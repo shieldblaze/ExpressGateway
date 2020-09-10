@@ -18,14 +18,13 @@
 package com.shieldblaze.expressgateway.loadbalancingmethods.l4;
 
 import java.net.InetSocketAddress;
-import java.util.ArrayList;
 import java.util.List;
 
 public abstract class L4Balancer {
-    protected ArrayList<InetSocketAddress> backendAddresses;
+    protected List<InetSocketAddress> backendAddresses;
 
     public L4Balancer(List<InetSocketAddress> socketAddressList) {
-        socketAddressList = new ArrayList<>();
+        this.backendAddresses = socketAddressList;
     }
 
     public abstract InetSocketAddress getBackendAddress(InetSocketAddress sourceAddress);
