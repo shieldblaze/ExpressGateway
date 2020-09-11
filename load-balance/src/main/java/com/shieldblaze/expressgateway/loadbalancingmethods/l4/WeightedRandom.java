@@ -6,25 +6,23 @@ import com.shieldblaze.expressgateway.backend.Backend;
 
 import java.net.InetSocketAddress;
 import java.util.List;
-import java.util.concurrent.atomic.AtomicInteger;
+import java.util.TreeMap;
 
-public class WeightedRoundRobin extends L4Balance {
+public final class WeightedRandom extends L4Balance {
+    private static final java.util.Random RANDOM_INSTANCE = new java.util.Random();
 
-    private final AtomicInteger Index = new AtomicInteger();
     private final TreeRangeMap<Integer, Backend> backends = TreeRangeMap.create();
     private int totalWeight = 0;
 
-    public WeightedRoundRobin(List<Backend> backends) {
+    public WeightedRandom(List<Backend> backends) {
         super(backends);
-        backends.forEach(backend -> this.backends.put(Range.closed(totalWeight, totalWeight += backend.getWeight()), backend));
+        backends.forEach(backend -> this.backends.put(Range.closed(totalWeight,  totalWeight += backend.getWeight()), backend));
         getBackends().clear();
     }
 
     @Override
     public Backend getBackend(InetSocketAddress sourceAddress) {
-        if (Index.get() > totalWeight) {
-            Index.set(0);
-        }
-        return backends.get(Index.getAndIncrement());
+        int index = RANDOM_INSTANCE.nextInt(totalWeight);
+        return backends.get(index);
     }
 }

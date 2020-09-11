@@ -57,4 +57,13 @@ public class Backend {
     public void decConnections() {
         connections--;
     }
+
+    @Override
+    public String toString() {
+        return "Backend{" +
+                "inetSocketAddress=" + inetSocketAddress +
+                ", weight=" + weight +
+                ", connections=" + connections +
+                '}';
+    }
 }
