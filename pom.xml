@@ -25,11 +25,18 @@ along with ShieldBlaze ExpressGateway.  If not, see <https://www.gnu.org/license
     <artifactId>expressgateway</artifactId>
     <version>0.0.1-a</version>
 
+    <packaging>pom</packaging>
+
     <properties>
         <java.version>11</java.version>
         <maven.compiler.source>11</maven.compiler.source>
         <maven.compiler.target>11</maven.compiler.target>
     </properties>
+
+    <modules>
+        <module>expressgateway-core</module>
+        <module>expressgateway-loadbalancingmethods</module>
+    </modules>
 
     <dependencies>
 
@@ -37,7 +44,7 @@ along with ShieldBlaze ExpressGateway.  If not, see <https://www.gnu.org/license
         <dependency>
             <groupId>io.netty</groupId>
             <artifactId>netty-all</artifactId>
-            <version>4.1.51.Final</version>
+            <version>4.1.52.Final</version>
         </dependency>
 
         <!-- https://mvnrepository.com/artifact/org.apache.logging.log4j/log4j-api -->
@@ -69,6 +76,24 @@ along with ShieldBlaze ExpressGateway.  If not, see <https://www.gnu.org/license
             <scope>test</scope>
         </dependency>
 
+        <!-- https://mvnrepository.com/artifact/org.junit.jupiter/junit-jupiter-engine -->
+        <dependency>
+            <groupId>org.junit.jupiter</groupId>
+            <artifactId>junit-jupiter-engine</artifactId>
+            <version>5.6.2</version>
+            <scope>test</scope>
+        </dependency>
+
     </dependencies>
+
+    <build>
+        <plugins>
+            <plugin>
+                <groupId>org.apache.maven.plugins</groupId>
+                <artifactId>maven-surefire-plugin</artifactId>
+                <version>2.22.2</version>
+            </plugin>
+        </plugins>
+    </build>
 
 </project>
