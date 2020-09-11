@@ -45,11 +45,11 @@ public final class SourceIPHash extends L4Balance {
             .expireAfterWrite(5, TimeUnit.MINUTES)
             .build();
 
-    private final RoundRobinListImpl<Backend> backendAddressesRoundRobin;
+    private final RoundRobinImpl<Backend> backendAddressesRoundRobin;
 
     public SourceIPHash(List<Backend> socketAddressList) {
         super(socketAddressList);
-        backendAddressesRoundRobin = new RoundRobinListImpl<>(getBackends());
+        backendAddressesRoundRobin = new RoundRobinImpl<>(getBackends());
     }
 
     @Override

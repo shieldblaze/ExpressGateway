@@ -28,14 +28,16 @@ along with ShieldBlaze ExpressGateway.  If not, see <https://www.gnu.org/license
     <packaging>pom</packaging>
 
     <properties>
+        <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
+        <project.reporting.outputEncoding>UTF-8</project.reporting.outputEncoding>
         <java.version>11</java.version>
         <maven.compiler.source>11</maven.compiler.source>
         <maven.compiler.target>11</maven.compiler.target>
     </properties>
 
     <modules>
-        <module>expressgateway-core</module>
-        <module>expressgateway-loadbalancingmethods</module>
+        <module>core</module>
+        <module>load-balance</module>
     </modules>
 
     <dependencies>
@@ -82,6 +84,13 @@ along with ShieldBlaze ExpressGateway.  If not, see <https://www.gnu.org/license
             <artifactId>junit-jupiter-engine</artifactId>
             <version>5.6.2</version>
             <scope>test</scope>
+        </dependency>
+
+        <!-- https://mvnrepository.com/artifact/com.google.guava/guava -->
+        <dependency>
+            <groupId>com.google.guava</groupId>
+            <artifactId>guava</artifactId>
+            <version>29.0-jre</version>
         </dependency>
 
     </dependencies>

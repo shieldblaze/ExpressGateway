@@ -28,8 +28,8 @@ import java.util.List;
 public abstract class L4Balance {
     private final List<Backend> backends;
 
-    public L4Balance(List<Backend> socketAddressList) {
-        this.backends = socketAddressList;
+    public L4Balance(List<Backend> backends) {
+        this.backends = backends;
     }
 
     public abstract Backend getBackend(InetSocketAddress sourceAddress);

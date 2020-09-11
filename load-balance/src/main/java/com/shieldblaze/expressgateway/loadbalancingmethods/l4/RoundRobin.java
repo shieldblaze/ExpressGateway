@@ -27,11 +27,11 @@ import java.util.List;
  */
 public final class RoundRobin extends L4Balance {
 
-    private final RoundRobinListImpl<Backend> backendsRoundRobin;
+    private final RoundRobinImpl<Backend> backendsRoundRobin;
 
     public RoundRobin(List<Backend> socketAddressList) {
         super(socketAddressList);
-        backendsRoundRobin = new RoundRobinListImpl<>(getBackends());
+        backendsRoundRobin = new RoundRobinImpl<>(getBackends());
     }
 
     @Override

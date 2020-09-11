@@ -17,5 +17,44 @@
  */
 package com.shieldblaze.expressgateway.backend;
 
-public final class Backend {
+import java.net.InetSocketAddress;
+
+public class Backend {
+    private InetSocketAddress inetSocketAddress;
+    private int weight;
+    private int connections;
+
+    public Backend(InetSocketAddress inetSocketAddress, int weight, int connections) {
+        this.inetSocketAddress = inetSocketAddress;
+        this.weight = weight;
+        this.connections = connections;
+    }
+
+    public InetSocketAddress getInetSocketAddress() {
+        return inetSocketAddress;
+    }
+
+    public void setInetSocketAddress(InetSocketAddress inetSocketAddress) {
+        this.inetSocketAddress = inetSocketAddress;
+    }
+
+    public int getWeight() {
+        return weight;
+    }
+
+    public void setWeight(int weight) {
+        this.weight = weight;
+    }
+
+    public int getConnections() {
+        return connections;
+    }
+
+    public void incConnections() {
+        connections++;
+    }
+
+    public void decConnections() {
+        connections--;
+    }
 }
