@@ -29,7 +29,7 @@ public final class RoundRobin extends L4Balancer {
 
     public RoundRobin(List<InetSocketAddress> socketAddressList) {
         super(socketAddressList);
-        backendAddressesRoundRobin = new RoundRobinListImpl<>(backendAddresses);
+        backendAddressesRoundRobin = new RoundRobinListImpl<>(getBackendAddresses());
     }
 
     @Override

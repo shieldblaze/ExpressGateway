@@ -21,11 +21,15 @@ import java.net.InetSocketAddress;
 import java.util.List;
 
 public abstract class L4Balancer {
-    protected List<InetSocketAddress> backendAddresses;
+    private List<InetSocketAddress> backendAddresses;
 
     public L4Balancer(List<InetSocketAddress> socketAddressList) {
         this.backendAddresses = socketAddressList;
     }
 
     public abstract InetSocketAddress getBackendAddress(InetSocketAddress sourceAddress);
+
+    public List<InetSocketAddress> getBackendAddresses() {
+        return backendAddresses;
+    }
 }

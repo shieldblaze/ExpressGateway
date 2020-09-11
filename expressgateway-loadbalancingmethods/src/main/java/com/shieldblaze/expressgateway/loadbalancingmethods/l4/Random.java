@@ -32,7 +32,7 @@ public final class Random extends L4Balancer {
 
     @Override
     public InetSocketAddress getBackendAddress(InetSocketAddress sourceAddress) {
-        int index = RANDOM_INSTANCE.nextInt(backendAddresses.size());
-        return backendAddresses.get(index);
+        int index = RANDOM_INSTANCE.nextInt(getBackendAddresses().size());
+        return getBackendAddresses().get(index);
     }
 }
