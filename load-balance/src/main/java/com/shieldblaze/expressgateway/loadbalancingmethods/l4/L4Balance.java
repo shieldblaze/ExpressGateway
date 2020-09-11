@@ -17,19 +17,24 @@
  */
 package com.shieldblaze.expressgateway.loadbalancingmethods.l4;
 
+import com.shieldblaze.expressgateway.backend.Backend;
+
 import java.net.InetSocketAddress;
 import java.util.List;
 
-public abstract class L4Balancer {
-    private List<InetSocketAddress> backendAddresses;
+/**
+ * Layer-4 Load Balance
+ */
+public abstract class L4Balance {
+    private final List<Backend> backends;
 
-    public L4Balancer(List<InetSocketAddress> socketAddressList) {
-        this.backendAddresses = socketAddressList;
+    public L4Balance(List<Backend> socketAddressList) {
+        this.backends = socketAddressList;
     }
 
-    public abstract InetSocketAddress getBackendAddress(InetSocketAddress sourceAddress);
+    public abstract Backend getBackend(InetSocketAddress sourceAddress);
 
-    public List<InetSocketAddress> getBackendAddresses() {
-        return backendAddresses;
+    public List<Backend> getBackends() {
+        return backends;
     }
 }

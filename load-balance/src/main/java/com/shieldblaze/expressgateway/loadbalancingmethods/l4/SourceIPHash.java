@@ -17,38 +17,43 @@
  */
 package com.shieldblaze.expressgateway.loadbalancingmethods.l4;
 
+import com.google.common.cache.Cache;
+import com.google.common.cache.CacheBuilder;
+import com.shieldblaze.expressgateway.backend.Backend;
 import io.netty.util.NetUtil;
 
 import java.math.BigInteger;
 import java.net.Inet4Address;
 import java.net.Inet6Address;
 import java.net.InetSocketAddress;
-import java.util.HashMap;
 import java.util.List;
-import java.util.Map;
+import java.util.concurrent.TimeUnit;
 
 /**
  * Select Backend Based on Source IP Hash and Round-Robin
  */
-public final class SourceIPHash extends L4Balancer {
+public final class SourceIPHash extends L4Balance {
 
     private static final BigInteger MINUS_ONE = BigInteger.valueOf(-1);
-
-    private final RoundRobinListImpl<InetSocketAddress> backendAddressesRoundRobin;
 
     /**
      * {@link Object} {@link Integer} in case of IPv4 or {@link Byte) in case of IPv6 for Source Address
      * {@link InetSocketAddress} Linked Backend Address
      */
-    private final Map<Object, InetSocketAddress> ipHashMap = new HashMap<>();
+    private final Cache<Object, Backend> ipHashCache = CacheBuilder.newBuilder()
+            .maximumSize(1_000_000)
+            .expireAfterWrite(5, TimeUnit.MINUTES)
+            .build();
 
-    public SourceIPHash(List<InetSocketAddress> socketAddressList) {
+    private final RoundRobinListImpl<Backend> backendAddressesRoundRobin;
+
+    public SourceIPHash(List<Backend> socketAddressList) {
         super(socketAddressList);
-        backendAddressesRoundRobin = new RoundRobinListImpl<>(getBackendAddresses());
+        backendAddressesRoundRobin = new RoundRobinListImpl<>(getBackends());
     }
 
     @Override
-    public InetSocketAddress getBackendAddress(InetSocketAddress sourceAddress) {
+    public Backend getBackend(InetSocketAddress sourceAddress) {
 
         /*
          * If Source IP Address is IPv4, we'll convert it into Integer with /24 mask.
@@ -59,11 +64,11 @@ public final class SourceIPHash extends L4Balancer {
             int ipAddress = NetUtil.ipv4AddressToInt((Inet4Address) sourceAddress.getAddress());
             int ipWithMask = ipAddress & prefixToSubnetMaskIPv4();
 
-            InetSocketAddress backendAddress = ipHashMap.get(ipWithMask);
+            Backend backendAddress = ipHashCache.getIfPresent(ipWithMask);
 
             if (backendAddress == null) {
                 backendAddress = backendAddressesRoundRobin.iterator().next();
-                ipHashMap.put(ipWithMask, backendAddress);
+                ipHashCache.put(ipWithMask, backendAddress);
             }
 
             return backendAddress;
@@ -71,11 +76,11 @@ public final class SourceIPHash extends L4Balancer {
             BigInteger ipAddress = ipToInt((Inet6Address) sourceAddress.getAddress());
             BigInteger ipWithMask = ipAddress.and(prefixToSubnetMaskIPv6());
 
-            InetSocketAddress backendAddress = ipHashMap.get(ipWithMask);
+            Backend backendAddress = ipHashCache.getIfPresent(ipWithMask);
 
             if (backendAddress == null) {
                 backendAddress = backendAddressesRoundRobin.iterator().next();
-                ipHashMap.put(ipWithMask, backendAddress);
+                ipHashCache.put(ipWithMask, backendAddress);
             }
 
             return backendAddress;

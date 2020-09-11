@@ -57,4 +57,8 @@ final class RoundRobinListImpl<T> implements Iterable<T> {
             }
         };
     }
+
+    public int getIndex() {
+        return index;
+    }
 }

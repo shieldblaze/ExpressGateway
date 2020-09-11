@@ -17,23 +17,24 @@
  */
 package com.shieldblaze.expressgateway.loadbalancingmethods.l4;
 
+import com.shieldblaze.expressgateway.backend.Backend;
+
 import java.net.InetSocketAddress;
 import java.util.List;
 
 /**
- * Select Backend based on Round-Robin
+ * Select Backend Randomly
  */
-public final class RoundRobin extends L4Balancer {
+public final class Random extends L4Balance {
+    private static final java.util.Random RANDOM_INSTANCE = new java.util.Random();
 
-    private final RoundRobinListImpl<InetSocketAddress> backendAddressesRoundRobin;
-
-    public RoundRobin(List<InetSocketAddress> socketAddressList) {
+    public Random(List<Backend> socketAddressList) {
         super(socketAddressList);
-        backendAddressesRoundRobin = new RoundRobinListImpl<>(getBackendAddresses());
     }
 
     @Override
-    public InetSocketAddress getBackendAddress(InetSocketAddress sourceAddress) {
-        return backendAddressesRoundRobin.iterator().next();
+    public Backend getBackend(InetSocketAddress sourceAddress) {
+        int index = RANDOM_INSTANCE.nextInt(getBackends().size());
+        return getBackends().get(index);
     }
 }
