@@ -1,5 +1,5 @@
                     ShieldBlaze ExpressGateway
-		   ============================
+					==========================
 
 This file is part of ShieldBlaze ExpressGateway. [www.shieldblaze.com]
 Copyright (c) 2020 ShieldBlaze
@@ -30,7 +30,7 @@ This product depends on 'Netty'. License for the same can be obtained at:
 
   * LICENSE:
     * license/LICENSE.netty.txt (Apache License 2.0)
-	
+
 ---------------------------------
 	
 This product depends on 'Apache Log4J'. License for the same can be obtained at:
@@ -44,5 +44,12 @@ This product depends on 'Junit 5'. License for the same can be obtained at:
 
   * LICENSE:
     * license/LICENSE.junit5.txt (Eclipse Public License - v2.0)
+
+---------------------------------
+
+This product depends on 'Google Guava'. License for the same can be obtained at:
+
+  * LICENSE:
+    * license/LICENSE.guava.txt (Apache License 2.0)
 
 ---------------------------------
