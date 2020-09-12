@@ -18,6 +18,7 @@
 package com.shieldblaze.expressgateway.loadbalancingmethods.l4;
 
 import com.shieldblaze.expressgateway.backend.Backend;
+import io.netty.util.internal.ObjectUtil;
 
 import java.net.InetSocketAddress;
 import java.util.List;
@@ -29,9 +30,17 @@ public final class RoundRobin extends L4Balance {
 
     private final RoundRobinImpl<Backend> backendsRoundRobin;
 
-    public RoundRobin(List<Backend> socketAddressList) {
-        super(socketAddressList);
-        backendsRoundRobin = new RoundRobinImpl<>(backends);
+    /**
+     * Initialize {@link RoundRobin}
+     *
+     * @param backends {@link List} of {@link Backend}
+     * @throws IllegalArgumentException If {@link List} of {@link Backend} is empty.
+     * @throws NullPointerException     If {@link List} of {@link Backend} is {@code null}.
+     */
+    public RoundRobin(List<Backend> backends) {
+        super(backends);
+        ObjectUtil.checkNotNull(backends, "Backend List");
+        backendsRoundRobin = new RoundRobinImpl<>(this.backends);
     }
 
     @Override

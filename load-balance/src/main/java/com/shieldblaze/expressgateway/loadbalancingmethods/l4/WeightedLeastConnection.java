@@ -20,6 +20,7 @@ package com.shieldblaze.expressgateway.loadbalancingmethods.l4;
 import com.google.common.collect.Range;
 import com.google.common.collect.TreeRangeMap;
 import com.shieldblaze.expressgateway.backend.Backend;
+import io.netty.util.internal.ObjectUtil;
 
 import java.net.InetSocketAddress;
 import java.util.HashMap;
@@ -27,7 +28,6 @@ import java.util.List;
 import java.util.Map;
 import java.util.Map.Entry;
 import java.util.concurrent.atomic.AtomicInteger;
-import java.util.function.BiConsumer;
 
 /**
  * Select {@link Backend} Based on Weight with Least Connection using Round-Robin
@@ -36,17 +36,26 @@ import java.util.function.BiConsumer;
 public final class WeightedLeastConnection extends L4Balance {
 
     private final AtomicInteger Index = new AtomicInteger(0);
-    private final TreeRangeMap<Integer, Backend> backends = TreeRangeMap.create();
+    private final TreeRangeMap<Integer, Backend> backendsMap = TreeRangeMap.create();
     private final Map<Backend, Integer> localConnectionMap = new HashMap<>();
 
     private int totalWeight = 0;
 
-    public WeightedLeastConnection(List<Backend> backends) {
-        super(backends);
-        backends.forEach(backend -> {
-            this.backends.put(Range.closed(totalWeight, totalWeight += backend.getWeight()), backend);
+    /**
+     * Initialize {@link WeightedLeastConnection}
+     *
+     * @param backendsMap {@link List} of {@link Backend}
+     * @throws IllegalArgumentException If {@link List} of {@link Backend} is empty.
+     * @throws NullPointerException     If {@link List} of {@link Backend} is {@code null}.
+     */
+    public WeightedLeastConnection(List<Backend> backendsMap) {
+        super(backendsMap);
+        ObjectUtil.checkNotNull(backendsMap, "Backend List");
+        backendsMap.forEach(backend -> {
+            this.backendsMap.put(Range.closed(totalWeight, totalWeight += backend.getWeight()), backend);
             localConnectionMap.put(backend, 0);
         });
+        backends.clear();
     }
 
     @Override
@@ -56,7 +65,7 @@ public final class WeightedLeastConnection extends L4Balance {
             Index.set(0);
         }
 
-        Entry<Range<Integer>, Backend> backend = backends.getEntry(Index.getAndIncrement());
+        Entry<Range<Integer>, Backend> backend = backendsMap.getEntry(Index.getAndIncrement());
         Integer connections = localConnectionMap.get(backend.getValue());
 
         if (connections >= backend.getKey().upperEndpoint()) {

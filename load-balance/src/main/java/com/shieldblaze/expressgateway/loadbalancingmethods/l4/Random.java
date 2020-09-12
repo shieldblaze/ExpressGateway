@@ -18,6 +18,7 @@
 package com.shieldblaze.expressgateway.loadbalancingmethods.l4;
 
 import com.shieldblaze.expressgateway.backend.Backend;
+import io.netty.util.internal.ObjectUtil;
 
 import java.net.InetSocketAddress;
 import java.util.List;
@@ -28,8 +29,16 @@ import java.util.List;
 public final class Random extends L4Balance {
     private static final java.util.Random RANDOM_INSTANCE = new java.util.Random();
 
-    public Random(List<Backend> socketAddressList) {
-        super(socketAddressList);
+    /**
+     * Initialize {@link Random}
+     *
+     * @param backends {@link List} of {@link Backend}
+     * @throws IllegalArgumentException If {@link List} of {@link Backend} is empty.
+     * @throws NullPointerException     If {@link List} of {@link Backend} is {@code null}.
+     */
+    public Random(List<Backend> backends) {
+        super(backends);
+        ObjectUtil.checkNotNull(backends, "Backend List");
     }
 
     @Override
