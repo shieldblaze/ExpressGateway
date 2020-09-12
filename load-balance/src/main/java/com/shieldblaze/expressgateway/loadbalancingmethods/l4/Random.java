@@ -33,7 +33,7 @@ public final class Random extends L4Balance {
      * Initialize {@link Random}
      *
      * @param backends {@link List} of {@link Backend}
-     * @throws IllegalArgumentException If {@link List} of {@link Backend} cannot be empty.
+     * @throws IllegalArgumentException If {@link List} of {@link Backend} is empty.
      * @throws NullPointerException     If {@link List} of {@link Backend} is {@code null}.
      */
     public Random(List<Backend> backends) {

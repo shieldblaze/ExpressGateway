@@ -52,7 +52,7 @@ public final class SourceIPHash extends L4Balance {
      * Initialize {@link SourceIPHash}
      *
      * @param backends {@link List} of {@link Backend}
-     * @throws IllegalArgumentException If {@link List} of {@link Backend} cannot be empty.
+     * @throws IllegalArgumentException If {@link List} of {@link Backend} is empty.
      * @throws NullPointerException     If {@link List} of {@link Backend} is {@code null}.
      */
     public SourceIPHash(List<Backend> backends) {

@@ -36,7 +36,7 @@ public final class LeastConnection extends L4Balance {
      * Initialize {@link LeastConnection}
      *
      * @param backends {@link List} of {@link Backend}
-     * @throws IllegalArgumentException If {@link List} of {@link Backend} cannot be empty.
+     * @throws IllegalArgumentException If {@link List} of {@link Backend} is empty.
      * @throws NullPointerException     If {@link List} of {@link Backend} is {@code null}.
      */
     public LeastConnection(List<Backend> backends) {

@@ -34,7 +34,7 @@ public final class RoundRobin extends L4Balance {
      * Initialize {@link RoundRobin}
      *
      * @param backends {@link List} of {@link Backend}
-     * @throws IllegalArgumentException If {@link List} of {@link Backend} cannot be empty.
+     * @throws IllegalArgumentException If {@link List} of {@link Backend} is empty.
      * @throws NullPointerException     If {@link List} of {@link Backend} is {@code null}.
      */
     public RoundRobin(List<Backend> backends) {

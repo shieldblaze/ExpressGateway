@@ -45,7 +45,7 @@ public final class WeightedLeastConnection extends L4Balance {
      * Initialize {@link WeightedLeastConnection}
      *
      * @param backendsMap {@link List} of {@link Backend}
-     * @throws IllegalArgumentException If {@link List} of {@link Backend} cannot be empty.
+     * @throws IllegalArgumentException If {@link List} of {@link Backend} is empty.
      * @throws NullPointerException     If {@link List} of {@link Backend} is {@code null}.
      */
     public WeightedLeastConnection(List<Backend> backendsMap) {
