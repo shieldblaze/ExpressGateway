@@ -20,6 +20,7 @@ package com.shieldblaze.expressgateway.loadbalancingmethods.l4;
 import com.google.common.collect.Range;
 import com.google.common.collect.TreeRangeMap;
 import com.shieldblaze.expressgateway.backend.Backend;
+import io.netty.util.internal.ObjectUtil;
 
 import java.net.InetSocketAddress;
 import java.util.List;
@@ -31,18 +32,26 @@ import java.util.List;
 public final class WeightedRandom extends L4Balance {
     private static final java.util.Random RANDOM_INSTANCE = new java.util.Random();
 
-    private final TreeRangeMap<Integer, Backend> backends = TreeRangeMap.create();
+    private final TreeRangeMap<Integer, Backend> backendsMap = TreeRangeMap.create();
     private int totalWeight = 0;
 
-    public WeightedRandom(List<Backend> backends) {
-        super(backends);
-        backends.forEach(backend -> this.backends.put(Range.closed(totalWeight, totalWeight += backend.getWeight()), backend));
+    /**
+     * Initialize {@link WeightedRandom}
+     *
+     * @param backendsMap {@link List} of {@link Backend}
+     * @throws IllegalArgumentException If {@link List} of {@link Backend} is empty.
+     * @throws NullPointerException     If {@link List} of {@link Backend} is {@code null}.
+     */
+    public WeightedRandom(List<Backend> backendsMap) {
+        super(backendsMap);
+        ObjectUtil.checkNotNull(backendsMap, "Backend List");
+        backendsMap.forEach(backend -> this.backendsMap.put(Range.closed(totalWeight, totalWeight += backend.getWeight()), backend));
         backends.clear();
     }
 
     @Override
     public Backend getBackend(InetSocketAddress sourceAddress) {
         int index = RANDOM_INSTANCE.nextInt(totalWeight);
-        return backends.get(index);
+        return backendsMap.get(index);
     }
 }

@@ -20,6 +20,7 @@ package com.shieldblaze.expressgateway.loadbalancingmethods.l4;
 import com.google.common.collect.Range;
 import com.google.common.collect.TreeRangeMap;
 import com.shieldblaze.expressgateway.backend.Backend;
+import io.netty.util.internal.ObjectUtil;
 
 import java.net.InetSocketAddress;
 import java.util.List;
@@ -32,12 +33,20 @@ import java.util.concurrent.atomic.AtomicInteger;
 public final class WeightedRoundRobin extends L4Balance {
 
     private final AtomicInteger Index = new AtomicInteger();
-    private final TreeRangeMap<Integer, Backend> backends = TreeRangeMap.create();
+    private final TreeRangeMap<Integer, Backend> backendsMap = TreeRangeMap.create();
     private int totalWeight = 0;
 
-    public WeightedRoundRobin(List<Backend> backends) {
-        super(backends);
-        backends.forEach(backend -> this.backends.put(Range.closed(totalWeight, totalWeight += backend.getWeight()), backend));
+    /**
+     * Initialize {@link WeightedRoundRobin}
+     *
+     * @param backendsMap {@link List} of {@link Backend}
+     * @throws IllegalArgumentException If {@link List} of {@link Backend} is empty.
+     * @throws NullPointerException     If {@link List} of {@link Backend} is {@code null}.
+     */
+    public WeightedRoundRobin(List<Backend> backendsMap) {
+        super(backendsMap);
+        ObjectUtil.checkNotNull(backends, "Backend List");
+        backendsMap.forEach(backend -> this.backendsMap.put(Range.closed(totalWeight, totalWeight += backend.getWeight()), backend));
         backends.clear();
     }
 
@@ -46,6 +55,6 @@ public final class WeightedRoundRobin extends L4Balance {
         if (Index.get() >= totalWeight) {
             Index.set(0);
         }
-        return backends.get(Index.getAndIncrement());
+        return backendsMap.get(Index.getAndIncrement());
     }
 }
