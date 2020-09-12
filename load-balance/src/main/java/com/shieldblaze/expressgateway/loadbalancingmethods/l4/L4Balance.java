@@ -20,6 +20,7 @@ package com.shieldblaze.expressgateway.loadbalancingmethods.l4;
 import com.shieldblaze.expressgateway.backend.Backend;
 
 import java.net.InetSocketAddress;
+import java.util.ArrayList;
 import java.util.List;
 
 /**
@@ -38,7 +39,7 @@ public abstract class L4Balance {
     protected final List<Backend> backends;
 
     public L4Balance(List<Backend> backends) {
-        this.backends = backends;
+        this.backends = new ArrayList<>(backends);
     }
 
     public abstract Backend getBackend(InetSocketAddress sourceAddress);

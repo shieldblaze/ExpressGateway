@@ -21,6 +21,7 @@ import com.google.common.cache.Cache;
 import com.google.common.cache.CacheBuilder;
 import com.shieldblaze.expressgateway.backend.Backend;
 import io.netty.util.NetUtil;
+import io.netty.util.internal.ObjectUtil;
 
 import java.math.BigInteger;
 import java.net.Inet4Address;
@@ -47,9 +48,17 @@ public final class SourceIPHash extends L4Balance {
 
     private final RoundRobinImpl<Backend> backendAddressesRoundRobin;
 
-    public SourceIPHash(List<Backend> socketAddressList) {
-        super(socketAddressList);
-        backendAddressesRoundRobin = new RoundRobinImpl<>(backends);
+    /**
+     * Initialize {@link SourceIPHash}
+     *
+     * @param backends {@link List} of {@link Backend}
+     * @throws IllegalArgumentException If {@link List} of {@link Backend} cannot be empty.
+     * @throws NullPointerException     If {@link List} of {@link Backend} is {@code null}.
+     */
+    public SourceIPHash(List<Backend> backends) {
+        super(backends);
+        ObjectUtil.checkNotNull(backends, "Backend List");
+        backendAddressesRoundRobin = new RoundRobinImpl<>(this.backends);
     }
 
     @Override

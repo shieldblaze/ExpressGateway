@@ -18,6 +18,7 @@
 package com.shieldblaze.expressgateway.loadbalancingmethods.l4;
 
 import com.shieldblaze.expressgateway.backend.Backend;
+import io.netty.util.internal.ObjectUtil;
 
 import java.net.InetSocketAddress;
 import java.util.List;
@@ -31,8 +32,16 @@ public final class LeastConnection extends L4Balance {
 
     private final AtomicInteger Index = new AtomicInteger();
 
+    /**
+     * Initialize {@link LeastConnection}
+     *
+     * @param backends {@link List} of {@link Backend}
+     * @throws IllegalArgumentException If {@link List} of {@link Backend} cannot be empty.
+     * @throws NullPointerException     If {@link List} of {@link Backend} is {@code null}.
+     */
     public LeastConnection(List<Backend> backends) {
         super(backends);
+        ObjectUtil.checkNotNull(backends, "Backend List");
         if (backends.size() == 0) {
             throw new IllegalArgumentException("Backends List cannot be empty");
         }
