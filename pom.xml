@@ -62,7 +62,7 @@ along with ShieldBlaze ExpressGateway.  If not, see <https://www.gnu.org/license
 
     <dependencies>
 
-        <!-- https://mvnrepository.com/artifact/io.netty/netty-handler -->
+        <!-- https://mvnrepository.com/artifact/io.netty/netty-all -->
         <dependency>
             <groupId>io.netty</groupId>
             <artifactId>netty-all</artifactId>
