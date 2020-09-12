@@ -25,6 +25,9 @@ import java.net.InetSocketAddress;
 import java.util.List;
 import java.util.concurrent.atomic.AtomicInteger;
 
+/**
+ * Select {@link Backend} based on Weight using Round-Robin
+ */
 @SuppressWarnings("UnstableApiUsage")
 public final class WeightedRoundRobin extends L4Balance {
 

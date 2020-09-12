@@ -30,7 +30,7 @@ import java.util.List;
 import java.util.concurrent.TimeUnit;
 
 /**
- * Select Backend Based on Source IP Hash and Round-Robin
+ * Select {@link Backend} Based on Source IP Hash and Round-Robin
  */
 public final class SourceIPHash extends L4Balance {
 

@@ -23,7 +23,7 @@ import java.net.InetSocketAddress;
 import java.util.List;
 
 /**
- * Select Backend Randomly
+ * Select {@link Backend} Randomly
  */
 public final class Random extends L4Balance {
     private static final java.util.Random RANDOM_INSTANCE = new java.util.Random();

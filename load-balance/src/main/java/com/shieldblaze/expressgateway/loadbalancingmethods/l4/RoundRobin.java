@@ -23,7 +23,7 @@ import java.net.InetSocketAddress;
 import java.util.List;
 
 /**
- * Select Backend based on Round-Robin
+ * Select {@link Backend} based on Round-Robin
  */
 public final class RoundRobin extends L4Balance {
 

@@ -24,6 +24,9 @@ import com.shieldblaze.expressgateway.backend.Backend;
 import java.net.InetSocketAddress;
 import java.util.List;
 
+/**
+ * Select {@link Backend} based on Weight Randomly
+ */
 @SuppressWarnings("UnstableApiUsage")
 public final class WeightedRandom extends L4Balance {
     private static final java.util.Random RANDOM_INSTANCE = new java.util.Random();

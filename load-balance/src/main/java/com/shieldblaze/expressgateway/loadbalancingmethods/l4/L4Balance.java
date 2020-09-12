@@ -23,7 +23,16 @@ import java.net.InetSocketAddress;
 import java.util.List;
 
 /**
- * Layer-4 Load Balance
+ * <p> Balance Layer-4 Traffic using the available methods: </p>
+ * <ul>
+ *     <li> {@link LeastConnection} </li>
+ *     <li> {@link Random} </li>
+ *     <li> {@link RoundRobin} </li>
+ *     <li> {@link SourceIPHash} </li>
+ *     <li> {@link WeightedLeastConnection} </li>
+ *     <li> {@link WeightedRandom} </li>
+ *     <li> {@link WeightedRoundRobin} </li>
+ * </ul>
  */
 public abstract class L4Balance {
     protected final List<Backend> backends;

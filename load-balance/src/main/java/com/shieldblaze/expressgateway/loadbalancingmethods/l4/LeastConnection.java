@@ -24,6 +24,9 @@ import java.util.List;
 import java.util.Optional;
 import java.util.concurrent.atomic.AtomicInteger;
 
+/**
+ * Select {@link Backend} with least connections with Round-Robin.
+ */
 public final class LeastConnection extends L4Balance {
 
     private final AtomicInteger Index = new AtomicInteger();
@@ -37,15 +40,18 @@ public final class LeastConnection extends L4Balance {
 
     @Override
     public Backend getBackend(InetSocketAddress sourceAddress) {
+        // If Index size equals Backend List size, we'll reset the Index.
         if (Index.get() >= backends.size()) {
             Index.set(0);
         }
 
+        // Get Number Of Maximum Connection on a Backend
         int currentMaxConnections = backends.stream()
                 .mapToInt(Backend::getConnections)
                 .max()
                 .getAsInt();
 
+        // Check If we got any Backend which has less Number of Connections than Backend with Maximum Connection
         Optional<Backend> backend = backends.stream()
                 .filter(back -> back.getConnections() < currentMaxConnections)
                 .findFirst();

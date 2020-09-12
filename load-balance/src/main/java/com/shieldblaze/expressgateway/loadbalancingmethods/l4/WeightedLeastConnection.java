@@ -30,7 +30,7 @@ import java.util.concurrent.atomic.AtomicInteger;
 import java.util.function.BiConsumer;
 
 /**
- * Weighted Least Connection Round Robin
+ * Select {@link Backend} Based on Weight with Least Connection using Round-Robin
  */
 @SuppressWarnings("UnstableApiUsage")
 public final class WeightedLeastConnection extends L4Balance {

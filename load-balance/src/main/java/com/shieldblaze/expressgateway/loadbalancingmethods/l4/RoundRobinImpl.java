@@ -20,6 +20,9 @@ package com.shieldblaze.expressgateway.loadbalancingmethods.l4;
 import java.util.Iterator;
 import java.util.List;
 
+/**
+ * Round-Robin List Implementation
+ */
 final class RoundRobinImpl<T> implements Iterable<T> {
     private final List<T> list;
     private int index = 0;
