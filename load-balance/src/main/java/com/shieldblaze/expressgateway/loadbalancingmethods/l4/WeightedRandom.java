@@ -34,7 +34,7 @@ public final class WeightedRandom extends L4Balance {
     public WeightedRandom(List<Backend> backends) {
         super(backends);
         backends.forEach(backend -> this.backends.put(Range.closed(totalWeight, totalWeight += backend.getWeight()), backend));
-        getBackends().clear();
+        backends.clear();
     }
 
     @Override

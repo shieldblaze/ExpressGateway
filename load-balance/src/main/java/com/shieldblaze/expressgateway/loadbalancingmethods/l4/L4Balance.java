@@ -26,15 +26,11 @@ import java.util.List;
  * Layer-4 Load Balance
  */
 public abstract class L4Balance {
-    private final List<Backend> backends;
+    protected final List<Backend> backends;
 
     public L4Balance(List<Backend> backends) {
         this.backends = backends;
     }
 
     public abstract Backend getBackend(InetSocketAddress sourceAddress);
-
-    public List<Backend> getBackends() {
-        return backends;
-    }
 }

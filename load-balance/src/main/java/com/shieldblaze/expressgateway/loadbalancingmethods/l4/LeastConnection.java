@@ -21,21 +21,35 @@ import com.shieldblaze.expressgateway.backend.Backend;
 
 import java.net.InetSocketAddress;
 import java.util.List;
+import java.util.Optional;
+import java.util.concurrent.atomic.AtomicInteger;
 
-/**
- * Select Backend based on Round-Robin
- */
-public final class RoundRobin extends L4Balance {
+public final class LeastConnection extends L4Balance {
 
-    private final RoundRobinImpl<Backend> backendsRoundRobin;
+    private final AtomicInteger Index = new AtomicInteger();
 
-    public RoundRobin(List<Backend> socketAddressList) {
-        super(socketAddressList);
-        backendsRoundRobin = new RoundRobinImpl<>(backends);
+    public LeastConnection(List<Backend> backends) {
+        super(backends);
+        if (backends.size() == 0) {
+            throw new IllegalArgumentException("Backends List cannot be empty");
+        }
     }
 
     @Override
     public Backend getBackend(InetSocketAddress sourceAddress) {
-        return backendsRoundRobin.iterator().next();
+        if (Index.get() >= backends.size()) {
+            Index.set(0);
+        }
+
+        int currentMaxConnections = backends.stream()
+                .mapToInt(Backend::getConnections)
+                .max()
+                .getAsInt();
+
+        Optional<Backend> backend = backends.stream()
+                .filter(back -> back.getConnections() < currentMaxConnections)
+                .findFirst();
+
+        return backend.orElseGet(() -> backends.get(Index.getAndIncrement()));
     }
 }

@@ -1,3 +1,20 @@
+/*
+ * This file is part of ShieldBlaze ExpressGateway. [www.shieldblaze.com]
+ * Copyright (c) 2020 ShieldBlaze
+ *
+ * ShieldBlaze ExpressGateway is free software: you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License as published by
+ * the Free Software Foundation, either version 3 of the License, or
+ * (at your option) any later version.
+ *
+ * ShieldBlaze ExpressGateway is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
+ *
+ * You should have received a copy of the GNU General Public License
+ * along with ShieldBlaze ExpressGateway.  If not, see <https://www.gnu.org/licenses/>.
+ */
 package com.shieldblaze.expressgateway.loadbalancingmethods.l4;
 
 import com.shieldblaze.expressgateway.backend.Backend;
@@ -14,10 +31,10 @@ class WeightedLeastConnectionTest {
     @Test
     void getBackend() {
         List<Backend> backends = new ArrayList<>();
-        backends.add(fastBuild("10.10.1.1", 10, 0));
-        backends.add(fastBuild("10.10.1.2", 20, 0));
-        backends.add(fastBuild("10.10.1.3", 30, 0));
-        backends.add(fastBuild("10.10.1.4", 40, 0));
+        backends.add(fastBuild("10.10.1.1", 10));
+        backends.add(fastBuild("10.10.1.2", 20));
+        backends.add(fastBuild("10.10.1.3", 30));
+        backends.add(fastBuild("10.10.1.4", 40));
 
         int first = 0;
         int second = 0;
@@ -57,7 +74,7 @@ class WeightedLeastConnectionTest {
         assertEquals(400000, forth);
     }
 
-    private static Backend fastBuild(String host, int weight, int connection) {
-        return new Backend(new InetSocketAddress(host, 1), weight, connection);
+    private static Backend fastBuild(String host, int weight) {
+        return new Backend(new InetSocketAddress(host, 1), weight, 0);
     }
 }

@@ -26,47 +26,41 @@ import java.util.List;
 
 import static org.junit.jupiter.api.Assertions.*;
 
-class RandomTest {
+class LeastConnectionTest {
 
     @Test
     void getBackend() {
-        List<Backend> addressList = new ArrayList<>();
-
-        // Add Backend Server Addresses
-        addressList.add(fastBuild("172.16.20.1"));
-        addressList.add(fastBuild("172.16.20.2"));
-        addressList.add(fastBuild("172.16.20.3"));
-        addressList.add(fastBuild("172.16.20.4"));
-        addressList.add(fastBuild("172.16.20.5"));
-
-        L4Balance l4Balance = new Random(addressList);
+        List<Backend> backends = new ArrayList<>();
+        backends.add(fastBuild("10.10.1.1"));
+        backends.add(fastBuild("10.10.1.2"));
+        backends.add(fastBuild("10.10.1.3"));
+        backends.add(fastBuild("10.10.1.4"));
 
         int first = 0;
         int second = 0;
         int third = 0;
         int forth = 0;
-        int fifth = 0;
 
-        for (int i = 0; i < 1000; i++) {
-            switch (l4Balance.getBackend(null).getInetSocketAddress().getHostString()) {
-                case "172.16.20.1": {
+        L4Balance l4Balance = new LeastConnection(backends);
+
+        for (int i = 0; i < 1000000; i++) {
+            Backend backend = l4Balance.getBackend(null);
+            backend.incConnections();
+            switch (backend.getInetSocketAddress().getHostString()) {
+                case "10.10.1.1": {
                     first++;
                     break;
                 }
-                case "172.16.20.2": {
+                case "10.10.1.2": {
                     second++;
                     break;
                 }
-                case "172.16.20.3": {
+                case "10.10.1.3": {
                     third++;
                     break;
                 }
-                case "172.16.20.4": {
+                case "10.10.1.4": {
                     forth++;
-                    break;
-                }
-                case "172.16.20.5": {
-                    fifth++;
                     break;
                 }
                 default:
@@ -74,14 +68,13 @@ class RandomTest {
             }
         }
 
-        assertTrue(first > 10);
-        assertTrue(second > 10);
-        assertTrue(third > 10);
-        assertTrue(forth > 10);
-        assertTrue(fifth > 10);
+        assertEquals(250000, first);
+        assertEquals(250000, second);
+        assertEquals(250000, third);
+        assertEquals(250000, forth);
     }
 
-    private Backend fastBuild(String host) {
-        return new Backend(new InetSocketAddress(host, 1), 1, 0);
+    private static Backend fastBuild(String host) {
+        return new Backend(new InetSocketAddress(host, 1), 0, 0);
     }
 }

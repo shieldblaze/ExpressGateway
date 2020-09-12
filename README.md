@@ -21,13 +21,13 @@
 - [ ] L7 Based Health Check using HTTP/HTTPS
 
 ### Load Balancing Methods:
-- [X] Round Robin
 - [X] Random
+- [X] Round Robin
 - [X] Source IP Hash
 - [X] Least Connection
 - [X] Weighted Random
 - [X] Weighted Round Robin
-- [ ] Weighted Least Connection
+- [X] Weighted Least Connection
 
 ### Session Persistence:
 - [ ] 5-Tuple Hash (Source IP + Source Port +  Destination IP +  Destination Port + Protocol) 

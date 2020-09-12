@@ -35,7 +35,7 @@ public final class WeightedRoundRobin extends L4Balance {
     public WeightedRoundRobin(List<Backend> backends) {
         super(backends);
         backends.forEach(backend -> this.backends.put(Range.closed(totalWeight, totalWeight += backend.getWeight()), backend));
-        getBackends().clear();
+        backends.clear();
     }
 
     @Override

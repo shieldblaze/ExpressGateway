@@ -49,7 +49,7 @@ public final class SourceIPHash extends L4Balance {
 
     public SourceIPHash(List<Backend> socketAddressList) {
         super(socketAddressList);
-        backendAddressesRoundRobin = new RoundRobinImpl<>(getBackends());
+        backendAddressesRoundRobin = new RoundRobinImpl<>(backends);
     }
 
     @Override
