@@ -22,24 +22,47 @@ import com.google.common.collect.TreeRangeMap;
 import com.shieldblaze.expressgateway.backend.Backend;
 
 import java.net.InetSocketAddress;
+import java.util.HashMap;
 import java.util.List;
+import java.util.Map;
+import java.util.Map.Entry;
+import java.util.concurrent.atomic.AtomicInteger;
+import java.util.function.BiConsumer;
 
 @SuppressWarnings("UnstableApiUsage")
-public final class WeightedRandom extends L4Balance {
-    private static final java.util.Random RANDOM_INSTANCE = new java.util.Random();
+public final class WeightedLeastConnection extends L4Balance {
 
+    private final AtomicInteger Index = new AtomicInteger(0);
     private final TreeRangeMap<Integer, Backend> backends = TreeRangeMap.create();
+    private final Map<Backend, Integer> localConnectionMap = new HashMap<>();
+
     private int totalWeight = 0;
 
-    public WeightedRandom(List<Backend> backends) {
+    public WeightedLeastConnection(List<Backend> backends) {
         super(backends);
-        backends.forEach(backend -> this.backends.put(Range.closed(totalWeight, totalWeight += backend.getWeight()), backend));
-        getBackends().clear();
+        backends.forEach(backend -> {
+            this.backends.put(Range.closed(totalWeight, totalWeight += backend.getWeight()), backend);
+            localConnectionMap.put(backend, 0);
+        });
     }
 
     @Override
     public Backend getBackend(InetSocketAddress sourceAddress) {
-        int index = RANDOM_INSTANCE.nextInt(totalWeight);
-        return backends.get(index);
+        if (Index.get() >= totalWeight) {
+            localConnectionMap.replaceAll((b, i) -> i = 0);
+            Index.set(0);
+        }
+
+        Entry<Range<Integer>, Backend> backend = backends.getEntry(Index.getAndIncrement());
+        Integer connections = localConnectionMap.get(backend.getValue());
+
+        if (connections >= backend.getKey().upperEndpoint()) {
+            localConnectionMap.put(backend.getValue(), 0);
+            Index.set(backend.getKey().upperEndpoint());
+        } else {
+            localConnectionMap.put(backend.getValue(), connections + 1);
+        }
+
+        return backend.getValue();
     }
 }

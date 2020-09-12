@@ -47,3 +47,9 @@ This product depends on 'Junit 5'. License for the same can be obtained at:
 
 ---------------------------------
 
+This product depends on 'Google Guava'. License for the same can be obtained at:
+
+  * LICENSE:
+    * license/LICENSE.guava.txt (Apache License 2.0)
+
+---------------------------------

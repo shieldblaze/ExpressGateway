@@ -1,5 +1,5 @@
 # ShieldBlaze ExpressGateway
-#### ShieldBlaze ExpressGateway is a high-performance network virtual applicance.
+#### ShieldBlaze ExpressGateway is a High-Performance Virtual Network Appliance.
 
 #### Current Status: In-development
 
@@ -21,13 +21,13 @@
 - [ ] L7 Based Health Check using HTTP/HTTPS
 
 ### Load Balancing Methods:
-- [ ] Round Robin
-- [ ] Random
-- [ ] Source IP Hash
-- [ ] Least Connection
-- [ ] Weighted Round Robin
+- [X] Round Robin
+- [X] Random
+- [X] Source IP Hash
+- [X] Least Connection
+- [X] Weighted Random
+- [X] Weighted Round Robin
 - [ ] Weighted Least Connection
-- [ ] Geographic Proximity
 
 ### Session Persistence:
 - [ ] 5-Tuple Hash (Source IP + Source Port +  Destination IP +  Destination Port + Protocol) 

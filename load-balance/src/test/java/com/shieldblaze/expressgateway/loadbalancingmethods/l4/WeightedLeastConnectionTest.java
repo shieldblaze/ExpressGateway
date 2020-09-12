@@ -9,26 +9,27 @@ import java.util.List;
 
 import static org.junit.jupiter.api.Assertions.*;
 
-class WeightedRoundRobinTest {
+class WeightedLeastConnectionTest {
 
     @Test
     void getBackend() {
-
         List<Backend> backends = new ArrayList<>();
-        backends.add(fastBuild("10.10.1.1", 10));
-        backends.add(fastBuild("10.10.1.2", 20));
-        backends.add(fastBuild("10.10.1.3", 30));
-        backends.add(fastBuild("10.10.1.4", 40));
+        backends.add(fastBuild("10.10.1.1", 10, 0));
+        backends.add(fastBuild("10.10.1.2", 20, 0));
+        backends.add(fastBuild("10.10.1.3", 30, 0));
+        backends.add(fastBuild("10.10.1.4", 40, 0));
 
         int first = 0;
         int second = 0;
         int third = 0;
         int forth = 0;
 
-        L4Balance l4Balance = new WeightedRoundRobin(backends);
+        L4Balance l4Balance = new WeightedLeastConnection(backends);
 
         for (int i = 0; i < 1000000; i++) {
-            switch (l4Balance.getBackend(null).getInetSocketAddress().getHostString()) {
+            Backend backend = l4Balance.getBackend(null);
+            backend.incConnections();
+            switch (backend.getInetSocketAddress().getHostString()) {
                 case "10.10.1.1": {
                     first++;
                     break;
@@ -56,7 +57,7 @@ class WeightedRoundRobinTest {
         assertEquals(400000, forth);
     }
 
-    private Backend fastBuild(String host, int weight) {
-        return new Backend(new InetSocketAddress(host, 1), weight, 0);
+    private static Backend fastBuild(String host, int weight, int connection) {
+        return new Backend(new InetSocketAddress(host, 1), weight, connection);
     }
 }
