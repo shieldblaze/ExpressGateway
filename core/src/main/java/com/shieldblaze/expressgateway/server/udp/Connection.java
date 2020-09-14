@@ -33,13 +33,14 @@ import java.util.List;
 
 final class Connection implements Comparable<Connection> {
 
-    private final List<DatagramPacket> datagramPacketBacklog = new ArrayList<>();
-    private final byte[] clientAddressAsBytes;
+    private List<DatagramPacket> datagramPacketBacklog;
+    final InetSocketAddress clientAddress;
     private final Channel backendChannel;
     private boolean channelActive = false;
 
     Connection(InetSocketAddress clientAddress, InetSocketAddress destinationAddress, Channel clientChannel) {
-        clientAddressAsBytes = AddressUtils.address(clientAddress);
+        this.clientAddress = clientAddress;
+        this.datagramPacketBacklog = new ArrayList<>();
 
         Bootstrap bootstrap = BootstrapUtils.udp(EventLoopUtils.CHILD);
         bootstrap.handler(new DownstreamHandler(clientChannel, clientAddress));
@@ -49,7 +50,13 @@ final class Connection implements Comparable<Connection> {
         channelFuture.addListener((ChannelFutureListener) future -> {
             if (future.isSuccess()) {
                 channelActive = true;
-                datagramPacketBacklog.forEach(datagramPacket -> backendChannel.writeAndFlush(datagramPacket.content()));
+                datagramPacketBacklog.forEach(datagramPacket -> {
+                    backendChannel.writeAndFlush(datagramPacket.content()).addListener((ChannelFutureListener) cf -> {
+                        if (!cf.isSuccess()) {
+                            datagramPacket.release();
+                        }
+                    });
+                });
             } else {
                 datagramPacketBacklog.forEach(DefaultAddressedEnvelope::release);
                 backendChannel.close();
@@ -60,18 +67,26 @@ final class Connection implements Comparable<Connection> {
 
     @Override
     public int compareTo(Connection connection) {
-        return SignedBytes.lexicographicalComparator().compare(clientAddressAsBytes, connection.clientAddressAsBytes);
-    }
-
-    void writeDatagram(DatagramPacket datagramPacket) {
-        if (channelActive) {
-            backendChannel.writeAndFlush(datagramPacket.content());
+        int compare = SignedBytes.lexicographicalComparator().compare(clientAddress.getAddress().getAddress(),
+                connection.clientAddress.getAddress().getAddress());
+        if (compare == 0) {
+            return Integer.compare(clientAddress.getPort(), connection.clientAddress.getPort());
         } else {
-            datagramPacketBacklog.add(datagramPacket);
+            return 0;
         }
     }
 
-    byte[] getClientAddressAsBytes() {
-        return clientAddressAsBytes;
+    void writeDatagram(DatagramPacket datagramPacket) {
+        datagramPacket.touch("Write");
+        if (channelActive) {
+            datagramPacket.touch("Active Write");
+            backendChannel.writeAndFlush(datagramPacket.content()).addListener((ChannelFutureListener) cf -> {
+                if (!cf.isSuccess()) {
+                    datagramPacket.release();
+                }
+            });
+        } else {
+            datagramPacketBacklog.add(datagramPacket);
+        }
     }
 }

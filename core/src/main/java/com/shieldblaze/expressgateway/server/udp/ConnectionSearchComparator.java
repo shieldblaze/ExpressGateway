@@ -19,6 +19,7 @@ package com.shieldblaze.expressgateway.server.udp;
 
 import com.google.common.primitives.SignedBytes;
 
+import java.net.InetSocketAddress;
 import java.util.Comparator;
 
 final class ConnectionSearchComparator implements Comparator<Object> {
@@ -32,7 +33,15 @@ final class ConnectionSearchComparator implements Comparator<Object> {
     @Override
     public int compare(Object o1, Object o2) {
         Connection connection = (Connection) o1;
-        byte[] byteBuffer = (byte[]) o2;
-        return SignedBytes.lexicographicalComparator().compare(connection.getClientAddressAsBytes(), byteBuffer);
+        InetSocketAddress socketAddress = (InetSocketAddress) o2;
+
+        int compare = SignedBytes.lexicographicalComparator().compare(connection.clientAddress.getAddress().getAddress(),
+                socketAddress.getAddress().getAddress());
+
+        if (compare == 0) {
+            return Integer.compare(connection.clientAddress.getPort(), socketAddress.getPort());
+        } else {
+            return compare;
+        }
     }
 }

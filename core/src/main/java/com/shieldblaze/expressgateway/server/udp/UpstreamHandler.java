@@ -44,10 +44,9 @@ final class UpstreamHandler extends ChannelInboundHandlerAdapter {
 
     @Override
     public void channelRead(ChannelHandlerContext ctx, Object msg) {
+        DatagramPacket datagramPacket = (DatagramPacket) msg;
         EventLoopUtils.CHILD.next().execute(() -> {
-            DatagramPacket datagramPacket = (DatagramPacket) msg;
-
-            int index = Collections.binarySearch(connectionList, AddressUtils.address(datagramPacket.sender()), ConnectionSearchComparator.INSTANCE);
+            int index = Collections.binarySearch(connectionList, datagramPacket.sender(), ConnectionSearchComparator.INSTANCE);
 
             if (index >= 0) {
                 connectionList.get(index).writeDatagram(datagramPacket);
@@ -57,5 +56,10 @@ final class UpstreamHandler extends ChannelInboundHandlerAdapter {
                 connectionList.add(connection);
             }
         });
+    }
+
+    @Override
+    public void exceptionCaught(ChannelHandlerContext ctx, Throwable cause) throws Exception {
+        cause.printStackTrace();
     }
 }
