@@ -21,19 +21,20 @@ import com.google.common.primitives.SignedBytes;
 import com.shieldblaze.expressgateway.netty.BootstrapUtils;
 import com.shieldblaze.expressgateway.netty.EventLoopUtils;
 import io.netty.bootstrap.Bootstrap;
-import io.netty.buffer.ByteBuf;
 import io.netty.channel.Channel;
 import io.netty.channel.ChannelFuture;
 import io.netty.channel.ChannelFutureListener;
 import io.netty.channel.socket.DatagramPacket;
+import io.netty.util.ReferenceCountUtil;
 
 import java.net.InetSocketAddress;
 import java.util.ArrayList;
+import java.util.List;
 
 final class Connection implements Comparable<Connection> {
 
+    private List<DatagramPacket> datagramPacketBacklog = new ArrayList<>();
     private final byte[] clientAddressAsBytes;
-    private ArrayList<ByteBuf> datagramPacketBacklog = new ArrayList<>();
     private final Channel backendChannel;
     private boolean channelActive = false;
 
@@ -44,14 +45,27 @@ final class Connection implements Comparable<Connection> {
         bootstrap.handler(new DownstreamHandler(clientChannel, clientAddress));
         ChannelFuture channelFuture = bootstrap.connect(destinationAddress);
         backendChannel = channelFuture.channel();
+
         channelFuture.addListener((ChannelFutureListener) future -> {
             if (future.isSuccess()) {
-                datagramPacketBacklog.forEach(byteBuf -> channelFuture.channel().writeAndFlush(new DatagramPacket(byteBuf, destinationAddress)));
-                channelActive = true;
+
+                EventLoopUtils.CHILD.next().execute(() -> {
+                    channelActive = true;
+
+                    for (DatagramPacket datagramPacket : datagramPacketBacklog) {
+                        if (datagramPacket == null) {
+                            System.out.println("Packet got GCed");
+                        } else {
+                            backendChannel.writeAndFlush(datagramPacket.content());
+                        }
+                    }
+
+                    datagramPacketBacklog.clear();
+                });
             } else {
                 channelFuture.channel().close();
+                datagramPacketBacklog.clear();
             }
-            datagramPacketBacklog = null;
         });
     }
 
@@ -60,11 +74,11 @@ final class Connection implements Comparable<Connection> {
         return SignedBytes.lexicographicalComparator().compare(clientAddressAsBytes, connection.clientAddressAsBytes);
     }
 
-    void writeDatagram(ByteBuf byteBuf) {
+    void writeDatagram(DatagramPacket datagramPacket) {
         if (channelActive) {
-            backendChannel.writeAndFlush(byteBuf);
+            backendChannel.writeAndFlush(datagramPacket.content());
         } else {
-            datagramPacketBacklog.add(byteBuf);
+            datagramPacketBacklog.add(datagramPacket);
         }
     }
 

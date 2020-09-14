@@ -18,6 +18,7 @@
 package com.shieldblaze.expressgateway;
 
 import com.shieldblaze.expressgateway.server.udp.Server;
+import io.netty.util.ResourceLeakDetector;
 
 import java.net.InetSocketAddress;
 
@@ -28,6 +29,7 @@ public final class Main {
     }
 
     public static void main(String[] args) throws Exception {
+        ResourceLeakDetector.setLevel(ResourceLeakDetector.Level.PARANOID);
         new Server(new InetSocketAddress("192.168.1.5", 9110)).start();
     }
 }

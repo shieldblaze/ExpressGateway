@@ -60,7 +60,7 @@ public final class BootstrapUtils {
         return new Bootstrap()
                 .group(eventLoopGroup)
                 .option(ChannelOption.ALLOCATOR, PooledByteBufAllocatorBuffer.INSTANCE)
-                .option(ChannelOption.RCVBUF_ALLOCATOR, new FixedRecvByteBufAllocator(65535))
+                .option(ChannelOption.RCVBUF_ALLOCATOR, new FixedRecvByteBufAllocator(100))
                 .option(ChannelOption.SO_RCVBUF, 2147483647)
                 .option(ChannelOption.SO_SNDBUF, 2147483647)
                 .option(ChannelOption.AUTO_READ, true)
