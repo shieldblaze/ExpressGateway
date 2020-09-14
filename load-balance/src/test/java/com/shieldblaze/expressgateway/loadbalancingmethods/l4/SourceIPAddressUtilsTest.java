@@ -26,7 +26,7 @@ import java.util.List;
 
 import static org.junit.jupiter.api.Assertions.*;
 
-class SourceIPHashTest {
+class SourceIPAddressUtilsTest {
 
     @Test
     void getBackendAddress() {

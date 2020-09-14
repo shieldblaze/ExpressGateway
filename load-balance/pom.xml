@@ -26,12 +26,13 @@ along with ShieldBlaze ExpressGateway.  If not, see <https://www.gnu.org/license
     </parent>
     <modelVersion>4.0.0</modelVersion>
 
-    <artifactId>load-balance</artifactId>
+    <artifactId>expressgateway-load-balance</artifactId>
+    <packaging>jar</packaging>
 
     <dependencies>
         <dependency>
             <groupId>com.shieldblaze</groupId>
-            <artifactId>core</artifactId>
+            <artifactId>expressgateway-core</artifactId>
             <version>0.0.1-a</version>
         </dependency>
     </dependencies>

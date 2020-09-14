@@ -15,19 +15,20 @@
  * You should have received a copy of the GNU General Public License
  * along with ShieldBlaze ExpressGateway.  If not, see <https://www.gnu.org/licenses/>.
  */
-package com.shieldblaze.expressgateway;
+package com.shieldblaze.expressgateway.netty;
 
-import com.shieldblaze.expressgateway.server.udp.Server;
+import io.netty.buffer.PooledByteBufAllocator;
 
-import java.net.InetSocketAddress;
+public final class PooledByteBufAllocatorBuffer {
 
-public final class Main {
+    /**
+     * Get Instance of {@link PooledByteBufAllocator}
+     */
+    public static final PooledByteBufAllocator INSTANCE = new PooledByteBufAllocator(
+        true
+    );
 
-    static {
-        System.setProperty("log4j.configurationFile", "log4j2.xml");
-    }
-
-    public static void main(String[] args) throws Exception {
-        new Server(new InetSocketAddress("192.168.1.5", 9110)).start();
+    private PooledByteBufAllocatorBuffer() {
+        // Prevent outside Initialization
     }
 }

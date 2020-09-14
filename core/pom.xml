@@ -26,6 +26,7 @@ along with ShieldBlaze ExpressGateway.  If not, see <https://www.gnu.org/license
     </parent>
     <modelVersion>4.0.0</modelVersion>
 
-    <artifactId>core</artifactId>
+    <artifactId>expressgateway-core</artifactId>
+    <packaging>jar</packaging>
 
 </project>

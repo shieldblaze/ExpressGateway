@@ -15,19 +15,24 @@
  * You should have received a copy of the GNU General Public License
  * along with ShieldBlaze ExpressGateway.  If not, see <https://www.gnu.org/licenses/>.
  */
-package com.shieldblaze.expressgateway;
+package com.shieldblaze.expressgateway.server.udp;
 
-import com.shieldblaze.expressgateway.server.udp.Server;
+import com.google.common.primitives.SignedBytes;
 
-import java.net.InetSocketAddress;
+import java.util.Comparator;
 
-public final class Main {
+final class ConnectionSearchComparator implements Comparator<Object> {
 
-    static {
-        System.setProperty("log4j.configurationFile", "log4j2.xml");
+    static final ConnectionSearchComparator INSTANCE = new ConnectionSearchComparator();
+
+    private ConnectionSearchComparator() {
+        // Prevent outside initialization
     }
 
-    public static void main(String[] args) throws Exception {
-        new Server(new InetSocketAddress("192.168.1.5", 9110)).start();
+    @Override
+    public int compare(Object o1, Object o2) {
+        Connection connection = (Connection) o1;
+        byte[] byteBuffer = (byte[]) o2;
+        return SignedBytes.lexicographicalComparator().compare(connection.getClientAddressAsBytes(), byteBuffer);
     }
 }
