@@ -17,18 +17,14 @@
  */
 package com.shieldblaze.expressgateway.server.udp;
 
-import com.shieldblaze.expressgateway.netty.EventLoopUtils;
-import io.netty.buffer.ByteBuf;
+import com.shieldblaze.expressgateway.netty.EventLoopFactory;
 import io.netty.channel.ChannelHandlerContext;
 import io.netty.channel.ChannelInboundHandlerAdapter;
 import io.netty.channel.socket.DatagramPacket;
 
 import java.net.InetSocketAddress;
-import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
-import java.util.Map;
-import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.CopyOnWriteArrayList;
 
 final class UpstreamHandler extends ChannelInboundHandlerAdapter {
@@ -44,8 +40,8 @@ final class UpstreamHandler extends ChannelInboundHandlerAdapter {
 
     @Override
     public void channelRead(ChannelHandlerContext ctx, Object msg) {
-        DatagramPacket datagramPacket = (DatagramPacket) msg;
-        EventLoopUtils.CHILD.next().execute(() -> {
+        EventLoopFactory.CHILD.next().execute(() -> {
+            DatagramPacket datagramPacket = (DatagramPacket) msg;
             int index = Collections.binarySearch(connectionList, datagramPacket.sender(), ConnectionSearchComparator.INSTANCE);
 
             if (index >= 0) {

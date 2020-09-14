@@ -19,7 +19,7 @@ package com.shieldblaze.expressgateway.server.udp;
 
 import com.google.common.primitives.SignedBytes;
 import com.shieldblaze.expressgateway.netty.BootstrapUtils;
-import com.shieldblaze.expressgateway.netty.EventLoopUtils;
+import com.shieldblaze.expressgateway.netty.EventLoopFactory;
 import io.netty.bootstrap.Bootstrap;
 import io.netty.channel.Channel;
 import io.netty.channel.ChannelFuture;
@@ -28,21 +28,19 @@ import io.netty.channel.DefaultAddressedEnvelope;
 import io.netty.channel.socket.DatagramPacket;
 
 import java.net.InetSocketAddress;
-import java.util.ArrayList;
-import java.util.List;
+import java.util.concurrent.ConcurrentLinkedQueue;
 
 final class Connection implements Comparable<Connection> {
 
-    private List<DatagramPacket> datagramPacketBacklog;
+    private ConcurrentLinkedQueue<DatagramPacket> backlog = new ConcurrentLinkedQueue<>();
     final InetSocketAddress clientAddress;
     private final Channel backendChannel;
     private boolean channelActive = false;
 
     Connection(InetSocketAddress clientAddress, InetSocketAddress destinationAddress, Channel clientChannel) {
         this.clientAddress = clientAddress;
-        this.datagramPacketBacklog = new ArrayList<>();
 
-        Bootstrap bootstrap = BootstrapUtils.udp(EventLoopUtils.CHILD);
+        Bootstrap bootstrap = BootstrapUtils.udp(EventLoopFactory.CHILD);
         bootstrap.handler(new DownstreamHandler(clientChannel, clientAddress));
         ChannelFuture channelFuture = bootstrap.connect(destinationAddress);
         backendChannel = channelFuture.channel();
@@ -50,19 +48,35 @@ final class Connection implements Comparable<Connection> {
         channelFuture.addListener((ChannelFutureListener) future -> {
             if (future.isSuccess()) {
                 channelActive = true;
-                datagramPacketBacklog.forEach(datagramPacket -> {
-                    backendChannel.writeAndFlush(datagramPacket.content()).addListener((ChannelFutureListener) cf -> {
-                        if (!cf.isSuccess()) {
-                            datagramPacket.release();
-                        }
-                    });
+
+                EventLoopFactory.CHILD.next().execute(() -> {
+                    backlog.forEach(datagramPacket -> backendChannel.writeAndFlush(datagramPacket.content())
+                            .addListener((ChannelFutureListener) cf -> {
+                                if (!cf.isSuccess()) {
+                                    datagramPacket.release();
+                                }
+                            }));
+
+                    backlog.clear();
+                    backlog = null;
                 });
             } else {
-                datagramPacketBacklog.forEach(DefaultAddressedEnvelope::release);
+                backlog.forEach(DefaultAddressedEnvelope::release);
                 backendChannel.close();
             }
-            datagramPacketBacklog.clear();
         });
+    }
+
+    void writeDatagram(DatagramPacket datagramPacket) {
+        if (channelActive) {
+            backendChannel.writeAndFlush(datagramPacket.content()).addListener((ChannelFutureListener) cf -> {
+                if (!cf.isSuccess()) {
+                    datagramPacket.release();
+                }
+            });
+        } else if (backlog != null) {
+            backlog.add(datagramPacket);
+        }
     }
 
     @Override
@@ -72,21 +86,7 @@ final class Connection implements Comparable<Connection> {
         if (compare == 0) {
             return Integer.compare(clientAddress.getPort(), connection.clientAddress.getPort());
         } else {
-            return 0;
-        }
-    }
-
-    void writeDatagram(DatagramPacket datagramPacket) {
-        datagramPacket.touch("Write");
-        if (channelActive) {
-            datagramPacket.touch("Active Write");
-            backendChannel.writeAndFlush(datagramPacket.content()).addListener((ChannelFutureListener) cf -> {
-                if (!cf.isSuccess()) {
-                    datagramPacket.release();
-                }
-            });
-        } else {
-            datagramPacketBacklog.add(datagramPacket);
+            return compare;
         }
     }
 }

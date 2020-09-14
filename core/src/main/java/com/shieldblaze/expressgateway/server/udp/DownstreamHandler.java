@@ -17,7 +17,6 @@
  */
 package com.shieldblaze.expressgateway.server.udp;
 
-import io.netty.buffer.ByteBuf;
 import io.netty.channel.Channel;
 import io.netty.channel.ChannelHandlerContext;
 import io.netty.channel.ChannelInboundHandlerAdapter;

@@ -1,6 +1,6 @@
 package com.shieldblaze.expressgateway.server;
 
-import com.shieldblaze.expressgateway.netty.EventLoopUtils;
+import com.shieldblaze.expressgateway.netty.EventLoopFactory;
 import com.shieldblaze.expressgateway.server.tcp.Server;
 import org.junit.jupiter.api.AfterAll;
 import org.junit.jupiter.api.BeforeAll;
@@ -30,8 +30,8 @@ class UpstreamHandlerTest {
 
     @AfterAll
     static void stop() throws InterruptedException {
-        assertTrue(EventLoopUtils.PARENT.shutdownGracefully().sync().isSuccess());
-        assertTrue(EventLoopUtils.CHILD.shutdownGracefully().sync().isSuccess());
+        assertTrue(EventLoopFactory.PARENT.shutdownGracefully().sync().isSuccess());
+        assertTrue(EventLoopFactory.CHILD.shutdownGracefully().sync().isSuccess());
     }
 
     @Test

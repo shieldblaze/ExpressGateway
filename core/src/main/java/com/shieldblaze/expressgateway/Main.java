@@ -18,7 +18,6 @@
 package com.shieldblaze.expressgateway;
 
 import com.shieldblaze.expressgateway.server.udp.Server;
-import io.netty.util.ResourceLeakDetector;
 
 import java.net.InetSocketAddress;
 
@@ -28,8 +27,7 @@ public final class Main {
         System.setProperty("log4j.configurationFile", "log4j2.xml");
     }
 
-    public static void main(String[] args) throws Exception {
-        ResourceLeakDetector.setLevel(ResourceLeakDetector.Level.PARANOID);
+    public static void main(String[] args) {
         new Server(new InetSocketAddress("192.168.1.5", 9110)).start();
     }
 }

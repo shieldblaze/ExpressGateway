@@ -5,7 +5,7 @@ import io.netty.channel.epoll.Epoll;
 import io.netty.channel.epoll.EpollEventLoopGroup;
 import io.netty.channel.nio.NioEventLoopGroup;
 
-public final class EventLoopUtils {
+public final class EventLoopFactory {
     public static final EventLoopGroup PARENT;
     public static final EventLoopGroup CHILD;
 

@@ -18,7 +18,7 @@
 package com.shieldblaze.expressgateway.server.udp;
 
 import com.shieldblaze.expressgateway.netty.BootstrapUtils;
-import com.shieldblaze.expressgateway.netty.EventLoopUtils;
+import com.shieldblaze.expressgateway.netty.EventLoopFactory;
 import io.netty.bootstrap.Bootstrap;
 import io.netty.channel.ChannelFuture;
 import io.netty.channel.ChannelFutureListener;
@@ -37,7 +37,7 @@ public final class Server {
     }
 
     public void start() {
-        Bootstrap bootstrap = BootstrapUtils.udp(EventLoopUtils.PARENT)
+        Bootstrap bootstrap = BootstrapUtils.udp(EventLoopFactory.PARENT)
                 .handler(new UpstreamHandler());
 
         channelFuture = bootstrap.bind(inetSocketAddress)

@@ -18,7 +18,7 @@
 package com.shieldblaze.expressgateway.server.tcp;
 
 import com.shieldblaze.expressgateway.netty.PooledByteBufAllocatorBuffer;
-import com.shieldblaze.expressgateway.netty.EventLoopUtils;
+import com.shieldblaze.expressgateway.netty.EventLoopFactory;
 import io.netty.bootstrap.ServerBootstrap;
 import io.netty.channel.ChannelFuture;
 import io.netty.channel.ChannelFutureListener;
@@ -49,7 +49,7 @@ public final class Server {
     public void start() {
 
         ServerBootstrap serverBootstrap = new ServerBootstrap()
-                .group(EventLoopUtils.PARENT, EventLoopUtils.CHILD)
+                .group(EventLoopFactory.PARENT, EventLoopFactory.CHILD)
                 .option(ChannelOption.ALLOCATOR, PooledByteBufAllocatorBuffer.INSTANCE)
                 .option(ChannelOption.RCVBUF_ALLOCATOR, new FixedRecvByteBufAllocator(65535))
                 .option(ChannelOption.SO_RCVBUF, 2147483647)
