@@ -24,8 +24,8 @@ import io.netty.bootstrap.Bootstrap;
 import io.netty.channel.Channel;
 import io.netty.channel.ChannelFuture;
 import io.netty.channel.ChannelFutureListener;
+import io.netty.channel.DefaultAddressedEnvelope;
 import io.netty.channel.socket.DatagramPacket;
-import io.netty.util.ReferenceCountUtil;
 
 import java.net.InetSocketAddress;
 import java.util.ArrayList;
@@ -33,7 +33,7 @@ import java.util.List;
 
 final class Connection implements Comparable<Connection> {
 
-    private List<DatagramPacket> datagramPacketBacklog = new ArrayList<>();
+    private final List<DatagramPacket> datagramPacketBacklog = new ArrayList<>();
     private final byte[] clientAddressAsBytes;
     private final Channel backendChannel;
     private boolean channelActive = false;
@@ -48,24 +48,13 @@ final class Connection implements Comparable<Connection> {
 
         channelFuture.addListener((ChannelFutureListener) future -> {
             if (future.isSuccess()) {
-
-                EventLoopUtils.CHILD.next().execute(() -> {
-                    channelActive = true;
-
-                    for (DatagramPacket datagramPacket : datagramPacketBacklog) {
-                        if (datagramPacket == null) {
-                            System.out.println("Packet got GCed");
-                        } else {
-                            backendChannel.writeAndFlush(datagramPacket.content());
-                        }
-                    }
-
-                    datagramPacketBacklog.clear();
-                });
+                channelActive = true;
+                datagramPacketBacklog.forEach(datagramPacket -> backendChannel.writeAndFlush(datagramPacket.content()));
             } else {
-                channelFuture.channel().close();
-                datagramPacketBacklog.clear();
+                datagramPacketBacklog.forEach(DefaultAddressedEnvelope::release);
+                backendChannel.close();
             }
+            datagramPacketBacklog.clear();
         });
     }
 
