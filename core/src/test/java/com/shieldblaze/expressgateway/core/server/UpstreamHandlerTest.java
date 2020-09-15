@@ -14,6 +14,7 @@ import com.shieldblaze.expressgateway.core.loadbalance.l4.RoundRobin;
 import com.shieldblaze.expressgateway.core.netty.EventLoopFactory;
 import com.shieldblaze.expressgateway.core.netty.PooledByteBufAllocatorBuffer;
 import com.shieldblaze.expressgateway.core.server.tcp.TCPListener;
+import io.netty.channel.epoll.Epoll;
 import org.junit.jupiter.api.AfterAll;
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.Test;
@@ -38,7 +39,7 @@ class UpstreamHandlerTest {
     static void setup() {
 
         TransportConfiguration transportConfiguration = TransportConfigurationBuilder.newBuilder()
-                .withTransportType(TransportType.NIO)
+                .withTransportType(Epoll.isAvailable() ? TransportType.EPOLL : TransportType.NIO)
                 .withTCPFastOpenMaximumPendingRequests(2147483647)
                 .withBackendConnectTimeout(1000 * 5)
                 .withListenerSocketTimeout(1000 * 5)
