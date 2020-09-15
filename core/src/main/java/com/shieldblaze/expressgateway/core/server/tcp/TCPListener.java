@@ -17,12 +17,13 @@
  */
 package com.shieldblaze.expressgateway.core.server.tcp;
 
-import com.shieldblaze.expressgateway.core.netty.PooledByteBufAllocatorBuffer;
-import com.shieldblaze.expressgateway.core.server.FrontListener;
+import com.shieldblaze.expressgateway.core.configuration.Configuration;
+import com.shieldblaze.expressgateway.core.configuration.transport.TransportConfiguration;
 import com.shieldblaze.expressgateway.core.loadbalance.l4.L4Balance;
 import com.shieldblaze.expressgateway.core.netty.EventLoopFactory;
+import com.shieldblaze.expressgateway.core.server.FrontListener;
 import io.netty.bootstrap.ServerBootstrap;
-import io.netty.channel.AdaptiveRecvByteBufAllocator;
+import io.netty.buffer.ByteBufAllocator;
 import io.netty.channel.ChannelFuture;
 import io.netty.channel.ChannelFutureListener;
 import io.netty.channel.ChannelHandlerContext;
@@ -50,20 +51,21 @@ public final class TCPListener extends FrontListener {
     }
 
     @Override
-    public void start(L4Balance l4Balance) {
+    public void start(Configuration configuration, EventLoopFactory eventLoopFactory, ByteBufAllocator byteBufAllocator, L4Balance l4Balance) {
+        TransportConfiguration transportConfiguration = configuration.getTransportConfiguration();
 
         ServerBootstrap serverBootstrap = new ServerBootstrap()
-                .group(EventLoopFactory.PARENT, EventLoopFactory.CHILD)
-                .option(ChannelOption.ALLOCATOR, PooledByteBufAllocatorBuffer.INSTANCE)
-                .option(ChannelOption.RCVBUF_ALLOCATOR, new AdaptiveRecvByteBufAllocator(1500, 9001, 65536))
-                .option(ChannelOption.SO_RCVBUF, 2147483647)
-                .option(ChannelOption.SO_BACKLOG, 2147483647)
+                .group(eventLoopFactory.getParentGroup(), eventLoopFactory.getChildGroup())
+                .option(ChannelOption.ALLOCATOR, byteBufAllocator)
+                .option(ChannelOption.RCVBUF_ALLOCATOR, transportConfiguration.getRecvByteBufAllocator())
+                .option(ChannelOption.SO_RCVBUF, transportConfiguration.getSocketReceiveBufferSize())
+                .option(ChannelOption.SO_BACKLOG, transportConfiguration.getTCPConnectionBacklog())
                 .option(ChannelOption.AUTO_READ, true)
                 .option(ChannelOption.AUTO_CLOSE, false)
-                .option(ChannelOption.SO_TIMEOUT, 1000)
-                .childOption(ChannelOption.SO_SNDBUF, 2147483647)
-                .childOption(ChannelOption.SO_RCVBUF, 2147483647)
-                .childOption(ChannelOption.RCVBUF_ALLOCATOR, new AdaptiveRecvByteBufAllocator(1500, 9001, 65536))
+                .option(ChannelOption.SO_TIMEOUT, transportConfiguration.getListenerSocketTimeout())
+                .childOption(ChannelOption.SO_SNDBUF, transportConfiguration.getSocketSendBufferSize())
+                .childOption(ChannelOption.SO_RCVBUF, transportConfiguration.getSocketReceiveBufferSize())
+                .childOption(ChannelOption.RCVBUF_ALLOCATOR, transportConfiguration.getRecvByteBufAllocator())
                 .channelFactory(() -> {
                     if (Epoll.isAvailable()) {
                         EpollServerSocketChannel serverSocketChannel = new EpollServerSocketChannel();
@@ -76,7 +78,7 @@ public final class TCPListener extends FrontListener {
                         return new NioServerSocketChannel();
                     }
                 })
-                .childHandler(new ServerInitializer(l4Balance));
+                .childHandler(new ServerInitializer(configuration, eventLoopFactory, l4Balance));
 
         ChannelFuture channelFuture = serverBootstrap.bind(bindAddress).addListener((ChannelFutureListener) future -> {
             if (future.isSuccess()) {
@@ -91,17 +93,19 @@ public final class TCPListener extends FrontListener {
 
         private static final Logger logger = LogManager.getLogger(ServerInitializer.class);
 
+        private final EventLoopFactory eventLoopFactory;
+        private final Configuration configuration;
         private final L4Balance l4Balance;
 
-        public ServerInitializer(L4Balance l4Balance) {
+        public ServerInitializer(Configuration configuration, EventLoopFactory eventLoopFactory, L4Balance l4Balance) {
+            this.configuration = configuration;
+            this.eventLoopFactory = eventLoopFactory;
             this.l4Balance = l4Balance;
         }
 
-
-
         @Override
         protected void initChannel(SocketChannel socketChannel) {
-            socketChannel.pipeline().addFirst(new UpstreamHandler(l4Balance));
+            socketChannel.pipeline().addFirst(new UpstreamHandler(configuration, eventLoopFactory, l4Balance));
         }
 
         @Override

@@ -17,6 +17,7 @@
  */
 package com.shieldblaze.expressgateway.core.server.udp;
 
+import com.shieldblaze.expressgateway.core.configuration.Configuration;
 import com.shieldblaze.expressgateway.core.loadbalance.backend.Backend;
 import com.shieldblaze.expressgateway.core.loadbalance.l4.L4Balance;
 import com.shieldblaze.expressgateway.core.netty.EventLoopFactory;
@@ -32,14 +33,18 @@ final class UpstreamHandler extends ChannelInboundHandlerAdapter {
 
     private final Map<InetSocketAddress, Connection> connectionMap = new ConcurrentHashMap<>();
     private final L4Balance l4Balance;
+    private final Configuration configuration;
+    private final EventLoopFactory eventLoopFactory;
 
-    public UpstreamHandler(L4Balance l4Balance) {
+    UpstreamHandler(L4Balance l4Balance, Configuration configuration, EventLoopFactory eventLoopFactory) {
         this.l4Balance = l4Balance;
+        this.configuration = configuration;
+        this.eventLoopFactory = eventLoopFactory;
     }
 
     @Override
     public void channelRead(ChannelHandlerContext ctx, Object msg) {
-        EventLoopFactory.CHILD.next().execute(() -> {
+        eventLoopFactory.getChildGroup().next().execute(() -> {
             DatagramPacket datagramPacket = (DatagramPacket) msg;
             Connection connection = connectionMap.get(datagramPacket.sender());
 
@@ -47,7 +52,7 @@ final class UpstreamHandler extends ChannelInboundHandlerAdapter {
                 Backend backend = l4Balance.getBackend(datagramPacket.sender());
                 backend.incConnections();
 
-                connection = new Connection(datagramPacket.sender(), backend, ctx.channel());
+                connection = new Connection(datagramPacket.sender(), backend, ctx.channel(), configuration, eventLoopFactory, ctx.alloc());
                 connectionMap.put(datagramPacket.sender(), connection);
             }
 

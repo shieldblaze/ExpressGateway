@@ -48,13 +48,13 @@ public final class LeastConnection extends L4Balance {
 
         // Get Number Of Maximum Connection on a Backend
         int currentMaxConnections = backends.stream()
-                .mapToInt(Backend::getCurrentConnections)
+                .mapToInt(Backend::getActiveConnections)
                 .max()
                 .getAsInt();
 
         // Check If we got any Backend which has less Number of Connections than Backend with Maximum Connection
         Optional<Backend> backend = backends.stream()
-                .filter(back -> back.getCurrentConnections() < currentMaxConnections)
+                .filter(back -> back.getActiveConnections() < currentMaxConnections)
                 .findFirst();
 
         return backend.orElseGet(() -> backends.get(Index.getAndIncrement()));

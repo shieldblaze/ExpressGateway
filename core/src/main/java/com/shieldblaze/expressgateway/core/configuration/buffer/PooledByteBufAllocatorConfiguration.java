@@ -1,9 +1,28 @@
+/*
+ * This file is part of ShieldBlaze ExpressGateway. [www.shieldblaze.com]
+ * Copyright (c) 2020 ShieldBlaze
+ *
+ * ShieldBlaze ExpressGateway is free software: you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License as published by
+ * the Free Software Foundation, either version 3 of the License, or
+ * (at your option) any later version.
+ *
+ * ShieldBlaze ExpressGateway is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
+ *
+ * You should have received a copy of the GNU General Public License
+ * along with ShieldBlaze ExpressGateway.  If not, see <https://www.gnu.org/licenses/>.
+ */
 package com.shieldblaze.expressgateway.core.configuration.buffer;
 
-public class PooledByteBufAllocatorConfiguration {
+import io.netty.util.internal.PlatformDependent;
+
+public final class PooledByteBufAllocatorConfiguration {
     private boolean preferDirect;
-    private int nHeapArena;
-    private int nDirectArena;
+    private int HeapArena;
+    private int DirectArena;
     private int pageSize;
     private int maxOrder;
     private int smallCacheSize;
@@ -11,35 +30,64 @@ public class PooledByteBufAllocatorConfiguration {
     private boolean useCacheForAllThreads;
     private int directMemoryCacheAlignment;
 
+    PooledByteBufAllocatorConfiguration() {
+        // Prevent outside initialization
+    }
+
+    public static final PooledByteBufAllocatorConfiguration DEFAULT = new PooledByteBufAllocatorConfiguration(
+            true,
+            16384,
+            11,
+            (int) Math.max(0, Math.min(Runtime.getRuntime().availableProcessors() * 2, Runtime.getRuntime().maxMemory() / 16384 << 11 / 2 / 3)),
+            (int) Math.max(0, Math.min(Runtime.getRuntime().availableProcessors() * 2, PlatformDependent.maxDirectMemory() / 16384 << 11 / 2 / 3)),
+            256,
+            64,
+            true,
+            0
+    );
+
+    private PooledByteBufAllocatorConfiguration(boolean preferDirect, int pageSize, int maxOrder, int heapArena, int directArena, int smallCacheSize,
+                                                int normalCacheSize, boolean useCacheForAllThreads, int directMemoryCacheAlignment) {
+        this.preferDirect = preferDirect;
+        HeapArena = heapArena;
+        DirectArena = directArena;
+        this.pageSize = pageSize;
+        this.maxOrder = maxOrder;
+        this.smallCacheSize = smallCacheSize;
+        this.normalCacheSize = normalCacheSize;
+        this.useCacheForAllThreads = useCacheForAllThreads;
+        this.directMemoryCacheAlignment = directMemoryCacheAlignment;
+    }
+
     public boolean isPreferDirect() {
         return preferDirect;
     }
 
-    public void setPreferDirect(boolean preferDirect) {
+    void setPreferDirect(boolean preferDirect) {
         this.preferDirect = preferDirect;
     }
 
-    public int getnHeapArena() {
-        return nHeapArena;
+    public int getHeapArena() {
+        return HeapArena;
     }
 
-    public void setnHeapArena(int nHeapArena) {
-        this.nHeapArena = nHeapArena;
+    void setHeapArena(int heapArena) {
+        this.HeapArena = heapArena;
     }
 
-    public int getnDirectArena() {
-        return nDirectArena;
+    public int getDirectArena() {
+        return DirectArena;
     }
 
-    public void setnDirectArena(int nDirectArena) {
-        this.nDirectArena = nDirectArena;
+    void setDirectArena(int directArena) {
+        this.DirectArena = directArena;
     }
 
     public int getPageSize() {
         return pageSize;
     }
 
-    public void setPageSize(int pageSize) {
+    void setPageSize(int pageSize) {
         this.pageSize = pageSize;
     }
 
@@ -47,7 +95,7 @@ public class PooledByteBufAllocatorConfiguration {
         return maxOrder;
     }
 
-    public void setMaxOrder(int maxOrder) {
+    void setMaxOrder(int maxOrder) {
         this.maxOrder = maxOrder;
     }
 
@@ -55,7 +103,7 @@ public class PooledByteBufAllocatorConfiguration {
         return smallCacheSize;
     }
 
-    public void setSmallCacheSize(int smallCacheSize) {
+    void setSmallCacheSize(int smallCacheSize) {
         this.smallCacheSize = smallCacheSize;
     }
 
@@ -63,7 +111,7 @@ public class PooledByteBufAllocatorConfiguration {
         return normalCacheSize;
     }
 
-    public void setNormalCacheSize(int normalCacheSize) {
+    void setNormalCacheSize(int normalCacheSize) {
         this.normalCacheSize = normalCacheSize;
     }
 
@@ -71,7 +119,7 @@ public class PooledByteBufAllocatorConfiguration {
         return useCacheForAllThreads;
     }
 
-    public void setUseCacheForAllThreads(boolean useCacheForAllThreads) {
+    void setUseCacheForAllThreads(boolean useCacheForAllThreads) {
         this.useCacheForAllThreads = useCacheForAllThreads;
     }
 
@@ -79,7 +127,7 @@ public class PooledByteBufAllocatorConfiguration {
         return directMemoryCacheAlignment;
     }
 
-    public void setDirectMemoryCacheAlignment(int directMemoryCacheAlignment) {
+    void setDirectMemoryCacheAlignment(int directMemoryCacheAlignment) {
         this.directMemoryCacheAlignment = directMemoryCacheAlignment;
     }
 }

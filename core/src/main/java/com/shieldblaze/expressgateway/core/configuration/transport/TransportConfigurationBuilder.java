@@ -1,5 +1,23 @@
+/*
+ * This file is part of ShieldBlaze ExpressGateway. [www.shieldblaze.com]
+ * Copyright (c) 2020 ShieldBlaze
+ *
+ * ShieldBlaze ExpressGateway is free software: you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License as published by
+ * the Free Software Foundation, either version 3 of the License, or
+ * (at your option) any later version.
+ *
+ * ShieldBlaze ExpressGateway is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
+ *
+ * You should have received a copy of the GNU General Public License
+ * along with ShieldBlaze ExpressGateway.  If not, see <https://www.gnu.org/licenses/>.
+ */
 package com.shieldblaze.expressgateway.core.configuration.transport;
 
+import io.netty.channel.epoll.Epoll;
 import io.netty.util.internal.ObjectUtil;
 
 public final class TransportConfigurationBuilder {
@@ -7,10 +25,11 @@ public final class TransportConfigurationBuilder {
     private ReceiveBufferAllocationType receiveBufferAllocationType;
     private int[] ReceiveBufferSizes;
     private int TCPConnectionBacklog;
-    private int TCPDataBacklog;
+    private int DataBacklog;
     private int SocketReceiveBufferSize;
     private int SocketSendBufferSize;
     private int TCPFastOpenMaximumPendingRequestsCount;
+    private int ListenerSocketTimeout;
     private int BackendConnectTimeout;
 
     private TransportConfigurationBuilder() {
@@ -40,8 +59,8 @@ public final class TransportConfigurationBuilder {
         return this;
     }
 
-    public TransportConfigurationBuilder withTCPDataBacklog(int TCPDataBacklog) {
-        this.TCPDataBacklog = TCPDataBacklog;
+    public TransportConfigurationBuilder withDataBacklog(int DataBacklog) {
+        this.DataBacklog = DataBacklog;
         return this;
     }
 
@@ -60,6 +79,11 @@ public final class TransportConfigurationBuilder {
         return this;
     }
 
+    public TransportConfigurationBuilder withListenerSocketTimeout(int ListenerSocketTimeout) {
+        this.ListenerSocketTimeout = ListenerSocketTimeout;
+        return this;
+    }
+
     public TransportConfigurationBuilder withBackendConnectTimeout(int BackendConnectTimeout) {
         this.BackendConnectTimeout = BackendConnectTimeout;
         return this;
@@ -68,6 +92,11 @@ public final class TransportConfigurationBuilder {
     public TransportConfiguration build() {
         TransportConfiguration transportConfiguration = new TransportConfiguration();
         transportConfiguration.setTransportType(ObjectUtil.checkNotNull(transportType, "Transport Type"));
+
+        if (transportType == TransportType.EPOLL && !Epoll.isAvailable()) {
+            throw new IllegalArgumentException("Epoll is not available");
+        }
+
         transportConfiguration.setReceiveBufferAllocationType(ObjectUtil.checkNotNull(receiveBufferAllocationType,
                 "Receive Buffer Allocation Type"));
         transportConfiguration.setReceiveBufferSizes(ObjectUtil.checkNotNull(ReceiveBufferSizes, "Receive Buffer Sizes"));
@@ -102,21 +131,22 @@ public final class TransportConfigurationBuilder {
         }
 
         transportConfiguration.setTCPConnectionBacklog(ObjectUtil.checkPositive(TCPConnectionBacklog,  "TCP Connection Backlog"));
-        transportConfiguration.setTCPDataBacklog(ObjectUtil.checkPositive(TCPDataBacklog, "TCP Data Backlog"));
+        transportConfiguration.setDataBacklog(ObjectUtil.checkPositive(DataBacklog, "Data Backlog"));
 
         transportConfiguration.setSocketReceiveBufferSize(SocketReceiveBufferSize);
-        if (SocketReceiveBufferSize > 65536 || SocketReceiveBufferSize < 64) {
-            throw new IllegalArgumentException("Socket Receive Buffer Size Cannot Be Less Than 64-65536");
+        if (SocketReceiveBufferSize < 64) {
+            throw new IllegalArgumentException("Socket Receive Buffer Size Must Be Greater Than 64");
         }
 
         transportConfiguration.setSocketSendBufferSize(SocketSendBufferSize);
-        if (SocketSendBufferSize > 65536 || SocketSendBufferSize < 64) {
-            throw new IllegalArgumentException("Socket Send Buffer Size Cannot Be Less Than 64-65536");
+        if (SocketSendBufferSize < 64) {
+            throw new IllegalArgumentException("Socket Send Buffer Size Must Be Greater Than 64");
         }
 
         transportConfiguration.setTCPFastOpenMaximumPendingRequests(ObjectUtil.checkPositive(TCPFastOpenMaximumPendingRequestsCount,
                 "TCP Fast Open Maximum Pending Requests"));
         transportConfiguration.setBackendConnectTimeout(ObjectUtil.checkPositive(BackendConnectTimeout, "Backend Connect Timeout"));
+        transportConfiguration.setListenerSocketTimeout(ObjectUtil.checkPositive(ListenerSocketTimeout, "Listener Socket Timeout"));
 
         return transportConfiguration;
     }

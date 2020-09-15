@@ -17,12 +17,14 @@
  */
 package com.shieldblaze.expressgateway.core;
 
+import com.shieldblaze.expressgateway.core.configuration.Configuration;
 import com.shieldblaze.expressgateway.core.loadbalance.backend.Cluster;
 import com.shieldblaze.expressgateway.core.loadbalance.l4.L4Balance;
 import com.shieldblaze.expressgateway.core.server.FrontListener;
 import io.netty.util.internal.ObjectUtil;
 
 public final class L4LoadBalancerBuilder {
+    private Configuration configuration;
     private L4Balance l4Balance;
     private Cluster cluster;
     private FrontListener frontListener;
@@ -33,6 +35,11 @@ public final class L4LoadBalancerBuilder {
 
     public static L4LoadBalancerBuilder newBuilder() {
         return new L4LoadBalancerBuilder();
+    }
+
+    public L4LoadBalancerBuilder withConfiguration(Configuration configuration) {
+        this.configuration = configuration;
+        return this;
     }
 
     public L4LoadBalancerBuilder withL4Balance(L4Balance l4Balance) {
@@ -52,6 +59,7 @@ public final class L4LoadBalancerBuilder {
 
     public L4LoadBalancer build() {
         L4LoadBalancer l4LoadBalancer = new L4LoadBalancer();
+        l4LoadBalancer.setConfiguration(ObjectUtil.checkNotNull(configuration, "Configuration"));
         l4LoadBalancer.setL4Balance(ObjectUtil.checkNotNull(l4Balance, "L4Balance"));
         l4Balance.setBackends(cluster.getBackends());
         l4LoadBalancer.setCluster(ObjectUtil.checkNotNull(cluster, "Cluster"));

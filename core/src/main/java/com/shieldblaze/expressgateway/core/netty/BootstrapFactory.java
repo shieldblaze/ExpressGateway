@@ -17,7 +17,11 @@
  */
 package com.shieldblaze.expressgateway.core.netty;
 
+import com.shieldblaze.expressgateway.core.configuration.Configuration;
+import com.shieldblaze.expressgateway.core.configuration.transport.TransportConfiguration;
 import io.netty.bootstrap.Bootstrap;
+import io.netty.buffer.ByteBufAllocator;
+import io.netty.buffer.PooledByteBufAllocator;
 import io.netty.channel.AdaptiveRecvByteBufAllocator;
 import io.netty.channel.ChannelOption;
 import io.netty.channel.EventLoopGroup;
@@ -35,13 +39,15 @@ public final class BootstrapFactory {
         // Prevent outside initialization
     }
 
-    public static Bootstrap getTCP(EventLoopGroup eventLoopGroup) {
+    public static Bootstrap getTCP(Configuration configuration, EventLoopGroup eventLoopGroup, ByteBufAllocator byteBufAllocator) {
         return new Bootstrap()
                 .group(eventLoopGroup)
-                .option(ChannelOption.ALLOCATOR, PooledByteBufAllocatorBuffer.INSTANCE)
-                .option(ChannelOption.SO_SNDBUF, 2147483647)
+                .option(ChannelOption.ALLOCATOR, byteBufAllocator)
+                .option(ChannelOption.RCVBUF_ALLOCATOR, configuration.getTransportConfiguration().getRecvByteBufAllocator())
+                .option(ChannelOption.SO_SNDBUF, configuration.getTransportConfiguration().getSocketSendBufferSize())
+                .option(ChannelOption.SO_RCVBUF, configuration.getTransportConfiguration().getSocketReceiveBufferSize())
                 .option(ChannelOption.TCP_NODELAY, true)
-                .option(ChannelOption.CONNECT_TIMEOUT_MILLIS, 5000)
+                .option(ChannelOption.CONNECT_TIMEOUT_MILLIS, configuration.getTransportConfiguration().getBackendConnectTimeout())
                 .channelFactory(() -> {
                     if (Epoll.isAvailable()) {
                         EpollSocketChannel socketChannel = new EpollSocketChannel();
@@ -57,13 +63,13 @@ public final class BootstrapFactory {
                 });
     }
 
-    public static Bootstrap getUDP(EventLoopGroup eventLoopGroup) {
+    public static Bootstrap getUDP(Configuration configuration, EventLoopGroup eventLoopGroup, ByteBufAllocator byteBufAllocator) {
         return new Bootstrap()
                 .group(eventLoopGroup)
-                .option(ChannelOption.ALLOCATOR, PooledByteBufAllocatorBuffer.INSTANCE)
-                .option(ChannelOption.RCVBUF_ALLOCATOR, new AdaptiveRecvByteBufAllocator(1500, 9001, 65536))
-                .option(ChannelOption.SO_RCVBUF, 2147483647)
-                .option(ChannelOption.SO_SNDBUF, 2147483647)
+                .option(ChannelOption.ALLOCATOR, byteBufAllocator)
+                .option(ChannelOption.RCVBUF_ALLOCATOR, configuration.getTransportConfiguration().getRecvByteBufAllocator())
+                .option(ChannelOption.SO_SNDBUF, configuration.getTransportConfiguration().getSocketSendBufferSize())
+                .option(ChannelOption.SO_RCVBUF, configuration.getTransportConfiguration().getSocketReceiveBufferSize())
                 .option(ChannelOption.AUTO_READ, true)
                 .option(ChannelOption.AUTO_CLOSE, false)
                 .channelFactory(() -> {

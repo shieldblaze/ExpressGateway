@@ -17,6 +17,7 @@
  */
 package com.shieldblaze.expressgateway.core.server.tcp;
 
+import com.shieldblaze.expressgateway.core.configuration.Configuration;
 import com.shieldblaze.expressgateway.core.loadbalance.backend.Backend;
 import com.shieldblaze.expressgateway.core.loadbalance.l4.L4Balance;
 import com.shieldblaze.expressgateway.core.netty.BootstrapFactory;
@@ -44,24 +45,28 @@ import java.util.concurrent.ConcurrentLinkedQueue;
  */
 final class UpstreamHandler extends ChannelInboundHandlerAdapter {
 
+    private final L4Balance l4Balance;
+    private final Configuration configuration;
+    private final EventLoopFactory eventLoopFactory;
+
     private ConcurrentLinkedQueue<ByteBuf> backlog = new ConcurrentLinkedQueue<>();
     private boolean channelActive = false;
     private Channel backendChannel;
-    private final L4Balance l4Balance;
     private Backend backend;
 
-    public UpstreamHandler(L4Balance l4Balance) {
+    public UpstreamHandler(Configuration configuration, EventLoopFactory eventLoopFactory, L4Balance l4Balance) {
         this.l4Balance = l4Balance;
+        this.configuration = configuration;
+        this.eventLoopFactory = eventLoopFactory;
     }
 
     @Override
     public void channelActive(ChannelHandlerContext ctx) {
-        Channel sourceChannel = ctx.channel();
-        Bootstrap bootstrap = BootstrapFactory.getTCP(ctx.channel().eventLoop());
+        Bootstrap bootstrap = BootstrapFactory.getTCP(configuration, ctx.channel().eventLoop(), ctx.alloc());
         backend = l4Balance.getBackend((InetSocketAddress) ctx.channel().remoteAddress());
-        bootstrap.handler(new DownstreamHandler(sourceChannel, backend));
+        bootstrap.handler(new DownstreamHandler(ctx.channel(), backend));
 
-        ChannelFuture channelFuture = bootstrap.connect(new InetSocketAddress("127.0.0.1", 9111));
+        ChannelFuture channelFuture = bootstrap.connect(backend.getSocketAddress());
         backendChannel = channelFuture.channel();
 
         // Listener for writing Backlog
@@ -73,7 +78,7 @@ final class UpstreamHandler extends ChannelInboundHandlerAdapter {
              * If we're not connected to the backend, close everything.
              */
             if (future.isSuccess()) {
-                EventLoopFactory.CHILD.next().execute(() -> {
+                eventLoopFactory.getChildGroup().next().execute(() -> {
 
                     backlog.forEach(packet -> {
                         backend.incBytesWritten(packet.readableBytes());

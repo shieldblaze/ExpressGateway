@@ -17,18 +17,34 @@
  */
 package com.shieldblaze.expressgateway.core.netty;
 
+import com.shieldblaze.expressgateway.core.configuration.buffer.PooledByteBufAllocatorConfiguration;
 import io.netty.buffer.PooledByteBufAllocator;
+import io.netty.util.internal.ObjectUtil;
 
 public final class PooledByteBufAllocatorBuffer {
 
-    private PooledByteBufAllocatorBuffer() {
-        // Prevent outside Initialization
+    private final PooledByteBufAllocator pooledByteBufAllocator;
+
+    public PooledByteBufAllocatorBuffer(PooledByteBufAllocatorConfiguration configuration) {
+        ObjectUtil.checkNotNull(configuration, "PooledByteBufAllocatorConfiguration");
+
+        pooledByteBufAllocator = new PooledByteBufAllocator(
+                configuration.isPreferDirect(),
+                configuration.getHeapArena(),
+                configuration.getDirectArena(),
+                configuration.getPageSize(),
+                configuration.getMaxOrder(),
+                configuration.getSmallCacheSize(),
+                configuration.getNormalCacheSize(),
+                configuration.isUseCacheForAllThreads(),
+                configuration.getDirectMemoryCacheAlignment()
+        );
     }
 
     /**
      * Get Instance of {@link PooledByteBufAllocator}
      */
-    public static final PooledByteBufAllocator INSTANCE = new PooledByteBufAllocator(
-        true
-    );
+    public PooledByteBufAllocator getInstance() {
+        return pooledByteBufAllocator;
+    }
 }

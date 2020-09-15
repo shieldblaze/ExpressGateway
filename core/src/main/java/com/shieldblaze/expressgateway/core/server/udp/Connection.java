@@ -17,10 +17,12 @@
  */
 package com.shieldblaze.expressgateway.core.server.udp;
 
+import com.shieldblaze.expressgateway.core.configuration.Configuration;
 import com.shieldblaze.expressgateway.core.loadbalance.backend.Backend;
 import com.shieldblaze.expressgateway.core.netty.BootstrapFactory;
 import com.shieldblaze.expressgateway.core.netty.EventLoopFactory;
 import io.netty.bootstrap.Bootstrap;
+import io.netty.buffer.ByteBufAllocator;
 import io.netty.channel.Channel;
 import io.netty.channel.ChannelFuture;
 import io.netty.channel.ChannelFutureListener;
@@ -33,24 +35,27 @@ import java.util.concurrent.ConcurrentLinkedQueue;
 final class Connection {
 
     private ConcurrentLinkedQueue<DatagramPacket> backlog = new ConcurrentLinkedQueue<>();
-    final InetSocketAddress clientAddress;
-    private final Channel backendChannel;
-    private boolean channelActive = false;
-    private final Backend backend;
 
-    Connection(InetSocketAddress clientAddress, Backend backend, Channel clientChannel) {
+    private final Configuration configuration;
+    private final Channel backendChannel;
+    private final Backend backend;
+    private boolean channelActive = false;
+    final InetSocketAddress clientAddress;
+
+    Connection(InetSocketAddress clientAddress, Backend backend, Channel clientChannel, Configuration configuration,
+               EventLoopFactory eventLoopFactory, ByteBufAllocator byteBufAllocator) {
+        this.configuration = configuration;
         this.clientAddress = clientAddress;
         this.backend = backend;
 
-        Bootstrap bootstrap = BootstrapFactory.getUDP(EventLoopFactory.CHILD);
+        Bootstrap bootstrap = BootstrapFactory.getUDP(configuration, eventLoopFactory.getChildGroup(), byteBufAllocator);
         bootstrap.handler(new DownstreamHandler(clientChannel, clientAddress, backend));
         ChannelFuture channelFuture = bootstrap.connect(backend.getSocketAddress());
         backendChannel = channelFuture.channel();
 
         channelFuture.addListener((ChannelFutureListener) future -> {
             if (future.isSuccess()) {
-
-                EventLoopFactory.CHILD.next().execute(() -> {
+                eventLoopFactory.getChildGroup().next().execute(() -> {
 
                     backlog.forEach(datagramPacket -> {
                         backend.incBytesWritten(datagramPacket.content().readableBytes());
@@ -80,8 +85,13 @@ final class Connection {
                     datagramPacket.release();
                 }
             });
+            return;
         } else if (backlog != null) {
-            backlog.add(datagramPacket);
+            if (backlog.size() < configuration.getTransportConfiguration().getDataBacklog()) {
+                backlog.add(datagramPacket);
+                return;
+            }
         }
+        datagramPacket.release();
     }
 }

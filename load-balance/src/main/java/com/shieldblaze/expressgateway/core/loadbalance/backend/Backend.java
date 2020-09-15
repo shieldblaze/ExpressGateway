@@ -20,17 +20,51 @@ package com.shieldblaze.expressgateway.core.loadbalance.backend;
 import io.netty.util.internal.ObjectUtil;
 
 import java.net.InetSocketAddress;
+import java.util.concurrent.atomic.AtomicInteger;
+import java.util.concurrent.atomic.AtomicLong;
 
+/**
+ * {@link Backend} is the server which handles actual request of client.
+ */
 public class Backend {
-    private InetSocketAddress socketAddress;
-    private int Weight;
-    private int maxConnections;
-    private int currentConnections = 0;
-    private long bytesWritten = 0L;
-    private long bytesReceived = 0L;
 
+    /**
+     * Address of this {@link Backend}
+     */
+    private InetSocketAddress socketAddress;
+
+    /**
+     * Weight of this {@link Backend}
+     */
+    private int Weight;
+
+    /**
+     * Maximum Number Of Connections Allowed for this {@link Backend}
+     */
+    private int maxConnections;
+
+    /**
+     * Active Number Of Connection for this {@link Backend}
+     */
+    private final AtomicInteger activeConnections = new AtomicInteger();
+
+    /**
+     * Number of bytes written so far to this {@link Backend}
+     */
+    private final AtomicLong bytesWritten = new AtomicLong();
+
+    /**
+     * Number of bytes received so far from this {@link Backend}
+     */
+    private final AtomicLong bytesReceived  = new AtomicLong();
+
+    /**
+     * Create {@link Backend} with {@code Weight 100} and {@code maxConnections 10000}
+     *
+     * @param socketAddress Address of this {@link Backend}
+     */
     public Backend(InetSocketAddress socketAddress) {
-        this(socketAddress, 100, 100_000);
+        this(socketAddress, 100, 10_000);
     }
 
     public Backend(InetSocketAddress socketAddress, int Weight, int maxConnections) {
@@ -65,24 +99,24 @@ public class Backend {
         this.Weight = weight;
     }
 
-    public int getCurrentConnections() {
-        return currentConnections;
+    public int getActiveConnections() {
+        return activeConnections.get();
     }
 
     public void incConnections() {
-        currentConnections++;
+        activeConnections.incrementAndGet();
     }
 
     public void decConnections() {
-        currentConnections--;
+        activeConnections.decrementAndGet();
     }
 
     public void incBytesWritten(int bytes) {
-        bytesWritten += bytes;
+        bytesWritten.addAndGet(bytes);
     }
 
     public void incBytesReceived(int bytes) {
-        bytesReceived += bytes;
+        bytesReceived.addAndGet(bytes);
     }
 
     public void setMaxConnections(int maxConnections) {

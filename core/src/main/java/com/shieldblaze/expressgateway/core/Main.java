@@ -17,6 +17,15 @@
  */
 package com.shieldblaze.expressgateway.core;
 
+import com.shieldblaze.expressgateway.core.configuration.Configuration;
+import com.shieldblaze.expressgateway.core.configuration.ConfigurationBuilder;
+import com.shieldblaze.expressgateway.core.configuration.buffer.PooledByteBufAllocatorConfiguration;
+import com.shieldblaze.expressgateway.core.configuration.eventloop.EventLoopConfiguration;
+import com.shieldblaze.expressgateway.core.configuration.eventloop.EventLoopConfigurationBuilder;
+import com.shieldblaze.expressgateway.core.configuration.transport.ReceiveBufferAllocationType;
+import com.shieldblaze.expressgateway.core.configuration.transport.TransportConfiguration;
+import com.shieldblaze.expressgateway.core.configuration.transport.TransportConfigurationBuilder;
+import com.shieldblaze.expressgateway.core.configuration.transport.TransportType;
 import com.shieldblaze.expressgateway.core.loadbalance.backend.Backend;
 import com.shieldblaze.expressgateway.core.loadbalance.l4.RoundRobin;
 import com.shieldblaze.expressgateway.core.server.udp.UDPListener;
@@ -31,12 +40,36 @@ public final class Main {
     }
 
     public static void main(String[] args) {
+        TransportConfiguration transportConfiguration = TransportConfigurationBuilder.newBuilder()
+                .withTransportType(TransportType.NIO)
+                .withTCPFastOpenMaximumPendingRequests(2147483647)
+                .withBackendConnectTimeout(1000 * 5)
+                .withListenerSocketTimeout(1000 * 5)
+                .withReceiveBufferAllocationType(ReceiveBufferAllocationType.FIXED)
+                .withReceiveBufferSizes(new int[]{100})
+                .withSocketReceiveBufferSize(2147483647)
+                .withSocketSendBufferSize(2147483647)
+                .withTCPConnectionBacklog(2147483647)
+                .withDataBacklog(2147483647)
+                .build();
+
+        EventLoopConfiguration eventLoopConfiguration = EventLoopConfigurationBuilder.newBuilder()
+                .withParentWorkers(2)
+                .withChildWorkers(4)
+                .build();
+
+        Configuration configuration = ConfigurationBuilder.newBuilder()
+                .withTransportConfiguration(transportConfiguration)
+                .withEventLoopConfiguration(eventLoopConfiguration)
+                .withPooledByteBufAllocatorConfiguration(PooledByteBufAllocatorConfiguration.DEFAULT)
+                .build();
+
         Cluster cluster = new Cluster();
         cluster.setClusterName("MyCluster");
-
         cluster.addBackend(new Backend(new InetSocketAddress("127.0.0.1", 9111)));
 
         L4LoadBalancer l4LoadBalancer = L4LoadBalancerBuilder.newBuilder()
+                .withConfiguration(configuration)
                 .withL4Balance(new RoundRobin())
                 .withCluster(cluster)
                 .withFrontListener(new UDPListener(new InetSocketAddress("0.0.0.0", 9110)))

@@ -1,14 +1,36 @@
+/*
+ * This file is part of ShieldBlaze ExpressGateway. [www.shieldblaze.com]
+ * Copyright (c) 2020 ShieldBlaze
+ *
+ * ShieldBlaze ExpressGateway is free software: you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License as published by
+ * the Free Software Foundation, either version 3 of the License, or
+ * (at your option) any later version.
+ *
+ * ShieldBlaze ExpressGateway is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
+ *
+ * You should have received a copy of the GNU General Public License
+ * along with ShieldBlaze ExpressGateway.  If not, see <https://www.gnu.org/licenses/>.
+ */
 package com.shieldblaze.expressgateway.core.configuration.transport;
 
-public class TransportConfiguration {
+import io.netty.channel.AdaptiveRecvByteBufAllocator;
+import io.netty.channel.FixedRecvByteBufAllocator;
+import io.netty.channel.RecvByteBufAllocator;
+
+public final class TransportConfiguration {
     private TransportType transportType;
     private ReceiveBufferAllocationType receiveBufferAllocationType;
     private int[] ReceiveBufferSizes;
     private int TCPConnectionBacklog;
-    private int TCPDataBacklog;
+    private int DataBacklog;
     private int SocketReceiveBufferSize;
     private int SocketSendBufferSize;
     private int TCPFastOpenMaximumPendingRequests;
+    private int ListenerSocketTimeout;
     private int BackendConnectTimeout;
 
     public TransportType getTransportType() {
@@ -35,6 +57,14 @@ public class TransportConfiguration {
         ReceiveBufferSizes = receiveBufferSizes;
     }
 
+    public RecvByteBufAllocator getRecvByteBufAllocator() {
+        if (receiveBufferAllocationType == ReceiveBufferAllocationType.FIXED) {
+            return new FixedRecvByteBufAllocator(ReceiveBufferSizes[0]);
+        } else {
+            return new AdaptiveRecvByteBufAllocator(ReceiveBufferSizes[0], ReceiveBufferSizes[1], ReceiveBufferSizes[2]);
+        }
+    }
+
     public int getTCPConnectionBacklog() {
         return TCPConnectionBacklog;
     }
@@ -43,12 +73,12 @@ public class TransportConfiguration {
         this.TCPConnectionBacklog = TCPConnectionBacklog;
     }
 
-    public int getTCPDataBacklog() {
-        return TCPDataBacklog;
+    public int getDataBacklog() {
+        return DataBacklog;
     }
 
-    public void setTCPDataBacklog(int TCPDataBacklog) {
-        this.TCPDataBacklog = TCPDataBacklog;
+    public void setDataBacklog(int dataBacklog) {
+        this.DataBacklog = dataBacklog;
     }
 
     public int getSocketReceiveBufferSize() {
@@ -73,6 +103,14 @@ public class TransportConfiguration {
 
     public void setTCPFastOpenMaximumPendingRequests(int TCPFastOpenMaximumPendingRequests) {
         this.TCPFastOpenMaximumPendingRequests = TCPFastOpenMaximumPendingRequests;
+    }
+
+    public int getListenerSocketTimeout() {
+        return ListenerSocketTimeout;
+    }
+
+    void setListenerSocketTimeout(int listenerSocketTimeout) {
+        ListenerSocketTimeout = listenerSocketTimeout;
     }
 
     public int getBackendConnectTimeout() {

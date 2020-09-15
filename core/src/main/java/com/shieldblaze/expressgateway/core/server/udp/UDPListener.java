@@ -17,11 +17,13 @@
  */
 package com.shieldblaze.expressgateway.core.server.udp;
 
+import com.shieldblaze.expressgateway.core.configuration.Configuration;
 import com.shieldblaze.expressgateway.core.server.FrontListener;
 import com.shieldblaze.expressgateway.core.loadbalance.l4.L4Balance;
 import com.shieldblaze.expressgateway.core.netty.BootstrapFactory;
 import com.shieldblaze.expressgateway.core.netty.EventLoopFactory;
 import io.netty.bootstrap.Bootstrap;
+import io.netty.buffer.ByteBufAllocator;
 import io.netty.channel.ChannelFuture;
 import io.netty.channel.ChannelFutureListener;
 import org.apache.logging.log4j.LogManager;
@@ -37,9 +39,9 @@ public final class UDPListener extends FrontListener {
     }
 
     @Override
-    public void start(L4Balance l4Balance) {
-        Bootstrap bootstrap = BootstrapFactory.getUDP(EventLoopFactory.PARENT)
-                .handler(new UpstreamHandler(l4Balance));
+    public void start(Configuration configuration, EventLoopFactory eventLoopFactory, ByteBufAllocator byteBufAllocator, L4Balance l4Balance) {
+        Bootstrap bootstrap = BootstrapFactory.getUDP(configuration, eventLoopFactory.getParentGroup(), byteBufAllocator)
+                .handler(new UpstreamHandler(l4Balance, configuration, eventLoopFactory));
 
         ChannelFuture channelFuture = bootstrap.bind(bindAddress).addListener((ChannelFutureListener) future -> {
             if (future.isSuccess()) {
