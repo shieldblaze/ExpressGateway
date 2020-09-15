@@ -17,8 +17,9 @@
  */
 package com.shieldblaze.expressgateway.server.udp;
 
-import com.shieldblaze.expressgateway.netty.BootstrapUtils;
+import com.shieldblaze.expressgateway.netty.BootstrapFactory;
 import com.shieldblaze.expressgateway.netty.EventLoopFactory;
+import com.shieldblaze.expressgateway.server.FrontListener;
 import io.netty.bootstrap.Bootstrap;
 import io.netty.channel.ChannelFuture;
 import io.netty.channel.ChannelFutureListener;
@@ -27,24 +28,24 @@ import org.apache.logging.log4j.Logger;
 
 import java.net.InetSocketAddress;
 
-public final class Server {
-    private static final Logger logger = LogManager.getLogger(Server.class);
-    private final InetSocketAddress inetSocketAddress;
-    public ChannelFuture channelFuture;
+public final class Listener extends FrontListener {
+    private static final Logger logger = LogManager.getLogger(Listener.class);
 
-    public Server(InetSocketAddress inetSocketAddress) {
-        this.inetSocketAddress = inetSocketAddress;
+    public Listener(InetSocketAddress bindAddress) {
+        super(bindAddress);
     }
 
+    @Override
     public void start() {
-        Bootstrap bootstrap = BootstrapUtils.udp(EventLoopFactory.PARENT)
+        Bootstrap bootstrap = BootstrapFactory.getUDP(EventLoopFactory.PARENT)
                 .handler(new UpstreamHandler());
 
-        channelFuture = bootstrap.bind(inetSocketAddress)
-                .addListener((ChannelFutureListener) future -> {
-                    if (future.isSuccess()) {
-                        logger.atInfo().log("Server Successfully Started at: {}", future.channel().localAddress());
-                    }
-                });
+        ChannelFuture channelFuture = bootstrap.bind(bindAddress).addListener((ChannelFutureListener) future -> {
+            if (future.isSuccess()) {
+                logger.atInfo().log("Server Successfully Started at: {}", future.channel().localAddress());
+            }
+        });
+
+        channelFutureList.add(channelFuture);
     }
 }

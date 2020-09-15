@@ -44,7 +44,7 @@ final class RoundRobinImpl<T> implements Iterable<T> {
                 try {
                     // If Index size has reached List size, set it to zero.
                     // Else, get the element from list as per latest Index count.
-                    if(index == list.size()) {
+                    if(index >= list.size()) {
                         index = 0;
                     }
                     return list.get(index);

@@ -17,15 +17,16 @@
  */
 package com.shieldblaze.expressgateway.server.tcp;
 
-import com.shieldblaze.expressgateway.netty.PooledByteBufAllocatorBuffer;
 import com.shieldblaze.expressgateway.netty.EventLoopFactory;
+import com.shieldblaze.expressgateway.netty.PooledByteBufAllocatorBuffer;
+import com.shieldblaze.expressgateway.server.FrontListener;
 import io.netty.bootstrap.ServerBootstrap;
+import io.netty.channel.AdaptiveRecvByteBufAllocator;
 import io.netty.channel.ChannelFuture;
 import io.netty.channel.ChannelFutureListener;
 import io.netty.channel.ChannelHandlerContext;
 import io.netty.channel.ChannelInitializer;
 import io.netty.channel.ChannelOption;
-import io.netty.channel.FixedRecvByteBufAllocator;
 import io.netty.channel.epoll.Epoll;
 import io.netty.channel.epoll.EpollMode;
 import io.netty.channel.epoll.EpollServerSocketChannel;
@@ -36,28 +37,28 @@ import org.apache.logging.log4j.Logger;
 
 import java.net.InetSocketAddress;
 
-public final class Server {
+public final class Listener extends FrontListener {
 
-    private static final Logger logger = LogManager.getLogger(Server.class);
-    private final InetSocketAddress inetSocketAddress;
-    public ChannelFuture channelFuture;
+    private static final Logger logger = LogManager.getLogger(Listener.class);
 
-    public Server(InetSocketAddress inetSocketAddress) {
-        this.inetSocketAddress = inetSocketAddress;
+    public Listener(InetSocketAddress bindAddress) {
+        super(bindAddress);
     }
 
+    @Override
     public void start() {
 
         ServerBootstrap serverBootstrap = new ServerBootstrap()
                 .group(EventLoopFactory.PARENT, EventLoopFactory.CHILD)
                 .option(ChannelOption.ALLOCATOR, PooledByteBufAllocatorBuffer.INSTANCE)
-                .option(ChannelOption.RCVBUF_ALLOCATOR, new FixedRecvByteBufAllocator(65535))
+                .option(ChannelOption.RCVBUF_ALLOCATOR, new AdaptiveRecvByteBufAllocator(1500, 9001, 65536))
                 .option(ChannelOption.SO_RCVBUF, 2147483647)
                 .option(ChannelOption.SO_BACKLOG, 2147483647)
                 .option(ChannelOption.AUTO_READ, true)
                 .option(ChannelOption.AUTO_CLOSE, false)
                 .childOption(ChannelOption.SO_SNDBUF, 2147483647)
-                .childOption(ChannelOption.RCVBUF_ALLOCATOR, new FixedRecvByteBufAllocator(65535))
+                .childOption(ChannelOption.SO_RCVBUF, 2147483647)
+                .childOption(ChannelOption.RCVBUF_ALLOCATOR, new AdaptiveRecvByteBufAllocator(1500, 9001, 65536))
                 .channelFactory(() -> {
                     if (Epoll.isAvailable()) {
                         EpollServerSocketChannel serverSocketChannel = new EpollServerSocketChannel();
@@ -72,12 +73,13 @@ public final class Server {
                 })
                 .childHandler(new ServerInitializer());
 
-        channelFuture = serverBootstrap.bind(inetSocketAddress)
-                .addListener((ChannelFutureListener) future -> {
-                    if (future.isSuccess()) {
-                        logger.atInfo().log("Server Successfully Started at: {}", future.channel().localAddress());
-                    }
-                });
+        ChannelFuture channelFuture = serverBootstrap.bind(bindAddress).addListener((ChannelFutureListener) future -> {
+            if (future.isSuccess()) {
+                logger.atInfo().log("Server Successfully Started at: {}", future.channel().localAddress());
+            }
+        });
+
+        channelFutureList.add(channelFuture);
     }
 
     private static final class ServerInitializer extends ChannelInitializer<SocketChannel> {
