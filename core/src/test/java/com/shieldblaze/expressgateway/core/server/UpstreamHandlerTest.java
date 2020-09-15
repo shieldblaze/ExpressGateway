@@ -68,8 +68,7 @@ class UpstreamHandlerTest {
         listener = new TCPListener(new InetSocketAddress("127.0.0.1", 9110));
         listener.start(configuration, eventLoopFactory,
                 pooledByteBufAllocatorBuffer.getInstance(),
-                new RoundRobin(Collections.singletonList(new Backend(new InetSocketAddress("127.0.0.1",
-                9111)))));
+                new RoundRobin(Collections.singletonList(new Backend(new InetSocketAddress("127.0.0.1", 9111)))));
         assertTrue(listener.waitForStart());
         new TCPServer().start();
     }

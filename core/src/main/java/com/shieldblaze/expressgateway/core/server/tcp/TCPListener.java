@@ -32,8 +32,10 @@ import io.netty.channel.ChannelInitializer;
 import io.netty.channel.ChannelOption;
 import io.netty.channel.epoll.EpollMode;
 import io.netty.channel.epoll.EpollServerSocketChannel;
+import io.netty.channel.epoll.EpollServerSocketChannelConfig;
 import io.netty.channel.socket.SocketChannel;
 import io.netty.channel.socket.nio.NioServerSocketChannel;
+import io.netty.channel.unix.UnixChannelOption;
 import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
 
@@ -54,39 +56,49 @@ public final class TCPListener extends FrontListener {
     public void start(Configuration configuration, EventLoopFactory eventLoopFactory, ByteBufAllocator byteBufAllocator, L4Balance l4Balance) {
         TransportConfiguration transportConfiguration = configuration.getTransportConfiguration();
 
-        ServerBootstrap serverBootstrap = new ServerBootstrap()
-                .group(eventLoopFactory.getParentGroup(), eventLoopFactory.getChildGroup())
-                .option(ChannelOption.ALLOCATOR, byteBufAllocator)
-                .option(ChannelOption.RCVBUF_ALLOCATOR, transportConfiguration.getRecvByteBufAllocator())
-                .option(ChannelOption.SO_RCVBUF, transportConfiguration.getSocketReceiveBufferSize())
-                .option(ChannelOption.SO_BACKLOG, transportConfiguration.getTCPConnectionBacklog())
-                .option(ChannelOption.AUTO_READ, true)
-                .option(ChannelOption.AUTO_CLOSE, false)
-                .option(ChannelOption.SO_TIMEOUT, transportConfiguration.getListenerSocketTimeout())
-                .childOption(ChannelOption.SO_SNDBUF, transportConfiguration.getSocketSendBufferSize())
-                .childOption(ChannelOption.SO_RCVBUF, transportConfiguration.getSocketReceiveBufferSize())
-                .childOption(ChannelOption.RCVBUF_ALLOCATOR, transportConfiguration.getRecvByteBufAllocator())
-                .channelFactory(() -> {
-                    if (configuration.getTransportConfiguration().getTransportType() == TransportType.EPOLL) {
-                        EpollServerSocketChannel serverSocketChannel = new EpollServerSocketChannel();
-                        serverSocketChannel.config()
-                                .setEpollMode(EpollMode.EDGE_TRIGGERED)
-                                .setTcpFastopen(2147483647);
+        int bindRounds;
+        if (transportConfiguration.getTransportType() == TransportType.EPOLL) {
+            bindRounds = configuration.getEventLoopConfiguration().getParentWorkers();
+        } else {
+            bindRounds = 1;
+        }
 
-                        return serverSocketChannel;
-                    } else {
-                        return new NioServerSocketChannel();
-                    }
-                })
-                .childHandler(new ServerInitializer(configuration, eventLoopFactory, l4Balance));
+        for (int i = 0; i < bindRounds; i++) {
+            ServerBootstrap serverBootstrap = new ServerBootstrap()
+                    .group(eventLoopFactory.getParentGroup(), eventLoopFactory.getChildGroup())
+                    .option(ChannelOption.ALLOCATOR, byteBufAllocator)
+                    .option(ChannelOption.RCVBUF_ALLOCATOR, transportConfiguration.getRecvByteBufAllocator())
+                    .option(ChannelOption.SO_RCVBUF, transportConfiguration.getSocketReceiveBufferSize())
+                    .option(ChannelOption.SO_BACKLOG, transportConfiguration.getTCPConnectionBacklog())
+                    .option(ChannelOption.AUTO_READ, true)
+                    .option(ChannelOption.AUTO_CLOSE, false)
+                    .option(ChannelOption.SO_TIMEOUT, transportConfiguration.getListenerSocketTimeout())
+                    .childOption(ChannelOption.SO_SNDBUF, transportConfiguration.getSocketSendBufferSize())
+                    .childOption(ChannelOption.SO_RCVBUF, transportConfiguration.getSocketReceiveBufferSize())
+                    .childOption(ChannelOption.RCVBUF_ALLOCATOR, transportConfiguration.getRecvByteBufAllocator())
+                    .channelFactory(() -> {
+                        if (configuration.getTransportConfiguration().getTransportType() == TransportType.EPOLL) {
+                            EpollServerSocketChannel serverSocketChannel = new EpollServerSocketChannel();
+                            EpollServerSocketChannelConfig config = serverSocketChannel.config();
+                            config.setOption(UnixChannelOption.SO_REUSEPORT, true);
+                            config.setTcpFastopen(transportConfiguration.getTCPFastOpenMaximumPendingRequests());
+                            config.setEpollMode(EpollMode.EDGE_TRIGGERED);
 
-        ChannelFuture channelFuture = serverBootstrap.bind(bindAddress).addListener((ChannelFutureListener) future -> {
-            if (future.isSuccess()) {
-                logger.atInfo().log("Server Successfully Started at: {}", future.channel().localAddress());
-            }
-        });
+                            return serverSocketChannel;
+                        } else {
+                            return new NioServerSocketChannel();
+                        }
+                    })
+                    .childHandler(new ServerInitializer(configuration, eventLoopFactory, l4Balance));
 
-        channelFutureList.add(channelFuture);
+            ChannelFuture channelFuture = serverBootstrap.bind(bindAddress).addListener((ChannelFutureListener) future -> {
+                if (future.isSuccess()) {
+                    logger.info("Server Successfully Started at: {}", future.channel().localAddress());
+                }
+            });
+
+            channelFutureList.add(channelFuture);
+        }
     }
 
     private static final class ServerInitializer extends ChannelInitializer<SocketChannel> {

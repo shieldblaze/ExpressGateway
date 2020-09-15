@@ -40,12 +40,10 @@ final class Connection {
     private final Channel backendChannel;
     private final Backend backend;
     private boolean channelActive = false;
-    final InetSocketAddress clientAddress;
 
     Connection(InetSocketAddress clientAddress, Backend backend, Channel clientChannel, Configuration configuration,
                EventLoopFactory eventLoopFactory, ByteBufAllocator byteBufAllocator) {
         this.configuration = configuration;
-        this.clientAddress = clientAddress;
         this.backend = backend;
 
         Bootstrap bootstrap = BootstrapFactory.getUDP(configuration, eventLoopFactory.getChildGroup(), byteBufAllocator);
