@@ -29,12 +29,10 @@ along with ShieldBlaze ExpressGateway.  If not, see <https://www.gnu.org/license
     <artifactId>expressgateway-load-balance</artifactId>
     <packaging>jar</packaging>
 
-    <dependencies>
-        <dependency>
-            <groupId>com.shieldblaze</groupId>
-            <artifactId>expressgateway-core</artifactId>
-            <version>0.0.1-a</version>
-        </dependency>
-    </dependencies>
+    <name>ExpressGateway/LoadBalance</name>
+
+    <properties>
+        <javaModuleName>com.shieldblaze.expressgateway.loadbalance</javaModuleName>
+    </properties>
 
 </project>
