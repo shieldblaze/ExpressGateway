@@ -54,7 +54,7 @@ final class UpstreamHandler extends ChannelInboundHandlerAdapter {
     private Channel backendChannel;
     private Backend backend;
 
-    public UpstreamHandler(Configuration configuration, EventLoopFactory eventLoopFactory, L4Balance l4Balance) {
+    UpstreamHandler(Configuration configuration, EventLoopFactory eventLoopFactory, L4Balance l4Balance) {
         this.l4Balance = l4Balance;
         this.configuration = configuration;
         this.eventLoopFactory = eventLoopFactory;

@@ -19,6 +19,7 @@ package com.shieldblaze.expressgateway.core.netty;
 
 import com.shieldblaze.expressgateway.core.configuration.Configuration;
 import com.shieldblaze.expressgateway.core.configuration.transport.TransportConfiguration;
+import com.shieldblaze.expressgateway.core.configuration.transport.TransportType;
 import io.netty.bootstrap.Bootstrap;
 import io.netty.buffer.ByteBufAllocator;
 import io.netty.buffer.PooledByteBufAllocator;
@@ -49,7 +50,7 @@ public final class BootstrapFactory {
                 .option(ChannelOption.TCP_NODELAY, true)
                 .option(ChannelOption.CONNECT_TIMEOUT_MILLIS, configuration.getTransportConfiguration().getBackendConnectTimeout())
                 .channelFactory(() -> {
-                    if (Epoll.isAvailable()) {
+                    if (configuration.getTransportConfiguration().getTransportType() == TransportType.EPOLL) {
                         EpollSocketChannel socketChannel = new EpollSocketChannel();
                         socketChannel.config()
                                 .setEpollMode(EpollMode.EDGE_TRIGGERED)
@@ -73,7 +74,7 @@ public final class BootstrapFactory {
                 .option(ChannelOption.AUTO_READ, true)
                 .option(ChannelOption.AUTO_CLOSE, false)
                 .channelFactory(() -> {
-                    if (Epoll.isAvailable()) {
+                    if (configuration.getTransportConfiguration().getTransportType() == TransportType.EPOLL) {
                         EpollDatagramChannel epollDatagramChannel = new EpollDatagramChannel();
                         epollDatagramChannel.config()
                                 .setEpollMode(EpollMode.EDGE_TRIGGERED)

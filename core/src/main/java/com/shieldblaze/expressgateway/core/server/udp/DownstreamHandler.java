@@ -30,7 +30,7 @@ final class DownstreamHandler extends ChannelInboundHandlerAdapter {
     private final InetSocketAddress clientAddress;
     private final Backend backend;
 
-    public DownstreamHandler(Channel clientChannel, InetSocketAddress clientAddress, Backend backend) {
+    DownstreamHandler(Channel clientChannel, InetSocketAddress clientAddress, Backend backend) {
         this.clientChannel = clientChannel;
         this.clientAddress = clientAddress;
         this.backend = backend;

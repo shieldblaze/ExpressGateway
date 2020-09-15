@@ -19,6 +19,7 @@ package com.shieldblaze.expressgateway.core.server.tcp;
 
 import com.shieldblaze.expressgateway.core.configuration.Configuration;
 import com.shieldblaze.expressgateway.core.configuration.transport.TransportConfiguration;
+import com.shieldblaze.expressgateway.core.configuration.transport.TransportType;
 import com.shieldblaze.expressgateway.core.loadbalance.l4.L4Balance;
 import com.shieldblaze.expressgateway.core.netty.EventLoopFactory;
 import com.shieldblaze.expressgateway.core.server.FrontListener;
@@ -29,7 +30,6 @@ import io.netty.channel.ChannelFutureListener;
 import io.netty.channel.ChannelHandlerContext;
 import io.netty.channel.ChannelInitializer;
 import io.netty.channel.ChannelOption;
-import io.netty.channel.epoll.Epoll;
 import io.netty.channel.epoll.EpollMode;
 import io.netty.channel.epoll.EpollServerSocketChannel;
 import io.netty.channel.socket.SocketChannel;
@@ -67,7 +67,7 @@ public final class TCPListener extends FrontListener {
                 .childOption(ChannelOption.SO_RCVBUF, transportConfiguration.getSocketReceiveBufferSize())
                 .childOption(ChannelOption.RCVBUF_ALLOCATOR, transportConfiguration.getRecvByteBufAllocator())
                 .channelFactory(() -> {
-                    if (Epoll.isAvailable()) {
+                    if (configuration.getTransportConfiguration().getTransportType() == TransportType.EPOLL) {
                         EpollServerSocketChannel serverSocketChannel = new EpollServerSocketChannel();
                         serverSocketChannel.config()
                                 .setEpollMode(EpollMode.EDGE_TRIGGERED)
