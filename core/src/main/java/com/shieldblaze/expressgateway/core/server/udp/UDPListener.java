@@ -18,10 +18,12 @@
 package com.shieldblaze.expressgateway.core.server.udp;
 
 import com.shieldblaze.expressgateway.core.configuration.Configuration;
-import com.shieldblaze.expressgateway.core.server.FrontListener;
+import com.shieldblaze.expressgateway.core.configuration.transport.TransportConfiguration;
+import com.shieldblaze.expressgateway.core.configuration.transport.TransportType;
 import com.shieldblaze.expressgateway.core.loadbalance.l4.L4Balance;
 import com.shieldblaze.expressgateway.core.netty.BootstrapFactory;
 import com.shieldblaze.expressgateway.core.netty.EventLoopFactory;
+import com.shieldblaze.expressgateway.core.server.FrontListener;
 import io.netty.bootstrap.Bootstrap;
 import io.netty.buffer.ByteBufAllocator;
 import io.netty.channel.ChannelFuture;
@@ -40,15 +42,23 @@ public final class UDPListener extends FrontListener {
 
     @Override
     public void start(Configuration configuration, EventLoopFactory eventLoopFactory, ByteBufAllocator byteBufAllocator, L4Balance l4Balance) {
-        Bootstrap bootstrap = BootstrapFactory.getUDP(configuration, eventLoopFactory.getParentGroup(), byteBufAllocator)
-                .handler(new UpstreamHandler(l4Balance, configuration, eventLoopFactory));
 
-        ChannelFuture channelFuture = bootstrap.bind(bindAddress).addListener((ChannelFutureListener) future -> {
-            if (future.isSuccess()) {
-                logger.atInfo().log("Server Successfully Started at: {}", future.channel().localAddress());
-            }
-        });
+        int bindRounds = 1;
+        if (configuration.getTransportConfiguration().getTransportType() == TransportType.EPOLL) {
+            bindRounds = configuration.getEventLoopConfiguration().getParentWorkers();
+        }
 
-        channelFutureList.add(channelFuture);
+        for (int i = 0; i < bindRounds; i++) {
+            Bootstrap bootstrap = BootstrapFactory.getUDP(configuration, eventLoopFactory.getParentGroup(), byteBufAllocator)
+                    .handler(new UpstreamHandler(l4Balance, configuration, eventLoopFactory));
+
+            ChannelFuture channelFuture = bootstrap.bind(bindAddress).addListener((ChannelFutureListener) future -> {
+                if (future.isSuccess()) {
+                    logger.atInfo().log("Server Successfully Started at: {}", future.channel().localAddress());
+                }
+            });
+
+            channelFutureList.add(channelFuture);
+        }
     }
 }

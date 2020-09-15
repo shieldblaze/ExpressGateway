@@ -56,11 +56,9 @@ public final class TCPListener extends FrontListener {
     public void start(Configuration configuration, EventLoopFactory eventLoopFactory, ByteBufAllocator byteBufAllocator, L4Balance l4Balance) {
         TransportConfiguration transportConfiguration = configuration.getTransportConfiguration();
 
-        int bindRounds;
+        int bindRounds = 1;
         if (transportConfiguration.getTransportType() == TransportType.EPOLL) {
             bindRounds = configuration.getEventLoopConfiguration().getParentWorkers();
-        } else {
-            bindRounds = 1;
         }
 
         for (int i = 0; i < bindRounds; i++) {
