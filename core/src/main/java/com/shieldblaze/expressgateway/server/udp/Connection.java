@@ -17,7 +17,6 @@
  */
 package com.shieldblaze.expressgateway.server.udp;
 
-import com.google.common.primitives.SignedBytes;
 import com.shieldblaze.expressgateway.netty.BootstrapUtils;
 import com.shieldblaze.expressgateway.netty.EventLoopFactory;
 import io.netty.bootstrap.Bootstrap;
@@ -30,7 +29,7 @@ import io.netty.channel.socket.DatagramPacket;
 import java.net.InetSocketAddress;
 import java.util.concurrent.ConcurrentLinkedQueue;
 
-final class Connection implements Comparable<Connection> {
+final class Connection {
 
     private ConcurrentLinkedQueue<DatagramPacket> backlog = new ConcurrentLinkedQueue<>();
     final InetSocketAddress clientAddress;
@@ -47,21 +46,23 @@ final class Connection implements Comparable<Connection> {
 
         channelFuture.addListener((ChannelFutureListener) future -> {
             if (future.isSuccess()) {
-                channelActive = true;
 
                 EventLoopFactory.CHILD.next().execute(() -> {
-                    backlog.forEach(datagramPacket -> backendChannel.writeAndFlush(datagramPacket.content())
-                            .addListener((ChannelFutureListener) cf -> {
-                                if (!cf.isSuccess()) {
-                                    datagramPacket.release();
-                                }
-                            }));
 
-                    backlog.clear();
+                    backlog.forEach(datagramPacket -> {
+                        backendChannel.writeAndFlush(datagramPacket.content()).addListener((ChannelFutureListener) cf -> {
+                            if (!cf.isSuccess()) {
+                                datagramPacket.release();
+                            }
+                        });
+                    });
+
+                    channelActive = true;
                     backlog = null;
                 });
             } else {
                 backlog.forEach(DefaultAddressedEnvelope::release);
+                backlog = null;
                 backendChannel.close();
             }
         });
@@ -76,17 +77,6 @@ final class Connection implements Comparable<Connection> {
             });
         } else if (backlog != null) {
             backlog.add(datagramPacket);
-        }
-    }
-
-    @Override
-    public int compareTo(Connection connection) {
-        int compare = SignedBytes.lexicographicalComparator().compare(clientAddress.getAddress().getAddress(),
-                connection.clientAddress.getAddress().getAddress());
-        if (compare == 0) {
-            return Integer.compare(clientAddress.getPort(), connection.clientAddress.getPort());
-        } else {
-            return compare;
         }
     }
 }

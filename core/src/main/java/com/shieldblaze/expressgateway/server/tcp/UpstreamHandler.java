@@ -18,15 +18,18 @@
 package com.shieldblaze.expressgateway.server.tcp;
 
 import com.shieldblaze.expressgateway.netty.BootstrapUtils;
+import com.shieldblaze.expressgateway.netty.EventLoopFactory;
 import io.netty.bootstrap.Bootstrap;
+import io.netty.buffer.ByteBuf;
 import io.netty.channel.Channel;
 import io.netty.channel.ChannelFuture;
 import io.netty.channel.ChannelFutureListener;
 import io.netty.channel.ChannelHandlerContext;
 import io.netty.channel.ChannelInboundHandlerAdapter;
+import io.netty.util.ReferenceCounted;
 
 import java.net.InetSocketAddress;
-import java.util.ArrayList;
+import java.util.concurrent.ConcurrentLinkedQueue;
 
 /**
  * <p> Upstream Handler receives Data from Internet.
@@ -39,8 +42,8 @@ import java.util.ArrayList;
  */
 final class UpstreamHandler extends ChannelInboundHandlerAdapter {
 
+    private ConcurrentLinkedQueue<ByteBuf> backlog = new ConcurrentLinkedQueue<>();
     private boolean channelActive = false;
-    private ArrayList<Object> backlog = new ArrayList<>();
     private Channel backendChannel;
 
     @Override
@@ -60,15 +63,26 @@ final class UpstreamHandler extends ChannelInboundHandlerAdapter {
              *
              * If we're not connected to the backend, close everything.
              */
-            if (future.isSuccess() && backendChannel.isActive()) {
-                backlog.forEach(packet -> backendChannel.writeAndFlush(packet));
-                channelActive = true;
+            if (future.isSuccess()) {
+                EventLoopFactory.CHILD.next().execute(() -> {
+
+                    backlog.forEach(packet -> {
+                        backendChannel.writeAndFlush(packet).addListener((ChannelFutureListener) cf -> {
+                            if (!cf.isSuccess()) {
+                                packet.release();
+                            }
+                        });
+                    });
+
+                    channelActive = true;
+                    backlog = null;
+                });
             } else {
+                backlog.forEach(ReferenceCounted::release);
+                backlog.clear();
                 backendChannel.close();
                 ctx.channel().close();
             }
-
-            backlog = null;
         });
     }
 
@@ -76,8 +90,8 @@ final class UpstreamHandler extends ChannelInboundHandlerAdapter {
     public void channelRead(ChannelHandlerContext ctx, Object msg) {
         if (channelActive) {
             backendChannel.writeAndFlush(msg);
-        } else {
-            backlog.add(msg);
+        } else if (backlog != null) {
+            backlog.add((ByteBuf) msg);
         }
     }
 

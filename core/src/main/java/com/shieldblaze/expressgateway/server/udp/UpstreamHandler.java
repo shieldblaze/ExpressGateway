@@ -25,32 +25,26 @@ import io.netty.channel.socket.DatagramPacket;
 import java.net.InetSocketAddress;
 import java.util.Collections;
 import java.util.List;
+import java.util.Map;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.CopyOnWriteArrayList;
 
 final class UpstreamHandler extends ChannelInboundHandlerAdapter {
 
-    private final List<Connection> connectionList = new CopyOnWriteArrayList<Connection>(){
-        @Override
-        public boolean add(Connection o) {
-            super.add(o);
-            Collections.sort(this);
-            return true;
-        }
-    };
+    private final Map<InetSocketAddress, Connection> connectionMap = new ConcurrentHashMap<>();
 
     @Override
     public void channelRead(ChannelHandlerContext ctx, Object msg) {
         EventLoopFactory.CHILD.next().execute(() -> {
             DatagramPacket datagramPacket = (DatagramPacket) msg;
-            int index = Collections.binarySearch(connectionList, datagramPacket.sender(), ConnectionSearchComparator.INSTANCE);
+            Connection connection = connectionMap.get(datagramPacket.sender());
 
-            if (index >= 0) {
-                connectionList.get(index).writeDatagram(datagramPacket);
-            } else {
-                Connection connection = new Connection(datagramPacket.sender(), new InetSocketAddress("127.0.0.1", 9111), ctx.channel());
-                connection.writeDatagram(datagramPacket);
-                connectionList.add(connection);
+            if (connection == null) {
+                connection = new Connection(datagramPacket.sender(), new InetSocketAddress("127.0.0.1", 9111), ctx.channel());
+                connectionMap.put(datagramPacket.sender(), connection);
             }
+
+            connection.writeDatagram(datagramPacket);
         });
     }
 
