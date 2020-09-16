@@ -2,6 +2,8 @@
 #### ShieldBlaze ExpressGateway is a High-Performance Virtual Network Appliance.
 
 ![Java CI with Maven](https://github.com/shieldblaze/ExpressGateway/workflows/Java%20CI%20with%20Maven/badge.svg)
+[![Total alerts](https://img.shields.io/lgtm/alerts/g/shieldblaze/ExpressGateway.svg?logo=lgtm&logoWidth=18)](https://lgtm.com/projects/g/shieldblaze/ExpressGateway/alerts/)
+[![Language grade: Java](https://img.shields.io/lgtm/grade/java/g/shieldblaze/ExpressGateway.svg?logo=lgtm&logoWidth=18)](https://lgtm.com/projects/g/shieldblaze/ExpressGateway/context:java)
 
 
 #### Current Status: In-development
