@@ -12,6 +12,7 @@ on:
         description: 'GitHub Actions'
         required: true
         default: 'GitHub Actions'
+  push:
 
 jobs:
   buildOnJDK8:
