@@ -70,6 +70,13 @@ along with ShieldBlaze ExpressGateway.  If not, see <https://www.gnu.org/license
             <version>4.1.52.Final</version>
         </dependency>
 
+        <!-- https://mvnrepository.com/artifact/io.netty/netty-tcnative -->
+        <dependency>
+            <groupId>io.netty</groupId>
+            <artifactId>netty-tcnative</artifactId>
+            <version>2.0.34.Final</version>
+        </dependency>
+
         <!-- https://mvnrepository.com/artifact/org.apache.logging.log4j/log4j-api -->
         <dependency>
             <groupId>org.apache.logging.log4j</groupId>

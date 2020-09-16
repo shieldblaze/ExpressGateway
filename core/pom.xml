@@ -38,7 +38,7 @@ along with ShieldBlaze ExpressGateway.  If not, see <https://www.gnu.org/license
     <dependencies>
         <dependency>
             <groupId>com.shieldblaze</groupId>
-            <artifactId>expressgateway-load-balance</artifactId>
+            <artifactId>expressgateway-loadbalance</artifactId>
             <version>0.0.1-a</version>
         </dependency>
     </dependencies>
