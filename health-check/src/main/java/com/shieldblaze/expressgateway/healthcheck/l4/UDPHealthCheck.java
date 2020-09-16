@@ -19,24 +19,37 @@ package com.shieldblaze.expressgateway.healthcheck.l4;
 
 import com.shieldblaze.expressgateway.healthcheck.HealthCheck;
 
+import java.net.DatagramPacket;
+import java.net.DatagramSocket;
 import java.net.InetSocketAddress;
-import java.net.Socket;
+import java.util.Arrays;
 
-public final class TCP extends HealthCheck {
+public final class UDPHealthCheck extends HealthCheck {
 
-    public TCP(InetSocketAddress socketAddress, int timeout) {
+    private static final byte[] PING = "PING".getBytes();
+    private static final byte[] PONG = "PONG".getBytes();
+
+    public UDPHealthCheck(InetSocketAddress socketAddress, int timeout) {
         super(socketAddress, timeout);
     }
 
-    public TCP(InetSocketAddress socketAddress, int timeout, int samples) {
+    public UDPHealthCheck(InetSocketAddress socketAddress, int timeout, int samples) {
         super(socketAddress, timeout, samples);
     }
 
     @Override
     public void check() {
-        try (Socket socket = new Socket()) {
-            socket.connect(socketAddress, timeout);
-            if (socket.isConnected()) {
+        try (DatagramSocket datagramSocket = new DatagramSocket()) {
+            datagramSocket.setSoTimeout(timeout);
+            DatagramPacket datagramPacket = new DatagramPacket(PING,4, socketAddress);
+            datagramSocket.send(datagramPacket);
+
+            byte[] bytes = new byte[4];
+            datagramPacket = new DatagramPacket(bytes,4);
+            datagramSocket.receive(datagramPacket);
+
+            byte[] packet = Arrays.copyOfRange(datagramPacket.getData(), 0, 4);
+            if (Arrays.equals(packet, PING) || Arrays.equals(packet, PONG)) {
                 markSuccess();
             } else {
                 markFailure();

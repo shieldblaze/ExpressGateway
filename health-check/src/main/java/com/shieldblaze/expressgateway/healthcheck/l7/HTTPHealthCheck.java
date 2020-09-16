@@ -34,14 +34,14 @@ import java.net.InetSocketAddress;
 import java.net.URL;
 import java.util.concurrent.TimeUnit;
 
-public final class HTTP extends HealthCheck {
+public final class HTTPHealthCheck extends HealthCheck {
 
     private final Bootstrap bootstrap;
     private final SslContext sslContext;
     final URL url;
     final int timeout;
 
-    public HTTP(Bootstrap bootstrap, SslContext sslContext, URL url, int timeout) {
+    public HTTPHealthCheck(Bootstrap bootstrap, SslContext sslContext, URL url, int timeout) {
         super(new InetSocketAddress(url.getHost(), url.getPort()), timeout);
         this.bootstrap = bootstrap;
         this.sslContext = sslContext;

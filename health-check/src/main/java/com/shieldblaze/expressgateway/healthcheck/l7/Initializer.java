@@ -41,17 +41,17 @@ import org.apache.logging.log4j.Logger;
 final class Initializer extends ChannelInitializer<SocketChannel> {
 
     private final SslContext sslContext;
-    private final HTTP http;
+    private final HTTPHealthCheck httpHealthCheck;
 
-    Initializer(SslContext sslContext, HTTP http) {
+    Initializer(SslContext sslContext, HTTPHealthCheck httpHealthCheck) {
         this.sslContext = sslContext;
-        this.http = http;
+        this.httpHealthCheck = httpHealthCheck;
     }
 
     @Override
     protected void initChannel(SocketChannel ch) {
-        ch.pipeline().addLast(new IdleStateHandler(http.timeout, http.timeout, http.timeout))
-                .addLast(sslContext.newHandler(ch.alloc(), http.url.getHost(), http.url.getPort()))
+        ch.pipeline().addLast(new IdleStateHandler(httpHealthCheck.timeout, httpHealthCheck.timeout, httpHealthCheck.timeout))
+                .addLast(sslContext.newHandler(ch.alloc(), httpHealthCheck.url.getHost(), httpHealthCheck.url.getPort()))
                 .addLast(new ALPNHandler(new DefaultPromise<>(ch.eventLoop())));
     }
 

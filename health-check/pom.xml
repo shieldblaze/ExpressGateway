@@ -29,6 +29,9 @@ along with ShieldBlaze ExpressGateway.  If not, see <https://www.gnu.org/license
     <artifactId>expressgateway-healthcheck</artifactId>
     <packaging>jar</packaging>
 
+    <properties>
+        <javaModuleName>com.shieldblaze.expressgateway.healthcheck</javaModuleName>
+    </properties>
     <name>ExpressGateway/HealthCheck</name>
 
 </project>
