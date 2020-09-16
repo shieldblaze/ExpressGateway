@@ -20,8 +20,8 @@
 - [ ] HTTP Compression and Caching
 
 ### Health Checking:
-- [ ] L4 Based Health Check using TCP/UDP
-- [ ] L7 Based Health Check using HTTP/HTTPS
+- [X] L4 Based Health Check using TCP/UDP
+- [X] L7 Based Health Check using HTTP/HTTPS
 
 ### Load Balancing Methods:
 - [X] Random
