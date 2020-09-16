@@ -12,9 +12,11 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 class TCPHealthCheckTest {
 
     @Test
-    void check() {
+    void check() throws InterruptedException {
         TCPServer tcpServer = new TCPServer();
         tcpServer.start();
+
+        Thread.sleep(2500L); // Wait for TCP Server to Start
 
         TCPHealthCheck tcpHealthCheck = new TCPHealthCheck(new InetSocketAddress("127.0.0.1", 9111), 5);
         tcpHealthCheck.check();
