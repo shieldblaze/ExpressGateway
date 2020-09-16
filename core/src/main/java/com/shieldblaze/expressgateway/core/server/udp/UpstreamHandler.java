@@ -56,11 +56,6 @@ final class UpstreamHandler extends ChannelInboundHandlerAdapter {
         this.configuration = configuration;
         this.eventLoopFactory = eventLoopFactory;
         this.l4Balance = l4Balance;
-        System.out.println("Initiated again");
-    }
-
-    @Override
-    public void channelActive(ChannelHandlerContext ctx) {
         connectionCleaner.startService();
     }
 
@@ -85,7 +80,6 @@ final class UpstreamHandler extends ChannelInboundHandlerAdapter {
     @Override
     public void channelInactive(ChannelHandlerContext ctx) {
         logger.info("Closing All Upstream and Downstream Channels");
-        System.out.println(ctx.channel().eventLoop());
 
         connectionCleaner.stopService();
         for (Map.Entry<InetSocketAddress, Connection> entry : connectionMap.entrySet()) {

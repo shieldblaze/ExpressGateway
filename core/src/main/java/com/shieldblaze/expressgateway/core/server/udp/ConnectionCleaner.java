@@ -59,10 +59,8 @@ final class ConnectionCleaner extends Thread {
     }
 
     public void startService() {
-        if (!runService) {
-            start();
-            runService = true;
-        }
+        runService = true;
+        start();
     }
 
     public void stopService() {
