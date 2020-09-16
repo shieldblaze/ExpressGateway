@@ -48,15 +48,15 @@ public final class UDPListener extends FrontListener {
     @Override
     public void start(Configuration configuration, EventLoopFactory eventLoopFactory, ByteBufAllocator byteBufAllocator, L4Balance l4Balance) {
 
+        Bootstrap bootstrap = BootstrapFactory.getUDP(configuration, eventLoopFactory.getParentGroup(), byteBufAllocator)
+                .handler(new UpstreamHandler(configuration, eventLoopFactory, l4Balance));
+
         int bindRounds = 1;
         if (configuration.getTransportConfiguration().getTransportType() == TransportType.EPOLL) {
             bindRounds = configuration.getEventLoopConfiguration().getParentWorkers();
         }
 
         for (int i = 0; i < bindRounds; i++) {
-            Bootstrap bootstrap = BootstrapFactory.getUDP(configuration, eventLoopFactory.getParentGroup(), byteBufAllocator)
-                    .handler(new UpstreamHandler(configuration, eventLoopFactory, l4Balance));
-
             ChannelFuture channelFuture = bootstrap.bind(bindAddress).addListener((ChannelFutureListener) future -> {
                 if (future.isSuccess()) {
                     logger.info("Server Successfully Started at: {}", future.channel().localAddress());

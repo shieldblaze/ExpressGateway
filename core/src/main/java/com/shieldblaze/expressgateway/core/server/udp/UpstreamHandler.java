@@ -82,6 +82,7 @@ final class UpstreamHandler extends ChannelInboundHandlerAdapter {
     @Override
     public void channelInactive(ChannelHandlerContext ctx) {
         logger.info("Closing All Upstream and Downstream Channels");
+        System.out.println(ctx.channel().eventLoop());
 
         connectionCleaner.stopService();
         for (Map.Entry<InetSocketAddress, Connection> entry : connectionMap.entrySet()) {
