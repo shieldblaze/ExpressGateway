@@ -5,9 +5,9 @@
 
 ## Features:
 ### L4:
-- [ ] Load Balancing for TCP/UDP
-- [ ] Full IPv6 Support
-- [ ] NAT-forwarding
+- [X] Load Balancing for TCP/UDP
+- [X] Full IPv6 Support
+- [X] NAT-forwarding
 
 ### L7:
 - [ ] TLS Support (v1.0, v1.1, v1.2 and v1.3)
