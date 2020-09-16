@@ -5,14 +5,14 @@ name: Java CI with Maven
 
 
 on:
-  pull_request:
+  push:
   workflow_dispatch:
     inputs:
       name:
         description: 'GitHub Actions'
         required: true
         default: 'GitHub Actions'
-  push:
+
 
 jobs:
   buildOnJDK8:
