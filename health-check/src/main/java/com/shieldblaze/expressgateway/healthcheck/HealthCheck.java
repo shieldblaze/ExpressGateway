@@ -26,7 +26,7 @@ import java.util.Collections;
 public abstract class HealthCheck {
 
     protected final InetSocketAddress socketAddress;
-    private EvictingQueue<Boolean> queue;
+    private final EvictingQueue<Boolean> queue;
     protected final int timeout;
 
     public HealthCheck(InetSocketAddress socketAddress, int timeout) {
