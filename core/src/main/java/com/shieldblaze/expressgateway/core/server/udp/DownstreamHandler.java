@@ -17,40 +17,62 @@
  */
 package com.shieldblaze.expressgateway.core.server.udp;
 
-import com.shieldblaze.expressgateway.core.loadbalance.backend.Backend;
 import io.netty.channel.Channel;
 import io.netty.channel.ChannelHandlerContext;
 import io.netty.channel.ChannelInboundHandlerAdapter;
 import io.netty.channel.socket.DatagramPacket;
+import org.apache.logging.log4j.LogManager;
+import org.apache.logging.log4j.Logger;
 
 import java.net.InetSocketAddress;
 
+/**
+ * <p> Downstream Handler receives Data from Backend.
+ *
+ * <p> Flow: </p>
+ * <p> &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp;
+ * &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp;
+ * &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp;
+ * &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp;
+ * &nbsp; &nbsp;(Data) </p>
+ * (INTERNET) --<--<--<--< (EXPRESSGATEWAY) --<--<--<--< (BACKEND)
+ */
 final class DownstreamHandler extends ChannelInboundHandlerAdapter {
+
+    private static final Logger logger = LogManager.getLogger(DownstreamHandler.class);
+
     private final Channel clientChannel;
     private final InetSocketAddress clientAddress;
-    private final Backend backend;
+    private final Connection connection;
 
-    DownstreamHandler(Channel clientChannel, InetSocketAddress clientAddress, Backend backend) {
+    DownstreamHandler(Channel clientChannel, InetSocketAddress clientAddress, Connection connection) {
         this.clientChannel = clientChannel;
         this.clientAddress = clientAddress;
-        this.backend = backend;
+        this.connection = connection;
     }
 
     @Override
     public void channelRead(ChannelHandlerContext ctx, Object msg) {
         DatagramPacket packet = (DatagramPacket) msg;
-        backend.incBytesReceived(packet.content().readableBytes());
+        connection.backend.incBytesReceived(packet.content().readableBytes());
         clientChannel.writeAndFlush(new DatagramPacket(packet.content(), clientAddress));
     }
 
     @Override
     public void channelInactive(ChannelHandlerContext ctx) {
-        clientChannel.close();
-        ctx.channel().close();
+
+        if (logger.isInfoEnabled()) {
+            logger.info("Closing Upstream {} and Downstream {} Channel",
+                    connection.clientAddress.getAddress().getHostAddress() + ":" + connection.clientAddress.getPort(),
+                    connection.backend.getSocketAddress().getAddress().getHostAddress() + ":" + connection.backend.getSocketAddress().getPort());
+        }
+
+        connection.connectionActive.set(false); // Mark the Connection as inactive
+        ctx.channel().close();                  // Close Downstream Channel
     }
 
     @Override
     public void exceptionCaught(ChannelHandlerContext ctx, Throwable cause) {
-        cause.printStackTrace();
+        logger.error("Caught Error at Downstream Handler", cause);
     }
 }

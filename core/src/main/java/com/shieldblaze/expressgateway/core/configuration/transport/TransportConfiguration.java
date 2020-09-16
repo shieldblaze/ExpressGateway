@@ -30,14 +30,15 @@ public final class TransportConfiguration {
     private int SocketReceiveBufferSize;
     private int SocketSendBufferSize;
     private int TCPFastOpenMaximumPendingRequests;
-    private int ListenerSocketTimeout;
+    private int BackendSocketTimeout;
     private int BackendConnectTimeout;
+    private int ConnectionIdleTimeout;
 
     public TransportType getTransportType() {
         return transportType;
     }
 
-    public void setTransportType(TransportType transportType) {
+    void setTransportType(TransportType transportType) {
         this.transportType = transportType;
     }
 
@@ -45,7 +46,7 @@ public final class TransportConfiguration {
         return receiveBufferAllocationType;
     }
 
-    public void setReceiveBufferAllocationType(ReceiveBufferAllocationType receiveBufferAllocationType) {
+    void setReceiveBufferAllocationType(ReceiveBufferAllocationType receiveBufferAllocationType) {
         this.receiveBufferAllocationType = receiveBufferAllocationType;
     }
 
@@ -53,7 +54,7 @@ public final class TransportConfiguration {
         return ReceiveBufferSizes;
     }
 
-    public void setReceiveBufferSizes(int[] receiveBufferSizes) {
+    void setReceiveBufferSizes(int[] receiveBufferSizes) {
         ReceiveBufferSizes = receiveBufferSizes;
     }
 
@@ -69,7 +70,7 @@ public final class TransportConfiguration {
         return TCPConnectionBacklog;
     }
 
-    public void setTCPConnectionBacklog(int TCPConnectionBacklog) {
+    void setTCPConnectionBacklog(int TCPConnectionBacklog) {
         this.TCPConnectionBacklog = TCPConnectionBacklog;
     }
 
@@ -77,7 +78,7 @@ public final class TransportConfiguration {
         return DataBacklog;
     }
 
-    public void setDataBacklog(int dataBacklog) {
+    void setDataBacklog(int dataBacklog) {
         this.DataBacklog = dataBacklog;
     }
 
@@ -85,7 +86,7 @@ public final class TransportConfiguration {
         return SocketReceiveBufferSize;
     }
 
-    public void setSocketReceiveBufferSize(int socketReceiveBufferSize) {
+    void setSocketReceiveBufferSize(int socketReceiveBufferSize) {
         SocketReceiveBufferSize = socketReceiveBufferSize;
     }
 
@@ -93,7 +94,7 @@ public final class TransportConfiguration {
         return SocketSendBufferSize;
     }
 
-    public void setSocketSendBufferSize(int socketSendBufferSize) {
+    void setSocketSendBufferSize(int socketSendBufferSize) {
         SocketSendBufferSize = socketSendBufferSize;
     }
 
@@ -101,23 +102,31 @@ public final class TransportConfiguration {
         return TCPFastOpenMaximumPendingRequests;
     }
 
-    public void setTCPFastOpenMaximumPendingRequests(int TCPFastOpenMaximumPendingRequests) {
+    void setTCPFastOpenMaximumPendingRequests(int TCPFastOpenMaximumPendingRequests) {
         this.TCPFastOpenMaximumPendingRequests = TCPFastOpenMaximumPendingRequests;
     }
 
-    public int getListenerSocketTimeout() {
-        return ListenerSocketTimeout;
+    public int getBackendSocketTimeout() {
+        return BackendSocketTimeout;
     }
 
-    void setListenerSocketTimeout(int listenerSocketTimeout) {
-        ListenerSocketTimeout = listenerSocketTimeout;
+    void setBackendSocketTimeout(int backendSocketTimeout) {
+        BackendSocketTimeout = backendSocketTimeout;
     }
 
     public int getBackendConnectTimeout() {
         return BackendConnectTimeout;
     }
 
-    public void setBackendConnectTimeout(int backendConnectTimeout) {
+    void setBackendConnectTimeout(int backendConnectTimeout) {
         BackendConnectTimeout = backendConnectTimeout;
+    }
+
+    public int getConnectionIdleTimeout() {
+        return ConnectionIdleTimeout;
+    }
+
+    void setConnectionIdleTimeout(int connectionIdleTimeout) {
+        ConnectionIdleTimeout = connectionIdleTimeout;
     }
 }

@@ -29,8 +29,9 @@ public final class TransportConfigurationBuilder {
     private int SocketReceiveBufferSize;
     private int SocketSendBufferSize;
     private int TCPFastOpenMaximumPendingRequestsCount;
-    private int ListenerSocketTimeout;
+    private int BackendSocketTimeout;
     private int BackendConnectTimeout;
+    private int ConnectionIdleTimeout;
 
     private TransportConfigurationBuilder() {
     }
@@ -79,13 +80,18 @@ public final class TransportConfigurationBuilder {
         return this;
     }
 
-    public TransportConfigurationBuilder withListenerSocketTimeout(int ListenerSocketTimeout) {
-        this.ListenerSocketTimeout = ListenerSocketTimeout;
+    public TransportConfigurationBuilder withBackendSocketTimeout(int BackendSocketTimeout) {
+        this.BackendSocketTimeout = BackendSocketTimeout;
         return this;
     }
 
     public TransportConfigurationBuilder withBackendConnectTimeout(int BackendConnectTimeout) {
         this.BackendConnectTimeout = BackendConnectTimeout;
+        return this;
+    }
+
+    public TransportConfigurationBuilder withConnectionIdleTimeout(int ConnectionIdleTimeout) {
+        this.ConnectionIdleTimeout = ConnectionIdleTimeout;
         return this;
     }
 
@@ -146,7 +152,8 @@ public final class TransportConfigurationBuilder {
         transportConfiguration.setTCPFastOpenMaximumPendingRequests(ObjectUtil.checkPositive(TCPFastOpenMaximumPendingRequestsCount,
                 "TCP Fast Open Maximum Pending Requests"));
         transportConfiguration.setBackendConnectTimeout(ObjectUtil.checkPositive(BackendConnectTimeout, "Backend Connect Timeout"));
-        transportConfiguration.setListenerSocketTimeout(ObjectUtil.checkPositive(ListenerSocketTimeout, "Listener Socket Timeout"));
+        transportConfiguration.setBackendSocketTimeout(ObjectUtil.checkPositive(BackendSocketTimeout, "Backend Socket Timeout"));
+        transportConfiguration.setConnectionIdleTimeout(ObjectUtil.checkPositive(ConnectionIdleTimeout, "Connection Idle Timeout"));
 
         return transportConfiguration;
     }

@@ -34,11 +34,23 @@ public final class L4LoadBalancer {
     private L4Balance l4Balance;
     private Cluster cluster;
     private FrontListener frontListener;
+    private EventLoopFactory eventLoopFactory;
 
     public boolean start() {
-        frontListener.start(configuration, new EventLoopFactory(configuration),
+        eventLoopFactory = new EventLoopFactory(configuration);
+        frontListener.start(configuration, eventLoopFactory,
                 new PooledByteBufAllocatorBuffer(configuration.getPooledByteBufAllocatorConfiguration()).getInstance(), l4Balance);
         return frontListener.waitForStart();
+    }
+
+    public void stop() {
+        frontListener.stop();
+        eventLoopFactory.getParentGroup().shutdownGracefully();
+        eventLoopFactory.getChildGroup().shutdownGracefully();
+    }
+
+    public boolean hasStarted() {
+        return frontListener.isStarted();
     }
 
     void setConfiguration(Configuration configuration) {

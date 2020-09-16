@@ -26,30 +26,41 @@ import io.netty.buffer.ByteBufAllocator;
 import io.netty.channel.Channel;
 import io.netty.channel.ChannelFuture;
 import io.netty.channel.ChannelFutureListener;
-import io.netty.channel.DefaultAddressedEnvelope;
 import io.netty.channel.socket.DatagramPacket;
+import io.netty.handler.timeout.IdleStateHandler;
 
 import java.net.InetSocketAddress;
 import java.util.concurrent.ConcurrentLinkedQueue;
+import java.util.concurrent.atomic.AtomicBoolean;
 
 final class Connection {
 
-    private ConcurrentLinkedQueue<DatagramPacket> backlog = new ConcurrentLinkedQueue<>();
+    /**
+     * Backlog of {@link DatagramPacket} pending to be written once connection with backend establishes
+     */
+    ConcurrentLinkedQueue<DatagramPacket> backlog = new ConcurrentLinkedQueue<>();
 
     private final Configuration configuration;
     private final Channel backendChannel;
-    private final Backend backend;
+    final InetSocketAddress clientAddress;
+    final Backend backend;
+    final AtomicBoolean connectionActive = new AtomicBoolean(true);
     private boolean channelActive = false;
 
     Connection(InetSocketAddress clientAddress, Backend backend, Channel clientChannel, Configuration configuration,
                EventLoopFactory eventLoopFactory, ByteBufAllocator byteBufAllocator) {
         this.configuration = configuration;
+        this.clientAddress = clientAddress;
         this.backend = backend;
 
         Bootstrap bootstrap = BootstrapFactory.getUDP(configuration, eventLoopFactory.getChildGroup(), byteBufAllocator);
-        bootstrap.handler(new DownstreamHandler(clientChannel, clientAddress, backend));
+        bootstrap.handler(new DownstreamHandler(clientChannel, clientAddress, this));
         ChannelFuture channelFuture = bootstrap.connect(backend.getSocketAddress());
         backendChannel = channelFuture.channel();
+
+        int timeout = configuration.getTransportConfiguration().getConnectionIdleTimeout();
+
+        backendChannel.pipeline().addFirst(new IdleStateHandler(timeout, timeout, timeout));
 
         channelFuture.addListener((ChannelFutureListener) future -> {
             if (future.isSuccess()) {
@@ -68,9 +79,9 @@ final class Connection {
                     backlog = null;
                 });
             } else {
-                backlog.forEach(DefaultAddressedEnvelope::release);
-                backlog = null;
+                clearBacklog();
                 backendChannel.close();
+                connectionActive.set(false);
             }
         });
     }
@@ -84,12 +95,24 @@ final class Connection {
                 }
             });
             return;
-        } else if (backlog != null) {
-            if (backlog.size() < configuration.getTransportConfiguration().getDataBacklog()) {
-                backlog.add(datagramPacket);
-                return;
-            }
+        } else if (backlog != null && backlog.size() < configuration.getTransportConfiguration().getDataBacklog()) {
+            backlog.add(datagramPacket);
+            return;
         }
         datagramPacket.release();
+    }
+
+    /**
+     * Release all active {@link DatagramPacket} from {@link #backlog}
+     */
+    void clearBacklog() {
+        if (backlog != null && backlog.size() > 0) {
+            for (DatagramPacket datagramPacket : backlog) {
+                if (datagramPacket.refCnt() > 0) {
+                    datagramPacket.release();
+                }
+            }
+        }
+        backlog = null;
     }
 }

@@ -18,7 +18,6 @@
 package com.shieldblaze.expressgateway.core.server.udp;
 
 import com.shieldblaze.expressgateway.core.configuration.Configuration;
-import com.shieldblaze.expressgateway.core.configuration.transport.TransportConfiguration;
 import com.shieldblaze.expressgateway.core.configuration.transport.TransportType;
 import com.shieldblaze.expressgateway.core.loadbalance.l4.L4Balance;
 import com.shieldblaze.expressgateway.core.netty.BootstrapFactory;
@@ -33,9 +32,15 @@ import org.apache.logging.log4j.Logger;
 
 import java.net.InetSocketAddress;
 
+/**
+ * UDP Listener for handling incoming requests.
+ */
 public final class UDPListener extends FrontListener {
     private static final Logger logger = LogManager.getLogger(UDPListener.class);
 
+    /**
+     * @param bindAddress {@link InetSocketAddress} on which {@link UDPListener} will bind and listen.
+     */
     public UDPListener(InetSocketAddress bindAddress) {
         super(bindAddress);
     }
@@ -50,11 +55,11 @@ public final class UDPListener extends FrontListener {
 
         for (int i = 0; i < bindRounds; i++) {
             Bootstrap bootstrap = BootstrapFactory.getUDP(configuration, eventLoopFactory.getParentGroup(), byteBufAllocator)
-                    .handler(new UpstreamHandler(l4Balance, configuration, eventLoopFactory));
+                    .handler(new UpstreamHandler(configuration, eventLoopFactory, l4Balance));
 
             ChannelFuture channelFuture = bootstrap.bind(bindAddress).addListener((ChannelFutureListener) future -> {
                 if (future.isSuccess()) {
-                    logger.atInfo().log("Server Successfully Started at: {}", future.channel().localAddress());
+                    logger.info("Server Successfully Started at: {}", future.channel().localAddress());
                 }
             });
 

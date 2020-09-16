@@ -36,6 +36,7 @@ import io.netty.channel.epoll.EpollServerSocketChannelConfig;
 import io.netty.channel.socket.SocketChannel;
 import io.netty.channel.socket.nio.NioServerSocketChannel;
 import io.netty.channel.unix.UnixChannelOption;
+import io.netty.handler.timeout.IdleStateHandler;
 import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
 
@@ -48,6 +49,9 @@ public final class TCPListener extends FrontListener {
 
     private static final Logger logger = LogManager.getLogger(TCPListener.class);
 
+    /**
+     * @param bindAddress {@link InetSocketAddress} on which {@link TCPListener} will bind and listen.
+     */
     public TCPListener(InetSocketAddress bindAddress) {
         super(bindAddress);
     }
@@ -70,7 +74,6 @@ public final class TCPListener extends FrontListener {
                     .option(ChannelOption.SO_BACKLOG, transportConfiguration.getTCPConnectionBacklog())
                     .option(ChannelOption.AUTO_READ, true)
                     .option(ChannelOption.AUTO_CLOSE, false)
-                    .option(ChannelOption.SO_TIMEOUT, transportConfiguration.getListenerSocketTimeout())
                     .childOption(ChannelOption.SO_SNDBUF, transportConfiguration.getSocketSendBufferSize())
                     .childOption(ChannelOption.SO_RCVBUF, transportConfiguration.getSocketReceiveBufferSize())
                     .childOption(ChannelOption.RCVBUF_ALLOCATOR, transportConfiguration.getRecvByteBufAllocator())
@@ -107,7 +110,7 @@ public final class TCPListener extends FrontListener {
         private final Configuration configuration;
         private final L4Balance l4Balance;
 
-        public ServerInitializer(Configuration configuration, EventLoopFactory eventLoopFactory, L4Balance l4Balance) {
+        ServerInitializer(Configuration configuration, EventLoopFactory eventLoopFactory, L4Balance l4Balance) {
             this.configuration = configuration;
             this.eventLoopFactory = eventLoopFactory;
             this.l4Balance = l4Balance;
@@ -115,7 +118,11 @@ public final class TCPListener extends FrontListener {
 
         @Override
         protected void initChannel(SocketChannel socketChannel) {
-            socketChannel.pipeline().addFirst(new UpstreamHandler(configuration, eventLoopFactory, l4Balance));
+            int timeout = configuration.getTransportConfiguration().getConnectionIdleTimeout();
+            socketChannel.pipeline().addFirst(
+                    new IdleStateHandler(timeout, timeout, timeout),
+                    new UpstreamHandler(configuration, eventLoopFactory, l4Balance)
+            );
         }
 
         @Override

@@ -1,5 +1,7 @@
 package com.shieldblaze.expressgateway.core.server;
 
+import com.shieldblaze.expressgateway.core.L4LoadBalancer;
+import com.shieldblaze.expressgateway.core.L4LoadBalancerBuilder;
 import com.shieldblaze.expressgateway.core.configuration.Configuration;
 import com.shieldblaze.expressgateway.core.configuration.ConfigurationBuilder;
 import com.shieldblaze.expressgateway.core.configuration.buffer.PooledByteBufAllocatorConfiguration;
@@ -10,6 +12,7 @@ import com.shieldblaze.expressgateway.core.configuration.transport.TransportConf
 import com.shieldblaze.expressgateway.core.configuration.transport.TransportConfigurationBuilder;
 import com.shieldblaze.expressgateway.core.configuration.transport.TransportType;
 import com.shieldblaze.expressgateway.core.loadbalance.backend.Backend;
+import com.shieldblaze.expressgateway.core.loadbalance.backend.Cluster;
 import com.shieldblaze.expressgateway.core.loadbalance.l4.RoundRobin;
 import com.shieldblaze.expressgateway.core.netty.EventLoopFactory;
 import com.shieldblaze.expressgateway.core.netty.PooledByteBufAllocatorBuffer;
@@ -25,14 +28,14 @@ import java.net.InetAddress;
 import java.net.InetSocketAddress;
 import java.net.ServerSocket;
 import java.net.Socket;
-import java.util.Collections;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 class UpstreamHandlerTest {
 
-    static FrontListener listener;
+    static L4LoadBalancer l4LoadBalancer;
     static EventLoopFactory eventLoopFactory;
 
     @BeforeAll
@@ -42,13 +45,14 @@ class UpstreamHandlerTest {
                 .withTransportType(Epoll.isAvailable() ? TransportType.EPOLL : TransportType.NIO)
                 .withTCPFastOpenMaximumPendingRequests(2147483647)
                 .withBackendConnectTimeout(1000 * 5)
-                .withListenerSocketTimeout(1000 * 5)
+                .withBackendSocketTimeout(1000 * 5)
                 .withReceiveBufferAllocationType(ReceiveBufferAllocationType.FIXED)
                 .withReceiveBufferSizes(new int[]{100})
                 .withSocketReceiveBufferSize(2147483647)
                 .withSocketSendBufferSize(2147483647)
                 .withTCPConnectionBacklog(2147483647)
                 .withDataBacklog(2147483647)
+                .withConnectionIdleTimeout(180)
                 .build();
 
         EventLoopConfiguration eventLoopConfiguration = EventLoopConfigurationBuilder.newBuilder()
@@ -63,22 +67,26 @@ class UpstreamHandlerTest {
                 .build();
 
         eventLoopFactory = new EventLoopFactory(configuration);
-        PooledByteBufAllocatorBuffer pooledByteBufAllocatorBuffer =
-                new PooledByteBufAllocatorBuffer(configuration.getPooledByteBufAllocatorConfiguration());
 
-        listener = new TCPListener(new InetSocketAddress("127.0.0.1", 9110));
-        listener.start(configuration, eventLoopFactory,
-                pooledByteBufAllocatorBuffer.getInstance(),
-                new RoundRobin(Collections.singletonList(new Backend(new InetSocketAddress("127.0.0.1", 9111)))));
-        assertTrue(listener.waitForStart());
+        Cluster cluster = new Cluster();
+        cluster.setClusterName("MyCluster");
+        cluster.addBackend(new Backend(new InetSocketAddress("127.0.0.1", 9111)));
+
+        l4LoadBalancer = L4LoadBalancerBuilder.newBuilder()
+                .withConfiguration(configuration)
+                .withL4Balance(new RoundRobin())
+                .withCluster(cluster)
+                .withFrontListener(new TCPListener(new InetSocketAddress("127.0.0.1", 9110)))
+                .build();
+
+        assertTrue(l4LoadBalancer.start());
         new TCPServer().start();
     }
 
     @AfterAll
-    static void stop() throws InterruptedException {
-        listener.stop();
-        assertTrue(eventLoopFactory.getParentGroup().shutdownGracefully().sync().isSuccess());
-        assertTrue(eventLoopFactory.getChildGroup().shutdownGracefully().sync().isSuccess());
+    static void stop() {
+        l4LoadBalancer.stop();
+        assertFalse(l4LoadBalancer.hasStarted());
     }
 
     @Test

@@ -29,7 +29,10 @@ import io.netty.channel.ChannelFuture;
 import io.netty.channel.ChannelFutureListener;
 import io.netty.channel.ChannelHandlerContext;
 import io.netty.channel.ChannelInboundHandlerAdapter;
+import io.netty.handler.timeout.IdleStateHandler;
 import io.netty.util.ReferenceCounted;
+import org.apache.logging.log4j.LogManager;
+import org.apache.logging.log4j.Logger;
 
 import java.net.InetSocketAddress;
 import java.util.concurrent.ConcurrentLinkedQueue;
@@ -45,29 +48,34 @@ import java.util.concurrent.ConcurrentLinkedQueue;
  */
 final class UpstreamHandler extends ChannelInboundHandlerAdapter {
 
+    private static final Logger logger = LogManager.getLogger(UpstreamHandler.class);
+
     private final L4Balance l4Balance;
     private final Configuration configuration;
     private final EventLoopFactory eventLoopFactory;
 
     private ConcurrentLinkedQueue<ByteBuf> backlog = new ConcurrentLinkedQueue<>();
     private boolean channelActive = false;
-    private Channel backendChannel;
+    private Channel downstreamChannel;
     private Backend backend;
 
     UpstreamHandler(Configuration configuration, EventLoopFactory eventLoopFactory, L4Balance l4Balance) {
-        this.l4Balance = l4Balance;
         this.configuration = configuration;
         this.eventLoopFactory = eventLoopFactory;
+        this.l4Balance = l4Balance;
     }
 
     @Override
     public void channelActive(ChannelHandlerContext ctx) {
-        Bootstrap bootstrap = BootstrapFactory.getTCP(configuration, ctx.channel().eventLoop(), ctx.alloc());
+        Bootstrap bootstrap = BootstrapFactory.getTCP(configuration, eventLoopFactory.getChildGroup(), ctx.alloc());
         backend = l4Balance.getBackend((InetSocketAddress) ctx.channel().remoteAddress());
         bootstrap.handler(new DownstreamHandler(ctx.channel(), backend));
 
         ChannelFuture channelFuture = bootstrap.connect(backend.getSocketAddress());
-        backendChannel = channelFuture.channel();
+        downstreamChannel = channelFuture.channel();
+
+        int timeout = configuration.getTransportConfiguration().getConnectionIdleTimeout();
+        downstreamChannel.pipeline().addFirst(new IdleStateHandler(timeout, timeout, timeout));
 
         // Listener for writing Backlog
         channelFuture.addListener((ChannelFutureListener) future -> {
@@ -82,7 +90,7 @@ final class UpstreamHandler extends ChannelInboundHandlerAdapter {
 
                     backlog.forEach(packet -> {
                         backend.incBytesWritten(packet.readableBytes());
-                        backendChannel.writeAndFlush(packet).addListener((ChannelFutureListener) cf -> {
+                        downstreamChannel.writeAndFlush(packet).addListener((ChannelFutureListener) cf -> {
                             if (!cf.isSuccess()) {
                                 packet.release();
                             }
@@ -95,7 +103,7 @@ final class UpstreamHandler extends ChannelInboundHandlerAdapter {
             } else {
                 backlog.forEach(ReferenceCounted::release);
                 backlog = null;
-                backendChannel.close();
+                downstreamChannel.close();
                 ctx.channel().close();
             }
         });
@@ -106,19 +114,35 @@ final class UpstreamHandler extends ChannelInboundHandlerAdapter {
         ByteBuf byteBuf = (ByteBuf) msg;
         if (channelActive) {
             backend.incBytesWritten(byteBuf.readableBytes());
-            backendChannel.writeAndFlush(byteBuf);
-        } else if (backlog != null) {
+            downstreamChannel.writeAndFlush(byteBuf);
+            return;
+        } else if (backlog != null && backlog.size() < configuration.getTransportConfiguration().getDataBacklog()) {
             backlog.add(byteBuf);
+            return;
         }
+        byteBuf.release();
     }
 
     @Override
     public void channelInactive(ChannelHandlerContext ctx) {
+        if (logger.isInfoEnabled()) {
+            logger.info("Closing Upstream {} and Downstream {} Channel",
+                    ((InetSocketAddress) ctx.channel()).getAddress().getHostAddress() + ":" + ((InetSocketAddress) ctx.channel()).getPort(),
+                    backend.getSocketAddress().getAddress().getHostAddress() + ":" + backend.getSocketAddress().getPort());
+        }
+        if (backlog != null) {
+            for (ByteBuf byteBuf : backlog) {
+                if (byteBuf.refCnt() > 0) {
+                    byteBuf.release();
+                }
+            }
+        }
         ctx.channel().close();
-        backendChannel.close();
+        downstreamChannel.close();
     }
 
     @Override
     public void exceptionCaught(ChannelHandlerContext ctx, Throwable cause) {
+        logger.error("Caught Error at Downstream Handler", cause);
     }
 }

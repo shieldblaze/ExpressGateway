@@ -24,22 +24,41 @@ import com.shieldblaze.expressgateway.core.netty.EventLoopFactory;
 import io.netty.channel.ChannelHandlerContext;
 import io.netty.channel.ChannelInboundHandlerAdapter;
 import io.netty.channel.socket.DatagramPacket;
+import org.apache.logging.log4j.LogManager;
+import org.apache.logging.log4j.Logger;
 
 import java.net.InetSocketAddress;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
 
+/**
+ * <p> Upstream Handler receives Data from Internet.
+ * This is the first point of contact for Load Balancer. </p>
+ *
+ * <p> Flow: </p>
+ * <p> &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp;
+ * &nbsp; &nbsp; &nbsp; (Data) </p>
+ * (INTERNET) -->-->-->--> (EXPRESSGATEWAY) -->-->-->--> (BACKEND)
+ */
 final class UpstreamHandler extends ChannelInboundHandlerAdapter {
 
-    private final Map<InetSocketAddress, Connection> connectionMap = new ConcurrentHashMap<>();
-    private final L4Balance l4Balance;
+    private static final Logger logger = LogManager.getLogger(UpstreamHandler.class);
+
+    final Map<InetSocketAddress, Connection> connectionMap = new ConcurrentHashMap<>();
     private final Configuration configuration;
     private final EventLoopFactory eventLoopFactory;
+    private final L4Balance l4Balance;
+    private final ConnectionCleaner connectionCleaner = new ConnectionCleaner(this);
 
-    UpstreamHandler(L4Balance l4Balance, Configuration configuration, EventLoopFactory eventLoopFactory) {
-        this.l4Balance = l4Balance;
+    UpstreamHandler(Configuration configuration, EventLoopFactory eventLoopFactory, L4Balance l4Balance) {
         this.configuration = configuration;
         this.eventLoopFactory = eventLoopFactory;
+        this.l4Balance = l4Balance;
+    }
+
+    @Override
+    public void channelActive(ChannelHandlerContext ctx) {
+        connectionCleaner.startService();
     }
 
     @Override
@@ -61,7 +80,19 @@ final class UpstreamHandler extends ChannelInboundHandlerAdapter {
     }
 
     @Override
-    public void exceptionCaught(ChannelHandlerContext ctx, Throwable cause) throws Exception {
-        cause.printStackTrace();
+    public void channelInactive(ChannelHandlerContext ctx) {
+        logger.info("Closing All Upstream and Downstream Channels");
+
+        connectionCleaner.stopService();
+        for (Map.Entry<InetSocketAddress, Connection> entry : connectionMap.entrySet()) {
+            Connection connection = entry.getValue();
+            connection.clearBacklog();
+        }
+        connectionMap.clear();
+    }
+
+    @Override
+    public void exceptionCaught(ChannelHandlerContext ctx, Throwable cause) {
+        logger.error("Caught Error at Upstream Handler", cause);
     }
 }

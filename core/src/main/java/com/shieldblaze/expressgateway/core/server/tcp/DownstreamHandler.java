@@ -25,6 +25,8 @@ import io.netty.channel.ChannelInboundHandlerAdapter;
 import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
 
+import java.net.InetSocketAddress;
+
 /**
  * <p> Downstream Handler receives Data from Backend.
  *
@@ -40,32 +42,38 @@ final class DownstreamHandler extends ChannelInboundHandlerAdapter {
 
     private static final Logger logger = LogManager.getLogger(DownstreamHandler.class);
 
-    private final Channel clientChannel;
+    private final Channel upstream;
     private final Backend backend;
+    private final InetSocketAddress upstreamAddress;
 
     /**
      * Create a {@link DownstreamHandler} for receiving Data from {@link Backend}
      * and send back to {@code Client}.
      *
-     * @param clientChannel {@code Client} {@link Channel}
-     * @param backend {@link Backend} We'll use this for incrementing {@link Backend#incBytesReceived(int)}
+     * @param upstream {@code Client} {@link Channel}
+     * @param backend  {@link Backend} We'll use this for incrementing {@link Backend#incBytesReceived(int)}
      */
-    DownstreamHandler(Channel clientChannel, Backend backend) {
-        this.clientChannel = clientChannel;
+    DownstreamHandler(Channel upstream, Backend backend) {
+        this.upstream = upstream;
         this.backend = backend;
+        this.upstreamAddress = (InetSocketAddress) upstream.remoteAddress();
     }
 
     @Override
     public void channelRead(ChannelHandlerContext ctx, Object msg) {
         ByteBuf byteBuf = (ByteBuf) msg;                    // Cast Data to ByteBuf
         backend.incBytesReceived(byteBuf.readableBytes());  // Increment number of Bytes Received from Backend
-        clientChannel.writeAndFlush(byteBuf);               // Write Data back to Client
+        upstream.writeAndFlush(byteBuf);                    // Write Data back to Client
     }
 
     @Override
     public void channelInactive(ChannelHandlerContext ctx) {
-        logger.debug("Closing Client {} and Backend {} Channel", clientChannel, ctx.channel());
-        clientChannel.close(); // Close Client Channel
+        if (logger.isInfoEnabled()) {
+            logger.info("Closing Upstream {} and Downstream {} Channel",
+                    upstreamAddress.getAddress().getHostAddress() + ":" + upstreamAddress.getPort(),
+                    backend.getSocketAddress().getAddress().getHostAddress() + ":" + backend.getSocketAddress().getPort());
+        }
+        upstream.close();      // Close Upstream Channel
         ctx.channel().close(); // Close Downstream Channel
     }
 

@@ -20,8 +20,10 @@ package com.shieldblaze.expressgateway.core.server;
 import com.shieldblaze.expressgateway.core.configuration.Configuration;
 import com.shieldblaze.expressgateway.core.loadbalance.l4.L4Balance;
 import com.shieldblaze.expressgateway.core.netty.EventLoopFactory;
+import io.netty.buffer.ByteBuf;
 import io.netty.buffer.ByteBufAllocator;
 import io.netty.channel.ChannelFuture;
+import io.netty.channel.EventLoopGroup;
 import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
 
@@ -42,6 +44,13 @@ public abstract class FrontListener {
         this.bindAddress = bindAddress;
     }
 
+    /**
+     * Start a {@link FrontListener}
+     * @param configuration {@link Configuration} to be applied
+     * @param eventLoopFactory {@link EventLoopFactory} for {@link EventLoopGroup}
+     * @param byteBufAllocator {@link ByteBufAllocator} for {@link ByteBuf} allocation
+     * @param l4Balance {@link L4Balance} for load-balance
+     */
     public abstract void start(Configuration configuration, EventLoopFactory eventLoopFactory, ByteBufAllocator byteBufAllocator,
                                L4Balance l4Balance);
 
