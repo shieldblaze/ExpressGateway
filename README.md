@@ -14,9 +14,11 @@
 - [X] Full IPv6 Support
 - [X] NAT-forwarding
 
-### L7:
+### TLS:
 - [ ] TLS Support (v1.0, v1.1, v1.2 and v1.3)
 - [ ] TLS Offload
+
+### L7:
 - [ ] HTTP/2
 - [ ] Reverse Proxy
 - [ ] HTTP Compression and Caching
