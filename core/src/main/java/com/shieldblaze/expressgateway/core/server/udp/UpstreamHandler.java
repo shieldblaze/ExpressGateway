@@ -56,6 +56,7 @@ final class UpstreamHandler extends ChannelInboundHandlerAdapter {
         this.configuration = configuration;
         this.eventLoopFactory = eventLoopFactory;
         this.l4Balance = l4Balance;
+        System.out.println("Initiated again");
     }
 
     @Override
