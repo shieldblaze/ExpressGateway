@@ -33,6 +33,6 @@
 - [X] Weighted Least Connection
 
 ### Session Persistence:
-- [ ] 5-Tuple Hash (Source IP + Source Port +  Destination IP +  Destination Port + Protocol) 
+- [X] 5-Tuple Hash (Source IP + Source Port +  Destination IP +  Destination Port + Protocol) 
 - [ ] TLS Session ID
 - [ ] HTTP Cookie
