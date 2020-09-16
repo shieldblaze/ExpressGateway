@@ -1,6 +1,9 @@
 # ShieldBlaze ExpressGateway
 #### ShieldBlaze ExpressGateway is a High-Performance Virtual Network Appliance.
 
+![Java CI with Maven](https://github.com/shieldblaze/ExpressGateway/workflows/Java%20CI%20with%20Maven/badge.svg)
+
+
 #### Current Status: In-development
 
 ## Features:
