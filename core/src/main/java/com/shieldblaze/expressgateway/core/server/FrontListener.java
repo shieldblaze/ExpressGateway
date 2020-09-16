@@ -36,8 +36,8 @@ import java.util.concurrent.atomic.AtomicBoolean;
 public abstract class FrontListener {
     private static final Logger logger = LogManager.getLogger(FrontListener.class);
 
-    protected InetSocketAddress bindAddress;
-    protected List<ChannelFuture> channelFutureList = Collections.synchronizedList(new ArrayList<>());
+    protected final InetSocketAddress bindAddress;
+    protected final List<ChannelFuture> channelFutureList = Collections.synchronizedList(new ArrayList<>());
     private final AtomicBoolean started = new AtomicBoolean(false);
 
     public FrontListener(InetSocketAddress bindAddress) {
