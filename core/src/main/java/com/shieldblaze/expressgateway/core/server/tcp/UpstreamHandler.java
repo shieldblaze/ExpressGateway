@@ -126,11 +126,12 @@ final class UpstreamHandler extends ChannelInboundHandlerAdapter {
     @Override
     public void channelInactive(ChannelHandlerContext ctx) {
         if (logger.isInfoEnabled()) {
+            InetSocketAddress socketAddress = ((InetSocketAddress) ctx.channel().remoteAddress());
             logger.info("Closing Upstream {} and Downstream {} Channel",
-                    ((InetSocketAddress) ctx.channel().remoteAddress()).getAddress().getHostAddress() + ":" +
-                            ((InetSocketAddress) ctx.channel()).getPort(),
+                    socketAddress.getAddress().getHostAddress() + ":" + socketAddress.getPort(),
                     backend.getSocketAddress().getAddress().getHostAddress() + ":" + backend.getSocketAddress().getPort());
         }
+
         if (backlog != null) {
             for (ByteBuf byteBuf : backlog) {
                 if (byteBuf.refCnt() > 0) {
