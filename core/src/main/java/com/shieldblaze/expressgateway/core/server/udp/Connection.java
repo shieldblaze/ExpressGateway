@@ -18,7 +18,7 @@
 package com.shieldblaze.expressgateway.core.server.udp;
 
 import com.shieldblaze.expressgateway.core.configuration.Configuration;
-import com.shieldblaze.expressgateway.core.loadbalance.backend.Backend;
+import com.shieldblaze.expressgateway.loadbalance.backend.Backend;
 import com.shieldblaze.expressgateway.core.netty.BootstrapFactory;
 import com.shieldblaze.expressgateway.core.netty.EventLoopFactory;
 import io.netty.bootstrap.Bootstrap;

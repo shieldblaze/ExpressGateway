@@ -18,8 +18,8 @@
 package com.shieldblaze.expressgateway.core;
 
 import com.shieldblaze.expressgateway.core.configuration.Configuration;
-import com.shieldblaze.expressgateway.core.loadbalance.backend.Cluster;
-import com.shieldblaze.expressgateway.core.loadbalance.l4.L4Balance;
+import com.shieldblaze.expressgateway.loadbalance.backend.Cluster;
+import com.shieldblaze.expressgateway.loadbalance.l4.L4Balance;
 import com.shieldblaze.expressgateway.core.netty.EventLoopFactory;
 import com.shieldblaze.expressgateway.core.netty.PooledByteBufAllocatorBuffer;
 import com.shieldblaze.expressgateway.core.server.FrontListener;

@@ -26,29 +26,9 @@ along with ShieldBlaze ExpressGateway.  If not, see <https://www.gnu.org/license
     </parent>
     <modelVersion>4.0.0</modelVersion>
 
-    <artifactId>expressgateway-core</artifactId>
+    <artifactId>expressgateway-healthcheck</artifactId>
     <packaging>jar</packaging>
 
-    <name>ExpressGateway/Core</name>
-
-    <properties>
-        <javaModuleName>com.shieldblaze.expressgateway.core</javaModuleName>
-    </properties>
-
-    <dependencies>
-        <dependency>
-            <groupId>com.shieldblaze</groupId>
-            <artifactId>expressgateway-load-balance</artifactId>
-            <version>0.0.1-a</version>
-        </dependency>
-
-        <!-- https://mvnrepository.com/artifact/com.squareup.okhttp3/okhttp -->
-        <dependency>
-            <groupId>com.squareup.okhttp3</groupId>
-            <artifactId>okhttp</artifactId>
-            <version>4.9.0</version>
-        </dependency>
-
-    </dependencies>
+    <name>ExpressGateway/HealthCheck</name>
 
 </project>

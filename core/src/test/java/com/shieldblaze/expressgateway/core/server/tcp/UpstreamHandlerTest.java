@@ -11,9 +11,9 @@ import com.shieldblaze.expressgateway.core.configuration.transport.ReceiveBuffer
 import com.shieldblaze.expressgateway.core.configuration.transport.TransportConfiguration;
 import com.shieldblaze.expressgateway.core.configuration.transport.TransportConfigurationBuilder;
 import com.shieldblaze.expressgateway.core.configuration.transport.TransportType;
-import com.shieldblaze.expressgateway.core.loadbalance.backend.Backend;
-import com.shieldblaze.expressgateway.core.loadbalance.backend.Cluster;
-import com.shieldblaze.expressgateway.core.loadbalance.l4.RoundRobin;
+import com.shieldblaze.expressgateway.loadbalance.backend.Backend;
+import com.shieldblaze.expressgateway.loadbalance.backend.Cluster;
+import com.shieldblaze.expressgateway.loadbalance.l4.RoundRobin;
 import com.shieldblaze.expressgateway.core.netty.EventLoopFactory;
 import io.netty.channel.epoll.Epoll;
 import org.junit.jupiter.api.AfterAll;
