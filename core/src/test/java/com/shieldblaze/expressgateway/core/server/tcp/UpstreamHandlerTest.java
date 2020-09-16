@@ -1,4 +1,4 @@
-package com.shieldblaze.expressgateway.core.server;
+package com.shieldblaze.expressgateway.core.server.tcp;
 
 import com.shieldblaze.expressgateway.core.L4LoadBalancer;
 import com.shieldblaze.expressgateway.core.L4LoadBalancerBuilder;
@@ -15,8 +15,6 @@ import com.shieldblaze.expressgateway.core.loadbalance.backend.Backend;
 import com.shieldblaze.expressgateway.core.loadbalance.backend.Cluster;
 import com.shieldblaze.expressgateway.core.loadbalance.l4.RoundRobin;
 import com.shieldblaze.expressgateway.core.netty.EventLoopFactory;
-import com.shieldblaze.expressgateway.core.netty.PooledByteBufAllocatorBuffer;
-import com.shieldblaze.expressgateway.core.server.tcp.TCPListener;
 import io.netty.channel.epoll.Epoll;
 import org.junit.jupiter.api.AfterAll;
 import org.junit.jupiter.api.BeforeAll;
@@ -56,8 +54,8 @@ class UpstreamHandlerTest {
                 .build();
 
         EventLoopConfiguration eventLoopConfiguration = EventLoopConfigurationBuilder.newBuilder()
-                .withParentWorkers(2)
-                .withChildWorkers(4)
+                .withParentWorkers(Runtime.getRuntime().availableProcessors())
+                .withChildWorkers(Runtime.getRuntime().availableProcessors() * 2)
                 .build();
 
         Configuration configuration = ConfigurationBuilder.newBuilder()
