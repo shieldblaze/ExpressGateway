@@ -96,6 +96,8 @@ class UpstreamHandlerTest {
             out.writeUTF("HELLO_FROM_CLIENT");
             out.flush();
 
+            Thread.sleep(2500L); // Wait for server to respond
+
             assertEquals("HELLO_FROM_SERVER", in.readUTF());
         }
     }
