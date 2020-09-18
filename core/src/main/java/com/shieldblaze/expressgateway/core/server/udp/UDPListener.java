@@ -35,7 +35,7 @@ import java.net.InetSocketAddress;
 /**
  * UDP Listener for handling incoming requests.
  */
-public final class UDPListener extends FrontListener {
+public class UDPListener extends FrontListener {
     private static final Logger logger = LogManager.getLogger(UDPListener.class);
 
     /**
@@ -46,7 +46,8 @@ public final class UDPListener extends FrontListener {
     }
 
     @Override
-    public void start(CommonConfiguration commonConfiguration, EventLoopFactory eventLoopFactory, ByteBufAllocator byteBufAllocator, L4Balance l4Balance) {
+    public void start(CommonConfiguration commonConfiguration, EventLoopFactory eventLoopFactory, ByteBufAllocator byteBufAllocator,
+                      L4Balance l4Balance) {
 
         Bootstrap bootstrap = BootstrapFactory.getUDP(commonConfiguration, eventLoopFactory.getParentGroup(), byteBufAllocator)
                 .handler(new UpstreamHandler(commonConfiguration, eventLoopFactory, l4Balance));

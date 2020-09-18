@@ -54,23 +54,60 @@ public class TCPListener extends FrontListener {
     private static final Logger logger = LogManager.getLogger(TCPListener.class);
 
     /**
-     * {@link TLSConfiguration} for TLS Support
+     * {@link TLSConfiguration} for TLS Server Support
      */
-    private final TLSConfiguration tlsConfiguration;
+    private final TLSConfiguration tlsConfigurationForServer;
 
+    /**
+     * {@link TLSConfiguration} for TLS Client Support
+     */
+    private final TLSConfiguration tlsConfigurationForClient;
+
+    /**
+     * Create {@link TCPListener} Instance
+     *
+     * @param bindAddress {@link InetSocketAddress} on which {@link TCPListener} will bind and listen.
+     */
     public TCPListener(InetSocketAddress bindAddress) {
         this(bindAddress, null);
     }
 
     /**
+     * Create {@link TCPListener} Instance with TLS Server Support (a.k.a TLS Offload)
+     *
      * @param bindAddress {@link InetSocketAddress} on which {@link TCPListener} will bind and listen.
+     * @param tlsConfigurationForServer {@link TLSConfiguration} for TLS Server
      */
-    public TCPListener(InetSocketAddress bindAddress, TLSConfiguration tlsConfiguration) {
-        super(bindAddress);
-        this.tlsConfiguration = tlsConfiguration;
+    public TCPListener(InetSocketAddress bindAddress, TLSConfiguration tlsConfigurationForServer) {
+        this(bindAddress, tlsConfigurationForServer, null);
+    }
 
-        if (tlsConfiguration != null && !tlsConfiguration.isForServer()) {
-            throw new IllegalArgumentException("TLSConfiguration is not for server");
+    /**
+     * Create {@link TCPListener} Instance with TLS Server and Client Support (a.k.a TLS Offload and Reload)
+     *
+     * @param bindAddress {@link InetSocketAddress} on which {@link TCPListener} will bind and listen.
+     * @param tlsConfigurationForServer {@link TLSConfiguration} for TLS Server
+     * @param tlsConfigurationForClient {@link TLSConfiguration} for TLS Client
+     */
+    public TCPListener(InetSocketAddress bindAddress, TLSConfiguration tlsConfigurationForServer, TLSConfiguration tlsConfigurationForClient) {
+        super(bindAddress);
+        this.tlsConfigurationForServer = tlsConfigurationForServer;
+        this.tlsConfigurationForClient = tlsConfigurationForClient;
+
+        if (tlsConfigurationForServer != null && !tlsConfigurationForServer.isForServer()) {
+            throw new IllegalArgumentException("TLSConfiguration for Server is invalid");
+        }
+
+        if (tlsConfigurationForClient != null && tlsConfigurationForClient.isForServer()) {
+            throw new IllegalArgumentException("TLSConfiguration is Client is invalid");
+        }
+
+        if (tlsConfigurationForServer == null) {
+            logger.info("TLS Server Support is Disabled");
+        }
+
+        if (tlsConfigurationForClient == null) {
+            logger.info("TLS Client Support is Disabled");
         }
     }
 
@@ -104,7 +141,8 @@ public class TCPListener extends FrontListener {
                         return new NioServerSocketChannel();
                     }
                 })
-                .childHandler(new ServerInitializer(commonConfiguration, eventLoopFactory, l4Balance, tlsConfiguration));
+                .childHandler(new ServerInitializer(commonConfiguration, eventLoopFactory, l4Balance,
+                        tlsConfigurationForServer, tlsConfigurationForClient));
 
         int bindRounds = 1;
         if (transportConfiguration.getTransportType() == TransportType.EPOLL) {
@@ -129,14 +167,16 @@ public class TCPListener extends FrontListener {
         private final EventLoopFactory eventLoopFactory;
         private final CommonConfiguration commonConfiguration;
         private final L4Balance l4Balance;
-        private final TLSConfiguration tlsConfiguration;
+        private final TLSConfiguration tlsConfigurationForServer;
+        private final TLSConfiguration tlsConfigurationForClient;
 
         ServerInitializer(CommonConfiguration commonConfiguration, EventLoopFactory eventLoopFactory, L4Balance l4Balance,
-                          TLSConfiguration tlsConfiguration) {
+                          TLSConfiguration tlsConfigurationForServer, TLSConfiguration tlsConfigurationForClient) {
             this.commonConfiguration = commonConfiguration;
             this.eventLoopFactory = eventLoopFactory;
             this.l4Balance = l4Balance;
-            this.tlsConfiguration = tlsConfiguration;
+            this.tlsConfigurationForServer = tlsConfigurationForServer;
+            this.tlsConfigurationForClient = tlsConfigurationForClient;
         }
 
         @Override
@@ -144,11 +184,11 @@ public class TCPListener extends FrontListener {
             int timeout = commonConfiguration.getTransportConfiguration().getConnectionIdleTimeout();
             socketChannel.pipeline().addFirst(new IdleStateHandler(timeout, timeout, timeout));
 
-            if (tlsConfiguration != null) {
-                socketChannel.pipeline().addLast(new SNIHandler(tlsConfiguration));
+            if (tlsConfigurationForServer != null) {
+                socketChannel.pipeline().addLast(new SNIHandler(tlsConfigurationForServer));
             }
 
-            socketChannel.pipeline().addLast(new UpstreamHandler(commonConfiguration, eventLoopFactory, l4Balance));
+            socketChannel.pipeline().addLast(new UpstreamHandler(commonConfiguration, tlsConfigurationForClient, eventLoopFactory, l4Balance));
         }
 
         @Override

@@ -18,6 +18,7 @@
 package com.shieldblaze.expressgateway.core.server.tcp;
 
 import com.shieldblaze.expressgateway.core.configuration.CommonConfiguration;
+import com.shieldblaze.expressgateway.core.configuration.tls.TLSConfiguration;
 import com.shieldblaze.expressgateway.loadbalance.backend.Backend;
 import com.shieldblaze.expressgateway.loadbalance.l4.L4Balance;
 import com.shieldblaze.expressgateway.core.netty.BootstrapFactory;
@@ -29,6 +30,8 @@ import io.netty.channel.ChannelFuture;
 import io.netty.channel.ChannelFutureListener;
 import io.netty.channel.ChannelHandlerContext;
 import io.netty.channel.ChannelInboundHandlerAdapter;
+import io.netty.channel.ChannelInitializer;
+import io.netty.channel.socket.SocketChannel;
 import io.netty.handler.timeout.IdleStateHandler;
 import io.netty.util.ReferenceCountUtil;
 import io.netty.util.ReferenceCounted;
@@ -51,17 +54,20 @@ final class UpstreamHandler extends ChannelInboundHandlerAdapter {
 
     private static final Logger logger = LogManager.getLogger(UpstreamHandler.class);
 
-    private final L4Balance l4Balance;
     private final CommonConfiguration commonConfiguration;
+    private final TLSConfiguration tlsConfiguration;
     private final EventLoopFactory eventLoopFactory;
+    private final L4Balance l4Balance;
 
     private ConcurrentLinkedQueue<ByteBuf> backlog = new ConcurrentLinkedQueue<>();
     private boolean channelActive = false;
     private Channel downstreamChannel;
     private Backend backend;
 
-    UpstreamHandler(CommonConfiguration commonConfiguration, EventLoopFactory eventLoopFactory, L4Balance l4Balance) {
+    UpstreamHandler(CommonConfiguration commonConfiguration, TLSConfiguration tlsConfiguration, EventLoopFactory eventLoopFactory,
+                    L4Balance l4Balance) {
         this.commonConfiguration = commonConfiguration;
+        this.tlsConfiguration = tlsConfiguration;
         this.eventLoopFactory = eventLoopFactory;
         this.l4Balance = l4Balance;
     }
@@ -70,13 +76,23 @@ final class UpstreamHandler extends ChannelInboundHandlerAdapter {
     public void channelActive(ChannelHandlerContext ctx) {
         Bootstrap bootstrap = BootstrapFactory.getTCP(commonConfiguration, eventLoopFactory.getChildGroup(), ctx.alloc());
         backend = l4Balance.getBackend((InetSocketAddress) ctx.channel().remoteAddress());
-        bootstrap.handler(new DownstreamHandler(ctx.channel(), backend));
+        bootstrap.handler(new ChannelInitializer<SocketChannel>() {
+            @Override
+            protected void initChannel(SocketChannel ch) {
+                int timeout = commonConfiguration.getTransportConfiguration().getConnectionIdleTimeout();
+                downstreamChannel.pipeline().addFirst(new IdleStateHandler(timeout, timeout, timeout));
+
+                if (tlsConfiguration != null) {
+                    downstreamChannel.pipeline().addLast(tlsConfiguration.getDefault().getSslContext()
+                            .newHandler(ctx.alloc(), backend.getSocketAddress().getHostName(), backend.getSocketAddress().getPort()));
+                }
+
+                downstreamChannel.pipeline().addLast(new DownstreamHandler(ctx.channel(), backend));
+            }
+        });
 
         ChannelFuture channelFuture = bootstrap.connect(backend.getSocketAddress());
         downstreamChannel = channelFuture.channel();
-
-        int timeout = commonConfiguration.getTransportConfiguration().getConnectionIdleTimeout();
-        downstreamChannel.pipeline().addFirst(new IdleStateHandler(timeout, timeout, timeout));
 
         // Listener for writing Backlog
         channelFuture.addListener((ChannelFutureListener) future -> {

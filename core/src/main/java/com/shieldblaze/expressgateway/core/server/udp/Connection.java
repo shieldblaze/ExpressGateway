@@ -73,6 +73,7 @@ final class Connection {
                                 datagramPacket.release();
                             }
                         });
+                        backlog.remove(datagramPacket);
                     });
 
                     channelActive = true;
