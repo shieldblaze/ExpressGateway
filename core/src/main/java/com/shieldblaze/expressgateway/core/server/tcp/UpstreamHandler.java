@@ -80,14 +80,14 @@ final class UpstreamHandler extends ChannelInboundHandlerAdapter {
             @Override
             protected void initChannel(SocketChannel ch) {
                 int timeout = commonConfiguration.getTransportConfiguration().getConnectionIdleTimeout();
-                downstreamChannel.pipeline().addFirst(new IdleStateHandler(timeout, timeout, timeout));
+                ch.pipeline().addFirst(new IdleStateHandler(timeout, timeout, timeout));
 
                 if (tlsConfiguration != null) {
-                    downstreamChannel.pipeline().addLast(tlsConfiguration.getDefault().getSslContext()
+                    ch.pipeline().addLast(tlsConfiguration.getDefault().getSslContext()
                             .newHandler(ctx.alloc(), backend.getSocketAddress().getHostName(), backend.getSocketAddress().getPort()));
                 }
 
-                downstreamChannel.pipeline().addLast(new DownstreamHandler(ctx.channel(), backend));
+                ch.pipeline().addLast(new DownstreamHandler(ctx.channel(), backend));
             }
         });
 

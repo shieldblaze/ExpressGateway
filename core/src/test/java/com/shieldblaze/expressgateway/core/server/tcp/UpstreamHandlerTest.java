@@ -38,6 +38,7 @@ class UpstreamHandlerTest {
 
     @BeforeAll
     static void setup() {
+        new TCPServer().start();
 
         TransportConfiguration transportConfiguration = TransportConfigurationBuilder.newBuilder()
                 .withTransportType(Epoll.isAvailable() ? TransportType.EPOLL : TransportType.NIO)
@@ -78,7 +79,6 @@ class UpstreamHandlerTest {
                 .build();
 
         assertTrue(l4LoadBalancer.start());
-        new TCPServer().start();
     }
 
     @AfterAll
