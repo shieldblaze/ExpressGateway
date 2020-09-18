@@ -17,7 +17,7 @@
  */
 package com.shieldblaze.expressgateway.core.server.udp;
 
-import com.shieldblaze.expressgateway.core.configuration.Configuration;
+import com.shieldblaze.expressgateway.core.configuration.CommonConfiguration;
 import com.shieldblaze.expressgateway.loadbalance.backend.Backend;
 import com.shieldblaze.expressgateway.core.netty.BootstrapFactory;
 import com.shieldblaze.expressgateway.core.netty.EventLoopFactory;
@@ -40,25 +40,25 @@ final class Connection {
      */
     ConcurrentLinkedQueue<DatagramPacket> backlog = new ConcurrentLinkedQueue<>();
 
-    private final Configuration configuration;
+    private final CommonConfiguration commonConfiguration;
     private final Channel backendChannel;
     final InetSocketAddress clientAddress;
     final Backend backend;
     final AtomicBoolean connectionActive = new AtomicBoolean(true);
     private boolean channelActive = false;
 
-    Connection(InetSocketAddress clientAddress, Backend backend, Channel clientChannel, Configuration configuration,
+    Connection(InetSocketAddress clientAddress, Backend backend, Channel clientChannel, CommonConfiguration commonConfiguration,
                EventLoopFactory eventLoopFactory, ByteBufAllocator byteBufAllocator) {
-        this.configuration = configuration;
+        this.commonConfiguration = commonConfiguration;
         this.clientAddress = clientAddress;
         this.backend = backend;
 
-        Bootstrap bootstrap = BootstrapFactory.getUDP(configuration, eventLoopFactory.getChildGroup(), byteBufAllocator);
+        Bootstrap bootstrap = BootstrapFactory.getUDP(commonConfiguration, eventLoopFactory.getChildGroup(), byteBufAllocator);
         bootstrap.handler(new DownstreamHandler(clientChannel, clientAddress, this));
         ChannelFuture channelFuture = bootstrap.connect(backend.getSocketAddress());
         backendChannel = channelFuture.channel();
 
-        int timeout = configuration.getTransportConfiguration().getConnectionIdleTimeout();
+        int timeout = commonConfiguration.getTransportConfiguration().getConnectionIdleTimeout();
 
         backendChannel.pipeline().addFirst(new IdleStateHandler(timeout, timeout, timeout));
 
@@ -73,6 +73,7 @@ final class Connection {
                                 datagramPacket.release();
                             }
                         });
+                        backlog.remove(datagramPacket);
                     });
 
                     channelActive = true;
@@ -95,7 +96,7 @@ final class Connection {
                 }
             });
             return;
-        } else if (backlog != null && backlog.size() < configuration.getTransportConfiguration().getDataBacklog()) {
+        } else if (backlog != null && backlog.size() < commonConfiguration.getTransportConfiguration().getDataBacklog()) {
             backlog.add(datagramPacket);
             return;
         }

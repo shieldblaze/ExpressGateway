@@ -17,14 +17,17 @@
  */
 package com.shieldblaze.expressgateway.core;
 
-import com.shieldblaze.expressgateway.core.configuration.Configuration;
+import com.shieldblaze.expressgateway.core.configuration.CommonConfiguration;
+import com.shieldblaze.expressgateway.core.server.FrontListener;
 import com.shieldblaze.expressgateway.loadbalance.backend.Cluster;
 import com.shieldblaze.expressgateway.loadbalance.l4.L4Balance;
-import com.shieldblaze.expressgateway.core.server.FrontListener;
 import io.netty.util.internal.ObjectUtil;
 
+/**
+ * Build {@link L4LoadBalancer}
+ */
 public final class L4LoadBalancerBuilder {
-    private Configuration configuration;
+    private CommonConfiguration commonConfiguration;
     private L4Balance l4Balance;
     private Cluster cluster;
     private FrontListener frontListener;
@@ -33,33 +36,56 @@ public final class L4LoadBalancerBuilder {
         // Prevent outside initialization
     }
 
+    /**
+     * Create a new {@link L4LoadBalancerBuilder} Instance
+     *
+     * @return {@link L4LoadBalancerBuilder} Instance
+     */
     public static L4LoadBalancerBuilder newBuilder() {
         return new L4LoadBalancerBuilder();
     }
 
-    public L4LoadBalancerBuilder withConfiguration(Configuration configuration) {
-        this.configuration = configuration;
+    /**
+     * Set {@link CommonConfiguration}
+     */
+    public L4LoadBalancerBuilder withConfiguration(CommonConfiguration commonConfiguration) {
+        this.commonConfiguration = commonConfiguration;
         return this;
     }
 
+    /**
+     * Set {@link L4Balance} Type
+     */
     public L4LoadBalancerBuilder withL4Balance(L4Balance l4Balance) {
         this.l4Balance = l4Balance;
         return this;
     }
 
+    /**
+     * Set {@link Cluster} to Load Balance
+     */
     public L4LoadBalancerBuilder withCluster(Cluster cluster) {
         this.cluster = cluster;
         return this;
     }
 
+    /**
+     * Set {@link FrontListener} to listen incoming traffic
+     */
     public L4LoadBalancerBuilder withFrontListener(FrontListener frontListener) {
         this.frontListener = frontListener;
         return this;
     }
 
+    /**
+     * Build {@link L4LoadBalancer} Instance
+     *
+     * @return {@link L4LoadBalancer} Instance
+     * @throws NullPointerException If a required value if {@code null}
+     */
     public L4LoadBalancer build() {
         L4LoadBalancer l4LoadBalancer = new L4LoadBalancer();
-        l4LoadBalancer.setConfiguration(ObjectUtil.checkNotNull(configuration, "Configuration"));
+        l4LoadBalancer.setConfiguration(ObjectUtil.checkNotNull(commonConfiguration, "Configuration"));
         l4LoadBalancer.setL4Balance(ObjectUtil.checkNotNull(l4Balance, "L4Balance"));
         l4Balance.setBackends(cluster.getBackends());
         l4LoadBalancer.setCluster(ObjectUtil.checkNotNull(cluster, "Cluster"));

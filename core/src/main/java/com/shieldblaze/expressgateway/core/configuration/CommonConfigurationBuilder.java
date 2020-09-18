@@ -22,39 +22,61 @@ import com.shieldblaze.expressgateway.core.configuration.eventloop.EventLoopConf
 import com.shieldblaze.expressgateway.core.configuration.transport.TransportConfiguration;
 import io.netty.util.internal.ObjectUtil;
 
-public final class ConfigurationBuilder {
+/**
+ * Configuration Builder for {@link CommonConfiguration}
+ */
+public final class CommonConfigurationBuilder {
     private TransportConfiguration transportConfiguration;
     private EventLoopConfiguration eventLoopConfiguration;
     private PooledByteBufAllocatorConfiguration pooledByteBufAllocatorConfiguration;
 
-    private ConfigurationBuilder() {
+    private CommonConfigurationBuilder() {
+        // Prevent outside initialization
     }
 
-    public static ConfigurationBuilder newBuilder() {
-        return new ConfigurationBuilder();
+    /**
+     * Create a new {@link CommonConfiguration} Instance
+     * @return {@link CommonConfiguration} Instance
+     */
+    public static CommonConfigurationBuilder newBuilder() {
+        return new CommonConfigurationBuilder();
     }
 
-    public ConfigurationBuilder withTransportConfiguration(TransportConfiguration transportConfiguration) {
+    /**
+     * Set {@link TransportConfiguration}
+     */
+    public CommonConfigurationBuilder withTransportConfiguration(TransportConfiguration transportConfiguration) {
         this.transportConfiguration = transportConfiguration;
         return this;
     }
 
-    public ConfigurationBuilder withEventLoopConfiguration(EventLoopConfiguration eventLoopConfiguration) {
+    /**
+     * Set {@link EventLoopConfiguration}
+     */
+    public CommonConfigurationBuilder withEventLoopConfiguration(EventLoopConfiguration eventLoopConfiguration) {
         this.eventLoopConfiguration = eventLoopConfiguration;
         return this;
     }
 
-    public ConfigurationBuilder withPooledByteBufAllocatorConfiguration(PooledByteBufAllocatorConfiguration pooledByteBufAllocatorConfiguration) {
+    /**
+     * Set {@link PooledByteBufAllocatorConfiguration}
+     */
+    public CommonConfigurationBuilder withPooledByteBufAllocatorConfiguration(PooledByteBufAllocatorConfiguration pooledByteBufAllocatorConfiguration) {
         this.pooledByteBufAllocatorConfiguration = pooledByteBufAllocatorConfiguration;
         return this;
     }
 
-    public Configuration build() {
-        Configuration configuration = new Configuration();
-        configuration.setTransportConfiguration(ObjectUtil.checkNotNull(transportConfiguration, "Transport Configuration"));
-        configuration.setEventLoopConfiguration(ObjectUtil.checkNotNull(eventLoopConfiguration, "EventLoop Configuration"));
-        configuration.setPooledByteBufAllocatorConfiguration(ObjectUtil.checkNotNull(pooledByteBufAllocatorConfiguration,
+    /**
+     * Build {@link CommonConfiguration}
+     * @return {@link CommonConfiguration} Instance
+     * @throws NullPointerException If a required value if {@code null}
+     */
+    public CommonConfiguration build() {
+        CommonConfiguration commonConfiguration = new CommonConfiguration();
+        commonConfiguration.setTransportConfiguration(ObjectUtil.checkNotNull(transportConfiguration, "Transport Configuration"));
+        commonConfiguration.setEventLoopConfiguration(ObjectUtil.checkNotNull(eventLoopConfiguration, "EventLoop Configuration"));
+        commonConfiguration.setPooledByteBufAllocatorConfiguration(ObjectUtil.checkNotNull(pooledByteBufAllocatorConfiguration,
                 "PooledByteBufAllocator Configuration"));
-        return configuration;
+        return commonConfiguration;
     }
 }

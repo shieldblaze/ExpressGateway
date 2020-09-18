@@ -17,41 +17,9 @@
  */
 package com.shieldblaze.expressgateway.core.configuration;
 
-import com.shieldblaze.expressgateway.core.configuration.buffer.PooledByteBufAllocatorConfiguration;
-import com.shieldblaze.expressgateway.core.configuration.eventloop.EventLoopConfiguration;
-import com.shieldblaze.expressgateway.core.configuration.transport.TransportConfiguration;
-
-public final class Configuration {
-
-    private TransportConfiguration transportConfiguration;
-    private EventLoopConfiguration eventLoopConfiguration;
-    private PooledByteBufAllocatorConfiguration pooledByteBufAllocatorConfiguration;
-
-    Configuration() {
-        // Prevent outside initialization
-    }
-
-    public TransportConfiguration getTransportConfiguration() {
-        return transportConfiguration;
-    }
-
-    void setTransportConfiguration(TransportConfiguration transportConfiguration) {
-        this.transportConfiguration = transportConfiguration;
-    }
-
-    public EventLoopConfiguration getEventLoopConfiguration() {
-        return eventLoopConfiguration;
-    }
-
-    void setEventLoopConfiguration(EventLoopConfiguration eventLoopConfiguration) {
-        this.eventLoopConfiguration = eventLoopConfiguration;
-    }
-
-    public PooledByteBufAllocatorConfiguration getPooledByteBufAllocatorConfiguration() {
-        return pooledByteBufAllocatorConfiguration;
-    }
-
-    void setPooledByteBufAllocatorConfiguration(PooledByteBufAllocatorConfiguration pooledByteBufAllocatorConfiguration) {
-        this.pooledByteBufAllocatorConfiguration = pooledByteBufAllocatorConfiguration;
-    }
+/**
+ * Base Class
+ */
+public class Configuration {
+    // Base Class
 }

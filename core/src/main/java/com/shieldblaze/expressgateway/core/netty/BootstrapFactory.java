@@ -17,7 +17,7 @@
  */
 package com.shieldblaze.expressgateway.core.netty;
 
-import com.shieldblaze.expressgateway.core.configuration.Configuration;
+import com.shieldblaze.expressgateway.core.configuration.CommonConfiguration;
 import com.shieldblaze.expressgateway.core.configuration.transport.TransportType;
 import io.netty.bootstrap.Bootstrap;
 import io.netty.buffer.ByteBufAllocator;
@@ -36,17 +36,17 @@ public final class BootstrapFactory {
         // Prevent outside initialization
     }
 
-    public static Bootstrap getTCP(Configuration configuration, EventLoopGroup eventLoopGroup, ByteBufAllocator byteBufAllocator) {
+    public static Bootstrap getTCP(CommonConfiguration commonConfiguration, EventLoopGroup eventLoopGroup, ByteBufAllocator byteBufAllocator) {
         return new Bootstrap()
                 .group(eventLoopGroup)
                 .option(ChannelOption.ALLOCATOR, byteBufAllocator)
-                .option(ChannelOption.RCVBUF_ALLOCATOR, configuration.getTransportConfiguration().getRecvByteBufAllocator())
-                .option(ChannelOption.SO_SNDBUF, configuration.getTransportConfiguration().getSocketSendBufferSize())
-                .option(ChannelOption.SO_RCVBUF, configuration.getTransportConfiguration().getSocketReceiveBufferSize())
+                .option(ChannelOption.RCVBUF_ALLOCATOR, commonConfiguration.getTransportConfiguration().getRecvByteBufAllocator())
+                .option(ChannelOption.SO_SNDBUF, commonConfiguration.getTransportConfiguration().getSocketSendBufferSize())
+                .option(ChannelOption.SO_RCVBUF, commonConfiguration.getTransportConfiguration().getSocketReceiveBufferSize())
                 .option(ChannelOption.TCP_NODELAY, true)
-                .option(ChannelOption.CONNECT_TIMEOUT_MILLIS, configuration.getTransportConfiguration().getBackendConnectTimeout())
+                .option(ChannelOption.CONNECT_TIMEOUT_MILLIS, commonConfiguration.getTransportConfiguration().getBackendConnectTimeout())
                 .channelFactory(() -> {
-                    if (configuration.getTransportConfiguration().getTransportType() == TransportType.EPOLL) {
+                    if (commonConfiguration.getTransportConfiguration().getTransportType() == TransportType.EPOLL) {
                         EpollSocketChannel socketChannel = new EpollSocketChannel();
                         socketChannel.config()
                                 .setEpollMode(EpollMode.EDGE_TRIGGERED)
@@ -60,17 +60,17 @@ public final class BootstrapFactory {
                 });
     }
 
-    public static Bootstrap getUDP(Configuration configuration, EventLoopGroup eventLoopGroup, ByteBufAllocator byteBufAllocator) {
+    public static Bootstrap getUDP(CommonConfiguration commonConfiguration, EventLoopGroup eventLoopGroup, ByteBufAllocator byteBufAllocator) {
         return new Bootstrap()
                 .group(eventLoopGroup)
                 .option(ChannelOption.ALLOCATOR, byteBufAllocator)
-                .option(ChannelOption.RCVBUF_ALLOCATOR, configuration.getTransportConfiguration().getRecvByteBufAllocator())
-                .option(ChannelOption.SO_SNDBUF, configuration.getTransportConfiguration().getSocketSendBufferSize())
-                .option(ChannelOption.SO_RCVBUF, configuration.getTransportConfiguration().getSocketReceiveBufferSize())
+                .option(ChannelOption.RCVBUF_ALLOCATOR, commonConfiguration.getTransportConfiguration().getRecvByteBufAllocator())
+                .option(ChannelOption.SO_SNDBUF, commonConfiguration.getTransportConfiguration().getSocketSendBufferSize())
+                .option(ChannelOption.SO_RCVBUF, commonConfiguration.getTransportConfiguration().getSocketReceiveBufferSize())
                 .option(ChannelOption.AUTO_READ, true)
                 .option(ChannelOption.AUTO_CLOSE, false)
                 .channelFactory(() -> {
-                    if (configuration.getTransportConfiguration().getTransportType() == TransportType.EPOLL) {
+                    if (commonConfiguration.getTransportConfiguration().getTransportType() == TransportType.EPOLL) {
                         EpollDatagramChannel epollDatagramChannel = new EpollDatagramChannel();
                         epollDatagramChannel.config()
                                 .setEpollMode(EpollMode.EDGE_TRIGGERED)

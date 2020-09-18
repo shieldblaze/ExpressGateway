@@ -15,21 +15,31 @@
  * You should have received a copy of the GNU General Public License
  * along with ShieldBlaze ExpressGateway.  If not, see <https://www.gnu.org/licenses/>.
  */
-package com.shieldblaze.expressgateway.core.configuration.transport;
+package com.shieldblaze.expressgateway.core.configuration.tls;
 
-import io.netty.channel.AdaptiveRecvByteBufAllocator;
-import io.netty.channel.FixedRecvByteBufAllocator;
+import java.util.List;
 
 /**
- * Receive Buffer Allocation Type
+ * List of available TLS Protocols under OpenSsl 1.1.1g
  */
-public enum ReceiveBufferAllocationType {
-    /**
-     * Uses {@link AdaptiveRecvByteBufAllocator}
-     */
-    ADAPTIVE,
-    /**
-     * Uses {@link FixedRecvByteBufAllocator}
-     */
-    FIXED
+public enum Protocol {
+    TLS_1_1("TLSv1.1"),
+    TLS_1_2("TLSv1.2"),
+    TLS_1_3("TLSv1.3");
+    
+    private final String protocol;
+
+    Protocol(String protocol) {
+        this.protocol = protocol;
+    }
+
+    static String[] getProtocols(List<Protocol> protocols) {
+        String[] protocolArray = new String[protocols.size()];
+        int index = 0;
+        for (Protocol protocol : protocols) {
+            protocolArray[index] = protocol.protocol;
+            index++;
+        }
+        return protocolArray;
+    }
 }

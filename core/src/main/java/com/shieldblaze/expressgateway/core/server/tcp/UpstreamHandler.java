@@ -17,7 +17,8 @@
  */
 package com.shieldblaze.expressgateway.core.server.tcp;
 
-import com.shieldblaze.expressgateway.core.configuration.Configuration;
+import com.shieldblaze.expressgateway.core.configuration.CommonConfiguration;
+import com.shieldblaze.expressgateway.core.configuration.tls.TLSConfiguration;
 import com.shieldblaze.expressgateway.loadbalance.backend.Backend;
 import com.shieldblaze.expressgateway.loadbalance.l4.L4Balance;
 import com.shieldblaze.expressgateway.core.netty.BootstrapFactory;
@@ -29,7 +30,10 @@ import io.netty.channel.ChannelFuture;
 import io.netty.channel.ChannelFutureListener;
 import io.netty.channel.ChannelHandlerContext;
 import io.netty.channel.ChannelInboundHandlerAdapter;
+import io.netty.channel.ChannelInitializer;
+import io.netty.channel.socket.SocketChannel;
 import io.netty.handler.timeout.IdleStateHandler;
+import io.netty.util.ReferenceCountUtil;
 import io.netty.util.ReferenceCounted;
 import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
@@ -50,32 +54,45 @@ final class UpstreamHandler extends ChannelInboundHandlerAdapter {
 
     private static final Logger logger = LogManager.getLogger(UpstreamHandler.class);
 
-    private final L4Balance l4Balance;
-    private final Configuration configuration;
+    private final CommonConfiguration commonConfiguration;
+    private final TLSConfiguration tlsConfiguration;
     private final EventLoopFactory eventLoopFactory;
+    private final L4Balance l4Balance;
 
     private ConcurrentLinkedQueue<ByteBuf> backlog = new ConcurrentLinkedQueue<>();
     private boolean channelActive = false;
     private Channel downstreamChannel;
     private Backend backend;
 
-    UpstreamHandler(Configuration configuration, EventLoopFactory eventLoopFactory, L4Balance l4Balance) {
-        this.configuration = configuration;
+    UpstreamHandler(CommonConfiguration commonConfiguration, TLSConfiguration tlsConfiguration, EventLoopFactory eventLoopFactory,
+                    L4Balance l4Balance) {
+        this.commonConfiguration = commonConfiguration;
+        this.tlsConfiguration = tlsConfiguration;
         this.eventLoopFactory = eventLoopFactory;
         this.l4Balance = l4Balance;
     }
 
     @Override
     public void channelActive(ChannelHandlerContext ctx) {
-        Bootstrap bootstrap = BootstrapFactory.getTCP(configuration, eventLoopFactory.getChildGroup(), ctx.alloc());
+        Bootstrap bootstrap = BootstrapFactory.getTCP(commonConfiguration, eventLoopFactory.getChildGroup(), ctx.alloc());
         backend = l4Balance.getBackend((InetSocketAddress) ctx.channel().remoteAddress());
-        bootstrap.handler(new DownstreamHandler(ctx.channel(), backend));
+        bootstrap.handler(new ChannelInitializer<SocketChannel>() {
+            @Override
+            protected void initChannel(SocketChannel ch) {
+                int timeout = commonConfiguration.getTransportConfiguration().getConnectionIdleTimeout();
+                downstreamChannel.pipeline().addFirst(new IdleStateHandler(timeout, timeout, timeout));
+
+                if (tlsConfiguration != null) {
+                    downstreamChannel.pipeline().addLast(tlsConfiguration.getDefault().getSslContext()
+                            .newHandler(ctx.alloc(), backend.getSocketAddress().getHostName(), backend.getSocketAddress().getPort()));
+                }
+
+                downstreamChannel.pipeline().addLast(new DownstreamHandler(ctx.channel(), backend));
+            }
+        });
 
         ChannelFuture channelFuture = bootstrap.connect(backend.getSocketAddress());
         downstreamChannel = channelFuture.channel();
-
-        int timeout = configuration.getTransportConfiguration().getConnectionIdleTimeout();
-        downstreamChannel.pipeline().addFirst(new IdleStateHandler(timeout, timeout, timeout));
 
         // Listener for writing Backlog
         channelFuture.addListener((ChannelFutureListener) future -> {
@@ -95,14 +112,13 @@ final class UpstreamHandler extends ChannelInboundHandlerAdapter {
                                 packet.release();
                             }
                         });
+                        backlog.remove(packet);
                     });
 
                     channelActive = true;
                     backlog = null;
                 });
             } else {
-                backlog.forEach(ReferenceCounted::release);
-                backlog = null;
                 downstreamChannel.close();
                 ctx.channel().close();
             }
@@ -116,7 +132,7 @@ final class UpstreamHandler extends ChannelInboundHandlerAdapter {
             backend.incBytesWritten(byteBuf.readableBytes());
             downstreamChannel.writeAndFlush(byteBuf);
             return;
-        } else if (backlog != null && backlog.size() < configuration.getTransportConfiguration().getDataBacklog()) {
+        } else if (backlog != null && backlog.size() < commonConfiguration.getTransportConfiguration().getDataBacklog()) {
             backlog.add(byteBuf);
             return;
         }
@@ -132,6 +148,9 @@ final class UpstreamHandler extends ChannelInboundHandlerAdapter {
                     backend.getSocketAddress().getAddress().getHostAddress() + ":" + backend.getSocketAddress().getPort());
         }
 
+        ctx.channel().close();
+        downstreamChannel.close();
+
         if (backlog != null) {
             for (ByteBuf byteBuf : backlog) {
                 if (byteBuf.refCnt() > 0) {
@@ -139,12 +158,10 @@ final class UpstreamHandler extends ChannelInboundHandlerAdapter {
                 }
             }
         }
-        ctx.channel().close();
-        downstreamChannel.close();
     }
 
     @Override
     public void exceptionCaught(ChannelHandlerContext ctx, Throwable cause) {
-        logger.error("Caught Error at Downstream Handler", cause);
+        logger.error("Caught Error at Upstream Handler", cause);
     }
 }

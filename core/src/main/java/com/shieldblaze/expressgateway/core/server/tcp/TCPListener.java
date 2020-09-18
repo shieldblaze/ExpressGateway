@@ -17,12 +17,13 @@
  */
 package com.shieldblaze.expressgateway.core.server.tcp;
 
-import com.shieldblaze.expressgateway.core.configuration.Configuration;
+import com.shieldblaze.expressgateway.core.configuration.CommonConfiguration;
+import com.shieldblaze.expressgateway.core.configuration.tls.TLSConfiguration;
 import com.shieldblaze.expressgateway.core.configuration.transport.TransportConfiguration;
 import com.shieldblaze.expressgateway.core.configuration.transport.TransportType;
-import com.shieldblaze.expressgateway.loadbalance.l4.L4Balance;
 import com.shieldblaze.expressgateway.core.netty.EventLoopFactory;
 import com.shieldblaze.expressgateway.core.server.FrontListener;
+import com.shieldblaze.expressgateway.loadbalance.l4.L4Balance;
 import io.netty.bootstrap.ServerBootstrap;
 import io.netty.buffer.ByteBufAllocator;
 import io.netty.channel.ChannelFuture;
@@ -45,20 +46,76 @@ import java.net.InetSocketAddress;
 /**
  * TCP Listener for handling incoming requests.
  */
-public final class TCPListener extends FrontListener {
+public class TCPListener extends FrontListener {
 
+    /**
+     * Logger
+     */
     private static final Logger logger = LogManager.getLogger(TCPListener.class);
 
     /**
+     * {@link TLSConfiguration} for TLS Server Support
+     */
+    private final TLSConfiguration tlsConfigurationForServer;
+
+    /**
+     * {@link TLSConfiguration} for TLS Client Support
+     */
+    private final TLSConfiguration tlsConfigurationForClient;
+
+    /**
+     * Create {@link TCPListener} Instance
+     *
      * @param bindAddress {@link InetSocketAddress} on which {@link TCPListener} will bind and listen.
      */
     public TCPListener(InetSocketAddress bindAddress) {
+        this(bindAddress, null);
+    }
+
+    /**
+     * Create {@link TCPListener} Instance with TLS Server Support (a.k.a TLS Offload)
+     *
+     * @param bindAddress {@link InetSocketAddress} on which {@link TCPListener} will bind and listen.
+     * @param tlsConfigurationForServer {@link TLSConfiguration} for TLS Server
+     */
+    public TCPListener(InetSocketAddress bindAddress, TLSConfiguration tlsConfigurationForServer) {
+        this(bindAddress, tlsConfigurationForServer, null);
+    }
+
+    /**
+     * Create {@link TCPListener} Instance with TLS Server and Client Support (a.k.a TLS Offload and Reload)
+     *
+     * @param bindAddress {@link InetSocketAddress} on which {@link TCPListener} will bind and listen.
+     * @param tlsConfigurationForServer {@link TLSConfiguration} for TLS Server
+     * @param tlsConfigurationForClient {@link TLSConfiguration} for TLS Client
+     */
+    public TCPListener(InetSocketAddress bindAddress, TLSConfiguration tlsConfigurationForServer, TLSConfiguration tlsConfigurationForClient) {
         super(bindAddress);
+        this.tlsConfigurationForServer = tlsConfigurationForServer;
+        this.tlsConfigurationForClient = tlsConfigurationForClient;
+
+        if (tlsConfigurationForServer != null && !tlsConfigurationForServer.isForServer()) {
+            throw new IllegalArgumentException("TLSConfiguration for Server is invalid");
+        }
+
+        if (tlsConfigurationForClient != null && tlsConfigurationForClient.isForServer()) {
+            throw new IllegalArgumentException("TLSConfiguration is Client is invalid");
+        }
+
+        if (tlsConfigurationForServer == null) {
+            logger.info("TLS Server Support is Disabled");
+        }
+
+        if (tlsConfigurationForClient == null) {
+            logger.info("TLS Client Support is Disabled");
+        }
     }
 
     @Override
-    public void start(Configuration configuration, EventLoopFactory eventLoopFactory, ByteBufAllocator byteBufAllocator, L4Balance l4Balance) {
-        TransportConfiguration transportConfiguration = configuration.getTransportConfiguration();
+    public void start(CommonConfiguration commonConfiguration, EventLoopFactory eventLoopFactory, ByteBufAllocator byteBufAllocator,
+                      L4Balance l4Balance) {
+
+        TransportConfiguration transportConfiguration = commonConfiguration.getTransportConfiguration();
 
         ServerBootstrap serverBootstrap = new ServerBootstrap()
                 .group(eventLoopFactory.getParentGroup(), eventLoopFactory.getChildGroup())
@@ -72,7 +129,7 @@ public final class TCPListener extends FrontListener {
                 .childOption(ChannelOption.SO_RCVBUF, transportConfiguration.getSocketReceiveBufferSize())
                 .childOption(ChannelOption.RCVBUF_ALLOCATOR, transportConfiguration.getRecvByteBufAllocator())
                 .channelFactory(() -> {
-                    if (configuration.getTransportConfiguration().getTransportType() == TransportType.EPOLL) {
+                    if (commonConfiguration.getTransportConfiguration().getTransportType() == TransportType.EPOLL) {
                         EpollServerSocketChannel serverSocketChannel = new EpollServerSocketChannel();
                         EpollServerSocketChannelConfig config = serverSocketChannel.config();
                         config.setOption(UnixChannelOption.SO_REUSEPORT, true);
@@ -84,11 +141,12 @@ public final class TCPListener extends FrontListener {
                         return new NioServerSocketChannel();
                     }
                 })
-                .childHandler(new ServerInitializer(configuration, eventLoopFactory, l4Balance));
+                .childHandler(new ServerInitializer(commonConfiguration, eventLoopFactory, l4Balance,
+                        tlsConfigurationForServer, tlsConfigurationForClient));
 
         int bindRounds = 1;
         if (transportConfiguration.getTransportType() == TransportType.EPOLL) {
-            bindRounds = configuration.getEventLoopConfiguration().getParentWorkers();
+            bindRounds = commonConfiguration.getEventLoopConfiguration().getParentWorkers();
         }
 
         for (int i = 0; i < bindRounds; i++) {
@@ -107,22 +165,30 @@ public final class TCPListener extends FrontListener {
         private static final Logger logger = LogManager.getLogger(ServerInitializer.class);
 
         private final EventLoopFactory eventLoopFactory;
-        private final Configuration configuration;
+        private final CommonConfiguration commonConfiguration;
         private final L4Balance l4Balance;
+        private final TLSConfiguration tlsConfigurationForServer;
+        private final TLSConfiguration tlsConfigurationForClient;
 
-        ServerInitializer(Configuration configuration, EventLoopFactory eventLoopFactory, L4Balance l4Balance) {
-            this.configuration = configuration;
+        ServerInitializer(CommonConfiguration commonConfiguration, EventLoopFactory eventLoopFactory, L4Balance l4Balance,
+                          TLSConfiguration tlsConfigurationForServer, TLSConfiguration tlsConfigurationForClient) {
+            this.commonConfiguration = commonConfiguration;
             this.eventLoopFactory = eventLoopFactory;
             this.l4Balance = l4Balance;
+            this.tlsConfigurationForServer = tlsConfigurationForServer;
+            this.tlsConfigurationForClient = tlsConfigurationForClient;
         }
 
         @Override
         protected void initChannel(SocketChannel socketChannel) {
-            int timeout = configuration.getTransportConfiguration().getConnectionIdleTimeout();
-            socketChannel.pipeline().addFirst(
-                    new IdleStateHandler(timeout, timeout, timeout),
-                    new UpstreamHandler(configuration, eventLoopFactory, l4Balance)
-            );
+            int timeout = commonConfiguration.getTransportConfiguration().getConnectionIdleTimeout();
+            socketChannel.pipeline().addFirst(new IdleStateHandler(timeout, timeout, timeout));
+
+            if (tlsConfigurationForServer != null) {
+                socketChannel.pipeline().addLast(new SNIHandler(tlsConfigurationForServer));
+            }
+
+            socketChannel.pipeline().addLast(new UpstreamHandler(commonConfiguration, tlsConfigurationForClient, eventLoopFactory, l4Balance));
         }
 
         @Override

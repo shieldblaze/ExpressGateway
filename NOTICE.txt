@@ -32,6 +32,13 @@ This product depends on 'Netty'. License for the same can be obtained at:
     * license/LICENSE.netty.txt (Apache License 2.0)
 
 ---------------------------------
+
+This product depends on 'Netty-TCNative'. License for the same can be obtained at:
+
+  * LICENSE:
+    * license/LICENSE.netty-tcnative.txt (Apache License 2.0)
+
+---------------------------------
 	
 This product depends on 'Apache Log4J'. License for the same can be obtained at:
 
@@ -51,5 +58,19 @@ This product depends on 'Google Guava'. License for the same can be obtained at:
 
   * LICENSE:
     * license/LICENSE.guava.txt (Apache License 2.0)
+
+---------------------------------
+
+This product depends on 'Apache HttpComponents HttpClient'. License for the same can be obtained at:
+
+  * LICENSE:
+    * license/LICENSE.httpclient.txt (Apache License 2.0)
+
+---------------------------------
+
+This product depends on 'BouncyCastle'. License for the same can be obtained at:
+
+  * LICENSE:
+    * license/LICENSE.bouncycastle.txt (The Legion of the Bouncy Castle Inc.)
 
 ---------------------------------

@@ -15,21 +15,26 @@
  * You should have received a copy of the GNU General Public License
  * along with ShieldBlaze ExpressGateway.  If not, see <https://www.gnu.org/licenses/>.
  */
-package com.shieldblaze.expressgateway.core.configuration.transport;
+package com.shieldblaze.expressgateway.core.configuration.tls;
 
-import io.netty.channel.AdaptiveRecvByteBufAllocator;
-import io.netty.channel.FixedRecvByteBufAllocator;
+import io.netty.handler.ssl.ClientAuth;
 
 /**
- * Receive Buffer Allocation Type
+ * Mutual TLS configuration for Server.
+ * @see <a href="https://en.wikipedia.org/wiki/Mutual_authentication">Mutual TLS</a>
  */
-public enum ReceiveBufferAllocationType {
-    /**
-     * Uses {@link AdaptiveRecvByteBufAllocator}
-     */
-    ADAPTIVE,
-    /**
-     * Uses {@link FixedRecvByteBufAllocator}
-     */
-    FIXED
+public enum MutualTLS {
+    NOT_REQUIRED(ClientAuth.NONE),
+    OPTIONAL(ClientAuth.OPTIONAL),
+    REQUIRED(ClientAuth.REQUIRE);
+
+    private final ClientAuth clientAuth;
+
+    MutualTLS(ClientAuth clientAuth) {
+        this.clientAuth = clientAuth;
+    }
+
+    ClientAuth getClientAuth() {
+        return clientAuth;
+    }
 }

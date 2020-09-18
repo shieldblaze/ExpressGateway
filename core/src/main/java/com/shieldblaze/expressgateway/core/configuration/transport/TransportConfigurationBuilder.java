@@ -20,6 +20,9 @@ package com.shieldblaze.expressgateway.core.configuration.transport;
 import io.netty.channel.epoll.Epoll;
 import io.netty.util.internal.ObjectUtil;
 
+/**
+ * Configuration Builder for {@link TransportConfiguration}
+ */
 public final class TransportConfigurationBuilder {
     private TransportType transportType;
     private ReceiveBufferAllocationType receiveBufferAllocationType;
@@ -34,67 +37,111 @@ public final class TransportConfigurationBuilder {
     private int ConnectionIdleTimeout;
 
     private TransportConfigurationBuilder() {
+        // Prevent outside initialization
     }
 
+    /**
+     * Create a new {@link TransportConfigurationBuilder} Instance
+     * @return {@link TransportConfigurationBuilder} Instance
+     */
     public static TransportConfigurationBuilder newBuilder() {
         return new TransportConfigurationBuilder();
     }
 
+    /**
+     * Set {@link TransportType} to use
+     */
     public TransportConfigurationBuilder withTransportType(TransportType transportType) {
         this.transportType = transportType;
         return this;
     }
 
+    /**
+     * Set {@link ReceiveBufferAllocationType} to use
+     */
     public TransportConfigurationBuilder withReceiveBufferAllocationType(ReceiveBufferAllocationType receiveBufferAllocationType) {
         this.receiveBufferAllocationType = receiveBufferAllocationType;
         return this;
     }
 
+    /**
+     * Set Receive Buffer Allocation Sizes
+     */
     public TransportConfigurationBuilder withReceiveBufferSizes(int[] ReceiveBufferSizes) {
         this.ReceiveBufferSizes = ReceiveBufferSizes;
         return this;
     }
 
+    /**
+     * Set TCP Connection Backlog Size
+     */
     public TransportConfigurationBuilder withTCPConnectionBacklog(int TCPConnectionBacklog) {
         this.TCPConnectionBacklog = TCPConnectionBacklog;
         return this;
     }
 
+    /**
+     * Set Data Backlog Size
+     */
     public TransportConfigurationBuilder withDataBacklog(int DataBacklog) {
         this.DataBacklog = DataBacklog;
         return this;
     }
 
+    /**
+     * Set Socket Receive Buffer Size
+     */
     public TransportConfigurationBuilder withSocketReceiveBufferSize(int SocketReceiveBufferSize) {
         this.SocketReceiveBufferSize = SocketReceiveBufferSize;
         return this;
     }
 
+    /**
+     * Set Socket Send Buffer Size
+     */
     public TransportConfigurationBuilder withSocketSendBufferSize(int SocketSendBufferSize) {
         this.SocketSendBufferSize = SocketSendBufferSize;
         return this;
     }
 
+    /**
+     * Set TCP Fast Open Maximum Pending Requests Limit
+     */
     public TransportConfigurationBuilder withTCPFastOpenMaximumPendingRequests(int TCPFastOpenMaximumPendingRequests) {
         this.TCPFastOpenMaximumPendingRequestsCount = TCPFastOpenMaximumPendingRequests;
         return this;
     }
 
+    /**
+     * Set Backend Socket Timeout
+     */
     public TransportConfigurationBuilder withBackendSocketTimeout(int BackendSocketTimeout) {
         this.BackendSocketTimeout = BackendSocketTimeout;
         return this;
     }
 
+    /**
+     * Set Backend Connect Timeout
+     */
     public TransportConfigurationBuilder withBackendConnectTimeout(int BackendConnectTimeout) {
         this.BackendConnectTimeout = BackendConnectTimeout;
         return this;
     }
 
+    /**
+     * Set Connection Idle Timeout
+     */
     public TransportConfigurationBuilder withConnectionIdleTimeout(int ConnectionIdleTimeout) {
         this.ConnectionIdleTimeout = ConnectionIdleTimeout;
         return this;
     }
 
+    /**
+     * Build {@link TransportConfiguration}
+     * @return {@link TransportConfiguration} Instance
+     * @throws NullPointerException If a required value if {@code null}
+     * @throws IllegalArgumentException If a value is invalid
+     */
     public TransportConfiguration build() {
         TransportConfiguration transportConfiguration = new TransportConfiguration();
         transportConfiguration.setTransportType(ObjectUtil.checkNotNull(transportType, "Transport Type"));

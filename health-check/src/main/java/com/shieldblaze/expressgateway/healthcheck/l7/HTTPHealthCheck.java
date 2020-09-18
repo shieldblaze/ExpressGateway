@@ -18,95 +18,81 @@
 package com.shieldblaze.expressgateway.healthcheck.l7;
 
 import com.shieldblaze.expressgateway.healthcheck.HealthCheck;
-import io.netty.bootstrap.Bootstrap;
-import io.netty.channel.Channel;
-import io.netty.channel.ChannelFuture;
-import io.netty.handler.codec.http.DefaultFullHttpRequest;
-import io.netty.handler.codec.http.HttpHeaderNames;
-import io.netty.handler.codec.http.HttpMethod;
-import io.netty.handler.codec.http.HttpVersion;
-import io.netty.handler.codec.http2.HttpConversionUtil;
-import io.netty.handler.ssl.ApplicationProtocolNames;
-import io.netty.handler.ssl.SslContext;
-import io.netty.util.concurrent.Promise;
+import org.apache.http.client.config.RequestConfig;
+import org.apache.http.client.methods.CloseableHttpResponse;
+import org.apache.http.client.methods.HttpGet;
+import org.apache.http.conn.ssl.NoopHostnameVerifier;
+import org.apache.http.conn.ssl.SSLConnectionSocketFactory;
+import org.apache.http.conn.ssl.TrustSelfSignedStrategy;
+import org.apache.http.impl.client.CloseableHttpClient;
+import org.apache.http.impl.client.HttpClientBuilder;
+import org.apache.http.ssl.SSLContextBuilder;
 
 import java.net.InetSocketAddress;
-import java.net.URL;
-import java.util.concurrent.TimeUnit;
+import java.net.URI;
+import java.security.KeyManagementException;
+import java.security.KeyStoreException;
+import java.security.NoSuchAlgorithmException;
 
 public final class HTTPHealthCheck extends HealthCheck {
 
-    private final Bootstrap bootstrap;
-    private final SslContext sslContext;
-    final URL url;
-    final int timeout;
+    private final HttpClientBuilder httpClientBuilder;
+    private final URI uri;
 
-    public HTTPHealthCheck(Bootstrap bootstrap, SslContext sslContext, URL url, int timeout) {
-        super(new InetSocketAddress(url.getHost(), url.getPort()), timeout);
-        this.bootstrap = bootstrap;
-        this.sslContext = sslContext;
-        this.url = url;
-        this.timeout = timeout;
-    }
+    public HTTPHealthCheck(URI uri, int timeout, boolean disableTLSValidation) throws KeyStoreException, NoSuchAlgorithmException,
+            KeyManagementException {
+        super(new InetSocketAddress(uri.getHost(), uri.getPort()), timeout);
+        this.uri = uri;
 
-    @Override
-    public void check() {
-        Channel channel = null;
-        try {
+        RequestConfig requestConfig = RequestConfig.custom()
+                .setRedirectsEnabled(false)
+                .setConnectionRequestTimeout(1000 * timeout)
+                .setSocketTimeout(1000 * timeout)
+                .setConnectTimeout(1000 *  timeout)
+                .setAuthenticationEnabled(false)
+                .setRedirectsEnabled(false)
+                .setCircularRedirectsAllowed(false)
+                .build();
 
-            bootstrap.handler(new Initializer(sslContext, this));
-            ChannelFuture channelFuture = bootstrap.connect(socketAddress);
-            channelFuture.await(5, TimeUnit.SECONDS);
-            channel = channelFuture.channel();
+        this.httpClientBuilder = HttpClientBuilder.create()
+                .disableAuthCaching()
+                .disableContentCompression()
+                .disableAutomaticRetries()
+                .disableConnectionState()
+                .disableCookieManagement()
+                .disableDefaultUserAgent()
+                .setDefaultRequestConfig(requestConfig)
+                .disableRedirectHandling();
 
-            if (!channelFuture.isSuccess()) {
-                markFailure();
-                return;
-            }
-
-            Promise<String> alpnPromise = channel.pipeline().get(Initializer.ALPNHandler.class).getPromise();
-            alpnPromise.await(timeout, TimeUnit.SECONDS);
-            if (!alpnPromise.isSuccess()) {
-                markFailure();
-                return;
-            }
-
-            DefaultFullHttpRequest fullHttpRequest = new DefaultFullHttpRequest(HttpVersion.HTTP_1_1, HttpMethod.GET, url.getPath());
-            fullHttpRequest.headers()
-                    .add(HttpHeaderNames.HOST, url.getHost())
-                    .add(HttpHeaderNames.USER_AGENT, "ShieldBlaze ExpressGateway HealthCheck Client");
-
-            if (alpnPromise.get().equalsIgnoreCase(ApplicationProtocolNames.HTTP_2)) {
-                fullHttpRequest.headers().add(HttpConversionUtil.ExtensionHeaderNames.SCHEME.text(), "https");
-            }
-
-            channel.writeAndFlush(fullHttpRequest).sync();
-            Promise<Boolean> promise = channel.pipeline().get(Handler.class).getPromise();
-            promise.await(timeout, TimeUnit.SECONDS);
-
-            if (promise.isSuccess() && promise.get()) {
-                markSuccess();
-            } else {
-                markFailure();
-            }
-
-        } catch (Exception ex) {
-            ex.printStackTrace();
-            markFailure();
-        } finally {
-            if (channel != null) {
-                channel.close();
-            }
+        if (disableTLSValidation) {
+            SSLContextBuilder builder = new SSLContextBuilder();
+            builder.loadTrustMaterial(null, new TrustSelfSignedStrategy());
+            SSLConnectionSocketFactory socketFactory = new SSLConnectionSocketFactory(builder.build());
+            httpClientBuilder.setSSLSocketFactory(socketFactory);
+            httpClientBuilder.setSSLHostnameVerifier(new NoopHostnameVerifier());
         }
     }
 
     @Override
-    protected void markSuccess() {
-        super.markSuccess();
-    }
+    public void check() {
+        try {
+            try (CloseableHttpClient httpClient = httpClientBuilder.build()) {
+                HttpGet httpGet = new HttpGet(uri);
+                httpGet.addHeader("User-Agent", "ShieldBlaze ExpressGateway HealthCheck Agent");
+                httpGet.addHeader("Connection", "Close");
 
-    @Override
-    protected void markFailure() {
-        super.markFailure();
+                try (CloseableHttpResponse httpResponse = httpClient.execute(httpGet)) {
+                    int status = httpResponse.getStatusLine().getStatusCode();
+                    if (status >= 200 && status <= 299) {
+                        markSuccess();
+                    } else {
+                        markFailure();
+                    }
+                }
+            }
+        } catch (Exception e) {
+            e.printStackTrace();
+            markFailure();
+        }
     }
 }
