@@ -15,11 +15,8 @@
  * You should have received a copy of the GNU General Public License
  * along with ShieldBlaze ExpressGateway.  If not, see <https://www.gnu.org/licenses/>.
  */
-package com.shieldblaze.expressgateway.core.configuration;
+package com.shieldblaze.expressgateway.core.tls;
 
-/**
- * Base Class
- */
-public class Configuration {
-    // Base Class
+public final class OCSPServerData {
+
 }

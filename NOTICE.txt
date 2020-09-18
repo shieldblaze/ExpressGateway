@@ -60,3 +60,17 @@ This product depends on 'Google Guava'. License for the same can be obtained at:
     * license/LICENSE.guava.txt (Apache License 2.0)
 
 ---------------------------------
+
+This product depends on 'Apache HttpComponents HttpClient'. License for the same can be obtained at:
+
+  * LICENSE:
+    * license/LICENSE.httpclient.txt (Apache License 2.0)
+
+---------------------------------
+
+This product depends on 'BouncyCastle'. License for the same can be obtained at:
+
+  * LICENSE:
+    * license/LICENSE.bouncycastle.txt (The Legion of the Bouncy Castle Inc.)
+
+---------------------------------

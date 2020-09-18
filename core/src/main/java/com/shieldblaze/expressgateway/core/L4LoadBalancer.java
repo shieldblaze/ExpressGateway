@@ -17,7 +17,7 @@
  */
 package com.shieldblaze.expressgateway.core;
 
-import com.shieldblaze.expressgateway.core.configuration.Configuration;
+import com.shieldblaze.expressgateway.core.configuration.CommonConfiguration;
 import com.shieldblaze.expressgateway.loadbalance.backend.Cluster;
 import com.shieldblaze.expressgateway.loadbalance.l4.L4Balance;
 import com.shieldblaze.expressgateway.core.netty.EventLoopFactory;
@@ -30,16 +30,16 @@ public final class L4LoadBalancer {
         // Prevent outside initialization
     }
 
-    private Configuration configuration;
+    private CommonConfiguration commonConfiguration;
     private L4Balance l4Balance;
     private Cluster cluster;
     private FrontListener frontListener;
     private EventLoopFactory eventLoopFactory;
 
     public boolean start() {
-        eventLoopFactory = new EventLoopFactory(configuration);
-        frontListener.start(configuration, eventLoopFactory,
-                new PooledByteBufAllocatorBuffer(configuration.getPooledByteBufAllocatorConfiguration()).getInstance(), l4Balance);
+        eventLoopFactory = new EventLoopFactory(commonConfiguration);
+        frontListener.start(commonConfiguration, eventLoopFactory,
+                new PooledByteBufAllocatorBuffer(commonConfiguration.getPooledByteBufAllocatorConfiguration()).getInstance(), l4Balance);
         return frontListener.waitForStart();
     }
 
@@ -53,8 +53,8 @@ public final class L4LoadBalancer {
         return frontListener.isStarted();
     }
 
-    void setConfiguration(Configuration configuration) {
-        this.configuration = configuration;
+    void setConfiguration(CommonConfiguration commonConfiguration) {
+        this.commonConfiguration = commonConfiguration;
     }
 
     void setL4Balance(L4Balance l4Balance) {

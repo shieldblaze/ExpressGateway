@@ -15,11 +15,13 @@
  * You should have received a copy of the GNU General Public License
  * along with ShieldBlaze ExpressGateway.  If not, see <https://www.gnu.org/licenses/>.
  */
-package com.shieldblaze.expressgateway.core.configuration;
+package com.shieldblaze.expressgateway.core.tls;
 
-/**
- * Base Class
- */
-public class Configuration {
-    // Base Class
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+
+public final class OCSPServerDataUpdateService {
+    private final ExecutorService executorService = Executors.newSingleThreadScheduledExecutor();
+
+
 }

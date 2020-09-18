@@ -2,8 +2,8 @@ package com.shieldblaze.expressgateway.core.server.udp;
 
 import com.shieldblaze.expressgateway.core.L4LoadBalancer;
 import com.shieldblaze.expressgateway.core.L4LoadBalancerBuilder;
-import com.shieldblaze.expressgateway.core.configuration.Configuration;
-import com.shieldblaze.expressgateway.core.configuration.ConfigurationBuilder;
+import com.shieldblaze.expressgateway.core.configuration.CommonConfiguration;
+import com.shieldblaze.expressgateway.core.configuration.CommonConfigurationBuilder;
 import com.shieldblaze.expressgateway.core.configuration.buffer.PooledByteBufAllocatorConfiguration;
 import com.shieldblaze.expressgateway.core.configuration.eventloop.EventLoopConfiguration;
 import com.shieldblaze.expressgateway.core.configuration.eventloop.EventLoopConfigurationBuilder;
@@ -57,20 +57,20 @@ class UpstreamHandlerTest {
                 .withChildWorkers(Runtime.getRuntime().availableProcessors() * 2)
                 .build();
 
-        Configuration configuration = ConfigurationBuilder.newBuilder()
+        CommonConfiguration commonConfiguration = CommonConfigurationBuilder.newBuilder()
                 .withTransportConfiguration(transportConfiguration)
                 .withEventLoopConfiguration(eventLoopConfiguration)
                 .withPooledByteBufAllocatorConfiguration(PooledByteBufAllocatorConfiguration.DEFAULT)
                 .build();
 
-        eventLoopFactory = new EventLoopFactory(configuration);
+        eventLoopFactory = new EventLoopFactory(commonConfiguration);
 
         Cluster cluster = new Cluster();
         cluster.setClusterName("MyCluster");
         cluster.addBackend(new Backend(new InetSocketAddress("127.0.0.1", 9111)));
 
         l4LoadBalancer = L4LoadBalancerBuilder.newBuilder()
-                .withConfiguration(configuration)
+                .withConfiguration(commonConfiguration)
                 .withL4Balance(new RoundRobin())
                 .withCluster(cluster)
                 .withFrontListener(new UDPListener(new InetSocketAddress("127.0.0.1", 9110)))

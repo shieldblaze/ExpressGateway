@@ -17,11 +17,13 @@
  */
 package com.shieldblaze.expressgateway.core.configuration.transport;
 
+import com.shieldblaze.expressgateway.core.configuration.CommonConfiguration;
 import io.netty.channel.AdaptiveRecvByteBufAllocator;
 import io.netty.channel.FixedRecvByteBufAllocator;
 import io.netty.channel.RecvByteBufAllocator;
 
-public final class TransportConfiguration {
+public final class TransportConfiguration extends CommonConfiguration {
+
     private TransportType transportType;
     private ReceiveBufferAllocationType receiveBufferAllocationType;
     private int[] ReceiveBufferSizes;

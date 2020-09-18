@@ -15,11 +15,28 @@
  * You should have received a copy of the GNU General Public License
  * along with ShieldBlaze ExpressGateway.  If not, see <https://www.gnu.org/licenses/>.
  */
-package com.shieldblaze.expressgateway.core.configuration;
+package com.shieldblaze.expressgateway.core.configuration.tls;
 
-/**
- * Base Class
- */
-public class Configuration {
-    // Base Class
+import java.util.HashMap;
+import java.util.Map;
+
+public final class TLSServerMapping {
+    final Map<String, ServerCertificateKey> certificateKeyMap = new HashMap<>();
+    final boolean hasDefaultMapping;
+
+    public TLSServerMapping() {
+        this(false);
+    }
+
+    public TLSServerMapping(boolean hasDefaultMapping) {
+        this.hasDefaultMapping = hasDefaultMapping;
+    }
+
+    public void addMapping(String hostname, ServerCertificateKey serverCertificateKey) {
+        certificateKeyMap.put(hostname, serverCertificateKey);
+    }
+
+    public void addDefaultHost(ServerCertificateKey serverCertificateKey) {
+        certificateKeyMap.put("DEFAULT_HOST", serverCertificateKey);
+    }
 }

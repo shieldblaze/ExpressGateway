@@ -17,13 +17,14 @@
  */
 package com.shieldblaze.expressgateway.core.server;
 
-import com.shieldblaze.expressgateway.core.configuration.Configuration;
+import com.shieldblaze.expressgateway.core.configuration.CommonConfiguration;
 import com.shieldblaze.expressgateway.loadbalance.l4.L4Balance;
 import com.shieldblaze.expressgateway.core.netty.EventLoopFactory;
 import io.netty.buffer.ByteBuf;
 import io.netty.buffer.ByteBufAllocator;
 import io.netty.channel.ChannelFuture;
 import io.netty.channel.EventLoopGroup;
+import io.netty.util.internal.ObjectUtil;
 import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
 
@@ -41,17 +42,17 @@ public abstract class FrontListener {
     private final AtomicBoolean started = new AtomicBoolean(false);
 
     public FrontListener(InetSocketAddress bindAddress) {
-        this.bindAddress = bindAddress;
+        this.bindAddress = ObjectUtil.checkNotNull(bindAddress, "Bind Address");
     }
 
     /**
      * Start a {@link FrontListener}
-     * @param configuration {@link Configuration} to be applied
+     * @param commonConfiguration {@link CommonConfiguration} to be applied
      * @param eventLoopFactory {@link EventLoopFactory} for {@link EventLoopGroup}
      * @param byteBufAllocator {@link ByteBufAllocator} for {@link ByteBuf} allocation
      * @param l4Balance {@link L4Balance} for load-balance
      */
-    public abstract void start(Configuration configuration, EventLoopFactory eventLoopFactory, ByteBufAllocator byteBufAllocator,
+    public abstract void start(CommonConfiguration commonConfiguration, EventLoopFactory eventLoopFactory, ByteBufAllocator byteBufAllocator,
                                L4Balance l4Balance);
 
     public boolean waitForStart() {

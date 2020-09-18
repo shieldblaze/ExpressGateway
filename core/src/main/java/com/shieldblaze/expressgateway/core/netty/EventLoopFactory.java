@@ -17,7 +17,7 @@
  */
 package com.shieldblaze.expressgateway.core.netty;
 
-import com.shieldblaze.expressgateway.core.configuration.Configuration;
+import com.shieldblaze.expressgateway.core.configuration.CommonConfiguration;
 import com.shieldblaze.expressgateway.core.configuration.transport.TransportType;
 import io.netty.channel.EventLoopGroup;
 import io.netty.channel.epoll.EpollEventLoopGroup;
@@ -28,13 +28,13 @@ public final class EventLoopFactory {
     private final EventLoopGroup parentGroup;
     private final EventLoopGroup childGroup;
 
-    public EventLoopFactory(Configuration configuration) {
-        if (configuration.getTransportConfiguration().getTransportType() == TransportType.EPOLL) {
-            parentGroup = new EpollEventLoopGroup(configuration.getEventLoopConfiguration().getParentWorkers());
-            childGroup = new EpollEventLoopGroup(configuration.getEventLoopConfiguration().getChildWorkers());
+    public EventLoopFactory(CommonConfiguration commonConfiguration) {
+        if (commonConfiguration.getTransportConfiguration().getTransportType() == TransportType.EPOLL) {
+            parentGroup = new EpollEventLoopGroup(commonConfiguration.getEventLoopConfiguration().getParentWorkers());
+            childGroup = new EpollEventLoopGroup(commonConfiguration.getEventLoopConfiguration().getChildWorkers());
         } else {
-            parentGroup = new NioEventLoopGroup(configuration.getEventLoopConfiguration().getParentWorkers());
-            childGroup = new NioEventLoopGroup(configuration.getEventLoopConfiguration().getChildWorkers());
+            parentGroup = new NioEventLoopGroup(commonConfiguration.getEventLoopConfiguration().getParentWorkers());
+            childGroup = new NioEventLoopGroup(commonConfiguration.getEventLoopConfiguration().getChildWorkers());
         }
     }
 

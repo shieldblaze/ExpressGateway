@@ -15,11 +15,21 @@
  * You should have received a copy of the GNU General Public License
  * along with ShieldBlaze ExpressGateway.  If not, see <https://www.gnu.org/licenses/>.
  */
-package com.shieldblaze.expressgateway.core.configuration;
+package com.shieldblaze.expressgateway.core.server.tcp;
 
-/**
- * Base Class
- */
-public class Configuration {
-    // Base Class
+import io.netty.channel.ChannelHandlerContext;
+import io.netty.handler.ssl.SslHandler;
+
+import javax.net.ssl.SSLEngine;
+
+final class TLSHandler extends SslHandler {
+
+    TLSHandler(SSLEngine engine) {
+        super(engine);
+    }
+
+    @Override
+    public void exceptionCaught(ChannelHandlerContext ctx, Throwable cause) {
+        ctx.fireExceptionCaught(cause);
+    }
 }

@@ -17,9 +17,6 @@
  */
 package com.shieldblaze.expressgateway.core.configuration;
 
-/**
- * Base Class
- */
-public class Configuration {
-    // Base Class
+public class GenericConfiguration extends Configuration {
+
 }

@@ -15,11 +15,29 @@
  * You should have received a copy of the GNU General Public License
  * along with ShieldBlaze ExpressGateway.  If not, see <https://www.gnu.org/licenses/>.
  */
-package com.shieldblaze.expressgateway.core.configuration;
+package com.shieldblaze.expressgateway.core.server.tcp;
 
-/**
- * Base Class
- */
-public class Configuration {
-    // Base Class
+import io.netty.buffer.ByteBufAllocator;
+import io.netty.channel.ChannelHandlerContext;
+import io.netty.handler.ssl.SniHandler;
+import io.netty.handler.ssl.SslContext;
+import io.netty.handler.ssl.SslHandler;
+import io.netty.util.Mapping;
+
+final class SNIHandler extends SniHandler {
+
+    SNIHandler(Mapping<? super String, ? extends SslContext> mapping) {
+        super(mapping);
+    }
+
+    @Override
+    protected SslHandler newSslHandler(SslContext context, ByteBufAllocator allocator) {
+        return new TLSHandler(context.newEngine(allocator));
+    }
+
+    @Override
+    public void exceptionCaught(ChannelHandlerContext ctx, Throwable cause) throws Exception {
+        System.out.println(cause.getMessage());
+        // Handle
+    }
 }

@@ -121,6 +121,13 @@ along with ShieldBlaze ExpressGateway.  If not, see <https://www.gnu.org/license
             <version>29.0-jre</version>
         </dependency>
 
+        <!-- https://mvnrepository.com/artifact/org.apache.httpcomponents/httpclient -->
+        <dependency>
+            <groupId>org.apache.httpcomponents</groupId>
+            <artifactId>httpclient</artifactId>
+            <version>4.5.12</version>
+        </dependency>
+
     </dependencies>
 
     <build>

@@ -15,11 +15,22 @@
  * You should have received a copy of the GNU General Public License
  * along with ShieldBlaze ExpressGateway.  If not, see <https://www.gnu.org/licenses/>.
  */
-package com.shieldblaze.expressgateway.core.configuration;
+package com.shieldblaze.expressgateway.core.configuration.tls;
 
-/**
- * Base Class
- */
-public class Configuration {
-    // Base Class
+import io.netty.handler.ssl.ClientAuth;
+
+public enum MutualTLS {
+    NOT_REQUIRED(ClientAuth.NONE),
+    OPTIONAL(ClientAuth.OPTIONAL),
+    REQUIRED(ClientAuth.REQUIRE);
+
+    private final ClientAuth clientAuth;
+
+    MutualTLS(ClientAuth clientAuth) {
+        this.clientAuth = clientAuth;
+    }
+
+    ClientAuth getClientAuth() {
+        return clientAuth;
+    }
 }

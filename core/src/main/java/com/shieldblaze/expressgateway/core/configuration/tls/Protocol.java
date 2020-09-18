@@ -15,11 +15,28 @@
  * You should have received a copy of the GNU General Public License
  * along with ShieldBlaze ExpressGateway.  If not, see <https://www.gnu.org/licenses/>.
  */
-package com.shieldblaze.expressgateway.core.configuration;
+package com.shieldblaze.expressgateway.core.configuration.tls;
 
-/**
- * Base Class
- */
-public class Configuration {
-    // Base Class
+import java.util.List;
+
+public enum Protocol {
+    TLS_1_1("TLSv1.1"),
+    TLS_1_2("TLSv1.2"),
+    TLS_1_3("TLSv1.3");
+    
+    private final String protocol;
+
+    Protocol(String protocol) {
+        this.protocol = protocol;
+    }
+
+    static String[] getProtocols(List<Protocol> protocols) {
+        String[] protocolArray = new String[protocols.size()];
+        int index = 0;
+        for (Protocol protocol : protocols) {
+            protocolArray[index] = protocol.protocol;
+            index++;
+        }
+        return protocolArray;
+    }
 }

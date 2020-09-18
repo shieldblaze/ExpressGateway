@@ -17,12 +17,15 @@
  */
 package com.shieldblaze.expressgateway.core.server.tcp;
 
-import com.shieldblaze.expressgateway.core.configuration.Configuration;
+import com.shieldblaze.expressgateway.core.configuration.CommonConfiguration;
+import com.shieldblaze.expressgateway.core.configuration.tls.TLSConfiguration;
 import com.shieldblaze.expressgateway.core.configuration.transport.TransportConfiguration;
 import com.shieldblaze.expressgateway.core.configuration.transport.TransportType;
-import com.shieldblaze.expressgateway.loadbalance.l4.L4Balance;
 import com.shieldblaze.expressgateway.core.netty.EventLoopFactory;
 import com.shieldblaze.expressgateway.core.server.FrontListener;
+import com.shieldblaze.expressgateway.core.tls.OCSPClient;
+import com.shieldblaze.expressgateway.core.tls.SNIMapper;
+import com.shieldblaze.expressgateway.loadbalance.l4.L4Balance;
 import io.netty.bootstrap.ServerBootstrap;
 import io.netty.buffer.ByteBufAllocator;
 import io.netty.channel.ChannelFuture;
@@ -36,7 +39,10 @@ import io.netty.channel.epoll.EpollServerSocketChannelConfig;
 import io.netty.channel.socket.SocketChannel;
 import io.netty.channel.socket.nio.NioServerSocketChannel;
 import io.netty.channel.unix.UnixChannelOption;
+import io.netty.handler.ssl.SniHandler;
+import io.netty.handler.ssl.SslContext;
 import io.netty.handler.timeout.IdleStateHandler;
+import io.netty.util.concurrent.Future;
 import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
 
@@ -45,20 +51,39 @@ import java.net.InetSocketAddress;
 /**
  * TCP Listener for handling incoming requests.
  */
-public final class TCPListener extends FrontListener {
+public class TCPListener extends FrontListener {
 
+    /**
+     * Logger
+     */
     private static final Logger logger = LogManager.getLogger(TCPListener.class);
+
+    /**
+     * {@link TLSConfiguration} for TLS Support
+     */
+    private final TLSConfiguration tlsConfiguration;
+
+    public TCPListener(InetSocketAddress bindAddress) {
+        this(bindAddress, null);
+    }
 
     /**
      * @param bindAddress {@link InetSocketAddress} on which {@link TCPListener} will bind and listen.
      */
-    public TCPListener(InetSocketAddress bindAddress) {
+    public TCPListener(InetSocketAddress bindAddress, TLSConfiguration tlsConfiguration) {
         super(bindAddress);
+        this.tlsConfiguration = tlsConfiguration;
+
+        if (tlsConfiguration != null && !tlsConfiguration.isForServer()) {
+            throw new IllegalArgumentException("TLSConfiguration is not for server");
+        }
     }
 
     @Override
-    public void start(Configuration configuration, EventLoopFactory eventLoopFactory, ByteBufAllocator byteBufAllocator, L4Balance l4Balance) {
-        TransportConfiguration transportConfiguration = configuration.getTransportConfiguration();
+    public void start(CommonConfiguration commonConfiguration, EventLoopFactory eventLoopFactory, ByteBufAllocator byteBufAllocator,
+                      L4Balance l4Balance) {
+
+        TransportConfiguration transportConfiguration = commonConfiguration.getTransportConfiguration();
 
         ServerBootstrap serverBootstrap = new ServerBootstrap()
                 .group(eventLoopFactory.getParentGroup(), eventLoopFactory.getChildGroup())
@@ -72,7 +97,7 @@ public final class TCPListener extends FrontListener {
                 .childOption(ChannelOption.SO_RCVBUF, transportConfiguration.getSocketReceiveBufferSize())
                 .childOption(ChannelOption.RCVBUF_ALLOCATOR, transportConfiguration.getRecvByteBufAllocator())
                 .channelFactory(() -> {
-                    if (configuration.getTransportConfiguration().getTransportType() == TransportType.EPOLL) {
+                    if (commonConfiguration.getTransportConfiguration().getTransportType() == TransportType.EPOLL) {
                         EpollServerSocketChannel serverSocketChannel = new EpollServerSocketChannel();
                         EpollServerSocketChannelConfig config = serverSocketChannel.config();
                         config.setOption(UnixChannelOption.SO_REUSEPORT, true);
@@ -84,11 +109,11 @@ public final class TCPListener extends FrontListener {
                         return new NioServerSocketChannel();
                     }
                 })
-                .childHandler(new ServerInitializer(configuration, eventLoopFactory, l4Balance));
+                .childHandler(new ServerInitializer(commonConfiguration, eventLoopFactory, l4Balance, tlsConfiguration));
 
         int bindRounds = 1;
         if (transportConfiguration.getTransportType() == TransportType.EPOLL) {
-            bindRounds = configuration.getEventLoopConfiguration().getParentWorkers();
+            bindRounds = commonConfiguration.getEventLoopConfiguration().getParentWorkers();
         }
 
         for (int i = 0; i < bindRounds; i++) {
@@ -107,22 +132,28 @@ public final class TCPListener extends FrontListener {
         private static final Logger logger = LogManager.getLogger(ServerInitializer.class);
 
         private final EventLoopFactory eventLoopFactory;
-        private final Configuration configuration;
+        private final CommonConfiguration commonConfiguration;
         private final L4Balance l4Balance;
+        private final TLSConfiguration tlsConfiguration;
 
-        ServerInitializer(Configuration configuration, EventLoopFactory eventLoopFactory, L4Balance l4Balance) {
-            this.configuration = configuration;
+        ServerInitializer(CommonConfiguration commonConfiguration, EventLoopFactory eventLoopFactory, L4Balance l4Balance,
+                          TLSConfiguration tlsConfiguration) {
+            this.commonConfiguration = commonConfiguration;
             this.eventLoopFactory = eventLoopFactory;
             this.l4Balance = l4Balance;
+            this.tlsConfiguration = tlsConfiguration;
         }
 
         @Override
         protected void initChannel(SocketChannel socketChannel) {
-            int timeout = configuration.getTransportConfiguration().getConnectionIdleTimeout();
-            socketChannel.pipeline().addFirst(
-                    new IdleStateHandler(timeout, timeout, timeout),
-                    new UpstreamHandler(configuration, eventLoopFactory, l4Balance)
-            );
+            int timeout = commonConfiguration.getTransportConfiguration().getConnectionIdleTimeout();
+            socketChannel.pipeline().addFirst(new IdleStateHandler(timeout, timeout, timeout));
+
+            if (tlsConfiguration != null) {
+                socketChannel.pipeline().addLast(new SNIHandler(new SNIMapper(tlsConfiguration)));
+            }
+
+            socketChannel.pipeline().addLast(new UpstreamHandler(commonConfiguration, eventLoopFactory, l4Balance));
         }
 
         @Override
