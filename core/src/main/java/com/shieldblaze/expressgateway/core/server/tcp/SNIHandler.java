@@ -17,27 +17,112 @@
  */
 package com.shieldblaze.expressgateway.core.server.tcp;
 
-import io.netty.buffer.ByteBufAllocator;
+import com.shieldblaze.expressgateway.core.configuration.tls.CertificateKeyPair;
+import com.shieldblaze.expressgateway.core.configuration.tls.TLSConfiguration;
 import io.netty.channel.ChannelHandlerContext;
-import io.netty.handler.ssl.SniHandler;
-import io.netty.handler.ssl.SslContext;
+import io.netty.handler.codec.DecoderException;
+import io.netty.handler.ssl.AbstractSniHandler;
+import io.netty.handler.ssl.ReferenceCountedOpenSslEngine;
 import io.netty.handler.ssl.SslHandler;
-import io.netty.util.Mapping;
+import io.netty.util.AsyncMapping;
+import io.netty.util.ReferenceCountUtil;
+import io.netty.util.concurrent.Future;
+import io.netty.util.internal.PlatformDependent;
 
-final class SNIHandler extends SniHandler {
+import javax.net.ssl.SSLEngine;
 
-    SNIHandler(Mapping<? super String, ? extends SslContext> mapping) {
-        super(mapping);
+final class SNIHandler extends AbstractSniHandler<CertificateKeyPair> {
+
+    private final AsyncMapping<String, CertificateKeyPair> promise;
+
+    public SNIHandler(TLSConfiguration tlsConfiguration) {
+
+        promise = (input, promise) -> {
+            try {
+                CertificateKeyPair certificateKeyPair = tlsConfiguration.getCertificateKeyPairMap().get(input);
+
+                // If `null` it means, Mapping was not found with FQDN then we'll try Wildcard.
+                if (certificateKeyPair == null) {
+                    input = "*" + input.substring(input.indexOf("."));
+                    certificateKeyPair = tlsConfiguration.getCertificateKeyPairMap().get(input);
+                    if (certificateKeyPair != null) {
+                        return promise.setSuccess(tlsConfiguration.getDefault());
+                    }
+                }
+            } catch (Exception ex) {
+                // Ignore
+            }
+
+            // If not found with FQDN and Wildcard, we'll return default if it's available else we'll mark failure.
+            if (tlsConfiguration.getDefault() != null) {
+                return promise.setSuccess(tlsConfiguration.getDefault());
+            }
+
+            return promise.setFailure(new IllegalArgumentException("Mapping Not Found"));
+        };
     }
 
     @Override
-    protected SslHandler newSslHandler(SslContext context, ByteBufAllocator allocator) {
-        return new TLSHandler(context.newEngine(allocator));
+    protected Future<CertificateKeyPair> lookup(ChannelHandlerContext ctx, String hostname) {
+        return promise.map(hostname, ctx.executor().newPromise());
+    }
+
+    @Override
+    protected void onLookupComplete(ChannelHandlerContext ctx, String hostname, Future<CertificateKeyPair> future) throws Exception {
+        if (!future.isSuccess()) {
+            final Throwable cause = future.cause();
+            if (cause instanceof Error) {
+                throw (Error) cause;
+            }
+            throw new DecoderException("failed to get the SslContext for " + hostname, cause);
+        }
+
+        CertificateKeyPair certificateKeyPair = future.getNow();
+        try {
+            replaceHandler(ctx, certificateKeyPair);
+        } catch (Throwable cause) {
+            PlatformDependent.throwException(cause);
+        }
+    }
+
+    protected void replaceHandler(ChannelHandlerContext ctx, CertificateKeyPair certificateKeyPair) throws Exception {
+        SslHandler sslHandler = null;
+        try {
+            sslHandler = new TLSHandler(certificateKeyPair.getSslContext().newHandler(ctx.alloc()).engine());
+
+            try {
+                if (sslHandler.engine() instanceof ReferenceCountedOpenSslEngine) {
+                    ((ReferenceCountedOpenSslEngine) sslHandler.engine()).setOcspResponse(certificateKeyPair.getOcspStaplingData());
+                }
+            } catch (Exception ex) {
+                ctx.fireExceptionCaught(ex);
+            }
+
+            ctx.pipeline().replace(this, SslHandler.class.getName(), sslHandler);
+            sslHandler = null;
+        } finally {
+            // Since the SslHandler was not inserted into the pipeline the ownership of the SSLEngine was not
+            // transferred to the SslHandler.
+            // See https://github.com/netty/netty/issues/5678
+            if (sslHandler != null) {
+                ReferenceCountUtil.safeRelease(sslHandler.engine());
+            }
+        }
     }
 
     @Override
     public void exceptionCaught(ChannelHandlerContext ctx, Throwable cause) throws Exception {
-        System.out.println(cause.getMessage());
-        // Handle
+        ctx.fireExceptionCaught(cause);
+    }
+
+    private static final class TLSHandler extends SslHandler {
+        private TLSHandler(SSLEngine engine) {
+            super(engine);
+        }
+
+        @Override
+        public void exceptionCaught(ChannelHandlerContext ctx, Throwable cause) {
+            ctx.fireExceptionCaught(cause);
+        }
     }
 }

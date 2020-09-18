@@ -22,33 +22,55 @@ import com.shieldblaze.expressgateway.core.configuration.eventloop.EventLoopConf
 import com.shieldblaze.expressgateway.core.configuration.transport.TransportConfiguration;
 import io.netty.util.internal.ObjectUtil;
 
+/**
+ * Configuration Builder for {@link CommonConfiguration}
+ */
 public final class CommonConfigurationBuilder {
     private TransportConfiguration transportConfiguration;
     private EventLoopConfiguration eventLoopConfiguration;
     private PooledByteBufAllocatorConfiguration pooledByteBufAllocatorConfiguration;
 
     private CommonConfigurationBuilder() {
+        // Prevent outside initialization
     }
 
+    /**
+     * Create a new {@link CommonConfiguration} Instance
+     * @return {@link CommonConfiguration} Instance
+     */
     public static CommonConfigurationBuilder newBuilder() {
         return new CommonConfigurationBuilder();
     }
 
+    /**
+     * Set {@link TransportConfiguration}
+     */
     public CommonConfigurationBuilder withTransportConfiguration(TransportConfiguration transportConfiguration) {
         this.transportConfiguration = transportConfiguration;
         return this;
     }
 
+    /**
+     * Set {@link EventLoopConfiguration}
+     */
     public CommonConfigurationBuilder withEventLoopConfiguration(EventLoopConfiguration eventLoopConfiguration) {
         this.eventLoopConfiguration = eventLoopConfiguration;
         return this;
     }
 
+    /**
+     * Set {@link PooledByteBufAllocatorConfiguration}
+     */
     public CommonConfigurationBuilder withPooledByteBufAllocatorConfiguration(PooledByteBufAllocatorConfiguration pooledByteBufAllocatorConfiguration) {
         this.pooledByteBufAllocatorConfiguration = pooledByteBufAllocatorConfiguration;
         return this;
     }
 
+    /**
+     * Build {@link CommonConfiguration}
+     * @return {@link CommonConfiguration} Instance
+     * @throws NullPointerException If a required value if {@code null}
+     */
     public CommonConfiguration build() {
         CommonConfiguration commonConfiguration = new CommonConfiguration();
         commonConfiguration.setTransportConfiguration(ObjectUtil.checkNotNull(transportConfiguration, "Transport Configuration"));

@@ -22,6 +22,9 @@ import io.netty.channel.AdaptiveRecvByteBufAllocator;
 import io.netty.channel.FixedRecvByteBufAllocator;
 import io.netty.channel.RecvByteBufAllocator;
 
+/**
+ * Transport Configuration
+ */
 public final class TransportConfiguration extends CommonConfiguration {
 
     private TransportType transportType;

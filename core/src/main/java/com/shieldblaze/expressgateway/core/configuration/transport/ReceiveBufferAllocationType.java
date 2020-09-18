@@ -20,6 +20,9 @@ package com.shieldblaze.expressgateway.core.configuration.transport;
 import io.netty.channel.AdaptiveRecvByteBufAllocator;
 import io.netty.channel.FixedRecvByteBufAllocator;
 
+/**
+ * Receive Buffer Allocation Type
+ */
 public enum ReceiveBufferAllocationType {
     /**
      * Uses {@link AdaptiveRecvByteBufAllocator}

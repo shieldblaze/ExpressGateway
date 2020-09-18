@@ -17,7 +17,10 @@
  */
 package com.shieldblaze.expressgateway.core.configuration.tls;
 
-public enum Ciphers {
+/**
+ * List of available Ciphers Suites under OpenSsl 1.1.1g
+ */
+public enum Cipher {
     TLS_AES_256_GCM_SHA384,
     TLS_CHACHA20_POLY1305_SHA256,
     TLS_AES_128_GCM_SHA256,

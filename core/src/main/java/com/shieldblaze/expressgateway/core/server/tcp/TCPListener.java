@@ -23,8 +23,6 @@ import com.shieldblaze.expressgateway.core.configuration.transport.TransportConf
 import com.shieldblaze.expressgateway.core.configuration.transport.TransportType;
 import com.shieldblaze.expressgateway.core.netty.EventLoopFactory;
 import com.shieldblaze.expressgateway.core.server.FrontListener;
-import com.shieldblaze.expressgateway.core.tls.OCSPClient;
-import com.shieldblaze.expressgateway.core.tls.SNIMapper;
 import com.shieldblaze.expressgateway.loadbalance.l4.L4Balance;
 import io.netty.bootstrap.ServerBootstrap;
 import io.netty.buffer.ByteBufAllocator;
@@ -39,10 +37,7 @@ import io.netty.channel.epoll.EpollServerSocketChannelConfig;
 import io.netty.channel.socket.SocketChannel;
 import io.netty.channel.socket.nio.NioServerSocketChannel;
 import io.netty.channel.unix.UnixChannelOption;
-import io.netty.handler.ssl.SniHandler;
-import io.netty.handler.ssl.SslContext;
 import io.netty.handler.timeout.IdleStateHandler;
-import io.netty.util.concurrent.Future;
 import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
 
@@ -150,7 +145,7 @@ public class TCPListener extends FrontListener {
             socketChannel.pipeline().addFirst(new IdleStateHandler(timeout, timeout, timeout));
 
             if (tlsConfiguration != null) {
-                socketChannel.pipeline().addLast(new SNIHandler(new SNIMapper(tlsConfiguration)));
+                socketChannel.pipeline().addLast(new SNIHandler(tlsConfiguration));
             }
 
             socketChannel.pipeline().addLast(new UpstreamHandler(commonConfiguration, eventLoopFactory, l4Balance));

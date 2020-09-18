@@ -27,164 +27,186 @@ import io.netty.util.internal.ObjectUtil;
 
 import javax.net.ssl.SSLException;
 import javax.net.ssl.TrustManager;
-import java.security.PrivateKey;
-import java.security.cert.X509Certificate;
 import java.util.List;
 import java.util.Map;
-import java.util.Optional;
 import java.util.TreeMap;
 
+/**
+ * Configuration Builder for {@link TLSConfiguration}
+ */
 public final class TLSConfigurationBuilder {
     private final boolean forServer;
 
-    private List<Ciphers> ciphers;
+    private List<Cipher> ciphers;
     private List<Protocol> protocols;
-    private PrivateKey privateKey;
-    private List<X509Certificate> certificateChain;
     private TrustManager trustManager;
     private MutualTLS mutualTLS;
     private boolean useStartTLS;
-    private boolean enableOCSPStapling;
-    private boolean enableOCSPCheck;
     private boolean useALPN;
     private int sessionTimeout;
     private int sessionCacheSize;
     private TLSServerMapping tlsServerMapping;
+    private CertificateKeyPair certificateKeyPair;
 
+    /**
+     * @see TLSConfigurationBuilder#newBuilder(boolean)
+     */
     private TLSConfigurationBuilder(boolean forServer) {
         this.forServer = forServer;
     }
 
+    /**
+     * Create a new {@link TLSConfigurationBuilder} Instance for TLS Client
+     */
     public static TLSConfigurationBuilder forClient() {
         return new TLSConfigurationBuilder(false);
     }
 
+    /**
+     * Create a new {@link TLSConfigurationBuilder} Instance for TLS Server
+     */
     public static TLSConfigurationBuilder forServer() {
         return new TLSConfigurationBuilder(true);
     }
 
+    /**
+     * Create a new {@link TLSConfigurationBuilder} Instance
+     *
+     * @param forServer {@code true} if building configuration for TLS Server else
+     *                  set to {@code false} if building configuration for TLS Client.
+     */
     public static TLSConfigurationBuilder newBuilder(boolean forServer) {
         return new TLSConfigurationBuilder(forServer);
     }
 
-    public TLSConfigurationBuilder withCiphers(List<Ciphers> ciphers) {
+    /**
+     * {@link List} of {@link Cipher}s to use
+     */
+    public TLSConfigurationBuilder withCiphers(List<Cipher> ciphers) {
         this.ciphers = ciphers;
         return this;
     }
 
+    /**
+     * {@link List} of {@link Protocol}s to use
+     */
     public TLSConfigurationBuilder withProtocols(List<Protocol> protocols) {
         this.protocols = protocols;
         return this;
     }
 
-    public TLSConfigurationBuilder withPrivateKey(PrivateKey privateKey) {
-        this.privateKey = privateKey;
-        return this;
-    }
-
-    public TLSConfigurationBuilder withCertificateChain(List<X509Certificate> certificateChain) {
-        this.certificateChain = certificateChain;
-        return this;
-    }
-
+    /**
+     * {@link TrustManager} to use for TLS Client
+     */
     public TLSConfigurationBuilder withTrustManager(TrustManager trustManager) {
         this.trustManager = trustManager;
         return this;
     }
 
+    /**
+     * {@link MutualTLS} to use for TLS Server
+     */
     public TLSConfigurationBuilder withMutualTLS(MutualTLS mutualTLS) {
         this.mutualTLS = mutualTLS;
         return this;
     }
 
+    /**
+     * Set to {@code true} if we want to use {@code StartTLS} else set to {@code false}
+     */
     public TLSConfigurationBuilder withUseStartTLS(boolean useStartTLS) {
         this.useStartTLS = useStartTLS;
         return this;
     }
 
-    public TLSConfigurationBuilder withEnableOCSPStapling(boolean enableOCSPStapling) {
-        this.enableOCSPStapling = enableOCSPStapling;
-        return this;
-    }
-
-    public TLSConfigurationBuilder withEnableOCSPCheck(boolean enableOCSPCheck) {
-        this.enableOCSPCheck = enableOCSPCheck;
-        return this;
-    }
-
+    /**
+     * Set to {@code true} if we want to use {@code ALPN} with HTTP/2 and HTTP/1.1 else set to {@code false}
+     */
     public TLSConfigurationBuilder withUseALPN(boolean useALPN) {
         this.useALPN = useALPN;
         return this;
     }
 
+    /**
+     * Set Session Timeout for TLS Server
+     */
     public TLSConfigurationBuilder withSessionTimeout(int sessionTimeout) {
         this.sessionTimeout = sessionTimeout;
         return this;
     }
 
+    /**
+     * Set Session Cache Size for TLS Server
+     */
     public TLSConfigurationBuilder withSessionCacheSize(int sessionCacheSize) {
         this.sessionCacheSize = sessionCacheSize;
         return this;
     }
 
+    /**
+     * Add {@link TLSServerMapping} for TLS Server
+     */
     public TLSConfigurationBuilder withTLSServerMapping(TLSServerMapping tlsServerMapping) {
         this.tlsServerMapping = tlsServerMapping;
         return this;
     }
 
-    public TLSConfiguration build() throws SSLException {
+    /**
+     * Add {@link CertificateKeyPair} for TLS Client - Mutual TLS
+     */
+    public TLSConfigurationBuilder withClientCertificateKeyPair(CertificateKeyPair certificateKeyPair) {
+        this.certificateKeyPair = certificateKeyPair;
+        return this;
+    }
 
-        // Throw error if OpenSsl does not support OCSP Stapling
-        if (forServer && enableOCSPStapling && !OpenSsl.isOcspSupported()) {
-            throw new IllegalArgumentException("OCSP Stapling is not available because OpenSsl is not loaded.");
-        }
+    /**
+     * Build {@link TLSConfiguration}
+     *
+     * @return {@link TLSConfiguration} Instance
+     * @throws SSLException If there is an error while building {@link SslContext}
+     * @throws NullPointerException If a required value if {@code null}
+     * @throws IllegalArgumentException If a required value is invalid
+     */
+    public TLSConfiguration build() throws SSLException {
 
         ObjectUtil.checkNonEmpty(ciphers, "Ciphers");
         ObjectUtil.checkNonEmpty(protocols, "Protocols");
+        ObjectUtil.checkNotNull(mutualTLS, "MutualTLS");
 
-        if (!forServer) {
+        // For Server, we need TLS Server Mapping
+        // For Client, We need Trust Manager and Mutual TLS
+        if (forServer) {
+            ObjectUtil.checkNotNull(tlsServerMapping, "TLSServerMapping");
+        } else {
             ObjectUtil.checkNotNull(trustManager, "Trust Manager");
-            ObjectUtil.checkNotNull(mutualTLS, "MutualTLS");
 
             if (mutualTLS == MutualTLS.REQUIRED || mutualTLS == MutualTLS.OPTIONAL) {
-                ObjectUtil.checkNotNull(privateKey, "Private Key");
-                ObjectUtil.checkNonEmpty(certificateChain, "Certificate Chain");
+                ObjectUtil.checkNotNull(certificateKeyPair, "CertificateKeyPair for Client");
             }
         }
 
-        if (forServer) {
-            ObjectUtil.checkNotNull(tlsServerMapping, "TLS Mapping");
-
-            if (tlsServerMapping.hasDefaultMapping) {
-                Optional<String> optional = tlsServerMapping.certificateKeyMap.keySet()
-                        .stream()
-                        .filter(hostname -> hostname.equalsIgnoreCase("DEFAULT_HOST"))
-                        .findAny();
-
-                if (!optional.isPresent()) {
-                    throw new IllegalArgumentException("Default Host Not Present");
-                }
-            }
-        }
-
-        Map<String, SslContext> hostnameMap = new TreeMap<>();
+        Map<String, CertificateKeyPair> hostnameMap = new TreeMap<>();
 
         if (forServer) {
 
-            for (Map.Entry<String, ServerCertificateKey> entry : tlsServerMapping.certificateKeyMap.entrySet()) {
+            for (Map.Entry<String, CertificateKeyPair> entry : tlsServerMapping.certificateKeyMap.entrySet()) {
                 String hostname = entry.getKey();
-                ServerCertificateKey serverCertificateKey = entry.getValue();
+                CertificateKeyPair certificateKeyPair = entry.getValue();
+
+                // Throw error if OpenSsl does not support OCSP Stapling
+                if (certificateKeyPair.useOCSP() && !OpenSsl.isOcspSupported()) {
+                    throw new IllegalArgumentException("OCSP Stapling is not available because OpenSsl is not loaded.");
+                }
 
                 SslContextBuilder sslContextBuilder =
-                        SslContextBuilder.forServer(serverCertificateKey.getPrivateKey(), serverCertificateKey.getCertificateChain())
+                        SslContextBuilder.forServer(certificateKeyPair.getPrivateKey(), certificateKeyPair.getCertificateChain())
                                 .sslProvider(OpenSsl.isAvailable() ? SslProvider.OPENSSL : SslProvider.JDK)
                                 .protocols(Protocol.getProtocols(protocols))
-                                .enableOcsp(enableOCSPStapling)
+                                .enableOcsp(certificateKeyPair.useOCSP())
                                 .clientAuth(mutualTLS.getClientAuth())
                                 .startTls(useStartTLS)
                                 .sessionTimeout(ObjectUtil.checkPositiveOrZero(sessionTimeout, "Session Timeout"))
                                 .sessionCacheSize(ObjectUtil.checkPositiveOrZero(sessionCacheSize, "Session Cache Size"));
-
 
                 if (useALPN) {
                     sslContextBuilder.applicationProtocolConfig(new ApplicationProtocolConfig(
@@ -195,28 +217,27 @@ public final class TLSConfigurationBuilder {
                             ApplicationProtocolNames.HTTP_1_1));
                 }
 
-                hostnameMap.put(hostname, sslContextBuilder.build());
+                certificateKeyPair.setSslContext(sslContextBuilder.build());
+                hostnameMap.put(hostname, certificateKeyPair);
             }
         } else {
             SslContextBuilder sslContextBuilder = SslContextBuilder.forClient()
                     .sslProvider(OpenSsl.isAvailable() ? SslProvider.OPENSSL : SslProvider.JDK)
                     .protocols(Protocol.getProtocols(protocols))
-                    .enableOcsp(enableOCSPStapling)
+                    .enableOcsp(certificateKeyPair.useOCSP())
                     .clientAuth(mutualTLS.getClientAuth())
                     .startTls(useStartTLS);
 
             if (mutualTLS == MutualTLS.REQUIRED || mutualTLS == MutualTLS.OPTIONAL) {
-                sslContextBuilder.keyManager(privateKey, certificateChain);
+                sslContextBuilder.keyManager(certificateKeyPair.getPrivateKey(), certificateKeyPair.getCertificateChain());
             }
 
-            hostnameMap.put("DEFAULT_HOST", sslContextBuilder.build());
+            certificateKeyPair.setSslContext(sslContextBuilder.build());
+            hostnameMap.put("DEFAULT_HOST", certificateKeyPair);
         }
 
         TLSConfiguration tLSConfiguration = new TLSConfiguration();
-        tLSConfiguration.enableOCSPCheck(enableOCSPCheck);
-        tLSConfiguration.enableOCSPStapling(enableOCSPStapling);
-        tLSConfiguration.setHostnameCertificateMapping(hostnameMap);
-        System.out.println(hostnameMap);
+        tLSConfiguration.setCertificateKeyPairMap(hostnameMap);
         tLSConfiguration.setForServer(forServer);
         return tLSConfiguration;
     }

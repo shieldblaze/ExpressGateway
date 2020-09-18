@@ -15,8 +15,10 @@
 - [X] NAT-forwarding
 
 ### TLS:
-- [ ] TLS Support (v1.0, v1.1, v1.2 and v1.3)
-- [ ] TLS Offload
+- [X] TLS Support (v1.1, v1.2 and v1.3)
+- [X] TLS Offload
+- [X] Mutual TLS
+- [X] OCSP Stapling
 
 ### L7:
 - [ ] HTTP/2

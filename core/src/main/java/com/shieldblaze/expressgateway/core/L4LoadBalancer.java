@@ -24,6 +24,9 @@ import com.shieldblaze.expressgateway.core.netty.EventLoopFactory;
 import com.shieldblaze.expressgateway.core.netty.PooledByteBufAllocatorBuffer;
 import com.shieldblaze.expressgateway.core.server.FrontListener;
 
+/**
+ * Layer-4 Load Balancer
+ */
 public final class L4LoadBalancer {
 
     L4LoadBalancer() {

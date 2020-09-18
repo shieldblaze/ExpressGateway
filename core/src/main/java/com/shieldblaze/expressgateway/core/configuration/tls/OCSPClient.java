@@ -15,7 +15,7 @@
  * You should have received a copy of the GNU General Public License
  * along with ShieldBlaze ExpressGateway.  If not, see <https://www.gnu.org/licenses/>.
  */
-package com.shieldblaze.expressgateway.core.tls;
+package com.shieldblaze.expressgateway.core.configuration.tls;
 
 import org.apache.http.client.config.RequestConfig;
 import org.apache.http.client.methods.CloseableHttpResponse;
@@ -29,22 +29,23 @@ import org.bouncycastle.asn1.ASN1Sequence;
 import org.bouncycastle.asn1.DEROctetString;
 import org.bouncycastle.asn1.DLTaggedObject;
 import org.bouncycastle.asn1.ocsp.OCSPObjectIdentifiers;
-import org.bouncycastle.asn1.oiw.OIWObjectIdentifiers;
-import org.bouncycastle.asn1.x509.AlgorithmIdentifier;
+import org.bouncycastle.asn1.ocsp.OCSPResponseStatus;
 import org.bouncycastle.asn1.x509.Extension;
 import org.bouncycastle.asn1.x509.Extensions;
 import org.bouncycastle.asn1.x509.GeneralName;
 import org.bouncycastle.asn1.x509.X509ObjectIdentifiers;
-import org.bouncycastle.cert.X509CertificateHolder;
 import org.bouncycastle.cert.jcajce.JcaX509CertificateHolder;
 import org.bouncycastle.cert.jcajce.JcaX509ExtensionUtils;
+import org.bouncycastle.cert.ocsp.BasicOCSPResp;
 import org.bouncycastle.cert.ocsp.CertificateID;
+import org.bouncycastle.cert.ocsp.OCSPException;
 import org.bouncycastle.cert.ocsp.OCSPReq;
 import org.bouncycastle.cert.ocsp.OCSPReqBuilder;
 import org.bouncycastle.cert.ocsp.OCSPResp;
-import org.bouncycastle.crypto.Digest;
-import org.bouncycastle.operator.DigestCalculator;
-import org.bouncycastle.operator.bc.BcDigestCalculatorProvider;
+import org.bouncycastle.cert.ocsp.SingleResp;
+import org.bouncycastle.operator.ContentVerifierProvider;
+import org.bouncycastle.operator.OperatorCreationException;
+import org.bouncycastle.operator.jcajce.JcaContentVerifierProviderBuilder;
 import org.bouncycastle.operator.jcajce.JcaDigestCalculatorProviderBuilder;
 
 import java.io.IOException;
@@ -53,27 +54,41 @@ import java.net.URI;
 import java.security.SecureRandom;
 import java.security.cert.X509Certificate;
 import java.util.Enumeration;
-import java.util.Objects;
 
-public final class OCSPClient {
+final class OCSPClient {
 
     private static final String OCSP_REQUEST_TYPE = "application/ocsp-request";
     private static final String OCSP_RESPONSE_TYPE = "application/ocsp-response";
 
-    public static OCSPResp getResponse(X509Certificate x509Certificate, X509Certificate issuer) throws Exception {
-        CertificateID id = new CertificateID(new JcaDigestCalculatorProviderBuilder().build().get(CertificateID.HASH_SHA1),
-                new JcaX509CertificateHolder(issuer), x509Certificate.getSerialNumber());
+    static OCSPResp getResponse(X509Certificate x509Certificate, X509Certificate issuer) throws Exception {
+        CertificateID id = new CertificateID(new JcaDigestCalculatorProviderBuilder().build()
+                .get(CertificateID.HASH_SHA1), new JcaX509CertificateHolder(issuer), x509Certificate.getSerialNumber());
 
         OCSPReqBuilder builder = new OCSPReqBuilder();
         builder.addRequest(id);
 
-        byte[] nonce = new byte[8];
+        byte[] nonce = new byte[6];
         SecureRandom.getInstanceStrong().nextBytes(nonce);
+        DEROctetString derNonce = new DEROctetString(nonce);
 
-        builder.setRequestExtensions(new Extensions(new Extension(OCSPObjectIdentifiers.id_pkix_ocsp_nonce, false,
-                new DEROctetString(nonce))));
+        builder.setRequestExtensions(new Extensions(new Extension(OCSPObjectIdentifiers.id_pkix_ocsp_nonce, false, derNonce)));
 
-        return queryCA(URI.create(getOcspUrlFromCertificate(x509Certificate)), builder.build());
+        OCSPResp ocspResp = queryCA(URI.create(getOcspUrlFromCertificate(x509Certificate)), builder.build());
+
+        if (ocspResp.getStatus() != OCSPResponseStatus.SUCCESSFUL) {
+            throw new IllegalArgumentException("OCSP Request was not successful, Status: " + ocspResp.getStatus());
+        }
+
+        BasicOCSPResp basicResponse = (BasicOCSPResp) ocspResp.getResponseObject();
+
+        checkNonce(basicResponse, derNonce);
+        checkSignature(basicResponse, issuer);
+
+        if (basicResponse.getResponses().length != 1) {
+            throw new IllegalArgumentException("Expected number of response was 1 but we got: " + basicResponse.getResponses().length);
+        }
+
+        return ocspResp;
     }
 
     private static OCSPResp queryCA(URI uri, OCSPReq request) throws Exception {
@@ -128,5 +143,26 @@ public final class OCSPClient {
         }
 
         throw new NullPointerException("Unable to find OCSP URL");
+    }
+
+    private static void checkNonce(BasicOCSPResp basicResponse, DEROctetString encodedNonce) throws OCSPException {
+        Extension nonceExt = basicResponse.getExtension(OCSPObjectIdentifiers.id_pkix_ocsp_nonce);
+        if (nonceExt != null) {
+            DEROctetString responseNonceString = (DEROctetString) nonceExt.getExtnValue();
+            if (!responseNonceString.equals(encodedNonce)) {
+                throw new OCSPException("Nonce Mismatch");
+            }
+        }
+    }
+
+    private static void checkSignature(BasicOCSPResp basicResponse, X509Certificate certificate) throws OCSPException {
+        try {
+            ContentVerifierProvider verifier = new JcaContentVerifierProviderBuilder().build(certificate);
+            if (!basicResponse.isSignatureValid(verifier)) {
+                throw new OCSPException("OCSP-Signature is not valid!");
+            }
+        } catch (OperatorCreationException e) {
+            throw new OCSPException("Error checking Ocsp-Signature", e);
+        }
     }
 }

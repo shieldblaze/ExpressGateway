@@ -17,6 +17,9 @@
  */
 package com.shieldblaze.expressgateway.core.configuration.buffer;
 
+/**
+ * Configuration Builder for {@link PooledByteBufAllocatorConfiguration}
+ */
 public final class PooledByteBufAllocatorConfigurationBuilder {
     private boolean preferDirect;
     private int HeapArena;
@@ -29,57 +32,92 @@ public final class PooledByteBufAllocatorConfigurationBuilder {
     private int directMemoryCacheAlignment;
 
     private PooledByteBufAllocatorConfigurationBuilder() {
+        // Prevent outside initialization
     }
 
+    /**
+     * Create a new {@link PooledByteBufAllocatorConfigurationBuilder} Instance
+     */
     public static PooledByteBufAllocatorConfigurationBuilder newBuilder() {
         return new PooledByteBufAllocatorConfigurationBuilder();
     }
 
+    /**
+     * {@code true} to use direct memory else set to {@code false}
+     */
     public PooledByteBufAllocatorConfigurationBuilder withPreferDirect(boolean preferDirect) {
         this.preferDirect = preferDirect;
         return this;
     }
 
+    /**
+     * Heap Arena Size
+     */
     public PooledByteBufAllocatorConfigurationBuilder withHeapArena(int HeapArena) {
         this.HeapArena = HeapArena;
         return this;
     }
 
+    /**
+     * Direct Arena Size
+     */
     public PooledByteBufAllocatorConfigurationBuilder withDirectArena(int DirectArena) {
         this.DirectArena = DirectArena;
         return this;
     }
 
+    /**
+     * Page Size
+     */
     public PooledByteBufAllocatorConfigurationBuilder withPageSize(int pageSize) {
         this.pageSize = pageSize;
         return this;
     }
 
+    /**
+     * Max Order
+     */
     public PooledByteBufAllocatorConfigurationBuilder withMaxOrder(int maxOrder) {
         this.maxOrder = maxOrder;
         return this;
     }
 
+    /**
+     * Small Cache Size
+     */
     public PooledByteBufAllocatorConfigurationBuilder withSmallCacheSize(int smallCacheSize) {
         this.smallCacheSize = smallCacheSize;
         return this;
     }
 
+    /**
+     * Normal Cache Size
+     */
     public PooledByteBufAllocatorConfigurationBuilder withNormalCacheSize(int normalCacheSize) {
         this.normalCacheSize = normalCacheSize;
         return this;
     }
 
+    /**
+     * {@code true} to use Cache for all threads else set to {@code false}
+     */
     public PooledByteBufAllocatorConfigurationBuilder withUseCacheForAllThreads(boolean useCacheForAllThreads) {
         this.useCacheForAllThreads = useCacheForAllThreads;
         return this;
     }
 
+    /**
+     * Direct Memory Cache Alignment
+     */
     public PooledByteBufAllocatorConfigurationBuilder withDirectMemoryCacheAlignment(int directMemoryCacheAlignment) {
         this.directMemoryCacheAlignment = directMemoryCacheAlignment;
         return this;
     }
 
+    /**
+     * Build {@link PooledByteBufAllocatorConfiguration}
+     * @return {@link PooledByteBufAllocatorConfiguration} Instance
+     */
     public PooledByteBufAllocatorConfiguration build() {
         PooledByteBufAllocatorConfiguration pooledByteBufAllocatorConfiguration = new PooledByteBufAllocatorConfiguration();
         pooledByteBufAllocatorConfiguration.setPreferDirect(preferDirect);

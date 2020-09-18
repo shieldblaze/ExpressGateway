@@ -22,38 +22,23 @@ import io.netty.handler.ssl.SslContext;
 
 import java.util.Map;
 
+/**
+ * Configuration for TLS
+ */
 public final class TLSConfiguration extends GenericConfiguration {
-    private Map<String, SslContext> hostnameCertificateMapping;
-    private boolean enableOCSPCheck;
-    private boolean enableOCSPStapling;
+    private Map<String, CertificateKeyPair> certificateKeyPairMap;
     private boolean forServer;
 
-    public boolean enableOCSPCheck() {
-        return enableOCSPCheck;
+    public Map<String, CertificateKeyPair> getCertificateKeyPairMap() {
+        return certificateKeyPairMap;
     }
 
-    void enableOCSPCheck(boolean enableOCSPCheck) {
-        this.enableOCSPCheck = enableOCSPCheck;
+    public CertificateKeyPair getDefault() {
+        return certificateKeyPairMap.get("DEFAULT_HOST");
     }
 
-    public boolean enableOCSPStapling() {
-        return enableOCSPStapling;
-    }
-
-    void enableOCSPStapling(boolean enableOCSPStapling) {
-        this.enableOCSPStapling = enableOCSPStapling;
-    }
-
-    public Map<String, SslContext> getHostnameCertificateMapping() {
-        return hostnameCertificateMapping;
-    }
-
-    public SslContext getDefault() {
-        return hostnameCertificateMapping.get("DEFAULT_HOST");
-    }
-
-    void setHostnameCertificateMapping(Map<String, SslContext> hostnameCertificateMapping) {
-        this.hostnameCertificateMapping = hostnameCertificateMapping;
+    void setCertificateKeyPairMap(Map<String, CertificateKeyPair> certificateKeyPairMap) {
+        this.certificateKeyPairMap = certificateKeyPairMap;
     }
 
     public boolean isForServer() {

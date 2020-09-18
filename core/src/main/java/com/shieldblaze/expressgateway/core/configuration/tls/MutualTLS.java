@@ -19,6 +19,10 @@ package com.shieldblaze.expressgateway.core.configuration.tls;
 
 import io.netty.handler.ssl.ClientAuth;
 
+/**
+ * Mutual TLS configuration for Server.
+ * @see <a href="https://en.wikipedia.org/wiki/Mutual_authentication">Mutual TLS</a>
+ */
 public enum MutualTLS {
     NOT_REQUIRED(ClientAuth.NONE),
     OPTIONAL(ClientAuth.OPTIONAL),

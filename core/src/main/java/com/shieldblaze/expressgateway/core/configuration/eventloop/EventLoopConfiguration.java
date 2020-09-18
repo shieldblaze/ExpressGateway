@@ -18,7 +18,7 @@
 package com.shieldblaze.expressgateway.core.configuration.eventloop;
 
 /**
- * Set {@code EventLoop} Configuration
+ * {@code EventLoop} Configuration
  */
 public final class EventLoopConfiguration {
     private int parentWorkers;

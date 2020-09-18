@@ -19,6 +19,9 @@ package com.shieldblaze.expressgateway.core.configuration.eventloop;
 
 import io.netty.util.internal.ObjectUtil;
 
+/**
+ * Configuration Builder for {@link EventLoopConfiguration}
+ */
 public final class EventLoopConfigurationBuilder {
     private int parentWorkers;
     private int childWorkers;
@@ -26,20 +29,35 @@ public final class EventLoopConfigurationBuilder {
     private EventLoopConfigurationBuilder() {
     }
 
+    /**
+     * Create a new {@link EventLoopConfigurationBuilder} Instance
+     */
     public static EventLoopConfigurationBuilder newBuilder() {
         return new EventLoopConfigurationBuilder();
     }
 
+    /**
+     * Set Number of Parent Workers
+     */
     public EventLoopConfigurationBuilder withParentWorkers(int parentWorkers) {
         this.parentWorkers = parentWorkers;
         return this;
     }
 
+    /**
+     * Set Number of Child Workers
+     */
     public EventLoopConfigurationBuilder withChildWorkers(int childWorkers) {
         this.childWorkers = childWorkers;
         return this;
     }
 
+    /**
+     * Build {@link EventLoopConfiguration}
+     *
+     * @return {@link EventLoopConfiguration} Instance
+     * @throws IllegalArgumentException If Parent or Child worker count is less than 1
+     */
     public EventLoopConfiguration build() {
         EventLoopConfiguration eventLoopConfiguration = new EventLoopConfiguration();
         eventLoopConfiguration.setParentWorkers(ObjectUtil.checkPositive(parentWorkers, "Parent Workers"));

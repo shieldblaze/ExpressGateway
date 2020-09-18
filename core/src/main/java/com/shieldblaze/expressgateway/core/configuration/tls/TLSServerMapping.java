@@ -20,23 +20,34 @@ package com.shieldblaze.expressgateway.core.configuration.tls;
 import java.util.HashMap;
 import java.util.Map;
 
+/**
+ * TLS Server Mapping contains mapping for Hostname and {@link CertificateKeyPair}
+ */
 public final class TLSServerMapping {
-    final Map<String, ServerCertificateKey> certificateKeyMap = new HashMap<>();
-    final boolean hasDefaultMapping;
+    final Map<String, CertificateKeyPair> certificateKeyMap = new HashMap<>();
 
+    /**
+     * Create new Instance of {@link TLSServerMapping}
+     */
     public TLSServerMapping() {
-        this(false);
+        // Empty Constructor
     }
 
-    public TLSServerMapping(boolean hasDefaultMapping) {
-        this.hasDefaultMapping = hasDefaultMapping;
+    /**
+     * Create new Instance of {@link TLSServerMapping} along with default {@link CertificateKeyPair}
+     *
+     * @param certificateKeyPair Default {@link CertificateKeyPair}
+     */
+    public TLSServerMapping(CertificateKeyPair certificateKeyPair) {
+        certificateKeyMap.put("DEFAULT_HOST", certificateKeyPair);
     }
 
-    public void addMapping(String hostname, ServerCertificateKey serverCertificateKey) {
-        certificateKeyMap.put(hostname, serverCertificateKey);
-    }
-
-    public void addDefaultHost(ServerCertificateKey serverCertificateKey) {
-        certificateKeyMap.put("DEFAULT_HOST", serverCertificateKey);
+    /**
+     * Add Mapping
+     * @param hostname Hostname to which {@link CertificateKeyPair} will be mapped
+     * @param certificateKeyPair {@link CertificateKeyPair} to be mapped
+     */
+    public void addMapping(String hostname, CertificateKeyPair certificateKeyPair) {
+        certificateKeyMap.put(hostname, certificateKeyPair);
     }
 }
