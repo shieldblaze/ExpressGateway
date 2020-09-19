@@ -40,5 +40,5 @@
 
 ### Session Persistence:
 - [X] 5-Tuple Hash (Source IP + Source Port +  Destination IP +  Destination Port + Protocol) 
-- [ ] TLS Session ID
+- [X] Long-Lived Sessions
 - [ ] HTTP Cookie
