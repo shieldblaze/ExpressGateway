@@ -24,6 +24,18 @@ import java.net.DatagramSocket;
 import java.net.InetSocketAddress;
 import java.util.Arrays;
 
+/**
+ * <p> UDP based {@link HealthCheck} </p>
+ * <p> How it works:
+ * <ol>
+ *     <li> It starts a UDP client and send "PING" packet to remote host. </li>
+ *     <li> If remote host responds back with "PING" or "PONG" packet back,
+ *              it'll pass the Health Check and close the UDP client. </li>
+ *     <li> If remote host does not responds back with "PING" or "PONG" packet back,
+ *              it'll fail the Health Check. </li>
+ * </ol>
+ * </p>
+ */
 public final class UDPHealthCheck extends HealthCheck {
 
     private static final byte[] PING = "PING".getBytes();
@@ -41,11 +53,11 @@ public final class UDPHealthCheck extends HealthCheck {
     public void check() {
         try (DatagramSocket datagramSocket = new DatagramSocket()) {
             datagramSocket.setSoTimeout(timeout);
-            DatagramPacket datagramPacket = new DatagramPacket(PING,4, socketAddress);
+            DatagramPacket datagramPacket = new DatagramPacket(PING, 4, socketAddress);
             datagramSocket.send(datagramPacket);
 
             byte[] bytes = new byte[4];
-            datagramPacket = new DatagramPacket(bytes,4);
+            datagramPacket = new DatagramPacket(bytes, 4);
             datagramSocket.receive(datagramPacket);
 
             byte[] packet = Arrays.copyOfRange(datagramPacket.getData(), 0, 4);

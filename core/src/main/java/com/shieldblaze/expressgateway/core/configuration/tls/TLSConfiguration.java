@@ -18,19 +18,44 @@
 package com.shieldblaze.expressgateway.core.configuration.tls;
 
 import com.shieldblaze.expressgateway.core.configuration.GenericConfiguration;
-import io.netty.handler.ssl.SslContext;
 
 import java.util.Map;
+import java.util.TreeMap;
 
 /**
  * Configuration for TLS
  */
 public final class TLSConfiguration extends GenericConfiguration {
-    private Map<String, CertificateKeyPair> certificateKeyPairMap;
+    private final Map<String, CertificateKeyPair> certificateKeyPairMap = new TreeMap<>();
     private boolean forServer;
 
-    public Map<String, CertificateKeyPair> getCertificateKeyPairMap() {
-        return certificateKeyPairMap;
+    /**
+     * Get {@link CertificateKeyPair} for a Hostname
+     * @param fqdn FQDN
+     * @return {@link CertificateKeyPair} if found
+     * @throws NullPointerException If Mapping is not found for a Hostname
+     */
+    public CertificateKeyPair getMapping(String fqdn) {
+        try {
+            CertificateKeyPair certificateKeyPair = certificateKeyPairMap.get(fqdn);
+
+            // If `null` it means, Mapping was not found with FQDN then we'll try Wildcard.
+            if (certificateKeyPair == null) {
+                fqdn = "*" + fqdn.substring(fqdn.indexOf("."));
+                certificateKeyPair = certificateKeyPairMap.get(fqdn);
+                if (certificateKeyPair != null) {
+                    return certificateKeyPair;
+                }
+            }
+        } catch (Exception ex) {
+            // Ignore
+        }
+
+        if (certificateKeyPairMap.containsKey("DEFAULT_HOST")) {
+            return getDefault();
+        }
+
+        throw new NullPointerException("Mapping Not Found");
     }
 
     public CertificateKeyPair getDefault() {
@@ -38,7 +63,7 @@ public final class TLSConfiguration extends GenericConfiguration {
     }
 
     void setCertificateKeyPairMap(Map<String, CertificateKeyPair> certificateKeyPairMap) {
-        this.certificateKeyPairMap = certificateKeyPairMap;
+        this.certificateKeyPairMap.putAll(certificateKeyPairMap);
     }
 
     public boolean isForServer() {

@@ -35,30 +35,14 @@ final class SNIHandler extends AbstractSniHandler<CertificateKeyPair> {
 
     private final AsyncMapping<String, CertificateKeyPair> promise;
 
-    public SNIHandler(TLSConfiguration tlsConfiguration) {
+    SNIHandler(TLSConfiguration tlsConfiguration) {
 
         promise = (input, promise) -> {
             try {
-                CertificateKeyPair certificateKeyPair = tlsConfiguration.getCertificateKeyPairMap().get(input);
-
-                // If `null` it means, Mapping was not found with FQDN then we'll try Wildcard.
-                if (certificateKeyPair == null) {
-                    input = "*" + input.substring(input.indexOf("."));
-                    certificateKeyPair = tlsConfiguration.getCertificateKeyPairMap().get(input);
-                    if (certificateKeyPair != null) {
-                        return promise.setSuccess(tlsConfiguration.getDefault());
-                    }
-                }
+                return promise.setSuccess(tlsConfiguration.getMapping(input));
             } catch (Exception ex) {
-                // Ignore
+                return promise.setFailure(ex);
             }
-
-            // If not found with FQDN and Wildcard, we'll return default if it's available else we'll mark failure.
-            if (tlsConfiguration.getDefault() != null) {
-                return promise.setSuccess(tlsConfiguration.getDefault());
-            }
-
-            return promise.setFailure(new IllegalArgumentException("Mapping Not Found"));
         };
     }
 
