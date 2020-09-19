@@ -19,6 +19,9 @@
 - [X] TLS Offload
 - [X] Mutual TLS
 - [X] OCSP Stapling
+- [X] OCSP Certificate Validation
+- [X] Server Name Indication (SNI) Support
+- [X] StartTLS Support
 
 ### L7:
 - [ ] HTTP/2
