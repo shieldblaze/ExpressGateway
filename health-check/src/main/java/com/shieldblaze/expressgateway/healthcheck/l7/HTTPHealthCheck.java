@@ -34,6 +34,18 @@ import java.security.KeyManagementException;
 import java.security.KeyStoreException;
 import java.security.NoSuchAlgorithmException;
 
+/**
+ * <p> HTTP based {@link HealthCheck} </p>
+ * <p> How it works:
+ * <ol>
+ *     <li> It starts a HTTP client and connects to remote host. </li>
+ *     <li> If connection is successful and host replies with HTTP Response code between 200-299,
+ *     it'll pass the Health Check and close the connection. </li>
+ *     <li> If connection is not successful or host does not replies with HTTP Response code between 200-299,
+ *     it'll fail the Health Check. </li>
+ * </ol>
+ * </p>
+ */
 public final class HTTPHealthCheck extends HealthCheck {
 
     private final HttpClientBuilder httpClientBuilder;
@@ -48,7 +60,7 @@ public final class HTTPHealthCheck extends HealthCheck {
                 .setRedirectsEnabled(false)
                 .setConnectionRequestTimeout(1000 * timeout)
                 .setSocketTimeout(1000 * timeout)
-                .setConnectTimeout(1000 *  timeout)
+                .setConnectTimeout(1000 * timeout)
                 .setAuthenticationEnabled(false)
                 .setRedirectsEnabled(false)
                 .setCircularRedirectsAllowed(false)

@@ -1,5 +1,23 @@
+/*
+ * This file is part of ShieldBlaze ExpressGateway. [www.shieldblaze.com]
+ * Copyright (c) 2020 ShieldBlaze
+ *
+ * ShieldBlaze ExpressGateway is free software: you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License as published by
+ * the Free Software Foundation, either version 3 of the License, or
+ * (at your option) any later version.
+ *
+ * ShieldBlaze ExpressGateway is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
+ *
+ * You should have received a copy of the GNU General Public License
+ * along with ShieldBlaze ExpressGateway.  If not, see <https://www.gnu.org/licenses/>.
+ */
 package com.shieldblaze.expressgateway.healthcheck.l4;
 
+import com.shieldblaze.expressgateway.healthcheck.Health;
 import org.junit.jupiter.api.Test;
 
 import java.net.DatagramPacket;
@@ -10,8 +28,9 @@ import java.net.SocketException;
 import java.util.Arrays;
 
 import static org.junit.jupiter.api.Assertions.assertArrayEquals;
+import static org.junit.jupiter.api.Assertions.assertEquals;
 
-class UDPHealthCheckTest {
+final class UDPHealthCheckTest {
 
     static final byte[] PING = "PING".getBytes();
     static final byte[] PONG = "PONG".getBytes();
@@ -22,19 +41,10 @@ class UDPHealthCheckTest {
         udpServer.start();
         Thread.sleep(2500L); // Wait for UDP Server to Start
 
-        try (DatagramSocket datagramSocket = new DatagramSocket()) {
-            datagramSocket.setSoTimeout(5000);
-            DatagramPacket datagramPacket = new DatagramPacket(PING, 4, new InetSocketAddress("127.0.0.1", 9111));
-            datagramSocket.send(datagramPacket);
+        UDPHealthCheck udpHealthCheck = new UDPHealthCheck( new InetSocketAddress("127.0.0.1", 9111), 5);
+        udpHealthCheck.check();
 
-            byte[] bytes = new byte[2048];
-            datagramPacket = new DatagramPacket(bytes, bytes.length);
-            datagramSocket.receive(datagramPacket);
-
-            assertArrayEquals(PING, Arrays.copyOf(datagramPacket.getData(), datagramPacket.getLength()));
-        } catch (Exception e) {
-            e.printStackTrace();
-        }
+        assertEquals(Health.GOOD, udpHealthCheck.health());
     }
 
     @Test
@@ -43,19 +53,10 @@ class UDPHealthCheckTest {
         udpServer.start();
         Thread.sleep(2500L); // Wait for UDP Server to Start
 
-        try (DatagramSocket datagramSocket = new DatagramSocket()) {
-            datagramSocket.setSoTimeout(5000);
-            DatagramPacket datagramPacket = new DatagramPacket(PING, 4, new InetSocketAddress("127.0.0.1", 9111));
-            datagramSocket.send(datagramPacket);
+        UDPHealthCheck udpHealthCheck = new UDPHealthCheck( new InetSocketAddress("127.0.0.1", 9111), 5);
+        udpHealthCheck.check();
 
-            byte[] bytes = new byte[2048];
-            datagramPacket = new DatagramPacket(bytes, bytes.length);
-            datagramSocket.receive(datagramPacket);
-
-            assertArrayEquals(PONG, Arrays.copyOf(datagramPacket.getData(), datagramPacket.getLength()));
-        } catch (Exception e) {
-            e.printStackTrace();
-        }
+        assertEquals(Health.GOOD, udpHealthCheck.health());
     }
 
     private static final class UDPServer extends Thread {

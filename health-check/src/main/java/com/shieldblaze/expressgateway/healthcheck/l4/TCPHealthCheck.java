@@ -22,6 +22,16 @@ import com.shieldblaze.expressgateway.healthcheck.HealthCheck;
 import java.net.InetSocketAddress;
 import java.net.Socket;
 
+/**
+ * <p> TCP based {@link HealthCheck} </p>
+ * <p> How it works:
+ * <ol>
+ *     <li> It starts a TCP client and connects to remote host. </li>
+ *     <li> If connection is successful, it'll pass the Health Check and close the connection. </li>
+ *     <li> If connection is not successful, it'll fail the Health Check. </li>
+ * </ol>
+ * </p>
+ */
 public final class TCPHealthCheck extends HealthCheck {
 
     public TCPHealthCheck(InetSocketAddress socketAddress, int timeout) {

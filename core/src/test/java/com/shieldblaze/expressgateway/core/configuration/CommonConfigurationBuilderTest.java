@@ -15,25 +15,16 @@
  * You should have received a copy of the GNU General Public License
  * along with ShieldBlaze ExpressGateway.  If not, see <https://www.gnu.org/licenses/>.
  */
-package com.shieldblaze.expressgateway.healthcheck;
+package com.shieldblaze.expressgateway.core.configuration;
 
-/**
- * Health of Remote Host
- */
-public enum Health {
-    /**
-     * <p> Health is good. </p>
-     * <p> Remote host passes more than 95% of Health Check Successfully </p>
-     */
-    GOOD,
-    /**
-     * Health is not good and not bad (medium).
-     * <p> Remote host passes more than 75% of Health Check Successfully </p>
-     */
-    MEDIUM,
-    /**
-     * Health is bad.
-     * <p> Remote host passes less than 75% of Health Check Successfully </p>
-     */
-    BAD
+import org.junit.jupiter.api.Test;
+
+import static org.junit.jupiter.api.Assertions.*;
+
+final class CommonConfigurationBuilderTest {
+
+    @Test
+    void test() {
+        assertThrows(NullPointerException.class, () -> CommonConfigurationBuilder.newBuilder().build());
+    }
 }

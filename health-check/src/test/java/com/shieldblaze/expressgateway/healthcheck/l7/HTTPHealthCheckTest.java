@@ -15,41 +15,38 @@
  * You should have received a copy of the GNU General Public License
  * along with ShieldBlaze ExpressGateway.  If not, see <https://www.gnu.org/licenses/>.
  */
-package com.shieldblaze.expressgateway.healthcheck.l4;
+package com.shieldblaze.expressgateway.healthcheck.l7;
 
 import com.shieldblaze.expressgateway.healthcheck.Health;
 import org.junit.jupiter.api.Test;
 
-import java.net.InetAddress;
-import java.net.InetSocketAddress;
-import java.net.ServerSocket;
+import java.net.URI;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 
-final class TCPHealthCheckTest {
+final class HTTPHealthCheckTest {
 
     @Test
-    void check() throws InterruptedException {
-        TCPServer tcpServer = new TCPServer();
-        tcpServer.start();
+    void testPass() throws Exception {
+        new HTTPServer("200 OK").start();
 
-        Thread.sleep(2500L); // Wait for TCP Server to Start
+        Thread.sleep(1000L);
 
-        TCPHealthCheck tcpHealthCheck = new TCPHealthCheck(new InetSocketAddress("127.0.0.1", 9111), 5);
-        tcpHealthCheck.check();
+        HTTPHealthCheck httpHealthCheck = new HTTPHealthCheck(URI.create("http://127.0.0.1:9111"), 5, false);
+        httpHealthCheck.check();
 
-        assertEquals(Health.GOOD, tcpHealthCheck.health());
+        assertEquals(Health.GOOD, httpHealthCheck.health());
     }
 
-    private static final class TCPServer extends Thread {
+    @Test
+    void testFail() throws Exception {
+        new HTTPServer("500 Internal Server Error").start();
 
-        @Override
-        public void run() {
-            try (ServerSocket serverSocket = new ServerSocket(9111, 1000, InetAddress.getByName("127.0.0.1"))) {
-                serverSocket.accept();
-            } catch (Exception ex) {
-                ex.printStackTrace();
-            }
-        }
+        Thread.sleep(1000L);
+
+        HTTPHealthCheck httpHealthCheck = new HTTPHealthCheck(URI.create("http://127.0.0.1:9111"), 5, false);
+        httpHealthCheck.check();
+
+        assertEquals(Health.BAD, httpHealthCheck.health());
     }
 }

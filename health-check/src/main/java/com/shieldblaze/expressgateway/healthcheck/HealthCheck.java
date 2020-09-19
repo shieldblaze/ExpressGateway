@@ -22,6 +22,9 @@ import com.google.common.collect.EvictingQueue;
 import java.net.InetSocketAddress;
 import java.util.Collections;
 
+/**
+ * Health Check for checking health of remote host.
+ */
 @SuppressWarnings("UnstableApiUsage")
 public abstract class HealthCheck {
 
@@ -29,27 +32,52 @@ public abstract class HealthCheck {
     private final EvictingQueue<Boolean> queue;
     protected final int timeout;
 
+    /**
+     * Create a new {@link HealthCheck} Instance with {@code samples} set to 100.
+     *
+     * @param socketAddress {@link InetSocketAddress} of remote host to check
+     * @param timeout       Timeout for health check
+     */
     public HealthCheck(InetSocketAddress socketAddress, int timeout) {
         this(socketAddress, timeout, 100);
     }
 
+    /**
+     * Create a new {@link HealthCheck} Instance
+     *
+     * @param socketAddress {@link InetSocketAddress} of remote host to check
+     * @param timeout       Timeout for health check
+     * @param samples       Number of samples to use for evaluating Health of remote host
+     */
     public HealthCheck(InetSocketAddress socketAddress, int timeout, int samples) {
         this.socketAddress = socketAddress;
         this.timeout = timeout;
         this.queue = EvictingQueue.create(samples);
     }
 
+    /**
+     * Perform Health Check
+     */
     public abstract void check();
 
+    /**
+     * If Heath Check was successful, call this method.
+     */
     protected void markSuccess() {
         queue.add(true);
     }
 
+    /**
+     * If Heath Check was unsuccessful, call this method.
+     */
     protected void markFailure() {
         queue.add(false);
     }
 
-    public Health getHealth() {
+    /**
+     * Get {@link Health} of Remote Host
+     */
+    public Health health() {
         double percentage = getPercentage(Collections.frequency(queue, true), queue.size());
         if (percentage >= 95) {
             return Health.GOOD;
