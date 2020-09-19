@@ -24,7 +24,7 @@ import com.shieldblaze.expressgateway.loadbalance.l4.L4Balance;
 import io.netty.util.internal.ObjectUtil;
 
 /**
- * Build {@link L4LoadBalancer}
+ * Builder for {@link L4LoadBalancer}
  */
 public final class L4LoadBalancerBuilder {
     private CommonConfiguration commonConfiguration;
