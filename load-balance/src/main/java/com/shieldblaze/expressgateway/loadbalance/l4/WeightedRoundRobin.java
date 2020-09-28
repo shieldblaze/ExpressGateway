@@ -20,6 +20,8 @@ package com.shieldblaze.expressgateway.loadbalance.l4;
 import com.google.common.collect.Range;
 import com.google.common.collect.TreeRangeMap;
 import com.shieldblaze.expressgateway.loadbalance.backend.Backend;
+import com.shieldblaze.expressgateway.loadbalance.l4.sessionpersistence.NOOPSessionPersistence;
+import com.shieldblaze.expressgateway.loadbalance.l4.sessionpersistence.SessionPersistence;
 
 import java.net.InetSocketAddress;
 import java.util.List;
@@ -36,9 +38,15 @@ public final class WeightedRoundRobin extends L4Balance {
     private int totalWeight = 0;
 
     public WeightedRoundRobin() {
+        super(new NOOPSessionPersistence());
     }
 
     public WeightedRoundRobin(List<Backend> backends) {
+        this(new NOOPSessionPersistence(), backends);
+    }
+
+    public WeightedRoundRobin(SessionPersistence sessionPersistence, List<Backend> backends) {
+        super(sessionPersistence);
         setBackends(backends);
     }
 
@@ -51,9 +59,17 @@ public final class WeightedRoundRobin extends L4Balance {
 
     @Override
     public Backend getBackend(InetSocketAddress sourceAddress) {
+        Backend backend = sessionPersistence.getBackend(sourceAddress);
+        if (backend != null) {
+            return backend;
+        }
+
         if (Index.get() >= totalWeight) {
             Index.set(0);
         }
-        return backendsMap.get(Index.getAndIncrement());
+
+        backend = backendsMap.get(Index.getAndIncrement());
+        sessionPersistence.addRoute(sourceAddress, backend);
+        return backend;
     }
 }

@@ -1,6 +1,8 @@
 package com.shieldblaze.expressgateway.loadbalance.l4;
 
 import com.shieldblaze.expressgateway.loadbalance.backend.Backend;
+import com.shieldblaze.expressgateway.loadbalance.l4.sessionpersistence.NOOPSessionPersistence;
+import com.shieldblaze.expressgateway.loadbalance.l4.sessionpersistence.SessionPersistence;
 import org.junit.jupiter.api.Assertions;
 import org.junit.jupiter.api.Test;
 
@@ -29,6 +31,10 @@ class L4BalanceTest {
     }
 
     private static final class EmptyL4Balance extends L4Balance {
+
+        public EmptyL4Balance() {
+            super(new NOOPSessionPersistence());
+        }
 
         @Override
         public Backend getBackend(InetSocketAddress sourceAddress) {

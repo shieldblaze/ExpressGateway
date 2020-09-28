@@ -18,6 +18,8 @@
 package com.shieldblaze.expressgateway.loadbalance.l4;
 
 import com.shieldblaze.expressgateway.loadbalance.backend.Backend;
+import com.shieldblaze.expressgateway.loadbalance.l4.sessionpersistence.NOOPSessionPersistence;
+import com.shieldblaze.expressgateway.loadbalance.l4.sessionpersistence.SessionPersistence;
 
 import java.net.InetSocketAddress;
 import java.util.List;
@@ -29,15 +31,30 @@ public final class Random extends L4Balance {
     private static final java.util.Random RANDOM_INSTANCE = new java.util.Random();
 
     public Random() {
+        super(new NOOPSessionPersistence());
     }
 
     public Random(List<Backend> backends) {
+        super(new NOOPSessionPersistence());
+        setBackends(backends);
+    }
+
+    public Random(SessionPersistence sessionPersistence, List<Backend> backends) {
+        super(sessionPersistence);
         setBackends(backends);
     }
 
     @Override
     public Backend getBackend(InetSocketAddress sourceAddress) {
+        Backend backend = sessionPersistence.getBackend(sourceAddress);
+        if (backend != null) {
+            return backend;
+        }
+
         int index = RANDOM_INSTANCE.nextInt(backends.size());
-        return backends.get(index);
+
+        backend = backends.get(index);
+        sessionPersistence.addRoute(sourceAddress, backend);
+        return backend;
     }
 }

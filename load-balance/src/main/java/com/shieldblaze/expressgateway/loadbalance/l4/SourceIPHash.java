@@ -20,6 +20,8 @@ package com.shieldblaze.expressgateway.loadbalance.l4;
 import com.google.common.cache.Cache;
 import com.google.common.cache.CacheBuilder;
 import com.shieldblaze.expressgateway.loadbalance.backend.Backend;
+import com.shieldblaze.expressgateway.loadbalance.l4.sessionpersistence.NOOPSessionPersistence;
+import com.shieldblaze.expressgateway.loadbalance.l4.sessionpersistence.SessionPersistence;
 import io.netty.util.NetUtil;
 
 import java.math.BigInteger;
@@ -48,9 +50,11 @@ public final class SourceIPHash extends L4Balance {
     private RoundRobinImpl<Backend> backendRoundRobin;
 
     public SourceIPHash() {
+        super(new NOOPSessionPersistence());
     }
 
     public SourceIPHash(List<Backend> backends) {
+        super(new NOOPSessionPersistence());
         setBackends(backends);
     }
 
@@ -62,6 +66,7 @@ public final class SourceIPHash extends L4Balance {
 
     @Override
     public Backend getBackend(InetSocketAddress sourceAddress) {
+        Backend backend;
 
         /*
          * If Source IP Address is IPv4, we'll convert it into Integer with /24 mask.
@@ -72,26 +77,26 @@ public final class SourceIPHash extends L4Balance {
             int ipAddress = NetUtil.ipv4AddressToInt((Inet4Address) sourceAddress.getAddress());
             int ipWithMask = ipAddress & prefixToSubnetMaskIPv4();
 
-            Backend backendAddress = ipHashCache.getIfPresent(ipWithMask);
+            backend = ipHashCache.getIfPresent(ipWithMask);
 
-            if (backendAddress == null) {
-                backendAddress = backendRoundRobin.iterator().next();
-                ipHashCache.put(ipWithMask, backendAddress);
+            if (backend == null) {
+                backend = backendRoundRobin.iterator().next();
+                ipHashCache.put(ipWithMask, backend);
             }
 
-            return backendAddress;
+            return backend;
         } else {
             BigInteger ipAddress = ipToInt((Inet6Address) sourceAddress.getAddress());
             BigInteger ipWithMask = ipAddress.and(prefixToSubnetMaskIPv6());
 
-            Backend backendAddress = ipHashCache.getIfPresent(ipWithMask);
+            backend = ipHashCache.getIfPresent(ipWithMask);
 
-            if (backendAddress == null) {
-                backendAddress = backendRoundRobin.iterator().next();
-                ipHashCache.put(ipWithMask, backendAddress);
+            if (backend == null) {
+                backend = backendRoundRobin.iterator().next();
+                ipHashCache.put(ipWithMask, backend);
             }
 
-            return backendAddress;
+            return backend;
         }
     }
 

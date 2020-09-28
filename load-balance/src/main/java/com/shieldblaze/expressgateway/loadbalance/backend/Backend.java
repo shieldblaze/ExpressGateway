@@ -17,11 +17,12 @@
  */
 package com.shieldblaze.expressgateway.loadbalance.backend;
 
+import com.shieldblaze.expressgateway.healthcheck.Health;
+import com.shieldblaze.expressgateway.healthcheck.HealthCheck;
 import io.netty.util.internal.ObjectUtil;
 
 import java.net.InetSocketAddress;
 import java.util.concurrent.atomic.AtomicInteger;
-import java.util.concurrent.atomic.AtomicLong;
 
 /**
  * {@link Backend} is the server which handles actual request of client.
@@ -51,23 +52,37 @@ public class Backend {
     /**
      * Number of bytes written so far to this {@link Backend}
      */
-    private final AtomicLong bytesWritten = new AtomicLong();
+    private long bytesWritten = 0L;
 
     /**
      * Number of bytes received so far from this {@link Backend}
      */
-    private final AtomicLong bytesReceived  = new AtomicLong();
+    private long bytesReceived = 0L;
 
     /**
-     * Create {@link Backend} with {@code Weight 100} and {@code maxConnections 10000}
+     * Current State of this {@link Backend}
+     */
+    private State state;
+
+    /**
+     * Health Check for this {@link Backend}
+     */
+    private HealthCheck healthCheck;
+
+    /**
+     * Create {@link Backend} with {@code Weight 100}, {@code maxConnections 10000} and no Health Check
      *
      * @param socketAddress Address of this {@link Backend}
      */
     public Backend(InetSocketAddress socketAddress) {
-        this(socketAddress, 100, 10_000);
+        this(socketAddress, 100, 10_000, null);
     }
 
     public Backend(InetSocketAddress socketAddress, int Weight, int maxConnections) {
+        this(socketAddress, Weight, maxConnections, null);
+    }
+
+    public Backend(InetSocketAddress socketAddress, int Weight, int maxConnections, HealthCheck healthCheck) {
         ObjectUtil.checkNotNull(socketAddress, "SocketAddress");
 
         if (Weight < 1) {
@@ -78,9 +93,11 @@ public class Backend {
             throw new IllegalArgumentException("Maximum Connection cannot be less than 1 (one).");
         }
 
+        this.state = State.ONLINE;
         this.socketAddress = socketAddress;
         this.Weight = Weight;
         this.maxConnections = maxConnections;
+        this.healthCheck = healthCheck;
     }
 
     public InetSocketAddress getSocketAddress() {
@@ -112,11 +129,11 @@ public class Backend {
     }
 
     public void incBytesWritten(int bytes) {
-        bytesWritten.addAndGet(bytes);
+        bytesWritten += bytes;
     }
 
     public void incBytesReceived(int bytes) {
-        bytesReceived.addAndGet(bytes);
+        bytesReceived += bytes;
     }
 
     public void setMaxConnections(int maxConnections) {
@@ -125,5 +142,36 @@ public class Backend {
 
     public int getMaxConnections() {
         return maxConnections;
+    }
+
+    public long getBytesWritten() {
+        return bytesWritten;
+    }
+
+    public long getBytesReceived() {
+        return bytesReceived;
+    }
+
+    public State getState() {
+        return state;
+    }
+
+    public void setState(State state) {
+        this.state = state;
+    }
+
+    public HealthCheck getHealthCheck() {
+        return healthCheck;
+    }
+
+    public void setHealthCheck(HealthCheck healthCheck) {
+        this.healthCheck = healthCheck;
+    }
+
+    public Health getHealth() {
+        if (healthCheck == null) {
+            return Health.UNKNOWN;
+        }
+        return healthCheck.health();
     }
 }

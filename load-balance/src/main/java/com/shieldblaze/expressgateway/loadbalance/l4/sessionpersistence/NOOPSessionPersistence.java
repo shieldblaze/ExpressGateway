@@ -15,29 +15,24 @@
  * You should have received a copy of the GNU General Public License
  * along with ShieldBlaze ExpressGateway.  If not, see <https://www.gnu.org/licenses/>.
  */
-package com.shieldblaze.expressgateway.healthcheck;
+package com.shieldblaze.expressgateway.loadbalance.l4.sessionpersistence;
+
+import com.shieldblaze.expressgateway.loadbalance.backend.Backend;
+
+import java.net.InetSocketAddress;
 
 /**
- * Health of Remote Host
+ * No-Operation {@link SessionPersistence}
  */
-public enum Health {
-    /**
-     * <p> Health is good. </p>
-     * <p> Remote host passes more than 95% of Health Check Successfully </p>
-     */
-    GOOD,
-    /**
-     * Health is not good and not bad (medium).
-     * <p> Remote host passes more than 75% of Health Check Successfully </p>
-     */
-    MEDIUM,
-    /**
-     * Health is bad.
-     * <p> Remote host passes less than 75% of Health Check Successfully </p>
-     */
-    BAD,
-    /**
-     * Health is unknown.
-     */
-    UNKNOWN;
+public final class NOOPSessionPersistence extends SessionPersistence {
+
+    @Override
+    public Backend getBackend(InetSocketAddress sourceAddress) {
+        return null;
+    }
+
+    @Override
+    public void addRoute(InetSocketAddress socketAddress, Backend backend) {
+        // Does Nothing
+    }
 }

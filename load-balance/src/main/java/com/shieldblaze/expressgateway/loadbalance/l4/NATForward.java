@@ -1,6 +1,7 @@
 package com.shieldblaze.expressgateway.loadbalance.l4;
 
 import com.shieldblaze.expressgateway.loadbalance.backend.Backend;
+import com.shieldblaze.expressgateway.loadbalance.l4.sessionpersistence.NOOPSessionPersistence;
 
 import java.net.InetSocketAddress;
 import java.util.List;
@@ -11,6 +12,7 @@ import java.util.List;
 public final class NATForward extends L4Balance {
 
     public NATForward() {
+        super(new NOOPSessionPersistence());
     }
 
     /**
@@ -18,6 +20,7 @@ public final class NATForward extends L4Balance {
      * @see #setBackends(List)
      */
     public NATForward(List<Backend> backends) {
+        super(new NOOPSessionPersistence());
         setBackends(backends);
     }
 

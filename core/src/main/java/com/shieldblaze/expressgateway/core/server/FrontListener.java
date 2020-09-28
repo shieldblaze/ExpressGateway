@@ -18,8 +18,8 @@
 package com.shieldblaze.expressgateway.core.server;
 
 import com.shieldblaze.expressgateway.core.configuration.CommonConfiguration;
-import com.shieldblaze.expressgateway.loadbalance.l4.L4Balance;
 import com.shieldblaze.expressgateway.core.netty.EventLoopFactory;
+import com.shieldblaze.expressgateway.loadbalance.l4.L4Balance;
 import io.netty.buffer.ByteBuf;
 import io.netty.buffer.ByteBufAllocator;
 import io.netty.channel.ChannelFuture;
@@ -47,13 +47,14 @@ public abstract class FrontListener {
 
     /**
      * Start a {@link FrontListener}
+     *
      * @param commonConfiguration {@link CommonConfiguration} to be applied
-     * @param eventLoopFactory {@link EventLoopFactory} for {@link EventLoopGroup}
-     * @param byteBufAllocator {@link ByteBufAllocator} for {@link ByteBuf} allocation
-     * @param l4Balance {@link L4Balance} for load-balance
+     * @param eventLoopFactory    {@link EventLoopFactory} for {@link EventLoopGroup}
+     * @param byteBufAllocator    {@link ByteBufAllocator} for {@link ByteBuf} allocation
+     * @param l4Balance           {@link L4Balance} for load-balance
      */
-    public abstract void start(CommonConfiguration commonConfiguration, EventLoopFactory eventLoopFactory, ByteBufAllocator byteBufAllocator,
-                               L4Balance l4Balance);
+    public abstract void start(CommonConfiguration commonConfiguration, EventLoopFactory eventLoopFactory,
+                               ByteBufAllocator byteBufAllocator, L4Balance l4Balance);
 
     public boolean waitForStart() {
         for (ChannelFuture channelFuture : channelFutureList) {
