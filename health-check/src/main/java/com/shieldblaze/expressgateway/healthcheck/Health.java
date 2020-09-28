@@ -35,5 +35,9 @@ public enum Health {
      * Health is bad.
      * <p> Remote host passes less than 75% of Health Check Successfully </p>
      */
-    BAD
+    BAD,
+    /**
+     * Health is unknown.
+     */
+    UNKNOWN;
 }

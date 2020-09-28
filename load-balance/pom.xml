@@ -30,6 +30,14 @@ along with ShieldBlaze ExpressGateway.  If not, see <https://www.gnu.org/license
     <packaging>jar</packaging>
 
     <name>ExpressGateway/LoadBalance</name>
+    <dependencies>
+        <dependency>
+            <groupId>com.shieldblaze</groupId>
+            <artifactId>expressgateway-healthcheck</artifactId>
+            <version>0.0.1-a</version>
+            <scope>compile</scope>
+        </dependency>
+    </dependencies>
 
     <properties>
         <javaModuleName>com.shieldblaze.expressgateway.loadbalance</javaModuleName>

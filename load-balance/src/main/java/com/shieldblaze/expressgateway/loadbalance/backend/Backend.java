@@ -17,6 +17,8 @@
  */
 package com.shieldblaze.expressgateway.loadbalance.backend;
 
+import com.shieldblaze.expressgateway.healthcheck.Health;
+import com.shieldblaze.expressgateway.healthcheck.HealthCheck;
 import io.netty.util.internal.ObjectUtil;
 
 import java.net.InetSocketAddress;
@@ -58,15 +60,25 @@ public class Backend {
     private long bytesReceived = 0L;
 
     /**
+     * Current State of this {@link Backend}
+     */
+    private State state;
+
+    /**
+     * Health Check for this {@link Backend}
+     */
+    private HealthCheck healthCheck;
+
+    /**
      * Create {@link Backend} with {@code Weight 100} and {@code maxConnections 10000}
      *
      * @param socketAddress Address of this {@link Backend}
      */
     public Backend(InetSocketAddress socketAddress) {
-        this(socketAddress, 100, 10_000);
+        this(socketAddress, 100, 10_000, null);
     }
 
-    public Backend(InetSocketAddress socketAddress, int Weight, int maxConnections) {
+    public Backend(InetSocketAddress socketAddress, int Weight, int maxConnections, HealthCheck healthCheck) {
         ObjectUtil.checkNotNull(socketAddress, "SocketAddress");
 
         if (Weight < 1) {
@@ -77,9 +89,11 @@ public class Backend {
             throw new IllegalArgumentException("Maximum Connection cannot be less than 1 (one).");
         }
 
+        this.state = State.ONLINE;
         this.socketAddress = socketAddress;
         this.Weight = Weight;
         this.maxConnections = maxConnections;
+        this.healthCheck = healthCheck;
     }
 
     public InetSocketAddress getSocketAddress() {
@@ -124,5 +138,36 @@ public class Backend {
 
     public int getMaxConnections() {
         return maxConnections;
+    }
+
+    public long getBytesWritten() {
+        return bytesWritten;
+    }
+
+    public long getBytesReceived() {
+        return bytesReceived;
+    }
+
+    public State getState() {
+        return state;
+    }
+
+    public void setState(State state) {
+        this.state = state;
+    }
+
+    public HealthCheck getHealthCheck() {
+        return healthCheck;
+    }
+
+    public void setHealthCheck(HealthCheck healthCheck) {
+        this.healthCheck = healthCheck;
+    }
+
+    public Health getHealth() {
+        if (healthCheck == null) {
+            return Health.UNKNOWN;
+        }
+        return healthCheck.health();
     }
 }
