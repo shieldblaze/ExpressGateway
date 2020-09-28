@@ -70,12 +70,16 @@ public class Backend {
     private HealthCheck healthCheck;
 
     /**
-     * Create {@link Backend} with {@code Weight 100} and {@code maxConnections 10000}
+     * Create {@link Backend} with {@code Weight 100}, {@code maxConnections 10000} and no Health Check
      *
      * @param socketAddress Address of this {@link Backend}
      */
     public Backend(InetSocketAddress socketAddress) {
         this(socketAddress, 100, 10_000, null);
+    }
+
+    public Backend(InetSocketAddress socketAddress, int Weight, int maxConnections) {
+        this(socketAddress, Weight, maxConnections, null);
     }
 
     public Backend(InetSocketAddress socketAddress, int Weight, int maxConnections, HealthCheck healthCheck) {

@@ -39,6 +39,8 @@ final class TCPHealthCheckTest {
         tcpHealthCheck.check();
 
         assertEquals(Health.GOOD, tcpHealthCheck.health());
+
+        tcpServer.interrupt();
     }
 
     private static final class TCPServer extends Thread {
