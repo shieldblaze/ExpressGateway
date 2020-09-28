@@ -45,3 +45,8 @@
 - [X] 5-Tuple Hash (Source IP + Source Port +  Destination IP +  Destination Port + Protocol) 
 - [X] Long-Lived Sessions
 - [ ] HTTP Cookie
+
+### Security:
+- [ ] Access Control List (ACL)
+- [ ] Rate-Limit
+- [ ] Web Application Firewall (WAF)
