@@ -20,6 +20,8 @@ package com.shieldblaze.expressgateway.loadbalance.l4;
 import com.google.common.collect.Range;
 import com.google.common.collect.TreeRangeMap;
 import com.shieldblaze.expressgateway.loadbalance.backend.Backend;
+import com.shieldblaze.expressgateway.loadbalance.l4.sessionpersistence.NOOPSessionPersistence;
+import com.shieldblaze.expressgateway.loadbalance.l4.sessionpersistence.SessionPersistence;
 
 import java.net.InetSocketAddress;
 import java.util.List;
@@ -35,9 +37,15 @@ public final class WeightedRandom extends L4Balance {
     private int totalWeight = 0;
 
     public WeightedRandom() {
+        super(new NOOPSessionPersistence());
     }
 
     public WeightedRandom(List<Backend> backends) {
+        this(new NOOPSessionPersistence(), backends);
+    }
+
+    public WeightedRandom(SessionPersistence sessionPersistence, List<Backend> backends) {
+        super(sessionPersistence);
         setBackends(backends);
     }
 
@@ -50,7 +58,14 @@ public final class WeightedRandom extends L4Balance {
 
     @Override
     public Backend getBackend(InetSocketAddress sourceAddress) {
+        Backend backend = sessionPersistence.getBackend(sourceAddress);
+        if (backend != null) {
+            return backend;
+        }
+
         int index = RANDOM_INSTANCE.nextInt(totalWeight);
-        return backendsMap.get(index);
+        backend = backendsMap.get(index);
+        sessionPersistence.addRoute(sourceAddress, backend);
+        return backend;
     }
 }

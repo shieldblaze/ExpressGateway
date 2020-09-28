@@ -18,6 +18,8 @@
 package com.shieldblaze.expressgateway.loadbalance.l4;
 
 import com.shieldblaze.expressgateway.loadbalance.backend.Backend;
+import com.shieldblaze.expressgateway.loadbalance.l4.sessionpersistence.NOOPSessionPersistence;
+import com.shieldblaze.expressgateway.loadbalance.l4.sessionpersistence.SessionPersistence;
 
 import java.net.InetSocketAddress;
 import java.util.List;
@@ -32,15 +34,29 @@ public final class LeastConnection extends L4Balance {
     private final AtomicInteger Index = new AtomicInteger();
 
     public LeastConnection() {
-
+        this(new NOOPSessionPersistence());
     }
 
     public LeastConnection(List<Backend> backends) {
+        this(new NOOPSessionPersistence(), backends);
+    }
+
+    public LeastConnection(SessionPersistence sessionPersistence) {
+        super(sessionPersistence);
+    }
+
+    public LeastConnection(SessionPersistence sessionPersistence, List<Backend> backends) {
+        super(sessionPersistence);
         setBackends(backends);
     }
 
     @Override
     public Backend getBackend(InetSocketAddress sourceAddress) {
+        Backend backend = sessionPersistence.getBackend(sourceAddress);
+        if (backend != null) {
+            return backend;
+        }
+
         // If Index size equals Backend List size, we'll reset the Index.
         if (Index.get() >= backends.size()) {
             Index.set(0);
@@ -53,10 +69,12 @@ public final class LeastConnection extends L4Balance {
                 .getAsInt();
 
         // Check If we got any Backend which has less Number of Connections than Backend with Maximum Connection
-        Optional<Backend> backend = backends.stream()
+        Optional<Backend> optionalBackend = backends.stream()
                 .filter(back -> back.getActiveConnections() < currentMaxConnections)
                 .findFirst();
 
-        return backend.orElseGet(() -> backends.get(Index.getAndIncrement()));
+        backend = optionalBackend.orElseGet(() -> backends.get(Index.getAndIncrement()));
+        sessionPersistence.addRoute(sourceAddress, backend);
+        return backend;
     }
 }

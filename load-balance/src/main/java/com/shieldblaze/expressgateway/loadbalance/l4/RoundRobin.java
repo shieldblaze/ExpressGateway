@@ -18,6 +18,8 @@
 package com.shieldblaze.expressgateway.loadbalance.l4;
 
 import com.shieldblaze.expressgateway.loadbalance.backend.Backend;
+import com.shieldblaze.expressgateway.loadbalance.l4.sessionpersistence.NOOPSessionPersistence;
+import com.shieldblaze.expressgateway.loadbalance.l4.sessionpersistence.SessionPersistence;
 
 import java.net.InetSocketAddress;
 import java.util.List;
@@ -30,9 +32,15 @@ public final class RoundRobin extends L4Balance {
     private RoundRobinImpl<Backend> backendsRoundRobin;
 
     public RoundRobin() {
+        super(new NOOPSessionPersistence());
     }
 
     public RoundRobin(List<Backend> backends) {
+        this(new NOOPSessionPersistence(), backends);
+    }
+
+    public RoundRobin(SessionPersistence sessionPersistence, List<Backend> backends) {
+        super(sessionPersistence);
         setBackends(backends);
     }
 
@@ -44,6 +52,13 @@ public final class RoundRobin extends L4Balance {
 
     @Override
     public Backend getBackend(InetSocketAddress sourceAddress) {
-        return backendsRoundRobin.iterator().next();
+        Backend backend = sessionPersistence.getBackend(sourceAddress);
+        if (backend != null) {
+            return backend;
+        }
+
+        backend = backendsRoundRobin.iterator().next();
+        sessionPersistence.addRoute(sourceAddress, backend);
+        return backend;
     }
 }

@@ -21,7 +21,6 @@ import io.netty.util.internal.ObjectUtil;
 
 import java.net.InetSocketAddress;
 import java.util.concurrent.atomic.AtomicInteger;
-import java.util.concurrent.atomic.AtomicLong;
 
 /**
  * {@link Backend} is the server which handles actual request of client.
@@ -51,12 +50,12 @@ public class Backend {
     /**
      * Number of bytes written so far to this {@link Backend}
      */
-    private final AtomicLong bytesWritten = new AtomicLong();
+    private long bytesWritten = 0L;
 
     /**
      * Number of bytes received so far from this {@link Backend}
      */
-    private final AtomicLong bytesReceived  = new AtomicLong();
+    private long bytesReceived = 0L;
 
     /**
      * Create {@link Backend} with {@code Weight 100} and {@code maxConnections 10000}
@@ -112,11 +111,11 @@ public class Backend {
     }
 
     public void incBytesWritten(int bytes) {
-        bytesWritten.addAndGet(bytes);
+        bytesWritten += bytes;
     }
 
     public void incBytesReceived(int bytes) {
-        bytesReceived.addAndGet(bytes);
+        bytesReceived += bytes;
     }
 
     public void setMaxConnections(int maxConnections) {

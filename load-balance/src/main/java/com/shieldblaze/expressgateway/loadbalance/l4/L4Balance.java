@@ -18,6 +18,7 @@
 package com.shieldblaze.expressgateway.loadbalance.l4;
 
 import com.shieldblaze.expressgateway.loadbalance.backend.Backend;
+import com.shieldblaze.expressgateway.loadbalance.l4.sessionpersistence.SessionPersistence;
 import io.netty.util.internal.ObjectUtil;
 
 import java.net.InetSocketAddress;
@@ -37,7 +38,18 @@ import java.util.List;
  * </ul>
  */
 public abstract class L4Balance {
+    protected SessionPersistence sessionPersistence;
     protected List<Backend> backends;
+
+    /**
+     * Create {@link L4Balance} Instance
+     *
+     * @param sessionPersistence {@link SessionPersistence} Instance
+     * @throws NullPointerException If {@link SessionPersistence} is {@code null}
+     */
+    public L4Balance(SessionPersistence sessionPersistence) {
+        this.sessionPersistence = ObjectUtil.checkNotNull(sessionPersistence, "Session Persistence");
+    }
 
     /**
      * Set Backends

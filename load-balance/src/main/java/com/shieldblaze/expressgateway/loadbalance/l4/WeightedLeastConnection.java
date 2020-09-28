@@ -20,6 +20,8 @@ package com.shieldblaze.expressgateway.loadbalance.l4;
 import com.google.common.collect.Range;
 import com.google.common.collect.TreeRangeMap;
 import com.shieldblaze.expressgateway.loadbalance.backend.Backend;
+import com.shieldblaze.expressgateway.loadbalance.l4.sessionpersistence.NOOPSessionPersistence;
+import com.shieldblaze.expressgateway.loadbalance.l4.sessionpersistence.SessionPersistence;
 
 import java.net.InetSocketAddress;
 import java.util.HashMap;
@@ -40,9 +42,15 @@ public final class WeightedLeastConnection extends L4Balance {
     private int totalWeight = 0;
 
     public WeightedLeastConnection() {
+        super(new NOOPSessionPersistence());
     }
 
     public WeightedLeastConnection(List<Backend> backends) {
+        this(new NOOPSessionPersistence(), backends);
+    }
+
+    public WeightedLeastConnection(SessionPersistence sessionPersistence, List<Backend> backends) {
+        super(sessionPersistence);
         setBackends(backends);
     }
 
@@ -58,8 +66,13 @@ public final class WeightedLeastConnection extends L4Balance {
 
     @Override
     public Backend getBackend(InetSocketAddress sourceAddress) {
+        Backend _backend = sessionPersistence.getBackend(sourceAddress);
+        if (_backend != null) {
+            return _backend;
+        }
+
         if (Index.get() >= totalWeight) {
-            localConnectionMap.replaceAll((b, i) -> i = 0);
+            localConnectionMap.replaceAll((backend, i) -> i = 0);
             Index.set(0);
         }
 
@@ -73,6 +86,8 @@ public final class WeightedLeastConnection extends L4Balance {
             localConnectionMap.put(backend.getValue(), connections + 1);
         }
 
-        return backend.getValue();
+        _backend  = backend.getValue();
+        sessionPersistence.addRoute(sourceAddress, _backend);
+        return _backend;
     }
 }
