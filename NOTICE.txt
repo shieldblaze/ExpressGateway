@@ -74,3 +74,10 @@ This product depends on 'BouncyCastle'. License for the same can be obtained at:
     * license/LICENSE.bouncycastle.txt (The Legion of the Bouncy Castle Inc.)
 
 ---------------------------------
+
+This product depends on 'Bucket4J'. License for the same can be obtained at:
+
+  * LICENSE:
+    * license/LICENSE.bucket4j.txt (Apache License 2.0)
+
+---------------------------------

@@ -41,15 +41,24 @@ along with ShieldBlaze ExpressGateway.  If not, see <https://www.gnu.org/license
             <artifactId>expressgateway-loadbalance</artifactId>
             <version>0.0.1-a</version>
         </dependency>
+
         <dependency>
             <groupId>com.shieldblaze</groupId>
             <artifactId>expressgateway-healthcheck</artifactId>
             <version>0.0.1-a</version>
         </dependency>
+
         <dependency>
             <groupId>org.bouncycastle</groupId>
             <artifactId>bcpkix-jdk15on</artifactId>
             <version>1.66</version>
+        </dependency>
+
+        <!-- https://mvnrepository.com/artifact/com.github.vladimir-bukhtoyarov/bucket4j-core -->
+        <dependency>
+            <groupId>com.github.vladimir-bukhtoyarov</groupId>
+            <artifactId>bucket4j-core</artifactId>
+            <version>4.10.0</version>
         </dependency>
     </dependencies>
 
