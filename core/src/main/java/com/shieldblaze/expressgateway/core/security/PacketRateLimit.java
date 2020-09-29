@@ -56,19 +56,12 @@ public final class PacketRateLimit extends ChannelDuplexHandler {
         if (bucket.asAsync().tryConsume(1).get()) {
             super.channelRead(ctx, msg);
         } else {
-            if (ctx.channel() instanceof SocketChannel) {
+            if (msg instanceof ByteBuf) {
+                ((ByteBuf) msg).release();
                 logger.debug("Rate-Limit exceeded, Denying new Packet from {}", ctx.channel().remoteAddress());
-                if (msg instanceof ByteBuf) {
-                    ((ByteBuf) msg).release();
-                }
-            } else if (ctx.channel() instanceof DatagramChannel) {
-                if (msg instanceof ByteBuf) {
-                    logger.debug("Rate-Limit exceeded, Denying new Packet from {}", ctx.channel().remoteAddress());
-                    ((ByteBuf) msg).release();
-                } else if (msg instanceof DatagramPacket) {
-                    logger.debug("Rate-Limit exceeded, Denying new Packet from {}", ((DatagramPacket) msg).sender());
-                    ((DatagramPacket) msg).release();
-                }
+            } else if (msg instanceof DatagramPacket) {
+                ((DatagramPacket) msg).release();
+                logger.debug("Rate-Limit exceeded, Denying new Packet from {}", ((DatagramPacket) msg).sender());
             }
         }
     }
