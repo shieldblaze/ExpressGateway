@@ -31,8 +31,8 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 class NACLTest {
 
     @Test
-    void test() {
-        NACL nacl = new NACL(1, Duration.ofMinutes(1));
+    void test() throws InterruptedException {
+        NACL nacl = new NACL(1, Duration.ofSeconds(10));
 
         EmbeddedChannel ch1 = newEmbeddedInetChannel(nacl);
         assertTrue(ch1.isActive());
@@ -53,6 +53,24 @@ class NACLTest {
         EmbeddedChannel ch5 = newEmbeddedInetChannel(nacl);
         assertFalse(ch5.isActive());
         assertTrue(ch5.close().isSuccess());
+
+        for (int i = 0; i < 100; i++) {
+            EmbeddedChannel ch6 = newEmbeddedInetChannel(nacl);
+            assertFalse(ch6.isActive());
+            assertTrue(ch6.close().isSuccess());
+        }
+
+        Thread.sleep(15000L);
+
+        EmbeddedChannel ch7 = newEmbeddedInetChannel(nacl);
+        assertTrue(ch7.isActive());
+        assertTrue(ch7.close().isSuccess());
+
+        for (int i = 0; i < 100; i++) {
+            EmbeddedChannel ch8 = newEmbeddedInetChannel(nacl);
+            assertFalse(ch8.isActive());
+            assertTrue(ch8.close().isSuccess());
+        }
     }
 
     private static EmbeddedChannel newEmbeddedInetChannel(ChannelHandler... handlers) {
