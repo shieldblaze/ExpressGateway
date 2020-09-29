@@ -47,6 +47,7 @@
 - [ ] HTTP Cookie
 
 ### Security:
-- [ ] Access Control List (ACL)
-- [ ] Rate-Limit
+- [X] Access Control List (ACL)
+- [X] Per-Connection Rate-Limit
+- [X] Per-Packet Rate-Limit
 - [ ] Web Application Firewall (WAF)
