@@ -22,6 +22,8 @@ import com.shieldblaze.expressgateway.core.configuration.CommonConfigurationBuil
 import com.shieldblaze.expressgateway.core.configuration.buffer.PooledByteBufAllocatorConfiguration;
 import com.shieldblaze.expressgateway.core.configuration.eventloop.EventLoopConfiguration;
 import com.shieldblaze.expressgateway.core.configuration.eventloop.EventLoopConfigurationBuilder;
+import com.shieldblaze.expressgateway.core.configuration.http.HTTPConfiguration;
+import com.shieldblaze.expressgateway.core.configuration.http.HTTPConfigurationBuilder;
 import com.shieldblaze.expressgateway.core.configuration.tls.CertificateKeyPair;
 import com.shieldblaze.expressgateway.core.configuration.tls.Cipher;
 import com.shieldblaze.expressgateway.core.configuration.tls.MutualTLS;
@@ -34,10 +36,9 @@ import com.shieldblaze.expressgateway.core.configuration.transport.TransportConf
 import com.shieldblaze.expressgateway.core.configuration.transport.TransportConfigurationBuilder;
 import com.shieldblaze.expressgateway.core.configuration.transport.TransportType;
 import com.shieldblaze.expressgateway.core.server.http.HTTPListener;
-import com.shieldblaze.expressgateway.core.server.tcp.TCPListener;
 import com.shieldblaze.expressgateway.loadbalance.backend.Backend;
 import com.shieldblaze.expressgateway.loadbalance.backend.Cluster;
-import com.shieldblaze.expressgateway.loadbalance.l4.RoundRobin;
+import com.shieldblaze.expressgateway.loadbalance.l7.RoundRobin;
 import io.netty.handler.ssl.util.SelfSignedCertificate;
 
 import javax.net.ssl.SSLException;
@@ -97,14 +98,39 @@ public final class Main {
         cluster.setClusterName("MyCluster");
         cluster.addBackend(new Backend(new InetSocketAddress("172.27.67.143", 80)));
 
-        L4LoadBalancer l4LoadBalancer = L4LoadBalancerBuilder.newBuilder()
+
+
+/*        L4LoadBalancer l4LoadBalancer = L4LoadBalancerBuilder.newBuilder()
                 .withConfiguration(configuration)
                 .withL4Balance(new RoundRobin())
-                .withL7Balance(new com.shieldblaze.expressgateway.loadbalance.l7.RoundRobin())
                 .withCluster(cluster)
-                .withFrontListener(new HTTPListener(new InetSocketAddress("0.0.0.0", 9110)))
+                .withFrontListener(new TCPListener(new InetSocketAddress("0.0.0.0", 9110)))
                 .build();
 
-        l4LoadBalancer.start();
+        l4LoadBalancer.start();*/
+
+        HTTPConfiguration httpConfiguration = HTTPConfigurationBuilder.newBuilder()
+                .withBrotliCompressionLevel(4)
+                .withCompressionThreshold(100)
+                .withDeflateCompressionLevel(6)
+                .withEnableHTTP2Push(true)
+                .withInitialWindowSize(1024)
+                .withMaxChunkSize(8196)
+                .withMaxConcurrentStreams(100)
+                .withMaxContentLength(1024 * 1024)
+                .withMaxHeaderSize(1024 * 10)
+                .withMaxHeaderSizeList(1024 * 10)
+                .withMaxInitialLineLength(1024 * 10)
+                .build();
+
+        L7LoadBalancer l7LoadBalancer = L7LoadBalancerBuilder.newBuilder()
+                .withCommonConfiguration(configuration)
+                .withL7Balance(new RoundRobin())
+                .withCluster(cluster)
+                .withL7FrontListener(new HTTPListener(new InetSocketAddress("0.0.0.0", 9110)))
+                .withHTTPConfiguration(httpConfiguration)
+                .build();
+
+        l7LoadBalancer.start();
     }
 }

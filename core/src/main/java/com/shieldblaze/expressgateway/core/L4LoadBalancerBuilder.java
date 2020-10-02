@@ -18,7 +18,7 @@
 package com.shieldblaze.expressgateway.core;
 
 import com.shieldblaze.expressgateway.core.configuration.CommonConfiguration;
-import com.shieldblaze.expressgateway.core.server.FrontListener;
+import com.shieldblaze.expressgateway.core.server.L4FrontListener;
 import com.shieldblaze.expressgateway.loadbalance.backend.Cluster;
 import com.shieldblaze.expressgateway.loadbalance.l4.L4Balance;
 import com.shieldblaze.expressgateway.loadbalance.l7.L7Balance;
@@ -30,9 +30,8 @@ import io.netty.util.internal.ObjectUtil;
 public final class L4LoadBalancerBuilder {
     private CommonConfiguration commonConfiguration;
     private L4Balance l4Balance;
-    private L7Balance l7Balance;
     private Cluster cluster;
-    private FrontListener frontListener;
+    private L4FrontListener l4FrontListener;
 
     private L4LoadBalancerBuilder() {
         // Prevent outside initialization
@@ -64,14 +63,6 @@ public final class L4LoadBalancerBuilder {
     }
 
     /**
-     * Set {@link L7Balance} Type
-     */
-    public L4LoadBalancerBuilder withL7Balance(L7Balance l7Balance) {
-        this.l7Balance = l7Balance;
-        return this;
-    }
-
-    /**
      * Set {@link Cluster} to Load Balance
      */
     public L4LoadBalancerBuilder withCluster(Cluster cluster) {
@@ -80,10 +71,10 @@ public final class L4LoadBalancerBuilder {
     }
 
     /**
-     * Set {@link FrontListener} to listen incoming traffic
+     * Set {@link L4FrontListener} to listen incoming traffic
      */
-    public L4LoadBalancerBuilder withFrontListener(FrontListener frontListener) {
-        this.frontListener = frontListener;
+    public L4LoadBalancerBuilder withFrontListener(L4FrontListener l4FrontListener) {
+        this.l4FrontListener = l4FrontListener;
         return this;
     }
 
@@ -97,11 +88,9 @@ public final class L4LoadBalancerBuilder {
         L4LoadBalancer l4LoadBalancer = new L4LoadBalancer();
         l4LoadBalancer.setConfiguration(ObjectUtil.checkNotNull(commonConfiguration, "Configuration"));
         l4LoadBalancer.setL4Balance(ObjectUtil.checkNotNull(l4Balance, "L4Balance"));
-        l4LoadBalancer.setL7Balance(ObjectUtil.checkNotNull(l7Balance, "L7Balance"));
-        l4Balance.setBackends(cluster.getBackends());
-        l7Balance.setBackends(cluster.getBackends());
         l4LoadBalancer.setCluster(ObjectUtil.checkNotNull(cluster, "Cluster"));
-        l4LoadBalancer.setFrontListener(ObjectUtil.checkNotNull(frontListener, "FrontListener"));
+        l4Balance.setBackends(cluster.getBackends());
+        l4LoadBalancer.setFrontListener(ObjectUtil.checkNotNull(l4FrontListener, "L4 FrontListener"));
         return l4LoadBalancer;
     }
 }

@@ -1,11 +1,29 @@
+/*
+ * This file is part of ShieldBlaze ExpressGateway. [www.shieldblaze.com]
+ * Copyright (c) 2020 ShieldBlaze
+ *
+ * ShieldBlaze ExpressGateway is free software: you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License as published by
+ * the Free Software Foundation, either version 3 of the License, or
+ * (at your option) any later version.
+ *
+ * ShieldBlaze ExpressGateway is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
+ *
+ * You should have received a copy of the GNU General Public License
+ * along with ShieldBlaze ExpressGateway.  If not, see <https://www.gnu.org/licenses/>.
+ */
 package com.shieldblaze.expressgateway.core.server.http;
 
 import com.shieldblaze.expressgateway.core.configuration.CommonConfiguration;
+import com.shieldblaze.expressgateway.core.configuration.http.HTTPConfiguration;
 import com.shieldblaze.expressgateway.core.configuration.tls.TLSConfiguration;
 import com.shieldblaze.expressgateway.core.configuration.transport.TransportConfiguration;
 import com.shieldblaze.expressgateway.core.configuration.transport.TransportType;
 import com.shieldblaze.expressgateway.core.netty.EventLoopFactory;
-import com.shieldblaze.expressgateway.core.server.FrontListener;
+import com.shieldblaze.expressgateway.core.server.L7FrontListener;
 import com.shieldblaze.expressgateway.core.tls.SNIHandler;
 import com.shieldblaze.expressgateway.loadbalance.l4.L4Balance;
 import com.shieldblaze.expressgateway.loadbalance.l7.L7Balance;
@@ -23,7 +41,8 @@ import io.netty.channel.epoll.EpollServerSocketChannelConfig;
 import io.netty.channel.socket.SocketChannel;
 import io.netty.channel.socket.nio.NioServerSocketChannel;
 import io.netty.channel.unix.UnixChannelOption;
-import io.netty.handler.codec.http.HttpObjectAggregator;
+import io.netty.handler.codec.http.HttpContentCompressor;
+import io.netty.handler.codec.http.HttpContentDecompressor;
 import io.netty.handler.codec.http.HttpServerCodec;
 import io.netty.handler.timeout.IdleStateHandler;
 import org.apache.logging.log4j.LogManager;
@@ -31,7 +50,7 @@ import org.apache.logging.log4j.Logger;
 
 import java.net.InetSocketAddress;
 
-public final class HTTPListener extends FrontListener {
+public final class HTTPListener extends L7FrontListener {
 
     /**
      * Logger
@@ -55,11 +74,6 @@ public final class HTTPListener extends FrontListener {
      */
     public HTTPListener(InetSocketAddress bindAddress) {
         this(bindAddress, null);
-    }
-
-    @Override
-    public void start(CommonConfiguration commonConfiguration, EventLoopFactory eventLoopFactory, ByteBufAllocator byteBufAllocator, L4Balance l4Balance) {
-
     }
 
     /**
@@ -103,7 +117,7 @@ public final class HTTPListener extends FrontListener {
 
     @Override
     public void start(CommonConfiguration commonConfiguration, EventLoopFactory eventLoopFactory, ByteBufAllocator byteBufAllocator,
-                      L7Balance l7Balance) {
+                      HTTPConfiguration httpConfiguration, L7Balance l7Balance) {
 
         TransportConfiguration transportConfiguration = commonConfiguration.getTransportConfiguration();
 
@@ -131,7 +145,7 @@ public final class HTTPListener extends FrontListener {
                         return new NioServerSocketChannel();
                     }
                 })
-                .childHandler(new ServerInitializer(commonConfiguration, eventLoopFactory, l7Balance,
+                .childHandler(new ServerInitializer(httpConfiguration, commonConfiguration, eventLoopFactory, l7Balance,
                         tlsConfigurationForServer, tlsConfigurationForClient));
 
         int bindRounds = 1;
@@ -154,14 +168,16 @@ public final class HTTPListener extends FrontListener {
 
         private static final Logger logger = LogManager.getLogger(ServerInitializer.class);
 
+        private final HTTPConfiguration httpConfiguration;
         private final EventLoopFactory eventLoopFactory;
         private final CommonConfiguration commonConfiguration;
         private final L7Balance l7Balance;
         private final TLSConfiguration tlsConfigurationForServer;
         private final TLSConfiguration tlsConfigurationForClient;
 
-        ServerInitializer(CommonConfiguration commonConfiguration, EventLoopFactory eventLoopFactory, L7Balance l7Balance,
-                          TLSConfiguration tlsConfigurationForServer, TLSConfiguration tlsConfigurationForClient) {
+        ServerInitializer(HTTPConfiguration httpConfiguration, CommonConfiguration commonConfiguration, EventLoopFactory eventLoopFactory,
+                          L7Balance l7Balance, TLSConfiguration tlsConfigurationForServer, TLSConfiguration tlsConfigurationForClient) {
+            this.httpConfiguration = httpConfiguration;
             this.commonConfiguration = commonConfiguration;
             this.eventLoopFactory = eventLoopFactory;
             this.l7Balance = l7Balance;
@@ -180,9 +196,7 @@ public final class HTTPListener extends FrontListener {
                 pipeline.addLast(new SNIHandler(tlsConfigurationForServer));
             }
 
-            pipeline.addLast(new HttpServerCodec(4096, 8196, 8196, true));
-            pipeline.addLast(new HttpServerExpectContinueHandlerImpl(8196));
-            pipeline.addLast(new Handler(l7Balance, commonConfiguration, tlsConfigurationForClient, eventLoopFactory));
+            pipeline.addLast(new ALPNHandler(l7Balance, commonConfiguration, tlsConfigurationForClient, eventLoopFactory, httpConfiguration));
         }
 
         @Override

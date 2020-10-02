@@ -1,3 +1,20 @@
+/*
+ * This file is part of ShieldBlaze ExpressGateway. [www.shieldblaze.com]
+ * Copyright (c) 2020 ShieldBlaze
+ *
+ * ShieldBlaze ExpressGateway is free software: you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License as published by
+ * the Free Software Foundation, either version 3 of the License, or
+ * (at your option) any later version.
+ *
+ * ShieldBlaze ExpressGateway is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
+ *
+ * You should have received a copy of the GNU General Public License
+ * along with ShieldBlaze ExpressGateway.  If not, see <https://www.gnu.org/licenses/>.
+ */
 package com.shieldblaze.expressgateway.core.server.http;
 
 import io.netty.channel.ChannelFutureListener;
@@ -16,13 +33,13 @@ import io.netty.util.ReferenceCountUtil;
 import static io.netty.handler.codec.http.HttpUtil.getContentLength;
 
 /**
- * Validate Content-Length and Expect Header
+ * Validate "Content-Length" and "Expect" Header
  */
-public class HttpServerExpectContinueHandlerImpl extends ChannelInboundHandlerAdapter {
+final class HttpServerExpectContinueHandlerImpl extends ChannelInboundHandlerAdapter {
 
-    private final int maxContentLength;
+    private final long maxContentLength;
 
-    public HttpServerExpectContinueHandlerImpl(int maxContentLength) {
+    HttpServerExpectContinueHandlerImpl(long maxContentLength) {
         this.maxContentLength = maxContentLength;
     }
 

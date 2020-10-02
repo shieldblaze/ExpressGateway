@@ -22,7 +22,7 @@ import com.shieldblaze.expressgateway.core.configuration.transport.TransportType
 import com.shieldblaze.expressgateway.loadbalance.l4.L4Balance;
 import com.shieldblaze.expressgateway.core.netty.BootstrapFactory;
 import com.shieldblaze.expressgateway.core.netty.EventLoopFactory;
-import com.shieldblaze.expressgateway.core.server.FrontListener;
+import com.shieldblaze.expressgateway.core.server.L4FrontListener;
 import com.shieldblaze.expressgateway.loadbalance.l7.L7Balance;
 import io.netty.bootstrap.Bootstrap;
 import io.netty.buffer.ByteBufAllocator;
@@ -36,7 +36,7 @@ import java.net.InetSocketAddress;
 /**
  * UDP Listener for handling incoming requests.
  */
-public class UDPListener extends FrontListener {
+public final class UDPListener extends L4FrontListener {
     private static final Logger logger = LogManager.getLogger(UDPListener.class);
 
     /**
@@ -67,10 +67,5 @@ public class UDPListener extends FrontListener {
 
             channelFutureList.add(channelFuture);
         }
-    }
-
-    @Override
-    public void start(CommonConfiguration commonConfiguration, EventLoopFactory eventLoopFactory, ByteBufAllocator byteBufAllocator, L7Balance l7Balance) {
-        // Not supported
     }
 }
