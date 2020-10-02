@@ -15,46 +15,51 @@
  * You should have received a copy of the GNU General Public License
  * along with ShieldBlaze ExpressGateway.  If not, see <https://www.gnu.org/licenses/>.
  */
-package com.shieldblaze.expressgateway.loadbalance.l4;
+package com.shieldblaze.expressgateway.loadbalance.l7;
 
 import com.shieldblaze.expressgateway.loadbalance.backend.Backend;
 import com.shieldblaze.expressgateway.loadbalance.sessionpersistence.NOOPSessionPersistence;
 import com.shieldblaze.expressgateway.loadbalance.sessionpersistence.SessionPersistence;
+import io.netty.handler.codec.http.HttpRequest;
 
 import java.net.InetSocketAddress;
 import java.util.List;
 
 /**
- * Select {@link Backend} Randomly
+ * Select {@link Backend} based on Round-Robin
  */
-public final class Random extends L4Balance {
-    private static final java.util.Random RANDOM_INSTANCE = new java.util.Random();
+public final class RoundRobin extends L7Balance {
 
-    public Random() {
+    private RoundRobinImpl<Backend> backendsRoundRobin;
+
+    public RoundRobin() {
         super(new NOOPSessionPersistence());
     }
 
-    public Random(List<Backend> backends) {
-        super(new NOOPSessionPersistence());
-        setBackends(backends);
+    public RoundRobin(List<Backend> backends) {
+        this(new NOOPSessionPersistence(), backends);
     }
 
-    public Random(SessionPersistence sessionPersistence, List<Backend> backends) {
+    public RoundRobin(SessionPersistence sessionPersistence, List<Backend> backends) {
         super(sessionPersistence);
         setBackends(backends);
     }
 
     @Override
-    public Backend getBackend(InetSocketAddress sourceAddress) {
-        Backend backend = sessionPersistence.getBackend(sourceAddress);
+    public void setBackends(List<Backend> backends) {
+        super.setBackends(backends);
+        backendsRoundRobin = new RoundRobinImpl<>(this.backends);
+    }
+
+    @Override
+    public Backend getBackend(HttpRequest httpRequest) {
+        Backend backend = sessionPersistence.getBackend(httpRequest);
         if (backend != null) {
             return backend;
         }
 
-        int index = RANDOM_INSTANCE.nextInt(backends.size());
-
-        backend = backends.get(index);
-        sessionPersistence.addRoute(sourceAddress, backend);
+        backend = backendsRoundRobin.iterator().next();
+        sessionPersistence.addRoute(httpRequest, backend);
         return backend;
     }
 }

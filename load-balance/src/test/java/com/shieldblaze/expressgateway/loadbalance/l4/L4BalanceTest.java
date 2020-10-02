@@ -1,8 +1,7 @@
 package com.shieldblaze.expressgateway.loadbalance.l4;
 
 import com.shieldblaze.expressgateway.loadbalance.backend.Backend;
-import com.shieldblaze.expressgateway.loadbalance.l4.sessionpersistence.NOOPSessionPersistence;
-import com.shieldblaze.expressgateway.loadbalance.l4.sessionpersistence.SessionPersistence;
+import com.shieldblaze.expressgateway.loadbalance.sessionpersistence.NOOPSessionPersistence;
 import org.junit.jupiter.api.Assertions;
 import org.junit.jupiter.api.Test;
 

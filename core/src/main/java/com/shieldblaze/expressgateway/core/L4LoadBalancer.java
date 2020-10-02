@@ -23,6 +23,7 @@ import com.shieldblaze.expressgateway.loadbalance.l4.L4Balance;
 import com.shieldblaze.expressgateway.core.netty.EventLoopFactory;
 import com.shieldblaze.expressgateway.core.netty.PooledByteBufAllocatorBuffer;
 import com.shieldblaze.expressgateway.core.server.FrontListener;
+import com.shieldblaze.expressgateway.loadbalance.l7.L7Balance;
 
 /**
  * Layer-4 Load Balancer
@@ -35,14 +36,17 @@ public final class L4LoadBalancer {
 
     private CommonConfiguration commonConfiguration;
     private L4Balance l4Balance;
+    private L7Balance l7Balance;
     private Cluster cluster;
     private FrontListener frontListener;
     private EventLoopFactory eventLoopFactory;
 
     public boolean start() {
         eventLoopFactory = new EventLoopFactory(commonConfiguration);
+//        frontListener.start(commonConfiguration, eventLoopFactory,
+//                new PooledByteBufAllocatorBuffer(commonConfiguration.getPooledByteBufAllocatorConfiguration()).getInstance(), l4Balance);
         frontListener.start(commonConfiguration, eventLoopFactory,
-                new PooledByteBufAllocatorBuffer(commonConfiguration.getPooledByteBufAllocatorConfiguration()).getInstance(), l4Balance);
+                new PooledByteBufAllocatorBuffer(commonConfiguration.getPooledByteBufAllocatorConfiguration()).getInstance(), l7Balance);
         return frontListener.waitForStart();
     }
 
@@ -62,6 +66,10 @@ public final class L4LoadBalancer {
 
     void setL4Balance(L4Balance l4Balance) {
         this.l4Balance = l4Balance;
+    }
+
+    void setL7Balance(L7Balance l7Balance) {
+        this.l7Balance = l7Balance;
     }
 
     void setCluster(Cluster cluster) {

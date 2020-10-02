@@ -23,6 +23,7 @@ import com.shieldblaze.expressgateway.loadbalance.l4.L4Balance;
 import com.shieldblaze.expressgateway.core.netty.BootstrapFactory;
 import com.shieldblaze.expressgateway.core.netty.EventLoopFactory;
 import com.shieldblaze.expressgateway.core.server.FrontListener;
+import com.shieldblaze.expressgateway.loadbalance.l7.L7Balance;
 import io.netty.bootstrap.Bootstrap;
 import io.netty.buffer.ByteBufAllocator;
 import io.netty.channel.ChannelFuture;
@@ -66,5 +67,10 @@ public class UDPListener extends FrontListener {
 
             channelFutureList.add(channelFuture);
         }
+    }
+
+    @Override
+    public void start(CommonConfiguration commonConfiguration, EventLoopFactory eventLoopFactory, ByteBufAllocator byteBufAllocator, L7Balance l7Balance) {
+        // Not supported
     }
 }

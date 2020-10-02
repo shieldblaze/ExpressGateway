@@ -21,6 +21,7 @@ import com.shieldblaze.expressgateway.core.configuration.CommonConfiguration;
 import com.shieldblaze.expressgateway.core.server.FrontListener;
 import com.shieldblaze.expressgateway.loadbalance.backend.Cluster;
 import com.shieldblaze.expressgateway.loadbalance.l4.L4Balance;
+import com.shieldblaze.expressgateway.loadbalance.l7.L7Balance;
 import io.netty.util.internal.ObjectUtil;
 
 /**
@@ -29,6 +30,7 @@ import io.netty.util.internal.ObjectUtil;
 public final class L4LoadBalancerBuilder {
     private CommonConfiguration commonConfiguration;
     private L4Balance l4Balance;
+    private L7Balance l7Balance;
     private Cluster cluster;
     private FrontListener frontListener;
 
@@ -62,6 +64,14 @@ public final class L4LoadBalancerBuilder {
     }
 
     /**
+     * Set {@link L7Balance} Type
+     */
+    public L4LoadBalancerBuilder withL7Balance(L7Balance l7Balance) {
+        this.l7Balance = l7Balance;
+        return this;
+    }
+
+    /**
      * Set {@link Cluster} to Load Balance
      */
     public L4LoadBalancerBuilder withCluster(Cluster cluster) {
@@ -87,7 +97,9 @@ public final class L4LoadBalancerBuilder {
         L4LoadBalancer l4LoadBalancer = new L4LoadBalancer();
         l4LoadBalancer.setConfiguration(ObjectUtil.checkNotNull(commonConfiguration, "Configuration"));
         l4LoadBalancer.setL4Balance(ObjectUtil.checkNotNull(l4Balance, "L4Balance"));
+        l4LoadBalancer.setL7Balance(ObjectUtil.checkNotNull(l7Balance, "L7Balance"));
         l4Balance.setBackends(cluster.getBackends());
+        l7Balance.setBackends(cluster.getBackends());
         l4LoadBalancer.setCluster(ObjectUtil.checkNotNull(cluster, "Cluster"));
         l4LoadBalancer.setFrontListener(ObjectUtil.checkNotNull(frontListener, "FrontListener"));
         return l4LoadBalancer;

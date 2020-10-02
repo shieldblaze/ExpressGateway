@@ -1,21 +1,4 @@
-/*
- * This file is part of ShieldBlaze ExpressGateway. [www.shieldblaze.com]
- * Copyright (c) 2020 ShieldBlaze
- *
- * ShieldBlaze ExpressGateway is free software: you can redistribute it and/or modify
- * it under the terms of the GNU General Public License as published by
- * the Free Software Foundation, either version 3 of the License, or
- * (at your option) any later version.
- *
- * ShieldBlaze ExpressGateway is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
- * GNU General Public License for more details.
- *
- * You should have received a copy of the GNU General Public License
- * along with ShieldBlaze ExpressGateway.  If not, see <https://www.gnu.org/licenses/>.
- */
-package com.shieldblaze.expressgateway.core.server.tcp;
+package com.shieldblaze.expressgateway.core.server.http;
 
 import com.shieldblaze.expressgateway.core.configuration.CommonConfiguration;
 import com.shieldblaze.expressgateway.core.configuration.tls.TLSConfiguration;
@@ -33,27 +16,27 @@ import io.netty.channel.ChannelFutureListener;
 import io.netty.channel.ChannelHandlerContext;
 import io.netty.channel.ChannelInitializer;
 import io.netty.channel.ChannelOption;
+import io.netty.channel.ChannelPipeline;
 import io.netty.channel.epoll.EpollMode;
 import io.netty.channel.epoll.EpollServerSocketChannel;
 import io.netty.channel.epoll.EpollServerSocketChannelConfig;
 import io.netty.channel.socket.SocketChannel;
 import io.netty.channel.socket.nio.NioServerSocketChannel;
 import io.netty.channel.unix.UnixChannelOption;
+import io.netty.handler.codec.http.HttpObjectAggregator;
+import io.netty.handler.codec.http.HttpServerCodec;
 import io.netty.handler.timeout.IdleStateHandler;
 import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
 
 import java.net.InetSocketAddress;
 
-/**
- * TCP Listener for handling incoming requests.
- */
-public class TCPListener extends FrontListener {
+public final class HTTPListener extends FrontListener {
 
     /**
      * Logger
      */
-    private static final Logger logger = LogManager.getLogger(TCPListener.class);
+    private static final Logger logger = LogManager.getLogger(HTTPListener.class);
 
     /**
      * {@link TLSConfiguration} for TLS Server Support
@@ -66,32 +49,37 @@ public class TCPListener extends FrontListener {
     private final TLSConfiguration tlsConfigurationForClient;
 
     /**
-     * Create {@link TCPListener} Instance
+     * Create {@link HTTPListener} Instance
      *
-     * @param bindAddress {@link InetSocketAddress} on which {@link TCPListener} will bind and listen.
+     * @param bindAddress {@link InetSocketAddress} on which {@link HTTPListener} will bind and listen.
      */
-    public TCPListener(InetSocketAddress bindAddress) {
+    public HTTPListener(InetSocketAddress bindAddress) {
         this(bindAddress, null);
     }
 
+    @Override
+    public void start(CommonConfiguration commonConfiguration, EventLoopFactory eventLoopFactory, ByteBufAllocator byteBufAllocator, L4Balance l4Balance) {
+
+    }
+
     /**
-     * Create {@link TCPListener} Instance with TLS Server Support (a.k.a TLS Offload)
+     * Create {@link HTTPListener} Instance with TLS Server Support (a.k.a TLS Offload)
      *
-     * @param bindAddress               {@link InetSocketAddress} on which {@link TCPListener} will bind and listen.
+     * @param bindAddress               {@link InetSocketAddress} on which {@link HTTPListener} will bind and listen.
      * @param tlsConfigurationForServer {@link TLSConfiguration} for TLS Server
      */
-    public TCPListener(InetSocketAddress bindAddress, TLSConfiguration tlsConfigurationForServer) {
+    public HTTPListener(InetSocketAddress bindAddress, TLSConfiguration tlsConfigurationForServer) {
         this(bindAddress, tlsConfigurationForServer, null);
     }
 
     /**
-     * Create {@link TCPListener} Instance with TLS Server and Client Support (a.k.a TLS Offload and Reload)
+     * Create {@link HTTPListener} Instance with TLS Server and Client Support (a.k.a TLS Offload and Reload)
      *
-     * @param bindAddress               {@link InetSocketAddress} on which {@link TCPListener} will bind and listen.
+     * @param bindAddress               {@link InetSocketAddress} on which {@link HTTPListener} will bind and listen.
      * @param tlsConfigurationForServer {@link TLSConfiguration} for TLS Server
      * @param tlsConfigurationForClient {@link TLSConfiguration} for TLS Client
      */
-    public TCPListener(InetSocketAddress bindAddress, TLSConfiguration tlsConfigurationForServer, TLSConfiguration tlsConfigurationForClient) {
+    public HTTPListener(InetSocketAddress bindAddress, TLSConfiguration tlsConfigurationForServer, TLSConfiguration tlsConfigurationForClient) {
         super(bindAddress);
         this.tlsConfigurationForServer = tlsConfigurationForServer;
         this.tlsConfigurationForClient = tlsConfigurationForClient;
@@ -115,7 +103,7 @@ public class TCPListener extends FrontListener {
 
     @Override
     public void start(CommonConfiguration commonConfiguration, EventLoopFactory eventLoopFactory, ByteBufAllocator byteBufAllocator,
-                      L4Balance l4Balance) {
+                      L7Balance l7Balance) {
 
         TransportConfiguration transportConfiguration = commonConfiguration.getTransportConfiguration();
 
@@ -143,7 +131,7 @@ public class TCPListener extends FrontListener {
                         return new NioServerSocketChannel();
                     }
                 })
-                .childHandler(new ServerInitializer(commonConfiguration, eventLoopFactory, l4Balance,
+                .childHandler(new ServerInitializer(commonConfiguration, eventLoopFactory, l7Balance,
                         tlsConfigurationForServer, tlsConfigurationForClient));
 
         int bindRounds = 1;
@@ -162,40 +150,39 @@ public class TCPListener extends FrontListener {
         }
     }
 
-    @Override
-    public void start(CommonConfiguration commonConfiguration, EventLoopFactory eventLoopFactory, ByteBufAllocator byteBufAllocator, L7Balance l7Balance) {
-
-    }
-
     private static final class ServerInitializer extends ChannelInitializer<SocketChannel> {
 
         private static final Logger logger = LogManager.getLogger(ServerInitializer.class);
 
         private final EventLoopFactory eventLoopFactory;
         private final CommonConfiguration commonConfiguration;
-        private final L4Balance l4Balance;
+        private final L7Balance l7Balance;
         private final TLSConfiguration tlsConfigurationForServer;
         private final TLSConfiguration tlsConfigurationForClient;
 
-        ServerInitializer(CommonConfiguration commonConfiguration, EventLoopFactory eventLoopFactory, L4Balance l4Balance,
+        ServerInitializer(CommonConfiguration commonConfiguration, EventLoopFactory eventLoopFactory, L7Balance l7Balance,
                           TLSConfiguration tlsConfigurationForServer, TLSConfiguration tlsConfigurationForClient) {
             this.commonConfiguration = commonConfiguration;
             this.eventLoopFactory = eventLoopFactory;
-            this.l4Balance = l4Balance;
+            this.l7Balance = l7Balance;
             this.tlsConfigurationForServer = tlsConfigurationForServer;
             this.tlsConfigurationForClient = tlsConfigurationForClient;
         }
 
         @Override
         protected void initChannel(SocketChannel socketChannel) {
+            ChannelPipeline pipeline = socketChannel.pipeline();
+
             int timeout = commonConfiguration.getTransportConfiguration().getConnectionIdleTimeout();
-            socketChannel.pipeline().addFirst(new IdleStateHandler(timeout, timeout, timeout));
+            pipeline.addFirst(new IdleStateHandler(timeout, timeout, timeout));
 
             if (tlsConfigurationForServer != null) {
-                socketChannel.pipeline().addLast(new SNIHandler(tlsConfigurationForServer));
+                pipeline.addLast(new SNIHandler(tlsConfigurationForServer));
             }
 
-            socketChannel.pipeline().addLast(new UpstreamHandler(commonConfiguration, tlsConfigurationForClient, eventLoopFactory, l4Balance));
+            pipeline.addLast(new HttpServerCodec(4096, 8196, 8196, true));
+            pipeline.addLast(new HttpServerExpectContinueHandlerImpl(8196));
+            pipeline.addLast(new Handler(l7Balance, commonConfiguration, tlsConfigurationForClient, eventLoopFactory));
         }
 
         @Override

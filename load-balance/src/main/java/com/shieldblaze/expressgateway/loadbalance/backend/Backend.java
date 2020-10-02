@@ -22,12 +22,20 @@ import com.shieldblaze.expressgateway.healthcheck.HealthCheck;
 import io.netty.util.internal.ObjectUtil;
 
 import java.net.InetSocketAddress;
+import java.util.ArrayList;
+import java.util.Collections;
+import java.util.List;
 import java.util.concurrent.atomic.AtomicInteger;
 
 /**
  * {@link Backend} is the server which handles actual request of client.
  */
 public class Backend {
+
+    /**
+     * {@link List} of Hostnames associated with this {@link Backend}
+     */
+    private List<String> hostnames;
 
     /**
      * Address of this {@link Backend}
@@ -47,7 +55,7 @@ public class Backend {
     /**
      * Active Number Of Connection for this {@link Backend}
      */
-    private final AtomicInteger activeConnections = new AtomicInteger();
+    private int activeConnections;
 
     /**
      * Number of bytes written so far to this {@link Backend}
@@ -75,15 +83,16 @@ public class Backend {
      * @param socketAddress Address of this {@link Backend}
      */
     public Backend(InetSocketAddress socketAddress) {
-        this(socketAddress, 100, 10_000, null);
+        this(Collections.emptyList(), socketAddress, 100, 10_000, null);
     }
 
     public Backend(InetSocketAddress socketAddress, int Weight, int maxConnections) {
-        this(socketAddress, Weight, maxConnections, null);
+        this(Collections.emptyList(), socketAddress, Weight, maxConnections, null);
     }
 
-    public Backend(InetSocketAddress socketAddress, int Weight, int maxConnections, HealthCheck healthCheck) {
+    public Backend(List<String> hostnames, InetSocketAddress socketAddress, int Weight, int maxConnections, HealthCheck healthCheck) {
         ObjectUtil.checkNotNull(socketAddress, "SocketAddress");
+        ObjectUtil.checkNotNull(hostnames, "Hostnames");
 
         if (Weight < 1) {
             throw new IllegalArgumentException("Weight cannot be less than 1 (one).");
@@ -93,11 +102,17 @@ public class Backend {
             throw new IllegalArgumentException("Maximum Connection cannot be less than 1 (one).");
         }
 
+        this.hostnames = new ArrayList<>(hostnames);
+        Collections.sort(this.hostnames);
         this.state = State.ONLINE;
         this.socketAddress = socketAddress;
         this.Weight = Weight;
         this.maxConnections = maxConnections;
         this.healthCheck = healthCheck;
+    }
+
+    public List<String> getHostnames() {
+        return hostnames;
     }
 
     public InetSocketAddress getSocketAddress() {
@@ -117,15 +132,15 @@ public class Backend {
     }
 
     public int getActiveConnections() {
-        return activeConnections.get();
+        return activeConnections;
     }
 
     public void incConnections() {
-        activeConnections.incrementAndGet();
+        activeConnections++;
     }
 
     public void decConnections() {
-        activeConnections.decrementAndGet();
+        activeConnections--;
     }
 
     public void incBytesWritten(int bytes) {

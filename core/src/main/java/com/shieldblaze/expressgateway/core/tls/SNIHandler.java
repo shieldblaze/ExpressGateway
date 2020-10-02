@@ -15,7 +15,7 @@
  * You should have received a copy of the GNU General Public License
  * along with ShieldBlaze ExpressGateway.  If not, see <https://www.gnu.org/licenses/>.
  */
-package com.shieldblaze.expressgateway.core.server.tcp;
+package com.shieldblaze.expressgateway.core.tls;
 
 import com.shieldblaze.expressgateway.core.configuration.tls.CertificateKeyPair;
 import com.shieldblaze.expressgateway.core.configuration.tls.TLSConfiguration;
@@ -31,11 +31,11 @@ import io.netty.util.internal.PlatformDependent;
 
 import javax.net.ssl.SSLEngine;
 
-final class SNIHandler extends AbstractSniHandler<CertificateKeyPair> {
+public final class SNIHandler extends AbstractSniHandler<CertificateKeyPair> {
 
     private final AsyncMapping<String, CertificateKeyPair> promise;
 
-    SNIHandler(TLSConfiguration tlsConfiguration) {
+    public SNIHandler(TLSConfiguration tlsConfiguration) {
 
         promise = (input, promise) -> {
             try {
@@ -52,7 +52,7 @@ final class SNIHandler extends AbstractSniHandler<CertificateKeyPair> {
     }
 
     @Override
-    protected void onLookupComplete(ChannelHandlerContext ctx, String hostname, Future<CertificateKeyPair> future) throws Exception {
+    protected void onLookupComplete(ChannelHandlerContext ctx, String hostname, Future<CertificateKeyPair> future) {
         if (!future.isSuccess()) {
             final Throwable cause = future.cause();
             if (cause instanceof Error) {
@@ -95,7 +95,7 @@ final class SNIHandler extends AbstractSniHandler<CertificateKeyPair> {
     }
 
     @Override
-    public void exceptionCaught(ChannelHandlerContext ctx, Throwable cause) throws Exception {
+    public void exceptionCaught(ChannelHandlerContext ctx, Throwable cause) {
         ctx.fireExceptionCaught(cause);
     }
 
