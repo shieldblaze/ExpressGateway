@@ -20,12 +20,15 @@ package com.shieldblaze.expressgateway.core.server.http;
 import io.netty.channel.Channel;
 import io.netty.channel.ChannelHandlerContext;
 import io.netty.channel.ChannelInboundHandlerAdapter;
+import org.apache.logging.log4j.LogManager;
+import org.apache.logging.log4j.Logger;
 
 final class DownstreamHandler extends ChannelInboundHandlerAdapter {
 
-    private final Channel clientChannel;
+    private static final Logger logger = LogManager.getLogger(DownstreamHandler.class);
 
-    public DownstreamHandler(Channel clientChannel) {
+    private final Channel clientChannel;
+    DownstreamHandler(Channel clientChannel) {
         this.clientChannel = clientChannel;
     }
 
@@ -42,5 +45,10 @@ final class DownstreamHandler extends ChannelInboundHandlerAdapter {
         if (clientChannel.isActive()) {
             clientChannel.close();
         }
+    }
+
+    @Override
+    public void exceptionCaught(ChannelHandlerContext ctx, Throwable cause) {
+        logger.error("Caught Error at Downstream Handler", cause);
     }
 }

@@ -39,11 +39,14 @@ import com.shieldblaze.expressgateway.core.server.http.HTTPListener;
 import com.shieldblaze.expressgateway.loadbalance.backend.Backend;
 import com.shieldblaze.expressgateway.loadbalance.backend.Cluster;
 import com.shieldblaze.expressgateway.loadbalance.l7.RoundRobin;
+import io.netty.handler.ssl.util.InsecureTrustManagerFactory;
 import io.netty.handler.ssl.util.SelfSignedCertificate;
 
 import javax.net.ssl.SSLException;
+import javax.net.ssl.TrustManagerFactory;
 import java.net.InetSocketAddress;
 import java.security.cert.CertificateException;
+import java.util.Arrays;
 import java.util.Collections;
 
 public final class Main {
@@ -57,15 +60,15 @@ public final class Main {
         TransportConfiguration transportConfiguration = TransportConfigurationBuilder.newBuilder()
                 .withTransportType(TransportType.NIO)
                 .withTCPFastOpenMaximumPendingRequests(2147483647)
-                .withBackendConnectTimeout(1000 * 5)
-                .withBackendSocketTimeout(1000 * 5)
+                .withBackendConnectTimeout(10000 * 5)
+                .withBackendSocketTimeout(10000 * 5)
                 .withReceiveBufferAllocationType(ReceiveBufferAllocationType.FIXED)
                 .withReceiveBufferSizes(new int[]{100})
                 .withSocketReceiveBufferSize(2147483647)
                 .withSocketSendBufferSize(2147483647)
                 .withTCPConnectionBacklog(2147483647)
                 .withDataBacklog(2147483647)
-                .withConnectionIdleTimeout(180)
+                .withConnectionIdleTimeout(1800000)
                 .build();
 
         EventLoopConfiguration eventLoopConfiguration = EventLoopConfigurationBuilder.newBuilder()
@@ -87,18 +90,24 @@ public final class Main {
         TLSServerMapping tlsServerMapping = new TLSServerMapping(certificateKeyPair);
 
         TLSConfiguration tlsConfiguration = TLSConfigurationBuilder.forServer()
-                .withProtocols(Collections.singletonList(Protocol.TLS_1_2))
-                .withCiphers(Collections.singletonList(Cipher.TLS_ECDHE_ECDSA_WITH_AES_128_GCM_SHA256))
-                .withUseALPN(false)
+                .withProtocols(Collections.singletonList(Protocol.TLS_1_3))
+                .withCiphers(Collections.singletonList(Cipher.TLS_AES_128_GCM_SHA256))
+                .withUseALPN(true)
                 .withTLSServerMapping(tlsServerMapping)
                 .withMutualTLS(MutualTLS.NOT_REQUIRED)
                 .build();
 
+        TLSConfiguration forClient = TLSConfigurationBuilder.forClient()
+                .withProtocols(Collections.singletonList(Protocol.TLS_1_2))
+                .withCiphers(Collections.singletonList(Cipher.TLS_ECDHE_ECDSA_WITH_AES_128_CBC_SHA256))
+                .withUseALPN(true)
+                .withMutualTLS(MutualTLS.NOT_REQUIRED)
+                .withTrustManager(InsecureTrustManagerFactory.INSTANCE.getTrustManagers()[0])
+                .build();
+
         Cluster cluster = new Cluster();
         cluster.setClusterName("MyCluster");
-        cluster.addBackend(new Backend(new InetSocketAddress("172.27.67.143", 80)));
-
-
+        cluster.addBackend(new Backend("speed.hetzner.de", new InetSocketAddress("speed.hetzner.de", 443)));
 
 /*        L4LoadBalancer l4LoadBalancer = L4LoadBalancerBuilder.newBuilder()
                 .withConfiguration(configuration)
@@ -114,7 +123,7 @@ public final class Main {
                 .withCompressionThreshold(100)
                 .withDeflateCompressionLevel(6)
                 .withEnableHTTP2Push(true)
-                .withInitialWindowSize(1024)
+                .withInitialWindowSize(10240)
                 .withMaxChunkSize(8196)
                 .withMaxConcurrentStreams(100)
                 .withMaxContentLength(1024 * 1024)
@@ -127,7 +136,7 @@ public final class Main {
                 .withCommonConfiguration(configuration)
                 .withL7Balance(new RoundRobin())
                 .withCluster(cluster)
-                .withL7FrontListener(new HTTPListener(new InetSocketAddress("0.0.0.0", 9110)))
+                .withL7FrontListener(new HTTPListener(new InetSocketAddress("0.0.0.0", 9110), tlsConfiguration, forClient))
                 .withHTTPConfiguration(httpConfiguration)
                 .build();
 

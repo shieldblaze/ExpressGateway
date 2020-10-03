@@ -89,7 +89,7 @@ final class UpstreamHandlerTest {
         cluster.addBackend(new Backend(new InetSocketAddress("127.0.0.1", 9111)));
 
         l4LoadBalancer = L4LoadBalancerBuilder.newBuilder()
-                .withConfiguration(commonConfiguration)
+                .withCommonConfiguration(commonConfiguration)
                 .withL4Balance(new RoundRobin())
                 .withCluster(cluster)
                 .withFrontListener(new TCPListener(new InetSocketAddress("127.0.0.1", 9110)))

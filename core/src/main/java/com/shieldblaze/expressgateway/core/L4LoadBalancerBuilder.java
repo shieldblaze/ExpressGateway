@@ -49,7 +49,7 @@ public final class L4LoadBalancerBuilder {
     /**
      * Set {@link CommonConfiguration}
      */
-    public L4LoadBalancerBuilder withConfiguration(CommonConfiguration commonConfiguration) {
+    public L4LoadBalancerBuilder withCommonConfiguration(CommonConfiguration commonConfiguration) {
         this.commonConfiguration = commonConfiguration;
         return this;
     }

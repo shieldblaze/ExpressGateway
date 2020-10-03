@@ -23,6 +23,7 @@ import io.netty.channel.ChannelInboundHandlerAdapter;
 import io.netty.handler.codec.http.HttpHeaderNames;
 import io.netty.handler.codec.http.HttpHeaderValues;
 import io.netty.handler.codec.http.HttpMessage;
+import io.netty.handler.codec.http.HttpObjectAggregator;
 import io.netty.handler.codec.http.HttpRequest;
 import io.netty.handler.codec.http.HttpResponse;
 import io.netty.handler.codec.http.HttpServerExpectContinueHandler;
@@ -35,11 +36,11 @@ import static io.netty.handler.codec.http.HttpUtil.getContentLength;
 /**
  * Validate "Content-Length" and "Expect" Header
  */
-final class HttpServerExpectContinueHandlerImpl extends ChannelInboundHandlerAdapter {
+final class HTTPServerValidator extends ChannelInboundHandlerAdapter {
 
     private final long maxContentLength;
 
-    HttpServerExpectContinueHandlerImpl(long maxContentLength) {
+    HTTPServerValidator(long maxContentLength) {
         this.maxContentLength = maxContentLength;
     }
 

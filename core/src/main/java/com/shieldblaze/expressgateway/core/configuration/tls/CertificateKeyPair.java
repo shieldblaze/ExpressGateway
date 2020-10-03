@@ -59,6 +59,12 @@ public final class CertificateKeyPair {
         this.useOCSP = useOCSP;
     }
 
+    CertificateKeyPair() {
+        this.certificateChain = null;
+        this.privateKey = null;
+        this.useOCSP = false;
+    }
+
     List<X509Certificate> getCertificateChain() {
         return certificateChain;
     }

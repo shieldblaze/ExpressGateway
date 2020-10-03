@@ -33,9 +33,9 @@ import java.util.concurrent.atomic.AtomicInteger;
 public class Backend {
 
     /**
-     * {@link List} of Hostnames associated with this {@link Backend}
+     * Hostname associated with this {@link Backend}
      */
-    private List<String> hostnames;
+    private String hostname;
 
     /**
      * Address of this {@link Backend}
@@ -83,16 +83,20 @@ public class Backend {
      * @param socketAddress Address of this {@link Backend}
      */
     public Backend(InetSocketAddress socketAddress) {
-        this(Collections.emptyList(), socketAddress, 100, 10_000, null);
+        this(socketAddress.getAddress().getHostAddress(), socketAddress, 100, 10_000, null);
     }
 
     public Backend(InetSocketAddress socketAddress, int Weight, int maxConnections) {
-        this(Collections.emptyList(), socketAddress, Weight, maxConnections, null);
+        this(socketAddress.getAddress().getHostAddress(), socketAddress, Weight, maxConnections, null);
     }
 
-    public Backend(List<String> hostnames, InetSocketAddress socketAddress, int Weight, int maxConnections, HealthCheck healthCheck) {
+    public Backend(String hostname, InetSocketAddress socketAddress) {
+        this(hostname, socketAddress, 100, 10_000, null);
+    }
+
+    public Backend(String hostname, InetSocketAddress socketAddress, int Weight, int maxConnections, HealthCheck healthCheck) {
         ObjectUtil.checkNotNull(socketAddress, "SocketAddress");
-        ObjectUtil.checkNotNull(hostnames, "Hostnames");
+        ObjectUtil.checkNotNull(hostname, "Hostnames");
 
         if (Weight < 1) {
             throw new IllegalArgumentException("Weight cannot be less than 1 (one).");
@@ -102,8 +106,7 @@ public class Backend {
             throw new IllegalArgumentException("Maximum Connection cannot be less than 1 (one).");
         }
 
-        this.hostnames = new ArrayList<>(hostnames);
-        Collections.sort(this.hostnames);
+        this.hostname = hostname;
         this.state = State.ONLINE;
         this.socketAddress = socketAddress;
         this.Weight = Weight;
@@ -111,8 +114,8 @@ public class Backend {
         this.healthCheck = healthCheck;
     }
 
-    public List<String> getHostnames() {
-        return hostnames;
+    public String getHostname() {
+        return hostname;
     }
 
     public InetSocketAddress getSocketAddress() {

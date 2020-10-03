@@ -25,7 +25,6 @@ import com.shieldblaze.expressgateway.core.configuration.transport.TransportType
 import com.shieldblaze.expressgateway.core.netty.EventLoopFactory;
 import com.shieldblaze.expressgateway.core.server.L7FrontListener;
 import com.shieldblaze.expressgateway.core.tls.SNIHandler;
-import com.shieldblaze.expressgateway.loadbalance.l4.L4Balance;
 import com.shieldblaze.expressgateway.loadbalance.l7.L7Balance;
 import io.netty.bootstrap.ServerBootstrap;
 import io.netty.buffer.ByteBufAllocator;
@@ -41,9 +40,6 @@ import io.netty.channel.epoll.EpollServerSocketChannelConfig;
 import io.netty.channel.socket.SocketChannel;
 import io.netty.channel.socket.nio.NioServerSocketChannel;
 import io.netty.channel.unix.UnixChannelOption;
-import io.netty.handler.codec.http.HttpContentCompressor;
-import io.netty.handler.codec.http.HttpContentDecompressor;
-import io.netty.handler.codec.http.HttpServerCodec;
 import io.netty.handler.timeout.IdleStateHandler;
 import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
@@ -196,7 +192,7 @@ public final class HTTPListener extends L7FrontListener {
                 pipeline.addLast(new SNIHandler(tlsConfigurationForServer));
             }
 
-            pipeline.addLast(new ALPNHandler(l7Balance, commonConfiguration, tlsConfigurationForClient, eventLoopFactory, httpConfiguration));
+            pipeline.addLast(new ALPNHandlerServer(l7Balance, commonConfiguration, tlsConfigurationForClient, eventLoopFactory, httpConfiguration));
         }
 
         @Override
