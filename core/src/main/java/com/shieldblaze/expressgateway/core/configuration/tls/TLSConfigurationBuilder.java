@@ -229,8 +229,10 @@ public final class TLSConfigurationBuilder {
                     .trustManager(InsecureTrustManagerFactory.INSTANCE)
                     .startTls(false);
 
-            if (mutualTLS == MutualTLS.REQUIRED || mutualTLS == MutualTLS.OPTIONAL && certificateKeyPair != null) {
-                sslContextBuilder.keyManager(certificateKeyPair.getPrivateKey(), certificateKeyPair.getCertificateChain());
+            if (certificateKeyPair != null) {
+                if (mutualTLS == MutualTLS.REQUIRED || mutualTLS == MutualTLS.OPTIONAL) {
+                    sslContextBuilder.keyManager(certificateKeyPair.getPrivateKey(), certificateKeyPair.getCertificateChain());
+                }
             }
 
             if (certificateKeyPair == null) {
