@@ -21,7 +21,6 @@ import com.shieldblaze.expressgateway.loadbalance.backend.Backend;
 import io.netty.channel.Channel;
 import io.netty.channel.ChannelHandlerContext;
 import io.netty.channel.ChannelInboundHandlerAdapter;
-import io.netty.handler.codec.http.HttpHeaders;
 import io.netty.handler.codec.http.HttpMessage;
 import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
