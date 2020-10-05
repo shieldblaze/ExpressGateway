@@ -27,6 +27,8 @@ import io.netty.handler.codec.http2.HttpToHttp2ConnectionHandler;
 import io.netty.handler.codec.http2.HttpToHttp2ConnectionHandlerBuilder;
 import io.netty.handler.codec.http2.InboundHttp2ToHttpObjectAdapter;
 import io.netty.handler.codec.http2.InboundHttp2ToHttpObjectAdapterBuilder;
+import io.netty.handler.logging.LogLevel;
+import io.netty.handler.logging.LoggingHandler;
 import io.netty.handler.ssl.ApplicationProtocolNames;
 import io.netty.handler.ssl.ApplicationProtocolNegotiationHandler;
 import io.netty.util.concurrent.Promise;
@@ -40,12 +42,14 @@ final class ALPNHandlerClient extends ApplicationProtocolNegotiationHandler {
     private final HTTPConfiguration httpConfiguration;
     private final DownstreamHandler downstreamHandler;
     private final Promise<Void> promise;
+    private final boolean isUpstreamHTTP2;
 
-    ALPNHandlerClient(HTTPConfiguration httpConfiguration, DownstreamHandler downstreamHandler, Promise<Void> promise) {
+    ALPNHandlerClient(HTTPConfiguration httpConfiguration, DownstreamHandler downstreamHandler, Promise<Void> promise, boolean isUpstreamHTTP2) {
         super(ApplicationProtocolNames.HTTP_1_1);
         this.httpConfiguration = httpConfiguration;
         this.downstreamHandler = downstreamHandler;
         this.promise = promise;
+        this.isUpstreamHTTP2 = isUpstreamHTTP2;
     }
 
     @Override
@@ -64,14 +68,19 @@ final class ALPNHandlerClient extends ApplicationProtocolNegotiationHandler {
                     .connection(connection)
                     .build();
 
-            ctx.pipeline().addLast(http2Handler, downstreamHandler);
+            ctx.pipeline().addLast(http2Handler);
+            if (!isUpstreamHTTP2) {
+                ctx.pipeline().addLast(new HTTPOutboundHTTP2Adapter(false));
+            }
+            ctx.pipeline().addLast(downstreamHandler);
             promise.trySuccess(null);
         } else if (protocol.equalsIgnoreCase(ApplicationProtocolNames.HTTP_1_1)) {
-            ctx.pipeline().addLast(
-                    new HttpClientCodec(httpConfiguration.getMaxInitialLineLength(), httpConfiguration.getMaxHeaderSize(),
-                            httpConfiguration.getMaxChunkSize(), true, true),
-                    downstreamHandler
-            );
+            ctx.pipeline().addLast(new HttpClientCodec(httpConfiguration.getMaxInitialLineLength(), httpConfiguration.getMaxHeaderSize(),
+                    httpConfiguration.getMaxChunkSize(), true, true));
+            if (isUpstreamHTTP2) {
+                ctx.pipeline().addLast(new HTTPOutboundHTTP2Adapter(true));
+            }
+            ctx.pipeline().addLast(downstreamHandler);
             promise.trySuccess(null);
         } else {
             Throwable throwable = new IllegalArgumentException("Unsupported ALPN Protocol: " + protocol);

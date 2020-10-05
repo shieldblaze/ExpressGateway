@@ -80,7 +80,7 @@ final class ALPNHandlerServer extends ApplicationProtocolNegotiationHandler {
             ctx.pipeline().addLast(
                     http2Handler,
                     new HTTPServerValidator(httpConfiguration.getMaxContentLength()),
-                    new UpstreamHandler(l7Balance, commonConfiguration, tlsConfigurationForClient, eventLoopFactory, httpConfiguration)
+                    new UpstreamHandler(l7Balance, commonConfiguration, tlsConfigurationForClient, eventLoopFactory, httpConfiguration, true)
             );
         } else if (protocol.equalsIgnoreCase(ApplicationProtocolNames.HTTP_1_1)) {
             ctx.pipeline().addLast(
@@ -89,10 +89,13 @@ final class ALPNHandlerServer extends ApplicationProtocolNegotiationHandler {
                     new HttpContentCompressor(),
                     new HttpContentDecompressor(),
                     new HTTPServerValidator(httpConfiguration.getMaxContentLength()),
-                    new UpstreamHandler(l7Balance, commonConfiguration, tlsConfigurationForClient, eventLoopFactory, httpConfiguration)
+                    new UpstreamHandler(l7Balance, commonConfiguration, tlsConfigurationForClient, eventLoopFactory, httpConfiguration, false)
             );
         } else {
-            logger.error("Unsupported ALPN Protocol: {}", protocol);
+            if (logger.isErrorEnabled()) {
+                Throwable throwable = new IllegalArgumentException("Unsupported ALPN Protocol: " + protocol);
+                logger.error(throwable);
+            }
             ctx.channel().closeFuture();
         }
     }

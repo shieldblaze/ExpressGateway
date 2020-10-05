@@ -63,14 +63,16 @@ final class UpstreamHandler extends ChannelInboundHandlerAdapter {
     private final TLSConfiguration tlsConfiguration;
     private final EventLoopFactory eventLoopFactory;
     private final HTTPConfiguration httpConfiguration;
+    private final boolean isHTTP2;
 
     UpstreamHandler(L7Balance l7Balance, CommonConfiguration commonConfiguration, TLSConfiguration tlsConfiguration,
-                    EventLoopFactory eventLoopFactory, HTTPConfiguration httpConfiguration) {
+                    EventLoopFactory eventLoopFactory, HTTPConfiguration httpConfiguration, boolean isHTTP2) {
         this.l7Balance = l7Balance;
         this.commonConfiguration = commonConfiguration;
         this.tlsConfiguration = tlsConfiguration;
         this.eventLoopFactory = eventLoopFactory;
         this.httpConfiguration = httpConfiguration;
+        this.isHTTP2 = isHTTP2;
     }
 
     @Override
@@ -144,7 +146,7 @@ final class UpstreamHandler extends ChannelInboundHandlerAdapter {
                     pipeline.addLast(tlsConfiguration.getDefault().getSslContext().newHandler(byteBufAllocator,
                             backend.getSocketAddress().getHostName(), backend.getSocketAddress().getPort()));
 
-                    pipeline.addLast(new ALPNHandlerClient(httpConfiguration, new DownstreamHandler(channel, backend), ch.newPromise()));
+                    pipeline.addLast(new ALPNHandlerClient(httpConfiguration, new DownstreamHandler(channel, backend), ch.newPromise(), isHTTP2));
                 } else {
                     pipeline.addLast(new HttpClientCodec(), new DownstreamHandler(channel, backend));
                 }

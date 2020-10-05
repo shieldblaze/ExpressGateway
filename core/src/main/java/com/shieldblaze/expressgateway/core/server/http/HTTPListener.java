@@ -40,6 +40,9 @@ import io.netty.channel.epoll.EpollServerSocketChannelConfig;
 import io.netty.channel.socket.SocketChannel;
 import io.netty.channel.socket.nio.NioServerSocketChannel;
 import io.netty.channel.unix.UnixChannelOption;
+import io.netty.handler.codec.http.HttpContentCompressor;
+import io.netty.handler.codec.http.HttpContentDecompressor;
+import io.netty.handler.codec.http.HttpServerCodec;
 import io.netty.handler.timeout.IdleStateHandler;
 import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
@@ -190,9 +193,17 @@ public final class HTTPListener extends L7FrontListener {
 
             if (tlsConfigurationForServer != null) {
                 pipeline.addLast(new SNIHandler(tlsConfigurationForServer));
+                pipeline.addLast(new ALPNHandlerServer(l7Balance, commonConfiguration, tlsConfigurationForClient, eventLoopFactory, httpConfiguration));
+            } else {
+                pipeline.addLast(
+                        new HttpServerCodec(httpConfiguration.getMaxInitialLineLength(), httpConfiguration.getMaxHeaderSize(),
+                                httpConfiguration.getMaxChunkSize(), true),
+                        new HttpContentCompressor(),
+                        new HttpContentDecompressor(),
+                        new HTTPServerValidator(httpConfiguration.getMaxContentLength()),
+                        new UpstreamHandler(l7Balance, commonConfiguration, tlsConfigurationForClient, eventLoopFactory, httpConfiguration, false)
+                );
             }
-
-            pipeline.addLast(new ALPNHandlerServer(l7Balance, commonConfiguration, tlsConfigurationForClient, eventLoopFactory, httpConfiguration));
         }
 
         @Override

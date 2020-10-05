@@ -61,7 +61,7 @@ public class HttpToHttp2ConnectionHandler extends Http2ConnectionHandler {
      */
     @Override
     public void write(ChannelHandlerContext ctx, Object msg, ChannelPromise promise) {
-
+        System.out.println(msg);
         if (!(msg instanceof HttpMessage || msg instanceof HttpContent)) {
             ctx.write(msg, promise);
             return;
