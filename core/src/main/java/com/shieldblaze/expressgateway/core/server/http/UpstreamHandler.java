@@ -93,7 +93,7 @@ final class UpstreamHandler extends ChannelInboundHandlerAdapter {
             }
 
             // If Connection with Downstream is not established yet, we'll create new.
-            if (downstreamChannel == null) {
+            if (!channelActive) {
                 newChannel(backend, ctx.alloc(), ctx.channel());
             }
 

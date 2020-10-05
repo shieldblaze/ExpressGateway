@@ -223,14 +223,13 @@ public final class TLSConfigurationBuilder {
             }
         } else {
             SslContextBuilder sslContextBuilder = SslContextBuilder.forClient()
-//                    .sslProvider(OpenSsl.isAvailable() ? SslProvider.OPENSSL : SslProvider.JDK)
-//                    .protocols(Protocol.getProtocols(protocols))
-//                    .enableOcsp(certificateKeyPair != null && certificateKeyPair.useOCSP())
-//                    .clientAuth(mutualTLS.getClientAuth())
+                    .sslProvider(OpenSsl.isAvailable() ? SslProvider.OPENSSL : SslProvider.JDK)
+                    .protocols(Protocol.getProtocols(protocols))
+                    .clientAuth(mutualTLS.getClientAuth())
                     .trustManager(InsecureTrustManagerFactory.INSTANCE)
                     .startTls(false);
 
-            if (mutualTLS == MutualTLS.REQUIRED || mutualTLS == MutualTLS.OPTIONAL) {
+            if (mutualTLS == MutualTLS.REQUIRED || mutualTLS == MutualTLS.OPTIONAL && certificateKeyPair != null) {
                 sslContextBuilder.keyManager(certificateKeyPair.getPrivateKey(), certificateKeyPair.getCertificateChain());
             }
 
