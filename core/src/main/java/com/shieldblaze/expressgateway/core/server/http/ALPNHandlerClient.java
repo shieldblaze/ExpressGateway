@@ -3,9 +3,13 @@ package com.shieldblaze.expressgateway.core.server.http;
 import com.shieldblaze.expressgateway.core.configuration.http.HTTPConfiguration;
 import io.netty.channel.ChannelHandlerContext;
 import io.netty.handler.codec.http.HttpClientCodec;
-import io.netty.handler.codec.http2.Http2FrameCodecBuilder;
-import io.netty.handler.logging.LogLevel;
-import io.netty.handler.logging.LoggingHandler;
+import io.netty.handler.codec.http2.DefaultHttp2Connection;
+import io.netty.handler.codec.http2.Http2Connection;
+import io.netty.handler.codec.http2.Http2FrameListenerDecorator;
+import io.netty.handler.codec.http2.HttpToHttp2ConnectionHandler;
+import io.netty.handler.codec.http2.HttpToHttp2ConnectionHandlerBuilder;
+import io.netty.handler.codec.http2.InboundHttp2ToHttpObjectAdapter;
+import io.netty.handler.codec.http2.InboundHttp2ToHttpObjectAdapterBuilder;
 import io.netty.handler.ssl.ApplicationProtocolNames;
 import io.netty.handler.ssl.ApplicationProtocolNegotiationHandler;
 import io.netty.util.concurrent.Promise;
@@ -30,16 +34,20 @@ final class ALPNHandlerClient extends ApplicationProtocolNegotiationHandler {
     @Override
     protected void configurePipeline(ChannelHandlerContext ctx, String protocol) {
         if (protocol.equalsIgnoreCase(ApplicationProtocolNames.HTTP_2)) {
-            ctx.pipeline().addLast(
-                    Http2FrameCodecBuilder.forClient()
-                            .autoAckPingFrame(true)
-                            .autoAckSettingsFrame(true)
-                            .validateHeaders(true)
-                            .build(),
-                    new LoggingHandler(LogLevel.DEBUG),
-                    new HTTP2ClientTranslationHandler(),
-                    downstreamHandler
-            );
+            Http2Connection connection = new DefaultHttp2Connection(false);
+
+            InboundHttp2ToHttpObjectAdapter listener = new InboundHttp2ToHttpObjectAdapterBuilder(connection)
+                    .propagateSettings(false)
+                    .validateHttpHeaders(true)
+                    .maxContentLength((int) httpConfiguration.getMaxContentLength())
+                    .build();
+
+            HttpToHttp2ConnectionHandler http2Handler = new HttpToHttp2ConnectionHandlerBuilder()
+                    .frameListener(new Http2FrameListenerDecorator(listener))
+                    .connection(connection)
+                    .build();
+
+            ctx.pipeline().addLast(http2Handler, downstreamHandler);
             promise.trySuccess(null);
         } else if (protocol.equalsIgnoreCase(ApplicationProtocolNames.HTTP_1_1)) {
             ctx.pipeline().addLast(
@@ -49,12 +57,12 @@ final class ALPNHandlerClient extends ApplicationProtocolNegotiationHandler {
             );
             promise.trySuccess(null);
         } else {
-            logger.error("Unsupported ALPN Protocol: {}", protocol);
+            Throwable throwable = new IllegalArgumentException("Unsupported ALPN Protocol: " + protocol);
+            logger.error(throwable);
+            promise.tryFailure(throwable);
             ctx.channel().closeFuture();
-            promise.tryFailure(new IllegalArgumentException("Unsupported Protocol: " +  protocol));
         }
     }
-
 
     Promise<Void> promise() {
         return promise;
@@ -62,6 +70,6 @@ final class ALPNHandlerClient extends ApplicationProtocolNegotiationHandler {
 
     @Override
     public void exceptionCaught(ChannelHandlerContext ctx, Throwable cause) {
-//        logger.error("Caught Error at ALPN Client Handler", cause);
+        logger.error("Caught Error at ALPN Client Handler", cause);
     }
 }

@@ -17,33 +17,54 @@
  */
 package com.shieldblaze.expressgateway.core.server.http;
 
+import com.shieldblaze.expressgateway.loadbalance.backend.Backend;
 import io.netty.channel.Channel;
 import io.netty.channel.ChannelHandlerContext;
 import io.netty.channel.ChannelInboundHandlerAdapter;
+import io.netty.handler.codec.http.HttpHeaders;
+import io.netty.handler.codec.http.HttpMessage;
 import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
+
+import java.net.InetSocketAddress;
 
 final class DownstreamHandler extends ChannelInboundHandlerAdapter {
 
     private static final Logger logger = LogManager.getLogger(DownstreamHandler.class);
 
-    private final Channel clientChannel;
-    DownstreamHandler(Channel clientChannel) {
-        this.clientChannel = clientChannel;
+    private final Channel upstream;
+    private final InetSocketAddress upstreamAddress;
+    private final Backend backend;
+
+    DownstreamHandler(Channel upstream, Backend backend) {
+        this.upstream = upstream;
+        this.upstreamAddress = (InetSocketAddress) upstream.remoteAddress();
+        this.backend = backend;
     }
 
     @Override
     public void channelRead(ChannelHandlerContext ctx, Object msg) {
-        clientChannel.writeAndFlush(msg);
+        System.out.println(msg);
+        if (msg instanceof HttpMessage) {
+            HeaderUtils.setGenericHeaders(((HttpMessage) msg).headers());
+        }
+        upstream.writeAndFlush(msg);
     }
 
     @Override
     public void channelInactive(ChannelHandlerContext ctx) {
+        if (logger.isInfoEnabled()) {
+            logger.info("Closing Upstream {} and Downstream {} Channel",
+                    upstreamAddress.getAddress().getHostAddress() + ":" + upstreamAddress.getPort(),
+                    backend.getSocketAddress().getAddress().getHostAddress() + ":" + backend.getSocketAddress().getPort());
+        }
+
         if (ctx.channel().isActive()) {
             ctx.close();
         }
-        if (clientChannel.isActive()) {
-            clientChannel.close();
+
+        if (upstream.isActive()) {
+            upstream.close();
         }
     }
 

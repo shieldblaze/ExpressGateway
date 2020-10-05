@@ -39,8 +39,6 @@ import io.netty.handler.codec.http.HttpContent;
 import io.netty.handler.codec.http.HttpHeaderNames;
 import io.netty.handler.codec.http.HttpRequest;
 import io.netty.handler.codec.http.HttpUtil;
-import io.netty.handler.logging.LogLevel;
-import io.netty.handler.logging.LoggingHandler;
 import io.netty.handler.timeout.IdleStateHandler;
 import io.netty.util.ReferenceCountUtil;
 import org.apache.logging.log4j.LogManager;
@@ -49,9 +47,9 @@ import org.apache.logging.log4j.Logger;
 import java.net.InetSocketAddress;
 import java.util.concurrent.ConcurrentLinkedQueue;
 
-final class Handler extends ChannelInboundHandlerAdapter {
+final class UpstreamHandler extends ChannelInboundHandlerAdapter {
 
-    private static final Logger logger = LogManager.getLogger(Handler.class);
+    private static final Logger logger = LogManager.getLogger(UpstreamHandler.class);
 
     private ConcurrentLinkedQueue<Object> backlog = new ConcurrentLinkedQueue<>();
 
@@ -65,16 +63,14 @@ final class Handler extends ChannelInboundHandlerAdapter {
     private final TLSConfiguration tlsConfiguration;
     private final EventLoopFactory eventLoopFactory;
     private final HTTPConfiguration httpConfiguration;
-    private final boolean isHTTP2;
 
-    public Handler(L7Balance l7Balance, CommonConfiguration commonConfiguration, TLSConfiguration tlsConfiguration,
-                   EventLoopFactory eventLoopFactory, HTTPConfiguration httpConfiguration, boolean isHTTP2) {
+    UpstreamHandler(L7Balance l7Balance, CommonConfiguration commonConfiguration, TLSConfiguration tlsConfiguration,
+                    EventLoopFactory eventLoopFactory, HTTPConfiguration httpConfiguration) {
         this.l7Balance = l7Balance;
         this.commonConfiguration = commonConfiguration;
         this.tlsConfiguration = tlsConfiguration;
         this.eventLoopFactory = eventLoopFactory;
         this.httpConfiguration = httpConfiguration;
-        this.isHTTP2 = isHTTP2;
     }
 
     @Override
@@ -121,7 +117,7 @@ final class Handler extends ChannelInboundHandlerAdapter {
                 return;
             }
 
-            if (channelActive && downstreamChannel != null) {
+            if (channelActive) {
                 backend.incBytesWritten(content.content().readableBytes());
                 downstreamChannel.writeAndFlush(content).addListener(ChannelFutureListener.CLOSE_ON_FAILURE);
                 return;
@@ -148,9 +144,9 @@ final class Handler extends ChannelInboundHandlerAdapter {
                     pipeline.addLast(tlsConfiguration.getDefault().getSslContext().newHandler(byteBufAllocator,
                             backend.getSocketAddress().getHostName(), backend.getSocketAddress().getPort()));
 
-                    pipeline.addLast(new ALPNHandlerClient(httpConfiguration, new DownstreamHandler(channel), ch.newPromise()));
+                    pipeline.addLast(new ALPNHandlerClient(httpConfiguration, new DownstreamHandler(channel, backend), ch.newPromise()));
                 } else {
-                    pipeline.addLast(new HttpClientCodec(), new DownstreamHandler(channel));
+                    pipeline.addLast(new HttpClientCodec(), new DownstreamHandler(channel, backend));
                 }
             }
         });
@@ -158,22 +154,23 @@ final class Handler extends ChannelInboundHandlerAdapter {
         ChannelFuture channelFuture = bootstrap.connect(backend.getSocketAddress());
         downstreamChannel = channelFuture.channel();
 
-        channelFuture.addListener((ChannelFutureListener) future -> {
-            if (future.isSuccess()) {
+        channelFuture.addListener((ChannelFutureListener) _channelFuture -> {
+            if (_channelFuture.isSuccess()) {
 
-                downstreamChannel.pipeline().get(ALPNHandlerClient.class).promise().addListener((ChannelFutureListener) _future -> {
-                    if (future.isSuccess()) {
-                        backlog.forEach(httpObject -> downstreamChannel.writeAndFlush(httpObject).addListener((ChannelFutureListener) f -> {
-                            if (!f.isSuccess()) {
-                                if (httpObject instanceof HttpContent && ((HttpContent) httpObject).refCnt() > 0) {
-                                    ReferenceCountUtil.release(httpObject);
-                                }
-                                if (channel.isActive()) {
-                                    channel.close();
-                                }
-                            }
-                            backlog.remove(httpObject);
-                        }));
+                downstreamChannel.pipeline().get(ALPNHandlerClient.class).promise().addListener((ChannelFutureListener) alpnFuture -> {
+                    if (alpnFuture.isSuccess()) {
+                        backlog.forEach(httpObject -> downstreamChannel.writeAndFlush(httpObject)
+                                .addListener((ChannelFutureListener) writeFuture -> {
+                                    if (!writeFuture.isSuccess()) {
+                                        if (httpObject instanceof HttpContent && ((HttpContent) httpObject).refCnt() > 0) {
+                                            ReferenceCountUtil.release(httpObject);
+                                        }
+                                        if (channel.isActive()) {
+                                            channel.close();
+                                        }
+                                    }
+                                    backlog.remove(httpObject);
+                                }));
 
                         channelActive = true;
                         backlog = null;
@@ -218,6 +215,7 @@ final class Handler extends ChannelInboundHandlerAdapter {
                     ReferenceCountUtil.release(httpObject);
                 }
             }
+            backlog = null;
         }
     }
 

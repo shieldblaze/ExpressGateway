@@ -26,9 +26,13 @@ import io.netty.channel.ChannelHandlerContext;
 import io.netty.handler.codec.http.HttpContentCompressor;
 import io.netty.handler.codec.http.HttpContentDecompressor;
 import io.netty.handler.codec.http.HttpServerCodec;
-import io.netty.handler.codec.http2.Http2FrameCodecBuilder;
-import io.netty.handler.logging.LogLevel;
-import io.netty.handler.logging.LoggingHandler;
+import io.netty.handler.codec.http2.DefaultHttp2Connection;
+import io.netty.handler.codec.http2.Http2Connection;
+import io.netty.handler.codec.http2.Http2FrameListenerDecorator;
+import io.netty.handler.codec.http2.HttpToHttp2ConnectionHandler;
+import io.netty.handler.codec.http2.HttpToHttp2ConnectionHandlerBuilder;
+import io.netty.handler.codec.http2.InboundHttp2ToHttpObjectAdapter;
+import io.netty.handler.codec.http2.InboundHttp2ToHttpObjectAdapterBuilder;
 import io.netty.handler.ssl.ApplicationProtocolNames;
 import io.netty.handler.ssl.ApplicationProtocolNegotiationHandler;
 import org.apache.logging.log4j.LogManager;
@@ -48,7 +52,7 @@ final class ALPNHandlerServer extends ApplicationProtocolNegotiationHandler {
      * Creates a new instance with the specified fallback protocol name.
      */
     ALPNHandlerServer(L7Balance l7Balance, CommonConfiguration commonConfiguration, TLSConfiguration tlsConfiguration,
-                                EventLoopFactory eventLoopFactory, HTTPConfiguration httpConfiguration) {
+                      EventLoopFactory eventLoopFactory, HTTPConfiguration httpConfiguration) {
         super(ApplicationProtocolNames.HTTP_1_1);
         this.commonConfiguration = commonConfiguration;
         this.eventLoopFactory = eventLoopFactory;
@@ -60,15 +64,23 @@ final class ALPNHandlerServer extends ApplicationProtocolNegotiationHandler {
     @Override
     protected void configurePipeline(ChannelHandlerContext ctx, String protocol) {
         if (protocol.equalsIgnoreCase(ApplicationProtocolNames.HTTP_2)) {
+            Http2Connection connection = new DefaultHttp2Connection(true);
+
+            InboundHttp2ToHttpObjectAdapter listener = new InboundHttp2ToHttpObjectAdapterBuilder(connection)
+                    .propagateSettings(false)
+                    .validateHttpHeaders(true)
+                    .maxContentLength((int) httpConfiguration.getMaxContentLength())
+                    .build();
+
+            HttpToHttp2ConnectionHandler http2Handler = new HttpToHttp2ConnectionHandlerBuilder()
+                    .frameListener(new Http2FrameListenerDecorator(listener))
+                    .connection(connection)
+                    .build();
+
             ctx.pipeline().addLast(
-                    Http2FrameCodecBuilder.forServer()
-                            .autoAckSettingsFrame(true)
-                            .autoAckPingFrame(true)
-                            .validateHeaders(true)
-                            .build(),
-                    new LoggingHandler(LogLevel.DEBUG),
-                    new HTTP2ServerTranslationHandler(),
-                    new Handler(l7Balance, commonConfiguration, tlsConfigurationForClient, eventLoopFactory, httpConfiguration, true)
+                    http2Handler,
+                    new HTTPServerValidator(httpConfiguration.getMaxContentLength()),
+                    new UpstreamHandler(l7Balance, commonConfiguration, tlsConfigurationForClient, eventLoopFactory, httpConfiguration)
             );
         } else if (protocol.equalsIgnoreCase(ApplicationProtocolNames.HTTP_1_1)) {
             ctx.pipeline().addLast(
@@ -77,7 +89,7 @@ final class ALPNHandlerServer extends ApplicationProtocolNegotiationHandler {
                     new HttpContentCompressor(),
                     new HttpContentDecompressor(),
                     new HTTPServerValidator(httpConfiguration.getMaxContentLength()),
-                    new Handler(l7Balance, commonConfiguration, tlsConfigurationForClient, eventLoopFactory, httpConfiguration, false)
+                    new UpstreamHandler(l7Balance, commonConfiguration, tlsConfigurationForClient, eventLoopFactory, httpConfiguration)
             );
         } else {
             logger.error("Unsupported ALPN Protocol: {}", protocol);
