@@ -37,50 +37,41 @@ final class UDPHealthCheckTest {
 
     @Test
     void check() throws InterruptedException {
-        UDPServer udpServer = new UDPServer(true);
+        UDPServer udpServer = new UDPServer(true, 12345);
         udpServer.start();
         Thread.sleep(2500L); // Wait for UDP Server to Start
 
-        UDPHealthCheck udpHealthCheck = new UDPHealthCheck( new InetSocketAddress("127.0.0.1", 9111), 5);
+        UDPHealthCheck udpHealthCheck = new UDPHealthCheck( new InetSocketAddress("127.0.0.1", 12345), 5);
         udpHealthCheck.check();
 
         assertEquals(Health.GOOD, udpHealthCheck.health());
-
-        // Block till UDP server is stopped
-        while (!udpServer.isStopped) {
-            Thread.sleep(100L);
-        }
     }
 
     @Test
     void checkPong() throws InterruptedException {
-        UDPServer udpServer = new UDPServer(false);
+        UDPServer udpServer = new UDPServer(false, 12346);
         udpServer.start();
         Thread.sleep(2500L); // Wait for UDP Server to Start
 
-        UDPHealthCheck udpHealthCheck = new UDPHealthCheck( new InetSocketAddress("127.0.0.1", 9111), 5);
+        UDPHealthCheck udpHealthCheck = new UDPHealthCheck(new InetSocketAddress("127.0.0.1", 12346), 5);
         udpHealthCheck.check();
 
         assertEquals(Health.GOOD, udpHealthCheck.health());
-
-        // Block till UDP server is stopped
-        while (!udpServer.isStopped) {
-            Thread.sleep(100L);
-        }
     }
 
     private static final class UDPServer extends Thread {
 
         private final boolean ping;
-        private boolean isStopped;
+        private final int port;
 
-        private UDPServer(boolean ping) {
+        private UDPServer(boolean ping, int port) {
             this.ping = ping;
+            this.port = port;
         }
 
         @Override
         public void run() {
-            try (DatagramSocket datagramSocket = new DatagramSocket(9111, InetAddress.getByName("127.0.0.1"))) {
+            try (DatagramSocket datagramSocket = new DatagramSocket(port, InetAddress.getByName("127.0.0.1"))) {
                 byte[] bytes = new byte[2048];
                 DatagramPacket datagramPacket = new DatagramPacket(bytes, bytes.length);
                 datagramSocket.receive(datagramPacket);
@@ -100,8 +91,6 @@ final class UDPHealthCheckTest {
                 Thread.sleep(2500L);
             } catch (Exception ex) {
                 ex.printStackTrace();
-            } finally {
-                isStopped = true;
             }
         }
     }
