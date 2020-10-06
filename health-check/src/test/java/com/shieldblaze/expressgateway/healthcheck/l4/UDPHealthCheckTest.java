@@ -86,10 +86,12 @@ final class UDPHealthCheckTest {
                     datagramPacket = new DatagramPacket(PONG, 4, inetAddress, port);
                 }
 
-                datagramSocket.send(datagramPacket);
-                Thread.sleep(2500L);
+                for (int i = 0; i < 10; i++) {
+                    datagramSocket.send(datagramPacket);
+                    Thread.sleep(100L);
+                }
             } catch (Exception ex) {
-                ex.printStackTrace();
+                // Ignore
             }
         }
     }
