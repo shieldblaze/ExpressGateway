@@ -45,6 +45,11 @@ final class UDPHealthCheckTest {
         udpHealthCheck.check();
 
         assertEquals(Health.GOOD, udpHealthCheck.health());
+
+        // Block till UDP server is stopped
+        while (!udpServer.isStopped) {
+            Thread.sleep(100L);
+        }
     }
 
     @Test
@@ -57,11 +62,17 @@ final class UDPHealthCheckTest {
         udpHealthCheck.check();
 
         assertEquals(Health.GOOD, udpHealthCheck.health());
+
+        // Block till UDP server is stopped
+        while (!udpServer.isStopped) {
+            Thread.sleep(100L);
+        }
     }
 
     private static final class UDPServer extends Thread {
 
         private final boolean ping;
+        private boolean isStopped;
 
         private UDPServer(boolean ping) {
             this.ping = ping;
@@ -89,6 +100,8 @@ final class UDPHealthCheckTest {
                 Thread.sleep(2500L);
             } catch (Exception ex) {
                 ex.printStackTrace();
+            } finally {
+                isStopped = true;
             }
         }
     }
