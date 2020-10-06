@@ -23,6 +23,7 @@ import io.netty.handler.ssl.OpenSsl;
 import io.netty.handler.ssl.SslContext;
 import io.netty.handler.ssl.SslContextBuilder;
 import io.netty.handler.ssl.SslProvider;
+import io.netty.handler.ssl.util.InsecureTrustManagerFactory;
 import io.netty.util.internal.ObjectUtil;
 
 import javax.net.ssl.SSLException;
@@ -163,8 +164,8 @@ public final class TLSConfigurationBuilder {
      * Build {@link TLSConfiguration}
      *
      * @return {@link TLSConfiguration} Instance
-     * @throws SSLException If there is an error while building {@link SslContext}
-     * @throws NullPointerException If a required value if {@code null}
+     * @throws SSLException             If there is an error while building {@link SslContext}
+     * @throws NullPointerException     If a required value if {@code null}
      * @throws IllegalArgumentException If a required value is invalid
      */
     public TLSConfiguration build() throws SSLException {
@@ -224,12 +225,27 @@ public final class TLSConfigurationBuilder {
             SslContextBuilder sslContextBuilder = SslContextBuilder.forClient()
                     .sslProvider(OpenSsl.isAvailable() ? SslProvider.OPENSSL : SslProvider.JDK)
                     .protocols(Protocol.getProtocols(protocols))
-                    .enableOcsp(certificateKeyPair.useOCSP())
                     .clientAuth(mutualTLS.getClientAuth())
-                    .startTls(useStartTLS);
+                    .trustManager(InsecureTrustManagerFactory.INSTANCE)
+                    .startTls(false);
 
-            if (mutualTLS == MutualTLS.REQUIRED || mutualTLS == MutualTLS.OPTIONAL) {
-                sslContextBuilder.keyManager(certificateKeyPair.getPrivateKey(), certificateKeyPair.getCertificateChain());
+            if (certificateKeyPair != null) {
+                if (mutualTLS == MutualTLS.REQUIRED || mutualTLS == MutualTLS.OPTIONAL) {
+                    sslContextBuilder.keyManager(certificateKeyPair.getPrivateKey(), certificateKeyPair.getCertificateChain());
+                }
+            }
+
+            if (certificateKeyPair == null) {
+                certificateKeyPair = new CertificateKeyPair();
+            }
+
+            if (useALPN) {
+                sslContextBuilder.applicationProtocolConfig(new ApplicationProtocolConfig(
+                        ApplicationProtocolConfig.Protocol.ALPN,
+                        ApplicationProtocolConfig.SelectorFailureBehavior.NO_ADVERTISE,
+                        ApplicationProtocolConfig.SelectedListenerFailureBehavior.ACCEPT,
+                        ApplicationProtocolNames.HTTP_2,
+                        ApplicationProtocolNames.HTTP_1_1));
             }
 
             certificateKeyPair.setSslContext(sslContextBuilder.build());

@@ -20,8 +20,7 @@ package com.shieldblaze.expressgateway.loadbalance.l4;
 import com.google.common.cache.Cache;
 import com.google.common.cache.CacheBuilder;
 import com.shieldblaze.expressgateway.loadbalance.backend.Backend;
-import com.shieldblaze.expressgateway.loadbalance.l4.sessionpersistence.NOOPSessionPersistence;
-import com.shieldblaze.expressgateway.loadbalance.l4.sessionpersistence.SessionPersistence;
+import com.shieldblaze.expressgateway.loadbalance.sessionpersistence.NOOPSessionPersistence;
 import io.netty.util.NetUtil;
 
 import java.math.BigInteger;

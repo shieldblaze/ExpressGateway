@@ -18,7 +18,7 @@
 package com.shieldblaze.expressgateway.loadbalance.l4;
 
 import com.shieldblaze.expressgateway.loadbalance.backend.Backend;
-import com.shieldblaze.expressgateway.loadbalance.l4.sessionpersistence.SessionPersistence;
+import com.shieldblaze.expressgateway.loadbalance.sessionpersistence.SessionPersistence;
 import io.netty.util.internal.ObjectUtil;
 
 import java.net.InetSocketAddress;

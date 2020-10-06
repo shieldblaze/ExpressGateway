@@ -18,8 +18,9 @@
 package com.shieldblaze.expressgateway.core.server;
 
 import com.shieldblaze.expressgateway.core.configuration.CommonConfiguration;
+import com.shieldblaze.expressgateway.core.configuration.http.HTTPConfiguration;
 import com.shieldblaze.expressgateway.core.netty.EventLoopFactory;
-import com.shieldblaze.expressgateway.loadbalance.l4.L4Balance;
+import com.shieldblaze.expressgateway.loadbalance.l7.L7Balance;
 import io.netty.buffer.ByteBuf;
 import io.netty.buffer.ByteBufAllocator;
 import io.netty.channel.ChannelFuture;
@@ -34,27 +35,28 @@ import java.util.Collections;
 import java.util.List;
 import java.util.concurrent.atomic.AtomicBoolean;
 
-public abstract class FrontListener {
-    private static final Logger logger = LogManager.getLogger(FrontListener.class);
+public abstract class L7FrontListener {
+    private static final Logger logger = LogManager.getLogger(L4FrontListener.class);
 
     protected final InetSocketAddress bindAddress;
     protected final List<ChannelFuture> channelFutureList = Collections.synchronizedList(new ArrayList<>());
     private final AtomicBoolean started = new AtomicBoolean(false);
 
-    public FrontListener(InetSocketAddress bindAddress) {
+    public L7FrontListener(InetSocketAddress bindAddress) {
         this.bindAddress = ObjectUtil.checkNotNull(bindAddress, "Bind Address");
     }
 
     /**
-     * Start a {@link FrontListener}
+     * Start a {@link L7FrontListener}
      *
      * @param commonConfiguration {@link CommonConfiguration} to be applied
      * @param eventLoopFactory    {@link EventLoopFactory} for {@link EventLoopGroup}
      * @param byteBufAllocator    {@link ByteBufAllocator} for {@link ByteBuf} allocation
-     * @param l4Balance           {@link L4Balance} for load-balance
+     * @param httpConfiguration   {@link HTTPConfiguration} to be applied
+     * @param l7Balance           {@link L7Balance} for load-balance
      */
     public abstract void start(CommonConfiguration commonConfiguration, EventLoopFactory eventLoopFactory,
-                               ByteBufAllocator byteBufAllocator, L4Balance l4Balance);
+                               ByteBufAllocator byteBufAllocator, HTTPConfiguration httpConfiguration, L7Balance l7Balance);
 
     public boolean waitForStart() {
         for (ChannelFuture channelFuture : channelFutureList) {

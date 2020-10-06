@@ -22,7 +22,7 @@ import com.shieldblaze.expressgateway.core.configuration.transport.TransportType
 import com.shieldblaze.expressgateway.loadbalance.l4.L4Balance;
 import com.shieldblaze.expressgateway.core.netty.BootstrapFactory;
 import com.shieldblaze.expressgateway.core.netty.EventLoopFactory;
-import com.shieldblaze.expressgateway.core.server.FrontListener;
+import com.shieldblaze.expressgateway.core.server.L4FrontListener;
 import io.netty.bootstrap.Bootstrap;
 import io.netty.buffer.ByteBufAllocator;
 import io.netty.channel.ChannelFuture;
@@ -35,7 +35,7 @@ import java.net.InetSocketAddress;
 /**
  * UDP Listener for handling incoming requests.
  */
-public class UDPListener extends FrontListener {
+public final class UDPListener extends L4FrontListener {
     private static final Logger logger = LogManager.getLogger(UDPListener.class);
 
     /**

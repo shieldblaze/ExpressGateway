@@ -33,8 +33,6 @@ import io.netty.channel.ChannelInboundHandlerAdapter;
 import io.netty.channel.ChannelInitializer;
 import io.netty.channel.socket.SocketChannel;
 import io.netty.handler.timeout.IdleStateHandler;
-import io.netty.util.ReferenceCountUtil;
-import io.netty.util.ReferenceCounted;
 import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
 
@@ -143,13 +141,23 @@ final class UpstreamHandler extends ChannelInboundHandlerAdapter {
     public void channelInactive(ChannelHandlerContext ctx) {
         if (logger.isInfoEnabled()) {
             InetSocketAddress socketAddress = ((InetSocketAddress) ctx.channel().remoteAddress());
-            logger.info("Closing Upstream {} and Downstream {} Channel",
-                    socketAddress.getAddress().getHostAddress() + ":" + socketAddress.getPort(),
-                    backend.getSocketAddress().getAddress().getHostAddress() + ":" + backend.getSocketAddress().getPort());
+            if (backend == null) {
+                logger.info("Closing Upstream {}",
+                        socketAddress.getAddress().getHostAddress() + ":" + socketAddress.getPort());
+            } else {
+                logger.info("Closing Upstream {} and Downstream {} Channel",
+                        socketAddress.getAddress().getHostAddress() + ":" + socketAddress.getPort(),
+                        backend.getSocketAddress().getAddress().getHostAddress() + ":" + backend.getSocketAddress().getPort());
+            }
         }
 
-        ctx.channel().close();
-        downstreamChannel.close();
+        if (ctx.channel().isActive()) {
+            ctx.channel().close();
+        }
+
+        if (downstreamChannel.isActive()) {
+            downstreamChannel.close();
+        }
 
         if (backlog != null) {
             for (ByteBuf byteBuf : backlog) {

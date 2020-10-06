@@ -22,7 +22,8 @@ import com.shieldblaze.expressgateway.core.configuration.tls.TLSConfiguration;
 import com.shieldblaze.expressgateway.core.configuration.transport.TransportConfiguration;
 import com.shieldblaze.expressgateway.core.configuration.transport.TransportType;
 import com.shieldblaze.expressgateway.core.netty.EventLoopFactory;
-import com.shieldblaze.expressgateway.core.server.FrontListener;
+import com.shieldblaze.expressgateway.core.server.L4FrontListener;
+import com.shieldblaze.expressgateway.core.tls.SNIHandler;
 import com.shieldblaze.expressgateway.loadbalance.l4.L4Balance;
 import io.netty.bootstrap.ServerBootstrap;
 import io.netty.buffer.ByteBufAllocator;
@@ -46,7 +47,7 @@ import java.net.InetSocketAddress;
 /**
  * TCP Listener for handling incoming requests.
  */
-public class TCPListener extends FrontListener {
+public final class TCPListener extends L4FrontListener {
 
     /**
      * Logger
@@ -75,7 +76,7 @@ public class TCPListener extends FrontListener {
     /**
      * Create {@link TCPListener} Instance with TLS Server Support (a.k.a TLS Offload)
      *
-     * @param bindAddress {@link InetSocketAddress} on which {@link TCPListener} will bind and listen.
+     * @param bindAddress               {@link InetSocketAddress} on which {@link TCPListener} will bind and listen.
      * @param tlsConfigurationForServer {@link TLSConfiguration} for TLS Server
      */
     public TCPListener(InetSocketAddress bindAddress, TLSConfiguration tlsConfigurationForServer) {
@@ -85,7 +86,7 @@ public class TCPListener extends FrontListener {
     /**
      * Create {@link TCPListener} Instance with TLS Server and Client Support (a.k.a TLS Offload and Reload)
      *
-     * @param bindAddress {@link InetSocketAddress} on which {@link TCPListener} will bind and listen.
+     * @param bindAddress               {@link InetSocketAddress} on which {@link TCPListener} will bind and listen.
      * @param tlsConfigurationForServer {@link TLSConfiguration} for TLS Server
      * @param tlsConfigurationForClient {@link TLSConfiguration} for TLS Client
      */
