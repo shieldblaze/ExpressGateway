@@ -824,7 +824,7 @@ public final class ReadOnlyHttp2Headers implements Http2Headers {
         }
 
         private void calculateNext() {
-            if (current != null) {
+            if (current == null) {
                 return;
             }
             for (; i < current.length; i += 2) {
