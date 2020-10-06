@@ -208,7 +208,7 @@ public final class Http2CodecUtil {
      * Writes an HTTP/2 frame header to the output buffer.
      */
     public static void writeFrameHeader(ByteBuf out, int payloadLength, byte type,
-            Http2Flags flags, int streamId) {
+                                        Http2Flags flags, int streamId) {
         out.ensureWritable(FRAME_HEADER_LENGTH + payloadLength);
         writeFrameHeaderInternal(out, payloadLength, type, flags, streamId);
     }

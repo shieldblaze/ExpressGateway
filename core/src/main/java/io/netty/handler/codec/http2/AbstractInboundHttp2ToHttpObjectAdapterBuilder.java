@@ -32,7 +32,7 @@ public abstract class AbstractInboundHttp2ToHttpObjectAdapterBuilder<
     private boolean propagateSettings;
 
     /**
-     * Creates a new {@link InboundHttp2ToHttpObjectAdapter} builder for the specified {@link Http2Connection}.
+     * Creates a new {@link io.netty.handler.codec.http2.InboundHttp2ToHttpObjectAdapter} builder for the specified {@link Http2Connection}.
      *
      * @param connection the object which will provide connection notification events
      *                   for the current connection
@@ -66,7 +66,7 @@ public abstract class AbstractInboundHttp2ToHttpObjectAdapterBuilder<
      * @param maxContentLength the maximum length of the message content. If the length of the message content
      *                         exceeds this value, a {@link TooLongFrameException} will be raised
      * @return {@link AbstractInboundHttp2ToHttpObjectAdapterBuilder} the builder for the
-     * {@link InboundHttp2ToHttpObjectAdapter}
+     * {@link io.netty.handler.codec.http2.InboundHttp2ToHttpObjectAdapter}
      */
     protected B maxContentLength(int maxContentLength) {
         this.maxContentLength = maxContentLength;
@@ -88,7 +88,7 @@ public abstract class AbstractInboundHttp2ToHttpObjectAdapterBuilder<
      *                 <li>{@code false} not to validate HTTP headers in the http-codec</li>
      *                 </ul>
      * @return {@link AbstractInboundHttp2ToHttpObjectAdapterBuilder} the builder for the
-     * {@link InboundHttp2ToHttpObjectAdapter}
+     * {@link io.netty.handler.codec.http2.InboundHttp2ToHttpObjectAdapter}
      */
     protected B validateHttpHeaders(boolean validate) {
         validateHttpHeaders = validate;
@@ -108,7 +108,7 @@ public abstract class AbstractInboundHttp2ToHttpObjectAdapterBuilder<
      * @param propagate if {@code true} read settings will be passed along the pipeline. This can be useful
      *                  to clients that need hold off sending data until they have received the settings.
      * @return {@link AbstractInboundHttp2ToHttpObjectAdapterBuilder} the builder for the
-     * {@link InboundHttp2ToHttpObjectAdapter}
+     * {@link io.netty.handler.codec.http2.InboundHttp2ToHttpObjectAdapter}
      */
     protected B propagateSettings(boolean propagate) {
         propagateSettings = propagate;
@@ -116,7 +116,7 @@ public abstract class AbstractInboundHttp2ToHttpObjectAdapterBuilder<
     }
 
     /**
-     * Builds/creates a new {@link InboundHttp2ToHttpObjectAdapter} instance using this builder's current settings.
+     * Builds/creates a new {@link io.netty.handler.codec.http2.InboundHttp2ToHttpObjectAdapter} instance using this builder's current settings.
      */
     protected T build() {
         final T instance;

@@ -16,7 +16,6 @@
 
 package io.netty.handler.codec.http2;
 
-import io.netty.handler.codec.http2.Http2HeadersEncoder.SensitivityDetector;
 import io.netty.util.internal.UnstableApi;
 
 /**
@@ -58,7 +57,7 @@ public final class HttpToHttp2ConnectionHandlerBuilder extends
 
     @Override
     public HttpToHttp2ConnectionHandlerBuilder codec(Http2ConnectionDecoder decoder,
-                                                        Http2ConnectionEncoder encoder) {
+                                                     Http2ConnectionEncoder encoder) {
         return super.codec(decoder, encoder);
     }
 
