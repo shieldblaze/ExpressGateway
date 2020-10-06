@@ -826,7 +826,7 @@ public final class ReadOnlyHttp2Headers implements Http2Headers {
                 if (roName.hashCode() == nameHash && roName.contentEqualsIgnoreCase(name)) {
                     try {
                         next = current[i + 1];
-                    } catch (ArrayIndexOutOfBoundsException ex) {
+                    } catch (Exception ex) {
                         // Handle Array out of bound properly
                         PlatformDependent.throwException(ex);
                         return;
