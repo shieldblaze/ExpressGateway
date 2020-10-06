@@ -86,6 +86,7 @@ final class UDPHealthCheckTest {
                 }
 
                 datagramSocket.send(datagramPacket);
+                Thread.sleep(2500L);
             } catch (Exception ex) {
                 ex.printStackTrace();
             }

@@ -824,15 +824,14 @@ public final class ReadOnlyHttp2Headers implements Http2Headers {
         }
 
         private void calculateNext() {
-            if (current == null) {
-                return;
-            }
             for (; i < current.length; i += 2) {
                 AsciiString roName = current[i];
                 if (roName.hashCode() == nameHash && roName.contentEqualsIgnoreCase(name)) {
-                    next = current[i + 1];
-                    i += 2;
-                    return;
+                    if (!(i + 1 > current.length)) {
+                        next = current[i + 1];
+                        i += 2;
+                        return;
+                    }
                 }
             }
             if (current == pseudoHeaders) {
