@@ -24,7 +24,6 @@ import java.net.DatagramPacket;
 import java.net.DatagramSocket;
 import java.net.InetAddress;
 import java.net.InetSocketAddress;
-import java.net.SocketException;
 import java.util.Arrays;
 
 import static org.junit.jupiter.api.Assertions.assertArrayEquals;
@@ -41,7 +40,7 @@ final class UDPHealthCheckTest {
         udpServer.start();
         Thread.sleep(2500L); // Wait for UDP Server to Start
 
-        UDPHealthCheck udpHealthCheck = new UDPHealthCheck( new InetSocketAddress("127.0.0.1", 12345), 5);
+        UDPHealthCheck udpHealthCheck = new UDPHealthCheck(new InetSocketAddress("127.0.0.1", 12345), 5);
         udpHealthCheck.check();
 
         assertEquals(Health.GOOD, udpHealthCheck.health());
