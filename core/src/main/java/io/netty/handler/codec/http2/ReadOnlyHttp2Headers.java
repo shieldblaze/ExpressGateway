@@ -827,7 +827,7 @@ public final class ReadOnlyHttp2Headers implements Http2Headers {
             for (; i < current.length; i += 2) {
                 AsciiString roName = current[i];
                 if (roName.hashCode() == nameHash && roName.contentEqualsIgnoreCase(name)) {
-                    if (i + 1 <= current.length) {
+                    if (i + 1 < current.length) {
                         next = current[i + 1];
                         i += 2;
                     }
