@@ -55,9 +55,9 @@ public final class InboundHttp2ToHttpObjectAdapterBuilder extends AbstractInboun
 
     @Override
     protected InboundHttp2ToHttpObjectAdapter build(Http2Connection connection,
-                                              int maxContentLength,
-                                              boolean validateHttpHeaders,
-                                              boolean propagateSettings) throws Exception {
+                                                    int maxContentLength,
+                                                    boolean validateHttpHeaders,
+                                                    boolean propagateSettings) throws Exception {
 
         return new InboundHttp2ToHttpObjectAdapter(connection, maxContentLength,
                                              validateHttpHeaders, propagateSettings);
