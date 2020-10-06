@@ -174,8 +174,13 @@ final class HpackDynamicTable {
             maxEntries++;
         }
 
+        // Make sure `hpackHeaderFields` is not `null`.
+        if (hpackHeaderFields == null) {
+            return;
+        }
+
         // check if capacity change requires us to reallocate the array
-        if (hpackHeaderFields != null && hpackHeaderFields.length == maxEntries) {
+        if (hpackHeaderFields.length == maxEntries) {
             return;
         }
 

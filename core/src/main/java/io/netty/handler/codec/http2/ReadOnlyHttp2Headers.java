@@ -18,6 +18,7 @@ package io.netty.handler.codec.http2;
 import io.netty.handler.codec.Headers;
 import io.netty.util.AsciiString;
 import io.netty.util.HashingStrategy;
+import io.netty.util.internal.PlatformDependent;
 
 import java.util.ArrayList;
 import java.util.Collections;
@@ -823,12 +824,18 @@ public final class ReadOnlyHttp2Headers implements Http2Headers {
             for (; i < current.length; i += 2) {
                 AsciiString roName = current[i];
                 if (roName.hashCode() == nameHash && roName.contentEqualsIgnoreCase(name)) {
-                    next = current[i + 1];
+                    try {
+                        next = current[i + 1];
+                    } catch (ArrayIndexOutOfBoundsException ex) {
+                        // Handle Array out of bound properly
+                        PlatformDependent.throwException(ex);
+                        return;
+                    }
                     i += 2;
                     return;
                 }
             }
-            if (i >= current.length && current == pseudoHeaders) {
+            if (current == pseudoHeaders) {
                 i = 0;
                 current = otherHeaders;
                 calculateNext();
