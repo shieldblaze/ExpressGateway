@@ -74,7 +74,7 @@ public final class HttpToHttp2ConnectionHandlerBuilder extends
 
     @Override
     public HttpToHttp2ConnectionHandlerBuilder headerSensitivityDetector(
-            SensitivityDetector headerSensitivityDetector) {
+            Http2HeadersEncoder.SensitivityDetector headerSensitivityDetector) {
         return super.headerSensitivityDetector(headerSensitivityDetector);
     }
 
