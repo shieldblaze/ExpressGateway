@@ -34,23 +34,27 @@ import io.netty.channel.ChannelInboundHandlerAdapter;
 import io.netty.channel.ChannelInitializer;
 import io.netty.channel.ChannelPipeline;
 import io.netty.channel.socket.SocketChannel;
-import io.netty.handler.codec.http.HttpClientCodec;
 import io.netty.handler.codec.http.HttpContent;
 import io.netty.handler.codec.http.HttpHeaderNames;
 import io.netty.handler.codec.http.HttpRequest;
 import io.netty.handler.codec.http.HttpUtil;
+import io.netty.handler.codec.http2.HttpConversionUtil;
+import io.netty.handler.ssl.SslHandler;
 import io.netty.handler.timeout.IdleStateHandler;
 import io.netty.util.ReferenceCountUtil;
 import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
 
 import java.net.InetSocketAddress;
+import java.util.Map;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ConcurrentLinkedQueue;
 
 final class UpstreamHandler extends ChannelInboundHandlerAdapter {
 
     private static final Logger logger = LogManager.getLogger(UpstreamHandler.class);
 
+    private final Map<Integer, String> acceptEncodingMap = new ConcurrentHashMap<>();
     private ConcurrentLinkedQueue<Object> backlog = new ConcurrentLinkedQueue<>();
 
     private long bytesReceived = 0L;
@@ -64,6 +68,11 @@ final class UpstreamHandler extends ChannelInboundHandlerAdapter {
     private final EventLoopFactory eventLoopFactory;
     private final HTTPConfiguration httpConfiguration;
     private final boolean isHTTP2;
+
+    UpstreamHandler(L7Balance l7Balance, CommonConfiguration commonConfiguration, TLSConfiguration tlsConfiguration,
+                    EventLoopFactory eventLoopFactory, HTTPConfiguration httpConfiguration) {
+        this(l7Balance, commonConfiguration, tlsConfiguration, eventLoopFactory, httpConfiguration, false);
+    }
 
     UpstreamHandler(L7Balance l7Balance, CommonConfiguration commonConfiguration, TLSConfiguration tlsConfiguration,
                     EventLoopFactory eventLoopFactory, HTTPConfiguration httpConfiguration, boolean isHTTP2) {
@@ -94,13 +103,27 @@ final class UpstreamHandler extends ChannelInboundHandlerAdapter {
                 return;
             }
 
-            // If Connection with Downstream is not established yet, we'll create new.
+            // If Downstream Channel is not active yet, we'll create new.
             if (!channelActive) {
                 newChannel(backend, ctx.alloc(), ctx.channel());
             }
 
+            /*
+             * If Upstream is HTTP/2 then we'll map the Stream ID with `ACCEPT_ENCODING` so we can
+             * later pass it to 'DownstreamHandler` to put `CONTENT_ENCODING` for {@link HTTP2ContentCompressor}
+             * to compress it.
+             */
+            if (isHTTP2) {
+                String acceptEncoding = request.headers().get(HttpHeaderNames.ACCEPT_ENCODING);
+                if (acceptEncoding != null) {
+                    int streamId = request.headers().getInt(HttpConversionUtil.ExtensionHeaderNames.STREAM_ID.text());
+                    acceptEncodingMap.put(streamId, acceptEncoding);
+                }
+            }
+
             request.headers().set("X-Forwarded-For", ((InetSocketAddress) ctx.channel().remoteAddress()).getAddress().getHostAddress());
             request.headers().set(HttpHeaderNames.HOST, backend.getHostname());
+            request.headers().set(HttpHeaderNames.ACCEPT_ENCODING, "br, gzip, deflate");
 
             if (channelActive) {
                 backend.incBytesWritten(HttpUtil.getContentLength(request, 0));
@@ -140,15 +163,21 @@ final class UpstreamHandler extends ChannelInboundHandlerAdapter {
                 ChannelPipeline pipeline = ch.pipeline();
 
                 int timeout = commonConfiguration.getTransportConfiguration().getConnectionIdleTimeout();
-                pipeline.addFirst(new IdleStateHandler(timeout, timeout, timeout));
+                pipeline.addFirst("IdleStateHandler", new IdleStateHandler(timeout, timeout, timeout));
 
-                if (tlsConfiguration != null) {
-                    pipeline.addLast(tlsConfiguration.getDefault().getSslContext().newHandler(byteBufAllocator,
-                            backend.getSocketAddress().getHostName(), backend.getSocketAddress().getPort()));
-
-                    pipeline.addLast(new ALPNHandlerClient(httpConfiguration, new DownstreamHandler(channel, backend), ch.newPromise(), isHTTP2));
+                if (tlsConfiguration == null) {
+                    pipeline.addLast(HTTPCodecs.newClient(httpConfiguration));
+                    pipeline.addLast("HTTPContentCompressor", new HTTPContentCompressor(4, 6, 15, 8, 0));
+                    pipeline.addLast("HTTPContentDecompressor", new HTTPContentDecompressor());
+                    pipeline.addLast("DownstreamHandler", new DownstreamHandler(channel, backend, acceptEncodingMap, isHTTP2));
                 } else {
-                    pipeline.addLast(new HttpClientCodec(), new DownstreamHandler(channel, backend));
+                    String hostname = backend.getSocketAddress().getHostName();
+                    int port = backend.getSocketAddress().getPort();
+                    SslHandler sslHandler = tlsConfiguration.getDefault().getSslContext().newHandler(byteBufAllocator, hostname, port);
+
+                    pipeline.addLast("TLSHandler", sslHandler);
+                    pipeline.addLast("ALPNServerHandler", new ALPNHandlerClient(httpConfiguration,
+                            new DownstreamHandler(channel, backend, acceptEncodingMap, isHTTP2), ch.newPromise(), isHTTP2));
                 }
             }
         });

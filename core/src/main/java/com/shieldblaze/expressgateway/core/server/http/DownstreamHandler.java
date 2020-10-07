@@ -21,11 +21,15 @@ import com.shieldblaze.expressgateway.loadbalance.backend.Backend;
 import io.netty.channel.Channel;
 import io.netty.channel.ChannelHandlerContext;
 import io.netty.channel.ChannelInboundHandlerAdapter;
+import io.netty.handler.codec.http.HttpHeaderNames;
 import io.netty.handler.codec.http.HttpMessage;
+import io.netty.handler.codec.http.HttpResponse;
+import io.netty.handler.codec.http2.HttpConversionUtil;
 import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
 
 import java.net.InetSocketAddress;
+import java.util.Map;
 
 final class DownstreamHandler extends ChannelInboundHandlerAdapter {
 
@@ -34,17 +38,32 @@ final class DownstreamHandler extends ChannelInboundHandlerAdapter {
     private final Channel upstream;
     private final InetSocketAddress upstreamAddress;
     private final Backend backend;
+    private final Map<Integer, String> acceptEncodingMap;
+    private final boolean isUpstreamHTTP2;
 
-    DownstreamHandler(Channel upstream, Backend backend) {
+    DownstreamHandler(Channel upstream, Backend backend, Map<Integer, String> acceptEncodingMap,boolean isUpstreamHTTP2) {
         this.upstream = upstream;
         this.upstreamAddress = (InetSocketAddress) upstream.remoteAddress();
         this.backend = backend;
+        this.acceptEncodingMap = acceptEncodingMap;
+        this.isUpstreamHTTP2 = isUpstreamHTTP2;
     }
 
     @Override
     public void channelRead(ChannelHandlerContext ctx, Object msg) {
-        if (msg instanceof HttpMessage) {
-            HeaderUtils.setGenericHeaders(((HttpMessage) msg).headers());
+        if (msg instanceof HttpResponse) {
+            HttpResponse response = (HttpResponse) msg;
+            HeaderUtils.setGenericHeaders(response.headers());
+
+            if (isUpstreamHTTP2) {
+                String acceptEncoding = acceptEncodingMap.get(response.headers().getInt("x-http2-stream-id"));
+                if (acceptEncoding != null) {
+                    String targetContentEncoding = HTTPContentCompressor.getTargetEncoding(response, acceptEncoding);
+                    if (targetContentEncoding != null) {
+                        response.headers().set(HttpHeaderNames.CONTENT_ENCODING, targetContentEncoding);
+                    }
+                }
+            }
         }
         upstream.writeAndFlush(msg);
     }

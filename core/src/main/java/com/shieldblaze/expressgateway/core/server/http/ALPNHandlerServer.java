@@ -23,12 +23,9 @@ import com.shieldblaze.expressgateway.core.configuration.tls.TLSConfiguration;
 import com.shieldblaze.expressgateway.core.netty.EventLoopFactory;
 import com.shieldblaze.expressgateway.loadbalance.l7.L7Balance;
 import io.netty.channel.ChannelHandlerContext;
-import io.netty.handler.codec.http.HttpContentCompressor;
-import io.netty.handler.codec.http.HttpContentDecompressor;
-import io.netty.handler.codec.http.HttpServerCodec;
+import io.netty.channel.ChannelPipeline;
 import io.netty.handler.codec.http2.DefaultHttp2Connection;
 import io.netty.handler.codec.http2.Http2Connection;
-import io.netty.handler.codec.http2.Http2FrameListenerDecorator;
 import io.netty.handler.codec.http2.HttpToHttp2ConnectionHandler;
 import io.netty.handler.codec.http2.HttpToHttp2ConnectionHandlerBuilder;
 import io.netty.handler.codec.http2.InboundHttp2ToHttpObjectAdapter;
@@ -63,34 +60,34 @@ final class ALPNHandlerServer extends ApplicationProtocolNegotiationHandler {
 
     @Override
     protected void configurePipeline(ChannelHandlerContext ctx, String protocol) {
+        ChannelPipeline pipeline = ctx.pipeline();
         if (protocol.equalsIgnoreCase(ApplicationProtocolNames.HTTP_2)) {
             Http2Connection connection = new DefaultHttp2Connection(true);
 
             InboundHttp2ToHttpObjectAdapter listener = new InboundHttp2ToHttpObjectAdapterBuilder(connection)
                     .propagateSettings(false)
                     .validateHttpHeaders(true)
-                    .maxContentLength((int) httpConfiguration.getMaxContentLength())
+                    .maxContentLength(httpConfiguration.getMaxContentLength())
                     .build();
 
             HttpToHttp2ConnectionHandler http2Handler = new HttpToHttp2ConnectionHandlerBuilder()
-                    .frameListener(new Http2FrameListenerDecorator(listener))
+                    .frameListener(new HTTP2ContentDecompressor(connection, listener))
                     .connection(connection)
                     .build();
 
-            ctx.pipeline().addLast(
-                    http2Handler,
-                    new HTTPServerValidator(httpConfiguration.getMaxContentLength()),
-                    new UpstreamHandler(l7Balance, commonConfiguration, tlsConfigurationForClient, eventLoopFactory, httpConfiguration, true)
-            );
+            pipeline.addLast("HTTP2Handler", http2Handler);
+//            pipeline.addLast("HTTPServerValidator", new HTTPServerValidator(httpConfiguration));
+
+            pipeline.addLast("UpstreamHandler", new UpstreamHandler(l7Balance, commonConfiguration, tlsConfigurationForClient,
+                    eventLoopFactory, httpConfiguration, true));
         } else if (protocol.equalsIgnoreCase(ApplicationProtocolNames.HTTP_1_1)) {
-            ctx.pipeline().addLast(
-                    new HttpServerCodec(httpConfiguration.getMaxInitialLineLength(), httpConfiguration.getMaxHeaderSize(),
-                            httpConfiguration.getMaxChunkSize(), true),
-                    new HttpContentCompressor(),
-                    new HttpContentDecompressor(),
-                    new HTTPServerValidator(httpConfiguration.getMaxContentLength()),
-                    new UpstreamHandler(l7Balance, commonConfiguration, tlsConfigurationForClient, eventLoopFactory, httpConfiguration, false)
-            );
+            pipeline.addLast("HTTPServerCodec", HTTPCodecs.newServer(httpConfiguration));
+//            pipeline.addLast("HTTPServerValidator", new HTTPServerValidator(httpConfiguration));
+//            pipeline.addLast("HTTPContentCompressor", new SmartHTTPContentCompressor(4, 6, 15, 8, 0));
+//            pipeline.addLast("HTTPContentDecompressor", new HTTPContentDecompressor());
+
+            pipeline.addLast("UpstreamHandler", new UpstreamHandler(l7Balance, commonConfiguration, tlsConfigurationForClient,
+                    eventLoopFactory, httpConfiguration));
         } else {
             if (logger.isErrorEnabled()) {
                 Throwable throwable = new IllegalArgumentException("Unsupported ALPN Protocol: " + protocol);

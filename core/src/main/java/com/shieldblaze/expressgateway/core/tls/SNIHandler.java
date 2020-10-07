@@ -82,7 +82,7 @@ public final class SNIHandler extends AbstractSniHandler<CertificateKeyPair> {
                 ctx.fireExceptionCaught(ex);
             }
 
-            ctx.pipeline().replace(this, SslHandler.class.getName(), sslHandler);
+            ctx.pipeline().replace(this, "TLSHandler", sslHandler);
             sslHandler = null;
         } finally {
             // Since the SslHandler was not inserted into the pipeline the ownership of the SSLEngine was not

@@ -43,17 +43,25 @@ final class HTTPOutboundHTTP2Adapter extends ChannelDuplexHandler {
         if (msg instanceof HttpResponse) {
             HttpResponse httpResponse = (HttpResponse) msg;
 
-            if (streamId != -1) {
-                httpResponse.headers().set(HttpConversionUtil.ExtensionHeaderNames.STREAM_ID.text(), streamId);
-            }
-            if (weight != -1) {
-                httpResponse.headers().set(HttpConversionUtil.ExtensionHeaderNames.STREAM_WEIGHT.text(), weight);
-            }
-            if (dependencyId != -1) {
-                httpResponse.headers().set(HttpConversionUtil.ExtensionHeaderNames.STREAM_DEPENDENCY_ID.text(), dependencyId);
-            }
-            if (promiseId != -1) {
-                httpResponse.headers().set(HttpConversionUtil.ExtensionHeaderNames.STREAM_PROMISE_ID.text(), promiseId);
+            if (isUpstreamHTTP2) {
+                if (streamId != -1) {
+                    httpResponse.headers().set(HttpConversionUtil.ExtensionHeaderNames.STREAM_ID.text(), streamId);
+                }
+                if (weight != -1) {
+                    httpResponse.headers().set(HttpConversionUtil.ExtensionHeaderNames.STREAM_WEIGHT.text(), weight);
+                }
+                if (dependencyId != -1) {
+                    httpResponse.headers().set(HttpConversionUtil.ExtensionHeaderNames.STREAM_DEPENDENCY_ID.text(), dependencyId);
+                }
+                if (promiseId != -1) {
+                    httpResponse.headers().set(HttpConversionUtil.ExtensionHeaderNames.STREAM_PROMISE_ID.text(), promiseId);
+                }
+            } else {
+                httpResponse.headers().remove(HttpConversionUtil.ExtensionHeaderNames.STREAM_ID.text());
+                httpResponse.headers().remove(HttpConversionUtil.ExtensionHeaderNames.STREAM_WEIGHT.text());
+                httpResponse.headers().remove(HttpConversionUtil.ExtensionHeaderNames.STREAM_DEPENDENCY_ID.text());
+                httpResponse.headers().remove(HttpConversionUtil.ExtensionHeaderNames.STREAM_PROMISE_ID.text());
+                httpResponse.headers().remove(HttpConversionUtil.ExtensionHeaderNames.SCHEME.text());
             }
         }
         super.channelRead(ctx, msg);
@@ -71,7 +79,7 @@ final class HTTPOutboundHTTP2Adapter extends ChannelDuplexHandler {
                 promiseId = httpRequest.headers().getInt(HttpConversionUtil.ExtensionHeaderNames.STREAM_PROMISE_ID.text(), -1);
 
                 if (streamId == -1) {
-                    throw new Http2Exception(Http2Error.PROTOCOL_ERROR, "StreamID not found in HttpRequest");
+                    throw new Http2Exception(Http2Error.PROTOCOL_ERROR, "StreamID not found");
                 }
             } else {
                 httpRequest.headers().set(HttpConversionUtil.ExtensionHeaderNames.SCHEME.text(), "https");

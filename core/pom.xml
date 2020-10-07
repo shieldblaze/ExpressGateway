@@ -35,6 +35,14 @@ along with ShieldBlaze ExpressGateway.  If not, see <https://www.gnu.org/license
         <javaModuleName>com.shieldblaze.expressgateway.core</javaModuleName>
     </properties>
 
+    <repositories>
+        <repository>
+            <id>bintray-nitram509-jbrotli</id>
+            <name>bintray</name>
+            <url>http://dl.bintray.com/nitram509/jbrotli</url>
+        </repository>
+    </repositories>
+
     <dependencies>
         <dependency>
             <groupId>com.shieldblaze</groupId>
@@ -59,6 +67,12 @@ along with ShieldBlaze ExpressGateway.  If not, see <https://www.gnu.org/license
             <groupId>com.github.vladimir-bukhtoyarov</groupId>
             <artifactId>bucket4j-core</artifactId>
             <version>4.10.0</version>
+        </dependency>
+
+        <dependency>
+            <groupId>com.nixxcode.jvmbrotli</groupId>
+            <artifactId>jvmbrotli</artifactId>
+            <version>0.2.0</version>
         </dependency>
     </dependencies>
 
