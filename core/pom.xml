@@ -35,14 +35,6 @@ along with ShieldBlaze ExpressGateway.  If not, see <https://www.gnu.org/license
         <javaModuleName>com.shieldblaze.expressgateway.core</javaModuleName>
     </properties>
 
-    <repositories>
-        <repository>
-            <id>bintray-nitram509-jbrotli</id>
-            <name>bintray</name>
-            <url>http://dl.bintray.com/nitram509/jbrotli</url>
-        </repository>
-    </repositories>
-
     <dependencies>
         <dependency>
             <groupId>com.shieldblaze</groupId>
