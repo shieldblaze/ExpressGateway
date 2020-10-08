@@ -87,7 +87,7 @@ public final class HTTPContentCompressor extends HttpContentCompressor {
                 ctx.channel().config(), compressor));
     }
 
-    static String getTargetEncoding(HttpResponse response, String acceptEncoding) {
+    public static String getTargetEncoding(HttpResponse response, String acceptEncoding) {
         HttpHeaders headers = response.headers();
         // If `Content-Encoding` is set to `Identity`, then we'll do nothing.
         if (headers.containsValue(HttpHeaderNames.CONTENT_ENCODING, HttpHeaderValues.IDENTITY, true)) {
