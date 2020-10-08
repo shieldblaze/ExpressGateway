@@ -26,7 +26,20 @@ import io.netty.handler.codec.http2.Http2Error;
 import io.netty.handler.codec.http2.Http2Exception;
 import io.netty.handler.codec.http2.HttpConversionUtil;
 
-final class HTTPOutboundHTTP2Adapter extends ChannelDuplexHandler {
+/**
+ * <p>
+ * {@link HTTPTranslationAdapter} is Full-Duplex Adapter for handling Translation of:
+ *     <ul>
+ *         <li>
+ *             {@link UpstreamHandler} HTTP/2 to {@link DownstreamHandler} HTTP/1.1
+ *         </li>
+ *         <li>
+ *             {@link UpstreamHandler} HTTP/1.1 to {@link DownstreamHandler} HTTP/2
+ *         </li>
+ *     </ul>
+ * </p>
+ */
+final class HTTPTranslationAdapter extends ChannelDuplexHandler {
 
     private final boolean isUpstreamHTTP2;
     private int streamId;
@@ -34,7 +47,13 @@ final class HTTPOutboundHTTP2Adapter extends ChannelDuplexHandler {
     private int dependencyId;
     private int promiseId;
 
-    HTTPOutboundHTTP2Adapter(boolean isUpstreamHTTP2) {
+    /**
+     * Create a new {@link HTTPTranslationAdapter} Instance
+     *
+     * @param isUpstreamHTTP2 Set to {@code true} if {@link UpstreamHandler} is using HTTP/2
+     *                        else set to {@code false}.
+     */
+    HTTPTranslationAdapter(boolean isUpstreamHTTP2) {
         this.isUpstreamHTTP2 = isUpstreamHTTP2;
     }
 

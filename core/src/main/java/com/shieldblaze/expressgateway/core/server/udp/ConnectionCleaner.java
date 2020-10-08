@@ -43,7 +43,7 @@ final class ConnectionCleaner extends Thread {
 
         while (runService) {
 
-            for (Map.Entry<InetSocketAddress, Connection> entry : upstreamHandler.connectionMap.entrySet()) {
+            for (Map.Entry<String, Connection> entry : upstreamHandler.connectionMap.entrySet()) {
                 if (!entry.getValue().connectionActive.get()) {
                     entry.getValue().clearBacklog();
                     upstreamHandler.connectionMap.remove(entry.getKey());

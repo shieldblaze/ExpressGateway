@@ -22,9 +22,7 @@ import io.netty.channel.Channel;
 import io.netty.channel.ChannelHandlerContext;
 import io.netty.channel.ChannelInboundHandlerAdapter;
 import io.netty.handler.codec.http.HttpHeaderNames;
-import io.netty.handler.codec.http.HttpMessage;
 import io.netty.handler.codec.http.HttpResponse;
-import io.netty.handler.codec.http2.HttpConversionUtil;
 import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
 
@@ -53,7 +51,7 @@ final class DownstreamHandler extends ChannelInboundHandlerAdapter {
     public void channelRead(ChannelHandlerContext ctx, Object msg) {
         if (msg instanceof HttpResponse) {
             HttpResponse response = (HttpResponse) msg;
-            HeaderUtils.setGenericHeaders(response.headers());
+            HTTPUtils.setGenericHeaders(response.headers());
 
             if (isUpstreamHTTP2) {
                 String acceptEncoding = acceptEncodingMap.get(response.headers().getInt("x-http2-stream-id"));

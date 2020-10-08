@@ -18,17 +18,16 @@
 package com.shieldblaze.expressgateway.core.netty;
 
 import com.shieldblaze.expressgateway.core.configuration.buffer.PooledByteBufAllocatorConfiguration;
-import io.netty.buffer.PooledByteBufAllocator;
 import io.netty.util.internal.ObjectUtil;
 
-public final class PooledByteBufAllocatorBuffer {
+public final class PooledByteBufAllocator {
 
-    private final PooledByteBufAllocator pooledByteBufAllocator;
+    private final io.netty.buffer.PooledByteBufAllocator pooledByteBufAllocator;
 
-    public PooledByteBufAllocatorBuffer(PooledByteBufAllocatorConfiguration configuration) {
+    public PooledByteBufAllocator(PooledByteBufAllocatorConfiguration configuration) {
         ObjectUtil.checkNotNull(configuration, "PooledByteBufAllocatorConfiguration");
 
-        pooledByteBufAllocator = new PooledByteBufAllocator(
+        pooledByteBufAllocator = new io.netty.buffer.PooledByteBufAllocator(
                 configuration.isPreferDirect(),
                 configuration.getHeapArena(),
                 configuration.getDirectArena(),
@@ -42,9 +41,9 @@ public final class PooledByteBufAllocatorBuffer {
     }
 
     /**
-     * Get Instance of {@link PooledByteBufAllocator}
+     * Get Instance of {@link io.netty.buffer.PooledByteBufAllocator}
      */
-    public PooledByteBufAllocator getInstance() {
+    public io.netty.buffer.PooledByteBufAllocator getInstance() {
         return pooledByteBufAllocator;
     }
 }

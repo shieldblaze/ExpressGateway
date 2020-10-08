@@ -124,7 +124,7 @@ public final class Main {
                 .withBrotliCompressionLevel(4)
                 .withCompressionThreshold(100)
                 .withDeflateCompressionLevel(6)
-                .withEnableHTTP2Push(true)
+                .withEnableHTTP2Push(false)
                 .withInitialWindowSize(10240)
                 .withMaxChunkSize(8196)
                 .withMaxConcurrentStreams(100)

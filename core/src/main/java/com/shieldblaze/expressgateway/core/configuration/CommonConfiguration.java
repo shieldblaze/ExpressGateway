@@ -17,7 +17,7 @@
  */
 package com.shieldblaze.expressgateway.core.configuration;
 
-import com.shieldblaze.expressgateway.core.L4LoadBalancer;
+import com.shieldblaze.expressgateway.core.l4.L4LoadBalancer;
 import com.shieldblaze.expressgateway.core.configuration.buffer.PooledByteBufAllocatorConfiguration;
 import com.shieldblaze.expressgateway.core.configuration.eventloop.EventLoopConfiguration;
 import com.shieldblaze.expressgateway.core.configuration.transport.TransportConfiguration;

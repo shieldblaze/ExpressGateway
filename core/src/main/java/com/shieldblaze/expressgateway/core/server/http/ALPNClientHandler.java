@@ -20,28 +20,25 @@ package com.shieldblaze.expressgateway.core.server.http;
 import com.shieldblaze.expressgateway.core.configuration.http.HTTPConfiguration;
 import io.netty.channel.ChannelHandlerContext;
 import io.netty.channel.ChannelPipeline;
-import io.netty.handler.codec.http2.DefaultHttp2Connection;
-import io.netty.handler.codec.http2.Http2Connection;
-import io.netty.handler.codec.http2.HttpToHttp2ConnectionHandler;
-import io.netty.handler.codec.http2.HttpToHttp2ConnectionHandlerBuilder;
-import io.netty.handler.codec.http2.InboundHttp2ToHttpObjectAdapter;
-import io.netty.handler.codec.http2.InboundHttp2ToHttpObjectAdapterBuilder;
 import io.netty.handler.ssl.ApplicationProtocolNames;
 import io.netty.handler.ssl.ApplicationProtocolNegotiationHandler;
 import io.netty.util.concurrent.Promise;
 import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
 
-final class ALPNHandlerClient extends ApplicationProtocolNegotiationHandler {
+/**
+ * {@link ALPNClientHandler} is used for Application-Layer Protocol Negotiation as client.
+ */
+final class ALPNClientHandler extends ApplicationProtocolNegotiationHandler {
 
-    private static final Logger logger = LogManager.getLogger(ALPNHandlerClient.class);
+    private static final Logger logger = LogManager.getLogger(ALPNClientHandler.class);
 
     private final HTTPConfiguration httpConfiguration;
     private final DownstreamHandler downstreamHandler;
     private final Promise<Void> promise;
     private final boolean isUpstreamHTTP2;
 
-    ALPNHandlerClient(HTTPConfiguration httpConfiguration, DownstreamHandler downstreamHandler, Promise<Void> promise, boolean isUpstreamHTTP2) {
+    ALPNClientHandler(HTTPConfiguration httpConfiguration, DownstreamHandler downstreamHandler, Promise<Void> promise, boolean isUpstreamHTTP2) {
         super(ApplicationProtocolNames.HTTP_1_1);
         this.httpConfiguration = httpConfiguration;
         this.downstreamHandler = downstreamHandler;
@@ -53,24 +50,12 @@ final class ALPNHandlerClient extends ApplicationProtocolNegotiationHandler {
     protected void configurePipeline(ChannelHandlerContext ctx, String protocol) {
         ChannelPipeline pipeline = ctx.pipeline();
         if (protocol.equalsIgnoreCase(ApplicationProtocolNames.HTTP_2)) {
-            Http2Connection connection = new DefaultHttp2Connection(false);
 
-            InboundHttp2ToHttpObjectAdapter listener = new InboundHttp2ToHttpObjectAdapterBuilder(connection)
-                    .propagateSettings(false)
-                    .validateHttpHeaders(true)
-                    .maxContentLength(httpConfiguration.getMaxContentLength())
-                    .build();
+            pipeline.addLast("HTTP2Handler", HTTPUtils.h2Handler(httpConfiguration, false));
 
-            HttpToHttp2ConnectionHandler http2Handler = new HttpToHttp2ConnectionHandlerBuilder()
-                    .frameListener(new HTTP2ContentDecompressor(connection, listener))
-                    .connection(connection)
-                    .build();
-
-            pipeline.addLast("HTTP2Handler", http2Handler);
-
-            // If Upstream is not HTTP/2 then we need Adapter for HTTP Message conversion
+            // If Upstream is not HTTP/2 then we need HTTPTranslationAdapter for HTTP Message conversion
             if (!isUpstreamHTTP2) {
-                pipeline.addLast("HTTPOutboundHTTP2Adapter", new HTTPOutboundHTTP2Adapter(false));
+                pipeline.addLast("HTTPTranslationAdapter", new HTTPTranslationAdapter(false));
             }
 
             pipeline.addLast("DownstreamHandler", downstreamHandler);
@@ -78,9 +63,9 @@ final class ALPNHandlerClient extends ApplicationProtocolNegotiationHandler {
         } else if (protocol.equalsIgnoreCase(ApplicationProtocolNames.HTTP_1_1)) {
             pipeline.addLast("HTTPClientCodec", HTTPCodecs.newClient(httpConfiguration));
 
-            // If Upstream is HTTP/2 then we need Adapter for HTTP Message conversion
+            // If Upstream is HTTP/2 then we need HTTPTranslationAdapter for HTTP Message conversion
             if (isUpstreamHTTP2) {
-                pipeline.addLast("HTTPOutboundHTTP2Adapter", new HTTPOutboundHTTP2Adapter(true));
+                pipeline.addLast("HTTPTranslationAdapter", new HTTPTranslationAdapter(true));
             }
 
             pipeline.addLast("HTTPContentCompressor", new HTTPContentCompressor(4, 6, 15, 8, 0));

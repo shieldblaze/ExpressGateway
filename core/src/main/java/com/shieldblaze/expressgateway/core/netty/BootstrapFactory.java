@@ -44,6 +44,8 @@ public final class BootstrapFactory {
                 .option(ChannelOption.SO_SNDBUF, commonConfiguration.getTransportConfiguration().getSocketSendBufferSize())
                 .option(ChannelOption.SO_RCVBUF, commonConfiguration.getTransportConfiguration().getSocketReceiveBufferSize())
                 .option(ChannelOption.TCP_NODELAY, true)
+                .option(ChannelOption.AUTO_READ, true)
+                .option(ChannelOption.AUTO_CLOSE, true)
                 .option(ChannelOption.CONNECT_TIMEOUT_MILLIS, commonConfiguration.getTransportConfiguration().getBackendConnectTimeout())
                 .channelFactory(() -> {
                     if (commonConfiguration.getTransportConfiguration().getTransportType() == TransportType.EPOLL) {

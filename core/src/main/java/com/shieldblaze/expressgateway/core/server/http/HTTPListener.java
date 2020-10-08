@@ -124,7 +124,7 @@ public final class HTTPListener extends L7FrontListener {
                 .option(ChannelOption.SO_RCVBUF, transportConfiguration.getSocketReceiveBufferSize())
                 .option(ChannelOption.SO_BACKLOG, transportConfiguration.getTCPConnectionBacklog())
                 .option(ChannelOption.AUTO_READ, true)
-                .option(ChannelOption.AUTO_CLOSE, false)
+                .option(ChannelOption.AUTO_CLOSE, true)
                 .childOption(ChannelOption.SO_SNDBUF, transportConfiguration.getSocketSendBufferSize())
                 .childOption(ChannelOption.SO_RCVBUF, transportConfiguration.getSocketReceiveBufferSize())
                 .childOption(ChannelOption.RCVBUF_ALLOCATOR, transportConfiguration.getRecvByteBufAllocator())
@@ -160,16 +160,16 @@ public final class HTTPListener extends L7FrontListener {
         }
     }
 
-    private static final class ServerInitializer extends ChannelInitializer<SocketChannel> {
+    static final class ServerInitializer extends ChannelInitializer<SocketChannel> {
 
         private static final Logger logger = LogManager.getLogger(ServerInitializer.class);
 
-        private final HTTPConfiguration httpConfiguration;
-        private final EventLoopFactory eventLoopFactory;
-        private final CommonConfiguration commonConfiguration;
-        private final L7Balance l7Balance;
-        private final TLSConfiguration tlsConfigurationForServer;
-        private final TLSConfiguration tlsConfigurationForClient;
+        final HTTPConfiguration httpConfiguration;
+        final EventLoopFactory eventLoopFactory;
+        final CommonConfiguration commonConfiguration;
+        final L7Balance l7Balance;
+        final TLSConfiguration tlsConfigurationForServer;
+        final TLSConfiguration tlsConfigurationForClient;
 
         ServerInitializer(HTTPConfiguration httpConfiguration, CommonConfiguration commonConfiguration, EventLoopFactory eventLoopFactory,
                           L7Balance l7Balance, TLSConfiguration tlsConfigurationForServer, TLSConfiguration tlsConfigurationForClient) {
@@ -188,16 +188,14 @@ public final class HTTPListener extends L7FrontListener {
             int timeout = commonConfiguration.getTransportConfiguration().getConnectionIdleTimeout();
             pipeline.addFirst("IdleStateHandler", new IdleStateHandler(timeout, timeout, timeout));
 
-            // If TLS is not enabled then we'll only use HTTP/1.1
+            // If TLS Server is not enabled then we'll only use HTTP/1.1
             if (tlsConfigurationForServer == null) {
                 pipeline.addLast("HTTPServerCodec", HTTPCodecs.newServer(httpConfiguration));
                 pipeline.addLast("HTTPServerValidator", new HTTPServerValidator(httpConfiguration));
-                pipeline.addLast("UpstreamHandler", new UpstreamHandler(l7Balance, commonConfiguration, tlsConfigurationForClient,
-                        eventLoopFactory, httpConfiguration));
+                pipeline.addLast("UpstreamHandler", new UpstreamHandler(this));
             } else {
                 pipeline.addLast("SNIHandler", new SNIHandler(tlsConfigurationForServer));
-                pipeline.addLast("ALPNServerHandler", new ALPNHandlerServer(l7Balance, commonConfiguration, tlsConfigurationForClient,
-                        eventLoopFactory, httpConfiguration));
+                pipeline.addLast("ALPNServerHandler", new ALPNServerHandler(this));
             }
         }
 

@@ -18,40 +18,53 @@
 package com.shieldblaze.expressgateway.healthcheck.l4;
 
 import com.shieldblaze.expressgateway.healthcheck.Health;
+import org.junit.jupiter.api.AfterAll;
+import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.Test;
 
+import java.io.IOException;
 import java.net.InetAddress;
 import java.net.InetSocketAddress;
 import java.net.ServerSocket;
+import java.nio.channels.AsynchronousServerSocketChannel;
+import java.nio.channels.ServerSocketChannel;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 
 final class TCPHealthCheckTest {
 
-    @Test
-    void check() throws InterruptedException {
-        TCPServer tcpServer = new TCPServer();
+    static TCPServer tcpServer = new TCPServer();
+
+    @BeforeAll
+    static void startTCPServer() throws IOException {
         tcpServer.start();
+    }
 
-        Thread.sleep(2500L); // Wait for TCP Server to Start
+    @AfterAll
+    static void stopTCPServer() throws IOException {
+        tcpServer.stop();
+    }
 
+    @Test
+    void check() {
         TCPHealthCheck tcpHealthCheck = new TCPHealthCheck(new InetSocketAddress("127.0.0.1", 9111), 5);
         tcpHealthCheck.check();
 
         assertEquals(Health.GOOD, tcpHealthCheck.health());
-
-        tcpServer.interrupt();
     }
 
-    private static final class TCPServer extends Thread {
+    private static final class TCPServer {
 
-        @Override
-        public void run() {
-            try (ServerSocket serverSocket = new ServerSocket(9111, 1000, InetAddress.getByName("127.0.0.1"))) {
-                serverSocket.accept();
-            } catch (Exception ex) {
-                ex.printStackTrace();
-            }
+        private AsynchronousServerSocketChannel server;
+
+        private void start() throws IOException {
+             server = AsynchronousServerSocketChannel.open();
+             server.bind(new InetSocketAddress("127.0.0.1", 9111));
+             server.accept();
+        }
+
+        private void stop() throws IOException {
+            server.close();
         }
     }
 }

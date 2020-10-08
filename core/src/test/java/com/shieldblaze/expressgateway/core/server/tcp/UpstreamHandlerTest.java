@@ -17,8 +17,8 @@
  */
 package com.shieldblaze.expressgateway.core.server.tcp;
 
-import com.shieldblaze.expressgateway.core.L4LoadBalancer;
-import com.shieldblaze.expressgateway.core.L4LoadBalancerBuilder;
+import com.shieldblaze.expressgateway.core.l4.L4LoadBalancer;
+import com.shieldblaze.expressgateway.core.l4.L4LoadBalancerBuilder;
 import com.shieldblaze.expressgateway.core.configuration.CommonConfiguration;
 import com.shieldblaze.expressgateway.core.configuration.CommonConfigurationBuilder;
 import com.shieldblaze.expressgateway.core.configuration.buffer.PooledByteBufAllocatorConfiguration;
@@ -43,6 +43,8 @@ import java.net.InetAddress;
 import java.net.InetSocketAddress;
 import java.net.ServerSocket;
 import java.net.Socket;
+import java.util.concurrent.ExecutionException;
+import java.util.concurrent.atomic.AtomicBoolean;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
@@ -92,16 +94,26 @@ final class UpstreamHandlerTest {
                 .withCommonConfiguration(commonConfiguration)
                 .withL4Balance(new RoundRobin())
                 .withCluster(cluster)
-                .withFrontListener(new TCPListener(new InetSocketAddress("127.0.0.1", 9110)))
+                .withBindAddress(new InetSocketAddress("127.0.0.1", 9110))
+                .withFrontListener(new TCPListener())
                 .build();
 
-        assertTrue(l4LoadBalancer.start());
+        AtomicBoolean isStarted = new AtomicBoolean(false);
+
+        l4LoadBalancer.start().forEach(completableFuture -> {
+            try {
+                isStarted.set(completableFuture.get().isSuccess());
+            } catch (InterruptedException | ExecutionException e) {
+                // Ignore
+            }
+        });
+
+        assertTrue(isStarted.get());
     }
 
     @AfterAll
-    static void stop() {
-        l4LoadBalancer.stop();
-        assertFalse(l4LoadBalancer.hasStarted());
+    static void stop() throws ExecutionException, InterruptedException {
+        assertTrue(l4LoadBalancer.stop().get());
     }
 
     @Test

@@ -24,7 +24,7 @@ import io.netty.handler.codec.http.HttpHeaderValues;
 import io.netty.handler.codec.http.HttpResponseStatus;
 import io.netty.handler.codec.http.HttpVersion;
 
-import static com.shieldblaze.expressgateway.core.server.http.HeaderUtils.setGenericHeaders;
+import static com.shieldblaze.expressgateway.core.server.http.HTTPUtils.setGenericHeaders;
 
 public final class HttpResponses {
 

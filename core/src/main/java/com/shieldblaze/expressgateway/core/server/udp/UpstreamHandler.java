@@ -17,6 +17,7 @@
  */
 package com.shieldblaze.expressgateway.core.server.udp;
 
+import com.shieldblaze.expressgateway.core.l4.AbstractL4LoadBalancer;
 import com.shieldblaze.expressgateway.core.configuration.CommonConfiguration;
 import com.shieldblaze.expressgateway.loadbalance.backend.Backend;
 import com.shieldblaze.expressgateway.loadbalance.l4.L4Balance;
@@ -46,16 +47,16 @@ final class UpstreamHandler extends ChannelInboundHandlerAdapter {
 
     private static final Logger logger = LogManager.getLogger(UpstreamHandler.class);
 
-    final Map<InetSocketAddress, Connection> connectionMap = new ConcurrentHashMap<>();
+    final Map<String, Connection> connectionMap = new ConcurrentHashMap<>();
     private final CommonConfiguration commonConfiguration;
     private final EventLoopFactory eventLoopFactory;
     private final L4Balance l4Balance;
     private final ConnectionCleaner connectionCleaner = new ConnectionCleaner(this);
 
-    UpstreamHandler(CommonConfiguration commonConfiguration, EventLoopFactory eventLoopFactory, L4Balance l4Balance) {
-        this.commonConfiguration = commonConfiguration;
-        this.eventLoopFactory = eventLoopFactory;
-        this.l4Balance = l4Balance;
+    UpstreamHandler(AbstractL4LoadBalancer abstractL4LoadBalancer) {
+        this.commonConfiguration = abstractL4LoadBalancer.getCommonConfiguration();
+        this.eventLoopFactory = abstractL4LoadBalancer.getEventLoopFactory();
+        this.l4Balance = abstractL4LoadBalancer.getL4Balance();
         connectionCleaner.startService();
     }
 
@@ -63,14 +64,14 @@ final class UpstreamHandler extends ChannelInboundHandlerAdapter {
     public void channelRead(ChannelHandlerContext ctx, Object msg) {
         eventLoopFactory.getChildGroup().next().execute(() -> {
             DatagramPacket datagramPacket = (DatagramPacket) msg;
-            Connection connection = connectionMap.get(datagramPacket.sender());
+            Connection connection = connectionMap.get(datagramPacket.sender().toString());
 
             if (connection == null) {
                 Backend backend = l4Balance.getBackend(datagramPacket.sender());
                 backend.incConnections();
 
                 connection = new Connection(datagramPacket.sender(), backend, ctx.channel(), commonConfiguration, eventLoopFactory, ctx.alloc());
-                connectionMap.put(datagramPacket.sender(), connection);
+                connectionMap.put(datagramPacket.sender().toString(), connection);
             }
 
             connection.writeDatagram(datagramPacket);
@@ -82,7 +83,7 @@ final class UpstreamHandler extends ChannelInboundHandlerAdapter {
         logger.info("Closing All Upstream and Downstream Channels");
 
         connectionCleaner.stopService();
-        for (Map.Entry<InetSocketAddress, Connection> entry : connectionMap.entrySet()) {
+        for (Map.Entry<String, Connection> entry : connectionMap.entrySet()) {
             Connection connection = entry.getValue();
             connection.clearBacklog();
         }

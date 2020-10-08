@@ -52,6 +52,7 @@ public final class TCPHealthCheck extends HealthCheck {
                 markFailure();
             }
         } catch (Exception e) {
+            e.printStackTrace();
             markFailure();
         }
     }

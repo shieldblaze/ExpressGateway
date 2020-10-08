@@ -15,14 +15,11 @@
  * You should have received a copy of the GNU General Public License
  * along with ShieldBlaze ExpressGateway.  If not, see <https://www.gnu.org/licenses/>.
  */
-package com.shieldblaze.expressgateway.core.configuration;
+package com.shieldblaze.expressgateway.core.concurrent;
 
-import com.shieldblaze.expressgateway.core.l4.L4LoadBalancer;
+public interface Event {
 
-/**
- * Generic Configuration is not usually shared between multiple {@link L4LoadBalancer} because it contains
- * configuration that are specific to something.
- */
-public class GenericConfiguration extends Configuration {
-    // Generic Configuration
+    boolean isSuccess();
+
+    Throwable cause();
 }

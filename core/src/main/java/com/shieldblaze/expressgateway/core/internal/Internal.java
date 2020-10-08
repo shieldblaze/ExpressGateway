@@ -15,14 +15,14 @@
  * You should have received a copy of the GNU General Public License
  * along with ShieldBlaze ExpressGateway.  If not, see <https://www.gnu.org/licenses/>.
  */
-package com.shieldblaze.expressgateway.core.configuration;
+package com.shieldblaze.expressgateway.core.internal;
 
-import com.shieldblaze.expressgateway.core.l4.L4LoadBalancer;
+import java.lang.annotation.ElementType;
+import java.lang.annotation.Target;
 
 /**
- * Generic Configuration is not usually shared between multiple {@link L4LoadBalancer} because it contains
- * configuration that are specific to something.
+ * Methods annotated with {@link Internal} is only for Internal use.
  */
-public class GenericConfiguration extends Configuration {
-    // Generic Configuration
+@Target(ElementType.METHOD)
+public @interface Internal {
 }

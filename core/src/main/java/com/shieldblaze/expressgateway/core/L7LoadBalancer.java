@@ -20,7 +20,7 @@ package com.shieldblaze.expressgateway.core;
 import com.shieldblaze.expressgateway.core.configuration.CommonConfiguration;
 import com.shieldblaze.expressgateway.core.configuration.http.HTTPConfiguration;
 import com.shieldblaze.expressgateway.core.netty.EventLoopFactory;
-import com.shieldblaze.expressgateway.core.netty.PooledByteBufAllocatorBuffer;
+import com.shieldblaze.expressgateway.core.netty.PooledByteBufAllocator;
 import com.shieldblaze.expressgateway.core.server.L7FrontListener;
 import com.shieldblaze.expressgateway.loadbalance.backend.Cluster;
 import com.shieldblaze.expressgateway.loadbalance.l7.L7Balance;
@@ -40,7 +40,7 @@ public class L7LoadBalancer {
     public boolean start() {
         eventLoopFactory = new EventLoopFactory(commonConfiguration);
         l7FrontListener.start(commonConfiguration, eventLoopFactory,
-                new PooledByteBufAllocatorBuffer(commonConfiguration.getPooledByteBufAllocatorConfiguration()).getInstance(),
+                new PooledByteBufAllocator(commonConfiguration.getPooledByteBufAllocatorConfiguration()).getInstance(),
                 httpConfiguration,
                 l7Balance);
         return l7FrontListener.waitForStart();
