@@ -160,7 +160,6 @@ public final class TCPListener extends L4FrontListener {
                         } else {
                             l4FrontListenerEvent.setCause(future.cause());
                         }
-                        System.out.println(future);
                     }).sync();
                 } catch (InterruptedException e) {
                     l4FrontListenerEvent.setCause(e);
