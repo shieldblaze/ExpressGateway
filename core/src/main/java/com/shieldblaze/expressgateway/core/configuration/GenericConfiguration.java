@@ -17,10 +17,11 @@
  */
 package com.shieldblaze.expressgateway.core.configuration;
 
-import com.shieldblaze.expressgateway.core.loadbalancer.DefaultL4LoadBalancer;
+import com.shieldblaze.expressgateway.core.loadbalancer.l4.L4LoadBalancer;
+import com.shieldblaze.expressgateway.core.loadbalancer.l7.L7LoadBalancer;
 
 /**
- * Generic Configuration is not usually shared between multiple {@link DefaultL4LoadBalancer} because it contains
+ * Generic Configuration is not usually shared between multiple {@link L4LoadBalancer} and {@link L7LoadBalancer} because it contains
  * configuration that are specific to something.
  */
 public class GenericConfiguration extends Configuration {
