@@ -17,7 +17,7 @@
  */
 package com.shieldblaze.expressgateway.core.server.udp;
 
-import com.shieldblaze.expressgateway.core.l4.AbstractL4LoadBalancer;
+import com.shieldblaze.expressgateway.core.loadbalancer.l4.L4LoadBalancer;
 import com.shieldblaze.expressgateway.core.configuration.CommonConfiguration;
 import com.shieldblaze.expressgateway.loadbalance.backend.Backend;
 import com.shieldblaze.expressgateway.loadbalance.l4.L4Balance;
@@ -29,7 +29,6 @@ import io.netty.channel.socket.DatagramPacket;
 import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
 
-import java.net.InetSocketAddress;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
 
@@ -53,10 +52,10 @@ final class UpstreamHandler extends ChannelInboundHandlerAdapter {
     private final L4Balance l4Balance;
     private final ConnectionCleaner connectionCleaner = new ConnectionCleaner(this);
 
-    UpstreamHandler(AbstractL4LoadBalancer abstractL4LoadBalancer) {
-        this.commonConfiguration = abstractL4LoadBalancer.getCommonConfiguration();
-        this.eventLoopFactory = abstractL4LoadBalancer.getEventLoopFactory();
-        this.l4Balance = abstractL4LoadBalancer.getL4Balance();
+    UpstreamHandler(L4LoadBalancer l4LoadBalancer) {
+        this.commonConfiguration = l4LoadBalancer.getCommonConfiguration();
+        this.eventLoopFactory = l4LoadBalancer.getEventLoopFactory();
+        this.l4Balance = l4LoadBalancer.getL4Balance();
         connectionCleaner.startService();
     }
 

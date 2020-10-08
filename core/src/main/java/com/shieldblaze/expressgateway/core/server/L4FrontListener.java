@@ -17,7 +17,7 @@
  */
 package com.shieldblaze.expressgateway.core.server;
 
-import com.shieldblaze.expressgateway.core.l4.AbstractL4LoadBalancer;
+import com.shieldblaze.expressgateway.core.loadbalancer.l4.L4LoadBalancer;
 import com.shieldblaze.expressgateway.core.concurrent.async.L4FrontListenerEvent;
 
 import java.util.ArrayList;
@@ -28,19 +28,19 @@ import java.util.concurrent.CompletableFuture;
 public abstract class L4FrontListener {
     protected final List<CompletableFuture<L4FrontListenerEvent>> completableFutureList = new ArrayList<>();
 
-    private AbstractL4LoadBalancer l4LoadBalancer;
+    private L4LoadBalancer l4LoadBalancer;
 
-    public abstract void start();
+    public abstract List<CompletableFuture<L4FrontListenerEvent>> start();
 
     public abstract CompletableFuture<Boolean> stop();
 
-    public AbstractL4LoadBalancer getL4LoadBalancer() {
+    public L4LoadBalancer getL4LoadBalancer() {
         return l4LoadBalancer;
     }
 
-    public void setL4LoadBalancer(AbstractL4LoadBalancer l4LoadBalancer) {
+    public void setL4LoadBalancer(L4LoadBalancer l4LoadBalancer) {
         if (this.l4LoadBalancer != null) {
-            throw new IllegalArgumentException("AbstractL4LoadBalancer is already applied");
+            throw new IllegalArgumentException("L4LoadBalancer is already set");
         }
         this.l4LoadBalancer = l4LoadBalancer;
     }

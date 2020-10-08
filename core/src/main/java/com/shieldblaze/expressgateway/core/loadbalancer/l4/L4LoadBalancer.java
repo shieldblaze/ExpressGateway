@@ -15,7 +15,7 @@
  * You should have received a copy of the GNU General Public License
  * along with ShieldBlaze ExpressGateway.  If not, see <https://www.gnu.org/licenses/>.
  */
-package com.shieldblaze.expressgateway.core.l4;
+package com.shieldblaze.expressgateway.core.loadbalancer.l4;
 
 import com.shieldblaze.expressgateway.core.concurrent.async.L4FrontListenerEvent;
 import com.shieldblaze.expressgateway.core.configuration.CommonConfiguration;
@@ -31,7 +31,10 @@ import java.util.List;
 import java.util.Objects;
 import java.util.concurrent.CompletableFuture;
 
-public abstract class AbstractL4LoadBalancer {
+/**
+ * {@link L4LoadBalancer} holds base functions for a L4-Load Balancer.
+ */
+public abstract class L4LoadBalancer {
 
     private final InetSocketAddress bindAddress;
     private final L4Balance l4Balance;
@@ -43,8 +46,16 @@ public abstract class AbstractL4LoadBalancer {
     private final EventLoopFactory eventLoopFactory;
 
 
-    public AbstractL4LoadBalancer(InetSocketAddress bindAddress, L4Balance l4Balance, L4FrontListener l4FrontListener, Cluster cluster,
-                                  CommonConfiguration commonConfiguration) {
+    /**
+     * @param bindAddress         {@link InetSocketAddress} on which {@link L4FrontListener} will bind and listen.
+     * @param l4Balance           {@link L4Balance} for Load Balance
+     * @param l4FrontListener     {@link L4FrontListener} for listening and handling traffic
+     * @param cluster             {@link Cluster} to be Load Balanced
+     * @param commonConfiguration {@link CommonConfiguration} to be applied
+     * @throws NullPointerException If a required parameter if {@code null}
+     */
+    public L4LoadBalancer(InetSocketAddress bindAddress, L4Balance l4Balance, L4FrontListener l4FrontListener, Cluster cluster,
+                          CommonConfiguration commonConfiguration) {
         this.bindAddress = Objects.requireNonNull(bindAddress, "bindAddress");
         this.l4Balance = Objects.requireNonNull(l4Balance, "L4Balance");
         this.l4FrontListener = Objects.requireNonNull(l4FrontListener, "L4FrontListener");
@@ -54,34 +65,66 @@ public abstract class AbstractL4LoadBalancer {
         this.eventLoopFactory = new EventLoopFactory(commonConfiguration);
     }
 
+    /**
+     * Start L4 Load Balancer
+     *
+     * @return {@link List} containing {@link CompletableFuture} of {@link L4FrontListenerEvent}
+     * which will notify when server is completely started.
+     */
     public abstract List<CompletableFuture<L4FrontListenerEvent>> start();
 
+    /**
+     * Stop L4 Load Balancer
+     *
+     * @return {@link CompletableFuture} of {@link Boolean} which is set to {@code true} when server is successfully closed.
+     */
     public abstract CompletableFuture<Boolean> stop();
 
+    /**
+     * Get {@link InetSocketAddress} on which {@link L4FrontListener} is bind.
+     */
     public InetSocketAddress getBindAddress() {
         return bindAddress;
     }
 
+    /**
+     * Get {@link L4Balance} used to Load Balance
+     */
     public L4Balance getL4Balance() {
         return l4Balance;
     }
 
+    /**
+     * Get {@link L4FrontListener} which is listening and handling traffic
+     */
     public L4FrontListener getL4FrontListener() {
         return l4FrontListener;
     }
 
+    /**
+     * Get {@link Cluster} which is being Load Balanced
+     */
     public Cluster getCluster() {
         return cluster;
     }
 
+    /**
+     * Get {@link CommonConfiguration} which is applied
+     */
     public CommonConfiguration getCommonConfiguration() {
         return commonConfiguration;
     }
 
+    /**
+     * Get {@link ByteBufAllocator} created from {@link PooledByteBufAllocator}
+     */
     public ByteBufAllocator getByteBufAllocator() {
         return byteBufAllocator;
     }
 
+    /**
+     * Get {@link EventLoopFactory} being used
+     */
     public EventLoopFactory getEventLoopFactory() {
         return eventLoopFactory;
     }

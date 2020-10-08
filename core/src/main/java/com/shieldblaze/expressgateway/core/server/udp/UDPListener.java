@@ -38,7 +38,7 @@ import java.util.function.BiConsumer;
 public final class UDPListener extends L4FrontListener {
 
     @Override
-    public void start() {
+    public List<CompletableFuture<L4FrontListenerEvent>> start() {
         CommonConfiguration commonConfiguration = getL4LoadBalancer().getCommonConfiguration();
         EventLoopGroup eventLoopGroup = getL4LoadBalancer().getEventLoopFactory().getParentGroup();
 
@@ -69,6 +69,8 @@ public final class UDPListener extends L4FrontListener {
 
             completableFutureList.add(completableFuture);
         }
+
+        return completableFutureList;
     }
 
     @Override

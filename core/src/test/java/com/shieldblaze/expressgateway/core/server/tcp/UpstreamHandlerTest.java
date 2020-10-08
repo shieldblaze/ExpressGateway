@@ -27,8 +27,8 @@ import com.shieldblaze.expressgateway.core.configuration.transport.ReceiveBuffer
 import com.shieldblaze.expressgateway.core.configuration.transport.TransportConfiguration;
 import com.shieldblaze.expressgateway.core.configuration.transport.TransportConfigurationBuilder;
 import com.shieldblaze.expressgateway.core.configuration.transport.TransportType;
-import com.shieldblaze.expressgateway.core.l4.L4LoadBalancer;
-import com.shieldblaze.expressgateway.core.l4.L4LoadBalancerBuilder;
+import com.shieldblaze.expressgateway.core.loadbalancer.l4.L4LoadBalancer;
+import com.shieldblaze.expressgateway.core.loadbalancer.l4.L4LoadBalancerBuilder;
 import com.shieldblaze.expressgateway.core.netty.EventLoopFactory;
 import com.shieldblaze.expressgateway.loadbalance.backend.Backend;
 import com.shieldblaze.expressgateway.loadbalance.backend.Cluster;
@@ -47,7 +47,6 @@ import java.net.Socket;
 import java.util.List;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ExecutionException;
-import java.util.concurrent.atomic.AtomicBoolean;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertTrue;

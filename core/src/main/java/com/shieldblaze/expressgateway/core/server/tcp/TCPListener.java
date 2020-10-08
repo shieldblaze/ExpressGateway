@@ -23,7 +23,7 @@ import com.shieldblaze.expressgateway.core.configuration.CommonConfiguration;
 import com.shieldblaze.expressgateway.core.configuration.tls.TLSConfiguration;
 import com.shieldblaze.expressgateway.core.configuration.transport.TransportConfiguration;
 import com.shieldblaze.expressgateway.core.configuration.transport.TransportType;
-import com.shieldblaze.expressgateway.core.l4.AbstractL4LoadBalancer;
+import com.shieldblaze.expressgateway.core.loadbalancer.l4.L4LoadBalancer;
 import com.shieldblaze.expressgateway.core.netty.EventLoopFactory;
 import com.shieldblaze.expressgateway.core.server.L4FrontListener;
 import com.shieldblaze.expressgateway.core.tls.SNIHandler;
@@ -43,6 +43,7 @@ import io.netty.handler.timeout.IdleStateHandler;
 import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
 
+import java.util.List;
 import java.util.Objects;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ExecutionException;
@@ -85,7 +86,7 @@ public final class TCPListener extends L4FrontListener {
     }
 
     /**
-     * Create {@link TCPListener} Instance with TLS Server and Client Support (a.k.a TLS Offload and Reload)
+     * Create {@link TCPListener} Instance with TLS Server and Client Support
      *
      * @param tlsServer {@link TLSConfiguration} for TLS Server
      * @param tlsClient {@link TLSConfiguration} for TLS Client
@@ -112,7 +113,7 @@ public final class TCPListener extends L4FrontListener {
     }
 
     @Override
-    public void start() {
+    public List<CompletableFuture<L4FrontListenerEvent>> start() {
 
         CommonConfiguration commonConfiguration = getL4LoadBalancer().getCommonConfiguration();
         TransportConfiguration transportConfiguration = commonConfiguration.getTransportConfiguration();
@@ -169,6 +170,8 @@ public final class TCPListener extends L4FrontListener {
 
             completableFutureList.add(completableFuture);
         }
+
+        return completableFutureList;
     }
 
     @Override
@@ -190,26 +193,26 @@ public final class TCPListener extends L4FrontListener {
 
         private static final Logger logger = LogManager.getLogger(ServerInitializer.class);
 
-        private final AbstractL4LoadBalancer abstractL4LoadBalancer;
+        private final L4LoadBalancer l4LoadBalancer;
         private final TLSConfiguration tlsServer;
         private final TLSConfiguration tlsClient;
 
-        ServerInitializer(AbstractL4LoadBalancer abstractL4LoadBalancer, TLSConfiguration tlsServer, TLSConfiguration tlsClient) {
-            this.abstractL4LoadBalancer = abstractL4LoadBalancer;
+        ServerInitializer(L4LoadBalancer l4LoadBalancer, TLSConfiguration tlsServer, TLSConfiguration tlsClient) {
+            this.l4LoadBalancer = l4LoadBalancer;
             this.tlsServer = tlsServer;
             this.tlsClient = tlsClient;
         }
 
         @Override
         protected void initChannel(SocketChannel socketChannel) {
-            int timeout = abstractL4LoadBalancer.getCommonConfiguration().getTransportConfiguration().getConnectionIdleTimeout();
+            int timeout = l4LoadBalancer.getCommonConfiguration().getTransportConfiguration().getConnectionIdleTimeout();
             socketChannel.pipeline().addFirst(new IdleStateHandler(timeout, timeout, timeout));
 
             if (tlsServer != null) {
                 socketChannel.pipeline().addLast("SNIHandler", new SNIHandler(tlsServer));
             }
 
-            socketChannel.pipeline().addLast("UpstreamHandler", new UpstreamHandler(abstractL4LoadBalancer, tlsClient));
+            socketChannel.pipeline().addLast("UpstreamHandler", new UpstreamHandler(l4LoadBalancer, tlsClient));
         }
 
         @Override

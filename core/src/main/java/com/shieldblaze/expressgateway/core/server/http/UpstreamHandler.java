@@ -20,6 +20,7 @@ package com.shieldblaze.expressgateway.core.server.http;
 import com.shieldblaze.expressgateway.core.configuration.CommonConfiguration;
 import com.shieldblaze.expressgateway.core.configuration.http.HTTPConfiguration;
 import com.shieldblaze.expressgateway.core.configuration.tls.TLSConfiguration;
+import com.shieldblaze.expressgateway.core.loadbalancer.l7.http.HTTPLoadBalancer;
 import com.shieldblaze.expressgateway.core.netty.BootstrapFactory;
 import com.shieldblaze.expressgateway.core.netty.EventLoopFactory;
 import com.shieldblaze.expressgateway.loadbalance.backend.Backend;
@@ -104,26 +105,21 @@ final class UpstreamHandler extends ChannelInboundHandlerAdapter {
 
     private final L7Balance l7Balance;
     private final CommonConfiguration commonConfiguration;
-    private final TLSConfiguration tlsConfiguration;
+    private final TLSConfiguration tlsClient;
     private final EventLoopFactory eventLoopFactory;
     private final HTTPConfiguration httpConfiguration;
     private final boolean isHTTP2;
 
-    UpstreamHandler(HTTPListener.ServerInitializer serverInitializer) {
-        this.l7Balance = serverInitializer.l7Balance;
-        this.commonConfiguration = serverInitializer.commonConfiguration;
-        this.tlsConfiguration = serverInitializer.tlsConfigurationForClient;
-        this.eventLoopFactory = serverInitializer.eventLoopFactory;
-        this.httpConfiguration = serverInitializer.httpConfiguration;
-        this.isHTTP2 = false;
+    UpstreamHandler(HTTPLoadBalancer httpLoadBalancer, TLSConfiguration tlsClient) {
+        this(httpLoadBalancer, tlsClient, false);
     }
 
-    UpstreamHandler(ALPNServerHandler alpnServerHandler, boolean isHTTP2) {
-        this.l7Balance = alpnServerHandler.l7Balance;
-        this.commonConfiguration = alpnServerHandler.commonConfiguration;
-        this.tlsConfiguration = alpnServerHandler.tlsConfiguration;
-        this.eventLoopFactory = alpnServerHandler.eventLoopFactory;
-        this.httpConfiguration = alpnServerHandler.httpConfiguration;
+    UpstreamHandler(HTTPLoadBalancer httpLoadBalancer, TLSConfiguration tlsClient, boolean isHTTP2) {
+        this.l7Balance = httpLoadBalancer.getL7Balance();
+        this.commonConfiguration = httpLoadBalancer.getCommonConfiguration();
+        this.eventLoopFactory = httpLoadBalancer.getEventLoopFactory();
+        this.httpConfiguration = httpLoadBalancer.getHTTPConfiguration();
+        this.tlsClient = tlsClient;
         this.isHTTP2 = isHTTP2;
     }
 
@@ -208,7 +204,7 @@ final class UpstreamHandler extends ChannelInboundHandlerAdapter {
                 int timeout = commonConfiguration.getTransportConfiguration().getConnectionIdleTimeout();
                 pipeline.addFirst("IdleStateHandler", new IdleStateHandler(timeout, timeout, timeout));
 
-                if (tlsConfiguration == null) {
+                if (tlsClient == null) {
                     pipeline.addLast(HTTPCodecs.newClient(httpConfiguration));
                     pipeline.addLast("HTTPContentCompressor", new HTTPContentCompressor(4, 6, 15, 8, 0));
                     pipeline.addLast("HTTPContentDecompressor", new HTTPContentDecompressor());
@@ -216,7 +212,7 @@ final class UpstreamHandler extends ChannelInboundHandlerAdapter {
                 } else {
                     String hostname = backend.getSocketAddress().getHostName();
                     int port = backend.getSocketAddress().getPort();
-                    SslHandler sslHandler = tlsConfiguration.getDefault().getSslContext().newHandler(byteBufAllocator, hostname, port);
+                    SslHandler sslHandler = tlsClient.getDefault().getSslContext().newHandler(byteBufAllocator, hostname, port);
 
                     pipeline.addLast("TLSHandler", sslHandler);
                     pipeline.addLast("ALPNServerHandler", new ALPNClientHandler(httpConfiguration,

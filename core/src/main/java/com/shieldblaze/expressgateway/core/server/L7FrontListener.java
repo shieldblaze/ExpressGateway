@@ -17,8 +17,11 @@
  */
 package com.shieldblaze.expressgateway.core.server;
 
+import com.shieldblaze.expressgateway.core.concurrent.async.L4FrontListenerEvent;
 import com.shieldblaze.expressgateway.core.configuration.CommonConfiguration;
 import com.shieldblaze.expressgateway.core.configuration.http.HTTPConfiguration;
+import com.shieldblaze.expressgateway.core.loadbalancer.l4.L4LoadBalancer;
+import com.shieldblaze.expressgateway.core.loadbalancer.l7.L7LoadBalancer;
 import com.shieldblaze.expressgateway.core.netty.EventLoopFactory;
 import com.shieldblaze.expressgateway.loadbalance.l7.L7Balance;
 import io.netty.buffer.ByteBuf;
@@ -33,56 +36,30 @@ import java.net.InetSocketAddress;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
+import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.atomic.AtomicBoolean;
 
 public abstract class L7FrontListener {
-    private static final Logger logger = LogManager.getLogger(L4FrontListener.class);
+    protected final List<CompletableFuture<L4FrontListenerEvent>> completableFutureList = new ArrayList<>();
 
-    protected final InetSocketAddress bindAddress;
-    protected final List<ChannelFuture> channelFutureList = Collections.synchronizedList(new ArrayList<>());
-    private final AtomicBoolean started = new AtomicBoolean(false);
+    private L7LoadBalancer l7LoadBalancer;
 
-    public L7FrontListener(InetSocketAddress bindAddress) {
-        this.bindAddress = ObjectUtil.checkNotNull(bindAddress, "Bind Address");
+    public abstract List<CompletableFuture<L4FrontListenerEvent>> start();
+
+    public abstract CompletableFuture<Boolean> stop();
+
+    public L7LoadBalancer getL7LoadBalancer() {
+        return l7LoadBalancer;
     }
 
-    /**
-     * Start a {@link L7FrontListener}
-     *
-     * @param commonConfiguration {@link CommonConfiguration} to be applied
-     * @param eventLoopFactory    {@link EventLoopFactory} for {@link EventLoopGroup}
-     * @param byteBufAllocator    {@link ByteBufAllocator} for {@link ByteBuf} allocation
-     * @param httpConfiguration   {@link HTTPConfiguration} to be applied
-     * @param l7Balance           {@link L7Balance} for load-balance
-     */
-    public abstract void start(CommonConfiguration commonConfiguration, EventLoopFactory eventLoopFactory,
-                               ByteBufAllocator byteBufAllocator, HTTPConfiguration httpConfiguration, L7Balance l7Balance);
-
-    public boolean waitForStart() {
-        for (ChannelFuture channelFuture : channelFutureList) {
-            try {
-                started.set(channelFuture.sync().isSuccess());
-                if (!started.get()) {
-                    logger.error("Failed to Start FrontListener", channelFuture.cause());
-                    stop();
-                    break;
-                }
-            } catch (InterruptedException e) {
-                logger.error("ChannelFuture Block Call was interrupted");
-            }
+    public void setL7LoadBalancer(L7LoadBalancer l7FrontListener) {
+        if (this.l7LoadBalancer != null) {
+            throw new IllegalArgumentException("L7LoadBalancer is already set");
         }
-
-        return started.get();
+        this.l7LoadBalancer = l7FrontListener;
     }
 
-    public void stop() {
-        for (ChannelFuture channelFuture : channelFutureList) {
-            channelFuture.channel().closeFuture();
-        }
-        started.set(false);
-    }
-
-    public boolean isStarted() {
-        return started.get();
+    public List<CompletableFuture<L4FrontListenerEvent>> getFutures() {
+        return Collections.unmodifiableList(completableFutureList);
     }
 }

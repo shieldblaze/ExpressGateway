@@ -15,7 +15,7 @@
  * You should have received a copy of the GNU General Public License
  * along with ShieldBlaze ExpressGateway.  If not, see <https://www.gnu.org/licenses/>.
  */
-package com.shieldblaze.expressgateway.core.l4;
+package com.shieldblaze.expressgateway.core.loadbalancer.l4;
 
 import com.shieldblaze.expressgateway.core.configuration.CommonConfiguration;
 import com.shieldblaze.expressgateway.core.server.L4FrontListener;
@@ -26,7 +26,7 @@ import java.net.InetSocketAddress;
 import java.util.Objects;
 
 /**
- * Builder for {@link L4LoadBalancer}
+ * Builder for creating default {@link L4LoadBalancer}
  */
 public final class L4LoadBalancerBuilder {
     private InetSocketAddress bindAddress;
@@ -89,13 +89,13 @@ public final class L4LoadBalancerBuilder {
     }
 
     /**
-     * Build {@link L4LoadBalancer} Instance
+     * Build {@link DefaultL4LoadBalancer} Instance
      *
-     * @return {@link L4LoadBalancer} Instance
+     * @return {@link DefaultL4LoadBalancer} Instance
      * @throws NullPointerException If a required value if {@code null}
      */
-    public L4LoadBalancer build() {
-        L4LoadBalancer l4LoadBalancer = new L4LoadBalancer(
+    public DefaultL4LoadBalancer build() {
+        DefaultL4LoadBalancer defaultL4LoadBalancer = new DefaultL4LoadBalancer(
                 Objects.requireNonNull(bindAddress, "bindAddress"),
                 Objects.requireNonNull(l4Balance, "L4Balance"),
                 Objects.requireNonNull(l4FrontListener, "l4FrontListener"),
@@ -103,7 +103,7 @@ public final class L4LoadBalancerBuilder {
                 Objects.requireNonNull(commonConfiguration, "commonConfiguration")
         );
         l4Balance.setBackends(cluster.getBackends());
-        l4FrontListener.setL4LoadBalancer(l4LoadBalancer);
-        return l4LoadBalancer;
+        l4FrontListener.setL4LoadBalancer(defaultL4LoadBalancer);
+        return defaultL4LoadBalancer;
     }
 }

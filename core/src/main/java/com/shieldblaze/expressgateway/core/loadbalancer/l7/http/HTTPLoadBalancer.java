@@ -15,36 +15,43 @@
  * You should have received a copy of the GNU General Public License
  * along with ShieldBlaze ExpressGateway.  If not, see <https://www.gnu.org/licenses/>.
  */
-package com.shieldblaze.expressgateway.core.l4;
+package com.shieldblaze.expressgateway.core.loadbalancer.l7.http;
 
 import com.shieldblaze.expressgateway.core.concurrent.async.L4FrontListenerEvent;
 import com.shieldblaze.expressgateway.core.configuration.CommonConfiguration;
-import com.shieldblaze.expressgateway.loadbalance.backend.Cluster;
-import com.shieldblaze.expressgateway.loadbalance.l4.L4Balance;
+import com.shieldblaze.expressgateway.core.configuration.http.HTTPConfiguration;
+import com.shieldblaze.expressgateway.core.loadbalancer.l7.L7LoadBalancer;
 import com.shieldblaze.expressgateway.core.server.L4FrontListener;
+import com.shieldblaze.expressgateway.core.server.L7FrontListener;
+import com.shieldblaze.expressgateway.loadbalance.backend.Cluster;
+import com.shieldblaze.expressgateway.loadbalance.l7.L7Balance;
 
 import java.net.InetSocketAddress;
 import java.util.List;
 import java.util.concurrent.CompletableFuture;
 
 /**
- * Layer-4 Load Balancer
+ * HTTP Load Balancer
  */
-public final class L4LoadBalancer extends AbstractL4LoadBalancer {
+public final class HTTPLoadBalancer extends L7LoadBalancer {
 
-    L4LoadBalancer(InetSocketAddress bindAddress, L4Balance l4Balance, L4FrontListener l4FrontListener, Cluster cluster,
-                   CommonConfiguration commonConfiguration) {
-        super(bindAddress, l4Balance, l4FrontListener, cluster, commonConfiguration);
+    private final HTTPConfiguration httpConfiguration;
+
+    /**
+     * @see L7FrontListener
+     */
+    HTTPLoadBalancer(InetSocketAddress bindAddress, L7Balance l7Balance, L7FrontListener l7FrontListener, Cluster cluster,
+                            CommonConfiguration commonConfiguration, HTTPConfiguration httpConfiguration) {
+        super(bindAddress, l7Balance, l7FrontListener, cluster, commonConfiguration);
+        this.httpConfiguration = httpConfiguration;
     }
 
     @Override
     public List<CompletableFuture<L4FrontListenerEvent>> start() {
-        getL4FrontListener().start();
-        return getL4FrontListener().getFutures();
+        return super.start();
     }
 
-    @Override
-    public CompletableFuture<Boolean> stop() {
-        return getL4FrontListener().stop();
+    public HTTPConfiguration getHTTPConfiguration() {
+        return httpConfiguration;
     }
 }

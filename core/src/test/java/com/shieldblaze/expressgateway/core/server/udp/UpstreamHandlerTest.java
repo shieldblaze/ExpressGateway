@@ -18,8 +18,6 @@
 package com.shieldblaze.expressgateway.core.server.udp;
 
 import com.shieldblaze.expressgateway.core.concurrent.async.L4FrontListenerEvent;
-import com.shieldblaze.expressgateway.core.l4.L4LoadBalancer;
-import com.shieldblaze.expressgateway.core.l4.L4LoadBalancerBuilder;
 import com.shieldblaze.expressgateway.core.configuration.CommonConfiguration;
 import com.shieldblaze.expressgateway.core.configuration.CommonConfigurationBuilder;
 import com.shieldblaze.expressgateway.core.configuration.buffer.PooledByteBufAllocatorConfiguration;
@@ -29,11 +27,12 @@ import com.shieldblaze.expressgateway.core.configuration.transport.ReceiveBuffer
 import com.shieldblaze.expressgateway.core.configuration.transport.TransportConfiguration;
 import com.shieldblaze.expressgateway.core.configuration.transport.TransportConfigurationBuilder;
 import com.shieldblaze.expressgateway.core.configuration.transport.TransportType;
-import com.shieldblaze.expressgateway.core.server.L4FrontListener;
+import com.shieldblaze.expressgateway.core.loadbalancer.l4.L4LoadBalancer;
+import com.shieldblaze.expressgateway.core.loadbalancer.l4.L4LoadBalancerBuilder;
+import com.shieldblaze.expressgateway.core.netty.EventLoopFactory;
 import com.shieldblaze.expressgateway.loadbalance.backend.Backend;
 import com.shieldblaze.expressgateway.loadbalance.backend.Cluster;
 import com.shieldblaze.expressgateway.loadbalance.l4.RoundRobin;
-import com.shieldblaze.expressgateway.core.netty.EventLoopFactory;
 import io.netty.channel.epoll.Epoll;
 import org.junit.jupiter.api.AfterAll;
 import org.junit.jupiter.api.BeforeAll;
@@ -47,10 +46,8 @@ import java.util.Arrays;
 import java.util.List;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ExecutionException;
-import java.util.concurrent.atomic.AtomicBoolean;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
-import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 final class UpstreamHandlerTest {

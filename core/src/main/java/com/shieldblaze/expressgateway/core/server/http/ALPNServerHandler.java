@@ -17,11 +17,8 @@
  */
 package com.shieldblaze.expressgateway.core.server.http;
 
-import com.shieldblaze.expressgateway.core.configuration.CommonConfiguration;
-import com.shieldblaze.expressgateway.core.configuration.http.HTTPConfiguration;
 import com.shieldblaze.expressgateway.core.configuration.tls.TLSConfiguration;
-import com.shieldblaze.expressgateway.core.netty.EventLoopFactory;
-import com.shieldblaze.expressgateway.loadbalance.l7.L7Balance;
+import com.shieldblaze.expressgateway.core.loadbalancer.l7.http.HTTPLoadBalancer;
 import io.netty.channel.ChannelHandlerContext;
 import io.netty.channel.ChannelPipeline;
 import io.netty.handler.ssl.ApplicationProtocolNames;
@@ -36,35 +33,29 @@ final class ALPNServerHandler extends ApplicationProtocolNegotiationHandler {
 
     private static final Logger logger = LogManager.getLogger(ALPNServerHandler.class);
 
-    final HTTPConfiguration httpConfiguration;
-    final EventLoopFactory eventLoopFactory;
-    final CommonConfiguration commonConfiguration;
-    final L7Balance l7Balance;
-    final TLSConfiguration tlsConfiguration;
+    final HTTPLoadBalancer httpLoadBalancer;
+    final TLSConfiguration tlsClient;
 
     /**
      * Creates a new instance with the specified fallback protocol name.
      */
-    ALPNServerHandler(HTTPListener.ServerInitializer serverInitializer) {
+    ALPNServerHandler(HTTPLoadBalancer httpLoadBalancer, TLSConfiguration tlsClient) {
         super(ApplicationProtocolNames.HTTP_1_1);
-        this.l7Balance = serverInitializer.l7Balance;
-        this.commonConfiguration = serverInitializer.commonConfiguration;
-        this.tlsConfiguration = serverInitializer.tlsConfigurationForClient;
-        this.eventLoopFactory = serverInitializer.eventLoopFactory;
-        this.httpConfiguration = serverInitializer.httpConfiguration;
+        this.httpLoadBalancer = httpLoadBalancer;
+        this.tlsClient = tlsClient;
     }
 
     @Override
     protected void configurePipeline(ChannelHandlerContext ctx, String protocol) {
         ChannelPipeline pipeline = ctx.pipeline();
         if (protocol.equalsIgnoreCase(ApplicationProtocolNames.HTTP_2)) {
-            pipeline.addLast("HTTP2Handler", HTTPUtils.h2Handler(httpConfiguration, true));
-            pipeline.addLast("HTTPServerValidator", new HTTPServerValidator(httpConfiguration));
-            pipeline.addLast("UpstreamHandler", new UpstreamHandler(this, true));
+            pipeline.addLast("HTTP2Handler", HTTPUtils.h2Handler(httpLoadBalancer.getHTTPConfiguration(), true));
+            pipeline.addLast("HTTPServerValidator", new HTTPServerValidator(httpLoadBalancer.getHTTPConfiguration()));
+            pipeline.addLast("UpstreamHandler", new UpstreamHandler(httpLoadBalancer, tlsClient, true));
         } else if (protocol.equalsIgnoreCase(ApplicationProtocolNames.HTTP_1_1)) {
-            pipeline.addLast("HTTPServerCodec", HTTPCodecs.newServer(httpConfiguration));
-            pipeline.addLast("HTTPServerValidator", new HTTPServerValidator(httpConfiguration));
-            pipeline.addLast("UpstreamHandler", new UpstreamHandler(this, false));
+            pipeline.addLast("HTTPServerCodec", HTTPCodecs.newServer(httpLoadBalancer.getHTTPConfiguration()));
+            pipeline.addLast("HTTPServerValidator", new HTTPServerValidator(httpLoadBalancer.getHTTPConfiguration()));
+            pipeline.addLast("UpstreamHandler", new UpstreamHandler(httpLoadBalancer, tlsClient));
         } else {
             if (logger.isErrorEnabled()) {
                 Throwable throwable = new IllegalArgumentException("Unsupported ALPN Protocol: " + protocol);
@@ -76,6 +67,6 @@ final class ALPNServerHandler extends ApplicationProtocolNegotiationHandler {
 
     @Override
     public void exceptionCaught(ChannelHandlerContext ctx, Throwable cause) {
-//        logger.error("Caught Error at ALPN Server Handler", cause);
+        logger.error("Caught Error at ALPN Server Handler", cause);
     }
 }

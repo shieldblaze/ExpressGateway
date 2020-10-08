@@ -19,7 +19,7 @@ package com.shieldblaze.expressgateway.core.server.tcp;
 
 import com.shieldblaze.expressgateway.core.configuration.CommonConfiguration;
 import com.shieldblaze.expressgateway.core.configuration.tls.TLSConfiguration;
-import com.shieldblaze.expressgateway.core.l4.AbstractL4LoadBalancer;
+import com.shieldblaze.expressgateway.core.loadbalancer.l4.L4LoadBalancer;
 import com.shieldblaze.expressgateway.core.netty.BootstrapFactory;
 import com.shieldblaze.expressgateway.core.netty.EventLoopFactory;
 import com.shieldblaze.expressgateway.loadbalance.backend.Backend;
@@ -64,10 +64,10 @@ final class UpstreamHandler extends ChannelInboundHandlerAdapter {
     private Channel downstreamChannel;
     private Backend backend;
 
-    UpstreamHandler(AbstractL4LoadBalancer abstractL4LoadBalancer, TLSConfiguration tlsConfiguration) {
-        this.commonConfiguration = abstractL4LoadBalancer.getCommonConfiguration();
-        this.eventLoopFactory = abstractL4LoadBalancer.getEventLoopFactory();
-        this.l4Balance = abstractL4LoadBalancer.getL4Balance();
+    UpstreamHandler(L4LoadBalancer l4LoadBalancer, TLSConfiguration tlsConfiguration) {
+        this.commonConfiguration = l4LoadBalancer.getCommonConfiguration();
+        this.eventLoopFactory = l4LoadBalancer.getEventLoopFactory();
+        this.l4Balance = l4LoadBalancer.getL4Balance();
         this.tlsConfiguration = tlsConfiguration;
     }
 
