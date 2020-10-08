@@ -126,7 +126,7 @@ public final class TCPListener extends L4FrontListener {
                 .option(ChannelOption.SO_RCVBUF, transportConfiguration.getSocketReceiveBufferSize())
                 .option(ChannelOption.SO_BACKLOG, transportConfiguration.getTCPConnectionBacklog())
                 .option(ChannelOption.AUTO_READ, true)
-                .option(ChannelOption.AUTO_CLOSE, true)
+                .option(ChannelOption.AUTO_CLOSE, false)
                 .childOption(ChannelOption.SO_SNDBUF, transportConfiguration.getSocketSendBufferSize())
                 .childOption(ChannelOption.SO_RCVBUF, transportConfiguration.getSocketReceiveBufferSize())
                 .childOption(ChannelOption.RCVBUF_ALLOCATOR, transportConfiguration.getRecvByteBufAllocator())
