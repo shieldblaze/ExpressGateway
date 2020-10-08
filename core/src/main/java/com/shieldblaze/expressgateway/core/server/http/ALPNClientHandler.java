@@ -18,6 +18,7 @@
 package com.shieldblaze.expressgateway.core.server.http;
 
 import com.shieldblaze.expressgateway.core.configuration.http.HTTPConfiguration;
+import com.shieldblaze.expressgateway.core.server.http.compression.HTTPContentDecompressor;
 import io.netty.channel.ChannelHandlerContext;
 import io.netty.channel.ChannelPipeline;
 import io.netty.handler.ssl.ApplicationProtocolNames;
@@ -38,6 +39,14 @@ final class ALPNClientHandler extends ApplicationProtocolNegotiationHandler {
     private final Promise<Void> promise;
     private final boolean isUpstreamHTTP2;
 
+    /**
+     * Create a new {@link ALPNClientHandler} Instance
+     *
+     * @param httpConfiguration {@link HTTPConfiguration} to be applied
+     * @param downstreamHandler {@link DownstreamHandler} which will be handling incoming responses
+     * @param promise           {@link Promise} to notify when {@link ALPNClientHandler} has finished setting up
+     * @param isUpstreamHTTP2   Set to {@code true} if {@link UpstreamHandler} is connected via HTTP/2 else set to {@code false}
+     */
     ALPNClientHandler(HTTPConfiguration httpConfiguration, DownstreamHandler downstreamHandler, Promise<Void> promise, boolean isUpstreamHTTP2) {
         super(ApplicationProtocolNames.HTTP_1_1);
         this.httpConfiguration = httpConfiguration;
@@ -61,14 +70,13 @@ final class ALPNClientHandler extends ApplicationProtocolNegotiationHandler {
             pipeline.addLast("DownstreamHandler", downstreamHandler);
             promise.trySuccess(null);
         } else if (protocol.equalsIgnoreCase(ApplicationProtocolNames.HTTP_1_1)) {
-            pipeline.addLast("HTTPClientCodec", HTTPCodecs.newClient(httpConfiguration));
+            pipeline.addLast("HTTPClientCodec", HTTPUtils.newClientCodec(httpConfiguration));
 
             // If Upstream is HTTP/2 then we need HTTPTranslationAdapter for HTTP Message conversion
             if (isUpstreamHTTP2) {
                 pipeline.addLast("HTTPTranslationAdapter", new HTTPTranslationAdapter(true));
             }
 
-            pipeline.addLast("HTTPContentCompressor", new HTTPContentCompressor(4, 6, 15, 8, 0));
             pipeline.addLast("HTTPContentDecompressor", new HTTPContentDecompressor());
             pipeline.addLast("DownstreamHandler", downstreamHandler);
             promise.trySuccess(null);

@@ -21,7 +21,6 @@ import com.shieldblaze.expressgateway.core.concurrent.async.L4FrontListenerEvent
 import com.shieldblaze.expressgateway.core.configuration.CommonConfiguration;
 import com.shieldblaze.expressgateway.core.configuration.http.HTTPConfiguration;
 import com.shieldblaze.expressgateway.core.loadbalancer.l7.L7LoadBalancer;
-import com.shieldblaze.expressgateway.core.server.L4FrontListener;
 import com.shieldblaze.expressgateway.core.server.L7FrontListener;
 import com.shieldblaze.expressgateway.loadbalance.backend.Cluster;
 import com.shieldblaze.expressgateway.loadbalance.l7.L7Balance;
@@ -44,11 +43,6 @@ public final class HTTPLoadBalancer extends L7LoadBalancer {
                             CommonConfiguration commonConfiguration, HTTPConfiguration httpConfiguration) {
         super(bindAddress, l7Balance, l7FrontListener, cluster, commonConfiguration);
         this.httpConfiguration = httpConfiguration;
-    }
-
-    @Override
-    public List<CompletableFuture<L4FrontListenerEvent>> start() {
-        return super.start();
     }
 
     public HTTPConfiguration getHTTPConfiguration() {

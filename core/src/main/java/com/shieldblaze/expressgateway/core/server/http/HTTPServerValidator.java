@@ -48,19 +48,19 @@ final class HTTPServerValidator extends ChannelInboundHandlerAdapter {
             HttpRequest request = (HttpRequest) msg;
 
             if (getContentLength(request, -1L) > maxContentLength) {
-                ctx.writeAndFlush(HttpResponses.TOO_LARGE.retainedDuplicate()).addListener(ChannelFutureListener.CLOSE);
+                ctx.writeAndFlush(HTTPResponses.TOO_LARGE.retainedDuplicate()).addListener(ChannelFutureListener.CLOSE);
                 ReferenceCountUtil.release(msg);
                 return;
             }
 
             if (isUnsupportedExpectation(request)) {
-                ctx.writeAndFlush(HttpResponses.EXPECTATION_FAILED.retainedDuplicate()).addListener(ChannelFutureListener.CLOSE);
+                ctx.writeAndFlush(HTTPResponses.EXPECTATION_FAILED.retainedDuplicate()).addListener(ChannelFutureListener.CLOSE);
                 ReferenceCountUtil.release(msg);
                 return;
             }
 
             if (HttpUtil.is100ContinueExpected(request)) {
-                ctx.writeAndFlush(HttpResponses.ACCEPT_KEEP_ALIVE.retainedDuplicate()).addListener(ChannelFutureListener.CLOSE_ON_FAILURE);
+                ctx.writeAndFlush(HTTPResponses.ACCEPT_KEEP_ALIVE.retainedDuplicate()).addListener(ChannelFutureListener.CLOSE_ON_FAILURE);
                 request.headers().remove(HttpHeaderNames.EXPECT);
             }
         }

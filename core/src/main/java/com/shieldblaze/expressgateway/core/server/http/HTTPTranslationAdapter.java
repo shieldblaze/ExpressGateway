@@ -28,7 +28,7 @@ import io.netty.handler.codec.http2.HttpConversionUtil;
 
 /**
  * <p>
- * {@link HTTPTranslationAdapter} is Full-Duplex Adapter for handling Translation of:
+ * {@link HTTPTranslationAdapter} is Full-Duplex Adapter for handling translation of:
  *     <ul>
  *         <li>
  *             {@link UpstreamHandler} HTTP/2 to {@link DownstreamHandler} HTTP/1.1

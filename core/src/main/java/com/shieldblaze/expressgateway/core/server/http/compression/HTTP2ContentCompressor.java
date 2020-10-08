@@ -15,7 +15,7 @@
  * You should have received a copy of the GNU General Public License
  * along with ShieldBlaze ExpressGateway.  If not, see <https://www.gnu.org/licenses/>.
  */
-package com.shieldblaze.expressgateway.core.server.http;
+package com.shieldblaze.expressgateway.core.server.http.compression;
 
 import io.netty.channel.ChannelHandlerContext;
 import io.netty.channel.embedded.EmbeddedChannel;
@@ -24,13 +24,20 @@ import io.netty.handler.codec.compression.ZlibCodecFactory;
 import io.netty.handler.codec.compression.ZlibWrapper;
 import io.netty.handler.codec.http2.CompressorHttp2ConnectionEncoder;
 import io.netty.handler.codec.http2.Http2ConnectionEncoder;
-import io.netty.handler.codec.http2.Http2Exception;
+import io.netty.handler.codec.http2.Http2DataFrame;
+import io.netty.handler.codec.http2.Http2Headers;
 
-import static io.netty.handler.codec.http.HttpHeaderValues.DEFLATE;
-import static io.netty.handler.codec.http.HttpHeaderValues.GZIP;
-import static io.netty.handler.codec.http.HttpHeaderValues.X_DEFLATE;
-import static io.netty.handler.codec.http.HttpHeaderValues.X_GZIP;
-
+/**
+ * {@link HTTP2ContentDecompressor} decompresses {@link Http2DataFrame} if {@link Http2Headers} contains {@code Content-Encoding}
+ * and is set to:
+ * <ul>
+ *     <li> gzip </li>
+ *     <li> x-gzip </li>
+ *     <li> deflate </li>
+ *     <li> x-deflate </li>
+ *     <li> br </li>
+ * </ul>
+ */
 public final class HTTP2ContentCompressor extends CompressorHttp2ConnectionEncoder {
 
     public static final int DEFAULT_COMPRESSION_LEVEL = 6;
@@ -43,23 +50,22 @@ public final class HTTP2ContentCompressor extends CompressorHttp2ConnectionEncod
 
     @Override
     protected EmbeddedChannel newContentCompressor(ChannelHandlerContext ctx, CharSequence contentEncoding) {
-        if (GZIP.contentEqualsIgnoreCase(contentEncoding) || X_GZIP.contentEqualsIgnoreCase(contentEncoding)) {
-            return new EmbeddedChannel(ctx.channel().id(), ctx.channel().metadata().hasDisconnect(),
-                    ctx.channel().config(), ZlibCodecFactory.newZlibEncoder(ZlibWrapper.GZIP, DEFAULT_COMPRESSION_LEVEL, DEFAULT_WINDOW_BITS,
-                    DEFAULT_MEM_LEVEL));
+        switch (contentEncoding.toString().toLowerCase()) {
+            case "gzip":
+            case "x-gzip":
+                return new EmbeddedChannel(ctx.channel().id(), ctx.channel().metadata().hasDisconnect(),
+                        ctx.channel().config(), ZlibCodecFactory.newZlibEncoder(ZlibWrapper.GZIP, DEFAULT_COMPRESSION_LEVEL, DEFAULT_WINDOW_BITS,
+                        DEFAULT_MEM_LEVEL));
+            case "deflate":
+            case "x-deflate":
+                return new EmbeddedChannel(ctx.channel().id(), ctx.channel().metadata().hasDisconnect(),
+                        ctx.channel().config(), ZlibCodecFactory.newZlibEncoder(ZlibWrapper.ZLIB, DEFAULT_COMPRESSION_LEVEL, DEFAULT_WINDOW_BITS,
+                        DEFAULT_MEM_LEVEL));
+            case "br":
+                return new EmbeddedChannel(ctx.channel().id(), ctx.channel().metadata().hasDisconnect(),
+                        ctx.channel().config(), new BrotliEncoder(4));
+            default:
+                return null;
         }
-
-        if (DEFLATE.contentEqualsIgnoreCase(contentEncoding) || X_DEFLATE.contentEqualsIgnoreCase(contentEncoding)) {
-            return new EmbeddedChannel(ctx.channel().id(), ctx.channel().metadata().hasDisconnect(),
-                    ctx.channel().config(), ZlibCodecFactory.newZlibEncoder(ZlibWrapper.ZLIB, DEFAULT_COMPRESSION_LEVEL, DEFAULT_WINDOW_BITS,
-                    DEFAULT_MEM_LEVEL));
-        }
-
-        if ("br".equalsIgnoreCase(contentEncoding.toString())) {
-            return new EmbeddedChannel(ctx.channel().id(), ctx.channel().metadata().hasDisconnect(),
-                    ctx.channel().config(), new BrotliEncoder(4));
-        }
-
-        return null;
     }
 }

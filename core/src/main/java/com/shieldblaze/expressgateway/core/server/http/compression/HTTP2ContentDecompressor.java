@@ -15,7 +15,7 @@
  * You should have received a copy of the GNU General Public License
  * along with ShieldBlaze ExpressGateway.  If not, see <https://www.gnu.org/licenses/>.
  */
-package com.shieldblaze.expressgateway.core.server.http;
+package com.shieldblaze.expressgateway.core.server.http.compression;
 
 import io.netty.channel.ChannelHandlerContext;
 import io.netty.channel.embedded.EmbeddedChannel;
@@ -24,17 +24,29 @@ import io.netty.handler.codec.compression.ZlibCodecFactory;
 import io.netty.handler.codec.compression.ZlibWrapper;
 import io.netty.handler.codec.http2.DelegatingDecompressorFrameListener;
 import io.netty.handler.codec.http2.Http2Connection;
-import io.netty.handler.codec.http2.Http2Exception;
+import io.netty.handler.codec.http2.Http2DataFrame;
 import io.netty.handler.codec.http2.Http2FrameListener;
+import io.netty.handler.codec.http2.Http2Headers;
 
 import static io.netty.handler.codec.http.HttpHeaderValues.DEFLATE;
 import static io.netty.handler.codec.http.HttpHeaderValues.GZIP;
 import static io.netty.handler.codec.http.HttpHeaderValues.X_DEFLATE;
 import static io.netty.handler.codec.http.HttpHeaderValues.X_GZIP;
 
-final class HTTP2ContentDecompressor extends DelegatingDecompressorFrameListener {
+/**
+ * {@link HTTP2ContentCompressor} compresses {@link Http2DataFrame} if {@link Http2Headers} contains {@code Content-Encoding}
+ * and is set to:
+ * <ul>
+ *     <li> gzip </li>
+ *     <li> x-gzip </li>
+ *     <li> deflate </li>
+ *     <li> x-deflate </li>
+ *     <li> br </li>
+ * </ul>
+ */
+public final class HTTP2ContentDecompressor extends DelegatingDecompressorFrameListener {
 
-    HTTP2ContentDecompressor(Http2Connection connection, Http2FrameListener listener) {
+    public HTTP2ContentDecompressor(Http2Connection connection, Http2FrameListener listener) {
         super(connection, listener);
     }
 
@@ -47,7 +59,6 @@ final class HTTP2ContentDecompressor extends DelegatingDecompressorFrameListener
         }
 
         if (DEFLATE.contentEqualsIgnoreCase(contentEncoding) || X_DEFLATE.contentEqualsIgnoreCase(contentEncoding)) {
-            // To be strict, 'deflate' means ZLIB, but some servers were not implemented correctly.
             return new EmbeddedChannel(ctx.channel().id(), ctx.channel().metadata().hasDisconnect(),
                     ctx.channel().config(), ZlibCodecFactory.newZlibDecoder(ZlibWrapper.ZLIB));
         }

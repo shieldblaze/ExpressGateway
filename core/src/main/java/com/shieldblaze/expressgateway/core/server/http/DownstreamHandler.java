@@ -17,6 +17,7 @@
  */
 package com.shieldblaze.expressgateway.core.server.http;
 
+import com.shieldblaze.expressgateway.core.server.http.compression.HTTPContentCompressor;
 import com.shieldblaze.expressgateway.loadbalance.backend.Backend;
 import io.netty.channel.Channel;
 import io.netty.channel.ChannelHandlerContext;
@@ -39,7 +40,7 @@ final class DownstreamHandler extends ChannelInboundHandlerAdapter {
     private final Map<Integer, String> acceptEncodingMap;
     private final boolean isUpstreamHTTP2;
 
-    DownstreamHandler(Channel upstream, Backend backend, Map<Integer, String> acceptEncodingMap,boolean isUpstreamHTTP2) {
+    DownstreamHandler(Channel upstream, Backend backend, Map<Integer, String> acceptEncodingMap, boolean isUpstreamHTTP2) {
         this.upstream = upstream;
         this.upstreamAddress = (InetSocketAddress) upstream.remoteAddress();
         this.backend = backend;
@@ -54,13 +55,16 @@ final class DownstreamHandler extends ChannelInboundHandlerAdapter {
             HTTPUtils.setGenericHeaders(response.headers());
 
             if (isUpstreamHTTP2) {
-                String acceptEncoding = acceptEncodingMap.get(response.headers().getInt("x-http2-stream-id"));
-                if (acceptEncoding != null) {
-                    String targetContentEncoding = HTTPContentCompressor.getTargetEncoding(response, acceptEncoding);
-                    if (targetContentEncoding != null) {
-                        response.headers().set(HttpHeaderNames.CONTENT_ENCODING, targetContentEncoding);
+                if (response.headers().contains(HttpHeaderNames.CONTENT_ENCODING)) {
+                    String acceptEncoding = acceptEncodingMap.get(response.headers().getInt("x-http2-stream-id"));
+                    if (acceptEncoding != null) {
+                        String targetContentEncoding = HTTPContentCompressor.getTargetEncoding(response, acceptEncoding);
+                        if (targetContentEncoding != null) {
+                            response.headers().set(HttpHeaderNames.CONTENT_ENCODING, targetContentEncoding);
+                        }
                     }
                 }
+                acceptEncodingMap.remove(response.headers().getInt("x-http2-stream-id"));
             }
         }
         upstream.writeAndFlush(msg);

@@ -18,26 +18,12 @@
 package com.shieldblaze.expressgateway.core.server;
 
 import com.shieldblaze.expressgateway.core.concurrent.async.L4FrontListenerEvent;
-import com.shieldblaze.expressgateway.core.configuration.CommonConfiguration;
-import com.shieldblaze.expressgateway.core.configuration.http.HTTPConfiguration;
-import com.shieldblaze.expressgateway.core.loadbalancer.l4.L4LoadBalancer;
 import com.shieldblaze.expressgateway.core.loadbalancer.l7.L7LoadBalancer;
-import com.shieldblaze.expressgateway.core.netty.EventLoopFactory;
-import com.shieldblaze.expressgateway.loadbalance.l7.L7Balance;
-import io.netty.buffer.ByteBuf;
-import io.netty.buffer.ByteBufAllocator;
-import io.netty.channel.ChannelFuture;
-import io.netty.channel.EventLoopGroup;
-import io.netty.util.internal.ObjectUtil;
-import org.apache.logging.log4j.LogManager;
-import org.apache.logging.log4j.Logger;
 
-import java.net.InetSocketAddress;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
 import java.util.concurrent.CompletableFuture;
-import java.util.concurrent.atomic.AtomicBoolean;
 
 public abstract class L7FrontListener {
     protected final List<CompletableFuture<L4FrontListenerEvent>> completableFutureList = new ArrayList<>();

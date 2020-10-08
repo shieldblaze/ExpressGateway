@@ -30,7 +30,6 @@ import io.netty.channel.EventLoopGroup;
 import java.util.List;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ExecutionException;
-import java.util.function.BiConsumer;
 
 /**
  * UDP Listener for handling incoming requests.

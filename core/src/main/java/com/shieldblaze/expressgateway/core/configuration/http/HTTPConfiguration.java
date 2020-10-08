@@ -25,8 +25,9 @@ import com.shieldblaze.expressgateway.core.configuration.GenericConfiguration;
 public final class HTTPConfiguration extends GenericConfiguration {
     private long maxContentLength;
     private int initialWindowSize;
-    private int maxConcurrentStreams;
+    private long maxConcurrentStreams;
     private long maxHeaderSizeList;
+    private long maxHeaderTableSize;
     private int maxInitialLineLength;
     private int maxHeaderSize;
     private int maxChunkSize;
@@ -47,12 +48,16 @@ public final class HTTPConfiguration extends GenericConfiguration {
         return initialWindowSize;
     }
 
-    public int getMaxConcurrentStreams() {
+    public long getMaxConcurrentStreams() {
         return maxConcurrentStreams;
     }
 
     public long getMaxHeaderSizeList() {
         return maxHeaderSizeList;
+    }
+
+    public long getMaxHeaderTableSize() {
+        return maxHeaderTableSize;
     }
 
     public int getMaxInitialLineLength() {

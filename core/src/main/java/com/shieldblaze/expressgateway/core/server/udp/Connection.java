@@ -28,6 +28,7 @@ import io.netty.channel.ChannelFuture;
 import io.netty.channel.ChannelFutureListener;
 import io.netty.channel.socket.DatagramPacket;
 import io.netty.handler.timeout.IdleStateHandler;
+import io.netty.util.ReferenceCountUtil;
 
 import java.net.InetSocketAddress;
 import java.util.concurrent.ConcurrentLinkedQueue;
@@ -92,7 +93,7 @@ final class Connection {
             backend.incBytesWritten(datagramPacket.content().readableBytes());
             backendChannel.writeAndFlush(datagramPacket.content()).addListener((ChannelFutureListener) cf -> {
                 if (!cf.isSuccess()) {
-                    datagramPacket.release();
+                    ReferenceCountUtil.silentFullRelease(datagramPacket);
                 }
             });
             return;
@@ -109,9 +110,7 @@ final class Connection {
     void clearBacklog() {
         if (backlog != null && backlog.size() > 0) {
             for (DatagramPacket datagramPacket : backlog) {
-                if (datagramPacket.refCnt() > 0) {
-                    datagramPacket.release();
-                }
+                ReferenceCountUtil.silentFullRelease(datagramPacket);
             }
         }
         backlog = null;

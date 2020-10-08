@@ -15,20 +15,27 @@
  * You should have received a copy of the GNU General Public License
  * along with ShieldBlaze ExpressGateway.  If not, see <https://www.gnu.org/licenses/>.
  */
-package com.shieldblaze.expressgateway.core.server.http;
+package com.shieldblaze.expressgateway.core.server.http.compression;
 
 import io.netty.channel.embedded.EmbeddedChannel;
 import io.netty.handler.codec.compression.BrotliDecoder;
 import io.netty.handler.codec.compression.ZlibCodecFactory;
 import io.netty.handler.codec.compression.ZlibWrapper;
+import io.netty.handler.codec.http.HttpContent;
 import io.netty.handler.codec.http.HttpContentDecompressor;
+import io.netty.handler.codec.http.HttpHeaderNames;
+import io.netty.handler.codec.http.HttpMessage;
 
 import static io.netty.handler.codec.http.HttpHeaderValues.DEFLATE;
 import static io.netty.handler.codec.http.HttpHeaderValues.GZIP;
 import static io.netty.handler.codec.http.HttpHeaderValues.X_DEFLATE;
 import static io.netty.handler.codec.http.HttpHeaderValues.X_GZIP;
 
-final class HTTPContentDecompressor extends HttpContentDecompressor {
+/**
+ * {@link HTTPContentDecompressor} decompresses {@link HttpContent} of {@link HttpMessage} if
+ * {@link HttpHeaderNames#CONTENT_ENCODING} is supported.
+ */
+public final class HTTPContentDecompressor extends HttpContentDecompressor {
 
     @Override
     protected EmbeddedChannel newContentDecoder(String contentEncoding) {
@@ -47,7 +54,6 @@ final class HTTPContentDecompressor extends HttpContentDecompressor {
             return new EmbeddedChannel(ctx.channel().id(), ctx.channel().metadata().hasDisconnect(), ctx.channel().config(), new BrotliDecoder());
         }
 
-        // 'identity' or unsupported
         return null;
     }
 }

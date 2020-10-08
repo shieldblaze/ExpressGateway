@@ -15,7 +15,7 @@
  * You should have received a copy of the GNU General Public License
  * along with ShieldBlaze ExpressGateway.  If not, see <https://www.gnu.org/licenses/>.
  */
-package com.shieldblaze.expressgateway.core.server.http;
+package com.shieldblaze.expressgateway.core.server.http.compression;
 
 import io.netty.channel.ChannelHandler;
 import io.netty.channel.ChannelHandlerContext;
@@ -23,6 +23,7 @@ import io.netty.channel.embedded.EmbeddedChannel;
 import io.netty.handler.codec.compression.BrotliEncoder;
 import io.netty.handler.codec.compression.ZlibCodecFactory;
 import io.netty.handler.codec.compression.ZlibWrapper;
+import io.netty.handler.codec.http.HttpContent;
 import io.netty.handler.codec.http.HttpContentCompressor;
 import io.netty.handler.codec.http.HttpHeaderNames;
 import io.netty.handler.codec.http.HttpHeaderValues;
@@ -32,7 +33,11 @@ import io.netty.handler.codec.http.HttpResponse;
 import java.util.HashSet;
 import java.util.Set;
 
-final class HTTPContentCompressor extends HttpContentCompressor {
+/**
+ * {@link HTTPContentCompressor} compresses {@link HttpContent} of {@link HttpResponse} if
+ * {@link HttpHeaderNames#CONTENT_TYPE} is compressible.
+ */
+public final class HTTPContentCompressor extends HttpContentCompressor {
 
     private static final Set<String> MIME_TYPES = new HashSet<>();
 
@@ -43,7 +48,7 @@ final class HTTPContentCompressor extends HttpContentCompressor {
 
     private ChannelHandlerContext ctx;
 
-    HTTPContentCompressor(int brotliCompressionQuality, int compressionLevel, int windowBits, int memLevel, int contentSizeThreshold) {
+    public HTTPContentCompressor(int brotliCompressionQuality, int compressionLevel, int windowBits, int memLevel) {
         this.brotliCompressionQuality = brotliCompressionQuality;
         this.compressionLevel = compressionLevel;
         this.windowBits = windowBits;

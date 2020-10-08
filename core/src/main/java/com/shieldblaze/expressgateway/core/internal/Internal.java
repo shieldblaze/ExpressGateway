@@ -23,6 +23,6 @@ import java.lang.annotation.Target;
 /**
  * Methods annotated with {@link Internal} is only for Internal use.
  */
-@Target(ElementType.METHOD)
+@Target({ElementType.METHOD, ElementType.TYPE})
 public @interface Internal {
 }

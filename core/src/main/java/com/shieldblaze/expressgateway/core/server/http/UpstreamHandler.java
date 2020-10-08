@@ -23,6 +23,8 @@ import com.shieldblaze.expressgateway.core.configuration.tls.TLSConfiguration;
 import com.shieldblaze.expressgateway.core.loadbalancer.l7.http.HTTPLoadBalancer;
 import com.shieldblaze.expressgateway.core.netty.BootstrapFactory;
 import com.shieldblaze.expressgateway.core.netty.EventLoopFactory;
+import com.shieldblaze.expressgateway.core.server.http.compression.HTTPContentDecompressor;
+import com.shieldblaze.expressgateway.core.utils.ChannelUtils;
 import com.shieldblaze.expressgateway.loadbalance.backend.Backend;
 import com.shieldblaze.expressgateway.loadbalance.l7.L7Balance;
 import io.netty.bootstrap.Bootstrap;
@@ -37,6 +39,7 @@ import io.netty.channel.ChannelPipeline;
 import io.netty.channel.socket.SocketChannel;
 import io.netty.handler.codec.http.HttpContent;
 import io.netty.handler.codec.http.HttpHeaderNames;
+import io.netty.handler.codec.http.HttpHeaders;
 import io.netty.handler.codec.http.HttpObject;
 import io.netty.handler.codec.http.HttpRequest;
 import io.netty.handler.codec.http.HttpUtil;
@@ -109,11 +112,27 @@ final class UpstreamHandler extends ChannelInboundHandlerAdapter {
     private final EventLoopFactory eventLoopFactory;
     private final HTTPConfiguration httpConfiguration;
     private final boolean isHTTP2;
+    private final int maxDataBacklog;
 
+    /**
+     * Create a new {@link UpstreamHandler} Instance with {@code isHTTP2} set to {@code false}
+     *
+     * @param httpLoadBalancer {@link HTTPLoadBalancer} Instance
+     * @param tlsClient        {@link TLSConfiguration} Instance if we'll use TLS when connecting
+     *                         to backend else set to {@code null}
+     */
     UpstreamHandler(HTTPLoadBalancer httpLoadBalancer, TLSConfiguration tlsClient) {
         this(httpLoadBalancer, tlsClient, false);
     }
 
+    /**
+     * Create a new {@link UpstreamHandler} Instance
+     *
+     * @param httpLoadBalancer {@link HTTPLoadBalancer} Instance
+     * @param tlsClient        {@link TLSConfiguration} Instance if we'll use TLS when connecting
+     *                         to backend else set to {@code null}
+     * @param isHTTP2          Set to {@code true} if connection is established over HTTP/2 else set to {@code false}
+     */
     UpstreamHandler(HTTPLoadBalancer httpLoadBalancer, TLSConfiguration tlsClient, boolean isHTTP2) {
         this.l7Balance = httpLoadBalancer.getL7Balance();
         this.commonConfiguration = httpLoadBalancer.getCommonConfiguration();
@@ -121,12 +140,14 @@ final class UpstreamHandler extends ChannelInboundHandlerAdapter {
         this.httpConfiguration = httpLoadBalancer.getHTTPConfiguration();
         this.tlsClient = tlsClient;
         this.isHTTP2 = isHTTP2;
+        this.maxDataBacklog = commonConfiguration.getTransportConfiguration().getDataBacklog();
     }
 
     @Override
     public void channelRead(ChannelHandlerContext ctx, Object msg) {
         if (msg instanceof HttpRequest) {
             HttpRequest request = (HttpRequest) msg;
+            HttpHeaders headers = request.headers();
 
             // Get Backend
             backend = l7Balance.getBackend(request);
@@ -135,9 +156,9 @@ final class UpstreamHandler extends ChannelInboundHandlerAdapter {
             if (backend == null) {
                 // If request have `Keep-Alive`, return `Keep-Alive` else `Close` response.
                 if (HttpUtil.isKeepAlive(request)) {
-                    ctx.writeAndFlush(HttpResponses.BAD_GATEWAY_KEEP_ALIVE.retainedDuplicate()).addListener(ChannelFutureListener.CLOSE_ON_FAILURE);
+                    ctx.writeAndFlush(HTTPResponses.BAD_GATEWAY_KEEP_ALIVE.retainedDuplicate()).addListener(ChannelFutureListener.CLOSE_ON_FAILURE);
                 } else {
-                    ctx.writeAndFlush(HttpResponses.BAD_GATEWAY.retainedDuplicate()).addListener(ChannelFutureListener.CLOSE);
+                    ctx.writeAndFlush(HTTPResponses.BAD_GATEWAY.retainedDuplicate()).addListener(ChannelFutureListener.CLOSE);
                 }
                 return;
             }
@@ -153,21 +174,21 @@ final class UpstreamHandler extends ChannelInboundHandlerAdapter {
              * to compress it.
              */
             if (isHTTP2) {
-                String acceptEncoding = request.headers().get(HttpHeaderNames.ACCEPT_ENCODING);
+                String acceptEncoding = headers.get(HttpHeaderNames.ACCEPT_ENCODING);
                 if (acceptEncoding != null) {
-                    int streamId = request.headers().getInt(HttpConversionUtil.ExtensionHeaderNames.STREAM_ID.text());
+                    int streamId = headers.getInt(HttpConversionUtil.ExtensionHeaderNames.STREAM_ID.text());
                     acceptEncodingMap.put(streamId, acceptEncoding);
                 }
             }
 
-            request.headers().set("X-Forwarded-For", ((InetSocketAddress) ctx.channel().remoteAddress()).getAddress().getHostAddress());
-            request.headers().set(HttpHeaderNames.HOST, backend.getHostname());
-            request.headers().set(HttpHeaderNames.ACCEPT_ENCODING, "br, gzip, deflate");
+            headers.set("X-Forwarded-For", ((InetSocketAddress) ctx.channel().remoteAddress()).getAddress().getHostAddress());
+            headers.set(HttpHeaderNames.HOST, backend.getHostname());
+            headers.set(HttpHeaderNames.ACCEPT_ENCODING, "br, gzip, deflate");
 
             if (channelActive) {
                 backend.incBytesWritten(HttpUtil.getContentLength(request, 0));
                 downstreamChannel.writeAndFlush(msg).addListener(ChannelFutureListener.CLOSE_ON_FAILURE);
-            } else if (backlog != null && backlog.size() < commonConfiguration.getTransportConfiguration().getDataBacklog()) {
+            } else if (backlog != null && backlog.size() < maxDataBacklog) {
                 backlog.add(msg);
             }
 
@@ -177,7 +198,7 @@ final class UpstreamHandler extends ChannelInboundHandlerAdapter {
 
             bytesReceived += content.content().readableBytes();
             if (bytesReceived > httpConfiguration.getMaxContentLength()) {
-                ctx.writeAndFlush(HttpResponses.TOO_LARGE.retainedDuplicate()).addListener(ChannelFutureListener.CLOSE);
+                ctx.writeAndFlush(HTTPResponses.TOO_LARGE.retainedDuplicate()).addListener(ChannelFutureListener.CLOSE);
                 return;
             }
 
@@ -185,7 +206,7 @@ final class UpstreamHandler extends ChannelInboundHandlerAdapter {
                 backend.incBytesWritten(content.content().readableBytes());
                 downstreamChannel.writeAndFlush(content).addListener(ChannelFutureListener.CLOSE_ON_FAILURE);
                 return;
-            } else if (backlog != null && backlog.size() < commonConfiguration.getTransportConfiguration().getDataBacklog()) {
+            } else if (backlog != null && backlog.size() < maxDataBacklog) {
                 backlog.add(content);
                 return;
             }
@@ -205,8 +226,7 @@ final class UpstreamHandler extends ChannelInboundHandlerAdapter {
                 pipeline.addFirst("IdleStateHandler", new IdleStateHandler(timeout, timeout, timeout));
 
                 if (tlsClient == null) {
-                    pipeline.addLast(HTTPCodecs.newClient(httpConfiguration));
-                    pipeline.addLast("HTTPContentCompressor", new HTTPContentCompressor(4, 6, 15, 8, 0));
+                    pipeline.addLast("HTTPClientCodec", HTTPUtils.newClientCodec(httpConfiguration));
                     pipeline.addLast("HTTPContentDecompressor", new HTTPContentDecompressor());
                     pipeline.addLast("DownstreamHandler", new DownstreamHandler(channel, backend, acceptEncodingMap, isHTTP2));
                 } else {
@@ -214,9 +234,11 @@ final class UpstreamHandler extends ChannelInboundHandlerAdapter {
                     int port = backend.getSocketAddress().getPort();
                     SslHandler sslHandler = tlsClient.getDefault().getSslContext().newHandler(byteBufAllocator, hostname, port);
 
+                    DownstreamHandler downstreamHandler = new DownstreamHandler(channel, backend, acceptEncodingMap, isHTTP2);
+                    ALPNClientHandler alpnClientHandler = new ALPNClientHandler(httpConfiguration, downstreamHandler, ch.newPromise(), isHTTP2);
+
                     pipeline.addLast("TLSHandler", sslHandler);
-                    pipeline.addLast("ALPNServerHandler", new ALPNClientHandler(httpConfiguration,
-                            new DownstreamHandler(channel, backend, acceptEncodingMap, isHTTP2), ch.newPromise(), isHTTP2));
+                    pipeline.addLast("ALPNServerHandler", alpnClientHandler);
                 }
             }
         });
@@ -229,30 +251,16 @@ final class UpstreamHandler extends ChannelInboundHandlerAdapter {
 
                 downstreamChannel.pipeline().get(ALPNClientHandler.class).promise().addListener((ChannelFutureListener) alpnFuture -> {
                     if (alpnFuture.isSuccess()) {
-                        backlog.forEach(httpObject -> downstreamChannel.writeAndFlush(httpObject)
-                                .addListener((ChannelFutureListener) writeFuture -> {
-                                    if (!writeFuture.isSuccess()) {
-                                        if (httpObject instanceof HttpContent && ((HttpContent) httpObject).refCnt() > 0) {
-                                            ReferenceCountUtil.release(httpObject);
-                                        }
-                                        if (channel.isActive()) {
-                                            channel.close();
-                                        }
-                                    }
-                                    backlog.remove(httpObject);
-                                }));
-
+                        backlog.forEach(object -> downstreamChannel.writeAndFlush(object).addListener(ChannelFutureListener.CLOSE_ON_FAILURE));
                         channelActive = true;
                         backlog = null;
                     } else {
-                        downstreamChannel.close();
-                        channel.close();
+                        ChannelUtils.closeChannels(channel, downstreamChannel);
                     }
                 });
 
             } else {
-                downstreamChannel.close();
-                channel.close();
+                ChannelUtils.closeChannels(channel, downstreamChannel);
             }
         });
     }
@@ -271,19 +279,11 @@ final class UpstreamHandler extends ChannelInboundHandlerAdapter {
             }
         }
 
-        if (ctx.channel().isActive()) {
-            ctx.channel().close();
-        }
-
-        if (downstreamChannel != null && downstreamChannel.isActive()) {
-            downstreamChannel.close();
-        }
+        ChannelUtils.closeChannels(ctx.channel(), downstreamChannel);
 
         if (backlog != null) {
             for (Object httpObject : backlog) {
-                if (httpObject instanceof HttpContent && ((HttpContent) httpObject).refCnt() > 0) {
-                    ReferenceCountUtil.release(httpObject);
-                }
+                ReferenceCountUtil.silentFullRelease(httpObject);
             }
             backlog = null;
         }

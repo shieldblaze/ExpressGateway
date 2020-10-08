@@ -36,8 +36,13 @@ final class ALPNServerHandler extends ApplicationProtocolNegotiationHandler {
     final HTTPLoadBalancer httpLoadBalancer;
     final TLSConfiguration tlsClient;
 
+
     /**
-     * Creates a new instance with the specified fallback protocol name.
+     * Create a new {@link ALPNServerHandler} Instance
+     *
+     * @param httpLoadBalancer {@link HTTPLoadBalancer} Instance
+     * @param tlsClient        {@link TLSConfiguration} Instance if we'll use TLS when connecting
+     *                         to backend else set to {@code null}
      */
     ALPNServerHandler(HTTPLoadBalancer httpLoadBalancer, TLSConfiguration tlsClient) {
         super(ApplicationProtocolNames.HTTP_1_1);
@@ -53,7 +58,7 @@ final class ALPNServerHandler extends ApplicationProtocolNegotiationHandler {
             pipeline.addLast("HTTPServerValidator", new HTTPServerValidator(httpLoadBalancer.getHTTPConfiguration()));
             pipeline.addLast("UpstreamHandler", new UpstreamHandler(httpLoadBalancer, tlsClient, true));
         } else if (protocol.equalsIgnoreCase(ApplicationProtocolNames.HTTP_1_1)) {
-            pipeline.addLast("HTTPServerCodec", HTTPCodecs.newServer(httpLoadBalancer.getHTTPConfiguration()));
+            pipeline.addLast("HTTPServerCodec", HTTPUtils.newServerCodec(httpLoadBalancer.getHTTPConfiguration()));
             pipeline.addLast("HTTPServerValidator", new HTTPServerValidator(httpLoadBalancer.getHTTPConfiguration()));
             pipeline.addLast("UpstreamHandler", new UpstreamHandler(httpLoadBalancer, tlsClient));
         } else {
@@ -61,7 +66,7 @@ final class ALPNServerHandler extends ApplicationProtocolNegotiationHandler {
                 Throwable throwable = new IllegalArgumentException("Unsupported ALPN Protocol: " + protocol);
                 logger.error(throwable);
             }
-            ctx.channel().closeFuture();
+            ctx.channel().close();
         }
     }
 
