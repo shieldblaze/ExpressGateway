@@ -17,6 +17,7 @@
  */
 package com.shieldblaze.expressgateway.core.server.udp;
 
+import com.shieldblaze.expressgateway.core.concurrent.async.L4FrontListenerEvent;
 import com.shieldblaze.expressgateway.core.l4.L4LoadBalancer;
 import com.shieldblaze.expressgateway.core.l4.L4LoadBalancerBuilder;
 import com.shieldblaze.expressgateway.core.configuration.CommonConfiguration;
@@ -28,6 +29,7 @@ import com.shieldblaze.expressgateway.core.configuration.transport.ReceiveBuffer
 import com.shieldblaze.expressgateway.core.configuration.transport.TransportConfiguration;
 import com.shieldblaze.expressgateway.core.configuration.transport.TransportConfigurationBuilder;
 import com.shieldblaze.expressgateway.core.configuration.transport.TransportType;
+import com.shieldblaze.expressgateway.core.server.L4FrontListener;
 import com.shieldblaze.expressgateway.loadbalance.backend.Backend;
 import com.shieldblaze.expressgateway.loadbalance.backend.Cluster;
 import com.shieldblaze.expressgateway.loadbalance.l4.RoundRobin;
@@ -42,6 +44,8 @@ import java.net.DatagramSocket;
 import java.net.InetAddress;
 import java.net.InetSocketAddress;
 import java.util.Arrays;
+import java.util.List;
+import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ExecutionException;
 import java.util.concurrent.atomic.AtomicBoolean;
 
@@ -97,25 +101,14 @@ final class UpstreamHandlerTest {
                 .withBindAddress(new InetSocketAddress("127.0.0.1", 9110))
                 .build();
 
-        AtomicBoolean isStarted = new AtomicBoolean(false);
-
-
-        System.out.println(l4LoadBalancer.start());
-
-        l4LoadBalancer.start();
-/*                .forEach(completableFuture -> {
+        List<CompletableFuture<L4FrontListenerEvent>> list = l4LoadBalancer.start();
+        for (CompletableFuture<L4FrontListenerEvent> completableFuture : list) {
             try {
-                if (completableFuture.get().isSuccess()) {
-                    isStarted.set(true);
-                } else {
-                    throw completableFuture.get().cause();
-                }
+                assertTrue(completableFuture.get().isSuccess());
             } catch (Throwable e) {
-//                e.printStackTrace();
+                e.printStackTrace();
             }
-        });*/
-
-        assertTrue(isStarted.get());
+        }
     }
 
     @AfterAll

@@ -17,6 +17,7 @@
  */
 package com.shieldblaze.expressgateway.core.server.tcp;
 
+import com.shieldblaze.expressgateway.core.concurrent.async.L4FrontListenerEvent;
 import com.shieldblaze.expressgateway.core.configuration.CommonConfiguration;
 import com.shieldblaze.expressgateway.core.configuration.CommonConfigurationBuilder;
 import com.shieldblaze.expressgateway.core.configuration.buffer.PooledByteBufAllocatorConfiguration;
@@ -43,6 +44,8 @@ import java.net.InetAddress;
 import java.net.InetSocketAddress;
 import java.net.ServerSocket;
 import java.net.Socket;
+import java.util.List;
+import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ExecutionException;
 import java.util.concurrent.atomic.AtomicBoolean;
 
@@ -97,27 +100,14 @@ final class UpstreamHandlerTest {
                 .withFrontListener(new TCPListener())
                 .build();
 
-        AtomicBoolean isStarted = new AtomicBoolean(false);
-
-
-        System.out.println(l4LoadBalancer.start());
-
-        l4LoadBalancer.start();
-/*                .forEach(completableFuture -> {
+        List<CompletableFuture<L4FrontListenerEvent>> list = l4LoadBalancer.start();
+        for (CompletableFuture<L4FrontListenerEvent> completableFuture : list) {
             try {
-                if (completableFuture.get().isSuccess()) {
-                    isStarted.set(true);
-                } else {
-                    throw completableFuture.get().cause();
-                }
+                assertTrue(completableFuture.get().isSuccess());
             } catch (Throwable e) {
-//                e.printStackTrace();
+                e.printStackTrace();
             }
-        });*/
-
-
-
-        assertTrue(isStarted.get());
+        }
     }
 
     @AfterAll
