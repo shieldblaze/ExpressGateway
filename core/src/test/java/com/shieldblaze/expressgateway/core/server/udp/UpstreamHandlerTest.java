@@ -99,7 +99,11 @@ final class UpstreamHandlerTest {
 
         AtomicBoolean isStarted = new AtomicBoolean(false);
 
-        l4LoadBalancer.start().forEach(completableFuture -> {
+
+        System.out.println(l4LoadBalancer.start());
+
+        l4LoadBalancer.start();
+/*                .forEach(completableFuture -> {
             try {
                 if (completableFuture.get().isSuccess()) {
                     isStarted.set(true);
@@ -107,9 +111,9 @@ final class UpstreamHandlerTest {
                     throw completableFuture.get().cause();
                 }
             } catch (Throwable e) {
-                e.printStackTrace();
+//                e.printStackTrace();
             }
-        });
+        });*/
 
         assertTrue(isStarted.get());
     }
