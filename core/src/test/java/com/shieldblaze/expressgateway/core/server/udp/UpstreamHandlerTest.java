@@ -101,9 +101,13 @@ final class UpstreamHandlerTest {
 
         l4LoadBalancer.start().forEach(completableFuture -> {
             try {
-                isStarted.set(completableFuture.get().isSuccess());
-            } catch (InterruptedException | ExecutionException e) {
-                // Ignore
+                if (completableFuture.get().isSuccess()) {
+                    isStarted.set(true);
+                } else {
+                    throw completableFuture.get().cause();
+                }
+            } catch (Throwable e) {
+                e.printStackTrace();
             }
         });
 

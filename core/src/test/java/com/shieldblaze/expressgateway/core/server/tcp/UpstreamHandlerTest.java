@@ -17,8 +17,6 @@
  */
 package com.shieldblaze.expressgateway.core.server.tcp;
 
-import com.shieldblaze.expressgateway.core.l4.L4LoadBalancer;
-import com.shieldblaze.expressgateway.core.l4.L4LoadBalancerBuilder;
 import com.shieldblaze.expressgateway.core.configuration.CommonConfiguration;
 import com.shieldblaze.expressgateway.core.configuration.CommonConfigurationBuilder;
 import com.shieldblaze.expressgateway.core.configuration.buffer.PooledByteBufAllocatorConfiguration;
@@ -28,10 +26,12 @@ import com.shieldblaze.expressgateway.core.configuration.transport.ReceiveBuffer
 import com.shieldblaze.expressgateway.core.configuration.transport.TransportConfiguration;
 import com.shieldblaze.expressgateway.core.configuration.transport.TransportConfigurationBuilder;
 import com.shieldblaze.expressgateway.core.configuration.transport.TransportType;
+import com.shieldblaze.expressgateway.core.l4.L4LoadBalancer;
+import com.shieldblaze.expressgateway.core.l4.L4LoadBalancerBuilder;
+import com.shieldblaze.expressgateway.core.netty.EventLoopFactory;
 import com.shieldblaze.expressgateway.loadbalance.backend.Backend;
 import com.shieldblaze.expressgateway.loadbalance.backend.Cluster;
 import com.shieldblaze.expressgateway.loadbalance.l4.RoundRobin;
-import com.shieldblaze.expressgateway.core.netty.EventLoopFactory;
 import io.netty.channel.epoll.Epoll;
 import org.junit.jupiter.api.AfterAll;
 import org.junit.jupiter.api.BeforeAll;
@@ -47,7 +47,6 @@ import java.util.concurrent.ExecutionException;
 import java.util.concurrent.atomic.AtomicBoolean;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
-import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 final class UpstreamHandlerTest {
@@ -102,9 +101,13 @@ final class UpstreamHandlerTest {
 
         l4LoadBalancer.start().forEach(completableFuture -> {
             try {
-                isStarted.set(completableFuture.get().isSuccess());
-            } catch (InterruptedException | ExecutionException e) {
-                // Ignore
+                if (completableFuture.get().isSuccess()) {
+                    isStarted.set(true);
+                } else {
+                    throw completableFuture.get().cause();
+                }
+            } catch (Throwable e) {
+                e.printStackTrace();
             }
         });
 
