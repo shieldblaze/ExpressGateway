@@ -89,6 +89,10 @@ final class HTTPContentCompressor extends HttpContentCompressor {
             return null;
         }
 
+        if (!MIME_TYPES.contains(response.headers().get(HttpHeaderNames.CONTENT_TYPE))) {
+            return null;
+        }
+
         return determineEncoding(acceptEncoding);
     }
 

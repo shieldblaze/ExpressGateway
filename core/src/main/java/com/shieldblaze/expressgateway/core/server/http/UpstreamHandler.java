@@ -22,8 +22,9 @@ import com.shieldblaze.expressgateway.core.configuration.http.HTTPConfiguration;
 import com.shieldblaze.expressgateway.core.configuration.tls.TLSConfiguration;
 import com.shieldblaze.expressgateway.core.loadbalancer.l7.http.HTTPLoadBalancer;
 import com.shieldblaze.expressgateway.core.utils.BootstrapFactory;
-import com.shieldblaze.expressgateway.core.utils.EventLoopFactory;
 import com.shieldblaze.expressgateway.core.utils.ChannelUtils;
+import com.shieldblaze.expressgateway.core.utils.EventLoopFactory;
+import com.shieldblaze.expressgateway.core.utils.ReferenceCountedUtil;
 import com.shieldblaze.expressgateway.loadbalance.backend.Backend;
 import com.shieldblaze.expressgateway.loadbalance.l7.L7Balance;
 import io.netty.bootstrap.Bootstrap;
@@ -44,7 +45,6 @@ import io.netty.handler.codec.http.HttpUtil;
 import io.netty.handler.codec.http2.HttpConversionUtil;
 import io.netty.handler.ssl.SslHandler;
 import io.netty.handler.timeout.IdleStateHandler;
-import com.shieldblaze.expressgateway.core.utils.ReferenceCountedUtil;
 import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
 
@@ -159,8 +159,9 @@ final class UpstreamHandler extends ChannelInboundHandlerAdapter {
             headers.set(HttpHeaderNames.ACCEPT_ENCODING, "br, gzip, deflate");
 
             if (channelActive) {
-                if (request.headers().contains(HttpHeaderNames.CONTENT_LENGTH))
-                backend.incBytesWritten(HttpUtil.getContentLength(request, 0L));
+                if (request.headers().contains(HttpHeaderNames.CONTENT_LENGTH) && backend != null) {
+                    backend.incBytesWritten(HttpUtil.getContentLength(request, 0L));
+                }
                 downstreamChannel.writeAndFlush(msg);
             } else if (backlog != null && backlog.size() < maxDataBacklog) {
                 backlog.add(msg);
