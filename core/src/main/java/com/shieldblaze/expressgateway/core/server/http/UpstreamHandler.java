@@ -159,8 +159,8 @@ final class UpstreamHandler extends ChannelInboundHandlerAdapter {
             headers.set(HttpHeaderNames.ACCEPT_ENCODING, "br, gzip, deflate");
 
             if (channelActive) {
-                if (request.headers().contains(HttpHeaderNames.CONTENT_LENGTH) && backend != null) {
-                    backend.incBytesWritten(HttpUtil.getContentLength(request, 0L));
+                if (request.headers().contains(HttpHeaderNames.CONTENT_LENGTH)) {
+                    backend.incBytesWritten(Long.parseLong(request.headers().get(HttpHeaderNames.CONTENT_LENGTH)));
                 }
                 downstreamChannel.writeAndFlush(msg);
             } else if (backlog != null && backlog.size() < maxDataBacklog) {

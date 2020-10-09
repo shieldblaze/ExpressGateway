@@ -108,7 +108,7 @@ public final class Main {
 
         Cluster cluster = new Cluster();
         cluster.setClusterName("MyCluster");
-        cluster.addBackend(new Backend("www.google.com", new InetSocketAddress("www.google.com", 443)));
+        cluster.addBackend(new Backend("speed.hetzner.de", new InetSocketAddress("speed.hetzner.de", 443)));
 //        cluster.addBackend(new Backend("one.one.one.one", new InetSocketAddress("one.one.one.one", 443)));
 
 /*        L4LoadBalancer l4LoadBalancer = L4LoadBalancerBuilder.newBuilder()
