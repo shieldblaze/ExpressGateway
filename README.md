@@ -27,7 +27,7 @@
 - [X] Full HTTP/1.1 and HTTP/2
 - [X] HTTP/2 to HTTP/1.1 Translation
 - [X] HTTP/1.1 to HTTP/2 Translation
-- [ ] Reverse Proxy
+- [X] Reverse Proxy
 - [X] HTTP Compression (GZIP, Deflate and Brotli)
 - [ ] HTTP Caching
 
