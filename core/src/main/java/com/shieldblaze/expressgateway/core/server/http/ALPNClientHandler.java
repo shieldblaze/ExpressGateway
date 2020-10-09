@@ -70,7 +70,6 @@ final class ALPNClientHandler extends ApplicationProtocolNegotiationHandler {
             promise.trySuccess(null);
         } else if (protocol.equalsIgnoreCase(ApplicationProtocolNames.HTTP_1_1)) {
             pipeline.addLast("HTTPClientCodec", HTTPUtils.newClientCodec(httpConfiguration));
-            pipeline.addLast("HTTPContentCompressor", new HTTPContentCompressor(httpConfiguration));
             pipeline.addLast("HTTPContentDecompressor", new HTTPContentDecompressor());
 
             // If Upstream is HTTP/2 then we need HTTPTranslationAdapter for HTTP Message conversion
