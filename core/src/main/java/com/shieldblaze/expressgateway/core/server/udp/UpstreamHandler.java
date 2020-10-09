@@ -21,7 +21,7 @@ import com.shieldblaze.expressgateway.core.loadbalancer.l4.L4LoadBalancer;
 import com.shieldblaze.expressgateway.core.configuration.CommonConfiguration;
 import com.shieldblaze.expressgateway.loadbalance.backend.Backend;
 import com.shieldblaze.expressgateway.loadbalance.l4.L4Balance;
-import com.shieldblaze.expressgateway.core.netty.EventLoopFactory;
+import com.shieldblaze.expressgateway.core.utils.EventLoopFactory;
 import io.netty.channel.ChannelHandler;
 import io.netty.channel.ChannelHandlerContext;
 import io.netty.channel.ChannelInboundHandlerAdapter;
@@ -31,6 +31,7 @@ import org.apache.logging.log4j.Logger;
 
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.ConcurrentSkipListMap;
 
 /**
  * <p> Upstream Handler receives Data from Internet.
@@ -46,7 +47,7 @@ final class UpstreamHandler extends ChannelInboundHandlerAdapter {
 
     private static final Logger logger = LogManager.getLogger(UpstreamHandler.class);
 
-    final Map<String, Connection> connectionMap = new ConcurrentHashMap<>();
+    final Map<String, Connection> connectionMap = new ConcurrentSkipListMap<>();
     private final CommonConfiguration commonConfiguration;
     private final EventLoopFactory eventLoopFactory;
     private final L4Balance l4Balance;

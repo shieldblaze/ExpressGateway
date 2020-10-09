@@ -20,7 +20,7 @@ package com.shieldblaze.expressgateway.core.loadbalancer.l7.http;
 import com.shieldblaze.expressgateway.core.configuration.CommonConfiguration;
 import com.shieldblaze.expressgateway.core.configuration.http.HTTPConfiguration;
 import com.shieldblaze.expressgateway.core.server.L7FrontListener;
-import com.shieldblaze.expressgateway.core.server.http.HTTPListener;
+import com.shieldblaze.expressgateway.core.server.http.HTTPFrontListener;
 import com.shieldblaze.expressgateway.loadbalance.backend.Cluster;
 import com.shieldblaze.expressgateway.loadbalance.l7.L7Balance;
 
@@ -36,7 +36,8 @@ public final class HTTPLoadBalancerBuilder {
     private HTTPConfiguration httpConfiguration;
     private L7Balance l7Balance;
     private Cluster cluster;
-    private HTTPListener httpListener;
+    private HTTPFrontListener httpFrontListener;
+    private HTTPLoadBalancer httpLoadBalancer;
 
     private HTTPLoadBalancerBuilder() {
         // Prevent outside initialization
@@ -66,8 +67,8 @@ public final class HTTPLoadBalancerBuilder {
         return this;
     }
 
-    public HTTPLoadBalancerBuilder withL7FrontListener(HTTPListener httpListener) {
-        this.httpListener = httpListener;
+    public HTTPLoadBalancerBuilder withHTTPFrontListener(HTTPFrontListener httpFrontListener) {
+        this.httpFrontListener = httpFrontListener;
         return this;
     }
 
@@ -79,16 +80,27 @@ public final class HTTPLoadBalancerBuilder {
         return this;
     }
 
+    /**
+     * Set {@link HTTPLoadBalancer} to use
+     */
+    public HTTPLoadBalancerBuilder withHTTPLoadBalancer(HTTPLoadBalancer httpLoadBalancer) {
+        this.httpLoadBalancer = httpLoadBalancer;
+        return this;
+    }
+
     public HTTPLoadBalancer build() {
-        HTTPLoadBalancer HTTPLoadBalancer = new HTTPLoadBalancer(
-                Objects.requireNonNull(bindAddress, "bindAddress"),
-                Objects.requireNonNull(l7Balance, "l7Balance"),
-                Objects.requireNonNull(httpListener, "httpListener"),
-                Objects.requireNonNull(cluster, "cluster"),
-                Objects.requireNonNull(commonConfiguration, "commonConfiguration"),
-                Objects.requireNonNull(httpConfiguration, "httpConfiguration")
-        );
+        if (httpLoadBalancer == null) {
+            httpLoadBalancer = new DefaultHTTPLoadBalancer(
+                    Objects.requireNonNull(bindAddress, "bindAddress"),
+                    Objects.requireNonNull(l7Balance, "l7Balance"),
+                    Objects.requireNonNull(httpFrontListener, "httpFrontListener"),
+                    Objects.requireNonNull(cluster, "cluster"),
+                    Objects.requireNonNull(commonConfiguration, "commonConfiguration"),
+                    Objects.requireNonNull(httpConfiguration, "httpConfiguration")
+            );
+        }
         l7Balance.setBackends(cluster.getBackends());
-        return HTTPLoadBalancer;
+        httpFrontListener.setL7LoadBalancer(httpLoadBalancer);
+        return httpLoadBalancer;
     }
 }

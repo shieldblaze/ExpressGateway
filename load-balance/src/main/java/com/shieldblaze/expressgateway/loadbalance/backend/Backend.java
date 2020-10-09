@@ -150,6 +150,10 @@ public class Backend {
         bytesWritten += bytes;
     }
 
+    public void incBytesWritten(long bytes) {
+        bytesWritten += bytes;
+    }
+
     public void incBytesReceived(int bytes) {
         bytesReceived += bytes;
     }

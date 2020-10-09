@@ -17,9 +17,7 @@
  */
 package com.shieldblaze.expressgateway.core.server.http;
 
-import com.shieldblaze.expressgateway.core.server.http.compression.HTTPContentCompressor;
-import com.shieldblaze.expressgateway.loadbalance.backend.Backend;
-import io.netty.channel.Channel;
+import com.shieldblaze.expressgateway.core.utils.ChannelUtils;
 import io.netty.channel.ChannelHandlerContext;
 import io.netty.channel.ChannelInboundHandlerAdapter;
 import io.netty.handler.codec.http.HttpHeaderNames;
@@ -27,25 +25,14 @@ import io.netty.handler.codec.http.HttpResponse;
 import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
 
-import java.net.InetSocketAddress;
-import java.util.Map;
-
 final class DownstreamHandler extends ChannelInboundHandlerAdapter {
 
     private static final Logger logger = LogManager.getLogger(DownstreamHandler.class);
 
-    private final Channel upstream;
-    private final InetSocketAddress upstreamAddress;
-    private final Backend backend;
-    private final Map<Integer, String> acceptEncodingMap;
-    private final boolean isUpstreamHTTP2;
+    private final UpstreamHandler upstreamHandler;
 
-    DownstreamHandler(Channel upstream, Backend backend, Map<Integer, String> acceptEncodingMap, boolean isUpstreamHTTP2) {
-        this.upstream = upstream;
-        this.upstreamAddress = (InetSocketAddress) upstream.remoteAddress();
-        this.backend = backend;
-        this.acceptEncodingMap = acceptEncodingMap;
-        this.isUpstreamHTTP2 = isUpstreamHTTP2;
+    DownstreamHandler(UpstreamHandler upstreamHandler) {
+        this.upstreamHandler = upstreamHandler;
     }
 
     @Override
@@ -54,37 +41,34 @@ final class DownstreamHandler extends ChannelInboundHandlerAdapter {
             HttpResponse response = (HttpResponse) msg;
             HTTPUtils.setGenericHeaders(response.headers());
 
-            if (isUpstreamHTTP2) {
-                if (response.headers().contains(HttpHeaderNames.CONTENT_ENCODING)) {
-                    String acceptEncoding = acceptEncodingMap.get(response.headers().getInt("x-http2-stream-id"));
-                    if (acceptEncoding != null) {
-                        String targetContentEncoding = HTTPContentCompressor.getTargetEncoding(response, acceptEncoding);
-                        if (targetContentEncoding != null) {
-                            response.headers().set(HttpHeaderNames.CONTENT_ENCODING, targetContentEncoding);
-                        }
+            /*
+             * If `isUpstreamHTTP2` is `true` then  we'll lookup at map using Stream-ID and check if we have entry for "ACCEPT-ENCODING" values.
+             * If ``
+             */
+            if (upstreamHandler.isHTTP2) {
+                String acceptEncoding = upstreamHandler.acceptEncodingMap.get(response.headers().getInt("x-http2-stream-id"));
+                if (acceptEncoding != null) {
+                    String targetContentEncoding = HTTPContentCompressor.getTargetEncoding(response, acceptEncoding);
+                    if (targetContentEncoding != null) {
+                        response.headers().set(HttpHeaderNames.CONTENT_ENCODING, targetContentEncoding);
                     }
+
+                    upstreamHandler.acceptEncodingMap.remove(response.headers().getInt("x-http2-stream-id"));
                 }
-                acceptEncodingMap.remove(response.headers().getInt("x-http2-stream-id"));
             }
         }
-        upstream.writeAndFlush(msg);
+        upstreamHandler.upstreamChannel.writeAndFlush(msg);
     }
 
     @Override
     public void channelInactive(ChannelHandlerContext ctx) {
         if (logger.isInfoEnabled()) {
             logger.info("Closing Upstream {} and Downstream {} Channel",
-                    upstreamAddress.getAddress().getHostAddress() + ":" + upstreamAddress.getPort(),
-                    backend.getSocketAddress().getAddress().getHostAddress() + ":" + backend.getSocketAddress().getPort());
+                    upstreamHandler.upstreamAddress.getAddress().getHostAddress() + ":" + upstreamHandler.upstreamAddress.getPort(),
+                    upstreamHandler.downstreamAddress.getAddress().getHostAddress() + ":" + upstreamHandler.downstreamAddress.getPort());
         }
 
-        if (ctx.channel().isActive()) {
-            ctx.close();
-        }
-
-        if (upstream.isActive()) {
-            upstream.close();
-        }
+        ChannelUtils.closeChannels(upstreamHandler.upstreamChannel, upstreamHandler.downstreamChannel);
     }
 
     @Override

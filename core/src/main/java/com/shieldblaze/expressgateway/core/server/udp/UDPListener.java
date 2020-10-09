@@ -21,7 +21,7 @@ import com.shieldblaze.expressgateway.core.concurrent.GlobalEventExecutors;
 import com.shieldblaze.expressgateway.core.concurrent.async.L4FrontListenerEvent;
 import com.shieldblaze.expressgateway.core.configuration.CommonConfiguration;
 import com.shieldblaze.expressgateway.core.configuration.transport.TransportType;
-import com.shieldblaze.expressgateway.core.netty.BootstrapFactory;
+import com.shieldblaze.expressgateway.core.utils.BootstrapFactory;
 import com.shieldblaze.expressgateway.core.server.L4FrontListener;
 import io.netty.bootstrap.Bootstrap;
 import io.netty.channel.ChannelFutureListener;
@@ -32,7 +32,7 @@ import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ExecutionException;
 
 /**
- * UDP Listener for handling incoming requests.
+ * UDP Listener for handling incoming UDP requests.
  */
 public final class UDPListener extends L4FrontListener {
 

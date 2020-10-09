@@ -18,8 +18,6 @@
 package com.shieldblaze.expressgateway.core.server.http;
 
 import com.shieldblaze.expressgateway.core.configuration.http.HTTPConfiguration;
-import com.shieldblaze.expressgateway.core.server.http.compression.HTTP2ContentCompressor;
-import com.shieldblaze.expressgateway.core.server.http.compression.HTTP2ContentDecompressor;
 import io.netty.handler.codec.http.HttpClientCodec;
 import io.netty.handler.codec.http.HttpHeaderNames;
 import io.netty.handler.codec.http.HttpHeaders;
@@ -49,12 +47,12 @@ final class HTTPUtils {
     }
 
     static HttpToHttp2ConnectionHandler h2Handler(HTTPConfiguration httpConfiguration, boolean forServer) {
-        Http2Settings http2Settings = new Http2Settings();
-        http2Settings.initialWindowSize(httpConfiguration.getInitialWindowSize());
-        http2Settings.maxConcurrentStreams(httpConfiguration.getMaxConcurrentStreams());
-        http2Settings.maxHeaderListSize(httpConfiguration.getMaxHeaderSizeList());
-        http2Settings.headerTableSize(httpConfiguration.getMaxHeaderTableSize());
-        http2Settings.pushEnabled(httpConfiguration.enableHTTP2Push());
+        Http2Settings http2Settings = Http2Settings.defaultSettings();
+//        http2Settings.initialWindowSize(httpConfiguration.getInitialWindowSize());
+//        http2Settings.maxConcurrentStreams(httpConfiguration.getMaxConcurrentStreams());
+//        http2Settings.maxHeaderListSize(httpConfiguration.getMaxHeaderSizeList());
+//        http2Settings.headerTableSize(httpConfiguration.getMaxHeaderTableSize());
+//        http2Settings.pushEnabled(httpConfiguration.enableHTTP2Push());
 
         Http2Connection connection = new DefaultHttp2Connection(forServer);
 
@@ -67,14 +65,13 @@ final class HTTPUtils {
         Http2FrameReader reader = new DefaultHttp2FrameReader(new DefaultHttp2HeadersDecoder(true, http2Settings.maxHeaderListSize()));
         Http2FrameWriter writer = new DefaultHttp2FrameWriter(Http2HeadersEncoder.NEVER_SENSITIVE, false);
 
-        Http2ConnectionEncoder encoder = new HTTP2ContentCompressor(new DefaultHttp2ConnectionEncoder(connection, writer));
+        Http2ConnectionEncoder encoder = new HTTP2ContentCompressor(new DefaultHttp2ConnectionEncoder(connection, writer), httpConfiguration);
 
         DefaultHttp2ConnectionDecoder decoder = new DefaultHttp2ConnectionDecoder(connection, encoder, reader,
                 Http2PromisedRequestVerifier.ALWAYS_VERIFY, true, true);
 
         return new HttpToHttp2ConnectionHandlerBuilder()
                 .frameListener(new HTTP2ContentDecompressor(connection, listener))
-                .connection(connection)
                 .codec(decoder, encoder)
                 .initialSettings(http2Settings)
                 .build();
@@ -85,8 +82,8 @@ final class HTTPUtils {
      * @param httpConfiguration {@link HTTPConfiguration} Instance
      */
     static HttpServerCodec newServerCodec(HTTPConfiguration httpConfiguration) {
-        return new HttpServerCodec(httpConfiguration.getMaxInitialLineLength(), httpConfiguration.getMaxHeaderSize(),
-                httpConfiguration.getMaxChunkSize(), true);
+        int maxChunkSize = httpConfiguration.getMaxChunkSize();
+        return new HttpServerCodec(httpConfiguration.getMaxInitialLineLength(), httpConfiguration.getMaxHeaderSize(), maxChunkSize, true);
     }
 
     /**
@@ -94,7 +91,9 @@ final class HTTPUtils {
      * @param httpConfiguration {@link HTTPConfiguration} Instance
      */
     static HttpClientCodec newClientCodec(HTTPConfiguration httpConfiguration) {
-        return new HttpClientCodec(httpConfiguration.getMaxInitialLineLength(), httpConfiguration.getMaxHeaderSize(),
-                httpConfiguration.getMaxChunkSize(), true);
+        int maxInitialLineLength = httpConfiguration.getMaxInitialLineLength();
+        int maxHeaderSize = httpConfiguration.getMaxHeaderSize();
+        int maxChunkSize = httpConfiguration.getMaxChunkSize();
+        return new HttpClientCodec(maxInitialLineLength, maxHeaderSize, maxChunkSize, true);
     }
 }

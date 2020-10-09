@@ -20,12 +20,12 @@ package com.shieldblaze.expressgateway.core.server.http;
 import com.shieldblaze.expressgateway.core.concurrent.GlobalEventExecutors;
 import com.shieldblaze.expressgateway.core.concurrent.async.L4FrontListenerEvent;
 import com.shieldblaze.expressgateway.core.configuration.CommonConfiguration;
+import com.shieldblaze.expressgateway.core.configuration.http.HTTPConfiguration;
 import com.shieldblaze.expressgateway.core.configuration.tls.TLSConfiguration;
 import com.shieldblaze.expressgateway.core.configuration.transport.TransportConfiguration;
 import com.shieldblaze.expressgateway.core.configuration.transport.TransportType;
 import com.shieldblaze.expressgateway.core.loadbalancer.l7.http.HTTPLoadBalancer;
-import com.shieldblaze.expressgateway.core.netty.EventLoopFactory;
-import com.shieldblaze.expressgateway.core.server.L7FrontListener;
+import com.shieldblaze.expressgateway.core.utils.EventLoopFactory;
 import com.shieldblaze.expressgateway.core.tls.SNIHandler;
 import io.netty.bootstrap.ServerBootstrap;
 import io.netty.buffer.ByteBufAllocator;
@@ -49,7 +49,10 @@ import java.util.Objects;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ExecutionException;
 
-public final class HTTPListener extends L7FrontListener {
+/**
+ * HTTP Listener for for handling incoming HTTP requests.
+ */
+public final class HTTPListener extends HTTPFrontListener {
 
     /**
      * Logger
@@ -186,7 +189,7 @@ public final class HTTPListener extends L7FrontListener {
         });
     }
 
-    static final class ServerInitializer extends ChannelInitializer<SocketChannel> {
+    private static final class ServerInitializer extends ChannelInitializer<SocketChannel> {
 
         private static final Logger logger = LogManager.getLogger(ServerInitializer.class);
 
@@ -203,14 +206,17 @@ public final class HTTPListener extends L7FrontListener {
         @Override
         protected void initChannel(SocketChannel socketChannel) {
             ChannelPipeline pipeline = socketChannel.pipeline();
+            HTTPConfiguration httpConfiguration = httpLoadBalancer.getHTTPConfiguration();
 
             int timeout = httpLoadBalancer.getCommonConfiguration().getTransportConfiguration().getConnectionIdleTimeout();
             pipeline.addFirst("IdleStateHandler", new IdleStateHandler(timeout, timeout, timeout));
 
             // If TLS Server is not enabled then we'll only use HTTP/1.1
             if (tlsServer == null) {
-                pipeline.addLast("HTTPServerCodec", HTTPUtils.newServerCodec(httpLoadBalancer.getHTTPConfiguration()));
-                pipeline.addLast("HTTPServerValidator", new HTTPServerValidator(httpLoadBalancer.getHTTPConfiguration()));
+                pipeline.addLast("HTTPServerCodec", HTTPUtils.newServerCodec(httpConfiguration));
+                pipeline.addLast("HTTPServerValidator", new HTTPServerValidator(httpConfiguration));
+                pipeline.addLast("HTTPContentCompressor", new HTTPContentCompressor(httpConfiguration));
+                pipeline.addLast("HTTPContentDecompressor", new HTTPContentDecompressor());
                 pipeline.addLast("UpstreamHandler", new UpstreamHandler(httpLoadBalancer, tlsClient));
             } else {
                 pipeline.addLast("SNIHandler", new SNIHandler(tlsServer));

@@ -15,8 +15,9 @@
  * You should have received a copy of the GNU General Public License
  * along with ShieldBlaze ExpressGateway.  If not, see <https://www.gnu.org/licenses/>.
  */
-package com.shieldblaze.expressgateway.core.server.http.compression;
+package com.shieldblaze.expressgateway.core.server.http;
 
+import com.shieldblaze.expressgateway.core.configuration.http.HTTPConfiguration;
 import io.netty.channel.ChannelHandler;
 import io.netty.channel.ChannelHandlerContext;
 import io.netty.channel.embedded.EmbeddedChannel;
@@ -30,29 +31,25 @@ import io.netty.handler.codec.http.HttpHeaderValues;
 import io.netty.handler.codec.http.HttpHeaders;
 import io.netty.handler.codec.http.HttpResponse;
 
-import java.util.HashSet;
 import java.util.Set;
+import java.util.TreeSet;
 
 /**
  * {@link HTTPContentCompressor} compresses {@link HttpContent} of {@link HttpResponse} if
  * {@link HttpHeaderNames#CONTENT_TYPE} is compressible.
  */
-public final class HTTPContentCompressor extends HttpContentCompressor {
+final class HTTPContentCompressor extends HttpContentCompressor {
 
-    private static final Set<String> MIME_TYPES = new HashSet<>();
+    private static final Set<String> MIME_TYPES = new TreeSet<>();
 
     private final int brotliCompressionQuality;
     private final int compressionLevel;
-    private final int windowBits;
-    private final int memLevel;
 
     private ChannelHandlerContext ctx;
 
-    public HTTPContentCompressor(int brotliCompressionQuality, int compressionLevel, int windowBits, int memLevel) {
-        this.brotliCompressionQuality = brotliCompressionQuality;
-        this.compressionLevel = compressionLevel;
-        this.windowBits = windowBits;
-        this.memLevel = memLevel;
+    HTTPContentCompressor(HTTPConfiguration httpConfiguration) {
+        this.brotliCompressionQuality = httpConfiguration.getBrotliCompressionLevel();
+        this.compressionLevel = httpConfiguration.getDeflateCompressionLevel();
     }
 
     @Override
@@ -71,10 +68,10 @@ public final class HTTPContentCompressor extends HttpContentCompressor {
         ChannelHandler compressor;
         switch (targetContentEncoding) {
             case "gzip":
-                compressor = ZlibCodecFactory.newZlibEncoder(ZlibWrapper.GZIP, compressionLevel, windowBits, memLevel);
+                compressor = ZlibCodecFactory.newZlibEncoder(ZlibWrapper.GZIP, compressionLevel, 15, 8);
                 break;
             case "deflate":
-                compressor = ZlibCodecFactory.newZlibEncoder(ZlibWrapper.ZLIB, compressionLevel, windowBits, memLevel);
+                compressor = ZlibCodecFactory.newZlibEncoder(ZlibWrapper.ZLIB, compressionLevel, 15, 8);
                 break;
             case "br":
                 compressor = new BrotliEncoder(brotliCompressionQuality);
@@ -83,37 +80,16 @@ public final class HTTPContentCompressor extends HttpContentCompressor {
                 throw new Error();
         }
 
-        return new Result(targetContentEncoding, new EmbeddedChannel(ctx.channel().id(), ctx.channel().metadata().hasDisconnect(),
-                ctx.channel().config(), compressor));
+        return new Result(targetContentEncoding, new EmbeddedChannel(ctx.channel().id(), ctx.channel().metadata().hasDisconnect(), ctx.channel().config(), compressor));
     }
 
-    public static String getTargetEncoding(HttpResponse response, String acceptEncoding) {
-        HttpHeaders headers = response.headers();
-        // If `Content-Encoding` is set to `Identity`, then we'll do nothing.
-        if (headers.containsValue(HttpHeaderNames.CONTENT_ENCODING, HttpHeaderValues.IDENTITY, true)) {
+    static String getTargetEncoding(HttpResponse response, String acceptEncoding) {
+        // If "CONTENT-ENCODING" is already set then we will not do anything.
+        if (response.headers().contains(HttpHeaderNames.CONTENT_ENCODING)) {
             return null;
         }
 
-        String targetContentEncoding = determineEncoding(acceptEncoding);
-        if (targetContentEncoding == null) {
-            return null;
-        }
-
-        /*
-         * If MIME_TYPE is compressible and `Brotli` is selected for compression and Response already contains `CONTENT_ENCODING`
-         * then we'll check value is `gzip` or `deflate`.
-         *
-         * If `true` then we'll recompress it with Brotli for better compression.
-         */
-        String contentType = headers.get(HttpHeaderNames.CONTENT_TYPE);
-        if (targetContentEncoding.equals("br") && MIME_TYPES.contains(contentType) && headers.contains(HttpHeaderNames.CONTENT_ENCODING)) {
-            String contentEncoding = headers.get(HttpHeaderNames.CONTENT_ENCODING);
-            if (!(contentEncoding.equalsIgnoreCase("gzip") || contentEncoding.equalsIgnoreCase("deflate"))) {
-                return null;
-            }
-        }
-
-        return targetContentEncoding;
+        return determineEncoding(acceptEncoding);
     }
 
     private static String determineEncoding(String acceptEncoding) {

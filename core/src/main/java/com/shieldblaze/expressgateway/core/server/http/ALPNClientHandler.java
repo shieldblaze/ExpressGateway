@@ -18,7 +18,6 @@
 package com.shieldblaze.expressgateway.core.server.http;
 
 import com.shieldblaze.expressgateway.core.configuration.http.HTTPConfiguration;
-import com.shieldblaze.expressgateway.core.server.http.compression.HTTPContentDecompressor;
 import io.netty.channel.ChannelHandlerContext;
 import io.netty.channel.ChannelPipeline;
 import io.netty.handler.ssl.ApplicationProtocolNames;
@@ -71,20 +70,21 @@ final class ALPNClientHandler extends ApplicationProtocolNegotiationHandler {
             promise.trySuccess(null);
         } else if (protocol.equalsIgnoreCase(ApplicationProtocolNames.HTTP_1_1)) {
             pipeline.addLast("HTTPClientCodec", HTTPUtils.newClientCodec(httpConfiguration));
+            pipeline.addLast("HTTPContentCompressor", new HTTPContentCompressor(httpConfiguration));
+            pipeline.addLast("HTTPContentDecompressor", new HTTPContentDecompressor());
 
             // If Upstream is HTTP/2 then we need HTTPTranslationAdapter for HTTP Message conversion
             if (isUpstreamHTTP2) {
                 pipeline.addLast("HTTPTranslationAdapter", new HTTPTranslationAdapter(true));
             }
 
-            pipeline.addLast("HTTPContentDecompressor", new HTTPContentDecompressor());
             pipeline.addLast("DownstreamHandler", downstreamHandler);
             promise.trySuccess(null);
         } else {
             Throwable throwable = new IllegalArgumentException("Unsupported ALPN Protocol: " + protocol);
             logger.error(throwable);
             promise.tryFailure(throwable);
-            ctx.channel().closeFuture();
+            ctx.channel().close();
         }
     }
 

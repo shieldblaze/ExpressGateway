@@ -15,8 +15,9 @@
  * You should have received a copy of the GNU General Public License
  * along with ShieldBlaze ExpressGateway.  If not, see <https://www.gnu.org/licenses/>.
  */
-package com.shieldblaze.expressgateway.core.server.http.compression;
+package com.shieldblaze.expressgateway.core.server.http;
 
+import io.netty.channel.Channel;
 import io.netty.channel.embedded.EmbeddedChannel;
 import io.netty.handler.codec.compression.BrotliDecoder;
 import io.netty.handler.codec.compression.ZlibCodecFactory;
@@ -35,25 +36,22 @@ import static io.netty.handler.codec.http.HttpHeaderValues.X_GZIP;
  * {@link HTTPContentDecompressor} decompresses {@link HttpContent} of {@link HttpMessage} if
  * {@link HttpHeaderNames#CONTENT_ENCODING} is supported.
  */
-public final class HTTPContentDecompressor extends HttpContentDecompressor {
+final class HTTPContentDecompressor extends HttpContentDecompressor {
 
     @Override
     protected EmbeddedChannel newContentDecoder(String contentEncoding) {
-
-        if (GZIP.contentEqualsIgnoreCase(contentEncoding) || X_GZIP.contentEqualsIgnoreCase(contentEncoding)) {
-            return new EmbeddedChannel(ctx.channel().id(), ctx.channel().metadata().hasDisconnect(),
-                    ctx.channel().config(), ZlibCodecFactory.newZlibDecoder(ZlibWrapper.GZIP));
+        Channel channel = ctx.channel();
+        switch (contentEncoding.toLowerCase()) {
+            case "gzip":
+            case "x-gzip":
+                return new EmbeddedChannel(channel.id(), channel.metadata().hasDisconnect(), channel.config(), ZlibCodecFactory.newZlibDecoder(ZlibWrapper.GZIP));
+            case "deflate":
+            case "x-deflate":
+                return new EmbeddedChannel(channel.id(), channel.metadata().hasDisconnect(), channel.config(), ZlibCodecFactory.newZlibDecoder(ZlibWrapper.ZLIB));
+            case "br":
+                return new EmbeddedChannel(channel.id(), channel.metadata().hasDisconnect(), channel.config(), new BrotliDecoder());
+            default:
+                return null;
         }
-
-        if (DEFLATE.contentEqualsIgnoreCase(contentEncoding) || X_DEFLATE.contentEqualsIgnoreCase(contentEncoding)) {
-            return new EmbeddedChannel(ctx.channel().id(), ctx.channel().metadata().hasDisconnect(),
-                    ctx.channel().config(), ZlibCodecFactory.newZlibDecoder(ZlibWrapper.ZLIB));
-        }
-
-        if ("br".equalsIgnoreCase(contentEncoding)) {
-            return new EmbeddedChannel(ctx.channel().id(), ctx.channel().metadata().hasDisconnect(), ctx.channel().config(), new BrotliDecoder());
-        }
-
-        return null;
     }
 }

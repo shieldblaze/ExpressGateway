@@ -29,7 +29,7 @@ import com.shieldblaze.expressgateway.core.configuration.transport.TransportConf
 import com.shieldblaze.expressgateway.core.configuration.transport.TransportType;
 import com.shieldblaze.expressgateway.core.loadbalancer.l4.L4LoadBalancer;
 import com.shieldblaze.expressgateway.core.loadbalancer.l4.L4LoadBalancerBuilder;
-import com.shieldblaze.expressgateway.core.netty.EventLoopFactory;
+import com.shieldblaze.expressgateway.core.utils.EventLoopFactory;
 import com.shieldblaze.expressgateway.loadbalance.backend.Backend;
 import com.shieldblaze.expressgateway.loadbalance.backend.Cluster;
 import com.shieldblaze.expressgateway.loadbalance.l4.RoundRobin;

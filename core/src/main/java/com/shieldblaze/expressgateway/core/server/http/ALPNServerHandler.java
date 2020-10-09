@@ -17,6 +17,7 @@
  */
 package com.shieldblaze.expressgateway.core.server.http;
 
+import com.shieldblaze.expressgateway.core.configuration.http.HTTPConfiguration;
 import com.shieldblaze.expressgateway.core.configuration.tls.TLSConfiguration;
 import com.shieldblaze.expressgateway.core.loadbalancer.l7.http.HTTPLoadBalancer;
 import io.netty.channel.ChannelHandlerContext;
@@ -36,7 +37,6 @@ final class ALPNServerHandler extends ApplicationProtocolNegotiationHandler {
     final HTTPLoadBalancer httpLoadBalancer;
     final TLSConfiguration tlsClient;
 
-
     /**
      * Create a new {@link ALPNServerHandler} Instance
      *
@@ -53,13 +53,16 @@ final class ALPNServerHandler extends ApplicationProtocolNegotiationHandler {
     @Override
     protected void configurePipeline(ChannelHandlerContext ctx, String protocol) {
         ChannelPipeline pipeline = ctx.pipeline();
+        HTTPConfiguration httpConfiguration = httpLoadBalancer.getHTTPConfiguration();
         if (protocol.equalsIgnoreCase(ApplicationProtocolNames.HTTP_2)) {
-            pipeline.addLast("HTTP2Handler", HTTPUtils.h2Handler(httpLoadBalancer.getHTTPConfiguration(), true));
-            pipeline.addLast("HTTPServerValidator", new HTTPServerValidator(httpLoadBalancer.getHTTPConfiguration()));
+            pipeline.addLast("HTTP2Handler", HTTPUtils.h2Handler(httpConfiguration, true));
+            pipeline.addLast("HTTPServerValidator", new HTTPServerValidator(httpConfiguration));
             pipeline.addLast("UpstreamHandler", new UpstreamHandler(httpLoadBalancer, tlsClient, true));
         } else if (protocol.equalsIgnoreCase(ApplicationProtocolNames.HTTP_1_1)) {
-            pipeline.addLast("HTTPServerCodec", HTTPUtils.newServerCodec(httpLoadBalancer.getHTTPConfiguration()));
-            pipeline.addLast("HTTPServerValidator", new HTTPServerValidator(httpLoadBalancer.getHTTPConfiguration()));
+            pipeline.addLast("HTTPServerCodec", HTTPUtils.newServerCodec(httpConfiguration));
+            pipeline.addLast("HTTPServerValidator", new HTTPServerValidator(httpConfiguration));
+            pipeline.addLast("HTTPContentCompressor", new HTTPContentCompressor(httpConfiguration));
+            pipeline.addLast("HTTPContentDecompressor", new HTTPContentDecompressor());
             pipeline.addLast("UpstreamHandler", new UpstreamHandler(httpLoadBalancer, tlsClient));
         } else {
             if (logger.isErrorEnabled()) {

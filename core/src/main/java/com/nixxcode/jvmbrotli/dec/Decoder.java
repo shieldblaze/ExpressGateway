@@ -20,7 +20,7 @@ public class Decoder {
      */
     public static byte[] decompress(byte[] data) throws IOException {
         DecoderJNI.Wrapper decoder = new DecoderJNI.Wrapper(data.length);
-        ArrayList<byte[]> output = new ArrayList<byte[]>();
+        ArrayList<byte[]> output = new ArrayList<>();
         int totalOutputSize = 0;
         try {
             decoder.getInputBuffer().put(data);

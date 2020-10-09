@@ -17,34 +17,36 @@
  */
 package com.shieldblaze.expressgateway.core.loadbalancer.l7.http;
 
-import com.shieldblaze.expressgateway.core.concurrent.async.L4FrontListenerEvent;
 import com.shieldblaze.expressgateway.core.configuration.CommonConfiguration;
 import com.shieldblaze.expressgateway.core.configuration.http.HTTPConfiguration;
 import com.shieldblaze.expressgateway.core.loadbalancer.l7.L7LoadBalancer;
-import com.shieldblaze.expressgateway.core.server.L7FrontListener;
+import com.shieldblaze.expressgateway.core.server.http.HTTPFrontListener;
 import com.shieldblaze.expressgateway.loadbalance.backend.Cluster;
 import com.shieldblaze.expressgateway.loadbalance.l7.L7Balance;
 
 import java.net.InetSocketAddress;
-import java.util.List;
-import java.util.concurrent.CompletableFuture;
+import java.util.Objects;
 
 /**
  * HTTP Load Balancer
  */
-public final class HTTPLoadBalancer extends L7LoadBalancer {
+public abstract class HTTPLoadBalancer extends L7LoadBalancer {
 
     private final HTTPConfiguration httpConfiguration;
 
     /**
-     * @see L7FrontListener
+     * @throws NullPointerException If any parameter is {@code null}
+     * @see L7LoadBalancer
      */
-    HTTPLoadBalancer(InetSocketAddress bindAddress, L7Balance l7Balance, L7FrontListener l7FrontListener, Cluster cluster,
-                            CommonConfiguration commonConfiguration, HTTPConfiguration httpConfiguration) {
-        super(bindAddress, l7Balance, l7FrontListener, cluster, commonConfiguration);
-        this.httpConfiguration = httpConfiguration;
+    HTTPLoadBalancer(InetSocketAddress bindAddress, L7Balance l7Balance, HTTPFrontListener httpFrontListener, Cluster cluster,
+                     CommonConfiguration commonConfiguration, HTTPConfiguration httpConfiguration) {
+        super(bindAddress, l7Balance, httpFrontListener, cluster, commonConfiguration);
+        this.httpConfiguration = Objects.requireNonNull(httpConfiguration, "httpConfiguration");
     }
 
+    /**
+     * Get {@link HTTPConfiguration} Instance for this {@link HTTPLoadBalancer}
+     */
     public HTTPConfiguration getHTTPConfiguration() {
         return httpConfiguration;
     }

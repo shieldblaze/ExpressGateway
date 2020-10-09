@@ -40,7 +40,7 @@ public final class HTTPResponses {
             HttpResponseStatus.NOT_FOUND, Unpooled.EMPTY_BUFFER);
 
     /**
-     * HTTP 500: BAD_GATEWAY
+     * HTTP 502: BAD_GATEWAY
      */
     public static final DefaultFullHttpResponse BAD_GATEWAY_KEEP_ALIVE = new DefaultFullHttpResponse(HttpVersion.HTTP_1_1,
             HttpResponseStatus.BAD_GATEWAY, Unpooled.EMPTY_BUFFER);

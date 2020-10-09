@@ -15,8 +15,9 @@
  * You should have received a copy of the GNU General Public License
  * along with ShieldBlaze ExpressGateway.  If not, see <https://www.gnu.org/licenses/>.
  */
-package com.shieldblaze.expressgateway.core.server.http.compression;
+package com.shieldblaze.expressgateway.core.server.http;
 
+import io.netty.channel.Channel;
 import io.netty.channel.ChannelHandlerContext;
 import io.netty.channel.embedded.EmbeddedChannel;
 import io.netty.handler.codec.compression.BrotliDecoder;
@@ -27,11 +28,6 @@ import io.netty.handler.codec.http2.Http2Connection;
 import io.netty.handler.codec.http2.Http2DataFrame;
 import io.netty.handler.codec.http2.Http2FrameListener;
 import io.netty.handler.codec.http2.Http2Headers;
-
-import static io.netty.handler.codec.http.HttpHeaderValues.DEFLATE;
-import static io.netty.handler.codec.http.HttpHeaderValues.GZIP;
-import static io.netty.handler.codec.http.HttpHeaderValues.X_DEFLATE;
-import static io.netty.handler.codec.http.HttpHeaderValues.X_GZIP;
 
 /**
  * {@link HTTP2ContentCompressor} compresses {@link Http2DataFrame} if {@link Http2Headers} contains {@code Content-Encoding}
@@ -44,29 +40,26 @@ import static io.netty.handler.codec.http.HttpHeaderValues.X_GZIP;
  *     <li> br </li>
  * </ul>
  */
-public final class HTTP2ContentDecompressor extends DelegatingDecompressorFrameListener {
+final class HTTP2ContentDecompressor extends DelegatingDecompressorFrameListener {
 
-    public HTTP2ContentDecompressor(Http2Connection connection, Http2FrameListener listener) {
+    HTTP2ContentDecompressor(Http2Connection connection, Http2FrameListener listener) {
         super(connection, listener);
     }
 
     @Override
     protected EmbeddedChannel newContentDecompressor(ChannelHandlerContext ctx, CharSequence contentEncoding) {
-
-        if (GZIP.contentEqualsIgnoreCase(contentEncoding) || X_GZIP.contentEqualsIgnoreCase(contentEncoding)) {
-            return new EmbeddedChannel(ctx.channel().id(), ctx.channel().metadata().hasDisconnect(),
-                    ctx.channel().config(), ZlibCodecFactory.newZlibDecoder(ZlibWrapper.GZIP));
+        Channel channel = ctx.channel();
+        switch (contentEncoding.toString().toLowerCase()) {
+            case "gzip":
+            case "x-gzip":
+                return new EmbeddedChannel(channel.id(), channel.metadata().hasDisconnect(), channel.config(), ZlibCodecFactory.newZlibDecoder(ZlibWrapper.GZIP));
+            case "deflate":
+            case "x-deflate":
+                return new EmbeddedChannel(channel.id(), channel.metadata().hasDisconnect(), channel.config(), ZlibCodecFactory.newZlibDecoder(ZlibWrapper.ZLIB));
+            case "br":
+                return new EmbeddedChannel(channel.id(), channel.metadata().hasDisconnect(), channel.config(), new BrotliDecoder());
+            default:
+                return null;
         }
-
-        if (DEFLATE.contentEqualsIgnoreCase(contentEncoding) || X_DEFLATE.contentEqualsIgnoreCase(contentEncoding)) {
-            return new EmbeddedChannel(ctx.channel().id(), ctx.channel().metadata().hasDisconnect(),
-                    ctx.channel().config(), ZlibCodecFactory.newZlibDecoder(ZlibWrapper.ZLIB));
-        }
-
-        if ("br".equalsIgnoreCase(contentEncoding.toString())) {
-            return new EmbeddedChannel(ctx.channel().id(), ctx.channel().metadata().hasDisconnect(), ctx.channel().config(), new BrotliDecoder());
-        }
-
-        return null;
     }
 }

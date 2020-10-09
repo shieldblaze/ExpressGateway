@@ -15,8 +15,10 @@
  * You should have received a copy of the GNU General Public License
  * along with ShieldBlaze ExpressGateway.  If not, see <https://www.gnu.org/licenses/>.
  */
-package com.shieldblaze.expressgateway.core.server.http.compression;
+package com.shieldblaze.expressgateway.core.server.http;
 
+import com.shieldblaze.expressgateway.core.configuration.http.HTTPConfiguration;
+import io.netty.channel.Channel;
 import io.netty.channel.ChannelHandlerContext;
 import io.netty.channel.embedded.EmbeddedChannel;
 import io.netty.handler.codec.compression.BrotliEncoder;
@@ -38,32 +40,31 @@ import io.netty.handler.codec.http2.Http2Headers;
  *     <li> br </li>
  * </ul>
  */
-public final class HTTP2ContentCompressor extends CompressorHttp2ConnectionEncoder {
+final class HTTP2ContentCompressor extends CompressorHttp2ConnectionEncoder {
 
-    public static final int DEFAULT_COMPRESSION_LEVEL = 6;
-    public static final int DEFAULT_WINDOW_BITS = 15;
-    public static final int DEFAULT_MEM_LEVEL = 8;
+    private final int brotliCompressionQuality;
+    private final int compressionLevel;
 
-    public HTTP2ContentCompressor(Http2ConnectionEncoder delegate) {
+    HTTP2ContentCompressor(Http2ConnectionEncoder delegate, HTTPConfiguration httpConfiguration) {
         super(delegate);
+        this.brotliCompressionQuality = httpConfiguration.getBrotliCompressionLevel();
+        this.compressionLevel = httpConfiguration.getDeflateCompressionLevel();
     }
 
     @Override
     protected EmbeddedChannel newContentCompressor(ChannelHandlerContext ctx, CharSequence contentEncoding) {
+        Channel channel = ctx.channel();
         switch (contentEncoding.toString().toLowerCase()) {
             case "gzip":
             case "x-gzip":
-                return new EmbeddedChannel(ctx.channel().id(), ctx.channel().metadata().hasDisconnect(),
-                        ctx.channel().config(), ZlibCodecFactory.newZlibEncoder(ZlibWrapper.GZIP, DEFAULT_COMPRESSION_LEVEL, DEFAULT_WINDOW_BITS,
-                        DEFAULT_MEM_LEVEL));
+                return new EmbeddedChannel(channel.id(), channel.metadata().hasDisconnect(), channel.config(),
+                        ZlibCodecFactory.newZlibEncoder(ZlibWrapper.GZIP, compressionLevel, 15, 8));
             case "deflate":
             case "x-deflate":
-                return new EmbeddedChannel(ctx.channel().id(), ctx.channel().metadata().hasDisconnect(),
-                        ctx.channel().config(), ZlibCodecFactory.newZlibEncoder(ZlibWrapper.ZLIB, DEFAULT_COMPRESSION_LEVEL, DEFAULT_WINDOW_BITS,
-                        DEFAULT_MEM_LEVEL));
+                return new EmbeddedChannel(channel.id(), channel.metadata().hasDisconnect(), channel.config(),
+                        ZlibCodecFactory.newZlibEncoder(ZlibWrapper.ZLIB, compressionLevel, 15, 8));
             case "br":
-                return new EmbeddedChannel(ctx.channel().id(), ctx.channel().metadata().hasDisconnect(),
-                        ctx.channel().config(), new BrotliEncoder(4));
+                return new EmbeddedChannel(channel.id(), channel.metadata().hasDisconnect(), channel.config(), new BrotliEncoder(brotliCompressionQuality));
             default:
                 return null;
         }

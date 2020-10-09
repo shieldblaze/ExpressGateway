@@ -96,10 +96,6 @@ final class HTTPTranslationAdapter extends ChannelDuplexHandler {
                 weight = httpRequest.headers().getShort(HttpConversionUtil.ExtensionHeaderNames.STREAM_WEIGHT.text(), (short) -1);
                 dependencyId = httpRequest.headers().getInt(HttpConversionUtil.ExtensionHeaderNames.STREAM_DEPENDENCY_ID.text(), -1);
                 promiseId = httpRequest.headers().getInt(HttpConversionUtil.ExtensionHeaderNames.STREAM_PROMISE_ID.text(), -1);
-
-                if (streamId == -1) {
-                    throw new Http2Exception(Http2Error.PROTOCOL_ERROR, "StreamID not found");
-                }
             } else {
                 httpRequest.headers().set(HttpConversionUtil.ExtensionHeaderNames.SCHEME.text(), "https");
             }

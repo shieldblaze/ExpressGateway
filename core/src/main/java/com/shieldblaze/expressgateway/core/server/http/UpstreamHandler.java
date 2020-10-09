@@ -21,9 +21,8 @@ import com.shieldblaze.expressgateway.core.configuration.CommonConfiguration;
 import com.shieldblaze.expressgateway.core.configuration.http.HTTPConfiguration;
 import com.shieldblaze.expressgateway.core.configuration.tls.TLSConfiguration;
 import com.shieldblaze.expressgateway.core.loadbalancer.l7.http.HTTPLoadBalancer;
-import com.shieldblaze.expressgateway.core.netty.BootstrapFactory;
-import com.shieldblaze.expressgateway.core.netty.EventLoopFactory;
-import com.shieldblaze.expressgateway.core.server.http.compression.HTTPContentDecompressor;
+import com.shieldblaze.expressgateway.core.utils.BootstrapFactory;
+import com.shieldblaze.expressgateway.core.utils.EventLoopFactory;
 import com.shieldblaze.expressgateway.core.utils.ChannelUtils;
 import com.shieldblaze.expressgateway.loadbalance.backend.Backend;
 import com.shieldblaze.expressgateway.loadbalance.l7.L7Balance;
@@ -40,16 +39,12 @@ import io.netty.channel.socket.SocketChannel;
 import io.netty.handler.codec.http.HttpContent;
 import io.netty.handler.codec.http.HttpHeaderNames;
 import io.netty.handler.codec.http.HttpHeaders;
-import io.netty.handler.codec.http.HttpObject;
 import io.netty.handler.codec.http.HttpRequest;
 import io.netty.handler.codec.http.HttpUtil;
-import io.netty.handler.codec.http2.Http2Frame;
 import io.netty.handler.codec.http2.HttpConversionUtil;
-import io.netty.handler.codec.http2.HttpToHttp2ConnectionHandler;
-import io.netty.handler.codec.http2.InboundHttp2ToHttpObjectAdapter;
 import io.netty.handler.ssl.SslHandler;
 import io.netty.handler.timeout.IdleStateHandler;
-import io.netty.util.ReferenceCountUtil;
+import com.shieldblaze.expressgateway.core.utils.ReferenceCountedUtil;
 import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
 
@@ -58,60 +53,27 @@ import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ConcurrentLinkedQueue;
 
-/**
- * <p>
- * {@link UpstreamHandler} handles incoming HTTP requests.
- * It can handle HTTP/2 and HTTP/1.1 together. For {@link UpstreamHandler} to handle
- * HTTP/2 requests, {@link #isHTTP2} must be set to {@code true}. For HTTP/2 traffic,
- * Client must use HTTP/2 over TLS (h2). And for {@link UpstreamHandler}
- * to handle HTTP/1.1 requests, {@link #isHTTP2} must be set to {@code false}.
- * </p>
- * <p></p>
- * <p>
- * <p> How HTTP/2 traffic is handled: </p>
- * <p>
- * When HTTP/2 request arrives, {@link InboundHttp2ToHttpObjectAdapter} converts it into
- * {@link HttpObject}. When {@link HttpObject} arrives at {@link UpstreamHandler}, we take Stream ID
- * from {@link HttpRequest} inside {@code x-http2-stream-id} header and map it with {@code ACCEPT-ENCODING} header
- * in {@link #acceptEncodingMap}. Then we connect to {@link Backend} server. If {@link TLSConfiguration}
- * is supplied, then we use {@link ALPNClientHandler} while connecting to the {@link Backend}.
- *         <ul>
- *             <li>
- *                  If Backend is connected to HTTP/2, we will write {@link HttpObject} and {@link HttpToHttp2ConnectionHandler}
- *                  will convert it to {@link Http2Frame}. {@link HttpToHttp2ConnectionHandler} uses same the StreamID which is
- *                  present in {@link HttpRequest} inside {@code x-http2-stream-id} header. When response comes back from {@link Backend},
- *                  it is handled by {@link DownstreamHandler}. {@link DownstreamHandler} checks if {@link UpstreamHandler} uses HTTP/2,
- *                  If yes then we'll fetch {@code ACCEPT-ENCODING} for the actual request from {@link #acceptEncodingMap} using Stream ID
- *                  and set {@code CONTENT-ENCODING} if response is compressible and {@code ACCEPT-ENCODING} accepts the compression method.
- *                  Then we'll forward the request and {@link HttpToHttp2ConnectionHandler} will receive the response and compress if
- *                  {@code CONTENT-ENCODING} header is set and finally pass the request back to origin.
- *             </li>
- *             <li>
- *                 If Backend is connected to HTTP/1.1 when we'll use {@link HTTPTranslationAdapter} for Translation
- *                 between {@link UpstreamHandler} HTTP/2 to {@link DownstreamHandler} HTTP/1.1.
- *             </li>
- *         </ul>
- *     </p>
- * </p>
- */
 final class UpstreamHandler extends ChannelInboundHandlerAdapter {
 
     private static final Logger logger = LogManager.getLogger(UpstreamHandler.class);
 
-    private final Map<Integer, String> acceptEncodingMap = new ConcurrentHashMap<>();
+    final Map<Integer, String> acceptEncodingMap = new ConcurrentHashMap<>();
     private ConcurrentLinkedQueue<Object> backlog = new ConcurrentLinkedQueue<>();
 
     private long bytesReceived = 0L;
     private boolean channelActive = false;
-    private Channel downstreamChannel;
-    private Backend backend;
+    Channel upstreamChannel;
+    Channel downstreamChannel;
+    Backend backend;
+    InetSocketAddress upstreamAddress;
+    InetSocketAddress downstreamAddress;
 
     private final L7Balance l7Balance;
     private final CommonConfiguration commonConfiguration;
     private final TLSConfiguration tlsClient;
     private final EventLoopFactory eventLoopFactory;
     private final HTTPConfiguration httpConfiguration;
-    private final boolean isHTTP2;
+    final boolean isHTTP2;
     private final int maxDataBacklog;
 
     /**
@@ -145,18 +107,28 @@ final class UpstreamHandler extends ChannelInboundHandlerAdapter {
 
     @Override
     public void channelRead(ChannelHandlerContext ctx, Object msg) {
+        if (upstreamAddress == null) {
+            upstreamAddress = (InetSocketAddress) ctx.channel().remoteAddress();
+        }
+
+        if (upstreamChannel == null) {
+            upstreamChannel = ctx.channel();
+        }
+
         if (msg instanceof HttpRequest) {
             HttpRequest request = (HttpRequest) msg;
             HttpHeaders headers = request.headers();
 
             // Get Backend
-            backend = l7Balance.getBackend(request);
+            if (backend == null) {
+                backend = l7Balance.getBackend(request);
+            }
 
             // If Backend is not found, return `BAD_GATEWAY` response.
             if (backend == null) {
                 // If request have `Keep-Alive`, return `Keep-Alive` else `Close` response.
                 if (HttpUtil.isKeepAlive(request)) {
-                    ctx.writeAndFlush(HTTPResponses.BAD_GATEWAY_KEEP_ALIVE.retainedDuplicate()).addListener(ChannelFutureListener.CLOSE_ON_FAILURE);
+                    ctx.writeAndFlush(HTTPResponses.BAD_GATEWAY_KEEP_ALIVE.retainedDuplicate());
                 } else {
                     ctx.writeAndFlush(HTTPResponses.BAD_GATEWAY.retainedDuplicate()).addListener(ChannelFutureListener.CLOSE);
                 }
@@ -165,7 +137,7 @@ final class UpstreamHandler extends ChannelInboundHandlerAdapter {
 
             // If Downstream Channel is not active yet, we'll create new.
             if (!channelActive) {
-                newChannel(backend, ctx.alloc(), ctx.channel());
+                newChannel(ctx.alloc());
             }
 
             /*
@@ -181,13 +153,15 @@ final class UpstreamHandler extends ChannelInboundHandlerAdapter {
                 }
             }
 
-            headers.set("X-Forwarded-For", ((InetSocketAddress) ctx.channel().remoteAddress()).getAddress().getHostAddress());
+            headers.remove(HttpHeaderNames.UPGRADE);
+            headers.set("X-Forwarded-For", upstreamAddress.getAddress().getHostAddress());
             headers.set(HttpHeaderNames.HOST, backend.getHostname());
             headers.set(HttpHeaderNames.ACCEPT_ENCODING, "br, gzip, deflate");
 
             if (channelActive) {
-                backend.incBytesWritten(HttpUtil.getContentLength(request, 0));
-                downstreamChannel.writeAndFlush(msg).addListener(ChannelFutureListener.CLOSE_ON_FAILURE);
+                if (request.headers().contains(HttpHeaderNames.CONTENT_LENGTH))
+                backend.incBytesWritten(HttpUtil.getContentLength(request, 0L));
+                downstreamChannel.writeAndFlush(msg);
             } else if (backlog != null && backlog.size() < maxDataBacklog) {
                 backlog.add(msg);
             }
@@ -204,7 +178,7 @@ final class UpstreamHandler extends ChannelInboundHandlerAdapter {
 
             if (channelActive) {
                 backend.incBytesWritten(content.content().readableBytes());
-                downstreamChannel.writeAndFlush(content).addListener(ChannelFutureListener.CLOSE_ON_FAILURE);
+                downstreamChannel.writeAndFlush(content);
                 return;
             } else if (backlog != null && backlog.size() < maxDataBacklog) {
                 backlog.add(content);
@@ -215,8 +189,10 @@ final class UpstreamHandler extends ChannelInboundHandlerAdapter {
         }
     }
 
-    private void newChannel(Backend backend, ByteBufAllocator byteBufAllocator, Channel channel) {
-        Bootstrap bootstrap = BootstrapFactory.getTCP(commonConfiguration, eventLoopFactory.getChildGroup(), byteBufAllocator);
+    private void newChannel(ByteBufAllocator allocator) {
+        UpstreamHandler upstreamHandler = this;
+
+        Bootstrap bootstrap = BootstrapFactory.getTCP(commonConfiguration, eventLoopFactory.getChildGroup(), allocator);
         bootstrap.handler(new ChannelInitializer<SocketChannel>() {
             @Override
             protected void initChannel(SocketChannel ch) {
@@ -227,14 +203,15 @@ final class UpstreamHandler extends ChannelInboundHandlerAdapter {
 
                 if (tlsClient == null) {
                     pipeline.addLast("HTTPClientCodec", HTTPUtils.newClientCodec(httpConfiguration));
+                    pipeline.addLast("HTTPContentCompressor", new HTTPContentCompressor(httpConfiguration));
                     pipeline.addLast("HTTPContentDecompressor", new HTTPContentDecompressor());
-                    pipeline.addLast("DownstreamHandler", new DownstreamHandler(channel, backend, acceptEncodingMap, isHTTP2));
+                    pipeline.addLast("DownstreamHandler", new DownstreamHandler(upstreamHandler));
                 } else {
                     String hostname = backend.getSocketAddress().getHostName();
                     int port = backend.getSocketAddress().getPort();
-                    SslHandler sslHandler = tlsClient.getDefault().getSslContext().newHandler(byteBufAllocator, hostname, port);
+                    SslHandler sslHandler = tlsClient.getDefault().getSslContext().newHandler(allocator, hostname, port);
 
-                    DownstreamHandler downstreamHandler = new DownstreamHandler(channel, backend, acceptEncodingMap, isHTTP2);
+                    DownstreamHandler downstreamHandler = new DownstreamHandler(upstreamHandler);
                     ALPNClientHandler alpnClientHandler = new ALPNClientHandler(httpConfiguration, downstreamHandler, ch.newPromise(), isHTTP2);
 
                     pipeline.addLast("TLSHandler", sslHandler);
@@ -248,19 +225,20 @@ final class UpstreamHandler extends ChannelInboundHandlerAdapter {
 
         channelFuture.addListener((ChannelFutureListener) _channelFuture -> {
             if (_channelFuture.isSuccess()) {
+                downstreamAddress = (InetSocketAddress) downstreamChannel.remoteAddress();
 
                 downstreamChannel.pipeline().get(ALPNClientHandler.class).promise().addListener((ChannelFutureListener) alpnFuture -> {
                     if (alpnFuture.isSuccess()) {
-                        backlog.forEach(object -> downstreamChannel.writeAndFlush(object).addListener(ChannelFutureListener.CLOSE_ON_FAILURE));
+                        backlog.forEach(object -> downstreamChannel.writeAndFlush(object));
                         channelActive = true;
                         backlog = null;
                     } else {
-                        ChannelUtils.closeChannels(channel, downstreamChannel);
+                        ChannelUtils.closeChannels(upstreamChannel, downstreamChannel);
                     }
                 });
 
             } else {
-                ChannelUtils.closeChannels(channel, downstreamChannel);
+                ChannelUtils.closeChannels(upstreamChannel, downstreamChannel);
             }
         });
     }
@@ -268,14 +246,14 @@ final class UpstreamHandler extends ChannelInboundHandlerAdapter {
     @Override
     public void channelInactive(ChannelHandlerContext ctx) {
         if (logger.isInfoEnabled()) {
-            InetSocketAddress socketAddress = ((InetSocketAddress) ctx.channel().remoteAddress());
-            if (backend == null) {
-                logger.info("Closing Upstream {}",
-                        socketAddress.getAddress().getHostAddress() + ":" + socketAddress.getPort());
-            } else {
-                logger.info("Closing Upstream {} and Downstream {} Channel",
-                        socketAddress.getAddress().getHostAddress() + ":" + socketAddress.getPort(),
-                        backend.getSocketAddress().getAddress().getHostAddress() + ":" + backend.getSocketAddress().getPort());
+            if (upstreamAddress != null) {
+                if (downstreamAddress == null) {
+                    logger.info("Closing Upstream {}", upstreamAddress.getAddress().getHostAddress() + ":" + upstreamAddress.getPort());
+                } else {
+                    logger.info("Closing Upstream {} and Downstream {} Channel",
+                            upstreamAddress.getAddress().getHostAddress() + ":" + upstreamAddress.getPort(),
+                            downstreamAddress.getAddress().getHostAddress() + ":" + downstreamAddress.getPort());
+                }
             }
         }
 
@@ -283,7 +261,7 @@ final class UpstreamHandler extends ChannelInboundHandlerAdapter {
 
         if (backlog != null) {
             for (Object httpObject : backlog) {
-                ReferenceCountUtil.silentFullRelease(httpObject);
+                ReferenceCountedUtil.silentFullRelease(httpObject);
             }
             backlog = null;
         }

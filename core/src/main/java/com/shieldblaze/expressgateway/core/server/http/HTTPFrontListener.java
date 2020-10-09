@@ -15,7 +15,13 @@
  * You should have received a copy of the GNU General Public License
  * along with ShieldBlaze ExpressGateway.  If not, see <https://www.gnu.org/licenses/>.
  */
-/**
- * HTTP Load-Balancing and other HTTP related features
- */
 package com.shieldblaze.expressgateway.core.server.http;
+
+import com.shieldblaze.expressgateway.core.server.L7FrontListener;
+
+/**
+ * Base class for implementing HTTP {@link L7FrontListener}
+ */
+public abstract class HTTPFrontListener extends L7FrontListener {
+    // Empty
+}

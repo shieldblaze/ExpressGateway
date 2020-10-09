@@ -19,8 +19,8 @@ package com.shieldblaze.expressgateway.core.loadbalancer.l7;
 
 import com.shieldblaze.expressgateway.core.concurrent.async.L4FrontListenerEvent;
 import com.shieldblaze.expressgateway.core.configuration.CommonConfiguration;
-import com.shieldblaze.expressgateway.core.netty.EventLoopFactory;
-import com.shieldblaze.expressgateway.core.netty.PooledByteBufAllocator;
+import com.shieldblaze.expressgateway.core.utils.EventLoopFactory;
+import com.shieldblaze.expressgateway.core.utils.PooledByteBufAllocator;
 import com.shieldblaze.expressgateway.core.server.L4FrontListener;
 import com.shieldblaze.expressgateway.core.server.L7FrontListener;
 import com.shieldblaze.expressgateway.loadbalance.backend.Cluster;
@@ -29,8 +29,12 @@ import io.netty.buffer.ByteBufAllocator;
 
 import java.net.InetSocketAddress;
 import java.util.List;
+import java.util.Objects;
 import java.util.concurrent.CompletableFuture;
 
+/**
+ * {@link L7LoadBalancer} holds base functions for a L7-Load Balancer.
+ */
 public abstract class L7LoadBalancer {
 
     private final InetSocketAddress bindAddress;
@@ -48,14 +52,14 @@ public abstract class L7LoadBalancer {
      * @param l7FrontListener     {@link L7FrontListener} for listening and handling traffic
      * @param cluster             {@link Cluster} to be Load Balanced
      * @param commonConfiguration {@link CommonConfiguration} to be applied
-     * @throws NullPointerException If a required parameter if {@code null}
+     * @throws NullPointerException If any parameter is {@code null}
      */
     public L7LoadBalancer(InetSocketAddress bindAddress, L7Balance l7Balance, L7FrontListener l7FrontListener, Cluster cluster, CommonConfiguration commonConfiguration) {
-        this.bindAddress = bindAddress;
-        this.l7Balance = l7Balance;
-        this.l7FrontListener = l7FrontListener;
-        this.cluster = cluster;
-        this.commonConfiguration = commonConfiguration;
+        this.bindAddress = Objects.requireNonNull(bindAddress, "bindAddress");
+        this.l7Balance = Objects.requireNonNull(l7Balance, "l7Balance");
+        this.l7FrontListener = Objects.requireNonNull(l7FrontListener, "l7FrontListener");
+        this.cluster = Objects.requireNonNull(cluster, "cluster");
+        this.commonConfiguration = Objects.requireNonNull(commonConfiguration);
         this.byteBufAllocator = new PooledByteBufAllocator(commonConfiguration.getPooledByteBufAllocatorConfiguration()).getInstance();
         this.eventLoopFactory = new EventLoopFactory(commonConfiguration);
     }

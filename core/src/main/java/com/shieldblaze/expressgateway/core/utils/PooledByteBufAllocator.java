@@ -15,17 +15,18 @@
  * You should have received a copy of the GNU General Public License
  * along with ShieldBlaze ExpressGateway.  If not, see <https://www.gnu.org/licenses/>.
  */
-package com.shieldblaze.expressgateway.core.netty;
+package com.shieldblaze.expressgateway.core.utils;
 
 import com.shieldblaze.expressgateway.core.configuration.buffer.PooledByteBufAllocatorConfiguration;
-import io.netty.util.internal.ObjectUtil;
+
+import java.util.Objects;
 
 public final class PooledByteBufAllocator {
 
     private final io.netty.buffer.PooledByteBufAllocator pooledByteBufAllocator;
 
     public PooledByteBufAllocator(PooledByteBufAllocatorConfiguration configuration) {
-        ObjectUtil.checkNotNull(configuration, "PooledByteBufAllocatorConfiguration");
+        Objects.requireNonNull(configuration, "PooledByteBufAllocatorConfiguration");
 
         pooledByteBufAllocator = new io.netty.buffer.PooledByteBufAllocator(
                 configuration.isPreferDirect(),

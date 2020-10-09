@@ -5,6 +5,9 @@ import io.netty.channel.Channel;
 
 import java.util.Objects;
 
+/**
+ * Provides extra utilities for {@link Channel} objects.
+ */
 @Internal
 public final class ChannelUtils {
 

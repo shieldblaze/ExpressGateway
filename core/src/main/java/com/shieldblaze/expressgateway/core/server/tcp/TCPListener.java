@@ -24,7 +24,7 @@ import com.shieldblaze.expressgateway.core.configuration.tls.TLSConfiguration;
 import com.shieldblaze.expressgateway.core.configuration.transport.TransportConfiguration;
 import com.shieldblaze.expressgateway.core.configuration.transport.TransportType;
 import com.shieldblaze.expressgateway.core.loadbalancer.l4.L4LoadBalancer;
-import com.shieldblaze.expressgateway.core.netty.EventLoopFactory;
+import com.shieldblaze.expressgateway.core.utils.EventLoopFactory;
 import com.shieldblaze.expressgateway.core.server.L4FrontListener;
 import com.shieldblaze.expressgateway.core.tls.SNIHandler;
 import io.netty.bootstrap.ServerBootstrap;
@@ -49,7 +49,7 @@ import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ExecutionException;
 
 /**
- * TCP Listener for handling incoming requests.
+ * TCP Listener for handling incoming TCP requests.
  */
 public final class TCPListener extends L4FrontListener {
 
