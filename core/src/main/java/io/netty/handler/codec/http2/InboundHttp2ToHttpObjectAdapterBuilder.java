@@ -34,7 +34,7 @@ public final class InboundHttp2ToHttpObjectAdapterBuilder extends AbstractInboun
     }
 
     @Override
-    public InboundHttp2ToHttpObjectAdapterBuilder maxContentLength(int maxContentLength) {
+    public InboundHttp2ToHttpObjectAdapterBuilder maxContentLength(long maxContentLength) {
         return super.maxContentLength(maxContentLength);
     }
 
@@ -55,7 +55,7 @@ public final class InboundHttp2ToHttpObjectAdapterBuilder extends AbstractInboun
 
     @Override
     protected InboundHttp2ToHttpObjectAdapter build(Http2Connection connection,
-                                                    int maxContentLength,
+                                                    long maxContentLength,
                                                     boolean validateHttpHeaders,
                                                     boolean propagateSettings) throws Exception {
 

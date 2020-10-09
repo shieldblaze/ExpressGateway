@@ -17,40 +17,32 @@
  */
 package com.shieldblaze.expressgateway.core.server.udp;
 
+import com.shieldblaze.expressgateway.core.concurrent.GlobalEventExecutors;
+import com.shieldblaze.expressgateway.core.concurrent.async.L4FrontListenerEvent;
 import com.shieldblaze.expressgateway.core.configuration.CommonConfiguration;
 import com.shieldblaze.expressgateway.core.configuration.transport.TransportType;
-import com.shieldblaze.expressgateway.loadbalance.l4.L4Balance;
-import com.shieldblaze.expressgateway.core.netty.BootstrapFactory;
-import com.shieldblaze.expressgateway.core.netty.EventLoopFactory;
+import com.shieldblaze.expressgateway.core.utils.BootstrapFactory;
 import com.shieldblaze.expressgateway.core.server.L4FrontListener;
 import io.netty.bootstrap.Bootstrap;
-import io.netty.buffer.ByteBufAllocator;
-import io.netty.channel.ChannelFuture;
 import io.netty.channel.ChannelFutureListener;
-import org.apache.logging.log4j.LogManager;
-import org.apache.logging.log4j.Logger;
+import io.netty.channel.EventLoopGroup;
 
-import java.net.InetSocketAddress;
+import java.util.List;
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.ExecutionException;
 
 /**
- * UDP Listener for handling incoming requests.
+ * UDP Listener for handling incoming UDP requests.
  */
 public final class UDPListener extends L4FrontListener {
-    private static final Logger logger = LogManager.getLogger(UDPListener.class);
-
-    /**
-     * @param bindAddress {@link InetSocketAddress} on which {@link UDPListener} will bind and listen.
-     */
-    public UDPListener(InetSocketAddress bindAddress) {
-        super(bindAddress);
-    }
 
     @Override
-    public void start(CommonConfiguration commonConfiguration, EventLoopFactory eventLoopFactory, ByteBufAllocator byteBufAllocator,
-                      L4Balance l4Balance) {
+    public List<CompletableFuture<L4FrontListenerEvent>> start() {
+        CommonConfiguration commonConfiguration = getL4LoadBalancer().getCommonConfiguration();
+        EventLoopGroup eventLoopGroup = getL4LoadBalancer().getEventLoopFactory().getParentGroup();
 
-        Bootstrap bootstrap = BootstrapFactory.getUDP(commonConfiguration, eventLoopFactory.getParentGroup(), byteBufAllocator)
-                .handler(new UpstreamHandler(commonConfiguration, eventLoopFactory, l4Balance));
+        Bootstrap bootstrap = BootstrapFactory.getUDP(commonConfiguration, eventLoopGroup, getL4LoadBalancer().getByteBufAllocator())
+                .handler(new UpstreamHandler(getL4LoadBalancer()));
 
         int bindRounds = 1;
         if (commonConfiguration.getTransportConfiguration().getTransportType() == TransportType.EPOLL) {
@@ -58,13 +50,39 @@ public final class UDPListener extends L4FrontListener {
         }
 
         for (int i = 0; i < bindRounds; i++) {
-            ChannelFuture channelFuture = bootstrap.bind(bindAddress).addListener((ChannelFutureListener) future -> {
-                if (future.isSuccess()) {
-                    logger.info("Server Successfully Started at: {}", future.channel().localAddress());
+            CompletableFuture<L4FrontListenerEvent> completableFuture = GlobalEventExecutors.INSTANCE.submitTask(() -> {
+                L4FrontListenerEvent l4FrontListenerEvent = new L4FrontListenerEvent();
+                try {
+                    bootstrap.bind(getL4LoadBalancer().getBindAddress()).addListener((ChannelFutureListener) future -> {
+                        if (future.isSuccess()) {
+                            l4FrontListenerEvent.setChannelFuture(future);
+                        } else {
+                            l4FrontListenerEvent.setCause(future.cause());
+                        }
+                    }).sync();
+                } catch (InterruptedException e) {
+                    l4FrontListenerEvent.setCause(e);
                 }
+                return l4FrontListenerEvent;
             });
 
-            channelFutureList.add(channelFuture);
+            completableFutureList.add(completableFuture);
         }
+
+        return completableFutureList;
+    }
+
+    @Override
+    public CompletableFuture<Boolean> stop() {
+        return GlobalEventExecutors.INSTANCE.submitTask(() -> {
+            completableFutureList.forEach(event -> {
+                try {
+                    event.get().getChannelFuture().channel().close().sync();
+                } catch (InterruptedException | ExecutionException e) {
+                    // Ignore
+                }
+            });
+            return true;
+        }).whenComplete((result, throwable) -> completableFutureList.clear());
     }
 }

@@ -52,7 +52,7 @@ public final class UDPHealthCheck extends HealthCheck {
     @Override
     public void check() {
         try (DatagramSocket datagramSocket = new DatagramSocket()) {
-            datagramSocket.setSoTimeout(timeout);
+            datagramSocket.setSoTimeout(1000 * timeout);
             DatagramPacket datagramPacket = new DatagramPacket(PING, 4, socketAddress);
             datagramSocket.send(datagramPacket);
 

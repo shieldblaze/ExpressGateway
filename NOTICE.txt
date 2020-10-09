@@ -81,3 +81,17 @@ This product depends on 'Bucket4J'. License for the same can be obtained at:
     * license/LICENSE.bucket4j.txt (Apache License 2.0)
 
 ---------------------------------
+
+This product depends on 'Google Brotli and it's Java code'. License for the same can be obtained at:
+
+  * LICENSE:
+    * license/LICENSE.googlebrotli.txt (MIT License)
+
+---------------------------------
+
+This product depends on 'Nixxcode JVM-Brotli and code belonging to MeteoGroup Deutschland GmbH'. License for the same can be obtained at:
+
+  * LICENSE:
+    * license/LICENSE.jvmbrotli.txt (Apache License 2.0)
+
+---------------------------------

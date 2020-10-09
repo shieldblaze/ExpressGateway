@@ -19,30 +19,34 @@ package com.shieldblaze.expressgateway.core.server.http;
 
 import com.shieldblaze.expressgateway.core.configuration.http.HTTPConfiguration;
 import io.netty.channel.ChannelHandlerContext;
-import io.netty.handler.codec.http.HttpClientCodec;
-import io.netty.handler.codec.http2.DefaultHttp2Connection;
-import io.netty.handler.codec.http2.Http2Connection;
-import io.netty.handler.codec.http2.Http2FrameListenerDecorator;
-import io.netty.handler.codec.http2.HttpToHttp2ConnectionHandler;
-import io.netty.handler.codec.http2.HttpToHttp2ConnectionHandlerBuilder;
-import io.netty.handler.codec.http2.InboundHttp2ToHttpObjectAdapter;
-import io.netty.handler.codec.http2.InboundHttp2ToHttpObjectAdapterBuilder;
+import io.netty.channel.ChannelPipeline;
 import io.netty.handler.ssl.ApplicationProtocolNames;
 import io.netty.handler.ssl.ApplicationProtocolNegotiationHandler;
 import io.netty.util.concurrent.Promise;
 import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
 
-final class ALPNHandlerClient extends ApplicationProtocolNegotiationHandler {
+/**
+ * {@link ALPNClientHandler} is used for Application-Layer Protocol Negotiation as client.
+ */
+final class ALPNClientHandler extends ApplicationProtocolNegotiationHandler {
 
-    private static final Logger logger = LogManager.getLogger(ALPNHandlerClient.class);
+    private static final Logger logger = LogManager.getLogger(ALPNClientHandler.class);
 
     private final HTTPConfiguration httpConfiguration;
     private final DownstreamHandler downstreamHandler;
     private final Promise<Void> promise;
     private final boolean isUpstreamHTTP2;
 
-    ALPNHandlerClient(HTTPConfiguration httpConfiguration, DownstreamHandler downstreamHandler, Promise<Void> promise, boolean isUpstreamHTTP2) {
+    /**
+     * Create a new {@link ALPNClientHandler} Instance
+     *
+     * @param httpConfiguration {@link HTTPConfiguration} to be applied
+     * @param downstreamHandler {@link DownstreamHandler} which will be handling incoming responses
+     * @param promise           {@link Promise} to notify when {@link ALPNClientHandler} has finished setting up
+     * @param isUpstreamHTTP2   Set to {@code true} if {@link UpstreamHandler} is connected via HTTP/2 else set to {@code false}
+     */
+    ALPNClientHandler(HTTPConfiguration httpConfiguration, DownstreamHandler downstreamHandler, Promise<Void> promise, boolean isUpstreamHTTP2) {
         super(ApplicationProtocolNames.HTTP_1_1);
         this.httpConfiguration = httpConfiguration;
         this.downstreamHandler = downstreamHandler;
@@ -52,39 +56,34 @@ final class ALPNHandlerClient extends ApplicationProtocolNegotiationHandler {
 
     @Override
     protected void configurePipeline(ChannelHandlerContext ctx, String protocol) {
+        ChannelPipeline pipeline = ctx.pipeline();
         if (protocol.equalsIgnoreCase(ApplicationProtocolNames.HTTP_2)) {
-            Http2Connection connection = new DefaultHttp2Connection(false);
 
-            InboundHttp2ToHttpObjectAdapter listener = new InboundHttp2ToHttpObjectAdapterBuilder(connection)
-                    .propagateSettings(false)
-                    .validateHttpHeaders(true)
-                    .maxContentLength((int) httpConfiguration.getMaxContentLength())
-                    .build();
+            pipeline.addLast("HTTP2Handler", HTTPUtils.h2Handler(httpConfiguration, false));
 
-            HttpToHttp2ConnectionHandler http2Handler = new HttpToHttp2ConnectionHandlerBuilder()
-                    .frameListener(new Http2FrameListenerDecorator(listener))
-                    .connection(connection)
-                    .build();
-
-            ctx.pipeline().addLast(http2Handler);
+            // If Upstream is not HTTP/2 then we need HTTPTranslationAdapter for HTTP Message conversion
             if (!isUpstreamHTTP2) {
-                ctx.pipeline().addLast(new HTTPOutboundHTTP2Adapter(false));
+                pipeline.addLast("HTTPTranslationAdapter", new HTTPTranslationAdapter(false));
             }
-            ctx.pipeline().addLast(downstreamHandler);
+
+            pipeline.addLast("DownstreamHandler", downstreamHandler);
             promise.trySuccess(null);
         } else if (protocol.equalsIgnoreCase(ApplicationProtocolNames.HTTP_1_1)) {
-            ctx.pipeline().addLast(new HttpClientCodec(httpConfiguration.getMaxInitialLineLength(), httpConfiguration.getMaxHeaderSize(),
-                    httpConfiguration.getMaxChunkSize(), true, true));
+            pipeline.addLast("HTTPClientCodec", HTTPUtils.newClientCodec(httpConfiguration));
+            pipeline.addLast("HTTPContentDecompressor", new HTTPContentDecompressor());
+
+            // If Upstream is HTTP/2 then we need HTTPTranslationAdapter for HTTP Message conversion
             if (isUpstreamHTTP2) {
-                ctx.pipeline().addLast(new HTTPOutboundHTTP2Adapter(true));
+                pipeline.addLast("HTTPTranslationAdapter", new HTTPTranslationAdapter(true));
             }
-            ctx.pipeline().addLast(downstreamHandler);
+
+            pipeline.addLast("DownstreamHandler", downstreamHandler);
             promise.trySuccess(null);
         } else {
             Throwable throwable = new IllegalArgumentException("Unsupported ALPN Protocol: " + protocol);
             logger.error(throwable);
             promise.tryFailure(throwable);
-            ctx.channel().closeFuture();
+            ctx.channel().close();
         }
     }
 

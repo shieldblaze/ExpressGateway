@@ -20,7 +20,6 @@ package com.shieldblaze.expressgateway.core.server.udp;
 import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
 
-import java.net.InetSocketAddress;
 import java.util.Map;
 
 /**
@@ -43,7 +42,7 @@ final class ConnectionCleaner extends Thread {
 
         while (runService) {
 
-            for (Map.Entry<InetSocketAddress, Connection> entry : upstreamHandler.connectionMap.entrySet()) {
+            for (Map.Entry<String, Connection> entry : upstreamHandler.connectionMap.entrySet()) {
                 if (!entry.getValue().connectionActive.get()) {
                     entry.getValue().clearBacklog();
                     upstreamHandler.connectionMap.remove(entry.getKey());

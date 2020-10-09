@@ -17,70 +17,35 @@
  */
 package com.shieldblaze.expressgateway.core.server;
 
-import com.shieldblaze.expressgateway.core.configuration.CommonConfiguration;
-import com.shieldblaze.expressgateway.core.netty.EventLoopFactory;
-import com.shieldblaze.expressgateway.loadbalance.l4.L4Balance;
-import io.netty.buffer.ByteBuf;
-import io.netty.buffer.ByteBufAllocator;
-import io.netty.channel.ChannelFuture;
-import io.netty.channel.EventLoopGroup;
-import io.netty.util.internal.ObjectUtil;
-import org.apache.logging.log4j.LogManager;
-import org.apache.logging.log4j.Logger;
+import com.shieldblaze.expressgateway.core.loadbalancer.l4.L4LoadBalancer;
+import com.shieldblaze.expressgateway.core.concurrent.async.L4FrontListenerEvent;
 
-import java.net.InetSocketAddress;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
-import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.CompletableFuture;
 
 public abstract class L4FrontListener {
-    private static final Logger logger = LogManager.getLogger(L4FrontListener.class);
+    protected final List<CompletableFuture<L4FrontListenerEvent>> completableFutureList = new ArrayList<>();
 
-    protected final InetSocketAddress bindAddress;
-    protected final List<ChannelFuture> channelFutureList = Collections.synchronizedList(new ArrayList<>());
-    private final AtomicBoolean started = new AtomicBoolean(false);
+    private L4LoadBalancer l4LoadBalancer;
 
-    public L4FrontListener(InetSocketAddress bindAddress) {
-        this.bindAddress = ObjectUtil.checkNotNull(bindAddress, "Bind Address");
+    public abstract List<CompletableFuture<L4FrontListenerEvent>> start();
+
+    public abstract CompletableFuture<Boolean> stop();
+
+    public L4LoadBalancer getL4LoadBalancer() {
+        return l4LoadBalancer;
     }
 
-    /**
-     * Start a {@link L4FrontListener}
-     *
-     * @param commonConfiguration {@link CommonConfiguration} to be applied
-     * @param eventLoopFactory    {@link EventLoopFactory} for {@link EventLoopGroup}
-     * @param byteBufAllocator    {@link ByteBufAllocator} for {@link ByteBuf} allocation
-     * @param l4Balance           {@link L4Balance} for load-balance
-     */
-    public abstract void start(CommonConfiguration commonConfiguration, EventLoopFactory eventLoopFactory,
-                               ByteBufAllocator byteBufAllocator, L4Balance l4Balance);
-
-    public boolean waitForStart() {
-        for (ChannelFuture channelFuture : channelFutureList) {
-            try {
-                started.set(channelFuture.sync().isSuccess());
-                if (!started.get()) {
-                    logger.error("Failed to Start FrontListener", channelFuture.cause());
-                    stop();
-                    break;
-                }
-            } catch (InterruptedException e) {
-                logger.error("ChannelFuture Block Call was interrupted");
-            }
+    public void setL4LoadBalancer(L4LoadBalancer l4LoadBalancer) {
+        if (this.l4LoadBalancer != null) {
+            throw new IllegalArgumentException("L4LoadBalancer is already set");
         }
-
-        return started.get();
+        this.l4LoadBalancer = l4LoadBalancer;
     }
 
-    public void stop() {
-        for (ChannelFuture channelFuture : channelFutureList) {
-            channelFuture.channel().closeFuture();
-        }
-        started.set(false);
-    }
-
-    public boolean isStarted() {
-        return started.get();
+    public List<CompletableFuture<L4FrontListenerEvent>> getFutures() {
+        return Collections.unmodifiableList(completableFutureList);
     }
 }

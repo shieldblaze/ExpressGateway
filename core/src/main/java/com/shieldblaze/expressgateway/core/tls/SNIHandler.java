@@ -27,16 +27,18 @@ import io.netty.handler.ssl.SslHandler;
 import io.netty.util.AsyncMapping;
 import io.netty.util.ReferenceCountUtil;
 import io.netty.util.concurrent.Future;
-import io.netty.util.internal.PlatformDependent;
 
 import javax.net.ssl.SSLEngine;
 
+/**
+ * {@link SNIHandler} TLS Server Name Indication (SNI) and serve the correct
+ * {@link CertificateKeyPair} as requested in SNI.
+ */
 public final class SNIHandler extends AbstractSniHandler<CertificateKeyPair> {
 
     private final AsyncMapping<String, CertificateKeyPair> promise;
 
     public SNIHandler(TLSConfiguration tlsConfiguration) {
-
         promise = (input, promise) -> {
             try {
                 return promise.setSuccess(tlsConfiguration.getMapping(input));
@@ -58,18 +60,14 @@ public final class SNIHandler extends AbstractSniHandler<CertificateKeyPair> {
             if (cause instanceof Error) {
                 throw (Error) cause;
             }
-            throw new DecoderException("failed to get the SslContext for " + hostname, cause);
+            throw new DecoderException("Failed to get the CertificateKeyPair for " + hostname, cause);
         }
 
         CertificateKeyPair certificateKeyPair = future.getNow();
-        try {
-            replaceHandler(ctx, certificateKeyPair);
-        } catch (Throwable cause) {
-            PlatformDependent.throwException(cause);
-        }
+        replaceHandler(ctx, certificateKeyPair);
     }
 
-    protected void replaceHandler(ChannelHandlerContext ctx, CertificateKeyPair certificateKeyPair) throws Exception {
+    protected void replaceHandler(ChannelHandlerContext ctx, CertificateKeyPair certificateKeyPair) {
         SslHandler sslHandler = null;
         try {
             sslHandler = new TLSHandler(certificateKeyPair.getSslContext().newHandler(ctx.alloc()).engine());
@@ -82,7 +80,7 @@ public final class SNIHandler extends AbstractSniHandler<CertificateKeyPair> {
                 ctx.fireExceptionCaught(ex);
             }
 
-            ctx.pipeline().replace(this, SslHandler.class.getName(), sslHandler);
+            ctx.pipeline().replace(this, "TLSHandler", sslHandler);
             sslHandler = null;
         } finally {
             // Since the SslHandler was not inserted into the pipeline the ownership of the SSLEngine was not

@@ -17,8 +17,7 @@
  */
 package com.shieldblaze.expressgateway.core.server.tcp;
 
-import com.shieldblaze.expressgateway.core.L4LoadBalancer;
-import com.shieldblaze.expressgateway.core.L4LoadBalancerBuilder;
+import com.shieldblaze.expressgateway.core.concurrent.async.L4FrontListenerEvent;
 import com.shieldblaze.expressgateway.core.configuration.CommonConfiguration;
 import com.shieldblaze.expressgateway.core.configuration.CommonConfigurationBuilder;
 import com.shieldblaze.expressgateway.core.configuration.buffer.PooledByteBufAllocatorConfiguration;
@@ -28,10 +27,12 @@ import com.shieldblaze.expressgateway.core.configuration.transport.ReceiveBuffer
 import com.shieldblaze.expressgateway.core.configuration.transport.TransportConfiguration;
 import com.shieldblaze.expressgateway.core.configuration.transport.TransportConfigurationBuilder;
 import com.shieldblaze.expressgateway.core.configuration.transport.TransportType;
+import com.shieldblaze.expressgateway.core.loadbalancer.l4.L4LoadBalancer;
+import com.shieldblaze.expressgateway.core.loadbalancer.l4.L4LoadBalancerBuilder;
+import com.shieldblaze.expressgateway.core.utils.EventLoopFactory;
 import com.shieldblaze.expressgateway.loadbalance.backend.Backend;
 import com.shieldblaze.expressgateway.loadbalance.backend.Cluster;
 import com.shieldblaze.expressgateway.loadbalance.l4.RoundRobin;
-import com.shieldblaze.expressgateway.core.netty.EventLoopFactory;
 import io.netty.channel.epoll.Epoll;
 import org.junit.jupiter.api.AfterAll;
 import org.junit.jupiter.api.BeforeAll;
@@ -43,9 +44,11 @@ import java.net.InetAddress;
 import java.net.InetSocketAddress;
 import java.net.ServerSocket;
 import java.net.Socket;
+import java.util.List;
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.ExecutionException;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
-import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 final class UpstreamHandlerTest {
@@ -92,16 +95,23 @@ final class UpstreamHandlerTest {
                 .withCommonConfiguration(commonConfiguration)
                 .withL4Balance(new RoundRobin())
                 .withCluster(cluster)
-                .withFrontListener(new TCPListener(new InetSocketAddress("127.0.0.1", 9110)))
+                .withBindAddress(new InetSocketAddress("127.0.0.1", 9110))
+                .withFrontListener(new TCPListener())
                 .build();
 
-        assertTrue(l4LoadBalancer.start());
+        List<CompletableFuture<L4FrontListenerEvent>> list = l4LoadBalancer.start();
+        for (CompletableFuture<L4FrontListenerEvent> completableFuture : list) {
+            try {
+                assertTrue(completableFuture.get().isSuccess());
+            } catch (Throwable e) {
+                e.printStackTrace();
+            }
+        }
     }
 
     @AfterAll
-    static void stop() {
-        l4LoadBalancer.stop();
-        assertFalse(l4LoadBalancer.hasStarted());
+    static void stop() throws ExecutionException, InterruptedException {
+        assertTrue(l4LoadBalancer.stop().get());
     }
 
     @Test

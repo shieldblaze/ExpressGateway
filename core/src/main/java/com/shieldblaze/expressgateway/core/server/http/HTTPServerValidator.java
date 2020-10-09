@@ -17,6 +17,7 @@
  */
 package com.shieldblaze.expressgateway.core.server.http;
 
+import com.shieldblaze.expressgateway.core.configuration.http.HTTPConfiguration;
 import io.netty.channel.ChannelFutureListener;
 import io.netty.channel.ChannelHandlerContext;
 import io.netty.channel.ChannelInboundHandlerAdapter;
@@ -26,7 +27,7 @@ import io.netty.handler.codec.http.HttpMessage;
 import io.netty.handler.codec.http.HttpRequest;
 import io.netty.handler.codec.http.HttpUtil;
 import io.netty.handler.codec.http.HttpVersion;
-import io.netty.util.ReferenceCountUtil;
+import com.shieldblaze.expressgateway.core.utils.ReferenceCountedUtil;
 
 import static io.netty.handler.codec.http.HttpUtil.getContentLength;
 
@@ -37,8 +38,8 @@ final class HTTPServerValidator extends ChannelInboundHandlerAdapter {
 
     private final long maxContentLength;
 
-    HTTPServerValidator(long maxContentLength) {
-        this.maxContentLength = maxContentLength;
+    HTTPServerValidator(HTTPConfiguration httpConfiguration) {
+        this.maxContentLength = httpConfiguration.getMaxContentLength();
     }
 
     @Override
@@ -47,19 +48,19 @@ final class HTTPServerValidator extends ChannelInboundHandlerAdapter {
             HttpRequest request = (HttpRequest) msg;
 
             if (getContentLength(request, -1L) > maxContentLength) {
-                ctx.writeAndFlush(HttpResponses.TOO_LARGE.retainedDuplicate()).addListener(ChannelFutureListener.CLOSE);
-                ReferenceCountUtil.release(msg);
+                ctx.writeAndFlush(HTTPResponses.TOO_LARGE.retainedDuplicate()).addListener(ChannelFutureListener.CLOSE);
+                ReferenceCountedUtil.silentRelease(msg);
                 return;
             }
 
             if (isUnsupportedExpectation(request)) {
-                ctx.writeAndFlush(HttpResponses.EXPECTATION_FAILED.retainedDuplicate()).addListener(ChannelFutureListener.CLOSE);
-                ReferenceCountUtil.release(msg);
+                ctx.writeAndFlush(HTTPResponses.EXPECTATION_FAILED.retainedDuplicate()).addListener(ChannelFutureListener.CLOSE);
+                ReferenceCountedUtil.silentRelease(msg);
                 return;
             }
 
             if (HttpUtil.is100ContinueExpected(request)) {
-                ctx.writeAndFlush(HttpResponses.ACCEPT_KEEP_ALIVE.retainedDuplicate()).addListener(ChannelFutureListener.CLOSE_ON_FAILURE);
+                ctx.writeAndFlush(HTTPResponses.ACCEPT_KEEP_ALIVE.retainedDuplicate()).addListener(ChannelFutureListener.CLOSE_ON_FAILURE);
                 request.headers().remove(HttpHeaderNames.EXPECT);
             }
         }

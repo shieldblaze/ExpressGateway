@@ -17,10 +17,11 @@
  */
 package com.shieldblaze.expressgateway.core.server.udp;
 
+import com.shieldblaze.expressgateway.core.loadbalancer.l4.L4LoadBalancer;
 import com.shieldblaze.expressgateway.core.configuration.CommonConfiguration;
 import com.shieldblaze.expressgateway.loadbalance.backend.Backend;
 import com.shieldblaze.expressgateway.loadbalance.l4.L4Balance;
-import com.shieldblaze.expressgateway.core.netty.EventLoopFactory;
+import com.shieldblaze.expressgateway.core.utils.EventLoopFactory;
 import io.netty.channel.ChannelHandler;
 import io.netty.channel.ChannelHandlerContext;
 import io.netty.channel.ChannelInboundHandlerAdapter;
@@ -28,9 +29,9 @@ import io.netty.channel.socket.DatagramPacket;
 import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
 
-import java.net.InetSocketAddress;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.ConcurrentSkipListMap;
 
 /**
  * <p> Upstream Handler receives Data from Internet.
@@ -46,16 +47,16 @@ final class UpstreamHandler extends ChannelInboundHandlerAdapter {
 
     private static final Logger logger = LogManager.getLogger(UpstreamHandler.class);
 
-    final Map<InetSocketAddress, Connection> connectionMap = new ConcurrentHashMap<>();
+    final Map<String, Connection> connectionMap = new ConcurrentSkipListMap<>();
     private final CommonConfiguration commonConfiguration;
     private final EventLoopFactory eventLoopFactory;
     private final L4Balance l4Balance;
     private final ConnectionCleaner connectionCleaner = new ConnectionCleaner(this);
 
-    UpstreamHandler(CommonConfiguration commonConfiguration, EventLoopFactory eventLoopFactory, L4Balance l4Balance) {
-        this.commonConfiguration = commonConfiguration;
-        this.eventLoopFactory = eventLoopFactory;
-        this.l4Balance = l4Balance;
+    UpstreamHandler(L4LoadBalancer l4LoadBalancer) {
+        this.commonConfiguration = l4LoadBalancer.getCommonConfiguration();
+        this.eventLoopFactory = l4LoadBalancer.getEventLoopFactory();
+        this.l4Balance = l4LoadBalancer.getL4Balance();
         connectionCleaner.startService();
     }
 
@@ -63,14 +64,14 @@ final class UpstreamHandler extends ChannelInboundHandlerAdapter {
     public void channelRead(ChannelHandlerContext ctx, Object msg) {
         eventLoopFactory.getChildGroup().next().execute(() -> {
             DatagramPacket datagramPacket = (DatagramPacket) msg;
-            Connection connection = connectionMap.get(datagramPacket.sender());
+            Connection connection = connectionMap.get(datagramPacket.sender().toString());
 
             if (connection == null) {
                 Backend backend = l4Balance.getBackend(datagramPacket.sender());
                 backend.incConnections();
 
                 connection = new Connection(datagramPacket.sender(), backend, ctx.channel(), commonConfiguration, eventLoopFactory, ctx.alloc());
-                connectionMap.put(datagramPacket.sender(), connection);
+                connectionMap.put(datagramPacket.sender().toString(), connection);
             }
 
             connection.writeDatagram(datagramPacket);
@@ -82,7 +83,7 @@ final class UpstreamHandler extends ChannelInboundHandlerAdapter {
         logger.info("Closing All Upstream and Downstream Channels");
 
         connectionCleaner.stopService();
-        for (Map.Entry<InetSocketAddress, Connection> entry : connectionMap.entrySet()) {
+        for (Map.Entry<String, Connection> entry : connectionMap.entrySet()) {
             Connection connection = entry.getValue();
             connection.clearBacklog();
         }

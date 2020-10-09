@@ -19,10 +19,11 @@ package com.shieldblaze.expressgateway.core.server.tcp;
 
 import com.shieldblaze.expressgateway.core.configuration.CommonConfiguration;
 import com.shieldblaze.expressgateway.core.configuration.tls.TLSConfiguration;
+import com.shieldblaze.expressgateway.core.loadbalancer.l4.L4LoadBalancer;
+import com.shieldblaze.expressgateway.core.utils.BootstrapFactory;
+import com.shieldblaze.expressgateway.core.utils.EventLoopFactory;
 import com.shieldblaze.expressgateway.loadbalance.backend.Backend;
 import com.shieldblaze.expressgateway.loadbalance.l4.L4Balance;
-import com.shieldblaze.expressgateway.core.netty.BootstrapFactory;
-import com.shieldblaze.expressgateway.core.netty.EventLoopFactory;
 import io.netty.bootstrap.Bootstrap;
 import io.netty.buffer.ByteBuf;
 import io.netty.channel.Channel;
@@ -32,6 +33,7 @@ import io.netty.channel.ChannelHandlerContext;
 import io.netty.channel.ChannelInboundHandlerAdapter;
 import io.netty.channel.ChannelInitializer;
 import io.netty.channel.socket.SocketChannel;
+import io.netty.handler.ssl.SslHandler;
 import io.netty.handler.timeout.IdleStateHandler;
 import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
@@ -62,12 +64,11 @@ final class UpstreamHandler extends ChannelInboundHandlerAdapter {
     private Channel downstreamChannel;
     private Backend backend;
 
-    UpstreamHandler(CommonConfiguration commonConfiguration, TLSConfiguration tlsConfiguration, EventLoopFactory eventLoopFactory,
-                    L4Balance l4Balance) {
-        this.commonConfiguration = commonConfiguration;
+    UpstreamHandler(L4LoadBalancer l4LoadBalancer, TLSConfiguration tlsConfiguration) {
+        this.commonConfiguration = l4LoadBalancer.getCommonConfiguration();
+        this.eventLoopFactory = l4LoadBalancer.getEventLoopFactory();
+        this.l4Balance = l4LoadBalancer.getL4Balance();
         this.tlsConfiguration = tlsConfiguration;
-        this.eventLoopFactory = eventLoopFactory;
-        this.l4Balance = l4Balance;
     }
 
     @Override
@@ -81,11 +82,14 @@ final class UpstreamHandler extends ChannelInboundHandlerAdapter {
                 ch.pipeline().addFirst(new IdleStateHandler(timeout, timeout, timeout));
 
                 if (tlsConfiguration != null) {
-                    ch.pipeline().addLast(tlsConfiguration.getDefault().getSslContext()
-                            .newHandler(ctx.alloc(), backend.getSocketAddress().getHostName(), backend.getSocketAddress().getPort()));
+                    String hostname = backend.getSocketAddress().getHostName();
+                    int port = backend.getSocketAddress().getPort();
+                    SslHandler sslHandler = tlsConfiguration.getDefault().getSslContext().newHandler(ctx.alloc(), hostname, port);
+
+                    ch.pipeline().addLast("TLSHandler", sslHandler);
                 }
 
-                ch.pipeline().addLast(new DownstreamHandler(ctx.channel(), backend));
+                ch.pipeline().addLast("DownstreamHandler", new DownstreamHandler(ctx.channel(), backend));
             }
         });
 
@@ -105,11 +109,7 @@ final class UpstreamHandler extends ChannelInboundHandlerAdapter {
 
                     backlog.forEach(packet -> {
                         backend.incBytesWritten(packet.readableBytes());
-                        downstreamChannel.writeAndFlush(packet).addListener((ChannelFutureListener) cf -> {
-                            if (!cf.isSuccess()) {
-                                packet.release();
-                            }
-                        });
+                        downstreamChannel.writeAndFlush(packet);
                         backlog.remove(packet);
                     });
 
@@ -155,7 +155,7 @@ final class UpstreamHandler extends ChannelInboundHandlerAdapter {
             ctx.channel().close();
         }
 
-        if (downstreamChannel.isActive()) {
+        if (downstreamChannel != null && downstreamChannel.isActive()) {
             downstreamChannel.close();
         }
 

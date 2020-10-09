@@ -15,20 +15,20 @@
  * You should have received a copy of the GNU General Public License
  * along with ShieldBlaze ExpressGateway.  If not, see <https://www.gnu.org/licenses/>.
  */
-package com.shieldblaze.expressgateway.core.netty;
+package com.shieldblaze.expressgateway.core.utils;
 
 import com.shieldblaze.expressgateway.core.configuration.buffer.PooledByteBufAllocatorConfiguration;
-import io.netty.buffer.PooledByteBufAllocator;
-import io.netty.util.internal.ObjectUtil;
 
-public final class PooledByteBufAllocatorBuffer {
+import java.util.Objects;
 
-    private final PooledByteBufAllocator pooledByteBufAllocator;
+public final class PooledByteBufAllocator {
 
-    public PooledByteBufAllocatorBuffer(PooledByteBufAllocatorConfiguration configuration) {
-        ObjectUtil.checkNotNull(configuration, "PooledByteBufAllocatorConfiguration");
+    private final io.netty.buffer.PooledByteBufAllocator pooledByteBufAllocator;
 
-        pooledByteBufAllocator = new PooledByteBufAllocator(
+    public PooledByteBufAllocator(PooledByteBufAllocatorConfiguration configuration) {
+        Objects.requireNonNull(configuration, "PooledByteBufAllocatorConfiguration");
+
+        pooledByteBufAllocator = new io.netty.buffer.PooledByteBufAllocator(
                 configuration.isPreferDirect(),
                 configuration.getHeapArena(),
                 configuration.getDirectArena(),
@@ -42,9 +42,9 @@ public final class PooledByteBufAllocatorBuffer {
     }
 
     /**
-     * Get Instance of {@link PooledByteBufAllocator}
+     * Get Instance of {@link io.netty.buffer.PooledByteBufAllocator}
      */
-    public PooledByteBufAllocator getInstance() {
+    public io.netty.buffer.PooledByteBufAllocator getInstance() {
         return pooledByteBufAllocator;
     }
 }

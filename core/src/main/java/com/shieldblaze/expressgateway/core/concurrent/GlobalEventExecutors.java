@@ -15,14 +15,26 @@
  * You should have received a copy of the GNU General Public License
  * along with ShieldBlaze ExpressGateway.  If not, see <https://www.gnu.org/licenses/>.
  */
-package com.shieldblaze.expressgateway.core.server.http;
+package com.shieldblaze.expressgateway.core.concurrent;
 
-import io.netty.handler.codec.http.HttpHeaderNames;
-import io.netty.handler.codec.http.HttpHeaders;
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.function.Supplier;
 
-final class HeaderUtils {
+public final class GlobalEventExecutors {
+    private static final ExecutorService EXECUTOR_SERVICE = Executors.newCachedThreadPool();
+    public static final GlobalEventExecutors INSTANCE = new GlobalEventExecutors();
 
-    static void setGenericHeaders(HttpHeaders headers) {
-        headers.set(HttpHeaderNames.SERVER, "ShieldBlaze ExpressGateway");
+    private GlobalEventExecutors() {
+        // Prevent outside initialization
+    }
+
+    public CompletableFuture<Void> submitTask(Runnable runnable) {
+        return CompletableFuture.runAsync(runnable, EXECUTOR_SERVICE);
+    }
+
+    public <T> CompletableFuture<T> submitTask(Supplier<T> supplier) {
+        return CompletableFuture.supplyAsync(supplier, EXECUTOR_SERVICE);
     }
 }

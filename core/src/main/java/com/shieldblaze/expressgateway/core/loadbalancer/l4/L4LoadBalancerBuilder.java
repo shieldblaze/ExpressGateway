@@ -15,18 +15,21 @@
  * You should have received a copy of the GNU General Public License
  * along with ShieldBlaze ExpressGateway.  If not, see <https://www.gnu.org/licenses/>.
  */
-package com.shieldblaze.expressgateway.core;
+package com.shieldblaze.expressgateway.core.loadbalancer.l4;
 
 import com.shieldblaze.expressgateway.core.configuration.CommonConfiguration;
 import com.shieldblaze.expressgateway.core.server.L4FrontListener;
 import com.shieldblaze.expressgateway.loadbalance.backend.Cluster;
 import com.shieldblaze.expressgateway.loadbalance.l4.L4Balance;
-import io.netty.util.internal.ObjectUtil;
+
+import java.net.InetSocketAddress;
+import java.util.Objects;
 
 /**
- * Builder for {@link L4LoadBalancer}
+ * Builder for creating default {@link L4LoadBalancer}
  */
 public final class L4LoadBalancerBuilder {
+    private InetSocketAddress bindAddress;
     private CommonConfiguration commonConfiguration;
     private L4Balance l4Balance;
     private Cluster cluster;
@@ -78,18 +81,29 @@ public final class L4LoadBalancerBuilder {
     }
 
     /**
-     * Build {@link L4LoadBalancer} Instance
+     * Set {@link InetSocketAddress} where {@link L4FrontListener} will bind and listen
+     */
+    public L4LoadBalancerBuilder withBindAddress(InetSocketAddress bindAddress) {
+        this.bindAddress = bindAddress;
+        return this;
+    }
+
+    /**
+     * Build {@link DefaultL4LoadBalancer} Instance
      *
-     * @return {@link L4LoadBalancer} Instance
+     * @return {@link DefaultL4LoadBalancer} Instance
      * @throws NullPointerException If a required value if {@code null}
      */
-    public L4LoadBalancer build() {
-        L4LoadBalancer l4LoadBalancer = new L4LoadBalancer();
-        l4LoadBalancer.setConfiguration(ObjectUtil.checkNotNull(commonConfiguration, "Configuration"));
-        l4LoadBalancer.setL4Balance(ObjectUtil.checkNotNull(l4Balance, "L4Balance"));
-        l4LoadBalancer.setCluster(ObjectUtil.checkNotNull(cluster, "Cluster"));
+    public DefaultL4LoadBalancer build() {
+        DefaultL4LoadBalancer defaultL4LoadBalancer = new DefaultL4LoadBalancer(
+                Objects.requireNonNull(bindAddress, "bindAddress"),
+                Objects.requireNonNull(l4Balance, "L4Balance"),
+                Objects.requireNonNull(l4FrontListener, "l4FrontListener"),
+                Objects.requireNonNull(cluster, "cluster"),
+                Objects.requireNonNull(commonConfiguration, "commonConfiguration")
+        );
         l4Balance.setBackends(cluster.getBackends());
-        l4LoadBalancer.setFrontListener(ObjectUtil.checkNotNull(l4FrontListener, "L4 FrontListener"));
-        return l4LoadBalancer;
+        l4FrontListener.setL4LoadBalancer(defaultL4LoadBalancer);
+        return defaultL4LoadBalancer;
     }
 }

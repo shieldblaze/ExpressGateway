@@ -63,10 +63,24 @@ along with ShieldBlaze ExpressGateway.  If not, see <https://www.gnu.org/license
 
     <dependencies>
 
-        <!-- https://mvnrepository.com/artifact/io.netty/netty-all -->
+        <!-- https://mvnrepository.com/artifact/io.netty/netty-codec-http -->
         <dependency>
             <groupId>io.netty</groupId>
-            <artifactId>netty-all</artifactId>
+            <artifactId>netty-codec-http</artifactId>
+            <version>4.1.52.Final</version>
+        </dependency>
+
+        <!-- https://mvnrepository.com/artifact/io.netty/netty-codec-http2 -->
+        <dependency>
+            <groupId>io.netty</groupId>
+            <artifactId>netty-codec-http2</artifactId>
+            <version>4.1.52.Final</version>
+        </dependency>
+
+        <!-- https://mvnrepository.com/artifact/io.netty/netty-transport-native-epoll -->
+        <dependency>
+            <groupId>io.netty</groupId>
+            <artifactId>netty-transport-native-epoll</artifactId>
             <version>4.1.52.Final</version>
         </dependency>
 

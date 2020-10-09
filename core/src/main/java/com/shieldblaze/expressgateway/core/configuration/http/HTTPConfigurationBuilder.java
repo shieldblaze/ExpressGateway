@@ -1,41 +1,25 @@
-/*
- * This file is part of ShieldBlaze ExpressGateway. [www.shieldblaze.com]
- * Copyright (c) 2020 ShieldBlaze
- *
- * ShieldBlaze ExpressGateway is free software: you can redistribute it and/or modify
- * it under the terms of the GNU General Public License as published by
- * the Free Software Foundation, either version 3 of the License, or
- * (at your option) any later version.
- *
- * ShieldBlaze ExpressGateway is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
- * GNU General Public License for more details.
- *
- * You should have received a copy of the GNU General Public License
- * along with ShieldBlaze ExpressGateway.  If not, see <https://www.gnu.org/licenses/>.
- */
 package com.shieldblaze.expressgateway.core.configuration.http;
 
-import io.netty.util.internal.ObjectUtil;
-
 /**
- * Configuration Builder for {@link HTTPConfiguration}
+ * Builder for {@link HTTPConfiguration}
  */
 public final class HTTPConfigurationBuilder {
     private long maxContentLength;
-    private int initialWindowSize;
-    private int maxConcurrentStreams;
-    private long maxHeaderSizeList;
+    private int h2InitialWindowSize;
+    private long h2MaxConcurrentStreams;
+    private long h2MaxHeaderSizeList;
+    private long h2MaxHeaderTableSize;
+    private int h2MaxFrameSize;
+    private boolean h2enablePush;
     private int maxInitialLineLength;
     private int maxHeaderSize;
     private int maxChunkSize;
     private int compressionThreshold;
     private int deflateCompressionLevel;
     private int brotliCompressionLevel;
-    private boolean enableHTTP2Push;
 
     private HTTPConfigurationBuilder() {
+        // Prevent outside initialization
     }
 
     public static HTTPConfigurationBuilder newBuilder() {
@@ -47,18 +31,33 @@ public final class HTTPConfigurationBuilder {
         return this;
     }
 
-    public HTTPConfigurationBuilder withInitialWindowSize(int initialWindowSize) {
-        this.initialWindowSize = initialWindowSize;
+    public HTTPConfigurationBuilder withH2InitialWindowSize(int h2InitialWindowSize) {
+        this.h2InitialWindowSize = h2InitialWindowSize;
         return this;
     }
 
-    public HTTPConfigurationBuilder withMaxConcurrentStreams(int maxConcurrentStreams) {
-        this.maxConcurrentStreams = maxConcurrentStreams;
+    public HTTPConfigurationBuilder withH2MaxConcurrentStreams(long h2MaxConcurrentStreams) {
+        this.h2MaxConcurrentStreams = h2MaxConcurrentStreams;
         return this;
     }
 
-    public HTTPConfigurationBuilder withMaxHeaderSizeList(long maxHeaderSizeList) {
-        this.maxHeaderSizeList = maxHeaderSizeList;
+    public HTTPConfigurationBuilder withH2MaxHeaderSizeList(long h2MaxHeaderSizeList) {
+        this.h2MaxHeaderSizeList = h2MaxHeaderSizeList;
+        return this;
+    }
+
+    public HTTPConfigurationBuilder withH2MaxHeaderTableSize(long h2MaxHeaderTableSize) {
+        this.h2MaxHeaderTableSize = h2MaxHeaderTableSize;
+        return this;
+    }
+
+    public HTTPConfigurationBuilder withH2MaxFrameSize(int h2MaxFrameSize) {
+        this.h2MaxFrameSize = h2MaxFrameSize;
+        return this;
+    }
+
+    public HTTPConfigurationBuilder withH2enablePush(boolean h2enablePush) {
+        this.h2enablePush = h2enablePush;
         return this;
     }
 
@@ -92,24 +91,21 @@ public final class HTTPConfigurationBuilder {
         return this;
     }
 
-    public HTTPConfigurationBuilder withEnableHTTP2Push(boolean enableHTTP2Push) {
-        this.enableHTTP2Push = enableHTTP2Push;
-        return this;
-    }
-
     public HTTPConfiguration build() {
         HTTPConfiguration hTTPConfiguration = new HTTPConfiguration();
-        hTTPConfiguration.setMaxContentLength(ObjectUtil.checkPositive(maxContentLength, "Max ContentLength"));
-        hTTPConfiguration.setInitialWindowSize(ObjectUtil.checkPositive(initialWindowSize, "Initial Window Size"));
-        hTTPConfiguration.setMaxConcurrentStreams(ObjectUtil.checkPositive(maxConcurrentStreams, "Max Concurrent Streams"));
-        hTTPConfiguration.setMaxHeaderSizeList(ObjectUtil.checkPositive(maxHeaderSizeList, "Max Header Size List"));
-        hTTPConfiguration.setMaxInitialLineLength(ObjectUtil.checkPositive(maxInitialLineLength, "Max Initial Line Length"));
-        hTTPConfiguration.setMaxHeaderSize(ObjectUtil.checkPositive(maxHeaderSize, "Max Header Size"));
-        hTTPConfiguration.setMaxChunkSize(ObjectUtil.checkPositive(maxChunkSize, "Max Chunk Size"));
-        hTTPConfiguration.setCompressionThreshold(ObjectUtil.checkPositive(compressionThreshold, "Max Compression Threshold"));
-        hTTPConfiguration.setDeflateCompressionLevel(ObjectUtil.checkPositive(deflateCompressionLevel, "Deflate Compression Level"));
-        hTTPConfiguration.setBrotliCompressionLevel(ObjectUtil.checkPositive(brotliCompressionLevel, "Brotli Compression Level"));
-        hTTPConfiguration.setEnableHTTP2Push(enableHTTP2Push);
+        hTTPConfiguration.setMaxContentLength(maxContentLength);
+        hTTPConfiguration.setH2InitialWindowSize(h2InitialWindowSize);
+        hTTPConfiguration.setH2MaxConcurrentStreams(h2MaxConcurrentStreams);
+        hTTPConfiguration.setH2MaxHeaderSizeList(h2MaxHeaderSizeList);
+        hTTPConfiguration.setH2MaxHeaderTableSize(h2MaxHeaderTableSize);
+        hTTPConfiguration.setH2MaxFrameSize(h2MaxFrameSize);
+        hTTPConfiguration.setH2enablePush(h2enablePush);
+        hTTPConfiguration.setMaxInitialLineLength(maxInitialLineLength);
+        hTTPConfiguration.setMaxHeaderSize(maxHeaderSize);
+        hTTPConfiguration.setMaxChunkSize(maxChunkSize);
+        hTTPConfiguration.setCompressionThreshold(compressionThreshold);
+        hTTPConfiguration.setDeflateCompressionLevel(deflateCompressionLevel);
+        hTTPConfiguration.setBrotliCompressionLevel(brotliCompressionLevel);
         return hTTPConfiguration;
     }
 }
