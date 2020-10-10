@@ -47,7 +47,7 @@ final class TCPHealthCheckTest {
 
     @Test
     void check() {
-        TCPHealthCheck tcpHealthCheck = new TCPHealthCheck(new InetSocketAddress("127.0.0.1", 9111), 5);
+        TCPHealthCheck tcpHealthCheck = new TCPHealthCheck(new InetSocketAddress("127.0.0.1", 1000), 5);
         tcpHealthCheck.check();
 
         assertEquals(Health.GOOD, tcpHealthCheck.health());
@@ -59,7 +59,7 @@ final class TCPHealthCheckTest {
 
         private void start() throws IOException {
              server = AsynchronousServerSocketChannel.open();
-             server.bind(new InetSocketAddress("127.0.0.1", 9111));
+             server.bind(new InetSocketAddress("127.0.0.1", 1000));
              server.accept();
         }
 
