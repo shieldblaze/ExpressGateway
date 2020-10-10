@@ -17,11 +17,11 @@
  */
 package com.shieldblaze.expressgateway.core.loadbalancer.l7.http;
 
+import com.shieldblaze.expressgateway.backend.Cluster;
 import com.shieldblaze.expressgateway.core.configuration.CommonConfiguration;
 import com.shieldblaze.expressgateway.core.configuration.http.HTTPConfiguration;
 import com.shieldblaze.expressgateway.core.server.L7FrontListener;
 import com.shieldblaze.expressgateway.core.server.http.HTTPFrontListener;
-import com.shieldblaze.expressgateway.loadbalance.backend.Cluster;
 import com.shieldblaze.expressgateway.loadbalance.l7.L7Balance;
 
 import java.net.InetSocketAddress;

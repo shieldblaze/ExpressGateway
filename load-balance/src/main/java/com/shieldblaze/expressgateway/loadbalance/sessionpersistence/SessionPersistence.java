@@ -17,7 +17,7 @@
  */
 package com.shieldblaze.expressgateway.loadbalance.sessionpersistence;
 
-import com.shieldblaze.expressgateway.loadbalance.backend.Backend;
+import com.shieldblaze.expressgateway.backend.Backend;
 import io.netty.handler.codec.http.HttpRequest;
 
 import java.net.InetSocketAddress;
@@ -29,12 +29,14 @@ public abstract class SessionPersistence {
 
     /**
      * Get {@link Backend}
+     *
      * @return {@link Backend} is route is available else {@code null}
      */
     public abstract Backend getBackend(InetSocketAddress sourceAddress);
 
     /**
      * Get {@link Backend}
+     *
      * @return {@link Backend} is route is available else {@code null}
      */
     public abstract Backend getBackend(HttpRequest httpRequest);

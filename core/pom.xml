@@ -49,6 +49,12 @@ along with ShieldBlaze ExpressGateway.  If not, see <https://www.gnu.org/license
         </dependency>
 
         <dependency>
+            <groupId>com.shieldblaze</groupId>
+            <artifactId>expressgateway-backend</artifactId>
+            <version>0.0.1-a</version>
+        </dependency>
+
+        <dependency>
             <groupId>org.bouncycastle</groupId>
             <artifactId>bcpkix-jdk15on</artifactId>
             <version>1.66</version>

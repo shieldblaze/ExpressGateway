@@ -19,7 +19,7 @@ package com.shieldblaze.expressgateway.loadbalance.sessionpersistence;
 
 import com.google.common.cache.Cache;
 import com.google.common.cache.CacheBuilder;
-import com.shieldblaze.expressgateway.loadbalance.backend.Backend;
+import com.shieldblaze.expressgateway.backend.Backend;
 import io.netty.handler.codec.http.HttpRequest;
 
 import java.net.InetSocketAddress;

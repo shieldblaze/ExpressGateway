@@ -15,17 +15,13 @@
  * You should have received a copy of the GNU General Public License
  * along with ShieldBlaze ExpressGateway.  If not, see <https://www.gnu.org/licenses/>.
  */
-package com.shieldblaze.expressgateway.loadbalance.backend;
+package com.shieldblaze.expressgateway.backend;
 
 import com.shieldblaze.expressgateway.healthcheck.Health;
 import com.shieldblaze.expressgateway.healthcheck.HealthCheck;
 import io.netty.util.internal.ObjectUtil;
 
 import java.net.InetSocketAddress;
-import java.util.ArrayList;
-import java.util.Collections;
-import java.util.List;
-import java.util.concurrent.atomic.AtomicInteger;
 
 /**
  * {@link Backend} is the server which handles actual request of client.
@@ -77,6 +73,8 @@ public class Backend {
      */
     private HealthCheck healthCheck;
 
+
+
     /**
      * Create {@link Backend} with {@code Weight 100}, {@code maxConnections 10000} and no Health Check
      *
@@ -116,6 +114,10 @@ public class Backend {
 
     public String getHostname() {
         return hostname;
+    }
+
+    public void setHostname(String hostname) {
+        this.hostname = hostname;
     }
 
     public InetSocketAddress getSocketAddress() {

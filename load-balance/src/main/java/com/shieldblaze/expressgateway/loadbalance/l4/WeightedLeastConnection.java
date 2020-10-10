@@ -19,7 +19,7 @@ package com.shieldblaze.expressgateway.loadbalance.l4;
 
 import com.google.common.collect.Range;
 import com.google.common.collect.TreeRangeMap;
-import com.shieldblaze.expressgateway.loadbalance.backend.Backend;
+import com.shieldblaze.expressgateway.backend.Backend;
 import com.shieldblaze.expressgateway.loadbalance.sessionpersistence.NOOPSessionPersistence;
 import com.shieldblaze.expressgateway.loadbalance.sessionpersistence.SessionPersistence;
 
@@ -86,7 +86,7 @@ public final class WeightedLeastConnection extends L4Balance {
             localConnectionMap.put(backend.getValue(), connections + 1);
         }
 
-        _backend  = backend.getValue();
+        _backend = backend.getValue();
         sessionPersistence.addRoute(sourceAddress, _backend);
         return _backend;
     }

@@ -17,6 +17,7 @@
  */
 package com.shieldblaze.expressgateway.core.server.http;
 
+import com.shieldblaze.expressgateway.backend.Backend;
 import com.shieldblaze.expressgateway.core.configuration.CommonConfiguration;
 import com.shieldblaze.expressgateway.core.configuration.http.HTTPConfiguration;
 import com.shieldblaze.expressgateway.core.configuration.tls.TLSConfiguration;
@@ -25,7 +26,6 @@ import com.shieldblaze.expressgateway.core.utils.BootstrapFactory;
 import com.shieldblaze.expressgateway.core.utils.ChannelUtils;
 import com.shieldblaze.expressgateway.core.utils.EventLoopFactory;
 import com.shieldblaze.expressgateway.core.utils.ReferenceCountedUtil;
-import com.shieldblaze.expressgateway.loadbalance.backend.Backend;
 import com.shieldblaze.expressgateway.loadbalance.l7.L7Balance;
 import io.netty.bootstrap.Bootstrap;
 import io.netty.buffer.ByteBufAllocator;
@@ -205,7 +205,6 @@ final class UpstreamHandler extends ChannelInboundHandlerAdapter {
 
                 if (tlsClient == null) {
                     pipeline.addLast("HTTPClientCodec", HTTPUtils.newClientCodec(httpConfiguration));
-                    pipeline.addLast("HTTPContentCompressor", new HTTPContentCompressor(httpConfiguration));
                     pipeline.addLast("HTTPContentDecompressor", new HTTPContentDecompressor());
                     pipeline.addLast("DownstreamHandler", new DownstreamHandler(upstreamHandler));
                 } else {

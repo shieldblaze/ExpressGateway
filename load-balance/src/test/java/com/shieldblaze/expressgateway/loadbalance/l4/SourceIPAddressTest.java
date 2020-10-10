@@ -17,14 +17,14 @@
  */
 package com.shieldblaze.expressgateway.loadbalance.l4;
 
-import com.shieldblaze.expressgateway.loadbalance.backend.Backend;
+import com.shieldblaze.expressgateway.backend.Backend;
 import org.junit.jupiter.api.Test;
 
 import java.net.InetSocketAddress;
 import java.util.ArrayList;
 import java.util.List;
 
-import static org.junit.jupiter.api.Assertions.*;
+import static org.junit.jupiter.api.Assertions.assertEquals;
 
 class SourceIPAddressTest {
 

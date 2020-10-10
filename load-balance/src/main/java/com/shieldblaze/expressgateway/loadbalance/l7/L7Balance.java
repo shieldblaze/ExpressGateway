@@ -1,7 +1,6 @@
 package com.shieldblaze.expressgateway.loadbalance.l7;
 
-import com.shieldblaze.expressgateway.loadbalance.backend.Backend;
-import com.shieldblaze.expressgateway.loadbalance.l4.L4Balance;
+import com.shieldblaze.expressgateway.backend.Backend;
 import com.shieldblaze.expressgateway.loadbalance.sessionpersistence.SessionPersistence;
 import io.netty.handler.codec.http.HttpRequest;
 import io.netty.util.internal.ObjectUtil;
@@ -14,7 +13,7 @@ public abstract class L7Balance {
     protected List<Backend> backends;
 
     /**
-     * Create {@link L4Balance} Instance
+     * Create {@link L7Balance} Instance
      *
      * @param sessionPersistence {@link SessionPersistence} Instance
      * @throws NullPointerException If {@link SessionPersistence} is {@code null}

@@ -59,6 +59,7 @@ along with ShieldBlaze ExpressGateway.  If not, see <https://www.gnu.org/license
         <module>core</module>
         <module>load-balance</module>
         <module>health-check</module>
+        <module>backend</module>
     </modules>
 
     <dependencies>
@@ -142,6 +143,11 @@ along with ShieldBlaze ExpressGateway.  If not, see <https://www.gnu.org/license
             <version>4.5.12</version>
         </dependency>
 
+        <dependency>
+            <groupId>com.github.chrisvest</groupId>
+            <artifactId>stormpot</artifactId>
+            <version>3.1</version>
+        </dependency>
     </dependencies>
 
     <build>
