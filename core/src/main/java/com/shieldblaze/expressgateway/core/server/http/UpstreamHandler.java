@@ -105,8 +105,8 @@ final class UpstreamHandler extends ChannelInboundHandlerAdapter {
         this.maxDataBacklog = commonConfiguration.getTransportConfiguration().getDataBacklog();
     }
 
-    @SuppressWarnings("lgtm[java/dereferenced-value-may-be-null]")
     @Override
+    @SuppressWarnings("lgtm[java/dereferenced-value-may-be-null]")
     public void channelRead(ChannelHandlerContext ctx, Object msg) {
         if (upstreamAddress == null) {
             upstreamAddress = (InetSocketAddress) ctx.channel().remoteAddress();
