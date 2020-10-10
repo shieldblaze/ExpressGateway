@@ -10,47 +10,49 @@
 
 ## Features:
 ### L4:
-- [X] Load Balancing for TCP/UDP
-- [X] Full IPv6 Support
-- [X] NAT-forwarding
+- :heavy_check_mark: Load Balancing for TCP/UDP
+- :heavy_check_mark: Full IPv6 Support
+- :heavy_check_mark: NAT-forwarding
 
 ### TLS:
-- [X] TLS Support (v1.1, v1.2 and v1.3)
-- [X] TLS Offload
-- [X] Mutual TLS
-- [X] OCSP Stapling
-- [X] OCSP Certificate Validation
-- [X] Server Name Indication (SNI) Support
-- [X] StartTLS Support
+- :heavy_check_mark: TLS Support (v1.1, v1.2 and v1.3)
+- :heavy_check_mark: TLS Offload
+- :heavy_check_mark: Mutual TLS
+- :heavy_check_mark: OCSP Stapling
+- :heavy_check_mark: OCSP Certificate Validation
+- :heavy_check_mark: Server Name Indication (SNI) Support
+- :heavy_check_mark: StartTLS Support
 
 ### L7:
-- [X] Full HTTP/1.1 and HTTP/2
-- [X] HTTP/2 to HTTP/1.1 Translation
-- [X] HTTP/1.1 to HTTP/2 Translation
-- [X] Reverse Proxy
-- [X] HTTP Compression (GZIP, Deflate and Brotli)
+- :heavy_check_mark: Full HTTP/1.1 and HTTP/2
+- :heavy_check_mark: HTTP/2 to HTTP/1.1 Translation
+- :heavy_check_mark: HTTP/1.1 to HTTP/2 Translation
+- :heavy_check_mark: Reverse Proxy
+- :heavy_check_mark: HTTP Compression (GZIP, Deflate and Brotli)
 - [ ] HTTP Caching
+- [ ] HTTP Connection Pool
 
 ### Health Checking:
-- [X] L4 Based Health Check using TCP/UDP
-- [X] L7 Based Health Check using HTTP/HTTPS
+- :heavy_check_mark: L4 Based Health Check using TCP/UDP
+- :heavy_check_mark: L7 Based Health Check using HTTP/HTTPS
 
 ### Load Balancing Methods:
-- [X] Random
-- [X] Round Robin
-- [X] Source IP Hash
-- [X] Least Connection
-- [X] Weighted Random
-- [X] Weighted Round Robin
-- [X] Weighted Least Connection
+- :heavy_check_mark: Random
+- :heavy_check_mark: Round Robin
+- :heavy_check_mark: Source IP Hash
+- :heavy_check_mark: Least Connection
+- :heavy_check_mark: Weighted Random
+- :heavy_check_mark: Weighted Round Robin
+- :heavy_check_mark: Weighted Least Connection
+- :heavy_check_mark: Per HTTP Request Round Robin
 
 ### Session Persistence:
-- [X] 5-Tuple Hash (Source IP + Source Port +  Destination IP +  Destination Port + Protocol) 
-- [X] Long-Lived Sessions
+- :heavy_check_mark: 5-Tuple Hash (Source IP + Source Port +  Destination IP +  Destination Port + Protocol) 
+- :heavy_check_mark: Long-Lived Sessions
 - [ ] HTTP Cookie
 
 ### Security:
-- [X] Access Control List (ACL)
-- [X] Per-Connection Rate-Limit
-- [X] Per-Packet Rate-Limit
+- :heavy_check_mark: Access Control List (ACL)
+- :heavy_check_mark: Per-Connection Rate-Limit
+- :heavy_check_mark: Per-Packet Rate-Limit
 - [ ] Web Application Firewall (WAF)
