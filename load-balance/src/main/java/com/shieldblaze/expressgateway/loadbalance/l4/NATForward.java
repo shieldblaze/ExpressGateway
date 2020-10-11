@@ -1,6 +1,6 @@
 package com.shieldblaze.expressgateway.loadbalance.l4;
 
-import com.shieldblaze.expressgateway.loadbalance.backend.Backend;
+import com.shieldblaze.expressgateway.backend.Backend;
 import com.shieldblaze.expressgateway.loadbalance.sessionpersistence.NOOPSessionPersistence;
 
 import java.net.InetSocketAddress;

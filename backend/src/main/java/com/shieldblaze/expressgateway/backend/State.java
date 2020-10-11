@@ -15,24 +15,10 @@
  * You should have received a copy of the GNU General Public License
  * along with ShieldBlaze ExpressGateway.  If not, see <https://www.gnu.org/licenses/>.
  */
-package com.shieldblaze.expressgateway.loadbalance.l4.sessionpersistence;
+package com.shieldblaze.expressgateway.backend;
 
-import com.shieldblaze.expressgateway.loadbalance.backend.Backend;
-
-import java.net.InetSocketAddress;
-
-/**
- * No-Operation {@link SessionPersistence}
- */
-public final class NOOPSessionPersistence extends SessionPersistence {
-
-    @Override
-    public Backend getBackend(InetSocketAddress sourceAddress) {
-        return null;
-    }
-
-    @Override
-    public void addRoute(InetSocketAddress socketAddress, Backend backend) {
-        // Does Nothing
-    }
+public enum State {
+    ONLINE,
+    OFFLINE,
+    DRAINING
 }

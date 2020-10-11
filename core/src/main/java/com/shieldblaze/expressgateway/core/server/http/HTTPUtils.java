@@ -30,6 +30,8 @@ import io.netty.handler.codec.http2.DefaultHttp2FrameWriter;
 import io.netty.handler.codec.http2.DefaultHttp2HeadersDecoder;
 import io.netty.handler.codec.http2.Http2Connection;
 import io.netty.handler.codec.http2.Http2ConnectionEncoder;
+import io.netty.handler.codec.http2.Http2FrameCodec;
+import io.netty.handler.codec.http2.Http2FrameListener;
 import io.netty.handler.codec.http2.Http2FrameReader;
 import io.netty.handler.codec.http2.Http2FrameWriter;
 import io.netty.handler.codec.http2.Http2HeadersEncoder;
@@ -46,15 +48,16 @@ final class HTTPUtils {
         headers.set(HttpHeaderNames.SERVER, "ShieldBlaze ExpressGateway");
     }
 
-    static HttpToHttp2ConnectionHandler h2Handler(HTTPConfiguration httpConfiguration, boolean forServer) {
-        Http2Settings http2Settings = Http2Settings.defaultSettings();
-//        http2Settings.initialWindowSize(httpConfiguration.getInitialWindowSize());
-//        http2Settings.maxConcurrentStreams(httpConfiguration.getMaxConcurrentStreams());
-//        http2Settings.maxHeaderListSize(httpConfiguration.getMaxHeaderSizeList());
-//        http2Settings.headerTableSize(httpConfiguration.getMaxHeaderTableSize());
-//        http2Settings.pushEnabled(httpConfiguration.enableHTTP2Push());
+    static HttpToHttp2ConnectionHandler clientH2Handler(HTTPConfiguration httpConfiguration) {
+        Http2Settings http2Settings = new Http2Settings();
+        http2Settings.initialWindowSize(httpConfiguration.getH2InitialWindowSize());
+        http2Settings.maxConcurrentStreams(httpConfiguration.getH2MaxConcurrentStreams());
+        http2Settings.maxHeaderListSize(httpConfiguration.getH2MaxHeaderSizeList());
+        http2Settings.headerTableSize(httpConfiguration.getH2MaxHeaderTableSize());
+        http2Settings.pushEnabled(httpConfiguration.isH2enablePush());
+        http2Settings.maxFrameSize(httpConfiguration.getH2MaxFrameSize());
 
-        Http2Connection connection = new DefaultHttp2Connection(forServer);
+        Http2Connection connection = new DefaultHttp2Connection(false);
 
         InboundHttp2ToHttpObjectAdapter listener = new InboundHttp2ToHttpObjectAdapterBuilder(connection)
                 .propagateSettings(false)
@@ -75,6 +78,26 @@ final class HTTPUtils {
                 .codec(decoder, encoder)
                 .initialSettings(http2Settings)
                 .build();
+    }
+
+    static Http2FrameCodec serverH2Handler(HTTPConfiguration httpConfiguration) {
+        Http2Settings http2Settings = new Http2Settings();
+        http2Settings.maxHeaderListSize(httpConfiguration.getH2MaxHeaderSizeList());
+
+        Http2Connection connection = new DefaultHttp2Connection(true);
+
+        Http2FrameReader reader = new DefaultHttp2FrameReader(new DefaultHttp2HeadersDecoder(true, http2Settings.maxHeaderListSize()));
+        Http2FrameWriter writer = new DefaultHttp2FrameWriter(Http2HeadersEncoder.NEVER_SENSITIVE, false);
+
+        Http2ConnectionEncoder encoder = new HTTP2ContentCompressor(new DefaultHttp2ConnectionEncoder(connection, writer), httpConfiguration);
+
+        DefaultHttp2ConnectionDecoder decoder = new DefaultHttp2ConnectionDecoder(connection, encoder, reader,
+                Http2PromisedRequestVerifier.ALWAYS_VERIFY, true, true);
+
+        Http2FrameCodec http2FrameCodec = new Http2FrameCodec(encoder, decoder, http2Settings, false);
+        decoder.frameListener(new HTTP2ContentDecompressor(connection, decoder.frameListener()));
+
+        return http2FrameCodec;
     }
 
     /**

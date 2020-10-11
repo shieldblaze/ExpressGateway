@@ -17,12 +17,11 @@
  */
 package com.shieldblaze.expressgateway.loadbalance.l7;
 
-import com.shieldblaze.expressgateway.loadbalance.backend.Backend;
+import com.shieldblaze.expressgateway.backend.Backend;
 import com.shieldblaze.expressgateway.loadbalance.sessionpersistence.NOOPSessionPersistence;
 import com.shieldblaze.expressgateway.loadbalance.sessionpersistence.SessionPersistence;
 import io.netty.handler.codec.http.HttpRequest;
 
-import java.net.InetSocketAddress;
 import java.util.List;
 
 /**

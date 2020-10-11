@@ -20,8 +20,11 @@ package com.shieldblaze.expressgateway.core.server.http;
 import com.shieldblaze.expressgateway.core.configuration.http.HTTPConfiguration;
 import com.shieldblaze.expressgateway.core.configuration.tls.TLSConfiguration;
 import com.shieldblaze.expressgateway.core.loadbalancer.l7.http.HTTPLoadBalancer;
+import io.netty.channel.Channel;
 import io.netty.channel.ChannelHandlerContext;
+import io.netty.channel.ChannelInitializer;
 import io.netty.channel.ChannelPipeline;
+import io.netty.handler.codec.http2.Http2MultiplexHandler;
 import io.netty.handler.ssl.ApplicationProtocolNames;
 import io.netty.handler.ssl.ApplicationProtocolNegotiationHandler;
 import org.apache.logging.log4j.LogManager;
@@ -55,9 +58,8 @@ final class ALPNServerHandler extends ApplicationProtocolNegotiationHandler {
         ChannelPipeline pipeline = ctx.pipeline();
         HTTPConfiguration httpConfiguration = httpLoadBalancer.getHTTPConfiguration();
         if (protocol.equalsIgnoreCase(ApplicationProtocolNames.HTTP_2)) {
-            pipeline.addLast("HTTP2Handler", HTTPUtils.h2Handler(httpConfiguration, true));
-            pipeline.addLast("HTTPServerValidator", new HTTPServerValidator(httpConfiguration));
-            pipeline.addLast("UpstreamHandler", new UpstreamHandler(httpLoadBalancer, tlsClient, true));
+            pipeline.addLast("HTTP2Handler", HTTPUtils.serverH2Handler(httpConfiguration));
+            pipeline.addLast("HTTP2MultiplexHandler", new Http2MultiplexHandler(new MultiplexInitializer(httpLoadBalancer, tlsClient)));
         } else if (protocol.equalsIgnoreCase(ApplicationProtocolNames.HTTP_1_1)) {
             pipeline.addLast("HTTPServerCodec", HTTPUtils.newServerCodec(httpConfiguration));
             pipeline.addLast("HTTPServerValidator", new HTTPServerValidator(httpConfiguration));
@@ -76,5 +78,23 @@ final class ALPNServerHandler extends ApplicationProtocolNegotiationHandler {
     @Override
     public void exceptionCaught(ChannelHandlerContext ctx, Throwable cause) {
         logger.error("Caught Error at ALPN Server Handler", cause);
+    }
+
+    private static final class MultiplexInitializer extends ChannelInitializer<Channel> {
+
+        private final HTTPLoadBalancer httpLoadBalancer;
+        private final TLSConfiguration tlsClient;
+
+        private MultiplexInitializer(HTTPLoadBalancer httpLoadBalancer, TLSConfiguration tlsClient) {
+            this.httpLoadBalancer = httpLoadBalancer;
+            this.tlsClient = tlsClient;
+        }
+
+        @Override
+        protected void initChannel(Channel ch) {
+            ChannelPipeline pipeline = ch.pipeline();
+            pipeline.addLast("DuplexHTTP2ToHTTPObjectAdapter", new DuplexHTTP2ToHTTPObjectAdapter());
+            pipeline.addLast("UpstreamHandler", new UpstreamHandler(httpLoadBalancer, tlsClient, true));
+        }
     }
 }

@@ -20,8 +20,10 @@ package com.shieldblaze.expressgateway.core.server.http;
 import com.shieldblaze.expressgateway.core.utils.ChannelUtils;
 import io.netty.channel.ChannelHandlerContext;
 import io.netty.channel.ChannelInboundHandlerAdapter;
+import io.netty.handler.codec.http.FullHttpMessage;
 import io.netty.handler.codec.http.HttpHeaderNames;
 import io.netty.handler.codec.http.HttpResponse;
+import io.netty.handler.codec.http.LastHttpContent;
 import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
 
@@ -30,6 +32,7 @@ final class DownstreamHandler extends ChannelInboundHandlerAdapter {
     private static final Logger logger = LogManager.getLogger(DownstreamHandler.class);
 
     private final UpstreamHandler upstreamHandler;
+    boolean isActive;
 
     DownstreamHandler(UpstreamHandler upstreamHandler) {
         this.upstreamHandler = upstreamHandler;
@@ -56,6 +59,9 @@ final class DownstreamHandler extends ChannelInboundHandlerAdapter {
                     upstreamHandler.acceptEncodingMap.remove(response.headers().getInt("x-http2-stream-id"));
                 }
             }
+        }
+        if (msg instanceof LastHttpContent) {
+            isActive = false;
         }
         upstreamHandler.upstreamChannel.writeAndFlush(msg);
     }

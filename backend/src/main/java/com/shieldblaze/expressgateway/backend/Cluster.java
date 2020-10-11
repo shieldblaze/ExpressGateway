@@ -1,4 +1,4 @@
-package com.shieldblaze.expressgateway.loadbalance.backend;
+package com.shieldblaze.expressgateway.backend;
 
 import java.net.InetSocketAddress;
 import java.util.ArrayList;

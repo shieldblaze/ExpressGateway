@@ -17,7 +17,7 @@
  */        // Does Nothing
 package com.shieldblaze.expressgateway.loadbalance.sessionpersistence;
 
-import com.shieldblaze.expressgateway.loadbalance.backend.Backend;
+import com.shieldblaze.expressgateway.backend.Backend;
 import io.netty.handler.codec.http.HttpRequest;
 
 import java.net.InetSocketAddress;

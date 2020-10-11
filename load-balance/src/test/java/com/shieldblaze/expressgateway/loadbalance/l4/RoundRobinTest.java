@@ -17,7 +17,7 @@
  */
 package com.shieldblaze.expressgateway.loadbalance.l4;
 
-import com.shieldblaze.expressgateway.loadbalance.backend.Backend;
+import com.shieldblaze.expressgateway.backend.Backend;
 import org.junit.jupiter.api.Test;
 
 import java.net.InetSocketAddress;

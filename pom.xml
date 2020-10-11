@@ -59,6 +59,7 @@ along with ShieldBlaze ExpressGateway.  If not, see <https://www.gnu.org/license
         <module>core</module>
         <module>load-balance</module>
         <module>health-check</module>
+        <module>backend</module>
     </modules>
 
     <dependencies>
@@ -141,7 +142,6 @@ along with ShieldBlaze ExpressGateway.  If not, see <https://www.gnu.org/license
             <artifactId>httpclient</artifactId>
             <version>4.5.12</version>
         </dependency>
-
     </dependencies>
 
     <build>

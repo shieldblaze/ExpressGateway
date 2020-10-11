@@ -34,18 +34,15 @@ public final class HTTPResponses {
     /**
      * HTTP 404: NOT_FOUND
      */
-    public static final DefaultFullHttpResponse NOT_FOUND_KEEP_ALIVE = new DefaultFullHttpResponse(HttpVersion.HTTP_1_1,
-            HttpResponseStatus.NOT_FOUND, Unpooled.EMPTY_BUFFER);
-    public static final DefaultFullHttpResponse NOT_FOUND = new DefaultFullHttpResponse(HttpVersion.HTTP_1_1,
-            HttpResponseStatus.NOT_FOUND, Unpooled.EMPTY_BUFFER);
+    public static final DefaultFullHttpResponse NOT_FOUND_KEEP_ALIVE = new DefaultFullHttpResponse(HttpVersion.HTTP_1_1, HttpResponseStatus.NOT_FOUND, Unpooled.EMPTY_BUFFER);
+    public static final DefaultFullHttpResponse NOT_FOUND = new DefaultFullHttpResponse(HttpVersion.HTTP_1_1, HttpResponseStatus.NOT_FOUND, Unpooled.EMPTY_BUFFER);
 
     /**
      * HTTP 502: BAD_GATEWAY
      */
     public static final DefaultFullHttpResponse BAD_GATEWAY_KEEP_ALIVE = new DefaultFullHttpResponse(HttpVersion.HTTP_1_1,
             HttpResponseStatus.BAD_GATEWAY, Unpooled.EMPTY_BUFFER);
-    public static final DefaultFullHttpResponse BAD_GATEWAY = new DefaultFullHttpResponse(HttpVersion.HTTP_1_1,
-            HttpResponseStatus.BAD_GATEWAY, Unpooled.EMPTY_BUFFER);
+    public static final DefaultFullHttpResponse BAD_GATEWAY = new DefaultFullHttpResponse(HttpVersion.HTTP_1_1, HttpResponseStatus.BAD_GATEWAY, Unpooled.EMPTY_BUFFER);
 
     /**
      * HTTP 417: EXPECTATION_FAILED
@@ -56,10 +53,8 @@ public final class HTTPResponses {
     /**
      * HTTP 100: CONTINUE
      */
-    public static final DefaultFullHttpResponse ACCEPT_KEEP_ALIVE = new DefaultFullHttpResponse(HttpVersion.HTTP_1_1,
-            HttpResponseStatus.CONTINUE, Unpooled.EMPTY_BUFFER);
-    public static final DefaultFullHttpResponse ACCEPT = new DefaultFullHttpResponse(HttpVersion.HTTP_1_1,
-            HttpResponseStatus.CONTINUE, Unpooled.EMPTY_BUFFER);
+    public static final DefaultFullHttpResponse ACCEPT_KEEP_ALIVE = new DefaultFullHttpResponse(HttpVersion.HTTP_1_1, HttpResponseStatus.CONTINUE, Unpooled.EMPTY_BUFFER);
+    public static final DefaultFullHttpResponse ACCEPT = new DefaultFullHttpResponse(HttpVersion.HTTP_1_1, HttpResponseStatus.CONTINUE, Unpooled.EMPTY_BUFFER);
 
     /**
      * HTTP 413: REQUEST_ENTITY_TOO_LARGE

@@ -17,9 +17,9 @@
  */
 package com.shieldblaze.expressgateway.core.loadbalancer.l4;
 
+import com.shieldblaze.expressgateway.backend.Cluster;
 import com.shieldblaze.expressgateway.core.configuration.CommonConfiguration;
 import com.shieldblaze.expressgateway.core.server.L4FrontListener;
-import com.shieldblaze.expressgateway.loadbalance.backend.Cluster;
 import com.shieldblaze.expressgateway.loadbalance.l4.L4Balance;
 
 import java.net.InetSocketAddress;
