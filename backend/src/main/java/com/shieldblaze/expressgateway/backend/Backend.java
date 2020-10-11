@@ -73,8 +73,6 @@ public class Backend {
      */
     private HealthCheck healthCheck;
 
-
-
     /**
      * Create {@link Backend} with {@code Weight 100}, {@code maxConnections 10000} and no Health Check
      *

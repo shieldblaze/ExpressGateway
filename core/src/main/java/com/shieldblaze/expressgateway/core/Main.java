@@ -41,6 +41,8 @@ import com.shieldblaze.expressgateway.core.loadbalancer.l7.http.HTTPLoadBalancer
 import com.shieldblaze.expressgateway.core.loadbalancer.l7.http.HTTPLoadBalancerBuilder;
 import com.shieldblaze.expressgateway.core.server.http.HTTPListener;
 import com.shieldblaze.expressgateway.loadbalance.l7.RoundRobin;
+import io.netty.handler.codec.http2.Http2FrameCodec;
+import io.netty.handler.codec.http2.Http2FrameCodecBuilder;
 import io.netty.handler.ssl.util.InsecureTrustManagerFactory;
 import io.netty.handler.ssl.util.SelfSignedCertificate;
 
@@ -105,9 +107,11 @@ public final class Main {
                 .withTrustManager(InsecureTrustManagerFactory.INSTANCE.getTrustManagers()[0])
                 .build();
 
+        Backend backend = new Backend("www.google.com", new InetSocketAddress("www.google.com", 443));
+
         Cluster cluster = new Cluster();
         cluster.setClusterName("MyCluster");
-        cluster.addBackend(new Backend("www.google.com", new InetSocketAddress("www.google.com", 443)));
+        cluster.addBackend(backend);
 //        cluster.addBackend(new Backend("speed.hetzner.de", new InetSocketAddress("speed.hetzner.de", 443)));
 //        cluster.addBackend(new Backend("one.one.one.one", new InetSocketAddress("one.one.one.one", 443)));
 
@@ -122,6 +126,9 @@ public final class Main {
 //new Http2MultiplexHandler()
 
 //        Http2StreamFrameToHttpObjectCodec
+
+//        new Http2FrameCodecBuilder()
+//new Http2FrameCodec()
         HTTPConfiguration httpConfiguration = HTTPConfigurationBuilder.newBuilder()
                 .withBrotliCompressionLevel(4)
                 .withCompressionThreshold(100)

@@ -59,7 +59,7 @@ final class ALPNClientHandler extends ApplicationProtocolNegotiationHandler {
         ChannelPipeline pipeline = ctx.pipeline();
         if (protocol.equalsIgnoreCase(ApplicationProtocolNames.HTTP_2)) {
 
-            pipeline.addLast("HTTP2Handler", HTTPUtils.h2Handler(httpConfiguration, false));
+            pipeline.addLast("HTTP2Handler", HTTPUtils.clientH2Handler(httpConfiguration));
 
             // If Upstream is not HTTP/2 then we need HTTPTranslationAdapter for HTTP Message conversion
             if (!isUpstreamHTTP2) {

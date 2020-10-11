@@ -49,6 +49,7 @@ import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
 
 import java.net.InetSocketAddress;
+import java.nio.charset.StandardCharsets;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ConcurrentLinkedQueue;
@@ -129,9 +130,9 @@ final class UpstreamHandler extends ChannelInboundHandlerAdapter {
             if (backend == null) {
                 // If request have `Keep-Alive`, return `Keep-Alive` else `Close` response.
                 if (HttpUtil.isKeepAlive(request)) {
-                    ctx.writeAndFlush(HTTPResponses.BAD_GATEWAY_KEEP_ALIVE.retainedDuplicate());
+                    ctx.channel().writeAndFlush(HTTPResponses.BAD_GATEWAY_KEEP_ALIVE.retainedDuplicate());
                 } else {
-                    ctx.writeAndFlush(HTTPResponses.BAD_GATEWAY.retainedDuplicate()).addListener(ChannelFutureListener.CLOSE);
+                    ctx.channel().writeAndFlush(HTTPResponses.BAD_GATEWAY.retainedDuplicate()).addListener(ChannelFutureListener.CLOSE);
                 }
                 return;
             }
