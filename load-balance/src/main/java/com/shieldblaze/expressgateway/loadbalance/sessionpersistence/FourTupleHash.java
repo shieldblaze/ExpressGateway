@@ -17,13 +17,13 @@
  */
 package com.shieldblaze.expressgateway.loadbalance.sessionpersistence;
 
-import com.google.common.cache.Cache;
-import com.google.common.cache.CacheBuilder;
 import com.shieldblaze.expressgateway.backend.Backend;
-import io.netty.handler.codec.http.HttpRequest;
+import com.shieldblaze.expressgateway.common.SelfExpiringMap;
+import com.shieldblaze.expressgateway.loadbalance.l7.Request;
 
 import java.net.InetSocketAddress;
-import java.util.concurrent.TimeUnit;
+import java.time.Duration;
+import java.util.concurrent.ConcurrentHashMap;
 
 /**
  * <p> 4-Tuple Hash based {@link SessionPersistence} </p>
@@ -31,28 +31,25 @@ import java.util.concurrent.TimeUnit;
  */
 public final class FourTupleHash extends SessionPersistence {
 
-    private final Cache<InetSocketAddress, Backend> routeCache = CacheBuilder.newBuilder()
-            .maximumSize(1_000_000)
-            .expireAfterWrite(1, TimeUnit.HOURS)
-            .build();
+    private final SelfExpiringMap<String, Backend> routeMap = new SelfExpiringMap<>(new ConcurrentHashMap<>(), Duration.ofHours(1), false);
 
     @Override
     public Backend getBackend(InetSocketAddress sourceAddress) {
-        return routeCache.getIfPresent(sourceAddress);
+        return routeMap.get(sourceAddress.toString());
     }
 
     @Override
-    public Backend getBackend(HttpRequest httpRequest) {
+    public Backend getBackend(Request request) {
         return null;
     }
 
     @Override
     public void addRoute(InetSocketAddress socketAddress, Backend backend) {
-        routeCache.put(socketAddress, backend);
+        routeMap.put(socketAddress.toString(), backend);
     }
 
     @Override
-    public void addRoute(HttpRequest httpRequest, Backend backend) {
+    public void addRoute(Request request, Backend backend) {
         // Does nothing
     }
 }

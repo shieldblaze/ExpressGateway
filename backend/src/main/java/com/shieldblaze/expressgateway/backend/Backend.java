@@ -17,6 +17,7 @@
  */
 package com.shieldblaze.expressgateway.backend;
 
+import com.google.common.hash.Hashing;
 import com.shieldblaze.expressgateway.healthcheck.Health;
 import com.shieldblaze.expressgateway.healthcheck.HealthCheck;
 import io.netty.util.internal.ObjectUtil;
@@ -26,6 +27,7 @@ import java.net.InetSocketAddress;
 /**
  * {@link Backend} is the server which handles actual request of client.
  */
+@SuppressWarnings("UnstableApiUsage")
 public class Backend {
 
     /**
@@ -36,7 +38,7 @@ public class Backend {
     /**
      * Address of this {@link Backend}
      */
-    private InetSocketAddress socketAddress;
+    private final InetSocketAddress socketAddress;
 
     /**
      * Weight of this {@link Backend}
@@ -74,6 +76,11 @@ public class Backend {
     private HealthCheck healthCheck;
 
     /**
+     * Hash of {@link InetSocketAddress}
+     */
+    private long hash;
+
+    /**
      * Create {@link Backend} with {@code Weight 100}, {@code maxConnections 10000} and no Health Check
      *
      * @param socketAddress Address of this {@link Backend}
@@ -108,6 +115,12 @@ public class Backend {
         this.Weight = Weight;
         this.maxConnections = maxConnections;
         this.healthCheck = healthCheck;
+
+        this.hash = Hashing.murmur3_128().newHasher()
+                .putBytes(socketAddress.getAddress().getAddress())
+                .putInt(socketAddress.getPort())
+                .hash()
+                .padToLong();
     }
 
     public String getHostname() {
@@ -120,10 +133,6 @@ public class Backend {
 
     public InetSocketAddress getSocketAddress() {
         return socketAddress;
-    }
-
-    public void setSocketAddress(InetSocketAddress socketAddress) {
-        this.socketAddress = socketAddress;
     }
 
     public int getWeight() {
@@ -195,5 +204,9 @@ public class Backend {
             return Health.UNKNOWN;
         }
         return healthCheck.health();
+    }
+
+    public long getHash() {
+      return hash;
     }
 }

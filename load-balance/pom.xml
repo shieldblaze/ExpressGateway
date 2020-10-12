@@ -42,6 +42,11 @@ along with ShieldBlaze ExpressGateway.  If not, see <https://www.gnu.org/license
             <artifactId>expressgateway-backend</artifactId>
             <version>0.0.1-a</version>
         </dependency>
+        <dependency>
+            <groupId>com.shieldblaze</groupId>
+            <artifactId>expressgateway-common</artifactId>
+            <version>0.0.1-a</version>
+        </dependency>
     </dependencies>
 
     <properties>

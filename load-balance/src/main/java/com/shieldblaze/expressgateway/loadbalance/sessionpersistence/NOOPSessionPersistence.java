@@ -18,6 +18,7 @@
 package com.shieldblaze.expressgateway.loadbalance.sessionpersistence;
 
 import com.shieldblaze.expressgateway.backend.Backend;
+import com.shieldblaze.expressgateway.loadbalance.l7.Request;
 import io.netty.handler.codec.http.HttpRequest;
 
 import java.net.InetSocketAddress;
@@ -33,7 +34,7 @@ public final class NOOPSessionPersistence extends SessionPersistence {
     }
 
     @Override
-    public Backend getBackend(HttpRequest httpRequest) {
+    public Backend getBackend(Request request) {
         return null;
     }
 
@@ -43,7 +44,7 @@ public final class NOOPSessionPersistence extends SessionPersistence {
     }
 
     @Override
-    public void addRoute(HttpRequest httpRequest, Backend backend) {
+    public void addRoute(Request request, Backend backend) {
         // Does Nothing
     }
 }
