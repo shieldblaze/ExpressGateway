@@ -27,6 +27,7 @@ import com.shieldblaze.expressgateway.core.utils.ChannelUtils;
 import com.shieldblaze.expressgateway.core.utils.EventLoopFactory;
 import com.shieldblaze.expressgateway.core.utils.ReferenceCountedUtil;
 import com.shieldblaze.expressgateway.loadbalance.l7.L7Balance;
+import com.shieldblaze.expressgateway.loadbalance.l7.Request;
 import io.netty.bootstrap.Bootstrap;
 import io.netty.buffer.ByteBufAllocator;
 import io.netty.channel.Channel;
@@ -123,7 +124,7 @@ final class UpstreamHandler extends ChannelInboundHandlerAdapter {
 
             // Get Backend
             if (backend == null) {
-                backend = l7Balance.getBackend(request);
+                backend = l7Balance.getBackend(new Request((InetSocketAddress) ctx.channel().remoteAddress(), headers)).getBackend();
             }
 
             // If Backend is not found, return `BAD_GATEWAY` response.
