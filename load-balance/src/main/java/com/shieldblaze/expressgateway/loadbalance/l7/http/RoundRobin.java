@@ -24,24 +24,24 @@ import io.netty.handler.codec.http.EmptyHttpHeaders;
 
 import java.util.List;
 
-/**
- * Select {@link Backend} based on Round-Robin
- */
-public final class RoundRobin extends HTTPL7Balance {
+public final class PerRequestRoundRobin extends HTTPBalance {
 
+    private final boolean enableHTTP2;
     private RoundRobinList<Backend> backendsRoundRobin;
 
-    public RoundRobin() {
+    public PerRequestRoundRobin() {
         super(new NOOPSessionPersistence());
+        enableHTTP2 = true;
     }
 
-    public RoundRobin(List<Backend> backends) {
-        this(new NOOPSessionPersistence(), backends);
+    public PerRequestRoundRobin(List<Backend> backends) {
+        this(new NOOPSessionPersistence(), backends, true);
     }
 
-    public RoundRobin(SessionPersistence<Backend, HTTPRequest, HTTPResponse> sessionPersistence, List<Backend> backends) {
+    public PerRequestRoundRobin(SessionPersistence<HTTPResponse, HTTPResponse, HTTPRequest, Backend> sessionPersistence, List<Backend> backends, boolean enableHTTP2) {
         super(sessionPersistence);
         setBackends(backends);
+        this.enableHTTP2 = enableHTTP2;
     }
 
     @Override
@@ -51,15 +51,13 @@ public final class RoundRobin extends HTTPL7Balance {
     }
 
     @Override
-    public HTTPResponse getBackend(HTTPRequest HTTPRequest) {
-        Backend backend = sessionPersistence.getBackend(HTTPRequest);
-        if (backend != null) {
-            return new HTTPResponse(backend, EmptyHttpHeaders.INSTANCE);
+    public HTTPResponse getBackend(HTTPRequest httpRequest) {
+        HTTPResponse httpResponse = sessionPersistence.getBackend(httpRequest);
+        if (httpResponse != null) {
+            return httpResponse;
         }
 
-        backend = backendsRoundRobin.iterator().next();
-        HTTPResponse httpResponse = new HTTPResponse(backend, EmptyHttpHeaders.INSTANCE);
-        sessionPersistence.addRoute(HTTPRequest, httpResponse);
-        return httpResponse;
+        Backend backend = backendsRoundRobin.iterator().next();
+        return sessionPersistence.addRoute(httpRequest, backend);
     }
 }
