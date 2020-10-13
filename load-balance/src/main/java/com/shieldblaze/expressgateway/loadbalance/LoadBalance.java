@@ -1,3 +1,20 @@
+/*
+ * This file is part of ShieldBlaze ExpressGateway. [www.shieldblaze.com]
+ * Copyright (c) 2020 ShieldBlaze
+ *
+ * ShieldBlaze ExpressGateway is free software: you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License as published by
+ * the Free Software Foundation, either version 3 of the License, or
+ * (at your option) any later version.
+ *
+ * ShieldBlaze ExpressGateway is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
+ *
+ * You should have received a copy of the GNU General Public License
+ * along with ShieldBlaze ExpressGateway.  If not, see <https://www.gnu.org/licenses/>.
+ */
 package com.shieldblaze.expressgateway.loadbalance;
 
 import com.shieldblaze.expressgateway.backend.Backend;
@@ -8,12 +25,9 @@ import java.util.Objects;
 
 /**
  * Base Implementation for Load Balance
- * @param <R> Session Persistence Get Type
- * @param <K> Session Persistence Key Type
- * @param <V> Session Persistence Value Type
  */
-public abstract class LoadBalance<R, K, V> {
-    protected SessionPersistence<R, K, V> sessionPersistence;
+public abstract class LoadBalance<REQUEST, RESPONSE, KEY, VALUE> {
+    protected final SessionPersistence<REQUEST, RESPONSE, KEY, VALUE> sessionPersistence;
     protected List<Backend> backends;
 
     /**
@@ -22,7 +36,7 @@ public abstract class LoadBalance<R, K, V> {
      * @param sessionPersistence {@link SessionPersistence} Instance
      * @throws NullPointerException If {@link SessionPersistence} is {@code null}
      */
-    public LoadBalance(SessionPersistence<R, K, V> sessionPersistence) {
+    public LoadBalance(SessionPersistence<REQUEST, RESPONSE, KEY, VALUE>  sessionPersistence) {
         this.sessionPersistence = Objects.requireNonNull(sessionPersistence, "sessionPersistence");
     }
 

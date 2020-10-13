@@ -43,7 +43,7 @@ public final class WeightedRoundRobin extends L4Balance {
         this(new NOOPSessionPersistence(), backends);
     }
 
-    public WeightedRoundRobin(SessionPersistence<Backend, InetSocketAddress, Backend> sessionPersistence, List<Backend> backends) {
+    public WeightedRoundRobin(SessionPersistence<Backend, Backend, InetSocketAddress, Backend> sessionPersistence, List<Backend> backends) {
         super(sessionPersistence);
         setBackends(backends);
     }

@@ -24,7 +24,6 @@ import com.shieldblaze.expressgateway.loadbalance.Response;
 import com.shieldblaze.expressgateway.loadbalance.SessionPersistence;
 
 import java.net.InetSocketAddress;
-import java.util.List;
 
 /**
  * <p> Balance Layer-4 Traffic using the available methods: </p>
@@ -37,7 +36,7 @@ import java.util.List;
  *     <li> {@link WeightedRoundRobin} </li>
  * </ul>
  */
-public abstract class L4Balance extends LoadBalance<Backend, InetSocketAddress, Backend> {
+public abstract class L4Balance extends LoadBalance<Backend, Backend, InetSocketAddress, Backend> {
 
     /**
      * Create {@link L4Balance} Instance
@@ -45,7 +44,7 @@ public abstract class L4Balance extends LoadBalance<Backend, InetSocketAddress, 
      * @param sessionPersistence {@link SessionPersistence} Instance
      * @throws NullPointerException If {@link SessionPersistence} is {@code null}
      */
-    public L4Balance(SessionPersistence<Backend, InetSocketAddress, Backend> sessionPersistence) {
+    public L4Balance(SessionPersistence<Backend, Backend, InetSocketAddress, Backend> sessionPersistence) {
         super(sessionPersistence);
     }
 

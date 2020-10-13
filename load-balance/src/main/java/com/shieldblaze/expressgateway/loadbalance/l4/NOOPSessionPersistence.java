@@ -26,7 +26,7 @@ import java.net.InetSocketAddress;
 /**
  * No-Operation {@link SessionPersistence}
  */
-final class NOOPSessionPersistence implements SessionPersistence<Backend, InetSocketAddress, Backend> {
+final class NOOPSessionPersistence implements SessionPersistence<Backend, Backend, InetSocketAddress, Backend> {
 
     @Override
     public Backend getBackend(Request request) {
@@ -34,7 +34,7 @@ final class NOOPSessionPersistence implements SessionPersistence<Backend, InetSo
     }
 
     @Override
-    public void addRoute(InetSocketAddress key, Backend value) {
-        // Does Nothing
+    public Backend addRoute(InetSocketAddress socketAddress, Backend backend) {
+        return null;
     }
 }

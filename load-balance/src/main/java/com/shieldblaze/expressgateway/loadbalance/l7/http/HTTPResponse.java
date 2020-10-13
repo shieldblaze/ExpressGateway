@@ -44,4 +44,9 @@ public final class HTTPResponse extends Response {
     public HttpHeaders getHTTPHeaders() {
         return httpHeaders;
     }
+
+    @Override
+    public String toString() {
+        return "HTTPResponse{httpHeaders=" + httpHeaders + ", backend=" + getBackend() + '}';
+    }
 }

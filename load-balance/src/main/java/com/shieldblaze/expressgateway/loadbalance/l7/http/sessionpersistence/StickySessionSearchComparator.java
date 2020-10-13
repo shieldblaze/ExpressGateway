@@ -21,11 +21,11 @@ import com.shieldblaze.expressgateway.backend.Backend;
 
 import java.util.Comparator;
 
-public final class StickySessionComparator implements Comparator<Object> {
+final class StickySessionSearchComparator implements Comparator<Object> {
 
-    public static final StickySessionComparator INSTANCE = new StickySessionComparator();
+    static final StickySessionSearchComparator INSTANCE = new StickySessionSearchComparator();
 
-    private StickySessionComparator() {
+    private StickySessionSearchComparator() {
         // Prevent outside initialization
     }
 
@@ -33,6 +33,6 @@ public final class StickySessionComparator implements Comparator<Object> {
     public int compare(Object o1, Object o2) {
         String key = (String) o1;
         Backend backend = (Backend) o2;
-        return backend.getHash().compareTo(key);
+        return backend.getHash().compareToIgnoreCase(key);
     }
 }

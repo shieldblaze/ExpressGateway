@@ -23,17 +23,15 @@ import com.shieldblaze.expressgateway.loadbalance.Request;
 import com.shieldblaze.expressgateway.loadbalance.Response;
 import com.shieldblaze.expressgateway.loadbalance.SessionPersistence;
 
-import java.util.List;
-
-public abstract class HTTPL7Balance extends LoadBalance<Backend, HTTPRequest, HTTPResponse> {
+public abstract class HTTPBalance extends LoadBalance<HTTPResponse, HTTPResponse, HTTPRequest, Backend> {
 
     /**
-     * Create {@link HTTPL7Balance} Instance
+     * Create {@link HTTPBalance} Instance
      *
      * @param sessionPersistence {@link SessionPersistence} Instance
      * @throws NullPointerException If {@link SessionPersistence} is {@code null}
      */
-    public HTTPL7Balance(SessionPersistence<Backend, HTTPRequest, HTTPResponse> sessionPersistence) {
+    public HTTPBalance(SessionPersistence<HTTPResponse, HTTPResponse, HTTPRequest, Backend> sessionPersistence) {
         super(sessionPersistence);
     }
 

@@ -24,11 +24,12 @@ import com.shieldblaze.expressgateway.healthcheck.HealthCheck;
 import io.netty.util.internal.ObjectUtil;
 
 import java.net.InetSocketAddress;
+import java.nio.ByteBuffer;
 
 /**
  * {@link Backend} is the server which handles actual request of client.
  */
-public class Backend {
+public class Backend implements Comparable<Backend> {
 
     /**
      * Hostname associated with this {@link Backend}
@@ -116,7 +117,12 @@ public class Backend {
         this.maxConnections = maxConnections;
         this.healthCheck = healthCheck;
 
-        this.hash = Hasher.hash(Hasher.Algorithm.SHA256, socketAddress.toString().getBytes());
+        ByteBuffer byteBuffer = ByteBuffer.allocate(8);
+        byteBuffer.put(socketAddress.getAddress().getAddress());
+        byteBuffer.putInt(socketAddress.getPort());
+        byte[] addressAndPort = byteBuffer.array();
+        byteBuffer.clear();
+        this.hash = Hasher.hash(Hasher.Algorithm.SHA256, addressAndPort);
     }
 
     public String getHostname() {
@@ -204,5 +210,18 @@ public class Backend {
 
     public String getHash() {
         return hash;
+    }
+
+    @Override
+    public int compareTo(Backend o) {
+        return hash.compareToIgnoreCase(o.hash);
+    }
+
+    @Override
+    public String toString() {
+        return "Backend{" +
+                "hostname='" + hostname + '\'' +
+                ", socketAddress=" + socketAddress +
+                '}';
     }
 }

@@ -47,7 +47,7 @@ public final class WeightedLeastConnection extends L4Balance {
         this(new NOOPSessionPersistence(), backends);
     }
 
-    public WeightedLeastConnection(SessionPersistence<Backend, InetSocketAddress, Backend> sessionPersistence, List<Backend> backends) {
+    public WeightedLeastConnection(SessionPersistence<Backend, Backend, InetSocketAddress, Backend> sessionPersistence, List<Backend> backends) {
         super(sessionPersistence);
         setBackends(backends);
     }

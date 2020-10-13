@@ -23,7 +23,6 @@ import com.shieldblaze.expressgateway.loadbalance.SessionPersistence;
 import java.net.InetSocketAddress;
 import java.util.List;
 import java.util.Optional;
-import java.util.concurrent.atomic.AtomicInteger;
 
 /**
  * Select {@link Backend} with least connections with Round-Robin.
@@ -40,11 +39,11 @@ public final class LeastConnection extends L4Balance {
         this(new NOOPSessionPersistence(), backends);
     }
 
-    public LeastConnection(SessionPersistence<Backend, InetSocketAddress, Backend> sessionPersistence) {
+    public LeastConnection(SessionPersistence<Backend, Backend, InetSocketAddress, Backend> sessionPersistence) {
         super(sessionPersistence);
     }
 
-    public LeastConnection(SessionPersistence<Backend, InetSocketAddress, Backend> sessionPersistence, List<Backend> backends) {
+    public LeastConnection(SessionPersistence<Backend, Backend, InetSocketAddress, Backend> sessionPersistence, List<Backend> backends) {
         super(sessionPersistence);
         setBackends(backends);
     }

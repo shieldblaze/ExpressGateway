@@ -18,28 +18,26 @@
 package com.shieldblaze.expressgateway.loadbalance;
 
 import com.shieldblaze.expressgateway.backend.Backend;
-import com.shieldblaze.expressgateway.loadbalance.Request;
-
-import java.net.InetSocketAddress;
 
 /**
  * Session Persistence is used to route a request to specific {@linkplain Backend}.
  *
- * @param <R> Response for {@linkplain #getBackend(Request)}
- * @param <K> Key to use for {@linkplain #addRoute(Object, Object)}
- * @param <V> Value to use for {@linkplain #addRoute(Object, Object)}
+ * @param <REQUEST> Request Type for {@linkplain #getBackend(Request)}
+ * @param <RESPONSE> Response Type for {@linkplain #addRoute(Object, Object)}
+ * @param <KEY> Key Type to use for {@linkplain #addRoute(Object, Object)}
+ * @param <VALUE> Value Type to use for {@linkplain #addRoute(Object, Object)}
  */
-public interface SessionPersistence<R, K, V> {
+public interface SessionPersistence<REQUEST, RESPONSE, KEY, VALUE> {
 
     /**
      * Get {@link Backend}
      *
      * @return {@link Backend} is route is available else {@code null}
      */
-    R getBackend(Request request);
+    REQUEST getBackend(Request request);
 
     /**
-     * Add a Key-Value which maps to {@linkplain V}
+     * Add a Key-Value which maps to {@linkplain VALUE}
      */
-    void addRoute(K key, V value);
+    RESPONSE addRoute(KEY key, VALUE value);
 }

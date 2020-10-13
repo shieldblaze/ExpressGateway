@@ -40,4 +40,11 @@ public abstract class Response {
     public Backend getBackend() {
         return backend;
     }
+
+    @Override
+    public String toString() {
+        return "Response{" +
+                "backend=" + backend +
+                '}';
+    }
 }

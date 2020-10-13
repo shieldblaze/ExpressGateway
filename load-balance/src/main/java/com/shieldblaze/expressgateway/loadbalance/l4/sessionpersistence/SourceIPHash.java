@@ -30,7 +30,7 @@ import java.net.InetSocketAddress;
 import java.time.Duration;
 import java.util.concurrent.ConcurrentHashMap;
 
-public final class SourceIPHash implements SessionPersistence<Backend, InetSocketAddress, Backend> {
+public final class SourceIPHash implements SessionPersistence<Backend, Backend, InetSocketAddress, Backend> {
 
     private static final BigInteger MINUS_ONE = BigInteger.valueOf(-1);
 
@@ -57,7 +57,7 @@ public final class SourceIPHash implements SessionPersistence<Backend, InetSocke
     }
 
     @Override
-    public void addRoute(InetSocketAddress socketAddress, Backend value) {
+    public Backend addRoute(InetSocketAddress socketAddress, Backend value) {
         Object key;
         if (socketAddress.getAddress() instanceof Inet4Address) {
             key = ipv4WithMask(socketAddress);
@@ -65,6 +65,7 @@ public final class SourceIPHash implements SessionPersistence<Backend, InetSocke
             key = ipv6WithMask(socketAddress);
         }
         routeMap.put(key, value);
+        return value;
     }
 
     private int ipv4WithMask(Request request) {

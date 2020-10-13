@@ -20,19 +20,20 @@ package com.shieldblaze.expressgateway.loadbalance.l7.http;
 import com.shieldblaze.expressgateway.backend.Backend;
 import com.shieldblaze.expressgateway.loadbalance.Request;
 import com.shieldblaze.expressgateway.loadbalance.SessionPersistence;
+import io.netty.handler.codec.http.EmptyHttpHeaders;
 
 /**
  * No-Operation {@link SessionPersistence}
  */
-final class NOOPSessionPersistence implements SessionPersistence<Backend, HTTPRequest, HTTPResponse> {
+final class NOOPSessionPersistence implements SessionPersistence<HTTPResponse, HTTPResponse, HTTPRequest, Backend> {
 
     @Override
-    public Backend getBackend(Request request) {
+    public HTTPResponse getBackend(Request request) {
         return null;
     }
 
     @Override
-    public void addRoute(HTTPRequest key, HTTPResponse value) {
-        // Does Nothing
+    public HTTPResponse addRoute(HTTPRequest httpRequest, Backend backend) {
+        return new HTTPResponse(backend, EmptyHttpHeaders.INSTANCE);
     }
 }

@@ -20,28 +20,27 @@ package com.shieldblaze.expressgateway.loadbalance.l7.http;
 import com.shieldblaze.expressgateway.backend.Backend;
 import com.shieldblaze.expressgateway.common.list.RoundRobinList;
 import com.shieldblaze.expressgateway.loadbalance.SessionPersistence;
-import io.netty.handler.codec.http.EmptyHttpHeaders;
 
 import java.util.List;
 
-public final class PerRequestRoundRobin extends HTTPBalance {
+/**
+ * Select {@link Backend} based on Round-Robin
+ */
+public final class RoundRobin extends HTTPBalance {
 
-    private final boolean enableHTTP2;
     private RoundRobinList<Backend> backendsRoundRobin;
 
-    public PerRequestRoundRobin() {
+    public RoundRobin() {
         super(new NOOPSessionPersistence());
-        enableHTTP2 = true;
     }
 
-    public PerRequestRoundRobin(List<Backend> backends) {
-        this(new NOOPSessionPersistence(), backends, true);
+    public RoundRobin(List<Backend> backends) {
+        this(new NOOPSessionPersistence(), backends);
     }
 
-    public PerRequestRoundRobin(SessionPersistence<HTTPResponse, HTTPResponse, HTTPRequest, Backend> sessionPersistence, List<Backend> backends, boolean enableHTTP2) {
+    public RoundRobin(SessionPersistence<HTTPResponse, HTTPResponse, HTTPRequest, Backend> sessionPersistence, List<Backend> backends) {
         super(sessionPersistence);
         setBackends(backends);
-        this.enableHTTP2 = enableHTTP2;
     }
 
     @Override

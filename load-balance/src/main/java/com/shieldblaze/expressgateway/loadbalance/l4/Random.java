@@ -27,7 +27,7 @@ import java.util.List;
  * Select {@link Backend} Randomly
  */
 public final class Random extends L4Balance {
-    private static final java.util.Random RANDOM_INSTANCE = new java.util.Random();
+    private final java.util.Random RANDOM_INSTANCE = new java.util.Random();
 
     public Random() {
         super(new NOOPSessionPersistence());
@@ -38,7 +38,7 @@ public final class Random extends L4Balance {
         setBackends(backends);
     }
 
-    public Random(SessionPersistence<Backend, InetSocketAddress, Backend> sessionPersistence, List<Backend> backends) {
+    public Random(SessionPersistence<Backend, Backend, InetSocketAddress, Backend> sessionPersistence, List<Backend> backends) {
         super(sessionPersistence);
         setBackends(backends);
     }

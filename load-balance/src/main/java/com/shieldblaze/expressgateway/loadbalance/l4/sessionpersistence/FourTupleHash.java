@@ -30,7 +30,7 @@ import java.util.concurrent.ConcurrentSkipListMap;
  * <p> 4-Tuple Hash based {@link SessionPersistence} </p>
  * <p> Source IP Address + Source Port + Destination IP Address + Destination Port </p>
  */
-public final class FourTupleHash implements SessionPersistence<Backend, InetSocketAddress, Backend> {
+public final class FourTupleHash implements SessionPersistence<Backend, Backend, InetSocketAddress, Backend> {
 
     private final SelfExpiringMap<String, Backend> routeMap = new SelfExpiringMap<>(new ConcurrentSkipListMap<>(), Duration.ofHours(1), false);
 
@@ -40,7 +40,8 @@ public final class FourTupleHash implements SessionPersistence<Backend, InetSock
     }
 
     @Override
-    public void addRoute(InetSocketAddress socketAddress, Backend backend) {
+    public Backend addRoute(InetSocketAddress socketAddress, Backend backend) {
         routeMap.put(socketAddress.toString(), backend);
+        return backend;
     }
 }
