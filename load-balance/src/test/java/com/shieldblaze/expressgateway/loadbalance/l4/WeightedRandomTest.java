@@ -43,9 +43,10 @@ class WeightedRandomTest {
         int forth = 0;
 
         L4Balance l4Balance = new WeightedRandom(backends);
+        L4Request l4Request = new L4Request(new InetSocketAddress("192.168.1.1", 1));
 
         for (int i = 0; i < 1000; i++) {
-            switch (l4Balance.getBackend(null).getSocketAddress().getHostString()) {
+            switch (l4Balance.getResponse(l4Request).getBackend().getSocketAddress().getHostString()) {
                 case "10.10.1.1": {
                     first++;
                     break;

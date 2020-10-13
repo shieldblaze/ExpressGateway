@@ -14,36 +14,35 @@
  *
  * You should have received a copy of the GNU General Public License
  * along with ShieldBlaze ExpressGateway.  If not, see <https://www.gnu.org/licenses/>.
- */        // Does Nothing
-package com.shieldblaze.expressgateway.loadbalance.sessionpersistence;
+ */
+package com.shieldblaze.expressgateway.loadbalance.l7.http;
 
-import com.shieldblaze.expressgateway.backend.Backend;
-import io.netty.handler.codec.http.HttpRequest;
+import com.shieldblaze.expressgateway.loadbalance.Request;
+import io.netty.handler.codec.http.HttpHeaders;
 
 import java.net.InetSocketAddress;
 
 /**
- * No-Operation {@link SessionPersistence}
+ * {@link HTTPRequest} contains {@link InetSocketAddress} and {@link HttpHeaders} of Client
  */
-public final class NOOPSessionPersistence extends SessionPersistence {
+public final class HTTPRequest extends Request {
+    private final HttpHeaders httpHeaders;
 
-    @Override
-    public Backend getBackend(InetSocketAddress sourceAddress) {
-        return null;
+    /**
+     * Create a new {@link HTTPRequest} Instance
+     *
+     * @param socketAddress {@link InetSocketAddress} of Client
+     * @param httpHeaders   {@link HttpHeaders} of Client
+     */
+    public HTTPRequest(InetSocketAddress socketAddress, HttpHeaders httpHeaders) {
+        super(socketAddress);
+        this.httpHeaders = httpHeaders;
     }
 
-    @Override
-    public Backend getBackend(HttpRequest httpRequest) {
-        return null;
-    }
-
-    @Override
-    public void addRoute(InetSocketAddress socketAddress, Backend backend) {
-        // Does Nothing
-    }
-
-    @Override
-    public void addRoute(HttpRequest httpRequest, Backend backend) {
-        // Does Nothing
+    /**
+     * Get Client {@link HttpHeaders}
+     */
+    public HttpHeaders getHTTPHeaders() {
+        return httpHeaders;
     }
 }

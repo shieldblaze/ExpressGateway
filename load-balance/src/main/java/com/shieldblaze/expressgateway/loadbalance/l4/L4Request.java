@@ -15,14 +15,23 @@
  * You should have received a copy of the GNU General Public License
  * along with ShieldBlaze ExpressGateway.  If not, see <https://www.gnu.org/licenses/>.
  */
-package com.shieldblaze.expressgateway.core.internal;
+package com.shieldblaze.expressgateway.loadbalance.l4;
 
-import java.lang.annotation.ElementType;
-import java.lang.annotation.Target;
+import com.shieldblaze.expressgateway.loadbalance.Request;
+
+import java.net.InetSocketAddress;
 
 /**
- * Methods annotated with {@link Internal} is only for Internal use.
+ * Layer-4 Request
  */
-@Target({ElementType.METHOD, ElementType.TYPE})
-public @interface Internal {
+public final class L4Request extends Request {
+
+    /**
+     * Create a new {@link L4Request} Instance
+     *
+     * @param socketAddress {@link InetSocketAddress} of Client
+     */
+    public L4Request(InetSocketAddress socketAddress) {
+        super(socketAddress);
+    }
 }

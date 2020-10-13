@@ -18,12 +18,12 @@
 package com.shieldblaze.expressgateway.loadbalance.l4;
 
 import com.shieldblaze.expressgateway.backend.Backend;
-import com.shieldblaze.expressgateway.loadbalance.sessionpersistence.SessionPersistence;
-import io.netty.util.internal.ObjectUtil;
+import com.shieldblaze.expressgateway.loadbalance.LoadBalance;
+import com.shieldblaze.expressgateway.loadbalance.Request;
+import com.shieldblaze.expressgateway.loadbalance.Response;
+import com.shieldblaze.expressgateway.loadbalance.SessionPersistence;
 
 import java.net.InetSocketAddress;
-import java.util.ArrayList;
-import java.util.List;
 
 /**
  * <p> Balance Layer-4 Traffic using the available methods: </p>
@@ -31,15 +31,12 @@ import java.util.List;
  *     <li> {@link LeastConnection} </li>
  *     <li> {@link Random} </li>
  *     <li> {@link RoundRobin} </li>
- *     <li> {@link SourceIPHash} </li>
  *     <li> {@link WeightedLeastConnection} </li>
  *     <li> {@link WeightedRandom} </li>
  *     <li> {@link WeightedRoundRobin} </li>
  * </ul>
  */
-public abstract class L4Balance {
-    protected SessionPersistence sessionPersistence;
-    protected List<Backend> backends;
+public abstract class L4Balance extends LoadBalance<Backend, Backend, InetSocketAddress, Backend> {
 
     /**
      * Create {@link L4Balance} Instance
@@ -47,24 +44,14 @@ public abstract class L4Balance {
      * @param sessionPersistence {@link SessionPersistence} Instance
      * @throws NullPointerException If {@link SessionPersistence} is {@code null}
      */
-    public L4Balance(SessionPersistence sessionPersistence) {
-        this.sessionPersistence = ObjectUtil.checkNotNull(sessionPersistence, "Session Persistence");
+    public L4Balance(SessionPersistence<Backend, Backend, InetSocketAddress, Backend> sessionPersistence) {
+        super(sessionPersistence);
     }
 
-    /**
-     * Set Backends
-     *
-     * @param backends {@link List} of {@link Backend}
-     * @throws IllegalArgumentException If {@link List} of {@link Backend} is Empty.
-     * @throws NullPointerException     If {@link List} of {@link Backend} is {@code null}.
-     */
-    public void setBackends(List<Backend> backends) {
-        ObjectUtil.checkNotNull(backends, "Backend List");
-        if (backends.size() == 0) {
-            throw new IllegalArgumentException("Backends List Cannot Be Empty");
-        }
-        this.backends = new ArrayList<>(backends);
-    }
+    public abstract L4Response getResponse(L4Request l4Request);
 
-    public abstract Backend getBackend(InetSocketAddress sourceAddress);
+    @Override
+    public Response getResponse(Request request) {
+        return getResponse((L4Request) request);
+    }
 }

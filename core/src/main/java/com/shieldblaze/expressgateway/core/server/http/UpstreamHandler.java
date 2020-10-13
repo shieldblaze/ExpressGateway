@@ -26,7 +26,8 @@ import com.shieldblaze.expressgateway.core.utils.BootstrapFactory;
 import com.shieldblaze.expressgateway.core.utils.ChannelUtils;
 import com.shieldblaze.expressgateway.core.utils.EventLoopFactory;
 import com.shieldblaze.expressgateway.core.utils.ReferenceCountedUtil;
-import com.shieldblaze.expressgateway.loadbalance.l7.L7Balance;
+import com.shieldblaze.expressgateway.loadbalance.l7.http.HTTPBalance;
+import com.shieldblaze.expressgateway.loadbalance.l7.http.HTTPRequest;
 import io.netty.bootstrap.Bootstrap;
 import io.netty.buffer.ByteBufAllocator;
 import io.netty.channel.Channel;
@@ -49,7 +50,6 @@ import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
 
 import java.net.InetSocketAddress;
-import java.nio.charset.StandardCharsets;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ConcurrentLinkedQueue;
@@ -69,7 +69,7 @@ final class UpstreamHandler extends ChannelInboundHandlerAdapter {
     InetSocketAddress upstreamAddress;
     InetSocketAddress downstreamAddress;
 
-    private final L7Balance l7Balance;
+    private final HTTPBalance HTTPBalance;
     private final CommonConfiguration commonConfiguration;
     private final TLSConfiguration tlsClient;
     private final EventLoopFactory eventLoopFactory;
@@ -97,7 +97,7 @@ final class UpstreamHandler extends ChannelInboundHandlerAdapter {
      * @param isHTTP2          Set to {@code true} if connection is established over HTTP/2 else set to {@code false}
      */
     UpstreamHandler(HTTPLoadBalancer httpLoadBalancer, TLSConfiguration tlsClient, boolean isHTTP2) {
-        this.l7Balance = httpLoadBalancer.getL7Balance();
+        this.HTTPBalance = httpLoadBalancer.getL7Balance();
         this.commonConfiguration = httpLoadBalancer.getCommonConfiguration();
         this.eventLoopFactory = httpLoadBalancer.getEventLoopFactory();
         this.httpConfiguration = httpLoadBalancer.getHTTPConfiguration();
@@ -123,7 +123,7 @@ final class UpstreamHandler extends ChannelInboundHandlerAdapter {
 
             // Get Backend
             if (backend == null) {
-                backend = l7Balance.getBackend(request);
+                backend = HTTPBalance.getBackend(new HTTPRequest((InetSocketAddress) ctx.channel().remoteAddress(), headers)).getBackend();
             }
 
             // If Backend is not found, return `BAD_GATEWAY` response.

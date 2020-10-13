@@ -17,7 +17,7 @@
  */
 package com.shieldblaze.expressgateway.core.utils;
 
-import com.shieldblaze.expressgateway.core.internal.Internal;
+import com.shieldblaze.expressgateway.common.internal.Internal;
 import io.netty.util.ReferenceCountUtil;
 import io.netty.util.ReferenceCounted;
 

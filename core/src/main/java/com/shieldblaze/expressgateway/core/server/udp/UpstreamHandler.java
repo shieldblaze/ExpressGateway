@@ -22,6 +22,7 @@ import com.shieldblaze.expressgateway.core.configuration.CommonConfiguration;
 import com.shieldblaze.expressgateway.core.loadbalancer.l4.L4LoadBalancer;
 import com.shieldblaze.expressgateway.core.utils.EventLoopFactory;
 import com.shieldblaze.expressgateway.loadbalance.l4.L4Balance;
+import com.shieldblaze.expressgateway.loadbalance.l4.L4Request;
 import io.netty.channel.ChannelHandler;
 import io.netty.channel.ChannelHandlerContext;
 import io.netty.channel.ChannelInboundHandlerAdapter;
@@ -66,7 +67,7 @@ final class UpstreamHandler extends ChannelInboundHandlerAdapter {
             Connection connection = connectionMap.get(datagramPacket.sender().toString());
 
             if (connection == null) {
-                Backend backend = l4Balance.getBackend(datagramPacket.sender());
+                Backend backend = l4Balance.getResponse(new L4Request(datagramPacket.sender())).getBackend();
                 backend.incConnections();
 
                 connection = new Connection(datagramPacket.sender(), backend, ctx.channel(), commonConfiguration, eventLoopFactory, ctx.alloc());

@@ -20,15 +20,13 @@ package com.shieldblaze.expressgateway.loadbalance.l4;
 import com.google.common.collect.Range;
 import com.google.common.collect.TreeRangeMap;
 import com.shieldblaze.expressgateway.backend.Backend;
-import com.shieldblaze.expressgateway.loadbalance.sessionpersistence.NOOPSessionPersistence;
-import com.shieldblaze.expressgateway.loadbalance.sessionpersistence.SessionPersistence;
+import com.shieldblaze.expressgateway.loadbalance.SessionPersistence;
 
 import java.net.InetSocketAddress;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Map.Entry;
-import java.util.concurrent.atomic.AtomicInteger;
 
 /**
  * Select {@link Backend} Based on Weight with Least Connection using Round-Robin
@@ -36,7 +34,7 @@ import java.util.concurrent.atomic.AtomicInteger;
 @SuppressWarnings("UnstableApiUsage")
 public final class WeightedLeastConnection extends L4Balance {
 
-    private final AtomicInteger Index = new AtomicInteger(0);
+    private int index = 0;
     private final TreeRangeMap<Integer, Backend> backendsMap = TreeRangeMap.create();
     private final Map<Backend, Integer> localConnectionMap = new HashMap<>();
     private int totalWeight = 0;
@@ -49,7 +47,7 @@ public final class WeightedLeastConnection extends L4Balance {
         this(new NOOPSessionPersistence(), backends);
     }
 
-    public WeightedLeastConnection(SessionPersistence sessionPersistence, List<Backend> backends) {
+    public WeightedLeastConnection(SessionPersistence<Backend, Backend, InetSocketAddress, Backend> sessionPersistence, List<Backend> backends) {
         super(sessionPersistence);
         setBackends(backends);
     }
@@ -65,29 +63,29 @@ public final class WeightedLeastConnection extends L4Balance {
     }
 
     @Override
-    public Backend getBackend(InetSocketAddress sourceAddress) {
-        Backend _backend = sessionPersistence.getBackend(sourceAddress);
+    public L4Response getResponse(L4Request l4Request) {
+        Backend _backend = sessionPersistence.getBackend(new L4Request(l4Request.getSocketAddress()));
         if (_backend != null) {
-            return _backend;
+            return new L4Response(_backend);
         }
 
-        if (Index.get() >= totalWeight) {
+        if (index >= totalWeight) {
             localConnectionMap.replaceAll((backend, i) -> i = 0);
-            Index.set(0);
+            index = 0;
         }
 
-        Entry<Range<Integer>, Backend> backend = backendsMap.getEntry(Index.getAndIncrement());
+        Entry<Range<Integer>, Backend> backend = backendsMap.getEntry(index++);
         Integer connections = localConnectionMap.get(backend.getValue());
 
         if (connections >= backend.getKey().upperEndpoint()) {
             localConnectionMap.put(backend.getValue(), 0);
-            Index.set(backend.getKey().upperEndpoint());
+            index = backend.getKey().upperEndpoint();
         } else {
             localConnectionMap.put(backend.getValue(), connections + 1);
         }
 
         _backend = backend.getValue();
-        sessionPersistence.addRoute(sourceAddress, _backend);
-        return _backend;
+        sessionPersistence.addRoute(l4Request.getSocketAddress(), _backend);
+        return new L4Response(_backend);
     }
 }

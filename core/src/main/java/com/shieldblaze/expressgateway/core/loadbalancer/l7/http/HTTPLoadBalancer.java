@@ -22,7 +22,7 @@ import com.shieldblaze.expressgateway.core.configuration.CommonConfiguration;
 import com.shieldblaze.expressgateway.core.configuration.http.HTTPConfiguration;
 import com.shieldblaze.expressgateway.core.loadbalancer.l7.L7LoadBalancer;
 import com.shieldblaze.expressgateway.core.server.http.HTTPFrontListener;
-import com.shieldblaze.expressgateway.loadbalance.l7.L7Balance;
+import com.shieldblaze.expressgateway.loadbalance.l7.http.HTTPBalance;
 
 import java.net.InetSocketAddress;
 import java.util.Objects;
@@ -38,9 +38,9 @@ public abstract class HTTPLoadBalancer extends L7LoadBalancer {
      * @throws NullPointerException If any parameter is {@code null}
      * @see L7LoadBalancer
      */
-    HTTPLoadBalancer(InetSocketAddress bindAddress, L7Balance l7Balance, HTTPFrontListener httpFrontListener, Cluster cluster,
+    HTTPLoadBalancer(InetSocketAddress bindAddress, HTTPBalance HTTPBalance, HTTPFrontListener httpFrontListener, Cluster cluster,
                      CommonConfiguration commonConfiguration, HTTPConfiguration httpConfiguration) {
-        super(bindAddress, l7Balance, httpFrontListener, cluster, commonConfiguration);
+        super(bindAddress, HTTPBalance, httpFrontListener, cluster, commonConfiguration);
         this.httpConfiguration = Objects.requireNonNull(httpConfiguration, "httpConfiguration");
     }
 

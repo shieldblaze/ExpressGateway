@@ -17,16 +17,19 @@
  */
 package com.shieldblaze.expressgateway.backend;
 
+import com.google.common.hash.Hashing;
+import com.shieldblaze.expressgateway.common.crypto.Hasher;
 import com.shieldblaze.expressgateway.healthcheck.Health;
 import com.shieldblaze.expressgateway.healthcheck.HealthCheck;
 import io.netty.util.internal.ObjectUtil;
 
 import java.net.InetSocketAddress;
+import java.nio.ByteBuffer;
 
 /**
  * {@link Backend} is the server which handles actual request of client.
  */
-public class Backend {
+public class Backend implements Comparable<Backend> {
 
     /**
      * Hostname associated with this {@link Backend}
@@ -36,7 +39,7 @@ public class Backend {
     /**
      * Address of this {@link Backend}
      */
-    private InetSocketAddress socketAddress;
+    private final InetSocketAddress socketAddress;
 
     /**
      * Weight of this {@link Backend}
@@ -74,6 +77,11 @@ public class Backend {
     private HealthCheck healthCheck;
 
     /**
+     * Hash of {@link InetSocketAddress}
+     */
+    private final String hash;
+
+    /**
      * Create {@link Backend} with {@code Weight 100}, {@code maxConnections 10000} and no Health Check
      *
      * @param socketAddress Address of this {@link Backend}
@@ -108,6 +116,13 @@ public class Backend {
         this.Weight = Weight;
         this.maxConnections = maxConnections;
         this.healthCheck = healthCheck;
+
+        ByteBuffer byteBuffer = ByteBuffer.allocate(8);
+        byteBuffer.put(socketAddress.getAddress().getAddress());
+        byteBuffer.putInt(socketAddress.getPort());
+        byte[] addressAndPort = byteBuffer.array();
+        byteBuffer.clear();
+        this.hash = Hasher.hash(Hasher.Algorithm.SHA256, addressAndPort);
     }
 
     public String getHostname() {
@@ -120,10 +135,6 @@ public class Backend {
 
     public InetSocketAddress getSocketAddress() {
         return socketAddress;
-    }
-
-    public void setSocketAddress(InetSocketAddress socketAddress) {
-        this.socketAddress = socketAddress;
     }
 
     public int getWeight() {
@@ -195,5 +206,22 @@ public class Backend {
             return Health.UNKNOWN;
         }
         return healthCheck.health();
+    }
+
+    public String getHash() {
+        return hash;
+    }
+
+    @Override
+    public int compareTo(Backend o) {
+        return hash.compareToIgnoreCase(o.hash);
+    }
+
+    @Override
+    public String toString() {
+        return "Backend{" +
+                "hostname='" + hostname + '\'' +
+                ", socketAddress=" + socketAddress +
+                '}';
     }
 }

@@ -18,20 +18,18 @@
 package com.shieldblaze.expressgateway.loadbalance.l4;
 
 import com.shieldblaze.expressgateway.backend.Backend;
-import com.shieldblaze.expressgateway.loadbalance.sessionpersistence.NOOPSessionPersistence;
-import com.shieldblaze.expressgateway.loadbalance.sessionpersistence.SessionPersistence;
+import com.shieldblaze.expressgateway.loadbalance.SessionPersistence;
 
 import java.net.InetSocketAddress;
 import java.util.List;
 import java.util.Optional;
-import java.util.concurrent.atomic.AtomicInteger;
 
 /**
  * Select {@link Backend} with least connections with Round-Robin.
  */
 public final class LeastConnection extends L4Balance {
 
-    private final AtomicInteger Index = new AtomicInteger();
+    private int index;
 
     public LeastConnection() {
         this(new NOOPSessionPersistence());
@@ -41,25 +39,25 @@ public final class LeastConnection extends L4Balance {
         this(new NOOPSessionPersistence(), backends);
     }
 
-    public LeastConnection(SessionPersistence sessionPersistence) {
+    public LeastConnection(SessionPersistence<Backend, Backend, InetSocketAddress, Backend> sessionPersistence) {
         super(sessionPersistence);
     }
 
-    public LeastConnection(SessionPersistence sessionPersistence, List<Backend> backends) {
+    public LeastConnection(SessionPersistence<Backend, Backend, InetSocketAddress, Backend> sessionPersistence, List<Backend> backends) {
         super(sessionPersistence);
         setBackends(backends);
     }
 
     @Override
-    public Backend getBackend(InetSocketAddress sourceAddress) {
-        Backend backend = sessionPersistence.getBackend(sourceAddress);
+    public L4Response getResponse(L4Request l4Request) {
+        Backend backend = sessionPersistence.getBackend(l4Request);
         if (backend != null) {
-            return backend;
+            return new L4Response(backend);
         }
 
         // If Index size equals Backend List size, we'll reset the Index.
-        if (Index.get() >= backends.size()) {
-            Index.set(0);
+        if (index >= backends.size()) {
+            index = 0;
         }
 
         // Get Number Of Maximum Connection on a Backend
@@ -73,8 +71,8 @@ public final class LeastConnection extends L4Balance {
                 .filter(back -> back.getActiveConnections() < currentMaxConnections)
                 .findFirst();
 
-        backend = optionalBackend.orElseGet(() -> backends.get(Index.getAndIncrement()));
-        sessionPersistence.addRoute(sourceAddress, backend);
-        return backend;
+        backend = optionalBackend.orElseGet(() -> backends.get(index++));
+        sessionPersistence.addRoute(l4Request.getSocketAddress(), backend);
+        return new L4Response(backend);
     }
 }

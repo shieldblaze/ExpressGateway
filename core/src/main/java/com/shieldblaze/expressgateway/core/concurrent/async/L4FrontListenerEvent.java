@@ -17,8 +17,8 @@
  */
 package com.shieldblaze.expressgateway.core.concurrent.async;
 
-import com.shieldblaze.expressgateway.core.concurrent.Event;
-import com.shieldblaze.expressgateway.core.internal.Internal;
+import com.shieldblaze.expressgateway.common.internal.Internal;
+import com.shieldblaze.expressgateway.common.concurrent.Event;
 import com.shieldblaze.expressgateway.core.server.L4FrontListener;
 import io.netty.channel.ChannelFuture;
 

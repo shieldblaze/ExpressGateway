@@ -15,26 +15,24 @@
  * You should have received a copy of the GNU General Public License
  * along with ShieldBlaze ExpressGateway.  If not, see <https://www.gnu.org/licenses/>.
  */
-package com.shieldblaze.expressgateway.core.concurrent;
+package com.shieldblaze.expressgateway.loadbalance.l7.http.sessionpersistence;
 
-import java.util.concurrent.CompletableFuture;
-import java.util.concurrent.ExecutorService;
-import java.util.concurrent.Executors;
-import java.util.function.Supplier;
+import com.shieldblaze.expressgateway.backend.Backend;
 
-public final class GlobalEventExecutors {
-    private static final ExecutorService EXECUTOR_SERVICE = Executors.newCachedThreadPool();
-    public static final GlobalEventExecutors INSTANCE = new GlobalEventExecutors();
+import java.util.Comparator;
 
-    private GlobalEventExecutors() {
+final class StickySessionSearchComparator implements Comparator<Object> {
+
+    static final StickySessionSearchComparator INSTANCE = new StickySessionSearchComparator();
+
+    private StickySessionSearchComparator() {
         // Prevent outside initialization
     }
 
-    public CompletableFuture<Void> submitTask(Runnable runnable) {
-        return CompletableFuture.runAsync(runnable, EXECUTOR_SERVICE);
-    }
-
-    public <T> CompletableFuture<T> submitTask(Supplier<T> supplier) {
-        return CompletableFuture.supplyAsync(supplier, EXECUTOR_SERVICE);
+    @Override
+    public int compare(Object o1, Object o2) {
+        String key = (String) o1;
+        Backend backend = (Backend) o2;
+        return backend.getHash().compareToIgnoreCase(key);
     }
 }

@@ -40,6 +40,7 @@ class RandomTest {
         addressList.add(fastBuild("172.16.20.5"));
 
         L4Balance l4Balance = new Random(addressList);
+        L4Request l4Request = new L4Request(new InetSocketAddress("192.168.1.1", 1));
 
         int first = 0;
         int second = 0;
@@ -48,7 +49,7 @@ class RandomTest {
         int fifth = 0;
 
         for (int i = 0; i < 1000; i++) {
-            switch (l4Balance.getBackend(null).getSocketAddress().getHostString()) {
+            switch (l4Balance.getResponse(l4Request).getBackend().getSocketAddress().getHostString()) {
                 case "172.16.20.1": {
                     first++;
                     break;

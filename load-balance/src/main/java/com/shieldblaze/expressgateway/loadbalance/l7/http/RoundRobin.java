@@ -15,21 +15,20 @@
  * You should have received a copy of the GNU General Public License
  * along with ShieldBlaze ExpressGateway.  If not, see <https://www.gnu.org/licenses/>.
  */
-package com.shieldblaze.expressgateway.loadbalance.l7;
+package com.shieldblaze.expressgateway.loadbalance.l7.http;
 
 import com.shieldblaze.expressgateway.backend.Backend;
-import com.shieldblaze.expressgateway.loadbalance.sessionpersistence.NOOPSessionPersistence;
-import com.shieldblaze.expressgateway.loadbalance.sessionpersistence.SessionPersistence;
-import io.netty.handler.codec.http.HttpRequest;
+import com.shieldblaze.expressgateway.common.list.RoundRobinList;
+import com.shieldblaze.expressgateway.loadbalance.SessionPersistence;
 
 import java.util.List;
 
 /**
  * Select {@link Backend} based on Round-Robin
  */
-public final class RoundRobin extends L7Balance {
+public final class RoundRobin extends HTTPBalance {
 
-    private RoundRobinImpl<Backend> backendsRoundRobin;
+    private RoundRobinList<Backend> backendsRoundRobin;
 
     public RoundRobin() {
         super(new NOOPSessionPersistence());
@@ -39,7 +38,7 @@ public final class RoundRobin extends L7Balance {
         this(new NOOPSessionPersistence(), backends);
     }
 
-    public RoundRobin(SessionPersistence sessionPersistence, List<Backend> backends) {
+    public RoundRobin(SessionPersistence<HTTPResponse, HTTPResponse, HTTPRequest, Backend> sessionPersistence, List<Backend> backends) {
         super(sessionPersistence);
         setBackends(backends);
     }
@@ -47,18 +46,17 @@ public final class RoundRobin extends L7Balance {
     @Override
     public void setBackends(List<Backend> backends) {
         super.setBackends(backends);
-        backendsRoundRobin = new RoundRobinImpl<>(this.backends);
+        backendsRoundRobin = new RoundRobinList<>(this.backends);
     }
 
     @Override
-    public Backend getBackend(HttpRequest httpRequest) {
-        Backend backend = sessionPersistence.getBackend(httpRequest);
-        if (backend != null) {
-            return backend;
+    public HTTPResponse getBackend(HTTPRequest httpRequest) {
+        HTTPResponse httpResponse = sessionPersistence.getBackend(httpRequest);
+        if (httpResponse != null) {
+            return httpResponse;
         }
 
-        backend = backendsRoundRobin.iterator().next();
-        sessionPersistence.addRoute(httpRequest, backend);
-        return backend;
+        Backend backend = backendsRoundRobin.iterator().next();
+        return sessionPersistence.addRoute(httpRequest, backend);
     }
 }

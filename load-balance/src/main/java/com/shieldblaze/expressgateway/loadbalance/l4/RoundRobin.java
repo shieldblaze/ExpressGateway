@@ -18,8 +18,8 @@
 package com.shieldblaze.expressgateway.loadbalance.l4;
 
 import com.shieldblaze.expressgateway.backend.Backend;
-import com.shieldblaze.expressgateway.loadbalance.sessionpersistence.NOOPSessionPersistence;
-import com.shieldblaze.expressgateway.loadbalance.sessionpersistence.SessionPersistence;
+import com.shieldblaze.expressgateway.common.list.RoundRobinList;
+import com.shieldblaze.expressgateway.loadbalance.SessionPersistence;
 
 import java.net.InetSocketAddress;
 import java.util.List;
@@ -29,7 +29,7 @@ import java.util.List;
  */
 public final class RoundRobin extends L4Balance {
 
-    private RoundRobinImpl<Backend> backendsRoundRobin;
+    private RoundRobinList<Backend> backendsRoundRobin;
 
     public RoundRobin() {
         super(new NOOPSessionPersistence());
@@ -39,7 +39,7 @@ public final class RoundRobin extends L4Balance {
         this(new NOOPSessionPersistence(), backends);
     }
 
-    public RoundRobin(SessionPersistence sessionPersistence, List<Backend> backends) {
+    public RoundRobin(SessionPersistence<Backend, Backend, InetSocketAddress, Backend> sessionPersistence, List<Backend> backends) {
         super(sessionPersistence);
         setBackends(backends);
     }
@@ -47,18 +47,18 @@ public final class RoundRobin extends L4Balance {
     @Override
     public void setBackends(List<Backend> backends) {
         super.setBackends(backends);
-        backendsRoundRobin = new RoundRobinImpl<>(this.backends);
+        backendsRoundRobin = new RoundRobinList<>(this.backends);
     }
 
     @Override
-    public Backend getBackend(InetSocketAddress sourceAddress) {
-        Backend backend = sessionPersistence.getBackend(sourceAddress);
+    public L4Response getResponse(L4Request l4Request) {
+        Backend backend = sessionPersistence.getBackend(new L4Request(l4Request.getSocketAddress()));
         if (backend != null) {
-            return backend;
+            return new L4Response(backend);
         }
 
         backend = backendsRoundRobin.iterator().next();
-        sessionPersistence.addRoute(sourceAddress, backend);
-        return backend;
+        sessionPersistence.addRoute(l4Request.getSocketAddress(), backend);
+        return new L4Response(backend);
     }
 }

@@ -15,39 +15,26 @@
  * You should have received a copy of the GNU General Public License
  * along with ShieldBlaze ExpressGateway.  If not, see <https://www.gnu.org/licenses/>.
  */
-package com.shieldblaze.expressgateway.loadbalance.sessionpersistence;
+package com.shieldblaze.expressgateway.loadbalance.l4;
 
 import com.shieldblaze.expressgateway.backend.Backend;
-import io.netty.handler.codec.http.HttpRequest;
+import com.shieldblaze.expressgateway.loadbalance.Request;
+import com.shieldblaze.expressgateway.loadbalance.SessionPersistence;
 
 import java.net.InetSocketAddress;
 
 /**
- * Session Persistence routes connection to specific {@link Backend}
+ * No-Operation {@link SessionPersistence}
  */
-public abstract class SessionPersistence {
+final class NOOPSessionPersistence implements SessionPersistence<Backend, Backend, InetSocketAddress, Backend> {
 
-    /**
-     * Get {@link Backend}
-     *
-     * @return {@link Backend} is route is available else {@code null}
-     */
-    public abstract Backend getBackend(InetSocketAddress sourceAddress);
+    @Override
+    public Backend getBackend(Request request) {
+        return null;
+    }
 
-    /**
-     * Get {@link Backend}
-     *
-     * @return {@link Backend} is route is available else {@code null}
-     */
-    public abstract Backend getBackend(HttpRequest httpRequest);
-
-    /**
-     * Add route to {@link Backend}
-     */
-    public abstract void addRoute(InetSocketAddress socketAddress, Backend backend);
-
-    /**
-     * Add route to {@link Backend}
-     */
-    public abstract void addRoute(HttpRequest httpRequest, Backend backend);
+    @Override
+    public Backend addRoute(InetSocketAddress socketAddress, Backend backend) {
+        return null;
+    }
 }

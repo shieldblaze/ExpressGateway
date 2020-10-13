@@ -15,44 +15,33 @@
  * You should have received a copy of the GNU General Public License
  * along with ShieldBlaze ExpressGateway.  If not, see <https://www.gnu.org/licenses/>.
  */
-package com.shieldblaze.expressgateway.loadbalance.sessionpersistence;
+package com.shieldblaze.expressgateway.loadbalance.l4.sessionpersistence;
 
-import com.google.common.cache.Cache;
-import com.google.common.cache.CacheBuilder;
 import com.shieldblaze.expressgateway.backend.Backend;
-import io.netty.handler.codec.http.HttpRequest;
+import com.shieldblaze.expressgateway.common.map.SelfExpiringMap;
+import com.shieldblaze.expressgateway.loadbalance.Request;
+import com.shieldblaze.expressgateway.loadbalance.SessionPersistence;
 
 import java.net.InetSocketAddress;
-import java.util.concurrent.TimeUnit;
+import java.time.Duration;
+import java.util.concurrent.ConcurrentSkipListMap;
 
 /**
  * <p> 4-Tuple Hash based {@link SessionPersistence} </p>
  * <p> Source IP Address + Source Port + Destination IP Address + Destination Port </p>
  */
-public final class FourTupleHash extends SessionPersistence {
+public final class FourTupleHash implements SessionPersistence<Backend, Backend, InetSocketAddress, Backend> {
 
-    private final Cache<InetSocketAddress, Backend> routeCache = CacheBuilder.newBuilder()
-            .maximumSize(1_000_000)
-            .expireAfterWrite(1, TimeUnit.HOURS)
-            .build();
+    private final SelfExpiringMap<String, Backend> routeMap = new SelfExpiringMap<>(new ConcurrentSkipListMap<>(), Duration.ofHours(1), false);
 
     @Override
-    public Backend getBackend(InetSocketAddress sourceAddress) {
-        return routeCache.getIfPresent(sourceAddress);
+    public Backend getBackend(Request request) {
+        return routeMap.get(request.getSocketAddress().toString());
     }
 
     @Override
-    public Backend getBackend(HttpRequest httpRequest) {
-        return null;
-    }
-
-    @Override
-    public void addRoute(InetSocketAddress socketAddress, Backend backend) {
-        routeCache.put(socketAddress, backend);
-    }
-
-    @Override
-    public void addRoute(HttpRequest httpRequest, Backend backend) {
-        // Does nothing
+    public Backend addRoute(InetSocketAddress socketAddress, Backend backend) {
+        routeMap.put(socketAddress.toString(), backend);
+        return backend;
     }
 }

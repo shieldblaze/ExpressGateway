@@ -49,7 +49,7 @@
 ### Session Persistence:
 - :heavy_check_mark: 5-Tuple Hash (Source IP + Source Port +  Destination IP +  Destination Port + Protocol) 
 - :heavy_check_mark: Long-Lived Sessions
-- [ ] HTTP Cookie
+- :heavy_check_mark: HTTP Cookie
 
 ### Security:
 - :heavy_check_mark: Access Control List (ACL)

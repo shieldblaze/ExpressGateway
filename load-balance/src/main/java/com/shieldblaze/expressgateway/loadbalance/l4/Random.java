@@ -18,8 +18,7 @@
 package com.shieldblaze.expressgateway.loadbalance.l4;
 
 import com.shieldblaze.expressgateway.backend.Backend;
-import com.shieldblaze.expressgateway.loadbalance.sessionpersistence.NOOPSessionPersistence;
-import com.shieldblaze.expressgateway.loadbalance.sessionpersistence.SessionPersistence;
+import com.shieldblaze.expressgateway.loadbalance.SessionPersistence;
 
 import java.net.InetSocketAddress;
 import java.util.List;
@@ -28,7 +27,7 @@ import java.util.List;
  * Select {@link Backend} Randomly
  */
 public final class Random extends L4Balance {
-    private static final java.util.Random RANDOM_INSTANCE = new java.util.Random();
+    private final java.util.Random RANDOM_INSTANCE = new java.util.Random();
 
     public Random() {
         super(new NOOPSessionPersistence());
@@ -39,22 +38,22 @@ public final class Random extends L4Balance {
         setBackends(backends);
     }
 
-    public Random(SessionPersistence sessionPersistence, List<Backend> backends) {
+    public Random(SessionPersistence<Backend, Backend, InetSocketAddress, Backend> sessionPersistence, List<Backend> backends) {
         super(sessionPersistence);
         setBackends(backends);
     }
 
     @Override
-    public Backend getBackend(InetSocketAddress sourceAddress) {
-        Backend backend = sessionPersistence.getBackend(sourceAddress);
+    public L4Response getResponse(L4Request l4Request) {
+        Backend backend = sessionPersistence.getBackend(new L4Request(l4Request.getSocketAddress()));
         if (backend != null) {
-            return backend;
+            return new L4Response(backend);
         }
 
         int index = RANDOM_INSTANCE.nextInt(backends.size());
 
         backend = backends.get(index);
-        sessionPersistence.addRoute(sourceAddress, backend);
-        return backend;
+        sessionPersistence.addRoute(l4Request.getSocketAddress(), backend);
+        return new L4Response(backend);
     }
 }
