@@ -15,28 +15,18 @@
  * You should have received a copy of the GNU General Public License
  * along with ShieldBlaze ExpressGateway.  If not, see <https://www.gnu.org/licenses/>.
  */
-package com.shieldblaze.expressgateway.loadbalance.sessionpersistence;
+package com.shieldblaze.expressgateway.loadbalance.l4;
 
 import com.shieldblaze.expressgateway.backend.Backend;
-import com.shieldblaze.expressgateway.common.SelfExpiringMap;
-import com.shieldblaze.expressgateway.loadbalance.l7.Request;
+import com.shieldblaze.expressgateway.loadbalance.Request;
+import com.shieldblaze.expressgateway.loadbalance.SessionPersistence;
 
 import java.net.InetSocketAddress;
-import java.time.Duration;
-import java.util.concurrent.ConcurrentHashMap;
 
 /**
- * <p> 4-Tuple Hash based {@link SessionPersistence} </p>
- * <p> Source IP Address + Source Port + Destination IP Address + Destination Port </p>
+ * No-Operation {@link SessionPersistence}
  */
-public final class FourTupleHash extends SessionPersistence {
-
-    private final SelfExpiringMap<String, Backend> routeMap = new SelfExpiringMap<>(new ConcurrentHashMap<>(), Duration.ofHours(1), false);
-
-    @Override
-    public Backend getBackend(InetSocketAddress sourceAddress) {
-        return routeMap.get(sourceAddress.toString());
-    }
+final class NOOPSessionPersistence implements SessionPersistence<Backend, InetSocketAddress, Backend> {
 
     @Override
     public Backend getBackend(Request request) {
@@ -44,12 +34,7 @@ public final class FourTupleHash extends SessionPersistence {
     }
 
     @Override
-    public void addRoute(InetSocketAddress socketAddress, Backend backend) {
-        routeMap.put(socketAddress.toString(), backend);
-    }
-
-    @Override
-    public void addRoute(Request request, Backend backend) {
-        // Does nothing
+    public void addRoute(InetSocketAddress key, Backend value) {
+        // Does Nothing
     }
 }

@@ -15,40 +15,31 @@
  * You should have received a copy of the GNU General Public License
  * along with ShieldBlaze ExpressGateway.  If not, see <https://www.gnu.org/licenses/>.
  */
-package com.shieldblaze.expressgateway.loadbalance.sessionpersistence;
+package com.shieldblaze.expressgateway.loadbalance;
 
 import com.shieldblaze.expressgateway.backend.Backend;
-import com.shieldblaze.expressgateway.loadbalance.l7.Request;
-import io.netty.handler.codec.http.HttpRequest;
+import com.shieldblaze.expressgateway.loadbalance.Request;
 
 import java.net.InetSocketAddress;
 
 /**
- * Session Persistence routes connection to specific {@link Backend}
+ * Session Persistence is used to route a request to specific {@linkplain Backend}.
+ *
+ * @param <R> Response for {@linkplain #getBackend(Request)}
+ * @param <K> Key to use for {@linkplain #addRoute(Object, Object)}
+ * @param <V> Value to use for {@linkplain #addRoute(Object, Object)}
  */
-public abstract class SessionPersistence {
+public interface SessionPersistence<R, K, V> {
 
     /**
      * Get {@link Backend}
      *
      * @return {@link Backend} is route is available else {@code null}
      */
-    public abstract Backend getBackend(InetSocketAddress sourceAddress);
+    R getBackend(Request request);
 
     /**
-     * Get {@link Backend}
-     *
-     * @return {@link Backend} is route is available else {@code null}
+     * Add a Key-Value which maps to {@linkplain V}
      */
-    public abstract Backend getBackend(Request request);
-
-    /**
-     * Add route to {@link Backend}
-     */
-    public abstract void addRoute(InetSocketAddress socketAddress, Backend backend);
-
-    /**
-     * Add route to {@link Backend}
-     */
-    public abstract void addRoute(Request httpRequest, Backend backend);
+    void addRoute(K key, V value);
 }

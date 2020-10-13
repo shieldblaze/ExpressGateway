@@ -20,7 +20,7 @@ package com.shieldblaze.expressgateway.loadbalance.l4;
 import com.google.common.cache.Cache;
 import com.google.common.cache.CacheBuilder;
 import com.shieldblaze.expressgateway.backend.Backend;
-import com.shieldblaze.expressgateway.loadbalance.sessionpersistence.NOOPSessionPersistence;
+import com.shieldblaze.expressgateway.common.list.RoundRobinList;
 import io.netty.util.NetUtil;
 
 import java.math.BigInteger;
@@ -46,7 +46,7 @@ public final class SourceIPHash extends L4Balance {
             .expireAfterWrite(5, TimeUnit.MINUTES)
             .build();
 
-    private RoundRobinImpl<Backend> backendRoundRobin;
+    private RoundRobinList<Backend> backendRoundRobin;
 
     public SourceIPHash() {
         super(new NOOPSessionPersistence());
@@ -60,11 +60,11 @@ public final class SourceIPHash extends L4Balance {
     @Override
     public void setBackends(List<Backend> backends) {
         super.setBackends(backends);
-        backendRoundRobin = new RoundRobinImpl<>(this.backends);
+        backendRoundRobin = new RoundRobinList<>(this.backends);
     }
 
     @Override
-    public Backend getBackend(InetSocketAddress sourceAddress) {
+    public L4Response getResponse(L4Request l4Request) {
         Backend backend;
 
         /*
@@ -72,8 +72,8 @@ public final class SourceIPHash extends L4Balance {
          *
          * If Source IP Address is IPv6, we'll convert it into BigInteger with /48 mask.
          */
-        if (sourceAddress.getAddress() instanceof Inet4Address) {
-            int ipAddress = NetUtil.ipv4AddressToInt((Inet4Address) sourceAddress.getAddress());
+        if (l4Request.getSocketAddress().getAddress() instanceof Inet4Address) {
+            int ipAddress = NetUtil.ipv4AddressToInt((Inet4Address) l4Request.getSocketAddress().getAddress());
             int ipWithMask = ipAddress & prefixToSubnetMaskIPv4();
 
             backend = ipHashCache.getIfPresent(ipWithMask);
@@ -83,9 +83,8 @@ public final class SourceIPHash extends L4Balance {
                 ipHashCache.put(ipWithMask, backend);
             }
 
-            return backend;
         } else {
-            BigInteger ipAddress = ipToInt((Inet6Address) sourceAddress.getAddress());
+            BigInteger ipAddress = ipToInt((Inet6Address) l4Request.getSocketAddress().getAddress());
             BigInteger ipWithMask = ipAddress.and(prefixToSubnetMaskIPv6());
 
             backend = ipHashCache.getIfPresent(ipWithMask);
@@ -95,8 +94,8 @@ public final class SourceIPHash extends L4Balance {
                 ipHashCache.put(ipWithMask, backend);
             }
 
-            return backend;
         }
+        return new L4Response(backend);
     }
 
     private static BigInteger ipToInt(Inet6Address ipAddress) {

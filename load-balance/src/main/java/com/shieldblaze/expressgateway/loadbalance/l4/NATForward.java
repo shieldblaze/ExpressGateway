@@ -1,9 +1,7 @@
 package com.shieldblaze.expressgateway.loadbalance.l4;
 
 import com.shieldblaze.expressgateway.backend.Backend;
-import com.shieldblaze.expressgateway.loadbalance.sessionpersistence.NOOPSessionPersistence;
 
-import java.net.InetSocketAddress;
 import java.util.List;
 
 /**
@@ -38,7 +36,7 @@ public final class NATForward extends L4Balance {
     }
 
     @Override
-    public Backend getBackend(InetSocketAddress sourceAddress) {
-        return backends.get(0);
+    public L4Response getResponse(L4Request l4Request) {
+        return new L4Response(backends.get(0));
     }
 }

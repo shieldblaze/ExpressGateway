@@ -15,7 +15,7 @@
  * You should have received a copy of the GNU General Public License
  * along with ShieldBlaze ExpressGateway.  If not, see <https://www.gnu.org/licenses/>.
  */
-package com.shieldblaze.expressgateway.loadbalance.l4;
+package com.shieldblaze.expressgateway.loadbalance.l7.http;
 
 import com.shieldblaze.expressgateway.backend.Backend;
 import com.shieldblaze.expressgateway.loadbalance.LoadBalance;
@@ -23,36 +23,24 @@ import com.shieldblaze.expressgateway.loadbalance.Request;
 import com.shieldblaze.expressgateway.loadbalance.Response;
 import com.shieldblaze.expressgateway.loadbalance.SessionPersistence;
 
-import java.net.InetSocketAddress;
 import java.util.List;
 
-/**
- * <p> Balance Layer-4 Traffic using the available methods: </p>
- * <ul>
- *     <li> {@link LeastConnection} </li>
- *     <li> {@link Random} </li>
- *     <li> {@link RoundRobin} </li>
- *     <li> {@link WeightedLeastConnection} </li>
- *     <li> {@link WeightedRandom} </li>
- *     <li> {@link WeightedRoundRobin} </li>
- * </ul>
- */
-public abstract class L4Balance extends LoadBalance<Backend, InetSocketAddress, Backend> {
+public abstract class HTTPL7Balance extends LoadBalance<Backend, HTTPRequest, HTTPResponse> {
 
     /**
-     * Create {@link L4Balance} Instance
+     * Create {@link HTTPL7Balance} Instance
      *
      * @param sessionPersistence {@link SessionPersistence} Instance
      * @throws NullPointerException If {@link SessionPersistence} is {@code null}
      */
-    public L4Balance(SessionPersistence<Backend, InetSocketAddress, Backend> sessionPersistence) {
+    public HTTPL7Balance(SessionPersistence<Backend, HTTPRequest, HTTPResponse> sessionPersistence) {
         super(sessionPersistence);
     }
 
-    public abstract L4Response getResponse(L4Request l4Request);
+    public abstract HTTPResponse getBackend(HTTPRequest httpRequest);
 
     @Override
     public Response getResponse(Request request) {
-        return getResponse((L4Request) request);
+        return getBackend((HTTPRequest) request);
     }
 }

@@ -15,7 +15,7 @@
  * You should have received a copy of the GNU General Public License
  * along with ShieldBlaze ExpressGateway.  If not, see <https://www.gnu.org/licenses/>.
  */
-package com.shieldblaze.expressgateway.common;
+package com.shieldblaze.expressgateway.common.map;
 
 import java.time.Duration;
 import java.util.Collection;

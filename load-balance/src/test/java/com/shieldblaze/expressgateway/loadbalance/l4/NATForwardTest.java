@@ -19,10 +19,14 @@ class NATForwardTest {
 
         L4Balance l4Balance = new NATForward(addressList);
 
-        assertEquals(fastBuild("192.168.1.1").getSocketAddress(), l4Balance.getBackend(new InetSocketAddress("10.10.10.1", 1)).getSocketAddress());
-        assertEquals(fastBuild("192.168.1.1").getSocketAddress(), l4Balance.getBackend(new InetSocketAddress("10.10.10.2", 2)).getSocketAddress());
-        assertEquals(fastBuild("192.168.1.1").getSocketAddress(), l4Balance.getBackend(new InetSocketAddress("10.10.10.3", 3)).getSocketAddress());
-        assertEquals(fastBuild("192.168.1.1").getSocketAddress(), l4Balance.getBackend(new InetSocketAddress("10.10.10.4", 4)).getSocketAddress());
+        assertEquals(fastBuild("192.168.1.1").getSocketAddress(),
+                l4Balance.getResponse(new L4Request(new InetSocketAddress("10.10.10.1", 1))).getBackend().getSocketAddress());
+        assertEquals(fastBuild("192.168.1.1").getSocketAddress(),
+                l4Balance.getResponse(new L4Request(new InetSocketAddress("10.10.10.2", 2))).getBackend().getSocketAddress());
+        assertEquals(fastBuild("192.168.1.1").getSocketAddress(),
+                l4Balance.getResponse(new L4Request(new InetSocketAddress("10.10.10.3", 3))).getBackend().getSocketAddress());
+        assertEquals(fastBuild("192.168.1.1").getSocketAddress(),
+                l4Balance.getResponse(new L4Request(new InetSocketAddress("10.10.10.4", 4))).getBackend().getSocketAddress());
     }
 
     @Test

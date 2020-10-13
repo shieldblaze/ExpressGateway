@@ -15,41 +15,23 @@
  * You should have received a copy of the GNU General Public License
  * along with ShieldBlaze ExpressGateway.  If not, see <https://www.gnu.org/licenses/>.
  */
-package com.shieldblaze.expressgateway.loadbalance.l7;
+package com.shieldblaze.expressgateway.loadbalance.l4;
 
-import io.netty.handler.codec.http.HttpHeaders;
+import com.shieldblaze.expressgateway.loadbalance.Request;
 
 import java.net.InetSocketAddress;
 
 /**
- * {@link Request} contains {@link InetSocketAddress} and {@link HttpHeaders} of Client
+ * Layer-4 Request
  */
-public final class Request {
-    private final InetSocketAddress socketAddress;
-    private final HttpHeaders httpHeaders;
+public final class L4Request extends Request {
 
     /**
-     * Create a new {@link Request} Instance
+     * Create a new {@link L4Request} Instance
      *
      * @param socketAddress {@link InetSocketAddress} of Client
-     * @param httpHeaders   {@link HttpHeaders} of Client
      */
-    public Request(InetSocketAddress socketAddress, HttpHeaders httpHeaders) {
-        this.socketAddress = socketAddress;
-        this.httpHeaders = httpHeaders;
-    }
-
-    /**
-     * Get Client {@link InetSocketAddress}
-     */
-    public InetSocketAddress getSocketAddress() {
-        return socketAddress;
-    }
-
-    /**
-     * Get Client {@link HttpHeaders}
-     */
-    public HttpHeaders getHTTPHeaders() {
-        return httpHeaders;
+    public L4Request(InetSocketAddress socketAddress) {
+        super(socketAddress);
     }
 }

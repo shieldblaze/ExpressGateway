@@ -18,6 +18,7 @@
 package com.shieldblaze.expressgateway.backend;
 
 import com.google.common.hash.Hashing;
+import com.shieldblaze.expressgateway.common.crypto.Hasher;
 import com.shieldblaze.expressgateway.healthcheck.Health;
 import com.shieldblaze.expressgateway.healthcheck.HealthCheck;
 import io.netty.util.internal.ObjectUtil;
@@ -27,7 +28,6 @@ import java.net.InetSocketAddress;
 /**
  * {@link Backend} is the server which handles actual request of client.
  */
-@SuppressWarnings("UnstableApiUsage")
 public class Backend {
 
     /**
@@ -78,7 +78,7 @@ public class Backend {
     /**
      * Hash of {@link InetSocketAddress}
      */
-    private long hash;
+    private final String hash;
 
     /**
      * Create {@link Backend} with {@code Weight 100}, {@code maxConnections 10000} and no Health Check
@@ -116,11 +116,7 @@ public class Backend {
         this.maxConnections = maxConnections;
         this.healthCheck = healthCheck;
 
-        this.hash = Hashing.murmur3_128().newHasher()
-                .putBytes(socketAddress.getAddress().getAddress())
-                .putInt(socketAddress.getPort())
-                .hash()
-                .padToLong();
+        this.hash = Hasher.hash(Hasher.Algorithm.SHA256, socketAddress.toString().getBytes());
     }
 
     public String getHostname() {
@@ -206,7 +202,7 @@ public class Backend {
         return healthCheck.health();
     }
 
-    public long getHash() {
-      return hash;
+    public String getHash() {
+        return hash;
     }
 }

@@ -15,26 +15,29 @@
  * You should have received a copy of the GNU General Public License
  * along with ShieldBlaze ExpressGateway.  If not, see <https://www.gnu.org/licenses/>.
  */
-package com.shieldblaze.expressgateway.core.concurrent;
+package com.shieldblaze.expressgateway.loadbalance;
 
-import java.util.concurrent.CompletableFuture;
-import java.util.concurrent.ExecutorService;
-import java.util.concurrent.Executors;
-import java.util.function.Supplier;
+import com.shieldblaze.expressgateway.backend.Backend;
 
-public final class GlobalEventExecutors {
-    private static final ExecutorService EXECUTOR_SERVICE = Executors.newCachedThreadPool();
-    public static final GlobalEventExecutors INSTANCE = new GlobalEventExecutors();
+/**
+ * {@linkplain Response} contains selected {@linkplain Backend}
+ */
+public abstract class Response {
+    private final Backend backend;
 
-    private GlobalEventExecutors() {
-        // Prevent outside initialization
+    /**
+     * Create a new {@link Response} Instance
+     *
+     * @param backend Selected {@linkplain Backend} for the request
+     */
+    public Response(Backend backend) {
+        this.backend = backend;
     }
 
-    public CompletableFuture<Void> submitTask(Runnable runnable) {
-        return CompletableFuture.runAsync(runnable, EXECUTOR_SERVICE);
-    }
-
-    public <T> CompletableFuture<T> submitTask(Supplier<T> supplier) {
-        return CompletableFuture.supplyAsync(supplier, EXECUTOR_SERVICE);
+    /**
+     * Get selected {@linkplain Backend}
+     */
+    public Backend getBackend() {
+        return backend;
     }
 }

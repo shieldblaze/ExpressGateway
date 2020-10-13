@@ -15,11 +15,19 @@
  * You should have received a copy of the GNU General Public License
  * along with ShieldBlaze ExpressGateway.  If not, see <https://www.gnu.org/licenses/>.
  */
-package com.shieldblaze.expressgateway.core.concurrent;
+package com.shieldblaze.expressgateway.common.concurrent;
 
 public interface Event {
 
+    /**
+     * Set to {@code true} if an event was successful else set to {@code false}
+     */
     boolean isSuccess();
 
+    /**
+     * Returns {@link Throwable} of an event if it was not successful.
+     *
+     * @return {@link Throwable} if an event was not successful else {@code null}
+     */
     Throwable cause();
 }

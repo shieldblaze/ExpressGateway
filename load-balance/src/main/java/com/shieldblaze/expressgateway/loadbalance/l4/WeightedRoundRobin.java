@@ -20,12 +20,10 @@ package com.shieldblaze.expressgateway.loadbalance.l4;
 import com.google.common.collect.Range;
 import com.google.common.collect.TreeRangeMap;
 import com.shieldblaze.expressgateway.backend.Backend;
-import com.shieldblaze.expressgateway.loadbalance.sessionpersistence.NOOPSessionPersistence;
-import com.shieldblaze.expressgateway.loadbalance.sessionpersistence.SessionPersistence;
+import com.shieldblaze.expressgateway.loadbalance.SessionPersistence;
 
 import java.net.InetSocketAddress;
 import java.util.List;
-import java.util.concurrent.atomic.AtomicInteger;
 
 /**
  * Select {@link Backend} based on Weight using Round-Robin
@@ -33,7 +31,7 @@ import java.util.concurrent.atomic.AtomicInteger;
 @SuppressWarnings("UnstableApiUsage")
 public final class WeightedRoundRobin extends L4Balance {
 
-    private final AtomicInteger Index = new AtomicInteger();
+    private int index = 0;
     private final TreeRangeMap<Integer, Backend> backendsMap = TreeRangeMap.create();
     private int totalWeight = 0;
 
@@ -45,7 +43,7 @@ public final class WeightedRoundRobin extends L4Balance {
         this(new NOOPSessionPersistence(), backends);
     }
 
-    public WeightedRoundRobin(SessionPersistence sessionPersistence, List<Backend> backends) {
+    public WeightedRoundRobin(SessionPersistence<Backend, InetSocketAddress, Backend> sessionPersistence, List<Backend> backends) {
         super(sessionPersistence);
         setBackends(backends);
     }
@@ -58,18 +56,18 @@ public final class WeightedRoundRobin extends L4Balance {
     }
 
     @Override
-    public Backend getBackend(InetSocketAddress sourceAddress) {
-        Backend backend = sessionPersistence.getBackend(sourceAddress);
+    public L4Response getResponse(L4Request l4Request) {
+        Backend backend = sessionPersistence.getBackend(new L4Request(l4Request.getSocketAddress()));
         if (backend != null) {
-            return backend;
+            return new L4Response(backend);
         }
 
-        if (Index.get() >= totalWeight) {
-            Index.set(0);
+        if (index >= totalWeight) {
+            index = 0;
         }
 
-        backend = backendsMap.get(Index.getAndIncrement());
-        sessionPersistence.addRoute(sourceAddress, backend);
-        return backend;
+        backend = backendsMap.get(index++);
+        sessionPersistence.addRoute(l4Request.getSocketAddress(), backend);
+        return new L4Response(backend);
     }
 }

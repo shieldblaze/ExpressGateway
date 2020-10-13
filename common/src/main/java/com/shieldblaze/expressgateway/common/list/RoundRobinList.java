@@ -15,7 +15,7 @@
  * You should have received a copy of the GNU General Public License
  * along with ShieldBlaze ExpressGateway.  If not, see <https://www.gnu.org/licenses/>.
  */
-package com.shieldblaze.expressgateway.loadbalance.l7;
+package com.shieldblaze.expressgateway.common.list;
 
 import java.util.Iterator;
 import java.util.List;
@@ -23,16 +23,14 @@ import java.util.List;
 /**
  * Round-Robin List Implementation
  */
-final class RoundRobinImpl<T> implements Iterable<T> {
+public final class RoundRobinList<T> implements Iterable<T> {
     private final List<T> list;
     private int index = 0;
+    private Iterator<T> iterator;
 
-    RoundRobinImpl(List<T> list) { this.list = list; }
-
-    public Iterator<T> iterator() {
-
-        return new Iterator<T>() {
-
+    public RoundRobinList(List<T> list) {
+        this.list = list;
+        this.iterator = new Iterator<T>() {
             @Override
             public boolean hasNext() {
                 // Because it's round-robin
@@ -44,7 +42,7 @@ final class RoundRobinImpl<T> implements Iterable<T> {
                 try {
                     // If Index size has reached List size, set it to zero.
                     // Else, get the element from list as per latest Index count.
-                    if(index >= list.size()) {
+                    if (index >= list.size()) {
                         index = 0;
                     }
                     return list.get(index);
@@ -59,6 +57,11 @@ final class RoundRobinImpl<T> implements Iterable<T> {
                 throw new UnsupportedOperationException();
             }
         };
+    }
+
+    @Override
+    public Iterator<T> iterator() {
+        return iterator;
     }
 
     public int getIndex() {

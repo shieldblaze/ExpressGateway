@@ -15,10 +15,11 @@
  * You should have received a copy of the GNU General Public License
  * along with ShieldBlaze ExpressGateway.  If not, see <https://www.gnu.org/licenses/>.
  */
-package com.shieldblaze.expressgateway.loadbalance.l7;
+package com.shieldblaze.expressgateway.loadbalance.l7.http;
 
 import com.shieldblaze.expressgateway.backend.Backend;
-import com.shieldblaze.expressgateway.loadbalance.sessionpersistence.SessionPersistence;
+import com.shieldblaze.expressgateway.common.list.RoundRobinList;
+import com.shieldblaze.expressgateway.loadbalance.SessionPersistence;
 import io.netty.handler.codec.http.DefaultHttpHeaders;
 import io.netty.handler.codec.http.EmptyHttpHeaders;
 import io.netty.handler.codec.http.HttpHeaderNames;
@@ -31,40 +32,41 @@ import io.netty.handler.codec.http.cookie.ServerCookieEncoder;
 import java.util.List;
 import java.util.Optional;
 
-public final class StickySession extends L7Balance {
+public final class StickySession extends HTTPL7Balance {
 
-    private RoundRobinImpl<Backend> backendsRoundRobin;
+    private RoundRobinList<Backend> backendsRoundRobin;
 
-    public StickySession(SessionPersistence sessionPersistence) {
+    public StickySession(SessionPersistence<Backend, HTTPRequest, HTTPResponse> sessionPersistence) {
         super(sessionPersistence);
     }
 
     @Override
     public void setBackends(List<Backend> backends) {
         super.setBackends(backends);
-        backendsRoundRobin = new RoundRobinImpl<>(this.backends);
+        backendsRoundRobin = new RoundRobinList<>(this.backends);
     }
 
     @Override
-    public Response getBackend(Request request) {
-        Backend backend = sessionPersistence.getBackend(request);
+    public HTTPResponse getBackend(HTTPRequest HTTPRequest) {
+        Backend backend = sessionPersistence.getBackend(HTTPRequest);
         if (backend != null) {
-            return new Response(backend, EmptyHttpHeaders.INSTANCE);
+            return new HTTPResponse(backend, EmptyHttpHeaders.INSTANCE);
         }
 
-        if (request.getHTTPHeaders().contains(HttpHeaderNames.COOKIE)) {
-            List<String> cookies = request.getHTTPHeaders().getAllAsString(HttpHeaderNames.COOKIE);
+        if (HTTPRequest.getHTTPHeaders().contains(HttpHeaderNames.COOKIE)) {
+            List<String> cookies = HTTPRequest.getHTTPHeaders().getAllAsString(HttpHeaderNames.COOKIE);
             for (String _cookie : cookies) {
                 Cookie cookie = ClientCookieDecoder.STRICT.decode(_cookie);
                 if (cookie.name().equalsIgnoreCase("X-Route-ID")) {
                     try {
-                        long hash = Long.parseLong(cookie.value());
+                        String value = cookie.value();
+
                         Optional<Backend> optionalBackend = backends.stream()
-                                .filter(_backend -> _backend.getHash() == hash)
+                                .filter(_backend -> _backend.getHash().equalsIgnoreCase(value))
                                 .findAny();
 
                         if (optionalBackend.isPresent()) {
-                            return new Response(optionalBackend.get(), EmptyHttpHeaders.INSTANCE);
+                            return new HTTPResponse(optionalBackend.get(), EmptyHttpHeaders.INSTANCE);
                         }
                     } catch (Exception ex) {
                         break;
@@ -75,15 +77,15 @@ public final class StickySession extends L7Balance {
 
         backend = backendsRoundRobin.iterator().next();
 
-        DefaultCookie cookie = new DefaultCookie("X-Route-ID", String.valueOf(backend.getHash()));
+        DefaultCookie cookie = new DefaultCookie("X-SBZ-EGW-RouteID", String.valueOf(backend.getHash()));
         cookie.setDomain(backend.getHostname());
         cookie.setPath("/");
         cookie.setHttpOnly(true);
         cookie.setSameSite(CookieHeaderNames.SameSite.Strict);
 
-        DefaultHttpHeaders defaultHttpHeaders = new DefaultHttpHeaders(false);
+        DefaultHttpHeaders defaultHttpHeaders = new DefaultHttpHeaders();
         defaultHttpHeaders.add(HttpHeaderNames.SET_COOKIE, ServerCookieEncoder.STRICT.encode(cookie));
 
-        return new Response(backend, defaultHttpHeaders);
+        return new HTTPResponse(backend, defaultHttpHeaders);
     }
 }
