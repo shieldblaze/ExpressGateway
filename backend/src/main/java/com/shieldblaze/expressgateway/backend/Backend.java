@@ -165,7 +165,7 @@ public class Backend implements Comparable<Backend>, Closeable {
             this.healthCheckManager.initialize();
         }
 
-        ByteBuffer byteBuffer = ByteBuffer.allocate(8);
+        ByteBuffer byteBuffer = ByteBuffer.allocate(6);
         byteBuffer.put(socketAddress.getAddress().getAddress());
         byteBuffer.putShort((short) socketAddress.getPort());
         byte[] addressAndPort = byteBuffer.array();
