@@ -40,7 +40,6 @@
 #### L4:
 - :heavy_check_mark: Random
 - :heavy_check_mark: Round Robin
-- :heavy_check_mark: Source IP Hash
 - :heavy_check_mark: Least Connection
 - :heavy_check_mark: Weighted Random
 - :heavy_check_mark: Weighted Round Robin
@@ -52,7 +51,8 @@
 - :heavy_check_mark: HTTP Weighted Round Robin
 
 ### Session Persistence:
-- :heavy_check_mark: 5-Tuple Hash (Source IP + Source Port +  Destination IP +  Destination Port + Protocol) 
+- :heavy_check_mark: 5-Tuple Hash (Source IP + Source Port +  Destination IP +  Destination Port + Protocol)
+- :heavy_check_mark: Source IP Hash
 - :heavy_check_mark: Long-Lived Sessions
 - :heavy_check_mark: HTTP Cookie
 
