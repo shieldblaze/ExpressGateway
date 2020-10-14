@@ -17,18 +17,20 @@
  */
 package com.shieldblaze.expressgateway.backend;
 
+import com.shieldblaze.expressgateway.backend.healthcheckmanager.HealthCheckManager;
 import com.shieldblaze.expressgateway.common.crypto.Hasher;
 import com.shieldblaze.expressgateway.healthcheck.Health;
 import com.shieldblaze.expressgateway.healthcheck.HealthCheck;
-import io.netty.util.internal.ObjectUtil;
 
+import java.io.Closeable;
 import java.net.InetSocketAddress;
 import java.nio.ByteBuffer;
+import java.util.Objects;
 
 /**
- * {@link Backend} is the server which handles actual request of client.
+ * {@link Backend} is the server where all requests are sent.
  */
-public class Backend implements Comparable<Backend> {
+public class Backend implements Comparable<Backend>, Closeable {
 
     /**
      * Hostname associated with this {@link Backend}
@@ -76,37 +78,78 @@ public class Backend implements Comparable<Backend> {
     private HealthCheck healthCheck;
 
     /**
+     * Health Check Manager for this {@linkplain Backend}
+     */
+    private final HealthCheckManager healthCheckManager;
+
+    /**
      * Hash of {@link InetSocketAddress}
      */
     private final String hash;
 
     /**
-     * Create {@link Backend} with {@code Weight 100}, {@code maxConnections 10000} and no Health Check
+     * Create a new {@linkplain Backend} Instance with {@code Weight 100}, {@code maxConnections 10000} and no Health Check
      *
      * @param socketAddress Address of this {@link Backend}
      */
     public Backend(InetSocketAddress socketAddress) {
-        this(socketAddress.getAddress().getHostAddress(), socketAddress, 100, 10_000, null);
+        this(socketAddress.getAddress().getHostName(), socketAddress, 100, 10_000, null, null);
     }
 
-    public Backend(InetSocketAddress socketAddress, int Weight, int maxConnections) {
-        this(socketAddress.getAddress().getHostAddress(), socketAddress, Weight, maxConnections, null);
-    }
-
+    /**
+     * Create a new {@linkplain Backend} Instance with {@code Weight 100}, {@code maxConnections 10000} and no Health Check
+     *
+     * @param hostname      Hostname of this {@linkplain Backend}
+     * @param socketAddress Address of this {@linkplain Backend}
+     */
     public Backend(String hostname, InetSocketAddress socketAddress) {
-        this(hostname, socketAddress, 100, 10_000, null);
+        this(hostname, socketAddress, 100, 10_000, null, null);
     }
 
+    /**
+     * Create a new {@linkplain Backend} Instance with no Health Check
+     *
+     * @param socketAddress  Address of this {@linkplain Backend}
+     * @param Weight         Weight of this {@linkplain Backend}
+     * @param maxConnections Maximum Number of Connections allowed for this {@linkplain Backend}
+     */
+    public Backend(InetSocketAddress socketAddress, int Weight, int maxConnections) {
+        this(socketAddress.getAddress().getHostAddress(), socketAddress, Weight, maxConnections, null, null);
+    }
+
+    /**
+     * Create a new {@linkplain Backend} Instance
+     *
+     * @param hostname       Hostname of this {@linkplain Backend}
+     * @param socketAddress  Address of this {@linkplain Backend}
+     * @param Weight         Weight of this {@linkplain Backend}
+     * @param maxConnections Maximum Number of Connections allowed for this {@linkplain Backend}
+     * @param healthCheck    {@linkplain HealthCheck} Instance
+     */
     public Backend(String hostname, InetSocketAddress socketAddress, int Weight, int maxConnections, HealthCheck healthCheck) {
-        ObjectUtil.checkNotNull(socketAddress, "SocketAddress");
-        ObjectUtil.checkNotNull(hostname, "Hostnames");
+        this(hostname, socketAddress, Weight, maxConnections, healthCheck, null);
+    }
+
+    /**
+     * Create a new {@linkplain Backend} Instance
+     *
+     * @param hostname       Hostname of this {@linkplain Backend}
+     * @param socketAddress  Address of this {@linkplain Backend}
+     * @param Weight         Weight of this {@linkplain Backend}
+     * @param maxConnections Maximum Number of Connections allowed for this {@linkplain Backend}
+     * @param healthCheck    {@linkplain HealthCheck} Instance
+     * @param healthCheckManager {@linkplain HealthCheckManager} Instance
+     */
+    public Backend(String hostname, InetSocketAddress socketAddress, int Weight, int maxConnections, HealthCheck healthCheck, HealthCheckManager healthCheckManager) {
+        Objects.requireNonNull(socketAddress, "SocketAddress");
+        Objects.requireNonNull(hostname, "Hostname");
 
         if (Weight < 1) {
             throw new IllegalArgumentException("Weight cannot be less than 1 (one).");
         }
 
         if (maxConnections < 0) {
-            throw new IllegalArgumentException("Maximum Connection cannot be less than 1 (one).");
+            throw new IllegalArgumentException("Maximum Connection cannot be less than 0 (Zero).");
         }
 
         this.hostname = hostname;
@@ -115,10 +158,16 @@ public class Backend implements Comparable<Backend> {
         this.Weight = Weight;
         this.maxConnections = maxConnections;
         this.healthCheck = healthCheck;
+        this.healthCheckManager = healthCheckManager;
 
-        ByteBuffer byteBuffer = ByteBuffer.allocate(8);
+        if (this.healthCheck != null && this.healthCheckManager != null) {
+            this.healthCheckManager.setBackend(this);
+            this.healthCheckManager.initialize();
+        }
+
+        ByteBuffer byteBuffer = ByteBuffer.allocate(6);
         byteBuffer.put(socketAddress.getAddress().getAddress());
-        byteBuffer.putInt(socketAddress.getPort());
+        byteBuffer.putShort((short) socketAddress.getPort());
         byte[] addressAndPort = byteBuffer.array();
         byteBuffer.clear();
         this.hash = Hasher.hash(Hasher.Algorithm.SHA256, addressAndPort);
@@ -219,8 +268,17 @@ public class Backend implements Comparable<Backend> {
     @Override
     public String toString() {
         return "Backend{" +
-                "hostname='" + hostname + '\'' +
-                ", socketAddress=" + socketAddress +
+                "socketAddress=" + socketAddress +
+                ", state=" + state +
+                ", healthCheck=" + getHealth() +
                 '}';
+    }
+
+    @Override
+    public void close() {
+        setState(State.OFFLINE);
+        if (this.healthCheck != null && this.healthCheckManager != null) {
+            healthCheckManager.shutdown();
+        }
     }
 }

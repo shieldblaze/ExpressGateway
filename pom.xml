@@ -61,6 +61,7 @@ along with ShieldBlaze ExpressGateway.  If not, see <https://www.gnu.org/license
         <module>health-check</module>
         <module>backend</module>
         <module>common</module>
+        <module>security</module>
     </modules>
 
     <dependencies>

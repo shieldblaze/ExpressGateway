@@ -23,11 +23,9 @@ import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.Test;
 
 import java.io.IOException;
-import java.net.InetAddress;
 import java.net.InetSocketAddress;
-import java.net.ServerSocket;
 import java.nio.channels.AsynchronousServerSocketChannel;
-import java.nio.channels.ServerSocketChannel;
+import java.time.Duration;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 
@@ -47,8 +45,8 @@ final class TCPHealthCheckTest {
 
     @Test
     void check() {
-        TCPHealthCheck tcpHealthCheck = new TCPHealthCheck(new InetSocketAddress("127.0.0.1", 10000), 5);
-        tcpHealthCheck.check();
+        TCPHealthCheck tcpHealthCheck = new TCPHealthCheck(new InetSocketAddress("127.0.0.1", 10000), Duration.ofSeconds(5));
+        tcpHealthCheck.run();
 
         assertEquals(Health.GOOD, tcpHealthCheck.health());
     }
@@ -58,9 +56,9 @@ final class TCPHealthCheckTest {
         private AsynchronousServerSocketChannel server;
 
         private void start() throws IOException {
-             server = AsynchronousServerSocketChannel.open();
-             server.bind(new InetSocketAddress("127.0.0.1", 10000));
-             server.accept();
+            server = AsynchronousServerSocketChannel.open();
+            server.bind(new InetSocketAddress("127.0.0.1", 10000));
+            server.accept();
         }
 
         private void stop() throws IOException {

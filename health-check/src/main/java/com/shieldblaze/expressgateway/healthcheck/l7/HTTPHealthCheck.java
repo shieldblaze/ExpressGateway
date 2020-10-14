@@ -27,12 +27,15 @@ import org.apache.http.conn.ssl.TrustSelfSignedStrategy;
 import org.apache.http.impl.client.CloseableHttpClient;
 import org.apache.http.impl.client.HttpClientBuilder;
 import org.apache.http.ssl.SSLContextBuilder;
+import org.apache.logging.log4j.LogManager;
+import org.apache.logging.log4j.Logger;
 
 import java.net.InetSocketAddress;
 import java.net.URI;
 import java.security.KeyManagementException;
 import java.security.KeyStoreException;
 import java.security.NoSuchAlgorithmException;
+import java.time.Duration;
 
 /**
  * <p> HTTP based {@link HealthCheck} </p>
@@ -48,19 +51,21 @@ import java.security.NoSuchAlgorithmException;
  */
 public final class HTTPHealthCheck extends HealthCheck {
 
+    private static final Logger logger = LogManager.getLogger(HTTPHealthCheck.class);
+
     private final HttpClientBuilder httpClientBuilder;
     private final URI uri;
 
-    public HTTPHealthCheck(URI uri, int timeout, boolean disableTLSValidation) throws KeyStoreException, NoSuchAlgorithmException,
+    public HTTPHealthCheck(URI uri, Duration timeout, boolean disableTLSValidation) throws KeyStoreException, NoSuchAlgorithmException,
             KeyManagementException {
         super(new InetSocketAddress(uri.getHost(), uri.getPort()), timeout);
         this.uri = uri;
 
         RequestConfig requestConfig = RequestConfig.custom()
                 .setRedirectsEnabled(false)
-                .setConnectionRequestTimeout(1000 * timeout)
-                .setSocketTimeout(1000 * timeout)
-                .setConnectTimeout(1000 * timeout)
+                .setConnectionRequestTimeout(super.timeout)
+                .setSocketTimeout(super.timeout)
+                .setConnectTimeout(super.timeout)
                 .setAuthenticationEnabled(false)
                 .setRedirectsEnabled(false)
                 .setCircularRedirectsAllowed(false)
@@ -86,7 +91,7 @@ public final class HTTPHealthCheck extends HealthCheck {
     }
 
     @Override
-    public void check() {
+    public void run() {
         try {
             try (CloseableHttpClient httpClient = httpClientBuilder.build()) {
                 HttpGet httpGet = new HttpGet(uri);
@@ -103,7 +108,7 @@ public final class HTTPHealthCheck extends HealthCheck {
                 }
             }
         } catch (Exception e) {
-            e.printStackTrace();
+            logger.debug("Health Check Failure For Address: " + socketAddress, e);
             markFailure();
         }
     }

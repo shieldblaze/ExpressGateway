@@ -24,6 +24,7 @@ import java.net.DatagramPacket;
 import java.net.DatagramSocket;
 import java.net.InetAddress;
 import java.net.InetSocketAddress;
+import java.time.Duration;
 import java.util.Arrays;
 
 import static org.junit.jupiter.api.Assertions.assertArrayEquals;
@@ -35,13 +36,13 @@ final class UDPHealthCheckTest {
     static final byte[] PONG = "PONG".getBytes();
 
     @Test
-    void check() throws InterruptedException {
+    void checkPing() throws InterruptedException {
         UDPServer udpServer = new UDPServer(true, 12345);
         udpServer.start();
         Thread.sleep(2500L); // Wait for UDP Server to Start
 
-        UDPHealthCheck udpHealthCheck = new UDPHealthCheck(new InetSocketAddress("127.0.0.1", 12345), 5);
-        udpHealthCheck.check();
+        UDPHealthCheck udpHealthCheck = new UDPHealthCheck(new InetSocketAddress("127.0.0.1", 12345), Duration.ofSeconds(5));
+        udpHealthCheck.run();
 
         assertEquals(Health.GOOD, udpHealthCheck.health());
     }
@@ -52,8 +53,8 @@ final class UDPHealthCheckTest {
         udpServer.start();
         Thread.sleep(2500L); // Wait for UDP Server to Start
 
-        UDPHealthCheck udpHealthCheck = new UDPHealthCheck(new InetSocketAddress("127.0.0.1", 12346), 5);
-        udpHealthCheck.check();
+        UDPHealthCheck udpHealthCheck = new UDPHealthCheck(new InetSocketAddress("127.0.0.1", 12346), Duration.ofSeconds(5));
+        udpHealthCheck.run();
 
         assertEquals(Health.GOOD, udpHealthCheck.health());
     }

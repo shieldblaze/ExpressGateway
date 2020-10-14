@@ -18,10 +18,13 @@
 package com.shieldblaze.expressgateway.healthcheck.l4;
 
 import com.shieldblaze.expressgateway.healthcheck.HealthCheck;
+import org.apache.logging.log4j.LogManager;
+import org.apache.logging.log4j.Logger;
 
 import java.net.DatagramPacket;
 import java.net.DatagramSocket;
 import java.net.InetSocketAddress;
+import java.time.Duration;
 import java.util.Arrays;
 
 /**
@@ -38,21 +41,23 @@ import java.util.Arrays;
  */
 public final class UDPHealthCheck extends HealthCheck {
 
+    private static final Logger logger = LogManager.getLogger(UDPHealthCheck.class);
+
     private static final byte[] PING = "PING".getBytes();
     private static final byte[] PONG = "PONG".getBytes();
 
-    public UDPHealthCheck(InetSocketAddress socketAddress, int timeout) {
+    public UDPHealthCheck(InetSocketAddress socketAddress, Duration timeout) {
         super(socketAddress, timeout);
     }
 
-    public UDPHealthCheck(InetSocketAddress socketAddress, int timeout, int samples) {
+    public UDPHealthCheck(InetSocketAddress socketAddress, Duration timeout, int samples) {
         super(socketAddress, timeout, samples);
     }
 
     @Override
-    public void check() {
+    public void run() {
         try (DatagramSocket datagramSocket = new DatagramSocket()) {
-            datagramSocket.setSoTimeout(1000 * timeout);
+            datagramSocket.setSoTimeout(timeout);
             DatagramPacket datagramPacket = new DatagramPacket(PING, 4, socketAddress);
             datagramSocket.send(datagramPacket);
 
@@ -67,6 +72,7 @@ public final class UDPHealthCheck extends HealthCheck {
                 markFailure();
             }
         } catch (Exception e) {
+            logger.debug("Health Check Failure For Address: " + socketAddress, e);
             markFailure();
         }
     }

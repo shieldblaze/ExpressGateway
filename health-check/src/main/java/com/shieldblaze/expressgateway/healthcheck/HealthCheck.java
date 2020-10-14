@@ -20,13 +20,14 @@ package com.shieldblaze.expressgateway.healthcheck;
 import com.google.common.collect.EvictingQueue;
 
 import java.net.InetSocketAddress;
+import java.time.Duration;
 import java.util.Collections;
 
 /**
  * Health Check for checking health of remote host.
  */
 @SuppressWarnings("UnstableApiUsage")
-public abstract class HealthCheck {
+public abstract class HealthCheck implements Runnable {
 
     protected final InetSocketAddress socketAddress;
     private final EvictingQueue<Boolean> queue;
@@ -36,9 +37,9 @@ public abstract class HealthCheck {
      * Create a new {@link HealthCheck} Instance with {@code samples} set to 100.
      *
      * @param socketAddress {@link InetSocketAddress} of remote host to check
-     * @param timeout       Timeout for health check
+     * @param timeout       Timeout in seconds for health check
      */
-    public HealthCheck(InetSocketAddress socketAddress, int timeout) {
+    public HealthCheck(InetSocketAddress socketAddress, Duration timeout) {
         this(socketAddress, timeout, 100);
     }
 
@@ -49,16 +50,11 @@ public abstract class HealthCheck {
      * @param timeout       Timeout for health check
      * @param samples       Number of samples to use for evaluating Health of remote host
      */
-    public HealthCheck(InetSocketAddress socketAddress, int timeout, int samples) {
+    public HealthCheck(InetSocketAddress socketAddress, Duration timeout, int samples) {
         this.socketAddress = socketAddress;
-        this.timeout = timeout;
+        this.timeout = (int) timeout.toMillis();
         this.queue = EvictingQueue.create(samples);
     }
-
-    /**
-     * Perform Health Check
-     */
-    public abstract void check();
 
     /**
      * If Heath Check was successful, call this method.

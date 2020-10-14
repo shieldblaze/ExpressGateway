@@ -26,16 +26,19 @@ public enum Health {
      * <p> Remote host passes more than 95% of Health Check Successfully </p>
      */
     GOOD,
+
     /**
      * Health is not good and not bad (medium).
      * <p> Remote host passes more than 75% of Health Check Successfully </p>
      */
     MEDIUM,
+
     /**
      * Health is bad.
      * <p> Remote host passes less than 75% of Health Check Successfully </p>
      */
     BAD,
+
     /**
      * Health is unknown.
      */

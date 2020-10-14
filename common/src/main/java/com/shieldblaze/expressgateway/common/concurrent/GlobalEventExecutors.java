@@ -36,7 +36,7 @@ public final class GlobalEventExecutors {
     private static final ExecutorService EXECUTOR_SERVICE = new ThreadPoolExecutor(0, Integer.MAX_VALUE, 300L, TimeUnit.SECONDS, new SynchronousQueue<>());
 
     /**
-     * Single Threaded Scheduled {@link ExecutorService}
+     * Scheduled {@link ExecutorService}
      */
     private static final ScheduledExecutorService SCHEDULED_EXECUTOR_SERVICE = Executors.newScheduledThreadPool(0);
 
@@ -65,7 +65,7 @@ public final class GlobalEventExecutors {
     }
 
     public ScheduledFuture<?> submitTaskAndRunEvery(Runnable runnable, int initialDelay, int period, TimeUnit timeUnit) {
-        return SCHEDULED_EXECUTOR_SERVICE.scheduleAtFixedRate(runnable, initialDelay, period, timeUnit);
+        return SCHEDULED_EXECUTOR_SERVICE.scheduleWithFixedDelay(runnable, initialDelay, period, timeUnit);
     }
 
     /**

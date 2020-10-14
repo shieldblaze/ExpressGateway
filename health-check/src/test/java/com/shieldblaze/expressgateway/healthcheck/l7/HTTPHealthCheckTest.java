@@ -21,6 +21,7 @@ import com.shieldblaze.expressgateway.healthcheck.Health;
 import org.junit.jupiter.api.Test;
 
 import java.net.URI;
+import java.time.Duration;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 
@@ -32,8 +33,8 @@ final class HTTPHealthCheckTest {
 
         Thread.sleep(1000L);
 
-        HTTPHealthCheck httpHealthCheck = new HTTPHealthCheck(URI.create("http://127.0.0.1:9111"), 5, false);
-        httpHealthCheck.check();
+        HTTPHealthCheck httpHealthCheck = new HTTPHealthCheck(URI.create("http://127.0.0.1:9111"), Duration.ofSeconds(5), false);
+        httpHealthCheck.run();
 
         assertEquals(Health.GOOD, httpHealthCheck.health());
     }
@@ -44,8 +45,8 @@ final class HTTPHealthCheckTest {
 
         Thread.sleep(1000L);
 
-        HTTPHealthCheck httpHealthCheck = new HTTPHealthCheck(URI.create("http://127.0.0.1:9111"), 5, false);
-        httpHealthCheck.check();
+        HTTPHealthCheck httpHealthCheck = new HTTPHealthCheck(URI.create("http://127.0.0.1:9111"), Duration.ofSeconds(5), false);
+        httpHealthCheck.run();
 
         assertEquals(Health.BAD, httpHealthCheck.health());
     }
