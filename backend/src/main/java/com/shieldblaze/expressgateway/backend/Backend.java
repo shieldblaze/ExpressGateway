@@ -161,8 +161,8 @@ public class Backend implements Comparable<Backend>, Closeable {
         this.healthCheckManager = healthCheckManager;
 
         if (this.healthCheck != null && this.healthCheckManager != null) {
-            healthCheckManager.setBackend(this);
-            healthCheckManager.initialize();
+            this.healthCheckManager.setBackend(this);
+            this.healthCheckManager.initialize();
         }
 
         ByteBuffer byteBuffer = ByteBuffer.allocate(8);
