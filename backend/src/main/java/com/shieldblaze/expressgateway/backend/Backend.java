@@ -17,18 +17,15 @@
  */
 package com.shieldblaze.expressgateway.backend;
 
-import com.shieldblaze.expressgateway.common.concurrent.GlobalEventExecutors;
+import com.shieldblaze.expressgateway.backend.healthcheckmanager.HealthCheckManager;
 import com.shieldblaze.expressgateway.common.crypto.Hasher;
 import com.shieldblaze.expressgateway.healthcheck.Health;
 import com.shieldblaze.expressgateway.healthcheck.HealthCheck;
 
 import java.io.Closeable;
-import java.io.IOException;
 import java.net.InetSocketAddress;
 import java.nio.ByteBuffer;
 import java.util.Objects;
-import java.util.concurrent.ScheduledFuture;
-import java.util.concurrent.TimeUnit;
 
 /**
  * {@link Backend} is the server where all requests are sent.
@@ -80,7 +77,10 @@ public class Backend implements Comparable<Backend>, Closeable {
      */
     private HealthCheck healthCheck;
 
-    private ScheduledFuture<?> scheduledFutureHealthCheck;
+    /**
+     * Health Check Manager for this {@linkplain Backend}
+     */
+    private final HealthCheckManager healthCheckManager;
 
     /**
      * Hash of {@link InetSocketAddress}
@@ -93,7 +93,7 @@ public class Backend implements Comparable<Backend>, Closeable {
      * @param socketAddress Address of this {@link Backend}
      */
     public Backend(InetSocketAddress socketAddress) {
-        this(socketAddress.getAddress().getHostName(), socketAddress, 100, 10_000, null);
+        this(socketAddress.getAddress().getHostName(), socketAddress, 100, 10_000, null, null);
     }
 
     /**
@@ -103,7 +103,7 @@ public class Backend implements Comparable<Backend>, Closeable {
      * @param socketAddress Address of this {@linkplain Backend}
      */
     public Backend(String hostname, InetSocketAddress socketAddress) {
-        this(hostname, socketAddress, 100, 10_000, null);
+        this(hostname, socketAddress, 100, 10_000, null, null);
     }
 
     /**
@@ -114,7 +114,7 @@ public class Backend implements Comparable<Backend>, Closeable {
      * @param maxConnections Maximum Number of Connections allowed for this {@linkplain Backend}
      */
     public Backend(InetSocketAddress socketAddress, int Weight, int maxConnections) {
-        this(socketAddress.getAddress().getHostAddress(), socketAddress, Weight, maxConnections, null);
+        this(socketAddress.getAddress().getHostAddress(), socketAddress, Weight, maxConnections, null, null);
     }
 
     /**
@@ -124,9 +124,23 @@ public class Backend implements Comparable<Backend>, Closeable {
      * @param socketAddress  Address of this {@linkplain Backend}
      * @param Weight         Weight of this {@linkplain Backend}
      * @param maxConnections Maximum Number of Connections allowed for this {@linkplain Backend}
-     * @param healthCheck    Health Check
+     * @param healthCheck    {@linkplain HealthCheck} Instance
      */
     public Backend(String hostname, InetSocketAddress socketAddress, int Weight, int maxConnections, HealthCheck healthCheck) {
+        this(hostname, socketAddress, Weight, maxConnections, healthCheck, null);
+    }
+
+    /**
+     * Create a new {@linkplain Backend} Instance
+     *
+     * @param hostname       Hostname of this {@linkplain Backend}
+     * @param socketAddress  Address of this {@linkplain Backend}
+     * @param Weight         Weight of this {@linkplain Backend}
+     * @param maxConnections Maximum Number of Connections allowed for this {@linkplain Backend}
+     * @param healthCheck    {@linkplain HealthCheck} Instance
+     * @param healthCheckManager {@linkplain HealthCheckManager} Instance
+     */
+    public Backend(String hostname, InetSocketAddress socketAddress, int Weight, int maxConnections, HealthCheck healthCheck, HealthCheckManager healthCheckManager) {
         Objects.requireNonNull(socketAddress, "SocketAddress");
         Objects.requireNonNull(hostname, "Hostname");
 
@@ -144,9 +158,11 @@ public class Backend implements Comparable<Backend>, Closeable {
         this.Weight = Weight;
         this.maxConnections = maxConnections;
         this.healthCheck = healthCheck;
+        this.healthCheckManager = healthCheckManager;
 
-        if (this.healthCheck != null) {
-            scheduledFutureHealthCheck = GlobalEventExecutors.INSTANCE.submitTaskAndRunEvery(this.healthCheck, 0, 5, TimeUnit.SECONDS);
+        if (this.healthCheck != null && this.healthCheckManager != null) {
+            healthCheckManager.setBackend(this);
+            healthCheckManager.initialize();
         }
 
         ByteBuffer byteBuffer = ByteBuffer.allocate(8);
@@ -251,14 +267,18 @@ public class Backend implements Comparable<Backend>, Closeable {
 
     @Override
     public String toString() {
-        return "Backend{hostname='" + hostname + '\'' + ", socketAddress=" + socketAddress + '}';
+        return "Backend{" +
+                "socketAddress=" + socketAddress +
+                ", state=" + state +
+                ", healthCheck=" + getHealth() +
+                '}';
     }
 
     @Override
     public void close() {
         setState(State.OFFLINE);
-        if (scheduledFutureHealthCheck != null) {
-            scheduledFutureHealthCheck.cancel(true);
+        if (this.healthCheck != null && this.healthCheckManager != null) {
+            healthCheckManager.shutdown();
         }
     }
 }

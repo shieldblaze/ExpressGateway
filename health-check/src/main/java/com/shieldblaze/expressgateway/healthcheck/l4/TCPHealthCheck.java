@@ -23,6 +23,7 @@ import org.apache.logging.log4j.Logger;
 
 import java.net.InetSocketAddress;
 import java.net.Socket;
+import java.time.Duration;
 
 /**
  * <p> TCP based {@link HealthCheck} </p>
@@ -38,11 +39,11 @@ public final class TCPHealthCheck extends HealthCheck {
 
     private static final Logger logger = LogManager.getLogger(TCPHealthCheck.class);
 
-    public TCPHealthCheck(InetSocketAddress socketAddress, int timeout) {
+    public TCPHealthCheck(InetSocketAddress socketAddress, Duration timeout) {
         super(socketAddress, timeout);
     }
 
-    public TCPHealthCheck(InetSocketAddress socketAddress, int timeout, int samples) {
+    public TCPHealthCheck(InetSocketAddress socketAddress, Duration timeout, int samples) {
         super(socketAddress, timeout, samples);
     }
 

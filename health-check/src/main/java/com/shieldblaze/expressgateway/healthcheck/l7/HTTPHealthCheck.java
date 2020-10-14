@@ -35,6 +35,7 @@ import java.net.URI;
 import java.security.KeyManagementException;
 import java.security.KeyStoreException;
 import java.security.NoSuchAlgorithmException;
+import java.time.Duration;
 
 /**
  * <p> HTTP based {@link HealthCheck} </p>
@@ -55,16 +56,16 @@ public final class HTTPHealthCheck extends HealthCheck {
     private final HttpClientBuilder httpClientBuilder;
     private final URI uri;
 
-    public HTTPHealthCheck(URI uri, int timeout, boolean disableTLSValidation) throws KeyStoreException, NoSuchAlgorithmException,
+    public HTTPHealthCheck(URI uri, Duration timeout, boolean disableTLSValidation) throws KeyStoreException, NoSuchAlgorithmException,
             KeyManagementException {
         super(new InetSocketAddress(uri.getHost(), uri.getPort()), timeout);
         this.uri = uri;
 
         RequestConfig requestConfig = RequestConfig.custom()
                 .setRedirectsEnabled(false)
-                .setConnectionRequestTimeout(1000 * timeout)
-                .setSocketTimeout(1000 * timeout)
-                .setConnectTimeout(1000 * timeout)
+                .setConnectionRequestTimeout(super.timeout)
+                .setSocketTimeout(super.timeout)
+                .setConnectTimeout(super.timeout)
                 .setAuthenticationEnabled(false)
                 .setRedirectsEnabled(false)
                 .setCircularRedirectsAllowed(false)

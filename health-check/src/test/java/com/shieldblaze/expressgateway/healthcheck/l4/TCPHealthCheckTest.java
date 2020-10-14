@@ -34,6 +34,7 @@ import java.net.InetSocketAddress;
 import java.net.ServerSocket;
 import java.nio.channels.AsynchronousServerSocketChannel;
 import java.nio.channels.ServerSocketChannel;
+import java.time.Duration;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 
@@ -53,7 +54,7 @@ final class TCPHealthCheckTest {
 
     @Test
     void check() {
-        TCPHealthCheck tcpHealthCheck = new TCPHealthCheck(new InetSocketAddress("127.0.0.1", 10000), 5);
+        TCPHealthCheck tcpHealthCheck = new TCPHealthCheck(new InetSocketAddress("127.0.0.1", 10000), Duration.ofSeconds(5));
         tcpHealthCheck.run();
 
         assertEquals(Health.GOOD, tcpHealthCheck.health());

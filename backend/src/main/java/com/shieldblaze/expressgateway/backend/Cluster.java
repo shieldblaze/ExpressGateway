@@ -17,6 +17,8 @@
  */
 package com.shieldblaze.expressgateway.backend;
 
+import com.shieldblaze.expressgateway.healthcheck.Health;
+
 import java.net.InetSocketAddress;
 import java.util.List;
 import java.util.concurrent.CopyOnWriteArrayList;

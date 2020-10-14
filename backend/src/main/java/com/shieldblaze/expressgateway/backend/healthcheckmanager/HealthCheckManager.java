@@ -15,7 +15,7 @@
  * You should have received a copy of the GNU General Public License
  * along with ShieldBlaze ExpressGateway.  If not, see <https://www.gnu.org/licenses/>.
  */
-package com.shieldblaze.expressgateway.backend.healthcheck;
+package com.shieldblaze.expressgateway.backend.healthcheckmanager;
 
 import com.shieldblaze.expressgateway.backend.Backend;
 import com.shieldblaze.expressgateway.common.concurrent.GlobalEventExecutors;
@@ -30,20 +30,22 @@ public abstract class HealthCheckManager implements Runnable {
 
     protected Backend backend;
     protected final HealthCheck healthCheck;
+    private final int initialDelay;
     private final int time;
     private final TimeUnit timeUnit;
 
     private ScheduledFuture<?> scheduledFutureHealthCheck;
 
-    public HealthCheckManager(HealthCheck healthCheck, int time, TimeUnit timeUnit) {
+    public HealthCheckManager(HealthCheck healthCheck, int initialDelay, int time, TimeUnit timeUnit) {
         this.healthCheck = Objects.requireNonNull(healthCheck);
         this.time = ObjectUtil.checkPositive(time, "time");
+        this.initialDelay = ObjectUtil.checkPositive(initialDelay, "initialDelay");
         this.timeUnit = Objects.requireNonNull(timeUnit, "timeUnit");
     }
 
     public void initialize() {
        if (scheduledFutureHealthCheck == null) {
-           scheduledFutureHealthCheck = GlobalEventExecutors.INSTANCE.submitTaskAndRunEvery(healthCheck, 0, time, timeUnit);
+           scheduledFutureHealthCheck = GlobalEventExecutors.INSTANCE.submitTaskAndRunEvery(healthCheck, initialDelay, time, timeUnit);
        }
     }
 

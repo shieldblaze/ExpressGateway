@@ -48,8 +48,4 @@ class BackendTest {
         assertThrows(IllegalArgumentException.class, () -> new Backend(new InetSocketAddress("10.1.1.1", 9110), 1, -1));
         assertDoesNotThrow(() -> new Backend(new InetSocketAddress("10.1.1.1", 9110), 1, 0));
     }
-
-    void testAutoHealthCheck() {
-
-    }
 }

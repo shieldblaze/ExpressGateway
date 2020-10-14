@@ -17,7 +17,9 @@
  */
 package com.shieldblaze.expressgateway.backend;
 
+import com.shieldblaze.expressgateway.backend.healthcheckmanager.DefaultHealthCheckManager;
 import com.shieldblaze.expressgateway.healthcheck.Health;
+import com.shieldblaze.expressgateway.healthcheck.HealthCheck;
 import com.shieldblaze.expressgateway.healthcheck.l4.TCPHealthCheck;
 import io.netty.bootstrap.ServerBootstrap;
 import io.netty.channel.ChannelInitializer;
@@ -29,6 +31,8 @@ import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.Test;
 
 import java.net.InetSocketAddress;
+import java.time.Duration;
+import java.util.concurrent.TimeUnit;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 
@@ -49,32 +53,36 @@ class ClusterTest {
         Cluster cluster = new Cluster();
 
         for (int i = 1; i < 100; i++) {
-            cluster.addBackend(new Backend("localhost", new InetSocketAddress("192.168.1." + i, i), 100, 100,
-                    new TCPHealthCheck(new InetSocketAddress("127.0.0.1", 10000), 5)));
+            HealthCheck healthCheck = new TCPHealthCheck(new InetSocketAddress("127.0.0.1", 10000), Duration.ofMillis(15));
+            DefaultHealthCheckManager defaultHealthCheckManager = new DefaultHealthCheckManager(healthCheck, 1, 1, TimeUnit.SECONDS);
+            cluster.addBackend(new Backend("localhost", new InetSocketAddress("192.168.1." + i, i), 100, 100, healthCheck, defaultHealthCheckManager));
         }
 
-        Thread.sleep(2500L); // Wait for all Health Checks to Finish
+        Thread.sleep(5000L); // Wait for all Health Checks to Finish
 
         for (Backend backend : cluster.getBackends()) {
             assertEquals(Health.GOOD, backend.getHealth());
         }
 
+        assertEquals(99, cluster.getAvailableBackends().size());
+
         tcpServer.stop();
-        Thread.sleep(5000L); // Wait for server to stop and all Health Checks to Finish
+        Thread.sleep(10000L); // Wait for server to stop and all Health Checks to Finish
 
         for (Backend backend : cluster.getBackends()) {
             assertEquals(Health.BAD, backend.getHealth());
         }
+
+        assertEquals(0, cluster.getAvailableBackends().size());
     }
 
     private static final class TCPServer {
 
-        private final EventLoopGroup bossGroup = new NioEventLoopGroup(2);
-        private final EventLoopGroup workerGroup = new NioEventLoopGroup(4);
+        private final EventLoopGroup bossGroup = new NioEventLoopGroup(4);
 
         private void start() {
             ServerBootstrap serverBootstrap = new ServerBootstrap()
-                    .group(bossGroup, workerGroup)
+                    .group(bossGroup)
                     .channel(NioServerSocketChannel.class)
                     .childHandler(new ChannelInitializer<SocketChannel>() {
                         @Override
@@ -86,9 +94,8 @@ class ClusterTest {
             serverBootstrap.bind(new InetSocketAddress("127.0.0.1", 10000));
         }
 
-        private void stop() {
-            bossGroup.shutdownGracefully();
-            workerGroup.shutdownGracefully();
+        private void stop() throws InterruptedException {
+            bossGroup.shutdownGracefully().sync();
         }
     }
 }
