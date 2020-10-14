@@ -15,53 +15,60 @@
  * You should have received a copy of the GNU General Public License
  * along with ShieldBlaze ExpressGateway.  If not, see <https://www.gnu.org/licenses/>.
  */
-package com.shieldblaze.expressgateway.loadbalance.l4;
+package com.shieldblaze.expressgateway.loadbalance.l7.http;
 
 import com.shieldblaze.expressgateway.backend.Backend;
+import io.netty.handler.codec.http.EmptyHttpHeaders;
 import org.junit.jupiter.api.Test;
 
 import java.net.InetSocketAddress;
 import java.util.ArrayList;
 import java.util.List;
 
-import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 
-class WeightedLeastConnectionTest {
+class RandomTest {
 
     @Test
-    void testWeightedLeastConnection() {
-        List<Backend> backends = new ArrayList<>();
-        backends.add(fastBuild("10.10.1.1", 10));
-        backends.add(fastBuild("10.10.1.2", 20));
-        backends.add(fastBuild("10.10.1.3", 30));
-        backends.add(fastBuild("10.10.1.4", 40));
+    void testRandom() {
+        List<Backend> addressList = new ArrayList<>();
+
+        // Add Backend Server Addresses
+        addressList.add(fastBuild("172.16.20.1"));
+        addressList.add(fastBuild("172.16.20.2"));
+        addressList.add(fastBuild("172.16.20.3"));
+        addressList.add(fastBuild("172.16.20.4"));
+        addressList.add(fastBuild("172.16.20.5"));
+
+        HTTPBalance httpBalance = new Random(addressList);
+        HTTPRequest httpRequest = new HTTPRequest(new InetSocketAddress("192.168.1.1", 1), EmptyHttpHeaders.INSTANCE);
 
         int first = 0;
         int second = 0;
         int third = 0;
         int forth = 0;
+        int fifth = 0;
 
-        L4Balance l4Balance = new WeightedLeastConnection(backends);
-        L4Request l4Request = new L4Request(new InetSocketAddress("192.168.1.1", 1));
-
-        for (int i = 0; i < 1000000; i++) {
-            Backend backend = l4Balance.getResponse(l4Request).getBackend();
-            backend.incConnections();
-            switch (backend.getSocketAddress().getHostString()) {
-                case "10.10.1.1": {
+        for (int i = 0; i < 1000; i++) {
+            switch (httpBalance.getResponse(httpRequest).getBackend().getSocketAddress().getHostString()) {
+                case "172.16.20.1": {
                     first++;
                     break;
                 }
-                case "10.10.1.2": {
+                case "172.16.20.2": {
                     second++;
                     break;
                 }
-                case "10.10.1.3": {
+                case "172.16.20.3": {
                     third++;
                     break;
                 }
-                case "10.10.1.4": {
+                case "172.16.20.4": {
                     forth++;
+                    break;
+                }
+                case "172.16.20.5": {
+                    fifth++;
                     break;
                 }
                 default:
@@ -69,13 +76,14 @@ class WeightedLeastConnectionTest {
             }
         }
 
-        assertEquals(100000, first);
-        assertEquals(200000, second);
-        assertEquals(300000, third);
-        assertEquals(400000, forth);
+        assertTrue(first > 10);
+        assertTrue(second > 10);
+        assertTrue(third > 10);
+        assertTrue(forth > 10);
+        assertTrue(fifth > 10);
     }
 
-    private static Backend fastBuild(String host, int weight) {
-        return new Backend(new InetSocketAddress(host, 1), weight, 1);
+    private Backend fastBuild(String host) {
+        return new Backend(new InetSocketAddress(host, 1));
     }
 }

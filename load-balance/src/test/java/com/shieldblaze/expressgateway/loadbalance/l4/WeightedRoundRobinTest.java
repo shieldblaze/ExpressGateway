@@ -29,7 +29,7 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 class WeightedRoundRobinTest {
 
     @Test
-    void getBackend() {
+    void testWeightedRound() {
 
         List<Backend> backends = new ArrayList<>();
         backends.add(fastBuild("10.10.1.1", 10));

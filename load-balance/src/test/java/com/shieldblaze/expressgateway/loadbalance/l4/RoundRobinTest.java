@@ -30,7 +30,7 @@ import static org.junit.jupiter.api.Assertions.assertNotEquals;
 class RoundRobinTest {
 
     @Test
-    void getBackendAddress() {
+    void testRoundRobin() {
         List<Backend> addressList = new ArrayList<>();
 
         // Add Backend Server Addresses

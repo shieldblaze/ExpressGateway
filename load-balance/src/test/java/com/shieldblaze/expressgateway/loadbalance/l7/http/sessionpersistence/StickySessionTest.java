@@ -45,19 +45,19 @@ class StickySessionTest {
             HTTPRequest httpRequest = new HTTPRequest(socketAddress, EmptyHttpHeaders.INSTANCE);
 
             RoundRobin roundRobin = new RoundRobin(new StickySession(backends), backends);
-            HTTPResponse httpResponse = roundRobin.getBackend(httpRequest);
+            HTTPResponse httpResponse = roundRobin.getResponse(httpRequest);
             assertEquals(backends.get(0), httpResponse.getBackend());
 
             httpRequest = new HTTPRequest(socketAddress, httpResponse.getHTTPHeaders());
-            httpResponse = roundRobin.getBackend(httpRequest);
+            httpResponse = roundRobin.getResponse(httpRequest);
             assertEquals(backends.get(1),  httpResponse.getBackend());
 
             httpRequest = new HTTPRequest(socketAddress, httpResponse.getHTTPHeaders());
-            httpResponse = roundRobin.getBackend(httpRequest);
+            httpResponse = roundRobin.getResponse(httpRequest);
             assertEquals(backends.get(2),  httpResponse.getBackend());
 
             httpRequest = new HTTPRequest(socketAddress, httpResponse.getHTTPHeaders());
-            httpResponse = roundRobin.getBackend(httpRequest);
+            httpResponse = roundRobin.getResponse(httpRequest);
             assertEquals(backends.get(3),  httpResponse.getBackend());
         }
     }

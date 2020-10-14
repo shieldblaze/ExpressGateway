@@ -15,9 +15,12 @@
  * You should have received a copy of the GNU General Public License
  * along with ShieldBlaze ExpressGateway.  If not, see <https://www.gnu.org/licenses/>.
  */
-package com.shieldblaze.expressgateway.loadbalance.l4;
+package com.shieldblaze.expressgateway.loadbalance.l7.http;
 
 import com.shieldblaze.expressgateway.backend.Backend;
+import com.shieldblaze.expressgateway.loadbalance.l4.L4Balance;
+import com.shieldblaze.expressgateway.loadbalance.l4.L4Request;
+import io.netty.handler.codec.http.EmptyHttpHeaders;
 import org.junit.jupiter.api.Test;
 
 import java.net.InetSocketAddress;
@@ -26,10 +29,11 @@ import java.util.List;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 
-class WeightedLeastConnectionTest {
+class WeightedRoundRobinTest {
 
     @Test
-    void testWeightedLeastConnection() {
+    void testWeightedRoundRobin() {
+
         List<Backend> backends = new ArrayList<>();
         backends.add(fastBuild("10.10.1.1", 10));
         backends.add(fastBuild("10.10.1.2", 20));
@@ -41,13 +45,11 @@ class WeightedLeastConnectionTest {
         int third = 0;
         int forth = 0;
 
-        L4Balance l4Balance = new WeightedLeastConnection(backends);
-        L4Request l4Request = new L4Request(new InetSocketAddress("192.168.1.1", 1));
+        HTTPBalance httpBalance = new WeightedRoundRobin(backends);
+        HTTPRequest httpRequest = new HTTPRequest(new InetSocketAddress("192.168.1.1", 1), EmptyHttpHeaders.INSTANCE);
 
         for (int i = 0; i < 1000000; i++) {
-            Backend backend = l4Balance.getResponse(l4Request).getBackend();
-            backend.incConnections();
-            switch (backend.getSocketAddress().getHostString()) {
+            switch (httpBalance.getResponse(httpRequest).getBackend().getSocketAddress().getHostString()) {
                 case "10.10.1.1": {
                     first++;
                     break;
@@ -75,7 +77,7 @@ class WeightedLeastConnectionTest {
         assertEquals(400000, forth);
     }
 
-    private static Backend fastBuild(String host, int weight) {
+    private Backend fastBuild(String host, int weight) {
         return new Backend(new InetSocketAddress(host, 1), weight, 1);
     }
 }

@@ -29,7 +29,7 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 class WeightedRandomTest {
 
     @Test
-    void getBackend() {
+    void testWeightedRandom() {
 
         List<Backend> backends = new ArrayList<>();
         backends.add(fastBuild("10.10.1.1", 30));

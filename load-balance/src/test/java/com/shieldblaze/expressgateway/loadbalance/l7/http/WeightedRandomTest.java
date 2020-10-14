@@ -15,39 +15,39 @@
  * You should have received a copy of the GNU General Public License
  * along with ShieldBlaze ExpressGateway.  If not, see <https://www.gnu.org/licenses/>.
  */
-package com.shieldblaze.expressgateway.loadbalance.l4;
+package com.shieldblaze.expressgateway.loadbalance.l7.http;
 
 import com.shieldblaze.expressgateway.backend.Backend;
+import io.netty.handler.codec.http.EmptyHttpHeaders;
 import org.junit.jupiter.api.Test;
 
 import java.net.InetSocketAddress;
 import java.util.ArrayList;
 import java.util.List;
 
-import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 
-class WeightedLeastConnectionTest {
+class WeightedRandomTest {
 
     @Test
-    void testWeightedLeastConnection() {
+    void testWeightedRandom() {
+
         List<Backend> backends = new ArrayList<>();
-        backends.add(fastBuild("10.10.1.1", 10));
+        backends.add(fastBuild("10.10.1.1", 30));
         backends.add(fastBuild("10.10.1.2", 20));
-        backends.add(fastBuild("10.10.1.3", 30));
-        backends.add(fastBuild("10.10.1.4", 40));
+        backends.add(fastBuild("10.10.1.3", 40));
+        backends.add(fastBuild("10.10.1.4", 10));
 
         int first = 0;
         int second = 0;
         int third = 0;
         int forth = 0;
 
-        L4Balance l4Balance = new WeightedLeastConnection(backends);
-        L4Request l4Request = new L4Request(new InetSocketAddress("192.168.1.1", 1));
+        HTTPBalance httpBalance = new WeightedRandom(backends);
+        HTTPRequest httpRequest = new HTTPRequest(new InetSocketAddress("192.168.1.1", 1), EmptyHttpHeaders.INSTANCE);
 
-        for (int i = 0; i < 1000000; i++) {
-            Backend backend = l4Balance.getResponse(l4Request).getBackend();
-            backend.incConnections();
-            switch (backend.getSocketAddress().getHostString()) {
+        for (int i = 0; i < 1000; i++) {
+            switch (httpBalance.getResponse(httpRequest).getBackend().getSocketAddress().getHostString()) {
                 case "10.10.1.1": {
                     first++;
                     break;
@@ -69,13 +69,13 @@ class WeightedLeastConnectionTest {
             }
         }
 
-        assertEquals(100000, first);
-        assertEquals(200000, second);
-        assertEquals(300000, third);
-        assertEquals(400000, forth);
+        assertTrue(first > 200);
+        assertTrue(second > 100);
+        assertTrue(third > 300);
+        assertTrue(forth > 75);
     }
 
-    private static Backend fastBuild(String host, int weight) {
+    private Backend fastBuild(String host, int weight) {
         return new Backend(new InetSocketAddress(host, 1), weight, 1);
     }
 }

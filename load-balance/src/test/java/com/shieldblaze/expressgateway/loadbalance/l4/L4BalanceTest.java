@@ -29,7 +29,7 @@ import static org.junit.jupiter.api.Assertions.assertThrows;
 class L4BalanceTest {
 
     @Test
-    void getBackend() {
+    void testL4Balance() {
         Backend backend = new Backend(new InetSocketAddress("192.168.1.1", 9110));
 
         L4Balance l4Balance = new EmptyL4Balance();

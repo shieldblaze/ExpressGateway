@@ -32,7 +32,7 @@ import static org.junit.jupiter.api.Assertions.*;
 class SourceIPHashTest {
 
     @Test
-    void test() {
+    void testSourceIPHash() {
         List<Backend> addressList = new ArrayList<>();
 
         // Add Backend Server Addresses

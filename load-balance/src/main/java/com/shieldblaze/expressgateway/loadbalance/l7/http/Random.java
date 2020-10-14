@@ -18,27 +18,40 @@
 package com.shieldblaze.expressgateway.loadbalance.l7.http;
 
 import com.shieldblaze.expressgateway.backend.Backend;
-import com.shieldblaze.expressgateway.loadbalance.LoadBalance;
-import com.shieldblaze.expressgateway.loadbalance.Request;
-import com.shieldblaze.expressgateway.loadbalance.Response;
 import com.shieldblaze.expressgateway.loadbalance.SessionPersistence;
 
-public abstract class HTTPBalance extends LoadBalance<HTTPResponse, HTTPResponse, HTTPRequest, Backend> {
+import java.util.List;
 
-    /**
-     * Create {@link HTTPBalance} Instance
-     *
-     * @param sessionPersistence {@link SessionPersistence} Instance
-     * @throws NullPointerException If {@link SessionPersistence} is {@code null}
-     */
-    public HTTPBalance(SessionPersistence<HTTPResponse, HTTPResponse, HTTPRequest, Backend> sessionPersistence) {
-        super(sessionPersistence);
+/**
+ * Select {@link Backend} Randomly
+ */
+public final class Random extends HTTPBalance {
+    private final java.util.Random RANDOM_INSTANCE = new java.util.Random();
+
+    public Random() {
+        super(new NOOPSessionPersistence());
     }
 
-    public abstract HTTPResponse getResponse(HTTPRequest httpRequest);
+    public Random(List<Backend> backends) {
+        super(new NOOPSessionPersistence());
+        setBackends(backends);
+    }
+
+    public Random(SessionPersistence<HTTPResponse, HTTPResponse, HTTPRequest, Backend> sessionPersistence, List<Backend> backends) {
+        super(sessionPersistence);
+        setBackends(backends);
+    }
 
     @Override
-    public Response getResponse(Request request) {
-        return getResponse((HTTPRequest) request);
+    public HTTPResponse getResponse(HTTPRequest httpRequest) {
+        HTTPResponse httpResponse = sessionPersistence.getBackend(httpRequest);
+        if (httpResponse != null) {
+            return httpResponse;
+        }
+
+        int index = RANDOM_INSTANCE.nextInt(backends.size());
+
+        Backend backend = backends.get(index);
+        return sessionPersistence.addRoute(httpRequest, backend);
     }
 }
