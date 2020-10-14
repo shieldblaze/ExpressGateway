@@ -29,7 +29,7 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 class LeastConnectionTest {
 
     @Test
-    void getBackend() {
+    void testLeastConnection() {
         List<Backend> backends = new ArrayList<>();
         backends.add(fastBuild("10.10.1.1"));
         backends.add(fastBuild("10.10.1.2"));

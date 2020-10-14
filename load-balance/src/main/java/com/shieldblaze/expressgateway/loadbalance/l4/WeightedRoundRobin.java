@@ -66,7 +66,8 @@ public final class WeightedRoundRobin extends L4Balance {
             index = 0;
         }
 
-        backend = backendsMap.get(index++);
+        backend = backendsMap.get(index);
+        index++;
         sessionPersistence.addRoute(l4Request.getSocketAddress(), backend);
         return new L4Response(backend);
     }

@@ -17,28 +17,32 @@
  */
 package com.shieldblaze.expressgateway.loadbalance.l7.http;
 
+import com.google.common.collect.Range;
+import com.google.common.collect.TreeRangeMap;
 import com.shieldblaze.expressgateway.backend.Backend;
-import com.shieldblaze.expressgateway.common.list.RoundRobinList;
 import com.shieldblaze.expressgateway.loadbalance.SessionPersistence;
 
 import java.util.List;
 
 /**
- * Select {@link Backend} based on Round-Robin
+ * Select {@link Backend} based on Weight Randomly
  */
-public final class RoundRobin extends HTTPBalance {
+@SuppressWarnings("UnstableApiUsage")
+public final class WeightedRandom extends HTTPBalance {
+    private final java.util.Random RANDOM_INSTANCE = new java.util.Random();
 
-    private RoundRobinList<Backend> backendsRoundRobin;
+    private final TreeRangeMap<Integer, Backend> backendsMap = TreeRangeMap.create();
+    private int totalWeight = 0;
 
-    public RoundRobin() {
+    public WeightedRandom() {
         super(new NOOPSessionPersistence());
     }
 
-    public RoundRobin(List<Backend> backends) {
+    public WeightedRandom(List<Backend> backends) {
         this(new NOOPSessionPersistence(), backends);
     }
 
-    public RoundRobin(SessionPersistence<HTTPResponse, HTTPResponse, HTTPRequest, Backend> sessionPersistence, List<Backend> backends) {
+    public WeightedRandom(SessionPersistence<HTTPResponse, HTTPResponse, HTTPRequest, Backend> sessionPersistence, List<Backend> backends) {
         super(sessionPersistence);
         setBackends(backends);
     }
@@ -46,7 +50,8 @@ public final class RoundRobin extends HTTPBalance {
     @Override
     public void setBackends(List<Backend> backends) {
         super.setBackends(backends);
-        backendsRoundRobin = new RoundRobinList<>(this.backends);
+        this.backends.forEach(backend -> this.backendsMap.put(Range.closed(totalWeight, totalWeight += backend.getWeight()), backend));
+        backends.clear();
     }
 
     @Override
@@ -56,7 +61,8 @@ public final class RoundRobin extends HTTPBalance {
             return httpResponse;
         }
 
-        Backend backend = backendsRoundRobin.iterator().next();
+        int index = RANDOM_INSTANCE.nextInt(totalWeight);
+        Backend backend = backendsMap.get(index);
         return sessionPersistence.addRoute(httpRequest, backend);
     }
 }

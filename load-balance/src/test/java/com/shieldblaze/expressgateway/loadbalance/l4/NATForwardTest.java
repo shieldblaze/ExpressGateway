@@ -30,7 +30,7 @@ import static org.junit.jupiter.api.Assertions.assertThrows;
 class NATForwardTest {
 
     @Test
-    void getBackend() {
+    void testNATForward() {
         List<Backend> addressList = new ArrayList<>();
         addressList.add(fastBuild("192.168.1.1"));
 

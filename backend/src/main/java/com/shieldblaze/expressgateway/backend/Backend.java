@@ -17,7 +17,6 @@
  */
 package com.shieldblaze.expressgateway.backend;
 
-import com.google.common.hash.Hashing;
 import com.shieldblaze.expressgateway.common.crypto.Hasher;
 import com.shieldblaze.expressgateway.healthcheck.Health;
 import com.shieldblaze.expressgateway.healthcheck.HealthCheck;

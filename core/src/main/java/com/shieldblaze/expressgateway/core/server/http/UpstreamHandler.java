@@ -123,7 +123,7 @@ final class UpstreamHandler extends ChannelInboundHandlerAdapter {
 
             // Get Backend
             if (backend == null) {
-                backend = HTTPBalance.getBackend(new HTTPRequest((InetSocketAddress) ctx.channel().remoteAddress(), headers)).getBackend();
+                backend = HTTPBalance.getResponse(new HTTPRequest((InetSocketAddress) ctx.channel().remoteAddress(), headers)).getBackend();
             }
 
             // If Backend is not found, return `BAD_GATEWAY` response.

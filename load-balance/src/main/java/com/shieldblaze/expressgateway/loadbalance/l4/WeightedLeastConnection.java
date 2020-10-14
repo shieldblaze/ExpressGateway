@@ -74,7 +74,8 @@ public final class WeightedLeastConnection extends L4Balance {
             index = 0;
         }
 
-        Entry<Range<Integer>, Backend> backend = backendsMap.getEntry(index++);
+        Entry<Range<Integer>, Backend> backend = backendsMap.getEntry(index);
+        index++;
         Integer connections = localConnectionMap.get(backend.getValue());
 
         if (connections >= backend.getKey().upperEndpoint()) {

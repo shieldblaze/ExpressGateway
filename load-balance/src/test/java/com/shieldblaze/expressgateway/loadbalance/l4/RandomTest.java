@@ -29,7 +29,7 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 class RandomTest {
 
     @Test
-    void getBackend() {
+    void testRandom() {
         List<Backend> addressList = new ArrayList<>();
 
         // Add Backend Server Addresses
