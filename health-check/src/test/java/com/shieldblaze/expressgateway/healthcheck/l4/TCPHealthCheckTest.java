@@ -18,22 +18,13 @@
 package com.shieldblaze.expressgateway.healthcheck.l4;
 
 import com.shieldblaze.expressgateway.healthcheck.Health;
-import io.netty.bootstrap.ServerBootstrap;
-import io.netty.channel.ChannelInitializer;
-import io.netty.channel.EventLoopGroup;
-import io.netty.channel.nio.NioEventLoopGroup;
-import io.netty.channel.socket.SocketChannel;
-import io.netty.channel.socket.nio.NioServerSocketChannel;
 import org.junit.jupiter.api.AfterAll;
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.Test;
 
 import java.io.IOException;
-import java.net.InetAddress;
 import java.net.InetSocketAddress;
-import java.net.ServerSocket;
 import java.nio.channels.AsynchronousServerSocketChannel;
-import java.nio.channels.ServerSocketChannel;
 import java.time.Duration;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
@@ -43,12 +34,12 @@ final class TCPHealthCheckTest {
     static TCPServer tcpServer = new TCPServer();
 
     @BeforeAll
-    static void startTCPServer() {
+    static void startTCPServer() throws IOException {
         tcpServer.start();
     }
 
     @AfterAll
-    static void stopTCPServer() {
+    static void stopTCPServer() throws IOException {
         tcpServer.stop();
     }
 
@@ -62,26 +53,16 @@ final class TCPHealthCheckTest {
 
     private static final class TCPServer {
 
-        private final EventLoopGroup bossGroup = new NioEventLoopGroup(2);
-        private final EventLoopGroup workerGroup = new NioEventLoopGroup(4);
+        private AsynchronousServerSocketChannel server;
 
-        private void start() {
-            ServerBootstrap serverBootstrap = new ServerBootstrap()
-                    .group(bossGroup, workerGroup)
-                    .channel(NioServerSocketChannel.class)
-                    .childHandler(new ChannelInitializer<SocketChannel>() {
-                        @Override
-                        protected void initChannel(SocketChannel socketChannel) {
-                            // Ignore
-                        }
-                    });
-
-            serverBootstrap.bind(new InetSocketAddress("127.0.0.1", 10000));
+        private void start() throws IOException {
+            server = AsynchronousServerSocketChannel.open();
+            server.bind(new InetSocketAddress("127.0.0.1", 10000));
+            server.accept();
         }
 
-        private void stop() {
-            bossGroup.shutdownGracefully();
-            workerGroup.shutdownGracefully();
+        private void stop() throws IOException {
+            server.close();
         }
     }
 }
