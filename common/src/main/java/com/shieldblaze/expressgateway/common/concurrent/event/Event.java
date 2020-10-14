@@ -15,7 +15,7 @@
  * You should have received a copy of the GNU General Public License
  * along with ShieldBlaze ExpressGateway.  If not, see <https://www.gnu.org/licenses/>.
  */
-package com.shieldblaze.expressgateway.common.concurrent;
+package com.shieldblaze.expressgateway.common.concurrent.event;
 
 public interface Event {
 

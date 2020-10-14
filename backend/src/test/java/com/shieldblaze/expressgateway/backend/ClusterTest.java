@@ -15,48 +15,56 @@
  * You should have received a copy of the GNU General Public License
  * along with ShieldBlaze ExpressGateway.  If not, see <https://www.gnu.org/licenses/>.
  */
-package com.shieldblaze.expressgateway.healthcheck.l4;
+package com.shieldblaze.expressgateway.backend;
 
 import com.shieldblaze.expressgateway.healthcheck.Health;
+import com.shieldblaze.expressgateway.healthcheck.l4.TCPHealthCheck;
 import io.netty.bootstrap.ServerBootstrap;
 import io.netty.channel.ChannelInitializer;
 import io.netty.channel.EventLoopGroup;
 import io.netty.channel.nio.NioEventLoopGroup;
 import io.netty.channel.socket.SocketChannel;
 import io.netty.channel.socket.nio.NioServerSocketChannel;
-import org.junit.jupiter.api.AfterAll;
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.Test;
 
-import java.io.IOException;
-import java.net.InetAddress;
 import java.net.InetSocketAddress;
-import java.net.ServerSocket;
-import java.nio.channels.AsynchronousServerSocketChannel;
-import java.nio.channels.ServerSocketChannel;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 
-final class TCPHealthCheckTest {
+class ClusterTest {
 
-    static TCPServer tcpServer = new TCPServer();
+    static TCPServer tcpServer;
 
     @BeforeAll
-    static void startTCPServer() {
+    static void setup() throws InterruptedException {
+        tcpServer = new TCPServer();
         tcpServer.start();
-    }
 
-    @AfterAll
-    static void stopTCPServer() {
-        tcpServer.stop();
+        Thread.sleep(2500L); // Wait for server to start
     }
 
     @Test
-    void check() {
-        TCPHealthCheck tcpHealthCheck = new TCPHealthCheck(new InetSocketAddress("127.0.0.1", 10000), 5);
-        tcpHealthCheck.run();
+    void testBackendsHealth() throws InterruptedException {
+        Cluster cluster = new Cluster();
 
-        assertEquals(Health.GOOD, tcpHealthCheck.health());
+        for (int i = 1; i < 100; i++) {
+            cluster.addBackend(new Backend("localhost", new InetSocketAddress("192.168.1." + i, i), 100, 100,
+                    new TCPHealthCheck(new InetSocketAddress("127.0.0.1", 10000), 5)));
+        }
+
+        Thread.sleep(2500L); // Wait for all Health Checks to Finish
+
+        for (Backend backend : cluster.getBackends()) {
+            assertEquals(Health.GOOD, backend.getHealth());
+        }
+
+        tcpServer.stop();
+        Thread.sleep(5000L); // Wait for server to stop and all Health Checks to Finish
+
+        for (Backend backend : cluster.getBackends()) {
+            assertEquals(Health.BAD, backend.getHealth());
+        }
     }
 
     private static final class TCPServer {

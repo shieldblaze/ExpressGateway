@@ -18,6 +18,8 @@
 package com.shieldblaze.expressgateway.healthcheck.l4;
 
 import com.shieldblaze.expressgateway.healthcheck.HealthCheck;
+import org.apache.logging.log4j.LogManager;
+import org.apache.logging.log4j.Logger;
 
 import java.net.DatagramPacket;
 import java.net.DatagramSocket;
@@ -38,6 +40,8 @@ import java.util.Arrays;
  */
 public final class UDPHealthCheck extends HealthCheck {
 
+    private static final Logger logger = LogManager.getLogger(UDPHealthCheck.class);
+
     private static final byte[] PING = "PING".getBytes();
     private static final byte[] PONG = "PONG".getBytes();
 
@@ -50,7 +54,7 @@ public final class UDPHealthCheck extends HealthCheck {
     }
 
     @Override
-    public void check() {
+    public void run() {
         try (DatagramSocket datagramSocket = new DatagramSocket()) {
             datagramSocket.setSoTimeout(1000 * timeout);
             DatagramPacket datagramPacket = new DatagramPacket(PING, 4, socketAddress);
@@ -67,6 +71,7 @@ public final class UDPHealthCheck extends HealthCheck {
                 markFailure();
             }
         } catch (Exception e) {
+            logger.debug("Health Check Failure For Address: " + socketAddress, e);
             markFailure();
         }
     }

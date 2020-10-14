@@ -26,7 +26,7 @@ import java.util.Collections;
  * Health Check for checking health of remote host.
  */
 @SuppressWarnings("UnstableApiUsage")
-public abstract class HealthCheck {
+public abstract class HealthCheck implements Runnable {
 
     protected final InetSocketAddress socketAddress;
     private final EvictingQueue<Boolean> queue;
@@ -54,11 +54,6 @@ public abstract class HealthCheck {
         this.timeout = timeout;
         this.queue = EvictingQueue.create(samples);
     }
-
-    /**
-     * Perform Health Check
-     */
-    public abstract void check();
 
     /**
      * If Heath Check was successful, call this method.

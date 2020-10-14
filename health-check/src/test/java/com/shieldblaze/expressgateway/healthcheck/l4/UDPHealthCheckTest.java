@@ -41,7 +41,7 @@ final class UDPHealthCheckTest {
         Thread.sleep(2500L); // Wait for UDP Server to Start
 
         UDPHealthCheck udpHealthCheck = new UDPHealthCheck(new InetSocketAddress("127.0.0.1", 12345), 5);
-        udpHealthCheck.check();
+        udpHealthCheck.run();
 
         assertEquals(Health.GOOD, udpHealthCheck.health());
     }
@@ -53,7 +53,7 @@ final class UDPHealthCheckTest {
         Thread.sleep(2500L); // Wait for UDP Server to Start
 
         UDPHealthCheck udpHealthCheck = new UDPHealthCheck(new InetSocketAddress("127.0.0.1", 12346), 5);
-        udpHealthCheck.check();
+        udpHealthCheck.run();
 
         assertEquals(Health.GOOD, udpHealthCheck.health());
     }

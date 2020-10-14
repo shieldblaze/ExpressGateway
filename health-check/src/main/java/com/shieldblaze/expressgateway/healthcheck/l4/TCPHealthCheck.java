@@ -18,6 +18,8 @@
 package com.shieldblaze.expressgateway.healthcheck.l4;
 
 import com.shieldblaze.expressgateway.healthcheck.HealthCheck;
+import org.apache.logging.log4j.LogManager;
+import org.apache.logging.log4j.Logger;
 
 import java.net.InetSocketAddress;
 import java.net.Socket;
@@ -34,6 +36,8 @@ import java.net.Socket;
  */
 public final class TCPHealthCheck extends HealthCheck {
 
+    private static final Logger logger = LogManager.getLogger(TCPHealthCheck.class);
+
     public TCPHealthCheck(InetSocketAddress socketAddress, int timeout) {
         super(socketAddress, timeout);
     }
@@ -43,7 +47,7 @@ public final class TCPHealthCheck extends HealthCheck {
     }
 
     @Override
-    public void check() {
+    public void run() {
         try (Socket socket = new Socket()) {
             socket.connect(socketAddress, timeout);
             if (socket.isConnected()) {
@@ -52,7 +56,7 @@ public final class TCPHealthCheck extends HealthCheck {
                 markFailure();
             }
         } catch (Exception e) {
-            e.printStackTrace();
+            logger.debug("Health Check Failure For Address: " + socketAddress, e);
             markFailure();
         }
     }
