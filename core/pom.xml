@@ -60,13 +60,6 @@ along with ShieldBlaze ExpressGateway.  If not, see <https://www.gnu.org/license
             <version>1.66</version>
         </dependency>
 
-        <!-- https://mvnrepository.com/artifact/com.github.vladimir-bukhtoyarov/bucket4j-core -->
-        <dependency>
-            <groupId>com.github.vladimir-bukhtoyarov</groupId>
-            <artifactId>bucket4j-core</artifactId>
-            <version>4.10.0</version>
-        </dependency>
-
         <dependency>
             <groupId>com.nixxcode.jvmbrotli</groupId>
             <artifactId>jvmbrotli</artifactId>
