@@ -46,7 +46,6 @@ final class DownstreamHandler extends ChannelInboundHandlerAdapter {
 
             /*
              * If `isUpstreamHTTP2` is `true` then  we'll lookup at map using Stream-ID and check if we have entry for "ACCEPT-ENCODING" values.
-             * If ``
              */
             if (upstreamHandler.isHTTP2) {
                 String acceptEncoding = upstreamHandler.acceptEncodingMap.get(response.headers().getInt("x-http2-stream-id"));
@@ -55,7 +54,6 @@ final class DownstreamHandler extends ChannelInboundHandlerAdapter {
                     if (targetContentEncoding != null) {
                         response.headers().set(HttpHeaderNames.CONTENT_ENCODING, targetContentEncoding);
                     }
-
                     upstreamHandler.acceptEncodingMap.remove(response.headers().getInt("x-http2-stream-id"));
                 }
             }

@@ -21,14 +21,12 @@ import com.shieldblaze.expressgateway.core.configuration.http.HTTPConfiguration;
 import io.netty.channel.ChannelHandler;
 import io.netty.channel.ChannelHandlerContext;
 import io.netty.channel.embedded.EmbeddedChannel;
-import io.netty.handler.codec.compression.BrotliEncoder;
+import com.shieldblaze.expressgateway.core.server.http.compression.BrotliEncoder;
 import io.netty.handler.codec.compression.ZlibCodecFactory;
 import io.netty.handler.codec.compression.ZlibWrapper;
 import io.netty.handler.codec.http.HttpContent;
 import io.netty.handler.codec.http.HttpContentCompressor;
 import io.netty.handler.codec.http.HttpHeaderNames;
-import io.netty.handler.codec.http.HttpHeaderValues;
-import io.netty.handler.codec.http.HttpHeaders;
 import io.netty.handler.codec.http.HttpResponse;
 
 import java.util.Set;
@@ -89,7 +87,7 @@ final class HTTPContentCompressor extends HttpContentCompressor {
             return null;
         }
 
-        if (!MIME_TYPES.contains(response.headers().get(HttpHeaderNames.CONTENT_TYPE))) {
+        if (!MIME_TYPES.contains(response.headers().get(HttpHeaderNames.CONTENT_TYPE).split(";")[0])) {
             return null;
         }
 
