@@ -20,7 +20,7 @@ package com.shieldblaze.expressgateway.core.server.http;
 import io.netty.channel.Channel;
 import io.netty.channel.ChannelHandlerContext;
 import io.netty.channel.embedded.EmbeddedChannel;
-import io.netty.handler.codec.compression.BrotliDecoder;
+import com.shieldblaze.expressgateway.core.server.http.compression.BrotliDecoder;
 import io.netty.handler.codec.compression.ZlibCodecFactory;
 import io.netty.handler.codec.compression.ZlibWrapper;
 import io.netty.handler.codec.http2.DelegatingDecompressorFrameListener;

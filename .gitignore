@@ -28,3 +28,5 @@ target/
 #IntelliJ
 .idea/
 *.iml
+
+Main.java
