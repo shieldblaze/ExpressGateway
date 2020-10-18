@@ -17,7 +17,7 @@
  */
 package com.shieldblaze.expressgateway.core.loadbalancer.l4;
 
-import com.shieldblaze.expressgateway.backend.Cluster;
+import com.shieldblaze.expressgateway.backend.cluster.Cluster;
 import com.shieldblaze.expressgateway.core.configuration.CommonConfiguration;
 import com.shieldblaze.expressgateway.core.server.L4FrontListener;
 import com.shieldblaze.expressgateway.loadbalance.l4.L4Balance;
@@ -102,7 +102,7 @@ public final class L4LoadBalancerBuilder {
                 Objects.requireNonNull(cluster, "cluster"),
                 Objects.requireNonNull(commonConfiguration, "commonConfiguration")
         );
-        l4Balance.setBackends(cluster.getBackends());
+        l4Balance.setCluster(cluster);
         l4FrontListener.setL4LoadBalancer(defaultL4LoadBalancer);
         return defaultL4LoadBalancer;
     }

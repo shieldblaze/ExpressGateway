@@ -84,7 +84,7 @@ along with ShieldBlaze ExpressGateway.  If not, see <https://www.gnu.org/license
         <dependency>
             <groupId>io.netty</groupId>
             <artifactId>netty-transport-native-epoll</artifactId>
-            <version>4.1.52.Final</version>
+            <version>4.1.53.Final</version>
         </dependency>
 
         <!-- https://mvnrepository.com/artifact/io.netty/netty-tcnative -->

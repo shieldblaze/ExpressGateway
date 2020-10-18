@@ -15,25 +15,22 @@
  * You should have received a copy of the GNU General Public License
  * along with ShieldBlaze ExpressGateway.  If not, see <https://www.gnu.org/licenses/>.
  */
-package com.shieldblaze.expressgateway.loadbalance.l7.http;
+package com.shieldblaze.expressgateway.backend;
 
-import com.shieldblaze.expressgateway.backend.Backend;
-import com.shieldblaze.expressgateway.loadbalance.Request;
-import com.shieldblaze.expressgateway.loadbalance.SessionPersistence;
-import io.netty.handler.codec.http.EmptyHttpHeaders;
-
-/**
- * No-Operation {@link SessionPersistence}
- */
-final class NOOPSessionPersistence implements SessionPersistence<HTTPBalanceResponse, HTTPBalanceResponse, HTTPBalanceRequest, Backend> {
-
-    @Override
-    public HTTPBalanceResponse getBackend(Request request) {
-        return null;
+public class BackendNotAvailableException extends Exception {
+    public BackendNotAvailableException() {
+        super();
     }
 
-    @Override
-    public HTTPBalanceResponse addRoute(HTTPBalanceRequest httpBalanceRequest, Backend backend) {
-        return new HTTPBalanceResponse(backend, EmptyHttpHeaders.INSTANCE);
+    public BackendNotAvailableException(String message) {
+        super(message);
+    }
+
+    public BackendNotAvailableException(String message, Throwable cause) {
+        super(message, cause);
+    }
+
+    public BackendNotAvailableException(Throwable cause) {
+        super(cause);
     }
 }

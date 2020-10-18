@@ -17,7 +17,7 @@
  */
 package com.shieldblaze.expressgateway.core.server.http;
 
-import com.shieldblaze.expressgateway.common.concurrent.GlobalEventExecutors;
+import com.shieldblaze.expressgateway.common.concurrent.GlobalExecutors;
 import com.shieldblaze.expressgateway.core.concurrent.async.L4FrontListenerEvent;
 import com.shieldblaze.expressgateway.core.configuration.CommonConfiguration;
 import com.shieldblaze.expressgateway.core.configuration.http.HTTPConfiguration;
@@ -152,7 +152,7 @@ public final class HTTPListener extends HTTPFrontListener {
         }
 
         for (int i = 0; i < bindRounds; i++) {
-            CompletableFuture<L4FrontListenerEvent> completableFuture = GlobalEventExecutors.INSTANCE.submitTask(() -> {
+            CompletableFuture<L4FrontListenerEvent> completableFuture = GlobalExecutors.INSTANCE.submitTask(() -> {
                 L4FrontListenerEvent l4FrontListenerEvent = new L4FrontListenerEvent();
                 try {
                     serverBootstrap.bind(getL7LoadBalancer().getBindAddress()).addListener((ChannelFutureListener) future -> {
@@ -176,7 +176,7 @@ public final class HTTPListener extends HTTPFrontListener {
 
     @Override
     public CompletableFuture<Boolean> stop() {
-        return GlobalEventExecutors.INSTANCE.submitTask(() -> {
+        return GlobalExecutors.INSTANCE.submitTask(() -> {
             completableFutureList.forEach(event -> {
                 try {
                     event.get().getChannelFuture().channel().close().sync();

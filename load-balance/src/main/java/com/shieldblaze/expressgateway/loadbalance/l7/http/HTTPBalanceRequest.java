@@ -17,36 +17,32 @@
  */
 package com.shieldblaze.expressgateway.loadbalance.l7.http;
 
-import com.shieldblaze.expressgateway.backend.Backend;
-import com.shieldblaze.expressgateway.loadbalance.Response;
+import com.shieldblaze.expressgateway.loadbalance.Request;
 import io.netty.handler.codec.http.HttpHeaders;
 
+import java.net.InetSocketAddress;
+
 /**
- * {@link HTTPResponse} contains selected {@link Backend} and {@link HttpHeaders} for response.
+ * {@link HTTPBalanceRequest} contains {@link InetSocketAddress} and {@link HttpHeaders} of Client
  */
-public final class HTTPResponse extends Response {
+public final class HTTPBalanceRequest extends Request {
     private final HttpHeaders httpHeaders;
 
     /**
-     * Create a {@link HTTPResponse} Instance
+     * Create a new {@link HTTPBalanceRequest} Instance
      *
-     * @param backend     Selected {@linkplain Backend} for the request
-     * @param httpHeaders {@linkplain HttpHeaders} for response
+     * @param socketAddress {@link InetSocketAddress} of Client
+     * @param httpHeaders   {@link HttpHeaders} of Client
      */
-    public HTTPResponse(Backend backend, HttpHeaders httpHeaders) {
-        super(backend);
+    public HTTPBalanceRequest(InetSocketAddress socketAddress, HttpHeaders httpHeaders) {
+        super(socketAddress);
         this.httpHeaders = httpHeaders;
     }
 
     /**
-     * Get {@link HttpHeaders} for {@link HTTPRequest} response.
+     * Get Client {@link HttpHeaders}
      */
     public HttpHeaders getHTTPHeaders() {
         return httpHeaders;
-    }
-
-    @Override
-    public String toString() {
-        return "HTTPResponse{httpHeaders=" + httpHeaders + ", backend=" + getBackend() + '}';
     }
 }

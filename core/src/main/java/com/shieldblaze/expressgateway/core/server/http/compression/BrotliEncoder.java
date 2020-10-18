@@ -37,7 +37,7 @@ public class BrotliEncoder extends MessageToByteEncoder<ByteBuf> {
     private static final InternalLogger logger = InternalLoggerFactory.getInstance(BrotliEncoder.class);
 
     static {
-        logger.info("Brotli Loader Status: {}", Brotli4jLoader.isAvailable());
+        logger.info("Brotli4j Loader Status: {}", Brotli4jLoader.isAvailable());
     }
 
     private final Encoder.Parameters parameters;

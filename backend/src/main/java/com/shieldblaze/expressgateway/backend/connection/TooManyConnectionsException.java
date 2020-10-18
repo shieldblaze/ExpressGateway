@@ -15,25 +15,14 @@
  * You should have received a copy of the GNU General Public License
  * along with ShieldBlaze ExpressGateway.  If not, see <https://www.gnu.org/licenses/>.
  */
-package com.shieldblaze.expressgateway.loadbalance.l7.http;
+package com.shieldblaze.expressgateway.backend.connection;
 
 import com.shieldblaze.expressgateway.backend.Backend;
-import com.shieldblaze.expressgateway.loadbalance.Request;
-import com.shieldblaze.expressgateway.loadbalance.SessionPersistence;
-import io.netty.handler.codec.http.EmptyHttpHeaders;
+import com.shieldblaze.expressgateway.backend.BackendNotAvailableException;
 
-/**
- * No-Operation {@link SessionPersistence}
- */
-final class NOOPSessionPersistence implements SessionPersistence<HTTPBalanceResponse, HTTPBalanceResponse, HTTPBalanceRequest, Backend> {
+public class TooManyConnectionsException extends BackendNotAvailableException {
 
-    @Override
-    public HTTPBalanceResponse getBackend(Request request) {
-        return null;
-    }
-
-    @Override
-    public HTTPBalanceResponse addRoute(HTTPBalanceRequest httpBalanceRequest, Backend backend) {
-        return new HTTPBalanceResponse(backend, EmptyHttpHeaders.INSTANCE);
+    public TooManyConnectionsException(Backend backend) {
+        super("Backend: " + backend.getSocketAddress() + " has too many active connections. Increase Maximum Connection limit to create new connection.");
     }
 }

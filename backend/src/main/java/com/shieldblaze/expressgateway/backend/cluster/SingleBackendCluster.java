@@ -15,25 +15,27 @@
  * You should have received a copy of the GNU General Public License
  * along with ShieldBlaze ExpressGateway.  If not, see <https://www.gnu.org/licenses/>.
  */
-package com.shieldblaze.expressgateway.loadbalance.l7.http;
+package com.shieldblaze.expressgateway.backend.cluster;
 
 import com.shieldblaze.expressgateway.backend.Backend;
-import com.shieldblaze.expressgateway.loadbalance.Request;
-import com.shieldblaze.expressgateway.loadbalance.SessionPersistence;
-import io.netty.handler.codec.http.EmptyHttpHeaders;
 
 /**
- * No-Operation {@link SessionPersistence}
+ * {@linkplain Cluster} with single {@linkplain Backend}
  */
-final class NOOPSessionPersistence implements SessionPersistence<HTTPBalanceResponse, HTTPBalanceResponse, HTTPBalanceRequest, Backend> {
+public final class SingleBackendCluster extends Cluster {
 
-    @Override
-    public HTTPBalanceResponse getBackend(Request request) {
-        return null;
+    private static int count = 0;
+
+    private SingleBackendCluster(String name, Backend backend) {
+        setName(name);
+        addBackend(backend);
     }
 
-    @Override
-    public HTTPBalanceResponse addRoute(HTTPBalanceRequest httpBalanceRequest, Backend backend) {
-        return new HTTPBalanceResponse(backend, EmptyHttpHeaders.INSTANCE);
+    public static SingleBackendCluster of(Backend backend) {
+        return new SingleBackendCluster("SingleBackendCluster#" + count++, backend);
+    }
+
+    public static SingleBackendCluster of(String name, Backend backend) {
+        return new SingleBackendCluster(name, backend);
     }
 }

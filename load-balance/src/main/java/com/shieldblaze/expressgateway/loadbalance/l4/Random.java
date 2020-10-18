@@ -18,6 +18,7 @@
 package com.shieldblaze.expressgateway.loadbalance.l4;
 
 import com.shieldblaze.expressgateway.backend.Backend;
+import com.shieldblaze.expressgateway.backend.cluster.Cluster;
 import com.shieldblaze.expressgateway.loadbalance.SessionPersistence;
 
 import java.net.InetSocketAddress;
@@ -33,26 +34,25 @@ public final class Random extends L4Balance {
         super(new NOOPSessionPersistence());
     }
 
-    public Random(List<Backend> backends) {
-        super(new NOOPSessionPersistence());
-        setBackends(backends);
+    public Random(Cluster cluster) {
+        this(new NOOPSessionPersistence(), cluster);
     }
 
-    public Random(SessionPersistence<Backend, Backend, InetSocketAddress, Backend> sessionPersistence, List<Backend> backends) {
+    public Random(SessionPersistence<Backend, Backend, InetSocketAddress, Backend> sessionPersistence, Cluster cluster) {
         super(sessionPersistence);
-        setBackends(backends);
+        setCluster(cluster);
     }
 
     @Override
     public L4Response getResponse(L4Request l4Request) {
-        Backend backend = sessionPersistence.getBackend(new L4Request(l4Request.getSocketAddress()));
+        Backend backend = sessionPersistence.getBackend(l4Request);
         if (backend != null) {
             return new L4Response(backend);
         }
 
-        int index = RANDOM_INSTANCE.nextInt(backends.size());
+        int index = RANDOM_INSTANCE.nextInt(cluster.available());
 
-        backend = backends.get(index);
+        backend = cluster.getOnline(index);
         sessionPersistence.addRoute(l4Request.getSocketAddress(), backend);
         return new L4Response(backend);
     }

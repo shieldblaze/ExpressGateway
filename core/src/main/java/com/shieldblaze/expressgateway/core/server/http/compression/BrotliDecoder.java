@@ -38,7 +38,7 @@ public class BrotliDecoder extends ByteToMessageDecoder {
     private static final InternalLogger logger = InternalLoggerFactory.getInstance(BrotliDecoder.class);
 
     static {
-        logger.info("Brotli Loader Status: {}", Brotli4jLoader.isAvailable());
+        logger.info("Brotli4j Loader Status: {}", Brotli4jLoader.isAvailable());
     }
 
     /**

@@ -20,10 +20,10 @@ package com.shieldblaze.expressgateway.loadbalance.l4;
 import com.google.common.collect.Range;
 import com.google.common.collect.TreeRangeMap;
 import com.shieldblaze.expressgateway.backend.Backend;
+import com.shieldblaze.expressgateway.backend.cluster.Cluster;
 import com.shieldblaze.expressgateway.loadbalance.SessionPersistence;
 
 import java.net.InetSocketAddress;
-import java.util.List;
 
 /**
  * Select {@link Backend} based on Weight using Round-Robin
@@ -31,33 +31,31 @@ import java.util.List;
 @SuppressWarnings("UnstableApiUsage")
 public final class WeightedRoundRobin extends L4Balance {
 
-    private int index = 0;
     private final TreeRangeMap<Integer, Backend> backendsMap = TreeRangeMap.create();
+    private int index = 0;
     private int totalWeight = 0;
 
     public WeightedRoundRobin() {
         super(new NOOPSessionPersistence());
     }
 
-    public WeightedRoundRobin(List<Backend> backends) {
-        this(new NOOPSessionPersistence(), backends);
+    public WeightedRoundRobin(Cluster cluster) {
+        this(new NOOPSessionPersistence(), cluster);
     }
 
-    public WeightedRoundRobin(SessionPersistence<Backend, Backend, InetSocketAddress, Backend> sessionPersistence, List<Backend> backends) {
+    public WeightedRoundRobin(SessionPersistence<Backend, Backend, InetSocketAddress, Backend> sessionPersistence, Cluster cluster) {
         super(sessionPersistence);
-        setBackends(backends);
+        super.setCluster(cluster);
+        reset(cluster);
     }
 
-    @Override
-    public void setBackends(List<Backend> backends) {
-        super.setBackends(backends);
-        this.backends.forEach(backend -> this.backendsMap.put(Range.closed(totalWeight, totalWeight += backend.getWeight()), backend));
-        backends.clear();
+    private void reset(Cluster cluster) {
+        cluster.getAvailableBackends().forEach(backend -> this.backendsMap.put(Range.closed(totalWeight, totalWeight += backend.getWeight()), backend));
     }
 
     @Override
     public L4Response getResponse(L4Request l4Request) {
-        Backend backend = sessionPersistence.getBackend(new L4Request(l4Request.getSocketAddress()));
+        Backend backend = sessionPersistence.getBackend(l4Request);
         if (backend != null) {
             return new L4Response(backend);
         }

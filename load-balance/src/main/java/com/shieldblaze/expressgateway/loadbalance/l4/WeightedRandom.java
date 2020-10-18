@@ -20,10 +20,13 @@ package com.shieldblaze.expressgateway.loadbalance.l4;
 import com.google.common.collect.Range;
 import com.google.common.collect.TreeRangeMap;
 import com.shieldblaze.expressgateway.backend.Backend;
+import com.shieldblaze.expressgateway.backend.cluster.Cluster;
+import com.shieldblaze.expressgateway.common.concurrent.GlobalExecutors;
 import com.shieldblaze.expressgateway.loadbalance.SessionPersistence;
 
 import java.net.InetSocketAddress;
-import java.util.List;
+import java.util.concurrent.ScheduledFuture;
+import java.util.concurrent.TimeUnit;
 
 /**
  * Select {@link Backend} based on Weight Randomly
@@ -39,25 +42,23 @@ public final class WeightedRandom extends L4Balance {
         super(new NOOPSessionPersistence());
     }
 
-    public WeightedRandom(List<Backend> backends) {
-        this(new NOOPSessionPersistence(), backends);
+    public WeightedRandom(Cluster cluster) {
+        this(new NOOPSessionPersistence(), cluster);
     }
 
-    public WeightedRandom(SessionPersistence<Backend, Backend, InetSocketAddress, Backend> sessionPersistence, List<Backend> backends) {
+    public WeightedRandom(SessionPersistence<Backend, Backend, InetSocketAddress, Backend> sessionPersistence, Cluster cluster) {
         super(sessionPersistence);
-        setBackends(backends);
+        super.setCluster(cluster);
+        reset(cluster);
     }
 
-    @Override
-    public void setBackends(List<Backend> backends) {
-        super.setBackends(backends);
-        this.backends.forEach(backend -> this.backendsMap.put(Range.closed(totalWeight, totalWeight += backend.getWeight()), backend));
-        backends.clear();
+    private void reset(Cluster cluster) {
+        cluster.getAvailableBackends().forEach(backend -> this.backendsMap.put(Range.closed(totalWeight, totalWeight += backend.getWeight()), backend));
     }
 
     @Override
     public L4Response getResponse(L4Request l4Request) {
-        Backend backend = sessionPersistence.getBackend(new L4Request(l4Request.getSocketAddress()));
+        Backend backend = sessionPersistence.getBackend(l4Request);
         if (backend != null) {
             return new L4Response(backend);
         }

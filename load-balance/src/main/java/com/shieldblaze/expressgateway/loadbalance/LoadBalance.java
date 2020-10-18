@@ -17,10 +17,8 @@
  */
 package com.shieldblaze.expressgateway.loadbalance;
 
-import com.shieldblaze.expressgateway.backend.Backend;
+import com.shieldblaze.expressgateway.backend.cluster.Cluster;
 
-import java.util.ArrayList;
-import java.util.List;
 import java.util.Objects;
 
 /**
@@ -28,7 +26,7 @@ import java.util.Objects;
  */
 public abstract class LoadBalance<REQUEST, RESPONSE, KEY, VALUE> {
     protected final SessionPersistence<REQUEST, RESPONSE, KEY, VALUE> sessionPersistence;
-    protected List<Backend> backends;
+    protected Cluster cluster;
 
     /**
      * Create {@link LoadBalance} Instance
@@ -36,24 +34,18 @@ public abstract class LoadBalance<REQUEST, RESPONSE, KEY, VALUE> {
      * @param sessionPersistence {@link SessionPersistence} Instance
      * @throws NullPointerException If {@link SessionPersistence} is {@code null}
      */
-    public LoadBalance(SessionPersistence<REQUEST, RESPONSE, KEY, VALUE>  sessionPersistence) {
+    public LoadBalance(SessionPersistence<REQUEST, RESPONSE, KEY, VALUE> sessionPersistence) {
         this.sessionPersistence = Objects.requireNonNull(sessionPersistence, "sessionPersistence");
     }
 
     /**
-     * Set Backends
+     * Set {@link Cluster} to load balance
      *
-     * @param backends {@link List} of {@link Backend}
-     * @throws IllegalArgumentException If {@link List} of {@link Backend} is Empty.
-     * @throws NullPointerException     If {@link List} of {@link Backend} is {@code null}.
+     * @param cluster {@link Cluster} Instance
      */
-    public void setBackends(List<Backend> backends) {
-        Objects.requireNonNull(backends, "backends");
-        if (backends.size() == 0) {
-            throw new IllegalArgumentException("Backends List Cannot Be Empty");
-        }
-        this.backends = new ArrayList<>(backends);
+    public void setCluster(Cluster cluster) {
+        this.cluster = Objects.requireNonNull(cluster, "cluster");
     }
 
-    public abstract Response getResponse(Request request);
+    public abstract Response getResponse(Request request) throws NoBackendAvailableException;
 }

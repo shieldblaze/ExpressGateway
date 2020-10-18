@@ -18,6 +18,9 @@
 package com.shieldblaze.expressgateway.loadbalance.l4;
 
 import com.shieldblaze.expressgateway.backend.Backend;
+import com.shieldblaze.expressgateway.backend.cluster.Cluster;
+import com.shieldblaze.expressgateway.backend.cluster.ClusterPool;
+import com.shieldblaze.expressgateway.loadbalance.NoBackendAvailableException;
 import org.junit.jupiter.api.Test;
 
 import java.net.InetSocketAddress;
@@ -29,17 +32,18 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 class RandomTest {
 
     @Test
-    void testRandom() {
-        List<Backend> addressList = new ArrayList<>();
+    void testRandom() throws NoBackendAvailableException {
 
         // Add Backend Server Addresses
-        addressList.add(fastBuild("172.16.20.1"));
-        addressList.add(fastBuild("172.16.20.2"));
-        addressList.add(fastBuild("172.16.20.3"));
-        addressList.add(fastBuild("172.16.20.4"));
-        addressList.add(fastBuild("172.16.20.5"));
+        Cluster cluster = ClusterPool.of(
+                fastBuild("172.16.20.1"),
+                fastBuild("172.16.20.2"),
+                fastBuild("172.16.20.3"),
+                fastBuild("172.16.20.4"),
+                fastBuild("172.16.20.5")
+        );
 
-        L4Balance l4Balance = new Random(addressList);
+        L4Balance l4Balance = new Random(cluster);
         L4Request l4Request = new L4Request(new InetSocketAddress("192.168.1.1", 1));
 
         int first = 0;

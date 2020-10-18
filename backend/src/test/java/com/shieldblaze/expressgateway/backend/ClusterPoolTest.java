@@ -17,6 +17,7 @@
  */
 package com.shieldblaze.expressgateway.backend;
 
+import com.shieldblaze.expressgateway.backend.cluster.ClusterPool;
 import com.shieldblaze.expressgateway.backend.healthcheckmanager.DefaultHealthCheckManager;
 import com.shieldblaze.expressgateway.healthcheck.Health;
 import com.shieldblaze.expressgateway.healthcheck.HealthCheck;
@@ -36,7 +37,7 @@ import java.util.concurrent.TimeUnit;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 
-class ClusterTest {
+class ClusterPoolTest {
 
     static TCPServer tcpServer;
 
@@ -50,30 +51,30 @@ class ClusterTest {
 
     @Test
     void testBackendsHealth() throws InterruptedException {
-        Cluster cluster = new Cluster();
+        ClusterPool clusterPool = new ClusterPool();
 
         for (int i = 1; i < 100; i++) {
             HealthCheck healthCheck = new TCPHealthCheck(new InetSocketAddress("127.0.0.1", 10000), Duration.ofMillis(15));
             DefaultHealthCheckManager defaultHealthCheckManager = new DefaultHealthCheckManager(healthCheck, 1, 1, TimeUnit.SECONDS);
-            cluster.addBackend(new Backend("localhost", new InetSocketAddress("192.168.1." + i, i), 100, 100, healthCheck, defaultHealthCheckManager));
+            clusterPool.addBackends(new Backend("localhost", new InetSocketAddress("192.168.1." + i, i), 100, 100, healthCheck, defaultHealthCheckManager));
         }
 
         Thread.sleep(5000L); // Wait for all Health Checks to Finish
 
-        for (Backend backend : cluster.getBackends()) {
+        for (Backend backend : clusterPool.getAvailableBackends()) {
             assertEquals(Health.GOOD, backend.getHealth());
         }
 
-        assertEquals(99, cluster.getAvailableBackends().size());
+        assertEquals(99, clusterPool.getAvailableBackends().size());
 
         tcpServer.stop();
         Thread.sleep(10000L); // Wait for server to stop and all Health Checks to Finish
 
-        for (Backend backend : cluster.getBackends()) {
+        for (Backend backend : clusterPool.getAvailableBackends()) {
             assertEquals(Health.BAD, backend.getHealth());
         }
 
-        assertEquals(0, cluster.getAvailableBackends().size());
+        assertEquals(0, clusterPool.getAvailableBackends().size());
     }
 
     private static final class TCPServer {

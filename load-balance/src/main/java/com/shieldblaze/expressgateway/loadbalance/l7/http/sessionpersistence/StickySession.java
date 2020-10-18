@@ -20,8 +20,8 @@ package com.shieldblaze.expressgateway.loadbalance.l7.http.sessionpersistence;
 import com.shieldblaze.expressgateway.backend.Backend;
 import com.shieldblaze.expressgateway.loadbalance.Request;
 import com.shieldblaze.expressgateway.loadbalance.SessionPersistence;
-import com.shieldblaze.expressgateway.loadbalance.l7.http.HTTPRequest;
-import com.shieldblaze.expressgateway.loadbalance.l7.http.HTTPResponse;
+import com.shieldblaze.expressgateway.loadbalance.l7.http.HTTPBalanceRequest;
+import com.shieldblaze.expressgateway.loadbalance.l7.http.HTTPBalanceResponse;
 import io.netty.handler.codec.http.DefaultHttpHeaders;
 import io.netty.handler.codec.http.EmptyHttpHeaders;
 import io.netty.handler.codec.http.HttpHeaderNames;
@@ -35,7 +35,7 @@ import java.util.Collections;
 import java.util.List;
 import java.util.Objects;
 
-public final class StickySession implements SessionPersistence<HTTPResponse, HTTPResponse, HTTPRequest, Backend> {
+public final class StickySession implements SessionPersistence<HTTPBalanceResponse, HTTPBalanceResponse, HTTPBalanceRequest, Backend> {
 
     private static final String COOKIE_NAME = "X-SBZ-EGW-RouteID";
 
@@ -51,20 +51,20 @@ public final class StickySession implements SessionPersistence<HTTPResponse, HTT
     }
 
     @Override
-    public HTTPResponse getBackend(Request request) {
-        return getBackend((HTTPRequest) request);
+    public HTTPBalanceResponse getBackend(Request request) {
+        return getBackend((HTTPBalanceRequest) request);
     }
 
-    public HTTPResponse getBackend(HTTPRequest httpRequest) {
-        if (httpRequest.getHTTPHeaders().contains(HttpHeaderNames.COOKIE)) {
-            List<String> cookies = httpRequest.getHTTPHeaders().getAllAsString(HttpHeaderNames.COOKIE);
+    public HTTPBalanceResponse getBackend(HTTPBalanceRequest httpBalanceRequest) {
+        if (httpBalanceRequest.getHTTPHeaders().contains(HttpHeaderNames.COOKIE)) {
+            List<String> cookies = httpBalanceRequest.getHTTPHeaders().getAllAsString(HttpHeaderNames.COOKIE);
             for (String cookieAsString : cookies) {
                 Cookie cookie = ClientCookieDecoder.STRICT.decode(cookieAsString);
                 if (cookie.name().equalsIgnoreCase(COOKIE_NAME)) {
                     try {
                         String value = cookie.value();
                         int index = Collections.binarySearch(backends, value, StickySessionSearchComparator.INSTANCE);
-                        return new HTTPResponse(backends.get(index), EmptyHttpHeaders.INSTANCE);
+                        return new HTTPBalanceResponse(backends.get(index), EmptyHttpHeaders.INSTANCE);
                     } catch (Exception ex) {
                         break;
                     }
@@ -76,7 +76,7 @@ public final class StickySession implements SessionPersistence<HTTPResponse, HTT
     }
 
     @Override
-    public HTTPResponse addRoute(HTTPRequest httpRequest, Backend backend) {
+    public HTTPBalanceResponse addRoute(HTTPBalanceRequest httpBalanceRequest, Backend backend) {
         DefaultCookie cookie = new DefaultCookie(COOKIE_NAME, String.valueOf(backend.getHash()));
         cookie.setDomain(backend.getHostname());
         cookie.setPath("/");
@@ -86,7 +86,7 @@ public final class StickySession implements SessionPersistence<HTTPResponse, HTT
         DefaultHttpHeaders defaultHttpHeaders = new DefaultHttpHeaders();
         defaultHttpHeaders.add(HttpHeaderNames.SET_COOKIE, ServerCookieEncoder.STRICT.encode(cookie));
 
-        return new HTTPResponse(backend, defaultHttpHeaders);
+        return new HTTPBalanceResponse(backend, defaultHttpHeaders);
     }
 
     public void setBackends(List<Backend> backends) {

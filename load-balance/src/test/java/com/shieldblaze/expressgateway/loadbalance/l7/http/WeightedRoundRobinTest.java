@@ -18,6 +18,8 @@
 package com.shieldblaze.expressgateway.loadbalance.l7.http;
 
 import com.shieldblaze.expressgateway.backend.Backend;
+import com.shieldblaze.expressgateway.backend.cluster.Cluster;
+import com.shieldblaze.expressgateway.backend.cluster.ClusterPool;
 import io.netty.handler.codec.http.EmptyHttpHeaders;
 import org.junit.jupiter.api.Test;
 
@@ -32,22 +34,23 @@ class WeightedRoundRobinTest {
     @Test
     void testWeightedRoundRobin() {
 
-        List<Backend> backends = new ArrayList<>();
-        backends.add(fastBuild("10.10.1.1", 10));
-        backends.add(fastBuild("10.10.1.2", 20));
-        backends.add(fastBuild("10.10.1.3", 30));
-        backends.add(fastBuild("10.10.1.4", 40));
+        Cluster cluster = ClusterPool.of(
+                fastBuild("10.10.1.1", 10),
+                fastBuild("10.10.1.2", 20),
+                fastBuild("10.10.1.3", 30),
+                fastBuild("10.10.1.4", 40)
+        );
 
         int first = 0;
         int second = 0;
         int third = 0;
         int forth = 0;
 
-        HTTPBalance httpBalance = new WeightedRoundRobin(backends);
-        HTTPRequest httpRequest = new HTTPRequest(new InetSocketAddress("192.168.1.1", 1), EmptyHttpHeaders.INSTANCE);
+        HTTPBalance httpBalance = new WeightedRoundRobin(cluster);
+        HTTPBalanceRequest httpBalanceRequest = new HTTPBalanceRequest(new InetSocketAddress("192.168.1.1", 1), EmptyHttpHeaders.INSTANCE);
 
         for (int i = 0; i < 1000000; i++) {
-            switch (httpBalance.getResponse(httpRequest).getBackend().getSocketAddress().getHostString()) {
+            switch (httpBalance.getResponse(httpBalanceRequest).getBackend().getSocketAddress().getHostString()) {
                 case "10.10.1.1": {
                     first++;
                     break;

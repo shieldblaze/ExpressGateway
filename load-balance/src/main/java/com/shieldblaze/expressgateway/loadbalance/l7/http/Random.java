@@ -18,6 +18,7 @@
 package com.shieldblaze.expressgateway.loadbalance.l7.http;
 
 import com.shieldblaze.expressgateway.backend.Backend;
+import com.shieldblaze.expressgateway.backend.cluster.Cluster;
 import com.shieldblaze.expressgateway.loadbalance.SessionPersistence;
 
 import java.util.List;
@@ -32,26 +33,26 @@ public final class Random extends HTTPBalance {
         super(new NOOPSessionPersistence());
     }
 
-    public Random(List<Backend> backends) {
+    public Random(Cluster cluster) {
         super(new NOOPSessionPersistence());
-        setBackends(backends);
+        super.setCluster(cluster);
     }
 
-    public Random(SessionPersistence<HTTPResponse, HTTPResponse, HTTPRequest, Backend> sessionPersistence, List<Backend> backends) {
+    public Random(SessionPersistence<HTTPBalanceResponse, HTTPBalanceResponse, HTTPBalanceRequest, Backend> sessionPersistence, Cluster cluster) {
         super(sessionPersistence);
-        setBackends(backends);
+        super.setCluster(cluster);
     }
 
     @Override
-    public HTTPResponse getResponse(HTTPRequest httpRequest) {
-        HTTPResponse httpResponse = sessionPersistence.getBackend(httpRequest);
-        if (httpResponse != null) {
-            return httpResponse;
+    public HTTPBalanceResponse getResponse(HTTPBalanceRequest httpBalanceRequest) {
+        HTTPBalanceResponse httpBalanceResponse = sessionPersistence.getBackend(httpBalanceRequest);
+        if (httpBalanceResponse != null) {
+            return httpBalanceResponse;
         }
 
-        int index = RANDOM_INSTANCE.nextInt(backends.size());
+        int index = RANDOM_INSTANCE.nextInt(cluster.available());
 
-        Backend backend = backends.get(index);
-        return sessionPersistence.addRoute(httpRequest, backend);
+        Backend backend = cluster.getOnline(index);
+        return sessionPersistence.addRoute(httpBalanceRequest, backend);
     }
 }

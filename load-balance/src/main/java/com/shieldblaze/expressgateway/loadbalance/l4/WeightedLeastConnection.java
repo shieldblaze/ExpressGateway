@@ -20,13 +20,16 @@ package com.shieldblaze.expressgateway.loadbalance.l4;
 import com.google.common.collect.Range;
 import com.google.common.collect.TreeRangeMap;
 import com.shieldblaze.expressgateway.backend.Backend;
+import com.shieldblaze.expressgateway.backend.cluster.Cluster;
+import com.shieldblaze.expressgateway.common.concurrent.GlobalExecutors;
 import com.shieldblaze.expressgateway.loadbalance.SessionPersistence;
 
 import java.net.InetSocketAddress;
 import java.util.HashMap;
-import java.util.List;
 import java.util.Map;
 import java.util.Map.Entry;
+import java.util.concurrent.ScheduledFuture;
+import java.util.concurrent.TimeUnit;
 
 /**
  * Select {@link Backend} Based on Weight with Least Connection using Round-Robin
@@ -34,59 +37,67 @@ import java.util.Map.Entry;
 @SuppressWarnings("UnstableApiUsage")
 public final class WeightedLeastConnection extends L4Balance {
 
-    private int index = 0;
     private final TreeRangeMap<Integer, Backend> backendsMap = TreeRangeMap.create();
     private final Map<Backend, Integer> localConnectionMap = new HashMap<>();
+    private int index = 0;
     private int totalWeight = 0;
 
     public WeightedLeastConnection() {
         super(new NOOPSessionPersistence());
     }
 
-    public WeightedLeastConnection(List<Backend> backends) {
-        this(new NOOPSessionPersistence(), backends);
+    public WeightedLeastConnection(Cluster cluster) {
+        this(new NOOPSessionPersistence(), cluster);
     }
 
-    public WeightedLeastConnection(SessionPersistence<Backend, Backend, InetSocketAddress, Backend> sessionPersistence, List<Backend> backends) {
+    public WeightedLeastConnection(SessionPersistence<Backend, Backend, InetSocketAddress, Backend> sessionPersistence, Cluster cluster) {
         super(sessionPersistence);
-        setBackends(backends);
+        super.setCluster(cluster);
+        reset();
     }
 
-    @Override
-    public void setBackends(List<Backend> backends) {
-        super.setBackends(backends);
-        this.backends.forEach(backend -> {
-            this.backendsMap.put(Range.closed(totalWeight, totalWeight += backend.getWeight()), backend);
+    private void reset() {
+        if (cluster == null) {
+            return;
+        }
+
+        index = 0;
+        totalWeight = 0;
+
+        backendsMap.clear();
+        localConnectionMap.clear();
+
+        cluster.getAvailableBackends().forEach(backend -> {
+            backendsMap.put(Range.closed(totalWeight, totalWeight += backend.getWeight()), backend);
             localConnectionMap.put(backend, 0);
         });
-        backends.clear();
     }
 
     @Override
     public L4Response getResponse(L4Request l4Request) {
-        Backend _backend = sessionPersistence.getBackend(new L4Request(l4Request.getSocketAddress()));
-        if (_backend != null) {
-            return new L4Response(_backend);
+        Backend backend = sessionPersistence.getBackend(l4Request);
+        if (backend != null) {
+            return new L4Response(backend);
         }
 
         if (index >= totalWeight) {
-            localConnectionMap.replaceAll((backend, i) -> i = 0);
+            localConnectionMap.replaceAll((b, i) -> i = 0);
             index = 0;
         }
 
-        Entry<Range<Integer>, Backend> backend = backendsMap.getEntry(index);
+        Entry<Range<Integer>, Backend> backendEntry = backendsMap.getEntry(index);
         index++;
-        Integer connections = localConnectionMap.get(backend.getValue());
+        Integer connections = localConnectionMap.get(backendEntry.getValue());
 
-        if (connections >= backend.getKey().upperEndpoint()) {
-            localConnectionMap.put(backend.getValue(), 0);
-            index = backend.getKey().upperEndpoint();
+        if (connections >= backendEntry.getKey().upperEndpoint()) {
+            localConnectionMap.put(backendEntry.getValue(), 0);
+            index = backendEntry.getKey().upperEndpoint();
         } else {
-            localConnectionMap.put(backend.getValue(), connections + 1);
+            localConnectionMap.put(backendEntry.getValue(), connections + 1);
         }
 
-        _backend = backend.getValue();
-        sessionPersistence.addRoute(l4Request.getSocketAddress(), _backend);
-        return new L4Response(_backend);
+        backend = backendEntry.getValue();
+        sessionPersistence.addRoute(l4Request.getSocketAddress(), backend);
+        return new L4Response(backend);
     }
 }

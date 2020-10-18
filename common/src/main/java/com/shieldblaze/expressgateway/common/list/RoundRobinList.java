@@ -17,20 +17,40 @@
  */
 package com.shieldblaze.expressgateway.common.list;
 
+import javax.annotation.Nonnull;
+import java.util.Collections;
 import java.util.Iterator;
 import java.util.List;
+import java.util.Objects;
+import java.util.Queue;
+import java.util.concurrent.ConcurrentLinkedQueue;
 
 /**
  * Round-Robin List Implementation
  */
 public final class RoundRobinList<T> implements Iterable<T> {
-    private final List<T> list;
-    private int index = 0;
     private Iterator<T> iterator;
+    private int index = 0;
+
+    public RoundRobinList() {
+        this(Collections.emptyList());
+    }
 
     public RoundRobinList(List<T> list) {
-        this.list = list;
-        this.iterator = new Iterator<T>() {
+        newIterator(list);
+    }
+
+    @Nonnull
+    @Override
+    public Iterator<T> iterator() {
+        return iterator;
+    }
+
+    public void newIterator(List<T> list) {
+        Objects.requireNonNull(list, "list");
+
+        index = 0;
+        this.iterator = new Iterator<>() {
             @Override
             public boolean hasNext() {
                 // Because it's round-robin
@@ -54,17 +74,9 @@ public final class RoundRobinList<T> implements Iterable<T> {
             @Override
             public void remove() {
                 // We don't support removal of elements
+                // because we're just a Round-Robin Iterator.
                 throw new UnsupportedOperationException();
             }
         };
-    }
-
-    @Override
-    public Iterator<T> iterator() {
-        return iterator;
-    }
-
-    public int getIndex() {
-        return index;
     }
 }

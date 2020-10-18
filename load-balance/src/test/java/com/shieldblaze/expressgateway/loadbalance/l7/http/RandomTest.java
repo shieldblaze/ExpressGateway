@@ -18,6 +18,8 @@
 package com.shieldblaze.expressgateway.loadbalance.l7.http;
 
 import com.shieldblaze.expressgateway.backend.Backend;
+import com.shieldblaze.expressgateway.backend.cluster.Cluster;
+import com.shieldblaze.expressgateway.backend.cluster.ClusterPool;
 import io.netty.handler.codec.http.EmptyHttpHeaders;
 import org.junit.jupiter.api.Test;
 
@@ -31,17 +33,16 @@ class RandomTest {
 
     @Test
     void testRandom() {
-        List<Backend> addressList = new ArrayList<>();
+        Cluster cluster = ClusterPool.of(
+                fastBuild("172.16.20.1"),
+                fastBuild("172.16.20.2"),
+                fastBuild("172.16.20.3"),
+                fastBuild("172.16.20.4"),
+                fastBuild("172.16.20.5")
+        );
 
-        // Add Backend Server Addresses
-        addressList.add(fastBuild("172.16.20.1"));
-        addressList.add(fastBuild("172.16.20.2"));
-        addressList.add(fastBuild("172.16.20.3"));
-        addressList.add(fastBuild("172.16.20.4"));
-        addressList.add(fastBuild("172.16.20.5"));
-
-        HTTPBalance httpBalance = new Random(addressList);
-        HTTPRequest httpRequest = new HTTPRequest(new InetSocketAddress("192.168.1.1", 1), EmptyHttpHeaders.INSTANCE);
+        HTTPBalance httpBalance = new Random(cluster);
+        HTTPBalanceRequest httpBalanceRequest = new HTTPBalanceRequest(new InetSocketAddress("192.168.1.1", 1), EmptyHttpHeaders.INSTANCE);
 
         int first = 0;
         int second = 0;
@@ -50,7 +51,7 @@ class RandomTest {
         int fifth = 0;
 
         for (int i = 0; i < 1000; i++) {
-            switch (httpBalance.getResponse(httpRequest).getBackend().getSocketAddress().getHostString()) {
+            switch (httpBalance.getResponse(httpBalanceRequest).getBackend().getSocketAddress().getHostString()) {
                 case "172.16.20.1": {
                     first++;
                     break;

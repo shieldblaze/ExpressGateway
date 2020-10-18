@@ -18,7 +18,9 @@
 package com.shieldblaze.expressgateway.core.server.udp;
 
 import com.shieldblaze.expressgateway.backend.Backend;
-import com.shieldblaze.expressgateway.backend.Cluster;
+import com.shieldblaze.expressgateway.backend.cluster.Cluster;
+import com.shieldblaze.expressgateway.backend.cluster.ClusterPool;
+import com.shieldblaze.expressgateway.backend.cluster.SingleBackendCluster;
 import com.shieldblaze.expressgateway.core.concurrent.async.L4FrontListenerEvent;
 import com.shieldblaze.expressgateway.core.configuration.CommonConfiguration;
 import com.shieldblaze.expressgateway.core.configuration.CommonConfigurationBuilder;
@@ -86,14 +88,12 @@ final class UpstreamHandlerTest {
 
         eventLoopFactory = new EventLoopFactory(commonConfiguration);
 
-        Cluster cluster = new Cluster();
-        cluster.setClusterName("MyCluster");
-        cluster.addBackend(new Backend(new InetSocketAddress("127.0.0.1", 9111)));
+        Cluster clusterPool = SingleBackendCluster.of(new Backend(new InetSocketAddress("127.0.0.1", 9111)));
 
         l4LoadBalancer = L4LoadBalancerBuilder.newBuilder()
                 .withCommonConfiguration(commonConfiguration)
                 .withL4Balance(new RoundRobin())
-                .withCluster(cluster)
+                .withCluster(clusterPool)
                 .withFrontListener(new UDPListener())
                 .withBindAddress(new InetSocketAddress("127.0.0.1", 9110))
                 .build();

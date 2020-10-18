@@ -18,7 +18,9 @@
 package com.shieldblaze.expressgateway.loadbalance.l4;
 
 import com.shieldblaze.expressgateway.backend.Backend;
+import com.shieldblaze.expressgateway.backend.cluster.Cluster;
 import com.shieldblaze.expressgateway.common.list.RoundRobinList;
+import com.shieldblaze.expressgateway.loadbalance.NoBackendAvailableException;
 import com.shieldblaze.expressgateway.loadbalance.SessionPersistence;
 
 import java.net.InetSocketAddress;
@@ -29,35 +31,32 @@ import java.util.List;
  */
 public final class RoundRobin extends L4Balance {
 
-    private RoundRobinList<Backend> backendsRoundRobin;
-
     public RoundRobin() {
         super(new NOOPSessionPersistence());
     }
 
-    public RoundRobin(List<Backend> backends) {
-        this(new NOOPSessionPersistence(), backends);
+    public RoundRobin(Cluster cluster) {
+        this(new NOOPSessionPersistence(), cluster);
     }
 
-    public RoundRobin(SessionPersistence<Backend, Backend, InetSocketAddress, Backend> sessionPersistence, List<Backend> backends) {
+    public RoundRobin(SessionPersistence<Backend, Backend, InetSocketAddress, Backend> sessionPersistence, Cluster cluster) {
         super(sessionPersistence);
-        setBackends(backends);
+        super.setCluster(cluster);
     }
 
     @Override
-    public void setBackends(List<Backend> backends) {
-        super.setBackends(backends);
-        backendsRoundRobin = new RoundRobinList<>(this.backends);
-    }
-
-    @Override
-    public L4Response getResponse(L4Request l4Request) {
-        Backend backend = sessionPersistence.getBackend(new L4Request(l4Request.getSocketAddress()));
+    public L4Response getResponse(L4Request l4Request) throws NoBackendAvailableException {
+        Backend backend = sessionPersistence.getBackend(l4Request);
         if (backend != null) {
             return new L4Response(backend);
         }
 
-        backend = backendsRoundRobin.iterator().next();
+        backend = cluster.next();
+
+        if (backend == null) {
+            throw new NoBackendAvailableException("No Backend available for Cluster: " + cluster);
+        }
+
         sessionPersistence.addRoute(l4Request.getSocketAddress(), backend);
         return new L4Response(backend);
     }

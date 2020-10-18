@@ -18,6 +18,7 @@
 package com.shieldblaze.expressgateway.loadbalance.l7.http;
 
 import com.shieldblaze.expressgateway.backend.Backend;
+import com.shieldblaze.expressgateway.backend.cluster.Cluster;
 import com.shieldblaze.expressgateway.common.list.RoundRobinList;
 import com.shieldblaze.expressgateway.loadbalance.SessionPersistence;
 
@@ -28,35 +29,27 @@ import java.util.List;
  */
 public final class RoundRobin extends HTTPBalance {
 
-    private RoundRobinList<Backend> backendsRoundRobin;
-
     public RoundRobin() {
         super(new NOOPSessionPersistence());
     }
 
-    public RoundRobin(List<Backend> backends) {
-        this(new NOOPSessionPersistence(), backends);
+    public RoundRobin(Cluster cluster) {
+        this(new NOOPSessionPersistence(), cluster);
     }
 
-    public RoundRobin(SessionPersistence<HTTPResponse, HTTPResponse, HTTPRequest, Backend> sessionPersistence, List<Backend> backends) {
+    public RoundRobin(SessionPersistence<HTTPBalanceResponse, HTTPBalanceResponse, HTTPBalanceRequest, Backend> sessionPersistence, Cluster cluster) {
         super(sessionPersistence);
-        setBackends(backends);
+        super.setCluster(cluster);
     }
 
     @Override
-    public void setBackends(List<Backend> backends) {
-        super.setBackends(backends);
-        backendsRoundRobin = new RoundRobinList<>(this.backends);
-    }
-
-    @Override
-    public HTTPResponse getResponse(HTTPRequest httpRequest) {
-        HTTPResponse httpResponse = sessionPersistence.getBackend(httpRequest);
-        if (httpResponse != null) {
-            return httpResponse;
+    public HTTPBalanceResponse getResponse(HTTPBalanceRequest httpBalanceRequest) {
+        HTTPBalanceResponse httpBalanceResponse = sessionPersistence.getBackend(httpBalanceRequest);
+        if (httpBalanceResponse != null) {
+            return httpBalanceResponse;
         }
 
-        Backend backend = backendsRoundRobin.iterator().next();
-        return sessionPersistence.addRoute(httpRequest, backend);
+        Backend backend = cluster.next();
+        return sessionPersistence.addRoute(httpBalanceRequest, backend);
     }
 }

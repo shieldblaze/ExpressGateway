@@ -18,6 +18,9 @@
 package com.shieldblaze.expressgateway.loadbalance.l4;
 
 import com.shieldblaze.expressgateway.backend.Backend;
+import com.shieldblaze.expressgateway.backend.cluster.ClusterPool;
+import com.shieldblaze.expressgateway.backend.cluster.SingleBackendCluster;
+import com.shieldblaze.expressgateway.loadbalance.NoBackendAvailableException;
 import org.junit.jupiter.api.Test;
 
 import java.net.InetSocketAddress;
@@ -30,11 +33,9 @@ import static org.junit.jupiter.api.Assertions.assertThrows;
 class NATForwardTest {
 
     @Test
-    void testNATForward() {
-        List<Backend> addressList = new ArrayList<>();
-        addressList.add(fastBuild("192.168.1.1"));
+    void testNATForward() throws NoBackendAvailableException {
 
-        L4Balance l4Balance = new NATForward(addressList);
+        L4Balance l4Balance = new NATForward(SingleBackendCluster.of(fastBuild("192.168.1.1")));
 
         assertEquals(fastBuild("192.168.1.1").getSocketAddress(),
                 l4Balance.getResponse(new L4Request(new InetSocketAddress("10.10.10.1", 1))).getBackend().getSocketAddress());
@@ -48,11 +49,7 @@ class NATForwardTest {
 
     @Test
     void throwException() {
-        List<Backend> addressList = new ArrayList<>();
-        addressList.add(fastBuild("192.168.1.1"));
-        addressList.add(fastBuild("192.168.1.2"));
-
-        assertThrows(IllegalArgumentException.class, () -> new NATForward(addressList));
+        assertThrows(IllegalArgumentException.class, () -> new NATForward(ClusterPool.of(fastBuild("192.168.1.1"), fastBuild("192.168.1.2"))));
     }
 
     private Backend fastBuild(String host) {

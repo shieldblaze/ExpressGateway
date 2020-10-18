@@ -17,7 +17,9 @@
  */
 package com.shieldblaze.expressgateway.core.loadbalancer.l7;
 
-import com.shieldblaze.expressgateway.backend.Cluster;
+import com.shieldblaze.expressgateway.backend.cluster.Cluster;
+import com.shieldblaze.expressgateway.backend.cluster.ClusterPool;
+import com.shieldblaze.expressgateway.backend.connection.ConnectionManager;
 import com.shieldblaze.expressgateway.core.concurrent.async.L4FrontListenerEvent;
 import com.shieldblaze.expressgateway.core.configuration.CommonConfiguration;
 import com.shieldblaze.expressgateway.core.server.L4FrontListener;
@@ -42,24 +44,28 @@ public abstract class L7LoadBalancer {
     private final L7FrontListener l7FrontListener;
     private final Cluster cluster;
     private final CommonConfiguration commonConfiguration;
+    private final ConnectionManager connectionManager;
 
     private final ByteBufAllocator byteBufAllocator;
     private final EventLoopFactory eventLoopFactory;
 
     /**
-     * @param bindAddress         {@link InetSocketAddress} on which {@link L4FrontListener} will bind and listen.
-     * @param HTTPBalance           {@link HTTPBalance} for Load Balance
+     * @param bindAddress         {@link InetSocketAddress} on which {@link L7FrontListener} will bind and listen.
+     * @param HTTPBalance         {@link HTTPBalance} for Load Balance
      * @param l7FrontListener     {@link L7FrontListener} for listening and handling traffic
      * @param cluster             {@link Cluster} to be Load Balanced
      * @param commonConfiguration {@link CommonConfiguration} to be applied
+     * @param connectionManager   {@link ConnectionManager} to use
      * @throws NullPointerException If any parameter is {@code null}
      */
-    public L7LoadBalancer(InetSocketAddress bindAddress, HTTPBalance HTTPBalance, L7FrontListener l7FrontListener, Cluster cluster, CommonConfiguration commonConfiguration) {
+    public L7LoadBalancer(InetSocketAddress bindAddress, HTTPBalance HTTPBalance, L7FrontListener l7FrontListener, Cluster cluster,
+                          CommonConfiguration commonConfiguration, ConnectionManager connectionManager) {
         this.bindAddress = Objects.requireNonNull(bindAddress, "bindAddress");
         this.HTTPBalance = Objects.requireNonNull(HTTPBalance, "l7Balance");
         this.l7FrontListener = Objects.requireNonNull(l7FrontListener, "l7FrontListener");
         this.cluster = Objects.requireNonNull(cluster, "cluster");
         this.commonConfiguration = Objects.requireNonNull(commonConfiguration);
+        this.connectionManager = Objects.requireNonNull(connectionManager, "connectionManager");
         this.byteBufAllocator = new PooledByteBufAllocator(commonConfiguration.getPooledByteBufAllocatorConfiguration()).getInstance();
         this.eventLoopFactory = new EventLoopFactory(commonConfiguration);
     }
@@ -116,6 +122,13 @@ public abstract class L7LoadBalancer {
      */
     public CommonConfiguration getCommonConfiguration() {
         return commonConfiguration;
+    }
+
+    /**
+     * Get {@link ConnectionManager} to use
+     */
+    public ConnectionManager getConnectionManager() {
+        return connectionManager;
     }
 
     /**

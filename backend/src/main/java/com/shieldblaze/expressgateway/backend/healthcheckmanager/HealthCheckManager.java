@@ -18,7 +18,7 @@
 package com.shieldblaze.expressgateway.backend.healthcheckmanager;
 
 import com.shieldblaze.expressgateway.backend.Backend;
-import com.shieldblaze.expressgateway.common.concurrent.GlobalEventExecutors;
+import com.shieldblaze.expressgateway.common.concurrent.GlobalExecutors;
 import com.shieldblaze.expressgateway.healthcheck.HealthCheck;
 import io.netty.util.internal.ObjectUtil;
 
@@ -45,7 +45,7 @@ public abstract class HealthCheckManager implements Runnable {
 
     public void initialize() {
        if (scheduledFutureHealthCheck == null) {
-           scheduledFutureHealthCheck = GlobalEventExecutors.INSTANCE.submitTaskAndRunEvery(healthCheck, initialDelay, time, timeUnit);
+           scheduledFutureHealthCheck = GlobalExecutors.INSTANCE.submitTaskAndRunEvery(healthCheck, initialDelay, time, timeUnit);
        }
     }
 
