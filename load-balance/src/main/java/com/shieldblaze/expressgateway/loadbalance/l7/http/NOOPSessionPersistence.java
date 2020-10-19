@@ -36,4 +36,14 @@ final class NOOPSessionPersistence implements SessionPersistence<HTTPBalanceResp
     public HTTPBalanceResponse addRoute(HTTPBalanceRequest httpBalanceRequest, Backend backend) {
         return new HTTPBalanceResponse(backend, EmptyHttpHeaders.INSTANCE);
     }
+
+    @Override
+    public boolean removeRoute(HTTPBalanceRequest httpBalanceRequest, Backend backend) {
+        return false;
+    }
+
+    @Override
+    public void clear() {
+        // Does nothing
+    }
 }

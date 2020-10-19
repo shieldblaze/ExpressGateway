@@ -22,10 +22,12 @@ import com.shieldblaze.expressgateway.backend.Backend;
 /**
  * Session Persistence is used to route a request to specific {@linkplain Backend}.
  *
- * @param <REQUEST> Request Type for {@linkplain #getBackend(Request)}
- * @param <RESPONSE> Response Type for {@linkplain #addRoute(Object, Object)}
- * @param <KEY> Key Type to use for {@linkplain #addRoute(Object, Object)}
- * @param <VALUE> Value Type to use for {@linkplain #addRoute(Object, Object)}
+ * <p></p>
+ *
+ * @param <REQUEST>  Request Type for {@linkplain #getBackend(Request)}
+ * @param <RESPONSE> Response Type for {@linkplain #addRoute(KEY, VALUE)} and {@linkplain #removeRoute(KEY, VALUE)}
+ * @param <KEY>      Key Type to use for {@linkplain #addRoute(KEY, VALUE)} and {@linkplain #removeRoute(KEY, VALUE)}
+ * @param <VALUE>    Value Type to use for {@linkplain #addRoute(KEY, VALUE)} and {@linkplain #removeRoute(KEY, VALUE)}
  */
 public interface SessionPersistence<REQUEST, RESPONSE, KEY, VALUE> {
 
@@ -40,4 +42,16 @@ public interface SessionPersistence<REQUEST, RESPONSE, KEY, VALUE> {
      * Add a Key-Value which maps to {@linkplain VALUE}
      */
     RESPONSE addRoute(KEY key, VALUE value);
+
+    /**
+     * Remove a Key-Value which maps to {@linkplain VALUE}
+     *
+     * @return Returns {@code true} if removal was successful else {@code false}
+     */
+    boolean removeRoute(KEY key, VALUE value);
+
+    /**
+     * Clear all Key-Value entries
+     */
+    void clear();
 }

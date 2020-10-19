@@ -46,7 +46,7 @@ class StickySessionTest {
             InetSocketAddress socketAddress = new InetSocketAddress("192.168.1." + i,1);
             HTTPBalanceRequest httpBalanceRequest = new HTTPBalanceRequest(socketAddress, EmptyHttpHeaders.INSTANCE);
 
-            RoundRobin roundRobin = new RoundRobin(new StickySession(cluster.getOnlineBackends()), cluster);
+            RoundRobin roundRobin = new RoundRobin(new StickySession(), cluster);
             HTTPBalanceResponse httpBalanceResponse = roundRobin.getResponse(httpBalanceRequest);
             assertEquals(cluster.get(0), httpBalanceResponse.getBackend());
 

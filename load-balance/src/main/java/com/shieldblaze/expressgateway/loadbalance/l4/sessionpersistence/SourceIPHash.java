@@ -68,6 +68,22 @@ public final class SourceIPHash implements SessionPersistence<Backend, Backend, 
         return value;
     }
 
+    @Override
+    public boolean removeRoute(InetSocketAddress socketAddress, Backend backend) {
+        Object key;
+        if (socketAddress.getAddress() instanceof Inet4Address) {
+            key = ipv4WithMask(socketAddress);
+        } else {
+            key = ipv6WithMask(socketAddress);
+        }
+        return routeMap.remove(key, backend);
+    }
+
+    @Override
+    public void clear() {
+        routeMap.clear();
+    }
+
     private int ipv4WithMask(Request request) {
         return ipv4WithMask(request.getSocketAddress());
     }

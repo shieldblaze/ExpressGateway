@@ -18,12 +18,14 @@
 package com.shieldblaze.expressgateway.loadbalance.l7.http;
 
 import com.shieldblaze.expressgateway.backend.Backend;
+import com.shieldblaze.expressgateway.backend.State;
 import com.shieldblaze.expressgateway.backend.cluster.Cluster;
 import com.shieldblaze.expressgateway.backend.events.BackendEvent;
 import com.shieldblaze.expressgateway.common.eventstream.EventListener;
 import com.shieldblaze.expressgateway.common.list.RoundRobinList;
-import com.shieldblaze.expressgateway.loadbalance.exceptions.LoadBalanceException;
 import com.shieldblaze.expressgateway.loadbalance.SessionPersistence;
+import com.shieldblaze.expressgateway.loadbalance.exceptions.LoadBalanceException;
+import com.shieldblaze.expressgateway.loadbalance.exceptions.NoBackendAvailableException;
 
 /**
  * Select {@link Backend} based on Round-Robin
@@ -56,13 +58,21 @@ public final class RoundRobin extends HTTPBalance implements EventListener {
     public HTTPBalanceResponse getResponse(HTTPBalanceRequest httpBalanceRequest) throws LoadBalanceException {
         HTTPBalanceResponse httpBalanceResponse = sessionPersistence.getBackend(httpBalanceRequest);
         if (httpBalanceResponse != null) {
-            return httpBalanceResponse;
+            // If Backend is ONLINE then return the response
+            // else remove it from session persistence.
+            if (httpBalanceResponse.getBackend().getState() == State.ONLINE) {
+                return httpBalanceResponse;
+            } else {
+                sessionPersistence.removeRoute(httpBalanceRequest, httpBalanceResponse.getBackend());
+            }
         }
 
         Backend backend = roundRobinList.iterator().next();
 
+        // If Backend is `null` then we don't have any
+        // backend to return so we will throw exception.
         if (backend == null) {
-            throw new LoadBalanceException("No Backend available for Cluster: " + cluster);
+            throw new NoBackendAvailableException("No Backend available for Cluster: " + cluster);
         }
 
         return sessionPersistence.addRoute(httpBalanceRequest, backend);
@@ -78,6 +88,7 @@ public final class RoundRobin extends HTTPBalance implements EventListener {
                 case OFFLINE:
                 case REMOVED:
                     roundRobinList.newIterator(cluster.getOnlineBackends());
+                    sessionPersistence.clear();
                 default:
                     throw new IllegalArgumentException("Unsupported Backend Event Type: " + backendEvent.getType());
             }

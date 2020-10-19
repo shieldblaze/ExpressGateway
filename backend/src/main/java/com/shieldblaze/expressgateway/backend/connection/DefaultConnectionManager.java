@@ -56,6 +56,8 @@ public final class DefaultConnectionManager extends ConnectionManager {
             throw new TooManyConnectionsException(backend);
         }
 
+        backend.incConnections(); // Increment number of connections in Backend
+
         // Create a new connection
         connection = new Connection();
         activeConnections.add(connection);

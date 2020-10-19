@@ -41,6 +41,7 @@ final class ConnectionLifecycleManager implements Runnable {
         connectionManager.activeConnections.forEach(connection -> {
             if (!connection.isActive()) {
                 connectionManager.activeConnections.remove(connection);
+                connectionManager.backend.decConnections();
             }
         });
 

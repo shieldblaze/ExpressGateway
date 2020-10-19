@@ -20,10 +20,12 @@ package com.shieldblaze.expressgateway.loadbalance.l4;
 import com.google.common.collect.Range;
 import com.google.common.collect.TreeRangeMap;
 import com.shieldblaze.expressgateway.backend.Backend;
+import com.shieldblaze.expressgateway.backend.State;
 import com.shieldblaze.expressgateway.backend.cluster.Cluster;
 import com.shieldblaze.expressgateway.backend.events.BackendEvent;
 import com.shieldblaze.expressgateway.common.eventstream.EventListener;
 import com.shieldblaze.expressgateway.loadbalance.SessionPersistence;
+import com.shieldblaze.expressgateway.loadbalance.exceptions.BackendNotOnlineException;
 
 import java.net.InetSocketAddress;
 
@@ -58,14 +60,22 @@ public final class WeightedRoundRobin extends L4Balance implements EventListener
     }
 
     private void reset() {
-        cluster.getOnlineBackends().forEach(backend -> this.backendsMap.put(Range.closed(totalWeight, totalWeight += backend.getWeight()), backend));
+        sessionPersistence.clear();
+        backendsMap.clear();
+        cluster.getOnlineBackends().forEach(backend -> backendsMap.put(Range.closed(totalWeight, totalWeight += backend.getWeight()), backend));
     }
 
     @Override
-    public L4Response getResponse(L4Request l4Request) {
+    public L4Response getResponse(L4Request l4Request) throws BackendNotOnlineException {
         Backend backend = sessionPersistence.getBackend(l4Request);
         if (backend != null) {
-            return new L4Response(backend);
+            // If Backend is ONLINE then return the response
+            // else remove it from session persistence.
+            if (backend.getState() == State.ONLINE) {
+                return new L4Response(backend);
+            } else {
+                sessionPersistence.removeRoute(l4Request.getSocketAddress(), backend);
+            }
         }
 
         if (index >= totalWeight) {
@@ -73,6 +83,19 @@ public final class WeightedRoundRobin extends L4Balance implements EventListener
         }
 
         backend = backendsMap.get(index);
+
+        if (backend == null) {
+            // If Backend is `null` then we don't have any
+            // backend to return so we will throw exception.
+            throw new BackendNotOnlineException("No Backend available for Cluster: " + cluster);
+        } else if (backend.getState() != State.ONLINE) {
+            reset(); // We'll reset the mapping because it could be outdated.
+
+            // If selected Backend is not online then
+            // we'll throw an exception.
+            throw new BackendNotOnlineException("Randomly selected Backend is not online");
+        }
+
         index++;
         sessionPersistence.addRoute(l4Request.getSocketAddress(), backend);
         return new L4Response(backend);

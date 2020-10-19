@@ -18,12 +18,14 @@
 package com.shieldblaze.expressgateway.loadbalance.l4;
 
 import com.shieldblaze.expressgateway.backend.Backend;
+import com.shieldblaze.expressgateway.backend.State;
 import com.shieldblaze.expressgateway.backend.cluster.Cluster;
 import com.shieldblaze.expressgateway.backend.events.BackendEvent;
 import com.shieldblaze.expressgateway.common.eventstream.EventListener;
 import com.shieldblaze.expressgateway.common.list.RoundRobinList;
 import com.shieldblaze.expressgateway.loadbalance.exceptions.LoadBalanceException;
 import com.shieldblaze.expressgateway.loadbalance.SessionPersistence;
+import com.shieldblaze.expressgateway.loadbalance.exceptions.NoBackendAvailableException;
 
 import java.net.InetSocketAddress;
 import java.util.Optional;
@@ -63,7 +65,13 @@ public final class LeastConnection extends L4Balance implements EventListener {
     public L4Response getResponse(L4Request l4Request) throws LoadBalanceException {
         Backend backend = sessionPersistence.getBackend(l4Request);
         if (backend != null) {
-            return new L4Response(backend);
+            // If Backend is ONLINE then return the response
+            // else remove it from session persistence.
+            if (backend.getState() == State.ONLINE) {
+                return new L4Response(backend);
+            } else {
+                sessionPersistence.removeRoute(l4Request.getSocketAddress(), backend);
+            }
         }
 
         // Get Number Of Maximum Connection on a Backend
@@ -78,9 +86,13 @@ public final class LeastConnection extends L4Balance implements EventListener {
                 .findFirst();
 
         backend = optionalBackend.orElseGet(() -> roundRobinList.iterator().next());
+
+        // If Backend is `null` then we don't have any
+        // backend to return so we will throw exception.
         if (backend == null) {
-            throw new LoadBalanceException("No Backend available for Cluster: " + cluster);
+            throw new NoBackendAvailableException("No Backend available for Cluster: " + cluster);
         }
+
         sessionPersistence.addRoute(l4Request.getSocketAddress(), backend);
         return new L4Response(backend);
     }
@@ -95,6 +107,7 @@ public final class LeastConnection extends L4Balance implements EventListener {
                 case OFFLINE:
                 case REMOVED:
                     roundRobinList.newIterator(cluster.getOnlineBackends());
+                    sessionPersistence.clear();
                 default:
                     throw new IllegalArgumentException("Unsupported Backend Event Type: " + backendEvent.getType());
             }

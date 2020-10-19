@@ -20,6 +20,7 @@ package com.shieldblaze.expressgateway.loadbalance.l4;
 import com.google.common.collect.Range;
 import com.google.common.collect.TreeRangeMap;
 import com.shieldblaze.expressgateway.backend.Backend;
+import com.shieldblaze.expressgateway.backend.State;
 import com.shieldblaze.expressgateway.backend.cluster.Cluster;
 import com.shieldblaze.expressgateway.backend.events.BackendEvent;
 import com.shieldblaze.expressgateway.common.eventstream.EventListener;
@@ -67,6 +68,7 @@ public final class WeightedLeastConnection extends L4Balance implements EventLis
 
         backendsMap.clear();
         localConnectionMap.clear();
+        sessionPersistence.clear();
 
         cluster.getOnlineBackends().forEach(backend -> {
             backendsMap.put(Range.closed(totalWeight, totalWeight += backend.getWeight()), backend);
@@ -78,7 +80,13 @@ public final class WeightedLeastConnection extends L4Balance implements EventLis
     public L4Response getResponse(L4Request l4Request) {
         Backend backend = sessionPersistence.getBackend(l4Request);
         if (backend != null) {
-            return new L4Response(backend);
+            // If Backend is ONLINE then return the response
+            // else remove it from session persistence.
+            if (backend.getState() == State.ONLINE) {
+                return new L4Response(backend);
+            } else {
+                sessionPersistence.removeRoute(l4Request.getSocketAddress(), backend);
+            }
         }
 
         if (index >= totalWeight) {

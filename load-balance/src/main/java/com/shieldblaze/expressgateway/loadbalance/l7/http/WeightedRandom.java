@@ -20,10 +20,12 @@ package com.shieldblaze.expressgateway.loadbalance.l7.http;
 import com.google.common.collect.Range;
 import com.google.common.collect.TreeRangeMap;
 import com.shieldblaze.expressgateway.backend.Backend;
+import com.shieldblaze.expressgateway.backend.State;
 import com.shieldblaze.expressgateway.backend.cluster.Cluster;
 import com.shieldblaze.expressgateway.backend.events.BackendEvent;
 import com.shieldblaze.expressgateway.common.eventstream.EventListener;
 import com.shieldblaze.expressgateway.loadbalance.SessionPersistence;
+import com.shieldblaze.expressgateway.loadbalance.exceptions.BackendNotOnlineException;
 
 /**
  * Select {@link Backend} based on Weight Randomly
@@ -56,18 +58,38 @@ public final class WeightedRandom extends HTTPBalance implements EventListener {
     }
 
     private void reset() {
+        sessionPersistence.clear();
         cluster.getOnlineBackends().forEach(backend -> this.backendsMap.put(Range.closed(totalWeight, totalWeight += backend.getWeight()), backend));
     }
 
     @Override
-    public HTTPBalanceResponse getResponse(HTTPBalanceRequest httpBalanceRequest) {
+    public HTTPBalanceResponse getResponse(HTTPBalanceRequest httpBalanceRequest) throws BackendNotOnlineException {
         HTTPBalanceResponse httpBalanceResponse = sessionPersistence.getBackend(httpBalanceRequest);
         if (httpBalanceResponse != null) {
-            return httpBalanceResponse;
+            // If Backend is ONLINE then return the response
+            // else remove it from session persistence.
+            if (httpBalanceResponse.getBackend().getState() == State.ONLINE) {
+                return httpBalanceResponse;
+            } else {
+                sessionPersistence.removeRoute(httpBalanceRequest, httpBalanceResponse.getBackend());
+            }
         }
 
         int index = RANDOM_INSTANCE.nextInt(totalWeight);
         Backend backend = backendsMap.get(index);
+
+        if (backend == null) {
+            // If Backend is `null` then we don't have any
+            // backend to return so we will throw exception.
+            throw new BackendNotOnlineException("No Backend available for Cluster: " + cluster);
+        } else if (backend.getState() != State.ONLINE) {
+            reset(); // We'll reset the mapping because it could be outdated.
+
+            // If selected Backend is not online then
+            // we'll throw an exception.
+            throw new BackendNotOnlineException("Randomly selected Backend is not online");
+        }
+
         return sessionPersistence.addRoute(httpBalanceRequest, backend);
     }
 

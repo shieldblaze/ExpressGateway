@@ -34,21 +34,13 @@ import io.netty.handler.codec.http.cookie.ServerCookieEncoder;
 import java.util.Collections;
 import java.util.List;
 import java.util.Objects;
+import java.util.concurrent.CopyOnWriteArrayList;
 
 public final class StickySession implements SessionPersistence<HTTPBalanceResponse, HTTPBalanceResponse, HTTPBalanceRequest, Backend> {
 
     private static final String COOKIE_NAME = "X-SBZ-EGW-RouteID";
 
-    private List<Backend> backends;
-
-    public StickySession() {
-       this(Collections.emptyList());
-    }
-
-    public StickySession(List<Backend> backends) {
-        this.backends = backends;
-        Collections.sort(this.backends);
-    }
+    private final List<Backend> backends = new CopyOnWriteArrayList<>();
 
     @Override
     public HTTPBalanceResponse getBackend(Request request) {
@@ -86,11 +78,25 @@ public final class StickySession implements SessionPersistence<HTTPBalanceRespon
         DefaultHttpHeaders defaultHttpHeaders = new DefaultHttpHeaders();
         defaultHttpHeaders.add(HttpHeaderNames.SET_COOKIE, ServerCookieEncoder.STRICT.encode(cookie));
 
+        addIfAbsent(backend);
+
         return new HTTPBalanceResponse(backend, defaultHttpHeaders);
     }
 
-    public void setBackends(List<Backend> backends) {
-        this.backends = Objects.requireNonNull(backends, "Backends");
-        Collections.sort(this.backends);
+    @Override
+    public boolean removeRoute(HTTPBalanceRequest httpBalanceRequest, Backend backend) {
+        return this.backends.remove(backend);
+    }
+
+    @Override
+    public void clear() {
+        backends.clear();
+    }
+
+    private void addIfAbsent(Backend backend) {
+        if (!backends.contains(backend)) {
+            backends.add(backend);
+            Collections.sort(backends);
+        }
     }
 }

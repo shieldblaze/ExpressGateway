@@ -18,17 +18,21 @@
 package com.shieldblaze.expressgateway.loadbalance.l4;
 
 import com.shieldblaze.expressgateway.backend.Backend;
+import com.shieldblaze.expressgateway.backend.State;
 import com.shieldblaze.expressgateway.backend.cluster.Cluster;
+import com.shieldblaze.expressgateway.backend.events.BackendEvent;
 import com.shieldblaze.expressgateway.backend.exceptions.BackendNotOnlineException;
+import com.shieldblaze.expressgateway.common.eventstream.EventListener;
 import com.shieldblaze.expressgateway.loadbalance.exceptions.LoadBalanceException;
 import com.shieldblaze.expressgateway.loadbalance.SessionPersistence;
+import com.shieldblaze.expressgateway.loadbalance.exceptions.NoBackendAvailableException;
 
 import java.net.InetSocketAddress;
 
 /**
  * Select {@link Backend} Randomly
  */
-public final class Random extends L4Balance {
+public final class Random extends L4Balance implements EventListener {
     private final java.util.Random RANDOM_INSTANCE = new java.util.Random();
 
     public Random() {
@@ -48,7 +52,13 @@ public final class Random extends L4Balance {
     public L4Response getResponse(L4Request l4Request) throws LoadBalanceException {
         Backend backend = sessionPersistence.getBackend(l4Request);
         if (backend != null) {
-            return new L4Response(backend);
+            // If Backend is ONLINE then return the response
+            // else remove it from session persistence.
+            if (backend.getState() == State.ONLINE) {
+                return new L4Response(backend);
+            } else {
+                sessionPersistence.removeRoute(l4Request.getSocketAddress(), backend);
+            }
         }
 
         int index = RANDOM_INSTANCE.nextInt(cluster.online());
@@ -56,11 +66,30 @@ public final class Random extends L4Balance {
         try {
             backend = cluster.getOnline(index);
         } catch (BackendNotOnlineException e) {
-            throw new LoadBalanceException("Randomly selected Backend is not online");
+            // If selected Backend is not online then
+            // we'll throw an exception. However, this should
+            // rarely or never happen in most cases.
+            throw new NoBackendAvailableException("Randomly selected Backend is not online");
         }
 
         // Add to session persistence
         sessionPersistence.addRoute(l4Request.getSocketAddress(), backend);
         return new L4Response(backend);
+    }
+
+    @Override
+    public void accept(Object event) {
+        if (event instanceof BackendEvent) {
+            BackendEvent backendEvent = (BackendEvent) event;
+            switch (backendEvent.getType()) {
+                case ADDED:
+                case ONLINE:
+                case OFFLINE:
+                case REMOVED:
+                    sessionPersistence.clear();
+                default:
+                    throw new IllegalArgumentException("Unsupported Backend Event Type: " + backendEvent.getType());
+            }
+        }
     }
 }

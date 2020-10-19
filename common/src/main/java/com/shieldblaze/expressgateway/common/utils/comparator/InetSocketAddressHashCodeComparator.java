@@ -15,36 +15,24 @@
  * You should have received a copy of the GNU General Public License
  * along with ShieldBlaze ExpressGateway.  If not, see <https://www.gnu.org/licenses/>.
  */
-package com.shieldblaze.expressgateway.loadbalance.l4;
-
-import com.shieldblaze.expressgateway.backend.Backend;
-import com.shieldblaze.expressgateway.loadbalance.Request;
-import com.shieldblaze.expressgateway.loadbalance.SessionPersistence;
+package com.shieldblaze.expressgateway.common.utils.comparator;
 
 import java.net.InetSocketAddress;
+import java.util.Comparator;
 
 /**
- * No-Operation {@link SessionPersistence}
+ * {@link InetSocketAddress} comparator using hash code.
  */
-final class NOOPSessionPersistence implements SessionPersistence<Backend, Backend, InetSocketAddress, Backend> {
+public final class InetSocketAddressHashCodeComparator implements Comparator<InetSocketAddress> {
 
-    @Override
-    public Backend getBackend(Request request) {
-        return null;
+    public static final InetSocketAddressHashCodeComparator INSTANCE = new InetSocketAddressHashCodeComparator();
+
+    private InetSocketAddressHashCodeComparator() {
+        // Prevent outside initialization
     }
 
     @Override
-    public Backend addRoute(InetSocketAddress socketAddress, Backend backend) {
-        return null;
-    }
-
-    @Override
-    public boolean removeRoute(InetSocketAddress inetSocketAddress, Backend backend) {
-        return false;
-    }
-
-    @Override
-    public void clear() {
-        // Does nothing
+    public int compare(InetSocketAddress o1, InetSocketAddress o2) {
+        return Integer.compare(o1.hashCode(), o2.hashCode());
     }
 }
