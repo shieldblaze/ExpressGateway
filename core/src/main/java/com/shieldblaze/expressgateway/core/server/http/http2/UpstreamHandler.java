@@ -56,8 +56,8 @@ public class UpstreamHandler extends Http2ChannelDuplexHandler {
     private void onHeaderRead(ChannelHandlerContext ctx, Http2HeadersFrame http2HeadersFrame) throws Exception {
         Http2Headers headers = http2HeadersFrame.headers();
 
-        HTTPBalanceResponse httpBalanceResponse = httpBalance.getResponse(new HTTPBalanceRequest((InetSocketAddress) ctx.channel().remoteAddress(),
-                getHeaders(http2HeadersFrame)));
+        InetSocketAddress remoteAddress = (InetSocketAddress) ctx.channel().remoteAddress();
+        HTTPBalanceResponse httpBalanceResponse = httpBalance.getResponse(new HTTPBalanceRequest(remoteAddress, getHeaders(http2HeadersFrame)));
         if (httpBalanceResponse == null) {
             sendErrorResponse(ctx, HTTPResponses.BAD_GATEWAY, http2HeadersFrame.padding());
             return;
@@ -75,6 +75,7 @@ public class UpstreamHandler extends Http2ChannelDuplexHandler {
 
     }
 
+    @SuppressWarnings("lgtm[java/netty-http-response-splitting]")
     private HttpHeaders getHeaders(Http2HeadersFrame http2HeadersFrame) throws Http2Exception {
         Http2Headers headers = http2HeadersFrame.headers();
         DefaultHttpHeaders defaultHttpHeaders = new DefaultHttpHeaders(false);
@@ -82,6 +83,7 @@ public class UpstreamHandler extends Http2ChannelDuplexHandler {
         return defaultHttpHeaders;
     }
 
+    @SuppressWarnings("lgtm[java/netty-http-response-splitting]")
     private void sendErrorResponse(ChannelHandlerContext ctx, FullHttpResponse _fullHttpResponse, int padding) {
         FullHttpResponse fullHttpResponse = _fullHttpResponse.retainedDuplicate();
         fullHttpResponse.headers().remove(HttpHeaderNames.CONNECTION);
