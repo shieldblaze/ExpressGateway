@@ -54,6 +54,7 @@ public final class WeightedRandom extends L4Balance implements EventListener {
     public void setCluster(Cluster cluster) {
         super.setCluster(cluster);
         reset();
+        cluster.subscribeStream(this);
     }
 
     private void reset() {

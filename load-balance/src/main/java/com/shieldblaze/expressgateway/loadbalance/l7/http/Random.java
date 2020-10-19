@@ -34,8 +34,7 @@ public final class Random extends HTTPBalance {
     }
 
     public Random(Cluster cluster) {
-        super(new NOOPSessionPersistence());
-        setCluster(cluster);
+        this(new NOOPSessionPersistence(), cluster);
     }
 
     public Random(SessionPersistence<HTTPBalanceResponse, HTTPBalanceResponse, HTTPBalanceRequest, Backend> sessionPersistence, Cluster cluster) {

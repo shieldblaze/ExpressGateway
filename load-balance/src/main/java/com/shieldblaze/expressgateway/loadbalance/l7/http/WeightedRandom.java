@@ -52,6 +52,7 @@ public final class WeightedRandom extends HTTPBalance implements EventListener {
     public void setCluster(Cluster cluster) {
         super.setCluster(cluster);
         reset();
+        cluster.subscribeStream(this);
     }
 
     private void reset() {

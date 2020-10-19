@@ -52,6 +52,7 @@ public final class WeightedRoundRobin extends HTTPBalance implements EventListen
     public void setCluster(Cluster cluster) {
         super.setCluster(cluster);
         reset();
+        cluster.subscribeStream(this);
     }
 
     private void reset() {

@@ -58,6 +58,7 @@ public final class WeightedLeastConnection extends L4Balance implements EventLis
     public void setCluster(Cluster cluster) {
         super.setCluster(cluster);
         reset();
+        cluster.subscribeStream(this);
     }
 
     private void reset() {
