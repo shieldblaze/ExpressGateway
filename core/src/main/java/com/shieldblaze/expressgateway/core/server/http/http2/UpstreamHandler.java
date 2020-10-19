@@ -75,20 +75,18 @@ public class UpstreamHandler extends Http2ChannelDuplexHandler {
 
     }
 
-    @SuppressWarnings("lgtm[java/netty-http-response-splitting]")
     private HttpHeaders getHeaders(Http2HeadersFrame http2HeadersFrame) throws Http2Exception {
         Http2Headers headers = http2HeadersFrame.headers();
-        DefaultHttpHeaders defaultHttpHeaders = new DefaultHttpHeaders(false);
+        DefaultHttpHeaders defaultHttpHeaders = new DefaultHttpHeaders(true);
         HttpConversionUtil.addHttp2ToHttpHeaders(http2HeadersFrame.stream().id(), headers, defaultHttpHeaders, HttpVersion.HTTP_1_1, false, true);
         return defaultHttpHeaders;
     }
 
-    @SuppressWarnings("lgtm[java/netty-http-response-splitting]")
     private void sendErrorResponse(ChannelHandlerContext ctx, FullHttpResponse _fullHttpResponse, int padding) {
         FullHttpResponse fullHttpResponse = _fullHttpResponse.retainedDuplicate();
         fullHttpResponse.headers().remove(HttpHeaderNames.CONNECTION);
 
-        Http2Headers http2Headers = HttpConversionUtil.toHttp2Headers(fullHttpResponse, false);
+        Http2Headers http2Headers = HttpConversionUtil.toHttp2Headers(fullHttpResponse, true);
         DefaultHttp2HeadersFrame defaultHttp2HeadersFrame = new DefaultHttp2HeadersFrame(http2Headers, true, padding);
         ctx.channel().writeAndFlush(defaultHttp2HeadersFrame);
     }
