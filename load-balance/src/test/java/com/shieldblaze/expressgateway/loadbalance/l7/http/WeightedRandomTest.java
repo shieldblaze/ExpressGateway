@@ -20,6 +20,7 @@ package com.shieldblaze.expressgateway.loadbalance.l7.http;
 import com.shieldblaze.expressgateway.backend.Backend;
 import com.shieldblaze.expressgateway.backend.cluster.Cluster;
 import com.shieldblaze.expressgateway.backend.cluster.ClusterPool;
+import com.shieldblaze.expressgateway.loadbalance.NoBackendAvailableException;
 import io.netty.handler.codec.http.EmptyHttpHeaders;
 import org.junit.jupiter.api.Test;
 
@@ -32,7 +33,7 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 class WeightedRandomTest {
 
     @Test
-    void testWeightedRandom() {
+    void testWeightedRandom() throws NoBackendAvailableException {
 
         Cluster cluster = ClusterPool.of(
                 fastBuild("10.10.1.1", 30),

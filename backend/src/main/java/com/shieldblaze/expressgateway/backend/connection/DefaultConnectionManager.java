@@ -18,7 +18,7 @@
 package com.shieldblaze.expressgateway.backend.connection;
 
 import com.shieldblaze.expressgateway.backend.Backend;
-import com.shieldblaze.expressgateway.backend.BackendNotAvailableException;
+import com.shieldblaze.expressgateway.backend.exceptions.BackendNotAvailableException;
 import com.shieldblaze.expressgateway.backend.State;
 
 /**

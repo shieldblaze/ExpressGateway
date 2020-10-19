@@ -29,6 +29,7 @@ import java.util.concurrent.ConcurrentLinkedQueue;
  * Round-Robin List Implementation
  */
 public final class RoundRobinList<T> implements Iterable<T> {
+    private List<T> list;
     private Iterator<T> iterator;
     private int index = 0;
 
@@ -47,7 +48,7 @@ public final class RoundRobinList<T> implements Iterable<T> {
     }
 
     public void newIterator(List<T> list) {
-        Objects.requireNonNull(list, "list");
+        this.list = Objects.requireNonNull(list, "list");
 
         index = 0;
         this.iterator = new Iterator<>() {
@@ -78,5 +79,9 @@ public final class RoundRobinList<T> implements Iterable<T> {
                 throw new UnsupportedOperationException();
             }
         };
+    }
+
+    public List<T> getList() {
+        return list;
     }
 }

@@ -25,6 +25,9 @@ import com.shieldblaze.expressgateway.healthcheck.HealthCheck;
 import java.util.concurrent.ScheduledFuture;
 import java.util.concurrent.TimeUnit;
 
+/**
+ * Default implementation of {@link HealthCheckManager}
+ */
 public final class DefaultHealthCheckManager extends HealthCheckManager {
 
     private ScheduledFuture<?> scheduledFutureHealthCheck;

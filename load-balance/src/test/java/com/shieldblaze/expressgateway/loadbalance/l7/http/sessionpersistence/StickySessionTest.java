@@ -20,6 +20,7 @@ package com.shieldblaze.expressgateway.loadbalance.l7.http.sessionpersistence;
 import com.shieldblaze.expressgateway.backend.Backend;
 import com.shieldblaze.expressgateway.backend.cluster.Cluster;
 import com.shieldblaze.expressgateway.backend.cluster.ClusterPool;
+import com.shieldblaze.expressgateway.loadbalance.NoBackendAvailableException;
 import com.shieldblaze.expressgateway.loadbalance.l7.http.HTTPBalanceRequest;
 import com.shieldblaze.expressgateway.loadbalance.l7.http.HTTPBalanceResponse;
 import com.shieldblaze.expressgateway.loadbalance.l7.http.RoundRobin;
@@ -27,15 +28,13 @@ import io.netty.handler.codec.http.EmptyHttpHeaders;
 import org.junit.jupiter.api.Test;
 
 import java.net.InetSocketAddress;
-import java.util.ArrayList;
-import java.util.List;
 
 import static org.junit.jupiter.api.Assertions.*;
 
 class StickySessionTest {
 
     @Test
-    void testStickySession() {
+    void testStickySession() throws NoBackendAvailableException {
         Cluster cluster = ClusterPool.of(
                 new Backend(new InetSocketAddress("172.16.1.1", 9110)),
                 new Backend(new InetSocketAddress("172.16.1.2", 9110)),
@@ -47,7 +46,7 @@ class StickySessionTest {
             InetSocketAddress socketAddress = new InetSocketAddress("192.168.1." + i,1);
             HTTPBalanceRequest httpBalanceRequest = new HTTPBalanceRequest(socketAddress, EmptyHttpHeaders.INSTANCE);
 
-            RoundRobin roundRobin = new RoundRobin(new StickySession(cluster.getAvailableBackends()), cluster);
+            RoundRobin roundRobin = new RoundRobin(new StickySession(cluster.getOnlineBackends()), cluster);
             HTTPBalanceResponse httpBalanceResponse = roundRobin.getResponse(httpBalanceRequest);
             assertEquals(cluster.get(0), httpBalanceResponse.getBackend());
 

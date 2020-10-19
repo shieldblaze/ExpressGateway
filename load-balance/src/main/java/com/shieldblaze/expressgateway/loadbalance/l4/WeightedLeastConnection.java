@@ -21,21 +21,20 @@ import com.google.common.collect.Range;
 import com.google.common.collect.TreeRangeMap;
 import com.shieldblaze.expressgateway.backend.Backend;
 import com.shieldblaze.expressgateway.backend.cluster.Cluster;
-import com.shieldblaze.expressgateway.common.concurrent.GlobalExecutors;
+import com.shieldblaze.expressgateway.backend.events.BackendEvent;
+import com.shieldblaze.expressgateway.common.eventstream.EventListener;
 import com.shieldblaze.expressgateway.loadbalance.SessionPersistence;
 
 import java.net.InetSocketAddress;
 import java.util.HashMap;
 import java.util.Map;
 import java.util.Map.Entry;
-import java.util.concurrent.ScheduledFuture;
-import java.util.concurrent.TimeUnit;
 
 /**
  * Select {@link Backend} Based on Weight with Least Connection using Round-Robin
  */
 @SuppressWarnings("UnstableApiUsage")
-public final class WeightedLeastConnection extends L4Balance {
+public final class WeightedLeastConnection extends L4Balance implements EventListener {
 
     private final TreeRangeMap<Integer, Backend> backendsMap = TreeRangeMap.create();
     private final Map<Backend, Integer> localConnectionMap = new HashMap<>();
@@ -52,22 +51,23 @@ public final class WeightedLeastConnection extends L4Balance {
 
     public WeightedLeastConnection(SessionPersistence<Backend, Backend, InetSocketAddress, Backend> sessionPersistence, Cluster cluster) {
         super(sessionPersistence);
+        setCluster(cluster);
+    }
+
+    @Override
+    public void setCluster(Cluster cluster) {
         super.setCluster(cluster);
         reset();
     }
 
     private void reset() {
-        if (cluster == null) {
-            return;
-        }
-
         index = 0;
         totalWeight = 0;
 
         backendsMap.clear();
         localConnectionMap.clear();
 
-        cluster.getAvailableBackends().forEach(backend -> {
+        cluster.getOnlineBackends().forEach(backend -> {
             backendsMap.put(Range.closed(totalWeight, totalWeight += backend.getWeight()), backend);
             localConnectionMap.put(backend, 0);
         });
@@ -99,5 +99,21 @@ public final class WeightedLeastConnection extends L4Balance {
         backend = backendEntry.getValue();
         sessionPersistence.addRoute(l4Request.getSocketAddress(), backend);
         return new L4Response(backend);
+    }
+
+    @Override
+    public void accept(Object event) {
+        if (event instanceof BackendEvent) {
+            BackendEvent backendEvent = (BackendEvent) event;
+            switch (backendEvent.getType()) {
+                case ADDED:
+                case ONLINE:
+                case OFFLINE:
+                case REMOVED:
+                   reset();
+                default:
+                    throw new IllegalArgumentException("Unsupported Backend Event Type: " + backendEvent.getType());
+            }
+        }
     }
 }

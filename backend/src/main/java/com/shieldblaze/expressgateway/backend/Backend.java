@@ -93,7 +93,7 @@ public class Backend implements Comparable<Backend>, Closeable {
      * @param socketAddress Address of this {@link Backend}
      */
     public Backend(InetSocketAddress socketAddress) {
-        this(socketAddress.getAddress().getHostName(), socketAddress, 100, 10_000, null, null);
+        this(socketAddress.getHostString(), socketAddress, 100, 10_000, null, null);
     }
 
     /**

@@ -19,10 +19,11 @@ package com.shieldblaze.expressgateway.loadbalance.l4;
 
 import com.shieldblaze.expressgateway.backend.Backend;
 import com.shieldblaze.expressgateway.backend.cluster.Cluster;
+import com.shieldblaze.expressgateway.backend.exceptions.BackendNotOnlineException;
+import com.shieldblaze.expressgateway.loadbalance.NoBackendAvailableException;
 import com.shieldblaze.expressgateway.loadbalance.SessionPersistence;
 
 import java.net.InetSocketAddress;
-import java.util.List;
 
 /**
  * Select {@link Backend} Randomly
@@ -44,15 +45,21 @@ public final class Random extends L4Balance {
     }
 
     @Override
-    public L4Response getResponse(L4Request l4Request) {
+    public L4Response getResponse(L4Request l4Request) throws NoBackendAvailableException {
         Backend backend = sessionPersistence.getBackend(l4Request);
         if (backend != null) {
             return new L4Response(backend);
         }
 
-        int index = RANDOM_INSTANCE.nextInt(cluster.available());
+        int index = RANDOM_INSTANCE.nextInt(cluster.online());
 
-        backend = cluster.getOnline(index);
+        try {
+            backend = cluster.getOnline(index);
+        } catch (BackendNotOnlineException e) {
+            throw new NoBackendAvailableException("Randomly selected Backend is not online");
+        }
+
+        // Add to session persistence
         sessionPersistence.addRoute(l4Request.getSocketAddress(), backend);
         return new L4Response(backend);
     }

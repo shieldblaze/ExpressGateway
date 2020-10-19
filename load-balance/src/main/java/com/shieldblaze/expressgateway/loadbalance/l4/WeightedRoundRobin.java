@@ -21,6 +21,8 @@ import com.google.common.collect.Range;
 import com.google.common.collect.TreeRangeMap;
 import com.shieldblaze.expressgateway.backend.Backend;
 import com.shieldblaze.expressgateway.backend.cluster.Cluster;
+import com.shieldblaze.expressgateway.backend.events.BackendEvent;
+import com.shieldblaze.expressgateway.common.eventstream.EventListener;
 import com.shieldblaze.expressgateway.loadbalance.SessionPersistence;
 
 import java.net.InetSocketAddress;
@@ -29,7 +31,7 @@ import java.net.InetSocketAddress;
  * Select {@link Backend} based on Weight using Round-Robin
  */
 @SuppressWarnings("UnstableApiUsage")
-public final class WeightedRoundRobin extends L4Balance {
+public final class WeightedRoundRobin extends L4Balance implements EventListener {
 
     private final TreeRangeMap<Integer, Backend> backendsMap = TreeRangeMap.create();
     private int index = 0;
@@ -45,12 +47,17 @@ public final class WeightedRoundRobin extends L4Balance {
 
     public WeightedRoundRobin(SessionPersistence<Backend, Backend, InetSocketAddress, Backend> sessionPersistence, Cluster cluster) {
         super(sessionPersistence);
-        super.setCluster(cluster);
-        reset(cluster);
+        setCluster(cluster);
     }
 
-    private void reset(Cluster cluster) {
-        cluster.getAvailableBackends().forEach(backend -> this.backendsMap.put(Range.closed(totalWeight, totalWeight += backend.getWeight()), backend));
+    @Override
+    public void setCluster(Cluster cluster) {
+        super.setCluster(cluster);
+        reset();
+    }
+
+    private void reset() {
+        cluster.getOnlineBackends().forEach(backend -> this.backendsMap.put(Range.closed(totalWeight, totalWeight += backend.getWeight()), backend));
     }
 
     @Override
@@ -68,5 +75,21 @@ public final class WeightedRoundRobin extends L4Balance {
         index++;
         sessionPersistence.addRoute(l4Request.getSocketAddress(), backend);
         return new L4Response(backend);
+    }
+
+    @Override
+    public void accept(Object event) {
+        if (event instanceof BackendEvent) {
+            BackendEvent backendEvent = (BackendEvent) event;
+            switch (backendEvent.getType()) {
+                case ADDED:
+                case ONLINE:
+                case OFFLINE:
+                case REMOVED:
+                    reset();
+                default:
+                    throw new IllegalArgumentException("Unsupported Backend Event Type: " + backendEvent.getType());
+            }
+        }
     }
 }

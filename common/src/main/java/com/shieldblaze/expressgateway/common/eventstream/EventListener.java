@@ -15,22 +15,18 @@
  * You should have received a copy of the GNU General Public License
  * along with ShieldBlaze ExpressGateway.  If not, see <https://www.gnu.org/licenses/>.
  */
-package com.shieldblaze.expressgateway.backend;
+package com.shieldblaze.expressgateway.common.eventstream;
 
-public class BackendNotAvailableException extends Exception {
-    public BackendNotAvailableException() {
-        super();
-    }
+/**
+ * Interface to implement to become a subscriber and accept
+ * events using {@link #accept(Object)}.
+ */
+public interface EventListener {
 
-    public BackendNotAvailableException(String message) {
-        super(message);
-    }
-
-    public BackendNotAvailableException(String message, Throwable cause) {
-        super(message, cause);
-    }
-
-    public BackendNotAvailableException(Throwable cause) {
-        super(cause);
-    }
+    /**
+     * This method is called when an event is published.
+     *
+     * @param event Event that was published.
+     */
+    void accept(Object event);
 }

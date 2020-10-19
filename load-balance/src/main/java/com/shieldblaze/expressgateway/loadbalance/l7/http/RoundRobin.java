@@ -19,7 +19,10 @@ package com.shieldblaze.expressgateway.loadbalance.l7.http;
 
 import com.shieldblaze.expressgateway.backend.Backend;
 import com.shieldblaze.expressgateway.backend.cluster.Cluster;
+import com.shieldblaze.expressgateway.backend.events.BackendEvent;
+import com.shieldblaze.expressgateway.common.eventstream.EventListener;
 import com.shieldblaze.expressgateway.common.list.RoundRobinList;
+import com.shieldblaze.expressgateway.loadbalance.NoBackendAvailableException;
 import com.shieldblaze.expressgateway.loadbalance.SessionPersistence;
 
 import java.util.List;
@@ -27,7 +30,9 @@ import java.util.List;
 /**
  * Select {@link Backend} based on Round-Robin
  */
-public final class RoundRobin extends HTTPBalance {
+public final class RoundRobin extends HTTPBalance implements EventListener {
+
+    private RoundRobinList<Backend> roundRobinList;
 
     public RoundRobin() {
         super(new NOOPSessionPersistence());
@@ -39,17 +44,45 @@ public final class RoundRobin extends HTTPBalance {
 
     public RoundRobin(SessionPersistence<HTTPBalanceResponse, HTTPBalanceResponse, HTTPBalanceRequest, Backend> sessionPersistence, Cluster cluster) {
         super(sessionPersistence);
-        super.setCluster(cluster);
+        setCluster(cluster);
     }
 
     @Override
-    public HTTPBalanceResponse getResponse(HTTPBalanceRequest httpBalanceRequest) {
+    public void setCluster(Cluster cluster) {
+        super.setCluster(cluster);
+        roundRobinList = new RoundRobinList<>(cluster.getOnlineBackends());
+        cluster.subscribeStream(this);
+    }
+
+    @Override
+    public HTTPBalanceResponse getResponse(HTTPBalanceRequest httpBalanceRequest) throws NoBackendAvailableException {
         HTTPBalanceResponse httpBalanceResponse = sessionPersistence.getBackend(httpBalanceRequest);
         if (httpBalanceResponse != null) {
             return httpBalanceResponse;
         }
 
-        Backend backend = cluster.next();
+        Backend backend = roundRobinList.iterator().next();
+
+        if (backend == null) {
+            throw new NoBackendAvailableException("No Backend available for Cluster: " + cluster);
+        }
+
         return sessionPersistence.addRoute(httpBalanceRequest, backend);
+    }
+
+    @Override
+    public void accept(Object event) {
+        if (event instanceof BackendEvent) {
+            BackendEvent backendEvent = (BackendEvent) event;
+            switch (backendEvent.getType()) {
+                case ADDED:
+                case ONLINE:
+                case OFFLINE:
+                case REMOVED:
+                    roundRobinList.newIterator(cluster.getOnlineBackends());
+                default:
+                    throw new IllegalArgumentException("Unsupported Backend Event Type: " + backendEvent.getType());
+            }
+        }
     }
 }

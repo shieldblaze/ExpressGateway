@@ -15,14 +15,22 @@
  * You should have received a copy of the GNU General Public License
  * along with ShieldBlaze ExpressGateway.  If not, see <https://www.gnu.org/licenses/>.
  */
-package com.shieldblaze.expressgateway.backend.connection;
 
-import com.shieldblaze.expressgateway.backend.Backend;
-import com.shieldblaze.expressgateway.backend.exceptions.BackendNotAvailableException;
+package com.shieldblaze.expressgateway.common.concurrent;
 
-public class TooManyConnectionsException extends BackendNotAvailableException {
+public interface Future<T> extends java.util.concurrent.Future<T> {
 
-    public TooManyConnectionsException(Backend backend) {
-        super("Backend: " + backend.getSocketAddress() + " has too many active connections. Increase Maximum Connection limit to create new connection.");
-    }
+    /**
+     * Return {@code true} if an operation was successful else {@code false}
+     */
+    boolean isSuccessful();
+
+    /**
+     * Returns {@code true} if an operation can be cancelled via {@link #cancel(boolean)}
+     */
+    boolean isCancellable();
+
+
+    @Override
+    boolean cancel(boolean mayInterruptIfRunning);
 }

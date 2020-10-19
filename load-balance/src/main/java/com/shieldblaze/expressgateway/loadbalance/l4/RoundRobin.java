@@ -19,6 +19,8 @@ package com.shieldblaze.expressgateway.loadbalance.l4;
 
 import com.shieldblaze.expressgateway.backend.Backend;
 import com.shieldblaze.expressgateway.backend.cluster.Cluster;
+import com.shieldblaze.expressgateway.backend.events.BackendEvent;
+import com.shieldblaze.expressgateway.common.eventstream.EventListener;
 import com.shieldblaze.expressgateway.common.list.RoundRobinList;
 import com.shieldblaze.expressgateway.loadbalance.NoBackendAvailableException;
 import com.shieldblaze.expressgateway.loadbalance.SessionPersistence;
@@ -29,7 +31,9 @@ import java.util.List;
 /**
  * Select {@link Backend} based on Round-Robin
  */
-public final class RoundRobin extends L4Balance {
+public final class RoundRobin extends L4Balance implements EventListener {
+
+    private RoundRobinList<Backend> roundRobinList;
 
     public RoundRobin() {
         super(new NOOPSessionPersistence());
@@ -41,7 +45,14 @@ public final class RoundRobin extends L4Balance {
 
     public RoundRobin(SessionPersistence<Backend, Backend, InetSocketAddress, Backend> sessionPersistence, Cluster cluster) {
         super(sessionPersistence);
+        setCluster(cluster);
+    }
+
+    @Override
+    public void setCluster(Cluster cluster) {
         super.setCluster(cluster);
+        roundRobinList = new RoundRobinList<>(cluster.getOnlineBackends());
+        cluster.subscribeStream(this);
     }
 
     @Override
@@ -51,7 +62,7 @@ public final class RoundRobin extends L4Balance {
             return new L4Response(backend);
         }
 
-        backend = cluster.next();
+        backend = roundRobinList.iterator().next();
 
         if (backend == null) {
             throw new NoBackendAvailableException("No Backend available for Cluster: " + cluster);
@@ -59,5 +70,21 @@ public final class RoundRobin extends L4Balance {
 
         sessionPersistence.addRoute(l4Request.getSocketAddress(), backend);
         return new L4Response(backend);
+    }
+
+    @Override
+    public void accept(Object event) {
+        if (event instanceof BackendEvent) {
+            BackendEvent backendEvent = (BackendEvent) event;
+            switch (backendEvent.getType()) {
+                case ADDED:
+                case ONLINE:
+                case OFFLINE:
+                case REMOVED:
+                    roundRobinList.newIterator(cluster.getOnlineBackends());
+                default:
+                    throw new IllegalArgumentException("Unsupported Backend Event Type: " + backendEvent.getType());
+            }
+        }
     }
 }

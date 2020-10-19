@@ -36,10 +36,12 @@ public final class GlobalExecutors {
      * {@link GlobalExecutors} Instance
      */
     public static final GlobalExecutors INSTANCE = new GlobalExecutors();
+
     /**
      * Cached {@link ExecutorService}
      */
     private static final ExecutorService EXECUTOR_SERVICE = new ThreadPoolExecutor(0, Integer.MAX_VALUE, 300L, TimeUnit.SECONDS, new SynchronousQueue<>());
+
     /**
      * Scheduled {@link ExecutorService}
      */
@@ -81,6 +83,10 @@ public final class GlobalExecutors {
      */
     public ScheduledFuture<?> submitTaskAndRunEvery(Runnable runnable, int initialDelay, int period, TimeUnit timeUnit) {
         return SCHEDULED_EXECUTOR_SERVICE.scheduleWithFixedDelay(runnable, initialDelay, period, timeUnit);
+    }
+
+    public ExecutorService getExecutorService() {
+        return EXECUTOR_SERVICE;
     }
 
     /**

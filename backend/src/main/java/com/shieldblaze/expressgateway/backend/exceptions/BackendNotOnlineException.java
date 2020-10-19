@@ -15,14 +15,14 @@
  * You should have received a copy of the GNU General Public License
  * along with ShieldBlaze ExpressGateway.  If not, see <https://www.gnu.org/licenses/>.
  */
-package com.shieldblaze.expressgateway.backend.connection;
+
+package com.shieldblaze.expressgateway.backend.exceptions;
 
 import com.shieldblaze.expressgateway.backend.Backend;
-import com.shieldblaze.expressgateway.backend.exceptions.BackendNotAvailableException;
 
-public class TooManyConnectionsException extends BackendNotAvailableException {
+public class BackendNotOnlineException extends BackendNotAvailableException {
 
-    public TooManyConnectionsException(Backend backend) {
-        super("Backend: " + backend.getSocketAddress() + " has too many active connections. Increase Maximum Connection limit to create new connection.");
+    public BackendNotOnlineException(Backend backend) {
+        super("Backend: {" + backend + "} is not online");
     }
 }

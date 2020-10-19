@@ -19,10 +19,17 @@ package com.shieldblaze.expressgateway.backend.cluster;
 
 import com.shieldblaze.expressgateway.backend.Backend;
 import com.shieldblaze.expressgateway.backend.State;
+import com.shieldblaze.expressgateway.backend.events.BackendEvent;
+import com.shieldblaze.expressgateway.backend.exceptions.BackendNotOnlineException;
+import com.shieldblaze.expressgateway.common.concurrent.GlobalExecutors;
+import com.shieldblaze.expressgateway.common.eventstream.AsyncEventStream;
+import com.shieldblaze.expressgateway.common.eventstream.EventListener;
+import com.shieldblaze.expressgateway.common.eventstream.EventStream;
 
 import java.util.List;
 import java.util.Objects;
 import java.util.concurrent.CopyOnWriteArrayList;
+import java.util.concurrent.Executors;
 import java.util.stream.Collectors;
 import java.util.stream.Stream;
 
@@ -30,11 +37,20 @@ import java.util.stream.Stream;
  * Base class for Cluster
  */
 public abstract class Cluster {
+
+    /**
+     * Stream of {@linkplain BackendEvent}
+     */
+    private final AsyncEventStream eventStream = new AsyncEventStream(GlobalExecutors.INSTANCE.getExecutorService());
+
+    /**
+     * List of all {@linkplain Backend} associated with this {@linkplain Cluster}
+     */
     protected final List<Backend> allBackends = new CopyOnWriteArrayList<>();
-    private final List<Backend> onlineBackends = new CopyOnWriteArrayList<>();
 
-    private int roundRobinIndex = 0;
-
+    /**
+     * Name of this {@linkplain Cluster}
+     */
     private String name;
 
     /**
@@ -60,24 +76,15 @@ public abstract class Cluster {
      */
     protected void addBackend(Backend backend) {
         allBackends.add(Objects.requireNonNull(backend, "backend"));
-        onlineBackends.add(backend);
-        roundRobinIndex = 0;
     }
 
     /**
-     * Get {@linkplain List} of available (Online) {@linkplain Backend} in this {@linkplain Cluster}
+     * Get {@linkplain List} of online {@linkplain Backend} in this {@linkplain Cluster}
      */
-    public List<Backend> getAvailableBackends() {
+    public List<Backend> getOnlineBackends() {
         return allBackends.stream()
                 .filter(backend -> backend.getState() == State.ONLINE)
                 .collect(Collectors.toList());
-    }
-
-    /**
-     * Get {@link Stream} of available (Online) {@linkplain Backend} in this {@linkplain Cluster}
-     */
-    public Stream<Backend> stream() {
-        return allBackends.stream().filter(backend -> backend.getState() == State.ONLINE);
     }
 
     public Backend get(int index) {
@@ -90,24 +97,12 @@ public abstract class Cluster {
      * @param index Index
      * @return {@linkplain Backend} Instance if found else {@code null}
      */
-    public Backend getOnline(int index) {
-        return allBackends.get(index);
-    }
-
-    /**
-     * [ROUND ROBIN] Get the next {@linkplain Backend}
-     */
-    public Backend next() {
-        try {
-            if (roundRobinIndex >= onlineBackends.size()) {
-                roundRobinIndex = 0;
-            }
-            return onlineBackends.get(roundRobinIndex);
-        } catch (Exception ex) {
-            return null;
-        } finally {
-            roundRobinIndex++;
+    public Backend getOnline(int index) throws BackendNotOnlineException {
+        Backend backend = allBackends.get(index);
+        if (backend.getState() != State.ONLINE) {
+            throw new BackendNotOnlineException(backend);
         }
+        return backend;
     }
 
     /**
@@ -118,11 +113,27 @@ public abstract class Cluster {
     }
 
     /**
-     * Get number of available (Online) {@linkplain Backend} in this {@linkplain Cluster}
+     * Get number of Online {@linkplain Backend} in this {@linkplain Cluster}
      */
-    public int available() {
-        return (int) stream()
-                .filter(backend -> backend.getState() == State.ONLINE)
-                .count();
+    public int online() {
+        return (int) allBackends.stream().filter(backend -> backend.getState() == State.ONLINE).count();
+    }
+
+    /**
+     * Subscribe to stream of {@link BackendEvent}
+     *
+     * @see EventStream#subscribe(EventListener)
+     */
+    public void subscribeStream(EventListener eventListener) {
+        eventStream.subscribe(eventListener);
+    }
+
+    /**
+     * Unsubscribe from stream of {@link BackendEvent}
+     *
+     * @see EventStream#subscribe(EventListener)
+     */
+    public void unsubscribeStream(EventListener eventListener) {
+        eventStream.unsubscribe(eventListener);
     }
 }

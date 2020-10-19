@@ -19,6 +19,8 @@ package com.shieldblaze.expressgateway.loadbalance.l4;
 
 import com.shieldblaze.expressgateway.backend.Backend;
 import com.shieldblaze.expressgateway.backend.cluster.Cluster;
+import com.shieldblaze.expressgateway.backend.events.BackendEvent;
+import com.shieldblaze.expressgateway.common.eventstream.EventListener;
 import com.shieldblaze.expressgateway.common.list.RoundRobinList;
 import com.shieldblaze.expressgateway.loadbalance.NoBackendAvailableException;
 import com.shieldblaze.expressgateway.loadbalance.SessionPersistence;
@@ -29,7 +31,9 @@ import java.util.Optional;
 /**
  * Select {@link Backend} with least connections with Round-Robin.
  */
-public final class LeastConnection extends L4Balance {
+public final class LeastConnection extends L4Balance implements EventListener {
+
+    private RoundRobinList<Backend> roundRobinList;
 
     public LeastConnection() {
         this(new NOOPSessionPersistence());
@@ -49,6 +53,13 @@ public final class LeastConnection extends L4Balance {
     }
 
     @Override
+    public void setCluster(Cluster cluster) {
+        super.setCluster(cluster);
+        roundRobinList = new RoundRobinList<>(cluster.getOnlineBackends());
+        cluster.subscribeStream(this);
+    }
+
+    @Override
     public L4Response getResponse(L4Request l4Request) throws NoBackendAvailableException {
         Backend backend = sessionPersistence.getBackend(l4Request);
         if (backend != null) {
@@ -56,21 +67,37 @@ public final class LeastConnection extends L4Balance {
         }
 
         // Get Number Of Maximum Connection on a Backend
-        int currentMaxConnections = cluster.stream()
+        int currentMaxConnections = roundRobinList.getList().stream()
                 .mapToInt(Backend::getActiveConnections)
                 .max()
                 .getAsInt();
 
         // Check If we got any Backend which has less Number of Connections than Backend with Maximum Connection
-        Optional<Backend> optionalBackend = cluster.stream()
+        Optional<Backend> optionalBackend = roundRobinList.getList().stream()
                 .filter(back -> back.getActiveConnections() < currentMaxConnections)
                 .findFirst();
 
-        backend = optionalBackend.orElseGet(() -> cluster.next());
+        backend = optionalBackend.orElseGet(() -> roundRobinList.iterator().next());
         if (backend == null) {
             throw new NoBackendAvailableException("No Backend available for Cluster: " + cluster);
         }
         sessionPersistence.addRoute(l4Request.getSocketAddress(), backend);
         return new L4Response(backend);
+    }
+
+    @Override
+    public void accept(Object event) {
+        if (event instanceof BackendEvent) {
+            BackendEvent backendEvent = (BackendEvent) event;
+            switch (backendEvent.getType()) {
+                case ADDED:
+                case ONLINE:
+                case OFFLINE:
+                case REMOVED:
+                    roundRobinList.newIterator(cluster.getOnlineBackends());
+                default:
+                    throw new IllegalArgumentException("Unsupported Backend Event Type: " + backendEvent.getType());
+            }
+        }
     }
 }
