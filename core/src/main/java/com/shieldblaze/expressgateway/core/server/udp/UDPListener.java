@@ -18,7 +18,7 @@
 package com.shieldblaze.expressgateway.core.server.udp;
 
 import com.shieldblaze.expressgateway.common.concurrent.GlobalExecutors;
-import com.shieldblaze.expressgateway.core.concurrent.async.L4FrontListenerEvent;
+import com.shieldblaze.expressgateway.core.concurrent.events.L4FrontListenerEvent;
 import com.shieldblaze.expressgateway.core.configuration.CommonConfiguration;
 import com.shieldblaze.expressgateway.core.configuration.transport.TransportType;
 import com.shieldblaze.expressgateway.core.utils.BootstrapFactory;
