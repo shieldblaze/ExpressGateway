@@ -20,7 +20,7 @@ package com.shieldblaze.expressgateway.loadbalance.l4;
 import com.shieldblaze.expressgateway.backend.Backend;
 import com.shieldblaze.expressgateway.backend.cluster.Cluster;
 import com.shieldblaze.expressgateway.backend.cluster.ClusterPool;
-import com.shieldblaze.expressgateway.loadbalance.NoBackendAvailableException;
+import com.shieldblaze.expressgateway.loadbalance.exceptions.LoadBalanceException;
 import org.junit.jupiter.api.Test;
 
 import java.net.InetSocketAddress;
@@ -34,7 +34,7 @@ class WeightedLeastConnectionTest {
     }
 
     @Test
-    void testWeightedLeastConnection() throws NoBackendAvailableException {
+    void testWeightedLeastConnection() throws LoadBalanceException {
         Cluster cluster = ClusterPool.of(
                 fastBuild("10.10.1.1", 10),
                 fastBuild("10.10.1.2", 20),

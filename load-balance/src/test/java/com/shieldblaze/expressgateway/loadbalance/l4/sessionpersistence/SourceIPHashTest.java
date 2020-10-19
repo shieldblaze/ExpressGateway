@@ -20,22 +20,20 @@ package com.shieldblaze.expressgateway.loadbalance.l4.sessionpersistence;
 import com.shieldblaze.expressgateway.backend.Backend;
 import com.shieldblaze.expressgateway.backend.cluster.Cluster;
 import com.shieldblaze.expressgateway.backend.cluster.ClusterPool;
-import com.shieldblaze.expressgateway.loadbalance.NoBackendAvailableException;
+import com.shieldblaze.expressgateway.loadbalance.exceptions.LoadBalanceException;
 import com.shieldblaze.expressgateway.loadbalance.l4.L4Balance;
 import com.shieldblaze.expressgateway.loadbalance.l4.L4Request;
 import com.shieldblaze.expressgateway.loadbalance.l4.RoundRobin;
 import org.junit.jupiter.api.Test;
 
 import java.net.InetSocketAddress;
-import java.util.ArrayList;
-import java.util.List;
 
 import static org.junit.jupiter.api.Assertions.*;
 
 class SourceIPHashTest {
 
     @Test
-    void testSourceIPHash() throws NoBackendAvailableException {
+    void testSourceIPHash() throws LoadBalanceException {
 
         Cluster cluster = ClusterPool.of(
                 fastBuild("172.16.20.1"),

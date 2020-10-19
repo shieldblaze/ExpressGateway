@@ -19,19 +19,18 @@ package com.shieldblaze.expressgateway.loadbalance.l4;
 
 import com.shieldblaze.expressgateway.backend.Backend;
 import com.shieldblaze.expressgateway.backend.cluster.SingleBackendCluster;
-import com.shieldblaze.expressgateway.loadbalance.NoBackendAvailableException;
+import com.shieldblaze.expressgateway.loadbalance.exceptions.LoadBalanceException;
 import org.junit.jupiter.api.Assertions;
 import org.junit.jupiter.api.Test;
 
 import java.net.InetSocketAddress;
-import java.util.Collections;
 
 import static org.junit.jupiter.api.Assertions.assertThrows;
 
 class L4BalanceTest {
 
     @Test
-    void testL4Balance() throws NoBackendAvailableException {
+    void testL4Balance() throws LoadBalanceException {
         Backend backend = new Backend(new InetSocketAddress("192.168.1.1", 9110));
 
         L4Balance l4Balance = new EmptyL4Balance();

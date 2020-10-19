@@ -18,7 +18,7 @@
 package com.shieldblaze.expressgateway.core.server.tcp;
 
 import com.shieldblaze.expressgateway.common.concurrent.GlobalExecutors;
-import com.shieldblaze.expressgateway.core.concurrent.events.L4FrontListenerEvent;
+import com.shieldblaze.expressgateway.core.events.L4FrontListenerEvent;
 import com.shieldblaze.expressgateway.core.configuration.CommonConfiguration;
 import com.shieldblaze.expressgateway.core.configuration.tls.TLSConfiguration;
 import com.shieldblaze.expressgateway.core.configuration.transport.TransportConfiguration;

@@ -3,7 +3,8 @@ package com.shieldblaze.expressgateway.loadbalance.l4;
 import com.shieldblaze.expressgateway.backend.Backend;
 import com.shieldblaze.expressgateway.backend.State;
 import com.shieldblaze.expressgateway.backend.cluster.Cluster;
-import com.shieldblaze.expressgateway.loadbalance.NoBackendAvailableException;
+import com.shieldblaze.expressgateway.loadbalance.exceptions.LoadBalanceException;
+import com.shieldblaze.expressgateway.loadbalance.exceptions.NoBackendAvailableException;
 
 /**
  * Select a single {@link Backend}. Used for NAT-Forwarding purpose.
@@ -31,7 +32,7 @@ public final class NATForward extends L4Balance {
     }
 
     @Override
-    public L4Response getResponse(L4Request l4Request) throws NoBackendAvailableException {
+    public L4Response getResponse(L4Request l4Request) throws LoadBalanceException {
          if (l4Response.getBackend().getState() != State.ONLINE) {
              throw new NoBackendAvailableException("No Backend available for Cluster: " + cluster);
          }

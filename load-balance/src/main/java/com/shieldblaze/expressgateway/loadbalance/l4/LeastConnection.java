@@ -22,7 +22,7 @@ import com.shieldblaze.expressgateway.backend.cluster.Cluster;
 import com.shieldblaze.expressgateway.backend.events.BackendEvent;
 import com.shieldblaze.expressgateway.common.eventstream.EventListener;
 import com.shieldblaze.expressgateway.common.list.RoundRobinList;
-import com.shieldblaze.expressgateway.loadbalance.NoBackendAvailableException;
+import com.shieldblaze.expressgateway.loadbalance.exceptions.LoadBalanceException;
 import com.shieldblaze.expressgateway.loadbalance.SessionPersistence;
 
 import java.net.InetSocketAddress;
@@ -60,7 +60,7 @@ public final class LeastConnection extends L4Balance implements EventListener {
     }
 
     @Override
-    public L4Response getResponse(L4Request l4Request) throws NoBackendAvailableException {
+    public L4Response getResponse(L4Request l4Request) throws LoadBalanceException {
         Backend backend = sessionPersistence.getBackend(l4Request);
         if (backend != null) {
             return new L4Response(backend);
@@ -79,7 +79,7 @@ public final class LeastConnection extends L4Balance implements EventListener {
 
         backend = optionalBackend.orElseGet(() -> roundRobinList.iterator().next());
         if (backend == null) {
-            throw new NoBackendAvailableException("No Backend available for Cluster: " + cluster);
+            throw new LoadBalanceException("No Backend available for Cluster: " + cluster);
         }
         sessionPersistence.addRoute(l4Request.getSocketAddress(), backend);
         return new L4Response(backend);

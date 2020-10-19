@@ -20,7 +20,7 @@ package com.shieldblaze.expressgateway.loadbalance.l7.http;
 import com.shieldblaze.expressgateway.backend.Backend;
 import com.shieldblaze.expressgateway.backend.cluster.Cluster;
 import com.shieldblaze.expressgateway.backend.exceptions.BackendNotOnlineException;
-import com.shieldblaze.expressgateway.loadbalance.NoBackendAvailableException;
+import com.shieldblaze.expressgateway.loadbalance.exceptions.LoadBalanceException;
 import com.shieldblaze.expressgateway.loadbalance.SessionPersistence;
 
 /**
@@ -43,7 +43,7 @@ public final class Random extends HTTPBalance {
     }
 
     @Override
-    public HTTPBalanceResponse getResponse(HTTPBalanceRequest httpBalanceRequest) throws NoBackendAvailableException {
+    public HTTPBalanceResponse getResponse(HTTPBalanceRequest httpBalanceRequest) throws LoadBalanceException {
         HTTPBalanceResponse httpBalanceResponse = sessionPersistence.getBackend(httpBalanceRequest);
         if (httpBalanceResponse != null) {
             return httpBalanceResponse;
@@ -56,7 +56,7 @@ public final class Random extends HTTPBalance {
         try {
             backend = cluster.getOnline(index);
         } catch (BackendNotOnlineException e) {
-            throw new NoBackendAvailableException("Randomly selected Backend is not online");
+            throw new LoadBalanceException("Randomly selected Backend is not online");
         }
 
         // Add to session persistence and return

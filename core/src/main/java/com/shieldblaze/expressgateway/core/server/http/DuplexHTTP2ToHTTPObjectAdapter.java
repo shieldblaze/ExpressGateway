@@ -59,6 +59,7 @@ final class DuplexHTTP2ToHTTPObjectAdapter extends ChannelDuplexHandler {
 
     @Override
     public void channelRead(ChannelHandlerContext ctx, Object msg) throws Exception {
+        System.err.println(msg);
         if (msg instanceof DefaultHttp2HeadersFrame) {
             DefaultHttp2HeadersFrame http2HeadersFrame = (DefaultHttp2HeadersFrame) msg;
             onHeadersRead(ctx, http2HeadersFrame.stream().id(), http2HeadersFrame.headers(), http2HeadersFrame.padding(), http2HeadersFrame.isEndStream());

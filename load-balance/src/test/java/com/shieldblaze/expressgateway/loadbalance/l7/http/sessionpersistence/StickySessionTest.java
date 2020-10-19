@@ -20,7 +20,7 @@ package com.shieldblaze.expressgateway.loadbalance.l7.http.sessionpersistence;
 import com.shieldblaze.expressgateway.backend.Backend;
 import com.shieldblaze.expressgateway.backend.cluster.Cluster;
 import com.shieldblaze.expressgateway.backend.cluster.ClusterPool;
-import com.shieldblaze.expressgateway.loadbalance.NoBackendAvailableException;
+import com.shieldblaze.expressgateway.loadbalance.exceptions.LoadBalanceException;
 import com.shieldblaze.expressgateway.loadbalance.l7.http.HTTPBalanceRequest;
 import com.shieldblaze.expressgateway.loadbalance.l7.http.HTTPBalanceResponse;
 import com.shieldblaze.expressgateway.loadbalance.l7.http.RoundRobin;
@@ -34,7 +34,7 @@ import static org.junit.jupiter.api.Assertions.*;
 class StickySessionTest {
 
     @Test
-    void testStickySession() throws NoBackendAvailableException {
+    void testStickySession() throws LoadBalanceException {
         Cluster cluster = ClusterPool.of(
                 new Backend(new InetSocketAddress("172.16.1.1", 9110)),
                 new Backend(new InetSocketAddress("172.16.1.2", 9110)),

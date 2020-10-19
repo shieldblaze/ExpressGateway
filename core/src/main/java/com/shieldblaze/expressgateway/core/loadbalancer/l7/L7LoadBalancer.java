@@ -19,7 +19,7 @@ package com.shieldblaze.expressgateway.core.loadbalancer.l7;
 
 import com.shieldblaze.expressgateway.backend.cluster.Cluster;
 import com.shieldblaze.expressgateway.backend.connection.ConnectionManager;
-import com.shieldblaze.expressgateway.core.concurrent.events.L4FrontListenerEvent;
+import com.shieldblaze.expressgateway.core.events.L4FrontListenerEvent;
 import com.shieldblaze.expressgateway.core.configuration.CommonConfiguration;
 import com.shieldblaze.expressgateway.core.server.L4FrontListener;
 import com.shieldblaze.expressgateway.core.server.L7FrontListener;

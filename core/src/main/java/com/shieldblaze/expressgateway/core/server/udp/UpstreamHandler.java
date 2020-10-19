@@ -21,7 +21,7 @@ import com.shieldblaze.expressgateway.backend.Backend;
 import com.shieldblaze.expressgateway.core.configuration.CommonConfiguration;
 import com.shieldblaze.expressgateway.core.loadbalancer.l4.L4LoadBalancer;
 import com.shieldblaze.expressgateway.core.utils.EventLoopFactory;
-import com.shieldblaze.expressgateway.loadbalance.NoBackendAvailableException;
+import com.shieldblaze.expressgateway.loadbalance.exceptions.LoadBalanceException;
 import com.shieldblaze.expressgateway.loadbalance.l4.L4Balance;
 import com.shieldblaze.expressgateway.loadbalance.l4.L4Request;
 import io.netty.channel.ChannelHandler;
@@ -71,7 +71,7 @@ final class UpstreamHandler extends ChannelInboundHandlerAdapter {
                 Backend backend;
                 try {
                     backend = l4Balance.getResponse(new L4Request(datagramPacket.sender())).getBackend();
-                } catch (NoBackendAvailableException e) {
+                } catch (LoadBalanceException e) {
                     // Handle this
                     return;
                 }

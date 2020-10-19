@@ -20,20 +20,18 @@ package com.shieldblaze.expressgateway.loadbalance.l7.http;
 import com.shieldblaze.expressgateway.backend.Backend;
 import com.shieldblaze.expressgateway.backend.cluster.Cluster;
 import com.shieldblaze.expressgateway.backend.cluster.ClusterPool;
-import com.shieldblaze.expressgateway.loadbalance.NoBackendAvailableException;
+import com.shieldblaze.expressgateway.loadbalance.exceptions.LoadBalanceException;
 import io.netty.handler.codec.http.EmptyHttpHeaders;
 import org.junit.jupiter.api.Test;
 
 import java.net.InetSocketAddress;
-import java.util.ArrayList;
-import java.util.List;
 
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 class RandomTest {
 
     @Test
-    void testRandom() throws NoBackendAvailableException {
+    void testRandom() throws LoadBalanceException {
         Cluster cluster = ClusterPool.of(
                 fastBuild("172.16.20.1"),
                 fastBuild("172.16.20.2"),

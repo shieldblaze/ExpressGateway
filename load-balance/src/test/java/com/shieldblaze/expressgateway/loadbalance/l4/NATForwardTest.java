@@ -20,12 +20,10 @@ package com.shieldblaze.expressgateway.loadbalance.l4;
 import com.shieldblaze.expressgateway.backend.Backend;
 import com.shieldblaze.expressgateway.backend.cluster.ClusterPool;
 import com.shieldblaze.expressgateway.backend.cluster.SingleBackendCluster;
-import com.shieldblaze.expressgateway.loadbalance.NoBackendAvailableException;
+import com.shieldblaze.expressgateway.loadbalance.exceptions.LoadBalanceException;
 import org.junit.jupiter.api.Test;
 
 import java.net.InetSocketAddress;
-import java.util.ArrayList;
-import java.util.List;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertThrows;
@@ -33,7 +31,7 @@ import static org.junit.jupiter.api.Assertions.assertThrows;
 class NATForwardTest {
 
     @Test
-    void testNATForward() throws NoBackendAvailableException {
+    void testNATForward() throws LoadBalanceException {
 
         L4Balance l4Balance = new NATForward(SingleBackendCluster.of(fastBuild("192.168.1.1")));
 

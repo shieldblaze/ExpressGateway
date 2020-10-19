@@ -18,6 +18,7 @@
 package com.shieldblaze.expressgateway.loadbalance;
 
 import com.shieldblaze.expressgateway.backend.cluster.Cluster;
+import com.shieldblaze.expressgateway.loadbalance.exceptions.LoadBalanceException;
 
 import java.util.Objects;
 
@@ -47,5 +48,5 @@ public abstract class LoadBalance<REQUEST, RESPONSE, KEY, VALUE> {
         this.cluster = Objects.requireNonNull(cluster, "cluster");
     }
 
-    public abstract Response getResponse(Request request) throws NoBackendAvailableException;
+    public abstract Response getResponse(Request request) throws LoadBalanceException;
 }

@@ -19,7 +19,7 @@ package com.shieldblaze.expressgateway.loadbalance.l7.http;
 
 import com.shieldblaze.expressgateway.backend.Backend;
 import com.shieldblaze.expressgateway.loadbalance.LoadBalance;
-import com.shieldblaze.expressgateway.loadbalance.NoBackendAvailableException;
+import com.shieldblaze.expressgateway.loadbalance.exceptions.LoadBalanceException;
 import com.shieldblaze.expressgateway.loadbalance.Request;
 import com.shieldblaze.expressgateway.loadbalance.Response;
 import com.shieldblaze.expressgateway.loadbalance.SessionPersistence;
@@ -36,10 +36,10 @@ public abstract class HTTPBalance extends LoadBalance<HTTPBalanceResponse, HTTPB
         super(sessionPersistence);
     }
 
-    public abstract HTTPBalanceResponse getResponse(HTTPBalanceRequest httpBalanceRequest) throws NoBackendAvailableException;
+    public abstract HTTPBalanceResponse getResponse(HTTPBalanceRequest httpBalanceRequest) throws LoadBalanceException;
 
     @Override
-    public Response getResponse(Request request) throws NoBackendAvailableException {
+    public Response getResponse(Request request) throws LoadBalanceException {
         return getResponse((HTTPBalanceRequest) request);
     }
 }

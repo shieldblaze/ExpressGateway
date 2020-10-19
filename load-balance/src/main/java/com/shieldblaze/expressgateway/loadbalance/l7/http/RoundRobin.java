@@ -22,10 +22,8 @@ import com.shieldblaze.expressgateway.backend.cluster.Cluster;
 import com.shieldblaze.expressgateway.backend.events.BackendEvent;
 import com.shieldblaze.expressgateway.common.eventstream.EventListener;
 import com.shieldblaze.expressgateway.common.list.RoundRobinList;
-import com.shieldblaze.expressgateway.loadbalance.NoBackendAvailableException;
+import com.shieldblaze.expressgateway.loadbalance.exceptions.LoadBalanceException;
 import com.shieldblaze.expressgateway.loadbalance.SessionPersistence;
-
-import java.util.List;
 
 /**
  * Select {@link Backend} based on Round-Robin
@@ -55,7 +53,7 @@ public final class RoundRobin extends HTTPBalance implements EventListener {
     }
 
     @Override
-    public HTTPBalanceResponse getResponse(HTTPBalanceRequest httpBalanceRequest) throws NoBackendAvailableException {
+    public HTTPBalanceResponse getResponse(HTTPBalanceRequest httpBalanceRequest) throws LoadBalanceException {
         HTTPBalanceResponse httpBalanceResponse = sessionPersistence.getBackend(httpBalanceRequest);
         if (httpBalanceResponse != null) {
             return httpBalanceResponse;
@@ -64,7 +62,7 @@ public final class RoundRobin extends HTTPBalance implements EventListener {
         Backend backend = roundRobinList.iterator().next();
 
         if (backend == null) {
-            throw new NoBackendAvailableException("No Backend available for Cluster: " + cluster);
+            throw new LoadBalanceException("No Backend available for Cluster: " + cluster);
         }
 
         return sessionPersistence.addRoute(httpBalanceRequest, backend);
