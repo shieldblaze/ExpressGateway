@@ -108,7 +108,7 @@ final class UpstreamHandler extends ChannelInboundHandlerAdapter {
 
     @Override
     @SuppressWarnings("lgtm[java/dereferenced-value-may-be-null]")
-    public void channelRead(ChannelHandlerContext ctx, Object msg) {
+    public void channelRead(ChannelHandlerContext ctx, Object msg) throws Exception {
         if (upstreamAddress == null) {
             upstreamAddress = (InetSocketAddress) ctx.channel().remoteAddress();
         }

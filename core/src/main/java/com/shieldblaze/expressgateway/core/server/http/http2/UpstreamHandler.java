@@ -53,7 +53,7 @@ public class UpstreamHandler extends Http2ChannelDuplexHandler {
         }
     }
 
-    private void onHeaderRead(ChannelHandlerContext ctx, Http2HeadersFrame http2HeadersFrame) throws Http2Exception {
+    private void onHeaderRead(ChannelHandlerContext ctx, Http2HeadersFrame http2HeadersFrame) throws Exception {
         Http2Headers headers = http2HeadersFrame.headers();
 
         HTTPBalanceResponse httpBalanceResponse = httpBalance.getResponse(new HTTPBalanceRequest((InetSocketAddress) ctx.channel().remoteAddress(),
