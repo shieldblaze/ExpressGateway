@@ -252,6 +252,15 @@ public class Backend implements Comparable<Backend>, Closeable {
     }
 
     @Override
+    public boolean equals(Object obj) {
+        if (obj instanceof Backend) {
+            Backend backend = (Backend) obj;
+            return hashCode() == backend.hashCode();
+        }
+        return false;
+    }
+
+    @Override
     public String toString() {
         return "Backend{" +
                 "socketAddress=" + socketAddress +
