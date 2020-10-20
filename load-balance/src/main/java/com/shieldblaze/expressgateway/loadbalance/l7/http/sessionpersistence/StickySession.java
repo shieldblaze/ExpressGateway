@@ -33,7 +33,6 @@ import io.netty.handler.codec.http.cookie.ServerCookieEncoder;
 
 import java.util.Collections;
 import java.util.List;
-import java.util.Objects;
 import java.util.concurrent.CopyOnWriteArrayList;
 
 public final class StickySession implements SessionPersistence<HTTPBalanceResponse, HTTPBalanceResponse, HTTPBalanceRequest, Backend> {
@@ -70,7 +69,7 @@ public final class StickySession implements SessionPersistence<HTTPBalanceRespon
     @Override
     public HTTPBalanceResponse addRoute(HTTPBalanceRequest httpBalanceRequest, Backend backend) {
         DefaultCookie cookie = new DefaultCookie(COOKIE_NAME, String.valueOf(backend.getHash()));
-        cookie.setDomain(backend.getHostname());
+        cookie.setDomain(backend.getCluster().getHostname());
         cookie.setPath("/");
         cookie.setHttpOnly(true);
         cookie.setSameSite(CookieHeaderNames.SameSite.Strict);

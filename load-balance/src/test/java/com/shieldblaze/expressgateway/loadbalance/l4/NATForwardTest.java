@@ -33,7 +33,7 @@ class NATForwardTest {
     @Test
     void testNATForward() throws LoadBalanceException {
 
-        L4Balance l4Balance = new NATForward(SingleBackendCluster.of(fastBuild("192.168.1.1")));
+        L4Balance l4Balance = new NATForward(SingleBackendCluster.of("localhost.domain", fastBuild("192.168.1.1")));
 
         assertEquals(fastBuild("192.168.1.1").getSocketAddress(),
                 l4Balance.getResponse(new L4Request(new InetSocketAddress("10.10.10.1", 1))).getBackend().getSocketAddress());
@@ -47,7 +47,9 @@ class NATForwardTest {
 
     @Test
     void throwException() {
-        assertThrows(IllegalArgumentException.class, () -> new NATForward(ClusterPool.of(fastBuild("192.168.1.1"), fastBuild("192.168.1.2"))));
+        assertThrows(IllegalArgumentException.class, () -> {
+            new NATForward(ClusterPool.of("localhost", fastBuild("192.168.1.1"), fastBuild("192.168.1.2")));
+        });
     }
 
     private Backend fastBuild(String host) {

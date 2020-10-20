@@ -19,7 +19,6 @@ package com.shieldblaze.expressgateway.core;
 
 import com.shieldblaze.expressgateway.backend.Backend;
 import com.shieldblaze.expressgateway.backend.cluster.Cluster;
-import com.shieldblaze.expressgateway.backend.cluster.ClusterPool;
 import com.shieldblaze.expressgateway.backend.cluster.SingleBackendCluster;
 import com.shieldblaze.expressgateway.backend.connection.DefaultConnectionManager;
 import com.shieldblaze.expressgateway.core.configuration.CommonConfiguration;
@@ -89,7 +88,7 @@ public final class Main {
         SelfSignedCertificate selfSignedCertificate = new SelfSignedCertificate("localhost", "EC", 256);
 
         CertificateKeyPair certificateKeyPair = new CertificateKeyPair(
-                Collections.singletonList(selfSignedCertificate.cert()), selfSignedCertificate.key(),false);
+                Collections.singletonList(selfSignedCertificate.cert()), selfSignedCertificate.key(), false);
 
         TLSServerMapping tlsServerMapping = new TLSServerMapping(certificateKeyPair);
 
@@ -109,9 +108,10 @@ public final class Main {
                 .withTrustManager(InsecureTrustManagerFactory.INSTANCE.getTrustManagers()[0])
                 .build();
 
-        Backend backend = new Backend("www.google.com", new InetSocketAddress("www.google.com", 443));
 
-        Cluster clusterPool = SingleBackendCluster.of(backend);
+        Backend backend = new Backend(new InetSocketAddress("www.google.com", 443));
+        Cluster clusterPool = SingleBackendCluster.of("www.google.com", backend);
+
 //        cluster.addBackend(new Backend("speed.hetzner.de", new InetSocketAddress("speed.hetzner.de", 443)));
 //        cluster.addBackend(new Backend("one.one.one.one", new InetSocketAddress("one.one.one.one", 443)));
 
@@ -149,7 +149,6 @@ public final class Main {
                 .withHTTPConfiguration(httpConfiguration)
                 .withConnectionManager(new DefaultConnectionManager(new BootstrapperImpl()))
                 .build();
-
 
 
         httpLoadBalancer.start();

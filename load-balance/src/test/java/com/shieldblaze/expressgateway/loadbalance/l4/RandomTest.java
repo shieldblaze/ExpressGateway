@@ -34,6 +34,7 @@ class RandomTest {
 
         // Add Backend Server Addresses
         Cluster cluster = ClusterPool.of(
+                "localhost.domain",
                 fastBuild("172.16.20.1"),
                 fastBuild("172.16.20.2"),
                 fastBuild("172.16.20.3"),

@@ -32,17 +32,18 @@ public final class ClusterPool extends Cluster {
         setName("ClusterPool#" + count++);
     }
 
-    private ClusterPool(String name, Backend... backends) {
+    private ClusterPool(String name, String hostname, Backend... backends) {
         setName(name);
+        setHostname(hostname);
         addBackends(backends);
     }
 
-    public static ClusterPool of(Backend... backends) {
-        return new ClusterPool("ClusterPool#" + count++, backends);
+    public static ClusterPool of(String hostname, Backend... backends) {
+        return new ClusterPool("ClusterPool#" + count++, hostname, backends);
     }
 
-    public static ClusterPool of(String name, Backend... backends) {
-        return new ClusterPool(name, backends);
+    public static ClusterPool of(String name, String hostname, Backend... backends) {
+        return new ClusterPool(name, hostname, backends);
     }
 
     /**

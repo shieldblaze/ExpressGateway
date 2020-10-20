@@ -36,6 +36,7 @@ class StickySessionTest {
     @Test
     void testStickySession() throws LoadBalanceException {
         Cluster cluster = ClusterPool.of(
+                "localhost.domain",
                 new Backend(new InetSocketAddress("172.16.1.1", 9110)),
                 new Backend(new InetSocketAddress("172.16.1.2", 9110)),
                 new Backend(new InetSocketAddress("172.16.1.3", 9110)),

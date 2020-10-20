@@ -26,7 +26,6 @@ import com.shieldblaze.expressgateway.backend.events.BackendEvent;
 import com.shieldblaze.expressgateway.common.eventstream.EventListener;
 import com.shieldblaze.expressgateway.loadbalance.SessionPersistence;
 import com.shieldblaze.expressgateway.loadbalance.exceptions.BackendNotOnlineException;
-import com.shieldblaze.expressgateway.loadbalance.exceptions.NoBackendAvailableException;
 
 import java.net.InetSocketAddress;
 

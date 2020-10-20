@@ -26,16 +26,21 @@ public final class SingleBackendCluster extends Cluster {
 
     private static int count = 0;
 
-    private SingleBackendCluster(String name, Backend backend) {
+    private SingleBackendCluster(String name, String hostname, Backend backend) {
         setName(name);
+        setHostname(hostname);
         addBackend(backend);
     }
 
     public static SingleBackendCluster of(Backend backend) {
-        return new SingleBackendCluster("SingleBackendCluster#" + count++, backend);
+        return new SingleBackendCluster("SingleBackendCluster#" + count++, backend.getSocketAddress().getHostName(), backend);
     }
 
-    public static SingleBackendCluster of(String name, Backend backend) {
-        return new SingleBackendCluster(name, backend);
+    public static SingleBackendCluster of(String hostname, Backend backend) {
+        return new SingleBackendCluster("SingleBackendCluster#" + count++, hostname, backend);
+    }
+
+    public static SingleBackendCluster of(String name, String hostname, Backend backend) {
+        return new SingleBackendCluster(name, hostname, backend);
     }
 }

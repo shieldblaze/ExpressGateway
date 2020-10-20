@@ -33,6 +33,7 @@ class RandomTest {
     @Test
     void testRandom() throws LoadBalanceException {
         Cluster cluster = ClusterPool.of(
+                "localhost.domain",
                 fastBuild("172.16.20.1"),
                 fastBuild("172.16.20.2"),
                 fastBuild("172.16.20.3"),

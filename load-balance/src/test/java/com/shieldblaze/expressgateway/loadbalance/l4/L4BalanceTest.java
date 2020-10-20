@@ -34,7 +34,7 @@ class L4BalanceTest {
         Backend backend = new Backend(new InetSocketAddress("192.168.1.1", 9110));
 
         L4Balance l4Balance = new EmptyL4Balance();
-        l4Balance.setCluster(SingleBackendCluster.of(backend));
+        l4Balance.setCluster(SingleBackendCluster.of("localhost.domain", backend));
 
         Assertions.assertEquals(backend, l4Balance.getResponse(null).getBackend());
     }

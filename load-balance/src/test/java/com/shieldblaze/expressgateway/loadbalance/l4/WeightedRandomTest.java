@@ -33,6 +33,7 @@ class WeightedRandomTest {
     void testWeightedRandom() throws LoadBalanceException {
 
         Cluster cluster = ClusterPool.of(
+                "localhost.domain",
                 fastBuild("10.10.1.1", 30),
                 fastBuild("10.10.1.2", 20),
                 fastBuild("10.10.1.3", 40),

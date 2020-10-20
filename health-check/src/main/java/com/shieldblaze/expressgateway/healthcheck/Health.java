@@ -42,5 +42,5 @@ public enum Health {
     /**
      * Health is unknown.
      */
-    UNKNOWN;
+    UNKNOWN
 }

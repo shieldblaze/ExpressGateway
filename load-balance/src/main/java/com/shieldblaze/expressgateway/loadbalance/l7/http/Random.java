@@ -21,10 +21,8 @@ import com.shieldblaze.expressgateway.backend.Backend;
 import com.shieldblaze.expressgateway.backend.State;
 import com.shieldblaze.expressgateway.backend.cluster.Cluster;
 import com.shieldblaze.expressgateway.backend.exceptions.BackendNotOnlineException;
-import com.shieldblaze.expressgateway.loadbalance.exceptions.LoadBalanceException;
 import com.shieldblaze.expressgateway.loadbalance.SessionPersistence;
 import com.shieldblaze.expressgateway.loadbalance.exceptions.NoBackendAvailableException;
-import com.shieldblaze.expressgateway.loadbalance.l4.L4Response;
 
 /**
  * Select {@link Backend} Randomly

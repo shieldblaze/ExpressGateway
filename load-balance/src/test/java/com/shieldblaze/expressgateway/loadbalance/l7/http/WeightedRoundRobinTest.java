@@ -34,6 +34,7 @@ class WeightedRoundRobinTest {
     void testWeightedRoundRobin() throws LoadBalanceException {
 
         Cluster cluster = ClusterPool.of(
+                "localhost.domain",
                 fastBuild("10.10.1.1", 10),
                 fastBuild("10.10.1.2", 20),
                 fastBuild("10.10.1.3", 30),

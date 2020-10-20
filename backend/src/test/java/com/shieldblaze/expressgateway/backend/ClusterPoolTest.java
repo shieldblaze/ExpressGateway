@@ -56,7 +56,7 @@ class ClusterPoolTest {
         for (int i = 1; i < 100; i++) {
             HealthCheck healthCheck = new TCPHealthCheck(new InetSocketAddress("127.0.0.1", 10000), Duration.ofMillis(15));
             DefaultHealthCheckManager defaultHealthCheckManager = new DefaultHealthCheckManager(healthCheck, 1, 1, TimeUnit.SECONDS);
-            clusterPool.addBackends(new Backend("localhost", new InetSocketAddress("192.168.1." + i, i), 100, 100, healthCheck, defaultHealthCheckManager));
+            clusterPool.addBackends(new Backend(new InetSocketAddress("192.168.1." + i, i), 100, 100, healthCheck, defaultHealthCheckManager));
         }
 
         Thread.sleep(5000L); // Wait for all Health Checks to Finish

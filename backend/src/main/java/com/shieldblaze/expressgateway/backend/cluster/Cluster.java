@@ -29,9 +29,7 @@ import com.shieldblaze.expressgateway.common.eventstream.EventStream;
 import java.util.List;
 import java.util.Objects;
 import java.util.concurrent.CopyOnWriteArrayList;
-import java.util.concurrent.Executors;
 import java.util.stream.Collectors;
-import java.util.stream.Stream;
 
 /**
  * Base class for Cluster
@@ -39,19 +37,43 @@ import java.util.stream.Stream;
 public abstract class Cluster {
 
     /**
+     * List of all {@linkplain Backend} associated with this {@linkplain Cluster}
+     */
+    private final List<Backend> allBackends = new CopyOnWriteArrayList<>();
+
+    /**
      * Stream of {@linkplain BackendEvent}
      */
     private final AsyncEventStream eventStream = new AsyncEventStream(GlobalExecutors.INSTANCE.getExecutorService());
 
     /**
-     * List of all {@linkplain Backend} associated with this {@linkplain Cluster}
+     * Hostname of this {@linkplain Cluster}
      */
-    protected final List<Backend> allBackends = new CopyOnWriteArrayList<>();
+    private String hostname;
 
     /**
      * Name of this {@linkplain Cluster}
      */
     private String name;
+
+    /**
+     * Get hostname of this {@linkplain Cluster}
+     *
+     * @return Hostname as {@link String}
+     */
+    public String getHostname() {
+        return hostname;
+    }
+
+    /**
+     * Set hostname of this {@linkplain Cluster}
+     *
+     * @param hostname Name as {@link String}
+     * @throws IllegalArgumentException If hostname is invalid
+     */
+    public void setHostname(String hostname) {
+        this.hostname = Objects.requireNonNull(hostname, "hostname");
+    }
 
     /**
      * Get name of this {@linkplain Cluster}
@@ -76,6 +98,7 @@ public abstract class Cluster {
      */
     protected void addBackend(Backend backend) {
         allBackends.add(Objects.requireNonNull(backend, "backend"));
+        backend.setCluster(this);
     }
 
     /**

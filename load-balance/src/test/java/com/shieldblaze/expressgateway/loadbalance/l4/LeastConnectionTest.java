@@ -32,6 +32,7 @@ class LeastConnectionTest {
     @Test
     void testLeastConnection() throws LoadBalanceException {
         Cluster cluster = ClusterPool.of(
+                "localhost.domain",
                 fastBuild("10.10.1.1"),
                 fastBuild("10.10.1.2"),
                 fastBuild("10.10.1.3"),
