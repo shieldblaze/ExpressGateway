@@ -157,7 +157,7 @@ final class UpstreamHandler extends ChannelInboundHandlerAdapter {
 
             headers.remove(HttpHeaderNames.UPGRADE);
             headers.set("X-Forwarded-For", upstreamAddress.getAddress().getHostAddress());
-            headers.set(HttpHeaderNames.HOST, backend.getHostname());
+            headers.set(HttpHeaderNames.HOST, backend.getCluster().getHostname());
             headers.set(HttpHeaderNames.ACCEPT_ENCODING, "br, gzip, deflate");
 
             if (channelActive) {
