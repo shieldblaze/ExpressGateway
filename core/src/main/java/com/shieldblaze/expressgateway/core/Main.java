@@ -21,29 +21,30 @@ import com.shieldblaze.expressgateway.backend.Backend;
 import com.shieldblaze.expressgateway.backend.cluster.Cluster;
 import com.shieldblaze.expressgateway.backend.cluster.SingleBackendCluster;
 import com.shieldblaze.expressgateway.backend.connection.DefaultConnectionManager;
-import com.shieldblaze.expressgateway.core.configuration.CommonConfiguration;
-import com.shieldblaze.expressgateway.core.configuration.CommonConfigurationBuilder;
-import com.shieldblaze.expressgateway.core.configuration.buffer.PooledByteBufAllocatorConfiguration;
-import com.shieldblaze.expressgateway.core.configuration.eventloop.EventLoopConfiguration;
-import com.shieldblaze.expressgateway.core.configuration.eventloop.EventLoopConfigurationBuilder;
-import com.shieldblaze.expressgateway.core.configuration.http.HTTPConfiguration;
-import com.shieldblaze.expressgateway.core.configuration.http.HTTPConfigurationBuilder;
-import com.shieldblaze.expressgateway.core.configuration.tls.CertificateKeyPair;
-import com.shieldblaze.expressgateway.core.configuration.tls.Cipher;
-import com.shieldblaze.expressgateway.core.configuration.tls.MutualTLS;
-import com.shieldblaze.expressgateway.core.configuration.tls.Protocol;
-import com.shieldblaze.expressgateway.core.configuration.tls.TLSConfiguration;
-import com.shieldblaze.expressgateway.core.configuration.tls.TLSConfigurationBuilder;
-import com.shieldblaze.expressgateway.core.configuration.tls.TLSServerMapping;
-import com.shieldblaze.expressgateway.core.configuration.transport.ReceiveBufferAllocationType;
-import com.shieldblaze.expressgateway.core.configuration.transport.TransportConfiguration;
-import com.shieldblaze.expressgateway.core.configuration.transport.TransportConfigurationBuilder;
-import com.shieldblaze.expressgateway.core.configuration.transport.TransportType;
+import com.shieldblaze.expressgateway.configuration.CommonConfiguration;
+import com.shieldblaze.expressgateway.configuration.CommonConfigurationBuilder;
+import com.shieldblaze.expressgateway.configuration.buffer.PooledByteBufAllocatorConfiguration;
+import com.shieldblaze.expressgateway.configuration.eventloop.EventLoopConfiguration;
+import com.shieldblaze.expressgateway.configuration.eventloop.EventLoopConfigurationBuilder;
+import com.shieldblaze.expressgateway.configuration.http.HTTPConfiguration;
+import com.shieldblaze.expressgateway.configuration.http.HTTPConfigurationBuilder;
+import com.shieldblaze.expressgateway.configuration.tls.CertificateKeyPair;
+import com.shieldblaze.expressgateway.configuration.tls.Cipher;
+import com.shieldblaze.expressgateway.configuration.tls.MutualTLS;
+import com.shieldblaze.expressgateway.configuration.tls.Protocol;
+import com.shieldblaze.expressgateway.configuration.tls.TLSConfiguration;
+import com.shieldblaze.expressgateway.configuration.tls.TLSConfigurationBuilder;
+import com.shieldblaze.expressgateway.configuration.tls.TLSServerMapping;
+import com.shieldblaze.expressgateway.configuration.transport.ReceiveBufferAllocationType;
+import com.shieldblaze.expressgateway.configuration.transport.TransportConfiguration;
+import com.shieldblaze.expressgateway.configuration.transport.TransportConfigurationBuilder;
+import com.shieldblaze.expressgateway.configuration.transport.TransportType;
 import com.shieldblaze.expressgateway.core.loadbalancer.l7.http.HTTPLoadBalancer;
 import com.shieldblaze.expressgateway.core.loadbalancer.l7.http.HTTPLoadBalancerBuilder;
 import com.shieldblaze.expressgateway.core.server.http.BootstrapperImpl;
 import com.shieldblaze.expressgateway.core.server.http.HTTPListener;
 import com.shieldblaze.expressgateway.loadbalance.l7.http.RoundRobin;
+import io.netty.channel.epoll.Epoll;
 import io.netty.handler.ssl.util.InsecureTrustManagerFactory;
 import io.netty.handler.ssl.util.SelfSignedCertificate;
 
@@ -60,13 +61,14 @@ public final class Main {
     }
 
     public static void main(String[] args) throws CertificateException, SSLException {
+
         TransportConfiguration transportConfiguration = TransportConfigurationBuilder.newBuilder()
-                .withTransportType(TransportType.NIO)
+                .withTransportType(TransportType.EPOLL)
                 .withTCPFastOpenMaximumPendingRequests(2147483647)
                 .withBackendConnectTimeout(10000 * 5)
                 .withBackendSocketTimeout(10000 * 5)
                 .withReceiveBufferAllocationType(ReceiveBufferAllocationType.FIXED)
-                .withReceiveBufferSizes(new int[]{100})
+                .withReceiveBufferSizes(new int[]{65535})
                 .withSocketReceiveBufferSize(2147483647)
                 .withSocketSendBufferSize(2147483647)
                 .withTCPConnectionBacklog(2147483647)

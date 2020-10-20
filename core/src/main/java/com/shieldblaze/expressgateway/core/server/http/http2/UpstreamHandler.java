@@ -18,7 +18,13 @@
 package com.shieldblaze.expressgateway.core.server.http.http2;
 
 import com.shieldblaze.expressgateway.backend.Backend;
+import com.shieldblaze.expressgateway.backend.cluster.Cluster;
+import com.shieldblaze.expressgateway.backend.connection.Connection;
+import com.shieldblaze.expressgateway.backend.connection.ConnectionManager;
+import com.shieldblaze.expressgateway.common.utils.Hostname;
 import com.shieldblaze.expressgateway.core.server.http.HTTPResponses;
+import com.shieldblaze.expressgateway.loadbalance.exceptions.BackendNotOnlineException;
+import com.shieldblaze.expressgateway.loadbalance.exceptions.NoBackendAvailableException;
 import com.shieldblaze.expressgateway.loadbalance.l7.http.HTTPBalance;
 import com.shieldblaze.expressgateway.loadbalance.l7.http.HTTPBalanceRequest;
 import com.shieldblaze.expressgateway.loadbalance.l7.http.HTTPBalanceResponse;
@@ -28,6 +34,7 @@ import io.netty.handler.codec.http.FullHttpResponse;
 import io.netty.handler.codec.http.HttpHeaderNames;
 import io.netty.handler.codec.http.HttpHeaders;
 import io.netty.handler.codec.http.HttpVersion;
+import io.netty.handler.codec.http2.DefaultHttp2Headers;
 import io.netty.handler.codec.http2.DefaultHttp2HeadersFrame;
 import io.netty.handler.codec.http2.Http2ChannelDuplexHandler;
 import io.netty.handler.codec.http2.Http2DataFrame;
@@ -35,12 +42,18 @@ import io.netty.handler.codec.http2.Http2Exception;
 import io.netty.handler.codec.http2.Http2Headers;
 import io.netty.handler.codec.http2.Http2HeadersFrame;
 import io.netty.handler.codec.http2.HttpConversionUtil;
+import org.apache.logging.log4j.LogManager;
+import org.apache.logging.log4j.Logger;
 
 import java.net.InetSocketAddress;
 
-public class UpstreamHandler extends Http2ChannelDuplexHandler {
+public final class UpstreamHandler extends Http2ChannelDuplexHandler {
 
+    private static final Logger logger = LogManager.getLogger(UpstreamHandler.class);
+
+    private ConnectionManager connectionManager;
     private HTTPBalance httpBalance;
+    private Cluster cluster;
 
     @Override
     public void channelRead(ChannelHandlerContext ctx, Object msg) throws Exception {
@@ -54,16 +67,30 @@ public class UpstreamHandler extends Http2ChannelDuplexHandler {
     }
 
     private void onHeaderRead(ChannelHandlerContext ctx, Http2HeadersFrame http2HeadersFrame) throws Exception {
+        HTTPBalanceResponse httpBalanceResponse;
         Http2Headers headers = http2HeadersFrame.headers();
-
+        InetSocketAddress localAddress = (InetSocketAddress) ctx.channel().localAddress();
         InetSocketAddress remoteAddress = (InetSocketAddress) ctx.channel().remoteAddress();
-        HTTPBalanceResponse httpBalanceResponse = httpBalance.getResponse(new HTTPBalanceRequest(remoteAddress, getHeaders(http2HeadersFrame)));
-        if (httpBalanceResponse == null) {
-            sendErrorResponse(ctx, HTTPResponses.BAD_GATEWAY, http2HeadersFrame.padding());
+
+        // Check if Authority header is present.
+        // If Authority header is present, check if Authority matches Cluster Hostname and local Port.
+        if (headers.authority() == null || !Hostname.doesHostAndPortMatch(cluster.getHostname(), localAddress.getPort(), headers.authority().toString())) {
+            sendErrorResponse(ctx, HTTPResponses.BAD_REQUEST_400, http2HeadersFrame.padding());
+        }
+
+        // Call HTTPBalance and get HTTPBalanceResponse for this request.
+        try {
+            httpBalanceResponse = httpBalance.getResponse(new HTTPBalanceRequest(remoteAddress, getHeaders(http2HeadersFrame)));
+        } catch (BackendNotOnlineException ex) {
+            sendErrorResponse(ctx, HTTPResponses.BAD_GATEWAY_502, http2HeadersFrame.padding());
+            return;
+        } catch (NoBackendAvailableException ex) {
+            sendErrorResponse(ctx, HTTPResponses.SERVICE_UNAVAILABLE_503, http2HeadersFrame.padding());
             return;
         }
 
         Backend backend = httpBalanceResponse.getBackend();
+        Connection connection = connectionManager.acquireConnection();
 
     }
 

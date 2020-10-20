@@ -18,9 +18,9 @@
 package com.shieldblaze.expressgateway.core.server.http;
 
 import com.shieldblaze.expressgateway.backend.Backend;
-import com.shieldblaze.expressgateway.core.configuration.CommonConfiguration;
-import com.shieldblaze.expressgateway.core.configuration.http.HTTPConfiguration;
-import com.shieldblaze.expressgateway.core.configuration.tls.TLSConfiguration;
+import com.shieldblaze.expressgateway.configuration.CommonConfiguration;
+import com.shieldblaze.expressgateway.configuration.http.HTTPConfiguration;
+import com.shieldblaze.expressgateway.configuration.tls.TLSConfiguration;
 import com.shieldblaze.expressgateway.core.loadbalancer.l7.http.HTTPLoadBalancer;
 import com.shieldblaze.expressgateway.core.utils.BootstrapFactory;
 import com.shieldblaze.expressgateway.core.utils.ChannelUtils;
@@ -126,13 +126,13 @@ final class UpstreamHandler extends ChannelInboundHandlerAdapter {
                 backend = HTTPBalance.getResponse(new HTTPBalanceRequest((InetSocketAddress) ctx.channel().remoteAddress(), headers)).getBackend();
             }
 
-            // If Backend is not found, return `BAD_GATEWAY` response.
+            // If Backend is not found, return `BAD_GATEWAY_502` response.
             if (backend == null) {
                 // If request have `Keep-Alive`, return `Keep-Alive` else `Close` response.
                 if (HttpUtil.isKeepAlive(request)) {
-                    ctx.channel().writeAndFlush(HTTPResponses.BAD_GATEWAY_KEEP_ALIVE.retainedDuplicate());
+                    ctx.channel().writeAndFlush(HTTPResponses.BAD_GATEWAY_502.retainedDuplicate());
                 } else {
-                    ctx.channel().writeAndFlush(HTTPResponses.BAD_GATEWAY.retainedDuplicate()).addListener(ChannelFutureListener.CLOSE);
+                    ctx.channel().writeAndFlush(HTTPResponses.BAD_GATEWAY_502.retainedDuplicate()).addListener(ChannelFutureListener.CLOSE);
                 }
                 return;
             }
@@ -175,7 +175,7 @@ final class UpstreamHandler extends ChannelInboundHandlerAdapter {
 
             bytesReceived += content.content().readableBytes();
             if (bytesReceived > httpConfiguration.getMaxContentLength()) {
-                ctx.writeAndFlush(HTTPResponses.TOO_LARGE.retainedDuplicate()).addListener(ChannelFutureListener.CLOSE);
+                ctx.writeAndFlush(HTTPResponses.TOO_LARGE_413.retainedDuplicate()).addListener(ChannelFutureListener.CLOSE);
                 return;
             }
 

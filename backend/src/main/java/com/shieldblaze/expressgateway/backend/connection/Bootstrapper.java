@@ -17,15 +17,60 @@
  */
 package com.shieldblaze.expressgateway.backend.connection;
 
+import com.shieldblaze.expressgateway.configuration.CommonConfiguration;
 import io.netty.bootstrap.Bootstrap;
+import io.netty.buffer.ByteBufAllocator;
+import io.netty.channel.EventLoopGroup;
+
+import java.util.Objects;
 
 /**
  * Netty {@link Bootstrap} initializer
  */
-public interface Bootstrapper {
+public abstract class Bootstrapper {
+
+    private CommonConfiguration commonConfiguration;
+    private EventLoopGroup eventLoopGroup;
+    private ByteBufAllocator allocator;
 
     /**
      * Create a new {@link Bootstrap} Instance for new connection.
      */
-    Bootstrap bootstrap();
+    public abstract Bootstrap bootstrap();
+
+    public void setCommonConfiguration(CommonConfiguration commonConfiguration) {
+        if (this.commonConfiguration == null) {
+            this.commonConfiguration = Objects.requireNonNull(commonConfiguration, "CommonConfiguration");
+        } else {
+            throw new IllegalArgumentException("CommonConfiguration is already set");
+        }
+    }
+
+    public void setEventLoopFactory(EventLoopGroup eventLoopGroup) {
+        if (this.eventLoopGroup == null) {
+            this.eventLoopGroup = Objects.requireNonNull(eventLoopGroup, "EventLoopGroup");
+        } else {
+            throw new IllegalArgumentException("EventLoopGroup is already set");
+        }
+    }
+
+    public void setAllocator(ByteBufAllocator allocator) {
+        if (this.allocator == null) {
+            this.allocator = Objects.requireNonNull(allocator, "ByteBufAllocator");
+        } else {
+            throw new IllegalArgumentException("ByteBufAllocator is already set");
+        }
+    }
+
+    protected CommonConfiguration getCommonConfiguration() {
+        return commonConfiguration;
+    }
+
+    protected EventLoopGroup getEventLoopGroup() {
+        return eventLoopGroup;
+    }
+
+    protected ByteBufAllocator getAllocator() {
+        return allocator;
+    }
 }

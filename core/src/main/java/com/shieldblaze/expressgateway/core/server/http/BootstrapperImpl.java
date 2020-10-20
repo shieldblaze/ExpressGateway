@@ -15,16 +15,42 @@
  * You should have received a copy of the GNU General Public License
  * along with ShieldBlaze ExpressGateway.  If not, see <https://www.gnu.org/licenses/>.
  */
-
 package com.shieldblaze.expressgateway.core.server.http;
 
 import com.shieldblaze.expressgateway.backend.connection.Bootstrapper;
+import com.shieldblaze.expressgateway.configuration.transport.TransportType;
 import io.netty.bootstrap.Bootstrap;
+import io.netty.channel.ChannelOption;
+import io.netty.channel.epoll.EpollMode;
+import io.netty.channel.epoll.EpollSocketChannel;
+import io.netty.channel.socket.nio.NioSocketChannel;
 
-public final class BootstrapperImpl implements Bootstrapper {
+public final class BootstrapperImpl extends Bootstrapper {
 
     @Override
     public Bootstrap bootstrap() {
-        return null;
+        return new Bootstrap()
+                .group(getEventLoopGroup())
+                .option(ChannelOption.ALLOCATOR, getAllocator())
+                .option(ChannelOption.RCVBUF_ALLOCATOR, getCommonConfiguration().getTransportConfiguration().getRecvByteBufAllocator())
+                .option(ChannelOption.SO_SNDBUF, getCommonConfiguration().getTransportConfiguration().getSocketSendBufferSize())
+                .option(ChannelOption.SO_RCVBUF, getCommonConfiguration().getTransportConfiguration().getSocketReceiveBufferSize())
+                .option(ChannelOption.TCP_NODELAY, true)
+                .option(ChannelOption.AUTO_READ, true)
+                .option(ChannelOption.AUTO_CLOSE, true)
+                .option(ChannelOption.CONNECT_TIMEOUT_MILLIS, getCommonConfiguration().getTransportConfiguration().getBackendConnectTimeout())
+                .channelFactory(() -> {
+                    if (getCommonConfiguration().getTransportConfiguration().getTransportType() == TransportType.EPOLL) {
+                        EpollSocketChannel socketChannel = new EpollSocketChannel();
+                        socketChannel.config()
+                                .setEpollMode(EpollMode.EDGE_TRIGGERED)
+                                .setTcpFastOpenConnect(true)
+                                .setTcpQuickAck(true);
+
+                        return socketChannel;
+                    } else {
+                        return new NioSocketChannel();
+                    }
+                });
     }
 }

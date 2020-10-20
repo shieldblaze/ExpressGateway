@@ -17,8 +17,8 @@
  */
 package com.shieldblaze.expressgateway.core.tls;
 
-import com.shieldblaze.expressgateway.core.configuration.tls.CertificateKeyPair;
-import com.shieldblaze.expressgateway.core.configuration.tls.TLSConfiguration;
+import com.shieldblaze.expressgateway.configuration.tls.CertificateKeyPair;
+import com.shieldblaze.expressgateway.configuration.tls.TLSConfiguration;
 import io.netty.channel.ChannelHandlerContext;
 import io.netty.handler.codec.DecoderException;
 import io.netty.handler.ssl.AbstractSniHandler;

@@ -76,6 +76,12 @@ public abstract class ConnectionManager {
     public void setBackend(Backend backend) {
         if (this.backend == null) {
             this.backend = Objects.requireNonNull(backend, "backend");
+        } else {
+            throw new IllegalArgumentException("Backend is already set");
         }
+    }
+
+    public Bootstrapper getBootstrapper() {
+        return bootstrapper;
     }
 }
