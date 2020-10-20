@@ -23,9 +23,11 @@ import com.shieldblaze.expressgateway.backend.cluster.Cluster;
 import com.shieldblaze.expressgateway.backend.events.BackendEvent;
 import com.shieldblaze.expressgateway.common.eventstream.EventListener;
 import com.shieldblaze.expressgateway.common.list.RoundRobinList;
+import com.shieldblaze.expressgateway.common.utils.Hostname;
 import com.shieldblaze.expressgateway.loadbalance.SessionPersistence;
 import com.shieldblaze.expressgateway.loadbalance.exceptions.LoadBalanceException;
 import com.shieldblaze.expressgateway.loadbalance.exceptions.NoBackendAvailableException;
+import io.netty.handler.codec.http.HttpHeaderNames;
 
 /**
  * Select {@link Backend} based on Round-Robin
@@ -55,15 +57,15 @@ public final class RoundRobin extends HTTPBalance implements EventListener {
     }
 
     @Override
-    public HTTPBalanceResponse getResponse(HTTPBalanceRequest httpBalanceRequest) throws LoadBalanceException {
-        HTTPBalanceResponse httpBalanceResponse = sessionPersistence.getBackend(httpBalanceRequest);
+    public HTTPBalanceResponse getResponse(HTTPBalanceRequest request) throws LoadBalanceException {
+        HTTPBalanceResponse httpBalanceResponse = sessionPersistence.getBackend(request);
         if (httpBalanceResponse != null) {
             // If Backend is ONLINE then return the response
             // else remove it from session persistence.
             if (httpBalanceResponse.getBackend().getState() == State.ONLINE) {
                 return httpBalanceResponse;
             } else {
-                sessionPersistence.removeRoute(httpBalanceRequest, httpBalanceResponse.getBackend());
+                sessionPersistence.removeRoute(request, httpBalanceResponse.getBackend());
             }
         }
 
@@ -75,7 +77,7 @@ public final class RoundRobin extends HTTPBalance implements EventListener {
             throw new NoBackendAvailableException("No Backend available for Cluster: " + cluster);
         }
 
-        return sessionPersistence.addRoute(httpBalanceRequest, backend);
+        return sessionPersistence.addRoute(request, backend);
     }
 
     @Override

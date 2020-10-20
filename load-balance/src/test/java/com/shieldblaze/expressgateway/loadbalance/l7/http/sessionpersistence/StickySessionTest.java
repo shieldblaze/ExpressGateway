@@ -29,7 +29,7 @@ import org.junit.jupiter.api.Test;
 
 import java.net.InetSocketAddress;
 
-import static org.junit.jupiter.api.Assertions.*;
+import static org.junit.jupiter.api.Assertions.assertEquals;
 
 class StickySessionTest {
 
@@ -44,7 +44,7 @@ class StickySessionTest {
         );
 
         for (int i = 0; i < 100; i++) {
-            InetSocketAddress socketAddress = new InetSocketAddress("192.168.1." + i,1);
+            InetSocketAddress socketAddress = new InetSocketAddress("192.168.1." + i, 1);
             HTTPBalanceRequest httpBalanceRequest = new HTTPBalanceRequest(socketAddress, EmptyHttpHeaders.INSTANCE);
 
             RoundRobin roundRobin = new RoundRobin(new StickySession(), cluster);
@@ -53,15 +53,15 @@ class StickySessionTest {
 
             httpBalanceRequest = new HTTPBalanceRequest(socketAddress, httpBalanceResponse.getHTTPHeaders());
             httpBalanceResponse = roundRobin.getResponse(httpBalanceRequest);
-            assertEquals(cluster.get(1),  httpBalanceResponse.getBackend());
+            assertEquals(cluster.get(1), httpBalanceResponse.getBackend());
 
             httpBalanceRequest = new HTTPBalanceRequest(socketAddress, httpBalanceResponse.getHTTPHeaders());
             httpBalanceResponse = roundRobin.getResponse(httpBalanceRequest);
-            assertEquals(cluster.get(2),  httpBalanceResponse.getBackend());
+            assertEquals(cluster.get(2), httpBalanceResponse.getBackend());
 
             httpBalanceRequest = new HTTPBalanceRequest(socketAddress, httpBalanceResponse.getHTTPHeaders());
             httpBalanceResponse = roundRobin.getResponse(httpBalanceRequest);
-            assertEquals(cluster.get(3),  httpBalanceResponse.getBackend());
+            assertEquals(cluster.get(3), httpBalanceResponse.getBackend());
         }
     }
 }

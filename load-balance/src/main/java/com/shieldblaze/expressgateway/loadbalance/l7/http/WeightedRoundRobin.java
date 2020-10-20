@@ -24,8 +24,12 @@ import com.shieldblaze.expressgateway.backend.State;
 import com.shieldblaze.expressgateway.backend.cluster.Cluster;
 import com.shieldblaze.expressgateway.backend.events.BackendEvent;
 import com.shieldblaze.expressgateway.common.eventstream.EventListener;
+import com.shieldblaze.expressgateway.common.utils.Hostname;
 import com.shieldblaze.expressgateway.loadbalance.SessionPersistence;
 import com.shieldblaze.expressgateway.loadbalance.exceptions.BackendNotOnlineException;
+import com.shieldblaze.expressgateway.loadbalance.exceptions.LoadBalanceException;
+import com.shieldblaze.expressgateway.loadbalance.exceptions.NoBackendAvailableException;
+import io.netty.handler.codec.http.HttpHeaderNames;
 
 /**
  * Select {@link Backend} based on Weight using Round-Robin
@@ -63,15 +67,15 @@ public final class WeightedRoundRobin extends HTTPBalance implements EventListen
     }
 
     @Override
-    public HTTPBalanceResponse getResponse(HTTPBalanceRequest httpBalanceRequest) throws BackendNotOnlineException {
-        HTTPBalanceResponse httpBalanceResponse = sessionPersistence.getBackend(httpBalanceRequest);
+    public HTTPBalanceResponse getResponse(HTTPBalanceRequest request) throws LoadBalanceException {
+        HTTPBalanceResponse httpBalanceResponse = sessionPersistence.getBackend(request);
         if (httpBalanceResponse != null) {
             // If Backend is ONLINE then return the response
             // else remove it from session persistence.
             if (httpBalanceResponse.getBackend().getState() == State.ONLINE) {
                 return httpBalanceResponse;
             } else {
-                sessionPersistence.removeRoute(httpBalanceRequest, httpBalanceResponse.getBackend());
+                sessionPersistence.removeRoute(request, httpBalanceResponse.getBackend());
             }
         }
 
@@ -84,7 +88,7 @@ public final class WeightedRoundRobin extends HTTPBalance implements EventListen
         if (backend == null) {
             // If Backend is `null` then we don't have any
             // backend to return so we will throw exception.
-            throw new BackendNotOnlineException("No Backend available for Cluster: " + cluster);
+            throw new NoBackendAvailableException("No Backend available for Cluster: " + cluster);
         } else if (backend.getState() != State.ONLINE) {
             reset(); // We'll reset the mapping because it could be outdated.
 
@@ -94,7 +98,7 @@ public final class WeightedRoundRobin extends HTTPBalance implements EventListen
         }
 
         index++;
-        return sessionPersistence.addRoute(httpBalanceRequest, backend);
+        return sessionPersistence.addRoute(request, backend);
     }
 
     @Override
