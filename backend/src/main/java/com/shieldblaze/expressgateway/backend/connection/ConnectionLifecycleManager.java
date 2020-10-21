@@ -17,39 +17,48 @@
  */
 package com.shieldblaze.expressgateway.backend.connection;
 
+import com.shieldblaze.expressgateway.backend.Backend;
+
+import java.util.Map;
+import java.util.concurrent.ConcurrentLinkedQueue;
+
 /**
  * Connection Lifecycle Manager removes in-active {@link Connection}
- * from {@link ConnectionManager#activeConnections} and adds
- * active and available to use {@link Connection} in {@link ConnectionManager#availableConnections}
+ * from {@link ClusterConnectionPool#backendActiveConnectionMap} and adds
+ * active and available to use {@link Connection} in {@link ClusterConnectionPool#backendAvailableConnectionMap}
  */
 final class ConnectionLifecycleManager implements Runnable {
 
-    private final ConnectionManager connectionManager;
+    private final ClusterConnectionPool connectionManager;
 
     /**
      * Create a new {@link ConnectionLifecycleManager} Instance
      *
-     * @param connectionManager {@link ConnectionManager} which we have to manage
+     * @param connectionManager {@link ClusterConnectionPool} which we have to manage
      */
-    ConnectionLifecycleManager(ConnectionManager connectionManager) {
+    ConnectionLifecycleManager(ClusterConnectionPool connectionManager) {
         this.connectionManager = connectionManager;
     }
 
     @Override
     public void run() {
         // Remove connections which are not active.
-        connectionManager.activeConnections.forEach(connection -> {
-            if (!connection.isActive()) {
-                connectionManager.activeConnections.remove(connection);
-                connectionManager.backend.decConnections();
-            }
-        });
+        for (Map.Entry<Backend, ConcurrentLinkedQueue<Connection>> entry : connectionManager.backendActiveConnectionMap.entrySet()) {
+            entry.getValue().forEach(connection -> {
+                if (!connection.isActive()) {
+                    entry.getValue().remove(connection);
+                    entry.getKey().decConnections();
+                }
+            });
+        }
 
         // If connection is active and not in use then add it to available connections.
-        connectionManager.activeConnections.forEach(connection -> {
-            if (connection.isActive() && !connection.isInUse()) {
-                connectionManager.availableConnections.add(connection);
-            }
-        });
+        for (Map.Entry<Backend, ConcurrentLinkedQueue<Connection>> entry : connectionManager.backendActiveConnectionMap.entrySet()) {
+            entry.getValue().forEach(connection -> {
+                if (connection.isActive() && !connection.isInUse()) {
+                    connectionManager.backendAvailableConnectionMap.get(entry.getKey()).add(connection);
+                }
+            });
+        }
     }
 }

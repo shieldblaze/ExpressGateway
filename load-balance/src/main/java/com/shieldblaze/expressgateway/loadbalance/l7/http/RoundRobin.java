@@ -23,11 +23,9 @@ import com.shieldblaze.expressgateway.backend.cluster.Cluster;
 import com.shieldblaze.expressgateway.backend.events.BackendEvent;
 import com.shieldblaze.expressgateway.common.eventstream.EventListener;
 import com.shieldblaze.expressgateway.common.list.RoundRobinList;
-import com.shieldblaze.expressgateway.common.utils.Hostname;
-import com.shieldblaze.expressgateway.loadbalance.SessionPersistence;
-import com.shieldblaze.expressgateway.loadbalance.exceptions.LoadBalanceException;
+import com.shieldblaze.expressgateway.backend.loadbalance.SessionPersistence;
+import com.shieldblaze.expressgateway.backend.exceptions.LoadBalanceException;
 import com.shieldblaze.expressgateway.loadbalance.exceptions.NoBackendAvailableException;
-import io.netty.handler.codec.http.HttpHeaderNames;
 
 /**
  * Select {@link Backend} based on Round-Robin

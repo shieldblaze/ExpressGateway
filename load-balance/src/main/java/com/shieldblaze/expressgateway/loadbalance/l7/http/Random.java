@@ -20,12 +20,9 @@ package com.shieldblaze.expressgateway.loadbalance.l7.http;
 import com.shieldblaze.expressgateway.backend.Backend;
 import com.shieldblaze.expressgateway.backend.State;
 import com.shieldblaze.expressgateway.backend.cluster.Cluster;
-import com.shieldblaze.expressgateway.common.utils.Hostname;
-import com.shieldblaze.expressgateway.loadbalance.SessionPersistence;
+import com.shieldblaze.expressgateway.backend.loadbalance.SessionPersistence;
 import com.shieldblaze.expressgateway.loadbalance.exceptions.BackendNotOnlineException;
-import com.shieldblaze.expressgateway.loadbalance.exceptions.LoadBalanceException;
-import com.shieldblaze.expressgateway.loadbalance.exceptions.NoBackendAvailableException;
-import io.netty.handler.codec.http.HttpHeaderNames;
+import com.shieldblaze.expressgateway.backend.exceptions.LoadBalanceException;
 
 /**
  * Select {@link Backend} Randomly

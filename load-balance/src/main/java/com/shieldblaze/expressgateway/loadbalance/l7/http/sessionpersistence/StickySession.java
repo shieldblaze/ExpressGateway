@@ -18,8 +18,8 @@
 package com.shieldblaze.expressgateway.loadbalance.l7.http.sessionpersistence;
 
 import com.shieldblaze.expressgateway.backend.Backend;
-import com.shieldblaze.expressgateway.loadbalance.Request;
-import com.shieldblaze.expressgateway.loadbalance.SessionPersistence;
+import com.shieldblaze.expressgateway.backend.loadbalance.Request;
+import com.shieldblaze.expressgateway.backend.loadbalance.SessionPersistence;
 import com.shieldblaze.expressgateway.loadbalance.l7.http.HTTPBalanceRequest;
 import com.shieldblaze.expressgateway.loadbalance.l7.http.HTTPBalanceResponse;
 import io.netty.handler.codec.http.DefaultHttpHeaders;

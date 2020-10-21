@@ -15,34 +15,36 @@
  * You should have received a copy of the GNU General Public License
  * along with ShieldBlaze ExpressGateway.  If not, see <https://www.gnu.org/licenses/>.
  */
-package com.shieldblaze.expressgateway.loadbalance.l7.http;
+package com.shieldblaze.expressgateway.backend.loadbalance;
 
-import com.shieldblaze.expressgateway.backend.loadbalance.Request;
-import io.netty.handler.codec.http.HttpHeaders;
-
-import java.net.InetSocketAddress;
+import com.shieldblaze.expressgateway.backend.Backend;
 
 /**
- * {@link HTTPBalanceRequest} contains {@link InetSocketAddress} and {@link HttpHeaders} of Client
+ * {@linkplain Response} contains selected {@linkplain Backend}
  */
-public final class HTTPBalanceRequest extends Request {
-    private final HttpHeaders httpHeaders;
+public abstract class Response {
+    private final Backend backend;
 
     /**
-     * Create a new {@link HTTPBalanceRequest} Instance
+     * Create a new {@link Response} Instance
      *
-     * @param socketAddress {@link InetSocketAddress} of Client
-     * @param httpHeaders   {@link HttpHeaders} of Client
+     * @param backend Selected {@linkplain Backend} for the request
      */
-    public HTTPBalanceRequest(InetSocketAddress socketAddress, HttpHeaders httpHeaders) {
-        super(socketAddress);
-        this.httpHeaders = httpHeaders;
+    public Response(Backend backend) {
+        this.backend = backend;
     }
 
     /**
-     * Get Client {@link HttpHeaders}
+     * Get selected {@linkplain Backend}
      */
-    public HttpHeaders getHTTPHeaders() {
-        return httpHeaders;
+    public Backend getBackend() {
+        return backend;
+    }
+
+    @Override
+    public String toString() {
+        return "Response{" +
+                "backend=" + backend +
+                '}';
     }
 }

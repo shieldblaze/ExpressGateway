@@ -19,8 +19,8 @@ package com.shieldblaze.expressgateway.loadbalance.l4.sessionpersistence;
 
 import com.shieldblaze.expressgateway.backend.Backend;
 import com.shieldblaze.expressgateway.common.map.SelfExpiringMap;
-import com.shieldblaze.expressgateway.loadbalance.Request;
-import com.shieldblaze.expressgateway.loadbalance.SessionPersistence;
+import com.shieldblaze.expressgateway.backend.loadbalance.Request;
+import com.shieldblaze.expressgateway.backend.loadbalance.SessionPersistence;
 import io.netty.util.NetUtil;
 
 import java.math.BigInteger;

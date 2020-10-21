@@ -23,7 +23,7 @@ import com.shieldblaze.expressgateway.configuration.tls.TLSConfiguration;
 import com.shieldblaze.expressgateway.core.loadbalancer.l4.L4LoadBalancer;
 import com.shieldblaze.expressgateway.core.utils.BootstrapFactory;
 import com.shieldblaze.expressgateway.core.utils.EventLoopFactory;
-import com.shieldblaze.expressgateway.loadbalance.exceptions.LoadBalanceException;
+import com.shieldblaze.expressgateway.backend.exceptions.LoadBalanceException;
 import com.shieldblaze.expressgateway.loadbalance.l4.L4Balance;
 import com.shieldblaze.expressgateway.loadbalance.l4.L4Request;
 import io.netty.bootstrap.Bootstrap;

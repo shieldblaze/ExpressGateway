@@ -15,11 +15,11 @@
  * You should have received a copy of the GNU General Public License
  * along with ShieldBlaze ExpressGateway.  If not, see <https://www.gnu.org/licenses/>.
  */
-package com.shieldblaze.expressgateway.core.server.http;
+package com.shieldblaze.expressgateway.core.server.http.compression;
 
 import io.netty.channel.Channel;
 import io.netty.channel.embedded.EmbeddedChannel;
-import com.shieldblaze.expressgateway.core.server.http.compression.BrotliDecoder;
+import com.shieldblaze.expressgateway.core.server.http.compression.brotli.BrotliDecoder;
 import io.netty.handler.codec.compression.ZlibCodecFactory;
 import io.netty.handler.codec.compression.ZlibWrapper;
 import io.netty.handler.codec.http.HttpContent;
@@ -31,7 +31,7 @@ import io.netty.handler.codec.http.HttpMessage;
  * {@link HTTPContentDecompressor} decompresses {@link HttpContent} of {@link HttpMessage} if
  * {@link HttpHeaderNames#CONTENT_ENCODING} is supported.
  */
-final class HTTPContentDecompressor extends HttpContentDecompressor {
+public final class HTTPContentDecompressor extends HttpContentDecompressor {
 
     @Override
     protected EmbeddedChannel newContentDecoder(String contentEncoding) {

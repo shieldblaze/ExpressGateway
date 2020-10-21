@@ -15,13 +15,13 @@
  * You should have received a copy of the GNU General Public License
  * along with ShieldBlaze ExpressGateway.  If not, see <https://www.gnu.org/licenses/>.
  */
-package com.shieldblaze.expressgateway.core.server.http;
+package com.shieldblaze.expressgateway.core.server.http.compression;
 
 import com.shieldblaze.expressgateway.configuration.http.HTTPConfiguration;
 import io.netty.channel.ChannelHandler;
 import io.netty.channel.ChannelHandlerContext;
 import io.netty.channel.embedded.EmbeddedChannel;
-import com.shieldblaze.expressgateway.core.server.http.compression.BrotliEncoder;
+import com.shieldblaze.expressgateway.core.server.http.compression.brotli.BrotliEncoder;
 import io.netty.handler.codec.compression.ZlibCodecFactory;
 import io.netty.handler.codec.compression.ZlibWrapper;
 import io.netty.handler.codec.http.HttpContent;
@@ -36,7 +36,7 @@ import java.util.TreeSet;
  * {@link HTTPContentCompressor} compresses {@link HttpContent} of {@link HttpResponse} if
  * {@link HttpHeaderNames#CONTENT_TYPE} is compressible.
  */
-final class HTTPContentCompressor extends HttpContentCompressor {
+public class HTTPContentCompressor extends HttpContentCompressor {
 
     private static final Set<String> MIME_TYPES = new TreeSet<>();
 
@@ -45,7 +45,7 @@ final class HTTPContentCompressor extends HttpContentCompressor {
 
     private ChannelHandlerContext ctx;
 
-    HTTPContentCompressor(HTTPConfiguration httpConfiguration) {
+    public HTTPContentCompressor(HTTPConfiguration httpConfiguration) {
         this.brotliCompressionQuality = httpConfiguration.getBrotliCompressionLevel();
         this.compressionLevel = httpConfiguration.getDeflateCompressionLevel();
     }
@@ -81,7 +81,7 @@ final class HTTPContentCompressor extends HttpContentCompressor {
         return new Result(targetContentEncoding, new EmbeddedChannel(ctx.channel().id(), ctx.channel().metadata().hasDisconnect(), ctx.channel().config(), compressor));
     }
 
-    static String getTargetEncoding(HttpResponse response, String acceptEncoding) {
+    public static String getTargetEncoding(HttpResponse response, String acceptEncoding) {
         // If "CONTENT-ENCODING" is already set then we will not do anything.
         if (response.headers().contains(HttpHeaderNames.CONTENT_ENCODING)) {
             return null;

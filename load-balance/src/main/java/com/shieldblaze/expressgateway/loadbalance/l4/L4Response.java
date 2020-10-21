@@ -18,7 +18,7 @@
 package com.shieldblaze.expressgateway.loadbalance.l4;
 
 import com.shieldblaze.expressgateway.backend.Backend;
-import com.shieldblaze.expressgateway.loadbalance.Response;
+import com.shieldblaze.expressgateway.backend.loadbalance.Response;
 
 /**
  * Layer-4 Response

@@ -18,6 +18,8 @@
 package com.shieldblaze.expressgateway.core.server.http;
 
 import com.shieldblaze.expressgateway.configuration.http.HTTPConfiguration;
+import com.shieldblaze.expressgateway.core.server.http.compression.HTTP2ContentCompressor;
+import com.shieldblaze.expressgateway.core.server.http.compression.HTTP2ContentDecompressor;
 import io.netty.handler.codec.http.HttpClientCodec;
 import io.netty.handler.codec.http.HttpHeaderNames;
 import io.netty.handler.codec.http.HttpHeaders;
@@ -41,13 +43,13 @@ import io.netty.handler.codec.http2.HttpToHttp2ConnectionHandlerBuilder;
 import io.netty.handler.codec.http2.InboundHttp2ToHttpObjectAdapter;
 import io.netty.handler.codec.http2.InboundHttp2ToHttpObjectAdapterBuilder;
 
-final class HTTPUtils {
+public final class HTTPUtils {
 
     static void setGenericHeaders(HttpHeaders headers) {
         headers.set(HttpHeaderNames.SERVER, "ShieldBlaze ExpressGateway");
     }
 
-    static HttpToHttp2ConnectionHandler clientH2Handler(HTTPConfiguration httpConfiguration) {
+    public static HttpToHttp2ConnectionHandler clientH2Handler(HTTPConfiguration httpConfiguration) {
         Http2Settings http2Settings = new Http2Settings();
         http2Settings.initialWindowSize(httpConfiguration.getH2InitialWindowSize());
         http2Settings.maxConcurrentStreams(httpConfiguration.getH2MaxConcurrentStreams());
@@ -112,7 +114,7 @@ final class HTTPUtils {
      * Create new {@link HttpClientCodec} Instance
      * @param httpConfiguration {@link HTTPConfiguration} Instance
      */
-    static HttpClientCodec newClientCodec(HTTPConfiguration httpConfiguration) {
+    public static HttpClientCodec newClientCodec(HTTPConfiguration httpConfiguration) {
         int maxInitialLineLength = httpConfiguration.getMaxInitialLineLength();
         int maxHeaderSize = httpConfiguration.getMaxHeaderSize();
         int maxChunkSize = httpConfiguration.getMaxChunkSize();

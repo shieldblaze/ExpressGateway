@@ -19,8 +19,6 @@ package com.shieldblaze.expressgateway.core.server.http.http2;
 
 import com.shieldblaze.expressgateway.backend.Backend;
 import com.shieldblaze.expressgateway.backend.cluster.Cluster;
-import com.shieldblaze.expressgateway.backend.connection.Connection;
-import com.shieldblaze.expressgateway.backend.connection.ConnectionManager;
 import com.shieldblaze.expressgateway.common.utils.Hostname;
 import com.shieldblaze.expressgateway.core.server.http.HTTPResponses;
 import com.shieldblaze.expressgateway.loadbalance.exceptions.BackendNotOnlineException;
@@ -34,7 +32,6 @@ import io.netty.handler.codec.http.FullHttpResponse;
 import io.netty.handler.codec.http.HttpHeaderNames;
 import io.netty.handler.codec.http.HttpHeaders;
 import io.netty.handler.codec.http.HttpVersion;
-import io.netty.handler.codec.http2.DefaultHttp2Headers;
 import io.netty.handler.codec.http2.DefaultHttp2HeadersFrame;
 import io.netty.handler.codec.http2.Http2ChannelDuplexHandler;
 import io.netty.handler.codec.http2.Http2DataFrame;
@@ -51,7 +48,6 @@ public final class UpstreamHandler extends Http2ChannelDuplexHandler {
 
     private static final Logger logger = LogManager.getLogger(UpstreamHandler.class);
 
-    private ConnectionManager connectionManager;
     private HTTPBalance httpBalance;
     private Cluster cluster;
 
@@ -90,8 +86,6 @@ public final class UpstreamHandler extends Http2ChannelDuplexHandler {
         }
 
         Backend backend = httpBalanceResponse.getBackend();
-        Connection connection = connectionManager.acquireConnection();
-
     }
 
     private void onDataRead(ChannelHandlerContext ctx, Http2DataFrame http2HeadersFrame) {

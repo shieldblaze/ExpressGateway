@@ -21,7 +21,7 @@ import com.shieldblaze.expressgateway.backend.Backend;
 import com.shieldblaze.expressgateway.configuration.CommonConfiguration;
 import com.shieldblaze.expressgateway.core.loadbalancer.l4.L4LoadBalancer;
 import com.shieldblaze.expressgateway.core.utils.EventLoopFactory;
-import com.shieldblaze.expressgateway.loadbalance.exceptions.LoadBalanceException;
+import com.shieldblaze.expressgateway.backend.exceptions.LoadBalanceException;
 import com.shieldblaze.expressgateway.loadbalance.l4.L4Balance;
 import com.shieldblaze.expressgateway.loadbalance.l4.L4Request;
 import io.netty.channel.ChannelHandler;

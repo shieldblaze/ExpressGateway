@@ -15,27 +15,22 @@
  * You should have received a copy of the GNU General Public License
  * along with ShieldBlaze ExpressGateway.  If not, see <https://www.gnu.org/licenses/>.
  */
-package com.shieldblaze.expressgateway.loadbalance.exceptions;
+package com.shieldblaze.expressgateway.backend.connection;
 
-public class LoadBalanceException extends Exception {
+import com.shieldblaze.expressgateway.backend.Backend;
 
-    public LoadBalanceException() {
-        super();
+import java.util.Comparator;
+
+final class BackendHashCodeComparator implements Comparator<Backend> {
+
+    static final BackendHashCodeComparator INSTANCE = new BackendHashCodeComparator();
+
+    private BackendHashCodeComparator() {
+        // Prevent outside initialization
     }
 
-    public LoadBalanceException(String message) {
-        super(message);
-    }
-
-    public LoadBalanceException(String message, Throwable cause) {
-        super(message, cause);
-    }
-
-    public LoadBalanceException(Throwable cause) {
-        super(cause);
-    }
-
-    protected LoadBalanceException(String message, Throwable cause, boolean enableSuppression, boolean writableStackTrace) {
-        super(message, cause, enableSuppression, writableStackTrace);
+    @Override
+    public int compare(Backend o1, Backend o2) {
+        return Integer.compare(o1.hashCode(), o2.hashCode());
     }
 }

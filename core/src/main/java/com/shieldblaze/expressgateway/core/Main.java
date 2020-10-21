@@ -20,7 +20,6 @@ package com.shieldblaze.expressgateway.core;
 import com.shieldblaze.expressgateway.backend.Backend;
 import com.shieldblaze.expressgateway.backend.cluster.Cluster;
 import com.shieldblaze.expressgateway.backend.cluster.SingleBackendCluster;
-import com.shieldblaze.expressgateway.backend.connection.DefaultConnectionManager;
 import com.shieldblaze.expressgateway.configuration.CommonConfiguration;
 import com.shieldblaze.expressgateway.configuration.CommonConfigurationBuilder;
 import com.shieldblaze.expressgateway.configuration.buffer.PooledByteBufAllocatorConfiguration;
@@ -41,10 +40,10 @@ import com.shieldblaze.expressgateway.configuration.transport.TransportConfigura
 import com.shieldblaze.expressgateway.configuration.transport.TransportType;
 import com.shieldblaze.expressgateway.core.loadbalancer.l7.http.HTTPLoadBalancer;
 import com.shieldblaze.expressgateway.core.loadbalancer.l7.http.HTTPLoadBalancerBuilder;
-import com.shieldblaze.expressgateway.core.server.http.BootstrapperImpl;
+import com.shieldblaze.expressgateway.core.server.http.pool.HTTPBootstrapper;
 import com.shieldblaze.expressgateway.core.server.http.HTTPListener;
+import com.shieldblaze.expressgateway.core.server.http.pool.HTTPClusterConnectionPool;
 import com.shieldblaze.expressgateway.loadbalance.l7.http.RoundRobin;
-import io.netty.channel.epoll.Epoll;
 import io.netty.handler.ssl.util.InsecureTrustManagerFactory;
 import io.netty.handler.ssl.util.SelfSignedCertificate;
 
@@ -94,7 +93,7 @@ public final class Main {
 
         TLSServerMapping tlsServerMapping = new TLSServerMapping(certificateKeyPair);
 
-        TLSConfiguration tlsConfiguration = TLSConfigurationBuilder.forServer()
+        TLSConfiguration forServer = TLSConfigurationBuilder.forServer()
                 .withProtocols(Collections.singletonList(Protocol.TLS_1_3))
                 .withCiphers(Collections.singletonList(Cipher.TLS_AES_128_GCM_SHA256))
                 .withUseALPN(true)
@@ -147,11 +146,12 @@ public final class Main {
                 .withL7Balance(new RoundRobin())
                 .withCluster(clusterPool)
                 .withBindAddress(new InetSocketAddress("0.0.0.0", 9110))
-                .withHTTPFrontListener(new HTTPListener(tlsConfiguration, forClient))
+                .withHTTPFrontListener(new HTTPListener())
                 .withHTTPConfiguration(httpConfiguration)
-                .withConnectionManager(new DefaultConnectionManager(new BootstrapperImpl()))
+                .withClusterConnectionPool(new HTTPClusterConnectionPool(new HTTPBootstrapper()))
+                .withTLSForClient(forClient)
+                .withTLSForServer(forServer)
                 .build();
-
 
         httpLoadBalancer.start();
     }

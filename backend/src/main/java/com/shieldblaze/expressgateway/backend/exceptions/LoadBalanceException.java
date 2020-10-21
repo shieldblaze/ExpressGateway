@@ -15,29 +15,27 @@
  * You should have received a copy of the GNU General Public License
  * along with ShieldBlaze ExpressGateway.  If not, see <https://www.gnu.org/licenses/>.
  */
-package com.shieldblaze.expressgateway.loadbalance.exceptions;
+package com.shieldblaze.expressgateway.backend.exceptions;
 
-import com.shieldblaze.expressgateway.backend.exceptions.LoadBalanceException;
+public class LoadBalanceException extends Exception {
 
-public class BackendNotOnlineException extends LoadBalanceException {
-
-    public BackendNotOnlineException() {
+    public LoadBalanceException() {
         super();
     }
 
-    public BackendNotOnlineException(String message) {
+    public LoadBalanceException(String message) {
         super(message);
     }
 
-    public BackendNotOnlineException(String message, Throwable cause) {
+    public LoadBalanceException(String message, Throwable cause) {
         super(message, cause);
     }
 
-    public BackendNotOnlineException(Throwable cause) {
+    public LoadBalanceException(Throwable cause) {
         super(cause);
     }
 
-    protected BackendNotOnlineException(String message, Throwable cause, boolean enableSuppression, boolean writableStackTrace) {
+    protected LoadBalanceException(String message, Throwable cause, boolean enableSuppression, boolean writableStackTrace) {
         super(message, cause, enableSuppression, writableStackTrace);
     }
 }

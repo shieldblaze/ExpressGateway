@@ -20,7 +20,7 @@ package com.shieldblaze.expressgateway.loadbalance.l7.http.sessionpersistence;
 import com.shieldblaze.expressgateway.backend.Backend;
 import com.shieldblaze.expressgateway.backend.cluster.Cluster;
 import com.shieldblaze.expressgateway.backend.cluster.ClusterPool;
-import com.shieldblaze.expressgateway.loadbalance.exceptions.LoadBalanceException;
+import com.shieldblaze.expressgateway.backend.exceptions.LoadBalanceException;
 import com.shieldblaze.expressgateway.loadbalance.l7.http.HTTPBalanceRequest;
 import com.shieldblaze.expressgateway.loadbalance.l7.http.HTTPBalanceResponse;
 import com.shieldblaze.expressgateway.loadbalance.l7.http.RoundRobin;

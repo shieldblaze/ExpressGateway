@@ -17,6 +17,7 @@
  */
 package com.shieldblaze.expressgateway.core.server.http;
 
+import com.shieldblaze.expressgateway.core.server.http.compression.HTTPContentCompressor;
 import com.shieldblaze.expressgateway.core.utils.ChannelUtils;
 import io.netty.channel.ChannelHandlerContext;
 import io.netty.channel.ChannelInboundHandlerAdapter;
@@ -33,7 +34,7 @@ final class DownstreamHandler extends ChannelInboundHandlerAdapter {
     private final UpstreamHandler upstreamHandler;
     boolean isActive;
 
-    DownstreamHandler(UpstreamHandler upstreamHandler) {
+    public DownstreamHandler(UpstreamHandler upstreamHandler) {
         this.upstreamHandler = upstreamHandler;
     }
 

@@ -18,9 +18,10 @@
 package com.shieldblaze.expressgateway.core.loadbalancer.l7.http;
 
 import com.shieldblaze.expressgateway.backend.cluster.Cluster;
-import com.shieldblaze.expressgateway.backend.connection.ConnectionManager;
+import com.shieldblaze.expressgateway.backend.connection.ClusterConnectionPool;
 import com.shieldblaze.expressgateway.configuration.CommonConfiguration;
 import com.shieldblaze.expressgateway.configuration.http.HTTPConfiguration;
+import com.shieldblaze.expressgateway.configuration.tls.TLSConfiguration;
 import com.shieldblaze.expressgateway.core.loadbalancer.l7.L7LoadBalancer;
 import com.shieldblaze.expressgateway.core.server.L7FrontListener;
 import com.shieldblaze.expressgateway.loadbalance.l7.http.HTTPBalance;
@@ -41,13 +42,14 @@ public abstract class HTTPLoadBalancer extends L7LoadBalancer {
      * @param l7FrontListener     {@link L7FrontListener} for listening and handling traffic
      * @param cluster             {@link Cluster} to be Load Balanced
      * @param commonConfiguration {@link CommonConfiguration} to be applied
-     * @param connectionManager   {@link ConnectionManager} to use
+     * @param clusterConnectionPool   {@link ClusterConnectionPool} to use
      * @throws NullPointerException If any parameter is {@code null}
      */
     public HTTPLoadBalancer(InetSocketAddress bindAddress, HTTPBalance HTTPBalance, L7FrontListener l7FrontListener, Cluster cluster,
-                            CommonConfiguration commonConfiguration, ConnectionManager connectionManager, HTTPConfiguration httpConfiguration) {
-        super(bindAddress, HTTPBalance, l7FrontListener, cluster, commonConfiguration, connectionManager);
-        this.httpConfiguration = Objects.requireNonNull(httpConfiguration, "httpConfiguration");
+                            CommonConfiguration commonConfiguration, ClusterConnectionPool clusterConnectionPool, HTTPConfiguration httpConfiguration,
+                            TLSConfiguration tlsClient, TLSConfiguration tlsServer) {
+        super(bindAddress, HTTPBalance, l7FrontListener, cluster, commonConfiguration, clusterConnectionPool, tlsClient, tlsServer);
+        this.httpConfiguration = Objects.requireNonNull(httpConfiguration, "HTTPConfiguration");
     }
 
     /**

@@ -18,11 +18,11 @@
 package com.shieldblaze.expressgateway.loadbalance.l4;
 
 import com.shieldblaze.expressgateway.backend.Backend;
-import com.shieldblaze.expressgateway.loadbalance.LoadBalance;
-import com.shieldblaze.expressgateway.loadbalance.exceptions.LoadBalanceException;
-import com.shieldblaze.expressgateway.loadbalance.Request;
-import com.shieldblaze.expressgateway.loadbalance.Response;
-import com.shieldblaze.expressgateway.loadbalance.SessionPersistence;
+import com.shieldblaze.expressgateway.backend.loadbalance.LoadBalance;
+import com.shieldblaze.expressgateway.backend.exceptions.LoadBalanceException;
+import com.shieldblaze.expressgateway.backend.loadbalance.Request;
+import com.shieldblaze.expressgateway.backend.loadbalance.Response;
+import com.shieldblaze.expressgateway.backend.loadbalance.SessionPersistence;
 
 import java.io.Closeable;
 import java.net.InetSocketAddress;

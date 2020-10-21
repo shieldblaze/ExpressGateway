@@ -38,14 +38,6 @@ public abstract class Bootstrapper {
      */
     public abstract Bootstrap bootstrap();
 
-    public void setCommonConfiguration(CommonConfiguration commonConfiguration) {
-        if (this.commonConfiguration == null) {
-            this.commonConfiguration = Objects.requireNonNull(commonConfiguration, "CommonConfiguration");
-        } else {
-            throw new IllegalArgumentException("CommonConfiguration is already set");
-        }
-    }
-
     public void setEventLoopFactory(EventLoopGroup eventLoopGroup) {
         if (this.eventLoopGroup == null) {
             this.eventLoopGroup = Objects.requireNonNull(eventLoopGroup, "EventLoopGroup");
@@ -54,16 +46,16 @@ public abstract class Bootstrapper {
         }
     }
 
-    public void setAllocator(ByteBufAllocator allocator) {
-        if (this.allocator == null) {
-            this.allocator = Objects.requireNonNull(allocator, "ByteBufAllocator");
-        } else {
-            throw new IllegalArgumentException("ByteBufAllocator is already set");
-        }
-    }
-
     protected CommonConfiguration getCommonConfiguration() {
         return commonConfiguration;
+    }
+
+    public void setCommonConfiguration(CommonConfiguration commonConfiguration) {
+        if (this.commonConfiguration == null) {
+            this.commonConfiguration = Objects.requireNonNull(commonConfiguration, "CommonConfiguration");
+        } else {
+            throw new IllegalArgumentException("CommonConfiguration is already set");
+        }
     }
 
     protected EventLoopGroup getEventLoopGroup() {
@@ -72,5 +64,13 @@ public abstract class Bootstrapper {
 
     protected ByteBufAllocator getAllocator() {
         return allocator;
+    }
+
+    public void setAllocator(ByteBufAllocator allocator) {
+        if (this.allocator == null) {
+            this.allocator = Objects.requireNonNull(allocator, "ByteBufAllocator");
+        } else {
+            throw new IllegalArgumentException("ByteBufAllocator is already set");
+        }
     }
 }

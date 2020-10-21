@@ -30,7 +30,7 @@
 - :heavy_check_mark: Reverse Proxy
 - :heavy_check_mark: HTTP Compression (GZIP, Deflate and Brotli)
 - [ ] HTTP Caching
-- [ ] HTTP Connection Pool
+- :heavy_check_mark: HTTP Connection Pool
 
 ### Health Checking:
 - :heavy_check_mark: L4 Based Health Check using TCP/UDP

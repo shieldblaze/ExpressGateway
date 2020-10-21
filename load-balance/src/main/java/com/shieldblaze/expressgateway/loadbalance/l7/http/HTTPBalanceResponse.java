@@ -18,13 +18,13 @@
 package com.shieldblaze.expressgateway.loadbalance.l7.http;
 
 import com.shieldblaze.expressgateway.backend.Backend;
-import com.shieldblaze.expressgateway.loadbalance.Response;
+import com.shieldblaze.expressgateway.backend.loadbalance.Response;
 import io.netty.handler.codec.http.HttpHeaders;
 
 /**
  * {@link HTTPBalanceResponse} contains selected {@link Backend} and {@link HttpHeaders} for response.
  */
-public final class HTTPBalanceResponse extends Response {
+public class HTTPBalanceResponse extends Response {
     private final HttpHeaders httpHeaders;
 
     /**

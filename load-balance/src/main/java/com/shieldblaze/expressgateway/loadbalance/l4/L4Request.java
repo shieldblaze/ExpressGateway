@@ -17,7 +17,7 @@
  */
 package com.shieldblaze.expressgateway.loadbalance.l4;
 
-import com.shieldblaze.expressgateway.loadbalance.Request;
+import com.shieldblaze.expressgateway.backend.loadbalance.Request;
 
 import java.net.InetSocketAddress;
 

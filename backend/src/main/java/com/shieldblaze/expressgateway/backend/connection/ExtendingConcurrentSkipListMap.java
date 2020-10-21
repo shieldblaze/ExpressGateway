@@ -15,36 +15,24 @@
  * You should have received a copy of the GNU General Public License
  * along with ShieldBlaze ExpressGateway.  If not, see <https://www.gnu.org/licenses/>.
  */
-package com.shieldblaze.expressgateway.loadbalance;
+package com.shieldblaze.expressgateway.backend.connection;
 
 import com.shieldblaze.expressgateway.backend.Backend;
 
-/**
- * {@linkplain Response} contains selected {@linkplain Backend}
- */
-public abstract class Response {
-    private final Backend backend;
+import java.util.concurrent.ConcurrentLinkedQueue;
+import java.util.concurrent.ConcurrentSkipListMap;
 
-    /**
-     * Create a new {@link Response} Instance
-     *
-     * @param backend Selected {@linkplain Backend} for the request
-     */
-    public Response(Backend backend) {
-        this.backend = backend;
+public final class ExtendingConcurrentSkipListMap extends ConcurrentSkipListMap<Backend, ConcurrentLinkedQueue<Connection>> {
+
+    public ExtendingConcurrentSkipListMap() {
+        super(BackendHashCodeComparator.INSTANCE);
     }
 
-    /**
-     * Get selected {@linkplain Backend}
-     */
-    public Backend getBackend() {
-        return backend;
-    }
-
-    @Override
-    public String toString() {
-        return "Response{" +
-                "backend=" + backend +
-                '}';
+    public ConcurrentLinkedQueue<Connection> get(Backend backend) {
+        ConcurrentLinkedQueue<Connection> queue = super.get(backend);
+        if (queue == null) {
+            queue = new ConcurrentLinkedQueue<>();
+        }
+        return queue;
     }
 }

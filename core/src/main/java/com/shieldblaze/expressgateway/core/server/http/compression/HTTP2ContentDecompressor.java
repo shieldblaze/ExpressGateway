@@ -15,12 +15,12 @@
  * You should have received a copy of the GNU General Public License
  * along with ShieldBlaze ExpressGateway.  If not, see <https://www.gnu.org/licenses/>.
  */
-package com.shieldblaze.expressgateway.core.server.http;
+package com.shieldblaze.expressgateway.core.server.http.compression;
 
 import io.netty.channel.Channel;
 import io.netty.channel.ChannelHandlerContext;
 import io.netty.channel.embedded.EmbeddedChannel;
-import com.shieldblaze.expressgateway.core.server.http.compression.BrotliDecoder;
+import com.shieldblaze.expressgateway.core.server.http.compression.brotli.BrotliDecoder;
 import io.netty.handler.codec.compression.ZlibCodecFactory;
 import io.netty.handler.codec.compression.ZlibWrapper;
 import io.netty.handler.codec.http2.DelegatingDecompressorFrameListener;
@@ -40,9 +40,9 @@ import io.netty.handler.codec.http2.Http2Headers;
  *     <li> br </li>
  * </ul>
  */
-final class HTTP2ContentDecompressor extends DelegatingDecompressorFrameListener {
+public class HTTP2ContentDecompressor extends DelegatingDecompressorFrameListener {
 
-    HTTP2ContentDecompressor(Http2Connection connection, Http2FrameListener listener) {
+    public HTTP2ContentDecompressor(Http2Connection connection, Http2FrameListener listener) {
         super(connection, listener);
     }
 

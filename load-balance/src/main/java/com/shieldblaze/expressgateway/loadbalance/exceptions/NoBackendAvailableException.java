@@ -17,6 +17,8 @@
  */
 package com.shieldblaze.expressgateway.loadbalance.exceptions;
 
+import com.shieldblaze.expressgateway.backend.exceptions.LoadBalanceException;
+
 public class NoBackendAvailableException extends LoadBalanceException {
 
     public NoBackendAvailableException() {

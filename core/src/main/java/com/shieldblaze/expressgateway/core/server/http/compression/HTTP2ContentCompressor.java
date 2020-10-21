@@ -15,13 +15,13 @@
  * You should have received a copy of the GNU General Public License
  * along with ShieldBlaze ExpressGateway.  If not, see <https://www.gnu.org/licenses/>.
  */
-package com.shieldblaze.expressgateway.core.server.http;
+package com.shieldblaze.expressgateway.core.server.http.compression;
 
 import com.shieldblaze.expressgateway.configuration.http.HTTPConfiguration;
 import io.netty.channel.Channel;
 import io.netty.channel.ChannelHandlerContext;
 import io.netty.channel.embedded.EmbeddedChannel;
-import com.shieldblaze.expressgateway.core.server.http.compression.BrotliEncoder;
+import com.shieldblaze.expressgateway.core.server.http.compression.brotli.BrotliEncoder;
 import io.netty.handler.codec.compression.ZlibCodecFactory;
 import io.netty.handler.codec.compression.ZlibWrapper;
 import io.netty.handler.codec.http2.CompressorHttp2ConnectionEncoder;
@@ -40,12 +40,12 @@ import io.netty.handler.codec.http2.Http2Headers;
  *     <li> br </li>
  * </ul>
  */
-final class HTTP2ContentCompressor extends CompressorHttp2ConnectionEncoder {
+public class HTTP2ContentCompressor extends CompressorHttp2ConnectionEncoder {
 
     private final int brotliCompressionQuality;
     private final int compressionLevel;
 
-    HTTP2ContentCompressor(Http2ConnectionEncoder delegate, HTTPConfiguration httpConfiguration) {
+    public HTTP2ContentCompressor(Http2ConnectionEncoder delegate, HTTPConfiguration httpConfiguration) {
         super(delegate);
         this.brotliCompressionQuality = httpConfiguration.getBrotliCompressionLevel();
         this.compressionLevel = httpConfiguration.getDeflateCompressionLevel();

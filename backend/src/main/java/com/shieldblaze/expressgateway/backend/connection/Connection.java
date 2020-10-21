@@ -27,6 +27,14 @@ public class Connection {
     protected ChannelFuture channelFuture;
     private boolean inUse;
 
+    public void setChannelFuture(ChannelFuture channelFuture) {
+        if (this.channelFuture == null) {
+            this.channelFuture = channelFuture;
+        } else {
+            throw new IllegalArgumentException("ChannelFuture is already set");
+        }
+    }
+
     /**
      * Check if connection is active and connected.
      *

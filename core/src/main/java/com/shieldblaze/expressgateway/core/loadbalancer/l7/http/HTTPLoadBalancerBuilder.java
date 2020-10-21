@@ -18,9 +18,10 @@
 package com.shieldblaze.expressgateway.core.loadbalancer.l7.http;
 
 import com.shieldblaze.expressgateway.backend.cluster.Cluster;
-import com.shieldblaze.expressgateway.backend.connection.ConnectionManager;
+import com.shieldblaze.expressgateway.backend.connection.ClusterConnectionPool;
 import com.shieldblaze.expressgateway.configuration.CommonConfiguration;
 import com.shieldblaze.expressgateway.configuration.http.HTTPConfiguration;
+import com.shieldblaze.expressgateway.configuration.tls.TLSConfiguration;
 import com.shieldblaze.expressgateway.core.server.L7FrontListener;
 import com.shieldblaze.expressgateway.core.server.http.HTTPFrontListener;
 import com.shieldblaze.expressgateway.loadbalance.l7.http.HTTPBalance;
@@ -39,7 +40,9 @@ public final class HTTPLoadBalancerBuilder {
     private Cluster cluster;
     private HTTPFrontListener httpFrontListener;
     private HTTPLoadBalancer httpLoadBalancer;
-    private ConnectionManager connectionManager;
+    private ClusterConnectionPool clusterConnectionPool;
+    private TLSConfiguration tlsServer;
+    private TLSConfiguration tlsClient;
 
     private HTTPLoadBalancerBuilder() {
         // Prevent outside initialization
@@ -91,10 +94,26 @@ public final class HTTPLoadBalancerBuilder {
     }
 
     /**
-     * Set {@link ConnectionManager} to use
+     * Set {@link ClusterConnectionPool} to use
      */
-    public HTTPLoadBalancerBuilder withConnectionManager(ConnectionManager connectionManager) {
-        this.connectionManager = connectionManager;
+    public HTTPLoadBalancerBuilder withClusterConnectionPool(ClusterConnectionPool clusterConnectionPool) {
+        this.clusterConnectionPool = clusterConnectionPool;
+        return this;
+    }
+
+    /**
+     * Set {@link TLSConfiguration} for Client
+     */
+    public HTTPLoadBalancerBuilder withTLSForClient(TLSConfiguration tlsClient) {
+        this.tlsClient = tlsClient;
+        return this;
+    }
+
+    /**
+     * Set {@link TLSConfiguration} for Server
+     */
+    public HTTPLoadBalancerBuilder withTLSForServer(TLSConfiguration tlsServer) {
+        this.tlsServer = tlsServer;
         return this;
     }
 
@@ -106,8 +125,10 @@ public final class HTTPLoadBalancerBuilder {
                     Objects.requireNonNull(httpFrontListener, "httpFrontListener"),
                     Objects.requireNonNull(cluster, "cluster"),
                     Objects.requireNonNull(commonConfiguration, "commonConfiguration"),
-                    Objects.requireNonNull(connectionManager, "connectionManager"),
-                    Objects.requireNonNull(httpConfiguration, "httpConfiguration")
+                    Objects.requireNonNull(clusterConnectionPool, "ClusterConnectionPool"),
+                    Objects.requireNonNull(httpConfiguration, "httpConfiguration"),
+                    tlsClient,
+                    tlsServer
             );
         }
         httpBalance.setCluster(cluster);

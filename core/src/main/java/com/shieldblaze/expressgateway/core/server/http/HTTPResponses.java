@@ -41,7 +41,6 @@ public final class HTTPResponses {
      */
     public static final DefaultFullHttpResponse ACCEPT_100 = new DefaultFullHttpResponse(HttpVersion.HTTP_1_1, CONTINUE);
 
-
     /**
      * HTTP 400: BAD_REQUEST
      */

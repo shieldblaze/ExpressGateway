@@ -18,8 +18,9 @@
 package com.shieldblaze.expressgateway.core.loadbalancer.l7;
 
 import com.shieldblaze.expressgateway.backend.cluster.Cluster;
-import com.shieldblaze.expressgateway.backend.connection.ConnectionManager;
+import com.shieldblaze.expressgateway.backend.connection.ClusterConnectionPool;
 import com.shieldblaze.expressgateway.configuration.CommonConfiguration;
+import com.shieldblaze.expressgateway.configuration.tls.TLSConfiguration;
 import com.shieldblaze.expressgateway.core.events.L4FrontListenerEvent;
 import com.shieldblaze.expressgateway.core.server.L4FrontListener;
 import com.shieldblaze.expressgateway.core.server.L7FrontListener;
@@ -43,7 +44,9 @@ public abstract class L7LoadBalancer {
     private final L7FrontListener l7FrontListener;
     private final Cluster cluster;
     private final CommonConfiguration commonConfiguration;
-    private final ConnectionManager connectionManager;
+    private final ClusterConnectionPool clusterConnectionPool;
+    private final TLSConfiguration tlsClient;
+    private final TLSConfiguration tlsServer;
 
     private final ByteBufAllocator byteBufAllocator;
     private final EventLoopFactory eventLoopFactory;
@@ -54,17 +57,20 @@ public abstract class L7LoadBalancer {
      * @param l7FrontListener     {@link L7FrontListener} for listening and handling traffic
      * @param cluster             {@link Cluster} to be Load Balanced
      * @param commonConfiguration {@link CommonConfiguration} to be applied
-     * @param connectionManager   {@link ConnectionManager} to use
+     * @param clusterConnectionPool   {@link ClusterConnectionPool} to use
      * @throws NullPointerException If any parameter is {@code null}
      */
     public L7LoadBalancer(InetSocketAddress bindAddress, HTTPBalance HTTPBalance, L7FrontListener l7FrontListener, Cluster cluster,
-                          CommonConfiguration commonConfiguration, ConnectionManager connectionManager) {
+                          CommonConfiguration commonConfiguration, ClusterConnectionPool clusterConnectionPool, TLSConfiguration tlsClient, TLSConfiguration tlsServer) {
         this.bindAddress = Objects.requireNonNull(bindAddress, "bindAddress");
         this.HTTPBalance = Objects.requireNonNull(HTTPBalance, "l7Balance");
         this.l7FrontListener = Objects.requireNonNull(l7FrontListener, "l7FrontListener");
         this.cluster = Objects.requireNonNull(cluster, "cluster");
         this.commonConfiguration = Objects.requireNonNull(commonConfiguration);
-        this.connectionManager = Objects.requireNonNull(connectionManager, "connectionManager");
+        this.clusterConnectionPool = Objects.requireNonNull(clusterConnectionPool, "ClusterConnectionPool");
+        this.tlsClient = tlsClient;
+        this.tlsServer = tlsServer;
+
         this.byteBufAllocator = new PooledByteBufAllocator(commonConfiguration.getPooledByteBufAllocatorConfiguration()).getInstance();
         this.eventLoopFactory = new EventLoopFactory(commonConfiguration);
     }
@@ -124,10 +130,24 @@ public abstract class L7LoadBalancer {
     }
 
     /**
-     * Get {@link ConnectionManager} to use
+     * Get {@link ClusterConnectionPool} to use
      */
-    public ConnectionManager getConnectionManager() {
-        return connectionManager;
+    public ClusterConnectionPool getConnectionManager() {
+        return clusterConnectionPool;
+    }
+
+    /**
+     * Get {@link TLSConfiguration} for Client
+     */
+    public TLSConfiguration getTlsClient() {
+        return tlsClient;
+    }
+
+    /**
+     * Get {@link TLSConfiguration} for Server
+     */
+    public TLSConfiguration getTlsServer() {
+        return tlsServer;
     }
 
     /**
