@@ -25,7 +25,7 @@ import java.util.Map;
 /**
  * Builder for {@link ALPNHandler}
  */
-public class ALPNHandlerBuilder {
+public final class ALPNHandlerBuilder {
 
     private final Map<String, ChannelHandler> HTTP1ChannelHandlers = new LinkedHashMap<>();
     private final Map<String, ChannelHandler> HTTP2ChannelHandlers = new LinkedHashMap<>();
@@ -58,6 +58,11 @@ public class ALPNHandlerBuilder {
         return this;
     }
 
+    /**
+     * Build {@linkplain ALPNHandler} Instance
+     *
+     * @return {@linkplain ALPNHandler Instance}
+     */
     public ALPNHandler build() {
         if (!(HTTP1ChannelHandlers.size() > 0 || HTTP2ChannelHandlers.size() > 0)) {
             throw new IllegalArgumentException("There must be at least one Handler for both HTTP/2 and HTTP/1.1");

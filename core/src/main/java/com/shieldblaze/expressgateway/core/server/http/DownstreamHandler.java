@@ -27,7 +27,7 @@ import io.netty.handler.codec.http.LastHttpContent;
 import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
 
-final class DownstreamHandler extends ChannelInboundHandlerAdapter {
+public final class DownstreamHandler extends ChannelInboundHandlerAdapter {
 
     private static final Logger logger = LogManager.getLogger(DownstreamHandler.class);
 

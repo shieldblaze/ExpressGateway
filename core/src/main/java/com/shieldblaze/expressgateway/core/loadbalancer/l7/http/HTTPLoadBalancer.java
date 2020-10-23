@@ -24,6 +24,7 @@ import com.shieldblaze.expressgateway.configuration.http.HTTPConfiguration;
 import com.shieldblaze.expressgateway.configuration.tls.TLSConfiguration;
 import com.shieldblaze.expressgateway.core.loadbalancer.l7.L7LoadBalancer;
 import com.shieldblaze.expressgateway.core.server.L7FrontListener;
+import com.shieldblaze.expressgateway.core.server.http.pool.HTTPClusterConnectionPool;
 import com.shieldblaze.expressgateway.loadbalance.l7.http.HTTPBalance;
 
 import java.net.InetSocketAddress;
@@ -50,6 +51,7 @@ public abstract class HTTPLoadBalancer extends L7LoadBalancer {
                             TLSConfiguration tlsClient, TLSConfiguration tlsServer) {
         super(bindAddress, HTTPBalance, l7FrontListener, cluster, commonConfiguration, clusterConnectionPool, tlsClient, tlsServer);
         this.httpConfiguration = Objects.requireNonNull(httpConfiguration, "HTTPConfiguration");
+        ((HTTPClusterConnectionPool) clusterConnectionPool).setHTTPLoadBalancer(this);
     }
 
     /**

@@ -33,6 +33,7 @@ import com.shieldblaze.expressgateway.core.server.http.HTTPUtils;
 import com.shieldblaze.expressgateway.core.server.http.alpn.ALPNHandler;
 import com.shieldblaze.expressgateway.core.server.http.alpn.ALPNHandlerBuilder;
 import com.shieldblaze.expressgateway.core.server.http.compression.HTTPContentDecompressor;
+import com.shieldblaze.expressgateway.core.server.http.http2.HTTP2ToHTTP1Adapter;
 import com.shieldblaze.expressgateway.loadbalance.l7.http.HTTPBalanceRequest;
 import com.shieldblaze.expressgateway.loadbalance.l7.http.HTTPBalanceResponse;
 import io.netty.bootstrap.Bootstrap;
@@ -63,15 +64,14 @@ public class HTTPClusterConnectionPool extends ClusterConnectionPool {
     }
 
     @Override
-    public Connection acquireConnection(Response response, ChannelHandler downstreamHandler) throws BackendNotAvailableException {
-
+    public HTTPConnection acquireConnection(Response response, ChannelHandler downstreamHandler) throws BackendNotAvailableException {
         Backend backend = response.getBackend();
 
         if (backend.getState() != State.ONLINE) {
             throw new BackendNotAvailableException("Backend: " + backend.getSocketAddress() + " is not online");
         }
 
-        Connection connection = backendAvailableConnectionMap.get(backend).poll();
+        HTTPConnection connection = (HTTPConnection) backendAvailableConnectionMap.get(backend).poll();
 
         // If connection is available, return it.
         if (connection != null) {
@@ -79,18 +79,17 @@ public class HTTPClusterConnectionPool extends ClusterConnectionPool {
         }
 
         // Check for connection limit before creating new connection.
-        if (backend.getMaxConnections() > backendAvailableConnectionMap.size()) {
+        if (backendAvailableConnectionMap.size() > backend.getMaxConnections()) {
             // Throw exception because we have too many active connections
             throw new TooManyConnectionsException(backend);
         }
 
         backend.incConnections(); // Increment number of connections in Backend
 
-        // Create a new connection
-        connection = new Connection();
-        backendActiveConnectionMap.get(backend).add(connection);
+        // Create a new HTTP connection
+        HTTPConnection httpConnection = new HTTPConnection();
+        backendActiveConnectionMap.get(backend).add(httpConnection);
         Bootstrap bootstrap = bootstrapper.bootstrap();
-
         bootstrap.handler(new ChannelInitializer<SocketChannel>() {
             @Override
             protected void initChannel(SocketChannel ch) {
@@ -122,18 +121,22 @@ public class HTTPClusterConnectionPool extends ClusterConnectionPool {
 
                     pipeline.addLast("TLSHandler", sslHandler);
                     pipeline.addLast("ALPNHandler", alpnHandler);
+
+                    httpConnection.setALPNHandlerPresent();
                 }
             }
         });
 
-        connection.setChannelFuture(bootstrap.connect(backend.getSocketAddress()));
-        connection.setInUse(true);
-        return connection;
+        httpConnection.setChannelFuture(bootstrap.connect(backend.getSocketAddress()));
+        return httpConnection;
     }
 
     public void setHTTPLoadBalancer(HTTPLoadBalancer httpLoadBalancer) {
         if (this.httpLoadBalancer == null) {
             this.httpLoadBalancer = Objects.requireNonNull(httpLoadBalancer, "HTTPLoadBalancer");
+            bootstrapper.setAllocator(httpLoadBalancer.getByteBufAllocator());
+            bootstrapper.setCommonConfiguration(httpLoadBalancer.getCommonConfiguration());
+            bootstrapper.setEventLoopFactory(httpLoadBalancer.getEventLoopFactory().getChildGroup());
         } else {
             throw new IllegalArgumentException("HTTPLoadBalancer is already set");
         }

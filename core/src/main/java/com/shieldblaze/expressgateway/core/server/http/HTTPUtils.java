@@ -49,7 +49,7 @@ public final class HTTPUtils {
         headers.set(HttpHeaderNames.SERVER, "ShieldBlaze ExpressGateway");
     }
 
-    public static HttpToHttp2ConnectionHandler clientH2Handler(HTTPConfiguration httpConfiguration) {
+    public static Http2FrameCodec clientH2Handler(HTTPConfiguration httpConfiguration) {
         Http2Settings http2Settings = new Http2Settings();
         http2Settings.initialWindowSize(httpConfiguration.getH2InitialWindowSize());
         http2Settings.maxConcurrentStreams(httpConfiguration.getH2MaxConcurrentStreams());
@@ -60,12 +60,6 @@ public final class HTTPUtils {
 
         Http2Connection connection = new DefaultHttp2Connection(false);
 
-        InboundHttp2ToHttpObjectAdapter listener = new InboundHttp2ToHttpObjectAdapterBuilder(connection)
-                .propagateSettings(false)
-                .validateHttpHeaders(true)
-                .maxContentLength(httpConfiguration.getMaxContentLength())
-                .build();
-
         Http2FrameReader reader = new DefaultHttp2FrameReader(new DefaultHttp2HeadersDecoder(true, http2Settings.maxHeaderListSize()));
         Http2FrameWriter writer = new DefaultHttp2FrameWriter(Http2HeadersEncoder.NEVER_SENSITIVE, false);
 
@@ -74,11 +68,10 @@ public final class HTTPUtils {
         DefaultHttp2ConnectionDecoder decoder = new DefaultHttp2ConnectionDecoder(connection, encoder, reader,
                 Http2PromisedRequestVerifier.ALWAYS_VERIFY, true, true);
 
-        return new HttpToHttp2ConnectionHandlerBuilder()
-                .frameListener(new HTTP2ContentDecompressor(connection, listener))
-                .codec(decoder, encoder)
-                .initialSettings(http2Settings)
-                .build();
+        Http2FrameCodec http2FrameCodec = new Http2FrameCodec(encoder, decoder, http2Settings, false);
+        decoder.frameListener(new HTTP2ContentDecompressor(connection, decoder.frameListener()));
+
+        return http2FrameCodec;
     }
 
     static Http2FrameCodec serverH2Handler(HTTPConfiguration httpConfiguration) {
@@ -103,6 +96,7 @@ public final class HTTPUtils {
 
     /**
      * Create new {@link HttpServerCodec} Instance
+     *
      * @param httpConfiguration {@link HTTPConfiguration} Instance
      */
     static HttpServerCodec newServerCodec(HTTPConfiguration httpConfiguration) {
@@ -112,6 +106,7 @@ public final class HTTPUtils {
 
     /**
      * Create new {@link HttpClientCodec} Instance
+     *
      * @param httpConfiguration {@link HTTPConfiguration} Instance
      */
     public static HttpClientCodec newClientCodec(HTTPConfiguration httpConfiguration) {

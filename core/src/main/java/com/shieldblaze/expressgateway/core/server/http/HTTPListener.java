@@ -28,6 +28,9 @@ import com.shieldblaze.expressgateway.core.server.http.alpn.ALPNHandler;
 import com.shieldblaze.expressgateway.core.server.http.alpn.ALPNHandlerBuilder;
 import com.shieldblaze.expressgateway.core.server.http.compression.HTTPContentCompressor;
 import com.shieldblaze.expressgateway.core.server.http.compression.HTTPContentDecompressor;
+import com.shieldblaze.expressgateway.core.server.http.http2.HTTP2ToHTTP1Adapter;
+import com.shieldblaze.expressgateway.core.server.http.http2.UpstreamHandler;
+import com.shieldblaze.expressgateway.core.server.http.pool.HTTPClusterConnectionPool;
 import com.shieldblaze.expressgateway.core.tls.SNIHandler;
 import com.shieldblaze.expressgateway.core.utils.EventLoopFactory;
 import io.netty.bootstrap.ServerBootstrap;
@@ -158,20 +161,21 @@ public final class HTTPListener extends HTTPFrontListener {
                 pipeline.addLast("HTTPServerValidator", new HTTPServerValidator(httpConfiguration));
                 pipeline.addLast("HTTPContentCompressor", new HTTPContentCompressor(httpConfiguration));
                 pipeline.addLast("HTTPContentDecompressor", new HTTPContentDecompressor());
-                pipeline.addLast("UpstreamHandler", new UpstreamHandler(httpLoadBalancer));
+//                pipeline.addLast("UpstreamHandler", new UpstreamHandler(httpLoadBalancer));
             } else {
                 pipeline.addLast("SNIHandler", new SNIHandler(httpLoadBalancer.getTlsServer()));
 
                 ALPNHandler alpnHandler = ALPNHandlerBuilder.newBuilder()
                         // HTTP/2 Handlers
                         .withHTTP2ChannelHandler("HTTP2Handler", HTTPUtils.serverH2Handler(httpConfiguration))
-                        .withHTTP2ChannelHandler("HTTP2MultiplexHandler", new Http2MultiplexHandler(new MultiplexInitializer(httpLoadBalancer)))
+                        .withHTTP2ChannelHandler("UpstreamHandler", new UpstreamHandler(httpLoadBalancer.getL7Balance(), httpLoadBalancer.getCluster(), (HTTPClusterConnectionPool) httpLoadBalancer.getConnectionManager()))
+
                         // HTTP/1.1 Handlers
-                        .withHTTP1ChannelHandler("HTTPServerCodec", HTTPUtils.newServerCodec(httpConfiguration))
-                        .withHTTP1ChannelHandler("HTTPServerValidator", new HTTPServerValidator(httpConfiguration))
-                        .withHTTP1ChannelHandler("HTTPContentCompressor", new HTTPContentCompressor(httpConfiguration))
-                        .withHTTP1ChannelHandler("HTTPContentDecompressor", new HTTPContentDecompressor())
-                        .withHTTP1ChannelHandler("UpstreamHandler", new UpstreamHandler(httpLoadBalancer))
+//                        .withHTTP1ChannelHandler("HTTPServerCodec", HTTPUtils.newServerCodec(httpConfiguration))
+//                        .withHTTP1ChannelHandler("HTTPServerValidator", new HTTPServerValidator(httpConfiguration))
+//                        .withHTTP1ChannelHandler("HTTPContentCompressor", new HTTPContentCompressor(httpConfiguration))
+//                        .withHTTP1ChannelHandler("HTTPContentDecompressor", new HTTPContentDecompressor())
+//                        .withHTTP1ChannelHandler("UpstreamHandler", new UpstreamHandler(httpLoadBalancer))
                         .build();
 
                 pipeline.addLast("ALPNHandler", alpnHandler);
@@ -181,22 +185,6 @@ public final class HTTPListener extends HTTPFrontListener {
         @Override
         public void exceptionCaught(ChannelHandlerContext ctx, Throwable cause) {
             logger.error("Caught Error At ServerInitializer", cause);
-        }
-    }
-
-    private static final class MultiplexInitializer extends ChannelInitializer<Channel> {
-
-        private final HTTPLoadBalancer httpLoadBalancer;
-
-        private MultiplexInitializer(HTTPLoadBalancer httpLoadBalancer) {
-            this.httpLoadBalancer = httpLoadBalancer;
-        }
-
-        @Override
-        protected void initChannel(Channel ch) {
-            ChannelPipeline pipeline = ch.pipeline();
-            pipeline.addLast("DuplexHTTP2ToHTTPObjectAdapter", new DuplexHTTP2ToHTTPObjectAdapter());
-            pipeline.addLast("UpstreamHandler", new UpstreamHandler(httpLoadBalancer, true));
         }
     }
 }

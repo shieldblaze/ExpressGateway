@@ -77,7 +77,7 @@ public final class UpstreamHandler extends ChannelInboundHandlerAdapter {
     private long bytesReceived = 0L;
     private boolean channelActive = false;
 
-    private HTTPLoadBalancer httpLoadBalancer;
+    private final HTTPLoadBalancer httpLoadBalancer;
 
     /**
      * Create a new {@link UpstreamHandler} Instance with {@code isHTTP2} set to {@code false}

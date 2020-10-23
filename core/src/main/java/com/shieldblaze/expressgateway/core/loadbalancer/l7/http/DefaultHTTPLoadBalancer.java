@@ -15,8 +15,8 @@
  * You should have received a copy of the GNU General Public License
  * along with ShieldBlaze ExpressGateway.  If not, see <https://www.gnu.org/licenses/>.
  */
-
 package com.shieldblaze.expressgateway.core.loadbalancer.l7.http;
+
 import com.shieldblaze.expressgateway.backend.cluster.Cluster;
 import com.shieldblaze.expressgateway.backend.connection.ClusterConnectionPool;
 import com.shieldblaze.expressgateway.configuration.CommonConfiguration;
