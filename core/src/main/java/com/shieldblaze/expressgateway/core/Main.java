@@ -40,9 +40,7 @@ import com.shieldblaze.expressgateway.configuration.transport.TransportConfigura
 import com.shieldblaze.expressgateway.configuration.transport.TransportType;
 import com.shieldblaze.expressgateway.core.loadbalancer.l7.http.HTTPLoadBalancer;
 import com.shieldblaze.expressgateway.core.loadbalancer.l7.http.HTTPLoadBalancerBuilder;
-import com.shieldblaze.expressgateway.core.server.http.pool.HTTPBootstrapper;
 import com.shieldblaze.expressgateway.core.server.http.HTTPListener;
-import com.shieldblaze.expressgateway.core.server.http.pool.HTTPClusterConnectionPool;
 import com.shieldblaze.expressgateway.loadbalance.l7.http.RoundRobin;
 import io.netty.handler.ssl.util.InsecureTrustManagerFactory;
 import io.netty.handler.ssl.util.SelfSignedCertificate;
@@ -56,13 +54,13 @@ public final class Main {
 
     static {
         System.setProperty("log4j.configurationFile", "log4j2.xml");
-        System.loadLibrary("netty_tcnative");
+//        System.loadLibrary("netty_tcnative");
     }
 
     public static void main(String[] args) throws CertificateException, SSLException {
 
         TransportConfiguration transportConfiguration = TransportConfigurationBuilder.newBuilder()
-                .withTransportType(TransportType.EPOLL)
+                .withTransportType(TransportType.NIO)
                 .withTCPFastOpenMaximumPendingRequests(2147483647)
                 .withBackendConnectTimeout(10000 * 5)
                 .withBackendSocketTimeout(10000 * 5)
@@ -130,13 +128,13 @@ public final class Main {
                 .withCompressionThreshold(100)
                 .withDeflateCompressionLevel(6)
                 .withH2enablePush(false)
-                .withH2InitialWindowSize(65535)
-                .withMaxChunkSize(1024 * 10)
+                .withH2InitialWindowSize(Integer.MAX_VALUE / 2)
+                .withMaxChunkSize(1024 * 100)
                 .withH2MaxConcurrentStreams(100)
-                .withMaxContentLength(1024 * 1024)
+                .withMaxContentLength(1024 * 10240)
                 .withMaxHeaderSize(1024 * 10)
                 .withH2MaxHeaderSizeList(4294967295L)
-                .withMaxInitialLineLength(1024 * 10)
+                .withMaxInitialLineLength(1024 * 100)
                 .withH2MaxFrameSize(16777215)
                 .withH2MaxHeaderTableSize(4096)
                 .build();
@@ -148,7 +146,7 @@ public final class Main {
                 .withBindAddress(new InetSocketAddress("0.0.0.0", 9110))
                 .withHTTPFrontListener(new HTTPListener())
                 .withHTTPConfiguration(httpConfiguration)
-                .withClusterConnectionPool(new HTTPClusterConnectionPool(new HTTPBootstrapper()))
+//                .withClusterConnectionPool(new HTTPClusterConnectionPool(new HTTPBootstrapper()))
                 .withTLSForClient(forClient)
                 .withTLSForServer(forServer)
                 .build();

@@ -40,7 +40,6 @@ public final class HTTPLoadBalancerBuilder {
     private Cluster cluster;
     private HTTPFrontListener httpFrontListener;
     private HTTPLoadBalancer httpLoadBalancer;
-    private ClusterConnectionPool clusterConnectionPool;
     private TLSConfiguration tlsServer;
     private TLSConfiguration tlsClient;
 
@@ -94,14 +93,6 @@ public final class HTTPLoadBalancerBuilder {
     }
 
     /**
-     * Set {@link ClusterConnectionPool} to use
-     */
-    public HTTPLoadBalancerBuilder withClusterConnectionPool(ClusterConnectionPool clusterConnectionPool) {
-        this.clusterConnectionPool = clusterConnectionPool;
-        return this;
-    }
-
-    /**
      * Set {@link TLSConfiguration} for Client
      */
     public HTTPLoadBalancerBuilder withTLSForClient(TLSConfiguration tlsClient) {
@@ -125,7 +116,6 @@ public final class HTTPLoadBalancerBuilder {
                     Objects.requireNonNull(httpFrontListener, "httpFrontListener"),
                     Objects.requireNonNull(cluster, "cluster"),
                     Objects.requireNonNull(commonConfiguration, "commonConfiguration"),
-                    Objects.requireNonNull(clusterConnectionPool, "ClusterConnectionPool"),
                     Objects.requireNonNull(httpConfiguration, "httpConfiguration"),
                     tlsClient,
                     tlsServer

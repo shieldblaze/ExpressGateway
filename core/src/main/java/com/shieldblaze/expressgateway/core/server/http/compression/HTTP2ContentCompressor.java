@@ -63,8 +63,8 @@ public class HTTP2ContentCompressor extends CompressorHttp2ConnectionEncoder {
             case "x-deflate":
                 return new EmbeddedChannel(channel.id(), channel.metadata().hasDisconnect(), channel.config(),
                         ZlibCodecFactory.newZlibEncoder(ZlibWrapper.ZLIB, compressionLevel, 15, 8));
-            case "br":
-                return new EmbeddedChannel(channel.id(), channel.metadata().hasDisconnect(), channel.config(), new BrotliEncoder(brotliCompressionQuality));
+//            case "br":
+//                return new EmbeddedChannel(channel.id(), channel.metadata().hasDisconnect(), channel.config(), new BrotliEncoder(brotliCompressionQuality));
             default:
                 return null;
         }

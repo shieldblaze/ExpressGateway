@@ -15,22 +15,26 @@
  * You should have received a copy of the GNU General Public License
  * along with ShieldBlaze ExpressGateway.  If not, see <https://www.gnu.org/licenses/>.
  */
-package com.shieldblaze.expressgateway.core.server.http.http2;
+package com.shieldblaze.expressgateway.core.server.http.adapter;
 
-import io.netty.channel.ChannelDuplexHandler;
-import io.netty.channel.ChannelHandlerContext;
-import io.netty.channel.ChannelPromise;
+import io.netty.handler.codec.http2.Http2FrameStream;
 
-public final class HTTP2ToHTTP1Adapter extends ChannelDuplexHandler {
+import java.util.Comparator;
 
-    @Override
-    public void write(ChannelHandlerContext ctx, Object msg, ChannelPromise promise) throws Exception {
-        System.err.println(msg);
-        super.write(ctx, msg, promise);
+/**
+ * {@link Comparator} implementation for comparing {@link Http2FrameStream}
+ * using {@link Http2FrameStream#id()}.
+ */
+final class Http2FrameStreamComparator implements Comparator<Http2FrameStream> {
+
+    final static Http2FrameStreamComparator INSTANCE = new Http2FrameStreamComparator();
+
+    private Http2FrameStreamComparator() {
+        // Prevent outside initialization
     }
 
     @Override
-    public void channelRead(ChannelHandlerContext ctx, Object msg) throws Exception {
-        super.channelRead(ctx, msg);
+    public int compare(Http2FrameStream o1, Http2FrameStream o2) {
+        return Integer.compare(o1.id(), o2.id());
     }
 }

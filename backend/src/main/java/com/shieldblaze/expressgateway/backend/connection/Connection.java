@@ -33,7 +33,6 @@ public class Connection {
     protected ChannelFuture channelFuture;
     private ConcurrentLinkedQueue<Object> backlogQueue = new ConcurrentLinkedQueue<>();
     private boolean inUse = true;
-    protected State state = State.NEW;
 
     public void setChannelFuture(ChannelFuture channelFuture) {
         if (this.channelFuture == null) {
@@ -41,16 +40,11 @@ public class Connection {
 
             // Add Listener to write all pending backlog data.
             this.channelFuture.addListener((ChannelFutureListener) future -> {
-                if (future.isSuccess()) {
-                    state = State.ESTABLISHED;
-                } else {
-                    state = State.CLOSED;
-                }
                 releaseBacklog(future.isSuccess());
             });
 
             this.channelFuture.channel().closeFuture().addListener((ChannelFutureListener) future -> {
-               state = State.CLOSED;
+                inUse = false;
             });
         } else {
             throw new IllegalArgumentException("ChannelFuture is already set");
@@ -89,8 +83,7 @@ public class Connection {
      * Write and Flush message
      */
     public void writeAndFlush(Object msg) {
-        // - If BacklogQueue is not null then connection is not established yet
-        // then we'll add message to backlog.
+        // - If BacklogQueue is not null then connection is not established yet then we'll add message to backlog.
         // - If BacklogQueue is null and channel is active then write the message.
         // - If both case are not matched then connection is not active and we'll release the message.
         if (backlogQueue != null) {
@@ -114,15 +107,5 @@ public class Connection {
             backlogQueue.forEach(ReferenceCounted::silentFullRelease);
         }
         backlogQueue = null;
-    }
-
-    public State getState() {
-        return state;
-    }
-
-    public enum State {
-        NEW,
-        ESTABLISHED,
-        CLOSED
     }
 }

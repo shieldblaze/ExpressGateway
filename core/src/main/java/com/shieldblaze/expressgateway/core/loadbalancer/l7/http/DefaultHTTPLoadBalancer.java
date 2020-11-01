@@ -38,13 +38,12 @@ final class DefaultHTTPLoadBalancer extends HTTPLoadBalancer {
      * @param l7FrontListener     {@link L7FrontListener} for listening and handling traffic
      * @param cluster             {@link Cluster} to be Load Balanced
      * @param commonConfiguration {@link CommonConfiguration} to be applied
-     * @param clusterConnectionPool   {@link ClusterConnectionPool} to use
      * @param httpConfiguration   {@link HTTPConfiguration} to be applied
      * @throws NullPointerException If any parameter is {@code null}
      */
     DefaultHTTPLoadBalancer(InetSocketAddress bindAddress, HTTPBalance HTTPBalance, L7FrontListener l7FrontListener, Cluster cluster,
-                            CommonConfiguration commonConfiguration, ClusterConnectionPool clusterConnectionPool, HTTPConfiguration httpConfiguration,
+                            CommonConfiguration commonConfiguration, HTTPConfiguration httpConfiguration,
                             TLSConfiguration tlsClient, TLSConfiguration tlsServer) {
-        super(bindAddress, HTTPBalance, l7FrontListener, cluster, commonConfiguration, clusterConnectionPool, httpConfiguration, tlsClient, tlsServer);
+        super(bindAddress, HTTPBalance, l7FrontListener, cluster, commonConfiguration, httpConfiguration, tlsClient, tlsServer);
     }
 }

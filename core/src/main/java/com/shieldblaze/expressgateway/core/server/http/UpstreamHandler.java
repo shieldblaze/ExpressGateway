@@ -22,6 +22,7 @@ import com.shieldblaze.expressgateway.common.concurrent.GlobalExecutors;
 import com.shieldblaze.expressgateway.configuration.CommonConfiguration;
 import com.shieldblaze.expressgateway.configuration.http.HTTPConfiguration;
 import com.shieldblaze.expressgateway.core.loadbalancer.l7.http.HTTPLoadBalancer;
+import com.shieldblaze.expressgateway.core.server.http.adapter.OutboundAdapter;
 import com.shieldblaze.expressgateway.core.server.http.alpn.ALPNHandler;
 import com.shieldblaze.expressgateway.core.server.http.alpn.ALPNHandlerBuilder;
 import com.shieldblaze.expressgateway.core.server.http.compression.HTTPContentDecompressor;
@@ -47,11 +48,16 @@ import io.netty.handler.codec.http.HttpHeaders;
 import io.netty.handler.codec.http.HttpRequest;
 import io.netty.handler.codec.http.HttpUtil;
 import io.netty.handler.codec.http2.HttpConversionUtil;
+import io.netty.handler.logging.LogLevel;
+import io.netty.handler.logging.LoggingHandler;
+import io.netty.handler.pcap.PcapWriteHandler;
 import io.netty.handler.ssl.SslHandler;
 import io.netty.handler.timeout.IdleStateHandler;
 import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
 
+import java.io.FileNotFoundException;
+import java.io.FileOutputStream;
 import java.net.InetSocketAddress;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
@@ -156,7 +162,7 @@ public final class UpstreamHandler extends ChannelInboundHandlerAdapter {
             headers.remove(HttpHeaderNames.UPGRADE);
             headers.set("X-Forwarded-For", upstreamAddress.getAddress().getHostAddress());
             headers.set(HttpHeaderNames.HOST, backend.getCluster().getHostname());
-            headers.set(HttpHeaderNames.ACCEPT_ENCODING, "br, gzip, deflate");
+            headers.set(HttpHeaderNames.ACCEPT_ENCODING, "gzip, deflate");
 
             if (channelActive) {
                 if (request.headers().contains(HttpHeaderNames.CONTENT_LENGTH)) {
@@ -216,6 +222,7 @@ public final class UpstreamHandler extends ChannelInboundHandlerAdapter {
                     ALPNHandler alpnHandler = ALPNHandlerBuilder.newBuilder()
                             // HTTP/2 Handlers
                             .withHTTP2ChannelHandler("HTTP2Handler", HTTPUtils.clientH2Handler(httpConfiguration))
+                            .withHTTP2ChannelHandler("OutboundAdapter", new OutboundAdapter())
                             .withHTTP2ChannelHandler("DownstreamHandler", downstreamHandler)
                             // HTTP/1.1 Handlers
                             .withHTTP1ChannelHandler("HTTPClientCodec", HTTPUtils.newClientCodec(httpConfiguration))
@@ -232,8 +239,8 @@ public final class UpstreamHandler extends ChannelInboundHandlerAdapter {
         ChannelFuture channelFuture = bootstrap.connect(backend.getSocketAddress());
         downstreamChannel = channelFuture.channel();
 
-        channelFuture.addListener((ChannelFutureListener) _channelFuture -> {
-            if (_channelFuture.isSuccess()) {
+        channelFuture.addListener((ChannelFutureListener) future -> {
+            if (future.isSuccess()) {
                 downstreamAddress = (InetSocketAddress) downstreamChannel.remoteAddress();
 
                 downstreamChannel.pipeline().get(ALPNHandler.class).getALPNProtocol().whenCompleteAsync((protocol, throwable) -> {
@@ -244,7 +251,7 @@ public final class UpstreamHandler extends ChannelInboundHandlerAdapter {
                     } else {
                         ChannelUtils.closeChannels(upstreamChannel, downstreamChannel);
                     }
-                }, GlobalExecutors.INSTANCE.getExecutorService());
+                }, future.channel().eventLoop());
 
             } else {
                 ChannelUtils.closeChannels(upstreamChannel, downstreamChannel);

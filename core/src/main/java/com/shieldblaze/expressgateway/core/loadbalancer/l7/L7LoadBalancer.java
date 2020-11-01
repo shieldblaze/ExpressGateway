@@ -44,7 +44,6 @@ public abstract class L7LoadBalancer {
     private final L7FrontListener l7FrontListener;
     private final Cluster cluster;
     private final CommonConfiguration commonConfiguration;
-    private final ClusterConnectionPool clusterConnectionPool;
     private final TLSConfiguration tlsClient;
     private final TLSConfiguration tlsServer;
 
@@ -57,17 +56,15 @@ public abstract class L7LoadBalancer {
      * @param l7FrontListener     {@link L7FrontListener} for listening and handling traffic
      * @param cluster             {@link Cluster} to be Load Balanced
      * @param commonConfiguration {@link CommonConfiguration} to be applied
-     * @param clusterConnectionPool   {@link ClusterConnectionPool} to use
      * @throws NullPointerException If any parameter is {@code null}
      */
     public L7LoadBalancer(InetSocketAddress bindAddress, HTTPBalance HTTPBalance, L7FrontListener l7FrontListener, Cluster cluster,
-                          CommonConfiguration commonConfiguration, ClusterConnectionPool clusterConnectionPool, TLSConfiguration tlsClient, TLSConfiguration tlsServer) {
+                          CommonConfiguration commonConfiguration, TLSConfiguration tlsClient, TLSConfiguration tlsServer) {
         this.bindAddress = Objects.requireNonNull(bindAddress, "bindAddress");
         this.HTTPBalance = Objects.requireNonNull(HTTPBalance, "l7Balance");
         this.l7FrontListener = Objects.requireNonNull(l7FrontListener, "l7FrontListener");
         this.cluster = Objects.requireNonNull(cluster, "cluster");
         this.commonConfiguration = Objects.requireNonNull(commonConfiguration);
-        this.clusterConnectionPool = Objects.requireNonNull(clusterConnectionPool, "ClusterConnectionPool");
         this.tlsClient = tlsClient;
         this.tlsServer = tlsServer;
 
@@ -127,13 +124,6 @@ public abstract class L7LoadBalancer {
      */
     public CommonConfiguration getCommonConfiguration() {
         return commonConfiguration;
-    }
-
-    /**
-     * Get {@link ClusterConnectionPool} to use
-     */
-    public ClusterConnectionPool getConnectionManager() {
-        return clusterConnectionPool;
     }
 
     /**

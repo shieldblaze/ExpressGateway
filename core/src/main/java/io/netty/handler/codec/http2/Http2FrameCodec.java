@@ -161,8 +161,7 @@ public class Http2FrameCodec extends Http2ConnectionHandler {
 
     /** Number of buffered streams if the {@link StreamBufferingEncoder} is used. **/
     private int numBufferedStreams;
-    private final IntObjectMap<DefaultHttp2FrameStream> frameStreamToInitializeMap =
-            new IntObjectHashMap<DefaultHttp2FrameStream>(8);
+    private final IntObjectMap<DefaultHttp2FrameStream> frameStreamToInitializeMap = new IntObjectHashMap<>(8);
 
     public Http2FrameCodec(Http2ConnectionEncoder encoder, Http2ConnectionDecoder decoder, Http2Settings initialSettings,
                     boolean decoupleCloseAndGoAway) {
@@ -390,8 +389,7 @@ public class Http2FrameCodec extends Http2ConnectionHandler {
             final ChannelHandlerContext ctx, Http2HeadersFrame headersFrame, final ChannelPromise promise) {
 
         if (isStreamIdValid(headersFrame.stream().id())) {
-            encoder().writeHeaders(ctx, headersFrame.stream().id(), headersFrame.headers(), headersFrame.padding(),
-                    headersFrame.isEndStream(), promise);
+            encoder().writeHeaders(ctx, headersFrame.stream().id(), headersFrame.headers(), headersFrame.padding(), headersFrame.isEndStream(), promise);
         } else {
             final DefaultHttp2FrameStream stream = (DefaultHttp2FrameStream) headersFrame.stream();
             final Http2Connection connection = connection();
@@ -445,8 +443,7 @@ public class Http2FrameCodec extends Http2ConnectionHandler {
     }
 
     private void onStreamActive0(Http2Stream stream) {
-        if (stream.id() != Http2CodecUtil.HTTP_UPGRADE_STREAM_ID &&
-                connection().local().isValidStreamId(stream.id())) {
+        if (stream.id() != Http2CodecUtil.HTTP_UPGRADE_STREAM_ID && connection().local().isValidStreamId(stream.id())) {
             return;
         }
 
@@ -458,7 +455,6 @@ public class Http2FrameCodec extends Http2ConnectionHandler {
         @Override
         public void onStreamAdded(Http2Stream stream) {
             DefaultHttp2FrameStream frameStream = frameStreamToInitializeMap.remove(stream.id());
-
             if (frameStream != null) {
                 frameStream.setStreamAndProperty(streamKey, stream);
             }
@@ -666,7 +662,7 @@ public class Http2FrameCodec extends Http2ConnectionHandler {
      * {@link Http2FrameStream} implementation.
      */
     // TODO(buchgr): Merge Http2FrameStream and Http2Stream.
-    static class DefaultHttp2FrameStream implements Http2FrameStream {
+    public static class DefaultHttp2FrameStream implements Http2FrameStream {
 
         private volatile int id = -1;
         private volatile Http2Stream stream;
@@ -675,6 +671,13 @@ public class Http2FrameCodec extends Http2ConnectionHandler {
         final Http2FrameStreamEvent writabilityChanged = Http2FrameStreamEvent.writabilityChanged(this);
 
         Channel attachment;
+
+        public DefaultHttp2FrameStream() {
+        }
+
+        public DefaultHttp2FrameStream(int id) {
+            this.id = id;
+        }
 
         DefaultHttp2FrameStream setStreamAndProperty(PropertyKey streamKey, Http2Stream stream) {
             assert id == -1 || stream.id() == id;
@@ -695,9 +698,17 @@ public class Http2FrameCodec extends Http2ConnectionHandler {
             return stream == null ? State.IDLE : stream.state();
         }
 
+        public void setId(int id) {
+            this.id = id;
+        }
+
         @Override
         public String toString() {
             return String.valueOf(id());
         }
+    }
+
+    public IntObjectMap<DefaultHttp2FrameStream> getFrameStreamToInitializeMap() {
+        return frameStreamToInitializeMap;
     }
 }

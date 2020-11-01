@@ -24,18 +24,15 @@ import com.shieldblaze.expressgateway.configuration.transport.TransportConfigura
 import com.shieldblaze.expressgateway.configuration.transport.TransportType;
 import com.shieldblaze.expressgateway.core.events.L4FrontListenerEvent;
 import com.shieldblaze.expressgateway.core.loadbalancer.l7.http.HTTPLoadBalancer;
+import com.shieldblaze.expressgateway.core.server.http.adapter.InboundAdapter;
 import com.shieldblaze.expressgateway.core.server.http.alpn.ALPNHandler;
 import com.shieldblaze.expressgateway.core.server.http.alpn.ALPNHandlerBuilder;
 import com.shieldblaze.expressgateway.core.server.http.compression.HTTPContentCompressor;
 import com.shieldblaze.expressgateway.core.server.http.compression.HTTPContentDecompressor;
-import com.shieldblaze.expressgateway.core.server.http.http2.HTTP2ToHTTP1Adapter;
-import com.shieldblaze.expressgateway.core.server.http.http2.UpstreamHandler;
-import com.shieldblaze.expressgateway.core.server.http.pool.HTTPClusterConnectionPool;
 import com.shieldblaze.expressgateway.core.tls.SNIHandler;
 import com.shieldblaze.expressgateway.core.utils.EventLoopFactory;
 import io.netty.bootstrap.ServerBootstrap;
 import io.netty.buffer.ByteBufAllocator;
-import io.netty.channel.Channel;
 import io.netty.channel.ChannelFutureListener;
 import io.netty.channel.ChannelHandlerContext;
 import io.netty.channel.ChannelInitializer;
@@ -47,7 +44,6 @@ import io.netty.channel.epoll.EpollServerSocketChannelConfig;
 import io.netty.channel.socket.SocketChannel;
 import io.netty.channel.socket.nio.NioServerSocketChannel;
 import io.netty.channel.unix.UnixChannelOption;
-import io.netty.handler.codec.http2.Http2MultiplexHandler;
 import io.netty.handler.timeout.IdleStateHandler;
 import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
@@ -161,21 +157,22 @@ public final class HTTPListener extends HTTPFrontListener {
                 pipeline.addLast("HTTPServerValidator", new HTTPServerValidator(httpConfiguration));
                 pipeline.addLast("HTTPContentCompressor", new HTTPContentCompressor(httpConfiguration));
                 pipeline.addLast("HTTPContentDecompressor", new HTTPContentDecompressor());
-//                pipeline.addLast("UpstreamHandler", new UpstreamHandler(httpLoadBalancer));
+                pipeline.addLast("UpstreamHandler", new UpstreamHandler(httpLoadBalancer));
             } else {
                 pipeline.addLast("SNIHandler", new SNIHandler(httpLoadBalancer.getTlsServer()));
 
                 ALPNHandler alpnHandler = ALPNHandlerBuilder.newBuilder()
                         // HTTP/2 Handlers
                         .withHTTP2ChannelHandler("HTTP2Handler", HTTPUtils.serverH2Handler(httpConfiguration))
-                        .withHTTP2ChannelHandler("UpstreamHandler", new UpstreamHandler(httpLoadBalancer.getL7Balance(), httpLoadBalancer.getCluster(), (HTTPClusterConnectionPool) httpLoadBalancer.getConnectionManager()))
+                        .withHTTP2ChannelHandler("HTTP2TranslationAdapter", new InboundAdapter())
+                        .withHTTP2ChannelHandler("UpstreamHandler", new UpstreamHandler(httpLoadBalancer))
 
                         // HTTP/1.1 Handlers
-//                        .withHTTP1ChannelHandler("HTTPServerCodec", HTTPUtils.newServerCodec(httpConfiguration))
-//                        .withHTTP1ChannelHandler("HTTPServerValidator", new HTTPServerValidator(httpConfiguration))
-//                        .withHTTP1ChannelHandler("HTTPContentCompressor", new HTTPContentCompressor(httpConfiguration))
-//                        .withHTTP1ChannelHandler("HTTPContentDecompressor", new HTTPContentDecompressor())
-//                        .withHTTP1ChannelHandler("UpstreamHandler", new UpstreamHandler(httpLoadBalancer))
+                        .withHTTP1ChannelHandler("HTTPServerCodec", HTTPUtils.newServerCodec(httpConfiguration))
+                        .withHTTP1ChannelHandler("HTTPServerValidator", new HTTPServerValidator(httpConfiguration))
+                        .withHTTP1ChannelHandler("HTTPContentCompressor", new HTTPContentCompressor(httpConfiguration))
+                        .withHTTP1ChannelHandler("HTTPContentDecompressor", new HTTPContentDecompressor())
+                        .withHTTP1ChannelHandler("UpstreamHandler", new UpstreamHandler(httpLoadBalancer))
                         .build();
 
                 pipeline.addLast("ALPNHandler", alpnHandler);

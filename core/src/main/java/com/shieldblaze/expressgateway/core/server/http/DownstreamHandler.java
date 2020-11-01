@@ -21,9 +21,12 @@ import com.shieldblaze.expressgateway.core.server.http.compression.HTTPContentCo
 import com.shieldblaze.expressgateway.core.utils.ChannelUtils;
 import io.netty.channel.ChannelHandlerContext;
 import io.netty.channel.ChannelInboundHandlerAdapter;
+import io.netty.handler.codec.http.HttpContent;
 import io.netty.handler.codec.http.HttpHeaderNames;
 import io.netty.handler.codec.http.HttpResponse;
 import io.netty.handler.codec.http.LastHttpContent;
+import io.netty.handler.codec.http2.Http2DataFrame;
+import io.netty.handler.codec.http2.Http2HeadersFrame;
 import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
 
@@ -40,6 +43,9 @@ public final class DownstreamHandler extends ChannelInboundHandlerAdapter {
 
     @Override
     public void channelRead(ChannelHandlerContext ctx, Object msg) {
+        if (!(msg instanceof Http2HeadersFrame || msg instanceof Http2DataFrame || msg instanceof HttpResponse || msg instanceof HttpContent)) {
+            return;
+        }
         if (msg instanceof HttpResponse) {
             HttpResponse response = (HttpResponse) msg;
             HTTPUtils.setGenericHeaders(response.headers());

@@ -71,9 +71,9 @@ public class HTTPContentCompressor extends HttpContentCompressor {
             case "deflate":
                 compressor = ZlibCodecFactory.newZlibEncoder(ZlibWrapper.ZLIB, compressionLevel, 15, 8);
                 break;
-            case "br":
-                compressor = new BrotliEncoder(brotliCompressionQuality);
-                break;
+//            case "br":
+//                compressor = new BrotliEncoder(brotliCompressionQuality);
+//                break;
             default:
                 throw new Error();
         }
