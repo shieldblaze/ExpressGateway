@@ -30,6 +30,7 @@ import io.netty.handler.codec.http2.DefaultHttp2GoAwayFrame;
 import io.netty.handler.codec.http2.DefaultHttp2HeadersFrame;
 import io.netty.handler.codec.http2.DefaultHttp2TranslatedHttpContent;
 import io.netty.handler.codec.http2.DefaultHttp2TranslatedLastHttpContent;
+import io.netty.handler.codec.http2.DefaultHttp2WindowUpdateFrame;
 import io.netty.handler.codec.http2.Http2DataFrame;
 import io.netty.handler.codec.http2.Http2Error;
 import io.netty.handler.codec.http2.Http2FrameStream;
@@ -125,6 +126,8 @@ public final class InboundAdapter extends ChannelDuplexHandler {
                     http2HeadersFrame.stream(streamMap.get(streamId));
                     ctx.writeAndFlush(http2HeadersFrame, promise); // Write and flush the HTTP/2 Header Frame
                 }
+
+                streamMap.remove(streamId); // We're done with this Stream
             }
         }
     }

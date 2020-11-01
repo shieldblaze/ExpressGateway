@@ -29,6 +29,7 @@ final class OutboundProperty {
     private final short streamWeight;
     private final Http2FrameStream http2FrameStream;
     private boolean isInitialRead;
+    private int readBytes = 0;
 
     OutboundProperty(HttpHeaders httpHeaders, Http2FrameStream http2FrameStream) {
         scheme = httpHeaders.get(HttpConversionUtil.ExtensionHeaderNames.SCHEME.text());
@@ -64,5 +65,17 @@ final class OutboundProperty {
 
     void fireInitialRead() {
         isInitialRead = true;
+    }
+
+    void incrementReadBytes(int bytes) {
+        readBytes += bytes;
+    }
+
+    void resetReadBytes() {
+        readBytes = 0;
+    }
+
+    int getReadBytes() {
+        return readBytes;
     }
 }

@@ -128,7 +128,7 @@ public final class Main {
                 .withCompressionThreshold(100)
                 .withDeflateCompressionLevel(6)
                 .withH2enablePush(false)
-                .withH2InitialWindowSize(Integer.MAX_VALUE / 2)
+                .withH2InitialWindowSize(Integer.MAX_VALUE)
                 .withMaxChunkSize(1024 * 100)
                 .withH2MaxConcurrentStreams(100)
                 .withMaxContentLength(1024 * 10240)

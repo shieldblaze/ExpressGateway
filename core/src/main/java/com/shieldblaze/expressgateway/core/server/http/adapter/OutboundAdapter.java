@@ -35,7 +35,6 @@ import io.netty.handler.codec.http2.Http2ChannelDuplexHandler;
 import io.netty.handler.codec.http2.Http2DataFrame;
 import io.netty.handler.codec.http2.Http2Error;
 import io.netty.handler.codec.http2.Http2FrameCodec;
-import io.netty.handler.codec.http2.Http2GoAwayFrame;
 import io.netty.handler.codec.http2.Http2Headers;
 import io.netty.handler.codec.http2.Http2HeadersFrame;
 import io.netty.handler.codec.http2.Http2StreamFrame;
@@ -102,7 +101,6 @@ public final class OutboundAdapter extends Http2ChannelDuplexHandler {
 
     @Override
     public void channelRead(ChannelHandlerContext ctx, Object msg) throws Exception {
-        System.out.println(msg);
         if (msg instanceof Http2HeadersFrame) {
             Http2HeadersFrame headersFrame = (Http2HeadersFrame) msg;
             int streamId = headersFrame.stream().id();
@@ -111,7 +109,8 @@ public final class OutboundAdapter extends Http2ChannelDuplexHandler {
             if (outboundProperty.isInitialRead()) {
                 DefaultHttp2TranslatedLastHttpContent httpContent = new DefaultHttp2TranslatedLastHttpContent(Unpooled.EMPTY_BUFFER,
                         outboundProperty.getStreamId(), false);
-                HttpConversionUtil.addHttp2ToHttpHeaders(streamId, headersFrame.headers(), httpContent.trailingHeaders(), HttpVersion.HTTP_1_1, true, false);
+                HttpConversionUtil.addHttp2ToHttpHeaders(streamId, headersFrame.headers(), httpContent.trailingHeaders(), HttpVersion.HTTP_1_1,
+                        true, false);
                 ctx.fireChannelRead(httpContent);
                 streamMap.remove(streamId);
 
@@ -138,6 +137,7 @@ public final class OutboundAdapter extends Http2ChannelDuplexHandler {
             Http2DataFrame dataFrame = (Http2DataFrame) msg;
             int streamId = dataFrame.stream().id();
             OutboundProperty outboundProperty = getOutboundProperty(streamId);
+            outboundProperty.incrementReadBytes(dataFrame.content().readableBytes());
 
             HttpContent httpContent;
             if (dataFrame.isEndStream()) {
@@ -145,6 +145,13 @@ public final class OutboundAdapter extends Http2ChannelDuplexHandler {
                 streamMap.remove(streamId);
             } else {
                 httpContent = new DefaultHttp2TranslatedHttpContent(dataFrame.content(), outboundProperty.getStreamId());
+            }
+
+            // If Number of Read Bytes has exceeded 50% of Window Size then
+            // send WINDOW_UPDATE frame.
+            if (outboundProperty.getReadBytes() >= Integer.MAX_VALUE / 2) {
+                frameCodec.connection().local().flowController().consumeBytes(frameCodec.connection().stream(streamId), outboundProperty.getReadBytes());
+                outboundProperty.resetReadBytes();
             }
 
             ctx.fireChannelRead(httpContent);
