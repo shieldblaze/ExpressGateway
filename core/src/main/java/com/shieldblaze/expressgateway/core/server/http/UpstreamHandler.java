@@ -231,7 +231,6 @@ public final class UpstreamHandler extends ChannelInboundHandlerAdapter {
                             .build();
 
                     pipeline.addLast("TLSHandler", sslHandler);
-//                    pipeline.addLast(new LoggingHandler(LogLevel.DEBUG));
                     pipeline.addLast("ALPNHandler", alpnHandler);
                 }
             }

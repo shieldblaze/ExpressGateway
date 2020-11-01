@@ -20,7 +20,10 @@ package com.shieldblaze.expressgateway.core.server.http.adapter;
 import io.netty.buffer.Unpooled;
 import io.netty.channel.ChannelHandlerContext;
 import io.netty.channel.ChannelPromise;
+import io.netty.handler.codec.http.FullHttpResponse;
 import io.netty.handler.codec.http.HttpContent;
+import io.netty.handler.codec.http.HttpHeaderNames;
+import io.netty.handler.codec.http.HttpHeaderValues;
 import io.netty.handler.codec.http.HttpMessage;
 import io.netty.handler.codec.http.HttpObject;
 import io.netty.handler.codec.http.HttpRequest;
@@ -57,7 +60,7 @@ public final class OutboundAdapter extends Http2ChannelDuplexHandler {
     private final Map<Integer, OutboundProperty> streamMap = new ConcurrentSkipListMap<>();
 
     @Override
-    public void write(ChannelHandlerContext ctx, Object msg, ChannelPromise promise) throws Exception {
+    public void write(ChannelHandlerContext ctx, Object msg, ChannelPromise promise) {
         if (msg instanceof HttpRequest) {
             Http2FrameCodec.DefaultHttp2FrameStream http2FrameStream = (Http2FrameCodec.DefaultHttp2FrameStream) newStream();
             http2FrameStream.setId(getNextStreamId(ctx, http2FrameStream)); // Get the next available stream ID and set.
@@ -119,7 +122,16 @@ public final class OutboundAdapter extends Http2ChannelDuplexHandler {
                     ctx.writeAndFlush(new DefaultHttp2GoAwayFrame(Http2Error.NO_ERROR).setExtraStreamIds(streamId));
                 }
             } else {
-                HttpResponse httpResponse = HttpConversionUtil.toHttpResponse(streamId, headersFrame.headers(), false);
+                HttpResponse httpResponse;
+
+                // If 'endOfStream' flag is set to 'true' then we will create FullHttpResponse.
+                if (headersFrame.isEndStream()) {
+                    httpResponse = HttpConversionUtil.toFullHttpResponse(streamId, headersFrame.headers(), Unpooled.EMPTY_BUFFER,false);
+                    streamMap.remove(streamId);
+                } else {
+                    httpResponse = HttpConversionUtil.toHttpResponse(streamId, headersFrame.headers(), false);
+                    httpResponse.headers().set(HttpHeaderNames.CONTENT_ENCODING, HttpHeaderValues.CHUNKED);
+                }
                 httpResponse.headers().set(HttpConversionUtil.ExtensionHeaderNames.SCHEME.text(), outboundProperty.getScheme());
                 httpResponse.headers().set(HttpConversionUtil.ExtensionHeaderNames.STREAM_ID.text(), outboundProperty.getStreamId());
                 httpResponse.headers().set(HttpConversionUtil.ExtensionHeaderNames.STREAM_DEPENDENCY_ID.text(), outboundProperty.getDependencyId());
@@ -127,11 +139,6 @@ public final class OutboundAdapter extends Http2ChannelDuplexHandler {
 
                 ctx.fireChannelRead(httpResponse);
                 outboundProperty.fireInitialRead();
-
-                if (headersFrame.isEndStream()) {
-                    streamMap.remove(streamId);
-                    ctx.fireChannelRead(new DefaultHttp2TranslatedLastHttpContent(streamId));
-                }
             }
         } else if (msg instanceof Http2DataFrame) {
             Http2DataFrame dataFrame = (Http2DataFrame) msg;
