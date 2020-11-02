@@ -106,7 +106,7 @@ public final class InboundAdapter extends ChannelDuplexHandler {
                 writeHeaders(ctx, streamId, headersFrame, promise);
 
                 Http2DataFrame dataFrame = new DefaultHttp2DataFrame(fullHttpResponse.content(), true);
-                writeData(ctx, streamId, dataFrame, promise);
+                writeData(ctx, streamId, dataFrame, ctx.newPromise());
 
                 streamMap.remove(streamId); // We're done with this Stream
             } else {

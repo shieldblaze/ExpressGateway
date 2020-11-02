@@ -21,15 +21,14 @@ import io.netty.handler.codec.http2.Http2FrameStream;
 import io.netty.handler.codec.http2.Http2Headers;
 import io.netty.handler.codec.http2.Http2StreamFrame;
 
-public final class PushPromiseRead implements Http2StreamFrame {
+public class PushPromiseRead implements Http2StreamFrame {
 
     private Http2FrameStream stream;
     private final int promisedStreamId;
     private final Http2Headers headers;
     private final int padding;
 
-    public PushPromiseRead(Http2FrameStream stream, int promisedStreamId, Http2Headers headers, int padding) {
-        this.stream = stream;
+    public PushPromiseRead(int promisedStreamId, Http2Headers headers, int padding) {
         this.promisedStreamId = promisedStreamId;
         this.headers = headers;
         this.padding = padding;
