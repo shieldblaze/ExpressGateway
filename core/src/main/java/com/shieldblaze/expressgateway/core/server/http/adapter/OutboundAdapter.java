@@ -34,13 +34,17 @@ import io.netty.handler.codec.http2.DefaultHttp2GoAwayFrame;
 import io.netty.handler.codec.http2.DefaultHttp2HeadersFrame;
 import io.netty.handler.codec.http2.DefaultHttp2TranslatedHttpContent;
 import io.netty.handler.codec.http2.DefaultHttp2TranslatedLastHttpContent;
+import io.netty.handler.codec.http2.DefaultHttp2WindowUpdateFrame;
 import io.netty.handler.codec.http2.Http2ChannelDuplexHandler;
 import io.netty.handler.codec.http2.Http2DataFrame;
 import io.netty.handler.codec.http2.Http2Error;
 import io.netty.handler.codec.http2.Http2FrameCodec;
 import io.netty.handler.codec.http2.Http2Headers;
 import io.netty.handler.codec.http2.Http2HeadersFrame;
+import io.netty.handler.codec.http2.Http2Settings;
+import io.netty.handler.codec.http2.Http2SettingsFrame;
 import io.netty.handler.codec.http2.Http2StreamFrame;
+import io.netty.handler.codec.http2.Http2WindowUpdateFrame;
 import io.netty.handler.codec.http2.HttpConversionUtil;
 
 import java.util.Map;
@@ -162,6 +166,17 @@ public final class OutboundAdapter extends Http2ChannelDuplexHandler {
             }
 
             ctx.fireChannelRead(httpContent);
+        } else if (msg instanceof Http2WindowUpdateFrame) {
+            Http2WindowUpdateFrame windowUpdateFrame = (Http2WindowUpdateFrame) msg;
+            System.err.println(msg);
+        } else if (msg instanceof Http2SettingsFrame) {
+            Http2SettingsFrame settingsFrame = (Http2SettingsFrame) msg;
+            System.err.println(msg);
+//            frameCodec.connection().local().flowController().initialWindowSize(settingsFrame.settings().initialWindowSize());
+//            frameCodec.connection().local().flowController().incrementWindowSize(frameCodec.connection().connectionStream(),
+//                    settingsFrame.settings().initialWindowSize());
+        } else {
+            System.out.println(msg);
         }
     }
 

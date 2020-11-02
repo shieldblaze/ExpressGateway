@@ -108,8 +108,9 @@ public final class Main {
                 .build();
 
 
-        Backend backend = new Backend(new InetSocketAddress("www.google.com", 443));
-        Cluster clusterPool = SingleBackendCluster.of("www.google.com", backend);
+        String hostname = "www.google.com";
+        Backend backend = new Backend(new InetSocketAddress(hostname, 443));
+        Cluster clusterPool = SingleBackendCluster.of(hostname, backend);
 
 //        cluster.addBackend(new Backend("speed.hetzner.de", new InetSocketAddress("speed.hetzner.de", 443)));
 //        cluster.addBackend(new Backend("one.one.one.one", new InetSocketAddress("one.one.one.one", 443)));
@@ -127,16 +128,16 @@ public final class Main {
                 .withBrotliCompressionLevel(4)
                 .withCompressionThreshold(100)
                 .withDeflateCompressionLevel(6)
-                .withH2enablePush(false)
-                .withH2InitialWindowSize(Integer.MAX_VALUE)
                 .withMaxChunkSize(1024 * 100)
-                .withH2MaxConcurrentStreams(100)
                 .withMaxContentLength(1024 * 10240)
                 .withMaxHeaderSize(1024 * 10)
-                .withH2MaxHeaderSizeList(4294967295L)
                 .withMaxInitialLineLength(1024 * 100)
+                .withH2enablePush(false)
+                .withH2InitialWindowSize(6291456)
+                .withH2MaxConcurrentStreams(1000)
+                .withH2MaxHeaderSizeList(262144)
                 .withH2MaxFrameSize(16777215)
-                .withH2MaxHeaderTableSize(4096)
+                .withH2MaxHeaderTableSize(65536)
                 .build();
 
         HTTPLoadBalancer httpLoadBalancer = HTTPLoadBalancerBuilder.newBuilder()

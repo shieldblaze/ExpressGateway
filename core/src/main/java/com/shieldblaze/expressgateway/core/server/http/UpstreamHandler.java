@@ -231,6 +231,11 @@ public final class UpstreamHandler extends ChannelInboundHandlerAdapter {
                             .build();
 
                     pipeline.addLast("TLSHandler", sslHandler);
+                    try {
+                        pipeline.addLast(new PcapWriteHandler(new FileOutputStream("D://pcap.pcap")));
+                    } catch (FileNotFoundException e) {
+                        e.printStackTrace();
+                    }
                     pipeline.addLast("ALPNHandler", alpnHandler);
                 }
             }
