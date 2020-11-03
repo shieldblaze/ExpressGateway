@@ -17,6 +17,7 @@
  */
 package com.shieldblaze.expressgateway.backend;
 
+import com.shieldblaze.expressgateway.backend.cluster.Cluster;
 import com.shieldblaze.expressgateway.backend.healthcheckmanager.HealthCheckManager;
 import com.shieldblaze.expressgateway.common.crypto.Hasher;
 import com.shieldblaze.expressgateway.healthcheck.Health;
@@ -33,77 +34,57 @@ import java.util.Objects;
 public class Backend implements Comparable<Backend>, Closeable {
 
     /**
-     * Hostname associated with this {@link Backend}
-     */
-    private String hostname;
-
-    /**
      * Address of this {@link Backend}
      */
     private final InetSocketAddress socketAddress;
-
+    /**
+     * Health Check Manager for this {@linkplain Backend}
+     */
+    private final HealthCheckManager healthCheckManager;
+    /**
+     * Hash of {@link InetSocketAddress}
+     */
+    private final String hash;
+    /**
+     * {@linkplain Cluster} to which this {@linkplain Backend} is associated
+     */
+    private Cluster cluster;
     /**
      * Weight of this {@link Backend}
      */
     private int Weight;
-
     /**
      * Maximum Number Of Connections Allowed for this {@link Backend}
      */
     private int maxConnections;
-
     /**
      * Active Number Of Connection for this {@link Backend}
      */
     private int activeConnections;
-
     /**
      * Number of bytes written so far to this {@link Backend}
      */
     private long bytesWritten = 0L;
-
     /**
      * Number of bytes received so far from this {@link Backend}
      */
     private long bytesReceived = 0L;
-
     /**
      * Current State of this {@link Backend}
      */
     private State state;
-
     /**
      * Health Check for this {@link Backend}
      */
     private HealthCheck healthCheck;
 
     /**
-     * Health Check Manager for this {@linkplain Backend}
-     */
-    private final HealthCheckManager healthCheckManager;
-
-    /**
-     * Hash of {@link InetSocketAddress}
-     */
-    private final String hash;
-
-    /**
      * Create a new {@linkplain Backend} Instance with {@code Weight 100}, {@code maxConnections 10000} and no Health Check
      *
-     * @param socketAddress Address of this {@link Backend}
-     */
-    public Backend(InetSocketAddress socketAddress) {
-        this(socketAddress.getAddress().getHostName(), socketAddress, 100, 10_000, null, null);
-    }
-
-    /**
-     * Create a new {@linkplain Backend} Instance with {@code Weight 100}, {@code maxConnections 10000} and no Health Check
-     *
-     * @param hostname      Hostname of this {@linkplain Backend}
      * @param socketAddress Address of this {@linkplain Backend}
      */
-    public Backend(String hostname, InetSocketAddress socketAddress) {
-        this(hostname, socketAddress, 100, 10_000, null, null);
+    public Backend(InetSocketAddress socketAddress) {
+        this(socketAddress, 100, 10_000, null, null);
     }
 
     /**
@@ -114,35 +95,32 @@ public class Backend implements Comparable<Backend>, Closeable {
      * @param maxConnections Maximum Number of Connections allowed for this {@linkplain Backend}
      */
     public Backend(InetSocketAddress socketAddress, int Weight, int maxConnections) {
-        this(socketAddress.getAddress().getHostAddress(), socketAddress, Weight, maxConnections, null, null);
+        this(socketAddress, Weight, maxConnections, null, null);
     }
 
     /**
      * Create a new {@linkplain Backend} Instance
      *
-     * @param hostname       Hostname of this {@linkplain Backend}
      * @param socketAddress  Address of this {@linkplain Backend}
      * @param Weight         Weight of this {@linkplain Backend}
      * @param maxConnections Maximum Number of Connections allowed for this {@linkplain Backend}
      * @param healthCheck    {@linkplain HealthCheck} Instance
      */
-    public Backend(String hostname, InetSocketAddress socketAddress, int Weight, int maxConnections, HealthCheck healthCheck) {
-        this(hostname, socketAddress, Weight, maxConnections, healthCheck, null);
+    public Backend(InetSocketAddress socketAddress, int Weight, int maxConnections, HealthCheck healthCheck) {
+        this(socketAddress, Weight, maxConnections, healthCheck, null);
     }
 
     /**
      * Create a new {@linkplain Backend} Instance
      *
-     * @param hostname       Hostname of this {@linkplain Backend}
-     * @param socketAddress  Address of this {@linkplain Backend}
-     * @param Weight         Weight of this {@linkplain Backend}
-     * @param maxConnections Maximum Number of Connections allowed for this {@linkplain Backend}
-     * @param healthCheck    {@linkplain HealthCheck} Instance
+     * @param socketAddress      Address of this {@linkplain Backend}
+     * @param Weight             Weight of this {@linkplain Backend}
+     * @param maxConnections     Maximum Number of Connections allowed for this {@linkplain Backend}
+     * @param healthCheck        {@linkplain HealthCheck} Instance
      * @param healthCheckManager {@linkplain HealthCheckManager} Instance
      */
-    public Backend(String hostname, InetSocketAddress socketAddress, int Weight, int maxConnections, HealthCheck healthCheck, HealthCheckManager healthCheckManager) {
+    public Backend(InetSocketAddress socketAddress, int Weight, int maxConnections, HealthCheck healthCheck, HealthCheckManager healthCheckManager) {
         Objects.requireNonNull(socketAddress, "SocketAddress");
-        Objects.requireNonNull(hostname, "Hostname");
 
         if (Weight < 1) {
             throw new IllegalArgumentException("Weight cannot be less than 1 (one).");
@@ -152,7 +130,6 @@ public class Backend implements Comparable<Backend>, Closeable {
             throw new IllegalArgumentException("Maximum Connection cannot be less than 0 (Zero).");
         }
 
-        this.hostname = hostname;
         this.state = State.ONLINE;
         this.socketAddress = socketAddress;
         this.Weight = Weight;
@@ -173,12 +150,16 @@ public class Backend implements Comparable<Backend>, Closeable {
         this.hash = Hasher.hash(Hasher.Algorithm.SHA256, addressAndPort);
     }
 
-    public String getHostname() {
-        return hostname;
+    public Cluster getCluster() {
+        return cluster;
     }
 
-    public void setHostname(String hostname) {
-        this.hostname = hostname;
+    public void setCluster(Cluster cluster) {
+        if (this.cluster == null) {
+            this.cluster = cluster;
+        } else {
+            throw new IllegalArgumentException("Cluster is already set");
+        }
     }
 
     public InetSocketAddress getSocketAddress() {
@@ -217,12 +198,12 @@ public class Backend implements Comparable<Backend>, Closeable {
         bytesReceived += bytes;
     }
 
-    public void setMaxConnections(int maxConnections) {
-        this.maxConnections = maxConnections;
-    }
-
     public int getMaxConnections() {
         return maxConnections;
+    }
+
+    public void setMaxConnections(int maxConnections) {
+        this.maxConnections = maxConnections;
     }
 
     public long getBytesWritten() {
@@ -263,6 +244,20 @@ public class Backend implements Comparable<Backend>, Closeable {
     @Override
     public int compareTo(Backend o) {
         return hash.compareToIgnoreCase(o.hash);
+    }
+
+    @Override
+    public int hashCode() {
+        return socketAddress.hashCode();
+    }
+
+    @Override
+    public boolean equals(Object obj) {
+        if (obj instanceof Backend) {
+            Backend backend = (Backend) obj;
+            return hashCode() == backend.hashCode();
+        }
+        return false;
     }
 
     @Override

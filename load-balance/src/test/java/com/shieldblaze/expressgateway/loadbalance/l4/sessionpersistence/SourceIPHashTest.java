@@ -18,28 +18,30 @@
 package com.shieldblaze.expressgateway.loadbalance.l4.sessionpersistence;
 
 import com.shieldblaze.expressgateway.backend.Backend;
+import com.shieldblaze.expressgateway.backend.cluster.Cluster;
+import com.shieldblaze.expressgateway.backend.cluster.ClusterPool;
+import com.shieldblaze.expressgateway.backend.exceptions.LoadBalanceException;
 import com.shieldblaze.expressgateway.loadbalance.l4.L4Balance;
 import com.shieldblaze.expressgateway.loadbalance.l4.L4Request;
 import com.shieldblaze.expressgateway.loadbalance.l4.RoundRobin;
 import org.junit.jupiter.api.Test;
 
 import java.net.InetSocketAddress;
-import java.util.ArrayList;
-import java.util.List;
 
 import static org.junit.jupiter.api.Assertions.*;
 
 class SourceIPHashTest {
 
     @Test
-    void testSourceIPHash() {
-        List<Backend> addressList = new ArrayList<>();
+    void testSourceIPHash() throws LoadBalanceException {
 
-        // Add Backend Server Addresses
-        addressList.add(fastBuild("172.16.20.1"));
-        addressList.add(fastBuild("172.16.20.2"));
+        Cluster cluster = ClusterPool.of(
+                "localhost.domain",
+                fastBuild("172.16.20.1"),
+                fastBuild("172.16.20.2")
+        );
 
-        L4Balance l4Balance = new RoundRobin(new SourceIPHash(), addressList);
+        L4Balance l4Balance = new RoundRobin(new SourceIPHash(), cluster);
         assertEquals(fastBuild("172.16.20.1").getSocketAddress(),
                 l4Balance.getResponse(new L4Request(new InetSocketAddress("192.168.1.1", 1))).getBackend().getSocketAddress());
         assertEquals(fastBuild("172.16.20.1").getSocketAddress(),

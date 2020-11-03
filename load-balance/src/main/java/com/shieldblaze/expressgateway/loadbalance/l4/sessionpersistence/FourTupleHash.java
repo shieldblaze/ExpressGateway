@@ -19,8 +19,9 @@ package com.shieldblaze.expressgateway.loadbalance.l4.sessionpersistence;
 
 import com.shieldblaze.expressgateway.backend.Backend;
 import com.shieldblaze.expressgateway.common.map.SelfExpiringMap;
-import com.shieldblaze.expressgateway.loadbalance.Request;
-import com.shieldblaze.expressgateway.loadbalance.SessionPersistence;
+import com.shieldblaze.expressgateway.common.utils.comparator.InetSocketAddressHashCodeComparator;
+import com.shieldblaze.expressgateway.backend.loadbalance.Request;
+import com.shieldblaze.expressgateway.backend.loadbalance.SessionPersistence;
 
 import java.net.InetSocketAddress;
 import java.time.Duration;
@@ -32,16 +33,27 @@ import java.util.concurrent.ConcurrentSkipListMap;
  */
 public final class FourTupleHash implements SessionPersistence<Backend, Backend, InetSocketAddress, Backend> {
 
-    private final SelfExpiringMap<String, Backend> routeMap = new SelfExpiringMap<>(new ConcurrentSkipListMap<>(), Duration.ofHours(1), false);
+    private final SelfExpiringMap<InetSocketAddress, Backend> routeMap = new SelfExpiringMap<>(
+            new ConcurrentSkipListMap<>(InetSocketAddressHashCodeComparator.INSTANCE), Duration.ofHours(1), false);
 
     @Override
     public Backend getBackend(Request request) {
-        return routeMap.get(request.getSocketAddress().toString());
+        return routeMap.get(request.getSocketAddress());
     }
 
     @Override
     public Backend addRoute(InetSocketAddress socketAddress, Backend backend) {
-        routeMap.put(socketAddress.toString(), backend);
+        routeMap.put(socketAddress, backend);
         return backend;
+    }
+
+    @Override
+    public boolean removeRoute(InetSocketAddress inetSocketAddress, Backend backend) {
+        return routeMap.remove(inetSocketAddress, backend);
+    }
+
+    @Override
+    public void clear() {
+        routeMap.clear();
     }
 }

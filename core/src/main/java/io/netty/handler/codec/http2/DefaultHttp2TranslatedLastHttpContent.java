@@ -17,81 +17,51 @@ package io.netty.handler.codec.http2;
 
 import io.netty.buffer.ByteBuf;
 import io.netty.buffer.Unpooled;
-import io.netty.handler.codec.http.EmptyHttpHeaders;
+import io.netty.handler.codec.http.DefaultLastHttpContent;
 import io.netty.handler.codec.http.HttpHeaders;
 import io.netty.handler.codec.http.LastHttpContent;
 import io.netty.util.internal.StringUtil;
 
 /**
- * {@link DefaultHttp2TranslatedHttpContent} contains {@code streamId} from last (endOfStream) {@link Http2DataFrame}.
+ * {@link DefaultHttp2TranslatedHttpContent} contains {@code streamId}
+ * from last (endOfStream) {@link Http2DataFrame}.
  */
-public class DefaultHttp2TranslatedLastHttpContent extends DefaultHttp2TranslatedHttpContent
-        implements LastHttpContent {
+public class DefaultHttp2TranslatedLastHttpContent extends DefaultLastHttpContent {
+
+    private final int streamId;
 
     public DefaultHttp2TranslatedLastHttpContent(int streamId) {
-        super(Unpooled.buffer(0), streamId);
+        this(Unpooled.EMPTY_BUFFER, streamId);
     }
 
     public DefaultHttp2TranslatedLastHttpContent(ByteBuf content, int streamId) {
-        super(content, streamId);
+        this(content, streamId, true);
+    }
+
+    public DefaultHttp2TranslatedLastHttpContent(ByteBuf content, int streamId, boolean validateHeaders) {
+        super(content, validateHeaders);
+        this.streamId = streamId;
     }
 
     public int getStreamId() {
-        return super.getStreamId();
+        return streamId;
     }
 
     @Override
-    public LastHttpContent copy() {
-        return replace(content().copy());
-    }
-
-    @Override
-    public LastHttpContent duplicate() {
-        return replace(content().duplicate());
-    }
-
-    @Override
-    public LastHttpContent retainedDuplicate() {
-        return replace(content().retainedDuplicate());
-    }
-
-    @Override
-    public LastHttpContent replace(ByteBuf content) {
-        return new DefaultHttp2TranslatedLastHttpContent(content, super.getStreamId());
-    }
-
-    @Override
-    public LastHttpContent retain(int increment) {
-        super.retain(increment);
-        return this;
-    }
-
-    @Override
-    public LastHttpContent retain() {
-        super.retain();
-        return this;
-    }
-
-    @Override
-    public LastHttpContent touch() {
-        super.touch();
-        return this;
-    }
-
-    @Override
-    public LastHttpContent touch(Object hint) {
-        super.touch(hint);
-        return this;
-    }
-
-    @Override
-    public HttpHeaders trailingHeaders() {
-        return EmptyHttpHeaders.INSTANCE;
+    public DefaultHttp2TranslatedLastHttpContent replace(ByteBuf content) {
+        DefaultHttp2TranslatedLastHttpContent dup = new DefaultHttp2TranslatedLastHttpContent(content, streamId);
+        dup.trailingHeaders().set(trailingHeaders());
+        return dup;
     }
 
     @Override
     public String toString() {
-        return StringUtil.simpleClassName(this) + "(streamId: " + super.getStreamId() + ", data: " + content() +
-                ", decoderResult: " + decoderResult() + ')';
+        return StringUtil.simpleClassName(this) +
+                "(streamId: " + streamId + ", data: " + content() + ", decoderResult: " + decoderResult() + ')';
+    }
+
+    @Override
+    public HttpHeaders trailingHeaders() {
+        return super.trailingHeaders();
     }
 }

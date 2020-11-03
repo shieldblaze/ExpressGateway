@@ -18,42 +18,78 @@
 package com.shieldblaze.expressgateway.loadbalance.l4;
 
 import com.shieldblaze.expressgateway.backend.Backend;
-import com.shieldblaze.expressgateway.loadbalance.SessionPersistence;
+import com.shieldblaze.expressgateway.backend.State;
+import com.shieldblaze.expressgateway.backend.cluster.Cluster;
+import com.shieldblaze.expressgateway.backend.events.BackendEvent;
+import com.shieldblaze.expressgateway.backend.exceptions.BackendNotOnlineException;
+import com.shieldblaze.expressgateway.common.eventstream.EventListener;
+import com.shieldblaze.expressgateway.backend.exceptions.LoadBalanceException;
+import com.shieldblaze.expressgateway.backend.loadbalance.SessionPersistence;
+import com.shieldblaze.expressgateway.loadbalance.exceptions.NoBackendAvailableException;
 
 import java.net.InetSocketAddress;
-import java.util.List;
 
 /**
  * Select {@link Backend} Randomly
  */
-public final class Random extends L4Balance {
+public final class Random extends L4Balance implements EventListener {
     private final java.util.Random RANDOM_INSTANCE = new java.util.Random();
 
     public Random() {
         super(new NOOPSessionPersistence());
     }
 
-    public Random(List<Backend> backends) {
-        super(new NOOPSessionPersistence());
-        setBackends(backends);
+    public Random(Cluster cluster) {
+        this(new NOOPSessionPersistence(), cluster);
     }
 
-    public Random(SessionPersistence<Backend, Backend, InetSocketAddress, Backend> sessionPersistence, List<Backend> backends) {
+    public Random(SessionPersistence<Backend, Backend, InetSocketAddress, Backend> sessionPersistence, Cluster cluster) {
         super(sessionPersistence);
-        setBackends(backends);
+        setCluster(cluster);
     }
 
     @Override
-    public L4Response getResponse(L4Request l4Request) {
-        Backend backend = sessionPersistence.getBackend(new L4Request(l4Request.getSocketAddress()));
+    public L4Response getResponse(L4Request l4Request) throws LoadBalanceException {
+        Backend backend = sessionPersistence.getBackend(l4Request);
         if (backend != null) {
-            return new L4Response(backend);
+            // If Backend is ONLINE then return the response
+            // else remove it from session persistence.
+            if (backend.getState() == State.ONLINE) {
+                return new L4Response(backend);
+            } else {
+                sessionPersistence.removeRoute(l4Request.getSocketAddress(), backend);
+            }
         }
 
-        int index = RANDOM_INSTANCE.nextInt(backends.size());
+        int index = RANDOM_INSTANCE.nextInt(cluster.online());
 
-        backend = backends.get(index);
+        try {
+            backend = cluster.getOnline(index);
+        } catch (BackendNotOnlineException e) {
+            // If selected Backend is not online then
+            // we'll throw an exception. However, this should
+            // rarely or never happen in most cases.
+            throw new NoBackendAvailableException("Randomly selected Backend is not online");
+        }
+
+        // Add to session persistence
         sessionPersistence.addRoute(l4Request.getSocketAddress(), backend);
         return new L4Response(backend);
+    }
+
+    @Override
+    public void accept(Object event) {
+        if (event instanceof BackendEvent) {
+            BackendEvent backendEvent = (BackendEvent) event;
+            switch (backendEvent.getType()) {
+                case ADDED:
+                case ONLINE:
+                case OFFLINE:
+                case REMOVED:
+                    sessionPersistence.clear();
+                default:
+                    throw new IllegalArgumentException("Unsupported Backend Event Type: " + backendEvent.getType());
+            }
+        }
     }
 }

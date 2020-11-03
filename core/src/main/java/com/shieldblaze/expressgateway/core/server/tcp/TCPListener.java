@@ -17,12 +17,12 @@
  */
 package com.shieldblaze.expressgateway.core.server.tcp;
 
-import com.shieldblaze.expressgateway.common.concurrent.GlobalEventExecutors;
-import com.shieldblaze.expressgateway.core.concurrent.async.L4FrontListenerEvent;
-import com.shieldblaze.expressgateway.core.configuration.CommonConfiguration;
-import com.shieldblaze.expressgateway.core.configuration.tls.TLSConfiguration;
-import com.shieldblaze.expressgateway.core.configuration.transport.TransportConfiguration;
-import com.shieldblaze.expressgateway.core.configuration.transport.TransportType;
+import com.shieldblaze.expressgateway.common.concurrent.GlobalExecutors;
+import com.shieldblaze.expressgateway.core.events.L4FrontListenerEvent;
+import com.shieldblaze.expressgateway.configuration.CommonConfiguration;
+import com.shieldblaze.expressgateway.configuration.tls.TLSConfiguration;
+import com.shieldblaze.expressgateway.configuration.transport.TransportConfiguration;
+import com.shieldblaze.expressgateway.configuration.transport.TransportType;
 import com.shieldblaze.expressgateway.core.loadbalancer.l4.L4LoadBalancer;
 import com.shieldblaze.expressgateway.core.utils.EventLoopFactory;
 import com.shieldblaze.expressgateway.core.server.L4FrontListener;
@@ -152,7 +152,7 @@ public final class TCPListener extends L4FrontListener {
         }
 
         for (int i = 0; i < bindRounds; i++) {
-            CompletableFuture<L4FrontListenerEvent> completableFuture = GlobalEventExecutors.INSTANCE.submitTask(() -> {
+            CompletableFuture<L4FrontListenerEvent> completableFuture = GlobalExecutors.INSTANCE.submitTask(() -> {
                 L4FrontListenerEvent l4FrontListenerEvent = new L4FrontListenerEvent();
                 try {
                     serverBootstrap.bind(getL4LoadBalancer().getBindAddress()).addListener((ChannelFutureListener) future -> {
@@ -176,7 +176,7 @@ public final class TCPListener extends L4FrontListener {
 
     @Override
     public CompletableFuture<Boolean> stop() {
-        return GlobalEventExecutors.INSTANCE.submitTask(() -> {
+        return GlobalExecutors.INSTANCE.submitTask(() -> {
             completableFutureList.forEach(event -> {
                 try {
                     event.get().getChannelFuture().channel().close().sync();

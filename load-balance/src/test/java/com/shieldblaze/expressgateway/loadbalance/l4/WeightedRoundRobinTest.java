@@ -18,31 +18,34 @@
 package com.shieldblaze.expressgateway.loadbalance.l4;
 
 import com.shieldblaze.expressgateway.backend.Backend;
+import com.shieldblaze.expressgateway.backend.cluster.Cluster;
+import com.shieldblaze.expressgateway.backend.cluster.ClusterPool;
+import com.shieldblaze.expressgateway.backend.exceptions.LoadBalanceException;
 import org.junit.jupiter.api.Test;
 
 import java.net.InetSocketAddress;
-import java.util.ArrayList;
-import java.util.List;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 
 class WeightedRoundRobinTest {
 
     @Test
-    void testWeightedRound() {
+    void testWeightedRound() throws LoadBalanceException {
 
-        List<Backend> backends = new ArrayList<>();
-        backends.add(fastBuild("10.10.1.1", 10));
-        backends.add(fastBuild("10.10.1.2", 20));
-        backends.add(fastBuild("10.10.1.3", 30));
-        backends.add(fastBuild("10.10.1.4", 40));
+        Cluster cluster = ClusterPool.of(
+                "localhost.domain",
+                fastBuild("10.10.1.1", 10),
+                fastBuild("10.10.1.2", 20),
+                fastBuild("10.10.1.3", 30),
+                fastBuild("10.10.1.4", 40)
+        );
 
         int first = 0;
         int second = 0;
         int third = 0;
         int forth = 0;
 
-        L4Balance l4Balance = new WeightedRoundRobin(backends);
+        L4Balance l4Balance = new WeightedRoundRobin(cluster);
         L4Request l4Request = new L4Request(new InetSocketAddress("192.168.1.1", 1));
 
         for (int i = 0; i < 1000000; i++) {

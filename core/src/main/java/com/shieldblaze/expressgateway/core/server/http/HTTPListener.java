@@ -17,16 +17,20 @@
  */
 package com.shieldblaze.expressgateway.core.server.http;
 
-import com.shieldblaze.expressgateway.common.concurrent.GlobalEventExecutors;
-import com.shieldblaze.expressgateway.core.concurrent.async.L4FrontListenerEvent;
-import com.shieldblaze.expressgateway.core.configuration.CommonConfiguration;
-import com.shieldblaze.expressgateway.core.configuration.http.HTTPConfiguration;
-import com.shieldblaze.expressgateway.core.configuration.tls.TLSConfiguration;
-import com.shieldblaze.expressgateway.core.configuration.transport.TransportConfiguration;
-import com.shieldblaze.expressgateway.core.configuration.transport.TransportType;
+import com.shieldblaze.expressgateway.common.concurrent.GlobalExecutors;
+import com.shieldblaze.expressgateway.configuration.CommonConfiguration;
+import com.shieldblaze.expressgateway.configuration.http.HTTPConfiguration;
+import com.shieldblaze.expressgateway.configuration.transport.TransportConfiguration;
+import com.shieldblaze.expressgateway.configuration.transport.TransportType;
+import com.shieldblaze.expressgateway.core.events.L4FrontListenerEvent;
 import com.shieldblaze.expressgateway.core.loadbalancer.l7.http.HTTPLoadBalancer;
-import com.shieldblaze.expressgateway.core.utils.EventLoopFactory;
+import com.shieldblaze.expressgateway.core.server.http.adapter.InboundAdapter;
+import com.shieldblaze.expressgateway.core.server.http.alpn.ALPNHandler;
+import com.shieldblaze.expressgateway.core.server.http.alpn.ALPNHandlerBuilder;
+import com.shieldblaze.expressgateway.core.server.http.compression.HTTPContentCompressor;
+import com.shieldblaze.expressgateway.core.server.http.compression.HTTPContentDecompressor;
 import com.shieldblaze.expressgateway.core.tls.SNIHandler;
+import com.shieldblaze.expressgateway.core.utils.EventLoopFactory;
 import io.netty.bootstrap.ServerBootstrap;
 import io.netty.buffer.ByteBufAllocator;
 import io.netty.channel.ChannelFutureListener;
@@ -45,7 +49,6 @@ import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
 
 import java.util.List;
-import java.util.Objects;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ExecutionException;
 
@@ -53,65 +56,6 @@ import java.util.concurrent.ExecutionException;
  * HTTP Listener for for handling incoming HTTP requests.
  */
 public final class HTTPListener extends HTTPFrontListener {
-
-    /**
-     * Logger
-     */
-    private static final Logger logger = LogManager.getLogger(HTTPListener.class);
-
-    /**
-     * {@link TLSConfiguration} for TLS Server Support
-     */
-    private final TLSConfiguration tlsServer;
-
-    /**
-     * {@link TLSConfiguration} for TLS Client Support
-     */
-    private final TLSConfiguration tlsClient;
-
-    /**
-     * Create {@link HTTPListener} Instance
-     */
-    public HTTPListener() {
-        this(null, null);
-    }
-
-    /**
-     * Create {@link HTTPListener} Instance with TLS Server Support (a.k.a TLS Offload)
-     *
-     * @param tlsServer {@link TLSConfiguration} for TLS Server
-     * @throws NullPointerException If {@code tlsServer} is {@code null}
-     */
-    public HTTPListener(TLSConfiguration tlsServer) {
-        this(Objects.requireNonNull(tlsServer, "tlsServer"), null);
-    }
-
-    /**
-     * Create {@link HTTPListener} Instance with TLS Server and Client Support
-     *
-     * @param tlsServer {@link TLSConfiguration} for TLS Server
-     * @param tlsClient {@link TLSConfiguration} for TLS Client
-     */
-    public HTTPListener(TLSConfiguration tlsServer, TLSConfiguration tlsClient) {
-        this.tlsServer = tlsServer;
-        this.tlsClient = tlsClient;
-
-        if (tlsServer != null && !tlsServer.isForServer()) {
-            throw new IllegalArgumentException("TLSConfiguration for Server is invalid");
-        }
-
-        if (tlsClient != null && tlsClient.isForServer()) {
-            throw new IllegalArgumentException("TLSConfiguration is Client is invalid");
-        }
-
-        if (tlsServer == null) {
-            logger.info("TLS Server Support is Disabled");
-        }
-
-        if (tlsClient == null) {
-            logger.info("TLS Client Support is Disabled");
-        }
-    }
 
     @Override
     public List<CompletableFuture<L4FrontListenerEvent>> start() {
@@ -144,7 +88,7 @@ public final class HTTPListener extends HTTPFrontListener {
                         return new NioServerSocketChannel();
                     }
                 })
-                .childHandler(new ServerInitializer((HTTPLoadBalancer) getL7LoadBalancer() ,tlsServer, tlsClient));
+                .childHandler(new ServerInitializer((HTTPLoadBalancer) getL7LoadBalancer()));
 
         int bindRounds = 1;
         if (transportConfiguration.getTransportType() == TransportType.EPOLL) {
@@ -152,7 +96,7 @@ public final class HTTPListener extends HTTPFrontListener {
         }
 
         for (int i = 0; i < bindRounds; i++) {
-            CompletableFuture<L4FrontListenerEvent> completableFuture = GlobalEventExecutors.INSTANCE.submitTask(() -> {
+            CompletableFuture<L4FrontListenerEvent> completableFuture = GlobalExecutors.INSTANCE.submitTask(() -> {
                 L4FrontListenerEvent l4FrontListenerEvent = new L4FrontListenerEvent();
                 try {
                     serverBootstrap.bind(getL7LoadBalancer().getBindAddress()).addListener((ChannelFutureListener) future -> {
@@ -176,7 +120,7 @@ public final class HTTPListener extends HTTPFrontListener {
 
     @Override
     public CompletableFuture<Boolean> stop() {
-        return GlobalEventExecutors.INSTANCE.submitTask(() -> {
+        return GlobalExecutors.INSTANCE.submitTask(() -> {
             completableFutureList.forEach(event -> {
                 try {
                     event.get().getChannelFuture().channel().close().sync();
@@ -194,13 +138,9 @@ public final class HTTPListener extends HTTPFrontListener {
         private static final Logger logger = LogManager.getLogger(ServerInitializer.class);
 
         final HTTPLoadBalancer httpLoadBalancer;
-        final TLSConfiguration tlsServer;
-        final TLSConfiguration tlsClient;
 
-        ServerInitializer(HTTPLoadBalancer httpLoadBalancer, TLSConfiguration tlsServer, TLSConfiguration tlsClient) {
+        ServerInitializer(HTTPLoadBalancer httpLoadBalancer) {
             this.httpLoadBalancer = httpLoadBalancer;
-            this.tlsServer = tlsServer;
-            this.tlsClient = tlsClient;
         }
 
         @Override
@@ -212,15 +152,30 @@ public final class HTTPListener extends HTTPFrontListener {
             pipeline.addFirst("IdleStateHandler", new IdleStateHandler(timeout, timeout, timeout));
 
             // If TLS Server is not enabled then we'll only use HTTP/1.1
-            if (tlsServer == null) {
+            if (httpLoadBalancer.getTlsServer() == null) {
                 pipeline.addLast("HTTPServerCodec", HTTPUtils.newServerCodec(httpConfiguration));
                 pipeline.addLast("HTTPServerValidator", new HTTPServerValidator(httpConfiguration));
                 pipeline.addLast("HTTPContentCompressor", new HTTPContentCompressor(httpConfiguration));
                 pipeline.addLast("HTTPContentDecompressor", new HTTPContentDecompressor());
-                pipeline.addLast("UpstreamHandler", new UpstreamHandler(httpLoadBalancer, tlsClient));
+                pipeline.addLast("UpstreamHandler", new UpstreamHandler(httpLoadBalancer));
             } else {
-                pipeline.addLast("SNIHandler", new SNIHandler(tlsServer));
-                pipeline.addLast("ALPNServerHandler", new ALPNServerHandler(httpLoadBalancer, tlsClient));
+                pipeline.addLast("SNIHandler", new SNIHandler(httpLoadBalancer.getTlsServer()));
+
+                ALPNHandler alpnHandler = ALPNHandlerBuilder.newBuilder()
+                        // HTTP/2 Handlers
+                        .withHTTP2ChannelHandler("HTTP2Handler", HTTPUtils.serverH2Handler(httpConfiguration))
+                        .withHTTP2ChannelHandler("HTTP2TranslationAdapter", new InboundAdapter())
+                        .withHTTP2ChannelHandler("UpstreamHandler", new UpstreamHandler(httpLoadBalancer))
+
+                        // HTTP/1.1 Handlers
+                        .withHTTP1ChannelHandler("HTTPServerCodec", HTTPUtils.newServerCodec(httpConfiguration))
+                        .withHTTP1ChannelHandler("HTTPServerValidator", new HTTPServerValidator(httpConfiguration))
+                        .withHTTP1ChannelHandler("HTTPContentCompressor", new HTTPContentCompressor(httpConfiguration))
+                        .withHTTP1ChannelHandler("HTTPContentDecompressor", new HTTPContentDecompressor())
+                        .withHTTP1ChannelHandler("UpstreamHandler", new UpstreamHandler(httpLoadBalancer))
+                        .build();
+
+                pipeline.addLast("ALPNHandler", alpnHandler);
             }
         }
 

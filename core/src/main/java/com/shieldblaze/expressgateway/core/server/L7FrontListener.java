@@ -17,7 +17,7 @@
  */
 package com.shieldblaze.expressgateway.core.server;
 
-import com.shieldblaze.expressgateway.core.concurrent.async.L4FrontListenerEvent;
+import com.shieldblaze.expressgateway.core.events.L4FrontListenerEvent;
 import com.shieldblaze.expressgateway.core.loadbalancer.l7.L7LoadBalancer;
 
 import java.util.ArrayList;

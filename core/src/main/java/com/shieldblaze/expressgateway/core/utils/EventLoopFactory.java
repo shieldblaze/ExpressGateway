@@ -17,8 +17,8 @@
  */
 package com.shieldblaze.expressgateway.core.utils;
 
-import com.shieldblaze.expressgateway.core.configuration.CommonConfiguration;
-import com.shieldblaze.expressgateway.core.configuration.transport.TransportType;
+import com.shieldblaze.expressgateway.configuration.CommonConfiguration;
+import com.shieldblaze.expressgateway.configuration.transport.TransportType;
 import io.netty.channel.EventLoopGroup;
 import io.netty.channel.epoll.EpollEventLoopGroup;
 import io.netty.channel.nio.NioEventLoopGroup;

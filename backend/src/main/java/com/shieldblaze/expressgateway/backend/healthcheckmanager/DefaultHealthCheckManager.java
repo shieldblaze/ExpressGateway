@@ -18,20 +18,23 @@
 package com.shieldblaze.expressgateway.backend.healthcheckmanager;
 
 import com.shieldblaze.expressgateway.backend.State;
-import com.shieldblaze.expressgateway.common.concurrent.GlobalEventExecutors;
+import com.shieldblaze.expressgateway.common.concurrent.GlobalExecutors;
 import com.shieldblaze.expressgateway.healthcheck.Health;
 import com.shieldblaze.expressgateway.healthcheck.HealthCheck;
 
 import java.util.concurrent.ScheduledFuture;
 import java.util.concurrent.TimeUnit;
 
+/**
+ * Default implementation of {@link HealthCheckManager}
+ */
 public final class DefaultHealthCheckManager extends HealthCheckManager {
 
     private ScheduledFuture<?> scheduledFutureHealthCheck;
 
     public DefaultHealthCheckManager(HealthCheck healthCheck, int initialDelay, int time, TimeUnit timeUnit) {
         super(healthCheck, initialDelay, time, timeUnit);
-        this.scheduledFutureHealthCheck = GlobalEventExecutors.INSTANCE.submitTaskAndRunEvery(this, initialDelay, time, timeUnit);
+        this.scheduledFutureHealthCheck = GlobalExecutors.INSTANCE.submitTaskAndRunEvery(this, initialDelay, time, timeUnit);
     }
 
     @Override

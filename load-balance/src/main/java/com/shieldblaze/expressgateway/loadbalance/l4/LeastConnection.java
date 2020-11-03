@@ -18,61 +18,99 @@
 package com.shieldblaze.expressgateway.loadbalance.l4;
 
 import com.shieldblaze.expressgateway.backend.Backend;
-import com.shieldblaze.expressgateway.loadbalance.SessionPersistence;
+import com.shieldblaze.expressgateway.backend.State;
+import com.shieldblaze.expressgateway.backend.cluster.Cluster;
+import com.shieldblaze.expressgateway.backend.events.BackendEvent;
+import com.shieldblaze.expressgateway.common.eventstream.EventListener;
+import com.shieldblaze.expressgateway.common.list.RoundRobinList;
+import com.shieldblaze.expressgateway.backend.exceptions.LoadBalanceException;
+import com.shieldblaze.expressgateway.backend.loadbalance.SessionPersistence;
+import com.shieldblaze.expressgateway.loadbalance.exceptions.NoBackendAvailableException;
 
 import java.net.InetSocketAddress;
-import java.util.List;
 import java.util.Optional;
 
 /**
  * Select {@link Backend} with least connections with Round-Robin.
  */
-public final class LeastConnection extends L4Balance {
+public final class LeastConnection extends L4Balance implements EventListener {
 
-    private int index;
+    private RoundRobinList<Backend> roundRobinList;
 
     public LeastConnection() {
         this(new NOOPSessionPersistence());
     }
 
-    public LeastConnection(List<Backend> backends) {
-        this(new NOOPSessionPersistence(), backends);
+    public LeastConnection(Cluster cluster) {
+        this(new NOOPSessionPersistence(), cluster);
     }
 
     public LeastConnection(SessionPersistence<Backend, Backend, InetSocketAddress, Backend> sessionPersistence) {
         super(sessionPersistence);
     }
 
-    public LeastConnection(SessionPersistence<Backend, Backend, InetSocketAddress, Backend> sessionPersistence, List<Backend> backends) {
+    public LeastConnection(SessionPersistence<Backend, Backend, InetSocketAddress, Backend> sessionPersistence, Cluster cluster) {
         super(sessionPersistence);
-        setBackends(backends);
+        setCluster(cluster);
     }
 
     @Override
-    public L4Response getResponse(L4Request l4Request) {
+    public void setCluster(Cluster cluster) {
+        super.setCluster(cluster);
+        roundRobinList = new RoundRobinList<>(cluster.getOnlineBackends());
+        cluster.subscribeStream(this);
+    }
+
+    @Override
+    public L4Response getResponse(L4Request l4Request) throws LoadBalanceException {
         Backend backend = sessionPersistence.getBackend(l4Request);
         if (backend != null) {
-            return new L4Response(backend);
-        }
-
-        // If Index size equals Backend List size, we'll reset the Index.
-        if (index >= backends.size()) {
-            index = 0;
+            // If Backend is ONLINE then return the response
+            // else remove it from session persistence.
+            if (backend.getState() == State.ONLINE) {
+                return new L4Response(backend);
+            } else {
+                sessionPersistence.removeRoute(l4Request.getSocketAddress(), backend);
+            }
         }
 
         // Get Number Of Maximum Connection on a Backend
-        int currentMaxConnections = backends.stream()
+        int currentMaxConnections = roundRobinList.getList().stream()
                 .mapToInt(Backend::getActiveConnections)
                 .max()
                 .getAsInt();
 
         // Check If we got any Backend which has less Number of Connections than Backend with Maximum Connection
-        Optional<Backend> optionalBackend = backends.stream()
+        Optional<Backend> optionalBackend = roundRobinList.getList().stream()
                 .filter(back -> back.getActiveConnections() < currentMaxConnections)
                 .findFirst();
 
-        backend = optionalBackend.orElseGet(() -> backends.get(index++));
+        backend = optionalBackend.orElseGet(() -> roundRobinList.iterator().next());
+
+        // If Backend is `null` then we don't have any
+        // backend to return so we will throw exception.
+        if (backend == null) {
+            throw new NoBackendAvailableException("No Backend available for Cluster: " + cluster);
+        }
+
         sessionPersistence.addRoute(l4Request.getSocketAddress(), backend);
         return new L4Response(backend);
+    }
+
+    @Override
+    public void accept(Object event) {
+        if (event instanceof BackendEvent) {
+            BackendEvent backendEvent = (BackendEvent) event;
+            switch (backendEvent.getType()) {
+                case ADDED:
+                case ONLINE:
+                case OFFLINE:
+                case REMOVED:
+                    roundRobinList.newIterator(cluster.getOnlineBackends());
+                    sessionPersistence.clear();
+                default:
+                    throw new IllegalArgumentException("Unsupported Backend Event Type: " + backendEvent.getType());
+            }
+        }
     }
 }

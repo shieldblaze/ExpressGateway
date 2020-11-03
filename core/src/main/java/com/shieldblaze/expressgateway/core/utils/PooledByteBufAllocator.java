@@ -17,7 +17,7 @@
  */
 package com.shieldblaze.expressgateway.core.utils;
 
-import com.shieldblaze.expressgateway.core.configuration.buffer.PooledByteBufAllocatorConfiguration;
+import com.shieldblaze.expressgateway.configuration.buffer.PooledByteBufAllocatorConfiguration;
 
 import java.util.Objects;
 

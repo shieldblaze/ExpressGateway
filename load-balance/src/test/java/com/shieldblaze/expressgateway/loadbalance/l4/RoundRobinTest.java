@@ -18,11 +18,11 @@
 package com.shieldblaze.expressgateway.loadbalance.l4;
 
 import com.shieldblaze.expressgateway.backend.Backend;
+import com.shieldblaze.expressgateway.backend.cluster.ClusterPool;
+import com.shieldblaze.expressgateway.backend.exceptions.LoadBalanceException;
 import org.junit.jupiter.api.Test;
 
 import java.net.InetSocketAddress;
-import java.util.ArrayList;
-import java.util.List;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNotEquals;
@@ -30,15 +30,15 @@ import static org.junit.jupiter.api.Assertions.assertNotEquals;
 class RoundRobinTest {
 
     @Test
-    void testRoundRobin() {
-        List<Backend> addressList = new ArrayList<>();
+    void testRoundRobin() throws LoadBalanceException {
+        ClusterPool cluster = new ClusterPool();
 
         // Add Backend Server Addresses
         for (int i = 1; i <= 100; i++) {
-            addressList.add(fastBuild("192.168.1." + i));
+            cluster.addBackends(fastBuild("192.168.1." + i));
         }
 
-        L4Balance l4Balance = new RoundRobin(addressList);
+        L4Balance l4Balance = new RoundRobin(cluster);
         L4Request l4Request = new L4Request(new InetSocketAddress("192.168.1.1", 1));
 
         for (int i = 1; i <= 100; i++) {

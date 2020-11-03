@@ -19,8 +19,8 @@ package com.shieldblaze.expressgateway.loadbalance.l4.sessionpersistence;
 
 import com.shieldblaze.expressgateway.backend.Backend;
 import com.shieldblaze.expressgateway.common.map.SelfExpiringMap;
-import com.shieldblaze.expressgateway.loadbalance.Request;
-import com.shieldblaze.expressgateway.loadbalance.SessionPersistence;
+import com.shieldblaze.expressgateway.backend.loadbalance.Request;
+import com.shieldblaze.expressgateway.backend.loadbalance.SessionPersistence;
 import io.netty.util.NetUtil;
 
 import java.math.BigInteger;
@@ -66,6 +66,22 @@ public final class SourceIPHash implements SessionPersistence<Backend, Backend, 
         }
         routeMap.put(key, value);
         return value;
+    }
+
+    @Override
+    public boolean removeRoute(InetSocketAddress socketAddress, Backend backend) {
+        Object key;
+        if (socketAddress.getAddress() instanceof Inet4Address) {
+            key = ipv4WithMask(socketAddress);
+        } else {
+            key = ipv6WithMask(socketAddress);
+        }
+        return routeMap.remove(key, backend);
+    }
+
+    @Override
+    public void clear() {
+        routeMap.clear();
     }
 
     private int ipv4WithMask(Request request) {

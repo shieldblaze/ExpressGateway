@@ -1,42 +1,41 @@
 package com.shieldblaze.expressgateway.loadbalance.l4;
 
 import com.shieldblaze.expressgateway.backend.Backend;
-
-import java.util.List;
+import com.shieldblaze.expressgateway.backend.State;
+import com.shieldblaze.expressgateway.backend.cluster.Cluster;
+import com.shieldblaze.expressgateway.backend.exceptions.LoadBalanceException;
+import com.shieldblaze.expressgateway.loadbalance.exceptions.NoBackendAvailableException;
 
 /**
  * Select a single {@link Backend}. Used for NAT-Forwarding purpose.
  */
 public final class NATForward extends L4Balance {
 
+    private L4Response l4Response;
+
     public NATForward() {
         super(new NOOPSessionPersistence());
     }
 
-    /**
-     * @param backends {@link List} of {@link Backend}
-     * @see #setBackends(List)
-     */
-    public NATForward(List<Backend> backends) {
+    public NATForward(Cluster cluster) {
         super(new NOOPSessionPersistence());
-        setBackends(backends);
+        setCluster(cluster);
     }
 
-    /**
-     * @param backends {@link List} of {@link Backend}
-     * @throws IllegalArgumentException If {@link List} of {@link Backend} is more than 1
-     * @see L4Balance#setBackends(List)
-     */
     @Override
-    public void setBackends(List<Backend> backends) {
-        super.setBackends(backends);
-        if (backends.size() > 1) {
-            throw new IllegalArgumentException("Backends Cannot Be More Than 1 (one).");
+    public void setCluster(Cluster cluster) {
+        super.setCluster(cluster);
+        if (cluster.size() > 1) {
+            throw new IllegalArgumentException("Cluster size cannot be more than 1 (one).");
         }
+        this.l4Response = new L4Response(cluster.get(0));
     }
 
     @Override
-    public L4Response getResponse(L4Request l4Request) {
-        return new L4Response(backends.get(0));
+    public L4Response getResponse(L4Request l4Request) throws LoadBalanceException {
+         if (l4Response.getBackend().getState() != State.ONLINE) {
+             throw new NoBackendAvailableException("No Backend available for Cluster: " + cluster);
+         }
+         return l4Response;
     }
 }

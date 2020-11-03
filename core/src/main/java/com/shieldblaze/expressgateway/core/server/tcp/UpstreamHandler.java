@@ -18,11 +18,12 @@
 package com.shieldblaze.expressgateway.core.server.tcp;
 
 import com.shieldblaze.expressgateway.backend.Backend;
-import com.shieldblaze.expressgateway.core.configuration.CommonConfiguration;
-import com.shieldblaze.expressgateway.core.configuration.tls.TLSConfiguration;
+import com.shieldblaze.expressgateway.configuration.CommonConfiguration;
+import com.shieldblaze.expressgateway.configuration.tls.TLSConfiguration;
 import com.shieldblaze.expressgateway.core.loadbalancer.l4.L4LoadBalancer;
 import com.shieldblaze.expressgateway.core.utils.BootstrapFactory;
 import com.shieldblaze.expressgateway.core.utils.EventLoopFactory;
+import com.shieldblaze.expressgateway.backend.exceptions.LoadBalanceException;
 import com.shieldblaze.expressgateway.loadbalance.l4.L4Balance;
 import com.shieldblaze.expressgateway.loadbalance.l4.L4Request;
 import io.netty.bootstrap.Bootstrap;
@@ -73,7 +74,7 @@ final class UpstreamHandler extends ChannelInboundHandlerAdapter {
     }
 
     @Override
-    public void channelActive(ChannelHandlerContext ctx) {
+    public void channelActive(ChannelHandlerContext ctx) throws LoadBalanceException {
         Bootstrap bootstrap = BootstrapFactory.getTCP(commonConfiguration, eventLoopFactory.getChildGroup(), ctx.alloc());
         backend = l4Balance.getResponse(new L4Request((InetSocketAddress) ctx.channel().remoteAddress())).getBackend();
         bootstrap.handler(new ChannelInitializer<SocketChannel>() {

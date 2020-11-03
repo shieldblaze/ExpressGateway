@@ -17,7 +17,9 @@
  */
 package com.shieldblaze.expressgateway.core.server.http;
 
-import com.shieldblaze.expressgateway.core.configuration.http.HTTPConfiguration;
+import com.shieldblaze.expressgateway.configuration.http.HTTPConfiguration;
+import com.shieldblaze.expressgateway.core.server.http.compression.HTTP2ContentCompressor;
+import com.shieldblaze.expressgateway.core.server.http.compression.HTTP2ContentDecompressor;
 import io.netty.handler.codec.http.HttpClientCodec;
 import io.netty.handler.codec.http.HttpHeaderNames;
 import io.netty.handler.codec.http.HttpHeaders;
@@ -31,24 +33,19 @@ import io.netty.handler.codec.http2.DefaultHttp2HeadersDecoder;
 import io.netty.handler.codec.http2.Http2Connection;
 import io.netty.handler.codec.http2.Http2ConnectionEncoder;
 import io.netty.handler.codec.http2.Http2FrameCodec;
-import io.netty.handler.codec.http2.Http2FrameListener;
 import io.netty.handler.codec.http2.Http2FrameReader;
 import io.netty.handler.codec.http2.Http2FrameWriter;
 import io.netty.handler.codec.http2.Http2HeadersEncoder;
 import io.netty.handler.codec.http2.Http2PromisedRequestVerifier;
 import io.netty.handler.codec.http2.Http2Settings;
-import io.netty.handler.codec.http2.HttpToHttp2ConnectionHandler;
-import io.netty.handler.codec.http2.HttpToHttp2ConnectionHandlerBuilder;
-import io.netty.handler.codec.http2.InboundHttp2ToHttpObjectAdapter;
-import io.netty.handler.codec.http2.InboundHttp2ToHttpObjectAdapterBuilder;
 
-final class HTTPUtils {
+public final class HTTPUtils {
 
     static void setGenericHeaders(HttpHeaders headers) {
         headers.set(HttpHeaderNames.SERVER, "ShieldBlaze ExpressGateway");
     }
 
-    static HttpToHttp2ConnectionHandler clientH2Handler(HTTPConfiguration httpConfiguration) {
+    public static Http2FrameCodec clientH2Handler(HTTPConfiguration httpConfiguration) {
         Http2Settings http2Settings = new Http2Settings();
         http2Settings.initialWindowSize(httpConfiguration.getH2InitialWindowSize());
         http2Settings.maxConcurrentStreams(httpConfiguration.getH2MaxConcurrentStreams());
@@ -59,12 +56,6 @@ final class HTTPUtils {
 
         Http2Connection connection = new DefaultHttp2Connection(false);
 
-        InboundHttp2ToHttpObjectAdapter listener = new InboundHttp2ToHttpObjectAdapterBuilder(connection)
-                .propagateSettings(false)
-                .validateHttpHeaders(true)
-                .maxContentLength(httpConfiguration.getMaxContentLength())
-                .build();
-
         Http2FrameReader reader = new DefaultHttp2FrameReader(new DefaultHttp2HeadersDecoder(true, http2Settings.maxHeaderListSize()));
         Http2FrameWriter writer = new DefaultHttp2FrameWriter(Http2HeadersEncoder.NEVER_SENSITIVE, false);
 
@@ -73,11 +64,10 @@ final class HTTPUtils {
         DefaultHttp2ConnectionDecoder decoder = new DefaultHttp2ConnectionDecoder(connection, encoder, reader,
                 Http2PromisedRequestVerifier.ALWAYS_VERIFY, true, true);
 
-        return new HttpToHttp2ConnectionHandlerBuilder()
-                .frameListener(new HTTP2ContentDecompressor(connection, listener))
-                .codec(decoder, encoder)
-                .initialSettings(http2Settings)
-                .build();
+        Http2FrameCodec http2FrameCodec = new Http2FrameCodec(encoder, decoder, http2Settings, false);
+        decoder.frameListener(new HTTP2ContentDecompressor(connection, decoder.frameListener()));
+
+        return http2FrameCodec;
     }
 
     static Http2FrameCodec serverH2Handler(HTTPConfiguration httpConfiguration) {
@@ -102,6 +92,7 @@ final class HTTPUtils {
 
     /**
      * Create new {@link HttpServerCodec} Instance
+     *
      * @param httpConfiguration {@link HTTPConfiguration} Instance
      */
     static HttpServerCodec newServerCodec(HTTPConfiguration httpConfiguration) {
@@ -111,9 +102,10 @@ final class HTTPUtils {
 
     /**
      * Create new {@link HttpClientCodec} Instance
+     *
      * @param httpConfiguration {@link HTTPConfiguration} Instance
      */
-    static HttpClientCodec newClientCodec(HTTPConfiguration httpConfiguration) {
+    public static HttpClientCodec newClientCodec(HTTPConfiguration httpConfiguration) {
         int maxInitialLineLength = httpConfiguration.getMaxInitialLineLength();
         int maxHeaderSize = httpConfiguration.getMaxHeaderSize();
         int maxChunkSize = httpConfiguration.getMaxChunkSize();

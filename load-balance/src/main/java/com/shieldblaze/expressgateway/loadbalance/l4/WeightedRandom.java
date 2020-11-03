@@ -20,16 +20,20 @@ package com.shieldblaze.expressgateway.loadbalance.l4;
 import com.google.common.collect.Range;
 import com.google.common.collect.TreeRangeMap;
 import com.shieldblaze.expressgateway.backend.Backend;
-import com.shieldblaze.expressgateway.loadbalance.SessionPersistence;
+import com.shieldblaze.expressgateway.backend.State;
+import com.shieldblaze.expressgateway.backend.cluster.Cluster;
+import com.shieldblaze.expressgateway.backend.events.BackendEvent;
+import com.shieldblaze.expressgateway.common.eventstream.EventListener;
+import com.shieldblaze.expressgateway.backend.loadbalance.SessionPersistence;
+import com.shieldblaze.expressgateway.loadbalance.exceptions.BackendNotOnlineException;
 
 import java.net.InetSocketAddress;
-import java.util.List;
 
 /**
  * Select {@link Backend} based on Weight Randomly
  */
 @SuppressWarnings("UnstableApiUsage")
-public final class WeightedRandom extends L4Balance {
+public final class WeightedRandom extends L4Balance implements EventListener {
     private final java.util.Random RANDOM_INSTANCE = new java.util.Random();
 
     private final TreeRangeMap<Integer, Backend> backendsMap = TreeRangeMap.create();
@@ -39,32 +43,73 @@ public final class WeightedRandom extends L4Balance {
         super(new NOOPSessionPersistence());
     }
 
-    public WeightedRandom(List<Backend> backends) {
-        this(new NOOPSessionPersistence(), backends);
+    public WeightedRandom(Cluster cluster) {
+        this(new NOOPSessionPersistence(), cluster);
     }
 
-    public WeightedRandom(SessionPersistence<Backend, Backend, InetSocketAddress, Backend> sessionPersistence, List<Backend> backends) {
+    public WeightedRandom(SessionPersistence<Backend, Backend, InetSocketAddress, Backend> sessionPersistence, Cluster cluster) {
         super(sessionPersistence);
-        setBackends(backends);
+        setCluster(cluster);
     }
 
     @Override
-    public void setBackends(List<Backend> backends) {
-        super.setBackends(backends);
-        this.backends.forEach(backend -> this.backendsMap.put(Range.closed(totalWeight, totalWeight += backend.getWeight()), backend));
-        backends.clear();
+    public void setCluster(Cluster cluster) {
+        super.setCluster(cluster);
+        reset();
+        cluster.subscribeStream(this);
+    }
+
+    private void reset() {
+        sessionPersistence.clear();
+        backendsMap.clear();
+        cluster.getOnlineBackends().forEach(backend -> backendsMap.put(Range.closed(totalWeight, totalWeight += backend.getWeight()), backend));
     }
 
     @Override
-    public L4Response getResponse(L4Request l4Request) {
-        Backend backend = sessionPersistence.getBackend(new L4Request(l4Request.getSocketAddress()));
+    public L4Response getResponse(L4Request l4Request) throws BackendNotOnlineException {
+        Backend backend = sessionPersistence.getBackend(l4Request);
         if (backend != null) {
-            return new L4Response(backend);
+            // If Backend is ONLINE then return the response
+            // else remove it from session persistence.
+            if (backend.getState() == State.ONLINE) {
+                return new L4Response(backend);
+            } else {
+                sessionPersistence.removeRoute(l4Request.getSocketAddress(), backend);
+            }
         }
 
         int index = RANDOM_INSTANCE.nextInt(totalWeight);
         backend = backendsMap.get(index);
+
+        if (backend == null) {
+            // If Backend is `null` then we don't have any
+            // backend to return so we will throw exception.
+            throw new BackendNotOnlineException("No Backend available for Cluster: " + cluster);
+        } else if (backend.getState() != State.ONLINE) {
+            reset(); // We'll reset the mapping because it could be outdated.
+
+            // If selected Backend is not online then
+            // we'll throw an exception.
+            throw new BackendNotOnlineException("Randomly selected Backend is not online");
+        }
+
         sessionPersistence.addRoute(l4Request.getSocketAddress(), backend);
         return new L4Response(backend);
+    }
+
+    @Override
+    public void accept(Object event) {
+        if (event instanceof BackendEvent) {
+            BackendEvent backendEvent = (BackendEvent) event;
+            switch (backendEvent.getType()) {
+                case ADDED:
+                case ONLINE:
+                case OFFLINE:
+                case REMOVED:
+                    reset();
+                default:
+                    throw new IllegalArgumentException("Unsupported Backend Event Type: " + backendEvent.getType());
+            }
+        }
     }
 }

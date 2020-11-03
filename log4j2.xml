@@ -8,7 +8,7 @@
     </Appenders>
 
     <Loggers>
-        <Root level="info">
+        <Root level="debug">
             <AppenderRef ref="ConsoleAppender"/>
         </Root>
 <!--        <Logger name="com.shieldblaze.expressgateway.core.server.http" level="debug">-->

@@ -18,22 +18,32 @@
 package com.shieldblaze.expressgateway.loadbalance.l7.http;
 
 import com.shieldblaze.expressgateway.backend.Backend;
-import com.shieldblaze.expressgateway.loadbalance.Request;
-import com.shieldblaze.expressgateway.loadbalance.SessionPersistence;
+import com.shieldblaze.expressgateway.backend.loadbalance.Request;
+import com.shieldblaze.expressgateway.backend.loadbalance.SessionPersistence;
 import io.netty.handler.codec.http.EmptyHttpHeaders;
 
 /**
  * No-Operation {@link SessionPersistence}
  */
-final class NOOPSessionPersistence implements SessionPersistence<HTTPResponse, HTTPResponse, HTTPRequest, Backend> {
+final class NOOPSessionPersistence implements SessionPersistence<HTTPBalanceResponse, HTTPBalanceResponse, HTTPBalanceRequest, Backend> {
 
     @Override
-    public HTTPResponse getBackend(Request request) {
+    public HTTPBalanceResponse getBackend(Request request) {
         return null;
     }
 
     @Override
-    public HTTPResponse addRoute(HTTPRequest httpRequest, Backend backend) {
-        return new HTTPResponse(backend, EmptyHttpHeaders.INSTANCE);
+    public HTTPBalanceResponse addRoute(HTTPBalanceRequest httpBalanceRequest, Backend backend) {
+        return new HTTPBalanceResponse(backend, EmptyHttpHeaders.INSTANCE);
+    }
+
+    @Override
+    public boolean removeRoute(HTTPBalanceRequest httpBalanceRequest, Backend backend) {
+        return false;
+    }
+
+    @Override
+    public void clear() {
+        // Does nothing
     }
 }

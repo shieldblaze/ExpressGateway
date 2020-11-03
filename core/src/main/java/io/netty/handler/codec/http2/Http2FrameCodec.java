@@ -15,6 +15,7 @@
  */
 package io.netty.handler.codec.http2;
 
+import com.shieldblaze.expressgateway.core.server.http.http2.PushPromiseRead;
 import io.netty.buffer.ByteBuf;
 import io.netty.channel.Channel;
 import io.netty.channel.ChannelFuture;
@@ -158,7 +159,7 @@ public class Http2FrameCodec extends Http2ConnectionHandler {
 
     /** Number of buffered streams if the {@link StreamBufferingEncoder} is used. **/
     private int numBufferedStreams;
-    private final IntObjectMap<DefaultHttp2FrameStream> frameStreamToInitializeMap =
+    public final IntObjectMap<DefaultHttp2FrameStream> frameStreamToInitializeMap =
             new IntObjectHashMap<DefaultHttp2FrameStream>(8);
 
     public Http2FrameCodec(Http2ConnectionEncoder encoder, Http2ConnectionDecoder decoder, Http2Settings initialSettings,
@@ -621,9 +622,9 @@ public class Http2FrameCodec extends Http2ConnectionHandler {
         }
 
         @Override
-        public void onPushPromiseRead(
-                ChannelHandlerContext ctx, int streamId, int promisedStreamId, Http2Headers headers, int padding)  {
-            // TODO: Maybe handle me
+        public void onPushPromiseRead(ChannelHandlerContext ctx, int streamId, int promisedStreamId, Http2Headers headers,
+                                      int padding)  {
+            onHttp2Frame(ctx, new PushPromiseRead(promisedStreamId, headers, padding).stream(requireStream(streamId)));
         }
 
         private Http2FrameStream requireStream(int streamId) {
@@ -672,7 +673,7 @@ public class Http2FrameCodec extends Http2ConnectionHandler {
      * {@link Http2FrameStream} implementation.
      */
     // TODO(buchgr): Merge Http2FrameStream and Http2Stream.
-    static class DefaultHttp2FrameStream implements Http2FrameStream {
+    public static class DefaultHttp2FrameStream implements Http2FrameStream {
 
         private volatile int id = -1;
         private volatile Http2Stream stream;
@@ -693,6 +694,10 @@ public class Http2FrameCodec extends Http2ConnectionHandler {
         public int id() {
             Http2Stream stream = this.stream;
             return stream == null ? id : stream.id();
+        }
+
+        public void setId(int id) {
+            this.id = id;
         }
 
         @Override

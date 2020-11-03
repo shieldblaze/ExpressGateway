@@ -18,17 +18,18 @@
 package com.shieldblaze.expressgateway.core.server.udp;
 
 import com.shieldblaze.expressgateway.backend.Backend;
-import com.shieldblaze.expressgateway.backend.Cluster;
-import com.shieldblaze.expressgateway.core.concurrent.async.L4FrontListenerEvent;
-import com.shieldblaze.expressgateway.core.configuration.CommonConfiguration;
-import com.shieldblaze.expressgateway.core.configuration.CommonConfigurationBuilder;
-import com.shieldblaze.expressgateway.core.configuration.buffer.PooledByteBufAllocatorConfiguration;
-import com.shieldblaze.expressgateway.core.configuration.eventloop.EventLoopConfiguration;
-import com.shieldblaze.expressgateway.core.configuration.eventloop.EventLoopConfigurationBuilder;
-import com.shieldblaze.expressgateway.core.configuration.transport.ReceiveBufferAllocationType;
-import com.shieldblaze.expressgateway.core.configuration.transport.TransportConfiguration;
-import com.shieldblaze.expressgateway.core.configuration.transport.TransportConfigurationBuilder;
-import com.shieldblaze.expressgateway.core.configuration.transport.TransportType;
+import com.shieldblaze.expressgateway.backend.cluster.Cluster;
+import com.shieldblaze.expressgateway.backend.cluster.SingleBackendCluster;
+import com.shieldblaze.expressgateway.core.events.L4FrontListenerEvent;
+import com.shieldblaze.expressgateway.configuration.CommonConfiguration;
+import com.shieldblaze.expressgateway.configuration.CommonConfigurationBuilder;
+import com.shieldblaze.expressgateway.configuration.buffer.PooledByteBufAllocatorConfiguration;
+import com.shieldblaze.expressgateway.configuration.eventloop.EventLoopConfiguration;
+import com.shieldblaze.expressgateway.configuration.eventloop.EventLoopConfigurationBuilder;
+import com.shieldblaze.expressgateway.configuration.transport.ReceiveBufferAllocationType;
+import com.shieldblaze.expressgateway.configuration.transport.TransportConfiguration;
+import com.shieldblaze.expressgateway.configuration.transport.TransportConfigurationBuilder;
+import com.shieldblaze.expressgateway.configuration.transport.TransportType;
 import com.shieldblaze.expressgateway.core.loadbalancer.l4.L4LoadBalancer;
 import com.shieldblaze.expressgateway.core.loadbalancer.l4.L4LoadBalancerBuilder;
 import com.shieldblaze.expressgateway.core.utils.EventLoopFactory;
@@ -86,14 +87,12 @@ final class UpstreamHandlerTest {
 
         eventLoopFactory = new EventLoopFactory(commonConfiguration);
 
-        Cluster cluster = new Cluster();
-        cluster.setClusterName("MyCluster");
-        cluster.addBackend(new Backend(new InetSocketAddress("127.0.0.1", 9111)));
+        Cluster clusterPool = SingleBackendCluster.of(new Backend(new InetSocketAddress("127.0.0.1", 9111)));
 
         l4LoadBalancer = L4LoadBalancerBuilder.newBuilder()
                 .withCommonConfiguration(commonConfiguration)
                 .withL4Balance(new RoundRobin())
-                .withCluster(cluster)
+                .withCluster(clusterPool)
                 .withFrontListener(new UDPListener())
                 .withBindAddress(new InetSocketAddress("127.0.0.1", 9110))
                 .build();

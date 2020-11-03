@@ -18,12 +18,13 @@
 package com.shieldblaze.expressgateway.loadbalance.l7.http;
 
 import com.shieldblaze.expressgateway.backend.Backend;
-import com.shieldblaze.expressgateway.loadbalance.LoadBalance;
-import com.shieldblaze.expressgateway.loadbalance.Request;
-import com.shieldblaze.expressgateway.loadbalance.Response;
-import com.shieldblaze.expressgateway.loadbalance.SessionPersistence;
+import com.shieldblaze.expressgateway.backend.loadbalance.LoadBalance;
+import com.shieldblaze.expressgateway.backend.exceptions.LoadBalanceException;
+import com.shieldblaze.expressgateway.backend.loadbalance.Request;
+import com.shieldblaze.expressgateway.backend.loadbalance.Response;
+import com.shieldblaze.expressgateway.backend.loadbalance.SessionPersistence;
 
-public abstract class HTTPBalance extends LoadBalance<HTTPResponse, HTTPResponse, HTTPRequest, Backend> {
+public abstract class HTTPBalance extends LoadBalance<HTTPBalanceResponse, HTTPBalanceResponse, HTTPBalanceRequest, Backend> {
 
     /**
      * Create {@link HTTPBalance} Instance
@@ -31,14 +32,14 @@ public abstract class HTTPBalance extends LoadBalance<HTTPResponse, HTTPResponse
      * @param sessionPersistence {@link SessionPersistence} Instance
      * @throws NullPointerException If {@link SessionPersistence} is {@code null}
      */
-    public HTTPBalance(SessionPersistence<HTTPResponse, HTTPResponse, HTTPRequest, Backend> sessionPersistence) {
+    public HTTPBalance(SessionPersistence<HTTPBalanceResponse, HTTPBalanceResponse, HTTPBalanceRequest, Backend> sessionPersistence) {
         super(sessionPersistence);
     }
 
-    public abstract HTTPResponse getResponse(HTTPRequest httpRequest);
+    public abstract HTTPBalanceResponse getResponse(HTTPBalanceRequest httpBalanceRequest) throws LoadBalanceException;
 
     @Override
-    public Response getResponse(Request request) {
-        return getResponse((HTTPRequest) request);
+    public Response getResponse(Request request) throws LoadBalanceException {
+        return getResponse((HTTPBalanceRequest) request);
     }
 }

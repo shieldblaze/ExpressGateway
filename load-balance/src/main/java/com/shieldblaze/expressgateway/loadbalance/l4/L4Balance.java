@@ -18,11 +18,13 @@
 package com.shieldblaze.expressgateway.loadbalance.l4;
 
 import com.shieldblaze.expressgateway.backend.Backend;
-import com.shieldblaze.expressgateway.loadbalance.LoadBalance;
-import com.shieldblaze.expressgateway.loadbalance.Request;
-import com.shieldblaze.expressgateway.loadbalance.Response;
-import com.shieldblaze.expressgateway.loadbalance.SessionPersistence;
+import com.shieldblaze.expressgateway.backend.loadbalance.LoadBalance;
+import com.shieldblaze.expressgateway.backend.exceptions.LoadBalanceException;
+import com.shieldblaze.expressgateway.backend.loadbalance.Request;
+import com.shieldblaze.expressgateway.backend.loadbalance.Response;
+import com.shieldblaze.expressgateway.backend.loadbalance.SessionPersistence;
 
+import java.io.Closeable;
 import java.net.InetSocketAddress;
 
 /**
@@ -36,7 +38,7 @@ import java.net.InetSocketAddress;
  *     <li> {@link WeightedRoundRobin} </li>
  * </ul>
  */
-public abstract class L4Balance extends LoadBalance<Backend, Backend, InetSocketAddress, Backend> {
+public abstract class L4Balance extends LoadBalance<Backend, Backend, InetSocketAddress, Backend> implements Closeable {
 
     /**
      * Create {@link L4Balance} Instance
@@ -48,10 +50,15 @@ public abstract class L4Balance extends LoadBalance<Backend, Backend, InetSocket
         super(sessionPersistence);
     }
 
-    public abstract L4Response getResponse(L4Request l4Request);
+    public abstract L4Response getResponse(L4Request l4Request) throws LoadBalanceException;
 
     @Override
-    public Response getResponse(Request request) {
+    public Response getResponse(Request request) throws LoadBalanceException {
         return getResponse((L4Request) request);
+    }
+
+    @Override
+    public void close() {
+        // Override to use, does nothing by default.
     }
 }

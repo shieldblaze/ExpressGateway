@@ -18,47 +18,50 @@
 package com.shieldblaze.expressgateway.loadbalance.l7.http.sessionpersistence;
 
 import com.shieldblaze.expressgateway.backend.Backend;
-import com.shieldblaze.expressgateway.loadbalance.l7.http.HTTPRequest;
-import com.shieldblaze.expressgateway.loadbalance.l7.http.HTTPResponse;
+import com.shieldblaze.expressgateway.backend.cluster.Cluster;
+import com.shieldblaze.expressgateway.backend.cluster.ClusterPool;
+import com.shieldblaze.expressgateway.backend.exceptions.LoadBalanceException;
+import com.shieldblaze.expressgateway.loadbalance.l7.http.HTTPBalanceRequest;
+import com.shieldblaze.expressgateway.loadbalance.l7.http.HTTPBalanceResponse;
 import com.shieldblaze.expressgateway.loadbalance.l7.http.RoundRobin;
 import io.netty.handler.codec.http.EmptyHttpHeaders;
 import org.junit.jupiter.api.Test;
 
 import java.net.InetSocketAddress;
-import java.util.ArrayList;
-import java.util.List;
 
-import static org.junit.jupiter.api.Assertions.*;
+import static org.junit.jupiter.api.Assertions.assertEquals;
 
 class StickySessionTest {
 
     @Test
-    void testStickySession() {
-        List<Backend> backends = new ArrayList<>();
-        backends.add(new Backend(new InetSocketAddress("172.16.1.1", 9110)));
-        backends.add(new Backend(new InetSocketAddress("172.16.1.2", 9110)));
-        backends.add(new Backend(new InetSocketAddress("172.16.1.3", 9110)));
-        backends.add(new Backend(new InetSocketAddress("172.16.1.4", 9110)));
+    void testStickySession() throws LoadBalanceException {
+        Cluster cluster = ClusterPool.of(
+                "localhost.domain",
+                new Backend(new InetSocketAddress("172.16.1.1", 9110)),
+                new Backend(new InetSocketAddress("172.16.1.2", 9110)),
+                new Backend(new InetSocketAddress("172.16.1.3", 9110)),
+                new Backend(new InetSocketAddress("172.16.1.4", 9110))
+        );
 
         for (int i = 0; i < 100; i++) {
-            InetSocketAddress socketAddress = new InetSocketAddress("192.168.1." + i,1);
-            HTTPRequest httpRequest = new HTTPRequest(socketAddress, EmptyHttpHeaders.INSTANCE);
+            InetSocketAddress socketAddress = new InetSocketAddress("192.168.1." + i, 1);
+            HTTPBalanceRequest httpBalanceRequest = new HTTPBalanceRequest(socketAddress, EmptyHttpHeaders.INSTANCE);
 
-            RoundRobin roundRobin = new RoundRobin(new StickySession(backends), backends);
-            HTTPResponse httpResponse = roundRobin.getResponse(httpRequest);
-            assertEquals(backends.get(0), httpResponse.getBackend());
+            RoundRobin roundRobin = new RoundRobin(new StickySession(), cluster);
+            HTTPBalanceResponse httpBalanceResponse = roundRobin.getResponse(httpBalanceRequest);
+            assertEquals(cluster.get(0), httpBalanceResponse.getBackend());
 
-            httpRequest = new HTTPRequest(socketAddress, httpResponse.getHTTPHeaders());
-            httpResponse = roundRobin.getResponse(httpRequest);
-            assertEquals(backends.get(1),  httpResponse.getBackend());
+            httpBalanceRequest = new HTTPBalanceRequest(socketAddress, httpBalanceResponse.getHTTPHeaders());
+            httpBalanceResponse = roundRobin.getResponse(httpBalanceRequest);
+            assertEquals(cluster.get(1), httpBalanceResponse.getBackend());
 
-            httpRequest = new HTTPRequest(socketAddress, httpResponse.getHTTPHeaders());
-            httpResponse = roundRobin.getResponse(httpRequest);
-            assertEquals(backends.get(2),  httpResponse.getBackend());
+            httpBalanceRequest = new HTTPBalanceRequest(socketAddress, httpBalanceResponse.getHTTPHeaders());
+            httpBalanceResponse = roundRobin.getResponse(httpBalanceRequest);
+            assertEquals(cluster.get(2), httpBalanceResponse.getBackend());
 
-            httpRequest = new HTTPRequest(socketAddress, httpResponse.getHTTPHeaders());
-            httpResponse = roundRobin.getResponse(httpRequest);
-            assertEquals(backends.get(3),  httpResponse.getBackend());
+            httpBalanceRequest = new HTTPBalanceRequest(socketAddress, httpBalanceResponse.getHTTPHeaders());
+            httpBalanceResponse = roundRobin.getResponse(httpBalanceRequest);
+            assertEquals(cluster.get(3), httpBalanceResponse.getBackend());
         }
     }
 }

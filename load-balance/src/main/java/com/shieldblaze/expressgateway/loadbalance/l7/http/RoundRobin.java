@@ -18,45 +18,80 @@
 package com.shieldblaze.expressgateway.loadbalance.l7.http;
 
 import com.shieldblaze.expressgateway.backend.Backend;
+import com.shieldblaze.expressgateway.backend.State;
+import com.shieldblaze.expressgateway.backend.cluster.Cluster;
+import com.shieldblaze.expressgateway.backend.events.BackendEvent;
+import com.shieldblaze.expressgateway.common.eventstream.EventListener;
 import com.shieldblaze.expressgateway.common.list.RoundRobinList;
-import com.shieldblaze.expressgateway.loadbalance.SessionPersistence;
-
-import java.util.List;
+import com.shieldblaze.expressgateway.backend.loadbalance.SessionPersistence;
+import com.shieldblaze.expressgateway.backend.exceptions.LoadBalanceException;
+import com.shieldblaze.expressgateway.loadbalance.exceptions.NoBackendAvailableException;
 
 /**
  * Select {@link Backend} based on Round-Robin
  */
-public final class RoundRobin extends HTTPBalance {
+public final class RoundRobin extends HTTPBalance implements EventListener {
 
-    private RoundRobinList<Backend> backendsRoundRobin;
+    private RoundRobinList<Backend> roundRobinList;
 
     public RoundRobin() {
         super(new NOOPSessionPersistence());
     }
 
-    public RoundRobin(List<Backend> backends) {
-        this(new NOOPSessionPersistence(), backends);
+    public RoundRobin(Cluster cluster) {
+        this(new NOOPSessionPersistence(), cluster);
     }
 
-    public RoundRobin(SessionPersistence<HTTPResponse, HTTPResponse, HTTPRequest, Backend> sessionPersistence, List<Backend> backends) {
+    public RoundRobin(SessionPersistence<HTTPBalanceResponse, HTTPBalanceResponse, HTTPBalanceRequest, Backend> sessionPersistence, Cluster cluster) {
         super(sessionPersistence);
-        setBackends(backends);
+        setCluster(cluster);
     }
 
     @Override
-    public void setBackends(List<Backend> backends) {
-        super.setBackends(backends);
-        backendsRoundRobin = new RoundRobinList<>(this.backends);
+    public void setCluster(Cluster cluster) {
+        super.setCluster(cluster);
+        roundRobinList = new RoundRobinList<>(cluster.getOnlineBackends());
+        cluster.subscribeStream(this);
     }
 
     @Override
-    public HTTPResponse getResponse(HTTPRequest httpRequest) {
-        HTTPResponse httpResponse = sessionPersistence.getBackend(httpRequest);
-        if (httpResponse != null) {
-            return httpResponse;
+    public HTTPBalanceResponse getResponse(HTTPBalanceRequest request) throws LoadBalanceException {
+        HTTPBalanceResponse httpBalanceResponse = sessionPersistence.getBackend(request);
+        if (httpBalanceResponse != null) {
+            // If Backend is ONLINE then return the response
+            // else remove it from session persistence.
+            if (httpBalanceResponse.getBackend().getState() == State.ONLINE) {
+                return httpBalanceResponse;
+            } else {
+                sessionPersistence.removeRoute(request, httpBalanceResponse.getBackend());
+            }
         }
 
-        Backend backend = backendsRoundRobin.iterator().next();
-        return sessionPersistence.addRoute(httpRequest, backend);
+        Backend backend = roundRobinList.iterator().next();
+
+        // If Backend is `null` then we don't have any
+        // backend to return so we will throw exception.
+        if (backend == null) {
+            throw new NoBackendAvailableException("No Backend available for Cluster: " + cluster);
+        }
+
+        return sessionPersistence.addRoute(request, backend);
+    }
+
+    @Override
+    public void accept(Object event) {
+        if (event instanceof BackendEvent) {
+            BackendEvent backendEvent = (BackendEvent) event;
+            switch (backendEvent.getType()) {
+                case ADDED:
+                case ONLINE:
+                case OFFLINE:
+                case REMOVED:
+                    roundRobinList.newIterator(cluster.getOnlineBackends());
+                    sessionPersistence.clear();
+                default:
+                    throw new IllegalArgumentException("Unsupported Backend Event Type: " + backendEvent.getType());
+            }
+        }
     }
 }

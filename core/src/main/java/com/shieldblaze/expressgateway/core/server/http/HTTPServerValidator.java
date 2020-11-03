@@ -17,7 +17,7 @@
  */
 package com.shieldblaze.expressgateway.core.server.http;
 
-import com.shieldblaze.expressgateway.core.configuration.http.HTTPConfiguration;
+import com.shieldblaze.expressgateway.configuration.http.HTTPConfiguration;
 import io.netty.channel.ChannelFutureListener;
 import io.netty.channel.ChannelHandlerContext;
 import io.netty.channel.ChannelInboundHandlerAdapter;
@@ -48,19 +48,19 @@ final class HTTPServerValidator extends ChannelInboundHandlerAdapter {
             HttpRequest request = (HttpRequest) msg;
 
             if (getContentLength(request, -1L) > maxContentLength) {
-                ctx.writeAndFlush(HTTPResponses.TOO_LARGE.retainedDuplicate()).addListener(ChannelFutureListener.CLOSE);
+                ctx.writeAndFlush(HTTPResponses.TOO_LARGE_413.retainedDuplicate()).addListener(ChannelFutureListener.CLOSE);
                 ReferenceCountedUtil.silentRelease(msg);
                 return;
             }
 
             if (isUnsupportedExpectation(request)) {
-                ctx.writeAndFlush(HTTPResponses.EXPECTATION_FAILED.retainedDuplicate()).addListener(ChannelFutureListener.CLOSE);
+                ctx.writeAndFlush(HTTPResponses.TOO_LARGE_413.retainedDuplicate()).addListener(ChannelFutureListener.CLOSE);
                 ReferenceCountedUtil.silentRelease(msg);
                 return;
             }
 
             if (HttpUtil.is100ContinueExpected(request)) {
-                ctx.writeAndFlush(HTTPResponses.ACCEPT_KEEP_ALIVE.retainedDuplicate()).addListener(ChannelFutureListener.CLOSE_ON_FAILURE);
+                ctx.writeAndFlush(HTTPResponses.ACCEPT_100.retainedDuplicate()).addListener(ChannelFutureListener.CLOSE_ON_FAILURE);
                 request.headers().remove(HttpHeaderNames.EXPECT);
             }
         }

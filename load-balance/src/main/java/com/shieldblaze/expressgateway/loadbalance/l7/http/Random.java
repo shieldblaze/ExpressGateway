@@ -18,9 +18,11 @@
 package com.shieldblaze.expressgateway.loadbalance.l7.http;
 
 import com.shieldblaze.expressgateway.backend.Backend;
-import com.shieldblaze.expressgateway.loadbalance.SessionPersistence;
-
-import java.util.List;
+import com.shieldblaze.expressgateway.backend.State;
+import com.shieldblaze.expressgateway.backend.cluster.Cluster;
+import com.shieldblaze.expressgateway.backend.loadbalance.SessionPersistence;
+import com.shieldblaze.expressgateway.loadbalance.exceptions.BackendNotOnlineException;
+import com.shieldblaze.expressgateway.backend.exceptions.LoadBalanceException;
 
 /**
  * Select {@link Backend} Randomly
@@ -32,26 +34,41 @@ public final class Random extends HTTPBalance {
         super(new NOOPSessionPersistence());
     }
 
-    public Random(List<Backend> backends) {
-        super(new NOOPSessionPersistence());
-        setBackends(backends);
+    public Random(Cluster cluster) {
+        this(new NOOPSessionPersistence(), cluster);
     }
 
-    public Random(SessionPersistence<HTTPResponse, HTTPResponse, HTTPRequest, Backend> sessionPersistence, List<Backend> backends) {
+    public Random(SessionPersistence<HTTPBalanceResponse, HTTPBalanceResponse, HTTPBalanceRequest, Backend> sessionPersistence, Cluster cluster) {
         super(sessionPersistence);
-        setBackends(backends);
+        super.setCluster(cluster);
     }
 
     @Override
-    public HTTPResponse getResponse(HTTPRequest httpRequest) {
-        HTTPResponse httpResponse = sessionPersistence.getBackend(httpRequest);
-        if (httpResponse != null) {
-            return httpResponse;
+    public HTTPBalanceResponse getResponse(HTTPBalanceRequest request) throws LoadBalanceException {
+        HTTPBalanceResponse httpBalanceResponse = sessionPersistence.getBackend(request);
+        if (httpBalanceResponse != null) {
+            // If Backend is ONLINE then return the response
+            // else remove it from session persistence.
+            if (httpBalanceResponse.getBackend().getState() == State.ONLINE) {
+                return httpBalanceResponse;
+            } else {
+                sessionPersistence.removeRoute(request, httpBalanceResponse.getBackend());
+            }
         }
 
-        int index = RANDOM_INSTANCE.nextInt(backends.size());
+        int index = RANDOM_INSTANCE.nextInt(cluster.online());
 
-        Backend backend = backends.get(index);
-        return sessionPersistence.addRoute(httpRequest, backend);
+        Backend backend;
+        try {
+            backend = cluster.getOnline(index);
+        } catch (com.shieldblaze.expressgateway.backend.exceptions.BackendNotOnlineException e) {
+            // If selected Backend is not online then
+            // we'll throw an exception. However, this should
+            // rarely or never happen in most cases.
+            throw new BackendNotOnlineException("Randomly selected Backend is not online");
+        }
+
+        // Add to session persistence and return
+        return sessionPersistence.addRoute(request, backend);
     }
 }
