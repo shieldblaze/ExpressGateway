@@ -21,9 +21,11 @@ import io.netty.buffer.Unpooled;
 import io.netty.channel.ChannelHandlerContext;
 import io.netty.channel.ChannelPromise;
 import io.netty.handler.codec.http.FullHttpRequest;
+import io.netty.handler.codec.http.FullHttpResponse;
 import io.netty.handler.codec.http.HttpContent;
 import io.netty.handler.codec.http.HttpHeaderNames;
 import io.netty.handler.codec.http.HttpHeaderValues;
+import io.netty.handler.codec.http.HttpObject;
 import io.netty.handler.codec.http.HttpRequest;
 import io.netty.handler.codec.http.HttpResponse;
 import io.netty.handler.codec.http.HttpVersion;
@@ -39,13 +41,39 @@ import io.netty.handler.codec.http2.Http2Error;
 import io.netty.handler.codec.http2.Http2FrameCodec;
 import io.netty.handler.codec.http2.Http2Headers;
 import io.netty.handler.codec.http2.Http2HeadersFrame;
+import io.netty.handler.codec.http2.Http2StreamFrame;
 import io.netty.handler.codec.http2.HttpConversionUtil;
 
 import java.util.Map;
 import java.util.concurrent.ConcurrentSkipListMap;
 
 /**
+ * <p>
+ * {@linkplain OutboundAdapter} accepts {@linkplain HttpRequest} and {@linkplain HttpContent}
+ * and converts them into {@linkplain Http2HeadersFrame} and {@linkplain Http2DataFrame}.
+ * </p>
  *
+ * <p>
+ * For Inbound {@linkplain HttpObject}:
+ * <ul>
+ * <li>
+ *     If {@linkplain HttpResponse} is received then {@linkplain Http2HeadersFrame}
+ *     will be sent with {@code endOfStream} set to {@code false}. When {@linkplain LastHttpContent} is received then
+ *     {@linkplain Http2DataFrame} is sent with {@code endOfStream} set to {@code true}.
+ * </li>
+ * <li>
+ *     If {@linkplain FullHttpRequest} is received then {@linkplain Http2HeadersFrame}
+ *     will be sent with {@code endOfStream} set to {@code false}. A {@linkplain Http2DataFrame}
+ *     will be sent with {@linkplain FullHttpRequest#content()} and {@code endOfStream} set to {@code true}.
+ * </li>
+ * </ul>
+ * </p>
+ *
+ * <p>
+ * For Outbound {@linkplain Http2StreamFrame}: If {@linkplain Http2HeadersFrame} has {@code endOfStream} set to {@code true}
+ * then {@linkplain InboundAdapter} will create {@linkplain FullHttpResponse} else it'll create
+ * {@linkplain HttpRequest} and set {@code CONTENT-ENCODING: CHUNKED}.
+ * </p>
  */
 public final class OutboundAdapter extends Http2ChannelDuplexHandler {
 
@@ -130,7 +158,7 @@ public final class OutboundAdapter extends Http2ChannelDuplexHandler {
 
                 // If 'endOfStream' flag is set to 'true' then we will create FullHttpResponse.
                 if (headersFrame.isEndStream()) {
-                    httpResponse = HttpConversionUtil.toFullHttpResponse(streamId, headersFrame.headers(), Unpooled.EMPTY_BUFFER,false);
+                    httpResponse = HttpConversionUtil.toFullHttpResponse(streamId, headersFrame.headers(), Unpooled.EMPTY_BUFFER, false);
                     streamMap.remove(streamId);
                 } else {
                     httpResponse = HttpConversionUtil.toHttpResponse(streamId, headersFrame.headers(), false);
