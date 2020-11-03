@@ -24,11 +24,10 @@ import io.netty.handler.codec.http.FullHttpRequest;
 import io.netty.handler.codec.http.HttpContent;
 import io.netty.handler.codec.http.HttpHeaderNames;
 import io.netty.handler.codec.http.HttpHeaderValues;
-import io.netty.handler.codec.http.HttpMessage;
-import io.netty.handler.codec.http.HttpObject;
 import io.netty.handler.codec.http.HttpRequest;
 import io.netty.handler.codec.http.HttpResponse;
 import io.netty.handler.codec.http.HttpVersion;
+import io.netty.handler.codec.http.LastHttpContent;
 import io.netty.handler.codec.http2.DefaultHttp2DataFrame;
 import io.netty.handler.codec.http2.DefaultHttp2GoAwayFrame;
 import io.netty.handler.codec.http2.DefaultHttp2HeadersFrame;
@@ -40,18 +39,13 @@ import io.netty.handler.codec.http2.Http2Error;
 import io.netty.handler.codec.http2.Http2FrameCodec;
 import io.netty.handler.codec.http2.Http2Headers;
 import io.netty.handler.codec.http2.Http2HeadersFrame;
-import io.netty.handler.codec.http2.Http2SettingsFrame;
-import io.netty.handler.codec.http2.Http2StreamFrame;
-import io.netty.handler.codec.http2.Http2WindowUpdateFrame;
 import io.netty.handler.codec.http2.HttpConversionUtil;
 
 import java.util.Map;
 import java.util.concurrent.ConcurrentSkipListMap;
 
 /**
- * <p> {@linkplain OutboundAdapter} converts {@link HttpObject} into {@link Http2StreamFrame}. </p>
- * <p> {@link Http2HeadersFrame} is converted into {@link HttpMessage} </p>
- * <p> {@link Http2DataFrame} is converted into {@link HttpContent} </p>
+ *
  */
 public final class OutboundAdapter extends Http2ChannelDuplexHandler {
 
@@ -75,15 +69,15 @@ public final class OutboundAdapter extends Http2ChannelDuplexHandler {
                 FullHttpRequest fullHttpRequest = (FullHttpRequest) msg;
 
                 Http2Headers http2Headers = HttpConversionUtil.toHttp2Headers(fullHttpRequest, false);
-                Http2HeadersFrame http2HeadersFrame = new DefaultHttp2HeadersFrame(http2Headers, false, 0);
-                writeHeader(ctx, streamId, http2HeadersFrame, promise);
+                Http2HeadersFrame http2HeadersFrame = new DefaultHttp2HeadersFrame(http2Headers, false);
+                writeHeaders(ctx, streamId, http2HeadersFrame, promise);
 
                 Http2DataFrame dataFrame = new DefaultHttp2DataFrame(fullHttpRequest.content(), true);
                 writeData(ctx, streamId, dataFrame, ctx.newPromise());
             } else {
                 Http2Headers http2Headers = HttpConversionUtil.toHttp2Headers((HttpRequest) msg, false);
-                Http2HeadersFrame http2HeadersFrame = new DefaultHttp2HeadersFrame(http2Headers, false, 0);
-                writeHeader(ctx, streamId, http2HeadersFrame, promise);
+                Http2HeadersFrame http2HeadersFrame = new DefaultHttp2HeadersFrame(http2Headers, false);
+                writeHeaders(ctx, streamId, http2HeadersFrame, promise);
             }
         } else if (msg instanceof HttpContent) {
 
@@ -106,8 +100,8 @@ public final class OutboundAdapter extends Http2ChannelDuplexHandler {
                     writeData(ctx, httpContent.getStreamId(), dataFrame, promise);
 
                     Http2Headers http2Headers = HttpConversionUtil.toHttp2Headers(httpContent.trailingHeaders(), false);
-                    Http2HeadersFrame http2HeadersFrame = new DefaultHttp2HeadersFrame(http2Headers, true, 0);
-                    writeHeader(ctx, httpContent.getStreamId(), http2HeadersFrame, promise);
+                    Http2HeadersFrame http2HeadersFrame = new DefaultHttp2HeadersFrame(http2Headers, true);
+                    writeHeaders(ctx, httpContent.getStreamId(), http2HeadersFrame, promise);
                 }
             }
         }
@@ -121,8 +115,7 @@ public final class OutboundAdapter extends Http2ChannelDuplexHandler {
             OutboundProperty outboundProperty = getOutboundProperty(streamId);
 
             if (outboundProperty.isInitialRead()) {
-                DefaultHttp2TranslatedLastHttpContent httpContent = new DefaultHttp2TranslatedLastHttpContent(Unpooled.EMPTY_BUFFER,
-                        outboundProperty.getStreamId(), false);
+                LastHttpContent httpContent = new DefaultHttp2TranslatedLastHttpContent(Unpooled.EMPTY_BUFFER, outboundProperty.getStreamId(), false);
                 HttpConversionUtil.addHttp2ToHttpHeaders(streamId, headersFrame.headers(), httpContent.trailingHeaders(), HttpVersion.HTTP_1_1,
                         true, false);
                 ctx.fireChannelRead(httpContent);
@@ -143,19 +136,19 @@ public final class OutboundAdapter extends Http2ChannelDuplexHandler {
                     httpResponse = HttpConversionUtil.toHttpResponse(streamId, headersFrame.headers(), false);
                     httpResponse.headers().set(HttpHeaderNames.CONTENT_ENCODING, HttpHeaderValues.CHUNKED);
                 }
+
                 httpResponse.headers().set(HttpConversionUtil.ExtensionHeaderNames.SCHEME.text(), outboundProperty.getScheme());
                 httpResponse.headers().set(HttpConversionUtil.ExtensionHeaderNames.STREAM_ID.text(), outboundProperty.getStreamId());
                 httpResponse.headers().set(HttpConversionUtil.ExtensionHeaderNames.STREAM_DEPENDENCY_ID.text(), outboundProperty.getDependencyId());
                 httpResponse.headers().set(HttpConversionUtil.ExtensionHeaderNames.STREAM_WEIGHT.text(), outboundProperty.getStreamWeight());
 
-                ctx.fireChannelRead(httpResponse);
                 outboundProperty.fireInitialRead();
+                ctx.fireChannelRead(httpResponse);
             }
         } else if (msg instanceof Http2DataFrame) {
             Http2DataFrame dataFrame = (Http2DataFrame) msg;
             int streamId = dataFrame.stream().id();
             OutboundProperty outboundProperty = getOutboundProperty(streamId);
-            outboundProperty.incrementReadBytes(dataFrame.content().readableBytes());
 
             HttpContent httpContent;
             if (dataFrame.isEndStream()) {
@@ -169,16 +162,25 @@ public final class OutboundAdapter extends Http2ChannelDuplexHandler {
         }
     }
 
-    private void writeHeader(ChannelHandlerContext ctx, int streamId, Http2HeadersFrame headersFrame, ChannelPromise channelPromise) {
+    /**
+     * Write and Flush {@linkplain Http2HeadersFrame}
+     */
+    private void writeHeaders(ChannelHandlerContext ctx, int streamId, Http2HeadersFrame headersFrame, ChannelPromise channelPromise) {
         headersFrame.stream(getOutboundProperty(streamId).getHttp2FrameStream());
         ctx.writeAndFlush(headersFrame, channelPromise);
     }
 
+    /**
+     * Write and Flush {@linkplain Http2DataFrame}
+     */
     private void writeData(ChannelHandlerContext ctx, int streamId, Http2DataFrame dataFrame, ChannelPromise channelPromise) {
         dataFrame.stream(getOutboundProperty(streamId).getHttp2FrameStream());
         ctx.writeAndFlush(dataFrame, channelPromise);
     }
 
+    /**
+     * Get {@linkplain OutboundProperty} using {@code StreamID}
+     */
     private OutboundProperty getOutboundProperty(int streamId) {
         OutboundProperty outboundProperty = streamMap.get(streamId);
         if (outboundProperty == null) {

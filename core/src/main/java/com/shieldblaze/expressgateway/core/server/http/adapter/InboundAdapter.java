@@ -21,13 +21,16 @@ import io.netty.buffer.Unpooled;
 import io.netty.channel.ChannelDuplexHandler;
 import io.netty.channel.ChannelHandlerContext;
 import io.netty.channel.ChannelPromise;
+import io.netty.handler.codec.http.FullHttpRequest;
 import io.netty.handler.codec.http.FullHttpResponse;
 import io.netty.handler.codec.http.HttpContent;
 import io.netty.handler.codec.http.HttpHeaderNames;
 import io.netty.handler.codec.http.HttpHeaderValues;
+import io.netty.handler.codec.http.HttpObject;
 import io.netty.handler.codec.http.HttpRequest;
 import io.netty.handler.codec.http.HttpResponse;
 import io.netty.handler.codec.http.HttpVersion;
+import io.netty.handler.codec.http.LastHttpContent;
 import io.netty.handler.codec.http2.DefaultHttp2DataFrame;
 import io.netty.handler.codec.http2.DefaultHttp2GoAwayFrame;
 import io.netty.handler.codec.http2.DefaultHttp2HeadersFrame;
@@ -38,18 +41,45 @@ import io.netty.handler.codec.http2.Http2Error;
 import io.netty.handler.codec.http2.Http2FrameStream;
 import io.netty.handler.codec.http2.Http2Headers;
 import io.netty.handler.codec.http2.Http2HeadersFrame;
+import io.netty.handler.codec.http2.Http2StreamFrame;
 import io.netty.handler.codec.http2.HttpConversionUtil;
+import org.apache.logging.log4j.LogManager;
+import org.apache.logging.log4j.Logger;
 
 import java.util.Map;
 import java.util.concurrent.ConcurrentSkipListMap;
 
 /**
  * <p>
- * {@linkplain InboundAdapter} is responsible for handling {@link Http2HeadersFrame} and
- * {@link Http2DataFrame} and converts them into {@link HttpRequest} and {@link HttpContent}.
+ * {@linkplain InboundAdapter} accepts {@linkplain Http2HeadersFrame} and {@linkplain Http2DataFrame}
+ * and converts them into {@linkplain HttpRequest} and {@linkplain HttpContent}.
+ * </p>
+ *
+ * <p>
+ * For Inbound {@linkplain Http2StreamFrame}: If {@linkplain Http2HeadersFrame} has {@code endOfStream} set to {@code true}
+ * then {@linkplain InboundAdapter} will create {@linkplain FullHttpRequest} else it'll create
+ * {@linkplain HttpRequest} and set {@code CONTENT-ENCODING: CHUNKED}.
+ * </p>
+ *
+ * <p>
+ * For Outbound {@linkplain HttpObject}:
+ * <ul>
+ * <li>
+ *     If {@linkplain HttpResponse} is received then {@linkplain Http2HeadersFrame}
+ *     will be sent with {@code endOfStream} set to {@code false}. When {@linkplain LastHttpContent} is received then
+ *     {@linkplain Http2DataFrame} is sent with {@code endOfStream} set to {@code true}.
+ * </li>
+ * <li>
+ *     If {@linkplain FullHttpResponse} is received then {@linkplain Http2HeadersFrame}
+ *     will be sent with {@code endOfStream} set to {@code false}. A {@linkplain Http2DataFrame}
+ *     will be sent with {@linkplain FullHttpResponse#content()} and {@code endOfStream} set to {@code true}.
+ * </li>
+ * </ul>
  * </p>
  */
 public final class InboundAdapter extends ChannelDuplexHandler {
+
+    private static final Logger logger = LogManager.getLogger(InboundAdapter.class);
 
     private final Map<Integer, Http2FrameStream> streamMap = new ConcurrentSkipListMap<>();
 
@@ -61,7 +91,7 @@ public final class InboundAdapter extends ChannelDuplexHandler {
 
             // If StreamMap already contains the streamId then this HeadersFrame is part of Trailing Headers.
             if (streamMap.containsKey(streamId)) {
-                DefaultHttp2TranslatedLastHttpContent httpContent = new DefaultHttp2TranslatedLastHttpContent(Unpooled.EMPTY_BUFFER, streamId, false);
+                LastHttpContent httpContent = new DefaultHttp2TranslatedLastHttpContent(Unpooled.EMPTY_BUFFER, streamId, false);
                 HttpConversionUtil.addHttp2ToHttpHeaders(streamId, headersFrame.headers(), httpContent.trailingHeaders(), HttpVersion.HTTP_1_1, true, true);
                 ctx.fireChannelRead(httpContent);
 
@@ -71,14 +101,15 @@ public final class InboundAdapter extends ChannelDuplexHandler {
                 }
             } else {
                 HttpRequest httpRequest;
+                // If 'endOfStream' is set to 'true' then we'll create 'FullHttpRequest' else 'HttpRequest'.
                 if (headersFrame.isEndStream()) {
                     httpRequest = HttpConversionUtil.toFullHttpRequest(streamId, headersFrame.headers(), Unpooled.EMPTY_BUFFER, false);
                 } else {
                     httpRequest = HttpConversionUtil.toHttpRequest(streamId, headersFrame.headers(), false);
                     httpRequest.headers().set(HttpHeaderNames.CONTENT_ENCODING, HttpHeaderValues.CHUNKED);
                 }
-                ctx.fireChannelRead(httpRequest);
                 streamMap.put(streamId, headersFrame.stream());
+                ctx.fireChannelRead(httpRequest);
             }
         } else if (msg instanceof Http2DataFrame) {
             Http2DataFrame dataFrame = (Http2DataFrame) msg;
@@ -95,14 +126,14 @@ public final class InboundAdapter extends ChannelDuplexHandler {
     }
 
     @Override
-    public void write(ChannelHandlerContext ctx, Object msg, ChannelPromise promise) throws Exception {
+    public void write(ChannelHandlerContext ctx, Object msg, ChannelPromise promise) {
         if (msg instanceof HttpResponse) {
             if (msg instanceof FullHttpResponse) {
                 FullHttpResponse fullHttpResponse = (FullHttpResponse) msg;
                 int streamId = fullHttpResponse.headers().getInt(HttpConversionUtil.ExtensionHeaderNames.STREAM_ID.text());
                 Http2Headers http2Headers = HttpConversionUtil.toHttp2Headers(fullHttpResponse, false);
 
-                Http2HeadersFrame headersFrame = new DefaultHttp2HeadersFrame(http2Headers, false, 0);
+                Http2HeadersFrame headersFrame = new DefaultHttp2HeadersFrame(http2Headers, false);
                 writeHeaders(ctx, streamId, headersFrame, promise);
 
                 Http2DataFrame dataFrame = new DefaultHttp2DataFrame(fullHttpResponse.content(), true);
@@ -114,7 +145,7 @@ public final class InboundAdapter extends ChannelDuplexHandler {
                 int streamId = httpResponse.headers().getInt(HttpConversionUtil.ExtensionHeaderNames.STREAM_ID.text());
                 Http2Headers http2Headers = HttpConversionUtil.toHttp2Headers(httpResponse, false);
 
-                Http2HeadersFrame headersFrame = new DefaultHttp2HeadersFrame(http2Headers, false, 0);
+                Http2HeadersFrame headersFrame = new DefaultHttp2HeadersFrame(http2Headers, false);
                 writeHeaders(ctx, streamId, headersFrame, promise);
             }
         } else if (msg instanceof HttpContent) {
@@ -143,7 +174,7 @@ public final class InboundAdapter extends ChannelDuplexHandler {
                     writeData(ctx, lastHttpContent.getStreamId(), dataFrame, promise);
 
                     Http2Headers http2Headers = HttpConversionUtil.toHttp2Headers(lastHttpContent.trailingHeaders(), false);
-                    Http2HeadersFrame headersFrame = new DefaultHttp2HeadersFrame(http2Headers, true, 0);
+                    Http2HeadersFrame headersFrame = new DefaultHttp2HeadersFrame(http2Headers, true);
                     writeHeaders(ctx, streamId, headersFrame, promise);
                 }
 
@@ -152,13 +183,24 @@ public final class InboundAdapter extends ChannelDuplexHandler {
         }
     }
 
+    /**
+     * Write and Flush {@linkplain Http2HeadersFrame}
+     */
     private void writeHeaders(ChannelHandlerContext ctx, int streamId, Http2HeadersFrame headersFrame, ChannelPromise channelPromise) {
         headersFrame.stream(streamMap.get(streamId));
         ctx.writeAndFlush(headersFrame, channelPromise);
     }
 
+    /**
+     * Write and Flush {@linkplain Http2DataFrame}
+     */
     private void writeData(ChannelHandlerContext ctx, int streamId, Http2DataFrame dataFrame, ChannelPromise channelPromise) {
         dataFrame.stream(streamMap.get(streamId));
         ctx.writeAndFlush(dataFrame, channelPromise);
+    }
+
+    @Override
+    public void exceptionCaught(ChannelHandlerContext ctx, Throwable cause) {
+        logger.error("Caught error at InboundAdapter", cause);
     }
 }
