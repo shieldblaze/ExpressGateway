@@ -56,8 +56,8 @@ public class HTTP2ContentDecompressor extends DelegatingDecompressorFrameListene
             case "deflate":
             case "x-deflate":
                 return new EmbeddedChannel(channel.id(), channel.metadata().hasDisconnect(), channel.config(), ZlibCodecFactory.newZlibDecoder(ZlibWrapper.ZLIB));
-//            case "br":
-//                return new EmbeddedChannel(channel.id(), channel.metadata().hasDisconnect(), channel.config(), new BrotliDecoder());
+            case "br":
+                return new EmbeddedChannel(channel.id(), channel.metadata().hasDisconnect(), channel.config(), new BrotliDecoder());
             default:
                 return null;
         }

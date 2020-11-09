@@ -150,6 +150,13 @@ along with ShieldBlaze ExpressGateway.  If not, see <https://www.gnu.org/license
             <artifactId>httpclient</artifactId>
             <version>4.5.12</version>
         </dependency>
+
+        <!-- https://mvnrepository.com/artifact/net.openhft/zero-allocation-hashing -->
+        <dependency>
+            <groupId>net.openhft</groupId>
+            <artifactId>zero-allocation-hashing</artifactId>
+            <version>0.12</version>
+        </dependency>
     </dependencies>
 
     <build>

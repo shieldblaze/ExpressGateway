@@ -18,11 +18,11 @@
 package com.shieldblaze.expressgateway.core.server.http;
 
 import com.shieldblaze.expressgateway.backend.Backend;
-import com.shieldblaze.expressgateway.common.concurrent.GlobalExecutors;
 import com.shieldblaze.expressgateway.configuration.CommonConfiguration;
 import com.shieldblaze.expressgateway.configuration.http.HTTPConfiguration;
 import com.shieldblaze.expressgateway.core.loadbalancer.l7.http.HTTPLoadBalancer;
-import com.shieldblaze.expressgateway.core.server.http.adapter.OutboundAdapter;
+import com.shieldblaze.expressgateway.core.server.http.adapter.http1.HTTPOutboundAdapter;
+import com.shieldblaze.expressgateway.core.server.http.adapter.http2.HTTP2OutboundAdapter;
 import com.shieldblaze.expressgateway.core.server.http.alpn.ALPNHandler;
 import com.shieldblaze.expressgateway.core.server.http.alpn.ALPNHandlerBuilder;
 import com.shieldblaze.expressgateway.core.server.http.compression.HTTPContentDecompressor;
@@ -48,16 +48,11 @@ import io.netty.handler.codec.http.HttpHeaders;
 import io.netty.handler.codec.http.HttpRequest;
 import io.netty.handler.codec.http.HttpUtil;
 import io.netty.handler.codec.http2.HttpConversionUtil;
-import io.netty.handler.logging.LogLevel;
-import io.netty.handler.logging.LoggingHandler;
-import io.netty.handler.pcap.PcapWriteHandler;
 import io.netty.handler.ssl.SslHandler;
 import io.netty.handler.timeout.IdleStateHandler;
 import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
 
-import java.io.FileNotFoundException;
-import java.io.FileOutputStream;
 import java.net.InetSocketAddress;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
@@ -222,11 +217,12 @@ public final class UpstreamHandler extends ChannelInboundHandlerAdapter {
                     ALPNHandler alpnHandler = ALPNHandlerBuilder.newBuilder()
                             // HTTP/2 Handlers
                             .withHTTP2ChannelHandler("HTTP2Handler", HTTPUtils.clientH2Handler(httpConfiguration))
-                            .withHTTP2ChannelHandler("OutboundAdapter", new OutboundAdapter())
+                            .withHTTP2ChannelHandler("HTTP2OutboundAdapter", new HTTP2OutboundAdapter())
                             .withHTTP2ChannelHandler("DownstreamHandler", downstreamHandler)
                             // HTTP/1.1 Handlers
                             .withHTTP1ChannelHandler("HTTPClientCodec", HTTPUtils.newClientCodec(httpConfiguration))
                             .withHTTP1ChannelHandler("HTTPContentDecompressor", new HTTPContentDecompressor())
+                            .withHTTP1ChannelHandler("HTTP1OutboundAdapter", new HTTPOutboundAdapter())
                             .withHTTP1ChannelHandler("DownstreamHandler", downstreamHandler)
                             .build();
 
