@@ -24,7 +24,8 @@ import com.shieldblaze.expressgateway.configuration.transport.TransportConfigura
 import com.shieldblaze.expressgateway.configuration.transport.TransportType;
 import com.shieldblaze.expressgateway.core.events.L4FrontListenerEvent;
 import com.shieldblaze.expressgateway.core.loadbalancer.l7.http.HTTPLoadBalancer;
-import com.shieldblaze.expressgateway.core.server.http.adapter.InboundAdapter;
+import com.shieldblaze.expressgateway.core.server.http.adapter.http1.HTTPInboundAdapter;
+import com.shieldblaze.expressgateway.core.server.http.adapter.http2.HTTP2InboundAdapter;
 import com.shieldblaze.expressgateway.core.server.http.alpn.ALPNHandler;
 import com.shieldblaze.expressgateway.core.server.http.alpn.ALPNHandlerBuilder;
 import com.shieldblaze.expressgateway.core.server.http.compression.HTTPContentCompressor;
@@ -157,6 +158,7 @@ public final class HTTPListener extends HTTPFrontListener {
                 pipeline.addLast("HTTPServerValidator", new HTTPServerValidator(httpConfiguration));
                 pipeline.addLast("HTTPContentCompressor", new HTTPContentCompressor(httpConfiguration));
                 pipeline.addLast("HTTPContentDecompressor", new HTTPContentDecompressor());
+                pipeline.addLast("HTTP2OutboundAdapter", new HTTPInboundAdapter());
                 pipeline.addLast("UpstreamHandler", new UpstreamHandler(httpLoadBalancer));
             } else {
                 pipeline.addLast("SNIHandler", new SNIHandler(httpLoadBalancer.getTlsServer()));
@@ -164,7 +166,7 @@ public final class HTTPListener extends HTTPFrontListener {
                 ALPNHandler alpnHandler = ALPNHandlerBuilder.newBuilder()
                         // HTTP/2 Handlers
                         .withHTTP2ChannelHandler("HTTP2Handler", HTTPUtils.serverH2Handler(httpConfiguration))
-                        .withHTTP2ChannelHandler("HTTP2TranslationAdapter", new InboundAdapter())
+                        .withHTTP2ChannelHandler("HTTP2TranslationAdapter", new HTTP2InboundAdapter())
                         .withHTTP2ChannelHandler("UpstreamHandler", new UpstreamHandler(httpLoadBalancer))
 
                         // HTTP/1.1 Handlers
@@ -172,6 +174,7 @@ public final class HTTPListener extends HTTPFrontListener {
                         .withHTTP1ChannelHandler("HTTPServerValidator", new HTTPServerValidator(httpConfiguration))
                         .withHTTP1ChannelHandler("HTTPContentCompressor", new HTTPContentCompressor(httpConfiguration))
                         .withHTTP1ChannelHandler("HTTPContentDecompressor", new HTTPContentDecompressor())
+                        .withHTTP1ChannelHandler("HTTP2OutboundAdapter", new HTTPInboundAdapter())
                         .withHTTP1ChannelHandler("UpstreamHandler", new UpstreamHandler(httpLoadBalancer))
                         .build();
 

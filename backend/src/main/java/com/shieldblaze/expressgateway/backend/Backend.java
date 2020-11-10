@@ -18,7 +18,10 @@
 package com.shieldblaze.expressgateway.backend;
 
 import com.shieldblaze.expressgateway.backend.cluster.Cluster;
+import com.shieldblaze.expressgateway.backend.exceptions.TooManyConnectionsException;
 import com.shieldblaze.expressgateway.backend.healthcheckmanager.HealthCheckManager;
+import com.shieldblaze.expressgateway.backend.pool.Connection;
+import com.shieldblaze.expressgateway.common.concurrent.GlobalExecutors;
 import com.shieldblaze.expressgateway.common.crypto.Hasher;
 import com.shieldblaze.expressgateway.healthcheck.Health;
 import com.shieldblaze.expressgateway.healthcheck.HealthCheck;
@@ -27,6 +30,11 @@ import java.io.Closeable;
 import java.net.InetSocketAddress;
 import java.nio.ByteBuffer;
 import java.util.Objects;
+import java.util.Optional;
+import java.util.Queue;
+import java.util.concurrent.ConcurrentLinkedQueue;
+import java.util.concurrent.ScheduledFuture;
+import java.util.concurrent.TimeUnit;
 
 /**
  * {@link Backend} is the server where all requests are sent.
@@ -37,46 +45,62 @@ public class Backend implements Comparable<Backend>, Closeable {
      * Address of this {@link Backend}
      */
     private final InetSocketAddress socketAddress;
+
     /**
      * Health Check Manager for this {@linkplain Backend}
      */
     private final HealthCheckManager healthCheckManager;
+
     /**
      * Hash of {@link InetSocketAddress}
      */
     private final String hash;
+
     /**
      * {@linkplain Cluster} to which this {@linkplain Backend} is associated
      */
     private Cluster cluster;
+
     /**
      * Weight of this {@link Backend}
      */
     private int Weight;
+
     /**
      * Maximum Number Of Connections Allowed for this {@link Backend}
      */
     private int maxConnections;
+
     /**
      * Active Number Of Connection for this {@link Backend}
      */
     private int activeConnections;
+
     /**
      * Number of bytes written so far to this {@link Backend}
      */
     private long bytesWritten = 0L;
+
     /**
      * Number of bytes received so far from this {@link Backend}
      */
     private long bytesReceived = 0L;
+
     /**
      * Current State of this {@link Backend}
      */
     private State state;
+
     /**
      * Health Check for this {@link Backend}
      */
     private HealthCheck healthCheck;
+
+    /**
+     * Connections List
+     */
+    final Queue<Connection> connectionList = new ConcurrentLinkedQueue<>();
+    private final ScheduledFuture<?> connectionCleanerFuture;
 
     /**
      * Create a new {@linkplain Backend} Instance with {@code Weight 100}, {@code maxConnections 10000} and no Health Check
@@ -142,12 +166,15 @@ public class Backend implements Comparable<Backend>, Closeable {
             this.healthCheckManager.initialize();
         }
 
+        // Hash this backend
         ByteBuffer byteBuffer = ByteBuffer.allocate(6);
         byteBuffer.put(socketAddress.getAddress().getAddress());
         byteBuffer.putShort((short) socketAddress.getPort());
         byte[] addressAndPort = byteBuffer.array();
         byteBuffer.clear();
         this.hash = Hasher.hash(Hasher.Algorithm.SHA256, addressAndPort);
+
+        connectionCleanerFuture = GlobalExecutors.INSTANCE.submitTaskAndRunEvery(new ConnectionCleaner(this), 1, 10, TimeUnit.MICROSECONDS);
     }
 
     public Cluster getCluster() {
@@ -241,23 +268,65 @@ public class Backend implements Comparable<Backend>, Closeable {
         return hash;
     }
 
-    @Override
-    public int compareTo(Backend o) {
-        return hash.compareToIgnoreCase(o.hash);
-    }
+    /**
+     * Try to lease a connection from available connections. This method automatically calls
+     * {@link Connection#lease()}.
+     *
+     * @return {@linkplain Connection} Instance of available and active connection
+     * @throws IllegalAccessException If there is an issue while leasing connection
+     */
+    public Connection lease() throws IllegalAccessException {
+        Optional<Connection> optionalConnection = connectionList.stream()
+                .filter(connection -> !connection.isInUse())
+                .findAny();
 
-    @Override
-    public int hashCode() {
-        return socketAddress.hashCode();
-    }
+        // If we've an available connection then return it.
+        if (optionalConnection.isPresent()) {
 
-    @Override
-    public boolean equals(Object obj) {
-        if (obj instanceof Backend) {
-            Backend backend = (Backend) obj;
-            return hashCode() == backend.hashCode();
+            // If connection is not active, remove it and return null.
+            if (!optionalConnection.get().isActive()) {
+                connectionList.remove(optionalConnection.get());
+                return null;
+            }
+
+            optionalConnection.get().lease();
+            return optionalConnection.get();
+        } else {
+            return null;
         }
-        return false;
+    }
+
+    /**
+     * Associate a {@link Connection} with this {@linkplain Backend}
+     *
+     * @param connection {@link Connection} to be associated
+     */
+    public void addConnection(Connection connection) throws TooManyConnectionsException {
+        if (connectionList.size() > maxConnections) {
+            throw new TooManyConnectionsException(this, connectionList.size(), maxConnections);
+        }
+        connectionList.add(connection);
+        connection.close();
+    }
+
+    /**
+     * Dissociate a {@link Connection} with from {@linkplain Backend}
+     *
+     * @param connection {@link Connection} to be Dissociated
+     */
+    public void removeConnection(Connection connection) {
+        connectionList.remove(connection);
+    }
+
+    @Override
+    public void close() {
+        state = State.OFFLINE;
+        connectionCleanerFuture.cancel(true);
+        if (this.healthCheck != null && this.healthCheckManager != null) {
+            healthCheckManager.shutdown();
+        }
+        connectionList.forEach(Connection::close);
+        connectionList.clear();
     }
 
     @Override
@@ -270,10 +339,21 @@ public class Backend implements Comparable<Backend>, Closeable {
     }
 
     @Override
-    public void close() {
-        setState(State.OFFLINE);
-        if (this.healthCheck != null && this.healthCheckManager != null) {
-            healthCheckManager.shutdown();
+    public boolean equals(Object obj) {
+        if (obj instanceof Backend) {
+            Backend backend = (Backend) obj;
+            return hashCode() == backend.hashCode();
         }
+        return false;
+    }
+
+    @Override
+    public int hashCode() {
+        return socketAddress.hashCode();
+    }
+
+    @Override
+    public int compareTo(Backend o) {
+        return hash.compareToIgnoreCase(o.hash);
     }
 }

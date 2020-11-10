@@ -65,13 +65,26 @@ along with ShieldBlaze ExpressGateway.  If not, see <https://www.gnu.org/license
         <module>configuration</module>
     </modules>
 
+    <repositories>
+        <repository>
+            <id>oss.sonatype.org-snapshot</id>
+            <url>https://oss.sonatype.org/content/repositories/snapshots</url>
+            <releases>
+                <enabled>false</enabled>
+            </releases>
+            <snapshots>
+                <enabled>true</enabled>
+            </snapshots>
+        </repository>
+    </repositories>
+
     <dependencies>
 
         <!-- https://mvnrepository.com/artifact/io.netty/netty-codec-http -->
         <dependency>
             <groupId>io.netty</groupId>
             <artifactId>netty-all</artifactId>
-            <version>4.1.53.Final</version>
+            <version>4.1.54.Final-SNAPSHOT</version>
         </dependency>
 
         <!-- https://mvnrepository.com/artifact/io.netty/netty-tcnative -->
@@ -136,6 +149,13 @@ along with ShieldBlaze ExpressGateway.  If not, see <https://www.gnu.org/license
             <groupId>org.apache.httpcomponents</groupId>
             <artifactId>httpclient</artifactId>
             <version>4.5.12</version>
+        </dependency>
+
+        <!-- https://mvnrepository.com/artifact/net.openhft/zero-allocation-hashing -->
+        <dependency>
+            <groupId>net.openhft</groupId>
+            <artifactId>zero-allocation-hashing</artifactId>
+            <version>0.12</version>
         </dependency>
     </dependencies>
 

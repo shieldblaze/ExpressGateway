@@ -88,3 +88,10 @@ This product depends on 'Brotli4j'. License for the same can be obtained at:
     * license/LICENSE.brotli4j.txt (GNU General Public License v3.0)
 
 ---------------------------------
+
+This product depends on 'Zero-Allocation Hashing'. License for the same can be obtained at:
+
+  * LICENSE:
+    * license/LICENSE.zero-allocation-hashing.txt (Apache License 2.0)
+
+---------------------------------
