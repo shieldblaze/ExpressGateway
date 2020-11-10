@@ -17,7 +17,7 @@
  */
 package com.shieldblaze.expressgateway.core.server.http.adapter.http2;
 
-import com.shieldblaze.expressgateway.core.server.http.adapter.AdapterHeaders;
+import com.shieldblaze.expressgateway.core.server.http.Headers;
 import io.netty.buffer.Unpooled;
 import io.netty.channel.ChannelDuplexHandler;
 import io.netty.channel.ChannelHandlerContext;
@@ -144,7 +144,7 @@ public final class HTTP2InboundAdapter extends ChannelDuplexHandler {
             streamMap.put(inboundProperty.streamHash(), inboundProperty);
             streamIds.put(streamId, inboundProperty.streamHash());
 
-            httpRequest.headers().set(AdapterHeaders.STREAM_HASH, inboundProperty.streamHash());
+            httpRequest.headers().set(Headers.STREAM_HASH, inboundProperty.streamHash());
             ctx.fireChannelRead(httpRequest);
         }
     }
@@ -163,11 +163,10 @@ public final class HTTP2InboundAdapter extends ChannelDuplexHandler {
 
     @Override
     public void write(ChannelHandlerContext ctx, Object msg, ChannelPromise promise) {
-//        System.err.println(msg);
         if (msg instanceof HttpResponse) {
             if (msg instanceof FullHttpResponse) {
                 FullHttpResponse fullHttpResponse = (FullHttpResponse) msg;
-                long streamHash = Long.parseLong(fullHttpResponse.headers().get(AdapterHeaders.STREAM_HASH));
+                long streamHash = Long.parseLong(fullHttpResponse.headers().get(Headers.STREAM_HASH));
                 Http2Headers http2Headers = HttpConversionUtil.toHttp2Headers(fullHttpResponse, false);
 
                 Http2HeadersFrame headersFrame = new DefaultHttp2HeadersFrame(http2Headers, false);
@@ -180,7 +179,7 @@ public final class HTTP2InboundAdapter extends ChannelDuplexHandler {
                 removeStreamMapping(streamHash);
             } else {
                 HttpResponse httpResponse = (HttpResponse) msg;
-                long streamHash = Long.parseLong(httpResponse.headers().get(AdapterHeaders.STREAM_HASH));
+                long streamHash = Long.parseLong(httpResponse.headers().get(Headers.STREAM_HASH));
                 Http2Headers http2Headers = HttpConversionUtil.toHttp2Headers(httpResponse, false);
 
                 Http2HeadersFrame headersFrame = new DefaultHttp2HeadersFrame(http2Headers, false);

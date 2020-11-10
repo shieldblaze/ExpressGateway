@@ -128,7 +128,7 @@ public abstract class L7LoadBalancer {
     /**
      * Get {@link TLSConfiguration} for Client
      */
-    public TLSConfiguration getTlsClient() {
+    public TLSConfiguration tlsClient() {
         return tlsClient;
     }
 

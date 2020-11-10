@@ -17,7 +17,7 @@
  */
 package com.shieldblaze.expressgateway.core.server.http.adapter.http2;
 
-import com.shieldblaze.expressgateway.core.server.http.adapter.AdapterHeaders;
+import com.shieldblaze.expressgateway.core.server.http.Headers;
 import io.netty.channel.ChannelHandlerContext;
 import io.netty.channel.ChannelPromise;
 import io.netty.handler.codec.http.FullHttpRequest;
@@ -96,7 +96,7 @@ public final class HTTP2OutboundAdapter extends Http2ChannelDuplexHandler {
             HttpRequest httpRequest = (HttpRequest) msg;
             Http2FrameCodec.DefaultHttp2FrameStream http2FrameStream = (Http2FrameCodec.DefaultHttp2FrameStream) newStream();
             int streamId = frameCodec.initializeNewStream(ctx, http2FrameStream, promise);
-            long streamHash = Long.parseLong(httpRequest.headers().get(AdapterHeaders.STREAM_HASH));
+            long streamHash = Long.parseLong(httpRequest.headers().get(Headers.STREAM_HASH));
 
             // Put the stream ID and Outbound Property into the map.
             OutboundProperty outboundProperty = new OutboundProperty(streamHash, http2FrameStream);
@@ -174,7 +174,7 @@ public final class HTTP2OutboundAdapter extends Http2ChannelDuplexHandler {
                     httpResponse.headers().set(HttpHeaderNames.TRANSFER_ENCODING, HttpHeaderValues.CHUNKED);
                 }
 
-                httpResponse.headers().set(AdapterHeaders.STREAM_HASH, streamHash);
+                httpResponse.headers().set(Headers.STREAM_HASH, streamHash);
 
                 outboundProperty.fireInitialRead();
                 ctx.fireChannelRead(httpResponse);

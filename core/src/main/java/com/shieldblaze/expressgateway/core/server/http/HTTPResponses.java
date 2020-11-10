@@ -17,13 +17,11 @@
  */
 package com.shieldblaze.expressgateway.core.server.http;
 
-import io.netty.buffer.ByteBuf;
 import io.netty.handler.codec.http.DefaultFullHttpResponse;
 import io.netty.handler.codec.http.HttpHeaderNames;
 import io.netty.handler.codec.http.HttpResponseStatus;
 import io.netty.handler.codec.http.HttpVersion;
 
-import static com.shieldblaze.expressgateway.core.server.http.HTTPUtils.setGenericHeaders;
 import static io.netty.handler.codec.http.HttpResponseStatus.BAD_GATEWAY;
 import static io.netty.handler.codec.http.HttpResponseStatus.CONTINUE;
 import static io.netty.handler.codec.http.HttpResponseStatus.EXPECTATION_FAILED;
@@ -76,17 +74,16 @@ public final class HTTPResponses {
     }
 
     public static void init() {
-        setGenericHeader(ACCEPT_100);
-        setGenericHeader(BAD_REQUEST_400);
-        setGenericHeader(NOT_FOUND_404);
-        setGenericHeader(EXPECTATION_FAILED_417);
-        setGenericHeader(TOO_LARGE_413);
-        setGenericHeader(BAD_GATEWAY_502);
-        setGenericHeader(SERVICE_UNAVAILABLE_503);
+        setContentLength(ACCEPT_100);
+        setContentLength(BAD_REQUEST_400);
+        setContentLength(NOT_FOUND_404);
+        setContentLength(EXPECTATION_FAILED_417);
+        setContentLength(TOO_LARGE_413);
+        setContentLength(BAD_GATEWAY_502);
+        setContentLength(SERVICE_UNAVAILABLE_503);
     }
 
-    static void setGenericHeader(DefaultFullHttpResponse response) {
+    private static void setContentLength(DefaultFullHttpResponse response) {
         response.headers().set(HttpHeaderNames.CONTENT_LENGTH, response.content().readableBytes());
-        setGenericHeaders(response.headers());
     }
 }

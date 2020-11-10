@@ -39,13 +39,9 @@ import io.netty.handler.codec.http2.Http2HeadersEncoder;
 import io.netty.handler.codec.http2.Http2PromisedRequestVerifier;
 import io.netty.handler.codec.http2.Http2Settings;
 
-public final class HTTPUtils {
+final class HTTPUtils {
 
-    static void setGenericHeaders(HttpHeaders headers) {
-        headers.set(HttpHeaderNames.SERVER, "ShieldBlaze ExpressGateway");
-    }
-
-    public static Http2FrameCodec clientH2Handler(HTTPConfiguration httpConfiguration) {
+    static Http2FrameCodec clientH2Handler(HTTPConfiguration httpConfiguration) {
         Http2Settings http2Settings = new Http2Settings();
         http2Settings.initialWindowSize(httpConfiguration.getH2InitialWindowSize());
         http2Settings.maxConcurrentStreams(httpConfiguration.getH2MaxConcurrentStreams());
@@ -105,7 +101,7 @@ public final class HTTPUtils {
      *
      * @param httpConfiguration {@link HTTPConfiguration} Instance
      */
-    public static HttpClientCodec newClientCodec(HTTPConfiguration httpConfiguration) {
+    static HttpClientCodec newClientCodec(HTTPConfiguration httpConfiguration) {
         int maxInitialLineLength = httpConfiguration.getMaxInitialLineLength();
         int maxHeaderSize = httpConfiguration.getMaxHeaderSize();
         int maxChunkSize = httpConfiguration.getMaxChunkSize();

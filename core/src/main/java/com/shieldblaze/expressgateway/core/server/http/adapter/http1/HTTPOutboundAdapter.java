@@ -17,7 +17,7 @@
  */
 package com.shieldblaze.expressgateway.core.server.http.adapter.http1;
 
-import com.shieldblaze.expressgateway.core.server.http.adapter.AdapterHeaders;
+import com.shieldblaze.expressgateway.core.server.http.Headers;
 import io.netty.channel.ChannelDuplexHandler;
 import io.netty.channel.ChannelHandlerContext;
 import io.netty.channel.ChannelPromise;
@@ -37,7 +37,7 @@ public final class HTTPOutboundAdapter extends ChannelDuplexHandler {
     public void write(ChannelHandlerContext ctx, Object msg, ChannelPromise promise) {
         if (msg instanceof HttpRequest) {
             HttpRequest request = (HttpRequest) msg;
-            streamHash = Long.parseLong(request.headers().get(AdapterHeaders.STREAM_HASH));
+            streamHash = Long.parseLong(request.headers().get(Headers.STREAM_HASH));
 
             request.headers().remove(HttpConversionUtil.ExtensionHeaderNames.STREAM_ID.text());
             request.headers().remove(HttpConversionUtil.ExtensionHeaderNames.STREAM_WEIGHT.text());
@@ -52,7 +52,7 @@ public final class HTTPOutboundAdapter extends ChannelDuplexHandler {
     public void channelRead(ChannelHandlerContext ctx, Object msg) {
         if (msg instanceof HttpResponse) {
             HttpResponse response = (HttpResponse) msg;
-            response.headers().set(AdapterHeaders.STREAM_HASH, streamHash);
+            response.headers().set(Headers.STREAM_HASH, streamHash);
         } else if (msg instanceof HttpContent) {
 
             HttpContent httpContent;

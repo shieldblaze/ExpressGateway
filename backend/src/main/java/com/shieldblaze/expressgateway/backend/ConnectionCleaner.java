@@ -28,6 +28,13 @@ final class ConnectionCleaner implements Runnable {
     @Override
     public void run() {
         // Remove connection from queue if they're not active.
-        backend.connectionList.removeIf(connection -> !connection.isActive());
+        backend.connectionList.removeIf(connection -> {
+            if (connection.hasConnectionTimedOut() && !connection.isActive()) {
+                backend.removeConnection(connection);
+                return true;
+            } else {
+                return false;
+            }
+        });
     }
 }

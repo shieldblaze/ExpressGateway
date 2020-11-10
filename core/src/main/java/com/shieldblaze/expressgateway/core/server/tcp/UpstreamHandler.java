@@ -86,7 +86,7 @@ final class UpstreamHandler extends ChannelInboundHandlerAdapter {
                 if (tlsConfiguration != null) {
                     String hostname = backend.getSocketAddress().getHostName();
                     int port = backend.getSocketAddress().getPort();
-                    SslHandler sslHandler = tlsConfiguration.getDefault().getSslContext().newHandler(ctx.alloc(), hostname, port);
+                    SslHandler sslHandler = tlsConfiguration.getDefault().sslContext().newHandler(ctx.alloc(), hostname, port);
 
                     ch.pipeline().addLast("TLSHandler", sslHandler);
                 }
