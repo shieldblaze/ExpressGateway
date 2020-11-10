@@ -70,7 +70,7 @@ public final class SNIHandler extends AbstractSniHandler<CertificateKeyPair> {
     protected void replaceHandler(ChannelHandlerContext ctx, CertificateKeyPair certificateKeyPair) {
         SslHandler sslHandler = null;
         try {
-            sslHandler = new TLSHandler(certificateKeyPair.getSslContext().newHandler(ctx.alloc()).engine());
+            sslHandler = new TLSHandler(certificateKeyPair.sslContext().newHandler(ctx.alloc()).engine());
 
             try {
                 if (sslHandler.engine() instanceof ReferenceCountedOpenSslEngine && certificateKeyPair.useOCSP()) {

@@ -273,9 +273,8 @@ public class Backend implements Comparable<Backend>, Closeable {
      * {@link Connection#lease()}.
      *
      * @return {@linkplain Connection} Instance of available and active connection
-     * @throws IllegalAccessException If there is an issue while leasing connection
      */
-    public Connection lease() throws IllegalAccessException {
+    public Connection lease() {
         Optional<Connection> optionalConnection = connectionList.stream()
                 .filter(connection -> !connection.isInUse())
                 .findAny();
@@ -288,8 +287,6 @@ public class Backend implements Comparable<Backend>, Closeable {
                 connectionList.remove(optionalConnection.get());
                 return null;
             }
-
-            optionalConnection.get().lease();
             return optionalConnection.get();
         } else {
             return null;
@@ -306,7 +303,6 @@ public class Backend implements Comparable<Backend>, Closeable {
             throw new TooManyConnectionsException(this, connectionList.size(), maxConnections);
         }
         connectionList.add(connection);
-        connection.close();
     }
 
     /**
@@ -316,6 +312,7 @@ public class Backend implements Comparable<Backend>, Closeable {
      */
     public void removeConnection(Connection connection) {
         connectionList.remove(connection);
+        connection.close();
     }
 
     @Override

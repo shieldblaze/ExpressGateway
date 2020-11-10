@@ -154,31 +154,31 @@ public final class HTTPListener extends HTTPFrontListener {
 
             // If TLS Server is not enabled then we'll only use HTTP/1.1
             if (httpLoadBalancer.getTlsServer() == null) {
-                pipeline.addLast("HTTPServerCodec", HTTPUtils.newServerCodec(httpConfiguration));
-                pipeline.addLast("HTTPServerValidator", new HTTPServerValidator(httpConfiguration));
-                pipeline.addLast("HTTPContentCompressor", new HTTPContentCompressor(httpConfiguration));
-                pipeline.addLast("HTTPContentDecompressor", new HTTPContentDecompressor());
-                pipeline.addLast("HTTP2OutboundAdapter", new HTTPInboundAdapter());
-                pipeline.addLast("UpstreamHandler", new UpstreamHandler(httpLoadBalancer));
+                pipeline.addLast(HTTPUtils.newServerCodec(httpConfiguration));
+                pipeline.addLast(new HTTPServerValidator(httpConfiguration));
+                pipeline.addLast(new HTTPContentCompressor(httpConfiguration));
+                pipeline.addLast(new HTTPContentDecompressor());
+                pipeline.addLast(new HTTPInboundAdapter());
+                pipeline.addLast(new UpstreamHandler(httpLoadBalancer));
             } else {
-                pipeline.addLast("SNIHandler", new SNIHandler(httpLoadBalancer.getTlsServer()));
+                pipeline.addLast(new SNIHandler(httpLoadBalancer.getTlsServer()));
 
                 ALPNHandler alpnHandler = ALPNHandlerBuilder.newBuilder()
                         // HTTP/2 Handlers
-                        .withHTTP2ChannelHandler("HTTP2Handler", HTTPUtils.serverH2Handler(httpConfiguration))
-                        .withHTTP2ChannelHandler("HTTP2TranslationAdapter", new HTTP2InboundAdapter())
-                        .withHTTP2ChannelHandler("UpstreamHandler", new UpstreamHandler(httpLoadBalancer))
+                        .withHTTP2ChannelHandler(HTTPUtils.serverH2Handler(httpConfiguration))
+                        .withHTTP2ChannelHandler(new HTTP2InboundAdapter())
+                        .withHTTP2ChannelHandler(new UpstreamHandler(httpLoadBalancer))
 
                         // HTTP/1.1 Handlers
-                        .withHTTP1ChannelHandler("HTTPServerCodec", HTTPUtils.newServerCodec(httpConfiguration))
-                        .withHTTP1ChannelHandler("HTTPServerValidator", new HTTPServerValidator(httpConfiguration))
-                        .withHTTP1ChannelHandler("HTTPContentCompressor", new HTTPContentCompressor(httpConfiguration))
-                        .withHTTP1ChannelHandler("HTTPContentDecompressor", new HTTPContentDecompressor())
-                        .withHTTP1ChannelHandler("HTTP2OutboundAdapter", new HTTPInboundAdapter())
-                        .withHTTP1ChannelHandler("UpstreamHandler", new UpstreamHandler(httpLoadBalancer))
+                        .withHTTP1ChannelHandler(HTTPUtils.newServerCodec(httpConfiguration))
+                        .withHTTP1ChannelHandler(new HTTPServerValidator(httpConfiguration))
+                        .withHTTP1ChannelHandler(new HTTPContentCompressor(httpConfiguration))
+                        .withHTTP1ChannelHandler(new HTTPContentDecompressor())
+                        .withHTTP1ChannelHandler(new HTTPInboundAdapter())
+                        .withHTTP1ChannelHandler(new UpstreamHandler(httpLoadBalancer))
                         .build();
 
-                pipeline.addLast("ALPNHandler", alpnHandler);
+                pipeline.addLast(alpnHandler);
             }
         }
 

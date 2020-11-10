@@ -15,8 +15,40 @@
  * You should have received a copy of the GNU General Public License
  * along with ShieldBlaze ExpressGateway.  If not, see <https://www.gnu.org/licenses/>.
  */
-package com.shieldblaze.expressgateway.core.server.http.adapter;
+package com.shieldblaze.expressgateway.core.server.http;
 
-public final class AdapterHeaders {
+public final class Headers {
+
+    /**
+     * "x-http2-stream-hash"
+     */
     public static final String STREAM_HASH = "x-http2-stream-hash";
+
+    /**
+     * "x-forwarded-for"
+     */
+    public static final String X_FORWARDED_FOR = "x-forwarded-for";
+
+    /**
+     * x-forwarded-http-version
+     */
+    public static final String X_FORWARDED_HTTP_VERSION = "x-forwarded-http-version";
+
+    public static final class Values {
+
+        /**
+         * http_1_0
+         */
+        public static final String HTTP_1_0 = "http_1_0";
+
+        /**
+         * http_1_1
+         */
+        public static final String HTTP_1_1 = "http_1_1";
+
+        /**
+         * h2
+         */
+        public static final String HTTP_2 = "h2";
+    }
 }

@@ -89,7 +89,7 @@ public final class ALPNHandler extends ApplicationProtocolNegotiationHandler {
     /**
      * Get the negotiated protocol
      */
-    public CompletableFuture<String> getALPNProtocol() {
+    public CompletableFuture<String> protocol() {
         return ALPNProtocol;
     }
 }

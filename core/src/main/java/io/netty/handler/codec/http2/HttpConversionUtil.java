@@ -214,7 +214,7 @@ public final class HttpConversionUtil {
      */
     public static FullHttpResponse toFullHttpResponse(int streamId, Http2Headers http2Headers, ByteBufAllocator alloc,
                                                       boolean validateHttpHeaders) throws Http2Exception {
-        return toFullHttpResponse(streamId, http2Headers, alloc.buffer(), validateHttpHeaders);
+        return toFullHttpResponse(streamId, http2Headers, alloc.buffer(), HttpVersion.HTTP_1_1, validateHttpHeaders);
     }
 
     /**
@@ -231,12 +231,12 @@ public final class HttpConversionUtil {
      * @throws Http2Exception see {@link #addHttp2ToHttpHeaders(int, Http2Headers, FullHttpMessage, boolean)}
      */
     public static FullHttpResponse toFullHttpResponse(int streamId, Http2Headers http2Headers, ByteBuf content,
-                                                      boolean validateHttpHeaders)
+                                                      HttpVersion httpVersion, boolean validateHttpHeaders)
                     throws Http2Exception {
         HttpResponseStatus status = parseStatus(http2Headers.status());
         // HTTP/2 does not define a way to carry the version or reason phrase that is included in an
         // HTTP/1.1 status line.
-        FullHttpResponse msg = new DefaultFullHttpResponse(HttpVersion.HTTP_1_1, status, content,
+        FullHttpResponse msg = new DefaultFullHttpResponse(httpVersion, status, content,
                                                            validateHttpHeaders);
         try {
             addHttp2ToHttpHeaders(streamId, http2Headers, msg, false);
@@ -346,13 +346,12 @@ public final class HttpConversionUtil {
      * @throws Http2Exception see {@link #addHttp2ToHttpHeaders(int, Http2Headers,
      *         HttpHeaders, HttpVersion, boolean, boolean)}
      */
-    public static HttpResponse toHttpResponse(final int streamId,
-                                              final Http2Headers http2Headers,
-                                              final boolean validateHttpHeaders) throws Http2Exception {
+    public static HttpResponse toHttpResponse(int streamId, Http2Headers http2Headers,
+                                              HttpVersion httpVersion, boolean validateHttpHeaders) throws Http2Exception {
         final HttpResponseStatus status = parseStatus(http2Headers.status());
         // HTTP/2 does not define a way to carry the version or reason phrase that is included in an
         // HTTP/1.1 status line.
-        final HttpResponse msg = new DefaultHttpResponse(HttpVersion.HTTP_1_1, status, validateHttpHeaders);
+        final HttpResponse msg = new DefaultHttpResponse(httpVersion, status, validateHttpHeaders);
         try {
             addHttp2ToHttpHeaders(streamId, http2Headers, msg.headers(), msg.protocolVersion(), false, false);
         } catch (final Http2Exception e) {

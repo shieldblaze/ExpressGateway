@@ -17,68 +17,73 @@
  */
 package com.shieldblaze.expressgateway.core.server.http;
 
-import com.shieldblaze.expressgateway.core.server.http.compression.HTTPContentCompressor;
-import com.shieldblaze.expressgateway.core.utils.ChannelUtils;
+import io.netty.channel.Channel;
+import io.netty.channel.ChannelFutureListener;
 import io.netty.channel.ChannelHandlerContext;
 import io.netty.channel.ChannelInboundHandlerAdapter;
-import io.netty.handler.codec.http.HttpContent;
+import io.netty.handler.codec.http.FullHttpResponse;
 import io.netty.handler.codec.http.HttpHeaderNames;
+import io.netty.handler.codec.http.HttpHeaderValues;
 import io.netty.handler.codec.http.HttpResponse;
+import io.netty.handler.codec.http.HttpVersion;
 import io.netty.handler.codec.http.LastHttpContent;
 import io.netty.handler.codec.http2.Http2DataFrame;
 import io.netty.handler.codec.http2.Http2HeadersFrame;
 import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
 
-public final class DownstreamHandler extends ChannelInboundHandlerAdapter {
+final class DownstreamHandler extends ChannelInboundHandlerAdapter {
 
     private static final Logger logger = LogManager.getLogger(DownstreamHandler.class);
 
-    private final UpstreamHandler upstreamHandler;
-    boolean isActive;
+    private final HTTPConnection httpConnection;
+    private Channel channel;
+    private boolean doCloseAtLast;
 
-    public DownstreamHandler(UpstreamHandler upstreamHandler) {
-        this.upstreamHandler = upstreamHandler;
+    DownstreamHandler(HTTPConnection httpConnection, Channel channel) {
+        this.httpConnection = httpConnection;
+        this.channel = channel;
     }
 
     @Override
     public void channelRead(ChannelHandlerContext ctx, Object msg) {
-        if (!(msg instanceof Http2HeadersFrame || msg instanceof Http2DataFrame || msg instanceof HttpResponse || msg instanceof HttpContent)) {
-            return;
-        }
-        if (msg instanceof HttpResponse) {
-            HttpResponse response = (HttpResponse) msg;
-            HTTPUtils.setGenericHeaders(response.headers());
+        if (msg instanceof Http2HeadersFrame || msg instanceof Http2DataFrame) {
+            // No need of any modification
+        } else if (msg instanceof HttpResponse) {
 
-            /*
-             * If `isUpstreamHTTP2` is `true` then  we'll lookup at map using Stream-ID and check if we have entry for "ACCEPT-ENCODING" values.
-             */
-            if (upstreamHandler.isHTTP2) {
-                String acceptEncoding = upstreamHandler.acceptEncodingMap.get(response.headers().getInt("x-http2-stream-id"));
-                if (acceptEncoding != null) {
-                    String targetContentEncoding = HTTPContentCompressor.getTargetEncoding(response, acceptEncoding);
-                    if (targetContentEncoding != null) {
-                        response.headers().set(HttpHeaderNames.CONTENT_ENCODING, targetContentEncoding);
-                    }
-                    upstreamHandler.acceptEncodingMap.remove(response.headers().getInt("x-http2-stream-id"));
+            if (msg instanceof FullHttpResponse) {
+                if (((FullHttpResponse) msg).protocolVersion() == HttpVersion.HTTP_1_0) {
+                    ((FullHttpResponse) msg).headers().set(HttpHeaderNames.CONNECTION, HttpHeaderValues.CLOSE);
+                    channel.writeAndFlush(msg).addListener(ChannelFutureListener.CLOSE);
+                    return;
+                }
+            } else {
+                // If HTTP Version is 1.0 then set Connection:Close and mark for CloseAtLast.
+                if (((HttpResponse) msg).protocolVersion() == HttpVersion.HTTP_1_0) {
+                    doCloseAtLast = true;
+                    ((HttpResponse) msg).headers().set(HttpHeaderNames.CONNECTION, HttpHeaderValues.CLOSE);
                 }
             }
+
+        } else if (msg instanceof LastHttpContent) {
+
+            // If Connection is not over HTTP/2 then release it back to pool.
+            if (!httpConnection.isHTTP2()) {
+                httpConnection.release();
+            }
+
+            if (doCloseAtLast) {
+                doCloseAtLast = false;
+                channel.writeAndFlush(msg).addListener(ChannelFutureListener.CLOSE);
+                return;
+            }
         }
-        if (msg instanceof LastHttpContent) {
-            isActive = false;
-        }
-        upstreamHandler.upstreamChannel.writeAndFlush(msg);
+
+        channel.writeAndFlush(msg);
     }
 
-    @Override
-    public void channelInactive(ChannelHandlerContext ctx) {
-        if (logger.isInfoEnabled()) {
-            logger.info("Closing Upstream {} and Downstream {} Channel",
-                    upstreamHandler.upstreamAddress.getAddress().getHostAddress() + ":" + upstreamHandler.upstreamAddress.getPort(),
-                    upstreamHandler.downstreamAddress.getAddress().getHostAddress() + ":" + upstreamHandler.downstreamAddress.getPort());
-        }
-
-        ChannelUtils.closeChannels(upstreamHandler.upstreamChannel, upstreamHandler.downstreamChannel);
+    void setChannel(Channel channel) {
+        this.channel = channel;
     }
 
     @Override

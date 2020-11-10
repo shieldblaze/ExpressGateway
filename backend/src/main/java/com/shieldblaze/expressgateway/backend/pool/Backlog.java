@@ -19,7 +19,7 @@ package com.shieldblaze.expressgateway.backend.pool;
 
 import io.netty.channel.ChannelPromise;
 
-final class Backlog {
+public final class Backlog {
     private final Object object;
     private final ChannelPromise channelPromise;
 
@@ -28,11 +28,11 @@ final class Backlog {
         this.channelPromise = channelPromise;
     }
 
-    Object getObject() {
+    public Object object() {
         return object;
     }
 
-    ChannelPromise getChannelPromise() {
+    public ChannelPromise channelPromise() {
         return channelPromise;
     }
 }

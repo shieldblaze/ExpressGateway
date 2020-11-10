@@ -109,7 +109,7 @@ public final class CertificateKeyPair {
         return ocspStaplingData;
     }
 
-    public SslContext getSslContext() {
+    public SslContext sslContext() {
         return sslContext;
     }
 
