@@ -23,10 +23,12 @@ final class OutboundProperty {
     private final long streamHash;
     private final Http2FrameStream stream;
     private boolean isInitialRead;
+    private final String httpVersion;
 
-    OutboundProperty(long streamHash, Http2FrameStream stream) {
+    OutboundProperty(long streamHash, Http2FrameStream stream, String httpVersion) {
         this.streamHash = streamHash;
         this.stream = stream;
+        this.httpVersion = httpVersion;
     }
 
     long streamHash() {
@@ -43,5 +45,9 @@ final class OutboundProperty {
 
     void fireInitialRead() {
         isInitialRead = true;
+    }
+
+    String httpVersion() {
+        return httpVersion;
     }
 }

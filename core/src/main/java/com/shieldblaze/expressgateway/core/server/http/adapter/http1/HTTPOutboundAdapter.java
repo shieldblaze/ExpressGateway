@@ -45,7 +45,7 @@ public final class HTTPOutboundAdapter extends ChannelDuplexHandler {
             request.headers().remove(HttpConversionUtil.ExtensionHeaderNames.PATH.text());
             request.headers().remove(HttpConversionUtil.ExtensionHeaderNames.STREAM_DEPENDENCY_ID.text());
         }
-        ctx.writeAndFlush(msg, promise);
+        ctx.write(msg, promise);
     }
 
     @Override

@@ -19,11 +19,16 @@ package com.shieldblaze.expressgateway.core.server.http.adapter.http1;
 
 import com.shieldblaze.expressgateway.core.server.http.Headers;
 import io.netty.channel.ChannelDuplexHandler;
+import io.netty.channel.ChannelFuture;
+import io.netty.channel.ChannelFutureListener;
 import io.netty.channel.ChannelHandlerContext;
 import io.netty.channel.ChannelPromise;
 import io.netty.handler.codec.http.HttpContent;
+import io.netty.handler.codec.http.HttpHeaderNames;
+import io.netty.handler.codec.http.HttpHeaderValues;
 import io.netty.handler.codec.http.HttpRequest;
 import io.netty.handler.codec.http.HttpResponse;
+import io.netty.handler.codec.http.HttpVersion;
 import io.netty.handler.codec.http.LastHttpContent;
 import io.netty.handler.codec.http2.DefaultHttp2TranslatedHttpContent;
 import io.netty.handler.codec.http2.DefaultHttp2TranslatedLastHttpContent;
@@ -54,6 +59,12 @@ public final class HTTPInboundAdapter extends ChannelDuplexHandler {
             request.headers().set(HttpConversionUtil.ExtensionHeaderNames.SCHEME.text(), "https");
             request.headers().set(Headers.STREAM_HASH, streamHash);
 
+            if (request.protocolVersion() == HttpVersion.HTTP_1_0) {
+                request.headers().set(Headers.X_FORWARDED_HTTP_VERSION, Headers.Values.HTTP_1_0);
+            } else {
+                request.headers().set(Headers.X_FORWARDED_HTTP_VERSION, Headers.Values.HTTP_1_1);
+            }
+
             ctx.fireChannelRead(request);
         } else if (msg instanceof HttpContent) {
 
@@ -75,6 +86,6 @@ public final class HTTPInboundAdapter extends ChannelDuplexHandler {
             response.headers().remove(Headers.STREAM_HASH);
             response.headers().remove(HttpConversionUtil.ExtensionHeaderNames.STREAM_ID.text());
         }
-        ctx.writeAndFlush(msg, promise);
+        ctx.write(msg, promise);
     }
 }

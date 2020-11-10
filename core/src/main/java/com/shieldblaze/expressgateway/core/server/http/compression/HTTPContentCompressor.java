@@ -38,8 +38,6 @@ import java.util.TreeSet;
  */
 public class HTTPContentCompressor extends HttpContentCompressor {
 
-    private static final Set<String> MIME_TYPES = new TreeSet<>();
-
     private final int brotliCompressionQuality;
     private final int compressionLevel;
 
@@ -57,7 +55,7 @@ public class HTTPContentCompressor extends HttpContentCompressor {
 
     @Override
     protected Result beginEncode(HttpResponse response, String acceptEncoding) {
-        String targetContentEncoding = getTargetEncoding(response, acceptEncoding);
+        String targetContentEncoding = HTTPCompressionUtil.getTargetEncoding(response, acceptEncoding);
 
         if (targetContentEncoding == null) {
             return null;
@@ -79,95 +77,5 @@ public class HTTPContentCompressor extends HttpContentCompressor {
         }
 
         return new Result(targetContentEncoding, new EmbeddedChannel(ctx.channel().id(), ctx.channel().metadata().hasDisconnect(), ctx.channel().config(), compressor));
-    }
-
-    public static String getTargetEncoding(HttpResponse response, String acceptEncoding) {
-        // If "CONTENT-ENCODING" is already set then we will not do anything.
-        if (response.headers().contains(HttpHeaderNames.CONTENT_ENCODING)) {
-            return null;
-        }
-
-        if (!MIME_TYPES.contains(response.headers().get(HttpHeaderNames.CONTENT_TYPE).split(";")[0])) {
-            return null;
-        }
-
-        return determineEncoding(acceptEncoding);
-    }
-
-    private static String determineEncoding(String acceptEncoding) {
-        float starQ = -1.0f;
-        float brQ = -1.0f;
-        float gzipQ = -1.0f;
-        float deflateQ = -1.0f;
-        for (String encoding : acceptEncoding.split(",")) {
-            float q = 1.0f;
-            int equalsPos = encoding.indexOf('=');
-            if (equalsPos != -1) {
-                try {
-                    q = Float.parseFloat(encoding.substring(equalsPos + 1));
-                } catch (NumberFormatException e) {
-                    // Ignore encoding
-                    q = 0.0f;
-                }
-            }
-            if (encoding.contains("*")) {
-                starQ = q;
-            } else if (encoding.contains("br") && q > brQ) {
-                brQ = q;
-            } else if (encoding.contains("gzip") && q > gzipQ) {
-                gzipQ = q;
-            } else if (encoding.contains("deflate") && q > deflateQ) {
-                deflateQ = q;
-            }
-        }
-        if (brQ > 0.0f || gzipQ > 0.0f || deflateQ > 0.0f) {
-            if (brQ >= gzipQ) {
-                return "br";
-            } else if (gzipQ >= deflateQ) {
-                return "gzip";
-            } else {
-                return "deflate";
-            }
-        }
-        if (starQ > 0.0f) {
-            if (brQ == -1.0f) {
-                return "br";
-            }
-            if (gzipQ == -1.0f) {
-                return "gzip";
-            }
-            if (deflateQ == -1.0f) {
-                return "deflate";
-            }
-        }
-        return null;
-    }
-
-    static {
-        MIME_TYPES.add("text/html");
-        MIME_TYPES.add("text/css");
-        MIME_TYPES.add("text/plain");
-        MIME_TYPES.add("text/xml");
-        MIME_TYPES.add("text/x-component");
-        MIME_TYPES.add("text/javascript");
-        MIME_TYPES.add("application/x-javascript");
-        MIME_TYPES.add("application/javascript");
-        MIME_TYPES.add("application/json");
-        MIME_TYPES.add("application/manifest+json");
-        MIME_TYPES.add("application/xml");
-        MIME_TYPES.add("application/xhtml+xml");
-        MIME_TYPES.add("application/rss+xml");
-        MIME_TYPES.add("application/atom+xml");
-        MIME_TYPES.add("application/vnd.ms-fontobject");
-        MIME_TYPES.add("application/x-font-ttf");
-        MIME_TYPES.add("application/x-font-opentype");
-        MIME_TYPES.add("application/x-font-truetype");
-        MIME_TYPES.add("image/svg+xml");
-        MIME_TYPES.add("image/x-icon");
-        MIME_TYPES.add("image/vnd.microsoft.icon");
-        MIME_TYPES.add("font/ttf");
-        MIME_TYPES.add("font/eot");
-        MIME_TYPES.add("font/otf");
-        MIME_TYPES.add("font/opentype");
     }
 }

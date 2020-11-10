@@ -25,9 +25,13 @@ import com.shieldblaze.expressgateway.loadbalance.l7.http.HTTPBalanceRequest;
 import com.shieldblaze.expressgateway.loadbalance.l7.http.HTTPBalanceResponse;
 import io.netty.channel.ChannelDuplexHandler;
 import io.netty.channel.ChannelHandlerContext;
+import io.netty.channel.ChannelPromise;
 import io.netty.handler.codec.http.HttpHeaderNames;
 import io.netty.handler.codec.http.HttpHeaders;
 import io.netty.handler.codec.http.HttpRequest;
+import io.netty.handler.codec.http.HttpResponse;
+import io.netty.handler.codec.http.HttpVersion;
+import io.netty.handler.codec.http2.DefaultHttp2TranslatedLastHttpContent;
 import io.netty.handler.codec.http2.Http2TranslatedHttpContent;
 import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
@@ -40,7 +44,10 @@ public final class UpstreamHandler extends ChannelDuplexHandler {
 
     private static final Logger logger = LogManager.getLogger(UpstreamHandler.class);
 
-    private final Map<Long, String> acceptEncodingMap = new ConcurrentSkipListMap<>();
+    /**
+     * Long: Stream Hash
+     * Connection: {@link Connection} Instance
+     */
     private final Map<Long, Connection> connectionMap = new ConcurrentSkipListMap<>();
 
     private final HTTPBalance httpBalance;
@@ -87,15 +94,22 @@ public final class UpstreamHandler extends ChannelDuplexHandler {
     }
 
     private void onHeadersRead(HttpHeaders headers, long streamHash, String host, InetSocketAddress upstreamAddress) {
-
-        if (headers.contains(HttpHeaderNames.ACCEPT_ENCODING)) {
-            acceptEncodingMap.put(streamHash, headers.get(HttpHeaderNames.ACCEPT_ENCODING));
-        }
-
         headers.remove(HttpHeaderNames.UPGRADE);
         headers.set(HttpHeaderNames.HOST, host);
         headers.set(HttpHeaderNames.ACCEPT_ENCODING, "br, gzip, deflate");
         headers.add(Headers.X_FORWARDED_FOR, upstreamAddress.getAddress().getHostAddress());
+    }
+
+    @Override
+    public void write(ChannelHandlerContext ctx, Object msg, ChannelPromise promise) throws Exception {
+        if (msg instanceof HttpResponse) {
+            HttpResponse response = (HttpResponse) msg;
+            response.headers().set(HttpHeaderNames.SERVER, "ShieldBlaze ExpressGateway");
+        } else if (msg instanceof DefaultHttp2TranslatedLastHttpContent) {
+            DefaultHttp2TranslatedLastHttpContent httpContent = (DefaultHttp2TranslatedLastHttpContent) msg;
+            connectionMap.remove(httpContent.streamId());
+        }
+        super.write(ctx, msg, promise);
     }
 
     @Override

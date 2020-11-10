@@ -18,6 +18,7 @@
 package com.shieldblaze.expressgateway.core.server.http.adapter.http2;
 
 import com.shieldblaze.expressgateway.core.server.http.Headers;
+import io.netty.buffer.Unpooled;
 import io.netty.channel.ChannelHandlerContext;
 import io.netty.channel.ChannelPromise;
 import io.netty.handler.codec.http.FullHttpRequest;
@@ -44,6 +45,8 @@ import io.netty.handler.codec.http2.Http2HeadersFrame;
 import io.netty.handler.codec.http2.Http2StreamFrame;
 import io.netty.handler.codec.http2.Http2TranslatedHttpContent;
 import io.netty.handler.codec.http2.HttpConversionUtil;
+import org.apache.logging.log4j.LogManager;
+import org.apache.logging.log4j.Logger;
 
 import java.util.Map;
 import java.util.concurrent.ConcurrentSkipListMap;
@@ -78,6 +81,8 @@ import java.util.concurrent.ConcurrentSkipListMap;
  */
 public final class HTTP2OutboundAdapter extends Http2ChannelDuplexHandler {
 
+    private static final Logger logger = LogManager.getLogger(HTTP2OutboundAdapter.class);
+
     /**
      * Integer: Connection Stream ID
      * Long: Stream Hash
@@ -99,7 +104,7 @@ public final class HTTP2OutboundAdapter extends Http2ChannelDuplexHandler {
             long streamHash = Long.parseLong(httpRequest.headers().get(Headers.STREAM_HASH));
 
             // Put the stream ID and Outbound Property into the map.
-            OutboundProperty outboundProperty = new OutboundProperty(streamHash, http2FrameStream);
+            OutboundProperty outboundProperty = new OutboundProperty(streamHash, http2FrameStream, httpRequest.headers().get(Headers.X_FORWARDED_HTTP_VERSION));
             streamMap.put(streamHash, outboundProperty);
             streamIds.put(streamId, streamHash);
 
@@ -153,7 +158,17 @@ public final class HTTP2OutboundAdapter extends Http2ChannelDuplexHandler {
 
             if (outboundProperty.initialRead()) {
                 LastHttpContent httpContent = new DefaultHttp2TranslatedLastHttpContent(outboundProperty.streamHash());
-                HttpConversionUtil.addHttp2ToHttpHeaders(streamId, headersFrame.headers(), httpContent.trailingHeaders(), HttpVersion.HTTP_1_1, true, false);
+
+                HttpVersion httpVersion;
+                if (outboundProperty.httpVersion().equals(Headers.Values.HTTP_1_0)) {
+                    httpVersion = HttpVersion.HTTP_1_0;
+                } else if (outboundProperty.httpVersion().equals(Headers.Values.HTTP_1_1)) {
+                    httpVersion = HttpVersion.HTTP_1_1;
+                } else {
+                    throw new IllegalArgumentException("Unsupported X-Forwarded-HTTP-Version");
+                }
+
+                HttpConversionUtil.addHttp2ToHttpHeaders(streamId, headersFrame.headers(), httpContent.trailingHeaders(), httpVersion, true, false);
                 ctx.fireChannelRead(httpContent);
                 removeStreamMapping(streamId);
 
@@ -165,12 +180,22 @@ public final class HTTP2OutboundAdapter extends Http2ChannelDuplexHandler {
                 HttpResponse httpResponse;
                 long streamHash = streamIds.get(streamId);
 
+                HttpVersion httpVersion;
+                if (outboundProperty.httpVersion().equals(Headers.Values.HTTP_1_0)) {
+                    httpVersion = HttpVersion.HTTP_1_0;
+                } else if (outboundProperty.httpVersion().equals(Headers.Values.HTTP_1_1)) {
+                    httpVersion = HttpVersion.HTTP_1_1;
+                } else {
+                    throw new IllegalArgumentException("Unsupported X-Forwarded-HTTP-Version");
+                }
+
                 // If 'endOfStream' flag is set to 'true' then we will create FullHttpResponse.
                 if (headersFrame.isEndStream()) {
-                    httpResponse = HttpConversionUtil.toFullHttpResponse(streamId, headersFrame.headers(), ctx.alloc(), false);
+                    httpResponse = HttpConversionUtil.toFullHttpResponse(streamId, headersFrame.headers(), Unpooled.EMPTY_BUFFER,
+                            httpVersion, false);
                     removeStreamMapping(streamId);
                 } else {
-                    httpResponse = HttpConversionUtil.toHttpResponse(streamId, headersFrame.headers(), false);
+                    httpResponse = HttpConversionUtil.toHttpResponse(streamId, headersFrame.headers(), httpVersion, false);
                     httpResponse.headers().set(HttpHeaderNames.TRANSFER_ENCODING, HttpHeaderValues.CHUNKED);
                 }
 
@@ -239,7 +264,7 @@ public final class HTTP2OutboundAdapter extends Http2ChannelDuplexHandler {
     }
 
     @Override
-    public void exceptionCaught(ChannelHandlerContext ctx, Throwable cause) throws Exception {
-        cause.printStackTrace();
+    public void exceptionCaught(ChannelHandlerContext ctx, Throwable cause) {
+        logger.error("Caught error at HTTP2OutboundAdapter", cause);
     }
 }

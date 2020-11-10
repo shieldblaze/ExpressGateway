@@ -24,10 +24,12 @@ final class InboundProperty {
 
     private final long streamHash;
     private final Http2FrameStream stream;
+    private final String acceptEncoding;
 
-    InboundProperty(long streamNumber, Http2FrameStream stream) {
+    InboundProperty(long streamNumber, Http2FrameStream stream, String acceptEncoding) {
         this.streamHash = LongHashFunction.xx().hashLongs(new long[]{streamNumber, stream.id()});
         this.stream = stream;
+        this.acceptEncoding = acceptEncoding;
     }
 
     long streamHash() {
@@ -36,5 +38,9 @@ final class InboundProperty {
 
     Http2FrameStream stream() {
         return stream;
+    }
+
+    String acceptEncoding() {
+        return acceptEncoding;
     }
 }
