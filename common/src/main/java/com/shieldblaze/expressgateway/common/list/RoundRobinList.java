@@ -18,10 +18,12 @@
 package com.shieldblaze.expressgateway.common.list;
 
 import javax.annotation.Nonnull;
+import java.util.ArrayList;
 import java.util.Collections;
 import java.util.Iterator;
 import java.util.List;
 import java.util.Objects;
+import java.util.concurrent.atomic.AtomicInteger;
 
 /**
  * Round-Robin List Implementation
@@ -29,7 +31,7 @@ import java.util.Objects;
 public final class RoundRobinList<T> implements Iterable<T> {
     private List<T> list;
     private Iterator<T> iterator;
-    private int index = 0;
+    private final AtomicInteger index = new AtomicInteger(0);
 
     public RoundRobinList() {
         this(Collections.emptyList());
@@ -46,9 +48,9 @@ public final class RoundRobinList<T> implements Iterable<T> {
     }
 
     public void newIterator(List<T> list) {
-        this.list = Objects.requireNonNull(list, "list");
+        this.list = new ArrayList<>(Objects.requireNonNull(list, "list"));
 
-        index = 0;
+        index.set(0);
         this.iterator = new Iterator<>() {
             @Override
             public boolean hasNext() {
@@ -58,16 +60,8 @@ public final class RoundRobinList<T> implements Iterable<T> {
 
             @Override
             public T next() {
-                try {
-                    // If Index size has reached List size, set it to zero.
-                    // Else, get the element from list as per latest Index count.
-                    if (index >= list.size()) {
-                        index = 0;
-                    }
-                    return list.get(index);
-                } finally {
-                    index++;
-                }
+                index.compareAndSet(list.size(), 0);
+                return list.get(index.getAndIncrement());
             }
 
             @Override
