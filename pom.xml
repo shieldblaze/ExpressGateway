@@ -84,7 +84,7 @@ along with ShieldBlaze ExpressGateway.  If not, see <https://www.gnu.org/license
         <dependency>
             <groupId>io.netty</groupId>
             <artifactId>netty-all</artifactId>
-            <version>4.1.54.Final-SNAPSHOT</version>
+            <version>4.1.54.Final</version>
         </dependency>
 
         <!-- https://mvnrepository.com/artifact/io.netty/netty-tcnative -->
