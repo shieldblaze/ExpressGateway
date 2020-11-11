@@ -37,7 +37,7 @@ public final class WeightedRandom extends L4Balance implements EventListener {
     private final java.util.Random RANDOM_INSTANCE = new java.util.Random();
 
     private final TreeRangeMap<Integer, Backend> backendsMap = TreeRangeMap.create();
-    private int totalWeight = 0;
+    private int totalWeight;
 
     public WeightedRandom() {
         super(new NOOPSessionPersistence());
@@ -55,11 +55,12 @@ public final class WeightedRandom extends L4Balance implements EventListener {
     @Override
     public void setCluster(Cluster cluster) {
         super.setCluster(cluster);
-        reset();
+        init();
         cluster.subscribeStream(this);
     }
 
-    private void reset() {
+    private void init() {
+        totalWeight = 0;
         sessionPersistence.clear();
         backendsMap.clear();
         cluster.getOnlineBackends().forEach(backend -> backendsMap.put(Range.closed(totalWeight, totalWeight += backend.getWeight()), backend));
@@ -86,7 +87,7 @@ public final class WeightedRandom extends L4Balance implements EventListener {
             // backend to return so we will throw exception.
             throw new BackendNotOnlineException("No Backend available for Cluster: " + cluster);
         } else if (backend.getState() != State.ONLINE) {
-            reset(); // We'll reset the mapping because it could be outdated.
+            init(); // We'll reset the mapping because it could be outdated.
 
             // If selected Backend is not online then
             // we'll throw an exception.
@@ -106,7 +107,7 @@ public final class WeightedRandom extends L4Balance implements EventListener {
                 case ONLINE:
                 case OFFLINE:
                 case REMOVED:
-                    reset();
+                    init();
                 default:
                     throw new IllegalArgumentException("Unsupported Backend Event Type: " + backendEvent.getType());
             }

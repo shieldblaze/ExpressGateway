@@ -23,6 +23,7 @@ import com.shieldblaze.expressgateway.backend.Backend;
 import com.shieldblaze.expressgateway.backend.State;
 import com.shieldblaze.expressgateway.backend.cluster.Cluster;
 import com.shieldblaze.expressgateway.backend.events.BackendEvent;
+import com.shieldblaze.expressgateway.common.algo.roundrobin.RoundRobinIndexGenerator;
 import com.shieldblaze.expressgateway.common.eventstream.EventListener;
 import com.shieldblaze.expressgateway.backend.loadbalance.SessionPersistence;
 import com.shieldblaze.expressgateway.loadbalance.exceptions.BackendNotOnlineException;
@@ -35,9 +36,9 @@ import com.shieldblaze.expressgateway.loadbalance.exceptions.NoBackendAvailableE
 @SuppressWarnings("UnstableApiUsage")
 public final class WeightedRoundRobin extends HTTPBalance implements EventListener {
 
-    private int index = 0;
+    private RoundRobinIndexGenerator roundRobinIndexGenerator;
     private final TreeRangeMap<Integer, Backend> backendsMap = TreeRangeMap.create();
-    private int totalWeight = 0;
+    private int totalWeight;
 
     public WeightedRoundRobin() {
         super(new NOOPSessionPersistence());
@@ -55,13 +56,15 @@ public final class WeightedRoundRobin extends HTTPBalance implements EventListen
     @Override
     public void setCluster(Cluster cluster) {
         super.setCluster(cluster);
-        reset();
+        init();
         cluster.subscribeStream(this);
     }
 
-    private void reset() {
+    private void init() {
+        totalWeight = 0;
         sessionPersistence.clear();
         cluster.getOnlineBackends().forEach(backend -> this.backendsMap.put(Range.closed(totalWeight, totalWeight += backend.getWeight()), backend));
+        roundRobinIndexGenerator = new RoundRobinIndexGenerator(totalWeight);
     }
 
     @Override
@@ -77,25 +80,20 @@ public final class WeightedRoundRobin extends HTTPBalance implements EventListen
             }
         }
 
-        if (index >= totalWeight) {
-            index = 0;
-        }
-
-        Backend backend = backendsMap.get(index);
+        Backend backend = backendsMap.get(roundRobinIndexGenerator.next());
 
         if (backend == null) {
             // If Backend is `null` then we don't have any
             // backend to return so we will throw exception.
             throw new NoBackendAvailableException("No Backend available for Cluster: " + cluster);
         } else if (backend.getState() != State.ONLINE) {
-            reset(); // We'll reset the mapping because it could be outdated.
+            init(); // We'll reset the mapping because it could be outdated.
 
             // If selected Backend is not online then
             // we'll throw an exception.
             throw new BackendNotOnlineException("Randomly selected Backend is not online");
         }
 
-        index++;
         return sessionPersistence.addRoute(request, backend);
     }
 
@@ -108,7 +106,7 @@ public final class WeightedRoundRobin extends HTTPBalance implements EventListen
                 case ONLINE:
                 case OFFLINE:
                 case REMOVED:
-                    reset();
+                    init();
                 default:
                     throw new IllegalArgumentException("Unsupported Backend Event Type: " + backendEvent.getType());
             }

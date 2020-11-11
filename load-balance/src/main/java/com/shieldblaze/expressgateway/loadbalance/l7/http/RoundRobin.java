@@ -42,7 +42,8 @@ public final class RoundRobin extends HTTPBalance implements EventListener {
         this(new NOOPSessionPersistence(), cluster);
     }
 
-    public RoundRobin(SessionPersistence<HTTPBalanceResponse, HTTPBalanceResponse, HTTPBalanceRequest, Backend> sessionPersistence, Cluster cluster) {
+    public RoundRobin(SessionPersistence<HTTPBalanceResponse, HTTPBalanceResponse, HTTPBalanceRequest, Backend> sessionPersistence,
+                      Cluster cluster) {
         super(sessionPersistence);
         setCluster(cluster);
     }
@@ -67,7 +68,7 @@ public final class RoundRobin extends HTTPBalance implements EventListener {
             }
         }
 
-        Backend backend = roundRobinList.iterator().next();
+        Backend backend = roundRobinList.next();
 
         // If Backend is `null` then we don't have any
         // backend to return so we will throw exception.
@@ -87,7 +88,7 @@ public final class RoundRobin extends HTTPBalance implements EventListener {
                 case ONLINE:
                 case OFFLINE:
                 case REMOVED:
-                    roundRobinList.newIterator(cluster.getOnlineBackends());
+                    roundRobinList.init(cluster.getOnlineBackends());
                     sessionPersistence.clear();
                 default:
                     throw new IllegalArgumentException("Unsupported Backend Event Type: " + backendEvent.getType());

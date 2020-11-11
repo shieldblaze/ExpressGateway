@@ -69,7 +69,7 @@ public final class RoundRobin extends L4Balance implements EventListener {
             }
         }
 
-        backend = roundRobinList.iterator().next();
+        backend = roundRobinList.next();
 
         // If Backend is `null` then we don't have any
         // backend to return so we will throw exception.
@@ -90,7 +90,7 @@ public final class RoundRobin extends L4Balance implements EventListener {
                 case ONLINE:
                 case OFFLINE:
                 case REMOVED:
-                    roundRobinList.newIterator(cluster.getOnlineBackends());
+                    roundRobinList.init(cluster.getOnlineBackends());
                     sessionPersistence.clear();
                 default:
                     throw new IllegalArgumentException("Unsupported Backend Event Type: " + backendEvent.getType());
