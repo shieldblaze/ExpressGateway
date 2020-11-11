@@ -17,63 +17,33 @@
  */
 package com.shieldblaze.expressgateway.common.list;
 
-import javax.annotation.Nonnull;
+import com.shieldblaze.expressgateway.common.algo.roundrobin.RoundRobinIndexGenerator;
+
 import java.util.ArrayList;
-import java.util.Collections;
-import java.util.Iterator;
 import java.util.List;
 import java.util.Objects;
-import java.util.concurrent.atomic.AtomicInteger;
 
 /**
  * Round-Robin List Implementation
  */
-public final class RoundRobinList<T> implements Iterable<T> {
+public final class RoundRobinList<T> {
     private List<T> list;
-    private Iterator<T> iterator;
-    private final AtomicInteger index = new AtomicInteger(0);
-
-    public RoundRobinList() {
-        this(Collections.emptyList());
-    }
+    private RoundRobinIndexGenerator roundRobinIndexGenerator;
 
     public RoundRobinList(List<T> list) {
-        newIterator(list);
+        init(list);
     }
 
-    @Nonnull
-    @Override
-    public Iterator<T> iterator() {
-        return iterator;
+    public T next() {
+        return list.get(roundRobinIndexGenerator.next());
     }
 
-    public void newIterator(List<T> list) {
-        this.list = new ArrayList<>(Objects.requireNonNull(list, "list"));
-
-        index.set(0);
-        this.iterator = new Iterator<>() {
-            @Override
-            public boolean hasNext() {
-                // Because it's round-robin
-                return true;
-            }
-
-            @Override
-            public T next() {
-                index.compareAndSet(list.size(), 0);
-                return list.get(index.getAndIncrement());
-            }
-
-            @Override
-            public void remove() {
-                // We don't support removal of elements
-                // because we're just a Round-Robin Iterator.
-                throw new UnsupportedOperationException();
-            }
-        };
+    public void init(List<T> list) {
+        this.list = new ArrayList<>(Objects.requireNonNull(list, "List"));
+        roundRobinIndexGenerator = new RoundRobinIndexGenerator(list);
     }
 
-    public List<T> getList() {
+    public List<T> list() {
         return list;
     }
 }

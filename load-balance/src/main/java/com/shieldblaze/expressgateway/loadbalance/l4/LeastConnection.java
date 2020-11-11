@@ -29,6 +29,7 @@ import com.shieldblaze.expressgateway.loadbalance.exceptions.NoBackendAvailableE
 
 import java.net.InetSocketAddress;
 import java.util.Optional;
+import java.util.OptionalInt;
 
 /**
  * Select {@link Backend} with least connections with Round-Robin.
@@ -75,17 +76,23 @@ public final class LeastConnection extends L4Balance implements EventListener {
         }
 
         // Get Number Of Maximum Connection on a Backend
-        int currentMaxConnections = roundRobinList.getList().stream()
+        int currentMaxConnections;
+        OptionalInt optionalInt = roundRobinList.list().stream()
                 .mapToInt(Backend::getActiveConnections)
-                .max()
-                .getAsInt();
+                .max();
+
+        if (optionalInt.isPresent()) {
+            currentMaxConnections = optionalInt.getAsInt();
+        } else {
+            currentMaxConnections = 0;
+        }
 
         // Check If we got any Backend which has less Number of Connections than Backend with Maximum Connection
-        Optional<Backend> optionalBackend = roundRobinList.getList().stream()
+        Optional<Backend> optionalBackend = roundRobinList.list().stream()
                 .filter(back -> back.getActiveConnections() < currentMaxConnections)
                 .findFirst();
 
-        backend = optionalBackend.orElseGet(() -> roundRobinList.iterator().next());
+        backend = optionalBackend.orElseGet(() -> roundRobinList.next());
 
         // If Backend is `null` then we don't have any
         // backend to return so we will throw exception.
@@ -106,7 +113,7 @@ public final class LeastConnection extends L4Balance implements EventListener {
                 case ONLINE:
                 case OFFLINE:
                 case REMOVED:
-                    roundRobinList.newIterator(cluster.getOnlineBackends());
+                    roundRobinList.init(cluster.getOnlineBackends());
                     sessionPersistence.clear();
                 default:
                     throw new IllegalArgumentException("Unsupported Backend Event Type: " + backendEvent.getType());
