@@ -29,18 +29,18 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 
 class WeightedLeastConnectionTest {
 
-    private static Backend fastBuild(String host, int weight) {
-        return new Backend(new InetSocketAddress(host, 1), weight, 1);
+    private static Backend fastBuild(String host, int maxconnections) {
+        return new Backend(new InetSocketAddress(host, 1), 1, maxconnections);
     }
 
     @Test
     void testWeightedLeastConnection() throws LoadBalanceException {
         Cluster cluster = ClusterPool.of(
                 "localhost.domain",
-                fastBuild("10.10.1.1", 10),
-                fastBuild("10.10.1.2", 20),
-                fastBuild("10.10.1.3", 30),
-                fastBuild("10.10.1.4", 40)
+                fastBuild("10.10.1.1", 100_000),
+                fastBuild("10.10.1.2", 200_000),
+                fastBuild("10.10.1.3", 300_000),
+                fastBuild("10.10.1.4", 400_000)
         );
 
         int first = 0;
@@ -51,7 +51,7 @@ class WeightedLeastConnectionTest {
         L4Balance l4Balance = new WeightedLeastConnection(cluster);
         L4Request l4Request = new L4Request(new InetSocketAddress("192.168.1.1", 1));
 
-        for (int i = 0; i < 1000000; i++) {
+        for (int i = 0; i < 1_000_000; i++) {
             Backend backend = l4Balance.getResponse(l4Request).getBackend();
             backend.incConnections();
             switch (backend.getSocketAddress().getHostString()) {
@@ -76,9 +76,9 @@ class WeightedLeastConnectionTest {
             }
         }
 
-        assertEquals(100000, first);
-        assertEquals(200000, second);
-        assertEquals(300000, third);
-        assertEquals(400000, forth);
+        assertEquals(100_000, first);
+        assertEquals(200_000, second);
+        assertEquals(300_000, third);
+        assertEquals(400_000, forth);
     }
 }

@@ -26,6 +26,7 @@ import com.shieldblaze.expressgateway.common.list.RoundRobinList;
 import com.shieldblaze.expressgateway.backend.loadbalance.SessionPersistence;
 import com.shieldblaze.expressgateway.backend.exceptions.LoadBalanceException;
 import com.shieldblaze.expressgateway.loadbalance.exceptions.NoBackendAvailableException;
+import com.shieldblaze.expressgateway.loadbalance.l7.http.sessionpersistence.NOOPSessionPersistence;
 
 /**
  * Select {@link Backend} based on Round-Robin

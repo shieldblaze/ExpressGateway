@@ -5,6 +5,7 @@ import com.shieldblaze.expressgateway.backend.State;
 import com.shieldblaze.expressgateway.backend.cluster.Cluster;
 import com.shieldblaze.expressgateway.backend.exceptions.LoadBalanceException;
 import com.shieldblaze.expressgateway.loadbalance.exceptions.NoBackendAvailableException;
+import com.shieldblaze.expressgateway.loadbalance.l4.sessionpersistence.NOOPSessionPersistence;
 
 /**
  * Select a single {@link Backend}. Used for NAT-Forwarding purpose.

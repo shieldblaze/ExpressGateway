@@ -17,30 +17,27 @@
  */
 package com.shieldblaze.expressgateway.loadbalance.l4;
 
-import com.google.common.collect.Range;
-import com.google.common.collect.TreeRangeMap;
 import com.shieldblaze.expressgateway.backend.Backend;
 import com.shieldblaze.expressgateway.backend.State;
 import com.shieldblaze.expressgateway.backend.cluster.Cluster;
 import com.shieldblaze.expressgateway.backend.events.BackendEvent;
+import com.shieldblaze.expressgateway.backend.exceptions.LoadBalanceException;
 import com.shieldblaze.expressgateway.common.eventstream.EventListener;
 import com.shieldblaze.expressgateway.backend.loadbalance.SessionPersistence;
+import com.shieldblaze.expressgateway.loadbalance.exceptions.NoBackendAvailableException;
+import com.shieldblaze.expressgateway.loadbalance.l4.sessionpersistence.NOOPSessionPersistence;
 
 import java.net.InetSocketAddress;
-import java.util.HashMap;
-import java.util.Map;
-import java.util.Map.Entry;
+import java.util.ArrayList;
+import java.util.List;
+import java.util.Optional;
 
 /**
  * Select {@link Backend} Based on Weight with Least Connection using Round-Robin
  */
-@SuppressWarnings("UnstableApiUsage")
 public final class WeightedLeastConnection extends L4Balance implements EventListener {
 
-    private final TreeRangeMap<Integer, Backend> backendsMap = TreeRangeMap.create();
-    private final Map<Backend, Integer> localConnectionMap = new HashMap<>();
-    private int index = 0;
-    private int totalWeight = 0;
+    private final List<Backend> backends = new ArrayList<>();
 
     public WeightedLeastConnection() {
         super(new NOOPSessionPersistence());
@@ -58,26 +55,19 @@ public final class WeightedLeastConnection extends L4Balance implements EventLis
     @Override
     public void setCluster(Cluster cluster) {
         super.setCluster(cluster);
-        reset();
+        init();
         cluster.subscribeStream(this);
     }
 
-    private void reset() {
-        index = 0;
-        totalWeight = 0;
-
-        backendsMap.clear();
-        localConnectionMap.clear();
+    private void init() {
         sessionPersistence.clear();
+        backends.clear();
 
-        cluster.getOnlineBackends().forEach(backend -> {
-            backendsMap.put(Range.closed(totalWeight, totalWeight += backend.getWeight()), backend);
-            localConnectionMap.put(backend, 0);
-        });
+        backends.addAll(cluster.getOnlineBackends());
     }
 
     @Override
-    public L4Response getResponse(L4Request l4Request) {
+    public L4Response getResponse(L4Request l4Request) throws LoadBalanceException {
         Backend backend = sessionPersistence.getBackend(l4Request);
         if (backend != null) {
             // If Backend is ONLINE then return the response
@@ -89,23 +79,15 @@ public final class WeightedLeastConnection extends L4Balance implements EventLis
             }
         }
 
-        if (index >= totalWeight) {
-            localConnectionMap.replaceAll((b, i) -> i = 0);
-            index = 0;
-        }
+        Optional<Backend> optionalBackend = backends.stream()
+                .reduce((a, b) -> a.load() < b.load() ? a : b);
 
-        Entry<Range<Integer>, Backend> backendEntry = backendsMap.getEntry(index);
-        index++;
-        Integer connections = localConnectionMap.get(backendEntry.getValue());
-
-        if (connections >= backendEntry.getKey().upperEndpoint()) {
-            localConnectionMap.put(backendEntry.getValue(), 0);
-            index = backendEntry.getKey().upperEndpoint();
+        if (optionalBackend.isPresent()) {
+            backend = optionalBackend.get();
         } else {
-            localConnectionMap.put(backendEntry.getValue(), connections + 1);
+            throw new NoBackendAvailableException();
         }
-
-        backend = backendEntry.getValue();
+;
         sessionPersistence.addRoute(l4Request.getSocketAddress(), backend);
         return new L4Response(backend);
     }
@@ -119,7 +101,7 @@ public final class WeightedLeastConnection extends L4Balance implements EventLis
                 case ONLINE:
                 case OFFLINE:
                 case REMOVED:
-                   reset();
+                   init();
                 default:
                     throw new IllegalArgumentException("Unsupported Backend Event Type: " + backendEvent.getType());
             }

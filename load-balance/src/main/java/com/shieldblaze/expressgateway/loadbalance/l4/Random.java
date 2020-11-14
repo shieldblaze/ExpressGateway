@@ -26,6 +26,7 @@ import com.shieldblaze.expressgateway.common.eventstream.EventListener;
 import com.shieldblaze.expressgateway.backend.exceptions.LoadBalanceException;
 import com.shieldblaze.expressgateway.backend.loadbalance.SessionPersistence;
 import com.shieldblaze.expressgateway.loadbalance.exceptions.NoBackendAvailableException;
+import com.shieldblaze.expressgateway.loadbalance.l4.sessionpersistence.NOOPSessionPersistence;
 
 import java.net.InetSocketAddress;
 
