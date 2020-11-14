@@ -63,6 +63,7 @@ along with ShieldBlaze ExpressGateway.  If not, see <https://www.gnu.org/license
         <module>common</module>
         <module>security</module>
         <module>configuration</module>
+        <module>shaded-dependencies</module>
     </modules>
 
     <repositories>
