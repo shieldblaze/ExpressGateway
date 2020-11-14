@@ -61,6 +61,12 @@ along with ShieldBlaze ExpressGateway.  If not, see <https://www.gnu.org/license
         </dependency>
 
         <dependency>
+            <groupId>com.shieldblaze</groupId>
+            <artifactId>expressgateway-shaded-dependencies</artifactId>
+            <version>0.0.1-a</version>
+        </dependency>
+
+        <dependency>
             <groupId>com.aayushatharva.brotli4j</groupId>
             <artifactId>brotli4j</artifactId>
             <version>1.1.0</version>
