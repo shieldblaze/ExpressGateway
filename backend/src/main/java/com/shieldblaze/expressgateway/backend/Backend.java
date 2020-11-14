@@ -21,6 +21,7 @@ import com.shieldblaze.expressgateway.backend.cluster.Cluster;
 import com.shieldblaze.expressgateway.backend.exceptions.TooManyConnectionsException;
 import com.shieldblaze.expressgateway.backend.healthcheckmanager.HealthCheckManager;
 import com.shieldblaze.expressgateway.backend.pool.Connection;
+import com.shieldblaze.expressgateway.common.Math;
 import com.shieldblaze.expressgateway.common.concurrent.GlobalExecutors;
 import com.shieldblaze.expressgateway.common.crypto.Hasher;
 import com.shieldblaze.expressgateway.healthcheck.Health;
@@ -266,6 +267,13 @@ public class Backend implements Comparable<Backend>, Closeable {
 
     public String getHash() {
         return hash;
+    }
+
+    public float load() {
+        if (getActiveConnections() == 0) {
+            return 0;
+        }
+        return Math.percentage(activeConnections, maxConnections);
     }
 
     /**

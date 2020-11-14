@@ -27,6 +27,7 @@ import com.shieldblaze.expressgateway.common.algo.roundrobin.RoundRobinIndexGene
 import com.shieldblaze.expressgateway.common.eventstream.EventListener;
 import com.shieldblaze.expressgateway.backend.loadbalance.SessionPersistence;
 import com.shieldblaze.expressgateway.loadbalance.exceptions.BackendNotOnlineException;
+import com.shieldblaze.expressgateway.loadbalance.l4.sessionpersistence.NOOPSessionPersistence;
 
 import java.net.InetSocketAddress;
 
