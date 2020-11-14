@@ -28,5 +28,12 @@
     <modelVersion>4.0.0</modelVersion>
 
     <artifactId>expressgateway-shaded-dependencies</artifactId>
+    <packaging>jar</packaging>
+
+    <name>ExpressGateway/Shaded-Dependencies</name>
+
+    <properties>
+        <javaModuleName>com.shieldblaze.expressgateway.shadeddependencies</javaModuleName>
+    </properties>
 
 </project>
