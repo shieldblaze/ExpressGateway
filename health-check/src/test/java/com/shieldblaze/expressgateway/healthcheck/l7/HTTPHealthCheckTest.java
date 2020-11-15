@@ -29,11 +29,11 @@ final class HTTPHealthCheckTest {
 
     @Test
     void testPass() throws Exception {
-        new HTTPServer("200 OK").start();
+        new HTTPServer("200 OK", 10000).start();
 
         Thread.sleep(1000L);
 
-        HTTPHealthCheck httpHealthCheck = new HTTPHealthCheck(URI.create("http://127.0.0.1:9111"), Duration.ofSeconds(5), false);
+        HTTPHealthCheck httpHealthCheck = new HTTPHealthCheck(URI.create("http://127.0.0.1:10000"), Duration.ofSeconds(5), false);
         httpHealthCheck.run();
 
         assertEquals(Health.GOOD, httpHealthCheck.health());
@@ -41,11 +41,11 @@ final class HTTPHealthCheckTest {
 
     @Test
     void testFail() throws Exception {
-        new HTTPServer("500 Internal Server Error").start();
+        new HTTPServer("500 Internal Server Error", 10001).start();
 
         Thread.sleep(1000L);
 
-        HTTPHealthCheck httpHealthCheck = new HTTPHealthCheck(URI.create("http://127.0.0.1:9111"), Duration.ofSeconds(5), false);
+        HTTPHealthCheck httpHealthCheck = new HTTPHealthCheck(URI.create("http://127.0.0.1:10001"), Duration.ofSeconds(5), false);
         httpHealthCheck.run();
 
         assertEquals(Health.BAD, httpHealthCheck.health());

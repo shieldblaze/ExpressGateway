@@ -67,8 +67,7 @@ public final class HTTPHealthCheck extends HealthCheck {
     private final HttpClient httpClient;
     private final URI uri;
 
-    public HTTPHealthCheck(URI uri, Duration timeout, boolean disableTLSValidation) throws KeyStoreException, NoSuchAlgorithmException,
-            KeyManagementException {
+    public HTTPHealthCheck(URI uri, Duration timeout, boolean disableTLSValidation) throws NoSuchAlgorithmException, KeyManagementException {
         super(new InetSocketAddress(uri.getHost(), uri.getPort()), timeout);
         this.uri = uri;
 
@@ -81,18 +80,14 @@ public final class HTTPHealthCheck extends HealthCheck {
         httpClient = builder.followRedirects(HttpClient.Redirect.NEVER)
                 .connectTimeout(timeout)
                 .build();
-
-
     }
 
     @Override
     public void run() {
         try {
-
             HttpRequest request = HttpRequest.newBuilder()
                     .GET()
                     .setHeader("User-Agent", "ExpressGateway HealthCheck Agent")
-                    .setHeader("Connection", "Close")
                     .uri(uri)
                     .build();
 
