@@ -42,13 +42,13 @@ public final class StickySession implements SessionPersistence<HTTPBalanceRespon
     private final List<Backend> backends = new CopyOnWriteArrayList<>();
 
     @Override
-    public HTTPBalanceResponse getBackend(Request request) {
+    public HTTPBalanceResponse backend(Request request) {
         return getBackend((HTTPBalanceRequest) request);
     }
 
     public HTTPBalanceResponse getBackend(HTTPBalanceRequest httpBalanceRequest) {
-        if (httpBalanceRequest.getHTTPHeaders().contains(HttpHeaderNames.COOKIE)) {
-            List<String> cookies = httpBalanceRequest.getHTTPHeaders().getAllAsString(HttpHeaderNames.COOKIE);
+        if (httpBalanceRequest.httpHeaders().contains(HttpHeaderNames.COOKIE)) {
+            List<String> cookies = httpBalanceRequest.httpHeaders().getAllAsString(HttpHeaderNames.COOKIE);
             for (String cookieAsString : cookies) {
                 Cookie cookie = ClientCookieDecoder.STRICT.decode(cookieAsString);
                 if (cookie.name().equalsIgnoreCase(COOKIE_NAME)) {
@@ -68,8 +68,8 @@ public final class StickySession implements SessionPersistence<HTTPBalanceRespon
 
     @Override
     public HTTPBalanceResponse addRoute(HTTPBalanceRequest httpBalanceRequest, Backend backend) {
-        DefaultCookie cookie = new DefaultCookie(COOKIE_NAME, String.valueOf(backend.getHash()));
-        cookie.setDomain(backend.getCluster().getHostname());
+        DefaultCookie cookie = new DefaultCookie(COOKIE_NAME, String.valueOf(backend.hash()));
+        cookie.setDomain(backend.cluster().hostname());
         cookie.setPath("/");
         cookie.setHttpOnly(true);
         cookie.setSameSite(CookieHeaderNames.SameSite.Strict);

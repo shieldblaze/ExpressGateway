@@ -64,7 +64,7 @@ final class DownstreamHandler extends ChannelInboundHandlerAdapter {
         if (logger.isInfoEnabled()) {
             logger.info("Closing Upstream {} and Downstream {} Channel",
                     connection.clientAddress.getAddress().getHostAddress() + ":" + connection.clientAddress.getPort(),
-                    connection.backend.getSocketAddress().getAddress().getHostAddress() + ":" + connection.backend.getSocketAddress().getPort());
+                    connection.backend.socketAddress().getAddress().getHostAddress() + ":" + connection.backend.socketAddress().getPort());
         }
 
         connection.connectionActive.set(false); // Mark the Connection as inactive

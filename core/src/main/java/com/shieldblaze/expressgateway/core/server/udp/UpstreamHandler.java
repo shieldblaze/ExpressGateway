@@ -70,7 +70,7 @@ final class UpstreamHandler extends ChannelInboundHandlerAdapter {
             if (connection == null) {
                 Backend backend;
                 try {
-                    backend = l4Balance.getResponse(new L4Request(datagramPacket.sender())).getBackend();
+                    backend = l4Balance.response(new L4Request(datagramPacket.sender())).backend();
                 } catch (LoadBalanceException e) {
                     // Handle this
                     return;

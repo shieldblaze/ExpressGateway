@@ -80,8 +80,8 @@ final class Bootstrapper {
                         logger.error(e);
                     }
                 } else {
-                    String hostname = backend.getSocketAddress().getHostName();
-                    int port = backend.getSocketAddress().getPort();
+                    String hostname = backend.socketAddress().getHostName();
+                    int port = backend.socketAddress().getPort();
                     SslHandler sslHandler = httpLoadBalancer.tlsClient().defaultMapping().sslContext().newHandler(ch.alloc(), hostname, port);
 
                     ALPNHandler alpnHandler = ALPNHandlerBuilder.newBuilder()
@@ -102,7 +102,7 @@ final class Bootstrapper {
             }
         });
 
-        ChannelFuture channelFuture = bootstrap.connect(backend.getSocketAddress());
+        ChannelFuture channelFuture = bootstrap.connect(backend.socketAddress());
         httpConnection.init(channelFuture);
         return httpConnection;
     }

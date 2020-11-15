@@ -48,20 +48,20 @@ class StickySessionTest {
             HTTPBalanceRequest httpBalanceRequest = new HTTPBalanceRequest(socketAddress, EmptyHttpHeaders.INSTANCE);
 
             RoundRobin roundRobin = new RoundRobin(new StickySession(), cluster);
-            HTTPBalanceResponse httpBalanceResponse = roundRobin.getResponse(httpBalanceRequest);
-            assertEquals(cluster.get(0), httpBalanceResponse.getBackend());
+            HTTPBalanceResponse httpBalanceResponse = roundRobin.response(httpBalanceRequest);
+            assertEquals(cluster.get(0), httpBalanceResponse.backend());
 
             httpBalanceRequest = new HTTPBalanceRequest(socketAddress, httpBalanceResponse.getHTTPHeaders());
-            httpBalanceResponse = roundRobin.getResponse(httpBalanceRequest);
-            assertEquals(cluster.get(1), httpBalanceResponse.getBackend());
+            httpBalanceResponse = roundRobin.response(httpBalanceRequest);
+            assertEquals(cluster.get(1), httpBalanceResponse.backend());
 
             httpBalanceRequest = new HTTPBalanceRequest(socketAddress, httpBalanceResponse.getHTTPHeaders());
-            httpBalanceResponse = roundRobin.getResponse(httpBalanceRequest);
-            assertEquals(cluster.get(2), httpBalanceResponse.getBackend());
+            httpBalanceResponse = roundRobin.response(httpBalanceRequest);
+            assertEquals(cluster.get(2), httpBalanceResponse.backend());
 
             httpBalanceRequest = new HTTPBalanceRequest(socketAddress, httpBalanceResponse.getHTTPHeaders());
-            httpBalanceResponse = roundRobin.getResponse(httpBalanceRequest);
-            assertEquals(cluster.get(3), httpBalanceResponse.getBackend());
+            httpBalanceResponse = roundRobin.response(httpBalanceRequest);
+            assertEquals(cluster.get(3), httpBalanceResponse.backend());
         }
     }
 }

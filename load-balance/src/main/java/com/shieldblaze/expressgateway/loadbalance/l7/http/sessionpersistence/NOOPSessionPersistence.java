@@ -30,7 +30,7 @@ import io.netty.handler.codec.http.EmptyHttpHeaders;
 public final class NOOPSessionPersistence implements SessionPersistence<HTTPBalanceResponse, HTTPBalanceResponse, HTTPBalanceRequest, Backend> {
 
     @Override
-    public HTTPBalanceResponse getBackend(Request request) {
+    public HTTPBalanceResponse backend(Request request) {
         return null;
     }
 

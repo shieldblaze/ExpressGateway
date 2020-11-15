@@ -61,7 +61,7 @@ public abstract class Cluster {
      *
      * @return Hostname as {@link String}
      */
-    public String getHostname() {
+    public String hostname() {
         return hostname;
     }
 
@@ -71,7 +71,7 @@ public abstract class Cluster {
      * @param hostname Name as {@link String}
      * @throws IllegalArgumentException If hostname is invalid
      */
-    public void setHostname(String hostname) {
+    public void hostname(String hostname) {
         this.hostname = Objects.requireNonNull(hostname, "hostname");
     }
 
@@ -80,7 +80,7 @@ public abstract class Cluster {
      *
      * @return Name as {@link String}
      */
-    public String getName() {
+    public String name() {
         return name;
     }
 
@@ -89,7 +89,7 @@ public abstract class Cluster {
      *
      * @param name Name as {@link String}
      */
-    public void setName(String name) {
+    public void name(String name) {
         this.name = Objects.requireNonNull(name, "name");
     }
 
@@ -98,15 +98,15 @@ public abstract class Cluster {
      */
     protected void addBackend(Backend backend) {
         allBackends.add(Objects.requireNonNull(backend, "backend"));
-        backend.setCluster(this);
+        backend.cluster(this);
     }
 
     /**
      * Get {@linkplain List} of online {@linkplain Backend} in this {@linkplain Cluster}
      */
-    public List<Backend> getOnlineBackends() {
+    public List<Backend> onlineBackends() {
         return allBackends.stream()
-                .filter(backend -> backend.getState() == State.ONLINE)
+                .filter(backend -> backend.state() == State.ONLINE)
                 .collect(Collectors.toList());
     }
 
@@ -120,9 +120,9 @@ public abstract class Cluster {
      * @param index Index
      * @return {@linkplain Backend} Instance if found else {@code null}
      */
-    public Backend getOnline(int index) throws BackendNotOnlineException {
+    public Backend online(int index) throws BackendNotOnlineException {
         Backend backend = allBackends.get(index);
-        if (backend.getState() != State.ONLINE) {
+        if (backend.state() != State.ONLINE) {
             throw new BackendNotOnlineException(backend);
         }
         return backend;
@@ -139,7 +139,7 @@ public abstract class Cluster {
      * Get number of Online {@linkplain Backend} in this {@linkplain Cluster}
      */
     public int online() {
-        return (int) allBackends.stream().filter(backend -> backend.getState() == State.ONLINE).count();
+        return (int) allBackends.stream().filter(backend -> backend.state() == State.ONLINE).count();
     }
 
     /**

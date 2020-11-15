@@ -29,13 +29,13 @@ public final class SingleBackendCluster extends Cluster {
     private static final AtomicInteger count = new AtomicInteger();
 
     private SingleBackendCluster(String name, String hostname, Backend backend) {
-        setName(name);
-        setHostname(hostname);
+        name(name);
+        hostname(hostname);
         addBackend(backend);
     }
 
     public static SingleBackendCluster of(Backend backend) {
-        return new SingleBackendCluster("SingleBackendCluster#" + count.getAndIncrement(), backend.getSocketAddress().getHostName(), backend);
+        return new SingleBackendCluster("SingleBackendCluster#" + count.getAndIncrement(), backend.socketAddress().getHostName(), backend);
     }
 
     public static SingleBackendCluster of(String hostname, Backend backend) {

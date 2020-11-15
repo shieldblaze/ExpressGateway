@@ -65,8 +65,8 @@ public final class UpstreamHandler extends ChannelDuplexHandler {
 
             InetSocketAddress upstreamAddress = (InetSocketAddress) ctx.channel().remoteAddress();
             HTTPBalanceRequest balanceRequest = new HTTPBalanceRequest(upstreamAddress, request.headers());
-            HTTPBalanceResponse balanceResponse = httpBalance.getResponse(balanceRequest);
-            Backend backend = balanceResponse.getBackend();
+            HTTPBalanceResponse balanceResponse = httpBalance.response(balanceRequest);
+            Backend backend = balanceResponse.backend();
 
             HTTPConnection connection = (HTTPConnection) backend.lease();
             if (connection == null) {
@@ -82,7 +82,7 @@ public final class UpstreamHandler extends ChannelDuplexHandler {
             connectionMap.put(streamHash, connection);
 
             // Modify Request Headers
-            onHeadersRead(request.headers(), streamHash, balanceResponse.getBackend().getCluster().getHostname(), upstreamAddress);
+            onHeadersRead(request.headers(), streamHash, balanceResponse.backend().cluster().hostname(), upstreamAddress);
 
             // Write the request to Backend
             connection.writeAndFlush(msg);

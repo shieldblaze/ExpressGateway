@@ -42,7 +42,7 @@ public final class HTTPBalanceRequest extends Request {
     /**
      * Get Client {@link HttpHeaders}
      */
-    public HttpHeaders getHTTPHeaders() {
+    public HttpHeaders httpHeaders() {
         return httpHeaders;
     }
 }

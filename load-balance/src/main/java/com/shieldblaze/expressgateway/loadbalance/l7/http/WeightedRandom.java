@@ -50,12 +50,12 @@ public final class WeightedRandom extends HTTPBalance implements EventListener {
 
     public WeightedRandom(SessionPersistence<HTTPBalanceResponse, HTTPBalanceResponse, HTTPBalanceRequest, Backend> sessionPersistence, Cluster cluster) {
         super(sessionPersistence);
-        setCluster(cluster);
+        cluster(cluster);
     }
 
     @Override
-    public void setCluster(Cluster cluster) {
-        super.setCluster(cluster);
+    public void cluster(Cluster cluster) {
+        super.cluster(cluster);
         init();
         cluster.subscribeStream(this);
     }
@@ -63,19 +63,19 @@ public final class WeightedRandom extends HTTPBalance implements EventListener {
     private void init() {
         totalWeight = 0;
         sessionPersistence.clear();
-        cluster.getOnlineBackends().forEach(backend -> backendsMap.put(Range.closed(totalWeight, totalWeight += backend.getWeight()), backend));
+        cluster.onlineBackends().forEach(backend -> backendsMap.put(Range.closed(totalWeight, totalWeight += backend.weight()), backend));
     }
 
     @Override
-    public HTTPBalanceResponse getResponse(HTTPBalanceRequest request) throws LoadBalanceException {
-        HTTPBalanceResponse httpBalanceResponse = sessionPersistence.getBackend(request);
+    public HTTPBalanceResponse response(HTTPBalanceRequest request) throws LoadBalanceException {
+        HTTPBalanceResponse httpBalanceResponse = sessionPersistence.backend(request);
         if (httpBalanceResponse != null) {
             // If Backend is ONLINE then return the response
             // else remove it from session persistence.
-            if (httpBalanceResponse.getBackend().getState() == State.ONLINE) {
+            if (httpBalanceResponse.backend().state() == State.ONLINE) {
                 return httpBalanceResponse;
             } else {
-                sessionPersistence.removeRoute(request, httpBalanceResponse.getBackend());
+                sessionPersistence.removeRoute(request, httpBalanceResponse.backend());
             }
         }
 
@@ -86,7 +86,7 @@ public final class WeightedRandom extends HTTPBalance implements EventListener {
             // If Backend is `null` then we don't have any
             // backend to return so we will throw exception.
             throw new NoBackendAvailableException("No Backend available for Cluster: " + cluster);
-        } else if (backend.getState() != State.ONLINE) {
+        } else if (backend.state() != State.ONLINE) {
             init(); // We'll reset the mapping because it our `backendsMap` could be outdated.
 
             // If selected Backend is not online then
@@ -101,14 +101,14 @@ public final class WeightedRandom extends HTTPBalance implements EventListener {
     public void accept(Object event) {
         if (event instanceof BackendEvent) {
             BackendEvent backendEvent = (BackendEvent) event;
-            switch (backendEvent.getType()) {
+            switch (backendEvent.type()) {
                 case ADDED:
                 case ONLINE:
                 case OFFLINE:
                 case REMOVED:
                     init();
                 default:
-                    throw new IllegalArgumentException("Unsupported Backend Event Type: " + backendEvent.getType());
+                    throw new IllegalArgumentException("Unsupported Backend Event Type: " + backendEvent.type());
             }
         }
     }

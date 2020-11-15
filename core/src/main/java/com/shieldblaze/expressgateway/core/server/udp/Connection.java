@@ -56,7 +56,7 @@ final class Connection {
 
         Bootstrap bootstrap = BootstrapFactory.getUDP(commonConfiguration, eventLoopFactory.getChildGroup(), byteBufAllocator);
         bootstrap.handler(new DownstreamHandler(clientChannel, clientAddress, this));
-        ChannelFuture channelFuture = bootstrap.connect(backend.getSocketAddress());
+        ChannelFuture channelFuture = bootstrap.connect(backend.socketAddress());
         backendChannel = channelFuture.channel();
 
         int timeout = commonConfiguration.transportConfiguration().connectionIdleTimeout();

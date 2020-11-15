@@ -76,7 +76,7 @@ final class UpstreamHandler extends ChannelInboundHandlerAdapter {
     @Override
     public void channelActive(ChannelHandlerContext ctx) throws LoadBalanceException {
         Bootstrap bootstrap = BootstrapFactory.getTCP(commonConfiguration, eventLoopFactory.getChildGroup(), ctx.alloc());
-        backend = l4Balance.getResponse(new L4Request((InetSocketAddress) ctx.channel().remoteAddress())).getBackend();
+        backend = l4Balance.response(new L4Request((InetSocketAddress) ctx.channel().remoteAddress())).backend();
         bootstrap.handler(new ChannelInitializer<SocketChannel>() {
             @Override
             protected void initChannel(SocketChannel ch) {
@@ -84,8 +84,8 @@ final class UpstreamHandler extends ChannelInboundHandlerAdapter {
                 ch.pipeline().addFirst(new IdleStateHandler(timeout, timeout, timeout));
 
                 if (tlsConfiguration != null) {
-                    String hostname = backend.getSocketAddress().getHostName();
-                    int port = backend.getSocketAddress().getPort();
+                    String hostname = backend.socketAddress().getHostName();
+                    int port = backend.socketAddress().getPort();
                     SslHandler sslHandler = tlsConfiguration.defaultMapping().sslContext().newHandler(ctx.alloc(), hostname, port);
 
                     ch.pipeline().addLast("TLSHandler", sslHandler);
@@ -95,7 +95,7 @@ final class UpstreamHandler extends ChannelInboundHandlerAdapter {
             }
         });
 
-        ChannelFuture channelFuture = bootstrap.connect(backend.getSocketAddress());
+        ChannelFuture channelFuture = bootstrap.connect(backend.socketAddress());
         downstreamChannel = channelFuture.channel();
 
         // Listener for writing Backlog
@@ -149,7 +149,7 @@ final class UpstreamHandler extends ChannelInboundHandlerAdapter {
             } else {
                 logger.info("Closing Upstream {} and Downstream {} Channel",
                         socketAddress.getAddress().getHostAddress() + ":" + socketAddress.getPort(),
-                        backend.getSocketAddress().getAddress().getHostAddress() + ":" + backend.getSocketAddress().getPort());
+                        backend.socketAddress().getAddress().getHostAddress() + ":" + backend.socketAddress().getPort());
             }
         }
 

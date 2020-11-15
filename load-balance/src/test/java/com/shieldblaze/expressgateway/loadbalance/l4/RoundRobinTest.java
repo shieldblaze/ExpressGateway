@@ -42,19 +42,19 @@ class RoundRobinTest {
         L4Request l4Request = new L4Request(new InetSocketAddress("192.168.1.1", 1));
 
         for (int i = 1; i <= 100; i++) {
-            assertEquals(fastBuild("192.168.1." + i).getSocketAddress(), l4Balance.getResponse(l4Request).getBackend().getSocketAddress());
+            assertEquals(fastBuild("192.168.1." + i).socketAddress(), l4Balance.response(l4Request).backend().socketAddress());
         }
 
         for (int i = 1; i <= 100; i++) {
-            assertEquals(fastBuild("192.168.1." + i).getSocketAddress(), l4Balance.getResponse(l4Request).getBackend().getSocketAddress());
+            assertEquals(fastBuild("192.168.1." + i).socketAddress(), l4Balance.response(l4Request).backend().socketAddress());
         }
 
         for (int i = 1; i <= 100; i++) {
-            assertNotEquals(fastBuild("10.10.1." + i).getSocketAddress(), l4Balance.getResponse(l4Request).getBackend().getSocketAddress());
+            assertNotEquals(fastBuild("10.10.1." + i).socketAddress(), l4Balance.response(l4Request).backend().socketAddress());
         }
 
         for (int i = 1; i <= 100; i++) {
-            assertNotEquals(fastBuild("172.16.20." + i).getSocketAddress(), l4Balance.getResponse(l4Request).getBackend().getSocketAddress());
+            assertNotEquals(fastBuild("172.16.20." + i).socketAddress(), l4Balance.response(l4Request).backend().socketAddress());
         }
     }
 

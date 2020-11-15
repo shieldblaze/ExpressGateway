@@ -120,7 +120,7 @@ public final class HTTPLoadBalancerBuilder {
                     tlsServer
             );
         }
-        httpBalance.setCluster(cluster);
+        httpBalance.cluster(cluster);
         httpFrontListener.setL7LoadBalancer(httpLoadBalancer);
         return httpLoadBalancer;
     }

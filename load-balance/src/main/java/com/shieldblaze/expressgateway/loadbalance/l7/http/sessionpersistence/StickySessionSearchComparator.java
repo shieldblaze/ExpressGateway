@@ -33,6 +33,6 @@ final class StickySessionSearchComparator implements Comparator<Object> {
     public int compare(Object o1, Object o2) {
         String key = (String) o1;
         Backend backend = (Backend) o2;
-        return backend.getHash().compareToIgnoreCase(key);
+        return backend.hash().compareToIgnoreCase(key);
     }
 }

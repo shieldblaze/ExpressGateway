@@ -29,7 +29,7 @@ import java.net.InetSocketAddress;
 public final class NOOPSessionPersistence implements SessionPersistence<Backend, Backend, InetSocketAddress, Backend> {
 
     @Override
-    public Backend getBackend(Request request) {
+    public Backend backend(Request request) {
         return null;
     }
 

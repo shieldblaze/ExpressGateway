@@ -37,8 +37,8 @@ public final class FourTupleHash implements SessionPersistence<Backend, Backend,
             new ConcurrentSkipListMap<>(InetSocketAddressHashCodeComparator.INSTANCE), Duration.ofHours(1), false);
 
     @Override
-    public Backend getBackend(Request request) {
-        return routeMap.get(request.getSocketAddress());
+    public Backend backend(Request request) {
+        return routeMap.get(request.socketAddress());
     }
 
     @Override

@@ -20,12 +20,12 @@ public final class NATForward extends L4Balance {
 
     public NATForward(Cluster cluster) {
         super(new NOOPSessionPersistence());
-        setCluster(cluster);
+        cluster(cluster);
     }
 
     @Override
-    public void setCluster(Cluster cluster) {
-        super.setCluster(cluster);
+    public void cluster(Cluster cluster) {
+        super.cluster(cluster);
         if (cluster.size() > 1) {
             throw new IllegalArgumentException("Cluster size cannot be more than 1 (one).");
         }
@@ -33,8 +33,8 @@ public final class NATForward extends L4Balance {
     }
 
     @Override
-    public L4Response getResponse(L4Request l4Request) throws LoadBalanceException {
-         if (l4Response.getBackend().getState() != State.ONLINE) {
+    public L4Response response(L4Request l4Request) throws LoadBalanceException {
+         if (l4Response.backend().state() != State.ONLINE) {
              throw new NoBackendAvailableException("No Backend available for Cluster: " + cluster);
          }
          return l4Response;

@@ -42,41 +42,41 @@ class SourceIPHashTest {
         );
 
         L4Balance l4Balance = new RoundRobin(new SourceIPHash(), cluster);
-        assertEquals(fastBuild("172.16.20.1").getSocketAddress(),
-                l4Balance.getResponse(new L4Request(new InetSocketAddress("192.168.1.1", 1))).getBackend().getSocketAddress());
-        assertEquals(fastBuild("172.16.20.1").getSocketAddress(),
-                l4Balance.getResponse(new L4Request(new InetSocketAddress("192.168.1.23", 1))).getBackend().getSocketAddress());
-        assertEquals(fastBuild("172.16.20.1").getSocketAddress(),
-                l4Balance.getResponse(new L4Request(new InetSocketAddress("192.168.1.84", 1))).getBackend().getSocketAddress());
-        assertEquals(fastBuild("172.16.20.1").getSocketAddress(),
-                l4Balance.getResponse(new L4Request(new InetSocketAddress("192.168.1.251", 1))).getBackend().getSocketAddress());
+        assertEquals(fastBuild("172.16.20.1").socketAddress(),
+                l4Balance.response(new L4Request(new InetSocketAddress("192.168.1.1", 1))).backend().socketAddress());
+        assertEquals(fastBuild("172.16.20.1").socketAddress(),
+                l4Balance.response(new L4Request(new InetSocketAddress("192.168.1.23", 1))).backend().socketAddress());
+        assertEquals(fastBuild("172.16.20.1").socketAddress(),
+                l4Balance.response(new L4Request(new InetSocketAddress("192.168.1.84", 1))).backend().socketAddress());
+        assertEquals(fastBuild("172.16.20.1").socketAddress(),
+                l4Balance.response(new L4Request(new InetSocketAddress("192.168.1.251", 1))).backend().socketAddress());
 
-        assertEquals(fastBuild("172.16.20.2").getSocketAddress(),
-                l4Balance.getResponse(new L4Request(new InetSocketAddress("10.18.1.10", 1))).getBackend().getSocketAddress());
-        assertEquals(fastBuild("172.16.20.2").getSocketAddress(),
-                l4Balance.getResponse(new L4Request(new InetSocketAddress("10.18.1.43", 1))).getBackend().getSocketAddress());
-        assertEquals(fastBuild("172.16.20.2").getSocketAddress(),
-                l4Balance.getResponse(new L4Request(new InetSocketAddress("10.18.1.72", 1))).getBackend().getSocketAddress());
-        assertEquals(fastBuild("172.16.20.2").getSocketAddress(),
-                l4Balance.getResponse(new L4Request(new InetSocketAddress("10.18.1.213", 1))).getBackend().getSocketAddress());
+        assertEquals(fastBuild("172.16.20.2").socketAddress(),
+                l4Balance.response(new L4Request(new InetSocketAddress("10.18.1.10", 1))).backend().socketAddress());
+        assertEquals(fastBuild("172.16.20.2").socketAddress(),
+                l4Balance.response(new L4Request(new InetSocketAddress("10.18.1.43", 1))).backend().socketAddress());
+        assertEquals(fastBuild("172.16.20.2").socketAddress(),
+                l4Balance.response(new L4Request(new InetSocketAddress("10.18.1.72", 1))).backend().socketAddress());
+        assertEquals(fastBuild("172.16.20.2").socketAddress(),
+                l4Balance.response(new L4Request(new InetSocketAddress("10.18.1.213", 1))).backend().socketAddress());
 
-        assertEquals(fastBuild("172.16.20.1").getSocketAddress(),
-                l4Balance.getResponse(new L4Request(new InetSocketAddress("127.0.0.10", 1))).getBackend().getSocketAddress());
-        assertEquals(fastBuild("172.16.20.1").getSocketAddress(),
-                l4Balance.getResponse(new L4Request(new InetSocketAddress("127.0.0.172", 1))).getBackend().getSocketAddress());
-        assertEquals(fastBuild("172.16.20.1").getSocketAddress(),
-                l4Balance.getResponse(new L4Request(new InetSocketAddress("127.0.0.230", 1))).getBackend().getSocketAddress());
-        assertEquals(fastBuild("172.16.20.1").getSocketAddress(),
-                l4Balance.getResponse(new L4Request(new InetSocketAddress("127.0.0.253", 1))).getBackend().getSocketAddress());
+        assertEquals(fastBuild("172.16.20.1").socketAddress(),
+                l4Balance.response(new L4Request(new InetSocketAddress("127.0.0.10", 1))).backend().socketAddress());
+        assertEquals(fastBuild("172.16.20.1").socketAddress(),
+                l4Balance.response(new L4Request(new InetSocketAddress("127.0.0.172", 1))).backend().socketAddress());
+        assertEquals(fastBuild("172.16.20.1").socketAddress(),
+                l4Balance.response(new L4Request(new InetSocketAddress("127.0.0.230", 1))).backend().socketAddress());
+        assertEquals(fastBuild("172.16.20.1").socketAddress(),
+                l4Balance.response(new L4Request(new InetSocketAddress("127.0.0.253", 1))).backend().socketAddress());
 
-        assertEquals(fastBuild("172.16.20.2").getSocketAddress(),
-                l4Balance.getResponse(new L4Request(new InetSocketAddress("172.20.1.10", 1))).getBackend().getSocketAddress());
-        assertEquals(fastBuild("172.16.20.2").getSocketAddress(),
-                l4Balance.getResponse(new L4Request(new InetSocketAddress("172.20.1.172", 1))).getBackend().getSocketAddress());
-        assertEquals(fastBuild("172.16.20.2").getSocketAddress(),
-                l4Balance.getResponse(new L4Request(new InetSocketAddress("172.20.1.230", 1))).getBackend().getSocketAddress());
-        assertEquals(fastBuild("172.16.20.2").getSocketAddress(),
-                l4Balance.getResponse(new L4Request(new InetSocketAddress("172.20.1.253", 1))).getBackend().getSocketAddress());
+        assertEquals(fastBuild("172.16.20.2").socketAddress(),
+                l4Balance.response(new L4Request(new InetSocketAddress("172.20.1.10", 1))).backend().socketAddress());
+        assertEquals(fastBuild("172.16.20.2").socketAddress(),
+                l4Balance.response(new L4Request(new InetSocketAddress("172.20.1.172", 1))).backend().socketAddress());
+        assertEquals(fastBuild("172.16.20.2").socketAddress(),
+                l4Balance.response(new L4Request(new InetSocketAddress("172.20.1.230", 1))).backend().socketAddress());
+        assertEquals(fastBuild("172.16.20.2").socketAddress(),
+                l4Balance.response(new L4Request(new InetSocketAddress("172.20.1.253", 1))).backend().socketAddress());
     }
 
     private Backend fastBuild(String host) {

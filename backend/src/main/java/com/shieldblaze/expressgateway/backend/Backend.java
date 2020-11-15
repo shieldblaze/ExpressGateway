@@ -163,7 +163,7 @@ public class Backend implements Comparable<Backend>, Closeable {
         this.healthCheckManager = healthCheckManager;
 
         if (this.healthCheck != null && this.healthCheckManager != null) {
-            this.healthCheckManager.setBackend(this);
+            this.healthCheckManager.backend(this);
             this.healthCheckManager.initialize();
         }
 
@@ -178,99 +178,109 @@ public class Backend implements Comparable<Backend>, Closeable {
         connectionCleanerFuture = GlobalExecutors.INSTANCE.submitTaskAndRunEvery(new ConnectionCleaner(this), 1, 10, TimeUnit.MICROSECONDS);
     }
 
-    public Cluster getCluster() {
+    public Cluster cluster() {
         return cluster;
     }
 
-    public void setCluster(Cluster cluster) {
+    public Backend cluster(Cluster cluster) {
         if (this.cluster == null) {
             this.cluster = cluster;
         } else {
             throw new IllegalArgumentException("Cluster is already set");
         }
+        return this;
     }
 
-    public InetSocketAddress getSocketAddress() {
+    public InetSocketAddress socketAddress() {
         return socketAddress;
     }
 
-    public int getWeight() {
+    public int weight() {
         return Weight;
     }
 
-    public void setWeight(int weight) {
+    public Backend weight(int weight) {
         this.Weight = weight;
+        return this;
     }
 
-    public int getActiveConnections() {
+    public int activeConnections() {
         return activeConnections;
     }
 
-    public void incConnections() {
+    public Backend incConnections() {
         activeConnections++;
+        return this;
     }
 
-    public void decConnections() {
+    public Backend decConnections() {
         activeConnections--;
+        return this;
     }
 
-    public void incBytesWritten(int bytes) {
+    public Backend incBytesWritten(int bytes) {
         bytesWritten += bytes;
+        return this;
     }
 
-    public void incBytesWritten(long bytes) {
+    public Backend incBytesWritten(long bytes) {
         bytesWritten += bytes;
+        return this;
     }
 
-    public void incBytesReceived(int bytes) {
+    public Backend incBytesReceived(int bytes) {
         bytesReceived += bytes;
+        return this;
     }
 
-    public int getMaxConnections() {
+    public int maxConnections() {
         return maxConnections;
     }
 
-    public void setMaxConnections(int maxConnections) {
+    public Backend maxConnections(int maxConnections) {
         this.maxConnections = maxConnections;
+        return this;
     }
 
-    public long getBytesWritten() {
+    public long bytesWritten() {
         return bytesWritten;
     }
 
-    public long getBytesReceived() {
+    public long bytesReceived() {
         return bytesReceived;
     }
 
-    public State getState() {
+    public State state() {
         return state;
     }
 
-    public void setState(State state) {
+    public Backend state(State state) {
         this.state = state;
+        return this;
     }
 
-    public HealthCheck getHealthCheck() {
+    public HealthCheck healthCheck() {
         return healthCheck;
     }
 
-    public void setHealthCheck(HealthCheck healthCheck) {
+    public Backend healthCheck(HealthCheck healthCheck) {
         this.healthCheck = healthCheck;
+        return this;
     }
 
-    public Health getHealth() {
+    public Health health() {
         if (healthCheck == null) {
             return Health.UNKNOWN;
         }
         return healthCheck.health();
     }
 
-    public String getHash() {
+    public String hash() {
         return hash;
     }
 
     public float load() {
-        if (getActiveConnections() == 0) {
+        if (activeConnections() == 0) {
             return 0;
         }
         return Math.percentage(activeConnections, maxConnections);
@@ -306,11 +316,12 @@ public class Backend implements Comparable<Backend>, Closeable {
      *
      * @param connection {@link Connection} to be associated
      */
-    public void addConnection(Connection connection) throws TooManyConnectionsException {
+    public Backend addConnection(Connection connection) throws TooManyConnectionsException {
         if (connectionList.size() > maxConnections) {
             throw new TooManyConnectionsException(this, connectionList.size(), maxConnections);
         }
         connectionList.add(connection);
+        return this;
     }
 
     /**
@@ -318,9 +329,10 @@ public class Backend implements Comparable<Backend>, Closeable {
      *
      * @param connection {@link Connection} to be Dissociated
      */
-    public void removeConnection(Connection connection) {
+    public Backend removeConnection(Connection connection) {
         connectionList.remove(connection);
         connection.close();
+        return this;
     }
 
     @Override
@@ -339,7 +351,7 @@ public class Backend implements Comparable<Backend>, Closeable {
         return "Backend{" +
                 "socketAddress=" + socketAddress +
                 ", state=" + state +
-                ", healthCheck=" + getHealth() +
+                ", healthCheck=" + health() +
                 '}';
     }
 

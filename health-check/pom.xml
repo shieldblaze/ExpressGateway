@@ -35,4 +35,12 @@ along with ShieldBlaze ExpressGateway.  If not, see <https://www.gnu.org/license
         <javaModuleName>com.shieldblaze.expressgateway.healthcheck</javaModuleName>
     </properties>
 
+    <dependencies>
+        <dependency>
+            <groupId>com.shieldblaze</groupId>
+            <artifactId>expressgateway-common</artifactId>
+            <version>0.0.1-a</version>
+        </dependency>
+    </dependencies>
+
 </project>
