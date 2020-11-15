@@ -24,6 +24,7 @@ import com.shieldblaze.expressgateway.configuration.transport.TransportType;
 import com.shieldblaze.expressgateway.core.utils.BootstrapFactory;
 import com.shieldblaze.expressgateway.core.server.L4FrontListener;
 import io.netty.bootstrap.Bootstrap;
+import io.netty.channel.ChannelFuture;
 import io.netty.channel.ChannelFutureListener;
 import io.netty.channel.EventLoopGroup;
 
@@ -52,17 +53,8 @@ public final class UDPListener extends L4FrontListener {
         for (int i = 0; i < bindRounds; i++) {
             CompletableFuture<L4FrontListenerEvent> completableFuture = GlobalExecutors.INSTANCE.submitTask(() -> {
                 L4FrontListenerEvent l4FrontListenerEvent = new L4FrontListenerEvent();
-                try {
-                    bootstrap.bind(getL4LoadBalancer().getBindAddress()).addListener((ChannelFutureListener) future -> {
-                        if (future.isSuccess()) {
-                            l4FrontListenerEvent.setChannelFuture(future);
-                        } else {
-                            l4FrontListenerEvent.setCause(future.cause());
-                        }
-                    }).sync();
-                } catch (InterruptedException e) {
-                    l4FrontListenerEvent.setCause(e);
-                }
+                ChannelFuture channelFuture = bootstrap.bind(getL4LoadBalancer().getBindAddress());
+                l4FrontListenerEvent.channelFuture(channelFuture);
                 return l4FrontListenerEvent;
             });
 
@@ -77,7 +69,7 @@ public final class UDPListener extends L4FrontListener {
         return GlobalExecutors.INSTANCE.submitTask(() -> {
             completableFutureList.forEach(event -> {
                 try {
-                    event.get().getChannelFuture().channel().close().sync();
+                    event.get().channelFuture().channel().close().sync();
                 } catch (InterruptedException | ExecutionException e) {
                     // Ignore
                 }

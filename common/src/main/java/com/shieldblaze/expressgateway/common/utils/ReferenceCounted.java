@@ -17,13 +17,11 @@
  */
 package com.shieldblaze.expressgateway.common.utils;
 
-import com.shieldblaze.expressgateway.common.internal.Internal;
 import io.netty.util.ReferenceCountUtil;
 
 /**
  * Provides extra utilities for {@link io.netty.util.ReferenceCounted} objects.
  */
-@Internal
 public final class ReferenceCounted {
 
     private ReferenceCounted() {

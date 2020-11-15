@@ -18,10 +18,10 @@
 package com.shieldblaze.expressgateway.core.server.udp;
 
 import com.shieldblaze.expressgateway.backend.Backend;
+import com.shieldblaze.expressgateway.common.utils.ReferenceCounted;
 import com.shieldblaze.expressgateway.configuration.CommonConfiguration;
 import com.shieldblaze.expressgateway.core.utils.BootstrapFactory;
 import com.shieldblaze.expressgateway.core.utils.EventLoopFactory;
-import com.shieldblaze.expressgateway.core.utils.ReferenceCountedUtil;
 import io.netty.bootstrap.Bootstrap;
 import io.netty.buffer.ByteBufAllocator;
 import io.netty.channel.Channel;
@@ -93,7 +93,7 @@ final class Connection {
             backend.incBytesWritten(datagramPacket.content().readableBytes());
             backendChannel.writeAndFlush(datagramPacket.content()).addListener((ChannelFutureListener) cf -> {
                 if (!cf.isSuccess()) {
-                    ReferenceCountedUtil.silentFullRelease(datagramPacket);
+                    ReferenceCounted.silentFullRelease(datagramPacket);
                 }
             });
             return;
@@ -110,7 +110,7 @@ final class Connection {
     void clearBacklog() {
         if (backlog != null && backlog.size() > 0) {
             for (DatagramPacket datagramPacket : backlog) {
-                ReferenceCountedUtil.silentFullRelease(datagramPacket);
+                ReferenceCounted.silentFullRelease(datagramPacket);
             }
         }
         backlog = null;

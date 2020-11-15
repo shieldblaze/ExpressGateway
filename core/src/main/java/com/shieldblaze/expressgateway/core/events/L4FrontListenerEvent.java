@@ -17,51 +17,22 @@
  */
 package com.shieldblaze.expressgateway.core.events;
 
-import com.shieldblaze.expressgateway.common.internal.Internal;
-import com.shieldblaze.expressgateway.concurrent.events.Event;
+import com.shieldblaze.expressgateway.concurrent.Event;
 import com.shieldblaze.expressgateway.core.server.L4FrontListener;
 import io.netty.channel.ChannelFuture;
 
 /**
  * {@link Event} for {@link L4FrontListener}
  */
-public final class L4FrontListenerEvent implements Event {
-    private boolean isValueSet;
-
-    private boolean isSuccess;
-    private Throwable cause;
+public class L4FrontListenerEvent implements Event {
     private ChannelFuture channelFuture;
 
-    @Override
-    public boolean isSuccess() {
-        return isSuccess;
-    }
-
-    @Override
-    public Throwable cause() {
-        return cause;
-    }
-
-    @Internal
-    public void setCause(Throwable cause) {
-        if (isValueSet) {
-            throw new IllegalArgumentException("Value already set");
-        }
-        this.cause = cause;
-        isValueSet = true;
-    }
-
-    @Internal
-    public ChannelFuture getChannelFuture() {
-        return channelFuture;
-    }
-
-    @Internal
-    public void setChannelFuture(ChannelFuture channelFuture) {
-        if (isValueSet) {
-            throw new IllegalArgumentException("Value already set");
-        }
+    public L4FrontListenerEvent channelFuture(ChannelFuture channelFuture) {
         this.channelFuture = channelFuture;
-        this.isSuccess = true;
+        return this;
+    }
+
+    public ChannelFuture channelFuture() {
+        return channelFuture;
     }
 }

@@ -17,7 +17,6 @@
  */
 package com.shieldblaze.expressgateway.core.utils;
 
-import com.shieldblaze.expressgateway.common.internal.Internal;
 import com.shieldblaze.expressgateway.configuration.CommonConfiguration;
 import com.shieldblaze.expressgateway.configuration.transport.TransportType;
 import io.netty.bootstrap.Bootstrap;
@@ -31,7 +30,6 @@ import io.netty.channel.socket.nio.NioDatagramChannel;
 import io.netty.channel.socket.nio.NioSocketChannel;
 import io.netty.channel.unix.UnixChannelOption;
 
-@Internal
 public final class BootstrapFactory {
 
     private BootstrapFactory() {
