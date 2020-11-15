@@ -20,16 +20,17 @@ package com.shieldblaze.expressgateway.backend.cluster;
 import com.shieldblaze.expressgateway.backend.Backend;
 
 import java.util.Objects;
+import java.util.concurrent.atomic.AtomicInteger;
 
 /**
  * {@linkplain ClusterPool} with multiple {@linkplain Backend}
  */
 public final class ClusterPool extends Cluster {
 
-    private static int count = 0;
+    private static final AtomicInteger count = new AtomicInteger();
 
     public ClusterPool() {
-        setName("ClusterPool#" + count++);
+        setName("ClusterPool#" + count.getAndIncrement());
     }
 
     private ClusterPool(String name, String hostname, Backend... backends) {
@@ -39,7 +40,7 @@ public final class ClusterPool extends Cluster {
     }
 
     public static ClusterPool of(String hostname, Backend... backends) {
-        return new ClusterPool("ClusterPool#" + count++, hostname, backends);
+        return new ClusterPool("ClusterPool#" + count.getAndIncrement(), hostname, backends);
     }
 
     public static ClusterPool of(String name, String hostname, Backend... backends) {
