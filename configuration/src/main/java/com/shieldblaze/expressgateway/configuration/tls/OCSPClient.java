@@ -17,13 +17,6 @@
  */
 package com.shieldblaze.expressgateway.configuration.tls;
 
-import org.apache.http.client.config.RequestConfig;
-import org.apache.http.client.methods.CloseableHttpResponse;
-import org.apache.http.client.methods.HttpPost;
-import org.apache.http.entity.ByteArrayEntity;
-import org.apache.http.entity.ContentType;
-import org.apache.http.impl.client.CloseableHttpClient;
-import org.apache.http.impl.client.HttpClientBuilder;
 import org.bouncycastle.asn1.ASN1ObjectIdentifier;
 import org.bouncycastle.asn1.ASN1Sequence;
 import org.bouncycastle.asn1.DEROctetString;
@@ -49,11 +42,21 @@ import org.bouncycastle.operator.jcajce.JcaDigestCalculatorProviderBuilder;
 
 import java.io.IOException;
 import java.net.URI;
+import java.net.http.HttpClient;
+import java.net.http.HttpRequest;
+import java.net.http.HttpResponse;
 import java.security.SecureRandom;
 import java.security.cert.X509Certificate;
+import java.time.Duration;
+import java.time.temporal.ChronoUnit;
 import java.util.Enumeration;
 
 final class OCSPClient {
+
+    private static final HttpClient HTTP_CLIENT = HttpClient.newBuilder()
+            .followRedirects(HttpClient.Redirect.NEVER)
+            .connectTimeout(Duration.of(5, ChronoUnit.SECONDS))
+            .build();
 
     private static final String OCSP_REQUEST_TYPE = "application/ocsp-request";
     private static final String OCSP_RESPONSE_TYPE = "application/ocsp-response";
@@ -90,34 +93,27 @@ final class OCSPClient {
     }
 
     private static OCSPResp queryCA(URI uri, OCSPReq request) throws Exception {
-        try (CloseableHttpClient httpClient = HttpClientBuilder.create()
-                .setDefaultRequestConfig(RequestConfig.custom()
-                        .setRedirectsEnabled(false)
-                        .setConnectionRequestTimeout(1000 * 5)
-                        .setSocketTimeout(1000 * 5)
-                        .setConnectTimeout(1000 * 5).build())
-                .build()) {
+        HttpRequest httpRequest = HttpRequest.newBuilder()
+                .uri(uri)
+                .setHeader("Accept-Content", OCSP_RESPONSE_TYPE)
+                .setHeader("Content-Type", OCSP_REQUEST_TYPE)
+                .setHeader("User-Agent", "ShieldBlaze ExpressGateway OCSP Client")
+                .POST(HttpRequest.BodyPublishers.ofByteArray(request.getEncoded()))
+                .build();
 
-            HttpPost httpPost = new HttpPost(uri);
-            httpPost.setEntity(new ByteArrayEntity(request.getEncoded(), ContentType.create(OCSP_REQUEST_TYPE)));
-            httpPost.setHeader("Accept-Content", OCSP_RESPONSE_TYPE);
-            httpPost.setHeader("User-Agent", "ShieldBlaze ExpressGateway OCSP Client");
+        HttpResponse<byte[]> httpResponse = HTTP_CLIENT.send(httpRequest, HttpResponse.BodyHandlers.ofByteArray());
 
-            try (CloseableHttpResponse httpResponse = httpClient.execute(httpPost)) {
-
-                if (!httpResponse.getFirstHeader("Content-Type").getValue().equalsIgnoreCase(OCSP_RESPONSE_TYPE)) {
-                    throw new IllegalArgumentException("Response Content-Type was: " +
-                            httpResponse.getFirstHeader("Content-Type").getValue() + ", Expected: " + OCSP_RESPONSE_TYPE);
-                }
-
-                if (httpResponse.getStatusLine().getStatusCode() != 200) {
-                    throw new IllegalArgumentException("HTTP Response Code was: " +
-                            httpResponse.getStatusLine().getStatusCode() + ", Expected: 200");
-                }
-
-                return new OCSPResp(httpResponse.getEntity().getContent());
-            }
+        if (httpResponse.headers().firstValue("Content-Type").isEmpty() ||
+                !httpResponse.headers().firstValue("Content-Type").get().equalsIgnoreCase(OCSP_RESPONSE_TYPE)) {
+            throw new IllegalArgumentException("Response Content-Type was: " + httpResponse.headers().firstValue("Content-Type").get() +
+                    ", Expected: " + OCSP_RESPONSE_TYPE);
         }
+
+        if (httpResponse.statusCode() != 200) {
+            throw new IllegalArgumentException("HTTP Response Code was: " + httpResponse.statusCode() + ", Expected: 200");
+        }
+
+        return new OCSPResp(httpResponse.body());
     }
 
     private static String getOcspUrlFromCertificate(X509Certificate cert) throws IOException {

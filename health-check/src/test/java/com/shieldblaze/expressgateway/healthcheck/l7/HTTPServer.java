@@ -28,14 +28,16 @@ final class HTTPServer extends Thread{
 
     private final static String CRLF = "\r\n";
     private final String responseStatus;
+    private final int port;
 
-    public HTTPServer(String responseStatus) {
+    public HTTPServer(String responseStatus, int port) {
         this.responseStatus = responseStatus;
+        this.port = port;
     }
 
     @Override
     public void run() {
-        try (ServerSocket serverSocket = new ServerSocket(9111, 1000, InetAddress.getByName("127.0.0.1"))) {
+        try (ServerSocket serverSocket = new ServerSocket(port, 1000, InetAddress.getByName("127.0.0.1"))) {
             Socket clientSocket = serverSocket.accept();
             PrintWriter out = new PrintWriter(new BufferedWriter(new OutputStreamWriter(clientSocket.getOutputStream())),true);
 
