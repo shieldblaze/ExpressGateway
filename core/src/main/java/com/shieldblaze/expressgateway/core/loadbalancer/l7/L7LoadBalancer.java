@@ -67,7 +67,7 @@ public abstract class L7LoadBalancer {
         this.tlsClient = tlsClient;
         this.tlsServer = tlsServer;
 
-        this.byteBufAllocator = new PooledByteBufAllocator(commonConfiguration.getPooledByteBufAllocatorConfiguration()).getInstance();
+        this.byteBufAllocator = new PooledByteBufAllocator(commonConfiguration.pooledByteBufAllocatorConfiguration()).getInstance();
         this.eventLoopFactory = new EventLoopFactory(commonConfiguration);
     }
 

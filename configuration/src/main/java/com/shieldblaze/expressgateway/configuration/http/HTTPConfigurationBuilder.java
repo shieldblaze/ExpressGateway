@@ -110,20 +110,19 @@ public final class HTTPConfigurationBuilder {
     }
 
     public HTTPConfiguration build() {
-        HTTPConfiguration hTTPConfiguration = new HTTPConfiguration();
-        hTTPConfiguration.setMaxContentLength(maxContentLength);
-        hTTPConfiguration.setH2InitialWindowSize(h2InitialWindowSize);
-        hTTPConfiguration.setH2MaxConcurrentStreams(h2MaxConcurrentStreams);
-        hTTPConfiguration.setH2MaxHeaderSizeList(h2MaxHeaderSizeList);
-        hTTPConfiguration.setH2MaxHeaderTableSize(h2MaxHeaderTableSize);
-        hTTPConfiguration.setH2MaxFrameSize(h2MaxFrameSize);
-        hTTPConfiguration.setH2enablePush(h2enablePush);
-        hTTPConfiguration.setMaxInitialLineLength(maxInitialLineLength);
-        hTTPConfiguration.setMaxHeaderSize(maxHeaderSize);
-        hTTPConfiguration.setMaxChunkSize(maxChunkSize);
-        hTTPConfiguration.setCompressionThreshold(compressionThreshold);
-        hTTPConfiguration.setDeflateCompressionLevel(deflateCompressionLevel);
-        hTTPConfiguration.setBrotliCompressionLevel(brotliCompressionLevel);
-        return hTTPConfiguration;
+        return new HTTPConfiguration()
+                .maxContentLength(maxContentLength)
+                .setH2InitialWindowSize(h2InitialWindowSize)
+                .h2MaxConcurrentStreams(h2MaxConcurrentStreams)
+                .h2MaxHeaderSizeList(h2MaxHeaderSizeList)
+                .h2MaxHeaderTableSize(h2MaxHeaderTableSize)
+                .h2MaxFrameSize(h2MaxFrameSize)
+                .h2enablePush(h2enablePush)
+                .maxInitialLineLength(maxInitialLineLength)
+                .setMaxHeaderSize(maxHeaderSize)
+                .maxChunkSize(maxChunkSize)
+                .compressionThreshold(compressionThreshold)
+                .deflateCompressionLevel(deflateCompressionLevel)
+                .brotliCompressionLevel(brotliCompressionLevel);
     }
 }

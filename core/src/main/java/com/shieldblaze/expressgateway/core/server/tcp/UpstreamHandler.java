@@ -80,13 +80,13 @@ final class UpstreamHandler extends ChannelInboundHandlerAdapter {
         bootstrap.handler(new ChannelInitializer<SocketChannel>() {
             @Override
             protected void initChannel(SocketChannel ch) {
-                int timeout = commonConfiguration.getTransportConfiguration().getConnectionIdleTimeout();
+                int timeout = commonConfiguration.transportConfiguration().connectionIdleTimeout();
                 ch.pipeline().addFirst(new IdleStateHandler(timeout, timeout, timeout));
 
                 if (tlsConfiguration != null) {
                     String hostname = backend.getSocketAddress().getHostName();
                     int port = backend.getSocketAddress().getPort();
-                    SslHandler sslHandler = tlsConfiguration.getDefault().sslContext().newHandler(ctx.alloc(), hostname, port);
+                    SslHandler sslHandler = tlsConfiguration.defaultMapping().sslContext().newHandler(ctx.alloc(), hostname, port);
 
                     ch.pipeline().addLast("TLSHandler", sslHandler);
                 }
@@ -132,7 +132,7 @@ final class UpstreamHandler extends ChannelInboundHandlerAdapter {
             backend.incBytesWritten(byteBuf.readableBytes());
             downstreamChannel.writeAndFlush(byteBuf);
             return;
-        } else if (backlog != null && backlog.size() < commonConfiguration.getTransportConfiguration().getDataBacklog()) {
+        } else if (backlog != null && backlog.size() < commonConfiguration.transportConfiguration().dataBacklog()) {
             backlog.add(byteBuf);
             return;
         }

@@ -29,109 +29,120 @@ public final class TransportConfiguration extends CommonConfiguration {
 
     private TransportType transportType;
     private ReceiveBufferAllocationType receiveBufferAllocationType;
-    private int[] ReceiveBufferSizes;
-    private int TCPConnectionBacklog;
-    private int DataBacklog;
-    private int SocketReceiveBufferSize;
-    private int SocketSendBufferSize;
-    private int TCPFastOpenMaximumPendingRequests;
-    private int BackendSocketTimeout;
-    private int BackendConnectTimeout;
-    private int ConnectionIdleTimeout;
+    private int[] receiveBufferSizes;
+    private int tcpConnectionBacklog;
+    private int dataBacklog;
+    private int socketReceiveBufferSize;
+    private int socketSendBufferSize;
+    private int tcpFastOpenMaximumPendingRequests;
+    private int backendSocketTimeout;
+    private int backendConnectTimeout;
+    private int connectionIdleTimeout;
 
-    public TransportType getTransportType() {
+    public TransportType transportType() {
         return transportType;
     }
 
-    void setTransportType(TransportType transportType) {
+    TransportConfiguration transportType(TransportType transportType) {
         this.transportType = transportType;
+        return this;
     }
 
-    public ReceiveBufferAllocationType getReceiveBufferAllocationType() {
+    public ReceiveBufferAllocationType receiveBufferAllocationType() {
         return receiveBufferAllocationType;
     }
 
-    void setReceiveBufferAllocationType(ReceiveBufferAllocationType receiveBufferAllocationType) {
+    TransportConfiguration receiveBufferAllocationType(ReceiveBufferAllocationType receiveBufferAllocationType) {
         this.receiveBufferAllocationType = receiveBufferAllocationType;
+        return this;
     }
 
-    public int[] getReceiveBufferSizes() {
-        return ReceiveBufferSizes;
+    public int[] receiveBufferSizes() {
+        return receiveBufferSizes;
     }
 
-    void setReceiveBufferSizes(int[] receiveBufferSizes) {
-        ReceiveBufferSizes = receiveBufferSizes;
+    TransportConfiguration receiveBufferSizes(int[] receiveBufferSizes) {
+        this.receiveBufferSizes = receiveBufferSizes;
+        return this;
     }
 
-    public RecvByteBufAllocator getRecvByteBufAllocator() {
+    public RecvByteBufAllocator recvByteBufAllocator() {
         if (receiveBufferAllocationType == ReceiveBufferAllocationType.FIXED) {
-            return new FixedRecvByteBufAllocator(ReceiveBufferSizes[0]);
+            return new FixedRecvByteBufAllocator(receiveBufferSizes[0]);
         } else {
-            return new AdaptiveRecvByteBufAllocator(ReceiveBufferSizes[0], ReceiveBufferSizes[1], ReceiveBufferSizes[2]);
+            return new AdaptiveRecvByteBufAllocator(receiveBufferSizes[0], receiveBufferSizes[1], receiveBufferSizes[2]);
         }
     }
 
-    public int getTCPConnectionBacklog() {
-        return TCPConnectionBacklog;
+    public int tcpConnectionBacklog() {
+        return tcpConnectionBacklog;
     }
 
-    void setTCPConnectionBacklog(int TCPConnectionBacklog) {
-        this.TCPConnectionBacklog = TCPConnectionBacklog;
+    TransportConfiguration tcpConnectionBacklog(int TCPConnectionBacklog) {
+        this.tcpConnectionBacklog = TCPConnectionBacklog;
+        return this;
     }
 
-    public int getDataBacklog() {
-        return DataBacklog;
+    public int dataBacklog() {
+        return dataBacklog;
     }
 
-    void setDataBacklog(int dataBacklog) {
-        this.DataBacklog = dataBacklog;
+    TransportConfiguration dataBacklog(int dataBacklog) {
+        this.dataBacklog = dataBacklog;
+        return this;
     }
 
-    public int getSocketReceiveBufferSize() {
-        return SocketReceiveBufferSize;
+    public int socketReceiveBufferSize() {
+        return socketReceiveBufferSize;
     }
 
-    void setSocketReceiveBufferSize(int socketReceiveBufferSize) {
-        SocketReceiveBufferSize = socketReceiveBufferSize;
+    TransportConfiguration socketReceiveBufferSize(int socketReceiveBufferSize) {
+        this.socketReceiveBufferSize = socketReceiveBufferSize;
+        return this;
     }
 
-    public int getSocketSendBufferSize() {
-        return SocketSendBufferSize;
+    public int socketSendBufferSize() {
+        return socketSendBufferSize;
     }
 
-    void setSocketSendBufferSize(int socketSendBufferSize) {
-        SocketSendBufferSize = socketSendBufferSize;
+    TransportConfiguration socketSendBufferSize(int socketSendBufferSize) {
+        this.socketSendBufferSize = socketSendBufferSize;
+        return this;
     }
 
-    public int getTCPFastOpenMaximumPendingRequests() {
-        return TCPFastOpenMaximumPendingRequests;
+    public int tcpFastOpenMaximumPendingRequests() {
+        return tcpFastOpenMaximumPendingRequests;
     }
 
-    void setTCPFastOpenMaximumPendingRequests(int TCPFastOpenMaximumPendingRequests) {
-        this.TCPFastOpenMaximumPendingRequests = TCPFastOpenMaximumPendingRequests;
+    TransportConfiguration tcpFastOpenMaximumPendingRequests(int TCPFastOpenMaximumPendingRequests) {
+        this.tcpFastOpenMaximumPendingRequests = TCPFastOpenMaximumPendingRequests;
+        return this;
     }
 
-    public int getBackendSocketTimeout() {
-        return BackendSocketTimeout;
+    public int backendSocketTimeout() {
+        return backendSocketTimeout;
     }
 
-    void setBackendSocketTimeout(int backendSocketTimeout) {
-        BackendSocketTimeout = backendSocketTimeout;
+    TransportConfiguration backendSocketTimeout(int backendSocketTimeout) {
+        this.backendSocketTimeout = backendSocketTimeout;
+        return this;
     }
 
-    public int getBackendConnectTimeout() {
-        return BackendConnectTimeout;
+    public int backendConnectTimeout() {
+        return backendConnectTimeout;
     }
 
-    void setBackendConnectTimeout(int backendConnectTimeout) {
-        BackendConnectTimeout = backendConnectTimeout;
+    TransportConfiguration backendConnectTimeout(int backendConnectTimeout) {
+        this.backendConnectTimeout = backendConnectTimeout;
+        return this;
     }
 
-    public int getConnectionIdleTimeout() {
-        return ConnectionIdleTimeout;
+    public int connectionIdleTimeout() {
+        return connectionIdleTimeout;
     }
 
-    void setConnectionIdleTimeout(int connectionIdleTimeout) {
-        ConnectionIdleTimeout = connectionIdleTimeout;
+    TransportConfiguration connectionIdleTimeout(int connectionIdleTimeout) {
+        this.connectionIdleTimeout = connectionIdleTimeout;
+        return this;
     }
 }

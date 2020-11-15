@@ -27,6 +27,7 @@ public final class EventLoopConfigurationBuilder {
     private int childWorkers;
 
     private EventLoopConfigurationBuilder() {
+        // Prevent outside initialization
     }
 
     /**
@@ -59,9 +60,8 @@ public final class EventLoopConfigurationBuilder {
      * @throws IllegalArgumentException If Parent or Child worker count is less than 1
      */
     public EventLoopConfiguration build() {
-        EventLoopConfiguration eventLoopConfiguration = new EventLoopConfiguration();
-        eventLoopConfiguration.setParentWorkers(ObjectUtil.checkPositive(parentWorkers, "Parent Workers"));
-        eventLoopConfiguration.setChildWorkers(ObjectUtil.checkPositive(childWorkers, "Child Workers"));
-        return eventLoopConfiguration;
+        return new EventLoopConfiguration()
+                .parentWorkers(ObjectUtil.checkPositive(parentWorkers, "Parent Workers"))
+                .childWorkers(ObjectUtil.checkPositive(childWorkers, "Child Workers"));
     }
 }

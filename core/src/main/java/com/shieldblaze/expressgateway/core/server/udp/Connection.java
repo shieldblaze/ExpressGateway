@@ -59,7 +59,7 @@ final class Connection {
         ChannelFuture channelFuture = bootstrap.connect(backend.getSocketAddress());
         backendChannel = channelFuture.channel();
 
-        int timeout = commonConfiguration.getTransportConfiguration().getConnectionIdleTimeout();
+        int timeout = commonConfiguration.transportConfiguration().connectionIdleTimeout();
 
         backendChannel.pipeline().addFirst(new IdleStateHandler(timeout, timeout, timeout));
 
@@ -97,7 +97,7 @@ final class Connection {
                 }
             });
             return;
-        } else if (backlog != null && backlog.size() < commonConfiguration.getTransportConfiguration().getDataBacklog()) {
+        } else if (backlog != null && backlog.size() < commonConfiguration.transportConfiguration().dataBacklog()) {
             backlog.add(datagramPacket);
             return;
         }

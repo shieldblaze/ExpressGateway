@@ -61,7 +61,7 @@ final class OCSPClient {
     private static final String OCSP_REQUEST_TYPE = "application/ocsp-request";
     private static final String OCSP_RESPONSE_TYPE = "application/ocsp-response";
 
-    static OCSPResp getResponse(X509Certificate x509Certificate, X509Certificate issuer) throws Exception {
+    static OCSPResp response(X509Certificate x509Certificate, X509Certificate issuer) throws Exception {
         CertificateID id = new CertificateID(new JcaDigestCalculatorProviderBuilder().build()
                 .get(CertificateID.HASH_SHA1), new JcaX509CertificateHolder(issuer), x509Certificate.getSerialNumber());
 

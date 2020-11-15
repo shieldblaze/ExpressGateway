@@ -27,6 +27,7 @@ import java.io.IOException;
 import java.security.PrivateKey;
 import java.security.cert.X509Certificate;
 import java.util.List;
+import java.util.Objects;
 import java.util.concurrent.TimeUnit;
 
 /**
@@ -55,7 +56,7 @@ public final class CertificateKeyPair {
      */
     public CertificateKeyPair(List<X509Certificate> certificateChain, PrivateKey privateKey, boolean useOCSP) {
         this.certificateChain = ObjectUtil.checkNonEmpty(certificateChain, "Certificate Chain");
-        this.privateKey = ObjectUtil.checkNotNull(privateKey, "Private Key");
+        this.privateKey = Objects.requireNonNull(privateKey, "Private Key");
         this.useOCSP = useOCSP;
     }
 
@@ -65,18 +66,18 @@ public final class CertificateKeyPair {
         this.useOCSP = false;
     }
 
-    List<X509Certificate> getCertificateChain() {
+    List<X509Certificate> certificateChain() {
         return certificateChain;
     }
 
-    PrivateKey getPrivateKey() {
+    PrivateKey privateKey() {
         return privateKey;
     }
 
     public boolean doOCSPCheck(boolean forServer) {
         if (useOCSP) {
             try {
-                OCSPResp response =  OCSPClient.getResponse(certificateChain.get(0), certificateChain.get(1));
+                OCSPResp response = OCSPClient.response(certificateChain.get(0), certificateChain.get(1));
                 if (forServer) {
                     ocspStaplingData = response.getEncoded();
                     ocspResp = ((BasicOCSPResp) response.getResponseObject()).getResponses()[0];
@@ -84,7 +85,7 @@ public final class CertificateKeyPair {
                         return true;
                     }
                 } else {
-                    if (((BasicOCSPResp) OCSPClient.getResponse(certificateChain.get(0), certificateChain.get(1)).getResponseObject())
+                    if (((BasicOCSPResp) OCSPClient.response(certificateChain.get(0), certificateChain.get(1)).getResponseObject())
                             .getResponses()[0].getCertStatus() == null) {
                         return true;
                     }
@@ -96,13 +97,13 @@ public final class CertificateKeyPair {
         return false;
     }
 
-    public byte[] getOcspStaplingData() throws IOException {
+    public byte[] ocspStaplingData() throws IOException {
         if (ocspStaplingData != null) {
-            long duration  = System.currentTimeMillis() - ocspResp.getNextUpdate().getTime();
+            long duration = System.currentTimeMillis() - ocspResp.getNextUpdate().getTime();
             long diffInMinutes = TimeUnit.MILLISECONDS.toMinutes(duration);
             if (diffInMinutes > -60) {
                 if (!doOCSPCheck(true)) {
-                    throw new IOException("Unable To Renew OCSP Stapling Data");
+                    throw new IOException("Unable To Renew OCSP Data");
                 }
             }
         }

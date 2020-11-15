@@ -20,7 +20,7 @@ package com.shieldblaze.expressgateway.configuration.tls;
 import java.util.List;
 
 /**
- * List of available TLS Protocols under OpenSsl 1.1.1g
+ * List of available TLS Protocols under OpenSsl 1.1.1h
  */
 public enum Protocol {
     TLS_1_1("TLSv1.1"),

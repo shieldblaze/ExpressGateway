@@ -29,9 +29,6 @@ import io.netty.handler.codec.http.HttpContentCompressor;
 import io.netty.handler.codec.http.HttpHeaderNames;
 import io.netty.handler.codec.http.HttpResponse;
 
-import java.util.Set;
-import java.util.TreeSet;
-
 /**
  * {@link HTTPContentCompressor} compresses {@link HttpContent} of {@link HttpResponse} if
  * {@link HttpHeaderNames#CONTENT_TYPE} is compressible.
@@ -44,8 +41,8 @@ public class HTTPContentCompressor extends HttpContentCompressor {
     private ChannelHandlerContext ctx;
 
     public HTTPContentCompressor(HTTPConfiguration httpConfiguration) {
-        this.brotliCompressionQuality = httpConfiguration.getBrotliCompressionLevel();
-        this.compressionLevel = httpConfiguration.getDeflateCompressionLevel();
+        this.brotliCompressionQuality = httpConfiguration.brotliCompressionLevel();
+        this.compressionLevel = httpConfiguration.deflateCompressionLevel();
     }
 
     @Override

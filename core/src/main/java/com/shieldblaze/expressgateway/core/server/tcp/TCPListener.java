@@ -95,11 +95,11 @@ public final class TCPListener extends L4FrontListener {
         this.tlsServer = tlsServer;
         this.tlsClient = tlsClient;
 
-        if (tlsServer != null && !tlsServer.isForServer()) {
+        if (tlsServer != null && !tlsServer.forServer()) {
             throw new IllegalArgumentException("TLSConfiguration for Server is invalid");
         }
 
-        if (tlsClient != null && tlsClient.isForServer()) {
+        if (tlsClient != null && tlsClient.forServer()) {
             throw new IllegalArgumentException("TLSConfiguration is Client is invalid");
         }
 
@@ -116,27 +116,27 @@ public final class TCPListener extends L4FrontListener {
     public List<CompletableFuture<L4FrontListenerEvent>> start() {
 
         CommonConfiguration commonConfiguration = getL4LoadBalancer().getCommonConfiguration();
-        TransportConfiguration transportConfiguration = commonConfiguration.getTransportConfiguration();
+        TransportConfiguration transportConfiguration = commonConfiguration.transportConfiguration();
         EventLoopFactory eventLoopFactory = getL4LoadBalancer().getEventLoopFactory();
         ByteBufAllocator byteBufAllocator = getL4LoadBalancer().getByteBufAllocator();
 
         ServerBootstrap serverBootstrap = new ServerBootstrap()
                 .group(eventLoopFactory.getParentGroup(), eventLoopFactory.getChildGroup())
                 .option(ChannelOption.ALLOCATOR, byteBufAllocator)
-                .option(ChannelOption.RCVBUF_ALLOCATOR, transportConfiguration.getRecvByteBufAllocator())
-                .option(ChannelOption.SO_RCVBUF, transportConfiguration.getSocketReceiveBufferSize())
-                .option(ChannelOption.SO_BACKLOG, transportConfiguration.getTCPConnectionBacklog())
+                .option(ChannelOption.RCVBUF_ALLOCATOR, transportConfiguration.recvByteBufAllocator())
+                .option(ChannelOption.SO_RCVBUF, transportConfiguration.socketReceiveBufferSize())
+                .option(ChannelOption.SO_BACKLOG, transportConfiguration.tcpConnectionBacklog())
                 .option(ChannelOption.AUTO_READ, true)
                 .option(ChannelOption.AUTO_CLOSE, true)
-                .childOption(ChannelOption.SO_SNDBUF, transportConfiguration.getSocketSendBufferSize())
-                .childOption(ChannelOption.SO_RCVBUF, transportConfiguration.getSocketReceiveBufferSize())
-                .childOption(ChannelOption.RCVBUF_ALLOCATOR, transportConfiguration.getRecvByteBufAllocator())
+                .childOption(ChannelOption.SO_SNDBUF, transportConfiguration.socketSendBufferSize())
+                .childOption(ChannelOption.SO_RCVBUF, transportConfiguration.socketReceiveBufferSize())
+                .childOption(ChannelOption.RCVBUF_ALLOCATOR, transportConfiguration.recvByteBufAllocator())
                 .channelFactory(() -> {
-                    if (transportConfiguration.getTransportType() == TransportType.EPOLL) {
+                    if (transportConfiguration.transportType() == TransportType.EPOLL) {
                         EpollServerSocketChannel serverSocketChannel = new EpollServerSocketChannel();
                         EpollServerSocketChannelConfig config = serverSocketChannel.config();
                         config.setOption(UnixChannelOption.SO_REUSEPORT, true);
-                        config.setTcpFastopen(transportConfiguration.getTCPFastOpenMaximumPendingRequests());
+                        config.setTcpFastopen(transportConfiguration.tcpFastOpenMaximumPendingRequests());
                         config.setEpollMode(EpollMode.EDGE_TRIGGERED);
 
                         return serverSocketChannel;
@@ -147,8 +147,8 @@ public final class TCPListener extends L4FrontListener {
                 .childHandler(new ServerInitializer(getL4LoadBalancer(), tlsServer, tlsClient));
 
         int bindRounds = 1;
-        if (transportConfiguration.getTransportType() == TransportType.EPOLL) {
-            bindRounds = commonConfiguration.getEventLoopConfiguration().getParentWorkers();
+        if (transportConfiguration.transportType() == TransportType.EPOLL) {
+            bindRounds = commonConfiguration.eventLoopConfiguration().parentWorkers();
         }
 
         for (int i = 0; i < bindRounds; i++) {
@@ -196,7 +196,7 @@ public final class TCPListener extends L4FrontListener {
 
         @Override
         protected void initChannel(SocketChannel socketChannel) {
-            int timeout = l4LoadBalancer.getCommonConfiguration().getTransportConfiguration().getConnectionIdleTimeout();
+            int timeout = l4LoadBalancer.getCommonConfiguration().transportConfiguration().connectionIdleTimeout();
             socketChannel.pipeline().addFirst(new IdleStateHandler(timeout, timeout, timeout));
 
             if (tlsServer != null) {

@@ -39,7 +39,7 @@ final class HTTPServerValidator extends ChannelInboundHandlerAdapter {
     private final long maxContentLength;
 
     HTTPServerValidator(HTTPConfiguration httpConfiguration) {
-        this.maxContentLength = httpConfiguration.getMaxContentLength();
+        this.maxContentLength = httpConfiguration.maxContentLength();
     }
 
     @Override

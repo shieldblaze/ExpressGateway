@@ -28,19 +28,21 @@ public final class EventLoopConfiguration {
         // Prevent outside initialization
     }
 
-    public int getParentWorkers() {
+    public int parentWorkers() {
         return parentWorkers;
     }
 
-    void setParentWorkers(int parentWorkers) {
+    EventLoopConfiguration parentWorkers(int parentWorkers) {
         this.parentWorkers = parentWorkers;
+        return this;
     }
 
-    public int getChildWorkers() {
+    public int childWorkers() {
         return childWorkers;
     }
 
-    void setChildWorkers(int childWorkers) {
+    EventLoopConfiguration childWorkers(int childWorkers) {
         this.childWorkers = childWorkers;
+        return this;
     }
 }

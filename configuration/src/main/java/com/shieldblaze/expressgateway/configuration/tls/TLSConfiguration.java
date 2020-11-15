@@ -31,11 +31,12 @@ public final class TLSConfiguration extends GenericConfiguration {
 
     /**
      * Get {@link CertificateKeyPair} for a Hostname
+     *
      * @param fqdn FQDN
      * @return {@link CertificateKeyPair} if found
      * @throws NullPointerException If Mapping is not found for a Hostname
      */
-    public CertificateKeyPair getMapping(String fqdn) {
+    public CertificateKeyPair mapping(String fqdn) {
         try {
             CertificateKeyPair certificateKeyPair = certificateKeyPairMap.get(fqdn);
 
@@ -52,25 +53,27 @@ public final class TLSConfiguration extends GenericConfiguration {
         }
 
         if (certificateKeyPairMap.containsKey("DEFAULT_HOST")) {
-            return getDefault();
+            return defaultMapping();
         }
 
         throw new NullPointerException("Mapping Not Found");
     }
 
-    public CertificateKeyPair getDefault() {
+    public CertificateKeyPair defaultMapping() {
         return certificateKeyPairMap.get("DEFAULT_HOST");
     }
 
-    void setCertificateKeyPairMap(Map<String, CertificateKeyPair> certificateKeyPairMap) {
+    TLSConfiguration certificateKeyPairMap(Map<String, CertificateKeyPair> certificateKeyPairMap) {
         this.certificateKeyPairMap.putAll(certificateKeyPairMap);
+        return this;
     }
 
-    public boolean isForServer() {
+    public boolean forServer() {
         return forServer;
     }
 
-    void setForServer(boolean forServer) {
+    TLSConfiguration forServer(boolean forServer) {
         this.forServer = forServer;
+        return this;
     }
 }

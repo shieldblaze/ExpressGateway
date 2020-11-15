@@ -27,7 +27,7 @@ public final class Hex {
      * @param bytes Byte array
      * @return {@link String} containing Hex
      */
-    public static String toHexString(byte[] bytes) {
+    public static String hexString(byte[] bytes) {
         byte[] hexChars = new byte[bytes.length * 2];
         for (int j = 0; j < bytes.length; j++) {
             int v = bytes[j] & 0xFF;

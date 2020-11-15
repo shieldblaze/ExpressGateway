@@ -36,7 +36,7 @@ public final class Hasher {
     public static String hash(Algorithm algorithm, byte[] data) {
         try {
             MessageDigest messageDigest = messageDigest(algorithm);
-            return Hex.toHexString(messageDigest.digest(data));
+            return Hex.hexString(messageDigest.digest(data));
         } catch (Exception ex) {
             logger.error("Error Occurred While Hashing", ex);
         }

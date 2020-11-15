@@ -31,27 +31,30 @@ public class CommonConfiguration extends Configuration {
     private EventLoopConfiguration eventLoopConfiguration;
     private PooledByteBufAllocatorConfiguration pooledByteBufAllocatorConfiguration;
 
-    public TransportConfiguration getTransportConfiguration() {
+    public TransportConfiguration transportConfiguration() {
         return transportConfiguration;
     }
 
-    void setTransportConfiguration(TransportConfiguration transportConfiguration) {
+    CommonConfiguration transportConfiguration(TransportConfiguration transportConfiguration) {
         this.transportConfiguration = transportConfiguration;
+        return this;
     }
 
-    public EventLoopConfiguration getEventLoopConfiguration() {
+    public EventLoopConfiguration eventLoopConfiguration() {
         return eventLoopConfiguration;
     }
 
-    void setEventLoopConfiguration(EventLoopConfiguration eventLoopConfiguration) {
+    CommonConfiguration eventLoopConfiguration(EventLoopConfiguration eventLoopConfiguration) {
         this.eventLoopConfiguration = eventLoopConfiguration;
+        return this;
     }
 
-    public PooledByteBufAllocatorConfiguration getPooledByteBufAllocatorConfiguration() {
+    public PooledByteBufAllocatorConfiguration pooledByteBufAllocatorConfiguration() {
         return pooledByteBufAllocatorConfiguration;
     }
 
-    void setPooledByteBufAllocatorConfiguration(PooledByteBufAllocatorConfiguration pooledByteBufAllocatorConfiguration) {
+    CommonConfiguration pooledByteBufAllocatorConfiguration(PooledByteBufAllocatorConfiguration pooledByteBufAllocatorConfiguration) {
         this.pooledByteBufAllocatorConfiguration = pooledByteBufAllocatorConfiguration;
+        return this;
     }
 }

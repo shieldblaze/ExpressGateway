@@ -41,12 +41,12 @@ final class HTTPUtils {
 
     static Http2FrameCodec clientH2Handler(HTTPConfiguration httpConfiguration) {
         Http2Settings http2Settings = new Http2Settings();
-        http2Settings.initialWindowSize(httpConfiguration.getH2InitialWindowSize());
-        http2Settings.maxConcurrentStreams(httpConfiguration.getH2MaxConcurrentStreams());
-        http2Settings.maxHeaderListSize(httpConfiguration.getH2MaxHeaderSizeList());
-        http2Settings.headerTableSize(httpConfiguration.getH2MaxHeaderTableSize());
-        http2Settings.pushEnabled(httpConfiguration.isH2enablePush());
-        http2Settings.maxFrameSize(httpConfiguration.getH2MaxFrameSize());
+        http2Settings.initialWindowSize(httpConfiguration.h2InitialWindowSize());
+        http2Settings.maxConcurrentStreams(httpConfiguration.h2MaxConcurrentStreams());
+        http2Settings.maxHeaderListSize(httpConfiguration.h2MaxHeaderSizeList());
+        http2Settings.headerTableSize(httpConfiguration.h2MaxHeaderTableSize());
+        http2Settings.pushEnabled(httpConfiguration.h2enablePush());
+        http2Settings.maxFrameSize(httpConfiguration.h2MaxFrameSize());
 
         Http2Connection connection = new DefaultHttp2Connection(false);
 
@@ -66,7 +66,7 @@ final class HTTPUtils {
 
     static Http2FrameCodec serverH2Handler(HTTPConfiguration httpConfiguration) {
         Http2Settings http2Settings = new Http2Settings();
-        http2Settings.maxHeaderListSize(httpConfiguration.getH2MaxHeaderSizeList());
+        http2Settings.maxHeaderListSize(httpConfiguration.h2MaxHeaderSizeList());
 
         Http2Connection connection = new DefaultHttp2Connection(true);
 
@@ -90,8 +90,8 @@ final class HTTPUtils {
      * @param httpConfiguration {@link HTTPConfiguration} Instance
      */
     static HttpServerCodec newServerCodec(HTTPConfiguration httpConfiguration) {
-        int maxChunkSize = httpConfiguration.getMaxChunkSize();
-        return new HttpServerCodec(httpConfiguration.getMaxInitialLineLength(), httpConfiguration.getMaxHeaderSize(), maxChunkSize, true);
+        int maxChunkSize = httpConfiguration.maxChunkSize();
+        return new HttpServerCodec(httpConfiguration.maxInitialLineLength(), httpConfiguration.maxHeaderSize(), maxChunkSize, true);
     }
 
     /**
@@ -100,9 +100,9 @@ final class HTTPUtils {
      * @param httpConfiguration {@link HTTPConfiguration} Instance
      */
     static HttpClientCodec newClientCodec(HTTPConfiguration httpConfiguration) {
-        int maxInitialLineLength = httpConfiguration.getMaxInitialLineLength();
-        int maxHeaderSize = httpConfiguration.getMaxHeaderSize();
-        int maxChunkSize = httpConfiguration.getMaxChunkSize();
+        int maxInitialLineLength = httpConfiguration.maxInitialLineLength();
+        int maxHeaderSize = httpConfiguration.maxHeaderSize();
+        int maxChunkSize = httpConfiguration.maxChunkSize();
         return new HttpClientCodec(maxInitialLineLength, maxHeaderSize, maxChunkSize, true);
     }
 }

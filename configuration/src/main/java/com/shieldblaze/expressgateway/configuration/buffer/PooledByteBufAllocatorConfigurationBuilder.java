@@ -22,8 +22,8 @@ package com.shieldblaze.expressgateway.configuration.buffer;
  */
 public final class PooledByteBufAllocatorConfigurationBuilder {
     private boolean preferDirect;
-    private int HeapArena;
-    private int DirectArena;
+    private int heapArena;
+    private int directArena;
     private int pageSize;
     private int maxOrder;
     private int smallCacheSize;
@@ -54,7 +54,7 @@ public final class PooledByteBufAllocatorConfigurationBuilder {
      * Heap Arena Size
      */
     public PooledByteBufAllocatorConfigurationBuilder withHeapArena(int HeapArena) {
-        this.HeapArena = HeapArena;
+        this.heapArena = HeapArena;
         return this;
     }
 
@@ -62,7 +62,7 @@ public final class PooledByteBufAllocatorConfigurationBuilder {
      * Direct Arena Size
      */
     public PooledByteBufAllocatorConfigurationBuilder withDirectArena(int DirectArena) {
-        this.DirectArena = DirectArena;
+        this.directArena = DirectArena;
         return this;
     }
 
@@ -116,19 +116,19 @@ public final class PooledByteBufAllocatorConfigurationBuilder {
 
     /**
      * Build {@link PooledByteBufAllocatorConfiguration}
+     *
      * @return {@link PooledByteBufAllocatorConfiguration} Instance
      */
     public PooledByteBufAllocatorConfiguration build() {
-        PooledByteBufAllocatorConfiguration pooledByteBufAllocatorConfiguration = new PooledByteBufAllocatorConfiguration();
-        pooledByteBufAllocatorConfiguration.setPreferDirect(preferDirect);
-        pooledByteBufAllocatorConfiguration.setHeapArena(HeapArena);
-        pooledByteBufAllocatorConfiguration.setDirectArena(DirectArena);
-        pooledByteBufAllocatorConfiguration.setPageSize(pageSize);
-        pooledByteBufAllocatorConfiguration.setMaxOrder(maxOrder);
-        pooledByteBufAllocatorConfiguration.setSmallCacheSize(smallCacheSize);
-        pooledByteBufAllocatorConfiguration.setNormalCacheSize(normalCacheSize);
-        pooledByteBufAllocatorConfiguration.setUseCacheForAllThreads(useCacheForAllThreads);
-        pooledByteBufAllocatorConfiguration.setDirectMemoryCacheAlignment(directMemoryCacheAlignment);
-        return pooledByteBufAllocatorConfiguration;
+        return new PooledByteBufAllocatorConfiguration()
+                .preferDirect(preferDirect)
+                .heapArena(heapArena)
+                .directArena(directArena)
+                .pageSize(pageSize)
+                .maxOrder(maxOrder)
+                .smallCacheSize(smallCacheSize)
+                .setNormalCacheSize(normalCacheSize)
+                .useCacheForAllThreads(useCacheForAllThreads)
+                .directMemoryCacheAlignment(directMemoryCacheAlignment);
     }
 }

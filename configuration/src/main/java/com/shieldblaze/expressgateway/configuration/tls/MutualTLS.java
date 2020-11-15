@@ -34,7 +34,7 @@ public enum MutualTLS {
         this.clientAuth = clientAuth;
     }
 
-    ClientAuth getClientAuth() {
+    ClientAuth clientAuth() {
         return clientAuth;
     }
 }
