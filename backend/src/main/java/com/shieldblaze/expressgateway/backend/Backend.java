@@ -22,7 +22,7 @@ import com.shieldblaze.expressgateway.backend.exceptions.TooManyConnectionsExcep
 import com.shieldblaze.expressgateway.backend.healthcheckmanager.HealthCheckManager;
 import com.shieldblaze.expressgateway.backend.pool.Connection;
 import com.shieldblaze.expressgateway.common.Math;
-import com.shieldblaze.expressgateway.common.concurrent.GlobalExecutors;
+import com.shieldblaze.expressgateway.concurrent.GlobalExecutors;
 import com.shieldblaze.expressgateway.common.crypto.Hasher;
 import com.shieldblaze.expressgateway.healthcheck.Health;
 import com.shieldblaze.expressgateway.healthcheck.HealthCheck;

@@ -19,12 +19,14 @@ package com.shieldblaze.expressgateway.backend.cluster;
 
 import com.shieldblaze.expressgateway.backend.Backend;
 
+import java.util.concurrent.atomic.AtomicInteger;
+
 /**
  * {@linkplain Cluster} with single {@linkplain Backend}
  */
 public final class SingleBackendCluster extends Cluster {
 
-    private static int count = 0;
+    private static final AtomicInteger count = new AtomicInteger();
 
     private SingleBackendCluster(String name, String hostname, Backend backend) {
         setName(name);
@@ -33,11 +35,11 @@ public final class SingleBackendCluster extends Cluster {
     }
 
     public static SingleBackendCluster of(Backend backend) {
-        return new SingleBackendCluster("SingleBackendCluster#" + count++, backend.getSocketAddress().getHostName(), backend);
+        return new SingleBackendCluster("SingleBackendCluster#" + count.getAndIncrement(), backend.getSocketAddress().getHostName(), backend);
     }
 
     public static SingleBackendCluster of(String hostname, Backend backend) {
-        return new SingleBackendCluster("SingleBackendCluster#" + count++, hostname, backend);
+        return new SingleBackendCluster("SingleBackendCluster#" + count.getAndIncrement(), hostname, backend);
     }
 
     public static SingleBackendCluster of(String name, String hostname, Backend backend) {

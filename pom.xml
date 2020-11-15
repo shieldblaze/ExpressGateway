@@ -64,6 +64,7 @@ along with ShieldBlaze ExpressGateway.  If not, see <https://www.gnu.org/license
         <module>security</module>
         <module>configuration</module>
         <module>shaded-dependencies</module>
+        <module>concurrent</module>
     </modules>
 
     <repositories>

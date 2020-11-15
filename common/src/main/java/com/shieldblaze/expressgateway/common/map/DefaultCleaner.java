@@ -1,6 +1,6 @@
 package com.shieldblaze.expressgateway.common.map;
 
-import com.shieldblaze.expressgateway.common.concurrent.GlobalExecutors;
+import com.shieldblaze.expressgateway.concurrent.GlobalExecutors;
 
 import java.util.concurrent.TimeUnit;
 

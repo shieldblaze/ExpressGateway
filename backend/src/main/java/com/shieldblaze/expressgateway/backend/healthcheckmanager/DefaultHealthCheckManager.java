@@ -18,7 +18,7 @@
 package com.shieldblaze.expressgateway.backend.healthcheckmanager;
 
 import com.shieldblaze.expressgateway.backend.State;
-import com.shieldblaze.expressgateway.common.concurrent.GlobalExecutors;
+import com.shieldblaze.expressgateway.concurrent.GlobalExecutors;
 import com.shieldblaze.expressgateway.healthcheck.Health;
 import com.shieldblaze.expressgateway.healthcheck.HealthCheck;
 

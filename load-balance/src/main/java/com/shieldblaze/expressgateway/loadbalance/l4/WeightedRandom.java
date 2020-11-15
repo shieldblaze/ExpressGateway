@@ -23,7 +23,7 @@ import com.shieldblaze.expressgateway.backend.Backend;
 import com.shieldblaze.expressgateway.backend.State;
 import com.shieldblaze.expressgateway.backend.cluster.Cluster;
 import com.shieldblaze.expressgateway.backend.events.BackendEvent;
-import com.shieldblaze.expressgateway.common.eventstream.EventListener;
+import com.shieldblaze.expressgateway.concurrent.eventstream.EventListener;
 import com.shieldblaze.expressgateway.backend.loadbalance.SessionPersistence;
 import com.shieldblaze.expressgateway.loadbalance.exceptions.BackendNotOnlineException;
 import com.shieldblaze.expressgateway.loadbalance.l4.sessionpersistence.NOOPSessionPersistence;

@@ -21,10 +21,10 @@ import com.shieldblaze.expressgateway.backend.Backend;
 import com.shieldblaze.expressgateway.backend.State;
 import com.shieldblaze.expressgateway.backend.events.BackendEvent;
 import com.shieldblaze.expressgateway.backend.exceptions.BackendNotOnlineException;
-import com.shieldblaze.expressgateway.common.concurrent.GlobalExecutors;
-import com.shieldblaze.expressgateway.common.eventstream.AsyncEventStream;
-import com.shieldblaze.expressgateway.common.eventstream.EventListener;
-import com.shieldblaze.expressgateway.common.eventstream.EventStream;
+import com.shieldblaze.expressgateway.concurrent.GlobalExecutors;
+import com.shieldblaze.expressgateway.concurrent.eventstream.AsyncEventStream;
+import com.shieldblaze.expressgateway.concurrent.eventstream.EventListener;
+import com.shieldblaze.expressgateway.concurrent.eventstream.EventStream;
 
 import java.util.List;
 import java.util.Objects;

@@ -17,7 +17,7 @@
  */
 package com.shieldblaze.expressgateway.core.server.http;
 
-import com.shieldblaze.expressgateway.common.concurrent.GlobalExecutors;
+import com.shieldblaze.expressgateway.concurrent.GlobalExecutors;
 import com.shieldblaze.expressgateway.configuration.CommonConfiguration;
 import com.shieldblaze.expressgateway.configuration.http.HTTPConfiguration;
 import com.shieldblaze.expressgateway.configuration.transport.TransportConfiguration;
@@ -34,7 +34,7 @@ import com.shieldblaze.expressgateway.core.tls.SNIHandler;
 import com.shieldblaze.expressgateway.core.utils.EventLoopFactory;
 import io.netty.bootstrap.ServerBootstrap;
 import io.netty.buffer.ByteBufAllocator;
-import io.netty.channel.ChannelFutureListener;
+import io.netty.channel.ChannelFuture;
 import io.netty.channel.ChannelHandlerContext;
 import io.netty.channel.ChannelInitializer;
 import io.netty.channel.ChannelOption;
@@ -99,17 +99,8 @@ public final class HTTPListener extends HTTPFrontListener {
         for (int i = 0; i < bindRounds; i++) {
             CompletableFuture<L4FrontListenerEvent> completableFuture = GlobalExecutors.INSTANCE.submitTask(() -> {
                 L4FrontListenerEvent l4FrontListenerEvent = new L4FrontListenerEvent();
-                try {
-                    serverBootstrap.bind(getL7LoadBalancer().getBindAddress()).addListener((ChannelFutureListener) future -> {
-                        if (future.isSuccess()) {
-                            l4FrontListenerEvent.setChannelFuture(future);
-                        } else {
-                            l4FrontListenerEvent.setCause(future.cause());
-                        }
-                    }).sync();
-                } catch (InterruptedException e) {
-                    l4FrontListenerEvent.setCause(e);
-                }
+                ChannelFuture channelFuture = serverBootstrap.bind(getL7LoadBalancer().getBindAddress());
+                l4FrontListenerEvent.channelFuture(channelFuture);
                 return l4FrontListenerEvent;
             });
 
@@ -124,7 +115,7 @@ public final class HTTPListener extends HTTPFrontListener {
         return GlobalExecutors.INSTANCE.submitTask(() -> {
             completableFutureList.forEach(event -> {
                 try {
-                    event.get().getChannelFuture().channel().close().sync();
+                    event.get().channelFuture().channel().close().sync();
                 } catch (InterruptedException | ExecutionException e) {
                     // Ignore
                 }
