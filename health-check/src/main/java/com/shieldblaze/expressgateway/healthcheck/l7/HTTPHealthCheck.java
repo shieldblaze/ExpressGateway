@@ -18,23 +18,22 @@
 package com.shieldblaze.expressgateway.healthcheck.l7;
 
 import com.shieldblaze.expressgateway.healthcheck.HealthCheck;
-import org.apache.http.client.config.RequestConfig;
-import org.apache.http.client.methods.CloseableHttpResponse;
-import org.apache.http.client.methods.HttpGet;
-import org.apache.http.conn.ssl.NoopHostnameVerifier;
-import org.apache.http.conn.ssl.SSLConnectionSocketFactory;
-import org.apache.http.conn.ssl.TrustSelfSignedStrategy;
-import org.apache.http.impl.client.CloseableHttpClient;
-import org.apache.http.impl.client.HttpClientBuilder;
-import org.apache.http.ssl.SSLContextBuilder;
 import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
 
+import javax.net.ssl.SSLContext;
+import javax.net.ssl.TrustManager;
+import javax.net.ssl.X509TrustManager;
 import java.net.InetSocketAddress;
 import java.net.URI;
+import java.net.http.HttpClient;
+import java.net.http.HttpRequest;
+import java.net.http.HttpResponse;
 import java.security.KeyManagementException;
 import java.security.KeyStoreException;
 import java.security.NoSuchAlgorithmException;
+import java.security.SecureRandom;
+import java.security.cert.X509Certificate;
 import java.time.Duration;
 
 /**
@@ -52,8 +51,20 @@ import java.time.Duration;
 public final class HTTPHealthCheck extends HealthCheck {
 
     private static final Logger logger = LogManager.getLogger(HTTPHealthCheck.class);
+    private static final TrustManager[] trustAllCerts = new TrustManager[]{
+            new X509TrustManager() {
+                public X509Certificate[] getAcceptedIssuers() {
+                    return null;
+                }
 
-    private final HttpClientBuilder httpClientBuilder;
+                public void checkClientTrusted(X509Certificate[] certs, String authType) {
+                }
+
+                public void checkServerTrusted(X509Certificate[] certs, String authType) {
+                }
+            }
+    };
+    private final HttpClient httpClient;
     private final URI uri;
 
     public HTTPHealthCheck(URI uri, Duration timeout, boolean disableTLSValidation) throws KeyStoreException, NoSuchAlgorithmException,
@@ -61,51 +72,36 @@ public final class HTTPHealthCheck extends HealthCheck {
         super(new InetSocketAddress(uri.getHost(), uri.getPort()), timeout);
         this.uri = uri;
 
-        RequestConfig requestConfig = RequestConfig.custom()
-                .setRedirectsEnabled(false)
-                .setConnectionRequestTimeout(super.timeout)
-                .setSocketTimeout(super.timeout)
-                .setConnectTimeout(super.timeout)
-                .setAuthenticationEnabled(false)
-                .setRedirectsEnabled(false)
-                .setCircularRedirectsAllowed(false)
+        HttpClient.Builder builder = HttpClient.newBuilder();
+        if (disableTLSValidation) {
+            SSLContext sslContext = SSLContext.getInstance("TLSv1.2");
+            sslContext.init(null, trustAllCerts, new SecureRandom());
+            builder.sslContext(sslContext);
+        }
+        httpClient = builder.followRedirects(HttpClient.Redirect.NEVER)
+                .connectTimeout(timeout)
                 .build();
 
-        this.httpClientBuilder = HttpClientBuilder.create()
-                .disableAuthCaching()
-                .disableContentCompression()
-                .disableAutomaticRetries()
-                .disableConnectionState()
-                .disableCookieManagement()
-                .disableDefaultUserAgent()
-                .setDefaultRequestConfig(requestConfig)
-                .disableRedirectHandling();
 
-        if (disableTLSValidation) {
-            SSLContextBuilder builder = new SSLContextBuilder();
-            builder.loadTrustMaterial(null, new TrustSelfSignedStrategy());
-            SSLConnectionSocketFactory socketFactory = new SSLConnectionSocketFactory(builder.build());
-            httpClientBuilder.setSSLSocketFactory(socketFactory);
-            httpClientBuilder.setSSLHostnameVerifier(new NoopHostnameVerifier());
-        }
     }
 
     @Override
     public void run() {
         try {
-            try (CloseableHttpClient httpClient = httpClientBuilder.build()) {
-                HttpGet httpGet = new HttpGet(uri);
-                httpGet.addHeader("User-Agent", "ShieldBlaze ExpressGateway HealthCheck Agent");
-                httpGet.addHeader("Connection", "Close");
 
-                try (CloseableHttpResponse httpResponse = httpClient.execute(httpGet)) {
-                    int status = httpResponse.getStatusLine().getStatusCode();
-                    if (status >= 200 && status <= 299) {
-                        markSuccess();
-                    } else {
-                        markFailure();
-                    }
-                }
+            HttpRequest request = HttpRequest.newBuilder()
+                    .GET()
+                    .setHeader("User-Agent", "ExpressGateway HealthCheck Agent")
+                    .setHeader("Connection", "Close")
+                    .uri(uri)
+                    .build();
+
+            HttpResponse<Void> response = httpClient.send(request, HttpResponse.BodyHandlers.discarding());
+
+            if (response.statusCode() >= 200 && response.statusCode() <= 299) {
+                markSuccess();
+            } else {
+                markFailure();
             }
         } catch (Exception e) {
             logger.debug("Health Check Failure For Address: " + socketAddress, e);
