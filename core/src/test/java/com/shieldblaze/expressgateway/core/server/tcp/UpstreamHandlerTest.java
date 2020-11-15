@@ -58,7 +58,7 @@ final class UpstreamHandlerTest {
     static EventLoopFactory eventLoopFactory;
 
     @BeforeAll
-    static void setup() {
+    static void setup() throws InterruptedException {
         new TCPServer().start();
 
         TransportConfiguration transportConfiguration = TransportConfigurationBuilder.newBuilder()
@@ -99,9 +99,10 @@ final class UpstreamHandlerTest {
                 .build();
 
         List<CompletableFuture<L4FrontListenerEvent>> list = l4LoadBalancer.start();
+        Thread.sleep(2500L);
         for (CompletableFuture<L4FrontListenerEvent> completableFuture : list) {
             try {
-                assertTrue(completableFuture.get().isSuccess());
+                assertTrue(completableFuture.get().channelFuture().isSuccess());
             } catch (Throwable e) {
                 e.printStackTrace();
             }
