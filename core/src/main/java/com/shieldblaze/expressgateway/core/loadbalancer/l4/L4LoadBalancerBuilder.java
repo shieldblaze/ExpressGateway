@@ -102,7 +102,7 @@ public final class L4LoadBalancerBuilder {
                 Objects.requireNonNull(cluster, "cluster"),
                 Objects.requireNonNull(commonConfiguration, "commonConfiguration")
         );
-        l4Balance.setCluster(cluster);
+        l4Balance.cluster(cluster);
         l4FrontListener.setL4LoadBalancer(defaultL4LoadBalancer);
         return defaultL4LoadBalancer;
     }

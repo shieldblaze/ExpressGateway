@@ -29,12 +29,12 @@ public final class EventLoopFactory {
     private final EventLoopGroup childGroup;
 
     public EventLoopFactory(CommonConfiguration commonConfiguration) {
-        if (commonConfiguration.getTransportConfiguration().getTransportType() == TransportType.EPOLL) {
-            parentGroup = new EpollEventLoopGroup(commonConfiguration.getEventLoopConfiguration().getParentWorkers());
-            childGroup = new EpollEventLoopGroup(commonConfiguration.getEventLoopConfiguration().getChildWorkers());
+        if (commonConfiguration.transportConfiguration().transportType() == TransportType.EPOLL) {
+            parentGroup = new EpollEventLoopGroup(commonConfiguration.eventLoopConfiguration().parentWorkers());
+            childGroup = new EpollEventLoopGroup(commonConfiguration.eventLoopConfiguration().childWorkers());
         } else {
-            parentGroup = new NioEventLoopGroup(commonConfiguration.getEventLoopConfiguration().getParentWorkers());
-            childGroup = new NioEventLoopGroup(commonConfiguration.getEventLoopConfiguration().getChildWorkers());
+            parentGroup = new NioEventLoopGroup(commonConfiguration.eventLoopConfiguration().parentWorkers());
+            childGroup = new NioEventLoopGroup(commonConfiguration.eventLoopConfiguration().childWorkers());
         }
     }
 

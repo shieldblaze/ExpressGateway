@@ -24,7 +24,7 @@ import com.shieldblaze.expressgateway.backend.Backend;
  *
  * <p></p>
  *
- * @param <REQUEST>  Request Type for {@linkplain #getBackend(Request)}
+ * @param <REQUEST>  Request Type for {@linkplain #backend(Request)}
  * @param <RESPONSE> Response Type for {@linkplain #addRoute(KEY, VALUE)} and {@linkplain #removeRoute(KEY, VALUE)}
  * @param <KEY>      Key Type to use for {@linkplain #addRoute(KEY, VALUE)} and {@linkplain #removeRoute(KEY, VALUE)}
  * @param <VALUE>    Value Type to use for {@linkplain #addRoute(KEY, VALUE)} and {@linkplain #removeRoute(KEY, VALUE)}
@@ -36,7 +36,7 @@ public interface SessionPersistence<REQUEST, RESPONSE, KEY, VALUE> {
      *
      * @return {@link Backend} is route is available else {@code null}
      */
-    REQUEST getBackend(Request request);
+    REQUEST backend(Request request);
 
     /**
      * Add a Key-Value which maps to {@linkplain VALUE}

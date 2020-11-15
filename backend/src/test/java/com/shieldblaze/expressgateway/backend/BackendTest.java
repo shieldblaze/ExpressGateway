@@ -30,15 +30,15 @@ class BackendTest {
     @Test
     void testCreate() {
         Backend backend = new Backend(new InetSocketAddress("10.1.1.1", 9110));
-        assertEquals("10.1.1.1", backend.getSocketAddress().getAddress().getHostAddress());
-        assertEquals(9110, backend.getSocketAddress().getPort());
+        assertEquals("10.1.1.1", backend.socketAddress().getAddress().getHostAddress());
+        assertEquals(9110, backend.socketAddress().getPort());
 
 
         backend = new Backend(new InetSocketAddress("10.1.1.1", 9110), 10, 100);
-        assertEquals("10.1.1.1", backend.getSocketAddress().getAddress().getHostAddress());
-        assertEquals(9110, backend.getSocketAddress().getPort());
-        assertEquals(10, backend.getWeight());
-        assertEquals(100, backend.getMaxConnections());
+        assertEquals("10.1.1.1", backend.socketAddress().getAddress().getHostAddress());
+        assertEquals(9110, backend.socketAddress().getPort());
+        assertEquals(10, backend.weight());
+        assertEquals(100, backend.maxConnections());
     }
 
     @Test

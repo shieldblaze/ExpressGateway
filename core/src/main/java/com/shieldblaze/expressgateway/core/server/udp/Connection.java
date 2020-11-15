@@ -56,10 +56,10 @@ final class Connection {
 
         Bootstrap bootstrap = BootstrapFactory.getUDP(commonConfiguration, eventLoopFactory.getChildGroup(), byteBufAllocator);
         bootstrap.handler(new DownstreamHandler(clientChannel, clientAddress, this));
-        ChannelFuture channelFuture = bootstrap.connect(backend.getSocketAddress());
+        ChannelFuture channelFuture = bootstrap.connect(backend.socketAddress());
         backendChannel = channelFuture.channel();
 
-        int timeout = commonConfiguration.getTransportConfiguration().getConnectionIdleTimeout();
+        int timeout = commonConfiguration.transportConfiguration().connectionIdleTimeout();
 
         backendChannel.pipeline().addFirst(new IdleStateHandler(timeout, timeout, timeout));
 
@@ -97,7 +97,7 @@ final class Connection {
                 }
             });
             return;
-        } else if (backlog != null && backlog.size() < commonConfiguration.getTransportConfiguration().getDataBacklog()) {
+        } else if (backlog != null && backlog.size() < commonConfiguration.transportConfiguration().dataBacklog()) {
             backlog.add(datagramPacket);
             return;
         }

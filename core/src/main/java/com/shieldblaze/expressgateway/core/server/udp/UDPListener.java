@@ -25,7 +25,6 @@ import com.shieldblaze.expressgateway.core.utils.BootstrapFactory;
 import com.shieldblaze.expressgateway.core.server.L4FrontListener;
 import io.netty.bootstrap.Bootstrap;
 import io.netty.channel.ChannelFuture;
-import io.netty.channel.ChannelFutureListener;
 import io.netty.channel.EventLoopGroup;
 
 import java.util.List;
@@ -46,8 +45,8 @@ public final class UDPListener extends L4FrontListener {
                 .handler(new UpstreamHandler(getL4LoadBalancer()));
 
         int bindRounds = 1;
-        if (commonConfiguration.getTransportConfiguration().getTransportType() == TransportType.EPOLL) {
-            bindRounds = commonConfiguration.getEventLoopConfiguration().getParentWorkers();
+        if (commonConfiguration.transportConfiguration().transportType() == TransportType.EPOLL) {
+            bindRounds = commonConfiguration.eventLoopConfiguration().parentWorkers();
         }
 
         for (int i = 0; i < bindRounds; i++) {

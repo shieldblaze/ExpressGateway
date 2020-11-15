@@ -50,12 +50,12 @@ public final class WeightedRandom extends L4Balance implements EventListener {
 
     public WeightedRandom(SessionPersistence<Backend, Backend, InetSocketAddress, Backend> sessionPersistence, Cluster cluster) {
         super(sessionPersistence);
-        setCluster(cluster);
+        cluster(cluster);
     }
 
     @Override
-    public void setCluster(Cluster cluster) {
-        super.setCluster(cluster);
+    public void cluster(Cluster cluster) {
+        super.cluster(cluster);
         init();
         cluster.subscribeStream(this);
     }
@@ -64,19 +64,19 @@ public final class WeightedRandom extends L4Balance implements EventListener {
         totalWeight = 0;
         sessionPersistence.clear();
         backendsMap.clear();
-        cluster.getOnlineBackends().forEach(backend -> backendsMap.put(Range.closed(totalWeight, totalWeight += backend.getWeight()), backend));
+        cluster.onlineBackends().forEach(backend -> backendsMap.put(Range.closed(totalWeight, totalWeight += backend.weight()), backend));
     }
 
     @Override
-    public L4Response getResponse(L4Request l4Request) throws BackendNotOnlineException {
-        Backend backend = sessionPersistence.getBackend(l4Request);
+    public L4Response response(L4Request l4Request) throws BackendNotOnlineException {
+        Backend backend = sessionPersistence.backend(l4Request);
         if (backend != null) {
             // If Backend is ONLINE then return the response
             // else remove it from session persistence.
-            if (backend.getState() == State.ONLINE) {
+            if (backend.state() == State.ONLINE) {
                 return new L4Response(backend);
             } else {
-                sessionPersistence.removeRoute(l4Request.getSocketAddress(), backend);
+                sessionPersistence.removeRoute(l4Request.socketAddress(), backend);
             }
         }
 
@@ -87,7 +87,7 @@ public final class WeightedRandom extends L4Balance implements EventListener {
             // If Backend is `null` then we don't have any
             // backend to return so we will throw exception.
             throw new BackendNotOnlineException("No Backend available for Cluster: " + cluster);
-        } else if (backend.getState() != State.ONLINE) {
+        } else if (backend.state() != State.ONLINE) {
             init(); // We'll reset the mapping because it could be outdated.
 
             // If selected Backend is not online then
@@ -95,7 +95,7 @@ public final class WeightedRandom extends L4Balance implements EventListener {
             throw new BackendNotOnlineException("Randomly selected Backend is not online");
         }
 
-        sessionPersistence.addRoute(l4Request.getSocketAddress(), backend);
+        sessionPersistence.addRoute(l4Request.socketAddress(), backend);
         return new L4Response(backend);
     }
 
@@ -103,14 +103,14 @@ public final class WeightedRandom extends L4Balance implements EventListener {
     public void accept(Object event) {
         if (event instanceof BackendEvent) {
             BackendEvent backendEvent = (BackendEvent) event;
-            switch (backendEvent.getType()) {
+            switch (backendEvent.type()) {
                 case ADDED:
                 case ONLINE:
                 case OFFLINE:
                 case REMOVED:
                     init();
                 default:
-                    throw new IllegalArgumentException("Unsupported Backend Event Type: " + backendEvent.getType());
+                    throw new IllegalArgumentException("Unsupported Backend Event Type: " + backendEvent.type());
             }
         }
     }

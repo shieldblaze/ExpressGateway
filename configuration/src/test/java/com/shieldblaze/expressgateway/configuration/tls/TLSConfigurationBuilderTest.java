@@ -17,12 +17,6 @@
  */
 package com.shieldblaze.expressgateway.configuration.tls;
 
-import com.shieldblaze.expressgateway.configuration.tls.CertificateKeyPair;
-import com.shieldblaze.expressgateway.configuration.tls.Cipher;
-import com.shieldblaze.expressgateway.configuration.tls.MutualTLS;
-import com.shieldblaze.expressgateway.configuration.tls.Protocol;
-import com.shieldblaze.expressgateway.configuration.tls.TLSConfigurationBuilder;
-import com.shieldblaze.expressgateway.configuration.tls.TLSServerMapping;
 import io.netty.handler.ssl.util.SelfSignedCertificate;
 import org.junit.jupiter.api.Test;
 
@@ -40,7 +34,7 @@ final class TLSConfigurationBuilderTest {
         CertificateKeyPair certificateKeyPair = new CertificateKeyPair(Collections.singletonList(selfSignedCertificate.cert()),
                 selfSignedCertificate.key(), false);
         TLSServerMapping tlsServerMapping = new TLSServerMapping(certificateKeyPair);
-        tlsServerMapping.addMapping("*.localhost", certificateKeyPair);
+        tlsServerMapping.mapping("*.localhost", certificateKeyPair);
 
         assertThrows(NullPointerException.class, () -> TLSConfigurationBuilder.forServer().withCiphers(null).build());
 

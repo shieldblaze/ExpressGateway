@@ -17,9 +17,6 @@
  */
 package com.shieldblaze.expressgateway.configuration.tls;
 
-import com.shieldblaze.expressgateway.configuration.tls.CertificateKeyPair;
-import com.shieldblaze.expressgateway.configuration.tls.TLSConfiguration;
-import com.shieldblaze.expressgateway.configuration.tls.TLSServerMapping;
 import io.netty.handler.ssl.util.SelfSignedCertificate;
 import org.junit.jupiter.api.Test;
 
@@ -38,14 +35,14 @@ final class TLSConfigurationTest {
                 selfSignedCertificate.key(), false);
 
         TLSServerMapping tlsServerMapping = new TLSServerMapping(certificateKeyPair);
-        tlsServerMapping.addMapping("*.localhost", certificateKeyPair);
+        tlsServerMapping.mapping("*.localhost", certificateKeyPair);
 
         TLSConfiguration tlsConfiguration = new TLSConfiguration();
-        tlsConfiguration.setCertificateKeyPairMap(tlsServerMapping.certificateKeyMap);
+        tlsConfiguration.certificateKeyPairMap(tlsServerMapping.certificateKeyMap);
 
-        assertEquals(certificateKeyPair, tlsConfiguration.getMapping("haha.localhost"));
-        assertEquals(certificateKeyPair, tlsConfiguration.getMapping("123.localhost"));
-        assertEquals(certificateKeyPair, tlsConfiguration.getMapping("localhost.localhost"));
-        assertEquals(certificateKeyPair, tlsConfiguration.getMapping("shieldblaze.com"));
+        assertEquals(certificateKeyPair, tlsConfiguration.mapping("haha.localhost"));
+        assertEquals(certificateKeyPair, tlsConfiguration.mapping("123.localhost"));
+        assertEquals(certificateKeyPair, tlsConfiguration.mapping("localhost.localhost"));
+        assertEquals(certificateKeyPair, tlsConfiguration.mapping("shieldblaze.com"));
     }
 }

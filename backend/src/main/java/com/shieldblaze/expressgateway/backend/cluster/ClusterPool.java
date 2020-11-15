@@ -30,12 +30,12 @@ public final class ClusterPool extends Cluster {
     private static final AtomicInteger count = new AtomicInteger();
 
     public ClusterPool() {
-        setName("ClusterPool#" + count.getAndIncrement());
+        name("ClusterPool#" + count.getAndIncrement());
     }
 
     private ClusterPool(String name, String hostname, Backend... backends) {
-        setName(name);
-        setHostname(hostname);
+        name(name);
+        hostname(hostname);
         addBackends(backends);
     }
 

@@ -37,7 +37,7 @@ public final class SourceIPHash implements SessionPersistence<Backend, Backend, 
     private final SelfExpiringMap<Object, Backend> routeMap = new SelfExpiringMap<>(new ConcurrentHashMap<>(), Duration.ofHours(1), false);
 
     @Override
-    public Backend getBackend(Request request) {
+    public Backend backend(Request request) {
         Backend backend;
 
         /*
@@ -45,7 +45,7 @@ public final class SourceIPHash implements SessionPersistence<Backend, Backend, 
          *
          * If Source IP Address is IPv6, we'll convert it into BigInteger with /48 mask.
          */
-        if (request.getSocketAddress().getAddress() instanceof Inet4Address) {
+        if (request.socketAddress().getAddress() instanceof Inet4Address) {
             int ipWithMask = ipv4WithMask(request);
             backend = routeMap.get(ipWithMask);
         } else {
@@ -85,11 +85,11 @@ public final class SourceIPHash implements SessionPersistence<Backend, Backend, 
     }
 
     private int ipv4WithMask(Request request) {
-        return ipv4WithMask(request.getSocketAddress());
+        return ipv4WithMask(request.socketAddress());
     }
 
     private BigInteger ipv6WithMask(Request request) {
-        return ipv6WithMask(request.getSocketAddress());
+        return ipv6WithMask(request.socketAddress());
     }
 
     private int ipv4WithMask(InetSocketAddress socketAddress) {

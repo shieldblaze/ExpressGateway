@@ -47,8 +47,8 @@ public class HTTP2ContentCompressor extends CompressorHttp2ConnectionEncoder {
 
     public HTTP2ContentCompressor(Http2ConnectionEncoder delegate, HTTPConfiguration httpConfiguration) {
         super(delegate);
-        this.brotliCompressionQuality = httpConfiguration.getBrotliCompressionLevel();
-        this.compressionLevel = httpConfiguration.getDeflateCompressionLevel();
+        this.brotliCompressionQuality = httpConfiguration.brotliCompressionLevel();
+        this.compressionLevel = httpConfiguration.deflateCompressionLevel();
     }
 
     @Override

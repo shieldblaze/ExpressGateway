@@ -40,15 +40,15 @@ public final class BootstrapFactory {
         return new Bootstrap()
                 .group(eventLoopGroup)
                 .option(ChannelOption.ALLOCATOR, byteBufAllocator)
-                .option(ChannelOption.RCVBUF_ALLOCATOR, commonConfiguration.getTransportConfiguration().getRecvByteBufAllocator())
-                .option(ChannelOption.SO_SNDBUF, commonConfiguration.getTransportConfiguration().getSocketSendBufferSize())
-                .option(ChannelOption.SO_RCVBUF, commonConfiguration.getTransportConfiguration().getSocketReceiveBufferSize())
+                .option(ChannelOption.RCVBUF_ALLOCATOR, commonConfiguration.transportConfiguration().recvByteBufAllocator())
+                .option(ChannelOption.SO_SNDBUF, commonConfiguration.transportConfiguration().socketSendBufferSize())
+                .option(ChannelOption.SO_RCVBUF, commonConfiguration.transportConfiguration().socketReceiveBufferSize())
                 .option(ChannelOption.TCP_NODELAY, true)
                 .option(ChannelOption.AUTO_READ, true)
                 .option(ChannelOption.AUTO_CLOSE, true)
-                .option(ChannelOption.CONNECT_TIMEOUT_MILLIS, commonConfiguration.getTransportConfiguration().getBackendConnectTimeout())
+                .option(ChannelOption.CONNECT_TIMEOUT_MILLIS, commonConfiguration.transportConfiguration().backendConnectTimeout())
                 .channelFactory(() -> {
-                    if (commonConfiguration.getTransportConfiguration().getTransportType() == TransportType.EPOLL) {
+                    if (commonConfiguration.transportConfiguration().transportType() == TransportType.EPOLL) {
                         EpollSocketChannel socketChannel = new EpollSocketChannel();
                         socketChannel.config()
                                 .setEpollMode(EpollMode.EDGE_TRIGGERED)
@@ -66,13 +66,13 @@ public final class BootstrapFactory {
         return new Bootstrap()
                 .group(eventLoopGroup)
                 .option(ChannelOption.ALLOCATOR, byteBufAllocator)
-                .option(ChannelOption.RCVBUF_ALLOCATOR, commonConfiguration.getTransportConfiguration().getRecvByteBufAllocator())
-                .option(ChannelOption.SO_SNDBUF, commonConfiguration.getTransportConfiguration().getSocketSendBufferSize())
-                .option(ChannelOption.SO_RCVBUF, commonConfiguration.getTransportConfiguration().getSocketReceiveBufferSize())
+                .option(ChannelOption.RCVBUF_ALLOCATOR, commonConfiguration.transportConfiguration().recvByteBufAllocator())
+                .option(ChannelOption.SO_SNDBUF, commonConfiguration.transportConfiguration().socketSendBufferSize())
+                .option(ChannelOption.SO_RCVBUF, commonConfiguration.transportConfiguration().socketReceiveBufferSize())
                 .option(ChannelOption.AUTO_READ, true)
                 .option(ChannelOption.AUTO_CLOSE, false)
                 .channelFactory(() -> {
-                    if (commonConfiguration.getTransportConfiguration().getTransportType() == TransportType.EPOLL) {
+                    if (commonConfiguration.transportConfiguration().transportType() == TransportType.EPOLL) {
                         EpollDatagramChannel epollDatagramChannel = new EpollDatagramChannel();
                         epollDatagramChannel.config()
                                 .setEpollMode(EpollMode.EDGE_TRIGGERED)

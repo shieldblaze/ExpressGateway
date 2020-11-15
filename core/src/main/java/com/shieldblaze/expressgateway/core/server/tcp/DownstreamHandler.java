@@ -71,7 +71,7 @@ final class DownstreamHandler extends ChannelInboundHandlerAdapter {
         if (logger.isInfoEnabled()) {
             logger.info("Closing Upstream {} and Downstream {} Channel",
                     upstreamAddress.getAddress().getHostAddress() + ":" + upstreamAddress.getPort(),
-                    backend.getSocketAddress().getAddress().getHostAddress() + ":" + backend.getSocketAddress().getPort());
+                    backend.socketAddress().getAddress().getHostAddress() + ":" + backend.socketAddress().getPort());
         }
         upstream.close();      // Close Upstream Channel
         ctx.channel().close(); // Close Downstream Channel

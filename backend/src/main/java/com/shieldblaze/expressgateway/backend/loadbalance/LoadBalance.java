@@ -36,7 +36,7 @@ public abstract class LoadBalance<REQUEST, RESPONSE, KEY, VALUE> {
      * @throws NullPointerException If {@link SessionPersistence} is {@code null}
      */
     public LoadBalance(SessionPersistence<REQUEST, RESPONSE, KEY, VALUE> sessionPersistence) {
-        this.sessionPersistence = Objects.requireNonNull(sessionPersistence, "sessionPersistence");
+        this.sessionPersistence = Objects.requireNonNull(sessionPersistence, "SessionPersistence");
     }
 
     /**
@@ -44,9 +44,9 @@ public abstract class LoadBalance<REQUEST, RESPONSE, KEY, VALUE> {
      *
      * @param cluster {@link Cluster} Instance
      */
-    public void setCluster(Cluster cluster) {
+    public void cluster(Cluster cluster) {
         this.cluster = Objects.requireNonNull(cluster, "cluster");
     }
 
-    public abstract Response getResponse(Request request) throws LoadBalanceException;
+    public abstract Response response(Request request) throws LoadBalanceException;
 }

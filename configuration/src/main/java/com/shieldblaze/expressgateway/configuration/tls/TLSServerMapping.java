@@ -18,10 +18,10 @@
 package com.shieldblaze.expressgateway.configuration.tls;
 
 import com.google.common.net.InternetDomainName;
-import io.netty.util.internal.ObjectUtil;
 
 import java.util.HashMap;
 import java.util.Map;
+import java.util.Objects;
 
 /**
  * TLS Server Mapping contains mapping for Hostname and {@link CertificateKeyPair}
@@ -48,12 +48,13 @@ public final class TLSServerMapping {
 
     /**
      * Add Mapping
-     * @param hostname Hostname to which {@link CertificateKeyPair} will be mapped
+     *
+     * @param hostname           Hostname to which {@link CertificateKeyPair} will be mapped
      * @param certificateKeyPair {@link CertificateKeyPair} to be mapped
      * @throws IllegalArgumentException If {@code hostname} is invalid
-     * @throws NullPointerException If {@code certificateKeyPair} is {@code null}
+     * @throws NullPointerException     If {@code certificateKeyPair} is {@code null}
      */
-    public void addMapping(String hostname, CertificateKeyPair certificateKeyPair) {
+    public TLSServerMapping mapping(String hostname, CertificateKeyPair certificateKeyPair) {
         if (hostname.startsWith("*.")) {
             if (!InternetDomainName.isValid(hostname.substring(2))) {
                 throw new IllegalArgumentException("Invalid Hostname");
@@ -64,6 +65,7 @@ public final class TLSServerMapping {
             }
         }
 
-        certificateKeyMap.put(hostname, ObjectUtil.checkNotNull(certificateKeyPair, "CertificateKeyPair"));
+        certificateKeyMap.put(hostname, Objects.requireNonNull(certificateKeyPair, "CertificateKeyPair"));
+        return this;
     }
 }

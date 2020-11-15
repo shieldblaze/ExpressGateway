@@ -50,11 +50,11 @@ public abstract class L4Balance extends LoadBalance<Backend, Backend, InetSocket
         super(sessionPersistence);
     }
 
-    public abstract L4Response getResponse(L4Request l4Request) throws LoadBalanceException;
+    public abstract L4Response response(L4Request l4Request) throws LoadBalanceException;
 
     @Override
-    public Response getResponse(Request request) throws LoadBalanceException {
-        return getResponse((L4Request) request);
+    public Response response(Request request) throws LoadBalanceException {
+        return response((L4Request) request);
     }
 
     @Override

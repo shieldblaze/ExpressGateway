@@ -47,26 +47,26 @@ public final class RoundRobin extends L4Balance implements EventListener {
 
     public RoundRobin(SessionPersistence<Backend, Backend, InetSocketAddress, Backend> sessionPersistence, Cluster cluster) {
         super(sessionPersistence);
-        setCluster(cluster);
+        cluster(cluster);
     }
 
     @Override
-    public void setCluster(Cluster cluster) {
-        super.setCluster(cluster);
-        roundRobinList = new RoundRobinList<>(cluster.getOnlineBackends());
+    public void cluster(Cluster cluster) {
+        super.cluster(cluster);
+        roundRobinList = new RoundRobinList<>(cluster.onlineBackends());
         cluster.subscribeStream(this);
     }
 
     @Override
-    public L4Response getResponse(L4Request l4Request) throws LoadBalanceException {
-        Backend backend = sessionPersistence.getBackend(l4Request);
+    public L4Response response(L4Request l4Request) throws LoadBalanceException {
+        Backend backend = sessionPersistence.backend(l4Request);
         if (backend != null) {
             // If Backend is ONLINE then return the response
             // else remove it from session persistence.
-            if (backend.getState() == State.ONLINE) {
+            if (backend.state() == State.ONLINE) {
                 return new L4Response(backend);
             } else {
-                sessionPersistence.removeRoute(l4Request.getSocketAddress(), backend);
+                sessionPersistence.removeRoute(l4Request.socketAddress(), backend);
             }
         }
 
@@ -78,7 +78,7 @@ public final class RoundRobin extends L4Balance implements EventListener {
             throw new NoBackendAvailableException("No Backend available for Cluster: " + cluster);
         }
 
-        sessionPersistence.addRoute(l4Request.getSocketAddress(), backend);
+        sessionPersistence.addRoute(l4Request.socketAddress(), backend);
         return new L4Response(backend);
     }
 
@@ -86,15 +86,15 @@ public final class RoundRobin extends L4Balance implements EventListener {
     public void accept(Object event) {
         if (event instanceof BackendEvent) {
             BackendEvent backendEvent = (BackendEvent) event;
-            switch (backendEvent.getType()) {
+            switch (backendEvent.type()) {
                 case ADDED:
                 case ONLINE:
                 case OFFLINE:
                 case REMOVED:
-                    roundRobinList.init(cluster.getOnlineBackends());
+                    roundRobinList.init(cluster.onlineBackends());
                     sessionPersistence.clear();
                 default:
-                    throw new IllegalArgumentException("Unsupported Backend Event Type: " + backendEvent.getType());
+                    throw new IllegalArgumentException("Unsupported Backend Event Type: " + backendEvent.type());
             }
         }
     }

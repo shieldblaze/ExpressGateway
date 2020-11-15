@@ -29,15 +29,15 @@ public final class PooledByteBufAllocator {
         Objects.requireNonNull(configuration, "PooledByteBufAllocatorConfiguration");
 
         pooledByteBufAllocator = new io.netty.buffer.PooledByteBufAllocator(
-                configuration.isPreferDirect(),
-                configuration.getHeapArena(),
-                configuration.getDirectArena(),
-                configuration.getPageSize(),
-                configuration.getMaxOrder(),
-                configuration.getSmallCacheSize(),
-                configuration.getNormalCacheSize(),
-                configuration.isUseCacheForAllThreads(),
-                configuration.getDirectMemoryCacheAlignment()
+                configuration.rreferDirect(),
+                configuration.heapArena(),
+                configuration.directArena(),
+                configuration.pageSize(),
+                configuration.maxOrder(),
+                configuration.smallCacheSize(),
+                configuration.normalCacheSize(),
+                configuration.useCacheForAllThreads(),
+                configuration.directMemoryCacheAlignment()
         );
     }
 

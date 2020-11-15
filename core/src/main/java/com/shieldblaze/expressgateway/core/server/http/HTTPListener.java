@@ -61,27 +61,27 @@ public final class HTTPListener extends HTTPFrontListener {
     @Override
     public List<CompletableFuture<L4FrontListenerEvent>> start() {
         CommonConfiguration commonConfiguration = getL7LoadBalancer().getCommonConfiguration();
-        TransportConfiguration transportConfiguration = commonConfiguration.getTransportConfiguration();
+        TransportConfiguration transportConfiguration = commonConfiguration.transportConfiguration();
         EventLoopFactory eventLoopFactory = getL7LoadBalancer().getEventLoopFactory();
         ByteBufAllocator byteBufAllocator = getL7LoadBalancer().getByteBufAllocator();
 
         ServerBootstrap serverBootstrap = new ServerBootstrap()
                 .group(eventLoopFactory.getParentGroup(), eventLoopFactory.getChildGroup())
                 .option(ChannelOption.ALLOCATOR, byteBufAllocator)
-                .option(ChannelOption.RCVBUF_ALLOCATOR, transportConfiguration.getRecvByteBufAllocator())
-                .option(ChannelOption.SO_RCVBUF, transportConfiguration.getSocketReceiveBufferSize())
-                .option(ChannelOption.SO_BACKLOG, transportConfiguration.getTCPConnectionBacklog())
+                .option(ChannelOption.RCVBUF_ALLOCATOR, transportConfiguration.recvByteBufAllocator())
+                .option(ChannelOption.SO_RCVBUF, transportConfiguration.socketReceiveBufferSize())
+                .option(ChannelOption.SO_BACKLOG, transportConfiguration.tcpConnectionBacklog())
                 .option(ChannelOption.AUTO_READ, true)
                 .option(ChannelOption.AUTO_CLOSE, true)
-                .childOption(ChannelOption.SO_SNDBUF, transportConfiguration.getSocketSendBufferSize())
-                .childOption(ChannelOption.SO_RCVBUF, transportConfiguration.getSocketReceiveBufferSize())
-                .childOption(ChannelOption.RCVBUF_ALLOCATOR, transportConfiguration.getRecvByteBufAllocator())
+                .childOption(ChannelOption.SO_SNDBUF, transportConfiguration.socketSendBufferSize())
+                .childOption(ChannelOption.SO_RCVBUF, transportConfiguration.socketReceiveBufferSize())
+                .childOption(ChannelOption.RCVBUF_ALLOCATOR, transportConfiguration.recvByteBufAllocator())
                 .channelFactory(() -> {
-                    if (commonConfiguration.getTransportConfiguration().getTransportType() == TransportType.EPOLL) {
+                    if (commonConfiguration.transportConfiguration().transportType() == TransportType.EPOLL) {
                         EpollServerSocketChannel serverSocketChannel = new EpollServerSocketChannel();
                         EpollServerSocketChannelConfig config = serverSocketChannel.config();
                         config.setOption(UnixChannelOption.SO_REUSEPORT, true);
-                        config.setTcpFastopen(transportConfiguration.getTCPFastOpenMaximumPendingRequests());
+                        config.setTcpFastopen(transportConfiguration.tcpFastOpenMaximumPendingRequests());
                         config.setEpollMode(EpollMode.EDGE_TRIGGERED);
 
                         return serverSocketChannel;
@@ -92,8 +92,8 @@ public final class HTTPListener extends HTTPFrontListener {
                 .childHandler(new ServerInitializer((HTTPLoadBalancer) getL7LoadBalancer()));
 
         int bindRounds = 1;
-        if (transportConfiguration.getTransportType() == TransportType.EPOLL) {
-            bindRounds = commonConfiguration.getEventLoopConfiguration().getParentWorkers();
+        if (transportConfiguration.transportType() == TransportType.EPOLL) {
+            bindRounds = commonConfiguration.eventLoopConfiguration().parentWorkers();
         }
 
         for (int i = 0; i < bindRounds; i++) {
@@ -140,7 +140,7 @@ public final class HTTPListener extends HTTPFrontListener {
             ChannelPipeline pipeline = socketChannel.pipeline();
             HTTPConfiguration httpConfiguration = httpLoadBalancer.getHTTPConfiguration();
 
-            int timeout = httpLoadBalancer.getCommonConfiguration().getTransportConfiguration().getConnectionIdleTimeout();
+            int timeout = httpLoadBalancer.getCommonConfiguration().transportConfiguration().connectionIdleTimeout();
             pipeline.addFirst("IdleStateHandler", new IdleStateHandler(timeout, timeout, timeout));
 
             // If TLS Server is not enabled then we'll only use HTTP/1.1

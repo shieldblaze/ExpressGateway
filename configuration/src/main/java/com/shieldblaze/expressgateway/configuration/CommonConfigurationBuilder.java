@@ -36,6 +36,7 @@ public final class CommonConfigurationBuilder {
 
     /**
      * Create a new {@link CommonConfiguration} Instance
+     *
      * @return {@link CommonConfiguration} Instance
      */
     public static CommonConfigurationBuilder newBuilder() {
@@ -68,15 +69,14 @@ public final class CommonConfigurationBuilder {
 
     /**
      * Build {@link CommonConfiguration}
+     *
      * @return {@link CommonConfiguration} Instance
      * @throws NullPointerException If a required value if {@code null}
      */
     public CommonConfiguration build() {
-        CommonConfiguration commonConfiguration = new CommonConfiguration();
-        commonConfiguration.setTransportConfiguration(ObjectUtil.checkNotNull(transportConfiguration, "Transport Configuration"));
-        commonConfiguration.setEventLoopConfiguration(ObjectUtil.checkNotNull(eventLoopConfiguration, "EventLoop Configuration"));
-        commonConfiguration.setPooledByteBufAllocatorConfiguration(ObjectUtil.checkNotNull(pooledByteBufAllocatorConfiguration,
-                "PooledByteBufAllocator Configuration"));
-        return commonConfiguration;
+        return new CommonConfiguration()
+                .transportConfiguration(ObjectUtil.checkNotNull(transportConfiguration, "Transport Configuration"))
+                .eventLoopConfiguration(ObjectUtil.checkNotNull(eventLoopConfiguration, "EventLoop Configuration"))
+                .pooledByteBufAllocatorConfiguration(ObjectUtil.checkNotNull(pooledByteBufAllocatorConfiguration, "PooledByteBufAllocator Configuration"));
     }
 }

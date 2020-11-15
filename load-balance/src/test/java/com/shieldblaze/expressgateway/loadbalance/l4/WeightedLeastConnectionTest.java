@@ -52,9 +52,9 @@ class WeightedLeastConnectionTest {
         L4Request l4Request = new L4Request(new InetSocketAddress("192.168.1.1", 1));
 
         for (int i = 0; i < 1_000_000; i++) {
-            Backend backend = l4Balance.getResponse(l4Request).getBackend();
+            Backend backend = l4Balance.response(l4Request).backend();
             backend.incConnections();
-            switch (backend.getSocketAddress().getHostString()) {
+            switch (backend.socketAddress().getHostString()) {
                 case "10.10.1.1": {
                     first++;
                     break;

@@ -52,7 +52,7 @@ class RandomTest {
         int fifth = 0;
 
         for (int i = 0; i < 1000; i++) {
-            switch (l4Balance.getResponse(l4Request).getBackend().getSocketAddress().getHostString()) {
+            switch (l4Balance.response(l4Request).backend().socketAddress().getHostString()) {
                 case "172.16.20.1": {
                     first++;
                     break;

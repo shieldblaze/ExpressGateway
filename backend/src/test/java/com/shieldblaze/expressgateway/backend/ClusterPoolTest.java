@@ -61,20 +61,20 @@ class ClusterPoolTest {
 
         Thread.sleep(5000L); // Wait for all Health Checks to Finish
 
-        for (Backend backend : clusterPool.getOnlineBackends()) {
-            assertEquals(Health.GOOD, backend.getHealth());
+        for (Backend backend : clusterPool.onlineBackends()) {
+            assertEquals(Health.GOOD, backend.health());
         }
 
-        assertEquals(99, clusterPool.getOnlineBackends().size());
+        assertEquals(99, clusterPool.onlineBackends().size());
 
         tcpServer.stop();
         Thread.sleep(10000L); // Wait for server to stop and all Health Checks to Finish
 
-        for (Backend backend : clusterPool.getOnlineBackends()) {
-            assertEquals(Health.BAD, backend.getHealth());
+        for (Backend backend : clusterPool.onlineBackends()) {
+            assertEquals(Health.BAD, backend.health());
         }
 
-        assertEquals(0, clusterPool.getOnlineBackends().size());
+        assertEquals(0, clusterPool.onlineBackends().size());
     }
 
     private static final class TCPServer {

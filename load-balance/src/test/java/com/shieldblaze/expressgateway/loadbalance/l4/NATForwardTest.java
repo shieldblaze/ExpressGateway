@@ -35,14 +35,14 @@ class NATForwardTest {
 
         L4Balance l4Balance = new NATForward(SingleBackendCluster.of("localhost.domain", fastBuild("192.168.1.1")));
 
-        assertEquals(fastBuild("192.168.1.1").getSocketAddress(),
-                l4Balance.getResponse(new L4Request(new InetSocketAddress("10.10.10.1", 1))).getBackend().getSocketAddress());
-        assertEquals(fastBuild("192.168.1.1").getSocketAddress(),
-                l4Balance.getResponse(new L4Request(new InetSocketAddress("10.10.10.2", 2))).getBackend().getSocketAddress());
-        assertEquals(fastBuild("192.168.1.1").getSocketAddress(),
-                l4Balance.getResponse(new L4Request(new InetSocketAddress("10.10.10.3", 3))).getBackend().getSocketAddress());
-        assertEquals(fastBuild("192.168.1.1").getSocketAddress(),
-                l4Balance.getResponse(new L4Request(new InetSocketAddress("10.10.10.4", 4))).getBackend().getSocketAddress());
+        assertEquals(fastBuild("192.168.1.1").socketAddress(),
+                l4Balance.response(new L4Request(new InetSocketAddress("10.10.10.1", 1))).backend().socketAddress());
+        assertEquals(fastBuild("192.168.1.1").socketAddress(),
+                l4Balance.response(new L4Request(new InetSocketAddress("10.10.10.2", 2))).backend().socketAddress());
+        assertEquals(fastBuild("192.168.1.1").socketAddress(),
+                l4Balance.response(new L4Request(new InetSocketAddress("10.10.10.3", 3))).backend().socketAddress());
+        assertEquals(fastBuild("192.168.1.1").socketAddress(),
+                l4Balance.response(new L4Request(new InetSocketAddress("10.10.10.4", 4))).backend().socketAddress());
     }
 
     @Test

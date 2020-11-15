@@ -35,14 +35,14 @@ class L4BalanceTest {
         Backend backend = new Backend(new InetSocketAddress("192.168.1.1", 9110));
 
         L4Balance l4Balance = new EmptyL4Balance();
-        l4Balance.setCluster(SingleBackendCluster.of("localhost.domain", backend));
+        l4Balance.cluster(SingleBackendCluster.of("localhost.domain", backend));
 
-        Assertions.assertEquals(backend, l4Balance.getResponse(null).getBackend());
+        Assertions.assertEquals(backend, l4Balance.response(null).backend());
     }
 
     @Test
     void throwsException() {
-        assertThrows(NullPointerException.class, () -> new EmptyL4Balance().setCluster(null));
+        assertThrows(NullPointerException.class, () -> new EmptyL4Balance().cluster(null));
     }
 
     private static final class EmptyL4Balance extends L4Balance {
@@ -52,7 +52,7 @@ class L4BalanceTest {
         }
 
         @Override
-        public L4Response getResponse(L4Request l4Request) {
+        public L4Response response(L4Request l4Request) {
             return new L4Response(cluster.get(0));
         }
     }

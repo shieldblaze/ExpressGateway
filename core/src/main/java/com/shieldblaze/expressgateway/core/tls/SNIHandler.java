@@ -41,7 +41,7 @@ public final class SNIHandler extends AbstractSniHandler<CertificateKeyPair> {
     public SNIHandler(TLSConfiguration tlsConfiguration) {
         promise = (input, promise) -> {
             try {
-                return promise.setSuccess(tlsConfiguration.getMapping(input));
+                return promise.setSuccess(tlsConfiguration.mapping(input));
             } catch (Exception ex) {
                 return promise.setFailure(ex);
             }
@@ -74,7 +74,7 @@ public final class SNIHandler extends AbstractSniHandler<CertificateKeyPair> {
 
             try {
                 if (sslHandler.engine() instanceof ReferenceCountedOpenSslEngine && certificateKeyPair.useOCSP()) {
-                    ((ReferenceCountedOpenSslEngine) sslHandler.engine()).setOcspResponse(certificateKeyPair.getOcspStaplingData());
+                    ((ReferenceCountedOpenSslEngine) sslHandler.engine()).setOcspResponse(certificateKeyPair.ocspStaplingData());
                 }
             } catch (Exception ex) {
                 ctx.fireExceptionCaught(ex);

@@ -56,7 +56,8 @@ public abstract class HealthCheckManager implements Runnable {
         }
     }
 
-    public void setBackend(Backend backend) {
+    public HealthCheckManager backend(Backend backend) {
         this.backend = Objects.requireNonNull(backend);
+        return this;
     }
 }

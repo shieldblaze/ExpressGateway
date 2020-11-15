@@ -53,7 +53,7 @@ final class Bootstrapper {
     }
 
     HTTPConnection newInit(Backend backend, Channel channel) {
-        int timeout = httpLoadBalancer.getCommonConfiguration().getTransportConfiguration().getBackendConnectTimeout();
+        int timeout = httpLoadBalancer.getCommonConfiguration().transportConfiguration().backendConnectTimeout();
         HTTPConnection httpConnection = new HTTPConnection(timeout);
 
         Bootstrap bootstrap = BootstrapFactory.getTCP(httpLoadBalancer.getCommonConfiguration(), eventLoopGroup, byteBufAllocator);
@@ -62,7 +62,7 @@ final class Bootstrapper {
             protected void initChannel(SocketChannel ch) {
                 ChannelPipeline pipeline = ch.pipeline();
 
-                int timeout = httpLoadBalancer.getCommonConfiguration().getTransportConfiguration().getConnectionIdleTimeout();
+                int timeout = httpLoadBalancer.getCommonConfiguration().transportConfiguration().connectionIdleTimeout();
                 pipeline.addFirst(new IdleStateHandler(timeout, timeout, timeout));
 
                 DownstreamHandler downstreamHandler = new DownstreamHandler(httpConnection, channel);
@@ -80,9 +80,9 @@ final class Bootstrapper {
                         logger.error(e);
                     }
                 } else {
-                    String hostname = backend.getSocketAddress().getHostName();
-                    int port = backend.getSocketAddress().getPort();
-                    SslHandler sslHandler = httpLoadBalancer.tlsClient().getDefault().sslContext().newHandler(ch.alloc(), hostname, port);
+                    String hostname = backend.socketAddress().getHostName();
+                    int port = backend.socketAddress().getPort();
+                    SslHandler sslHandler = httpLoadBalancer.tlsClient().defaultMapping().sslContext().newHandler(ch.alloc(), hostname, port);
 
                     ALPNHandler alpnHandler = ALPNHandlerBuilder.newBuilder()
                             // HTTP/2 Handlers
@@ -102,7 +102,7 @@ final class Bootstrapper {
             }
         });
 
-        ChannelFuture channelFuture = bootstrap.connect(backend.getSocketAddress());
+        ChannelFuture channelFuture = bootstrap.connect(backend.socketAddress());
         httpConnection.init(channelFuture);
         return httpConnection;
     }

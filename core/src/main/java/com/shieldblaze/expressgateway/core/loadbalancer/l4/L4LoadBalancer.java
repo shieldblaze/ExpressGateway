@@ -61,7 +61,7 @@ public abstract class L4LoadBalancer {
         this.l4FrontListener = Objects.requireNonNull(l4FrontListener, "L4FrontListener");
         this.cluster = Objects.requireNonNull(cluster, "Cluster");
         this.commonConfiguration = Objects.requireNonNull(commonConfiguration, "CommonConfiguration");
-        this.byteBufAllocator = new PooledByteBufAllocator(commonConfiguration.getPooledByteBufAllocatorConfiguration()).getInstance();
+        this.byteBufAllocator = new PooledByteBufAllocator(commonConfiguration.pooledByteBufAllocatorConfiguration()).getInstance();
         this.eventLoopFactory = new EventLoopFactory(commonConfiguration);
     }
 

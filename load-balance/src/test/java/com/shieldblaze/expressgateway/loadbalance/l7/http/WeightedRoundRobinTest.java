@@ -50,7 +50,7 @@ class WeightedRoundRobinTest {
         HTTPBalanceRequest httpBalanceRequest = new HTTPBalanceRequest(new InetSocketAddress("192.168.1.1", 1), EmptyHttpHeaders.INSTANCE);
 
         for (int i = 0; i < 1000000; i++) {
-            switch (httpBalance.getResponse(httpBalanceRequest).getBackend().getSocketAddress().getHostString()) {
+            switch (httpBalance.response(httpBalanceRequest).backend().socketAddress().getHostString()) {
                 case "10.10.1.1": {
                     first++;
                     break;

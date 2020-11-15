@@ -196,18 +196,17 @@ public final class TLSConfigurationBuilder {
 
                 // Throw error if OpenSsl does not support OCSP Stapling
                 if (certificateKeyPair.useOCSP() && !OpenSsl.isOcspSupported()) {
-                    throw new IllegalArgumentException("OCSP Stapling is not available because OpenSsl is not loaded.");
+                    throw new IllegalArgumentException("OCSP Stapling is not available because OpenSSL is not available");
                 }
 
-                SslContextBuilder sslContextBuilder =
-                        SslContextBuilder.forServer(certificateKeyPair.getPrivateKey(), certificateKeyPair.getCertificateChain())
-                                .sslProvider(OpenSsl.isAvailable() ? SslProvider.OPENSSL : SslProvider.JDK)
-                                .protocols(Protocol.getProtocols(protocols))
-                                .enableOcsp(certificateKeyPair.useOCSP())
-                                .clientAuth(mutualTLS.getClientAuth())
-                                .startTls(useStartTLS)
-                                .sessionTimeout(ObjectUtil.checkPositiveOrZero(sessionTimeout, "Session Timeout"))
-                                .sessionCacheSize(ObjectUtil.checkPositiveOrZero(sessionCacheSize, "Session Cache Size"));
+                SslContextBuilder sslContextBuilder = SslContextBuilder.forServer(certificateKeyPair.privateKey(), certificateKeyPair.certificateChain())
+                        .sslProvider(OpenSsl.isAvailable() ? SslProvider.OPENSSL : SslProvider.JDK)
+                        .protocols(Protocol.getProtocols(protocols))
+                        .enableOcsp(certificateKeyPair.useOCSP())
+                        .clientAuth(mutualTLS.clientAuth())
+                        .startTls(useStartTLS)
+                        .sessionTimeout(ObjectUtil.checkPositiveOrZero(sessionTimeout, "Session Timeout"))
+                        .sessionCacheSize(ObjectUtil.checkPositiveOrZero(sessionCacheSize, "Session Cache Size"));
 
                 if (useALPN) {
                     sslContextBuilder.applicationProtocolConfig(new ApplicationProtocolConfig(
@@ -225,13 +224,13 @@ public final class TLSConfigurationBuilder {
             SslContextBuilder sslContextBuilder = SslContextBuilder.forClient()
                     .sslProvider(OpenSsl.isAvailable() ? SslProvider.OPENSSL : SslProvider.JDK)
                     .protocols(Protocol.getProtocols(protocols))
-                    .clientAuth(mutualTLS.getClientAuth())
+                    .clientAuth(mutualTLS.clientAuth())
                     .trustManager(InsecureTrustManagerFactory.INSTANCE)
                     .startTls(false);
 
             if (certificateKeyPair != null) {
                 if (mutualTLS == MutualTLS.REQUIRED || mutualTLS == MutualTLS.OPTIONAL) {
-                    sslContextBuilder.keyManager(certificateKeyPair.getPrivateKey(), certificateKeyPair.getCertificateChain());
+                    sslContextBuilder.keyManager(certificateKeyPair.privateKey(), certificateKeyPair.certificateChain());
                 }
             }
 
@@ -252,9 +251,8 @@ public final class TLSConfigurationBuilder {
             hostnameMap.put("DEFAULT_HOST", certificateKeyPair);
         }
 
-        TLSConfiguration tLSConfiguration = new TLSConfiguration();
-        tLSConfiguration.setCertificateKeyPairMap(hostnameMap);
-        tLSConfiguration.setForServer(forServer);
-        return tLSConfiguration;
+        return new TLSConfiguration()
+                .certificateKeyPairMap(hostnameMap)
+                .forServer(forServer);
     }
 }

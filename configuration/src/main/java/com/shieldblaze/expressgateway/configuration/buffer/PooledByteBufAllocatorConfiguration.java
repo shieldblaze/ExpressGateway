@@ -68,99 +68,108 @@ public final class PooledByteBufAllocatorConfiguration {
     /**
      * @see PooledByteBufAllocatorConfigurationBuilder#withPreferDirect(boolean)
      */
-    public boolean isPreferDirect() {
+    public boolean rreferDirect() {
         return preferDirect;
     }
 
-    void setPreferDirect(boolean preferDirect) {
+    PooledByteBufAllocatorConfiguration preferDirect(boolean preferDirect) {
         this.preferDirect = preferDirect;
+        return this;
     }
 
     /**
      * @see PooledByteBufAllocatorConfigurationBuilder#withHeapArena(int)
      */
-    public int getHeapArena() {
+    public int heapArena() {
         return HeapArena;
     }
 
-    void setHeapArena(int heapArena) {
+    PooledByteBufAllocatorConfiguration heapArena(int heapArena) {
         this.HeapArena = heapArena;
+        return this;
     }
 
     /**
      * @see PooledByteBufAllocatorConfigurationBuilder#withDirectArena(int)
      */
-    public int getDirectArena() {
+    public int directArena() {
         return DirectArena;
     }
 
-    void setDirectArena(int directArena) {
+    PooledByteBufAllocatorConfiguration directArena(int directArena) {
         this.DirectArena = directArena;
+        return this;
     }
 
     /**
      * @see PooledByteBufAllocatorConfigurationBuilder#withPageSize(int)
      */
-    public int getPageSize() {
+    public int pageSize() {
         return pageSize;
     }
 
-    void setPageSize(int pageSize) {
+    PooledByteBufAllocatorConfiguration pageSize(int pageSize) {
         this.pageSize = pageSize;
+        return this;
     }
 
     /**
      * @see PooledByteBufAllocatorConfigurationBuilder#withMaxOrder(int)
      */
-    public int getMaxOrder() {
+    public int maxOrder() {
         return maxOrder;
     }
 
-    void setMaxOrder(int maxOrder) {
+    PooledByteBufAllocatorConfiguration maxOrder(int maxOrder) {
         this.maxOrder = maxOrder;
+        return this;
     }
 
     /**
      * @see PooledByteBufAllocatorConfigurationBuilder#withSmallCacheSize(int)
      */
-    public int getSmallCacheSize() {
+    public int smallCacheSize() {
         return smallCacheSize;
     }
 
-    void setSmallCacheSize(int smallCacheSize) {
+    PooledByteBufAllocatorConfiguration smallCacheSize(int smallCacheSize) {
         this.smallCacheSize = smallCacheSize;
+        return this;
     }
 
     /**
      * @see PooledByteBufAllocatorConfigurationBuilder#withNormalCacheSize(int)
      */
-    public int getNormalCacheSize() {
+    public int normalCacheSize() {
         return normalCacheSize;
     }
 
-    void setNormalCacheSize(int normalCacheSize) {
+    PooledByteBufAllocatorConfiguration setNormalCacheSize(int normalCacheSize) {
         this.normalCacheSize = normalCacheSize;
+        return this;
     }
 
     /**
      * @see PooledByteBufAllocatorConfigurationBuilder#withUseCacheForAllThreads(boolean)
      */
-    public boolean isUseCacheForAllThreads() {
+    public boolean useCacheForAllThreads() {
         return useCacheForAllThreads;
     }
 
-    void setUseCacheForAllThreads(boolean useCacheForAllThreads) {
+    PooledByteBufAllocatorConfiguration useCacheForAllThreads(boolean useCacheForAllThreads) {
         this.useCacheForAllThreads = useCacheForAllThreads;
+        return this;
     }
 
     /**
      * @see PooledByteBufAllocatorConfigurationBuilder#withDirectMemoryCacheAlignment(int)
      */
-    public int getDirectMemoryCacheAlignment() {
+    public int directMemoryCacheAlignment() {
         return directMemoryCacheAlignment;
     }
 
-    void setDirectMemoryCacheAlignment(int directMemoryCacheAlignment) {
+    PooledByteBufAllocatorConfiguration directMemoryCacheAlignment(int directMemoryCacheAlignment) {
         this.directMemoryCacheAlignment = directMemoryCacheAlignment;
+        return this;
     }
 }

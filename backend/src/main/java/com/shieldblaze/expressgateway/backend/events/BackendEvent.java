@@ -28,11 +28,11 @@ public class BackendEvent {
         this.type = type;
     }
 
-    public Backend getBackend() {
+    public Backend backend() {
         return backend;
     }
 
-    public Type getType() {
+    public Type type() {
         return type;
     }
 }

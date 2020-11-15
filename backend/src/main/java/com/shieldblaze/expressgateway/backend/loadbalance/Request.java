@@ -37,7 +37,7 @@ public abstract class Request {
     /**
      * Get Client {@link InetSocketAddress}
      */
-    public InetSocketAddress getSocketAddress() {
+    public InetSocketAddress socketAddress() {
         return socketAddress;
     }
 }
