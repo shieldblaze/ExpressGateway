@@ -17,13 +17,13 @@
  */
 package com.shieldblaze.expressgateway.core.server.udp;
 
-import com.shieldblaze.expressgateway.backend.Backend;
+import com.shieldblaze.expressgateway.backend.Node;
+import com.shieldblaze.expressgateway.backend.strategy.l4.L4Balance;
+import com.shieldblaze.expressgateway.backend.strategy.l4.L4Request;
 import com.shieldblaze.expressgateway.configuration.CommonConfiguration;
 import com.shieldblaze.expressgateway.core.loadbalancer.l4.L4LoadBalancer;
 import com.shieldblaze.expressgateway.core.utils.EventLoopFactory;
 import com.shieldblaze.expressgateway.backend.exceptions.LoadBalanceException;
-import com.shieldblaze.expressgateway.loadbalance.l4.L4Balance;
-import com.shieldblaze.expressgateway.loadbalance.l4.L4Request;
 import io.netty.channel.ChannelHandler;
 import io.netty.channel.ChannelHandlerContext;
 import io.netty.channel.ChannelInboundHandlerAdapter;
@@ -55,9 +55,9 @@ final class UpstreamHandler extends ChannelInboundHandlerAdapter {
     private final ConnectionCleaner connectionCleaner = new ConnectionCleaner(this);
 
     UpstreamHandler(L4LoadBalancer l4LoadBalancer) {
-        this.commonConfiguration = l4LoadBalancer.getCommonConfiguration();
-        this.eventLoopFactory = l4LoadBalancer.getEventLoopFactory();
-        this.l4Balance = l4LoadBalancer.getL4Balance();
+        this.commonConfiguration = l4LoadBalancer.commonConfiguration();
+        this.eventLoopFactory = l4LoadBalancer.eventLoopFactory();
+        this.l4Balance = l4LoadBalancer.l4Balance();
         connectionCleaner.startService();
     }
 
@@ -68,16 +68,16 @@ final class UpstreamHandler extends ChannelInboundHandlerAdapter {
             Connection connection = connectionMap.get(datagramPacket.sender().toString());
 
             if (connection == null) {
-                Backend backend;
+                Node node;
                 try {
-                    backend = l4Balance.response(new L4Request(datagramPacket.sender())).backend();
+                    node = l4Balance.response(new L4Request(datagramPacket.sender())).backend();
                 } catch (LoadBalanceException e) {
                     // Handle this
                     return;
                 }
-                backend.incConnections();
+                node.incConnections();
 
-                connection = new Connection(datagramPacket.sender(), backend, ctx.channel(), commonConfiguration, eventLoopFactory, ctx.alloc());
+                connection = new Connection(datagramPacket.sender(), node, ctx.channel(), commonConfiguration, eventLoopFactory, ctx.alloc());
                 connectionMap.put(datagramPacket.sender().toString(), connection);
             }
 

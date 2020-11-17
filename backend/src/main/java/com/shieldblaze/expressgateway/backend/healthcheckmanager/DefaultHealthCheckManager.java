@@ -40,9 +40,9 @@ public final class DefaultHealthCheckManager extends HealthCheckManager {
     @Override
     public void run() {
         if (healthCheck.health() == Health.GOOD) {
-            backend.state(State.ONLINE);
+            node.state(State.ONLINE);
         } else {
-            backend.state(State.OFFLINE);
+            node.state(State.OFFLINE);
         }
     }
 

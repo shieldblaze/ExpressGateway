@@ -26,7 +26,7 @@
     </parent>
     <modelVersion>4.0.0</modelVersion>
 
-    <artifactId>expressgateway-security</artifactId>
+    <artifactId>expressgateway.security</artifactId>
     <packaging>jar</packaging>
 
     <name>ExpressGateway/Security</name>

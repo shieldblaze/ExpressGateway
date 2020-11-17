@@ -18,23 +18,28 @@
 package com.shieldblaze.expressgateway.core.loadbalancer.l4;
 
 import com.shieldblaze.expressgateway.backend.cluster.Cluster;
-import com.shieldblaze.expressgateway.core.events.L4FrontListenerEvent;
+import com.shieldblaze.expressgateway.backend.strategy.l4.L4Balance;
+import com.shieldblaze.expressgateway.concurrent.eventstream.AsyncEventStream;
+import com.shieldblaze.expressgateway.concurrent.eventstream.EventListener;
 import com.shieldblaze.expressgateway.configuration.CommonConfiguration;
+import com.shieldblaze.expressgateway.core.events.L4FrontListenerEvent;
 import com.shieldblaze.expressgateway.core.server.L4FrontListener;
 import com.shieldblaze.expressgateway.core.utils.EventLoopFactory;
 import com.shieldblaze.expressgateway.core.utils.PooledByteBufAllocator;
-import com.shieldblaze.expressgateway.loadbalance.l4.L4Balance;
 import io.netty.buffer.ByteBufAllocator;
 
 import java.net.InetSocketAddress;
 import java.util.List;
 import java.util.Objects;
 import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.Executors;
 
 /**
  * {@link L4LoadBalancer} holds base functions for a L4-Load Balancer.
  */
 public abstract class L4LoadBalancer {
+
+    private final AsyncEventStream eventStream = new AsyncEventStream(Executors.newFixedThreadPool(2));
 
     private final InetSocketAddress bindAddress;
     private final L4Balance l4Balance;
@@ -54,14 +59,13 @@ public abstract class L4LoadBalancer {
      * @param commonConfiguration {@link CommonConfiguration} to be applied
      * @throws NullPointerException If a required parameter if {@code null}
      */
-    public L4LoadBalancer(InetSocketAddress bindAddress, L4Balance l4Balance, L4FrontListener l4FrontListener, Cluster cluster,
-                          CommonConfiguration commonConfiguration) {
-        this.bindAddress = Objects.requireNonNull(bindAddress, "bindAddress");
+    public L4LoadBalancer(InetSocketAddress bindAddress, L4Balance l4Balance, L4FrontListener l4FrontListener, Cluster cluster, CommonConfiguration commonConfiguration) {
+        this.bindAddress = Objects.requireNonNull(bindAddress, "BindAddress");
         this.l4Balance = Objects.requireNonNull(l4Balance, "L4Balance");
         this.l4FrontListener = Objects.requireNonNull(l4FrontListener, "L4FrontListener");
         this.cluster = Objects.requireNonNull(cluster, "Cluster");
         this.commonConfiguration = Objects.requireNonNull(commonConfiguration, "CommonConfiguration");
-        this.byteBufAllocator = new PooledByteBufAllocator(commonConfiguration.pooledByteBufAllocatorConfiguration()).getInstance();
+        this.byteBufAllocator = new PooledByteBufAllocator(commonConfiguration.pooledByteBufAllocatorConfiguration()).instance();
         this.eventLoopFactory = new EventLoopFactory(commonConfiguration);
     }
 
@@ -83,49 +87,69 @@ public abstract class L4LoadBalancer {
     /**
      * Get {@link InetSocketAddress} on which {@link L4FrontListener} is bind.
      */
-    public InetSocketAddress getBindAddress() {
+    public InetSocketAddress bindAddress() {
         return bindAddress;
     }
 
     /**
      * Get {@link L4Balance} used to Load Balance
      */
-    public L4Balance getL4Balance() {
+    public L4Balance l4Balance() {
         return l4Balance;
     }
 
     /**
      * Get {@link L4FrontListener} which is listening and handling traffic
      */
-    public L4FrontListener getL4FrontListener() {
+    public L4FrontListener l4FrontListener() {
         return l4FrontListener;
     }
 
     /**
      * Get {@link Cluster} which is being Load Balanced
      */
-    public Cluster getCluster() {
+    public Cluster cluster() {
         return cluster;
     }
 
     /**
      * Get {@link CommonConfiguration} which is applied
      */
-    public CommonConfiguration getCommonConfiguration() {
+    public CommonConfiguration commonConfiguration() {
         return commonConfiguration;
     }
 
     /**
      * Get {@link ByteBufAllocator} created from {@link PooledByteBufAllocator}
      */
-    public ByteBufAllocator getByteBufAllocator() {
+    public ByteBufAllocator byteBufAllocator() {
         return byteBufAllocator;
     }
 
     /**
      * Get {@link EventLoopFactory} being used
      */
-    public EventLoopFactory getEventLoopFactory() {
+    public EventLoopFactory eventLoopFactory() {
         return eventLoopFactory;
+    }
+
+    /**
+     * Subscribe to event stream
+     *
+     * @param eventListener {@link EventListener} implementation to receive events
+     */
+    public L4LoadBalancer subscribeToEvents(EventListener eventListener) {
+        eventStream.subscribe(eventListener);
+        return this;
+    }
+
+    /**
+     * Unsubscribe from event stream
+     *
+     * @param eventListener {@link EventListener} implementation to stop which was subscribed
+     */
+    public L4LoadBalancer unsubscribeFromEvents(EventListener eventListener) {
+        eventStream.unsubscribe(eventListener);
+        return this;
     }
 }

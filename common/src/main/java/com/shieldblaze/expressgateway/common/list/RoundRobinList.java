@@ -20,6 +20,7 @@ package com.shieldblaze.expressgateway.common.list;
 import com.shieldblaze.expressgateway.common.algo.roundrobin.RoundRobinIndexGenerator;
 
 import java.util.ArrayList;
+import java.util.Collections;
 import java.util.List;
 import java.util.Objects;
 
@@ -30,6 +31,10 @@ public final class RoundRobinList<T> {
     private List<T> list;
     private RoundRobinIndexGenerator roundRobinIndexGenerator;
 
+    public RoundRobinList() {
+        this(Collections.emptyList());
+    }
+
     public RoundRobinList(List<T> list) {
         init(list);
     }
@@ -39,7 +44,8 @@ public final class RoundRobinList<T> {
     }
 
     public void init(List<T> list) {
-        this.list = new ArrayList<>(Objects.requireNonNull(list, "List"));
+        Objects.requireNonNull(list, "List");
+        this.list = new ArrayList<>(list);
         roundRobinIndexGenerator = new RoundRobinIndexGenerator(list);
     }
 

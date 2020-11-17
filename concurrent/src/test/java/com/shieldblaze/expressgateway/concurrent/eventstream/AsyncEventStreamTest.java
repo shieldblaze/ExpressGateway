@@ -17,6 +17,7 @@
  */
 package com.shieldblaze.expressgateway.concurrent.eventstream;
 
+import com.shieldblaze.expressgateway.concurrent.Event;
 import org.junit.jupiter.api.Test;
 
 import java.util.concurrent.ConcurrentSkipListSet;
@@ -34,7 +35,7 @@ class AsyncEventStreamTest {
         asyncEventStream.subscribe(eventListenerTest);
 
         for (int i = 0; i < 100_000; i++) {
-            asyncEventStream.publish("Meow" + i);
+            asyncEventStream.publish(new SimpleEvent("Meow" + i));
         }
 
         assertTrue(asyncEventStream.unsubscribe(eventListenerTest));
@@ -51,8 +52,16 @@ class AsyncEventStreamTest {
         }
 
         @Override
-        public void accept(Object event) {
-            assertTrue(stringsSet.contains(event));
+        public void accept(Event event) {
+            assertTrue(stringsSet.contains(((SimpleEvent) event).string));
+        }
+    }
+
+    private static final class SimpleEvent implements Event {
+        private final String string;
+
+        public SimpleEvent(String string) {
+            this.string = string;
         }
     }
 }

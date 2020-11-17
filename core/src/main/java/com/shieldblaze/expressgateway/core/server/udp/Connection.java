@@ -17,7 +17,7 @@
  */
 package com.shieldblaze.expressgateway.core.server.udp;
 
-import com.shieldblaze.expressgateway.backend.Backend;
+import com.shieldblaze.expressgateway.backend.Node;
 import com.shieldblaze.expressgateway.common.utils.ReferenceCounted;
 import com.shieldblaze.expressgateway.configuration.CommonConfiguration;
 import com.shieldblaze.expressgateway.core.utils.BootstrapFactory;
@@ -44,19 +44,19 @@ final class Connection {
     private final CommonConfiguration commonConfiguration;
     private final Channel backendChannel;
     final InetSocketAddress clientAddress;
-    final Backend backend;
+    final Node node;
     final AtomicBoolean connectionActive = new AtomicBoolean(true);
     private boolean channelActive = false;
 
-    Connection(InetSocketAddress clientAddress, Backend backend, Channel clientChannel, CommonConfiguration commonConfiguration,
+    Connection(InetSocketAddress clientAddress, Node node, Channel clientChannel, CommonConfiguration commonConfiguration,
                EventLoopFactory eventLoopFactory, ByteBufAllocator byteBufAllocator) {
         this.commonConfiguration = commonConfiguration;
         this.clientAddress = clientAddress;
-        this.backend = backend;
+        this.node = node;
 
         Bootstrap bootstrap = BootstrapFactory.getUDP(commonConfiguration, eventLoopFactory.getChildGroup(), byteBufAllocator);
         bootstrap.handler(new DownstreamHandler(clientChannel, clientAddress, this));
-        ChannelFuture channelFuture = bootstrap.connect(backend.socketAddress());
+        ChannelFuture channelFuture = bootstrap.connect(node.socketAddress());
         backendChannel = channelFuture.channel();
 
         int timeout = commonConfiguration.transportConfiguration().connectionIdleTimeout();
@@ -68,7 +68,7 @@ final class Connection {
                 eventLoopFactory.getChildGroup().next().execute(() -> {
 
                     backlog.forEach(datagramPacket -> {
-                        backend.incBytesWritten(datagramPacket.content().readableBytes());
+                        node.incBytesWritten(datagramPacket.content().readableBytes());
                         backendChannel.writeAndFlush(datagramPacket.content()).addListener((ChannelFutureListener) cf -> {
                             if (!cf.isSuccess()) {
                                 datagramPacket.release();
@@ -90,7 +90,7 @@ final class Connection {
 
     void writeDatagram(DatagramPacket datagramPacket) {
         if (channelActive) {
-            backend.incBytesWritten(datagramPacket.content().readableBytes());
+            node.incBytesWritten(datagramPacket.content().readableBytes());
             backendChannel.writeAndFlush(datagramPacket.content()).addListener((ChannelFutureListener) cf -> {
                 if (!cf.isSuccess()) {
                     ReferenceCounted.silentFullRelease(datagramPacket);

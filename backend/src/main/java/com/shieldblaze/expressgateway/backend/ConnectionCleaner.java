@@ -19,18 +19,18 @@ package com.shieldblaze.expressgateway.backend;
 
 final class ConnectionCleaner implements Runnable {
 
-    private final Backend backend;
+    private final Node node;
 
-    ConnectionCleaner(Backend backend) {
-        this.backend = backend;
+    ConnectionCleaner(Node node) {
+        this.node = node;
     }
 
     @Override
     public void run() {
         // Remove connection from queue if they're not active.
-        backend.connectionList.removeIf(connection -> {
+        node.connectionList.removeIf(connection -> {
             if (connection.hasConnectionTimedOut() && !connection.isActive()) {
-                backend.removeConnection(connection);
+                node.removeConnection(connection);
                 return true;
             } else {
                 return false;

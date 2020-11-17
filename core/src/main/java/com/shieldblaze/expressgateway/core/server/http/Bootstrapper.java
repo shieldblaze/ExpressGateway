@@ -17,7 +17,7 @@
  */
 package com.shieldblaze.expressgateway.core.server.http;
 
-import com.shieldblaze.expressgateway.backend.Backend;
+import com.shieldblaze.expressgateway.backend.Node;
 import com.shieldblaze.expressgateway.core.loadbalancer.l7.http.HTTPLoadBalancer;
 import com.shieldblaze.expressgateway.core.server.http.adapter.http1.HTTPOutboundAdapter;
 import com.shieldblaze.expressgateway.core.server.http.adapter.http2.HTTP2OutboundAdapter;
@@ -52,7 +52,7 @@ final class Bootstrapper {
         this.byteBufAllocator = byteBufAllocator;
     }
 
-    HTTPConnection newInit(Backend backend, Channel channel) {
+    HTTPConnection newInit(Node node, Channel channel) {
         int timeout = httpLoadBalancer.getCommonConfiguration().transportConfiguration().backendConnectTimeout();
         HTTPConnection httpConnection = new HTTPConnection(timeout);
 
@@ -80,8 +80,8 @@ final class Bootstrapper {
                         logger.error(e);
                     }
                 } else {
-                    String hostname = backend.socketAddress().getHostName();
-                    int port = backend.socketAddress().getPort();
+                    String hostname = node.socketAddress().getHostName();
+                    int port = node.socketAddress().getPort();
                     SslHandler sslHandler = httpLoadBalancer.tlsClient().defaultMapping().sslContext().newHandler(ch.alloc(), hostname, port);
 
                     ALPNHandler alpnHandler = ALPNHandlerBuilder.newBuilder()
@@ -102,7 +102,7 @@ final class Bootstrapper {
             }
         });
 
-        ChannelFuture channelFuture = bootstrap.connect(backend.socketAddress());
+        ChannelFuture channelFuture = bootstrap.connect(node.socketAddress());
         httpConnection.init(channelFuture);
         return httpConnection;
     }

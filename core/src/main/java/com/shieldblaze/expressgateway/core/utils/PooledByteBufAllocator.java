@@ -44,7 +44,7 @@ public final class PooledByteBufAllocator {
     /**
      * Get Instance of {@link io.netty.buffer.PooledByteBufAllocator}
      */
-    public io.netty.buffer.PooledByteBufAllocator getInstance() {
+    public io.netty.buffer.PooledByteBufAllocator instance() {
         return pooledByteBufAllocator;
     }
 }

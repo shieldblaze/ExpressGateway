@@ -17,13 +17,13 @@
  */
 package com.shieldblaze.expressgateway.backend.cluster;
 
-import com.shieldblaze.expressgateway.backend.Backend;
+import com.shieldblaze.expressgateway.backend.Node;
 
 import java.util.Objects;
 import java.util.concurrent.atomic.AtomicInteger;
 
 /**
- * {@linkplain ClusterPool} with multiple {@linkplain Backend}
+ * {@linkplain ClusterPool} with multiple {@linkplain Node}
  */
 public final class ClusterPool extends Cluster {
 
@@ -33,31 +33,31 @@ public final class ClusterPool extends Cluster {
         name("ClusterPool#" + count.getAndIncrement());
     }
 
-    private ClusterPool(String name, String hostname, Backend... backends) {
+    private ClusterPool(String name, String hostname, Node... nodes) {
         name(name);
         hostname(hostname);
-        addBackends(backends);
+        addBackends(nodes);
     }
 
-    public static ClusterPool of(String hostname, Backend... backends) {
-        return new ClusterPool("ClusterPool#" + count.getAndIncrement(), hostname, backends);
+    public static ClusterPool of(String hostname, Node... nodes) {
+        return new ClusterPool("ClusterPool#" + count.getAndIncrement(), hostname, nodes);
     }
 
-    public static ClusterPool of(String name, String hostname, Backend... backends) {
-        return new ClusterPool(name, hostname, backends);
+    public static ClusterPool of(String name, String hostname, Node... nodes) {
+        return new ClusterPool(name, hostname, nodes);
     }
 
     /**
-     * @see Cluster#addBackend(Backend)
+     * @see Cluster#addBackend(Node)
      */
-    public void addBackends(Backend... backends) {
-        Objects.requireNonNull(backends, "backends");
-        for (Backend backend : backends) {
-            super.addBackend(backend);
+    public void addBackends(Node... nodes) {
+        Objects.requireNonNull(nodes, "backends");
+        for (Node node : nodes) {
+            super.addBackend(node);
         }
     }
 
-    public void addBackend(Backend backends) {
+    public void addBackend(Node backends) {
         super.addBackend(backends);
     }
 }

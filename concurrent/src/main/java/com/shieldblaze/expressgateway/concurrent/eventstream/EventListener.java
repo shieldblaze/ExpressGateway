@@ -17,9 +17,11 @@
  */
 package com.shieldblaze.expressgateway.concurrent.eventstream;
 
+import com.shieldblaze.expressgateway.concurrent.Event;
+
 /**
  * Interface to implement to become a subscriber and accept
- * events using {@link #accept(Object)}.
+ * events using {@link #accept(Event)}.
  */
 public interface EventListener {
 
@@ -28,5 +30,5 @@ public interface EventListener {
      *
      * @param event Event that was published.
      */
-    void accept(Object event);
+    void accept(Event event);
 }

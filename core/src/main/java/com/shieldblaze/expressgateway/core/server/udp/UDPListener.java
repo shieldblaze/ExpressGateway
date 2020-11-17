@@ -38,10 +38,10 @@ public final class UDPListener extends L4FrontListener {
 
     @Override
     public List<CompletableFuture<L4FrontListenerEvent>> start() {
-        CommonConfiguration commonConfiguration = getL4LoadBalancer().getCommonConfiguration();
-        EventLoopGroup eventLoopGroup = getL4LoadBalancer().getEventLoopFactory().getParentGroup();
+        CommonConfiguration commonConfiguration = getL4LoadBalancer().commonConfiguration();
+        EventLoopGroup eventLoopGroup = getL4LoadBalancer().eventLoopFactory().getParentGroup();
 
-        Bootstrap bootstrap = BootstrapFactory.getUDP(commonConfiguration, eventLoopGroup, getL4LoadBalancer().getByteBufAllocator())
+        Bootstrap bootstrap = BootstrapFactory.getUDP(commonConfiguration, eventLoopGroup, getL4LoadBalancer().byteBufAllocator())
                 .handler(new UpstreamHandler(getL4LoadBalancer()));
 
         int bindRounds = 1;
@@ -52,7 +52,7 @@ public final class UDPListener extends L4FrontListener {
         for (int i = 0; i < bindRounds; i++) {
             CompletableFuture<L4FrontListenerEvent> completableFuture = GlobalExecutors.INSTANCE.submitTask(() -> {
                 L4FrontListenerEvent l4FrontListenerEvent = new L4FrontListenerEvent();
-                ChannelFuture channelFuture = bootstrap.bind(getL4LoadBalancer().getBindAddress());
+                ChannelFuture channelFuture = bootstrap.bind(getL4LoadBalancer().bindAddress());
                 l4FrontListenerEvent.channelFuture(channelFuture);
                 return l4FrontListenerEvent;
             });

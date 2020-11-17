@@ -18,11 +18,11 @@
 package com.shieldblaze.expressgateway.core.loadbalancer.l7.http;
 
 import com.shieldblaze.expressgateway.backend.cluster.Cluster;
+import com.shieldblaze.expressgateway.backend.strategy.l7.http.HTTPBalance;
 import com.shieldblaze.expressgateway.configuration.CommonConfiguration;
 import com.shieldblaze.expressgateway.configuration.http.HTTPConfiguration;
 import com.shieldblaze.expressgateway.configuration.tls.TLSConfiguration;
 import com.shieldblaze.expressgateway.core.server.L7FrontListener;
-import com.shieldblaze.expressgateway.loadbalance.l7.http.HTTPBalance;
 
 import java.net.InetSocketAddress;
 
@@ -33,16 +33,16 @@ final class DefaultHTTPLoadBalancer extends HTTPLoadBalancer {
 
     /**
      * @param bindAddress         {@link InetSocketAddress} on which {@link L7FrontListener} will bind and listen.
-     * @param HTTPBalance         {@link HTTPBalance} for Load Balance
+     * @param httpBalance         {@link HTTPBalance} for Load Balance
      * @param l7FrontListener     {@link L7FrontListener} for listening and handling traffic
      * @param cluster             {@link Cluster} to be Load Balanced
      * @param commonConfiguration {@link CommonConfiguration} to be applied
      * @param httpConfiguration   {@link HTTPConfiguration} to be applied
      * @throws NullPointerException If any parameter is {@code null}
      */
-    DefaultHTTPLoadBalancer(InetSocketAddress bindAddress, HTTPBalance HTTPBalance, L7FrontListener l7FrontListener, Cluster cluster,
+    DefaultHTTPLoadBalancer(InetSocketAddress bindAddress, HTTPBalance httpBalance, L7FrontListener l7FrontListener, Cluster cluster,
                             CommonConfiguration commonConfiguration, HTTPConfiguration httpConfiguration,
                             TLSConfiguration tlsClient, TLSConfiguration tlsServer) {
-        super(bindAddress, HTTPBalance, l7FrontListener, cluster, commonConfiguration, httpConfiguration, tlsClient, tlsServer);
+        super(bindAddress, httpBalance, l7FrontListener, cluster, commonConfiguration, httpConfiguration, tlsClient, tlsServer);
     }
 }

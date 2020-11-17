@@ -18,11 +18,15 @@
 
 package com.shieldblaze.expressgateway.backend.exceptions;
 
-import com.shieldblaze.expressgateway.backend.Backend;
+import com.shieldblaze.expressgateway.backend.Node;
 
 public class BackendNotOnlineException extends BackendNotAvailableException {
 
-    public BackendNotOnlineException(Backend backend) {
-        super("Backend: {" + backend + "} is not online");
+    public BackendNotOnlineException(Node node) {
+        super("Backend: {" + node + "} is not online");
+    }
+
+    public BackendNotOnlineException(String message) {
+        super(message);
     }
 }

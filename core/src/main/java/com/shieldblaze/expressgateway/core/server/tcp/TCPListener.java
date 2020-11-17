@@ -115,10 +115,10 @@ public final class TCPListener extends L4FrontListener {
     @Override
     public List<CompletableFuture<L4FrontListenerEvent>> start() {
 
-        CommonConfiguration commonConfiguration = getL4LoadBalancer().getCommonConfiguration();
+        CommonConfiguration commonConfiguration = getL4LoadBalancer().commonConfiguration();
         TransportConfiguration transportConfiguration = commonConfiguration.transportConfiguration();
-        EventLoopFactory eventLoopFactory = getL4LoadBalancer().getEventLoopFactory();
-        ByteBufAllocator byteBufAllocator = getL4LoadBalancer().getByteBufAllocator();
+        EventLoopFactory eventLoopFactory = getL4LoadBalancer().eventLoopFactory();
+        ByteBufAllocator byteBufAllocator = getL4LoadBalancer().byteBufAllocator();
 
         ServerBootstrap serverBootstrap = new ServerBootstrap()
                 .group(eventLoopFactory.getParentGroup(), eventLoopFactory.getChildGroup())
@@ -154,7 +154,7 @@ public final class TCPListener extends L4FrontListener {
         for (int i = 0; i < bindRounds; i++) {
             CompletableFuture<L4FrontListenerEvent> completableFuture = GlobalExecutors.INSTANCE.submitTask(() -> {
                 L4FrontListenerEvent l4FrontListenerEvent = new L4FrontListenerEvent();
-                ChannelFuture channelFuture = serverBootstrap.bind(getL4LoadBalancer().getBindAddress());
+                ChannelFuture channelFuture = serverBootstrap.bind(getL4LoadBalancer().bindAddress());
                 l4FrontListenerEvent.channelFuture(channelFuture);
                 return l4FrontListenerEvent;
             });
@@ -196,7 +196,7 @@ public final class TCPListener extends L4FrontListener {
 
         @Override
         protected void initChannel(SocketChannel socketChannel) {
-            int timeout = l4LoadBalancer.getCommonConfiguration().transportConfiguration().connectionIdleTimeout();
+            int timeout = l4LoadBalancer.commonConfiguration().transportConfiguration().connectionIdleTimeout();
             socketChannel.pipeline().addFirst(new IdleStateHandler(timeout, timeout, timeout));
 
             if (tlsServer != null) {

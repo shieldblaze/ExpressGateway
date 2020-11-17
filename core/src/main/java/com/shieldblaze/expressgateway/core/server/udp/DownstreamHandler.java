@@ -54,7 +54,7 @@ final class DownstreamHandler extends ChannelInboundHandlerAdapter {
     @Override
     public void channelRead(ChannelHandlerContext ctx, Object msg) {
         DatagramPacket packet = (DatagramPacket) msg;
-        connection.backend.incBytesReceived(packet.content().readableBytes());
+        connection.node.incBytesReceived(packet.content().readableBytes());
         clientChannel.writeAndFlush(new DatagramPacket(packet.content(), clientAddress));
     }
 
@@ -64,7 +64,7 @@ final class DownstreamHandler extends ChannelInboundHandlerAdapter {
         if (logger.isInfoEnabled()) {
             logger.info("Closing Upstream {} and Downstream {} Channel",
                     connection.clientAddress.getAddress().getHostAddress() + ":" + connection.clientAddress.getPort(),
-                    connection.backend.socketAddress().getAddress().getHostAddress() + ":" + connection.backend.socketAddress().getPort());
+                    connection.node.socketAddress().getAddress().getHostAddress() + ":" + connection.node.socketAddress().getPort());
         }
 
         connection.connectionActive.set(false); // Mark the Connection as inactive

@@ -18,12 +18,12 @@
 package com.shieldblaze.expressgateway.core.loadbalancer.l7.http;
 
 import com.shieldblaze.expressgateway.backend.cluster.Cluster;
+import com.shieldblaze.expressgateway.backend.strategy.l7.http.HTTPBalance;
 import com.shieldblaze.expressgateway.configuration.CommonConfiguration;
 import com.shieldblaze.expressgateway.configuration.http.HTTPConfiguration;
 import com.shieldblaze.expressgateway.configuration.tls.TLSConfiguration;
 import com.shieldblaze.expressgateway.core.server.L7FrontListener;
 import com.shieldblaze.expressgateway.core.server.http.HTTPFrontListener;
-import com.shieldblaze.expressgateway.loadbalance.l7.http.HTTPBalance;
 
 import java.net.InetSocketAddress;
 import java.util.Objects;

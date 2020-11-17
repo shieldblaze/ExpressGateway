@@ -57,7 +57,6 @@ along with ShieldBlaze ExpressGateway.  If not, see <https://www.gnu.org/license
 
     <modules>
         <module>core</module>
-        <module>load-balance</module>
         <module>health-check</module>
         <module>backend</module>
         <module>common</module>

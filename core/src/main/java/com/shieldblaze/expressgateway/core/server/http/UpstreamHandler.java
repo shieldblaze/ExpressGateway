@@ -17,12 +17,12 @@
  */
 package com.shieldblaze.expressgateway.core.server.http;
 
-import com.shieldblaze.expressgateway.backend.Backend;
+import com.shieldblaze.expressgateway.backend.Node;
 import com.shieldblaze.expressgateway.backend.pool.Connection;
+import com.shieldblaze.expressgateway.backend.strategy.l7.http.HTTPBalance;
+import com.shieldblaze.expressgateway.backend.strategy.l7.http.HTTPBalanceRequest;
+import com.shieldblaze.expressgateway.backend.strategy.l7.http.HTTPBalanceResponse;
 import com.shieldblaze.expressgateway.core.loadbalancer.l7.http.HTTPLoadBalancer;
-import com.shieldblaze.expressgateway.loadbalance.l7.http.HTTPBalance;
-import com.shieldblaze.expressgateway.loadbalance.l7.http.HTTPBalanceRequest;
-import com.shieldblaze.expressgateway.loadbalance.l7.http.HTTPBalanceResponse;
 import io.netty.channel.ChannelDuplexHandler;
 import io.netty.channel.ChannelHandlerContext;
 import io.netty.channel.ChannelPromise;
@@ -66,12 +66,12 @@ public final class UpstreamHandler extends ChannelDuplexHandler {
             InetSocketAddress upstreamAddress = (InetSocketAddress) ctx.channel().remoteAddress();
             HTTPBalanceRequest balanceRequest = new HTTPBalanceRequest(upstreamAddress, request.headers());
             HTTPBalanceResponse balanceResponse = httpBalance.response(balanceRequest);
-            Backend backend = balanceResponse.backend();
+            Node node = balanceResponse.backend();
 
-            HTTPConnection connection = (HTTPConnection) backend.lease();
+            HTTPConnection connection = (HTTPConnection) node.lease();
             if (connection == null) {
-                connection = bootstrapper.newInit(backend, ctx.channel());
-                backend.addConnection(connection);
+                connection = bootstrapper.newInit(node, ctx.channel());
+                node.addConnection(connection);
             } else {
                 connection.setUpstreamChannel(ctx.channel());
                 if (!connection.isHTTP2()) {

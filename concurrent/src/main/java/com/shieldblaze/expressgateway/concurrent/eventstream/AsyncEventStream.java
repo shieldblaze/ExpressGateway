@@ -17,6 +17,8 @@
  */
 package com.shieldblaze.expressgateway.concurrent.eventstream;
 
+import com.shieldblaze.expressgateway.concurrent.Event;
+
 import java.util.concurrent.ExecutorService;
 
 /**
@@ -26,7 +28,7 @@ import java.util.concurrent.ExecutorService;
 public class AsyncEventStream extends EventStream {
 
     /**
-     * {@link ExecutorService} for execution of {@link #publish(Object)}
+     * {@link ExecutorService} for execution of {@link #publish(Event)}
      */
     private final ExecutorService executorService;
 
@@ -40,7 +42,7 @@ public class AsyncEventStream extends EventStream {
      * @param event Event to publish
      */
     @Override
-    public void publish(Object event) {
+    public void publish(Event event) {
         executorService.execute(() -> {
             for (EventListener eventListener : subscribers) {
                 executorService.execute(() -> eventListener.accept(event));

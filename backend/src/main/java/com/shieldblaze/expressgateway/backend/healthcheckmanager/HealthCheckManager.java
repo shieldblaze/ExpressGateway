@@ -17,7 +17,7 @@
  */
 package com.shieldblaze.expressgateway.backend.healthcheckmanager;
 
-import com.shieldblaze.expressgateway.backend.Backend;
+import com.shieldblaze.expressgateway.backend.Node;
 import com.shieldblaze.expressgateway.concurrent.GlobalExecutors;
 import com.shieldblaze.expressgateway.healthcheck.HealthCheck;
 import io.netty.util.internal.ObjectUtil;
@@ -28,7 +28,7 @@ import java.util.concurrent.TimeUnit;
 
 public abstract class HealthCheckManager implements Runnable {
 
-    protected Backend backend;
+    protected Node node;
     protected final HealthCheck healthCheck;
     private final int initialDelay;
     private final int time;
@@ -56,8 +56,8 @@ public abstract class HealthCheckManager implements Runnable {
         }
     }
 
-    public HealthCheckManager backend(Backend backend) {
-        this.backend = Objects.requireNonNull(backend);
+    public HealthCheckManager backend(Node node) {
+        this.node = Objects.requireNonNull(node);
         return this;
     }
 }

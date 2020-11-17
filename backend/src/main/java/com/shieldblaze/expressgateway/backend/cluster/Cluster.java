@@ -17,7 +17,7 @@
  */
 package com.shieldblaze.expressgateway.backend.cluster;
 
-import com.shieldblaze.expressgateway.backend.Backend;
+import com.shieldblaze.expressgateway.backend.Node;
 import com.shieldblaze.expressgateway.backend.State;
 import com.shieldblaze.expressgateway.backend.events.BackendEvent;
 import com.shieldblaze.expressgateway.backend.exceptions.BackendNotOnlineException;
@@ -37,9 +37,9 @@ import java.util.stream.Collectors;
 public abstract class Cluster {
 
     /**
-     * List of all {@linkplain Backend} associated with this {@linkplain Cluster}
+     * List of all {@linkplain Node} associated with this {@linkplain Cluster}
      */
-    private final List<Backend> allBackends = new CopyOnWriteArrayList<>();
+    private final List<Node> allNodes = new CopyOnWriteArrayList<>();
 
     /**
      * Stream of {@linkplain BackendEvent}
@@ -94,52 +94,52 @@ public abstract class Cluster {
     }
 
     /**
-     * Add {@link Backend} into this {@linkplain Cluster}
+     * Add {@link Node} into this {@linkplain Cluster}
      */
-    protected void addBackend(Backend backend) {
-        allBackends.add(Objects.requireNonNull(backend, "backend"));
-        backend.cluster(this);
+    protected void addBackend(Node node) {
+        allNodes.add(Objects.requireNonNull(node, "backend"));
+        node.cluster(this);
     }
 
     /**
-     * Get {@linkplain List} of online {@linkplain Backend} in this {@linkplain Cluster}
+     * Get {@linkplain List} of online {@linkplain Node} in this {@linkplain Cluster}
      */
-    public List<Backend> onlineBackends() {
-        return allBackends.stream()
+    public List<Node> onlineBackends() {
+        return allNodes.stream()
                 .filter(backend -> backend.state() == State.ONLINE)
                 .collect(Collectors.toList());
     }
 
-    public Backend get(int index) {
-        return allBackends.get(index);
+    public Node get(int index) {
+        return allNodes.get(index);
     }
 
     /**
-     * Get {@linkplain Backend} from online pool using Index
+     * Get {@linkplain Node} from online pool using Index
      *
      * @param index Index
-     * @return {@linkplain Backend} Instance if found else {@code null}
+     * @return {@linkplain Node} Instance if found else {@code null}
      */
-    public Backend online(int index) throws BackendNotOnlineException {
-        Backend backend = allBackends.get(index);
-        if (backend.state() != State.ONLINE) {
-            throw new BackendNotOnlineException(backend);
+    public Node online(int index) throws BackendNotOnlineException {
+        Node node = allNodes.get(index);
+        if (node.state() != State.ONLINE) {
+            throw new BackendNotOnlineException(node);
         }
-        return backend;
+        return node;
     }
 
     /**
      * Get size of this {@linkplain Cluster}
      */
     public int size() {
-        return allBackends.size();
+        return allNodes.size();
     }
 
     /**
-     * Get number of Online {@linkplain Backend} in this {@linkplain Cluster}
+     * Get number of Online {@linkplain Node} in this {@linkplain Cluster}
      */
     public int online() {
-        return (int) allBackends.stream().filter(backend -> backend.state() == State.ONLINE).count();
+        return (int) allNodes.stream().filter(backend -> backend.state() == State.ONLINE).count();
     }
 
     /**

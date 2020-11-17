@@ -56,13 +56,13 @@ class ClusterPoolTest {
         for (int i = 1; i < 100; i++) {
             HealthCheck healthCheck = new TCPHealthCheck(new InetSocketAddress("127.0.0.1", 10000), Duration.ofMillis(15));
             DefaultHealthCheckManager defaultHealthCheckManager = new DefaultHealthCheckManager(healthCheck, 1, 1, TimeUnit.SECONDS);
-            clusterPool.addBackends(new Backend(new InetSocketAddress("192.168.1." + i, i), 100, 100, healthCheck, defaultHealthCheckManager));
+            clusterPool.addBackends(new Node(new InetSocketAddress("192.168.1." + i, i), 100, 100, healthCheck, defaultHealthCheckManager));
         }
 
         Thread.sleep(5000L); // Wait for all Health Checks to Finish
 
-        for (Backend backend : clusterPool.onlineBackends()) {
-            assertEquals(Health.GOOD, backend.health());
+        for (Node node : clusterPool.onlineBackends()) {
+            assertEquals(Health.GOOD, node.health());
         }
 
         assertEquals(99, clusterPool.onlineBackends().size());
@@ -70,8 +70,8 @@ class ClusterPoolTest {
         tcpServer.stop();
         Thread.sleep(10000L); // Wait for server to stop and all Health Checks to Finish
 
-        for (Backend backend : clusterPool.onlineBackends()) {
-            assertEquals(Health.BAD, backend.health());
+        for (Node node : clusterPool.onlineBackends()) {
+            assertEquals(Health.BAD, node.health());
         }
 
         assertEquals(0, clusterPool.onlineBackends().size());

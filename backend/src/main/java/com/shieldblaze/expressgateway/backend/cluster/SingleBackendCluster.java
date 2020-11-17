@@ -17,32 +17,32 @@
  */
 package com.shieldblaze.expressgateway.backend.cluster;
 
-import com.shieldblaze.expressgateway.backend.Backend;
+import com.shieldblaze.expressgateway.backend.Node;
 
 import java.util.concurrent.atomic.AtomicInteger;
 
 /**
- * {@linkplain Cluster} with single {@linkplain Backend}
+ * {@linkplain Cluster} with single {@linkplain Node}
  */
 public final class SingleBackendCluster extends Cluster {
 
     private static final AtomicInteger count = new AtomicInteger();
 
-    private SingleBackendCluster(String name, String hostname, Backend backend) {
+    private SingleBackendCluster(String name, String hostname, Node node) {
         name(name);
         hostname(hostname);
-        addBackend(backend);
+        addBackend(node);
     }
 
-    public static SingleBackendCluster of(Backend backend) {
-        return new SingleBackendCluster("SingleBackendCluster#" + count.getAndIncrement(), backend.socketAddress().getHostName(), backend);
+    public static SingleBackendCluster of(Node node) {
+        return new SingleBackendCluster("SingleBackendCluster#" + count.getAndIncrement(), node.socketAddress().getHostName(), node);
     }
 
-    public static SingleBackendCluster of(String hostname, Backend backend) {
-        return new SingleBackendCluster("SingleBackendCluster#" + count.getAndIncrement(), hostname, backend);
+    public static SingleBackendCluster of(String hostname, Node node) {
+        return new SingleBackendCluster("SingleBackendCluster#" + count.getAndIncrement(), hostname, node);
     }
 
-    public static SingleBackendCluster of(String name, String hostname, Backend backend) {
-        return new SingleBackendCluster(name, hostname, backend);
+    public static SingleBackendCluster of(String name, String hostname, Node node) {
+        return new SingleBackendCluster(name, hostname, node);
     }
 }

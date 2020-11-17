@@ -18,10 +18,10 @@
 package com.shieldblaze.expressgateway.core.loadbalancer.l4;
 
 import com.shieldblaze.expressgateway.backend.cluster.Cluster;
+import com.shieldblaze.expressgateway.backend.strategy.l4.L4Balance;
 import com.shieldblaze.expressgateway.core.events.L4FrontListenerEvent;
 import com.shieldblaze.expressgateway.configuration.CommonConfiguration;
 import com.shieldblaze.expressgateway.core.server.L4FrontListener;
-import com.shieldblaze.expressgateway.loadbalance.l4.L4Balance;
 
 import java.net.InetSocketAddress;
 import java.util.List;
@@ -45,7 +45,7 @@ final class DefaultL4LoadBalancer extends L4LoadBalancer {
      */
     @Override
     public List<CompletableFuture<L4FrontListenerEvent>> start() {
-        return getL4FrontListener().start();
+        return l4FrontListener().start();
     }
 
     /**
@@ -53,6 +53,6 @@ final class DefaultL4LoadBalancer extends L4LoadBalancer {
      */
     @Override
     public CompletableFuture<Boolean> stop() {
-        return getL4FrontListener().stop();
+        return l4FrontListener().stop();
     }
 }

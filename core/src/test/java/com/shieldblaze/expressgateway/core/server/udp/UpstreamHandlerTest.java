@@ -17,10 +17,10 @@
  */
 package com.shieldblaze.expressgateway.core.server.udp;
 
-import com.shieldblaze.expressgateway.backend.Backend;
+import com.shieldblaze.expressgateway.backend.Node;
 import com.shieldblaze.expressgateway.backend.cluster.Cluster;
 import com.shieldblaze.expressgateway.backend.cluster.SingleBackendCluster;
-import com.shieldblaze.expressgateway.core.events.L4FrontListenerEvent;
+import com.shieldblaze.expressgateway.backend.strategy.l4.RoundRobin;
 import com.shieldblaze.expressgateway.configuration.CommonConfiguration;
 import com.shieldblaze.expressgateway.configuration.CommonConfigurationBuilder;
 import com.shieldblaze.expressgateway.configuration.buffer.PooledByteBufAllocatorConfiguration;
@@ -30,10 +30,10 @@ import com.shieldblaze.expressgateway.configuration.transport.ReceiveBufferAlloc
 import com.shieldblaze.expressgateway.configuration.transport.TransportConfiguration;
 import com.shieldblaze.expressgateway.configuration.transport.TransportConfigurationBuilder;
 import com.shieldblaze.expressgateway.configuration.transport.TransportType;
+import com.shieldblaze.expressgateway.core.events.L4FrontListenerEvent;
 import com.shieldblaze.expressgateway.core.loadbalancer.l4.L4LoadBalancer;
 import com.shieldblaze.expressgateway.core.loadbalancer.l4.L4LoadBalancerBuilder;
 import com.shieldblaze.expressgateway.core.utils.EventLoopFactory;
-import com.shieldblaze.expressgateway.loadbalance.l4.RoundRobin;
 import io.netty.channel.epoll.Epoll;
 import org.junit.jupiter.api.AfterAll;
 import org.junit.jupiter.api.BeforeAll;
@@ -87,7 +87,7 @@ final class UpstreamHandlerTest {
 
         eventLoopFactory = new EventLoopFactory(commonConfiguration);
 
-        Cluster clusterPool = SingleBackendCluster.of(new Backend(new InetSocketAddress("127.0.0.1", 9111)));
+        Cluster clusterPool = SingleBackendCluster.of(new Node(new InetSocketAddress("127.0.0.1", 9111)));
 
         l4LoadBalancer = L4LoadBalancerBuilder.newBuilder()
                 .withCommonConfiguration(commonConfiguration)

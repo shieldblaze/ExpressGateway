@@ -17,7 +17,7 @@
  */
 package com.shieldblaze.expressgateway.core.server.tcp;
 
-import com.shieldblaze.expressgateway.backend.Backend;
+import com.shieldblaze.expressgateway.backend.Node;
 import io.netty.buffer.ByteBuf;
 import io.netty.channel.Channel;
 import io.netty.channel.ChannelHandlerContext;
@@ -43,26 +43,26 @@ final class DownstreamHandler extends ChannelInboundHandlerAdapter {
     private static final Logger logger = LogManager.getLogger(DownstreamHandler.class);
 
     private final Channel upstream;
-    private final Backend backend;
+    private final Node node;
     private final InetSocketAddress upstreamAddress;
 
     /**
-     * Create a {@link DownstreamHandler} for receiving Data from {@link Backend}
+     * Create a {@link DownstreamHandler} for receiving Data from {@link Node}
      * and send back to {@code Client}.
      *
      * @param upstream {@code Client} {@link Channel}
-     * @param backend  {@link Backend} We'll use this for incrementing {@link Backend#incBytesReceived(int)}
+     * @param node  {@link Node} We'll use this for incrementing {@link Node#incBytesReceived(int)}
      */
-    DownstreamHandler(Channel upstream, Backend backend) {
+    DownstreamHandler(Channel upstream, Node node) {
         this.upstream = upstream;
-        this.backend = backend;
+        this.node = node;
         this.upstreamAddress = (InetSocketAddress) upstream.remoteAddress();
     }
 
     @Override
     public void channelRead(ChannelHandlerContext ctx, Object msg) {
         ByteBuf byteBuf = (ByteBuf) msg;                    // Cast Data to ByteBuf
-        backend.incBytesReceived(byteBuf.readableBytes());  // Increment number of Bytes Received from Backend
+        node.incBytesReceived(byteBuf.readableBytes());  // Increment number of Bytes Received from Backend
         upstream.writeAndFlush(byteBuf);                    // Write Data back to Client
     }
 
@@ -71,7 +71,7 @@ final class DownstreamHandler extends ChannelInboundHandlerAdapter {
         if (logger.isInfoEnabled()) {
             logger.info("Closing Upstream {} and Downstream {} Channel",
                     upstreamAddress.getAddress().getHostAddress() + ":" + upstreamAddress.getPort(),
-                    backend.socketAddress().getAddress().getHostAddress() + ":" + backend.socketAddress().getPort());
+                    node.socketAddress().getAddress().getHostAddress() + ":" + node.socketAddress().getPort());
         }
         upstream.close();      // Close Upstream Channel
         ctx.channel().close(); // Close Downstream Channel

@@ -17,22 +17,20 @@
  */
 package com.shieldblaze.expressgateway.backend.events;
 
-import com.shieldblaze.expressgateway.backend.Backend;
+import com.shieldblaze.expressgateway.backend.Node;
+import com.shieldblaze.expressgateway.concurrent.Event;
 
-public class BackendEvent {
-    private final Backend backend;
-    private final Type type;
+/**
+ * Base class of all {@link Node} events
+ */
+public abstract class BackendEvent implements Event {
+    private final Node node;
 
-    public BackendEvent(Backend backend, Type type) {
-        this.backend = backend;
-        this.type = type;
+    public BackendEvent(Node node) {
+        this.node = node;
     }
 
-    public Backend backend() {
-        return backend;
-    }
-
-    public Type type() {
-        return type;
+    public Node backend() {
+        return node;
     }
 }
