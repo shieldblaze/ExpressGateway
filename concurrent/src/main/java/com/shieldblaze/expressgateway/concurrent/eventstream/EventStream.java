@@ -17,7 +17,7 @@
  */
 package com.shieldblaze.expressgateway.concurrent.eventstream;
 
-import com.shieldblaze.expressgateway.concurrent.Event;
+import com.shieldblaze.expressgateway.concurrent.event.Event;
 
 import java.util.List;
 import java.util.concurrent.CopyOnWriteArrayList;
@@ -63,7 +63,7 @@ public class EventStream {
      *
      * @param event Event to publish
      */
-    public void publish(Event event) {
+    public <T> void publish(Event<T> event) {
         subscribers.forEach(eventListener -> eventListener.accept(event));
     }
 }

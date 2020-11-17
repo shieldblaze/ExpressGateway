@@ -17,7 +17,7 @@
  */
 package com.shieldblaze.expressgateway.concurrent.eventstream;
 
-import com.shieldblaze.expressgateway.concurrent.Event;
+import com.shieldblaze.expressgateway.concurrent.event.Event;
 import org.junit.jupiter.api.Assertions;
 import org.junit.jupiter.api.Test;
 

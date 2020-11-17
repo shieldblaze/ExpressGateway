@@ -31,7 +31,7 @@ public final class SingleBackendCluster extends Cluster {
     private SingleBackendCluster(String name, String hostname, Node node) {
         name(name);
         hostname(hostname);
-        addBackend(node);
+        addNode(node);
     }
 
     public static SingleBackendCluster of(Node node) {

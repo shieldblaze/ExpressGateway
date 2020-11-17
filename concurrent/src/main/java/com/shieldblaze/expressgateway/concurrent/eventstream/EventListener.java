@@ -17,7 +17,7 @@
  */
 package com.shieldblaze.expressgateway.concurrent.eventstream;
 
-import com.shieldblaze.expressgateway.concurrent.Event;
+import com.shieldblaze.expressgateway.concurrent.event.Event;
 
 /**
  * Interface to implement to become a subscriber and accept

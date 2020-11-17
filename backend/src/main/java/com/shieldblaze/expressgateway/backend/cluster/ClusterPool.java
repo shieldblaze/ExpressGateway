@@ -48,16 +48,16 @@ public final class ClusterPool extends Cluster {
     }
 
     /**
-     * @see Cluster#addBackend(Node)
+     * @see Cluster#addNode(Node)
      */
     public void addBackends(Node... nodes) {
         Objects.requireNonNull(nodes, "backends");
         for (Node node : nodes) {
-            super.addBackend(node);
+            super.addNode(node);
         }
     }
 
-    public void addBackend(Node backends) {
-        super.addBackend(backends);
+    public void addNode(Node backends) {
+        super.addNode(backends);
     }
 }

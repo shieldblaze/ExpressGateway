@@ -51,5 +51,6 @@ public enum TransportType {
      *     <li> {@link EpollEventLoopGroup} </li>
      * </ul>
      */
-    EPOLL
+    EPOLL,
+    IO_URING
 }

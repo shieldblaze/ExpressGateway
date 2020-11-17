@@ -21,8 +21,8 @@ import com.shieldblaze.expressgateway.backend.Node;
 import com.shieldblaze.expressgateway.backend.cluster.Cluster;
 import com.shieldblaze.expressgateway.backend.cluster.SingleBackendCluster;
 import com.shieldblaze.expressgateway.backend.strategy.l4.RoundRobin;
-import com.shieldblaze.expressgateway.configuration.CommonConfiguration;
-import com.shieldblaze.expressgateway.configuration.CommonConfigurationBuilder;
+import com.shieldblaze.expressgateway.configuration.CoreConfiguration;
+import com.shieldblaze.expressgateway.configuration.CoreConfigurationBuilder;
 import com.shieldblaze.expressgateway.configuration.buffer.PooledByteBufAllocatorConfiguration;
 import com.shieldblaze.expressgateway.configuration.eventloop.EventLoopConfiguration;
 import com.shieldblaze.expressgateway.configuration.eventloop.EventLoopConfigurationBuilder;
@@ -30,10 +30,9 @@ import com.shieldblaze.expressgateway.configuration.transport.ReceiveBufferAlloc
 import com.shieldblaze.expressgateway.configuration.transport.TransportConfiguration;
 import com.shieldblaze.expressgateway.configuration.transport.TransportConfigurationBuilder;
 import com.shieldblaze.expressgateway.configuration.transport.TransportType;
-import com.shieldblaze.expressgateway.core.events.L4FrontListenerEvent;
-import com.shieldblaze.expressgateway.core.loadbalancer.l4.L4LoadBalancer;
-import com.shieldblaze.expressgateway.core.loadbalancer.l4.L4LoadBalancerBuilder;
-import com.shieldblaze.expressgateway.core.utils.EventLoopFactory;
+import com.shieldblaze.expressgateway.core.events.L4FrontListenerStartupEvent;
+import com.shieldblaze.expressgateway.core.L4LoadBalancer;
+import com.shieldblaze.expressgateway.core.EventLoopFactory;
 import io.netty.channel.epoll.Epoll;
 import org.junit.jupiter.api.AfterAll;
 import org.junit.jupiter.api.BeforeAll;
@@ -80,27 +79,27 @@ final class UpstreamHandlerTest {
                 .withChildWorkers(Runtime.getRuntime().availableProcessors() * 2)
                 .build();
 
-        CommonConfiguration commonConfiguration = CommonConfigurationBuilder.newBuilder()
+        CoreConfiguration coreConfiguration = CoreConfigurationBuilder.newBuilder()
                 .withTransportConfiguration(transportConfiguration)
                 .withEventLoopConfiguration(eventLoopConfiguration)
                 .withPooledByteBufAllocatorConfiguration(PooledByteBufAllocatorConfiguration.DEFAULT)
                 .build();
 
-        eventLoopFactory = new EventLoopFactory(commonConfiguration);
+        eventLoopFactory = new EventLoopFactory(coreConfiguration);
 
         Cluster cluster = SingleBackendCluster.of((new Node(new InetSocketAddress("127.0.0.1", 9111))));
 
-        l4LoadBalancer = L4LoadBalancerBuilder.newBuilder()
-                .withCommonConfiguration(commonConfiguration)
+        l4LoadBalancer = DefaultL4LoadBalancerBuilder.newBuilder()
+                .withCommonConfiguration(coreConfiguration)
                 .withL4Balance(new RoundRobin())
                 .withCluster(cluster)
                 .withBindAddress(new InetSocketAddress("127.0.0.1", 9110))
                 .withFrontListener(new TCPListener())
                 .build();
 
-        List<CompletableFuture<L4FrontListenerEvent>> list = l4LoadBalancer.start();
+        List<CompletableFuture<L4FrontListenerStartupEvent>> list = l4LoadBalancer.start();
         Thread.sleep(2500L);
-        for (CompletableFuture<L4FrontListenerEvent> completableFuture : list) {
+        for (CompletableFuture<L4FrontListenerStartupEvent> completableFuture : list) {
             try {
                 assertTrue(completableFuture.get().channelFuture().isSuccess());
             } catch (Throwable e) {

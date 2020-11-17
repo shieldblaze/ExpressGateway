@@ -42,11 +42,6 @@ public abstract class Cluster {
     private final List<Node> allNodes = new CopyOnWriteArrayList<>();
 
     /**
-     * Stream of {@linkplain BackendEvent}
-     */
-    private final AsyncEventStream eventStream = new AsyncEventStream(GlobalExecutors.INSTANCE.getExecutorService());
-
-    /**
      * Hostname of this {@linkplain Cluster}
      */
     private String hostname;
@@ -96,7 +91,7 @@ public abstract class Cluster {
     /**
      * Add {@link Node} into this {@linkplain Cluster}
      */
-    protected void addBackend(Node node) {
+    protected void addNode(Node node) {
         allNodes.add(Objects.requireNonNull(node, "backend"));
         node.cluster(this);
     }
@@ -140,23 +135,5 @@ public abstract class Cluster {
      */
     public int online() {
         return (int) allNodes.stream().filter(backend -> backend.state() == State.ONLINE).count();
-    }
-
-    /**
-     * Subscribe to stream of {@link BackendEvent}
-     *
-     * @see EventStream#subscribe(EventListener)
-     */
-    public void subscribeStream(EventListener eventListener) {
-        eventStream.subscribe(eventListener);
-    }
-
-    /**
-     * Unsubscribe from stream of {@link BackendEvent}
-     *
-     * @see EventStream#subscribe(EventListener)
-     */
-    public void unsubscribeStream(EventListener eventListener) {
-        eventStream.unsubscribe(eventListener);
     }
 }

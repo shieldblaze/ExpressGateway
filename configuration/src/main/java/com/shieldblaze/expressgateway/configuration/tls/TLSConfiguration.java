@@ -17,15 +17,13 @@
  */
 package com.shieldblaze.expressgateway.configuration.tls;
 
-import com.shieldblaze.expressgateway.configuration.GenericConfiguration;
-
 import java.util.Map;
 import java.util.TreeMap;
 
 /**
  * Configuration for TLS
  */
-public final class TLSConfiguration extends GenericConfiguration {
+public final class TLSConfiguration {
     private final Map<String, CertificateKeyPair> certificateKeyPairMap = new TreeMap<>();
     private boolean forServer;
 

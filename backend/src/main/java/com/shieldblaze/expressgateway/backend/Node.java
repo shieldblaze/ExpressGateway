@@ -48,11 +48,6 @@ public class Node implements Comparable<Node>, Closeable {
     private final InetSocketAddress socketAddress;
 
     /**
-     * Health Check Manager for this {@linkplain Node}
-     */
-    private final HealthCheckManager healthCheckManager;
-
-    /**
      * Hash of {@link InetSocketAddress}
      */
     private final String hash;
@@ -61,16 +56,6 @@ public class Node implements Comparable<Node>, Closeable {
      * {@linkplain Cluster} to which this {@linkplain Node} is associated
      */
     private Cluster cluster;
-
-    /**
-     * Weight of this {@link Node}
-     */
-    private int Weight;
-
-    /**
-     * Maximum Number Of Connections Allowed for this {@link Node}
-     */
-    private int maxConnections;
 
     /**
      * Active Number Of Connection for this {@link Node}
@@ -104,68 +89,15 @@ public class Node implements Comparable<Node>, Closeable {
     private final ScheduledFuture<?> connectionCleanerFuture;
 
     /**
-     * Create a new {@linkplain Node} Instance with {@code Weight 100}, {@code maxConnections 10000} and no Health Check
-     *
-     * @param socketAddress Address of this {@linkplain Node}
-     */
-    public Node(InetSocketAddress socketAddress) {
-        this(socketAddress, 100, 10_000, null, null);
-    }
-
-    /**
-     * Create a new {@linkplain Node} Instance with no Health Check
-     *
-     * @param socketAddress  Address of this {@linkplain Node}
-     * @param Weight         Weight of this {@linkplain Node}
-     * @param maxConnections Maximum Number of Connections allowed for this {@linkplain Node}
-     */
-    public Node(InetSocketAddress socketAddress, int Weight, int maxConnections) {
-        this(socketAddress, Weight, maxConnections, null, null);
-    }
-
-    /**
-     * Create a new {@linkplain Node} Instance
-     *
-     * @param socketAddress  Address of this {@linkplain Node}
-     * @param Weight         Weight of this {@linkplain Node}
-     * @param maxConnections Maximum Number of Connections allowed for this {@linkplain Node}
-     * @param healthCheck    {@linkplain HealthCheck} Instance
-     */
-    public Node(InetSocketAddress socketAddress, int Weight, int maxConnections, HealthCheck healthCheck) {
-        this(socketAddress, Weight, maxConnections, healthCheck, null);
-    }
-
-    /**
      * Create a new {@linkplain Node} Instance
      *
      * @param socketAddress      Address of this {@linkplain Node}
-     * @param Weight             Weight of this {@linkplain Node}
-     * @param maxConnections     Maximum Number of Connections allowed for this {@linkplain Node}
-     * @param healthCheck        {@linkplain HealthCheck} Instance
-     * @param healthCheckManager {@linkplain HealthCheckManager} Instance
      */
-    public Node(InetSocketAddress socketAddress, int Weight, int maxConnections, HealthCheck healthCheck, HealthCheckManager healthCheckManager) {
+    public Node(InetSocketAddress socketAddress) {
         Objects.requireNonNull(socketAddress, "SocketAddress");
-
-        if (Weight < 1) {
-            throw new IllegalArgumentException("Weight cannot be less than 1 (one).");
-        }
-
-        if (maxConnections < 0) {
-            throw new IllegalArgumentException("Maximum Connection cannot be less than 0 (Zero).");
-        }
 
         this.state = State.ONLINE;
         this.socketAddress = socketAddress;
-        this.Weight = Weight;
-        this.maxConnections = maxConnections;
-        this.healthCheck = healthCheck;
-        this.healthCheckManager = healthCheckManager;
-
-        if (this.healthCheck != null && this.healthCheckManager != null) {
-            this.healthCheckManager.backend(this);
-            this.healthCheckManager.initialize();
-        }
 
         // Hash this backend
         ByteBuffer byteBuffer = ByteBuffer.allocate(6);
@@ -175,7 +107,7 @@ public class Node implements Comparable<Node>, Closeable {
         byteBuffer.clear();
         this.hash = Hasher.hash(Hasher.Algorithm.SHA256, addressAndPort);
 
-        connectionCleanerFuture = GlobalExecutors.INSTANCE.submitTaskAndRunEvery(new ConnectionCleaner(this), 1, 10, TimeUnit.MICROSECONDS);
+        connectionCleanerFuture = GlobalExecutors.INSTANCE.submitTaskAndRunEvery(new ConnectionCleaner(this), 1, 10, TimeUnit.MILLISECONDS);
     }
 
     public Cluster cluster() {
@@ -193,15 +125,6 @@ public class Node implements Comparable<Node>, Closeable {
 
     public InetSocketAddress socketAddress() {
         return socketAddress;
-    }
-
-    public int weight() {
-        return Weight;
-    }
-
-    public Node weight(int weight) {
-        this.Weight = weight;
-        return this;
     }
 
     public int activeConnections() {
@@ -230,15 +153,6 @@ public class Node implements Comparable<Node>, Closeable {
 
     public Node incBytesReceived(int bytes) {
         bytesReceived += bytes;
-        return this;
-    }
-
-    public int maxConnections() {
-        return maxConnections;
-    }
-
-    public Node maxConnections(int maxConnections) {
-        this.maxConnections = maxConnections;
         return this;
     }
 

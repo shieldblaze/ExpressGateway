@@ -17,6 +17,30 @@
  */
 package com.shieldblaze.expressgateway.backend.cluster;
 
-public class ParentCluster {
+import com.shieldblaze.expressgateway.backend.loadbalance.LoadBalance;
 
+import java.util.List;
+import java.util.concurrent.CopyOnWriteArrayList;
+
+public class ParentCluster {
+    private final List<Cluster> childClusters = new CopyOnWriteArrayList<>();
+    private LoadBalance<?, ?, ?, ?> loadBalance;
+
+    public ParentCluster addChild(Cluster cluster) {
+        childClusters.add(cluster);
+        return this;
+    }
+
+    public boolean removeChild(Cluster cluster) {
+        return childClusters.remove(cluster);
+    }
+
+    public ParentCluster loadBalance(LoadBalance<?, ?, ?, ?> loadBalance) {
+        this.loadBalance = loadBalance;
+        return this;
+    }
+
+    public LoadBalance<?, ?, ?, ?> loadBalance() {
+        return loadBalance;
+    }
 }

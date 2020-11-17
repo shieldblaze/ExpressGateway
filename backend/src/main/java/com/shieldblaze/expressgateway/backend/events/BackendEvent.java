@@ -18,7 +18,7 @@
 package com.shieldblaze.expressgateway.backend.events;
 
 import com.shieldblaze.expressgateway.backend.Node;
-import com.shieldblaze.expressgateway.concurrent.Event;
+import com.shieldblaze.expressgateway.concurrent.event.Event;
 
 /**
  * Base class of all {@link Node} events

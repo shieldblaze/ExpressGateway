@@ -29,7 +29,7 @@ import com.shieldblaze.expressgateway.backend.exceptions.NoBackendAvailableExcep
 import com.shieldblaze.expressgateway.backend.loadbalance.SessionPersistence;
 import com.shieldblaze.expressgateway.backend.strategy.l7.http.sessionpersistence.NOOPSessionPersistence;
 import com.shieldblaze.expressgateway.common.algo.roundrobin.RoundRobinIndexGenerator;
-import com.shieldblaze.expressgateway.concurrent.Event;
+import com.shieldblaze.expressgateway.concurrent.event.Event;
 import com.shieldblaze.expressgateway.concurrent.eventstream.EventListener;
 
 /**

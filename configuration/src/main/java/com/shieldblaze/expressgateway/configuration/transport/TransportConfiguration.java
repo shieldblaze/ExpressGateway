@@ -17,7 +17,7 @@
  */
 package com.shieldblaze.expressgateway.configuration.transport;
 
-import com.shieldblaze.expressgateway.configuration.CommonConfiguration;
+import com.shieldblaze.expressgateway.configuration.CoreConfiguration;
 import io.netty.channel.AdaptiveRecvByteBufAllocator;
 import io.netty.channel.FixedRecvByteBufAllocator;
 import io.netty.channel.RecvByteBufAllocator;
@@ -25,7 +25,7 @@ import io.netty.channel.RecvByteBufAllocator;
 /**
  * Transport Configuration
  */
-public final class TransportConfiguration extends CommonConfiguration {
+public final class TransportConfiguration extends CoreConfiguration {
 
     private TransportType transportType;
     private ReceiveBufferAllocationType receiveBufferAllocationType;

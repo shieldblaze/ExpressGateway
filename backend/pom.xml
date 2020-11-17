@@ -20,13 +20,13 @@ along with ShieldBlaze ExpressGateway.  If not, see <https://www.gnu.org/license
          xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
          xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 http://maven.apache.org/xsd/maven-4.0.0.xsd">
     <parent>
-        <artifactId>expressgateway</artifactId>
-        <groupId>com.shieldblaze</groupId>
+        <groupId>com.shieldblaze.expressgateway</groupId>
+        <artifactId>parent</artifactId>
         <version>0.0.1-a</version>
     </parent>
     <modelVersion>4.0.0</modelVersion>
 
-    <artifactId>expressgateway.backend</artifactId>
+    <artifactId>backend</artifactId>
     <packaging>jar</packaging>
 
     <name>ExpressGateway/Backend</name>
@@ -37,23 +37,23 @@ along with ShieldBlaze ExpressGateway.  If not, see <https://www.gnu.org/license
 
     <dependencies>
         <dependency>
-            <groupId>com.shieldblaze</groupId>
-            <artifactId>expressgateway.healthcheck</artifactId>
+            <groupId>com.shieldblaze.expressgateway</groupId>
+            <artifactId>healthcheck</artifactId>
             <version>0.0.1-a</version>
         </dependency>
         <dependency>
-            <groupId>com.shieldblaze</groupId>
-            <artifactId>expressgateway.common</artifactId>
+            <groupId>com.shieldblaze.expressgateway</groupId>
+            <artifactId>common</artifactId>
             <version>0.0.1-a</version>
         </dependency>
         <dependency>
-            <groupId>com.shieldblaze</groupId>
-            <artifactId>expressgateway.configuration</artifactId>
+            <groupId>com.shieldblaze.expressgateway</groupId>
+            <artifactId>configuration</artifactId>
             <version>0.0.1-a</version>
         </dependency>
         <dependency>
-            <groupId>com.shieldblaze</groupId>
-            <artifactId>expressgateway.concurrent</artifactId>
+            <groupId>com.shieldblaze.expressgateway</groupId>
+            <artifactId>concurrent</artifactId>
             <version>0.0.1-a</version>
         </dependency>
     </dependencies>
