@@ -23,12 +23,12 @@ import com.shieldblaze.expressgateway.concurrent.event.Event;
  * Interface to implement to become a subscriber and accept
  * events using {@link #accept(Event)}.
  */
-public interface EventListener {
+public interface EventListener<T> {
 
     /**
      * This method is called when an event is published.
      *
      * @param event Event that was published.
      */
-    void accept(Event event);
+    void accept(Event<T> event);
 }

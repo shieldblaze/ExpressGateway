@@ -47,6 +47,6 @@ public class HTTPBalanceResponse extends Response {
 
     @Override
     public String toString() {
-        return "HTTPResponse{httpHeaders=" + httpHeaders + ", backend=" + backend() + '}';
+        return "HTTPResponse{httpHeaders=" + httpHeaders + ", backend=" + node() + '}';
     }
 }

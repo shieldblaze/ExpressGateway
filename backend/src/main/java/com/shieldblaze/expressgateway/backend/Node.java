@@ -18,29 +18,36 @@
 package com.shieldblaze.expressgateway.backend;
 
 import com.shieldblaze.expressgateway.backend.cluster.Cluster;
+import com.shieldblaze.expressgateway.backend.events.node.NodeIdleEvent;
+import com.shieldblaze.expressgateway.backend.events.node.NodeOfflineEvent;
+import com.shieldblaze.expressgateway.backend.events.node.NodeOnlineEvent;
 import com.shieldblaze.expressgateway.backend.exceptions.TooManyConnectionsException;
-import com.shieldblaze.expressgateway.backend.healthcheckmanager.HealthCheckManager;
 import com.shieldblaze.expressgateway.backend.pool.Connection;
 import com.shieldblaze.expressgateway.common.Math;
-import com.shieldblaze.expressgateway.concurrent.GlobalExecutors;
-import com.shieldblaze.expressgateway.common.crypto.Hasher;
+import com.shieldblaze.expressgateway.common.annotation.NonNull;
+import com.shieldblaze.expressgateway.common.utils.Number;
 import com.shieldblaze.expressgateway.healthcheck.Health;
 import com.shieldblaze.expressgateway.healthcheck.HealthCheck;
 
-import java.io.Closeable;
 import java.net.InetSocketAddress;
-import java.nio.ByteBuffer;
 import java.util.Objects;
 import java.util.Optional;
 import java.util.Queue;
 import java.util.concurrent.ConcurrentLinkedQueue;
-import java.util.concurrent.ScheduledFuture;
-import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicInteger;
+import java.util.concurrent.atomic.AtomicLong;
 
 /**
- * {@link Node} is the server where all requests are sent.
+ * <p> {@link Node} is the server where all requests are sent. </p>
  */
-public class Node implements Comparable<Node>, Closeable {
+public final class Node implements Comparable<Node> {
+
+    /**
+     * Connections List
+     * <p>
+     * (Wrapped in ConcurrentLinkedQueue due to performance issues with CopyOnWriteArrayList).
+     */
+    private final Queue<Connection> connections = new ConcurrentLinkedQueue<>();
 
     /**
      * Address of this {@link Node}
@@ -55,22 +62,22 @@ public class Node implements Comparable<Node>, Closeable {
     /**
      * {@linkplain Cluster} to which this {@linkplain Node} is associated
      */
-    private Cluster cluster;
+    private final Cluster cluster;
 
     /**
-     * Active Number Of Connection for this {@link Node}
+     * Number of bytes sent so far to this {@link Node}
      */
-    private int activeConnections;
-
-    /**
-     * Number of bytes written so far to this {@link Node}
-     */
-    private long bytesWritten = 0L;
+    private final AtomicLong bytesSent = new AtomicLong();
 
     /**
      * Number of bytes received so far from this {@link Node}
      */
-    private long bytesReceived = 0L;
+    private final AtomicLong bytesReceived = new AtomicLong();
+
+    /**
+     * Active Connection secondary implementation
+     */
+    private final AtomicInteger activeConnection0 = new AtomicInteger(-1);
 
     /**
      * Current State of this {@link Node}
@@ -80,105 +87,120 @@ public class Node implements Comparable<Node>, Closeable {
     /**
      * Health Check for this {@link Node}
      */
-    private HealthCheck healthCheck;
+    private final HealthCheck healthCheck;
 
     /**
-     * Connections List
+     * Weight of this {@link Node}
      */
-    final Queue<Connection> connectionList = new ConcurrentLinkedQueue<>();
-    private final ScheduledFuture<?> connectionCleanerFuture;
+    private int weight;
+
+    /**
+     * Max Connections handled by this {@link Node}
+     */
+    private int maxConnections;
+
+    public Node(Cluster cluster, InetSocketAddress socketAddress) {
+        this(cluster, socketAddress, 100, -1, null);
+    }
 
     /**
      * Create a new {@linkplain Node} Instance
      *
-     * @param socketAddress      Address of this {@linkplain Node}
+     * @param socketAddress Address of this {@linkplain Node}
      */
-    public Node(InetSocketAddress socketAddress) {
-        Objects.requireNonNull(socketAddress, "SocketAddress");
+    public Node(@NonNull Cluster cluster,
+                @NonNull InetSocketAddress socketAddress,
+                int weight,
+                int maxConnections,
+                HealthCheck healthCheck) {
 
-        this.state = State.ONLINE;
+        this.cluster = cluster;
         this.socketAddress = socketAddress;
+        this.hash = String.valueOf(Objects.hashCode(this));
+        this.healthCheck = healthCheck;
 
-        // Hash this backend
-        ByteBuffer byteBuffer = ByteBuffer.allocate(6);
-        byteBuffer.put(socketAddress.getAddress().getAddress());
-        byteBuffer.putShort((short) socketAddress.getPort());
-        byte[] addressAndPort = byteBuffer.array();
-        byteBuffer.clear();
-        this.hash = Hasher.hash(Hasher.Algorithm.SHA256, addressAndPort);
-
-        connectionCleanerFuture = GlobalExecutors.INSTANCE.submitTaskAndRunEvery(new ConnectionCleaner(this), 1, 10, TimeUnit.MILLISECONDS);
+        state(State.ONLINE);
+        weight(weight);
+        maxConnections(maxConnections);
     }
 
     public Cluster cluster() {
         return cluster;
     }
 
-    public Node cluster(Cluster cluster) {
-        if (this.cluster == null) {
-            this.cluster = cluster;
-        } else {
-            throw new IllegalArgumentException("Cluster is already set");
-        }
-        return this;
-    }
-
     public InetSocketAddress socketAddress() {
         return socketAddress;
     }
 
-    public int activeConnections() {
-        return activeConnections;
+    public int activeConnection() {
+
+        // If active connection is initialized (value not set to -1) then return it.
+        if (activeConnection0() != -1) {
+            return activeConnection0();
+        }
+
+        return connections.size();
     }
 
-    public Node incConnections() {
-        activeConnections++;
-        return this;
-    }
-
-    public Node decConnections() {
-        activeConnections--;
-        return this;
-    }
-
-    public Node incBytesWritten(int bytes) {
-        bytesWritten += bytes;
-        return this;
-    }
-
-    public Node incBytesWritten(long bytes) {
-        bytesWritten += bytes;
+    public Node incBytesSent(int bytes) {
+        bytesSent.addAndGet(bytes);
         return this;
     }
 
     public Node incBytesReceived(int bytes) {
-        bytesReceived += bytes;
+        bytesReceived.addAndGet(bytes);
         return this;
     }
 
-    public long bytesWritten() {
-        return bytesWritten;
+    public long bytesSent() {
+        return bytesSent.get();
     }
 
     public long bytesReceived() {
-        return bytesReceived;
+        return bytesReceived.get();
     }
 
     public State state() {
         return state;
     }
 
+    @NonNull
     public Node state(State state) {
+
+        switch (state) {
+            case ONLINE:
+                cluster().eventPublisher().publish(new NodeOnlineEvent(this));
+                break;
+            case OFFLINE:
+                cluster().eventPublisher().publish(new NodeOfflineEvent(this));
+                break;
+            case IDLE:
+                cluster().eventPublisher().publish(new NodeIdleEvent(this));
+                break;
+            default:
+                throw new IllegalArgumentException("Unknown State: " + state);
+        }
+
         this.state = state;
         return this;
     }
 
-    public HealthCheck healthCheck() {
-        return healthCheck;
+    public int activeConnection0() {
+        return activeConnection0.get();
     }
 
-    public Node healthCheck(HealthCheck healthCheck) {
-        this.healthCheck = healthCheck;
+    public Node incActiveConnection0() {
+        activeConnection0.incrementAndGet();
+        return this;
+    }
+
+    public Node decActiveConnection0() {
+        activeConnection0.incrementAndGet();
+        return this;
+    }
+
+    public Node resetActiveConnection0() {
+        activeConnection0.set(-1);
         return this;
     }
 
@@ -189,25 +211,50 @@ public class Node implements Comparable<Node>, Closeable {
         return healthCheck.health();
     }
 
+    public HealthCheck healthCheck() {
+        return healthCheck;
+    }
+
+    public int weight() {
+        return weight;
+    }
+
+    public void weight(int weight) {
+        this.weight = Number.checkPositive(weight, "Weight");
+    }
+
+    public int maxConnections() {
+        return maxConnections;
+    }
+
+    public void maxConnections(int maxConnections) {
+        this.maxConnections = Number.checkRange(maxConnections, -1, 1_000_000, "MaxConnections");
+    }
+
     public String hash() {
         return hash;
     }
 
+    /**
+     * Get load factor of this {@link Node}
+     */
     public float load() {
-        if (activeConnections() == 0) {
+        // If number of active connections is 0 (zero) or max connections is -1 (negative one)
+        // then return 0 (zero) because we cannot get the percentage.
+        if (activeConnection() == 0 || maxConnections == -1) {
             return 0;
         }
-        return Math.percentage(activeConnections, maxConnections);
+        return Math.percentage(activeConnection(), maxConnections);
     }
 
     /**
      * Try to lease a connection from available connections. This method automatically calls
      * {@link Connection#lease()}.
      *
-     * @return {@linkplain Connection} Instance of available and active connection
+     * @return {@linkplain Connection} Instance of available and active connection else {@code null}.
      */
     public Connection lease() {
-        Optional<Connection> optionalConnection = connectionList.stream()
+        Optional<Connection> optionalConnection = connections.stream()
                 .filter(connection -> !connection.isInUse())
                 .findAny();
 
@@ -216,7 +263,7 @@ public class Node implements Comparable<Node>, Closeable {
 
             // If connection is not active, remove it and return null.
             if (!optionalConnection.get().isActive()) {
-                connectionList.remove(optionalConnection.get());
+                connections.remove(optionalConnection.get());
                 return null;
             }
             return optionalConnection.get();
@@ -226,43 +273,45 @@ public class Node implements Comparable<Node>, Closeable {
     }
 
     /**
-     * Associate a {@link Connection} with this {@linkplain Node}
-     *
-     * @param connection {@link Connection} to be associated
+     * Add a {@link Connection} with this {@linkplain Node}
      */
     public Node addConnection(Connection connection) throws TooManyConnectionsException {
-        if (connectionList.size() > maxConnections) {
-            throw new TooManyConnectionsException(this, connectionList.size(), maxConnections);
+        if (maxConnections != -1 && activeConnection() > maxConnections) {
+            connection.close();
+            throw new TooManyConnectionsException(this, maxConnections);
         }
-        connectionList.add(connection);
+        connections.add(connection);
         return this;
     }
 
     /**
-     * Dissociate a {@link Connection} with from {@linkplain Node}
-     *
-     * @param connection {@link Connection} to be Dissociated
+     * Remove and close a {@link Connection} from this {@linkplain Node}
      */
     public Node removeConnection(Connection connection) {
-        connectionList.remove(connection);
+        connections.remove(connection);
         connection.close();
         return this;
     }
 
-    @Override
-    public void close() {
-        state = State.OFFLINE;
-        connectionCleanerFuture.cancel(true);
-        if (this.healthCheck != null && this.healthCheckManager != null) {
-            healthCheckManager.shutdown();
+    public Queue<Connection> connections() {
+        return connections;
+    }
+
+    private void drainConnections() {
+        connections.forEach(Connection::close);
+        connections.clear();
+    }
+
+    public boolean connectionFull() {
+        if (maxConnections == -1) {
+            return false;
         }
-        connectionList.forEach(Connection::close);
-        connectionList.clear();
+        return activeConnection() >= maxConnections;
     }
 
     @Override
     public String toString() {
-        return "Backend{" +
+        return "Node{" +
                 "socketAddress=" + socketAddress +
                 ", state=" + state +
                 ", healthCheck=" + health() +
@@ -284,7 +333,7 @@ public class Node implements Comparable<Node>, Closeable {
     }
 
     @Override
-    public int compareTo(Node o) {
-        return hash.compareToIgnoreCase(o.hash);
+    public int compareTo(Node n) {
+        return hash.compareToIgnoreCase(n.hash);
     }
 }

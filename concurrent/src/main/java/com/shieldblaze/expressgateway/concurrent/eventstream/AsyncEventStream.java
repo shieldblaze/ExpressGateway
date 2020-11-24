@@ -42,11 +42,7 @@ public class AsyncEventStream extends EventStream {
      * @param event Event to publish
      */
     @Override
-    public <T> void publish(Event<T> event) {
-        executorService.execute(() -> {
-            for (EventListener eventListener : subscribers) {
-                executorService.execute(() -> eventListener.accept(event));
-            }
-        });
+    public void publish(Event event) {
+        subscribers.forEach(eventListener -> executorService.execute(() -> eventListener.accept(event)));
     }
 }

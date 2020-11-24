@@ -20,7 +20,7 @@ package com.shieldblaze.expressgateway.protocol.udp;
 import com.shieldblaze.expressgateway.backend.Node;
 import com.shieldblaze.expressgateway.backend.exceptions.LoadBalanceException;
 import com.shieldblaze.expressgateway.backend.strategy.l4.L4Request;
-import com.shieldblaze.expressgateway.core.L4LoadBalancer;
+import com.shieldblaze.expressgateway.core.loadbalancer.L4LoadBalancer;
 import io.netty.channel.ChannelHandler;
 import io.netty.channel.ChannelHandlerContext;
 import io.netty.channel.ChannelInboundHandlerAdapter;
@@ -54,7 +54,7 @@ final class UpstreamHandler extends ChannelInboundHandlerAdapter {
             if (connection == null) {
                 Node node;
                 try {
-                    node = l4LoadBalancer.loadBalance().response(new L4Request(datagramPacket.sender())).backend();
+                    node = l4LoadBalancer.loadBalance().response(new L4Request(datagramPacket.sender())).node();
                 } catch (LoadBalanceException e) {
                     // Handle this
                     return;

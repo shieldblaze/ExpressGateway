@@ -20,58 +20,37 @@ package com.shieldblaze.expressgateway.backend.strategy.l4;
 import com.shieldblaze.expressgateway.backend.Node;
 import com.shieldblaze.expressgateway.backend.State;
 import com.shieldblaze.expressgateway.backend.cluster.Cluster;
-import com.shieldblaze.expressgateway.backend.events.BackendEvent;
+import com.shieldblaze.expressgateway.backend.events.node.NodeEvent;
+import com.shieldblaze.expressgateway.backend.events.node.NodeOfflineEvent;
+import com.shieldblaze.expressgateway.backend.events.node.NodeRemovedEvent;
 import com.shieldblaze.expressgateway.backend.exceptions.LoadBalanceException;
-import com.shieldblaze.expressgateway.backend.exceptions.NoBackendAvailableException;
+import com.shieldblaze.expressgateway.backend.exceptions.NoClusterAvailableException;
+import com.shieldblaze.expressgateway.backend.exceptions.NoNodeAvailableException;
 import com.shieldblaze.expressgateway.backend.loadbalance.SessionPersistence;
-import com.shieldblaze.expressgateway.backend.strategy.l4.sessionpersistence.NOOPSessionPersistence;
 import com.shieldblaze.expressgateway.concurrent.event.Event;
 import com.shieldblaze.expressgateway.concurrent.eventstream.EventListener;
 
 import java.net.InetSocketAddress;
-import java.util.ArrayList;
-import java.util.List;
 import java.util.Optional;
 
 /**
  * Select {@link Node} Based on Weight with Least Connection using Round-Robin
  */
-public final class WeightedLeastConnection extends L4Balance implements EventListener {
+public final class WeightedLeastConnection extends L4Balance {
 
-    private final List<Node> nodes = new ArrayList<>();
-
-    public WeightedLeastConnection() {
-        super(new NOOPSessionPersistence());
-    }
-
-    public WeightedLeastConnection(Cluster cluster) {
-        this(new NOOPSessionPersistence(), cluster);
-    }
-
-    public WeightedLeastConnection(SessionPersistence<Node, Node, InetSocketAddress, Node> sessionPersistence, Cluster cluster) {
+    /**
+     * Create {@link WeightedLeastConnection} Instance
+     *
+     * @param sessionPersistence {@link SessionPersistence} Implementation Instance
+     */
+    public WeightedLeastConnection(SessionPersistence<Node, Node, InetSocketAddress, Node> sessionPersistence) {
         super(sessionPersistence);
-        cluster(cluster);
-    }
-
-    @Override
-    public void cluster(Cluster cluster) {
-        super.cluster(cluster);
-        init();
-        cluster.subscribeStream(this);
-    }
-
-    private void init() {
-        sessionPersistence.clear();
-        nodes.clear();
-        nodes.addAll(cluster.onlineBackends());
     }
 
     @Override
     public L4Response response(L4Request l4Request) throws LoadBalanceException {
         Node node = sessionPersistence.node(l4Request);
         if (node != null) {
-            // If Backend is ONLINE then return the response
-            // else remove it from session persistence.
             if (node.state() == State.ONLINE) {
                 return new L4Response(node);
             } else {
@@ -79,13 +58,12 @@ public final class WeightedLeastConnection extends L4Balance implements EventLis
             }
         }
 
-        Optional<Node> optionalBackend = nodes.stream()
-                .reduce((a, b) -> a.load() < b.load() ? a : b);
+        Optional<Node> optionalNode = cluster.nodes()
+                .stream()
+                .reduce((a, b) -> a.weight() > b.weight() ? a : b);
 
-        if (optionalBackend.isPresent()) {
-            node = optionalBackend.get();
-        } else {
-            throw new NoBackendAvailableException();
+        if (optionalNode.isEmpty()) {
+            throw new NoNodeAvailableException();
         }
 ;
         sessionPersistence.addRoute(l4Request.socketAddress(), node);
@@ -94,9 +72,11 @@ public final class WeightedLeastConnection extends L4Balance implements EventLis
 
     @Override
     public void accept(Event event) {
-        if (event instanceof BackendEvent) {
-            BackendEvent backendEvent = (BackendEvent) event;
-
+        if (event instanceof NodeEvent) {
+            NodeEvent nodeEvent = (NodeEvent) event;
+            if (nodeEvent instanceof NodeOfflineEvent || nodeEvent instanceof NodeRemovedEvent) {
+                sessionPersistence.remove(nodeEvent.node());
+            }
         }
     }
 }

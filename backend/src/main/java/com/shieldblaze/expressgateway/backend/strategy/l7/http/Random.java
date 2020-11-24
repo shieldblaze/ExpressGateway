@@ -20,28 +20,32 @@ package com.shieldblaze.expressgateway.backend.strategy.l7.http;
 import com.shieldblaze.expressgateway.backend.Node;
 import com.shieldblaze.expressgateway.backend.State;
 import com.shieldblaze.expressgateway.backend.cluster.Cluster;
-import com.shieldblaze.expressgateway.backend.exceptions.BackendNotOnlineException;
+import com.shieldblaze.expressgateway.backend.events.node.NodeEvent;
+import com.shieldblaze.expressgateway.backend.events.node.NodeIdleEvent;
+import com.shieldblaze.expressgateway.backend.events.node.NodeOfflineEvent;
+import com.shieldblaze.expressgateway.backend.events.node.NodeRemovedEvent;
+import com.shieldblaze.expressgateway.backend.exceptions.NoNodeAvailableException;
+import com.shieldblaze.expressgateway.backend.exceptions.NodeOfflineException;
 import com.shieldblaze.expressgateway.backend.exceptions.LoadBalanceException;
 import com.shieldblaze.expressgateway.backend.loadbalance.SessionPersistence;
 import com.shieldblaze.expressgateway.backend.strategy.l7.http.sessionpersistence.NOOPSessionPersistence;
+import com.shieldblaze.expressgateway.concurrent.event.Event;
+import com.shieldblaze.expressgateway.concurrent.eventstream.EventListener;
+
+import java.util.Optional;
 
 /**
  * Select {@link Node} Randomly
  */
 public final class Random extends HTTPBalance {
-    private final java.util.Random RANDOM_INSTANCE = new java.util.Random();
 
-    public Random() {
-        super(new NOOPSessionPersistence());
-    }
-
-    public Random(Cluster cluster) {
-        this(new NOOPSessionPersistence(), cluster);
-    }
-
-    public Random(SessionPersistence<HTTPBalanceResponse, HTTPBalanceResponse, HTTPBalanceRequest, Node> sessionPersistence, Cluster cluster) {
+    /**
+     * Create {@link Random} Instance
+     *
+     * @param sessionPersistence {@link SessionPersistence} Implementation Instance
+     */
+    public Random(SessionPersistence<HTTPBalanceResponse, HTTPBalanceResponse, HTTPBalanceRequest, Node> sessionPersistence) {
         super(sessionPersistence);
-        super.cluster(cluster);
     }
 
     @Override
@@ -50,26 +54,35 @@ public final class Random extends HTTPBalance {
         if (httpBalanceResponse != null) {
             // If Backend is ONLINE then return the response
             // else remove it from session persistence.
-            if (httpBalanceResponse.backend().state() == State.ONLINE) {
+            if (httpBalanceResponse.node().state() == State.ONLINE) {
                 return httpBalanceResponse;
             } else {
-                sessionPersistence.removeRoute(request, httpBalanceResponse.backend());
+                sessionPersistence.removeRoute(request, httpBalanceResponse.node());
             }
         }
 
-        int index = RANDOM_INSTANCE.nextInt(cluster.online());
+        Optional<Node> optionalNode = cluster.nodes()
+                .stream()
+                .findAny();
 
-        Node node;
-        try {
-            node = cluster.online(index);
-        } catch (com.shieldblaze.expressgateway.backend.exceptions.BackendNotOnlineException e) {
-            // If selected Backend is not online then
-            // we'll throw an exception. However, this should
-            // rarely or never happen in most cases.
-            throw new BackendNotOnlineException("Randomly selected Backend is not online");
+        // If we don't have any node available then throw an exception.
+        if (optionalNode.isEmpty()) {
+            throw new NoNodeAvailableException();
         }
+
+        Node node = optionalNode.get();
 
         // Add to session persistence and return
         return sessionPersistence.addRoute(request, node);
+    }
+
+    @Override
+    public void accept(Event event) {
+        if (event instanceof NodeEvent) {
+            NodeEvent nodeEvent = (NodeEvent) event;
+            if (nodeEvent instanceof NodeOfflineEvent || nodeEvent instanceof NodeRemovedEvent || nodeEvent instanceof NodeIdleEvent) {
+                sessionPersistence.remove(nodeEvent.node());
+            }
+        }
     }
 }

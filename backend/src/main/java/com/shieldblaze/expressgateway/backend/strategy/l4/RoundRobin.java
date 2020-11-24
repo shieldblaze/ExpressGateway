@@ -20,11 +20,22 @@ package com.shieldblaze.expressgateway.backend.strategy.l4;
 import com.shieldblaze.expressgateway.backend.Node;
 import com.shieldblaze.expressgateway.backend.State;
 import com.shieldblaze.expressgateway.backend.cluster.Cluster;
-import com.shieldblaze.expressgateway.backend.events.BackendEvent;
+import com.shieldblaze.expressgateway.backend.events.cluster.ClusterAddedEvent;
+import com.shieldblaze.expressgateway.backend.events.cluster.ClusterEvent;
+import com.shieldblaze.expressgateway.backend.events.cluster.ClusterIdleEvent;
+import com.shieldblaze.expressgateway.backend.events.cluster.ClusterOfflineEvent;
+import com.shieldblaze.expressgateway.backend.events.cluster.ClusterOnlineEvent;
+import com.shieldblaze.expressgateway.backend.events.cluster.ClusterRemovedEvent;
+import com.shieldblaze.expressgateway.backend.events.node.NodeAddedEvent;
+import com.shieldblaze.expressgateway.backend.events.node.NodeEvent;
+import com.shieldblaze.expressgateway.backend.events.node.NodeIdleEvent;
+import com.shieldblaze.expressgateway.backend.events.node.NodeOfflineEvent;
+import com.shieldblaze.expressgateway.backend.events.node.NodeOnlineEvent;
+import com.shieldblaze.expressgateway.backend.events.node.NodeRemovedEvent;
 import com.shieldblaze.expressgateway.backend.exceptions.LoadBalanceException;
-import com.shieldblaze.expressgateway.backend.exceptions.NoBackendAvailableException;
+import com.shieldblaze.expressgateway.backend.exceptions.NoNodeAvailableException;
 import com.shieldblaze.expressgateway.backend.loadbalance.SessionPersistence;
-import com.shieldblaze.expressgateway.backend.strategy.l4.sessionpersistence.NOOPSessionPersistence;
+import com.shieldblaze.expressgateway.common.algo.roundrobin.RoundRobinIndexGenerator;
 import com.shieldblaze.expressgateway.common.list.RoundRobinList;
 import com.shieldblaze.expressgateway.concurrent.event.Event;
 import com.shieldblaze.expressgateway.concurrent.eventstream.EventListener;
@@ -34,36 +45,23 @@ import java.net.InetSocketAddress;
 /**
  * Select {@link Node} based on Round-Robin
  */
-public final class RoundRobin extends L4Balance implements EventListener {
+public final class RoundRobin extends L4Balance {
 
-    private RoundRobinList<Node> roundRobinList;
+    private final RoundRobinIndexGenerator roundRobinIndexGenerator = new RoundRobinIndexGenerator(0);
 
-    public RoundRobin() {
-        super(new NOOPSessionPersistence());
-    }
-
-    public RoundRobin(Cluster cluster) {
-        this(new NOOPSessionPersistence(), cluster);
-    }
-
-    public RoundRobin(SessionPersistence<Node, Node, InetSocketAddress, Node> sessionPersistence, Cluster cluster) {
+    /**
+     * Create {@link RoundRobin} Instance
+     *
+     * @param sessionPersistence {@link SessionPersistence} Implementation Instance
+     */
+    public RoundRobin(SessionPersistence<Node, Node, InetSocketAddress, Node> sessionPersistence) {
         super(sessionPersistence);
-        cluster(cluster);
-    }
-
-    @Override
-    public void cluster(Cluster cluster) {
-        super.cluster(cluster);
-        roundRobinList = new RoundRobinList<>(cluster.onlineBackends());
-        cluster.subscribeStream(this);
     }
 
     @Override
     public L4Response response(L4Request l4Request) throws LoadBalanceException {
         Node node = sessionPersistence.node(l4Request);
         if (node != null) {
-            // If Backend is ONLINE then return the response
-            // else remove it from session persistence.
             if (node.state() == State.ONLINE) {
                 return new L4Response(node);
             } else {
@@ -71,12 +69,10 @@ public final class RoundRobin extends L4Balance implements EventListener {
             }
         }
 
-        node = roundRobinList.next();
-
-        // If Backend is `null` then we don't have any
-        // backend to return so we will throw exception.
-        if (node == null) {
-            throw new NoBackendAvailableException("No Backend available for Cluster: " + cluster);
+        try {
+            node = cluster.nodes().get(roundRobinIndexGenerator.next());
+        } catch (Exception ex) {
+            throw new NoNodeAvailableException(ex);
         }
 
         sessionPersistence.addRoute(l4Request.socketAddress(), node);
@@ -85,9 +81,14 @@ public final class RoundRobin extends L4Balance implements EventListener {
 
     @Override
     public void accept(Event event) {
-        if (event instanceof BackendEvent) {
-            BackendEvent backendEvent = (BackendEvent) event;
-
+        if (event instanceof NodeEvent) {
+            NodeEvent nodeEvent = (NodeEvent) event;
+            if (nodeEvent instanceof NodeOfflineEvent || nodeEvent instanceof NodeRemovedEvent || nodeEvent instanceof NodeIdleEvent) {
+                sessionPersistence.remove(nodeEvent.node());
+                roundRobinIndexGenerator.decMaxIndex();
+            } else if (nodeEvent instanceof NodeOnlineEvent) {
+                roundRobinIndexGenerator.incMaxIndex();
+            }
         }
     }
 }

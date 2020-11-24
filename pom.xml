@@ -57,7 +57,7 @@ along with ShieldBlaze ExpressGateway.  If not, see <https://www.gnu.org/license
 
     <modules>
         <module>core</module>
-        <module>health-check</module>
+        <module>healthcheck</module>
         <module>backend</module>
         <module>common</module>
         <module>security</module>
@@ -96,6 +96,13 @@ along with ShieldBlaze ExpressGateway.  If not, see <https://www.gnu.org/license
             <groupId>io.netty</groupId>
             <artifactId>netty-tcnative</artifactId>
             <version>2.0.34.Final</version>
+        </dependency>
+
+        <!-- https://mvnrepository.com/artifact/io.netty.incubator/netty-incubator-transport-native-io_uring -->
+        <dependency>
+            <groupId>io.netty.incubator</groupId>
+            <artifactId>netty-incubator-transport-native-io_uring</artifactId>
+            <version>0.0.1.Final</version>
         </dependency>
 
         <!-- https://mvnrepository.com/artifact/org.apache.logging.log4j/log4j-api -->

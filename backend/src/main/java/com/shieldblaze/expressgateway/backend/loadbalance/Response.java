@@ -37,7 +37,7 @@ public abstract class Response {
     /**
      * Get selected {@linkplain Node}
      */
-    public Node backend() {
+    public Node node() {
         return node;
     }
 

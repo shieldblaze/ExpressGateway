@@ -20,7 +20,7 @@ package com.shieldblaze.expressgateway.protocol.tcp;
 import com.shieldblaze.expressgateway.backend.Node;
 import com.shieldblaze.expressgateway.backend.exceptions.LoadBalanceException;
 import com.shieldblaze.expressgateway.backend.strategy.l4.L4Request;
-import com.shieldblaze.expressgateway.core.L4LoadBalancer;
+import com.shieldblaze.expressgateway.core.loadbalancer.L4LoadBalancer;
 import com.shieldblaze.expressgateway.core.BootstrapFactory;
 import io.netty.bootstrap.Bootstrap;
 import io.netty.buffer.ByteBuf;
@@ -57,7 +57,7 @@ final class UpstreamHandler extends ChannelInboundHandlerAdapter {
     @Override
     public void channelActive(ChannelHandlerContext ctx) throws LoadBalanceException {
         Bootstrap bootstrap = BootstrapFactory.getTCP(l4LoadBalancer.coreConfiguration(), l4LoadBalancer.eventLoopFactory().childGroup(), ctx.alloc());
-        node = l4LoadBalancer.loadBalance().response(new L4Request((InetSocketAddress) ctx.channel().remoteAddress())).backend();
+        node = l4LoadBalancer.loadBalance().response(new L4Request((InetSocketAddress) ctx.channel().remoteAddress())).node();
         bootstrap.handler(new ChannelInitializer<SocketChannel>() {
             @Override
             protected void initChannel(SocketChannel ch) {
@@ -94,7 +94,7 @@ final class UpstreamHandler extends ChannelInboundHandlerAdapter {
                 l4LoadBalancer.eventLoopFactory().childGroup().next().execute(() -> {
 
                     backlog.forEach(packet -> {
-                        node.incBytesWritten(packet.readableBytes());
+                        node.incBytesSent(packet.readableBytes());
                         downstreamChannel.writeAndFlush(packet);
                         backlog.remove(packet);
                     });
@@ -113,7 +113,7 @@ final class UpstreamHandler extends ChannelInboundHandlerAdapter {
     public void channelRead(ChannelHandlerContext ctx, Object msg) {
         ByteBuf byteBuf = (ByteBuf) msg;
         if (channelActive) {
-            node.incBytesWritten(byteBuf.readableBytes());
+            node.incBytesSent(byteBuf.readableBytes());
             downstreamChannel.writeAndFlush(byteBuf);
             return;
         } else if (backlog != null && backlog.size() < l4LoadBalancer.coreConfiguration().transportConfiguration().dataBacklog()) {

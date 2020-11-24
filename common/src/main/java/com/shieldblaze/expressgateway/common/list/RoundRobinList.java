@@ -39,17 +39,17 @@ public final class RoundRobinList<T> {
         init(list);
     }
 
-    public T next() {
+    public T next() throws Exception {
         return list.get(roundRobinIndexGenerator.next());
     }
 
     public void init(List<T> list) {
         Objects.requireNonNull(list, "List");
-        this.list = new ArrayList<>(list);
+        this.list = list;
         roundRobinIndexGenerator = new RoundRobinIndexGenerator(list);
     }
 
-    public List<T> list() {
-        return list;
+    public RoundRobinIndexGenerator roundRobinIndexGenerator() {
+        return roundRobinIndexGenerator;
     }
 }

@@ -26,14 +26,14 @@ public class GenericEvent<T> implements Event<T> {
 
     private CompletableFuture<T> future;
     private boolean finished;
-    private boolean successful;
+    private boolean success;
     private Throwable throwable;
 
     public void trySuccess(T object) {
         future = new CompletableFuture<>();
         future.complete(object);
         finished(true);
-        successful(true);
+        success(true);
         throwable(null);
     }
 
@@ -41,7 +41,7 @@ public class GenericEvent<T> implements Event<T> {
         future = new CompletableFuture<>();
         future.completeExceptionally(cause);
         finished(true);
-        successful(false);
+        success(false);
         throwable(cause);
     }
 
@@ -53,8 +53,8 @@ public class GenericEvent<T> implements Event<T> {
         this.finished = finished;
     }
 
-    public void successful(boolean successful) {
-        this.successful = successful;
+    public void success(boolean success) {
+        this.success = success;
     }
 
     public void throwable(Throwable throwable) {
@@ -73,7 +73,7 @@ public class GenericEvent<T> implements Event<T> {
 
     @Override
     public boolean success() {
-        return successful;
+        return success;
     }
 
     @Override

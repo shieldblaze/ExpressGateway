@@ -17,15 +17,17 @@
  */
 package com.shieldblaze.expressgateway.backend.strategy.l4;
 
-import com.google.common.collect.Range;
-import com.google.common.collect.TreeRangeMap;
 import com.shieldblaze.expressgateway.backend.Node;
 import com.shieldblaze.expressgateway.backend.State;
 import com.shieldblaze.expressgateway.backend.cluster.Cluster;
-import com.shieldblaze.expressgateway.backend.events.BackendEvent;
+import com.shieldblaze.expressgateway.backend.events.node.NodeEvent;
+import com.shieldblaze.expressgateway.backend.events.node.NodeIdleEvent;
+import com.shieldblaze.expressgateway.backend.events.node.NodeOfflineEvent;
+import com.shieldblaze.expressgateway.backend.events.node.NodeOnlineEvent;
+import com.shieldblaze.expressgateway.backend.events.node.NodeRemovedEvent;
 import com.shieldblaze.expressgateway.backend.exceptions.LoadBalanceException;
+import com.shieldblaze.expressgateway.backend.exceptions.NoNodeAvailableException;
 import com.shieldblaze.expressgateway.backend.loadbalance.SessionPersistence;
-import com.shieldblaze.expressgateway.backend.strategy.l4.sessionpersistence.NOOPSessionPersistence;
 import com.shieldblaze.expressgateway.common.algo.roundrobin.RoundRobinIndexGenerator;
 import com.shieldblaze.expressgateway.concurrent.event.Event;
 import com.shieldblaze.expressgateway.concurrent.eventstream.EventListener;
@@ -35,47 +37,23 @@ import java.net.InetSocketAddress;
 /**
  * Select {@link Node} based on Weight using Round-Robin
  */
-@SuppressWarnings("UnstableApiUsage")
-public final class WeightedRoundRobin extends L4Balance implements EventListener {
+public final class WeightedRoundRobin extends L4Balance {
 
-    private final TreeRangeMap<Integer, Node> backendsMap = TreeRangeMap.create();
-    private RoundRobinIndexGenerator roundRobinIndexGenerator;
-    private int totalWeight;
+    private final RoundRobinIndexGenerator roundRobinIndexGenerator = new RoundRobinIndexGenerator(0);
 
-    public WeightedRoundRobin() {
-        super(new NOOPSessionPersistence());
-    }
-
-    public WeightedRoundRobin(Cluster cluster) {
-        this(new NOOPSessionPersistence(), cluster);
-    }
-
-    public WeightedRoundRobin(SessionPersistence<Node, Node, InetSocketAddress, Node> sessionPersistence, Cluster cluster) {
+    /**
+     * Create {@link WeightedRoundRobin} Instance
+     *
+     * @param sessionPersistence {@link SessionPersistence} Implementation Instance
+     */
+    public WeightedRoundRobin(SessionPersistence<Node, Node, InetSocketAddress, Node> sessionPersistence) {
         super(sessionPersistence);
-        cluster(cluster);
-    }
-
-    @Override
-    public void cluster(Cluster cluster) {
-        super.cluster(cluster);
-        init();
-        cluster.subscribeStream(this);
-    }
-
-    private void init() {
-        totalWeight = 0;
-        sessionPersistence.clear();
-        backendsMap.clear();
-        cluster.onlineBackends().forEach(backend -> backendsMap.put(Range.closed(totalWeight, totalWeight += backend.weight()), backend));
-        roundRobinIndexGenerator = new RoundRobinIndexGenerator(totalWeight);
     }
 
     @Override
     public L4Response response(L4Request l4Request) throws LoadBalanceException {
         Node node = sessionPersistence.node(l4Request);
         if (node != null) {
-            // If Backend is ONLINE then return the response
-            // else remove it from session persistence.
             if (node.state() == State.ONLINE) {
                 return new L4Response(node);
             } else {
@@ -83,18 +61,10 @@ public final class WeightedRoundRobin extends L4Balance implements EventListener
             }
         }
 
-        node = backendsMap.get(roundRobinIndexGenerator.next());
-
-        if (node == null) {
-            // If Backend is `null` then we don't have any
-            // backend to return so we will throw exception.
-            throw new LoadBalanceException();
-        } else if (node.state() != State.ONLINE) {
-            init(); // We'll reset the mapping because it could be outdated.
-
-            // If selected Backend is not online then
-            // we'll throw an exception.
-            throw new LoadBalanceException();
+        try {
+            node = cluster.nodes().get(roundRobinIndexGenerator.next());
+        } catch (Exception ex) {
+            throw new NoNodeAvailableException();
         }
 
         sessionPersistence.addRoute(l4Request.socketAddress(), node);
@@ -103,9 +73,14 @@ public final class WeightedRoundRobin extends L4Balance implements EventListener
 
     @Override
     public void accept(Event event) {
-        if (event instanceof BackendEvent) {
-            BackendEvent backendEvent = (BackendEvent) event;
-
+        if (event instanceof NodeEvent) {
+            NodeEvent nodeEvent = (NodeEvent) event;
+            if (nodeEvent instanceof NodeOfflineEvent || nodeEvent instanceof NodeRemovedEvent || nodeEvent instanceof NodeIdleEvent) {
+                sessionPersistence.remove(nodeEvent.node());
+                roundRobinIndexGenerator.decMaxIndex();
+            } else if (nodeEvent instanceof NodeOnlineEvent) {
+                roundRobinIndexGenerator.incMaxIndex();
+            }
         }
     }
 }

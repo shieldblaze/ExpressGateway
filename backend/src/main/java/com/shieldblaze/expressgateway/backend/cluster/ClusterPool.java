@@ -18,8 +18,10 @@
 package com.shieldblaze.expressgateway.backend.cluster;
 
 import com.shieldblaze.expressgateway.backend.Node;
+import com.shieldblaze.expressgateway.backend.loadbalance.LoadBalance;
+import com.shieldblaze.expressgateway.common.annotation.NonNull;
+import com.shieldblaze.expressgateway.concurrent.eventstream.EventStream;
 
-import java.util.Objects;
 import java.util.concurrent.atomic.AtomicInteger;
 
 /**
@@ -29,35 +31,28 @@ public final class ClusterPool extends Cluster {
 
     private static final AtomicInteger count = new AtomicInteger();
 
-    public ClusterPool() {
-        name("ClusterPool#" + count.getAndIncrement());
+    public ClusterPool(EventStream eventStream, LoadBalance<?, ?, ?, ?> loadBalance) {
+        this(eventStream, loadBalance, "ClusterPool#" + count.getAndIncrement());
     }
 
-    private ClusterPool(String name, String hostname, Node... nodes) {
+    @NonNull
+    public ClusterPool(EventStream eventStream, LoadBalance<?, ?, ?, ?> loadBalance, String name) {
+        super(eventStream, loadBalance);
         name(name);
-        hostname(hostname);
-        addBackends(nodes);
-    }
-
-    public static ClusterPool of(String hostname, Node... nodes) {
-        return new ClusterPool("ClusterPool#" + count.getAndIncrement(), hostname, nodes);
-    }
-
-    public static ClusterPool of(String name, String hostname, Node... nodes) {
-        return new ClusterPool(name, hostname, nodes);
     }
 
     /**
      * @see Cluster#addNode(Node)
      */
-    public void addBackends(Node... nodes) {
-        Objects.requireNonNull(nodes, "backends");
+    @NonNull
+    public void addNodes(Node... nodes) {
         for (Node node : nodes) {
             super.addNode(node);
         }
     }
 
-    public void addNode(Node backends) {
-        super.addNode(backends);
+    @NonNull
+    public void addNode(Node node) {
+        super.addNode(node);
     }
 }

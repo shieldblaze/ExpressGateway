@@ -29,6 +29,9 @@ import io.netty.channel.epoll.EpollSocketChannel;
 import io.netty.channel.socket.nio.NioDatagramChannel;
 import io.netty.channel.socket.nio.NioSocketChannel;
 import io.netty.channel.unix.UnixChannelOption;
+import io.netty.incubator.channel.uring.IOUringChannelOption;
+import io.netty.incubator.channel.uring.IOUringDatagramChannel;
+import io.netty.incubator.channel.uring.IOUringSocketChannel;
 
 public final class BootstrapFactory {
 
@@ -46,9 +49,17 @@ public final class BootstrapFactory {
                 .option(ChannelOption.TCP_NODELAY, true)
                 .option(ChannelOption.AUTO_READ, true)
                 .option(ChannelOption.AUTO_CLOSE, true)
+                .option(ChannelOption.SO_KEEPALIVE, true)
                 .option(ChannelOption.CONNECT_TIMEOUT_MILLIS, coreConfiguration.transportConfiguration().backendConnectTimeout())
                 .channelFactory(() -> {
-                    if (coreConfiguration.transportConfiguration().transportType() == TransportType.EPOLL) {
+                    if (coreConfiguration.transportConfiguration().transportType() == TransportType.IO_URING) {
+                        IOUringSocketChannel socketChannel = new IOUringSocketChannel();
+                        socketChannel.config()
+                                .setTcpFastOpenConnect(true)
+                                .setTcpQuickAck(true);
+
+                        return socketChannel;
+                    } else if (coreConfiguration.transportConfiguration().transportType() == TransportType.EPOLL) {
                         EpollSocketChannel socketChannel = new EpollSocketChannel();
                         socketChannel.config()
                                 .setEpollMode(EpollMode.EDGE_TRIGGERED)
@@ -72,12 +83,16 @@ public final class BootstrapFactory {
                 .option(ChannelOption.AUTO_READ, true)
                 .option(ChannelOption.AUTO_CLOSE, false)
                 .channelFactory(() -> {
-                    if (coreConfiguration.transportConfiguration().transportType() == TransportType.EPOLL) {
-                        EpollDatagramChannel epollDatagramChannel = new EpollDatagramChannel();
-                        epollDatagramChannel.config()
-                                .setEpollMode(EpollMode.EDGE_TRIGGERED)
-                                .setOption(UnixChannelOption.SO_REUSEPORT, true);
-                        return epollDatagramChannel;
+                    if (coreConfiguration.transportConfiguration().transportType() == TransportType.IO_URING) {
+                        IOUringDatagramChannel datagramChannel = new IOUringDatagramChannel();
+                        datagramChannel.config().setOption(IOUringChannelOption.SO_REUSEPORT, true);
+
+                        return datagramChannel;
+                    } else if (coreConfiguration.transportConfiguration().transportType() == TransportType.EPOLL) {
+                        EpollDatagramChannel datagramChannel = new EpollDatagramChannel();
+                        datagramChannel.config().setEpollMode(EpollMode.EDGE_TRIGGERED).setOption(UnixChannelOption.SO_REUSEPORT, true);
+
+                        return datagramChannel;
                     } else {
                         return new NioDatagramChannel();
                     }

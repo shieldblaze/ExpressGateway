@@ -17,6 +17,7 @@
  */
 package com.shieldblaze.expressgateway.backend.pool;
 
+import com.shieldblaze.expressgateway.common.annotation.NonNull;
 import com.shieldblaze.expressgateway.common.utils.ReferenceCounted;
 import io.netty.channel.Channel;
 import io.netty.channel.ChannelFuture;
@@ -47,9 +48,10 @@ public abstract class Connection {
     /**
      * Initialize this Connection
      */
+    @NonNull
     public void init(ChannelFuture channelFuture) {
         if (this.channelFuture == null) {
-            this.channelFuture = Objects.requireNonNull(channelFuture, "ChannelFuture");
+            this.channelFuture = channelFuture;
 
             // Add listener to be notified when Channel initializes
             this.channelFuture.addListener((ChannelFutureListener) future -> {

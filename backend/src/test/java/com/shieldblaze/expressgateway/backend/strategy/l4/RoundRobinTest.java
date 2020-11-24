@@ -18,8 +18,11 @@
 package com.shieldblaze.expressgateway.backend.strategy.l4;
 
 import com.shieldblaze.expressgateway.backend.Node;
+import com.shieldblaze.expressgateway.backend.cluster.Cluster;
 import com.shieldblaze.expressgateway.backend.cluster.ClusterPool;
 import com.shieldblaze.expressgateway.backend.exceptions.LoadBalanceException;
+import com.shieldblaze.expressgateway.backend.strategy.l4.sessionpersistence.NOOPSessionPersistence;
+import com.shieldblaze.expressgateway.concurrent.eventstream.EventStream;
 import org.junit.jupiter.api.Test;
 
 import java.net.InetSocketAddress;
@@ -31,34 +34,34 @@ class RoundRobinTest {
 
     @Test
     void testRoundRobin() throws LoadBalanceException {
-        ClusterPool cluster = new ClusterPool();
+        EventStream eventStream = new EventStream();
+        ClusterPool cluster = new ClusterPool(eventStream, new RoundRobin(new NOOPSessionPersistence()));
 
-        // Add Backend Server Addresses
+        // Add Node Server Addresses
         for (int i = 1; i <= 100; i++) {
-            cluster.addBackends(fastBuild("192.168.1." + i));
+            cluster.addNode(fastBuild(cluster, "192.168.1." + i));
         }
 
-        L4Balance l4Balance = new RoundRobin(cluster);
         L4Request l4Request = new L4Request(new InetSocketAddress("192.168.1.1", 1));
 
         for (int i = 1; i <= 100; i++) {
-            assertEquals(fastBuild("192.168.1." + i).socketAddress(), l4Balance.response(l4Request).backend().socketAddress());
+            assertEquals(new InetSocketAddress("192.168.1." + i, 1), cluster.nextNode(l4Request).node().socketAddress());
         }
 
         for (int i = 1; i <= 100; i++) {
-            assertEquals(fastBuild("192.168.1." + i).socketAddress(), l4Balance.response(l4Request).backend().socketAddress());
+            assertEquals(new InetSocketAddress("192.168.1." + i, 1), cluster.nextNode(l4Request).node().socketAddress());
         }
 
         for (int i = 1; i <= 100; i++) {
-            assertNotEquals(fastBuild("10.10.1." + i).socketAddress(), l4Balance.response(l4Request).backend().socketAddress());
+            assertNotEquals(new InetSocketAddress("10.10.1." + i, 1), cluster.nextNode(l4Request).node().socketAddress());
         }
 
         for (int i = 1; i <= 100; i++) {
-            assertNotEquals(fastBuild("172.16.20." + i).socketAddress(), l4Balance.response(l4Request).backend().socketAddress());
+            assertNotEquals(new InetSocketAddress("172.16.20." + i, 1), cluster.nextNode(l4Request).node().socketAddress());
         }
     }
 
-    private Node fastBuild(String host) {
-        return new Node(new InetSocketAddress(host, 1));
+    private Node fastBuild(Cluster cluster, String host) {
+        return new Node(cluster, new InetSocketAddress(host, 1));
     }
 }

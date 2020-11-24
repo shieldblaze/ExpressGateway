@@ -20,6 +20,7 @@ package com.shieldblaze.expressgateway.concurrent.eventstream;
 import com.shieldblaze.expressgateway.concurrent.event.Event;
 import org.junit.jupiter.api.Test;
 
+import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ConcurrentSkipListSet;
 import java.util.concurrent.Executors;
 
@@ -62,6 +63,26 @@ class AsyncEventStreamTest {
 
         public SimpleEvent(String string) {
             this.string = string;
+        }
+
+        @Override
+        public CompletableFuture future() {
+            return null;
+        }
+
+        @Override
+        public boolean finished() {
+            return false;
+        }
+
+        @Override
+        public boolean success() {
+            return false;
+        }
+
+        @Override
+        public Throwable throwable() {
+            return null;
         }
     }
 }

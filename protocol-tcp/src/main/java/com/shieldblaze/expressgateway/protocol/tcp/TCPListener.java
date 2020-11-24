@@ -35,6 +35,8 @@ import io.netty.channel.epoll.EpollServerSocketChannel;
 import io.netty.channel.epoll.EpollServerSocketChannelConfig;
 import io.netty.channel.socket.nio.NioServerSocketChannel;
 import io.netty.channel.unix.UnixChannelOption;
+import io.netty.incubator.channel.uring.IOUringChannelOption;
+import io.netty.incubator.channel.uring.IOUringServerSocketChannel;
 
 import java.util.ArrayList;
 import java.util.List;
@@ -80,7 +82,11 @@ public class TCPListener extends L4FrontListener {
                 .childOption(ChannelOption.SO_RCVBUF, transportConfiguration.socketReceiveBufferSize())
                 .childOption(ChannelOption.RCVBUF_ALLOCATOR, transportConfiguration.recvByteBufAllocator())
                 .channelFactory(() -> {
-                    if (transportConfiguration.transportType() == TransportType.EPOLL) {
+                    if (transportConfiguration.transportType() == TransportType.IO_URING) {
+                        IOUringServerSocketChannel serverSocketChannel = new IOUringServerSocketChannel();
+                        serverSocketChannel.config().setOption(IOUringChannelOption.SO_REUSEPORT, true);
+                        return serverSocketChannel;
+                    } else if (transportConfiguration.transportType() == TransportType.EPOLL) {
                         EpollServerSocketChannel serverSocketChannel = new EpollServerSocketChannel();
                         EpollServerSocketChannelConfig config = serverSocketChannel.config();
                         config.setOption(UnixChannelOption.SO_REUSEPORT, true);
@@ -95,7 +101,7 @@ public class TCPListener extends L4FrontListener {
                 .childHandler(new ServerInitializer(l4LoadBalancer(), channelHandler));
 
         int bindRounds = 1;
-        if (transportConfiguration.transportType() == TransportType.EPOLL) {
+        if (transportConfiguration.transportType() == TransportType.EPOLL || transportConfiguration.transportType() == TransportType.IO_URING) {
             bindRounds = coreConfiguration.eventLoopConfiguration().parentWorkers();
         }
 

@@ -21,6 +21,8 @@ import com.shieldblaze.expressgateway.backend.Node;
 import com.shieldblaze.expressgateway.backend.cluster.Cluster;
 import com.shieldblaze.expressgateway.backend.cluster.ClusterPool;
 import com.shieldblaze.expressgateway.backend.exceptions.LoadBalanceException;
+import com.shieldblaze.expressgateway.backend.strategy.l4.sessionpersistence.NOOPSessionPersistence;
+import com.shieldblaze.expressgateway.concurrent.eventstream.EventStream;
 import org.junit.jupiter.api.Test;
 
 import java.net.InetSocketAddress;
@@ -31,25 +33,26 @@ class LeastConnectionTest {
 
     @Test
     void testLeastConnection() throws LoadBalanceException {
-        Cluster cluster = ClusterPool.of(
-                "localhost.domain",
-                fastBuild("10.10.1.1"),
-                fastBuild("10.10.1.2"),
-                fastBuild("10.10.1.3"),
-                fastBuild("10.10.1.4")
-        );
+        EventStream eventStream = new EventStream();
+
+        ClusterPool cluster = new ClusterPool(eventStream, new LeastConnection(new NOOPSessionPersistence()));
+        L4Balance l4Balance = new LeastConnection(new NOOPSessionPersistence());
+
+        cluster.addNode(fastBuild(cluster, "10.10.1.1"));
+        cluster.addNode(fastBuild(cluster, "10.10.1.2"));
+        cluster.addNode(fastBuild(cluster, "10.10.1.3"));
+        cluster.addNode(fastBuild(cluster, "10.10.1.4"));
 
         int first = 0;
         int second = 0;
         int third = 0;
         int forth = 0;
 
-        L4Balance l4Balance = new LeastConnection(cluster);
         L4Request l4Request = new L4Request(new InetSocketAddress("192.168.1.1", 1));
 
-        for (int i = 0; i < 1000000; i++) {
-            Node node = l4Balance.response(l4Request).backend();
-            node.incConnections();
+        for (int i = 0; i < 1_000_000; i++) {
+            Node node = l4Balance.response(l4Request).node();
+            node.incActiveConnection0();
             switch (node.socketAddress().getHostString()) {
                 case "10.10.1.1": {
                     first++;
@@ -78,7 +81,7 @@ class LeastConnectionTest {
         assertEquals(250000, forth);
     }
 
-    private static Node fastBuild(String host) {
-        return new Node(new InetSocketAddress(host, 1));
+    private static Node fastBuild(Cluster cluster, String host) {
+        return new Node(cluster, new InetSocketAddress(host, 1));
     }
 }

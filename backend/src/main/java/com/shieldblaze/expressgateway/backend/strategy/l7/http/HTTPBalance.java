@@ -18,6 +18,7 @@
 package com.shieldblaze.expressgateway.backend.strategy.l7.http;
 
 import com.shieldblaze.expressgateway.backend.Node;
+import com.shieldblaze.expressgateway.backend.cluster.Cluster;
 import com.shieldblaze.expressgateway.backend.exceptions.LoadBalanceException;
 import com.shieldblaze.expressgateway.backend.loadbalance.LoadBalance;
 import com.shieldblaze.expressgateway.backend.loadbalance.Request;
@@ -27,10 +28,9 @@ import com.shieldblaze.expressgateway.backend.loadbalance.SessionPersistence;
 public abstract class HTTPBalance extends LoadBalance<HTTPBalanceResponse, HTTPBalanceResponse, HTTPBalanceRequest, Node> {
 
     /**
-     * Create {@link HTTPBalance} Instance
+     * Create {@link LoadBalance} Instance
      *
-     * @param sessionPersistence {@link SessionPersistence} Instance
-     * @throws NullPointerException If {@link SessionPersistence} is {@code null}
+     * @param sessionPersistence {@link SessionPersistence} Implementation Instance
      */
     public HTTPBalance(SessionPersistence<HTTPBalanceResponse, HTTPBalanceResponse, HTTPBalanceRequest, Node> sessionPersistence) {
         super(sessionPersistence);

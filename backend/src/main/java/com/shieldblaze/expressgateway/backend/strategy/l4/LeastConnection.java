@@ -20,63 +20,37 @@ package com.shieldblaze.expressgateway.backend.strategy.l4;
 import com.shieldblaze.expressgateway.backend.Node;
 import com.shieldblaze.expressgateway.backend.State;
 import com.shieldblaze.expressgateway.backend.cluster.Cluster;
-import com.shieldblaze.expressgateway.backend.events.BackendAddedEvent;
-import com.shieldblaze.expressgateway.backend.events.BackendEvent;
-import com.shieldblaze.expressgateway.backend.events.BackendOfflineEvent;
+import com.shieldblaze.expressgateway.backend.events.node.NodeEvent;
+import com.shieldblaze.expressgateway.backend.events.node.NodeOfflineEvent;
+import com.shieldblaze.expressgateway.backend.events.node.NodeRemovedEvent;
 import com.shieldblaze.expressgateway.backend.exceptions.LoadBalanceException;
-import com.shieldblaze.expressgateway.backend.exceptions.NoBackendAvailableException;
+import com.shieldblaze.expressgateway.backend.exceptions.NoClusterAvailableException;
+import com.shieldblaze.expressgateway.backend.exceptions.NoNodeAvailableException;
 import com.shieldblaze.expressgateway.backend.loadbalance.SessionPersistence;
-import com.shieldblaze.expressgateway.backend.strategy.l4.sessionpersistence.NOOPSessionPersistence;
-import com.shieldblaze.expressgateway.common.list.RoundRobinList;
 import com.shieldblaze.expressgateway.concurrent.event.Event;
 import com.shieldblaze.expressgateway.concurrent.eventstream.EventListener;
 
 import java.net.InetSocketAddress;
 import java.util.Optional;
-import java.util.OptionalInt;
 
 /**
  * Select {@link Node} with least connections with Round-Robin.
  */
-public final class LeastConnection extends L4Balance implements EventListener {
+public final class LeastConnection extends L4Balance {
 
-    private final RoundRobinList<Node> roundRobinList = new RoundRobinList<>();
-
-    public LeastConnection() {
-        this(new NOOPSessionPersistence());
-    }
-
-    public LeastConnection(Cluster cluster) {
-        this(new NOOPSessionPersistence(), cluster);
-    }
-
+    /**
+     * Create {@link LeastConnection} Instance
+     *
+     * @param sessionPersistence {@link SessionPersistence} Implementation Instance
+     */
     public LeastConnection(SessionPersistence<Node, Node, InetSocketAddress, Node> sessionPersistence) {
         super(sessionPersistence);
-    }
-
-    public LeastConnection(SessionPersistence<Node, Node, InetSocketAddress, Node> sessionPersistence, Cluster cluster) {
-        super(sessionPersistence);
-        cluster(cluster);
-    }
-
-    @Override
-    public void cluster(Cluster cluster) {
-        super.cluster(cluster);
-        cluster.subscribeStream(this);
-        init();
-    }
-
-    private void init() {
-        sessionPersistence.clear();
-        roundRobinList.init(cluster.onlineBackends());
     }
 
     @Override
     public L4Response response(L4Request l4Request) throws LoadBalanceException {
         Node node = sessionPersistence.node(l4Request);
         if (node != null) {
-            // If Backend is ONLINE then return the response
-            // else remove it from session persistence.
             if (node.state() == State.ONLINE) {
                 return new L4Response(node);
             } else {
@@ -84,30 +58,17 @@ public final class LeastConnection extends L4Balance implements EventListener {
             }
         }
 
-        // Get Number Of Maximum Connection on a Backend
-        int currentMaxConnections;
-        OptionalInt optionalInt = roundRobinList.list().stream()
-                .mapToInt(Node::activeConnections)
-                .max();
+        // Get the Node with least amount of active connections
+        Optional<Node> optionalNode = cluster.nodes()
+                .stream()
+                .reduce((a, b) -> a.activeConnection() < b.activeConnection() ? a : b);
 
-        if (optionalInt.isPresent()) {
-            currentMaxConnections = optionalInt.getAsInt();
-        } else {
-            currentMaxConnections = 0;
+        // If we don't have any node available then throw an exception.
+        if (optionalNode.isEmpty()) {
+            throw new NoNodeAvailableException();
         }
 
-        // Check If we got any Backend which has less Number of Connections than Backend with Maximum Connection
-        Optional<Node> optionalBackend = roundRobinList.list().stream()
-                .filter(back -> back.activeConnections() < currentMaxConnections)
-                .findFirst();
-
-        node = optionalBackend.orElseGet(roundRobinList::next);
-
-        // If Backend is `null` then we don't have any
-        // backend to return so we will throw exception.
-        if (node == null) {
-            throw new NoBackendAvailableException("No Backend available for Cluster: " + cluster);
-        }
+        node = optionalNode.get();
 
         sessionPersistence.addRoute(l4Request.socketAddress(), node);
         return new L4Response(node);
@@ -115,13 +76,10 @@ public final class LeastConnection extends L4Balance implements EventListener {
 
     @Override
     public void accept(Event event) {
-        if (event instanceof BackendEvent) {
-            BackendEvent backendEvent = (BackendEvent) event;
-
-            if (backendEvent instanceof BackendAddedEvent) {
-                roundRobinList.init(cluster.onlineBackends());
-            } else if (backendEvent instanceof BackendOfflineEvent) {
-
+        if (event instanceof NodeEvent) {
+            NodeEvent nodeEvent = (NodeEvent) event;
+            if (nodeEvent instanceof NodeOfflineEvent || nodeEvent instanceof NodeRemovedEvent) {
+                sessionPersistence.remove(nodeEvent.node());
             }
         }
     }

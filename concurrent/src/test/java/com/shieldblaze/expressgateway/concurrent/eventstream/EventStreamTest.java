@@ -21,6 +21,8 @@ import com.shieldblaze.expressgateway.concurrent.event.Event;
 import org.junit.jupiter.api.Assertions;
 import org.junit.jupiter.api.Test;
 
+import java.util.concurrent.CompletableFuture;
+
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 class EventStreamTest {
@@ -55,6 +57,26 @@ class EventStreamTest {
 
         public SimpleEvent(String string) {
             this.string = string;
+        }
+
+        @Override
+        public CompletableFuture future() {
+            return null;
+        }
+
+        @Override
+        public boolean finished() {
+            return false;
+        }
+
+        @Override
+        public boolean success() {
+            return false;
+        }
+
+        @Override
+        public Throwable throwable() {
+            return null;
         }
     }
 }

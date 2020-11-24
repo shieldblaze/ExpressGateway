@@ -18,6 +18,7 @@
 package com.shieldblaze.expressgateway.configuration.transport;
 
 import io.netty.channel.epoll.Epoll;
+import io.netty.incubator.channel.uring.IOUring;
 import io.netty.util.internal.ObjectUtil;
 
 import java.util.Objects;
@@ -160,6 +161,8 @@ public final class TransportConfigurationBuilder {
 
         if (transportType == TransportType.EPOLL && !Epoll.isAvailable()) {
             throw new IllegalArgumentException("Epoll is not available");
+        } else if (transportType == TransportType.IO_URING && !IOUring.isAvailable()) {
+            throw new IllegalArgumentException("IOUring is not available");
         }
 
         if (receiveBufferAllocationType == ReceiveBufferAllocationType.ADAPTIVE) {

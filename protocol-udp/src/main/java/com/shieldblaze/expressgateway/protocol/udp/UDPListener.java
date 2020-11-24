@@ -63,7 +63,8 @@ public class UDPListener extends L4FrontListener {
                 .handler(channelHandler);
 
         int bindRounds = 1;
-        if (coreConfiguration.transportConfiguration().transportType() == TransportType.EPOLL) {
+        if (coreConfiguration.transportConfiguration().transportType() == TransportType.EPOLL ||
+                coreConfiguration.transportConfiguration().transportType() == TransportType.IO_URING) {
             bindRounds = coreConfiguration.eventLoopConfiguration().parentWorkers();
         }
 

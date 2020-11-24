@@ -20,14 +20,12 @@ package com.shieldblaze.expressgateway.backend.loadbalance;
 import com.shieldblaze.expressgateway.backend.Node;
 
 /**
- * Session Persistence is used to route a request to specific {@linkplain Node}.
- *
- * <p></p>
+ * <p> Session Persistence is used to route a request to specific {@linkplain Node}. </p>
  *
  * @param <REQUEST>  Request Type for {@linkplain #node(Request)}
  * @param <RESPONSE> Response Type for {@linkplain #addRoute(KEY, VALUE)} and {@linkplain #removeRoute(KEY, VALUE)}
  * @param <KEY>      Key Type to use for {@linkplain #addRoute(KEY, VALUE)} and {@linkplain #removeRoute(KEY, VALUE)}
- * @param <VALUE>    Value Type to use for {@linkplain #addRoute(KEY, VALUE)} and {@linkplain #removeRoute(KEY, VALUE)}
+ * @param <VALUE>    Value Type to use for {@linkplain #addRoute(KEY, VALUE)}, {@linkplain #removeRoute(KEY, VALUE)} and {@linkplain #remove(VALUE)}
  */
 public interface SessionPersistence<REQUEST, RESPONSE, KEY, VALUE> {
 

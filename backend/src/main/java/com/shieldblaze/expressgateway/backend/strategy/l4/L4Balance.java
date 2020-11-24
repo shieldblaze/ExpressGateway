@@ -18,13 +18,15 @@
 package com.shieldblaze.expressgateway.backend.strategy.l4;
 
 import com.shieldblaze.expressgateway.backend.Node;
+import com.shieldblaze.expressgateway.backend.cluster.Cluster;
 import com.shieldblaze.expressgateway.backend.exceptions.LoadBalanceException;
 import com.shieldblaze.expressgateway.backend.loadbalance.LoadBalance;
 import com.shieldblaze.expressgateway.backend.loadbalance.Request;
 import com.shieldblaze.expressgateway.backend.loadbalance.Response;
 import com.shieldblaze.expressgateway.backend.loadbalance.SessionPersistence;
+import com.shieldblaze.expressgateway.common.annotation.NonNull;
+import com.shieldblaze.expressgateway.concurrent.eventstream.EventListener;
 
-import java.io.Closeable;
 import java.net.InetSocketAddress;
 
 /**
@@ -34,31 +36,32 @@ import java.net.InetSocketAddress;
  *     <li> {@link Random} </li>
  *     <li> {@link RoundRobin} </li>
  *     <li> {@link WeightedLeastConnection} </li>
- *     <li> {@link WeightedRandom} </li>
  *     <li> {@link WeightedRoundRobin} </li>
  * </ul>
  */
-public abstract class L4Balance extends LoadBalance<Node, Node, InetSocketAddress, Node> implements Closeable {
+public abstract class L4Balance extends LoadBalance<Node, Node, InetSocketAddress, Node> {
 
     /**
      * Create {@link L4Balance} Instance
      *
-     * @param sessionPersistence {@link SessionPersistence} Instance
-     * @throws NullPointerException If {@link SessionPersistence} is {@code null}
+     * @param sessionPersistence {@link SessionPersistence} Implementation Instance
      */
+    @NonNull
     public L4Balance(SessionPersistence<Node, Node, InetSocketAddress, Node> sessionPersistence) {
         super(sessionPersistence);
     }
 
+    @NonNull
+    @Override
+    public void cluster(Cluster cluster) {
+        super.cluster(cluster);
+    }
+
+    @NonNull
     public abstract L4Response response(L4Request l4Request) throws LoadBalanceException;
 
     @Override
     public Response response(Request request) throws LoadBalanceException {
         return response((L4Request) request);
-    }
-
-    @Override
-    public void close() {
-        // Override to use, does nothing by default.
     }
 }

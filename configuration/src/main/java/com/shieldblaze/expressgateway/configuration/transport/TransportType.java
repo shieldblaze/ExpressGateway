@@ -25,14 +25,15 @@ import io.netty.channel.nio.NioEventLoopGroup;
 import io.netty.channel.socket.nio.NioDatagramChannel;
 import io.netty.channel.socket.nio.NioServerSocketChannel;
 import io.netty.channel.socket.nio.NioSocketChannel;
+import io.netty.incubator.channel.uring.IOUringDatagramChannel;
+import io.netty.incubator.channel.uring.IOUringEventLoopGroup;
+import io.netty.incubator.channel.uring.IOUringServerSocketChannel;
+import io.netty.incubator.channel.uring.IOUringSocketChannel;
 
-/**
- * <p> {@code NIO} uses Java NIO </p>
- * <p> {@code EPOLL} uses Linux Epoll Mechanism </p>
- */
 public enum TransportType {
 
     /**
+     * <p> This uses Java NIO (Fast) </p>
      * Uses:
      * <ul>
      *     <li> {@link NioSocketChannel} </li>
@@ -43,6 +44,7 @@ public enum TransportType {
      */
     NIO,
     /**
+     * <p> This uses Linux Epoll (Faster) </p>
      * Uses:
      * <ul>
      *     <li> {@link EpollSocketChannel} </li>
@@ -52,5 +54,15 @@ public enum TransportType {
      * </ul>
      */
     EPOLL,
+    /**
+     * <p> This uses Linux IO_URING (Fastest) </p>
+     * Uses:
+     * <ul>
+     *     <li> {@link IOUringSocketChannel} </li>
+     *     <li> {@link IOUringServerSocketChannel} </li>
+     *     <li> {@link IOUringDatagramChannel} </li>
+     *     <li> {@link IOUringEventLoopGroup} </li>
+     * </ul>
+     */
     IO_URING
 }

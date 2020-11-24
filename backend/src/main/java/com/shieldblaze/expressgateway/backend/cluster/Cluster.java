@@ -18,43 +18,38 @@
 package com.shieldblaze.expressgateway.backend.cluster;
 
 import com.shieldblaze.expressgateway.backend.Node;
-import com.shieldblaze.expressgateway.backend.State;
-import com.shieldblaze.expressgateway.backend.events.BackendEvent;
-import com.shieldblaze.expressgateway.backend.exceptions.BackendNotOnlineException;
-import com.shieldblaze.expressgateway.concurrent.GlobalExecutors;
-import com.shieldblaze.expressgateway.concurrent.eventstream.AsyncEventStream;
-import com.shieldblaze.expressgateway.concurrent.eventstream.EventListener;
+import com.shieldblaze.expressgateway.backend.exceptions.LoadBalanceException;
+import com.shieldblaze.expressgateway.backend.loadbalance.LoadBalance;
+import com.shieldblaze.expressgateway.backend.loadbalance.Request;
+import com.shieldblaze.expressgateway.backend.loadbalance.Response;
+import com.shieldblaze.expressgateway.common.annotation.NonNull;
+import com.shieldblaze.expressgateway.concurrent.eventstream.EventPublisher;
 import com.shieldblaze.expressgateway.concurrent.eventstream.EventStream;
+import com.shieldblaze.expressgateway.concurrent.eventstream.EventSubscriber;
 
 import java.util.List;
-import java.util.Objects;
 import java.util.concurrent.CopyOnWriteArrayList;
-import java.util.stream.Collectors;
 
 /**
  * Base class for Cluster
  */
 public abstract class Cluster {
 
-    /**
-     * List of all {@linkplain Node} associated with this {@linkplain Cluster}
-     */
-    private final List<Node> allNodes = new CopyOnWriteArrayList<>();
-
-    /**
-     * Hostname of this {@linkplain Cluster}
-     */
+    private final List<Node> nodes = new CopyOnWriteArrayList<>();
     private String hostname;
-
-    /**
-     * Name of this {@linkplain Cluster}
-     */
     private String name;
+
+    private final EventStream eventStream;
+    private final LoadBalance<?, ?, ?, ?> loadBalance;
+
+    public Cluster(EventStream eventStream, LoadBalance<?, ?, ?, ?> loadBalance) {
+        this.eventStream = eventStream;
+        this.loadBalance = loadBalance;
+        loadBalance.cluster(this);
+    }
 
     /**
      * Get hostname of this {@linkplain Cluster}
-     *
-     * @return Hostname as {@link String}
      */
     public String hostname() {
         return hostname;
@@ -62,18 +57,15 @@ public abstract class Cluster {
 
     /**
      * Set hostname of this {@linkplain Cluster}
-     *
-     * @param hostname Name as {@link String}
-     * @throws IllegalArgumentException If hostname is invalid
      */
-    public void hostname(String hostname) {
-        this.hostname = Objects.requireNonNull(hostname, "hostname");
+    @NonNull
+    public Cluster hostname(String hostname) {
+        this.hostname = hostname;
+        return this;
     }
 
     /**
      * Get name of this {@linkplain Cluster}
-     *
-     * @return Name as {@link String}
      */
     public String name() {
         return name;
@@ -81,59 +73,40 @@ public abstract class Cluster {
 
     /**
      * Set name of this {@linkplain Cluster}
-     *
-     * @param name Name as {@link String}
      */
-    public void name(String name) {
-        this.name = Objects.requireNonNull(name, "name");
+    @NonNull
+    public Cluster name(String name) {
+        this.name = name;
+        return this;
     }
 
     /**
      * Add {@link Node} into this {@linkplain Cluster}
      */
-    protected void addNode(Node node) {
-        allNodes.add(Objects.requireNonNull(node, "backend"));
-        node.cluster(this);
+    @NonNull
+    public void addNode(Node node) {
+        nodes.add(node);
+    }
+
+    public List<Node> nodes() {
+        return nodes;
     }
 
     /**
-     * Get {@linkplain List} of online {@linkplain Node} in this {@linkplain Cluster}
-     */
-    public List<Node> onlineBackends() {
-        return allNodes.stream()
-                .filter(backend -> backend.state() == State.ONLINE)
-                .collect(Collectors.toList());
-    }
-
-    public Node get(int index) {
-        return allNodes.get(index);
-    }
-
-    /**
-     * Get {@linkplain Node} from online pool using Index
+     * Get the next {@link Node} available to handle request.
      *
-     * @param index Index
-     * @return {@linkplain Node} Instance if found else {@code null}
+     * @throws LoadBalanceException In case of some error while generating {@linkplain Response}
      */
-    public Node online(int index) throws BackendNotOnlineException {
-        Node node = allNodes.get(index);
-        if (node.state() != State.ONLINE) {
-            throw new BackendNotOnlineException(node);
-        }
-        return node;
+    @NonNull
+    public Response nextNode(Request request) throws LoadBalanceException {
+        return loadBalance.response(request);
     }
 
-    /**
-     * Get size of this {@linkplain Cluster}
-     */
-    public int size() {
-        return allNodes.size();
+    public EventSubscriber eventSubscriber() {
+        return eventStream.eventSubscriber();
     }
 
-    /**
-     * Get number of Online {@linkplain Node} in this {@linkplain Cluster}
-     */
-    public int online() {
-        return (int) allNodes.stream().filter(backend -> backend.state() == State.ONLINE).count();
+    public EventPublisher eventPublisher() {
+        return eventStream.eventPublisher();
     }
 }

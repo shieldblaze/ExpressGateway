@@ -19,34 +19,42 @@ package com.shieldblaze.expressgateway.backend.loadbalance;
 
 import com.shieldblaze.expressgateway.backend.cluster.Cluster;
 import com.shieldblaze.expressgateway.backend.exceptions.LoadBalanceException;
-
-import java.util.Objects;
+import com.shieldblaze.expressgateway.common.annotation.NonNull;
+import com.shieldblaze.expressgateway.concurrent.eventstream.EventListener;
 
 /**
  * Base Implementation for Load Balance
  */
-public abstract class LoadBalance<REQUEST, RESPONSE, KEY, VALUE> {
+public abstract class LoadBalance<REQUEST, RESPONSE, KEY, VALUE> implements EventListener {
     protected final SessionPersistence<REQUEST, RESPONSE, KEY, VALUE> sessionPersistence;
     protected Cluster cluster;
 
     /**
      * Create {@link LoadBalance} Instance
      *
-     * @param sessionPersistence {@link SessionPersistence} Instance
-     * @throws NullPointerException If {@link SessionPersistence} is {@code null}
+     * @param sessionPersistence {@link SessionPersistence} Implementation Instance
      */
+    @NonNull
     public LoadBalance(SessionPersistence<REQUEST, RESPONSE, KEY, VALUE> sessionPersistence) {
-        this.sessionPersistence = Objects.requireNonNull(sessionPersistence, "SessionPersistence");
+        this.sessionPersistence = sessionPersistence;
     }
 
     /**
-     * Set {@link Cluster} to load balance
-     *
-     * @param cluster {@link Cluster} Instance
+     * @param cluster {@link Cluster} to be load balanced
      */
+    @NonNull
     public void cluster(Cluster cluster) {
-        this.cluster = Objects.requireNonNull(cluster, "cluster");
+        this.cluster = cluster;
+        this.cluster.eventSubscriber().subscribe(this);
     }
 
+    /**
+     * Generate a Load-Balance {@linkplain Response} for {@linkplain Request}
+     *
+     * @param request {@linkplain Request}
+     * @return {@linkplain Response} if successful
+     * @throws LoadBalanceException In case of some error while generating {@linkplain Response}
+     */
+    @NonNull
     public abstract Response response(Request request) throws LoadBalanceException;
 }

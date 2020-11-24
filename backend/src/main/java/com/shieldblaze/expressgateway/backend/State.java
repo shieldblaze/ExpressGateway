@@ -19,5 +19,6 @@ package com.shieldblaze.expressgateway.backend;
 
 public enum State {
     ONLINE,
-    OFFLINE
+    OFFLINE,
+    IDLE
 }
