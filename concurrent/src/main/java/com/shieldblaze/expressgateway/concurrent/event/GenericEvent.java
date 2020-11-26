@@ -30,17 +30,17 @@ public class GenericEvent<T> implements Event<T> {
     private Throwable throwable;
 
     public void trySuccess(T object) {
-        future.complete(object);
         finished(true);
         success(true);
         throwable(null);
+        future.complete(object);
     }
 
     public void tryFailure(Throwable cause) {
-        future.completeExceptionally(cause);
         finished(true);
         success(false);
         throwable(cause);
+        future.completeExceptionally(cause);
     }
 
     public void future(CompletableFuture<T> future) {

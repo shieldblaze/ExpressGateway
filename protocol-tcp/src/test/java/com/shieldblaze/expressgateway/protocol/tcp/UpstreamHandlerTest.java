@@ -96,11 +96,6 @@ final class UpstreamHandlerTest {
 
         L4FrontListenerStartupEvent l4FrontListenerStartupEvent = l4LoadBalancer.start();
         l4FrontListenerStartupEvent.future().join();
-
-        if (l4FrontListenerStartupEvent.throwable() != null) {
-            l4FrontListenerStartupEvent.throwable().printStackTrace();
-        }
-
         assertTrue(l4FrontListenerStartupEvent.success());
     }
 
