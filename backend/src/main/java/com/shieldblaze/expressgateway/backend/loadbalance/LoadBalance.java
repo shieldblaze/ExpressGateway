@@ -42,6 +42,7 @@ public abstract class LoadBalance<REQUEST, RESPONSE, KEY, VALUE> implements Even
     /**
      * @param cluster {@link Cluster} to be load balanced
      */
+    @SuppressWarnings("unchecked")
     @NonNull
     public void cluster(Cluster cluster) {
         this.cluster = cluster;

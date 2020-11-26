@@ -18,7 +18,6 @@
 package com.shieldblaze.expressgateway.backend.events.node;
 
 import com.shieldblaze.expressgateway.backend.Node;
-import com.shieldblaze.expressgateway.concurrent.event.Event;
 import com.shieldblaze.expressgateway.concurrent.event.GenericEvent;
 
 /**

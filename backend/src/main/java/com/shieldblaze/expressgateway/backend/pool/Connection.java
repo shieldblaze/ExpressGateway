@@ -19,14 +19,12 @@ package com.shieldblaze.expressgateway.backend.pool;
 
 import com.shieldblaze.expressgateway.common.annotation.NonNull;
 import com.shieldblaze.expressgateway.common.utils.ReferenceCounted;
-import io.netty.channel.Channel;
 import io.netty.channel.ChannelFuture;
 import io.netty.channel.ChannelFutureListener;
 import io.netty.channel.ChannelPromise;
 
 import java.net.InetSocketAddress;
 import java.time.Instant;
-import java.util.Objects;
 import java.util.concurrent.ConcurrentLinkedQueue;
 
 public abstract class Connection {

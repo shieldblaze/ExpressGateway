@@ -23,7 +23,6 @@ import com.shieldblaze.expressgateway.backend.cluster.ClusterPool;
 import com.shieldblaze.expressgateway.backend.exceptions.LoadBalanceException;
 import com.shieldblaze.expressgateway.backend.strategy.l7.http.HTTPBalanceRequest;
 import com.shieldblaze.expressgateway.backend.strategy.l7.http.HTTPBalanceResponse;
-import com.shieldblaze.expressgateway.backend.strategy.l7.http.HTTPRandom;
 import com.shieldblaze.expressgateway.backend.strategy.l7.http.HTTPRoundRobin;
 import com.shieldblaze.expressgateway.concurrent.eventstream.EventStream;
 import io.netty.handler.codec.http.EmptyHttpHeaders;

@@ -31,7 +31,7 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 
 final class TCPHealthCheckTest {
 
-    static TCPServer tcpServer = new TCPServer();
+    static final TCPServer tcpServer = new TCPServer();
 
     @BeforeAll
     static void startTCPServer() throws IOException {

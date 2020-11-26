@@ -25,7 +25,6 @@ import com.shieldblaze.expressgateway.backend.loadbalance.Request;
 import com.shieldblaze.expressgateway.backend.loadbalance.Response;
 import com.shieldblaze.expressgateway.backend.loadbalance.SessionPersistence;
 import com.shieldblaze.expressgateway.common.annotation.NonNull;
-import com.shieldblaze.expressgateway.concurrent.eventstream.EventListener;
 
 import java.net.InetSocketAddress;
 
@@ -35,8 +34,7 @@ import java.net.InetSocketAddress;
  *     <li> {@link LeastConnection} </li>
  *     <li> {@link Random} </li>
  *     <li> {@link RoundRobin} </li>
- *     <li> {@link WeightedLeastConnection} </li>
- *     <li> {@link WeightedRoundRobin} </li>
+ *     <li> {@link LeastLoad} </li>
  * </ul>
  */
 public abstract class L4Balance extends LoadBalance<Node, Node, InetSocketAddress, Node> {

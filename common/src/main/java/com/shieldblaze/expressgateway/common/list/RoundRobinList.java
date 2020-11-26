@@ -19,7 +19,6 @@ package com.shieldblaze.expressgateway.common.list;
 
 import com.shieldblaze.expressgateway.common.algo.roundrobin.RoundRobinIndexGenerator;
 
-import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
 import java.util.Objects;

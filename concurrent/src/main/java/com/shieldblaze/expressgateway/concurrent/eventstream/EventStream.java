@@ -68,6 +68,7 @@ public class EventStream {
      *
      * @param event Event to publish
      */
+    @SuppressWarnings("unchecked")
     public void publish(Event event) {
         subscribers.forEach(eventListener -> eventListener.accept(event));
     }

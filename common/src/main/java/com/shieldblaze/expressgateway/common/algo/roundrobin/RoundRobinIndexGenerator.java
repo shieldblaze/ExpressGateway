@@ -19,7 +19,6 @@ package com.shieldblaze.expressgateway.common.algo.roundrobin;
 
 import java.util.Collection;
 import java.util.concurrent.atomic.AtomicInteger;
-import java.util.function.IntUnaryOperator;
 
 public class RoundRobinIndexGenerator {
 
