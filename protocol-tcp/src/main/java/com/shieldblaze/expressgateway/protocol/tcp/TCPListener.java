@@ -65,7 +65,7 @@ public class TCPListener extends L4FrontListener {
 
         ChannelHandler channelHandler;
         if (l4LoadBalancer().channelHandler() == null) {
-            channelHandler = new UpstreamHandler(l4LoadBalancer());
+            channelHandler = new ServerInitializer(l4LoadBalancer());
         } else {
             channelHandler = l4LoadBalancer().channelHandler();
         }
@@ -98,7 +98,7 @@ public class TCPListener extends L4FrontListener {
                         return new NioServerSocketChannel();
                     }
                 })
-                .childHandler(new ServerInitializer(l4LoadBalancer(), channelHandler));
+                .childHandler(channelHandler);
 
         int bindRounds = 1;
         if (transportConfiguration.transportType() == TransportType.EPOLL || transportConfiguration.transportType() == TransportType.IO_URING) {

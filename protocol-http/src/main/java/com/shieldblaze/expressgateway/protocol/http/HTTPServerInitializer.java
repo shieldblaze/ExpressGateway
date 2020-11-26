@@ -17,11 +17,17 @@
  */
 package com.shieldblaze.expressgateway.protocol.http;
 
-import com.shieldblaze.expressgateway.protocol.tcp.TCPListener;
+import com.shieldblaze.expressgateway.common.annotation.NonNull;
+import com.shieldblaze.expressgateway.protocol.http.loadbalancer.HTTPLoadBalancer;
+import io.netty.channel.ChannelInitializer;
+import io.netty.channel.socket.SocketChannel;
 
-/*
- * Empty because HTTP's TCP layer is handled by {@link TCPListener}
- */
-public final class HTTPListener extends TCPListener {
-    // Empty
+public abstract class HTTPServerInitializer extends ChannelInitializer<SocketChannel> {
+
+    protected HTTPLoadBalancer httpLoadBalancer;
+
+    @NonNull
+    public void httpLoadBalancer(HTTPLoadBalancer httpLoadBalancer) {
+        this.httpLoadBalancer = httpLoadBalancer;
+    }
 }

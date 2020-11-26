@@ -23,7 +23,9 @@ import com.shieldblaze.expressgateway.configuration.http.HTTPConfiguration;
 import com.shieldblaze.expressgateway.configuration.tls.TLSConfiguration;
 import com.shieldblaze.expressgateway.core.L4FrontListener;
 import com.shieldblaze.expressgateway.core.loadbalancer.L4LoadBalancer;
+import com.shieldblaze.expressgateway.protocol.http.HTTPServerInitializer;
 import com.shieldblaze.expressgateway.protocol.http.UpstreamHandler;
+import io.netty.channel.ChannelHandler;
 
 import java.net.InetSocketAddress;
 
@@ -46,10 +48,10 @@ public class HTTPLoadBalancer extends L4LoadBalancer {
      */
     public HTTPLoadBalancer(InetSocketAddress bindAddress, L4FrontListener l4FrontListener, Cluster cluster,
                             CoreConfiguration coreConfiguration, TLSConfiguration tlsForServer, TLSConfiguration tlsForClient,
-                            HTTPConfiguration httpConfiguration) {
-        super(bindAddress, l4FrontListener, cluster, coreConfiguration, tlsForServer, tlsForClient, null);
+                            HTTPConfiguration httpConfiguration, HTTPServerInitializer httpServerInitializer) {
+        super(bindAddress, l4FrontListener, cluster, coreConfiguration, tlsForServer, tlsForClient, httpServerInitializer);
         this.httpConfiguration = httpConfiguration;
-        super.channelHandler(new UpstreamHandler(this));
+        httpServerInitializer.httpLoadBalancer(this);
     }
 
     /**
