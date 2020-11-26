@@ -27,16 +27,14 @@ import io.netty.handler.timeout.IdleStateHandler;
 import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
 
-public class ServerInitializer extends ChannelInitializer<SocketChannel> {
+final class ServerInitializer extends ChannelInitializer<SocketChannel> {
 
     private static final Logger logger = LogManager.getLogger(ServerInitializer.class);
 
     private final L4LoadBalancer l4LoadBalancer;
-    private final ChannelHandler channelHandler;
 
-    public ServerInitializer(L4LoadBalancer l4LoadBalancer, ChannelHandler channelHandler) {
+    ServerInitializer(L4LoadBalancer l4LoadBalancer) {
         this.l4LoadBalancer = l4LoadBalancer;
-        this.channelHandler = channelHandler;
     }
 
     @Override
@@ -48,7 +46,7 @@ public class ServerInitializer extends ChannelInitializer<SocketChannel> {
             socketChannel.pipeline().addLast(new SNIHandler(l4LoadBalancer.tlsForServer()));
         }
 
-        socketChannel.pipeline().addLast(channelHandler);
+        socketChannel.pipeline().addLast(new UpstreamHandler(l4LoadBalancer));
     }
 
     @Override

@@ -137,17 +137,6 @@ public abstract class L4LoadBalancer {
     }
 
     /**
-     * Set {@link ChannelHandler} to use for handling traffic
-     */
-    @NonNull
-    protected void channelHandler(ChannelHandler channelHandler) {
-        if (this.channelHandler != null) {
-            throw new IllegalArgumentException("ChannelHandler is already set");
-        }
-        this.channelHandler = channelHandler;
-    }
-
-    /**
      * Get {@link ByteBufAllocator} created from {@link PooledByteBufAllocator}
      */
     public ByteBufAllocator byteBufAllocator() {
