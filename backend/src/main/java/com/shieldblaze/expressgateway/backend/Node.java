@@ -45,7 +45,7 @@ public final class Node implements Comparable<Node> {
     /**
      * Connections List
      * <p>
-     * (Wrapped in ConcurrentLinkedQueue due to performance issues with CopyOnWriteArrayList).
+     * (ConcurrentLinkedQueue is used due to performance issues with CopyOnWriteArrayList).
      */
     private final Queue<Connection> connections = new ConcurrentLinkedQueue<>();
 
@@ -77,7 +77,7 @@ public final class Node implements Comparable<Node> {
     /**
      * Active Connection secondary implementation
      */
-    private final AtomicInteger activeConnection0 = new AtomicInteger(-1);
+    private final AtomicInteger activeConnection0 = new AtomicInteger(0);
 
     /**
      * Current State of this {@link Node}
@@ -127,8 +127,8 @@ public final class Node implements Comparable<Node> {
 
     public int activeConnection() {
 
-        // If active connection is initialized (value not set to -1) then return it.
-        if (activeConnection0() != -1) {
+        // If active connection is initialized (value not set to 0) then return it.
+        if (activeConnection0() != 0) {
             return activeConnection0();
         }
 

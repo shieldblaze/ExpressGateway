@@ -19,31 +19,28 @@ package com.shieldblaze.expressgateway.backend.strategy.l4;
 
 import com.shieldblaze.expressgateway.backend.Node;
 import com.shieldblaze.expressgateway.backend.State;
-import com.shieldblaze.expressgateway.backend.cluster.Cluster;
 import com.shieldblaze.expressgateway.backend.events.node.NodeEvent;
 import com.shieldblaze.expressgateway.backend.events.node.NodeOfflineEvent;
 import com.shieldblaze.expressgateway.backend.events.node.NodeRemovedEvent;
 import com.shieldblaze.expressgateway.backend.exceptions.LoadBalanceException;
-import com.shieldblaze.expressgateway.backend.exceptions.NoClusterAvailableException;
 import com.shieldblaze.expressgateway.backend.exceptions.NoNodeAvailableException;
 import com.shieldblaze.expressgateway.backend.loadbalance.SessionPersistence;
 import com.shieldblaze.expressgateway.concurrent.event.Event;
-import com.shieldblaze.expressgateway.concurrent.eventstream.EventListener;
 
 import java.net.InetSocketAddress;
 import java.util.Optional;
 
 /**
- * Select {@link Node} with least connections.
+ * Select a {@link Node} with least load.
  */
-public final class LeastConnection extends L4Balance {
+public final class LeastLoad extends L4Balance {
 
     /**
-     * Create {@link LeastConnection} Instance
+     * Create {@link LeastLoad} Instance
      *
      * @param sessionPersistence {@link SessionPersistence} Implementation Instance
      */
-    public LeastConnection(SessionPersistence<Node, Node, InetSocketAddress, Node> sessionPersistence) {
+    public LeastLoad(SessionPersistence<Node, Node, InetSocketAddress, Node> sessionPersistence) {
         super(sessionPersistence);
     }
 
@@ -61,7 +58,7 @@ public final class LeastConnection extends L4Balance {
         // Get the Node with least amount of active connections
         Optional<Node> optionalNode = cluster.nodes()
                 .stream()
-                .reduce((a, b) -> a.activeConnection() < b.activeConnection() ? a : b);
+                .reduce((node1, node2) -> node1.load() < 100 ? node1 : node2);
 
         // If we don't have any node available then throw an exception.
         if (optionalNode.isEmpty()) {
