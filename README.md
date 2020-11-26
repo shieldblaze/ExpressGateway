@@ -12,7 +12,6 @@
 ### L4:
 - :heavy_check_mark: Load Balancing for TCP/UDP
 - :heavy_check_mark: Full IPv6 Support
-- :heavy_check_mark: NAT-forwarding
 
 ### L7:
 - :heavy_check_mark: Full HTTP/1.1 and HTTP/2
