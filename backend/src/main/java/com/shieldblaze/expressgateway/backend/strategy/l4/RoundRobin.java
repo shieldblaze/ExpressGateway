@@ -19,12 +19,6 @@ package com.shieldblaze.expressgateway.backend.strategy.l4;
 
 import com.shieldblaze.expressgateway.backend.Node;
 import com.shieldblaze.expressgateway.backend.State;
-import com.shieldblaze.expressgateway.backend.events.cluster.ClusterAddedEvent;
-import com.shieldblaze.expressgateway.backend.events.cluster.ClusterEvent;
-import com.shieldblaze.expressgateway.backend.events.cluster.ClusterIdleEvent;
-import com.shieldblaze.expressgateway.backend.events.cluster.ClusterOfflineEvent;
-import com.shieldblaze.expressgateway.backend.events.cluster.ClusterOnlineEvent;
-import com.shieldblaze.expressgateway.backend.events.cluster.ClusterRemovedEvent;
 import com.shieldblaze.expressgateway.backend.events.node.NodeEvent;
 import com.shieldblaze.expressgateway.backend.events.node.NodeIdleEvent;
 import com.shieldblaze.expressgateway.backend.events.node.NodeOfflineEvent;
