@@ -17,7 +17,7 @@
  */
 package com.shieldblaze.expressgateway.backend.exceptions;
 
-public class BackendNotAvailableException extends Exception {
+public class BackendNotAvailableException extends LoadBalanceException {
     public BackendNotAvailableException() {
         super();
     }

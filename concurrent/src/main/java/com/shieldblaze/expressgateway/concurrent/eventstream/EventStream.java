@@ -17,7 +17,10 @@
  */
 package com.shieldblaze.expressgateway.concurrent.eventstream;
 
+import com.shieldblaze.expressgateway.concurrent.event.Event;
+
 import java.util.List;
+import java.util.Objects;
 import java.util.concurrent.CopyOnWriteArrayList;
 
 /**
@@ -26,9 +29,11 @@ import java.util.concurrent.CopyOnWriteArrayList;
 public class EventStream {
 
     /**
-     * Queue of subscribers
+     * List of subscribers
      */
     protected final List<EventListener> subscribers = new CopyOnWriteArrayList<>();
+    private final EventSubscriber eventSubscriber = new EventSubscriber(this);
+    private final EventPublisher eventPublisher = new EventPublisher(this);
 
     /**
      * Subscribe to this {@linkplain EventStream}
@@ -36,6 +41,7 @@ public class EventStream {
      * @param eventListener Class implementing {@link EventListener} who will subscribe
      */
     public void subscribe(EventListener eventListener) {
+        Objects.requireNonNull(eventListener, "EventListener");
         subscribers.add(eventListener);
     }
 
@@ -46,6 +52,7 @@ public class EventStream {
      * @return Returns {@code true} if unsubscribe was successful else {@code false}
      */
     public boolean unsubscribe(EventListener eventListener) {
+        Objects.requireNonNull(eventListener, "EventListener");
         return subscribers.remove(eventListener);
     }
 
@@ -61,7 +68,16 @@ public class EventStream {
      *
      * @param event Event to publish
      */
-    public void publish(Object event) {
+    @SuppressWarnings("unchecked")
+    public void publish(Event event) {
         subscribers.forEach(eventListener -> eventListener.accept(event));
+    }
+
+    public EventSubscriber eventSubscriber() {
+        return eventSubscriber;
+    }
+
+    public EventPublisher eventPublisher() {
+        return eventPublisher;
     }
 }

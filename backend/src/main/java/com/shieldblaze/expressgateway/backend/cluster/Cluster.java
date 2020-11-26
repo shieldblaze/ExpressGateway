@@ -17,49 +17,39 @@
  */
 package com.shieldblaze.expressgateway.backend.cluster;
 
-import com.shieldblaze.expressgateway.backend.Backend;
-import com.shieldblaze.expressgateway.backend.State;
-import com.shieldblaze.expressgateway.backend.events.BackendEvent;
-import com.shieldblaze.expressgateway.backend.exceptions.BackendNotOnlineException;
-import com.shieldblaze.expressgateway.concurrent.GlobalExecutors;
-import com.shieldblaze.expressgateway.concurrent.eventstream.AsyncEventStream;
-import com.shieldblaze.expressgateway.concurrent.eventstream.EventListener;
+import com.shieldblaze.expressgateway.backend.Node;
+import com.shieldblaze.expressgateway.backend.exceptions.LoadBalanceException;
+import com.shieldblaze.expressgateway.backend.loadbalance.LoadBalance;
+import com.shieldblaze.expressgateway.backend.loadbalance.Request;
+import com.shieldblaze.expressgateway.backend.loadbalance.Response;
+import com.shieldblaze.expressgateway.common.annotation.NonNull;
+import com.shieldblaze.expressgateway.concurrent.eventstream.EventPublisher;
 import com.shieldblaze.expressgateway.concurrent.eventstream.EventStream;
+import com.shieldblaze.expressgateway.concurrent.eventstream.EventSubscriber;
 
 import java.util.List;
-import java.util.Objects;
 import java.util.concurrent.CopyOnWriteArrayList;
-import java.util.stream.Collectors;
 
 /**
  * Base class for Cluster
  */
 public abstract class Cluster {
 
-    /**
-     * List of all {@linkplain Backend} associated with this {@linkplain Cluster}
-     */
-    private final List<Backend> allBackends = new CopyOnWriteArrayList<>();
-
-    /**
-     * Stream of {@linkplain BackendEvent}
-     */
-    private final AsyncEventStream eventStream = new AsyncEventStream(GlobalExecutors.INSTANCE.getExecutorService());
-
-    /**
-     * Hostname of this {@linkplain Cluster}
-     */
+    private final List<Node> nodes = new CopyOnWriteArrayList<>();
     private String hostname;
-
-    /**
-     * Name of this {@linkplain Cluster}
-     */
     private String name;
+
+    private final EventStream eventStream;
+    private final LoadBalance<?, ?, ?, ?> loadBalance;
+
+    public Cluster(EventStream eventStream, LoadBalance<?, ?, ?, ?> loadBalance) {
+        this.eventStream = eventStream;
+        this.loadBalance = loadBalance;
+        loadBalance.cluster(this);
+    }
 
     /**
      * Get hostname of this {@linkplain Cluster}
-     *
-     * @return Hostname as {@link String}
      */
     public String hostname() {
         return hostname;
@@ -67,18 +57,15 @@ public abstract class Cluster {
 
     /**
      * Set hostname of this {@linkplain Cluster}
-     *
-     * @param hostname Name as {@link String}
-     * @throws IllegalArgumentException If hostname is invalid
      */
-    public void hostname(String hostname) {
-        this.hostname = Objects.requireNonNull(hostname, "hostname");
+    @NonNull
+    public Cluster hostname(String hostname) {
+        this.hostname = hostname;
+        return this;
     }
 
     /**
      * Get name of this {@linkplain Cluster}
-     *
-     * @return Name as {@link String}
      */
     public String name() {
         return name;
@@ -86,77 +73,40 @@ public abstract class Cluster {
 
     /**
      * Set name of this {@linkplain Cluster}
+     */
+    @NonNull
+    public Cluster name(String name) {
+        this.name = name;
+        return this;
+    }
+
+    /**
+     * Add {@link Node} into this {@linkplain Cluster}
+     */
+    @NonNull
+    public void addNode(Node node) {
+        nodes.add(node);
+    }
+
+    public List<Node> nodes() {
+        return nodes;
+    }
+
+    /**
+     * Get the next {@link Node} available to handle request.
      *
-     * @param name Name as {@link String}
+     * @throws LoadBalanceException In case of some error while generating {@linkplain Response}
      */
-    public void name(String name) {
-        this.name = Objects.requireNonNull(name, "name");
+    @NonNull
+    public Response nextNode(Request request) throws LoadBalanceException {
+        return loadBalance.response(request);
     }
 
-    /**
-     * Add {@link Backend} into this {@linkplain Cluster}
-     */
-    protected void addBackend(Backend backend) {
-        allBackends.add(Objects.requireNonNull(backend, "backend"));
-        backend.cluster(this);
+    public EventSubscriber eventSubscriber() {
+        return eventStream.eventSubscriber();
     }
 
-    /**
-     * Get {@linkplain List} of online {@linkplain Backend} in this {@linkplain Cluster}
-     */
-    public List<Backend> onlineBackends() {
-        return allBackends.stream()
-                .filter(backend -> backend.state() == State.ONLINE)
-                .collect(Collectors.toList());
-    }
-
-    public Backend get(int index) {
-        return allBackends.get(index);
-    }
-
-    /**
-     * Get {@linkplain Backend} from online pool using Index
-     *
-     * @param index Index
-     * @return {@linkplain Backend} Instance if found else {@code null}
-     */
-    public Backend online(int index) throws BackendNotOnlineException {
-        Backend backend = allBackends.get(index);
-        if (backend.state() != State.ONLINE) {
-            throw new BackendNotOnlineException(backend);
-        }
-        return backend;
-    }
-
-    /**
-     * Get size of this {@linkplain Cluster}
-     */
-    public int size() {
-        return allBackends.size();
-    }
-
-    /**
-     * Get number of Online {@linkplain Backend} in this {@linkplain Cluster}
-     */
-    public int online() {
-        return (int) allBackends.stream().filter(backend -> backend.state() == State.ONLINE).count();
-    }
-
-    /**
-     * Subscribe to stream of {@link BackendEvent}
-     *
-     * @see EventStream#subscribe(EventListener)
-     */
-    public void subscribeStream(EventListener eventListener) {
-        eventStream.subscribe(eventListener);
-    }
-
-    /**
-     * Unsubscribe from stream of {@link BackendEvent}
-     *
-     * @see EventStream#subscribe(EventListener)
-     */
-    public void unsubscribeStream(EventListener eventListener) {
-        eventStream.unsubscribe(eventListener);
+    public EventPublisher eventPublisher() {
+        return eventStream.eventPublisher();
     }
 }

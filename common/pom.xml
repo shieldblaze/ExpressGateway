@@ -20,13 +20,13 @@ along with ShieldBlaze ExpressGateway.  If not, see <https://www.gnu.org/license
          xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
          xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 http://maven.apache.org/xsd/maven-4.0.0.xsd">
     <parent>
-        <artifactId>expressgateway</artifactId>
-        <groupId>com.shieldblaze</groupId>
+        <groupId>com.shieldblaze.expressgateway</groupId>
+        <artifactId>parent</artifactId>
         <version>0.0.1-a</version>
     </parent>
     <modelVersion>4.0.0</modelVersion>
 
-    <artifactId>expressgateway-common</artifactId>
+    <artifactId>common</artifactId>
     <packaging>jar</packaging>
 
     <name>ExpressGateway/Common</name>
@@ -37,8 +37,8 @@ along with ShieldBlaze ExpressGateway.  If not, see <https://www.gnu.org/license
 
     <dependencies>
         <dependency>
-            <groupId>com.shieldblaze</groupId>
-            <artifactId>expressgateway-concurrent</artifactId>
+            <groupId>com.shieldblaze.expressgateway</groupId>
+            <artifactId>concurrent</artifactId>
             <version>0.0.1-a</version>
         </dependency>
     </dependencies>

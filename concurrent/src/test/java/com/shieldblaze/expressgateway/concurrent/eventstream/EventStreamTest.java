@@ -17,8 +17,11 @@
  */
 package com.shieldblaze.expressgateway.concurrent.eventstream;
 
+import com.shieldblaze.expressgateway.concurrent.event.Event;
 import org.junit.jupiter.api.Assertions;
 import org.junit.jupiter.api.Test;
+
+import java.util.concurrent.CompletableFuture;
 
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
@@ -32,7 +35,7 @@ class EventStreamTest {
         eventStream.subscribe(eventListenerTest);
 
         for (int i = 0; i < 100_000; i++) {
-            eventStream.publish("Meow" + i);
+            eventStream.publish(new SimpleEvent("Meow" + i));
         }
 
         assertTrue(eventStream.unsubscribe(eventListenerTest));
@@ -43,9 +46,37 @@ class EventStreamTest {
         int expect = 0;
 
         @Override
-        public void accept(Object event) {
-            Assertions.assertEquals("Meow" + expect, event);
+        public void accept(Event event) {
+            Assertions.assertEquals(new SimpleEvent("Meow" + expect).string, ((SimpleEvent) event).string);
             expect++;
+        }
+    }
+
+    private static final class SimpleEvent implements Event {
+        private final String string;
+
+        public SimpleEvent(String string) {
+            this.string = string;
+        }
+
+        @Override
+        public CompletableFuture future() {
+            return null;
+        }
+
+        @Override
+        public boolean finished() {
+            return false;
+        }
+
+        @Override
+        public boolean success() {
+            return false;
+        }
+
+        @Override
+        public Throwable throwable() {
+            return null;
         }
     }
 }

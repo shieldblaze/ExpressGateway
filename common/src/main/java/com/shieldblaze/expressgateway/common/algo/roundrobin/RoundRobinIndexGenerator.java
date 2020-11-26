@@ -17,25 +17,20 @@
  */
 package com.shieldblaze.expressgateway.common.algo.roundrobin;
 
-import java.util.List;
-import java.util.Map;
+import java.util.Collection;
 import java.util.concurrent.atomic.AtomicInteger;
 
 public class RoundRobinIndexGenerator {
 
     private final AtomicInteger atomicInteger = new AtomicInteger(-1);
-    private final int maxIndex;
+    private final AtomicInteger maxIndex;
 
-    public RoundRobinIndexGenerator(List<?> list) {
-        this(list.size());
-    }
-
-    public RoundRobinIndexGenerator(Map<?, ?> map) {
-        this(map.size());
+    public RoundRobinIndexGenerator(Collection<?> collection) {
+        this(collection.size());
     }
 
     public RoundRobinIndexGenerator(int maxIndex) {
-        this.maxIndex = maxIndex;
+        this.maxIndex = new AtomicInteger(maxIndex);
     }
 
     /**
@@ -50,6 +45,25 @@ public class RoundRobinIndexGenerator {
             nextIndex = currentIndex < Integer.MAX_VALUE ? currentIndex + 1 : 0;
         } while (!atomicInteger.compareAndSet(currentIndex, nextIndex));
 
-        return nextIndex % maxIndex;
+        return nextIndex % maxIndex.get();
+    }
+
+    public void incMaxIndex() {
+        maxIndex.addAndGet(1);
+        atomicInteger.set(-1);
+    }
+
+    public void decMaxIndex() {
+        maxIndex.updateAndGet(operand -> operand - 1);
+        atomicInteger.set(-1);
+    }
+
+    public void setMaxIndex(int maxIndex) {
+        this.maxIndex.set(maxIndex);
+        atomicInteger.set(-1);
+    }
+
+    public AtomicInteger maxIndex() {
+        return maxIndex;
     }
 }

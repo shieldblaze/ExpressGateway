@@ -17,13 +17,12 @@
  */
 package com.shieldblaze.expressgateway.configuration.http;
 
-import com.shieldblaze.expressgateway.configuration.GenericConfiguration;
 import io.netty.util.internal.ObjectUtil;
 
 /**
  * Configuration for HTTP
  */
-public final class HTTPConfiguration extends GenericConfiguration {
+public final class HTTPConfiguration {
     private long maxContentLength;
     private int h2InitialWindowSize;
     private long h2MaxConcurrentStreams;

@@ -41,14 +41,11 @@
 - :heavy_check_mark: Random
 - :heavy_check_mark: Round Robin
 - :heavy_check_mark: Least Connection
-- :heavy_check_mark: Weighted Random
-- :heavy_check_mark: Weighted Round Robin
-- :heavy_check_mark: Weighted Least Connection
+- :heavy_check_mark: Least Load
+
 #### L7:
 - :heavy_check_mark: HTTP Random
 - :heavy_check_mark: HTTP Round Robin
-- :heavy_check_mark: HTTP Weighted Random
-- :heavy_check_mark: HTTP Weighted Round Robin
 
 ### Session Persistence:
 - :heavy_check_mark: 5-Tuple Hash (Source IP + Source Port +  Destination IP +  Destination Port + Protocol)

@@ -17,26 +17,24 @@
  */
 package com.shieldblaze.expressgateway.backend.loadbalance;
 
-import com.shieldblaze.expressgateway.backend.Backend;
+import com.shieldblaze.expressgateway.backend.Node;
 
 /**
- * Session Persistence is used to route a request to specific {@linkplain Backend}.
+ * <p> Session Persistence is used to route a request to specific {@linkplain Node}. </p>
  *
- * <p></p>
- *
- * @param <REQUEST>  Request Type for {@linkplain #backend(Request)}
+ * @param <REQUEST>  Request Type for {@linkplain #node(Request)}
  * @param <RESPONSE> Response Type for {@linkplain #addRoute(KEY, VALUE)} and {@linkplain #removeRoute(KEY, VALUE)}
  * @param <KEY>      Key Type to use for {@linkplain #addRoute(KEY, VALUE)} and {@linkplain #removeRoute(KEY, VALUE)}
- * @param <VALUE>    Value Type to use for {@linkplain #addRoute(KEY, VALUE)} and {@linkplain #removeRoute(KEY, VALUE)}
+ * @param <VALUE>    Value Type to use for {@linkplain #addRoute(KEY, VALUE)}, {@linkplain #removeRoute(KEY, VALUE)} and {@linkplain #remove(VALUE)}
  */
 public interface SessionPersistence<REQUEST, RESPONSE, KEY, VALUE> {
 
     /**
-     * Get {@link Backend}
+     * Get {@link Node}
      *
-     * @return {@link Backend} is route is available else {@code null}
+     * @return {@link Node} is route is available else {@code null}
      */
-    REQUEST backend(Request request);
+    REQUEST node(Request request);
 
     /**
      * Add a Key-Value which maps to {@linkplain VALUE}
@@ -49,6 +47,14 @@ public interface SessionPersistence<REQUEST, RESPONSE, KEY, VALUE> {
      * @return Returns {@code true} if removal was successful else {@code false}
      */
     boolean removeRoute(KEY key, VALUE value);
+
+    /**
+     * Remove a value
+     *
+     * @param value {@linkplain VALUE} to be removed
+     * @return Returns {@code true} if removal was successful else {@code false}
+     */
+    boolean remove(VALUE value);
 
     /**
      * Clear all Key-Value entries

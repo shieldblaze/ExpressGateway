@@ -17,34 +17,34 @@
  */
 package com.shieldblaze.expressgateway.backend.loadbalance;
 
-import com.shieldblaze.expressgateway.backend.Backend;
+import com.shieldblaze.expressgateway.backend.Node;
 
 /**
- * {@linkplain Response} contains selected {@linkplain Backend}
+ * {@linkplain Response} contains selected {@linkplain Node}
  */
 public abstract class Response {
-    private final Backend backend;
+    private final Node node;
 
     /**
      * Create a new {@link Response} Instance
      *
-     * @param backend Selected {@linkplain Backend} for the request
+     * @param node Selected {@linkplain Node} for the request
      */
-    public Response(Backend backend) {
-        this.backend = backend;
+    public Response(Node node) {
+        this.node = node;
     }
 
     /**
-     * Get selected {@linkplain Backend}
+     * Get selected {@linkplain Node}
      */
-    public Backend backend() {
-        return backend;
+    public Node node() {
+        return node;
     }
 
     @Override
     public String toString() {
         return "Response{" +
-                "backend=" + backend +
+                "backend=" + node +
                 '}';
     }
 }

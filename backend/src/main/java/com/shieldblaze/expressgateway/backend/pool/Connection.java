@@ -17,15 +17,14 @@
  */
 package com.shieldblaze.expressgateway.backend.pool;
 
+import com.shieldblaze.expressgateway.common.annotation.NonNull;
 import com.shieldblaze.expressgateway.common.utils.ReferenceCounted;
-import io.netty.channel.Channel;
 import io.netty.channel.ChannelFuture;
 import io.netty.channel.ChannelFutureListener;
 import io.netty.channel.ChannelPromise;
 
 import java.net.InetSocketAddress;
 import java.time.Instant;
-import java.util.Objects;
 import java.util.concurrent.ConcurrentLinkedQueue;
 
 public abstract class Connection {
@@ -47,9 +46,10 @@ public abstract class Connection {
     /**
      * Initialize this Connection
      */
+    @NonNull
     public void init(ChannelFuture channelFuture) {
         if (this.channelFuture == null) {
-            this.channelFuture = Objects.requireNonNull(channelFuture, "ChannelFuture");
+            this.channelFuture = channelFuture;
 
             // Add listener to be notified when Channel initializes
             this.channelFuture.addListener((ChannelFutureListener) future -> {

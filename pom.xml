@@ -21,8 +21,8 @@ along with ShieldBlaze ExpressGateway.  If not, see <https://www.gnu.org/license
          xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 http://maven.apache.org/xsd/maven-4.0.0.xsd">
     <modelVersion>4.0.0</modelVersion>
 
-    <groupId>com.shieldblaze</groupId>
-    <artifactId>expressgateway</artifactId>
+    <groupId>com.shieldblaze.expressgateway</groupId>
+    <artifactId>parent</artifactId>
     <version>0.0.1-a</version>
 
     <packaging>pom</packaging>
@@ -57,14 +57,16 @@ along with ShieldBlaze ExpressGateway.  If not, see <https://www.gnu.org/license
 
     <modules>
         <module>core</module>
-        <module>load-balance</module>
-        <module>health-check</module>
+        <module>healthcheck</module>
         <module>backend</module>
         <module>common</module>
         <module>security</module>
         <module>configuration</module>
         <module>shaded-dependencies</module>
         <module>concurrent</module>
+        <module>protocol-http</module>
+        <module>protocol-tcp</module>
+        <module>protocol-udp</module>
     </modules>
 
     <repositories>
@@ -94,6 +96,13 @@ along with ShieldBlaze ExpressGateway.  If not, see <https://www.gnu.org/license
             <groupId>io.netty</groupId>
             <artifactId>netty-tcnative</artifactId>
             <version>2.0.34.Final</version>
+        </dependency>
+
+        <!-- https://mvnrepository.com/artifact/io.netty.incubator/netty-incubator-transport-native-io_uring -->
+        <dependency>
+            <groupId>io.netty.incubator</groupId>
+            <artifactId>netty-incubator-transport-native-io_uring</artifactId>
+            <version>0.0.1.Final</version>
         </dependency>
 
         <!-- https://mvnrepository.com/artifact/org.apache.logging.log4j/log4j-api -->
@@ -151,6 +160,13 @@ along with ShieldBlaze ExpressGateway.  If not, see <https://www.gnu.org/license
             <groupId>net.openhft</groupId>
             <artifactId>zero-allocation-hashing</artifactId>
             <version>0.12</version>
+        </dependency>
+
+        <!-- https://mvnrepository.com/artifact/com.aayushatharva.brotli4j/brotli4j -->
+        <dependency>
+            <groupId>com.aayushatharva.brotli4j</groupId>
+            <artifactId>brotli4j</artifactId>
+            <version>1.1.0</version>
         </dependency>
     </dependencies>
 

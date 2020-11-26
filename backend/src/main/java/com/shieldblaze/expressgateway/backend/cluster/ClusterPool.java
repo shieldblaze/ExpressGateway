@@ -17,47 +17,42 @@
  */
 package com.shieldblaze.expressgateway.backend.cluster;
 
-import com.shieldblaze.expressgateway.backend.Backend;
+import com.shieldblaze.expressgateway.backend.Node;
+import com.shieldblaze.expressgateway.backend.loadbalance.LoadBalance;
+import com.shieldblaze.expressgateway.common.annotation.NonNull;
+import com.shieldblaze.expressgateway.concurrent.eventstream.EventStream;
 
-import java.util.Objects;
 import java.util.concurrent.atomic.AtomicInteger;
 
 /**
- * {@linkplain ClusterPool} with multiple {@linkplain Backend}
+ * {@linkplain ClusterPool} with multiple {@linkplain Node}
  */
 public final class ClusterPool extends Cluster {
 
     private static final AtomicInteger count = new AtomicInteger();
 
-    public ClusterPool() {
-        name("ClusterPool#" + count.getAndIncrement());
+    public ClusterPool(EventStream eventStream, LoadBalance<?, ?, ?, ?> loadBalance) {
+        this(eventStream, loadBalance, "ClusterPool#" + count.getAndIncrement());
     }
 
-    private ClusterPool(String name, String hostname, Backend... backends) {
+    @NonNull
+    public ClusterPool(EventStream eventStream, LoadBalance<?, ?, ?, ?> loadBalance, String name) {
+        super(eventStream, loadBalance);
         name(name);
-        hostname(hostname);
-        addBackends(backends);
-    }
-
-    public static ClusterPool of(String hostname, Backend... backends) {
-        return new ClusterPool("ClusterPool#" + count.getAndIncrement(), hostname, backends);
-    }
-
-    public static ClusterPool of(String name, String hostname, Backend... backends) {
-        return new ClusterPool(name, hostname, backends);
     }
 
     /**
-     * @see Cluster#addBackend(Backend)
+     * @see Cluster#addNode(Node)
      */
-    public void addBackends(Backend... backends) {
-        Objects.requireNonNull(backends, "backends");
-        for (Backend backend : backends) {
-            super.addBackend(backend);
+    @NonNull
+    public void addNodes(Node... nodes) {
+        for (Node node : nodes) {
+            super.addNode(node);
         }
     }
 
-    public void addBackend(Backend backends) {
-        super.addBackend(backends);
+    @NonNull
+    public void addNode(Node node) {
+        super.addNode(node);
     }
 }
