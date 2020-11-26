@@ -57,7 +57,7 @@ final class UpstreamHandler extends ChannelInboundHandlerAdapter {
     @Override
     public void channelActive(ChannelHandlerContext ctx) throws LoadBalanceException {
         Bootstrap bootstrap = BootstrapFactory.getTCP(l4LoadBalancer.coreConfiguration(), l4LoadBalancer.eventLoopFactory().childGroup(), ctx.alloc());
-        node = l4LoadBalancer.loadBalance().response(new L4Request((InetSocketAddress) ctx.channel().remoteAddress())).node();
+        node = l4LoadBalancer.cluster().nextNode(new L4Request((InetSocketAddress) ctx.channel().remoteAddress())).node();
         bootstrap.handler(new ChannelInitializer<SocketChannel>() {
             @Override
             protected void initChannel(SocketChannel ch) {

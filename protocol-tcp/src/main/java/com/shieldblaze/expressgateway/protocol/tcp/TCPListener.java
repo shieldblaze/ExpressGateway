@@ -20,10 +20,10 @@ package com.shieldblaze.expressgateway.protocol.tcp;
 import com.shieldblaze.expressgateway.configuration.CoreConfiguration;
 import com.shieldblaze.expressgateway.configuration.transport.TransportConfiguration;
 import com.shieldblaze.expressgateway.configuration.transport.TransportType;
+import com.shieldblaze.expressgateway.core.EventLoopFactory;
 import com.shieldblaze.expressgateway.core.L4FrontListener;
 import com.shieldblaze.expressgateway.core.events.L4FrontListenerStartupEvent;
 import com.shieldblaze.expressgateway.core.events.L4FrontListenerStopEvent;
-import com.shieldblaze.expressgateway.core.EventLoopFactory;
 import io.netty.bootstrap.ServerBootstrap;
 import io.netty.buffer.ByteBufAllocator;
 import io.netty.channel.ChannelFuture;
@@ -119,7 +119,7 @@ public class TCPListener extends L4FrontListener {
             }
         });
 
-        l4LoadBalancer().publishEvent(l4FrontListenerStartupEvent);
+        l4LoadBalancer().eventPublisher().publish(l4FrontListenerStartupEvent);
         return l4FrontListenerStartupEvent;
     }
 
@@ -136,7 +136,7 @@ public class TCPListener extends L4FrontListener {
             }
         });
 
-        l4LoadBalancer().publishEvent(l4FrontListenerStopEvent);
+        l4LoadBalancer().eventPublisher().publish(l4FrontListenerStopEvent);
         return l4FrontListenerStopEvent;
     }
 }

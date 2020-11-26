@@ -17,7 +17,7 @@
  */
 package com.shieldblaze.expressgateway.protocol.http.adapter.http2;
 
-import com.shieldblaze.expressgateway.core.server.http.Headers;
+import com.shieldblaze.expressgateway.protocol.http.Headers;
 import io.netty.buffer.Unpooled;
 import io.netty.channel.ChannelHandlerContext;
 import io.netty.channel.ChannelPromise;

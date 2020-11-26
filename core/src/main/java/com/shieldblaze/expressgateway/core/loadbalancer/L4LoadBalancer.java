@@ -18,11 +18,10 @@
 package com.shieldblaze.expressgateway.core.loadbalancer;
 
 import com.shieldblaze.expressgateway.backend.cluster.Cluster;
-import com.shieldblaze.expressgateway.backend.loadbalance.LoadBalance;
 import com.shieldblaze.expressgateway.common.annotation.NonNull;
-import com.shieldblaze.expressgateway.concurrent.event.Event;
-import com.shieldblaze.expressgateway.concurrent.eventstream.AsyncEventStream;
-import com.shieldblaze.expressgateway.concurrent.eventstream.EventListener;
+import com.shieldblaze.expressgateway.concurrent.eventstream.EventPublisher;
+import com.shieldblaze.expressgateway.concurrent.eventstream.EventStream;
+import com.shieldblaze.expressgateway.concurrent.eventstream.EventSubscriber;
 import com.shieldblaze.expressgateway.configuration.CoreConfiguration;
 import com.shieldblaze.expressgateway.configuration.tls.TLSConfiguration;
 import com.shieldblaze.expressgateway.core.EventLoopFactory;
@@ -34,17 +33,13 @@ import io.netty.buffer.ByteBufAllocator;
 import io.netty.channel.ChannelHandler;
 
 import java.net.InetSocketAddress;
-import java.util.concurrent.Executors;
 
 /**
  * {@link L4LoadBalancer} holds base functions for a L4-Load Balancer.
  */
 public abstract class L4LoadBalancer {
 
-    private final AsyncEventStream eventStream = new AsyncEventStream(Executors.newFixedThreadPool(2));
-
     private final InetSocketAddress bindAddress;
-    private final LoadBalance<?, ?, ?, ?> loadBalance;
     private final L4FrontListener l4FrontListener;
     private final Cluster cluster;
     private final CoreConfiguration coreConfiguration;
@@ -57,7 +52,6 @@ public abstract class L4LoadBalancer {
 
     /**
      * @param bindAddress       {@link InetSocketAddress} on which {@link L4FrontListener} will bind and listen.
-     * @param loadBalance       {@link LoadBalance} to use for load balancing
      * @param l4FrontListener   {@link L4FrontListener} for listening traffic
      * @param cluster           {@link Cluster} to be Load Balanced
      * @param coreConfiguration {@link CoreConfiguration} to be applied
@@ -67,7 +61,6 @@ public abstract class L4LoadBalancer {
      * @throws NullPointerException If a required parameter if {@code null}
      */
     public L4LoadBalancer(@NonNull InetSocketAddress bindAddress,
-                          @NonNull LoadBalance<?, ?, ?, ?> loadBalance,
                           @NonNull L4FrontListener l4FrontListener,
                           @NonNull Cluster cluster,
                           @NonNull CoreConfiguration coreConfiguration,
@@ -75,7 +68,6 @@ public abstract class L4LoadBalancer {
                           TLSConfiguration tlsForClient,
                           ChannelHandler channelHandler) {
         this.bindAddress = bindAddress;
-        this.loadBalance = loadBalance;
         this.l4FrontListener = l4FrontListener;
         this.cluster = cluster;
         this.coreConfiguration = coreConfiguration;
@@ -111,16 +103,9 @@ public abstract class L4LoadBalancer {
     }
 
     /**
-     * Get {@link LoadBalance} used for Load Balance
-     */
-    public LoadBalance<?, ?, ?, ?> loadBalance() {
-        return loadBalance;
-    }
-
-    /**
      * Get {@link Cluster} which is being Load Balanced
      */
-    public Cluster backend() {
+    public Cluster cluster() {
         return cluster;
     }
 
@@ -177,32 +162,11 @@ public abstract class L4LoadBalancer {
         return eventLoopFactory;
     }
 
-    /**
-     * Publish an event to event stream
-     *
-     * @param event {@link Event} to be published
-     */
-    public <T> L4LoadBalancer publishEvent(Event<T> event) {
-        eventStream.publish(event);
-        return this;
+    public EventPublisher eventPublisher() {
+        return cluster.eventPublisher();
     }
 
-    /**
-     * Subscribe to event stream
-     *
-     * @param eventListener {@link EventListener} implementation to receive events
-     */
-    public <T> L4LoadBalancer subscribeToEvents(EventListener<T> eventListener) {
-        eventStream.subscribe(eventListener);
-        return this;
-    }
-
-    /**
-     * Unsubscribe from event stream
-     *
-     * @param eventListener {@link EventListener} implementation to stop which was subscribed
-     */
-    public <T> boolean unsubscribeFromEvents(EventListener<T> eventListener) {
-        return eventStream.unsubscribe(eventListener);
+    public EventSubscriber eventSubscriber() {
+        return cluster.eventSubscriber();
     }
 }

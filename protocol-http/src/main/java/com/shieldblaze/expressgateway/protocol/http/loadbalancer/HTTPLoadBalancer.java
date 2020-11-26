@@ -37,7 +37,6 @@ public class HTTPLoadBalancer extends L4LoadBalancer {
 
     /**
      * @param bindAddress       {@link InetSocketAddress} on which {@link L4FrontListener} will bind and listen.
-     * @param loadBalance       {@link LoadBalance} to use for load balancing
      * @param l4FrontListener   {@link L4FrontListener} for listening traffic
      * @param cluster           {@link Cluster} to be Load Balanced
      * @param coreConfiguration {@link CoreConfiguration} to be applied
@@ -46,10 +45,10 @@ public class HTTPLoadBalancer extends L4LoadBalancer {
      * @param httpConfiguration {@link HTTPConfiguration} to be applied
      * @throws NullPointerException If a required parameter if {@code null}
      */
-    public HTTPLoadBalancer(InetSocketAddress bindAddress, LoadBalance<?, ?, ?, ?> loadBalance, L4FrontListener l4FrontListener, Cluster cluster,
+    public HTTPLoadBalancer(InetSocketAddress bindAddress, L4FrontListener l4FrontListener, Cluster cluster,
                             CoreConfiguration coreConfiguration, TLSConfiguration tlsForServer, TLSConfiguration tlsForClient,
                             HTTPConfiguration httpConfiguration) {
-        super(bindAddress, loadBalance, l4FrontListener, cluster, coreConfiguration, tlsForServer, tlsForClient, null);
+        super(bindAddress, l4FrontListener, cluster, coreConfiguration, tlsForServer, tlsForClient, null);
         this.httpConfiguration = httpConfiguration;
         super.channelHandler(new UpstreamHandler(this));
     }

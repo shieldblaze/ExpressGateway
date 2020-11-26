@@ -18,9 +18,8 @@
 package com.shieldblaze.expressgateway.common.algo.roundrobin;
 
 import java.util.Collection;
-import java.util.List;
-import java.util.Map;
 import java.util.concurrent.atomic.AtomicInteger;
+import java.util.function.IntUnaryOperator;
 
 public class RoundRobinIndexGenerator {
 
@@ -51,12 +50,21 @@ public class RoundRobinIndexGenerator {
     }
 
     public void incMaxIndex() {
-        maxIndex.incrementAndGet();
+        maxIndex.addAndGet(1);
         atomicInteger.set(-1);
     }
 
     public void decMaxIndex() {
-        maxIndex.decrementAndGet();
+        maxIndex.updateAndGet(operand -> operand - 1);
         atomicInteger.set(-1);
+    }
+
+    public void setMaxIndex(int maxIndex) {
+        this.maxIndex.set(maxIndex);
+        atomicInteger.set(-1);
+    }
+
+    public AtomicInteger maxIndex() {
+        return maxIndex;
     }
 }

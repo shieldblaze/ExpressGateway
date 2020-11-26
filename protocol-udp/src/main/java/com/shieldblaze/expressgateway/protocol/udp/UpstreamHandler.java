@@ -54,12 +54,11 @@ final class UpstreamHandler extends ChannelInboundHandlerAdapter {
             if (connection == null) {
                 Node node;
                 try {
-                    node = l4LoadBalancer.loadBalance().response(new L4Request(datagramPacket.sender())).node();
+                    node = l4LoadBalancer.cluster().nextNode(new L4Request(datagramPacket.sender())).node();
                 } catch (LoadBalanceException e) {
                     // Handle this
                     return;
                 }
-                node.incConnections();
 
                 connection = new Connection(datagramPacket.sender(), node, ctx.channel(), l4LoadBalancer.coreConfiguration(),
                         l4LoadBalancer.eventLoopFactory(), ctx.alloc());

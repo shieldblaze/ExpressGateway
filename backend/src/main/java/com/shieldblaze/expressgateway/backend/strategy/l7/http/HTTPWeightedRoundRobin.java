@@ -17,9 +17,10 @@
  */
 package com.shieldblaze.expressgateway.backend.strategy.l7.http;
 
+import com.google.common.collect.Range;
+import com.google.common.collect.TreeRangeMap;
 import com.shieldblaze.expressgateway.backend.Node;
 import com.shieldblaze.expressgateway.backend.State;
-import com.shieldblaze.expressgateway.backend.cluster.Cluster;
 import com.shieldblaze.expressgateway.backend.events.node.NodeEvent;
 import com.shieldblaze.expressgateway.backend.events.node.NodeIdleEvent;
 import com.shieldblaze.expressgateway.backend.events.node.NodeOfflineEvent;
@@ -28,25 +29,27 @@ import com.shieldblaze.expressgateway.backend.events.node.NodeRemovedEvent;
 import com.shieldblaze.expressgateway.backend.exceptions.LoadBalanceException;
 import com.shieldblaze.expressgateway.backend.exceptions.NoNodeAvailableException;
 import com.shieldblaze.expressgateway.backend.loadbalance.SessionPersistence;
-import com.shieldblaze.expressgateway.backend.strategy.l7.http.sessionpersistence.NOOPSessionPersistence;
 import com.shieldblaze.expressgateway.common.algo.roundrobin.RoundRobinIndexGenerator;
-import com.shieldblaze.expressgateway.common.list.RoundRobinList;
 import com.shieldblaze.expressgateway.concurrent.event.Event;
-import com.shieldblaze.expressgateway.concurrent.eventstream.EventListener;
+
+import java.util.concurrent.atomic.AtomicInteger;
 
 /**
- * Select {@link Node} based on Round-Robin
+ * Select {@link Node} based on Weight using Round-Robin
  */
-public final class RoundRobin extends HTTPBalance {
+@SuppressWarnings("UnstableApiUsage")
+public final class HTTPWeightedRoundRobin extends HTTPBalance {
 
     private final RoundRobinIndexGenerator roundRobinIndexGenerator = new RoundRobinIndexGenerator(0);
+    private final TreeRangeMap<Integer, Node> weightMap = TreeRangeMap.create();
+    private final AtomicInteger totalWeight = new AtomicInteger(0);
 
     /**
-     * Create {@link RoundRobin} Instance
+     * Create {@link HTTPWeightedRoundRobin} Instance
      *
      * @param sessionPersistence {@link SessionPersistence} Implementation Instance
      */
-    public RoundRobin(SessionPersistence<HTTPBalanceResponse, HTTPBalanceResponse, HTTPBalanceRequest, Node> sessionPersistence) {
+    public HTTPWeightedRoundRobin(SessionPersistence<HTTPBalanceResponse, HTTPBalanceResponse, HTTPBalanceRequest, Node> sessionPersistence) {
         super(sessionPersistence);
     }
 
@@ -54,8 +57,6 @@ public final class RoundRobin extends HTTPBalance {
     public HTTPBalanceResponse response(HTTPBalanceRequest request) throws LoadBalanceException {
         HTTPBalanceResponse httpBalanceResponse = sessionPersistence.node(request);
         if (httpBalanceResponse != null) {
-            // If Backend is ONLINE then return the response
-            // else remove it from session persistence.
             if (httpBalanceResponse.node().state() == State.ONLINE) {
                 return httpBalanceResponse;
             } else {
@@ -65,9 +66,13 @@ public final class RoundRobin extends HTTPBalance {
 
         Node node;
         try {
-            node = cluster.nodes().get(roundRobinIndexGenerator.next());
+            int index = roundRobinIndexGenerator.next();
+            node = weightMap.get(index);
+            if (node == null) {
+                throw new NullPointerException("Node not found for Index: " + index);
+            }
         } catch (Exception ex) {
-            throw new NoNodeAvailableException();
+            throw new NoNodeAvailableException(ex);
         }
 
         return sessionPersistence.addRoute(request, node);
@@ -79,9 +84,15 @@ public final class RoundRobin extends HTTPBalance {
             NodeEvent nodeEvent = (NodeEvent) event;
             if (nodeEvent instanceof NodeOfflineEvent || nodeEvent instanceof NodeRemovedEvent || nodeEvent instanceof NodeIdleEvent) {
                 sessionPersistence.remove(nodeEvent.node());
-                roundRobinIndexGenerator.decMaxIndex();
+                totalWeight.updateAndGet(higherKey -> {
+                    int lowerKey = higherKey - nodeEvent.node().weight();
+                    weightMap.remove(Range.closed(lowerKey, higherKey));
+                    return lowerKey;
+                });
+                roundRobinIndexGenerator.setMaxIndex(totalWeight.get());
             } else if (nodeEvent instanceof NodeOnlineEvent) {
-                roundRobinIndexGenerator.incMaxIndex();
+                weightMap.put(Range.closed(totalWeight.get(), totalWeight.addAndGet(nodeEvent.node().weight())), nodeEvent.node());
+                roundRobinIndexGenerator.setMaxIndex(totalWeight.get());
             }
         }
     }

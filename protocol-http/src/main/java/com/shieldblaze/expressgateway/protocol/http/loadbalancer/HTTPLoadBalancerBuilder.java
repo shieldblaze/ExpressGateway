@@ -34,7 +34,6 @@ public final class HTTPLoadBalancerBuilder {
     private InetSocketAddress bindAddress;
     private CoreConfiguration coreConfiguration;
     private HTTPConfiguration httpConfiguration;
-    private HTTPBalance httpBalance;
     private Cluster cluster;
     private HTTPFrontListener httpFrontListener;
     private TLSConfiguration tlsServer;
@@ -55,11 +54,6 @@ public final class HTTPLoadBalancerBuilder {
 
     public HTTPLoadBalancerBuilder withHTTPConfiguration(HTTPConfiguration httpConfiguration) {
         this.httpConfiguration = httpConfiguration;
-        return this;
-    }
-
-    public HTTPLoadBalancerBuilder withHTTPBalance(HTTPBalance HTTPBalance) {
-        this.httpBalance = HTTPBalance;
         return this;
     }
 
@@ -99,15 +93,13 @@ public final class HTTPLoadBalancerBuilder {
 
     public HTTPLoadBalancer build() {
         Objects.requireNonNull(bindAddress, "BindAddress");
-        Objects.requireNonNull(httpBalance, "HTTPBalance");
         Objects.requireNonNull(httpFrontListener, "HTTPFrontListener");
         Objects.requireNonNull(cluster, "Cluster");
         Objects.requireNonNull(coreConfiguration, "CoreConfiguration");
         Objects.requireNonNull(httpConfiguration, "HTTPConfiguration");
 
-        HTTPLoadBalancer httpLoadBalancer = new HTTPLoadBalancer(
+        return new HTTPLoadBalancer(
                 bindAddress,
-                httpBalance,
                 httpFrontListener,
                 cluster,
                 coreConfiguration,
@@ -115,8 +107,5 @@ public final class HTTPLoadBalancerBuilder {
                 tlsServer,
                 httpConfiguration
         );
-
-        httpBalance.cluster(cluster);
-        return httpLoadBalancer;
     }
 }

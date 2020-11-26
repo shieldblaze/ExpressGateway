@@ -68,7 +68,7 @@ final class Connection {
                 eventLoopFactory.childGroup().next().execute(() -> {
 
                     backlog.forEach(datagramPacket -> {
-                        node.incBytesWritten(datagramPacket.content().readableBytes());
+                        node.incBytesSent(datagramPacket.content().readableBytes());
                         backendChannel.writeAndFlush(datagramPacket.content()).addListener((ChannelFutureListener) cf -> {
                             if (!cf.isSuccess()) {
                                 datagramPacket.release();
@@ -90,7 +90,7 @@ final class Connection {
 
     void writeDatagram(DatagramPacket datagramPacket) {
         if (channelActive) {
-            node.incBytesWritten(datagramPacket.content().readableBytes());
+            node.incBytesSent(datagramPacket.content().readableBytes());
             backendChannel.writeAndFlush(datagramPacket.content()).addListener((ChannelFutureListener) cf -> {
                 if (!cf.isSuccess()) {
                     ReferenceCounted.silentFullRelease(datagramPacket);

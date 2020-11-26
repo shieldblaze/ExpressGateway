@@ -17,8 +17,8 @@
  */
 package com.shieldblaze.expressgateway.protocol.http.adapter.http2;
 
-import com.shieldblaze.expressgateway.core.server.http.Headers;
-import com.shieldblaze.expressgateway.core.server.http.compression.HTTPCompressionUtil;
+import com.shieldblaze.expressgateway.protocol.http.Headers;
+import com.shieldblaze.expressgateway.protocol.http.compression.HTTPCompressionUtil;
 import io.netty.buffer.Unpooled;
 import io.netty.channel.ChannelDuplexHandler;
 import io.netty.channel.ChannelHandlerContext;
@@ -234,7 +234,7 @@ public final class HTTP2InboundAdapter extends ChannelDuplexHandler {
 
     private void onHeadersWrite(Http2Headers headers, InboundProperty inboundProperty) {
         if (!headers.contains(HttpHeaderNames.CONTENT_ENCODING) && inboundProperty.acceptEncoding() != null) {
-            String targetEncoding = HTTPCompressionUtil.getTargetEncoding(headers, inboundProperty.acceptEncoding());
+            String targetEncoding = HTTPCompressionUtil.targetEncoding(headers, inboundProperty.acceptEncoding());
             if (targetEncoding != null) {
                 headers.set(HttpHeaderNames.CONTENT_ENCODING, targetEncoding);
             }

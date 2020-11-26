@@ -17,7 +17,7 @@
  */
 package com.shieldblaze.expressgateway.protocol.http.adapter.http1;
 
-import com.shieldblaze.expressgateway.core.server.http.Headers;
+import com.shieldblaze.expressgateway.protocol.http.Headers;
 import io.netty.channel.ChannelDuplexHandler;
 import io.netty.channel.ChannelHandlerContext;
 import io.netty.channel.ChannelPromise;

@@ -17,38 +17,32 @@
  */
 package com.shieldblaze.expressgateway.backend.strategy.l7.http;
 
-import com.google.common.collect.Range;
-import com.google.common.collect.TreeRangeMap;
 import com.shieldblaze.expressgateway.backend.Node;
 import com.shieldblaze.expressgateway.backend.State;
-import com.shieldblaze.expressgateway.backend.cluster.Cluster;
 import com.shieldblaze.expressgateway.backend.events.node.NodeEvent;
 import com.shieldblaze.expressgateway.backend.events.node.NodeIdleEvent;
 import com.shieldblaze.expressgateway.backend.events.node.NodeOfflineEvent;
 import com.shieldblaze.expressgateway.backend.events.node.NodeOnlineEvent;
 import com.shieldblaze.expressgateway.backend.events.node.NodeRemovedEvent;
-import com.shieldblaze.expressgateway.backend.exceptions.NodeOfflineException;
 import com.shieldblaze.expressgateway.backend.exceptions.LoadBalanceException;
 import com.shieldblaze.expressgateway.backend.exceptions.NoNodeAvailableException;
 import com.shieldblaze.expressgateway.backend.loadbalance.SessionPersistence;
-import com.shieldblaze.expressgateway.backend.strategy.l7.http.sessionpersistence.NOOPSessionPersistence;
 import com.shieldblaze.expressgateway.common.algo.roundrobin.RoundRobinIndexGenerator;
 import com.shieldblaze.expressgateway.concurrent.event.Event;
-import com.shieldblaze.expressgateway.concurrent.eventstream.EventListener;
 
 /**
- * Select {@link Node} based on Weight using Round-Robin
+ * Select {@link Node} based on Round-Robin
  */
-public final class WeightedRoundRobin extends HTTPBalance {
+public final class HTTPRoundRobin extends HTTPBalance {
 
     private final RoundRobinIndexGenerator roundRobinIndexGenerator = new RoundRobinIndexGenerator(0);
 
     /**
-     * Create {@link WeightedRoundRobin} Instance
+     * Create {@link HTTPRoundRobin} Instance
      *
      * @param sessionPersistence {@link SessionPersistence} Implementation Instance
      */
-    public WeightedRoundRobin(SessionPersistence<HTTPBalanceResponse, HTTPBalanceResponse, HTTPBalanceRequest, Node> sessionPersistence) {
+    public HTTPRoundRobin(SessionPersistence<HTTPBalanceResponse, HTTPBalanceResponse, HTTPBalanceRequest, Node> sessionPersistence) {
         super(sessionPersistence);
     }
 

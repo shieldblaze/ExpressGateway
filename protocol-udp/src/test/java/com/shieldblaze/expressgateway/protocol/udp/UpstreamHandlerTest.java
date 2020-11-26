@@ -19,8 +19,10 @@ package com.shieldblaze.expressgateway.protocol.udp;
 
 import com.shieldblaze.expressgateway.backend.Node;
 import com.shieldblaze.expressgateway.backend.cluster.Cluster;
+import com.shieldblaze.expressgateway.backend.cluster.ClusterPool;
 import com.shieldblaze.expressgateway.backend.strategy.l4.RoundRobin;
 import com.shieldblaze.expressgateway.backend.strategy.l4.sessionpersistence.NOOPSessionPersistence;
+import com.shieldblaze.expressgateway.concurrent.eventstream.EventStream;
 import com.shieldblaze.expressgateway.configuration.CoreConfiguration;
 import com.shieldblaze.expressgateway.configuration.CoreConfigurationBuilder;
 import com.shieldblaze.expressgateway.configuration.buffer.PooledByteBufAllocatorConfiguration;
@@ -60,7 +62,7 @@ final class UpstreamHandlerTest {
         new UDPServer().start();
 
         TransportConfiguration transportConfiguration = TransportConfigurationBuilder.newBuilder()
-                .withTransportType(Epoll.isAvailable() ? TransportType.EPOLL : TransportType.NIO)
+                .withTransportType(TransportType.NIO)
                 .withTCPFastOpenMaximumPendingRequests(2147483647)
                 .withBackendConnectTimeout(1000 * 5)
                 .withBackendSocketTimeout(1000 * 5)
@@ -86,11 +88,11 @@ final class UpstreamHandlerTest {
 
         eventLoopFactory = new EventLoopFactory(coreConfiguration);
 
-        Cluster cluster = SingleBackendCluster.of(new Node(new InetSocketAddress("127.0.0.1", 9111)));
+        Cluster cluster = new ClusterPool(new EventStream(), new RoundRobin(new NOOPSessionPersistence()));
+        cluster.addNode(new Node(cluster, new InetSocketAddress("127.0.0.1", 9111)));
 
         l4LoadBalancer = L4LoadBalancerBuilder.newBuilder()
                 .withCoreConfiguration(coreConfiguration)
-                .withLoadBalance(new RoundRobin(new NOOPSessionPersistence(), cluster))
                 .withCluster(cluster)
                 .withBindAddress(new InetSocketAddress("127.0.0.1", 9110))
                 .withL4FrontListener(new UDPListener())

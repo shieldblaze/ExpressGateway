@@ -82,7 +82,7 @@ public class UDPListener extends L4FrontListener {
             }
         });
 
-        l4LoadBalancer().publishEvent(l4FrontListenerStartupEvent);
+        l4LoadBalancer().eventPublisher().publish(l4FrontListenerStartupEvent);
         return l4FrontListenerStartupEvent;
     }
 
@@ -99,7 +99,7 @@ public class UDPListener extends L4FrontListener {
             }
         });
 
-        l4LoadBalancer().publishEvent(l4FrontListenerStopEvent);
+        l4LoadBalancer().eventPublisher().publish(l4FrontListenerStopEvent);
         return l4FrontListenerStopEvent;
     }
 }

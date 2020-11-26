@@ -64,7 +64,7 @@ public final class UpstreamHandler extends ChannelDuplexHandler {
 
             InetSocketAddress upstreamAddress = (InetSocketAddress) ctx.channel().remoteAddress();
             HTTPBalanceRequest balanceRequest = new HTTPBalanceRequest(upstreamAddress, request.headers());
-            HTTPBalanceResponse balanceResponse = (HTTPBalanceResponse) httpLoadBalancer.loadBalance().response(balanceRequest);
+            HTTPBalanceResponse balanceResponse = (HTTPBalanceResponse) httpLoadBalancer.cluster().nextNode(balanceRequest);
             Node node = balanceResponse.node();
 
             HTTPConnection connection = (HTTPConnection) node.lease();

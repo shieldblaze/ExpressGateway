@@ -18,8 +18,8 @@
 package com.shieldblaze.expressgateway.protocol.http;
 
 import com.shieldblaze.expressgateway.configuration.http.HTTPConfiguration;
-import com.shieldblaze.expressgateway.core.server.http.compression.HTTP2ContentCompressor;
-import com.shieldblaze.expressgateway.core.server.http.compression.HTTP2ContentDecompressor;
+import com.shieldblaze.expressgateway.protocol.http.compression.HTTP2ContentCompressor;
+import com.shieldblaze.expressgateway.protocol.http.compression.HTTP2ContentDecompressor;
 import io.netty.handler.codec.http.HttpClientCodec;
 import io.netty.handler.codec.http.HttpServerCodec;
 import io.netty.handler.codec.http2.DefaultHttp2Connection;

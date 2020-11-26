@@ -19,32 +19,28 @@ package com.shieldblaze.expressgateway.backend.strategy.l7.http;
 
 import com.shieldblaze.expressgateway.backend.Node;
 import com.shieldblaze.expressgateway.backend.State;
-import com.shieldblaze.expressgateway.backend.cluster.Cluster;
 import com.shieldblaze.expressgateway.backend.events.node.NodeEvent;
 import com.shieldblaze.expressgateway.backend.events.node.NodeIdleEvent;
 import com.shieldblaze.expressgateway.backend.events.node.NodeOfflineEvent;
 import com.shieldblaze.expressgateway.backend.events.node.NodeRemovedEvent;
 import com.shieldblaze.expressgateway.backend.exceptions.NoNodeAvailableException;
-import com.shieldblaze.expressgateway.backend.exceptions.NodeOfflineException;
 import com.shieldblaze.expressgateway.backend.exceptions.LoadBalanceException;
 import com.shieldblaze.expressgateway.backend.loadbalance.SessionPersistence;
-import com.shieldblaze.expressgateway.backend.strategy.l7.http.sessionpersistence.NOOPSessionPersistence;
 import com.shieldblaze.expressgateway.concurrent.event.Event;
-import com.shieldblaze.expressgateway.concurrent.eventstream.EventListener;
-
-import java.util.Optional;
 
 /**
  * Select {@link Node} Randomly
  */
-public final class Random extends HTTPBalance {
+public final class HTTPRandom extends HTTPBalance {
+
+    private final java.util.Random RANDOM = new java.util.Random();
 
     /**
-     * Create {@link Random} Instance
+     * Create {@link HTTPRandom} Instance
      *
      * @param sessionPersistence {@link SessionPersistence} Implementation Instance
      */
-    public Random(SessionPersistence<HTTPBalanceResponse, HTTPBalanceResponse, HTTPBalanceRequest, Node> sessionPersistence) {
+    public HTTPRandom(SessionPersistence<HTTPBalanceResponse, HTTPBalanceResponse, HTTPBalanceRequest, Node> sessionPersistence) {
         super(sessionPersistence);
     }
 
@@ -61,16 +57,12 @@ public final class Random extends HTTPBalance {
             }
         }
 
-        Optional<Node> optionalNode = cluster.nodes()
-                .stream()
-                .findAny();
-
-        // If we don't have any node available then throw an exception.
-        if (optionalNode.isEmpty()) {
-            throw new NoNodeAvailableException();
+        Node node;
+        try {
+            node = cluster.nodes().get(RANDOM.nextInt(cluster.nodes().size()));
+        } catch (Exception ex) {
+            throw new NoNodeAvailableException(ex);
         }
-
-        Node node = optionalNode.get();
 
         // Add to session persistence and return
         return sessionPersistence.addRoute(request, node);

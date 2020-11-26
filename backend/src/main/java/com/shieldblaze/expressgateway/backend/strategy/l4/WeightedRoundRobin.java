@@ -17,9 +17,10 @@
  */
 package com.shieldblaze.expressgateway.backend.strategy.l4;
 
+import com.google.common.collect.Range;
+import com.google.common.collect.TreeRangeMap;
 import com.shieldblaze.expressgateway.backend.Node;
 import com.shieldblaze.expressgateway.backend.State;
-import com.shieldblaze.expressgateway.backend.cluster.Cluster;
 import com.shieldblaze.expressgateway.backend.events.node.NodeEvent;
 import com.shieldblaze.expressgateway.backend.events.node.NodeIdleEvent;
 import com.shieldblaze.expressgateway.backend.events.node.NodeOfflineEvent;
@@ -30,16 +31,19 @@ import com.shieldblaze.expressgateway.backend.exceptions.NoNodeAvailableExceptio
 import com.shieldblaze.expressgateway.backend.loadbalance.SessionPersistence;
 import com.shieldblaze.expressgateway.common.algo.roundrobin.RoundRobinIndexGenerator;
 import com.shieldblaze.expressgateway.concurrent.event.Event;
-import com.shieldblaze.expressgateway.concurrent.eventstream.EventListener;
 
 import java.net.InetSocketAddress;
+import java.util.concurrent.atomic.AtomicInteger;
 
 /**
  * Select {@link Node} based on Weight using Round-Robin
  */
+@SuppressWarnings("UnstableApiUsage")
 public final class WeightedRoundRobin extends L4Balance {
 
     private final RoundRobinIndexGenerator roundRobinIndexGenerator = new RoundRobinIndexGenerator(0);
+    private final TreeRangeMap<Integer, Node> weightMap = TreeRangeMap.create();
+    private final AtomicInteger totalWeight = new AtomicInteger(0);
 
     /**
      * Create {@link WeightedRoundRobin} Instance
@@ -62,9 +66,13 @@ public final class WeightedRoundRobin extends L4Balance {
         }
 
         try {
-            node = cluster.nodes().get(roundRobinIndexGenerator.next());
+            int index = roundRobinIndexGenerator.next();
+            node = weightMap.get(index);
+            if (node == null) {
+                throw new NullPointerException("Node not found for Index: " + index);
+            }
         } catch (Exception ex) {
-            throw new NoNodeAvailableException();
+            throw new NoNodeAvailableException(ex);
         }
 
         sessionPersistence.addRoute(l4Request.socketAddress(), node);
@@ -77,9 +85,15 @@ public final class WeightedRoundRobin extends L4Balance {
             NodeEvent nodeEvent = (NodeEvent) event;
             if (nodeEvent instanceof NodeOfflineEvent || nodeEvent instanceof NodeRemovedEvent || nodeEvent instanceof NodeIdleEvent) {
                 sessionPersistence.remove(nodeEvent.node());
-                roundRobinIndexGenerator.decMaxIndex();
+                totalWeight.updateAndGet(higherKey -> {
+                    int lowerKey = higherKey - nodeEvent.node().weight();
+                    weightMap.remove(Range.closed(lowerKey, higherKey));
+                    return lowerKey;
+                });
+                roundRobinIndexGenerator.setMaxIndex(totalWeight.get());
             } else if (nodeEvent instanceof NodeOnlineEvent) {
-                roundRobinIndexGenerator.incMaxIndex();
+                weightMap.put(Range.closed(totalWeight.get(), totalWeight.addAndGet(nodeEvent.node().weight())), nodeEvent.node());
+                roundRobinIndexGenerator.setMaxIndex(totalWeight.get());
             }
         }
     }

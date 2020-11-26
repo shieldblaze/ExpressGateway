@@ -56,7 +56,7 @@ public final class HTTPCompressionUtil {
         MIME_TYPES.add("font/opentype");
     }
 
-    public static String getTargetEncoding(Http2Headers headers, String acceptEncoding) {
+    public static String targetEncoding(Http2Headers headers, String acceptEncoding) {
         // If "CONTENT-ENCODING" is already set then we will not do anything.
         if (headers.contains(HttpHeaderNames.CONTENT_ENCODING)) {
             return null;
@@ -73,7 +73,7 @@ public final class HTTPCompressionUtil {
         return determineEncoding(acceptEncoding);
     }
 
-    public static String getTargetEncoding(HttpResponse response, String acceptEncoding) {
+    public static String targetEncoding(HttpResponse response, String acceptEncoding) {
 
         // If "CONTENT-ENCODING" is already set then we will not do anything.
         if (response.headers().contains(HttpHeaderNames.CONTENT_ENCODING)) {

@@ -33,7 +33,6 @@ final class DefaultL4LoadBalancer extends L4LoadBalancer {
 
     /**
      * @param bindAddress       {@link InetSocketAddress} on which {@link L4FrontListener} will bind and listen.
-     * @param loadBalance       {@link LoadBalance} to use for load balancing
      * @param l4FrontListener   {@link L4FrontListener} for listening traffic
      * @param cluster           {@link Cluster} to be Load Balanced
      * @param coreConfiguration {@link CoreConfiguration} to be applied
@@ -43,13 +42,12 @@ final class DefaultL4LoadBalancer extends L4LoadBalancer {
      * @throws NullPointerException If a required parameter if {@code null}
      */
     DefaultL4LoadBalancer(InetSocketAddress bindAddress,
-                          LoadBalance<?, ?, ?, ?> loadBalance,
                           L4FrontListener l4FrontListener,
                           Cluster cluster,
                           CoreConfiguration coreConfiguration,
                           TLSConfiguration tlsForServer,
                           TLSConfiguration tlsForClient,
                           ChannelHandler channelHandler) {
-        super(bindAddress, loadBalance, l4FrontListener, cluster, coreConfiguration, tlsForServer, tlsForClient, channelHandler);
+        super(bindAddress, l4FrontListener, cluster, coreConfiguration, tlsForServer, tlsForClient, channelHandler);
     }
 }

@@ -30,7 +30,7 @@ import java.net.InetSocketAddress;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNotEquals;
 
-class RoundRobinTest {
+class HTTPRoundRobinTest {
 
     @Test
     void testRoundRobin() throws LoadBalanceException {

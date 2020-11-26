@@ -119,9 +119,9 @@ public final class Node implements Comparable<Node> {
         this.hash = String.valueOf(Objects.hashCode(this));
         this.healthCheck = healthCheck;
 
-        state(State.ONLINE);
         weight(weight);
         maxConnections(maxConnections);
+        state(State.ONLINE);
     }
 
     public Cluster cluster() {
