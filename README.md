@@ -14,6 +14,15 @@
 - :heavy_check_mark: Full IPv6 Support
 - :heavy_check_mark: NAT-forwarding
 
+### L7:
+- :heavy_check_mark: Full HTTP/1.1 and HTTP/2
+- :heavy_check_mark: HTTP/2 to HTTP/1.1 Translation
+- :heavy_check_mark: HTTP/1.1 to HTTP/2 Translation
+- :heavy_check_mark: Reverse Proxy
+- :heavy_check_mark: HTTP Compression (GZIP, Deflate and Brotli)
+- :heavy_check_mark: HTTP Connection Pool
+- [ ] HTTP Caching
+
 ### TLS:
 - :heavy_check_mark: TLS Support (v1.1, v1.2 and v1.3)
 - :heavy_check_mark: TLS Offload
@@ -22,15 +31,6 @@
 - :heavy_check_mark: OCSP Certificate Validation
 - :heavy_check_mark: Server Name Indication (SNI) Support
 - :heavy_check_mark: StartTLS Support
-
-### L7:
-- :heavy_check_mark: Full HTTP/1.1 and HTTP/2
-- :heavy_check_mark: HTTP/2 to HTTP/1.1 Translation
-- :heavy_check_mark: HTTP/1.1 to HTTP/2 Translation
-- :heavy_check_mark: Reverse Proxy
-- :heavy_check_mark: HTTP Compression (GZIP, Deflate and Brotli)
-- [ ] HTTP Caching
-- :heavy_check_mark: HTTP Connection Pool
 
 ### Health Checking:
 - :heavy_check_mark: L4 Based Health Check using TCP/UDP
