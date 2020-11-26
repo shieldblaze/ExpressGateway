@@ -36,6 +36,8 @@ import java.util.Optional;
  */
 public final class Random extends L4Balance {
 
+    private final java.util.Random RANDOM = new java.util.Random();
+
     /**
      * Create {@link Random} Instance
      *
@@ -56,16 +58,11 @@ public final class Random extends L4Balance {
             }
         }
 
-        Optional<Node> optionalNode = cluster.nodes()
-                .stream()
-                .findAny();
-
-        // If we don't have any node available then throw an exception.
-        if (optionalNode.isEmpty()) {
-            throw new NoNodeAvailableException();
+        try {
+            node = cluster.nodes().get(RANDOM.nextInt(cluster.nodes().size()));
+        } catch (Exception ex) {
+            throw new NoNodeAvailableException(ex);
         }
-
-        node = optionalNode.get();
 
         // Add to session persistence
         sessionPersistence.addRoute(l4Request.socketAddress(), node);

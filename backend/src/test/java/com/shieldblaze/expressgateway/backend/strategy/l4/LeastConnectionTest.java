@@ -74,10 +74,10 @@ class LeastConnectionTest {
             }
         }
 
-        assertEquals(250000, first);
-        assertEquals(250000, second);
-        assertEquals(250000, third);
-        assertEquals(250000, forth);
+        assertEquals(250_000, first);
+        assertEquals(250_000, second);
+        assertEquals(250_000, third);
+        assertEquals(250_000, forth);
     }
 
     private static Node fastBuild(Cluster cluster, String host) {

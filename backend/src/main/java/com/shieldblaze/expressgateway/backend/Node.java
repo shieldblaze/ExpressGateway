@@ -90,17 +90,12 @@ public final class Node implements Comparable<Node> {
     private final HealthCheck healthCheck;
 
     /**
-     * Weight of this {@link Node}
-     */
-    private int weight;
-
-    /**
      * Max Connections handled by this {@link Node}
      */
     private int maxConnections;
 
     public Node(Cluster cluster, InetSocketAddress socketAddress) {
-        this(cluster, socketAddress, 100, -1, null);
+        this(cluster, socketAddress, -1, null);
     }
 
     /**
@@ -110,7 +105,6 @@ public final class Node implements Comparable<Node> {
      */
     public Node(@NonNull Cluster cluster,
                 @NonNull InetSocketAddress socketAddress,
-                int weight,
                 int maxConnections,
                 HealthCheck healthCheck) {
 
@@ -119,7 +113,6 @@ public final class Node implements Comparable<Node> {
         this.hash = String.valueOf(Objects.hashCode(this));
         this.healthCheck = healthCheck;
 
-        weight(weight);
         maxConnections(maxConnections);
         state(State.ONLINE);
     }
@@ -215,20 +208,12 @@ public final class Node implements Comparable<Node> {
         return healthCheck;
     }
 
-    public int weight() {
-        return weight;
-    }
-
-    public void weight(int weight) {
-        this.weight = Number.checkPositive(weight, "Weight");
-    }
-
     public int maxConnections() {
         return maxConnections;
     }
 
     public void maxConnections(int maxConnections) {
-        this.maxConnections = Number.checkRange(maxConnections, -1, 1_000_000, "MaxConnections");
+        this.maxConnections = Number.checkRange(maxConnections, -1, Integer.MAX_VALUE, "MaxConnections");
     }
 
     public String hash() {
@@ -312,9 +297,13 @@ public final class Node implements Comparable<Node> {
     @Override
     public String toString() {
         return "Node{" +
-                "socketAddress=" + socketAddress +
+                ", Cluster=" + cluster +
+                ", Address=" + socketAddress +
+                ", BytesSent=" + bytesSent +
+                ", BytesReceived=" + bytesReceived +
+                ", Connections=" + activeConnection() + "/" + maxConnections +
                 ", state=" + state +
-                ", healthCheck=" + health() +
+                ", healthCheck=" + healthCheck +
                 '}';
     }
 
