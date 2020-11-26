@@ -36,7 +36,6 @@ class LeastConnectionTest {
         EventStream eventStream = new EventStream();
 
         ClusterPool cluster = new ClusterPool(eventStream, new LeastConnection(new NOOPSessionPersistence()));
-        L4Balance l4Balance = new LeastConnection(new NOOPSessionPersistence());
 
         cluster.addNode(fastBuild(cluster, "10.10.1.1"));
         cluster.addNode(fastBuild(cluster, "10.10.1.2"));
@@ -51,7 +50,7 @@ class LeastConnectionTest {
         L4Request l4Request = new L4Request(new InetSocketAddress("192.168.1.1", 1));
 
         for (int i = 0; i < 1_000_000; i++) {
-            Node node = l4Balance.response(l4Request).node();
+            Node node = cluster.nextNode(l4Request).node();
             node.incActiveConnection0();
             switch (node.socketAddress().getHostString()) {
                 case "10.10.1.1": {

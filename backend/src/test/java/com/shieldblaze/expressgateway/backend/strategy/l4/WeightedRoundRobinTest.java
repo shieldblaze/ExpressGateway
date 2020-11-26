@@ -29,7 +29,7 @@ import java.net.InetSocketAddress;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 
-class HTTPWeightedHTTPRoundRobinTest {
+class WeightedRoundRobinTest {
 
     @Test
     void testWeightedRound() throws LoadBalanceException {
