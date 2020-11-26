@@ -56,7 +56,7 @@ final class UpstreamHandlerTest {
     static L4LoadBalancer l4LoadBalancer;
 
     @BeforeAll
-    static void setup() throws InterruptedException, ExecutionException {
+    static void setup() throws Throwable {
         new TCPServer().start();
 
         TransportConfiguration transportConfiguration = TransportConfigurationBuilder.newBuilder()
@@ -85,7 +85,6 @@ final class UpstreamHandlerTest {
                 .build();
 
         Cluster cluster = new ClusterPool(new EventStream(), new RoundRobin(new NOOPSessionPersistence()));
-
         cluster.addNode(new Node(cluster, new InetSocketAddress("127.0.0.1", 9111)));
 
         l4LoadBalancer = L4LoadBalancerBuilder.newBuilder()
@@ -97,6 +96,9 @@ final class UpstreamHandlerTest {
 
         L4FrontListenerStartupEvent l4FrontListenerStartupEvent = l4LoadBalancer.start();
         l4FrontListenerStartupEvent.future().get();
+        if (!l4FrontListenerStartupEvent.success()) {
+            throw l4FrontListenerStartupEvent.throwable();
+        }
         assertTrue(l4FrontListenerStartupEvent.success());
     }
 
