@@ -56,7 +56,7 @@ final class UpstreamHandlerTest {
     static L4LoadBalancer l4LoadBalancer;
 
     @BeforeAll
-    static void setup() throws Throwable {
+    static void setup() {
         new TCPServer().start();
 
         TransportConfiguration transportConfiguration = TransportConfigurationBuilder.newBuilder()
@@ -100,9 +100,9 @@ final class UpstreamHandlerTest {
     }
 
     @AfterAll
-    static void stop() throws ExecutionException, InterruptedException {
+    static void stop() {
         L4FrontListenerStopEvent l4FrontListenerStopEvent = l4LoadBalancer.stop();
-        l4FrontListenerStopEvent.future().get();
+        l4FrontListenerStopEvent.future().join();
         assertTrue(l4FrontListenerStopEvent.success());
     }
 

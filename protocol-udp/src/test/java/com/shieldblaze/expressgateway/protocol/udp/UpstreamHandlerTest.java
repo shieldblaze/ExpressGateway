@@ -33,11 +33,10 @@ import com.shieldblaze.expressgateway.configuration.transport.TransportConfigura
 import com.shieldblaze.expressgateway.configuration.transport.TransportConfigurationBuilder;
 import com.shieldblaze.expressgateway.configuration.transport.TransportType;
 import com.shieldblaze.expressgateway.core.EventLoopFactory;
+import com.shieldblaze.expressgateway.core.events.L4FrontListenerStartupEvent;
 import com.shieldblaze.expressgateway.core.events.L4FrontListenerStopEvent;
 import com.shieldblaze.expressgateway.core.loadbalancer.L4LoadBalancer;
-import com.shieldblaze.expressgateway.core.events.L4FrontListenerStartupEvent;
 import com.shieldblaze.expressgateway.core.loadbalancer.L4LoadBalancerBuilder;
-import io.netty.channel.epoll.Epoll;
 import org.junit.jupiter.api.AfterAll;
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.Test;
@@ -47,7 +46,6 @@ import java.net.DatagramSocket;
 import java.net.InetAddress;
 import java.net.InetSocketAddress;
 import java.util.Arrays;
-import java.util.concurrent.ExecutionException;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertTrue;
@@ -58,7 +56,7 @@ final class UpstreamHandlerTest {
     static EventLoopFactory eventLoopFactory;
 
     @BeforeAll
-    static void setup() throws InterruptedException, ExecutionException {
+    static void setup() {
         new UDPServer().start();
 
         TransportConfiguration transportConfiguration = TransportConfigurationBuilder.newBuilder()
@@ -99,14 +97,14 @@ final class UpstreamHandlerTest {
                 .build();
 
         L4FrontListenerStartupEvent l4FrontListenerStartupEvent = l4LoadBalancer.start();
-        l4FrontListenerStartupEvent.future().get();
+        l4FrontListenerStartupEvent.future().join();
         assertTrue(l4FrontListenerStartupEvent.success());
     }
 
     @AfterAll
-    static void stop() throws ExecutionException, InterruptedException {
+    static void stop() {
         L4FrontListenerStopEvent l4FrontListenerStopEvent = l4LoadBalancer.stop();
-        l4FrontListenerStopEvent.future().get();
+        l4FrontListenerStopEvent.future().join();
         assertTrue(l4FrontListenerStopEvent.success());
     }
 
