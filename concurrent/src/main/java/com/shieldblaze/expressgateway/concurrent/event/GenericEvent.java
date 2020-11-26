@@ -24,13 +24,12 @@ import java.util.concurrent.CompletableFuture;
  */
 public class GenericEvent<T> implements Event<T> {
 
-    private CompletableFuture<T> future;
+    private CompletableFuture<T> future = new CompletableFuture<>();
     private boolean finished;
     private boolean success;
     private Throwable throwable;
 
     public void trySuccess(T object) {
-        future = new CompletableFuture<>();
         future.complete(object);
         finished(true);
         success(true);
@@ -38,7 +37,6 @@ public class GenericEvent<T> implements Event<T> {
     }
 
     public void tryFailure(Throwable cause) {
-        future = new CompletableFuture<>();
         future.completeExceptionally(cause);
         finished(true);
         success(false);
