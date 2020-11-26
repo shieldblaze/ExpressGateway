@@ -112,10 +112,11 @@ public class TCPListener extends L4FrontListener {
 
         // Add listener to last ChannelFuture to notify all listeners
         channelFutures.get(channelFutures.size() - 1).addListener((ChannelFutureListener) future -> {
-            System.out.println(future);
             if (future.isSuccess()) {
+                System.out.println("Success:" + future);
                 l4FrontListenerStartupEvent.trySuccess(null);
             } else {
+                System.out.println("Failure:" + future);
                 l4FrontListenerStartupEvent.tryFailure(future.cause());
             }
         });
