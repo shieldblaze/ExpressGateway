@@ -155,6 +155,8 @@ class UpstreamHandlerTest {
         HTTPServer httpServer = new HTTPServer(10000, true);
         httpServer.start();
 
+        Thread.sleep(500L);
+
         Cluster cluster = new ClusterPool(new EventStream(), new HTTPRoundRobin(NOOPSessionPersistence.INSTANCE));
         cluster.hostname("localhost");
         new Node(cluster, new InetSocketAddress("127.0.0.1", 10000));
@@ -210,6 +212,8 @@ class UpstreamHandlerTest {
         HTTPServer httpServer = new HTTPServer(10001, false);
         httpServer.start();
 
+        Thread.sleep(500L);
+
         Cluster cluster = new ClusterPool(new EventStream(), new HTTPRoundRobin(NOOPSessionPersistence.INSTANCE));
         cluster.hostname("localhost");
         new Node(cluster, new InetSocketAddress("127.0.0.1", 10001));
@@ -264,6 +268,8 @@ class UpstreamHandlerTest {
         HTTPServer httpServer = new HTTPServer(10002, true);
         httpServer.start();
 
+        Thread.sleep(500L);
+
         Cluster cluster = new ClusterPool(new EventStream(), new HTTPRoundRobin(NOOPSessionPersistence.INSTANCE));
         cluster.hostname("localhost");
         new Node(cluster, new InetSocketAddress("127.0.0.1", 10002));
@@ -305,6 +311,8 @@ class UpstreamHandlerTest {
     void http1BackendWithoutTLSClient() throws Exception {
         HTTPServer httpServer = new HTTPServer(10003, false);
         httpServer.start();
+
+        Thread.sleep(500L);
 
         Cluster cluster = new ClusterPool(new EventStream(), new HTTPRoundRobin(NOOPSessionPersistence.INSTANCE));
         cluster.hostname("localhost");
