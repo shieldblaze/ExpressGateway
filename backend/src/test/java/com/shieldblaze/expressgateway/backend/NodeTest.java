@@ -59,6 +59,7 @@ class NodeTest {
         eventLoopGroup.shutdownGracefully();
     }
 
+    @SuppressWarnings("unchecked")
     @Test
     void testConnections() throws InterruptedException, TooManyConnectionsException {
         Cluster cluster = new ClusterPool(new EventStream(), new RoundRobin(NOOPSessionPersistence.INSTANCE));
@@ -108,7 +109,7 @@ class NodeTest {
                 });
 
         ChannelFuture channelFuture = bootstrap.connect("127.0.0.1", 9110);
-        TCPConnection tcpConnection = new TCPConnection(1000);
+        TCPConnection tcpConnection = new TCPConnection();
         tcpConnection.init(channelFuture);
         return tcpConnection;
     }
@@ -131,8 +132,8 @@ class NodeTest {
 
     private static final class TCPConnection extends Connection {
 
-        private TCPConnection(long timeout) {
-            super(timeout);
+        private TCPConnection() {
+            super(1000);
         }
 
         @Override

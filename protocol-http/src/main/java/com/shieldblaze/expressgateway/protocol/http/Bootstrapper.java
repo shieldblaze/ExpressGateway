@@ -82,7 +82,10 @@ final class Bootstrapper {
                 } else {
                     String hostname = node.socketAddress().getHostName();
                     int port = node.socketAddress().getPort();
-                    SslHandler sslHandler = httpLoadBalancer.tlsForClient().defaultMapping().sslContext().newHandler(ch.alloc(), hostname, port);
+                    SslHandler sslHandler = httpLoadBalancer.tlsForClient()
+                            .defaultMapping()
+                            .sslContext()
+                            .newHandler(ch.alloc(), hostname, port);
 
                     ALPNHandler alpnHandler = ALPNHandlerBuilder.newBuilder()
                             // HTTP/2 Handlers

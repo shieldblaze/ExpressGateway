@@ -39,6 +39,7 @@ import io.netty.handler.codec.http.HttpServerCodec;
 import io.netty.handler.codec.http.HttpVersion;
 import io.netty.handler.codec.http2.DefaultHttp2Connection;
 import io.netty.handler.codec.http2.Http2Connection;
+import io.netty.handler.codec.http2.HttpConversionUtil;
 import io.netty.handler.codec.http2.HttpToHttp2ConnectionHandler;
 import io.netty.handler.codec.http2.HttpToHttp2ConnectionHandlerBuilder;
 import io.netty.handler.codec.http2.InboundHttp2ToHttpAdapter;
@@ -105,6 +106,7 @@ public class HTTPServer extends Thread {
 
                                 ALPNHandler alpnHandler = ALPNHandlerBuilder.newBuilder()
                                         .withHTTP2ChannelHandler(httpToHttp2ConnectionHandler)
+                                        .withHTTP2ChannelHandler(new Handler())
                                         .withHTTP1ChannelHandler(new HttpServerCodec())
                                         .withHTTP1ChannelHandler(new HttpObjectAggregator(Integer.MAX_VALUE))
                                         .withHTTP1ChannelHandler(new Handler())
@@ -135,7 +137,12 @@ public class HTTPServer extends Thread {
         @Override
         protected void channelRead0(ChannelHandlerContext ctx, FullHttpRequest msg) {
             HttpResponse httpResponse = new DefaultFullHttpResponse(HttpVersion.HTTP_1_1, HttpResponseStatus.OK, Unpooled.wrappedBuffer("Meow".getBytes()));
-            httpResponse.headers().set(HttpHeaderNames.CONTENT_LENGTH, 4);
+            if (msg.headers().contains(HttpConversionUtil.ExtensionHeaderNames.STREAM_ID.text())) {
+                httpResponse.headers().set(HttpConversionUtil.ExtensionHeaderNames.STREAM_ID.text(),
+                        msg.headers().get(HttpConversionUtil.ExtensionHeaderNames.STREAM_ID.text()));
+            } else {
+                httpResponse.headers().set(HttpHeaderNames.CONTENT_LENGTH, 4);
+            }
             ctx.writeAndFlush(httpResponse);
         }
     }

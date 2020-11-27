@@ -246,8 +246,7 @@ public final class Node implements Comparable<Node> {
     }
 
     /**
-     * Try to lease a connection from available connections. This method automatically calls
-     * {@link Connection#lease()}.
+     * Try to lease a connection from available connections.
      *
      * @return {@linkplain Connection} Instance of available and active connection else {@code null}.
      */
