@@ -60,7 +60,9 @@ public abstract class Connection {
             });
 
             // Add listener to be notified when Channel closes
-            this.channelFuture.channel().closeFuture().addListener((ChannelFutureListener) future -> inUse = false);
+            this.channelFuture.channel()
+                    .closeFuture()
+                    .addListener((ChannelFutureListener) future -> inUse = false);
         } else {
             throw new IllegalArgumentException("Connection is already initialized");
         }

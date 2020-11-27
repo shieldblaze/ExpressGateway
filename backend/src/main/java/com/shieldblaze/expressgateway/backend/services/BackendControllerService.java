@@ -34,7 +34,7 @@ import java.util.concurrent.ScheduledFuture;
 import java.util.concurrent.TimeUnit;
 
 /**
- * Controls and manages {@linkplain Backend}
+ * Controls and manages {@linkplain Node}
  */
 public class BackendControllerService implements EventListener {
     private final Map<Node, NodeServices> nodeServicesMap = new ConcurrentHashMap<>();
