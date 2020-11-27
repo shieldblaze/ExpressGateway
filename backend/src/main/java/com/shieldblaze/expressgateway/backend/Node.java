@@ -110,6 +110,8 @@ public final class Node implements Comparable<Node> {
                 HealthCheck healthCheck) {
 
         this.cluster = cluster;
+        this.cluster.addNode(this);
+
         this.socketAddress = socketAddress;
         this.hash = String.valueOf(Objects.hashCode(this));
         this.healthCheck = healthCheck;

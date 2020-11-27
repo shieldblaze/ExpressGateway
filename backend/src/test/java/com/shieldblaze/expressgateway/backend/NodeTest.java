@@ -25,6 +25,7 @@ import com.shieldblaze.expressgateway.backend.services.BackendControllerService;
 import com.shieldblaze.expressgateway.backend.strategy.l4.RoundRobin;
 import com.shieldblaze.expressgateway.backend.strategy.l4.sessionpersistence.NOOPSessionPersistence;
 import com.shieldblaze.expressgateway.concurrent.eventstream.EventStream;
+import com.shieldblaze.expressgateway.healthcheck.l4.TCPHealthCheck;
 import io.netty.bootstrap.Bootstrap;
 import io.netty.buffer.ByteBuf;
 import io.netty.channel.ChannelFuture;
@@ -33,60 +34,83 @@ import io.netty.channel.EventLoopGroup;
 import io.netty.channel.SimpleChannelInboundHandler;
 import io.netty.channel.nio.NioEventLoopGroup;
 import io.netty.channel.socket.nio.NioSocketChannel;
+import org.junit.jupiter.api.AfterAll;
+import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.Test;
 
 import java.net.InetSocketAddress;
 import java.net.ServerSocket;
+import java.time.Duration;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertThrows;
 
 class NodeTest {
 
+    static EventLoopGroup eventLoopGroup;
+
+    @BeforeAll
+    static void initEventLoopGroup() {
+        eventLoopGroup = new NioEventLoopGroup(2);
+    }
+
+    @AfterAll
+    static void stopEventLoopGroup() {
+        eventLoopGroup.shutdownGracefully();
+    }
+
     @Test
-    void testNodeCreation() throws InterruptedException, TooManyConnectionsException {
+    void testConnections() throws InterruptedException, TooManyConnectionsException {
         Cluster cluster = new ClusterPool(new EventStream(), new RoundRobin(new NOOPSessionPersistence()));
-
-        Node node = new Node(cluster, new InetSocketAddress("127.0.0.1", 1));
-        cluster.addNode(node);
-
-        // Verify 0 connections in beginning
-        assertEquals(0, node.activeConnection());
-        assertEquals(0, node.activeConnection0());
+        cluster.eventSubscriber().subscribe(new BackendControllerService());
 
         // Start TCP Server
         TCPServer tcpServer = new TCPServer();
         tcpServer.start();
         Thread.sleep(500L);
 
-        // Start 100 TCP Connections and connect to TCP Server
-        EventLoopGroup eventLoopGroup = new NioEventLoopGroup(2);
-        for (int i = 0; i < 100; i++) {
-            Bootstrap bootstrap = new Bootstrap()
-                    .group(eventLoopGroup)
-                    .channel(NioSocketChannel.class)
-                    .handler(new SimpleChannelInboundHandler<ByteBuf>() {
-                        @Override
-                        protected void channelRead0(ChannelHandlerContext ctx, ByteBuf msg) {
-                            // Ignore
-                        }
-                    });
+        TCPHealthCheck healthCheck = new TCPHealthCheck(new InetSocketAddress("127.0.0.1", 9110), Duration.ofSeconds(1));
+        Node node = new Node(cluster, new InetSocketAddress("127.0.0.1", 1), 100, healthCheck);
 
-            ChannelFuture channelFuture = bootstrap.connect("127.0.0.1", 9110);
-            TCPConnection tcpConnection = new TCPConnection(1000);
-            tcpConnection.init(channelFuture);
-            node.addConnection(tcpConnection);
+        // Verify 0 connections in beginning
+        assertEquals(0, node.activeConnection());
+        assertEquals(0, node.activeConnection0());
+
+        // Start 100 TCP Connections and connect to TCP Server
+        for (int i = 0; i < 100; i++) {
+            node.addConnection(connection());
         }
 
         // Verify 100 connections are active
         assertEquals(100, node.activeConnection());
 
+        // Try connection 1 more connection which will cause maximum connection limit to exceed.
+        assertThrows(TooManyConnectionsException.class, () -> node.addConnection(connection()));
+
         // Mark Node as Offline and shutdown TCP Server
-        node.state(State.OFFLINE);
+        healthCheck.run();
         tcpServer.run = false;
         Thread.sleep(1000L);
 
         // Verify 0 connections are active
         assertEquals(0, node.activeConnection());
+    }
+
+    private Connection connection() {
+        Bootstrap bootstrap = new Bootstrap()
+                .group(eventLoopGroup)
+                .channel(NioSocketChannel.class)
+                .handler(new SimpleChannelInboundHandler<ByteBuf>() {
+                    @Override
+                    protected void channelRead0(ChannelHandlerContext ctx, ByteBuf msg) {
+                        // Ignore
+                    }
+                });
+
+        ChannelFuture channelFuture = bootstrap.connect("127.0.0.1", 9110);
+        TCPConnection tcpConnection = new TCPConnection(1000);
+        tcpConnection.init(channelFuture);
+        return tcpConnection;
     }
 
     private static final class TCPServer extends Thread {

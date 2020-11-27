@@ -36,8 +36,8 @@ class SourceIPHashTest {
     void testSourceIPHash() throws LoadBalanceException {
 
         Cluster cluster = new ClusterPool(new EventStream(), new RoundRobin(new SourceIPHash()));
-        cluster.addNode(fastBuild(cluster, "172.16.20.1"));
-        cluster.addNode(fastBuild(cluster, "172.16.20.2"));
+        fastBuild(cluster, "172.16.20.1");
+        fastBuild(cluster, "172.16.20.2");
 
         assertEquals(new InetSocketAddress("172.16.20.1", 1),
                 cluster.nextNode(new L4Request(new InetSocketAddress("192.168.1.1", 1))).node().socketAddress());

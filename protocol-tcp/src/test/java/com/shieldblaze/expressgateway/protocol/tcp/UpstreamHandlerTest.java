@@ -84,7 +84,7 @@ final class UpstreamHandlerTest {
                 .build();
 
         Cluster cluster = new ClusterPool(new EventStream(), new RoundRobin(new NOOPSessionPersistence()));
-        cluster.addNode(new Node(cluster, new InetSocketAddress("127.0.0.1", 9111)));
+        new Node(cluster, new InetSocketAddress("127.0.0.1", 9111));
 
         l4LoadBalancer = L4LoadBalancerBuilder.newBuilder()
                 .withCoreConfiguration(coreConfiguration)

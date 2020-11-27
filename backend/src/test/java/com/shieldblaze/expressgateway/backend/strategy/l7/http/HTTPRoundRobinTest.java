@@ -40,7 +40,7 @@ class HTTPRoundRobinTest {
 
         // Add Node Server Addresses
         for (int i = 1; i <= 100; i++) {
-            cluster.addNode(fastBuild(cluster, "192.168.1." + i));
+            fastBuild(cluster, "192.168.1." + i);
         }
 
         HTTPBalanceRequest httpBalanceRequest = new HTTPBalanceRequest(new InetSocketAddress("192.168.1.1", 1), EmptyHttpHeaders.INSTANCE);

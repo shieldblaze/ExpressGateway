@@ -36,11 +36,10 @@ class LeastConnectionTest {
         EventStream eventStream = new EventStream();
 
         ClusterPool cluster = new ClusterPool(eventStream, new LeastConnection(new NOOPSessionPersistence()));
-
-        cluster.addNode(fastBuild(cluster, "10.10.1.1"));
-        cluster.addNode(fastBuild(cluster, "10.10.1.2"));
-        cluster.addNode(fastBuild(cluster, "10.10.1.3"));
-        cluster.addNode(fastBuild(cluster, "10.10.1.4"));
+        fastBuild(cluster, "10.10.1.1");
+        fastBuild(cluster, "10.10.1.2");
+        fastBuild(cluster, "10.10.1.3");
+        fastBuild(cluster, "10.10.1.4");
 
         int first = 0;
         int second = 0;

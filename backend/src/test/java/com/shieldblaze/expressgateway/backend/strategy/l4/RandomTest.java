@@ -35,11 +35,11 @@ class RandomTest {
     void testRandom() throws LoadBalanceException {
 
         Cluster cluster = new ClusterPool(new EventStream(), new Random(new NOOPSessionPersistence()));
-        cluster.addNode(fastBuild(cluster, "172.16.20.1"));
-        cluster.addNode(fastBuild(cluster, "172.16.20.2"));
-        cluster.addNode(fastBuild(cluster, "172.16.20.3"));
-        cluster.addNode(fastBuild(cluster, "172.16.20.4"));
-        cluster.addNode(fastBuild(cluster, "172.16.20.5"));
+        fastBuild(cluster, "172.16.20.1");
+        fastBuild(cluster, "172.16.20.2");
+        fastBuild(cluster, "172.16.20.3");
+        fastBuild(cluster, "172.16.20.4");
+        fastBuild(cluster, "172.16.20.5");
 
         L4Request l4Request = new L4Request(new InetSocketAddress("192.168.1.1", 1));
 

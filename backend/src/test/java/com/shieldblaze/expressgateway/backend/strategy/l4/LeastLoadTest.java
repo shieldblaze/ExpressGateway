@@ -36,11 +36,10 @@ class LeastLoadTest {
         EventStream eventStream = new EventStream();
 
         ClusterPool cluster = new ClusterPool(eventStream, new LeastLoad(new NOOPSessionPersistence()));
-
-        cluster.addNode(fastBuild(cluster, "10.10.1.1", 100_000));
-        cluster.addNode(fastBuild(cluster, "10.10.1.2", 200_000));
-        cluster.addNode(fastBuild(cluster, "10.10.1.3", 300_000));
-        cluster.addNode(fastBuild(cluster, "10.10.1.4", 400_000));
+        fastBuild(cluster, "10.10.1.1", 100_000);
+        fastBuild(cluster, "10.10.1.2", 200_000);
+        fastBuild(cluster, "10.10.1.3", 300_000);
+        fastBuild(cluster, "10.10.1.4", 400_000);
 
         int first = 0;
         int second = 0;
