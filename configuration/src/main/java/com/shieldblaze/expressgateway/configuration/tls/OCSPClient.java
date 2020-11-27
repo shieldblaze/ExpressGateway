@@ -71,17 +71,14 @@ final class OCSPClient {
         byte[] nonce = new byte[6];
         SecureRandom.getInstanceStrong().nextBytes(nonce);
         DEROctetString derNonce = new DEROctetString(nonce);
-
         builder.setRequestExtensions(new Extensions(new Extension(OCSPObjectIdentifiers.id_pkix_ocsp_nonce, false, derNonce)));
 
         OCSPResp ocspResp = queryCA(URI.create(getOcspUrlFromCertificate(x509Certificate)), builder.build());
-
         if (ocspResp.getStatus() != OCSPResponseStatus.SUCCESSFUL) {
             throw new IllegalArgumentException("OCSP Request was not successful, Status: " + ocspResp.getStatus());
         }
 
         BasicOCSPResp basicResponse = (BasicOCSPResp) ocspResp.getResponseObject();
-
         checkNonce(basicResponse, derNonce);
         checkSignature(basicResponse, issuer);
 

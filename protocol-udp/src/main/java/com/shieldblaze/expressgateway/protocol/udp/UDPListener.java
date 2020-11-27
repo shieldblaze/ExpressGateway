@@ -88,6 +88,9 @@ public class UDPListener extends L4FrontListener {
 
     @Override
     public L4FrontListenerStopEvent stop() {
+        l4LoadBalancer().eventLoopFactory().parentGroup().shutdownGracefully();
+        l4LoadBalancer().eventLoopFactory().childGroup().shutdownGracefully();
+
         L4FrontListenerStopEvent l4FrontListenerStopEvent = new L4FrontListenerStopEvent();
 
         channelFutures.forEach(channelFuture -> channelFuture.channel().close());
