@@ -11,9 +11,6 @@
         <Root level="debug">
             <AppenderRef ref="ConsoleAppender"/>
         </Root>
-<!--        <Logger name="com.shieldblaze.expressgateway.core.server.http" level="debug">-->
-<!--            <AppenderRef ref="ConsoleAppender"/>-->
-<!--        </Logger>-->
     </Loggers>
 
 </Configuration>
