@@ -82,7 +82,7 @@ final class DownstreamHandler extends ChannelInboundHandlerAdapter {
         channel.writeAndFlush(msg);
     }
 
-    void setChannel(Channel channel) {
+    void channel(Channel channel) {
         this.channel = channel;
     }
 

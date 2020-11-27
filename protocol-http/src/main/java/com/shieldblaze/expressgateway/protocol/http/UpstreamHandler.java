@@ -72,7 +72,7 @@ public final class UpstreamHandler extends ChannelDuplexHandler {
                 connection = bootstrapper.newInit(node, ctx.channel());
                 node.addConnection(connection);
             } else {
-                connection.setUpstreamChannel(ctx.channel());
+                connection.upstreamChannel(ctx.channel());
                 if (!connection.isHTTP2()) {
                     connection.lease();
                 }

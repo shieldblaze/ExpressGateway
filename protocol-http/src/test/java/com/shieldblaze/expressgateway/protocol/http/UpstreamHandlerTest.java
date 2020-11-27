@@ -111,7 +111,7 @@ class UpstreamHandlerTest {
         TLSServerMapping tlsServerMapping = new TLSServerMapping(certificateKeyPair);
 
         forServer = TLSConfigurationBuilder.forServer()
-                .withProtocols(Arrays.asList(Protocol.TLS_1_3, Protocol.TLS_1_2))
+                .withProtocols(Arrays.asList(Protocol.TLS_1_3))
                 .withCiphers(Collections.singletonList(Cipher.TLS_AES_128_GCM_SHA256))
                 .withUseALPN(true)
                 .withTLSServerMapping(tlsServerMapping)
@@ -119,9 +119,9 @@ class UpstreamHandlerTest {
                 .build();
 
         forClient = TLSConfigurationBuilder.forClient()
-                .withProtocols(Arrays.asList(Protocol.TLS_1_3, Protocol.TLS_1_2))
+                .withProtocols(Arrays.asList(Protocol.TLS_1_3))
                 .withCiphers(Collections.singletonList(Cipher.TLS_AES_256_GCM_SHA384))
-                .withUseALPN(false)
+                .withUseALPN(true)
                 .withMutualTLS(MutualTLS.NOT_REQUIRED)
                 .withTrustManager(InsecureTrustManagerFactory.INSTANCE.getTrustManagers()[0])
                 .build();
@@ -151,7 +151,7 @@ class UpstreamHandlerTest {
     }
 
     @Test
-    void http1Backend() throws Exception {
+    void http2Backend() throws Exception {
         HTTPServer httpServer = new HTTPServer(12345, true);
         httpServer.start();
 
@@ -174,9 +174,11 @@ class UpstreamHandlerTest {
         l4FrontListenerStartupEvent.future().join();
         assertTrue(l4FrontListenerStartupEvent.success());
 
+        // Send using HTTP/1.1
         HttpRequest httpRequest = HttpRequest.newBuilder()
                 .GET()
                 .uri(URI.create("https://127.0.0.1:9110"))
+                .version(HttpClient.Version.HTTP_1_1)
                 .timeout(Duration.ofSeconds(5))
                 .build();
 
@@ -184,8 +186,74 @@ class UpstreamHandlerTest {
         assertEquals(200, httpResponse.statusCode());
         assertEquals("Meow", httpResponse.body());
 
-        httpServer.shutdown();
+        // Send using HTTP/2
+        httpRequest = HttpRequest.newBuilder()
+                .GET()
+                .uri(URI.create("https://127.0.0.1:9110"))
+                .version(HttpClient.Version.HTTP_2)
+                .timeout(Duration.ofSeconds(5))
+                .build();
 
+        httpResponse = httpClient.send(httpRequest, HttpResponse.BodyHandlers.ofString());
+        assertEquals(200, httpResponse.statusCode());
+        assertEquals("Meow", httpResponse.body());
+
+        // Shutdown HTTP Server and Load Balancer
+        httpServer.shutdown();
+        L4FrontListenerStopEvent l4FrontListenerStopEvent = httpLoadBalancer.stop();
+        l4FrontListenerStopEvent.future().join();
+        assertTrue(l4FrontListenerStopEvent.success());
+    }
+
+    @Test
+    void http1Backend() throws Exception {
+        HTTPServer httpServer = new HTTPServer(12345, false);
+        httpServer.start();
+
+        Cluster cluster = new ClusterPool(new EventStream(), new HTTPRoundRobin(NOOPSessionPersistence.INSTANCE));
+        cluster.hostname("localhost");
+        new Node(cluster, new InetSocketAddress("127.0.0.1", 12345));
+
+        HTTPLoadBalancer httpLoadBalancer = HTTPLoadBalancerBuilder.newBuilder()
+                .withCoreConfiguration(coreConfiguration)
+                .withHTTPConfiguration(httpConfiguration)
+                .withTLSForServer(forServer)
+                .withCluster(cluster)
+                .withBindAddress(new InetSocketAddress("127.0.0.1", 9110))
+                .withHTTPInitializer(new DefaultHTTPServerInitializer())
+                .withL4FrontListener(new TCPListener())
+                .build();
+
+        L4FrontListenerStartupEvent l4FrontListenerStartupEvent = httpLoadBalancer.start();
+        l4FrontListenerStartupEvent.future().join();
+        assertTrue(l4FrontListenerStartupEvent.success());
+
+        // Send using HTTP/1.1
+        HttpRequest httpRequest = HttpRequest.newBuilder()
+                .GET()
+                .uri(URI.create("https://127.0.0.1:9110"))
+                .version(HttpClient.Version.HTTP_1_1)
+                .timeout(Duration.ofSeconds(5))
+                .build();
+
+        HttpResponse<String> httpResponse = httpClient.send(httpRequest, HttpResponse.BodyHandlers.ofString());
+        assertEquals(200, httpResponse.statusCode());
+        assertEquals("Meow", httpResponse.body());
+
+        // Send using HTTP/2
+        httpRequest = HttpRequest.newBuilder()
+                .GET()
+                .uri(URI.create("https://127.0.0.1:9110"))
+                .version(HttpClient.Version.HTTP_2)
+                .timeout(Duration.ofSeconds(5))
+                .build();
+
+        httpResponse = httpClient.send(httpRequest, HttpResponse.BodyHandlers.ofString());
+        assertEquals(200, httpResponse.statusCode());
+        assertEquals("Meow", httpResponse.body());
+
+        // Shutdown HTTP Server and Load Balancer
+        httpServer.shutdown();
         L4FrontListenerStopEvent l4FrontListenerStopEvent = httpLoadBalancer.stop();
         l4FrontListenerStopEvent.future().join();
         assertTrue(l4FrontListenerStopEvent.success());

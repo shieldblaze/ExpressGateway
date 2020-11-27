@@ -17,6 +17,8 @@
  */
 package com.shieldblaze.expressgateway.protocol.http;
 
+import com.shieldblaze.expressgateway.protocol.http.alpn.ALPNHandler;
+import com.shieldblaze.expressgateway.protocol.http.alpn.ALPNHandlerBuilder;
 import io.netty.bootstrap.ServerBootstrap;
 import io.netty.buffer.Unpooled;
 import io.netty.channel.ChannelFuture;
@@ -35,6 +37,14 @@ import io.netty.handler.codec.http.HttpResponse;
 import io.netty.handler.codec.http.HttpResponseStatus;
 import io.netty.handler.codec.http.HttpServerCodec;
 import io.netty.handler.codec.http.HttpVersion;
+import io.netty.handler.codec.http2.DefaultHttp2Connection;
+import io.netty.handler.codec.http2.Http2Connection;
+import io.netty.handler.codec.http2.HttpToHttp2ConnectionHandler;
+import io.netty.handler.codec.http2.HttpToHttp2ConnectionHandlerBuilder;
+import io.netty.handler.codec.http2.InboundHttp2ToHttpAdapter;
+import io.netty.handler.codec.http2.InboundHttp2ToHttpAdapterBuilder;
+import io.netty.handler.ssl.ApplicationProtocolConfig;
+import io.netty.handler.ssl.ApplicationProtocolNames;
 import io.netty.handler.ssl.SslContext;
 import io.netty.handler.ssl.SslContextBuilder;
 import io.netty.handler.ssl.SslProvider;
@@ -62,6 +72,12 @@ public class HTTPServer extends Thread {
             SelfSignedCertificate selfSignedCertificate = new SelfSignedCertificate("localhost", "EC", 256);
             SslContext sslContext = SslContextBuilder.forServer(selfSignedCertificate.certificate(), selfSignedCertificate.privateKey())
                     .sslProvider(SslProvider.JDK)
+                    .applicationProtocolConfig(new ApplicationProtocolConfig(
+                            ApplicationProtocolConfig.Protocol.ALPN,
+                            ApplicationProtocolConfig.SelectorFailureBehavior.NO_ADVERTISE,
+                            ApplicationProtocolConfig.SelectedListenerFailureBehavior.ACCEPT,
+                            ApplicationProtocolNames.HTTP_2,
+                            ApplicationProtocolNames.HTTP_1_1))
                     .build();
 
             ServerBootstrap serverBootstrap = new ServerBootstrap()
@@ -70,13 +86,36 @@ public class HTTPServer extends Thread {
                     .childHandler(new ChannelInitializer<SocketChannel>() {
                         @Override
                         protected void initChannel(SocketChannel ch) {
+
                             if (tls) {
                                 ch.pipeline().addLast(sslContext.newHandler(ch.alloc()));
-                            }
 
-                            ch.pipeline().addLast(new HttpServerCodec());
-                            ch.pipeline().addLast(new HttpObjectAggregator(Integer.MAX_VALUE));
-                            ch.pipeline().addLast(new Handler());
+                                Http2Connection http2Connection = new DefaultHttp2Connection(true);
+
+                                InboundHttp2ToHttpAdapter adapter = new InboundHttp2ToHttpAdapterBuilder(http2Connection)
+                                        .propagateSettings(false)
+                                        .maxContentLength(Integer.MAX_VALUE)
+                                        .validateHttpHeaders(true)
+                                        .build();
+
+                                HttpToHttp2ConnectionHandler httpToHttp2ConnectionHandler = new HttpToHttp2ConnectionHandlerBuilder()
+                                        .connection(http2Connection)
+                                        .frameListener(adapter)
+                                        .build();
+
+                                ALPNHandler alpnHandler = ALPNHandlerBuilder.newBuilder()
+                                        .withHTTP2ChannelHandler(httpToHttp2ConnectionHandler)
+                                        .withHTTP1ChannelHandler(new HttpServerCodec())
+                                        .withHTTP1ChannelHandler(new HttpObjectAggregator(Integer.MAX_VALUE))
+                                        .withHTTP1ChannelHandler(new Handler())
+                                        .build();
+
+                                ch.pipeline().addLast(alpnHandler);
+                            } else {
+                                ch.pipeline().addLast(new HttpServerCodec());
+                                ch.pipeline().addLast(new HttpObjectAggregator(Integer.MAX_VALUE));
+                                ch.pipeline().addLast(new Handler());
+                            }
                         }
                     });
 

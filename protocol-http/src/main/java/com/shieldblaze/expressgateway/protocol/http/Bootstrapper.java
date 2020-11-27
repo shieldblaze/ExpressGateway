@@ -66,7 +66,7 @@ final class Bootstrapper {
                 pipeline.addFirst(new IdleStateHandler(timeout, timeout, timeout));
 
                 DownstreamHandler downstreamHandler = new DownstreamHandler(httpConnection, channel);
-                httpConnection.setDownstreamHandler(downstreamHandler);
+                httpConnection.downstreamHandler(downstreamHandler);
 
                 if (httpLoadBalancer.tlsForClient() == null) {
                     pipeline.addLast(HTTPUtils.newClientCodec(httpLoadBalancer.httpConfiguration()));
