@@ -152,12 +152,12 @@ class UpstreamHandlerTest {
 
     @Test
     void http2BackendWithTLSClient() throws Exception {
-        HTTPServer httpServer = new HTTPServer(12345, true);
+        HTTPServer httpServer = new HTTPServer(10000, true);
         httpServer.start();
 
         Cluster cluster = new ClusterPool(new EventStream(), new HTTPRoundRobin(NOOPSessionPersistence.INSTANCE));
         cluster.hostname("localhost");
-        new Node(cluster, new InetSocketAddress("127.0.0.1", 12345));
+        new Node(cluster, new InetSocketAddress("127.0.0.1", 10000));
 
         HTTPLoadBalancer httpLoadBalancer = HTTPLoadBalancerBuilder.newBuilder()
                 .withCoreConfiguration(coreConfiguration)
@@ -165,7 +165,7 @@ class UpstreamHandlerTest {
                 .withTLSForClient(forClient)
                 .withTLSForServer(forServer)
                 .withCluster(cluster)
-                .withBindAddress(new InetSocketAddress("127.0.0.1", 9110))
+                .withBindAddress(new InetSocketAddress("127.0.0.1", 20000))
                 .withHTTPInitializer(new DefaultHTTPServerInitializer())
                 .withL4FrontListener(new TCPListener())
                 .build();
@@ -177,7 +177,7 @@ class UpstreamHandlerTest {
         // Send using HTTP/1.1
         HttpRequest httpRequest = HttpRequest.newBuilder()
                 .GET()
-                .uri(URI.create("https://127.0.0.1:9110"))
+                .uri(URI.create("https://127.0.0.1:20000"))
                 .version(HttpClient.Version.HTTP_1_1)
                 .timeout(Duration.ofSeconds(5))
                 .build();
@@ -189,7 +189,7 @@ class UpstreamHandlerTest {
         // Send using HTTP/2
         httpRequest = HttpRequest.newBuilder()
                 .GET()
-                .uri(URI.create("https://127.0.0.1:9110"))
+                .uri(URI.create("https://127.0.0.1:20000"))
                 .version(HttpClient.Version.HTTP_2)
                 .timeout(Duration.ofSeconds(5))
                 .build();
@@ -207,19 +207,19 @@ class UpstreamHandlerTest {
 
     @Test
     void http1BackendWithTLSClient() throws Exception {
-        HTTPServer httpServer = new HTTPServer(12345, false);
+        HTTPServer httpServer = new HTTPServer(10001, false);
         httpServer.start();
 
         Cluster cluster = new ClusterPool(new EventStream(), new HTTPRoundRobin(NOOPSessionPersistence.INSTANCE));
         cluster.hostname("localhost");
-        new Node(cluster, new InetSocketAddress("127.0.0.1", 12345));
+        new Node(cluster, new InetSocketAddress("127.0.0.1", 10001));
 
         HTTPLoadBalancer httpLoadBalancer = HTTPLoadBalancerBuilder.newBuilder()
                 .withCoreConfiguration(coreConfiguration)
                 .withHTTPConfiguration(httpConfiguration)
                 .withTLSForServer(forServer)
                 .withCluster(cluster)
-                .withBindAddress(new InetSocketAddress("127.0.0.1", 9110))
+                .withBindAddress(new InetSocketAddress("127.0.0.1", 20001))
                 .withHTTPInitializer(new DefaultHTTPServerInitializer())
                 .withL4FrontListener(new TCPListener())
                 .build();
@@ -231,7 +231,7 @@ class UpstreamHandlerTest {
         // Send using HTTP/1.1
         HttpRequest httpRequest = HttpRequest.newBuilder()
                 .GET()
-                .uri(URI.create("https://127.0.0.1:9110"))
+                .uri(URI.create("https://127.0.0.1:20001"))
                 .version(HttpClient.Version.HTTP_1_1)
                 .timeout(Duration.ofSeconds(5))
                 .build();
@@ -243,7 +243,7 @@ class UpstreamHandlerTest {
         // Send using HTTP/2
         httpRequest = HttpRequest.newBuilder()
                 .GET()
-                .uri(URI.create("https://127.0.0.1:9110"))
+                .uri(URI.create("https://127.0.0.1:20001"))
                 .version(HttpClient.Version.HTTP_2)
                 .timeout(Duration.ofSeconds(5))
                 .build();
@@ -261,19 +261,19 @@ class UpstreamHandlerTest {
 
     @Test
     void http2BackendWithoutTLSClient() throws Exception {
-        HTTPServer httpServer = new HTTPServer(12345, true);
+        HTTPServer httpServer = new HTTPServer(10002, true);
         httpServer.start();
 
         Cluster cluster = new ClusterPool(new EventStream(), new HTTPRoundRobin(NOOPSessionPersistence.INSTANCE));
         cluster.hostname("localhost");
-        new Node(cluster, new InetSocketAddress("127.0.0.1", 12345));
+        new Node(cluster, new InetSocketAddress("127.0.0.1", 10002));
 
         HTTPLoadBalancer httpLoadBalancer = HTTPLoadBalancerBuilder.newBuilder()
                 .withCoreConfiguration(coreConfiguration)
                 .withHTTPConfiguration(httpConfiguration)
                 .withTLSForClient(forClient)
                 .withCluster(cluster)
-                .withBindAddress(new InetSocketAddress("127.0.0.1", 9110))
+                .withBindAddress(new InetSocketAddress("127.0.0.1", 20002))
                 .withHTTPInitializer(new DefaultHTTPServerInitializer())
                 .withL4FrontListener(new TCPListener())
                 .build();
@@ -285,7 +285,7 @@ class UpstreamHandlerTest {
         // Send using HTTP/1.1
         HttpRequest httpRequest = HttpRequest.newBuilder()
                 .GET()
-                .uri(URI.create("http://127.0.0.1:9110"))
+                .uri(URI.create("http://127.0.0.1:20002"))
                 .version(HttpClient.Version.HTTP_1_1)
                 .timeout(Duration.ofSeconds(5))
                 .build();
@@ -303,18 +303,18 @@ class UpstreamHandlerTest {
 
     @Test
     void http1BackendWithoutTLSClient() throws Exception {
-        HTTPServer httpServer = new HTTPServer(12345, false);
+        HTTPServer httpServer = new HTTPServer(10003, false);
         httpServer.start();
 
         Cluster cluster = new ClusterPool(new EventStream(), new HTTPRoundRobin(NOOPSessionPersistence.INSTANCE));
         cluster.hostname("localhost");
-        new Node(cluster, new InetSocketAddress("127.0.0.1", 12345));
+        new Node(cluster, new InetSocketAddress("127.0.0.1", 10003));
 
         HTTPLoadBalancer httpLoadBalancer = HTTPLoadBalancerBuilder.newBuilder()
                 .withCoreConfiguration(coreConfiguration)
                 .withHTTPConfiguration(httpConfiguration)
                 .withCluster(cluster)
-                .withBindAddress(new InetSocketAddress("127.0.0.1", 9110))
+                .withBindAddress(new InetSocketAddress("127.0.0.1", 20003))
                 .withHTTPInitializer(new DefaultHTTPServerInitializer())
                 .withL4FrontListener(new TCPListener())
                 .build();
@@ -326,7 +326,7 @@ class UpstreamHandlerTest {
         // Send using HTTP/1.1
         HttpRequest httpRequest = HttpRequest.newBuilder()
                 .GET()
-                .uri(URI.create("http://127.0.0.1:9110"))
+                .uri(URI.create("http://127.0.0.1:20003"))
                 .version(HttpClient.Version.HTTP_1_1)
                 .timeout(Duration.ofSeconds(5))
                 .build();
