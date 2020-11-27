@@ -84,8 +84,11 @@ public abstract class Cluster {
      * Add {@link Node} into this {@linkplain Cluster}
      */
     @NonNull
-    public void addNode(Node node) {
-        nodes.add(node);
+    public boolean addNode(Node node) {
+        if (nodes.contains(node)) {
+            return false;
+        }
+        return nodes.add(node);
     }
 
     public List<Node> nodes() {

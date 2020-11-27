@@ -35,7 +35,7 @@ class LeastLoadTest {
     void testLeastLoad() throws LoadBalanceException {
         EventStream eventStream = new EventStream();
 
-        ClusterPool cluster = new ClusterPool(eventStream, new LeastLoad(new NOOPSessionPersistence()));
+        ClusterPool cluster = new ClusterPool(eventStream, new LeastLoad(NOOPSessionPersistence.INSTANCE));
         fastBuild(cluster, "10.10.1.1", 100_000);
         fastBuild(cluster, "10.10.1.2", 200_000);
         fastBuild(cluster, "10.10.1.3", 300_000);

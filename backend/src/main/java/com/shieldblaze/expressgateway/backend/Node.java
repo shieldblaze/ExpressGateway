@@ -23,7 +23,7 @@ import com.shieldblaze.expressgateway.backend.events.node.NodeIdleEvent;
 import com.shieldblaze.expressgateway.backend.events.node.NodeOfflineEvent;
 import com.shieldblaze.expressgateway.backend.events.node.NodeOnlineEvent;
 import com.shieldblaze.expressgateway.backend.exceptions.TooManyConnectionsException;
-import com.shieldblaze.expressgateway.backend.pool.Connection;
+import com.shieldblaze.expressgateway.backend.connection.Connection;
 import com.shieldblaze.expressgateway.common.Math;
 import com.shieldblaze.expressgateway.common.annotation.NonNull;
 import com.shieldblaze.expressgateway.common.utils.Number;
@@ -323,20 +323,6 @@ public final class Node implements Comparable<Node> {
                 ", state=" + state +
                 ", healthCheck=" + healthCheck +
                 '}';
-    }
-
-    @Override
-    public boolean equals(Object obj) {
-        if (obj instanceof Node) {
-            Node node = (Node) obj;
-            return hashCode() == node.hashCode();
-        }
-        return false;
-    }
-
-    @Override
-    public int hashCode() {
-        return socketAddress.hashCode();
     }
 
     @Override

@@ -17,8 +17,8 @@
  */
 package com.shieldblaze.expressgateway.protocol.http;
 
-import com.shieldblaze.expressgateway.backend.pool.Backlog;
-import com.shieldblaze.expressgateway.backend.pool.Connection;
+import com.shieldblaze.expressgateway.backend.connection.Backlog;
+import com.shieldblaze.expressgateway.backend.connection.Connection;
 import com.shieldblaze.expressgateway.common.utils.ReferenceCounted;
 import com.shieldblaze.expressgateway.protocol.http.alpn.ALPNHandler;
 import io.netty.channel.Channel;

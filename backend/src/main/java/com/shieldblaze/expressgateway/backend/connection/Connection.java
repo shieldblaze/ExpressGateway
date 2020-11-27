@@ -15,7 +15,7 @@
  * You should have received a copy of the GNU General Public License
  * along with ShieldBlaze ExpressGateway.  If not, see <https://www.gnu.org/licenses/>.
  */
-package com.shieldblaze.expressgateway.backend.pool;
+package com.shieldblaze.expressgateway.backend.connection;
 
 import com.shieldblaze.expressgateway.common.annotation.NonNull;
 import com.shieldblaze.expressgateway.common.utils.ReferenceCounted;
@@ -27,6 +27,12 @@ import java.net.InetSocketAddress;
 import java.time.Instant;
 import java.util.concurrent.ConcurrentLinkedQueue;
 
+/**
+ * <p> Base class for Connection. Protocol implementations must extend this class. </p>
+ *
+ * <p> {@link #init(ChannelFuture)} must be called once {@link ChannelFuture} is ready
+ * for a new connection. </p>
+ */
 public abstract class Connection {
 
     /**
@@ -68,6 +74,11 @@ public abstract class Connection {
         }
     }
 
+    /**
+     * This method is called when {@link #channelFuture()} has finished the operation.
+     * Protocol implementations extending this class must clear {@link #backlogQueue} when
+     * this method is called.
+     */
     protected abstract void processBacklog(ChannelFuture channelFuture);
 
     /**
@@ -154,6 +165,7 @@ public abstract class Connection {
 
     /**
      * Check if this connection timed out
+     *
      * @return {@code true} if this connection timed out else {@code false}
      */
     public boolean hasConnectionTimedOut() {
@@ -177,7 +189,9 @@ public abstract class Connection {
     @Override
     public String toString() {
         return "Connection{" +
-                "inUse=" + inUse +
+                "timeout=" + timeout +
+                ", channelFuture=" + channelFuture +
+                ", inUse=" + inUse +
                 ", socketAddress=" + socketAddress +
                 '}';
     }

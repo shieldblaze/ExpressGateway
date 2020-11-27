@@ -34,7 +34,7 @@ class HTTPRandomTest {
 
     @Test
     void testRandom() throws LoadBalanceException {
-        Cluster cluster = new ClusterPool(new EventStream(), new HTTPRandom(new NOOPSessionPersistence()));
+        Cluster cluster = new ClusterPool(new EventStream(), new HTTPRandom(NOOPSessionPersistence.INSTANCE));
         fastBuild(cluster, "172.16.20.1");
         fastBuild(cluster, "172.16.20.2");
         fastBuild(cluster, "172.16.20.3");

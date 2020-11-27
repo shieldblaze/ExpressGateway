@@ -18,7 +18,17 @@
 package com.shieldblaze.expressgateway.backend;
 
 public enum State {
+    /**
+     * {@link Node} is online, active and accepting connections.
+     */
     ONLINE,
+    /**
+     * {@link Node} is offline, not active and not accepting any connections.
+     */
     OFFLINE,
+    /**
+     * {@link Node} is idle, only processing established active connections and not accepting
+     * any new connections.
+     */
     IDLE
 }

@@ -52,7 +52,7 @@ public final class ClusterPool extends Cluster {
     }
 
     @NonNull
-    public void addNode(Node node) {
-        super.addNode(node);
+    public boolean addNode(Node node) {
+        return super.addNode(node);
     }
 }

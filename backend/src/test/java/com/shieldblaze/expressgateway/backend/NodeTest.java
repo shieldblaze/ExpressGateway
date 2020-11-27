@@ -20,7 +20,7 @@ package com.shieldblaze.expressgateway.backend;
 import com.shieldblaze.expressgateway.backend.cluster.Cluster;
 import com.shieldblaze.expressgateway.backend.cluster.ClusterPool;
 import com.shieldblaze.expressgateway.backend.exceptions.TooManyConnectionsException;
-import com.shieldblaze.expressgateway.backend.pool.Connection;
+import com.shieldblaze.expressgateway.backend.connection.Connection;
 import com.shieldblaze.expressgateway.backend.services.BackendControllerService;
 import com.shieldblaze.expressgateway.backend.strategy.l4.RoundRobin;
 import com.shieldblaze.expressgateway.backend.strategy.l4.sessionpersistence.NOOPSessionPersistence;
@@ -61,7 +61,7 @@ class NodeTest {
 
     @Test
     void testConnections() throws InterruptedException, TooManyConnectionsException {
-        Cluster cluster = new ClusterPool(new EventStream(), new RoundRobin(new NOOPSessionPersistence()));
+        Cluster cluster = new ClusterPool(new EventStream(), new RoundRobin(NOOPSessionPersistence.INSTANCE));
         cluster.eventSubscriber().subscribe(new BackendControllerService());
 
         // Start TCP Server
