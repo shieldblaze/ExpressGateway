@@ -65,7 +65,7 @@ import java.util.Collections;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
-class UpstreamHandlerTest {
+class SimpleTest {
 
     static TransportConfiguration transportConfiguration;
     static EventLoopConfiguration eventLoopConfiguration;
@@ -118,7 +118,7 @@ class UpstreamHandlerTest {
                 .build();
 
         forClient = TLSConfigurationBuilder.forClient()
-                .withProtocols(Arrays.asList(Protocol.TLS_1_3))
+                .withProtocols(Collections.singletonList(Protocol.TLS_1_3))
                 .withCiphers(Collections.singletonList(Cipher.TLS_AES_256_GCM_SHA384))
                 .withUseALPN(true)
                 .withMutualTLS(MutualTLS.NOT_REQUIRED)
