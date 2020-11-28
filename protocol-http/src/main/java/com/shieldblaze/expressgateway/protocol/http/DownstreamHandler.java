@@ -58,7 +58,7 @@ final class DownstreamHandler extends ChannelInboundHandlerAdapter {
                     return;
                 }
             } else {
-                // If HTTP Version is 1.0 then set Connection:Close and mark for CloseAtLast.
+                // If HTTP Version is 1.0 then set header 'Connection:Close' and mark for CloseAtLast.
                 if (((HttpResponse) msg).protocolVersion() == HttpVersion.HTTP_1_0) {
                     doCloseAtLast = true;
                     ((HttpResponse) msg).headers().set(HttpHeaderNames.CONNECTION, HttpHeaderValues.CLOSE);
@@ -82,7 +82,7 @@ final class DownstreamHandler extends ChannelInboundHandlerAdapter {
         channel.writeAndFlush(msg);
     }
 
-    void setChannel(Channel channel) {
+    void channel(Channel channel) {
         this.channel = channel;
     }
 

@@ -21,7 +21,7 @@ import com.shieldblaze.expressgateway.backend.Node;
 
 public class TooManyConnectionsException extends Exception {
 
-    public TooManyConnectionsException(Node node, int max) {
-        super("Node (" + node + ") has reached maximum number of connections. Maximum Connections: " + max);
+    public TooManyConnectionsException(Node node) {
+        super("Node (" + node + ") has reached maximum number of connections.");
     }
 }

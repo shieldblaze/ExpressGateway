@@ -18,11 +18,12 @@
 package com.shieldblaze.expressgateway.backend;
 
 import com.shieldblaze.expressgateway.backend.cluster.Cluster;
+import com.shieldblaze.expressgateway.backend.events.node.NodeEvent;
 import com.shieldblaze.expressgateway.backend.events.node.NodeIdleEvent;
 import com.shieldblaze.expressgateway.backend.events.node.NodeOfflineEvent;
 import com.shieldblaze.expressgateway.backend.events.node.NodeOnlineEvent;
 import com.shieldblaze.expressgateway.backend.exceptions.TooManyConnectionsException;
-import com.shieldblaze.expressgateway.backend.pool.Connection;
+import com.shieldblaze.expressgateway.backend.connection.Connection;
 import com.shieldblaze.expressgateway.common.Math;
 import com.shieldblaze.expressgateway.common.annotation.NonNull;
 import com.shieldblaze.expressgateway.common.utils.Number;
@@ -109,6 +110,8 @@ public final class Node implements Comparable<Node> {
                 HealthCheck healthCheck) {
 
         this.cluster = cluster;
+        this.cluster.addNode(this);
+
         this.socketAddress = socketAddress;
         this.hash = String.valueOf(Objects.hashCode(this));
         this.healthCheck = healthCheck;
@@ -160,21 +163,26 @@ public final class Node implements Comparable<Node> {
     @NonNull
     public Node state(State state) {
 
+        NodeEvent nodeEvent;
+
         switch (state) {
             case ONLINE:
-                cluster().eventPublisher().publish(new NodeOnlineEvent(this));
+                nodeEvent = new NodeOnlineEvent(this);
                 break;
             case OFFLINE:
-                cluster().eventPublisher().publish(new NodeOfflineEvent(this));
+                nodeEvent = new NodeOfflineEvent(this);
+                drainConnections();
                 break;
             case IDLE:
-                cluster().eventPublisher().publish(new NodeIdleEvent(this));
+                nodeEvent = new NodeIdleEvent(this);
                 break;
             default:
                 throw new IllegalArgumentException("Unknown State: " + state);
         }
 
         this.state = state;
+        nodeEvent.trySuccess(null);
+        cluster().eventPublisher().publish(nodeEvent);
         return this;
     }
 
@@ -212,6 +220,11 @@ public final class Node implements Comparable<Node> {
         return maxConnections;
     }
 
+    /**
+     * <p> Set maximum number of connections. </p>
+     * <p> Valid range: -1 to 2147483647 </p>
+     * <p> Setting value to -1 will allow unlimited amount of connections. </p>
+     */
     public void maxConnections(int maxConnections) {
         this.maxConnections = Number.checkRange(maxConnections, -1, Integer.MAX_VALUE, "MaxConnections");
     }
@@ -233,8 +246,7 @@ public final class Node implements Comparable<Node> {
     }
 
     /**
-     * Try to lease a connection from available connections. This method automatically calls
-     * {@link Connection#lease()}.
+     * Try to lease a connection from available connections.
      *
      * @return {@linkplain Connection} Instance of available and active connection else {@code null}.
      */
@@ -261,9 +273,11 @@ public final class Node implements Comparable<Node> {
      * Add a {@link Connection} with this {@linkplain Node}
      */
     public Node addConnection(Connection connection) throws TooManyConnectionsException {
-        if (maxConnections != -1 && activeConnection() > maxConnections) {
+        // If Maximum Connection is not -1 and Number of Active connections is greater than
+        // Maximum number of connections then close the connection and throw an exception.
+        if (maxConnections != -1 && activeConnection() >= maxConnections) {
             connection.close();
-            throw new TooManyConnectionsException(this, maxConnections);
+            throw new TooManyConnectionsException(this);
         }
         connections.add(connection);
         return this;
@@ -282,16 +296,19 @@ public final class Node implements Comparable<Node> {
         return connections;
     }
 
-    private void drainConnections() {
-        connections.forEach(Connection::close);
-        connections.clear();
-    }
-
+    /**
+     * Returns {@code true} if connections has reached maximum limit else {@code false}.
+     */
     public boolean connectionFull() {
         if (maxConnections == -1) {
             return false;
         }
         return activeConnection() >= maxConnections;
+    }
+
+    private void drainConnections() {
+        connections.forEach(Connection::close);
+        connections.clear();
     }
 
     @Override
@@ -305,20 +322,6 @@ public final class Node implements Comparable<Node> {
                 ", state=" + state +
                 ", healthCheck=" + healthCheck +
                 '}';
-    }
-
-    @Override
-    public boolean equals(Object obj) {
-        if (obj instanceof Node) {
-            Node node = (Node) obj;
-            return hashCode() == node.hashCode();
-        }
-        return false;
-    }
-
-    @Override
-    public int hashCode() {
-        return socketAddress.hashCode();
     }
 
     @Override

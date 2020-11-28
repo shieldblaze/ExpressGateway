@@ -17,21 +17,17 @@
  */
 package com.shieldblaze.expressgateway.protocol.http;
 
-import com.shieldblaze.expressgateway.backend.pool.Backlog;
-import com.shieldblaze.expressgateway.backend.pool.Connection;
+import com.shieldblaze.expressgateway.backend.connection.Backlog;
+import com.shieldblaze.expressgateway.backend.connection.Connection;
 import com.shieldblaze.expressgateway.common.utils.ReferenceCounted;
 import com.shieldblaze.expressgateway.protocol.http.alpn.ALPNHandler;
 import io.netty.channel.Channel;
 import io.netty.channel.ChannelFuture;
 import io.netty.handler.ssl.ApplicationProtocolNames;
-import org.apache.logging.log4j.LogManager;
-import org.apache.logging.log4j.Logger;
 
 import java.util.concurrent.ConcurrentLinkedQueue;
 
 final class HTTPConnection extends Connection {
-
-    private static final Logger logger = LogManager.getLogger(HTTPConnection.class);
 
     private boolean isHTTP2;
     private DownstreamHandler downstreamHandler;
@@ -43,33 +39,37 @@ final class HTTPConnection extends Connection {
     @Override
     protected void processBacklog(ChannelFuture channelFuture) {
         if (channelFuture.isSuccess()) {
-            channelFuture.channel().pipeline().get(ALPNHandler.class).protocol().whenCompleteAsync((protocol, throwable) -> {
-                if (throwable == null) {
+            if (channelFuture.channel().pipeline().get(ALPNHandler.class) != null) {
+                channelFuture.channel().pipeline().get(ALPNHandler.class).protocol().whenCompleteAsync((protocol, throwable) -> {
 
-                    if (protocol.equalsIgnoreCase(ApplicationProtocolNames.HTTP_2)) {
-                        isHTTP2 = true;
-                    } else {
-                        try {
-                            lease();
-                        } catch (IllegalAccessException e) {
-                            logger.error(e);
+                    // If throwable is null then task is completed successfully without any error.
+                    if (throwable == null) {
+
+                        if (protocol.equalsIgnoreCase(ApplicationProtocolNames.HTTP_2)) {
+                            isHTTP2 = true;
                         }
-                    }
 
-                    ConcurrentLinkedQueue<Backlog> queue = new ConcurrentLinkedQueue<>(backlogQueue); // Make copy of Queue
-                    backlogQueue = null; // Make old queue null so no more data is written to it.
-                    queue.forEach(backlog -> channelFuture.channel().writeAndFlush(backlog.object(), backlog.channelPromise()));
-                    queue.clear(); // Clear the new queue because we're done with it.
-                } else {
-                    forceCleanBacklog(throwable);
-                }
-            }, channelFuture.channel().eventLoop());
+                        writeBacklog(channelFuture);
+                    } else {
+                        clearBacklog(throwable);
+                    }
+                }, channelFuture.channel().eventLoop());
+            } else {
+                writeBacklog(channelFuture);
+            }
         } else {
-            forceCleanBacklog(channelFuture.cause());
+            clearBacklog(channelFuture.cause());
         }
     }
 
-    private void forceCleanBacklog(Throwable throwable) {
+    private void writeBacklog(ChannelFuture channelFuture) {
+        ConcurrentLinkedQueue<Backlog> queue = new ConcurrentLinkedQueue<>(backlogQueue); // Make copy of Queue
+        backlogQueue = null; // Make old queue null so no more data is written to it.
+        queue.forEach(backlog -> channelFuture.channel().writeAndFlush(backlog.object(), backlog.channelPromise()));
+        queue.clear(); // Clear the new queue because we're done with it.
+    }
+
+    private void clearBacklog(Throwable throwable) {
         backlogQueue.forEach(backlog -> {
             ReferenceCounted.silentRelease(backlog.object());
             backlog.channelPromise().tryFailure(throwable);
@@ -81,17 +81,17 @@ final class HTTPConnection extends Connection {
         return isHTTP2;
     }
 
-    void setDownstreamHandler(DownstreamHandler downstreamHandler) {
+    void downstreamHandler(DownstreamHandler downstreamHandler) {
         this.downstreamHandler = downstreamHandler;
     }
 
-    void setUpstreamChannel(Channel channel) {
-        downstreamHandler.setChannel(channel);
+    void upstreamChannel(Channel channel) {
+        downstreamHandler.channel(channel);
     }
 
     @Override
     public String toString() {
-        return "ALPNConnection{" +
+        return "HTTPConnection{" +
                 "isHTTP2=" + isHTTP2 +
                 ", Connection=" + super.toString() +
                 '}';

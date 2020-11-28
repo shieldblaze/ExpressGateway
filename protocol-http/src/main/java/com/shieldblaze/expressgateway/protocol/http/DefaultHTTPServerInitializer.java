@@ -25,18 +25,18 @@ import com.shieldblaze.expressgateway.protocol.http.alpn.ALPNHandler;
 import com.shieldblaze.expressgateway.protocol.http.alpn.ALPNHandlerBuilder;
 import com.shieldblaze.expressgateway.protocol.http.compression.HTTPContentCompressor;
 import com.shieldblaze.expressgateway.protocol.http.compression.HTTPContentDecompressor;
-import com.shieldblaze.expressgateway.protocol.http.loadbalancer.HTTPLoadBalancer;
 import io.netty.channel.ChannelHandlerContext;
-import io.netty.channel.ChannelInitializer;
 import io.netty.channel.ChannelPipeline;
 import io.netty.channel.socket.SocketChannel;
+import io.netty.handler.logging.LogLevel;
+import io.netty.handler.logging.LoggingHandler;
 import io.netty.handler.timeout.IdleStateHandler;
 import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
 
-final class ServerInitializer extends HTTPServerInitializer {
+final class DefaultHTTPServerInitializer extends HTTPServerInitializer {
 
-    private static final Logger logger = LogManager.getLogger(ServerInitializer.class);
+    private static final Logger logger = LogManager.getLogger(DefaultHTTPServerInitializer.class);
 
     @Override
     protected void initChannel(SocketChannel socketChannel) {

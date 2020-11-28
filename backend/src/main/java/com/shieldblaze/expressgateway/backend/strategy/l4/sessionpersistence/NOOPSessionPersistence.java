@@ -28,6 +28,12 @@ import java.net.InetSocketAddress;
  */
 public final class NOOPSessionPersistence implements SessionPersistence<Node, Node, InetSocketAddress, Node> {
 
+    public static final NOOPSessionPersistence INSTANCE = new NOOPSessionPersistence();
+
+    private NOOPSessionPersistence() {
+        // Prevent outside initialization
+    }
+
     @Override
     public Node node(Request request) {
         return null;

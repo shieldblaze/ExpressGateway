@@ -25,7 +25,7 @@ import java.util.concurrent.ExecutorService;
  * {@linkplain AsyncEventStream} uses {@link ExecutorService} to
  * publish events asynchronously.
  */
-public class AsyncEventStream extends EventStream {
+public final class AsyncEventStream extends EventStream {
 
     /**
      * {@link ExecutorService} for execution of {@link #publish(Event)}

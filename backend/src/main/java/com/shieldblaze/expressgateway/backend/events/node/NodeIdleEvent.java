@@ -23,7 +23,7 @@ import com.shieldblaze.expressgateway.backend.Node;
 /**
  * When a {@linkplain Node} becomes idle.
  */
-public class NodeIdleEvent extends NodeEvent {
+public final class NodeIdleEvent extends NodeEvent {
 
     public NodeIdleEvent(Node node) {
         super(node);

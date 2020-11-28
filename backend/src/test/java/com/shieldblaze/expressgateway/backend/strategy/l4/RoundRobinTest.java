@@ -35,11 +35,11 @@ class RoundRobinTest {
     @Test
     void testRoundRobin() throws LoadBalanceException {
         EventStream eventStream = new EventStream();
-        ClusterPool cluster = new ClusterPool(eventStream, new RoundRobin(new NOOPSessionPersistence()));
+        ClusterPool cluster = new ClusterPool(eventStream, new RoundRobin(NOOPSessionPersistence.INSTANCE));
 
         // Add Node Server Addresses
         for (int i = 1; i <= 100; i++) {
-            cluster.addNode(fastBuild(cluster, "192.168.1." + i));
+            fastBuild(cluster, "192.168.1." + i);
         }
 
         L4Request l4Request = new L4Request(new InetSocketAddress("192.168.1.1", 1));

@@ -29,6 +29,12 @@ import io.netty.handler.codec.http.EmptyHttpHeaders;
  */
 public final class NOOPSessionPersistence implements SessionPersistence<HTTPBalanceResponse, HTTPBalanceResponse, HTTPBalanceRequest, Node> {
 
+    public static final NOOPSessionPersistence INSTANCE = new NOOPSessionPersistence();
+
+    private NOOPSessionPersistence() {
+        // Prevent outside initialization
+    }
+
     @Override
     public HTTPBalanceResponse node(Request request) {
         return null;

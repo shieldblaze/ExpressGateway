@@ -18,7 +18,7 @@
 package com.shieldblaze.expressgateway.protocol.http;
 
 import com.shieldblaze.expressgateway.backend.Node;
-import com.shieldblaze.expressgateway.backend.pool.Connection;
+import com.shieldblaze.expressgateway.backend.connection.Connection;
 import com.shieldblaze.expressgateway.backend.strategy.l7.http.HTTPBalanceRequest;
 import com.shieldblaze.expressgateway.backend.strategy.l7.http.HTTPBalanceResponse;
 import com.shieldblaze.expressgateway.protocol.http.loadbalancer.HTTPLoadBalancer;
@@ -35,6 +35,7 @@ import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
 
 import java.net.InetSocketAddress;
+import java.nio.charset.StandardCharsets;
 import java.util.Map;
 import java.util.concurrent.ConcurrentSkipListMap;
 
@@ -72,7 +73,7 @@ public final class UpstreamHandler extends ChannelDuplexHandler {
                 connection = bootstrapper.newInit(node, ctx.channel());
                 node.addConnection(connection);
             } else {
-                connection.setUpstreamChannel(ctx.channel());
+                connection.upstreamChannel(ctx.channel());
                 if (!connection.isHTTP2()) {
                     connection.lease();
                 }
