@@ -48,11 +48,11 @@ class HTTP2InboundAdapterTest {
     @Test
     void testInboundAdapter() {
         Http2HeadersFrame http2HeadersFrame = new DefaultHttp2HeadersFrame(new DefaultHttp2Headers(), true);
+        http2HeadersFrame.stream(new CustomHttp2FrameStream(2));
         http2HeadersFrame.headers().method("GET");
         http2HeadersFrame.headers().scheme("https");
         http2HeadersFrame.headers().path("/");
         http2HeadersFrame.headers().authority("localhost");
-        http2HeadersFrame.stream(new CustomHttp2FrameStream(2));
         embeddedChannel.writeInbound(http2HeadersFrame);
         embeddedChannel.flushInbound();
 
