@@ -48,7 +48,6 @@ import com.shieldblaze.expressgateway.protocol.http.loadbalancer.HTTPLoadBalance
 import com.shieldblaze.expressgateway.protocol.tcp.TCPListener;
 import io.netty.handler.ssl.util.InsecureTrustManagerFactory;
 import io.netty.handler.ssl.util.SelfSignedCertificate;
-import org.junit.jupiter.api.AfterAll;
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.Test;
 

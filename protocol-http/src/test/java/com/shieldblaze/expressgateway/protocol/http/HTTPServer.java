@@ -68,7 +68,7 @@ public class HTTPServer extends Thread {
 
         try {
 
-            eventLoopGroup = new NioEventLoopGroup(2);
+            eventLoopGroup = new NioEventLoopGroup(4);
 
             SelfSignedCertificate selfSignedCertificate = new SelfSignedCertificate("localhost", "EC", 256);
             SslContext sslContext = SslContextBuilder.forServer(selfSignedCertificate.certificate(), selfSignedCertificate.privateKey())
