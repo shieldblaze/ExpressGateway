@@ -26,7 +26,7 @@ jobs:
         with:
           java-version: 11
       - name: Build with Maven
-        run: mvn -Djava.io.tmpdir= /home/runner/work/ExpressGateway/ -B package --file pom.xml
+        run: mvn -Djava.io.tmpdir=/home/runner/work/ExpressGateway/ -B package --file pom.xml
 
 
   buildOnJDK15:
@@ -40,4 +40,4 @@ jobs:
         with:
           java-version: 15
       - name: Build with Maven
-        run: mvn -Djava.io.tmpdir= /home/runner/work/ExpressGateway/ -B package --file pom.xml
+        run: mvn -Djava.io.tmpdir=/home/runner/work/ExpressGateway/ -B package --file pom.xml
