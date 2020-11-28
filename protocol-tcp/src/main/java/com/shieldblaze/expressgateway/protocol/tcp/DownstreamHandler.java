@@ -35,13 +35,6 @@ final class DownstreamHandler extends ChannelInboundHandlerAdapter {
     private final Node node;
     private final InetSocketAddress upstreamAddress;
 
-    /**
-     * Create a {@link DownstreamHandler} for receiving Data from {@link Node}
-     * and send back to {@code Client}.
-     *
-     * @param upstream {@code Client} {@link Channel}
-     * @param node  {@link Node} We'll use this for incrementing {@link Node#incBytesReceived(int)}
-     */
     DownstreamHandler(Channel upstream, Node node) {
         this.upstream = upstream;
         this.node = node;
