@@ -154,7 +154,6 @@ class UpstreamHandlerTest {
     void http2BackendWithTLSClient() throws Exception {
         HTTPServer httpServer = new HTTPServer(10000, true);
         httpServer.start();
-
         Thread.sleep(500L);
 
         Cluster cluster = new ClusterPool(new EventStream(), new HTTPRoundRobin(NOOPSessionPersistence.INSTANCE));
@@ -211,7 +210,6 @@ class UpstreamHandlerTest {
     void http1BackendWithTLSClient() throws Exception {
         HTTPServer httpServer = new HTTPServer(10001, false);
         httpServer.start();
-
         Thread.sleep(500L);
 
         Cluster cluster = new ClusterPool(new EventStream(), new HTTPRoundRobin(NOOPSessionPersistence.INSTANCE));
@@ -267,7 +265,6 @@ class UpstreamHandlerTest {
     void http2BackendWithoutTLSClient() throws Exception {
         HTTPServer httpServer = new HTTPServer(10002, true);
         httpServer.start();
-
         Thread.sleep(500L);
 
         Cluster cluster = new ClusterPool(new EventStream(), new HTTPRoundRobin(NOOPSessionPersistence.INSTANCE));
@@ -311,7 +308,6 @@ class UpstreamHandlerTest {
     void http1BackendWithoutTLSClient() throws Exception {
         HTTPServer httpServer = new HTTPServer(10003, false);
         httpServer.start();
-
         Thread.sleep(500L);
 
         Cluster cluster = new ClusterPool(new EventStream(), new HTTPRoundRobin(NOOPSessionPersistence.INSTANCE));
