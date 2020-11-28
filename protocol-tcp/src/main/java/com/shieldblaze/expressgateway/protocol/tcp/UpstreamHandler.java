@@ -19,105 +19,51 @@ package com.shieldblaze.expressgateway.protocol.tcp;
 
 import com.shieldblaze.expressgateway.backend.Node;
 import com.shieldblaze.expressgateway.backend.exceptions.LoadBalanceException;
+import com.shieldblaze.expressgateway.backend.exceptions.TooManyConnectionsException;
 import com.shieldblaze.expressgateway.backend.strategy.l4.L4Request;
 import com.shieldblaze.expressgateway.core.loadbalancer.L4LoadBalancer;
-import com.shieldblaze.expressgateway.core.BootstrapFactory;
-import io.netty.bootstrap.Bootstrap;
 import io.netty.buffer.ByteBuf;
-import io.netty.channel.Channel;
-import io.netty.channel.ChannelFuture;
-import io.netty.channel.ChannelFutureListener;
 import io.netty.channel.ChannelHandlerContext;
 import io.netty.channel.ChannelInboundHandlerAdapter;
-import io.netty.channel.ChannelInitializer;
-import io.netty.channel.socket.SocketChannel;
-import io.netty.handler.ssl.SslHandler;
-import io.netty.handler.timeout.IdleStateHandler;
 import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
 
 import java.net.InetSocketAddress;
-import java.util.concurrent.ConcurrentLinkedQueue;
 
 final class UpstreamHandler extends ChannelInboundHandlerAdapter {
 
     private static final Logger logger = LogManager.getLogger(UpstreamHandler.class);
 
     private final L4LoadBalancer l4LoadBalancer;
-
-    private ConcurrentLinkedQueue<ByteBuf> backlog = new ConcurrentLinkedQueue<>();
-    private boolean channelActive = false;
-    private Channel downstreamChannel;
-    private Node node;
+    private final Bootstrapper bootstrapper;
+    private TCPConnection tcpConnection;
 
     UpstreamHandler(L4LoadBalancer l4LoadBalancer) {
         this.l4LoadBalancer = l4LoadBalancer;
+        bootstrapper = new Bootstrapper(l4LoadBalancer, l4LoadBalancer.eventLoopFactory().childGroup(), l4LoadBalancer.byteBufAllocator());
     }
 
     @Override
-    public void channelActive(ChannelHandlerContext ctx) throws LoadBalanceException {
-        Bootstrap bootstrap = BootstrapFactory.getTCP(l4LoadBalancer.coreConfiguration(), l4LoadBalancer.eventLoopFactory().childGroup(), ctx.alloc());
-        node = l4LoadBalancer.cluster().nextNode(new L4Request((InetSocketAddress) ctx.channel().remoteAddress())).node();
-        bootstrap.handler(new ChannelInitializer<SocketChannel>() {
-            @Override
-            protected void initChannel(SocketChannel ch) {
-                int timeout = l4LoadBalancer.coreConfiguration().transportConfiguration().connectionIdleTimeout();
-                ch.pipeline().addFirst(new IdleStateHandler(timeout, timeout, timeout));
-
-                if (l4LoadBalancer.tlsForClient() != null) {
-                    String hostname = node.socketAddress().getHostName();
-                    int port = node.socketAddress().getPort();
-                    SslHandler sslHandler = l4LoadBalancer.tlsForClient()
-                            .defaultMapping()
-                            .sslContext()
-                            .newHandler(ctx.alloc(), hostname, port);
-
-                    ch.pipeline().addLast(sslHandler);
-                }
-
-                ch.pipeline().addLast(new DownstreamHandler(ctx.channel(), node));
+    public void channelActive(ChannelHandlerContext ctx) throws Exception {
+        if (tcpConnection == null) {
+            Node node;
+            try {
+                node = l4LoadBalancer.cluster().nextNode(new L4Request((InetSocketAddress) ctx.channel().remoteAddress())).node();
+                tcpConnection = bootstrapper.newInit(node, ctx.channel());
+                node.addConnection(tcpConnection);
+            } catch (Exception ex) {
+                ctx.close();
+                throw ex;
             }
-        });
-
-        ChannelFuture channelFuture = bootstrap.connect(node.socketAddress());
-        downstreamChannel = channelFuture.channel();
-
-        // Listener for writing Backlog
-        channelFuture.addListener((ChannelFutureListener) future -> {
-
-            /*
-             * If we're connected to the backend, then we'll send all backlog to backend.
-             *
-             * If we're not connected to the backend, close everything.
-             */
-            if (future.isSuccess()) {
-                l4LoadBalancer.eventLoopFactory().childGroup().next().execute(() -> {
-
-                    backlog.forEach(packet -> {
-                        node.incBytesSent(packet.readableBytes());
-                        downstreamChannel.writeAndFlush(packet);
-                        backlog.remove(packet);
-                    });
-
-                    channelActive = true;
-                    backlog = null;
-                });
-            } else {
-                downstreamChannel.close();
-                ctx.channel().close();
-            }
-        });
+        }
     }
 
     @Override
     public void channelRead(ChannelHandlerContext ctx, Object msg) {
         ByteBuf byteBuf = (ByteBuf) msg;
-        if (channelActive) {
-            node.incBytesSent(byteBuf.readableBytes());
-            downstreamChannel.writeAndFlush(byteBuf);
-            return;
-        } else if (backlog != null && backlog.size() < l4LoadBalancer.coreConfiguration().transportConfiguration().dataBacklog()) {
-            backlog.add(byteBuf);
+        if (tcpConnection != null) {
+            tcpConnection.node().incBytesSent(byteBuf.readableBytes());
+            tcpConnection.writeAndFlush(byteBuf);
             return;
         }
         byteBuf.release();
@@ -127,13 +73,13 @@ final class UpstreamHandler extends ChannelInboundHandlerAdapter {
     public void channelInactive(ChannelHandlerContext ctx) {
         if (logger.isInfoEnabled()) {
             InetSocketAddress socketAddress = ((InetSocketAddress) ctx.channel().remoteAddress());
-            if (node == null) {
+            if (tcpConnection == null) {
                 logger.info("Closing Upstream {}",
                         socketAddress.getAddress().getHostAddress() + ":" + socketAddress.getPort());
             } else {
                 logger.info("Closing Upstream {} and Downstream {} Channel",
                         socketAddress.getAddress().getHostAddress() + ":" + socketAddress.getPort(),
-                        node.socketAddress().getAddress().getHostAddress() + ":" + node.socketAddress().getPort());
+                        tcpConnection.socketAddress().getAddress().getHostAddress() + ":" + tcpConnection.socketAddress().getPort());
             }
         }
 
@@ -141,16 +87,8 @@ final class UpstreamHandler extends ChannelInboundHandlerAdapter {
             ctx.channel().close();
         }
 
-        if (downstreamChannel != null && downstreamChannel.isActive()) {
-            downstreamChannel.close();
-        }
-
-        if (backlog != null) {
-            for (ByteBuf byteBuf : backlog) {
-                if (byteBuf.refCnt() > 0) {
-                    byteBuf.release();
-                }
-            }
+        if (tcpConnection != null && tcpConnection.isActive()) {
+            tcpConnection.close();
         }
     }
 

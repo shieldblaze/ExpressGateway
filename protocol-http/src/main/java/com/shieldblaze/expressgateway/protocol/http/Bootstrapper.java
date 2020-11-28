@@ -29,6 +29,7 @@ import io.netty.bootstrap.Bootstrap;
 import io.netty.buffer.ByteBufAllocator;
 import io.netty.channel.Channel;
 import io.netty.channel.ChannelFuture;
+import io.netty.channel.ChannelFutureListener;
 import io.netty.channel.ChannelInitializer;
 import io.netty.channel.ChannelPipeline;
 import io.netty.channel.EventLoopGroup;
@@ -107,6 +108,13 @@ final class Bootstrapper {
 
         ChannelFuture channelFuture = bootstrap.connect(node.socketAddress());
         httpConnection.init(channelFuture);
+
+        channelFuture.addListener((ChannelFutureListener) future -> {
+           if (!future.isSuccess()) {
+               channel.close();
+           }
+        });
+
         return httpConnection;
     }
 }
