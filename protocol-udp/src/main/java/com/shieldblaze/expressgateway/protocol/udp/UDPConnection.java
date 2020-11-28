@@ -17,13 +17,14 @@
  */
 package com.shieldblaze.expressgateway.protocol.udp;
 
+import com.shieldblaze.expressgateway.backend.Node;
 import com.shieldblaze.expressgateway.backend.connection.Connection;
 import io.netty.channel.ChannelFuture;
 
 final class UDPConnection extends Connection {
 
-    UDPConnection(long timeout) {
-        super(timeout);
+    UDPConnection(Node node, long timeout) {
+        super(node, timeout);
     }
 
     @Override

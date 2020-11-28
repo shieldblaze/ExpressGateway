@@ -17,6 +17,7 @@
  */
 package com.shieldblaze.expressgateway.backend.connection;
 
+import com.shieldblaze.expressgateway.backend.Node;
 import com.shieldblaze.expressgateway.common.annotation.NonNull;
 import com.shieldblaze.expressgateway.common.utils.ReferenceCounted;
 import io.netty.channel.ChannelFuture;
@@ -40,12 +41,14 @@ public abstract class Connection {
      */
     protected ConcurrentLinkedQueue<Backlog> backlogQueue = new ConcurrentLinkedQueue<>();
 
+    private final Node node;
     private final long timeout;
     private ChannelFuture channelFuture;
     private boolean inUse;
     private InetSocketAddress socketAddress;
 
-    public Connection(long timeout) {
+    public Connection(Node node, long timeout) {
+        this.node = node;
         this.timeout = Instant.now().plusMillis(timeout).toEpochMilli();
     }
 
@@ -202,6 +205,10 @@ public abstract class Connection {
         return channelFuture;
     }
 
+    public Node node() {
+        return node;
+    }
+
     public InetSocketAddress socketAddress() {
         return socketAddress;
     }
@@ -216,7 +223,8 @@ public abstract class Connection {
     @Override
     public String toString() {
         return "Connection{" +
-                "timeout=" + timeout +
+                "node=" + node +
+                ", timeout=" + timeout +
                 ", channelFuture=" + channelFuture +
                 ", inUse=" + inUse +
                 ", socketAddress=" + socketAddress +

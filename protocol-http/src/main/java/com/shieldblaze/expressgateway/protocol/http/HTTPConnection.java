@@ -17,6 +17,7 @@
  */
 package com.shieldblaze.expressgateway.protocol.http;
 
+import com.shieldblaze.expressgateway.backend.Node;
 import com.shieldblaze.expressgateway.backend.connection.Connection;
 import com.shieldblaze.expressgateway.protocol.http.alpn.ALPNHandler;
 import io.netty.channel.Channel;
@@ -28,8 +29,8 @@ final class HTTPConnection extends Connection {
     private boolean isHTTP2;
     private DownstreamHandler downstreamHandler;
 
-    HTTPConnection(long timeout) {
-        super(timeout);
+    HTTPConnection(Node node, long timeout) {
+        super(node, timeout);
     }
 
     @Override

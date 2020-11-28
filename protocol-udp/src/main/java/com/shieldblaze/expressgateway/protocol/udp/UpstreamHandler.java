@@ -18,7 +18,6 @@
 package com.shieldblaze.expressgateway.protocol.udp;
 
 import com.shieldblaze.expressgateway.backend.Node;
-import com.shieldblaze.expressgateway.backend.exceptions.LoadBalanceException;
 import com.shieldblaze.expressgateway.backend.strategy.l4.L4Request;
 import com.shieldblaze.expressgateway.common.map.SelfExpiringMap;
 import com.shieldblaze.expressgateway.common.utils.comparator.InetSocketAddressHashCodeComparator;
@@ -65,14 +64,15 @@ final class UpstreamHandler extends ChannelInboundHandlerAdapter {
                 Node node;
                 try {
                     node = l4LoadBalancer.cluster().nextNode(new L4Request(datagramPacket.sender())).node();
-                } catch (LoadBalanceException e) {
+                    udpConnection = bootstrapper.newInit(ctx.channel(), node, datagramPacket.sender());
+                    node.addConnection(udpConnection);
+                    connectionMap.put(datagramPacket.sender(), udpConnection);
+                } catch (Exception e) {
                     return;
                 }
-
-                udpConnection = bootstrapper.newInit(ctx.channel(), node, datagramPacket.sender());
-                connectionMap.put(datagramPacket.sender(), udpConnection);
             }
 
+            udpConnection.node().incBytesSent(datagramPacket.content().readableBytes());
             udpConnection.writeAndFlush(datagramPacket.content());
         });
     }

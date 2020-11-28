@@ -58,6 +58,7 @@ final class DownstreamHandler extends ChannelInboundHandlerAdapter {
                     udpConnection.socketAddress().getAddress().getHostAddress() + ":" + udpConnection.socketAddress().getPort());
         }
 
+        node.removeConnection(udpConnection);
         ctx.channel().close(); // Close Downstream Channel
     }
 
