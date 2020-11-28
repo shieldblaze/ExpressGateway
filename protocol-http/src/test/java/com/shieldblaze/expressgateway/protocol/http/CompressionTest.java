@@ -64,6 +64,7 @@ import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.Test;
 
 import javax.net.ssl.SSLContext;
+import java.io.ByteArrayInputStream;
 import java.io.IOException;
 import java.net.InetSocketAddress;
 import java.net.URI;
@@ -74,6 +75,10 @@ import java.security.SecureRandom;
 import java.time.Duration;
 import java.util.Arrays;
 import java.util.Collections;
+import java.util.zip.DataFormatException;
+import java.util.zip.Deflater;
+import java.util.zip.GZIPInputStream;
+import java.util.zip.Inflater;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertTrue;
@@ -255,6 +260,156 @@ class CompressionTest {
             DirectDecompress directDecompress = DirectDecompress.decompress(httpResponse.body());
             assertEquals(DecoderJNI.Status.DONE, directDecompress.getResultStatus());
             assertEquals("Meow", new String(directDecompress.getDecompressedData()));
+        }
+
+        // Shutdown HTTP Server and Load Balancer
+        httpServer.shutdown();
+        L4FrontListenerStopEvent l4FrontListenerStopEvent = httpLoadBalancer.stop();
+        l4FrontListenerStopEvent.future().join();
+        assertTrue(l4FrontListenerStopEvent.success());
+    }
+
+    @Test
+    void gzipCompressionTest() throws InterruptedException, IOException {
+        HTTPServer httpServer = new HTTPServer(10001, true, new SimpleChannelInboundHandler<FullHttpRequest>() {
+            @Override
+            protected void channelRead0(ChannelHandlerContext ctx, FullHttpRequest msg) {
+                DefaultFullHttpResponse httpResponse = new DefaultFullHttpResponse(HttpVersion.HTTP_1_1,
+                        HttpResponseStatus.OK, Unpooled.wrappedBuffer("Meow".getBytes()));
+                if (msg.headers().contains(HttpConversionUtil.ExtensionHeaderNames.STREAM_ID.text())) {
+                    httpResponse.headers().set("x-http2-stream-id", msg.headers().get(HttpConversionUtil.ExtensionHeaderNames.STREAM_ID.text()));
+                } else {
+                    httpResponse.headers().set(HttpHeaderNames.CONTENT_LENGTH, 4);
+                }
+                httpResponse.headers().set(HttpHeaderNames.CONTENT_TYPE, "text/html");
+                ctx.writeAndFlush(httpResponse);
+            }
+        });
+        httpServer.start();
+        Thread.sleep(500L);
+
+        Cluster cluster = new ClusterPool(new EventStream(), new HTTPRoundRobin(NOOPSessionPersistence.INSTANCE));
+        cluster.hostname("localhost");
+        new Node(cluster, new InetSocketAddress("127.0.0.1", 10001));
+
+        HTTPLoadBalancer httpLoadBalancer = HTTPLoadBalancerBuilder.newBuilder()
+                .withCoreConfiguration(coreConfiguration)
+                .withHTTPConfiguration(httpConfiguration)
+                .withTLSForClient(forClient)
+                .withTLSForServer(forServer)
+                .withCluster(cluster)
+                .withBindAddress(new InetSocketAddress("127.0.0.1", 20001))
+                .withHTTPInitializer(new DefaultHTTPServerInitializer())
+                .withL4FrontListener(new TCPListener())
+                .build();
+
+        L4FrontListenerStartupEvent l4FrontListenerStartupEvent = httpLoadBalancer.start();
+        l4FrontListenerStartupEvent.future().join();
+        assertTrue(l4FrontListenerStartupEvent.success());
+
+        // Gzip only
+        {
+            HttpRequest httpRequest = HttpRequest.newBuilder()
+                    .GET()
+                    .uri(URI.create("https://127.0.0.1:20001"))
+                    .version(HttpClient.Version.HTTP_2)
+                    .timeout(Duration.ofSeconds(5))
+                    .setHeader("Accept-Encoding", "gzip")
+                    .build();
+
+            HttpResponse<byte[]> httpResponse = httpClient.send(httpRequest, HttpResponse.BodyHandlers.ofByteArray());
+            assertEquals(200, httpResponse.statusCode());
+            assertEquals("gzip", httpResponse.headers().firstValue("Content-Encoding").get());
+
+            GZIPInputStream gzipInputStream = new GZIPInputStream(new ByteArrayInputStream(httpResponse.body()));
+            assertEquals("Meow", new String(gzipInputStream.readAllBytes()));
+            gzipInputStream.close();
+        }
+
+        // Gzip and Deflate
+        {
+            HttpRequest httpRequest = HttpRequest.newBuilder()
+                    .GET()
+                    .uri(URI.create("https://127.0.0.1:20001"))
+                    .version(HttpClient.Version.HTTP_2)
+                    .timeout(Duration.ofSeconds(5))
+                    .setHeader("Accept-Encoding", "gzip, deflate")
+                    .build();
+
+            HttpResponse<byte[]> httpResponse = httpClient.send(httpRequest, HttpResponse.BodyHandlers.ofByteArray());
+            assertEquals(200, httpResponse.statusCode());
+            assertEquals("gzip", httpResponse.headers().firstValue("Content-Encoding").get());
+
+            GZIPInputStream gzipInputStream = new GZIPInputStream(new ByteArrayInputStream(httpResponse.body()));
+            assertEquals("Meow", new String(gzipInputStream.readAllBytes()));
+            gzipInputStream.close();
+        }
+
+        // Shutdown HTTP Server and Load Balancer
+        httpServer.shutdown();
+        L4FrontListenerStopEvent l4FrontListenerStopEvent = httpLoadBalancer.stop();
+        l4FrontListenerStopEvent.future().join();
+        assertTrue(l4FrontListenerStopEvent.success());
+    }
+
+    @Test
+    void deflateCompressionTest() throws InterruptedException, IOException, DataFormatException {
+        HTTPServer httpServer = new HTTPServer(10002, true, new SimpleChannelInboundHandler<FullHttpRequest>() {
+            @Override
+            protected void channelRead0(ChannelHandlerContext ctx, FullHttpRequest msg) {
+                DefaultFullHttpResponse httpResponse = new DefaultFullHttpResponse(HttpVersion.HTTP_1_1,
+                        HttpResponseStatus.OK, Unpooled.wrappedBuffer("Meow".getBytes()));
+                if (msg.headers().contains(HttpConversionUtil.ExtensionHeaderNames.STREAM_ID.text())) {
+                    httpResponse.headers().set("x-http2-stream-id", msg.headers().get(HttpConversionUtil.ExtensionHeaderNames.STREAM_ID.text()));
+                } else {
+                    httpResponse.headers().set(HttpHeaderNames.CONTENT_LENGTH, 4);
+                }
+                httpResponse.headers().set(HttpHeaderNames.CONTENT_TYPE, "text/html");
+                ctx.writeAndFlush(httpResponse);
+            }
+        });
+        httpServer.start();
+        Thread.sleep(500L);
+
+        Cluster cluster = new ClusterPool(new EventStream(), new HTTPRoundRobin(NOOPSessionPersistence.INSTANCE));
+        cluster.hostname("localhost");
+        new Node(cluster, new InetSocketAddress("127.0.0.1", 10002));
+
+        HTTPLoadBalancer httpLoadBalancer = HTTPLoadBalancerBuilder.newBuilder()
+                .withCoreConfiguration(coreConfiguration)
+                .withHTTPConfiguration(httpConfiguration)
+                .withTLSForClient(forClient)
+                .withTLSForServer(forServer)
+                .withCluster(cluster)
+                .withBindAddress(new InetSocketAddress("127.0.0.1", 20002))
+                .withHTTPInitializer(new DefaultHTTPServerInitializer())
+                .withL4FrontListener(new TCPListener())
+                .build();
+
+        L4FrontListenerStartupEvent l4FrontListenerStartupEvent = httpLoadBalancer.start();
+        l4FrontListenerStartupEvent.future().join();
+        assertTrue(l4FrontListenerStartupEvent.success());
+
+        // Deflate only
+        {
+            HttpRequest httpRequest = HttpRequest.newBuilder()
+                    .GET()
+                    .uri(URI.create("https://127.0.0.1:20002"))
+                    .version(HttpClient.Version.HTTP_2)
+                    .timeout(Duration.ofSeconds(5))
+                    .setHeader("Accept-Encoding", "deflate")
+                    .build();
+
+            HttpResponse<byte[]> httpResponse = httpClient.send(httpRequest, HttpResponse.BodyHandlers.ofByteArray());
+            assertEquals(200, httpResponse.statusCode());
+            assertEquals("deflate", httpResponse.headers().firstValue("Content-Encoding").get());
+
+            Inflater inflater = new Inflater();
+            inflater.setInput(httpResponse.body());
+            byte[] result = new byte[1024];
+            int length = inflater.inflate(result);
+            inflater.end();
+            assertEquals("Meow", new String(result, 0, length));
         }
 
         // Shutdown HTTP Server and Load Balancer

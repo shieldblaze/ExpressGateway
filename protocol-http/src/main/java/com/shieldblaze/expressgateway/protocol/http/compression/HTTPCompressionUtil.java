@@ -74,7 +74,6 @@ public final class HTTPCompressionUtil {
     }
 
     public static String targetEncoding(HttpResponse response, String acceptEncoding) {
-
         // If "CONTENT-ENCODING" is already set then we will not do anything.
         if (response.headers().contains(HttpHeaderNames.CONTENT_ENCODING)) {
             return null;
@@ -118,11 +117,11 @@ public final class HTTPCompressionUtil {
             }
         }
         if (brQ > 0.0f || gzipQ > 0.0f || deflateQ > 0.0f) {
-            if (brQ >= gzipQ) {
+            if (brQ != -1.0f && brQ >= gzipQ) {
                 return "br";
-            } else if (gzipQ >= deflateQ) {
+            } else if (gzipQ != -1.0f && gzipQ >= deflateQ) {
                 return "gzip";
-            } else {
+            } else if (deflateQ != -1.0f) {
                 return "deflate";
             }
         }
