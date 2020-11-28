@@ -22,6 +22,7 @@ import com.shieldblaze.expressgateway.protocol.http.alpn.ALPNHandlerBuilder;
 import io.netty.bootstrap.ServerBootstrap;
 import io.netty.buffer.Unpooled;
 import io.netty.channel.ChannelFuture;
+import io.netty.channel.ChannelHandler;
 import io.netty.channel.ChannelHandlerContext;
 import io.netty.channel.ChannelInitializer;
 import io.netty.channel.EventLoopGroup;
@@ -51,16 +52,24 @@ import io.netty.handler.ssl.SslContextBuilder;
 import io.netty.handler.ssl.SslProvider;
 import io.netty.handler.ssl.util.SelfSignedCertificate;
 
-public class HTTPServer extends Thread {
+import java.util.Objects;
+
+class HTTPServer extends Thread {
 
     private final int port;
     private final boolean tls;
+    private final ChannelHandler channelHandler;
     private EventLoopGroup eventLoopGroup;
     private ChannelFuture channelFuture;
 
-    public HTTPServer(int port, boolean tls) {
+    HTTPServer(int port, boolean tls) {
+        this(port, tls, null);
+    }
+
+    HTTPServer(int port, boolean tls, ChannelHandler channelHandler) {
         this.port = port;
         this.tls = tls;
+        this.channelHandler = Objects.requireNonNullElseGet(channelHandler, Handler::new);
     }
 
     @Override
@@ -68,7 +77,7 @@ public class HTTPServer extends Thread {
 
         try {
 
-            eventLoopGroup = new NioEventLoopGroup(4);
+            eventLoopGroup = new NioEventLoopGroup(8);
 
             SelfSignedCertificate selfSignedCertificate = new SelfSignedCertificate("localhost", "EC", 256);
             SslContext sslContext = SslContextBuilder.forServer(selfSignedCertificate.certificate(), selfSignedCertificate.privateKey())
@@ -106,17 +115,17 @@ public class HTTPServer extends Thread {
 
                                 ALPNHandler alpnHandler = ALPNHandlerBuilder.newBuilder()
                                         .withHTTP2ChannelHandler(httpToHttp2ConnectionHandler)
-                                        .withHTTP2ChannelHandler(new Handler())
+                                        .withHTTP2ChannelHandler(channelHandler)
                                         .withHTTP1ChannelHandler(new HttpServerCodec())
                                         .withHTTP1ChannelHandler(new HttpObjectAggregator(Integer.MAX_VALUE))
-                                        .withHTTP1ChannelHandler(new Handler())
+                                        .withHTTP1ChannelHandler(channelHandler)
                                         .build();
 
                                 ch.pipeline().addLast(alpnHandler);
                             } else {
                                 ch.pipeline().addLast(new HttpServerCodec());
                                 ch.pipeline().addLast(new HttpObjectAggregator(Integer.MAX_VALUE));
-                                ch.pipeline().addLast(new Handler());
+                                ch.pipeline().addLast(channelHandler);
                             }
                         }
                     });
@@ -132,14 +141,14 @@ public class HTTPServer extends Thread {
         eventLoopGroup.shutdownGracefully();
     }
 
+    @ChannelHandler.Sharable
     private static final class Handler extends SimpleChannelInboundHandler<FullHttpRequest> {
 
         @Override
         protected void channelRead0(ChannelHandlerContext ctx, FullHttpRequest msg) {
             HttpResponse httpResponse = new DefaultFullHttpResponse(HttpVersion.HTTP_1_1, HttpResponseStatus.OK, Unpooled.wrappedBuffer("Meow".getBytes()));
             if (msg.headers().contains(HttpConversionUtil.ExtensionHeaderNames.STREAM_ID.text())) {
-                httpResponse.headers().set(HttpConversionUtil.ExtensionHeaderNames.STREAM_ID.text(),
-                        msg.headers().get(HttpConversionUtil.ExtensionHeaderNames.STREAM_ID.text()));
+                httpResponse.headers().set("x-http2-stream-id", msg.headers().get(HttpConversionUtil.ExtensionHeaderNames.STREAM_ID.text()));
             } else {
                 httpResponse.headers().set(HttpHeaderNames.CONTENT_LENGTH, 4);
             }

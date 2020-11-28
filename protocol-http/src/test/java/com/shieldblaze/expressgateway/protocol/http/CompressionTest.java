@@ -17,6 +17,9 @@
  */
 package com.shieldblaze.expressgateway.protocol.http;
 
+import com.aayushatharva.brotli4j.decoder.Decoder;
+import com.aayushatharva.brotli4j.decoder.DecoderJNI;
+import com.aayushatharva.brotli4j.decoder.DirectDecompress;
 import com.shieldblaze.expressgateway.backend.Node;
 import com.shieldblaze.expressgateway.backend.cluster.Cluster;
 import com.shieldblaze.expressgateway.backend.cluster.ClusterPool;
@@ -46,12 +49,22 @@ import com.shieldblaze.expressgateway.core.events.L4FrontListenerStopEvent;
 import com.shieldblaze.expressgateway.protocol.http.loadbalancer.HTTPLoadBalancer;
 import com.shieldblaze.expressgateway.protocol.http.loadbalancer.HTTPLoadBalancerBuilder;
 import com.shieldblaze.expressgateway.protocol.tcp.TCPListener;
+import io.netty.buffer.Unpooled;
+import io.netty.channel.ChannelHandlerContext;
+import io.netty.channel.SimpleChannelInboundHandler;
+import io.netty.handler.codec.http.DefaultFullHttpResponse;
+import io.netty.handler.codec.http.FullHttpRequest;
+import io.netty.handler.codec.http.HttpHeaderNames;
+import io.netty.handler.codec.http.HttpResponseStatus;
+import io.netty.handler.codec.http.HttpVersion;
+import io.netty.handler.codec.http2.HttpConversionUtil;
 import io.netty.handler.ssl.util.InsecureTrustManagerFactory;
 import io.netty.handler.ssl.util.SelfSignedCertificate;
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.Test;
 
 import javax.net.ssl.SSLContext;
+import java.io.IOException;
 import java.net.InetSocketAddress;
 import java.net.URI;
 import java.net.http.HttpClient;
@@ -65,7 +78,7 @@ import java.util.Collections;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
-class SimpleTest {
+class CompressionTest {
 
     static TransportConfiguration transportConfiguration;
     static EventLoopConfiguration eventLoopConfiguration;
@@ -150,8 +163,21 @@ class SimpleTest {
     }
 
     @Test
-    void http2BackendWithTLSClient() throws Exception {
-        HTTPServer httpServer = new HTTPServer(10000, true);
+    void brotliCompressionTest() throws InterruptedException, IOException {
+        HTTPServer httpServer = new HTTPServer(10000, true, new SimpleChannelInboundHandler<FullHttpRequest>() {
+            @Override
+            protected void channelRead0(ChannelHandlerContext ctx, FullHttpRequest msg) {
+                DefaultFullHttpResponse httpResponse = new DefaultFullHttpResponse(HttpVersion.HTTP_1_1,
+                        HttpResponseStatus.OK, Unpooled.wrappedBuffer("Meow".getBytes()));
+                if (msg.headers().contains(HttpConversionUtil.ExtensionHeaderNames.STREAM_ID.text())) {
+                    httpResponse.headers().set("x-http2-stream-id", msg.headers().get(HttpConversionUtil.ExtensionHeaderNames.STREAM_ID.text()));
+                } else {
+                    httpResponse.headers().set(HttpHeaderNames.CONTENT_LENGTH, 4);
+                }
+                httpResponse.headers().set(HttpHeaderNames.CONTENT_TYPE, "text/html");
+                ctx.writeAndFlush(httpResponse);
+            }
+        });
         httpServer.start();
         Thread.sleep(500L);
 
@@ -174,169 +200,62 @@ class SimpleTest {
         l4FrontListenerStartupEvent.future().join();
         assertTrue(l4FrontListenerStartupEvent.success());
 
-        // Send using HTTP/1.1
-        HttpRequest httpRequest = HttpRequest.newBuilder()
-                .GET()
-                .uri(URI.create("https://127.0.0.1:20000"))
-                .version(HttpClient.Version.HTTP_1_1)
-                .timeout(Duration.ofSeconds(5))
-                .build();
+        // Brotli only
+        {
+            HttpRequest httpRequest = HttpRequest.newBuilder()
+                    .GET()
+                    .uri(URI.create("https://127.0.0.1:20000"))
+                    .version(HttpClient.Version.HTTP_2)
+                    .timeout(Duration.ofSeconds(5))
+                    .setHeader("Accept-Encoding", "br")
+                    .build();
 
-        HttpResponse<String> httpResponse = httpClient.send(httpRequest, HttpResponse.BodyHandlers.ofString());
-        assertEquals(200, httpResponse.statusCode());
-        assertEquals("Meow", httpResponse.body());
+            HttpResponse<byte[]> httpResponse = httpClient.send(httpRequest, HttpResponse.BodyHandlers.ofByteArray());
+            assertEquals(200, httpResponse.statusCode());
+            assertEquals("br", httpResponse.headers().firstValue("Content-Encoding").get());
 
-        // Send using HTTP/2
-        httpRequest = HttpRequest.newBuilder()
-                .GET()
-                .uri(URI.create("https://127.0.0.1:20000"))
-                .version(HttpClient.Version.HTTP_2)
-                .timeout(Duration.ofSeconds(5))
-                .build();
+            DirectDecompress directDecompress = DirectDecompress.decompress(httpResponse.body());
+            assertEquals(DecoderJNI.Status.DONE, directDecompress.getResultStatus());
+            assertEquals("Meow", new String(directDecompress.getDecompressedData()));
+        }
 
-        httpResponse = httpClient.send(httpRequest, HttpResponse.BodyHandlers.ofString());
-        assertEquals(200, httpResponse.statusCode());
-        assertEquals("Meow", httpResponse.body());
+        // Brotli and Gzip
+        {
+            HttpRequest httpRequest = HttpRequest.newBuilder()
+                    .GET()
+                    .uri(URI.create("https://127.0.0.1:20000"))
+                    .version(HttpClient.Version.HTTP_2)
+                    .timeout(Duration.ofSeconds(5))
+                    .setHeader("Accept-Encoding", "gzip, br")
+                    .build();
 
-        // Shutdown HTTP Server and Load Balancer
-        httpServer.shutdown();
-        L4FrontListenerStopEvent l4FrontListenerStopEvent = httpLoadBalancer.stop();
-        l4FrontListenerStopEvent.future().join();
-        assertTrue(l4FrontListenerStopEvent.success());
-    }
+            HttpResponse<byte[]> httpResponse = httpClient.send(httpRequest, HttpResponse.BodyHandlers.ofByteArray());
+            assertEquals(200, httpResponse.statusCode());
+            assertEquals("br", httpResponse.headers().firstValue("Content-Encoding").get());
 
-    @Test
-    void http1BackendWithTLSClient() throws Exception {
-        HTTPServer httpServer = new HTTPServer(10001, false);
-        httpServer.start();
-        Thread.sleep(500L);
+            DirectDecompress directDecompress = DirectDecompress.decompress(httpResponse.body());
+            assertEquals(DecoderJNI.Status.DONE, directDecompress.getResultStatus());
+            assertEquals("Meow", new String(directDecompress.getDecompressedData()));
+        }
 
-        Cluster cluster = new ClusterPool(new EventStream(), new HTTPRoundRobin(NOOPSessionPersistence.INSTANCE));
-        cluster.hostname("localhost");
-        new Node(cluster, new InetSocketAddress("127.0.0.1", 10001));
+        // Brotli, Gzip and Deflate
+        {
+            HttpRequest httpRequest = HttpRequest.newBuilder()
+                    .GET()
+                    .uri(URI.create("https://127.0.0.1:20000"))
+                    .version(HttpClient.Version.HTTP_2)
+                    .timeout(Duration.ofSeconds(5))
+                    .setHeader("Accept-Encoding", "gzip, deflate, br")
+                    .build();
 
-        HTTPLoadBalancer httpLoadBalancer = HTTPLoadBalancerBuilder.newBuilder()
-                .withCoreConfiguration(coreConfiguration)
-                .withHTTPConfiguration(httpConfiguration)
-                .withTLSForServer(forServer)
-                .withCluster(cluster)
-                .withBindAddress(new InetSocketAddress("127.0.0.1", 20001))
-                .withHTTPInitializer(new DefaultHTTPServerInitializer())
-                .withL4FrontListener(new TCPListener())
-                .build();
+            HttpResponse<byte[]> httpResponse = httpClient.send(httpRequest, HttpResponse.BodyHandlers.ofByteArray());
+            assertEquals(200, httpResponse.statusCode());
+            assertEquals("br", httpResponse.headers().firstValue("Content-Encoding").get());
 
-        L4FrontListenerStartupEvent l4FrontListenerStartupEvent = httpLoadBalancer.start();
-        l4FrontListenerStartupEvent.future().join();
-        assertTrue(l4FrontListenerStartupEvent.success());
-
-        // Send using HTTP/1.1
-        HttpRequest httpRequest = HttpRequest.newBuilder()
-                .GET()
-                .uri(URI.create("https://127.0.0.1:20001"))
-                .version(HttpClient.Version.HTTP_1_1)
-                .timeout(Duration.ofSeconds(5))
-                .build();
-
-        HttpResponse<String> httpResponse = httpClient.send(httpRequest, HttpResponse.BodyHandlers.ofString());
-        assertEquals(200, httpResponse.statusCode());
-        assertEquals("Meow", httpResponse.body());
-
-        // Send using HTTP/2
-        httpRequest = HttpRequest.newBuilder()
-                .GET()
-                .uri(URI.create("https://127.0.0.1:20001"))
-                .version(HttpClient.Version.HTTP_2)
-                .timeout(Duration.ofSeconds(5))
-                .build();
-
-        httpResponse = httpClient.send(httpRequest, HttpResponse.BodyHandlers.ofString());
-        assertEquals(200, httpResponse.statusCode());
-        assertEquals("Meow", httpResponse.body());
-
-        // Shutdown HTTP Server and Load Balancer
-        httpServer.shutdown();
-        L4FrontListenerStopEvent l4FrontListenerStopEvent = httpLoadBalancer.stop();
-        l4FrontListenerStopEvent.future().join();
-        assertTrue(l4FrontListenerStopEvent.success());
-    }
-
-    @Test
-    void http2BackendWithoutTLSClient() throws Exception {
-        HTTPServer httpServer = new HTTPServer(10002, true);
-        httpServer.start();
-        Thread.sleep(500L);
-
-        Cluster cluster = new ClusterPool(new EventStream(), new HTTPRoundRobin(NOOPSessionPersistence.INSTANCE));
-        cluster.hostname("localhost");
-        new Node(cluster, new InetSocketAddress("127.0.0.1", 10002));
-
-        HTTPLoadBalancer httpLoadBalancer = HTTPLoadBalancerBuilder.newBuilder()
-                .withCoreConfiguration(coreConfiguration)
-                .withHTTPConfiguration(httpConfiguration)
-                .withTLSForClient(forClient)
-                .withCluster(cluster)
-                .withBindAddress(new InetSocketAddress("127.0.0.1", 20002))
-                .withHTTPInitializer(new DefaultHTTPServerInitializer())
-                .withL4FrontListener(new TCPListener())
-                .build();
-
-        L4FrontListenerStartupEvent l4FrontListenerStartupEvent = httpLoadBalancer.start();
-        l4FrontListenerStartupEvent.future().join();
-        assertTrue(l4FrontListenerStartupEvent.success());
-
-        // Send using HTTP/1.1
-        HttpRequest httpRequest = HttpRequest.newBuilder()
-                .GET()
-                .uri(URI.create("http://127.0.0.1:20002"))
-                .version(HttpClient.Version.HTTP_1_1)
-                .timeout(Duration.ofSeconds(5))
-                .build();
-
-        HttpResponse<String> httpResponse = httpClient.send(httpRequest, HttpResponse.BodyHandlers.ofString());
-        assertEquals(200, httpResponse.statusCode());
-        assertEquals("Meow", httpResponse.body());
-
-        // Shutdown HTTP Server and Load Balancer
-        httpServer.shutdown();
-        L4FrontListenerStopEvent l4FrontListenerStopEvent = httpLoadBalancer.stop();
-        l4FrontListenerStopEvent.future().join();
-        assertTrue(l4FrontListenerStopEvent.success());
-    }
-
-    @Test
-    void http1BackendWithoutTLSClient() throws Exception {
-        HTTPServer httpServer = new HTTPServer(10003, false);
-        httpServer.start();
-        Thread.sleep(500L);
-
-        Cluster cluster = new ClusterPool(new EventStream(), new HTTPRoundRobin(NOOPSessionPersistence.INSTANCE));
-        cluster.hostname("localhost");
-        new Node(cluster, new InetSocketAddress("127.0.0.1", 10003));
-
-        HTTPLoadBalancer httpLoadBalancer = HTTPLoadBalancerBuilder.newBuilder()
-                .withCoreConfiguration(coreConfiguration)
-                .withHTTPConfiguration(httpConfiguration)
-                .withCluster(cluster)
-                .withBindAddress(new InetSocketAddress("127.0.0.1", 20003))
-                .withHTTPInitializer(new DefaultHTTPServerInitializer())
-                .withL4FrontListener(new TCPListener())
-                .build();
-
-        L4FrontListenerStartupEvent l4FrontListenerStartupEvent = httpLoadBalancer.start();
-        l4FrontListenerStartupEvent.future().join();
-        assertTrue(l4FrontListenerStartupEvent.success());
-
-        // Send using HTTP/1.1
-        HttpRequest httpRequest = HttpRequest.newBuilder()
-                .GET()
-                .uri(URI.create("http://127.0.0.1:20003"))
-                .version(HttpClient.Version.HTTP_1_1)
-                .timeout(Duration.ofSeconds(5))
-                .build();
-
-        HttpResponse<String> httpResponse = httpClient.send(httpRequest, HttpResponse.BodyHandlers.ofString());
-        assertEquals(200, httpResponse.statusCode());
-        assertEquals("Meow", httpResponse.body());
+            DirectDecompress directDecompress = DirectDecompress.decompress(httpResponse.body());
+            assertEquals(DecoderJNI.Status.DONE, directDecompress.getResultStatus());
+            assertEquals("Meow", new String(directDecompress.getDecompressedData()));
+        }
 
         // Shutdown HTTP Server and Load Balancer
         httpServer.shutdown();

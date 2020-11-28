@@ -114,7 +114,7 @@ class HighRPSTest {
         TLSServerMapping tlsServerMapping = new TLSServerMapping(certificateKeyPair);
 
         forServer = TLSConfigurationBuilder.forServer()
-                .withProtocols(Arrays.asList(Protocol.TLS_1_3))
+                .withProtocols(Collections.singletonList(Protocol.TLS_1_3))
                 .withCiphers(Collections.singletonList(Cipher.TLS_AES_128_GCM_SHA256))
                 .withUseALPN(true)
                 .withTLSServerMapping(tlsServerMapping)
@@ -150,7 +150,7 @@ class HighRPSTest {
 
         httpClient = HttpClient.newBuilder()
                 .sslContext(sslContext)
-                .executor(Executors.newFixedThreadPool(50))
+                .executor(Executors.newFixedThreadPool(100))
                 .build();
     }
 
