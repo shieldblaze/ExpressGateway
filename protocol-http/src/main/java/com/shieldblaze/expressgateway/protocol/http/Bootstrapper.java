@@ -54,7 +54,7 @@ final class Bootstrapper {
 
     HTTPConnection newInit(Node node, Channel channel) {
         int timeout = httpLoadBalancer.coreConfiguration().transportConfiguration().backendConnectTimeout();
-        HTTPConnection httpConnection = new HTTPConnection(timeout);
+        HTTPConnection httpConnection = new HTTPConnection(node, timeout);
 
         Bootstrap bootstrap = BootstrapFactory.getTCP(httpLoadBalancer.coreConfiguration(), eventLoopGroup, byteBufAllocator);
         bootstrap.handler(new ChannelInitializer<SocketChannel>() {

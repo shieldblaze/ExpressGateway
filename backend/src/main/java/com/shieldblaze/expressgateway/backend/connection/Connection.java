@@ -17,6 +17,7 @@
  */
 package com.shieldblaze.expressgateway.backend.connection;
 
+import com.shieldblaze.expressgateway.backend.Node;
 import com.shieldblaze.expressgateway.common.annotation.NonNull;
 import com.shieldblaze.expressgateway.common.utils.ReferenceCounted;
 import io.netty.channel.ChannelFuture;
@@ -40,12 +41,14 @@ public abstract class Connection {
      */
     protected ConcurrentLinkedQueue<Backlog> backlogQueue = new ConcurrentLinkedQueue<>();
 
+    private final Node node;
     private final long timeout;
     private ChannelFuture channelFuture;
     private boolean inUse;
     private InetSocketAddress socketAddress;
 
-    public Connection(long timeout) {
+    public Connection(Node node, long timeout) {
+        this.node = node;
         this.timeout = Instant.now().plusMillis(timeout).toEpochMilli();
     }
 
@@ -80,6 +83,29 @@ public abstract class Connection {
      * this method is called.
      */
     protected abstract void processBacklog(ChannelFuture channelFuture);
+
+    /**
+     * Write and Process the Backlog
+     */
+    @NonNull
+    protected void writeBacklog(ChannelFuture channelFuture) {
+        ConcurrentLinkedQueue<Backlog> queue = new ConcurrentLinkedQueue<>(backlogQueue); // Make copy of Queue
+        backlogQueue = null; // Make old queue null so no more data is written to it.
+        queue.forEach(backlog -> channelFuture.channel().writeAndFlush(backlog.object(), backlog.channelPromise()));
+        queue.clear(); // Clear the new queue because we're done with it.
+    }
+
+    /**
+     * Clear the Backlog and release all objects.
+     */
+    @NonNull
+    protected void clearBacklog(Throwable throwable) {
+        backlogQueue.forEach(backlog -> {
+            ReferenceCounted.silentRelease(backlog.object());
+            backlog.channelPromise().tryFailure(throwable);
+        });
+        backlogQueue = null;
+    }
 
     /**
      * Write and Flush data
@@ -179,6 +205,14 @@ public abstract class Connection {
         return channelFuture;
     }
 
+    public Node node() {
+        return node;
+    }
+
+    public InetSocketAddress socketAddress() {
+        return socketAddress;
+    }
+
     /**
      * Close this {@linkplain Connection}
      */
@@ -189,7 +223,8 @@ public abstract class Connection {
     @Override
     public String toString() {
         return "Connection{" +
-                "timeout=" + timeout +
+                "node=" + node +
+                ", timeout=" + timeout +
                 ", channelFuture=" + channelFuture +
                 ", inUse=" + inUse +
                 ", socketAddress=" + socketAddress +

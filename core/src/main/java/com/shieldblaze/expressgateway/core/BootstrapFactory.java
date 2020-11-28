@@ -90,7 +90,9 @@ public final class BootstrapFactory {
                         return datagramChannel;
                     } else if (coreConfiguration.transportConfiguration().transportType() == TransportType.EPOLL) {
                         EpollDatagramChannel datagramChannel = new EpollDatagramChannel();
-                        datagramChannel.config().setEpollMode(EpollMode.EDGE_TRIGGERED).setOption(UnixChannelOption.SO_REUSEPORT, true);
+                        datagramChannel.config()
+                                .setEpollMode(EpollMode.EDGE_TRIGGERED)
+                                .setOption(UnixChannelOption.SO_REUSEPORT, true);
 
                         return datagramChannel;
                     } else {

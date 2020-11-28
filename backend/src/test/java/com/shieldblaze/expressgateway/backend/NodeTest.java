@@ -79,14 +79,14 @@ class NodeTest {
 
         // Start 100 TCP Connections and connect to TCP Server
         for (int i = 0; i < 100; i++) {
-            node.addConnection(connection());
+            node.addConnection(connection(node));
         }
 
         // Verify 100 connections are active
         assertEquals(100, node.activeConnection());
 
         // Try connection 1 more connection which will cause maximum connection limit to exceed.
-        assertThrows(TooManyConnectionsException.class, () -> node.addConnection(connection()));
+        assertThrows(TooManyConnectionsException.class, () -> node.addConnection(connection(node)));
 
         // Mark Node as Offline and shutdown TCP Server
         healthCheck.run();
@@ -97,7 +97,7 @@ class NodeTest {
         assertEquals(0, node.activeConnection());
     }
 
-    private Connection connection() {
+    private Connection connection(Node node) {
         Bootstrap bootstrap = new Bootstrap()
                 .group(eventLoopGroup)
                 .channel(NioSocketChannel.class)
@@ -109,7 +109,7 @@ class NodeTest {
                 });
 
         ChannelFuture channelFuture = bootstrap.connect("127.0.0.1", 9110);
-        TCPConnection tcpConnection = new TCPConnection();
+        TCPConnection tcpConnection = new TCPConnection(node);
         tcpConnection.init(channelFuture);
         return tcpConnection;
     }
@@ -132,8 +132,8 @@ class NodeTest {
 
     private static final class TCPConnection extends Connection {
 
-        private TCPConnection() {
-            super(1000);
+        private TCPConnection(Node node) {
+            super(node, 1000);
         }
 
         @Override

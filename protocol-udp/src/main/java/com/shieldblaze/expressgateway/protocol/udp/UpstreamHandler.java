@@ -18,8 +18,9 @@
 package com.shieldblaze.expressgateway.protocol.udp;
 
 import com.shieldblaze.expressgateway.backend.Node;
-import com.shieldblaze.expressgateway.backend.exceptions.LoadBalanceException;
 import com.shieldblaze.expressgateway.backend.strategy.l4.L4Request;
+import com.shieldblaze.expressgateway.common.map.SelfExpiringMap;
+import com.shieldblaze.expressgateway.common.utils.comparator.InetSocketAddressHashCodeComparator;
 import com.shieldblaze.expressgateway.core.loadbalancer.L4LoadBalancer;
 import io.netty.channel.ChannelHandler;
 import io.netty.channel.ChannelHandlerContext;
@@ -28,6 +29,8 @@ import io.netty.channel.socket.DatagramPacket;
 import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
 
+import java.net.InetSocketAddress;
+import java.time.Duration;
 import java.util.Map;
 import java.util.concurrent.ConcurrentSkipListMap;
 
@@ -36,48 +39,48 @@ final class UpstreamHandler extends ChannelInboundHandlerAdapter {
 
     private static final Logger logger = LogManager.getLogger(UpstreamHandler.class);
 
-    final Map<String, Connection> connectionMap = new ConcurrentSkipListMap<>();
+    private final Map<InetSocketAddress, UDPConnection> connectionMap;
     private final L4LoadBalancer l4LoadBalancer;
-    private final ConnectionCleaner connectionCleaner = new ConnectionCleaner(this);
+    private final Bootstrapper bootstrapper;
 
     UpstreamHandler(L4LoadBalancer l4LoadBalancer) {
         this.l4LoadBalancer = l4LoadBalancer;
-        connectionCleaner.startService();
+        this.bootstrapper = new Bootstrapper(l4LoadBalancer, l4LoadBalancer.eventLoopFactory().childGroup(), l4LoadBalancer.byteBufAllocator());
+        connectionMap = new SelfExpiringMap<>(
+                new ConcurrentSkipListMap<>(InetSocketAddressHashCodeComparator.INSTANCE),
+                Duration.ofMillis(l4LoadBalancer.coreConfiguration().transportConfiguration().connectionIdleTimeout()),
+                true
+        );
     }
 
     @Override
     public void channelRead(ChannelHandlerContext ctx, Object msg) {
         l4LoadBalancer.eventLoopFactory().childGroup().next().execute(() -> {
             DatagramPacket datagramPacket = (DatagramPacket) msg;
-            Connection connection = connectionMap.get(datagramPacket.sender().toString());
+            UDPConnection udpConnection = connectionMap.get(datagramPacket.sender());
 
-            if (connection == null) {
+            // If connection is null then we need to establish a new connection to the node.
+            if (udpConnection == null) {
                 Node node;
                 try {
                     node = l4LoadBalancer.cluster().nextNode(new L4Request(datagramPacket.sender())).node();
-                } catch (LoadBalanceException e) {
-                    // Handle this
+                    udpConnection = bootstrapper.newInit(ctx.channel(), node, datagramPacket.sender());
+                    node.addConnection(udpConnection);
+                    connectionMap.put(datagramPacket.sender(), udpConnection);
+                } catch (Exception e) {
                     return;
                 }
-
-                connection = new Connection(datagramPacket.sender(), node, ctx.channel(), l4LoadBalancer.coreConfiguration(),
-                        l4LoadBalancer.eventLoopFactory(), ctx.alloc());
-                connectionMap.put(datagramPacket.sender().toString(), connection);
             }
 
-            connection.writeDatagram(datagramPacket);
+            udpConnection.node().incBytesSent(datagramPacket.content().readableBytes());
+            udpConnection.writeAndFlush(datagramPacket.content());
         });
     }
 
     @Override
     public void channelInactive(ChannelHandlerContext ctx) {
         logger.info("Closing All Upstream and Downstream Channels");
-
-        connectionCleaner.stopService();
-        for (Map.Entry<String, Connection> entry : connectionMap.entrySet()) {
-            Connection connection = entry.getValue();
-            connection.clearBacklog();
-        }
+        connectionMap.forEach((socketAddress, udpConnection) -> udpConnection.close());
         connectionMap.clear();
     }
 
