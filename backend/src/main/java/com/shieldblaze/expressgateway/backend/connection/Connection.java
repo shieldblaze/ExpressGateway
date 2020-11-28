@@ -82,6 +82,29 @@ public abstract class Connection {
     protected abstract void processBacklog(ChannelFuture channelFuture);
 
     /**
+     * Write and Process the Backlog
+     */
+    @NonNull
+    protected void writeBacklog(ChannelFuture channelFuture) {
+        ConcurrentLinkedQueue<Backlog> queue = new ConcurrentLinkedQueue<>(backlogQueue); // Make copy of Queue
+        backlogQueue = null; // Make old queue null so no more data is written to it.
+        queue.forEach(backlog -> channelFuture.channel().writeAndFlush(backlog.object(), backlog.channelPromise()));
+        queue.clear(); // Clear the new queue because we're done with it.
+    }
+
+    /**
+     * Clear the Backlog and release all objects.
+     */
+    @NonNull
+    protected void clearBacklog(Throwable throwable) {
+        backlogQueue.forEach(backlog -> {
+            ReferenceCounted.silentRelease(backlog.object());
+            backlog.channelPromise().tryFailure(throwable);
+        });
+        backlogQueue = null;
+    }
+
+    /**
      * Write and Flush data
      *
      * @param o Data to be written
@@ -177,6 +200,10 @@ public abstract class Connection {
      */
     public ChannelFuture channelFuture() {
         return channelFuture;
+    }
+
+    public InetSocketAddress socketAddress() {
+        return socketAddress;
     }
 
     /**

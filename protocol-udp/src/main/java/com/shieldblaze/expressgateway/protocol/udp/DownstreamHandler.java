@@ -17,6 +17,7 @@
  */
 package com.shieldblaze.expressgateway.protocol.udp;
 
+import com.shieldblaze.expressgateway.backend.Node;
 import io.netty.channel.Channel;
 import io.netty.channel.ChannelHandlerContext;
 import io.netty.channel.ChannelInboundHandlerAdapter;
@@ -30,34 +31,34 @@ final class DownstreamHandler extends ChannelInboundHandlerAdapter {
 
     private static final Logger logger = LogManager.getLogger(DownstreamHandler.class);
 
-    private final Channel clientChannel;
-    private final InetSocketAddress clientAddress;
-    private final Connection connection;
+    private final Channel channel;
+    private final Node node;
+    private final UDPConnection udpConnection;
+    private final InetSocketAddress socketAddress;
 
-    DownstreamHandler(Channel clientChannel, InetSocketAddress clientAddress, Connection connection) {
-        this.clientChannel = clientChannel;
-        this.clientAddress = clientAddress;
-        this.connection = connection;
+    DownstreamHandler(Channel channel, Node node, InetSocketAddress socketAddress, UDPConnection udpConnection) {
+        this.channel = channel;
+        this.node = node;
+        this.udpConnection = udpConnection;
+        this.socketAddress = socketAddress;
     }
 
     @Override
     public void channelRead(ChannelHandlerContext ctx, Object msg) {
         DatagramPacket packet = (DatagramPacket) msg;
-        connection.node.incBytesReceived(packet.content().readableBytes());
-        clientChannel.writeAndFlush(new DatagramPacket(packet.content(), clientAddress));
+        node.incBytesReceived(packet.content().readableBytes());
+        channel.writeAndFlush(new DatagramPacket(packet.content(), socketAddress));
     }
 
     @Override
     public void channelInactive(ChannelHandlerContext ctx) {
-
-        if (logger.isInfoEnabled()) {
-            logger.info("Closing Upstream {} and Downstream {} Channel",
-                    connection.clientAddress.getAddress().getHostAddress() + ":" + connection.clientAddress.getPort(),
-                    connection.node.socketAddress().getAddress().getHostAddress() + ":" + connection.node.socketAddress().getPort());
+        if (logger.isDebugEnabled()) {
+            logger.debug("Closing Upstream {} and Downstream {} Channel",
+                    socketAddress.getAddress().getHostAddress() + ":" + socketAddress.getPort(),
+                    udpConnection.socketAddress().getAddress().getHostAddress() + ":" + udpConnection.socketAddress().getPort());
         }
 
-        connection.connectionActive.set(false); // Mark the Connection as inactive
-        ctx.channel().close();                  // Close Downstream Channel
+        ctx.channel().close(); // Close Downstream Channel
     }
 
     @Override

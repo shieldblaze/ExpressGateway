@@ -17,15 +17,11 @@
  */
 package com.shieldblaze.expressgateway.protocol.http;
 
-import com.shieldblaze.expressgateway.backend.connection.Backlog;
 import com.shieldblaze.expressgateway.backend.connection.Connection;
-import com.shieldblaze.expressgateway.common.utils.ReferenceCounted;
 import com.shieldblaze.expressgateway.protocol.http.alpn.ALPNHandler;
 import io.netty.channel.Channel;
 import io.netty.channel.ChannelFuture;
 import io.netty.handler.ssl.ApplicationProtocolNames;
-
-import java.util.concurrent.ConcurrentLinkedQueue;
 
 final class HTTPConnection extends Connection {
 
@@ -60,21 +56,6 @@ final class HTTPConnection extends Connection {
         } else {
             clearBacklog(channelFuture.cause());
         }
-    }
-
-    private void writeBacklog(ChannelFuture channelFuture) {
-        ConcurrentLinkedQueue<Backlog> queue = new ConcurrentLinkedQueue<>(backlogQueue); // Make copy of Queue
-        backlogQueue = null; // Make old queue null so no more data is written to it.
-        queue.forEach(backlog -> channelFuture.channel().writeAndFlush(backlog.object(), backlog.channelPromise()));
-        queue.clear(); // Clear the new queue because we're done with it.
-    }
-
-    private void clearBacklog(Throwable throwable) {
-        backlogQueue.forEach(backlog -> {
-            ReferenceCounted.silentRelease(backlog.object());
-            backlog.channelPromise().tryFailure(throwable);
-        });
-        backlogQueue = null;
     }
 
     boolean isHTTP2() {
