@@ -49,7 +49,6 @@ import io.netty.handler.codec.http2.HttpConversionUtil;
 import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
 
-import java.net.InetSocketAddress;
 import java.util.Map;
 import java.util.Random;
 import java.util.concurrent.ConcurrentSkipListMap;
@@ -102,8 +101,11 @@ public final class HTTP2InboundAdapter extends ChannelDuplexHandler {
 
     @Override
     public void handlerAdded(ChannelHandlerContext ctx) {
-        InetSocketAddress socketAddress = (InetSocketAddress) ctx.channel().remoteAddress();
-        random = new Random(socketAddress.hashCode());
+        if (ctx.channel().remoteAddress() != null) {
+            random = new Random(ctx.channel().remoteAddress().hashCode());
+        } else {
+            random = new Random(hashCode());
+        }
     }
 
     @Override
