@@ -155,7 +155,7 @@ public final class HTTP2InboundAdapter extends ChannelDuplexHandler {
             streamIds.put(streamId, inboundProperty.streamHash());
 
             httpRequest.headers().set(Headers.STREAM_HASH, inboundProperty.streamHash());
-            httpRequest.headers().set(Headers.X_FORWARDED_HTTP_VERSION, Headers.Values.HTTP_1_1);
+            httpRequest.headers().set(Headers.X_FORWARDED_HTTP_VERSION, Headers.Values.HTTP_2);
             ctx.fireChannelRead(httpRequest);
         }
     }
