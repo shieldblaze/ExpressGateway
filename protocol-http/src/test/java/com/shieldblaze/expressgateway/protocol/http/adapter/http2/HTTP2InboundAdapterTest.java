@@ -26,6 +26,7 @@ import io.netty.handler.codec.http.DefaultFullHttpResponse;
 import io.netty.handler.codec.http.DefaultHttpResponse;
 import io.netty.handler.codec.http.FullHttpRequest;
 import io.netty.handler.codec.http.HttpHeaderNames;
+import io.netty.handler.codec.http.HttpHeaderValues;
 import io.netty.handler.codec.http.HttpRequest;
 import io.netty.handler.codec.http.HttpResponse;
 import io.netty.handler.codec.http.HttpResponseStatus;
@@ -240,7 +241,7 @@ class HTTP2InboundAdapterTest {
         embeddedChannel.flushInbound();
         FullHttpRequest fullHttpRequest = embeddedChannel.readInbound();
 
-        final int bytesCount = 1024 * 100;
+        final int bytesCount = 1024 * 1000;
 
         HttpResponse httpResponse = new DefaultHttpResponse(HttpVersion.HTTP_1_1, HttpResponseStatus.OK);
         httpResponse.headers().set(Headers.STREAM_HASH, fullHttpRequest.headers().get(Headers.STREAM_HASH));
@@ -255,6 +256,59 @@ class HTTP2InboundAdapterTest {
 
         long streamHash = Long.parseLong(fullHttpRequest.headers().get(Headers.STREAM_HASH));
 
+        for (int i = 1; i <= bytesCount; i++) {
+            byte[] bytes = new byte[1];
+            new Random().nextBytes(bytes);
+
+            DefaultHttp2TranslatedHttpContent httpContent;
+            if (i == bytesCount) {
+                httpContent = new DefaultHttp2TranslatedLastHttpContent(Unpooled.wrappedBuffer(bytes), streamHash);
+            } else {
+                httpContent = new DefaultHttp2TranslatedHttpContent(Unpooled.wrappedBuffer(bytes), streamHash);
+            }
+            embeddedChannel.writeOutbound(httpContent);
+            embeddedChannel.flushOutbound();
+
+            Http2DataFrame http2DataFrame = embeddedChannel.readOutbound();
+            assertArrayEquals(bytes, ByteBufUtil.getBytes(http2DataFrame.content()));
+            http2DataFrame.release();
+
+            if (i == bytesCount) {
+                assertTrue(http2DataFrame.isEndStream());
+            } else {
+                assertFalse(http2DataFrame.isEndStream());
+            }
+        }
+
+        fullHttpRequest.release();
+    }
+
+    @Test
+    void fullDuplexTransferEncodingChunkedTest() {
+        Http2HeadersFrame http2HeadersFrame = new DefaultHttp2HeadersFrame(new DefaultHttp2Headers(), true);
+        http2HeadersFrame.stream(new CustomHttp2FrameStream(2));
+        http2HeadersFrame.headers().method("GET");
+        http2HeadersFrame.headers().scheme("https");
+        http2HeadersFrame.headers().path("/");
+        http2HeadersFrame.headers().authority("localhost");
+
+        embeddedChannel.writeInbound(http2HeadersFrame);
+        embeddedChannel.flushInbound();
+        FullHttpRequest fullHttpRequest = embeddedChannel.readInbound();
+
+        HttpResponse httpResponse = new DefaultHttpResponse(HttpVersion.HTTP_1_1, HttpResponseStatus.OK);
+        httpResponse.headers().set(Headers.STREAM_HASH, fullHttpRequest.headers().get(Headers.STREAM_HASH));
+        httpResponse.headers().set(HttpConversionUtil.ExtensionHeaderNames.STREAM_ID.text(), "2");
+        httpResponse.headers().set(HttpHeaderNames.TRANSFER_ENCODING, HttpHeaderValues.CHUNKED);
+        embeddedChannel.writeOutbound(httpResponse);
+        embeddedChannel.flushOutbound();
+
+        Http2HeadersFrame responseHeadersFrame = embeddedChannel.readOutbound();
+        assertEquals("200", responseHeadersFrame.headers().status().toString());
+
+        long streamHash = Long.parseLong(fullHttpRequest.headers().get(Headers.STREAM_HASH));
+
+        final int bytesCount = 1024 * 1000;
         for (int i = 1; i <= bytesCount; i++) {
             byte[] bytes = new byte[1];
             new Random().nextBytes(bytes);
