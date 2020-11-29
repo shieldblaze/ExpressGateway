@@ -19,6 +19,7 @@ package com.shieldblaze.expressgateway.protocol.http.adapter.http2;
 
 import com.shieldblaze.expressgateway.protocol.http.Headers;
 import com.shieldblaze.expressgateway.protocol.http.compression.HTTP2ContentDecompressor;
+import io.netty.buffer.Unpooled;
 import io.netty.channel.ChannelDuplexHandler;
 import io.netty.channel.ChannelHandlerContext;
 import io.netty.channel.ChannelPromise;
@@ -26,18 +27,24 @@ import io.netty.channel.embedded.EmbeddedChannel;
 import io.netty.handler.codec.http.DefaultFullHttpRequest;
 import io.netty.handler.codec.http.HttpMethod;
 import io.netty.handler.codec.http.HttpRequest;
+import io.netty.handler.codec.http.HttpResponse;
 import io.netty.handler.codec.http.HttpVersion;
 import io.netty.handler.codec.http2.DefaultHttp2Connection;
 import io.netty.handler.codec.http2.DefaultHttp2ConnectionDecoder;
 import io.netty.handler.codec.http2.DefaultHttp2ConnectionEncoder;
+import io.netty.handler.codec.http2.DefaultHttp2DataFrame;
 import io.netty.handler.codec.http2.DefaultHttp2FrameReader;
 import io.netty.handler.codec.http2.DefaultHttp2FrameWriter;
+import io.netty.handler.codec.http2.DefaultHttp2Headers;
 import io.netty.handler.codec.http2.DefaultHttp2HeadersDecoder;
+import io.netty.handler.codec.http2.DefaultHttp2HeadersFrame;
 import io.netty.handler.codec.http2.Http2Connection;
 import io.netty.handler.codec.http2.Http2ConnectionEncoder;
+import io.netty.handler.codec.http2.Http2DataFrame;
 import io.netty.handler.codec.http2.Http2FrameCodec;
 import io.netty.handler.codec.http2.Http2FrameReader;
 import io.netty.handler.codec.http2.Http2FrameWriter;
+import io.netty.handler.codec.http2.Http2Headers;
 import io.netty.handler.codec.http2.Http2HeadersEncoder;
 import io.netty.handler.codec.http2.Http2HeadersFrame;
 import io.netty.handler.codec.http2.Http2PromisedRequestVerifier;
@@ -45,12 +52,13 @@ import io.netty.handler.codec.http2.Http2Settings;
 import io.netty.handler.codec.http2.HttpConversionUtil;
 import org.junit.jupiter.api.Test;
 
+import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 class HTTP2OutboundAdapterTest {
 
     @Test
-    void simpleGETRequestAndResponse() throws InterruptedException {
+    void simpleGETRequestAndResponse() {
         EmbeddedChannel embeddedChannel = new EmbeddedChannel(
                 newCodec(),
                 new ChannelDuplexHandler() {
@@ -59,6 +67,18 @@ class HTTP2OutboundAdapterTest {
                         if (msg instanceof Http2HeadersFrame) {
                             Http2HeadersFrame headersFrame = (Http2HeadersFrame) msg;
                             assertTrue(headersFrame.isEndStream());
+
+                            Http2Headers http2Headers = new DefaultHttp2Headers();
+                            http2Headers.status("200");
+
+                            Http2HeadersFrame responseHeadersFrame = new DefaultHttp2HeadersFrame(http2Headers, false);
+                            responseHeadersFrame.stream(headersFrame.stream());
+                            ctx.fireChannelRead(responseHeadersFrame);
+
+                            Http2DataFrame http2DataFrame = new DefaultHttp2DataFrame(Unpooled.wrappedBuffer("Meow".getBytes()), true);
+                            http2DataFrame.stream(headersFrame.stream());
+                            ctx.fireChannelRead(http2DataFrame);
+
                             return;
                         }
 
@@ -75,9 +95,15 @@ class HTTP2OutboundAdapterTest {
         embeddedChannel.writeOutbound(httpRequest);
         embeddedChannel.flushOutbound();
 
-        Thread.sleep(1000L);
+        HttpResponse httpResponse = embeddedChannel.readInbound();
+        assertEquals(200, httpResponse.status().code());
 
         embeddedChannel.close();
+    }
+
+    @Test
+    void simplePOSTRequestAndResponse() {
+
     }
 
     Http2FrameCodec newCodec() {
