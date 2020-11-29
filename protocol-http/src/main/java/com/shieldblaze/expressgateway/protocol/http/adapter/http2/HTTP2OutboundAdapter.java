@@ -183,7 +183,7 @@ public final class HTTP2OutboundAdapter extends Http2ChannelDuplexHandler {
                 HttpVersion httpVersion;
                 if (outboundProperty.httpVersion().equals(Headers.Values.HTTP_1_0)) {
                     httpVersion = HttpVersion.HTTP_1_0;
-                } else if (outboundProperty.httpVersion().equals(Headers.Values.HTTP_1_1)) {
+                } else if (outboundProperty.httpVersion().equals(Headers.Values.HTTP_1_1) || outboundProperty.httpVersion().equals(Headers.Values.HTTP_2)) {
                     httpVersion = HttpVersion.HTTP_1_1;
                 } else {
                     throw new IllegalArgumentException("Unsupported X-Forwarded-HTTP-Version");

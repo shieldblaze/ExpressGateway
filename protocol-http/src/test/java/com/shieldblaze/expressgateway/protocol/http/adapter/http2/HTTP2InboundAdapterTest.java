@@ -54,7 +54,7 @@ class HTTP2InboundAdapterTest {
     }
 
     @Test
-    void http2InboundTest() {
+    void duplexHTTP2InboundTest() {
         {
             Http2HeadersFrame http2HeadersFrame = new DefaultHttp2HeadersFrame(new DefaultHttp2Headers(), true);
             http2HeadersFrame.stream(new CustomHttp2FrameStream(2));
