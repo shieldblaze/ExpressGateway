@@ -96,7 +96,7 @@ public final class HTTP2OutboundAdapter extends Http2ChannelDuplexHandler {
     private final Map<Long, OutboundProperty> streamMap = new ConcurrentSkipListMap<>();
 
     @Override
-    public void write(ChannelHandlerContext ctx, Object msg, ChannelPromise promise) {
+    public void write(ChannelHandlerContext ctx, Object msg, ChannelPromise promise) throws Exception {
         if (msg instanceof HttpRequest) {
             HttpRequest httpRequest = (HttpRequest) msg;
             Http2FrameCodec.DefaultHttp2FrameStream http2FrameStream = (Http2FrameCodec.DefaultHttp2FrameStream) newStream();
@@ -111,12 +111,18 @@ public final class HTTP2OutboundAdapter extends Http2ChannelDuplexHandler {
             if (msg instanceof FullHttpRequest) {
                 FullHttpRequest fullHttpRequest = (FullHttpRequest) msg;
 
-                Http2Headers http2Headers = HttpConversionUtil.toHttp2Headers(fullHttpRequest, false);
-                Http2HeadersFrame http2HeadersFrame = new DefaultHttp2HeadersFrame(http2Headers, false);
-                writeHeaders(ctx, streamHash, http2HeadersFrame, promise);
+                if (fullHttpRequest.content().readableBytes() == 0) {
+                    Http2Headers http2Headers = HttpConversionUtil.toHttp2Headers(fullHttpRequest, false);
+                    Http2HeadersFrame http2HeadersFrame = new DefaultHttp2HeadersFrame(http2Headers, true);
+                    writeHeaders(ctx, streamHash, http2HeadersFrame, promise);
+                } else {
+                    Http2Headers http2Headers = HttpConversionUtil.toHttp2Headers(fullHttpRequest, false);
+                    Http2HeadersFrame http2HeadersFrame = new DefaultHttp2HeadersFrame(http2Headers, false);
+                    writeHeaders(ctx, streamHash, http2HeadersFrame, promise);
 
-                Http2DataFrame dataFrame = new DefaultHttp2DataFrame(fullHttpRequest.content(), true);
-                writeData(ctx, streamHash, dataFrame, ctx.newPromise());
+                    Http2DataFrame dataFrame = new DefaultHttp2DataFrame(fullHttpRequest.content(), true);
+                    writeData(ctx, streamHash, dataFrame, ctx.newPromise());
+                }
             } else {
                 Http2Headers http2Headers = HttpConversionUtil.toHttp2Headers((HttpRequest) msg, false);
                 Http2HeadersFrame http2HeadersFrame = new DefaultHttp2HeadersFrame(http2Headers, false);
@@ -224,17 +230,18 @@ public final class HTTP2OutboundAdapter extends Http2ChannelDuplexHandler {
     /**
      * Write and Flush {@linkplain Http2HeadersFrame}
      */
-    private void writeHeaders(ChannelHandlerContext ctx, long streamHash, Http2HeadersFrame headersFrame, ChannelPromise channelPromise) {
+    private void writeHeaders(ChannelHandlerContext ctx, long streamHash, Http2HeadersFrame headersFrame, ChannelPromise channelPromise) throws Exception {
+        headersFrame.headers().remove(Headers.STREAM_HASH);
         headersFrame.stream(getOutboundProperty(streamHash).stream());
-        ctx.writeAndFlush(headersFrame, channelPromise);
+        super.write(ctx, headersFrame, channelPromise);
     }
 
     /**
      * Write and Flush {@linkplain Http2DataFrame}
      */
-    private void writeData(ChannelHandlerContext ctx, long streamHash, Http2DataFrame dataFrame, ChannelPromise channelPromise) {
+    private void writeData(ChannelHandlerContext ctx, long streamHash, Http2DataFrame dataFrame, ChannelPromise channelPromise) throws Exception {
         dataFrame.stream(getOutboundProperty(streamHash).stream());
-        ctx.writeAndFlush(dataFrame, channelPromise);
+        super.write(ctx, dataFrame, channelPromise);
     }
 
     /**
