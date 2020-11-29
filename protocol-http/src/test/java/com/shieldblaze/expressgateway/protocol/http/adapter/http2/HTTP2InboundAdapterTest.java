@@ -142,5 +142,37 @@ class HTTP2InboundAdapterTest {
             httpContent.release();
             lastHttpContent.release();
         }
+
+        {
+            Http2HeadersFrame http2HeadersFrame = new DefaultHttp2HeadersFrame(new DefaultHttp2Headers(), false);
+            http2HeadersFrame.stream(new CustomHttp2FrameStream(5));
+            http2HeadersFrame.headers().method("POST");
+            http2HeadersFrame.headers().scheme("http");
+            http2HeadersFrame.headers().path("/meow");
+            http2HeadersFrame.headers().authority("www.shieldblaze.com");
+
+            embeddedChannel.writeInbound(http2HeadersFrame);
+            embeddedChannel.flushInbound();
+            HttpRequest httpRequest = embeddedChannel.readInbound();
+
+            assertEquals("POST", httpRequest.method().name());
+            assertEquals("http", httpRequest.headers().get("x-http2-scheme"));
+            assertEquals("/meow", httpRequest.uri());
+            assertEquals("www.shieldblaze.com", httpRequest.headers().get("host"));
+            assertEquals(String.valueOf(5), httpRequest.headers().get("x-http2-stream-id"));
+            assertTrue(httpRequest.headers().contains(Headers.STREAM_HASH));
+            assertEquals(Headers.Values.HTTP_2, httpRequest.headers().get(Headers.X_FORWARDED_HTTP_VERSION));
+
+            Http2DataFrame http2DataFrame = new DefaultHttp2DataFrame(Unpooled.wrappedBuffer("MeowMeow".getBytes()), true);
+            http2DataFrame.stream(http2HeadersFrame.stream());
+            embeddedChannel.writeInbound(http2DataFrame);
+            embeddedChannel.flushInbound();
+            DefaultHttp2TranslatedLastHttpContent lastHttpContent = embeddedChannel.readInbound();
+
+            assertEquals(5, lastHttpContent.streamId());
+            assertEquals("MeowMeow", new String(ByteBufUtil.getBytes(lastHttpContent.content())));
+
+            lastHttpContent.release();
+        }
     }
 }
