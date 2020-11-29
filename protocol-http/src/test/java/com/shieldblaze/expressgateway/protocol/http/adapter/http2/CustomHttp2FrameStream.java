@@ -37,4 +37,11 @@ final class CustomHttp2FrameStream implements Http2FrameStream {
     public Http2Stream.State state() {
         return Http2Stream.State.OPEN;
     }
+
+    @Override
+    public String toString() {
+        return "CustomHttp2FrameStream{" +
+                "id=" + id +
+                '}';
+    }
 }

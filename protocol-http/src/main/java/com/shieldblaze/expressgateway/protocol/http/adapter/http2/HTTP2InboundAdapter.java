@@ -104,7 +104,7 @@ public final class HTTP2InboundAdapter extends ChannelDuplexHandler {
         if (ctx.channel().remoteAddress() != null) {
             random = new Random(ctx.channel().remoteAddress().hashCode());
         } else {
-            random = new Random(hashCode());
+            random = new Random();
         }
     }
 
@@ -179,14 +179,21 @@ public final class HTTP2InboundAdapter extends ChannelDuplexHandler {
                 FullHttpResponse fullHttpResponse = (FullHttpResponse) msg;
                 InboundProperty inboundProperty = streamMap.get(Long.parseLong(fullHttpResponse.headers().get(Headers.STREAM_HASH)));
                 Http2Headers http2Headers = HttpConversionUtil.toHttp2Headers(fullHttpResponse, false);
+                http2Headers.remove(Headers.STREAM_HASH);
 
-                onHeadersWrite(http2Headers, inboundProperty);
+                applyCompression(http2Headers, inboundProperty);
 
-                Http2HeadersFrame headersFrame = new DefaultHttp2HeadersFrame(http2Headers, false);
-                writeHeaders(ctx, inboundProperty, headersFrame, promise);
+                // If 'readableBytes' is 0 then there is no Data frame to write. We'll mark Header frame as 'endOfStream'.
+                if (fullHttpResponse.content().readableBytes() == 0) {
+                    Http2HeadersFrame headersFrame = new DefaultHttp2HeadersFrame(http2Headers, true);
+                    writeHeaders(ctx, inboundProperty, headersFrame, promise);
+                } else {
+                    Http2HeadersFrame headersFrame = new DefaultHttp2HeadersFrame(http2Headers, false);
+                    writeHeaders(ctx, inboundProperty, headersFrame, promise);
 
-                Http2DataFrame dataFrame = new DefaultHttp2DataFrame(fullHttpResponse.content(), true);
-                writeData(ctx, inboundProperty, dataFrame, ctx.newPromise());
+                    Http2DataFrame dataFrame = new DefaultHttp2DataFrame(fullHttpResponse.content(), true);
+                    writeData(ctx, inboundProperty, dataFrame, ctx.newPromise());
+                }
 
                 // We're done with this Stream
                 removeStreamMapping(inboundProperty.streamHash());
@@ -195,7 +202,7 @@ public final class HTTP2InboundAdapter extends ChannelDuplexHandler {
                 InboundProperty inboundProperty = streamMap.get(Long.parseLong(httpResponse.headers().get(Headers.STREAM_HASH)));
                 Http2Headers http2Headers = HttpConversionUtil.toHttp2Headers(httpResponse, false);
 
-                onHeadersWrite(http2Headers, inboundProperty);
+                applyCompression(http2Headers, inboundProperty);
 
                 Http2HeadersFrame headersFrame = new DefaultHttp2HeadersFrame(http2Headers, false);
                 writeHeaders(ctx, inboundProperty, headersFrame, promise);
@@ -234,7 +241,7 @@ public final class HTTP2InboundAdapter extends ChannelDuplexHandler {
         }
     }
 
-    private void onHeadersWrite(Http2Headers headers, InboundProperty inboundProperty) {
+    private void applyCompression(Http2Headers headers, InboundProperty inboundProperty) {
         if (!headers.contains(HttpHeaderNames.CONTENT_ENCODING) && inboundProperty.acceptEncoding() != null) {
             String targetEncoding = HTTPCompressionUtil.targetEncoding(headers, inboundProperty.acceptEncoding());
             if (targetEncoding != null) {
@@ -273,11 +280,19 @@ public final class HTTP2InboundAdapter extends ChannelDuplexHandler {
         ctx.write(dataFrame, channelPromise);
     }
 
-    private void removeStreamMapping(int streamId) {
+    protected Long streamHash(int streamId) {
+        return streamIds.get(streamId);
+    }
+
+    protected InboundProperty streamProperty(long streamHash) {
+        return streamMap.get(streamHash);
+    }
+
+    protected void removeStreamMapping(int streamId) {
         streamMap.remove(streamIds.remove(streamId));
     }
 
-    private void removeStreamMapping(long streamHash) {
+    protected void removeStreamMapping(long streamHash) {
         InboundProperty inboundProperty = streamMap.remove(streamHash);
         streamIds.remove(inboundProperty.stream().id());
     }

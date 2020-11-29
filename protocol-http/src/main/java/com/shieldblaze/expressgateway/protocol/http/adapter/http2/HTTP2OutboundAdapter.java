@@ -165,7 +165,7 @@ public final class HTTP2OutboundAdapter extends Http2ChannelDuplexHandler {
                 } else if (outboundProperty.httpVersion().equals(Headers.Values.HTTP_1_1) || outboundProperty.httpVersion().equals(Headers.Values.HTTP_2)) {
                     httpVersion = HttpVersion.HTTP_1_1;
                 } else {
-                    throw new IllegalArgumentException("Unsupported X-Forwarded-HTTP-Version");
+                    throw new IllegalArgumentException("Unsupported X-Forwarded-HTTP-Version: " + outboundProperty.httpVersion());
                 }
 
                 HttpConversionUtil.addHttp2ToHttpHeaders(streamId, headersFrame.headers(), httpContent.trailingHeaders(), httpVersion, true, false);
@@ -186,7 +186,7 @@ public final class HTTP2OutboundAdapter extends Http2ChannelDuplexHandler {
                 } else if (outboundProperty.httpVersion().equals(Headers.Values.HTTP_1_1) || outboundProperty.httpVersion().equals(Headers.Values.HTTP_2)) {
                     httpVersion = HttpVersion.HTTP_1_1;
                 } else {
-                    throw new IllegalArgumentException("Unsupported X-Forwarded-HTTP-Version");
+                    throw new IllegalArgumentException("Unsupported X-Forwarded-HTTP-Version: " + outboundProperty.httpVersion());
                 }
 
                 // If 'endOfStream' flag is set to 'true' then we will create FullHttpResponse.
