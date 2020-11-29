@@ -53,7 +53,6 @@ final class Bootstrapper {
         bootstrap.handler(new ChannelInitializer<>() {
             @Override
             protected void initChannel(Channel ch) {
-                ch.pipeline().addFirst(new LoggingHandler(LogLevel.DEBUG));
                 ch.pipeline().addFirst(new IdleStateHandler(connectionTimeout, connectionTimeout, connectionTimeout));
                 ch.pipeline().addLast(new DownstreamHandler(channel, node, socketAddress, udpConnection));
             }
