@@ -46,9 +46,9 @@ import java.net.InetSocketAddress;
 @State(Scope.Benchmark)
 @BenchmarkMode(Mode.Throughput)
 @Warmup(iterations = 5)
-public class RoundRobinBench {
+public class RoundRobinBenchTest {
 
-    private static final Logger logger = LogManager.getLogger(RoundRobinBench.class);
+    private static final Logger logger = LogManager.getLogger(RoundRobinBenchTest.class);
 
     private Cluster cluster10;
     private Cluster cluster50;
@@ -60,7 +60,7 @@ public class RoundRobinBench {
             logger.info("\"skipBench\" is set to false, skipping benchmarking test.");
         } else {
             Options opt = new OptionsBuilder()
-                    .include(RoundRobinBench.class.getSimpleName())
+                    .include(RoundRobinBenchTest.class.getSimpleName())
                     .forks(5)
                     .addProfiler("gc")
                     .build();
