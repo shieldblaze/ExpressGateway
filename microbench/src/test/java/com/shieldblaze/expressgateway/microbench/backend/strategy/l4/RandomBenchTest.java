@@ -22,7 +22,7 @@ import com.shieldblaze.expressgateway.backend.cluster.Cluster;
 import com.shieldblaze.expressgateway.backend.cluster.ClusterPool;
 import com.shieldblaze.expressgateway.backend.exceptions.LoadBalanceException;
 import com.shieldblaze.expressgateway.backend.strategy.l4.L4Request;
-import com.shieldblaze.expressgateway.backend.strategy.l4.RoundRobin;
+import com.shieldblaze.expressgateway.backend.strategy.l4.Random;
 import com.shieldblaze.expressgateway.backend.strategy.l4.sessionpersistence.NOOPSessionPersistence;
 import com.shieldblaze.expressgateway.concurrent.eventstream.EventStream;
 import org.apache.logging.log4j.LogManager;
@@ -46,9 +46,9 @@ import java.net.InetSocketAddress;
 @State(Scope.Benchmark)
 @BenchmarkMode({Mode.Throughput, Mode.AverageTime})
 @Warmup(iterations = 2)
-public class RoundRobinBenchTest {
+public class RandomBenchTest {
 
-    private static final Logger logger = LogManager.getLogger(RoundRobinBenchTest.class);
+    private static final Logger logger = LogManager.getLogger(RandomBenchTest.class);
 
     private Cluster cluster10;
     private Cluster cluster50;
@@ -60,7 +60,7 @@ public class RoundRobinBenchTest {
             logger.info("\"skipBench\" is set to false, skipping benchmarking test.");
         } else {
             Options opt = new OptionsBuilder()
-                    .include(RoundRobinBenchTest.class.getSimpleName())
+                    .include(RandomBenchTest.class.getSimpleName())
                     .forks(5)
                     .addProfiler("gc")
                     .build();
@@ -71,9 +71,9 @@ public class RoundRobinBenchTest {
 
     @Setup
     public void setup() {
-        cluster10 = new ClusterPool(new EventStream(), new RoundRobin(NOOPSessionPersistence.INSTANCE), "ClusterBench10");
-        cluster50 = new ClusterPool(new EventStream(), new RoundRobin(NOOPSessionPersistence.INSTANCE), "ClusterBench50");
-        cluster100 = new ClusterPool(new EventStream(), new RoundRobin(NOOPSessionPersistence.INSTANCE), "ClusterBench100");
+        cluster10 = new ClusterPool(new EventStream(), new Random(NOOPSessionPersistence.INSTANCE), "ClusterBench10");
+        cluster50 = new ClusterPool(new EventStream(), new Random(NOOPSessionPersistence.INSTANCE), "ClusterBench50");
+        cluster100 = new ClusterPool(new EventStream(), new Random(NOOPSessionPersistence.INSTANCE), "ClusterBench100");
 
         for (int i = 1; i <= 10; i++) {
             new Node(cluster10, new InetSocketAddress("10.10.1." + i, i));
