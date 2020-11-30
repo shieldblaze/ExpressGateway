@@ -26,7 +26,7 @@ jobs:
         with:
           java-version: 11
       - name: Build with Maven
-        run: mvn -B -ntp clean package --file pom.xml
+        run: mvn -B -ntp -DskipBench=true clean package --file pom.xml
 
 
   buildOnJDK15:
@@ -40,4 +40,4 @@ jobs:
         with:
           java-version: 15
       - name: Build with Maven
-        run: mvn -B -ntp clean package --file pom.xml
+        run: mvn -B -ntp -DskipBench=true clean package --file pom.xml
