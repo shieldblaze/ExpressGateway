@@ -69,7 +69,7 @@ public final class StickySession implements SessionPersistence<HTTPBalanceRespon
     @Override
     public HTTPBalanceResponse addRoute(HTTPBalanceRequest httpBalanceRequest, Node node) {
         DefaultCookie cookie = new DefaultCookie(COOKIE_NAME, String.valueOf(node.hash()));
-        cookie.setDomain(node.cluster().hostname());
+        cookie.setDomain(httpBalanceRequest.httpHeaders().get(HttpHeaderNames.HOST));
         cookie.setPath("/");
         cookie.setHttpOnly(true);
         cookie.setSameSite(CookieHeaderNames.SameSite.Strict);
