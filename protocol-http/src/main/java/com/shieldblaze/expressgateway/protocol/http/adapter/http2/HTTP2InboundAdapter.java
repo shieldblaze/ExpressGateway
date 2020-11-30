@@ -49,7 +49,6 @@ import io.netty.handler.codec.http2.HttpConversionUtil;
 import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
 
-import java.net.InetSocketAddress;
 import java.util.Map;
 import java.util.Random;
 import java.util.concurrent.ConcurrentSkipListMap;
@@ -102,8 +101,12 @@ public final class HTTP2InboundAdapter extends ChannelDuplexHandler {
 
     @Override
     public void handlerAdded(ChannelHandlerContext ctx) {
-        InetSocketAddress socketAddress = (InetSocketAddress) ctx.channel().remoteAddress();
-        random = new Random(socketAddress.hashCode());
+        if (ctx.channel().remoteAddress() != null) {
+            random = new Random(System.nanoTime() + ctx.channel().remoteAddress().hashCode());
+        } else {
+            // This happens when we're using EmbeddedChannel during testing.
+            random = new Random();
+        }
     }
 
     @Override
@@ -152,8 +155,15 @@ public final class HTTP2InboundAdapter extends ChannelDuplexHandler {
             streamMap.put(inboundProperty.streamHash(), inboundProperty);
             streamIds.put(streamId, inboundProperty.streamHash());
 
-            httpRequest.headers().set(Headers.STREAM_HASH, inboundProperty.streamHash());
-            httpRequest.headers().set(Headers.X_FORWARDED_HTTP_VERSION, Headers.Values.HTTP_1_1);
+            httpRequest.headers()
+                    .set(Headers.STREAM_HASH, inboundProperty.streamHash())
+                    .set(Headers.X_FORWARDED_HTTP_VERSION, Headers.Values.HTTP_2)
+                    .remove(HttpConversionUtil.ExtensionHeaderNames.STREAM_ID.text())
+                    .remove(HttpConversionUtil.ExtensionHeaderNames.PATH.text())
+                    .remove(HttpConversionUtil.ExtensionHeaderNames.STREAM_DEPENDENCY_ID.text())
+                    .remove(HttpConversionUtil.ExtensionHeaderNames.STREAM_PROMISE_ID.text())
+                    .remove(HttpConversionUtil.ExtensionHeaderNames.STREAM_WEIGHT.text());
+
             ctx.fireChannelRead(httpRequest);
         }
     }
@@ -177,14 +187,21 @@ public final class HTTP2InboundAdapter extends ChannelDuplexHandler {
                 FullHttpResponse fullHttpResponse = (FullHttpResponse) msg;
                 InboundProperty inboundProperty = streamMap.get(Long.parseLong(fullHttpResponse.headers().get(Headers.STREAM_HASH)));
                 Http2Headers http2Headers = HttpConversionUtil.toHttp2Headers(fullHttpResponse, false);
+                http2Headers.remove(Headers.STREAM_HASH);
 
-                onHeadersWrite(http2Headers, inboundProperty);
+                applyCompression(http2Headers, inboundProperty);
 
-                Http2HeadersFrame headersFrame = new DefaultHttp2HeadersFrame(http2Headers, false);
-                writeHeaders(ctx, inboundProperty, headersFrame, promise);
+                // If 'readableBytes' is 0 then there is no Data frame to write. We'll mark Header frame as 'endOfStream'.
+                if (fullHttpResponse.content().readableBytes() == 0) {
+                    Http2HeadersFrame headersFrame = new DefaultHttp2HeadersFrame(http2Headers, true);
+                    writeHeaders(ctx, inboundProperty, headersFrame, promise);
+                } else {
+                    Http2HeadersFrame headersFrame = new DefaultHttp2HeadersFrame(http2Headers, false);
+                    writeHeaders(ctx, inboundProperty, headersFrame, promise);
 
-                Http2DataFrame dataFrame = new DefaultHttp2DataFrame(fullHttpResponse.content(), true);
-                writeData(ctx, inboundProperty, dataFrame, ctx.newPromise());
+                    Http2DataFrame dataFrame = new DefaultHttp2DataFrame(fullHttpResponse.content(), true);
+                    writeData(ctx, inboundProperty, dataFrame, ctx.newPromise());
+                }
 
                 // We're done with this Stream
                 removeStreamMapping(inboundProperty.streamHash());
@@ -193,7 +210,7 @@ public final class HTTP2InboundAdapter extends ChannelDuplexHandler {
                 InboundProperty inboundProperty = streamMap.get(Long.parseLong(httpResponse.headers().get(Headers.STREAM_HASH)));
                 Http2Headers http2Headers = HttpConversionUtil.toHttp2Headers(httpResponse, false);
 
-                onHeadersWrite(http2Headers, inboundProperty);
+                applyCompression(http2Headers, inboundProperty);
 
                 Http2HeadersFrame headersFrame = new DefaultHttp2HeadersFrame(http2Headers, false);
                 writeHeaders(ctx, inboundProperty, headersFrame, promise);
@@ -203,7 +220,7 @@ public final class HTTP2InboundAdapter extends ChannelDuplexHandler {
 
             if (msg instanceof DefaultHttp2TranslatedLastHttpContent) {
                 DefaultHttp2TranslatedLastHttpContent lastHttpContent = (DefaultHttp2TranslatedLastHttpContent) msg;
-                long streamHash = lastHttpContent.streamId();
+                long streamHash = lastHttpContent.streamHash();
                 Http2DataFrame dataFrame;
 
                 // > If Trailing Headers are empty then we'll write HTTP/2 Data Frame with 'endOfStream' set to 'true.
@@ -224,15 +241,15 @@ public final class HTTP2InboundAdapter extends ChannelDuplexHandler {
                 // We're done with this Stream
                 removeStreamMapping(streamHash);
             } else if (msg instanceof DefaultHttp2TranslatedHttpContent) {
-                long streamId = ((DefaultHttp2TranslatedHttpContent) msg).streamId();
+                long streamHash = ((DefaultHttp2TranslatedHttpContent) msg).streamHash();
 
                 Http2DataFrame dataFrame = new DefaultHttp2DataFrame(httpContent.content(), false);
-                writeData(ctx, streamId, dataFrame, promise);
+                writeData(ctx, streamHash, dataFrame, promise);
             }
         }
     }
 
-    private void onHeadersWrite(Http2Headers headers, InboundProperty inboundProperty) {
+    private void applyCompression(Http2Headers headers, InboundProperty inboundProperty) {
         if (!headers.contains(HttpHeaderNames.CONTENT_ENCODING) && inboundProperty.acceptEncoding() != null) {
             String targetEncoding = HTTPCompressionUtil.targetEncoding(headers, inboundProperty.acceptEncoding());
             if (targetEncoding != null) {
@@ -271,11 +288,19 @@ public final class HTTP2InboundAdapter extends ChannelDuplexHandler {
         ctx.write(dataFrame, channelPromise);
     }
 
-    private void removeStreamMapping(int streamId) {
+    protected Long streamHash(int streamId) {
+        return streamIds.get(streamId);
+    }
+
+    protected InboundProperty streamProperty(long streamHash) {
+        return streamMap.get(streamHash);
+    }
+
+    protected void removeStreamMapping(int streamId) {
         streamMap.remove(streamIds.remove(streamId));
     }
 
-    private void removeStreamMapping(long streamHash) {
+    protected void removeStreamMapping(long streamHash) {
         InboundProperty inboundProperty = streamMap.remove(streamHash);
         streamIds.remove(inboundProperty.stream().id());
     }

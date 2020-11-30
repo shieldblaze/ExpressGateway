@@ -45,7 +45,7 @@ import io.netty.util.internal.StringUtil;
 import java.util.Map;
 
 /**
- * {@link DefaultHttp2TranslatedHttpContent} contains {@code streamId}
+ * {@link DefaultHttp2TranslatedHttpContent} contains {@code streamHash}
  * from last (endOfStream) {@link Http2DataFrame}.
  */
 public class DefaultHttp2TranslatedLastHttpContent extends DefaultHttp2TranslatedHttpContent
@@ -58,29 +58,29 @@ public class DefaultHttp2TranslatedLastHttpContent extends DefaultHttp2Translate
      * Creates a new instance with the specified chunk content,
      * {@link Unpooled#EMPTY_BUFFER} and Header validation disabled.
      *
-     * @param streamId Stream ID of HTTP/2 Data Frame
+     * @param streamHash Stream Hash of HTTP/2 Data Frame
      */
-    public DefaultHttp2TranslatedLastHttpContent(long streamId) {
-        this(Unpooled.EMPTY_BUFFER, streamId, true);
+    public DefaultHttp2TranslatedLastHttpContent(long streamHash) {
+        this(Unpooled.EMPTY_BUFFER, streamHash, true);
     }
 
     /**
      * Creates a new instance with the specified chunk content and Header validation disabled.
      *
      * @param content  {@link ByteBuf} Content
-     * @param streamId Stream ID of HTTP/2 Data Frame
+     * @param streamHash Stream Hash of HTTP/2 Data Frame
      */
-    public DefaultHttp2TranslatedLastHttpContent(ByteBuf content, long streamId) {
-        this(content, streamId, true);
+    public DefaultHttp2TranslatedLastHttpContent(ByteBuf content, long streamHash) {
+        this(content, streamHash, true);
     }
 
     /***
      * Creates a new instance with the specified chunk content.
-     * @param streamId Stream ID of HTTP/2 Data Frame
+     * @param streamHash Stream Hash of HTTP/2 Data Frame
      * @param validateHeaders Set to {@code true} to validate headers else set to {@code false}
      */
-    public DefaultHttp2TranslatedLastHttpContent(ByteBuf content, long streamId, boolean validateHeaders) {
-        super(content, streamId);
+    public DefaultHttp2TranslatedLastHttpContent(ByteBuf content, long streamHash, boolean validateHeaders) {
+        super(content, streamHash);
         this.validateHeaders = validateHeaders;
         trailingHeaders = new TrailingHttpHeaders(validateHeaders);
     }
@@ -103,7 +103,7 @@ public class DefaultHttp2TranslatedLastHttpContent extends DefaultHttp2Translate
     @Override
     public LastHttpContent replace(ByteBuf content) {
         DefaultHttp2TranslatedLastHttpContent lastHttpContent = new DefaultHttp2TranslatedLastHttpContent(content,
-                streamId(), validateHeaders);
+                streamHash(), validateHeaders);
         lastHttpContent.trailingHeaders().set(trailingHeaders());
         return lastHttpContent;
     }

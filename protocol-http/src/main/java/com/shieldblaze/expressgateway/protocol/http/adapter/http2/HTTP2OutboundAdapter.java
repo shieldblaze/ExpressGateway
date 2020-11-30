@@ -96,7 +96,7 @@ public final class HTTP2OutboundAdapter extends Http2ChannelDuplexHandler {
     private final Map<Long, OutboundProperty> streamMap = new ConcurrentSkipListMap<>();
 
     @Override
-    public void write(ChannelHandlerContext ctx, Object msg, ChannelPromise promise) {
+    public void write(ChannelHandlerContext ctx, Object msg, ChannelPromise promise) throws Exception {
         if (msg instanceof HttpRequest) {
             HttpRequest httpRequest = (HttpRequest) msg;
             Http2FrameCodec.DefaultHttp2FrameStream http2FrameStream = (Http2FrameCodec.DefaultHttp2FrameStream) newStream();
@@ -111,12 +111,18 @@ public final class HTTP2OutboundAdapter extends Http2ChannelDuplexHandler {
             if (msg instanceof FullHttpRequest) {
                 FullHttpRequest fullHttpRequest = (FullHttpRequest) msg;
 
-                Http2Headers http2Headers = HttpConversionUtil.toHttp2Headers(fullHttpRequest, false);
-                Http2HeadersFrame http2HeadersFrame = new DefaultHttp2HeadersFrame(http2Headers, false);
-                writeHeaders(ctx, streamHash, http2HeadersFrame, promise);
+                if (fullHttpRequest.content().readableBytes() == 0) {
+                    Http2Headers http2Headers = HttpConversionUtil.toHttp2Headers(fullHttpRequest, false);
+                    Http2HeadersFrame http2HeadersFrame = new DefaultHttp2HeadersFrame(http2Headers, true);
+                    writeHeaders(ctx, streamHash, http2HeadersFrame, promise);
+                } else {
+                    Http2Headers http2Headers = HttpConversionUtil.toHttp2Headers(fullHttpRequest, false);
+                    Http2HeadersFrame http2HeadersFrame = new DefaultHttp2HeadersFrame(http2Headers, false);
+                    writeHeaders(ctx, streamHash, http2HeadersFrame, promise);
 
-                Http2DataFrame dataFrame = new DefaultHttp2DataFrame(fullHttpRequest.content(), true);
-                writeData(ctx, streamHash, dataFrame, ctx.newPromise());
+                    Http2DataFrame dataFrame = new DefaultHttp2DataFrame(fullHttpRequest.content(), true);
+                    writeData(ctx, streamHash, dataFrame, ctx.newPromise());
+                }
             } else {
                 Http2Headers http2Headers = HttpConversionUtil.toHttp2Headers((HttpRequest) msg, false);
                 Http2HeadersFrame http2HeadersFrame = new DefaultHttp2HeadersFrame(http2Headers, false);
@@ -132,19 +138,19 @@ public final class HTTP2OutboundAdapter extends Http2ChannelDuplexHandler {
                 // which will have 'endOfStream' set to 'true.
                 if (httpContent.trailingHeaders().isEmpty()) {
                     Http2DataFrame dataFrame = new DefaultHttp2DataFrame(httpContent.content(), true);
-                    writeData(ctx, httpContent.streamId(), dataFrame, promise);
+                    writeData(ctx, httpContent.streamHash(), dataFrame, promise);
                 } else {
                     Http2DataFrame dataFrame = new DefaultHttp2DataFrame(httpContent.content(), false);
-                    writeData(ctx, httpContent.streamId(), dataFrame, promise);
+                    writeData(ctx, httpContent.streamHash(), dataFrame, promise);
 
                     Http2Headers http2Headers = HttpConversionUtil.toHttp2Headers(httpContent.trailingHeaders(), false);
                     Http2HeadersFrame http2HeadersFrame = new DefaultHttp2HeadersFrame(http2Headers, true);
-                    writeHeaders(ctx, httpContent.streamId(), http2HeadersFrame, promise);
+                    writeHeaders(ctx, httpContent.streamHash(), http2HeadersFrame, promise);
                 }
             } else if (msg instanceof DefaultHttp2TranslatedHttpContent) {
                 DefaultHttp2TranslatedHttpContent httpContent = (DefaultHttp2TranslatedHttpContent) msg;
                 Http2DataFrame dataFrame = new DefaultHttp2DataFrame(httpContent.content(), false);
-                writeData(ctx, httpContent.streamId(), dataFrame, promise);
+                writeData(ctx, httpContent.streamHash(), dataFrame, promise);
             }
         }
     }
@@ -156,17 +162,18 @@ public final class HTTP2OutboundAdapter extends Http2ChannelDuplexHandler {
             int streamId = headersFrame.stream().id();
             OutboundProperty outboundProperty = getOutboundProperty(streamId);
 
+            HttpVersion httpVersion;
+            if (outboundProperty.httpVersion().equals(Headers.Values.HTTP_1_0)) {
+                httpVersion = HttpVersion.HTTP_1_0;
+            } else if (outboundProperty.httpVersion().equals(Headers.Values.HTTP_1_1) || outboundProperty.httpVersion().equals(Headers.Values.HTTP_2)) {
+                httpVersion = HttpVersion.HTTP_1_1;
+            } else {
+                throw new IllegalArgumentException("Unsupported X-Forwarded-HTTP-Version: " + outboundProperty.httpVersion());
+            }
+
+            // If initial read is already performed then this Header frame is part of Last trailing frame.
             if (outboundProperty.initialRead()) {
                 LastHttpContent httpContent = new DefaultHttp2TranslatedLastHttpContent(outboundProperty.streamHash());
-
-                HttpVersion httpVersion;
-                if (outboundProperty.httpVersion().equals(Headers.Values.HTTP_1_0)) {
-                    httpVersion = HttpVersion.HTTP_1_0;
-                } else if (outboundProperty.httpVersion().equals(Headers.Values.HTTP_1_1)) {
-                    httpVersion = HttpVersion.HTTP_1_1;
-                } else {
-                    throw new IllegalArgumentException("Unsupported X-Forwarded-HTTP-Version");
-                }
 
                 HttpConversionUtil.addHttp2ToHttpHeaders(streamId, headersFrame.headers(), httpContent.trailingHeaders(), httpVersion, true, false);
                 ctx.fireChannelRead(httpContent);
@@ -180,26 +187,23 @@ public final class HTTP2OutboundAdapter extends Http2ChannelDuplexHandler {
                 HttpResponse httpResponse;
                 long streamHash = streamIds.get(streamId);
 
-                HttpVersion httpVersion;
-                if (outboundProperty.httpVersion().equals(Headers.Values.HTTP_1_0)) {
-                    httpVersion = HttpVersion.HTTP_1_0;
-                } else if (outboundProperty.httpVersion().equals(Headers.Values.HTTP_1_1)) {
-                    httpVersion = HttpVersion.HTTP_1_1;
-                } else {
-                    throw new IllegalArgumentException("Unsupported X-Forwarded-HTTP-Version");
-                }
-
-                // If 'endOfStream' flag is set to 'true' then we will create FullHttpResponse.
+                // If 'endOfStream' flag is set to 'true' then we will create FullHttpResponse and remove mapping.
                 if (headersFrame.isEndStream()) {
-                    httpResponse = HttpConversionUtil.toFullHttpResponse(streamId, headersFrame.headers(), Unpooled.EMPTY_BUFFER,
-                            httpVersion, false);
+                    httpResponse = HttpConversionUtil.toFullHttpResponse(streamId, headersFrame.headers(), Unpooled.EMPTY_BUFFER, httpVersion, false);
                     removeStreamMapping(streamId);
                 } else {
                     httpResponse = HttpConversionUtil.toHttpResponse(streamId, headersFrame.headers(), httpVersion, false);
                     httpResponse.headers().set(HttpHeaderNames.TRANSFER_ENCODING, HttpHeaderValues.CHUNKED);
                 }
 
-                httpResponse.headers().set(Headers.STREAM_HASH, streamHash);
+                httpResponse.headers()
+                        .set(Headers.STREAM_HASH, streamHash)
+                        .remove(HttpConversionUtil.ExtensionHeaderNames.STREAM_ID.text())
+                        .remove(HttpConversionUtil.ExtensionHeaderNames.SCHEME.text())
+                        .remove(HttpConversionUtil.ExtensionHeaderNames.PATH.text())
+                        .remove(HttpConversionUtil.ExtensionHeaderNames.STREAM_DEPENDENCY_ID.text())
+                        .remove(HttpConversionUtil.ExtensionHeaderNames.STREAM_PROMISE_ID.text())
+                        .remove(HttpConversionUtil.ExtensionHeaderNames.STREAM_WEIGHT.text());
 
                 outboundProperty.fireInitialRead();
                 ctx.fireChannelRead(httpResponse);
@@ -224,17 +228,18 @@ public final class HTTP2OutboundAdapter extends Http2ChannelDuplexHandler {
     /**
      * Write and Flush {@linkplain Http2HeadersFrame}
      */
-    private void writeHeaders(ChannelHandlerContext ctx, long streamHash, Http2HeadersFrame headersFrame, ChannelPromise channelPromise) {
+    private void writeHeaders(ChannelHandlerContext ctx, long streamHash, Http2HeadersFrame headersFrame, ChannelPromise channelPromise) throws Exception {
+        headersFrame.headers().remove(Headers.STREAM_HASH);
         headersFrame.stream(getOutboundProperty(streamHash).stream());
-        ctx.writeAndFlush(headersFrame, channelPromise);
+        super.write(ctx, headersFrame, channelPromise);
     }
 
     /**
      * Write and Flush {@linkplain Http2DataFrame}
      */
-    private void writeData(ChannelHandlerContext ctx, long streamHash, Http2DataFrame dataFrame, ChannelPromise channelPromise) {
+    private void writeData(ChannelHandlerContext ctx, long streamHash, Http2DataFrame dataFrame, ChannelPromise channelPromise) throws Exception {
         dataFrame.stream(getOutboundProperty(streamHash).stream());
-        ctx.writeAndFlush(dataFrame, channelPromise);
+        super.write(ctx, dataFrame, channelPromise);
     }
 
     /**

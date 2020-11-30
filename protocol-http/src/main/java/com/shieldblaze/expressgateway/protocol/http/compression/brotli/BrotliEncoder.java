@@ -41,8 +41,6 @@ public class BrotliEncoder extends MessageToByteEncoder<ByteBuf> {
     }
 
     private final Encoder.Parameters parameters;
-    private BrotliOutputStream brotliOutputStream;
-    private ByteBuf byteBuf;
 
     /**
      * Create new {@link BrotliEncoder} Instance
@@ -60,36 +58,6 @@ public class BrotliEncoder extends MessageToByteEncoder<ByteBuf> {
             return;
         }
 
-        if (brotliOutputStream == null) {
-            byteBuf = ctx.alloc().buffer();
-            brotliOutputStream = new BrotliOutputStream(new ByteBufOutputStream(byteBuf), parameters);
-        }
-
-        if (msg.hasArray()) {
-            byte[] inAry = msg.array();
-            int offset = msg.arrayOffset() + msg.readerIndex();
-            int len = msg.readableBytes();
-            brotliOutputStream.write(inAry, offset, len);
-        } else {
-            brotliOutputStream.write(ByteBufUtil.getBytes(msg));
-        }
-
-        brotliOutputStream.flush();
-        out.writeBytes(byteBuf);
-        byteBuf.clear();
-
-        if (!out.isWritable()) {
-            out.ensureWritable(out.writerIndex());
-        }
-    }
-
-    @Override
-    public void close(ChannelHandlerContext ctx, ChannelPromise promise) throws Exception {
-        if (brotliOutputStream != null) {
-            brotliOutputStream.close();
-            byteBuf.release();
-            promise.setSuccess();
-            brotliOutputStream = null;
-        }
+        out.writeBytes(Encoder.compress(ByteBufUtil.getBytes(msg, msg.readerIndex(), msg.readableBytes(), false), parameters));
     }
 }

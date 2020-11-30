@@ -35,7 +35,6 @@ import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
 
 import java.net.InetSocketAddress;
-import java.nio.charset.StandardCharsets;
 import java.util.Map;
 import java.util.concurrent.ConcurrentSkipListMap;
 
@@ -82,19 +81,18 @@ public final class UpstreamHandler extends ChannelDuplexHandler {
             connectionMap.put(streamHash, connection);
 
             // Modify Request Headers
-            onHeadersRead(request.headers(), balanceResponse.node().cluster().hostname(), upstreamAddress);
+            onHeadersRead(request.headers(), upstreamAddress);
 
             // Write the request to Backend
             connection.writeAndFlush(request);
         } else if (msg instanceof Http2TranslatedHttpContent) {
             Http2TranslatedHttpContent httpContent = (Http2TranslatedHttpContent) msg;
-            connectionMap.get(httpContent.streamId()).writeAndFlush(msg);
+            connectionMap.get(httpContent.streamHash()).writeAndFlush(msg);
         }
     }
 
-    private void onHeadersRead(HttpHeaders headers, String host, InetSocketAddress upstreamAddress) {
+    private void onHeadersRead(HttpHeaders headers, InetSocketAddress upstreamAddress) {
         headers.remove(HttpHeaderNames.UPGRADE);
-        headers.set(HttpHeaderNames.HOST, host);
         headers.set(HttpHeaderNames.ACCEPT_ENCODING, "br, gzip, deflate");
         headers.add(Headers.X_FORWARDED_FOR, upstreamAddress.getAddress().getHostAddress());
     }
@@ -106,7 +104,7 @@ public final class UpstreamHandler extends ChannelDuplexHandler {
             response.headers().set(HttpHeaderNames.SERVER, "ShieldBlaze ExpressGateway");
         } else if (msg instanceof DefaultHttp2TranslatedLastHttpContent) {
             DefaultHttp2TranslatedLastHttpContent httpContent = (DefaultHttp2TranslatedLastHttpContent) msg;
-            connectionMap.remove(httpContent.streamId());
+            connectionMap.remove(httpContent.streamHash());
         }
         super.write(ctx, msg, promise);
     }

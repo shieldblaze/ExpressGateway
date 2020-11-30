@@ -17,7 +17,7 @@ on:
 jobs:
   buildOnJDK11:
 
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-20.04
 
     steps:
       - uses: actions/checkout@v2
@@ -26,12 +26,12 @@ jobs:
         with:
           java-version: 11
       - name: Build with Maven
-        run: mvn -B package --file pom.xml
+        run: mvn -B -ntp clean package --file pom.xml
 
 
   buildOnJDK15:
 
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-20.04
 
     steps:
       - uses: actions/checkout@v2
@@ -40,4 +40,4 @@ jobs:
         with:
           java-version: 15
       - name: Build with Maven
-        run: mvn -B package --file pom.xml
+        run: mvn -B -ntp clean package --file pom.xml

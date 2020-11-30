@@ -38,21 +38,21 @@ import io.netty.handler.codec.http.HttpContent;
 import io.netty.util.internal.StringUtil;
 
 /**
- * {@link DefaultHttp2TranslatedHttpContent} contains {@link HttpContent} and {@code streamId}
+ * {@link DefaultHttp2TranslatedHttpContent} contains {@link HttpContent} and {@code streamHash}
  * which are translated from {@link Http2DataFrame}
  */
 public class DefaultHttp2TranslatedHttpContent extends Http2TranslatedHttpContent {
 
     /**
-     * Creates a new instance with the specified chunk content and StreamId.
+     * Creates a new instance with the specified chunk content and StreamHash.
      */
-    public DefaultHttp2TranslatedHttpContent(ByteBuf content, long streamId) {
-        super(content, streamId);
+    public DefaultHttp2TranslatedHttpContent(ByteBuf content, long streamHash) {
+        super(content, streamHash);
     }
 
     @Override
     public String toString() {
-        return StringUtil.simpleClassName(this) + "(streamId: " + streamId() + ", data: " + content() +
+        return StringUtil.simpleClassName(this) + "(streamHash: " + streamHash() + ", data: " + content() +
                 ", decoderResult: " + decoderResult() + ')';
     }
 }
