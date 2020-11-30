@@ -117,7 +117,7 @@ public class HTTP2ToHTTPAdapterBenchTest {
         }
 
         @Override
-        public void channelRead(ChannelHandlerContext ctx, Object msg) throws Exception {
+        public void channelRead(ChannelHandlerContext ctx, Object msg) {
             benchTest.outboundChannel.writeInbound(msg);
             benchTest.outboundChannel.flushInbound();
         }
