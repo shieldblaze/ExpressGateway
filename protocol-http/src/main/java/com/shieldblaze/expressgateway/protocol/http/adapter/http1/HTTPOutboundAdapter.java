@@ -29,21 +29,23 @@ import io.netty.handler.codec.http2.DefaultHttp2TranslatedHttpContent;
 import io.netty.handler.codec.http2.DefaultHttp2TranslatedLastHttpContent;
 import io.netty.handler.codec.http2.HttpConversionUtil;
 
+import java.util.concurrent.atomic.AtomicLong;
+
 public final class HTTPOutboundAdapter extends ChannelDuplexHandler {
 
-    private long streamHash = 0L;
+    private final AtomicLong streamHash = new AtomicLong();
 
     @Override
     public void write(ChannelHandlerContext ctx, Object msg, ChannelPromise promise) {
         if (msg instanceof HttpRequest) {
             HttpRequest request = (HttpRequest) msg;
-            streamHash = Long.parseLong(request.headers().get(Headers.STREAM_HASH));
+            streamHash.set(Long.parseLong(request.headers().get(Headers.STREAM_HASH)));
 
-            request.headers().remove(HttpConversionUtil.ExtensionHeaderNames.STREAM_ID.text());
-            request.headers().remove(HttpConversionUtil.ExtensionHeaderNames.STREAM_WEIGHT.text());
-            request.headers().remove(HttpConversionUtil.ExtensionHeaderNames.SCHEME.text());
-            request.headers().remove(HttpConversionUtil.ExtensionHeaderNames.PATH.text());
-            request.headers().remove(HttpConversionUtil.ExtensionHeaderNames.STREAM_DEPENDENCY_ID.text());
+            request.headers().remove(HttpConversionUtil.ExtensionHeaderNames.STREAM_ID.text())
+                    .remove(HttpConversionUtil.ExtensionHeaderNames.STREAM_WEIGHT.text())
+                    .remove(HttpConversionUtil.ExtensionHeaderNames.SCHEME.text())
+                    .remove(HttpConversionUtil.ExtensionHeaderNames.PATH.text())
+                    .remove(HttpConversionUtil.ExtensionHeaderNames.STREAM_DEPENDENCY_ID.text());
         }
         ctx.write(msg, promise);
     }
@@ -52,14 +54,14 @@ public final class HTTPOutboundAdapter extends ChannelDuplexHandler {
     public void channelRead(ChannelHandlerContext ctx, Object msg) {
         if (msg instanceof HttpResponse) {
             HttpResponse response = (HttpResponse) msg;
-            response.headers().set(Headers.STREAM_HASH, streamHash);
+            response.headers().set(Headers.STREAM_HASH, streamHash.get());
         } else if (msg instanceof HttpContent) {
 
             HttpContent httpContent;
             if (msg instanceof LastHttpContent) {
-                httpContent = new DefaultHttp2TranslatedLastHttpContent(((LastHttpContent) msg).content(), streamHash);
+                httpContent = new DefaultHttp2TranslatedLastHttpContent(((LastHttpContent) msg).content(), streamHash.get());
             } else {
-                httpContent = new DefaultHttp2TranslatedHttpContent(((HttpContent) msg).content(), streamHash);
+                httpContent = new DefaultHttp2TranslatedHttpContent(((HttpContent) msg).content(), streamHash.get());
             }
 
             ctx.fireChannelRead(httpContent);

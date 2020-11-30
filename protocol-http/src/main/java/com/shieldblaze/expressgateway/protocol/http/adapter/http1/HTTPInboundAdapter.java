@@ -18,6 +18,7 @@
 package com.shieldblaze.expressgateway.protocol.http.adapter.http1;
 
 import com.shieldblaze.expressgateway.protocol.http.Headers;
+import com.shieldblaze.expressgateway.protocol.http.adapter.http2.HTTP2OutboundAdapter;
 import io.netty.channel.ChannelDuplexHandler;
 import io.netty.channel.ChannelHandlerContext;
 import io.netty.channel.ChannelPromise;
@@ -31,18 +32,26 @@ import io.netty.handler.codec.http2.DefaultHttp2TranslatedLastHttpContent;
 import io.netty.handler.codec.http2.HttpConversionUtil;
 import net.openhft.hashing.LongHashFunction;
 
-import java.net.InetSocketAddress;
 import java.util.Random;
+import java.util.concurrent.atomic.AtomicLong;
 
+/**
+ * {@linkplain HTTPInboundAdapter} handles incoming HTTP/1.x requests
+ * and add headers so they can be processed by {@linkplain HTTPOutboundAdapter}
+ * or {@linkplain HTTP2OutboundAdapter}.
+ */
 public final class HTTPInboundAdapter extends ChannelDuplexHandler {
 
-    private long streamHash;
+    private final AtomicLong streamHash = new AtomicLong();
     private Random random;
 
     @Override
     public void handlerAdded(ChannelHandlerContext ctx) {
-        InetSocketAddress socketAddress = (InetSocketAddress) ctx.channel().remoteAddress();
-        random = new Random(socketAddress.hashCode());
+        if (ctx.channel().remoteAddress() != null) {
+            random = new Random(System.nanoTime() + ctx.channel().remoteAddress().hashCode());
+        } else {
+            random = new Random();
+        }
     }
 
     @Override
@@ -50,10 +59,10 @@ public final class HTTPInboundAdapter extends ChannelDuplexHandler {
         if (msg instanceof HttpRequest) {
             HttpRequest request = (HttpRequest) msg;
 
-            streamHash = LongHashFunction.xx().hashLong(random.nextLong());
+            streamHash.set(LongHashFunction.xx().hashLong(random.nextLong()));
 
-            request.headers().set(HttpConversionUtil.ExtensionHeaderNames.SCHEME.text(), "https");
-            request.headers().set(Headers.STREAM_HASH, streamHash);
+            request.headers().set(Headers.STREAM_HASH, streamHash)
+                    .set(HttpConversionUtil.ExtensionHeaderNames.SCHEME.text(), "https");
 
             if (request.protocolVersion() == HttpVersion.HTTP_1_0) {
                 request.headers().set(Headers.X_FORWARDED_HTTP_VERSION, Headers.Values.HTTP_1_0);
@@ -66,9 +75,9 @@ public final class HTTPInboundAdapter extends ChannelDuplexHandler {
 
             HttpContent httpContent;
             if (msg instanceof LastHttpContent) {
-                httpContent = new DefaultHttp2TranslatedLastHttpContent(((LastHttpContent) msg).content(), streamHash);
+                httpContent = new DefaultHttp2TranslatedLastHttpContent(((LastHttpContent) msg).content(), streamHash.get());
             } else {
-                httpContent = new DefaultHttp2TranslatedHttpContent(((HttpContent) msg).content(), streamHash);
+                httpContent = new DefaultHttp2TranslatedHttpContent(((HttpContent) msg).content(), streamHash.get());
             }
 
             ctx.fireChannelRead(httpContent);
@@ -80,7 +89,6 @@ public final class HTTPInboundAdapter extends ChannelDuplexHandler {
         if (msg instanceof HttpResponse) {
             HttpResponse response = (HttpResponse) msg;
             response.headers().remove(Headers.STREAM_HASH);
-            response.headers().remove(HttpConversionUtil.ExtensionHeaderNames.STREAM_ID.text());
         }
         ctx.write(msg, promise);
     }

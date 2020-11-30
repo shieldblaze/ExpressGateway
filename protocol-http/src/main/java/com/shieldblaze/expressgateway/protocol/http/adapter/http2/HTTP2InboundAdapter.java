@@ -102,7 +102,7 @@ public final class HTTP2InboundAdapter extends ChannelDuplexHandler {
     @Override
     public void handlerAdded(ChannelHandlerContext ctx) {
         if (ctx.channel().remoteAddress() != null) {
-            random = new Random(ctx.channel().remoteAddress().hashCode());
+            random = new Random(System.nanoTime() + ctx.channel().remoteAddress().hashCode());
         } else {
             // This happens when we're using EmbeddedChannel during testing.
             random = new Random();
