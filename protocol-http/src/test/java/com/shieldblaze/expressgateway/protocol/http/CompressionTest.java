@@ -184,7 +184,6 @@ class CompressionTest {
         Thread.sleep(500L);
 
         Cluster cluster = new ClusterPool(new EventStream(), new HTTPRoundRobin(NOOPSessionPersistence.INSTANCE));
-        cluster.hostname("localhost");
         new Node(cluster, new InetSocketAddress("127.0.0.1", 10000));
 
         HTTPLoadBalancer httpLoadBalancer = HTTPLoadBalancerBuilder.newBuilder()
@@ -286,7 +285,6 @@ class CompressionTest {
         Thread.sleep(500L);
 
         Cluster cluster = new ClusterPool(new EventStream(), new HTTPRoundRobin(NOOPSessionPersistence.INSTANCE));
-        cluster.hostname("localhost");
         new Node(cluster, new InetSocketAddress("127.0.0.1", 10001));
 
         HTTPLoadBalancer httpLoadBalancer = HTTPLoadBalancerBuilder.newBuilder()
@@ -369,7 +367,6 @@ class CompressionTest {
         Thread.sleep(500L);
 
         Cluster cluster = new ClusterPool(new EventStream(), new HTTPRoundRobin(NOOPSessionPersistence.INSTANCE));
-        cluster.hostname("localhost");
         new Node(cluster, new InetSocketAddress("127.0.0.1", 10002));
 
         HTTPLoadBalancer httpLoadBalancer = HTTPLoadBalancerBuilder.newBuilder()
