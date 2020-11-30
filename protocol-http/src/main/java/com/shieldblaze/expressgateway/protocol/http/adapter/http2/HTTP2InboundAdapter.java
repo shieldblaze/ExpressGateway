@@ -159,7 +159,6 @@ public final class HTTP2InboundAdapter extends ChannelDuplexHandler {
                     .set(Headers.STREAM_HASH, inboundProperty.streamHash())
                     .set(Headers.X_FORWARDED_HTTP_VERSION, Headers.Values.HTTP_2)
                     .remove(HttpConversionUtil.ExtensionHeaderNames.STREAM_ID.text())
-                    .remove(HttpConversionUtil.ExtensionHeaderNames.SCHEME.text())
                     .remove(HttpConversionUtil.ExtensionHeaderNames.PATH.text())
                     .remove(HttpConversionUtil.ExtensionHeaderNames.STREAM_DEPENDENCY_ID.text())
                     .remove(HttpConversionUtil.ExtensionHeaderNames.STREAM_PROMISE_ID.text())

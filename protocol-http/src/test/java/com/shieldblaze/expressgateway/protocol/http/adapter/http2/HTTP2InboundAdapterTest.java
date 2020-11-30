@@ -84,7 +84,6 @@ class HTTP2InboundAdapterTest {
         assertEquals("https", fullHttpRequest.headers().get("x-http2-scheme"));
         assertEquals("/", fullHttpRequest.uri());
         assertEquals("localhost", fullHttpRequest.headers().get("host"));
-        assertEquals("2", fullHttpRequest.headers().get("x-http2-stream-id"));
         assertTrue(fullHttpRequest.headers().contains(Headers.STREAM_HASH));
         assertEquals(Headers.Values.HTTP_2, fullHttpRequest.headers().get(Headers.X_FORWARDED_HTTP_VERSION));
 
@@ -129,7 +128,6 @@ class HTTP2InboundAdapterTest {
         assertEquals("http", fullHttpRequest.headers().get("x-http2-scheme"));
         assertEquals("/meow", fullHttpRequest.uri());
         assertEquals("www.shieldblaze.com", fullHttpRequest.headers().get("host"));
-        assertEquals("3", fullHttpRequest.headers().get("x-http2-stream-id"));
         assertTrue(fullHttpRequest.headers().contains(Headers.STREAM_HASH));
         assertEquals(Headers.Values.HTTP_2, fullHttpRequest.headers().get(Headers.X_FORWARDED_HTTP_VERSION));
 
@@ -168,7 +166,6 @@ class HTTP2InboundAdapterTest {
         assertEquals("http", httpRequest.headers().get("x-http2-scheme"));
         assertEquals("/meow", httpRequest.uri());
         assertEquals("www.shieldblaze.com", httpRequest.headers().get("host"));
-        assertEquals("5", httpRequest.headers().get("x-http2-stream-id"));
         assertTrue(httpRequest.headers().contains(Headers.STREAM_HASH));
         assertEquals(Headers.Values.HTTP_2, httpRequest.headers().get(Headers.X_FORWARDED_HTTP_VERSION));
 
@@ -201,7 +198,6 @@ class HTTP2InboundAdapterTest {
         assertEquals("http", httpRequest.headers().get("x-http2-scheme"));
         assertEquals("/meow", httpRequest.uri());
         assertEquals("www.shieldblaze.com", httpRequest.headers().get("host"));
-        assertEquals("4", httpRequest.headers().get("x-http2-stream-id"));
         assertTrue(httpRequest.headers().contains(Headers.STREAM_HASH));
         assertEquals(Headers.Values.HTTP_2, httpRequest.headers().get(Headers.X_FORWARDED_HTTP_VERSION));
 
