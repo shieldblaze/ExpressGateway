@@ -18,6 +18,7 @@
 package com.shieldblaze.expressgateway.protocol.http.adapter.http1;
 
 import com.shieldblaze.expressgateway.protocol.http.Headers;
+import com.shieldblaze.expressgateway.protocol.http.adapter.http2.HTTP2InboundAdapter;
 import io.netty.channel.ChannelDuplexHandler;
 import io.netty.channel.ChannelHandlerContext;
 import io.netty.channel.ChannelPromise;
@@ -31,6 +32,11 @@ import io.netty.handler.codec.http2.HttpConversionUtil;
 
 import java.util.concurrent.atomic.AtomicLong;
 
+/**
+ * {@linkplain HTTPOutboundAdapter} handles incoming HTTP/1.x responses
+ * and makes them compatible with {@linkplain HTTP2InboundAdapter} or
+ * {@linkplain HTTPInboundAdapter}.
+ */
 public final class HTTPOutboundAdapter extends ChannelDuplexHandler {
 
     private final AtomicLong streamHash = new AtomicLong();
@@ -41,7 +47,8 @@ public final class HTTPOutboundAdapter extends ChannelDuplexHandler {
             HttpRequest request = (HttpRequest) msg;
             streamHash.set(Long.parseLong(request.headers().get(Headers.STREAM_HASH)));
 
-            request.headers().remove(HttpConversionUtil.ExtensionHeaderNames.STREAM_ID.text())
+            request.headers().remove(Headers.STREAM_HASH)
+                    .remove(HttpConversionUtil.ExtensionHeaderNames.STREAM_ID.text())
                     .remove(HttpConversionUtil.ExtensionHeaderNames.STREAM_WEIGHT.text())
                     .remove(HttpConversionUtil.ExtensionHeaderNames.SCHEME.text())
                     .remove(HttpConversionUtil.ExtensionHeaderNames.PATH.text())

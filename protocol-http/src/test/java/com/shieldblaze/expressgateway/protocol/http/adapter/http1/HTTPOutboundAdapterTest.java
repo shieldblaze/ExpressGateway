@@ -15,6 +15,7 @@
  * You should have received a copy of the GNU General Public License
  * along with ShieldBlaze ExpressGateway.  If not, see <https://www.gnu.org/licenses/>.
  */
+
 package com.shieldblaze.expressgateway.protocol.http.adapter.http1;
 
 import com.shieldblaze.expressgateway.protocol.http.Headers;
@@ -34,53 +35,79 @@ import io.netty.handler.codec.http.HttpHeaderValues;
 import io.netty.handler.codec.http.HttpMethod;
 import io.netty.handler.codec.http.HttpRequest;
 import io.netty.handler.codec.http.HttpResponse;
-import io.netty.handler.codec.http.HttpResponseDecoder;
 import io.netty.handler.codec.http.HttpResponseStatus;
 import io.netty.handler.codec.http.HttpVersion;
 import io.netty.handler.codec.http2.Http2TranslatedHttpContent;
+import io.netty.handler.codec.http2.HttpConversionUtil;
 import org.junit.jupiter.api.Test;
 
 import java.util.Random;
 
-import static org.junit.jupiter.api.Assertions.assertEquals;
-import static org.junit.jupiter.api.Assertions.assertFalse;
-import static org.junit.jupiter.api.Assertions.assertTrue;
+import static org.junit.jupiter.api.Assertions.*;
 
-class HTTPInboundAdapterTest {
+class HTTPOutboundAdapterTest {
 
     @Test
-    void simpleGETRequest() {
-        EmbeddedChannel embeddedChannel = new EmbeddedChannel(new HTTPInboundAdapter());
+    void simpleGETRequestAndResponseTest() {
+        EmbeddedChannel embeddedChannel = new EmbeddedChannel(new HTTPOutboundAdapter());
 
         HttpRequest httpRequest = new DefaultFullHttpRequest(HttpVersion.HTTP_1_1, HttpMethod.GET, "/");
-        embeddedChannel.writeInbound(httpRequest);
+        httpRequest.headers().set(Headers.STREAM_HASH, 1);
+        httpRequest.headers().set(HttpConversionUtil.ExtensionHeaderNames.SCHEME.text(), "https");
+        embeddedChannel.writeOutbound(httpRequest);
+        embeddedChannel.flushOutbound();
+
+        HttpRequest transformedRequest = embeddedChannel.readOutbound();
+        assertFalse(transformedRequest.headers().contains(Headers.STREAM_HASH));
+        assertFalse(transformedRequest.headers().contains(HttpConversionUtil.ExtensionHeaderNames.SCHEME.text()));
+
+        HttpResponse httpResponse = new DefaultHttpResponse(HttpVersion.HTTP_1_1, HttpResponseStatus.OK);
+        embeddedChannel.writeInbound(httpResponse);
         embeddedChannel.flushInbound();
 
-        HttpRequest responseRequest = embeddedChannel.readInbound();
-        assertTrue(responseRequest.headers().contains(Headers.STREAM_HASH));
+        HttpResponse transformedResponse = embeddedChannel.readInbound();
+        assertEquals(1, Long.parseLong(transformedResponse.headers().get(Headers.STREAM_HASH)));
+
+        final int numBytes = 1024 * 100;
+        for (int i = 1; i <= numBytes; i++) {
+            ByteBuf byteBuf = Unpooled.wrappedBuffer(("Meow" + i).getBytes());
+            HttpContent httpContent;
+            if (i == numBytes) {
+                httpContent = new DefaultLastHttpContent(byteBuf);
+            } else {
+                httpContent = new DefaultHttpContent(byteBuf);
+            }
+            embeddedChannel.writeInbound(httpContent);
+            embeddedChannel.flushInbound();
+
+            Http2TranslatedHttpContent responseHttpContent = embeddedChannel.readInbound();
+            assertEquals("Meow" + i, new String(ByteBufUtil.getBytes(byteBuf)));
+            assertEquals(1, responseHttpContent.streamHash());
+            responseHttpContent.release();
+        }
 
         embeddedChannel.close();
     }
 
     @Test
-    void simplePOSTRequestAndResponse() {
-        EmbeddedChannel embeddedChannel = new EmbeddedChannel(new HTTPInboundAdapter());
+    void chunkedPOSTRequestAndResponse() {
+        EmbeddedChannel embeddedChannel = new EmbeddedChannel(new HTTPOutboundAdapter());
 
         HttpRequest httpRequest = new DefaultHttpRequest(HttpVersion.HTTP_1_1, HttpMethod.POST, "/");
         httpRequest.headers().set(HttpHeaderNames.TRANSFER_ENCODING, HttpHeaderValues.CHUNKED);
-        embeddedChannel.writeInbound(httpRequest);
-        embeddedChannel.flushInbound();
+        httpRequest.headers().set(Headers.STREAM_HASH, 1);
+        embeddedChannel.writeOutbound(httpRequest);
+        embeddedChannel.writeOutbound();
 
-        HttpRequest transformedRequest = embeddedChannel.readInbound();
-        assertEquals(HttpHeaderValues.CHUNKED.toString(), transformedRequest.headers().get(HttpHeaderNames.TRANSFER_ENCODING));
-        long streamHash = Long.parseLong(transformedRequest.headers().get(Headers.STREAM_HASH));
+        HttpRequest transformedRequest = embeddedChannel.readOutbound();
+        assertFalse(transformedRequest.headers().contains(Headers.STREAM_HASH));
+        assertFalse(transformedRequest.headers().contains(HttpConversionUtil.ExtensionHeaderNames.SCHEME.text()));
 
         HttpResponse httpResponse = new DefaultFullHttpResponse(HttpVersion.HTTP_1_1, HttpResponseStatus.OK);
         embeddedChannel.writeOutbound(httpResponse);
         embeddedChannel.flushOutbound();
 
-        final int numBytes = 1024 * 1000;
-
+        final int numBytes = 1024 * 100;
         for (int i = 1; i <= numBytes; i++) {
             byte[] bytes = new byte[1];
             new Random().nextBytes(bytes);
@@ -97,12 +124,9 @@ class HTTPInboundAdapterTest {
 
             Http2TranslatedHttpContent responseHttpContent = embeddedChannel.readInbound();
             assertEquals("Meow" + i, new String(ByteBufUtil.getBytes(byteBuf)));
-            assertEquals(streamHash, responseHttpContent.streamHash());
+            assertEquals(1, responseHttpContent.streamHash());
             responseHttpContent.release();
         }
-
-        HttpResponse transformedResponse = embeddedChannel.readOutbound();
-        assertFalse(transformedResponse.headers().contains(Headers.STREAM_HASH));
 
         embeddedChannel.close();
     }
