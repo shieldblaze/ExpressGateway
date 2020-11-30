@@ -56,9 +56,7 @@ public class RoundRobinBenchTest {
 
     @Test
     void runBenchmark() throws RunnerException {
-        if (System.getProperty("skipBench") != null && Boolean.parseBoolean(System.getProperty("skipBench"))) {
-            logger.info("\"skipBench\" is set to false, skipping benchmarking test.");
-        } else {
+        if (System.getProperty("performBench") != null && Boolean.parseBoolean(System.getProperty("performBench"))) {
             Options opt = new OptionsBuilder()
                     .include(RoundRobinBenchTest.class.getSimpleName())
                     .forks(5)
@@ -66,6 +64,8 @@ public class RoundRobinBenchTest {
                     .build();
 
             new Runner(opt).run();
+        } else {
+            logger.info("\"performBench\" is set to false, skipping benchmarking test.");
         }
     }
 

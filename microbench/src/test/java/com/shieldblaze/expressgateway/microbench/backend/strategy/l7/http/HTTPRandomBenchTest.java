@@ -15,16 +15,17 @@
  * You should have received a copy of the GNU General Public License
  * along with ShieldBlaze ExpressGateway.  If not, see <https://www.gnu.org/licenses/>.
  */
-package com.shieldblaze.expressgateway.microbench.backend.strategy.l4;
+package com.shieldblaze.expressgateway.microbench.backend.strategy.l7.http;
 
 import com.shieldblaze.expressgateway.backend.Node;
 import com.shieldblaze.expressgateway.backend.cluster.Cluster;
 import com.shieldblaze.expressgateway.backend.cluster.ClusterPool;
 import com.shieldblaze.expressgateway.backend.exceptions.LoadBalanceException;
-import com.shieldblaze.expressgateway.backend.strategy.l4.L4Request;
-import com.shieldblaze.expressgateway.backend.strategy.l4.Random;
-import com.shieldblaze.expressgateway.backend.strategy.l4.sessionpersistence.NOOPSessionPersistence;
+import com.shieldblaze.expressgateway.backend.strategy.l7.http.HTTPBalanceRequest;
+import com.shieldblaze.expressgateway.backend.strategy.l7.http.HTTPRandom;
+import com.shieldblaze.expressgateway.backend.strategy.l7.http.sessionpersistence.NOOPSessionPersistence;
 import com.shieldblaze.expressgateway.concurrent.eventstream.EventStream;
+import io.netty.handler.codec.http.EmptyHttpHeaders;
 import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
 import org.junit.jupiter.api.Test;
@@ -46,9 +47,9 @@ import java.net.InetSocketAddress;
 @State(Scope.Benchmark)
 @BenchmarkMode({Mode.Throughput, Mode.AverageTime})
 @Warmup(iterations = 2)
-public class RandomBenchTest {
+public class HTTPRandomBenchTest {
 
-    private static final Logger logger = LogManager.getLogger(RandomBenchTest.class);
+    private static final Logger logger = LogManager.getLogger(HTTPRandomBenchTest.class);
 
     private Cluster cluster10;
     private Cluster cluster50;
@@ -58,7 +59,7 @@ public class RandomBenchTest {
     void runBenchmark() throws RunnerException {
         if (System.getProperty("performBench") != null && Boolean.parseBoolean(System.getProperty("performBench"))) {
             Options opt = new OptionsBuilder()
-                    .include(RandomBenchTest.class.getSimpleName())
+                    .include(HTTPRandomBenchTest.class.getSimpleName())
                     .forks(5)
                     .addProfiler("gc")
                     .build();
@@ -71,9 +72,9 @@ public class RandomBenchTest {
 
     @Setup
     public void setup() {
-        cluster10 = new ClusterPool(new EventStream(), new Random(NOOPSessionPersistence.INSTANCE), "ClusterBench10");
-        cluster50 = new ClusterPool(new EventStream(), new Random(NOOPSessionPersistence.INSTANCE), "ClusterBench50");
-        cluster100 = new ClusterPool(new EventStream(), new Random(NOOPSessionPersistence.INSTANCE), "ClusterBench100");
+        cluster10 = new ClusterPool(new EventStream(), new HTTPRandom(NOOPSessionPersistence.INSTANCE), "ClusterBench10");
+        cluster50 = new ClusterPool(new EventStream(), new HTTPRandom(NOOPSessionPersistence.INSTANCE), "ClusterBench50");
+        cluster100 = new ClusterPool(new EventStream(), new HTTPRandom(NOOPSessionPersistence.INSTANCE), "ClusterBench100");
 
         for (int i = 1; i <= 10; i++) {
             new Node(cluster10, new InetSocketAddress("10.10.1." + i, i));
@@ -90,16 +91,16 @@ public class RandomBenchTest {
 
     @Benchmark
     public void cluster10Bench(Blackhole blackhole) throws LoadBalanceException {
-        blackhole.consume(cluster10.nextNode(new L4Request(new InetSocketAddress("192.168.1.1", 1))));
+        blackhole.consume(cluster10.nextNode(new HTTPBalanceRequest(new InetSocketAddress("192.168.1.1", 1), EmptyHttpHeaders.INSTANCE)));
     }
 
     @Benchmark
     public void cluster50Bench(Blackhole blackhole) throws LoadBalanceException {
-        blackhole.consume(cluster50.nextNode(new L4Request(new InetSocketAddress("192.168.1.1", 1))));
+        blackhole.consume(cluster50.nextNode(new HTTPBalanceRequest(new InetSocketAddress("192.168.1.1", 1), EmptyHttpHeaders.INSTANCE)));
     }
 
     @Benchmark
     public void cluster100Bench(Blackhole blackhole) throws LoadBalanceException {
-        blackhole.consume(cluster100.nextNode(new L4Request(new InetSocketAddress("192.168.1.1", 1))));
+        blackhole.consume(cluster100.nextNode(new HTTPBalanceRequest(new InetSocketAddress("192.168.1.1", 1), EmptyHttpHeaders.INSTANCE)));
     }
 }
