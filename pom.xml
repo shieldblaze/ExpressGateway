@@ -67,6 +67,7 @@ along with ShieldBlaze ExpressGateway.  If not, see <https://www.gnu.org/license
         <module>protocol-udp</module>
         <module>security</module>
         <module>shaded-dependencies</module>
+        <module>microbench</module>
     </modules>
 
     <repositories>

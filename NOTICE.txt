@@ -88,3 +88,10 @@ This product depends on 'Zero-Allocation Hashing'. License for the same can be o
     * license/LICENSE.zero-allocation-hashing.txt (Apache License 2.0)
 
 ---------------------------------
+
+This product depends on 'Java Microbenchmark Harness (JMH)'. License for the same can be obtained at:
+
+  * LICENSE:
+    * license/LICENSE.jmh.txt (GNU General Public License v2.0)
+
+---------------------------------
