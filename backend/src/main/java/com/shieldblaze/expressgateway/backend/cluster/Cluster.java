@@ -36,7 +36,6 @@ import java.util.concurrent.CopyOnWriteArrayList;
 public abstract class Cluster {
 
     private final List<Node> nodes = new CopyOnWriteArrayList<>();
-    private String hostname;
     private String name;
 
     private final EventStream eventStream;
@@ -46,22 +45,6 @@ public abstract class Cluster {
         this.eventStream = eventStream;
         this.loadBalance = loadBalance;
         loadBalance.cluster(this);
-    }
-
-    /**
-     * Get hostname of this {@linkplain Cluster}
-     */
-    public String hostname() {
-        return hostname;
-    }
-
-    /**
-     * Set hostname of this {@linkplain Cluster}
-     */
-    @NonNull
-    public Cluster hostname(String hostname) {
-        this.hostname = hostname;
-        return this;
     }
 
     /**
