@@ -39,9 +39,7 @@ import io.netty.handler.codec.http2.DefaultHttp2TranslatedLastHttpContent;
 import io.netty.handler.codec.http2.Http2DataFrame;
 import io.netty.handler.codec.http2.Http2HeadersFrame;
 import io.netty.handler.codec.http2.HttpConversionUtil;
-import org.junit.jupiter.api.AfterAll;
 import org.junit.jupiter.api.AfterEach;
-import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 
@@ -148,7 +146,7 @@ class HTTP2InboundAdapterTest {
         assertEquals("200", responseHeadersFrame.headers().status().toString());
         assertFalse(responseHeadersFrame.headers().contains(Headers.STREAM_HASH));
         assertEquals("MeowXD", responseHeadersFrame.headers().get("x-meow-key").toString());
-        assertNull(http2InboundAdapter.streamHash(2));
+        assertNull(http2InboundAdapter.streamHash(3));
 
         fullHttpRequest.release();
     }
@@ -180,7 +178,7 @@ class HTTP2InboundAdapterTest {
         embeddedChannel.flushInbound();
         DefaultHttp2TranslatedLastHttpContent lastHttpContent = embeddedChannel.readInbound();
 
-        assertEquals(5, lastHttpContent.streamId());
+        assertEquals(5, lastHttpContent.streamHash());
         assertEquals("MeowMeow", new String(ByteBufUtil.getBytes(lastHttpContent.content())));
 
         lastHttpContent.release();
@@ -213,7 +211,7 @@ class HTTP2InboundAdapterTest {
         embeddedChannel.flushInbound();
         DefaultHttp2TranslatedHttpContent httpContent = embeddedChannel.readInbound();
 
-        assertEquals(4, httpContent.streamId());
+        assertEquals(4, httpContent.streamHash());
         assertEquals("Meow", new String(ByteBufUtil.getBytes(httpContent.content())));
 
         http2DataFrame = new DefaultHttp2DataFrame(Unpooled.wrappedBuffer("MeowMeow".getBytes()), true);
@@ -222,7 +220,7 @@ class HTTP2InboundAdapterTest {
         embeddedChannel.flushInbound();
         DefaultHttp2TranslatedLastHttpContent lastHttpContent = embeddedChannel.readInbound();
 
-        assertEquals(4, lastHttpContent.streamId());
+        assertEquals(4, lastHttpContent.streamHash());
         assertEquals("MeowMeow", new String(ByteBufUtil.getBytes(lastHttpContent.content())));
 
         httpContent.release();

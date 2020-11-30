@@ -19,16 +19,23 @@ package com.shieldblaze.expressgateway.protocol.http.adapter.http2;
 
 import com.shieldblaze.expressgateway.protocol.http.Headers;
 import com.shieldblaze.expressgateway.protocol.http.compression.HTTP2ContentDecompressor;
+import io.netty.buffer.ByteBuf;
+import io.netty.buffer.ByteBufUtil;
 import io.netty.buffer.Unpooled;
 import io.netty.channel.ChannelDuplexHandler;
 import io.netty.channel.ChannelHandlerContext;
 import io.netty.channel.ChannelPromise;
 import io.netty.channel.embedded.EmbeddedChannel;
 import io.netty.handler.codec.http.DefaultFullHttpRequest;
+import io.netty.handler.codec.http.DefaultHttpRequest;
+import io.netty.handler.codec.http.HttpContent;
+import io.netty.handler.codec.http.HttpHeaderNames;
+import io.netty.handler.codec.http.HttpHeaderValues;
 import io.netty.handler.codec.http.HttpMethod;
 import io.netty.handler.codec.http.HttpRequest;
 import io.netty.handler.codec.http.HttpResponse;
 import io.netty.handler.codec.http.HttpVersion;
+import io.netty.handler.codec.http.LastHttpContent;
 import io.netty.handler.codec.http2.DefaultHttp2Connection;
 import io.netty.handler.codec.http2.DefaultHttp2ConnectionDecoder;
 import io.netty.handler.codec.http2.DefaultHttp2ConnectionEncoder;
@@ -38,6 +45,8 @@ import io.netty.handler.codec.http2.DefaultHttp2FrameWriter;
 import io.netty.handler.codec.http2.DefaultHttp2Headers;
 import io.netty.handler.codec.http2.DefaultHttp2HeadersDecoder;
 import io.netty.handler.codec.http2.DefaultHttp2HeadersFrame;
+import io.netty.handler.codec.http2.DefaultHttp2TranslatedHttpContent;
+import io.netty.handler.codec.http2.DefaultHttp2TranslatedLastHttpContent;
 import io.netty.handler.codec.http2.Http2Connection;
 import io.netty.handler.codec.http2.Http2ConnectionEncoder;
 import io.netty.handler.codec.http2.Http2DataFrame;
@@ -49,10 +58,15 @@ import io.netty.handler.codec.http2.Http2HeadersEncoder;
 import io.netty.handler.codec.http2.Http2HeadersFrame;
 import io.netty.handler.codec.http2.Http2PromisedRequestVerifier;
 import io.netty.handler.codec.http2.Http2Settings;
+import io.netty.handler.codec.http2.Http2TranslatedHttpContent;
 import io.netty.handler.codec.http2.HttpConversionUtil;
 import org.junit.jupiter.api.Test;
 
+import java.util.Random;
+
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 class HTTP2OutboundAdapterTest {
@@ -67,9 +81,11 @@ class HTTP2OutboundAdapterTest {
                         if (msg instanceof Http2HeadersFrame) {
                             Http2HeadersFrame headersFrame = (Http2HeadersFrame) msg;
                             assertTrue(headersFrame.isEndStream());
+                            assertEquals(3, headersFrame.stream().id());
 
                             Http2Headers http2Headers = new DefaultHttp2Headers();
                             http2Headers.status("200");
+                            http2Headers.set("shieldblaze", "expressgateway");
 
                             Http2HeadersFrame responseHeadersFrame = new DefaultHttp2HeadersFrame(http2Headers, false);
                             responseHeadersFrame.stream(headersFrame.stream());
@@ -81,7 +97,6 @@ class HTTP2OutboundAdapterTest {
 
                             return;
                         }
-
                         throw new IllegalArgumentException("Unknown Object: " + msg);
                     }
                 },
@@ -90,20 +105,126 @@ class HTTP2OutboundAdapterTest {
         HttpRequest httpRequest = new DefaultFullHttpRequest(HttpVersion.HTTP_1_1, HttpMethod.GET, "/");
         httpRequest.headers().set(Headers.STREAM_HASH, 1);
         httpRequest.headers().set(Headers.X_FORWARDED_HTTP_VERSION, Headers.Values.HTTP_2);
-        httpRequest.headers().set(HttpConversionUtil.ExtensionHeaderNames.STREAM_ID.text(), 2);
         httpRequest.headers().set(HttpConversionUtil.ExtensionHeaderNames.SCHEME.text(), "https");
         embeddedChannel.writeOutbound(httpRequest);
         embeddedChannel.flushOutbound();
 
         HttpResponse httpResponse = embeddedChannel.readInbound();
         assertEquals(200, httpResponse.status().code());
+        assertEquals("expressgateway", httpResponse.headers().get("shieldblaze"));
 
+        DefaultHttp2TranslatedLastHttpContent httpContent = embeddedChannel.readInbound();
+        assertEquals(1, httpContent.streamHash());
+        assertEquals("Meow", new String(ByteBufUtil.getBytes(httpContent.content())));
+
+        httpContent.release();
         embeddedChannel.close();
     }
 
     @Test
-    void simplePOSTRequestAndResponse() {
+    void chunkedPOSTRequestAndResponse() {
+        final int numBytesSend = 1024 * 100;
+        final int numBytesReceived = 1024 * 200;
 
+        EmbeddedChannel embeddedChannel = new EmbeddedChannel(
+                newCodec(),
+                new ChannelDuplexHandler() {
+                    int i = 1;
+                    int received = 0;
+
+                    @Override
+                    public void write(ChannelHandlerContext ctx, Object msg, ChannelPromise promise) {
+                        if (msg instanceof Http2HeadersFrame) {
+                            Http2HeadersFrame headersFrame = (Http2HeadersFrame) msg;
+                            assertFalse(headersFrame.isEndStream());
+                            assertEquals(3, headersFrame.stream().id());
+
+                            Http2Headers http2Headers = new DefaultHttp2Headers();
+                            http2Headers.status("200");
+                            http2Headers.set("shieldblaze", "expressgateway");
+
+                            Http2HeadersFrame responseHeadersFrame = new DefaultHttp2HeadersFrame(http2Headers, false);
+                            responseHeadersFrame.stream(headersFrame.stream());
+                            ctx.fireChannelRead(responseHeadersFrame);
+
+                            return;
+                        } else if (msg instanceof Http2DataFrame) {
+                            Http2DataFrame dataFrame = (Http2DataFrame) msg;
+                            assertEquals("MeowSent" + ++received, new String(ByteBufUtil.getBytes(dataFrame.content())));
+                            dataFrame.release();
+
+                            // When all bytes are received then we'll start sending.
+                            if (received == numBytesSend) {
+                                for (i = 1; i <= numBytesReceived; i++) {
+                                    Http2DataFrame http2DataFrame;
+
+                                    ByteBuf byteBuf = Unpooled.wrappedBuffer(("MeowReceived" + i).getBytes());
+                                    if (i == numBytesReceived) {
+                                        http2DataFrame = new DefaultHttp2DataFrame(byteBuf, true);
+                                    } else {
+                                        http2DataFrame = new DefaultHttp2DataFrame(byteBuf, false);
+                                    }
+                                    http2DataFrame.stream(dataFrame.stream());
+                                    ctx.fireChannelRead(http2DataFrame);
+                                }
+                            }
+
+                            return;
+                        }
+                        throw new IllegalArgumentException("Unknown Object: " + msg);
+                    }
+                },
+                new HTTP2OutboundAdapter());
+
+        HttpRequest httpRequest = new DefaultHttpRequest(HttpVersion.HTTP_1_1, HttpMethod.POST, "/");
+        httpRequest.headers().set(Headers.STREAM_HASH, 1);
+        httpRequest.headers().set(Headers.X_FORWARDED_HTTP_VERSION, Headers.Values.HTTP_2);
+        httpRequest.headers().set(HttpConversionUtil.ExtensionHeaderNames.SCHEME.text(), "https");
+        httpRequest.headers().set(HttpHeaderNames.TRANSFER_ENCODING, HttpHeaderValues.CHUNKED);
+        embeddedChannel.writeOutbound(httpRequest);
+        embeddedChannel.flushOutbound();
+
+        HttpResponse httpResponse = embeddedChannel.readInbound();
+        assertEquals(200, httpResponse.status().code());
+        assertEquals("expressgateway", httpResponse.headers().get("shieldblaze"));
+
+        // Send bytes
+        for (int i = 1; i <= numBytesSend; i++) {
+            byte[] bytes = new byte[1];
+            new Random().nextBytes(bytes);
+
+            ByteBuf byteBuf = Unpooled.wrappedBuffer(("MeowSent" + i).getBytes());
+            HttpContent httpContent;
+            if (i == numBytesSend) {
+                httpContent = new DefaultHttp2TranslatedLastHttpContent(byteBuf, 1);
+            } else {
+                httpContent = new DefaultHttp2TranslatedHttpContent(byteBuf, 1);
+            }
+
+            embeddedChannel.writeOutbound(httpContent);
+            embeddedChannel.flushOutbound();
+        }
+
+        // Receive bytes
+        for (int i = 1; i <= numBytesReceived; i++) {
+            Http2TranslatedHttpContent httpContent = embeddedChannel.readInbound();
+
+            if (i == numBytesReceived) {
+                assertTrue(httpContent instanceof DefaultHttp2TranslatedLastHttpContent);
+            } else {
+                assertTrue(httpContent instanceof DefaultHttp2TranslatedHttpContent);
+            }
+
+            assertEquals("MeowReceived" + i, new String(ByteBufUtil.getBytes(httpContent.content())));
+            assertEquals(1, httpContent.streamHash());
+            httpContent.release();
+        }
+
+        // Since we've read all HTTP Content, we don't have anything else left to read.
+        // Calling readInbound must return null.
+        assertNull(embeddedChannel.readInbound());
+
+        embeddedChannel.close();
     }
 
     Http2FrameCodec newCodec() {

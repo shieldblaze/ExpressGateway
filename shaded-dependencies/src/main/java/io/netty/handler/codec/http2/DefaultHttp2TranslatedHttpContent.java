@@ -52,7 +52,7 @@ public class DefaultHttp2TranslatedHttpContent extends Http2TranslatedHttpConten
 
     @Override
     public String toString() {
-        return StringUtil.simpleClassName(this) + "(streamId: " + streamId() + ", data: " + content() +
+        return StringUtil.simpleClassName(this) + "(streamId: " + streamHash() + ", data: " + content() +
                 ", decoderResult: " + decoderResult() + ')';
     }
 }

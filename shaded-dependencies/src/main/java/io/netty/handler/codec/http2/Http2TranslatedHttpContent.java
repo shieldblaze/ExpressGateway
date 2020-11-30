@@ -42,14 +42,14 @@ public abstract class Http2TranslatedHttpContent extends DefaultHttpContent {
 
     /***
      * Creates a new instance with the specified chunk content.
-     * @param streamId Stream ID of HTTP/2 Data Frame
+     * @param streamId Stream Hash of HTTP/2 Data Frame
      */
     public Http2TranslatedHttpContent(ByteBuf content, long streamId) {
         super(content);
         this.streamId = streamId;
     }
 
-    public long streamId() {
+    public long streamHash() {
         return streamId;
     }
 }

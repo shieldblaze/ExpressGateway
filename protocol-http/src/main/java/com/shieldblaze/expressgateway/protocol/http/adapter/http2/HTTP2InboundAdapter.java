@@ -104,6 +104,7 @@ public final class HTTP2InboundAdapter extends ChannelDuplexHandler {
         if (ctx.channel().remoteAddress() != null) {
             random = new Random(ctx.channel().remoteAddress().hashCode());
         } else {
+            // This happens when we're using EmbeddedChannel during testing.
             random = new Random();
         }
     }
@@ -154,8 +155,16 @@ public final class HTTP2InboundAdapter extends ChannelDuplexHandler {
             streamMap.put(inboundProperty.streamHash(), inboundProperty);
             streamIds.put(streamId, inboundProperty.streamHash());
 
-            httpRequest.headers().set(Headers.STREAM_HASH, inboundProperty.streamHash());
-            httpRequest.headers().set(Headers.X_FORWARDED_HTTP_VERSION, Headers.Values.HTTP_2);
+            httpRequest.headers()
+                    .set(Headers.STREAM_HASH, inboundProperty.streamHash())
+                    .set(Headers.X_FORWARDED_HTTP_VERSION, Headers.Values.HTTP_2)
+                    .remove(HttpConversionUtil.ExtensionHeaderNames.STREAM_ID.text())
+                    .remove(HttpConversionUtil.ExtensionHeaderNames.SCHEME.text())
+                    .remove(HttpConversionUtil.ExtensionHeaderNames.PATH.text())
+                    .remove(HttpConversionUtil.ExtensionHeaderNames.STREAM_DEPENDENCY_ID.text())
+                    .remove(HttpConversionUtil.ExtensionHeaderNames.STREAM_PROMISE_ID.text())
+                    .remove(HttpConversionUtil.ExtensionHeaderNames.STREAM_WEIGHT.text());
+
             ctx.fireChannelRead(httpRequest);
         }
     }
@@ -212,7 +221,7 @@ public final class HTTP2InboundAdapter extends ChannelDuplexHandler {
 
             if (msg instanceof DefaultHttp2TranslatedLastHttpContent) {
                 DefaultHttp2TranslatedLastHttpContent lastHttpContent = (DefaultHttp2TranslatedLastHttpContent) msg;
-                long streamHash = lastHttpContent.streamId();
+                long streamHash = lastHttpContent.streamHash();
                 Http2DataFrame dataFrame;
 
                 // > If Trailing Headers are empty then we'll write HTTP/2 Data Frame with 'endOfStream' set to 'true.
@@ -233,10 +242,10 @@ public final class HTTP2InboundAdapter extends ChannelDuplexHandler {
                 // We're done with this Stream
                 removeStreamMapping(streamHash);
             } else if (msg instanceof DefaultHttp2TranslatedHttpContent) {
-                long streamId = ((DefaultHttp2TranslatedHttpContent) msg).streamId();
+                long streamHash = ((DefaultHttp2TranslatedHttpContent) msg).streamHash();
 
                 Http2DataFrame dataFrame = new DefaultHttp2DataFrame(httpContent.content(), false);
-                writeData(ctx, streamId, dataFrame, promise);
+                writeData(ctx, streamHash, dataFrame, promise);
             }
         }
     }

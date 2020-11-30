@@ -103,7 +103,7 @@ public class DefaultHttp2TranslatedLastHttpContent extends DefaultHttp2Translate
     @Override
     public LastHttpContent replace(ByteBuf content) {
         DefaultHttp2TranslatedLastHttpContent lastHttpContent = new DefaultHttp2TranslatedLastHttpContent(content,
-                streamId(), validateHeaders);
+                streamHash(), validateHeaders);
         lastHttpContent.trailingHeaders().set(trailingHeaders());
         return lastHttpContent;
     }

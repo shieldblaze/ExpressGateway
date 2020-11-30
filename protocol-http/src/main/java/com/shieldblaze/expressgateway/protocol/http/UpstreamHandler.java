@@ -35,7 +35,6 @@ import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
 
 import java.net.InetSocketAddress;
-import java.nio.charset.StandardCharsets;
 import java.util.Map;
 import java.util.concurrent.ConcurrentSkipListMap;
 
@@ -88,7 +87,7 @@ public final class UpstreamHandler extends ChannelDuplexHandler {
             connection.writeAndFlush(request);
         } else if (msg instanceof Http2TranslatedHttpContent) {
             Http2TranslatedHttpContent httpContent = (Http2TranslatedHttpContent) msg;
-            connectionMap.get(httpContent.streamId()).writeAndFlush(msg);
+            connectionMap.get(httpContent.streamHash()).writeAndFlush(msg);
         }
     }
 
@@ -106,7 +105,7 @@ public final class UpstreamHandler extends ChannelDuplexHandler {
             response.headers().set(HttpHeaderNames.SERVER, "ShieldBlaze ExpressGateway");
         } else if (msg instanceof DefaultHttp2TranslatedLastHttpContent) {
             DefaultHttp2TranslatedLastHttpContent httpContent = (DefaultHttp2TranslatedLastHttpContent) msg;
-            connectionMap.remove(httpContent.streamId());
+            connectionMap.remove(httpContent.streamHash());
         }
         super.write(ctx, msg, promise);
     }
