@@ -81,7 +81,7 @@ public final class UpstreamHandler extends ChannelDuplexHandler {
             connectionMap.put(streamHash, connection);
 
             // Modify Request Headers
-            onHeadersRead(request.headers(), balanceResponse.node().cluster().hostname(), upstreamAddress);
+            onHeadersRead(request.headers(), upstreamAddress);
 
             // Write the request to Backend
             connection.writeAndFlush(request);
@@ -91,9 +91,8 @@ public final class UpstreamHandler extends ChannelDuplexHandler {
         }
     }
 
-    private void onHeadersRead(HttpHeaders headers, String host, InetSocketAddress upstreamAddress) {
+    private void onHeadersRead(HttpHeaders headers, InetSocketAddress upstreamAddress) {
         headers.remove(HttpHeaderNames.UPGRADE);
-        headers.set(HttpHeaderNames.HOST, host);
         headers.set(HttpHeaderNames.ACCEPT_ENCODING, "br, gzip, deflate");
         headers.add(Headers.X_FORWARDED_FOR, upstreamAddress.getAddress().getHostAddress());
     }
