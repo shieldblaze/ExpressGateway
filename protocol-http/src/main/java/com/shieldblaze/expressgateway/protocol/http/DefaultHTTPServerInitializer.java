@@ -18,6 +18,7 @@
 package com.shieldblaze.expressgateway.protocol.http;
 
 import com.shieldblaze.expressgateway.configuration.http.HTTPConfiguration;
+import com.shieldblaze.expressgateway.core.ConnectionTimeoutHandler;
 import com.shieldblaze.expressgateway.core.SNIHandler;
 import com.shieldblaze.expressgateway.protocol.http.adapter.http1.HTTPInboundAdapter;
 import com.shieldblaze.expressgateway.protocol.http.adapter.http2.HTTP2InboundAdapter;
@@ -34,6 +35,8 @@ import io.netty.handler.timeout.IdleStateHandler;
 import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
 
+import java.time.Duration;
+
 final class DefaultHTTPServerInitializer extends HTTPServerInitializer {
 
     private static final Logger logger = LogManager.getLogger(DefaultHTTPServerInitializer.class);
@@ -43,8 +46,8 @@ final class DefaultHTTPServerInitializer extends HTTPServerInitializer {
         ChannelPipeline pipeline = socketChannel.pipeline();
         HTTPConfiguration httpConfiguration = httpLoadBalancer.httpConfiguration();
 
-        int timeout = httpLoadBalancer.coreConfiguration().transportConfiguration().connectionIdleTimeout();
-        pipeline.addFirst(new IdleStateHandler(timeout, timeout, timeout));
+        Duration timeout = Duration.ofMillis(httpLoadBalancer.coreConfiguration().transportConfiguration().connectionIdleTimeout());
+        pipeline.addFirst(new ConnectionTimeoutHandler(timeout));
 
         // If TLS Server is not enabled then we'll only use HTTP/1.1
         if (httpLoadBalancer.tlsForServer() == null) {

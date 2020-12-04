@@ -22,6 +22,7 @@ import com.shieldblaze.expressgateway.configuration.transport.TransportType;
 import io.netty.channel.EventLoopGroup;
 import io.netty.channel.epoll.EpollEventLoopGroup;
 import io.netty.channel.nio.NioEventLoopGroup;
+import io.netty.incubator.channel.uring.IOUringEventLoopGroup;
 
 public final class EventLoopFactory {
 
@@ -29,7 +30,10 @@ public final class EventLoopFactory {
     private final EventLoopGroup childGroup;
 
     public EventLoopFactory(CoreConfiguration coreConfiguration) {
-        if (coreConfiguration.transportConfiguration().transportType() == TransportType.EPOLL) {
+        if (coreConfiguration.transportConfiguration().transportType() == TransportType.IO_URING) {
+            parentGroup = new IOUringEventLoopGroup(coreConfiguration.eventLoopConfiguration().parentWorkers());
+            childGroup = new IOUringEventLoopGroup(coreConfiguration.eventLoopConfiguration().childWorkers());
+        } else if (coreConfiguration.transportConfiguration().transportType() == TransportType.EPOLL) {
             parentGroup = new EpollEventLoopGroup(coreConfiguration.eventLoopConfiguration().parentWorkers());
             childGroup = new EpollEventLoopGroup(coreConfiguration.eventLoopConfiguration().childWorkers());
         } else {

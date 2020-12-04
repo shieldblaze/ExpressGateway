@@ -46,7 +46,7 @@ public class HTTPLoadBalancer extends L4LoadBalancer {
      * @param httpConfiguration {@link HTTPConfiguration} to be applied
      * @throws NullPointerException If a required parameter if {@code null}
      */
-    public HTTPLoadBalancer(InetSocketAddress bindAddress, L4FrontListener l4FrontListener, Cluster cluster,
+    HTTPLoadBalancer(InetSocketAddress bindAddress, L4FrontListener l4FrontListener, Cluster cluster,
                             CoreConfiguration coreConfiguration, TLSConfiguration tlsForServer, TLSConfiguration tlsForClient,
                             HTTPConfiguration httpConfiguration, HTTPServerInitializer httpServerInitializer) {
         super(bindAddress, l4FrontListener, cluster, coreConfiguration, tlsForServer, tlsForClient, httpServerInitializer);

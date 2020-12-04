@@ -18,8 +18,6 @@
 package com.shieldblaze.expressgateway.protocol.tcp;
 
 import com.shieldblaze.expressgateway.backend.Node;
-import com.shieldblaze.expressgateway.backend.exceptions.LoadBalanceException;
-import com.shieldblaze.expressgateway.backend.exceptions.TooManyConnectionsException;
 import com.shieldblaze.expressgateway.backend.strategy.l4.L4Request;
 import com.shieldblaze.expressgateway.core.loadbalancer.L4LoadBalancer;
 import io.netty.buffer.ByteBuf;
@@ -45,15 +43,17 @@ final class UpstreamHandler extends ChannelInboundHandlerAdapter {
 
     @Override
     public void channelActive(ChannelHandlerContext ctx) throws Exception {
-        if (tcpConnection == null) {
-            Node node;
-            try {
-                node = l4LoadBalancer.cluster().nextNode(new L4Request((InetSocketAddress) ctx.channel().remoteAddress())).node();
-                tcpConnection = bootstrapper.newInit(node, ctx.channel());
-                node.addConnection(tcpConnection);
-            } catch (Exception ex) {
+        Node node;
+        try {
+            node = l4LoadBalancer.cluster().nextNode(new L4Request((InetSocketAddress) ctx.channel().remoteAddress())).node();
+            tcpConnection = bootstrapper.newInit(node, ctx.channel());
+            node.addConnection(tcpConnection);
+        } catch (Exception ex) {
+            ctx.close();
+            throw ex;
+        } finally {
+            if (tcpConnection == null) {
                 ctx.close();
-                throw ex;
             }
         }
     }
@@ -61,19 +61,15 @@ final class UpstreamHandler extends ChannelInboundHandlerAdapter {
     @Override
     public void channelRead(ChannelHandlerContext ctx, Object msg) {
         ByteBuf byteBuf = (ByteBuf) msg;
-        if (tcpConnection != null) {
-            tcpConnection.node().incBytesSent(byteBuf.readableBytes());
-            tcpConnection.writeAndFlush(byteBuf);
-            return;
-        }
-        byteBuf.release();
+        tcpConnection.node().incBytesSent(byteBuf.readableBytes());
+        tcpConnection.writeAndFlush(msg);
     }
 
     @Override
     public void channelInactive(ChannelHandlerContext ctx) {
         if (logger.isInfoEnabled()) {
             InetSocketAddress socketAddress = ((InetSocketAddress) ctx.channel().remoteAddress());
-            if (tcpConnection == null) {
+            if (tcpConnection == null || tcpConnection.socketAddress() == null) {
                 logger.info("Closing Upstream {}",
                         socketAddress.getAddress().getHostAddress() + ":" + socketAddress.getPort());
             } else {

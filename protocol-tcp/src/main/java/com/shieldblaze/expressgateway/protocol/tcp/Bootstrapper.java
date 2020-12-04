@@ -19,6 +19,7 @@ package com.shieldblaze.expressgateway.protocol.tcp;
 
 import com.shieldblaze.expressgateway.backend.Node;
 import com.shieldblaze.expressgateway.core.BootstrapFactory;
+import com.shieldblaze.expressgateway.core.ConnectionTimeoutHandler;
 import com.shieldblaze.expressgateway.core.loadbalancer.L4LoadBalancer;
 import io.netty.bootstrap.Bootstrap;
 import io.netty.buffer.ByteBufAllocator;
@@ -29,6 +30,8 @@ import io.netty.channel.ChannelInitializer;
 import io.netty.channel.EventLoopGroup;
 import io.netty.channel.socket.SocketChannel;
 import io.netty.handler.ssl.SslHandler;
+
+import java.time.Duration;
 
 final class Bootstrapper {
     private final L4LoadBalancer l4LoadBalancer;
@@ -49,6 +52,8 @@ final class Bootstrapper {
                 .handler(new ChannelInitializer<SocketChannel>() {
                     @Override
                     protected void initChannel(SocketChannel ch) {
+                        Duration timeout = Duration.ofMillis(l4LoadBalancer.coreConfiguration().transportConfiguration().connectionIdleTimeout());
+                        ch.pipeline().addFirst(new ConnectionTimeoutHandler(timeout));
 
                         if (l4LoadBalancer.tlsForClient() != null) {
                             String hostname = node.socketAddress().getHostName();
@@ -67,13 +72,6 @@ final class Bootstrapper {
 
         ChannelFuture channelFuture = bootstrap.connect(node.socketAddress());
         tcpConnection.init(channelFuture);
-
-        channelFuture.addListener((ChannelFutureListener) future -> {
-            if (!future.isSuccess()) {
-                channel.close();
-            }
-        });
-
         return tcpConnection;
     }
 }

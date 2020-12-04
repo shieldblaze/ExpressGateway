@@ -48,7 +48,6 @@ public final class BootstrapFactory {
                 .option(ChannelOption.SO_RCVBUF, coreConfiguration.transportConfiguration().socketReceiveBufferSize())
                 .option(ChannelOption.TCP_NODELAY, true)
                 .option(ChannelOption.AUTO_READ, true)
-                .option(ChannelOption.AUTO_CLOSE, true)
                 .option(ChannelOption.SO_KEEPALIVE, true)
                 .option(ChannelOption.CONNECT_TIMEOUT_MILLIS, coreConfiguration.transportConfiguration().backendConnectTimeout())
                 .channelFactory(() -> {

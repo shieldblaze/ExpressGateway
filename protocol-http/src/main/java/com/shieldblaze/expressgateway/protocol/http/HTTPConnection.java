@@ -48,14 +48,14 @@ final class HTTPConnection extends Connection {
 
                         writeBacklog(channelFuture);
                     } else {
-                        clearBacklog(throwable);
+                        clearBacklog();
                     }
                 }, channelFuture.channel().eventLoop());
             } else {
                 writeBacklog(channelFuture);
             }
         } else {
-            clearBacklog(channelFuture.cause());
+            clearBacklog();
         }
     }
 
