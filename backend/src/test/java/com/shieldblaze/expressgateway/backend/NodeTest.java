@@ -91,7 +91,7 @@ class NodeTest {
         // Mark Node as Offline and shutdown TCP Server
         healthCheck.run();
         tcpServer.run = false;
-        Thread.sleep(1000L);
+        Thread.sleep(5000L);
 
         // Verify 0 connections are active
         assertEquals(0, node.activeConnection());
