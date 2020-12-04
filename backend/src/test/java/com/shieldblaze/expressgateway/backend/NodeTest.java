@@ -41,6 +41,7 @@ import org.junit.jupiter.api.Test;
 import java.net.InetSocketAddress;
 import java.net.ServerSocket;
 import java.time.Duration;
+import java.util.concurrent.atomic.AtomicBoolean;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertThrows;
@@ -90,7 +91,7 @@ class NodeTest {
 
         // Mark Node as Offline and shutdown TCP Server
         healthCheck.run();
-        tcpServer.run = false;
+        tcpServer.run.set(false);
         Thread.sleep(5000L);
 
         // Verify 0 connections are active
@@ -116,14 +117,14 @@ class NodeTest {
 
     private static final class TCPServer extends Thread {
 
-        private boolean run;
+        private final AtomicBoolean run = new AtomicBoolean(true);
         private InetSocketAddress socketAddress;
 
         @Override
         public void run() {
             try (ServerSocket serverSocket = new ServerSocket(0, 1000)) {
                 socketAddress = (InetSocketAddress) serverSocket.getLocalSocketAddress();
-                while (run) {
+                while (run.get()) {
                     serverSocket.accept();
                 }
             } catch (Exception ex) {
