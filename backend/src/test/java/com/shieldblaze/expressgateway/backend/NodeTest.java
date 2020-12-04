@@ -70,7 +70,7 @@ class NodeTest {
         tcpServer.start();
         Thread.sleep(500L);
 
-        TCPHealthCheck healthCheck = new TCPHealthCheck(new InetSocketAddress("127.0.0.1", 9110), Duration.ofSeconds(1));
+        TCPHealthCheck healthCheck = new TCPHealthCheck(new InetSocketAddress("127.0.0.1", 50000), Duration.ofSeconds(1));
         Node node = new Node(cluster, new InetSocketAddress("127.0.0.1", 1), 100, healthCheck);
 
         // Verify 0 connections in beginning
@@ -108,7 +108,7 @@ class NodeTest {
                     }
                 });
 
-        ChannelFuture channelFuture = bootstrap.connect("127.0.0.1", 9110);
+        ChannelFuture channelFuture = bootstrap.connect("127.0.0.1", 50000);
         TCPConnection tcpConnection = new TCPConnection(node);
         tcpConnection.init(channelFuture);
         return tcpConnection;
@@ -120,7 +120,7 @@ class NodeTest {
 
         @Override
         public void run() {
-            try (ServerSocket serverSocket = new ServerSocket(9110, 1000)) {
+            try (ServerSocket serverSocket = new ServerSocket(50000, 1000)) {
                 while (run) {
                     serverSocket.accept();
                 }
