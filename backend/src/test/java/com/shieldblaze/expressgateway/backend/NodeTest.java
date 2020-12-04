@@ -70,7 +70,7 @@ class NodeTest {
         tcpServer.start();
         Thread.sleep(500L);
 
-        TCPHealthCheck healthCheck = new TCPHealthCheck(new InetSocketAddress("127.0.0.1", 50000), Duration.ofSeconds(1));
+        TCPHealthCheck healthCheck = new TCPHealthCheck(tcpServer.socketAddress, Duration.ofSeconds(1));
         Node node = new Node(cluster, new InetSocketAddress("127.0.0.1", 1), 100, healthCheck);
 
         // Verify 0 connections in beginning
@@ -79,14 +79,14 @@ class NodeTest {
 
         // Start 100 TCP Connections and connect to TCP Server
         for (int i = 0; i < 100; i++) {
-            node.addConnection(connection(node));
+            node.addConnection(connection(node, tcpServer.socketAddress));
         }
 
         // Verify 100 connections are active
         assertEquals(100, node.activeConnection());
 
         // Try connection 1 more connection which will cause maximum connection limit to exceed.
-        assertThrows(TooManyConnectionsException.class, () -> node.addConnection(connection(node)));
+        assertThrows(TooManyConnectionsException.class, () -> node.addConnection(connection(node, tcpServer.socketAddress)));
 
         // Mark Node as Offline and shutdown TCP Server
         healthCheck.run();
@@ -97,7 +97,7 @@ class NodeTest {
         assertEquals(0, node.activeConnection());
     }
 
-    private Connection connection(Node node) {
+    private Connection connection(Node node, InetSocketAddress socketAddress) {
         Bootstrap bootstrap = new Bootstrap()
                 .group(eventLoopGroup)
                 .channel(NioSocketChannel.class)
@@ -108,7 +108,7 @@ class NodeTest {
                     }
                 });
 
-        ChannelFuture channelFuture = bootstrap.connect("127.0.0.1", 50000);
+        ChannelFuture channelFuture = bootstrap.connect(socketAddress);
         TCPConnection tcpConnection = new TCPConnection(node);
         tcpConnection.init(channelFuture);
         return tcpConnection;
@@ -117,10 +117,12 @@ class NodeTest {
     private static final class TCPServer extends Thread {
 
         private boolean run;
+        private InetSocketAddress socketAddress;
 
         @Override
         public void run() {
-            try (ServerSocket serverSocket = new ServerSocket(50000, 1000)) {
+            try (ServerSocket serverSocket = new ServerSocket(0, 1000)) {
+                socketAddress = (InetSocketAddress) serverSocket.getLocalSocketAddress();
                 while (run) {
                     serverSocket.accept();
                 }
