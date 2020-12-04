@@ -32,7 +32,7 @@ final class UDPConnection extends Connection {
         if (channelFuture.isSuccess()) {
             writeBacklog(channelFuture);
         } else {
-            clearBacklog(channelFuture.cause());
+            clearBacklog();
         }
     }
 }

@@ -19,6 +19,7 @@ package com.shieldblaze.expressgateway.protocol.udp;
 
 import com.shieldblaze.expressgateway.backend.Node;
 import com.shieldblaze.expressgateway.core.BootstrapFactory;
+import com.shieldblaze.expressgateway.core.ConnectionTimeoutHandler;
 import com.shieldblaze.expressgateway.core.loadbalancer.L4LoadBalancer;
 import io.netty.bootstrap.Bootstrap;
 import io.netty.buffer.ByteBufAllocator;
@@ -31,6 +32,7 @@ import io.netty.handler.logging.LoggingHandler;
 import io.netty.handler.timeout.IdleStateHandler;
 
 import java.net.InetSocketAddress;
+import java.time.Duration;
 
 final class Bootstrapper {
 
@@ -46,14 +48,14 @@ final class Bootstrapper {
 
     UDPConnection newInit(Channel channel, Node node, InetSocketAddress socketAddress) {
         int timeout = l4LoadBalancer.coreConfiguration().transportConfiguration().backendConnectTimeout();
-        int connectionTimeout = l4LoadBalancer.coreConfiguration().transportConfiguration().connectionIdleTimeout();
         UDPConnection udpConnection = new UDPConnection(node, timeout);
 
         Bootstrap bootstrap = BootstrapFactory.getUDP(l4LoadBalancer.coreConfiguration(), eventLoopGroup, byteBufAllocator);
         bootstrap.handler(new ChannelInitializer<>() {
             @Override
             protected void initChannel(Channel ch) {
-                ch.pipeline().addFirst(new IdleStateHandler(connectionTimeout, connectionTimeout, connectionTimeout));
+                Duration timeout = Duration.ofMillis(l4LoadBalancer.coreConfiguration().transportConfiguration().connectionIdleTimeout());
+                ch.pipeline().addFirst(new ConnectionTimeoutHandler(timeout));
                 ch.pipeline().addLast(new DownstreamHandler(channel, node, socketAddress, udpConnection));
             }
         });

@@ -19,6 +19,7 @@ package com.shieldblaze.expressgateway.protocol.http;
 
 import com.shieldblaze.expressgateway.backend.Node;
 import com.shieldblaze.expressgateway.core.BootstrapFactory;
+import com.shieldblaze.expressgateway.core.ConnectionTimeoutHandler;
 import com.shieldblaze.expressgateway.protocol.http.loadbalancer.HTTPLoadBalancer;
 import com.shieldblaze.expressgateway.protocol.http.adapter.http1.HTTPOutboundAdapter;
 import com.shieldblaze.expressgateway.protocol.http.adapter.http2.HTTP2OutboundAdapter;
@@ -38,6 +39,8 @@ import io.netty.handler.ssl.SslHandler;
 import io.netty.handler.timeout.IdleStateHandler;
 import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
+
+import java.time.Duration;
 
 final class Bootstrapper {
 
@@ -63,8 +66,8 @@ final class Bootstrapper {
             protected void initChannel(SocketChannel ch) {
                 ChannelPipeline pipeline = ch.pipeline();
 
-                int timeout = httpLoadBalancer.coreConfiguration().transportConfiguration().connectionIdleTimeout();
-                pipeline.addFirst(new IdleStateHandler(timeout, timeout, timeout));
+                Duration timeout = Duration.ofMillis(httpLoadBalancer.coreConfiguration().transportConfiguration().connectionIdleTimeout());
+                pipeline.addFirst(new ConnectionTimeoutHandler(timeout));
 
                 DownstreamHandler downstreamHandler = new DownstreamHandler(httpConnection, channel);
                 httpConnection.downstreamHandler(downstreamHandler);
@@ -108,13 +111,6 @@ final class Bootstrapper {
 
         ChannelFuture channelFuture = bootstrap.connect(node.socketAddress());
         httpConnection.init(channelFuture);
-
-        channelFuture.addListener((ChannelFutureListener) future -> {
-           if (!future.isSuccess()) {
-               channel.close();
-           }
-        });
-
         return httpConnection;
     }
 }

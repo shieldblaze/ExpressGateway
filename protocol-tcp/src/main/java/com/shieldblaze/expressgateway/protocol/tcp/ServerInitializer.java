@@ -17,6 +17,7 @@
  */
 package com.shieldblaze.expressgateway.protocol.tcp;
 
+import com.shieldblaze.expressgateway.core.ConnectionTimeoutHandler;
 import com.shieldblaze.expressgateway.core.loadbalancer.L4LoadBalancer;
 import com.shieldblaze.expressgateway.core.SNIHandler;
 import io.netty.channel.ChannelHandler;
@@ -26,6 +27,8 @@ import io.netty.channel.socket.SocketChannel;
 import io.netty.handler.timeout.IdleStateHandler;
 import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
+
+import java.time.Duration;
 
 final class ServerInitializer extends ChannelInitializer<SocketChannel> {
 
@@ -38,15 +41,15 @@ final class ServerInitializer extends ChannelInitializer<SocketChannel> {
     }
 
     @Override
-    protected void initChannel(SocketChannel socketChannel) {
-        int timeout = l4LoadBalancer.coreConfiguration().transportConfiguration().connectionIdleTimeout();
-        socketChannel.pipeline().addFirst(new IdleStateHandler(timeout, timeout, timeout));
+    protected void initChannel(SocketChannel ch) {
+        Duration timeout = Duration.ofMillis(l4LoadBalancer.coreConfiguration().transportConfiguration().connectionIdleTimeout());
+        ch.pipeline().addFirst(new ConnectionTimeoutHandler(timeout));
 
         if (l4LoadBalancer.tlsForServer() != null) {
-            socketChannel.pipeline().addLast(new SNIHandler(l4LoadBalancer.tlsForServer()));
+            ch.pipeline().addLast(new SNIHandler(l4LoadBalancer.tlsForServer()));
         }
 
-        socketChannel.pipeline().addLast(new UpstreamHandler(l4LoadBalancer));
+        ch.pipeline().addLast(new UpstreamHandler(l4LoadBalancer));
     }
 
     @Override

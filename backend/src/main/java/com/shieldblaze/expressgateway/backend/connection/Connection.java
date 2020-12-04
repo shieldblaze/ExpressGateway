@@ -20,9 +20,9 @@ package com.shieldblaze.expressgateway.backend.connection;
 import com.shieldblaze.expressgateway.backend.Node;
 import com.shieldblaze.expressgateway.common.annotation.NonNull;
 import com.shieldblaze.expressgateway.common.utils.ReferenceCounted;
+import io.netty.channel.Channel;
 import io.netty.channel.ChannelFuture;
 import io.netty.channel.ChannelFutureListener;
-import io.netty.channel.ChannelPromise;
 
 import java.net.InetSocketAddress;
 import java.time.Instant;
@@ -39,13 +39,15 @@ public abstract class Connection {
     /**
      * Backlog Queue contains objects pending to be written once connection establishes.
      */
-    protected ConcurrentLinkedQueue<Backlog> backlogQueue = new ConcurrentLinkedQueue<>();
+    protected ConcurrentLinkedQueue<Object> backlogQueue = new ConcurrentLinkedQueue<>();
 
     private final Node node;
     private final long timeout;
     private ChannelFuture channelFuture;
+    private Channel channel;
     private boolean inUse;
     private InetSocketAddress socketAddress;
+    private boolean isActive;
 
     public Connection(Node node, long timeout) {
         this.node = node;
@@ -65,13 +67,18 @@ public abstract class Connection {
                 processBacklog(channelFuture);
                 if (channelFuture.isSuccess()) {
                     socketAddress = (InetSocketAddress) channelFuture.channel().remoteAddress();
+                    isActive = true;
+                    channel = channelFuture.channel();
                 }
             });
 
             // Add listener to be notified when Channel closes
             this.channelFuture.channel()
                     .closeFuture()
-                    .addListener((ChannelFutureListener) future -> inUse = false);
+                    .addListener((ChannelFutureListener) future -> {
+                        inUse = false;
+                        isActive = true;
+                    });
         } else {
             throw new IllegalArgumentException("Connection is already initialized");
         }
@@ -89,9 +96,9 @@ public abstract class Connection {
      */
     @NonNull
     protected void writeBacklog(ChannelFuture channelFuture) {
-        ConcurrentLinkedQueue<Backlog> queue = new ConcurrentLinkedQueue<>(backlogQueue); // Make copy of Queue
+        ConcurrentLinkedQueue<Object> queue = new ConcurrentLinkedQueue<>(backlogQueue); // Make copy of Queue
         backlogQueue = null; // Make old queue null so no more data is written to it.
-        queue.forEach(backlog -> channelFuture.channel().writeAndFlush(backlog.object(), backlog.channelPromise()));
+        queue.forEach(object -> channelFuture.channel().writeAndFlush(object));
         queue.clear(); // Clear the new queue because we're done with it.
     }
 
@@ -99,11 +106,8 @@ public abstract class Connection {
      * Clear the Backlog and release all objects.
      */
     @NonNull
-    protected void clearBacklog(Throwable throwable) {
-        backlogQueue.forEach(backlog -> {
-            ReferenceCounted.silentRelease(backlog.object());
-            backlog.channelPromise().tryFailure(throwable);
-        });
+    protected void clearBacklog() {
+        backlogQueue.forEach(ReferenceCounted::silentRelease);
         backlogQueue = null;
     }
 
@@ -113,29 +117,13 @@ public abstract class Connection {
      * @param o Data to be written
      * @return {@link ChannelFuture} of this write and flush
      */
-    public ChannelFuture writeAndFlush(Object o) {
-        return writeAndFlush(o, channelFuture.channel().newPromise());
-    }
-
-    /**
-     * Write and Flush data
-     *
-     * @param o              Data to be written
-     * @param channelPromise {@link ChannelFuture} to use
-     * @return {@link ChannelFuture} of this write and flush
-     */
-    public ChannelPromise writeAndFlush(Object o, ChannelPromise channelPromise) {
+    public void writeAndFlush(Object o) {
         if (backlogQueue != null) {
-            Backlog backlog = new Backlog(o, channelPromise);
-            backlogQueue.add(backlog);
-            return channelPromise;
-        } else if (channelFuture.channel().isActive()) {
-            channelFuture.channel().writeAndFlush(o, channelPromise);
-            return channelPromise;
+            backlogQueue.add(o);
+        } else if (isActive) {
+            channel.writeAndFlush(o, channel.voidPromise());
         } else {
             ReferenceCounted.silentRelease(o);
-            channelPromise.tryFailure(new IllegalArgumentException("Connection is not accepting data anymore"));
-            return null;
         }
     }
 
@@ -186,7 +174,7 @@ public abstract class Connection {
      * else set to {@code false}.
      */
     public boolean isActive() {
-        return channelFuture.channel().isActive();
+        return isActive;
     }
 
     /**
