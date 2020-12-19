@@ -120,12 +120,6 @@ public final class HTTP2InboundAdapter extends ChannelDuplexHandler {
     private void onHttp2HeadersRead(ChannelHandlerContext ctx, Http2HeadersFrame headersFrame) throws Http2Exception {
         int streamId = headersFrame.stream().id();
 
-        /*
-         * First condition:
-         *      If StreamID Map already contains the streamId then this Header Frame is part of Trailing Headers.
-         *      We'll
-         *
-         */
         if (streamIdMap.containsKey(streamId)) {
             InboundProperty property = stream(streamId);
 
@@ -142,7 +136,6 @@ public final class HTTP2InboundAdapter extends ChannelDuplexHandler {
             long id = RANDOM.nextLong();
 
             HttpRequest httpRequest;
-            // If 'endOfStream' is set to 'true' then we'll create 'FullHttpRequest' else 'HttpRequest'.
             if (headersFrame.isEndStream()) {
                 httpRequest = HTTPConversionUtil.toFullHttpRequest(id, headersFrame.headers(), Unpooled.EMPTY_BUFFER);
             } else {

@@ -25,6 +25,7 @@ import com.shieldblaze.expressgateway.protocol.http.loadbalancer.HTTPLoadBalance
 import io.netty.channel.ChannelDuplexHandler;
 import io.netty.channel.ChannelHandlerContext;
 import io.netty.channel.ChannelPromise;
+import io.netty.handler.codec.MessageToMessageEncoder;
 import io.netty.handler.codec.http.CustomLastHttpContent;
 import io.netty.handler.codec.http.HttpFrame;
 import io.netty.handler.codec.http.HttpHeaderNames;
@@ -113,6 +114,7 @@ public final class UpstreamHandler extends ChannelDuplexHandler {
                 }
             }));
         }
+        MessageToMessageEncoder
         super.write(ctx, msg, promise);
     }
 
