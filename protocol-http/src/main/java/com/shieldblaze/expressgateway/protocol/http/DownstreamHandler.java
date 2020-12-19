@@ -18,6 +18,7 @@
 package com.shieldblaze.expressgateway.protocol.http;
 
 import io.netty.channel.Channel;
+import io.netty.channel.ChannelFuture;
 import io.netty.channel.ChannelFutureListener;
 import io.netty.channel.ChannelHandlerContext;
 import io.netty.channel.ChannelInboundHandlerAdapter;
@@ -27,18 +28,18 @@ import io.netty.handler.codec.http.HttpHeaderValues;
 import io.netty.handler.codec.http.HttpResponse;
 import io.netty.handler.codec.http.HttpVersion;
 import io.netty.handler.codec.http.LastHttpContent;
-import io.netty.handler.codec.http2.Http2DataFrame;
-import io.netty.handler.codec.http2.Http2HeadersFrame;
 import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
+
+import java.util.concurrent.atomic.AtomicBoolean;
 
 final class DownstreamHandler extends ChannelInboundHandlerAdapter {
 
     private static final Logger logger = LogManager.getLogger(DownstreamHandler.class);
 
+    private final AtomicBoolean doCloseAtLast = new AtomicBoolean(false);
     private final HTTPConnection httpConnection;
     private Channel channel;
-    private boolean doCloseAtLast;
 
     DownstreamHandler(HTTPConnection httpConnection, Channel channel) {
         this.httpConnection = httpConnection;
@@ -47,39 +48,35 @@ final class DownstreamHandler extends ChannelInboundHandlerAdapter {
 
     @Override
     public void channelRead(ChannelHandlerContext ctx, Object msg) {
-        if (msg instanceof Http2HeadersFrame || msg instanceof Http2DataFrame) {
-            // No need of any modification
-        } else if (msg instanceof HttpResponse) {
+        System.out.println(msg);
+        if (msg instanceof HttpResponse) {
+            HttpResponse httpResponse = (HttpResponse) msg;
 
-            if (msg instanceof FullHttpResponse) {
-                if (((FullHttpResponse) msg).protocolVersion() == HttpVersion.HTTP_1_0) {
-                    ((FullHttpResponse) msg).headers().set(HttpHeaderNames.CONNECTION, HttpHeaderValues.CLOSE);
+            if (httpResponse.protocolVersion() == HttpVersion.HTTP_1_0) {
+
+                httpResponse.headers().set(HttpHeaderNames.CONNECTION, HttpHeaderValues.CLOSE);
+                if (httpResponse instanceof FullHttpResponse) {
                     channel.writeAndFlush(msg).addListener(ChannelFutureListener.CLOSE);
                     return;
-                }
-            } else {
-                // If HTTP Version is 1.0 then set header 'Connection:Close' and mark for CloseAtLast.
-                if (((HttpResponse) msg).protocolVersion() == HttpVersion.HTTP_1_0) {
-                    doCloseAtLast = true;
-                    ((HttpResponse) msg).headers().set(HttpHeaderNames.CONNECTION, HttpHeaderValues.CLOSE);
+                } else {
+                    doCloseAtLast.set(true);
                 }
             }
-
         } else if (msg instanceof LastHttpContent) {
+            ChannelFuture channelFuture = channel.writeAndFlush(msg);
 
             // If Connection is not over HTTP/2 then release it back to pool.
             if (!httpConnection.isHTTP2()) {
-                httpConnection.release();
+                channelFuture.addListener(future -> httpConnection.release());
             }
 
-            if (doCloseAtLast) {
-                doCloseAtLast = false;
-                channel.writeAndFlush(msg).addListener(ChannelFutureListener.CLOSE);
-                return;
+            if (doCloseAtLast.compareAndSet(true, false)) {
+                channelFuture.addListener(ChannelFutureListener.CLOSE);
             }
+            return;
         }
 
-        channel.writeAndFlush(msg);
+        channel.writeAndFlush(msg, channel.voidPromise());
     }
 
     void channel(Channel channel) {

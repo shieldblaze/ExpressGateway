@@ -38,6 +38,7 @@ import org.junit.jupiter.api.AfterAll;
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.Test;
 
+import java.net.InetAddress;
 import java.net.InetSocketAddress;
 import java.net.ServerSocket;
 import java.time.Duration;
@@ -71,7 +72,7 @@ class NodeTest {
         tcpServer.start();
         Thread.sleep(500L);
 
-        TCPHealthCheck healthCheck = new TCPHealthCheck(tcpServer.socketAddress, Duration.ofSeconds(1));
+        TCPHealthCheck healthCheck = new TCPHealthCheck(tcpServer.socketAddress, Duration.ofMillis(10));
         Node node = new Node(cluster, new InetSocketAddress("127.0.0.1", 1), 100, healthCheck);
 
         // Verify 0 connections in beginning
@@ -80,7 +81,9 @@ class NodeTest {
 
         // Start 100 TCP Connections and connect to TCP Server
         for (int i = 0; i < 100; i++) {
-            node.addConnection(connection(node, tcpServer.socketAddress));
+            Connection connection = connection(node, tcpServer.socketAddress);
+            node.addConnection(connection);
+            connection.release();
         }
 
         // Verify 100 connections are active
@@ -90,8 +93,8 @@ class NodeTest {
         assertThrows(TooManyConnectionsException.class, () -> node.addConnection(connection(node, tcpServer.socketAddress)));
 
         // Mark Node as Offline and shutdown TCP Server
-        healthCheck.run();
         tcpServer.run.set(false);
+        healthCheck.run();
         Thread.sleep(5000L);
 
         // Verify 0 connections are active
@@ -122,7 +125,7 @@ class NodeTest {
 
         @Override
         public void run() {
-            try (ServerSocket serverSocket = new ServerSocket(0, 1000)) {
+            try (ServerSocket serverSocket = new ServerSocket(0, 1000, InetAddress.getByName("127.0.0.1"))) {
                 socketAddress = (InetSocketAddress) serverSocket.getLocalSocketAddress();
                 while (run.get()) {
                     serverSocket.accept();

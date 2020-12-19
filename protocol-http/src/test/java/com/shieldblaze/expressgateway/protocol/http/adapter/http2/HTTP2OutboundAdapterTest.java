@@ -17,7 +17,6 @@
  */
 package com.shieldblaze.expressgateway.protocol.http.adapter.http2;
 
-import com.shieldblaze.expressgateway.protocol.http.Headers;
 import com.shieldblaze.expressgateway.protocol.http.compression.HTTP2ContentDecompressor;
 import io.netty.buffer.ByteBuf;
 import io.netty.buffer.ByteBufUtil;
@@ -26,16 +25,18 @@ import io.netty.channel.ChannelDuplexHandler;
 import io.netty.channel.ChannelHandlerContext;
 import io.netty.channel.ChannelPromise;
 import io.netty.channel.embedded.EmbeddedChannel;
-import io.netty.handler.codec.http.DefaultFullHttpRequest;
-import io.netty.handler.codec.http.DefaultHttpRequest;
+import io.netty.handler.codec.http.CustomFullHttpRequest;
+import io.netty.handler.codec.http.CustomHttpContent;
+import io.netty.handler.codec.http.CustomHttpRequest;
+import io.netty.handler.codec.http.CustomLastHttpContent;
 import io.netty.handler.codec.http.HttpContent;
+import io.netty.handler.codec.http.HttpFrame;
 import io.netty.handler.codec.http.HttpHeaderNames;
 import io.netty.handler.codec.http.HttpHeaderValues;
 import io.netty.handler.codec.http.HttpMethod;
 import io.netty.handler.codec.http.HttpRequest;
 import io.netty.handler.codec.http.HttpResponse;
 import io.netty.handler.codec.http.HttpVersion;
-import io.netty.handler.codec.http.LastHttpContent;
 import io.netty.handler.codec.http2.DefaultHttp2Connection;
 import io.netty.handler.codec.http2.DefaultHttp2ConnectionDecoder;
 import io.netty.handler.codec.http2.DefaultHttp2ConnectionEncoder;
@@ -45,8 +46,6 @@ import io.netty.handler.codec.http2.DefaultHttp2FrameWriter;
 import io.netty.handler.codec.http2.DefaultHttp2Headers;
 import io.netty.handler.codec.http2.DefaultHttp2HeadersDecoder;
 import io.netty.handler.codec.http2.DefaultHttp2HeadersFrame;
-import io.netty.handler.codec.http2.DefaultHttp2TranslatedHttpContent;
-import io.netty.handler.codec.http2.DefaultHttp2TranslatedLastHttpContent;
 import io.netty.handler.codec.http2.Http2Connection;
 import io.netty.handler.codec.http2.Http2ConnectionEncoder;
 import io.netty.handler.codec.http2.Http2DataFrame;
@@ -58,8 +57,6 @@ import io.netty.handler.codec.http2.Http2HeadersEncoder;
 import io.netty.handler.codec.http2.Http2HeadersFrame;
 import io.netty.handler.codec.http2.Http2PromisedRequestVerifier;
 import io.netty.handler.codec.http2.Http2Settings;
-import io.netty.handler.codec.http2.Http2TranslatedHttpContent;
-import io.netty.handler.codec.http2.HttpConversionUtil;
 import org.junit.jupiter.api.Test;
 
 import java.util.Random;
@@ -102,10 +99,7 @@ class HTTP2OutboundAdapterTest {
                 },
                 new HTTP2OutboundAdapter());
 
-        HttpRequest httpRequest = new DefaultFullHttpRequest(HttpVersion.HTTP_1_1, HttpMethod.GET, "/");
-        httpRequest.headers().set(Headers.STREAM_HASH, 1);
-        httpRequest.headers().set(Headers.X_FORWARDED_HTTP_VERSION, Headers.Values.HTTP_2);
-        httpRequest.headers().set(HttpConversionUtil.ExtensionHeaderNames.SCHEME.text(), "https");
+        HttpRequest httpRequest = new CustomFullHttpRequest(HttpVersion.HTTP_1_1, HttpMethod.GET, "/", Unpooled.EMPTY_BUFFER, HttpFrame.Protocol.H2, 25);
         embeddedChannel.writeOutbound(httpRequest);
         embeddedChannel.flushOutbound();
 
@@ -113,8 +107,8 @@ class HTTP2OutboundAdapterTest {
         assertEquals(200, httpResponse.status().code());
         assertEquals("expressgateway", httpResponse.headers().get("shieldblaze"));
 
-        DefaultHttp2TranslatedLastHttpContent httpContent = embeddedChannel.readInbound();
-        assertEquals(1, httpContent.streamHash());
+        CustomHttpContent httpContent = embeddedChannel.readInbound();
+        assertEquals(25, httpContent.id());
         assertEquals("Meow", new String(ByteBufUtil.getBytes(httpContent.content())));
 
         httpContent.release();
@@ -176,10 +170,7 @@ class HTTP2OutboundAdapterTest {
                 },
                 new HTTP2OutboundAdapter());
 
-        HttpRequest httpRequest = new DefaultHttpRequest(HttpVersion.HTTP_1_1, HttpMethod.POST, "/");
-        httpRequest.headers().set(Headers.STREAM_HASH, 1);
-        httpRequest.headers().set(Headers.X_FORWARDED_HTTP_VERSION, Headers.Values.HTTP_2);
-        httpRequest.headers().set(HttpConversionUtil.ExtensionHeaderNames.SCHEME.text(), "https");
+        HttpRequest httpRequest = new CustomHttpRequest(HttpVersion.HTTP_1_1, HttpMethod.POST, "/", HttpFrame.Protocol.H2, 25);
         httpRequest.headers().set(HttpHeaderNames.TRANSFER_ENCODING, HttpHeaderValues.CHUNKED);
         embeddedChannel.writeOutbound(httpRequest);
         embeddedChannel.flushOutbound();
@@ -196,9 +187,9 @@ class HTTP2OutboundAdapterTest {
             ByteBuf byteBuf = Unpooled.wrappedBuffer(("MeowSent" + i).getBytes());
             HttpContent httpContent;
             if (i == numBytesSend) {
-                httpContent = new DefaultHttp2TranslatedLastHttpContent(byteBuf, 1);
+                httpContent = new CustomLastHttpContent(byteBuf, HttpFrame.Protocol.H2, 25);
             } else {
-                httpContent = new DefaultHttp2TranslatedHttpContent(byteBuf, 1);
+                httpContent = new CustomHttpContent(byteBuf, HttpFrame.Protocol.H2, 25);
             }
 
             embeddedChannel.writeOutbound(httpContent);
@@ -207,16 +198,14 @@ class HTTP2OutboundAdapterTest {
 
         // Receive bytes
         for (int i = 1; i <= numBytesReceived; i++) {
-            Http2TranslatedHttpContent httpContent = embeddedChannel.readInbound();
+            CustomHttpContent httpContent = embeddedChannel.readInbound();
 
             if (i == numBytesReceived) {
-                assertTrue(httpContent instanceof DefaultHttp2TranslatedLastHttpContent);
-            } else {
-                assertTrue(httpContent instanceof DefaultHttp2TranslatedHttpContent);
+                assertTrue(httpContent instanceof CustomLastHttpContent);
             }
 
             assertEquals("MeowReceived" + i, new String(ByteBufUtil.getBytes(httpContent.content())));
-            assertEquals(1, httpContent.streamHash());
+            assertEquals(25, httpContent.id());
             httpContent.release();
         }
 

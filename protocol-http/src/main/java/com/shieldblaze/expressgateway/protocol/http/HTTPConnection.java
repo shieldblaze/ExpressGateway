@@ -44,6 +44,8 @@ final class HTTPConnection extends Connection {
 
                         if (protocol.equalsIgnoreCase(ApplicationProtocolNames.HTTP_2)) {
                             isHTTP2 = true;
+                        } else {
+                            lease();
                         }
 
                         writeBacklog(channelFuture);

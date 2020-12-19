@@ -28,13 +28,14 @@ import com.shieldblaze.expressgateway.backend.loadbalance.SessionPersistence;
 import com.shieldblaze.expressgateway.concurrent.event.Event;
 
 import java.net.InetSocketAddress;
+import java.util.SplittableRandom;
 
 /**
  * Select {@link Node} Randomly
  */
 public final class Random extends L4Balance {
 
-    private final java.util.Random RANDOM = new java.util.Random();
+    private final SplittableRandom RANDOM = new SplittableRandom();
 
     /**
      * Create {@link Random} Instance

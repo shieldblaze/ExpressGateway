@@ -20,31 +20,25 @@ package com.shieldblaze.expressgateway.protocol.http;
 import com.shieldblaze.expressgateway.backend.Node;
 import com.shieldblaze.expressgateway.core.BootstrapFactory;
 import com.shieldblaze.expressgateway.core.ConnectionTimeoutHandler;
-import com.shieldblaze.expressgateway.protocol.http.loadbalancer.HTTPLoadBalancer;
 import com.shieldblaze.expressgateway.protocol.http.adapter.http1.HTTPOutboundAdapter;
 import com.shieldblaze.expressgateway.protocol.http.adapter.http2.HTTP2OutboundAdapter;
 import com.shieldblaze.expressgateway.protocol.http.alpn.ALPNHandler;
 import com.shieldblaze.expressgateway.protocol.http.alpn.ALPNHandlerBuilder;
 import com.shieldblaze.expressgateway.protocol.http.compression.HTTPContentDecompressor;
+import com.shieldblaze.expressgateway.protocol.http.loadbalancer.HTTPLoadBalancer;
 import io.netty.bootstrap.Bootstrap;
 import io.netty.buffer.ByteBufAllocator;
 import io.netty.channel.Channel;
 import io.netty.channel.ChannelFuture;
-import io.netty.channel.ChannelFutureListener;
 import io.netty.channel.ChannelInitializer;
 import io.netty.channel.ChannelPipeline;
 import io.netty.channel.EventLoopGroup;
 import io.netty.channel.socket.SocketChannel;
 import io.netty.handler.ssl.SslHandler;
-import io.netty.handler.timeout.IdleStateHandler;
-import org.apache.logging.log4j.LogManager;
-import org.apache.logging.log4j.Logger;
 
 import java.time.Duration;
 
 final class Bootstrapper {
-
-    private static final Logger logger = LogManager.getLogger(Bootstrapper.class);
 
     private final HTTPLoadBalancer httpLoadBalancer;
     private final EventLoopGroup eventLoopGroup;
@@ -73,16 +67,12 @@ final class Bootstrapper {
                 httpConnection.downstreamHandler(downstreamHandler);
 
                 if (httpLoadBalancer.tlsForClient() == null) {
-                    pipeline.addLast(HTTPUtils.newClientCodec(httpLoadBalancer.httpConfiguration()));
+                    pipeline.addLast(HTTPCodecs.HTTPClientCodec(httpLoadBalancer.httpConfiguration()));
                     pipeline.addLast(new HTTPContentDecompressor());
                     pipeline.addLast(new HTTPOutboundAdapter());
                     pipeline.addLast(downstreamHandler);
 
-                    try {
-                        httpConnection.lease();
-                    } catch (IllegalAccessException e) {
-                        logger.error(e);
-                    }
+                    httpConnection.lease();
                 } else {
                     String hostname = node.socketAddress().getHostName();
                     int port = node.socketAddress().getPort();
@@ -93,11 +83,11 @@ final class Bootstrapper {
 
                     ALPNHandler alpnHandler = ALPNHandlerBuilder.newBuilder()
                             // HTTP/2 Handlers
-                            .withHTTP2ChannelHandler(HTTPUtils.clientH2Handler(httpLoadBalancer.httpConfiguration()))
+                            .withHTTP2ChannelHandler(HTTPCodecs.H2ClientCodec(httpLoadBalancer.httpConfiguration()))
                             .withHTTP2ChannelHandler(new HTTP2OutboundAdapter())
                             .withHTTP2ChannelHandler(downstreamHandler)
                             // HTTP/1.1 Handlers
-                            .withHTTP1ChannelHandler(HTTPUtils.newClientCodec(httpLoadBalancer.httpConfiguration()))
+                            .withHTTP1ChannelHandler(HTTPCodecs.HTTPClientCodec(httpLoadBalancer.httpConfiguration()))
                             .withHTTP1ChannelHandler(new HTTPContentDecompressor())
                             .withHTTP1ChannelHandler(new HTTPOutboundAdapter())
                             .withHTTP1ChannelHandler(downstreamHandler)

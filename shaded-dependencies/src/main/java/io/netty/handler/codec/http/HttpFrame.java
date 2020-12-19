@@ -15,32 +15,42 @@
  * You should have received a copy of the GNU General Public License
  * along with ShieldBlaze ExpressGateway.  If not, see <https://www.gnu.org/licenses/>.
  */
-package com.shieldblaze.expressgateway.protocol.http.adapter.http2;
+package io.netty.handler.codec.http;
 
-import io.netty.handler.codec.http.HttpFrame;
-import io.netty.handler.codec.http2.Http2FrameStream;
+public interface HttpFrame {
 
-final class InboundProperty {
+    /**
+     * Returns the actual protocol used in this Http Frame
+     */
+    Protocol protocol();
 
-    private final HttpFrame httpFrame;
-    private final Http2FrameStream stream;
-    private final String acceptEncoding;
+    /**
+     * Set the actual protocol used in this Http Frame
+     */
+    void protocol(Protocol protocol);
 
-    InboundProperty(HttpFrame httpFrame, Http2FrameStream stream, String acceptEncoding) {
-        this.httpFrame = httpFrame;
-        this.stream = stream;
-        this.acceptEncoding = acceptEncoding;
-    }
+    /**
+     * Returns a globally unique identifier for this Http Frame
+     */
+    long id();
 
-    HttpFrame httpFrame() {
-        return httpFrame;
-    }
+    /**
+     * Set a globally unique identifier for this Http Frame
+     */
+    void id(long id);
 
-    Http2FrameStream stream() {
-        return stream;
-    }
-
-    String acceptEncoding() {
-        return acceptEncoding;
+    enum Protocol {
+        /**
+         * HTTP/2 over TLS
+         */
+        H2,
+        /**
+         * HTTP 1.1
+         */
+        HTTP_1_1,
+        /**
+         * HTTP 1.0
+         */
+        HTTP_1_0
     }
 }

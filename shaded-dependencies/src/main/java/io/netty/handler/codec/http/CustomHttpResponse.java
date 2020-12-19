@@ -15,40 +15,36 @@
  * You should have received a copy of the GNU General Public License
  * along with ShieldBlaze ExpressGateway.  If not, see <https://www.gnu.org/licenses/>.
  */
-package com.shieldblaze.expressgateway.protocol.http.adapter.http2;
+package io.netty.handler.codec.http;
 
-import io.netty.handler.codec.http.HttpFrame;
-import io.netty.handler.codec.http2.Http2FrameStream;
+public class CustomHttpResponse extends DefaultHttpResponse implements HttpFrame {
 
-final class OutboundProperty {
-    private final long id;
-    private final Http2FrameStream stream;
-    private boolean isInitialRead;
-    private final HttpFrame.Protocol protocol;
+    private Protocol protocol;
+    private long id;
 
-    OutboundProperty(long id, Http2FrameStream stream, HttpFrame.Protocol protocol) {
+    public CustomHttpResponse(HttpVersion httpVersion, HttpResponseStatus status, Protocol protocol, long id) {
+        super(httpVersion, status, true);
+        this.protocol = protocol;
         this.id = id;
-        this.stream = stream;
+    }
+
+    @Override
+    public Protocol protocol() {
+        return protocol;
+    }
+
+    @Override
+    public void protocol(Protocol protocol) {
         this.protocol = protocol;
     }
 
-    long id() {
+    @Override
+    public long id() {
         return id;
     }
 
-    Http2FrameStream stream() {
-        return stream;
-    }
-
-    boolean initialRead() {
-        return isInitialRead;
-    }
-
-    void fireInitialRead() {
-        isInitialRead = true;
-    }
-
-    HttpFrame.Protocol protocol() {
-        return protocol;
+    @Override
+    public void id(long id) {
+        this.id = id;
     }
 }

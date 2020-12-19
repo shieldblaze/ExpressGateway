@@ -20,11 +20,6 @@ package com.shieldblaze.expressgateway.protocol.http;
 public final class Headers {
 
     /**
-     * "x-http2-stream-hash"
-     */
-    public static final String STREAM_HASH = "x-http2-stream-hash";
-
-    /**
      * "x-forwarded-for"
      */
     public static final String X_FORWARDED_FOR = "x-forwarded-for";

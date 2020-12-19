@@ -17,64 +17,37 @@
  */
 package com.shieldblaze.expressgateway.protocol.http.adapter.http1;
 
-import com.shieldblaze.expressgateway.protocol.http.Headers;
 import com.shieldblaze.expressgateway.protocol.http.adapter.http2.HTTP2InboundAdapter;
 import io.netty.channel.ChannelDuplexHandler;
 import io.netty.channel.ChannelHandlerContext;
 import io.netty.channel.ChannelPromise;
 import io.netty.handler.codec.http.HttpContent;
+import io.netty.handler.codec.http.HttpFrame;
 import io.netty.handler.codec.http.HttpRequest;
-import io.netty.handler.codec.http.HttpResponse;
-import io.netty.handler.codec.http.LastHttpContent;
-import io.netty.handler.codec.http2.DefaultHttp2TranslatedHttpContent;
-import io.netty.handler.codec.http2.DefaultHttp2TranslatedLastHttpContent;
-import io.netty.handler.codec.http2.HttpConversionUtil;
-
-import java.util.concurrent.atomic.AtomicLong;
 
 /**
  * {@linkplain HTTPOutboundAdapter} handles incoming HTTP/1.x responses
- * and makes them compatible with {@linkplain HTTP2InboundAdapter} or
- * {@linkplain HTTPInboundAdapter}.
+ * and makes them compatible with {@linkplain HTTP2InboundAdapter}.
  */
 public final class HTTPOutboundAdapter extends ChannelDuplexHandler {
 
-    private final AtomicLong streamHash = new AtomicLong();
+    private long id;
 
     @Override
     public void write(ChannelHandlerContext ctx, Object msg, ChannelPromise promise) {
-        if (msg instanceof HttpRequest) {
-            HttpRequest request = (HttpRequest) msg;
-            streamHash.set(Long.parseLong(request.headers().get(Headers.STREAM_HASH)));
-
-            request.headers().remove(Headers.STREAM_HASH)
-                    .remove(HttpConversionUtil.ExtensionHeaderNames.STREAM_ID.text())
-                    .remove(HttpConversionUtil.ExtensionHeaderNames.STREAM_WEIGHT.text())
-                    .remove(HttpConversionUtil.ExtensionHeaderNames.SCHEME.text())
-                    .remove(HttpConversionUtil.ExtensionHeaderNames.PATH.text())
-                    .remove(HttpConversionUtil.ExtensionHeaderNames.STREAM_DEPENDENCY_ID.text());
+        if (msg instanceof HttpRequest && msg instanceof HttpFrame) {
+            HttpFrame httpFrame = (HttpFrame) msg;
+            id = httpFrame.id();
         }
         ctx.write(msg, promise);
     }
 
     @Override
     public void channelRead(ChannelHandlerContext ctx, Object msg) {
-        if (msg instanceof HttpResponse) {
-            HttpResponse response = (HttpResponse) msg;
-            response.headers().set(Headers.STREAM_HASH, streamHash.get());
-        } else if (msg instanceof HttpContent) {
-
-            HttpContent httpContent;
-            if (msg instanceof LastHttpContent) {
-                httpContent = new DefaultHttp2TranslatedLastHttpContent(((LastHttpContent) msg).content(), streamHash.get());
-            } else {
-                httpContent = new DefaultHttp2TranslatedHttpContent(((HttpContent) msg).content(), streamHash.get());
-            }
-
-            ctx.fireChannelRead(httpContent);
-            return;
+        if (msg instanceof HttpContent && msg instanceof HttpFrame) {
+            HttpFrame httpFrame = (HttpFrame) msg;
+            httpFrame.id(id);
         }
-
         ctx.fireChannelRead(msg);
     }
 }

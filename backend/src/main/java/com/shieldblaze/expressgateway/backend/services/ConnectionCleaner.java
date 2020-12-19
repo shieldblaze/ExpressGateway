@@ -30,7 +30,19 @@ final class ConnectionCleaner implements Runnable {
     @Override
     public void run() {
         // Remove connection from queue if they're not active.
-        node.connections().removeIf(connection -> {
+        node.availableConnections().removeIf(connection -> {
+            // If Connection has timed out connecting limit and connection is not active
+            // then we can safely remove connection.
+            if (connection.hasConnectionTimedOut() && !connection.isActive()) {
+                node.removeConnection(connection);
+                return true;
+            } else {
+                return false;
+            }
+        });
+
+        // Remove connection from queue if they're not active.
+        node.activeConnections().removeIf(connection -> {
             // If Connection has timed out connecting limit and connection is not active
             // then we can safely remove connection.
             if (connection.hasConnectionTimedOut() && !connection.isActive()) {

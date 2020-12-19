@@ -37,9 +37,9 @@ import io.netty.handler.codec.http2.Http2HeadersEncoder;
 import io.netty.handler.codec.http2.Http2PromisedRequestVerifier;
 import io.netty.handler.codec.http2.Http2Settings;
 
-final class HTTPUtils {
+final class HTTPCodecs {
 
-    static Http2FrameCodec clientH2Handler(HTTPConfiguration httpConfiguration) {
+    static Http2FrameCodec H2ClientCodec(HTTPConfiguration httpConfiguration) {
         Http2Settings http2Settings = new Http2Settings();
         http2Settings.initialWindowSize(httpConfiguration.h2InitialWindowSize());
         http2Settings.maxConcurrentStreams(httpConfiguration.h2MaxConcurrentStreams());
@@ -64,7 +64,7 @@ final class HTTPUtils {
         return http2FrameCodec;
     }
 
-    static Http2FrameCodec serverH2Handler(HTTPConfiguration httpConfiguration) {
+    static Http2FrameCodec H2ServerCodec(HTTPConfiguration httpConfiguration) {
         Http2Settings http2Settings = new Http2Settings();
         http2Settings.maxHeaderListSize(httpConfiguration.h2MaxHeaderSizeList());
 
@@ -89,7 +89,7 @@ final class HTTPUtils {
      *
      * @param httpConfiguration {@link HTTPConfiguration} Instance
      */
-    static HttpServerCodec newServerCodec(HTTPConfiguration httpConfiguration) {
+    static HttpServerCodec HTTPServerCodec(HTTPConfiguration httpConfiguration) {
         int maxChunkSize = httpConfiguration.maxChunkSize();
         return new HttpServerCodec(httpConfiguration.maxInitialLineLength(), httpConfiguration.maxHeaderSize(), maxChunkSize, true);
     }
@@ -99,7 +99,7 @@ final class HTTPUtils {
      *
      * @param httpConfiguration {@link HTTPConfiguration} Instance
      */
-    static HttpClientCodec newClientCodec(HTTPConfiguration httpConfiguration) {
+    static HttpClientCodec HTTPClientCodec(HTTPConfiguration httpConfiguration) {
         int maxInitialLineLength = httpConfiguration.maxInitialLineLength();
         int maxHeaderSize = httpConfiguration.maxHeaderSize();
         int maxChunkSize = httpConfiguration.maxChunkSize();

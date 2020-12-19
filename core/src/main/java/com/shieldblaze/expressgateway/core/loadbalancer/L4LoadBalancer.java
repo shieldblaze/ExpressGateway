@@ -91,6 +91,8 @@ public abstract class L4LoadBalancer {
      * Stop L4 Load Balancer
      */
     public L4FrontListenerStopEvent stop() {
+        eventLoopFactory.parentGroup().shutdownGracefully();
+        eventLoopFactory.childGroup().shutdownGracefully();
         return l4FrontListener.stop();
     }
 
