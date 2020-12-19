@@ -27,6 +27,7 @@ import io.netty.channel.ChannelFutureListener;
 import java.net.InetSocketAddress;
 import java.time.Instant;
 import java.util.concurrent.ConcurrentLinkedQueue;
+import java.util.concurrent.atomic.AtomicInteger;
 
 /**
  * <p> Base class for Connection. Protocol implementations must extend this class. </p>
@@ -95,10 +96,15 @@ public abstract class Connection {
      */
     @NonNull
     protected void writeBacklog(ChannelFuture channelFuture) {
-        ConcurrentLinkedQueue<Object> queue = new ConcurrentLinkedQueue<>(backlogQueue); // Make copy of Queue
-        backlogQueue = null; // Make old queue null so no more data is written to it.
-        queue.forEach(object -> channelFuture.channel().writeAndFlush(object));
-        queue.clear(); // Clear the new queue because we're done with it.
+        AtomicInteger written = new AtomicInteger();
+        backlogQueue.forEach(object -> {
+            written.getAndIncrement();
+            channelFuture.channel().writeAndFlush(object).addListener((future -> {
+                if (written.get() == backlogQueue.size()) {
+                    backlogQueue = null;
+                }
+            }));
+        });
     }
 
     /**
@@ -121,7 +127,7 @@ public abstract class Connection {
             backlogQueue.add(o);
         } else if (isActive) {
             channel.writeAndFlush(o, channel.voidPromise());
-        } else {
+        }  else {
             ReferenceCounted.silentRelease(o);
         }
     }

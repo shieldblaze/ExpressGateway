@@ -119,9 +119,4 @@ public final class UpstreamHandler extends ChannelDuplexHandler {
     public void exceptionCaught(ChannelHandlerContext ctx, Throwable cause) {
         logger.error("Caught Error at Upstream Handler", cause);
     }
-
-    @Override
-    public void channelWritabilityChanged(ChannelHandlerContext ctx) throws Exception {
-        System.out.println(ctx.channel().isWritable());
-    }
 }
