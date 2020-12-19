@@ -108,7 +108,9 @@ public final class UpstreamHandler extends ChannelDuplexHandler {
             final long id = httpContent.id();
             promise.addListener((future -> {
                 Connection connection = connectionMap.get(id);
-                connection.release();
+                if (connection != null) {
+                    connection.release();
+                }
             }));
         }
         super.write(ctx, msg, promise);
