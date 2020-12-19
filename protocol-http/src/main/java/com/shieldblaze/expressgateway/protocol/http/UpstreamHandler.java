@@ -25,7 +25,6 @@ import com.shieldblaze.expressgateway.protocol.http.loadbalancer.HTTPLoadBalance
 import io.netty.channel.ChannelDuplexHandler;
 import io.netty.channel.ChannelHandlerContext;
 import io.netty.channel.ChannelPromise;
-import io.netty.handler.codec.MessageToMessageEncoder;
 import io.netty.handler.codec.http.CustomLastHttpContent;
 import io.netty.handler.codec.http.HttpFrame;
 import io.netty.handler.codec.http.HttpHeaderNames;
@@ -38,7 +37,6 @@ import org.apache.logging.log4j.Logger;
 import java.net.InetSocketAddress;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
-import java.util.concurrent.ConcurrentSkipListMap;
 
 public final class UpstreamHandler extends ChannelDuplexHandler {
 
@@ -114,7 +112,6 @@ public final class UpstreamHandler extends ChannelDuplexHandler {
                 }
             }));
         }
-        MessageToMessageEncoder
         super.write(ctx, msg, promise);
     }
 
