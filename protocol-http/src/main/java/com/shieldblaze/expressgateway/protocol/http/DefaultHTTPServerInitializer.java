@@ -53,7 +53,6 @@ final class DefaultHTTPServerInitializer extends HTTPServerInitializer {
             pipeline.addLast(new HTTPServerValidator(httpConfiguration));
             pipeline.addLast(new HTTPContentCompressor(httpConfiguration));
             pipeline.addLast(new HTTPContentDecompressor());
-//            pipeline.addLast(new HTTPOutboundAdapter());
             pipeline.addLast(new UpstreamHandler(httpLoadBalancer));
         } else {
             pipeline.addLast(new SNIHandler(httpLoadBalancer.tlsForServer()));
@@ -69,7 +68,6 @@ final class DefaultHTTPServerInitializer extends HTTPServerInitializer {
                     .withHTTP1ChannelHandler(new HTTPServerValidator(httpConfiguration))
                     .withHTTP1ChannelHandler(new HTTPContentCompressor(httpConfiguration))
                     .withHTTP1ChannelHandler(new HTTPContentDecompressor())
-//                    .withHTTP1ChannelHandler(new HTTPOutboundAdapter())
                     .withHTTP1ChannelHandler(new UpstreamHandler(httpLoadBalancer))
                     .build();
 

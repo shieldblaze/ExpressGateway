@@ -103,6 +103,6 @@ final class HTTPCodecs {
         int maxInitialLineLength = httpConfiguration.maxInitialLineLength();
         int maxHeaderSize = httpConfiguration.maxHeaderSize();
         int maxChunkSize = httpConfiguration.maxChunkSize();
-        return new HttpClientCodec(maxInitialLineLength, maxHeaderSize, maxChunkSize, true);
+        return new HttpClientCodec(maxInitialLineLength, maxHeaderSize, maxChunkSize, false);
     }
 }
