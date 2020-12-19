@@ -107,7 +107,7 @@ public class HTTPConversionUtil {
         HTTP_TO_HTTP2_HEADER_BLACKLIST.add(HttpConversionUtil.ExtensionHeaderNames.PATH.text(), EMPTY_STRING);
     }
 
-    public static FullHttpResponse toFullHttpResponse(int id, Http2Headers http2Headers, ByteBuf content, HttpVersion httpVersion) throws Http2Exception {
+    public static FullHttpResponse toFullHttpResponse(long id, Http2Headers http2Headers, ByteBuf content, HttpVersion httpVersion) throws Http2Exception {
         HttpResponseStatus status = parseStatus(http2Headers.status());
         FullHttpResponse msg = new CustomFullHttpResponse(httpVersion, status, content, HttpFrame.Protocol.H2, id);
         try {
@@ -119,7 +119,7 @@ public class HTTPConversionUtil {
         return msg;
     }
 
-    public static FullHttpRequest toFullHttpRequest(long id, Http2Headers http2Headers, ByteBuf content) throws Http2Exception {
+    public static FullHttpRequest toFullHttpRequest(long id, Http2Headers http2Headers, ByteBuf content) {
         CharSequence method = http2Headers.method();
         CharSequence path = http2Headers.path();
 
@@ -134,7 +134,7 @@ public class HTTPConversionUtil {
         return msg;
     }
 
-    public static HttpRequest toHttpRequest(long id, Http2Headers http2Headers) throws Http2Exception {
+    public static HttpRequest toHttpRequest(long id, Http2Headers http2Headers) {
         CharSequence method = http2Headers.method();
         CharSequence path = http2Headers.path();
 

@@ -164,6 +164,6 @@ public class CustomFullHttpRequest extends CustomHttpRequest implements FullHttp
 
     @Override
     public String toString() {
-        return HttpMessageUtil.appendFullRequest(new StringBuilder(256), this).toString();
+        return HttpMessageUtil.appendFullRequest(new StringBuilder(256), this).toString() + "/" + id();
     }
 }

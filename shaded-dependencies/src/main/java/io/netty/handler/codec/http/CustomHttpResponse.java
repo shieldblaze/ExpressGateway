@@ -29,6 +29,14 @@ public class CustomHttpResponse extends DefaultHttpResponse implements HttpFrame
     }
 
     @Override
+    public String toString() {
+        return "CustomHttpResponse{" +
+                "protocol=" + protocol +
+                ", id=" + id +
+                '}';
+    }
+
+    @Override
     public Protocol protocol() {
         return protocol;
     }

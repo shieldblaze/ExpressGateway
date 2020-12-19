@@ -48,7 +48,6 @@ final class DownstreamHandler extends ChannelInboundHandlerAdapter {
 
     @Override
     public void channelRead(ChannelHandlerContext ctx, Object msg) {
-        System.out.println(msg);
         if (msg instanceof HttpResponse) {
             HttpResponse httpResponse = (HttpResponse) msg;
 

@@ -43,4 +43,13 @@ final class InboundProperty {
     String acceptEncoding() {
         return acceptEncoding;
     }
+
+    @Override
+    public String toString() {
+        return "InboundProperty{" +
+                "httpFrame=(" + httpFrame.id() + ")" +
+                ", stream=" + stream +
+                ", acceptEncoding='" + acceptEncoding + '\'' +
+                '}';
+    }
 }

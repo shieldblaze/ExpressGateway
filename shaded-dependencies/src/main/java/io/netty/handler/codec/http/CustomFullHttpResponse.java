@@ -142,6 +142,6 @@ public class CustomFullHttpResponse extends CustomHttpResponse implements FullHt
 
     @Override
     public String toString() {
-        return HttpMessageUtil.appendFullResponse(new StringBuilder(256), this).toString();
+        return HttpMessageUtil.appendFullResponse(new StringBuilder(256), this).toString() + "/" + id();
     }
 }

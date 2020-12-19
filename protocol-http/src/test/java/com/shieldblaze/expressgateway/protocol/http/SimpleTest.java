@@ -231,7 +231,7 @@ class SimpleTest {
         HttpRequest httpRequest = HttpRequest.newBuilder()
                 .GET()
                 .uri(URI.create("https://127.0.0.1:20001"))
-                .version(HttpClient.Version.HTTP_1_1)
+                .version(HttpClient.Version.HTTP_2)
                 .timeout(Duration.ofSeconds(5))
                 .build();
 
@@ -243,7 +243,7 @@ class SimpleTest {
         httpRequest = HttpRequest.newBuilder()
                 .GET()
                 .uri(URI.create("https://127.0.0.1:20001"))
-                .version(HttpClient.Version.HTTP_2)
+                .version(HttpClient.Version.HTTP_1_1)
                 .timeout(Duration.ofSeconds(5))
                 .build();
 

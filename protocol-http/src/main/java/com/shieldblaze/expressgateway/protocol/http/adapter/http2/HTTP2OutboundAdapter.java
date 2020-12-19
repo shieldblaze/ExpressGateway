@@ -180,21 +180,19 @@ public final class HTTP2OutboundAdapter extends Http2ChannelDuplexHandler {
                     ctx.writeAndFlush(new DefaultHttp2GoAwayFrame(Http2Error.NO_ERROR).setExtraStreamIds(streamId));
                 }
             } else {
+                outboundProperty.fireInitialRead();
+
                 HttpResponse httpResponse;
-                long id = requestIdToStreamIdMap.get(streamId);
 
                 // If 'endOfStream' flag is set to 'true' then we will create FullHttpResponse and remove mapping.
                 if (headersFrame.isEndStream()) {
-                    httpResponse = HTTPConversionUtil.toFullHttpResponse(streamId, headersFrame.headers(), Unpooled.EMPTY_BUFFER, httpVersion);
+                    httpResponse = HTTPConversionUtil.toFullHttpResponse(outboundProperty.id(), headersFrame.headers(), Unpooled.EMPTY_BUFFER, httpVersion);
                     removeStreamMapping(streamId);
                 } else {
-                    httpResponse = HTTPConversionUtil.toHttpResponse(streamId, headersFrame.headers(), httpVersion);
+                    httpResponse = HTTPConversionUtil.toHttpResponse(outboundProperty.id(), headersFrame.headers(), httpVersion);
                     httpResponse.headers().set(HttpHeaderNames.TRANSFER_ENCODING, HttpHeaderValues.CHUNKED);
                 }
 
-                ((HttpFrame) httpResponse).id(id);
-
-                outboundProperty.fireInitialRead();
                 ctx.fireChannelRead(httpResponse);
             }
         } else if (msg instanceof Http2DataFrame) {

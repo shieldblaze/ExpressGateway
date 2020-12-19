@@ -91,7 +91,7 @@ public class CustomLastHttpContent extends CustomHttpContent implements LastHttp
 
         // Remove the last newline.
         buf.setLength(buf.length() - StringUtil.NEWLINE.length());
-        return buf.toString();
+        return buf.toString()  + "/" + id();
     }
 
     private void appendHeaders(StringBuilder buf) {

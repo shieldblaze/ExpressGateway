@@ -31,6 +31,14 @@ public class CustomHttpContent extends DefaultHttpContent implements HttpFrame{
     }
 
     @Override
+    public String toString() {
+        return "CustomHttpContent{" +
+                "protocol=" + protocol +
+                ", id=" + id +
+                '}';
+    }
+
+    @Override
     public Protocol protocol() {
         return protocol;
     }

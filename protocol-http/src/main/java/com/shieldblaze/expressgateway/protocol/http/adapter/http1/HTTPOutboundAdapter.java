@@ -35,7 +35,7 @@ public final class HTTPOutboundAdapter extends ChannelDuplexHandler {
 
     @Override
     public void write(ChannelHandlerContext ctx, Object msg, ChannelPromise promise) {
-        if (msg instanceof HttpRequest && msg instanceof HttpFrame) {
+        if (msg instanceof HttpFrame) {
             HttpFrame httpFrame = (HttpFrame) msg;
             id = httpFrame.id();
         }
@@ -44,7 +44,7 @@ public final class HTTPOutboundAdapter extends ChannelDuplexHandler {
 
     @Override
     public void channelRead(ChannelHandlerContext ctx, Object msg) {
-        if (msg instanceof HttpContent && msg instanceof HttpFrame) {
+        if (msg instanceof HttpFrame) {
             HttpFrame httpFrame = (HttpFrame) msg;
             httpFrame.id(id);
         }

@@ -41,8 +41,6 @@ import io.netty.handler.codec.http.LastHttpContent;
 import io.netty.handler.codec.http2.DefaultHttp2DataFrame;
 import io.netty.handler.codec.http2.DefaultHttp2GoAwayFrame;
 import io.netty.handler.codec.http2.DefaultHttp2HeadersFrame;
-import io.netty.handler.codec.http2.DefaultHttp2TranslatedHttpContent;
-import io.netty.handler.codec.http2.DefaultHttp2TranslatedLastHttpContent;
 import io.netty.handler.codec.http2.Http2DataFrame;
 import io.netty.handler.codec.http2.Http2Error;
 import io.netty.handler.codec.http2.Http2Exception;
@@ -129,7 +127,7 @@ public final class HTTP2InboundAdapter extends ChannelDuplexHandler {
          *
          */
         if (streamIdMap.containsKey(streamId)) {
-            InboundProperty property = getStream(streamId);
+            InboundProperty property = stream(streamId);
 
             LastHttpContent httpContent = new CustomLastHttpContent(Unpooled.EMPTY_BUFFER, HttpFrame.Protocol.HTTP_1_1, property.httpFrame().id());
             HTTPConversionUtil.addHttp2ToHttpHeaders(headersFrame.headers(), httpContent.trailingHeaders(), true, true);
@@ -168,13 +166,13 @@ public final class HTTP2InboundAdapter extends ChannelDuplexHandler {
     }
 
     private void onHttp2DataRead(ChannelHandlerContext ctx, Http2DataFrame dataFrame) {
-        long id = getStream(dataFrame.stream().id()).httpFrame().id();
+        long id = stream(dataFrame.stream().id()).httpFrame().id();
 
         HttpContent httpContent;
         if (dataFrame.isEndStream()) {
-            httpContent = new DefaultHttp2TranslatedLastHttpContent(dataFrame.content(), id, false);
+            httpContent = new CustomLastHttpContent(dataFrame.content(), HttpFrame.Protocol.H2, id);
         } else {
-            httpContent = new DefaultHttp2TranslatedHttpContent(dataFrame.content(), id);
+            httpContent = new CustomHttpContent(dataFrame.content(), HttpFrame.Protocol.H2, id);
         }
         ctx.fireChannelRead(httpContent);
     }
@@ -184,7 +182,7 @@ public final class HTTP2InboundAdapter extends ChannelDuplexHandler {
         if (msg instanceof HttpResponse) {
             if (msg instanceof FullHttpResponse) {
                 CustomFullHttpResponse httpResponse = (CustomFullHttpResponse) msg;
-                InboundProperty inboundProperty = getStream(httpResponse.id());
+                InboundProperty inboundProperty = stream(httpResponse.id());
                 Http2Headers http2Headers = HTTPConversionUtil.toHttp2Headers(httpResponse);
 
                 applyCompression(http2Headers, inboundProperty);
@@ -205,7 +203,7 @@ public final class HTTP2InboundAdapter extends ChannelDuplexHandler {
                 removeStream(inboundProperty);
             } else {
                 CustomHttpResponse httpResponse = (CustomHttpResponse) msg;
-                InboundProperty inboundProperty = getStream(httpResponse.id());
+                InboundProperty inboundProperty = stream(httpResponse.id());
                 Http2Headers http2Headers = HTTPConversionUtil.toHttp2Headers(httpResponse);
 
                 applyCompression(http2Headers, inboundProperty);
@@ -216,7 +214,7 @@ public final class HTTP2InboundAdapter extends ChannelDuplexHandler {
         } else if (msg instanceof HttpContent) {
             if (msg instanceof CustomLastHttpContent) {
                 CustomLastHttpContent lastHttpContent = (CustomLastHttpContent) msg;
-                InboundProperty property = getStream(lastHttpContent.id());
+                InboundProperty property = stream(lastHttpContent.id());
 
                 // > If Trailing Headers are empty then we'll write HTTP/2 Data Frame with 'endOfStream' set to 'true.
                 // > If Trailing Headers are present then we'll write HTTP/2 Data Frame followed by HTTP/2 Header Frame
@@ -237,7 +235,7 @@ public final class HTTP2InboundAdapter extends ChannelDuplexHandler {
                 removeStream(property);
             } else if (msg instanceof CustomHttpContent) {
                 CustomHttpContent httpContent = (CustomHttpContent) msg;
-                InboundProperty property = getStream(httpContent.id());
+                InboundProperty property = stream(httpContent.id());
 
                 Http2DataFrame dataFrame = new DefaultHttp2DataFrame(httpContent.content(), false);
                 writeData(ctx, property, dataFrame, promise, false);
@@ -290,15 +288,16 @@ public final class HTTP2InboundAdapter extends ChannelDuplexHandler {
     }
 
     private void removeStream(InboundProperty inboundProperty) {
-        requestIdToStreamIdMap.put(inboundProperty.httpFrame().id(), inboundProperty.stream().id());
-        streamIdMap.put(inboundProperty.stream().id(), inboundProperty);
+        requestIdToStreamIdMap.remove(inboundProperty.httpFrame().id());
+        streamIdMap.remove(inboundProperty.stream().id());
     }
 
-    private InboundProperty getStream(long id) {
-        return getStream(requestIdToStreamIdMap.get(id));
+    private InboundProperty stream(long id) {
+        int streamId = requestIdToStreamIdMap.get(id);
+        return stream(streamId);
     }
 
-    private InboundProperty getStream(int streamId) {
+    private InboundProperty stream(int streamId) {
         return streamIdMap.get(streamId);
     }
 

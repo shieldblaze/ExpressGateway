@@ -25,18 +25,18 @@ import com.shieldblaze.expressgateway.protocol.http.loadbalancer.HTTPLoadBalance
 import io.netty.channel.ChannelDuplexHandler;
 import io.netty.channel.ChannelHandlerContext;
 import io.netty.channel.ChannelPromise;
+import io.netty.handler.codec.http.CustomLastHttpContent;
 import io.netty.handler.codec.http.HttpFrame;
 import io.netty.handler.codec.http.HttpHeaderNames;
 import io.netty.handler.codec.http.HttpHeaders;
 import io.netty.handler.codec.http.HttpRequest;
 import io.netty.handler.codec.http.HttpResponse;
-import io.netty.handler.codec.http2.DefaultHttp2TranslatedLastHttpContent;
-import io.netty.handler.codec.http2.Http2TranslatedHttpContent;
 import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
 
 import java.net.InetSocketAddress;
 import java.util.Map;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ConcurrentSkipListMap;
 
 public final class UpstreamHandler extends ChannelDuplexHandler {
@@ -47,7 +47,7 @@ public final class UpstreamHandler extends ChannelDuplexHandler {
      * Long: Request ID
      * Connection: {@link Connection} Instance
      */
-    private final Map<Long, Connection> connectionMap = new ConcurrentSkipListMap<>();
+    private final Map<Long, Connection> connectionMap = new ConcurrentHashMap<>();
 
     private final HTTPLoadBalancer httpLoadBalancer;
     private final Bootstrapper bootstrapper;
@@ -103,9 +103,10 @@ public final class UpstreamHandler extends ChannelDuplexHandler {
         if (msg instanceof HttpResponse) {
             HttpResponse response = (HttpResponse) msg;
             response.headers().set(HttpHeaderNames.SERVER, "ShieldBlaze ExpressGateway");
-        } else if (msg instanceof DefaultHttp2TranslatedLastHttpContent) {
-            DefaultHttp2TranslatedLastHttpContent httpContent = (DefaultHttp2TranslatedLastHttpContent) msg;
-            connectionMap.remove(httpContent.streamId());
+        } else if (msg instanceof CustomLastHttpContent) {
+            CustomLastHttpContent httpContent = (CustomLastHttpContent) msg;
+            Connection connection = connectionMap.get(httpContent.id());
+            connection.release();
         }
         super.write(ctx, msg, promise);
     }

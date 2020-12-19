@@ -166,7 +166,7 @@ class HTTP2InboundAdapterTest {
         http2DataFrame.stream(http2HeadersFrame.stream());
         embeddedChannel.writeInbound(http2DataFrame);
         embeddedChannel.flushInbound();
-        DefaultHttp2TranslatedLastHttpContent lastHttpContent = embeddedChannel.readInbound();
+        CustomLastHttpContent lastHttpContent = embeddedChannel.readInbound();
 
         assertEquals("MeowMeow", new String(ByteBufUtil.getBytes(lastHttpContent.content())));
 
@@ -196,7 +196,7 @@ class HTTP2InboundAdapterTest {
         http2DataFrame.stream(http2HeadersFrame.stream());
         embeddedChannel.writeInbound(http2DataFrame);
         embeddedChannel.flushInbound();
-        DefaultHttp2TranslatedHttpContent httpContent = embeddedChannel.readInbound();
+        CustomHttpContent httpContent = embeddedChannel.readInbound();
 
         assertEquals("Meow", new String(ByteBufUtil.getBytes(httpContent.content())));
 
@@ -204,7 +204,7 @@ class HTTP2InboundAdapterTest {
         http2DataFrame.stream(http2HeadersFrame.stream());
         embeddedChannel.writeInbound(http2DataFrame);
         embeddedChannel.flushInbound();
-        DefaultHttp2TranslatedLastHttpContent lastHttpContent = embeddedChannel.readInbound();
+        CustomLastHttpContent lastHttpContent = embeddedChannel.readInbound();
 
         assertEquals("MeowMeow", new String(ByteBufUtil.getBytes(lastHttpContent.content())));
 
