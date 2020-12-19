@@ -151,11 +151,11 @@ public class CustomFullHttpRequest extends CustomHttpRequest implements FullHttp
 
     @Override
     public boolean equals(Object o) {
-        if (!(o instanceof DefaultFullHttpRequest)) {
+        if (!(o instanceof CustomFullHttpRequest)) {
             return false;
         }
 
-        DefaultFullHttpRequest other = (DefaultFullHttpRequest) o;
+        CustomFullHttpRequest other = (CustomFullHttpRequest) o;
 
         return super.equals(other) &&
                 content().equals(other.content()) &&
