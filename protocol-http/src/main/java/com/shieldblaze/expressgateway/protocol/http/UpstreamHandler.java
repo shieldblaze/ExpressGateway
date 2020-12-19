@@ -105,8 +105,11 @@ public final class UpstreamHandler extends ChannelDuplexHandler {
             response.headers().set(HttpHeaderNames.SERVER, "ShieldBlaze ExpressGateway");
         } else if (msg instanceof CustomLastHttpContent) {
             CustomLastHttpContent httpContent = (CustomLastHttpContent) msg;
-            Connection connection = connectionMap.get(httpContent.id());
-            connection.release();
+            final long id = httpContent.id();
+            promise.addListener((future -> {
+                Connection connection = connectionMap.get(id);
+                connection.release();
+            }));
         }
         super.write(ctx, msg, promise);
     }

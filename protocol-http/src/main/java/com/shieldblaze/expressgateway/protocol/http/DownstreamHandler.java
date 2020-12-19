@@ -75,7 +75,7 @@ final class DownstreamHandler extends ChannelInboundHandlerAdapter {
             return;
         }
 
-        channel.writeAndFlush(msg, channel.voidPromise());
+        channel.writeAndFlush(msg);
     }
 
     void channel(Channel channel) {
