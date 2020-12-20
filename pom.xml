@@ -157,13 +157,6 @@ along with ShieldBlaze ExpressGateway.  If not, see <https://www.gnu.org/license
             <version>1.67</version>
         </dependency>
 
-        <!-- https://mvnrepository.com/artifact/net.openhft/zero-allocation-hashing -->
-        <dependency>
-            <groupId>net.openhft</groupId>
-            <artifactId>zero-allocation-hashing</artifactId>
-            <version>0.12</version>
-        </dependency>
-
         <!-- https://mvnrepository.com/artifact/com.aayushatharva.brotli4j/brotli4j -->
         <dependency>
             <groupId>com.aayushatharva.brotli4j</groupId>
