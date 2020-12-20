@@ -87,7 +87,7 @@ final class DownstreamHandler extends ChannelInboundHandlerAdapter {
                 channelFuture.addListener(ChannelFutureListener.CLOSE);
             }
         } else if (msg instanceof HttpContent) {
-            channel.writeAndFlush(msg, ctx.voidPromise());
+            channel.writeAndFlush(msg, channel.voidPromise());
         }
     }
 
