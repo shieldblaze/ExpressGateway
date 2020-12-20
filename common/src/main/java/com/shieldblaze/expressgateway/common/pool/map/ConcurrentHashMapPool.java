@@ -30,9 +30,9 @@ public class ConcurrentHashMapPool {
 
     private static final Pool<ConcurrentHashMapPooled> pooledPool = Pool.from(new ConcurrentHashMapAllocator())
             .setSize(Integer.MAX_VALUE)
-//            .setExpiration(info -> {
-//                return info.getAgeMillis() >= 60000; // 60 Seconds (1 Minute)
-//            })
+            .setExpiration(info -> {
+                return info.getAgeMillis() >= 60000; // 60 Seconds (1 Minute)
+            })
             .build();
 
 
