@@ -65,7 +65,7 @@ public final class Main {
     public static void main(String[] args) throws CertificateException, SSLException {
 
         TransportConfiguration transportConfiguration = TransportConfigurationBuilder.newBuilder()
-                .withTransportType(TransportType.EPOLL)
+                .withTransportType(TransportType.IO_URING)
                 .withTCPFastOpenMaximumPendingRequests(2147483647)
                 .withBackendConnectTimeout(10000 * 5)
                 .withBackendSocketTimeout(10000 * 5)
