@@ -94,7 +94,7 @@ public class TCPListener extends L4FrontListener {
                         config.setTcpFastopen(transportConfiguration.tcpFastOpenMaximumPendingRequests());
                         config.setEpollMode(EpollMode.EDGE_TRIGGERED);
                         config.setWriteBufferWaterMark(new WriteBufferWaterMark(0, Integer.MAX_VALUE));
-
+                        config.setPerformancePreferences(0, 1,2);
 
                         return serverSocketChannel;
                     } else {
