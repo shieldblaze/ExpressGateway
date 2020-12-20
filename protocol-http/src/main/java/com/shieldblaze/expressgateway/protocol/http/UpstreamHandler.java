@@ -21,22 +21,19 @@ import com.shieldblaze.expressgateway.backend.Node;
 import com.shieldblaze.expressgateway.backend.connection.Connection;
 import com.shieldblaze.expressgateway.backend.strategy.l7.http.HTTPBalanceRequest;
 import com.shieldblaze.expressgateway.backend.strategy.l7.http.HTTPBalanceResponse;
+import com.shieldblaze.expressgateway.common.pool.map.ConcurrentHashMapPool;
+import com.shieldblaze.expressgateway.common.pool.map.ConcurrentHashMapPooled;
 import com.shieldblaze.expressgateway.protocol.http.loadbalancer.HTTPLoadBalancer;
 import io.netty.channel.ChannelDuplexHandler;
 import io.netty.channel.ChannelHandlerContext;
-import io.netty.channel.ChannelPromise;
-import io.netty.handler.codec.http.CustomLastHttpContent;
 import io.netty.handler.codec.http.HttpFrame;
 import io.netty.handler.codec.http.HttpHeaderNames;
 import io.netty.handler.codec.http.HttpHeaders;
 import io.netty.handler.codec.http.HttpRequest;
-import io.netty.handler.codec.http.HttpResponse;
 import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
 
 import java.net.InetSocketAddress;
-import java.util.Map;
-import java.util.concurrent.ConcurrentHashMap;
 
 public final class UpstreamHandler extends ChannelDuplexHandler {
 
@@ -46,7 +43,7 @@ public final class UpstreamHandler extends ChannelDuplexHandler {
      * Long: Request ID
      * Connection: {@link Connection} Instance
      */
-    private final Map<Long, Connection> connectionMap = new ConcurrentHashMap<>();
+    private ConcurrentHashMapPooled<Long, Connection> connectionMap;
 
     private final HTTPLoadBalancer httpLoadBalancer;
     private final Bootstrapper bootstrapper;
@@ -54,6 +51,17 @@ public final class UpstreamHandler extends ChannelDuplexHandler {
     public UpstreamHandler(HTTPLoadBalancer httpLoadBalancer) {
         this.httpLoadBalancer = httpLoadBalancer;
         bootstrapper = new Bootstrapper(httpLoadBalancer, httpLoadBalancer.eventLoopFactory().childGroup(), httpLoadBalancer.byteBufAllocator());
+    }
+
+    @SuppressWarnings("unchecked")
+    @Override
+    public void handlerAdded(ChannelHandlerContext ctx) throws Exception {
+        connectionMap = ConcurrentHashMapPool.newInstance();
+    }
+
+    @Override
+    public void handlerRemoved(ChannelHandlerContext ctx) {
+        connectionMap.release();
     }
 
     @Override
@@ -94,7 +102,7 @@ public final class UpstreamHandler extends ChannelDuplexHandler {
     private void onHeadersRead(HttpHeaders headers, InetSocketAddress upstreamAddress) {
         headers.remove(HttpHeaderNames.UPGRADE);
         headers.set(HttpHeaderNames.ACCEPT_ENCODING, "br, gzip, deflate");
-        headers.add(Headers.X_FORWARDED_FOR, upstreamAddress.getAddress().getHostAddress());
+        headers.add("x-forwarded-for", upstreamAddress.getAddress().getHostAddress());
     }
 
     @Override

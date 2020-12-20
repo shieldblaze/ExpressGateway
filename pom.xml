@@ -163,6 +163,13 @@ along with ShieldBlaze ExpressGateway.  If not, see <https://www.gnu.org/license
             <artifactId>brotli4j</artifactId>
             <version>1.1.0</version>
         </dependency>
+
+        <!-- https://mvnrepository.com/artifact/com.github.chrisvest/stormpot -->
+        <dependency>
+            <groupId>com.github.chrisvest</groupId>
+            <artifactId>stormpot</artifactId>
+            <version>3.1</version>
+        </dependency>
     </dependencies>
 
     <build>

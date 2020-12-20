@@ -62,6 +62,7 @@ final class HTTPServerValidator extends ChannelInboundHandlerAdapter {
             if (HttpUtil.is100ContinueExpected(request)) {
                 ctx.writeAndFlush(HTTPResponses.ACCEPT_100.retainedDuplicate()).addListener(ChannelFutureListener.CLOSE_ON_FAILURE);
                 request.headers().remove(HttpHeaderNames.EXPECT);
+                ReferenceCounted.silentRelease(msg);
             }
         }
         super.channelRead(ctx, msg);

@@ -15,35 +15,28 @@
  * You should have received a copy of the GNU General Public License
  * along with ShieldBlaze ExpressGateway.  If not, see <https://www.gnu.org/licenses/>.
  */
-package com.shieldblaze.expressgateway.protocol.http;
+package com.shieldblaze.expressgateway.common.pool.map;
 
-public final class Headers {
+import stormpot.Pool;
+import stormpot.Timeout;
 
-    /**
-     * "x-forwarded-for"
-     */
-    public static final String X_FORWARDED_FOR = "x-forwarded-for";
+import java.time.Duration;
 
-    /**
-     * x-forwarded-http-version
-     */
-    public static final String X_FORWARDED_HTTP_VERSION = "x-forwarded-http-version";
+public class ConcurrentHashMapPool {
 
-    public static final class Values {
+    private ConcurrentHashMapPool() {
+        // Prevent outside initialization
+    }
 
-        /**
-         * http_1_0
-         */
-        public static final String HTTP_1_0 = "http_1_0";
+    private static final Pool<ConcurrentHashMapPooled> pooledPool = Pool.from(new ConcurrentHashMapAllocator())
+            .setSize(Integer.MAX_VALUE)
+//            .setExpiration(info -> {
+//                return info.getAgeMillis() >= 60000; // 60 Seconds (1 Minute)
+//            })
+            .build();
 
-        /**
-         * http_1_1
-         */
-        public static final String HTTP_1_1 = "http_1_1";
 
-        /**
-         * h2
-         */
-        public static final String HTTP_2 = "h2";
+    public static ConcurrentHashMapPooled newInstance() throws InterruptedException {
+        return pooledPool.claim(new Timeout(Duration.ofSeconds(5)));
     }
 }

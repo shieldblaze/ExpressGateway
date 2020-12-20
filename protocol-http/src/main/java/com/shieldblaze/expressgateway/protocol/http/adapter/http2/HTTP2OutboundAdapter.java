@@ -17,6 +17,8 @@
  */
 package com.shieldblaze.expressgateway.protocol.http.adapter.http2;
 
+import com.shieldblaze.expressgateway.common.pool.map.ConcurrentHashMapPool;
+import com.shieldblaze.expressgateway.common.pool.map.ConcurrentHashMapPooled;
 import com.shieldblaze.expressgateway.protocol.http.HTTPConversionUtil;
 import io.netty.buffer.Unpooled;
 import io.netty.channel.ChannelHandlerContext;
@@ -46,9 +48,6 @@ import io.netty.handler.codec.http2.Http2HeadersFrame;
 import io.netty.handler.codec.http2.Http2StreamFrame;
 import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
-
-import java.util.Map;
-import java.util.concurrent.ConcurrentHashMap;
 
 /**
  * <p>
@@ -86,13 +85,26 @@ public final class HTTP2OutboundAdapter extends Http2ChannelDuplexHandler {
      * <p> Integer: HTTP/2 Stream ID </p>
      * <p> Long: Request ID </p>
      */
-    private final Map<Integer, Long> requestIdToStreamIdMap = new ConcurrentHashMap<>();
+    private ConcurrentHashMapPooled<Integer, Long> requestIdToStreamIdMap;
 
     /**
      * <p> Long: Request ID </p>
      * <p> OutboundProperty: {@link OutboundProperty} Instance </p>
      */
-    private final Map<Long, OutboundProperty> streamIdMap = new ConcurrentHashMap<>();
+    private ConcurrentHashMapPooled<Long, OutboundProperty> streamIdMap;
+
+    @SuppressWarnings("unchecked")
+    @Override
+    public void handlerAdded0(ChannelHandlerContext ctx) throws Exception {
+        requestIdToStreamIdMap = ConcurrentHashMapPool.newInstance();
+        streamIdMap = ConcurrentHashMapPool.newInstance();
+    }
+
+    @Override
+    protected void handlerRemoved0(ChannelHandlerContext ctx) {
+        requestIdToStreamIdMap.release();
+        streamIdMap.release();
+    }
 
     @Override
     public void write(ChannelHandlerContext ctx, Object msg, ChannelPromise promise) throws Exception {
