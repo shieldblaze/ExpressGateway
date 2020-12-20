@@ -100,9 +100,4 @@ final class DownstreamHandler extends ChannelInboundHandlerAdapter {
     public void exceptionCaught(ChannelHandlerContext ctx, Throwable cause) {
         logger.error("Caught Error at Downstream Handler", cause);
     }
-
-    @Override
-    public void channelWritabilityChanged(ChannelHandlerContext ctx) throws Exception {
-        System.out.println(ctx.channel().isWritable());
-    }
 }
