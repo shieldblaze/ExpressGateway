@@ -79,8 +79,8 @@ public final class Main {
                 .build();
 
         EventLoopConfiguration eventLoopConfiguration = EventLoopConfigurationBuilder.newBuilder()
-                .withParentWorkers(2)
-                .withChildWorkers(4)
+                .withParentWorkers(32)
+                .withChildWorkers(32)
                 .build();
 
         CoreConfiguration configuration = CoreConfigurationBuilder.newBuilder()
