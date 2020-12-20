@@ -35,7 +35,6 @@ public class ConcurrentHashMapPool {
             })
             .build();
 
-
     public static ConcurrentHashMapPooled newInstance() throws InterruptedException {
         return POOL.claim(new Timeout(Duration.ofSeconds(5)));
     }
