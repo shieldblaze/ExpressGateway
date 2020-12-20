@@ -109,8 +109,11 @@ public final class HTTP2InboundAdapter extends ChannelDuplexHandler {
     @SuppressWarnings("unchecked")
     @Override
     public void handlerAdded(ChannelHandlerContext ctx) throws Exception {
-        requestIdToStreamIdMap = ConcurrentHashMapPool.newInstance();
-        streamIdMap = ConcurrentHashMapPool.newInstance();
+//        requestIdToStreamIdMap = ConcurrentHashMapPool.newInstance();
+//        streamIdMap = ConcurrentHashMapPool.newInstance();
+
+        requestIdToStreamIdMap = new ConcurrentHashMapPooled<>();
+        streamIdMap = new ConcurrentHashMapPooled<>();
     }
 
     @Override

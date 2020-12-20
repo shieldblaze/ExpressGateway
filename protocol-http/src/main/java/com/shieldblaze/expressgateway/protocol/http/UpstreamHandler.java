@@ -56,7 +56,8 @@ public final class UpstreamHandler extends ChannelDuplexHandler {
     @SuppressWarnings("unchecked")
     @Override
     public void handlerAdded(ChannelHandlerContext ctx) throws Exception {
-        connectionMap = ConcurrentHashMapPool.newInstance();
+//        connectionMap = ConcurrentHashMapPool.newInstance();
+        connectionMap = new ConcurrentHashMapPooled<>();
     }
 
     @Override
