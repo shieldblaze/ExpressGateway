@@ -28,7 +28,7 @@ public class ConcurrentHashMapPool {
         // Prevent outside initialization
     }
 
-    private static final Pool<ConcurrentHashMapPooled> pooledPool = Pool.from(new ConcurrentHashMapAllocator())
+    private static final Pool<ConcurrentHashMapPooled> POOL = Pool.from(new ConcurrentHashMapAllocator())
             .setSize(Integer.MAX_VALUE)
             .setExpiration(info -> {
                 return info.getAgeMillis() >= 60000; // 60 Seconds (1 Minute)
@@ -37,6 +37,6 @@ public class ConcurrentHashMapPool {
 
 
     public static ConcurrentHashMapPooled newInstance() throws InterruptedException {
-        return pooledPool.claim(new Timeout(Duration.ofSeconds(5)));
+        return POOL.claim(new Timeout(Duration.ofSeconds(5)));
     }
 }

@@ -56,22 +56,10 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 
 class HTTP2InboundAdapterTest {
 
-    EmbeddedChannel embeddedChannel;
-    HTTP2InboundAdapter http2InboundAdapter;
-
-    @BeforeEach
-    void setupEmbeddedChannel() {
-        http2InboundAdapter = new HTTP2InboundAdapter();
-        embeddedChannel = new EmbeddedChannel(http2InboundAdapter);
-    }
-
-    @AfterEach
-    void shutdownEmbeddedChannel() {
-        embeddedChannel.close();
-    }
-
     @Test
     void simpleGETRequestAndFullResponseTest() {
+        EmbeddedChannel embeddedChannel = new EmbeddedChannel(new HTTP2InboundAdapter());
+
         Http2HeadersFrame http2HeadersFrame = new DefaultHttp2HeadersFrame(new DefaultHttp2Headers(), true);
         http2HeadersFrame.stream(new CustomHttp2FrameStream(2));
         http2HeadersFrame.headers().method("GET");
@@ -107,10 +95,14 @@ class HTTP2InboundAdapterTest {
 
         fullHttpRequest.release();
         responseDataFrame.release();
+
+        embeddedChannel.close();
     }
 
     @Test
     void simplePOSTRequestAndFullResponseTest() {
+        EmbeddedChannel embeddedChannel = new EmbeddedChannel(new HTTP2InboundAdapter());
+
         Http2HeadersFrame http2HeadersFrame = new DefaultHttp2HeadersFrame(new DefaultHttp2Headers(), true);
         http2HeadersFrame.stream(new CustomHttp2FrameStream(3));
         http2HeadersFrame.headers().method("POST");
@@ -141,10 +133,14 @@ class HTTP2InboundAdapterTest {
         assertEquals("MeowXD", responseHeadersFrame.headers().get("x-meow-key").toString());
 
         fullHttpRequest.release();
+
+        embeddedChannel.close();
     }
 
     @Test
     void simplePOSTDataRequestTest() {
+        EmbeddedChannel embeddedChannel = new EmbeddedChannel(new HTTP2InboundAdapter());
+
         Http2HeadersFrame http2HeadersFrame = new DefaultHttp2HeadersFrame(new DefaultHttp2Headers(), false);
         http2HeadersFrame.stream(new CustomHttp2FrameStream(5));
         http2HeadersFrame.headers().method("POST");
@@ -171,10 +167,14 @@ class HTTP2InboundAdapterTest {
         assertEquals("MeowMeow", new String(ByteBufUtil.getBytes(lastHttpContent.content())));
 
         lastHttpContent.release();
+
+        embeddedChannel.close();
     }
 
     @Test
     void multiplePOSTDataRequestTest() {
+        EmbeddedChannel embeddedChannel = new EmbeddedChannel(new HTTP2InboundAdapter());
+
         Http2HeadersFrame http2HeadersFrame = new DefaultHttp2HeadersFrame(new DefaultHttp2Headers(), false);
         http2HeadersFrame.stream(new CustomHttp2FrameStream(4));
         http2HeadersFrame.headers().method("POST");
@@ -210,10 +210,14 @@ class HTTP2InboundAdapterTest {
 
         httpContent.release();
         lastHttpContent.release();
+
+        embeddedChannel.close();
     }
 
     @Test
     void fullDuplexContentLengthBasedTest() {
+        EmbeddedChannel embeddedChannel = new EmbeddedChannel(new HTTP2InboundAdapter());
+
         Http2HeadersFrame http2HeadersFrame = new DefaultHttp2HeadersFrame(new DefaultHttp2Headers(), true);
         http2HeadersFrame.stream(new CustomHttp2FrameStream(2));
         http2HeadersFrame.headers().method("GET");
@@ -263,10 +267,14 @@ class HTTP2InboundAdapterTest {
         }
 
         fullHttpRequest.release();
+
+        embeddedChannel.close();
     }
 
     @Test
     void fullDuplexTransferEncodingChunkedTest() {
+        EmbeddedChannel embeddedChannel = new EmbeddedChannel(new HTTP2InboundAdapter());
+
         Http2HeadersFrame http2HeadersFrame = new DefaultHttp2HeadersFrame(new DefaultHttp2Headers(), true);
         http2HeadersFrame.stream(new CustomHttp2FrameStream(2));
         http2HeadersFrame.headers().method("GET");
@@ -314,5 +322,7 @@ class HTTP2InboundAdapterTest {
                 assertFalse(http2DataFrame.isEndStream());
             }
         }
+
+        embeddedChannel.close();
     }
 }
