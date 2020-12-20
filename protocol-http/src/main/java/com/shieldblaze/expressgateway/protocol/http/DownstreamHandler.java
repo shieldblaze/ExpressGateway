@@ -65,7 +65,7 @@ final class DownstreamHandler extends ChannelInboundHandlerAdapter {
                 httpResponse.headers().set(HttpHeaderNames.CONNECTION, HttpHeaderValues.CLOSE);
 
                 if (httpResponse instanceof FullHttpResponse) {
-                    channel.writeAndFlush(msg)
+                    channel.writeAndFlush(httpResponse)
                             .addListener(future -> httpConnection.release())
                             .addListener(ChannelFutureListener.CLOSE);
                 } else {
@@ -73,7 +73,7 @@ final class DownstreamHandler extends ChannelInboundHandlerAdapter {
                 }
             } else {
                 if (httpResponse instanceof FullHttpResponse) {
-                    channel.writeAndFlush(msg)
+                    channel.writeAndFlush(httpResponse)
                             .addListener(future -> httpConnection.release());
                     return;
                 }
