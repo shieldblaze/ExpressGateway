@@ -212,7 +212,7 @@ public class Http2FrameCodec extends Http2ConnectionHandler {
                 @Override
                 public boolean visit(Http2Stream stream) {
                     try {
-                        return streamVisitor.visit((Http2FrameStream) stream.getProperty(streamKey));
+                        return streamVisitor.visit(stream.getProperty(streamKey));
                     } catch (Throwable cause) {
                         onError(ctx, false, cause);
                         return false;
@@ -471,7 +471,7 @@ public class Http2FrameCodec extends Http2ConnectionHandler {
     }
 
     public int initializeNewStream(ChannelHandlerContext ctx, DefaultHttp2FrameStream http2FrameStream,
-                                    ChannelPromise promise) {
+                                   ChannelPromise promise) {
         final Http2Connection connection = connection();
         final int streamId = connection.local().incrementAndGetNextStreamId();
         if (streamId < 0) {
@@ -689,8 +689,7 @@ public class Http2FrameCodec extends Http2ConnectionHandler {
         public void onPushPromiseRead(ChannelHandlerContext ctx, int streamId, int promisedStreamId,
                                       Http2Headers headers, int padding) {
             onHttp2Frame(ctx, new DefaultHttp2PushPromiseFrame(headers, padding, promisedStreamId)
-                    .pushStream(new DefaultHttp2FrameStream()
-                            .setStreamAndProperty(streamKey, connection().stream(promisedStreamId)))
+                    .pushStream(new DefaultHttp2FrameStream().setStreamAndProperty(streamKey, connection().stream(promisedStreamId)))
                     .stream(requireStream(streamId)));
         }
 

@@ -18,12 +18,12 @@
 package com.shieldblaze.expressgateway.backend;
 
 import com.shieldblaze.expressgateway.backend.cluster.Cluster;
+import com.shieldblaze.expressgateway.backend.connection.Connection;
 import com.shieldblaze.expressgateway.backend.events.node.NodeEvent;
 import com.shieldblaze.expressgateway.backend.events.node.NodeIdleEvent;
 import com.shieldblaze.expressgateway.backend.events.node.NodeOfflineEvent;
 import com.shieldblaze.expressgateway.backend.events.node.NodeOnlineEvent;
 import com.shieldblaze.expressgateway.backend.exceptions.TooManyConnectionsException;
-import com.shieldblaze.expressgateway.backend.connection.Connection;
 import com.shieldblaze.expressgateway.common.Math;
 import com.shieldblaze.expressgateway.common.annotation.NonNull;
 import com.shieldblaze.expressgateway.common.utils.Number;
@@ -32,7 +32,6 @@ import com.shieldblaze.expressgateway.healthcheck.HealthCheck;
 
 import java.net.InetSocketAddress;
 import java.util.Objects;
-import java.util.Optional;
 import java.util.Queue;
 import java.util.concurrent.ConcurrentLinkedQueue;
 import java.util.concurrent.atomic.AtomicInteger;
@@ -44,11 +43,14 @@ import java.util.concurrent.atomic.AtomicLong;
 public final class Node implements Comparable<Node> {
 
     /**
-     * Connections List
-     * <p>
-     * (ConcurrentLinkedQueue is used due to performance issues with CopyOnWriteArrayList).
+     * Available Connections Queue
      */
-    private final Queue<Connection> connections = new ConcurrentLinkedQueue<>();
+    private final Queue<Connection> availableConnections = new ConcurrentLinkedQueue<>();
+
+    /**
+     * Active Connections Queue
+     */
+    private final Queue<Connection> activeConnections = new ConcurrentLinkedQueue<>();
 
     /**
      * Address of this {@link Node}
@@ -135,7 +137,7 @@ public final class Node implements Comparable<Node> {
             return activeConnection0();
         }
 
-        return connections.size();
+        return availableConnections.size();
     }
 
     public Node incBytesSent(int bytes) {
@@ -246,30 +248,6 @@ public final class Node implements Comparable<Node> {
     }
 
     /**
-     * Try to lease a connection from available connections.
-     *
-     * @return {@linkplain Connection} Instance of available and active connection else {@code null}.
-     */
-    public Connection lease() {
-        Optional<Connection> optionalConnection = connections.stream()
-                .filter(connection -> !connection.isInUse())
-                .findAny();
-
-        // If we've an available connection then return it.
-        if (optionalConnection.isPresent()) {
-
-            // If connection is not active, remove it and return null.
-            if (!optionalConnection.get().isActive()) {
-                connections.remove(optionalConnection.get());
-                return null;
-            }
-            return optionalConnection.get();
-        } else {
-            return null;
-        }
-    }
-
-    /**
      * Add a {@link Connection} with this {@linkplain Node}
      */
     public Node addConnection(Connection connection) throws TooManyConnectionsException {
@@ -279,7 +257,7 @@ public final class Node implements Comparable<Node> {
             connection.close();
             throw new TooManyConnectionsException(this);
         }
-        connections.add(connection);
+        activeConnections.add(connection);
         return this;
     }
 
@@ -287,13 +265,43 @@ public final class Node implements Comparable<Node> {
      * Remove and close a {@link Connection} from this {@linkplain Node}
      */
     public Node removeConnection(Connection connection) {
-        connections.remove(connection);
+        availableConnections.remove(connection);
+        activeConnections.remove(connection);
         connection.close();
         return this;
     }
 
-    public Queue<Connection> connections() {
-        return connections;
+    /**
+     * Try to lease an available active connection.
+     *
+     * @return {@link Connection} if an available active connection is available else {@code null}
+     */
+    public Connection tryLease() {
+        return availableConnections.poll();
+    }
+
+    /**
+     * Lease a connection and remove it from available active connection pool.
+     */
+    public Node lease0(Connection connection) {
+        availableConnections.remove(connection);
+        return this;
+    }
+
+    /**
+     * Release a connection and add it into available active connection pool.
+     */
+    public Node release0(Connection connection) {
+        availableConnections.add(connection);
+        return this;
+    }
+
+    public Queue<Connection> activeConnections() {
+        return activeConnections;
+    }
+
+    public Queue<Connection> availableConnections() {
+        return availableConnections;
     }
 
     /**
@@ -306,9 +314,13 @@ public final class Node implements Comparable<Node> {
         return activeConnection() >= maxConnections;
     }
 
+    /**
+     * Close all active connection and clear available connection list
+     */
     private void drainConnections() {
-        connections.forEach(Connection::close);
-        connections.clear();
+        activeConnections.forEach(Connection::close);
+        activeConnections.clear();
+        availableConnections.clear();
     }
 
     @Override

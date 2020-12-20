@@ -17,13 +17,16 @@
  */
 package com.shieldblaze.expressgateway.protocol.http.adapter.http2;
 
-import com.shieldblaze.expressgateway.protocol.http.Headers;
+import com.shieldblaze.expressgateway.protocol.http.HTTPConversionUtil;
 import io.netty.buffer.Unpooled;
 import io.netty.channel.ChannelHandlerContext;
 import io.netty.channel.ChannelPromise;
+import io.netty.handler.codec.http.CustomHttpContent;
+import io.netty.handler.codec.http.CustomLastHttpContent;
 import io.netty.handler.codec.http.FullHttpRequest;
 import io.netty.handler.codec.http.FullHttpResponse;
 import io.netty.handler.codec.http.HttpContent;
+import io.netty.handler.codec.http.HttpFrame;
 import io.netty.handler.codec.http.HttpHeaderNames;
 import io.netty.handler.codec.http.HttpHeaderValues;
 import io.netty.handler.codec.http.HttpObject;
@@ -34,8 +37,6 @@ import io.netty.handler.codec.http.LastHttpContent;
 import io.netty.handler.codec.http2.DefaultHttp2DataFrame;
 import io.netty.handler.codec.http2.DefaultHttp2GoAwayFrame;
 import io.netty.handler.codec.http2.DefaultHttp2HeadersFrame;
-import io.netty.handler.codec.http2.DefaultHttp2TranslatedHttpContent;
-import io.netty.handler.codec.http2.DefaultHttp2TranslatedLastHttpContent;
 import io.netty.handler.codec.http2.Http2ChannelDuplexHandler;
 import io.netty.handler.codec.http2.Http2DataFrame;
 import io.netty.handler.codec.http2.Http2Error;
@@ -43,13 +44,11 @@ import io.netty.handler.codec.http2.Http2FrameCodec;
 import io.netty.handler.codec.http2.Http2Headers;
 import io.netty.handler.codec.http2.Http2HeadersFrame;
 import io.netty.handler.codec.http2.Http2StreamFrame;
-import io.netty.handler.codec.http2.Http2TranslatedHttpContent;
-import io.netty.handler.codec.http2.HttpConversionUtil;
 import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
 
 import java.util.Map;
-import java.util.concurrent.ConcurrentSkipListMap;
+import java.util.concurrent.ConcurrentHashMap;
 
 /**
  * <p>
@@ -84,73 +83,72 @@ public final class HTTP2OutboundAdapter extends Http2ChannelDuplexHandler {
     private static final Logger logger = LogManager.getLogger(HTTP2OutboundAdapter.class);
 
     /**
-     * Integer: Connection Stream ID
-     * Long: Stream Hash
+     * <p> Integer: HTTP/2 Stream ID </p>
+     * <p> Long: Request ID </p>
      */
-    private final Map<Integer, Long> streamIds = new ConcurrentSkipListMap<>();
+    private final Map<Integer, Long> requestIdToStreamIdMap = new ConcurrentHashMap<>();
 
     /**
-     * Long: Stream Hash
-     * OutboundProperty: {@link OutboundProperty} Instance
+     * <p> Long: Request ID </p>
+     * <p> OutboundProperty: {@link OutboundProperty} Instance </p>
      */
-    private final Map<Long, OutboundProperty> streamMap = new ConcurrentSkipListMap<>();
+    private final Map<Long, OutboundProperty> streamIdMap = new ConcurrentHashMap<>();
 
     @Override
     public void write(ChannelHandlerContext ctx, Object msg, ChannelPromise promise) throws Exception {
         if (msg instanceof HttpRequest) {
-            HttpRequest httpRequest = (HttpRequest) msg;
+            HttpFrame httpFrame = (HttpFrame) msg;
             Http2FrameCodec.DefaultHttp2FrameStream http2FrameStream = (Http2FrameCodec.DefaultHttp2FrameStream) newStream();
-            int streamId = frameCodec.initializeNewStream(ctx, http2FrameStream, promise);
-            long streamHash = Long.parseLong(httpRequest.headers().get(Headers.STREAM_HASH));
+            frameCodec.initializeNewStream(ctx, http2FrameStream, promise);
+            long id = httpFrame.id();
 
             // Put the stream ID and Outbound Property into the map.
-            OutboundProperty outboundProperty = new OutboundProperty(streamHash, http2FrameStream, httpRequest.headers().get(Headers.X_FORWARDED_HTTP_VERSION));
-            streamMap.put(streamHash, outboundProperty);
-            streamIds.put(streamId, streamHash);
+            addStream(new OutboundProperty(id, http2FrameStream, httpFrame.protocol()));
 
             if (msg instanceof FullHttpRequest) {
                 FullHttpRequest fullHttpRequest = (FullHttpRequest) msg;
 
                 if (fullHttpRequest.content().readableBytes() == 0) {
-                    Http2Headers http2Headers = HttpConversionUtil.toHttp2Headers(fullHttpRequest, false);
+                    Http2Headers http2Headers = HTTPConversionUtil.toHttp2Headers(fullHttpRequest);
                     Http2HeadersFrame http2HeadersFrame = new DefaultHttp2HeadersFrame(http2Headers, true);
-                    writeHeaders(ctx, streamHash, http2HeadersFrame, promise);
+                    writeHeaders(ctx, id, http2HeadersFrame, promise);
                 } else {
-                    Http2Headers http2Headers = HttpConversionUtil.toHttp2Headers(fullHttpRequest, false);
+                    Http2Headers http2Headers = HTTPConversionUtil.toHttp2Headers(fullHttpRequest);
                     Http2HeadersFrame http2HeadersFrame = new DefaultHttp2HeadersFrame(http2Headers, false);
-                    writeHeaders(ctx, streamHash, http2HeadersFrame, promise);
+                    writeHeaders(ctx, id, http2HeadersFrame, promise);
 
                     Http2DataFrame dataFrame = new DefaultHttp2DataFrame(fullHttpRequest.content(), true);
-                    writeData(ctx, streamHash, dataFrame, ctx.newPromise());
+                    writeData(ctx, id, dataFrame, ctx.voidPromise());
                 }
             } else {
-                Http2Headers http2Headers = HttpConversionUtil.toHttp2Headers((HttpRequest) msg, false);
+                Http2Headers http2Headers = HTTPConversionUtil.toHttp2Headers(((HttpRequest) msg));
                 Http2HeadersFrame http2HeadersFrame = new DefaultHttp2HeadersFrame(http2Headers, false);
-                writeHeaders(ctx, streamHash, http2HeadersFrame, promise);
+                writeHeaders(ctx, id, http2HeadersFrame, promise);
             }
         } else if (msg instanceof HttpContent) {
+            HttpContent httpContent = (HttpContent) msg;
+            long id = ((HttpFrame) httpContent).id();
 
-            if (msg instanceof DefaultHttp2TranslatedLastHttpContent) {
-                DefaultHttp2TranslatedLastHttpContent httpContent = (DefaultHttp2TranslatedLastHttpContent) msg;
+            if (msg instanceof LastHttpContent) {
+                LastHttpContent lastHttpContent = (LastHttpContent) httpContent;
 
                 // > If Trailing Headers are empty then we'll write HTTP/2 Data Frame with 'endOfStream' set to 'true.
                 // > If Trailing Headers are present then we'll write HTTP/2 Data Frame followed by HTTP/2 Header Frame
                 // which will have 'endOfStream' set to 'true.
-                if (httpContent.trailingHeaders().isEmpty()) {
+                if (lastHttpContent.trailingHeaders().isEmpty()) {
                     Http2DataFrame dataFrame = new DefaultHttp2DataFrame(httpContent.content(), true);
-                    writeData(ctx, httpContent.streamHash(), dataFrame, promise);
+                    writeData(ctx, id, dataFrame, promise);
                 } else {
                     Http2DataFrame dataFrame = new DefaultHttp2DataFrame(httpContent.content(), false);
-                    writeData(ctx, httpContent.streamHash(), dataFrame, promise);
+                    writeData(ctx, id, dataFrame, promise);
 
-                    Http2Headers http2Headers = HttpConversionUtil.toHttp2Headers(httpContent.trailingHeaders(), false);
+                    Http2Headers http2Headers = HTTPConversionUtil.toHttp2Headers(lastHttpContent.trailingHeaders());
                     Http2HeadersFrame http2HeadersFrame = new DefaultHttp2HeadersFrame(http2Headers, true);
-                    writeHeaders(ctx, httpContent.streamHash(), http2HeadersFrame, promise);
+                    writeHeaders(ctx, id, http2HeadersFrame, promise);
                 }
-            } else if (msg instanceof DefaultHttp2TranslatedHttpContent) {
-                DefaultHttp2TranslatedHttpContent httpContent = (DefaultHttp2TranslatedHttpContent) msg;
+            } else {
                 Http2DataFrame dataFrame = new DefaultHttp2DataFrame(httpContent.content(), false);
-                writeData(ctx, httpContent.streamHash(), dataFrame, promise);
+                writeData(ctx, id, dataFrame, promise);
             }
         }
     }
@@ -160,22 +158,20 @@ public final class HTTP2OutboundAdapter extends Http2ChannelDuplexHandler {
         if (msg instanceof Http2HeadersFrame) {
             Http2HeadersFrame headersFrame = (Http2HeadersFrame) msg;
             int streamId = headersFrame.stream().id();
-            OutboundProperty outboundProperty = getOutboundProperty(streamId);
+            OutboundProperty outboundProperty = outboundProperty(streamId);
 
             HttpVersion httpVersion;
-            if (outboundProperty.httpVersion().equals(Headers.Values.HTTP_1_0)) {
+            if (outboundProperty.protocol().equals(HttpFrame.Protocol.HTTP_1_0)) {
                 httpVersion = HttpVersion.HTTP_1_0;
-            } else if (outboundProperty.httpVersion().equals(Headers.Values.HTTP_1_1) || outboundProperty.httpVersion().equals(Headers.Values.HTTP_2)) {
-                httpVersion = HttpVersion.HTTP_1_1;
             } else {
-                throw new IllegalArgumentException("Unsupported X-Forwarded-HTTP-Version: " + outboundProperty.httpVersion());
+                httpVersion = HttpVersion.HTTP_1_1;
             }
 
             // If initial read is already performed then this Header frame is part of Last trailing frame.
             if (outboundProperty.initialRead()) {
-                LastHttpContent httpContent = new DefaultHttp2TranslatedLastHttpContent(outboundProperty.streamHash());
+                LastHttpContent httpContent = new CustomLastHttpContent(Unpooled.EMPTY_BUFFER, outboundProperty.protocol(), outboundProperty.id());
 
-                HttpConversionUtil.addHttp2ToHttpHeaders(streamId, headersFrame.headers(), httpContent.trailingHeaders(), httpVersion, true, false);
+                HTTPConversionUtil.addHttp2ToHttpHeaders(headersFrame.headers(), httpContent.trailingHeaders(), true, false);
                 ctx.fireChannelRead(httpContent);
                 removeStreamMapping(streamId);
 
@@ -184,41 +180,32 @@ public final class HTTP2OutboundAdapter extends Http2ChannelDuplexHandler {
                     ctx.writeAndFlush(new DefaultHttp2GoAwayFrame(Http2Error.NO_ERROR).setExtraStreamIds(streamId));
                 }
             } else {
+                outboundProperty.fireInitialRead();
+
                 HttpResponse httpResponse;
-                long streamHash = streamIds.get(streamId);
 
                 // If 'endOfStream' flag is set to 'true' then we will create FullHttpResponse and remove mapping.
                 if (headersFrame.isEndStream()) {
-                    httpResponse = HttpConversionUtil.toFullHttpResponse(streamId, headersFrame.headers(), Unpooled.EMPTY_BUFFER, httpVersion, false);
+                    httpResponse = HTTPConversionUtil.toFullHttpResponse(outboundProperty.id(), headersFrame.headers(), Unpooled.EMPTY_BUFFER, httpVersion);
                     removeStreamMapping(streamId);
                 } else {
-                    httpResponse = HttpConversionUtil.toHttpResponse(streamId, headersFrame.headers(), httpVersion, false);
+                    httpResponse = HTTPConversionUtil.toHttpResponse(outboundProperty.id(), headersFrame.headers(), httpVersion);
                     httpResponse.headers().set(HttpHeaderNames.TRANSFER_ENCODING, HttpHeaderValues.CHUNKED);
                 }
 
-                httpResponse.headers()
-                        .set(Headers.STREAM_HASH, streamHash)
-                        .remove(HttpConversionUtil.ExtensionHeaderNames.STREAM_ID.text())
-                        .remove(HttpConversionUtil.ExtensionHeaderNames.SCHEME.text())
-                        .remove(HttpConversionUtil.ExtensionHeaderNames.PATH.text())
-                        .remove(HttpConversionUtil.ExtensionHeaderNames.STREAM_DEPENDENCY_ID.text())
-                        .remove(HttpConversionUtil.ExtensionHeaderNames.STREAM_PROMISE_ID.text())
-                        .remove(HttpConversionUtil.ExtensionHeaderNames.STREAM_WEIGHT.text());
-
-                outboundProperty.fireInitialRead();
                 ctx.fireChannelRead(httpResponse);
             }
         } else if (msg instanceof Http2DataFrame) {
             Http2DataFrame dataFrame = (Http2DataFrame) msg;
             int streamId = dataFrame.stream().id();
-            OutboundProperty outboundProperty = getOutboundProperty(streamId);
+            OutboundProperty outboundProperty = outboundProperty(streamId);
 
-            Http2TranslatedHttpContent httpContent;
+            HttpContent httpContent;
             if (dataFrame.isEndStream()) {
-                httpContent = new DefaultHttp2TranslatedLastHttpContent(dataFrame.content(), outboundProperty.streamHash());
+                httpContent = new CustomLastHttpContent(dataFrame.content(), outboundProperty.protocol(), outboundProperty.id());
                 removeStreamMapping(streamId);
             } else {
-                httpContent = new DefaultHttp2TranslatedHttpContent(dataFrame.content(), outboundProperty.streamHash());
+                httpContent = new CustomHttpContent(dataFrame.content(), outboundProperty.protocol(), outboundProperty.id());
             }
 
             ctx.fireChannelRead(httpContent);
@@ -228,44 +215,41 @@ public final class HTTP2OutboundAdapter extends Http2ChannelDuplexHandler {
     /**
      * Write and Flush {@linkplain Http2HeadersFrame}
      */
-    private void writeHeaders(ChannelHandlerContext ctx, long streamHash, Http2HeadersFrame headersFrame, ChannelPromise channelPromise) throws Exception {
-        headersFrame.headers().remove(Headers.STREAM_HASH);
-        headersFrame.stream(getOutboundProperty(streamHash).stream());
+    private void writeHeaders(ChannelHandlerContext ctx, long id, Http2HeadersFrame headersFrame, ChannelPromise channelPromise) throws Exception {
+        headersFrame.stream(outboundProperty(id).stream());
         super.write(ctx, headersFrame, channelPromise);
     }
 
     /**
      * Write and Flush {@linkplain Http2DataFrame}
      */
-    private void writeData(ChannelHandlerContext ctx, long streamHash, Http2DataFrame dataFrame, ChannelPromise channelPromise) throws Exception {
-        dataFrame.stream(getOutboundProperty(streamHash).stream());
+    private void writeData(ChannelHandlerContext ctx, long id, Http2DataFrame dataFrame, ChannelPromise channelPromise) throws Exception {
+        dataFrame.stream(outboundProperty(id).stream());
         super.write(ctx, dataFrame, channelPromise);
     }
 
-    /**
-     * Get {@linkplain OutboundProperty} using {@code StreamId}
-     */
-    private OutboundProperty getOutboundProperty(int streamId) {
-        OutboundProperty outboundProperty = streamMap.get(streamIds.get(streamId));
-        if (outboundProperty == null) {
-            throw new IllegalArgumentException("Stream does not exist for StreamID: " + streamId);
-        }
-        return outboundProperty;
+    private void addStream(OutboundProperty outboundProperty) {
+        requestIdToStreamIdMap.put(outboundProperty.stream().id(), outboundProperty.id());
+        streamIdMap.put(outboundProperty.id(), outboundProperty);
+    }
+
+    private OutboundProperty outboundProperty(int streamId) {
+        return outboundProperty(requestIdToStreamIdMap.get(streamId));
     }
 
     /**
-     * Get {@linkplain OutboundProperty} using {@code StreamHash}
+     * Get {@linkplain OutboundProperty} using {@code ID}
      */
-    private OutboundProperty getOutboundProperty(long streamHash) {
-        OutboundProperty outboundProperty = streamMap.get(streamHash);
+    private OutboundProperty outboundProperty(long id) {
+        OutboundProperty outboundProperty = streamIdMap.get(id);
         if (outboundProperty == null) {
-            throw new IllegalArgumentException("Stream does not exist for StreamHash: " + streamHash);
+            throw new IllegalArgumentException("Stream does not exist for StreamHash: " + id);
         }
         return outboundProperty;
     }
 
     private void removeStreamMapping(int streamId) {
-        streamMap.remove(streamIds.remove(streamId));
+        streamIdMap.remove(requestIdToStreamIdMap.remove(streamId));
     }
 
     @Override

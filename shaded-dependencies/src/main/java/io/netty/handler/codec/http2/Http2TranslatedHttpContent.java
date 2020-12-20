@@ -38,18 +38,18 @@ import io.netty.handler.codec.http.DefaultHttpContent;
 
 public abstract class Http2TranslatedHttpContent extends DefaultHttpContent {
 
-    private final long streamHash;
+    private final long streamId;
 
     /***
      * Creates a new instance with the specified chunk content.
-     * @param streamHash Stream Hash of HTTP/2 Data Frame
+     * @param streamId Stream Id of HTTP/2 Data Frame
      */
-    public Http2TranslatedHttpContent(ByteBuf content, long streamHash) {
+    public Http2TranslatedHttpContent(ByteBuf content, long streamId) {
         super(content);
-        this.streamHash = streamHash;
+        this.streamId = streamId;
     }
 
-    public long streamHash() {
-        return streamHash;
+    public long streamId() {
+        return streamId;
     }
 }

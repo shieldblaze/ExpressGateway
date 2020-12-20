@@ -23,17 +23,19 @@ import com.shieldblaze.expressgateway.backend.events.node.NodeEvent;
 import com.shieldblaze.expressgateway.backend.events.node.NodeIdleEvent;
 import com.shieldblaze.expressgateway.backend.events.node.NodeOfflineEvent;
 import com.shieldblaze.expressgateway.backend.events.node.NodeRemovedEvent;
-import com.shieldblaze.expressgateway.backend.exceptions.NoNodeAvailableException;
 import com.shieldblaze.expressgateway.backend.exceptions.LoadBalanceException;
+import com.shieldblaze.expressgateway.backend.exceptions.NoNodeAvailableException;
 import com.shieldblaze.expressgateway.backend.loadbalance.SessionPersistence;
 import com.shieldblaze.expressgateway.concurrent.event.Event;
+
+import java.util.SplittableRandom;
 
 /**
  * Select {@link Node} Randomly
  */
 public final class HTTPRandom extends HTTPBalance {
 
-    private final java.util.Random RANDOM = new java.util.Random();
+    private final SplittableRandom RANDOM = new SplittableRandom();
 
     /**
      * Create {@link HTTPRandom} Instance

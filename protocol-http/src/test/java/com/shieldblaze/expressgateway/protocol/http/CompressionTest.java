@@ -49,6 +49,7 @@ import com.shieldblaze.expressgateway.protocol.http.loadbalancer.HTTPLoadBalance
 import com.shieldblaze.expressgateway.protocol.http.loadbalancer.HTTPLoadBalancerBuilder;
 import com.shieldblaze.expressgateway.protocol.tcp.TCPListener;
 import io.netty.buffer.Unpooled;
+import io.netty.channel.ChannelHandler;
 import io.netty.channel.ChannelHandlerContext;
 import io.netty.channel.SimpleChannelInboundHandler;
 import io.netty.handler.codec.http.DefaultFullHttpResponse;
@@ -166,7 +167,9 @@ class CompressionTest {
 
     @Test
     void brotliCompressionTest() throws InterruptedException, IOException {
-        HTTPServer httpServer = new HTTPServer(10000, true, new SimpleChannelInboundHandler<FullHttpRequest>() {
+
+        @ChannelHandler.Sharable
+        class Handler extends SimpleChannelInboundHandler<FullHttpRequest> {
             @Override
             protected void channelRead0(ChannelHandlerContext ctx, FullHttpRequest msg) {
                 DefaultFullHttpResponse httpResponse = new DefaultFullHttpResponse(HttpVersion.HTTP_1_1,
@@ -179,7 +182,9 @@ class CompressionTest {
                 httpResponse.headers().set(HttpHeaderNames.CONTENT_TYPE, "text/html");
                 ctx.writeAndFlush(httpResponse);
             }
-        });
+        }
+
+        HTTPServer httpServer = new HTTPServer(10000, true, new Handler());
         httpServer.start();
         Thread.sleep(500L);
 
@@ -267,7 +272,8 @@ class CompressionTest {
 
     @Test
     void gzipCompressionTest() throws InterruptedException, IOException {
-        HTTPServer httpServer = new HTTPServer(10001, true, new SimpleChannelInboundHandler<FullHttpRequest>() {
+        @ChannelHandler.Sharable
+        class Handler extends SimpleChannelInboundHandler<FullHttpRequest> {
             @Override
             protected void channelRead0(ChannelHandlerContext ctx, FullHttpRequest msg) {
                 DefaultFullHttpResponse httpResponse = new DefaultFullHttpResponse(HttpVersion.HTTP_1_1,
@@ -280,7 +286,9 @@ class CompressionTest {
                 httpResponse.headers().set(HttpHeaderNames.CONTENT_TYPE, "text/html");
                 ctx.writeAndFlush(httpResponse);
             }
-        });
+        }
+
+        HTTPServer httpServer = new HTTPServer(10001, true, new Handler());
         httpServer.start();
         Thread.sleep(500L);
 
@@ -349,7 +357,8 @@ class CompressionTest {
 
     @Test
     void deflateCompressionTest() throws InterruptedException, IOException, DataFormatException {
-        HTTPServer httpServer = new HTTPServer(10002, true, new SimpleChannelInboundHandler<FullHttpRequest>() {
+        @ChannelHandler.Sharable
+        class Handler extends SimpleChannelInboundHandler<FullHttpRequest> {
             @Override
             protected void channelRead0(ChannelHandlerContext ctx, FullHttpRequest msg) {
                 DefaultFullHttpResponse httpResponse = new DefaultFullHttpResponse(HttpVersion.HTTP_1_1,
@@ -362,7 +371,9 @@ class CompressionTest {
                 httpResponse.headers().set(HttpHeaderNames.CONTENT_TYPE, "text/html");
                 ctx.writeAndFlush(httpResponse);
             }
-        });
+        }
+
+        HTTPServer httpServer = new HTTPServer(10002, true, new Handler());
         httpServer.start();
         Thread.sleep(500L);
 

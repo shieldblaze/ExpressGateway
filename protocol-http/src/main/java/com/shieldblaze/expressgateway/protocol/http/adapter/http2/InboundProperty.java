@@ -17,23 +17,23 @@
  */
 package com.shieldblaze.expressgateway.protocol.http.adapter.http2;
 
+import io.netty.handler.codec.http.HttpFrame;
 import io.netty.handler.codec.http2.Http2FrameStream;
-import net.openhft.hashing.LongHashFunction;
 
 final class InboundProperty {
 
-    private final long streamHash;
+    private final HttpFrame httpFrame;
     private final Http2FrameStream stream;
     private final String acceptEncoding;
 
-    InboundProperty(long streamNumber, Http2FrameStream stream, String acceptEncoding) {
-        this.streamHash = LongHashFunction.xx().hashLongs(new long[]{streamNumber, stream.id()});
+    InboundProperty(HttpFrame httpFrame, Http2FrameStream stream, String acceptEncoding) {
+        this.httpFrame = httpFrame;
         this.stream = stream;
         this.acceptEncoding = acceptEncoding;
     }
 
-    long streamHash() {
-        return streamHash;
+    HttpFrame httpFrame() {
+        return httpFrame;
     }
 
     Http2FrameStream stream() {
@@ -42,5 +42,14 @@ final class InboundProperty {
 
     String acceptEncoding() {
         return acceptEncoding;
+    }
+
+    @Override
+    public String toString() {
+        return "InboundProperty{" +
+                "httpFrame=(" + httpFrame.id() + ")" +
+                ", stream=" + stream +
+                ", acceptEncoding='" + acceptEncoding + '\'' +
+                '}';
     }
 }

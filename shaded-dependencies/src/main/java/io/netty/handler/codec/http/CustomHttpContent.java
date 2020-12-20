@@ -15,40 +15,46 @@
  * You should have received a copy of the GNU General Public License
  * along with ShieldBlaze ExpressGateway.  If not, see <https://www.gnu.org/licenses/>.
  */
-package com.shieldblaze.expressgateway.protocol.http.adapter.http2;
+package io.netty.handler.codec.http;
 
-import io.netty.handler.codec.http.HttpFrame;
-import io.netty.handler.codec.http2.Http2FrameStream;
+import io.netty.buffer.ByteBuf;
 
-final class OutboundProperty {
-    private final long id;
-    private final Http2FrameStream stream;
-    private boolean isInitialRead;
-    private final HttpFrame.Protocol protocol;
+public class CustomHttpContent extends DefaultHttpContent implements HttpFrame{
 
-    OutboundProperty(long id, Http2FrameStream stream, HttpFrame.Protocol protocol) {
+    private Protocol protocol;
+    private long id;
+
+    public CustomHttpContent(ByteBuf content, Protocol protocol, long id) {
+        super(content);
+        this.protocol = protocol;
         this.id = id;
-        this.stream = stream;
+    }
+
+    @Override
+    public String toString() {
+        return "CustomHttpContent{" +
+                "protocol=" + protocol +
+                ", id=" + id +
+                '}';
+    }
+
+    @Override
+    public Protocol protocol() {
+        return protocol;
+    }
+
+    @Override
+    public void protocol(Protocol protocol) {
         this.protocol = protocol;
     }
 
-    long id() {
+    @Override
+    public long id() {
         return id;
     }
 
-    Http2FrameStream stream() {
-        return stream;
-    }
-
-    boolean initialRead() {
-        return isInitialRead;
-    }
-
-    void fireInitialRead() {
-        isInitialRead = true;
-    }
-
-    HttpFrame.Protocol protocol() {
-        return protocol;
+    @Override
+    public void id(long id) {
+        this.id = id;
     }
 }
