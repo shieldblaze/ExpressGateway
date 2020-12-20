@@ -17,10 +17,12 @@
  */
 package com.shieldblaze.expressgateway.common.pool.map;
 
+import io.netty.util.Recycler;
 import stormpot.Pool;
 import stormpot.Timeout;
 
 import java.time.Duration;
+import java.util.concurrent.ConcurrentHashMap;
 
 public class ConcurrentHashMapPool {
 
@@ -28,13 +30,12 @@ public class ConcurrentHashMapPool {
         // Prevent outside initialization
     }
 
-    private static final Pool<ConcurrentHashMapPooled> POOL = Pool.from(new ConcurrentHashMapAllocator())
-            .setExpiration(info -> {
-                return info.getAgeMillis() >= 60000; // 60 Seconds (1 Minute)
-            })
-            .build();
+    public static final Recycler<ConcurrentHashMap> INSTANCE = new Recycler<>() {
+        @Override
+        protected ConcurrentHashMap newObject(Handle<ConcurrentHashMap> handle) {
+            return new ConcurrentHashMap<>();
+        }
+    };
 
-    public static ConcurrentHashMapPooled newInstance() throws InterruptedException {
-        return POOL.claim(new Timeout(Duration.ofSeconds(5)));
-    }
+    public static final Recycler.Handle<ConcurrentHashMap> HANDLE = ConcurrentHashMap::clear;
 }

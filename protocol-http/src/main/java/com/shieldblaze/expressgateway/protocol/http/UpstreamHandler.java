@@ -22,7 +22,6 @@ import com.shieldblaze.expressgateway.backend.connection.Connection;
 import com.shieldblaze.expressgateway.backend.strategy.l7.http.HTTPBalanceRequest;
 import com.shieldblaze.expressgateway.backend.strategy.l7.http.HTTPBalanceResponse;
 import com.shieldblaze.expressgateway.common.pool.map.ConcurrentHashMapPool;
-import com.shieldblaze.expressgateway.common.pool.map.ConcurrentHashMapPooled;
 import com.shieldblaze.expressgateway.protocol.http.loadbalancer.HTTPLoadBalancer;
 import io.netty.channel.ChannelDuplexHandler;
 import io.netty.channel.ChannelHandlerContext;
@@ -34,6 +33,7 @@ import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
 
 import java.net.InetSocketAddress;
+import java.util.concurrent.ConcurrentHashMap;
 
 public final class UpstreamHandler extends ChannelDuplexHandler {
 
@@ -43,7 +43,7 @@ public final class UpstreamHandler extends ChannelDuplexHandler {
      * Long: Request ID
      * Connection: {@link Connection} Instance
      */
-    private ConcurrentHashMapPooled<Long, Connection> connectionMap;
+    private ConcurrentHashMap<Long, Connection> connectionMap;
 
     private final HTTPLoadBalancer httpLoadBalancer;
     private final Bootstrapper bootstrapper;
@@ -55,13 +55,13 @@ public final class UpstreamHandler extends ChannelDuplexHandler {
 
     @SuppressWarnings("unchecked")
     @Override
-    public void handlerAdded(ChannelHandlerContext ctx) throws Exception {
-        connectionMap = ConcurrentHashMapPool.newInstance();
+    public void handlerAdded(ChannelHandlerContext ctx) {
+        connectionMap = ConcurrentHashMapPool.INSTANCE.get();
     }
 
     @Override
     public void handlerRemoved(ChannelHandlerContext ctx) {
-        connectionMap.release();
+        ConcurrentHashMapPool.HANDLE.recycle(connectionMap);
     }
 
     @Override

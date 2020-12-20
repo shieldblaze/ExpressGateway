@@ -18,7 +18,6 @@
 package com.shieldblaze.expressgateway.protocol.http.adapter.http2;
 
 import com.shieldblaze.expressgateway.common.pool.map.ConcurrentHashMapPool;
-import com.shieldblaze.expressgateway.common.pool.map.ConcurrentHashMapPooled;
 import com.shieldblaze.expressgateway.protocol.http.HTTPConversionUtil;
 import com.shieldblaze.expressgateway.protocol.http.compression.HTTP2ContentCompressor;
 import com.shieldblaze.expressgateway.protocol.http.compression.HTTPCompressionUtil;
@@ -53,6 +52,7 @@ import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
 
 import java.util.SplittableRandom;
+import java.util.concurrent.ConcurrentHashMap;
 
 /**
  * <p>
@@ -98,25 +98,25 @@ public final class HTTP2InboundAdapter extends ChannelDuplexHandler {
      * <p> {@link Long}: HTTP Request ID </p>
      * <p> {@link Integer}: HTTP/2 Stream ID  </p>
      */
-    private ConcurrentHashMapPooled<Long, Integer> requestIdToStreamIdMap;
+    private ConcurrentHashMap<Long, Integer> requestIdToStreamIdMap;
 
     /**
      * <p> {@link Integer}: HTTP/2 Stream ID </p>
      * <p> {@link InboundProperty}: {@linkplain InboundProperty} associated with the HTTP Request.  </p>
      */
-    private ConcurrentHashMapPooled<Integer, InboundProperty> streamIdMap;
+    private ConcurrentHashMap<Integer, InboundProperty> streamIdMap;
 
     @SuppressWarnings("unchecked")
     @Override
-    public void handlerAdded(ChannelHandlerContext ctx) throws Exception {
-        requestIdToStreamIdMap = ConcurrentHashMapPool.newInstance();
-        streamIdMap = ConcurrentHashMapPool.newInstance();
+    public void handlerAdded(ChannelHandlerContext ctx) {
+        requestIdToStreamIdMap = ConcurrentHashMapPool.INSTANCE.get();
+        streamIdMap = ConcurrentHashMapPool.INSTANCE.get();
     }
 
     @Override
     public void handlerRemoved(ChannelHandlerContext ctx) {
-        requestIdToStreamIdMap.release();
-        streamIdMap.release();
+        ConcurrentHashMapPool.HANDLE.recycle(requestIdToStreamIdMap);
+        ConcurrentHashMapPool.HANDLE.recycle(streamIdMap);
     }
 
     @Override
