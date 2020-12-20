@@ -68,7 +68,6 @@ final class DownstreamHandler extends ChannelInboundHandlerAdapter {
                     channel.writeAndFlush(msg)
                             .addListener(future -> httpConnection.release())
                             .addListener(ChannelFutureListener.CLOSE);
-                    return;
                 } else {
                     doCloseAtLast.set(true);
                 }
@@ -86,9 +85,9 @@ final class DownstreamHandler extends ChannelInboundHandlerAdapter {
             if (doCloseAtLast.compareAndSet(true, false)) {
                 channelFuture.addListener(ChannelFutureListener.CLOSE);
             }
-        } else if (msg instanceof HttpContent) {
-            channel.writeAndFlush(msg, channel.voidPromise());
         }
+
+        channel.writeAndFlush(msg, channel.voidPromise());
     }
 
     void channel(Channel channel) {
