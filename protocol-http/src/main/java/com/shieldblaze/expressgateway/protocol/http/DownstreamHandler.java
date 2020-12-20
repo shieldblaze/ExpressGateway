@@ -85,6 +85,8 @@ final class DownstreamHandler extends ChannelInboundHandlerAdapter {
             if (doCloseAtLast.compareAndSet(true, false)) {
                 channelFuture.addListener(ChannelFutureListener.CLOSE);
             }
+
+            return;
         }
 
         channel.writeAndFlush(msg, channel.voidPromise());
