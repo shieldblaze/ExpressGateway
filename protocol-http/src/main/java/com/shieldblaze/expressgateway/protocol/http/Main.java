@@ -113,7 +113,7 @@ public final class Main {
                 .build();
 
         Cluster cluster = new ClusterPool(new EventStream(), new HTTPRoundRobin(NOOPSessionPersistence.INSTANCE));
-        new Node(cluster, new InetSocketAddress("10.128.0.5", 8080));
+        new Node(cluster, new InetSocketAddress("127.0.0.1", 8080));
 
         HTTPConfiguration httpConfiguration = HTTPConfigurationBuilder.newBuilder()
                 .withBrotliCompressionLevel(4)
@@ -134,7 +134,7 @@ public final class Main {
         HTTPLoadBalancer httpLoadBalancer = HTTPLoadBalancerBuilder.newBuilder()
                 .withCoreConfiguration(configuration)
                 .withCluster(cluster)
-                .withBindAddress(new InetSocketAddress("0.0.0.0", 9110))
+                .withBindAddress(new InetSocketAddress("127.0.0.1", 9110))
                 .withHTTPConfiguration(httpConfiguration)
                 .withHTTPInitializer(new DefaultHTTPServerInitializer())
                 .withL4FrontListener(new TCPListener())
