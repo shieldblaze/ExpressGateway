@@ -15,35 +15,42 @@
  * You should have received a copy of the GNU General Public License
  * along with ShieldBlaze ExpressGateway.  If not, see <https://www.gnu.org/licenses/>.
  */
-package com.shieldblaze.expressgateway.protocol.http;
+package io.netty.handler.codec.http;
 
-public final class Headers {
-
-    /**
-     * "x-forwarded-for"
-     */
-    public static final String X_FORWARDED_FOR = "x-forwarded-for";
+public interface HttpFrame {
 
     /**
-     * x-forwarded-http-version
+     * Returns the actual protocol used in this Http Frame
      */
-    public static final String X_FORWARDED_HTTP_VERSION = "x-forwarded-http-version";
+    Protocol protocol();
 
-    public static final class Values {
+    /**
+     * Set the actual protocol used in this Http Frame
+     */
+    void protocol(Protocol protocol);
 
+    /**
+     * Returns a globally unique identifier for this Http Frame
+     */
+    long id();
+
+    /**
+     * Set a globally unique identifier for this Http Frame
+     */
+    void id(long id);
+
+    enum Protocol {
         /**
-         * http_1_0
+         * HTTP/2 over TLS
          */
-        public static final String HTTP_1_0 = "http_1_0";
-
+        H2,
         /**
-         * http_1_1
+         * HTTP 1.1
          */
-        public static final String HTTP_1_1 = "http_1_1";
-
+        HTTP_1_1,
         /**
-         * h2
+         * HTTP 1.0
          */
-        public static final String HTTP_2 = "h2";
+        HTTP_1_0
     }
 }

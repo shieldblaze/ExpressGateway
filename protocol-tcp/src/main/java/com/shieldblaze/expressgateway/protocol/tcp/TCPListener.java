@@ -30,6 +30,7 @@ import io.netty.channel.ChannelFuture;
 import io.netty.channel.ChannelFutureListener;
 import io.netty.channel.ChannelHandler;
 import io.netty.channel.ChannelOption;
+import io.netty.channel.WriteBufferWaterMark;
 import io.netty.channel.epoll.EpollMode;
 import io.netty.channel.epoll.EpollServerSocketChannel;
 import io.netty.channel.epoll.EpollServerSocketChannelConfig;
@@ -92,6 +93,8 @@ public class TCPListener extends L4FrontListener {
                         config.setOption(UnixChannelOption.SO_REUSEPORT, true);
                         config.setTcpFastopen(transportConfiguration.tcpFastOpenMaximumPendingRequests());
                         config.setEpollMode(EpollMode.EDGE_TRIGGERED);
+                        config.setWriteBufferWaterMark(new WriteBufferWaterMark(0, Integer.MAX_VALUE));
+                        config.setPerformancePreferences(100,100,100);
 
                         return serverSocketChannel;
                     } else {

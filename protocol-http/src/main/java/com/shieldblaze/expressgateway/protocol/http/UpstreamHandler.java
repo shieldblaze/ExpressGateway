@@ -25,28 +25,28 @@ import com.shieldblaze.expressgateway.protocol.http.loadbalancer.HTTPLoadBalance
 import io.netty.channel.ChannelDuplexHandler;
 import io.netty.channel.ChannelHandlerContext;
 import io.netty.channel.ChannelPromise;
+import io.netty.handler.codec.http.CustomLastHttpContent;
+import io.netty.handler.codec.http.HttpFrame;
 import io.netty.handler.codec.http.HttpHeaderNames;
 import io.netty.handler.codec.http.HttpHeaders;
 import io.netty.handler.codec.http.HttpRequest;
 import io.netty.handler.codec.http.HttpResponse;
-import io.netty.handler.codec.http2.DefaultHttp2TranslatedLastHttpContent;
-import io.netty.handler.codec.http2.Http2TranslatedHttpContent;
 import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
 
 import java.net.InetSocketAddress;
 import java.util.Map;
-import java.util.concurrent.ConcurrentSkipListMap;
+import java.util.concurrent.ConcurrentHashMap;
 
 public final class UpstreamHandler extends ChannelDuplexHandler {
 
     private static final Logger logger = LogManager.getLogger(UpstreamHandler.class);
 
     /**
-     * Long: Stream Hash
+     * Long: Request ID
      * Connection: {@link Connection} Instance
      */
-    private final Map<Long, Connection> connectionMap = new ConcurrentSkipListMap<>();
+    private final Map<Long, Connection> connectionMap = new ConcurrentHashMap<>();
 
     private final HTTPLoadBalancer httpLoadBalancer;
     private final Bootstrapper bootstrapper;
@@ -60,14 +60,13 @@ public final class UpstreamHandler extends ChannelDuplexHandler {
     public void channelRead(ChannelHandlerContext ctx, Object msg) throws Exception {
         if (msg instanceof HttpRequest) {
             HttpRequest request = (HttpRequest) msg;
-            long streamHash = Long.parseLong(request.headers().get(Headers.STREAM_HASH));
 
             InetSocketAddress upstreamAddress = (InetSocketAddress) ctx.channel().remoteAddress();
             HTTPBalanceRequest balanceRequest = new HTTPBalanceRequest(upstreamAddress, request.headers());
             HTTPBalanceResponse balanceResponse = (HTTPBalanceResponse) httpLoadBalancer.cluster().nextNode(balanceRequest);
             Node node = balanceResponse.node();
 
-            HTTPConnection connection = (HTTPConnection) node.lease();
+            HTTPConnection connection = (HTTPConnection) node.tryLease();
             if (connection == null) {
                 connection = bootstrapper.newInit(node, ctx.channel());
                 node.addConnection(connection);
@@ -78,16 +77,17 @@ public final class UpstreamHandler extends ChannelDuplexHandler {
                 }
             }
 
-            connectionMap.put(streamHash, connection);
+            // Map Id with Connection
+            connectionMap.put(((HttpFrame) msg).id(), connection);
 
             // Modify Request Headers
             onHeadersRead(request.headers(), upstreamAddress);
 
             // Write the request to Backend
             connection.writeAndFlush(request);
-        } else if (msg instanceof Http2TranslatedHttpContent) {
-            Http2TranslatedHttpContent httpContent = (Http2TranslatedHttpContent) msg;
-            connectionMap.get(httpContent.streamHash()).writeAndFlush(msg);
+        } else if (msg instanceof HttpFrame) {
+            HttpFrame httpFrame = (HttpFrame) msg;
+            connectionMap.get(httpFrame.id()).writeAndFlush(msg);
         }
     }
 
@@ -95,18 +95,6 @@ public final class UpstreamHandler extends ChannelDuplexHandler {
         headers.remove(HttpHeaderNames.UPGRADE);
         headers.set(HttpHeaderNames.ACCEPT_ENCODING, "br, gzip, deflate");
         headers.add(Headers.X_FORWARDED_FOR, upstreamAddress.getAddress().getHostAddress());
-    }
-
-    @Override
-    public void write(ChannelHandlerContext ctx, Object msg, ChannelPromise promise) throws Exception {
-        if (msg instanceof HttpResponse) {
-            HttpResponse response = (HttpResponse) msg;
-            response.headers().set(HttpHeaderNames.SERVER, "ShieldBlaze ExpressGateway");
-        } else if (msg instanceof DefaultHttp2TranslatedLastHttpContent) {
-            DefaultHttp2TranslatedLastHttpContent httpContent = (DefaultHttp2TranslatedLastHttpContent) msg;
-            connectionMap.remove(httpContent.streamHash());
-        }
-        super.write(ctx, msg, promise);
     }
 
     @Override

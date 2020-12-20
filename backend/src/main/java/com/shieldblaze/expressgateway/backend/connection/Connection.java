@@ -45,7 +45,6 @@ public abstract class Connection {
     private final long timeout;
     private ChannelFuture channelFuture;
     private Channel channel;
-    private boolean inUse;
     private InetSocketAddress socketAddress;
     private boolean isActive;
 
@@ -76,8 +75,8 @@ public abstract class Connection {
             this.channelFuture.channel()
                     .closeFuture()
                     .addListener((ChannelFutureListener) future -> {
-                        inUse = false;
-                        isActive = true;
+                        isActive = false;
+                        node.removeConnection(this);
                     });
         } else {
             throw new IllegalArgumentException("Connection is already initialized");
@@ -128,43 +127,19 @@ public abstract class Connection {
     }
 
     /**
-     * Lease this {@linkplain Connection} for use.
-     *
-     * @return {@linkplain Connection} Instance
-     * @throws IllegalAccessException If this connection is already in use
+     * Lease this {@link Connection} from connection pool.
      */
-    public Connection lease() throws IllegalAccessException {
-        if (inUse) {
-            throw new IllegalAccessException("Connection is in use.");
-        } else {
-            inUse = true;
-            return this;
-        }
+    public Connection lease() {
+        node.lease0(this);
+        return this;
     }
 
     /**
-     * Release this {@linkplain Connection} to be used by others.
-     *
-     * @return {@linkplain Connection} Instance
-     * @throws IllegalArgumentException If this connection is already released
+     * Release this {@linkplain Connection} back to connection pool.
      */
-    public Connection release() throws IllegalArgumentException {
-        if (!inUse) {
-            throw new IllegalArgumentException("Connection is already released.");
-        } else {
-            inUse = false;
-            return this;
-        }
-    }
-
-    /**
-     * Check if this {@linkplain Connection} is in use.
-     *
-     * @return Returns {@code true} if this {@linkplain Connection} is in use
-     * else set to {@code false}.
-     */
-    public boolean isInUse() {
-        return inUse;
+    public Connection release() {
+        node.release0(this);
+        return this;
     }
 
     /**
@@ -214,7 +189,6 @@ public abstract class Connection {
                 "node=" + node +
                 ", timeout=" + timeout +
                 ", channelFuture=" + channelFuture +
-                ", inUse=" + inUse +
                 ", socketAddress=" + socketAddress +
                 '}';
     }
