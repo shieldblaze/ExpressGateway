@@ -284,7 +284,6 @@ public final class Node implements Comparable<Node> {
      * Lease a connection and remove it from available active connection pool.
      */
     public Node lease0(Connection connection) {
-        availableConnections.remove(connection);
         activeConnections.remove(connection);
         return this;
     }

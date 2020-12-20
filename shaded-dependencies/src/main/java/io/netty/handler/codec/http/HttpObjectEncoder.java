@@ -83,7 +83,8 @@ public abstract class HttpObjectEncoder<H extends HttpMessage> extends MessageTo
         ByteBuf buf = null;
         if (msg instanceof HttpMessage) {
             if (state != ST_INIT) {
-                return;
+                throw new IllegalStateException("unexpected message type: " + StringUtil.simpleClassName(msg)
+                        + ", state: " + state);
             }
 
             @SuppressWarnings({ "unchecked", "CastConflictsWithInstanceof" })
@@ -120,7 +121,8 @@ public abstract class HttpObjectEncoder<H extends HttpMessage> extends MessageTo
         if (msg instanceof HttpContent || msg instanceof ByteBuf || msg instanceof FileRegion) {
             switch (state) {
                 case ST_INIT:
-                    return;
+                    throw new IllegalStateException("unexpected message type: " + StringUtil.simpleClassName(msg)
+                            + ", state: " + state);
                 case ST_CONTENT_NON_CHUNK:
                     final long contentLength = contentLength(msg);
                     if (contentLength > 0) {
