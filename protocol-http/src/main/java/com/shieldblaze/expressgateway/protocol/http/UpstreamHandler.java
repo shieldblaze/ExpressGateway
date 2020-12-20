@@ -98,24 +98,6 @@ public final class UpstreamHandler extends ChannelDuplexHandler {
     }
 
     @Override
-    public void write(ChannelHandlerContext ctx, Object msg, ChannelPromise promise) throws Exception {
-        if (msg instanceof HttpResponse) {
-            HttpResponse response = (HttpResponse) msg;
-            response.headers().set(HttpHeaderNames.SERVER, "ShieldBlaze ExpressGateway");
-        } else if (msg instanceof CustomLastHttpContent) {
-            CustomLastHttpContent httpContent = (CustomLastHttpContent) msg;
-            final long id = httpContent.id();
-            promise.addListener((future -> {
-                Connection connection = connectionMap.get(id);
-                if (connection != null) {
-                    connection.release();
-                }
-            }));
-        }
-        super.write(ctx, msg, promise);
-    }
-
-    @Override
     public void exceptionCaught(ChannelHandlerContext ctx, Throwable cause) {
         logger.error("Caught Error at Upstream Handler", cause);
     }

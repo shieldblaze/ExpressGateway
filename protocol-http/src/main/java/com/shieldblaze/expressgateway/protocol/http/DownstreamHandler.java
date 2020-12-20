@@ -23,6 +23,7 @@ import io.netty.channel.ChannelFutureListener;
 import io.netty.channel.ChannelHandlerContext;
 import io.netty.channel.ChannelInboundHandlerAdapter;
 import io.netty.handler.codec.http.FullHttpResponse;
+import io.netty.handler.codec.http.HttpContent;
 import io.netty.handler.codec.http.HttpHeaderNames;
 import io.netty.handler.codec.http.HttpHeaderValues;
 import io.netty.handler.codec.http.HttpResponse;
@@ -51,31 +52,43 @@ final class DownstreamHandler extends ChannelInboundHandlerAdapter {
         if (msg instanceof HttpResponse) {
             HttpResponse httpResponse = (HttpResponse) msg;
 
+            /*
+             * If Protocol version is HTTP/1.0 then we'll add 'CONNECTION:CLOSE' header.
+             * And if the Response is FullHttpResponse then we'll write the message and release and close the connection.
+             * If Response is not FullHttpResponse then we'll set `doCloseAtLast` to true.
+             *
+             *
+             * If Protocol version is HTTP/1.1 and the response is FullHttpResponse then we'll add listener to release connection
+             * when message is successfully written.
+             */
             if (httpResponse.protocolVersion() == HttpVersion.HTTP_1_0) {
-
                 httpResponse.headers().set(HttpHeaderNames.CONNECTION, HttpHeaderValues.CLOSE);
+
                 if (httpResponse instanceof FullHttpResponse) {
-                    channel.writeAndFlush(msg).addListener(ChannelFutureListener.CLOSE);
+                    channel.writeAndFlush(msg)
+                            .addListener(future -> httpConnection.release())
+                            .addListener(ChannelFutureListener.CLOSE);
                     return;
                 } else {
                     doCloseAtLast.set(true);
                 }
+            } else {
+                if (httpResponse instanceof FullHttpResponse) {
+                    channel.writeAndFlush(msg)
+                            .addListener(future -> httpConnection.release());
+                    return;
+                }
             }
         } else if (msg instanceof LastHttpContent) {
-            ChannelFuture channelFuture = channel.writeAndFlush(msg);
-
-            // If Connection is not over HTTP/2 then release it back to pool.
-            if (!httpConnection.isHTTP2()) {
-                channelFuture.addListener(future -> httpConnection.release());
-            }
+            ChannelFuture channelFuture = channel.writeAndFlush(msg)
+                    .addListener(future -> httpConnection.release());
 
             if (doCloseAtLast.compareAndSet(true, false)) {
                 channelFuture.addListener(ChannelFutureListener.CLOSE);
             }
-            return;
+        } else if (msg instanceof HttpContent) {
+            channel.writeAndFlush(msg, ctx.voidPromise());
         }
-
-        channel.writeAndFlush(msg);
     }
 
     void channel(Channel channel) {
