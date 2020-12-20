@@ -65,9 +65,6 @@ import java.util.Collections;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
-/*
- * Port range: 2000-2500
- */
 class SimpleTest {
 
     static TransportConfiguration transportConfiguration;
@@ -154,12 +151,12 @@ class SimpleTest {
 
     @Test
     void http2BackendWithTLSClient() throws Exception {
-        HTTPServer httpServer = new HTTPServer(2000, true);
+        HTTPServer httpServer = new HTTPServer(50000, true);
         httpServer.start();
         Thread.sleep(500L);
 
         Cluster cluster = new ClusterPool(new EventStream(), new HTTPRoundRobin(NOOPSessionPersistence.INSTANCE));
-        new Node(cluster, new InetSocketAddress("127.0.0.1", 2000));
+        new Node(cluster, new InetSocketAddress("127.0.0.1", 50000));
 
         HTTPLoadBalancer httpLoadBalancer = HTTPLoadBalancerBuilder.newBuilder()
                 .withCoreConfiguration(coreConfiguration)
@@ -167,7 +164,7 @@ class SimpleTest {
                 .withTLSForClient(forClient)
                 .withTLSForServer(forServer)
                 .withCluster(cluster)
-                .withBindAddress(new InetSocketAddress("127.0.0.1", 2001))
+                .withBindAddress(new InetSocketAddress("127.0.0.1", 55555))
                 .withHTTPInitializer(new DefaultHTTPServerInitializer())
                 .withL4FrontListener(new TCPListener())
                 .build();
@@ -179,7 +176,7 @@ class SimpleTest {
         // Send using HTTP/1.1
         HttpRequest httpRequest = HttpRequest.newBuilder()
                 .GET()
-                .uri(URI.create("https://127.0.0.1:2001"))
+                .uri(URI.create("https://127.0.0.1:55555"))
                 .version(HttpClient.Version.HTTP_1_1)
                 .timeout(Duration.ofSeconds(5))
                 .build();
@@ -191,7 +188,7 @@ class SimpleTest {
         // Send using HTTP/2
         httpRequest = HttpRequest.newBuilder()
                 .GET()
-                .uri(URI.create("https://127.0.0.1:2001"))
+                .uri(URI.create("https://127.0.0.1:55555"))
                 .version(HttpClient.Version.HTTP_2)
                 .timeout(Duration.ofSeconds(5))
                 .build();
@@ -209,19 +206,19 @@ class SimpleTest {
 
     @Test
     void http1BackendWithTLSClient() throws Exception {
-        HTTPServer httpServer = new HTTPServer(2002, false);
+        HTTPServer httpServer = new HTTPServer(50000, false);
         httpServer.start();
         Thread.sleep(500L);
 
         Cluster cluster = new ClusterPool(new EventStream(), new HTTPRoundRobin(NOOPSessionPersistence.INSTANCE));
-        new Node(cluster, new InetSocketAddress("127.0.0.1", 2002));
+        new Node(cluster, new InetSocketAddress("127.0.0.1", 50000));
 
         HTTPLoadBalancer httpLoadBalancer = HTTPLoadBalancerBuilder.newBuilder()
                 .withCoreConfiguration(coreConfiguration)
                 .withHTTPConfiguration(httpConfiguration)
                 .withTLSForServer(forServer)
                 .withCluster(cluster)
-                .withBindAddress(new InetSocketAddress("127.0.0.1", 2003))
+                .withBindAddress(new InetSocketAddress("127.0.0.1", 55555))
                 .withHTTPInitializer(new DefaultHTTPServerInitializer())
                 .withL4FrontListener(new TCPListener())
                 .build();
@@ -233,7 +230,7 @@ class SimpleTest {
         // Send using HTTP/1.1
         HttpRequest httpRequest = HttpRequest.newBuilder()
                 .GET()
-                .uri(URI.create("https://127.0.0.1:2003"))
+                .uri(URI.create("https://127.0.0.1:55555"))
                 .version(HttpClient.Version.HTTP_2)
                 .timeout(Duration.ofSeconds(5))
                 .build();
@@ -245,7 +242,7 @@ class SimpleTest {
         // Send using HTTP/2
         httpRequest = HttpRequest.newBuilder()
                 .GET()
-                .uri(URI.create("https://127.0.0.1:2003"))
+                .uri(URI.create("https://127.0.0.1:55555"))
                 .version(HttpClient.Version.HTTP_1_1)
                 .timeout(Duration.ofSeconds(5))
                 .build();
@@ -263,19 +260,19 @@ class SimpleTest {
 
     @Test
     void http2BackendWithoutTLSClient() throws Exception {
-        HTTPServer httpServer = new HTTPServer(2004, true);
+        HTTPServer httpServer = new HTTPServer(50000, true);
         httpServer.start();
         Thread.sleep(500L);
 
         Cluster cluster = new ClusterPool(new EventStream(), new HTTPRoundRobin(NOOPSessionPersistence.INSTANCE));
-        new Node(cluster, new InetSocketAddress("127.0.0.1", 2004));
+        new Node(cluster, new InetSocketAddress("127.0.0.1", 50000));
 
         HTTPLoadBalancer httpLoadBalancer = HTTPLoadBalancerBuilder.newBuilder()
                 .withCoreConfiguration(coreConfiguration)
                 .withHTTPConfiguration(httpConfiguration)
                 .withTLSForClient(forClient)
                 .withCluster(cluster)
-                .withBindAddress(new InetSocketAddress("127.0.0.1", 2005))
+                .withBindAddress(new InetSocketAddress("127.0.0.1", 55555))
                 .withHTTPInitializer(new DefaultHTTPServerInitializer())
                 .withL4FrontListener(new TCPListener())
                 .build();
@@ -287,7 +284,7 @@ class SimpleTest {
         // Send using HTTP/1.1
         HttpRequest httpRequest = HttpRequest.newBuilder()
                 .GET()
-                .uri(URI.create("http://127.0.0.1:2005"))
+                .uri(URI.create("http://127.0.0.1:55555"))
                 .version(HttpClient.Version.HTTP_1_1)
                 .timeout(Duration.ofSeconds(5))
                 .build();
@@ -305,18 +302,18 @@ class SimpleTest {
 
     @Test
     void http1BackendWithoutTLSClient() throws Exception {
-        HTTPServer httpServer = new HTTPServer(2006, false);
+        HTTPServer httpServer = new HTTPServer(50000, false);
         httpServer.start();
         Thread.sleep(500L);
 
         Cluster cluster = new ClusterPool(new EventStream(), new HTTPRoundRobin(NOOPSessionPersistence.INSTANCE));
-        new Node(cluster, new InetSocketAddress("127.0.0.1", 2006));
+        new Node(cluster, new InetSocketAddress("127.0.0.1", 50000));
 
         HTTPLoadBalancer httpLoadBalancer = HTTPLoadBalancerBuilder.newBuilder()
                 .withCoreConfiguration(coreConfiguration)
                 .withHTTPConfiguration(httpConfiguration)
                 .withCluster(cluster)
-                .withBindAddress(new InetSocketAddress("127.0.0.1", 2007))
+                .withBindAddress(new InetSocketAddress("127.0.0.1", 55555))
                 .withHTTPInitializer(new DefaultHTTPServerInitializer())
                 .withL4FrontListener(new TCPListener())
                 .build();
@@ -328,7 +325,7 @@ class SimpleTest {
         // Send using HTTP/1.1
         HttpRequest httpRequest = HttpRequest.newBuilder()
                 .GET()
-                .uri(URI.create("http://127.0.0.1:2007"))
+                .uri(URI.create("http://127.0.0.1:55555"))
                 .version(HttpClient.Version.HTTP_1_1)
                 .timeout(Duration.ofSeconds(5))
                 .build();

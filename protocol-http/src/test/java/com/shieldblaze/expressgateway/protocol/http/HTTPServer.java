@@ -137,7 +137,7 @@ class HTTPServer extends Thread {
     }
 
     public void shutdown() {
-        channelFuture.channel().close();
+        channelFuture.channel().close().awaitUninterruptibly();
         eventLoopGroup.shutdownGracefully();
     }
 
