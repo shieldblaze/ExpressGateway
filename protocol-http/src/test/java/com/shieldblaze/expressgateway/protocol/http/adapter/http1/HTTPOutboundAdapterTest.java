@@ -108,7 +108,7 @@ class HTTPOutboundAdapterTest {
             embeddedChannel.writeInbound(httpContent);
             embeddedChannel.flushInbound();
 
-            CustomHttpContent responseHttpContent = responseHttpContent = embeddedChannel.readInbound();
+            CustomHttpContent responseHttpContent = embeddedChannel.readInbound();
             assertEquals("Meow" + i, new String(ByteBufUtil.getBytes(byteBuf)));
             assertEquals(1, responseHttpContent.id());
             responseHttpContent.release();

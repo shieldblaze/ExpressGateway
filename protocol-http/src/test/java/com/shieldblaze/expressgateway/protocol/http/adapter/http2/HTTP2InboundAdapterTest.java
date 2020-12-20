@@ -229,7 +229,7 @@ class HTTP2InboundAdapterTest {
         embeddedChannel.flushInbound();
         CustomFullHttpRequest fullHttpRequest = embeddedChannel.readInbound();
 
-        final int bytesCount = 1024 * 1000;
+        final int bytesCount = 1024 * 100;
 
         HttpResponse httpResponse = new CustomHttpResponse(HttpVersion.HTTP_1_1, HttpResponseStatus.OK, HttpFrame.Protocol.H2, fullHttpRequest.id());
         httpResponse.headers().set(HttpHeaderNames.CONTENT_LENGTH, bytesCount);
@@ -297,7 +297,7 @@ class HTTP2InboundAdapterTest {
         long id = ((HttpFrame) httpResponse).id();
 
         final Random random = new Random();
-        final int bytesCount = 1024 * 1000;
+        final int bytesCount = 1024 * 100;
         for (int i = 1; i <= bytesCount; i++) {
             byte[] bytes = new byte[1];
             random.nextBytes(bytes);
