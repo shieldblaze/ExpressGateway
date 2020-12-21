@@ -29,7 +29,6 @@ public final class HTTPConfiguration {
     private long h2MaxHeaderSizeList;
     private long h2MaxHeaderTableSize;
     private int h2MaxFrameSize;
-    private boolean h2enablePush;
     private int maxInitialLineLength;
     private int maxHeaderSize;
     private int maxChunkSize;
@@ -92,15 +91,6 @@ public final class HTTPConfiguration {
 
     public HTTPConfiguration h2MaxFrameSize(int h2MaxFrameSize) {
         this.h2MaxFrameSize = ObjectUtil.checkPositive(h2MaxFrameSize, "h2MaxFrameSize");
-        return this;
-    }
-
-    public boolean h2enablePush() {
-        return h2enablePush;
-    }
-
-    public HTTPConfiguration h2enablePush(boolean h2enablePush) {
-        this.h2enablePush = h2enablePush;
         return this;
     }
 

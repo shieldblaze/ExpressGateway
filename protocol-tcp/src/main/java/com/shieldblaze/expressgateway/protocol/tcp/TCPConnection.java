@@ -18,7 +18,7 @@
 package com.shieldblaze.expressgateway.protocol.tcp;
 
 import com.shieldblaze.expressgateway.backend.Node;
-import com.shieldblaze.expressgateway.backend.connection.Connection;
+import com.shieldblaze.expressgateway.backend.Connection;
 import io.netty.channel.ChannelFuture;
 
 final class TCPConnection extends Connection {
@@ -30,7 +30,7 @@ final class TCPConnection extends Connection {
     @Override
     protected void processBacklog(ChannelFuture channelFuture) {
         if (channelFuture.isSuccess()) {
-            writeBacklog(channelFuture);
+            writeBacklog();
         } else {
             clearBacklog();
         }

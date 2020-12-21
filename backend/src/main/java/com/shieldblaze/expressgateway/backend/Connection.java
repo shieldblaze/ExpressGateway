@@ -15,11 +15,12 @@
  * You should have received a copy of the GNU General Public License
  * along with ShieldBlaze ExpressGateway.  If not, see <https://www.gnu.org/licenses/>.
  */
-package com.shieldblaze.expressgateway.backend.connection;
+package com.shieldblaze.expressgateway.backend;
 
-import com.shieldblaze.expressgateway.backend.Node;
 import com.shieldblaze.expressgateway.common.annotation.NonNull;
 import com.shieldblaze.expressgateway.common.utils.ReferenceCounted;
+import io.netty.buffer.ByteBuf;
+import io.netty.buffer.ByteBufHolder;
 import io.netty.channel.Channel;
 import io.netty.channel.ChannelFuture;
 import io.netty.channel.ChannelFutureListener;
@@ -62,7 +63,7 @@ public abstract class Connection {
             this.channelFuture = channelFuture;
 
             // Add listener to be notified when Channel initializes
-            this.channelFuture.addListener((ChannelFutureListener) future -> {
+            this.channelFuture.addListener(future -> {
                 processBacklog(channelFuture);
                 if (channelFuture.isSuccess()) {
                     socketAddress = (InetSocketAddress) channelFuture.channel().remoteAddress();
@@ -74,7 +75,7 @@ public abstract class Connection {
             // Add listener to be notified when Channel closes
             this.channelFuture.channel()
                     .closeFuture()
-                    .addListener((ChannelFutureListener) future -> {
+                    .addListener(future -> {
                         isActive = false;
                         node.removeConnection(this);
                     });
@@ -93,18 +94,16 @@ public abstract class Connection {
     /**
      * Write and Process the Backlog
      */
-    @NonNull
-    protected void writeBacklog(ChannelFuture channelFuture) {
+    protected void writeBacklog() {
         ConcurrentLinkedQueue<Object> queue = new ConcurrentLinkedQueue<>(backlogQueue); // Make copy of Queue
         backlogQueue = null; // Make old queue null so no more data is written to it.
-        queue.forEach(object -> channelFuture.channel().writeAndFlush(object));
+        queue.forEach(this::writeAndFlush);
         queue.clear(); // Clear the new queue because we're done with it.
     }
 
     /**
      * Clear the Backlog and release all objects.
      */
-    @NonNull
     protected void clearBacklog() {
         backlogQueue.forEach(ReferenceCounted::silentRelease);
         backlogQueue = null;
@@ -116,6 +115,7 @@ public abstract class Connection {
      * @param o Data to be written
      * @return {@link ChannelFuture} of this write and flush
      */
+    @NonNull
     public void writeAndFlush(Object o) {
         if (backlogQueue != null) {
             backlogQueue.add(o);
@@ -124,14 +124,6 @@ public abstract class Connection {
         } else {
             ReferenceCounted.silentRelease(o);
         }
-    }
-
-    /**
-     * Lease this {@link Connection} from connection pool.
-     */
-    public Connection lease() {
-        node.lease0(this);
-        return this;
     }
 
     /**

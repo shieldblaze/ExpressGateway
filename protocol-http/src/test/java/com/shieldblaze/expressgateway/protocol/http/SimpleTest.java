@@ -133,7 +133,6 @@ class SimpleTest {
                 .withMaxContentLength(1024 * 10240)
                 .withMaxHeaderSize(1024 * 10)
                 .withMaxInitialLineLength(1024 * 100)
-                .withH2enablePush(false)
                 .withH2InitialWindowSize(Integer.MAX_VALUE)
                 .withH2MaxConcurrentStreams(1000)
                 .withH2MaxHeaderSizeList(262144)

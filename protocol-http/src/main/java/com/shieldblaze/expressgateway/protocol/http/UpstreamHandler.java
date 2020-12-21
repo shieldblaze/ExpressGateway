@@ -18,19 +18,15 @@
 package com.shieldblaze.expressgateway.protocol.http;
 
 import com.shieldblaze.expressgateway.backend.Node;
-import com.shieldblaze.expressgateway.backend.connection.Connection;
+import com.shieldblaze.expressgateway.backend.Connection;
 import com.shieldblaze.expressgateway.backend.strategy.l7.http.HTTPBalanceRequest;
-import com.shieldblaze.expressgateway.backend.strategy.l7.http.HTTPBalanceResponse;
 import com.shieldblaze.expressgateway.protocol.http.loadbalancer.HTTPLoadBalancer;
 import io.netty.channel.ChannelDuplexHandler;
 import io.netty.channel.ChannelHandlerContext;
-import io.netty.channel.ChannelPromise;
-import io.netty.handler.codec.http.CustomLastHttpContent;
 import io.netty.handler.codec.http.HttpFrame;
 import io.netty.handler.codec.http.HttpHeaderNames;
 import io.netty.handler.codec.http.HttpHeaders;
 import io.netty.handler.codec.http.HttpRequest;
-import io.netty.handler.codec.http.HttpResponse;
 import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
 
@@ -61,27 +57,37 @@ public final class UpstreamHandler extends ChannelDuplexHandler {
         if (msg instanceof HttpRequest) {
             HttpRequest request = (HttpRequest) msg;
 
-            InetSocketAddress upstreamAddress = (InetSocketAddress) ctx.channel().remoteAddress();
-            HTTPBalanceRequest balanceRequest = new HTTPBalanceRequest(upstreamAddress, request.headers());
-            HTTPBalanceResponse balanceResponse = (HTTPBalanceResponse) httpLoadBalancer.cluster().nextNode(balanceRequest);
-            Node node = balanceResponse.node();
+            InetSocketAddress socketAddress = (InetSocketAddress) ctx.channel().remoteAddress();
+            HTTPBalanceRequest balanceRequest = new HTTPBalanceRequest(socketAddress, request.headers());
+            Node node = httpLoadBalancer.cluster().nextNode(balanceRequest).node();
 
+            /*
+             * We'll try to lease an available connection. If available, we'll get
+             * HTTPConnection Instance else we'll get 'null'.
+             *
+             * If we don't get any available connection, we'll create a new
+             * HTTPConnection.
+             */
             HTTPConnection connection = (HTTPConnection) node.tryLease();
             if (connection == null) {
                 connection = bootstrapper.newInit(node, ctx.channel());
                 node.addConnection(connection);
             } else {
+                // Set this as a new Upstream Channel
                 connection.upstreamChannel(ctx.channel());
-                if (!connection.isHTTP2()) {
-                    connection.lease();
-                }
+            }
+
+            // If connection is HTTP/2 then we'll release it back to the pool
+            // because we can do multiplexing on HTTP/2.
+            if (connection.isHTTP2()) {
+                connection.release();
             }
 
             // Map Id with Connection
             connectionMap.put(((HttpFrame) msg).id(), connection);
 
             // Modify Request Headers
-            onHeadersRead(request.headers(), upstreamAddress);
+            onHeadersRead(request.headers(), socketAddress);
 
             // Write the request to Backend
             connection.writeAndFlush(request);
@@ -94,7 +100,7 @@ public final class UpstreamHandler extends ChannelDuplexHandler {
     private void onHeadersRead(HttpHeaders headers, InetSocketAddress upstreamAddress) {
         headers.remove(HttpHeaderNames.UPGRADE);
         headers.set(HttpHeaderNames.ACCEPT_ENCODING, "br, gzip, deflate");
-        headers.add(Headers.X_FORWARDED_FOR, upstreamAddress.getAddress().getHostAddress());
+        headers.add("x-forwarded-for", upstreamAddress.getAddress().getHostAddress());
     }
 
     @Override

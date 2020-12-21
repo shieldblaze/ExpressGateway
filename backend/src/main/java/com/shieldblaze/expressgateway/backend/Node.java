@@ -18,7 +18,6 @@
 package com.shieldblaze.expressgateway.backend;
 
 import com.shieldblaze.expressgateway.backend.cluster.Cluster;
-import com.shieldblaze.expressgateway.backend.connection.Connection;
 import com.shieldblaze.expressgateway.backend.events.node.NodeEvent;
 import com.shieldblaze.expressgateway.backend.events.node.NodeIdleEvent;
 import com.shieldblaze.expressgateway.backend.events.node.NodeOfflineEvent;
@@ -278,14 +277,6 @@ public final class Node implements Comparable<Node> {
      */
     public Connection tryLease() {
         return availableConnections.poll();
-    }
-
-    /**
-     * Lease a connection and remove it from available active connection pool.
-     */
-    public Node lease0(Connection connection) {
-        availableConnections.remove(connection);
-        return this;
     }
 
     /**

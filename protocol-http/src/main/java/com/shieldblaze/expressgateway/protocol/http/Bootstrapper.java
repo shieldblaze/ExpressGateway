@@ -18,6 +18,7 @@
 package com.shieldblaze.expressgateway.protocol.http;
 
 import com.shieldblaze.expressgateway.backend.Node;
+import com.shieldblaze.expressgateway.backend.NodeBytesCalculator;
 import com.shieldblaze.expressgateway.core.BootstrapFactory;
 import com.shieldblaze.expressgateway.core.ConnectionTimeoutHandler;
 import com.shieldblaze.expressgateway.protocol.http.adapter.http1.HTTPOutboundAdapter;
@@ -60,8 +61,10 @@ final class Bootstrapper {
             protected void initChannel(SocketChannel ch) {
                 ChannelPipeline pipeline = ch.pipeline();
 
+                pipeline.addFirst(new NodeBytesCalculator(node));
+
                 Duration timeout = Duration.ofMillis(httpLoadBalancer.coreConfiguration().transportConfiguration().connectionIdleTimeout());
-                pipeline.addFirst(new ConnectionTimeoutHandler(timeout));
+                pipeline.addLast(new ConnectionTimeoutHandler(timeout));
 
                 DownstreamHandler downstreamHandler = new DownstreamHandler(httpConnection, channel);
                 httpConnection.downstreamHandler(downstreamHandler);
@@ -71,8 +74,6 @@ final class Bootstrapper {
                     pipeline.addLast(new HTTPContentDecompressor());
                     pipeline.addLast(new HTTPOutboundAdapter());
                     pipeline.addLast(downstreamHandler);
-
-                    httpConnection.lease();
                 } else {
                     String hostname = node.socketAddress().getHostName();
                     int port = node.socketAddress().getPort();
