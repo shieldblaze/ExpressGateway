@@ -64,12 +64,12 @@ public abstract class Connection {
 
             // Add listener to be notified when Channel initializes
             this.channelFuture.addListener(future -> {
-                processBacklog(channelFuture);
                 if (channelFuture.isSuccess()) {
                     socketAddress = (InetSocketAddress) channelFuture.channel().remoteAddress();
                     isActive = true;
                     channel = channelFuture.channel();
                 }
+                processBacklog(channelFuture);
             });
 
             // Add listener to be notified when Channel closes

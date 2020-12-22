@@ -85,22 +85,10 @@ public class CustomLastHttpContent extends CustomHttpContent implements LastHttp
 
     @Override
     public String toString() {
-        StringBuilder buf = new StringBuilder(super.toString());
-        buf.append(StringUtil.NEWLINE);
-        appendHeaders(buf);
-
-        // Remove the last newline.
-        buf.setLength(buf.length() - StringUtil.NEWLINE.length());
-        return buf.toString()  + "/" + id();
-    }
-
-    private void appendHeaders(StringBuilder buf) {
-        for (Map.Entry<String, String> e : trailingHeaders()) {
-            buf.append(e.getKey());
-            buf.append(": ");
-            buf.append(e.getValue());
-            buf.append(StringUtil.NEWLINE);
-        }
+        return "CustomLastHttpContent{" +
+                "protocol=" + protocol() +
+                ", id=" + id() +
+                '}';
     }
 
     private static final class TrailingHttpHeaders extends DefaultHttpHeaders {

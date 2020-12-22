@@ -16,9 +16,8 @@
  * along with ShieldBlaze ExpressGateway.  If not, see <https://www.gnu.org/licenses/>.
  */
 
-package com.shieldblaze.expressgateway.protocol.http;
+package com.shieldblaze.expressgateway.protocol.http.adapter.http1;
 
-import com.shieldblaze.expressgateway.protocol.http.adapter.http1.HTTPOutboundAdapter;
 import io.netty.buffer.ByteBuf;
 import io.netty.buffer.ByteBufUtil;
 import io.netty.buffer.Unpooled;
@@ -39,7 +38,7 @@ import org.junit.jupiter.api.Test;
 
 import java.util.Random;
 
-import static org.junit.jupiter.api.Assertions.*;
+import static org.junit.jupiter.api.Assertions.assertEquals;
 
 class HTTPOutboundAdapterTest {
 
@@ -108,7 +107,7 @@ class HTTPOutboundAdapterTest {
             embeddedChannel.writeInbound(httpContent);
             embeddedChannel.flushInbound();
 
-            CustomHttpContent responseHttpContent = responseHttpContent = embeddedChannel.readInbound();
+            CustomHttpContent responseHttpContent = embeddedChannel.readInbound();
             assertEquals("Meow" + i, new String(ByteBufUtil.getBytes(byteBuf)));
             assertEquals(1, responseHttpContent.id());
             responseHttpContent.release();
