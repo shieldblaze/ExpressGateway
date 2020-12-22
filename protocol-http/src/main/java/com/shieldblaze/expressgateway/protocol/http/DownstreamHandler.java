@@ -23,7 +23,6 @@ import io.netty.channel.ChannelFutureListener;
 import io.netty.channel.ChannelHandlerContext;
 import io.netty.channel.ChannelInboundHandlerAdapter;
 import io.netty.handler.codec.http.FullHttpResponse;
-import io.netty.handler.codec.http.HttpContent;
 import io.netty.handler.codec.http.HttpHeaderNames;
 import io.netty.handler.codec.http.HttpHeaderValues;
 import io.netty.handler.codec.http.HttpResponse;
@@ -49,6 +48,19 @@ final class DownstreamHandler extends ChannelInboundHandlerAdapter {
 
     @Override
     public void channelRead(ChannelHandlerContext ctx, Object msg) {
+        if (httpConnection.isHTTP2()) {
+            handleHTTP2(msg);
+        } else {
+            handleHTTP1(msg);
+        }
+    }
+
+    private void handleHTTP2(Object msg) {
+        // Just write data into channel.
+        channel.writeAndFlush(msg, channel.voidPromise());
+    }
+
+    private void handleHTTP1(Object msg) {
         if (msg instanceof HttpResponse) {
             HttpResponse httpResponse = (HttpResponse) msg;
 
@@ -89,6 +101,7 @@ final class DownstreamHandler extends ChannelInboundHandlerAdapter {
             return;
         }
 
+        // HTTPContent writes will be executed here.
         channel.writeAndFlush(msg, channel.voidPromise());
     }
 

@@ -16,10 +16,8 @@
  * along with ShieldBlaze ExpressGateway.  If not, see <https://www.gnu.org/licenses/>.
  */
 
-package com.shieldblaze.expressgateway.protocol.http;
+package com.shieldblaze.expressgateway.protocol.http.adapter.http1;
 
-import com.shieldblaze.expressgateway.protocol.http.Headers;
-import com.shieldblaze.expressgateway.protocol.http.adapter.http1.HTTPOutboundAdapter;
 import io.netty.buffer.ByteBuf;
 import io.netty.buffer.ByteBufUtil;
 import io.netty.buffer.Unpooled;
@@ -29,28 +27,18 @@ import io.netty.handler.codec.http.CustomHttpContent;
 import io.netty.handler.codec.http.CustomHttpRequest;
 import io.netty.handler.codec.http.CustomHttpResponse;
 import io.netty.handler.codec.http.CustomLastHttpContent;
-import io.netty.handler.codec.http.DefaultFullHttpRequest;
-import io.netty.handler.codec.http.DefaultFullHttpResponse;
-import io.netty.handler.codec.http.DefaultHttpContent;
-import io.netty.handler.codec.http.DefaultHttpRequest;
-import io.netty.handler.codec.http.DefaultHttpResponse;
-import io.netty.handler.codec.http.DefaultLastHttpContent;
 import io.netty.handler.codec.http.HttpContent;
 import io.netty.handler.codec.http.HttpFrame;
-import io.netty.handler.codec.http.HttpHeaderNames;
-import io.netty.handler.codec.http.HttpHeaderValues;
 import io.netty.handler.codec.http.HttpMethod;
 import io.netty.handler.codec.http.HttpRequest;
 import io.netty.handler.codec.http.HttpResponse;
 import io.netty.handler.codec.http.HttpResponseStatus;
 import io.netty.handler.codec.http.HttpVersion;
-import io.netty.handler.codec.http2.Http2TranslatedHttpContent;
-import io.netty.handler.codec.http2.HttpConversionUtil;
 import org.junit.jupiter.api.Test;
 
 import java.util.Random;
 
-import static org.junit.jupiter.api.Assertions.*;
+import static org.junit.jupiter.api.Assertions.assertEquals;
 
 class HTTPOutboundAdapterTest {
 
@@ -119,7 +107,7 @@ class HTTPOutboundAdapterTest {
             embeddedChannel.writeInbound(httpContent);
             embeddedChannel.flushInbound();
 
-            CustomHttpContent responseHttpContent = responseHttpContent = embeddedChannel.readInbound();
+            CustomHttpContent responseHttpContent = embeddedChannel.readInbound();
             assertEquals("Meow" + i, new String(ByteBufUtil.getBytes(byteBuf)));
             assertEquals(1, responseHttpContent.id());
             responseHttpContent.release();

@@ -45,7 +45,6 @@ final class HTTPCodecs {
         http2Settings.maxConcurrentStreams(httpConfiguration.h2MaxConcurrentStreams());
         http2Settings.maxHeaderListSize(httpConfiguration.h2MaxHeaderSizeList());
         http2Settings.headerTableSize(httpConfiguration.h2MaxHeaderTableSize());
-        http2Settings.pushEnabled(httpConfiguration.h2enablePush());
         http2Settings.maxFrameSize(httpConfiguration.h2MaxFrameSize());
 
         Http2Connection connection = new DefaultHttp2Connection(false);
@@ -90,8 +89,10 @@ final class HTTPCodecs {
      * @param httpConfiguration {@link HTTPConfiguration} Instance
      */
     static HttpServerCodec HTTPServerCodec(HTTPConfiguration httpConfiguration) {
+        int maxInitialLineLength = httpConfiguration.maxInitialLineLength();
+        int maxHeaderSize = httpConfiguration.maxHeaderSize();
         int maxChunkSize = httpConfiguration.maxChunkSize();
-        return new HttpServerCodec(httpConfiguration.maxInitialLineLength(), httpConfiguration.maxHeaderSize(), maxChunkSize, true);
+        return new HttpServerCodec(maxInitialLineLength, maxHeaderSize, maxChunkSize, true);
     }
 
     /**

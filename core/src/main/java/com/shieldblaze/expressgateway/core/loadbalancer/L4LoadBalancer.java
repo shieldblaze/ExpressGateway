@@ -44,7 +44,7 @@ public abstract class L4LoadBalancer {
     private final CoreConfiguration coreConfiguration;
     private final TLSConfiguration tlsForServer;
     private final TLSConfiguration tlsForClient;
-    private ChannelHandler channelHandler;
+    private final ChannelHandler channelHandler;
 
     private final ByteBufAllocator byteBufAllocator;
     private final EventLoopFactory eventLoopFactory;

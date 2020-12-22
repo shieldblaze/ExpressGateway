@@ -72,7 +72,6 @@ import static io.netty.handler.codec.http.HttpUtil.isAsteriskForm;
 import static io.netty.handler.codec.http.HttpUtil.isOriginForm;
 import static io.netty.handler.codec.http2.Http2Error.PROTOCOL_ERROR;
 import static io.netty.handler.codec.http2.Http2Exception.connectionError;
-import static io.netty.handler.codec.http2.Http2Exception.streamError;
 import static io.netty.util.AsciiString.EMPTY_STRING;
 import static io.netty.util.AsciiString.contentEqualsIgnoreCase;
 import static io.netty.util.AsciiString.indexOf;

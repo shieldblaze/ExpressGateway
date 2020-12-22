@@ -24,8 +24,6 @@ import com.shieldblaze.expressgateway.configuration.tls.TLSConfiguration;
 import com.shieldblaze.expressgateway.core.L4FrontListener;
 import com.shieldblaze.expressgateway.core.loadbalancer.L4LoadBalancer;
 import com.shieldblaze.expressgateway.protocol.http.HTTPServerInitializer;
-import com.shieldblaze.expressgateway.protocol.http.UpstreamHandler;
-import io.netty.channel.ChannelHandler;
 
 import java.net.InetSocketAddress;
 

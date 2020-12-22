@@ -130,7 +130,7 @@ class HTTPServer extends Thread {
                         }
                     });
 
-            channelFuture = serverBootstrap.bind(port);
+            channelFuture = serverBootstrap.bind("127.0.0.1", port);
         } catch (Exception ex) {
             ex.printStackTrace();
         }

@@ -21,9 +21,7 @@ import com.shieldblaze.expressgateway.protocol.http.adapter.http2.HTTP2InboundAd
 import io.netty.channel.ChannelDuplexHandler;
 import io.netty.channel.ChannelHandlerContext;
 import io.netty.channel.ChannelPromise;
-import io.netty.handler.codec.http.HttpContent;
 import io.netty.handler.codec.http.HttpFrame;
-import io.netty.handler.codec.http.HttpRequest;
 
 /**
  * {@linkplain HTTPOutboundAdapter} handles incoming HTTP/1.x responses

@@ -59,7 +59,6 @@ import java.net.http.HttpRequest;
 import java.net.http.HttpResponse;
 import java.security.SecureRandom;
 import java.time.Duration;
-import java.util.Arrays;
 import java.util.Collections;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
@@ -133,7 +132,6 @@ class SimpleTest {
                 .withMaxContentLength(1024 * 10240)
                 .withMaxHeaderSize(1024 * 10)
                 .withMaxInitialLineLength(1024 * 100)
-                .withH2enablePush(false)
                 .withH2InitialWindowSize(Integer.MAX_VALUE)
                 .withH2MaxConcurrentStreams(1000)
                 .withH2MaxHeaderSizeList(262144)
@@ -302,12 +300,12 @@ class SimpleTest {
 
     @Test
     void http1BackendWithoutTLSClient() throws Exception {
-        HTTPServer httpServer = new HTTPServer(10003, false);
+        HTTPServer httpServer = new HTTPServer(55555, false);
         httpServer.start();
         Thread.sleep(500L);
 
         Cluster cluster = new ClusterPool(new EventStream(), new HTTPRoundRobin(NOOPSessionPersistence.INSTANCE));
-        new Node(cluster, new InetSocketAddress("127.0.0.1", 10003));
+        new Node(cluster, new InetSocketAddress("127.0.0.1", 55555));
 
         HTTPLoadBalancer httpLoadBalancer = HTTPLoadBalancerBuilder.newBuilder()
                 .withCoreConfiguration(coreConfiguration)

@@ -20,7 +20,6 @@ package com.shieldblaze.expressgateway.backend;
 import com.shieldblaze.expressgateway.backend.cluster.Cluster;
 import com.shieldblaze.expressgateway.backend.cluster.ClusterPool;
 import com.shieldblaze.expressgateway.backend.exceptions.TooManyConnectionsException;
-import com.shieldblaze.expressgateway.backend.connection.Connection;
 import com.shieldblaze.expressgateway.backend.services.BackendControllerService;
 import com.shieldblaze.expressgateway.backend.strategy.l4.RoundRobin;
 import com.shieldblaze.expressgateway.backend.strategy.l4.sessionpersistence.NOOPSessionPersistence;

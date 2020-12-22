@@ -39,8 +39,6 @@ import io.netty.handler.codec.http.HttpVersion;
 import io.netty.handler.codec.http2.DefaultHttp2DataFrame;
 import io.netty.handler.codec.http2.DefaultHttp2Headers;
 import io.netty.handler.codec.http2.DefaultHttp2HeadersFrame;
-import io.netty.handler.codec.http2.DefaultHttp2TranslatedHttpContent;
-import io.netty.handler.codec.http2.DefaultHttp2TranslatedLastHttpContent;
 import io.netty.handler.codec.http2.Http2DataFrame;
 import io.netty.handler.codec.http2.Http2HeadersFrame;
 import org.junit.jupiter.api.AfterEach;

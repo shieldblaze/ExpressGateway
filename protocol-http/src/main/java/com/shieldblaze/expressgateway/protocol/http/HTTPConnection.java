@@ -18,7 +18,7 @@
 package com.shieldblaze.expressgateway.protocol.http;
 
 import com.shieldblaze.expressgateway.backend.Node;
-import com.shieldblaze.expressgateway.backend.connection.Connection;
+import com.shieldblaze.expressgateway.backend.Connection;
 import com.shieldblaze.expressgateway.protocol.http.alpn.ALPNHandler;
 import io.netty.channel.Channel;
 import io.netty.channel.ChannelFuture;
@@ -26,6 +26,9 @@ import io.netty.handler.ssl.ApplicationProtocolNames;
 
 final class HTTPConnection extends Connection {
 
+    /**
+     * Set to {@code true} if this connection is established on top of HTTP/2 (h2)
+     */
     private boolean isHTTP2;
     private DownstreamHandler downstreamHandler;
 
@@ -44,17 +47,16 @@ final class HTTPConnection extends Connection {
 
                         if (protocol.equalsIgnoreCase(ApplicationProtocolNames.HTTP_2)) {
                             isHTTP2 = true;
-                        } else {
-                            lease();
+                            release();
                         }
 
-                        writeBacklog(channelFuture);
+                        writeBacklog();
                     } else {
                         clearBacklog();
                     }
                 }, channelFuture.channel().eventLoop());
             } else {
-                writeBacklog(channelFuture);
+                writeBacklog();
             }
         } else {
             clearBacklog();

@@ -28,7 +28,6 @@ public final class HTTPConfigurationBuilder {
     private long h2MaxHeaderSizeList;
     private long h2MaxHeaderTableSize;
     private int h2MaxFrameSize;
-    private boolean h2enablePush;
     private int maxInitialLineLength;
     private int maxHeaderSize;
     private int maxChunkSize;
@@ -74,11 +73,6 @@ public final class HTTPConfigurationBuilder {
         return this;
     }
 
-    public HTTPConfigurationBuilder withH2enablePush(boolean h2enablePush) {
-        this.h2enablePush = h2enablePush;
-        return this;
-    }
-
     public HTTPConfigurationBuilder withMaxInitialLineLength(int maxInitialLineLength) {
         this.maxInitialLineLength = maxInitialLineLength;
         return this;
@@ -117,7 +111,6 @@ public final class HTTPConfigurationBuilder {
                 .h2MaxHeaderSizeList(h2MaxHeaderSizeList)
                 .h2MaxHeaderTableSize(h2MaxHeaderTableSize)
                 .h2MaxFrameSize(h2MaxFrameSize)
-                .h2enablePush(h2enablePush)
                 .maxInitialLineLength(maxInitialLineLength)
                 .setMaxHeaderSize(maxHeaderSize)
                 .maxChunkSize(maxChunkSize)
