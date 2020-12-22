@@ -28,12 +28,12 @@ import io.netty.channel.ChannelPromise;
  * Handler which tracks the count of Bytes IN/OUT.
  * This handler must be the first handler in Pipeline.
  */
-public final class NodeBytesCalculator extends ChannelDuplexHandler {
+public final class NodeBytesTracker extends ChannelDuplexHandler {
 
     private final Node node;
 
     @NonNull
-    public NodeBytesCalculator(Node node) {
+    public NodeBytesTracker(Node node) {
         this.node = node;
     }
 

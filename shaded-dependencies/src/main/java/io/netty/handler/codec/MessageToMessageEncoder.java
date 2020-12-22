@@ -23,7 +23,6 @@ import io.netty.channel.ChannelPromise;
 import io.netty.util.ReferenceCountUtil;
 import io.netty.util.ReferenceCounted;
 import io.netty.util.concurrent.PromiseCombiner;
-import io.netty.util.internal.StringUtil;
 import io.netty.util.internal.TypeParameterMatcher;
 
 import java.util.List;

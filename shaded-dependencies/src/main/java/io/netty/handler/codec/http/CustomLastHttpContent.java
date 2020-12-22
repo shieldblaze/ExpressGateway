@@ -19,9 +19,6 @@ package io.netty.handler.codec.http;
 
 import io.netty.buffer.ByteBuf;
 import io.netty.handler.codec.DefaultHeaders;
-import io.netty.util.internal.StringUtil;
-
-import java.util.Map;
 
 public class CustomLastHttpContent extends CustomHttpContent implements LastHttpContent {
 

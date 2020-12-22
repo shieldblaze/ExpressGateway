@@ -29,7 +29,6 @@ import io.netty.channel.embedded.EmbeddedChannel;
 import org.junit.jupiter.api.Test;
 
 import java.net.InetSocketAddress;
-import java.util.Random;
 
 import static org.junit.jupiter.api.Assertions.*;
 
@@ -40,7 +39,7 @@ class NodeBytesCalculatorTest {
         Cluster cluster = new ClusterPool(new EventStream(), new RoundRobin(NOOPSessionPersistence.INSTANCE));
         Node node = new Node(cluster, new InetSocketAddress("127.0.0.1", 9110));
 
-        EmbeddedChannel embeddedChannel = new EmbeddedChannel(new NodeBytesCalculator(node));
+        EmbeddedChannel embeddedChannel = new EmbeddedChannel(new NodeBytesTracker(node));
 
         for (int i = 1; i <= 10_000_000; i++) {
             ByteBuf byteBuf = Unpooled.buffer().writeZero(1);
@@ -61,7 +60,7 @@ class NodeBytesCalculatorTest {
         Cluster cluster = new ClusterPool(new EventStream(), new RoundRobin(NOOPSessionPersistence.INSTANCE));
         Node node = new Node(cluster, new InetSocketAddress("127.0.0.1", 9110));
 
-        EmbeddedChannel embeddedChannel = new EmbeddedChannel(new NodeBytesCalculator(node));
+        EmbeddedChannel embeddedChannel = new EmbeddedChannel(new NodeBytesTracker(node));
 
         for (int i = 1; i <= 10_000_000; i++) {
             ByteBuf byteBuf = Unpooled.buffer().writeZero(1);
