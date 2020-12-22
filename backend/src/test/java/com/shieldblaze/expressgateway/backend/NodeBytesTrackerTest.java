@@ -32,7 +32,7 @@ import java.net.InetSocketAddress;
 
 import static org.junit.jupiter.api.Assertions.*;
 
-class NodeBytesCalculatorTest {
+class NodeBytesTrackerTest {
 
     @Test
     void receive10MBytes() {
