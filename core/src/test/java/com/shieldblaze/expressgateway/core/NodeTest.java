@@ -80,7 +80,7 @@ class NodeTest {
                 .build();
 
         Cluster cluster = new ClusterPool(streamConfiguration.eventStream(), new RoundRobin(NOOPSessionPersistence.INSTANCE), "TestPool");
-        cluster.eventSubscriber().subscribe(new Controller(controllerConfiguration));
+        cluster.eventSubscriber().subscribe(new Controller(controllerConfiguration, cluster.eventPublisher()));
 
         // Start TCP Server
         TCPServer tcpServer = new TCPServer();
