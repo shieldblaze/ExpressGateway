@@ -121,6 +121,10 @@ public final class Node implements Comparable<Node> {
 
         this.cluster = cluster;
         this.cluster.addNode(this);
+
+        if (healthCheck == null) {
+            state(State.ONLINE);
+        }
     }
 
     public Cluster cluster() {
@@ -165,26 +169,7 @@ public final class Node implements Comparable<Node> {
 
     @NonNull
     public Node state(State state) {
-        NodeEvent nodeEvent;
-
-        switch (state) {
-            case ONLINE:
-                nodeEvent = new NodeOnlineEvent(this);
-                break;
-            case OFFLINE:
-                nodeEvent = new NodeOfflineEvent(this);
-                drainConnections();
-                break;
-            case IDLE:
-                nodeEvent = new NodeIdleEvent(this);
-                break;
-            default:
-                throw new IllegalArgumentException("Unknown State: " + state);
-        }
-
         this.state = state;
-        nodeEvent.trySuccess(null);
-        cluster().eventPublisher().publish(nodeEvent);
         return this;
     }
 

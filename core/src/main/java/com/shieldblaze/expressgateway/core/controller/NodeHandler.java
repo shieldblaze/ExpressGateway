@@ -64,7 +64,8 @@ final class NodeHandler {
         // If Health Check is associated with the node then we'll run it.
         if (node.healthCheck() != null) {
             long interval = controller.configuration.healthCheckIntervalMilliseconds();
-            healthCheck = controller.loopWorkers.scheduleWithFixedDelay(new HealthCheckService(node), 0, interval, TimeUnit.MILLISECONDS);
+            healthCheck = controller.loopWorkers.scheduleWithFixedDelay(new HealthCheckService(node, controller.eventPublisher),
+                    0, interval, TimeUnit.MILLISECONDS);
         }
 
         long interval = controller.configuration.deadConnectionCleanIntervalMilliseconds();

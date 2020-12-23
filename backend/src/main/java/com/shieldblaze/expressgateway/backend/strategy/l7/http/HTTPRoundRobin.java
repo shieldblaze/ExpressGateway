@@ -19,6 +19,7 @@ package com.shieldblaze.expressgateway.backend.strategy.l7.http;
 
 import com.shieldblaze.expressgateway.backend.Node;
 import com.shieldblaze.expressgateway.backend.State;
+import com.shieldblaze.expressgateway.backend.events.node.NodeAddedEvent;
 import com.shieldblaze.expressgateway.backend.events.node.NodeEvent;
 import com.shieldblaze.expressgateway.backend.events.node.NodeIdleEvent;
 import com.shieldblaze.expressgateway.backend.events.node.NodeOfflineEvent;
@@ -76,7 +77,7 @@ public final class HTTPRoundRobin extends HTTPBalance {
             if (nodeEvent instanceof NodeOfflineEvent || nodeEvent instanceof NodeRemovedEvent || nodeEvent instanceof NodeIdleEvent) {
                 sessionPersistence.remove(nodeEvent.node());
                 roundRobinIndexGenerator.decMaxIndex();
-            } else if (nodeEvent instanceof NodeOnlineEvent) {
+            } else if (nodeEvent instanceof NodeOnlineEvent || nodeEvent instanceof NodeAddedEvent) {
                 roundRobinIndexGenerator.incMaxIndex();
             }
         }

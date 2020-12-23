@@ -37,10 +37,10 @@ class StickySessionTest {
     @Test
     void testStickySession() throws LoadBalanceException {
         Cluster cluster = new ClusterPool(new EventStream(), new HTTPRoundRobin(new StickySession()));
-        cluster.addNode(fastBuild(cluster, "172.16.20.1"));
-        cluster.addNode(fastBuild(cluster, "172.16.20.2"));
-        cluster.addNode(fastBuild(cluster, "172.16.20.3"));
-        cluster.addNode(fastBuild(cluster, "172.16.20.4"));
+        fastBuild(cluster, "172.16.20.1");
+        fastBuild(cluster, "172.16.20.2");
+        fastBuild(cluster, "172.16.20.3");
+        fastBuild(cluster, "172.16.20.4");
 
         for (int i = 0; i < 100; i++) {
             InetSocketAddress socketAddress = new InetSocketAddress("192.168.1." + i, 1);

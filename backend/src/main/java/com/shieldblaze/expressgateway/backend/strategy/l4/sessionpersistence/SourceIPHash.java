@@ -58,15 +58,16 @@ public final class SourceIPHash implements SessionPersistence<Node, Node, InetSo
     }
 
     @Override
-    public Node addRoute(InetSocketAddress socketAddress, Node value) {
+    public Node addRoute(InetSocketAddress socketAddress, Node node) {
         Object key;
         if (socketAddress.getAddress() instanceof Inet4Address) {
             key = ipv4WithMask(socketAddress);
         } else {
             key = ipv6WithMask(socketAddress);
         }
-        routeMap.put(key, value);
-        return value;
+
+        routeMap.put(key, node);
+        return node;
     }
 
     @Override

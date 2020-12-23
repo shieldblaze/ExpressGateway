@@ -20,6 +20,7 @@ package com.shieldblaze.expressgateway.core.controller;
 import com.shieldblaze.expressgateway.backend.events.node.NodeEvent;
 import com.shieldblaze.expressgateway.concurrent.event.Event;
 import com.shieldblaze.expressgateway.concurrent.eventstream.EventListener;
+import com.shieldblaze.expressgateway.concurrent.eventstream.EventPublisher;
 import com.shieldblaze.expressgateway.configuration.controller.ControllerConfiguration;
 
 import java.util.concurrent.Executor;
@@ -35,14 +36,16 @@ public class Controller implements EventListener {
     final ScheduledExecutorService loopWorkers;
 
     final ControllerConfiguration configuration;
+    final EventPublisher eventPublisher;
     private final NodeHandler nodeHandler;
 
-    public Controller(ControllerConfiguration controllerConfiguration) {
+    public Controller(ControllerConfiguration controllerConfiguration, EventPublisher eventPublisher) {
         this.configuration = controllerConfiguration;
 
         // Executors
         workers = Executors.newFixedThreadPool(controllerConfiguration.workers());
         loopWorkers = Executors.newScheduledThreadPool(controllerConfiguration.workers());
+        this.eventPublisher = eventPublisher;
 
         this.nodeHandler = new NodeHandler(this);
     }
