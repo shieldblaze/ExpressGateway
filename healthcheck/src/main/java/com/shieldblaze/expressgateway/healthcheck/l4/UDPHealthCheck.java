@@ -41,8 +41,6 @@ import java.util.Arrays;
  */
 public final class UDPHealthCheck extends HealthCheck {
 
-    private static final Logger logger = LogManager.getLogger(UDPHealthCheck.class);
-
     private static final byte[] PING = "PING".getBytes();
     private static final byte[] PONG = "PONG".getBytes();
 
@@ -72,7 +70,6 @@ public final class UDPHealthCheck extends HealthCheck {
                 markFailure();
             }
         } catch (Exception e) {
-            logger.debug("Health Check Failure For Address: " + socketAddress, e);
             markFailure();
         }
     }

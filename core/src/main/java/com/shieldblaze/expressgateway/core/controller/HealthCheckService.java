@@ -15,14 +15,19 @@
  * You should have received a copy of the GNU General Public License
  * along with ShieldBlaze ExpressGateway.  If not, see <https://www.gnu.org/licenses/>.
  */
-package com.shieldblaze.expressgateway.backend.services;
+package com.shieldblaze.expressgateway.core.controller;
 
 import com.shieldblaze.expressgateway.backend.Node;
 import com.shieldblaze.expressgateway.backend.State;
 import com.shieldblaze.expressgateway.healthcheck.Health;
+import com.shieldblaze.expressgateway.healthcheck.HealthCheck;
 
 import java.util.Objects;
 
+/**
+ * {@link HealthCheckService} executes {@link HealthCheck} for
+ * getting the latest {@link Health} of a {@link Node}.
+ */
 final class HealthCheckService implements Runnable {
 
     private final Node node;
@@ -33,10 +38,14 @@ final class HealthCheckService implements Runnable {
 
     @Override
     public void run() {
-        Health oldHealth = node.health();
-        node.healthCheck().run();
+        final Health oldHealth = node.health(); // Store old Health
+        node.healthCheck().run();         // Run a fresh Health Check
 
-        // If new Health is GOOD and old Health is not GOOD then update.
+        /*
+         * > If new Health is GOOD and old Health is not GOOD then update 'ONLINE' state in Node.
+         * > If new Health is MEDIUM and old Health is not MEDIUM then update 'IDLE' state in Node.
+         * > If new Health is BAD and old Health is not BAD then update 'OFFLINE' state in Node.
+         */
         if (node.health() == Health.GOOD && oldHealth != Health.GOOD) {
             node.state(State.ONLINE);
         } else if (node.health() == Health.MEDIUM && oldHealth != Health.MEDIUM) {

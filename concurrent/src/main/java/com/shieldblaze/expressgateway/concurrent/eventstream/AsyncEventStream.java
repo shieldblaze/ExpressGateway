@@ -44,6 +44,10 @@ public final class AsyncEventStream extends EventStream {
     @SuppressWarnings("unchecked")
     @Override
     public void publish(Event event) {
-        subscribers.forEach(eventListener -> executorService.execute(() -> eventListener.accept(event)));
+        executorService.execute(() -> subscribers.forEach(eventListener -> executorService.execute(() -> eventListener.accept(event))));
+    }
+
+    public void shutdown() {
+        executorService.shutdown();
     }
 }

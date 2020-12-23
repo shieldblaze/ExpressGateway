@@ -15,15 +15,20 @@
  * You should have received a copy of the GNU General Public License
  * along with ShieldBlaze ExpressGateway.  If not, see <https://www.gnu.org/licenses/>.
  */
-package com.shieldblaze.expressgateway.backend;
+package com.shieldblaze.expressgateway.core;
 
+import com.shieldblaze.expressgateway.backend.Connection;
+import com.shieldblaze.expressgateway.backend.Node;
 import com.shieldblaze.expressgateway.backend.cluster.Cluster;
 import com.shieldblaze.expressgateway.backend.cluster.ClusterPool;
 import com.shieldblaze.expressgateway.backend.exceptions.TooManyConnectionsException;
-import com.shieldblaze.expressgateway.backend.services.BackendControllerService;
 import com.shieldblaze.expressgateway.backend.strategy.l4.RoundRobin;
 import com.shieldblaze.expressgateway.backend.strategy.l4.sessionpersistence.NOOPSessionPersistence;
-import com.shieldblaze.expressgateway.concurrent.eventstream.EventStream;
+import com.shieldblaze.expressgateway.configuration.controller.ControllerConfiguration;
+import com.shieldblaze.expressgateway.configuration.controller.ControllerConfigurationBuilder;
+import com.shieldblaze.expressgateway.configuration.eventstream.EventStreamConfiguration;
+import com.shieldblaze.expressgateway.configuration.eventstream.EventStreamConfigurationBuilder;
+import com.shieldblaze.expressgateway.core.controller.Controller;
 import com.shieldblaze.expressgateway.healthcheck.l4.TCPHealthCheck;
 import io.netty.bootstrap.Bootstrap;
 import io.netty.buffer.ByteBuf;
@@ -63,8 +68,19 @@ class NodeTest {
     @SuppressWarnings("unchecked")
     @Test
     void testConnections() throws InterruptedException, TooManyConnectionsException {
-        Cluster cluster = new ClusterPool(new EventStream(), new RoundRobin(NOOPSessionPersistence.INSTANCE));
-        cluster.eventSubscriber().subscribe(new BackendControllerService());
+        EventStreamConfiguration streamConfiguration = EventStreamConfigurationBuilder.newBuilder()
+                .withWorkers(2)
+                .build();
+
+        ControllerConfiguration controllerConfiguration = ControllerConfigurationBuilder.newBuilder()
+                .withOCSPCheckIntervalMilliseconds(100)
+                .withHealthCheckIntervalMilliseconds(10)
+                .withDeadConnectionCleanIntervalMilliseconds(10)
+                .withWorkers(2)
+                .build();
+
+        Cluster cluster = new ClusterPool(streamConfiguration.eventStream(), new RoundRobin(NOOPSessionPersistence.INSTANCE), "TestPool");
+        cluster.eventSubscriber().subscribe(new Controller(controllerConfiguration));
 
         // Start TCP Server
         TCPServer tcpServer = new TCPServer();

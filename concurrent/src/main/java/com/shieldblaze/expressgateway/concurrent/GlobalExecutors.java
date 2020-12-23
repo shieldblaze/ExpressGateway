@@ -40,13 +40,12 @@ public final class GlobalExecutors {
     /**
      * Cached {@link ExecutorService}
      */
-    private static final ExecutorService EXECUTOR_SERVICE = new ThreadPoolExecutor(0, Integer.MAX_VALUE, 300L,
-            TimeUnit.SECONDS, new SynchronousQueue<>());
+    private static final ExecutorService EXECUTOR_SERVICE = Executors.newFixedThreadPool(Runtime.getRuntime().availableProcessors());
 
     /**
      * Scheduled {@link ExecutorService}
      */
-    private static final ScheduledExecutorService SCHEDULED_EXECUTOR_SERVICE = Executors.newScheduledThreadPool(0);
+    private static final ScheduledExecutorService SCHEDULED_EXECUTOR_SERVICE = Executors.newScheduledThreadPool(Runtime.getRuntime().availableProcessors());
 
     private GlobalExecutors() {
         // Prevent outside initialization

@@ -23,6 +23,8 @@ import com.shieldblaze.expressgateway.backend.cluster.ClusterPool;
 import com.shieldblaze.expressgateway.backend.strategy.l4.RoundRobin;
 import com.shieldblaze.expressgateway.backend.strategy.l4.sessionpersistence.NOOPSessionPersistence;
 import com.shieldblaze.expressgateway.concurrent.eventstream.EventStream;
+import com.shieldblaze.expressgateway.configuration.eventstream.EventStreamConfiguration;
+import com.shieldblaze.expressgateway.configuration.eventstream.EventStreamConfigurationBuilder;
 import io.netty.buffer.ByteBuf;
 import io.netty.buffer.Unpooled;
 import io.netty.channel.embedded.EmbeddedChannel;
@@ -36,6 +38,10 @@ class NodeBytesTrackerTest {
 
     @Test
     void receive10MBytes() {
+        EventStreamConfiguration streamConfiguration = EventStreamConfigurationBuilder.newBuilder()
+                .withWorkers(2)
+                .build();
+
         Cluster cluster = new ClusterPool(new EventStream(), new RoundRobin(NOOPSessionPersistence.INSTANCE));
         Node node = new Node(cluster, new InetSocketAddress("127.0.0.1", 9110));
 

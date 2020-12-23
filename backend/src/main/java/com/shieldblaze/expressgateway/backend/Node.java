@@ -32,6 +32,7 @@ import com.shieldblaze.expressgateway.healthcheck.HealthCheck;
 import java.net.InetSocketAddress;
 import java.util.Objects;
 import java.util.Queue;
+import java.util.UUID;
 import java.util.concurrent.ConcurrentLinkedQueue;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicLong;
@@ -40,6 +41,14 @@ import java.util.concurrent.atomic.AtomicLong;
  * <p> {@link Node} is the server where all requests are sent. </p>
  */
 public final class Node implements Comparable<Node> {
+
+    /**
+     * Unique identifier of the node
+     */
+    private final String ID = UUID.randomUUID().toString();
+
+
+    private final int HASH = Objects.hash(ID);
 
     /**
      * Available Connections Queue
@@ -55,11 +64,6 @@ public final class Node implements Comparable<Node> {
      * Address of this {@link Node}
      */
     private final InetSocketAddress socketAddress;
-
-    /**
-     * Hash of {@link InetSocketAddress}
-     */
-    private final String hash;
 
     /**
      * {@linkplain Cluster} to which this {@linkplain Node} is associated
@@ -110,15 +114,13 @@ public final class Node implements Comparable<Node> {
                 int maxConnections,
                 HealthCheck healthCheck) {
 
-        this.cluster = cluster;
-        this.cluster.addNode(this);
+        maxConnections(maxConnections);
 
         this.socketAddress = socketAddress;
-        this.hash = String.valueOf(Objects.hashCode(this));
         this.healthCheck = healthCheck;
 
-        maxConnections(maxConnections);
-        state(State.ONLINE);
+        this.cluster = cluster;
+        this.cluster.addNode(this);
     }
 
     public Cluster cluster() {
@@ -163,7 +165,6 @@ public final class Node implements Comparable<Node> {
 
     @NonNull
     public Node state(State state) {
-
         NodeEvent nodeEvent;
 
         switch (state) {
@@ -230,8 +231,8 @@ public final class Node implements Comparable<Node> {
         this.maxConnections = Number.checkRange(maxConnections, -1, Integer.MAX_VALUE, "MaxConnections");
     }
 
-    public String hash() {
-        return hash;
+    public String id() {
+        return ID;
     }
 
     /**
@@ -328,7 +329,12 @@ public final class Node implements Comparable<Node> {
     }
 
     @Override
-    public int compareTo(Node n) {
-        return hash.compareToIgnoreCase(n.hash);
+    public int compareTo(Node node) {
+        return ID.compareToIgnoreCase(node.ID);
+    }
+
+    @Override
+    public int hashCode() {
+        return HASH;
     }
 }

@@ -15,24 +15,24 @@
  * You should have received a copy of the GNU General Public License
  * along with ShieldBlaze ExpressGateway.  If not, see <https://www.gnu.org/licenses/>.
  */
-package com.shieldblaze.expressgateway.backend.services;
+package com.shieldblaze.expressgateway.core.controller;
 
 import java.util.concurrent.ScheduledFuture;
 
-final class NodeServices {
-    private final ScheduledFuture<?> healthCheck;
-    private final ScheduledFuture<?> connectionCleaner;
+final class NodeHolder {
+    private final ScheduledFuture<?> healthCheckFuture;
+    private final ScheduledFuture<?> deadConnectionCleaner;
 
-    NodeServices(ScheduledFuture<?> healthCheck, ScheduledFuture<?> connectionCleaner) {
-        this.healthCheck = healthCheck;
-        this.connectionCleaner = connectionCleaner;
+    NodeHolder(ScheduledFuture<?> healthCheckFuture, ScheduledFuture<?> deadConnectionCleaner) {
+        this.healthCheckFuture = healthCheckFuture;
+        this.deadConnectionCleaner = deadConnectionCleaner;
     }
 
-    ScheduledFuture<?> healthCheck() {
-        return healthCheck;
+    public ScheduledFuture<?> healthCheck() {
+        return healthCheckFuture;
     }
 
-    ScheduledFuture<?> connectionCleaner() {
-        return connectionCleaner;
+    public ScheduledFuture<?> deadConnectionCleaner() {
+        return deadConnectionCleaner;
     }
 }

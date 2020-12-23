@@ -15,32 +15,24 @@
  * You should have received a copy of the GNU General Public License
  * along with ShieldBlaze ExpressGateway.  If not, see <https://www.gnu.org/licenses/>.
  */
-package com.shieldblaze.expressgateway.backend.services;
+package com.shieldblaze.expressgateway.core.controller;
 
 import com.shieldblaze.expressgateway.backend.Node;
 
-final class ConnectionCleaner implements Runnable {
+/**
+ * {@link DeadConnectionCleaner} removes dead connections from connection pool
+ * of a {@link Node}.
+ */
+final class DeadConnectionCleaner implements Runnable {
 
     private final Node node;
 
-    ConnectionCleaner(Node node) {
+    DeadConnectionCleaner(Node node) {
         this.node = node;
     }
 
     @Override
     public void run() {
-        // Remove connection from queue if they're not active.
-        node.availableConnections().removeIf(connection -> {
-            // If Connection has timed out connecting limit and connection is not active
-            // then we can safely remove connection.
-            if (connection.hasConnectionTimedOut() && !connection.isActive()) {
-                node.removeConnection(connection);
-                return true;
-            } else {
-                return false;
-            }
-        });
-
         // Remove connection from queue if they're not active.
         node.activeConnections().removeIf(connection -> {
             // If Connection has timed out connecting limit and connection is not active

@@ -18,17 +18,23 @@
 package com.shieldblaze.expressgateway.backend.cluster;
 
 import com.shieldblaze.expressgateway.backend.Node;
+import com.shieldblaze.expressgateway.backend.State;
+import com.shieldblaze.expressgateway.backend.events.node.NodeAddedEvent;
+import com.shieldblaze.expressgateway.backend.events.node.NodeRemovedEvent;
 import com.shieldblaze.expressgateway.backend.exceptions.LoadBalanceException;
 import com.shieldblaze.expressgateway.backend.loadbalance.LoadBalance;
 import com.shieldblaze.expressgateway.backend.loadbalance.Request;
 import com.shieldblaze.expressgateway.backend.loadbalance.Response;
 import com.shieldblaze.expressgateway.common.annotation.NonNull;
+import com.shieldblaze.expressgateway.concurrent.eventstream.AsyncEventStream;
 import com.shieldblaze.expressgateway.concurrent.eventstream.EventPublisher;
 import com.shieldblaze.expressgateway.concurrent.eventstream.EventStream;
 import com.shieldblaze.expressgateway.concurrent.eventstream.EventSubscriber;
+import com.shieldblaze.expressgateway.configuration.eventstream.EventStreamConfiguration;
 
 import java.util.List;
 import java.util.concurrent.CopyOnWriteArrayList;
+import java.util.concurrent.Executors;
 
 /**
  * Base class for Cluster
@@ -68,10 +74,34 @@ public abstract class Cluster {
      */
     @NonNull
     public boolean addNode(Node node) {
-        if (nodes.contains(node)) {
+        for (Node n : nodes) {
+            if (n.socketAddress() == node.socketAddress()) {
+                return false;
+            }
+        }
+
+        nodes.add(node);
+        eventStream.publish(new NodeAddedEvent(node));
+        return true;
+    }
+
+    public boolean removeNode(Node node) {
+        boolean isFound = false;
+        for (Node n : nodes) {
+            if (n.socketAddress() == node.socketAddress()) {
+                isFound = true;
+                break;
+            }
+        }
+
+        if (!isFound) {
             return false;
         }
-        return nodes.add(node);
+
+        nodes.remove(node);
+        node.state(State.OFFLINE);
+        eventStream.publish(new NodeRemovedEvent(node));
+        return true;
     }
 
     public List<Node> nodes() {

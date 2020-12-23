@@ -37,8 +37,6 @@ import java.time.Duration;
  */
 public final class TCPHealthCheck extends HealthCheck {
 
-    private static final Logger logger = LogManager.getLogger(TCPHealthCheck.class);
-
     public TCPHealthCheck(InetSocketAddress socketAddress, Duration timeout) {
         super(socketAddress, timeout);
     }
@@ -57,7 +55,6 @@ public final class TCPHealthCheck extends HealthCheck {
                 markFailure();
             }
         } catch (Exception e) {
-            logger.debug("Health Check Failure For Address: " + socketAddress, e);
             markFailure();
         }
     }

@@ -15,24 +15,27 @@
  * You should have received a copy of the GNU General Public License
  * along with ShieldBlaze ExpressGateway.  If not, see <https://www.gnu.org/licenses/>.
  */
-package com.shieldblaze.expressgateway.backend.strategy.l7.http.sessionpersistence;
 
-import com.shieldblaze.expressgateway.backend.Node;
+package com.shieldblaze.expressgateway.configuration.eventstream;
 
-import java.util.Comparator;
+import com.shieldblaze.expressgateway.concurrent.eventstream.AsyncEventStream;
+import com.shieldblaze.expressgateway.concurrent.eventstream.EventStream;
 
-final class StickySessionSearchComparator implements Comparator<Object> {
+import java.util.concurrent.Executors;
 
-    static final StickySessionSearchComparator INSTANCE = new StickySessionSearchComparator();
+public class EventStreamConfiguration {
 
-    private StickySessionSearchComparator() {
-        // Prevent outside initialization
+    private final EventStream eventStream;
+
+    EventStreamConfiguration(int workers) {
+        if (workers == 0) {
+            eventStream = new EventStream();
+        } else {
+            eventStream = new AsyncEventStream(Executors.newFixedThreadPool(workers));
+        }
     }
 
-    @Override
-    public int compare(Object o1, Object o2) {
-        String key = (String) o1;
-        Node node = (Node) o2;
-        return node.id().compareToIgnoreCase(key);
+    public EventStream eventStream() {
+        return eventStream;
     }
 }
