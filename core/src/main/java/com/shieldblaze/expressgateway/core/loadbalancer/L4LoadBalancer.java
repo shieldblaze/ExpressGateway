@@ -74,7 +74,7 @@ public abstract class L4LoadBalancer {
         this.tlsForClient = tlsForClient;
         this.channelHandler = channelHandler;
 
-        this.byteBufAllocator = new PooledByteBufAllocator(coreConfiguration.pooledByteBufAllocatorConfiguration()).instance();
+        this.byteBufAllocator = new PooledByteBufAllocator(coreConfiguration.pooledByteBufAllocatorConfiguration()).Instance();
         this.eventLoopFactory = new EventLoopFactory(coreConfiguration);
 
         l4FrontListener.l4LoadBalancer(this);

@@ -68,7 +68,7 @@ public final class PooledByteBufAllocatorConfiguration {
     /**
      * @see PooledByteBufAllocatorConfigurationBuilder#withPreferDirect(boolean)
      */
-    public boolean rreferDirect() {
+    public boolean preferDirect() {
         return preferDirect;
     }
 
