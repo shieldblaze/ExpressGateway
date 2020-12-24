@@ -303,7 +303,7 @@ public final class Node implements Comparable<Node> {
     @Override
     public String toString() {
         return "Node{" +
-                ", Cluster=" + cluster +
+                "Cluster=" + cluster +
                 ", Address=" + socketAddress +
                 ", BytesSent=" + bytesSent +
                 ", BytesReceived=" + bytesReceived +
@@ -321,5 +321,14 @@ public final class Node implements Comparable<Node> {
     @Override
     public int hashCode() {
         return HASH;
+    }
+
+    @Override
+    public boolean equals(Object obj) {
+        if (obj instanceof Node) {
+            Node node = (Node) obj;
+            return ID.equalsIgnoreCase(node.ID);
+        }
+        return false;
     }
 }
