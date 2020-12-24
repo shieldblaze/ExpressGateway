@@ -70,12 +70,10 @@ public abstract class Connection {
             });
 
             // Add listener to be notified when Channel closes
-            this.channelFuture.channel()
-                    .closeFuture()
-                    .addListener(future -> {
-                        isActive = false;
-                        node.removeConnection(this);
-                    });
+            this.channelFuture.channel().closeFuture().addListener(future -> {
+                isActive = false;
+                node.removeConnection(this);
+            });
         } else {
             throw new IllegalArgumentException("Connection is already initialized");
         }
@@ -176,9 +174,8 @@ public abstract class Connection {
     public String toString() {
         return "Connection{" +
                 "node=" + node +
-                ", timeout=" + timeout +
-                ", channelFuture=" + channelFuture +
                 ", socketAddress=" + socketAddress +
+                ", isActive=" + isActive +
                 '}';
     }
 }

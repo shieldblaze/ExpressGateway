@@ -142,7 +142,7 @@ public final class Node implements Comparable<Node> {
             return activeConnection0();
         }
 
-        return availableConnections.size();
+        return activeConnections.size();
     }
 
     public Node incBytesSent(int bytes) {
@@ -250,6 +250,7 @@ public final class Node implements Comparable<Node> {
      * Remove and close a {@link Connection} from this {@linkplain Node}
      */
     public Node removeConnection(Connection connection) {
+        System.out.println("Removed: " + connection);
         availableConnections.remove(connection);
         activeConnections.remove(connection);
         connection.close();
@@ -307,7 +308,7 @@ public final class Node implements Comparable<Node> {
                 ", Address=" + socketAddress +
                 ", BytesSent=" + bytesSent +
                 ", BytesReceived=" + bytesReceived +
-                ", Connections=" + activeConnection() + "/" + maxConnections +
+                ", Connections=" + activeConnections.size() + "/" + maxConnections +
                 ", state=" + state +
                 ", healthCheck=" + healthCheck +
                 '}';

@@ -15,7 +15,7 @@
  * You should have received a copy of the GNU General Public License
  * along with ShieldBlaze ExpressGateway.  If not, see <https://www.gnu.org/licenses/>.
  */
-package com.shieldblaze.expressgateway.core.controller;
+package com.shieldblaze.expressgateway.backend.healthcheck;
 
 import com.shieldblaze.expressgateway.backend.Node;
 import com.shieldblaze.expressgateway.backend.State;
@@ -27,19 +27,17 @@ import com.shieldblaze.expressgateway.concurrent.eventstream.EventPublisher;
 import com.shieldblaze.expressgateway.healthcheck.Health;
 import com.shieldblaze.expressgateway.healthcheck.HealthCheck;
 
-import java.util.Objects;
-
 /**
  * {@link HealthCheckService} executes {@link HealthCheck} for
  * getting the latest {@link Health} of a {@link Node}.
  */
-final class HealthCheckService implements Runnable {
+final class HealthCheckRunner implements Runnable {
 
     private final Node node;
     private final EventPublisher eventPublisher;
 
     @NonNull
-    HealthCheckService(Node node, EventPublisher eventPublisher) {
+    HealthCheckRunner(Node node, EventPublisher eventPublisher) {
         this.node = node;
         this.eventPublisher = eventPublisher;
     }
@@ -47,7 +45,7 @@ final class HealthCheckService implements Runnable {
     @Override
     public void run() {
         final Health oldHealth = node.health(); // Store old Health
-        node.healthCheck().run();         // Run a fresh Health Check
+        node.healthCheck().run();               // Run a fresh Health Check
 
         /*
          * > If new Health is GOOD and old Health is not GOOD then update 'ONLINE' state in Node.
