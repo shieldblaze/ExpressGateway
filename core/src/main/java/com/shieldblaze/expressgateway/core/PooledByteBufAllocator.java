@@ -29,7 +29,7 @@ public final class PooledByteBufAllocator {
         Objects.requireNonNull(configuration, "PooledByteBufAllocatorConfiguration");
 
         pooledByteBufAllocator = new io.netty.buffer.PooledByteBufAllocator(
-                configuration.rreferDirect(),
+                configuration.preferDirect(),
                 configuration.heapArena(),
                 configuration.directArena(),
                 configuration.pageSize(),
@@ -44,7 +44,7 @@ public final class PooledByteBufAllocator {
     /**
      * Get Instance of {@link io.netty.buffer.PooledByteBufAllocator}
      */
-    public io.netty.buffer.PooledByteBufAllocator instance() {
+    public io.netty.buffer.PooledByteBufAllocator Instance() {
         return pooledByteBufAllocator;
     }
 }

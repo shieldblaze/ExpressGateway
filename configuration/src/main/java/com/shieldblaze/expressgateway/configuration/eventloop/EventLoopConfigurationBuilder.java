@@ -17,7 +17,7 @@
  */
 package com.shieldblaze.expressgateway.configuration.eventloop;
 
-import io.netty.util.internal.ObjectUtil;
+import com.shieldblaze.expressgateway.common.utils.Number;
 
 /**
  * Configuration Builder for {@link EventLoopConfiguration}
@@ -61,7 +61,7 @@ public final class EventLoopConfigurationBuilder {
      */
     public EventLoopConfiguration build() {
         return new EventLoopConfiguration()
-                .parentWorkers(ObjectUtil.checkPositive(parentWorkers, "Parent Workers"))
-                .childWorkers(ObjectUtil.checkPositive(childWorkers, "Child Workers"));
+                .parentWorkers(Number.checkPositive(parentWorkers, "Parent Workers"))
+                .childWorkers(Number.checkPositive(childWorkers, "Child Workers"));
     }
 }

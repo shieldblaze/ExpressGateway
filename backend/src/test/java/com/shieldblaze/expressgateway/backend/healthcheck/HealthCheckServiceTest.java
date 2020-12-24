@@ -124,12 +124,12 @@ class HealthCheckServiceTest {
     @Order(3)
     void shutdownTCPServer() throws InterruptedException {
         tcpServer.shutdown();
-        Thread.sleep(5000);
+        Thread.sleep(10000);
     }
 
     @Test
     @Order(4)
-    void waitForConnectionsToRemoved() throws InterruptedException {
+    void waitForConnectionsToRemoved() {
         // Verify 0 connections are active
         assertEquals(0, node.activeConnection());
     }

@@ -17,6 +17,8 @@
  */
 package com.shieldblaze.expressgateway.configuration.buffer;
 
+import com.shieldblaze.expressgateway.common.utils.Number;
+
 /**
  * Configuration Builder for {@link PooledByteBufAllocatorConfiguration}
  */
@@ -118,8 +120,17 @@ public final class PooledByteBufAllocatorConfigurationBuilder {
      * Build {@link PooledByteBufAllocatorConfiguration}
      *
      * @return {@link PooledByteBufAllocatorConfiguration} Instance
+     * @throws IllegalArgumentException If a required value is invalid
      */
     public PooledByteBufAllocatorConfiguration build() {
+        Number.checkPositive(heapArena, "heapArena");
+        Number.checkPositive(directArena, "directArena");
+        Number.checkPositive(pageSize, "pageSize");
+        Number.checkPositive(maxOrder, "maxOrder");
+        Number.checkPositive(smallCacheSize, "smallCacheSize");
+        Number.checkPositive(normalCacheSize, "normalCacheSize");
+        Number.checkZeroOrPositive(directMemoryCacheAlignment, "directMemoryCacheAlignment");
+
         return new PooledByteBufAllocatorConfiguration()
                 .preferDirect(preferDirect)
                 .heapArena(heapArena)

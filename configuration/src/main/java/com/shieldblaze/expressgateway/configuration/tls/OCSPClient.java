@@ -62,11 +62,11 @@ final class OCSPClient {
     private static final String OCSP_RESPONSE_TYPE = "application/ocsp-response";
 
     static OCSPResp response(X509Certificate x509Certificate, X509Certificate issuer) throws Exception {
-        CertificateID id = new CertificateID(new JcaDigestCalculatorProviderBuilder().build()
-                .get(CertificateID.HASH_SHA1), new JcaX509CertificateHolder(issuer), x509Certificate.getSerialNumber());
+        CertificateID certificateID = new CertificateID(new JcaDigestCalculatorProviderBuilder().build().get(CertificateID.HASH_SHA1),
+                new JcaX509CertificateHolder(issuer), x509Certificate.getSerialNumber());
 
         OCSPReqBuilder builder = new OCSPReqBuilder();
-        builder.addRequest(id);
+        builder.addRequest(certificateID);
 
         byte[] nonce = new byte[6];
         SecureRandom.getInstanceStrong().nextBytes(nonce);
