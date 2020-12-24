@@ -52,6 +52,7 @@ import java.net.Socket;
 import java.time.Duration;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.atomic.AtomicBoolean;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
@@ -153,7 +154,7 @@ class HealthCheckServiceTest {
     private static final class TCPServer extends Thread {
 
         private final AtomicBoolean run = new AtomicBoolean(true);
-        private final List<Socket> sockets = new ArrayList<>();
+        private final List<Socket> sockets = new CopyOnWriteArrayList<>();
         private InetSocketAddress socketAddress;
         private ServerSocket serverSocket;
 
@@ -165,6 +166,10 @@ class HealthCheckServiceTest {
 
                 while (run.get()) {
                     sockets.add(serverSocket.accept());
+
+                    if (!run.get()) {
+                        return;
+                    }
                 }
 
             } catch (Exception ex) {
