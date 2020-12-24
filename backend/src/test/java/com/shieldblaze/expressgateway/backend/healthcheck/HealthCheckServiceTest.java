@@ -122,7 +122,7 @@ class HealthCheckServiceTest {
     @Test
     @Order(3)
     void shutdownTCPServer() throws InterruptedException {
-        tcpServer.run.set(false);
+        tcpServer.shutdown();
         Thread.sleep(5000);
     }
 
@@ -153,27 +153,40 @@ class HealthCheckServiceTest {
     private static final class TCPServer extends Thread {
 
         private final AtomicBoolean run = new AtomicBoolean(true);
+        private final List<Socket> sockets = new ArrayList<>();
         private InetSocketAddress socketAddress;
+        private ServerSocket serverSocket;
 
         @Override
         public void run() {
             try (ServerSocket serverSocket = new ServerSocket(0, 1000, InetAddress.getByName("127.0.0.1"))) {
+                this.serverSocket = serverSocket;
                 socketAddress = (InetSocketAddress) serverSocket.getLocalSocketAddress();
-                List<Socket> sockets = new ArrayList<>();
+
                 while (run.get()) {
                     sockets.add(serverSocket.accept());
                 }
-                sockets.forEach(socket -> {
-                    try {
-                        socket.close();
-                    } catch (IOException e) {
-                        // Ignore
-                    }
-                });
-                sockets.clear();
+
             } catch (Exception ex) {
-                ex.printStackTrace();
+                // Ignore
             }
+        }
+
+        private void shutdown() {
+            run.set(false);
+            try {
+                serverSocket.close();
+            } catch (IOException e) {
+                // Ignore
+            }
+            sockets.forEach(socket -> {
+                try {
+                    socket.close();
+                } catch (IOException e) {
+                    // Ignore
+                }
+            });
+            sockets.clear();
         }
     }
 
