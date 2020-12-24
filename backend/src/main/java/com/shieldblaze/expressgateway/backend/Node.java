@@ -32,6 +32,7 @@ import com.shieldblaze.expressgateway.healthcheck.HealthCheck;
 import java.net.InetSocketAddress;
 import java.util.Objects;
 import java.util.Queue;
+import java.util.UUID;
 import java.util.concurrent.ConcurrentLinkedQueue;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicLong;
@@ -40,6 +41,14 @@ import java.util.concurrent.atomic.AtomicLong;
  * <p> {@link Node} is the server where all requests are sent. </p>
  */
 public final class Node implements Comparable<Node> {
+
+    /**
+     * Unique identifier of the node
+     */
+    private final String ID = UUID.randomUUID().toString();
+
+
+    private final int HASH = Objects.hash(ID);
 
     /**
      * Available Connections Queue
@@ -55,11 +64,6 @@ public final class Node implements Comparable<Node> {
      * Address of this {@link Node}
      */
     private final InetSocketAddress socketAddress;
-
-    /**
-     * Hash of {@link InetSocketAddress}
-     */
-    private final String hash;
 
     /**
      * {@linkplain Cluster} to which this {@linkplain Node} is associated
@@ -110,15 +114,17 @@ public final class Node implements Comparable<Node> {
                 int maxConnections,
                 HealthCheck healthCheck) {
 
+        maxConnections(maxConnections);
+
+        this.socketAddress = socketAddress;
+        this.healthCheck = healthCheck;
+
         this.cluster = cluster;
         this.cluster.addNode(this);
 
-        this.socketAddress = socketAddress;
-        this.hash = String.valueOf(Objects.hashCode(this));
-        this.healthCheck = healthCheck;
-
-        maxConnections(maxConnections);
-        state(State.ONLINE);
+        if (healthCheck == null) {
+            state(State.ONLINE);
+        }
     }
 
     public Cluster cluster() {
@@ -136,7 +142,7 @@ public final class Node implements Comparable<Node> {
             return activeConnection0();
         }
 
-        return availableConnections.size();
+        return activeConnections.size();
     }
 
     public Node incBytesSent(int bytes) {
@@ -163,27 +169,7 @@ public final class Node implements Comparable<Node> {
 
     @NonNull
     public Node state(State state) {
-
-        NodeEvent nodeEvent;
-
-        switch (state) {
-            case ONLINE:
-                nodeEvent = new NodeOnlineEvent(this);
-                break;
-            case OFFLINE:
-                nodeEvent = new NodeOfflineEvent(this);
-                drainConnections();
-                break;
-            case IDLE:
-                nodeEvent = new NodeIdleEvent(this);
-                break;
-            default:
-                throw new IllegalArgumentException("Unknown State: " + state);
-        }
-
         this.state = state;
-        nodeEvent.trySuccess(null);
-        cluster().eventPublisher().publish(nodeEvent);
         return this;
     }
 
@@ -230,8 +216,8 @@ public final class Node implements Comparable<Node> {
         this.maxConnections = Number.checkRange(maxConnections, -1, Integer.MAX_VALUE, "MaxConnections");
     }
 
-    public String hash() {
-        return hash;
+    public String id() {
+        return ID;
     }
 
     /**
@@ -317,18 +303,32 @@ public final class Node implements Comparable<Node> {
     @Override
     public String toString() {
         return "Node{" +
-                ", Cluster=" + cluster +
+                "Cluster=" + cluster +
                 ", Address=" + socketAddress +
                 ", BytesSent=" + bytesSent +
                 ", BytesReceived=" + bytesReceived +
-                ", Connections=" + activeConnection() + "/" + maxConnections +
+                ", Connections=" + activeConnections.size() + "/" + maxConnections +
                 ", state=" + state +
                 ", healthCheck=" + healthCheck +
                 '}';
     }
 
     @Override
-    public int compareTo(Node n) {
-        return hash.compareToIgnoreCase(n.hash);
+    public int compareTo(Node node) {
+        return ID.compareToIgnoreCase(node.ID);
+    }
+
+    @Override
+    public int hashCode() {
+        return HASH;
+    }
+
+    @Override
+    public boolean equals(Object obj) {
+        if (obj instanceof Node) {
+            Node node = (Node) obj;
+            return ID.equalsIgnoreCase(node.ID);
+        }
+        return false;
     }
 }

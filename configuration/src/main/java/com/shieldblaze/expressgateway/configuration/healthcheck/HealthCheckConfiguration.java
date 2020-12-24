@@ -15,24 +15,23 @@
  * You should have received a copy of the GNU General Public License
  * along with ShieldBlaze ExpressGateway.  If not, see <https://www.gnu.org/licenses/>.
  */
-package com.shieldblaze.expressgateway.backend.strategy.l7.http.sessionpersistence;
+package com.shieldblaze.expressgateway.configuration.healthcheck;
 
-import com.shieldblaze.expressgateway.backend.Node;
+public class HealthCheckConfiguration {
 
-import java.util.Comparator;
+    private final int workers;
+    private final int timeInterval;
 
-final class StickySessionSearchComparator implements Comparator<Object> {
-
-    static final StickySessionSearchComparator INSTANCE = new StickySessionSearchComparator();
-
-    private StickySessionSearchComparator() {
-        // Prevent outside initialization
+    HealthCheckConfiguration(int workers, int timeInterval) {
+        this.workers = workers;
+        this.timeInterval = timeInterval;
     }
 
-    @Override
-    public int compare(Object o1, Object o2) {
-        String key = (String) o1;
-        Node node = (Node) o2;
-        return node.id().compareToIgnoreCase(key);
+    public int workers() {
+        return workers;
+    }
+
+    public int timeInterval() {
+        return timeInterval;
     }
 }

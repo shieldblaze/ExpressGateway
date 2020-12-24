@@ -15,24 +15,32 @@
  * You should have received a copy of the GNU General Public License
  * along with ShieldBlaze ExpressGateway.  If not, see <https://www.gnu.org/licenses/>.
  */
-package com.shieldblaze.expressgateway.backend.strategy.l7.http.sessionpersistence;
+package com.shieldblaze.expressgateway.configuration.eventstream;
 
-import com.shieldblaze.expressgateway.backend.Node;
+import com.shieldblaze.expressgateway.common.utils.Number;
 
-import java.util.Comparator;
+/**
+ * Builder for {@link EventStreamConfiguration}
+ */
+public final class EventStreamConfigurationBuilder {
 
-final class StickySessionSearchComparator implements Comparator<Object> {
+    private int workers;
 
-    static final StickySessionSearchComparator INSTANCE = new StickySessionSearchComparator();
-
-    private StickySessionSearchComparator() {
+    private EventStreamConfigurationBuilder() {
         // Prevent outside initialization
     }
 
-    @Override
-    public int compare(Object o1, Object o2) {
-        String key = (String) o1;
-        Node node = (Node) o2;
-        return node.id().compareToIgnoreCase(key);
+    public static EventStreamConfigurationBuilder newBuilder() {
+        return new EventStreamConfigurationBuilder();
+    }
+
+    public EventStreamConfigurationBuilder withWorkers(int workers) {
+        this.workers = workers;
+        return this;
+    }
+
+    public EventStreamConfiguration build() {
+        Number.checkZeroOrPositive(workers, "Workers");
+        return new EventStreamConfiguration(workers);
     }
 }

@@ -66,12 +66,12 @@ public final class HTTPHealthCheck extends HealthCheck {
     private final HttpClient httpClient;
     private final URI uri;
 
-    public HTTPHealthCheck(URI uri, Duration timeout, boolean disableTLSValidation) throws NoSuchAlgorithmException, KeyManagementException {
+    public HTTPHealthCheck(URI uri, Duration timeout, boolean enableTLSValidation) throws NoSuchAlgorithmException, KeyManagementException {
         super(new InetSocketAddress(uri.getHost(), uri.getPort()), timeout);
         this.uri = uri;
 
         HttpClient.Builder builder = HttpClient.newBuilder();
-        if (disableTLSValidation) {
+        if (enableTLSValidation) {
             SSLContext sslContext = SSLContext.getInstance("TLSv1.2");
             sslContext.init(null, trustAllCerts, new SecureRandom());
             builder.sslContext(sslContext);

@@ -15,24 +15,27 @@
  * You should have received a copy of the GNU General Public License
  * along with ShieldBlaze ExpressGateway.  If not, see <https://www.gnu.org/licenses/>.
  */
-package com.shieldblaze.expressgateway.backend.services;
 
-import java.util.concurrent.ScheduledFuture;
+package com.shieldblaze.expressgateway.configuration.eventstream;
 
-final class NodeServices {
-    private final ScheduledFuture<?> healthCheck;
-    private final ScheduledFuture<?> connectionCleaner;
+import com.shieldblaze.expressgateway.concurrent.eventstream.AsyncEventStream;
+import com.shieldblaze.expressgateway.concurrent.eventstream.EventStream;
 
-    NodeServices(ScheduledFuture<?> healthCheck, ScheduledFuture<?> connectionCleaner) {
-        this.healthCheck = healthCheck;
-        this.connectionCleaner = connectionCleaner;
+import java.util.concurrent.Executors;
+
+public class EventStreamConfiguration {
+
+    private final EventStream eventStream;
+
+    EventStreamConfiguration(int workers) {
+        if (workers == 0) {
+            eventStream = new EventStream();
+        } else {
+            eventStream = new AsyncEventStream(Executors.newFixedThreadPool(workers));
+        }
     }
 
-    ScheduledFuture<?> healthCheck() {
-        return healthCheck;
-    }
-
-    ScheduledFuture<?> connectionCleaner() {
-        return connectionCleaner;
+    public EventStream eventStream() {
+        return eventStream;
     }
 }
