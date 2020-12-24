@@ -129,7 +129,7 @@ class HealthCheckServiceTest {
 
     @Test
     @Order(4)
-    void waitForConnectionsToRemoved() throws InterruptedException {
+    void waitForConnectionsToRemoved() {
         // Verify 0 connections are active
         assertEquals(0, node.activeConnection());
     }
