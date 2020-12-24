@@ -250,6 +250,7 @@ public final class Node implements Comparable<Node> {
      * Remove and close a {@link Connection} from this {@linkplain Node}
      */
     public Node removeConnection(Connection connection) {
+        System.out.println(activeConnections.size());
         availableConnections.remove(connection);
         activeConnections.remove(connection);
         connection.close();
