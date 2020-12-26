@@ -43,7 +43,6 @@ public final class TLSConfigurationBuilder {
     private TrustManager trustManager;
     private MutualTLS mutualTLS;
     private boolean useStartTLS;
-    private boolean useALPN;
     private int sessionTimeout;
     private int sessionCacheSize;
     private TLSServerMapping tlsServerMapping;
@@ -117,14 +116,6 @@ public final class TLSConfigurationBuilder {
      */
     public TLSConfigurationBuilder withUseStartTLS(boolean useStartTLS) {
         this.useStartTLS = useStartTLS;
-        return this;
-    }
-
-    /**
-     * Set to {@code true} if we want to use {@code ALPN} with HTTP/2 and HTTP/1.1 else set to {@code false}
-     */
-    public TLSConfigurationBuilder withUseALPN(boolean useALPN) {
-        this.useALPN = useALPN;
         return this;
     }
 
@@ -206,16 +197,13 @@ public final class TLSConfigurationBuilder {
                         .clientAuth(mutualTLS.clientAuth())
                         .startTls(useStartTLS)
                         .sessionTimeout(ObjectUtil.checkPositiveOrZero(sessionTimeout, "Session Timeout"))
-                        .sessionCacheSize(ObjectUtil.checkPositiveOrZero(sessionCacheSize, "Session Cache Size"));
-
-                if (useALPN) {
-                    sslContextBuilder.applicationProtocolConfig(new ApplicationProtocolConfig(
-                            ApplicationProtocolConfig.Protocol.ALPN,
-                            ApplicationProtocolConfig.SelectorFailureBehavior.NO_ADVERTISE,
-                            ApplicationProtocolConfig.SelectedListenerFailureBehavior.ACCEPT,
-                            ApplicationProtocolNames.HTTP_2,
-                            ApplicationProtocolNames.HTTP_1_1));
-                }
+                        .sessionCacheSize(ObjectUtil.checkPositiveOrZero(sessionCacheSize, "Session Cache Size"))
+                        .applicationProtocolConfig(new ApplicationProtocolConfig(
+                                ApplicationProtocolConfig.Protocol.ALPN,
+                                ApplicationProtocolConfig.SelectorFailureBehavior.NO_ADVERTISE,
+                                ApplicationProtocolConfig.SelectedListenerFailureBehavior.ACCEPT,
+                                ApplicationProtocolNames.HTTP_2,
+                                ApplicationProtocolNames.HTTP_1_1));
 
                 certificateKeyPair.setSslContext(sslContextBuilder.build());
                 hostnameMap.put(hostname, certificateKeyPair);
@@ -226,7 +214,13 @@ public final class TLSConfigurationBuilder {
                     .protocols(Protocol.getProtocols(protocols))
                     .clientAuth(mutualTLS.clientAuth())
                     .trustManager(InsecureTrustManagerFactory.INSTANCE)
-                    .startTls(false);
+                    .startTls(useStartTLS)
+                    .applicationProtocolConfig(new ApplicationProtocolConfig(
+                            ApplicationProtocolConfig.Protocol.ALPN,
+                            ApplicationProtocolConfig.SelectorFailureBehavior.NO_ADVERTISE,
+                            ApplicationProtocolConfig.SelectedListenerFailureBehavior.ACCEPT,
+                            ApplicationProtocolNames.HTTP_2,
+                            ApplicationProtocolNames.HTTP_1_1));
 
             if (certificateKeyPair != null) {
                 if (mutualTLS == MutualTLS.REQUIRED || mutualTLS == MutualTLS.OPTIONAL) {
@@ -236,15 +230,6 @@ public final class TLSConfigurationBuilder {
 
             if (certificateKeyPair == null) {
                 certificateKeyPair = new CertificateKeyPair();
-            }
-
-            if (useALPN) {
-                sslContextBuilder.applicationProtocolConfig(new ApplicationProtocolConfig(
-                        ApplicationProtocolConfig.Protocol.ALPN,
-                        ApplicationProtocolConfig.SelectorFailureBehavior.NO_ADVERTISE,
-                        ApplicationProtocolConfig.SelectedListenerFailureBehavior.ACCEPT,
-                        ApplicationProtocolNames.HTTP_2,
-                        ApplicationProtocolNames.HTTP_1_1));
             }
 
             certificateKeyPair.setSslContext(sslContextBuilder.build());

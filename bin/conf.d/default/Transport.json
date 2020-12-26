@@ -1,0 +1,13 @@
+{
+  "transportType": "NIO",
+  "receiveBufferAllocationType": "FIXED",
+  "receiveBufferSizes": [
+    65535
+  ],
+  "tcpConnectionBacklog": 2147483647,
+  "socketReceiveBufferSize": 2147483647,
+  "socketSendBufferSize": 2147483647,
+  "tcpFastOpenMaximumPendingRequests": 2147483647,
+  "backendConnectTimeout": 50000,
+  "connectionIdleTimeout": 1800000
+}
