@@ -60,8 +60,8 @@ along with ShieldBlaze ExpressGateway.  If not, see <https://www.gnu.org/license
         <module>common</module>
         <module>concurrent</module>
         <module>configuration</module>
-        <module>console</module>
         <module>core</module>
+        <module>file-configuration</module>
         <module>healthcheck</module>
         <module>protocol-http</module>
         <module>protocol-tcp</module>
@@ -69,7 +69,6 @@ along with ShieldBlaze ExpressGateway.  If not, see <https://www.gnu.org/license
         <module>rest-api</module>
         <module>security</module>
         <module>shaded-dependencies</module>
-        <module>file-configuration</module>
     </modules>
 
     <repositories>
