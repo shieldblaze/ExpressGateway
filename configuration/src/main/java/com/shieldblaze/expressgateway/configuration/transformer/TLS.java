@@ -17,15 +17,30 @@
  */
 package com.shieldblaze.expressgateway.configuration.transformer;
 
+import com.google.gson.JsonElement;
 import com.google.gson.JsonObject;
 import com.google.gson.JsonParser;
-import com.shieldblaze.expressgateway.configuration.eventstream.EventStreamConfiguration;
-import com.shieldblaze.expressgateway.configuration.eventstream.EventStreamConfigurationBuilder;
+import com.shieldblaze.expressgateway.configuration.tls.CertificateKeyPair;
+import com.shieldblaze.expressgateway.configuration.tls.Cipher;
+import com.shieldblaze.expressgateway.configuration.tls.MutualTLS;
+import com.shieldblaze.expressgateway.configuration.tls.Protocol;
+import com.shieldblaze.expressgateway.configuration.tls.TLSConfiguration;
+import com.shieldblaze.expressgateway.configuration.tls.TLSConfigurationBuilder;
+import com.shieldblaze.expressgateway.configuration.tls.TLSServerMapping;
+import io.netty.handler.ssl.util.SelfSignedCertificate;
 
+import javax.net.ssl.SSLException;
 import java.io.File;
 import java.io.FileWriter;
 import java.io.IOException;
 import java.nio.file.Files;
+import java.security.cert.CertificateException;
+import java.util.ArrayList;
+import java.util.Arrays;
+import java.util.Collections;
+import java.util.List;
+import java.util.Map;
+import java.util.Set;
 
 public class TLS {
 
@@ -33,7 +48,7 @@ public class TLS {
         // Prevent outside initialization
     }
 
-    public static boolean write(EventStreamConfiguration configuration, String path) throws IOException {
+    public static boolean write(TLSConfiguration configuration, String path) throws IOException {
         String jsonString = GSON.INSTANCE.toJson(configuration);
 
         try (FileWriter fileWriter = new FileWriter(path)) {
@@ -43,11 +58,62 @@ public class TLS {
         return true;
     }
 
-    public static EventStreamConfiguration read(String path) throws IOException {
+    public static TLSConfiguration read(String path, boolean server) throws IOException {
         JsonObject json = JsonParser.parseString(Files.readString(new File(path).toPath())).getAsJsonObject();
 
-        return EventStreamConfigurationBuilder.newBuilder()
-                .withWorkers(json.get("workers").getAsInt())
+        TLSConfigurationBuilder tlsConfigurationBuilder;
+        if (server) {
+            tlsConfigurationBuilder = TLSConfigurationBuilder.forServer();
+        } else {
+            tlsConfigurationBuilder = TLSConfigurationBuilder.forClient();
+        }
+
+        if (server) {
+            JsonObject jsonObject = json.getAsJsonObject().get("certificateKeyPairMap").getAsJsonObject();
+
+            TLSServerMapping tlsServerMapping = new TLSServerMapping();
+
+            for (Map.Entry<String, JsonElement> entrySet : jsonObject.entrySet()) {
+                JsonObject certAndKey = entrySet.getValue().getAsJsonObject();
+
+                String certPath = certAndKey.get("certificateChain").getAsString();
+                String keyPath = certAndKey.get("privateKey").getAsString();
+                boolean ocsp = certAndKey.get("useOCSPStapling").getAsBoolean();
+
+                CertificateKeyPair certificateKeyPair = new CertificateKeyPair(certPath, keyPath, ocsp);
+                tlsServerMapping.mapping(entrySet.getKey(), certificateKeyPair);
+            }
+
+            tlsConfigurationBuilder.withTLSServerMapping(tlsServerMapping);
+        } else {
+            JsonObject certAndKey = json.get("certificateKeyPairMap").getAsJsonObject().get("DEFAULT_HOST").getAsJsonObject();
+            String certPath = certAndKey.get("certificateChain").getAsString();
+            String keyPath = certAndKey.get("privateKey").getAsString();
+            boolean ocsp = certAndKey.get("useOCSPStapling").getAsBoolean();
+
+            CertificateKeyPair certificateKeyPair = new CertificateKeyPair(certPath, keyPath, ocsp);
+            tlsConfigurationBuilder.withClientCertificateKeyPair(certificateKeyPair);
+        }
+
+        boolean useStartTLS = json.get("useStartTLS").getAsBoolean();
+        int sessionTimeout = json.get("sessionTimeout").getAsInt();
+        int sessionCacheSize = json.get("sessionCacheSize").getAsInt();
+
+        List<Cipher> ciphers = new ArrayList<>();
+        json.get("ciphers").getAsJsonArray().forEach(cipher -> ciphers.add(Cipher.valueOf(cipher.getAsString().toUpperCase())));
+
+        List<Protocol> protocols = new ArrayList<>();
+        json.get("protocols").getAsJsonArray().forEach(protocol -> protocols.add(Protocol.valueOf(protocol.getAsString().toUpperCase())));
+
+        MutualTLS mutualTLS = MutualTLS.valueOf(json.get("mutualTLS").getAsString().toUpperCase());
+
+        return tlsConfigurationBuilder
+                .withCiphers(ciphers)
+                .withProtocols(protocols)
+                .withMutualTLS(mutualTLS)
+                .withUseStartTLS(useStartTLS)
+                .withSessionTimeout(sessionTimeout)
+                .withSessionCacheSize(sessionCacheSize)
                 .build();
     }
 }

@@ -31,8 +31,8 @@ final class TLSConfigurationBuilderTest {
     @Test
     void test() throws CertificateException {
         SelfSignedCertificate selfSignedCertificate = new SelfSignedCertificate("localhost", "EC", 256);
-        CertificateKeyPair certificateKeyPair = new CertificateKeyPair(Collections.singletonList(selfSignedCertificate.cert()),
-                selfSignedCertificate.key(), false);
+        CertificateKeyPair certificateKeyPair = new CertificateKeyPair(selfSignedCertificate.certificate().getAbsolutePath(),
+                selfSignedCertificate.privateKey().getAbsolutePath(), false);
         TLSServerMapping tlsServerMapping = new TLSServerMapping(certificateKeyPair);
         tlsServerMapping.mapping("*.localhost", certificateKeyPair);
 

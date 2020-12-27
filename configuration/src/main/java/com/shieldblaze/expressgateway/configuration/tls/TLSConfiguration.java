@@ -17,14 +17,37 @@
  */
 package com.shieldblaze.expressgateway.configuration.tls;
 
+import com.google.gson.annotations.Expose;
+
+import java.util.List;
 import java.util.Map;
-import java.util.TreeMap;
+import java.util.concurrent.ConcurrentHashMap;
 
 /**
  * Configuration for TLS
  */
 public final class TLSConfiguration {
-    private final Map<String, CertificateKeyPair> certificateKeyPairMap = new TreeMap<>();
+
+    @Expose
+    private final Map<String, CertificateKeyPair> certificateKeyPairMap = new ConcurrentHashMap<>();
+
+    @Expose
+    private List<Cipher> ciphers;
+
+    @Expose
+    private List<Protocol> protocols;
+
+    @Expose
+    private MutualTLS mutualTLS;
+
+    @Expose
+    private boolean useStartTLS;
+
+    @Expose
+    private int sessionTimeout;
+
+    @Expose
+    private int sessionCacheSize;
 
     /**
      * Get {@link CertificateKeyPair} for a Hostname
@@ -63,5 +86,59 @@ public final class TLSConfiguration {
     TLSConfiguration certificateKeyPairMap(Map<String, CertificateKeyPair> certificateKeyPairMap) {
         this.certificateKeyPairMap.putAll(certificateKeyPairMap);
         return this;
+    }
+
+    TLSConfiguration ciphers(List<Cipher> ciphers) {
+        this.ciphers = ciphers;
+        return this;
+    }
+
+    TLSConfiguration protocols(List<Protocol> protocols) {
+        this.protocols = protocols;
+        return this;
+    }
+
+    TLSConfiguration mutualTLS(MutualTLS mutualTLS) {
+        this.mutualTLS = mutualTLS;
+        return this;
+    }
+
+    TLSConfiguration useStartTLS(boolean useStartTLS) {
+        this.useStartTLS = useStartTLS;
+        return this;
+    }
+
+    TLSConfiguration sessionTimeout(int sessionTimeout) {
+        this.sessionTimeout = sessionTimeout;
+        return this;
+    }
+
+    TLSConfiguration sessionCacheSize(int sessionCacheSize) {
+        this.sessionCacheSize = sessionCacheSize;
+        return this;
+    }
+
+    public List<Cipher> ciphers() {
+        return ciphers;
+    }
+
+    public List<Protocol> protocols() {
+        return protocols;
+    }
+
+    public MutualTLS mutualTLS() {
+        return mutualTLS;
+    }
+
+    public boolean useStartTLS() {
+        return useStartTLS;
+    }
+
+    public int sessionTimeout() {
+        return sessionTimeout;
+    }
+
+    public int sessionCacheSize() {
+        return sessionCacheSize;
     }
 }

@@ -35,8 +35,6 @@ import java.util.List;
 
 public class Transport {
 
-    private static final String DEFAULT = "bin/conf.d/default/Transport.json";
-
     public static boolean write(TransportConfiguration transportConfiguration, String path) throws IOException {
         String jsonString = GSON.INSTANCE.toJson(transportConfiguration);
 

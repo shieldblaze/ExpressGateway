@@ -17,12 +17,10 @@
  */
 package com.shieldblaze.expressgateway.configuration.tls;
 
-import com.shieldblaze.expressgateway.configuration.tls.CertificateKeyPair;
 import io.netty.handler.ssl.util.SelfSignedCertificate;
 import org.junit.jupiter.api.Test;
 
 import java.security.cert.CertificateException;
-import java.util.Collections;
 
 import static org.junit.jupiter.api.Assertions.assertDoesNotThrow;
 import static org.junit.jupiter.api.Assertions.assertThrows;
@@ -33,10 +31,10 @@ final class CertificateKeyPairTest {
     void test() throws CertificateException {
         SelfSignedCertificate selfSignedCertificate = new SelfSignedCertificate("localhost", "EC", 256);
         assertThrows(NullPointerException.class, () -> new CertificateKeyPair(null, null, false));
-        assertThrows(IllegalArgumentException.class, () -> new CertificateKeyPair(Collections.emptyList(), null, false));
-        assertThrows(NullPointerException.class, () -> new CertificateKeyPair(Collections.singletonList(selfSignedCertificate.cert()),
+        assertThrows(IllegalArgumentException.class, () -> new CertificateKeyPair(".", null, false));
+        assertThrows(NullPointerException.class, () -> new CertificateKeyPair(selfSignedCertificate.certificate().getAbsolutePath(),
                 null, false));
-        assertDoesNotThrow(() -> new CertificateKeyPair(Collections.singletonList(selfSignedCertificate.cert()), selfSignedCertificate.key(),
-                false));
+        assertDoesNotThrow(() -> new CertificateKeyPair(selfSignedCertificate.certificate().getAbsolutePath(),
+                selfSignedCertificate.privateKey().getAbsolutePath(), false));
     }
 }

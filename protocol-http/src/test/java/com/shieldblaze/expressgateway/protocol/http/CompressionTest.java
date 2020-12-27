@@ -32,13 +32,9 @@ import com.shieldblaze.expressgateway.configuration.eventloop.EventLoopConfigura
 import com.shieldblaze.expressgateway.configuration.eventloop.EventLoopConfigurationBuilder;
 import com.shieldblaze.expressgateway.configuration.http.HTTPConfiguration;
 import com.shieldblaze.expressgateway.configuration.http.HTTPConfigurationBuilder;
-import com.shieldblaze.expressgateway.configuration.tls.CertificateKeyPair;
 import com.shieldblaze.expressgateway.configuration.tls.Cipher;
 import com.shieldblaze.expressgateway.configuration.tls.MutualTLS;
 import com.shieldblaze.expressgateway.configuration.tls.Protocol;
-import com.shieldblaze.expressgateway.configuration.tls.TLSConfiguration;
-import com.shieldblaze.expressgateway.configuration.tls.TLSConfigurationBuilder;
-import com.shieldblaze.expressgateway.configuration.tls.TLSServerMapping;
 import com.shieldblaze.expressgateway.configuration.transport.ReceiveBufferAllocationType;
 import com.shieldblaze.expressgateway.configuration.transport.TransportConfiguration;
 import com.shieldblaze.expressgateway.configuration.transport.TransportConfigurationBuilder;

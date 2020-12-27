@@ -17,97 +17,79 @@
  */
 package com.shieldblaze.expressgateway.configuration.tls;
 
+import com.google.gson.annotations.Expose;
+import com.shieldblaze.expressgateway.concurrent.GlobalExecutors;
 import io.netty.handler.ssl.SslContext;
-import io.netty.util.internal.ObjectUtil;
 import org.bouncycastle.cert.ocsp.BasicOCSPResp;
 import org.bouncycastle.cert.ocsp.OCSPResp;
 import org.bouncycastle.cert.ocsp.SingleResp;
 
+import java.io.Closeable;
+import java.io.File;
+import java.io.FileInputStream;
+import java.io.FileNotFoundException;
 import java.io.IOException;
 import java.security.PrivateKey;
+import java.security.cert.Certificate;
+import java.security.cert.CertificateException;
+import java.security.cert.CertificateFactory;
 import java.security.cert.X509Certificate;
+import java.util.ArrayList;
 import java.util.List;
 import java.util.Objects;
+import java.util.concurrent.ScheduledFuture;
 import java.util.concurrent.TimeUnit;
 
 /**
  * {@link X509Certificate} and {@link PrivateKey} Pair
  */
-public final class CertificateKeyPair {
-    private final List<X509Certificate> certificateChain;
-    private final PrivateKey privateKey;
-    private byte[] ocspStaplingData = null;
-    private SingleResp ocspResp;
-    private final boolean useOCSP;
+public final class CertificateKeyPair implements Runnable, Closeable {
+
+    @Expose
+    private final String certificateChain;
+
+    private final List<X509Certificate> certificates = new ArrayList<>();
+
+    @Expose
+    private final String privateKey;
+
+    @Expose
+    private boolean useOCSPStapling;
+
+    private volatile byte[] ocspStaplingData = null;
+    private ScheduledFuture<?> scheduledFuture;
     private SslContext sslContext;
 
-    /**
-     * Create new Instance of {@link CertificateKeyPair}.
-     *
-     * @param certificateChain {@link List} of {@link X509Certificate} Chain
-     *                         <ol>
-     *                            <li> First {@link X509Certificate} should be end-entity. </li>
-     *                            <li> All {@link X509Certificate} in middle should be Intermediate Certificate Authority. </li>
-     *                            <li> Last {@link X509Certificate} should be Root Certificate Authority. </li>
-     *                         </ol>
-     * @param privateKey       {@link PrivateKey} of our {@link X509Certificate}.
-     * @param useOCSP          Set to {@code true} if we want OCSP Stapling (in case of Server) or
-     *                         OCSP Validation (in case of Client) else set to {@code false}
-     */
-    public CertificateKeyPair(List<X509Certificate> certificateChain, PrivateKey privateKey, boolean useOCSP) {
-        this.certificateChain = ObjectUtil.checkNonEmpty(certificateChain, "Certificate Chain");
+    public CertificateKeyPair(String certificateChain, String privateKey, boolean useOCSPStapling) {
+        this.certificateChain = Objects.requireNonNull(certificateChain, "Certificate Chain");
         this.privateKey = Objects.requireNonNull(privateKey, "Private Key");
-        this.useOCSP = useOCSP;
+
+        if (useOCSPStapling) {
+            scheduledFuture = GlobalExecutors.INSTANCE.submitTaskAndRunEvery(this, 0, 6, TimeUnit.HOURS);
+        }
+        this.useOCSPStapling = useOCSPStapling;
+
+        try {
+            CertificateFactory cf = CertificateFactory.getInstance("X.509");
+            for (Certificate certificate : cf.generateCertificates(new FileInputStream(certificateChain))) {
+                certificates.add((X509Certificate) certificate);
+            }
+        } catch (CertificateException | FileNotFoundException e) {
+            throw new IllegalArgumentException("Error Occurred: " + e);
+        }
     }
 
     CertificateKeyPair() {
         this.certificateChain = null;
         this.privateKey = null;
-        this.useOCSP = false;
     }
 
-    List<X509Certificate> certificateChain() {
+    String certificateChain() {
         return certificateChain;
     }
 
-    PrivateKey privateKey() {
+    String privateKey() {
         return privateKey;
-    }
-
-    public boolean doOCSPCheck(boolean forServer) {
-        if (useOCSP) {
-            try {
-                OCSPResp response = OCSPClient.response(certificateChain.get(0), certificateChain.get(1));
-                if (forServer) {
-                    ocspStaplingData = response.getEncoded();
-                    ocspResp = ((BasicOCSPResp) response.getResponseObject()).getResponses()[0];
-                    if (ocspResp.getCertStatus() == null) {
-                        return true;
-                    }
-                } else {
-                    if (((BasicOCSPResp) OCSPClient.response(certificateChain.get(0), certificateChain.get(1)).getResponseObject())
-                            .getResponses()[0].getCertStatus() == null) {
-                        return true;
-                    }
-                }
-            } catch (Exception ex) {
-                // Ignore
-            }
-        }
-        return false;
-    }
-
-    public byte[] ocspStaplingData() throws IOException {
-        if (ocspStaplingData != null) {
-            long duration = System.currentTimeMillis() - ocspResp.getNextUpdate().getTime();
-            long diffInMinutes = TimeUnit.MILLISECONDS.toMinutes(duration);
-            if (diffInMinutes > -60) {
-                if (!doOCSPCheck(true)) {
-                    throw new IOException("Unable To Renew OCSP Data");
-                }
-            }
-        }
-        return ocspStaplingData;
     }
 
     public SslContext sslContext() {
@@ -118,7 +100,31 @@ public final class CertificateKeyPair {
         this.sslContext = sslContext;
     }
 
-    public boolean useOCSP() {
-        return useOCSP;
+    public byte[] ocspStaplingData() {
+        return ocspStaplingData;
+    }
+
+    public boolean useOCSPStapling() {
+        return useOCSPStapling;
+    }
+
+    @Override
+    public void run() {
+        try {
+            OCSPResp response = OCSPClient.response(certificates.get(0), certificates.get(1));
+            SingleResp ocspResp = ((BasicOCSPResp) response.getResponseObject()).getResponses()[0];
+            if (ocspResp.getCertStatus() == null) {
+                ocspStaplingData = response.getEncoded();
+                return;
+            }
+        } catch (Exception ex) {
+            // Ignore
+        }
+        ocspStaplingData = null;
+    }
+
+    @Override
+    public void close() throws IOException {
+        scheduledFuture.cancel(true);
     }
 }

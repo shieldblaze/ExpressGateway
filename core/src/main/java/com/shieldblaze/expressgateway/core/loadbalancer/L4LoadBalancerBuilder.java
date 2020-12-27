@@ -20,7 +20,6 @@ package com.shieldblaze.expressgateway.core.loadbalancer;
 
 import com.shieldblaze.expressgateway.backend.cluster.Cluster;
 import com.shieldblaze.expressgateway.configuration.CoreConfiguration;
-import com.shieldblaze.expressgateway.configuration.tls.TLSConfiguration;
 import com.shieldblaze.expressgateway.core.L4FrontListener;
 import io.netty.channel.ChannelHandler;
 
