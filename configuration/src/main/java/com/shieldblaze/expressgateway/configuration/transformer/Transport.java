@@ -35,6 +35,10 @@ import java.util.List;
 
 public class Transport {
 
+    private Transport() {
+        // Prevent outside initialization
+    }
+
     public static boolean write(TransportConfiguration transportConfiguration, String path) throws IOException {
         String jsonString = GSON.INSTANCE.toJson(transportConfiguration);
 

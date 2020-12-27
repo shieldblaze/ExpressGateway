@@ -17,6 +17,8 @@
  */
 package com.shieldblaze.expressgateway.core;
 
+import com.shieldblaze.expressgateway.configuration.tls.CertificateKeyPair;
+import com.shieldblaze.expressgateway.configuration.tls.TLSConfiguration;
 import io.netty.channel.ChannelHandlerContext;
 import io.netty.handler.codec.DecoderException;
 import io.netty.handler.ssl.AbstractSniHandler;
@@ -71,7 +73,7 @@ public final class SNIHandler extends AbstractSniHandler<CertificateKeyPair> {
             sslHandler = new TLSHandler(certificateKeyPair.sslContext().newHandler(ctx.alloc()).engine());
 
             try {
-                if (sslHandler.engine() instanceof ReferenceCountedOpenSslEngine && certificateKeyPair.useOCSP()) {
+                if (sslHandler.engine() instanceof ReferenceCountedOpenSslEngine && certificateKeyPair.ocspStaplingData() != null) {
                     ((ReferenceCountedOpenSslEngine) sslHandler.engine()).setOcspResponse(certificateKeyPair.ocspStaplingData());
                 }
             } catch (Exception ex) {
