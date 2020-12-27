@@ -98,6 +98,7 @@ public class TLS {
         boolean useStartTLS = json.get("useStartTLS").getAsBoolean();
         int sessionTimeout = json.get("sessionTimeout").getAsInt();
         int sessionCacheSize = json.get("sessionCacheSize").getAsInt();
+        boolean acceptAllCerts = json.get("acceptAllCerts").getAsBoolean();
 
         List<Cipher> ciphers = new ArrayList<>();
         json.get("ciphers").getAsJsonArray().forEach(cipher -> ciphers.add(Cipher.valueOf(cipher.getAsString().toUpperCase())));
@@ -114,6 +115,7 @@ public class TLS {
                 .withUseStartTLS(useStartTLS)
                 .withSessionTimeout(sessionTimeout)
                 .withSessionCacheSize(sessionCacheSize)
+                .withAcceptAllCerts(acceptAllCerts)
                 .build();
     }
 }

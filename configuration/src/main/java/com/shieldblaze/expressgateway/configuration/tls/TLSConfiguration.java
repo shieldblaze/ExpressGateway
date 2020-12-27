@@ -18,6 +18,7 @@
 package com.shieldblaze.expressgateway.configuration.tls;
 
 import com.google.gson.annotations.Expose;
+import com.shieldblaze.expressgateway.configuration.transport.TransportConfiguration;
 
 import java.util.List;
 import java.util.Map;
@@ -48,6 +49,9 @@ public final class TLSConfiguration {
 
     @Expose
     private int sessionCacheSize;
+
+    @Expose
+    private boolean acceptAllCerts;
 
     /**
      * Get {@link CertificateKeyPair} for a Hostname
@@ -140,5 +144,14 @@ public final class TLSConfiguration {
 
     public int sessionCacheSize() {
         return sessionCacheSize;
+    }
+
+    public boolean acceptAllCerts() {
+        return acceptAllCerts;
+    }
+
+    public TLSConfiguration acceptAllCerts(boolean acceptAllCerts) {
+        this.acceptAllCerts = acceptAllCerts;
+        return this;
     }
 }

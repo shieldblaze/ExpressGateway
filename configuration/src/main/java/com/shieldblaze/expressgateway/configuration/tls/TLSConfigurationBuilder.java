@@ -28,7 +28,9 @@ import io.netty.util.internal.ObjectUtil;
 
 import javax.net.ssl.SSLException;
 import javax.net.ssl.TrustManager;
+import javax.net.ssl.TrustManagerFactory;
 import java.io.File;
+import java.security.KeyStore;
 import java.util.List;
 import java.util.Map;
 import java.util.TreeMap;
@@ -47,6 +49,7 @@ public final class TLSConfigurationBuilder {
     private int sessionCacheSize;
     private TLSServerMapping tlsServerMapping;
     private CertificateKeyPair certificateKeyPair;
+    private boolean acceptAllCerts;
 
     /**
      * @see TLSConfigurationBuilder#newBuilder(boolean)
@@ -144,6 +147,14 @@ public final class TLSConfigurationBuilder {
     }
 
     /**
+     * Accept all certificates (Insecure)
+     */
+    public TLSConfigurationBuilder withAcceptAllCerts(boolean acceptAllCerts) {
+        this.acceptAllCerts = acceptAllCerts;
+        return this;
+    }
+
+    /**
      * Build {@link TLSConfiguration}
      *
      * @return {@link TLSConfiguration} Instance
@@ -180,7 +191,8 @@ public final class TLSConfigurationBuilder {
                     throw new IllegalArgumentException("OCSP Stapling is not available because OpenSSL is not available");
                 }
 
-                SslContextBuilder sslContextBuilder = SslContextBuilder.forServer(new File(certificateKeyPair.certificateChain()), new File(certificateKeyPair.privateKey()))
+                SslContextBuilder sslContextBuilder = SslContextBuilder.forServer(new File(certificateKeyPair.certificateChain()),
+                        new File(certificateKeyPair.privateKey()))
                         .sslProvider(OpenSsl.isAvailable() ? SslProvider.OPENSSL : SslProvider.JDK)
                         .protocols(Protocol.getProtocols(protocols))
                         .enableOcsp(certificateKeyPair.useOCSPStapling())
@@ -199,11 +211,23 @@ public final class TLSConfigurationBuilder {
                 hostnameMap.put(hostname, certificateKeyPair);
             }
         } else {
+            TrustManagerFactory trustManagerFactory;
+            if (acceptAllCerts) {
+                trustManagerFactory = InsecureTrustManagerFactory.INSTANCE;
+            } else {
+                try {
+                    trustManagerFactory = TrustManagerFactory.getInstance(TrustManagerFactory.getDefaultAlgorithm());
+                    trustManagerFactory.init((KeyStore) null);
+                } catch (Exception ex) {
+                    throw new IllegalArgumentException("Error occurred while building TrustManagerFactory", ex);
+                }
+            }
+
             SslContextBuilder sslContextBuilder = SslContextBuilder.forClient()
                     .sslProvider(OpenSsl.isAvailable() ? SslProvider.OPENSSL : SslProvider.JDK)
                     .protocols(Protocol.getProtocols(protocols))
                     .clientAuth(mutualTLS.clientAuth())
-                    .trustManager(InsecureTrustManagerFactory.INSTANCE)
+                    .trustManager(trustManagerFactory)
                     .startTls(useStartTLS)
                     .applicationProtocolConfig(new ApplicationProtocolConfig(
                             ApplicationProtocolConfig.Protocol.ALPN,
@@ -234,6 +258,7 @@ public final class TLSConfigurationBuilder {
                 .mutualTLS(mutualTLS)
                 .useStartTLS(useStartTLS)
                 .sessionTimeout(sessionTimeout)
-                .sessionCacheSize(sessionCacheSize);
+                .sessionCacheSize(sessionCacheSize)
+                .acceptAllCerts(acceptAllCerts);
     }
 }

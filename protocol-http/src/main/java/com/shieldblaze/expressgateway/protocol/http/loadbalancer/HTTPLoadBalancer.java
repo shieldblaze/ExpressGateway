@@ -20,6 +20,7 @@ package com.shieldblaze.expressgateway.protocol.http.loadbalancer;
 import com.shieldblaze.expressgateway.backend.cluster.Cluster;
 import com.shieldblaze.expressgateway.configuration.CoreConfiguration;
 import com.shieldblaze.expressgateway.configuration.http.HTTPConfiguration;
+import com.shieldblaze.expressgateway.configuration.tls.TLSConfiguration;
 import com.shieldblaze.expressgateway.core.L4FrontListener;
 import com.shieldblaze.expressgateway.core.loadbalancer.L4LoadBalancer;
 import com.shieldblaze.expressgateway.protocol.http.HTTPServerInitializer;
@@ -44,8 +45,8 @@ public class HTTPLoadBalancer extends L4LoadBalancer {
      * @throws NullPointerException If a required parameter if {@code null}
      */
     HTTPLoadBalancer(InetSocketAddress bindAddress, L4FrontListener l4FrontListener, Cluster cluster,
-                            CoreConfiguration coreConfiguration, TLSConfiguration tlsForServer, TLSConfiguration tlsForClient,
-                            HTTPConfiguration httpConfiguration, HTTPServerInitializer httpServerInitializer) {
+                     CoreConfiguration coreConfiguration, TLSConfiguration tlsForServer, TLSConfiguration tlsForClient,
+                     HTTPConfiguration httpConfiguration, HTTPServerInitializer httpServerInitializer) {
         super(bindAddress, l4FrontListener, cluster, coreConfiguration, tlsForServer, tlsForClient, httpServerInitializer);
         this.httpConfiguration = httpConfiguration;
         httpServerInitializer.httpLoadBalancer(this);
