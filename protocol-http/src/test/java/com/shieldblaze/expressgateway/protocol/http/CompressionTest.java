@@ -134,6 +134,7 @@ class CompressionTest {
                 .withProtocols(Collections.singletonList(Protocol.TLS_1_3))
                 .withCiphers(Collections.singletonList(Cipher.TLS_AES_256_GCM_SHA384))
                 .withMutualTLS(MutualTLS.NOT_REQUIRED)
+                .withAcceptAllCerts(true)
                 .build();
 
         httpConfiguration = HTTPConfigurationBuilder.newBuilder()
