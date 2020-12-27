@@ -31,7 +31,7 @@ final class CertificateKeyPairTest {
     void test() throws CertificateException {
         SelfSignedCertificate selfSignedCertificate = new SelfSignedCertificate("localhost", "EC", 256);
         assertThrows(NullPointerException.class, () -> new CertificateKeyPair(null, null, false));
-        assertThrows(IllegalArgumentException.class, () -> new CertificateKeyPair(".", null, false));
+        assertThrows(NullPointerException.class, () -> new CertificateKeyPair(".", null, false));
         assertThrows(NullPointerException.class, () -> new CertificateKeyPair(selfSignedCertificate.certificate().getAbsolutePath(),
                 null, false));
         assertDoesNotThrow(() -> new CertificateKeyPair(selfSignedCertificate.certificate().getAbsolutePath(),
