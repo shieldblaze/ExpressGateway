@@ -236,8 +236,6 @@ public final class TLSConfigurationBuilder {
             hostnameMap.put("DEFAULT_HOST", certificateKeyPair);
         }
 
-        return new TLSConfiguration()
-                .certificateKeyPairMap(hostnameMap)
-                .forServer(forServer);
+        return new TLSConfiguration().certificateKeyPairMap(hostnameMap);
     }
 }

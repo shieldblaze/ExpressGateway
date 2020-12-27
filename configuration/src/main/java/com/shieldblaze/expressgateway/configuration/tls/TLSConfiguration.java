@@ -25,7 +25,6 @@ import java.util.TreeMap;
  */
 public final class TLSConfiguration {
     private final Map<String, CertificateKeyPair> certificateKeyPairMap = new TreeMap<>();
-    private boolean forServer;
 
     /**
      * Get {@link CertificateKeyPair} for a Hostname
@@ -63,15 +62,6 @@ public final class TLSConfiguration {
 
     TLSConfiguration certificateKeyPairMap(Map<String, CertificateKeyPair> certificateKeyPairMap) {
         this.certificateKeyPairMap.putAll(certificateKeyPairMap);
-        return this;
-    }
-
-    public boolean forServer() {
-        return forServer;
-    }
-
-    TLSConfiguration forServer(boolean forServer) {
-        this.forServer = forServer;
         return this;
     }
 }

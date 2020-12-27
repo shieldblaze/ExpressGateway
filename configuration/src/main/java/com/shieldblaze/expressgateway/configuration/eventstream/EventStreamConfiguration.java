@@ -18,6 +18,7 @@
 
 package com.shieldblaze.expressgateway.configuration.eventstream;
 
+import com.google.gson.annotations.Expose;
 import com.shieldblaze.expressgateway.concurrent.eventstream.AsyncEventStream;
 import com.shieldblaze.expressgateway.concurrent.eventstream.EventStream;
 
@@ -27,7 +28,11 @@ public class EventStreamConfiguration {
 
     private final EventStream eventStream;
 
+    @Expose
+    private final int workers;
+
     EventStreamConfiguration(int workers) {
+        this.workers = workers;
         if (workers == 0) {
             eventStream = new EventStream();
         } else {
@@ -37,5 +42,9 @@ public class EventStreamConfiguration {
 
     public EventStream eventStream() {
         return eventStream;
+    }
+
+    public int workers() {
+        return workers;
     }
 }

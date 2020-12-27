@@ -17,6 +17,7 @@
  */
 package com.shieldblaze.expressgateway.configuration.transport;
 
+import com.google.gson.annotations.Expose;
 import com.shieldblaze.expressgateway.common.utils.Number;
 import io.netty.channel.AdaptiveRecvByteBufAllocator;
 import io.netty.channel.FixedRecvByteBufAllocator;
@@ -34,14 +35,31 @@ import java.util.UUID;
  */
 public final class TransportConfiguration {
 
+    @Expose
     private TransportType transportType;
+
+    @Expose
     private ReceiveBufferAllocationType receiveBufferAllocationType;
+
+    @Expose
     private int[] receiveBufferSizes;
+
+    @Expose
     private int tcpConnectionBacklog;
+
+    @Expose
     private int socketReceiveBufferSize;
+
+    @Expose
     private int socketSendBufferSize;
+
+    @Expose
     private int tcpFastOpenMaximumPendingRequests;
+
+    @Expose
     private int backendConnectTimeout;
+
+    @Expose
     private int connectionIdleTimeout;
 
     public TransportType transportType() {

@@ -15,28 +15,18 @@
  * You should have received a copy of the GNU General Public License
  * along with ShieldBlaze ExpressGateway.  If not, see <https://www.gnu.org/licenses/>.
  */
-package com.shieldblaze.expressgateway.configuration.healthcheck;
+package com.shieldblaze.expressgateway.configuration.transformer;
 
-import com.google.gson.annotations.Expose;
+import com.google.gson.Gson;
+import com.google.gson.GsonBuilder;
 
-public class HealthCheckConfiguration {
+final class GSON {
 
-    @Expose
-    private final int workers;
+    static final Gson INSTANCE = new GsonBuilder().disableHtmlEscaping().setPrettyPrinting()
+            .excludeFieldsWithoutExposeAnnotation()
+            .create();
 
-    @Expose
-    private final int timeInterval;
-
-    HealthCheckConfiguration(int workers, int timeInterval) {
-        this.workers = workers;
-        this.timeInterval = timeInterval;
-    }
-
-    public int workers() {
-        return workers;
-    }
-
-    public int timeInterval() {
-        return timeInterval;
+    private GSON() {
+        // Prevent outside initialization
     }
 }

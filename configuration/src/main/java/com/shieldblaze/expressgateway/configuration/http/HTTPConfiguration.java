@@ -17,23 +17,48 @@
  */
 package com.shieldblaze.expressgateway.configuration.http;
 
-import io.netty.util.internal.ObjectUtil;
+import com.google.gson.annotations.Expose;
+import com.shieldblaze.expressgateway.common.utils.Number;
 
 /**
  * Configuration for HTTP
  */
 public final class HTTPConfiguration {
+
+    @Expose
     private long maxContentLength;
+
+    @Expose
     private int h2InitialWindowSize;
+
+    @Expose
     private long h2MaxConcurrentStreams;
+
+    @Expose
     private long h2MaxHeaderSizeList;
+
+    @Expose
     private long h2MaxHeaderTableSize;
+
+    @Expose
     private int h2MaxFrameSize;
+
+    @Expose
     private int maxInitialLineLength;
+
+    @Expose
     private int maxHeaderSize;
+
+    @Expose
     private int maxChunkSize;
+
+    @Expose
     private int compressionThreshold;
+
+    @Expose
     private int deflateCompressionLevel;
+
+    @Expose
     private int brotliCompressionLevel;
 
     HTTPConfiguration() {
@@ -45,7 +70,7 @@ public final class HTTPConfiguration {
     }
 
     public HTTPConfiguration maxContentLength(long maxContentLength) {
-        this.maxContentLength = ObjectUtil.checkPositive(maxContentLength, "maxContentLength");
+        this.maxContentLength = Number.checkPositive(maxContentLength, "maxContentLength");
         return this;
     }
 
@@ -54,7 +79,7 @@ public final class HTTPConfiguration {
     }
 
     public HTTPConfiguration setH2InitialWindowSize(int h2InitialWindowSize) {
-        this.h2InitialWindowSize = ObjectUtil.checkPositive(h2InitialWindowSize, "h2InitialWindowSize");
+        this.h2InitialWindowSize = Number.checkPositive(h2InitialWindowSize, "h2InitialWindowSize");
         return this;
     }
 
@@ -63,7 +88,7 @@ public final class HTTPConfiguration {
     }
 
     public HTTPConfiguration h2MaxConcurrentStreams(long h2MaxConcurrentStreams) {
-        this.h2MaxConcurrentStreams = ObjectUtil.checkPositive(h2MaxConcurrentStreams, "h2MaxConcurrentStreams");
+        this.h2MaxConcurrentStreams = Number.checkPositive(h2MaxConcurrentStreams, "h2MaxConcurrentStreams");
         return this;
     }
 
@@ -72,7 +97,7 @@ public final class HTTPConfiguration {
     }
 
     public HTTPConfiguration h2MaxHeaderSizeList(long h2MaxHeaderSizeList) {
-        this.h2MaxHeaderSizeList = ObjectUtil.checkPositive(h2MaxHeaderSizeList, "h2MaxHeaderSizeList");
+        this.h2MaxHeaderSizeList = Number.checkPositive(h2MaxHeaderSizeList, "h2MaxHeaderSizeList");
         return this;
     }
 
@@ -81,7 +106,7 @@ public final class HTTPConfiguration {
     }
 
     public HTTPConfiguration h2MaxHeaderTableSize(long h2MaxHeaderTableSize) {
-        this.h2MaxHeaderTableSize = ObjectUtil.checkPositive(h2MaxHeaderTableSize, "h2MaxHeaderTableSize");
+        this.h2MaxHeaderTableSize = Number.checkPositive(h2MaxHeaderTableSize, "h2MaxHeaderTableSize");
         return this;
     }
 
@@ -90,7 +115,7 @@ public final class HTTPConfiguration {
     }
 
     public HTTPConfiguration h2MaxFrameSize(int h2MaxFrameSize) {
-        this.h2MaxFrameSize = ObjectUtil.checkPositive(h2MaxFrameSize, "h2MaxFrameSize");
+        this.h2MaxFrameSize = Number.checkPositive(h2MaxFrameSize, "h2MaxFrameSize");
         return this;
     }
 
@@ -99,7 +124,7 @@ public final class HTTPConfiguration {
     }
 
     public HTTPConfiguration maxInitialLineLength(int maxInitialLineLength) {
-        this.maxInitialLineLength = ObjectUtil.checkPositive(maxInitialLineLength, "maxInitialLineLength");
+        this.maxInitialLineLength = Number.checkPositive(maxInitialLineLength, "maxInitialLineLength");
         return this;
     }
 
@@ -108,7 +133,7 @@ public final class HTTPConfiguration {
     }
 
     public HTTPConfiguration setMaxHeaderSize(int maxHeaderSize) {
-        this.maxHeaderSize = ObjectUtil.checkPositive(maxHeaderSize, "maxHeaderSize");
+        this.maxHeaderSize = Number.checkPositive(maxHeaderSize, "maxHeaderSize");
         return this;
     }
 
@@ -117,7 +142,7 @@ public final class HTTPConfiguration {
     }
 
     public HTTPConfiguration maxChunkSize(int maxChunkSize) {
-        this.maxChunkSize = ObjectUtil.checkPositive(maxChunkSize, "maxChunkSize");
+        this.maxChunkSize = Number.checkPositive(maxChunkSize, "maxChunkSize");
         return this;
     }
 
@@ -126,7 +151,7 @@ public final class HTTPConfiguration {
     }
 
     public HTTPConfiguration compressionThreshold(int compressionThreshold) {
-        this.compressionThreshold = ObjectUtil.checkPositiveOrZero(compressionThreshold, "compressionThreshold");
+        this.compressionThreshold = Number.checkZeroOrPositive(compressionThreshold, "compressionThreshold");
         return this;
     }
 
@@ -135,7 +160,7 @@ public final class HTTPConfiguration {
     }
 
     public HTTPConfiguration deflateCompressionLevel(int deflateCompressionLevel) {
-        this.deflateCompressionLevel = ObjectUtil.checkInRange(deflateCompressionLevel, 0, 9, "deflateCompressionLevel");
+        this.deflateCompressionLevel = Number.checkRange(deflateCompressionLevel, 0, 9, "deflateCompressionLevel");
         return this;
     }
 
@@ -144,7 +169,7 @@ public final class HTTPConfiguration {
     }
 
     public HTTPConfiguration brotliCompressionLevel(int brotliCompressionLevel) {
-        this.brotliCompressionLevel = ObjectUtil.checkInRange(brotliCompressionLevel, 1, 11, "brotliCompressionLevel");
+        this.brotliCompressionLevel = Number.checkRange(brotliCompressionLevel, 1, 11, "brotliCompressionLevel");
         return this;
     }
 }

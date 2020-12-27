@@ -17,11 +17,17 @@
  */
 package com.shieldblaze.expressgateway.configuration.eventloop;
 
+import com.google.gson.annotations.Expose;
+
 /**
  * {@code EventLoop} Configuration
  */
 public final class EventLoopConfiguration {
+
+    @Expose
     private int parentWorkers;
+
+    @Expose
     private int childWorkers;
 
     EventLoopConfiguration() {

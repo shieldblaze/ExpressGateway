@@ -15,10 +15,8 @@
  * You should have received a copy of the GNU General Public License
  * along with ShieldBlaze ExpressGateway.  If not, see <https://www.gnu.org/licenses/>.
  */
-package com.shieldblaze.expressgateway.file.config;
+package com.shieldblaze.expressgateway.configuration.transformer;
 
-import com.google.gson.Gson;
-import com.google.gson.GsonBuilder;
 import com.google.gson.JsonArray;
 import com.google.gson.JsonElement;
 import com.google.gson.JsonObject;
@@ -27,9 +25,9 @@ import com.shieldblaze.expressgateway.configuration.transport.ReceiveBufferAlloc
 import com.shieldblaze.expressgateway.configuration.transport.TransportConfiguration;
 import com.shieldblaze.expressgateway.configuration.transport.TransportConfigurationBuilder;
 import com.shieldblaze.expressgateway.configuration.transport.TransportType;
-import io.netty.util.internal.SystemPropertyUtil;
 
 import java.io.File;
+import java.io.FileWriter;
 import java.io.IOException;
 import java.nio.file.Files;
 import java.util.ArrayList;
@@ -39,29 +37,17 @@ public class Transport {
 
     private static final String DEFAULT = "bin/conf.d/default/Transport.json";
 
-    public static void main(String[] args) throws IOException {
+    public static boolean write(TransportConfiguration transportConfiguration, String path) throws IOException {
+        String jsonString = GSON.INSTANCE.toJson(transportConfiguration);
 
-        TransportConfiguration transportConfiguration = TransportConfigurationBuilder.newBuilder()
-                .withTransportType(TransportType.NIO)
-                .withTCPFastOpenMaximumPendingRequests(2147483647)
-                .withBackendConnectTimeout(10000 * 5)
-                .withReceiveBufferAllocationType(ReceiveBufferAllocationType.FIXED)
-                .withReceiveBufferSizes(new int[]{65535})
-                .withSocketReceiveBufferSize(2147483647)
-                .withSocketSendBufferSize(2147483647)
-                .withTCPConnectionBacklog(2147483647)
-                .withConnectionIdleTimeout(1800000)
-                .build();
+        try (FileWriter fileWriter = new FileWriter(path)) {
+            fileWriter.write(jsonString);
+        }
 
-
-//        Gson gson = new GsonBuilder().disableHtmlEscaping().setPrettyPrinting().create();
-//        System.out.println(gson.toJson(transportConfiguration));
-
-        loadConfiguration();
+        return true;
     }
 
-    private static void loadConfiguration() throws IOException {
-        String path = SystemPropertyUtil.get("config.dir", DEFAULT);
+    private static TransportConfiguration read(String path) throws IOException {
         JsonObject json = JsonParser.parseString(Files.readString(new File(path).toPath())).getAsJsonObject();
 
         List<Integer> sizesOf = new ArrayList<>();
@@ -70,12 +56,11 @@ public class Transport {
             sizesOf.add(jsonElement.getAsInt());
         }
         int[] sizes = new int[sizesOf.size()];
-        // ArrayList to Array Conversion
-        for (int i =0; i < sizesOf.size(); i++) {
+        for (int i = 0; i < sizesOf.size(); i++) {
             sizes[i] = sizesOf.get(i);
         }
 
-        TransportConfigurationBuilder.newBuilder()
+        return TransportConfigurationBuilder.newBuilder()
                 .withTransportType(TransportType.valueOf(json.get("transportType").getAsString()))
                 .withReceiveBufferAllocationType(ReceiveBufferAllocationType.valueOf(json.get("receiveBufferAllocationType").getAsString()))
                 .withReceiveBufferSizes(sizes)
