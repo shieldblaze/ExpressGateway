@@ -29,12 +29,10 @@ import org.springframework.web.bind.annotation.RequestMapping;
 public class ConfigHandler {
 
     @PostMapping("/transport")
-    public String loadBalancer(@PathVariable String name, @RequestBody Transport transport) {
+    public String loadBalancer(@PathVariable String name, @RequestBody String data) {
 
         if (Utils.ALPHANUMERIC.matcher(name).matches()) {
-            TransportConfigurationBuilder.newBuilder()
 
-                    .build();
         }
 
 

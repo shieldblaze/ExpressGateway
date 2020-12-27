@@ -15,35 +15,19 @@
  * You should have received a copy of the GNU General Public License
  * along with ShieldBlaze ExpressGateway.  If not, see <https://www.gnu.org/licenses/>.
  */
+package com.shieldblaze.expressgateway.common;
 
-package com.shieldblaze.expressgateway.restapi;
+import com.google.gson.Gson;
+import com.google.gson.GsonBuilder;
 
-import com.fasterxml.jackson.annotation.JsonProperty;
+public class GSON {
 
-public class CreateLoadBalancer {
-
-
-    public static class Transport {
-
-
+    private GSON() {
+        // Prevent outside initialization
     }
 
-    public static class EventLoop {
-
-        @JsonProperty("parentWorkers")
-        private int parentWorkers;
-
-        @JsonProperty("childWorkers")
-        private int childWorkers;
-
-        public int parentWorkers() {
-            return parentWorkers;
-        }
-
-        public int childWorkers() {
-            return childWorkers;
-        }
-    }
-
-
+    public static final Gson INSTANCE = new GsonBuilder()
+            .disableHtmlEscaping()
+            .setPrettyPrinting()
+            .create();
 }

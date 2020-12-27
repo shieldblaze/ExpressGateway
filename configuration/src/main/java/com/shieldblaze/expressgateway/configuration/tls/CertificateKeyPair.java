@@ -69,12 +69,12 @@ public final class CertificateKeyPair implements Runnable, Closeable {
         }
         this.useOCSPStapling = useOCSPStapling;
 
-        try {
+        try (FileInputStream fileInputStream = new FileInputStream(certificateChain)) {
             CertificateFactory cf = CertificateFactory.getInstance("X.509");
-            for (Certificate certificate : cf.generateCertificates(new FileInputStream(certificateChain))) {
+            for (Certificate certificate : cf.generateCertificates(fileInputStream)) {
                 certificates.add((X509Certificate) certificate);
             }
-        } catch (CertificateException | FileNotFoundException e) {
+        } catch (IOException | CertificateException e) {
             throw new IllegalArgumentException("Error Occurred: " + e);
         }
     }

@@ -20,7 +20,5 @@ package com.shieldblaze.expressgateway.restapi;
 import java.util.regex.Pattern;
 
 final class Utils {
-
     static final Pattern ALPHANUMERIC = Pattern.compile("[a-zA-Z0-9]");
-
 }
