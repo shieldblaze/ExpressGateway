@@ -21,6 +21,7 @@ import com.google.gson.JsonArray;
 import com.google.gson.JsonElement;
 import com.google.gson.JsonObject;
 import com.google.gson.JsonParser;
+import com.shieldblaze.expressgateway.configuration.eventloop.EventLoopConfiguration;
 import com.shieldblaze.expressgateway.configuration.transport.ReceiveBufferAllocationType;
 import com.shieldblaze.expressgateway.configuration.transport.TransportConfiguration;
 import com.shieldblaze.expressgateway.configuration.transport.TransportConfigurationBuilder;
@@ -49,8 +50,12 @@ public class Transport {
         return true;
     }
 
-    private static TransportConfiguration read(String path) throws IOException {
-        JsonObject json = JsonParser.parseString(Files.readString(new File(path).toPath())).getAsJsonObject();
+    public static TransportConfiguration readFile(String path) throws IOException {
+        return readDirectly(Files.readString(new File(path).toPath()));
+    }
+
+    public static TransportConfiguration readDirectly(String data) {
+        JsonObject json = JsonParser.parseString(data).getAsJsonObject();
 
         List<Integer> sizesOf = new ArrayList<>();
         JsonArray recvBuffSizes = json.get("receiveBufferSizes").getAsJsonArray();

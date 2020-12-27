@@ -45,8 +45,12 @@ public class EventStream {
         return true;
     }
 
-    public static EventStreamConfiguration read(String path) throws IOException {
-        JsonObject json = JsonParser.parseString(Files.readString(new File(path).toPath())).getAsJsonObject();
+    public static EventStreamConfiguration readFile(String path) throws IOException {
+        return readDirectly(Files.readString(new File(path).toPath()));
+    }
+
+    public static EventStreamConfiguration readDirectly(String data) {
+        JsonObject json = JsonParser.parseString(data).getAsJsonObject();
 
         return EventStreamConfigurationBuilder.newBuilder()
                 .withWorkers(json.get("workers").getAsInt())

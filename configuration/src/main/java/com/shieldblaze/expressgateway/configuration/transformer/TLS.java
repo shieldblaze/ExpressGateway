@@ -20,6 +20,7 @@ package com.shieldblaze.expressgateway.configuration.transformer;
 import com.google.gson.JsonElement;
 import com.google.gson.JsonObject;
 import com.google.gson.JsonParser;
+import com.shieldblaze.expressgateway.configuration.eventloop.EventLoopConfiguration;
 import com.shieldblaze.expressgateway.configuration.tls.CertificateKeyPair;
 import com.shieldblaze.expressgateway.configuration.tls.Cipher;
 import com.shieldblaze.expressgateway.configuration.tls.MutualTLS;
@@ -58,17 +59,23 @@ public class TLS {
         return true;
     }
 
-    public static TLSConfiguration read(String path, boolean server) throws IOException {
-        JsonObject json = JsonParser.parseString(Files.readString(new File(path).toPath())).getAsJsonObject();
+    public static TLSConfiguration readFile(String path) throws IOException {
+        return readDirectly(Files.readString(new File(path).toPath()));
+    }
+
+    public static TLSConfiguration readDirectly(String data) throws IOException {
+        JsonObject json = JsonParser.parseString(data).getAsJsonObject();
+
+        boolean forServer = json.get("forServer").getAsBoolean();
 
         TLSConfigurationBuilder tlsConfigurationBuilder;
-        if (server) {
+        if (forServer) {
             tlsConfigurationBuilder = TLSConfigurationBuilder.forServer();
         } else {
             tlsConfigurationBuilder = TLSConfigurationBuilder.forClient();
         }
 
-        if (server) {
+        if (forServer) {
             JsonObject jsonObject = json.getAsJsonObject().get("certificateKeyPairMap").getAsJsonObject();
 
             TLSServerMapping tlsServerMapping = new TLSServerMapping();

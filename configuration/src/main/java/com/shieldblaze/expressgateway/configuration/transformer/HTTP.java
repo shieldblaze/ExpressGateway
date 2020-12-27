@@ -19,6 +19,7 @@ package com.shieldblaze.expressgateway.configuration.transformer;
 
 import com.google.gson.JsonObject;
 import com.google.gson.JsonParser;
+import com.shieldblaze.expressgateway.configuration.eventloop.EventLoopConfiguration;
 import com.shieldblaze.expressgateway.configuration.http.HTTPConfiguration;
 import com.shieldblaze.expressgateway.configuration.http.HTTPConfigurationBuilder;
 
@@ -43,8 +44,12 @@ public class HTTP {
         return true;
     }
 
-    public static HTTPConfiguration read(String path) throws IOException {
-        JsonObject json = JsonParser.parseString(Files.readString(new File(path).toPath())).getAsJsonObject();
+    public static HTTPConfiguration readFile(String path) throws IOException {
+        return readDirectly(Files.readString(new File(path).toPath()));
+    }
+
+    public static HTTPConfiguration readDirectly(String data) {
+        JsonObject json = JsonParser.parseString(data).getAsJsonObject();
 
         return HTTPConfigurationBuilder.newBuilder()
                 .withBrotliCompressionLevel(json.get("brotliCompressionLevel").getAsInt())

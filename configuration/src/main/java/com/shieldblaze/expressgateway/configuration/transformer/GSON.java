@@ -22,7 +22,9 @@ import com.google.gson.GsonBuilder;
 
 final class GSON {
 
-    static final Gson INSTANCE = new GsonBuilder().disableHtmlEscaping().setPrettyPrinting()
+    static final Gson INSTANCE = new GsonBuilder()
+            .disableHtmlEscaping()
+            .setPrettyPrinting()
             .excludeFieldsWithoutExposeAnnotation()
             .create();
 

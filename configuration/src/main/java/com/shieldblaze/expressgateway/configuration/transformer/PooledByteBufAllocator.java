@@ -21,6 +21,7 @@ import com.google.gson.JsonObject;
 import com.google.gson.JsonParser;
 import com.shieldblaze.expressgateway.configuration.buffer.PooledByteBufAllocatorConfiguration;
 import com.shieldblaze.expressgateway.configuration.buffer.PooledByteBufAllocatorConfigurationBuilder;
+import com.shieldblaze.expressgateway.configuration.eventloop.EventLoopConfiguration;
 
 import java.io.File;
 import java.io.FileWriter;
@@ -43,8 +44,12 @@ public class PooledByteBufAllocator {
         return true;
     }
 
-    public static PooledByteBufAllocatorConfiguration read(String path) throws IOException {
-        JsonObject json = JsonParser.parseString(Files.readString(new File(path).toPath())).getAsJsonObject();
+    public static PooledByteBufAllocatorConfiguration readFile(String path) throws IOException {
+        return readDirectly(Files.readString(new File(path).toPath()));
+    }
+
+    public static PooledByteBufAllocatorConfiguration readDirectly(String data) {
+        JsonObject json = JsonParser.parseString(data).getAsJsonObject();
 
         return PooledByteBufAllocatorConfigurationBuilder.newBuilder()
                 .withPreferDirect(json.get("preferDirect").getAsBoolean())

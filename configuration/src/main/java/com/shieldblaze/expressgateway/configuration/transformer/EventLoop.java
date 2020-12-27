@@ -45,8 +45,12 @@ public class EventLoop {
         return true;
     }
 
-    public static EventLoopConfiguration read(String path) throws IOException {
-        JsonObject json = JsonParser.parseString(Files.readString(new File(path).toPath())).getAsJsonObject();
+    public static EventLoopConfiguration readFile(String path) throws IOException {
+        return readDirectly(Files.readString(new File(path).toPath()));
+    }
+
+    public static EventLoopConfiguration readDirectly(String data) {
+        JsonObject json = JsonParser.parseString(data).getAsJsonObject();
 
         return EventLoopConfigurationBuilder.newBuilder()
                 .withParentWorkers(json.get("parentWorkers").getAsInt())

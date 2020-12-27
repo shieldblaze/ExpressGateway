@@ -18,7 +18,6 @@
 package com.shieldblaze.expressgateway.configuration.tls;
 
 import com.google.gson.annotations.Expose;
-import com.shieldblaze.expressgateway.configuration.transport.TransportConfiguration;
 
 import java.util.List;
 import java.util.Map;
@@ -28,6 +27,9 @@ import java.util.concurrent.ConcurrentHashMap;
  * Configuration for TLS
  */
 public final class TLSConfiguration {
+
+    @Expose
+    private boolean forServer;
 
     @Expose
     private final Map<String, CertificateKeyPair> certificateKeyPairMap = new ConcurrentHashMap<>();
@@ -152,6 +154,15 @@ public final class TLSConfiguration {
 
     public TLSConfiguration acceptAllCerts(boolean acceptAllCerts) {
         this.acceptAllCerts = acceptAllCerts;
+        return this;
+    }
+
+    public boolean forServer() {
+        return forServer;
+    }
+
+    public TLSConfiguration forServer(boolean server) {
+        forServer = server;
         return this;
     }
 }

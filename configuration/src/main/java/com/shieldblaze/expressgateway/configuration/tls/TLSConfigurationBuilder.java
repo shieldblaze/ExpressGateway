@@ -27,7 +27,6 @@ import io.netty.handler.ssl.util.InsecureTrustManagerFactory;
 import io.netty.util.internal.ObjectUtil;
 
 import javax.net.ssl.SSLException;
-import javax.net.ssl.TrustManager;
 import javax.net.ssl.TrustManagerFactory;
 import java.io.File;
 import java.security.KeyStore;
@@ -259,6 +258,7 @@ public final class TLSConfigurationBuilder {
                 .useStartTLS(useStartTLS)
                 .sessionTimeout(sessionTimeout)
                 .sessionCacheSize(sessionCacheSize)
-                .acceptAllCerts(acceptAllCerts);
+                .acceptAllCerts(acceptAllCerts)
+                .forServer(forServer);
     }
 }

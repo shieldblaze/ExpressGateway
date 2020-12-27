@@ -17,13 +17,9 @@
  */
 package com.shieldblaze.expressgateway.restapi;
 
-import io.undertow.Undertow;
-import io.undertow.server.DefaultByteBufferPool;
 import org.springframework.boot.web.embedded.undertow.ConfigurableUndertowWebServerFactory;
-import org.springframework.boot.web.embedded.undertow.UndertowBuilderCustomizer;
 import org.springframework.boot.web.server.Compression;
 import org.springframework.boot.web.server.Http2;
-import org.springframework.boot.web.server.Ssl;
 import org.springframework.boot.web.server.WebServerFactoryCustomizer;
 import org.springframework.stereotype.Component;
 import org.springframework.util.unit.DataSize;

@@ -45,8 +45,12 @@ public class HealthCheck {
         return true;
     }
 
-    public static HealthCheckConfiguration read(String path) throws IOException {
-        JsonObject json = JsonParser.parseString(Files.readString(new File(path).toPath())).getAsJsonObject();
+    public static HealthCheckConfiguration readFile(String path) throws IOException {
+        return readDirectly(Files.readString(new File(path).toPath()));
+    }
+
+    public static HealthCheckConfiguration readDirectly(String data) {
+        JsonObject json = JsonParser.parseString(data).getAsJsonObject();
 
         return HealthCheckConfigurationBuilder.newBuilder()
                 .withWorkers(json.get("workers").getAsInt())
