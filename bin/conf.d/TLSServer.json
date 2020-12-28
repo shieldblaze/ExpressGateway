@@ -2,8 +2,8 @@
   "forServer": true,
   "certificateKeyPairMap": {
     "DEFAULT_HOST": {
-      "certificateChain": "C:\\Users\\Hyper\\AppData\\Local\\Temp\\keyutil_localhost_14707173677757758416.crt",
-      "privateKey": "C:\\Users\\Hyper\\AppData\\Local\\Temp\\keyutil_localhost_12649632586977816633.key",
+      "certificateChain": "Cert.crt",
+      "privateKey": "PrivateKey.key",
       "useOCSPStapling": false
     }
   },
