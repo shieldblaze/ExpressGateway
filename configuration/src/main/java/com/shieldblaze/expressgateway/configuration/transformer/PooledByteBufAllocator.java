@@ -52,7 +52,7 @@ public class PooledByteBufAllocator {
 
         return PooledByteBufAllocatorConfigurationBuilder.newBuilder()
                 .withPreferDirect(json.get("preferDirect").getAsBoolean())
-                .withHeapArena(json.get("headArena").getAsInt())
+                .withHeapArena(json.get("heapArena").getAsInt())
                 .withDirectArena(json.get("directArena").getAsInt())
                 .withPageSize(json.get("pageSize").getAsInt())
                 .withMaxOrder(json.get("maxOrder").getAsInt())

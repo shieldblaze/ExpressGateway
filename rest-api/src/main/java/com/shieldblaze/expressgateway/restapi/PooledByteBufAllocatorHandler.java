@@ -43,9 +43,11 @@ public class PooledByteBufAllocatorHandler {
     public ResponseEntity<String> create(@RequestBody String data) {
         try {
             PooledByteBufAllocatorConfiguration pooledByteBufAllocatorConfiguration = PooledByteBufAllocator.readDirectly(data);
-            PooledByteBufAllocator.write(pooledByteBufAllocatorConfiguration, SystemPropertyUtil.get("egw.config.dir", "../bin/conf.d/PooledByteBufAllocator.json"));
+            PooledByteBufAllocator.write(pooledByteBufAllocatorConfiguration, SystemPropertyUtil.get("egw.config.dir", "../bin/conf.d/")
+                    + "PooledByteBufAllocator.json");
             return new ResponseEntity<>(HttpStatus.NO_CONTENT);
         } catch (FileNotFoundException | NoSuchFileException ex) {
+            ex.printStackTrace();
             return new ResponseEntity<>("File not found", HttpStatus.NOT_FOUND);
         } catch (Exception ex) {
             return new ResponseEntity<>("Error Occurred: " + ex.getLocalizedMessage(), HttpStatus.BAD_REQUEST);
@@ -55,7 +57,7 @@ public class PooledByteBufAllocatorHandler {
     @GetMapping("/bufAlloc")
     public ResponseEntity<String> get() {
         try {
-            File file = new File(SystemPropertyUtil.get("egw.config.dir", "../bin/conf.d/PooledByteBufAllocator.json"));
+            File file = new File(SystemPropertyUtil.get("egw.config.dir", "../bin/conf.d/") + "PooledByteBufAllocator.json");
             String data = Files.readString(file.toPath());
             return new ResponseEntity<>(data, HttpStatus.OK);
         } catch (FileNotFoundException | NoSuchFileException ex) {
@@ -68,7 +70,7 @@ public class PooledByteBufAllocatorHandler {
     @DeleteMapping("/bufAlloc")
     public ResponseEntity<String> delete() {
         try {
-            File file = new File(SystemPropertyUtil.get("egw.config.dir", "../bin/conf.d/PooledByteBufAllocator.json"));
+            File file = new File(SystemPropertyUtil.get("egw.config.dir", "../bin/conf.d/") + "PooledByteBufAllocator.json");
             file.delete();
             return new ResponseEntity<>(HttpStatus.NO_CONTENT);
         } catch (Exception ex) {

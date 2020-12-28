@@ -157,5 +157,4 @@ class TLSHandlerTest {
         HttpResponse<String> httpResponse = HTTP_CLIENT.send(httpRequest, HttpResponse.BodyHandlers.ofString());
         assertEquals(404, httpResponse.statusCode());
     }
-
 }
