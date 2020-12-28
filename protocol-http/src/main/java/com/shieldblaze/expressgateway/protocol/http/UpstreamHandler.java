@@ -17,8 +17,8 @@
  */
 package com.shieldblaze.expressgateway.protocol.http;
 
-import com.shieldblaze.expressgateway.backend.Node;
 import com.shieldblaze.expressgateway.backend.Connection;
+import com.shieldblaze.expressgateway.backend.Node;
 import com.shieldblaze.expressgateway.backend.strategy.l7.http.HTTPBalanceRequest;
 import com.shieldblaze.expressgateway.protocol.http.loadbalancer.HTTPLoadBalancer;
 import io.netty.channel.ChannelDuplexHandler;

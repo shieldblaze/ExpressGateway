@@ -19,8 +19,6 @@ package com.shieldblaze.expressgateway.configuration.transformer;
 
 import com.google.gson.JsonObject;
 import com.google.gson.JsonParser;
-import com.shieldblaze.expressgateway.configuration.eventloop.EventLoopConfiguration;
-import com.shieldblaze.expressgateway.configuration.eventloop.EventLoopConfigurationBuilder;
 import com.shieldblaze.expressgateway.configuration.healthcheck.HealthCheckConfiguration;
 import com.shieldblaze.expressgateway.configuration.healthcheck.HealthCheckConfigurationBuilder;
 

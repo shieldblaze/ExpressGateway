@@ -24,11 +24,10 @@ import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.DeleteMapping;
 import org.springframework.web.bind.annotation.GetMapping;
-import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestBody;
-import org.springframework.web.bind.annotation.RestController;
 import org.springframework.web.bind.annotation.RequestMapping;
+import org.springframework.web.bind.annotation.RestController;
 
 import java.io.File;
 import java.io.FileNotFoundException;
@@ -43,7 +42,7 @@ public class TransportHandler {
     public ResponseEntity<String> createTransport(@RequestBody String data) {
         try {
             TransportConfiguration transportConfiguration = Transport.readDirectly(data);
-            Transport.write(transportConfiguration, SystemPropertyUtil.get("egw.config.dir", "bin/conf.d/") + "Transport.json");
+            Transport.write(transportConfiguration, SystemPropertyUtil.get("egw.config.dir", "../bin/conf.d/") + "Transport.json");
             return new ResponseEntity<>(HttpStatus.NO_CONTENT);
         } catch (FileNotFoundException | NoSuchFileException ex) {
             return new ResponseEntity<>("File not found", HttpStatus.NOT_FOUND);
@@ -55,7 +54,7 @@ public class TransportHandler {
     @GetMapping("/transport")
     public ResponseEntity<String> getTransport() {
         try {
-            File file = new File(SystemPropertyUtil.get("egw.config.dir", "bin/conf.d/") + "Transport.json");
+            File file = new File(SystemPropertyUtil.get("egw.config.dir", "../bin/conf.d/") + "Transport.json");
             String data = Files.readString(file.toPath());
             return new ResponseEntity<>(data, HttpStatus.OK);
         } catch (FileNotFoundException | NoSuchFileException ex) {
@@ -68,7 +67,7 @@ public class TransportHandler {
     @DeleteMapping("/transport")
     public ResponseEntity<String> deleteTransport() {
         try {
-            File file = new File(SystemPropertyUtil.get("egw.config.dir", "bin/conf.d/") + "Transport.json");
+            File file = new File(SystemPropertyUtil.get("egw.config.dir", "../bin/conf.d/") + "Transport.json");
             file.delete();
             return new ResponseEntity<>(HttpStatus.NO_CONTENT);
         } catch (Exception ex) {

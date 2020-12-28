@@ -24,7 +24,6 @@ import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.DeleteMapping;
 import org.springframework.web.bind.annotation.GetMapping;
-import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
@@ -44,7 +43,7 @@ public class PooledByteBufAllocatorHandler {
     public ResponseEntity<String> create(@RequestBody String data) {
         try {
             PooledByteBufAllocatorConfiguration pooledByteBufAllocatorConfiguration = PooledByteBufAllocator.readDirectly(data);
-            PooledByteBufAllocator.write(pooledByteBufAllocatorConfiguration, SystemPropertyUtil.get("egw.config.dir", "bin/conf.d/PooledByteBufAllocator.json"));
+            PooledByteBufAllocator.write(pooledByteBufAllocatorConfiguration, SystemPropertyUtil.get("egw.config.dir", "../bin/conf.d/PooledByteBufAllocator.json"));
             return new ResponseEntity<>(HttpStatus.NO_CONTENT);
         } catch (FileNotFoundException | NoSuchFileException ex) {
             return new ResponseEntity<>("File not found", HttpStatus.NOT_FOUND);
@@ -56,7 +55,7 @@ public class PooledByteBufAllocatorHandler {
     @GetMapping("/bufAlloc")
     public ResponseEntity<String> get() {
         try {
-            File file = new File(SystemPropertyUtil.get("egw.config.dir", "bin/conf.d/PooledByteBufAllocator.json"));
+            File file = new File(SystemPropertyUtil.get("egw.config.dir", "../bin/conf.d/PooledByteBufAllocator.json"));
             String data = Files.readString(file.toPath());
             return new ResponseEntity<>(data, HttpStatus.OK);
         } catch (FileNotFoundException | NoSuchFileException ex) {
@@ -69,7 +68,7 @@ public class PooledByteBufAllocatorHandler {
     @DeleteMapping("/bufAlloc")
     public ResponseEntity<String> delete() {
         try {
-            File file = new File(SystemPropertyUtil.get("egw.config.dir", "bin/conf.d/PooledByteBufAllocator.json"));
+            File file = new File(SystemPropertyUtil.get("egw.config.dir", "../bin/conf.d/PooledByteBufAllocator.json"));
             file.delete();
             return new ResponseEntity<>(HttpStatus.NO_CONTENT);
         } catch (Exception ex) {

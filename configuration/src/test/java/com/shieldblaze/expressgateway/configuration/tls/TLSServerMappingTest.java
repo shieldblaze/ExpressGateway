@@ -20,8 +20,6 @@ package com.shieldblaze.expressgateway.configuration.tls;
 import io.netty.handler.ssl.util.SelfSignedCertificate;
 import org.junit.jupiter.api.Test;
 
-import java.util.Collections;
-
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;

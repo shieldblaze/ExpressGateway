@@ -42,7 +42,7 @@ public class EventLoopHandler {
     public ResponseEntity<String> create(@RequestBody String data) {
         try {
             EventLoopConfiguration eventLoopConfiguration = EventLoop.readDirectly(data);
-            EventLoop.write(eventLoopConfiguration, SystemPropertyUtil.get("egw.config.dir", "bin/conf.d/") + "EventLoop.json");
+            EventLoop.write(eventLoopConfiguration, SystemPropertyUtil.get("egw.config.dir", "../bin/conf.d/") + "EventLoop.json");
             return new ResponseEntity<>(HttpStatus.NO_CONTENT);
         } catch (FileNotFoundException | NoSuchFileException ex) {
             return new ResponseEntity<>("File not found", HttpStatus.NOT_FOUND);
@@ -54,7 +54,7 @@ public class EventLoopHandler {
     @GetMapping("/eventloop")
     public ResponseEntity<String> get() {
         try {
-            File file = new File(SystemPropertyUtil.get("egw.config.dir", "bin/conf.d/") + "EventLoop.json");
+            File file = new File(SystemPropertyUtil.get("egw.config.dir", "../bin/conf.d/") + "EventLoop.json");
             String data = Files.readString(file.toPath());
             return new ResponseEntity<>(data, HttpStatus.OK);
         } catch (FileNotFoundException | NoSuchFileException ex) {
@@ -67,7 +67,7 @@ public class EventLoopHandler {
     @DeleteMapping("/eventloop")
     public ResponseEntity<String> delete() {
         try {
-            File file = new File(SystemPropertyUtil.get("egw.config.dir", "bin/conf.d/") + "EventLoop.json");
+            File file = new File(SystemPropertyUtil.get("egw.config.dir", "../bin/conf.d/") + "EventLoop.json");
             file.delete();
             return new ResponseEntity<>(HttpStatus.NO_CONTENT);
         } catch (Exception ex) {

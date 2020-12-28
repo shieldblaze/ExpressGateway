@@ -17,8 +17,8 @@
  */
 package com.shieldblaze.expressgateway.protocol.udp;
 
-import com.shieldblaze.expressgateway.backend.Node;
 import com.shieldblaze.expressgateway.backend.Connection;
+import com.shieldblaze.expressgateway.backend.Node;
 import io.netty.channel.ChannelFuture;
 
 final class UDPConnection extends Connection {

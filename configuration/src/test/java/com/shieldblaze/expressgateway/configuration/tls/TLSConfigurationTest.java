@@ -21,7 +21,6 @@ import io.netty.handler.ssl.util.SelfSignedCertificate;
 import org.junit.jupiter.api.Test;
 
 import java.security.cert.CertificateException;
-import java.util.Collections;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 

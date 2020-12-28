@@ -26,15 +26,12 @@ import com.shieldblaze.expressgateway.backend.loadbalance.LoadBalance;
 import com.shieldblaze.expressgateway.backend.loadbalance.Request;
 import com.shieldblaze.expressgateway.backend.loadbalance.Response;
 import com.shieldblaze.expressgateway.common.annotation.NonNull;
-import com.shieldblaze.expressgateway.concurrent.eventstream.AsyncEventStream;
 import com.shieldblaze.expressgateway.concurrent.eventstream.EventPublisher;
 import com.shieldblaze.expressgateway.concurrent.eventstream.EventStream;
 import com.shieldblaze.expressgateway.concurrent.eventstream.EventSubscriber;
-import com.shieldblaze.expressgateway.configuration.eventstream.EventStreamConfiguration;
 
 import java.util.List;
 import java.util.concurrent.CopyOnWriteArrayList;
-import java.util.concurrent.Executors;
 
 /**
  * Base class for Cluster

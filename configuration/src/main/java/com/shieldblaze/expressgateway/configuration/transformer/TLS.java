@@ -20,7 +20,6 @@ package com.shieldblaze.expressgateway.configuration.transformer;
 import com.google.gson.JsonElement;
 import com.google.gson.JsonObject;
 import com.google.gson.JsonParser;
-import com.shieldblaze.expressgateway.configuration.eventloop.EventLoopConfiguration;
 import com.shieldblaze.expressgateway.configuration.tls.CertificateKeyPair;
 import com.shieldblaze.expressgateway.configuration.tls.Cipher;
 import com.shieldblaze.expressgateway.configuration.tls.MutualTLS;
@@ -28,20 +27,14 @@ import com.shieldblaze.expressgateway.configuration.tls.Protocol;
 import com.shieldblaze.expressgateway.configuration.tls.TLSConfiguration;
 import com.shieldblaze.expressgateway.configuration.tls.TLSConfigurationBuilder;
 import com.shieldblaze.expressgateway.configuration.tls.TLSServerMapping;
-import io.netty.handler.ssl.util.SelfSignedCertificate;
 
-import javax.net.ssl.SSLException;
 import java.io.File;
 import java.io.FileWriter;
 import java.io.IOException;
 import java.nio.file.Files;
-import java.security.cert.CertificateException;
 import java.util.ArrayList;
-import java.util.Arrays;
-import java.util.Collections;
 import java.util.List;
 import java.util.Map;
-import java.util.Set;
 
 public class TLS {
 

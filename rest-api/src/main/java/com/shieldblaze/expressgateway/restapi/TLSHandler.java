@@ -24,7 +24,6 @@ import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.DeleteMapping;
 import org.springframework.web.bind.annotation.GetMapping;
-import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
@@ -43,7 +42,7 @@ public class TLSHandler {
     public ResponseEntity<String> createServer(@RequestBody String data) {
         try {
             TLSConfiguration tlsConfiguration = TLS.readDirectly(data);
-            TLS.write(tlsConfiguration, SystemPropertyUtil.get("egw.config.dir", "bin/conf.d/") + "TLSServer.json");
+            TLS.write(tlsConfiguration, SystemPropertyUtil.get("egw.config.dir", "../bin/conf.d/") + "TLSServer.json");
             return new ResponseEntity<>(HttpStatus.NO_CONTENT);
         } catch (FileNotFoundException | NoSuchFileException ex) {
             return new ResponseEntity<>("File not found", HttpStatus.NOT_FOUND);
@@ -55,7 +54,7 @@ public class TLSHandler {
     @GetMapping("/tlsServer")
     public ResponseEntity<String> getServer() {
         try {
-            File file = new File(SystemPropertyUtil.get("egw.config.dir", "bin/conf.d/") + "TLSServer.json");
+            File file = new File(SystemPropertyUtil.get("egw.config.dir", "../bin/conf.d/") + "TLSServer.json");
             String data = Files.readString(file.toPath());
             return new ResponseEntity<>(data, HttpStatus.OK);
         } catch (FileNotFoundException | NoSuchFileException ex) {
@@ -68,7 +67,7 @@ public class TLSHandler {
     @DeleteMapping("/tlsServer")
     public ResponseEntity<String> deleteServer() {
         try {
-            File file = new File(SystemPropertyUtil.get("egw.config.dir", "bin/conf.d/") + "TLSServer.json");
+            File file = new File(SystemPropertyUtil.get("egw.config.dir", "../bin/conf.d/") + "TLSServer.json");
             file.delete();
             return new ResponseEntity<>(HttpStatus.NO_CONTENT);
         } catch (Exception ex) {
@@ -80,7 +79,7 @@ public class TLSHandler {
     public ResponseEntity<String> createClient(@RequestBody String data) {
         try {
             TLSConfiguration tlsConfiguration = TLS.readDirectly(data);
-            TLS.write(tlsConfiguration, SystemPropertyUtil.get("egw.config.dir", "bin/conf.d/") + "TLSClient.json");
+            TLS.write(tlsConfiguration, SystemPropertyUtil.get("egw.config.dir", "../bin/conf.d/") + "TLSClient.json");
             return new ResponseEntity<>(HttpStatus.NO_CONTENT);
         } catch (FileNotFoundException | NoSuchFileException ex) {
             return new ResponseEntity<>("File not found", HttpStatus.NOT_FOUND);
@@ -92,7 +91,7 @@ public class TLSHandler {
     @GetMapping("/tlsClient")
     public ResponseEntity<String> getClient() {
         try {
-            File file = new File(SystemPropertyUtil.get("egw.config.dir", "bin/conf.d/") + "TLSClient.json");
+            File file = new File(SystemPropertyUtil.get("egw.config.dir", "../bin/conf.d/") + "TLSClient.json");
             String data = Files.readString(file.toPath());
             return new ResponseEntity<>(data, HttpStatus.OK);
         } catch (FileNotFoundException | NoSuchFileException ex) {
@@ -105,7 +104,7 @@ public class TLSHandler {
     @DeleteMapping("/tlsClient")
     public ResponseEntity<String> deleteClient() {
         try {
-            File file = new File(SystemPropertyUtil.get("egw.config.dir", "bin/conf.d/") + "TLSClient.json");
+            File file = new File(SystemPropertyUtil.get("egw.config.dir", "../bin/conf.d/") + "TLSClient.json");
             file.delete();
             return new ResponseEntity<>(HttpStatus.NO_CONTENT);
         } catch (Exception ex) {

@@ -25,10 +25,8 @@ import io.netty.channel.RecvByteBufAllocator;
 import io.netty.channel.epoll.Epoll;
 import io.netty.incubator.channel.uring.IOUring;
 
-import java.io.Serializable;
 import java.util.Arrays;
 import java.util.Objects;
-import java.util.UUID;
 
 /**
  * Transport Configuration

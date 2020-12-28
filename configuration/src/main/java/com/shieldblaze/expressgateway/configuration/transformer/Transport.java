@@ -21,7 +21,6 @@ import com.google.gson.JsonArray;
 import com.google.gson.JsonElement;
 import com.google.gson.JsonObject;
 import com.google.gson.JsonParser;
-import com.shieldblaze.expressgateway.configuration.eventloop.EventLoopConfiguration;
 import com.shieldblaze.expressgateway.configuration.transport.ReceiveBufferAllocationType;
 import com.shieldblaze.expressgateway.configuration.transport.TransportConfiguration;
 import com.shieldblaze.expressgateway.configuration.transport.TransportConfigurationBuilder;

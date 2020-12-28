@@ -17,6 +17,9 @@
  */
 package com.shieldblaze.expressgateway.restapi;
 
+import io.netty.util.internal.SystemPropertyUtil;
+import org.apache.logging.log4j.LogManager;
+import org.apache.logging.log4j.Logger;
 import org.springframework.boot.web.embedded.undertow.ConfigurableUndertowWebServerFactory;
 import org.springframework.boot.web.server.Compression;
 import org.springframework.boot.web.server.Http2;
@@ -24,12 +27,23 @@ import org.springframework.boot.web.server.WebServerFactoryCustomizer;
 import org.springframework.stereotype.Component;
 import org.springframework.util.unit.DataSize;
 
+import java.net.InetAddress;
+import java.net.UnknownHostException;
+
 @Component
 public class WebServerCustomizer implements WebServerFactoryCustomizer<ConfigurableUndertowWebServerFactory> {
 
+    private static final Logger logger = LogManager.getLogger(WebServerCustomizer.class);
+
     @Override
     public void customize(ConfigurableUndertowWebServerFactory container) {
-        container.setPort(8080);
+        try {
+            container.setAddress(InetAddress.getByName(SystemPropertyUtil.get("restapi.bindAddress", "127.0.0.1")));
+        } catch (UnknownHostException e) {
+            logger.error("Caught Error at WebServerCustomizer", e);
+        }
+
+        container.setPort(SystemPropertyUtil.getInt("restapi.bindAddress", 9110));
         container.setIoThreads(Runtime.getRuntime().availableProcessors());
         container.setWorkerThreads(Runtime.getRuntime().availableProcessors() * 2);
         container.setUseDirectBuffers(true);

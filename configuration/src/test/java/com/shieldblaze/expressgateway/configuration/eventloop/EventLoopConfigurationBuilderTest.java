@@ -17,7 +17,6 @@
  */
 package com.shieldblaze.expressgateway.configuration.eventloop;
 
-import com.shieldblaze.expressgateway.configuration.eventloop.EventLoopConfigurationBuilder;
 import org.junit.jupiter.api.Test;
 
 import static org.junit.jupiter.api.Assertions.assertDoesNotThrow;
