@@ -47,7 +47,7 @@ public class PooledByteBufAllocatorHandler {
             PooledByteBufAllocator.write(pooledByteBufAllocatorConfiguration, SystemPropertyUtil.get("egw.config.dir", "bin/conf.d/PooledByteBufAllocator.json"));
             return new ResponseEntity<>(HttpStatus.NO_CONTENT);
         } catch (FileNotFoundException | NoSuchFileException ex) {
-            return new ResponseEntity<>("File not found: " + ex.getMessage(), HttpStatus.NOT_FOUND);
+            return new ResponseEntity<>("File not found", HttpStatus.NOT_FOUND);
         } catch (Exception ex) {
             return new ResponseEntity<>("Error Occurred: " + ex.getMessage(), HttpStatus.BAD_REQUEST);
         }
@@ -60,7 +60,7 @@ public class PooledByteBufAllocatorHandler {
             String data = Files.readString(file.toPath());
             return new ResponseEntity<>(data, HttpStatus.OK);
         } catch (FileNotFoundException | NoSuchFileException ex) {
-            return new ResponseEntity<>("File not found: " + ex.getMessage(), HttpStatus.NOT_FOUND);
+            return new ResponseEntity<>("File not found", HttpStatus.NOT_FOUND);
         } catch (Exception ex) {
             return new ResponseEntity<>("Error Occurred: " + ex.getMessage(), HttpStatus.BAD_REQUEST);
         }
