@@ -1,0 +1,14 @@
+{
+  "maxContentLength": 250000000,
+  "h2InitialWindowSize": 65536,
+  "h2MaxConcurrentStreams": 1000,
+  "h2MaxHeaderSizeList": 262144,
+  "h2MaxHeaderTableSize": 65536,
+  "h2MaxFrameSize": 16777215,
+  "maxInitialLineLength": 8192,
+  "maxHeaderSize": 16384,
+  "maxChunkSize": 16384,
+  "compressionThreshold": 100,
+  "deflateCompressionLevel": 6,
+  "brotliCompressionLevel": 4
+}

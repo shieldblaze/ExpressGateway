@@ -19,66 +19,59 @@ package com.shieldblaze.expressgateway.restapi;
 
 import com.shieldblaze.expressgateway.configuration.eventloop.EventLoopConfiguration;
 import com.shieldblaze.expressgateway.configuration.transformer.EventLoop;
+import io.netty.util.internal.SystemPropertyUtil;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.DeleteMapping;
 import org.springframework.web.bind.annotation.GetMapping;
-import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RestController;
 
 import java.io.File;
+import java.io.FileNotFoundException;
 import java.nio.file.Files;
+import java.nio.file.NoSuchFileException;
 
-@SuppressWarnings("ResultOfMethodCallIgnored")
 @RestController
-@RequestMapping("/{name}/config")
+@RequestMapping("/config")
 public class EventLoopHandler {
 
     @PostMapping("/eventloop")
-    public ResponseEntity<String> create(@PathVariable String name, @RequestBody String data) {
-        if (name == null || !Utils.ALPHANUMERIC.matcher(name).matches()) {
-            return new ResponseEntity<>("Invalid Namespace", HttpStatus.BAD_REQUEST);
-        }
-
+    public ResponseEntity<String> create(@RequestBody String data) {
         try {
             EventLoopConfiguration eventLoopConfiguration = EventLoop.readDirectly(data);
-            EventLoop.write(eventLoopConfiguration, "bin/conf.d/" + name + "/EventLoop.json");
-            return new ResponseEntity<>(HttpStatus.OK);
+            EventLoop.write(eventLoopConfiguration, SystemPropertyUtil.get("egw.config.dir", "bin/conf.d/EventLoop.json"));
+            return new ResponseEntity<>(HttpStatus.NO_CONTENT);
+        } catch (FileNotFoundException | NoSuchFileException ex) {
+            return new ResponseEntity<>("File not found: " + ex.getMessage(), HttpStatus.NOT_FOUND);
         } catch (Exception ex) {
-            return new ResponseEntity<>("Error Occurred", HttpStatus.BAD_REQUEST);
+            return new ResponseEntity<>("Error Occurred: " + ex.getMessage(), HttpStatus.BAD_REQUEST);
         }
     }
 
     @GetMapping("/eventloop")
-    public ResponseEntity<String> get(@PathVariable String name) {
-        if (name == null || !Utils.ALPHANUMERIC.matcher(name).matches()) {
-            return new ResponseEntity<>("Invalid Namespace", HttpStatus.BAD_REQUEST);
-        }
-
+    public ResponseEntity<String> get() {
         try {
-            File file = new File("bin/conf.d/" + name + "/EventLoop.json");
+            File file = new File(SystemPropertyUtil.get("egw.config.dir", "bin/conf.d/EventLoop.json"));
             String data = Files.readString(file.toPath());
             return new ResponseEntity<>(data, HttpStatus.OK);
+        } catch (FileNotFoundException | NoSuchFileException ex) {
+            return new ResponseEntity<>("File not found: " + ex.getMessage(), HttpStatus.NOT_FOUND);
         } catch (Exception ex) {
-            return new ResponseEntity<>("Error Occurred", HttpStatus.BAD_REQUEST);
+            return new ResponseEntity<>("Error Occurred: " + ex.getMessage(), HttpStatus.BAD_REQUEST);
         }
     }
 
     @DeleteMapping("/eventloop")
-    public ResponseEntity<String> delete(@PathVariable String name) {
-        if (name == null || !Utils.ALPHANUMERIC.matcher(name).matches()) {
-            return new ResponseEntity<>("Invalid Namespace", HttpStatus.BAD_REQUEST);
-        }
-
+    public ResponseEntity<String> delete() {
         try {
-            File file = new File("bin/conf.d/" + name + "/EventLoop.json");
+            File file = new File(SystemPropertyUtil.get("egw.config.dir", "bin/conf.d/EventLoop.json"));
             file.delete();
             return new ResponseEntity<>(HttpStatus.NO_CONTENT);
         } catch (Exception ex) {
-            return new ResponseEntity<>("Error Occurred", HttpStatus.BAD_REQUEST);
+            return new ResponseEntity<>("Error Occurred: " + ex.getMessage(), HttpStatus.BAD_REQUEST);
         }
     }
 }

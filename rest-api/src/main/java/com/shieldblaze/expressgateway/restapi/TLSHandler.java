@@ -19,6 +19,7 @@ package com.shieldblaze.expressgateway.restapi;
 
 import com.shieldblaze.expressgateway.configuration.tls.TLSConfiguration;
 import com.shieldblaze.expressgateway.configuration.transformer.TLS;
+import io.netty.util.internal.SystemPropertyUtil;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.DeleteMapping;
@@ -30,55 +31,85 @@ import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RestController;
 
 import java.io.File;
+import java.io.FileNotFoundException;
 import java.nio.file.Files;
+import java.nio.file.NoSuchFileException;
 
-@SuppressWarnings("ResultOfMethodCallIgnored")
 @RestController
-@RequestMapping("/{name}/config")
+@RequestMapping("/config")
 public class TLSHandler {
 
-    @PostMapping("/tls")
-    public ResponseEntity<String> create(@PathVariable String name, @RequestBody String data) {
-        if (name == null || !Utils.ALPHANUMERIC.matcher(name).matches()) {
-            return new ResponseEntity<>("Invalid Namespace", HttpStatus.BAD_REQUEST);
-        }
-
+    @PostMapping("/tlsServer")
+    public ResponseEntity<String> createServer(@RequestBody String data) {
         try {
             TLSConfiguration tlsConfiguration = TLS.readDirectly(data);
-            TLS.write(tlsConfiguration, "bin/conf.d/" + name + "/TLS.json");
-            return new ResponseEntity<>(HttpStatus.OK);
+            TLS.write(tlsConfiguration, SystemPropertyUtil.get("egw.config.dir", "bin/conf.d/TLSServer.json"));
+            return new ResponseEntity<>(HttpStatus.NO_CONTENT);
+        } catch (FileNotFoundException | NoSuchFileException ex) {
+            return new ResponseEntity<>("File not found: " + ex.getMessage(), HttpStatus.NOT_FOUND);
         } catch (Exception ex) {
-            return new ResponseEntity<>("Error Occurred", HttpStatus.BAD_REQUEST);
+            return new ResponseEntity<>("Error Occurred: " + ex.getMessage(), HttpStatus.BAD_REQUEST);
         }
     }
 
-    @GetMapping("/tls")
-    public ResponseEntity<String> get(@PathVariable String name) {
-        if (name == null || !Utils.ALPHANUMERIC.matcher(name).matches()) {
-            return new ResponseEntity<>("Invalid Namespace", HttpStatus.BAD_REQUEST);
-        }
-
+    @GetMapping("/tlsServer")
+    public ResponseEntity<String> getServer() {
         try {
-            File file = new File("bin/conf.d/" + name + "/TLS.json");
+            File file = new File(SystemPropertyUtil.get("egw.config.dir", "bin/conf.d/TLSServer.json"));
             String data = Files.readString(file.toPath());
             return new ResponseEntity<>(data, HttpStatus.OK);
+        } catch (FileNotFoundException | NoSuchFileException ex) {
+            return new ResponseEntity<>("File not found: " + ex.getMessage(), HttpStatus.NOT_FOUND);
         } catch (Exception ex) {
-            return new ResponseEntity<>("Error Occurred", HttpStatus.BAD_REQUEST);
+            return new ResponseEntity<>("Error Occurred: " + ex.getMessage(), HttpStatus.BAD_REQUEST);
         }
     }
 
-    @DeleteMapping("/tls")
-    public ResponseEntity<String> delete(@PathVariable String name) {
-        if (name == null || !Utils.ALPHANUMERIC.matcher(name).matches()) {
-            return new ResponseEntity<>("Invalid Namespace", HttpStatus.BAD_REQUEST);
-        }
-
+    @DeleteMapping("/tlsServer")
+    public ResponseEntity<String> deleteServer() {
         try {
-            File file = new File("bin/conf.d/" + name + "/TLS.json");
+            File file = new File(SystemPropertyUtil.get("egw.config.dir", "bin/conf.d/TLSServer.json"));
             file.delete();
             return new ResponseEntity<>(HttpStatus.NO_CONTENT);
         } catch (Exception ex) {
-            return new ResponseEntity<>("Error Occurred", HttpStatus.BAD_REQUEST);
+            return new ResponseEntity<>("Error Occurred: " + ex.getMessage(), HttpStatus.BAD_REQUEST);
+        }
+    }
+
+    @PostMapping("/tlsClient")
+    public ResponseEntity<String> createClient(@RequestBody String data) {
+        try {
+            TLSConfiguration tlsConfiguration = TLS.readDirectly(data);
+            TLS.write(tlsConfiguration, SystemPropertyUtil.get("egw.config.dir", "bin/conf.d/TLSClient.json"));
+            return new ResponseEntity<>(HttpStatus.NO_CONTENT);
+        } catch (FileNotFoundException | NoSuchFileException ex) {
+            return new ResponseEntity<>("File not found: " + ex.getMessage(), HttpStatus.NOT_FOUND);
+        } catch (Exception ex) {
+            return new ResponseEntity<>("Error Occurred: " + ex.getMessage(), HttpStatus.BAD_REQUEST);
+        }
+    }
+
+    @GetMapping("/tlsClient")
+    public ResponseEntity<String> getClient() {
+        try {
+            File file = new File(SystemPropertyUtil.get("egw.config.dir", "bin/conf.d/TLSClient.json"));
+            String data = Files.readString(file.toPath());
+            return new ResponseEntity<>(data, HttpStatus.OK);
+        } catch (FileNotFoundException | NoSuchFileException ex) {
+            return new ResponseEntity<>("File not found: " + ex.getMessage(), HttpStatus.NOT_FOUND);
+        } catch (Exception ex) {
+            return new ResponseEntity<>("Error Occurred: " + ex.getMessage(), HttpStatus.BAD_REQUEST);
+        }
+    }
+
+    @DeleteMapping("/tlsClient")
+    public ResponseEntity<String> deleteClient() {
+        try {
+            File file = new File(SystemPropertyUtil.get("egw.config.dir", "bin/conf.d/TLSClient.json"));
+            file.delete();
+            return new ResponseEntity<>(HttpStatus.NO_CONTENT);
+        } catch (Exception ex) {
+            return new ResponseEntity<>("Error Occurred: " + ex.getMessage(), HttpStatus.BAD_REQUEST);
         }
     }
 }

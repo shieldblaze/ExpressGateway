@@ -36,7 +36,7 @@ public class WebServerCustomizer implements WebServerFactoryCustomizer<Configura
 
         Compression compression = new Compression();
         compression.setEnabled(true);
-        compression.setMinResponseSize(DataSize.ofKilobytes(1));
+        compression.setMinResponseSize(DataSize.ofBytes(500));
         container.setCompression(compression);
 
         Http2 http2 = new Http2();

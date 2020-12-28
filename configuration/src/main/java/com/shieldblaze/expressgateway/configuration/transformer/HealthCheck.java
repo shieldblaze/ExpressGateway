@@ -54,7 +54,7 @@ public class HealthCheck {
 
         return HealthCheckConfigurationBuilder.newBuilder()
                 .withWorkers(json.get("workers").getAsInt())
-                .withTimeInterval(json.get("workers").getAsInt())
+                .withTimeInterval(json.get("timeInterval").getAsInt())
                 .build();
     }
 }
