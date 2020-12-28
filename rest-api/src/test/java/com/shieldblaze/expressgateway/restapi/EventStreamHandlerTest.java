@@ -34,10 +34,10 @@ import java.net.http.HttpClient;
 import java.net.http.HttpRequest;
 import java.net.http.HttpResponse;
 
-import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.*;
 
 @TestMethodOrder(MethodOrderer.OrderAnnotation.class)
-class EventLoopHandlerTest {
+class EventStreamHandlerTest {
 
     final static HttpClient HTTP_CLIENT = HttpClient.newHttpClient();
     static ConfigurableApplicationContext ctx;
@@ -57,12 +57,11 @@ class EventLoopHandlerTest {
     @Order(1)
     void create() throws IOException, InterruptedException {
         JsonObject configJson = new JsonObject();
-        configJson.addProperty("parentWorkers", 32);
-        configJson.addProperty("childWorkers", 128);
+        configJson.addProperty("workers", 32);
 
         HttpRequest httpRequest = HttpRequest.newBuilder()
                 .POST(HttpRequest.BodyPublishers.ofString(configJson.toString()))
-                .uri(URI.create("http://127.0.0.1:9110/config/eventloop"))
+                .uri(URI.create("http://127.0.0.1:9110/config/eventstream"))
                 .build();
 
         HttpResponse<String> httpResponse = HTTP_CLIENT.send(httpRequest, HttpResponse.BodyHandlers.ofString());
@@ -74,15 +73,14 @@ class EventLoopHandlerTest {
     void get() throws IOException, InterruptedException {
         HttpRequest httpRequest = HttpRequest.newBuilder()
                 .GET()
-                .uri(URI.create("http://127.0.0.1:9110/config/eventloop"))
+                .uri(URI.create("http://127.0.0.1:9110/config/eventstream"))
                 .build();
 
         HttpResponse<String> httpResponse = HTTP_CLIENT.send(httpRequest, HttpResponse.BodyHandlers.ofString());
         assertEquals(200, httpResponse.statusCode());
 
         JsonObject jsonObject = JsonParser.parseString(httpResponse.body()).getAsJsonObject();
-        assertEquals("32", jsonObject.get("parentWorkers").getAsString());
-        assertEquals("128", jsonObject.get("childWorkers").getAsString());
+        assertEquals("32", jsonObject.get("workers").getAsString());
     }
 
     @Test
@@ -90,7 +88,7 @@ class EventLoopHandlerTest {
     void delete() throws IOException, InterruptedException {
         HttpRequest httpRequest = HttpRequest.newBuilder()
                 .DELETE()
-                .uri(URI.create("http://127.0.0.1:9110/config/eventloop"))
+                .uri(URI.create("http://127.0.0.1:9110/config/eventstream"))
                 .build();
 
         HttpResponse<String> httpResponse = HTTP_CLIENT.send(httpRequest, HttpResponse.BodyHandlers.ofString());
@@ -102,7 +100,7 @@ class EventLoopHandlerTest {
     void testDelete() throws IOException, InterruptedException {
         HttpRequest httpRequest = HttpRequest.newBuilder()
                 .GET()
-                .uri(URI.create("http://127.0.0.1:9110/config/eventloop"))
+                .uri(URI.create("http://127.0.0.1:9110/config/eventstream"))
                 .build();
 
         HttpResponse<String> httpResponse = HTTP_CLIENT.send(httpRequest, HttpResponse.BodyHandlers.ofString());

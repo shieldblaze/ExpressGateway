@@ -42,7 +42,7 @@ public class EventStreamHandler {
     public ResponseEntity<String> create(@RequestBody String data) {
         try {
             EventStreamConfiguration eventStreamConfiguration = EventStream.readDirectly(data);
-            EventStream.write(eventStreamConfiguration, SystemPropertyUtil.get("egw.config.dir", "../bin/conf.d/") + "EventStream.json");
+            EventStream.write(eventStreamConfiguration, SystemPropertyUtil.get("egw.config.dir", "../bin/conf.d") + "/" + "EventStream.json");
             return new ResponseEntity<>(HttpStatus.NO_CONTENT);
         } catch (FileNotFoundException | NoSuchFileException ex) {
             return new ResponseEntity<>("File not found", HttpStatus.NOT_FOUND);
@@ -54,7 +54,7 @@ public class EventStreamHandler {
     @GetMapping("/eventstream")
     public ResponseEntity<String> get() {
         try {
-            File file = new File(SystemPropertyUtil.get("egw.config.dir", "../bin/conf.d/") + "EventStream.json");
+            File file = new File(SystemPropertyUtil.get("egw.config.dir", "../bin/conf.d") + "/" + "EventStream.json");
             String data = Files.readString(file.toPath());
             return new ResponseEntity<>(data, HttpStatus.OK);
         } catch (FileNotFoundException | NoSuchFileException ex) {
@@ -67,7 +67,7 @@ public class EventStreamHandler {
     @DeleteMapping("/eventstream")
     public ResponseEntity<String> delete() {
         try {
-            File file = new File(SystemPropertyUtil.get("egw.config.dir", "../bin/conf.d/") + "EventStream.json");
+            File file = new File(SystemPropertyUtil.get("egw.config.dir", "../bin/conf.d") + "/" + "EventStream.json");
             file.delete();
             return new ResponseEntity<>(HttpStatus.NO_CONTENT);
         } catch (Exception ex) {
