@@ -43,7 +43,7 @@ public class HealthCheckHandler {
     public ResponseEntity<String> create(@RequestBody String data) {
         try {
             HealthCheckConfiguration healthCheckConfiguration = HealthCheck.readDirectly(data);
-            HealthCheck.write(healthCheckConfiguration, SystemPropertyUtil.get("egw.config.dir", "bin/conf.d/HealthCheck.json"));
+            HealthCheck.write(healthCheckConfiguration, SystemPropertyUtil.get("egw.config.dir", "bin/conf.d/") + "HealthCheck.json");
             return new ResponseEntity<>(HttpStatus.NO_CONTENT);
         } catch (FileNotFoundException | NoSuchFileException ex) {
             return new ResponseEntity<>("File not found", HttpStatus.NOT_FOUND);
@@ -55,7 +55,7 @@ public class HealthCheckHandler {
     @GetMapping("/healthcheck")
     public ResponseEntity<String> get() {
         try {
-            File file = new File(SystemPropertyUtil.get("egw.config.dir", "bin/conf.d/HealthCheck.json"));
+            File file = new File(SystemPropertyUtil.get("egw.config.dir", "bin/conf.d/") + "HealthCheck.json");
             String data = Files.readString(file.toPath());
             return new ResponseEntity<>(data, HttpStatus.OK);
         } catch (FileNotFoundException | NoSuchFileException ex) {
@@ -68,7 +68,7 @@ public class HealthCheckHandler {
     @DeleteMapping("/healthcheck")
     public ResponseEntity<String> delete() {
         try {
-            File file = new File(SystemPropertyUtil.get("egw.config.dir", "bin/conf.d/HealthCheck.json"));
+            File file = new File(SystemPropertyUtil.get("egw.config.dir", "bin/conf.d/") + "HealthCheck.json");
             file.delete();
             return new ResponseEntity<>(HttpStatus.NO_CONTENT);
         } catch (Exception ex) {

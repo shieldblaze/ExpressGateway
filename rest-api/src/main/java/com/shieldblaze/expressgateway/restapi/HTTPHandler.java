@@ -43,7 +43,7 @@ public class HTTPHandler {
     public ResponseEntity<String> create(@RequestBody String data) {
         try {
             HTTPConfiguration httpConfiguration = HTTP.readDirectly(data);
-            HTTP.write(httpConfiguration, SystemPropertyUtil.get("egw.config.dir", "bin/conf.d/HTTP.json"));
+            HTTP.write(httpConfiguration, SystemPropertyUtil.get("egw.config.dir", "bin/conf.d/") + "HTTP.json");
             return new ResponseEntity<>(HttpStatus.NO_CONTENT);
         } catch (FileNotFoundException | NoSuchFileException ex) {
             return new ResponseEntity<>("File not found", HttpStatus.NOT_FOUND);
@@ -55,7 +55,7 @@ public class HTTPHandler {
     @GetMapping("/http")
     public ResponseEntity<String> get() {
         try {
-            File file = new File(SystemPropertyUtil.get("egw.config.dir", "bin/conf.d/HTTP.json"));
+            File file = new File(SystemPropertyUtil.get("egw.config.dir", "bin/conf.d/") + "HTTP.json");
             String data = Files.readString(file.toPath());
             return new ResponseEntity<>(data, HttpStatus.OK);
         } catch (FileNotFoundException | NoSuchFileException ex) {
@@ -68,7 +68,7 @@ public class HTTPHandler {
     @DeleteMapping("/http")
     public ResponseEntity<String> delete() {
         try {
-            File file = new File(SystemPropertyUtil.get("egw.config.dir", "bin/conf.d/HTTP.json"));
+            File file = new File(SystemPropertyUtil.get("egw.config.dir", "bin/conf.d/") + "HTTP.json");
             file.delete();
             return new ResponseEntity<>(HttpStatus.NO_CONTENT);
         } catch (Exception ex) {
