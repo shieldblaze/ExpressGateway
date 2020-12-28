@@ -48,7 +48,7 @@ public class HTTPHandler {
         } catch (FileNotFoundException | NoSuchFileException ex) {
             return new ResponseEntity<>("File not found", HttpStatus.NOT_FOUND);
         } catch (Exception ex) {
-            return new ResponseEntity<>("Error Occurred: " + ex.getMessage(), HttpStatus.BAD_REQUEST);
+            return new ResponseEntity<>("Error Occurred: " + ex.toString(), HttpStatus.BAD_REQUEST);
         }
     }
 
@@ -61,7 +61,7 @@ public class HTTPHandler {
         } catch (FileNotFoundException | NoSuchFileException ex) {
             return new ResponseEntity<>("File not found", HttpStatus.NOT_FOUND);
         } catch (Exception ex) {
-            return new ResponseEntity<>("Error Occurred: " + ex.getMessage(), HttpStatus.BAD_REQUEST);
+            return new ResponseEntity<>("Error Occurred: " + ex.toString(), HttpStatus.BAD_REQUEST);
         }
     }
 
@@ -72,7 +72,7 @@ public class HTTPHandler {
             file.delete();
             return new ResponseEntity<>(HttpStatus.NO_CONTENT);
         } catch (Exception ex) {
-            return new ResponseEntity<>("Error Occurred: " + ex.getMessage(), HttpStatus.BAD_REQUEST);
+            return new ResponseEntity<>("Error Occurred: " + ex.toString(), HttpStatus.BAD_REQUEST);
         }
     }
 }
