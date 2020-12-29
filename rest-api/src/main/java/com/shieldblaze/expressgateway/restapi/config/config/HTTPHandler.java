@@ -15,10 +15,10 @@
  * You should have received a copy of the GNU General Public License
  * along with ShieldBlaze ExpressGateway.  If not, see <https://www.gnu.org/licenses/>.
  */
-package com.shieldblaze.expressgateway.restapi;
+package com.shieldblaze.expressgateway.restapi.config.config;
 
-import com.shieldblaze.expressgateway.configuration.transformer.Transport;
-import com.shieldblaze.expressgateway.configuration.transport.TransportConfiguration;
+import com.shieldblaze.expressgateway.configuration.http.HTTPConfiguration;
+import com.shieldblaze.expressgateway.configuration.transformer.HTTP;
 import io.netty.util.internal.SystemPropertyUtil;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
@@ -36,13 +36,13 @@ import java.nio.file.NoSuchFileException;
 
 @RestController
 @RequestMapping("/config")
-public class TransportHandler {
+public class HTTPHandler {
 
-    @PostMapping("/transport")
-    public ResponseEntity<String> createTransport(@RequestBody String data) {
+    @PostMapping("/http")
+    public ResponseEntity<String> create(@RequestBody String data) {
         try {
-            TransportConfiguration transportConfiguration = Transport.readDirectly(data);
-            Transport.write(transportConfiguration, SystemPropertyUtil.get("egw.config.dir", "../bin/conf.d/") + "Transport.json");
+            HTTPConfiguration httpConfiguration = HTTP.readDirectly(data);
+            HTTP.write(httpConfiguration, SystemPropertyUtil.get("egw.config.dir", "../bin/conf.d/") + "HTTP.json");
             return new ResponseEntity<>(HttpStatus.NO_CONTENT);
         } catch (FileNotFoundException | NoSuchFileException ex) {
             return new ResponseEntity<>("File not found", HttpStatus.NOT_FOUND);
@@ -51,10 +51,10 @@ public class TransportHandler {
         }
     }
 
-    @GetMapping("/transport")
-    public ResponseEntity<String> getTransport() {
+    @GetMapping("/http")
+    public ResponseEntity<String> get() {
         try {
-            File file = new File(SystemPropertyUtil.get("egw.config.dir", "../bin/conf.d/") + "Transport.json");
+            File file = new File(SystemPropertyUtil.get("egw.config.dir", "../bin/conf.d/") + "HTTP.json");
             String data = Files.readString(file.toPath());
             return new ResponseEntity<>(data, HttpStatus.OK);
         } catch (FileNotFoundException | NoSuchFileException ex) {
@@ -64,10 +64,10 @@ public class TransportHandler {
         }
     }
 
-    @DeleteMapping("/transport")
-    public ResponseEntity<String> deleteTransport() {
+    @DeleteMapping("/http")
+    public ResponseEntity<String> delete() {
         try {
-            File file = new File(SystemPropertyUtil.get("egw.config.dir", "../bin/conf.d/") + "Transport.json");
+            File file = new File(SystemPropertyUtil.get("egw.config.dir", "../bin/conf.d/") + "HTTP.json");
             file.delete();
             return new ResponseEntity<>(HttpStatus.NO_CONTENT);
         } catch (Exception ex) {

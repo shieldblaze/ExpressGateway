@@ -15,10 +15,10 @@
  * You should have received a copy of the GNU General Public License
  * along with ShieldBlaze ExpressGateway.  If not, see <https://www.gnu.org/licenses/>.
  */
-package com.shieldblaze.expressgateway.restapi;
+package com.shieldblaze.expressgateway.restapi.config.config;
 
-import com.shieldblaze.expressgateway.configuration.http.HTTPConfiguration;
-import com.shieldblaze.expressgateway.configuration.transformer.HTTP;
+import com.shieldblaze.expressgateway.configuration.eventloop.EventLoopConfiguration;
+import com.shieldblaze.expressgateway.configuration.transformer.EventLoop;
 import io.netty.util.internal.SystemPropertyUtil;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
@@ -36,13 +36,13 @@ import java.nio.file.NoSuchFileException;
 
 @RestController
 @RequestMapping("/config")
-public class HTTPHandler {
+public class EventLoopHandler {
 
-    @PostMapping("/http")
+    @PostMapping("/eventloop")
     public ResponseEntity<String> create(@RequestBody String data) {
         try {
-            HTTPConfiguration httpConfiguration = HTTP.readDirectly(data);
-            HTTP.write(httpConfiguration, SystemPropertyUtil.get("egw.config.dir", "../bin/conf.d/") + "HTTP.json");
+            EventLoopConfiguration eventLoopConfiguration = EventLoop.readDirectly(data);
+            EventLoop.write(eventLoopConfiguration, SystemPropertyUtil.get("egw.config.dir", "../bin/conf.d") + "/" + "EventLoop.json");
             return new ResponseEntity<>(HttpStatus.NO_CONTENT);
         } catch (FileNotFoundException | NoSuchFileException ex) {
             return new ResponseEntity<>("File not found", HttpStatus.NOT_FOUND);
@@ -51,10 +51,10 @@ public class HTTPHandler {
         }
     }
 
-    @GetMapping("/http")
+    @GetMapping("/eventloop")
     public ResponseEntity<String> get() {
         try {
-            File file = new File(SystemPropertyUtil.get("egw.config.dir", "../bin/conf.d/") + "HTTP.json");
+            File file = new File(SystemPropertyUtil.get("egw.config.dir", "../bin/conf.d") + "/" + "EventLoop.json");
             String data = Files.readString(file.toPath());
             return new ResponseEntity<>(data, HttpStatus.OK);
         } catch (FileNotFoundException | NoSuchFileException ex) {
@@ -64,10 +64,10 @@ public class HTTPHandler {
         }
     }
 
-    @DeleteMapping("/http")
+    @DeleteMapping("/eventloop")
     public ResponseEntity<String> delete() {
         try {
-            File file = new File(SystemPropertyUtil.get("egw.config.dir", "../bin/conf.d/") + "HTTP.json");
+            File file = new File(SystemPropertyUtil.get("egw.config.dir", "../bin/conf.d") + "/" + "EventLoop.json");
             file.delete();
             return new ResponseEntity<>(HttpStatus.NO_CONTENT);
         } catch (Exception ex) {

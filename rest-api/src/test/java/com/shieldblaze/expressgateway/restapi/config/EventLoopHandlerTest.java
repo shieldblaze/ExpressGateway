@@ -15,11 +15,11 @@
  * You should have received a copy of the GNU General Public License
  * along with ShieldBlaze ExpressGateway.  If not, see <https://www.gnu.org/licenses/>.
  */
-package com.shieldblaze.expressgateway.restapi;
+package com.shieldblaze.expressgateway.restapi.config;
 
-import com.google.gson.JsonArray;
 import com.google.gson.JsonObject;
 import com.google.gson.JsonParser;
+import com.shieldblaze.expressgateway.restapi.config.config.Server;
 import org.junit.jupiter.api.AfterAll;
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.MethodOrderer;
@@ -38,7 +38,8 @@ import java.net.http.HttpResponse;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 
 @TestMethodOrder(MethodOrderer.OrderAnnotation.class)
-class TransportHandlerTest {
+class EventLoopHandlerTest {
+
     final static HttpClient HTTP_CLIENT = HttpClient.newHttpClient();
     static ConfigurableApplicationContext ctx;
 
@@ -57,21 +58,12 @@ class TransportHandlerTest {
     @Order(1)
     void create() throws IOException, InterruptedException {
         JsonObject configJson = new JsonObject();
-        configJson.addProperty("transportType", "NIO");
-        configJson.addProperty("receiveBufferAllocationType", "FIXED");
-        JsonArray jsonArray = new JsonArray();
-        jsonArray.add(9001);
-        configJson.add("receiveBufferSizes", jsonArray);
-        configJson.addProperty("tcpConnectionBacklog", 100000);
-        configJson.addProperty("socketReceiveBufferSize", 2147483647);
-        configJson.addProperty("socketSendBufferSize", 2147483647);
-        configJson.addProperty("tcpFastOpenMaximumPendingRequests", 100000);
-        configJson.addProperty("backendConnectTimeout", 2147483647);
-        configJson.addProperty("connectionIdleTimeout", 2147483647);
+        configJson.addProperty("parentWorkers", 32);
+        configJson.addProperty("childWorkers", 128);
 
         HttpRequest httpRequest = HttpRequest.newBuilder()
                 .POST(HttpRequest.BodyPublishers.ofString(configJson.toString()))
-                .uri(URI.create("http://127.0.0.1:9110/config/transport"))
+                .uri(URI.create("http://127.0.0.1:9110/config/eventloop"))
                 .build();
 
         HttpResponse<String> httpResponse = HTTP_CLIENT.send(httpRequest, HttpResponse.BodyHandlers.ofString());
@@ -83,22 +75,15 @@ class TransportHandlerTest {
     void get() throws IOException, InterruptedException {
         HttpRequest httpRequest = HttpRequest.newBuilder()
                 .GET()
-                .uri(URI.create("http://127.0.0.1:9110/config/transport"))
+                .uri(URI.create("http://127.0.0.1:9110/config/eventloop"))
                 .build();
 
         HttpResponse<String> httpResponse = HTTP_CLIENT.send(httpRequest, HttpResponse.BodyHandlers.ofString());
         assertEquals(200, httpResponse.statusCode());
 
         JsonObject jsonObject = JsonParser.parseString(httpResponse.body()).getAsJsonObject();
-        assertEquals("NIO", jsonObject.get("transportType").getAsString());
-        assertEquals("FIXED", jsonObject.get("receiveBufferAllocationType").getAsString());
-        assertEquals(9001, jsonObject.get("receiveBufferSizes").getAsJsonArray().get(0).getAsInt());
-        assertEquals(100000, jsonObject.get("tcpConnectionBacklog").getAsInt());
-        assertEquals(2147483647, jsonObject.get("socketReceiveBufferSize").getAsInt());
-        assertEquals(2147483647, jsonObject.get("socketSendBufferSize").getAsInt());
-        assertEquals(100000, jsonObject.get("tcpFastOpenMaximumPendingRequests").getAsInt());
-        assertEquals(2147483647, jsonObject.get("backendConnectTimeout").getAsInt());
-        assertEquals(2147483647, jsonObject.get("connectionIdleTimeout").getAsInt());
+        assertEquals("32", jsonObject.get("parentWorkers").getAsString());
+        assertEquals("128", jsonObject.get("childWorkers").getAsString());
     }
 
     @Test
@@ -106,7 +91,7 @@ class TransportHandlerTest {
     void delete() throws IOException, InterruptedException {
         HttpRequest httpRequest = HttpRequest.newBuilder()
                 .DELETE()
-                .uri(URI.create("http://127.0.0.1:9110/config/transport"))
+                .uri(URI.create("http://127.0.0.1:9110/config/eventloop"))
                 .build();
 
         HttpResponse<String> httpResponse = HTTP_CLIENT.send(httpRequest, HttpResponse.BodyHandlers.ofString());
@@ -118,7 +103,7 @@ class TransportHandlerTest {
     void testDelete() throws IOException, InterruptedException {
         HttpRequest httpRequest = HttpRequest.newBuilder()
                 .GET()
-                .uri(URI.create("http://127.0.0.1:9110/config/transport"))
+                .uri(URI.create("http://127.0.0.1:9110/config/eventloop"))
                 .build();
 
         HttpResponse<String> httpResponse = HTTP_CLIENT.send(httpRequest, HttpResponse.BodyHandlers.ofString());

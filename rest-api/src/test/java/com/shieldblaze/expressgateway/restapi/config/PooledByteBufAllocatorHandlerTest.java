@@ -15,10 +15,11 @@
  * You should have received a copy of the GNU General Public License
  * along with ShieldBlaze ExpressGateway.  If not, see <https://www.gnu.org/licenses/>.
  */
-package com.shieldblaze.expressgateway.restapi;
+package com.shieldblaze.expressgateway.restapi.config;
 
 import com.google.gson.JsonObject;
 import com.google.gson.JsonParser;
+import com.shieldblaze.expressgateway.restapi.config.config.Server;
 import org.junit.jupiter.api.AfterAll;
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.MethodOrderer;
@@ -34,10 +35,10 @@ import java.net.http.HttpClient;
 import java.net.http.HttpRequest;
 import java.net.http.HttpResponse;
 
-import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.*;
 
 @TestMethodOrder(MethodOrderer.OrderAnnotation.class)
-class EventLoopHandlerTest {
+class PooledByteBufAllocatorHandlerTest {
 
     final static HttpClient HTTP_CLIENT = HttpClient.newHttpClient();
     static ConfigurableApplicationContext ctx;
@@ -57,12 +58,19 @@ class EventLoopHandlerTest {
     @Order(1)
     void create() throws IOException, InterruptedException {
         JsonObject configJson = new JsonObject();
-        configJson.addProperty("parentWorkers", 32);
-        configJson.addProperty("childWorkers", 128);
+        configJson.addProperty("preferDirect", true);
+        configJson.addProperty("heapArena", 12);
+        configJson.addProperty("directArena", 12);
+        configJson.addProperty("pageSize", 16384);
+        configJson.addProperty("maxOrder", 11);
+        configJson.addProperty("smallCacheSize", 256);
+        configJson.addProperty("normalCacheSize", 64);
+        configJson.addProperty("useCacheForAllThreads", true);
+        configJson.addProperty("directMemoryCacheAlignment", 0);
 
         HttpRequest httpRequest = HttpRequest.newBuilder()
                 .POST(HttpRequest.BodyPublishers.ofString(configJson.toString()))
-                .uri(URI.create("http://127.0.0.1:9110/config/eventloop"))
+                .uri(URI.create("http://127.0.0.1:9110/config/bufAlloc"))
                 .build();
 
         HttpResponse<String> httpResponse = HTTP_CLIENT.send(httpRequest, HttpResponse.BodyHandlers.ofString());
@@ -74,15 +82,22 @@ class EventLoopHandlerTest {
     void get() throws IOException, InterruptedException {
         HttpRequest httpRequest = HttpRequest.newBuilder()
                 .GET()
-                .uri(URI.create("http://127.0.0.1:9110/config/eventloop"))
+                .uri(URI.create("http://127.0.0.1:9110/config/bufAlloc"))
                 .build();
 
         HttpResponse<String> httpResponse = HTTP_CLIENT.send(httpRequest, HttpResponse.BodyHandlers.ofString());
         assertEquals(200, httpResponse.statusCode());
 
         JsonObject jsonObject = JsonParser.parseString(httpResponse.body()).getAsJsonObject();
-        assertEquals("32", jsonObject.get("parentWorkers").getAsString());
-        assertEquals("128", jsonObject.get("childWorkers").getAsString());
+        assertTrue(jsonObject.get("preferDirect").getAsBoolean());
+        assertEquals(12, jsonObject.get("heapArena").getAsInt());
+        assertEquals(12, jsonObject.get("directArena").getAsInt());
+        assertEquals(16384, jsonObject.get("pageSize").getAsInt());
+        assertEquals(11, jsonObject.get("maxOrder").getAsInt());
+        assertEquals(256, jsonObject.get("smallCacheSize").getAsInt());
+        assertEquals(64, jsonObject.get("normalCacheSize").getAsInt());
+        assertTrue(jsonObject.get("useCacheForAllThreads").getAsBoolean());
+        assertEquals(0, jsonObject.get("directMemoryCacheAlignment").getAsInt());
     }
 
     @Test
@@ -90,7 +105,7 @@ class EventLoopHandlerTest {
     void delete() throws IOException, InterruptedException {
         HttpRequest httpRequest = HttpRequest.newBuilder()
                 .DELETE()
-                .uri(URI.create("http://127.0.0.1:9110/config/eventloop"))
+                .uri(URI.create("http://127.0.0.1:9110/config/bufAlloc"))
                 .build();
 
         HttpResponse<String> httpResponse = HTTP_CLIENT.send(httpRequest, HttpResponse.BodyHandlers.ofString());
@@ -102,7 +117,7 @@ class EventLoopHandlerTest {
     void testDelete() throws IOException, InterruptedException {
         HttpRequest httpRequest = HttpRequest.newBuilder()
                 .GET()
-                .uri(URI.create("http://127.0.0.1:9110/config/eventloop"))
+                .uri(URI.create("http://127.0.0.1:9110/config/bufAlloc"))
                 .build();
 
         HttpResponse<String> httpResponse = HTTP_CLIENT.send(httpRequest, HttpResponse.BodyHandlers.ofString());

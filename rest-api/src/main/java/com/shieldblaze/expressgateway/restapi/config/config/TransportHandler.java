@@ -15,10 +15,10 @@
  * You should have received a copy of the GNU General Public License
  * along with ShieldBlaze ExpressGateway.  If not, see <https://www.gnu.org/licenses/>.
  */
-package com.shieldblaze.expressgateway.restapi;
+package com.shieldblaze.expressgateway.restapi.config.config;
 
-import com.shieldblaze.expressgateway.configuration.healthcheck.HealthCheckConfiguration;
-import com.shieldblaze.expressgateway.configuration.transformer.HealthCheck;
+import com.shieldblaze.expressgateway.configuration.transformer.Transport;
+import com.shieldblaze.expressgateway.configuration.transport.TransportConfiguration;
 import io.netty.util.internal.SystemPropertyUtil;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
@@ -36,13 +36,13 @@ import java.nio.file.NoSuchFileException;
 
 @RestController
 @RequestMapping("/config")
-public class HealthCheckHandler {
+public class TransportHandler {
 
-    @PostMapping("/healthcheck")
-    public ResponseEntity<String> create(@RequestBody String data) {
+    @PostMapping("/transport")
+    public ResponseEntity<String> createTransport(@RequestBody String data) {
         try {
-            HealthCheckConfiguration healthCheckConfiguration = HealthCheck.readDirectly(data);
-            HealthCheck.write(healthCheckConfiguration, SystemPropertyUtil.get("egw.config.dir", "../bin/conf.d/") + "HealthCheck.json");
+            TransportConfiguration transportConfiguration = Transport.readDirectly(data);
+            Transport.write(transportConfiguration, SystemPropertyUtil.get("egw.config.dir", "../bin/conf.d/") + "Transport.json");
             return new ResponseEntity<>(HttpStatus.NO_CONTENT);
         } catch (FileNotFoundException | NoSuchFileException ex) {
             return new ResponseEntity<>("File not found", HttpStatus.NOT_FOUND);
@@ -51,10 +51,10 @@ public class HealthCheckHandler {
         }
     }
 
-    @GetMapping("/healthcheck")
-    public ResponseEntity<String> get() {
+    @GetMapping("/transport")
+    public ResponseEntity<String> getTransport() {
         try {
-            File file = new File(SystemPropertyUtil.get("egw.config.dir", "../bin/conf.d/") + "HealthCheck.json");
+            File file = new File(SystemPropertyUtil.get("egw.config.dir", "../bin/conf.d/") + "Transport.json");
             String data = Files.readString(file.toPath());
             return new ResponseEntity<>(data, HttpStatus.OK);
         } catch (FileNotFoundException | NoSuchFileException ex) {
@@ -64,10 +64,10 @@ public class HealthCheckHandler {
         }
     }
 
-    @DeleteMapping("/healthcheck")
-    public ResponseEntity<String> delete() {
+    @DeleteMapping("/transport")
+    public ResponseEntity<String> deleteTransport() {
         try {
-            File file = new File(SystemPropertyUtil.get("egw.config.dir", "../bin/conf.d/") + "HealthCheck.json");
+            File file = new File(SystemPropertyUtil.get("egw.config.dir", "../bin/conf.d/") + "Transport.json");
             file.delete();
             return new ResponseEntity<>(HttpStatus.NO_CONTENT);
         } catch (Exception ex) {
