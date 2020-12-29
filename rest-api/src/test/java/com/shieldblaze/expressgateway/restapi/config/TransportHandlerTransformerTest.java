@@ -100,28 +100,4 @@ class TransportHandlerTransformerTest {
         assertEquals(2147483647, jsonObject.get("backendConnectTimeout").getAsInt());
         assertEquals(2147483647, jsonObject.get("connectionIdleTimeout").getAsInt());
     }
-
-    @Test
-    @Order(3)
-    void delete() throws IOException, InterruptedException {
-        HttpRequest httpRequest = HttpRequest.newBuilder()
-                .DELETE()
-                .uri(URI.create("http://127.0.0.1:9110/config/transport"))
-                .build();
-
-        HttpResponse<String> httpResponse = HTTP_CLIENT.send(httpRequest, HttpResponse.BodyHandlers.ofString());
-        assertEquals(204, httpResponse.statusCode());
-    }
-
-    @Test
-    @Order(4)
-    void testDelete() throws IOException, InterruptedException {
-        HttpRequest httpRequest = HttpRequest.newBuilder()
-                .GET()
-                .uri(URI.create("http://127.0.0.1:9110/config/transport"))
-                .build();
-
-        HttpResponse<String> httpResponse = HTTP_CLIENT.send(httpRequest, HttpResponse.BodyHandlers.ofString());
-        assertEquals(404, httpResponse.statusCode());
-    }
 }

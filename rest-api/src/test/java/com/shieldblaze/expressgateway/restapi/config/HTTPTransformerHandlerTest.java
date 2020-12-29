@@ -104,28 +104,4 @@ class HTTPTransformerHandlerTest {
         assertEquals(6, jsonObject.get("deflateCompressionLevel").getAsInt());
         assertEquals(4, jsonObject.get("brotliCompressionLevel").getAsInt());
     }
-
-    @Test
-    @Order(3)
-    void delete() throws IOException, InterruptedException {
-        HttpRequest httpRequest = HttpRequest.newBuilder()
-                .DELETE()
-                .uri(URI.create("http://127.0.0.1:9110/config/http"))
-                .build();
-
-        HttpResponse<String> httpResponse = HTTP_CLIENT.send(httpRequest, HttpResponse.BodyHandlers.ofString());
-        assertEquals(204, httpResponse.statusCode());
-    }
-
-    @Test
-    @Order(4)
-    void testDelete() throws IOException, InterruptedException {
-        HttpRequest httpRequest = HttpRequest.newBuilder()
-                .GET()
-                .uri(URI.create("http://127.0.0.1:9110/config/http"))
-                .build();
-
-        HttpResponse<String> httpResponse = HTTP_CLIENT.send(httpRequest, HttpResponse.BodyHandlers.ofString());
-        assertEquals(404, httpResponse.statusCode());
-    }
 }

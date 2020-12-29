@@ -85,28 +85,4 @@ class HealthCheckTransformerHandlerTest {
         assertEquals("32", jsonObject.get("workers").getAsString());
         assertEquals(1000, jsonObject.get("timeInterval").getAsInt());
     }
-
-    @Test
-    @Order(3)
-    void delete() throws IOException, InterruptedException {
-        HttpRequest httpRequest = HttpRequest.newBuilder()
-                .DELETE()
-                .uri(URI.create("http://127.0.0.1:9110/config/healthcheck"))
-                .build();
-
-        HttpResponse<String> httpResponse = HTTP_CLIENT.send(httpRequest, HttpResponse.BodyHandlers.ofString());
-        assertEquals(204, httpResponse.statusCode());
-    }
-
-    @Test
-    @Order(4)
-    void testDelete() throws IOException, InterruptedException {
-        HttpRequest httpRequest = HttpRequest.newBuilder()
-                .GET()
-                .uri(URI.create("http://127.0.0.1:9110/config/healthcheck"))
-                .build();
-
-        HttpResponse<String> httpResponse = HTTP_CLIENT.send(httpRequest, HttpResponse.BodyHandlers.ofString());
-        assertEquals(404, httpResponse.statusCode());
-    }
 }

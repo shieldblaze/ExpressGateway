@@ -135,28 +135,4 @@ class TLSHandlerTransformerTest {
         assertEquals(60, jsonObject.get("sessionCacheSize").getAsInt());
         assertTrue(jsonObject.get("acceptAllCerts").getAsBoolean());
     }
-
-    @Test
-    @Order(3)
-    void deleteServer() throws IOException, InterruptedException {
-        HttpRequest httpRequest = HttpRequest.newBuilder()
-                .DELETE()
-                .uri(URI.create("http://127.0.0.1:9110/config/tlsServer"))
-                .build();
-
-        HttpResponse<String> httpResponse = HTTP_CLIENT.send(httpRequest, HttpResponse.BodyHandlers.ofString());
-        assertEquals(204, httpResponse.statusCode());
-    }
-
-    @Test
-    @Order(4)
-    void testDeleteServer() throws IOException, InterruptedException {
-        HttpRequest httpRequest = HttpRequest.newBuilder()
-                .GET()
-                .uri(URI.create("http://127.0.0.1:9110/config/tlsServer"))
-                .build();
-
-        HttpResponse<String> httpResponse = HTTP_CLIENT.send(httpRequest, HttpResponse.BodyHandlers.ofString());
-        assertEquals(404, httpResponse.statusCode());
-    }
 }
