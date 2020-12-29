@@ -15,7 +15,7 @@
  * You should have received a copy of the GNU General Public License
  * along with ShieldBlaze ExpressGateway.  If not, see <https://www.gnu.org/licenses/>.
  */
-package com.shieldblaze.expressgateway.restapi.config.config;
+package com.shieldblaze.expressgateway.restapi.config;
 
 import io.netty.util.internal.SystemPropertyUtil;
 import org.apache.logging.log4j.LogManager;
