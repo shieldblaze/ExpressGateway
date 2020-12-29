@@ -15,6 +15,7 @@
  * You should have received a copy of the GNU General Public License
  * along with ShieldBlaze ExpressGateway.  If not, see <https://www.gnu.org/licenses/>.
  */
+
 package com.shieldblaze.expressgateway.restapi.config;
 
 import com.google.gson.JsonObject;
@@ -34,10 +35,10 @@ import java.net.http.HttpClient;
 import java.net.http.HttpRequest;
 import java.net.http.HttpResponse;
 
-import static org.junit.jupiter.api.Assertions.*;
+import static org.junit.jupiter.api.Assertions.assertEquals;
 
 @TestMethodOrder(MethodOrderer.OrderAnnotation.class)
-class EventStreamHandlerTest {
+class HealthCheckTransformerHandlerTest {
 
     final static HttpClient HTTP_CLIENT = HttpClient.newHttpClient();
     static ConfigurableApplicationContext ctx;
@@ -58,10 +59,11 @@ class EventStreamHandlerTest {
     void create() throws IOException, InterruptedException {
         JsonObject configJson = new JsonObject();
         configJson.addProperty("workers", 32);
+        configJson.addProperty("timeInterval", 1000);
 
         HttpRequest httpRequest = HttpRequest.newBuilder()
                 .POST(HttpRequest.BodyPublishers.ofString(configJson.toString()))
-                .uri(URI.create("http://127.0.0.1:9110/config/eventstream"))
+                .uri(URI.create("http://127.0.0.1:9110/config/healthcheck"))
                 .build();
 
         HttpResponse<String> httpResponse = HTTP_CLIENT.send(httpRequest, HttpResponse.BodyHandlers.ofString());
@@ -73,7 +75,7 @@ class EventStreamHandlerTest {
     void get() throws IOException, InterruptedException {
         HttpRequest httpRequest = HttpRequest.newBuilder()
                 .GET()
-                .uri(URI.create("http://127.0.0.1:9110/config/eventstream"))
+                .uri(URI.create("http://127.0.0.1:9110/config/healthcheck"))
                 .build();
 
         HttpResponse<String> httpResponse = HTTP_CLIENT.send(httpRequest, HttpResponse.BodyHandlers.ofString());
@@ -81,6 +83,7 @@ class EventStreamHandlerTest {
 
         JsonObject jsonObject = JsonParser.parseString(httpResponse.body()).getAsJsonObject();
         assertEquals("32", jsonObject.get("workers").getAsString());
+        assertEquals(1000, jsonObject.get("timeInterval").getAsInt());
     }
 
     @Test
@@ -88,7 +91,7 @@ class EventStreamHandlerTest {
     void delete() throws IOException, InterruptedException {
         HttpRequest httpRequest = HttpRequest.newBuilder()
                 .DELETE()
-                .uri(URI.create("http://127.0.0.1:9110/config/eventstream"))
+                .uri(URI.create("http://127.0.0.1:9110/config/healthcheck"))
                 .build();
 
         HttpResponse<String> httpResponse = HTTP_CLIENT.send(httpRequest, HttpResponse.BodyHandlers.ofString());
@@ -100,7 +103,7 @@ class EventStreamHandlerTest {
     void testDelete() throws IOException, InterruptedException {
         HttpRequest httpRequest = HttpRequest.newBuilder()
                 .GET()
-                .uri(URI.create("http://127.0.0.1:9110/config/eventstream"))
+                .uri(URI.create("http://127.0.0.1:9110/config/healthcheck"))
                 .build();
 
         HttpResponse<String> httpResponse = HTTP_CLIENT.send(httpRequest, HttpResponse.BodyHandlers.ofString());

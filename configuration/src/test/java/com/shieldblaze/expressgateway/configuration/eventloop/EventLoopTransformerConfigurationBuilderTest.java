@@ -22,7 +22,7 @@ import org.junit.jupiter.api.Test;
 import static org.junit.jupiter.api.Assertions.assertDoesNotThrow;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 
-final class EventLoopConfigurationBuilderTest {
+final class EventLoopTransformerConfigurationBuilderTest {
 
     @Test
     void build() {

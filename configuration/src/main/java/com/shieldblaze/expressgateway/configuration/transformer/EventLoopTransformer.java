@@ -19,40 +19,45 @@ package com.shieldblaze.expressgateway.configuration.transformer;
 
 import com.google.gson.JsonObject;
 import com.google.gson.JsonParser;
-import com.shieldblaze.expressgateway.configuration.healthcheck.HealthCheckConfiguration;
-import com.shieldblaze.expressgateway.configuration.healthcheck.HealthCheckConfigurationBuilder;
+import com.shieldblaze.expressgateway.configuration.eventloop.EventLoopConfiguration;
+import com.shieldblaze.expressgateway.configuration.eventloop.EventLoopConfigurationBuilder;
+import io.netty.util.internal.SystemPropertyUtil;
 
 import java.io.File;
 import java.io.FileWriter;
 import java.io.IOException;
 import java.nio.file.Files;
 
-public class HealthCheck {
+public final class EventLoopTransformer {
 
-    private HealthCheck() {
+    private static final File FILE = new File(SystemPropertyUtil.get("egw.config.dir", "../bin/conf.d") + "/" + "EventLoop.json");
+
+    private EventLoopTransformer() {
         // Prevent outside initialization
     }
 
-    public static boolean write(HealthCheckConfiguration configuration, String path) throws IOException {
+    public static void write(EventLoopConfiguration configuration) throws IOException {
         String jsonString = GSON.INSTANCE.toJson(configuration);
 
-        try (FileWriter fileWriter = new FileWriter(path)) {
+        try (FileWriter fileWriter = new FileWriter(FILE)) {
             fileWriter.write(jsonString);
         }
-
-        return true;
     }
 
-    public static HealthCheckConfiguration readFile(String path) throws IOException {
-        return readDirectly(Files.readString(new File(path).toPath()));
+    public static String getFileData() throws IOException {
+        return Files.readString(FILE.toPath());
     }
 
-    public static HealthCheckConfiguration readDirectly(String data) {
+    public static EventLoopConfiguration readFile() throws IOException {
+        return readDirectly(getFileData());
+    }
+
+    public static EventLoopConfiguration readDirectly(String data) {
         JsonObject json = JsonParser.parseString(data).getAsJsonObject();
 
-        return HealthCheckConfigurationBuilder.newBuilder()
-                .withWorkers(json.get("workers").getAsInt())
-                .withTimeInterval(json.get("timeInterval").getAsInt())
+        return EventLoopConfigurationBuilder.newBuilder()
+                .withParentWorkers(json.get("parentWorkers").getAsInt())
+                .withChildWorkers(json.get("childWorkers").getAsInt())
                 .build();
     }
 }

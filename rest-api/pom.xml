@@ -67,6 +67,32 @@
             <artifactId>configuration</artifactId>
             <version>0.0.1-a</version>
         </dependency>
+
+        <dependency>
+            <groupId>com.shieldblaze.expressgateway</groupId>
+            <artifactId>backend</artifactId>
+            <version>0.0.1-a</version>
+        </dependency>
+        <dependency>
+            <groupId>com.shieldblaze.expressgateway</groupId>
+            <artifactId>core</artifactId>
+            <version>0.0.1-a</version>
+        </dependency>
+        <dependency>
+            <groupId>com.shieldblaze.expressgateway</groupId>
+            <artifactId>protocol-tcp</artifactId>
+            <version>0.0.1-a</version>
+        </dependency>
+        <dependency>
+            <groupId>com.shieldblaze.expressgateway</groupId>
+            <artifactId>protocol-udp</artifactId>
+            <version>0.0.1-a</version>
+        </dependency>
+        <dependency>
+            <groupId>com.shieldblaze.expressgateway</groupId>
+            <artifactId>protocol-http</artifactId>
+            <version>0.0.1-a</version>
+        </dependency>
     </dependencies>
 
 </project>

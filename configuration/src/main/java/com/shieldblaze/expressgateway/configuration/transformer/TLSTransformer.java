@@ -27,6 +27,7 @@ import com.shieldblaze.expressgateway.configuration.tls.Protocol;
 import com.shieldblaze.expressgateway.configuration.tls.TLSConfiguration;
 import com.shieldblaze.expressgateway.configuration.tls.TLSConfigurationBuilder;
 import com.shieldblaze.expressgateway.configuration.tls.TLSServerMapping;
+import io.netty.util.internal.SystemPropertyUtil;
 
 import java.io.File;
 import java.io.FileWriter;
@@ -36,14 +37,24 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
 
-public class TLS {
+public class TLSTransformer {
 
-    private TLS() {
+    private TLSTransformer() {
         // Prevent outside initialization
     }
 
-    public static boolean write(TLSConfiguration configuration, String path) throws IOException {
+    private static final File FILE_SERVER = new File(SystemPropertyUtil.get("egw.config.dir", "../bin/conf.d") + "/" + "TLSServer.json");
+    private static final File FILE_CLIENT = new File(SystemPropertyUtil.get("egw.config.dir", "../bin/conf.d") + "/" + "TLSClient.json");
+
+    public static boolean write(TLSConfiguration configuration, boolean forServer) throws IOException {
         String jsonString = GSON.INSTANCE.toJson(configuration);
+
+        File path;
+        if (forServer){
+            path = FILE_SERVER;
+        } else {
+            path = FILE_CLIENT;
+        }
 
         try (FileWriter fileWriter = new FileWriter(path)) {
             fileWriter.write(jsonString);
@@ -52,8 +63,20 @@ public class TLS {
         return true;
     }
 
-    public static TLSConfiguration readFile(String path) throws IOException {
-        return readDirectly(Files.readString(new File(path).toPath()));
+    public static String getFileDataServer() throws IOException {
+        return Files.readString(FILE_SERVER.toPath());
+    }
+
+    public static String getFileDataClient() throws IOException {
+        return Files.readString(FILE_CLIENT.toPath());
+    }
+
+    public static TLSConfiguration readFile(boolean forServer) throws IOException {
+        if (forServer) {
+            return readDirectly(getFileDataServer());
+        } else {
+            return readDirectly(getFileDataClient());
+        }
     }
 
     public static TLSConfiguration readDirectly(String data) throws IOException {

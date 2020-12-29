@@ -18,20 +18,16 @@
 package com.shieldblaze.expressgateway.restapi.config;
 
 import com.shieldblaze.expressgateway.configuration.eventstream.EventStreamConfiguration;
-import com.shieldblaze.expressgateway.configuration.transformer.EventStream;
-import io.netty.util.internal.SystemPropertyUtil;
+import com.shieldblaze.expressgateway.configuration.transformer.EventStreamTransformer;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
-import org.springframework.web.bind.annotation.DeleteMapping;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RestController;
 
-import java.io.File;
 import java.io.FileNotFoundException;
-import java.nio.file.Files;
 import java.nio.file.NoSuchFileException;
 
 @RestController
@@ -41,8 +37,8 @@ public class EventStreamHandler {
     @PostMapping("/eventstream")
     public ResponseEntity<String> create(@RequestBody String data) {
         try {
-            EventStreamConfiguration eventStreamConfiguration = EventStream.readDirectly(data);
-            EventStream.write(eventStreamConfiguration, SystemPropertyUtil.get("egw.config.dir", "../bin/conf.d") + "/" + "EventStream.json");
+            EventStreamConfiguration eventStreamConfiguration = EventStreamTransformer.readDirectly(data);
+            EventStreamTransformer.write(eventStreamConfiguration);
             return new ResponseEntity<>(HttpStatus.NO_CONTENT);
         } catch (FileNotFoundException | NoSuchFileException ex) {
             return new ResponseEntity<>("File not found", HttpStatus.NOT_FOUND);
@@ -54,22 +50,10 @@ public class EventStreamHandler {
     @GetMapping("/eventstream")
     public ResponseEntity<String> get() {
         try {
-            File file = new File(SystemPropertyUtil.get("egw.config.dir", "../bin/conf.d") + "/" + "EventStream.json");
-            String data = Files.readString(file.toPath());
+            String data = EventStreamTransformer.getFileData();
             return new ResponseEntity<>(data, HttpStatus.OK);
         } catch (FileNotFoundException | NoSuchFileException ex) {
             return new ResponseEntity<>("File not found", HttpStatus.NOT_FOUND);
-        } catch (Exception ex) {
-            return new ResponseEntity<>("Error Occurred: " + ex.getLocalizedMessage(), HttpStatus.BAD_REQUEST);
-        }
-    }
-
-    @DeleteMapping("/eventstream")
-    public ResponseEntity<String> delete() {
-        try {
-            File file = new File(SystemPropertyUtil.get("egw.config.dir", "../bin/conf.d") + "/" + "EventStream.json");
-            file.delete();
-            return new ResponseEntity<>(HttpStatus.NO_CONTENT);
         } catch (Exception ex) {
             return new ResponseEntity<>("Error Occurred: " + ex.getLocalizedMessage(), HttpStatus.BAD_REQUEST);
         }

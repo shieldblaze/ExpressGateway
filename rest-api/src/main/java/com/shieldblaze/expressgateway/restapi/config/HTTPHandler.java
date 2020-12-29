@@ -18,20 +18,16 @@
 package com.shieldblaze.expressgateway.restapi.config;
 
 import com.shieldblaze.expressgateway.configuration.http.HTTPConfiguration;
-import com.shieldblaze.expressgateway.configuration.transformer.HTTP;
-import io.netty.util.internal.SystemPropertyUtil;
+import com.shieldblaze.expressgateway.configuration.transformer.HTTPTransformer;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
-import org.springframework.web.bind.annotation.DeleteMapping;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RestController;
 
-import java.io.File;
 import java.io.FileNotFoundException;
-import java.nio.file.Files;
 import java.nio.file.NoSuchFileException;
 
 @RestController
@@ -41,8 +37,8 @@ public class HTTPHandler {
     @PostMapping("/http")
     public ResponseEntity<String> create(@RequestBody String data) {
         try {
-            HTTPConfiguration httpConfiguration = HTTP.readDirectly(data);
-            HTTP.write(httpConfiguration, SystemPropertyUtil.get("egw.config.dir", "../bin/conf.d/") + "HTTP.json");
+            HTTPConfiguration httpConfiguration = HTTPTransformer.readDirectly(data);
+            HTTPTransformer.write(httpConfiguration);
             return new ResponseEntity<>(HttpStatus.NO_CONTENT);
         } catch (FileNotFoundException | NoSuchFileException ex) {
             return new ResponseEntity<>("File not found", HttpStatus.NOT_FOUND);
@@ -54,22 +50,10 @@ public class HTTPHandler {
     @GetMapping("/http")
     public ResponseEntity<String> get() {
         try {
-            File file = new File(SystemPropertyUtil.get("egw.config.dir", "../bin/conf.d/") + "HTTP.json");
-            String data = Files.readString(file.toPath());
+            String data = HTTPTransformer.getFileData();
             return new ResponseEntity<>(data, HttpStatus.OK);
         } catch (FileNotFoundException | NoSuchFileException ex) {
             return new ResponseEntity<>("File not found", HttpStatus.NOT_FOUND);
-        } catch (Exception ex) {
-            return new ResponseEntity<>("Error Occurred: " + ex.getLocalizedMessage(), HttpStatus.BAD_REQUEST);
-        }
-    }
-
-    @DeleteMapping("/http")
-    public ResponseEntity<String> delete() {
-        try {
-            File file = new File(SystemPropertyUtil.get("egw.config.dir", "../bin/conf.d/") + "HTTP.json");
-            file.delete();
-            return new ResponseEntity<>(HttpStatus.NO_CONTENT);
         } catch (Exception ex) {
             return new ResponseEntity<>("Error Occurred: " + ex.getLocalizedMessage(), HttpStatus.BAD_REQUEST);
         }

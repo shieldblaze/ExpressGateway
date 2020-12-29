@@ -32,11 +32,14 @@ import io.netty.buffer.ByteBufAllocator;
 import io.netty.channel.ChannelHandler;
 
 import java.net.InetSocketAddress;
+import java.util.UUID;
 
 /**
  * {@link L4LoadBalancer} holds base functions for a L4-Load Balancer.
  */
 public abstract class L4LoadBalancer {
+
+    public final String ID = UUID.randomUUID().toString();
 
     private final InetSocketAddress bindAddress;
     private final L4FrontListener l4FrontListener;

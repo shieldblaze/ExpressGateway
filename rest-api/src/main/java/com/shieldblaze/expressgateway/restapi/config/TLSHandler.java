@@ -18,20 +18,16 @@
 package com.shieldblaze.expressgateway.restapi.config;
 
 import com.shieldblaze.expressgateway.configuration.tls.TLSConfiguration;
-import com.shieldblaze.expressgateway.configuration.transformer.TLS;
-import io.netty.util.internal.SystemPropertyUtil;
+import com.shieldblaze.expressgateway.configuration.transformer.TLSTransformer;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
-import org.springframework.web.bind.annotation.DeleteMapping;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RestController;
 
-import java.io.File;
 import java.io.FileNotFoundException;
-import java.nio.file.Files;
 import java.nio.file.NoSuchFileException;
 
 @RestController
@@ -41,8 +37,8 @@ public class TLSHandler {
     @PostMapping("/tlsServer")
     public ResponseEntity<String> createServer(@RequestBody String data) {
         try {
-            TLSConfiguration tlsConfiguration = TLS.readDirectly(data);
-            TLS.write(tlsConfiguration, SystemPropertyUtil.get("egw.config.dir", "../bin/conf.d/") + "TLSServer.json");
+            TLSConfiguration tlsConfiguration = TLSTransformer.readDirectly(data);
+            TLSTransformer.write(tlsConfiguration, true);
             return new ResponseEntity<>(HttpStatus.NO_CONTENT);
         } catch (FileNotFoundException | NoSuchFileException ex) {
             return new ResponseEntity<>("File not found", HttpStatus.NOT_FOUND);
@@ -54,8 +50,7 @@ public class TLSHandler {
     @GetMapping("/tlsServer")
     public ResponseEntity<String> getServer() {
         try {
-            File file = new File(SystemPropertyUtil.get("egw.config.dir", "../bin/conf.d/") + "TLSServer.json");
-            String data = Files.readString(file.toPath());
+            String data = TLSTransformer.getFileDataServer();
             return new ResponseEntity<>(data, HttpStatus.OK);
         } catch (FileNotFoundException | NoSuchFileException ex) {
             return new ResponseEntity<>("File not found", HttpStatus.NOT_FOUND);
@@ -64,22 +59,11 @@ public class TLSHandler {
         }
     }
 
-    @DeleteMapping("/tlsServer")
-    public ResponseEntity<String> deleteServer() {
-        try {
-            File file = new File(SystemPropertyUtil.get("egw.config.dir", "../bin/conf.d/") + "TLSServer.json");
-            file.delete();
-            return new ResponseEntity<>(HttpStatus.NO_CONTENT);
-        } catch (Exception ex) {
-            return new ResponseEntity<>("Error Occurred: " + ex.getLocalizedMessage(), HttpStatus.BAD_REQUEST);
-        }
-    }
-
     @PostMapping("/tlsClient")
     public ResponseEntity<String> createClient(@RequestBody String data) {
         try {
-            TLSConfiguration tlsConfiguration = TLS.readDirectly(data);
-            TLS.write(tlsConfiguration, SystemPropertyUtil.get("egw.config.dir", "../bin/conf.d/") + "TLSClient.json");
+            TLSConfiguration tlsConfiguration = TLSTransformer.readDirectly(data);
+            TLSTransformer.write(tlsConfiguration, false);
             return new ResponseEntity<>(HttpStatus.NO_CONTENT);
         } catch (FileNotFoundException | NoSuchFileException ex) {
             return new ResponseEntity<>("File not found", HttpStatus.NOT_FOUND);
@@ -91,22 +75,10 @@ public class TLSHandler {
     @GetMapping("/tlsClient")
     public ResponseEntity<String> getClient() {
         try {
-            File file = new File(SystemPropertyUtil.get("egw.config.dir", "../bin/conf.d/") + "TLSClient.json");
-            String data = Files.readString(file.toPath());
+            String data = TLSTransformer.getFileDataClient();
             return new ResponseEntity<>(data, HttpStatus.OK);
         } catch (FileNotFoundException | NoSuchFileException ex) {
             return new ResponseEntity<>("File not found", HttpStatus.NOT_FOUND);
-        } catch (Exception ex) {
-            return new ResponseEntity<>("Error Occurred: " + ex.getLocalizedMessage(), HttpStatus.BAD_REQUEST);
-        }
-    }
-
-    @DeleteMapping("/tlsClient")
-    public ResponseEntity<String> deleteClient() {
-        try {
-            File file = new File(SystemPropertyUtil.get("egw.config.dir", "../bin/conf.d/") + "TLSClient.json");
-            file.delete();
-            return new ResponseEntity<>(HttpStatus.NO_CONTENT);
         } catch (Exception ex) {
             return new ResponseEntity<>("Error Occurred: " + ex.getLocalizedMessage(), HttpStatus.BAD_REQUEST);
         }

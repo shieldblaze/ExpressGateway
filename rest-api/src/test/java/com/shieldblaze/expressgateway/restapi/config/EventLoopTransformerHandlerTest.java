@@ -34,10 +34,10 @@ import java.net.http.HttpClient;
 import java.net.http.HttpRequest;
 import java.net.http.HttpResponse;
 
-import static org.junit.jupiter.api.Assertions.*;
+import static org.junit.jupiter.api.Assertions.assertEquals;
 
 @TestMethodOrder(MethodOrderer.OrderAnnotation.class)
-class HTTPHandlerTest {
+class EventLoopTransformerHandlerTest {
 
     final static HttpClient HTTP_CLIENT = HttpClient.newHttpClient();
     static ConfigurableApplicationContext ctx;
@@ -57,22 +57,12 @@ class HTTPHandlerTest {
     @Order(1)
     void create() throws IOException, InterruptedException {
         JsonObject configJson = new JsonObject();
-        configJson.addProperty("maxContentLength", 999_999);
-        configJson.addProperty("h2InitialWindowSize", 999_999);
-        configJson.addProperty("h2MaxConcurrentStreams", 999_999);
-        configJson.addProperty("h2MaxHeaderSizeList", 999_999);
-        configJson.addProperty("h2MaxHeaderTableSize", 999_999);
-        configJson.addProperty("h2MaxFrameSize", 999_999);
-        configJson.addProperty("maxInitialLineLength", 999_999);
-        configJson.addProperty("maxHeaderSize", 999_999);
-        configJson.addProperty("maxChunkSize", 999_999);
-        configJson.addProperty("compressionThreshold", 999_999);
-        configJson.addProperty("deflateCompressionLevel", 6);
-        configJson.addProperty("brotliCompressionLevel", 4);
+        configJson.addProperty("parentWorkers", 32);
+        configJson.addProperty("childWorkers", 128);
 
         HttpRequest httpRequest = HttpRequest.newBuilder()
                 .POST(HttpRequest.BodyPublishers.ofString(configJson.toString()))
-                .uri(URI.create("http://127.0.0.1:9110/config/http"))
+                .uri(URI.create("http://127.0.0.1:9110/config/eventloop"))
                 .build();
 
         HttpResponse<String> httpResponse = HTTP_CLIENT.send(httpRequest, HttpResponse.BodyHandlers.ofString());
@@ -84,25 +74,15 @@ class HTTPHandlerTest {
     void get() throws IOException, InterruptedException {
         HttpRequest httpRequest = HttpRequest.newBuilder()
                 .GET()
-                .uri(URI.create("http://127.0.0.1:9110/config/http"))
+                .uri(URI.create("http://127.0.0.1:9110/config/eventloop"))
                 .build();
 
         HttpResponse<String> httpResponse = HTTP_CLIENT.send(httpRequest, HttpResponse.BodyHandlers.ofString());
         assertEquals(200, httpResponse.statusCode());
 
         JsonObject jsonObject = JsonParser.parseString(httpResponse.body()).getAsJsonObject();
-        assertEquals(999_999, jsonObject.get("maxContentLength").getAsInt());
-        assertEquals(999_999, jsonObject.get("h2InitialWindowSize").getAsInt());
-        assertEquals(999_999, jsonObject.get("h2MaxConcurrentStreams").getAsInt());
-        assertEquals(999_999, jsonObject.get("h2MaxHeaderSizeList").getAsInt());
-        assertEquals(999_999, jsonObject.get("h2MaxHeaderTableSize").getAsInt());
-        assertEquals(999_999, jsonObject.get("h2MaxFrameSize").getAsInt());
-        assertEquals(999_999, jsonObject.get("maxInitialLineLength").getAsInt());
-        assertEquals(999_999, jsonObject.get("maxHeaderSize").getAsInt());
-        assertEquals(999_999, jsonObject.get("maxChunkSize").getAsInt());
-        assertEquals(999_999, jsonObject.get("compressionThreshold").getAsInt());
-        assertEquals(6, jsonObject.get("deflateCompressionLevel").getAsInt());
-        assertEquals(4, jsonObject.get("brotliCompressionLevel").getAsInt());
+        assertEquals("32", jsonObject.get("parentWorkers").getAsString());
+        assertEquals("128", jsonObject.get("childWorkers").getAsString());
     }
 
     @Test
@@ -110,7 +90,7 @@ class HTTPHandlerTest {
     void delete() throws IOException, InterruptedException {
         HttpRequest httpRequest = HttpRequest.newBuilder()
                 .DELETE()
-                .uri(URI.create("http://127.0.0.1:9110/config/http"))
+                .uri(URI.create("http://127.0.0.1:9110/config/eventloop"))
                 .build();
 
         HttpResponse<String> httpResponse = HTTP_CLIENT.send(httpRequest, HttpResponse.BodyHandlers.ofString());
@@ -122,7 +102,7 @@ class HTTPHandlerTest {
     void testDelete() throws IOException, InterruptedException {
         HttpRequest httpRequest = HttpRequest.newBuilder()
                 .GET()
-                .uri(URI.create("http://127.0.0.1:9110/config/http"))
+                .uri(URI.create("http://127.0.0.1:9110/config/eventloop"))
                 .build();
 
         HttpResponse<String> httpResponse = HTTP_CLIENT.send(httpRequest, HttpResponse.BodyHandlers.ofString());

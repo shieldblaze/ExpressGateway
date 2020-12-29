@@ -21,30 +21,37 @@ import com.google.gson.JsonObject;
 import com.google.gson.JsonParser;
 import com.shieldblaze.expressgateway.configuration.eventstream.EventStreamConfiguration;
 import com.shieldblaze.expressgateway.configuration.eventstream.EventStreamConfigurationBuilder;
+import io.netty.util.internal.SystemPropertyUtil;
 
 import java.io.File;
 import java.io.FileWriter;
 import java.io.IOException;
 import java.nio.file.Files;
 
-public class EventStream {
+public class EventStreamTransformer {
 
-    private EventStream() {
+    private static final File FILE = new File(SystemPropertyUtil.get("egw.config.dir", "../bin/conf.d") + "/" + "EventStream.json");
+
+    private EventStreamTransformer() {
         // Prevent outside initialization
     }
 
-    public static boolean write(EventStreamConfiguration configuration, String path) throws IOException {
+    public static boolean write(EventStreamConfiguration configuration) throws IOException {
         String jsonString = GSON.INSTANCE.toJson(configuration);
 
-        try (FileWriter fileWriter = new FileWriter(path)) {
+        try (FileWriter fileWriter = new FileWriter(FILE)) {
             fileWriter.write(jsonString);
         }
 
         return true;
     }
 
-    public static EventStreamConfiguration readFile(String path) throws IOException {
-        return readDirectly(Files.readString(new File(path).toPath()));
+    public static String getFileData() throws IOException {
+        return Files.readString(FILE.toPath());
+    }
+
+    public static EventStreamConfiguration readFile() throws IOException {
+        return readDirectly(getFileData());
     }
 
     public static EventStreamConfiguration readDirectly(String data) {

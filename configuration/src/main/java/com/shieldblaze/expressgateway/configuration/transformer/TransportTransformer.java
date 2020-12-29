@@ -25,6 +25,7 @@ import com.shieldblaze.expressgateway.configuration.transport.ReceiveBufferAlloc
 import com.shieldblaze.expressgateway.configuration.transport.TransportConfiguration;
 import com.shieldblaze.expressgateway.configuration.transport.TransportConfigurationBuilder;
 import com.shieldblaze.expressgateway.configuration.transport.TransportType;
+import io.netty.util.internal.SystemPropertyUtil;
 
 import java.io.File;
 import java.io.FileWriter;
@@ -33,24 +34,30 @@ import java.nio.file.Files;
 import java.util.ArrayList;
 import java.util.List;
 
-public class Transport {
+public class TransportTransformer {
 
-    private Transport() {
+    private TransportTransformer() {
         // Prevent outside initialization
     }
 
-    public static boolean write(TransportConfiguration transportConfiguration, String path) throws IOException {
+    private static final File FILE = new File(SystemPropertyUtil.get("egw.config.dir", "../bin/conf.d") + "/" + "Transport.json");
+
+    public static boolean write(TransportConfiguration transportConfiguration) throws IOException {
         String jsonString = GSON.INSTANCE.toJson(transportConfiguration);
 
-        try (FileWriter fileWriter = new FileWriter(path)) {
+        try (FileWriter fileWriter = new FileWriter(FILE)) {
             fileWriter.write(jsonString);
         }
 
         return true;
     }
 
-    public static TransportConfiguration readFile(String path) throws IOException {
-        return readDirectly(Files.readString(new File(path).toPath()));
+    public static String getFileData() throws IOException {
+        return Files.readString(FILE.toPath());
+    }
+
+    public static TransportConfiguration readFile() throws IOException {
+        return readDirectly(getFileData());
     }
 
     public static TransportConfiguration readDirectly(String data) {

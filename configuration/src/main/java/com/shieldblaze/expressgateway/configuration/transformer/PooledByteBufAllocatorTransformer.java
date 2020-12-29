@@ -21,30 +21,37 @@ import com.google.gson.JsonObject;
 import com.google.gson.JsonParser;
 import com.shieldblaze.expressgateway.configuration.buffer.PooledByteBufAllocatorConfiguration;
 import com.shieldblaze.expressgateway.configuration.buffer.PooledByteBufAllocatorConfigurationBuilder;
+import io.netty.util.internal.SystemPropertyUtil;
 
 import java.io.File;
 import java.io.FileWriter;
 import java.io.IOException;
 import java.nio.file.Files;
 
-public class PooledByteBufAllocator {
+public class PooledByteBufAllocatorTransformer {
 
-    private PooledByteBufAllocator() {
+    private PooledByteBufAllocatorTransformer() {
         // Prevent outside initialization
     }
 
-    public static boolean write(PooledByteBufAllocatorConfiguration configuration, String path) throws IOException {
+    private static final File FILE = new File(SystemPropertyUtil.get("egw.config.dir", "../bin/conf.d") + "/" + "PooledByteBufAllocator.json");
+
+    public static boolean write(PooledByteBufAllocatorConfiguration configuration) throws IOException {
         String jsonString = GSON.INSTANCE.toJson(configuration);
 
-        try (FileWriter fileWriter = new FileWriter(path)) {
+        try (FileWriter fileWriter = new FileWriter(SystemPropertyUtil.get("egw.config.dir", "../bin/conf.d") + "/" + "PooledByteBufAllocator.json")) {
             fileWriter.write(jsonString);
         }
 
         return true;
     }
 
-    public static PooledByteBufAllocatorConfiguration readFile(String path) throws IOException {
-        return readDirectly(Files.readString(new File(path).toPath()));
+    public static String getFileData() throws IOException {
+        return Files.readString(FILE.toPath());
+    }
+
+    public static PooledByteBufAllocatorConfiguration readFile() throws IOException {
+        return readDirectly(getFileData());
     }
 
     public static PooledByteBufAllocatorConfiguration readDirectly(String data) {

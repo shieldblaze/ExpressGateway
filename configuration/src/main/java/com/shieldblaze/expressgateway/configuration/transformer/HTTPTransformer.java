@@ -21,30 +21,37 @@ import com.google.gson.JsonObject;
 import com.google.gson.JsonParser;
 import com.shieldblaze.expressgateway.configuration.http.HTTPConfiguration;
 import com.shieldblaze.expressgateway.configuration.http.HTTPConfigurationBuilder;
+import io.netty.util.internal.SystemPropertyUtil;
 
 import java.io.File;
 import java.io.FileWriter;
 import java.io.IOException;
 import java.nio.file.Files;
 
-public class HTTP {
+public class HTTPTransformer {
 
-    private HTTP() {
+    private HTTPTransformer() {
         // Prevent outside initialization
     }
 
-    public static boolean write(HTTPConfiguration configuration, String path) throws IOException {
+    private static final File FILE = new File(SystemPropertyUtil.get("egw.config.dir", "../bin/conf.d") + "/" + "HTTP.json");
+
+    public static boolean write(HTTPConfiguration configuration) throws IOException {
         String jsonString = GSON.INSTANCE.toJson(configuration);
 
-        try (FileWriter fileWriter = new FileWriter(path)) {
+        try (FileWriter fileWriter = new FileWriter(FILE)) {
             fileWriter.write(jsonString);
         }
 
         return true;
     }
 
-    public static HTTPConfiguration readFile(String path) throws IOException {
-        return readDirectly(Files.readString(new File(path).toPath()));
+    public static String getFileData() throws IOException {
+        return Files.readString(FILE.toPath());
+    }
+
+    public static HTTPConfiguration readFile() throws IOException {
+        return readDirectly(getFileData());
     }
 
     public static HTTPConfiguration readDirectly(String data) {

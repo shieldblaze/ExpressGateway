@@ -58,7 +58,7 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 
 @TestMethodOrder(MethodOrderer.OrderAnnotation.class)
-class HealthCheckServiceTest {
+class HealthCheckTransformerServiceTest {
 
     static TCPServer tcpServer;
     static Cluster cluster;
