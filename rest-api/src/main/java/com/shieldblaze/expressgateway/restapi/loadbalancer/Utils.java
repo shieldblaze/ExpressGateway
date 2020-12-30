@@ -27,12 +27,15 @@ import com.shieldblaze.expressgateway.configuration.CoreConfigurationBuilder;
 import com.shieldblaze.expressgateway.configuration.transformer.EventLoopTransformer;
 import com.shieldblaze.expressgateway.configuration.transformer.PooledByteBufAllocatorTransformer;
 import com.shieldblaze.expressgateway.configuration.transformer.TransportTransformer;
+import com.shieldblaze.expressgateway.core.L4FrontListener;
+import com.shieldblaze.expressgateway.protocol.tcp.TCPListener;
+import com.shieldblaze.expressgateway.protocol.udp.UDPListener;
 
 import java.io.IOException;
 
 final class Utils {
 
-    static L4Balance determine(L4HandlerContext l4HandlerContext) {
+    static L4Balance determineAlgorithm(L4HandlerContext l4HandlerContext) {
 
         if (l4HandlerContext.algorithm().equalsIgnoreCase("RoundRobin")) {
             if (l4HandlerContext.sessionPersistence().equalsIgnoreCase("SourceIPHash")) {
@@ -42,6 +45,16 @@ final class Utils {
             } else if (l4HandlerContext.sessionPersistence().equalsIgnoreCase("NOOP")) {
                 return new RoundRobin(NOOPSessionPersistence.INSTANCE);
             }
+        }
+
+        return null;
+    }
+
+    static L4FrontListener determineListener(L4HandlerContext l4HandlerContext) {
+        if (l4HandlerContext.protocol().equalsIgnoreCase("tcp")) {
+            return new TCPListener();
+        } else if (l4HandlerContext.protocol().equalsIgnoreCase("udp")) {
+            return new UDPListener();
         }
 
         return null;

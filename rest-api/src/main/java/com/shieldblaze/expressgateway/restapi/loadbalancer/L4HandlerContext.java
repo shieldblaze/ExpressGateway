@@ -19,7 +19,7 @@ package com.shieldblaze.expressgateway.restapi.loadbalancer;
 
 import com.fasterxml.jackson.annotation.JsonProperty;
 
-public class L4HandlerContext {
+final class L4HandlerContext {
 
     @JsonProperty("bindAddress")
     private String bindAddress;
@@ -36,23 +36,23 @@ public class L4HandlerContext {
     @JsonProperty("sessionPersistence")
     private String sessionPersistence;
 
-    public String bindAddress() {
+    String bindAddress() {
         return bindAddress;
     }
 
-    public int bindPort() {
+    int bindPort() {
         return bindPort;
     }
 
-    public String protocol() {
+    String protocol() {
         return protocol;
     }
 
-    public String algorithm() {
+    String algorithm() {
         return algorithm;
     }
 
-    public String sessionPersistence() {
+    String sessionPersistence() {
         return sessionPersistence;
     }
 }

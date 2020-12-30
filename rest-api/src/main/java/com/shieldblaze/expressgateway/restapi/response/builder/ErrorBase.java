@@ -4,6 +4,7 @@ public enum ErrorBase {
 
     // API Errors
     INTERNAL_SERVER_ERROR(100, "Internal Server Error"),
+    REQUEST_ERROR(101, "Request Error"),
 
 
     LOADBALANCER_NOT_FOUND(200, "LoadBalancer not found")

@@ -29,30 +29,38 @@ import com.shieldblaze.expressgateway.protocol.tcp.TCPListener;
 import com.shieldblaze.expressgateway.restapi.response.FastBuilder;
 import com.shieldblaze.expressgateway.restapi.response.builder.APIResponse;
 import com.shieldblaze.expressgateway.restapi.response.builder.ErrorBase;
+import com.shieldblaze.expressgateway.restapi.response.builder.Message;
 import com.shieldblaze.expressgateway.restapi.response.builder.Result;
 import io.netty.handler.codec.http.HttpResponseStatus;
+import io.swagger.v3.oas.annotations.Operation;
+import io.swagger.v3.oas.annotations.tags.Tag;
 import org.springframework.http.HttpStatus;
+import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
+import org.springframework.web.bind.annotation.DeleteMapping;
 import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
-import org.springframework.web.bind.annotation.PutMapping;
 import org.springframework.web.bind.annotation.RequestBody;
+import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RestController;
 
 import java.net.InetSocketAddress;
 
-@RestController("/loadbalancer/")
+@RestController
+@RequestMapping("/loadbalancer/l4")
+@Tag(name = "Layer-4 LoadBalancer", description = "Layer-4 LoadBalancer API")
 public class L4Handler {
 
-    @PostMapping("/create")
+    @Operation(summary = "Create new Load Balancer and Start it")
+    @PostMapping(path = "/create", consumes = MediaType.APPLICATION_JSON_VALUE, produces = MediaType.APPLICATION_JSON_VALUE)
     public ResponseEntity<String> create(@RequestBody L4HandlerContext l4HandlerContext) {
         try {
             EventStream eventStream = EventStreamTransformer.readFile().eventStream();
-            L4Balance l4Balance = Utils.determine(l4HandlerContext);
+            L4Balance l4Balance = Utils.determineAlgorithm(l4HandlerContext);
             Cluster cluster = new ClusterPool(eventStream, l4Balance);
 
             L4LoadBalancer l4LoadBalancer = L4LoadBalancerBuilder.newBuilder()
-                    .withL4FrontListener(new TCPListener())
+                    .withL4FrontListener(Utils.determineListener(l4HandlerContext))
                     .withBindAddress(new InetSocketAddress(l4HandlerContext.bindAddress(), l4HandlerContext.bindPort()))
                     .withCluster(cluster)
                     .withCoreConfiguration(Utils.coreConfiguration())
@@ -63,16 +71,20 @@ public class L4Handler {
 
             APIResponse apiResponse = APIResponse.newBuilder()
                     .isSuccess(true)
-                    .withResult(Result.newBuilder().withHeader("ID").withMessage(l4LoadBalancer.ID).build())
+                    .withResult(Result.newBuilder().withHeader("LoadBalancerID").withMessage(l4LoadBalancer.ID).build())
                     .build();
 
             return new ResponseEntity<>(apiResponse.response(), HttpStatus.CREATED);
         } catch (Exception ex) {
-            return new ResponseEntity<>("Error Occurred: " + ex.getLocalizedMessage(), HttpStatus.BAD_REQUEST);
+            return FastBuilder.error(ErrorBase.REQUEST_ERROR, Message.newBuilder()
+                   .withHeader("Error")
+                   .withMessage(ex.getLocalizedMessage())
+                   .build(), HttpResponseStatus.BAD_REQUEST);
         }
     }
 
-    @PutMapping("/stop/{id}")
+    @Operation(summary = "Stop a Load Balancer")
+    @DeleteMapping(path = "/stop/{id}", consumes = MediaType.APPLICATION_JSON_VALUE, produces = MediaType.APPLICATION_JSON_VALUE)
     public ResponseEntity<String> stop(@PathVariable("id") String id) {
         try {
             L4LoadBalancer l4LoadBalancer = LoadBalancersRegistry.id(id);
@@ -83,16 +95,20 @@ public class L4Handler {
             }
 
             l4LoadBalancer.stop();
+            l4LoadBalancer.cluster().eventStream().close();
             LoadBalancersRegistry.removeLoadBalancer(l4LoadBalancer);
 
             APIResponse apiResponse = APIResponse.newBuilder()
                     .isSuccess(true)
-                    .withResult(Result.newBuilder().withHeader("ID").withMessage(l4LoadBalancer.ID).build())
+                    .withResult(Result.newBuilder().withHeader("LoadBalancerID").withMessage(l4LoadBalancer.ID).build())
                     .build();
 
             return new ResponseEntity<>(apiResponse.response(), HttpStatus.OK);
         } catch (Exception ex) {
-            return new ResponseEntity<>("Error Occurred: " + ex.getLocalizedMessage(), HttpStatus.BAD_REQUEST);
+            return FastBuilder.error(ErrorBase.REQUEST_ERROR, Message.newBuilder()
+                    .withHeader("Error")
+                    .withMessage(ex.getLocalizedMessage())
+                    .build(), HttpResponseStatus.BAD_REQUEST);
         }
     }
 }

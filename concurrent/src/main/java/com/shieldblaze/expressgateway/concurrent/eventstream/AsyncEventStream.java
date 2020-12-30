@@ -47,7 +47,9 @@ public final class AsyncEventStream extends EventStream {
         executorService.execute(() -> subscribers.forEach(eventListener -> executorService.execute(() -> eventListener.accept(event))));
     }
 
-    public void shutdown() {
+    @Override
+    public void close() {
+        super.close();
         executorService.shutdown();
     }
 }

@@ -30,6 +30,7 @@ import com.shieldblaze.expressgateway.concurrent.eventstream.EventPublisher;
 import com.shieldblaze.expressgateway.concurrent.eventstream.EventStream;
 import com.shieldblaze.expressgateway.concurrent.eventstream.EventSubscriber;
 
+import java.util.Collections;
 import java.util.List;
 import java.util.concurrent.CopyOnWriteArrayList;
 
@@ -101,6 +102,16 @@ public abstract class Cluster {
         return true;
     }
 
+    public boolean removeNode(String nodeId) {
+        for (Node n : nodes) {
+            if (n.id().equalsIgnoreCase(nodeId)) {
+                return removeNode(n);
+            }
+        }
+
+        return false;
+    }
+
     public List<Node> nodes() {
         return nodes;
     }
@@ -113,6 +124,10 @@ public abstract class Cluster {
     @NonNull
     public Response nextNode(Request request) throws LoadBalanceException {
         return loadBalance.response(request);
+    }
+
+    public EventStream eventStream() {
+        return eventStream;
     }
 
     public EventSubscriber eventSubscriber() {

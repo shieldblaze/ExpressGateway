@@ -43,7 +43,6 @@ public final class Node implements Comparable<Node> {
      */
     private final String ID = UUID.randomUUID().toString();
 
-
     private final int HASH = Objects.hash(ID);
 
     /**
@@ -98,6 +97,10 @@ public final class Node implements Comparable<Node> {
 
     public Node(Cluster cluster, InetSocketAddress socketAddress) {
         this(cluster, socketAddress, -1, null);
+    }
+
+    public Node(Cluster cluster, InetSocketAddress socketAddress, int maxConnections) {
+        this(cluster, socketAddress, maxConnections, null);
     }
 
     /**

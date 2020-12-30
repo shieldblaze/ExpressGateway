@@ -15,15 +15,30 @@
  * You should have received a copy of the GNU General Public License
  * along with ShieldBlaze ExpressGateway.  If not, see <https://www.gnu.org/licenses/>.
  */
-package com.shieldblaze.expressgateway.restapi.config;
+package com.shieldblaze.expressgateway.restapi;
 
+import io.swagger.v3.oas.models.OpenAPI;
+import io.swagger.v3.oas.models.info.Info;
+import io.swagger.v3.oas.models.info.License;
 import org.springframework.boot.SpringApplication;
 import org.springframework.boot.autoconfigure.SpringBootApplication;
+import org.springframework.context.annotation.Bean;
 
 @SpringBootApplication
 public class Server {
 
-    public static void main(String[] args) throws Exception {
+    public static void main(String[] args) {
         SpringApplication.run(Server.class, args);
+    }
+
+    @Bean
+    public OpenAPI customOpenAPI() {
+        return new OpenAPI()
+                .info(new Info()
+                        .title("ShieldBlaze ExpressGateway")
+                        .version("0.0.1-a")
+                        .description("High Performance Load Balancer")
+                        .termsOfService("https://www.shieldblaze.com/expressgateway/TermsOfService")
+                        .license(new License().name("GNU General Public License v3.0").url("https://www.gnu.org/licenses/gpl-3.0.html")));
     }
 }
