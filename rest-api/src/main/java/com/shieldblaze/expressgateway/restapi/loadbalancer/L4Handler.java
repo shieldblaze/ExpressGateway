@@ -44,6 +44,7 @@ import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RestController;
 
+import java.net.InetAddress;
 import java.net.InetSocketAddress;
 
 @RestController
@@ -61,7 +62,7 @@ public class L4Handler {
 
             L4LoadBalancer l4LoadBalancer = L4LoadBalancerBuilder.newBuilder()
                     .withL4FrontListener(Utils.determineListener(l4HandlerContext))
-                    .withBindAddress(new InetSocketAddress(l4HandlerContext.bindAddress(), l4HandlerContext.bindPort()))
+                    .withBindAddress(new InetSocketAddress(InetAddress.getByName(l4HandlerContext.bindAddress()), l4HandlerContext.bindPort()))
                     .withCluster(cluster)
                     .withCoreConfiguration(Utils.coreConfiguration())
                     .build();

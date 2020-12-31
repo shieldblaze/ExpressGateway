@@ -15,7 +15,7 @@
  * You should have received a copy of the GNU General Public License
  * along with ShieldBlaze ExpressGateway.  If not, see <https://www.gnu.org/licenses/>.
  */
-package com.shieldblaze.expressgateway.restapi.backend;
+package com.shieldblaze.expressgateway.restapi.node;
 
 import com.shieldblaze.expressgateway.healthcheck.HealthCheck;
 import com.shieldblaze.expressgateway.healthcheck.l4.TCPHealthCheck;
@@ -43,7 +43,7 @@ public class Utils {
             return new HTTPHealthCheck(uri, Duration.ofSeconds(addNodeHandler.healthCheckContext().timeout()), false);
         } else if (addNodeHandler.healthCheckContext().type().equalsIgnoreCase("https")) {
             AddNodeHandler.HealthCheckContext ctx = addNodeHandler.healthCheckContext();
-            URI uri = URI.create("httsp://" + ctx.host() + ":" + ctx.port() + "/" + ctx.httpPath());
+            URI uri = URI.create("https://" + ctx.host() + ":" + ctx.port() + "/" + ctx.httpPath());
             return new HTTPHealthCheck(uri, Duration.ofSeconds(addNodeHandler.healthCheckContext().timeout()), ctx.enableTLSValidation());
         }
 

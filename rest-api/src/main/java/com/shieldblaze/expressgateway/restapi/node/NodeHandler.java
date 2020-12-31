@@ -15,7 +15,7 @@
  * You should have received a copy of the GNU General Public License
  * along with ShieldBlaze ExpressGateway.  If not, see <https://www.gnu.org/licenses/>.
  */
-package com.shieldblaze.expressgateway.restapi.backend;
+package com.shieldblaze.expressgateway.restapi.node;
 
 import com.shieldblaze.expressgateway.backend.Node;
 import com.shieldblaze.expressgateway.core.LoadBalancersRegistry;
@@ -92,7 +92,7 @@ public class NodeHandler {
                     .isSuccess(deleteNode)
                     .build();
 
-            return new ResponseEntity<>(apiResponse.response(), HttpStatus.NO_CONTENT);
+            return new ResponseEntity<>(apiResponse.response(), HttpStatus.OK);
         } catch (Exception ex) {
             return FastBuilder.error(ErrorBase.REQUEST_ERROR, Message.newBuilder()
                     .withHeader("Error")
