@@ -41,6 +41,7 @@ public class WebServerCustomizer implements WebServerFactoryCustomizer<Configura
             container.setAddress(InetAddress.getByName(SystemPropertyUtil.get("restapi.bindAddress", "127.0.0.1")));
         } catch (UnknownHostException e) {
             logger.error("Caught Error at WebServerCustomizer", e);
+            System.exit(1);
         }
 
         container.setPort(SystemPropertyUtil.getInt("restapi.bindAddress", 9110));

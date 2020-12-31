@@ -96,7 +96,7 @@ public abstract class L4LoadBalancer {
                 running.set(true);
             }
         });
-        return l4FrontListener.start();
+        return startupEvent;
     }
 
     /**
@@ -109,7 +109,7 @@ public abstract class L4LoadBalancer {
         L4FrontListenerStopEvent stopEvent = l4FrontListener.stop();
         stopEvent.future().whenComplete((unused, throwable) -> running.set(false));
 
-        return l4FrontListener.stop();
+        return stopEvent;
     }
 
     /**

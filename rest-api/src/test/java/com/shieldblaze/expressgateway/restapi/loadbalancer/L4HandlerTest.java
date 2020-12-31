@@ -93,4 +93,49 @@ class L4HandlerTest {
         JsonObject jsonObject = JsonParser.parseString(httpResponse.body()).getAsJsonObject();
         assertFalse(jsonObject.get("Success").getAsBoolean());
     }
+
+    @Test
+    void badBindPort() throws IOException, InterruptedException {
+        JsonObject requestBody = new JsonObject();
+        requestBody.addProperty("bindAddress", "127.0.0.1");
+        requestBody.addProperty("bindPort", 99999);
+        requestBody.addProperty("protocol", "udp");
+        requestBody.addProperty("algorithm", "RoundRobin");
+        requestBody.addProperty("sessionPersistence", "NOOP");
+
+        HttpRequest httpRequest = HttpRequest.newBuilder()
+                .POST(HttpRequest.BodyPublishers.ofString(requestBody.toString()))
+                .uri(URI.create("http://127.0.0.1:9110/loadbalancer/l4/create"))
+                .setHeader("Content-Type", "application/json")
+                .build();
+
+        HttpResponse<String> httpResponse = httpClient.send(httpRequest, HttpResponse.BodyHandlers.ofString());
+        assertEquals(400, httpResponse.statusCode());
+
+        JsonObject jsonObject = JsonParser.parseString(httpResponse.body()).getAsJsonObject();
+        assertFalse(jsonObject.get("Success").getAsBoolean());
+    }
+
+
+    @Test
+    void badProtocol() throws IOException, InterruptedException {
+        JsonObject requestBody = new JsonObject();
+        requestBody.addProperty("bindAddress", "127.0.0.1");
+        requestBody.addProperty("bindPort", 99999);
+        requestBody.addProperty("protocol", "http");
+        requestBody.addProperty("algorithm", "RoundRobin");
+        requestBody.addProperty("sessionPersistence", "NOOP");
+
+        HttpRequest httpRequest = HttpRequest.newBuilder()
+                .POST(HttpRequest.BodyPublishers.ofString(requestBody.toString()))
+                .uri(URI.create("http://127.0.0.1:9110/loadbalancer/l4/create"))
+                .setHeader("Content-Type", "application/json")
+                .build();
+
+        HttpResponse<String> httpResponse = httpClient.send(httpRequest, HttpResponse.BodyHandlers.ofString());
+        assertEquals(400, httpResponse.statusCode());
+
+        JsonObject jsonObject = JsonParser.parseString(httpResponse.body()).getAsJsonObject();
+        assertFalse(jsonObject.get("Success").getAsBoolean());
+    }
 }
