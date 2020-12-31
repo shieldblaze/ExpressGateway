@@ -26,6 +26,7 @@ import com.shieldblaze.expressgateway.restapi.response.builder.ErrorBase;
 import com.shieldblaze.expressgateway.restapi.response.builder.Message;
 import com.shieldblaze.expressgateway.restapi.response.builder.Result;
 import io.netty.handler.codec.http.HttpResponseStatus;
+import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.Parameter;
 import io.swagger.v3.oas.annotations.tags.Tag;
 import org.springframework.http.HttpStatus;
@@ -38,6 +39,7 @@ import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RestController;
 
+import java.net.InetAddress;
 import java.net.InetSocketAddress;
 
 @RestController
@@ -45,6 +47,7 @@ import java.net.InetSocketAddress;
 @Tag(name = "Node Handler", description = "Node API")
 public class NodeHandler {
 
+    @Operation(summary = "Add a new Node", description = "Add a new Node in Cluster of Load Balancer")
     @PostMapping(value = "/{LBID}/add", consumes = MediaType.APPLICATION_JSON_VALUE, produces = MediaType.APPLICATION_JSON_VALUE)
     public ResponseEntity<String> addNode(@Parameter(description = "Load Balancer ID")
                                           @PathVariable String LBID,
@@ -58,12 +61,13 @@ public class NodeHandler {
                 return FastBuilder.error(ErrorBase.LOADBALANCER_NOT_FOUND, HttpResponseStatus.NOT_FOUND);
             }
 
+            InetSocketAddress socketAddress = new InetSocketAddress(InetAddress.getByName(addNodeHandler.host()), addNodeHandler.port());
+
             Node node;
             if (addNodeHandler.healthCheckContext() == null) {
-                node = new Node(l4LoadBalancer.cluster(), new InetSocketAddress(addNodeHandler.host(), addNodeHandler.port()), addNodeHandler.maxConnections());
+                node = new Node(l4LoadBalancer.cluster(), socketAddress, addNodeHandler.maxConnections());
             } else {
-                node = new Node(l4LoadBalancer.cluster(), new InetSocketAddress(addNodeHandler.host(), addNodeHandler.port()), addNodeHandler.maxConnections(),
-                        Utils.determine(addNodeHandler));
+                node = new Node(l4LoadBalancer.cluster(), socketAddress, addNodeHandler.maxConnections(), Utils.determineHealthCheck(addNodeHandler));
             }
 
             APIResponse apiResponse = APIResponse.newBuilder()
@@ -80,6 +84,7 @@ public class NodeHandler {
         }
     }
 
+    @Operation(summary = "Remove a Node", description = "Remove a Node from Cluster of Load Balancer")
     @DeleteMapping(value = "/{LBID}/remove/{NodeID}", produces = MediaType.APPLICATION_JSON_VALUE)
     public ResponseEntity<String> removeNode(@Parameter(description = "Load Balancer ID")
                                              @PathVariable String LBID,

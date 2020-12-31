@@ -30,7 +30,7 @@ import java.time.Duration;
 
 public class Utils {
 
-    static HealthCheck determine(AddNodeHandler addNodeHandler) throws KeyManagementException, NoSuchAlgorithmException {
+    static HealthCheck determineHealthCheck(AddNodeHandler addNodeHandler) throws KeyManagementException, NoSuchAlgorithmException {
         if (addNodeHandler.healthCheckContext().type().equalsIgnoreCase("tcp")) {
             InetSocketAddress socketAddress = new InetSocketAddress(addNodeHandler.healthCheckContext().host(), addNodeHandler.port());
             return new TCPHealthCheck(socketAddress, Duration.ofSeconds(addNodeHandler.healthCheckContext().timeout()));
