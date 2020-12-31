@@ -19,7 +19,13 @@ package com.shieldblaze.expressgateway.restapi.config;
 
 import com.shieldblaze.expressgateway.configuration.buffer.PooledByteBufAllocatorConfiguration;
 import com.shieldblaze.expressgateway.configuration.transformer.PooledByteBufAllocatorTransformer;
+import com.shieldblaze.expressgateway.restapi.response.FastBuilder;
+import com.shieldblaze.expressgateway.restapi.response.builder.ErrorBase;
+import com.shieldblaze.expressgateway.restapi.response.builder.Message;
+import io.netty.handler.codec.http.HttpResponseStatus;
+import io.swagger.v3.oas.annotations.tags.Tag;
 import org.springframework.http.HttpStatus;
+import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PostMapping;
@@ -32,31 +38,33 @@ import java.nio.file.NoSuchFileException;
 
 @RestController
 @RequestMapping("/config")
+@Tag(name = "Buffer Configuration", description = "Create or Fetch Buffer Configuration")
 public class PooledByteBufAllocatorHandler {
 
-    @PostMapping("/buffer")
+    @PostMapping(value = "/buffer", consumes = MediaType.APPLICATION_JSON_VALUE, produces = MediaType.APPLICATION_JSON_VALUE)
     public ResponseEntity<String> create(@RequestBody String data) {
         try {
             PooledByteBufAllocatorConfiguration pooledByteBufAllocatorConfiguration = PooledByteBufAllocatorTransformer.readDirectly(data);
             PooledByteBufAllocatorTransformer.write(pooledByteBufAllocatorConfiguration);
             return new ResponseEntity<>(HttpStatus.NO_CONTENT);
-        } catch (FileNotFoundException | NoSuchFileException ex) {
-            ex.printStackTrace();
-            return new ResponseEntity<>("File not found", HttpStatus.NOT_FOUND);
         } catch (Exception ex) {
-            return new ResponseEntity<>("Error Occurred: " + ex.getLocalizedMessage(), HttpStatus.BAD_REQUEST);
+            return FastBuilder.error(ErrorBase.REQUEST_ERROR, Message.newBuilder()
+                    .withHeader("Error")
+                    .withMessage(ex.getLocalizedMessage())
+                    .build(), HttpResponseStatus.BAD_REQUEST);
         }
     }
 
-    @GetMapping("/buffer")
+    @GetMapping(value = "/buffer", produces = MediaType.APPLICATION_JSON_VALUE)
     public ResponseEntity<String> get() {
         try {
             String data = PooledByteBufAllocatorTransformer.getFileData();
             return new ResponseEntity<>(data, HttpStatus.OK);
-        } catch (FileNotFoundException | NoSuchFileException ex) {
-            return new ResponseEntity<>("File not found", HttpStatus.NOT_FOUND);
         } catch (Exception ex) {
-            return new ResponseEntity<>("Error Occurred: " + ex.getLocalizedMessage(), HttpStatus.BAD_REQUEST);
+            return FastBuilder.error(ErrorBase.REQUEST_ERROR, Message.newBuilder()
+                    .withHeader("Error")
+                    .withMessage(ex.getLocalizedMessage())
+                    .build(), HttpResponseStatus.BAD_REQUEST);
         }
     }
 }

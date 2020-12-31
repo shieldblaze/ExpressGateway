@@ -19,7 +19,13 @@ package com.shieldblaze.expressgateway.restapi.config;
 
 import com.shieldblaze.expressgateway.configuration.tls.TLSConfiguration;
 import com.shieldblaze.expressgateway.configuration.transformer.TLSTransformer;
+import com.shieldblaze.expressgateway.restapi.response.FastBuilder;
+import com.shieldblaze.expressgateway.restapi.response.builder.ErrorBase;
+import com.shieldblaze.expressgateway.restapi.response.builder.Message;
+import io.netty.handler.codec.http.HttpResponseStatus;
+import io.swagger.v3.oas.annotations.tags.Tag;
 import org.springframework.http.HttpStatus;
+import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PostMapping;
@@ -32,55 +38,60 @@ import java.nio.file.NoSuchFileException;
 
 @RestController
 @RequestMapping("/config")
+@Tag(name = "TLS Configuration", description = "Create or Fetch TLS Configuration")
 public class TLSHandler {
 
-    @PostMapping("/tlsServer")
+    @PostMapping(value = "/tlsServer", consumes = MediaType.APPLICATION_JSON_VALUE, produces = MediaType.APPLICATION_JSON_VALUE)
     public ResponseEntity<String> createServer(@RequestBody String data) {
         try {
             TLSConfiguration tlsConfiguration = TLSTransformer.readDirectly(data);
             TLSTransformer.write(tlsConfiguration, true);
             return new ResponseEntity<>(HttpStatus.NO_CONTENT);
-        } catch (FileNotFoundException | NoSuchFileException ex) {
-            return new ResponseEntity<>("File not found", HttpStatus.NOT_FOUND);
         } catch (Exception ex) {
-            return new ResponseEntity<>("Error Occurred: " + ex.getLocalizedMessage(), HttpStatus.BAD_REQUEST);
+            return FastBuilder.error(ErrorBase.REQUEST_ERROR, Message.newBuilder()
+                    .withHeader("Error")
+                    .withMessage(ex.getLocalizedMessage())
+                    .build(), HttpResponseStatus.BAD_REQUEST);
         }
     }
 
-    @GetMapping("/tlsServer")
+    @GetMapping(value = "/tlsServer", produces = MediaType.APPLICATION_JSON_VALUE)
     public ResponseEntity<String> getServer() {
         try {
             String data = TLSTransformer.getFileDataServer();
             return new ResponseEntity<>(data, HttpStatus.OK);
-        } catch (FileNotFoundException | NoSuchFileException ex) {
-            return new ResponseEntity<>("File not found", HttpStatus.NOT_FOUND);
         } catch (Exception ex) {
-            return new ResponseEntity<>("Error Occurred: " + ex.getLocalizedMessage(), HttpStatus.BAD_REQUEST);
+            return FastBuilder.error(ErrorBase.REQUEST_ERROR, Message.newBuilder()
+                    .withHeader("Error")
+                    .withMessage(ex.getLocalizedMessage())
+                    .build(), HttpResponseStatus.BAD_REQUEST);
         }
     }
 
-    @PostMapping("/tlsClient")
+    @PostMapping(value = "/tlsClient", consumes = MediaType.APPLICATION_JSON_VALUE, produces = MediaType.APPLICATION_JSON_VALUE)
     public ResponseEntity<String> createClient(@RequestBody String data) {
         try {
             TLSConfiguration tlsConfiguration = TLSTransformer.readDirectly(data);
             TLSTransformer.write(tlsConfiguration, false);
             return new ResponseEntity<>(HttpStatus.NO_CONTENT);
-        } catch (FileNotFoundException | NoSuchFileException ex) {
-            return new ResponseEntity<>("File not found", HttpStatus.NOT_FOUND);
         } catch (Exception ex) {
-            return new ResponseEntity<>("Error Occurred: " + ex.getLocalizedMessage(), HttpStatus.BAD_REQUEST);
+            return FastBuilder.error(ErrorBase.REQUEST_ERROR, Message.newBuilder()
+                    .withHeader("Error")
+                    .withMessage(ex.getLocalizedMessage())
+                    .build(), HttpResponseStatus.BAD_REQUEST);
         }
     }
 
-    @GetMapping("/tlsClient")
+    @GetMapping(value = "/tlsClient", produces = MediaType.APPLICATION_JSON_VALUE)
     public ResponseEntity<String> getClient() {
         try {
             String data = TLSTransformer.getFileDataClient();
             return new ResponseEntity<>(data, HttpStatus.OK);
-        } catch (FileNotFoundException | NoSuchFileException ex) {
-            return new ResponseEntity<>("File not found", HttpStatus.NOT_FOUND);
         } catch (Exception ex) {
-            return new ResponseEntity<>("Error Occurred: " + ex.getLocalizedMessage(), HttpStatus.BAD_REQUEST);
+            return FastBuilder.error(ErrorBase.REQUEST_ERROR, Message.newBuilder()
+                    .withHeader("Error")
+                    .withMessage(ex.getLocalizedMessage())
+                    .build(), HttpResponseStatus.BAD_REQUEST);
         }
     }
 }

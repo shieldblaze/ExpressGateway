@@ -25,8 +25,8 @@ public enum ErrorBase {
     REQUEST_ERROR(101, "Request Error"),
 
 
-    LOADBALANCER_NOT_FOUND(200, "LoadBalancer not found")
-
+    LOADBALANCER_NOT_FOUND(200, "LoadBalancer not found"),
+    FILE_NOT_FOUND(201, "File Not Found")
     ;
 
     private final int ErrorCode;

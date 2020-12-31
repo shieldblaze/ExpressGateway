@@ -15,7 +15,7 @@
  * You should have received a copy of the GNU General Public License
  * along with ShieldBlaze ExpressGateway.  If not, see <https://www.gnu.org/licenses/>.
  */
-package com.shieldblaze.expressgateway.restapi.config;
+package com.shieldblaze.expressgateway.restapi;
 
 import io.netty.util.internal.SystemPropertyUtil;
 import org.apache.logging.log4j.LogManager;
@@ -31,7 +31,7 @@ import java.net.InetAddress;
 import java.net.UnknownHostException;
 
 @Component
-public class WebServerCustomizer implements WebServerFactoryCustomizer<ConfigurableUndertowWebServerFactory> {
+final class WebServerCustomizer implements WebServerFactoryCustomizer<ConfigurableUndertowWebServerFactory> {
 
     private static final Logger logger = LogManager.getLogger(WebServerCustomizer.class);
 

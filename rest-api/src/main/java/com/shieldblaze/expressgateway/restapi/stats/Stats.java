@@ -27,7 +27,9 @@ import com.shieldblaze.expressgateway.restapi.response.FastBuilder;
 import com.shieldblaze.expressgateway.restapi.response.builder.ErrorBase;
 import com.shieldblaze.expressgateway.restapi.response.builder.Message;
 import io.netty.handler.codec.http.HttpResponseStatus;
+import io.swagger.v3.oas.annotations.Operation;
 import org.springframework.http.HttpStatus;
+import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
@@ -38,7 +40,8 @@ import org.springframework.web.bind.annotation.RestController;
 @RequestMapping("/stats")
 public class Stats {
 
-    @GetMapping("/all")
+    @Operation(summary = "Get Stats of Everything", description = "Get Stats for Nodes across all Load Balancers")
+    @GetMapping(value = "/all", produces = MediaType.APPLICATION_JSON_VALUE)
     public ResponseEntity<String> all() {
         try {
 
@@ -84,7 +87,8 @@ public class Stats {
         }
     }
 
-    @GetMapping("/loadBalancer/{LBID}")
+    @Operation(summary = "Get Stats of Load Balancer", description = "Get Stats Of Specific Load Balancer")
+    @GetMapping(value = "/loadBalancer/{LBID}", produces = MediaType.APPLICATION_JSON_VALUE)
     public ResponseEntity<String> loadBalancer(@PathVariable String LBID) {
         try {
 

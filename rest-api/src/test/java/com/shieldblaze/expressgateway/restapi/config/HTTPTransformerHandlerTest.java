@@ -74,6 +74,7 @@ class HTTPTransformerHandlerTest {
         HttpRequest httpRequest = HttpRequest.newBuilder()
                 .POST(HttpRequest.BodyPublishers.ofString(configJson.toString()))
                 .uri(URI.create("http://127.0.0.1:9110/config/http"))
+                .setHeader("Content-Type", "application/json")
                 .build();
 
         HttpResponse<String> httpResponse = HTTP_CLIENT.send(httpRequest, HttpResponse.BodyHandlers.ofString());
