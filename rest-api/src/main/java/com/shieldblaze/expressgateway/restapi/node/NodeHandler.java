@@ -29,6 +29,7 @@ import io.netty.handler.codec.http.HttpResponseStatus;
 import io.swagger.v3.oas.annotations.Parameter;
 import io.swagger.v3.oas.annotations.tags.Tag;
 import org.springframework.http.HttpStatus;
+import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.DeleteMapping;
 import org.springframework.web.bind.annotation.PathVariable;
@@ -44,8 +45,11 @@ import java.net.InetSocketAddress;
 @Tag(name = "Node Handler", description = "Node API")
 public class NodeHandler {
 
-    @PostMapping("/{LBID}/add")
-    public ResponseEntity<String> addNode(@Parameter(description = "Load Balancer ID") @PathVariable String LBID, @RequestBody AddNodeHandler addNodeHandler) {
+    @PostMapping(value = "/{LBID}/add", consumes = MediaType.APPLICATION_JSON_VALUE, produces = MediaType.APPLICATION_JSON_VALUE)
+    public ResponseEntity<String> addNode(@Parameter(description = "Load Balancer ID")
+                                          @PathVariable String LBID,
+                                          @Parameter(description = "JSON Body containing Configuration Data")
+                                          @RequestBody AddNodeHandler addNodeHandler) {
         try {
             L4LoadBalancer l4LoadBalancer = LoadBalancersRegistry.id(LBID);
 
@@ -76,8 +80,11 @@ public class NodeHandler {
         }
     }
 
-    @DeleteMapping("/{LBID}/remove/{NID}")
-    public ResponseEntity<String> removeNode(@PathVariable String LBID, @PathVariable String NID) {
+    @DeleteMapping(value = "/{LBID}/remove/{NodeID}", produces = MediaType.APPLICATION_JSON_VALUE)
+    public ResponseEntity<String> removeNode(@Parameter(description = "Load Balancer ID")
+                                             @PathVariable String LBID,
+                                             @Parameter(description = "NodeID to be removed")
+                                             @PathVariable String NodeID) {
         try {
             L4LoadBalancer l4LoadBalancer = LoadBalancersRegistry.id(LBID);
 
@@ -86,7 +93,7 @@ public class NodeHandler {
                 return FastBuilder.error(ErrorBase.LOADBALANCER_NOT_FOUND, HttpResponseStatus.NOT_FOUND);
             }
 
-            boolean deleteNode = l4LoadBalancer.cluster().removeNode(NID);
+            boolean deleteNode = l4LoadBalancer.cluster().removeNode(NodeID);
 
             APIResponse apiResponse = APIResponse.newBuilder()
                     .isSuccess(deleteNode)
