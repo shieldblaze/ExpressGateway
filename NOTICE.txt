@@ -81,3 +81,24 @@ This product depends on 'Brotli4j'. License for the same can be obtained at:
     * license/LICENSE.brotli4j.txt (GNU General Public License v3.0)
 
 ---------------------------------
+
+This product depends on 'Google Gson'. License for the same can be obtained at:
+
+  * LICENSE:
+    * license/LICENSE.gson.txt (Apache License 2.0)
+
+---------------------------------
+
+This product depends on 'Spring Projects'. License for the same can be obtained at:
+
+  * LICENSE:
+    * license/LICENSE.spring.txt (Apache License 2.0)
+
+---------------------------------
+
+This product depends on 'Undertow.io'. License for the same can be obtained at:
+
+  * LICENSE:
+    * license/LICENSE.undertow.txt (Apache License 2.0)
+
+---------------------------------
