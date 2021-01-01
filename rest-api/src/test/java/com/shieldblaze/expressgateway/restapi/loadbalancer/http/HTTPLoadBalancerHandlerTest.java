@@ -41,6 +41,7 @@ class HTTPLoadBalancerHandlerTest {
 
     @BeforeAll
     static void setup() {
+        System.setProperty("restapi.bindPort", "9112");
         ctx = SpringApplication.run(Server.class);
     }
 
@@ -59,7 +60,7 @@ class HTTPLoadBalancerHandlerTest {
 
         HttpRequest httpRequest = HttpRequest.newBuilder()
                 .POST(HttpRequest.BodyPublishers.ofString(requestBody.toString()))
-                .uri(URI.create("http://127.0.0.1:9110/loadbalancer/http/create"))
+                .uri(URI.create("http://127.0.0.1:9112/loadbalancer/http/create"))
                 .setHeader("Content-Type", "application/json")
                 .build();
 
@@ -81,7 +82,7 @@ class HTTPLoadBalancerHandlerTest {
         httpRequest = HttpRequest.newBuilder()
                 .POST(HttpRequest.BodyPublishers.ofString(requestBody.toString()))
                 .setHeader("Content-Type", "application/json")
-                .uri(URI.create("http://127.0.0.1:9110/node/" + LBID + "/add"))
+                .uri(URI.create("http://127.0.0.1:9112/node/" + LBID + "/add"))
                 .build();
 
         httpResponse = httpClient.send(httpRequest, HttpResponse.BodyHandlers.ofString());
@@ -93,7 +94,7 @@ class HTTPLoadBalancerHandlerTest {
         httpRequest = HttpRequest.newBuilder()
                 .DELETE()
                 .setHeader("Content-Type", "application/json")
-                .uri(URI.create("http://127.0.0.1:9110/node/" + LBID + "/remove/" + NodeID))
+                .uri(URI.create("http://127.0.0.1:9112/node/" + LBID + "/remove/" + NodeID))
                 .build();
 
         httpResponse = httpClient.send(httpRequest, HttpResponse.BodyHandlers.ofString());
