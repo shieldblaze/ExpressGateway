@@ -32,11 +32,15 @@ import io.netty.buffer.ByteBufAllocator;
 import io.netty.channel.ChannelHandler;
 
 import java.net.InetSocketAddress;
+import java.util.UUID;
+import java.util.concurrent.atomic.AtomicBoolean;
 
 /**
  * {@link L4LoadBalancer} holds base functions for a L4-Load Balancer.
  */
 public abstract class L4LoadBalancer {
+
+    public final String ID = UUID.randomUUID().toString();
 
     private final InetSocketAddress bindAddress;
     private final L4FrontListener l4FrontListener;
@@ -48,6 +52,8 @@ public abstract class L4LoadBalancer {
 
     private final ByteBufAllocator byteBufAllocator;
     private final EventLoopFactory eventLoopFactory;
+
+    private AtomicBoolean running = new AtomicBoolean(false);
 
     /**
      * @param bindAddress       {@link InetSocketAddress} on which {@link L4FrontListener} will bind and listen.
@@ -84,7 +90,13 @@ public abstract class L4LoadBalancer {
      * Start L4 Load Balancer
      */
     public L4FrontListenerStartupEvent start() {
-        return l4FrontListener.start();
+        L4FrontListenerStartupEvent startupEvent = l4FrontListener.start();
+        startupEvent.future().whenComplete((_void, throwable) -> {
+            if (startupEvent.finished() && startupEvent.success()) {
+                running.set(true);
+            }
+        });
+        return startupEvent;
     }
 
     /**
@@ -93,7 +105,11 @@ public abstract class L4LoadBalancer {
     public L4FrontListenerStopEvent stop() {
         eventLoopFactory.parentGroup().shutdownGracefully();
         eventLoopFactory.childGroup().shutdownGracefully();
-        return l4FrontListener.stop();
+
+        L4FrontListenerStopEvent stopEvent = l4FrontListener.stop();
+        stopEvent.future().whenComplete((unused, throwable) -> running.set(false));
+
+        return stopEvent;
     }
 
     /**
@@ -158,5 +174,9 @@ public abstract class L4LoadBalancer {
 
     public EventSubscriber eventSubscriber() {
         return cluster.eventSubscriber();
+    }
+
+    public AtomicBoolean running() {
+        return running;
     }
 }

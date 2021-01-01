@@ -17,6 +17,7 @@
  */
 package com.shieldblaze.expressgateway.configuration.buffer;
 
+import com.google.gson.annotations.Expose;
 import io.netty.buffer.PooledByteBufAllocator;
 import io.netty.util.internal.PlatformDependent;
 
@@ -24,14 +25,32 @@ import io.netty.util.internal.PlatformDependent;
  * Configuration for {@link PooledByteBufAllocator}
  */
 public final class PooledByteBufAllocatorConfiguration {
+
+    @Expose
     private boolean preferDirect;
-    private int HeapArena;
-    private int DirectArena;
+
+    @Expose
+    private int heapArena;
+
+    @Expose
+    private int directArena;
+
+    @Expose
     private int pageSize;
+
+    @Expose
     private int maxOrder;
+
+    @Expose
     private int smallCacheSize;
+
+    @Expose
     private int normalCacheSize;
+
+    @Expose
     private boolean useCacheForAllThreads;
+
+    @Expose
     private int directMemoryCacheAlignment;
 
     PooledByteBufAllocatorConfiguration() {
@@ -55,8 +74,8 @@ public final class PooledByteBufAllocatorConfiguration {
     private PooledByteBufAllocatorConfiguration(boolean preferDirect, int pageSize, int maxOrder, int heapArena, int directArena, int smallCacheSize,
                                                 int normalCacheSize, boolean useCacheForAllThreads, int directMemoryCacheAlignment) {
         this.preferDirect = preferDirect;
-        HeapArena = heapArena;
-        DirectArena = directArena;
+        this.heapArena = heapArena;
+        this.directArena = directArena;
         this.pageSize = pageSize;
         this.maxOrder = maxOrder;
         this.smallCacheSize = smallCacheSize;
@@ -81,11 +100,11 @@ public final class PooledByteBufAllocatorConfiguration {
      * @see PooledByteBufAllocatorConfigurationBuilder#withHeapArena(int)
      */
     public int heapArena() {
-        return HeapArena;
+        return heapArena;
     }
 
     PooledByteBufAllocatorConfiguration heapArena(int heapArena) {
-        this.HeapArena = heapArena;
+        this.heapArena = heapArena;
         return this;
     }
 
@@ -93,11 +112,11 @@ public final class PooledByteBufAllocatorConfiguration {
      * @see PooledByteBufAllocatorConfigurationBuilder#withDirectArena(int)
      */
     public int directArena() {
-        return DirectArena;
+        return directArena;
     }
 
     PooledByteBufAllocatorConfiguration directArena(int directArena) {
-        this.DirectArena = directArena;
+        this.directArena = directArena;
         return this;
     }
 

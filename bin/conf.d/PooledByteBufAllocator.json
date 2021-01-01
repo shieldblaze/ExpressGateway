@@ -1,0 +1,11 @@
+{
+  "preferDirect": true,
+  "heapArena": 12,
+  "directArena": 12,
+  "pageSize": 16384,
+  "maxOrder": 11,
+  "smallCacheSize": 256,
+  "normalCacheSize": 64,
+  "useCacheForAllThreads": true,
+  "directMemoryCacheAlignment": 0
+}

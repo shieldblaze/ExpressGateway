@@ -18,10 +18,6 @@
 package com.shieldblaze.expressgateway.backend;
 
 import com.shieldblaze.expressgateway.backend.cluster.Cluster;
-import com.shieldblaze.expressgateway.backend.events.node.NodeEvent;
-import com.shieldblaze.expressgateway.backend.events.node.NodeIdleEvent;
-import com.shieldblaze.expressgateway.backend.events.node.NodeOfflineEvent;
-import com.shieldblaze.expressgateway.backend.events.node.NodeOnlineEvent;
 import com.shieldblaze.expressgateway.backend.exceptions.TooManyConnectionsException;
 import com.shieldblaze.expressgateway.common.Math;
 import com.shieldblaze.expressgateway.common.annotation.NonNull;
@@ -46,7 +42,6 @@ public final class Node implements Comparable<Node> {
      * Unique identifier of the node
      */
     private final String ID = UUID.randomUUID().toString();
-
 
     private final int HASH = Objects.hash(ID);
 
@@ -102,6 +97,10 @@ public final class Node implements Comparable<Node> {
 
     public Node(Cluster cluster, InetSocketAddress socketAddress) {
         this(cluster, socketAddress, -1, null);
+    }
+
+    public Node(Cluster cluster, InetSocketAddress socketAddress, int maxConnections) {
+        this(cluster, socketAddress, maxConnections, null);
     }
 
     /**

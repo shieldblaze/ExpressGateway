@@ -18,8 +18,8 @@
 package com.shieldblaze.expressgateway.protocol.tcp;
 
 import com.shieldblaze.expressgateway.core.ConnectionTimeoutHandler;
-import com.shieldblaze.expressgateway.core.loadbalancer.L4LoadBalancer;
 import com.shieldblaze.expressgateway.core.SNIHandler;
+import com.shieldblaze.expressgateway.core.loadbalancer.L4LoadBalancer;
 import io.netty.channel.ChannelHandlerContext;
 import io.netty.channel.ChannelInitializer;
 import io.netty.channel.socket.SocketChannel;

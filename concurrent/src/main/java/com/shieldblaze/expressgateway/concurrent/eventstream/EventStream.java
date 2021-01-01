@@ -28,6 +28,8 @@ import java.util.concurrent.CopyOnWriteArrayList;
  */
 public class EventStream {
 
+    private boolean isClosed;
+
     /**
      * List of subscribers
      */
@@ -79,5 +81,14 @@ public class EventStream {
 
     public EventPublisher eventPublisher() {
         return eventPublisher;
+    }
+
+    public void close() {
+        if (!isClosed) {
+            subscribers.clear();
+            isClosed = true;
+        } else {
+            throw new IllegalStateException("EventStream is already closed");
+        }
     }
 }

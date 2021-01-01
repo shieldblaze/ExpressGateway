@@ -97,13 +97,11 @@ class CompressionTest {
                 .withTransportType(TransportType.NIO)
                 .withTCPFastOpenMaximumPendingRequests(2147483647)
                 .withBackendConnectTimeout(10000 * 5)
-                .withBackendSocketTimeout(10000 * 5)
                 .withReceiveBufferAllocationType(ReceiveBufferAllocationType.FIXED)
                 .withReceiveBufferSizes(new int[]{65535})
                 .withSocketReceiveBufferSize(2147483647)
                 .withSocketSendBufferSize(2147483647)
                 .withTCPConnectionBacklog(2147483647)
-                .withDataBacklog(2147483647)
                 .withConnectionIdleTimeout(1800000)
                 .build();
 
@@ -120,15 +118,14 @@ class CompressionTest {
 
         SelfSignedCertificate selfSignedCertificate = new SelfSignedCertificate("localhost", "EC", 256);
 
-        CertificateKeyPair certificateKeyPair = new CertificateKeyPair(
-                Collections.singletonList(selfSignedCertificate.cert()), selfSignedCertificate.key(), false);
+        CertificateKeyPair certificateKeyPair = new CertificateKeyPair(selfSignedCertificate.certificate().getAbsolutePath(),
+                selfSignedCertificate.privateKey().getAbsolutePath(), false);
 
         TLSServerMapping tlsServerMapping = new TLSServerMapping(certificateKeyPair);
 
         forServer = TLSConfigurationBuilder.forServer()
                 .withProtocols(Collections.singletonList(Protocol.TLS_1_3))
                 .withCiphers(Collections.singletonList(Cipher.TLS_AES_128_GCM_SHA256))
-                .withUseALPN(true)
                 .withTLSServerMapping(tlsServerMapping)
                 .withMutualTLS(MutualTLS.NOT_REQUIRED)
                 .build();
@@ -136,9 +133,8 @@ class CompressionTest {
         forClient = TLSConfigurationBuilder.forClient()
                 .withProtocols(Collections.singletonList(Protocol.TLS_1_3))
                 .withCiphers(Collections.singletonList(Cipher.TLS_AES_256_GCM_SHA384))
-                .withUseALPN(true)
                 .withMutualTLS(MutualTLS.NOT_REQUIRED)
-                .withTrustManager(InsecureTrustManagerFactory.INSTANCE.getTrustManagers()[0])
+                .withAcceptAllCerts(true)
                 .build();
 
         httpConfiguration = HTTPConfigurationBuilder.newBuilder()

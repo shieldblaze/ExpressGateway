@@ -26,15 +26,13 @@ import com.shieldblaze.expressgateway.backend.loadbalance.LoadBalance;
 import com.shieldblaze.expressgateway.backend.loadbalance.Request;
 import com.shieldblaze.expressgateway.backend.loadbalance.Response;
 import com.shieldblaze.expressgateway.common.annotation.NonNull;
-import com.shieldblaze.expressgateway.concurrent.eventstream.AsyncEventStream;
 import com.shieldblaze.expressgateway.concurrent.eventstream.EventPublisher;
 import com.shieldblaze.expressgateway.concurrent.eventstream.EventStream;
 import com.shieldblaze.expressgateway.concurrent.eventstream.EventSubscriber;
-import com.shieldblaze.expressgateway.configuration.eventstream.EventStreamConfiguration;
 
+import java.util.Collections;
 import java.util.List;
 import java.util.concurrent.CopyOnWriteArrayList;
-import java.util.concurrent.Executors;
 
 /**
  * Base class for Cluster
@@ -104,6 +102,27 @@ public abstract class Cluster {
         return true;
     }
 
+    public boolean removeNode(String nodeId) {
+        for (Node n : nodes) {
+            if (n.id().equalsIgnoreCase(nodeId)) {
+                return removeNode(n);
+            }
+        }
+
+        return false;
+    }
+
+    public boolean idleNode(String nodeId) {
+        for (Node n : nodes) {
+            if (n.id().equalsIgnoreCase(nodeId)) {
+                n.state(State.IDLE);
+                return true;
+            }
+        }
+
+        return false;
+    }
+
     public List<Node> nodes() {
         return nodes;
     }
@@ -116,6 +135,10 @@ public abstract class Cluster {
     @NonNull
     public Response nextNode(Request request) throws LoadBalanceException {
         return loadBalance.response(request);
+    }
+
+    public EventStream eventStream() {
+        return eventStream;
     }
 
     public EventSubscriber eventSubscriber() {

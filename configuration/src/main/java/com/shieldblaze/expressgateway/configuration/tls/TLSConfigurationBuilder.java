@@ -27,7 +27,9 @@ import io.netty.handler.ssl.util.InsecureTrustManagerFactory;
 import io.netty.util.internal.ObjectUtil;
 
 import javax.net.ssl.SSLException;
-import javax.net.ssl.TrustManager;
+import javax.net.ssl.TrustManagerFactory;
+import java.io.File;
+import java.security.KeyStore;
 import java.util.List;
 import java.util.Map;
 import java.util.TreeMap;
@@ -40,14 +42,13 @@ public final class TLSConfigurationBuilder {
 
     private List<Cipher> ciphers;
     private List<Protocol> protocols;
-    private TrustManager trustManager;
     private MutualTLS mutualTLS;
     private boolean useStartTLS;
-    private boolean useALPN;
     private int sessionTimeout;
     private int sessionCacheSize;
     private TLSServerMapping tlsServerMapping;
     private CertificateKeyPair certificateKeyPair;
+    private boolean acceptAllCerts;
 
     /**
      * @see TLSConfigurationBuilder#newBuilder(boolean)
@@ -97,14 +98,6 @@ public final class TLSConfigurationBuilder {
     }
 
     /**
-     * {@link TrustManager} to use for TLS Client
-     */
-    public TLSConfigurationBuilder withTrustManager(TrustManager trustManager) {
-        this.trustManager = trustManager;
-        return this;
-    }
-
-    /**
      * {@link MutualTLS} to use for TLS Server
      */
     public TLSConfigurationBuilder withMutualTLS(MutualTLS mutualTLS) {
@@ -117,14 +110,6 @@ public final class TLSConfigurationBuilder {
      */
     public TLSConfigurationBuilder withUseStartTLS(boolean useStartTLS) {
         this.useStartTLS = useStartTLS;
-        return this;
-    }
-
-    /**
-     * Set to {@code true} if we want to use {@code ALPN} with HTTP/2 and HTTP/1.1 else set to {@code false}
-     */
-    public TLSConfigurationBuilder withUseALPN(boolean useALPN) {
-        this.useALPN = useALPN;
         return this;
     }
 
@@ -161,6 +146,14 @@ public final class TLSConfigurationBuilder {
     }
 
     /**
+     * Accept all certificates (Insecure)
+     */
+    public TLSConfigurationBuilder withAcceptAllCerts(boolean acceptAllCerts) {
+        this.acceptAllCerts = acceptAllCerts;
+        return this;
+    }
+
+    /**
      * Build {@link TLSConfiguration}
      *
      * @return {@link TLSConfiguration} Instance
@@ -179,8 +172,6 @@ public final class TLSConfigurationBuilder {
         if (forServer) {
             ObjectUtil.checkNotNull(tlsServerMapping, "TLSServerMapping");
         } else {
-            ObjectUtil.checkNotNull(trustManager, "Trust Manager");
-
             if (mutualTLS == MutualTLS.REQUIRED || mutualTLS == MutualTLS.OPTIONAL) {
                 ObjectUtil.checkNotNull(certificateKeyPair, "CertificateKeyPair for Client");
             }
@@ -195,56 +186,64 @@ public final class TLSConfigurationBuilder {
                 CertificateKeyPair certificateKeyPair = entry.getValue();
 
                 // Throw error if OpenSsl does not support OCSP Stapling
-                if (certificateKeyPair.useOCSP() && !OpenSsl.isOcspSupported()) {
+                if (certificateKeyPair.useOCSPStapling() && !OpenSsl.isOcspSupported()) {
                     throw new IllegalArgumentException("OCSP Stapling is not available because OpenSSL is not available");
                 }
 
-                SslContextBuilder sslContextBuilder = SslContextBuilder.forServer(certificateKeyPair.privateKey(), certificateKeyPair.certificateChain())
+                SslContextBuilder sslContextBuilder = SslContextBuilder.forServer(new File(certificateKeyPair.certificateChain()),
+                        new File(certificateKeyPair.privateKey()))
                         .sslProvider(OpenSsl.isAvailable() ? SslProvider.OPENSSL : SslProvider.JDK)
                         .protocols(Protocol.getProtocols(protocols))
-                        .enableOcsp(certificateKeyPair.useOCSP())
+                        .enableOcsp(certificateKeyPair.useOCSPStapling())
                         .clientAuth(mutualTLS.clientAuth())
                         .startTls(useStartTLS)
                         .sessionTimeout(ObjectUtil.checkPositiveOrZero(sessionTimeout, "Session Timeout"))
-                        .sessionCacheSize(ObjectUtil.checkPositiveOrZero(sessionCacheSize, "Session Cache Size"));
-
-                if (useALPN) {
-                    sslContextBuilder.applicationProtocolConfig(new ApplicationProtocolConfig(
-                            ApplicationProtocolConfig.Protocol.ALPN,
-                            ApplicationProtocolConfig.SelectorFailureBehavior.NO_ADVERTISE,
-                            ApplicationProtocolConfig.SelectedListenerFailureBehavior.ACCEPT,
-                            ApplicationProtocolNames.HTTP_2,
-                            ApplicationProtocolNames.HTTP_1_1));
-                }
+                        .sessionCacheSize(ObjectUtil.checkPositiveOrZero(sessionCacheSize, "Session Cache Size"))
+                        .applicationProtocolConfig(new ApplicationProtocolConfig(
+                                ApplicationProtocolConfig.Protocol.ALPN,
+                                ApplicationProtocolConfig.SelectorFailureBehavior.NO_ADVERTISE,
+                                ApplicationProtocolConfig.SelectedListenerFailureBehavior.ACCEPT,
+                                ApplicationProtocolNames.HTTP_2,
+                                ApplicationProtocolNames.HTTP_1_1));
 
                 certificateKeyPair.setSslContext(sslContextBuilder.build());
                 hostnameMap.put(hostname, certificateKeyPair);
             }
         } else {
+            TrustManagerFactory trustManagerFactory;
+            if (acceptAllCerts) {
+                trustManagerFactory = InsecureTrustManagerFactory.INSTANCE;
+            } else {
+                try {
+                    trustManagerFactory = TrustManagerFactory.getInstance(TrustManagerFactory.getDefaultAlgorithm());
+                    trustManagerFactory.init((KeyStore) null);
+                } catch (Exception ex) {
+                    throw new IllegalArgumentException("Error occurred while building TrustManagerFactory", ex);
+                }
+            }
+
             SslContextBuilder sslContextBuilder = SslContextBuilder.forClient()
                     .sslProvider(OpenSsl.isAvailable() ? SslProvider.OPENSSL : SslProvider.JDK)
                     .protocols(Protocol.getProtocols(protocols))
                     .clientAuth(mutualTLS.clientAuth())
-                    .trustManager(InsecureTrustManagerFactory.INSTANCE)
-                    .startTls(false);
+                    .trustManager(trustManagerFactory)
+                    .startTls(useStartTLS)
+                    .applicationProtocolConfig(new ApplicationProtocolConfig(
+                            ApplicationProtocolConfig.Protocol.ALPN,
+                            ApplicationProtocolConfig.SelectorFailureBehavior.NO_ADVERTISE,
+                            ApplicationProtocolConfig.SelectedListenerFailureBehavior.ACCEPT,
+                            ApplicationProtocolNames.HTTP_2,
+                            ApplicationProtocolNames.HTTP_1_1));
 
             if (certificateKeyPair != null) {
                 if (mutualTLS == MutualTLS.REQUIRED || mutualTLS == MutualTLS.OPTIONAL) {
-                    sslContextBuilder.keyManager(certificateKeyPair.privateKey(), certificateKeyPair.certificateChain());
+                    sslContextBuilder.keyManager(new File(certificateKeyPair.certificateChain()).getAbsoluteFile(),
+                            new File(certificateKeyPair.privateKey()).getAbsoluteFile());
                 }
             }
 
             if (certificateKeyPair == null) {
                 certificateKeyPair = new CertificateKeyPair();
-            }
-
-            if (useALPN) {
-                sslContextBuilder.applicationProtocolConfig(new ApplicationProtocolConfig(
-                        ApplicationProtocolConfig.Protocol.ALPN,
-                        ApplicationProtocolConfig.SelectorFailureBehavior.NO_ADVERTISE,
-                        ApplicationProtocolConfig.SelectedListenerFailureBehavior.ACCEPT,
-                        ApplicationProtocolNames.HTTP_2,
-                        ApplicationProtocolNames.HTTP_1_1));
             }
 
             certificateKeyPair.setSslContext(sslContextBuilder.build());
@@ -253,6 +252,13 @@ public final class TLSConfigurationBuilder {
 
         return new TLSConfiguration()
                 .certificateKeyPairMap(hostnameMap)
+                .ciphers(ciphers)
+                .protocols(protocols)
+                .mutualTLS(mutualTLS)
+                .useStartTLS(useStartTLS)
+                .sessionTimeout(sessionTimeout)
+                .sessionCacheSize(sessionCacheSize)
+                .acceptAllCerts(acceptAllCerts)
                 .forServer(forServer);
     }
 }

@@ -17,9 +17,6 @@
  */
 package com.shieldblaze.expressgateway.configuration.transport;
 
-import com.shieldblaze.expressgateway.configuration.transport.ReceiveBufferAllocationType;
-import com.shieldblaze.expressgateway.configuration.transport.TransportConfigurationBuilder;
-import com.shieldblaze.expressgateway.configuration.transport.TransportType;
 import org.junit.jupiter.api.Test;
 
 import static org.junit.jupiter.api.Assertions.assertThrows;

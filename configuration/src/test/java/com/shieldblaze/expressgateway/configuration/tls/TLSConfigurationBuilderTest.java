@@ -31,8 +31,8 @@ final class TLSConfigurationBuilderTest {
     @Test
     void test() throws CertificateException {
         SelfSignedCertificate selfSignedCertificate = new SelfSignedCertificate("localhost", "EC", 256);
-        CertificateKeyPair certificateKeyPair = new CertificateKeyPair(Collections.singletonList(selfSignedCertificate.cert()),
-                selfSignedCertificate.key(), false);
+        CertificateKeyPair certificateKeyPair = new CertificateKeyPair(selfSignedCertificate.certificate().getAbsolutePath(),
+                selfSignedCertificate.privateKey().getAbsolutePath(), false);
         TLSServerMapping tlsServerMapping = new TLSServerMapping(certificateKeyPair);
         tlsServerMapping.mapping("*.localhost", certificateKeyPair);
 
@@ -66,7 +66,6 @@ final class TLSConfigurationBuilderTest {
                 .withProtocols(Collections.singletonList(Protocol.TLS_1_3))
                 .withMutualTLS(MutualTLS.NOT_REQUIRED)
                 .withTLSServerMapping(tlsServerMapping)
-                .withUseALPN(true)
                 .withSessionTimeout(-1)
                 .build());
 
@@ -75,7 +74,6 @@ final class TLSConfigurationBuilderTest {
                 .withProtocols(Collections.singletonList(Protocol.TLS_1_3))
                 .withMutualTLS(MutualTLS.NOT_REQUIRED)
                 .withTLSServerMapping(tlsServerMapping)
-                .withUseALPN(true)
                 .withSessionTimeout(10)
                 .withSessionCacheSize(-1)
                 .build());
@@ -85,7 +83,6 @@ final class TLSConfigurationBuilderTest {
                 .withProtocols(Collections.singletonList(Protocol.TLS_1_3))
                 .withMutualTLS(MutualTLS.NOT_REQUIRED)
                 .withTLSServerMapping(tlsServerMapping)
-                .withUseALPN(true)
                 .withSessionTimeout(10)
                 .withSessionCacheSize(10)
                 .build());

@@ -20,8 +20,6 @@ package com.shieldblaze.expressgateway.configuration.tls;
 import io.netty.handler.ssl.util.SelfSignedCertificate;
 import org.junit.jupiter.api.Test;
 
-import java.util.Collections;
-
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
@@ -32,8 +30,8 @@ final class TLSServerMappingTest {
     void defaultHost() throws Exception {
         SelfSignedCertificate selfSignedCertificate = new SelfSignedCertificate("localhost", "EC", 256);
 
-        CertificateKeyPair certificateKeyPair = new CertificateKeyPair(Collections.singletonList(selfSignedCertificate.cert()),
-                selfSignedCertificate.key(), false);
+        CertificateKeyPair certificateKeyPair = new CertificateKeyPair(selfSignedCertificate.certificate().getAbsolutePath(),
+                selfSignedCertificate.privateKey().getAbsolutePath(), false);
 
         TLSServerMapping tlsServerMapping = new TLSServerMapping(certificateKeyPair);
         assertEquals(certificateKeyPair, tlsServerMapping.certificateKeyMap.get("DEFAULT_HOST"));
@@ -49,8 +47,8 @@ final class TLSServerMappingTest {
     void addMapping() throws Exception {
         SelfSignedCertificate selfSignedCertificate = new SelfSignedCertificate("localhost", "EC", 256);
 
-        CertificateKeyPair certificateKeyPair = new CertificateKeyPair(Collections.singletonList(selfSignedCertificate.cert()),
-                selfSignedCertificate.key(), false);
+        CertificateKeyPair certificateKeyPair = new CertificateKeyPair(selfSignedCertificate.certificate().getAbsolutePath(),
+                selfSignedCertificate.privateKey().getAbsolutePath(), false);
 
         TLSServerMapping tlsServerMapping = new TLSServerMapping();
         tlsServerMapping.mapping("localhost", certificateKeyPair);

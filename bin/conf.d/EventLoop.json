@@ -1,0 +1,4 @@
+{
+  "parentWorkers": 8,
+  "childWorkers": 16
+}

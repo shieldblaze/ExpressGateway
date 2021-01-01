@@ -17,9 +17,14 @@
  */
 package com.shieldblaze.expressgateway.configuration.healthcheck;
 
+import com.google.gson.annotations.Expose;
+
 public class HealthCheckConfiguration {
 
+    @Expose
     private final int workers;
+
+    @Expose
     private final int timeInterval;
 
     HealthCheckConfiguration(int workers, int timeInterval) {
