@@ -44,7 +44,7 @@ final class WebServerCustomizer implements WebServerFactoryCustomizer<Configurab
             System.exit(1);
         }
 
-        container.setPort(SystemPropertyUtil.getInt("restapi.bindAddress", 9110));
+        container.setPort(SystemPropertyUtil.getInt("restapi.bindPort", 9110));
         container.setIoThreads(Runtime.getRuntime().availableProcessors());
         container.setWorkerThreads(Runtime.getRuntime().availableProcessors() * 2);
         container.setUseDirectBuffers(true);

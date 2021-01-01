@@ -48,6 +48,7 @@ class L4LoadBalancerHandlerTest {
 
     @BeforeAll
     static void setup() {
+        System.setProperty("restapi.bindPort", "9111");
         ctx = SpringApplication.run(Server.class);
     }
 
@@ -60,14 +61,14 @@ class L4LoadBalancerHandlerTest {
     void createLoadBalancer() throws IOException, InterruptedException {
         JsonObject requestBody = new JsonObject();
         requestBody.addProperty("bindAddress", "127.0.0.1");
-        requestBody.addProperty("bindPort", 10000);
+        requestBody.addProperty("bindPort", 55555);
         requestBody.addProperty("protocol", "tcp");
         requestBody.addProperty("algorithm", "RoundRobin");
         requestBody.addProperty("sessionPersistence", "NOOP");
 
         HttpRequest httpRequest = HttpRequest.newBuilder()
                 .POST(HttpRequest.BodyPublishers.ofString(requestBody.toString()))
-                .uri(URI.create("http://127.0.0.1:9110/loadbalancer/l4/create"))
+                .uri(URI.create("http://127.0.0.1:9111/loadbalancer/l4/create"))
                 .setHeader("Content-Type", "application/json")
                 .build();
 
@@ -83,7 +84,7 @@ class L4LoadBalancerHandlerTest {
         // Add a node
         requestBody = new JsonObject();
         requestBody.addProperty("host", "127.0.0.1");
-        requestBody.addProperty("port", 25000);
+        requestBody.addProperty("port", 50000);
         requestBody.addProperty("maxConnections", "-1");
 
         new SingleRequestTCPServer().start();
@@ -91,14 +92,14 @@ class L4LoadBalancerHandlerTest {
         httpRequest = HttpRequest.newBuilder()
                 .POST(HttpRequest.BodyPublishers.ofString(requestBody.toString()))
                 .setHeader("Content-Type", "application/json")
-                .uri(URI.create("http://127.0.0.1:9110/node/" + LBID + "/add"))
+                .uri(URI.create("http://127.0.0.1:9111/node/" + LBID + "/add"))
                 .build();
 
         httpResponse = httpClient.send(httpRequest, HttpResponse.BodyHandlers.ofString());
         jsonObject = JsonParser.parseString(httpResponse.body()).getAsJsonObject();
         assertTrue(jsonObject.get("Success").getAsBoolean());
 
-        Socket socket = new Socket(InetAddress.getByName("127.0.0.1"), 10000);
+        Socket socket = new Socket(InetAddress.getByName("127.0.0.1"), 55555);
         InputStream inputStream = socket.getInputStream();
         assertEquals("HELLO", new String(inputStream.readNBytes(5)));
         socket.close();
@@ -107,10 +108,11 @@ class L4LoadBalancerHandlerTest {
     private static final class SingleRequestTCPServer extends Thread {
         @Override
         public void run() {
-            try (ServerSocket serverSocket = new ServerSocket(25000, 1000, InetAddress.getByName("127.0.0.1"))) {
+            try (ServerSocket serverSocket = new ServerSocket(50000, 1000, InetAddress.getByName("127.0.0.1"))) {
                Socket socket = serverSocket.accept();
                socket.getOutputStream().write("HELLO".getBytes());
                socket.getOutputStream().flush();
+               socket.close();
             } catch (Exception ex) {
                 ex.printStackTrace();
             }
@@ -128,7 +130,7 @@ class L4LoadBalancerHandlerTest {
 
         HttpRequest httpRequest = HttpRequest.newBuilder()
                 .POST(HttpRequest.BodyPublishers.ofString(requestBody.toString()))
-                .uri(URI.create("http://127.0.0.1:9110/loadbalancer/l4/create"))
+                .uri(URI.create("http://127.0.0.1:9111/loadbalancer/l4/create"))
                 .setHeader("Content-Type", "application/json")
                 .build();
 
@@ -150,7 +152,7 @@ class L4LoadBalancerHandlerTest {
 
         HttpRequest httpRequest = HttpRequest.newBuilder()
                 .POST(HttpRequest.BodyPublishers.ofString(requestBody.toString()))
-                .uri(URI.create("http://127.0.0.1:9110/loadbalancer/l4/create"))
+                .uri(URI.create("http://127.0.0.1:9111/loadbalancer/l4/create"))
                 .setHeader("Content-Type", "application/json")
                 .build();
 
@@ -172,7 +174,7 @@ class L4LoadBalancerHandlerTest {
 
         HttpRequest httpRequest = HttpRequest.newBuilder()
                 .POST(HttpRequest.BodyPublishers.ofString(requestBody.toString()))
-                .uri(URI.create("http://127.0.0.1:9110/loadbalancer/l4/create"))
+                .uri(URI.create("http://127.0.0.1:9111/loadbalancer/l4/create"))
                 .setHeader("Content-Type", "application/json")
                 .build();
 
