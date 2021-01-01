@@ -15,44 +15,8 @@
  * You should have received a copy of the GNU General Public License
  * along with ShieldBlaze ExpressGateway.  If not, see <https://www.gnu.org/licenses/>.
  */
-package com.shieldblaze.expressgateway.restapi.loadbalancer;
 
-import com.fasterxml.jackson.annotation.JsonProperty;
-
-final class L4HandlerContext {
-
-    @JsonProperty("bindAddress")
-    private String bindAddress;
-
-    @JsonProperty("bindPort")
-    private int bindPort;
-
-    @JsonProperty("protocol")
-    private String protocol;
-
-    @JsonProperty("algorithm")
-    private String algorithm;
-
-    @JsonProperty("sessionPersistence")
-    private String sessionPersistence;
-
-    String bindAddress() {
-        return bindAddress;
-    }
-
-    int bindPort() {
-        return bindPort;
-    }
-
-    String protocol() {
-        return protocol;
-    }
-
-    String algorithm() {
-        return algorithm;
-    }
-
-    String sessionPersistence() {
-        return sessionPersistence;
-    }
-}
+/**
+ * This package contains configuration of various components.
+ */
+package com.shieldblaze.expressgateway.restapi.config;

@@ -39,7 +39,7 @@ import java.nio.file.NoSuchFileException;
 @RestController
 @RequestMapping("/config")
 @Tag(name = "Buffer Configuration", description = "Create or Fetch Buffer Configuration")
-public class PooledByteBufAllocatorHandler {
+public class BufferHandler {
 
     @PostMapping(value = "/buffer", consumes = MediaType.APPLICATION_JSON_VALUE, produces = MediaType.APPLICATION_JSON_VALUE)
     public ResponseEntity<String> create(@RequestBody String data) {

@@ -19,7 +19,7 @@ package com.shieldblaze.expressgateway.restapi.node;
 
 import com.fasterxml.jackson.annotation.JsonProperty;
 
-final class AddNodeHandler {
+final class AddNodeContext {
 
     @JsonProperty("host")
     private String host;

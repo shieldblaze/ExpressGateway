@@ -28,6 +28,7 @@ import com.shieldblaze.expressgateway.restapi.response.builder.ErrorBase;
 import com.shieldblaze.expressgateway.restapi.response.builder.Message;
 import io.netty.handler.codec.http.HttpResponseStatus;
 import io.swagger.v3.oas.annotations.Operation;
+import io.swagger.v3.oas.annotations.tags.Tag;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
@@ -38,9 +39,10 @@ import org.springframework.web.bind.annotation.RestController;
 
 @RestController
 @RequestMapping("/stats")
+@Tag(name = "Statistics", description = "Statistics of Load Balancer(s)")
 public class Stats {
 
-    @Operation(summary = "Get Stats of Everything", description = "Get Stats for Nodes across all Load Balancers")
+    @Operation(summary = "Get Stats of Everything", description = "Get Stats of Nodes across all Load Balancers")
     @GetMapping(value = "/all", produces = MediaType.APPLICATION_JSON_VALUE)
     public ResponseEntity<String> all() {
         try {

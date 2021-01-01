@@ -30,21 +30,21 @@ import java.time.Duration;
 
 public class Utils {
 
-    static HealthCheck determineHealthCheck(AddNodeHandler addNodeHandler) throws KeyManagementException, NoSuchAlgorithmException {
-        if (addNodeHandler.healthCheckContext().type().equalsIgnoreCase("tcp")) {
-            InetSocketAddress socketAddress = new InetSocketAddress(addNodeHandler.healthCheckContext().host(), addNodeHandler.port());
-            return new TCPHealthCheck(socketAddress, Duration.ofSeconds(addNodeHandler.healthCheckContext().timeout()));
-        } else if (addNodeHandler.healthCheckContext().type().equalsIgnoreCase("udp")) {
-            InetSocketAddress socketAddress = new InetSocketAddress(addNodeHandler.healthCheckContext().host(), addNodeHandler.port());
-            return new UDPHealthCheck(socketAddress, Duration.ofSeconds(addNodeHandler.healthCheckContext().timeout()));
-        } else if (addNodeHandler.healthCheckContext().type().equalsIgnoreCase("http")) {
-            AddNodeHandler.HealthCheckContext ctx = addNodeHandler.healthCheckContext();
+    static HealthCheck determineHealthCheck(AddNodeContext addNodeContext) throws KeyManagementException, NoSuchAlgorithmException {
+        if (addNodeContext.healthCheckContext().type().equalsIgnoreCase("tcp")) {
+            InetSocketAddress socketAddress = new InetSocketAddress(addNodeContext.healthCheckContext().host(), addNodeContext.port());
+            return new TCPHealthCheck(socketAddress, Duration.ofSeconds(addNodeContext.healthCheckContext().timeout()));
+        } else if (addNodeContext.healthCheckContext().type().equalsIgnoreCase("udp")) {
+            InetSocketAddress socketAddress = new InetSocketAddress(addNodeContext.healthCheckContext().host(), addNodeContext.port());
+            return new UDPHealthCheck(socketAddress, Duration.ofSeconds(addNodeContext.healthCheckContext().timeout()));
+        } else if (addNodeContext.healthCheckContext().type().equalsIgnoreCase("http")) {
+            AddNodeContext.HealthCheckContext ctx = addNodeContext.healthCheckContext();
             URI uri = URI.create("http://" + ctx.host() + ":" + ctx.port() + "/" + ctx.httpPath());
-            return new HTTPHealthCheck(uri, Duration.ofSeconds(addNodeHandler.healthCheckContext().timeout()), false);
-        } else if (addNodeHandler.healthCheckContext().type().equalsIgnoreCase("https")) {
-            AddNodeHandler.HealthCheckContext ctx = addNodeHandler.healthCheckContext();
+            return new HTTPHealthCheck(uri, Duration.ofSeconds(addNodeContext.healthCheckContext().timeout()), false);
+        } else if (addNodeContext.healthCheckContext().type().equalsIgnoreCase("https")) {
+            AddNodeContext.HealthCheckContext ctx = addNodeContext.healthCheckContext();
             URI uri = URI.create("https://" + ctx.host() + ":" + ctx.port() + "/" + ctx.httpPath());
-            return new HTTPHealthCheck(uri, Duration.ofSeconds(addNodeHandler.healthCheckContext().timeout()), ctx.enableTLSValidation());
+            return new HTTPHealthCheck(uri, Duration.ofSeconds(addNodeContext.healthCheckContext().timeout()), ctx.enableTLSValidation());
         }
 
         return null;

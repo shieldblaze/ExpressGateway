@@ -39,7 +39,7 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 @TestMethodOrder(MethodOrderer.OrderAnnotation.class)
-class PooledByteBufAllocatorHandlerTransformerTest {
+class BufferHandlerTransformerTest {
 
     final static HttpClient HTTP_CLIENT = HttpClient.newHttpClient();
     static ConfigurableApplicationContext ctx;

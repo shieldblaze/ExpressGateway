@@ -112,6 +112,17 @@ public abstract class Cluster {
         return false;
     }
 
+    public boolean idleNode(String nodeId) {
+        for (Node n : nodes) {
+            if (n.id().equalsIgnoreCase(nodeId)) {
+                n.state(State.IDLE);
+                return true;
+            }
+        }
+
+        return false;
+    }
+
     public List<Node> nodes() {
         return nodes;
     }

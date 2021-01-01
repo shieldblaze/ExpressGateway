@@ -15,7 +15,7 @@
  * You should have received a copy of the GNU General Public License
  * along with ShieldBlaze ExpressGateway.  If not, see <https://www.gnu.org/licenses/>.
  */
-package com.shieldblaze.expressgateway.restapi.loadbalancer;
+package com.shieldblaze.expressgateway.restapi.loadbalancer.l4;
 
 import com.shieldblaze.expressgateway.backend.cluster.Cluster;
 import com.shieldblaze.expressgateway.backend.cluster.ClusterPool;
@@ -25,7 +25,6 @@ import com.shieldblaze.expressgateway.configuration.transformer.EventStreamTrans
 import com.shieldblaze.expressgateway.core.LoadBalancersRegistry;
 import com.shieldblaze.expressgateway.core.loadbalancer.L4LoadBalancer;
 import com.shieldblaze.expressgateway.core.loadbalancer.L4LoadBalancerBuilder;
-import com.shieldblaze.expressgateway.protocol.tcp.TCPListener;
 import com.shieldblaze.expressgateway.restapi.response.FastBuilder;
 import com.shieldblaze.expressgateway.restapi.response.builder.APIResponse;
 import com.shieldblaze.expressgateway.restapi.response.builder.ErrorBase;
@@ -46,25 +45,28 @@ import org.springframework.web.bind.annotation.RestController;
 
 import java.net.InetAddress;
 import java.net.InetSocketAddress;
+import java.util.function.BiConsumer;
 
 @RestController
 @RequestMapping("/loadbalancer/l4")
-@Tag(name = "Layer-4 LoadBalancer", description = "Layer-4 LoadBalancer API")
-public class L4Handler {
+@Tag(name = "Layer-4 Load Balancer", description = "Layer-4 Load Balancer API")
+public class L4LoadBalancerHandler {
 
-    @Operation(summary = "Create new Load Balancer and Start it")
+    @Operation(summary = "Create new Load Balancer", description = "Create and start a new Load Balancer")
     @PostMapping(path = "/create", consumes = MediaType.APPLICATION_JSON_VALUE, produces = MediaType.APPLICATION_JSON_VALUE)
-    public ResponseEntity<String> create(@RequestBody L4HandlerContext l4HandlerContext) {
+    public ResponseEntity<String> create(@RequestBody L4LoadBalancerContext l4LoadBalancerContext) {
         try {
             EventStream eventStream = EventStreamTransformer.readFile().eventStream();
-            L4Balance l4Balance = Utils.determineAlgorithm(l4HandlerContext);
+            L4Balance l4Balance = Utils.determineAlgorithm(l4LoadBalancerContext);
             Cluster cluster = new ClusterPool(eventStream, l4Balance);
 
             L4LoadBalancer l4LoadBalancer = L4LoadBalancerBuilder.newBuilder()
-                    .withL4FrontListener(Utils.determineListener(l4HandlerContext))
-                    .withBindAddress(new InetSocketAddress(InetAddress.getByName(l4HandlerContext.bindAddress()), l4HandlerContext.bindPort()))
+                    .withL4FrontListener(Utils.determineListener(l4LoadBalancerContext))
+                    .withBindAddress(new InetSocketAddress(InetAddress.getByName(l4LoadBalancerContext.bindAddress()), l4LoadBalancerContext.bindPort()))
                     .withCluster(cluster)
                     .withCoreConfiguration(Utils.coreConfiguration())
+                    .withTlsForServer(l4LoadBalancerContext.tlsForServer() ? Utils.tlsForServer() : null)
+                    .withTlsForClient(l4LoadBalancerContext.tlsForClient() ? Utils.tlsForClient() : null)
                     .build();
 
             LoadBalancersRegistry.addLoadBalancer(l4LoadBalancer);
@@ -84,7 +86,7 @@ public class L4Handler {
         }
     }
 
-    @Operation(summary = "Stop a Load Balancer")
+    @Operation(summary = "Stop a Load Balancer", description = "Stop and destroy a Load Balancer")
     @DeleteMapping(path = "/stop/{id}", consumes = MediaType.APPLICATION_JSON_VALUE, produces = MediaType.APPLICATION_JSON_VALUE)
     public ResponseEntity<String> stop(@PathVariable("id") String id) {
         try {

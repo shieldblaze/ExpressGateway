@@ -35,6 +35,7 @@ import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.DeleteMapping;
 import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
+import org.springframework.web.bind.annotation.PutMapping;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RestController;
@@ -52,7 +53,7 @@ public class NodeHandler {
     public ResponseEntity<String> addNode(@Parameter(description = "Load Balancer ID")
                                           @PathVariable String LBID,
                                           @Parameter(description = "JSON Body containing Configuration Data")
-                                          @RequestBody AddNodeHandler addNodeHandler) {
+                                          @RequestBody AddNodeContext addNodeContext) {
         try {
             L4LoadBalancer l4LoadBalancer = LoadBalancersRegistry.id(LBID);
 
@@ -61,13 +62,13 @@ public class NodeHandler {
                 return FastBuilder.error(ErrorBase.LOADBALANCER_NOT_FOUND, HttpResponseStatus.NOT_FOUND);
             }
 
-            InetSocketAddress socketAddress = new InetSocketAddress(InetAddress.getByName(addNodeHandler.host()), addNodeHandler.port());
+            InetSocketAddress socketAddress = new InetSocketAddress(InetAddress.getByName(addNodeContext.host()), addNodeContext.port());
 
             Node node;
-            if (addNodeHandler.healthCheckContext() == null) {
-                node = new Node(l4LoadBalancer.cluster(), socketAddress, addNodeHandler.maxConnections());
+            if (addNodeContext.healthCheckContext() == null) {
+                node = new Node(l4LoadBalancer.cluster(), socketAddress, addNodeContext.maxConnections());
             } else {
-                node = new Node(l4LoadBalancer.cluster(), socketAddress, addNodeHandler.maxConnections(), Utils.determineHealthCheck(addNodeHandler));
+                node = new Node(l4LoadBalancer.cluster(), socketAddress, addNodeContext.maxConnections(), Utils.determineHealthCheck(addNodeContext));
             }
 
             APIResponse apiResponse = APIResponse.newBuilder()
@@ -75,7 +76,36 @@ public class NodeHandler {
                     .withResult(Result.newBuilder().withHeader("NodeID").withMessage(node.id()).build())
                     .build();
 
-            return new ResponseEntity<>(apiResponse.response(), HttpStatus.NO_CONTENT);
+            return new ResponseEntity<>(apiResponse.response(), HttpStatus.CREATED);
+        } catch (Exception ex) {
+            return FastBuilder.error(ErrorBase.REQUEST_ERROR, Message.newBuilder()
+                    .withHeader("Error")
+                    .withMessage(ex.getLocalizedMessage())
+                    .build(), HttpResponseStatus.BAD_REQUEST);
+        }
+    }
+
+    @Operation(summary = "Idle a node", description = "Mark a Node Idle in Cluster of Load Balancer")
+    @PutMapping(value = "/{LBID}/idle/{NodeID}")
+    public ResponseEntity<String> idleNode(@Parameter(description = "Load Balancer ID")
+                                           @PathVariable String LBID,
+                                           @Parameter(description = "NodeID to be marked Idle")
+                                           @PathVariable String NodeID) {
+        try {
+            L4LoadBalancer l4LoadBalancer = LoadBalancersRegistry.id(LBID);
+
+            // If LoadBalancer is not found then return error.
+            if (l4LoadBalancer == null) {
+                return FastBuilder.error(ErrorBase.LOADBALANCER_NOT_FOUND, HttpResponseStatus.NOT_FOUND);
+            }
+
+            boolean idleNode = l4LoadBalancer.cluster().idleNode(NodeID);
+
+            APIResponse apiResponse = APIResponse.newBuilder()
+                    .isSuccess(idleNode)
+                    .build();
+
+            return new ResponseEntity<>(apiResponse.response(), HttpStatus.OK);
         } catch (Exception ex) {
             return FastBuilder.error(ErrorBase.REQUEST_ERROR, Message.newBuilder()
                     .withHeader("Error")
