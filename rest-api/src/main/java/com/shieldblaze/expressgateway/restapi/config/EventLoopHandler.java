@@ -23,6 +23,7 @@ import com.shieldblaze.expressgateway.restapi.response.FastBuilder;
 import com.shieldblaze.expressgateway.restapi.response.builder.ErrorBase;
 import com.shieldblaze.expressgateway.restapi.response.builder.Message;
 import io.netty.handler.codec.http.HttpResponseStatus;
+import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.tags.Tag;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.MediaType;
@@ -38,6 +39,8 @@ import org.springframework.web.bind.annotation.RestController;
 @Tag(name = "EventLoop Configuration", description = "Create or Fetch EventLoop Configuration")
 public class EventLoopHandler {
 
+    @Operation(summary = "Create or Modify EventLoop Configuration",
+            description = "EventLoop configuration contains settings for EventLoop. EventLoop is responsible for handling I/O.")
     @PostMapping(value = "/eventloop", consumes = MediaType.APPLICATION_JSON_VALUE, produces = MediaType.APPLICATION_JSON_VALUE)
     public ResponseEntity<String> create(@RequestBody String data) {
         try {
@@ -52,6 +55,8 @@ public class EventLoopHandler {
         }
     }
 
+    @Operation(summary = "Get the EventLoop Configuration",
+            description = "Get the EventLoop configuration which is saved in the file.")
     @GetMapping(value = "/eventloop", produces = MediaType.APPLICATION_JSON_VALUE)
     public ResponseEntity<String> get() {
         try {

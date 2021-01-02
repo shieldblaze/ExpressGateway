@@ -23,6 +23,7 @@ import com.shieldblaze.expressgateway.restapi.response.FastBuilder;
 import com.shieldblaze.expressgateway.restapi.response.builder.ErrorBase;
 import com.shieldblaze.expressgateway.restapi.response.builder.Message;
 import io.netty.handler.codec.http.HttpResponseStatus;
+import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.tags.Tag;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.MediaType;
@@ -33,14 +34,13 @@ import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RestController;
 
-import java.io.FileNotFoundException;
-import java.nio.file.NoSuchFileException;
-
 @RestController
 @RequestMapping("/config")
 @Tag(name = "TLS Configuration", description = "Create or Fetch TLS Configuration")
 public class TLSHandler {
 
+    @Operation(summary = "Create or Modify TLS Configuration for Server",
+            description = "TLS Configuration for Server contains settings for TLS in Server mode.")
     @PostMapping(value = "/tlsServer", consumes = MediaType.APPLICATION_JSON_VALUE, produces = MediaType.APPLICATION_JSON_VALUE)
     public ResponseEntity<String> createServer(@RequestBody String data) {
         try {
@@ -55,6 +55,8 @@ public class TLSHandler {
         }
     }
 
+    @Operation(summary = "Get the TLS for Server Configuration",
+            description = "Get the TLS for Server configuration which is saved in the file.")
     @GetMapping(value = "/tlsServer", produces = MediaType.APPLICATION_JSON_VALUE)
     public ResponseEntity<String> getServer() {
         try {
@@ -68,6 +70,8 @@ public class TLSHandler {
         }
     }
 
+    @Operation(summary = "Create or Modify TLS Configuration for Client",
+            description = "TLS Configuration for Client contains settings for TLS in Client mode.")
     @PostMapping(value = "/tlsClient", consumes = MediaType.APPLICATION_JSON_VALUE, produces = MediaType.APPLICATION_JSON_VALUE)
     public ResponseEntity<String> createClient(@RequestBody String data) {
         try {
@@ -82,6 +86,8 @@ public class TLSHandler {
         }
     }
 
+    @Operation(summary = "Get the TLS for Client Configuration",
+            description = "Get the TLS for Client configuration which is saved in the file.")
     @GetMapping(value = "/tlsClient", produces = MediaType.APPLICATION_JSON_VALUE)
     public ResponseEntity<String> getClient() {
         try {

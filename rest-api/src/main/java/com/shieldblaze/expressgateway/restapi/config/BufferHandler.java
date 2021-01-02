@@ -23,6 +23,7 @@ import com.shieldblaze.expressgateway.restapi.response.FastBuilder;
 import com.shieldblaze.expressgateway.restapi.response.builder.ErrorBase;
 import com.shieldblaze.expressgateway.restapi.response.builder.Message;
 import io.netty.handler.codec.http.HttpResponseStatus;
+import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.tags.Tag;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.MediaType;
@@ -33,14 +34,13 @@ import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RestController;
 
-import java.io.FileNotFoundException;
-import java.nio.file.NoSuchFileException;
-
 @RestController
 @RequestMapping("/config")
 @Tag(name = "Buffer Configuration", description = "Create or Fetch Buffer Configuration")
 public class BufferHandler {
 
+    @Operation(summary = "Create or Modify Buffer Configuration",
+            description = "Buffer configuration contains settings for ByteBuf. It is used to handle incoming or outgoing traffic.")
     @PostMapping(value = "/buffer", consumes = MediaType.APPLICATION_JSON_VALUE, produces = MediaType.APPLICATION_JSON_VALUE)
     public ResponseEntity<String> create(@RequestBody String data) {
         try {
@@ -55,6 +55,8 @@ public class BufferHandler {
         }
     }
 
+    @Operation(summary = "Get the Buffer Configuration",
+            description = "Get the Buffer configuration which is saved in the file.")
     @GetMapping(value = "/buffer", produces = MediaType.APPLICATION_JSON_VALUE)
     public ResponseEntity<String> get() {
         try {

@@ -23,6 +23,7 @@ import com.shieldblaze.expressgateway.restapi.response.FastBuilder;
 import com.shieldblaze.expressgateway.restapi.response.builder.ErrorBase;
 import com.shieldblaze.expressgateway.restapi.response.builder.Message;
 import io.netty.handler.codec.http.HttpResponseStatus;
+import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.tags.Tag;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.MediaType;
@@ -33,14 +34,13 @@ import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RestController;
 
-import java.io.FileNotFoundException;
-import java.nio.file.NoSuchFileException;
-
 @RestController
 @RequestMapping("/config")
 @Tag(name = "EventStream Configuration", description = "Create or Fetch EventStream Configuration")
 public class EventStreamHandler {
 
+    @Operation(summary = "Create or Modify EventStream Configuration",
+            description = "EventStream configuration contains settings for EventStream. EventStream is a pub-sub Event Stream.")
     @PostMapping(value = "/eventstream", consumes = MediaType.APPLICATION_JSON_VALUE, produces = MediaType.APPLICATION_JSON_VALUE)
     public ResponseEntity<String> create(@RequestBody String data) {
         try {
@@ -55,6 +55,8 @@ public class EventStreamHandler {
         }
     }
 
+    @Operation(summary = "Get the EventStream Configuration",
+            description = "Get the EventStream configuration which is saved in the file.")
     @GetMapping(value = "/eventstream", produces = MediaType.APPLICATION_JSON_VALUE)
     public ResponseEntity<String> get() {
         try {
