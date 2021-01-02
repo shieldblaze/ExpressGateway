@@ -19,6 +19,7 @@ package com.shieldblaze.expressgateway.restapi.loadbalancer.l4;
 
 import com.fasterxml.jackson.annotation.JsonProperty;
 
+@SuppressWarnings("unused")
 final class L4LoadBalancerContext {
 
     @JsonProperty("bindAddress")

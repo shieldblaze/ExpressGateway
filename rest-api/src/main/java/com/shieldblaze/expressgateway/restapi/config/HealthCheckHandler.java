@@ -23,6 +23,7 @@ import com.shieldblaze.expressgateway.restapi.response.FastBuilder;
 import com.shieldblaze.expressgateway.restapi.response.builder.ErrorBase;
 import com.shieldblaze.expressgateway.restapi.response.builder.Message;
 import io.netty.handler.codec.http.HttpResponseStatus;
+import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.tags.Tag;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.MediaType;
@@ -41,6 +42,8 @@ import java.nio.file.NoSuchFileException;
 @Tag(name = "HealthCheck Configuration", description = "Create or Fetch HealthCheck Configuration")
 public class HealthCheckHandler {
 
+    @Operation(summary = "Create or Modify HealthCheck Configuration",
+    description = "HealthCheck Configuration contains settings for HealthCheck Task Executor.")
     @PostMapping(value = "/healthcheck", consumes = MediaType.APPLICATION_JSON_VALUE, produces = MediaType.APPLICATION_JSON_VALUE)
     public ResponseEntity<String> create(@RequestBody String data) {
         try {
@@ -55,6 +58,8 @@ public class HealthCheckHandler {
         }
     }
 
+    @Operation(summary = "Get the HealthCheck Configuration",
+            description = "Get the HealthCheck configuration which is saved in the file.")
     @GetMapping(value = "/healthcheck", produces = MediaType.APPLICATION_JSON_VALUE)
     public ResponseEntity<String> get() {
         try {

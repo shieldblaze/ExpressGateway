@@ -32,6 +32,7 @@ import com.shieldblaze.expressgateway.restapi.response.builder.Message;
 import com.shieldblaze.expressgateway.restapi.response.builder.Result;
 import io.netty.handler.codec.http.HttpResponseStatus;
 import io.swagger.v3.oas.annotations.Operation;
+import io.swagger.v3.oas.annotations.Parameter;
 import io.swagger.v3.oas.annotations.tags.Tag;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.MediaType;
@@ -45,16 +46,18 @@ import org.springframework.web.bind.annotation.RestController;
 
 import java.net.InetAddress;
 import java.net.InetSocketAddress;
-import java.util.function.BiConsumer;
 
 @RestController
-@RequestMapping("/loadbalancer/l4")
+@RequestMapping("/loadbalancer/{protocol}")
 @Tag(name = "Layer-4 Load Balancer", description = "Layer-4 Load Balancer API")
 public class L4LoadBalancerHandler {
 
     @Operation(summary = "Create new Load Balancer", description = "Create and start a new Load Balancer")
     @PostMapping(path = "/create", consumes = MediaType.APPLICATION_JSON_VALUE, produces = MediaType.APPLICATION_JSON_VALUE)
-    public ResponseEntity<String> create(@RequestBody L4LoadBalancerContext l4LoadBalancerContext) {
+    public ResponseEntity<String> create(@Parameter(description = "Protocol to be Load Balanced (TCP/UDP)")
+                                         @PathVariable String protocol,
+                                         @Parameter(description = "Request Body containing all information for creation of Load Balancer")
+                                         @RequestBody L4LoadBalancerContext l4LoadBalancerContext) {
         try {
             EventStream eventStream = EventStreamTransformer.readFile().eventStream();
             L4Balance l4Balance = Utils.determineAlgorithm(l4LoadBalancerContext);
@@ -80,9 +83,9 @@ public class L4LoadBalancerHandler {
             return new ResponseEntity<>(apiResponse.response(), HttpStatus.CREATED);
         } catch (Exception ex) {
             return FastBuilder.error(ErrorBase.REQUEST_ERROR, Message.newBuilder()
-                   .withHeader("Error")
-                   .withMessage(ex.getLocalizedMessage())
-                   .build(), HttpResponseStatus.BAD_REQUEST);
+                    .withHeader("Error")
+                    .withMessage(ex.getLocalizedMessage())
+                    .build(), HttpResponseStatus.BAD_REQUEST);
         }
     }
 
@@ -94,7 +97,7 @@ public class L4LoadBalancerHandler {
 
             // If LoadBalancer is not found then return error.
             if (l4LoadBalancer == null) {
-               return FastBuilder.error(ErrorBase.LOADBALANCER_NOT_FOUND, HttpResponseStatus.NOT_FOUND);
+                return FastBuilder.error(ErrorBase.LOADBALANCER_NOT_FOUND, HttpResponseStatus.NOT_FOUND);
             }
 
             l4LoadBalancer.stop();
