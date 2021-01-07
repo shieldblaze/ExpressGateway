@@ -20,7 +20,7 @@ package com.shieldblaze.expressgateway.backend.healthcheck;
 import com.shieldblaze.expressgateway.backend.Node;
 import com.shieldblaze.expressgateway.common.annotation.NonNull;
 import com.shieldblaze.expressgateway.concurrent.eventstream.EventPublisher;
-import com.shieldblaze.expressgateway.configuration.healthcheck.HealthCheckConfiguration;
+import com.shieldblaze.expressgateway.configuration.HealthCheckConfiguration;
 import com.shieldblaze.expressgateway.healthcheck.Health;
 import com.shieldblaze.expressgateway.healthcheck.HealthCheck;
 

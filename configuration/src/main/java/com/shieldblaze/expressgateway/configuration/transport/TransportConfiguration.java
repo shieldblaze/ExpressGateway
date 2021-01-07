@@ -19,6 +19,7 @@ package com.shieldblaze.expressgateway.configuration.transport;
 
 import com.google.gson.annotations.Expose;
 import com.shieldblaze.expressgateway.common.utils.Number;
+import com.shieldblaze.expressgateway.configuration.Configuration;
 import io.netty.channel.AdaptiveRecvByteBufAllocator;
 import io.netty.channel.FixedRecvByteBufAllocator;
 import io.netty.channel.RecvByteBufAllocator;
@@ -31,7 +32,9 @@ import java.util.Objects;
 /**
  * Transport Configuration
  */
-public final class TransportConfiguration {
+public final class TransportConfiguration implements Configuration {
+
+    public static final TransportConfiguration EMPTY_INSTANCE = new TransportConfiguration();
 
     @Expose
     private TransportType transportType;
@@ -64,15 +67,8 @@ public final class TransportConfiguration {
         return transportType;
     }
 
-    TransportConfiguration transportType(TransportType transportType) {
-        this.transportType = Objects.requireNonNull(transportType);
-
-        if (transportType == TransportType.EPOLL && !Epoll.isAvailable()) {
-            throw new IllegalArgumentException("Epoll is not available");
-        } else if (transportType == TransportType.IO_URING && !IOUring.isAvailable()) {
-            throw new IllegalArgumentException("IOUring is not available");
-        }
-
+    public TransportConfiguration transportType(TransportType transportType) {
+        this.transportType = transportType;
         return this;
     }
 
@@ -80,7 +76,7 @@ public final class TransportConfiguration {
         return receiveBufferAllocationType;
     }
 
-    TransportConfiguration receiveBufferAllocationType(ReceiveBufferAllocationType receiveBufferAllocationType) {
+    public TransportConfiguration receiveBufferAllocationType(ReceiveBufferAllocationType receiveBufferAllocationType) {
         this.receiveBufferAllocationType = Objects.requireNonNull(receiveBufferAllocationType);
         return this;
     }
@@ -89,7 +85,95 @@ public final class TransportConfiguration {
         return receiveBufferSizes;
     }
 
-    TransportConfiguration receiveBufferSizes(int[] receiveBufferSizes) {
+    public TransportConfiguration receiveBufferSizes(int[] receiveBufferSizes) {
+        this.receiveBufferSizes = receiveBufferSizes;
+        return this;
+    }
+
+    public RecvByteBufAllocator recvByteBufAllocator() {
+        if (receiveBufferAllocationType == ReceiveBufferAllocationType.FIXED) {
+            return new FixedRecvByteBufAllocator(receiveBufferSizes[0]);
+        } else {
+            return new AdaptiveRecvByteBufAllocator(receiveBufferSizes[0], receiveBufferSizes[1], receiveBufferSizes[2]);
+        }
+    }
+
+    public int tcpConnectionBacklog() {
+        return tcpConnectionBacklog;
+    }
+
+    public TransportConfiguration tcpConnectionBacklog(int tcpConnectionBacklog) {
+        this.tcpConnectionBacklog = Number.checkPositive(tcpConnectionBacklog, "TCP Connection Backlog");
+        return this;
+    }
+
+    public int socketReceiveBufferSize() {
+        return socketReceiveBufferSize;
+    }
+
+    public TransportConfiguration socketReceiveBufferSize(int socketReceiveBufferSize) {
+        if (socketReceiveBufferSize < 64) {
+            throw new IllegalArgumentException("Socket Receive Buffer Size Must Be Greater Than 64");
+        }
+        this.socketReceiveBufferSize = socketReceiveBufferSize;
+        return this;
+    }
+
+    public int socketSendBufferSize() {
+        return socketSendBufferSize;
+    }
+
+    public TransportConfiguration socketSendBufferSize(int socketSendBufferSize) {
+        if (socketSendBufferSize < 64) {
+            throw new IllegalArgumentException("Socket Send Buffer Size Must Be Greater Than 64");
+        }
+        this.socketSendBufferSize = socketSendBufferSize;
+        return this;
+    }
+
+    public int tcpFastOpenMaximumPendingRequests() {
+        return tcpFastOpenMaximumPendingRequests;
+    }
+
+    public TransportConfiguration tcpFastOpenMaximumPendingRequests(int tcpFastOpenMaximumPendingRequests) {
+        this.tcpFastOpenMaximumPendingRequests = Number.checkPositive(tcpFastOpenMaximumPendingRequests, "TCP Fast Open Maximum Pending Requests");
+        return this;
+    }
+
+    public int backendConnectTimeout() {
+        return backendConnectTimeout;
+    }
+
+    public TransportConfiguration backendConnectTimeout(int backendConnectTimeout) {
+        this.backendConnectTimeout = Number.checkPositive(backendConnectTimeout, "Backend Connect Timeout");
+        return this;
+    }
+
+    public int connectionIdleTimeout() {
+        return connectionIdleTimeout;
+    }
+
+    public TransportConfiguration connectionIdleTimeout(int connectionIdleTimeout) {
+        this.connectionIdleTimeout = Number.checkPositive(connectionIdleTimeout, "Connection Idle Timeout");
+        return this;
+    }
+
+    @Override
+    public String name() {
+        return "Transport";
+    }
+
+    @Override
+    public void validate() throws Exception {
+        Objects.requireNonNull(transportType);
+        if (transportType == TransportType.EPOLL && !Epoll.isAvailable()) {
+            throw new IllegalArgumentException("Epoll is not available");
+        } else if (transportType == TransportType.IO_URING && !IOUring.isAvailable()) {
+            throw new IllegalArgumentException("IOUring is not available");
+        }
+
+        Objects.requireNonNull(receiveBufferAllocationType);
+
         Objects.requireNonNull(receiveBufferSizes, "Receive Buffer Sizes");
 
         if (receiveBufferAllocationType == ReceiveBufferAllocationType.ADAPTIVE) {
@@ -119,90 +203,16 @@ public final class TransportConfiguration {
                 throw new IllegalArgumentException("Fixed Receive Buffer Size Cannot Be Less Than 64-65536");
             }
         }
-        this.receiveBufferSizes = receiveBufferSizes;
-        return this;
-    }
 
-    public RecvByteBufAllocator recvByteBufAllocator() {
-        if (receiveBufferAllocationType == ReceiveBufferAllocationType.FIXED) {
-            return new FixedRecvByteBufAllocator(receiveBufferSizes[0]);
-        } else {
-            return new AdaptiveRecvByteBufAllocator(receiveBufferSizes[0], receiveBufferSizes[1], receiveBufferSizes[2]);
-        }
-    }
-
-    public int tcpConnectionBacklog() {
-        return tcpConnectionBacklog;
-    }
-
-    TransportConfiguration tcpConnectionBacklog(int tcpConnectionBacklog) {
-        this.tcpConnectionBacklog = Number.checkPositive(tcpConnectionBacklog, "TCP Connection Backlog");
-        return this;
-    }
-
-    public int socketReceiveBufferSize() {
-        return socketReceiveBufferSize;
-    }
-
-    TransportConfiguration socketReceiveBufferSize(int socketReceiveBufferSize) {
+        Number.checkPositive(tcpConnectionBacklog, "TCP Connection Backlog");
         if (socketReceiveBufferSize < 64) {
             throw new IllegalArgumentException("Socket Receive Buffer Size Must Be Greater Than 64");
         }
-        this.socketReceiveBufferSize = socketReceiveBufferSize;
-        return this;
-    }
-
-    public int socketSendBufferSize() {
-        return socketSendBufferSize;
-    }
-
-    TransportConfiguration socketSendBufferSize(int socketSendBufferSize) {
         if (socketSendBufferSize < 64) {
             throw new IllegalArgumentException("Socket Send Buffer Size Must Be Greater Than 64");
         }
-        this.socketSendBufferSize = socketSendBufferSize;
-        return this;
-    }
-
-    public int tcpFastOpenMaximumPendingRequests() {
-        return tcpFastOpenMaximumPendingRequests;
-    }
-
-    TransportConfiguration tcpFastOpenMaximumPendingRequests(int tcpFastOpenMaximumPendingRequests) {
-        this.tcpFastOpenMaximumPendingRequests = Number.checkPositive(tcpFastOpenMaximumPendingRequests, "TCP Fast Open Maximum Pending Requests");
-        return this;
-    }
-
-    public int backendConnectTimeout() {
-        return backendConnectTimeout;
-    }
-
-    TransportConfiguration backendConnectTimeout(int backendConnectTimeout) {
-        this.backendConnectTimeout = Number.checkPositive(backendConnectTimeout, "Backend Connect Timeout");
-        return this;
-    }
-
-    public int connectionIdleTimeout() {
-        return connectionIdleTimeout;
-    }
-
-    TransportConfiguration connectionIdleTimeout(int connectionIdleTimeout) {
-        this.connectionIdleTimeout = Number.checkPositive(connectionIdleTimeout, "Connection Idle Timeout");
-        return this;
-    }
-
-    @Override
-    public String toString() {
-        return "TransportConfiguration{" +
-                "transportType=" + transportType +
-                ", receiveBufferAllocationType=" + receiveBufferAllocationType +
-                ", receiveBufferSizes=" + Arrays.toString(receiveBufferSizes) +
-                ", tcpConnectionBacklog=" + tcpConnectionBacklog +
-                ", socketReceiveBufferSize=" + socketReceiveBufferSize +
-                ", socketSendBufferSize=" + socketSendBufferSize +
-                ", tcpFastOpenMaximumPendingRequests=" + tcpFastOpenMaximumPendingRequests +
-                ", backendConnectTimeout=" + backendConnectTimeout +
-                ", connectionIdleTimeout=" + connectionIdleTimeout +
-                '}';
+        Number.checkPositive(tcpFastOpenMaximumPendingRequests, "TCP Fast Open Maximum Pending Requests");
+        Number.checkPositive(backendConnectTimeout, "Backend Connect Timeout");
+        Number.checkPositive(connectionIdleTimeout, "Connection Idle Timeout");
     }
 }

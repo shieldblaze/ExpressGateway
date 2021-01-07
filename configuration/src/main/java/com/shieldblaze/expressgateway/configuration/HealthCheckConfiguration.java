@@ -15,36 +15,49 @@
  * You should have received a copy of the GNU General Public License
  * along with ShieldBlaze ExpressGateway.  If not, see <https://www.gnu.org/licenses/>.
  */
+package com.shieldblaze.expressgateway.configuration;
 
-package com.shieldblaze.expressgateway.configuration.healthcheck;
-
+import com.fasterxml.jackson.annotation.JsonProperty;
+import com.google.gson.annotations.Expose;
 import com.shieldblaze.expressgateway.common.utils.Number;
 
-public final class HealthCheckConfigurationBuilder {
-    private int workers;
-    private int timeInterval;
+public class HealthCheckConfiguration implements Configuration {
 
-    private HealthCheckConfigurationBuilder() {
+    public static final HealthCheckConfiguration EMPTY_INSTANCE = new HealthCheckConfiguration();
+
+    private HealthCheckConfiguration() {
         // Prevent outside initialization
     }
 
-    public static HealthCheckConfigurationBuilder newBuilder() {
-        return new HealthCheckConfigurationBuilder();
-    }
+    @Expose
+    @JsonProperty("workers")
+    private int workers;
 
-    public HealthCheckConfigurationBuilder withWorkers(int workers) {
+    @Expose
+    @JsonProperty("timeInterval")
+    private int timeInterval;
+
+    public HealthCheckConfiguration(int workers, int timeInterval) {
         this.workers = workers;
-        return this;
-    }
-
-    public HealthCheckConfigurationBuilder withTimeInterval(int timeInterval) {
         this.timeInterval = timeInterval;
-        return this;
     }
 
-    public HealthCheckConfiguration build() {
+    public int workers() {
+        return workers;
+    }
+
+    public int timeInterval() {
+        return timeInterval;
+    }
+
+    @Override
+    public String name() {
+        return "HealthCheck";
+    }
+
+    @Override
+    public void validate() {
         Number.checkPositive(workers, "Workers");
-        Number.checkPositive(timeInterval, "TimeInterval");
-        return new HealthCheckConfiguration(workers, timeInterval);
+        Number.checkPositive(timeInterval, "Time Interval");
     }
 }

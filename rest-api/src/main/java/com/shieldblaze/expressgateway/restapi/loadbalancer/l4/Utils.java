@@ -25,13 +25,14 @@ import com.shieldblaze.expressgateway.backend.strategy.l4.RoundRobin;
 import com.shieldblaze.expressgateway.backend.strategy.l4.sessionpersistence.FourTupleHash;
 import com.shieldblaze.expressgateway.backend.strategy.l4.sessionpersistence.NOOPSessionPersistence;
 import com.shieldblaze.expressgateway.backend.strategy.l4.sessionpersistence.SourceIPHash;
+import com.shieldblaze.expressgateway.configuration.BufferConfiguration;
 import com.shieldblaze.expressgateway.configuration.CoreConfiguration;
 import com.shieldblaze.expressgateway.configuration.CoreConfigurationBuilder;
-import com.shieldblaze.expressgateway.configuration.tls.TLSConfiguration;
-import com.shieldblaze.expressgateway.configuration.transformer.EventLoopTransformer;
-import com.shieldblaze.expressgateway.configuration.transformer.PooledByteBufAllocatorTransformer;
-import com.shieldblaze.expressgateway.configuration.transformer.TLSTransformer;
-import com.shieldblaze.expressgateway.configuration.transformer.TransportTransformer;
+import com.shieldblaze.expressgateway.configuration.EventLoopConfiguration;
+import com.shieldblaze.expressgateway.configuration.Transformer;
+import com.shieldblaze.expressgateway.configuration.tls.TLSClientConfiguration;
+import com.shieldblaze.expressgateway.configuration.tls.TLSServerConfiguration;
+import com.shieldblaze.expressgateway.configuration.transport.TransportConfiguration;
 import com.shieldblaze.expressgateway.core.L4FrontListener;
 import com.shieldblaze.expressgateway.protocol.tcp.TCPListener;
 import com.shieldblaze.expressgateway.protocol.udp.UDPListener;
@@ -90,29 +91,29 @@ final class Utils {
                 l4LoadBalancerContext.algorithm() + ", " + l4LoadBalancerContext.sessionPersistence());
     }
 
-    static L4FrontListener determineListener(L4LoadBalancerContext l4LoadBalancerContext) {
-        if (l4LoadBalancerContext.protocol().equalsIgnoreCase("tcp")) {
+    static L4FrontListener determineListener(String protocol) {
+        if (protocol.equalsIgnoreCase("tcp")) {
             return new TCPListener();
-        } else if (l4LoadBalancerContext.protocol().equalsIgnoreCase("udp")) {
+        } else if (protocol.equalsIgnoreCase("udp")) {
             return new UDPListener();
         }
 
         return null;
     }
 
-    static CoreConfiguration coreConfiguration() throws IOException {
+    static CoreConfiguration coreConfiguration(String profile) throws IOException {
         return CoreConfigurationBuilder.newBuilder()
-                .withTransportConfiguration(TransportTransformer.readFile())
-                .withEventLoopConfiguration(EventLoopTransformer.readFile())
-                .withPooledByteBufAllocatorConfiguration(PooledByteBufAllocatorTransformer.readFile())
+                .withTransportConfiguration((TransportConfiguration) Transformer.read(TransportConfiguration.EMPTY_INSTANCE, profile))
+                .withEventLoopConfiguration((EventLoopConfiguration) Transformer.read(EventLoopConfiguration.EMPTY_INSTANCE, profile))
+                .withBufferConfiguration((BufferConfiguration) Transformer.read(BufferConfiguration.EMPTY_INSTANCE, profile))
                 .build();
     }
 
-    static TLSConfiguration tlsForServer() throws IOException {
-        return TLSTransformer.readFile(true);
+    static TLSServerConfiguration tlsForServer(String profile) throws IOException {
+        return (TLSServerConfiguration) Transformer.read(TLSServerConfiguration.EMPTY_INSTANCE, profile);
     }
 
-    static TLSConfiguration tlsForClient() throws IOException {
-        return TLSTransformer.readFile(false);
+    static TLSClientConfiguration tlsForClient(String profile) throws IOException {
+        return (TLSClientConfiguration) Transformer.read(TLSClientConfiguration.EMPTY_INSTANCE, profile);
     }
 }

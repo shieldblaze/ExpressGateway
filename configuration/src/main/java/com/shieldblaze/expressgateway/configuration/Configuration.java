@@ -15,28 +15,19 @@
  * You should have received a copy of the GNU General Public License
  * along with ShieldBlaze ExpressGateway.  If not, see <https://www.gnu.org/licenses/>.
  */
-package com.shieldblaze.expressgateway.configuration.healthcheck;
+package com.shieldblaze.expressgateway.configuration;
 
-import com.google.gson.annotations.Expose;
+public interface Configuration {
 
-public class HealthCheckConfiguration {
+    /**
+     * Returns simple name of the Configuration
+     */
+    String name();
 
-    @Expose
-    private final int workers;
-
-    @Expose
-    private final int timeInterval;
-
-    HealthCheckConfiguration(int workers, int timeInterval) {
-        this.workers = workers;
-        this.timeInterval = timeInterval;
-    }
-
-    public int workers() {
-        return workers;
-    }
-
-    public int timeInterval() {
-        return timeInterval;
-    }
+    /**
+     * Validate configuration values.
+     *
+     * @throws Exception If a value is unexpected or wrong.
+     */
+    void validate() throws Exception;
 }

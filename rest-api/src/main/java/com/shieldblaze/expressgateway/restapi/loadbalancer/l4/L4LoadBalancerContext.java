@@ -28,9 +28,6 @@ final class L4LoadBalancerContext {
     @JsonProperty("bindPort")
     private int bindPort;
 
-    @JsonProperty("protocol")
-    private String protocol;
-
     @JsonProperty("algorithm")
     private String algorithm;
 
@@ -49,10 +46,6 @@ final class L4LoadBalancerContext {
 
     int bindPort() {
         return bindPort;
-    }
-
-    String protocol() {
-        return protocol;
     }
 
     String algorithm() {

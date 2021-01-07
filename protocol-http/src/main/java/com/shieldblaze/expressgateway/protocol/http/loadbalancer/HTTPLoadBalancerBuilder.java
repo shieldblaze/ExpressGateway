@@ -19,8 +19,9 @@ package com.shieldblaze.expressgateway.protocol.http.loadbalancer;
 
 import com.shieldblaze.expressgateway.backend.cluster.Cluster;
 import com.shieldblaze.expressgateway.configuration.CoreConfiguration;
-import com.shieldblaze.expressgateway.configuration.http.HTTPConfiguration;
-import com.shieldblaze.expressgateway.configuration.tls.TLSConfiguration;
+import com.shieldblaze.expressgateway.configuration.HTTPConfiguration;
+import com.shieldblaze.expressgateway.configuration.tls.TLSClientConfiguration;
+import com.shieldblaze.expressgateway.configuration.tls.TLSServerConfiguration;
 import com.shieldblaze.expressgateway.core.L4FrontListener;
 import com.shieldblaze.expressgateway.protocol.http.HTTPServerInitializer;
 
@@ -37,8 +38,8 @@ public final class HTTPLoadBalancerBuilder {
     private Cluster cluster;
     private L4FrontListener l4FrontListener;
     private HTTPServerInitializer httpServerInitializer;
-    private TLSConfiguration tlsServer;
-    private TLSConfiguration tlsClient;
+    private TLSServerConfiguration tlsServer;
+    private TLSClientConfiguration tlsClient;
 
     private HTTPLoadBalancerBuilder() {
         // Prevent outside initialization
@@ -82,17 +83,17 @@ public final class HTTPLoadBalancerBuilder {
     }
 
     /**
-     * Set {@link TLSConfiguration} for Client
+     * Set {@link TLSClientConfiguration} for Client
      */
-    public HTTPLoadBalancerBuilder withTLSForClient(TLSConfiguration tlsClient) {
+    public HTTPLoadBalancerBuilder withTLSForClient(TLSClientConfiguration tlsClient) {
         this.tlsClient = tlsClient;
         return this;
     }
 
     /**
-     * Set {@link TLSConfiguration} for Server
+     * Set {@link TLSServerConfiguration} for Server
      */
-    public HTTPLoadBalancerBuilder withTLSForServer(TLSConfiguration tlsServer) {
+    public HTTPLoadBalancerBuilder withTLSForServer(TLSServerConfiguration tlsServer) {
         this.tlsServer = tlsServer;
         return this;
     }

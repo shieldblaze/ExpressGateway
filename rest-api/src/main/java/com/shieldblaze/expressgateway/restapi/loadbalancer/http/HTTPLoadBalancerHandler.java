@@ -21,15 +21,15 @@ import com.shieldblaze.expressgateway.backend.cluster.Cluster;
 import com.shieldblaze.expressgateway.backend.cluster.ClusterPool;
 import com.shieldblaze.expressgateway.backend.strategy.l7.http.HTTPBalance;
 import com.shieldblaze.expressgateway.concurrent.eventstream.EventStream;
-import com.shieldblaze.expressgateway.configuration.transformer.EventStreamTransformer;
-import com.shieldblaze.expressgateway.configuration.transformer.HTTPTransformer;
+import com.shieldblaze.expressgateway.configuration.EventStreamConfiguration;
+import com.shieldblaze.expressgateway.configuration.HTTPConfiguration;
+import com.shieldblaze.expressgateway.configuration.Transformer;
 import com.shieldblaze.expressgateway.core.LoadBalancersRegistry;
 import com.shieldblaze.expressgateway.core.loadbalancer.L4LoadBalancer;
 import com.shieldblaze.expressgateway.protocol.http.DefaultHTTPServerInitializer;
 import com.shieldblaze.expressgateway.protocol.http.loadbalancer.HTTPLoadBalancer;
 import com.shieldblaze.expressgateway.protocol.http.loadbalancer.HTTPLoadBalancerBuilder;
 import com.shieldblaze.expressgateway.protocol.tcp.TCPListener;
-import com.shieldblaze.expressgateway.restapi.config.HTTPHandler;
 import com.shieldblaze.expressgateway.restapi.response.FastBuilder;
 import com.shieldblaze.expressgateway.restapi.response.builder.APIResponse;
 import com.shieldblaze.expressgateway.restapi.response.builder.ErrorBase;
@@ -52,27 +52,27 @@ import java.net.InetAddress;
 import java.net.InetSocketAddress;
 
 @RestController
-@RequestMapping("/loadbalancer/http")
+@RequestMapping("{profile}/loadbalancer/http")
 @Tag(name = "HTTP Load Balancer", description = "HTTP Load Balancer API")
 public class HTTPLoadBalancerHandler {
 
     @Operation(summary = "Create new Load Balancer", description = "Create and start a new Load Balancer")
     @PostMapping(value = "/create", consumes = MediaType.APPLICATION_JSON_VALUE, produces = MediaType.APPLICATION_JSON_VALUE)
-    public ResponseEntity<String> create(@RequestBody HTTPLoadBalancerContext httpLoadBalancerContext) {
+    public ResponseEntity<String> create(@PathVariable String profile, @RequestBody HTTPLoadBalancerContext httpLoadBalancerContext) {
         try {
 
-            EventStream eventStream = EventStreamTransformer.readFile().eventStream();
+            EventStream eventStream = ((EventStreamConfiguration) Transformer.read(EventStreamConfiguration.EMPTY_INSTANCE, "profile")).eventStream();
             HTTPBalance httpBalance = Utils.determineAlgorithm(httpLoadBalancerContext);
             Cluster cluster = new ClusterPool(eventStream, httpBalance);
 
             HTTPLoadBalancer httpLoadBalancer = HTTPLoadBalancerBuilder.newBuilder()
                     .withBindAddress(new InetSocketAddress(InetAddress.getByName(httpLoadBalancerContext.bindAddress()), httpLoadBalancerContext.bindPort()))
-                    .withCoreConfiguration(Utils.coreConfiguration())
+                    .withCoreConfiguration(Utils.coreConfiguration(profile))
                     .withL4FrontListener(new TCPListener())
                     .withCluster(cluster)
-                    .withTLSForServer(httpLoadBalancerContext.tlsForServer() ? Utils.tlsForServer() : null)
-                    .withTLSForClient(httpLoadBalancerContext.tlsForClient() ? Utils.tlsForClient() : null)
-                    .withHTTPConfiguration(HTTPTransformer.readFile())
+                    .withTLSForServer(httpLoadBalancerContext.tlsForServer() ? Utils.tlsForServer(profile) : null)
+                    .withTLSForClient(httpLoadBalancerContext.tlsForClient() ? Utils.tlsForClient(profile) : null)
+                    .withHTTPConfiguration((HTTPConfiguration) Transformer.read(HTTPConfiguration.EMPTY_INSTANCE, profile))
                     .withHTTPInitializer(new DefaultHTTPServerInitializer())
                     .build();
 

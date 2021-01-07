@@ -19,8 +19,9 @@ package com.shieldblaze.expressgateway.protocol.http.loadbalancer;
 
 import com.shieldblaze.expressgateway.backend.cluster.Cluster;
 import com.shieldblaze.expressgateway.configuration.CoreConfiguration;
-import com.shieldblaze.expressgateway.configuration.http.HTTPConfiguration;
-import com.shieldblaze.expressgateway.configuration.tls.TLSConfiguration;
+import com.shieldblaze.expressgateway.configuration.HTTPConfiguration;
+import com.shieldblaze.expressgateway.configuration.tls.TLSClientConfiguration;
+import com.shieldblaze.expressgateway.configuration.tls.TLSServerConfiguration;
 import com.shieldblaze.expressgateway.core.L4FrontListener;
 import com.shieldblaze.expressgateway.core.loadbalancer.L4LoadBalancer;
 import com.shieldblaze.expressgateway.protocol.http.HTTPServerInitializer;
@@ -39,13 +40,13 @@ public class HTTPLoadBalancer extends L4LoadBalancer {
      * @param l4FrontListener   {@link L4FrontListener} for listening traffic
      * @param cluster           {@link Cluster} to be Load Balanced
      * @param coreConfiguration {@link CoreConfiguration} to be applied
-     * @param tlsForServer      {@link TLSConfiguration} for Server
-     * @param tlsForClient      {@link TLSConfiguration} for Client
+     * @param tlsForServer      {@link TLSServerConfiguration} for Server
+     * @param tlsForClient      {@link TLSClientConfiguration} for Client
      * @param httpConfiguration {@link HTTPConfiguration} to be applied
      * @throws NullPointerException If a required parameter if {@code null}
      */
     HTTPLoadBalancer(InetSocketAddress bindAddress, L4FrontListener l4FrontListener, Cluster cluster,
-                     CoreConfiguration coreConfiguration, TLSConfiguration tlsForServer, TLSConfiguration tlsForClient,
+                     CoreConfiguration coreConfiguration, TLSServerConfiguration tlsForServer, TLSClientConfiguration tlsForClient,
                      HTTPConfiguration httpConfiguration, HTTPServerInitializer httpServerInitializer) {
         super(bindAddress, l4FrontListener, cluster, coreConfiguration, tlsForServer, tlsForClient, httpServerInitializer);
         this.httpConfiguration = httpConfiguration;

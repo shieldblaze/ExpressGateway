@@ -22,13 +22,14 @@ import com.shieldblaze.expressgateway.backend.strategy.l7.http.HTTPRandom;
 import com.shieldblaze.expressgateway.backend.strategy.l7.http.HTTPRoundRobin;
 import com.shieldblaze.expressgateway.backend.strategy.l7.http.sessionpersistence.NOOPSessionPersistence;
 import com.shieldblaze.expressgateway.backend.strategy.l7.http.sessionpersistence.StickySession;
+import com.shieldblaze.expressgateway.configuration.BufferConfiguration;
 import com.shieldblaze.expressgateway.configuration.CoreConfiguration;
 import com.shieldblaze.expressgateway.configuration.CoreConfigurationBuilder;
-import com.shieldblaze.expressgateway.configuration.tls.TLSConfiguration;
-import com.shieldblaze.expressgateway.configuration.transformer.EventLoopTransformer;
-import com.shieldblaze.expressgateway.configuration.transformer.PooledByteBufAllocatorTransformer;
-import com.shieldblaze.expressgateway.configuration.transformer.TLSTransformer;
-import com.shieldblaze.expressgateway.configuration.transformer.TransportTransformer;
+import com.shieldblaze.expressgateway.configuration.EventLoopConfiguration;
+import com.shieldblaze.expressgateway.configuration.Transformer;
+import com.shieldblaze.expressgateway.configuration.tls.TLSClientConfiguration;
+import com.shieldblaze.expressgateway.configuration.tls.TLSServerConfiguration;
+import com.shieldblaze.expressgateway.configuration.transport.TransportConfiguration;
 
 import java.io.IOException;
 
@@ -58,20 +59,20 @@ final class Utils {
                 httpLoadBalancerContext.algorithm() + ", " + httpLoadBalancerContext.sessionPersistence());
     }
 
-    static CoreConfiguration coreConfiguration() throws IOException {
+    static CoreConfiguration coreConfiguration(String profile) throws IOException {
         return CoreConfigurationBuilder.newBuilder()
-                .withTransportConfiguration(TransportTransformer.readFile())
-                .withEventLoopConfiguration(EventLoopTransformer.readFile())
-                .withPooledByteBufAllocatorConfiguration(PooledByteBufAllocatorTransformer.readFile())
+                .withTransportConfiguration((TransportConfiguration) Transformer.read(TransportConfiguration.EMPTY_INSTANCE, profile))
+                .withEventLoopConfiguration((EventLoopConfiguration) Transformer.read(EventLoopConfiguration.EMPTY_INSTANCE, profile))
+                .withBufferConfiguration((BufferConfiguration) Transformer.read(BufferConfiguration.EMPTY_INSTANCE, profile))
                 .build();
     }
 
 
-    static TLSConfiguration tlsForServer() throws IOException {
-        return TLSTransformer.readFile(true);
+    static TLSServerConfiguration tlsForServer(String profile) throws IOException {
+        return (TLSServerConfiguration) Transformer.read(TLSServerConfiguration.EMPTY_INSTANCE, profile);
     }
 
-    static TLSConfiguration tlsForClient() throws IOException {
-        return TLSTransformer.readFile(false);
+    static TLSClientConfiguration tlsForClient(String profile) throws IOException {
+        return (TLSClientConfiguration) Transformer.read(TLSClientConfiguration.EMPTY_INSTANCE, profile);
     }
 }

@@ -17,7 +17,7 @@
  */
 package com.shieldblaze.expressgateway.protocol.http.compression;
 
-import com.shieldblaze.expressgateway.configuration.http.HTTPConfiguration;
+import com.shieldblaze.expressgateway.configuration.HTTPConfiguration;
 import com.shieldblaze.expressgateway.protocol.http.compression.brotli.BrotliEncoder;
 import io.netty.channel.Channel;
 import io.netty.channel.ChannelHandlerContext;

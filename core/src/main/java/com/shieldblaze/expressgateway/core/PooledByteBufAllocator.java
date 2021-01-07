@@ -17,7 +17,7 @@
  */
 package com.shieldblaze.expressgateway.core;
 
-import com.shieldblaze.expressgateway.configuration.buffer.PooledByteBufAllocatorConfiguration;
+import com.shieldblaze.expressgateway.configuration.BufferConfiguration;
 
 import java.util.Objects;
 
@@ -25,7 +25,7 @@ public final class PooledByteBufAllocator {
 
     private final io.netty.buffer.PooledByteBufAllocator pooledByteBufAllocator;
 
-    public PooledByteBufAllocator(PooledByteBufAllocatorConfiguration configuration) {
+    public PooledByteBufAllocator(BufferConfiguration configuration) {
         Objects.requireNonNull(configuration, "PooledByteBufAllocatorConfiguration");
 
         pooledByteBufAllocator = new io.netty.buffer.PooledByteBufAllocator(

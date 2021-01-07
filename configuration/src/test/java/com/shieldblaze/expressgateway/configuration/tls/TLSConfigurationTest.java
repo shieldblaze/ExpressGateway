@@ -20,28 +20,31 @@ package com.shieldblaze.expressgateway.configuration.tls;
 import io.netty.handler.ssl.util.SelfSignedCertificate;
 import org.junit.jupiter.api.Test;
 
+import javax.net.ssl.SSLException;
 import java.security.cert.CertificateException;
+import java.util.Collections;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 
 final class TLSConfigurationTest {
 
     @Test
-    void test() throws CertificateException {
+    void test() throws CertificateException, SSLException {
         SelfSignedCertificate selfSignedCertificate = new SelfSignedCertificate("localhost", "EC", 256);
 
         CertificateKeyPair certificateKeyPair = new CertificateKeyPair(selfSignedCertificate.certificate().getAbsolutePath(),
                 selfSignedCertificate.privateKey().getAbsolutePath(), false);
 
-        TLSServerMapping tlsServerMapping = new TLSServerMapping(certificateKeyPair);
-        tlsServerMapping.mapping("*.localhost", certificateKeyPair);
+        TLSServerConfiguration tlsServerConfiguration = new TLSServerConfiguration();
+        tlsServerConfiguration.ciphers(Collections.singletonList(Cipher.TLS_AES_256_GCM_SHA384));
+        tlsServerConfiguration.protocols(Collections.singletonList(Protocol.TLS_1_3));
+        tlsServerConfiguration.mutualTLS(MutualTLS.NOT_REQUIRED);
 
-        TLSConfiguration tlsConfiguration = new TLSConfiguration();
-        tlsConfiguration.certificateKeyPairMap(tlsServerMapping.certificateKeyMap);
+        tlsServerConfiguration.addMapping("*.localhost", certificateKeyPair);
 
-        assertEquals(certificateKeyPair, tlsConfiguration.mapping("haha.localhost"));
-        assertEquals(certificateKeyPair, tlsConfiguration.mapping("123.localhost"));
-        assertEquals(certificateKeyPair, tlsConfiguration.mapping("localhost.localhost"));
-        assertEquals(certificateKeyPair, tlsConfiguration.mapping("shieldblaze.com"));
+        assertEquals(certificateKeyPair, tlsServerConfiguration.getMapping("haha.localhost"));
+        assertEquals(certificateKeyPair, tlsServerConfiguration.getMapping("123.localhost"));
+        assertEquals(certificateKeyPair, tlsServerConfiguration.getMapping("localhost.localhost"));
+        assertEquals(certificateKeyPair, tlsServerConfiguration.getMapping("shieldblaze.localhost"));
     }
 }

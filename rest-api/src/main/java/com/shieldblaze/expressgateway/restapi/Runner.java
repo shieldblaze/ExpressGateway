@@ -15,32 +15,12 @@
  * You should have received a copy of the GNU General Public License
  * along with ShieldBlaze ExpressGateway.  If not, see <https://www.gnu.org/licenses/>.
  */
-package com.shieldblaze.expressgateway.configuration.eventstream;
 
-import com.shieldblaze.expressgateway.common.utils.Number;
+package com.shieldblaze.expressgateway.restapi;
 
-/**
- * Builder for {@link EventStreamConfiguration}
- */
-public final class EventStreamConfigurationBuilder {
+public class Runner {
 
-    private int workers;
-
-    private EventStreamConfigurationBuilder() {
-        // Prevent outside initialization
-    }
-
-    public static EventStreamConfigurationBuilder newBuilder() {
-        return new EventStreamConfigurationBuilder();
-    }
-
-    public EventStreamConfigurationBuilder withWorkers(int workers) {
-        this.workers = workers;
-        return this;
-    }
-
-    public EventStreamConfiguration build() {
-        Number.checkZeroOrPositive(workers, "Workers");
-        return new EventStreamConfiguration(workers);
+    public static void main(String[] args) {
+        new Server().run();
     }
 }

@@ -17,8 +17,8 @@
  */
 package com.shieldblaze.expressgateway.restapi.config;
 
-import com.shieldblaze.expressgateway.configuration.eventloop.EventLoopConfiguration;
-import com.shieldblaze.expressgateway.configuration.transformer.EventLoopTransformer;
+import com.shieldblaze.expressgateway.configuration.EventLoopConfiguration;
+import com.shieldblaze.expressgateway.configuration.Transformer;
 import com.shieldblaze.expressgateway.restapi.response.FastBuilder;
 import com.shieldblaze.expressgateway.restapi.response.builder.ErrorBase;
 import com.shieldblaze.expressgateway.restapi.response.builder.Message;
@@ -29,23 +29,25 @@ import org.springframework.http.HttpStatus;
 import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.GetMapping;
+import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RestController;
 
 @RestController
-@RequestMapping("/config")
+@RequestMapping("/{profile}/config")
 @Tag(name = "EventLoop Configuration", description = "Create or Fetch EventLoop Configuration")
 public class EventLoopHandler {
 
-    @Operation(summary = "Create or Modify EventLoop Configuration",
-            description = "EventLoop configuration contains settings for EventLoop. EventLoop is responsible for handling I/O.")
+    @Operation(summary = "Create or Modify EventLoop Configuration", description = "EventLoop configuration contains settings" +
+            " for EventLoop. EventLoop is responsible for handling I/O.")
     @PostMapping(value = "/eventloop", consumes = MediaType.APPLICATION_JSON_VALUE, produces = MediaType.APPLICATION_JSON_VALUE)
-    public ResponseEntity<String> create(@RequestBody String data) {
+    public ResponseEntity<String> create(@PathVariable String profile,
+                                         @RequestBody EventLoopConfiguration eventLoopConfiguration) {
         try {
-            EventLoopConfiguration eventLoopConfiguration = EventLoopTransformer.readDirectly(data);
-            EventLoopTransformer.write(eventLoopConfiguration);
+            eventLoopConfiguration.validate();
+            Transformer.write(eventLoopConfiguration, profile);
             return new ResponseEntity<>(HttpStatus.NO_CONTENT);
         } catch (Exception ex) {
             return FastBuilder.error(ErrorBase.REQUEST_ERROR, Message.newBuilder()
@@ -55,12 +57,11 @@ public class EventLoopHandler {
         }
     }
 
-    @Operation(summary = "Get the EventLoop Configuration",
-            description = "Get the EventLoop configuration which is saved in the file.")
+    @Operation(summary = "Get the EventLoop Configuration", description = "Get the EventLoop configuration which is saved in the file.")
     @GetMapping(value = "/eventloop", produces = MediaType.APPLICATION_JSON_VALUE)
-    public ResponseEntity<String> get() {
+    public ResponseEntity<String> get(@PathVariable String profile) {
         try {
-            String data = EventLoopTransformer.getFileData();
+            String data = Transformer.readJSON(EventLoopConfiguration.EMPTY_INSTANCE, profile);
             return new ResponseEntity<>(data, HttpStatus.OK);
         } catch (Exception ex) {
             return FastBuilder.error(ErrorBase.REQUEST_ERROR, Message.newBuilder()

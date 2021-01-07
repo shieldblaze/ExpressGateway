@@ -17,8 +17,8 @@
  */
 package com.shieldblaze.expressgateway.restapi.config;
 
-import com.shieldblaze.expressgateway.configuration.http.HTTPConfiguration;
-import com.shieldblaze.expressgateway.configuration.transformer.HTTPTransformer;
+import com.shieldblaze.expressgateway.configuration.HTTPConfiguration;
+import com.shieldblaze.expressgateway.configuration.Transformer;
 import com.shieldblaze.expressgateway.restapi.response.FastBuilder;
 import com.shieldblaze.expressgateway.restapi.response.builder.ErrorBase;
 import com.shieldblaze.expressgateway.restapi.response.builder.Message;
@@ -29,23 +29,23 @@ import org.springframework.http.HttpStatus;
 import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.GetMapping;
+import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RestController;
 
 @RestController
-@RequestMapping("/config")
+@RequestMapping("/{profile}/config")
 @Tag(name = "HTTP Configuration", description = "Create or Fetch HTTP Configuration")
 public class HTTPHandler {
 
-    @Operation(summary = "Create or Modify HTTP Configuration",
-            description = "HTTP Configuration contains settings for HTTP Load Balancer.")
+    @Operation(summary = "Create or Modify HTTP Configuration", description = "HTTP Configuration contains settings for HTTP Load Balancer.")
     @PostMapping(value = "/http", consumes = MediaType.APPLICATION_JSON_VALUE, produces = MediaType.APPLICATION_JSON_VALUE)
-    public ResponseEntity<String> create(@RequestBody String data) {
+    public ResponseEntity<String> create(@PathVariable String profile, @RequestBody HTTPConfiguration httpConfiguration) {
         try {
-            HTTPConfiguration httpConfiguration = HTTPTransformer.readDirectly(data);
-            HTTPTransformer.write(httpConfiguration);
+            httpConfiguration.validate();
+            Transformer.write(httpConfiguration, profile);
             return new ResponseEntity<>(HttpStatus.NO_CONTENT);
         } catch (Exception ex) {
             return FastBuilder.error(ErrorBase.REQUEST_ERROR, Message.newBuilder()
@@ -55,12 +55,11 @@ public class HTTPHandler {
         }
     }
 
-    @Operation(summary = "Get the HTTP Configuration",
-            description = "Get the HTTP configuration which is saved in the file.")
+    @Operation(summary = "Get the HTTP Configuration", description = "Get the HTTP configuration which is saved in the file.")
     @GetMapping(value = "/http", produces = MediaType.APPLICATION_JSON_VALUE)
-    public ResponseEntity<String> get() {
+    public ResponseEntity<String> get(@PathVariable String profile) {
         try {
-            String data = HTTPTransformer.getFileData();
+            String data = Transformer.readJSON(HTTPConfiguration.EMPTY_INSTANCE, profile);
             return new ResponseEntity<>(data, HttpStatus.OK);
         } catch (Exception ex) {
             return FastBuilder.error(ErrorBase.REQUEST_ERROR, Message.newBuilder()

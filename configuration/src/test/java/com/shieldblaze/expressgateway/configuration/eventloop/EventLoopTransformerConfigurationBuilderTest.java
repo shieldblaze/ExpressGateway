@@ -17,6 +17,7 @@
  */
 package com.shieldblaze.expressgateway.configuration.eventloop;
 
+import com.shieldblaze.expressgateway.configuration.EventLoopConfiguration;
 import org.junit.jupiter.api.Test;
 
 import static org.junit.jupiter.api.Assertions.assertDoesNotThrow;
@@ -26,22 +27,18 @@ final class EventLoopTransformerConfigurationBuilderTest {
 
     @Test
     void build() {
-        assertThrows(IllegalArgumentException.class, () -> EventLoopConfigurationBuilder.newBuilder()
-                .withParentWorkers(0)
-                .build());
+        assertThrows(IllegalArgumentException.class, () -> new EventLoopConfiguration()
+                .parentWorkers(0));
 
-        assertThrows(IllegalArgumentException.class, () -> EventLoopConfigurationBuilder.newBuilder()
-                .withParentWorkers(1)
-                .build());
+        assertThrows(IllegalArgumentException.class, () -> new EventLoopConfiguration()
+                .parentWorkers(1));
 
-        assertThrows(IllegalArgumentException.class, () -> EventLoopConfigurationBuilder.newBuilder()
-                .withParentWorkers(1)
-                .withChildWorkers(0)
-                .build());
+        assertThrows(IllegalArgumentException.class, () -> new EventLoopConfiguration()
+                .parentWorkers(1)
+                .childWorkers(0));
 
-        assertDoesNotThrow(() -> EventLoopConfigurationBuilder.newBuilder()
-                .withParentWorkers(1)
-                .withChildWorkers(1)
-                .build());
+        assertDoesNotThrow(() -> new EventLoopConfiguration()
+                .parentWorkers(1)
+                .childWorkers(1));
     }
 }

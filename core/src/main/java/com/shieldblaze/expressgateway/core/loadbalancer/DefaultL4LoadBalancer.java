@@ -19,7 +19,8 @@ package com.shieldblaze.expressgateway.core.loadbalancer;
 
 import com.shieldblaze.expressgateway.backend.cluster.Cluster;
 import com.shieldblaze.expressgateway.configuration.CoreConfiguration;
-import com.shieldblaze.expressgateway.configuration.tls.TLSConfiguration;
+import com.shieldblaze.expressgateway.configuration.tls.TLSClientConfiguration;
+import com.shieldblaze.expressgateway.configuration.tls.TLSServerConfiguration;
 import com.shieldblaze.expressgateway.core.L4FrontListener;
 import io.netty.channel.ChannelHandler;
 
@@ -31,22 +32,22 @@ import java.net.InetSocketAddress;
 final class DefaultL4LoadBalancer extends L4LoadBalancer {
 
     /**
-     * @param bindAddress       {@link InetSocketAddress} on which {@link L4FrontListener} will bind and listen.
-     * @param l4FrontListener   {@link L4FrontListener} for listening traffic
-     * @param cluster           {@link Cluster} to be Load Balanced
-     * @param coreConfiguration {@link CoreConfiguration} to be applied
-     * @param tlsForServer      {@link TLSConfiguration} for Server
-     * @param tlsForClient      {@link TLSConfiguration} for Client
-     * @param channelHandler    {@link ChannelHandler} to use for handling traffic
+     * @param bindAddress            {@link InetSocketAddress} on which {@link L4FrontListener} will bind and listen.
+     * @param l4FrontListener        {@link L4FrontListener} for listening traffic
+     * @param cluster                {@link Cluster} to be Load Balanced
+     * @param coreConfiguration      {@link CoreConfiguration} to be applied
+     * @param tlsServerConfiguration {@link TLSServerConfiguration} for Server
+     * @param tlsClientConfiguration {@link TLSClientConfiguration} for Client
+     * @param channelHandler         {@link ChannelHandler} to use for handling traffic
      * @throws NullPointerException If a required parameter if {@code null}
      */
     DefaultL4LoadBalancer(InetSocketAddress bindAddress,
                           L4FrontListener l4FrontListener,
                           Cluster cluster,
                           CoreConfiguration coreConfiguration,
-                          TLSConfiguration tlsForServer,
-                          TLSConfiguration tlsForClient,
+                          TLSServerConfiguration tlsServerConfiguration,
+                          TLSClientConfiguration tlsClientConfiguration,
                           ChannelHandler channelHandler) {
-        super(bindAddress, l4FrontListener, cluster, coreConfiguration, tlsForServer, tlsForClient, channelHandler);
+        super(bindAddress, l4FrontListener, cluster, coreConfiguration, tlsServerConfiguration, tlsClientConfiguration, channelHandler);
     }
 }

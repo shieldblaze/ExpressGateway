@@ -20,13 +20,14 @@ package com.shieldblaze.expressgateway.common;
 import com.google.gson.Gson;
 import com.google.gson.GsonBuilder;
 
-public class GSON {
+public final class GSON {
 
     private GSON() {
         // Prevent outside initialization
     }
 
     public static final Gson INSTANCE = new GsonBuilder()
+            .excludeFieldsWithoutExposeAnnotation()
             .disableHtmlEscaping()
             .setPrettyPrinting()
             .create();

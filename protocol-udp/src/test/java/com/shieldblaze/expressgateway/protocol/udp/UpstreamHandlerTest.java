@@ -25,12 +25,10 @@ import com.shieldblaze.expressgateway.backend.strategy.l4.sessionpersistence.NOO
 import com.shieldblaze.expressgateway.concurrent.eventstream.EventStream;
 import com.shieldblaze.expressgateway.configuration.CoreConfiguration;
 import com.shieldblaze.expressgateway.configuration.CoreConfigurationBuilder;
-import com.shieldblaze.expressgateway.configuration.buffer.PooledByteBufAllocatorConfiguration;
-import com.shieldblaze.expressgateway.configuration.eventloop.EventLoopConfiguration;
-import com.shieldblaze.expressgateway.configuration.eventloop.EventLoopConfigurationBuilder;
+import com.shieldblaze.expressgateway.configuration.BufferConfiguration;
+import com.shieldblaze.expressgateway.configuration.EventLoopConfiguration;
 import com.shieldblaze.expressgateway.configuration.transport.ReceiveBufferAllocationType;
 import com.shieldblaze.expressgateway.configuration.transport.TransportConfiguration;
-import com.shieldblaze.expressgateway.configuration.transport.TransportConfigurationBuilder;
 import com.shieldblaze.expressgateway.configuration.transport.TransportType;
 import com.shieldblaze.expressgateway.core.EventLoopFactory;
 import com.shieldblaze.expressgateway.core.events.L4FrontListenerStartupEvent;
@@ -59,27 +57,25 @@ final class UpstreamHandlerTest {
     static void setup() {
         new UDPServer().start();
 
-        TransportConfiguration transportConfiguration = TransportConfigurationBuilder.newBuilder()
-                .withTransportType(TransportType.NIO)
-                .withTCPFastOpenMaximumPendingRequests(2147483647)
-                .withBackendConnectTimeout(1000 * 5)
-                .withReceiveBufferAllocationType(ReceiveBufferAllocationType.FIXED)
-                .withReceiveBufferSizes(new int[]{100})
-                .withSocketReceiveBufferSize(2147483647)
-                .withSocketSendBufferSize(2147483647)
-                .withTCPConnectionBacklog(2147483647)
-                .withConnectionIdleTimeout(180)
-                .build();
+        TransportConfiguration transportConfiguration = new TransportConfiguration()
+                .transportType(TransportType.NIO)
+                .tcpFastOpenMaximumPendingRequests(2147483647)
+                .backendConnectTimeout(1000 * 5)
+                .receiveBufferAllocationType(ReceiveBufferAllocationType.FIXED)
+                .receiveBufferSizes(new int[]{100})
+                .socketReceiveBufferSize(2147483647)
+                .socketSendBufferSize(2147483647)
+                .tcpConnectionBacklog(2147483647)
+                .connectionIdleTimeout(180);
 
-        EventLoopConfiguration eventLoopConfiguration = EventLoopConfigurationBuilder.newBuilder()
-                .withParentWorkers(Runtime.getRuntime().availableProcessors())
-                .withChildWorkers(Runtime.getRuntime().availableProcessors() * 2)
-                .build();
+        EventLoopConfiguration eventLoopConfiguration = new EventLoopConfiguration()
+                .parentWorkers(2)
+                .childWorkers(4);
 
         CoreConfiguration coreConfiguration = CoreConfigurationBuilder.newBuilder()
                 .withTransportConfiguration(transportConfiguration)
                 .withEventLoopConfiguration(eventLoopConfiguration)
-                .withPooledByteBufAllocatorConfiguration(PooledByteBufAllocatorConfiguration.DEFAULT)
+                .withBufferConfiguration(BufferConfiguration.DEFAULT)
                 .build();
 
         eventLoopFactory = new EventLoopFactory(coreConfiguration);

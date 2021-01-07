@@ -22,7 +22,8 @@ import com.shieldblaze.expressgateway.common.annotation.NonNull;
 import com.shieldblaze.expressgateway.concurrent.eventstream.EventPublisher;
 import com.shieldblaze.expressgateway.concurrent.eventstream.EventSubscriber;
 import com.shieldblaze.expressgateway.configuration.CoreConfiguration;
-import com.shieldblaze.expressgateway.configuration.tls.TLSConfiguration;
+import com.shieldblaze.expressgateway.configuration.tls.TLSClientConfiguration;
+import com.shieldblaze.expressgateway.configuration.tls.TLSServerConfiguration;
 import com.shieldblaze.expressgateway.core.EventLoopFactory;
 import com.shieldblaze.expressgateway.core.L4FrontListener;
 import com.shieldblaze.expressgateway.core.PooledByteBufAllocator;
@@ -46,41 +47,41 @@ public abstract class L4LoadBalancer {
     private final L4FrontListener l4FrontListener;
     private final Cluster cluster;
     private final CoreConfiguration coreConfiguration;
-    private final TLSConfiguration tlsForServer;
-    private final TLSConfiguration tlsForClient;
+    private final TLSServerConfiguration tlsServerConfiguration;
+    private final TLSClientConfiguration tlsClientConfiguration;
     private final ChannelHandler channelHandler;
 
     private final ByteBufAllocator byteBufAllocator;
     private final EventLoopFactory eventLoopFactory;
 
-    private AtomicBoolean running = new AtomicBoolean(false);
+    private final AtomicBoolean running = new AtomicBoolean(false);
 
     /**
-     * @param bindAddress       {@link InetSocketAddress} on which {@link L4FrontListener} will bind and listen.
-     * @param l4FrontListener   {@link L4FrontListener} for listening traffic
-     * @param cluster           {@link Cluster} to be Load Balanced
-     * @param coreConfiguration {@link CoreConfiguration} to be applied
-     * @param tlsForServer      {@link TLSConfiguration} for Server
-     * @param tlsForClient      {@link TLSConfiguration} for Client
-     * @param channelHandler    {@link ChannelHandler} to use for handling traffic
+     * @param bindAddress            {@link InetSocketAddress} on which {@link L4FrontListener} will bind and listen.
+     * @param l4FrontListener        {@link L4FrontListener} for listening traffic
+     * @param cluster                {@link Cluster} to be Load Balanced
+     * @param coreConfiguration      {@link CoreConfiguration} to be applied
+     * @param tlsServerConfiguration {@link TLSServerConfiguration} for Server
+     * @param tlsClientConfiguration {@link TLSClientConfiguration} for Client
+     * @param channelHandler         {@link ChannelHandler} to use for handling traffic
      * @throws NullPointerException If a required parameter if {@code null}
      */
     public L4LoadBalancer(@NonNull InetSocketAddress bindAddress,
                           @NonNull L4FrontListener l4FrontListener,
                           @NonNull Cluster cluster,
                           @NonNull CoreConfiguration coreConfiguration,
-                          TLSConfiguration tlsForServer,
-                          TLSConfiguration tlsForClient,
+                          TLSServerConfiguration tlsServerConfiguration,
+                          TLSClientConfiguration tlsClientConfiguration,
                           ChannelHandler channelHandler) {
         this.bindAddress = bindAddress;
         this.l4FrontListener = l4FrontListener;
         this.cluster = cluster;
         this.coreConfiguration = coreConfiguration;
-        this.tlsForServer = tlsForServer;
-        this.tlsForClient = tlsForClient;
+        this.tlsServerConfiguration = tlsServerConfiguration;
+        this.tlsClientConfiguration = tlsClientConfiguration;
         this.channelHandler = channelHandler;
 
-        this.byteBufAllocator = new PooledByteBufAllocator(coreConfiguration.pooledByteBufAllocatorConfiguration()).Instance();
+        this.byteBufAllocator = new PooledByteBufAllocator(coreConfiguration.bufferConfiguration()).Instance();
         this.eventLoopFactory = new EventLoopFactory(coreConfiguration);
 
         l4FrontListener.l4LoadBalancer(this);
@@ -134,17 +135,17 @@ public abstract class L4LoadBalancer {
     }
 
     /**
-     * Get {@link TLSConfiguration} for Server
+     * Get {@link TLSServerConfiguration} for Server
      */
-    public TLSConfiguration tlsForServer() {
-        return tlsForServer;
+    public TLSServerConfiguration tlsForServer() {
+        return tlsServerConfiguration;
     }
 
     /**
-     * Get {@link TLSConfiguration} for Client
+     * Get {@link TLSClientConfiguration} for Client
      */
-    public TLSConfiguration tlsForClient() {
-        return tlsForClient;
+    public TLSClientConfiguration tlsForClient() {
+        return tlsClientConfiguration;
     }
 
     /**

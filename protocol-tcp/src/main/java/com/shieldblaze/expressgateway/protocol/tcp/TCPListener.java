@@ -114,7 +114,7 @@ public class TCPListener extends L4FrontListener {
         }
 
         // Add listener to last ChannelFuture to notify all listeners
-        channelFutures.get(channelFutures.size() - 1).addListener((ChannelFutureListener) future -> {
+        channelFutures.get(channelFutures.size() - 1).addListener(future -> {
             if (future.isSuccess()) {
                 l4FrontListenerStartupEvent.trySuccess(null);
             } else {
@@ -134,7 +134,7 @@ public class TCPListener extends L4FrontListener {
         L4FrontListenerStopEvent l4FrontListenerStopEvent = new L4FrontListenerStopEvent();
 
         channelFutures.forEach(channelFuture -> channelFuture.channel().close());
-        channelFutures.get(channelFutures.size() - 1).channel().closeFuture().addListener((ChannelFutureListener) future -> {
+        channelFutures.get(channelFutures.size() - 1).channel().closeFuture().addListener(future -> {
             if (future.isSuccess()) {
                 l4FrontListenerStopEvent.trySuccess(null);
             } else {

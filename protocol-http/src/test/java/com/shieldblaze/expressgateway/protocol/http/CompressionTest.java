@@ -27,21 +27,17 @@ import com.shieldblaze.expressgateway.backend.strategy.l7.http.sessionpersistenc
 import com.shieldblaze.expressgateway.concurrent.eventstream.EventStream;
 import com.shieldblaze.expressgateway.configuration.CoreConfiguration;
 import com.shieldblaze.expressgateway.configuration.CoreConfigurationBuilder;
-import com.shieldblaze.expressgateway.configuration.buffer.PooledByteBufAllocatorConfiguration;
-import com.shieldblaze.expressgateway.configuration.eventloop.EventLoopConfiguration;
-import com.shieldblaze.expressgateway.configuration.eventloop.EventLoopConfigurationBuilder;
-import com.shieldblaze.expressgateway.configuration.http.HTTPConfiguration;
-import com.shieldblaze.expressgateway.configuration.http.HTTPConfigurationBuilder;
+import com.shieldblaze.expressgateway.configuration.BufferConfiguration;
+import com.shieldblaze.expressgateway.configuration.EventLoopConfiguration;
+import com.shieldblaze.expressgateway.configuration.HTTPConfiguration;
 import com.shieldblaze.expressgateway.configuration.tls.CertificateKeyPair;
 import com.shieldblaze.expressgateway.configuration.tls.Cipher;
 import com.shieldblaze.expressgateway.configuration.tls.MutualTLS;
 import com.shieldblaze.expressgateway.configuration.tls.Protocol;
-import com.shieldblaze.expressgateway.configuration.tls.TLSConfiguration;
-import com.shieldblaze.expressgateway.configuration.tls.TLSConfigurationBuilder;
-import com.shieldblaze.expressgateway.configuration.tls.TLSServerMapping;
+import com.shieldblaze.expressgateway.configuration.tls.TLSClientConfiguration;
+import com.shieldblaze.expressgateway.configuration.tls.TLSServerConfiguration;
 import com.shieldblaze.expressgateway.configuration.transport.ReceiveBufferAllocationType;
 import com.shieldblaze.expressgateway.configuration.transport.TransportConfiguration;
-import com.shieldblaze.expressgateway.configuration.transport.TransportConfigurationBuilder;
 import com.shieldblaze.expressgateway.configuration.transport.TransportType;
 import com.shieldblaze.expressgateway.core.events.L4FrontListenerStartupEvent;
 import com.shieldblaze.expressgateway.core.events.L4FrontListenerStopEvent;
@@ -86,34 +82,32 @@ class CompressionTest {
     static TransportConfiguration transportConfiguration;
     static EventLoopConfiguration eventLoopConfiguration;
     static CoreConfiguration coreConfiguration;
-    static TLSConfiguration forServer;
-    static TLSConfiguration forClient;
+    static TLSServerConfiguration forServer;
+    static TLSClientConfiguration forClient;
     static HTTPConfiguration httpConfiguration;
     static HttpClient httpClient;
 
     @BeforeAll
     static void initialize() throws Exception {
-        transportConfiguration = TransportConfigurationBuilder.newBuilder()
-                .withTransportType(TransportType.NIO)
-                .withTCPFastOpenMaximumPendingRequests(2147483647)
-                .withBackendConnectTimeout(10000 * 5)
-                .withReceiveBufferAllocationType(ReceiveBufferAllocationType.FIXED)
-                .withReceiveBufferSizes(new int[]{65535})
-                .withSocketReceiveBufferSize(2147483647)
-                .withSocketSendBufferSize(2147483647)
-                .withTCPConnectionBacklog(2147483647)
-                .withConnectionIdleTimeout(1800000)
-                .build();
+        transportConfiguration = new TransportConfiguration()
+                .transportType(TransportType.NIO)
+                .tcpFastOpenMaximumPendingRequests(2147483647)
+                .backendConnectTimeout(1000 * 5)
+                .receiveBufferAllocationType(ReceiveBufferAllocationType.FIXED)
+                .receiveBufferSizes(new int[]{100})
+                .socketReceiveBufferSize(2147483647)
+                .socketSendBufferSize(2147483647)
+                .tcpConnectionBacklog(2147483647)
+                .connectionIdleTimeout(180);
 
-        eventLoopConfiguration = EventLoopConfigurationBuilder.newBuilder()
-                .withParentWorkers(2)
-                .withChildWorkers(4)
-                .build();
+        eventLoopConfiguration = new EventLoopConfiguration()
+                .parentWorkers(2)
+                .childWorkers(4);
 
         coreConfiguration = CoreConfigurationBuilder.newBuilder()
                 .withTransportConfiguration(transportConfiguration)
                 .withEventLoopConfiguration(eventLoopConfiguration)
-                .withPooledByteBufAllocatorConfiguration(PooledByteBufAllocatorConfiguration.DEFAULT)
+                .withBufferConfiguration(BufferConfiguration.DEFAULT)
                 .build();
 
         SelfSignedCertificate selfSignedCertificate = new SelfSignedCertificate("localhost", "EC", 256);
@@ -121,36 +115,31 @@ class CompressionTest {
         CertificateKeyPair certificateKeyPair = new CertificateKeyPair(selfSignedCertificate.certificate().getAbsolutePath(),
                 selfSignedCertificate.privateKey().getAbsolutePath(), false);
 
-        TLSServerMapping tlsServerMapping = new TLSServerMapping(certificateKeyPair);
+        forServer = new TLSServerConfiguration()
+                .protocols(Collections.singletonList(Protocol.TLS_1_3))
+                .ciphers(Collections.singletonList(Cipher.TLS_AES_128_GCM_SHA256))
+                .mutualTLS(MutualTLS.NOT_REQUIRED);
 
-        forServer = TLSConfigurationBuilder.forServer()
-                .withProtocols(Collections.singletonList(Protocol.TLS_1_3))
-                .withCiphers(Collections.singletonList(Cipher.TLS_AES_128_GCM_SHA256))
-                .withTLSServerMapping(tlsServerMapping)
-                .withMutualTLS(MutualTLS.NOT_REQUIRED)
-                .build();
+        forServer.defaultMapping(certificateKeyPair);
 
-        forClient = TLSConfigurationBuilder.forClient()
-                .withProtocols(Collections.singletonList(Protocol.TLS_1_3))
-                .withCiphers(Collections.singletonList(Cipher.TLS_AES_256_GCM_SHA384))
-                .withMutualTLS(MutualTLS.NOT_REQUIRED)
-                .withAcceptAllCerts(true)
-                .build();
+        forClient = new TLSClientConfiguration()
+                .protocols(Collections.singletonList(Protocol.TLS_1_3))
+                .ciphers(Collections.singletonList(Cipher.TLS_AES_128_GCM_SHA256))
+                .acceptAllCerts(true);
 
-        httpConfiguration = HTTPConfigurationBuilder.newBuilder()
-                .withBrotliCompressionLevel(4)
-                .withCompressionThreshold(100)
-                .withDeflateCompressionLevel(6)
-                .withMaxChunkSize(1024 * 100)
-                .withMaxContentLength(1024 * 10240)
-                .withMaxHeaderSize(1024 * 10)
-                .withMaxInitialLineLength(1024 * 100)
-                .withH2InitialWindowSize(Integer.MAX_VALUE)
-                .withH2MaxConcurrentStreams(1000)
-                .withH2MaxHeaderSizeList(262144)
-                .withH2MaxFrameSize(16777215)
-                .withH2MaxHeaderTableSize(65536)
-                .build();
+        httpConfiguration = new HTTPConfiguration()
+                .brotliCompressionLevel(4)
+                .compressionThreshold(100)
+                .deflateCompressionLevel(6)
+                .maxChunkSize(1024 * 100)
+                .maxContentLength(1024 * 10240)
+                .maxHeaderSize(1024 * 10)
+                .maxInitialLineLength(1024 * 100)
+                .h2InitialWindowSize(Integer.MAX_VALUE)
+                .h2MaxConcurrentStreams(1000)
+                .h2MaxHeaderSizeList(262144)
+                .h2MaxFrameSize(16777215)
+                .h2MaxHeaderTableSize(65536);
 
         SSLContext sslContext = SSLContext.getInstance("TLSv1.3");
         sslContext.init(null, InsecureTrustManagerFactory.INSTANCE.getTrustManagers(), new SecureRandom());

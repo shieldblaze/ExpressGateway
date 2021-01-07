@@ -16,22 +16,31 @@
  * along with ShieldBlaze ExpressGateway.  If not, see <https://www.gnu.org/licenses/>.
  */
 
-package com.shieldblaze.expressgateway.configuration.eventstream;
+package com.shieldblaze.expressgateway.configuration;
 
+import com.fasterxml.jackson.annotation.JsonProperty;
 import com.google.gson.annotations.Expose;
+import com.shieldblaze.expressgateway.common.utils.Number;
 import com.shieldblaze.expressgateway.concurrent.eventstream.AsyncEventStream;
 import com.shieldblaze.expressgateway.concurrent.eventstream.EventStream;
 
 import java.util.concurrent.Executors;
 
-public class EventStreamConfiguration {
+public class EventStreamConfiguration implements Configuration {
 
-    private final EventStream eventStream;
+    public static final EventStreamConfiguration EMPTY_INSTANCE = new EventStreamConfiguration();
+
+    private EventStream eventStream;
 
     @Expose
-    private final int workers;
+    @JsonProperty("workers")
+    private int workers;
 
-    EventStreamConfiguration(int workers) {
+    private EventStreamConfiguration() {
+        // Prevent outside initialization
+    }
+
+    public EventStreamConfiguration(int workers) {
         this.workers = workers;
         if (workers == 0) {
             eventStream = new EventStream();
@@ -46,5 +55,15 @@ public class EventStreamConfiguration {
 
     public int workers() {
         return workers;
+    }
+
+    @Override
+    public String name() {
+        return "EventStream";
+    }
+
+    @Override
+    public void validate() throws IllegalArgumentException {
+        Number.checkZeroOrPositive(workers, "Workers");
     }
 }

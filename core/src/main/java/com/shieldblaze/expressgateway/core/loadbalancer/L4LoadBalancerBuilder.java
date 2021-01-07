@@ -20,7 +20,8 @@ package com.shieldblaze.expressgateway.core.loadbalancer;
 
 import com.shieldblaze.expressgateway.backend.cluster.Cluster;
 import com.shieldblaze.expressgateway.configuration.CoreConfiguration;
-import com.shieldblaze.expressgateway.configuration.tls.TLSConfiguration;
+import com.shieldblaze.expressgateway.configuration.tls.TLSClientConfiguration;
+import com.shieldblaze.expressgateway.configuration.tls.TLSServerConfiguration;
 import com.shieldblaze.expressgateway.core.L4FrontListener;
 import io.netty.channel.ChannelHandler;
 
@@ -36,8 +37,8 @@ public final class L4LoadBalancerBuilder {
     private L4FrontListener l4FrontListener;
     private Cluster cluster;
     private CoreConfiguration coreConfiguration;
-    private TLSConfiguration tlsForServer;
-    private TLSConfiguration tlsForClient;
+    private TLSServerConfiguration tlsForServer;
+    private TLSClientConfiguration tlsForClient;
     private ChannelHandler channelHandler;
 
     private L4LoadBalancerBuilder() {
@@ -68,12 +69,12 @@ public final class L4LoadBalancerBuilder {
         return this;
     }
 
-    public L4LoadBalancerBuilder withTlsForServer(TLSConfiguration tlsForServer) {
+    public L4LoadBalancerBuilder withTLSForServer(TLSServerConfiguration tlsForServer) {
         this.tlsForServer = tlsForServer;
         return this;
     }
 
-    public L4LoadBalancerBuilder withTlsForClient(TLSConfiguration tlsForClient) {
+    public L4LoadBalancerBuilder withTLSForClient(TLSClientConfiguration tlsForClient) {
         this.tlsForClient = tlsForClient;
         return this;
     }

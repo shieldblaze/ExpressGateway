@@ -17,8 +17,8 @@
  */
 package com.shieldblaze.expressgateway.restapi.config;
 
-import com.shieldblaze.expressgateway.configuration.eventstream.EventStreamConfiguration;
-import com.shieldblaze.expressgateway.configuration.transformer.EventStreamTransformer;
+import com.shieldblaze.expressgateway.configuration.EventStreamConfiguration;
+import com.shieldblaze.expressgateway.configuration.Transformer;
 import com.shieldblaze.expressgateway.restapi.response.FastBuilder;
 import com.shieldblaze.expressgateway.restapi.response.builder.ErrorBase;
 import com.shieldblaze.expressgateway.restapi.response.builder.Message;
@@ -29,23 +29,24 @@ import org.springframework.http.HttpStatus;
 import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.GetMapping;
+import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RestController;
 
 @RestController
-@RequestMapping("/config")
+@RequestMapping("/{profile}/config")
 @Tag(name = "EventStream Configuration", description = "Create or Fetch EventStream Configuration")
 public class EventStreamHandler {
 
     @Operation(summary = "Create or Modify EventStream Configuration",
             description = "EventStream configuration contains settings for EventStream. EventStream is a pub-sub Event Stream.")
     @PostMapping(value = "/eventstream", consumes = MediaType.APPLICATION_JSON_VALUE, produces = MediaType.APPLICATION_JSON_VALUE)
-    public ResponseEntity<String> create(@RequestBody String data) {
+    public ResponseEntity<String> create(@PathVariable String profile, @RequestBody EventStreamConfiguration eventStreamConfiguration) {
         try {
-            EventStreamConfiguration eventStreamConfiguration = EventStreamTransformer.readDirectly(data);
-            EventStreamTransformer.write(eventStreamConfiguration);
+            eventStreamConfiguration.validate();
+            Transformer.write(eventStreamConfiguration, profile);
             return new ResponseEntity<>(HttpStatus.NO_CONTENT);
         } catch (Exception ex) {
             return FastBuilder.error(ErrorBase.REQUEST_ERROR, Message.newBuilder()
@@ -55,12 +56,11 @@ public class EventStreamHandler {
         }
     }
 
-    @Operation(summary = "Get the EventStream Configuration",
-            description = "Get the EventStream configuration which is saved in the file.")
+    @Operation(summary = "Get the EventStream Configuration", description = "Get the EventStream configuration which is saved in the file.")
     @GetMapping(value = "/eventstream", produces = MediaType.APPLICATION_JSON_VALUE)
-    public ResponseEntity<String> get() {
+    public ResponseEntity<String> get(@PathVariable String profile) {
         try {
-            String data = EventStreamTransformer.getFileData();
+            String data = Transformer.readJSON(EventStreamConfiguration.EMPTY_INSTANCE, profile);
             return new ResponseEntity<>(data, HttpStatus.OK);
         } catch (Exception ex) {
             return FastBuilder.error(ErrorBase.REQUEST_ERROR, Message.newBuilder()

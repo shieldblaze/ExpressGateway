@@ -17,8 +17,6 @@
  */
 package com.shieldblaze.expressgateway.configuration;
 
-import com.shieldblaze.expressgateway.configuration.buffer.PooledByteBufAllocatorConfiguration;
-import com.shieldblaze.expressgateway.configuration.eventloop.EventLoopConfiguration;
 import com.shieldblaze.expressgateway.configuration.transport.TransportConfiguration;
 
 import java.util.Objects;
@@ -29,7 +27,7 @@ import java.util.Objects;
 public final class CoreConfigurationBuilder {
     private TransportConfiguration transportConfiguration;
     private EventLoopConfiguration eventLoopConfiguration;
-    private PooledByteBufAllocatorConfiguration pooledByteBufAllocatorConfiguration;
+    private BufferConfiguration bufferConfiguration;
 
     private CoreConfigurationBuilder() {
         // Prevent outside initialization
@@ -61,10 +59,10 @@ public final class CoreConfigurationBuilder {
     }
 
     /**
-     * Set {@link PooledByteBufAllocatorConfiguration}
+     * Set {@link BufferConfiguration}
      */
-    public CoreConfigurationBuilder withPooledByteBufAllocatorConfiguration(PooledByteBufAllocatorConfiguration pooledByteBufAllocatorConfiguration) {
-        this.pooledByteBufAllocatorConfiguration = pooledByteBufAllocatorConfiguration;
+    public CoreConfigurationBuilder withBufferConfiguration(BufferConfiguration bufferConfiguration) {
+        this.bufferConfiguration = bufferConfiguration;
         return this;
     }
 
@@ -77,11 +75,11 @@ public final class CoreConfigurationBuilder {
     public CoreConfiguration build() {
         Objects.requireNonNull(transportConfiguration, "Transport Configuration");
         Objects.requireNonNull(eventLoopConfiguration, "EventLoop Configuration");
-        Objects.requireNonNull(pooledByteBufAllocatorConfiguration, "PooledByteBufAllocator Configuration");
+        Objects.requireNonNull(bufferConfiguration, "Buffer Configuration");
 
         return new CoreConfiguration()
                 .transportConfiguration(transportConfiguration)
                 .eventLoopConfiguration(eventLoopConfiguration)
-                .pooledByteBufAllocatorConfiguration(pooledByteBufAllocatorConfiguration);
+                .bufferConfiguration(bufferConfiguration);
     }
 }

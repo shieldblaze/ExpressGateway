@@ -17,8 +17,8 @@
  */
 package com.shieldblaze.expressgateway.restapi.config;
 
-import com.shieldblaze.expressgateway.configuration.healthcheck.HealthCheckConfiguration;
-import com.shieldblaze.expressgateway.configuration.transformer.HealthCheckTransformer;
+import com.shieldblaze.expressgateway.configuration.HealthCheckConfiguration;
+import com.shieldblaze.expressgateway.configuration.Transformer;
 import com.shieldblaze.expressgateway.restapi.response.FastBuilder;
 import com.shieldblaze.expressgateway.restapi.response.builder.ErrorBase;
 import com.shieldblaze.expressgateway.restapi.response.builder.Message;
@@ -29,26 +29,23 @@ import org.springframework.http.HttpStatus;
 import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.GetMapping;
+import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RestController;
 
-import java.io.FileNotFoundException;
-import java.nio.file.NoSuchFileException;
-
 @RestController
-@RequestMapping("/config")
+@RequestMapping("/{profile}/config")
 @Tag(name = "HealthCheck Configuration", description = "Create or Fetch HealthCheck Configuration")
 public class HealthCheckHandler {
 
-    @Operation(summary = "Create or Modify HealthCheck Configuration",
-    description = "HealthCheck Configuration contains settings for HealthCheck Task Executor.")
+    @Operation(summary = "Create or Modify HealthCheck Configuration", description = "HealthCheck Configuration contains settings for HealthCheck Task Executor.")
     @PostMapping(value = "/healthcheck", consumes = MediaType.APPLICATION_JSON_VALUE, produces = MediaType.APPLICATION_JSON_VALUE)
-    public ResponseEntity<String> create(@RequestBody String data) {
+    public ResponseEntity<String> create(@PathVariable String profile, @RequestBody HealthCheckConfiguration healthCheckConfiguration) {
         try {
-            HealthCheckConfiguration healthCheckConfiguration = HealthCheckTransformer.readDirectly(data);
-            HealthCheckTransformer.write(healthCheckConfiguration);
+            healthCheckConfiguration.validate();
+            Transformer.write(healthCheckConfiguration, profile);
             return new ResponseEntity<>(HttpStatus.NO_CONTENT);
         } catch (Exception ex) {
             return FastBuilder.error(ErrorBase.REQUEST_ERROR, Message.newBuilder()
@@ -58,12 +55,11 @@ public class HealthCheckHandler {
         }
     }
 
-    @Operation(summary = "Get the HealthCheck Configuration",
-            description = "Get the HealthCheck configuration which is saved in the file.")
+    @Operation(summary = "Get the HealthCheck Configuration", description = "Get the HealthCheck configuration which is saved in the file.")
     @GetMapping(value = "/healthcheck", produces = MediaType.APPLICATION_JSON_VALUE)
-    public ResponseEntity<String> get() {
+    public ResponseEntity<String> get(@PathVariable String profile) {
         try {
-            String data = HealthCheckTransformer.getFileData();
+            String data = Transformer.readJSON(HealthCheckConfiguration.EMPTY_INSTANCE, profile);
             return new ResponseEntity<>(data, HttpStatus.OK);
         } catch (Exception ex) {
             return FastBuilder.error(ErrorBase.REQUEST_ERROR, Message.newBuilder()

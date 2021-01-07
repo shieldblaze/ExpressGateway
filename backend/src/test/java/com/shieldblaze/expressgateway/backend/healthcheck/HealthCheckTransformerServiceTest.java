@@ -24,10 +24,8 @@ import com.shieldblaze.expressgateway.backend.cluster.ClusterPool;
 import com.shieldblaze.expressgateway.backend.exceptions.TooManyConnectionsException;
 import com.shieldblaze.expressgateway.backend.strategy.l4.RoundRobin;
 import com.shieldblaze.expressgateway.backend.strategy.l4.sessionpersistence.NOOPSessionPersistence;
-import com.shieldblaze.expressgateway.configuration.eventstream.EventStreamConfiguration;
-import com.shieldblaze.expressgateway.configuration.eventstream.EventStreamConfigurationBuilder;
-import com.shieldblaze.expressgateway.configuration.healthcheck.HealthCheckConfiguration;
-import com.shieldblaze.expressgateway.configuration.healthcheck.HealthCheckConfigurationBuilder;
+import com.shieldblaze.expressgateway.configuration.EventStreamConfiguration;
+import com.shieldblaze.expressgateway.configuration.HealthCheckConfiguration;
 import com.shieldblaze.expressgateway.healthcheck.l4.TCPHealthCheck;
 import io.netty.bootstrap.Bootstrap;
 import io.netty.buffer.ByteBuf;
@@ -72,14 +70,8 @@ class HealthCheckTransformerServiceTest {
         tcpServer = new TCPServer();
         tcpServer.start();
 
-        EventStreamConfiguration streamConfiguration = EventStreamConfigurationBuilder.newBuilder()
-                .withWorkers(0) // Use EventStream instead of AsyncEventStream
-                .build();
-
-        HealthCheckConfiguration healthCheckConfiguration = HealthCheckConfigurationBuilder.newBuilder()
-                .withTimeInterval(10)
-                .withWorkers(2)
-                .build();
+        EventStreamConfiguration streamConfiguration = new EventStreamConfiguration(0);
+        HealthCheckConfiguration healthCheckConfiguration = new HealthCheckConfiguration(2, 10);
 
         cluster = new ClusterPool(streamConfiguration.eventStream(), new RoundRobin(NOOPSessionPersistence.INSTANCE), "TestPool");
         healthCheckService = new HealthCheckService(healthCheckConfiguration, cluster.eventPublisher());

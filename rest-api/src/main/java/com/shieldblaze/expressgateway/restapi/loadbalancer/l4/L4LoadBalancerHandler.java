@@ -21,7 +21,8 @@ import com.shieldblaze.expressgateway.backend.cluster.Cluster;
 import com.shieldblaze.expressgateway.backend.cluster.ClusterPool;
 import com.shieldblaze.expressgateway.backend.strategy.l4.L4Balance;
 import com.shieldblaze.expressgateway.concurrent.eventstream.EventStream;
-import com.shieldblaze.expressgateway.configuration.transformer.EventStreamTransformer;
+import com.shieldblaze.expressgateway.configuration.EventStreamConfiguration;
+import com.shieldblaze.expressgateway.configuration.Transformer;
 import com.shieldblaze.expressgateway.core.LoadBalancersRegistry;
 import com.shieldblaze.expressgateway.core.loadbalancer.L4LoadBalancer;
 import com.shieldblaze.expressgateway.core.loadbalancer.L4LoadBalancerBuilder;
@@ -34,6 +35,7 @@ import io.netty.handler.codec.http.HttpResponseStatus;
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.Parameter;
 import io.swagger.v3.oas.annotations.tags.Tag;
+import org.springframework.context.annotation.Description;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
@@ -48,28 +50,32 @@ import java.net.InetAddress;
 import java.net.InetSocketAddress;
 
 @RestController
-@RequestMapping("/loadbalancer/{protocol}")
+@RequestMapping("{profile}/loadbalancer/{protocol}")
 @Tag(name = "Layer-4 Load Balancer", description = "Layer-4 Load Balancer API")
 public class L4LoadBalancerHandler {
 
     @Operation(summary = "Create new Load Balancer", description = "Create and start a new Load Balancer")
     @PostMapping(path = "/create", consumes = MediaType.APPLICATION_JSON_VALUE, produces = MediaType.APPLICATION_JSON_VALUE)
-    public ResponseEntity<String> create(@Parameter(description = "Protocol to be Load Balanced (TCP/UDP)")
+    public ResponseEntity<String> create(@Parameter(description = "Profile name")
+                                         @PathVariable String profile,
+                                         //--------------------------------------
+                                         @Parameter(description = "Protocol to be Load Balanced (TCP/UDP)")
                                          @PathVariable String protocol,
+                                         //--------------------------------------
                                          @Parameter(description = "Request Body containing all information for creation of Load Balancer")
                                          @RequestBody L4LoadBalancerContext l4LoadBalancerContext) {
         try {
-            EventStream eventStream = EventStreamTransformer.readFile().eventStream();
+            EventStream eventStream = ((EventStreamConfiguration) Transformer.read(EventStreamConfiguration.EMPTY_INSTANCE, "profile")).eventStream();
             L4Balance l4Balance = Utils.determineAlgorithm(l4LoadBalancerContext);
             Cluster cluster = new ClusterPool(eventStream, l4Balance);
 
             L4LoadBalancer l4LoadBalancer = L4LoadBalancerBuilder.newBuilder()
-                    .withL4FrontListener(Utils.determineListener(l4LoadBalancerContext))
+                    .withL4FrontListener(Utils.determineListener(protocol))
                     .withBindAddress(new InetSocketAddress(InetAddress.getByName(l4LoadBalancerContext.bindAddress()), l4LoadBalancerContext.bindPort()))
                     .withCluster(cluster)
-                    .withCoreConfiguration(Utils.coreConfiguration())
-                    .withTlsForServer(l4LoadBalancerContext.tlsForServer() ? Utils.tlsForServer() : null)
-                    .withTlsForClient(l4LoadBalancerContext.tlsForClient() ? Utils.tlsForClient() : null)
+                    .withCoreConfiguration(Utils.coreConfiguration(profile))
+                    .withTLSForServer(l4LoadBalancerContext.tlsForServer() ? Utils.tlsForServer(profile) : null)
+                    .withTLSForClient(l4LoadBalancerContext.tlsForClient() ? Utils.tlsForClient(profile) : null)
                     .build();
 
             LoadBalancersRegistry.addLoadBalancer(l4LoadBalancer);

@@ -17,6 +17,7 @@
  */
 package com.shieldblaze.expressgateway.configuration.tls;
 
+import com.fasterxml.jackson.annotation.JsonProperty;
 import com.google.gson.annotations.Expose;
 import com.shieldblaze.expressgateway.concurrent.GlobalExecutors;
 import io.netty.handler.ssl.SslContext;
@@ -44,15 +45,18 @@ import java.util.concurrent.TimeUnit;
 public final class CertificateKeyPair implements Runnable, Closeable {
 
     @Expose
+    @JsonProperty("certificateChain")
     private final String certificateChain;
 
     private final List<X509Certificate> certificates = new ArrayList<>();
 
     @Expose
+    @JsonProperty("privateKey")
     private final String privateKey;
 
     @Expose
-    private boolean useOCSPStapling;
+    @JsonProperty("useOCSPStapling")
+    private final boolean useOCSPStapling;
 
     private volatile byte[] ocspStaplingData = null;
     private ScheduledFuture<?> scheduledFuture;
@@ -75,11 +79,6 @@ public final class CertificateKeyPair implements Runnable, Closeable {
         } catch (IOException | CertificateException e) {
             throw new IllegalArgumentException("Error Occurred: " + e);
         }
-    }
-
-    CertificateKeyPair() {
-        this.certificateChain = null;
-        this.privateKey = null;
     }
 
     String certificateChain() {
