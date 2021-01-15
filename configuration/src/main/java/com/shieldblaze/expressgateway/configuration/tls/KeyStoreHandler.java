@@ -51,6 +51,10 @@ public final class KeyStoreHandler {
 
         for (Map.Entry<String, CertificateKeyPair> entry : tlsConfiguration.certificateKeyPairMap().entrySet()) {
 
+            if (entry.getValue().noCertKey()) {
+                continue;
+            }
+
             Certificate[] certificates = new Certificate[entry.getValue().certificates().size()];
             int count = 0;
             for (X509Certificate x509Certificate : entry.getValue().certificates()) {
@@ -103,9 +107,12 @@ public final class KeyStoreHandler {
     public static void saveClient(TLSConfiguration tlsConfiguration, String profile, String password) throws Exception {
         KeyStore keyStore = KeyStore.getInstance("PKCS12", new BouncyCastleProvider());
         keyStore.load(null, null);
-        Certificate[] certificates = new Certificate[]{(X509Certificate) tlsConfiguration.defaultMapping().certificates()};
 
-        keyStore.setKeyEntry("DEFAULT_HOST", tlsConfiguration.defaultMapping().privateKey(), password.toCharArray(), certificates);
+        if (!tlsConfiguration.defaultMapping().noCertKey()) {
+            Certificate[] certificates = new Certificate[]{(X509Certificate) tlsConfiguration.defaultMapping().certificates()};
+            keyStore.setKeyEntry("DEFAULT_HOST", tlsConfiguration.defaultMapping().privateKey(), password.toCharArray(), certificates);
+        }
+
         keyStore.store(new FileOutputStream(Profile.ensure(profile, true) + "_Client.pfx"), password.toCharArray());
     }
 

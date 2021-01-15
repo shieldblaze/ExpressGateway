@@ -17,7 +17,6 @@
  */
 package com.shieldblaze.expressgateway.controlinterface.configuration;
 
-import com.shieldblaze.expressgateway.configuration.eventloop.EventLoopConfiguration;
 import com.shieldblaze.expressgateway.configuration.eventstream.EventStreamConfiguration;
 import com.shieldblaze.expressgateway.configuration.eventstream.EventStreamConfigurationBuilder;
 import io.grpc.stub.StreamObserver;

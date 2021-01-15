@@ -18,6 +18,7 @@
 package com.shieldblaze.expressgateway.configuration.tls;
 
 import java.util.List;
+import java.util.NoSuchElementException;
 
 /**
  * List of available TLS Protocols under OpenSsl 1.1.1h
@@ -41,5 +42,16 @@ public enum Protocol {
             index++;
         }
         return protocolArray;
+    }
+
+    public static Protocol get(String protocol) {
+        if (protocol.equalsIgnoreCase("TLSv1.1")) {
+            return TLS_1_1;
+        } else if (protocol.equalsIgnoreCase("TLSv1.2")) {
+            return TLS_1_2;
+        } else if (protocol.equalsIgnoreCase("TLSv1.3")) {
+            return TLS_1_3;
+        }
+       throw new NoSuchElementException("Invalid Protocol: " + protocol);
     }
 }

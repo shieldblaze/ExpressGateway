@@ -17,6 +17,7 @@
  */
 package com.shieldblaze.expressgateway.common.crypto;
 
+import org.bouncycastle.asn1.pkcs.PrivateKeyInfo;
 import org.bouncycastle.jce.provider.BouncyCastleProvider;
 import org.bouncycastle.openssl.PEMKeyPair;
 import org.bouncycastle.openssl.PEMParser;
@@ -41,6 +42,10 @@ public final class Keypair {
             PEMKeyPair pemKeyPair = (PEMKeyPair) object;
             JcaPEMKeyConverter converter = new JcaPEMKeyConverter().setProvider("BC");
             return converter.getKeyPair(pemKeyPair).getPrivate();
+        } else if (object instanceof PrivateKeyInfo) {
+            PrivateKeyInfo privateKeyInfo = (PrivateKeyInfo) object;
+            JcaPEMKeyConverter converter = new JcaPEMKeyConverter().setProvider("BC");
+            return converter.getPrivateKey(privateKeyInfo);
         }
 
         throw new IllegalArgumentException("Unknown Private Key: " + object);

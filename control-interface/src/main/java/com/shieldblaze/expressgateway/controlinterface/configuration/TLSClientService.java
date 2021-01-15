@@ -45,13 +45,18 @@ public class TLSClientService extends TLSClientServiceGrpc.TLSClientServiceImplB
 
         try {
             TLSConfiguration tlsConfiguration = TLSConfigurationBuilder.forClient()
-                    .withProtocols(protocolConverter(request.getProtocolsList()))
-                    .withCiphers(cipherConverter(request.getCiphersList()))
+                    .withProtocols(Utils.protocolConverter(request.getProtocolsList()))
+                    .withCiphers(Utils.cipherConverter(request.getCiphersList()))
                     .withAcceptAllCertificate(request.getAcceptAllCertificates())
                     .withUseStartTLS(request.getUseStartTLS())
                     .build();
 
-            tlsConfiguration.defaultMapping(new CertificateKeyPair(request.getCertificateChain(), request.getPrivateKey(), false));
+            if (request.getCertificateChain().isEmpty()) {
+                tlsConfiguration.defaultMapping(new CertificateKeyPair());
+            } else {
+                tlsConfiguration.defaultMapping(new CertificateKeyPair(request.getCertificateChain(), request.getPrivateKey(), false));
+            }
+
             tlsConfiguration.saveTo(request.getProfileName(), request.getPassword());
 
             response = TLS.ConfigurationResponse.newBuilder()
@@ -94,24 +99,9 @@ public class TLSClientService extends TLSClientServiceGrpc.TLSClientServiceImplB
             responseObserver.onNext(client);
             responseObserver.onCompleted();
         } catch (Exception ex) {
+            ex.printStackTrace();
             responseObserver.onError(ex);
             responseObserver.onCompleted();
         }
-    }
-
-    private List<Protocol> protocolConverter(ProtocolStringList protocolStringList) {
-        List<Protocol> protocols = new ArrayList<>();
-        for (String protocol : protocolStringList) {
-            protocols.add(Protocol.valueOf(protocol.toUpperCase()));
-        }
-        return protocols;
-    }
-
-    private List<Cipher> cipherConverter(ProtocolStringList protocolStringList) {
-        List<Cipher> protocols = new ArrayList<>();
-        for (String protocol : protocolStringList) {
-            protocols.add(Cipher.valueOf(protocol.toUpperCase()));
-        }
-        return protocols;
     }
 }

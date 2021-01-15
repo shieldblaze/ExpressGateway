@@ -17,13 +17,9 @@
  */
 package com.shieldblaze.expressgateway.controlinterface.configuration;
 
-import com.shieldblaze.expressgateway.common.GSON;
-import com.shieldblaze.expressgateway.common.utils.Profile;
 import com.shieldblaze.expressgateway.configuration.http.HTTPConfiguration;
 import com.shieldblaze.expressgateway.configuration.http.HTTPConfigurationBuilder;
 import io.grpc.stub.StreamObserver;
-
-import java.io.FileWriter;
 
 public final class HTTPService extends HTTPServiceGrpc.HTTPServiceImplBase {
 

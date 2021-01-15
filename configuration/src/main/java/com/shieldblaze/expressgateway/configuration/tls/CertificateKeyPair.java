@@ -61,6 +61,8 @@ public final class CertificateKeyPair implements Runnable, Closeable {
     private ScheduledFuture<?> scheduledFuture;
     private SslContext sslContext;
 
+    private boolean noCertKey = false;
+
     /**
      * <p> TLS for Client </p>
      * Should be used when there is no need of Mutual TLS handshake.
@@ -68,6 +70,7 @@ public final class CertificateKeyPair implements Runnable, Closeable {
     public CertificateKeyPair() {
         privateKey = null;
         useOCSPStapling = false;
+        noCertKey = true;
     }
 
     /**
@@ -198,6 +201,10 @@ public final class CertificateKeyPair implements Runnable, Closeable {
 
     public boolean useOCSPStapling() {
         return useOCSPStapling;
+    }
+
+    public boolean noCertKey() {
+        return noCertKey;
     }
 
     @Override

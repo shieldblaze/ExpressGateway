@@ -17,13 +17,9 @@
  */
 package com.shieldblaze.expressgateway.controlinterface.configuration;
 
-import com.shieldblaze.expressgateway.common.GSON;
-import com.shieldblaze.expressgateway.common.utils.Profile;
 import com.shieldblaze.expressgateway.configuration.eventloop.EventLoopConfiguration;
 import com.shieldblaze.expressgateway.configuration.eventloop.EventLoopConfigurationBuilder;
 import io.grpc.stub.StreamObserver;
-
-import java.io.FileWriter;
 
 public final class EventLoopService extends EventLoopServiceGrpc.EventLoopServiceImplBase {
 

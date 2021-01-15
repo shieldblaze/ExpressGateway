@@ -68,6 +68,7 @@ public final class TransportService extends TransportServiceGrpc.TransportServic
                     .withSocketSendBufferSize(request.getSocketSendBufferSize())
                     .withTCPConnectionBacklog(request.getTcpConnectionBacklog())
                     .withBackendConnectTimeout(request.getBackendConnectTimeout())
+                    .withBackendSocketTimeout(request.getBackendSocketTimeout())
                     .withConnectionIdleTimeout(request.getConnectionIdleTimeout())
                     .withTransportType(transportType)
                     .withReceiveBufferSizes(bufferSizes)

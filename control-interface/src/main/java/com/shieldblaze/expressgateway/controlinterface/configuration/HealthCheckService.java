@@ -17,13 +17,9 @@
  */
 package com.shieldblaze.expressgateway.controlinterface.configuration;
 
-import com.shieldblaze.expressgateway.common.GSON;
-import com.shieldblaze.expressgateway.common.utils.Profile;
 import com.shieldblaze.expressgateway.configuration.healthcheck.HealthCheckConfiguration;
 import com.shieldblaze.expressgateway.configuration.healthcheck.HealthCheckConfigurationBuilder;
 import io.grpc.stub.StreamObserver;
-
-import java.io.FileWriter;
 
 public final class HealthCheckService extends HealthCheckServiceGrpc.HealthCheckServiceImplBase {
 

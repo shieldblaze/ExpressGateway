@@ -27,11 +27,6 @@ public class TCPLoadBalancerService extends TCPLoadBalancerServiceGrpc.TCPLoadBa
     @Override
     public void tcp(L4LoadBalancer.TCPLoadBalancer request, StreamObserver<L4LoadBalancer.LoadBalancerResponse> responseObserver) {
 
-
-
-        com.shieldblaze.expressgateway.core.loadbalancer.L4LoadBalancer l4LoadBalancer = L4LoadBalancerBuilder.newBuilder()
-
-                .build();
     }
 
     @Override

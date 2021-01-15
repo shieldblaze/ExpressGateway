@@ -64,8 +64,8 @@ public final class TLSServerService extends TLSServerServiceGrpc.TLSServerServic
                     .withUseStartTLS(request.getUseStartTLS())
                     .withSessionCacheSize(request.getSessionCacheSize())
                     .withSessionTimeout(request.getSessionTimeout())
-                    .withProtocols(protocolConverter(request.getProtocolsList()))
-                    .withCiphers(cipherConverter(request.getCiphersList()))
+                    .withProtocols(Utils.protocolConverter(request.getProtocolsList()))
+                    .withCiphers(Utils.cipherConverter(request.getCiphersList()))
                     .withMutualTLS(mutualTLS)
                     .build();
 
@@ -142,21 +142,5 @@ public final class TLSServerService extends TLSServerServiceGrpc.TLSServerServic
 
     private CertificateKeyPair certificateKeyPairConverter(TLS.Server.CertificateKeyPair certificateKeyPair) throws IOException {
         return new CertificateKeyPair(certificateKeyPair.getCertificateChain(), certificateKeyPair.getPrivateKey(), certificateKeyPair.getUseOCSP());
-    }
-
-    private List<Protocol> protocolConverter(ProtocolStringList protocolStringList) {
-        List<Protocol> protocols = new ArrayList<>();
-        for (String protocol : protocolStringList) {
-            protocols.add(Protocol.valueOf(protocol.toUpperCase()));
-        }
-        return protocols;
-    }
-
-    private List<Cipher> cipherConverter(ProtocolStringList protocolStringList) {
-        List<Cipher> protocols = new ArrayList<>();
-        for (String protocol : protocolStringList) {
-            protocols.add(Cipher.valueOf(protocol.toUpperCase()));
-        }
-        return protocols;
     }
 }

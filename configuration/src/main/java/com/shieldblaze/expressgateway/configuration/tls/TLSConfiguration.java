@@ -80,7 +80,9 @@ public final class TLSConfiguration extends ConfigurationMarshaller {
 
     public TLSConfiguration addMapping(String host, CertificateKeyPair certificateKeyPair) throws NoSuchAlgorithmException, KeyStoreException, SSLException {
         certificateKeyPairMap.put(host, certificateKeyPair);
-        certificateKeyPair.init(this);
+        if (!certificateKeyPair.noCertKey()) {
+            certificateKeyPair.init(this);
+        }
         return this;
     }
 
