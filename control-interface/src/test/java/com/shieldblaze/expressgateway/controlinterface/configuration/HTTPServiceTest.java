@@ -37,7 +37,7 @@ class HTTPServiceTest {
     static void setup() throws IOException {
         System.setProperty("EGWConfDir", System.getProperty("java.io.tmpdir"));
 
-        server = ServerBuilder.forPort(2000)
+        server = ServerBuilder.forPort(9110)
                 .addService(new HTTPService())
                 .build()
                 .start();
@@ -50,7 +50,7 @@ class HTTPServiceTest {
 
     @Test
     void simpleTest() {
-        ManagedChannel channel = ManagedChannelBuilder.forTarget("127.0.0.1:2000")
+        ManagedChannel channel = ManagedChannelBuilder.forTarget("127.0.0.1:9110")
                 .usePlaintext()
                 .build();
 
@@ -59,7 +59,7 @@ class HTTPServiceTest {
                 .setProfileName("Meow")
                 .setBrotliCompressionLevel(4)
                 .setDeflateCompressionLevel(6)
-                .setCompressionThreshold(20000)
+                .setCompressionThreshold(91100)
                 .setMaxChunkSize(10000)
                 .setMaxHeaderSize(1000)
                 .setMaxInitialLineLength(10000)
@@ -80,7 +80,7 @@ class HTTPServiceTest {
 
     @Test
     void failingTest() {
-        ManagedChannel channel = ManagedChannelBuilder.forTarget("127.0.0.1:2000")
+        ManagedChannel channel = ManagedChannelBuilder.forTarget("127.0.0.1:9110")
                 .usePlaintext()
                 .build();
 
@@ -89,7 +89,7 @@ class HTTPServiceTest {
                 .setProfileName("Meow")
                 .setBrotliCompressionLevel(1000) // 1-11 valid
                 .setDeflateCompressionLevel(6)
-                .setCompressionThreshold(20000)
+                .setCompressionThreshold(91100)
                 .setMaxChunkSize(10000)
                 .setMaxHeaderSize(1000)
                 .setMaxInitialLineLength(10000)

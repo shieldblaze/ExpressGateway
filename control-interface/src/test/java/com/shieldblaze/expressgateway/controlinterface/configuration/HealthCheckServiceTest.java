@@ -37,7 +37,7 @@ class HealthCheckServiceTest {
     static void setup() throws IOException {
         System.setProperty("EGWConfDir", System.getProperty("java.io.tmpdir"));
 
-        server = ServerBuilder.forPort(2000)
+        server = ServerBuilder.forPort(9110)
                 .addService(new HealthCheckService())
                 .build()
                 .start();
@@ -50,7 +50,7 @@ class HealthCheckServiceTest {
 
     @Test
     void simpleTest() {
-        ManagedChannel channel = ManagedChannelBuilder.forTarget("127.0.0.1:2000")
+        ManagedChannel channel = ManagedChannelBuilder.forTarget("127.0.0.1:9110")
                 .usePlaintext()
                 .build();
 
@@ -70,7 +70,7 @@ class HealthCheckServiceTest {
 
     @Test
     void failingTest() {
-        ManagedChannel channel = ManagedChannelBuilder.forTarget("127.0.0.1:2000")
+        ManagedChannel channel = ManagedChannelBuilder.forTarget("127.0.0.1:9110")
                 .usePlaintext()
                 .build();
 
