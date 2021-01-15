@@ -1,0 +1,33 @@
+syntax = "proto3";
+package com.shieldblaze.expressgateway.controlinterface.configuration;
+
+message LoadBalancerResponse {
+  int32 responseCode = 1;
+  string responseText = 2;
+}
+
+// ------------------------ TCP ------------------------
+
+message TCPLoadBalancer {
+   string bindAddress = 1;
+   int32 bindPort = 2;
+   string tlsForServerProfileName = 3;
+   string tlsForClientProfileName = 4;
+}
+
+service TCPLoadBalancerService {
+  rpc tcp(TCPLoadBalancer) returns (LoadBalancerResponse);
+  rpc stopTCP(TCPLoadBalancer) returns (LoadBalancerResponse);
+}
+
+// ------------------------ UDP ------------------------
+
+message UDPLoadBalancer {
+  string bindAddress = 1;
+  int32 bindPort = 2;
+}
+
+service UDPLoadBalancerService {
+  rpc udp(UDPLoadBalancer) returns (LoadBalancerResponse);
+  rpc stopUDP(UDPLoadBalancer) returns (LoadBalancerResponse);
+}

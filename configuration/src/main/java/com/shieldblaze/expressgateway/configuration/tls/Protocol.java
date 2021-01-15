@@ -36,8 +36,8 @@ public enum Protocol {
     static String[] getProtocols(List<Protocol> protocols) {
         String[] protocolArray = new String[protocols.size()];
         int index = 0;
-        for (Protocol protocol : protocols) {
-            protocolArray[index] = protocol.protocol;
+        for (Protocol p : protocols) {
+            protocolArray[index] = p.protocol;
             index++;
         }
         return protocolArray;

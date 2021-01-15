@@ -44,7 +44,7 @@ public final class L4LoadBalancerBuilder {
         // Prevent outside initialization
     }
 
-    public static L4LoadBalancerBuilder newBuilder(){
+    public static L4LoadBalancerBuilder newBuilder() {
         return new L4LoadBalancerBuilder();
     }
 

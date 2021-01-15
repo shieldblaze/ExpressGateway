@@ -18,16 +18,27 @@
 
 package com.shieldblaze.expressgateway.configuration.eventstream;
 
+import com.google.gson.annotations.Expose;
 import com.shieldblaze.expressgateway.concurrent.eventstream.AsyncEventStream;
 import com.shieldblaze.expressgateway.concurrent.eventstream.EventStream;
+import com.shieldblaze.expressgateway.configuration.ConfigurationMarshaller;
 
+import java.io.IOException;
 import java.util.concurrent.Executors;
 
-public class EventStreamConfiguration {
+public class EventStreamConfiguration extends ConfigurationMarshaller {
 
-    private final EventStream eventStream;
+    private EventStream eventStream;
+
+    @Expose
+    private final int workers;
 
     EventStreamConfiguration(int workers) {
+        this.workers = workers;
+        init();
+    }
+
+    public void init() {
         if (workers == 0) {
             eventStream = new EventStream();
         } else {
@@ -35,7 +46,19 @@ public class EventStreamConfiguration {
         }
     }
 
+    public int workers() {
+        return workers;
+    }
+
     public EventStream eventStream() {
         return eventStream;
+    }
+
+    public static EventStreamConfiguration loadFrom(String profileName) throws IOException {
+        return loadFrom(EventStreamConfiguration.class, profileName, false, "EventStream.json");
+    }
+
+    public void saveTo(String profileName) throws IOException {
+        saveTo(this, profileName, false, "EventStream.json");
     }
 }

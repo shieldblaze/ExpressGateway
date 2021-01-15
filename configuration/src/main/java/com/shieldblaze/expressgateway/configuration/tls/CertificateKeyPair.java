@@ -17,108 +17,208 @@
  */
 package com.shieldblaze.expressgateway.configuration.tls;
 
+import com.shieldblaze.expressgateway.common.crypto.Keypair;
+import com.shieldblaze.expressgateway.concurrent.GlobalExecutors;
+import io.netty.handler.ssl.ApplicationProtocolConfig;
+import io.netty.handler.ssl.ApplicationProtocolNames;
+import io.netty.handler.ssl.OpenSsl;
 import io.netty.handler.ssl.SslContext;
-import io.netty.util.internal.ObjectUtil;
+import io.netty.handler.ssl.SslContextBuilder;
+import io.netty.handler.ssl.SslProvider;
+import io.netty.handler.ssl.util.InsecureTrustManagerFactory;
 import org.bouncycastle.cert.ocsp.BasicOCSPResp;
 import org.bouncycastle.cert.ocsp.OCSPResp;
 import org.bouncycastle.cert.ocsp.SingleResp;
 
+import javax.net.ssl.SSLException;
+import javax.net.ssl.TrustManagerFactory;
+import java.io.ByteArrayInputStream;
+import java.io.Closeable;
 import java.io.IOException;
+import java.security.KeyStore;
+import java.security.KeyStoreException;
+import java.security.NoSuchAlgorithmException;
 import java.security.PrivateKey;
+import java.security.cert.Certificate;
+import java.security.cert.CertificateException;
+import java.security.cert.CertificateFactory;
 import java.security.cert.X509Certificate;
+import java.util.ArrayList;
 import java.util.List;
-import java.util.Objects;
+import java.util.concurrent.ScheduledFuture;
 import java.util.concurrent.TimeUnit;
 
 /**
  * {@link X509Certificate} and {@link PrivateKey} Pair
  */
-public final class CertificateKeyPair {
-    private final List<X509Certificate> certificateChain;
+public final class CertificateKeyPair implements Runnable, Closeable {
+
+    private final List<X509Certificate> certificates = new ArrayList<>();
     private final PrivateKey privateKey;
-    private byte[] ocspStaplingData = null;
-    private SingleResp ocspResp;
-    private final boolean useOCSP;
+    private final boolean useOCSPStapling;
+
+    private volatile byte[] ocspStaplingData = null;
+    private ScheduledFuture<?> scheduledFuture;
     private SslContext sslContext;
 
     /**
-     * Create new Instance of {@link CertificateKeyPair}.
-     *
-     * @param certificateChain {@link List} of {@link X509Certificate} Chain
-     *                         <ol>
-     *                            <li> First {@link X509Certificate} should be end-entity. </li>
-     *                            <li> All {@link X509Certificate} in middle should be Intermediate Certificate Authority. </li>
-     *                            <li> Last {@link X509Certificate} should be Root Certificate Authority. </li>
-     *                         </ol>
-     * @param privateKey       {@link PrivateKey} of our {@link X509Certificate}.
-     * @param useOCSP          Set to {@code true} if we want OCSP Stapling (in case of Server) or
-     *                         OCSP Validation (in case of Client) else set to {@code false}
+     * <p> TLS for Client </p>
+     * Should be used when there is no need of Mutual TLS handshake.
      */
-    public CertificateKeyPair(List<X509Certificate> certificateChain, PrivateKey privateKey, boolean useOCSP) {
-        this.certificateChain = ObjectUtil.checkNonEmpty(certificateChain, "Certificate Chain");
-        this.privateKey = Objects.requireNonNull(privateKey, "Private Key");
-        this.useOCSP = useOCSP;
+    public CertificateKeyPair() {
+        privateKey = null;
+        useOCSPStapling = false;
     }
 
-    CertificateKeyPair() {
-        this.certificateChain = null;
-        this.privateKey = null;
-        this.useOCSP = false;
+    /**
+     * TLS for Client / Server with OCSPStapling disabled.
+     *
+     * @param x509Certificates {@link List} of {@link X509Certificate} certificates
+     * @param privateKey       {@link PrivateKey} Instance
+     */
+    public CertificateKeyPair(List<X509Certificate> x509Certificates, PrivateKey privateKey) {
+        this(x509Certificates, privateKey, false);
     }
 
-    List<X509Certificate> certificateChain() {
-        return certificateChain;
+    /**
+     * TLS for Client / Server
+     *
+     * @param x509Certificates {@link List} of {@link X509Certificate} certificates
+     * @param privateKey       {@link PrivateKey} Instance
+     * @param useOCSPStapling  Set to {@code true} to enable OCSP Stapling.
+     */
+    public CertificateKeyPair(List<X509Certificate> x509Certificates, PrivateKey privateKey, boolean useOCSPStapling) {
+        certificates.addAll(x509Certificates);
+        this.privateKey = privateKey;
+        this.useOCSPStapling = useOCSPStapling;
+    }
+
+    /**
+     * TLS for Client / Server
+     *
+     * @param certificateChain Certificate Chain in PEM format
+     * @param privateKey       Private Key in PEM format
+     * @param useOCSPStapling  Set to {@code true} to enable OCSP Stapling.
+     * @throws IOException If an error occurred while parsing CertificateChain
+     */
+    public CertificateKeyPair(String certificateChain, String privateKey, boolean useOCSPStapling) throws IOException {
+        this.privateKey = Keypair.parse(privateKey);
+        this.useOCSPStapling = useOCSPStapling;
+
+        try (ByteArrayInputStream inputStream = new ByteArrayInputStream(certificateChain.getBytes())) {
+            CertificateFactory cf = CertificateFactory.getInstance("X.509");
+            for (Certificate certificate : cf.generateCertificates(inputStream)) {
+                certificates.add((X509Certificate) certificate);
+            }
+        } catch (IOException | CertificateException e) {
+            throw new IllegalArgumentException("Error Occurred: " + e);
+        }
+    }
+
+    /**
+     * Initialize and build {@link SslContext}
+     *
+     * @param tlsConfiguration {@link TLSConfiguration} to use for initializing and building.
+     */
+    public CertificateKeyPair init(TLSConfiguration tlsConfiguration) throws NoSuchAlgorithmException, KeyStoreException, SSLException {
+        if (useOCSPStapling && !OpenSsl.isOcspSupported()) {
+            throw new IllegalArgumentException("OCSP Stapling is unavailable because OpenSSL is unavailable.");
+        }
+
+        List<String> ciphers = new ArrayList<>();
+        for (Cipher cipher : tlsConfiguration.ciphers()) {
+            ciphers.add(cipher.name());
+        }
+
+        SslContextBuilder sslContextBuilder;
+        if (tlsConfiguration.forServer()) {
+            sslContextBuilder = SslContextBuilder.forServer(privateKey, certificates)
+                    .sslProvider(OpenSsl.isAvailable() ? SslProvider.OPENSSL : SslProvider.JDK)
+                    .protocols(Protocol.getProtocols(tlsConfiguration.protocols()))
+                    .ciphers(ciphers)
+                    .enableOcsp(useOCSPStapling)
+                    .clientAuth(tlsConfiguration.mutualTLS().clientAuth())
+                    .startTls(tlsConfiguration.useStartTLS())
+                    .sessionTimeout(tlsConfiguration.sessionTimeout())
+                    .sessionCacheSize(tlsConfiguration.sessionCacheSize());
+
+            if (useOCSPStapling) {
+                scheduledFuture = GlobalExecutors.INSTANCE.submitTaskAndRunEvery(this, 0, 6, TimeUnit.HOURS);
+            }
+        } else {
+            TrustManagerFactory trustManagerFactory;
+            if (tlsConfiguration.acceptAllCerts()) {
+                trustManagerFactory = InsecureTrustManagerFactory.INSTANCE;
+            } else {
+                trustManagerFactory = TrustManagerFactory.getInstance(TrustManagerFactory.getDefaultAlgorithm());
+                trustManagerFactory.init((KeyStore) null);
+            }
+
+            sslContextBuilder = SslContextBuilder.forClient()
+                    .sslProvider(OpenSsl.isAvailable() ? SslProvider.OPENSSL : SslProvider.JDK)
+                    .protocols(Protocol.getProtocols(tlsConfiguration.protocols()))
+                    .ciphers(ciphers)
+                    .clientAuth(tlsConfiguration.mutualTLS().clientAuth())
+                    .trustManager(trustManagerFactory)
+                    .startTls(false);
+
+            if (tlsConfiguration.mutualTLS() == MutualTLS.REQUIRED || tlsConfiguration.mutualTLS() == MutualTLS.OPTIONAL) {
+                sslContextBuilder.keyManager(privateKey, certificates);
+            }
+        }
+
+        if (tlsConfiguration.useALPN()) {
+            sslContextBuilder.applicationProtocolConfig(new ApplicationProtocolConfig(
+                    ApplicationProtocolConfig.Protocol.ALPN,
+                    ApplicationProtocolConfig.SelectorFailureBehavior.NO_ADVERTISE,
+                    ApplicationProtocolConfig.SelectedListenerFailureBehavior.ACCEPT,
+                    ApplicationProtocolNames.HTTP_2,
+                    ApplicationProtocolNames.HTTP_1_1));
+        }
+
+        this.sslContext = sslContextBuilder.build();
+        return this;
+    }
+
+    public List<X509Certificate> certificates() {
+        return certificates;
     }
 
     PrivateKey privateKey() {
         return privateKey;
     }
 
-    public boolean doOCSPCheck(boolean forServer) {
-        if (useOCSP) {
-            try {
-                OCSPResp response = OCSPClient.response(certificateChain.get(0), certificateChain.get(1));
-                if (forServer) {
-                    ocspStaplingData = response.getEncoded();
-                    ocspResp = ((BasicOCSPResp) response.getResponseObject()).getResponses()[0];
-                    if (ocspResp.getCertStatus() == null) {
-                        return true;
-                    }
-                } else {
-                    if (((BasicOCSPResp) OCSPClient.response(certificateChain.get(0), certificateChain.get(1)).getResponseObject())
-                            .getResponses()[0].getCertStatus() == null) {
-                        return true;
-                    }
-                }
-            } catch (Exception ex) {
-                // Ignore
-            }
-        }
-        return false;
-    }
-
-    public byte[] ocspStaplingData() throws IOException {
-        if (ocspStaplingData != null) {
-            long duration = System.currentTimeMillis() - ocspResp.getNextUpdate().getTime();
-            long diffInMinutes = TimeUnit.MILLISECONDS.toMinutes(duration);
-            if (diffInMinutes > -60) {
-                if (!doOCSPCheck(true)) {
-                    throw new IOException("Unable To Renew OCSP Data");
-                }
-            }
-        }
-        return ocspStaplingData;
-    }
-
     public SslContext sslContext() {
         return sslContext;
     }
 
-    void setSslContext(SslContext sslContext) {
-        this.sslContext = sslContext;
+    public byte[] ocspStaplingData() {
+        return ocspStaplingData;
     }
 
-    public boolean useOCSP() {
-        return useOCSP;
+    public boolean useOCSPStapling() {
+        return useOCSPStapling;
+    }
+
+    @Override
+    public void run() {
+        try {
+            OCSPResp response = OCSPClient.response(certificates.get(0), certificates.get(1));
+            SingleResp ocspResp = ((BasicOCSPResp) response.getResponseObject()).getResponses()[0];
+            if (ocspResp.getCertStatus() == null) {
+                ocspStaplingData = response.getEncoded();
+                return;
+            }
+        } catch (Exception ex) {
+            // Ignore
+        }
+        ocspStaplingData = null;
+    }
+
+    @Override
+    public void close() throws IOException {
+        if (scheduledFuture != null && !scheduledFuture.isCancelled()) {
+            scheduledFuture.cancel(true);
+        }
     }
 }

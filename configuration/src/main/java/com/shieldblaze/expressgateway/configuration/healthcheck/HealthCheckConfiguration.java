@@ -17,9 +17,17 @@
  */
 package com.shieldblaze.expressgateway.configuration.healthcheck;
 
-public class HealthCheckConfiguration {
+import com.google.gson.annotations.Expose;
+import com.shieldblaze.expressgateway.configuration.ConfigurationMarshaller;
 
+import java.io.IOException;
+
+public class HealthCheckConfiguration extends ConfigurationMarshaller {
+
+    @Expose
     private final int workers;
+
+    @Expose
     private final int timeInterval;
 
     HealthCheckConfiguration(int workers, int timeInterval) {
@@ -33,5 +41,13 @@ public class HealthCheckConfiguration {
 
     public int timeInterval() {
         return timeInterval;
+    }
+
+    public static HealthCheckConfiguration loadFrom(String profileName) throws IOException {
+        return loadFrom(HealthCheckConfiguration.class, profileName, false, "HealthCheck.json");
+    }
+
+    public void saveTo(String profileName) throws IOException {
+        saveTo(this, profileName, false, "HealthCheck.json");
     }
 }

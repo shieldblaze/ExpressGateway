@@ -43,7 +43,7 @@ final class HTTPCodecs {
         Http2Settings http2Settings = new Http2Settings();
         http2Settings.initialWindowSize(httpConfiguration.h2InitialWindowSize());
         http2Settings.maxConcurrentStreams(httpConfiguration.h2MaxConcurrentStreams());
-        http2Settings.maxHeaderListSize(httpConfiguration.h2MaxHeaderSizeList());
+        http2Settings.maxHeaderListSize(httpConfiguration.h2MaxHeaderListSize());
         http2Settings.headerTableSize(httpConfiguration.h2MaxHeaderTableSize());
         http2Settings.maxFrameSize(httpConfiguration.h2MaxFrameSize());
 
@@ -65,7 +65,7 @@ final class HTTPCodecs {
 
     static Http2FrameCodec H2ServerCodec(HTTPConfiguration httpConfiguration) {
         Http2Settings http2Settings = new Http2Settings();
-        http2Settings.maxHeaderListSize(httpConfiguration.h2MaxHeaderSizeList());
+        http2Settings.maxHeaderListSize(httpConfiguration.h2MaxHeaderListSize());
 
         Http2Connection connection = new DefaultHttp2Connection(true);
 

@@ -17,11 +17,20 @@
  */
 package com.shieldblaze.expressgateway.configuration.eventloop;
 
+import com.google.gson.annotations.Expose;
+import com.shieldblaze.expressgateway.configuration.ConfigurationMarshaller;
+
+import java.io.IOException;
+
 /**
  * {@code EventLoop} Configuration
  */
-public final class EventLoopConfiguration {
+public final class EventLoopConfiguration extends ConfigurationMarshaller {
+
+    @Expose
     private int parentWorkers;
+
+    @Expose
     private int childWorkers;
 
     EventLoopConfiguration() {
@@ -44,5 +53,13 @@ public final class EventLoopConfiguration {
     EventLoopConfiguration childWorkers(int childWorkers) {
         this.childWorkers = childWorkers;
         return this;
+    }
+
+    public static EventLoopConfiguration loadFrom(String profileName) throws IOException {
+        return loadFrom(EventLoopConfiguration.class, profileName, false, "EventLoop.json");
+    }
+
+    public void saveTo(String profileName) throws IOException {
+        saveTo(this, profileName, false, "EventLoop.json");
     }
 }

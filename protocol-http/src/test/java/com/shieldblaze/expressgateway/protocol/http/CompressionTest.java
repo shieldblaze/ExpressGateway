@@ -27,7 +27,7 @@ import com.shieldblaze.expressgateway.backend.strategy.l7.http.sessionpersistenc
 import com.shieldblaze.expressgateway.concurrent.eventstream.EventStream;
 import com.shieldblaze.expressgateway.configuration.CoreConfiguration;
 import com.shieldblaze.expressgateway.configuration.CoreConfigurationBuilder;
-import com.shieldblaze.expressgateway.configuration.buffer.PooledByteBufAllocatorConfiguration;
+import com.shieldblaze.expressgateway.configuration.buffer.BufferConfiguration;
 import com.shieldblaze.expressgateway.configuration.eventloop.EventLoopConfiguration;
 import com.shieldblaze.expressgateway.configuration.eventloop.EventLoopConfigurationBuilder;
 import com.shieldblaze.expressgateway.configuration.http.HTTPConfiguration;
@@ -38,7 +38,6 @@ import com.shieldblaze.expressgateway.configuration.tls.MutualTLS;
 import com.shieldblaze.expressgateway.configuration.tls.Protocol;
 import com.shieldblaze.expressgateway.configuration.tls.TLSConfiguration;
 import com.shieldblaze.expressgateway.configuration.tls.TLSConfigurationBuilder;
-import com.shieldblaze.expressgateway.configuration.tls.TLSServerMapping;
 import com.shieldblaze.expressgateway.configuration.transport.ReceiveBufferAllocationType;
 import com.shieldblaze.expressgateway.configuration.transport.TransportConfiguration;
 import com.shieldblaze.expressgateway.configuration.transport.TransportConfigurationBuilder;
@@ -103,7 +102,6 @@ class CompressionTest {
                 .withSocketReceiveBufferSize(2147483647)
                 .withSocketSendBufferSize(2147483647)
                 .withTCPConnectionBacklog(2147483647)
-                .withDataBacklog(2147483647)
                 .withConnectionIdleTimeout(1800000)
                 .build();
 
@@ -115,7 +113,7 @@ class CompressionTest {
         coreConfiguration = CoreConfigurationBuilder.newBuilder()
                 .withTransportConfiguration(transportConfiguration)
                 .withEventLoopConfiguration(eventLoopConfiguration)
-                .withPooledByteBufAllocatorConfiguration(PooledByteBufAllocatorConfiguration.DEFAULT)
+                .withPooledByteBufAllocatorConfiguration(BufferConfiguration.DEFAULT)
                 .build();
 
         SelfSignedCertificate selfSignedCertificate = new SelfSignedCertificate("localhost", "EC", 256);
@@ -123,22 +121,21 @@ class CompressionTest {
         CertificateKeyPair certificateKeyPair = new CertificateKeyPair(
                 Collections.singletonList(selfSignedCertificate.cert()), selfSignedCertificate.key(), false);
 
-        TLSServerMapping tlsServerMapping = new TLSServerMapping(certificateKeyPair);
-
         forServer = TLSConfigurationBuilder.forServer()
                 .withProtocols(Collections.singletonList(Protocol.TLS_1_3))
                 .withCiphers(Collections.singletonList(Cipher.TLS_AES_128_GCM_SHA256))
                 .withUseALPN(true)
-                .withTLSServerMapping(tlsServerMapping)
                 .withMutualTLS(MutualTLS.NOT_REQUIRED)
                 .build();
+
+        forServer.defaultMapping(certificateKeyPair);
 
         forClient = TLSConfigurationBuilder.forClient()
                 .withProtocols(Collections.singletonList(Protocol.TLS_1_3))
                 .withCiphers(Collections.singletonList(Cipher.TLS_AES_256_GCM_SHA384))
                 .withUseALPN(true)
                 .withMutualTLS(MutualTLS.NOT_REQUIRED)
-                .withTrustManager(InsecureTrustManagerFactory.INSTANCE.getTrustManagers()[0])
+                .withAcceptAllCertificate(true)
                 .build();
 
         httpConfiguration = HTTPConfigurationBuilder.newBuilder()
@@ -151,7 +148,7 @@ class CompressionTest {
                 .withMaxInitialLineLength(1024 * 100)
                 .withH2InitialWindowSize(Integer.MAX_VALUE)
                 .withH2MaxConcurrentStreams(1000)
-                .withH2MaxHeaderSizeList(262144)
+                .withH2MaxHeaderListSize(262144)
                 .withH2MaxFrameSize(16777215)
                 .withH2MaxHeaderTableSize(65536)
                 .build();

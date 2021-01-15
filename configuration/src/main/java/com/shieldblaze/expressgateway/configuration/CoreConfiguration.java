@@ -17,7 +17,7 @@
  */
 package com.shieldblaze.expressgateway.configuration;
 
-import com.shieldblaze.expressgateway.configuration.buffer.PooledByteBufAllocatorConfiguration;
+import com.shieldblaze.expressgateway.configuration.buffer.BufferConfiguration;
 import com.shieldblaze.expressgateway.configuration.eventloop.EventLoopConfiguration;
 import com.shieldblaze.expressgateway.configuration.transport.TransportConfiguration;
 
@@ -29,7 +29,7 @@ public class CoreConfiguration {
 
     private TransportConfiguration transportConfiguration;
     private EventLoopConfiguration eventLoopConfiguration;
-    private PooledByteBufAllocatorConfiguration pooledByteBufAllocatorConfiguration;
+    private BufferConfiguration bufferConfiguration;
 
     public TransportConfiguration transportConfiguration() {
         return transportConfiguration;
@@ -49,12 +49,12 @@ public class CoreConfiguration {
         return this;
     }
 
-    public PooledByteBufAllocatorConfiguration pooledByteBufAllocatorConfiguration() {
-        return pooledByteBufAllocatorConfiguration;
+    public BufferConfiguration pooledByteBufAllocatorConfiguration() {
+        return bufferConfiguration;
     }
 
-    CoreConfiguration pooledByteBufAllocatorConfiguration(PooledByteBufAllocatorConfiguration pooledByteBufAllocatorConfiguration) {
-        this.pooledByteBufAllocatorConfiguration = pooledByteBufAllocatorConfiguration;
+    CoreConfiguration pooledByteBufAllocatorConfiguration(BufferConfiguration bufferConfiguration) {
+        this.bufferConfiguration = bufferConfiguration;
         return this;
     }
 }

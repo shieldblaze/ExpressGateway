@@ -17,26 +17,48 @@
  */
 package com.shieldblaze.expressgateway.configuration.transport;
 
+import com.google.gson.annotations.Expose;
+import com.shieldblaze.expressgateway.configuration.ConfigurationMarshaller;
 import com.shieldblaze.expressgateway.configuration.CoreConfiguration;
 import io.netty.channel.AdaptiveRecvByteBufAllocator;
 import io.netty.channel.FixedRecvByteBufAllocator;
 import io.netty.channel.RecvByteBufAllocator;
 
+import java.io.IOException;
+
 /**
  * Transport Configuration
  */
-public final class TransportConfiguration extends CoreConfiguration {
+public final class TransportConfiguration extends ConfigurationMarshaller {
 
+    @Expose
     private TransportType transportType;
+
+    @Expose
     private ReceiveBufferAllocationType receiveBufferAllocationType;
+
+    @Expose
     private int[] receiveBufferSizes;
+
+    @Expose
     private int tcpConnectionBacklog;
-    private int dataBacklog;
+
+    @Expose
     private int socketReceiveBufferSize;
+
+    @Expose
     private int socketSendBufferSize;
+
+    @Expose
     private int tcpFastOpenMaximumPendingRequests;
+
+    @Expose
     private int backendSocketTimeout;
+
+    @Expose
     private int backendConnectTimeout;
+
+    @Expose
     private int connectionIdleTimeout;
 
     public TransportType transportType() {
@@ -80,15 +102,6 @@ public final class TransportConfiguration extends CoreConfiguration {
 
     TransportConfiguration tcpConnectionBacklog(int TCPConnectionBacklog) {
         this.tcpConnectionBacklog = TCPConnectionBacklog;
-        return this;
-    }
-
-    public int dataBacklog() {
-        return dataBacklog;
-    }
-
-    TransportConfiguration dataBacklog(int dataBacklog) {
-        this.dataBacklog = dataBacklog;
         return this;
     }
 
@@ -144,5 +157,13 @@ public final class TransportConfiguration extends CoreConfiguration {
     TransportConfiguration connectionIdleTimeout(int connectionIdleTimeout) {
         this.connectionIdleTimeout = connectionIdleTimeout;
         return this;
+    }
+
+    public static TransportConfiguration loadFrom(String profileName) throws IOException {
+        return loadFrom(TransportConfiguration.class, profileName, false, "Transport.json");
+    }
+
+    public void saveTo(String profileName) throws IOException {
+        saveTo(this, profileName, false, "Transport.json");
     }
 }

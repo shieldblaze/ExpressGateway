@@ -1,0 +1,58 @@
+syntax = "proto3";
+package com.shieldblaze.expressgateway.controlinterface.tls;
+
+message ConfigurationResponse {
+  int32 responseCode = 1;
+  string responseText = 2;
+}
+
+enum MutualTLS {
+    NOT_REQUIRED = 0;
+    OPTIONAL = 1;
+    REQUIRED = 2;
+}
+
+message Server {
+  message CertificateKeyPair {
+    string certificateChain = 1;
+    string privateKey = 2;
+    bool useOCSP = 3;
+  }
+
+  map<string, CertificateKeyPair> tlsServerMapping = 1;
+  MutualTLS mTLS = 2;
+  bool useALPN = 3;
+  int32 sessionTimeout = 4;
+  int32 sessionCacheSize = 5;
+  repeated string protocols = 6;
+  repeated string ciphers = 7;
+  bool useStartTLS = 8;
+  string profileName = 9;
+  string password = 10;
+}
+
+message Client {
+  string certificateChain = 1;
+  string privateKey = 2;
+  repeated string protocols = 3;
+  repeated string ciphers = 4;
+  bool acceptAllCertificates = 5;
+  bool useStartTLS = 6;
+  string profileName = 7;
+  string password = 8;
+}
+
+message GetTLS {
+  string profileName = 1;
+  string password = 2;
+}
+
+service TLSServerService {
+  rpc server(Server) returns (ConfigurationResponse);
+  rpc get(GetTLS) returns (Server);
+}
+
+service TLSClientService {
+  rpc client(Client) returns (ConfigurationResponse);
+  rpc get(GetTLS) returns (Client);
+}

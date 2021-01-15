@@ -1,0 +1,144 @@
+syntax = "proto3";
+package com.shieldblaze.expressgateway.controlinterface.configuration;
+
+message ConfigurationResponse {
+  int32 responseCode = 1;
+  string responseText = 2;
+}
+
+// ------------------------ Buffer ------------------------
+
+message Buffer {
+  bool preferDirect = 1;
+  int32 HeapArena = 2;
+  int32 DirectArena = 3;
+  int32 pageSize = 4;
+  int32 maxOrder = 5;
+  int32 smallCacheSize = 6;
+  int32 normalCacheSize = 7;
+  bool useCacheForAllThreads = 8;
+  int32 directMemoryCacheAlignment = 9;
+  string profileName = 10;
+}
+
+message GetBuffer {
+  string profileName = 1;
+}
+
+service BufferService {
+  rpc buffer(Buffer) returns (ConfigurationResponse);
+  rpc get(GetBuffer) returns (Buffer);
+}
+
+// ------------------------ EventLoop ------------------------
+
+message EventLoop {
+  int32 parentWorkers = 1;
+  int32 childWorkers = 2;
+  string profileName = 3;
+}
+
+message GetEventLoop {
+  string profileName = 1;
+}
+
+service EventLoopService {
+  rpc eventLoop(EventLoop) returns (ConfigurationResponse);
+  rpc get(GetEventLoop) returns (EventLoop);
+}
+
+// ------------------------ EventStream ------------------------
+
+message EventStream {
+  int32 workers = 1;
+  string profileName = 2;
+}
+
+message GetEventStream {
+  string profileName = 1;
+}
+
+service EventStreamService {
+  rpc eventstream(EventStream) returns (ConfigurationResponse);
+  rpc get(GetEventStream) returns (EventStream);
+}
+
+// ------------------------ HealthCheck ------------------------
+
+message HealthCheck {
+  int32 workers = 1;
+  int32 timeInterval = 2;
+  string profileName = 3;
+}
+
+message GetHealthCheck {
+  string profileName = 1;
+}
+
+service HealthCheckService {
+  rpc healthcheck(HealthCheck) returns (ConfigurationResponse);
+  rpc get(GetHealthCheck) returns (HealthCheck);
+}
+
+// ------------------------ HTTP ------------------------
+
+message HTTP {
+  int64 maxContentLength = 1;
+  int32 h2InitialWindowSize = 2;
+  int64 h2MaxConcurrentStreams = 3;
+  int64 h2MaxHeaderListSize = 4;
+  int64 h2MaxHeaderTableSize = 5;
+  int32 h2MaxFrameSize = 6;
+  int32 maxInitialLineLength = 7;
+  int32 maxHeaderSize = 8;
+  int32 maxChunkSize = 9;
+  int32 compressionThreshold = 10;
+  int32 deflateCompressionLevel = 11;
+  int32 brotliCompressionLevel = 12;
+  string profileName = 13;
+}
+
+message GetHTTP {
+  string profileName = 1;
+}
+
+service HTTPService {
+  rpc http(HTTP) returns (ConfigurationResponse);
+  rpc get(GetHTTP) returns (HTTP);
+}
+
+// ------------------------ Transport ------------------------
+
+message Transport {
+  enum Type {
+    NIO = 0;
+    EPOLL = 1;
+    IOURING = 2;
+  }
+
+  enum ReceiveBufferAllocationType {
+    FIXED = 0;
+    ADAPTIVE = 1;
+  }
+
+  Type type = 1;
+  ReceiveBufferAllocationType receiveBufferAllocationType = 2;
+  repeated int32 receiveBufferSizes = 3;
+  int32 tcpConnectionBacklog = 4;
+  int32 socketReceiveBufferSize = 5;
+  int32 socketSendBufferSize = 6;
+  int32 tcpFastOpenMaximumPendingRequests = 7;
+  int32 backendSocketTimeout = 8;
+  int32 backendConnectTimeout = 9;
+  int32 connectionIdleTimeout = 10;
+  string profileName = 11;
+}
+
+message GetTransportService {
+  string profileName = 1;
+}
+
+service TransportService {
+  rpc transport(Transport) returns (ConfigurationResponse);
+  rpc get(GetTransportService) returns (Transport);
+}

@@ -31,7 +31,6 @@ public final class TransportConfigurationBuilder {
     private ReceiveBufferAllocationType receiveBufferAllocationType;
     private int[] receiveBufferSizes;
     private int tcpConnectionBacklog;
-    private int dataBacklog;
     private int socketReceiveBufferSize;
     private int socketSendBufferSize;
     private int tcpFastOpenMaximumPendingRequestsCount;
@@ -81,14 +80,6 @@ public final class TransportConfigurationBuilder {
      */
     public TransportConfigurationBuilder withTCPConnectionBacklog(int TCPConnectionBacklog) {
         this.tcpConnectionBacklog = TCPConnectionBacklog;
-        return this;
-    }
-
-    /**
-     * Set Data Backlog Size
-     */
-    public TransportConfigurationBuilder withDataBacklog(int DataBacklog) {
-        this.dataBacklog = DataBacklog;
         return this;
     }
 
@@ -152,7 +143,6 @@ public final class TransportConfigurationBuilder {
         Objects.requireNonNull(transportType, "Transport Type");
         Objects.requireNonNull(receiveBufferAllocationType, "Receive Buffer Allocation Type");
         Objects.requireNonNull(receiveBufferSizes, "Receive Buffer Sizes");
-        ObjectUtil.checkPositive(dataBacklog, "Data Backlog");
         ObjectUtil.checkPositive(tcpConnectionBacklog, "TCP Connection Backlog");
         ObjectUtil.checkPositive(tcpFastOpenMaximumPendingRequestsCount, "TCP Fast Open Maximum Pending Requests");
         ObjectUtil.checkPositive(backendConnectTimeout, "Backend Connect Timeout");
@@ -206,7 +196,6 @@ public final class TransportConfigurationBuilder {
                 .receiveBufferAllocationType(receiveBufferAllocationType)
                 .receiveBufferSizes(receiveBufferSizes)
                 .tcpConnectionBacklog(tcpConnectionBacklog)
-                .dataBacklog(dataBacklog)
                 .socketReceiveBufferSize(socketReceiveBufferSize)
                 .socketSendBufferSize(socketSendBufferSize)
                 .tcpFastOpenMaximumPendingRequests(tcpFastOpenMaximumPendingRequestsCount)

@@ -25,7 +25,7 @@ import com.shieldblaze.expressgateway.backend.strategy.l4.sessionpersistence.NOO
 import com.shieldblaze.expressgateway.concurrent.eventstream.EventStream;
 import com.shieldblaze.expressgateway.configuration.CoreConfiguration;
 import com.shieldblaze.expressgateway.configuration.CoreConfigurationBuilder;
-import com.shieldblaze.expressgateway.configuration.buffer.PooledByteBufAllocatorConfiguration;
+import com.shieldblaze.expressgateway.configuration.buffer.BufferConfiguration;
 import com.shieldblaze.expressgateway.configuration.eventloop.EventLoopConfiguration;
 import com.shieldblaze.expressgateway.configuration.eventloop.EventLoopConfigurationBuilder;
 import com.shieldblaze.expressgateway.configuration.transport.ReceiveBufferAllocationType;
@@ -68,7 +68,6 @@ final class UpstreamHandlerTest {
                 .withSocketReceiveBufferSize(2147483647)
                 .withSocketSendBufferSize(2147483647)
                 .withTCPConnectionBacklog(2147483647)
-                .withDataBacklog(2147483647)
                 .withConnectionIdleTimeout(180)
                 .build();
 
@@ -80,7 +79,7 @@ final class UpstreamHandlerTest {
         CoreConfiguration coreConfiguration = CoreConfigurationBuilder.newBuilder()
                 .withTransportConfiguration(transportConfiguration)
                 .withEventLoopConfiguration(eventLoopConfiguration)
-                .withPooledByteBufAllocatorConfiguration(PooledByteBufAllocatorConfiguration.DEFAULT)
+                .withPooledByteBufAllocatorConfiguration(BufferConfiguration.DEFAULT)
                 .build();
 
         Cluster cluster = new ClusterPool(new EventStream(), new RoundRobin(NOOPSessionPersistence.INSTANCE));
