@@ -21,11 +21,13 @@ import io.grpc.ManagedChannel;
 import io.grpc.ManagedChannelBuilder;
 import io.grpc.Server;
 import io.grpc.ServerBuilder;
+import io.grpc.netty.shaded.io.grpc.netty.NettyServerBuilder;
 import org.junit.jupiter.api.AfterAll;
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.Test;
 
 import java.io.IOException;
+import java.net.InetSocketAddress;
 
 import static org.junit.jupiter.api.Assertions.*;
 
@@ -37,7 +39,7 @@ class HTTPServiceTest {
     static void setup() throws IOException {
         System.setProperty("EGWConfDir", System.getProperty("java.io.tmpdir"));
 
-        server = ServerBuilder.forPort(9110)
+        server = NettyServerBuilder.forAddress(new InetSocketAddress("127.0.0.1", 9110))
                 .addService(new HTTPService())
                 .build()
                 .start();

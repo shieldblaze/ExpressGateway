@@ -25,6 +25,7 @@ import io.grpc.ManagedChannel;
 import io.grpc.ManagedChannelBuilder;
 import io.grpc.Server;
 import io.grpc.ServerBuilder;
+import io.grpc.netty.shaded.io.grpc.netty.NettyServerBuilder;
 import io.netty.handler.ssl.util.SelfSignedCertificate;
 import org.junit.jupiter.api.AfterAll;
 import org.junit.jupiter.api.BeforeAll;
@@ -32,6 +33,7 @@ import org.junit.jupiter.api.Test;
 
 import java.io.File;
 import java.io.IOException;
+import java.net.InetSocketAddress;
 import java.nio.file.Files;
 import java.security.cert.CertificateException;
 import java.util.Map;
@@ -46,7 +48,7 @@ class TLSServerServiceTest {
     static void setup() throws IOException {
         System.setProperty("EGWConfDir", System.getProperty("java.io.tmpdir"));
 
-        server = ServerBuilder.forPort(9110)
+        server = NettyServerBuilder.forAddress(new InetSocketAddress("127.0.0.1", 9110))
                 .addService(new TLSServerService())
                 .build()
                 .start();
