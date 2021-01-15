@@ -46,8 +46,8 @@ class HTTPServiceTest {
     }
 
     @AfterAll
-    static void shutdown() {
-        server.shutdownNow();
+    static void shutdown() throws InterruptedException {
+        server.shutdownNow().awaitTermination();
     }
 
     @Test

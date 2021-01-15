@@ -23,6 +23,7 @@ import io.grpc.ManagedChannelBuilder;
 import io.grpc.Server;
 import io.grpc.ServerBuilder;
 import io.grpc.netty.shaded.io.grpc.netty.NettyServerBuilder;
+import org.junit.jupiter.api.AfterAll;
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.Test;
 
@@ -45,6 +46,11 @@ class TransportServiceTest {
                 .addService(new TransportService())
                 .build()
                 .start();
+    }
+
+    @AfterAll
+    static void shutdown() throws InterruptedException {
+        server.shutdownNow().awaitTermination();
     }
 
     @Test
