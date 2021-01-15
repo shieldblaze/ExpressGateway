@@ -35,7 +35,7 @@ import java.util.Map;
  * {@linkplain KeyStoreHandler} handles {@linkplain TLSConfiguration} for both server and client.
  * Certificates and Private Keys are stored in password-protected PKCS12 vault.
  */
-public final class KeyStoreHandler {
+final class KeyStoreHandler {
 
     /**
      * Save server certificates and private keys into PKCS12 password-protected store.
@@ -45,7 +45,7 @@ public final class KeyStoreHandler {
      * @param password         Password to use for encryption PKCS12 store.
      * @throws Exception If any error occurs
      */
-    public static void saveServer(TLSConfiguration tlsConfiguration, String profile, String password) throws Exception {
+    static void saveServer(TLSConfiguration tlsConfiguration, String profile, String password) throws Exception {
         KeyStore keyStore = KeyStore.getInstance("PKCS12", new BouncyCastleProvider());
         keyStore.load(null, null);
 
@@ -66,7 +66,9 @@ public final class KeyStoreHandler {
             keyStore.setKeyEntry(entry.getKey(), entry.getValue().privateKey(), password.toCharArray(), certificates);
         }
 
-        keyStore.store(new FileOutputStream(Profile.ensure(profile, true) + "_Server.pfx"), password.toCharArray());
+        FileOutputStream outputStream = new FileOutputStream(Profile.ensure(profile, true) + "_Server.pfx");
+        keyStore.store(outputStream, password.toCharArray());
+        outputStream.close();
     }
 
     /**
@@ -77,9 +79,10 @@ public final class KeyStoreHandler {
      * @param password         Password to use for decryption PKCS12 store.
      * @throws Exception If any error occurs
      */
-    public static void loadServer(TLSConfiguration tlsConfiguration, String profile, String password) throws Exception {
+    static void loadServer(TLSConfiguration tlsConfiguration, String profile, String password) throws Exception {
         KeyStore keyStore = KeyStore.getInstance("PKCS12", new BouncyCastleProvider());
-        keyStore.load(new FileInputStream(Profile.ensure(profile, true) + "_Server.pfx"), password.toCharArray());
+        FileInputStream inputStream = new FileInputStream(Profile.ensure(profile, true) + "_Server.pfx");
+        keyStore.load(inputStream, password.toCharArray());
 
         Iterator<String> iterator = keyStore.aliases().asIterator();
 
@@ -94,6 +97,8 @@ public final class KeyStoreHandler {
 
             tlsConfiguration.addMapping(key, new CertificateKeyPair(x509Certificates, (PrivateKey) keyStore.getKey(key, password.toCharArray())));
         }
+
+        inputStream.close();
     }
 
     /**
@@ -104,7 +109,7 @@ public final class KeyStoreHandler {
      * @param password         Password to use for encryption PKCS12 store.
      * @throws Exception If any error occurs
      */
-    public static void saveClient(TLSConfiguration tlsConfiguration, String profile, String password) throws Exception {
+    static void saveClient(TLSConfiguration tlsConfiguration, String profile, String password) throws Exception {
         KeyStore keyStore = KeyStore.getInstance("PKCS12", new BouncyCastleProvider());
         keyStore.load(null, null);
 
@@ -113,7 +118,9 @@ public final class KeyStoreHandler {
             keyStore.setKeyEntry("DEFAULT_HOST", tlsConfiguration.defaultMapping().privateKey(), password.toCharArray(), certificates);
         }
 
-        keyStore.store(new FileOutputStream(Profile.ensure(profile, true) + "_Client.pfx"), password.toCharArray());
+        FileOutputStream outputStream = new FileOutputStream(Profile.ensure(profile, true) + "_Client.pfx");
+        keyStore.store(outputStream, password.toCharArray());
+        outputStream.close();
     }
 
     /**
@@ -124,9 +131,10 @@ public final class KeyStoreHandler {
      * @param password         Password to use for decryption PKCS12 store.
      * @throws Exception If any error occurs
      */
-    public static void loadClient(TLSConfiguration tlsConfiguration, String profile, String password) throws Exception {
+    static void loadClient(TLSConfiguration tlsConfiguration, String profile, String password) throws Exception {
         KeyStore keyStore = KeyStore.getInstance("PKCS12", new BouncyCastleProvider());
-        keyStore.load(new FileInputStream(Profile.ensure(profile, true) + "_Client.pfx"), password.toCharArray());
+        FileInputStream inputStream = new FileInputStream(Profile.ensure(profile, true) + "_Client.pfx");
+        keyStore.load(inputStream, password.toCharArray());
 
         List<X509Certificate> x509Certificates = new ArrayList<>();
         Certificate[] certificates = keyStore.getCertificateChain("DEFAULT_HOST");
@@ -135,5 +143,7 @@ public final class KeyStoreHandler {
         }
 
         tlsConfiguration.defaultMapping(new CertificateKeyPair(x509Certificates, (PrivateKey) keyStore.getKey("DEFAULT_HOST", password.toCharArray())));
+
+        inputStream.close();
     }
 }
