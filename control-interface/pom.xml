@@ -48,6 +48,17 @@
             <version>0.0.1-a</version>
         </dependency>
         <dependency>
+            <groupId>com.shieldblaze.expressgateway</groupId>
+            <artifactId>protocol-tcp</artifactId>
+            <version>0.0.1-a</version>
+        </dependency>
+        <dependency>
+            <groupId>com.shieldblaze.expressgateway</groupId>
+            <artifactId>protocol-udp</artifactId>
+            <version>0.0.1-a</version>
+        </dependency>
+
+        <dependency>
             <groupId>io.grpc</groupId>
             <artifactId>grpc-netty-shaded</artifactId>
             <version>1.34.1</version>
@@ -62,8 +73,6 @@
             <artifactId>grpc-stub</artifactId>
             <version>1.34.1</version>
         </dependency>
-
-        <!-- https://mvnrepository.com/artifact/javax.annotation/javax.annotation-api -->
         <dependency>
             <groupId>javax.annotation</groupId>
             <artifactId>javax.annotation-api</artifactId>

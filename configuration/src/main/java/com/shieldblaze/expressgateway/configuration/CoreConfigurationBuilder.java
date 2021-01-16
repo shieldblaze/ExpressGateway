@@ -63,7 +63,7 @@ public final class CoreConfigurationBuilder {
     /**
      * Set {@link BufferConfiguration}
      */
-    public CoreConfigurationBuilder withPooledByteBufAllocatorConfiguration(BufferConfiguration bufferConfiguration) {
+    public CoreConfigurationBuilder withBufferConfiguration(BufferConfiguration bufferConfiguration) {
         this.bufferConfiguration = bufferConfiguration;
         return this;
     }
@@ -77,7 +77,7 @@ public final class CoreConfigurationBuilder {
     public CoreConfiguration build() {
         Objects.requireNonNull(transportConfiguration, "Transport Configuration");
         Objects.requireNonNull(eventLoopConfiguration, "EventLoop Configuration");
-        Objects.requireNonNull(bufferConfiguration, "PooledByteBufAllocator Configuration");
+        Objects.requireNonNull(bufferConfiguration, "Buffer Configuration");
 
         return new CoreConfiguration()
                 .transportConfiguration(transportConfiguration)

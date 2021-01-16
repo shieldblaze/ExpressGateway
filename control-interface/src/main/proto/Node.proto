@@ -1,0 +1,40 @@
+syntax = "proto3";
+package com.shieldblaze.expressgateway.controlinterface.node;
+
+message Response {
+  int32 responseCode = 1;
+  string responseText = 2;
+}
+
+message HealthCheckL4 {
+  string nodeID = 1;
+  string address = 2;
+  int32 port = 3;
+  string protocol = 4;
+  int32 timeout = 5;
+  int32 samples = 6;
+}
+
+message HealthCheckHTTP {
+  string nodeID = 1;
+  string uri = 2;
+  int32 timeout = 3;
+  int32 samples = 4;
+  bool enableTLSValidation = 5;
+}
+
+message Node {
+  string loadBalancerID = 1;
+  string address = 2;
+  int32 port = 3;
+  int32 maxConnections = 4;
+  HealthCheckL4 healthCheckL4 = 5;
+  HealthCheckHTTP healthCheckHttp = 6;
+  string nodeID = 7;
+}
+
+service NodeService {
+  rpc add(Node) returns (Response);
+  rpc get(Node) returns (Response);
+  rpc delete(Node) returns (Response);
+}

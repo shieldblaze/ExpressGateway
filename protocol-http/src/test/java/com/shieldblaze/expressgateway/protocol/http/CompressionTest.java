@@ -113,7 +113,7 @@ class CompressionTest {
         coreConfiguration = CoreConfigurationBuilder.newBuilder()
                 .withTransportConfiguration(transportConfiguration)
                 .withEventLoopConfiguration(eventLoopConfiguration)
-                .withPooledByteBufAllocatorConfiguration(BufferConfiguration.DEFAULT)
+                .withBufferConfiguration(BufferConfiguration.DEFAULT)
                 .build();
 
         SelfSignedCertificate selfSignedCertificate = new SelfSignedCertificate("localhost", "EC", 256);

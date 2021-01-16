@@ -79,7 +79,7 @@ final class UpstreamHandlerTest {
         CoreConfiguration coreConfiguration = CoreConfigurationBuilder.newBuilder()
                 .withTransportConfiguration(transportConfiguration)
                 .withEventLoopConfiguration(eventLoopConfiguration)
-                .withPooledByteBufAllocatorConfiguration(BufferConfiguration.DEFAULT)
+                .withBufferConfiguration(BufferConfiguration.DEFAULT)
                 .build();
 
         Cluster cluster = new ClusterPool(new EventStream(), new RoundRobin(NOOPSessionPersistence.INSTANCE));

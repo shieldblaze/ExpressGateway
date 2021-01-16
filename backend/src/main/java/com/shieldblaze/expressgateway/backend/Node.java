@@ -48,7 +48,7 @@ public final class Node implements Comparable<Node> {
     private final String ID = UUID.randomUUID().toString();
 
 
-    private final int HASH = Objects.hash(ID);
+    private final int HASH = Objects.hashCode(ID);
 
     /**
      * Available Connections Queue
@@ -111,8 +111,7 @@ public final class Node implements Comparable<Node> {
      */
     public Node(@NonNull Cluster cluster,
                 @NonNull InetSocketAddress socketAddress,
-                int maxConnections,
-                HealthCheck healthCheck) {
+                int maxConnections, HealthCheck healthCheck) {
 
         maxConnections(maxConnections);
 

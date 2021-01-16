@@ -23,6 +23,8 @@ import com.shieldblaze.expressgateway.controlinterface.configuration.EventStream
 import com.shieldblaze.expressgateway.controlinterface.configuration.HTTPService;
 import com.shieldblaze.expressgateway.controlinterface.configuration.HealthCheckService;
 import com.shieldblaze.expressgateway.controlinterface.configuration.TransportService;
+import com.shieldblaze.expressgateway.controlinterface.loadbalancer.TCPLoadBalancerService;
+import com.shieldblaze.expressgateway.controlinterface.loadbalancer.UDPLoadBalancerService;
 import io.grpc.Server;
 import io.grpc.ServerBuilder;
 
@@ -37,6 +39,9 @@ public class GRPCServer {
                 .addService(new HealthCheckService())
                 .addService(new HTTPService())
                 .addService(new TransportService())
+
+                .addService(new TCPLoadBalancerService())
+                .addService(new UDPLoadBalancerService())
                 .build();
 
         server.start();

@@ -24,24 +24,24 @@ import com.shieldblaze.expressgateway.configuration.CoreConfigurationBuilder;
 import com.shieldblaze.expressgateway.configuration.buffer.BufferConfiguration;
 import com.shieldblaze.expressgateway.configuration.eventloop.EventLoopConfiguration;
 import com.shieldblaze.expressgateway.configuration.eventstream.EventStreamConfiguration;
-import com.shieldblaze.expressgateway.configuration.tls.TLSConfiguration;
 import com.shieldblaze.expressgateway.configuration.transport.TransportConfiguration;
 import com.shieldblaze.expressgateway.core.events.L4FrontListenerStartupEvent;
 import com.shieldblaze.expressgateway.core.loadbalancer.L4LoadBalancer;
 import com.shieldblaze.expressgateway.core.loadbalancer.L4LoadBalancerBuilder;
 import com.shieldblaze.expressgateway.core.loadbalancer.LoadBalancerRegistry;
-import com.shieldblaze.expressgateway.protocol.tcp.TCPListener;
+import com.shieldblaze.expressgateway.protocol.udp.UDPListener;
 import io.grpc.stub.StreamObserver;
 
 import java.net.InetSocketAddress;
 
-public final class TCPLoadBalancerService extends TCPLoadBalancerServiceGrpc.TCPLoadBalancerServiceImplBase {
+public final class UDPLoadBalancerService extends UDPLoadBalancerServiceGrpc.UDPLoadBalancerServiceImplBase {
 
     @Override
-    public void tcp(Layer4LoadBalancer.TCPLoadBalancer request, StreamObserver<Layer4LoadBalancer.LoadBalancerResponse> responseObserver) {
+    public void udp(Layer4LoadBalancer.UDPLoadBalancer request, StreamObserver<Layer4LoadBalancer.LoadBalancerResponse> responseObserver) {
         Layer4LoadBalancer.LoadBalancerResponse response;
 
         try {
+
             TransportConfiguration transportConfiguration = TransportConfiguration.loadFrom(request.getProfileName());
             EventLoopConfiguration eventLoopConfiguration = EventLoopConfiguration.loadFrom(request.getProfileName());
             BufferConfiguration bufferConfiguration = BufferConfiguration.loadFrom(request.getProfileName());
@@ -53,31 +53,13 @@ public final class TCPLoadBalancerService extends TCPLoadBalancerServiceGrpc.TCP
                     .withBufferConfiguration(bufferConfiguration)
                     .build();
 
-            TLSConfiguration forServer = null;
-            TLSConfiguration forClient = null;
-            if (request.getTlsForServer()) {
-                forServer = TLSConfiguration.loadFrom(request.getProfileName(), request.getTlsPassword(), true);
-            }
-
-            if (request.getTlsForClient()) {
-                forClient = TLSConfiguration.loadFrom(request.getProfileName(), request.getTlsPassword(), false);
-            }
-
             Cluster cluster = new ClusterPool(eventStreamConfiguration.eventStream(), Utils.l4(request.getStrategy(), Utils.l4(request.getSessionPersistence())));
 
             L4LoadBalancerBuilder l4LoadBalancerBuilder = L4LoadBalancerBuilder.newBuilder()
-                    .withL4FrontListener(new TCPListener())
+                    .withL4FrontListener(new UDPListener())
                     .withBindAddress(new InetSocketAddress(request.getBindAddress(), request.getBindPort()))
                     .withCluster(cluster)
                     .withCoreConfiguration(configuration);
-
-            if (forServer != null) {
-                l4LoadBalancerBuilder.withTlsForServer(forServer);
-            }
-
-            if (forClient != null) {
-                l4LoadBalancerBuilder.withTlsForClient(forClient);
-            }
 
             L4LoadBalancer l4LoadBalancer = l4LoadBalancerBuilder.build();
             L4FrontListenerStartupEvent event = l4LoadBalancer.start();
@@ -99,7 +81,7 @@ public final class TCPLoadBalancerService extends TCPLoadBalancerServiceGrpc.TCP
     }
 
     @Override
-    public void stopTCP(Layer4LoadBalancer.StopLoadBalancer request, StreamObserver<Layer4LoadBalancer.LoadBalancerResponse> responseObserver) {
+    public void stopUDP(Layer4LoadBalancer.StopLoadBalancer request, StreamObserver<Layer4LoadBalancer.LoadBalancerResponse> responseObserver) {
         responseObserver.onNext(Utils.stopLoadBalancer(request));
         responseObserver.onCompleted();
     }

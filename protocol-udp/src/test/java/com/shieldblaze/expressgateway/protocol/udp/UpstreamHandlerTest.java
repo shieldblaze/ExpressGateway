@@ -80,7 +80,7 @@ final class UpstreamHandlerTest {
         CoreConfiguration coreConfiguration = CoreConfigurationBuilder.newBuilder()
                 .withTransportConfiguration(transportConfiguration)
                 .withEventLoopConfiguration(eventLoopConfiguration)
-                .withPooledByteBufAllocatorConfiguration(BufferConfiguration.DEFAULT)
+                .withBufferConfiguration(BufferConfiguration.DEFAULT)
                 .build();
 
         eventLoopFactory = new EventLoopFactory(coreConfiguration);

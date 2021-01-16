@@ -67,6 +67,10 @@ public final class HTTPHealthCheck extends HealthCheck {
     private final URI uri;
 
     public HTTPHealthCheck(URI uri, Duration timeout, boolean enableTLSValidation) throws NoSuchAlgorithmException, KeyManagementException {
+        this(uri, timeout, 100, enableTLSValidation);
+    }
+
+    public HTTPHealthCheck(URI uri, Duration timeout, int samples, boolean enableTLSValidation) throws NoSuchAlgorithmException, KeyManagementException {
         super(new InetSocketAddress(uri.getHost(), uri.getPort()), timeout);
         this.uri = uri;
 
