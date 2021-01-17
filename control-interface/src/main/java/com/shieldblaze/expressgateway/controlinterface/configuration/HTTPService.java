@@ -46,12 +46,12 @@ public final class HTTPService extends HTTPServiceGrpc.HTTPServiceImplBase {
             httpConfiguration.saveTo(request.getProfileName());
 
             response = Configuration.ConfigurationResponse.newBuilder()
-                    .setResponseCode(1)
+                    .setSuccess(true)
                     .setResponseText("Success")
                     .build();
         } catch (Exception ex) {
             response = Configuration.ConfigurationResponse.newBuilder()
-                    .setResponseCode(-1)
+                    .setSuccess(false)
                     .setResponseText("Error: " + ex.getLocalizedMessage())
                     .build();
         }

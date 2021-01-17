@@ -92,7 +92,7 @@ class TLSServerServiceTest {
                 .build();
 
         TLS.ConfigurationResponse configurationResponse = tlsService.server(server);
-        assertEquals(1, configurationResponse.getResponseCode());
+        assertTrue(configurationResponse.getSuccess());
         assertEquals("Success", configurationResponse.getResponseText());
 
         channel.shutdownNow();
@@ -132,7 +132,7 @@ class TLSServerServiceTest {
                 .build();
 
         TLS.ConfigurationResponse configurationResponse = tlsService.server(server);
-        assertEquals(-1, configurationResponse.getResponseCode());
+        assertFalse(configurationResponse.getSuccess());
 
         channel.shutdownNow();
     }

@@ -66,12 +66,12 @@ public final class UDPLoadBalancerService extends UDPLoadBalancerServiceGrpc.UDP
             LoadBalancerRegistry.add(l4LoadBalancer, event);
 
             response = Layer4LoadBalancer.LoadBalancerResponse.newBuilder()
-                    .setResponseCode(1)
+                    .setSuccess(true)
                     .setResponseText(l4LoadBalancer.ID)
                     .build();
         } catch (Exception ex) {
             response = Layer4LoadBalancer.LoadBalancerResponse.newBuilder()
-                    .setResponseCode(-1)
+                    .setSuccess(false)
                     .setResponseText(ex.getLocalizedMessage())
                     .build();
         }

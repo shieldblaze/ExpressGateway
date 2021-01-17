@@ -75,7 +75,7 @@ class TransportServiceTest {
                 .build();
 
         Configuration.ConfigurationResponse configurationResponse = transportService.transport(transport);
-        assertEquals(1, configurationResponse.getResponseCode());
+        assertTrue(configurationResponse.getSuccess());
         assertEquals("Success", configurationResponse.getResponseText());
 
         channel.shutdownNow();
@@ -103,7 +103,7 @@ class TransportServiceTest {
                 .build();
 
         Configuration.ConfigurationResponse configurationResponse = transportService.transport(transport);
-        assertEquals(-1, configurationResponse.getResponseCode());
+        assertFalse(configurationResponse.getSuccess());
 
         channel.shutdownNow();
     }

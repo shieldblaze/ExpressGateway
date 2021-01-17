@@ -35,12 +35,12 @@ public final class EventStreamService extends EventStreamServiceGrpc.EventStream
             eventStreamConfiguration.saveTo(request.getProfileName());
 
             response = Configuration.ConfigurationResponse.newBuilder()
-                    .setResponseCode(1)
+                    .setSuccess(true)
                     .setResponseText("Success")
                     .build();
         } catch (Exception ex) {
             response = Configuration.ConfigurationResponse.newBuilder()
-                    .setResponseCode(-1)
+                    .setSuccess(false)
                     .setResponseText("Error: " + ex.getLocalizedMessage())
                     .build();
         }

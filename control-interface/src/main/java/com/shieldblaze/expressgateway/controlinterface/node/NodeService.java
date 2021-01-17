@@ -18,6 +18,7 @@
 package com.shieldblaze.expressgateway.controlinterface.node;
 
 import com.shieldblaze.expressgateway.backend.Node;
+import com.shieldblaze.expressgateway.common.utils.Number;
 import com.shieldblaze.expressgateway.core.events.L4FrontListenerStartupEvent;
 import com.shieldblaze.expressgateway.core.loadbalancer.L4LoadBalancer;
 import com.shieldblaze.expressgateway.core.loadbalancer.LoadBalancerRegistry;
@@ -40,7 +41,6 @@ public class NodeService extends NodeServiceGrpc.NodeServiceImplBase {
 
         try {
             L4LoadBalancer l4LoadBalancer = getLoadBalancerByID(request.getLoadBalancerID());
-
             HealthCheck healthCheck = null;
 
             // If 2 types of HealthCheck are present, then throw error.
@@ -48,11 +48,14 @@ public class NodeService extends NodeServiceGrpc.NodeServiceImplBase {
                 throw new IllegalArgumentException("2 types of HealthCheck defined. Expected only 1");
             }
 
+            // If HealthCheck L4 is present then parse it.
             if (request.hasHealthCheckL4()) {
                 NodeOuterClass.HealthCheckL4 healthCheckL4 = request.getHealthCheckL4();
-                int samples = 100;
+                int samples = 100; // Default value
+
+                // If Samples count is not 0 then parse it.
                 if (healthCheckL4.getSamples() != 0) {
-                    samples = healthCheckL4.getSamples();
+                    samples = Number.checkPositive(healthCheckL4.getSamples(), "Samples");
                 }
 
                 if (request.getHealthCheckL4().getProtocol().equalsIgnoreCase("tcp")) {
@@ -66,9 +69,12 @@ public class NodeService extends NodeServiceGrpc.NodeServiceImplBase {
                 }
             }
 
+            // If HealthCheck-HTTP is present then parse it.
             if (request.hasHealthCheckHttp()) {
                 NodeOuterClass.HealthCheckHTTP healthCheckHttp = request.getHealthCheckHttp();
-                int samples = 100;
+                int samples = 100; // Default value
+
+                // If Samples count is not 0 then parse it.
                 if (healthCheckHttp.getSamples() != 0) {
                     samples = healthCheckHttp.getSamples();
                 }
@@ -77,15 +83,16 @@ public class NodeService extends NodeServiceGrpc.NodeServiceImplBase {
                         samples, healthCheckHttp.getEnableTLSValidation());
             }
 
+            // Create a new Node under the specified Load Balancer
             Node node = new Node(l4LoadBalancer.cluster(), new InetSocketAddress(request.getAddress(), request.getPort()), request.getMaxConnections(), healthCheck);
 
             response = NodeOuterClass.Response.newBuilder()
-                    .setResponseCode(1)
+                    .setSuccess(true)
                     .setResponseText(node.id())
                     .build();
         } catch (Exception ex) {
             response = NodeOuterClass.Response.newBuilder()
-                    .setResponseCode(1)
+                    .setSuccess(false)
                     .setResponseText(ex.getLocalizedMessage())
                     .build();
         }

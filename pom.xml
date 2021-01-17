@@ -57,6 +57,7 @@ along with ShieldBlaze ExpressGateway.  If not, see <https://www.gnu.org/license
 
     <modules>
         <module>backend</module>
+        <module>cli-console</module>
         <module>common</module>
         <module>concurrent</module>
         <module>configuration</module>
@@ -68,7 +69,6 @@ along with ShieldBlaze ExpressGateway.  If not, see <https://www.gnu.org/license
         <module>protocol-udp</module>
         <module>security</module>
         <module>shaded-dependencies</module>
-        <module>cli-console</module>
     </modules>
 
     <repositories>

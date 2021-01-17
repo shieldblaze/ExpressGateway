@@ -60,12 +60,12 @@ public class TLSClientService extends TLSClientServiceGrpc.TLSClientServiceImplB
             tlsConfiguration.saveTo(request.getProfileName(), request.getPassword());
 
             response = TLS.ConfigurationResponse.newBuilder()
-                    .setResponseCode(1)
+                    .setSuccess(true)
                     .setResponseText("Success")
                     .build();
         } catch (Exception ex) {
             response = TLS.ConfigurationResponse.newBuilder()
-                    .setResponseCode(-1)
+                    .setSuccess(false)
                     .setResponseText("Error: " + ex.getLocalizedMessage())
                     .build();
         }

@@ -62,7 +62,7 @@ class EventStreamServiceTest {
                 .build();
 
         Configuration.ConfigurationResponse configurationResponse = eventStreamService.eventstream(eventStream);
-        assertEquals(1, configurationResponse.getResponseCode());
+        assertTrue(configurationResponse.getSuccess());
         assertEquals("Success", configurationResponse.getResponseText());
 
         channel.shutdownNow();
@@ -81,7 +81,7 @@ class EventStreamServiceTest {
                 .build();
 
         Configuration.ConfigurationResponse configurationResponse = eventStreamService.eventstream(eventStream);
-        assertEquals(-1, configurationResponse.getResponseCode());
+        assertFalse(configurationResponse.getSuccess());
 
         channel.shutdownNow();
     }

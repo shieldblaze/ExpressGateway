@@ -72,18 +72,18 @@ final class Utils {
 
             if (isStoppedSuccessfully.get()) {
                 response = Layer4LoadBalancer.LoadBalancerResponse.newBuilder()
-                        .setResponseCode(1)
+                        .setSuccess(true)
                         .setResponseText("Success")
                         .build();
             } else {
                 response = Layer4LoadBalancer.LoadBalancerResponse.newBuilder()
-                        .setResponseCode(-1)
+                        .setSuccess(false)
                         .setResponseText("Load Balancer was not found")
                         .build();
             }
         } catch (Exception ex) {
             response = Layer4LoadBalancer.LoadBalancerResponse.newBuilder()
-                    .setResponseCode(-1)
+                    .setSuccess(false)
                     .setResponseText(ex.getLocalizedMessage())
                     .build();
         }

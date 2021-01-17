@@ -30,6 +30,8 @@ import java.io.IOException;
 import java.net.InetSocketAddress;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 
 class BufferServiceTest {
 
@@ -71,7 +73,7 @@ class BufferServiceTest {
                 .build();
 
         Configuration.ConfigurationResponse configurationResponse = bufferService.buffer(buffer);
-        assertEquals(1, configurationResponse.getResponseCode());
+        assertTrue(configurationResponse.getSuccess());
         assertEquals("Success", configurationResponse.getResponseText());
 
         channel.shutdownNow();
@@ -98,7 +100,7 @@ class BufferServiceTest {
                 .build();
 
         Configuration.ConfigurationResponse configurationResponse = bufferService.buffer(buffer);
-        assertEquals(-1, configurationResponse.getResponseCode());
+        assertFalse(configurationResponse.getSuccess());
 
         channel.shutdownNow();
     }

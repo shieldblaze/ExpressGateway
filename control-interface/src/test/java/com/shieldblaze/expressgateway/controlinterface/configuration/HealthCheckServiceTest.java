@@ -64,7 +64,7 @@ class HealthCheckServiceTest {
                 .build();
 
         Configuration.ConfigurationResponse configurationResponse = healthCheckService.healthcheck(healthCheck);
-        assertEquals(1, configurationResponse.getResponseCode());
+        assertTrue(configurationResponse.getSuccess());
         assertEquals("Success", configurationResponse.getResponseText());
 
         channel.shutdownNow();
@@ -84,7 +84,7 @@ class HealthCheckServiceTest {
                 .build();
 
         Configuration.ConfigurationResponse configurationResponse = healthCheckService.healthcheck(healthCheck);
-        assertEquals(-1, configurationResponse.getResponseCode());
+        assertFalse(configurationResponse.getSuccess());
 
         channel.shutdownNow();
     }

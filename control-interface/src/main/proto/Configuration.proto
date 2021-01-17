@@ -2,7 +2,7 @@ syntax = "proto3";
 package com.shieldblaze.expressgateway.controlinterface.configuration;
 
 message ConfigurationResponse {
-  int32 responseCode = 1;
+  bool success = 1;
   string responseText = 2;
 }
 
