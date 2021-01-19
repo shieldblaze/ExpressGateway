@@ -52,6 +52,7 @@ class TCPLoadBalancerServiceTest {
     static Server server;
     static ManagedChannel channel;
     static String loadBalancerId;
+    static TCPServer tcpServer = new TCPServer();
 
     @BeforeAll
     static void setup() throws IOException {
@@ -70,6 +71,7 @@ class TCPLoadBalancerServiceTest {
 
     @AfterAll
     static void shutdown() throws InterruptedException {
+        tcpServer.shutdown();
         channel.shutdownNow();
         server.shutdownNow().awaitTermination(30, TimeUnit.SECONDS);
     }
@@ -77,7 +79,7 @@ class TCPLoadBalancerServiceTest {
     @Test
     @Order(1)
     void simpleServerLBClientTest() throws IOException {
-        new TCPServer().start();
+        tcpServer.start();
 
         TCPLoadBalancerServiceGrpc.TCPLoadBalancerServiceBlockingStub tcpService = TCPLoadBalancerServiceGrpc.newBlockingStub(channel);
         NodeServiceGrpc.NodeServiceBlockingStub nodeService = NodeServiceGrpc.newBlockingStub(channel);
@@ -143,20 +145,28 @@ class TCPLoadBalancerServiceTest {
 
     private static final class TCPServer extends Thread {
 
+        private volatile boolean run;
+
         @Override
         public void run() {
             logger.info("Starting 1-time TCP Server");
 
             try (ServerSocket serverSocket = new ServerSocket(10000)) {
-                Socket socket = serverSocket.accept();
-                assertArrayEquals("Meow".getBytes(), socket.getInputStream().readNBytes(4));
+                while (run) {
+                    Socket socket = serverSocket.accept();
+                    assertArrayEquals("Meow".getBytes(), socket.getInputStream().readNBytes(4));
 
-                Thread.sleep(500L);
-                socket.getOutputStream().write("Cat".getBytes());
-                socket.getOutputStream().flush();
+                    Thread.sleep(500L);
+                    socket.getOutputStream().write("Cat".getBytes());
+                    socket.getOutputStream().flush();
+                }
             } catch (Exception ex) {
                 ex.printStackTrace();
             }
+        }
+
+        private void shutdown() {
+            run = false;
         }
     }
 }
