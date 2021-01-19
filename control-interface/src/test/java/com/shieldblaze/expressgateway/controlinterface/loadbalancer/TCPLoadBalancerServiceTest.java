@@ -98,7 +98,7 @@ class TCPLoadBalancerServiceTest {
 
         NodeOuterClass.AddRequest addRequest = NodeOuterClass.AddRequest.newBuilder()
                 .setAddress("127.0.0.1")
-                .setPort(5555)
+                .setPort(10000)
                 .setLoadBalancerID(loadBalancerResponse.getResponseText())
                 .setMaxConnections(-1)
                 .build();
@@ -147,7 +147,7 @@ class TCPLoadBalancerServiceTest {
         public void run() {
             logger.info("Starting 1-time TCP Server");
 
-            try (ServerSocket serverSocket = new ServerSocket(5555)) {
+            try (ServerSocket serverSocket = new ServerSocket(10000)) {
                 Socket socket = serverSocket.accept();
                 assertArrayEquals("Meow".getBytes(), socket.getInputStream().readNBytes(4));
 
