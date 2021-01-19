@@ -97,6 +97,11 @@ public final class StickySession implements SessionPersistence<HTTPBalanceRespon
         nodes.clear();
     }
 
+    @Override
+    public String name() {
+        return "StickySession";
+    }
+
     private void addIfAbsent(Node node) {
         if (!nodes.contains(node)) {
             nodes.add(node);

@@ -38,6 +38,8 @@ public class EventStreamConfiguration extends ConfigurationMarshaller {
         init();
     }
 
+    public static final EventStreamConfiguration DEFAULT = new EventStreamConfiguration(Runtime.getRuntime().availableProcessors() / 2);
+
     public void init() {
         if (workers == 0) {
             eventStream = new EventStream();

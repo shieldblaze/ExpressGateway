@@ -19,6 +19,7 @@ package com.shieldblaze.expressgateway.controlinterface.configuration;
 
 import com.shieldblaze.expressgateway.configuration.healthcheck.HealthCheckConfiguration;
 import com.shieldblaze.expressgateway.configuration.healthcheck.HealthCheckConfigurationBuilder;
+import io.grpc.Status;
 import io.grpc.stub.StreamObserver;
 
 public final class HealthCheckService extends HealthCheckServiceGrpc.HealthCheckServiceImplBase {
@@ -40,10 +41,8 @@ public final class HealthCheckService extends HealthCheckServiceGrpc.HealthCheck
                     .setResponseText("Success")
                     .build();
         } catch (Exception ex) {
-            response = Configuration.ConfigurationResponse.newBuilder()
-                    .setSuccess(false)
-                    .setResponseText("Error: " + ex.getLocalizedMessage())
-                    .build();
+            responseObserver.onError(Status.INVALID_ARGUMENT.augmentDescription(ex.getLocalizedMessage()).asRuntimeException());
+            return;
         }
 
         responseObserver.onNext(response);
@@ -64,8 +63,7 @@ public final class HealthCheckService extends HealthCheckServiceGrpc.HealthCheck
             responseObserver.onNext(healthCheck);
             responseObserver.onCompleted();
         } catch (Exception ex) {
-            responseObserver.onError(ex);
-            responseObserver.onCompleted();
+            responseObserver.onError(Status.INVALID_ARGUMENT.augmentDescription(ex.getLocalizedMessage()).asRuntimeException());
         }
     }
 }

@@ -24,7 +24,7 @@ import com.shieldblaze.expressgateway.configuration.tls.Protocol;
 import java.util.ArrayList;
 import java.util.List;
 
-final class Utils {
+final class Common {
 
     static List<Protocol> protocolConverter(ProtocolStringList protocolStringList) {
         List<Protocol> protocols = new ArrayList<>();

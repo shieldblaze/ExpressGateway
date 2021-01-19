@@ -19,6 +19,7 @@ package com.shieldblaze.expressgateway.controlinterface.configuration;
 
 import com.shieldblaze.expressgateway.configuration.eventloop.EventLoopConfiguration;
 import com.shieldblaze.expressgateway.configuration.eventloop.EventLoopConfigurationBuilder;
+import io.grpc.Status;
 import io.grpc.stub.StreamObserver;
 
 public final class EventLoopService extends EventLoopServiceGrpc.EventLoopServiceImplBase {
@@ -40,10 +41,8 @@ public final class EventLoopService extends EventLoopServiceGrpc.EventLoopServic
                     .setResponseText("Success")
                     .build();
         } catch (Exception ex) {
-            response = Configuration.ConfigurationResponse.newBuilder()
-                    .setSuccess(false)
-                    .setResponseText("Error: " + ex.getLocalizedMessage())
-                    .build();
+            responseObserver.onError(Status.INVALID_ARGUMENT.augmentDescription(ex.getLocalizedMessage()).asRuntimeException());
+            return;
         }
 
         responseObserver.onNext(response);
@@ -64,8 +63,7 @@ public final class EventLoopService extends EventLoopServiceGrpc.EventLoopServic
             responseObserver.onNext(eventLoop);
             responseObserver.onCompleted();
         } catch (Exception ex) {
-            responseObserver.onError(ex);
-            responseObserver.onCompleted();
+            responseObserver.onError(Status.INVALID_ARGUMENT.augmentDescription(ex.getLocalizedMessage()).asRuntimeException());
         }
     }
 }

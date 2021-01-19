@@ -18,6 +18,7 @@
 package com.shieldblaze.expressgateway.protocol.http.loadbalancer;
 
 import com.shieldblaze.expressgateway.backend.cluster.Cluster;
+import com.shieldblaze.expressgateway.backend.strategy.l7.http.HTTPBalanceResponse;
 import com.shieldblaze.expressgateway.configuration.CoreConfiguration;
 import com.shieldblaze.expressgateway.configuration.http.HTTPConfiguration;
 import com.shieldblaze.expressgateway.configuration.tls.TLSConfiguration;
@@ -31,6 +32,7 @@ import java.util.Objects;
  * Builder for {@link HTTPLoadBalancer}
  */
 public final class HTTPLoadBalancerBuilder {
+    private String name;
     private InetSocketAddress bindAddress;
     private CoreConfiguration coreConfiguration;
     private HTTPConfiguration httpConfiguration;
@@ -46,6 +48,11 @@ public final class HTTPLoadBalancerBuilder {
 
     public static HTTPLoadBalancerBuilder newBuilder() {
         return new HTTPLoadBalancerBuilder();
+    }
+
+    public HTTPLoadBalancerBuilder withName(String name) {
+        this.name = name;
+        return this;
     }
 
     public HTTPLoadBalancerBuilder withCoreConfiguration(CoreConfiguration coreConfiguration) {
@@ -106,6 +113,7 @@ public final class HTTPLoadBalancerBuilder {
         Objects.requireNonNull(httpConfiguration, "HTTPConfiguration");
 
         return new HTTPLoadBalancer(
+                name,
                 bindAddress,
                 l4FrontListener,
                 cluster,

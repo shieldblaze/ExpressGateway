@@ -35,6 +35,7 @@ public class HTTPLoadBalancer extends L4LoadBalancer {
     private final HTTPConfiguration httpConfiguration;
 
     /**
+     * @param name              Name of this Load Balancer
      * @param bindAddress       {@link InetSocketAddress} on which {@link L4FrontListener} will bind and listen.
      * @param l4FrontListener   {@link L4FrontListener} for listening traffic
      * @param cluster           {@link Cluster} to be Load Balanced
@@ -44,10 +45,10 @@ public class HTTPLoadBalancer extends L4LoadBalancer {
      * @param httpConfiguration {@link HTTPConfiguration} to be applied
      * @throws NullPointerException If a required parameter if {@code null}
      */
-    HTTPLoadBalancer(InetSocketAddress bindAddress, L4FrontListener l4FrontListener, Cluster cluster,
-                            CoreConfiguration coreConfiguration, TLSConfiguration tlsForServer, TLSConfiguration tlsForClient,
-                            HTTPConfiguration httpConfiguration, HTTPServerInitializer httpServerInitializer) {
-        super(bindAddress, l4FrontListener, cluster, coreConfiguration, tlsForServer, tlsForClient, httpServerInitializer);
+    HTTPLoadBalancer(String name, InetSocketAddress bindAddress, L4FrontListener l4FrontListener, Cluster cluster,
+                     CoreConfiguration coreConfiguration, TLSConfiguration tlsForServer, TLSConfiguration tlsForClient,
+                     HTTPConfiguration httpConfiguration, HTTPServerInitializer httpServerInitializer) {
+        super(name, bindAddress, l4FrontListener, cluster, coreConfiguration, tlsForServer, tlsForClient, httpServerInitializer);
         this.httpConfiguration = httpConfiguration;
         httpServerInitializer.httpLoadBalancer(this);
     }

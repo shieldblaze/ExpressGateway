@@ -19,6 +19,7 @@ package com.shieldblaze.expressgateway.controlinterface.loadbalancer;
 
 import com.shieldblaze.expressgateway.backend.cluster.Cluster;
 import com.shieldblaze.expressgateway.backend.cluster.ClusterPool;
+import com.shieldblaze.expressgateway.common.utils.Number;
 import com.shieldblaze.expressgateway.configuration.CoreConfiguration;
 import com.shieldblaze.expressgateway.configuration.CoreConfigurationBuilder;
 import com.shieldblaze.expressgateway.configuration.buffer.BufferConfiguration;
@@ -29,32 +30,45 @@ import com.shieldblaze.expressgateway.configuration.transport.TransportConfigura
 import com.shieldblaze.expressgateway.core.events.L4FrontListenerStartupEvent;
 import com.shieldblaze.expressgateway.core.loadbalancer.L4LoadBalancer;
 import com.shieldblaze.expressgateway.core.loadbalancer.L4LoadBalancerBuilder;
+import com.shieldblaze.expressgateway.core.loadbalancer.LoadBalancerProperty;
 import com.shieldblaze.expressgateway.core.loadbalancer.LoadBalancerRegistry;
 import com.shieldblaze.expressgateway.protocol.tcp.TCPListener;
+import io.grpc.Metadata;
+import io.grpc.Status;
+import io.grpc.StatusException;
 import io.grpc.stub.StreamObserver;
 
 import java.net.InetSocketAddress;
+import java.util.Map;
+import java.util.concurrent.atomic.AtomicBoolean;
 
 public final class TCPLoadBalancerService extends TCPLoadBalancerServiceGrpc.TCPLoadBalancerServiceImplBase {
 
     @Override
-    public void tcp(Layer4LoadBalancer.TCPLoadBalancer request, StreamObserver<Layer4LoadBalancer.LoadBalancerResponse> responseObserver) {
+    public void start(Layer4LoadBalancer.TCPLoadBalancer request, StreamObserver<Layer4LoadBalancer.LoadBalancerResponse> responseObserver) {
         Layer4LoadBalancer.LoadBalancerResponse response;
 
         try {
-            TransportConfiguration transportConfiguration = TransportConfiguration.loadFrom(request.getProfileName());
-            EventLoopConfiguration eventLoopConfiguration = EventLoopConfiguration.loadFrom(request.getProfileName());
-            BufferConfiguration bufferConfiguration = BufferConfiguration.loadFrom(request.getProfileName());
-            EventStreamConfiguration eventStreamConfiguration = EventStreamConfiguration.loadFrom(request.getProfileName());
-
-            CoreConfiguration configuration = CoreConfigurationBuilder.newBuilder()
-                    .withTransportConfiguration(transportConfiguration)
-                    .withEventLoopConfiguration(eventLoopConfiguration)
-                    .withBufferConfiguration(bufferConfiguration)
-                    .build();
+            TransportConfiguration transportConfiguration;
+            EventLoopConfiguration eventLoopConfiguration;
+            BufferConfiguration bufferConfiguration;
+            EventStreamConfiguration eventStreamConfiguration;
 
             TLSConfiguration forServer = null;
             TLSConfiguration forClient = null;
+
+            if (request.getProfileName().equalsIgnoreCase("default") || request.getProfileName().isBlank()) {
+                transportConfiguration = TransportConfiguration.DEFAULT;
+                eventLoopConfiguration = EventLoopConfiguration.DEFAULT;
+                bufferConfiguration = BufferConfiguration.DEFAULT;
+                eventStreamConfiguration = EventStreamConfiguration.DEFAULT;
+            } else {
+                transportConfiguration = TransportConfiguration.loadFrom(request.getProfileName());
+                eventLoopConfiguration = EventLoopConfiguration.loadFrom(request.getProfileName());
+                bufferConfiguration = BufferConfiguration.loadFrom(request.getProfileName());
+                eventStreamConfiguration = EventStreamConfiguration.loadFrom(request.getProfileName());
+            }
+
             if (request.getTlsForServer()) {
                 forServer = TLSConfiguration.loadFrom(request.getProfileName(), request.getTlsPassword(), true);
             }
@@ -63,13 +77,20 @@ public final class TCPLoadBalancerService extends TCPLoadBalancerServiceGrpc.TCP
                 forClient = TLSConfiguration.loadFrom(request.getProfileName(), request.getTlsPassword(), false);
             }
 
-            Cluster cluster = new ClusterPool(eventStreamConfiguration.eventStream(), Utils.l4(request.getStrategy(), Utils.l4(request.getSessionPersistence())));
+            CoreConfiguration configuration = CoreConfigurationBuilder.newBuilder()
+                    .withTransportConfiguration(transportConfiguration)
+                    .withEventLoopConfiguration(eventLoopConfiguration)
+                    .withBufferConfiguration(bufferConfiguration)
+                    .build();
+
+            Cluster cluster = new ClusterPool(eventStreamConfiguration.eventStream(), Common.l4(request.getStrategy(), Common.l4(request.getSessionPersistence())));
 
             L4LoadBalancerBuilder l4LoadBalancerBuilder = L4LoadBalancerBuilder.newBuilder()
                     .withL4FrontListener(new TCPListener())
                     .withBindAddress(new InetSocketAddress(request.getBindAddress(), request.getBindPort()))
                     .withCluster(cluster)
-                    .withCoreConfiguration(configuration);
+                    .withCoreConfiguration(configuration)
+                    .withName(request.getName());
 
             if (forServer != null) {
                 l4LoadBalancerBuilder.withTlsForServer(forServer);
@@ -81,26 +102,90 @@ public final class TCPLoadBalancerService extends TCPLoadBalancerServiceGrpc.TCP
 
             L4LoadBalancer l4LoadBalancer = l4LoadBalancerBuilder.build();
             L4FrontListenerStartupEvent event = l4LoadBalancer.start();
-            LoadBalancerRegistry.add(l4LoadBalancer, event);
+            LoadBalancerProperty loadBalancerProperty = new LoadBalancerProperty().profileName(request.getProfileName()).startupEvent(event);
+            LoadBalancerRegistry.add(l4LoadBalancer, loadBalancerProperty);
 
             response = Layer4LoadBalancer.LoadBalancerResponse.newBuilder()
-                    .setSuccess(true)
                     .setResponseText(l4LoadBalancer.ID)
                     .build();
-        } catch (Exception ex) {
-            response = Layer4LoadBalancer.LoadBalancerResponse.newBuilder()
-                    .setSuccess(false)
-                    .setResponseText(ex.getLocalizedMessage())
-                    .build();
-        }
 
-        responseObserver.onNext(response);
-        responseObserver.onCompleted();
+            responseObserver.onNext(response);
+            responseObserver.onCompleted();
+        } catch (Exception ex) {
+            responseObserver.onError(Status.INVALID_ARGUMENT.augmentDescription(ex.getLocalizedMessage()).asRuntimeException());
+        }
     }
 
     @Override
-    public void stopTCP(Layer4LoadBalancer.StopLoadBalancer request, StreamObserver<Layer4LoadBalancer.LoadBalancerResponse> responseObserver) {
-        responseObserver.onNext(Utils.stopLoadBalancer(request));
+    public void get(Layer4LoadBalancer.GetLoadBalancerRequest request, StreamObserver<Layer4LoadBalancer.TCPLoadBalancer> responseObserver) {
+        try {
+            L4LoadBalancer l4LoadBalancer = null;
+            LoadBalancerProperty loadBalancerProperty = null;
+
+            for (Map.Entry<L4LoadBalancer, LoadBalancerProperty> entry : LoadBalancerRegistry.registry.entrySet()) {
+                if (entry.getKey().ID.equalsIgnoreCase(request.getLoadBalancerId())) {
+                    l4LoadBalancer = entry.getKey();
+                    loadBalancerProperty = entry.getValue();
+                    break;
+                }
+            }
+
+            if (l4LoadBalancer == null || loadBalancerProperty == null) {
+                throw new NullPointerException("Load Balancer was not found");
+            }
+
+            // If event has finished and was not successful then
+            // remove it from registry and throw an exception.
+            if (loadBalancerProperty.startupEvent().finished() && !loadBalancerProperty.startupEvent().success()) {
+                LoadBalancerRegistry.remove(l4LoadBalancer);
+                throw new IllegalArgumentException("Load Balancer failed to start, Cause: " + loadBalancerProperty.startupEvent().throwable().getLocalizedMessage());
+            }
+
+            Layer4LoadBalancer.TCPLoadBalancer response = Layer4LoadBalancer.TCPLoadBalancer.newBuilder()
+                    .setBindAddress(l4LoadBalancer.bindAddress().getAddress().getHostAddress())
+                    .setBindPort(l4LoadBalancer.bindAddress().getPort())
+                    .setTlsForServer(l4LoadBalancer.tlsForServer() != null)
+                    .setTlsForClient(l4LoadBalancer.tlsForClient() != null)
+                    .setStrategy(l4LoadBalancer.cluster().loadBalance().name())
+                    .setSessionPersistence(l4LoadBalancer.cluster().loadBalance().sessionPersistence().name())
+                    .setProfileName(loadBalancerProperty.profileName())
+                    .build();
+
+            responseObserver.onNext(response);
+            responseObserver.onCompleted();
+        } catch (Exception ex) {
+            responseObserver.onError(Status.INVALID_ARGUMENT.augmentDescription(ex.getLocalizedMessage()).asRuntimeException());
+        }
+    }
+
+    @Override
+    public void stop(Layer4LoadBalancer.StopLoadBalancer request, StreamObserver<Layer4LoadBalancer.LoadBalancerResponse> responseObserver) {
+        Layer4LoadBalancer.LoadBalancerResponse response;
+
+        try {
+            boolean isFound = false;
+
+            for (Map.Entry<L4LoadBalancer, LoadBalancerProperty> entry : LoadBalancerRegistry.registry.entrySet()) {
+                if (entry.getKey().ID.equalsIgnoreCase(request.getId())) {
+                    LoadBalancerRegistry.remove(entry.getKey());
+                    isFound = true;
+                    break;
+                }
+            }
+
+            if (isFound) {
+                response = Layer4LoadBalancer.LoadBalancerResponse.newBuilder()
+                        .setResponseText("Success")
+                        .build();
+            } else {
+                throw new NullPointerException("Load Balancer was not found");
+            }
+        } catch (Exception ex) {
+            responseObserver.onError(Status.INVALID_ARGUMENT.augmentDescription(ex.getLocalizedMessage()).asRuntimeException());
+            return;
+        }
+
+        responseObserver.onNext(response);
         responseObserver.onCompleted();
     }
 }

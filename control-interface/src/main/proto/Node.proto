@@ -1,10 +1,20 @@
 syntax = "proto3";
 package com.shieldblaze.expressgateway.controlinterface.node;
 
-message Response {
-  bool success = 1;
-  string responseText = 2;
+// ---------------------------- Node Structure ----------------------------
+
+message Node {
+  string id = 1;
+  string address = 2;
+  int32 port = 3;
+  int32 activeConnections = 4;
+  int32 maxConnections = 5;
+  float load = 6;
+  string health = 7;
+  string state = 8;
 }
+
+// ---------------------------- Health Checks ----------------------------
 
 message HealthCheckL4 {
   string nodeID = 1;
@@ -23,18 +33,61 @@ message HealthCheckHTTP {
   bool enableTLSValidation = 5;
 }
 
-message Node {
+// ---------------------------- Add ----------------------------
+
+message addRequest {
   string loadBalancerID = 1;
   string address = 2;
   int32 port = 3;
   int32 maxConnections = 4;
   HealthCheckL4 healthCheckL4 = 5;
   HealthCheckHTTP healthCheckHttp = 6;
-  string nodeID = 7;
 }
 
+message addResponse {
+  bool success = 1;
+  string nodeId = 2;
+}
+
+// ---------------------------- Get All ----------------------------
+
+message getAllRequest {
+  string loadBalancerId = 1;
+}
+
+message getAllResponse {
+  bool success = 1;
+  repeated Node node = 2;
+}
+
+// ---------------------------- Get ----------------------------
+
+message getRequest {
+  string loadBalancerId = 1;
+  string nodeId = 2;
+}
+
+message getResponse {
+  bool success = 1;
+  Node node = 2;
+}
+
+// ---------------------------- Delete ----------------------------
+
+message deleteRequest {
+  string loadBalancerId = 1;
+  string nodeId = 2;
+}
+
+message deleteResponse {
+  bool success = 1;
+}
+
+// ---------------------------- Service ----------------------------
+
 service NodeService {
-  rpc add(Node) returns (Response);
-  rpc get(Node) returns (Response);
-  rpc delete(Node) returns (Response);
+  rpc add(addRequest) returns (addResponse);
+  rpc get(getRequest) returns (getResponse);
+  rpc getAll(getAllRequest) returns (getAllResponse);
+  rpc delete(deleteRequest) returns (deleteResponse);
 }

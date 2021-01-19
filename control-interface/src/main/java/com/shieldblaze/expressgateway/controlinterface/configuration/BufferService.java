@@ -19,6 +19,7 @@ package com.shieldblaze.expressgateway.controlinterface.configuration;
 
 import com.shieldblaze.expressgateway.configuration.buffer.BufferConfiguration;
 import com.shieldblaze.expressgateway.configuration.buffer.BufferConfigurationBuilder;
+import io.grpc.Status;
 import io.grpc.stub.StreamObserver;
 
 public final class BufferService extends BufferServiceGrpc.BufferServiceImplBase {
@@ -47,10 +48,8 @@ public final class BufferService extends BufferServiceGrpc.BufferServiceImplBase
                     .setResponseText("Success")
                     .build();
         } catch (Exception ex) {
-            response = Configuration.ConfigurationResponse.newBuilder()
-                    .setSuccess(false)
-                    .setResponseText("Error: " + ex.getLocalizedMessage())
-                    .build();
+            responseObserver.onError(Status.INVALID_ARGUMENT.augmentDescription(ex.getLocalizedMessage()).asRuntimeException());
+            return;
         }
 
         responseObserver.onNext(response);
@@ -78,8 +77,7 @@ public final class BufferService extends BufferServiceGrpc.BufferServiceImplBase
             responseObserver.onNext(buffer);
             responseObserver.onCompleted();
         } catch (Exception ex) {
-            responseObserver.onError(ex);
-            responseObserver.onCompleted();
+            responseObserver.onError(Status.INVALID_ARGUMENT.augmentDescription(ex.getLocalizedMessage()).asRuntimeException());
         }
     }
 }

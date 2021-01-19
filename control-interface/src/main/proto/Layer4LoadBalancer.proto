@@ -2,43 +2,50 @@ syntax = "proto3";
 package com.shieldblaze.expressgateway.controlinterface.loadbalancer;
 
 message LoadBalancerResponse {
-  bool success = 1;
-  string responseText = 2;
+  string responseText = 1;
 }
 
 message StopLoadBalancer {
   string id = 1;
 }
 
+message GetLoadBalancerRequest {
+  string loadBalancerId = 1;
+}
+
 // ------------------------ TCP ------------------------
 
 message TCPLoadBalancer {
-   string bindAddress = 1;
-   int32 bindPort = 2;
-   string profileName = 3;
-   string tlsPassword = 4;
-   bool tlsForServer = 5;
-   bool tlsForClient = 6;
-   string strategy = 7;
-   string sessionPersistence = 8;
+   string name = 1;
+   string bindAddress = 2;
+   int32 bindPort = 3;
+   string profileName = 4;
+   string tlsPassword = 5;
+   bool tlsForServer = 6;
+   bool tlsForClient = 7;
+   string strategy = 8;
+   string sessionPersistence = 9;
 }
 
 service TCPLoadBalancerService {
-  rpc tcp(TCPLoadBalancer) returns (LoadBalancerResponse);
-  rpc stopTCP(StopLoadBalancer) returns (LoadBalancerResponse);
+  rpc start(TCPLoadBalancer) returns (LoadBalancerResponse);
+  rpc get(GetLoadBalancerRequest) returns (TCPLoadBalancer);
+  rpc stop(StopLoadBalancer) returns (LoadBalancerResponse);
 }
 
 // ------------------------ UDP ------------------------
 
 message UDPLoadBalancer {
-  string bindAddress = 1;
-  int32 bindPort = 2;
-  string strategy = 3;
-  string sessionPersistence = 4;
-  string profileName = 5;
+  string name = 1;
+  string bindAddress = 2;
+  int32 bindPort = 3;
+  string strategy = 4;
+  string sessionPersistence = 5;
+  string profileName = 6;
 }
 
 service UDPLoadBalancerService {
-  rpc udp(UDPLoadBalancer) returns (LoadBalancerResponse);
-  rpc stopUDP(StopLoadBalancer) returns (LoadBalancerResponse);
+  rpc start(UDPLoadBalancer) returns (LoadBalancerResponse);
+  rpc get(GetLoadBalancerRequest) returns (UDPLoadBalancer);
+  rpc stop(StopLoadBalancer) returns (LoadBalancerResponse);
 }

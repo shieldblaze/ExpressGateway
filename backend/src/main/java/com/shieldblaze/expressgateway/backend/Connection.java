@@ -44,7 +44,7 @@ public abstract class Connection {
     private ChannelFuture channelFuture;
     private Channel channel;
     private InetSocketAddress socketAddress;
-    private boolean isActive;
+    private volatile boolean isActive;
 
     public Connection(Node node, long timeout) {
         this.node = node;

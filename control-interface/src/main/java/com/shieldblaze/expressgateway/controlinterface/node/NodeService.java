@@ -21,29 +21,41 @@ import com.shieldblaze.expressgateway.backend.Node;
 import com.shieldblaze.expressgateway.common.utils.Number;
 import com.shieldblaze.expressgateway.core.events.L4FrontListenerStartupEvent;
 import com.shieldblaze.expressgateway.core.loadbalancer.L4LoadBalancer;
+import com.shieldblaze.expressgateway.core.loadbalancer.LoadBalancerProperty;
 import com.shieldblaze.expressgateway.core.loadbalancer.LoadBalancerRegistry;
 import com.shieldblaze.expressgateway.healthcheck.HealthCheck;
 import com.shieldblaze.expressgateway.healthcheck.l4.TCPHealthCheck;
 import com.shieldblaze.expressgateway.healthcheck.l4.UDPHealthCheck;
 import com.shieldblaze.expressgateway.healthcheck.l7.HTTPHealthCheck;
+import io.grpc.Status;
 import io.grpc.stub.StreamObserver;
 
 import java.net.InetSocketAddress;
 import java.net.URI;
 import java.time.Duration;
+import java.util.ArrayList;
+import java.util.List;
 import java.util.Map;
 
+/**
+ * <p> {@linkplain NodeService} can perform the following operations. </p>
+ * <ul>
+ *     <li> Add a node into Cluster </li>
+ *     <li> Get a node from Cluster </li>
+ *     <li> Get all nodes from Cluster </li>
+ *     <li> Delete a node from Cluster </li>
+ * </ul>
+ */
 public class NodeService extends NodeServiceGrpc.NodeServiceImplBase {
 
     @Override
-    public void add(NodeOuterClass.Node request, StreamObserver<NodeOuterClass.Response> responseObserver) {
-        NodeOuterClass.Response response;
+    public void add(NodeOuterClass.addRequest request, StreamObserver<NodeOuterClass.addResponse> responseObserver) {
+        NodeOuterClass.addResponse response;
 
         try {
             L4LoadBalancer l4LoadBalancer = getLoadBalancerByID(request.getLoadBalancerID());
             HealthCheck healthCheck = null;
 
-            // If 2 types of HealthCheck are present, then throw error.
             if (request.hasHealthCheckL4() && request.hasHealthCheckHttp()) {
                 throw new IllegalArgumentException("2 types of HealthCheck defined. Expected only 1");
             }
@@ -86,38 +98,122 @@ public class NodeService extends NodeServiceGrpc.NodeServiceImplBase {
             // Create a new Node under the specified Load Balancer
             Node node = new Node(l4LoadBalancer.cluster(), new InetSocketAddress(request.getAddress(), request.getPort()), request.getMaxConnections(), healthCheck);
 
-            response = NodeOuterClass.Response.newBuilder()
+            response = NodeOuterClass.addResponse.newBuilder()
                     .setSuccess(true)
-                    .setResponseText(node.id())
+                    .setNodeId(node.id())
                     .build();
+
+            responseObserver.onNext(response);
+            responseObserver.onCompleted();
         } catch (Exception ex) {
-            response = NodeOuterClass.Response.newBuilder()
-                    .setSuccess(false)
-                    .setResponseText(ex.getLocalizedMessage())
-                    .build();
+            responseObserver.onError(Status.INVALID_ARGUMENT.augmentDescription(ex.getLocalizedMessage()).asRuntimeException());
         }
-
-        responseObserver.onNext(response);
-        responseObserver.onCompleted();
     }
 
     @Override
-    public void get(NodeOuterClass.Node request, StreamObserver<NodeOuterClass.Response> responseObserver) {
-        super.get(request, responseObserver);
+    public void get(NodeOuterClass.getRequest request, StreamObserver<NodeOuterClass.getResponse> responseObserver) {
+        try {
+            L4LoadBalancer l4LoadBalancer = getLoadBalancerByID(request.getLoadBalancerId());
+            Node node = null;
+
+            for (Node n : l4LoadBalancer.cluster().nodes()) {
+                if (n.id().equalsIgnoreCase(request.getNodeId())) {
+                    node = n;
+                    break;
+                }
+            }
+
+            // If node is null then it means we couldn't find the node.
+            // We will throw an error.
+            if (node == null) {
+                throw new NullPointerException("Node not found");
+            }
+
+            NodeOuterClass.getResponse response = NodeOuterClass.getResponse.newBuilder()
+                    .setSuccess(true)
+                    .setNode(convert(node))
+                    .build();
+
+            responseObserver.onNext(response);
+            responseObserver.onCompleted();
+        } catch (Exception ex) {
+            responseObserver.onError(Status.INVALID_ARGUMENT.augmentDescription(ex.getLocalizedMessage()).asRuntimeException());
+        }
     }
 
     @Override
-    public void delete(NodeOuterClass.Node request, StreamObserver<NodeOuterClass.Response> responseObserver) {
-        super.delete(request, responseObserver);
+    public void getAll(NodeOuterClass.getAllRequest request, StreamObserver<NodeOuterClass.getAllResponse> responseObserver) {
+        try {
+            L4LoadBalancer l4LoadBalancer = getLoadBalancerByID(request.getLoadBalancerId());
+
+            List<NodeOuterClass.Node> nodes = new ArrayList<>();
+            l4LoadBalancer.cluster().nodes().forEach(node -> nodes.add(convert(node)));
+
+            NodeOuterClass.getAllResponse response = NodeOuterClass.getAllResponse.newBuilder()
+                    .setSuccess(true)
+                    .addAllNode(nodes)
+                    .build();
+
+            responseObserver.onNext(response);
+            responseObserver.onCompleted();
+        } catch (Exception ex) {
+            responseObserver.onError(Status.INVALID_ARGUMENT.augmentDescription(ex.getLocalizedMessage()).asRuntimeException());
+        }
+    }
+
+    @Override
+    public void delete(NodeOuterClass.deleteRequest request, StreamObserver<NodeOuterClass.deleteResponse> responseObserver) {
+        try {
+            L4LoadBalancer l4LoadBalancer = getLoadBalancerByID(request.getLoadBalancerId());
+            Node node = null;
+
+            for (Node n : l4LoadBalancer.cluster().nodes()) {
+                if (n.id().equalsIgnoreCase(request.getNodeId())) {
+                    node = n;
+                    break;
+                }
+            }
+
+            // If node is null then it means we couldn't find the node.
+            // We will throw an error.
+            if (node == null) {
+                throw new NullPointerException("Node not found");
+            }
+
+            // Drain connections and remove
+            node.drainConnectionAndRemove();
+
+            NodeOuterClass.deleteResponse response = NodeOuterClass.deleteResponse.newBuilder()
+                    .setSuccess(true)
+                    .build();
+
+            responseObserver.onNext(response);
+            responseObserver.onCompleted();
+        } catch (Exception ex) {
+            responseObserver.onError(Status.INVALID_ARGUMENT.augmentDescription(ex.getLocalizedMessage()).asRuntimeException());
+        }
     }
 
     private L4LoadBalancer getLoadBalancerByID(String id) {
-        for (Map.Entry<L4LoadBalancer, L4FrontListenerStartupEvent> entry : LoadBalancerRegistry.registry.entrySet()) {
+        for (Map.Entry<L4LoadBalancer, LoadBalancerProperty> entry : LoadBalancerRegistry.registry.entrySet()) {
             if (entry.getKey().ID.equalsIgnoreCase(id)) {
                 return entry.getKey();
             }
         }
 
         throw new NullPointerException("No LoadBalancer found with ID: " + id);
+    }
+
+    private NodeOuterClass.Node convert(Node node) {
+        return NodeOuterClass.Node.newBuilder()
+                .setId(node.id())
+                .setAddress(node.socketAddress().getAddress().getHostAddress())
+                .setPort(node.socketAddress().getPort())
+                .setActiveConnections(node.activeConnection())
+                .setMaxConnections(node.maxConnections())
+                .setLoad(node.load())
+                .setHealth(node.health().name())
+                .setState(node.state().name())
+                .build();
     }
 }

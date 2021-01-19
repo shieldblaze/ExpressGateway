@@ -82,7 +82,7 @@ class HealthCheckServiceTest {
                 .withWorkers(2)
                 .build();
 
-        cluster = new ClusterPool(streamConfiguration.eventStream(), new RoundRobin(NOOPSessionPersistence.INSTANCE), "TestPool");
+        cluster = new ClusterPool(streamConfiguration.eventStream(), new RoundRobin(NOOPSessionPersistence.INSTANCE));
         healthCheckService = new HealthCheckService(healthCheckConfiguration, cluster.eventPublisher());
 
         TCPHealthCheck healthCheck = new TCPHealthCheck(tcpServer.socketAddress, Duration.ofMillis(10));

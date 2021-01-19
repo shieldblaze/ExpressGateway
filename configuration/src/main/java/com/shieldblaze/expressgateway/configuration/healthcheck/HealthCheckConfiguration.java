@@ -30,6 +30,11 @@ public class HealthCheckConfiguration extends ConfigurationMarshaller {
     @Expose
     private final int timeInterval;
 
+    public static final HealthCheckConfiguration DEFAULT = new HealthCheckConfiguration(
+            Runtime.getRuntime().availableProcessors(),
+            1000 * 10 // 10 Seconds
+    );
+
     HealthCheckConfiguration(int workers, int timeInterval) {
         this.workers = workers;
         this.timeInterval = timeInterval;

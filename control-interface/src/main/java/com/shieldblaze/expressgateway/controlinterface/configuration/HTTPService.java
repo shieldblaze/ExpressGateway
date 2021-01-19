@@ -19,6 +19,7 @@ package com.shieldblaze.expressgateway.controlinterface.configuration;
 
 import com.shieldblaze.expressgateway.configuration.http.HTTPConfiguration;
 import com.shieldblaze.expressgateway.configuration.http.HTTPConfigurationBuilder;
+import io.grpc.Status;
 import io.grpc.stub.StreamObserver;
 
 public final class HTTPService extends HTTPServiceGrpc.HTTPServiceImplBase {
@@ -50,10 +51,8 @@ public final class HTTPService extends HTTPServiceGrpc.HTTPServiceImplBase {
                     .setResponseText("Success")
                     .build();
         } catch (Exception ex) {
-            response = Configuration.ConfigurationResponse.newBuilder()
-                    .setSuccess(false)
-                    .setResponseText("Error: " + ex.getLocalizedMessage())
-                    .build();
+            responseObserver.onError(Status.INVALID_ARGUMENT.augmentDescription(ex.getLocalizedMessage()).asRuntimeException());
+            return;
         }
 
         responseObserver.onNext(response);
@@ -84,8 +83,7 @@ public final class HTTPService extends HTTPServiceGrpc.HTTPServiceImplBase {
             responseObserver.onNext(http);
             responseObserver.onCompleted();
         } catch (Exception ex) {
-            responseObserver.onError(ex);
-            responseObserver.onCompleted();
+            responseObserver.onError(Status.INVALID_ARGUMENT.augmentDescription(ex.getLocalizedMessage()).asRuntimeException());
         }
     }
 }

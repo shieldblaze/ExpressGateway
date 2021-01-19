@@ -64,6 +64,22 @@ public final class HTTPConfiguration extends ConfigurationMarshaller {
     @Expose
     private int brotliCompressionLevel;
 
+    public static final HTTPConfiguration DEFAULT = new HTTPConfiguration();
+    static {
+        DEFAULT.maxContentLength = 500000000;
+        DEFAULT.h2InitialWindowSize = 65535;
+        DEFAULT.h2MaxConcurrentStreams = 1000;
+        DEFAULT.h2MaxHeaderListSize = 262144;
+        DEFAULT.h2MaxHeaderTableSize = 65536;
+        DEFAULT.h2MaxFrameSize = 16777215;
+        DEFAULT.maxInitialLineLength = 1024 * 8;
+        DEFAULT.maxHeaderSize = 1024 * 8;
+        DEFAULT.maxChunkSize = 1024 * 8;
+        DEFAULT.compressionThreshold = 1024;
+        DEFAULT.deflateCompressionLevel = 6;
+        DEFAULT.brotliCompressionLevel = 4;
+    }
+
     HTTPConfiguration() {
         // Prevent outside initialization
     }

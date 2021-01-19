@@ -17,26 +17,20 @@
  */
 package com.shieldblaze.expressgateway.controlinterface.configuration;
 
-import com.google.protobuf.ProtocolStringList;
 import com.shieldblaze.expressgateway.configuration.tls.CertificateKeyPair;
-import com.shieldblaze.expressgateway.configuration.tls.Cipher;
 import com.shieldblaze.expressgateway.configuration.tls.MutualTLS;
-import com.shieldblaze.expressgateway.configuration.tls.Protocol;
 import com.shieldblaze.expressgateway.configuration.tls.TLSConfiguration;
 import com.shieldblaze.expressgateway.configuration.tls.TLSConfigurationBuilder;
 import com.shieldblaze.expressgateway.controlinterface.tls.TLS;
 import com.shieldblaze.expressgateway.controlinterface.tls.TLSServerServiceGrpc;
+import io.grpc.Status;
 import io.grpc.stub.StreamObserver;
 
-import java.io.FileWriter;
 import java.io.IOException;
 import java.security.cert.X509Certificate;
-import java.util.ArrayList;
 import java.util.Base64;
 import java.util.HashMap;
-import java.util.List;
 import java.util.Map;
-import java.util.concurrent.ConcurrentHashMap;
 import java.util.stream.Collectors;
 
 public final class TLSServerService extends TLSServerServiceGrpc.TLSServerServiceImplBase {
@@ -64,8 +58,8 @@ public final class TLSServerService extends TLSServerServiceGrpc.TLSServerServic
                     .withUseStartTLS(request.getUseStartTLS())
                     .withSessionCacheSize(request.getSessionCacheSize())
                     .withSessionTimeout(request.getSessionTimeout())
-                    .withProtocols(Utils.protocolConverter(request.getProtocolsList()))
-                    .withCiphers(Utils.cipherConverter(request.getCiphersList()))
+                    .withProtocols(Common.protocolConverter(request.getProtocolsList()))
+                    .withCiphers(Common.cipherConverter(request.getCiphersList()))
                     .withMutualTLS(mutualTLS)
                     .build();
 
@@ -81,10 +75,8 @@ public final class TLSServerService extends TLSServerServiceGrpc.TLSServerServic
                     .build();
 
         } catch (Exception ex) {
-            response = TLS.ConfigurationResponse.newBuilder()
-                    .setSuccess(false)
-                    .setResponseText("Error: " + ex.getLocalizedMessage())
-                    .build();
+            responseObserver.onError(Status.INVALID_ARGUMENT.augmentDescription(ex.getLocalizedMessage()).asRuntimeException());
+            return;
         }
 
         responseObserver.onNext(response);
@@ -110,13 +102,13 @@ public final class TLSServerService extends TLSServerServiceGrpc.TLSServerServic
                                 .setCertificateChain(certificateChain.toString())
                                 .setPrivateKey("")
                                 .setUseOCSP(entry.getValue().useOCSPStapling())
-                        .build());
+                                .build());
             }
 
             TLS.MutualTLS mutualTLS = TLS.MutualTLS.NOT_REQUIRED;
             if (tlsConfiguration.mutualTLS() == MutualTLS.REQUIRED) {
                 mutualTLS = TLS.MutualTLS.REQUIRED;
-            } else if (tlsConfiguration.mutualTLS() == MutualTLS.OPTIONAL)  {
+            } else if (tlsConfiguration.mutualTLS() == MutualTLS.OPTIONAL) {
                 mutualTLS = TLS.MutualTLS.OPTIONAL;
             }
 
@@ -135,8 +127,7 @@ public final class TLSServerService extends TLSServerServiceGrpc.TLSServerServic
             responseObserver.onNext(server);
             responseObserver.onCompleted();
         } catch (Exception ex) {
-            responseObserver.onError(ex);
-            responseObserver.onCompleted();
+            responseObserver.onError(Status.INVALID_ARGUMENT.augmentDescription(ex.getLocalizedMessage()).asRuntimeException());
         }
     }
 

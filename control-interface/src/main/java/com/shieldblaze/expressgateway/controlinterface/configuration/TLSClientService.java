@@ -17,24 +17,16 @@
  */
 package com.shieldblaze.expressgateway.controlinterface.configuration;
 
-import com.google.protobuf.ProtocolStringList;
 import com.shieldblaze.expressgateway.configuration.tls.CertificateKeyPair;
-import com.shieldblaze.expressgateway.configuration.tls.Cipher;
-import com.shieldblaze.expressgateway.configuration.tls.Protocol;
 import com.shieldblaze.expressgateway.configuration.tls.TLSConfiguration;
 import com.shieldblaze.expressgateway.configuration.tls.TLSConfigurationBuilder;
 import com.shieldblaze.expressgateway.controlinterface.tls.TLS;
 import com.shieldblaze.expressgateway.controlinterface.tls.TLSClientServiceGrpc;
+import io.grpc.Status;
 import io.grpc.stub.StreamObserver;
-import io.netty.handler.ssl.util.InsecureTrustManagerFactory;
 
-import javax.net.ssl.TrustManagerFactory;
-import java.io.FileWriter;
-import java.security.KeyStore;
 import java.security.cert.X509Certificate;
-import java.util.ArrayList;
 import java.util.Base64;
-import java.util.List;
 import java.util.stream.Collectors;
 
 public class TLSClientService extends TLSClientServiceGrpc.TLSClientServiceImplBase {
@@ -45,8 +37,8 @@ public class TLSClientService extends TLSClientServiceGrpc.TLSClientServiceImplB
 
         try {
             TLSConfiguration tlsConfiguration = TLSConfigurationBuilder.forClient()
-                    .withProtocols(Utils.protocolConverter(request.getProtocolsList()))
-                    .withCiphers(Utils.cipherConverter(request.getCiphersList()))
+                    .withProtocols(Common.protocolConverter(request.getProtocolsList()))
+                    .withCiphers(Common.cipherConverter(request.getCiphersList()))
                     .withAcceptAllCertificate(request.getAcceptAllCertificates())
                     .withUseStartTLS(request.getUseStartTLS())
                     .build();
@@ -64,10 +56,8 @@ public class TLSClientService extends TLSClientServiceGrpc.TLSClientServiceImplB
                     .setResponseText("Success")
                     .build();
         } catch (Exception ex) {
-            response = TLS.ConfigurationResponse.newBuilder()
-                    .setSuccess(false)
-                    .setResponseText("Error: " + ex.getLocalizedMessage())
-                    .build();
+            responseObserver.onError(Status.INVALID_ARGUMENT.augmentDescription(ex.getLocalizedMessage()).asRuntimeException());
+            return;
         }
 
         responseObserver.onNext(response);
@@ -99,9 +89,7 @@ public class TLSClientService extends TLSClientServiceGrpc.TLSClientServiceImplB
             responseObserver.onNext(client);
             responseObserver.onCompleted();
         } catch (Exception ex) {
-            ex.printStackTrace();
-            responseObserver.onError(ex);
-            responseObserver.onCompleted();
+            responseObserver.onError(Status.INVALID_ARGUMENT.augmentDescription(ex.getLocalizedMessage()).asRuntimeException());
         }
     }
 }

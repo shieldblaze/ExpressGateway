@@ -71,4 +71,9 @@ public final class FourTupleHash implements SessionPersistence<Node, Node, InetS
     public void clear() {
         routeMap.clear();
     }
+
+    @Override
+    public String name() {
+        return "FourTupleHash";
+    }
 }

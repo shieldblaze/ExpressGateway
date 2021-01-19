@@ -34,7 +34,6 @@ public final class TransportConfigurationBuilder {
     private int socketReceiveBufferSize;
     private int socketSendBufferSize;
     private int tcpFastOpenMaximumPendingRequestsCount;
-    private int backendSocketTimeout;
     private int backendConnectTimeout;
     private int connectionIdleTimeout;
 
@@ -108,14 +107,6 @@ public final class TransportConfigurationBuilder {
     }
 
     /**
-     * Set Backend Socket Timeout
-     */
-    public TransportConfigurationBuilder withBackendSocketTimeout(int BackendSocketTimeout) {
-        this.backendSocketTimeout = BackendSocketTimeout;
-        return this;
-    }
-
-    /**
      * Set Backend Connect Timeout
      */
     public TransportConfigurationBuilder withBackendConnectTimeout(int BackendConnectTimeout) {
@@ -146,7 +137,6 @@ public final class TransportConfigurationBuilder {
         ObjectUtil.checkPositive(tcpConnectionBacklog, "TCP Connection Backlog");
         ObjectUtil.checkPositive(tcpFastOpenMaximumPendingRequestsCount, "TCP Fast Open Maximum Pending Requests");
         ObjectUtil.checkPositive(backendConnectTimeout, "Backend Connect Timeout");
-        ObjectUtil.checkPositive(backendSocketTimeout, "Backend Socket Timeout");
         ObjectUtil.checkPositive(connectionIdleTimeout, "Connection Idle Timeout");
 
         if (transportType == TransportType.EPOLL && !Epoll.isAvailable()) {
@@ -200,7 +190,6 @@ public final class TransportConfigurationBuilder {
                 .socketSendBufferSize(socketSendBufferSize)
                 .tcpFastOpenMaximumPendingRequests(tcpFastOpenMaximumPendingRequestsCount)
                 .backendConnectTimeout(backendConnectTimeout)
-                .backendSocketTimeout(backendSocketTimeout)
                 .connectionIdleTimeout(connectionIdleTimeout);
     }
 }

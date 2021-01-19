@@ -23,6 +23,8 @@ import com.shieldblaze.expressgateway.configuration.CoreConfiguration;
 import io.netty.channel.AdaptiveRecvByteBufAllocator;
 import io.netty.channel.FixedRecvByteBufAllocator;
 import io.netty.channel.RecvByteBufAllocator;
+import io.netty.channel.epoll.Epoll;
+import io.netty.incubator.channel.uring.IOUring;
 
 import java.io.IOException;
 
@@ -53,13 +55,30 @@ public final class TransportConfiguration extends ConfigurationMarshaller {
     private int tcpFastOpenMaximumPendingRequests;
 
     @Expose
-    private int backendSocketTimeout;
-
-    @Expose
     private int backendConnectTimeout;
 
     @Expose
     private int connectionIdleTimeout;
+
+    public static final TransportConfiguration DEFAULT = new TransportConfiguration();
+    static {
+        if (IOUring.isAvailable()) {
+            DEFAULT.transportType = TransportType.IO_URING;
+        } else if (Epoll.isAvailable()) {
+            DEFAULT.transportType = TransportType.EPOLL;
+        } else {
+            DEFAULT.transportType = TransportType.NIO;
+        }
+
+        DEFAULT.receiveBufferAllocationType = ReceiveBufferAllocationType.ADAPTIVE;
+        DEFAULT.receiveBufferSizes(new int[]{512, 9001, 65535});
+        DEFAULT.tcpConnectionBacklog = 50_000;
+        DEFAULT.socketSendBufferSize = 67108864;
+        DEFAULT.socketReceiveBufferSize = 67108864;
+        DEFAULT.tcpFastOpenMaximumPendingRequests = 100_000;
+        DEFAULT.backendConnectTimeout = 1000 * 10;     // 10 Seconds
+        DEFAULT.connectionIdleTimeout = 1000 * 60 * 5; // 5 Minutes
+    }
 
     public TransportType transportType() {
         return transportType;
@@ -129,15 +148,6 @@ public final class TransportConfiguration extends ConfigurationMarshaller {
 
     TransportConfiguration tcpFastOpenMaximumPendingRequests(int TCPFastOpenMaximumPendingRequests) {
         this.tcpFastOpenMaximumPendingRequests = TCPFastOpenMaximumPendingRequests;
-        return this;
-    }
-
-    public int backendSocketTimeout() {
-        return backendSocketTimeout;
-    }
-
-    TransportConfiguration backendSocketTimeout(int backendSocketTimeout) {
-        this.backendSocketTimeout = backendSocketTimeout;
         return this;
     }
 

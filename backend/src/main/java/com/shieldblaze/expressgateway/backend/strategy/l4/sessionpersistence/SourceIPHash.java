@@ -100,6 +100,11 @@ public final class SourceIPHash implements SessionPersistence<Node, Node, InetSo
         routeMap.clear();
     }
 
+    @Override
+    public String name() {
+        return "SourceIPHash";
+    }
+
     private int ipv4WithMask(Request request) {
         return ipv4WithMask(request.socketAddress());
     }

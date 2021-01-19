@@ -33,6 +33,7 @@ import io.netty.channel.ChannelHandler;
 
 import java.net.InetSocketAddress;
 import java.util.UUID;
+import java.util.concurrent.atomic.AtomicInteger;
 
 /**
  * {@link L4LoadBalancer} holds base functions for a L4-Load Balancer.
@@ -40,6 +41,9 @@ import java.util.UUID;
 public abstract class L4LoadBalancer {
 
     public final String ID = UUID.randomUUID().toString();
+
+    private static final AtomicInteger counter = new AtomicInteger(0);
+    private String name = "L4LoadBalancer#" + counter.incrementAndGet();
 
     private final InetSocketAddress bindAddress;
     private final L4FrontListener l4FrontListener;
@@ -53,6 +57,7 @@ public abstract class L4LoadBalancer {
     private final EventLoopFactory eventLoopFactory;
 
     /**
+     * @param name              Name of this Load Balancer
      * @param bindAddress       {@link InetSocketAddress} on which {@link L4FrontListener} will bind and listen.
      * @param l4FrontListener   {@link L4FrontListener} for listening traffic
      * @param cluster           {@link Cluster} to be Load Balanced
@@ -62,13 +67,19 @@ public abstract class L4LoadBalancer {
      * @param channelHandler    {@link ChannelHandler} to use for handling traffic
      * @throws NullPointerException If a required parameter if {@code null}
      */
-    public L4LoadBalancer(@NonNull InetSocketAddress bindAddress,
+    public L4LoadBalancer(String name,
+                          @NonNull InetSocketAddress bindAddress,
                           @NonNull L4FrontListener l4FrontListener,
                           @NonNull Cluster cluster,
                           @NonNull CoreConfiguration coreConfiguration,
                           TLSConfiguration tlsForServer,
                           TLSConfiguration tlsForClient,
                           ChannelHandler channelHandler) {
+
+        if (name != null && !name.isEmpty()) {
+            this.name = name;
+        }
+
         this.bindAddress = bindAddress;
         this.l4FrontListener = l4FrontListener;
         this.cluster = cluster;
@@ -81,6 +92,13 @@ public abstract class L4LoadBalancer {
         this.eventLoopFactory = new EventLoopFactory(coreConfiguration);
 
         l4FrontListener.l4LoadBalancer(this);
+    }
+
+    /**
+     * Name of this L4 Load Balancer
+     */
+    public String name() {
+        return name;
     }
 
     /**

@@ -17,25 +17,30 @@
  */
 package com.shieldblaze.expressgateway.core.loadbalancer;
 
+import com.shieldblaze.expressgateway.core.events.L4FrontListenerStartupEvent;
+
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
 
-public class LoadBalancerRegistry {
+public class LoadBalancerProperty {
+    private String profileName;
+    private L4FrontListenerStartupEvent startupEvent;
 
-    /**
-     * Use {@link #add(L4LoadBalancer, LoadBalancerProperty)} to register {@link L4LoadBalancer}
-     */
-    public static final Map<L4LoadBalancer, LoadBalancerProperty> registry = new ConcurrentHashMap<>();
-
-    public static void add(L4LoadBalancer l4LoadBalancer, LoadBalancerProperty loadBalancerProperty) {
-        if (registry.containsKey(l4LoadBalancer)) {
-            throw new IllegalArgumentException("LoadBalancer is already registered");
-        }
-
-        registry.put(l4LoadBalancer, loadBalancerProperty);
+    public String profileName() {
+        return profileName;
     }
 
-    public static void remove(L4LoadBalancer l4LoadBalancer) {
-        registry.remove(l4LoadBalancer);
+    public LoadBalancerProperty profileName(String profileName) {
+        this.profileName = profileName;
+        return this;
+    }
+
+    public L4FrontListenerStartupEvent startupEvent() {
+        return startupEvent;
+    }
+
+    public LoadBalancerProperty startupEvent(L4FrontListenerStartupEvent startupEvent) {
+        this.startupEvent = startupEvent;
+        return this;
     }
 }

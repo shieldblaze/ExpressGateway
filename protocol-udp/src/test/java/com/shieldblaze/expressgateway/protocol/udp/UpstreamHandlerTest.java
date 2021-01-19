@@ -63,7 +63,6 @@ final class UpstreamHandlerTest {
                 .withTransportType(TransportType.NIO)
                 .withTCPFastOpenMaximumPendingRequests(2147483647)
                 .withBackendConnectTimeout(1000 * 5)
-                .withBackendSocketTimeout(1000 * 5)
                 .withReceiveBufferAllocationType(ReceiveBufferAllocationType.FIXED)
                 .withReceiveBufferSizes(new int[]{100})
                 .withSocketReceiveBufferSize(2147483647)

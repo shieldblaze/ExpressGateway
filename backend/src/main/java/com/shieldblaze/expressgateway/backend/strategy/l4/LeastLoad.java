@@ -27,6 +27,7 @@ import com.shieldblaze.expressgateway.backend.exceptions.NoNodeAvailableExceptio
 import com.shieldblaze.expressgateway.backend.loadbalance.SessionPersistence;
 import com.shieldblaze.expressgateway.concurrent.event.Event;
 
+import java.io.IOException;
 import java.net.InetSocketAddress;
 import java.util.Optional;
 
@@ -42,6 +43,11 @@ public final class LeastLoad extends L4Balance {
      */
     public LeastLoad(SessionPersistence<Node, Node, InetSocketAddress, Node> sessionPersistence) {
         super(sessionPersistence);
+    }
+
+    @Override
+    public String name() {
+        return "LeastLoad";
     }
 
     @Override
@@ -79,5 +85,10 @@ public final class LeastLoad extends L4Balance {
                 sessionPersistence.remove(nodeEvent.node());
             }
         }
+    }
+
+    @Override
+    public void close() throws IOException {
+        sessionPersistence.clear();
     }
 }

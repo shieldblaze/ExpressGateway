@@ -58,4 +58,9 @@ public final class NOOPSessionPersistence implements SessionPersistence<Node, No
     public void clear() {
         // Does nothing
     }
+
+    @Override
+    public String name() {
+        return "NOOP";
+    }
 }

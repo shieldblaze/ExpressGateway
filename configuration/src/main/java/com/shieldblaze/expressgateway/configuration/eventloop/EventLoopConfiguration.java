@@ -37,6 +37,12 @@ public final class EventLoopConfiguration extends ConfigurationMarshaller {
         // Prevent outside initialization
     }
 
+    public static final EventLoopConfiguration DEFAULT = new EventLoopConfiguration();
+    static {
+        DEFAULT.parentWorkers = Runtime.getRuntime().availableProcessors();
+        DEFAULT.childWorkers = DEFAULT.parentWorkers * 2;
+    }
+
     public int parentWorkers() {
         return parentWorkers;
     }

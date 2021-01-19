@@ -79,7 +79,6 @@ class SimpleTest {
                 .withTransportType(TransportType.NIO)
                 .withTCPFastOpenMaximumPendingRequests(2147483647)
                 .withBackendConnectTimeout(10000 * 5)
-                .withBackendSocketTimeout(10000 * 5)
                 .withReceiveBufferAllocationType(ReceiveBufferAllocationType.FIXED)
                 .withReceiveBufferSizes(new int[]{65535})
                 .withSocketReceiveBufferSize(2147483647)

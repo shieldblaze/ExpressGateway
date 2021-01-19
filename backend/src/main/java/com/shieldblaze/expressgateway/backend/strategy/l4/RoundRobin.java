@@ -31,6 +31,7 @@ import com.shieldblaze.expressgateway.backend.loadbalance.SessionPersistence;
 import com.shieldblaze.expressgateway.common.algo.roundrobin.RoundRobinIndexGenerator;
 import com.shieldblaze.expressgateway.concurrent.event.Event;
 
+import java.io.IOException;
 import java.net.InetSocketAddress;
 
 /**
@@ -47,6 +48,11 @@ public final class RoundRobin extends L4Balance {
      */
     public RoundRobin(SessionPersistence<Node, Node, InetSocketAddress, Node> sessionPersistence) {
         super(sessionPersistence);
+    }
+
+    @Override
+    public String name() {
+        return "RoundRobin";
     }
 
     @Override
@@ -81,5 +87,10 @@ public final class RoundRobin extends L4Balance {
                 roundRobinIndexGenerator.incMaxIndex();
             }
         }
+    }
+
+    @Override
+    public void close() throws IOException {
+        sessionPersistence.clear();
     }
 }

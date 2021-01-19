@@ -19,6 +19,7 @@ package com.shieldblaze.expressgateway.controlinterface.configuration;
 
 import com.shieldblaze.expressgateway.configuration.eventstream.EventStreamConfiguration;
 import com.shieldblaze.expressgateway.configuration.eventstream.EventStreamConfigurationBuilder;
+import io.grpc.Status;
 import io.grpc.stub.StreamObserver;
 
 public final class EventStreamService extends EventStreamServiceGrpc.EventStreamServiceImplBase {
@@ -39,10 +40,8 @@ public final class EventStreamService extends EventStreamServiceGrpc.EventStream
                     .setResponseText("Success")
                     .build();
         } catch (Exception ex) {
-            response = Configuration.ConfigurationResponse.newBuilder()
-                    .setSuccess(false)
-                    .setResponseText("Error: " + ex.getLocalizedMessage())
-                    .build();
+            responseObserver.onError(Status.INVALID_ARGUMENT.augmentDescription(ex.getLocalizedMessage()).asRuntimeException());
+            return;
         }
 
         responseObserver.onNext(response);
@@ -61,8 +60,7 @@ public final class EventStreamService extends EventStreamServiceGrpc.EventStream
             responseObserver.onNext(eventStream);
             responseObserver.onCompleted();
         } catch (Exception ex) {
-            responseObserver.onError(ex);
-            responseObserver.onCompleted();
+            responseObserver.onError(Status.INVALID_ARGUMENT.augmentDescription(ex.getLocalizedMessage()).asRuntimeException());
         }
     }
 }

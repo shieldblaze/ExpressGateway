@@ -128,10 +128,9 @@ message Transport {
   int32 socketReceiveBufferSize = 5;
   int32 socketSendBufferSize = 6;
   int32 tcpFastOpenMaximumPendingRequests = 7;
-  int32 backendSocketTimeout = 8;
-  int32 backendConnectTimeout = 9;
-  int32 connectionIdleTimeout = 10;
-  string profileName = 11;
+  int32 backendConnectTimeout = 8;
+  int32 connectionIdleTimeout = 9;
+  string profileName = 10;
 }
 
 message GetTransportService {

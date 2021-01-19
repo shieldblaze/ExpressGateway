@@ -32,6 +32,7 @@ import java.util.Objects;
  */
 public final class L4LoadBalancerBuilder {
 
+    private String name;
     private InetSocketAddress bindAddress;
     private L4FrontListener l4FrontListener;
     private Cluster cluster;
@@ -46,6 +47,11 @@ public final class L4LoadBalancerBuilder {
 
     public static L4LoadBalancerBuilder newBuilder() {
         return new L4LoadBalancerBuilder();
+    }
+
+    public L4LoadBalancerBuilder withName(String name) {
+        this.name = name;
+        return this;
     }
 
     public L4LoadBalancerBuilder withBindAddress(InetSocketAddress bindAddress) {
@@ -88,6 +94,6 @@ public final class L4LoadBalancerBuilder {
         Objects.requireNonNull(l4FrontListener, "L4FrontListener");
         Objects.requireNonNull(cluster, "Backend");
         Objects.requireNonNull(coreConfiguration, "CoreConfiguration");
-        return new DefaultL4LoadBalancer(bindAddress, l4FrontListener, cluster, coreConfiguration, tlsForServer, tlsForClient, channelHandler);
+        return new DefaultL4LoadBalancer(name, bindAddress, l4FrontListener, cluster, coreConfiguration, tlsForServer, tlsForClient, channelHandler);
     }
 }

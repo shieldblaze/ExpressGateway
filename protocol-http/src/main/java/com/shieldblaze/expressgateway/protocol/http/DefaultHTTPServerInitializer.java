@@ -33,7 +33,7 @@ import org.apache.logging.log4j.Logger;
 
 import java.time.Duration;
 
-final class DefaultHTTPServerInitializer extends HTTPServerInitializer {
+public final class DefaultHTTPServerInitializer extends HTTPServerInitializer {
 
     private static final Logger logger = LogManager.getLogger(DefaultHTTPServerInitializer.class);
 

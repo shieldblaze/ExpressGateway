@@ -21,6 +21,7 @@ import com.shieldblaze.expressgateway.configuration.transport.ReceiveBufferAlloc
 import com.shieldblaze.expressgateway.configuration.transport.TransportConfiguration;
 import com.shieldblaze.expressgateway.configuration.transport.TransportConfigurationBuilder;
 import com.shieldblaze.expressgateway.configuration.transport.TransportType;
+import io.grpc.Status;
 import io.grpc.stub.StreamObserver;
 
 public final class TransportService extends TransportServiceGrpc.TransportServiceImplBase {
@@ -68,7 +69,6 @@ public final class TransportService extends TransportServiceGrpc.TransportServic
                     .withSocketSendBufferSize(request.getSocketSendBufferSize())
                     .withTCPConnectionBacklog(request.getTcpConnectionBacklog())
                     .withBackendConnectTimeout(request.getBackendConnectTimeout())
-                    .withBackendSocketTimeout(request.getBackendSocketTimeout())
                     .withConnectionIdleTimeout(request.getConnectionIdleTimeout())
                     .withTransportType(transportType)
                     .withReceiveBufferSizes(bufferSizes)
@@ -82,10 +82,8 @@ public final class TransportService extends TransportServiceGrpc.TransportServic
                     .setResponseText("Success")
                     .build();
         } catch (Exception ex) {
-            response = Configuration.ConfigurationResponse.newBuilder()
-                    .setSuccess(false)
-                    .setResponseText("Error: " + ex.getLocalizedMessage())
-                    .build();
+            responseObserver.onError(Status.INVALID_ARGUMENT.augmentDescription(ex.getLocalizedMessage()).asRuntimeException());
+            return;
         }
 
         responseObserver.onNext(response);
@@ -116,7 +114,6 @@ public final class TransportService extends TransportServiceGrpc.TransportServic
                     .setSocketReceiveBufferSize(transportConfiguration.socketReceiveBufferSize())
                     .setSocketSendBufferSize(transportConfiguration.socketSendBufferSize())
                     .setTcpFastOpenMaximumPendingRequests(transportConfiguration.tcpFastOpenMaximumPendingRequests())
-                    .setBackendSocketTimeout(transportConfiguration.backendSocketTimeout())
                     .setBackendConnectTimeout(transportConfiguration.backendConnectTimeout())
                     .setConnectionIdleTimeout(transportConfiguration.connectionIdleTimeout())
                     .setProfileName(request.getProfileName())
@@ -125,8 +122,7 @@ public final class TransportService extends TransportServiceGrpc.TransportServic
             responseObserver.onNext(transport);
             responseObserver.onCompleted();
         } catch (Exception ex) {
-            responseObserver.onError(ex);
-            responseObserver.onCompleted();
+            responseObserver.onError(Status.INVALID_ARGUMENT.augmentDescription(ex.getLocalizedMessage()).asRuntimeException());
         }
     }
 }
