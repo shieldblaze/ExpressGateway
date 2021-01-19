@@ -19,7 +19,6 @@ package com.shieldblaze.expressgateway.configuration.transport;
 
 import com.google.gson.annotations.Expose;
 import com.shieldblaze.expressgateway.configuration.ConfigurationMarshaller;
-import com.shieldblaze.expressgateway.configuration.CoreConfiguration;
 import io.netty.channel.AdaptiveRecvByteBufAllocator;
 import io.netty.channel.FixedRecvByteBufAllocator;
 import io.netty.channel.RecvByteBufAllocator;
@@ -169,11 +168,11 @@ public final class TransportConfiguration extends ConfigurationMarshaller {
         return this;
     }
 
-    public static TransportConfiguration loadFrom(String profileName) throws IOException {
-        return loadFrom(TransportConfiguration.class, profileName, false, "Transport.json");
+    public static TransportConfiguration loadFrom() throws IOException {
+        return loadFrom(TransportConfiguration.class, "Transport.json");
     }
 
-    public void saveTo(String profileName) throws IOException {
-        saveTo(this, profileName, false, "Transport.json");
+    public void saveTo() throws IOException {
+        saveTo(this, "Transport.json");
     }
 }

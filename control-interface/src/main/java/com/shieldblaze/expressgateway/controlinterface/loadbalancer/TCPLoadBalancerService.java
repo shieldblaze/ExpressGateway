@@ -19,12 +19,13 @@ package com.shieldblaze.expressgateway.controlinterface.loadbalancer;
 
 import com.shieldblaze.expressgateway.backend.cluster.Cluster;
 import com.shieldblaze.expressgateway.backend.cluster.ClusterPool;
-import com.shieldblaze.expressgateway.common.utils.Number;
 import com.shieldblaze.expressgateway.configuration.CoreConfiguration;
 import com.shieldblaze.expressgateway.configuration.CoreConfigurationBuilder;
 import com.shieldblaze.expressgateway.configuration.buffer.BufferConfiguration;
 import com.shieldblaze.expressgateway.configuration.eventloop.EventLoopConfiguration;
 import com.shieldblaze.expressgateway.configuration.eventstream.EventStreamConfiguration;
+import com.shieldblaze.expressgateway.configuration.http.HTTPConfiguration;
+import com.shieldblaze.expressgateway.configuration.http.HTTPConfigurationBuilder;
 import com.shieldblaze.expressgateway.configuration.tls.TLSConfiguration;
 import com.shieldblaze.expressgateway.configuration.transport.TransportConfiguration;
 import com.shieldblaze.expressgateway.core.events.L4FrontListenerStartupEvent;
@@ -32,49 +33,53 @@ import com.shieldblaze.expressgateway.core.loadbalancer.L4LoadBalancer;
 import com.shieldblaze.expressgateway.core.loadbalancer.L4LoadBalancerBuilder;
 import com.shieldblaze.expressgateway.core.loadbalancer.LoadBalancerProperty;
 import com.shieldblaze.expressgateway.core.loadbalancer.LoadBalancerRegistry;
+import com.shieldblaze.expressgateway.protocol.http.DefaultHTTPServerInitializer;
+import com.shieldblaze.expressgateway.protocol.http.loadbalancer.HTTPLoadBalancerBuilder;
 import com.shieldblaze.expressgateway.protocol.tcp.TCPListener;
-import io.grpc.Metadata;
 import io.grpc.Status;
-import io.grpc.StatusException;
 import io.grpc.stub.StreamObserver;
 
 import java.net.InetSocketAddress;
 import java.util.Map;
-import java.util.concurrent.atomic.AtomicBoolean;
 
 public final class TCPLoadBalancerService extends TCPLoadBalancerServiceGrpc.TCPLoadBalancerServiceImplBase {
 
     @Override
-    public void start(Layer4LoadBalancer.TCPLoadBalancer request, StreamObserver<Layer4LoadBalancer.LoadBalancerResponse> responseObserver) {
-        Layer4LoadBalancer.LoadBalancerResponse response;
+    public void start(LoadBalancer.TCPLoadBalancer request, StreamObserver<LoadBalancer.LoadBalancerResponse> responseObserver) {
+        LoadBalancer.LoadBalancerResponse response;
 
         try {
             TransportConfiguration transportConfiguration;
             EventLoopConfiguration eventLoopConfiguration;
             BufferConfiguration bufferConfiguration;
             EventStreamConfiguration eventStreamConfiguration;
+            HTTPConfiguration httpConfiguration;
 
             TLSConfiguration forServer = null;
             TLSConfiguration forClient = null;
 
-            if (request.getProfileName().equalsIgnoreCase("default") || request.getProfileName().isBlank()) {
+            if (request.getUseDefaults()) {
                 transportConfiguration = TransportConfiguration.DEFAULT;
                 eventLoopConfiguration = EventLoopConfiguration.DEFAULT;
                 bufferConfiguration = BufferConfiguration.DEFAULT;
                 eventStreamConfiguration = EventStreamConfiguration.DEFAULT;
+                httpConfiguration = HTTPConfiguration.DEFAULT;
             } else {
-                transportConfiguration = TransportConfiguration.loadFrom(request.getProfileName());
-                eventLoopConfiguration = EventLoopConfiguration.loadFrom(request.getProfileName());
-                bufferConfiguration = BufferConfiguration.loadFrom(request.getProfileName());
-                eventStreamConfiguration = EventStreamConfiguration.loadFrom(request.getProfileName());
+                transportConfiguration = TransportConfiguration.loadFrom();
+                eventLoopConfiguration = EventLoopConfiguration.loadFrom();
+                bufferConfiguration = BufferConfiguration.loadFrom();
+                eventStreamConfiguration = EventStreamConfiguration.loadFrom();
+                httpConfiguration = HTTPConfiguration.loadFrom();
             }
 
-            if (request.getTlsForServer()) {
-                forServer = TLSConfiguration.loadFrom(request.getProfileName(), request.getTlsPassword(), true);
+            if (request.hasTlsServer()) {
+                LoadBalancer.TLSServer tlsServer = request.getTlsServer();
+                forServer = Common.server(tlsServer);
             }
 
-            if (request.getTlsForClient()) {
-                forClient = TLSConfiguration.loadFrom(request.getProfileName(), request.getTlsPassword(), false);
+            if (request.hasTlsClient()) {
+                LoadBalancer.TLSClient tlsClient = request.getTlsClient();
+                forClient = Common.client(tlsClient);
             }
 
             CoreConfiguration configuration = CoreConfigurationBuilder.newBuilder()
@@ -85,28 +90,38 @@ public final class TCPLoadBalancerService extends TCPLoadBalancerServiceGrpc.TCP
 
             Cluster cluster = new ClusterPool(eventStreamConfiguration.eventStream(), Common.l4(request.getStrategy(), Common.l4(request.getSessionPersistence())));
 
-            L4LoadBalancerBuilder l4LoadBalancerBuilder = L4LoadBalancerBuilder.newBuilder()
-                    .withL4FrontListener(new TCPListener())
-                    .withBindAddress(new InetSocketAddress(request.getBindAddress(), request.getBindPort()))
-                    .withCluster(cluster)
-                    .withCoreConfiguration(configuration)
-                    .withName(request.getName());
+            L4LoadBalancer loadBalancer;
 
-            if (forServer != null) {
-                l4LoadBalancerBuilder.withTlsForServer(forServer);
+            if (request.getLayer7() == LoadBalancer.Layer7.HTTP) {
+                loadBalancer = HTTPLoadBalancerBuilder.newBuilder()
+                        .withL4FrontListener(new TCPListener())
+                        .withHTTPInitializer(new DefaultHTTPServerInitializer())
+                        .withBindAddress(new InetSocketAddress(request.getBindAddress(), request.getBindPort()))
+                        .withCluster(cluster)
+                        .withCoreConfiguration(configuration)
+                        .withHTTPConfiguration(httpConfiguration)
+                        .withTLSForClient(forClient)
+                        .withTLSForServer(forServer)
+                        .withName(request.getName())
+                        .build();
+            } else {
+                loadBalancer = L4LoadBalancerBuilder.newBuilder()
+                        .withL4FrontListener(new TCPListener())
+                        .withBindAddress(new InetSocketAddress(request.getBindAddress(), request.getBindPort()))
+                        .withCluster(cluster)
+                        .withCoreConfiguration(configuration)
+                        .withTlsForClient(forClient)
+                        .withTlsForServer(forServer)
+                        .withName(request.getName())
+                        .build();
             }
 
-            if (forClient != null) {
-                l4LoadBalancerBuilder.withTlsForClient(forClient);
-            }
-
-            L4LoadBalancer l4LoadBalancer = l4LoadBalancerBuilder.build();
-            L4FrontListenerStartupEvent event = l4LoadBalancer.start();
+            L4FrontListenerStartupEvent event = loadBalancer.start();
             LoadBalancerProperty loadBalancerProperty = new LoadBalancerProperty().profileName(request.getProfileName()).startupEvent(event);
-            LoadBalancerRegistry.add(l4LoadBalancer, loadBalancerProperty);
+            LoadBalancerRegistry.add(loadBalancer, loadBalancerProperty);
 
-            response = Layer4LoadBalancer.LoadBalancerResponse.newBuilder()
-                    .setResponseText(l4LoadBalancer.ID)
+            response = LoadBalancer.LoadBalancerResponse.newBuilder()
+                    .setResponseText(loadBalancer.ID)
                     .build();
 
             responseObserver.onNext(response);
@@ -117,7 +132,7 @@ public final class TCPLoadBalancerService extends TCPLoadBalancerServiceGrpc.TCP
     }
 
     @Override
-    public void get(Layer4LoadBalancer.GetLoadBalancerRequest request, StreamObserver<Layer4LoadBalancer.TCPLoadBalancer> responseObserver) {
+    public void get(LoadBalancer.GetLoadBalancerRequest request, StreamObserver<LoadBalancer.TCPLoadBalancer> responseObserver) {
         try {
             L4LoadBalancer l4LoadBalancer = null;
             LoadBalancerProperty loadBalancerProperty = null;
@@ -141,11 +156,9 @@ public final class TCPLoadBalancerService extends TCPLoadBalancerServiceGrpc.TCP
                 throw new IllegalArgumentException("Load Balancer failed to start, Cause: " + loadBalancerProperty.startupEvent().throwable().getLocalizedMessage());
             }
 
-            Layer4LoadBalancer.TCPLoadBalancer response = Layer4LoadBalancer.TCPLoadBalancer.newBuilder()
+            LoadBalancer.TCPLoadBalancer response = LoadBalancer.TCPLoadBalancer.newBuilder()
                     .setBindAddress(l4LoadBalancer.bindAddress().getAddress().getHostAddress())
                     .setBindPort(l4LoadBalancer.bindAddress().getPort())
-                    .setTlsForServer(l4LoadBalancer.tlsForServer() != null)
-                    .setTlsForClient(l4LoadBalancer.tlsForClient() != null)
                     .setStrategy(l4LoadBalancer.cluster().loadBalance().name())
                     .setSessionPersistence(l4LoadBalancer.cluster().loadBalance().sessionPersistence().name())
                     .setProfileName(loadBalancerProperty.profileName())
@@ -159,8 +172,8 @@ public final class TCPLoadBalancerService extends TCPLoadBalancerServiceGrpc.TCP
     }
 
     @Override
-    public void stop(Layer4LoadBalancer.StopLoadBalancer request, StreamObserver<Layer4LoadBalancer.LoadBalancerResponse> responseObserver) {
-        Layer4LoadBalancer.LoadBalancerResponse response;
+    public void stop(LoadBalancer.StopLoadBalancer request, StreamObserver<LoadBalancer.LoadBalancerResponse> responseObserver) {
+        LoadBalancer.LoadBalancerResponse response;
 
         try {
             boolean isFound = false;
@@ -174,7 +187,7 @@ public final class TCPLoadBalancerService extends TCPLoadBalancerServiceGrpc.TCP
             }
 
             if (isFound) {
-                response = Layer4LoadBalancer.LoadBalancerResponse.newBuilder()
+                response = LoadBalancer.LoadBalancerResponse.newBuilder()
                         .setResponseText("Success")
                         .build();
             } else {

@@ -41,7 +41,7 @@ public final class BufferService extends BufferServiceGrpc.BufferServiceImplBase
                     .withHeapArena(request.getHeapArena())
                     .build();
 
-            bufferConfiguration.saveTo(request.getProfileName());
+            bufferConfiguration.saveTo();
 
             response = Configuration.ConfigurationResponse.newBuilder()
                     .setSuccess(true)
@@ -57,9 +57,9 @@ public final class BufferService extends BufferServiceGrpc.BufferServiceImplBase
     }
 
     @Override
-    public void get(Configuration.GetBuffer request, StreamObserver<Configuration.Buffer> responseObserver) {
+    public void get(Configuration.GetBufferRequest request, StreamObserver<Configuration.Buffer> responseObserver) {
         try {
-            BufferConfiguration bufferConfiguration = BufferConfiguration.loadFrom(request.getProfileName());
+            BufferConfiguration bufferConfiguration = BufferConfiguration.loadFrom();
 
             Configuration.Buffer buffer = Configuration.Buffer.newBuilder()
                     .setPreferDirect(bufferConfiguration.preferDirect())
@@ -71,7 +71,6 @@ public final class BufferService extends BufferServiceGrpc.BufferServiceImplBase
                     .setNormalCacheSize(bufferConfiguration.normalCacheSize())
                     .setUseCacheForAllThreads(bufferConfiguration.useCacheForAllThreads())
                     .setDirectMemoryCacheAlignment(bufferConfiguration.directMemoryCacheAlignment())
-                    .setProfileName(request.getProfileName())
                     .build();
 
             responseObserver.onNext(buffer);

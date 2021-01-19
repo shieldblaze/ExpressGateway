@@ -62,7 +62,6 @@ class TransportServiceTest {
 
         TransportServiceGrpc.TransportServiceBlockingStub transportService = TransportServiceGrpc.newBlockingStub(channel);
         Configuration.Transport transport = Configuration.Transport.newBuilder()
-                .setProfileName("Meow")
                 .setConnectionIdleTimeout(1000)
                 .setBackendConnectTimeout(1000)
                 .setTcpFastOpenMaximumPendingRequests(1000)
@@ -89,7 +88,6 @@ class TransportServiceTest {
 
         TransportServiceGrpc.TransportServiceBlockingStub transportService = TransportServiceGrpc.newBlockingStub(channel);
         Configuration.Transport transport = Configuration.Transport.newBuilder()
-                .setProfileName("Meow")
                 .setConnectionIdleTimeout(1000)
                 .setBackendConnectTimeout(1000)
                 .setTcpFastOpenMaximumPendingRequests(1000)
@@ -98,7 +96,7 @@ class TransportServiceTest {
                 .setTcpConnectionBacklog(1000)
                 .setReceiveBufferAllocationType(Configuration.Transport.ReceiveBufferAllocationType.FIXED)
                 .setType(Configuration.Transport.Type.NIO)
-                .addAllReceiveBufferSizes(Arrays.asList(1, 2))
+                .addAllReceiveBufferSizes(Arrays.asList(1, 2)) // Invalid buffer sizes
                 .build();
 
         assertThrows(StatusRuntimeException.class, () -> transportService.transport(transport));

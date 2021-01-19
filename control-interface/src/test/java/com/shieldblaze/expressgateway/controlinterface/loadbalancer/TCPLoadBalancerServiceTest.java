@@ -17,35 +17,36 @@
  */
 package com.shieldblaze.expressgateway.controlinterface.loadbalancer;
 
-import com.shieldblaze.expressgateway.controlinterface.loadbalancer.Layer4LoadBalancer.LoadBalancerResponse;
 import com.shieldblaze.expressgateway.controlinterface.node.NodeOuterClass;
 import com.shieldblaze.expressgateway.controlinterface.node.NodeService;
 import com.shieldblaze.expressgateway.controlinterface.node.NodeServiceGrpc;
 import io.grpc.ManagedChannel;
 import io.grpc.ManagedChannelBuilder;
 import io.grpc.Server;
-import io.grpc.StatusException;
 import io.grpc.netty.shaded.io.grpc.netty.NettyServerBuilder;
 import org.junit.jupiter.api.AfterAll;
-import org.junit.jupiter.api.Assertions;
 import org.junit.jupiter.api.BeforeAll;
+import org.junit.jupiter.api.MethodOrderer;
+import org.junit.jupiter.api.Order;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.TestMethodOrder;
 
 import java.io.IOException;
 import java.net.InetSocketAddress;
 import java.net.ServerSocket;
 import java.net.Socket;
-import java.net.UnknownHostException;
-import java.util.Arrays;
 
 import static org.junit.jupiter.api.Assertions.assertArrayEquals;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
+@TestMethodOrder(MethodOrderer.OrderAnnotation.class)
 class TCPLoadBalancerServiceTest {
 
     static Server server;
+    static ManagedChannel channel;
+    static String loadBalancerId;
 
     @BeforeAll
     static void setup() throws IOException {
@@ -56,41 +57,45 @@ class TCPLoadBalancerServiceTest {
                 .addService(new NodeService())
                 .build()
                 .start();
+
+        channel = ManagedChannelBuilder.forTarget("127.0.0.1:9110")
+                .usePlaintext()
+                .build();
     }
 
     @AfterAll
     static void shutdown() throws InterruptedException {
+        channel.shutdownNow();
         server.shutdownNow().awaitTermination();
     }
 
     @Test
+    @Order(1)
     void simpleServerLBClientTest() throws IOException, InterruptedException {
-        ManagedChannel channel = ManagedChannelBuilder.forTarget("127.0.0.1:9110")
-                .usePlaintext()
-                .build();
-
         new TCPServer().start();
 
         TCPLoadBalancerServiceGrpc.TCPLoadBalancerServiceBlockingStub tcpService = TCPLoadBalancerServiceGrpc.newBlockingStub(channel);
         NodeServiceGrpc.NodeServiceBlockingStub nodeService = NodeServiceGrpc.newBlockingStub(channel);
 
-        Layer4LoadBalancer.TCPLoadBalancer tcpLoadBalancer = Layer4LoadBalancer.TCPLoadBalancer.newBuilder()
+        LoadBalancer.TCPLoadBalancer tcpLoadBalancer = LoadBalancer.TCPLoadBalancer.newBuilder()
                 .setBindAddress("127.0.0.1")
                 .setBindPort(5000)
                 .setName("Meow")
                 .build();
 
-        LoadBalancerResponse loadBalancerResponse = tcpService.start(tcpLoadBalancer);
-        assertFalse(loadBalancerResponse.getResponseText().isEmpty()); // Load Balancer ID
+        LoadBalancer.LoadBalancerResponse loadBalancerResponse = tcpService.start(tcpLoadBalancer);
+        assertFalse(loadBalancerResponse.getResponseText().isEmpty()); // Load Balancer ID must exist
 
-        NodeOuterClass.addRequest addRequest = NodeOuterClass.addRequest.newBuilder()
+        loadBalancerId = loadBalancerResponse.getResponseText();
+
+        NodeOuterClass.AddRequest addRequest = NodeOuterClass.AddRequest.newBuilder()
                 .setAddress("127.0.0.1")
                 .setPort(5555)
                 .setLoadBalancerID(loadBalancerResponse.getResponseText())
                 .setMaxConnections(-1)
                 .build();
 
-        NodeOuterClass.addResponse addResponse = nodeService.add(addRequest);
+        NodeOuterClass.AddResponse addResponse = nodeService.add(addRequest);
         assertTrue(addResponse.getSuccess());
         assertFalse(addResponse.getNodeId().isEmpty()); // Load Balancer ID
 
@@ -102,7 +107,19 @@ class TCPLoadBalancerServiceTest {
         }
 
         Thread.sleep(2500L); // Wait for everything to settle down
-        channel.shutdownNow();
+    }
+
+    @Test
+    @Order(2)
+    void getTest() {
+        TCPLoadBalancerServiceGrpc.TCPLoadBalancerServiceBlockingStub tcpService = TCPLoadBalancerServiceGrpc.newBlockingStub(channel);
+        LoadBalancer.GetLoadBalancerRequest request = LoadBalancer.GetLoadBalancerRequest.newBuilder()
+                .setLoadBalancerId(loadBalancerId)
+                .build();
+
+        LoadBalancer.TCPLoadBalancer tcpLoadBalancer = tcpService.get(request);
+
+        assertEquals(loadBalancerId, tcpLoadBalancer);
     }
 
     private static final class TCPServer extends Thread {

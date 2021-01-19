@@ -41,8 +41,8 @@ import java.util.concurrent.atomic.AtomicBoolean;
 public final class UDPLoadBalancerService extends UDPLoadBalancerServiceGrpc.UDPLoadBalancerServiceImplBase {
 
     @Override
-    public void start(Layer4LoadBalancer.UDPLoadBalancer request, StreamObserver<Layer4LoadBalancer.LoadBalancerResponse> responseObserver) {
-        Layer4LoadBalancer.LoadBalancerResponse response;
+    public void start(LoadBalancer.UDPLoadBalancer request, StreamObserver<LoadBalancer.LoadBalancerResponse> responseObserver) {
+        LoadBalancer.LoadBalancerResponse response;
 
         try {
             TransportConfiguration transportConfiguration;
@@ -50,16 +50,16 @@ public final class UDPLoadBalancerService extends UDPLoadBalancerServiceGrpc.UDP
             BufferConfiguration bufferConfiguration;
             EventStreamConfiguration eventStreamConfiguration;
 
-            if (request.getProfileName().equalsIgnoreCase("default")) {
+            if (request.getUseDefaults()) {
                 transportConfiguration = TransportConfiguration.DEFAULT;
                 eventLoopConfiguration = EventLoopConfiguration.DEFAULT;
                 bufferConfiguration = BufferConfiguration.DEFAULT;
                 eventStreamConfiguration = EventStreamConfiguration.DEFAULT;
             } else {
-                transportConfiguration = TransportConfiguration.loadFrom(request.getProfileName());
-                eventLoopConfiguration = EventLoopConfiguration.loadFrom(request.getProfileName());
-                bufferConfiguration = BufferConfiguration.loadFrom(request.getProfileName());
-                eventStreamConfiguration = EventStreamConfiguration.loadFrom(request.getProfileName());
+                transportConfiguration = TransportConfiguration.loadFrom();
+                eventLoopConfiguration = EventLoopConfiguration.loadFrom();
+                bufferConfiguration = BufferConfiguration.loadFrom();
+                eventStreamConfiguration = EventStreamConfiguration.loadFrom();
             }
 
             CoreConfiguration configuration = CoreConfigurationBuilder.newBuilder()
@@ -80,12 +80,10 @@ public final class UDPLoadBalancerService extends UDPLoadBalancerServiceGrpc.UDP
 
             L4LoadBalancer l4LoadBalancer = l4LoadBalancerBuilder.build();
             L4FrontListenerStartupEvent event = l4LoadBalancer.start();
-            LoadBalancerProperty loadBalancerProperty = new LoadBalancerProperty()
-                    .profileName(request.getProfileName())
-                    .startupEvent(event);
+            LoadBalancerProperty loadBalancerProperty = new LoadBalancerProperty().profileName(request.getName()).startupEvent(event);
             LoadBalancerRegistry.add(l4LoadBalancer, loadBalancerProperty);
 
-            response = Layer4LoadBalancer.LoadBalancerResponse.newBuilder()
+            response = LoadBalancer.LoadBalancerResponse.newBuilder()
                     .setResponseText(l4LoadBalancer.ID)
                     .build();
         } catch (Exception ex) {
@@ -98,7 +96,7 @@ public final class UDPLoadBalancerService extends UDPLoadBalancerServiceGrpc.UDP
     }
 
     @Override
-    public void get(Layer4LoadBalancer.GetLoadBalancerRequest request, StreamObserver<Layer4LoadBalancer.UDPLoadBalancer> responseObserver) {
+    public void get(LoadBalancer.GetLoadBalancerRequest request, StreamObserver<LoadBalancer.UDPLoadBalancer> responseObserver) {
         try {
             L4LoadBalancer l4LoadBalancer = null;
             LoadBalancerProperty property = null;
@@ -122,12 +120,12 @@ public final class UDPLoadBalancerService extends UDPLoadBalancerServiceGrpc.UDP
                 throw new IllegalArgumentException("Load Balancer failed to start, Cause: " + property.startupEvent().throwable().getLocalizedMessage());
             }
 
-            Layer4LoadBalancer.UDPLoadBalancer response = Layer4LoadBalancer.UDPLoadBalancer.newBuilder()
+            LoadBalancer.UDPLoadBalancer response = LoadBalancer.UDPLoadBalancer.newBuilder()
                     .setBindAddress(l4LoadBalancer.bindAddress().getAddress().getHostAddress())
                     .setBindPort(l4LoadBalancer.bindAddress().getPort())
                     .setStrategy(l4LoadBalancer.cluster().loadBalance().name())
                     .setSessionPersistence(l4LoadBalancer.cluster().loadBalance().sessionPersistence().name())
-                    .setProfileName(property.profileName())
+                    .setName(l4LoadBalancer.name())
                     .build();
 
             responseObserver.onNext(response);
@@ -138,8 +136,8 @@ public final class UDPLoadBalancerService extends UDPLoadBalancerServiceGrpc.UDP
     }
 
     @Override
-    public void stop(Layer4LoadBalancer.StopLoadBalancer request, StreamObserver<Layer4LoadBalancer.LoadBalancerResponse> responseObserver) {
-        Layer4LoadBalancer.LoadBalancerResponse response;
+    public void stop(LoadBalancer.StopLoadBalancer request, StreamObserver<LoadBalancer.LoadBalancerResponse> responseObserver) {
+        LoadBalancer.LoadBalancerResponse response;
 
         try {
             boolean isFound = false;
@@ -153,7 +151,7 @@ public final class UDPLoadBalancerService extends UDPLoadBalancerServiceGrpc.UDP
             }
 
             if (isFound) {
-                response = Layer4LoadBalancer.LoadBalancerResponse.newBuilder()
+                response = LoadBalancer.LoadBalancerResponse.newBuilder()
                         .setResponseText("Success")
                         .build();
             } else {

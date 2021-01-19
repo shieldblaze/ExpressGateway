@@ -34,7 +34,7 @@ public final class HealthCheckService extends HealthCheckServiceGrpc.HealthCheck
                     .withTimeInterval(request.getTimeInterval())
                     .build();
 
-            healthCheckConfiguration.saveTo(request.getProfileName());
+            healthCheckConfiguration.saveTo();
 
             response = Configuration.ConfigurationResponse.newBuilder()
                     .setSuccess(true)
@@ -50,14 +50,13 @@ public final class HealthCheckService extends HealthCheckServiceGrpc.HealthCheck
     }
 
     @Override
-    public void get(Configuration.GetHealthCheck request, StreamObserver<Configuration.HealthCheck> responseObserver) {
+    public void get(Configuration.GetHealthCheckRequest request, StreamObserver<Configuration.HealthCheck> responseObserver) {
         try {
-            HealthCheckConfiguration healthCheckConfiguration = HealthCheckConfiguration.loadFrom(request.getProfileName());
+            HealthCheckConfiguration healthCheckConfiguration = HealthCheckConfiguration.loadFrom();
 
             Configuration.HealthCheck healthCheck = Configuration.HealthCheck.newBuilder()
                     .setTimeInterval(healthCheckConfiguration.timeInterval())
                     .setWorkers(healthCheckConfiguration.workers())
-                    .setProfileName(request.getProfileName())
                     .build();
 
             responseObserver.onNext(healthCheck);

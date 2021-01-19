@@ -61,11 +61,11 @@ public final class EventLoopConfiguration extends ConfigurationMarshaller {
         return this;
     }
 
-    public static EventLoopConfiguration loadFrom(String profileName) throws IOException {
-        return loadFrom(EventLoopConfiguration.class, profileName, false, "EventLoop.json");
+    public static EventLoopConfiguration loadFrom() throws IOException {
+        return loadFrom(EventLoopConfiguration.class, "EventLoop.json");
     }
 
-    public void saveTo(String profileName) throws IOException {
-        saveTo(this, profileName, false, "EventLoop.json");
+    public void saveTo() throws IOException {
+        saveTo(this, "EventLoop.json");
     }
 }

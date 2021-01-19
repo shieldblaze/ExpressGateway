@@ -62,7 +62,6 @@ class BufferServiceTest {
 
         BufferServiceGrpc.BufferServiceBlockingStub bufferService = BufferServiceGrpc.newBlockingStub(channel);
         Configuration.Buffer buffer = Configuration.Buffer.newBuilder()
-                .setProfileName("Meow")
                 .setPreferDirect(true)
                 .setDirectMemoryCacheAlignment(0)
                 .setUseCacheForAllThreads(true)
@@ -89,7 +88,6 @@ class BufferServiceTest {
 
         BufferServiceGrpc.BufferServiceBlockingStub bufferService = BufferServiceGrpc.newBlockingStub(channel);
         Configuration.Buffer buffer = Configuration.Buffer.newBuilder()
-                .setProfileName("Meow")
                 .setPreferDirect(true)
                 .setDirectMemoryCacheAlignment(0)
                 .setUseCacheForAllThreads(true)

@@ -58,7 +58,6 @@ class EventStreamServiceTest {
 
         EventStreamServiceGrpc.EventStreamServiceBlockingStub eventStreamService = EventStreamServiceGrpc.newBlockingStub(channel);
         Configuration.EventStream eventStream = Configuration.EventStream.newBuilder()
-                .setProfileName("Meow")
                 .setWorkers(2)
                 .build();
 
@@ -77,7 +76,6 @@ class EventStreamServiceTest {
 
         EventStreamServiceGrpc.EventStreamServiceBlockingStub eventStreamService = EventStreamServiceGrpc.newBlockingStub(channel);
         Configuration.EventStream eventStream = Configuration.EventStream.newBuilder()
-                .setProfileName("Meow")
                 .setWorkers(-5)
                 .build();
 

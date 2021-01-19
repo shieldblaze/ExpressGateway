@@ -59,7 +59,6 @@ class HTTPServiceTest {
 
         HTTPServiceGrpc.HTTPServiceBlockingStub httpService = HTTPServiceGrpc.newBlockingStub(channel);
         Configuration.HTTP http = Configuration.HTTP.newBuilder()
-                .setProfileName("Meow")
                 .setBrotliCompressionLevel(4)
                 .setDeflateCompressionLevel(6)
                 .setCompressionThreshold(91100)
@@ -89,7 +88,6 @@ class HTTPServiceTest {
 
         HTTPServiceGrpc.HTTPServiceBlockingStub httpService = HTTPServiceGrpc.newBlockingStub(channel);
         Configuration.HTTP http = Configuration.HTTP.newBuilder()
-                .setProfileName("Meow")
                 .setBrotliCompressionLevel(1000) // 1-11 valid
                 .setDeflateCompressionLevel(6)
                 .setCompressionThreshold(91100)

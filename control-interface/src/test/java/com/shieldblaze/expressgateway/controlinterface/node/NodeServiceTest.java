@@ -56,7 +56,7 @@ class NodeServiceTest {
                 .build();
 
         NodeServiceGrpc.NodeServiceBlockingStub nodeService = NodeServiceGrpc.newBlockingStub(channel);
-        NodeOuterClass.addRequest addRequest = NodeOuterClass.addRequest.newBuilder()
+        NodeOuterClass.AddRequest addRequest = NodeOuterClass.AddRequest.newBuilder()
                 .setAddress("192.168.1.100")
                 .setPort(9110)
                 .build();

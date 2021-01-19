@@ -27,18 +27,8 @@ public final class Profile {
         // Prevent outside initialization
     }
 
-    public static String ensure(String profileName) {
-        return ensure(profileName, false);
-    }
-
-    public static String ensure(String profileName, boolean isTLSProfile) {
-        File file;
-        if (isTLSProfile) {
-            file = new File(SystemPropertyUtil.get("EGWConfDir", System.getProperty("user.dir")) + "/tls/" + profileName);
-        } else {
-            file = new File(SystemPropertyUtil.get("EGWConfDir", System.getProperty("user.dir")) + "/" + profileName);
-        }
-        file.mkdirs();
+    public static String ensure() {
+        File file = new File(SystemPropertyUtil.get("EGWConfDir", System.getProperty("user.dir")));
         return file.getAbsolutePath() + "/";
     }
 }

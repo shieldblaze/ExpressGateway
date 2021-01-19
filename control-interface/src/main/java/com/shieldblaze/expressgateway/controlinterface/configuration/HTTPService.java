@@ -44,7 +44,7 @@ public final class HTTPService extends HTTPServiceGrpc.HTTPServiceImplBase {
                     .withBrotliCompressionLevel(request.getBrotliCompressionLevel())
                     .build();
 
-            httpConfiguration.saveTo(request.getProfileName());
+            httpConfiguration.saveTo();
 
             response = Configuration.ConfigurationResponse.newBuilder()
                     .setSuccess(true)
@@ -60,9 +60,9 @@ public final class HTTPService extends HTTPServiceGrpc.HTTPServiceImplBase {
     }
 
     @Override
-    public void get(Configuration.GetHTTP request, StreamObserver<Configuration.HTTP> responseObserver) {
+    public void get(Configuration.GetHTTPRequest request, StreamObserver<Configuration.HTTP> responseObserver) {
         try {
-            HTTPConfiguration httpConfiguration = HTTPConfiguration.loadFrom(request.getProfileName());
+            HTTPConfiguration httpConfiguration = HTTPConfiguration.loadFrom();
 
             Configuration.HTTP http = Configuration.HTTP.newBuilder()
                     .setMaxContentLength(httpConfiguration.maxContentLength())
@@ -77,7 +77,6 @@ public final class HTTPService extends HTTPServiceGrpc.HTTPServiceImplBase {
                     .setCompressionThreshold(httpConfiguration.compressionThreshold())
                     .setDeflateCompressionLevel(httpConfiguration.deflateCompressionLevel())
                     .setBrotliCompressionLevel(httpConfiguration.brotliCompressionLevel())
-                    .setProfileName(request.getProfileName())
                     .build();
 
             responseObserver.onNext(http);

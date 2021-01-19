@@ -48,11 +48,11 @@ public class HealthCheckConfiguration extends ConfigurationMarshaller {
         return timeInterval;
     }
 
-    public static HealthCheckConfiguration loadFrom(String profileName) throws IOException {
-        return loadFrom(HealthCheckConfiguration.class, profileName, false, "HealthCheck.json");
+    public static HealthCheckConfiguration loadFrom() throws IOException {
+        return loadFrom(HealthCheckConfiguration.class, "HealthCheck.json");
     }
 
-    public void saveTo(String profileName) throws IOException {
-        saveTo(this, profileName, false, "HealthCheck.json");
+    public void saveTo() throws IOException {
+        saveTo(this, "HealthCheck.json");
     }
 }

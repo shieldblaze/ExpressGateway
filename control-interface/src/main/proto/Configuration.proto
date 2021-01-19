@@ -1,3 +1,20 @@
+/*
+This file is part of ShieldBlaze ExpressGateway. [www.shieldblaze.com]
+Copyright (c) 2020-2021 ShieldBlaze
+
+ShieldBlaze ExpressGateway is free software: you can redistribute it and/or modify
+it under the terms of the GNU General Public License as published by
+the Free Software Foundation, either version 3 of the License, or
+(at your option) any later version.
+
+ShieldBlaze ExpressGateway is distributed in the hope that it will be useful,
+but WITHOUT ANY WARRANTY; without even the implied warranty of
+MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+GNU General Public License for more details.
+
+You should have received a copy of the GNU General Public License
+along with ShieldBlaze ExpressGateway.  If not, see <https://www.gnu.org/licenses/>.
+ */
 syntax = "proto3";
 package com.shieldblaze.expressgateway.controlinterface.configuration;
 
@@ -18,16 +35,14 @@ message Buffer {
   int32 normalCacheSize = 7;
   bool useCacheForAllThreads = 8;
   int32 directMemoryCacheAlignment = 9;
-  string profileName = 10;
 }
 
-message GetBuffer {
-  string profileName = 1;
+message GetBufferRequest {
 }
 
 service BufferService {
   rpc buffer(Buffer) returns (ConfigurationResponse);
-  rpc get(GetBuffer) returns (Buffer);
+  rpc get(GetBufferRequest) returns (Buffer);
 }
 
 // ------------------------ EventLoop ------------------------
@@ -35,32 +50,29 @@ service BufferService {
 message EventLoop {
   int32 parentWorkers = 1;
   int32 childWorkers = 2;
-  string profileName = 3;
 }
 
-message GetEventLoop {
-  string profileName = 1;
+message GetEventLoopRequest {
 }
 
 service EventLoopService {
   rpc eventLoop(EventLoop) returns (ConfigurationResponse);
-  rpc get(GetEventLoop) returns (EventLoop);
+  rpc get(GetEventLoopRequest) returns (EventLoop);
 }
 
 // ------------------------ EventStream ------------------------
 
 message EventStream {
   int32 workers = 1;
-  string profileName = 2;
 }
 
-message GetEventStream {
-  string profileName = 1;
+message GetEventStreamRequest {
+
 }
 
 service EventStreamService {
   rpc eventstream(EventStream) returns (ConfigurationResponse);
-  rpc get(GetEventStream) returns (EventStream);
+  rpc get(GetEventStreamRequest) returns (EventStream);
 }
 
 // ------------------------ HealthCheck ------------------------
@@ -68,16 +80,14 @@ service EventStreamService {
 message HealthCheck {
   int32 workers = 1;
   int32 timeInterval = 2;
-  string profileName = 3;
 }
 
-message GetHealthCheck {
-  string profileName = 1;
+message GetHealthCheckRequest {
 }
 
 service HealthCheckService {
   rpc healthcheck(HealthCheck) returns (ConfigurationResponse);
-  rpc get(GetHealthCheck) returns (HealthCheck);
+  rpc get(GetHealthCheckRequest) returns (HealthCheck);
 }
 
 // ------------------------ HTTP ------------------------
@@ -95,16 +105,14 @@ message HTTP {
   int32 compressionThreshold = 10;
   int32 deflateCompressionLevel = 11;
   int32 brotliCompressionLevel = 12;
-  string profileName = 13;
 }
 
-message GetHTTP {
-  string profileName = 1;
+message GetHTTPRequest {
 }
 
 service HTTPService {
   rpc http(HTTP) returns (ConfigurationResponse);
-  rpc get(GetHTTP) returns (HTTP);
+  rpc get(GetHTTPRequest) returns (HTTP);
 }
 
 // ------------------------ Transport ------------------------
@@ -130,14 +138,12 @@ message Transport {
   int32 tcpFastOpenMaximumPendingRequests = 7;
   int32 backendConnectTimeout = 8;
   int32 connectionIdleTimeout = 9;
-  string profileName = 10;
 }
 
-message GetTransportService {
-  string profileName = 1;
+message GetTransportRequest {
 }
 
 service TransportService {
   rpc transport(Transport) returns (ConfigurationResponse);
-  rpc get(GetTransportService) returns (Transport);
+  rpc get(GetTransportRequest) returns (Transport);
 }

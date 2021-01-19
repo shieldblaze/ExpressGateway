@@ -53,7 +53,7 @@ class KeyStoreHandlerTest {
                 .build();
 
         tlsConfiguration.defaultMapping(new CertificateKeyPair(Collections.singletonList(ssc.cert()), ssc.key()));
-        KeyStoreHandler.saveServer(tlsConfiguration, "MeowProfile", "Meow");
+        KeyStoreHandler.saveServer(tlsConfiguration, "Meow");
     }
 
     @Test
@@ -64,7 +64,7 @@ class KeyStoreHandlerTest {
                 .withProtocols(Collections.singletonList(Protocol.TLS_1_3))
                 .build();
 
-        KeyStoreHandler.loadServer(tlsConfiguration, "MeowProfile", "Meow");
+        KeyStoreHandler.loadServer(tlsConfiguration, "Meow");
         assertArrayEquals(ssc.cert().getEncoded(), tlsConfiguration.defaultMapping().certificates().get(0).getEncoded());
     }
 }

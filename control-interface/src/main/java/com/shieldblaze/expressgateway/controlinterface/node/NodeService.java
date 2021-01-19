@@ -49,8 +49,8 @@ import java.util.Map;
 public class NodeService extends NodeServiceGrpc.NodeServiceImplBase {
 
     @Override
-    public void add(NodeOuterClass.addRequest request, StreamObserver<NodeOuterClass.addResponse> responseObserver) {
-        NodeOuterClass.addResponse response;
+    public void add(NodeOuterClass.AddRequest request, StreamObserver<NodeOuterClass.AddResponse> responseObserver) {
+        NodeOuterClass.AddResponse response;
 
         try {
             L4LoadBalancer l4LoadBalancer = getLoadBalancerByID(request.getLoadBalancerID());
@@ -98,7 +98,7 @@ public class NodeService extends NodeServiceGrpc.NodeServiceImplBase {
             // Create a new Node under the specified Load Balancer
             Node node = new Node(l4LoadBalancer.cluster(), new InetSocketAddress(request.getAddress(), request.getPort()), request.getMaxConnections(), healthCheck);
 
-            response = NodeOuterClass.addResponse.newBuilder()
+            response = NodeOuterClass.AddResponse.newBuilder()
                     .setSuccess(true)
                     .setNodeId(node.id())
                     .build();
@@ -111,7 +111,7 @@ public class NodeService extends NodeServiceGrpc.NodeServiceImplBase {
     }
 
     @Override
-    public void get(NodeOuterClass.getRequest request, StreamObserver<NodeOuterClass.getResponse> responseObserver) {
+    public void get(NodeOuterClass.GetRequest request, StreamObserver<NodeOuterClass.GetResponse> responseObserver) {
         try {
             L4LoadBalancer l4LoadBalancer = getLoadBalancerByID(request.getLoadBalancerId());
             Node node = null;
@@ -129,7 +129,7 @@ public class NodeService extends NodeServiceGrpc.NodeServiceImplBase {
                 throw new NullPointerException("Node not found");
             }
 
-            NodeOuterClass.getResponse response = NodeOuterClass.getResponse.newBuilder()
+            NodeOuterClass.GetResponse response = NodeOuterClass.GetResponse.newBuilder()
                     .setSuccess(true)
                     .setNode(convert(node))
                     .build();
@@ -142,14 +142,14 @@ public class NodeService extends NodeServiceGrpc.NodeServiceImplBase {
     }
 
     @Override
-    public void getAll(NodeOuterClass.getAllRequest request, StreamObserver<NodeOuterClass.getAllResponse> responseObserver) {
+    public void getAll(NodeOuterClass.GetAllRequest request, StreamObserver<NodeOuterClass.GetAllResponse> responseObserver) {
         try {
             L4LoadBalancer l4LoadBalancer = getLoadBalancerByID(request.getLoadBalancerId());
 
             List<NodeOuterClass.Node> nodes = new ArrayList<>();
             l4LoadBalancer.cluster().nodes().forEach(node -> nodes.add(convert(node)));
 
-            NodeOuterClass.getAllResponse response = NodeOuterClass.getAllResponse.newBuilder()
+            NodeOuterClass.GetAllResponse response = NodeOuterClass.GetAllResponse.newBuilder()
                     .setSuccess(true)
                     .addAllNode(nodes)
                     .build();
@@ -162,7 +162,7 @@ public class NodeService extends NodeServiceGrpc.NodeServiceImplBase {
     }
 
     @Override
-    public void delete(NodeOuterClass.deleteRequest request, StreamObserver<NodeOuterClass.deleteResponse> responseObserver) {
+    public void delete(NodeOuterClass.DeleteRequest request, StreamObserver<NodeOuterClass.DeleteResponse> responseObserver) {
         try {
             L4LoadBalancer l4LoadBalancer = getLoadBalancerByID(request.getLoadBalancerId());
             Node node = null;
@@ -183,7 +183,7 @@ public class NodeService extends NodeServiceGrpc.NodeServiceImplBase {
             // Drain connections and remove
             node.drainConnectionAndRemove();
 
-            NodeOuterClass.deleteResponse response = NodeOuterClass.deleteResponse.newBuilder()
+            NodeOuterClass.DeleteResponse response = NodeOuterClass.DeleteResponse.newBuilder()
                     .setSuccess(true)
                     .build();
 

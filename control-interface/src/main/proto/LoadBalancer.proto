@@ -1,0 +1,108 @@
+/*
+This file is part of ShieldBlaze ExpressGateway. [www.shieldblaze.com]
+Copyright (c) 2020-2021 ShieldBlaze
+
+ShieldBlaze ExpressGateway is free software: you can redistribute it and/or modify
+it under the terms of the GNU General Public License as published by
+the Free Software Foundation, either version 3 of the License, or
+(at your option) any later version.
+
+ShieldBlaze ExpressGateway is distributed in the hope that it will be useful,
+but WITHOUT ANY WARRANTY; without even the implied warranty of
+MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+GNU General Public License for more details.
+
+You should have received a copy of the GNU General Public License
+along with ShieldBlaze ExpressGateway.  If not, see <https://www.gnu.org/licenses/>.
+ */
+syntax = "proto3";
+package com.shieldblaze.expressgateway.controlinterface.loadbalancer;
+
+message LoadBalancerResponse {
+  string responseText = 1;
+}
+
+message StopLoadBalancer {
+  string id = 1;
+}
+
+message GetLoadBalancerRequest {
+  string loadBalancerId = 1;
+}
+
+// ------------------------ Layer-7 Protocols ------------------------
+
+enum Layer7 {
+  HTTP = 0;
+}
+
+// ------------------------ TLS ------------------------
+message TLSServer {
+  message CertificateKeyPair {
+    string certificateChain = 1;
+    string privateKey = 2;
+    bool useOCSP = 3;
+  }
+
+  enum MutualTLS {
+    NOT_REQUIRED = 0;
+    OPTIONAL = 1;
+    REQUIRED = 2;
+  }
+
+  map<string, CertificateKeyPair> tlsServerMapping = 1;
+  MutualTLS mTLS = 2;
+  bool useALPN = 3;
+  int32 sessionTimeout = 4;
+  int32 sessionCacheSize = 5;
+  repeated string protocols = 6;
+  repeated string ciphers = 7;
+  bool useStartTLS = 8;
+}
+
+message TLSClient {
+  string certificateChain = 1;
+  string privateKey = 2;
+  repeated string protocols = 3;
+  repeated string ciphers = 4;
+  bool acceptAllCertificates = 5;
+  bool useStartTLS = 6;
+}
+
+// ------------------------ TCP ------------------------
+
+message TCPLoadBalancer {
+   string name = 1;
+   string bindAddress = 2;
+   int32 bindPort = 3;
+   string profileName = 4;
+   TLSServer tlsServer = 5;
+   TLSClient tlsClient = 6;
+   string strategy = 7;
+   string sessionPersistence = 8;
+   bool useDefaults = 9;
+   Layer7 layer7 = 10;
+}
+
+service TCPLoadBalancerService {
+  rpc start(TCPLoadBalancer) returns (LoadBalancerResponse);
+  rpc get(GetLoadBalancerRequest) returns (TCPLoadBalancer);
+  rpc stop(StopLoadBalancer) returns (LoadBalancerResponse);
+}
+
+// ------------------------ UDP ------------------------
+
+message UDPLoadBalancer {
+  string name = 1;
+  string bindAddress = 2;
+  int32 bindPort = 3;
+  string strategy = 4;
+  string sessionPersistence = 5;
+  bool useDefaults = 6;
+}
+
+service UDPLoadBalancerService {
+  rpc start(UDPLoadBalancer) returns (LoadBalancerResponse);
+  rpc get(GetLoadBalancerRequest) returns (UDPLoadBalancer);
+  rpc stop(StopLoadBalancer) returns (LoadBalancerResponse);
+}

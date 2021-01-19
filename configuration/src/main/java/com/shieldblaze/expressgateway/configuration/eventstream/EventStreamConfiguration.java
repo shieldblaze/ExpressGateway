@@ -56,11 +56,11 @@ public class EventStreamConfiguration extends ConfigurationMarshaller {
         return eventStream;
     }
 
-    public static EventStreamConfiguration loadFrom(String profileName) throws IOException {
-        return loadFrom(EventStreamConfiguration.class, profileName, false, "EventStream.json");
+    public static EventStreamConfiguration loadFrom() throws IOException {
+        return loadFrom(EventStreamConfiguration.class, "EventStream.json");
     }
 
-    public void saveTo(String profileName) throws IOException {
-        saveTo(this, profileName, false, "EventStream.json");
+    public void saveTo() throws IOException {
+        saveTo(this, "EventStream.json");
     }
 }

@@ -192,11 +192,11 @@ public final class HTTPConfiguration extends ConfigurationMarshaller {
         return this;
     }
 
-    public static HTTPConfiguration loadFrom(String profileName) throws IOException {
-        return loadFrom(HTTPConfiguration.class, profileName, false, "HTTP.json");
+    public static HTTPConfiguration loadFrom() throws IOException {
+        return loadFrom(HTTPConfiguration.class, "HTTP.json");
     }
 
-    public void saveTo(String profileName) throws IOException {
-        saveTo(this, profileName, false, "HTTP.json");
+    public void saveTo() throws IOException {
+        saveTo(this, "HTTP.json");
     }
 }

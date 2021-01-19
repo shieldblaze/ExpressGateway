@@ -23,18 +23,16 @@ import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
 
 import javax.net.ssl.SSLException;
-import java.io.IOException;
 import java.security.KeyStoreException;
 import java.security.NoSuchAlgorithmException;
 import java.util.List;
 import java.util.Map;
-import java.util.TreeMap;
 import java.util.concurrent.ConcurrentHashMap;
 
 /**
  * Configuration for TLS
  */
-public final class TLSConfiguration extends ConfigurationMarshaller {
+public final class TLSConfiguration {
     private static final Logger logger = LogManager.getLogger(TLSConfiguration.class);
 
     private final Map<String, CertificateKeyPair> certificateKeyPairMap = new ConcurrentHashMap<>();
@@ -216,24 +214,5 @@ public final class TLSConfiguration extends ConfigurationMarshaller {
 
     public boolean acceptAllCerts() {
         return acceptAllCerts;
-    }
-
-    public static TLSConfiguration loadFrom(String profileName, String password, boolean forServer) throws Exception {
-        TLSConfiguration tlsConfiguration = loadFrom(TLSConfiguration.class, profileName, true, forServer ? "TLSServer.json" : "TLSClient.json");
-        if (forServer) {
-            KeyStoreHandler.loadClient(tlsConfiguration, profileName, password);
-        } else {
-            KeyStoreHandler.loadServer(tlsConfiguration, profileName, password);
-        }
-        return tlsConfiguration;
-    }
-
-    public void saveTo(String profileName, String password) throws Exception {
-        saveTo(this, profileName, true, forServer ? "TLSServer.json" : "TLSClient.json");
-        if (forServer) {
-            KeyStoreHandler.saveServer(this, profileName, password);
-        } else {
-            KeyStoreHandler.saveClient(this, profileName, password);
-        }
     }
 }

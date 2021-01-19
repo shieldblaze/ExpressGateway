@@ -34,7 +34,7 @@ public final class EventLoopService extends EventLoopServiceGrpc.EventLoopServic
                     .withChildWorkers(request.getChildWorkers())
                     .build();
 
-            eventLoopConfiguration.saveTo(request.getProfileName());
+            eventLoopConfiguration.saveTo();
 
             response = Configuration.ConfigurationResponse.newBuilder()
                     .setSuccess(true)
@@ -50,14 +50,14 @@ public final class EventLoopService extends EventLoopServiceGrpc.EventLoopServic
     }
 
     @Override
-    public void get(Configuration.GetEventLoop request, StreamObserver<Configuration.EventLoop> responseObserver) {
+    public void get(Configuration.GetEventLoopRequest request, StreamObserver<Configuration.EventLoop> responseObserver) {
         try {
-            EventLoopConfiguration eventLoopConfiguration = EventLoopConfiguration.loadFrom(request.getProfileName());
+            EventLoopConfiguration eventLoopConfiguration = EventLoopConfiguration.loadFrom();
 
             Configuration.EventLoop eventLoop = Configuration.EventLoop.newBuilder()
                     .setParentWorkers(eventLoopConfiguration.parentWorkers())
                     .setChildWorkers(eventLoopConfiguration.childWorkers())
-                    .setProfileName(request.getProfileName())
+                    .setProfileName()
                     .build();
 
             responseObserver.onNext(eventLoop);

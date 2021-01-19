@@ -75,7 +75,7 @@ public final class TransportService extends TransportServiceGrpc.TransportServic
                     .withReceiveBufferAllocationType(receiveBufferAllocationType)
                     .build();
 
-            transportConfiguration.saveTo(request.getProfileName());
+            transportConfiguration.saveTo();
 
             response = Configuration.ConfigurationResponse.newBuilder()
                     .setSuccess(true)
@@ -91,9 +91,9 @@ public final class TransportService extends TransportServiceGrpc.TransportServic
     }
 
     @Override
-    public void get(Configuration.GetTransportService request, StreamObserver<Configuration.Transport> responseObserver) {
+    public void get(Configuration.GetTransportRequest request, StreamObserver<Configuration.Transport> responseObserver) {
         try {
-            TransportConfiguration transportConfiguration = TransportConfiguration.loadFrom(request.getProfileName());
+            TransportConfiguration transportConfiguration = TransportConfiguration.loadFrom();
 
             Configuration.Transport.Type type = Configuration.Transport.Type.NIO;
             if (transportConfiguration.transportType() == TransportType.EPOLL) {
@@ -116,7 +116,6 @@ public final class TransportService extends TransportServiceGrpc.TransportServic
                     .setTcpFastOpenMaximumPendingRequests(transportConfiguration.tcpFastOpenMaximumPendingRequests())
                     .setBackendConnectTimeout(transportConfiguration.backendConnectTimeout())
                     .setConnectionIdleTimeout(transportConfiguration.connectionIdleTimeout())
-                    .setProfileName(request.getProfileName())
                     .build();
 
             responseObserver.onNext(transport);

@@ -1,3 +1,20 @@
+/*
+This file is part of ShieldBlaze ExpressGateway. [www.shieldblaze.com]
+Copyright (c) 2020-2021 ShieldBlaze
+
+ShieldBlaze ExpressGateway is free software: you can redistribute it and/or modify
+it under the terms of the GNU General Public License as published by
+the Free Software Foundation, either version 3 of the License, or
+(at your option) any later version.
+
+ShieldBlaze ExpressGateway is distributed in the hope that it will be useful,
+but WITHOUT ANY WARRANTY; without even the implied warranty of
+MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+GNU General Public License for more details.
+
+You should have received a copy of the GNU General Public License
+along with ShieldBlaze ExpressGateway.  If not, see <https://www.gnu.org/licenses/>.
+ */
 syntax = "proto3";
 package com.shieldblaze.expressgateway.controlinterface.node;
 
@@ -35,7 +52,7 @@ message HealthCheckHTTP {
 
 // ---------------------------- Add ----------------------------
 
-message addRequest {
+message AddRequest {
   string loadBalancerID = 1;
   string address = 2;
   int32 port = 3;
@@ -44,50 +61,50 @@ message addRequest {
   HealthCheckHTTP healthCheckHttp = 6;
 }
 
-message addResponse {
+message AddResponse {
   bool success = 1;
   string nodeId = 2;
 }
 
 // ---------------------------- Get All ----------------------------
 
-message getAllRequest {
+message GetAllRequest {
   string loadBalancerId = 1;
 }
 
-message getAllResponse {
+message GetAllResponse {
   bool success = 1;
   repeated Node node = 2;
 }
 
 // ---------------------------- Get ----------------------------
 
-message getRequest {
+message GetRequest {
   string loadBalancerId = 1;
   string nodeId = 2;
 }
 
-message getResponse {
+message GetResponse {
   bool success = 1;
   Node node = 2;
 }
 
 // ---------------------------- Delete ----------------------------
 
-message deleteRequest {
+message DeleteRequest {
   string loadBalancerId = 1;
   string nodeId = 2;
 }
 
-message deleteResponse {
+message DeleteResponse {
   bool success = 1;
 }
 
 // ---------------------------- Service ----------------------------
 
 service NodeService {
-  rpc add(addRequest) returns (addResponse);
-  rpc get(getRequest) returns (getResponse);
-  rpc getAll(getAllRequest) returns (getAllResponse);
-  rpc delete(deleteRequest) returns (deleteResponse);
+  rpc add(AddRequest) returns (AddResponse);
+  rpc get(GetRequest) returns (GetResponse);
+  rpc getAll(GetAllRequest) returns (GetAllResponse);
+  rpc delete(DeleteRequest) returns (DeleteResponse);
 }

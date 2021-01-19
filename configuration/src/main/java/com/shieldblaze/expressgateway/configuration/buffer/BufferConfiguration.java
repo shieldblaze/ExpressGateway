@@ -195,11 +195,11 @@ public final class BufferConfiguration extends ConfigurationMarshaller {
         return this;
     }
 
-    public static BufferConfiguration loadFrom(String profileName) throws IOException {
-        return loadFrom(BufferConfiguration.class, profileName, false, "Buffer.json");
+    public static BufferConfiguration loadFrom() throws IOException {
+        return loadFrom(BufferConfiguration.class, "Buffer.json");
     }
 
-    public void saveTo(String profileName) throws IOException {
-        saveTo(this, profileName, false, "Buffer.json");
+    public void saveTo() throws IOException {
+        saveTo(this, "Buffer.json");
     }
 }

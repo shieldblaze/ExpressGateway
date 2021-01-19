@@ -1,58 +1,20 @@
+/*
+This file is part of ShieldBlaze ExpressGateway. [www.shieldblaze.com]
+Copyright (c) 2020-2021 ShieldBlaze
+
+ShieldBlaze ExpressGateway is free software: you can redistribute it and/or modify
+it under the terms of the GNU General Public License as published by
+the Free Software Foundation, either version 3 of the License, or
+(at your option) any later version.
+
+ShieldBlaze ExpressGateway is distributed in the hope that it will be useful,
+but WITHOUT ANY WARRANTY; without even the implied warranty of
+MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+GNU General Public License for more details.
+
+You should have received a copy of the GNU General Public License
+along with ShieldBlaze ExpressGateway.  If not, see <https://www.gnu.org/licenses/>.
+ */
 syntax = "proto3";
 package com.shieldblaze.expressgateway.controlinterface.tls;
 
-message ConfigurationResponse {
-  bool success = 1;
-  string responseText = 2;
-}
-
-enum MutualTLS {
-    NOT_REQUIRED = 0;
-    OPTIONAL = 1;
-    REQUIRED = 2;
-}
-
-message Server {
-  message CertificateKeyPair {
-    string certificateChain = 1;
-    string privateKey = 2;
-    bool useOCSP = 3;
-  }
-
-  map<string, CertificateKeyPair> tlsServerMapping = 1;
-  MutualTLS mTLS = 2;
-  bool useALPN = 3;
-  int32 sessionTimeout = 4;
-  int32 sessionCacheSize = 5;
-  repeated string protocols = 6;
-  repeated string ciphers = 7;
-  bool useStartTLS = 8;
-  string profileName = 9;
-  string password = 10;
-}
-
-message Client {
-  string certificateChain = 1;
-  string privateKey = 2;
-  repeated string protocols = 3;
-  repeated string ciphers = 4;
-  bool acceptAllCertificates = 5;
-  bool useStartTLS = 6;
-  string profileName = 7;
-  string password = 8;
-}
-
-message GetTLS {
-  string profileName = 1;
-  string password = 2;
-}
-
-service TLSServerService {
-  rpc server(Server) returns (ConfigurationResponse);
-  rpc get(GetTLS) returns (Server);
-}
-
-service TLSClientService {
-  rpc client(Client) returns (ConfigurationResponse);
-  rpc get(GetTLS) returns (Client);
-}

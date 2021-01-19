@@ -59,7 +59,6 @@ class EventLoopServiceTest {
 
         EventLoopServiceGrpc.EventLoopServiceBlockingStub eventLoopService = EventLoopServiceGrpc.newBlockingStub(channel);
         Configuration.EventLoop eventLoop = Configuration.EventLoop.newBuilder()
-                .setProfileName("Meow")
                 .setParentWorkers(2)
                 .setChildWorkers(4)
                 .build();
@@ -79,7 +78,6 @@ class EventLoopServiceTest {
 
         EventLoopServiceGrpc.EventLoopServiceBlockingStub eventLoopService = EventLoopServiceGrpc.newBlockingStub(channel);
         Configuration.EventLoop eventLoop = Configuration.EventLoop.newBuilder()
-                .setProfileName("Meow")
                 .setParentWorkers(0)
                 .setChildWorkers(4)
                 .build();

@@ -59,7 +59,6 @@ class HealthCheckServiceTest {
 
         HealthCheckServiceGrpc.HealthCheckServiceBlockingStub healthCheckService = HealthCheckServiceGrpc.newBlockingStub(channel);
         Configuration.HealthCheck healthCheck = Configuration.HealthCheck.newBuilder()
-                .setProfileName("Meow")
                 .setWorkers(10)
                 .setTimeInterval(100)
                 .build();
@@ -79,7 +78,6 @@ class HealthCheckServiceTest {
 
         HealthCheckServiceGrpc.HealthCheckServiceBlockingStub healthCheckService = HealthCheckServiceGrpc.newBlockingStub(channel);
         Configuration.HealthCheck healthCheck = Configuration.HealthCheck.newBuilder()
-                .setProfileName("Meow")
                 .setWorkers(-1)
                 .setTimeInterval(100)
                 .build();

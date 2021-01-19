@@ -32,13 +32,13 @@ import java.nio.file.Files;
  */
 public class ConfigurationMarshaller {
 
-    public static  <T> T loadFrom(Class<?> clazz, String profileName, boolean isTLS, String filename) throws IOException {
-        String location = Profile.ensure(profileName, isTLS) + filename;
+    public static <T> T loadFrom(Class<?> clazz, String filename) throws IOException {
+        String location = Profile.ensure() + filename;
         return GSON.INSTANCE.fromJson(Files.readString(new File(location).toPath()), (Type) clazz);
     }
 
-    public static void saveTo(Object obj, String profileName, boolean isTLS, String filename) throws IOException {
-        String location = Profile.ensure(profileName, isTLS) + filename;
+    public static void saveTo(Object obj, String filename) throws IOException {
+        String location = Profile.ensure() + filename;
         try (FileWriter writer = new FileWriter(location)) {
             writer.write(GSON.INSTANCE.toJson(obj));
         }

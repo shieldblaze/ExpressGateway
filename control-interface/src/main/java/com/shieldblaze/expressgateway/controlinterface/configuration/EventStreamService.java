@@ -33,7 +33,7 @@ public final class EventStreamService extends EventStreamServiceGrpc.EventStream
                     .withWorkers(request.getWorkers())
                     .build();
 
-            eventStreamConfiguration.saveTo(request.getProfileName());
+            eventStreamConfiguration.saveTo();
 
             response = Configuration.ConfigurationResponse.newBuilder()
                     .setSuccess(true)
@@ -49,12 +49,12 @@ public final class EventStreamService extends EventStreamServiceGrpc.EventStream
     }
 
     @Override
-    public void get(Configuration.GetEventStream request, StreamObserver<Configuration.EventStream> responseObserver) {
+    public void get(Configuration.GetEventStreamRequest request, StreamObserver<Configuration.EventStream> responseObserver) {
         try {
-            EventStreamConfiguration eventStreamConfiguration = EventStreamConfiguration.loadFrom(request.getProfileName());
+            EventStreamConfiguration eventStreamConfiguration = EventStreamConfiguration.loadFrom();
+
             Configuration.EventStream eventStream = Configuration.EventStream.newBuilder()
                     .setWorkers(eventStreamConfiguration.workers())
-                    .setProfileName(request.getProfileName())
                     .build();
 
             responseObserver.onNext(eventStream);
