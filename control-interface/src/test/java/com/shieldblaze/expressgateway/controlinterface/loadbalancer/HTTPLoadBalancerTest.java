@@ -73,6 +73,7 @@ import java.net.http.HttpClient;
 import java.net.http.HttpRequest;
 import java.net.http.HttpResponse;
 import java.util.Objects;
+import java.util.concurrent.TimeUnit;
 
 import static org.junit.jupiter.api.Assertions.assertArrayEquals;
 import static org.junit.jupiter.api.Assertions.assertEquals;
@@ -104,7 +105,7 @@ class HTTPLoadBalancerTest {
     @AfterAll
     static void shutdown() throws InterruptedException {
         channel.shutdownNow();
-        server.shutdownNow().awaitTermination();
+        server.shutdownNow().awaitTermination(30, TimeUnit.SECONDS);
     }
 
     @Test

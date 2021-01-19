@@ -35,6 +35,7 @@ import java.io.IOException;
 import java.net.InetSocketAddress;
 import java.net.ServerSocket;
 import java.net.Socket;
+import java.util.concurrent.TimeUnit;
 
 import static org.junit.jupiter.api.Assertions.assertArrayEquals;
 import static org.junit.jupiter.api.Assertions.assertEquals;
@@ -66,7 +67,7 @@ class TCPLoadBalancerServiceTest {
     @AfterAll
     static void shutdown() throws InterruptedException {
         channel.shutdownNow();
-        server.shutdownNow().awaitTermination();
+        server.shutdownNow().awaitTermination(30, TimeUnit.SECONDS);
     }
 
     @Test
