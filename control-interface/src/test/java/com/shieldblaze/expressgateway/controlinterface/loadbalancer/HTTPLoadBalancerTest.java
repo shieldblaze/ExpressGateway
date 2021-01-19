@@ -125,8 +125,6 @@ class HTTPLoadBalancerTest {
         assertTrue(addResponse.getSuccess());
         assertFalse(addResponse.getNodeId().isEmpty()); // Load Balancer ID
 
-        System.out.println("LOL1");
-
         HttpClient httpClient = HttpClient.newHttpClient();
         HttpRequest httpRequest = HttpRequest.newBuilder()
                 .uri(URI.create("http://127.0.0.1:5000"))
@@ -135,8 +133,6 @@ class HTTPLoadBalancerTest {
 
         HttpResponse<Void> response = httpClient.send(httpRequest, java.net.http.HttpResponse.BodyHandlers.discarding());
         assertEquals(200, response.statusCode());
-
-        Thread.sleep(2500L); // Wait for everything to settle down
     }
 
     @Test
