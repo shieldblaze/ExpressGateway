@@ -24,6 +24,7 @@ import io.grpc.ManagedChannel;
 import io.grpc.ManagedChannelBuilder;
 import io.grpc.Server;
 import io.grpc.ServerBuilder;
+import io.grpc.StatusRuntimeException;
 import io.grpc.netty.shaded.io.grpc.netty.NettyServerBuilder;
 import org.junit.jupiter.api.AfterAll;
 import org.junit.jupiter.api.BeforeAll;
@@ -89,8 +90,7 @@ class TLSClientServiceTest {
                 .addCiphers("TLS_AES_256_GCM_SHA256")
                 .build();
 
-        TLS.ConfigurationResponse configurationResponse = tlsService.client(client);
-        assertFalse(configurationResponse.getSuccess());
+        assertThrows(StatusRuntimeException.class, () -> tlsService.client(client));
 
         channel.shutdownNow();
     }

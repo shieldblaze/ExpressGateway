@@ -21,6 +21,7 @@ import io.grpc.ManagedChannel;
 import io.grpc.ManagedChannelBuilder;
 import io.grpc.Server;
 import io.grpc.ServerBuilder;
+import io.grpc.StatusRuntimeException;
 import io.grpc.netty.shaded.io.grpc.netty.NettyServerBuilder;
 import org.junit.jupiter.api.AfterAll;
 import org.junit.jupiter.api.BeforeAll;
@@ -31,6 +32,7 @@ import java.net.InetSocketAddress;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 class BufferServiceTest {
@@ -99,8 +101,7 @@ class BufferServiceTest {
                 .setHeapArena(10240)
                 .build();
 
-        Configuration.ConfigurationResponse configurationResponse = bufferService.buffer(buffer);
-        assertFalse(configurationResponse.getSuccess());
+        assertThrows(StatusRuntimeException.class, () -> bufferService.buffer(buffer));
 
         channel.shutdownNow();
     }

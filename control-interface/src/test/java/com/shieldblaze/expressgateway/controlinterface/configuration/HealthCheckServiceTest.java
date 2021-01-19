@@ -21,6 +21,7 @@ import io.grpc.ManagedChannel;
 import io.grpc.ManagedChannelBuilder;
 import io.grpc.Server;
 import io.grpc.ServerBuilder;
+import io.grpc.StatusRuntimeException;
 import io.grpc.netty.shaded.io.grpc.netty.NettyServerBuilder;
 import org.junit.jupiter.api.AfterAll;
 import org.junit.jupiter.api.BeforeAll;
@@ -83,8 +84,7 @@ class HealthCheckServiceTest {
                 .setTimeInterval(100)
                 .build();
 
-        Configuration.ConfigurationResponse configurationResponse = healthCheckService.healthcheck(healthCheck);
-        assertFalse(configurationResponse.getSuccess());
+        assertThrows(StatusRuntimeException.class, () -> healthCheckService.healthcheck(healthCheck));
 
         channel.shutdownNow();
     }

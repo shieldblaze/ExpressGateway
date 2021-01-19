@@ -20,6 +20,7 @@ package com.shieldblaze.expressgateway.controlinterface.configuration;
 import io.grpc.ManagedChannel;
 import io.grpc.ManagedChannelBuilder;
 import io.grpc.Server;
+import io.grpc.StatusRuntimeException;
 import io.grpc.netty.shaded.io.grpc.netty.NettyServerBuilder;
 import org.junit.jupiter.api.AfterAll;
 import org.junit.jupiter.api.BeforeAll;
@@ -80,8 +81,7 @@ class EventStreamServiceTest {
                 .setWorkers(-5)
                 .build();
 
-        Configuration.ConfigurationResponse configurationResponse = eventStreamService.eventstream(eventStream);
-        assertFalse(configurationResponse.getSuccess());
+        assertThrows(StatusRuntimeException.class, () -> eventStreamService.eventstream(eventStream));
 
         channel.shutdownNow();
     }

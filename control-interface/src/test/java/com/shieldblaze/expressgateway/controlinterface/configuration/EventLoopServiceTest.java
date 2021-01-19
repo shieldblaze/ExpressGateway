@@ -21,6 +21,7 @@ import io.grpc.ManagedChannel;
 import io.grpc.ManagedChannelBuilder;
 import io.grpc.Server;
 import io.grpc.ServerBuilder;
+import io.grpc.StatusRuntimeException;
 import io.grpc.netty.shaded.io.grpc.netty.NettyServerBuilder;
 import org.junit.jupiter.api.AfterAll;
 import org.junit.jupiter.api.BeforeAll;
@@ -83,8 +84,7 @@ class EventLoopServiceTest {
                 .setChildWorkers(4)
                 .build();
 
-        Configuration.ConfigurationResponse configurationResponse = eventLoopService.eventLoop(eventLoop);
-        assertFalse(configurationResponse.getSuccess());
+        assertThrows(StatusRuntimeException.class, () -> eventLoopService.eventLoop(eventLoop));
 
         channel.shutdownNow();
     }
