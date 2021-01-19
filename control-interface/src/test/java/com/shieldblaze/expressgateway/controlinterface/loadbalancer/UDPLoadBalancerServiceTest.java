@@ -105,13 +105,12 @@ class UDPLoadBalancerServiceTest {
         assertFalse(addResponse.getNodeId().isEmpty()); // Load Balancer ID
 
         DatagramSocket datagramSocket = new DatagramSocket();
-        datagramSocket.send(new DatagramPacket(PING, 0, 4, InetAddress.getByName("127.0.0.1"), 5000));
+        datagramSocket.send(new DatagramPacket(PING, 0, PING.length, InetAddress.getByName("127.0.0.1"), 5000));
         DatagramPacket datagramPacket = new DatagramPacket(new byte[4], 4);
         datagramSocket.receive(datagramPacket);
+        datagramSocket.close();
 
         assertArrayEquals(PONG, datagramPacket.getData());
-
-        Thread.sleep(2500L); // Wait for everything to settle down
     }
 
     @Test
