@@ -58,13 +58,13 @@ class TCPLoadBalancerServiceTest {
     static void setup() throws IOException {
         System.setProperty("EGWConfDir", System.getProperty("java.io.tmpdir"));
 
-        server = NettyServerBuilder.forAddress(new InetSocketAddress("127.0.0.1", 9110))
+        server = NettyServerBuilder.forAddress(new InetSocketAddress("127.0.0.1", 30000))
                 .addService(new TCPLoadBalancerService())
                 .addService(new NodeService())
                 .build()
                 .start();
 
-        channel = ManagedChannelBuilder.forTarget("127.0.0.1:9110")
+        channel = ManagedChannelBuilder.forTarget("127.0.0.1:30000")
                 .usePlaintext()
                 .build();
     }
