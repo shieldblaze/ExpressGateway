@@ -33,7 +33,8 @@ message GetLoadBalancerRequest {
 // ------------------------ Layer-7 Protocols ------------------------
 
 enum Layer7 {
-  HTTP = 0;
+  NONE = 0;
+  HTTP = 1;
 }
 
 // ------------------------ TLS ------------------------
@@ -75,13 +76,12 @@ message TCPLoadBalancer {
    string name = 1;
    string bindAddress = 2;
    int32 bindPort = 3;
-   string profileName = 4;
-   TLSServer tlsServer = 5;
-   TLSClient tlsClient = 6;
-   string strategy = 7;
-   string sessionPersistence = 8;
-   bool useDefaults = 9;
-   Layer7 layer7 = 10;
+   TLSServer tlsServer = 4;
+   TLSClient tlsClient = 5;
+   string strategy = 6;
+   string sessionPersistence = 7;
+   bool useDefaults = 8;
+   Layer7 layer7 = 9;
 }
 
 service TCPLoadBalancerService {

@@ -35,13 +35,10 @@ import com.shieldblaze.expressgateway.configuration.tls.MutualTLS;
 import com.shieldblaze.expressgateway.configuration.tls.Protocol;
 import com.shieldblaze.expressgateway.configuration.tls.TLSConfiguration;
 import com.shieldblaze.expressgateway.configuration.tls.TLSConfigurationBuilder;
-import com.shieldblaze.expressgateway.core.loadbalancer.LoadBalancerRegistry;
-import com.shieldblaze.expressgateway.protocol.http.loadbalancer.HTTPLoadBalancerBuilder;
 
 import javax.net.ssl.SSLException;
 import java.util.ArrayList;
 import java.util.List;
-import java.util.concurrent.atomic.AtomicBoolean;
 
 @SuppressWarnings({"unchecked", "rawtypes"})
 final class Common {

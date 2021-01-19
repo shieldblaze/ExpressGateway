@@ -15,6 +15,7 @@
  * You should have received a copy of the GNU General Public License
  * along with ShieldBlaze ExpressGateway.  If not, see <https://www.gnu.org/licenses/>.
  */
+
 package com.shieldblaze.expressgateway.controlinterface.loadbalancer;
 
 import com.shieldblaze.expressgateway.controlinterface.node.NodeOuterClass;
@@ -32,17 +33,20 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.TestMethodOrder;
 
 import java.io.IOException;
+import java.net.DatagramPacket;
+import java.net.DatagramSocket;
+import java.net.InetAddress;
 import java.net.InetSocketAddress;
-import java.net.ServerSocket;
-import java.net.Socket;
+import java.net.URI;
+import java.net.http.HttpClient;
+import java.net.http.HttpRequest;
+import java.net.http.HttpResponse;
+import java.util.Arrays;
 
-import static org.junit.jupiter.api.Assertions.assertArrayEquals;
-import static org.junit.jupiter.api.Assertions.assertEquals;
-import static org.junit.jupiter.api.Assertions.assertFalse;
-import static org.junit.jupiter.api.Assertions.assertTrue;
+import static org.junit.jupiter.api.Assertions.*;
 
 @TestMethodOrder(MethodOrderer.OrderAnnotation.class)
-class TCPLoadBalancerServiceTest {
+class UDPLoadBalancerServiceTest {
 
     static Server server;
     static ManagedChannel channel;
@@ -53,7 +57,7 @@ class TCPLoadBalancerServiceTest {
         System.setProperty("EGWConfDir", System.getProperty("java.io.tmpdir"));
 
         server = NettyServerBuilder.forAddress(new InetSocketAddress("127.0.0.1", 9110))
-                .addService(new TCPLoadBalancerService())
+                .addService(new UDPLoadBalancerService())
                 .addService(new NodeService())
                 .build()
                 .start();
@@ -72,19 +76,19 @@ class TCPLoadBalancerServiceTest {
     @Test
     @Order(1)
     void simpleServerLBClientTest() throws IOException, InterruptedException {
-        new TCPServer().start();
+        new UDPServer(false, 5555).start();
 
-        TCPLoadBalancerServiceGrpc.TCPLoadBalancerServiceBlockingStub tcpService = TCPLoadBalancerServiceGrpc.newBlockingStub(channel);
+        UDPLoadBalancerServiceGrpc.UDPLoadBalancerServiceBlockingStub udpService = UDPLoadBalancerServiceGrpc.newBlockingStub(channel);
         NodeServiceGrpc.NodeServiceBlockingStub nodeService = NodeServiceGrpc.newBlockingStub(channel);
 
-        LoadBalancer.TCPLoadBalancer tcpLoadBalancer = LoadBalancer.TCPLoadBalancer.newBuilder()
+        LoadBalancer.UDPLoadBalancer tcpLoadBalancer = LoadBalancer.UDPLoadBalancer.newBuilder()
                 .setBindAddress("127.0.0.1")
                 .setBindPort(5000)
                 .setName("Meow")
                 .setUseDefaults(true)
                 .build();
 
-        LoadBalancer.LoadBalancerResponse loadBalancerResponse = tcpService.start(tcpLoadBalancer);
+        LoadBalancer.LoadBalancerResponse loadBalancerResponse = udpService.start(tcpLoadBalancer);
         assertFalse(loadBalancerResponse.getResponseText().isEmpty()); // Load Balancer ID must exist
 
         loadBalancerId = loadBalancerResponse.getResponseText();
@@ -100,12 +104,12 @@ class TCPLoadBalancerServiceTest {
         assertTrue(addResponse.getSuccess());
         assertFalse(addResponse.getNodeId().isEmpty()); // Load Balancer ID
 
-        try (Socket socket = new Socket("127.0.0.1", 5000)) {
-            socket.getOutputStream().write("Meow".getBytes());
-            assertArrayEquals("Cat".getBytes(), socket.getInputStream().readNBytes(3));
-        } catch (IOException e) {
-            throw e;
-        }
+        DatagramSocket datagramSocket = new DatagramSocket();
+        datagramSocket.send(new DatagramPacket(PING, 0, 4, InetAddress.getByName("127.0.0.1"), 5000));
+        DatagramPacket datagramPacket = new DatagramPacket(new byte[4], 4);
+        datagramSocket.receive(datagramPacket);
+
+        assertArrayEquals(PONG, datagramPacket.getData());
 
         Thread.sleep(2500L); // Wait for everything to settle down
     }
@@ -113,36 +117,59 @@ class TCPLoadBalancerServiceTest {
     @Test
     @Order(2)
     void getTest() {
-        TCPLoadBalancerServiceGrpc.TCPLoadBalancerServiceBlockingStub tcpService = TCPLoadBalancerServiceGrpc.newBlockingStub(channel);
+        UDPLoadBalancerServiceGrpc.UDPLoadBalancerServiceBlockingStub udpService = UDPLoadBalancerServiceGrpc.newBlockingStub(channel);
         LoadBalancer.GetLoadBalancerRequest request = LoadBalancer.GetLoadBalancerRequest.newBuilder()
                 .setLoadBalancerId(loadBalancerId)
                 .build();
 
-        LoadBalancer.TCPLoadBalancer tcpLoadBalancer = tcpService.get(request);
+        LoadBalancer.UDPLoadBalancer udpLoadBalancer = udpService.get(request);
 
-        assertEquals("127.0.0.1", tcpLoadBalancer.getBindAddress());
-        assertEquals(5000, tcpLoadBalancer.getBindPort());
+        assertEquals("127.0.0.1", udpLoadBalancer.getBindAddress());
+        assertEquals(5000, udpLoadBalancer.getBindPort());
     }
 
     @Test
     @Order(3)
     void stopTest() {
-        TCPLoadBalancerServiceGrpc.TCPLoadBalancerServiceBlockingStub tcpService = TCPLoadBalancerServiceGrpc.newBlockingStub(channel);
-        LoadBalancer.LoadBalancerResponse response = tcpService.stop(LoadBalancer.StopLoadBalancer.newBuilder().setId(loadBalancerId).build());
+        UDPLoadBalancerServiceGrpc.UDPLoadBalancerServiceBlockingStub udpService = UDPLoadBalancerServiceGrpc.newBlockingStub(channel);
+        LoadBalancer.LoadBalancerResponse response = udpService.stop(LoadBalancer.StopLoadBalancer.newBuilder().setId(loadBalancerId).build());
         assertEquals("Success", response.getResponseText());
     }
 
-    private static final class TCPServer extends Thread {
+    private static final byte[] PING = "PING".getBytes();
+    private static final byte[] PONG = "PONG".getBytes();
+
+    private static final class UDPServer extends Thread {
+
+        private final boolean ping;
+        private final int port;
+
+        private UDPServer(boolean ping, int port) {
+            this.ping = ping;
+            this.port = port;
+        }
 
         @Override
         public void run() {
-            try (ServerSocket serverSocket = new ServerSocket(5555)) {
-                Socket socket = serverSocket.accept();
-                assertArrayEquals("Meow".getBytes(), socket.getInputStream().readNBytes(4));
-                socket.getOutputStream().write("Cat".getBytes());
-                Thread.sleep(1000L);
+            try (DatagramSocket datagramSocket = new DatagramSocket(port, InetAddress.getByName("127.0.0.1"))) {
+                byte[] bytes = new byte[2048];
+                DatagramPacket datagramPacket = new DatagramPacket(bytes, bytes.length);
+                datagramSocket.receive(datagramPacket);
+
+                InetAddress inetAddress = datagramPacket.getAddress();
+                int port = datagramPacket.getPort();
+
+                assertArrayEquals(PING, Arrays.copyOf(datagramPacket.getData(), datagramPacket.getLength()));
+
+                if (ping) {
+                    datagramPacket = new DatagramPacket(PING, 4, inetAddress, port);
+                } else {
+                    datagramPacket = new DatagramPacket(PONG, 4, inetAddress, port);
+                }
+
+                datagramSocket.send(datagramPacket);
             } catch (Exception ex) {
-                ex.printStackTrace();
+                // Ignore
             }
         }
     }

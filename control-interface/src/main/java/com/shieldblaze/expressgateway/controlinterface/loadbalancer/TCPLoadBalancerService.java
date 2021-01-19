@@ -58,6 +58,9 @@ public final class TCPLoadBalancerService extends TCPLoadBalancerServiceGrpc.TCP
             TLSConfiguration forServer = null;
             TLSConfiguration forClient = null;
 
+            Cluster cluster;
+            L4LoadBalancer loadBalancer;
+
             if (request.getUseDefaults()) {
                 transportConfiguration = TransportConfiguration.DEFAULT;
                 eventLoopConfiguration = EventLoopConfiguration.DEFAULT;
@@ -88,11 +91,10 @@ public final class TCPLoadBalancerService extends TCPLoadBalancerServiceGrpc.TCP
                     .withBufferConfiguration(bufferConfiguration)
                     .build();
 
-            Cluster cluster = new ClusterPool(eventStreamConfiguration.eventStream(), Common.l4(request.getStrategy(), Common.l4(request.getSessionPersistence())));
-
-            L4LoadBalancer loadBalancer;
-
             if (request.getLayer7() == LoadBalancer.Layer7.HTTP) {
+                cluster = new ClusterPool(eventStreamConfiguration.eventStream(), Common.l7(request.getStrategy(),
+                        Common.l7(request.getSessionPersistence())));
+
                 loadBalancer = HTTPLoadBalancerBuilder.newBuilder()
                         .withL4FrontListener(new TCPListener())
                         .withHTTPInitializer(new DefaultHTTPServerInitializer())
@@ -105,6 +107,9 @@ public final class TCPLoadBalancerService extends TCPLoadBalancerServiceGrpc.TCP
                         .withName(request.getName())
                         .build();
             } else {
+                cluster = new ClusterPool(eventStreamConfiguration.eventStream(), Common.l4(request.getStrategy(),
+                        Common.l4(request.getSessionPersistence())));
+
                 loadBalancer = L4LoadBalancerBuilder.newBuilder()
                         .withL4FrontListener(new TCPListener())
                         .withBindAddress(new InetSocketAddress(request.getBindAddress(), request.getBindPort()))
@@ -117,7 +122,7 @@ public final class TCPLoadBalancerService extends TCPLoadBalancerServiceGrpc.TCP
             }
 
             L4FrontListenerStartupEvent event = loadBalancer.start();
-            LoadBalancerProperty loadBalancerProperty = new LoadBalancerProperty().profileName(request.getProfileName()).startupEvent(event);
+            LoadBalancerProperty loadBalancerProperty = new LoadBalancerProperty().profileName(request.getName()).startupEvent(event);
             LoadBalancerRegistry.add(loadBalancer, loadBalancerProperty);
 
             response = LoadBalancer.LoadBalancerResponse.newBuilder()
@@ -161,7 +166,6 @@ public final class TCPLoadBalancerService extends TCPLoadBalancerServiceGrpc.TCP
                     .setBindPort(l4LoadBalancer.bindAddress().getPort())
                     .setStrategy(l4LoadBalancer.cluster().loadBalance().name())
                     .setSessionPersistence(l4LoadBalancer.cluster().loadBalance().sessionPersistence().name())
-                    .setProfileName(loadBalancerProperty.profileName())
                     .build();
 
             responseObserver.onNext(response);
