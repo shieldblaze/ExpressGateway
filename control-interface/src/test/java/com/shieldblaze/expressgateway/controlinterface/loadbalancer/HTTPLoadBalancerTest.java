@@ -86,6 +86,7 @@ class HTTPLoadBalancerTest {
     static Server server;
     static ManagedChannel channel;
     static String loadBalancerId;
+    static HTTPServer httpServer = new HTTPServer(5555, false);
 
     @BeforeAll
     static void setup() throws IOException {
@@ -104,6 +105,7 @@ class HTTPLoadBalancerTest {
 
     @AfterAll
     static void shutdown() throws InterruptedException {
+        httpServer.shutdown();
         channel.shutdownNow();
         server.shutdownNow().awaitTermination(30, TimeUnit.SECONDS);
     }
@@ -111,7 +113,7 @@ class HTTPLoadBalancerTest {
     @Test
     @Order(1)
     void simpleServerLBClientTest() throws IOException, InterruptedException {
-        new HTTPServer(5555, false).start();
+        httpServer.start();
 
         TCPLoadBalancerServiceGrpc.TCPLoadBalancerServiceBlockingStub tcpService = TCPLoadBalancerServiceGrpc.newBlockingStub(channel);
         NodeServiceGrpc.NodeServiceBlockingStub nodeService = NodeServiceGrpc.newBlockingStub(channel);
