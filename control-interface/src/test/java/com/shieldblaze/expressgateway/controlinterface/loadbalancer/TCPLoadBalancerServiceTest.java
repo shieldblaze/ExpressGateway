@@ -100,7 +100,7 @@ class TCPLoadBalancerServiceTest {
         NodeOuterClass.AddResponse addResponse = nodeService.add(addRequest);
         assertTrue(addResponse.getSuccess());
         assertFalse(addResponse.getNodeId().isEmpty()); // Load Balancer ID
-        System.out.println("LOL1");
+
         try (Socket socket = new Socket("127.0.0.1", 5000)) {
             socket.getOutputStream().write("Meow".getBytes());
             assertArrayEquals("Cat".getBytes(), socket.getInputStream().readNBytes(3));
