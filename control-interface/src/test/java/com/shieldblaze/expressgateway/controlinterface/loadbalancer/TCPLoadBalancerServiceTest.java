@@ -122,6 +122,14 @@ class TCPLoadBalancerServiceTest {
         assertEquals(loadBalancerId, tcpLoadBalancer);
     }
 
+    @Test
+    @Order(3)
+    void stopTest() {
+        TCPLoadBalancerServiceGrpc.TCPLoadBalancerServiceBlockingStub tcpService = TCPLoadBalancerServiceGrpc.newBlockingStub(channel);
+        LoadBalancer.LoadBalancerResponse response = tcpService.stop(LoadBalancer.StopLoadBalancer.newBuilder().setId(loadBalancerId).build());
+        assertEquals("Success", response.getResponseText());
+    }
+
     private static final class TCPServer extends Thread {
 
         @Override

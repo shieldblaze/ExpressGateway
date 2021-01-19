@@ -57,7 +57,6 @@ public final class EventLoopService extends EventLoopServiceGrpc.EventLoopServic
             Configuration.EventLoop eventLoop = Configuration.EventLoop.newBuilder()
                     .setParentWorkers(eventLoopConfiguration.parentWorkers())
                     .setChildWorkers(eventLoopConfiguration.childWorkers())
-                    .setProfileName()
                     .build();
 
             responseObserver.onNext(eventLoop);
