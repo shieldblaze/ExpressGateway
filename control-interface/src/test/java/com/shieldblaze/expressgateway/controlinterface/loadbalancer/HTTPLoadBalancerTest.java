@@ -20,8 +20,6 @@ package com.shieldblaze.expressgateway.controlinterface.loadbalancer;
 import com.shieldblaze.expressgateway.controlinterface.node.NodeOuterClass;
 import com.shieldblaze.expressgateway.controlinterface.node.NodeService;
 import com.shieldblaze.expressgateway.controlinterface.node.NodeServiceGrpc;
-import com.shieldblaze.expressgateway.protocol.http.alpn.ALPNHandler;
-import com.shieldblaze.expressgateway.protocol.http.alpn.ALPNHandlerBuilder;
 import io.grpc.ManagedChannel;
 import io.grpc.ManagedChannelBuilder;
 import io.grpc.Server;
@@ -44,19 +42,7 @@ import io.netty.handler.codec.http.HttpObjectAggregator;
 import io.netty.handler.codec.http.HttpResponseStatus;
 import io.netty.handler.codec.http.HttpServerCodec;
 import io.netty.handler.codec.http.HttpVersion;
-import io.netty.handler.codec.http2.DefaultHttp2Connection;
-import io.netty.handler.codec.http2.Http2Connection;
 import io.netty.handler.codec.http2.HttpConversionUtil;
-import io.netty.handler.codec.http2.HttpToHttp2ConnectionHandler;
-import io.netty.handler.codec.http2.HttpToHttp2ConnectionHandlerBuilder;
-import io.netty.handler.codec.http2.InboundHttp2ToHttpAdapter;
-import io.netty.handler.codec.http2.InboundHttp2ToHttpAdapterBuilder;
-import io.netty.handler.ssl.ApplicationProtocolConfig;
-import io.netty.handler.ssl.ApplicationProtocolNames;
-import io.netty.handler.ssl.SslContext;
-import io.netty.handler.ssl.SslContextBuilder;
-import io.netty.handler.ssl.SslProvider;
-import io.netty.handler.ssl.util.SelfSignedCertificate;
 import org.junit.jupiter.api.AfterAll;
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.MethodOrderer;
@@ -66,8 +52,6 @@ import org.junit.jupiter.api.TestMethodOrder;
 
 import java.io.IOException;
 import java.net.InetSocketAddress;
-import java.net.ServerSocket;
-import java.net.Socket;
 import java.net.URI;
 import java.net.http.HttpClient;
 import java.net.http.HttpRequest;
@@ -75,7 +59,6 @@ import java.net.http.HttpResponse;
 import java.util.Objects;
 import java.util.concurrent.TimeUnit;
 
-import static org.junit.jupiter.api.Assertions.assertArrayEquals;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
@@ -86,7 +69,7 @@ class HTTPLoadBalancerTest {
     static Server server;
     static ManagedChannel channel;
     static String loadBalancerId;
-    static HTTPServer httpServer = new HTTPServer(5555, false);
+    static HTTPServer httpServer = new HTTPServer();
 
     @BeforeAll
     static void setup() throws IOException {
@@ -142,6 +125,8 @@ class HTTPLoadBalancerTest {
         assertTrue(addResponse.getSuccess());
         assertFalse(addResponse.getNodeId().isEmpty()); // Load Balancer ID
 
+        System.out.println("LOL1");
+
         HttpClient httpClient = HttpClient.newHttpClient();
         HttpRequest httpRequest = HttpRequest.newBuilder()
                 .uri(URI.create("http://127.0.0.1:5000"))
@@ -178,39 +163,13 @@ class HTTPLoadBalancerTest {
 
     private static final class HTTPServer extends Thread {
 
-        private final int port;
-        private final boolean tls;
-        private final ChannelHandler channelHandler;
         private EventLoopGroup eventLoopGroup;
         private ChannelFuture channelFuture;
 
-        HTTPServer(int port, boolean tls) {
-            this(port, tls, null);
-        }
-
-        HTTPServer(int port, boolean tls, ChannelHandler channelHandler) {
-            this.port = port;
-            this.tls = tls;
-            this.channelHandler = Objects.requireNonNullElseGet(channelHandler, Handler::new);
-        }
-
         @Override
         public void run() {
-
             try {
-
                 eventLoopGroup = new NioEventLoopGroup(2);
-
-                SelfSignedCertificate selfSignedCertificate = new SelfSignedCertificate("localhost", "EC", 256);
-                SslContext sslContext = SslContextBuilder.forServer(selfSignedCertificate.certificate(), selfSignedCertificate.privateKey())
-                        .sslProvider(SslProvider.JDK)
-                        .applicationProtocolConfig(new ApplicationProtocolConfig(
-                                ApplicationProtocolConfig.Protocol.ALPN,
-                                ApplicationProtocolConfig.SelectorFailureBehavior.NO_ADVERTISE,
-                                ApplicationProtocolConfig.SelectedListenerFailureBehavior.ACCEPT,
-                                ApplicationProtocolNames.HTTP_2,
-                                ApplicationProtocolNames.HTTP_1_1))
-                        .build();
 
                 ServerBootstrap serverBootstrap = new ServerBootstrap()
                         .group(eventLoopGroup, eventLoopGroup)
@@ -218,41 +177,13 @@ class HTTPLoadBalancerTest {
                         .childHandler(new ChannelInitializer<SocketChannel>() {
                             @Override
                             protected void initChannel(SocketChannel ch) {
-
-                                if (tls) {
-                                    ch.pipeline().addLast(sslContext.newHandler(ch.alloc()));
-
-                                    Http2Connection http2Connection = new DefaultHttp2Connection(true);
-
-                                    InboundHttp2ToHttpAdapter adapter = new InboundHttp2ToHttpAdapterBuilder(http2Connection)
-                                            .propagateSettings(false)
-                                            .maxContentLength(Integer.MAX_VALUE)
-                                            .validateHttpHeaders(true)
-                                            .build();
-
-                                    HttpToHttp2ConnectionHandler httpToHttp2ConnectionHandler = new HttpToHttp2ConnectionHandlerBuilder()
-                                            .connection(http2Connection)
-                                            .frameListener(adapter)
-                                            .build();
-
-                                    ALPNHandler alpnHandler = ALPNHandlerBuilder.newBuilder()
-                                            .withHTTP2ChannelHandler(httpToHttp2ConnectionHandler)
-                                            .withHTTP2ChannelHandler(channelHandler)
-                                            .withHTTP1ChannelHandler(new HttpServerCodec())
-                                            .withHTTP1ChannelHandler(new HttpObjectAggregator(Integer.MAX_VALUE))
-                                            .withHTTP1ChannelHandler(channelHandler)
-                                            .build();
-
-                                    ch.pipeline().addLast(alpnHandler);
-                                } else {
-                                    ch.pipeline().addLast(new HttpServerCodec());
-                                    ch.pipeline().addLast(new HttpObjectAggregator(Integer.MAX_VALUE));
-                                    ch.pipeline().addLast(channelHandler);
-                                }
+                                ch.pipeline().addLast(new HttpServerCodec());
+                                ch.pipeline().addLast(new HttpObjectAggregator(Integer.MAX_VALUE));
+                                ch.pipeline().addLast(new Handler());
                             }
                         });
 
-                channelFuture = serverBootstrap.bind("127.0.0.1", port);
+                channelFuture = serverBootstrap.bind("127.0.0.1", 5555);
             } catch (Exception ex) {
                 ex.printStackTrace();
             }
