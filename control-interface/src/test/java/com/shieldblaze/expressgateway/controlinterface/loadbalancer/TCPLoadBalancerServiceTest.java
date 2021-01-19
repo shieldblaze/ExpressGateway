@@ -138,6 +138,8 @@ class TCPLoadBalancerServiceTest {
             try (ServerSocket serverSocket = new ServerSocket(5555)) {
                 Socket socket = serverSocket.accept();
                 assertArrayEquals("Meow".getBytes(), socket.getInputStream().readNBytes(4));
+
+                Thread.sleep(500L);
                 socket.getOutputStream().write("Cat".getBytes());
             } catch (Exception ex) {
                 ex.printStackTrace();
