@@ -25,7 +25,6 @@ import com.shieldblaze.expressgateway.configuration.buffer.BufferConfiguration;
 import com.shieldblaze.expressgateway.configuration.eventloop.EventLoopConfiguration;
 import com.shieldblaze.expressgateway.configuration.eventstream.EventStreamConfiguration;
 import com.shieldblaze.expressgateway.configuration.http.HTTPConfiguration;
-import com.shieldblaze.expressgateway.configuration.http.HTTPConfigurationBuilder;
 import com.shieldblaze.expressgateway.configuration.tls.TLSConfiguration;
 import com.shieldblaze.expressgateway.configuration.transport.TransportConfiguration;
 import com.shieldblaze.expressgateway.core.events.L4FrontListenerStartupEvent;

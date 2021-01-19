@@ -19,10 +19,10 @@ package com.shieldblaze.expressgateway.protocol.udp;
 
 import com.shieldblaze.expressgateway.configuration.CoreConfiguration;
 import com.shieldblaze.expressgateway.configuration.transport.TransportType;
+import com.shieldblaze.expressgateway.core.BootstrapFactory;
 import com.shieldblaze.expressgateway.core.L4FrontListener;
 import com.shieldblaze.expressgateway.core.events.L4FrontListenerStartupEvent;
 import com.shieldblaze.expressgateway.core.events.L4FrontListenerStopEvent;
-import com.shieldblaze.expressgateway.core.BootstrapFactory;
 import io.netty.bootstrap.Bootstrap;
 import io.netty.channel.ChannelFuture;
 import io.netty.channel.ChannelFutureListener;

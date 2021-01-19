@@ -18,8 +18,6 @@
 package com.shieldblaze.expressgateway.healthcheck.l4;
 
 import com.shieldblaze.expressgateway.healthcheck.HealthCheck;
-import org.apache.logging.log4j.LogManager;
-import org.apache.logging.log4j.Logger;
 
 import java.net.InetSocketAddress;
 import java.net.Socket;

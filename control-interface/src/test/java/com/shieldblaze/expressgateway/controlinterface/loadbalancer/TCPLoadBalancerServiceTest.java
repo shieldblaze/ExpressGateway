@@ -72,7 +72,7 @@ class TCPLoadBalancerServiceTest {
 
     @Test
     @Order(1)
-    void simpleServerLBClientTest() throws IOException, InterruptedException {
+    void simpleServerLBClientTest() throws IOException {
         new TCPServer().start();
 
         TCPLoadBalancerServiceGrpc.TCPLoadBalancerServiceBlockingStub tcpService = TCPLoadBalancerServiceGrpc.newBlockingStub(channel);

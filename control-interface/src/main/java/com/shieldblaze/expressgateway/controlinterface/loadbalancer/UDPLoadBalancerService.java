@@ -36,7 +36,6 @@ import io.grpc.stub.StreamObserver;
 
 import java.net.InetSocketAddress;
 import java.util.Map;
-import java.util.concurrent.atomic.AtomicBoolean;
 
 public final class UDPLoadBalancerService extends UDPLoadBalancerServiceGrpc.UDPLoadBalancerServiceImplBase {
 

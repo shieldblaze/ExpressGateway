@@ -18,7 +18,6 @@
 package com.shieldblaze.expressgateway.configuration.tls;
 
 import com.google.gson.annotations.Expose;
-import com.shieldblaze.expressgateway.configuration.ConfigurationMarshaller;
 import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
 

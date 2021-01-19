@@ -17,7 +17,6 @@
  */
 package com.shieldblaze.expressgateway.controlinterface.node;
 
-import com.shieldblaze.expressgateway.controlinterface.configuration.BufferService;
 import io.grpc.ManagedChannel;
 import io.grpc.ManagedChannelBuilder;
 import io.grpc.Server;
@@ -28,8 +27,6 @@ import org.junit.jupiter.api.Test;
 
 import java.io.IOException;
 import java.net.InetSocketAddress;
-
-import static org.junit.jupiter.api.Assertions.*;
 
 class NodeServiceTest {
     static Server server;

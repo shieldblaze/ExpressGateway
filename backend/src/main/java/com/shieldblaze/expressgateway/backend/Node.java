@@ -18,11 +18,6 @@
 package com.shieldblaze.expressgateway.backend;
 
 import com.shieldblaze.expressgateway.backend.cluster.Cluster;
-import com.shieldblaze.expressgateway.backend.events.node.NodeEvent;
-import com.shieldblaze.expressgateway.backend.events.node.NodeIdleEvent;
-import com.shieldblaze.expressgateway.backend.events.node.NodeOfflineEvent;
-import com.shieldblaze.expressgateway.backend.events.node.NodeOnlineEvent;
-import com.shieldblaze.expressgateway.backend.events.node.NodeRemovedEvent;
 import com.shieldblaze.expressgateway.backend.exceptions.TooManyConnectionsException;
 import com.shieldblaze.expressgateway.common.Math;
 import com.shieldblaze.expressgateway.common.annotation.NonNull;
@@ -31,7 +26,6 @@ import com.shieldblaze.expressgateway.healthcheck.Health;
 import com.shieldblaze.expressgateway.healthcheck.HealthCheck;
 
 import java.net.InetSocketAddress;
-import java.util.Objects;
 import java.util.Queue;
 import java.util.UUID;
 import java.util.concurrent.ConcurrentLinkedQueue;

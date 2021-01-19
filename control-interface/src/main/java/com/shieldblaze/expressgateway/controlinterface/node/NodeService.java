@@ -19,7 +19,6 @@ package com.shieldblaze.expressgateway.controlinterface.node;
 
 import com.shieldblaze.expressgateway.backend.Node;
 import com.shieldblaze.expressgateway.common.utils.Number;
-import com.shieldblaze.expressgateway.core.events.L4FrontListenerStartupEvent;
 import com.shieldblaze.expressgateway.core.loadbalancer.L4LoadBalancer;
 import com.shieldblaze.expressgateway.core.loadbalancer.LoadBalancerProperty;
 import com.shieldblaze.expressgateway.core.loadbalancer.LoadBalancerRegistry;

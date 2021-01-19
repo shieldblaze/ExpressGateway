@@ -19,9 +19,6 @@ package com.shieldblaze.expressgateway.core.loadbalancer;
 
 import com.shieldblaze.expressgateway.core.events.L4FrontListenerStartupEvent;
 
-import java.util.Map;
-import java.util.concurrent.ConcurrentHashMap;
-
 public class LoadBalancerProperty {
     private String profileName;
     private L4FrontListenerStartupEvent startupEvent;
