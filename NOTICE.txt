@@ -78,6 +78,27 @@ This product depends on 'Bucket4J'. License for the same can be obtained at:
 This product depends on 'Brotli4j'. License for the same can be obtained at:
 
   * LICENSE:
-    * license/LICENSE.brotli4j.txt (GNU General Public License v3.0)
+    * license/LICENSE.brotli4j.txt (Apache License 2.0)
+
+---------------------------------
+
+This product depends on 'Google Gson'. License for the same can be obtained at:
+
+  * LICENSE:
+    * license/LICENSE.gson.txt (Apache License 2.0)
+
+---------------------------------
+
+This product depends on 'Google gRPC-Java'. License for the same can be obtained at:
+
+  * LICENSE:
+    * license/LICENSE.grpc-java.txt (Apache License 2.0)
+
+---------------------------------
+
+This product depends on 'Javax-Annotation'. License for the same can be obtained at:
+
+  * LICENSE:
+    * license/LICENSE.javax-annotation.txt (COMMON DEVELOPMENT AND DISTRIBUTION LICENSE (CDDL) Version 1.1)
 
 ---------------------------------
