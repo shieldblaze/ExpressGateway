@@ -41,20 +41,20 @@ class HTTPServiceTest {
     static void setup() throws IOException {
         System.setProperty("EGWConfDir", System.getProperty("java.io.tmpdir"));
 
-        server = NettyServerBuilder.forAddress(new InetSocketAddress("127.0.0.1", 9110))
+        server = NettyServerBuilder.forAddress(new InetSocketAddress("127.0.0.1", 60004))
                 .addService(new HTTPService())
                 .build()
                 .start();
     }
 
     @AfterAll
-    static void shutdown() throws InterruptedException {
-        server.shutdownNow().awaitTermination();
+    static void shutdown() {
+        server.shutdownNow();
     }
 
     @Test
     void simpleTest() {
-        ManagedChannel channel = ManagedChannelBuilder.forTarget("127.0.0.1:9110")
+        ManagedChannel channel = ManagedChannelBuilder.forTarget("127.0.0.1:60004")
                 .usePlaintext()
                 .build();
 
@@ -83,7 +83,7 @@ class HTTPServiceTest {
 
     @Test
     void failingTest() {
-        ManagedChannel channel = ManagedChannelBuilder.forTarget("127.0.0.1:9110")
+        ManagedChannel channel = ManagedChannelBuilder.forTarget("127.0.0.1:60004")
                 .usePlaintext()
                 .build();
 
