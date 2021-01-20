@@ -31,6 +31,7 @@ import java.util.Objects;
  * Builder for {@link HTTPLoadBalancer}
  */
 public final class HTTPLoadBalancerBuilder {
+    private String name;
     private InetSocketAddress bindAddress;
     private CoreConfiguration coreConfiguration;
     private HTTPConfiguration httpConfiguration;
@@ -46,6 +47,11 @@ public final class HTTPLoadBalancerBuilder {
 
     public static HTTPLoadBalancerBuilder newBuilder() {
         return new HTTPLoadBalancerBuilder();
+    }
+
+    public HTTPLoadBalancerBuilder withName(String name) {
+        this.name = name;
+        return this;
     }
 
     public HTTPLoadBalancerBuilder withCoreConfiguration(CoreConfiguration coreConfiguration) {
@@ -106,6 +112,7 @@ public final class HTTPLoadBalancerBuilder {
         Objects.requireNonNull(httpConfiguration, "HTTPConfiguration");
 
         return new HTTPLoadBalancer(
+                name,
                 bindAddress,
                 l4FrontListener,
                 cluster,

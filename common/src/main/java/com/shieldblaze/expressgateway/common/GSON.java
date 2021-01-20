@@ -15,16 +15,23 @@
  * You should have received a copy of the GNU General Public License
  * along with ShieldBlaze ExpressGateway.  If not, see <https://www.gnu.org/licenses/>.
  */
-package com.shieldblaze.expressgateway.configuration;
+package com.shieldblaze.expressgateway.common;
 
-import org.junit.jupiter.api.Test;
+import com.google.gson.Gson;
+import com.google.gson.GsonBuilder;
 
-import static org.junit.jupiter.api.Assertions.assertThrows;
+public final class GSON {
 
-final class CoreConfigurationBuilderTest {
-
-    @Test
-    void test() {
-        assertThrows(NullPointerException.class, () -> CoreConfigurationBuilder.newBuilder().build());
+    private GSON() {
+        // Prevent outside initialization
     }
+
+    /**
+     * {@link Gson} Singleton Instance
+     */
+    public static final Gson INSTANCE = new GsonBuilder()
+            .excludeFieldsWithoutExposeAnnotation()
+            .disableHtmlEscaping()
+            .setPrettyPrinting()
+            .create();
 }

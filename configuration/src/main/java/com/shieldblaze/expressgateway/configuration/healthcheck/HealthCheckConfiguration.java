@@ -17,10 +17,23 @@
  */
 package com.shieldblaze.expressgateway.configuration.healthcheck;
 
-public class HealthCheckConfiguration {
+import com.google.gson.annotations.Expose;
+import com.shieldblaze.expressgateway.configuration.ConfigurationMarshaller;
 
+import java.io.IOException;
+
+public class HealthCheckConfiguration extends ConfigurationMarshaller {
+
+    @Expose
     private final int workers;
+
+    @Expose
     private final int timeInterval;
+
+    public static final HealthCheckConfiguration DEFAULT = new HealthCheckConfiguration(
+            Runtime.getRuntime().availableProcessors(),
+            1000 * 10 // 10 Seconds
+    );
 
     HealthCheckConfiguration(int workers, int timeInterval) {
         this.workers = workers;
@@ -33,5 +46,13 @@ public class HealthCheckConfiguration {
 
     public int timeInterval() {
         return timeInterval;
+    }
+
+    public static HealthCheckConfiguration loadFrom() throws IOException {
+        return loadFrom(HealthCheckConfiguration.class, "HealthCheck.json");
+    }
+
+    public void saveTo() throws IOException {
+        saveTo(this, "HealthCheck.json");
     }
 }

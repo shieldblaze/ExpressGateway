@@ -25,7 +25,7 @@ public final class HTTPConfigurationBuilder {
     private long maxContentLength;
     private int h2InitialWindowSize;
     private long h2MaxConcurrentStreams;
-    private long h2MaxHeaderSizeList;
+    private long h2MaxHeaderListSize;
     private long h2MaxHeaderTableSize;
     private int h2MaxFrameSize;
     private int maxInitialLineLength;
@@ -58,8 +58,8 @@ public final class HTTPConfigurationBuilder {
         return this;
     }
 
-    public HTTPConfigurationBuilder withH2MaxHeaderSizeList(long h2MaxHeaderSizeList) {
-        this.h2MaxHeaderSizeList = h2MaxHeaderSizeList;
+    public HTTPConfigurationBuilder withH2MaxHeaderListSize(long h2MaxHeaderListSize) {
+        this.h2MaxHeaderListSize = h2MaxHeaderListSize;
         return this;
     }
 
@@ -108,7 +108,7 @@ public final class HTTPConfigurationBuilder {
                 .maxContentLength(maxContentLength)
                 .setH2InitialWindowSize(h2InitialWindowSize)
                 .h2MaxConcurrentStreams(h2MaxConcurrentStreams)
-                .h2MaxHeaderSizeList(h2MaxHeaderSizeList)
+                .h2MaxHeaderListSize(h2MaxHeaderListSize)
                 .h2MaxHeaderTableSize(h2MaxHeaderTableSize)
                 .h2MaxFrameSize(h2MaxFrameSize)
                 .maxInitialLineLength(maxInitialLineLength)

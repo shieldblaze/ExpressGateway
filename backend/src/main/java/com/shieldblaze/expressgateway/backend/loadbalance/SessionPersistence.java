@@ -60,4 +60,9 @@ public interface SessionPersistence<REQUEST, RESPONSE, KEY, VALUE> {
      * Clear all Key-Value entries
      */
     void clear();
+
+    /**
+     * Name of this Session Persistence
+     */
+    String name();
 }

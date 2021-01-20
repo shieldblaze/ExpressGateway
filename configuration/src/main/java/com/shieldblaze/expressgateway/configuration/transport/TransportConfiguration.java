@@ -17,27 +17,67 @@
  */
 package com.shieldblaze.expressgateway.configuration.transport;
 
-import com.shieldblaze.expressgateway.configuration.CoreConfiguration;
+import com.google.gson.annotations.Expose;
+import com.shieldblaze.expressgateway.configuration.ConfigurationMarshaller;
 import io.netty.channel.AdaptiveRecvByteBufAllocator;
 import io.netty.channel.FixedRecvByteBufAllocator;
 import io.netty.channel.RecvByteBufAllocator;
+import io.netty.channel.epoll.Epoll;
+import io.netty.incubator.channel.uring.IOUring;
+
+import java.io.IOException;
 
 /**
  * Transport Configuration
  */
-public final class TransportConfiguration extends CoreConfiguration {
+public final class TransportConfiguration extends ConfigurationMarshaller {
 
+    @Expose
     private TransportType transportType;
+
+    @Expose
     private ReceiveBufferAllocationType receiveBufferAllocationType;
+
+    @Expose
     private int[] receiveBufferSizes;
+
+    @Expose
     private int tcpConnectionBacklog;
-    private int dataBacklog;
+
+    @Expose
     private int socketReceiveBufferSize;
+
+    @Expose
     private int socketSendBufferSize;
+
+    @Expose
     private int tcpFastOpenMaximumPendingRequests;
-    private int backendSocketTimeout;
+
+    @Expose
     private int backendConnectTimeout;
+
+    @Expose
     private int connectionIdleTimeout;
+
+    public static final TransportConfiguration DEFAULT = new TransportConfiguration();
+    static {
+        if (IOUring.isAvailable()) {
+            DEFAULT.transportType = TransportType.IO_URING;
+        } else if (Epoll.isAvailable()) {
+            DEFAULT.transportType = TransportType.EPOLL;
+        } else {
+            DEFAULT.transportType = TransportType.NIO;
+        }
+
+        DEFAULT.receiveBufferAllocationType = ReceiveBufferAllocationType.ADAPTIVE;
+        DEFAULT.receiveBufferSizes(new int[]{512, 9001, 65535});
+        DEFAULT.tcpConnectionBacklog = 50_000;
+        DEFAULT.socketSendBufferSize = 67108864;
+        DEFAULT.socketReceiveBufferSize = 67108864;
+        DEFAULT.tcpFastOpenMaximumPendingRequests = 100_000;
+        DEFAULT.backendConnectTimeout = 1000 * 10;     // 10 Seconds
+        DEFAULT.connectionIdleTimeout = 1000 * 60 * 5; // 5 Minutes
+    }
 
     public TransportType transportType() {
         return transportType;
@@ -83,15 +123,6 @@ public final class TransportConfiguration extends CoreConfiguration {
         return this;
     }
 
-    public int dataBacklog() {
-        return dataBacklog;
-    }
-
-    TransportConfiguration dataBacklog(int dataBacklog) {
-        this.dataBacklog = dataBacklog;
-        return this;
-    }
-
     public int socketReceiveBufferSize() {
         return socketReceiveBufferSize;
     }
@@ -119,15 +150,6 @@ public final class TransportConfiguration extends CoreConfiguration {
         return this;
     }
 
-    public int backendSocketTimeout() {
-        return backendSocketTimeout;
-    }
-
-    TransportConfiguration backendSocketTimeout(int backendSocketTimeout) {
-        this.backendSocketTimeout = backendSocketTimeout;
-        return this;
-    }
-
     public int backendConnectTimeout() {
         return backendConnectTimeout;
     }
@@ -144,5 +166,13 @@ public final class TransportConfiguration extends CoreConfiguration {
     TransportConfiguration connectionIdleTimeout(int connectionIdleTimeout) {
         this.connectionIdleTimeout = connectionIdleTimeout;
         return this;
+    }
+
+    public static TransportConfiguration loadFrom() throws IOException {
+        return loadFrom(TransportConfiguration.class, "Transport.json");
+    }
+
+    public void saveTo() throws IOException {
+        saveTo(this, "Transport.json");
     }
 }

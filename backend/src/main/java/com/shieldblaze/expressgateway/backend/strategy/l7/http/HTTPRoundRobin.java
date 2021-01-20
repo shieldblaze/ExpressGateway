@@ -31,6 +31,8 @@ import com.shieldblaze.expressgateway.backend.loadbalance.SessionPersistence;
 import com.shieldblaze.expressgateway.common.algo.roundrobin.RoundRobinIndexGenerator;
 import com.shieldblaze.expressgateway.concurrent.event.Event;
 
+import java.io.IOException;
+
 /**
  * Select {@link Node} based on Round-Robin
  */
@@ -45,6 +47,11 @@ public final class HTTPRoundRobin extends HTTPBalance {
      */
     public HTTPRoundRobin(SessionPersistence<HTTPBalanceResponse, HTTPBalanceResponse, HTTPBalanceRequest, Node> sessionPersistence) {
         super(sessionPersistence);
+    }
+
+    @Override
+    public String name() {
+        return "HTTPRoundRobin";
     }
 
     @Override
@@ -81,5 +88,10 @@ public final class HTTPRoundRobin extends HTTPBalance {
                 roundRobinIndexGenerator.incMaxIndex();
             }
         }
+    }
+
+    @Override
+    public void close() throws IOException {
+        sessionPersistence.clear();
     }
 }

@@ -17,24 +17,68 @@
  */
 package com.shieldblaze.expressgateway.configuration.http;
 
+import com.google.gson.annotations.Expose;
+import com.shieldblaze.expressgateway.configuration.ConfigurationMarshaller;
 import io.netty.util.internal.ObjectUtil;
+
+import java.io.IOException;
 
 /**
  * Configuration for HTTP
  */
-public final class HTTPConfiguration {
+public final class HTTPConfiguration extends ConfigurationMarshaller {
+
+    @Expose
     private long maxContentLength;
+
+    @Expose
     private int h2InitialWindowSize;
+
+    @Expose
     private long h2MaxConcurrentStreams;
-    private long h2MaxHeaderSizeList;
+
+    @Expose
+    private long h2MaxHeaderListSize;
+
+    @Expose
     private long h2MaxHeaderTableSize;
+
+    @Expose
     private int h2MaxFrameSize;
+
+    @Expose
     private int maxInitialLineLength;
+
+    @Expose
     private int maxHeaderSize;
+
+    @Expose
     private int maxChunkSize;
+
+    @Expose
     private int compressionThreshold;
+
+    @Expose
     private int deflateCompressionLevel;
+
+    @Expose
     private int brotliCompressionLevel;
+
+    public static final HTTPConfiguration DEFAULT = new HTTPConfiguration();
+    static {
+        DEFAULT.maxContentLength = 500000000;
+        DEFAULT.h2InitialWindowSize = 65535;
+        DEFAULT.h2MaxConcurrentStreams = 1000;
+        DEFAULT.h2MaxHeaderListSize = 262144;
+        DEFAULT.h2MaxHeaderTableSize = 65536;
+        DEFAULT.h2MaxFrameSize = 16777215;
+        DEFAULT.maxInitialLineLength = 1024 * 8;
+        DEFAULT.maxHeaderSize = 1024 * 8;
+        DEFAULT.maxChunkSize = 1024 * 8;
+        DEFAULT.compressionThreshold = 1024;
+        DEFAULT.deflateCompressionLevel = 6;
+        DEFAULT.brotliCompressionLevel = 4;
+    }
 
     HTTPConfiguration() {
         // Prevent outside initialization
@@ -67,12 +111,12 @@ public final class HTTPConfiguration {
         return this;
     }
 
-    public long h2MaxHeaderSizeList() {
-        return h2MaxHeaderSizeList;
+    public long h2MaxHeaderListSize() {
+        return h2MaxHeaderListSize;
     }
 
-    public HTTPConfiguration h2MaxHeaderSizeList(long h2MaxHeaderSizeList) {
-        this.h2MaxHeaderSizeList = ObjectUtil.checkPositive(h2MaxHeaderSizeList, "h2MaxHeaderSizeList");
+    public HTTPConfiguration h2MaxHeaderListSize(long h2MaxHeaderSizeList) {
+        this.h2MaxHeaderListSize = ObjectUtil.checkPositive(h2MaxHeaderSizeList, "h2MaxHeaderListSize");
         return this;
     }
 
@@ -146,5 +190,13 @@ public final class HTTPConfiguration {
     public HTTPConfiguration brotliCompressionLevel(int brotliCompressionLevel) {
         this.brotliCompressionLevel = ObjectUtil.checkInRange(brotliCompressionLevel, 1, 11, "brotliCompressionLevel");
         return this;
+    }
+
+    public static HTTPConfiguration loadFrom() throws IOException {
+        return loadFrom(HTTPConfiguration.class, "HTTP.json");
+    }
+
+    public void saveTo() throws IOException {
+        saveTo(this, "HTTP.json");
     }
 }

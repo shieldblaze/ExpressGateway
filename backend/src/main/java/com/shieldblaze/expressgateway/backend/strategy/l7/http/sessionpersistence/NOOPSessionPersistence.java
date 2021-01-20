@@ -59,4 +59,9 @@ public final class NOOPSessionPersistence implements SessionPersistence<HTTPBala
     public void clear() {
         // Does nothing
     }
+
+    @Override
+    public String name() {
+        return "NOOP";
+    }
 }

@@ -17,8 +17,6 @@
  */
 package com.shieldblaze.expressgateway.common.map;
 
-import com.shieldblaze.expressgateway.common.map.ExpiringMap;
-import com.shieldblaze.expressgateway.common.map.ManualExpiringMap;
 import org.junit.jupiter.api.Test;
 
 import java.time.Duration;

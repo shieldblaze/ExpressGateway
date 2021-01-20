@@ -18,10 +18,6 @@
 package com.shieldblaze.expressgateway.backend;
 
 import com.shieldblaze.expressgateway.backend.cluster.Cluster;
-import com.shieldblaze.expressgateway.backend.events.node.NodeEvent;
-import com.shieldblaze.expressgateway.backend.events.node.NodeIdleEvent;
-import com.shieldblaze.expressgateway.backend.events.node.NodeOfflineEvent;
-import com.shieldblaze.expressgateway.backend.events.node.NodeOnlineEvent;
 import com.shieldblaze.expressgateway.backend.exceptions.TooManyConnectionsException;
 import com.shieldblaze.expressgateway.common.Math;
 import com.shieldblaze.expressgateway.common.annotation.NonNull;
@@ -30,7 +26,6 @@ import com.shieldblaze.expressgateway.healthcheck.Health;
 import com.shieldblaze.expressgateway.healthcheck.HealthCheck;
 
 import java.net.InetSocketAddress;
-import java.util.Objects;
 import java.util.Queue;
 import java.util.UUID;
 import java.util.concurrent.ConcurrentLinkedQueue;
@@ -47,8 +42,8 @@ public final class Node implements Comparable<Node> {
      */
     private final String ID = UUID.randomUUID().toString();
 
-
-    private final int HASH = Objects.hash(ID);
+    // Cache the hashCode
+    private final int hashCode = ID.hashCode();
 
     /**
      * Available Connections Queue
@@ -111,8 +106,7 @@ public final class Node implements Comparable<Node> {
      */
     public Node(@NonNull Cluster cluster,
                 @NonNull InetSocketAddress socketAddress,
-                int maxConnections,
-                HealthCheck healthCheck) {
+                int maxConnections, HealthCheck healthCheck) {
 
         maxConnections(maxConnections);
 
@@ -235,25 +229,23 @@ public final class Node implements Comparable<Node> {
     /**
      * Add a {@link Connection} with this {@linkplain Node}
      */
-    public Node addConnection(Connection connection) throws TooManyConnectionsException {
+    public void addConnection(Connection connection) throws TooManyConnectionsException {
         // If Maximum Connection is not -1 and Number of Active connections is greater than
         // Maximum number of connections then close the connection and throw an exception.
-        if (maxConnections != -1 && activeConnection() >= maxConnections) {
+        if (connectionFull()) {
             connection.close();
             throw new TooManyConnectionsException(this);
         }
         activeConnections.add(connection);
-        return this;
     }
 
     /**
      * Remove and close a {@link Connection} from this {@linkplain Node}
      */
-    public Node removeConnection(Connection connection) {
+    public void removeConnection(Connection connection) {
         availableConnections.remove(connection);
         activeConnections.remove(connection);
         connection.close();
-        return this;
     }
 
     /**
@@ -268,17 +260,8 @@ public final class Node implements Comparable<Node> {
     /**
      * Release a connection and add it into available active connection pool.
      */
-    public Node release0(Connection connection) {
+    public void release0(Connection connection) {
         availableConnections.add(connection);
-        return this;
-    }
-
-    public Queue<Connection> activeConnections() {
-        return activeConnections;
-    }
-
-    public Queue<Connection> availableConnections() {
-        return availableConnections;
     }
 
     /**
@@ -292,12 +275,13 @@ public final class Node implements Comparable<Node> {
     }
 
     /**
-     * Close all active connection and clear available connection list
+     * Close all active connection and remove itself from the associated {@linkplain Cluster}
      */
-    private void drainConnections() {
+    public void drainConnectionAndRemove() {
         activeConnections.forEach(Connection::close);
         activeConnections.clear();
         availableConnections.clear();
+        cluster().removeNode(this);
     }
 
     @Override
@@ -320,7 +304,7 @@ public final class Node implements Comparable<Node> {
 
     @Override
     public int hashCode() {
-        return HASH;
+        return hashCode;
     }
 
     @Override

@@ -26,47 +26,32 @@ import com.shieldblaze.expressgateway.backend.loadbalance.LoadBalance;
 import com.shieldblaze.expressgateway.backend.loadbalance.Request;
 import com.shieldblaze.expressgateway.backend.loadbalance.Response;
 import com.shieldblaze.expressgateway.common.annotation.NonNull;
-import com.shieldblaze.expressgateway.concurrent.eventstream.AsyncEventStream;
 import com.shieldblaze.expressgateway.concurrent.eventstream.EventPublisher;
 import com.shieldblaze.expressgateway.concurrent.eventstream.EventStream;
 import com.shieldblaze.expressgateway.concurrent.eventstream.EventSubscriber;
-import com.shieldblaze.expressgateway.configuration.eventstream.EventStreamConfiguration;
+import org.apache.logging.log4j.LogManager;
+import org.apache.logging.log4j.Logger;
 
+import java.io.IOException;
 import java.util.List;
 import java.util.concurrent.CopyOnWriteArrayList;
-import java.util.concurrent.Executors;
 
 /**
  * Base class for Cluster
  */
 public abstract class Cluster {
 
+    private static final Logger logger = LogManager.getLogger(Cluster.class);
+
     private final List<Node> nodes = new CopyOnWriteArrayList<>();
-    private String name;
 
     private final EventStream eventStream;
-    private final LoadBalance<?, ?, ?, ?> loadBalance;
+    private LoadBalance<?, ?, ?, ?> loadBalance;
 
     public Cluster(EventStream eventStream, LoadBalance<?, ?, ?, ?> loadBalance) {
         this.eventStream = eventStream;
         this.loadBalance = loadBalance;
         loadBalance.cluster(this);
-    }
-
-    /**
-     * Get name of this {@linkplain Cluster}
-     */
-    public String name() {
-        return name;
-    }
-
-    /**
-     * Set name of this {@linkplain Cluster}
-     */
-    @NonNull
-    public Cluster name(String name) {
-        this.name = name;
-        return this;
     }
 
     /**
@@ -88,7 +73,7 @@ public abstract class Cluster {
     public boolean removeNode(Node node) {
         boolean isFound = false;
         for (Node n : nodes) {
-            if (n.socketAddress() == node.socketAddress()) {
+            if (n.id().equalsIgnoreCase(node.id())) {
                 isFound = true;
                 break;
             }
@@ -98,8 +83,8 @@ public abstract class Cluster {
             return false;
         }
 
-        nodes.remove(node);
         node.state(State.OFFLINE);
+        nodes.remove(node);
         eventStream.publish(new NodeRemovedEvent(node));
         return true;
     }
@@ -124,5 +109,20 @@ public abstract class Cluster {
 
     public EventPublisher eventPublisher() {
         return eventStream.eventPublisher();
+    }
+
+    public LoadBalance<?, ?, ?, ?> loadBalance() {
+        return loadBalance;
+    }
+
+    @NonNull
+    public void loadBalance(LoadBalance<?, ?, ?, ?> loadBalance) {
+        try {
+            this.loadBalance.close();
+        } catch (IOException e) {
+            logger.error("Error while closing LoadBalance", e);
+        }
+
+        this.loadBalance = loadBalance;
     }
 }

@@ -20,28 +20,15 @@ package com.shieldblaze.expressgateway.backend.cluster;
 import com.shieldblaze.expressgateway.backend.Node;
 import com.shieldblaze.expressgateway.backend.loadbalance.LoadBalance;
 import com.shieldblaze.expressgateway.common.annotation.NonNull;
-import com.shieldblaze.expressgateway.concurrent.eventstream.AsyncEventStream;
 import com.shieldblaze.expressgateway.concurrent.eventstream.EventStream;
-import com.shieldblaze.expressgateway.configuration.eventstream.EventStreamConfiguration;
-
-import java.util.concurrent.Executors;
-import java.util.concurrent.atomic.AtomicInteger;
 
 /**
  * {@linkplain ClusterPool} with multiple {@linkplain Node}
  */
 public final class ClusterPool extends Cluster {
 
-    private static final AtomicInteger count = new AtomicInteger();
-
     public ClusterPool(EventStream eventStream, LoadBalance<?, ?, ?, ?> loadBalance) {
-        this(eventStream, loadBalance, "ClusterPool#" + count.getAndIncrement());
-    }
-
-    @NonNull
-    public ClusterPool(EventStream eventStream, LoadBalance<?, ?, ?, ?> loadBalance, String name) {
         super(eventStream, loadBalance);
-        name(name);
     }
 
     /**

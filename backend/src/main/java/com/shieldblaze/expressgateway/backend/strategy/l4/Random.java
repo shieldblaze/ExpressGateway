@@ -27,6 +27,7 @@ import com.shieldblaze.expressgateway.backend.exceptions.NoNodeAvailableExceptio
 import com.shieldblaze.expressgateway.backend.loadbalance.SessionPersistence;
 import com.shieldblaze.expressgateway.concurrent.event.Event;
 
+import java.io.IOException;
 import java.net.InetSocketAddress;
 import java.util.SplittableRandom;
 
@@ -44,6 +45,11 @@ public final class Random extends L4Balance {
      */
     public Random(SessionPersistence<Node, Node, InetSocketAddress, Node> sessionPersistence) {
         super(sessionPersistence);
+    }
+
+    @Override
+    public String name() {
+        return "Random";
     }
 
     @Override
@@ -76,5 +82,10 @@ public final class Random extends L4Balance {
                 sessionPersistence.remove(nodeEvent.node());
             }
         }
+    }
+
+    @Override
+    public void close() throws IOException {
+        sessionPersistence.clear();
     }
 }

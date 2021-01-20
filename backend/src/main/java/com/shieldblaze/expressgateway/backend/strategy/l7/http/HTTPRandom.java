@@ -28,6 +28,7 @@ import com.shieldblaze.expressgateway.backend.exceptions.NoNodeAvailableExceptio
 import com.shieldblaze.expressgateway.backend.loadbalance.SessionPersistence;
 import com.shieldblaze.expressgateway.concurrent.event.Event;
 
+import java.io.IOException;
 import java.util.SplittableRandom;
 
 /**
@@ -44,6 +45,11 @@ public final class HTTPRandom extends HTTPBalance {
      */
     public HTTPRandom(SessionPersistence<HTTPBalanceResponse, HTTPBalanceResponse, HTTPBalanceRequest, Node> sessionPersistence) {
         super(sessionPersistence);
+    }
+
+    @Override
+    public String name() {
+        return "HTTPRandom";
     }
 
     @Override
@@ -78,5 +84,10 @@ public final class HTTPRandom extends HTTPBalance {
                 sessionPersistence.remove(nodeEvent.node());
             }
         }
+    }
+
+    @Override
+    public void close() throws IOException {
+        sessionPersistence.clear();
     }
 }

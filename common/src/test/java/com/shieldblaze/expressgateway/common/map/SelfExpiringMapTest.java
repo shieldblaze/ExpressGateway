@@ -17,7 +17,6 @@
  */
 package com.shieldblaze.expressgateway.common.map;
 
-import com.shieldblaze.expressgateway.common.map.SelfExpiringMap;
 import org.junit.jupiter.api.Test;
 
 import java.time.Duration;

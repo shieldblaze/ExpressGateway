@@ -22,10 +22,14 @@ import com.shieldblaze.expressgateway.backend.exceptions.LoadBalanceException;
 import com.shieldblaze.expressgateway.common.annotation.NonNull;
 import com.shieldblaze.expressgateway.concurrent.eventstream.EventListener;
 
+import java.io.Closeable;
+
 /**
  * Base Implementation for Load Balance
  */
-public abstract class LoadBalance<REQUEST, RESPONSE, KEY, VALUE> implements EventListener {
+@SuppressWarnings("rawtypes")
+public abstract class LoadBalance<REQUEST, RESPONSE, KEY, VALUE> implements EventListener, Closeable {
+
     protected final SessionPersistence<REQUEST, RESPONSE, KEY, VALUE> sessionPersistence;
     protected Cluster cluster;
 
@@ -58,4 +62,13 @@ public abstract class LoadBalance<REQUEST, RESPONSE, KEY, VALUE> implements Even
      */
     @NonNull
     public abstract Response response(Request request) throws LoadBalanceException;
+
+    /**
+     * Name of this Load Balance
+     */
+    public abstract String name();
+
+    public SessionPersistence<REQUEST, RESPONSE, KEY, VALUE> sessionPersistence() {
+        return sessionPersistence;
+    }
 }
