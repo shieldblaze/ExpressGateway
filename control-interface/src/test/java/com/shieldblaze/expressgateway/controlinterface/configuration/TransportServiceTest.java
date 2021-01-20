@@ -57,7 +57,6 @@ class TransportServiceTest {
 
     @AfterAll
     static void shutdown() {
-        channel.shutdown();
         server.shutdown();
     }
 

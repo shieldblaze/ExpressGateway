@@ -54,7 +54,6 @@ class HealthCheckServiceTest {
 
     @AfterAll
     static void shutdown() {
-        channel.shutdown();
         server.shutdown();
     }
 

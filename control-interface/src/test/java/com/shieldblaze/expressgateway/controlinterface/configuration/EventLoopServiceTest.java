@@ -54,7 +54,6 @@ class EventLoopServiceTest {
 
     @AfterAll
     static void shutdown() {
-        channel.shutdown();
         server.shutdown();
     }
 

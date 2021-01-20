@@ -69,13 +69,12 @@ class UDPLoadBalancerServiceTest {
 
     @AfterAll
     static void shutdown() {
-        channel.shutdownNow();
-        server.shutdownNow();
+        server.shutdown();
     }
 
     @Test
     @Order(1)
-    void simpleServerLBClientTest() throws IOException, InterruptedException {
+    void simpleServerLBClientTest() throws IOException {
         new UDPServer(false, 5555).start();
 
         UDPLoadBalancerServiceGrpc.UDPLoadBalancerServiceBlockingStub udpService = UDPLoadBalancerServiceGrpc.newBlockingStub(channel);

@@ -54,7 +54,6 @@ class EventStreamServiceTest {
 
     @AfterAll
     static void shutdown() {
-        channel.shutdown();
         server.shutdown();
     }
 

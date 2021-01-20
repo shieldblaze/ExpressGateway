@@ -88,8 +88,7 @@ class HTTPLoadBalancerTest {
     @AfterAll
     static void shutdown() {
         httpServer.shutdown();
-        channel.shutdownNow();
-        server.shutdownNow();
+        server.shutdown();
     }
 
     @Test

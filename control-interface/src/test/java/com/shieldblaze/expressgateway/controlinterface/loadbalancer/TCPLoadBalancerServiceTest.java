@@ -36,6 +36,7 @@ import java.net.InetSocketAddress;
 import java.net.ServerSocket;
 import java.net.Socket;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicBoolean;
 
 import static org.junit.jupiter.api.Assertions.assertArrayEquals;
 import static org.junit.jupiter.api.Assertions.assertEquals;
@@ -67,9 +68,7 @@ class TCPLoadBalancerServiceTest {
 
     @AfterAll
     static void shutdown() {
-        tcpServer.shutdown();
-        channel.shutdownNow();
-        server.shutdownNow();
+        server.shutdown();
     }
 
     @Test
@@ -82,7 +81,7 @@ class TCPLoadBalancerServiceTest {
 
         LoadBalancer.TCPLoadBalancer tcpLoadBalancer = LoadBalancer.TCPLoadBalancer.newBuilder()
                 .setBindAddress("127.0.0.1")
-                .setBindPort(5000)
+                .setBindPort(35000)
                 .setName("Meow")
                 .setUseDefaults(true)
                 .build();
@@ -94,7 +93,7 @@ class TCPLoadBalancerServiceTest {
 
         NodeOuterClass.AddRequest addRequest = NodeOuterClass.AddRequest.newBuilder()
                 .setAddress("127.0.0.1")
-                .setPort(10000)
+                .setPort(15000)
                 .setLoadBalancerID(loadBalancerResponse.getResponseText())
                 .setMaxConnections(-1)
                 .build();
@@ -103,11 +102,13 @@ class TCPLoadBalancerServiceTest {
         assertTrue(addResponse.getSuccess());
         assertFalse(addResponse.getNodeId().isEmpty()); // Load Balancer ID
 
-        try (Socket socket = new Socket("127.0.0.1", 5000)) {
+        try (Socket socket = new Socket("127.0.0.1", 35000)) {
             socket.getOutputStream().write("Meow".getBytes());
             assertArrayEquals("Cat".getBytes(), socket.getInputStream().readNBytes(3));
         } catch (IOException e) {
             throw e;
+        } finally {
+            tcpServer.shutdown();
         }
     }
 
@@ -122,7 +123,7 @@ class TCPLoadBalancerServiceTest {
         LoadBalancer.TCPLoadBalancer tcpLoadBalancer = tcpService.get(request);
 
         assertEquals("127.0.0.1", tcpLoadBalancer.getBindAddress());
-        assertEquals(5000, tcpLoadBalancer.getBindPort());
+        assertEquals(35000, tcpLoadBalancer.getBindPort());
     }
 
     @Test
@@ -135,18 +136,15 @@ class TCPLoadBalancerServiceTest {
 
     private static final class TCPServer extends Thread {
 
-        private volatile boolean run = true;
+        private final AtomicBoolean run = new AtomicBoolean(true);
 
         @Override
         public void run() {
-            try (ServerSocket serverSocket = new ServerSocket(10000)) {
-                while (run) {
+            try (ServerSocket serverSocket = new ServerSocket(15000)) {
+                while (run.get()) {
                     Socket socket = serverSocket.accept();
                     assertArrayEquals("Meow".getBytes(), socket.getInputStream().readNBytes(4));
-
-                    Thread.sleep(500L);
                     socket.getOutputStream().write("Cat".getBytes());
-                    socket.getOutputStream().flush();
                 }
             } catch (Exception ex) {
                 ex.printStackTrace();
@@ -154,7 +152,7 @@ class TCPLoadBalancerServiceTest {
         }
 
         private void shutdown() {
-            run = false;
+            run.set(false);
         }
     }
 }
