@@ -38,6 +38,7 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 class TransportServiceTest {
 
     static Server server;
+    static ManagedChannel channel;
 
     @BeforeAll
     static void setup() throws IOException {
@@ -47,19 +48,21 @@ class TransportServiceTest {
                 .addService(new TransportService())
                 .build()
                 .start();
+
+        channel = ManagedChannelBuilder.forTarget("127.0.0.1:60005")
+                .usePlaintext()
+                .build();
+
     }
 
     @AfterAll
     static void shutdown() {
-        server.shutdownNow();
+        channel.shutdown();
+        server.shutdown();
     }
 
     @Test
     void simpleTest() {
-        ManagedChannel channel = ManagedChannelBuilder.forTarget("127.0.0.1:60005")
-                .usePlaintext()
-                .build();
-
         TransportServiceGrpc.TransportServiceBlockingStub transportService = TransportServiceGrpc.newBlockingStub(channel);
         Configuration.Transport transport = Configuration.Transport.newBuilder()
                 .setConnectionIdleTimeout(1000)
@@ -76,16 +79,10 @@ class TransportServiceTest {
         Configuration.ConfigurationResponse configurationResponse = transportService.transport(transport);
         assertTrue(configurationResponse.getSuccess());
         assertEquals("Success", configurationResponse.getResponseText());
-
-        channel.shutdownNow();
     }
 
     @Test
     void failingTest() {
-        ManagedChannel channel = ManagedChannelBuilder.forTarget("127.0.0.1:60005")
-                .usePlaintext()
-                .build();
-
         TransportServiceGrpc.TransportServiceBlockingStub transportService = TransportServiceGrpc.newBlockingStub(channel);
         Configuration.Transport transport = Configuration.Transport.newBuilder()
                 .setConnectionIdleTimeout(1000)
@@ -100,7 +97,5 @@ class TransportServiceTest {
                 .build();
 
         assertThrows(StatusRuntimeException.class, () -> transportService.transport(transport));
-
-        channel.shutdownNow();
     }
 }

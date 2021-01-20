@@ -36,6 +36,7 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 class HTTPServiceTest {
 
     static Server server;
+    static ManagedChannel channel;
 
     @BeforeAll
     static void setup() throws IOException {
@@ -45,19 +46,20 @@ class HTTPServiceTest {
                 .addService(new HTTPService())
                 .build()
                 .start();
+
+        channel = ManagedChannelBuilder.forTarget("127.0.0.1:60004")
+                .usePlaintext()
+                .build();
     }
 
     @AfterAll
     static void shutdown() {
-        server.shutdownNow();
+        channel.shutdown();
+        server.shutdown();
     }
 
     @Test
     void simpleTest() {
-        ManagedChannel channel = ManagedChannelBuilder.forTarget("127.0.0.1:60004")
-                .usePlaintext()
-                .build();
-
         HTTPServiceGrpc.HTTPServiceBlockingStub httpService = HTTPServiceGrpc.newBlockingStub(channel);
         Configuration.HTTP http = Configuration.HTTP.newBuilder()
                 .setBrotliCompressionLevel(4)
@@ -77,16 +79,10 @@ class HTTPServiceTest {
         Configuration.ConfigurationResponse configurationResponse = httpService.http(http);
         assertTrue(configurationResponse.getSuccess());
         assertEquals("Success", configurationResponse.getResponseText());
-
-        channel.shutdownNow();
     }
 
     @Test
     void failingTest() {
-        ManagedChannel channel = ManagedChannelBuilder.forTarget("127.0.0.1:60004")
-                .usePlaintext()
-                .build();
-
         HTTPServiceGrpc.HTTPServiceBlockingStub httpService = HTTPServiceGrpc.newBlockingStub(channel);
         Configuration.HTTP http = Configuration.HTTP.newBuilder()
                 .setBrotliCompressionLevel(1000) // 1-11 valid
@@ -104,7 +100,5 @@ class HTTPServiceTest {
                 .build();
 
         assertThrows(StatusRuntimeException.class, () -> httpService.http(http));
-
-        channel.shutdownNow();
     }
 }

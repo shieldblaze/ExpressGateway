@@ -36,6 +36,7 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 class BufferServiceTest {
 
     static Server server;
+    static ManagedChannel channel;
 
     @BeforeAll
     static void setup() throws IOException {
@@ -45,19 +46,20 @@ class BufferServiceTest {
                 .addService(new BufferService())
                 .build()
                 .start();
+
+        channel = ManagedChannelBuilder.forTarget("127.0.0.1:60000")
+                .usePlaintext()
+                .build();
     }
 
     @AfterAll
     static void shutdown() {
-        server.shutdownNow();
+        channel.shutdown();
+        server.shutdown();
     }
 
     @Test
     void simpleTest() {
-        ManagedChannel channel = ManagedChannelBuilder.forTarget("127.0.0.1:60000")
-                .usePlaintext()
-                .build();
-
         BufferServiceGrpc.BufferServiceBlockingStub bufferService = BufferServiceGrpc.newBlockingStub(channel);
         Configuration.Buffer buffer = Configuration.Buffer.newBuilder()
                 .setPreferDirect(true)
@@ -74,16 +76,10 @@ class BufferServiceTest {
         Configuration.ConfigurationResponse configurationResponse = bufferService.buffer(buffer);
         assertTrue(configurationResponse.getSuccess());
         assertEquals("Success", configurationResponse.getResponseText());
-
-        channel.shutdownNow();
     }
 
     @Test
     void failingTest() {
-        ManagedChannel channel = ManagedChannelBuilder.forTarget("127.0.0.1:60000")
-                .usePlaintext()
-                .build();
-
         BufferServiceGrpc.BufferServiceBlockingStub bufferService = BufferServiceGrpc.newBlockingStub(channel);
         Configuration.Buffer buffer = Configuration.Buffer.newBuilder()
                 .setPreferDirect(true)
@@ -98,7 +94,5 @@ class BufferServiceTest {
                 .build();
 
         assertThrows(StatusRuntimeException.class, () -> bufferService.buffer(buffer));
-
-        channel.shutdownNow();
     }
 }

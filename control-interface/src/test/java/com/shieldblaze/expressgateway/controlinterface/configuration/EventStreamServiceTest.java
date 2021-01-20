@@ -36,6 +36,7 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 class EventStreamServiceTest {
 
     static Server server;
+    static ManagedChannel channel;
 
     @BeforeAll
     static void setup() throws IOException {
@@ -45,19 +46,20 @@ class EventStreamServiceTest {
                 .addService(new EventStreamService())
                 .build()
                 .start();
+
+        channel = ManagedChannelBuilder.forTarget("127.0.0.1:60002")
+                .usePlaintext()
+                .build();
     }
 
     @AfterAll
     static void shutdown() {
-        server.shutdownNow();
+        channel.shutdown();
+        server.shutdown();
     }
 
     @Test
     void simpleTest() {
-        ManagedChannel channel = ManagedChannelBuilder.forTarget("127.0.0.1:60002")
-                .usePlaintext()
-                .build();
-
         EventStreamServiceGrpc.EventStreamServiceBlockingStub eventStreamService = EventStreamServiceGrpc.newBlockingStub(channel);
         Configuration.EventStream eventStream = Configuration.EventStream.newBuilder()
                 .setWorkers(2)
@@ -66,23 +68,15 @@ class EventStreamServiceTest {
         Configuration.ConfigurationResponse configurationResponse = eventStreamService.eventstream(eventStream);
         assertTrue(configurationResponse.getSuccess());
         assertEquals("Success", configurationResponse.getResponseText());
-
-        channel.shutdownNow();
     }
 
     @Test
     void failingTest() {
-        ManagedChannel channel = ManagedChannelBuilder.forTarget("127.0.0.1:60002")
-                .usePlaintext()
-                .build();
-
         EventStreamServiceGrpc.EventStreamServiceBlockingStub eventStreamService = EventStreamServiceGrpc.newBlockingStub(channel);
         Configuration.EventStream eventStream = Configuration.EventStream.newBuilder()
                 .setWorkers(-5)
                 .build();
 
         assertThrows(StatusRuntimeException.class, () -> eventStreamService.eventstream(eventStream));
-
-        channel.shutdownNow();
     }
 }

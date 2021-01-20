@@ -36,6 +36,7 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 class HealthCheckServiceTest {
 
     static Server server;
+    static ManagedChannel channel;
 
     @BeforeAll
     static void setup() throws IOException {
@@ -45,19 +46,20 @@ class HealthCheckServiceTest {
                 .addService(new HealthCheckService())
                 .build()
                 .start();
+
+        channel = ManagedChannelBuilder.forTarget("127.0.0.1:60003")
+                .usePlaintext()
+                .build();
     }
 
     @AfterAll
     static void shutdown() {
-        server.shutdownNow();
+        channel.shutdown();
+        server.shutdown();
     }
 
     @Test
     void simpleTest() {
-        ManagedChannel channel = ManagedChannelBuilder.forTarget("127.0.0.1:60003")
-                .usePlaintext()
-                .build();
-
         HealthCheckServiceGrpc.HealthCheckServiceBlockingStub healthCheckService = HealthCheckServiceGrpc.newBlockingStub(channel);
         Configuration.HealthCheck healthCheck = Configuration.HealthCheck.newBuilder()
                 .setWorkers(10)
@@ -67,16 +69,10 @@ class HealthCheckServiceTest {
         Configuration.ConfigurationResponse configurationResponse = healthCheckService.healthcheck(healthCheck);
         assertTrue(configurationResponse.getSuccess());
         assertEquals("Success", configurationResponse.getResponseText());
-
-        channel.shutdownNow();
     }
 
     @Test
     void failingTest() {
-        ManagedChannel channel = ManagedChannelBuilder.forTarget("127.0.0.1:60003")
-                .usePlaintext()
-                .build();
-
         HealthCheckServiceGrpc.HealthCheckServiceBlockingStub healthCheckService = HealthCheckServiceGrpc.newBlockingStub(channel);
         Configuration.HealthCheck healthCheck = Configuration.HealthCheck.newBuilder()
                 .setWorkers(-1)
@@ -84,7 +80,5 @@ class HealthCheckServiceTest {
                 .build();
 
         assertThrows(StatusRuntimeException.class, () -> healthCheckService.healthcheck(healthCheck));
-
-        channel.shutdownNow();
     }
 }

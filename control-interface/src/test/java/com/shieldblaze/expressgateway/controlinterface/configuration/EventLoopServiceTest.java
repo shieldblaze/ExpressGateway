@@ -36,6 +36,7 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 class EventLoopServiceTest {
 
     static Server server;
+    static ManagedChannel channel;
 
     @BeforeAll
     static void setup() throws IOException {
@@ -45,19 +46,20 @@ class EventLoopServiceTest {
                 .addService(new EventLoopService())
                 .build()
                 .start();
+
+        channel = ManagedChannelBuilder.forTarget("127.0.0.1:60001")
+                .usePlaintext()
+                .build();
     }
 
     @AfterAll
     static void shutdown() {
-        server.shutdownNow();
+        channel.shutdown();
+        server.shutdown();
     }
 
     @Test
     void simpleTest() {
-        ManagedChannel channel = ManagedChannelBuilder.forTarget("127.0.0.1:60001")
-                .usePlaintext()
-                .build();
-
         EventLoopServiceGrpc.EventLoopServiceBlockingStub eventLoopService = EventLoopServiceGrpc.newBlockingStub(channel);
         Configuration.EventLoop eventLoop = Configuration.EventLoop.newBuilder()
                 .setParentWorkers(2)
@@ -67,16 +69,10 @@ class EventLoopServiceTest {
         Configuration.ConfigurationResponse configurationResponse = eventLoopService.eventLoop(eventLoop);
         assertTrue(configurationResponse.getSuccess());
         assertEquals("Success", configurationResponse.getResponseText());
-
-        channel.shutdownNow();
     }
 
     @Test
     void failingTest() {
-        ManagedChannel channel = ManagedChannelBuilder.forTarget("127.0.0.1:60001")
-                .usePlaintext()
-                .build();
-
         EventLoopServiceGrpc.EventLoopServiceBlockingStub eventLoopService = EventLoopServiceGrpc.newBlockingStub(channel);
         Configuration.EventLoop eventLoop = Configuration.EventLoop.newBuilder()
                 .setParentWorkers(0)
@@ -84,7 +80,5 @@ class EventLoopServiceTest {
                 .build();
 
         assertThrows(StatusRuntimeException.class, () -> eventLoopService.eventLoop(eventLoop));
-
-        channel.shutdownNow();
     }
 }
