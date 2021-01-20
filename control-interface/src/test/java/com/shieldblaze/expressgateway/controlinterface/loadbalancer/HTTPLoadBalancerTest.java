@@ -86,10 +86,10 @@ class HTTPLoadBalancerTest {
     }
 
     @AfterAll
-    static void shutdown() throws InterruptedException {
+    static void shutdown() {
         httpServer.shutdown();
         channel.shutdownNow();
-        server.shutdownNow().awaitTermination(30, TimeUnit.SECONDS);
+        server.shutdownNow();
     }
 
     @Test

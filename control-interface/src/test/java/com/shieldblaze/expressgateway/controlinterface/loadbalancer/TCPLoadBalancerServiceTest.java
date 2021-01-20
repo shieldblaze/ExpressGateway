@@ -66,10 +66,10 @@ class TCPLoadBalancerServiceTest {
     }
 
     @AfterAll
-    static void shutdown() throws InterruptedException {
+    static void shutdown() {
         tcpServer.shutdown();
         channel.shutdownNow();
-        server.shutdownNow().awaitTermination(30, TimeUnit.SECONDS);
+        server.shutdownNow();
     }
 
     @Test

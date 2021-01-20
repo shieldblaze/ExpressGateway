@@ -56,21 +56,21 @@ class UDPLoadBalancerServiceTest {
     static void setup() throws IOException {
         System.setProperty("EGWConfDir", System.getProperty("java.io.tmpdir"));
 
-        server = NettyServerBuilder.forAddress(new InetSocketAddress("127.0.0.1", 9110))
+        server = NettyServerBuilder.forAddress(new InetSocketAddress("127.0.0.1", 50000))
                 .addService(new UDPLoadBalancerService())
                 .addService(new NodeService())
                 .build()
                 .start();
 
-        channel = ManagedChannelBuilder.forTarget("127.0.0.1:9110")
+        channel = ManagedChannelBuilder.forTarget("127.0.0.1:50000")
                 .usePlaintext()
                 .build();
     }
 
     @AfterAll
-    static void shutdown() throws InterruptedException {
+    static void shutdown() {
         channel.shutdownNow();
-        server.shutdownNow().awaitTermination(30, TimeUnit.SECONDS);
+        server.shutdownNow();
     }
 
     @Test
