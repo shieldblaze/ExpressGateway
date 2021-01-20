@@ -145,7 +145,7 @@ class TCPLoadBalancerServiceTest {
 
     private static final class TCPServer extends Thread {
 
-        private volatile boolean run;
+        private volatile boolean run = true;
 
         @Override
         public void run() {
