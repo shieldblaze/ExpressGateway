@@ -47,8 +47,6 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 @TestMethodOrder(MethodOrderer.OrderAnnotation.class)
 class TCPLoadBalancerServiceTest {
 
-    private static final Logger logger = LogManager.getLogger(TCPLoadBalancerServiceTest.class);
-
     static Server server;
     static ManagedChannel channel;
     static String loadBalancerId;
@@ -91,8 +89,6 @@ class TCPLoadBalancerServiceTest {
                 .setUseDefaults(true)
                 .build();
 
-        logger.info("LoadBalancer Initialized");
-
         LoadBalancer.LoadBalancerResponse loadBalancerResponse = tcpService.start(tcpLoadBalancer);
         assertFalse(loadBalancerResponse.getResponseText().isEmpty()); // Load Balancer ID must exist
 
@@ -109,13 +105,9 @@ class TCPLoadBalancerServiceTest {
         assertTrue(addResponse.getSuccess());
         assertFalse(addResponse.getNodeId().isEmpty()); // Load Balancer ID
 
-        logger.info("Added Node");
-
         try (Socket socket = new Socket("127.0.0.1", 5000)) {
             socket.getOutputStream().write("Meow".getBytes());
-            logger.info("Written \"Meow\" to server");
             assertArrayEquals("Cat".getBytes(), socket.getInputStream().readNBytes(3));
-            logger.info("Received \"Cat\" from server");
         } catch (IOException e) {
             throw e;
         }
@@ -149,8 +141,6 @@ class TCPLoadBalancerServiceTest {
 
         @Override
         public void run() {
-            logger.info("Starting 1-time TCP Server");
-
             try (ServerSocket serverSocket = new ServerSocket(10000)) {
                 while (run) {
                     Socket socket = serverSocket.accept();
