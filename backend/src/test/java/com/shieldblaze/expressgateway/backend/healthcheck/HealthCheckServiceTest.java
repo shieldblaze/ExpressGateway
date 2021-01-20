@@ -73,7 +73,7 @@ class HealthCheckServiceTest {
         tcpServer.start();
 
         EventStreamConfiguration streamConfiguration = EventStreamConfigurationBuilder.newBuilder()
-                .withWorkers(0) // Use EventStream instead of AsyncEventStream
+                .withWorkers(0) // Using EventStream
                 .build();
 
         HealthCheckConfiguration healthCheckConfiguration = HealthCheckConfigurationBuilder.newBuilder()
@@ -123,7 +123,7 @@ class HealthCheckServiceTest {
     @Order(3)
     void shutdownTCPServer() throws InterruptedException {
         tcpServer.shutdown();
-        Thread.sleep(10000);
+        Thread.sleep(20000);
     }
 
     @Test
