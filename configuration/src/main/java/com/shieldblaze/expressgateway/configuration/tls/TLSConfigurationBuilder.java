@@ -33,7 +33,6 @@ public final class TLSConfigurationBuilder {
     private List<Protocol> protocols;
     private MutualTLS mutualTLS = MutualTLS.NOT_REQUIRED;
     private boolean useStartTLS;
-    private boolean useALPN;
     private int sessionTimeout;
     private int sessionCacheSize;
     private boolean acceptAllCerts;
@@ -102,14 +101,6 @@ public final class TLSConfigurationBuilder {
     }
 
     /**
-     * Set to {@code true} if we want to use {@code ALPN} with HTTP/2 and HTTP/1.1 else set to {@code false}
-     */
-    public TLSConfigurationBuilder withUseALPN(boolean useALPN) {
-        this.useALPN = useALPN;
-        return this;
-    }
-
-    /**
      * Set Session Timeout for TLS Server
      */
     public TLSConfigurationBuilder withSessionTimeout(int sessionTimeout) {
@@ -147,7 +138,6 @@ public final class TLSConfigurationBuilder {
                 .protocols(protocols)
                 .useStartTLS(useStartTLS)
                 .mutualTLS(mutualTLS)
-                .ciphers(ciphers)
-                .useALPN(useALPN);
+                .ciphers(ciphers);
     }
 }

@@ -47,7 +47,7 @@ public final class DefaultHTTPServerInitializer extends HTTPServerInitializer {
 
         // If TLS Server is not enabled then we'll only use HTTP/1.1
         if (httpLoadBalancer.tlsForServer() == null) {
-            pipeline.addLast(HTTPCodecs.HTTPServerCodec(httpConfiguration));
+            pipeline.addLast(HTTPCodecs.server(httpConfiguration));
             pipeline.addLast(new HTTPServerValidator(httpConfiguration));
             pipeline.addLast(new HTTPContentCompressor(httpConfiguration));
             pipeline.addLast(new HTTPContentDecompressor());
@@ -57,12 +57,12 @@ public final class DefaultHTTPServerInitializer extends HTTPServerInitializer {
 
             ALPNHandler alpnHandler = ALPNHandlerBuilder.newBuilder()
                     // HTTP/2 Handlers
-                    .withHTTP2ChannelHandler(HTTPCodecs.H2ServerCodec(httpConfiguration))
+                    .withHTTP2ChannelHandler(HTTPCodecs.h2Server(httpConfiguration))
                     .withHTTP2ChannelHandler(new HTTP2InboundAdapter())
                     .withHTTP2ChannelHandler(new UpstreamHandler(httpLoadBalancer))
 
                     // HTTP/1.1 Handlers
-                    .withHTTP1ChannelHandler(HTTPCodecs.HTTPServerCodec(httpConfiguration))
+                    .withHTTP1ChannelHandler(HTTPCodecs.server(httpConfiguration))
                     .withHTTP1ChannelHandler(new HTTPServerValidator(httpConfiguration))
                     .withHTTP1ChannelHandler(new HTTPContentCompressor(httpConfiguration))
                     .withHTTP1ChannelHandler(new HTTPContentDecompressor())

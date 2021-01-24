@@ -143,7 +143,13 @@ public final class CertificateKeyPair implements Runnable, Closeable {
                     .clientAuth(tlsConfiguration.mutualTLS().clientAuth())
                     .startTls(tlsConfiguration.useStartTLS())
                     .sessionTimeout(tlsConfiguration.sessionTimeout())
-                    .sessionCacheSize(tlsConfiguration.sessionCacheSize());
+                    .sessionCacheSize(tlsConfiguration.sessionCacheSize())
+                    .applicationProtocolConfig(new ApplicationProtocolConfig(
+                            ApplicationProtocolConfig.Protocol.ALPN,
+                            ApplicationProtocolConfig.SelectorFailureBehavior.NO_ADVERTISE,
+                            ApplicationProtocolConfig.SelectedListenerFailureBehavior.ACCEPT,
+                            ApplicationProtocolNames.HTTP_2,
+                            ApplicationProtocolNames.HTTP_1_1));
 
             if (useOCSPStapling) {
                 scheduledFuture = GlobalExecutors.INSTANCE.submitTaskAndRunEvery(this, 0, 6, TimeUnit.HOURS);
@@ -163,20 +169,17 @@ public final class CertificateKeyPair implements Runnable, Closeable {
                     .ciphers(ciphers)
                     .clientAuth(tlsConfiguration.mutualTLS().clientAuth())
                     .trustManager(trustManagerFactory)
-                    .startTls(false);
+                    .startTls(false)
+                    .applicationProtocolConfig(new ApplicationProtocolConfig(
+                            ApplicationProtocolConfig.Protocol.ALPN,
+                            ApplicationProtocolConfig.SelectorFailureBehavior.NO_ADVERTISE,
+                            ApplicationProtocolConfig.SelectedListenerFailureBehavior.ACCEPT,
+                            ApplicationProtocolNames.HTTP_2,
+                            ApplicationProtocolNames.HTTP_1_1));
 
             if (tlsConfiguration.mutualTLS() == MutualTLS.REQUIRED || tlsConfiguration.mutualTLS() == MutualTLS.OPTIONAL) {
                 sslContextBuilder.keyManager(privateKey, certificates);
             }
-        }
-
-        if (tlsConfiguration.useALPN()) {
-            sslContextBuilder.applicationProtocolConfig(new ApplicationProtocolConfig(
-                    ApplicationProtocolConfig.Protocol.ALPN,
-                    ApplicationProtocolConfig.SelectorFailureBehavior.NO_ADVERTISE,
-                    ApplicationProtocolConfig.SelectedListenerFailureBehavior.ACCEPT,
-                    ApplicationProtocolNames.HTTP_2,
-                    ApplicationProtocolNames.HTTP_1_1));
         }
 
         this.sslContext = sslContextBuilder.build();

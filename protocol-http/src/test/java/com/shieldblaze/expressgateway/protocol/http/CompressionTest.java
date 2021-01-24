@@ -123,7 +123,6 @@ class CompressionTest {
         forServer = TLSConfigurationBuilder.forServer()
                 .withProtocols(Collections.singletonList(Protocol.TLS_1_3))
                 .withCiphers(Collections.singletonList(Cipher.TLS_AES_128_GCM_SHA256))
-                .withUseALPN(true)
                 .withMutualTLS(MutualTLS.NOT_REQUIRED)
                 .build();
 
@@ -132,7 +131,6 @@ class CompressionTest {
         forClient = TLSConfigurationBuilder.forClient()
                 .withProtocols(Collections.singletonList(Protocol.TLS_1_3))
                 .withCiphers(Collections.singletonList(Cipher.TLS_AES_256_GCM_SHA384))
-                .withUseALPN(true)
                 .withMutualTLS(MutualTLS.NOT_REQUIRED)
                 .withAcceptAllCertificate(true)
                 .build();
@@ -191,7 +189,6 @@ class CompressionTest {
                 .withHTTPConfiguration(httpConfiguration)
                 .withTLSForClient(forClient)
                 .withTLSForServer(forServer)
-                .withCluster(cluster)
                 .withBindAddress(new InetSocketAddress("127.0.0.1", 20000))
                 .withHTTPInitializer(new DefaultHTTPServerInitializer())
                 .withL4FrontListener(new TCPListener())
@@ -295,7 +292,6 @@ class CompressionTest {
                 .withHTTPConfiguration(httpConfiguration)
                 .withTLSForClient(forClient)
                 .withTLSForServer(forServer)
-                .withCluster(cluster)
                 .withBindAddress(new InetSocketAddress("127.0.0.1", 20001))
                 .withHTTPInitializer(new DefaultHTTPServerInitializer())
                 .withL4FrontListener(new TCPListener())
@@ -380,7 +376,6 @@ class CompressionTest {
                 .withHTTPConfiguration(httpConfiguration)
                 .withTLSForClient(forClient)
                 .withTLSForServer(forServer)
-                .withCluster(cluster)
                 .withBindAddress(new InetSocketAddress("127.0.0.1", 20002))
                 .withHTTPInitializer(new DefaultHTTPServerInitializer())
                 .withL4FrontListener(new TCPListener())

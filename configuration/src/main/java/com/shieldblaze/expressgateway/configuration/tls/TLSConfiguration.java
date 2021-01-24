@@ -17,11 +17,14 @@
  */
 package com.shieldblaze.expressgateway.configuration.tls;
 
-import com.google.gson.annotations.Expose;
+import com.fasterxml.jackson.annotation.JsonProperty;
+import com.shieldblaze.expressgateway.configuration.ConfigurationMarshaller;
+import io.netty.util.internal.SystemPropertyUtil;
 import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
 
 import javax.net.ssl.SSLException;
+import java.io.IOException;
 import java.security.KeyStoreException;
 import java.security.NoSuchAlgorithmException;
 import java.util.List;
@@ -31,37 +34,74 @@ import java.util.concurrent.ConcurrentHashMap;
 /**
  * Configuration for TLS
  */
-public final class TLSConfiguration {
+public final class TLSConfiguration extends ConfigurationMarshaller {
     private static final Logger logger = LogManager.getLogger(TLSConfiguration.class);
 
     private final Map<String, CertificateKeyPair> certificateKeyPairMap = new ConcurrentHashMap<>();
 
-    @Expose
+    @JsonProperty("forServer")
     private boolean forServer;
 
-    @Expose
+    @JsonProperty("ciphers")
     private List<Cipher> ciphers;
 
-    @Expose
+    @JsonProperty("protocols")
     private List<Protocol> protocols;
 
-    @Expose
-    private MutualTLS mutualTLS;
+    @JsonProperty("mutualTLS")
+    private MutualTLS mutualTLS = MutualTLS.NOT_REQUIRED;
 
-    @Expose
+    @JsonProperty("useStartTLS")
     private boolean useStartTLS;
 
-    @Expose
-    private boolean useALPN;
-
-    @Expose
+    @JsonProperty("sessionTimeout")
     private int sessionTimeout;
 
-    @Expose
+    @JsonProperty("sessionCacheSize")
     private int sessionCacheSize;
 
-    @Expose
+    @JsonProperty("acceptAllCerts")
     private boolean acceptAllCerts;
+
+    public static final TLSConfiguration DEFAULT_CLIENT = new TLSConfiguration();
+    public static final TLSConfiguration DEFAULT_SERVER = new TLSConfiguration();
+
+    static {
+        // Default Client
+        {
+            DEFAULT_CLIENT.forServer = false;
+            boolean useModernCrypto = SystemPropertyUtil.getBoolean("useModernCrypto", false);
+
+            if (useModernCrypto) {
+                DEFAULT_CLIENT.ciphers = ModernCrypto.CIPHERS;
+                DEFAULT_CLIENT.protocols = ModernCrypto.PROTOCOLS;
+            } else {
+                DEFAULT_CLIENT.ciphers = IntermediateCrypto.CIPHERS;
+                DEFAULT_CLIENT.protocols = IntermediateCrypto.PROTOCOLS;
+            }
+
+            DEFAULT_CLIENT.useStartTLS = false;
+            DEFAULT_CLIENT.acceptAllCerts = false;
+        }
+
+        // Default Server
+        {
+            DEFAULT_SERVER.forServer = true;
+            boolean useModernCrypto = SystemPropertyUtil.getBoolean("useModernCrypto", false);
+
+            if (useModernCrypto) {
+                DEFAULT_SERVER.ciphers = ModernCrypto.CIPHERS;
+                DEFAULT_SERVER.protocols = ModernCrypto.PROTOCOLS;
+            } else {
+                DEFAULT_SERVER.ciphers = IntermediateCrypto.CIPHERS;
+                DEFAULT_SERVER.protocols = IntermediateCrypto.PROTOCOLS;
+            }
+
+            DEFAULT_SERVER.useStartTLS = false;
+            DEFAULT_SERVER.sessionTimeout = 43200;
+            DEFAULT_SERVER.sessionCacheSize = 100_000;
+        }
+    }
 
     public Map<String, CertificateKeyPair> certificateKeyPairMap() {
         return certificateKeyPairMap;
@@ -163,11 +203,6 @@ public final class TLSConfiguration {
         return this;
     }
 
-    public TLSConfiguration useALPN(boolean useALPN) {
-        this.useALPN = useALPN;
-        return this;
-    }
-
     public TLSConfiguration sessionTimeout(int sessionTimeout) {
         this.sessionTimeout = sessionTimeout;
         return this;
@@ -199,10 +234,6 @@ public final class TLSConfiguration {
         return useStartTLS;
     }
 
-    public boolean useALPN() {
-        return useALPN;
-    }
-
     public int sessionTimeout() {
         return sessionTimeout;
     }
@@ -213,5 +244,21 @@ public final class TLSConfiguration {
 
     public boolean acceptAllCerts() {
         return acceptAllCerts;
+    }
+
+    public static TLSConfiguration loadClient() throws IOException {
+        return loadFrom(TLSConfiguration.class, "TLSClient.yaml");
+    }
+
+    public void saveClient() throws IOException {
+        saveTo(this, "TLSClient.yaml");
+    }
+
+    public static TLSConfiguration loadServer() throws IOException {
+        return loadFrom(TLSConfiguration.class, "TLSServer.yaml");
+    }
+
+    public void saveServer() throws IOException {
+        saveTo(this, "TLSServer.yaml");
     }
 }

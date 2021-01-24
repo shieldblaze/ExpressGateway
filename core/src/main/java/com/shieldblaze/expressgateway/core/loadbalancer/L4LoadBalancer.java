@@ -20,6 +20,7 @@ package com.shieldblaze.expressgateway.core.loadbalancer;
 import com.shieldblaze.expressgateway.backend.cluster.Cluster;
 import com.shieldblaze.expressgateway.common.annotation.NonNull;
 import com.shieldblaze.expressgateway.concurrent.eventstream.EventPublisher;
+import com.shieldblaze.expressgateway.concurrent.eventstream.EventStream;
 import com.shieldblaze.expressgateway.concurrent.eventstream.EventSubscriber;
 import com.shieldblaze.expressgateway.configuration.CoreConfiguration;
 import com.shieldblaze.expressgateway.configuration.tls.TLSConfiguration;
@@ -32,7 +33,9 @@ import io.netty.buffer.ByteBufAllocator;
 import io.netty.channel.ChannelHandler;
 
 import java.net.InetSocketAddress;
+import java.util.Map;
 import java.util.UUID;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.atomic.AtomicInteger;
 
 /**
@@ -45,9 +48,10 @@ public abstract class L4LoadBalancer {
     private static final AtomicInteger counter = new AtomicInteger(0);
     private String name = "L4LoadBalancer#" + counter.incrementAndGet();
 
+    private final EventStream eventStream;
     private final InetSocketAddress bindAddress;
     private final L4FrontListener l4FrontListener;
-    private final Cluster cluster;
+    private final Map<String, Cluster> clusterMap = new ConcurrentHashMap<>();
     private final CoreConfiguration coreConfiguration;
     private final TLSConfiguration tlsForServer;
     private final TLSConfiguration tlsForClient;
@@ -60,7 +64,6 @@ public abstract class L4LoadBalancer {
      * @param name              Name of this Load Balancer
      * @param bindAddress       {@link InetSocketAddress} on which {@link L4FrontListener} will bind and listen.
      * @param l4FrontListener   {@link L4FrontListener} for listening traffic
-     * @param cluster           {@link Cluster} to be Load Balanced
      * @param coreConfiguration {@link CoreConfiguration} to be applied
      * @param tlsForServer      {@link TLSConfiguration} for Server
      * @param tlsForClient      {@link TLSConfiguration} for Client
@@ -68,9 +71,9 @@ public abstract class L4LoadBalancer {
      * @throws NullPointerException If a required parameter if {@code null}
      */
     public L4LoadBalancer(String name,
+                          @NonNull EventStream eventStream,
                           @NonNull InetSocketAddress bindAddress,
                           @NonNull L4FrontListener l4FrontListener,
-                          @NonNull Cluster cluster,
                           @NonNull CoreConfiguration coreConfiguration,
                           TLSConfiguration tlsForServer,
                           TLSConfiguration tlsForClient,
@@ -80,9 +83,9 @@ public abstract class L4LoadBalancer {
             this.name = name;
         }
 
+        this.eventStream = eventStream;
         this.bindAddress = bindAddress;
         this.l4FrontListener = l4FrontListener;
-        this.cluster = cluster;
         this.coreConfiguration = coreConfiguration;
         this.tlsForServer = tlsForServer;
         this.tlsForClient = tlsForClient;
@@ -117,6 +120,10 @@ public abstract class L4LoadBalancer {
         return l4FrontListener.stop();
     }
 
+    public EventStream eventStream() {
+        return eventStream;
+    }
+
     /**
      * Get {@link InetSocketAddress} on which {@link L4FrontListener} is bind.
      */
@@ -125,10 +132,20 @@ public abstract class L4LoadBalancer {
     }
 
     /**
-     * Get {@link Cluster} which is being Load Balanced
+     * Get {@link Cluster} which is being Load Balanced for specific Hostname
+     * @param hostname FQDN Hostname
      */
-    public Cluster cluster() {
-        return cluster;
+    @NonNull
+    public Cluster cluster(String hostname) {
+        return clusterMap.get(hostname);
+    }
+
+    /**
+     * Add new mapping of Cluster with Hostname
+     */
+    @NonNull
+    public void mapCluster(String hostname, Cluster cluster) {
+        clusterMap.put(hostname, cluster);
     }
 
     /**
@@ -174,10 +191,6 @@ public abstract class L4LoadBalancer {
     }
 
     public EventPublisher eventPublisher() {
-        return cluster.eventPublisher();
-    }
-
-    public EventSubscriber eventSubscriber() {
-        return cluster.eventSubscriber();
+        return eventStream.eventPublisher();
     }
 }

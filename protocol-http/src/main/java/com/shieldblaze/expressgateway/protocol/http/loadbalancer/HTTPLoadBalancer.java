@@ -17,7 +17,7 @@
  */
 package com.shieldblaze.expressgateway.protocol.http.loadbalancer;
 
-import com.shieldblaze.expressgateway.backend.cluster.Cluster;
+import com.shieldblaze.expressgateway.concurrent.eventstream.EventStream;
 import com.shieldblaze.expressgateway.configuration.CoreConfiguration;
 import com.shieldblaze.expressgateway.configuration.http.HTTPConfiguration;
 import com.shieldblaze.expressgateway.configuration.tls.TLSConfiguration;
@@ -38,17 +38,16 @@ public class HTTPLoadBalancer extends L4LoadBalancer {
      * @param name              Name of this Load Balancer
      * @param bindAddress       {@link InetSocketAddress} on which {@link L4FrontListener} will bind and listen.
      * @param l4FrontListener   {@link L4FrontListener} for listening traffic
-     * @param cluster           {@link Cluster} to be Load Balanced
      * @param coreConfiguration {@link CoreConfiguration} to be applied
      * @param tlsForServer      {@link TLSConfiguration} for Server
      * @param tlsForClient      {@link TLSConfiguration} for Client
      * @param httpConfiguration {@link HTTPConfiguration} to be applied
      * @throws NullPointerException If a required parameter if {@code null}
      */
-    HTTPLoadBalancer(String name, InetSocketAddress bindAddress, L4FrontListener l4FrontListener, Cluster cluster,
+    HTTPLoadBalancer(String name, EventStream eventStream, InetSocketAddress bindAddress, L4FrontListener l4FrontListener,
                      CoreConfiguration coreConfiguration, TLSConfiguration tlsForServer, TLSConfiguration tlsForClient,
                      HTTPConfiguration httpConfiguration, HTTPServerInitializer httpServerInitializer) {
-        super(name, bindAddress, l4FrontListener, cluster, coreConfiguration, tlsForServer, tlsForClient, httpServerInitializer);
+        super(name, eventStream, bindAddress, l4FrontListener, coreConfiguration, tlsForServer, tlsForClient, httpServerInitializer);
         this.httpConfiguration = httpConfiguration;
         httpServerInitializer.httpLoadBalancer(this);
     }

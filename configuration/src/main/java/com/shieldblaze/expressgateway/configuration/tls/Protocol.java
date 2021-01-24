@@ -34,6 +34,10 @@ public enum Protocol {
         this.protocol = protocol;
     }
 
+    public String protocol() {
+        return protocol;
+    }
+
     static String[] getProtocols(List<Protocol> protocols) {
         String[] protocolArray = new String[protocols.size()];
         int index = 0;

@@ -19,9 +19,11 @@ package com.shieldblaze.expressgateway.protocol.http;
 
 import com.shieldblaze.expressgateway.backend.Connection;
 import com.shieldblaze.expressgateway.backend.Node;
+import com.shieldblaze.expressgateway.backend.cluster.Cluster;
 import com.shieldblaze.expressgateway.backend.strategy.l7.http.HTTPBalanceRequest;
 import com.shieldblaze.expressgateway.protocol.http.loadbalancer.HTTPLoadBalancer;
 import io.netty.channel.ChannelDuplexHandler;
+import io.netty.channel.ChannelFutureListener;
 import io.netty.channel.ChannelHandlerContext;
 import io.netty.handler.codec.http.HttpFrame;
 import io.netty.handler.codec.http.HttpHeaderNames;
@@ -57,9 +59,23 @@ public final class UpstreamHandler extends ChannelDuplexHandler {
         if (msg instanceof HttpRequest) {
             HttpRequest request = (HttpRequest) msg;
 
+            // If Host Header is not present then return `BAD_REQUEST` error.
+            if (!request.headers().contains(HttpHeaderNames.HOST)) {
+                ctx.writeAndFlush(HTTPResponses.BAD_REQUEST_400).addListener(ChannelFutureListener.CLOSE);
+                return;
+            }
+
             InetSocketAddress socketAddress = (InetSocketAddress) ctx.channel().remoteAddress();
-            HTTPBalanceRequest balanceRequest = new HTTPBalanceRequest(socketAddress, request.headers());
-            Node node = httpLoadBalancer.cluster().nextNode(balanceRequest).node();
+            Cluster cluster = httpLoadBalancer.cluster(request.headers().getAsString(HttpHeaderNames.HOST));
+
+            // If `Cluster` is `null` then no `Cluster` was found for that Hostname.
+            // Throw error back to client, `BAD_GATEWAY`.
+            if (cluster == null) {
+                ctx.writeAndFlush(HTTPResponses.BAD_GATEWAY_502).addListener(ChannelFutureListener.CLOSE);
+                return;
+            }
+
+            Node node = cluster.nextNode(new HTTPBalanceRequest(socketAddress, request.headers())).node();
 
             /*
              * We'll try to lease an available connection. If available, we'll get

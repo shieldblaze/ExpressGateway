@@ -106,7 +106,6 @@ class SimpleTest {
         forServer = TLSConfigurationBuilder.forServer()
                 .withProtocols(Collections.singletonList(Protocol.TLS_1_3))
                 .withCiphers(Collections.singletonList(Cipher.TLS_AES_128_GCM_SHA256))
-                .withUseALPN(true)
                 .withMutualTLS(MutualTLS.NOT_REQUIRED)
                 .build();
 
@@ -115,7 +114,6 @@ class SimpleTest {
         forClient = TLSConfigurationBuilder.forClient()
                 .withProtocols(Collections.singletonList(Protocol.TLS_1_3))
                 .withCiphers(Collections.singletonList(Cipher.TLS_AES_256_GCM_SHA384))
-                .withUseALPN(true)
                 .withMutualTLS(MutualTLS.NOT_REQUIRED)
                 .withAcceptAllCertificate(true)
                 .build();
@@ -157,7 +155,6 @@ class SimpleTest {
                 .withHTTPConfiguration(httpConfiguration)
                 .withTLSForClient(forClient)
                 .withTLSForServer(forServer)
-                .withCluster(cluster)
                 .withBindAddress(new InetSocketAddress("127.0.0.1", 20000))
                 .withHTTPInitializer(new DefaultHTTPServerInitializer())
                 .withL4FrontListener(new TCPListener())
@@ -211,7 +208,6 @@ class SimpleTest {
                 .withCoreConfiguration(coreConfiguration)
                 .withHTTPConfiguration(httpConfiguration)
                 .withTLSForServer(forServer)
-                .withCluster(cluster)
                 .withBindAddress(new InetSocketAddress("127.0.0.1", 20001))
                 .withHTTPInitializer(new DefaultHTTPServerInitializer())
                 .withL4FrontListener(new TCPListener())
@@ -265,7 +261,6 @@ class SimpleTest {
                 .withCoreConfiguration(coreConfiguration)
                 .withHTTPConfiguration(httpConfiguration)
                 .withTLSForClient(forClient)
-                .withCluster(cluster)
                 .withBindAddress(new InetSocketAddress("127.0.0.1", 20002))
                 .withHTTPInitializer(new DefaultHTTPServerInitializer())
                 .withL4FrontListener(new TCPListener())
@@ -306,7 +301,6 @@ class SimpleTest {
         HTTPLoadBalancer httpLoadBalancer = HTTPLoadBalancerBuilder.newBuilder()
                 .withCoreConfiguration(coreConfiguration)
                 .withHTTPConfiguration(httpConfiguration)
-                .withCluster(cluster)
                 .withBindAddress(new InetSocketAddress("127.0.0.1", 20003))
                 .withHTTPInitializer(new DefaultHTTPServerInitializer())
                 .withL4FrontListener(new TCPListener())
