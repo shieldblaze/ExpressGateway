@@ -150,6 +150,9 @@ public abstract class L4LoadBalancer {
     @NonNull
     public void mapCluster(String hostname, Cluster cluster) {
         clusterMap.put(hostname, cluster);
+        if (cluster.eventStream() == null) {
+            cluster.eventStream(eventStream);
+        }
     }
 
     /**

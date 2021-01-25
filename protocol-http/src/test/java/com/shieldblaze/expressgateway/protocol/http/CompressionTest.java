@@ -116,8 +116,7 @@ class CompressionTest {
         httpServer.start();
         Thread.sleep(500L);
 
-        Cluster cluster = new ClusterPool(new EventStream(), new HTTPRoundRobin(NOOPSessionPersistence.INSTANCE));
-        new Node(cluster, new InetSocketAddress("localhost", 10000));
+        Cluster cluster = new ClusterPool(new HTTPRoundRobin(NOOPSessionPersistence.INSTANCE));
 
         HTTPLoadBalancer httpLoadBalancer = HTTPLoadBalancerBuilder.newBuilder()
                 .withCoreConfiguration(CoreConfiguration.DEFAULT)
@@ -131,6 +130,7 @@ class CompressionTest {
                 .build();
 
         httpLoadBalancer.mapCluster("localhost:20000", cluster);
+        new Node(cluster, new InetSocketAddress("localhost", 10000));
 
         L4FrontListenerStartupEvent l4FrontListenerStartupEvent = httpLoadBalancer.start();
         l4FrontListenerStartupEvent.future().join();
@@ -222,8 +222,7 @@ class CompressionTest {
         httpServer.start();
         Thread.sleep(500L);
 
-        Cluster cluster = new ClusterPool(new EventStream(), new HTTPRoundRobin(NOOPSessionPersistence.INSTANCE));
-        new Node(cluster, new InetSocketAddress("localhost", 10001));
+        Cluster cluster = new ClusterPool(new HTTPRoundRobin(NOOPSessionPersistence.INSTANCE));
 
         HTTPLoadBalancer httpLoadBalancer = HTTPLoadBalancerBuilder.newBuilder()
                 .withCoreConfiguration(CoreConfiguration.DEFAULT)
@@ -237,6 +236,7 @@ class CompressionTest {
                 .build();
 
         httpLoadBalancer.mapCluster("localhost:20001", cluster);
+        new Node(cluster, new InetSocketAddress("localhost", 10001));
 
         L4FrontListenerStartupEvent l4FrontListenerStartupEvent = httpLoadBalancer.start();
         l4FrontListenerStartupEvent.future().join();
@@ -309,8 +309,7 @@ class CompressionTest {
         httpServer.start();
         Thread.sleep(500L);
 
-        Cluster cluster = new ClusterPool(new EventStream(), new HTTPRoundRobin(NOOPSessionPersistence.INSTANCE));
-        new Node(cluster, new InetSocketAddress("localhost", 10002));
+        Cluster cluster = new ClusterPool(new HTTPRoundRobin(NOOPSessionPersistence.INSTANCE));
 
         HTTPLoadBalancer httpLoadBalancer = HTTPLoadBalancerBuilder.newBuilder()
                 .withCoreConfiguration(CoreConfiguration.DEFAULT)
@@ -324,6 +323,7 @@ class CompressionTest {
                 .build();
 
         httpLoadBalancer.mapCluster("localhost:20002", cluster);
+        new Node(cluster, new InetSocketAddress("localhost", 10002));
 
         L4FrontListenerStartupEvent l4FrontListenerStartupEvent = httpLoadBalancer.start();
         l4FrontListenerStartupEvent.future().join();

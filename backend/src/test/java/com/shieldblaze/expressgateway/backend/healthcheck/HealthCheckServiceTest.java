@@ -72,16 +72,13 @@ class HealthCheckServiceTest {
         tcpServer = new TCPServer();
         tcpServer.start();
 
-        EventStreamConfiguration streamConfiguration = EventStreamConfigurationBuilder.newBuilder()
-                .withWorkers(0) // Using EventStream
-                .build();
-
         HealthCheckConfiguration healthCheckConfiguration = HealthCheckConfigurationBuilder.newBuilder()
                 .withTimeInterval(10)
                 .withWorkers(2)
                 .build();
 
-        cluster = new ClusterPool(streamConfiguration.eventStream(), new RoundRobin(NOOPSessionPersistence.INSTANCE));
+        cluster = new ClusterPool(new RoundRobin(NOOPSessionPersistence.INSTANCE));
+        cluster.eventStream(EventStreamConfiguration.DEFAULT.eventStream());
         healthCheckService = new HealthCheckService(healthCheckConfiguration, cluster.eventPublisher());
 
         TCPHealthCheck healthCheck = new TCPHealthCheck(tcpServer.socketAddress, Duration.ofMillis(10));
