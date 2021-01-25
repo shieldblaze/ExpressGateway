@@ -45,7 +45,7 @@ final class UpstreamHandler extends ChannelInboundHandlerAdapter {
     public void channelActive(ChannelHandlerContext ctx) throws Exception {
         Node node;
         try {
-            node = l4LoadBalancer.cluster().nextNode(new L4Request((InetSocketAddress) ctx.channel().remoteAddress())).node();
+            node = l4LoadBalancer.cluster("DEFAULT").nextNode(new L4Request((InetSocketAddress) ctx.channel().remoteAddress())).node();
             tcpConnection = bootstrapper.newInit(node, ctx.channel());
             node.addConnection(tcpConnection);
         } catch (Exception ex) {

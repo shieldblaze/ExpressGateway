@@ -19,6 +19,7 @@
 package com.shieldblaze.expressgateway.core.loadbalancer;
 
 import com.shieldblaze.expressgateway.backend.cluster.Cluster;
+import com.shieldblaze.expressgateway.concurrent.eventstream.EventStream;
 import com.shieldblaze.expressgateway.configuration.CoreConfiguration;
 import com.shieldblaze.expressgateway.configuration.tls.TLSConfiguration;
 import com.shieldblaze.expressgateway.core.L4FrontListener;
@@ -33,9 +34,9 @@ import java.util.Objects;
 public final class L4LoadBalancerBuilder {
 
     private String name;
+    private EventStream eventStream;
     private InetSocketAddress bindAddress;
     private L4FrontListener l4FrontListener;
-    private Cluster cluster;
     private CoreConfiguration coreConfiguration;
     private TLSConfiguration tlsForServer;
     private TLSConfiguration tlsForClient;
@@ -54,6 +55,11 @@ public final class L4LoadBalancerBuilder {
         return this;
     }
 
+    public L4LoadBalancerBuilder withEventStream(EventStream eventStream) {
+        this.eventStream = eventStream;
+        return this;
+    }
+
     public L4LoadBalancerBuilder withBindAddress(InetSocketAddress bindAddress) {
         this.bindAddress = bindAddress;
         return this;
@@ -61,11 +67,6 @@ public final class L4LoadBalancerBuilder {
 
     public L4LoadBalancerBuilder withL4FrontListener(L4FrontListener l4FrontListener) {
         this.l4FrontListener = l4FrontListener;
-        return this;
-    }
-
-    public L4LoadBalancerBuilder withCluster(Cluster backend) {
-        this.cluster = backend;
         return this;
     }
 
@@ -90,10 +91,10 @@ public final class L4LoadBalancerBuilder {
     }
 
     public L4LoadBalancer build() {
+        Objects.requireNonNull(eventStream, "Event Stream");
         Objects.requireNonNull(bindAddress, "BindAddress");
         Objects.requireNonNull(l4FrontListener, "L4FrontListener");
-        Objects.requireNonNull(cluster, "Backend");
         Objects.requireNonNull(coreConfiguration, "CoreConfiguration");
-        return new DefaultL4LoadBalancer(name, bindAddress, l4FrontListener, cluster, coreConfiguration, tlsForServer, tlsForClient, channelHandler);
+        return new DefaultL4LoadBalancer(name, eventStream, bindAddress, l4FrontListener, coreConfiguration, tlsForServer, tlsForClient, channelHandler);
     }
 }

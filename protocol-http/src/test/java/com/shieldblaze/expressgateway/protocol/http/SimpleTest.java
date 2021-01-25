@@ -24,22 +24,13 @@ import com.shieldblaze.expressgateway.backend.strategy.l7.http.HTTPRoundRobin;
 import com.shieldblaze.expressgateway.backend.strategy.l7.http.sessionpersistence.NOOPSessionPersistence;
 import com.shieldblaze.expressgateway.concurrent.eventstream.EventStream;
 import com.shieldblaze.expressgateway.configuration.CoreConfiguration;
-import com.shieldblaze.expressgateway.configuration.CoreConfigurationBuilder;
-import com.shieldblaze.expressgateway.configuration.buffer.BufferConfiguration;
-import com.shieldblaze.expressgateway.configuration.eventloop.EventLoopConfiguration;
-import com.shieldblaze.expressgateway.configuration.eventloop.EventLoopConfigurationBuilder;
 import com.shieldblaze.expressgateway.configuration.http.HTTPConfiguration;
-import com.shieldblaze.expressgateway.configuration.http.HTTPConfigurationBuilder;
 import com.shieldblaze.expressgateway.configuration.tls.CertificateKeyPair;
 import com.shieldblaze.expressgateway.configuration.tls.Cipher;
 import com.shieldblaze.expressgateway.configuration.tls.MutualTLS;
 import com.shieldblaze.expressgateway.configuration.tls.Protocol;
 import com.shieldblaze.expressgateway.configuration.tls.TLSConfiguration;
 import com.shieldblaze.expressgateway.configuration.tls.TLSConfigurationBuilder;
-import com.shieldblaze.expressgateway.configuration.transport.ReceiveBufferAllocationType;
-import com.shieldblaze.expressgateway.configuration.transport.TransportConfiguration;
-import com.shieldblaze.expressgateway.configuration.transport.TransportConfigurationBuilder;
-import com.shieldblaze.expressgateway.configuration.transport.TransportType;
 import com.shieldblaze.expressgateway.core.events.L4FrontListenerStartupEvent;
 import com.shieldblaze.expressgateway.core.events.L4FrontListenerStopEvent;
 import com.shieldblaze.expressgateway.protocol.http.loadbalancer.HTTPLoadBalancer;
@@ -65,73 +56,22 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 
 class SimpleTest {
 
-    static TransportConfiguration transportConfiguration;
-    static EventLoopConfiguration eventLoopConfiguration;
-    static CoreConfiguration coreConfiguration;
     static TLSConfiguration forServer;
     static TLSConfiguration forClient;
-    static HTTPConfiguration httpConfiguration;
     static HttpClient httpClient;
 
     @BeforeAll
     static void initialize() throws Exception {
-        transportConfiguration = TransportConfigurationBuilder.newBuilder()
-                .withTransportType(TransportType.NIO)
-                .withTCPFastOpenMaximumPendingRequests(2147483647)
-                .withBackendConnectTimeout(10000 * 5)
-                .withReceiveBufferAllocationType(ReceiveBufferAllocationType.FIXED)
-                .withReceiveBufferSizes(new int[]{65535})
-                .withSocketReceiveBufferSize(2147483647)
-                .withSocketSendBufferSize(2147483647)
-                .withTCPConnectionBacklog(2147483647)
-                .withConnectionIdleTimeout(1800000)
-                .build();
-
-        eventLoopConfiguration = EventLoopConfigurationBuilder.newBuilder()
-                .withParentWorkers(2)
-                .withChildWorkers(4)
-                .build();
-
-        coreConfiguration = CoreConfigurationBuilder.newBuilder()
-                .withTransportConfiguration(transportConfiguration)
-                .withEventLoopConfiguration(eventLoopConfiguration)
-                .withBufferConfiguration(BufferConfiguration.DEFAULT)
-                .build();
 
         SelfSignedCertificate selfSignedCertificate = new SelfSignedCertificate("localhost", "EC", 256);
 
-        CertificateKeyPair certificateKeyPair = new CertificateKeyPair(
-                Collections.singletonList(selfSignedCertificate.cert()), selfSignedCertificate.key(), false);
+        CertificateKeyPair certificateKeyPair = new CertificateKeyPair(Collections.singletonList(selfSignedCertificate.cert()), selfSignedCertificate.key());
 
-        forServer = TLSConfigurationBuilder.forServer()
-                .withProtocols(Collections.singletonList(Protocol.TLS_1_3))
-                .withCiphers(Collections.singletonList(Cipher.TLS_AES_128_GCM_SHA256))
-                .withMutualTLS(MutualTLS.NOT_REQUIRED)
-                .build();
+        forServer = TLSConfiguration.DEFAULT_SERVER;
+        forServer.addMapping("localhost", certificateKeyPair);
 
-        forServer.defaultMapping(certificateKeyPair);
-
-        forClient = TLSConfigurationBuilder.forClient()
-                .withProtocols(Collections.singletonList(Protocol.TLS_1_3))
-                .withCiphers(Collections.singletonList(Cipher.TLS_AES_256_GCM_SHA384))
-                .withMutualTLS(MutualTLS.NOT_REQUIRED)
-                .withAcceptAllCertificate(true)
-                .build();
-
-        httpConfiguration = HTTPConfigurationBuilder.newBuilder()
-                .withBrotliCompressionLevel(4)
-                .withCompressionThreshold(100)
-                .withDeflateCompressionLevel(6)
-                .withMaxChunkSize(1024 * 100)
-                .withMaxContentLength(1024 * 10240)
-                .withMaxHeaderSize(1024 * 10)
-                .withMaxInitialLineLength(1024 * 100)
-                .withH2InitialWindowSize(Integer.MAX_VALUE)
-                .withH2MaxConcurrentStreams(1000)
-                .withH2MaxHeaderListSize(262144)
-                .withH2MaxFrameSize(16777215)
-                .withH2MaxHeaderTableSize(65536)
-                .build();
+        forClient = TLSConfiguration.DEFAULT_CLIENT;
+        forClient.acceptAllCerts(true);
 
         SSLContext sslContext = SSLContext.getInstance("TLSv1.3");
         sslContext.init(null, InsecureTrustManagerFactory.INSTANCE.getTrustManagers(), new SecureRandom());
@@ -148,17 +88,20 @@ class SimpleTest {
         Thread.sleep(500L);
 
         Cluster cluster = new ClusterPool(new EventStream(), new HTTPRoundRobin(NOOPSessionPersistence.INSTANCE));
-        new Node(cluster, new InetSocketAddress("127.0.0.1", 10000));
+        new Node(cluster, new InetSocketAddress("localhost", 10000));
 
         HTTPLoadBalancer httpLoadBalancer = HTTPLoadBalancerBuilder.newBuilder()
-                .withCoreConfiguration(coreConfiguration)
-                .withHTTPConfiguration(httpConfiguration)
+                .withCoreConfiguration(CoreConfiguration.DEFAULT)
+                .withHTTPConfiguration(HTTPConfiguration.DEFAULT)
                 .withTLSForClient(forClient)
                 .withTLSForServer(forServer)
-                .withBindAddress(new InetSocketAddress("127.0.0.1", 20000))
+                .withBindAddress(new InetSocketAddress("localhost", 20000))
                 .withHTTPInitializer(new DefaultHTTPServerInitializer())
                 .withL4FrontListener(new TCPListener())
+                .withEventStream(new EventStream())
                 .build();
+
+        httpLoadBalancer.mapCluster("localhost:20000", cluster);
 
         L4FrontListenerStartupEvent l4FrontListenerStartupEvent = httpLoadBalancer.start();
         l4FrontListenerStartupEvent.future().join();
@@ -167,7 +110,7 @@ class SimpleTest {
         // Send using HTTP/1.1
         HttpRequest httpRequest = HttpRequest.newBuilder()
                 .GET()
-                .uri(URI.create("https://127.0.0.1:20000"))
+                .uri(URI.create("https://localhost:20000"))
                 .version(HttpClient.Version.HTTP_1_1)
                 .timeout(Duration.ofSeconds(5))
                 .build();
@@ -179,7 +122,7 @@ class SimpleTest {
         // Send using HTTP/2
         httpRequest = HttpRequest.newBuilder()
                 .GET()
-                .uri(URI.create("https://127.0.0.1:20000"))
+                .uri(URI.create("https://localhost:20000"))
                 .version(HttpClient.Version.HTTP_2)
                 .timeout(Duration.ofSeconds(5))
                 .build();
@@ -202,16 +145,19 @@ class SimpleTest {
         Thread.sleep(500L);
 
         Cluster cluster = new ClusterPool(new EventStream(), new HTTPRoundRobin(NOOPSessionPersistence.INSTANCE));
-        new Node(cluster, new InetSocketAddress("127.0.0.1", 10001));
+        new Node(cluster, new InetSocketAddress("localhost", 10001));
 
         HTTPLoadBalancer httpLoadBalancer = HTTPLoadBalancerBuilder.newBuilder()
-                .withCoreConfiguration(coreConfiguration)
-                .withHTTPConfiguration(httpConfiguration)
+                .withCoreConfiguration(CoreConfiguration.DEFAULT)
+                .withHTTPConfiguration(HTTPConfiguration.DEFAULT)
                 .withTLSForServer(forServer)
-                .withBindAddress(new InetSocketAddress("127.0.0.1", 20001))
+                .withBindAddress(new InetSocketAddress("localhost", 20001))
                 .withHTTPInitializer(new DefaultHTTPServerInitializer())
                 .withL4FrontListener(new TCPListener())
+                .withEventStream(new EventStream())
                 .build();
+
+        httpLoadBalancer.mapCluster("localhost:20001", cluster);
 
         L4FrontListenerStartupEvent l4FrontListenerStartupEvent = httpLoadBalancer.start();
         l4FrontListenerStartupEvent.future().join();
@@ -220,7 +166,7 @@ class SimpleTest {
         // Send using HTTP/1.1
         HttpRequest httpRequest = HttpRequest.newBuilder()
                 .GET()
-                .uri(URI.create("https://127.0.0.1:20001"))
+                .uri(URI.create("https://localhost:20001"))
                 .version(HttpClient.Version.HTTP_2)
                 .timeout(Duration.ofSeconds(5))
                 .build();
@@ -232,7 +178,7 @@ class SimpleTest {
         // Send using HTTP/2
         httpRequest = HttpRequest.newBuilder()
                 .GET()
-                .uri(URI.create("https://127.0.0.1:20001"))
+                .uri(URI.create("https://localhost:20001"))
                 .version(HttpClient.Version.HTTP_1_1)
                 .timeout(Duration.ofSeconds(5))
                 .build();
@@ -255,16 +201,19 @@ class SimpleTest {
         Thread.sleep(500L);
 
         Cluster cluster = new ClusterPool(new EventStream(), new HTTPRoundRobin(NOOPSessionPersistence.INSTANCE));
-        new Node(cluster, new InetSocketAddress("127.0.0.1", 10002));
+        new Node(cluster, new InetSocketAddress("localhost", 10002));
 
         HTTPLoadBalancer httpLoadBalancer = HTTPLoadBalancerBuilder.newBuilder()
-                .withCoreConfiguration(coreConfiguration)
-                .withHTTPConfiguration(httpConfiguration)
+                .withCoreConfiguration(CoreConfiguration.DEFAULT)
+                .withHTTPConfiguration(HTTPConfiguration.DEFAULT)
                 .withTLSForClient(forClient)
-                .withBindAddress(new InetSocketAddress("127.0.0.1", 20002))
+                .withBindAddress(new InetSocketAddress("localhost", 20002))
                 .withHTTPInitializer(new DefaultHTTPServerInitializer())
                 .withL4FrontListener(new TCPListener())
+                .withEventStream(new EventStream())
                 .build();
+
+        httpLoadBalancer.mapCluster("localhost:20002", cluster);
 
         L4FrontListenerStartupEvent l4FrontListenerStartupEvent = httpLoadBalancer.start();
         l4FrontListenerStartupEvent.future().join();
@@ -273,7 +222,7 @@ class SimpleTest {
         // Send using HTTP/1.1
         HttpRequest httpRequest = HttpRequest.newBuilder()
                 .GET()
-                .uri(URI.create("http://127.0.0.1:20002"))
+                .uri(URI.create("http://localhost:20002"))
                 .version(HttpClient.Version.HTTP_1_1)
                 .timeout(Duration.ofSeconds(5))
                 .build();
@@ -296,15 +245,18 @@ class SimpleTest {
         Thread.sleep(500L);
 
         Cluster cluster = new ClusterPool(new EventStream(), new HTTPRoundRobin(NOOPSessionPersistence.INSTANCE));
-        new Node(cluster, new InetSocketAddress("127.0.0.1", 55555));
+        new Node(cluster, new InetSocketAddress("localhost", 55555));
 
         HTTPLoadBalancer httpLoadBalancer = HTTPLoadBalancerBuilder.newBuilder()
-                .withCoreConfiguration(coreConfiguration)
-                .withHTTPConfiguration(httpConfiguration)
-                .withBindAddress(new InetSocketAddress("127.0.0.1", 20003))
+                .withCoreConfiguration(CoreConfiguration.DEFAULT)
+                .withHTTPConfiguration(HTTPConfiguration.DEFAULT)
+                .withBindAddress(new InetSocketAddress("localhost", 20003))
                 .withHTTPInitializer(new DefaultHTTPServerInitializer())
                 .withL4FrontListener(new TCPListener())
+                .withEventStream(new EventStream())
                 .build();
+
+        httpLoadBalancer.mapCluster("localhost:20003", cluster);
 
         L4FrontListenerStartupEvent l4FrontListenerStartupEvent = httpLoadBalancer.start();
         l4FrontListenerStartupEvent.future().join();
@@ -313,7 +265,7 @@ class SimpleTest {
         // Send using HTTP/1.1
         HttpRequest httpRequest = HttpRequest.newBuilder()
                 .GET()
-                .uri(URI.create("http://127.0.0.1:20003"))
+                .uri(URI.create("http://localhost:20003"))
                 .version(HttpClient.Version.HTTP_1_1)
                 .timeout(Duration.ofSeconds(5))
                 .build();

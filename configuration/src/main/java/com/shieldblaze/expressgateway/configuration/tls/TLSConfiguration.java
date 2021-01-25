@@ -17,6 +17,7 @@
  */
 package com.shieldblaze.expressgateway.configuration.tls;
 
+import com.fasterxml.jackson.annotation.JsonIgnore;
 import com.fasterxml.jackson.annotation.JsonProperty;
 import com.shieldblaze.expressgateway.configuration.ConfigurationMarshaller;
 import io.netty.util.internal.SystemPropertyUtil;
@@ -29,7 +30,7 @@ import java.security.KeyStoreException;
 import java.security.NoSuchAlgorithmException;
 import java.util.List;
 import java.util.Map;
-import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.ConcurrentSkipListMap;
 
 /**
  * Configuration for TLS
@@ -37,7 +38,8 @@ import java.util.concurrent.ConcurrentHashMap;
 public final class TLSConfiguration extends ConfigurationMarshaller {
     private static final Logger logger = LogManager.getLogger(TLSConfiguration.class);
 
-    private final Map<String, CertificateKeyPair> certificateKeyPairMap = new ConcurrentHashMap<>();
+    @JsonIgnore
+    private final Map<String, CertificateKeyPair> certificateKeyPairMap = new ConcurrentSkipListMap<>();
 
     @JsonProperty("forServer")
     private boolean forServer;
@@ -103,26 +105,29 @@ public final class TLSConfiguration extends ConfigurationMarshaller {
         }
     }
 
-    public Map<String, CertificateKeyPair> certificateKeyPairMap() {
-        return certificateKeyPairMap;
-    }
-
     /**
      * Add the default {@link CertificateKeyPair} mapping
      */
-    public TLSConfiguration defaultMapping(CertificateKeyPair certificateKeyPair) throws NoSuchAlgorithmException, KeyStoreException, SSLException {
-        addMapping("DEFAULT_HOST", certificateKeyPair);
-        return this;
+    public void clientMapping(CertificateKeyPair certificateKeyPair) throws NoSuchAlgorithmException, KeyStoreException, SSLException {
+        addMapping("CLIENT", certificateKeyPair);
     }
 
-    public TLSConfiguration addMapping(String host, CertificateKeyPair certificateKeyPair) throws NoSuchAlgorithmException, KeyStoreException, SSLException {
+    /**
+     * Add a new mapping
+     *  @param host FQDN
+     * @param certificateKeyPair {@link CertificateKeyPair} Instance
+     */
+    public void addMapping(String host, CertificateKeyPair certificateKeyPair) throws NoSuchAlgorithmException, KeyStoreException, SSLException {
         certificateKeyPairMap.put(host, certificateKeyPair);
-        if (!certificateKeyPair.noCertKey()) {
-            certificateKeyPair.init(this);
-        }
-        return this;
+        certificateKeyPair.init(this);
     }
 
+    /**
+     * Remove mapping for Host
+     *
+     * @param host Host to be removed
+     * @return {@code true} if mapping is successfully removed else {@code false}
+     */
     public boolean removeMapping(String host) {
         return certificateKeyPairMap.remove(host) != null;
     }
@@ -145,28 +150,25 @@ public final class TLSConfiguration extends ConfigurationMarshaller {
                 if (certificateKeyPair != null) {
                     return certificateKeyPair;
                 }
+            } else {
+                return certificateKeyPair;
             }
         } catch (Exception ex) {
             // Ignore
         }
 
-        if (certificateKeyPairMap.containsKey("DEFAULT_HOST")) {
-            return defaultMapping();
-        }
-
-        throw new NullPointerException("Mapping Not Found");
+        throw new NullPointerException("Mapping not found for Hostname: " + fqdn);
     }
 
     /**
      * Get the default mapping.
      */
-    public CertificateKeyPair defaultMapping() {
-        CertificateKeyPair certificateKeyPair = certificateKeyPairMap.get("DEFAULT_HOST");
+    public CertificateKeyPair clientMapping() {
+        CertificateKeyPair certificateKeyPair = certificateKeyPairMap.get("CLIENT");
         if (certificateKeyPair == null && !forServer) {
             try {
                 certificateKeyPair = new CertificateKeyPair();
-                certificateKeyPair.init(this);
-                defaultMapping(certificateKeyPair);
+                clientMapping(certificateKeyPair);
             } catch (Exception ex) {
                 logger.error("Caught error while initializing TLS Client DefaultMapping");
             }

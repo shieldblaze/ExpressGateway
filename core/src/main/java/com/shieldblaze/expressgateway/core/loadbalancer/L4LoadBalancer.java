@@ -21,7 +21,6 @@ import com.shieldblaze.expressgateway.backend.cluster.Cluster;
 import com.shieldblaze.expressgateway.common.annotation.NonNull;
 import com.shieldblaze.expressgateway.concurrent.eventstream.EventPublisher;
 import com.shieldblaze.expressgateway.concurrent.eventstream.EventStream;
-import com.shieldblaze.expressgateway.concurrent.eventstream.EventSubscriber;
 import com.shieldblaze.expressgateway.configuration.CoreConfiguration;
 import com.shieldblaze.expressgateway.configuration.tls.TLSConfiguration;
 import com.shieldblaze.expressgateway.core.EventLoopFactory;
@@ -62,6 +61,7 @@ public abstract class L4LoadBalancer {
 
     /**
      * @param name              Name of this Load Balancer
+     * @param eventStream       {@link EventStream} to use
      * @param bindAddress       {@link InetSocketAddress} on which {@link L4FrontListener} will bind and listen.
      * @param l4FrontListener   {@link L4FrontListener} for listening traffic
      * @param coreConfiguration {@link CoreConfiguration} to be applied
@@ -133,6 +133,7 @@ public abstract class L4LoadBalancer {
 
     /**
      * Get {@link Cluster} which is being Load Balanced for specific Hostname
+     *
      * @param hostname FQDN Hostname
      */
     @NonNull
@@ -142,6 +143,9 @@ public abstract class L4LoadBalancer {
 
     /**
      * Add new mapping of Cluster with Hostname
+     *
+     * @param hostname Fully qualified Hostname and Port if non-default port is used
+     * @param cluster  {@link Cluster} to be mapped
      */
     @NonNull
     public void mapCluster(String hostname, Cluster cluster) {

@@ -78,7 +78,7 @@ final class Bootstrapper {
                     String hostname = node.socketAddress().getHostName();
                     int port = node.socketAddress().getPort();
                     SslHandler sslHandler = httpLoadBalancer.tlsForClient()
-                            .defaultMapping()
+                            .clientMapping()
                             .sslContext()
                             .newHandler(ch.alloc(), hostname, port);
 

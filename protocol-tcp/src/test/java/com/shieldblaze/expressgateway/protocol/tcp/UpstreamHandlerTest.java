@@ -86,7 +86,6 @@ final class UpstreamHandlerTest {
 
         l4LoadBalancer = L4LoadBalancerBuilder.newBuilder()
                 .withCoreConfiguration(coreConfiguration)
-                .withCluster(cluster)
                 .withBindAddress(new InetSocketAddress("127.0.0.1", 9110))
                 .withL4FrontListener(new TCPListener())
                 .build();

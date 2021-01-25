@@ -102,3 +102,10 @@ This product depends on 'Javax-Annotation'. License for the same can be obtained
     * license/LICENSE.javax-annotation.txt (COMMON DEVELOPMENT AND DISTRIBUTION LICENSE (CDDL) Version 1.1)
 
 ---------------------------------
+
+This product depends on 'FasterXML YAML'. License for the same can be obtained at:
+
+  * LICENSE:
+    * license/LICENSE.fasterxml-yaml.txt (Apache License 2.0)
+
+---------------------------------

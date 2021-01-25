@@ -18,6 +18,7 @@
 package com.shieldblaze.expressgateway.core.loadbalancer;
 
 import com.shieldblaze.expressgateway.backend.cluster.Cluster;
+import com.shieldblaze.expressgateway.concurrent.eventstream.EventStream;
 import com.shieldblaze.expressgateway.configuration.CoreConfiguration;
 import com.shieldblaze.expressgateway.configuration.tls.TLSConfiguration;
 import com.shieldblaze.expressgateway.core.L4FrontListener;
@@ -32,9 +33,9 @@ final class DefaultL4LoadBalancer extends L4LoadBalancer {
 
     /**
      * @param name              Name of this Load Balancer
+     * @param eventStream       {@link EventStream} to use
      * @param bindAddress       {@link InetSocketAddress} on which {@link L4FrontListener} will bind and listen.
      * @param l4FrontListener   {@link L4FrontListener} for listening traffic
-     * @param cluster           {@link Cluster} to be Load Balanced
      * @param coreConfiguration {@link CoreConfiguration} to be applied
      * @param tlsForServer      {@link TLSConfiguration} for Server
      * @param tlsForClient      {@link TLSConfiguration} for Client
@@ -42,13 +43,13 @@ final class DefaultL4LoadBalancer extends L4LoadBalancer {
      * @throws NullPointerException If a required parameter if {@code null}
      */
     DefaultL4LoadBalancer(String name,
+                          EventStream eventStream,
                           InetSocketAddress bindAddress,
                           L4FrontListener l4FrontListener,
-                          Cluster cluster,
                           CoreConfiguration coreConfiguration,
                           TLSConfiguration tlsForServer,
                           TLSConfiguration tlsForClient,
                           ChannelHandler channelHandler) {
-        super(name, bindAddress, l4FrontListener, cluster, coreConfiguration, tlsForServer, tlsForClient, channelHandler);
+        super(name, eventStream, bindAddress, l4FrontListener, coreConfiguration, tlsForServer, tlsForClient, channelHandler);
     }
 }
