@@ -63,7 +63,7 @@ final class UpstreamHandler extends ChannelInboundHandlerAdapter {
             if (udpConnection == null) {
                 Node node;
                 try {
-                    node = l4LoadBalancer.cluster().nextNode(new L4Request(datagramPacket.sender())).node();
+                    node = l4LoadBalancer.defaultCluster().nextNode(new L4Request(datagramPacket.sender())).node();
                     udpConnection = bootstrapper.newInit(ctx.channel(), node, datagramPacket.sender());
                     node.addConnection(udpConnection);
                     connectionMap.put(datagramPacket.sender(), udpConnection);

@@ -62,7 +62,6 @@ final class UpstreamHandlerTest {
 
         Cluster cluster = new ClusterPool(new RoundRobin(NOOPSessionPersistence.INSTANCE));
         cluster.eventStream(new EventStream());
-        new Node(cluster, new InetSocketAddress("127.0.0.1", 9111));
 
         l4LoadBalancer = L4LoadBalancerBuilder.newBuilder()
                 .withCoreConfiguration(coreConfiguration)
@@ -70,6 +69,9 @@ final class UpstreamHandlerTest {
                 .withL4FrontListener(new TCPListener())
                 .withEventStream(new EventStream())
                 .build();
+
+        l4LoadBalancer.defaultCluster(cluster);
+        new Node(cluster, new InetSocketAddress("127.0.0.1", 9111));
 
         L4FrontListenerStartupEvent l4FrontListenerStartupEvent = l4LoadBalancer.start();
         l4FrontListenerStartupEvent.future().join();

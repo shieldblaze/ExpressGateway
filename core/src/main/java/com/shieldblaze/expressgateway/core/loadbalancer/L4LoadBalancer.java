@@ -142,6 +142,20 @@ public abstract class L4LoadBalancer {
     }
 
     /**
+     * Set the default {@link Cluster}
+     */
+    public void defaultCluster(Cluster cluster) {
+        mapCluster("DEFAULT", cluster);
+    }
+
+    /**
+     * Get the default {@link Cluster}
+     */
+    public Cluster defaultCluster() {
+        return cluster("DEFAULT");
+    }
+
+    /**
      * Add new mapping of Cluster with Hostname
      *
      * @param hostname Fully qualified Hostname and Port if non-default port is used
