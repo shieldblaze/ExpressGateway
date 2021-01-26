@@ -142,6 +142,13 @@ public abstract class L4LoadBalancer {
     }
 
     /**
+     * Get all {@link Cluster}
+     */
+    public Map<String, Cluster> clusters() {
+        return clusterMap;
+    }
+
+    /**
      * Set the default {@link Cluster}
      */
     public void defaultCluster(Cluster cluster) {
