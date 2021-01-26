@@ -17,12 +17,16 @@
  */
 package com.shieldblaze.expressgateway.configuration;
 
+import com.fasterxml.jackson.databind.ObjectMapper;
+import com.fasterxml.jackson.dataformat.yaml.YAMLFactory;
+import com.fasterxml.jackson.dataformat.yaml.YAMLGenerator;
 import com.shieldblaze.expressgateway.common.GSON;
 import com.shieldblaze.expressgateway.common.utils.Profile;
 
 import java.io.File;
 import java.io.FileWriter;
 import java.io.IOException;
+import java.io.StringReader;
 import java.lang.reflect.Type;
 import java.nio.file.Files;
 
@@ -32,15 +36,15 @@ import java.nio.file.Files;
  */
 public class ConfigurationMarshaller {
 
-    public static <T> T loadFrom(Class<?> clazz, String filename) throws IOException {
+    private static final ObjectMapper OBJECT_MAPPER = new ObjectMapper(new YAMLFactory().disable(YAMLGenerator.Feature.WRITE_DOC_START_MARKER));
+
+    protected static <T> T loadFrom(Class<?> clazz, String filename) throws IOException {
         String location = Profile.ensure() + filename;
-        return GSON.INSTANCE.fromJson(Files.readString(new File(location).toPath()), (Type) clazz);
+        return (T) OBJECT_MAPPER.readValue(Files.readString(new File(location).toPath()), clazz);
     }
 
-    public static void saveTo(Object obj, String filename) throws IOException {
+    protected static void saveTo(Object obj, String filename) throws IOException {
         String location = Profile.ensure() + filename;
-        try (FileWriter writer = new FileWriter(location)) {
-            writer.write(GSON.INSTANCE.toJson(obj));
-        }
+        OBJECT_MAPPER.writeValue(new FileWriter(location), obj);
     }
 }

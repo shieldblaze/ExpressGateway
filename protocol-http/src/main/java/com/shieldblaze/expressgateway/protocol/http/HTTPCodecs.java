@@ -63,7 +63,7 @@ final class HTTPCodecs {
         return http2FrameCodec;
     }
 
-    static Http2FrameCodec H2ServerCodec(HTTPConfiguration httpConfiguration) {
+    static Http2FrameCodec h2Server(HTTPConfiguration httpConfiguration) {
         Http2Settings http2Settings = new Http2Settings();
         http2Settings.maxHeaderListSize(httpConfiguration.h2MaxHeaderListSize());
 
@@ -88,7 +88,7 @@ final class HTTPCodecs {
      *
      * @param httpConfiguration {@link HTTPConfiguration} Instance
      */
-    static HttpServerCodec HTTPServerCodec(HTTPConfiguration httpConfiguration) {
+    static HttpServerCodec server(HTTPConfiguration httpConfiguration) {
         int maxInitialLineLength = httpConfiguration.maxInitialLineLength();
         int maxHeaderSize = httpConfiguration.maxHeaderSize();
         int maxChunkSize = httpConfiguration.maxChunkSize();

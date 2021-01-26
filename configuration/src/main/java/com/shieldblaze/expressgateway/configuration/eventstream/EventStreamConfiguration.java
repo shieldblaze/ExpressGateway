@@ -18,7 +18,7 @@
 
 package com.shieldblaze.expressgateway.configuration.eventstream;
 
-import com.google.gson.annotations.Expose;
+import com.fasterxml.jackson.annotation.JsonProperty;
 import com.shieldblaze.expressgateway.concurrent.eventstream.AsyncEventStream;
 import com.shieldblaze.expressgateway.concurrent.eventstream.EventStream;
 import com.shieldblaze.expressgateway.configuration.ConfigurationMarshaller;
@@ -30,7 +30,7 @@ public class EventStreamConfiguration extends ConfigurationMarshaller {
 
     private EventStream eventStream;
 
-    @Expose
+    @JsonProperty("workers")
     private final int workers;
 
     EventStreamConfiguration(int workers) {
@@ -57,10 +57,10 @@ public class EventStreamConfiguration extends ConfigurationMarshaller {
     }
 
     public static EventStreamConfiguration loadFrom() throws IOException {
-        return loadFrom(EventStreamConfiguration.class, "EventStream.json");
+        return loadFrom(EventStreamConfiguration.class, "EventStream.yaml");
     }
 
     public void saveTo() throws IOException {
-        saveTo(this, "EventStream.json");
+        saveTo(this, "EventStream.yaml");
     }
 }

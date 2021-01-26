@@ -31,6 +31,13 @@ public class CoreConfiguration {
     private EventLoopConfiguration eventLoopConfiguration;
     private BufferConfiguration bufferConfiguration;
 
+    public static final CoreConfiguration DEFAULT = new CoreConfiguration();
+    static {
+        DEFAULT.bufferConfiguration = BufferConfiguration.DEFAULT;
+        DEFAULT.eventLoopConfiguration = EventLoopConfiguration.DEFAULT;
+        DEFAULT.transportConfiguration = TransportConfiguration.DEFAULT;
+    }
+
     public TransportConfiguration transportConfiguration() {
         return transportConfiguration;
     }

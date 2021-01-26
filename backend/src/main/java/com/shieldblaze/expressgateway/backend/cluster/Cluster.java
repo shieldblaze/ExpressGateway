@@ -45,13 +45,11 @@ public abstract class Cluster {
 
     private final List<Node> nodes = new CopyOnWriteArrayList<>();
 
-    private final EventStream eventStream;
+    private EventStream eventStream;
     private LoadBalance<?, ?, ?, ?> loadBalance;
 
-    public Cluster(EventStream eventStream, LoadBalance<?, ?, ?, ?> loadBalance) {
-        this.eventStream = eventStream;
+    public Cluster(LoadBalance<?, ?, ?, ?> loadBalance) {
         this.loadBalance = loadBalance;
-        loadBalance.cluster(this);
     }
 
     /**
@@ -101,6 +99,19 @@ public abstract class Cluster {
     @NonNull
     public Response nextNode(Request request) throws LoadBalanceException {
         return loadBalance.response(request);
+    }
+
+    @NonNull
+    public void eventStream(EventStream eventStream) {
+        if (this.eventStream != null) {
+            throw new UnsupportedOperationException("EventStream is already set");
+        }
+        this.eventStream = eventStream;
+        loadBalance.cluster(this);
+    }
+
+    public EventStream eventStream() {
+        return eventStream;
     }
 
     public EventSubscriber eventSubscriber() {

@@ -17,7 +17,7 @@
  */
 package com.shieldblaze.expressgateway.protocol.http.loadbalancer;
 
-import com.shieldblaze.expressgateway.backend.cluster.Cluster;
+import com.shieldblaze.expressgateway.concurrent.eventstream.EventStream;
 import com.shieldblaze.expressgateway.configuration.CoreConfiguration;
 import com.shieldblaze.expressgateway.configuration.http.HTTPConfiguration;
 import com.shieldblaze.expressgateway.configuration.tls.TLSConfiguration;
@@ -32,10 +32,10 @@ import java.util.Objects;
  */
 public final class HTTPLoadBalancerBuilder {
     private String name;
+    private EventStream eventStream;
     private InetSocketAddress bindAddress;
     private CoreConfiguration coreConfiguration;
     private HTTPConfiguration httpConfiguration;
-    private Cluster cluster;
     private L4FrontListener l4FrontListener;
     private HTTPServerInitializer httpServerInitializer;
     private TLSConfiguration tlsServer;
@@ -54,6 +54,11 @@ public final class HTTPLoadBalancerBuilder {
         return this;
     }
 
+    public HTTPLoadBalancerBuilder withEventStream(EventStream eventStream) {
+        this.eventStream = eventStream;
+        return this;
+    }
+
     public HTTPLoadBalancerBuilder withCoreConfiguration(CoreConfiguration coreConfiguration) {
         this.coreConfiguration = coreConfiguration;
         return this;
@@ -61,11 +66,6 @@ public final class HTTPLoadBalancerBuilder {
 
     public HTTPLoadBalancerBuilder withHTTPConfiguration(HTTPConfiguration httpConfiguration) {
         this.httpConfiguration = httpConfiguration;
-        return this;
-    }
-
-    public HTTPLoadBalancerBuilder withCluster(Cluster cluster) {
-        this.cluster = cluster;
         return this;
     }
 
@@ -104,18 +104,18 @@ public final class HTTPLoadBalancerBuilder {
     }
 
     public HTTPLoadBalancer build() {
+        Objects.requireNonNull(eventStream, "Event Stream");
         Objects.requireNonNull(bindAddress, "BindAddress");
         Objects.requireNonNull(l4FrontListener, "L4FrontListener");
         Objects.requireNonNull(httpServerInitializer, "HTTPServerInitializer");
-        Objects.requireNonNull(cluster, "Cluster");
         Objects.requireNonNull(coreConfiguration, "CoreConfiguration");
         Objects.requireNonNull(httpConfiguration, "HTTPConfiguration");
 
         return new HTTPLoadBalancer(
                 name,
+                eventStream,
                 bindAddress,
                 l4FrontListener,
-                cluster,
                 coreConfiguration,
                 tlsServer,
                 tlsClient,

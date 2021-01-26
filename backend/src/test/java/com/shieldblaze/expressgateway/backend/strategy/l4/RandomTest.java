@@ -34,7 +34,8 @@ class RandomTest {
     @Test
     void testRandom() throws LoadBalanceException {
 
-        Cluster cluster = new ClusterPool(new EventStream(), new Random(NOOPSessionPersistence.INSTANCE));
+        Cluster cluster = new ClusterPool(new Random(NOOPSessionPersistence.INSTANCE));
+        cluster.eventStream(new EventStream());
         fastBuild(cluster, "172.16.20.1");
         fastBuild(cluster, "172.16.20.2");
         fastBuild(cluster, "172.16.20.3");

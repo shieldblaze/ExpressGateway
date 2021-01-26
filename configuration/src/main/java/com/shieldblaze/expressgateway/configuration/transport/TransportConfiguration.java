@@ -17,7 +17,7 @@
  */
 package com.shieldblaze.expressgateway.configuration.transport;
 
-import com.google.gson.annotations.Expose;
+import com.fasterxml.jackson.annotation.JsonProperty;
 import com.shieldblaze.expressgateway.configuration.ConfigurationMarshaller;
 import io.netty.channel.AdaptiveRecvByteBufAllocator;
 import io.netty.channel.FixedRecvByteBufAllocator;
@@ -32,34 +32,35 @@ import java.io.IOException;
  */
 public final class TransportConfiguration extends ConfigurationMarshaller {
 
-    @Expose
+    @JsonProperty("transportType")
     private TransportType transportType;
 
-    @Expose
+    @JsonProperty("receiveBufferAllocationType")
     private ReceiveBufferAllocationType receiveBufferAllocationType;
 
-    @Expose
+    @JsonProperty("receiveBufferSizes")
     private int[] receiveBufferSizes;
 
-    @Expose
+    @JsonProperty("tcpConnectionBacklog")
     private int tcpConnectionBacklog;
 
-    @Expose
+    @JsonProperty("socketReceiveBufferSize")
     private int socketReceiveBufferSize;
 
-    @Expose
+    @JsonProperty("socketSendBufferSize")
     private int socketSendBufferSize;
 
-    @Expose
+    @JsonProperty("tcpFastOpenMaximumPendingRequests")
     private int tcpFastOpenMaximumPendingRequests;
 
-    @Expose
+    @JsonProperty("backendConnectTimeout")
     private int backendConnectTimeout;
 
-    @Expose
+    @JsonProperty("connectionIdleTimeout")
     private int connectionIdleTimeout;
 
     public static final TransportConfiguration DEFAULT = new TransportConfiguration();
+
     static {
         if (IOUring.isAvailable()) {
             DEFAULT.transportType = TransportType.IO_URING;
@@ -169,10 +170,10 @@ public final class TransportConfiguration extends ConfigurationMarshaller {
     }
 
     public static TransportConfiguration loadFrom() throws IOException {
-        return loadFrom(TransportConfiguration.class, "Transport.json");
+        return loadFrom(TransportConfiguration.class, "Transport.yaml");
     }
 
     public void saveTo() throws IOException {
-        saveTo(this, "Transport.json");
+        saveTo(this, "Transport.yaml");
     }
 }

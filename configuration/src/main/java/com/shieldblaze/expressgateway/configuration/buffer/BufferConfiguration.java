@@ -17,7 +17,7 @@
  */
 package com.shieldblaze.expressgateway.configuration.buffer;
 
-import com.google.gson.annotations.Expose;
+import com.fasterxml.jackson.annotation.JsonProperty;
 import com.shieldblaze.expressgateway.configuration.ConfigurationMarshaller;
 import io.netty.buffer.PooledByteBufAllocator;
 import io.netty.util.internal.PlatformDependent;
@@ -29,31 +29,31 @@ import java.io.IOException;
  */
 public final class BufferConfiguration extends ConfigurationMarshaller {
 
-    @Expose
+    @JsonProperty("preferDirect")
     private boolean preferDirect;
 
-    @Expose
+    @JsonProperty("heapArena")
     private int heapArena;
 
-    @Expose
+    @JsonProperty("directArena")
     private int directArena;
 
-    @Expose
+    @JsonProperty("pageSize")
     private int pageSize;
 
-    @Expose
+    @JsonProperty("maxOrder")
     private int maxOrder;
 
-    @Expose
+    @JsonProperty("smallCacheSize")
     private int smallCacheSize;
 
-    @Expose
+    @JsonProperty("normalCacheSize")
     private int normalCacheSize;
 
-    @Expose
+    @JsonProperty("useCacheForAllThreads")
     private boolean useCacheForAllThreads;
 
-    @Expose
+    @JsonProperty("directMemoryCacheAlignment")
     private int directMemoryCacheAlignment;
 
     BufferConfiguration() {
@@ -195,11 +195,26 @@ public final class BufferConfiguration extends ConfigurationMarshaller {
         return this;
     }
 
+    @Override
+    public String toString() {
+        return "BufferConfiguration{" +
+                "preferDirect=" + preferDirect +
+                ", heapArena=" + heapArena +
+                ", directArena=" + directArena +
+                ", pageSize=" + pageSize +
+                ", maxOrder=" + maxOrder +
+                ", smallCacheSize=" + smallCacheSize +
+                ", normalCacheSize=" + normalCacheSize +
+                ", useCacheForAllThreads=" + useCacheForAllThreads +
+                ", directMemoryCacheAlignment=" + directMemoryCacheAlignment +
+                '}';
+    }
+
     public static BufferConfiguration loadFrom() throws IOException {
-        return loadFrom(BufferConfiguration.class, "Buffer.json");
+        return loadFrom(BufferConfiguration.class, "Buffer.yaml");
     }
 
     public void saveTo() throws IOException {
-        saveTo(this, "Buffer.json");
+        saveTo(this, "Buffer.yaml");
     }
 }

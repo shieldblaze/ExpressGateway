@@ -61,8 +61,6 @@ public final class CertificateKeyPair implements Runnable, Closeable {
     private ScheduledFuture<?> scheduledFuture;
     private SslContext sslContext;
 
-    private boolean noCertKey = false;
-
     /**
      * <p> TLS for Client </p>
      * Should be used when there is no need of Mutual TLS handshake.
@@ -70,7 +68,6 @@ public final class CertificateKeyPair implements Runnable, Closeable {
     public CertificateKeyPair() {
         privateKey = null;
         useOCSPStapling = false;
-        noCertKey = true;
     }
 
     /**
@@ -143,7 +140,13 @@ public final class CertificateKeyPair implements Runnable, Closeable {
                     .clientAuth(tlsConfiguration.mutualTLS().clientAuth())
                     .startTls(tlsConfiguration.useStartTLS())
                     .sessionTimeout(tlsConfiguration.sessionTimeout())
-                    .sessionCacheSize(tlsConfiguration.sessionCacheSize());
+                    .sessionCacheSize(tlsConfiguration.sessionCacheSize())
+                    .applicationProtocolConfig(new ApplicationProtocolConfig(
+                            ApplicationProtocolConfig.Protocol.ALPN,
+                            ApplicationProtocolConfig.SelectorFailureBehavior.NO_ADVERTISE,
+                            ApplicationProtocolConfig.SelectedListenerFailureBehavior.ACCEPT,
+                            ApplicationProtocolNames.HTTP_2,
+                            ApplicationProtocolNames.HTTP_1_1));
 
             if (useOCSPStapling) {
                 scheduledFuture = GlobalExecutors.INSTANCE.submitTaskAndRunEvery(this, 0, 6, TimeUnit.HOURS);
@@ -163,32 +166,21 @@ public final class CertificateKeyPair implements Runnable, Closeable {
                     .ciphers(ciphers)
                     .clientAuth(tlsConfiguration.mutualTLS().clientAuth())
                     .trustManager(trustManagerFactory)
-                    .startTls(false);
+                    .startTls(tlsConfiguration.useStartTLS())
+                    .applicationProtocolConfig(new ApplicationProtocolConfig(
+                            ApplicationProtocolConfig.Protocol.ALPN,
+                            ApplicationProtocolConfig.SelectorFailureBehavior.NO_ADVERTISE,
+                            ApplicationProtocolConfig.SelectedListenerFailureBehavior.ACCEPT,
+                            ApplicationProtocolNames.HTTP_2,
+                            ApplicationProtocolNames.HTTP_1_1));
 
             if (tlsConfiguration.mutualTLS() == MutualTLS.REQUIRED || tlsConfiguration.mutualTLS() == MutualTLS.OPTIONAL) {
                 sslContextBuilder.keyManager(privateKey, certificates);
             }
         }
 
-        if (tlsConfiguration.useALPN()) {
-            sslContextBuilder.applicationProtocolConfig(new ApplicationProtocolConfig(
-                    ApplicationProtocolConfig.Protocol.ALPN,
-                    ApplicationProtocolConfig.SelectorFailureBehavior.NO_ADVERTISE,
-                    ApplicationProtocolConfig.SelectedListenerFailureBehavior.ACCEPT,
-                    ApplicationProtocolNames.HTTP_2,
-                    ApplicationProtocolNames.HTTP_1_1));
-        }
-
         this.sslContext = sslContextBuilder.build();
         return this;
-    }
-
-    public List<X509Certificate> certificates() {
-        return certificates;
-    }
-
-    PrivateKey privateKey() {
-        return privateKey;
     }
 
     public SslContext sslContext() {
@@ -201,10 +193,6 @@ public final class CertificateKeyPair implements Runnable, Closeable {
 
     public boolean useOCSPStapling() {
         return useOCSPStapling;
-    }
-
-    public boolean noCertKey() {
-        return noCertKey;
     }
 
     @Override

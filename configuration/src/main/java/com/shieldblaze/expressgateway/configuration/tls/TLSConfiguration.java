@@ -17,72 +17,117 @@
  */
 package com.shieldblaze.expressgateway.configuration.tls;
 
-import com.google.gson.annotations.Expose;
+import com.fasterxml.jackson.annotation.JsonIgnore;
+import com.fasterxml.jackson.annotation.JsonProperty;
+import com.shieldblaze.expressgateway.configuration.ConfigurationMarshaller;
+import io.netty.util.internal.SystemPropertyUtil;
 import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
 
 import javax.net.ssl.SSLException;
+import java.io.IOException;
 import java.security.KeyStoreException;
 import java.security.NoSuchAlgorithmException;
 import java.util.List;
 import java.util.Map;
-import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.ConcurrentSkipListMap;
 
 /**
  * Configuration for TLS
  */
-public final class TLSConfiguration {
+public final class TLSConfiguration extends ConfigurationMarshaller {
     private static final Logger logger = LogManager.getLogger(TLSConfiguration.class);
 
-    private final Map<String, CertificateKeyPair> certificateKeyPairMap = new ConcurrentHashMap<>();
+    @JsonIgnore
+    private final Map<String, CertificateKeyPair> certificateKeyPairMap = new ConcurrentSkipListMap<>();
 
-    @Expose
+    @JsonProperty("forServer")
     private boolean forServer;
 
-    @Expose
+    @JsonProperty("ciphers")
     private List<Cipher> ciphers;
 
-    @Expose
+    @JsonProperty("protocols")
     private List<Protocol> protocols;
 
-    @Expose
-    private MutualTLS mutualTLS;
+    @JsonProperty("mutualTLS")
+    private MutualTLS mutualTLS = MutualTLS.NOT_REQUIRED;
 
-    @Expose
+    @JsonProperty("useStartTLS")
     private boolean useStartTLS;
 
-    @Expose
-    private boolean useALPN;
-
-    @Expose
+    @JsonProperty("sessionTimeout")
     private int sessionTimeout;
 
-    @Expose
+    @JsonProperty("sessionCacheSize")
     private int sessionCacheSize;
 
-    @Expose
+    @JsonProperty("acceptAllCerts")
     private boolean acceptAllCerts;
 
-    public Map<String, CertificateKeyPair> certificateKeyPairMap() {
-        return certificateKeyPairMap;
+    public static final TLSConfiguration DEFAULT_CLIENT = new TLSConfiguration();
+    public static final TLSConfiguration DEFAULT_SERVER = new TLSConfiguration();
+
+    static {
+        // Default Client
+        {
+            DEFAULT_CLIENT.forServer = false;
+            boolean useModernCrypto = SystemPropertyUtil.getBoolean("useModernCrypto", false);
+
+            if (useModernCrypto) {
+                DEFAULT_CLIENT.ciphers = ModernCrypto.CIPHERS;
+                DEFAULT_CLIENT.protocols = ModernCrypto.PROTOCOLS;
+            } else {
+                DEFAULT_CLIENT.ciphers = IntermediateCrypto.CIPHERS;
+                DEFAULT_CLIENT.protocols = IntermediateCrypto.PROTOCOLS;
+            }
+
+            DEFAULT_CLIENT.useStartTLS = false;
+            DEFAULT_CLIENT.acceptAllCerts = false;
+        }
+
+        // Default Server
+        {
+            DEFAULT_SERVER.forServer = true;
+            boolean useModernCrypto = SystemPropertyUtil.getBoolean("useModernCrypto", false);
+
+            if (useModernCrypto) {
+                DEFAULT_SERVER.ciphers = ModernCrypto.CIPHERS;
+                DEFAULT_SERVER.protocols = ModernCrypto.PROTOCOLS;
+            } else {
+                DEFAULT_SERVER.ciphers = IntermediateCrypto.CIPHERS;
+                DEFAULT_SERVER.protocols = IntermediateCrypto.PROTOCOLS;
+            }
+
+            DEFAULT_SERVER.useStartTLS = false;
+            DEFAULT_SERVER.sessionTimeout = 43200;
+            DEFAULT_SERVER.sessionCacheSize = 100_000;
+        }
     }
 
     /**
      * Add the default {@link CertificateKeyPair} mapping
      */
-    public TLSConfiguration defaultMapping(CertificateKeyPair certificateKeyPair) throws NoSuchAlgorithmException, KeyStoreException, SSLException {
-        addMapping("DEFAULT_HOST", certificateKeyPair);
-        return this;
+    public void clientMapping(CertificateKeyPair certificateKeyPair) throws NoSuchAlgorithmException, KeyStoreException, SSLException {
+        addMapping("CLIENT", certificateKeyPair);
     }
 
-    public TLSConfiguration addMapping(String host, CertificateKeyPair certificateKeyPair) throws NoSuchAlgorithmException, KeyStoreException, SSLException {
+    /**
+     * Add a new mapping
+     *  @param host FQDN
+     * @param certificateKeyPair {@link CertificateKeyPair} Instance
+     */
+    public void addMapping(String host, CertificateKeyPair certificateKeyPair) throws NoSuchAlgorithmException, KeyStoreException, SSLException {
         certificateKeyPairMap.put(host, certificateKeyPair);
-        if (!certificateKeyPair.noCertKey()) {
-            certificateKeyPair.init(this);
-        }
-        return this;
+        certificateKeyPair.init(this);
     }
 
+    /**
+     * Remove mapping for Host
+     *
+     * @param host Host to be removed
+     * @return {@code true} if mapping is successfully removed else {@code false}
+     */
     public boolean removeMapping(String host) {
         return certificateKeyPairMap.remove(host) != null;
     }
@@ -105,28 +150,25 @@ public final class TLSConfiguration {
                 if (certificateKeyPair != null) {
                     return certificateKeyPair;
                 }
+            } else {
+                return certificateKeyPair;
             }
         } catch (Exception ex) {
             // Ignore
         }
 
-        if (certificateKeyPairMap.containsKey("DEFAULT_HOST")) {
-            return defaultMapping();
-        }
-
-        throw new NullPointerException("Mapping Not Found");
+        throw new NullPointerException("Mapping not found for Hostname: " + fqdn);
     }
 
     /**
      * Get the default mapping.
      */
-    public CertificateKeyPair defaultMapping() {
-        CertificateKeyPair certificateKeyPair = certificateKeyPairMap.get("DEFAULT_HOST");
+    public CertificateKeyPair clientMapping() {
+        CertificateKeyPair certificateKeyPair = certificateKeyPairMap.get("CLIENT");
         if (certificateKeyPair == null && !forServer) {
             try {
                 certificateKeyPair = new CertificateKeyPair();
-                certificateKeyPair.init(this);
-                defaultMapping(certificateKeyPair);
+                clientMapping(certificateKeyPair);
             } catch (Exception ex) {
                 logger.error("Caught error while initializing TLS Client DefaultMapping");
             }
@@ -163,11 +205,6 @@ public final class TLSConfiguration {
         return this;
     }
 
-    public TLSConfiguration useALPN(boolean useALPN) {
-        this.useALPN = useALPN;
-        return this;
-    }
-
     public TLSConfiguration sessionTimeout(int sessionTimeout) {
         this.sessionTimeout = sessionTimeout;
         return this;
@@ -199,10 +236,6 @@ public final class TLSConfiguration {
         return useStartTLS;
     }
 
-    public boolean useALPN() {
-        return useALPN;
-    }
-
     public int sessionTimeout() {
         return sessionTimeout;
     }
@@ -213,5 +246,21 @@ public final class TLSConfiguration {
 
     public boolean acceptAllCerts() {
         return acceptAllCerts;
+    }
+
+    public static TLSConfiguration loadClient() throws IOException {
+        return loadFrom(TLSConfiguration.class, "TLSClient.yaml");
+    }
+
+    public void saveClient() throws IOException {
+        saveTo(this, "TLSClient.yaml");
+    }
+
+    public static TLSConfiguration loadServer() throws IOException {
+        return loadFrom(TLSConfiguration.class, "TLSServer.yaml");
+    }
+
+    public void saveServer() throws IOException {
+        saveTo(this, "TLSServer.yaml");
     }
 }

@@ -36,7 +36,8 @@ class HTTPRoundRobinTest {
     @Test
     void testRoundRobin() throws LoadBalanceException {
         EventStream eventStream = new EventStream();
-        ClusterPool cluster = new ClusterPool(eventStream, new HTTPRoundRobin(NOOPSessionPersistence.INSTANCE));
+        ClusterPool cluster = new ClusterPool(new HTTPRoundRobin(NOOPSessionPersistence.INSTANCE));
+        cluster.eventStream(eventStream);
 
         // Add Node Server Addresses
         for (int i = 1; i <= 100; i++) {

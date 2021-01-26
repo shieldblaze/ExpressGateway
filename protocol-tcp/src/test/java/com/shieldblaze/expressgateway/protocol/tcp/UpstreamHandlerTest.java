@@ -58,38 +58,20 @@ final class UpstreamHandlerTest {
     static void setup() {
         new TCPServer().start();
 
-        TransportConfiguration transportConfiguration = TransportConfigurationBuilder.newBuilder()
-                .withTransportType(TransportType.NIO)
-                .withTCPFastOpenMaximumPendingRequests(2147483647)
-                .withBackendConnectTimeout(1000 * 5)
-                .withReceiveBufferAllocationType(ReceiveBufferAllocationType.FIXED)
-                .withReceiveBufferSizes(new int[]{100})
-                .withSocketReceiveBufferSize(2147483647)
-                .withSocketSendBufferSize(2147483647)
-                .withTCPConnectionBacklog(2147483647)
-                .withConnectionIdleTimeout(180)
-                .build();
+        CoreConfiguration coreConfiguration = CoreConfiguration.DEFAULT;
 
-        EventLoopConfiguration eventLoopConfiguration = EventLoopConfigurationBuilder.newBuilder()
-                .withParentWorkers(Runtime.getRuntime().availableProcessors())
-                .withChildWorkers(Runtime.getRuntime().availableProcessors() * 2)
-                .build();
-
-        CoreConfiguration coreConfiguration = CoreConfigurationBuilder.newBuilder()
-                .withTransportConfiguration(transportConfiguration)
-                .withEventLoopConfiguration(eventLoopConfiguration)
-                .withBufferConfiguration(BufferConfiguration.DEFAULT)
-                .build();
-
-        Cluster cluster = new ClusterPool(new EventStream(), new RoundRobin(NOOPSessionPersistence.INSTANCE));
-        new Node(cluster, new InetSocketAddress("127.0.0.1", 9111));
+        Cluster cluster = new ClusterPool(new RoundRobin(NOOPSessionPersistence.INSTANCE));
+        cluster.eventStream(new EventStream());
 
         l4LoadBalancer = L4LoadBalancerBuilder.newBuilder()
                 .withCoreConfiguration(coreConfiguration)
-                .withCluster(cluster)
                 .withBindAddress(new InetSocketAddress("127.0.0.1", 9110))
                 .withL4FrontListener(new TCPListener())
+                .withEventStream(new EventStream())
                 .build();
+
+        l4LoadBalancer.defaultCluster(cluster);
+        new Node(cluster, new InetSocketAddress("127.0.0.1", 9111));
 
         L4FrontListenerStartupEvent l4FrontListenerStartupEvent = l4LoadBalancer.start();
         l4FrontListenerStartupEvent.future().join();
