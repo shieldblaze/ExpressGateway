@@ -19,11 +19,13 @@ package com.shieldblaze.expressgateway.backend.healthcheck;
 
 import com.shieldblaze.expressgateway.backend.Node;
 import com.shieldblaze.expressgateway.common.annotation.NonNull;
-import com.shieldblaze.expressgateway.concurrent.eventstream.EventPublisher;
+import com.shieldblaze.expressgateway.concurrent.eventstream.EventStream;
 import com.shieldblaze.expressgateway.configuration.healthcheck.HealthCheckConfiguration;
 import com.shieldblaze.expressgateway.healthcheck.Health;
 import com.shieldblaze.expressgateway.healthcheck.HealthCheck;
 
+import java.io.Closeable;
+import java.io.IOException;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.Executors;
@@ -35,19 +37,19 @@ import java.util.concurrent.TimeUnit;
  * {@link HealthCheckService} performs {@link HealthCheck} operation to
  * check {@link Health} of {@link Node}.
  */
-public final class HealthCheckService {
+public final class HealthCheckService implements Closeable {
 
     private final Map<Node, ScheduledFuture<?>> nodeMap = new ConcurrentHashMap<>();
 
     private final HealthCheckConfiguration configuration;
-    private final EventPublisher eventPublisher;
-    private final ScheduledExecutorService EXECUTORS;
+    private final EventStream eventStream;
+    private final ScheduledExecutorService executors;
 
     @NonNull
-    public HealthCheckService(HealthCheckConfiguration configuration, EventPublisher eventPublisher) {
+    public HealthCheckService(HealthCheckConfiguration configuration, EventStream eventStream) {
         this.configuration = configuration;
-        this.eventPublisher = eventPublisher;
-        EXECUTORS = Executors.newScheduledThreadPool(configuration.workers());
+        this.eventStream = eventStream;
+        executors = Executors.newScheduledThreadPool(configuration.workers());
     }
 
     @NonNull
@@ -56,8 +58,8 @@ public final class HealthCheckService {
             throw new IllegalArgumentException("HealthCheck is not enabled for this node.");
         }
 
-        int interval = configuration.timeInterval();
-        ScheduledFuture<?> scheduledFuture = EXECUTORS.scheduleAtFixedRate(new HealthCheckRunner(node, eventPublisher), interval, interval, TimeUnit.MILLISECONDS);
+        ScheduledFuture<?> scheduledFuture = executors.scheduleAtFixedRate(new HealthCheckRunner(node, eventStream),
+                0, configuration.timeInterval(), TimeUnit.SECONDS);
         nodeMap.put(node, scheduledFuture);
     }
 
@@ -73,9 +75,10 @@ public final class HealthCheckService {
         }
     }
 
-    public void shutdown() {
+    @Override
+    public void close() throws IOException {
         nodeMap.forEach((node, scheduledFuture) -> scheduledFuture.cancel(true));
         nodeMap.clear();
-        EXECUTORS.shutdown();
+        executors.shutdown();
     }
 }

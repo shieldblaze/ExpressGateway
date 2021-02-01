@@ -75,10 +75,10 @@ final class Bootstrapper {
                     pipeline.addLast(new HTTPOutboundAdapter());
                     pipeline.addLast(downstreamHandler);
                 } else {
-                    String hostname = node.socketAddress().getHostName();
+                    String hostname = "node.hostname()";
                     int port = node.socketAddress().getPort();
                     SslHandler sslHandler = httpLoadBalancer.tlsForClient()
-                            .clientMapping()
+                            .defaultMapping()
                             .sslContext()
                             .newHandler(ch.alloc(), hostname, port);
 

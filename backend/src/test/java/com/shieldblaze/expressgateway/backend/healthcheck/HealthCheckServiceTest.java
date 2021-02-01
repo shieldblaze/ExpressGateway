@@ -24,6 +24,7 @@ import com.shieldblaze.expressgateway.backend.cluster.ClusterPool;
 import com.shieldblaze.expressgateway.backend.exceptions.TooManyConnectionsException;
 import com.shieldblaze.expressgateway.backend.strategy.l4.RoundRobin;
 import com.shieldblaze.expressgateway.backend.strategy.l4.sessionpersistence.NOOPSessionPersistence;
+import com.shieldblaze.expressgateway.concurrent.eventstream.EventStream;
 import com.shieldblaze.expressgateway.configuration.eventstream.EventStreamConfiguration;
 import com.shieldblaze.expressgateway.configuration.eventstream.EventStreamConfigurationBuilder;
 import com.shieldblaze.expressgateway.configuration.healthcheck.HealthCheckConfiguration;
@@ -77,12 +78,14 @@ class HealthCheckServiceTest {
                 .withWorkers(2)
                 .build();
 
-        cluster = new ClusterPool(new RoundRobin(NOOPSessionPersistence.INSTANCE));
-        cluster.eventStream(EventStreamConfiguration.DEFAULT.eventStream());
-        healthCheckService = new HealthCheckService(healthCheckConfiguration, cluster.eventPublisher());
+        EventStream eventStream = new EventStream();
+        Cluster cluster = new ClusterPool(eventStream, new RoundRobin(NOOPSessionPersistence.INSTANCE));
+        healthCheckService = new HealthCheckService(healthCheckConfiguration, eventStream.eventPublisher());
 
         TCPHealthCheck healthCheck = new TCPHealthCheck(tcpServer.socketAddress, Duration.ofMillis(10));
-        node = new Node(cluster, new InetSocketAddress("127.0.0.1", 1), 100, healthCheck);
+
+        //todo fix health check
+        node = new Node(cluster, new InetSocketAddress("127.0.0.1", 1), 100);
         healthCheckService.add(node);
     }
 

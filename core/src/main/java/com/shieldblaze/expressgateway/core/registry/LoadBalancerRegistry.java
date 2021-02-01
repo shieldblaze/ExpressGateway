@@ -15,27 +15,30 @@
  * You should have received a copy of the GNU General Public License
  * along with ShieldBlaze ExpressGateway.  If not, see <https://www.gnu.org/licenses/>.
  */
-package com.shieldblaze.expressgateway.backend.exceptions;
+package com.shieldblaze.expressgateway.core.registry;
 
-public class NoClusterAvailableException extends LoadBalanceException {
+import com.shieldblaze.expressgateway.core.loadbalancer.L4LoadBalancer;
 
-    public NoClusterAvailableException() {
-        super();
+import java.util.Map;
+import java.util.concurrent.ConcurrentHashMap;
+
+public final class LoadBalancerRegistry {
+
+    public static final Map<String, LoadBalancerProperties> REGISTRY = new ConcurrentHashMap<>();
+
+    public static LoadBalancerProperties get(String loadBalancerID) {
+        return REGISTRY.get(loadBalancerID);
     }
 
-    public NoClusterAvailableException(String message) {
-        super(message);
+    public static void add(L4LoadBalancer l4LoadBalancer, LoadBalancerProperties loadBalancerProperties) {
+        REGISTRY.put(l4LoadBalancer.ID, loadBalancerProperties);
     }
 
-    public NoClusterAvailableException(String message, Throwable cause) {
-        super(message, cause);
+    public static LoadBalancerProperties remove(String loadBalancerID) {
+        return REGISTRY.remove(loadBalancerID);
     }
 
-    public NoClusterAvailableException(Throwable cause) {
-        super(cause);
-    }
-
-    protected NoClusterAvailableException(String message, Throwable cause, boolean enableSuppression, boolean writableStackTrace) {
-        super(message, cause, enableSuppression, writableStackTrace);
+    private LoadBalancerRegistry() {
+        // Prevent outside initialization
     }
 }

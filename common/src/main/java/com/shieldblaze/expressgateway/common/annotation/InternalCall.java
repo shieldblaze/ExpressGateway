@@ -15,18 +15,15 @@
  * You should have received a copy of the GNU General Public License
  * along with ShieldBlaze ExpressGateway.  If not, see <https://www.gnu.org/licenses/>.
  */
+package com.shieldblaze.expressgateway.common.annotation;
 
-package com.shieldblaze.expressgateway.backend.exceptions;
+import java.lang.annotation.ElementType;
+import java.lang.annotation.Target;
 
-import com.shieldblaze.expressgateway.backend.Node;
-
-public class NodeOfflineException extends BackendNotAvailableException {
-
-    public NodeOfflineException(Node node) {
-        super("Backend: {" + node + "} is not online");
-    }
-
-    public NodeOfflineException(String message) {
-        super(message);
-    }
+/**
+ * Function annotated with {@link InternalCall} must not be called directly.
+ * It'll be called internally by some other functions.
+ */
+@Target({ElementType.METHOD, ElementType.PARAMETER, ElementType.CONSTRUCTOR})
+public @interface InternalCall {
 }

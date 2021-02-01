@@ -108,8 +108,15 @@ public final class TLSConfiguration extends ConfigurationMarshaller {
     /**
      * Add the default {@link CertificateKeyPair} mapping
      */
-    public void clientMapping(CertificateKeyPair certificateKeyPair) throws NoSuchAlgorithmException, KeyStoreException, SSLException {
-        addMapping("CLIENT", certificateKeyPair);
+    public void defaultMapping(CertificateKeyPair certificateKeyPair) throws NoSuchAlgorithmException, KeyStoreException, SSLException {
+        addMapping("DEFAULT", certificateKeyPair);
+    }
+
+    /**
+     * Get default mapping {@link CertificateKeyPair}
+     */
+    public CertificateKeyPair defaultMapping() {
+        return certificateKeyPairMap.get("DEFAULT");
     }
 
     /**
@@ -158,22 +165,6 @@ public final class TLSConfiguration extends ConfigurationMarshaller {
         }
 
         throw new NullPointerException("Mapping not found for Hostname: " + fqdn);
-    }
-
-    /**
-     * Get the default mapping.
-     */
-    public CertificateKeyPair clientMapping() {
-        CertificateKeyPair certificateKeyPair = certificateKeyPairMap.get("CLIENT");
-        if (certificateKeyPair == null && !forServer) {
-            try {
-                certificateKeyPair = new CertificateKeyPair();
-                clientMapping(certificateKeyPair);
-            } catch (Exception ex) {
-                logger.error("Caught error while initializing TLS Client DefaultMapping");
-            }
-        }
-        return certificateKeyPair;
     }
 
     public boolean forServer() {

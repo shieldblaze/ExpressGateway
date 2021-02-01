@@ -25,20 +25,20 @@ import java.util.concurrent.CompletableFuture;
 public class GenericEvent<T> implements Event<T> {
 
     private CompletableFuture<T> future = new CompletableFuture<>();
-    private boolean finished;
-    private boolean success;
+    private boolean hasFinished;
+    private boolean isSuccessful;
     private Throwable throwable;
 
     public void trySuccess(T object) {
-        finished(true);
-        success(true);
+        hasFinished(true);
+        isSuccessful(true);
         throwable(null);
         future.complete(object);
     }
 
     public void tryFailure(Throwable cause) {
-        finished(true);
-        success(false);
+        hasFinished(true);
+        isSuccessful(false);
         throwable(cause);
         future.completeExceptionally(cause);
     }
@@ -47,12 +47,12 @@ public class GenericEvent<T> implements Event<T> {
         this.future = future;
     }
 
-    public void finished(boolean finished) {
-        this.finished = finished;
+    public void hasFinished(boolean finished) {
+        this.hasFinished = finished;
     }
 
-    public void success(boolean success) {
-        this.success = success;
+    public void isSuccessful(boolean success) {
+        this.isSuccessful = success;
     }
 
     public void throwable(Throwable throwable) {
@@ -65,13 +65,13 @@ public class GenericEvent<T> implements Event<T> {
     }
 
     @Override
-    public boolean finished() {
-        return finished;
+    public boolean hasFinished() {
+        return hasFinished;
     }
 
     @Override
-    public boolean success() {
-        return success;
+    public boolean isSuccessful() {
+        return isSuccessful;
     }
 
     @Override

@@ -31,9 +31,9 @@
 
     <name>ExpressGateway/Security</name>
 
-    <properties>
+    <loadBalancerProperties>
         <javaModuleName>com.shieldblaze.expressgateway.security</javaModuleName>
-    </properties>
+    </loadBalancerProperties>
 
     <dependencies>
         <!-- https://mvnrepository.com/artifact/com.github.vladimir-bukhtoyarov/bucket4j-core -->

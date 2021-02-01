@@ -19,23 +19,26 @@ package com.shieldblaze.expressgateway.configuration;
 
 import com.shieldblaze.expressgateway.configuration.buffer.BufferConfiguration;
 import com.shieldblaze.expressgateway.configuration.eventloop.EventLoopConfiguration;
+import com.shieldblaze.expressgateway.configuration.eventstream.EventStreamConfiguration;
+import com.shieldblaze.expressgateway.configuration.healthcheck.HealthCheckConfiguration;
 import com.shieldblaze.expressgateway.configuration.transport.TransportConfiguration;
 
-/**
- * Common Configuration can be shared between multiple Load Balancers because it contains
- * configuration that can easily be re-used.
- */
 public class CoreConfiguration {
 
     private TransportConfiguration transportConfiguration;
     private EventLoopConfiguration eventLoopConfiguration;
     private BufferConfiguration bufferConfiguration;
+    private EventStreamConfiguration eventStreamConfiguration;
+    private HealthCheckConfiguration healthCheckConfiguration;
 
     public static final CoreConfiguration DEFAULT = new CoreConfiguration();
+
     static {
         DEFAULT.bufferConfiguration = BufferConfiguration.DEFAULT;
         DEFAULT.eventLoopConfiguration = EventLoopConfiguration.DEFAULT;
         DEFAULT.transportConfiguration = TransportConfiguration.DEFAULT;
+        DEFAULT.eventStreamConfiguration = EventStreamConfiguration.DEFAULT;
+        DEFAULT.healthCheckConfiguration = HealthCheckConfiguration.DEFAULT;
     }
 
     public TransportConfiguration transportConfiguration() {
@@ -56,12 +59,30 @@ public class CoreConfiguration {
         return this;
     }
 
-    public BufferConfiguration pooledByteBufAllocatorConfiguration() {
+    public BufferConfiguration bufferConfiguration() {
         return bufferConfiguration;
     }
 
-    CoreConfiguration pooledByteBufAllocatorConfiguration(BufferConfiguration bufferConfiguration) {
+    CoreConfiguration bufferConfiguration(BufferConfiguration bufferConfiguration) {
         this.bufferConfiguration = bufferConfiguration;
+        return this;
+    }
+
+    public EventStreamConfiguration eventStreamConfiguration() {
+        return eventStreamConfiguration;
+    }
+
+    CoreConfiguration eventStreamConfiguration(EventStreamConfiguration eventStreamConfiguration) {
+        this.eventStreamConfiguration = eventStreamConfiguration;
+        return this;
+    }
+
+    public HealthCheckConfiguration healthCheckConfiguration() {
+        return healthCheckConfiguration;
+    }
+
+    CoreConfiguration healthCheckConfiguration(HealthCheckConfiguration healthCheckConfiguration) {
+        this.healthCheckConfiguration = healthCheckConfiguration;
         return this;
     }
 }

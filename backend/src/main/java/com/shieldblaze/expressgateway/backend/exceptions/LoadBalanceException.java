@@ -17,6 +17,11 @@
  */
 package com.shieldblaze.expressgateway.backend.exceptions;
 
+import com.shieldblaze.expressgateway.backend.loadbalance.LoadBalance;
+
+/**
+ * Thrown when there was an error during load-balancing by {@link LoadBalance}
+ */
 public class LoadBalanceException extends Exception {
 
     public LoadBalanceException() {

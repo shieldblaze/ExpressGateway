@@ -23,12 +23,12 @@ import com.shieldblaze.expressgateway.common.annotation.NonNull;
 import com.shieldblaze.expressgateway.concurrent.eventstream.EventStream;
 
 /**
- * {@linkplain ClusterPool} with multiple {@linkplain Node}
+ * {@linkplain ClusterPool} is the basic implementation of {@linkplain Cluster}
  */
 public final class ClusterPool extends Cluster {
 
-    public ClusterPool(LoadBalance<?, ?, ?, ?> loadBalance) {
-        super(loadBalance);
+    public ClusterPool(EventStream eventStream, LoadBalance<?, ?, ?, ?> loadBalance) {
+        super(eventStream, loadBalance);
     }
 
     /**
@@ -37,7 +37,7 @@ public final class ClusterPool extends Cluster {
     @NonNull
     public void addNodes(Node... nodes) {
         for (Node node : nodes) {
-            super.addNode(node);
+            addNode(node);
         }
     }
 

@@ -31,9 +31,9 @@ along with ShieldBlaze ExpressGateway.  If not, see <https://www.gnu.org/license
 
     <name>ExpressGateway/HealthCheck</name>
 
-    <properties>
+    <loadBalancerProperties>
         <javaModuleName>com.shieldblaze.expressgateway.healthcheck</javaModuleName>
-    </properties>
+    </loadBalancerProperties>
 
     <dependencies>
         <dependency>

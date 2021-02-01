@@ -19,7 +19,10 @@ package com.shieldblaze.expressgateway.backend.exceptions;
 
 import com.shieldblaze.expressgateway.backend.Node;
 
-public class TooManyConnectionsException extends Exception {
+/**
+ * Thrown when a {@link Node} has exceeded the maximum number of connections count.
+ */
+public final class TooManyConnectionsException extends Exception {
 
     public TooManyConnectionsException(Node node) {
         super("Node (" + node + ") has reached maximum number of connections.");

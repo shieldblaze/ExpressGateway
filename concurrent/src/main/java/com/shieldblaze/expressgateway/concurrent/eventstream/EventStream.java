@@ -19,6 +19,8 @@ package com.shieldblaze.expressgateway.concurrent.eventstream;
 
 import com.shieldblaze.expressgateway.concurrent.event.Event;
 
+import java.io.Closeable;
+import java.io.IOException;
 import java.util.List;
 import java.util.Objects;
 import java.util.concurrent.CopyOnWriteArrayList;
@@ -26,7 +28,7 @@ import java.util.concurrent.CopyOnWriteArrayList;
 /**
  * {@linkplain EventStream} is a simple pub-sub stream channel.
  */
-public class EventStream {
+public class EventStream implements Closeable {
 
     /**
      * List of subscribers
@@ -79,5 +81,10 @@ public class EventStream {
 
     public EventPublisher eventPublisher() {
         return eventPublisher;
+    }
+
+    @Override
+    public void close() throws IOException {
+        unsubscribeAll();
     }
 }

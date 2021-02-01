@@ -19,9 +19,9 @@ package com.shieldblaze.expressgateway.core.loadbalancer;
 
 import com.shieldblaze.expressgateway.backend.cluster.Cluster;
 import com.shieldblaze.expressgateway.common.annotation.NonNull;
-import com.shieldblaze.expressgateway.concurrent.eventstream.EventPublisher;
 import com.shieldblaze.expressgateway.concurrent.eventstream.EventStream;
 import com.shieldblaze.expressgateway.configuration.CoreConfiguration;
+import com.shieldblaze.expressgateway.configuration.eventstream.EventStreamConfiguration;
 import com.shieldblaze.expressgateway.configuration.tls.TLSConfiguration;
 import com.shieldblaze.expressgateway.core.EventLoopFactory;
 import com.shieldblaze.expressgateway.core.L4FrontListener;
@@ -31,6 +31,7 @@ import com.shieldblaze.expressgateway.core.events.L4FrontListenerStopEvent;
 import io.netty.buffer.ByteBufAllocator;
 import io.netty.channel.ChannelHandler;
 
+import java.io.IOException;
 import java.net.InetSocketAddress;
 import java.util.Map;
 import java.util.UUID;
@@ -44,8 +45,8 @@ public abstract class L4LoadBalancer {
 
     public final String ID = UUID.randomUUID().toString();
 
-    private static final AtomicInteger counter = new AtomicInteger(0);
-    private String name = "L4LoadBalancer#" + counter.incrementAndGet();
+    private static final AtomicInteger COUNTER = new AtomicInteger(0);
+    private String name = "L4LoadBalancer#" + COUNTER.incrementAndGet();
 
     private final EventStream eventStream;
     private final InetSocketAddress bindAddress;
@@ -60,18 +61,16 @@ public abstract class L4LoadBalancer {
     private final EventLoopFactory eventLoopFactory;
 
     /**
-     * @param name              Name of this Load Balancer
-     * @param eventStream       {@link EventStream} to use
-     * @param bindAddress       {@link InetSocketAddress} on which {@link L4FrontListener} will bind and listen.
-     * @param l4FrontListener   {@link L4FrontListener} for listening traffic
-     * @param coreConfiguration {@link CoreConfiguration} to be applied
-     * @param tlsForServer      {@link TLSConfiguration} for Server
-     * @param tlsForClient      {@link TLSConfiguration} for Client
-     * @param channelHandler    {@link ChannelHandler} to use for handling traffic
+     * @param name                     Name of this Load Balancer
+     * @param bindAddress              {@link InetSocketAddress} on which {@link L4FrontListener} will bind and listen.
+     * @param l4FrontListener          {@link L4FrontListener} for listening traffic
+     * @param coreConfiguration        {@link CoreConfiguration} to be applied
+     * @param tlsForServer             {@link TLSConfiguration} for Server
+     * @param tlsForClient             {@link TLSConfiguration} for Client
+     * @param channelHandler           {@link ChannelHandler} to use for handling traffic
      * @throws NullPointerException If a required parameter if {@code null}
      */
     public L4LoadBalancer(String name,
-                          @NonNull EventStream eventStream,
                           @NonNull InetSocketAddress bindAddress,
                           @NonNull L4FrontListener l4FrontListener,
                           @NonNull CoreConfiguration coreConfiguration,
@@ -83,15 +82,15 @@ public abstract class L4LoadBalancer {
             this.name = name;
         }
 
-        this.eventStream = eventStream;
         this.bindAddress = bindAddress;
         this.l4FrontListener = l4FrontListener;
         this.coreConfiguration = coreConfiguration;
+        this.eventStream = coreConfiguration.eventStreamConfiguration().eventStream();
         this.tlsForServer = tlsForServer;
         this.tlsForClient = tlsForClient;
         this.channelHandler = channelHandler;
 
-        this.byteBufAllocator = new PooledByteBufAllocator(coreConfiguration.pooledByteBufAllocatorConfiguration()).Instance();
+        this.byteBufAllocator = new PooledByteBufAllocator(coreConfiguration.bufferConfiguration()).Instance();
         this.eventLoopFactory = new EventLoopFactory(coreConfiguration);
 
         l4FrontListener.l4LoadBalancer(this);
@@ -112,14 +111,21 @@ public abstract class L4LoadBalancer {
     }
 
     /**
-     * Stop L4 Load Balancer
+     * Stop L4 Load Balancer and it's child operations and services.
      */
     public L4FrontListenerStopEvent stop() {
-        eventLoopFactory.parentGroup().shutdownGracefully();
-        eventLoopFactory.childGroup().shutdownGracefully();
-        return l4FrontListener.stop();
+        L4FrontListenerStopEvent event = l4FrontListener.stop();
+        try {
+            eventStream().close();
+        } catch (IOException e) {
+            // Ignore
+        }
+        return event;
     }
 
+    /**
+     * Get the {@link EventStream} of this Load Balancer
+     */
     public EventStream eventStream() {
         return eventStream;
     }
@@ -170,10 +176,24 @@ public abstract class L4LoadBalancer {
      */
     @NonNull
     public void mapCluster(String hostname, Cluster cluster) {
+        cluster.eventStream(eventStream); // Set EventStream
+        cluster.healthCheckConfiguration(coreConfiguration.healthCheckConfiguration()); // Set HealthCheckConfiguration
         clusterMap.put(hostname, cluster);
-        if (cluster.eventStream() == null) {
-            cluster.eventStream(eventStream);
+    }
+
+    /**
+     * Remove a Cluster from mapping
+     *
+     * @param hostname Hostname of the Cluster
+     * @return Returns {@link Boolean#TRUE} if removal was successful else {@link Boolean#FALSE}
+     */
+    public boolean removeCluster(String hostname) {
+        Cluster cluster = clusterMap.remove(hostname);
+        if (cluster == null) {
+            return false;
         }
+        cluster.close();
+        return true;
     }
 
     /**
@@ -216,9 +236,5 @@ public abstract class L4LoadBalancer {
      */
     public EventLoopFactory eventLoopFactory() {
         return eventLoopFactory;
-    }
-
-    public EventPublisher eventPublisher() {
-        return eventStream.eventPublisher();
     }
 }

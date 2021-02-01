@@ -122,7 +122,7 @@ public class TCPListener extends L4FrontListener {
             }
         });
 
-        l4LoadBalancer().eventPublisher().publish(l4FrontListenerStartupEvent);
+        l4LoadBalancer().eventStream().publish(l4FrontListenerStartupEvent);
         return l4FrontListenerStartupEvent;
     }
 
@@ -142,7 +142,11 @@ public class TCPListener extends L4FrontListener {
             }
         });
 
-        l4LoadBalancer().eventPublisher().publish(l4FrontListenerStopEvent);
+        // Shutdown Cluster
+        l4LoadBalancer().clusters().forEach((str, cluster) -> cluster.close());
+        l4LoadBalancer().clusters().clear();
+
+        l4LoadBalancer().eventStream().publish(l4FrontListenerStopEvent);
         return l4FrontListenerStopEvent;
     }
 }

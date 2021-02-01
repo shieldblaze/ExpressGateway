@@ -25,8 +25,14 @@ public abstract class L4FrontListener {
 
     private L4LoadBalancer l4LoadBalancer;
 
+    /**
+     * @see L4LoadBalancer#start()
+     */
     public abstract L4FrontListenerStartupEvent start();
 
+    /**
+     * @see L4LoadBalancer#stop()
+     */
     public abstract L4FrontListenerStopEvent stop();
 
     /**
@@ -40,11 +46,11 @@ public abstract class L4FrontListener {
      * This method is automatically called by {@link L4LoadBalancer} while initializing.
      *
      * @param l4LoadBalancer {@link L4LoadBalancer} Instance
-     * @throws UnsupportedOperationException If {@link L4LoadBalancer} is tried to be set again
+     * @throws IllegalArgumentException If {@link L4LoadBalancer} is tried to be set again
      */
     public L4FrontListener l4LoadBalancer(L4LoadBalancer l4LoadBalancer) {
         if (this.l4LoadBalancer != null) {
-            throw new UnsupportedOperationException("L4LoadBalancer is already set");
+            throw new IllegalArgumentException("L4LoadBalancer is already set");
         }
         this.l4LoadBalancer = l4LoadBalancer;
         return this;

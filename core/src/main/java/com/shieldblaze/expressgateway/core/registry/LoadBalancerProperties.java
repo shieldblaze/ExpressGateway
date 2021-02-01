@@ -15,29 +15,30 @@
  * You should have received a copy of the GNU General Public License
  * along with ShieldBlaze ExpressGateway.  If not, see <https://www.gnu.org/licenses/>.
  */
-package com.shieldblaze.expressgateway.core.loadbalancer;
+package com.shieldblaze.expressgateway.core.registry;
 
 import com.shieldblaze.expressgateway.core.events.L4FrontListenerStartupEvent;
+import com.shieldblaze.expressgateway.core.loadbalancer.L4LoadBalancer;
 
-public class LoadBalancerProperty {
-    private String profileName;
-    private L4FrontListenerStartupEvent startupEvent;
+public class LoadBalancerProperties {
+    private final L4LoadBalancer l4LoadBalancer;
+    private final L4FrontListenerStartupEvent startupEvent;
+    private final long startMillis = System.currentTimeMillis();
 
-    public String profileName() {
-        return profileName;
+    public LoadBalancerProperties(L4LoadBalancer l4LoadBalancer, L4FrontListenerStartupEvent startupEvent) {
+        this.l4LoadBalancer = l4LoadBalancer;
+        this.startupEvent = startupEvent;
     }
 
-    public LoadBalancerProperty profileName(String profileName) {
-        this.profileName = profileName;
-        return this;
+    public L4LoadBalancer l4LoadBalancer() {
+        return l4LoadBalancer;
     }
 
     public L4FrontListenerStartupEvent startupEvent() {
         return startupEvent;
     }
 
-    public LoadBalancerProperty startupEvent(L4FrontListenerStartupEvent startupEvent) {
-        this.startupEvent = startupEvent;
-        return this;
+    public long startMillis() {
+        return startMillis;
     }
 }

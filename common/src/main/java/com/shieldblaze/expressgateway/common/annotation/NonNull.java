@@ -21,7 +21,7 @@ import java.lang.annotation.ElementType;
 import java.lang.annotation.Target;
 
 /**
- * Objects annotated with {@link NonNull} must not pass {@code null} as input parameter.
+ * Functions annotated with {@link NonNull} must not pass {@code null} as input parameter.
  */
 @Target({ElementType.METHOD, ElementType.PARAMETER, ElementType.CONSTRUCTOR})
 public @interface NonNull {
