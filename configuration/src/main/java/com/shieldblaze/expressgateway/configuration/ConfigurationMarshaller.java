@@ -45,6 +45,8 @@ public class ConfigurationMarshaller {
 
     protected static void saveTo(Object obj, String filename) throws IOException {
         String location = Profile.ensure() + filename;
-        OBJECT_MAPPER.writeValue(new FileWriter(location), obj);
+        FileWriter fileWriter = new FileWriter(location);
+        OBJECT_MAPPER.writeValue(fileWriter, obj);
+        fileWriter.close();
     }
 }
