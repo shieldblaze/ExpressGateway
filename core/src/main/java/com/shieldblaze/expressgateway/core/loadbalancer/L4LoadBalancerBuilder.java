@@ -15,12 +15,10 @@
  * You should have received a copy of the GNU General Public License
  * along with ShieldBlaze ExpressGateway.  If not, see <https://www.gnu.org/licenses/>.
  */
-
 package com.shieldblaze.expressgateway.core.loadbalancer;
 
-import com.shieldblaze.expressgateway.backend.cluster.Cluster;
-import com.shieldblaze.expressgateway.concurrent.eventstream.EventStream;
 import com.shieldblaze.expressgateway.configuration.CoreConfiguration;
+import com.shieldblaze.expressgateway.configuration.eventstream.EventStreamConfiguration;
 import com.shieldblaze.expressgateway.configuration.tls.TLSConfiguration;
 import com.shieldblaze.expressgateway.core.L4FrontListener;
 import io.netty.channel.ChannelHandler;
@@ -34,10 +32,9 @@ import java.util.Objects;
 public final class L4LoadBalancerBuilder {
 
     private String name;
-    private EventStream eventStream;
     private InetSocketAddress bindAddress;
     private L4FrontListener l4FrontListener;
-    private CoreConfiguration coreConfiguration;
+    private CoreConfiguration coreConfiguration = CoreConfiguration.DEFAULT;
     private TLSConfiguration tlsForServer;
     private TLSConfiguration tlsForClient;
     private ChannelHandler channelHandler;
@@ -52,11 +49,6 @@ public final class L4LoadBalancerBuilder {
 
     public L4LoadBalancerBuilder withName(String name) {
         this.name = name;
-        return this;
-    }
-
-    public L4LoadBalancerBuilder withEventStream(EventStream eventStream) {
-        this.eventStream = eventStream;
         return this;
     }
 
@@ -75,12 +67,12 @@ public final class L4LoadBalancerBuilder {
         return this;
     }
 
-    public L4LoadBalancerBuilder withTlsForServer(TLSConfiguration tlsForServer) {
+    public L4LoadBalancerBuilder withTLSForServer(TLSConfiguration tlsForServer) {
         this.tlsForServer = tlsForServer;
         return this;
     }
 
-    public L4LoadBalancerBuilder withTlsForClient(TLSConfiguration tlsForClient) {
+    public L4LoadBalancerBuilder withTLSForClient(TLSConfiguration tlsForClient) {
         this.tlsForClient = tlsForClient;
         return this;
     }
@@ -91,10 +83,10 @@ public final class L4LoadBalancerBuilder {
     }
 
     public L4LoadBalancer build() {
-        Objects.requireNonNull(eventStream, "Event Stream");
-        Objects.requireNonNull(bindAddress, "BindAddress");
-        Objects.requireNonNull(l4FrontListener, "L4FrontListener");
-        Objects.requireNonNull(coreConfiguration, "CoreConfiguration");
-        return new DefaultL4LoadBalancer(name, eventStream, bindAddress, l4FrontListener, coreConfiguration, tlsForServer, tlsForClient, channelHandler);
+        Objects.requireNonNull(bindAddress, "Bind Address");
+        Objects.requireNonNull(l4FrontListener, "L4 FrontListener");
+        Objects.requireNonNull(coreConfiguration, "Core Configuration");
+
+        return new DefaultL4LoadBalancer(name, bindAddress, l4FrontListener, coreConfiguration, tlsForServer, tlsForClient, channelHandler);
     }
 }

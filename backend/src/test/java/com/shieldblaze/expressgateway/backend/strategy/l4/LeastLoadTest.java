@@ -33,10 +33,8 @@ class LeastLoadTest {
 
     @Test
     void testLeastLoad() throws LoadBalanceException {
-        EventStream eventStream = new EventStream();
-
         ClusterPool cluster = new ClusterPool(new LeastLoad(NOOPSessionPersistence.INSTANCE));
-        cluster.eventStream(eventStream);
+
         fastBuild(cluster, "10.10.1.1", 100_000);
         fastBuild(cluster, "10.10.1.2", 200_000);
         fastBuild(cluster, "10.10.1.3", 300_000);
@@ -80,7 +78,7 @@ class LeastLoadTest {
         assertEquals(400_000, forth);
     }
 
-    private static Node fastBuild(Cluster cluster, String host, int maxConnections) {
-        return new Node(cluster, new InetSocketAddress(host, 1), maxConnections, null);
+    private static void fastBuild(Cluster cluster, String host, int maxConnections) {
+        new Node(cluster, new InetSocketAddress(host, 1)).maxConnections(maxConnections);
     }
 }

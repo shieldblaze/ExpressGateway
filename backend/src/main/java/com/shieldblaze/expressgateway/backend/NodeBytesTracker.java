@@ -39,31 +39,27 @@ public final class NodeBytesTracker extends ChannelDuplexHandler {
 
     @Override
     public void write(ChannelHandlerContext ctx, Object msg, ChannelPromise promise) throws Exception {
-        int bytes;
         if (msg instanceof ByteBuf) {
-            bytes = ((ByteBuf) msg).readableBytes();
+            int bytes = ((ByteBuf) msg).readableBytes();
+            node.incBytesSent(bytes);
         } else if (msg instanceof ByteBufHolder) {
-            bytes = ((ByteBufHolder) msg).content().readableBytes();
-        } else {
-            bytes = 0;
+            int bytes = ((ByteBufHolder) msg).content().readableBytes();
+            node.incBytesSent(bytes);
         }
 
-        node.incBytesSent(bytes);
         super.write(ctx, msg, promise);
     }
 
     @Override
     public void channelRead(ChannelHandlerContext ctx, Object msg) throws Exception {
-        int bytes;
         if (msg instanceof ByteBuf) {
-            bytes = ((ByteBuf) msg).readableBytes();
+            int bytes = ((ByteBuf) msg).readableBytes();
+            node.incBytesReceived(bytes);
         } else if (msg instanceof ByteBufHolder) {
-            bytes = ((ByteBufHolder) msg).content().readableBytes();
-        } else {
-            bytes = 0;
+            int bytes = ((ByteBufHolder) msg).content().readableBytes();
+            node.incBytesReceived(bytes);
         }
 
-        node.incBytesReceived(bytes);
         super.channelRead(ctx, msg);
     }
 }

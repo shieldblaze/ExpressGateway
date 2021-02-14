@@ -19,6 +19,7 @@ package com.shieldblaze.expressgateway.concurrent.eventstream;
 
 import com.shieldblaze.expressgateway.concurrent.event.Event;
 
+import java.io.IOException;
 import java.util.concurrent.ExecutorService;
 
 /**
@@ -41,13 +42,15 @@ public final class AsyncEventStream extends EventStream {
      *
      * @param event Event to publish
      */
-    @SuppressWarnings("unchecked")
+    @SuppressWarnings({"unchecked"})
     @Override
     public void publish(Event event) {
         executorService.execute(() -> subscribers.forEach(eventListener -> executorService.execute(() -> eventListener.accept(event))));
     }
 
-    public void shutdown() {
+    @Override
+    public void close() {
         executorService.shutdown();
+        super.close();
     }
 }

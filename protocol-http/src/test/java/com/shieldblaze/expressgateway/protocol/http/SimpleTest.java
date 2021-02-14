@@ -26,11 +26,7 @@ import com.shieldblaze.expressgateway.concurrent.eventstream.EventStream;
 import com.shieldblaze.expressgateway.configuration.CoreConfiguration;
 import com.shieldblaze.expressgateway.configuration.http.HTTPConfiguration;
 import com.shieldblaze.expressgateway.configuration.tls.CertificateKeyPair;
-import com.shieldblaze.expressgateway.configuration.tls.Cipher;
-import com.shieldblaze.expressgateway.configuration.tls.MutualTLS;
-import com.shieldblaze.expressgateway.configuration.tls.Protocol;
 import com.shieldblaze.expressgateway.configuration.tls.TLSConfiguration;
-import com.shieldblaze.expressgateway.configuration.tls.TLSConfigurationBuilder;
 import com.shieldblaze.expressgateway.core.events.L4FrontListenerStartupEvent;
 import com.shieldblaze.expressgateway.core.events.L4FrontListenerStopEvent;
 import com.shieldblaze.expressgateway.protocol.http.loadbalancer.HTTPLoadBalancer;
@@ -97,7 +93,6 @@ class SimpleTest {
                 .withBindAddress(new InetSocketAddress("localhost", 20000))
                 .withHTTPInitializer(new DefaultHTTPServerInitializer())
                 .withL4FrontListener(new TCPListener())
-                .withEventStream(new EventStream())
                 .build();
 
         httpLoadBalancer.mapCluster("localhost:20000", cluster);
@@ -105,7 +100,7 @@ class SimpleTest {
 
         L4FrontListenerStartupEvent l4FrontListenerStartupEvent = httpLoadBalancer.start();
         l4FrontListenerStartupEvent.future().join();
-        assertTrue(l4FrontListenerStartupEvent.success());
+        assertTrue(l4FrontListenerStartupEvent.isSuccessful());
 
         // Send using HTTP/1.1
         HttpRequest httpRequest = HttpRequest.newBuilder()
@@ -135,7 +130,7 @@ class SimpleTest {
         httpServer.shutdown();
         L4FrontListenerStopEvent l4FrontListenerStopEvent = httpLoadBalancer.stop();
         l4FrontListenerStopEvent.future().join();
-        assertTrue(l4FrontListenerStopEvent.success());
+        assertTrue(l4FrontListenerStopEvent.isSuccessful());
     }
 
     @Test
@@ -153,7 +148,6 @@ class SimpleTest {
                 .withBindAddress(new InetSocketAddress("localhost", 20001))
                 .withHTTPInitializer(new DefaultHTTPServerInitializer())
                 .withL4FrontListener(new TCPListener())
-                .withEventStream(new EventStream())
                 .build();
 
         httpLoadBalancer.mapCluster("localhost:20001", cluster);
@@ -161,7 +155,7 @@ class SimpleTest {
 
         L4FrontListenerStartupEvent l4FrontListenerStartupEvent = httpLoadBalancer.start();
         l4FrontListenerStartupEvent.future().join();
-        assertTrue(l4FrontListenerStartupEvent.success());
+        assertTrue(l4FrontListenerStartupEvent.isSuccessful());
 
         // Send using HTTP/1.1
         HttpRequest httpRequest = HttpRequest.newBuilder()
@@ -191,7 +185,7 @@ class SimpleTest {
         httpServer.shutdown();
         L4FrontListenerStopEvent l4FrontListenerStopEvent = httpLoadBalancer.stop();
         l4FrontListenerStopEvent.future().join();
-        assertTrue(l4FrontListenerStopEvent.success());
+        assertTrue(l4FrontListenerStopEvent.isSuccessful());
     }
 
     @Test
@@ -209,7 +203,6 @@ class SimpleTest {
                 .withBindAddress(new InetSocketAddress("localhost", 20002))
                 .withHTTPInitializer(new DefaultHTTPServerInitializer())
                 .withL4FrontListener(new TCPListener())
-                .withEventStream(new EventStream())
                 .build();
 
         httpLoadBalancer.mapCluster("localhost:20002", cluster);
@@ -217,7 +210,7 @@ class SimpleTest {
 
         L4FrontListenerStartupEvent l4FrontListenerStartupEvent = httpLoadBalancer.start();
         l4FrontListenerStartupEvent.future().join();
-        assertTrue(l4FrontListenerStartupEvent.success());
+        assertTrue(l4FrontListenerStartupEvent.isSuccessful());
 
         // Send using HTTP/1.1
         HttpRequest httpRequest = HttpRequest.newBuilder()
@@ -235,7 +228,7 @@ class SimpleTest {
         httpServer.shutdown();
         L4FrontListenerStopEvent l4FrontListenerStopEvent = httpLoadBalancer.stop();
         l4FrontListenerStopEvent.future().join();
-        assertTrue(l4FrontListenerStopEvent.success());
+        assertTrue(l4FrontListenerStopEvent.isSuccessful());
     }
 
     @Test
@@ -252,7 +245,6 @@ class SimpleTest {
                 .withBindAddress(new InetSocketAddress("localhost", 20003))
                 .withHTTPInitializer(new DefaultHTTPServerInitializer())
                 .withL4FrontListener(new TCPListener())
-                .withEventStream(new EventStream())
                 .build();
 
         httpLoadBalancer.mapCluster("localhost:20003", cluster);
@@ -260,7 +252,7 @@ class SimpleTest {
 
         L4FrontListenerStartupEvent l4FrontListenerStartupEvent = httpLoadBalancer.start();
         l4FrontListenerStartupEvent.future().join();
-        assertTrue(l4FrontListenerStartupEvent.success());
+        assertTrue(l4FrontListenerStartupEvent.isSuccessful());
 
         // Send using HTTP/1.1
         HttpRequest httpRequest = HttpRequest.newBuilder()
@@ -278,6 +270,6 @@ class SimpleTest {
         httpServer.shutdown();
         L4FrontListenerStopEvent l4FrontListenerStopEvent = httpLoadBalancer.stop();
         l4FrontListenerStopEvent.future().join();
-        assertTrue(l4FrontListenerStopEvent.success());
+        assertTrue(l4FrontListenerStopEvent.isSuccessful());
     }
 }

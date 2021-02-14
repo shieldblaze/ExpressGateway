@@ -19,6 +19,8 @@ package com.shieldblaze.expressgateway.configuration;
 
 import com.shieldblaze.expressgateway.configuration.buffer.BufferConfiguration;
 import com.shieldblaze.expressgateway.configuration.eventloop.EventLoopConfiguration;
+import com.shieldblaze.expressgateway.configuration.eventstream.EventStreamConfiguration;
+import com.shieldblaze.expressgateway.configuration.healthcheck.HealthCheckConfiguration;
 import com.shieldblaze.expressgateway.configuration.transport.TransportConfiguration;
 
 import java.util.Objects;
@@ -30,6 +32,8 @@ public final class CoreConfigurationBuilder {
     private TransportConfiguration transportConfiguration;
     private EventLoopConfiguration eventLoopConfiguration;
     private BufferConfiguration bufferConfiguration;
+    private EventStreamConfiguration eventStreamConfiguration;
+    private HealthCheckConfiguration healthCheckConfiguration;
 
     private CoreConfigurationBuilder() {
         // Prevent outside initialization
@@ -69,6 +73,22 @@ public final class CoreConfigurationBuilder {
     }
 
     /**
+     * Set {@link EventStreamConfiguration}
+     */
+    public CoreConfigurationBuilder withEventStreamConfiguration(EventStreamConfiguration eventStreamConfiguration) {
+        this.eventStreamConfiguration = eventStreamConfiguration;
+        return this;
+    }
+
+    /**
+     * Set {@link HealthCheckConfiguration}
+     */
+    public CoreConfigurationBuilder withHealthCheckConfiguration(HealthCheckConfiguration healthCheckConfiguration) {
+        this.healthCheckConfiguration = healthCheckConfiguration;
+        return this;
+    }
+
+    /**
      * Build {@link CoreConfiguration}
      *
      * @return {@link CoreConfiguration} Instance
@@ -78,10 +98,14 @@ public final class CoreConfigurationBuilder {
         Objects.requireNonNull(transportConfiguration, "Transport Configuration");
         Objects.requireNonNull(eventLoopConfiguration, "EventLoop Configuration");
         Objects.requireNonNull(bufferConfiguration, "Buffer Configuration");
+        Objects.requireNonNull(eventStreamConfiguration, "EventStream Configuration");
+        Objects.requireNonNull(healthCheckConfiguration, "HealthCheck Configuration");
 
         return new CoreConfiguration()
                 .transportConfiguration(transportConfiguration)
                 .eventLoopConfiguration(eventLoopConfiguration)
-                .pooledByteBufAllocatorConfiguration(bufferConfiguration);
+                .bufferConfiguration(bufferConfiguration)
+                .eventStreamConfiguration(eventStreamConfiguration)
+                .healthCheckConfiguration(healthCheckConfiguration);
     }
 }

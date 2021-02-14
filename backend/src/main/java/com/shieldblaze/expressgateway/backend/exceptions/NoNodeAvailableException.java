@@ -17,7 +17,12 @@
  */
 package com.shieldblaze.expressgateway.backend.exceptions;
 
-public class NoNodeAvailableException extends LoadBalanceException {
+import com.shieldblaze.expressgateway.backend.Node;
+
+/**
+ * Thrown when there is no {@link Node} available to handle request.
+ */
+public final class NoNodeAvailableException extends LoadBalanceException {
 
     public NoNodeAvailableException() {
         super();

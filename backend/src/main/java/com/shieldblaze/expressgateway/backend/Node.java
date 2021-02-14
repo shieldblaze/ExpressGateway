@@ -20,11 +20,13 @@ package com.shieldblaze.expressgateway.backend;
 import com.shieldblaze.expressgateway.backend.cluster.Cluster;
 import com.shieldblaze.expressgateway.backend.exceptions.TooManyConnectionsException;
 import com.shieldblaze.expressgateway.common.Math;
+import com.shieldblaze.expressgateway.common.annotation.InternalCall;
 import com.shieldblaze.expressgateway.common.annotation.NonNull;
 import com.shieldblaze.expressgateway.common.utils.Number;
 import com.shieldblaze.expressgateway.healthcheck.Health;
 import com.shieldblaze.expressgateway.healthcheck.HealthCheck;
 
+import java.io.Closeable;
 import java.net.InetSocketAddress;
 import java.util.Queue;
 import java.util.UUID;
@@ -35,10 +37,10 @@ import java.util.concurrent.atomic.AtomicLong;
 /**
  * <p> {@link Node} is the server where all requests are sent. </p>
  */
-public final class Node implements Comparable<Node> {
+public final class Node implements Comparable<Node>, Closeable {
 
     /**
-     * Unique identifier of the node
+     * Unique identifier of the Node
      */
     private final String ID = UUID.randomUUID().toString();
 
@@ -88,47 +90,42 @@ public final class Node implements Comparable<Node> {
     /**
      * Health Check for this {@link Node}
      */
-    private final HealthCheck healthCheck;
+    private HealthCheck healthCheck;
 
     /**
      * Max Connections handled by this {@link Node}
      */
-    private int maxConnections;
-
-    public Node(Cluster cluster, InetSocketAddress socketAddress) {
-        this(cluster, socketAddress, -1, null);
-    }
+    private int maxConnections = 10_000;
 
     /**
-     * Create a new {@linkplain Node} Instance
-     *
-     * @param socketAddress Address of this {@linkplain Node}
+     * Create a new Instance
      */
-    public Node(@NonNull Cluster cluster,
-                @NonNull InetSocketAddress socketAddress,
-                int maxConnections, HealthCheck healthCheck) {
-
-        maxConnections(maxConnections);
-
+    @NonNull
+    public Node(Cluster cluster, InetSocketAddress socketAddress) {
         this.socketAddress = socketAddress;
-        this.healthCheck = healthCheck;
-
         this.cluster = cluster;
         this.cluster.addNode(this);
 
-        if (healthCheck == null) {
-            state(State.ONLINE);
-        }
+        state(State.ONLINE);
     }
 
+    /**
+     * Returns the associated {@link Cluster}
+     */
     public Cluster cluster() {
         return cluster;
     }
 
+    /**
+     * IP and Port of this {@link Node}
+     */
     public InetSocketAddress socketAddress() {
         return socketAddress;
     }
 
+    /**
+     * Get number of active connections
+     */
     public int activeConnection() {
 
         // If active connection is initialized (value not set to 0) then return it.
@@ -139,24 +136,41 @@ public final class Node implements Comparable<Node> {
         return activeConnections.size();
     }
 
-    public Node incBytesSent(int bytes) {
+    /**
+     * Increment bytes sent to this Node
+     *
+     * @param bytes Number of bytes to increment
+     */
+    public void incBytesSent(int bytes) {
         bytesSent.addAndGet(bytes);
-        return this;
     }
 
-    public Node incBytesReceived(int bytes) {
+    /**
+     * Increment bytes received from this Node
+     *
+     * @param bytes Number of bytes to increment
+     */
+    public void incBytesReceived(int bytes) {
         bytesReceived.addAndGet(bytes);
-        return this;
     }
 
+    /**
+     * Returns Number of Bytes Sent
+     */
     public long bytesSent() {
         return bytesSent.get();
     }
 
+    /**
+     * Returns Number of Bytes Received
+     */
     public long bytesReceived() {
         return bytesReceived.get();
     }
 
+    /**
+     * Returns the current {@link State} of this Node
+     */
     public State state() {
         return state;
     }
@@ -167,36 +181,59 @@ public final class Node implements Comparable<Node> {
         return this;
     }
 
+    /**
+     * Returns Number of active connections in secondary implementation
+     */
     public int activeConnection0() {
         return activeConnection0.get();
     }
 
-    public Node incActiveConnection0() {
+    /**
+     * Increments the number of active connections in secondary implementation
+     */
+    public void incActiveConnection0() {
         activeConnection0.incrementAndGet();
-        return this;
     }
 
+    /**
+     * Decrements the number of active connections in secondary implementation
+     */
     public Node decActiveConnection0() {
         activeConnection0.incrementAndGet();
         return this;
     }
 
+    /**
+     * Reset the number of active connections in secondary implementation
+     */
     public Node resetActiveConnection0() {
         activeConnection0.set(-1);
         return this;
     }
 
+    /**
+     * Returns {@link Health} of this Node
+     */
     public Health health() {
+        // If healthCheck is null then return UNKNOWN.
         if (healthCheck == null) {
             return Health.UNKNOWN;
         }
         return healthCheck.health();
     }
 
+    @NonNull
+    public void healthCheck(HealthCheck healthCheck) {
+        this.healthCheck = healthCheck;
+    }
+
     public HealthCheck healthCheck() {
         return healthCheck;
     }
 
+    /**
+     * Returns the Number of Maximum Connection
+     */
     public int maxConnections() {
         return maxConnections;
     }
@@ -274,16 +311,6 @@ public final class Node implements Comparable<Node> {
         return activeConnection() >= maxConnections;
     }
 
-    /**
-     * Close all active connection and remove itself from the associated {@linkplain Cluster}
-     */
-    public void drainConnectionAndRemove() {
-        activeConnections.forEach(Connection::close);
-        activeConnections.clear();
-        availableConnections.clear();
-        cluster().removeNode(this);
-    }
-
     @Override
     public String toString() {
         return "Node{" +
@@ -314,5 +341,20 @@ public final class Node implements Comparable<Node> {
             return ID.equalsIgnoreCase(node.ID);
         }
         return false;
+    }
+
+    /**
+     * <p> Close all active connections and set {@linkplain State} to {@linkplain State#OFFLINE}. </p>
+     *
+     * <p> This method is called by {@link Cluster#removeNode(Node)} when this {@link Node}
+     * is being removed from the cluster. </p>
+     */
+    @InternalCall
+    @Override
+    public void close() {
+        activeConnections.forEach(Connection::close);
+        activeConnections.clear();
+        availableConnections.clear();
+        state(State.OFFLINE);
     }
 }

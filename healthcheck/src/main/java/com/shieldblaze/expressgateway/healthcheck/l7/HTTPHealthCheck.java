@@ -21,18 +21,11 @@ import com.shieldblaze.expressgateway.healthcheck.HealthCheck;
 import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
 
-import javax.net.ssl.SSLContext;
-import javax.net.ssl.TrustManager;
-import javax.net.ssl.X509TrustManager;
 import java.net.InetSocketAddress;
 import java.net.URI;
 import java.net.http.HttpClient;
 import java.net.http.HttpRequest;
 import java.net.http.HttpResponse;
-import java.security.KeyManagementException;
-import java.security.NoSuchAlgorithmException;
-import java.security.SecureRandom;
-import java.security.cert.X509Certificate;
 import java.time.Duration;
 
 /**
@@ -50,37 +43,19 @@ import java.time.Duration;
 public final class HTTPHealthCheck extends HealthCheck {
 
     private static final Logger logger = LogManager.getLogger(HTTPHealthCheck.class);
-    private static final TrustManager[] trustAllCerts = new TrustManager[]{
-            new X509TrustManager() {
-                public X509Certificate[] getAcceptedIssuers() {
-                    return null;
-                }
 
-                public void checkClientTrusted(X509Certificate[] certs, String authType) {
-                }
-
-                public void checkServerTrusted(X509Certificate[] certs, String authType) {
-                }
-            }
-    };
     private final HttpClient httpClient;
     private final URI uri;
 
-    public HTTPHealthCheck(URI uri, Duration timeout, boolean enableTLSValidation) throws NoSuchAlgorithmException, KeyManagementException {
-        this(uri, timeout, 100, enableTLSValidation);
+    public HTTPHealthCheck(URI uri, Duration timeout, boolean enableTLSValidation) {
+        this(uri, timeout, 100);
     }
 
-    public HTTPHealthCheck(URI uri, Duration timeout, int samples, boolean enableTLSValidation) throws NoSuchAlgorithmException, KeyManagementException {
-        super(new InetSocketAddress(uri.getHost(), uri.getPort()), timeout);
+    public HTTPHealthCheck(URI uri, Duration timeout, int samples) {
+        super(new InetSocketAddress(uri.getHost(), uri.getPort()), timeout, samples);
         this.uri = uri;
 
-        HttpClient.Builder builder = HttpClient.newBuilder();
-        if (enableTLSValidation) {
-            SSLContext sslContext = SSLContext.getInstance("TLSv1.2");
-            sslContext.init(null, trustAllCerts, new SecureRandom());
-            builder.sslContext(sslContext);
-        }
-        httpClient = builder.followRedirects(HttpClient.Redirect.NEVER)
+        httpClient = HttpClient.newBuilder().followRedirects(HttpClient.Redirect.ALWAYS)
                 .connectTimeout(timeout)
                 .build();
     }

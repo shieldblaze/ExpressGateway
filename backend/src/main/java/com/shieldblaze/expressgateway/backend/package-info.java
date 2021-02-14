@@ -15,31 +15,8 @@
  * You should have received a copy of the GNU General Public License
  * along with ShieldBlaze ExpressGateway.  If not, see <https://www.gnu.org/licenses/>.
  */
-package com.shieldblaze.expressgateway.concurrent.event;
 
-import java.util.concurrent.CompletableFuture;
-
-public interface Event<T> {
-
-    /**
-     * {@link CompletableFuture} of the operation.
-     */
-    CompletableFuture<T> future();
-
-    /**
-     * Set to {@code true} if the event has finished else set to {@code false}.
-     */
-    boolean hasFinished();
-
-    /**
-     * Set to {@code true} if the event has finished and operation was successful else
-     * set to {@code false}.
-     */
-    boolean isSuccessful();
-
-    /**
-     * Returns {@link Throwable} of the event which has finished and operation was not successful
-     * due to some error.
-     */
-    Throwable throwable();
-}
+/**
+ * This module deals with Backend Servers and Connectivity, Health Check and Load Balancing.
+ */
+package com.shieldblaze.expressgateway.backend;

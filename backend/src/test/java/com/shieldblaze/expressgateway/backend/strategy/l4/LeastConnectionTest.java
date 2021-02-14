@@ -33,10 +33,7 @@ class LeastConnectionTest {
 
     @Test
     void testLeastConnection() throws LoadBalanceException {
-        EventStream eventStream = new EventStream();
-
         ClusterPool cluster = new ClusterPool(new LeastConnection(NOOPSessionPersistence.INSTANCE));
-        cluster.eventStream(eventStream);
         fastBuild(cluster, "10.10.1.1");
         fastBuild(cluster, "10.10.1.2");
         fastBuild(cluster, "10.10.1.3");

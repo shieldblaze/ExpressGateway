@@ -28,31 +28,22 @@ import java.util.concurrent.Executors;
 
 public class EventStreamConfiguration extends ConfigurationMarshaller {
 
-    private EventStream eventStream;
-
     @JsonProperty("workers")
     private final int workers;
 
     EventStreamConfiguration(int workers) {
         this.workers = workers;
-        init();
     }
 
     public static final EventStreamConfiguration DEFAULT = new EventStreamConfiguration(Runtime.getRuntime().availableProcessors() / 2);
 
-    public void init() {
+    public EventStream newEventStream() {
+        EventStream eventStream;
         if (workers == 0) {
             eventStream = new EventStream();
         } else {
             eventStream = new AsyncEventStream(Executors.newFixedThreadPool(workers));
         }
-    }
-
-    public int workers() {
-        return workers;
-    }
-
-    public EventStream eventStream() {
         return eventStream;
     }
 

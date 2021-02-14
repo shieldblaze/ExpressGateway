@@ -84,6 +84,7 @@ class CompressionTest {
 
         forClient = TLSConfiguration.DEFAULT_CLIENT;
         forClient.acceptAllCerts(true);
+        forClient.defaultMapping(new CertificateKeyPair());
 
         SSLContext sslContext = SSLContext.getInstance("TLSv1.3");
         sslContext.init(null, InsecureTrustManagerFactory.INSTANCE.getTrustManagers(), new SecureRandom());
@@ -126,7 +127,6 @@ class CompressionTest {
                 .withBindAddress(new InetSocketAddress("localhost", 20000))
                 .withHTTPInitializer(new DefaultHTTPServerInitializer())
                 .withL4FrontListener(new TCPListener())
-                .withEventStream(new EventStream())
                 .build();
 
         httpLoadBalancer.mapCluster("localhost:20000", cluster);
@@ -134,7 +134,7 @@ class CompressionTest {
 
         L4FrontListenerStartupEvent l4FrontListenerStartupEvent = httpLoadBalancer.start();
         l4FrontListenerStartupEvent.future().join();
-        assertTrue(l4FrontListenerStartupEvent.success());
+        assertTrue(l4FrontListenerStartupEvent.isSuccessful());
 
         // Brotli only
         {
@@ -197,7 +197,7 @@ class CompressionTest {
         httpServer.shutdown();
         L4FrontListenerStopEvent l4FrontListenerStopEvent = httpLoadBalancer.stop();
         l4FrontListenerStopEvent.future().join();
-        assertTrue(l4FrontListenerStopEvent.success());
+        assertTrue(l4FrontListenerStopEvent.isSuccessful());
     }
 
     @Test
@@ -232,7 +232,6 @@ class CompressionTest {
                 .withBindAddress(new InetSocketAddress("localhost", 20001))
                 .withHTTPInitializer(new DefaultHTTPServerInitializer())
                 .withL4FrontListener(new TCPListener())
-                .withEventStream(new EventStream())
                 .build();
 
         httpLoadBalancer.mapCluster("localhost:20001", cluster);
@@ -240,7 +239,7 @@ class CompressionTest {
 
         L4FrontListenerStartupEvent l4FrontListenerStartupEvent = httpLoadBalancer.start();
         l4FrontListenerStartupEvent.future().join();
-        assertTrue(l4FrontListenerStartupEvent.success());
+        assertTrue(l4FrontListenerStartupEvent.isSuccessful());
 
         // Gzip only
         {
@@ -284,7 +283,7 @@ class CompressionTest {
         httpServer.shutdown();
         L4FrontListenerStopEvent l4FrontListenerStopEvent = httpLoadBalancer.stop();
         l4FrontListenerStopEvent.future().join();
-        assertTrue(l4FrontListenerStopEvent.success());
+        assertTrue(l4FrontListenerStopEvent.isSuccessful());
     }
 
     @Test
@@ -319,7 +318,6 @@ class CompressionTest {
                 .withBindAddress(new InetSocketAddress("localhost", 20002))
                 .withHTTPInitializer(new DefaultHTTPServerInitializer())
                 .withL4FrontListener(new TCPListener())
-                .withEventStream(new EventStream())
                 .build();
 
         httpLoadBalancer.mapCluster("localhost:20002", cluster);
@@ -327,7 +325,7 @@ class CompressionTest {
 
         L4FrontListenerStartupEvent l4FrontListenerStartupEvent = httpLoadBalancer.start();
         l4FrontListenerStartupEvent.future().join();
-        assertTrue(l4FrontListenerStartupEvent.success());
+        assertTrue(l4FrontListenerStartupEvent.isSuccessful());
 
         // Deflate only
         {
@@ -355,6 +353,6 @@ class CompressionTest {
         httpServer.shutdown();
         L4FrontListenerStopEvent l4FrontListenerStopEvent = httpLoadBalancer.stop();
         l4FrontListenerStopEvent.future().join();
-        assertTrue(l4FrontListenerStopEvent.success());
+        assertTrue(l4FrontListenerStopEvent.isSuccessful());
     }
 }

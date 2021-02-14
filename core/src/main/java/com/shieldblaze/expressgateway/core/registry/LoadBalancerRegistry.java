@@ -15,18 +15,30 @@
  * You should have received a copy of the GNU General Public License
  * along with ShieldBlaze ExpressGateway.  If not, see <https://www.gnu.org/licenses/>.
  */
+package com.shieldblaze.expressgateway.core.registry;
 
-package com.shieldblaze.expressgateway.backend.exceptions;
+import com.shieldblaze.expressgateway.core.loadbalancer.L4LoadBalancer;
 
-import com.shieldblaze.expressgateway.backend.Node;
+import java.util.Map;
+import java.util.concurrent.ConcurrentHashMap;
 
-public class NodeOfflineException extends BackendNotAvailableException {
+public final class LoadBalancerRegistry {
 
-    public NodeOfflineException(Node node) {
-        super("Backend: {" + node + "} is not online");
+    public static final Map<String, LoadBalancerProperties> REGISTRY = new ConcurrentHashMap<>();
+
+    public static LoadBalancerProperties get(String loadBalancerID) {
+        return REGISTRY.get(loadBalancerID);
     }
 
-    public NodeOfflineException(String message) {
-        super(message);
+    public static void add(L4LoadBalancer l4LoadBalancer, LoadBalancerProperties properties) {
+        REGISTRY.put(l4LoadBalancer.ID, properties);
+    }
+
+    public static LoadBalancerProperties remove(String loadBalancerID) {
+        return REGISTRY.remove(loadBalancerID);
+    }
+
+    private LoadBalancerRegistry() {
+        // Prevent outside initialization
     }
 }

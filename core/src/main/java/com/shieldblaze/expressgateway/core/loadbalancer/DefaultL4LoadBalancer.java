@@ -17,8 +17,6 @@
  */
 package com.shieldblaze.expressgateway.core.loadbalancer;
 
-import com.shieldblaze.expressgateway.backend.cluster.Cluster;
-import com.shieldblaze.expressgateway.concurrent.eventstream.EventStream;
 import com.shieldblaze.expressgateway.configuration.CoreConfiguration;
 import com.shieldblaze.expressgateway.configuration.tls.TLSConfiguration;
 import com.shieldblaze.expressgateway.core.L4FrontListener;
@@ -33,7 +31,6 @@ final class DefaultL4LoadBalancer extends L4LoadBalancer {
 
     /**
      * @param name              Name of this Load Balancer
-     * @param eventStream       {@link EventStream} to use
      * @param bindAddress       {@link InetSocketAddress} on which {@link L4FrontListener} will bind and listen.
      * @param l4FrontListener   {@link L4FrontListener} for listening traffic
      * @param coreConfiguration {@link CoreConfiguration} to be applied
@@ -42,14 +39,8 @@ final class DefaultL4LoadBalancer extends L4LoadBalancer {
      * @param channelHandler    {@link ChannelHandler} to use for handling traffic
      * @throws NullPointerException If a required parameter if {@code null}
      */
-    DefaultL4LoadBalancer(String name,
-                          EventStream eventStream,
-                          InetSocketAddress bindAddress,
-                          L4FrontListener l4FrontListener,
-                          CoreConfiguration coreConfiguration,
-                          TLSConfiguration tlsForServer,
-                          TLSConfiguration tlsForClient,
-                          ChannelHandler channelHandler) {
-        super(name, eventStream, bindAddress, l4FrontListener, coreConfiguration, tlsForServer, tlsForClient, channelHandler);
+    DefaultL4LoadBalancer(String name, InetSocketAddress bindAddress, L4FrontListener l4FrontListener, CoreConfiguration coreConfiguration,
+                          TLSConfiguration tlsForServer, TLSConfiguration tlsForClient, ChannelHandler channelHandler) {
+        super(name, bindAddress, l4FrontListener, coreConfiguration, tlsForServer, tlsForClient, channelHandler);
     }
 }

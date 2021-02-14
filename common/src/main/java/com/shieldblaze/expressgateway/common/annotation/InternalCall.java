@@ -15,27 +15,16 @@
  * You should have received a copy of the GNU General Public License
  * along with ShieldBlaze ExpressGateway.  If not, see <https://www.gnu.org/licenses/>.
  */
-package com.shieldblaze.expressgateway.backend.exceptions;
+package com.shieldblaze.expressgateway.common.annotation;
 
-public class NoClusterAvailableException extends LoadBalanceException {
+import java.lang.annotation.ElementType;
+import java.lang.annotation.Target;
 
-    public NoClusterAvailableException() {
-        super();
-    }
-
-    public NoClusterAvailableException(String message) {
-        super(message);
-    }
-
-    public NoClusterAvailableException(String message, Throwable cause) {
-        super(message, cause);
-    }
-
-    public NoClusterAvailableException(Throwable cause) {
-        super(cause);
-    }
-
-    protected NoClusterAvailableException(String message, Throwable cause, boolean enableSuppression, boolean writableStackTrace) {
-        super(message, cause, enableSuppression, writableStackTrace);
-    }
+/**
+ * Function annotated with {@link InternalCall} must not be called directly.
+ * It'll be called internally by some other functions.
+ */
+@Target({ElementType.METHOD, ElementType.PARAMETER, ElementType.CONSTRUCTOR})
+public @interface InternalCall {
+    int value() default 0;
 }

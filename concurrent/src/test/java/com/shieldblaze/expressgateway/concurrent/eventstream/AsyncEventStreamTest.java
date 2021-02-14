@@ -71,12 +71,12 @@ class AsyncEventStreamTest {
         }
 
         @Override
-        public boolean finished() {
+        public boolean hasFinished() {
             return false;
         }
 
         @Override
-        public boolean success() {
+        public boolean isSuccessful() {
             return false;
         }
 

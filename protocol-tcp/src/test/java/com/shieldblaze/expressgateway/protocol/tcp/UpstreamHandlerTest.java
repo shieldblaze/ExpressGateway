@@ -24,14 +24,6 @@ import com.shieldblaze.expressgateway.backend.strategy.l4.RoundRobin;
 import com.shieldblaze.expressgateway.backend.strategy.l4.sessionpersistence.NOOPSessionPersistence;
 import com.shieldblaze.expressgateway.concurrent.eventstream.EventStream;
 import com.shieldblaze.expressgateway.configuration.CoreConfiguration;
-import com.shieldblaze.expressgateway.configuration.CoreConfigurationBuilder;
-import com.shieldblaze.expressgateway.configuration.buffer.BufferConfiguration;
-import com.shieldblaze.expressgateway.configuration.eventloop.EventLoopConfiguration;
-import com.shieldblaze.expressgateway.configuration.eventloop.EventLoopConfigurationBuilder;
-import com.shieldblaze.expressgateway.configuration.transport.ReceiveBufferAllocationType;
-import com.shieldblaze.expressgateway.configuration.transport.TransportConfiguration;
-import com.shieldblaze.expressgateway.configuration.transport.TransportConfigurationBuilder;
-import com.shieldblaze.expressgateway.configuration.transport.TransportType;
 import com.shieldblaze.expressgateway.core.events.L4FrontListenerStartupEvent;
 import com.shieldblaze.expressgateway.core.events.L4FrontListenerStopEvent;
 import com.shieldblaze.expressgateway.core.loadbalancer.L4LoadBalancer;
@@ -58,16 +50,12 @@ final class UpstreamHandlerTest {
     static void setup() {
         new TCPServer().start();
 
-        CoreConfiguration coreConfiguration = CoreConfiguration.DEFAULT;
-
         Cluster cluster = new ClusterPool(new RoundRobin(NOOPSessionPersistence.INSTANCE));
-        cluster.eventStream(new EventStream());
 
         l4LoadBalancer = L4LoadBalancerBuilder.newBuilder()
-                .withCoreConfiguration(coreConfiguration)
+                .withCoreConfiguration(CoreConfiguration.DEFAULT)
                 .withBindAddress(new InetSocketAddress("127.0.0.1", 9110))
                 .withL4FrontListener(new TCPListener())
-                .withEventStream(new EventStream())
                 .build();
 
         l4LoadBalancer.defaultCluster(cluster);
@@ -75,14 +63,14 @@ final class UpstreamHandlerTest {
 
         L4FrontListenerStartupEvent l4FrontListenerStartupEvent = l4LoadBalancer.start();
         l4FrontListenerStartupEvent.future().join();
-        assertTrue(l4FrontListenerStartupEvent.success());
+        assertTrue(l4FrontListenerStartupEvent.isSuccessful());
     }
 
     @AfterAll
     static void stop() {
         L4FrontListenerStopEvent l4FrontListenerStopEvent = l4LoadBalancer.stop();
         l4FrontListenerStopEvent.future().join();
-        assertTrue(l4FrontListenerStopEvent.success());
+        assertTrue(l4FrontListenerStopEvent.isSuccessful());
     }
 
     @Test

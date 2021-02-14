@@ -17,6 +17,9 @@
  */
 package com.shieldblaze.expressgateway.backend;
 
+/**
+ * Node State
+ */
 public enum State {
     /**
      * {@link Node} is online, active and accepting connections.

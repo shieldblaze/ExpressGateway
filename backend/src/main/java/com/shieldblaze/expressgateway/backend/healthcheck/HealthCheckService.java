@@ -18,12 +18,14 @@
 package com.shieldblaze.expressgateway.backend.healthcheck;
 
 import com.shieldblaze.expressgateway.backend.Node;
+import com.shieldblaze.expressgateway.common.annotation.InternalCall;
 import com.shieldblaze.expressgateway.common.annotation.NonNull;
-import com.shieldblaze.expressgateway.concurrent.eventstream.EventPublisher;
+import com.shieldblaze.expressgateway.concurrent.eventstream.EventStream;
 import com.shieldblaze.expressgateway.configuration.healthcheck.HealthCheckConfiguration;
 import com.shieldblaze.expressgateway.healthcheck.Health;
 import com.shieldblaze.expressgateway.healthcheck.HealthCheck;
 
+import java.io.Closeable;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.Executors;
@@ -32,50 +34,83 @@ import java.util.concurrent.ScheduledFuture;
 import java.util.concurrent.TimeUnit;
 
 /**
- * {@link HealthCheckService} performs {@link HealthCheck} operation to
- * check {@link Health} of {@link Node}.
+ * <p> {@link HealthCheckService} performs {@link HealthCheck} operation to
+ * check {@link Health} of {@link Node}. It uses {@link ScheduledExecutorService}
+ * to execute tasks. </p>
+ *
+ * <p> {@link #close()} must be called if this HealthCheckService is not going to be used. </p>
  */
-public final class HealthCheckService {
+public final class HealthCheckService implements Closeable {
 
     private final Map<Node, ScheduledFuture<?>> nodeMap = new ConcurrentHashMap<>();
 
-    private final HealthCheckConfiguration configuration;
-    private final EventPublisher eventPublisher;
-    private final ScheduledExecutorService EXECUTORS;
+    private HealthCheckConfiguration config;
+    private EventStream eventStream;
+    private ScheduledExecutorService executors;
 
-    @NonNull
-    public HealthCheckService(HealthCheckConfiguration configuration, EventPublisher eventPublisher) {
-        this.configuration = configuration;
-        this.eventPublisher = eventPublisher;
-        EXECUTORS = Executors.newScheduledThreadPool(configuration.workers());
-    }
-
+    /**
+     * Add a new {@link Node} to the HealthCheckService.
+     *
+     * @throws IllegalArgumentException If HealthCheck is not enabled for this {@link Node}
+     */
     @NonNull
     public void add(Node node) {
         if (node.healthCheck() == null) {
             throw new IllegalArgumentException("HealthCheck is not enabled for this node.");
         }
 
-        int interval = configuration.timeInterval();
-        ScheduledFuture<?> scheduledFuture = EXECUTORS.scheduleAtFixedRate(new HealthCheckRunner(node, eventPublisher), interval, interval, TimeUnit.MILLISECONDS);
+        ScheduledFuture<?> scheduledFuture = executors.scheduleAtFixedRate(new HealthCheckRunner(node, eventStream), 0, config.timeInterval(), TimeUnit.SECONDS);
         nodeMap.put(node, scheduledFuture);
     }
 
+    /**
+     * Remove a existing {@link Node} from the HealthCheckService.
+     *
+     * @throws IllegalArgumentException If this node was not found.
+     */
     @NonNull
     public void remove(Node node) {
-        if (node.healthCheck() == null) {
-            throw new IllegalArgumentException("HealthCheck is not enabled for this node.");
-        }
-
         ScheduledFuture<?> scheduledFuture = nodeMap.get(node);
         if (scheduledFuture != null) {
             scheduledFuture.cancel(true);
+        } else {
+            throw new IllegalArgumentException("Node not found in HealthCheckService");
         }
     }
 
-    public void shutdown() {
+    /**
+     * Set an EventStream. This method must be called before
+     * using {@link HealthCheckService}.
+     */
+    @NonNull
+    @InternalCall(1)
+    public void eventStream(EventStream eventStream) {
+        if (this.eventStream != null) {
+            throw new IllegalArgumentException("EventStream is already set");
+        }
+        this.eventStream = eventStream;
+    }
+
+    /**
+     * Set a new {@link HealthCheckConfiguration} to use.
+     * All running Health Check Tasks will be stopped.
+     */
+    @NonNull
+    public void healthCheckConfiguration(HealthCheckConfiguration configuration) {
+        close();
+        this.config = configuration;
+        executors = Executors.newScheduledThreadPool(configuration.workers());
+    }
+
+    /**
+     * Close this HealthCheckService and stops all running operations.
+     */
+    @Override
+    public void close() {
         nodeMap.forEach((node, scheduledFuture) -> scheduledFuture.cancel(true));
         nodeMap.clear();
-        EXECUTORS.shutdown();
+        if (executors != null) {
+            executors.shutdown();
+        }
     }
 }

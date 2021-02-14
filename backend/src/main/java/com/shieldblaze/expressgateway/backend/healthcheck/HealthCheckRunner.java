@@ -24,6 +24,7 @@ import com.shieldblaze.expressgateway.backend.events.node.NodeOfflineEvent;
 import com.shieldblaze.expressgateway.backend.events.node.NodeOnlineEvent;
 import com.shieldblaze.expressgateway.common.annotation.NonNull;
 import com.shieldblaze.expressgateway.concurrent.eventstream.EventPublisher;
+import com.shieldblaze.expressgateway.concurrent.eventstream.EventStream;
 import com.shieldblaze.expressgateway.healthcheck.Health;
 import com.shieldblaze.expressgateway.healthcheck.HealthCheck;
 
@@ -34,12 +35,12 @@ import com.shieldblaze.expressgateway.healthcheck.HealthCheck;
 final class HealthCheckRunner implements Runnable {
 
     private final Node node;
-    private final EventPublisher eventPublisher;
+    private final EventStream eventStream;
 
     @NonNull
-    HealthCheckRunner(Node node, EventPublisher eventPublisher) {
+    HealthCheckRunner(Node node, EventStream eventStream) {
         this.node = node;
-        this.eventPublisher = eventPublisher;
+        this.eventStream = eventStream;
     }
 
     @Override
@@ -54,15 +55,13 @@ final class HealthCheckRunner implements Runnable {
          */
         if (node.health() == Health.GOOD && oldHealth != Health.GOOD) {
             node.state(State.ONLINE);
-            eventPublisher.publish(new NodeOnlineEvent(node));
+            eventStream.publish(new NodeOnlineEvent(node));
         } else if (node.health() == Health.MEDIUM && oldHealth != Health.MEDIUM) {
             node.state(State.IDLE);
-            eventPublisher.publish(new NodeIdleEvent(node));
+            eventStream.publish(new NodeIdleEvent(node));
         } else if (node.health() == Health.BAD && oldHealth != Health.BAD) {
             node.state(State.OFFLINE);
-            eventPublisher.publish(new NodeOfflineEvent(node));
-        } else {
-            // Maybe In case of Health is UNKNOWN.
+            eventStream.publish(new NodeOfflineEvent(node));
         }
     }
 }

@@ -19,14 +19,14 @@ package com.shieldblaze.expressgateway.concurrent.eventstream;
 
 import com.shieldblaze.expressgateway.concurrent.event.Event;
 
+import java.io.Closeable;
 import java.util.List;
-import java.util.Objects;
 import java.util.concurrent.CopyOnWriteArrayList;
 
 /**
  * {@linkplain EventStream} is a simple pub-sub stream channel.
  */
-public class EventStream {
+public class EventStream implements Closeable {
 
     /**
      * List of subscribers
@@ -41,7 +41,6 @@ public class EventStream {
      * @param eventListener Class implementing {@link EventListener} who will subscribe
      */
     public void subscribe(EventListener eventListener) {
-        Objects.requireNonNull(eventListener, "EventListener");
         subscribers.add(eventListener);
     }
 
@@ -52,7 +51,6 @@ public class EventStream {
      * @return Returns {@code true} if unsubscribe was successful else {@code false}
      */
     public boolean unsubscribe(EventListener eventListener) {
-        Objects.requireNonNull(eventListener, "EventListener");
         return subscribers.remove(eventListener);
     }
 
@@ -73,11 +71,23 @@ public class EventStream {
         subscribers.forEach(eventListener -> eventListener.accept(event));
     }
 
-    public EventSubscriber eventSubscriber() {
-        return eventSubscriber;
+    /**
+     * Copy all subscribers from other {@link EventStream} to specified {@link EventStream}
+     * @param eventStream
+     */
+    public void addSubscribersFrom(EventStream eventStream) {
+        subscribers.addAll(eventStream.subscribers);
     }
 
-    public EventPublisher eventPublisher() {
-        return eventPublisher;
+    @Override
+    public void close() {
+        unsubscribeAll();
+    }
+
+    @Override
+    public String toString() {
+        return "EventStream{" +
+                "subscribers=" + subscribers +
+                '}';
     }
 }
