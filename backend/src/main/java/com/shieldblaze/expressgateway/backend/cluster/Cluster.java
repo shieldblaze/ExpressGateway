@@ -30,7 +30,6 @@ import com.shieldblaze.expressgateway.backend.loadbalance.Response;
 import com.shieldblaze.expressgateway.common.annotation.InternalCall;
 import com.shieldblaze.expressgateway.common.annotation.NonNull;
 import com.shieldblaze.expressgateway.concurrent.eventstream.EventStream;
-import com.shieldblaze.expressgateway.configuration.CoreConfiguration;
 import com.shieldblaze.expressgateway.configuration.healthcheck.HealthCheckConfiguration;
 import com.shieldblaze.expressgateway.healthcheck.HealthCheck;
 import com.shieldblaze.expressgateway.healthcheck.l4.TCPHealthCheck;
@@ -72,37 +71,15 @@ public abstract class Cluster {
     private static final Logger logger = LogManager.getLogger(Cluster.class);
 
     private final List<Node> nodes = new CopyOnWriteArrayList<>();
+    private final HealthCheckService healthCheckService = new HealthCheckService();
 
-    private EventStream eventStream;
+    private boolean defaultEventStream = true;
+    private EventStream eventStream = new EventStream();
     private LoadBalance<?, ?, ?, ?> loadBalance;
     private HealthCheckTemplate healthCheckTemplate;
-    private HealthCheckConfiguration healthCheckConfiguration;
-    private HealthCheckService healthCheckService;
 
-    /**
-     * Create a new {@link Cluster} Instance with specified {@link LoadBalance}
-     * and without {@link HealthCheckTemplate} (Health Check for all servers in
-     * this {@link Cluster} is disabled).
-     *
-     * @param loadBalance {@link LoadBalance} implementation to use for load-balancing
-     */
-    @NonNull
     public Cluster(LoadBalance<?, ?, ?, ?> loadBalance) {
-        this(loadBalance, null);
-    }
-
-    /**
-     * Create a new {@link Cluster} Instance with specified {@link LoadBalance}
-     * and {@link HealthCheckTemplate}.
-     *
-     * @param loadBalance         {@link LoadBalance} implementation to use for load-balancing
-     * @param healthCheckTemplate {@link HealthCheckTemplate} to create {@link HealthCheck}
-     *                            for all servers {@link Node}.
-     */
-    @NonNull
-    public Cluster(LoadBalance<?, ?, ?, ?> loadBalance, HealthCheckTemplate healthCheckTemplate) {
         loadBalance(loadBalance);
-        this.healthCheckTemplate = healthCheckTemplate;
     }
 
     /**
@@ -110,6 +87,7 @@ public abstract class Cluster {
      *
      * @return {@link Boolean#TRUE} if addition was successful else {@link Boolean#FALSE}
      */
+    @InternalCall
     @NonNull
     public boolean addNode(Node node) {
         for (Node n : nodes) {
@@ -119,7 +97,7 @@ public abstract class Cluster {
             }
         }
 
-        healthCheck(node); // Add HealthCheck if required
+        configureHealthCheck(node); // Add HealthCheck if required
         nodes.add(node);   // Add this Node into the list
         eventStream.publish(new NodeAddedEvent(node)); // Publish NodeAddedEvent event
         return true;
@@ -177,11 +155,10 @@ public abstract class Cluster {
      * @param eventStream {@link EventStream}
      * @throws IllegalStateException When Load Balancer is already set
      */
-    @InternalCall
+    @InternalCall(1)
+    @NonNull
     public void eventStream(EventStream eventStream) {
-        if (this.eventStream != null) {
-            throw new IllegalStateException("EventStream is already set");
-        }
+        eventStream.addSubscribersFrom(this.eventStream);
         this.eventStream = eventStream;
     }
 
@@ -195,7 +172,7 @@ public abstract class Cluster {
     @NonNull
     public void loadBalance(LoadBalance<?, ?, ?, ?> loadBalance) {
         try {
-            if (loadBalance != null) {
+            if (this.loadBalance != null) {
                 eventStream.unsubscribe(loadBalance);
                 this.loadBalance.close();
             }
@@ -203,6 +180,7 @@ public abstract class Cluster {
             logger.error("Error while closing LoadBalance", e);
         }
 
+        loadBalance.cluster(this);
         this.loadBalance = loadBalance;     // Set the new Load Balance
         eventStream.subscribe(loadBalance); // Subscribe to the EventStream
     }
@@ -214,35 +192,35 @@ public abstract class Cluster {
         return healthCheckTemplate;
     }
 
-    /**
-     * Set the {@link HealthCheckTemplate}
-     */
     @NonNull
-    public void healthCheckTemplate(HealthCheckTemplate healthCheckTemplate) {
+    public void configureHealthCheck(HealthCheckConfiguration healthCheckConfiguration, HealthCheckTemplate healthCheckTemplate) {
         this.healthCheckTemplate = healthCheckTemplate;
+        healthCheckService.healthCheckConfiguration(healthCheckConfiguration);
     }
 
     @NonNull
-    @InternalCall
-    public void healthCheckConfiguration(HealthCheckConfiguration healthCheckConfiguration) {
-        this.healthCheckConfiguration = healthCheckConfiguration;
-    }
-
-    @NonNull
-    private void healthCheck(Node node) {
+    private void configureHealthCheck(Node node) {
+        // If HealthCheckTemplate is null, then we'll return early because
+        // we can't perform HealthCheck task without it.
         if (healthCheckTemplate == null) {
             return;
         }
 
         HealthCheck healthCheck = null;
+
         if (healthCheckTemplate.protocol() == HealthCheckTemplate.Protocol.TCP) {
-            healthCheck = new TCPHealthCheck(new InetSocketAddress(node.socketAddress().getAddress(), healthCheckTemplate.port()),
-                    Duration.ofSeconds(healthCheckTemplate().timeout()), healthCheckTemplate().samples());
+            healthCheck = new TCPHealthCheck(
+                    new InetSocketAddress(node.socketAddress().getAddress(), healthCheckTemplate.port()),
+                    Duration.ofSeconds(healthCheckTemplate.timeout()),
+                    healthCheckTemplate.samples()
+            );
         } else if (healthCheckTemplate.protocol() == HealthCheckTemplate.Protocol.UDP) {
-            healthCheck = new UDPHealthCheck(new InetSocketAddress(node.socketAddress().getAddress(), healthCheckTemplate.port()),
-                    Duration.ofSeconds(healthCheckTemplate().timeout()), healthCheckTemplate().samples());
-        } else if (healthCheckTemplate.protocol() == HealthCheckTemplate.Protocol.HTTP ||
-                healthCheckTemplate.protocol() == HealthCheckTemplate.Protocol.HTTPS) {
+            healthCheck = new UDPHealthCheck(
+                    new InetSocketAddress(node.socketAddress().getAddress(), healthCheckTemplate.port()),
+                    Duration.ofSeconds(healthCheckTemplate.timeout()),
+                    healthCheckTemplate.samples()
+            );
+        } else if (healthCheckTemplate.protocol() == HealthCheckTemplate.Protocol.HTTP || healthCheckTemplate.protocol() == HealthCheckTemplate.Protocol.HTTPS) {
 
             String host;
             if (healthCheckTemplate.protocol() == HealthCheckTemplate.Protocol.HTTP) {
@@ -251,9 +229,10 @@ public abstract class Cluster {
                 host = "https://" + node.socketAddress().getAddress().getHostAddress() + ":" + healthCheckTemplate().port();
             }
 
-            healthCheck = new HTTPHealthCheck(URI.create(host), Duration.ofSeconds(healthCheckTemplate().timeout()), healthCheckTemplate().samples());
+            healthCheck = new HTTPHealthCheck(URI.create(host), Duration.ofSeconds(healthCheckTemplate.timeout()), healthCheckTemplate.samples());
         }
 
+        // Associate HealthCheck with Node if HealthCheck Instance is not null.
         if (healthCheck != null) {
             node.healthCheck(healthCheck);
         }
@@ -261,10 +240,10 @@ public abstract class Cluster {
 
     /**
      * Shutdown the entire Cluster including all {@link Node} and {@link Connection}.
-     *
+     * <p>
      * This method is called by L4LoadBalancer when this Cluster is being unmapped.
      */
-    @InternalCall
+    @InternalCall(3)
     public void close() {
         for (Node node : nodes) {
             try {

@@ -18,7 +18,6 @@
 
 package com.shieldblaze.expressgateway.configuration.eventstream;
 
-import com.fasterxml.jackson.annotation.JsonIgnore;
 import com.fasterxml.jackson.annotation.JsonProperty;
 import com.shieldblaze.expressgateway.concurrent.eventstream.AsyncEventStream;
 import com.shieldblaze.expressgateway.concurrent.eventstream.EventStream;
@@ -29,28 +28,22 @@ import java.util.concurrent.Executors;
 
 public class EventStreamConfiguration extends ConfigurationMarshaller {
 
-    @JsonIgnore
-    private EventStream eventStream;
-
     @JsonProperty("workers")
     private final int workers;
 
     EventStreamConfiguration(int workers) {
         this.workers = workers;
-        init();
     }
 
     public static final EventStreamConfiguration DEFAULT = new EventStreamConfiguration(Runtime.getRuntime().availableProcessors() / 2);
 
-    public void init() {
+    public EventStream newEventStream() {
+        EventStream eventStream;
         if (workers == 0) {
             eventStream = new EventStream();
         } else {
             eventStream = new AsyncEventStream(Executors.newFixedThreadPool(workers));
         }
-    }
-
-    public EventStream eventStream() {
         return eventStream;
     }
 

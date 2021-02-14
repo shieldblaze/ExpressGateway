@@ -30,8 +30,8 @@ public final class LoadBalancerRegistry {
         return REGISTRY.get(loadBalancerID);
     }
 
-    public static void add(L4LoadBalancer l4LoadBalancer, LoadBalancerProperties loadBalancerProperties) {
-        REGISTRY.put(l4LoadBalancer.ID, loadBalancerProperties);
+    public static void add(L4LoadBalancer l4LoadBalancer, LoadBalancerProperties properties) {
+        REGISTRY.put(l4LoadBalancer.ID, properties);
     }
 
     public static LoadBalancerProperties remove(String loadBalancerID) {

@@ -27,8 +27,8 @@ import com.shieldblaze.expressgateway.concurrent.eventstream.EventStream;
  */
 public final class ClusterPool extends Cluster {
 
-    public ClusterPool(EventStream eventStream, LoadBalance<?, ?, ?, ?> loadBalance) {
-        super(eventStream, loadBalance);
+    public ClusterPool(LoadBalance<?, ?, ?, ?> loadBalance) {
+        super(loadBalance);
     }
 
     /**

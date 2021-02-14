@@ -15,16 +15,5 @@
  * You should have received a copy of the GNU General Public License
  * along with ShieldBlaze ExpressGateway.  If not, see <https://www.gnu.org/licenses/>.
  */
-package com.shieldblaze.expressgateway.common.annotation;
 
-import java.lang.annotation.ElementType;
-import java.lang.annotation.Target;
-
-/**
- * Function annotated with {@link InternalCall} must not be called directly.
- * It'll be called internally by some other functions.
- */
-@Target({ElementType.METHOD, ElementType.PARAMETER, ElementType.CONSTRUCTOR})
-public @interface InternalCall {
-    int value() default 0;
-}
+package com.shieldblaze.expressgateway.core.registry;

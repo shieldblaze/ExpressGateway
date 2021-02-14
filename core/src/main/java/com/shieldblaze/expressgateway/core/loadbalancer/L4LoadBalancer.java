@@ -19,9 +19,9 @@ package com.shieldblaze.expressgateway.core.loadbalancer;
 
 import com.shieldblaze.expressgateway.backend.cluster.Cluster;
 import com.shieldblaze.expressgateway.common.annotation.NonNull;
+import com.shieldblaze.expressgateway.concurrent.GlobalExecutors;
 import com.shieldblaze.expressgateway.concurrent.eventstream.EventStream;
 import com.shieldblaze.expressgateway.configuration.CoreConfiguration;
-import com.shieldblaze.expressgateway.configuration.eventstream.EventStreamConfiguration;
 import com.shieldblaze.expressgateway.configuration.tls.TLSConfiguration;
 import com.shieldblaze.expressgateway.core.EventLoopFactory;
 import com.shieldblaze.expressgateway.core.L4FrontListener;
@@ -31,7 +31,6 @@ import com.shieldblaze.expressgateway.core.events.L4FrontListenerStopEvent;
 import io.netty.buffer.ByteBufAllocator;
 import io.netty.channel.ChannelHandler;
 
-import java.io.IOException;
 import java.net.InetSocketAddress;
 import java.util.Map;
 import java.util.UUID;
@@ -85,7 +84,7 @@ public abstract class L4LoadBalancer {
         this.bindAddress = bindAddress;
         this.l4FrontListener = l4FrontListener;
         this.coreConfiguration = coreConfiguration;
-        this.eventStream = coreConfiguration.eventStreamConfiguration().eventStream();
+        this.eventStream = coreConfiguration.eventStreamConfiguration().newEventStream();
         this.tlsForServer = tlsForServer;
         this.tlsForClient = tlsForClient;
         this.channelHandler = channelHandler;
@@ -115,11 +114,9 @@ public abstract class L4LoadBalancer {
      */
     public L4FrontListenerStopEvent stop() {
         L4FrontListenerStopEvent event = l4FrontListener.stop();
-        try {
-            eventStream().close();
-        } catch (IOException e) {
-            // Ignore
-        }
+
+        // Close EventStream when stop event has finished.
+        event.future().whenCompleteAsync((unusedVoid, throwable) -> eventStream().close(), GlobalExecutors.INSTANCE.getExecutorService());
         return event;
     }
 
@@ -177,7 +174,6 @@ public abstract class L4LoadBalancer {
     @NonNull
     public void mapCluster(String hostname, Cluster cluster) {
         cluster.eventStream(eventStream); // Set EventStream
-        cluster.healthCheckConfiguration(coreConfiguration.healthCheckConfiguration()); // Set HealthCheckConfiguration
         clusterMap.put(hostname, cluster);
     }
 

@@ -31,9 +31,9 @@
 
     <name>ExpressGateway/Configuration</name>
 
-    <loadBalancerProperties>
+    <properties>
         <javaModuleName>com.shieldblaze.expressgateway.configuration</javaModuleName>
-    </loadBalancerProperties>
+    </properties>
 
     <dependencies>
         <dependency>

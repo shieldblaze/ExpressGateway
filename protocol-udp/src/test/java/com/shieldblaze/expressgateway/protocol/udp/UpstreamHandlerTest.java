@@ -55,7 +55,6 @@ final class UpstreamHandlerTest {
                 .withCoreConfiguration(CoreConfiguration.DEFAULT)
                 .withBindAddress(new InetSocketAddress("127.0.0.1", 9110))
                 .withL4FrontListener(new UDPListener())
-                .withEventStream(new EventStream())
                 .build();
 
         l4LoadBalancer.defaultCluster(cluster);

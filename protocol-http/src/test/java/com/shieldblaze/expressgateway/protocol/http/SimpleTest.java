@@ -93,7 +93,6 @@ class SimpleTest {
                 .withBindAddress(new InetSocketAddress("localhost", 20000))
                 .withHTTPInitializer(new DefaultHTTPServerInitializer())
                 .withL4FrontListener(new TCPListener())
-                .withEventStream(new EventStream())
                 .build();
 
         httpLoadBalancer.mapCluster("localhost:20000", cluster);
@@ -149,7 +148,6 @@ class SimpleTest {
                 .withBindAddress(new InetSocketAddress("localhost", 20001))
                 .withHTTPInitializer(new DefaultHTTPServerInitializer())
                 .withL4FrontListener(new TCPListener())
-                .withEventStream(new EventStream())
                 .build();
 
         httpLoadBalancer.mapCluster("localhost:20001", cluster);
@@ -205,7 +203,6 @@ class SimpleTest {
                 .withBindAddress(new InetSocketAddress("localhost", 20002))
                 .withHTTPInitializer(new DefaultHTTPServerInitializer())
                 .withL4FrontListener(new TCPListener())
-                .withEventStream(new EventStream())
                 .build();
 
         httpLoadBalancer.mapCluster("localhost:20002", cluster);
@@ -248,7 +245,6 @@ class SimpleTest {
                 .withBindAddress(new InetSocketAddress("localhost", 20003))
                 .withHTTPInitializer(new DefaultHTTPServerInitializer())
                 .withL4FrontListener(new TCPListener())
-                .withEventStream(new EventStream())
                 .build();
 
         httpLoadBalancer.mapCluster("localhost:20003", cluster);

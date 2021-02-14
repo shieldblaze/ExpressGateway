@@ -32,7 +32,6 @@ import java.util.Objects;
  */
 public final class HTTPLoadBalancerBuilder {
     private String name;
-    private EventStream eventStream;
     private InetSocketAddress bindAddress;
     private CoreConfiguration coreConfiguration;
     private HTTPConfiguration httpConfiguration;
@@ -51,11 +50,6 @@ public final class HTTPLoadBalancerBuilder {
 
     public HTTPLoadBalancerBuilder withName(String name) {
         this.name = name;
-        return this;
-    }
-
-    public HTTPLoadBalancerBuilder withEventStream(EventStream eventStream) {
-        this.eventStream = eventStream;
         return this;
     }
 
@@ -104,7 +98,6 @@ public final class HTTPLoadBalancerBuilder {
     }
 
     public HTTPLoadBalancer build() {
-        Objects.requireNonNull(eventStream, "Event Stream");
         Objects.requireNonNull(bindAddress, "BindAddress");
         Objects.requireNonNull(l4FrontListener, "L4FrontListener");
         Objects.requireNonNull(httpServerInitializer, "HTTPServerInitializer");
@@ -113,7 +106,6 @@ public final class HTTPLoadBalancerBuilder {
 
         return new HTTPLoadBalancer(
                 name,
-                eventStream,
                 bindAddress,
                 l4FrontListener,
                 coreConfiguration,

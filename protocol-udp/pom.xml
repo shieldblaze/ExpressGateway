@@ -32,9 +32,9 @@
 
     <name>ExpressGateway/Protocol-UDP</name>
 
-    <loadBalancerProperties>
+    <properties>
         <javaModuleName>com.shieldblaze.expressgateway.protocol.udp</javaModuleName>
-    </loadBalancerProperties>
+    </properties>
 
     <dependencies>
         <dependency>

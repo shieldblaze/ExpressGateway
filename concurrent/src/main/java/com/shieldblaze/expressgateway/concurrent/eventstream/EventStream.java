@@ -20,9 +20,7 @@ package com.shieldblaze.expressgateway.concurrent.eventstream;
 import com.shieldblaze.expressgateway.concurrent.event.Event;
 
 import java.io.Closeable;
-import java.io.IOException;
 import java.util.List;
-import java.util.Objects;
 import java.util.concurrent.CopyOnWriteArrayList;
 
 /**
@@ -43,7 +41,6 @@ public class EventStream implements Closeable {
      * @param eventListener Class implementing {@link EventListener} who will subscribe
      */
     public void subscribe(EventListener eventListener) {
-        Objects.requireNonNull(eventListener, "EventListener");
         subscribers.add(eventListener);
     }
 
@@ -54,7 +51,6 @@ public class EventStream implements Closeable {
      * @return Returns {@code true} if unsubscribe was successful else {@code false}
      */
     public boolean unsubscribe(EventListener eventListener) {
-        Objects.requireNonNull(eventListener, "EventListener");
         return subscribers.remove(eventListener);
     }
 
@@ -75,16 +71,23 @@ public class EventStream implements Closeable {
         subscribers.forEach(eventListener -> eventListener.accept(event));
     }
 
-    public EventSubscriber eventSubscriber() {
-        return eventSubscriber;
-    }
-
-    public EventPublisher eventPublisher() {
-        return eventPublisher;
+    /**
+     * Copy all subscribers from other {@link EventStream} to specified {@link EventStream}
+     * @param eventStream
+     */
+    public void addSubscribersFrom(EventStream eventStream) {
+        subscribers.addAll(eventStream.subscribers);
     }
 
     @Override
-    public void close() throws IOException {
+    public void close() {
         unsubscribeAll();
+    }
+
+    @Override
+    public String toString() {
+        return "EventStream{" +
+                "subscribers=" + subscribers +
+                '}';
     }
 }

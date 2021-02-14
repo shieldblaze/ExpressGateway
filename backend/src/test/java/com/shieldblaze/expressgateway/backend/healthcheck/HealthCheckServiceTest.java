@@ -78,20 +78,21 @@ class HealthCheckServiceTest {
                 .withWorkers(2)
                 .build();
 
-        EventStream eventStream = new EventStream();
-        Cluster cluster = new ClusterPool(eventStream, new RoundRobin(NOOPSessionPersistence.INSTANCE));
-        healthCheckService = new HealthCheckService(healthCheckConfiguration, eventStream.eventPublisher());
+        Cluster cluster = new ClusterPool(new RoundRobin(NOOPSessionPersistence.INSTANCE));
+        healthCheckService = new HealthCheckService();
+        healthCheckService.healthCheckConfiguration(healthCheckConfiguration);
 
         TCPHealthCheck healthCheck = new TCPHealthCheck(tcpServer.socketAddress, Duration.ofMillis(10));
 
-        //todo fix health check
-        node = new Node(cluster, new InetSocketAddress("127.0.0.1", 1), 100);
+        node = new Node(cluster, new InetSocketAddress("127.0.0.1", 1));
+        node.healthCheck(healthCheck);
+        node.maxConnections(100);
         healthCheckService.add(node);
     }
 
     @AfterAll
     static void shutdown() {
-        healthCheckService.shutdown();
+        healthCheckService.close();
         eventLoopGroup.shutdownGracefully();
     }
 

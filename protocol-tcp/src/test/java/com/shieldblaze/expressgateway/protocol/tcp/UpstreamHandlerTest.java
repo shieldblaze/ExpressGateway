@@ -50,16 +50,12 @@ final class UpstreamHandlerTest {
     static void setup() {
         new TCPServer().start();
 
-        CoreConfiguration coreConfiguration = CoreConfiguration.DEFAULT;
-
         Cluster cluster = new ClusterPool(new RoundRobin(NOOPSessionPersistence.INSTANCE));
-        cluster.eventStream(new EventStream());
 
         l4LoadBalancer = L4LoadBalancerBuilder.newBuilder()
-                .withCoreConfiguration(coreConfiguration)
+                .withCoreConfiguration(CoreConfiguration.DEFAULT)
                 .withBindAddress(new InetSocketAddress("127.0.0.1", 9110))
                 .withL4FrontListener(new TCPListener())
-                .withEventStream(new EventStream())
                 .build();
 
         l4LoadBalancer.defaultCluster(cluster);

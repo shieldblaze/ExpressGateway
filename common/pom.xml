@@ -31,9 +31,9 @@ along with ShieldBlaze ExpressGateway.  If not, see <https://www.gnu.org/license
 
     <name>ExpressGateway/Common</name>
 
-    <loadBalancerProperties>
+    <properties>
         <javaModuleName>com.shieldblaze.expressgateway.common</javaModuleName>
-    </loadBalancerProperties>
+    </properties>
 
     <dependencies>
         <dependency>

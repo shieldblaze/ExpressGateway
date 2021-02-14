@@ -46,8 +46,6 @@ public final class GlobalExecutors {
     private static final ScheduledExecutorService SCHEDULED_EXECUTOR_SERVICE = Executors.newScheduledThreadPool(Runtime.getRuntime().availableProcessors());
 
     private GlobalExecutors() {
-        // Prevent outside initialization
-
         // Register Shutdown Hook to shutdown all Executors
         Runtime.getRuntime().addShutdownHook(new Thread(this::shutdownAll));
     }

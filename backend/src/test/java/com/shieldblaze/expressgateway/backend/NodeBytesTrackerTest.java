@@ -38,7 +38,7 @@ class NodeBytesTrackerTest {
 
     @Test
     void receive10MBytes() {
-        Cluster cluster = new ClusterPool(new EventStream(), new RoundRobin(NOOPSessionPersistence.INSTANCE));
+        Cluster cluster = new ClusterPool(new RoundRobin(NOOPSessionPersistence.INSTANCE));
         Node node = new Node(cluster, new InetSocketAddress("127.0.0.1", 9110));
 
         EmbeddedChannel embeddedChannel = new EmbeddedChannel(new NodeBytesTracker(node));
@@ -59,7 +59,7 @@ class NodeBytesTrackerTest {
 
     @Test
     void send10MBytes() {
-        Cluster cluster = new ClusterPool(new EventStream(), new RoundRobin(NOOPSessionPersistence.INSTANCE));
+        Cluster cluster = new ClusterPool(new RoundRobin(NOOPSessionPersistence.INSTANCE));
         Node node = new Node(cluster, new InetSocketAddress("127.0.0.1", 9110));
 
         EmbeddedChannel embeddedChannel = new EmbeddedChannel(new NodeBytesTracker(node));

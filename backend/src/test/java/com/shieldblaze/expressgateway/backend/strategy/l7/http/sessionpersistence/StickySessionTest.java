@@ -37,7 +37,6 @@ class StickySessionTest {
     @Test
     void testStickySession() throws LoadBalanceException {
         Cluster cluster = new ClusterPool(new HTTPRoundRobin(new StickySession()));
-        cluster.eventStream(new EventStream());
         fastBuild(cluster, "172.16.20.1");
         fastBuild(cluster, "172.16.20.2");
         fastBuild(cluster, "172.16.20.3");

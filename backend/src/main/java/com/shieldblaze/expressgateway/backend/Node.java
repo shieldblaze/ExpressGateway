@@ -95,23 +95,13 @@ public final class Node implements Comparable<Node>, Closeable {
     /**
      * Max Connections handled by this {@link Node}
      */
-    private int maxConnections;
-
-    public Node(Cluster cluster, InetSocketAddress socketAddress) {
-        this(cluster, socketAddress, -1);
-    }
+    private int maxConnections = 10_000;
 
     /**
-     * Create a new {@linkplain Node} Instance
-     *
-     * @param socketAddress Address of this {@linkplain Node}
+     * Create a new Instance
      */
-    public Node(@NonNull Cluster cluster,
-                @NonNull InetSocketAddress socketAddress,
-                int maxConnections) {
-
-        maxConnections(maxConnections);
-
+    @NonNull
+    public Node(Cluster cluster, InetSocketAddress socketAddress) {
         this.socketAddress = socketAddress;
         this.cluster = cluster;
         this.cluster.addNode(this);
@@ -119,14 +109,23 @@ public final class Node implements Comparable<Node>, Closeable {
         state(State.ONLINE);
     }
 
+    /**
+     * Returns the associated {@link Cluster}
+     */
     public Cluster cluster() {
         return cluster;
     }
 
+    /**
+     * IP and Port of this {@link Node}
+     */
     public InetSocketAddress socketAddress() {
         return socketAddress;
     }
 
+    /**
+     * Get number of active connections
+     */
     public int activeConnection() {
 
         // If active connection is initialized (value not set to 0) then return it.
@@ -137,22 +136,41 @@ public final class Node implements Comparable<Node>, Closeable {
         return activeConnections.size();
     }
 
+    /**
+     * Increment bytes sent to this Node
+     *
+     * @param bytes Number of bytes to increment
+     */
     public void incBytesSent(int bytes) {
         bytesSent.addAndGet(bytes);
     }
 
+    /**
+     * Increment bytes received from this Node
+     *
+     * @param bytes Number of bytes to increment
+     */
     public void incBytesReceived(int bytes) {
         bytesReceived.addAndGet(bytes);
     }
 
+    /**
+     * Returns Number of Bytes Sent
+     */
     public long bytesSent() {
         return bytesSent.get();
     }
 
+    /**
+     * Returns Number of Bytes Received
+     */
     public long bytesReceived() {
         return bytesReceived.get();
     }
 
+    /**
+     * Returns the current {@link State} of this Node
+     */
     public State state() {
         return state;
     }
@@ -163,25 +181,41 @@ public final class Node implements Comparable<Node>, Closeable {
         return this;
     }
 
+    /**
+     * Returns Number of active connections in secondary implementation
+     */
     public int activeConnection0() {
         return activeConnection0.get();
     }
 
+    /**
+     * Increments the number of active connections in secondary implementation
+     */
     public void incActiveConnection0() {
         activeConnection0.incrementAndGet();
     }
 
+    /**
+     * Decrements the number of active connections in secondary implementation
+     */
     public Node decActiveConnection0() {
         activeConnection0.incrementAndGet();
         return this;
     }
 
+    /**
+     * Reset the number of active connections in secondary implementation
+     */
     public Node resetActiveConnection0() {
         activeConnection0.set(-1);
         return this;
     }
 
+    /**
+     * Returns {@link Health} of this Node
+     */
     public Health health() {
+        // If healthCheck is null then return UNKNOWN.
         if (healthCheck == null) {
             return Health.UNKNOWN;
         }
@@ -197,6 +231,9 @@ public final class Node implements Comparable<Node>, Closeable {
         return healthCheck;
     }
 
+    /**
+     * Returns the Number of Maximum Connection
+     */
     public int maxConnections() {
         return maxConnections;
     }

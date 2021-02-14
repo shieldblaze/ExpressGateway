@@ -84,6 +84,7 @@ class CompressionTest {
 
         forClient = TLSConfiguration.DEFAULT_CLIENT;
         forClient.acceptAllCerts(true);
+        forClient.defaultMapping(new CertificateKeyPair());
 
         SSLContext sslContext = SSLContext.getInstance("TLSv1.3");
         sslContext.init(null, InsecureTrustManagerFactory.INSTANCE.getTrustManagers(), new SecureRandom());
@@ -126,7 +127,6 @@ class CompressionTest {
                 .withBindAddress(new InetSocketAddress("localhost", 20000))
                 .withHTTPInitializer(new DefaultHTTPServerInitializer())
                 .withL4FrontListener(new TCPListener())
-                .withEventStream(new EventStream())
                 .build();
 
         httpLoadBalancer.mapCluster("localhost:20000", cluster);
@@ -232,7 +232,6 @@ class CompressionTest {
                 .withBindAddress(new InetSocketAddress("localhost", 20001))
                 .withHTTPInitializer(new DefaultHTTPServerInitializer())
                 .withL4FrontListener(new TCPListener())
-                .withEventStream(new EventStream())
                 .build();
 
         httpLoadBalancer.mapCluster("localhost:20001", cluster);
@@ -319,7 +318,6 @@ class CompressionTest {
                 .withBindAddress(new InetSocketAddress("localhost", 20002))
                 .withHTTPInitializer(new DefaultHTTPServerInitializer())
                 .withL4FrontListener(new TCPListener())
-                .withEventStream(new EventStream())
                 .build();
 
         httpLoadBalancer.mapCluster("localhost:20002", cluster);

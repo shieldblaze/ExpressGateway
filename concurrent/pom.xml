@@ -32,8 +32,8 @@
 
     <name>ExpressGateway/Concurrent</name>
 
-    <loadBalancerProperties>
+    <properties>
         <javaModuleName>com.shieldblaze.expressgateway.concurrent</javaModuleName>
-    </loadBalancerProperties>
+    </properties>
 
 </project>

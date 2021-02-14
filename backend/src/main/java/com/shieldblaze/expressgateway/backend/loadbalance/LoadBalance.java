@@ -19,6 +19,7 @@ package com.shieldblaze.expressgateway.backend.loadbalance;
 
 import com.shieldblaze.expressgateway.backend.cluster.Cluster;
 import com.shieldblaze.expressgateway.backend.exceptions.LoadBalanceException;
+import com.shieldblaze.expressgateway.common.annotation.InternalCall;
 import com.shieldblaze.expressgateway.common.annotation.NonNull;
 import com.shieldblaze.expressgateway.concurrent.eventstream.EventListener;
 
@@ -46,6 +47,7 @@ public abstract class LoadBalance<REQUEST, RESPONSE, KEY, VALUE> implements Even
     /**
      * @param cluster {@link Cluster} to be load balanced
      */
+    @InternalCall(1)
     @NonNull
     public void cluster(Cluster cluster) {
         this.cluster = cluster;

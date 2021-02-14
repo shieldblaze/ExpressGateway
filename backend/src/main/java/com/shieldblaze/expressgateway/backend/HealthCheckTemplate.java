@@ -34,7 +34,7 @@ public final class HealthCheckTemplate {
     private int port;
 
     /**
-     * HTTP(s) Path
+     * HTTP Path
      */
     private String path;
 

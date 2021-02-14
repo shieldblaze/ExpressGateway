@@ -32,8 +32,8 @@
 
     <name>ExpressGateway/Shaded-Dependencies</name>
 
-    <loadBalancerProperties>
+    <properties>
         <javaModuleName>com.shieldblaze.expressgateway.shadeddependencies</javaModuleName>
-    </loadBalancerProperties>
+    </properties>
 
 </project>
