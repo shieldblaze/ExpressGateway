@@ -38,9 +38,10 @@ final class HTTPConnection extends Connection {
 
     @Override
     protected void processBacklog(ChannelFuture channelFuture) {
+        ALPNHandler alpnHandler = channelFuture.channel().pipeline().get(ALPNHandler.class);
         if (channelFuture.isSuccess()) {
-            if (channelFuture.channel().pipeline().get(ALPNHandler.class) != null) {
-                channelFuture.channel().pipeline().get(ALPNHandler.class).protocol().whenCompleteAsync((protocol, throwable) -> {
+            if (alpnHandler != null) {
+                alpnHandler.protocol().whenCompleteAsync((protocol, throwable) -> {
 
                     // If throwable is null then task is completed successfully without any error.
                     if (throwable == null) {
