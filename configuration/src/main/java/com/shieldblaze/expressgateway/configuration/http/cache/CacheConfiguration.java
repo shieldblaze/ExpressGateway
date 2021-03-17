@@ -15,29 +15,30 @@
  * You should have received a copy of the GNU General Public License
  * along with ShieldBlaze ExpressGateway.  If not, see <https://www.gnu.org/licenses/>.
  */
-package com.shieldblaze.expressgateway.protocol.http.cache;
+package com.shieldblaze.expressgateway.configuration.http.cache;
 
-/**
- * Cache Behaviour in case of Query String for a given URL.
- */
-public enum QueryStringCacheBehaviour {
+import java.util.Set;
 
-    /**
-     * In this mode, Query String is ignored on first request and request is sent to
-     * backend. When backend responds with response, the response is cached (depends on multiple factors),
-     * and returned back to client. All subsequent requests are served from Cache until the Cached
-     * Response expires or is elevated.
-     */
-    IGNORE_QUERY_STRING,
+public class CacheConfiguration {
 
     /**
-     * In this mode, all requests containing Query String are sent directly to the Backend.
-     * No caching happens at all.
+     * Which types of Query String requests we should cache
      */
-    FORWARD_TO_BACKEND,
+    private QueryStringCacheBehaviour queryStringCacheBehaviour;
 
     /**
-     * In this mode, all requests containing Query String or not, will be cached.
+     * Minimum size of response to cache
      */
-    CACHE_ALL
+    private long minimumResponseSize;
+
+    /**
+     * Maximum size of response to cache
+     */
+    private long maximumResponseSize;
+
+    /**
+     * MIME Types to cache
+     */
+    private Set<String> mimeTypesToCache;
+
 }

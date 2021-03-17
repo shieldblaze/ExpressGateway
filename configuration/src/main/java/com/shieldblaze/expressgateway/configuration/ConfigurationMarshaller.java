@@ -20,14 +20,11 @@ package com.shieldblaze.expressgateway.configuration;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.dataformat.yaml.YAMLFactory;
 import com.fasterxml.jackson.dataformat.yaml.YAMLGenerator;
-import com.shieldblaze.expressgateway.common.GSON;
 import com.shieldblaze.expressgateway.common.utils.Profile;
 
 import java.io.File;
 import java.io.FileWriter;
 import java.io.IOException;
-import java.io.StringReader;
-import java.lang.reflect.Type;
 import java.nio.file.Files;
 
 /**

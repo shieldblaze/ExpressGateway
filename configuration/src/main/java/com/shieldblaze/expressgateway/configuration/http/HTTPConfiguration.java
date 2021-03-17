@@ -20,7 +20,6 @@ package com.shieldblaze.expressgateway.configuration.http;
 import com.fasterxml.jackson.annotation.JsonProperty;
 import com.shieldblaze.expressgateway.common.utils.Number;
 import com.shieldblaze.expressgateway.configuration.ConfigurationMarshaller;
-import io.netty.util.internal.ObjectUtil;
 
 import java.io.IOException;
 
