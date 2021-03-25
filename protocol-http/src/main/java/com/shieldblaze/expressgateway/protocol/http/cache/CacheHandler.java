@@ -17,6 +17,7 @@
  */
 package com.shieldblaze.expressgateway.protocol.http.cache;
 
+import com.shieldblaze.expressgateway.configuration.http.cache.QueryStringCacheBehaviour;
 import io.netty.channel.ChannelDuplexHandler;
 import io.netty.channel.ChannelHandler;
 import io.netty.channel.ChannelHandlerContext;
@@ -25,7 +26,7 @@ import io.netty.handler.codec.http.HttpRequest;
 @ChannelHandler.Sharable
 public class CacheHandler extends ChannelDuplexHandler {
 
-    private final CacheManager cacheManager = new CacheManager();
+    private final CacheManager cacheManager = new CacheManager(QueryStringCacheBehaviour.STANDARD);
 
     @Override
     public void channelRead(ChannelHandlerContext ctx, Object msg) throws Exception {

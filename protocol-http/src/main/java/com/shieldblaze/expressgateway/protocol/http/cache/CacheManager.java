@@ -42,8 +42,9 @@ public final class CacheManager implements Runnable, Closeable {
     /**
      * Create a new {@link CacheManager} Instance
      */
-    public CacheManager() {
+    public CacheManager(QueryStringCacheBehaviour queryStringCacheBehaviour) {
         scheduledFuture = GlobalExecutors.INSTANCE.submitTaskAndRunEvery(this, 0, 1, TimeUnit.SECONDS);
+        queryStringCacheBehaviour(queryStringCacheBehaviour);
     }
 
     public void put(String key, Cached cached) throws MalformedURLException {

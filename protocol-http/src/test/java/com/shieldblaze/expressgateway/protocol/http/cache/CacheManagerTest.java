@@ -17,17 +17,44 @@
  */
 package com.shieldblaze.expressgateway.protocol.http.cache;
 
+import com.shieldblaze.expressgateway.configuration.http.cache.QueryStringCacheBehaviour;
+import io.netty.buffer.Unpooled;
 import org.junit.jupiter.api.Test;
 
 import java.net.MalformedURLException;
+import java.nio.charset.StandardCharsets;
+import java.util.Objects;
 
 import static org.junit.jupiter.api.Assertions.*;
 
 class CacheManagerTest {
 
     @Test
+    void testStandardCache() throws MalformedURLException {
+        CacheManager cacheManager = new CacheManager(QueryStringCacheBehaviour.STANDARD);
+
+        cacheManager.put("https://shieldblaze.com/index.html", new Cached(Unpooled.wrappedBuffer("Meow".getBytes()), 60));
+        assertNotNull(cacheManager.lookup("https://shieldblaze.com/index.html"));
+
+        assertEquals("Meow", cacheManager.lookup("https://shieldblaze.com/index.html").byteBuf().toString(StandardCharsets.UTF_8));
+        assertNull(cacheManager.lookup("https://shieldblaze.com/index.html?id=1"));
+    }
+
+    @Test
+    void testIgnoreQueryString() throws MalformedURLException {
+        CacheManager cacheManager = new CacheManager(QueryStringCacheBehaviour.IGNORE_QUERY_STRING);
+
+        cacheManager.put("https://shieldblaze.com/index.html", new Cached(Unpooled.wrappedBuffer("Meow".getBytes()), 60));
+        assertNotNull(cacheManager.lookup("https://shieldblaze.com/index.html?query=hey"));
+
+        assertEquals("Meow", cacheManager.lookup("https://shieldblaze.com/index.html?cat=meow").byteBuf().toString(StandardCharsets.UTF_8));
+    }
+
+    @Test
     void testURLBuilderStandard() throws MalformedURLException {
         assertEquals("https://shieldblaze.com/meow", CacheManager.buildURL("https://shieldblaze.com/meow", true));
         assertEquals("https://shieldblaze.com/meow?id=1", CacheManager.buildURL("https://shieldblaze.com/meow?id=1", true));
+
+        assertEquals("https://shieldblaze.com/meow", CacheManager.buildURL("https://shieldblaze.com/meow?id=1", false));
     }
 }
