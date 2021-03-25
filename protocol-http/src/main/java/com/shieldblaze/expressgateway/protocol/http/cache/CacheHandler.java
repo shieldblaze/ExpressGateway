@@ -15,24 +15,24 @@
  * You should have received a copy of the GNU General Public License
  * along with ShieldBlaze ExpressGateway.  If not, see <https://www.gnu.org/licenses/>.
  */
-package com.shieldblaze.expressgateway.protocol.tcp;
+package com.shieldblaze.expressgateway.protocol.http.cache;
 
-import com.shieldblaze.expressgateway.backend.Connection;
-import com.shieldblaze.expressgateway.backend.Node;
-import io.netty.channel.ChannelFuture;
+import io.netty.channel.ChannelDuplexHandler;
+import io.netty.channel.ChannelHandler;
+import io.netty.channel.ChannelHandlerContext;
+import io.netty.handler.codec.http.HttpRequest;
 
-final class TCPConnection extends Connection {
+@ChannelHandler.Sharable
+public class CacheHandler extends ChannelDuplexHandler {
 
-    TCPConnection(Node node) {
-        super(node);
-    }
+    private final CacheManager cacheManager = new CacheManager();
 
     @Override
-    protected void processBacklog(ChannelFuture channelFuture) {
-        if (channelFuture.isSuccess()) {
-            writeBacklog();
-        } else {
-            clearBacklog();
+    public void channelRead(ChannelHandlerContext ctx, Object msg) throws Exception {
+        if (msg instanceof HttpRequest) {
+            HttpRequest httpRequest = (HttpRequest) msg;
+
+
         }
     }
 }

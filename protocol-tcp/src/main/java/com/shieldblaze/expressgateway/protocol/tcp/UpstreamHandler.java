@@ -17,6 +17,7 @@
  */
 package com.shieldblaze.expressgateway.protocol.tcp;
 
+import com.shieldblaze.expressgateway.backend.Connection;
 import com.shieldblaze.expressgateway.backend.Node;
 import com.shieldblaze.expressgateway.backend.strategy.l4.L4Request;
 import com.shieldblaze.expressgateway.core.loadbalancer.L4LoadBalancer;
@@ -83,7 +84,7 @@ final class UpstreamHandler extends ChannelInboundHandlerAdapter {
             ctx.channel().close();
         }
 
-        if (tcpConnection != null && tcpConnection.isActive()) {
+        if (tcpConnection != null && tcpConnection.state() == Connection.State.CONNECTED_AND_ACTIVE) {
             tcpConnection.close();
         }
     }

@@ -25,16 +25,18 @@ import com.shieldblaze.expressgateway.protocol.http.loadbalancer.HTTPLoadBalance
 import io.netty.channel.ChannelDuplexHandler;
 import io.netty.channel.ChannelFutureListener;
 import io.netty.channel.ChannelHandlerContext;
+import io.netty.channel.ChannelPromise;
+import io.netty.handler.codec.http.CustomLastHttpContent;
 import io.netty.handler.codec.http.HttpFrame;
 import io.netty.handler.codec.http.HttpHeaderNames;
 import io.netty.handler.codec.http.HttpHeaders;
 import io.netty.handler.codec.http.HttpRequest;
+import it.unimi.dsi.fastutil.longs.Long2ObjectMap;
+import it.unimi.dsi.fastutil.longs.Long2ObjectOpenHashMap;
 import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
 
 import java.net.InetSocketAddress;
-import java.util.Map;
-import java.util.concurrent.ConcurrentHashMap;
 
 public final class UpstreamHandler extends ChannelDuplexHandler {
 
@@ -44,7 +46,7 @@ public final class UpstreamHandler extends ChannelDuplexHandler {
      * Long: Request ID
      * Connection: {@link Connection} Instance
      */
-    private final Map<Long, Connection> connectionMap = new ConcurrentHashMap<>();
+    private final Long2ObjectMap<Connection> connectionMap = new Long2ObjectOpenHashMap<>();
 
     private final HTTPLoadBalancer httpLoadBalancer;
     private final Bootstrapper bootstrapper;
@@ -113,10 +115,30 @@ public final class UpstreamHandler extends ChannelDuplexHandler {
         }
     }
 
+    @Override
+    public void write(ChannelHandlerContext ctx, Object msg, ChannelPromise promise) throws Exception {
+        if (msg instanceof CustomLastHttpContent) {
+            connectionMap.remove(((CustomLastHttpContent) msg).id()); // Remove mapping of finished Request.
+        }
+        super.write(ctx, msg, promise);
+    }
+
     private void onHeadersRead(HttpHeaders headers, InetSocketAddress upstreamAddress) {
+        /*
+         * Remove 'Upgrade' header because we don't support
+         * any other protocol than HTTP/1.X and HTTP/2
+         */
         headers.remove(HttpHeaderNames.UPGRADE);
+
+        /*
+         * Set supported 'ACCEPT_ENCODING' headers
+         */
         headers.set(HttpHeaderNames.ACCEPT_ENCODING, "br, gzip, deflate");
-        headers.add("x-forwarded-for", upstreamAddress.getAddress().getHostAddress());
+
+        /*
+         * Add 'X-Forwarded-For' Header
+         */
+        headers.add(Headers.X_FORWARDED_FOR, upstreamAddress.getAddress().getHostAddress());
     }
 
     @Override

@@ -58,7 +58,7 @@ public enum QueryStringCacheBehaviour {
      *     </ul>
      * </p>
      */
-    FORWARD_TO_BACKEND,
+    NO_QUERY_STRING,
 
     /**
      * <p>
@@ -75,5 +75,5 @@ public enum QueryStringCacheBehaviour {
      *     </ul>
      * </p>
      */
-    CACHE_ALL
+    STANDARD
 }

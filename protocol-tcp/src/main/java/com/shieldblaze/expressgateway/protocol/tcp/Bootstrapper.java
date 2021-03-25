@@ -44,8 +44,7 @@ final class Bootstrapper {
     }
 
     TCPConnection newInit(Node node, Channel channel) {
-        int connectTimeout = l4LoadBalancer.coreConfiguration().transportConfiguration().backendConnectTimeout();
-        TCPConnection tcpConnection = new TCPConnection(node, connectTimeout);
+        TCPConnection tcpConnection = new TCPConnection(node);
 
         Bootstrap bootstrap = BootstrapFactory.getTCP(l4LoadBalancer.coreConfiguration(), eventLoopGroup, byteBufAllocator)
                 .handler(new ChannelInitializer<SocketChannel>() {

@@ -186,6 +186,13 @@ along with ShieldBlaze ExpressGateway.  If not, see <https://www.gnu.org/license
             <version>2.12.1</version>
         </dependency>
 
+        <!-- https://mvnrepository.com/artifact/com.github.ben-manes.caffeine/caffeine -->
+        <dependency>
+            <groupId>com.github.ben-manes.caffeine</groupId>
+            <artifactId>caffeine</artifactId>
+            <version>3.0.1</version>
+        </dependency>
+
         <!-- https://mvnrepository.com/artifact/it.unimi.dsi/fastutil -->
         <dependency>
             <groupId>it.unimi.dsi</groupId>

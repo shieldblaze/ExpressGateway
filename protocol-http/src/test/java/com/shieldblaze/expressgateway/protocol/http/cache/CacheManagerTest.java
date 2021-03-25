@@ -15,24 +15,19 @@
  * You should have received a copy of the GNU General Public License
  * along with ShieldBlaze ExpressGateway.  If not, see <https://www.gnu.org/licenses/>.
  */
-package com.shieldblaze.expressgateway.protocol.tcp;
+package com.shieldblaze.expressgateway.protocol.http.cache;
 
-import com.shieldblaze.expressgateway.backend.Connection;
-import com.shieldblaze.expressgateway.backend.Node;
-import io.netty.channel.ChannelFuture;
+import org.junit.jupiter.api.Test;
 
-final class TCPConnection extends Connection {
+import java.net.MalformedURLException;
 
-    TCPConnection(Node node) {
-        super(node);
-    }
+import static org.junit.jupiter.api.Assertions.*;
 
-    @Override
-    protected void processBacklog(ChannelFuture channelFuture) {
-        if (channelFuture.isSuccess()) {
-            writeBacklog();
-        } else {
-            clearBacklog();
-        }
+class CacheManagerTest {
+
+    @Test
+    void testURLBuilderStandard() throws MalformedURLException {
+        assertEquals("https://shieldblaze.com/meow", CacheManager.buildURL("https://shieldblaze.com/meow", true));
+        assertEquals("https://shieldblaze.com/meow?id=1", CacheManager.buildURL("https://shieldblaze.com/meow?id=1", true));
     }
 }

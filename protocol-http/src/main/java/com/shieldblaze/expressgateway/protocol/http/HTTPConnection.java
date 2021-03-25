@@ -22,9 +22,16 @@ import com.shieldblaze.expressgateway.backend.Node;
 import com.shieldblaze.expressgateway.protocol.http.alpn.ALPNHandler;
 import io.netty.channel.Channel;
 import io.netty.channel.ChannelFuture;
+import io.netty.handler.codec.http.HttpRequest;
 import io.netty.handler.ssl.ApplicationProtocolNames;
+import it.unimi.dsi.fastutil.longs.Long2ObjectMap;
+import it.unimi.dsi.fastutil.longs.Long2ObjectOpenHashMap;
+
+import java.util.concurrent.atomic.AtomicInteger;
 
 final class HTTPConnection extends Connection {
+
+    private final AtomicInteger pendingRequests = new AtomicInteger();
 
     /**
      * Set to {@code true} if this connection is established on top of HTTP/2 (h2)
@@ -32,22 +39,31 @@ final class HTTPConnection extends Connection {
     private boolean isHTTP2;
     private DownstreamHandler downstreamHandler;
 
-    HTTPConnection(Node node, long timeout) {
-        super(node, timeout);
+    HTTPConnection(Node node) {
+        super(node);
     }
 
     @Override
     protected void processBacklog(ChannelFuture channelFuture) {
         ALPNHandler alpnHandler = channelFuture.channel().pipeline().get(ALPNHandler.class);
+
+        // If operation was successful then we'll check if ALPNHandler is available or not.
+        // If ALPNHandler is available (not null) then we'll see if ALPN has negotiated HTTP/2 or not.
+        // We'll then write the backlog or clear the backlog.
         if (channelFuture.isSuccess()) {
             if (alpnHandler != null) {
                 alpnHandler.protocol().whenCompleteAsync((protocol, throwable) -> {
 
-                    // If throwable is null then task is completed successfully without any error.
+                    // If throwable is 'null' then task is completed successfully without any error.
                     if (throwable == null) {
 
                         if (protocol.equalsIgnoreCase(ApplicationProtocolNames.HTTP_2)) {
                             isHTTP2 = true;
+
+                            /*
+                             * Since HTTP/2 supports Multiplexing,
+                             * we'll release this connection back to pool.
+                             */
                             release();
                         }
 
@@ -76,11 +92,12 @@ final class HTTPConnection extends Connection {
         downstreamHandler.channel(channel);
     }
 
+    AtomicInteger pendingRequests() {
+        return pendingRequests;
+    }
+
     @Override
     public String toString() {
-        return "HTTPConnection{" +
-                "isHTTP2=" + isHTTP2 +
-                ", Connection=" + super.toString() +
-                '}';
+        return "HTTPConnection{" + "isHTTP2=" + isHTTP2 + ", Connection=" + super.toString() + '}';
     }
 }

@@ -101,7 +101,7 @@ final class DownstreamHandler extends ChannelInboundHandlerAdapter {
             return;
         }
 
-        // HTTPContent writes will be executed here.
+        // HTTP Content(s) will be written here.
         channel.writeAndFlush(msg, channel.voidPromise());
     }
 

@@ -52,8 +52,7 @@ final class Bootstrapper {
     }
 
     HTTPConnection newInit(Node node, Channel channel) {
-        int timeout = httpLoadBalancer.coreConfiguration().transportConfiguration().backendConnectTimeout();
-        HTTPConnection httpConnection = new HTTPConnection(node, timeout);
+        HTTPConnection httpConnection = new HTTPConnection(node);
 
         Bootstrap bootstrap = BootstrapFactory.getTCP(httpLoadBalancer.coreConfiguration(), eventLoopGroup, byteBufAllocator);
         bootstrap.handler(new ChannelInitializer<SocketChannel>() {
@@ -69,13 +68,14 @@ final class Bootstrapper {
                 DownstreamHandler downstreamHandler = new DownstreamHandler(httpConnection, channel);
                 httpConnection.downstreamHandler(downstreamHandler);
 
+                // If TLS for Client is null then we will only use HTTP/1.X
                 if (httpLoadBalancer.tlsForClient() == null) {
                     pipeline.addLast(HTTPCodecs.HTTPClientCodec(httpLoadBalancer.httpConfiguration()));
                     pipeline.addLast(new HTTPContentDecompressor());
                     pipeline.addLast(new HTTPOutboundAdapter());
                     pipeline.addLast(downstreamHandler);
                 } else {
-                    String hostname = "node.hostname()";
+                    String hostname = node.socketAddress().getHostName();
                     int port = node.socketAddress().getPort();
                     SslHandler sslHandler = httpLoadBalancer.tlsForClient()
                             .defaultMapping()
@@ -87,6 +87,7 @@ final class Bootstrapper {
                             .withHTTP2ChannelHandler(HTTPCodecs.H2ClientCodec(httpLoadBalancer.httpConfiguration()))
                             .withHTTP2ChannelHandler(new HTTP2OutboundAdapter())
                             .withHTTP2ChannelHandler(downstreamHandler)
+
                             // HTTP/1.1 Handlers
                             .withHTTP1ChannelHandler(HTTPCodecs.HTTPClientCodec(httpLoadBalancer.httpConfiguration()))
                             .withHTTP1ChannelHandler(new HTTPContentDecompressor())

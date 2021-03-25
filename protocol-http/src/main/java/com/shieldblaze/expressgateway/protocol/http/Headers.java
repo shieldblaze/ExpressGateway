@@ -15,12 +15,9 @@
  * You should have received a copy of the GNU General Public License
  * along with ShieldBlaze ExpressGateway.  If not, see <https://www.gnu.org/licenses/>.
  */
+package com.shieldblaze.expressgateway.protocol.http;
 
-package com.shieldblaze.expressgateway.common.cache;
-
-public class Cache {
-
-    public static void main(String[] args) {
-
-    }
+final class Headers {
+    static final String X_FORWARDED_FOR = "x-forwarded-for";
+    static final String X_FORWARDED_PROTO = "x-forwarded-proto";
 }

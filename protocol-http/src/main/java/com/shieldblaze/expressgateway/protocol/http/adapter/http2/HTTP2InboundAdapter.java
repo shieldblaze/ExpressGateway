@@ -112,12 +112,12 @@ public final class HTTP2InboundAdapter extends ChannelDuplexHandler {
             onHttp2HeadersRead(ctx, (Http2HeadersFrame) msg);
         } else if (msg instanceof Http2DataFrame) {
             onHttp2DataRead(ctx, (Http2DataFrame) msg);
-        } else {
-            // Unsupported message type
         }
+
+        // Unsupported message type
     }
 
-    private void onHttp2HeadersRead(ChannelHandlerContext ctx, Http2HeadersFrame headersFrame) throws Http2Exception {
+    private void onHttp2HeadersRead(ChannelHandlerContext ctx, Http2HeadersFrame headersFrame) {
         int streamId = headersFrame.stream().id();
 
         if (streamIdMap.containsKey(streamId)) {
