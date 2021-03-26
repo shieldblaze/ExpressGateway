@@ -72,7 +72,16 @@ public final class CacheManager implements Runnable, Closeable {
     }
 
     public void invalidate(String key) {
-        CAFFEINE_CACHE.invalidate(key);
+        CAFFEINE_CACHE.asMap().forEach((path, cached) -> {
+            try {
+                if (pathValidator(path, key)) {
+                    close(cached);
+                    CAFFEINE_CACHE.invalidate(path);
+                }
+            } catch (Exception ex) {
+                // Ignore
+            }
+        });
     }
 
     @Override
@@ -135,6 +144,62 @@ public final class CacheManager implements Runnable, Closeable {
         }
 
         return urlBuilder.toString();
+    }
+
+    public static boolean pathValidator(String OriginalPath, String ValidationPath) throws MalformedURLException {
+
+        URL originalPath = new URL(OriginalPath);
+        URL validationPath = new URL(ValidationPath);
+
+        if (!validationPath.getHost().equalsIgnoreCase(originalPath.getHost())) {
+            return false;
+        }
+
+        if (validationPath.getPort() != -1) {
+            if (validationPath.getPort() != originalPath.getPort()) {
+                return false;
+            }
+        }
+
+        if (!validationPath.getProtocol().equalsIgnoreCase(originalPath.getProtocol())) {
+            return false;
+        }
+
+        boolean wasSuccess = false;
+        int iterationCount = 0;
+
+        try {
+
+            // Iterate over Original Path
+            for (String path : originalPath.getPath().split("/")) {
+
+                /*
+                 * 1. If Original Path has '$ALL' Flag and Validation Path has more Paths then we'll break
+                 * iteration and mark success because '$ALL' include all next path blocks.
+                 *
+                 * 2. If Original Path has '$DMC' Flag then we'll continue to next iteration.
+                 *
+                 * 3. We'll match Original Path with Validation Path.
+                 */
+                if ("$ALL".equals(validationPath.getPath().split("/")[iterationCount]) &&
+                        (validationPath.getPath().split("/")[iterationCount] != null)) {
+                    wasSuccess = true;
+                    break;
+                } else if ("$DMC".equals(validationPath.getPath().split("/")[iterationCount]) ||
+                        path.equals(validationPath.getPath().split("/")[iterationCount])) {
+                    wasSuccess = true;
+                    iterationCount++;
+                } else {
+                    wasSuccess = false;
+                    break;
+                }
+            }
+
+            return wasSuccess;
+        } catch (ArrayIndexOutOfBoundsException ex) {
+            // If we catch 'ArrayIndexOutOfBoundsException' then we'll return FALSE
+            return false;
+        }
     }
 
     /**
