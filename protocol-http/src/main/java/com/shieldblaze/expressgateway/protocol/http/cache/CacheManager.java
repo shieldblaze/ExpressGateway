@@ -197,7 +197,6 @@ public final class CacheManager implements Runnable, Closeable {
 
             return wasSuccess;
         } catch (ArrayIndexOutOfBoundsException ex) {
-            // If we catch 'ArrayIndexOutOfBoundsException' then we'll return FALSE
             return false;
         }
     }
