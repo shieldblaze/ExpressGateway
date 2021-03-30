@@ -56,10 +56,27 @@ class CacheManagerTest {
             for (int i = 0; i < 100; i++) {
                 cacheManager.put("https://shieldblaze.com/" + i, new Cached(Unpooled.wrappedBuffer("Meow".getBytes()), 60));
                 assertEquals("Meow", cacheManager.lookup("https://shieldblaze.com/" + i).byteBuf().toString(StandardCharsets.UTF_8));
+            }
 
-                cacheManager.invalidate("https://shieldblaze.com/$ALL");
+            cacheManager.invalidate("https://shieldblaze.com/$ALL");
+
+            for (int i = 0; i < 100; i++) {
                 assertNull(cacheManager.lookup("https://shieldblaze.com/" + i));
             }
+        }
+    }
+
+    @Test
+    void testAutoExpire() throws MalformedURLException {
+        try (CacheManager cacheManager = new CacheManager(QueryStringCacheBehaviour.STANDARD)) {
+            cacheManager.put("https://shieldblaze.com/main", new Cached(Unpooled.wrappedBuffer("Meow".getBytes()), 10));
+            assertEquals("Meow", cacheManager.lookup("https://shieldblaze.com/main").byteBuf().toString(StandardCharsets.UTF_8));
+
+            Thread.sleep(1000 * 15);
+
+            assertNull(cacheManager.lookup("https://shieldblaze.com/main"));
+        } catch (InterruptedException e) {
+            // Ignore
         }
     }
 

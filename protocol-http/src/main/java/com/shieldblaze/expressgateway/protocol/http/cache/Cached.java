@@ -23,6 +23,10 @@ import java.io.RandomAccessFile;
 import java.time.Instant;
 import java.util.concurrent.atomic.AtomicLong;
 
+/**
+ * {@linkplain Cached} holds cached data in {@link ByteBuf}
+ * or {@link RandomAccessFile}.
+ */
 public class Cached {
 
     /**
