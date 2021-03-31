@@ -17,10 +17,10 @@
  */
 package com.shieldblaze.expressgateway.protocol.http;
 
-import com.shieldblaze.expressgateway.backend.Connection;
 import com.shieldblaze.expressgateway.backend.Node;
 import com.shieldblaze.expressgateway.backend.cluster.Cluster;
 import com.shieldblaze.expressgateway.backend.strategy.l7.http.HTTPBalanceRequest;
+import com.shieldblaze.expressgateway.protocol.http.cache.CacheManager;
 import com.shieldblaze.expressgateway.protocol.http.loadbalancer.HTTPLoadBalancer;
 import io.netty.channel.ChannelDuplexHandler;
 import io.netty.channel.ChannelFutureListener;
@@ -30,6 +30,8 @@ import io.netty.handler.codec.http.CustomLastHttpContent;
 import io.netty.handler.codec.http.HttpFrame;
 import io.netty.handler.codec.http.HttpHeaderNames;
 import io.netty.handler.codec.http.HttpHeaders;
+import io.netty.handler.codec.http.HttpMethod;
+import io.netty.handler.codec.http.HttpObject;
 import io.netty.handler.codec.http.HttpRequest;
 import it.unimi.dsi.fastutil.longs.Long2ObjectMap;
 import it.unimi.dsi.fastutil.longs.Long2ObjectOpenHashMap;
@@ -44,12 +46,13 @@ public final class UpstreamHandler extends ChannelDuplexHandler {
 
     /**
      * Long: Request ID
-     * Connection: {@link Connection} Instance
+     * HTTPConnection: {@link HTTPConnection} Instance
      */
-    private final Long2ObjectMap<Connection> connectionMap = new Long2ObjectOpenHashMap<>();
+    private final Long2ObjectMap<HTTPConnection> connectionMap = new Long2ObjectOpenHashMap<>();
 
     private final HTTPLoadBalancer httpLoadBalancer;
     private final Bootstrapper bootstrapper;
+    private CacheManager cacheManager;
 
     public UpstreamHandler(HTTPLoadBalancer httpLoadBalancer) {
         this.httpLoadBalancer = httpLoadBalancer;
@@ -86,7 +89,8 @@ public final class UpstreamHandler extends ChannelDuplexHandler {
              * If we don't get any available connection, we'll create a new
              * HTTPConnection.
              */
-            HTTPConnection connection = (HTTPConnection) node.tryLease();
+            HTTPConnection connection = validateConnection((HTTPConnection) node.tryLease());
+
             if (connection == null) {
                 connection = bootstrapper.newInit(node, ctx.channel());
                 node.addConnection(connection);
@@ -102,7 +106,12 @@ public final class UpstreamHandler extends ChannelDuplexHandler {
             }
 
             // Map Id with Connection
-            connectionMap.put(((HttpFrame) msg).id(), connection);
+            long id = ((HttpFrame) msg).id();
+            connectionMap.put(id, connection);
+
+            // Add request Id in outstanding list and increment total number of requests.
+            connection.addOutstandingRequest(id);
+            connection.incrementTotalRequests();
 
             // Modify Request Headers
             onHeadersRead(request.headers(), socketAddress);
@@ -118,7 +127,9 @@ public final class UpstreamHandler extends ChannelDuplexHandler {
     @Override
     public void write(ChannelHandlerContext ctx, Object msg, ChannelPromise promise) throws Exception {
         if (msg instanceof CustomLastHttpContent) {
-            connectionMap.remove(((CustomLastHttpContent) msg).id()); // Remove mapping of finished Request.
+            long id = ((CustomLastHttpContent) msg).id();
+            HTTPConnection connection = connectionMap.remove(id); // Remove mapping of finished Request.
+            connection.finishedOutstandingRequest(id);
         }
         super.write(ctx, msg, promise);
     }
@@ -139,6 +150,23 @@ public final class UpstreamHandler extends ChannelDuplexHandler {
          * Add 'X-Forwarded-For' Header
          */
         headers.add(Headers.X_FORWARDED_FOR, upstreamAddress.getAddress().getHostAddress());
+    }
+
+    private void cacheHandler(HttpObject httpObject) {
+        if (httpObject instanceof HttpRequest) {
+
+        }
+    }
+
+    private HTTPConnection validateConnection(HTTPConnection httpConnection) {
+        if (httpConnection == null) {
+            return null;
+        } else if (httpConnection.isHTTP2() && httpConnection.hasReachedMaximumCapacity()) {
+            httpConnection.close();
+            return null;
+        } else {
+            return httpConnection;
+        }
     }
 
     @Override

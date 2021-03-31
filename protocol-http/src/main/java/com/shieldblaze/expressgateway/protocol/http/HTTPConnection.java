@@ -22,16 +22,16 @@ import com.shieldblaze.expressgateway.backend.Node;
 import com.shieldblaze.expressgateway.protocol.http.alpn.ALPNHandler;
 import io.netty.channel.Channel;
 import io.netty.channel.ChannelFuture;
-import io.netty.handler.codec.http.HttpRequest;
 import io.netty.handler.ssl.ApplicationProtocolNames;
-import it.unimi.dsi.fastutil.longs.Long2ObjectMap;
-import it.unimi.dsi.fastutil.longs.Long2ObjectOpenHashMap;
+import it.unimi.dsi.fastutil.longs.LongArrayList;
+import it.unimi.dsi.fastutil.longs.LongList;
 
 import java.util.concurrent.atomic.AtomicInteger;
 
 final class HTTPConnection extends Connection {
 
-    private final AtomicInteger pendingRequests = new AtomicInteger();
+    private final AtomicInteger totalRequests = new AtomicInteger();
+    private final LongList outstandingRequests = new LongArrayList();
 
     /**
      * Set to {@code true} if this connection is established on top of HTTP/2 (h2)
@@ -92,8 +92,24 @@ final class HTTPConnection extends Connection {
         downstreamHandler.channel(channel);
     }
 
-    AtomicInteger pendingRequests() {
-        return pendingRequests;
+    void addOutstandingRequest(long id) {
+        outstandingRequests.add(id);
+    }
+
+    boolean isRequestOutstanding(long id) {
+        return outstandingRequests.contains(id);
+    }
+
+    void finishedOutstandingRequest(long id) {
+        outstandingRequests.rem(id);
+    }
+
+    void incrementTotalRequests() {
+        totalRequests.incrementAndGet();
+    }
+
+    boolean hasReachedMaximumCapacity() {
+        return totalRequests.get() > Integer.MAX_VALUE - 100_000;
     }
 
     @Override
