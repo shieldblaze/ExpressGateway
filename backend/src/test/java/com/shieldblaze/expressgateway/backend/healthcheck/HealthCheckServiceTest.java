@@ -198,7 +198,7 @@ class HealthCheckServiceTest {
     private static final class TCPConnection extends Connection {
 
         private TCPConnection(Node node) {
-            super(node, 1000);
+            super(node);
         }
 
         @Override
