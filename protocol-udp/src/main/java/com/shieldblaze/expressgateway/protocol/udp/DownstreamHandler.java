@@ -31,13 +31,13 @@ final class DownstreamHandler extends ChannelInboundHandlerAdapter {
 
     private static final Logger logger = LogManager.getLogger(DownstreamHandler.class);
 
-    private final Channel channel;
+    private final Channel upstream;
     private final Node node;
     private final UDPConnection udpConnection;
     private final InetSocketAddress socketAddress;
 
-    DownstreamHandler(Channel channel, Node node, InetSocketAddress socketAddress, UDPConnection udpConnection) {
-        this.channel = channel;
+    DownstreamHandler(Channel upstream, Node node, InetSocketAddress socketAddress, UDPConnection udpConnection) {
+        this.upstream = upstream;
         this.node = node;
         this.udpConnection = udpConnection;
         this.socketAddress = socketAddress;
@@ -45,9 +45,8 @@ final class DownstreamHandler extends ChannelInboundHandlerAdapter {
 
     @Override
     public void channelRead(ChannelHandlerContext ctx, Object msg) {
-        DatagramPacket packet = (DatagramPacket) msg;
-        node.incBytesReceived(packet.content().readableBytes());
-        channel.writeAndFlush(new DatagramPacket(packet.content(), socketAddress));
+        DatagramPacket packet = (DatagramPacket) msg;            // Cast Data to DatagramPacket
+        upstream.writeAndFlush(new DatagramPacket(packet.content(), socketAddress), upstream.voidPromise()); // // Write Data back to Client
     }
 
     @Override
@@ -58,7 +57,7 @@ final class DownstreamHandler extends ChannelInboundHandlerAdapter {
                     udpConnection.socketAddress().getAddress().getHostAddress() + ":" + udpConnection.socketAddress().getPort());
         }
 
-        node.removeConnection(udpConnection);
+        udpConnection.close();
         ctx.channel().close(); // Close Downstream Channel
     }
 

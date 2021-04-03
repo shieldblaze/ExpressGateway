@@ -18,6 +18,7 @@
 package com.shieldblaze.expressgateway.protocol.tcp;
 
 import com.shieldblaze.expressgateway.backend.Node;
+import com.shieldblaze.expressgateway.backend.NodeBytesTracker;
 import com.shieldblaze.expressgateway.core.BootstrapFactory;
 import com.shieldblaze.expressgateway.core.ConnectionTimeoutHandler;
 import com.shieldblaze.expressgateway.core.loadbalancer.L4LoadBalancer;
@@ -26,6 +27,7 @@ import io.netty.buffer.ByteBufAllocator;
 import io.netty.channel.Channel;
 import io.netty.channel.ChannelFuture;
 import io.netty.channel.ChannelInitializer;
+import io.netty.channel.ChannelPipeline;
 import io.netty.channel.EventLoopGroup;
 import io.netty.channel.socket.SocketChannel;
 import io.netty.handler.ssl.SslHandler;
@@ -50,8 +52,12 @@ final class Bootstrapper {
                 .handler(new ChannelInitializer<SocketChannel>() {
                     @Override
                     protected void initChannel(SocketChannel ch) {
+                        ChannelPipeline pipeline = ch.pipeline();
+
+                        pipeline.addFirst(new NodeBytesTracker(node));
+
                         Duration timeout = Duration.ofMillis(l4LoadBalancer.coreConfiguration().transportConfiguration().connectionIdleTimeout());
-                        ch.pipeline().addFirst(new ConnectionTimeoutHandler(timeout));
+                        pipeline.addFirst(new ConnectionTimeoutHandler(timeout));
 
                         if (l4LoadBalancer.tlsForClient() != null) {
                             String hostname = node.socketAddress().getHostName();
@@ -61,10 +67,10 @@ final class Bootstrapper {
                                     .sslContext()
                                     .newHandler(ch.alloc(), hostname, port);
 
-                            ch.pipeline().addFirst(sslHandler);
+                            pipeline.addFirst(sslHandler);
                         }
 
-                        ch.pipeline().addLast(new DownstreamHandler(channel, node));
+                        pipeline.addLast(new DownstreamHandler(channel, node));
                     }
                 });
 

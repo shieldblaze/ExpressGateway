@@ -18,6 +18,7 @@
 package com.shieldblaze.expressgateway.protocol.udp;
 
 import com.shieldblaze.expressgateway.backend.Node;
+import com.shieldblaze.expressgateway.backend.NodeBytesTracker;
 import com.shieldblaze.expressgateway.core.BootstrapFactory;
 import com.shieldblaze.expressgateway.core.ConnectionTimeoutHandler;
 import com.shieldblaze.expressgateway.core.loadbalancer.L4LoadBalancer;
@@ -26,6 +27,7 @@ import io.netty.buffer.ByteBufAllocator;
 import io.netty.channel.Channel;
 import io.netty.channel.ChannelFuture;
 import io.netty.channel.ChannelInitializer;
+import io.netty.channel.ChannelPipeline;
 import io.netty.channel.EventLoopGroup;
 
 import java.net.InetSocketAddress;
@@ -50,9 +52,12 @@ final class Bootstrapper {
         bootstrap.handler(new ChannelInitializer<>() {
             @Override
             protected void initChannel(Channel ch) {
+                ChannelPipeline pipeline = ch.pipeline();
+
                 Duration timeout = Duration.ofMillis(l4LoadBalancer.coreConfiguration().transportConfiguration().connectionIdleTimeout());
-                ch.pipeline().addFirst(new ConnectionTimeoutHandler(timeout));
-                ch.pipeline().addLast(new DownstreamHandler(channel, node, socketAddress, udpConnection));
+                pipeline.addLast(new NodeBytesTracker(node));
+                pipeline.addLast(new ConnectionTimeoutHandler(timeout));
+                pipeline.addLast(new DownstreamHandler(channel, node, socketAddress, udpConnection));
             }
         });
 
