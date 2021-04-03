@@ -24,6 +24,7 @@ import io.netty.buffer.ByteBufAllocator;
 import io.netty.channel.ChannelOption;
 import io.netty.channel.EventLoopGroup;
 import io.netty.channel.epoll.EpollDatagramChannel;
+import io.netty.channel.epoll.EpollDatagramChannelConfig;
 import io.netty.channel.epoll.EpollMode;
 import io.netty.channel.epoll.EpollSocketChannel;
 import io.netty.channel.socket.nio.NioDatagramChannel;
@@ -89,9 +90,12 @@ public final class BootstrapFactory {
                         return datagramChannel;
                     } else if (coreConfiguration.transportConfiguration().transportType() == TransportType.EPOLL) {
                         EpollDatagramChannel datagramChannel = new EpollDatagramChannel();
-                        datagramChannel.config()
-                                .setEpollMode(EpollMode.EDGE_TRIGGERED)
-                                .setOption(UnixChannelOption.SO_REUSEPORT, true);
+
+                        EpollDatagramChannelConfig config = datagramChannel.config();
+
+                        config.setEpollMode(EpollMode.EDGE_TRIGGERED);
+                        config.setOption(UnixChannelOption.SO_REUSEPORT, true);
+                        config.setUdpGro(true);
 
                         return datagramChannel;
                     } else {
