@@ -72,7 +72,6 @@ final class UpstreamHandler extends ChannelInboundHandlerAdapter {
                 }
             }
 
-            udpConnection.node().incBytesSent(datagramPacket.content().readableBytes());
             udpConnection.writeAndFlush(datagramPacket.content());
         });
     }

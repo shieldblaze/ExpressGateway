@@ -15,24 +15,10 @@
  * You should have received a copy of the GNU General Public License
  * along with ShieldBlaze ExpressGateway.  If not, see <https://www.gnu.org/licenses/>.
  */
-package com.shieldblaze.expressgateway.protocol.tcp;
 
-import com.shieldblaze.expressgateway.backend.Connection;
-import com.shieldblaze.expressgateway.backend.Node;
-import io.netty.channel.ChannelFuture;
+package com.shieldblaze.expressgateway.protocol.http;
 
-final class TCPConnection extends Connection {
-
-    TCPConnection(Node node) {
-        super(node);
-    }
-
-    @Override
-    protected void processBacklog(ChannelFuture channelFuture) {
-        if (channelFuture.isSuccess()) {
-            writeBacklog();
-        } else {
-            clearBacklog();
-        }
-    }
+final class Headers {
+    static final String X_FORWARDED_FOR = "x-forwarded-for";
+    static final String X_FORWARDED_PROTO = "x-forwarded-proto";
 }

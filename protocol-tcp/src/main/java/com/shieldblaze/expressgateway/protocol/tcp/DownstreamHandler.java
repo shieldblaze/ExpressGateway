@@ -43,9 +43,7 @@ final class DownstreamHandler extends ChannelInboundHandlerAdapter {
 
     @Override
     public void channelRead(ChannelHandlerContext ctx, Object msg) {
-        ByteBuf byteBuf = (ByteBuf) msg;                         // Cast Data to ByteBuf
-        node.incBytesReceived(byteBuf.readableBytes());          // Increment number of Bytes Received from Backend
-        upstream.writeAndFlush(byteBuf, upstream.voidPromise()); // Write Data back to Client
+        upstream.writeAndFlush(msg, upstream.voidPromise()); // Write Data back to Client
     }
 
     @Override

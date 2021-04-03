@@ -18,6 +18,7 @@
 package com.shieldblaze.expressgateway.protocol.tcp;
 
 import com.shieldblaze.expressgateway.backend.Node;
+import com.shieldblaze.expressgateway.backend.NodeBytesTracker;
 import com.shieldblaze.expressgateway.core.BootstrapFactory;
 import com.shieldblaze.expressgateway.core.ConnectionTimeoutHandler;
 import com.shieldblaze.expressgateway.core.loadbalancer.L4LoadBalancer;
@@ -26,6 +27,7 @@ import io.netty.buffer.ByteBufAllocator;
 import io.netty.channel.Channel;
 import io.netty.channel.ChannelFuture;
 import io.netty.channel.ChannelInitializer;
+import io.netty.channel.ChannelPipeline;
 import io.netty.channel.EventLoopGroup;
 import io.netty.channel.socket.SocketChannel;
 import io.netty.handler.ssl.SslHandler;
@@ -44,15 +46,18 @@ final class Bootstrapper {
     }
 
     TCPConnection newInit(Node node, Channel channel) {
-        int connectTimeout = l4LoadBalancer.coreConfiguration().transportConfiguration().backendConnectTimeout();
-        TCPConnection tcpConnection = new TCPConnection(node, connectTimeout);
+        TCPConnection tcpConnection = new TCPConnection(node);
 
         Bootstrap bootstrap = BootstrapFactory.getTCP(l4LoadBalancer.coreConfiguration(), eventLoopGroup, byteBufAllocator)
                 .handler(new ChannelInitializer<SocketChannel>() {
                     @Override
                     protected void initChannel(SocketChannel ch) {
+                        ChannelPipeline pipeline = ch.pipeline();
+
+                        pipeline.addFirst(new NodeBytesTracker(node));
+
                         Duration timeout = Duration.ofMillis(l4LoadBalancer.coreConfiguration().transportConfiguration().connectionIdleTimeout());
-                        ch.pipeline().addFirst(new ConnectionTimeoutHandler(timeout));
+                        pipeline.addLast(new ConnectionTimeoutHandler(timeout));
 
                         if (l4LoadBalancer.tlsForClient() != null) {
                             String hostname = node.socketAddress().getHostName();
@@ -62,10 +67,10 @@ final class Bootstrapper {
                                     .sslContext()
                                     .newHandler(ch.alloc(), hostname, port);
 
-                            ch.pipeline().addFirst(sslHandler);
+                            pipeline.addLast(sslHandler);
                         }
 
-                        ch.pipeline().addLast(new DownstreamHandler(channel, node));
+                        pipeline.addLast(new DownstreamHandler(channel, node));
                     }
                 });
 

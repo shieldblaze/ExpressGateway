@@ -23,8 +23,8 @@ import io.netty.channel.ChannelFuture;
 
 final class UDPConnection extends Connection {
 
-    UDPConnection(Node node, long timeout) {
-        super(node, timeout);
+    UDPConnection(Node node) {
+        super(node);
     }
 
     @Override

@@ -22,6 +22,8 @@ import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.ScheduledFuture;
+import java.util.concurrent.SynchronousQueue;
+import java.util.concurrent.ThreadPoolExecutor;
 import java.util.concurrent.TimeUnit;
 import java.util.function.Supplier;
 
@@ -38,12 +40,16 @@ public final class GlobalExecutors {
     /**
      * Cached {@link ExecutorService}
      */
-    private static final ExecutorService EXECUTOR_SERVICE = Executors.newFixedThreadPool(Runtime.getRuntime().availableProcessors());
+    private static final ExecutorService EXECUTOR_SERVICE = new ThreadPoolExecutor(
+            Runtime.getRuntime().availableProcessors(), Runtime.getRuntime().availableProcessors() * 10,
+            120L, TimeUnit.SECONDS,
+            new SynchronousQueue<>()
+    );
 
     /**
      * Scheduled {@link ExecutorService}
      */
-    private static final ScheduledExecutorService SCHEDULED_EXECUTOR_SERVICE = Executors.newScheduledThreadPool(Runtime.getRuntime().availableProcessors());
+    private static final ScheduledExecutorService SCHEDULED_EXECUTOR_SERVICE = Executors.newScheduledThreadPool(Runtime.getRuntime().availableProcessors() * 4);
 
     private GlobalExecutors() {
         // Register Shutdown Hook to shutdown all Executors

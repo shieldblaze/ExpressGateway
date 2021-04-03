@@ -25,6 +25,7 @@ import io.netty.channel.ChannelInboundHandlerAdapter;
 import io.netty.handler.codec.http.HttpHeaderNames;
 import io.netty.handler.codec.http.HttpHeaderValues;
 import io.netty.handler.codec.http.HttpMessage;
+import io.netty.handler.codec.http.HttpObject;
 import io.netty.handler.codec.http.HttpRequest;
 import io.netty.handler.codec.http.HttpUtil;
 import io.netty.handler.codec.http.HttpVersion;
@@ -44,8 +45,19 @@ final class HTTPServerValidator extends ChannelInboundHandlerAdapter {
 
     @Override
     public void channelRead(ChannelHandlerContext ctx, Object msg) throws Exception {
+        if (((HttpObject) msg).decoderResult().isFailure()) {
+            ctx.writeAndFlush(HTTPResponses.BAD_REQUEST_400).addListener(ChannelFutureListener.CLOSE);
+            return;
+        }
+
         if (msg instanceof HttpRequest) {
             HttpRequest request = (HttpRequest) msg;
+
+            // If Host Header is not present then return `BAD_REQUEST` error.
+            if (!request.headers().contains(HttpHeaderNames.HOST)) {
+                ctx.writeAndFlush(HTTPResponses.BAD_REQUEST_400).addListener(ChannelFutureListener.CLOSE);
+                return;
+            }
 
             if (getContentLength(request, -1L) > maxContentLength) {
                 ctx.writeAndFlush(HTTPResponses.TOO_LARGE_413.retainedDuplicate()).addListener(ChannelFutureListener.CLOSE);
