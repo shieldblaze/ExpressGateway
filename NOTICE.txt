@@ -116,3 +116,10 @@ This product depends on 'JaCoCo'. License for the same can be obtained at:
     * license/LICENSE.jacoco.txt (Apache License 2.0)
 
 ---------------------------------
+
+This product depends on 'FastUtil'. License for the same can be obtained at:
+
+  * LICENSE:
+    * license/LICENSE.fastutil.txt (Apache License 2.0)
+
+---------------------------------

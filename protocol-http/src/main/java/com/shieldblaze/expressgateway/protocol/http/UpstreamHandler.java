@@ -17,7 +17,6 @@
  */
 package com.shieldblaze.expressgateway.protocol.http;
 
-import com.shieldblaze.expressgateway.backend.Connection;
 import com.shieldblaze.expressgateway.backend.Node;
 import com.shieldblaze.expressgateway.backend.cluster.Cluster;
 import com.shieldblaze.expressgateway.backend.strategy.l7.http.HTTPBalanceRequest;
@@ -25,16 +24,18 @@ import com.shieldblaze.expressgateway.protocol.http.loadbalancer.HTTPLoadBalance
 import io.netty.channel.ChannelDuplexHandler;
 import io.netty.channel.ChannelFutureListener;
 import io.netty.channel.ChannelHandlerContext;
+import io.netty.channel.ChannelPromise;
+import io.netty.handler.codec.http.CustomLastHttpContent;
 import io.netty.handler.codec.http.HttpFrame;
 import io.netty.handler.codec.http.HttpHeaderNames;
 import io.netty.handler.codec.http.HttpHeaders;
 import io.netty.handler.codec.http.HttpRequest;
+import it.unimi.dsi.fastutil.longs.Long2ObjectMap;
+import it.unimi.dsi.fastutil.longs.Long2ObjectOpenHashMap;
 import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
 
 import java.net.InetSocketAddress;
-import java.util.Map;
-import java.util.concurrent.ConcurrentHashMap;
 
 public final class UpstreamHandler extends ChannelDuplexHandler {
 
@@ -42,28 +43,24 @@ public final class UpstreamHandler extends ChannelDuplexHandler {
 
     /**
      * Long: Request ID
-     * Connection: {@link Connection} Instance
+     * HTTPConnection: {@link HTTPConnection} Instance
      */
-    private final Map<Long, Connection> connectionMap = new ConcurrentHashMap<>();
+    private final Long2ObjectMap<HTTPConnection> connectionMap = new Long2ObjectOpenHashMap<>();
 
     private final HTTPLoadBalancer httpLoadBalancer;
     private final Bootstrapper bootstrapper;
+    private final boolean isTLSConnection;
 
-    public UpstreamHandler(HTTPLoadBalancer httpLoadBalancer) {
+    public UpstreamHandler(HTTPLoadBalancer httpLoadBalancer, boolean isTLSConnection) {
         this.httpLoadBalancer = httpLoadBalancer;
-        bootstrapper = new Bootstrapper(httpLoadBalancer, httpLoadBalancer.eventLoopFactory().childGroup(), httpLoadBalancer.byteBufAllocator());
+        this.bootstrapper = new Bootstrapper(httpLoadBalancer, httpLoadBalancer.eventLoopFactory().childGroup(), httpLoadBalancer.byteBufAllocator());
+        this.isTLSConnection = isTLSConnection;
     }
 
     @Override
     public void channelRead(ChannelHandlerContext ctx, Object msg) throws Exception {
         if (msg instanceof HttpRequest) {
             HttpRequest request = (HttpRequest) msg;
-
-            // If Host Header is not present then return `BAD_REQUEST` error.
-            if (!request.headers().contains(HttpHeaderNames.HOST)) {
-                ctx.writeAndFlush(HTTPResponses.BAD_REQUEST_400).addListener(ChannelFutureListener.CLOSE);
-                return;
-            }
 
             InetSocketAddress socketAddress = (InetSocketAddress) ctx.channel().remoteAddress();
             Cluster cluster = httpLoadBalancer.cluster(request.headers().getAsString(HttpHeaderNames.HOST));
@@ -84,7 +81,8 @@ public final class UpstreamHandler extends ChannelDuplexHandler {
              * If we don't get any available connection, we'll create a new
              * HTTPConnection.
              */
-            HTTPConnection connection = (HTTPConnection) node.tryLease();
+            HTTPConnection connection = validateConnection((HTTPConnection) node.tryLease());
+
             if (connection == null) {
                 connection = bootstrapper.newInit(node, ctx.channel());
                 node.addConnection(connection);
@@ -100,7 +98,12 @@ public final class UpstreamHandler extends ChannelDuplexHandler {
             }
 
             // Map Id with Connection
-            connectionMap.put(((HttpFrame) msg).id(), connection);
+            long id = ((HttpFrame) msg).id();
+            connectionMap.put(id, connection);
+
+            // Add request Id in outstanding list and increment total number of requests.
+            connection.addOutstandingRequest(id);
+            connection.incrementTotalRequests();
 
             // Modify Request Headers
             onHeadersRead(request.headers(), socketAddress);
@@ -113,10 +116,42 @@ public final class UpstreamHandler extends ChannelDuplexHandler {
         }
     }
 
+    @Override
+    public void write(ChannelHandlerContext ctx, Object msg, ChannelPromise promise) throws Exception {
+        if (msg instanceof CustomLastHttpContent) {
+            long id = ((CustomLastHttpContent) msg).id();
+            HTTPConnection connection = connectionMap.remove(id); // Remove mapping of finished Request.
+            connection.finishedOutstandingRequest(id);
+        }
+        super.write(ctx, msg, promise);
+    }
+
     private void onHeadersRead(HttpHeaders headers, InetSocketAddress upstreamAddress) {
+        /*
+         * Remove 'Upgrade' header because we don't support
+         * any other protocol than HTTP/1.X and HTTP/2
+         */
         headers.remove(HttpHeaderNames.UPGRADE);
+
+        // Set supported 'ACCEPT_ENCODING' headers
         headers.set(HttpHeaderNames.ACCEPT_ENCODING, "br, gzip, deflate");
-        headers.add("x-forwarded-for", upstreamAddress.getAddress().getHostAddress());
+
+        // Add 'X-Forwarded-For' Header
+        headers.add(Headers.X_FORWARDED_FOR, upstreamAddress.getAddress().getHostAddress());
+
+        // Add 'X-Forwarded-Proto' Header
+        headers.add(Headers.X_FORWARDED_PROTO, isTLSConnection ? "HTTPS" : "HTTP");
+    }
+
+    private HTTPConnection validateConnection(HTTPConnection httpConnection) {
+        if (httpConnection == null) {
+            return null;
+        } else if (httpConnection.isHTTP2() && httpConnection.hasReachedMaximumCapacity()) {
+            httpConnection.close();
+            return null;
+        } else {
+            return httpConnection;
+        }
     }
 
     @Override

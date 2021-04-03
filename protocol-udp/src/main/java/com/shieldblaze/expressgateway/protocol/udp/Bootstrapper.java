@@ -44,8 +44,7 @@ final class Bootstrapper {
     }
 
     UDPConnection newInit(Channel channel, Node node, InetSocketAddress socketAddress) {
-        int timeout = l4LoadBalancer.coreConfiguration().transportConfiguration().backendConnectTimeout();
-        UDPConnection udpConnection = new UDPConnection(node, timeout);
+        UDPConnection udpConnection = new UDPConnection(node);
 
         Bootstrap bootstrap = BootstrapFactory.getUDP(l4LoadBalancer.coreConfiguration(), eventLoopGroup, byteBufAllocator);
         bootstrap.handler(new ChannelInitializer<>() {

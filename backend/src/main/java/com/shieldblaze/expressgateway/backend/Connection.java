@@ -21,9 +21,9 @@ import com.shieldblaze.expressgateway.common.annotation.NonNull;
 import com.shieldblaze.expressgateway.common.utils.ReferenceCounted;
 import io.netty.channel.Channel;
 import io.netty.channel.ChannelFuture;
+import io.netty.channel.ConnectTimeoutException;
 
 import java.net.InetSocketAddress;
-import java.time.Instant;
 import java.util.concurrent.ConcurrentLinkedQueue;
 
 /**
@@ -35,20 +35,47 @@ import java.util.concurrent.ConcurrentLinkedQueue;
 public abstract class Connection {
 
     /**
+     * Connection States
+     */
+    public enum State {
+        /**
+         * Connection State is Unknown
+         */
+        UNKNOWN,
+
+        /**
+         * Connection has timed-out while connecting.
+         */
+        CONNECTION_TIMEOUT,
+
+        /**
+         * Connection has been closed with remote host.
+         */
+        CONNECTION_CLOSED,
+
+        /**
+         * Connection has been connected successfully and is active.
+         */
+        CONNECTED_AND_ACTIVE
+    }
+
+    /**
      * Backlog Queue contains objects pending to be written once connection establishes.
      */
     protected ConcurrentLinkedQueue<Object> backlogQueue = new ConcurrentLinkedQueue<>();
 
     private final Node node;
-    private final long timeout;
     private ChannelFuture channelFuture;
     private Channel channel;
     private InetSocketAddress socketAddress;
-    private volatile boolean isActive;
+    private volatile State state = State.UNKNOWN;
 
-    public Connection(Node node, long timeout) {
+    /**
+     * Create a new {@link Connection} Instance
+     * @param node {@link Node} associated with this Connection
+     */
+    public Connection(Node node) {
         this.node = node;
-        this.timeout = Instant.now().plusMillis(timeout).toEpochMilli();
     }
 
     /**
@@ -60,19 +87,23 @@ public abstract class Connection {
             this.channelFuture = channelFuture;
 
             // Add listener to be notified when Channel initializes
-            this.channelFuture.addListener(future -> {
+            channelFuture.addListener(future -> {
                 if (channelFuture.isSuccess()) {
                     socketAddress = (InetSocketAddress) channelFuture.channel().remoteAddress();
-                    isActive = true;
                     channel = channelFuture.channel();
+                    state = State.CONNECTED_AND_ACTIVE;
+                } else {
+                    if (future.cause() instanceof ConnectTimeoutException) {
+                        state = State.CONNECTION_TIMEOUT;
+                    }
                 }
-                processBacklog(channelFuture);
+                processBacklog(channelFuture); // Call Backlog Processor for Backlog Processing
             });
 
             // Add listener to be notified when Channel closes
-            this.channelFuture.channel().closeFuture().addListener(future -> {
-                isActive = false;
+            channelFuture.channel().closeFuture().addListener(future -> {
                 node.removeConnection(this);
+                state = State.CONNECTION_CLOSED;
             });
         } else {
             throw new IllegalArgumentException("Connection is already initialized");
@@ -114,7 +145,7 @@ public abstract class Connection {
     public void writeAndFlush(Object o) {
         if (backlogQueue != null) {
             backlogQueue.add(o);
-        } else if (isActive) {
+        } else if (state == State.CONNECTED_AND_ACTIVE) {
             channel.writeAndFlush(o, channel.voidPromise());
         } else {
             ReferenceCounted.silentRelease(o);
@@ -127,25 +158,6 @@ public abstract class Connection {
     public Connection release() {
         node.release0(this);
         return this;
-    }
-
-    /**
-     * Check if this {@linkplain Connection} is active and connected.
-     *
-     * @return Returns {@code true} if this {@linkplain Connection} is active and connected
-     * else set to {@code false}.
-     */
-    public boolean isActive() {
-        return isActive;
-    }
-
-    /**
-     * Check if this connection timed out
-     *
-     * @return {@code true} if this connection timed out else {@code false}
-     */
-    public boolean hasConnectionTimedOut() {
-        return System.currentTimeMillis() > timeout;
     }
 
     /**
@@ -163,6 +175,10 @@ public abstract class Connection {
         return socketAddress;
     }
 
+    public State state() {
+        return state;
+    }
+
     /**
      * Close this {@linkplain Connection}
      */
@@ -172,10 +188,6 @@ public abstract class Connection {
 
     @Override
     public String toString() {
-        return "Connection{" +
-                "node=" + node +
-                ", socketAddress=" + socketAddress +
-                ", isActive=" + isActive +
-                '}';
+        return "Connection{" + "node=" + node + ", socketAddress=" + socketAddress + ", state=" + state + '}';
     }
 }

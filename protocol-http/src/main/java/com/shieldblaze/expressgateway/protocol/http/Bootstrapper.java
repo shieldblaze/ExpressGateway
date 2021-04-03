@@ -52,8 +52,7 @@ final class Bootstrapper {
     }
 
     HTTPConnection newInit(Node node, Channel channel) {
-        int timeout = httpLoadBalancer.coreConfiguration().transportConfiguration().backendConnectTimeout();
-        HTTPConnection httpConnection = new HTTPConnection(node, timeout);
+        HTTPConnection httpConnection = new HTTPConnection(node);
 
         Bootstrap bootstrap = BootstrapFactory.getTCP(httpLoadBalancer.coreConfiguration(), eventLoopGroup, byteBufAllocator);
         bootstrap.handler(new ChannelInitializer<SocketChannel>() {
@@ -75,7 +74,7 @@ final class Bootstrapper {
                     pipeline.addLast(new HTTPOutboundAdapter());
                     pipeline.addLast(downstreamHandler);
                 } else {
-                    String hostname = "node.hostname()";
+                    String hostname = node.socketAddress().getHostName();
                     int port = node.socketAddress().getPort();
                     SslHandler sslHandler = httpLoadBalancer.tlsForClient()
                             .defaultMapping()
