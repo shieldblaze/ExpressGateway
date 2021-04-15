@@ -63,9 +63,9 @@ final class Bootstrapper {
                 pipeline.addFirst(new NodeBytesTracker(node));
 
                 Duration timeout = Duration.ofMillis(httpLoadBalancer.coreConfiguration().transportConfiguration().connectionIdleTimeout());
-                pipeline.addLast(new ConnectionTimeoutHandler(timeout));
+                pipeline.addLast(new ConnectionTimeoutHandler(timeout, false));
 
-                DownstreamHandler downstreamHandler = new DownstreamHandler(httpConnection, channel);
+                DownstreamHandler downstreamHandler = new DownstreamHandler(channel);
                 httpConnection.downstreamHandler(downstreamHandler);
 
                 if (httpLoadBalancer.tlsForClient() == null) {

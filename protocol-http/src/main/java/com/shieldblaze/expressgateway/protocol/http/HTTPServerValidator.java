@@ -46,16 +46,22 @@ final class HTTPServerValidator extends ChannelInboundHandlerAdapter {
     @Override
     public void channelRead(ChannelHandlerContext ctx, Object msg) throws Exception {
         if (((HttpObject) msg).decoderResult().isFailure()) {
-            ctx.writeAndFlush(HTTPResponses.BAD_REQUEST_400).addListener(ChannelFutureListener.CLOSE);
+            ctx.writeAndFlush(HTTPResponses.BAD_REQUEST_400.retainedDuplicate()).addListener(ChannelFutureListener.CLOSE);
             return;
         }
 
         if (msg instanceof HttpRequest) {
             HttpRequest request = (HttpRequest) msg;
 
+            // We don't support HTTP/1.0. Throw error back if we get HTTP/1.0 request.
+            if (request.protocolVersion() == HttpVersion.HTTP_1_0) {
+                ctx.writeAndFlush(HTTPResponses.HTTP_VERSION_NOT_SUPPORTED_505.retainedDuplicate()).addListener(ChannelFutureListener.CLOSE);
+                return;
+            }
+
             // If Host Header is not present then return `BAD_REQUEST` error.
             if (!request.headers().contains(HttpHeaderNames.HOST)) {
-                ctx.writeAndFlush(HTTPResponses.BAD_REQUEST_400).addListener(ChannelFutureListener.CLOSE);
+                ctx.writeAndFlush(HTTPResponses.BAD_REQUEST_400.retainedDuplicate()).addListener(ChannelFutureListener.CLOSE);
                 return;
             }
 

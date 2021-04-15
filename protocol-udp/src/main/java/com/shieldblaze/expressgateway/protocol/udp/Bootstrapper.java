@@ -56,7 +56,7 @@ final class Bootstrapper {
 
                 Duration timeout = Duration.ofMillis(l4LoadBalancer.coreConfiguration().transportConfiguration().connectionIdleTimeout());
                 pipeline.addLast(new NodeBytesTracker(node));
-                pipeline.addLast(new ConnectionTimeoutHandler(timeout));
+                pipeline.addLast(new ConnectionTimeoutHandler(timeout, false));
                 pipeline.addLast(new DownstreamHandler(channel, node, socketAddress, udpConnection));
             }
         });

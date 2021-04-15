@@ -57,7 +57,7 @@ final class Bootstrapper {
                         pipeline.addFirst(new NodeBytesTracker(node));
 
                         Duration timeout = Duration.ofMillis(l4LoadBalancer.coreConfiguration().transportConfiguration().connectionIdleTimeout());
-                        pipeline.addLast(new ConnectionTimeoutHandler(timeout));
+                        pipeline.addLast(new ConnectionTimeoutHandler(timeout, false));
 
                         if (l4LoadBalancer.tlsForClient() != null) {
                             String hostname = node.socketAddress().getHostName();

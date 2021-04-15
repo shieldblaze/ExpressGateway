@@ -20,11 +20,13 @@ package com.shieldblaze.expressgateway.protocol.http;
 import com.shieldblaze.expressgateway.backend.Node;
 import com.shieldblaze.expressgateway.backend.cluster.Cluster;
 import com.shieldblaze.expressgateway.backend.strategy.l7.http.HTTPBalanceRequest;
+import com.shieldblaze.expressgateway.common.utils.ReferenceCounted;
 import com.shieldblaze.expressgateway.protocol.http.loadbalancer.HTTPLoadBalancer;
 import io.netty.channel.ChannelDuplexHandler;
 import io.netty.channel.ChannelFutureListener;
 import io.netty.channel.ChannelHandlerContext;
 import io.netty.channel.ChannelPromise;
+import io.netty.handler.codec.http.CustomFullHttpResponse;
 import io.netty.handler.codec.http.CustomLastHttpContent;
 import io.netty.handler.codec.http.HttpFrame;
 import io.netty.handler.codec.http.HttpHeaderNames;
@@ -68,7 +70,7 @@ public final class UpstreamHandler extends ChannelDuplexHandler {
             // If `Cluster` is `null` then no `Cluster` was found for that Hostname.
             // Throw error back to client, `BAD_GATEWAY`.
             if (cluster == null) {
-                ctx.writeAndFlush(HTTPResponses.BAD_GATEWAY_502).addListener(ChannelFutureListener.CLOSE);
+                ctx.writeAndFlush(HTTPResponses.BAD_GATEWAY_502.retainedDuplicate()).addListener(ChannelFutureListener.CLOSE);
                 return;
             }
 
@@ -91,12 +93,6 @@ public final class UpstreamHandler extends ChannelDuplexHandler {
                 connection.upstreamChannel(ctx.channel());
             }
 
-            // If connection is HTTP/2 then we'll release it back to the pool
-            // because we can do multiplexing on HTTP/2.
-            if (connection.isHTTP2()) {
-                connection.release();
-            }
-
             // Map Id with Connection
             long id = ((HttpFrame) msg).id();
             connectionMap.put(id, connection);
@@ -110,18 +106,24 @@ public final class UpstreamHandler extends ChannelDuplexHandler {
 
             // Write the request to Backend
             connection.writeAndFlush(request);
+            return;
         } else if (msg instanceof HttpFrame) {
-            HttpFrame httpFrame = (HttpFrame) msg;
-            connectionMap.get(httpFrame.id()).writeAndFlush(msg);
+            HTTPConnection httpConnection = connectionMap.get(((HttpFrame) msg).id());
+            if (httpConnection != null) {
+                httpConnection.writeAndFlush(msg);
+                return;
+            }
         }
+        ReferenceCounted.silentRelease(msg);
     }
 
     @Override
     public void write(ChannelHandlerContext ctx, Object msg, ChannelPromise promise) throws Exception {
-        if (msg instanceof CustomLastHttpContent) {
-            long id = ((CustomLastHttpContent) msg).id();
+        if (msg instanceof CustomLastHttpContent || msg instanceof CustomFullHttpResponse) {
+            long id = ((HttpFrame) msg).id();
             HTTPConnection connection = connectionMap.remove(id); // Remove mapping of finished Request.
             connection.finishedOutstandingRequest(id);
+            connection.release();
         }
         super.write(ctx, msg, promise);
     }
@@ -140,7 +142,7 @@ public final class UpstreamHandler extends ChannelDuplexHandler {
         headers.add(Headers.X_FORWARDED_FOR, upstreamAddress.getAddress().getHostAddress());
 
         // Add 'X-Forwarded-Proto' Header
-        headers.add(Headers.X_FORWARDED_PROTO, isTLSConnection ? "HTTPS" : "HTTP");
+        headers.add(Headers.X_FORWARDED_PROTO, isTLSConnection ? "https" : "http");
     }
 
     private HTTPConnection validateConnection(HTTPConnection httpConnection) {
@@ -152,6 +154,11 @@ public final class UpstreamHandler extends ChannelDuplexHandler {
         } else {
             return httpConnection;
         }
+    }
+
+    @Override
+    public void channelInactive(ChannelHandlerContext ctx) {
+        connectionMap.forEach((id, connection) -> connection.release());
     }
 
     @Override

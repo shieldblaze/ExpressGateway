@@ -43,7 +43,7 @@ public final class DefaultHTTPServerInitializer extends HTTPServerInitializer {
         HTTPConfiguration httpConfiguration = httpLoadBalancer.httpConfiguration();
 
         Duration timeout = Duration.ofMillis(httpLoadBalancer.coreConfiguration().transportConfiguration().connectionIdleTimeout());
-        pipeline.addFirst(new ConnectionTimeoutHandler(timeout));
+        pipeline.addFirst(new ConnectionTimeoutHandler(timeout, true));
 
         // If TLS Server is not enabled then we'll only use HTTP/1.1
         if (httpLoadBalancer.tlsForServer() == null) {

@@ -188,6 +188,6 @@ public abstract class Connection {
 
     @Override
     public String toString() {
-        return "Connection{" + "node=" + node + ", socketAddress=" + socketAddress + ", state=" + state + '}';
+        return '{' + "node=" + node + ", socketAddress=" + socketAddress + ", state=" + state + '}';
     }
 }

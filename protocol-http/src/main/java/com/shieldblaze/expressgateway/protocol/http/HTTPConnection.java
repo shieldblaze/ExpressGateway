@@ -109,7 +109,7 @@ final class HTTPConnection extends Connection {
     }
 
     boolean hasReachedMaximumCapacity() {
-        return totalRequests.get() > Integer.MAX_VALUE - 100_000;
+        return totalRequests.get() > 1073741823; // Integer.MAX_VALUE - 1 / 2
     }
 
     @Override

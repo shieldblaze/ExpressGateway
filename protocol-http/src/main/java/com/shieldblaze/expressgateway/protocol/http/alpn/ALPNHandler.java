@@ -64,7 +64,7 @@ public final class ALPNHandler extends ApplicationProtocolNegotiationHandler {
                 pipeline.addLast(entry.getKey(), entry.getValue());
             }
 
-            ALPNProtocol.complete(protocol);
+            complete(ApplicationProtocolNames.HTTP_2);
         } else if (protocol.equalsIgnoreCase(ApplicationProtocolNames.HTTP_1_1)) {
 
             // Add all channel handlers from HTTP/1.1 map to pipeline
@@ -72,13 +72,19 @@ public final class ALPNHandler extends ApplicationProtocolNegotiationHandler {
                 pipeline.addLast(entry.getKey(), entry.getValue());
             }
 
-            ALPNProtocol.complete(protocol);
+            complete(ApplicationProtocolNames.HTTP_1_1);
         } else {
             IllegalArgumentException exception = new IllegalArgumentException("Unsupported ALPN Protocol: " + protocol);
             ALPNProtocol.completeExceptionally(exception);
             logger.error(exception);
             ctx.channel().close();
         }
+    }
+
+    private void complete(String protocol) {
+        ALPNProtocol.complete(protocol);
+        http1ChannelHandlerMap.clear();
+        http2ChannelHandlerMap.clear();
     }
 
     @Override
