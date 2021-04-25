@@ -40,7 +40,7 @@ public final class BootstrapFactory {
         // Prevent outside initialization
     }
 
-    public static Bootstrap getTCP(CoreConfiguration coreConfiguration, EventLoopGroup eventLoopGroup, ByteBufAllocator byteBufAllocator) {
+    public static Bootstrap tcp(CoreConfiguration coreConfiguration, EventLoopGroup eventLoopGroup, ByteBufAllocator byteBufAllocator) {
         return new Bootstrap()
                 .group(eventLoopGroup)
                 .option(ChannelOption.ALLOCATOR, byteBufAllocator)
@@ -73,7 +73,7 @@ public final class BootstrapFactory {
                 });
     }
 
-    public static Bootstrap getUDP(CoreConfiguration coreConfiguration, EventLoopGroup eventLoopGroup, ByteBufAllocator byteBufAllocator) {
+    public static Bootstrap udp(CoreConfiguration coreConfiguration, EventLoopGroup eventLoopGroup, ByteBufAllocator byteBufAllocator) {
         return new Bootstrap()
                 .group(eventLoopGroup)
                 .option(ChannelOption.ALLOCATOR, byteBufAllocator)

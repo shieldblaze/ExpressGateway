@@ -15,17 +15,12 @@
  * You should have received a copy of the GNU General Public License
  * along with ShieldBlaze ExpressGateway.  If not, see <https://www.gnu.org/licenses/>.
  */
-package com.shieldblaze.expressgateway.protocol.http;
+package com.shieldblaze.expressgateway.protocol.http.websocket;
 
 import com.shieldblaze.expressgateway.backend.Node;
 import com.shieldblaze.expressgateway.backend.NodeBytesTracker;
 import com.shieldblaze.expressgateway.core.BootstrapFactory;
 import com.shieldblaze.expressgateway.core.ConnectionTimeoutHandler;
-import com.shieldblaze.expressgateway.protocol.http.adapter.http1.HTTPOutboundAdapter;
-import com.shieldblaze.expressgateway.protocol.http.adapter.http2.HTTP2OutboundAdapter;
-import com.shieldblaze.expressgateway.protocol.http.alpn.ALPNHandler;
-import com.shieldblaze.expressgateway.protocol.http.alpn.ALPNHandlerBuilder;
-import com.shieldblaze.expressgateway.protocol.http.compression.HTTPContentDecompressor;
 import com.shieldblaze.expressgateway.protocol.http.loadbalancer.HTTPLoadBalancer;
 import io.netty.bootstrap.Bootstrap;
 import io.netty.buffer.ByteBufAllocator;
@@ -35,9 +30,15 @@ import io.netty.channel.ChannelInitializer;
 import io.netty.channel.ChannelPipeline;
 import io.netty.channel.EventLoopGroup;
 import io.netty.channel.socket.SocketChannel;
+import io.netty.handler.codec.http.DefaultHttpHeaders;
+import io.netty.handler.codec.http.websocketx.WebSocketClientHandshaker;
+import io.netty.handler.codec.http.websocketx.WebSocketClientHandshakerFactory;
 import io.netty.handler.ssl.SslHandler;
 
+import java.net.URI;
 import java.time.Duration;
+
+import static io.netty.handler.codec.http.websocketx.WebSocketVersion.V13;
 
 final class Bootstrapper {
 
@@ -51,8 +52,9 @@ final class Bootstrapper {
         this.byteBufAllocator = httpLoadBalancer.byteBufAllocator();
     }
 
-    HTTPConnection newInit(Node node, Channel channel) {
-        HTTPConnection httpConnection = new HTTPConnection(node);
+    WebSocketConnection newInit(Node node, Channel channel, URI uri, String subProtocol) {
+        WebSocketClientHandshaker factory = WebSocketClientHandshakerFactory.newHandshaker(uri, V13, subProtocol, true, new DefaultHttpHeaders());
+        WebSocketConnection connection = new WebSocketConnection(node, factory, channel.newPromise());
 
         Bootstrap bootstrap = BootstrapFactory.tcp(httpLoadBalancer.coreConfiguration(), eventLoopGroup, byteBufAllocator);
         bootstrap.handler(new ChannelInitializer<SocketChannel>() {
@@ -60,20 +62,15 @@ final class Bootstrapper {
             protected void initChannel(SocketChannel ch) {
                 ChannelPipeline pipeline = ch.pipeline();
 
+                // Add NodeBytesTracker
                 pipeline.addFirst(new NodeBytesTracker(node));
 
+                // Add ConnectionTimeoutHandler
                 Duration timeout = Duration.ofMillis(httpLoadBalancer.coreConfiguration().transportConfiguration().connectionIdleTimeout());
                 pipeline.addLast(new ConnectionTimeoutHandler(timeout, false));
 
-                DownstreamHandler downstreamHandler = new DownstreamHandler(channel);
-                httpConnection.downstreamHandler(downstreamHandler);
-
-                if (httpLoadBalancer.tlsForClient() == null) {
-                    pipeline.addLast(HTTPCodecs.HTTPClientCodec(httpLoadBalancer.httpConfiguration()));
-                    pipeline.addLast(new HTTPContentDecompressor());
-                    pipeline.addLast(new HTTPOutboundAdapter());
-                    pipeline.addLast(downstreamHandler);
-                } else {
+                // If TLS is enabled then add TLS Handler
+                if (httpLoadBalancer.tlsForClient() != null) {
                     String hostname = node.socketAddress().getHostName();
                     int port = node.socketAddress().getPort();
                     SslHandler sslHandler = httpLoadBalancer.tlsForClient()
@@ -81,26 +78,16 @@ final class Bootstrapper {
                             .sslContext()
                             .newHandler(ch.alloc(), hostname, port);
 
-                    ALPNHandler alpnHandler = ALPNHandlerBuilder.newBuilder()
-                            // HTTP/2 Handlers
-                            .withHTTP2ChannelHandler(HTTPCodecs.H2ClientCodec(httpLoadBalancer.httpConfiguration()))
-                            .withHTTP2ChannelHandler(new HTTP2OutboundAdapter())
-                            .withHTTP2ChannelHandler(downstreamHandler)
-                            // HTTP/1.1 Handlers
-                            .withHTTP1ChannelHandler(HTTPCodecs.HTTPClientCodec(httpLoadBalancer.httpConfiguration()))
-                            .withHTTP1ChannelHandler(new HTTPContentDecompressor())
-                            .withHTTP1ChannelHandler(new HTTPOutboundAdapter())
-                            .withHTTP1ChannelHandler(downstreamHandler)
-                            .build();
-
                     pipeline.addLast(sslHandler);
-                    pipeline.addLast(alpnHandler);
                 }
+
+                // Add Downstream Handler
+                pipeline.addLast(new WebSocketDownstreamHandler(channel));
             }
         });
 
         ChannelFuture channelFuture = bootstrap.connect(node.socketAddress());
-        httpConnection.init(channelFuture);
-        return httpConnection;
+        connection.init(channelFuture);
+        return connection;
     }
 }

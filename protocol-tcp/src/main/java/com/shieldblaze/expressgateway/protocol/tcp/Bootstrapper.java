@@ -39,16 +39,16 @@ final class Bootstrapper {
     private final EventLoopGroup eventLoopGroup;
     private final ByteBufAllocator byteBufAllocator;
 
-    Bootstrapper(L4LoadBalancer l4LoadBalancer, EventLoopGroup eventLoopGroup, ByteBufAllocator byteBufAllocator) {
+    Bootstrapper(L4LoadBalancer l4LoadBalancer) {
         this.l4LoadBalancer = l4LoadBalancer;
-        this.eventLoopGroup = eventLoopGroup;
-        this.byteBufAllocator = byteBufAllocator;
+        this.eventLoopGroup = l4LoadBalancer.eventLoopFactory().childGroup();
+        this.byteBufAllocator = l4LoadBalancer.byteBufAllocator();
     }
 
-    TCPConnection newInit(Node node, Channel channel) {
+    public TCPConnection newInit(Node node, Channel channel) {
         TCPConnection tcpConnection = new TCPConnection(node);
 
-        Bootstrap bootstrap = BootstrapFactory.getTCP(l4LoadBalancer.coreConfiguration(), eventLoopGroup, byteBufAllocator)
+        Bootstrap bootstrap = BootstrapFactory.tcp(l4LoadBalancer.coreConfiguration(), eventLoopGroup, byteBufAllocator)
                 .handler(new ChannelInitializer<SocketChannel>() {
                     @Override
                     protected void initChannel(SocketChannel ch) {

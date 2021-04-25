@@ -43,8 +43,8 @@ public class Main {
         httpLoadBalancer.start();
 
         ClusterPool clusterPool = new ClusterPool(new HTTPRandom(NOOPSessionPersistence.INSTANCE));
-        httpLoadBalancer.mapCluster("192.168.133.197:9110", clusterPool);
+        httpLoadBalancer.mapCluster("localhost:9110", clusterPool);
 
-        new Node(clusterPool, new InetSocketAddress("172.27.5.153", 80));
+        new Node(clusterPool, new InetSocketAddress("localhost", 9000));
     }
 }

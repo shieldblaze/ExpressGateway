@@ -20,7 +20,6 @@ package com.shieldblaze.expressgateway.configuration.http;
 import com.fasterxml.jackson.annotation.JsonProperty;
 import com.shieldblaze.expressgateway.common.utils.Number;
 import com.shieldblaze.expressgateway.configuration.ConfigurationMarshaller;
-import io.netty.util.internal.ObjectUtil;
 
 import java.io.IOException;
 
@@ -65,6 +64,9 @@ public final class HTTPConfiguration extends ConfigurationMarshaller {
     @JsonProperty("brotliCompressionLevel")
     private int brotliCompressionLevel;
 
+    @JsonProperty("WebSocketConfiguration")
+    private WebSocketConfiguration webSocketConfiguration;
+
     public static final HTTPConfiguration DEFAULT = new HTTPConfiguration();
 
     static {
@@ -80,6 +82,11 @@ public final class HTTPConfiguration extends ConfigurationMarshaller {
         DEFAULT.compressionThreshold = 1024;
         DEFAULT.deflateCompressionLevel = 6;
         DEFAULT.brotliCompressionLevel = 4;
+
+        // WebSocket Configuration
+        DEFAULT.webSocketConfiguration = new WebSocketConfiguration();
+        DEFAULT.webSocketConfiguration.enableWebSocket = true;
+        DEFAULT.webSocketConfiguration.transparentTransport = false;
     }
 
     HTTPConfiguration() {
@@ -192,6 +199,42 @@ public final class HTTPConfiguration extends ConfigurationMarshaller {
     public HTTPConfiguration brotliCompressionLevel(int brotliCompressionLevel) {
         this.brotliCompressionLevel = Number.checkRange(brotliCompressionLevel, 1, 11, "brotliCompressionLevel");
         return this;
+    }
+
+    public WebSocketConfiguration webSocketConfiguration() {
+        return webSocketConfiguration;
+    }
+
+    public HTTPConfiguration webSocketConfiguration(WebSocketConfiguration webSocketConfiguration) {
+        this.webSocketConfiguration = webSocketConfiguration;
+        return this;
+    }
+
+    public static class WebSocketConfiguration {
+
+        @JsonProperty("enableWebSocket")
+        private boolean enableWebSocket;
+
+        @JsonProperty("transparentTransport")
+        private boolean transparentTransport;
+
+        public boolean enableWebSocket() {
+            return enableWebSocket;
+        }
+
+        public WebSocketConfiguration enableWebSocket(boolean enableWebSocket) {
+            this.enableWebSocket = enableWebSocket;
+            return this;
+        }
+
+        public boolean transparentTransport() {
+            return transparentTransport;
+        }
+
+        public WebSocketConfiguration transparentTransport(boolean transparentTransport) {
+            this.transparentTransport = transparentTransport;
+            return this;
+        }
     }
 
     public static HTTPConfiguration loadFrom() throws IOException {

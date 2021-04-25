@@ -39,9 +39,9 @@ public abstract class Connection {
      */
     public enum State {
         /**
-         * Connection State is Unknown
+         * Connection has been initialized.
          */
-        UNKNOWN,
+        INITIALIZED,
 
         /**
          * Connection has timed-out while connecting.
@@ -68,7 +68,7 @@ public abstract class Connection {
     private ChannelFuture channelFuture;
     private Channel channel;
     private InetSocketAddress socketAddress;
-    private volatile State state = State.UNKNOWN;
+    private State state = State.INITIALIZED;
 
     /**
      * Create a new {@link Connection} Instance

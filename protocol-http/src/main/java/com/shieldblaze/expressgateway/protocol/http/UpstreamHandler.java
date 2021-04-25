@@ -21,10 +21,14 @@ import com.shieldblaze.expressgateway.backend.Node;
 import com.shieldblaze.expressgateway.backend.cluster.Cluster;
 import com.shieldblaze.expressgateway.backend.strategy.l7.http.HTTPBalanceRequest;
 import com.shieldblaze.expressgateway.common.utils.ReferenceCounted;
+import com.shieldblaze.expressgateway.protocol.http.compression.HTTPContentCompressor;
+import com.shieldblaze.expressgateway.protocol.http.compression.HTTPContentDecompressor;
 import com.shieldblaze.expressgateway.protocol.http.loadbalancer.HTTPLoadBalancer;
+import com.shieldblaze.expressgateway.protocol.http.websocket.WebSocketUpstreamHandler;
 import io.netty.channel.ChannelDuplexHandler;
 import io.netty.channel.ChannelFutureListener;
 import io.netty.channel.ChannelHandlerContext;
+import io.netty.channel.ChannelPipeline;
 import io.netty.channel.ChannelPromise;
 import io.netty.handler.codec.http.CustomFullHttpResponse;
 import io.netty.handler.codec.http.CustomLastHttpContent;
@@ -32,6 +36,9 @@ import io.netty.handler.codec.http.HttpFrame;
 import io.netty.handler.codec.http.HttpHeaderNames;
 import io.netty.handler.codec.http.HttpHeaders;
 import io.netty.handler.codec.http.HttpRequest;
+import io.netty.handler.codec.http.websocketx.WebSocketServerHandshaker;
+import io.netty.handler.codec.http.websocketx.WebSocketServerHandshakerFactory;
+import io.netty.handler.ssl.SslHandler;
 import it.unimi.dsi.fastutil.longs.Long2ObjectMap;
 import it.unimi.dsi.fastutil.longs.Long2ObjectOpenHashMap;
 import org.apache.logging.log4j.LogManager;
@@ -55,7 +62,7 @@ public final class UpstreamHandler extends ChannelDuplexHandler {
 
     public UpstreamHandler(HTTPLoadBalancer httpLoadBalancer, boolean isTLSConnection) {
         this.httpLoadBalancer = httpLoadBalancer;
-        this.bootstrapper = new Bootstrapper(httpLoadBalancer, httpLoadBalancer.eventLoopFactory().childGroup(), httpLoadBalancer.byteBufAllocator());
+        this.bootstrapper = new Bootstrapper(httpLoadBalancer);
         this.isTLSConnection = isTLSConnection;
     }
 
@@ -75,6 +82,15 @@ public final class UpstreamHandler extends ChannelDuplexHandler {
             }
 
             Node node = cluster.nextNode(new HTTPBalanceRequest(socketAddress, request.headers())).node();
+
+            // If Upgrade is triggered, don't process this request any further.
+            if (webSocketUpgrader(ctx, request)) {
+                ctx.pipeline().remove(HTTPServerValidator.class);
+                ctx.pipeline().remove(HTTPContentCompressor.class);
+                ctx.pipeline().remove(HTTPContentDecompressor.class);
+                ctx.pipeline().replace(this, "WebSocketHandler", new WebSocketUpstreamHandler(node, httpLoadBalancer));
+                return;
+            }
 
             /*
              * We'll try to lease an available connection. If available, we'll get
@@ -117,32 +133,42 @@ public final class UpstreamHandler extends ChannelDuplexHandler {
         ReferenceCounted.silentRelease(msg);
     }
 
-    @Override
-    public void write(ChannelHandlerContext ctx, Object msg, ChannelPromise promise) throws Exception {
-        if (msg instanceof CustomLastHttpContent || msg instanceof CustomFullHttpResponse) {
-            long id = ((HttpFrame) msg).id();
-            HTTPConnection connection = connectionMap.remove(id); // Remove mapping of finished Request.
-            connection.finishedOutstandingRequest(id);
-            connection.release();
+    /**
+     * Handles HTTP Protocol Upgrades to WebSocket
+     *
+     * @param ctx         {@linkplain ChannelHandlerContext} associated with this channel
+     * @param httpRequest This {@linkplain HttpRequest}
+     * @return Returns {@code true} when an upgrade has happened else {@code false}
+     */
+    private boolean webSocketUpgrader(ChannelHandlerContext ctx, HttpRequest httpRequest) {
+        // If 'Connection:Upgrade' and 'Upgrade:WebSocket' then begin WebSocket Upgrade Process.
+        if (httpRequest.headers().get(HttpHeaderNames.CONNECTION).equalsIgnoreCase("Upgrade") &&
+                httpRequest.headers().get(HttpHeaderNames.UPGRADE).equalsIgnoreCase("WebSocket") &&
+                httpLoadBalancer.httpConfiguration().webSocketConfiguration().enableWebSocket()) {
+
+            // Handshake for WebSocket
+            WebSocketServerHandshakerFactory wsFactory = new WebSocketServerHandshakerFactory(webSocketURL(ctx.pipeline(), httpRequest), null, true);
+            WebSocketServerHandshaker handshaker = wsFactory.newHandshaker(httpRequest);
+            if (handshaker == null) {
+                WebSocketServerHandshakerFactory.sendUnsupportedVersionResponse(ctx.channel());
+            } else {
+                handshaker.handshake(ctx.channel(), httpRequest);
+            }
+
+            return true;
         }
-        super.write(ctx, msg, promise);
+
+        return false;
     }
 
-    private void onHeadersRead(HttpHeaders headers, InetSocketAddress upstreamAddress) {
-        /*
-         * Remove 'Upgrade' header because we don't support
-         * any other protocol than HTTP/1.X and HTTP/2
-         */
-        headers.remove(HttpHeaderNames.UPGRADE);
+    private String webSocketURL(ChannelPipeline channelPipeline, HttpRequest req) {
+        String url = req.headers().get(HttpHeaderNames.HOST) + req.uri();
 
-        // Set supported 'ACCEPT_ENCODING' headers
-        headers.set(HttpHeaderNames.ACCEPT_ENCODING, "br, gzip, deflate");
+        if (channelPipeline.get(SslHandler.class) != null) {
+            return "wss://" + url;
+        }
 
-        // Add 'X-Forwarded-For' Header
-        headers.add(Headers.X_FORWARDED_FOR, upstreamAddress.getAddress().getHostAddress());
-
-        // Add 'X-Forwarded-Proto' Header
-        headers.add(Headers.X_FORWARDED_PROTO, isTLSConnection ? "https" : "http");
+        return "ws://" + url;
     }
 
     private HTTPConnection validateConnection(HTTPConnection httpConnection) {
@@ -154,6 +180,28 @@ public final class UpstreamHandler extends ChannelDuplexHandler {
         } else {
             return httpConnection;
         }
+    }
+
+    private void onHeadersRead(HttpHeaders headers, InetSocketAddress upstreamAddress) {
+        // Set supported 'ACCEPT_ENCODING' headers
+        headers.set(HttpHeaderNames.ACCEPT_ENCODING, "br, gzip, deflate");
+
+        // Add 'X-Forwarded-For' Header
+        headers.add(Headers.X_FORWARDED_FOR, upstreamAddress.getAddress().getHostAddress());
+
+        // Add 'X-Forwarded-Proto' Header
+        headers.add(Headers.X_FORWARDED_PROTO, isTLSConnection ? "https" : "http");
+    }
+
+    @Override
+    public void write(ChannelHandlerContext ctx, Object msg, ChannelPromise promise) throws Exception {
+        if (msg instanceof CustomLastHttpContent || msg instanceof CustomFullHttpResponse) {
+            long id = ((HttpFrame) msg).id();
+            HTTPConnection connection = connectionMap.remove(id); // Remove mapping of finished Request.
+            connection.finishedOutstandingRequest(id);
+            connection.release();
+        }
+        super.write(ctx, msg, promise);
     }
 
     @Override
