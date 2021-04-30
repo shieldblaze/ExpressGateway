@@ -17,32 +17,29 @@
  */
 package com.shieldblaze.expressgateway.protocol.http.websocket;
 
-import io.netty.channel.Channel;
 import io.netty.channel.ChannelHandlerContext;
 import io.netty.channel.ChannelInboundHandlerAdapter;
-import io.netty.handler.codec.http.websocketx.WebSocketFrame;
-import org.apache.logging.log4j.LogManager;
-import org.apache.logging.log4j.Logger;
+import io.netty.handler.codec.http.FullHttpResponse;
+import io.netty.handler.codec.http.websocketx.WebSocketClientHandshaker;
 
-final class WebSocketDownstreamHandler extends ChannelInboundHandlerAdapter {
+final class WebSocketClientHandshakerFinisherHandler extends ChannelInboundHandlerAdapter {
 
-    private static final Logger logger = LogManager.getLogger(WebSocketDownstreamHandler.class);
+    private final WebSocketClientHandshaker handshaker;
 
-    private final Channel channel;
-
-    WebSocketDownstreamHandler(Channel channel) {
-        this.channel = channel;
+    WebSocketClientHandshakerFinisherHandler(WebSocketClientHandshaker handshaker) {
+        this.handshaker = handshaker;
     }
 
     @Override
-    public void channelRead(ChannelHandlerContext ctx, Object msg) {
-        if (msg instanceof WebSocketFrame) {
-            channel.writeAndFlush(msg, channel.voidPromise());
+    public void channelRead(ChannelHandlerContext ctx, Object msg) throws Exception {
+        if (msg instanceof FullHttpResponse) {
+            if (!handshaker.isHandshakeComplete()) {
+                handshaker.finishHandshake(ctx.channel(), (FullHttpResponse) msg);
+                ctx.pipeline().remove(this); // Let's remove ourselves because we're done.
+                return;
+            }
         }
-    }
 
-    @Override
-    public void exceptionCaught(ChannelHandlerContext ctx, Throwable cause) {
-        logger.error("Caught Error at Downstream Handler", cause);
+        super.channelRead(ctx, msg);
     }
 }

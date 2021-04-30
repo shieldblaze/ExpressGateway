@@ -18,31 +18,36 @@
 package com.shieldblaze.expressgateway.protocol.http.websocket;
 
 import io.netty.channel.Channel;
-import io.netty.channel.ChannelHandlerContext;
-import io.netty.channel.ChannelInboundHandlerAdapter;
-import io.netty.handler.codec.http.websocketx.WebSocketFrame;
-import org.apache.logging.log4j.LogManager;
-import org.apache.logging.log4j.Logger;
 
-final class WebSocketDownstreamHandler extends ChannelInboundHandlerAdapter {
+import java.net.InetSocketAddress;
+import java.net.URI;
 
-    private static final Logger logger = LogManager.getLogger(WebSocketDownstreamHandler.class);
-
+public final class WebSocketUpgradeProperty {
+    private final InetSocketAddress clientAddress;
+    private final URI uri;
+    private final String subProtocol;
     private final Channel channel;
 
-    WebSocketDownstreamHandler(Channel channel) {
+    public WebSocketUpgradeProperty(InetSocketAddress clientAddress, URI uri, String subProtocol, Channel channel) {
+        this.clientAddress = clientAddress;
+        this.uri = uri;
+        this.subProtocol = subProtocol;
         this.channel = channel;
     }
 
-    @Override
-    public void channelRead(ChannelHandlerContext ctx, Object msg) {
-        if (msg instanceof WebSocketFrame) {
-            channel.writeAndFlush(msg, channel.voidPromise());
-        }
+    InetSocketAddress clientAddress() {
+        return clientAddress;
     }
 
-    @Override
-    public void exceptionCaught(ChannelHandlerContext ctx, Throwable cause) {
-        logger.error("Caught Error at Downstream Handler", cause);
+    URI uri() {
+        return uri;
+    }
+
+    String subProtocol() {
+        return subProtocol;
+    }
+
+    Channel channel() {
+        return channel;
     }
 }

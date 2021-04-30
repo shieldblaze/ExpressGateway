@@ -30,10 +30,7 @@ public class CustomHttpResponse extends DefaultHttpResponse implements HttpFrame
 
     @Override
     public String toString() {
-        return "CustomHttpResponse{" +
-                "protocol=" + protocol +
-                ", id=" + id +
-                '}';
+        return HttpMessageUtil.appendResponse(new StringBuilder(256), this) +  "/" + id();
     }
 
     @Override

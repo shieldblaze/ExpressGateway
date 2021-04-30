@@ -96,7 +96,7 @@ public class CustomHttpRequest extends DefaultHttpMessage implements HttpRequest
 
     @Override
     public String toString() {
-        return HttpMessageUtil.appendRequest(new StringBuilder(256), this).toString() +  "/" + id();
+        return HttpMessageUtil.appendRequest(new StringBuilder(256), this) +  "/" + id();
     }
 
     @Override

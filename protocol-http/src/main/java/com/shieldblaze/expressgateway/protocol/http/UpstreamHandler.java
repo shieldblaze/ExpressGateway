@@ -24,6 +24,7 @@ import com.shieldblaze.expressgateway.common.utils.ReferenceCounted;
 import com.shieldblaze.expressgateway.protocol.http.compression.HTTPContentCompressor;
 import com.shieldblaze.expressgateway.protocol.http.compression.HTTPContentDecompressor;
 import com.shieldblaze.expressgateway.protocol.http.loadbalancer.HTTPLoadBalancer;
+import com.shieldblaze.expressgateway.protocol.http.websocket.WebSocketUpgradeProperty;
 import com.shieldblaze.expressgateway.protocol.http.websocket.WebSocketUpstreamHandler;
 import io.netty.channel.ChannelDuplexHandler;
 import io.netty.channel.ChannelFutureListener;
@@ -45,6 +46,7 @@ import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
 
 import java.net.InetSocketAddress;
+import java.net.URI;
 
 public final class UpstreamHandler extends ChannelDuplexHandler {
 
@@ -84,11 +86,12 @@ public final class UpstreamHandler extends ChannelDuplexHandler {
             Node node = cluster.nextNode(new HTTPBalanceRequest(socketAddress, request.headers())).node();
 
             // If Upgrade is triggered, don't process this request any further.
-            if (webSocketUpgrader(ctx, request)) {
+            WebSocketUpgradeProperty webSocketUpgradeProperty = webSocketUpgrader(ctx, request);
+            if (webSocketUpgradeProperty != null) {
                 ctx.pipeline().remove(HTTPServerValidator.class);
                 ctx.pipeline().remove(HTTPContentCompressor.class);
                 ctx.pipeline().remove(HTTPContentDecompressor.class);
-                ctx.pipeline().replace(this, "WebSocketHandler", new WebSocketUpstreamHandler(node, httpLoadBalancer));
+                ctx.pipeline().replace(this, "WebSocketHandler", new WebSocketUpstreamHandler(node, httpLoadBalancer, webSocketUpgradeProperty));
                 return;
             }
 
@@ -140,14 +143,16 @@ public final class UpstreamHandler extends ChannelDuplexHandler {
      * @param httpRequest This {@linkplain HttpRequest}
      * @return Returns {@code true} when an upgrade has happened else {@code false}
      */
-    private boolean webSocketUpgrader(ChannelHandlerContext ctx, HttpRequest httpRequest) {
+    private WebSocketUpgradeProperty webSocketUpgrader(ChannelHandlerContext ctx, HttpRequest httpRequest) {
         // If 'Connection:Upgrade' and 'Upgrade:WebSocket' then begin WebSocket Upgrade Process.
         if (httpRequest.headers().get(HttpHeaderNames.CONNECTION).equalsIgnoreCase("Upgrade") &&
                 httpRequest.headers().get(HttpHeaderNames.UPGRADE).equalsIgnoreCase("WebSocket") &&
                 httpLoadBalancer.httpConfiguration().webSocketConfiguration().enableWebSocket()) {
 
             // Handshake for WebSocket
-            WebSocketServerHandshakerFactory wsFactory = new WebSocketServerHandshakerFactory(webSocketURL(ctx.pipeline(), httpRequest), null, true);
+            String uri = webSocketURL(httpRequest);
+            String subProtocol = httpRequest.headers().get(HttpHeaderNames.SEC_WEBSOCKET_PROTOCOL);
+            WebSocketServerHandshakerFactory wsFactory = new WebSocketServerHandshakerFactory(uri, subProtocol, true);
             WebSocketServerHandshaker handshaker = wsFactory.newHandshaker(httpRequest);
             if (handshaker == null) {
                 WebSocketServerHandshakerFactory.sendUnsupportedVersionResponse(ctx.channel());
@@ -155,16 +160,17 @@ public final class UpstreamHandler extends ChannelDuplexHandler {
                 handshaker.handshake(ctx.channel(), httpRequest);
             }
 
-            return true;
+            return new WebSocketUpgradeProperty(((InetSocketAddress) ctx.channel().remoteAddress()), URI.create(uri), subProtocol, ctx.channel());
         }
 
-        return false;
+        return null;
     }
 
-    private String webSocketURL(ChannelPipeline channelPipeline, HttpRequest req) {
+    private String webSocketURL(HttpRequest req) {
         String url = req.headers().get(HttpHeaderNames.HOST) + req.uri();
 
-        if (channelPipeline.get(SslHandler.class) != null) {
+        // If TLS for Client is enabled then use `wss`.
+        if (httpLoadBalancer.tlsForClient() != null) {
             return "wss://" + url;
         }
 
@@ -195,7 +201,7 @@ public final class UpstreamHandler extends ChannelDuplexHandler {
 
     @Override
     public void write(ChannelHandlerContext ctx, Object msg, ChannelPromise promise) throws Exception {
-        if (msg instanceof CustomLastHttpContent || msg instanceof CustomFullHttpResponse) {
+        if (msg instanceof CustomFullHttpResponse || msg instanceof CustomLastHttpContent) {
             long id = ((HttpFrame) msg).id();
             HTTPConnection connection = connectionMap.remove(id); // Remove mapping of finished Request.
             connection.finishedOutstandingRequest(id);

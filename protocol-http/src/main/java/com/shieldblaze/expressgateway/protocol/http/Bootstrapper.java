@@ -69,7 +69,7 @@ final class Bootstrapper {
                 httpConnection.downstreamHandler(downstreamHandler);
 
                 if (httpLoadBalancer.tlsForClient() == null) {
-                    pipeline.addLast(HTTPCodecs.HTTPClientCodec(httpLoadBalancer.httpConfiguration()));
+                    pipeline.addLast(HTTPCodecs.client(httpLoadBalancer.httpConfiguration()));
                     pipeline.addLast(new HTTPContentDecompressor());
                     pipeline.addLast(new HTTPOutboundAdapter());
                     pipeline.addLast(downstreamHandler);
@@ -87,7 +87,7 @@ final class Bootstrapper {
                             .withHTTP2ChannelHandler(new HTTP2OutboundAdapter())
                             .withHTTP2ChannelHandler(downstreamHandler)
                             // HTTP/1.1 Handlers
-                            .withHTTP1ChannelHandler(HTTPCodecs.HTTPClientCodec(httpLoadBalancer.httpConfiguration()))
+                            .withHTTP1ChannelHandler(HTTPCodecs.client(httpLoadBalancer.httpConfiguration()))
                             .withHTTP1ChannelHandler(new HTTPContentDecompressor())
                             .withHTTP1ChannelHandler(new HTTPOutboundAdapter())
                             .withHTTP1ChannelHandler(downstreamHandler)

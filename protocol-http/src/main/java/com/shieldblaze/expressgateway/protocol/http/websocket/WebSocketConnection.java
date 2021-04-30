@@ -19,40 +19,62 @@ package com.shieldblaze.expressgateway.protocol.http.websocket;
 
 import com.shieldblaze.expressgateway.backend.Connection;
 import com.shieldblaze.expressgateway.backend.Node;
+import com.shieldblaze.expressgateway.common.utils.ReferenceCounted;
 import io.netty.channel.ChannelFuture;
-import io.netty.channel.ChannelPromise;
+import io.netty.handler.codec.http.websocketx.TextWebSocketFrame;
 import io.netty.handler.codec.http.websocketx.WebSocketClientHandshaker;
 
 final class WebSocketConnection extends Connection {
 
+    private enum WebSocketState {
+        INITIATED,
+        HANDSHAKE_SUCCESS,
+        HANDSHAKE_FAILURE
+    }
+
     private final WebSocketClientHandshaker webSocketClientHandshaker;
-    private final ChannelPromise channelPromise;
+    private WebSocketState webSocketState = WebSocketState.INITIATED;
 
     /**
      * Create a new {@link WebSocketConnection} Instance
      *
      * @param node {@link Node} associated with this Connection
      */
-    WebSocketConnection(Node node, WebSocketClientHandshaker webSocketClientHandshaker, ChannelPromise channelPromise) {
+    WebSocketConnection(Node node, WebSocketClientHandshaker webSocketClientHandshaker) {
         super(node);
         this.webSocketClientHandshaker = webSocketClientHandshaker;
-        this.channelPromise = channelPromise;
     }
 
     @Override
     protected void processBacklog(ChannelFuture channelFuture) {
         if (channelFuture.isSuccess()) {
-            webSocketClientHandshaker.handshake(channelFuture.channel()).addListener(future -> {
+            webSocketClientHandshaker.handshake(channel);
+
+            // Add Listener to handle WebSocket Handshake completion.
+            webSocketClientHandshaker.handshakePromise().addListener(future -> {
                 if (future.isSuccess()) {
-                    channelPromise.setSuccess(null);
+                    System.out.println("Success HS");
+                    webSocketState = WebSocketState.HANDSHAKE_SUCCESS;
                     writeBacklog();
                 } else {
-                    channelPromise.setFailure(future.cause());
+                    webSocketState = WebSocketState.HANDSHAKE_FAILURE;
                     clearBacklog();
                 }
             });
         } else {
             clearBacklog();
+        }
+    }
+
+    @Override
+    public void writeAndFlush(Object o) {
+        // If Connection State or WebSocket State is `Initiated`, add the data to backlog.
+        if (state == State.INITIALIZED || webSocketState == WebSocketState.INITIATED) {
+            backlogQueue.add(o);
+        } else if (state == State.CONNECTED_AND_ACTIVE && webSocketState == WebSocketState.HANDSHAKE_SUCCESS) {
+            channel.writeAndFlush(o, channel.voidPromise());
+        } else {
+            ReferenceCounted.silentRelease(o);
         }
     }
 }

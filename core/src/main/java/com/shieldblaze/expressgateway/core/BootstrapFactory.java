@@ -92,7 +92,6 @@ public final class BootstrapFactory {
                         EpollDatagramChannel datagramChannel = new EpollDatagramChannel();
 
                         EpollDatagramChannelConfig config = datagramChannel.config();
-
                         config.setEpollMode(EpollMode.EDGE_TRIGGERED);
                         config.setOption(UnixChannelOption.SO_REUSEPORT, true);
                         config.setUdpGro(true);

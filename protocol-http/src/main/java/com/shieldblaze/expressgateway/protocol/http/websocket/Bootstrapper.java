@@ -21,6 +21,8 @@ import com.shieldblaze.expressgateway.backend.Node;
 import com.shieldblaze.expressgateway.backend.NodeBytesTracker;
 import com.shieldblaze.expressgateway.core.BootstrapFactory;
 import com.shieldblaze.expressgateway.core.ConnectionTimeoutHandler;
+import com.shieldblaze.expressgateway.protocol.http.HTTPCodecs;
+import com.shieldblaze.expressgateway.protocol.http.Headers;
 import com.shieldblaze.expressgateway.protocol.http.loadbalancer.HTTPLoadBalancer;
 import io.netty.bootstrap.Bootstrap;
 import io.netty.buffer.ByteBufAllocator;
@@ -31,8 +33,13 @@ import io.netty.channel.ChannelPipeline;
 import io.netty.channel.EventLoopGroup;
 import io.netty.channel.socket.SocketChannel;
 import io.netty.handler.codec.http.DefaultHttpHeaders;
+import io.netty.handler.codec.http.HttpClientCodec;
+import io.netty.handler.codec.http.HttpHeaders;
+import io.netty.handler.codec.http.HttpObjectAggregator;
+import io.netty.handler.codec.http.websocketx.WebSocket13FrameDecoder;
 import io.netty.handler.codec.http.websocketx.WebSocketClientHandshaker;
 import io.netty.handler.codec.http.websocketx.WebSocketClientHandshakerFactory;
+import io.netty.handler.codec.http.websocketx.extensions.compression.WebSocketClientCompressionHandler;
 import io.netty.handler.ssl.SslHandler;
 
 import java.net.URI;
@@ -52,9 +59,11 @@ final class Bootstrapper {
         this.byteBufAllocator = httpLoadBalancer.byteBufAllocator();
     }
 
-    WebSocketConnection newInit(Node node, Channel channel, URI uri, String subProtocol) {
-        WebSocketClientHandshaker factory = WebSocketClientHandshakerFactory.newHandshaker(uri, V13, subProtocol, true, new DefaultHttpHeaders());
-        WebSocketConnection connection = new WebSocketConnection(node, factory, channel.newPromise());
+    WebSocketConnection newInit(Node node, WebSocketUpgradeProperty wsProperty) {
+        HttpHeaders headers = new DefaultHttpHeaders();
+        headers.set(Headers.X_FORWARDED_FOR, wsProperty.clientAddress().getAddress().getHostAddress());
+        WebSocketClientHandshaker factory = WebSocketClientHandshakerFactory.newHandshaker(wsProperty.uri(), V13, wsProperty.subProtocol(), true, headers);
+        WebSocketConnection connection = new WebSocketConnection(node, factory);
 
         Bootstrap bootstrap = BootstrapFactory.tcp(httpLoadBalancer.coreConfiguration(), eventLoopGroup, byteBufAllocator);
         bootstrap.handler(new ChannelInitializer<SocketChannel>() {
@@ -81,8 +90,16 @@ final class Bootstrapper {
                     pipeline.addLast(sslHandler);
                 }
 
+                // Add HTTP Client
+                pipeline.addLast(HTTPCodecs.client(httpLoadBalancer.httpConfiguration()));
+
+                // Add HTTP Object Aggregator to aggregate
+                pipeline.addLast(new HttpObjectAggregator(8196));
+
+                pipeline.addLast(new WebSocketClientHandshakerFinisherHandler(factory));
+
                 // Add Downstream Handler
-                pipeline.addLast(new WebSocketDownstreamHandler(channel));
+                pipeline.addLast(new WebSocketDownstreamHandler(wsProperty.channel()));
             }
         });
 

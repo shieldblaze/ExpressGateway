@@ -20,33 +20,30 @@ package com.shieldblaze.expressgateway.protocol.http.websocket;
 import com.shieldblaze.expressgateway.backend.Node;
 import com.shieldblaze.expressgateway.common.utils.ReferenceCounted;
 import com.shieldblaze.expressgateway.protocol.http.loadbalancer.HTTPLoadBalancer;
-import com.shieldblaze.expressgateway.protocol.tcp.Bootstrapper;
 import io.netty.channel.ChannelHandlerContext;
 import io.netty.channel.ChannelInboundHandlerAdapter;
+import io.netty.handler.codec.http.websocketx.TextWebSocketFrame;
 import io.netty.handler.codec.http.websocketx.WebSocketFrame;
+
+import java.net.URI;
 
 public final class WebSocketUpstreamHandler extends ChannelInboundHandlerAdapter {
 
     private final Node node;
     private final HTTPLoadBalancer httpLoadBalancer;
+    private final WebSocketUpgradeProperty webSocketUpgradeProperty;
     private WebSocketConnection connection;
 
-    public WebSocketUpstreamHandler(Node node, HTTPLoadBalancer httpLoadBalancer) {
+    public WebSocketUpstreamHandler(Node node, HTTPLoadBalancer httpLoadBalancer, WebSocketUpgradeProperty webSocketUpgradeProperty) {
         this.node = node;
         this.httpLoadBalancer = httpLoadBalancer;
+        this.webSocketUpgradeProperty = webSocketUpgradeProperty;
     }
 
     @Override
     public void handlerAdded(ChannelHandlerContext ctx) {
         Bootstrapper bootstrapper = new Bootstrapper(httpLoadBalancer);
-        connection = bootstrapper.newInit(node, ctx.channel());
-    }
-
-    @Override
-    public void handlerRemoved(ChannelHandlerContext ctx) {
-        if (connection != null) {
-            connection.close();
-        }
+        connection = bootstrapper.newInit(node, webSocketUpgradeProperty);
     }
 
     @Override
@@ -55,6 +52,13 @@ public final class WebSocketUpstreamHandler extends ChannelInboundHandlerAdapter
             connection.writeAndFlush(msg);
         } else {
             ReferenceCounted.silentRelease(msg);
+        }
+    }
+
+    @Override
+    public void handlerRemoved(ChannelHandlerContext ctx) {
+        if (connection != null) {
+            connection.close();
         }
     }
 }
