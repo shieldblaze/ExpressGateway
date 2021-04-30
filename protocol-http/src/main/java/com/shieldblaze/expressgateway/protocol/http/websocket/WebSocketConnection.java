@@ -51,9 +51,8 @@ final class WebSocketConnection extends Connection {
             webSocketClientHandshaker.handshake(channel);
 
             // Add Listener to handle WebSocket Handshake completion.
-            webSocketClientHandshaker.handshakePromise().addListener(future -> {
+            webSocketClientHandshaker.handshakeFuture().addListener(future -> {
                 if (future.isSuccess()) {
-                    System.out.println("Success HS");
                     webSocketState = WebSocketState.HANDSHAKE_SUCCESS;
                     writeBacklog();
                 } else {

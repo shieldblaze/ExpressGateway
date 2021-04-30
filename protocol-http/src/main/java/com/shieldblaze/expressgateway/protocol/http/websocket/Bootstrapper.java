@@ -93,9 +93,11 @@ final class Bootstrapper {
                 // Add HTTP Client
                 pipeline.addLast(HTTPCodecs.client(httpLoadBalancer.httpConfiguration()));
 
-                // Add HTTP Object Aggregator to aggregate
+                // Add HTTP Object Aggregator to aggregate HTTP Objects
                 pipeline.addLast(new HttpObjectAggregator(8196));
 
+                // Add WebSocketClientHandshakerFinisherHandler which will finish the
+                // handshaking process.
                 pipeline.addLast(new WebSocketClientHandshakerFinisherHandler(factory));
 
                 // Add Downstream Handler

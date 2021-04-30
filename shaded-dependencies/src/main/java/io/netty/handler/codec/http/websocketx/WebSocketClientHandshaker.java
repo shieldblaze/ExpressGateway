@@ -1,19 +1,17 @@
 /*
- * This file is part of ShieldBlaze ExpressGateway. [www.shieldblaze.com]
- * Copyright (c) 2020-2021 ShieldBlaze
+ * Copyright 2012 The Netty Project
  *
- * ShieldBlaze ExpressGateway is free software: you can redistribute it and/or modify
- * it under the terms of the GNU General Public License as published by
- * the Free Software Foundation, either version 3 of the License, or
- * (at your option) any later version.
+ * The Netty Project licenses this file to you under the Apache License,
+ * version 2.0 (the "License"); you may not use this file except in compliance
+ * with the License. You may obtain a copy of the License at:
  *
- * ShieldBlaze ExpressGateway is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
- * GNU General Public License for more details.
+ *   https://www.apache.org/licenses/LICENSE-2.0
  *
- * You should have received a copy of the GNU General Public License
- * along with ShieldBlaze ExpressGateway.  If not, see <https://www.gnu.org/licenses/>.
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS, WITHOUT
+ * WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied. See the
+ * License for the specific language governing permissions and limitations
+ * under the License.
  */
 package io.netty.handler.codec.http.websocketx;
 
@@ -232,9 +230,9 @@ public abstract class WebSocketClientHandshaker {
     }
 
     /**
-     * Returns a {@link ChannelPromise} of handshake process.
+     * Returns a {@link ChannelFuture} of handshake process.
      */
-    public ChannelPromise handshakePromise() {
+    public ChannelFuture handshakeFuture() {
         return handshakePromise;
     }
 
@@ -262,10 +260,10 @@ public abstract class WebSocketClientHandshaker {
         if (decoder == null) {
             HttpClientCodec codec = pipeline.get(HttpClientCodec.class);
             if (codec == null) {
-               promise.setFailure(new IllegalStateException("ChannelPipeline does not contain " +
-                       "an HttpResponseDecoder or HttpClientCodec"));
-               handshakePromise.tryFailure(promise.cause());
-               return promise;
+                promise.setFailure(new IllegalStateException("ChannelPipeline does not contain " +
+                        "an HttpResponseDecoder or HttpClientCodec"));
+                handshakePromise.tryFailure(promise.cause());
+                return promise;
             }
         }
 
@@ -399,7 +397,8 @@ public abstract class WebSocketClientHandshaker {
         }
 
         // If Handshake is successfully completed then mark `handshakePromise` success.
-        // We're doing this in bottom of method because we want pipeline to be configured properly.
+        // We're doing this in bottom of method because we want pipeline to be configured properly
+        // before marking promise as success.
         if (isHandshakeComplete()) {
             handshakePromise.trySuccess();
         }
@@ -624,8 +623,8 @@ public abstract class WebSocketClientHandshaker {
         int port = wsURL.getPort();
         final int defaultPort;
         if (WebSocketScheme.WSS.name().contentEquals(scheme)
-            || HttpScheme.HTTPS.name().contentEquals(scheme)
-            || (scheme == null && port == WebSocketScheme.WSS.port())) {
+                || HttpScheme.HTTPS.name().contentEquals(scheme)
+                || (scheme == null && port == WebSocketScheme.WSS.port())) {
 
             schemePrefix = HTTPS_SCHEME_PREFIX;
             defaultPort = WebSocketScheme.WSS.port();

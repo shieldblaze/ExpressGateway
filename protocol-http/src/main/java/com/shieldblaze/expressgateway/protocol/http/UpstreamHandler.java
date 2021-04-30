@@ -29,7 +29,6 @@ import com.shieldblaze.expressgateway.protocol.http.websocket.WebSocketUpstreamH
 import io.netty.channel.ChannelDuplexHandler;
 import io.netty.channel.ChannelFutureListener;
 import io.netty.channel.ChannelHandlerContext;
-import io.netty.channel.ChannelPipeline;
 import io.netty.channel.ChannelPromise;
 import io.netty.handler.codec.http.CustomFullHttpResponse;
 import io.netty.handler.codec.http.CustomLastHttpContent;
@@ -39,7 +38,6 @@ import io.netty.handler.codec.http.HttpHeaders;
 import io.netty.handler.codec.http.HttpRequest;
 import io.netty.handler.codec.http.websocketx.WebSocketServerHandshaker;
 import io.netty.handler.codec.http.websocketx.WebSocketServerHandshakerFactory;
-import io.netty.handler.ssl.SslHandler;
 import it.unimi.dsi.fastutil.longs.Long2ObjectMap;
 import it.unimi.dsi.fastutil.longs.Long2ObjectOpenHashMap;
 import org.apache.logging.log4j.LogManager;
@@ -144,6 +142,11 @@ public final class UpstreamHandler extends ChannelDuplexHandler {
      * @return Returns {@code true} when an upgrade has happened else {@code false}
      */
     private WebSocketUpgradeProperty webSocketUpgrader(ChannelHandlerContext ctx, HttpRequest httpRequest) {
+        if (!httpRequest.headers().contains(HttpHeaderNames.CONNECTION) ||
+                !httpRequest.headers().contains(HttpHeaderNames.UPGRADE)) {
+            return null;
+        }
+
         // If 'Connection:Upgrade' and 'Upgrade:WebSocket' then begin WebSocket Upgrade Process.
         if (httpRequest.headers().get(HttpHeaderNames.CONNECTION).equalsIgnoreCase("Upgrade") &&
                 httpRequest.headers().get(HttpHeaderNames.UPGRADE).equalsIgnoreCase("WebSocket") &&
