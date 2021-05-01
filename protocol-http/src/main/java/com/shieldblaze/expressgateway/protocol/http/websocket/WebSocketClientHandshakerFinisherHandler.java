@@ -31,7 +31,7 @@ final class WebSocketClientHandshakerFinisherHandler extends ChannelInboundHandl
     }
 
     @Override
-    public void channelRead(ChannelHandlerContext ctx, Object msg) throws Exception {
+    public void channelRead(ChannelHandlerContext ctx, Object msg) {
         if (msg instanceof FullHttpResponse) {
             if (!handshaker.isHandshakeComplete()) {
                 handshaker.finishHandshake(ctx.channel(), (FullHttpResponse) msg);
@@ -40,6 +40,6 @@ final class WebSocketClientHandshakerFinisherHandler extends ChannelInboundHandl
             }
         }
 
-        super.channelRead(ctx, msg);
+        ctx.fireChannelRead(ctx);
     }
 }

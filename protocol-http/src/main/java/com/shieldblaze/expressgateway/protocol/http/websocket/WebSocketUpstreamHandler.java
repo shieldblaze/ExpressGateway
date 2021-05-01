@@ -56,6 +56,13 @@ public final class WebSocketUpstreamHandler extends ChannelInboundHandlerAdapter
     }
 
     @Override
+    public void channelInactive(ChannelHandlerContext ctx) {
+        if (connection != null) {
+            connection.close();
+        }
+    }
+
+    @Override
     public void handlerRemoved(ChannelHandlerContext ctx) {
         if (connection != null) {
             connection.close();

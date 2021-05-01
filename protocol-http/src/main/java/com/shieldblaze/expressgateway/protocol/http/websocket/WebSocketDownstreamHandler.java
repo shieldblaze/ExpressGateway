@@ -45,6 +45,16 @@ final class WebSocketDownstreamHandler extends ChannelInboundHandlerAdapter {
     }
 
     @Override
+    public void channelInactive(ChannelHandlerContext ctx) {
+        channel.close();
+    }
+
+    @Override
+    public void handlerRemoved(ChannelHandlerContext ctx) {
+        channel.close();
+    }
+
+    @Override
     public void exceptionCaught(ChannelHandlerContext ctx, Throwable cause) {
         logger.error("Caught Error at Downstream Handler", cause);
     }
