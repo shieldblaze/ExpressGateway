@@ -17,35 +17,20 @@
  */
 package com.shieldblaze.expressgateway.protocol.http.websocket;
 
-import com.shieldblaze.expressgateway.common.utils.ReferenceCounted;
-import io.netty.channel.Channel;
 import io.netty.channel.ChannelHandlerContext;
-import io.netty.channel.ChannelInboundHandlerAdapter;
+import io.netty.channel.SimpleChannelInboundHandler;
+import io.netty.handler.codec.http.websocketx.TextWebSocketFrame;
 import io.netty.handler.codec.http.websocketx.WebSocketFrame;
-import org.apache.logging.log4j.LogManager;
-import org.apache.logging.log4j.Logger;
 
-final class WebSocketDownstreamHandler extends ChannelInboundHandlerAdapter {
-
-    private static final Logger logger = LogManager.getLogger(WebSocketDownstreamHandler.class);
-
-    private final Channel channel;
-
-    WebSocketDownstreamHandler(Channel channel) {
-        this.channel = channel;
-    }
+final class WebSocketHandler extends SimpleChannelInboundHandler<WebSocketFrame> {
 
     @Override
-    public void channelRead(ChannelHandlerContext ctx, Object msg) {
-        if (msg instanceof WebSocketFrame) {
-            channel.writeAndFlush(msg, channel.voidPromise());
-        } else {
-            ReferenceCounted.silentRelease(msg);
+    protected void channelRead0(ChannelHandlerContext ctx, WebSocketFrame webSocketFrame) {
+        if (webSocketFrame instanceof TextWebSocketFrame) {
+            TextWebSocketFrame frame = (TextWebSocketFrame) webSocketFrame;
+
+            // Echo Back
+            ctx.writeAndFlush(new TextWebSocketFrame(frame.text()));
         }
-    }
-
-    @Override
-    public void exceptionCaught(ChannelHandlerContext ctx, Throwable cause) {
-        logger.error("Caught Error at Downstream Handler", cause);
     }
 }

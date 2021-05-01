@@ -87,8 +87,6 @@ class SimpleTest {
         Cluster cluster = new ClusterPool(new HTTPRoundRobin(NOOPSessionPersistence.INSTANCE));
 
         HTTPLoadBalancer httpLoadBalancer = HTTPLoadBalancerBuilder.newBuilder()
-                .withCoreConfiguration(CoreConfiguration.DEFAULT)
-                .withHTTPConfiguration(HTTPConfiguration.DEFAULT)
                 .withTLSForClient(forClient)
                 .withTLSForServer(forServer)
                 .withBindAddress(new InetSocketAddress("localhost", 20000))
@@ -143,8 +141,6 @@ class SimpleTest {
         Cluster cluster = new ClusterPool(new HTTPRoundRobin(NOOPSessionPersistence.INSTANCE));
 
         HTTPLoadBalancer httpLoadBalancer = HTTPLoadBalancerBuilder.newBuilder()
-                .withCoreConfiguration(CoreConfiguration.DEFAULT)
-                .withHTTPConfiguration(HTTPConfiguration.DEFAULT)
                 .withTLSForServer(forServer)
                 .withBindAddress(new InetSocketAddress("localhost", 20001))
                 .withHTTPInitializer(new DefaultHTTPServerInitializer())
@@ -198,8 +194,6 @@ class SimpleTest {
         Cluster cluster = new ClusterPool(new HTTPRoundRobin(NOOPSessionPersistence.INSTANCE));
 
         HTTPLoadBalancer httpLoadBalancer = HTTPLoadBalancerBuilder.newBuilder()
-                .withCoreConfiguration(CoreConfiguration.DEFAULT)
-                .withHTTPConfiguration(HTTPConfiguration.DEFAULT)
                 .withTLSForClient(forClient)
                 .withBindAddress(new InetSocketAddress("localhost", 20002))
                 .withHTTPInitializer(new DefaultHTTPServerInitializer())
@@ -241,8 +235,6 @@ class SimpleTest {
         Cluster cluster = new ClusterPool(new HTTPRoundRobin(NOOPSessionPersistence.INSTANCE));
 
         HTTPLoadBalancer httpLoadBalancer = HTTPLoadBalancerBuilder.newBuilder()
-                .withCoreConfiguration(CoreConfiguration.DEFAULT)
-                .withHTTPConfiguration(HTTPConfiguration.DEFAULT)
                 .withBindAddress(new InetSocketAddress("localhost", 20003))
                 .withHTTPInitializer(new DefaultHTTPServerInitializer())
                 .withL4FrontListener(new TCPListener())
