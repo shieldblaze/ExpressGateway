@@ -17,54 +17,25 @@
  */
 package com.shieldblaze.expressgateway.configuration.http;
 
-import com.fasterxml.jackson.annotation.JsonProperty;
 import com.shieldblaze.expressgateway.common.utils.Number;
-import com.shieldblaze.expressgateway.configuration.ConfigurationMarshaller;
-
-import java.io.IOException;
 
 /**
  * Configuration for HTTP
  */
-public final class HTTPConfiguration extends ConfigurationMarshaller {
+public final class HTTPConfiguration {
 
-    @JsonProperty("maxContentLength")
     private long maxContentLength;
-
-    @JsonProperty("h2InitialWindowSize")
     private int h2InitialWindowSize;
-
-    @JsonProperty("h2MaxConcurrentStreams")
     private long h2MaxConcurrentStreams;
-
-    @JsonProperty("h2MaxHeaderListSize")
     private long h2MaxHeaderListSize;
-
-    @JsonProperty("h2MaxHeaderTableSize")
     private long h2MaxHeaderTableSize;
-
-    @JsonProperty("h2MaxFrameSize")
     private int h2MaxFrameSize;
-
-    @JsonProperty("maxInitialLineLength")
     private int maxInitialLineLength;
-
-    @JsonProperty("maxHeaderSize")
     private int maxHeaderSize;
-
-    @JsonProperty("maxChunkSize")
     private int maxChunkSize;
-
-    @JsonProperty("compressionThreshold")
     private int compressionThreshold;
-
-    @JsonProperty("deflateCompressionLevel")
     private int deflateCompressionLevel;
-
-    @JsonProperty("brotliCompressionLevel")
     private int brotliCompressionLevel;
-
-    @JsonProperty("WebSocketConfiguration")
     private WebSocketConfiguration webSocketConfiguration;
 
     public static final HTTPConfiguration DEFAULT = new HTTPConfiguration();
@@ -86,7 +57,6 @@ public final class HTTPConfiguration extends ConfigurationMarshaller {
         // WebSocket Configuration
         DEFAULT.webSocketConfiguration = new WebSocketConfiguration();
         DEFAULT.webSocketConfiguration.enableWebSocket = true;
-        DEFAULT.webSocketConfiguration.transparentTransport = false;
     }
 
     HTTPConfiguration() {
@@ -211,12 +181,7 @@ public final class HTTPConfiguration extends ConfigurationMarshaller {
     }
 
     public static class WebSocketConfiguration {
-
-        @JsonProperty("enableWebSocket")
         private boolean enableWebSocket;
-
-        @JsonProperty("transparentTransport")
-        private boolean transparentTransport;
 
         public boolean enableWebSocket() {
             return enableWebSocket;
@@ -226,22 +191,5 @@ public final class HTTPConfiguration extends ConfigurationMarshaller {
             this.enableWebSocket = enableWebSocket;
             return this;
         }
-
-        public boolean transparentTransport() {
-            return transparentTransport;
-        }
-
-        public WebSocketConfiguration transparentTransport(boolean transparentTransport) {
-            this.transparentTransport = transparentTransport;
-            return this;
-        }
-    }
-
-    public static HTTPConfiguration loadFrom() throws IOException {
-        return loadFrom(HTTPConfiguration.class, "HTTP.yaml");
-    }
-
-    public void saveTo() throws IOException {
-        saveTo(this, "HTTP.yaml");
     }
 }

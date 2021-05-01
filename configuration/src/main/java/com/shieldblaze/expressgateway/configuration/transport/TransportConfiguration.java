@@ -17,46 +17,25 @@
  */
 package com.shieldblaze.expressgateway.configuration.transport;
 
-import com.fasterxml.jackson.annotation.JsonProperty;
-import com.shieldblaze.expressgateway.configuration.ConfigurationMarshaller;
 import io.netty.channel.AdaptiveRecvByteBufAllocator;
 import io.netty.channel.FixedRecvByteBufAllocator;
 import io.netty.channel.RecvByteBufAllocator;
 import io.netty.channel.epoll.Epoll;
 import io.netty.incubator.channel.uring.IOUring;
 
-import java.io.IOException;
-
 /**
  * Transport Configuration
  */
-public final class TransportConfiguration extends ConfigurationMarshaller {
+public final class TransportConfiguration {
 
-    @JsonProperty("transportType")
     private TransportType transportType;
-
-    @JsonProperty("receiveBufferAllocationType")
     private ReceiveBufferAllocationType receiveBufferAllocationType;
-
-    @JsonProperty("receiveBufferSizes")
     private int[] receiveBufferSizes;
-
-    @JsonProperty("tcpConnectionBacklog")
     private int tcpConnectionBacklog;
-
-    @JsonProperty("socketReceiveBufferSize")
     private int socketReceiveBufferSize;
-
-    @JsonProperty("socketSendBufferSize")
     private int socketSendBufferSize;
-
-    @JsonProperty("tcpFastOpenMaximumPendingRequests")
     private int tcpFastOpenMaximumPendingRequests;
-
-    @JsonProperty("backendConnectTimeout")
     private int backendConnectTimeout;
-
-    @JsonProperty("connectionIdleTimeout")
     private int connectionIdleTimeout;
 
     public static final TransportConfiguration DEFAULT = new TransportConfiguration();
@@ -167,13 +146,5 @@ public final class TransportConfiguration extends ConfigurationMarshaller {
     TransportConfiguration connectionIdleTimeout(int connectionIdleTimeout) {
         this.connectionIdleTimeout = connectionIdleTimeout;
         return this;
-    }
-
-    public static TransportConfiguration loadFrom() throws IOException {
-        return loadFrom(TransportConfiguration.class, "Transport.yaml");
-    }
-
-    public void saveTo() throws IOException {
-        saveTo(this, "Transport.yaml");
     }
 }

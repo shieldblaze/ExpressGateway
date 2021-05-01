@@ -17,20 +17,14 @@
  */
 package com.shieldblaze.expressgateway.configuration.eventloop;
 
-import com.fasterxml.jackson.annotation.JsonProperty;
-import com.shieldblaze.expressgateway.configuration.ConfigurationMarshaller;
-
-import java.io.IOException;
+import com.shieldblaze.expressgateway.common.utils.Number;
 
 /**
  * {@code EventLoop} Configuration
  */
-public final class EventLoopConfiguration extends ConfigurationMarshaller {
+public final class EventLoopConfiguration {
 
-    @JsonProperty("parentWorkers")
     private int parentWorkers;
-
-    @JsonProperty("childWorkers")
     private int childWorkers;
 
     EventLoopConfiguration() {
@@ -49,6 +43,7 @@ public final class EventLoopConfiguration extends ConfigurationMarshaller {
     }
 
     EventLoopConfiguration parentWorkers(int parentWorkers) {
+        Number.checkPositive(parentWorkers, "Parent Workers");
         this.parentWorkers = parentWorkers;
         return this;
     }
@@ -58,15 +53,8 @@ public final class EventLoopConfiguration extends ConfigurationMarshaller {
     }
 
     EventLoopConfiguration childWorkers(int childWorkers) {
+        Number.checkPositive(childWorkers, "Child Workers");
         this.childWorkers = childWorkers;
         return this;
-    }
-
-    public static EventLoopConfiguration loadFrom() throws IOException {
-        return loadFrom(EventLoopConfiguration.class, "EventLoop.yaml");
-    }
-
-    public void saveTo() throws IOException {
-        saveTo(this, "EventLoop.yaml");
     }
 }

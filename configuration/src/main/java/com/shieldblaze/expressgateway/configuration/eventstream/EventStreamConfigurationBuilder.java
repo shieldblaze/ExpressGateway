@@ -17,8 +17,6 @@
  */
 package com.shieldblaze.expressgateway.configuration.eventstream;
 
-import com.shieldblaze.expressgateway.common.utils.Number;
-
 /**
  * Builder for {@link EventStreamConfiguration}
  */
@@ -40,7 +38,6 @@ public final class EventStreamConfigurationBuilder {
     }
 
     public EventStreamConfiguration build() {
-        Number.checkZeroOrPositive(workers, "Workers");
         return new EventStreamConfiguration(workers);
     }
 }

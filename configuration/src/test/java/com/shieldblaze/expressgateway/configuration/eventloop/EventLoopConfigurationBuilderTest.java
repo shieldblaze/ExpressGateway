@@ -25,7 +25,7 @@ import static org.junit.jupiter.api.Assertions.assertThrows;
 final class EventLoopConfigurationBuilderTest {
 
     @Test
-    void build() {
+    void simpleBuildTest() {
         assertThrows(IllegalArgumentException.class, () -> EventLoopConfigurationBuilder.newBuilder()
                 .withParentWorkers(0)
                 .build());

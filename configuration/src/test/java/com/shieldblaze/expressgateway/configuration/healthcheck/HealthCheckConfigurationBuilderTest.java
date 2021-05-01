@@ -18,29 +18,27 @@
 
 package com.shieldblaze.expressgateway.configuration.healthcheck;
 
-public final class HealthCheckConfigurationBuilder {
-    private int workers;
-    private int timeInterval;
+import org.junit.jupiter.api.Test;
 
-    private HealthCheckConfigurationBuilder() {
-        // Prevent outside initialization
-    }
+import static org.junit.jupiter.api.Assertions.*;
 
-    public static HealthCheckConfigurationBuilder newBuilder() {
-        return new HealthCheckConfigurationBuilder();
-    }
+class HealthCheckConfigurationBuilderTest {
 
-    public HealthCheckConfigurationBuilder withWorkers(int workers) {
-        this.workers = workers;
-        return this;
-    }
+    @Test
+    void simpleTest() {
+        assertThrows(IllegalArgumentException.class, () -> HealthCheckConfigurationBuilder.newBuilder()
+                .withWorkers(-1)
+                .withTimeInterval(-1)
+                .build());
 
-    public HealthCheckConfigurationBuilder withTimeInterval(int timeInterval) {
-        this.timeInterval = timeInterval;
-        return this;
-    }
+        assertThrows(IllegalArgumentException.class, () -> HealthCheckConfigurationBuilder.newBuilder()
+                .withWorkers(0)
+                .withTimeInterval(0)
+                .build());
 
-    public HealthCheckConfiguration build() {
-        return new HealthCheckConfiguration(workers, timeInterval);
+        assertDoesNotThrow(() -> HealthCheckConfigurationBuilder.newBuilder()
+                .withWorkers(1)
+                .withTimeInterval(1)
+                .build());
     }
 }

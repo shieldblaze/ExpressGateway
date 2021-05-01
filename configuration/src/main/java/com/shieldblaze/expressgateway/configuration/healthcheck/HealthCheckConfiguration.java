@@ -17,17 +17,11 @@
  */
 package com.shieldblaze.expressgateway.configuration.healthcheck;
 
-import com.fasterxml.jackson.annotation.JsonProperty;
-import com.shieldblaze.expressgateway.configuration.ConfigurationMarshaller;
+import com.shieldblaze.expressgateway.common.utils.Number;
 
-import java.io.IOException;
+public class HealthCheckConfiguration {
 
-public class HealthCheckConfiguration extends ConfigurationMarshaller {
-
-    @JsonProperty("workers")
     private final int workers;
-
-    @JsonProperty("timeInterval")
     private final int timeInterval;
 
     public static final HealthCheckConfiguration DEFAULT = new HealthCheckConfiguration(
@@ -36,6 +30,8 @@ public class HealthCheckConfiguration extends ConfigurationMarshaller {
     );
 
     HealthCheckConfiguration(int workers, int timeInterval) {
+        Number.checkPositive(workers, "Workers");
+        Number.checkPositive(timeInterval, "TimeInterval");
         this.workers = workers;
         this.timeInterval = timeInterval;
     }
@@ -46,13 +42,5 @@ public class HealthCheckConfiguration extends ConfigurationMarshaller {
 
     public int timeInterval() {
         return timeInterval;
-    }
-
-    public static HealthCheckConfiguration loadFrom() throws IOException {
-        return loadFrom(HealthCheckConfiguration.class, "HealthCheck.yaml");
-    }
-
-    public void saveTo() throws IOException {
-        saveTo(this, "HealthCheck.yaml");
     }
 }
