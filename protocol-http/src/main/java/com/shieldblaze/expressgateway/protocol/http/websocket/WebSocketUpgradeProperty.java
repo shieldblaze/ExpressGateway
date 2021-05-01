@@ -15,41 +15,39 @@
  * You should have received a copy of the GNU General Public License
  * along with ShieldBlaze ExpressGateway.  If not, see <https://www.gnu.org/licenses/>.
  */
-package io.netty.handler.codec.http;
+package com.shieldblaze.expressgateway.protocol.http.websocket;
 
-public class CustomHttpResponse extends DefaultHttpResponse implements HttpFrame {
+import io.netty.channel.Channel;
 
-    private Protocol protocol;
-    private long id;
+import java.net.InetSocketAddress;
+import java.net.URI;
 
-    public CustomHttpResponse(HttpVersion httpVersion, HttpResponseStatus status, Protocol protocol, long id) {
-        super(httpVersion, status, true);
-        this.protocol = protocol;
-        this.id = id;
+public final class WebSocketUpgradeProperty {
+    private final InetSocketAddress clientAddress;
+    private final URI uri;
+    private final String subProtocol;
+    private final Channel channel;
+
+    public WebSocketUpgradeProperty(InetSocketAddress clientAddress, URI uri, String subProtocol, Channel channel) {
+        this.clientAddress = clientAddress;
+        this.uri = uri;
+        this.subProtocol = subProtocol;
+        this.channel = channel;
     }
 
-    @Override
-    public String toString() {
-        return HttpMessageUtil.appendResponse(new StringBuilder(256), this) +  "/" + id();
+    InetSocketAddress clientAddress() {
+        return clientAddress;
     }
 
-    @Override
-    public Protocol protocol() {
-        return protocol;
+    URI uri() {
+        return uri;
     }
 
-    @Override
-    public void protocol(Protocol protocol) {
-        this.protocol = protocol;
+    String subProtocol() {
+        return subProtocol;
     }
 
-    @Override
-    public long id() {
-        return id;
-    }
-
-    @Override
-    public void id(long id) {
-        this.id = id;
+    Channel channel() {
+        return channel;
     }
 }

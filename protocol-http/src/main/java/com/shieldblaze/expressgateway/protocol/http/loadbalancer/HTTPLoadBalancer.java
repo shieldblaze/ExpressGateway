@@ -41,7 +41,6 @@ public class HTTPLoadBalancer extends L4LoadBalancer {
         httpServerInitializer.httpLoadBalancer(this);
     }
 
-
     /**
      * Get {@link HTTPConfiguration} Instance for this {@link HTTPLoadBalancer}
      */

@@ -17,11 +17,11 @@
  */
 package com.shieldblaze.expressgateway.protocol.http.loadbalancer;
 
-import com.shieldblaze.expressgateway.concurrent.eventstream.EventStream;
 import com.shieldblaze.expressgateway.configuration.CoreConfiguration;
 import com.shieldblaze.expressgateway.configuration.http.HTTPConfiguration;
 import com.shieldblaze.expressgateway.configuration.tls.TLSConfiguration;
 import com.shieldblaze.expressgateway.core.L4FrontListener;
+import com.shieldblaze.expressgateway.protocol.http.DefaultHTTPServerInitializer;
 import com.shieldblaze.expressgateway.protocol.http.HTTPServerInitializer;
 
 import java.net.InetSocketAddress;
@@ -33,10 +33,10 @@ import java.util.Objects;
 public final class HTTPLoadBalancerBuilder {
     private String name;
     private InetSocketAddress bindAddress;
-    private CoreConfiguration coreConfiguration;
-    private HTTPConfiguration httpConfiguration;
+    private CoreConfiguration coreConfiguration = CoreConfiguration.DEFAULT;
+    private HTTPConfiguration httpConfiguration = HTTPConfiguration.DEFAULT;
     private L4FrontListener l4FrontListener;
-    private HTTPServerInitializer httpServerInitializer;
+    private HTTPServerInitializer httpServerInitializer = new DefaultHTTPServerInitializer();
     private TLSConfiguration tlsServer;
     private TLSConfiguration tlsClient;
 
@@ -100,9 +100,6 @@ public final class HTTPLoadBalancerBuilder {
     public HTTPLoadBalancer build() {
         Objects.requireNonNull(bindAddress, "BindAddress");
         Objects.requireNonNull(l4FrontListener, "L4FrontListener");
-        Objects.requireNonNull(httpServerInitializer, "HTTPServerInitializer");
-        Objects.requireNonNull(coreConfiguration, "CoreConfiguration");
-        Objects.requireNonNull(httpConfiguration, "HTTPConfiguration");
 
         return new HTTPLoadBalancer(
                 name,

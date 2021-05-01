@@ -123,3 +123,10 @@ This product depends on 'FastUtil'. License for the same can be obtained at:
     * license/LICENSE.fastutil.txt (Apache License 2.0)
 
 ---------------------------------
+
+This product depends on 'OkHttp'. License for the same can be obtained at:
+
+  * LICENSE:
+    * license/LICENSE.okhttp.txt (Apache License 2.0)
+
+---------------------------------

@@ -15,41 +15,22 @@
  * You should have received a copy of the GNU General Public License
  * along with ShieldBlaze ExpressGateway.  If not, see <https://www.gnu.org/licenses/>.
  */
-package io.netty.handler.codec.http;
+package com.shieldblaze.expressgateway.protocol.http.websocket;
 
-public class CustomHttpResponse extends DefaultHttpResponse implements HttpFrame {
+import io.netty.channel.ChannelHandlerContext;
+import io.netty.channel.SimpleChannelInboundHandler;
+import io.netty.handler.codec.http.websocketx.TextWebSocketFrame;
+import io.netty.handler.codec.http.websocketx.WebSocketFrame;
 
-    private Protocol protocol;
-    private long id;
-
-    public CustomHttpResponse(HttpVersion httpVersion, HttpResponseStatus status, Protocol protocol, long id) {
-        super(httpVersion, status, true);
-        this.protocol = protocol;
-        this.id = id;
-    }
+final class WebSocketHandler extends SimpleChannelInboundHandler<WebSocketFrame> {
 
     @Override
-    public String toString() {
-        return HttpMessageUtil.appendResponse(new StringBuilder(256), this) +  "/" + id();
-    }
+    protected void channelRead0(ChannelHandlerContext ctx, WebSocketFrame webSocketFrame) {
+        if (webSocketFrame instanceof TextWebSocketFrame) {
+            TextWebSocketFrame frame = (TextWebSocketFrame) webSocketFrame;
 
-    @Override
-    public Protocol protocol() {
-        return protocol;
-    }
-
-    @Override
-    public void protocol(Protocol protocol) {
-        this.protocol = protocol;
-    }
-
-    @Override
-    public long id() {
-        return id;
-    }
-
-    @Override
-    public void id(long id) {
-        this.id = id;
+            // Echo Back
+            ctx.writeAndFlush(new TextWebSocketFrame(frame.text()));
+        }
     }
 }

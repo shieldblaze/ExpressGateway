@@ -15,35 +15,31 @@
  * You should have received a copy of the GNU General Public License
  * along with ShieldBlaze ExpressGateway.  If not, see <https://www.gnu.org/licenses/>.
  */
-package com.shieldblaze.expressgateway.protocol.http;
+package com.shieldblaze.expressgateway.protocol.http.websocket;
 
-import io.netty.channel.Channel;
 import io.netty.channel.ChannelHandlerContext;
 import io.netty.channel.ChannelInboundHandlerAdapter;
-import org.apache.logging.log4j.LogManager;
-import org.apache.logging.log4j.Logger;
+import io.netty.handler.codec.http.FullHttpResponse;
+import io.netty.handler.codec.http.websocketx.WebSocketClientHandshaker;
 
-final class DownstreamHandler extends ChannelInboundHandlerAdapter {
+final class WebSocketClientHandshakerFinisherHandler extends ChannelInboundHandlerAdapter {
 
-    private static final Logger logger = LogManager.getLogger(DownstreamHandler.class);
+    private final WebSocketClientHandshaker handshaker;
 
-    private Channel channel;
-
-    DownstreamHandler(Channel channel) {
-        this.channel = channel;
+    WebSocketClientHandshakerFinisherHandler(WebSocketClientHandshaker handshaker) {
+        this.handshaker = handshaker;
     }
 
     @Override
     public void channelRead(ChannelHandlerContext ctx, Object msg) {
-        channel.writeAndFlush(msg, channel.voidPromise());
-    }
+        if (msg instanceof FullHttpResponse) {
+            if (!handshaker.isHandshakeComplete()) {
+                handshaker.finishHandshake(ctx.channel(), (FullHttpResponse) msg);
+                ctx.pipeline().remove(this); // Let's remove ourselves because we're done.
+                return;
+            }
+        }
 
-    void channel(Channel channel) {
-        this.channel = channel;
-    }
-
-    @Override
-    public void exceptionCaught(ChannelHandlerContext ctx, Throwable cause) {
-        logger.error("Caught Error at Downstream Handler", cause);
+        ctx.fireChannelRead(ctx);
     }
 }

@@ -37,7 +37,7 @@ import io.netty.handler.codec.http2.Http2HeadersEncoder;
 import io.netty.handler.codec.http2.Http2PromisedRequestVerifier;
 import io.netty.handler.codec.http2.Http2Settings;
 
-final class HTTPCodecs {
+public final class HTTPCodecs {
 
     static Http2FrameCodec H2ClientCodec(HTTPConfiguration httpConfiguration) {
         Http2Settings http2Settings = new Http2Settings();
@@ -100,7 +100,7 @@ final class HTTPCodecs {
      *
      * @param httpConfiguration {@link HTTPConfiguration} Instance
      */
-    static HttpClientCodec HTTPClientCodec(HTTPConfiguration httpConfiguration) {
+    public static HttpClientCodec client(HTTPConfiguration httpConfiguration) {
         int maxInitialLineLength = httpConfiguration.maxInitialLineLength();
         int maxHeaderSize = httpConfiguration.maxHeaderSize();
         int maxChunkSize = httpConfiguration.maxChunkSize();

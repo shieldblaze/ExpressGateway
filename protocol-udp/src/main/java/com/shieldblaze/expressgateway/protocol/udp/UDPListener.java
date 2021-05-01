@@ -59,7 +59,7 @@ public class UDPListener extends L4FrontListener {
             channelHandler = l4LoadBalancer().channelHandler();
         }
 
-        Bootstrap bootstrap = BootstrapFactory.getUDP(coreConfiguration, eventLoopGroup, l4LoadBalancer().byteBufAllocator())
+        Bootstrap bootstrap = BootstrapFactory.udp(coreConfiguration, eventLoopGroup, l4LoadBalancer().byteBufAllocator())
                 .handler(channelHandler);
 
         int bindRounds = 1;

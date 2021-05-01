@@ -15,31 +15,43 @@
  * You should have received a copy of the GNU General Public License
  * along with ShieldBlaze ExpressGateway.  If not, see <https://www.gnu.org/licenses/>.
  */
-package com.shieldblaze.expressgateway.protocol.http;
+package com.shieldblaze.expressgateway.protocol.http.websocket;
 
+import com.shieldblaze.expressgateway.common.utils.ReferenceCounted;
 import io.netty.channel.Channel;
 import io.netty.channel.ChannelHandlerContext;
 import io.netty.channel.ChannelInboundHandlerAdapter;
+import io.netty.handler.codec.http.websocketx.WebSocketFrame;
 import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
 
-final class DownstreamHandler extends ChannelInboundHandlerAdapter {
+final class WebSocketDownstreamHandler extends ChannelInboundHandlerAdapter {
 
-    private static final Logger logger = LogManager.getLogger(DownstreamHandler.class);
+    private static final Logger logger = LogManager.getLogger(WebSocketDownstreamHandler.class);
 
-    private Channel channel;
+    private final Channel channel;
 
-    DownstreamHandler(Channel channel) {
+    WebSocketDownstreamHandler(Channel channel) {
         this.channel = channel;
     }
 
     @Override
     public void channelRead(ChannelHandlerContext ctx, Object msg) {
-        channel.writeAndFlush(msg, channel.voidPromise());
+        if (msg instanceof WebSocketFrame) {
+            channel.writeAndFlush(msg, channel.voidPromise());
+        } else {
+            ReferenceCounted.silentRelease(msg);
+        }
     }
 
-    void channel(Channel channel) {
-        this.channel = channel;
+    @Override
+    public void channelInactive(ChannelHandlerContext ctx) {
+        channel.close();
+    }
+
+    @Override
+    public void handlerRemoved(ChannelHandlerContext ctx) {
+        channel.close();
     }
 
     @Override

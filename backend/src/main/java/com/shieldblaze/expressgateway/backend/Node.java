@@ -298,7 +298,9 @@ public final class Node implements Comparable<Node>, Closeable {
      * Release a connection and add it into available active connection pool.
      */
     public void release0(Connection connection) {
-        availableConnections.add(connection);
+        if (!availableConnections.contains(connection)) {
+            availableConnections.add(connection);
+        }
     }
 
     /**
@@ -313,7 +315,7 @@ public final class Node implements Comparable<Node>, Closeable {
 
     @Override
     public String toString() {
-        return "Node{" +
+        return '{' +
                 "Cluster=" + cluster +
                 ", Address=" + socketAddress +
                 ", BytesSent=" + bytesSent +
@@ -352,9 +354,9 @@ public final class Node implements Comparable<Node>, Closeable {
     @InternalCall
     @Override
     public void close() {
+        state(State.OFFLINE);
         activeConnections.forEach(Connection::close);
         activeConnections.clear();
         availableConnections.clear();
-        state(State.OFFLINE);
     }
 }

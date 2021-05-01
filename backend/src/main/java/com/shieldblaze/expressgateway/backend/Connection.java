@@ -39,9 +39,9 @@ public abstract class Connection {
      */
     public enum State {
         /**
-         * Connection State is Unknown
+         * Connection has been initialized.
          */
-        UNKNOWN,
+        INITIALIZED,
 
         /**
          * Connection has timed-out while connecting.
@@ -62,13 +62,13 @@ public abstract class Connection {
     /**
      * Backlog Queue contains objects pending to be written once connection establishes.
      */
-    protected ConcurrentLinkedQueue<Object> backlogQueue = new ConcurrentLinkedQueue<>();
+    protected final ConcurrentLinkedQueue<Object> backlogQueue = new ConcurrentLinkedQueue<>();
 
     private final Node node;
-    private ChannelFuture channelFuture;
-    private Channel channel;
-    private InetSocketAddress socketAddress;
-    private volatile State state = State.UNKNOWN;
+    protected ChannelFuture channelFuture;
+    protected Channel channel;
+    protected InetSocketAddress socketAddress;
+    protected State state = State.INITIALIZED;
 
     /**
      * Create a new {@link Connection} Instance
@@ -89,9 +89,9 @@ public abstract class Connection {
             // Add listener to be notified when Channel initializes
             channelFuture.addListener(future -> {
                 if (channelFuture.isSuccess()) {
+                    state = State.CONNECTED_AND_ACTIVE;
                     socketAddress = (InetSocketAddress) channelFuture.channel().remoteAddress();
                     channel = channelFuture.channel();
-                    state = State.CONNECTED_AND_ACTIVE;
                 } else {
                     if (future.cause() instanceof ConnectTimeoutException) {
                         state = State.CONNECTION_TIMEOUT;
@@ -121,10 +121,8 @@ public abstract class Connection {
      * Write and Process the Backlog
      */
     protected void writeBacklog() {
-        ConcurrentLinkedQueue<Object> queue = new ConcurrentLinkedQueue<>(backlogQueue); // Make copy of Queue
-        backlogQueue = null; // Make old queue null so no more data is written to it.
-        queue.forEach(this::writeAndFlush);
-        queue.clear(); // Clear the new queue because we're done with it.
+        backlogQueue.forEach(this::writeAndFlush);
+        backlogQueue.clear(); // Clear the new queue because we're done with it.
     }
 
     /**
@@ -132,18 +130,17 @@ public abstract class Connection {
      */
     protected void clearBacklog() {
         backlogQueue.forEach(ReferenceCounted::silentRelease);
-        backlogQueue = null;
+        backlogQueue.clear();
     }
 
     /**
      * Write and Flush data
      *
      * @param o Data to be written
-     * @return {@link ChannelFuture} of this write and flush
      */
     @NonNull
     public void writeAndFlush(Object o) {
-        if (backlogQueue != null) {
+        if (state == State.INITIALIZED) {
             backlogQueue.add(o);
         } else if (state == State.CONNECTED_AND_ACTIVE) {
             channel.writeAndFlush(o, channel.voidPromise());
@@ -183,11 +180,17 @@ public abstract class Connection {
      * Close this {@linkplain Connection}
      */
     public void close() {
+        // If Backlog Queue contains something then clear it before closing connection.
+        if (!backlogQueue.isEmpty()) {
+            clearBacklog();
+        }
+
+        // Close the Connection
         channelFuture.channel().close();
     }
 
     @Override
     public String toString() {
-        return "Connection{" + "node=" + node + ", socketAddress=" + socketAddress + ", state=" + state + '}';
+        return '{' + "node=" + node + ", socketAddress=" + socketAddress + ", state=" + state + '}';
     }
 }

@@ -17,39 +17,92 @@
  */
 package com.shieldblaze.expressgateway.core;
 
+import com.shieldblaze.expressgateway.concurrent.GlobalExecutors;
 import io.netty.channel.ChannelDuplexHandler;
 import io.netty.channel.ChannelHandlerContext;
 import io.netty.channel.ChannelPromise;
 
 import java.time.Duration;
+import java.util.concurrent.ScheduledFuture;
+import java.util.concurrent.TimeUnit;
 
-public class ConnectionTimeoutHandler extends ChannelDuplexHandler {
+public final class ConnectionTimeoutHandler extends ChannelDuplexHandler implements Runnable {
+
+    public enum State {
+        /**
+         * When Upstream Read(Receiving) is Idle
+         */
+        UPSTREAM_READ_IDLE,
+
+        /**
+         * When Upstream Write(Sending) is Idle
+         */
+        UPSTREAM_WRITE_IDLE,
+
+        /**
+         * When Downstream Read(Receiving) is Idle
+         */
+        DOWNSTREAM_READ_IDLE,
+
+        /**
+         * When Downstream Write(Sending) is Idle
+         */
+        DOWNSTREAM_WRITE_IDLE,
+    }
 
     private final long timeoutNanos;
-    private long lastTransferred = System.nanoTime();
+    private final boolean isUpstream;
+    private long lastTransferredRead = System.nanoTime();
+    private long lastTransferredWrite = System.nanoTime();
+    private ChannelHandlerContext ctx;
+    private ScheduledFuture<?> scheduledFuture;
 
-    public ConnectionTimeoutHandler(Duration timeout) {
+    /**
+     * Create a new Instance of {@linkplain ConnectionTimeoutHandler}
+     *
+     * @param timeout    Timeout of Read/Write
+     * @param isUpstream Set to {@code true} if this Instance is placed in Upstream Pipeline
+     */
+    public ConnectionTimeoutHandler(Duration timeout, boolean isUpstream) {
         this.timeoutNanos = timeout.toNanos();
+        this.isUpstream = isUpstream;
+    }
+
+    @Override
+    public void channelActive(ChannelHandlerContext ctx) throws Exception {
+        this.ctx = ctx;
+        scheduledFuture = GlobalExecutors.INSTANCE.submitTaskAndRunEvery(this, 0, 500, TimeUnit.MILLISECONDS);
+        super.channelActive(ctx);
+    }
+
+    @Override
+    public void channelInactive(ChannelHandlerContext ctx) throws Exception {
+        scheduledFuture.cancel(true);
+        super.channelInactive(ctx);
     }
 
     @Override
     public void channelRead(ChannelHandlerContext ctx, Object msg) throws Exception {
-        check(ctx);
+        lastTransferredRead = System.nanoTime();
         super.channelRead(ctx, msg);
     }
 
     @Override
     public void write(ChannelHandlerContext ctx, Object msg, ChannelPromise promise) throws Exception {
-        check(ctx);
+        lastTransferredWrite = System.nanoTime();
         super.write(ctx, msg, promise);
     }
 
-    private void check(ChannelHandlerContext ctx) {
+    @Override
+    public void run() {
         long nanoTime = System.nanoTime();
-        if (nanoTime - lastTransferred > timeoutNanos) {
-            ctx.close();
-        } else {
-            lastTransferred = nanoTime;
+
+        if (nanoTime - lastTransferredRead > timeoutNanos) {
+            ctx.fireUserEventTriggered(isUpstream ? State.UPSTREAM_READ_IDLE : State.DOWNSTREAM_READ_IDLE);
+        }
+
+        if (nanoTime - lastTransferredWrite > timeoutNanos) {
+            ctx.fireUserEventTriggered(isUpstream ? State.UPSTREAM_WRITE_IDLE : State.DOWNSTREAM_WRITE_IDLE);
         }
     }
 }

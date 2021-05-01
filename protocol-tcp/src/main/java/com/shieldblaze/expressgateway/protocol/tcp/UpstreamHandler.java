@@ -39,7 +39,7 @@ final class UpstreamHandler extends ChannelInboundHandlerAdapter {
 
     UpstreamHandler(L4LoadBalancer l4LoadBalancer) {
         this.l4LoadBalancer = l4LoadBalancer;
-        bootstrapper = new Bootstrapper(l4LoadBalancer, l4LoadBalancer.eventLoopFactory().childGroup(), l4LoadBalancer.byteBufAllocator());
+        bootstrapper = new Bootstrapper(l4LoadBalancer);
     }
 
     @Override

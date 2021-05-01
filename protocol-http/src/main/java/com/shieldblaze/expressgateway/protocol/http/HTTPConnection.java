@@ -59,12 +59,6 @@ final class HTTPConnection extends Connection {
 
                         if (protocol.equalsIgnoreCase(ApplicationProtocolNames.HTTP_2)) {
                             isHTTP2 = true;
-
-                            /*
-                             * Since HTTP/2 supports Multiplexing,
-                             * we'll release this connection back to pool.
-                             */
-                            release();
                         }
 
                         writeBacklog();
@@ -109,7 +103,7 @@ final class HTTPConnection extends Connection {
     }
 
     boolean hasReachedMaximumCapacity() {
-        return totalRequests.get() > Integer.MAX_VALUE - 100_000;
+        return totalRequests.get() > 1073741823; // ((Integer.MAX_VALUE - 1) / 2)
     }
 
     @Override
