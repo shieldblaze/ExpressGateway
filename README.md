@@ -15,12 +15,13 @@
 - :heavy_check_mark: Full IPv6 Support
 
 ### L7:
-- :heavy_check_mark: Full HTTP/1.1 and HTTP/2
+- :heavy_check_mark: HTTP/1.1 and HTTP/2
 - :heavy_check_mark: HTTP/2 to HTTP/1.1 Translation
 - :heavy_check_mark: HTTP/1.1 to HTTP/2 Translation
 - :heavy_check_mark: Reverse Proxy
 - :heavy_check_mark: HTTP Compression (GZIP, Deflate and Brotli)
 - :heavy_check_mark: HTTP Connection Pool
+- :heavy_check_mark: WebSocket
 - [ ] HTTP Caching
 
 ### TLS:
