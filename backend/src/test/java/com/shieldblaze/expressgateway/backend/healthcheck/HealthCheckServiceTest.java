@@ -124,7 +124,7 @@ class HealthCheckServiceTest {
     @Order(3)
     void shutdownTCPServer() throws InterruptedException {
         tcpServer.shutdown();
-        Thread.sleep(20000);
+        Thread.sleep(25000);
     }
 
     @Test
