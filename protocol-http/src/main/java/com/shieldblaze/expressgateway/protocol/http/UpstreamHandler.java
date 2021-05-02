@@ -149,8 +149,7 @@ public final class UpstreamHandler extends ChannelDuplexHandler {
 
         // If 'Connection:Upgrade' and 'Upgrade:WebSocket' then begin WebSocket Upgrade Process.
         if (httpRequest.headers().get(HttpHeaderNames.CONNECTION).equalsIgnoreCase("Upgrade") &&
-                httpRequest.headers().get(HttpHeaderNames.UPGRADE).equalsIgnoreCase("WebSocket") &&
-                httpLoadBalancer.httpConfiguration().webSocketConfiguration().enableWebSocket()) {
+                httpRequest.headers().get(HttpHeaderNames.UPGRADE).equalsIgnoreCase("WebSocket")) {
 
             // Handshake for WebSocket
             String uri = webSocketURL(httpRequest);

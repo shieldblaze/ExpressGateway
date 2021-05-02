@@ -103,13 +103,6 @@ This product depends on 'Javax-Annotation'. License for the same can be obtained
 
 ---------------------------------
 
-This product depends on 'FasterXML YAML'. License for the same can be obtained at:
-
-  * LICENSE:
-    * license/LICENSE.fasterxml-yaml.txt (Apache License 2.0)
-
----------------------------------
-
 This product depends on 'JaCoCo'. License for the same can be obtained at:
 
   * LICENSE:

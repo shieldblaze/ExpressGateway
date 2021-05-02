@@ -17,55 +17,25 @@
  */
 package com.shieldblaze.expressgateway.configuration.http;
 
-import com.fasterxml.jackson.annotation.JsonProperty;
 import com.shieldblaze.expressgateway.common.utils.Number;
-import com.shieldblaze.expressgateway.configuration.ConfigurationMarshaller;
-
-import java.io.IOException;
 
 /**
  * Configuration for HTTP
  */
-public final class HTTPConfiguration extends ConfigurationMarshaller {
+public final class HTTPConfiguration {
 
-    @JsonProperty("maxContentLength")
     private long maxContentLength;
-
-    @JsonProperty("h2InitialWindowSize")
     private int h2InitialWindowSize;
-
-    @JsonProperty("h2MaxConcurrentStreams")
     private long h2MaxConcurrentStreams;
-
-    @JsonProperty("h2MaxHeaderListSize")
     private long h2MaxHeaderListSize;
-
-    @JsonProperty("h2MaxHeaderTableSize")
     private long h2MaxHeaderTableSize;
-
-    @JsonProperty("h2MaxFrameSize")
     private int h2MaxFrameSize;
-
-    @JsonProperty("maxInitialLineLength")
     private int maxInitialLineLength;
-
-    @JsonProperty("maxHeaderSize")
     private int maxHeaderSize;
-
-    @JsonProperty("maxChunkSize")
     private int maxChunkSize;
-
-    @JsonProperty("compressionThreshold")
     private int compressionThreshold;
-
-    @JsonProperty("deflateCompressionLevel")
     private int deflateCompressionLevel;
-
-    @JsonProperty("brotliCompressionLevel")
     private int brotliCompressionLevel;
-
-    @JsonProperty("WebSocketConfiguration")
-    private WebSocketConfiguration webSocketConfiguration;
 
     public static final HTTPConfiguration DEFAULT = new HTTPConfiguration();
 
@@ -82,11 +52,6 @@ public final class HTTPConfiguration extends ConfigurationMarshaller {
         DEFAULT.compressionThreshold = 1024;
         DEFAULT.deflateCompressionLevel = 6;
         DEFAULT.brotliCompressionLevel = 4;
-
-        // WebSocket Configuration
-        DEFAULT.webSocketConfiguration = new WebSocketConfiguration();
-        DEFAULT.webSocketConfiguration.enableWebSocket = true;
-        DEFAULT.webSocketConfiguration.transparentTransport = false;
     }
 
     HTTPConfiguration() {
@@ -97,7 +62,7 @@ public final class HTTPConfiguration extends ConfigurationMarshaller {
         return maxContentLength;
     }
 
-    public HTTPConfiguration maxContentLength(long maxContentLength) {
+    HTTPConfiguration maxContentLength(long maxContentLength) {
         this.maxContentLength = Number.checkPositive(maxContentLength, "maxContentLength");
         return this;
     }
@@ -106,7 +71,7 @@ public final class HTTPConfiguration extends ConfigurationMarshaller {
         return h2InitialWindowSize;
     }
 
-    public HTTPConfiguration setH2InitialWindowSize(int h2InitialWindowSize) {
+    HTTPConfiguration h2InitialWindowSize(int h2InitialWindowSize) {
         this.h2InitialWindowSize = Number.checkPositive(h2InitialWindowSize, "h2InitialWindowSize");
         return this;
     }
@@ -115,7 +80,7 @@ public final class HTTPConfiguration extends ConfigurationMarshaller {
         return h2MaxConcurrentStreams;
     }
 
-    public HTTPConfiguration h2MaxConcurrentStreams(long h2MaxConcurrentStreams) {
+    HTTPConfiguration h2MaxConcurrentStreams(long h2MaxConcurrentStreams) {
         this.h2MaxConcurrentStreams = Number.checkPositive(h2MaxConcurrentStreams, "h2MaxConcurrentStreams");
         return this;
     }
@@ -124,7 +89,7 @@ public final class HTTPConfiguration extends ConfigurationMarshaller {
         return h2MaxHeaderListSize;
     }
 
-    public HTTPConfiguration h2MaxHeaderListSize(long h2MaxHeaderSizeList) {
+    HTTPConfiguration h2MaxHeaderListSize(long h2MaxHeaderSizeList) {
         this.h2MaxHeaderListSize = Number.checkPositive(h2MaxHeaderSizeList, "h2MaxHeaderListSize");
         return this;
     }
@@ -133,7 +98,7 @@ public final class HTTPConfiguration extends ConfigurationMarshaller {
         return h2MaxHeaderTableSize;
     }
 
-    public HTTPConfiguration h2MaxHeaderTableSize(long h2MaxHeaderTableSize) {
+    HTTPConfiguration h2MaxHeaderTableSize(long h2MaxHeaderTableSize) {
         this.h2MaxHeaderTableSize = Number.checkPositive(h2MaxHeaderTableSize, "h2MaxHeaderTableSize");
         return this;
     }
@@ -142,7 +107,7 @@ public final class HTTPConfiguration extends ConfigurationMarshaller {
         return h2MaxFrameSize;
     }
 
-    public HTTPConfiguration h2MaxFrameSize(int h2MaxFrameSize) {
+    HTTPConfiguration h2MaxFrameSize(int h2MaxFrameSize) {
         this.h2MaxFrameSize = Number.checkPositive(h2MaxFrameSize, "h2MaxFrameSize");
         return this;
     }
@@ -151,7 +116,7 @@ public final class HTTPConfiguration extends ConfigurationMarshaller {
         return maxInitialLineLength;
     }
 
-    public HTTPConfiguration maxInitialLineLength(int maxInitialLineLength) {
+    HTTPConfiguration maxInitialLineLength(int maxInitialLineLength) {
         this.maxInitialLineLength = Number.checkPositive(maxInitialLineLength, "maxInitialLineLength");
         return this;
     }
@@ -160,7 +125,7 @@ public final class HTTPConfiguration extends ConfigurationMarshaller {
         return maxHeaderSize;
     }
 
-    public HTTPConfiguration setMaxHeaderSize(int maxHeaderSize) {
+    HTTPConfiguration maxHeaderSize(int maxHeaderSize) {
         this.maxHeaderSize = Number.checkPositive(maxHeaderSize, "maxHeaderSize");
         return this;
     }
@@ -169,7 +134,7 @@ public final class HTTPConfiguration extends ConfigurationMarshaller {
         return maxChunkSize;
     }
 
-    public HTTPConfiguration maxChunkSize(int maxChunkSize) {
+    HTTPConfiguration maxChunkSize(int maxChunkSize) {
         this.maxChunkSize = Number.checkPositive(maxChunkSize, "maxChunkSize");
         return this;
     }
@@ -178,7 +143,7 @@ public final class HTTPConfiguration extends ConfigurationMarshaller {
         return compressionThreshold;
     }
 
-    public HTTPConfiguration compressionThreshold(int compressionThreshold) {
+    HTTPConfiguration compressionThreshold(int compressionThreshold) {
         this.compressionThreshold = Number.checkZeroOrPositive(compressionThreshold, "compressionThreshold");
         return this;
     }
@@ -187,7 +152,7 @@ public final class HTTPConfiguration extends ConfigurationMarshaller {
         return deflateCompressionLevel;
     }
 
-    public HTTPConfiguration deflateCompressionLevel(int deflateCompressionLevel) {
+    HTTPConfiguration deflateCompressionLevel(int deflateCompressionLevel) {
         this.deflateCompressionLevel = Number.checkRange(deflateCompressionLevel, 0, 9, "deflateCompressionLevel");
         return this;
     }
@@ -196,52 +161,8 @@ public final class HTTPConfiguration extends ConfigurationMarshaller {
         return brotliCompressionLevel;
     }
 
-    public HTTPConfiguration brotliCompressionLevel(int brotliCompressionLevel) {
+    HTTPConfiguration brotliCompressionLevel(int brotliCompressionLevel) {
         this.brotliCompressionLevel = Number.checkRange(brotliCompressionLevel, 1, 11, "brotliCompressionLevel");
         return this;
-    }
-
-    public WebSocketConfiguration webSocketConfiguration() {
-        return webSocketConfiguration;
-    }
-
-    public HTTPConfiguration webSocketConfiguration(WebSocketConfiguration webSocketConfiguration) {
-        this.webSocketConfiguration = webSocketConfiguration;
-        return this;
-    }
-
-    public static class WebSocketConfiguration {
-
-        @JsonProperty("enableWebSocket")
-        private boolean enableWebSocket;
-
-        @JsonProperty("transparentTransport")
-        private boolean transparentTransport;
-
-        public boolean enableWebSocket() {
-            return enableWebSocket;
-        }
-
-        public WebSocketConfiguration enableWebSocket(boolean enableWebSocket) {
-            this.enableWebSocket = enableWebSocket;
-            return this;
-        }
-
-        public boolean transparentTransport() {
-            return transparentTransport;
-        }
-
-        public WebSocketConfiguration transparentTransport(boolean transparentTransport) {
-            this.transparentTransport = transparentTransport;
-            return this;
-        }
-    }
-
-    public static HTTPConfiguration loadFrom() throws IOException {
-        return loadFrom(HTTPConfiguration.class, "HTTP.yaml");
-    }
-
-    public void saveTo() throws IOException {
-        saveTo(this, "HTTP.yaml");
     }
 }

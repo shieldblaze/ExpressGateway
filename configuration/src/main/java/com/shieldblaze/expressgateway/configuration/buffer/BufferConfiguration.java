@@ -17,53 +17,23 @@
  */
 package com.shieldblaze.expressgateway.configuration.buffer;
 
-import com.fasterxml.jackson.annotation.JsonProperty;
-import com.google.gson.annotations.Expose;
-import com.shieldblaze.expressgateway.configuration.ConfigurationMarshaller;
+import com.shieldblaze.expressgateway.common.utils.Number;
 import io.netty.buffer.PooledByteBufAllocator;
 import io.netty.util.internal.PlatformDependent;
-
-import java.io.IOException;
 
 /**
  * Configuration for {@link PooledByteBufAllocator}
  */
-public final class BufferConfiguration extends ConfigurationMarshaller {
+public final class BufferConfiguration {
 
-    @Expose
-    @JsonProperty("preferDirect")
     private boolean preferDirect;
-
-    @Expose
-    @JsonProperty("heapArena")
     private int heapArena;
-
-    @Expose
-    @JsonProperty("directArena")
     private int directArena;
-
-    @Expose
-    @JsonProperty("pageSize")
     private int pageSize;
-
-    @Expose
-    @JsonProperty("maxOrder")
     private int maxOrder;
-
-    @Expose
-    @JsonProperty("smallCacheSize")
     private int smallCacheSize;
-
-    @Expose
-    @JsonProperty("normalCacheSize")
     private int normalCacheSize;
-
-    @Expose
-    @JsonProperty("useCacheForAllThreads")
     private boolean useCacheForAllThreads;
-
-    @Expose
-    @JsonProperty("directMemoryCacheAlignment")
     private int directMemoryCacheAlignment;
 
     BufferConfiguration() {
@@ -74,10 +44,8 @@ public final class BufferConfiguration extends ConfigurationMarshaller {
             true,
             16384,
             11,
-            (int) Math.max(0, Math.min((long) Runtime.getRuntime().availableProcessors() * 2,
-                    Runtime.getRuntime().maxMemory() / 16384 << 11 / 2 / 3)),
-            (int) Math.max(0, Math.min((long) Runtime.getRuntime().availableProcessors() * 2,
-                    PlatformDependent.maxDirectMemory() / 16384 << 11 / 2 / 3)),
+            (int) Math.max(0, Math.min((long) Runtime.getRuntime().availableProcessors() * 2, Runtime.getRuntime().maxMemory() / 16384 << 11 / 2 / 3)),
+            (int) Math.max(0, Math.min((long) Runtime.getRuntime().availableProcessors() * 2, PlatformDependent.maxDirectMemory() / 16384 << 11 / 2 / 3)),
             256,
             64,
             true,
@@ -117,6 +85,7 @@ public final class BufferConfiguration extends ConfigurationMarshaller {
     }
 
     BufferConfiguration heapArena(int heapArena) {
+        Number.checkPositive(heapArena, "heapArena");
         this.heapArena = heapArena;
         return this;
     }
@@ -129,6 +98,7 @@ public final class BufferConfiguration extends ConfigurationMarshaller {
     }
 
     BufferConfiguration directArena(int directArena) {
+        Number.checkPositive(directArena, "directArena");
         this.directArena = directArena;
         return this;
     }
@@ -141,6 +111,7 @@ public final class BufferConfiguration extends ConfigurationMarshaller {
     }
 
     BufferConfiguration pageSize(int pageSize) {
+        Number.checkPositive(pageSize, "pageSize");
         this.pageSize = pageSize;
         return this;
     }
@@ -153,6 +124,7 @@ public final class BufferConfiguration extends ConfigurationMarshaller {
     }
 
     BufferConfiguration maxOrder(int maxOrder) {
+        Number.checkPositive(maxOrder, "maxOrder");
         this.maxOrder = maxOrder;
         return this;
     }
@@ -165,6 +137,7 @@ public final class BufferConfiguration extends ConfigurationMarshaller {
     }
 
     BufferConfiguration smallCacheSize(int smallCacheSize) {
+        Number.checkPositive(smallCacheSize, "smallCacheSize");
         this.smallCacheSize = smallCacheSize;
         return this;
     }
@@ -177,6 +150,7 @@ public final class BufferConfiguration extends ConfigurationMarshaller {
     }
 
     BufferConfiguration setNormalCacheSize(int normalCacheSize) {
+        Number.checkPositive(normalCacheSize, "normalCacheSize");
         this.normalCacheSize = normalCacheSize;
         return this;
     }
@@ -201,6 +175,7 @@ public final class BufferConfiguration extends ConfigurationMarshaller {
     }
 
     BufferConfiguration directMemoryCacheAlignment(int directMemoryCacheAlignment) {
+        Number.checkZeroOrPositive(directMemoryCacheAlignment, "directMemoryCacheAlignment");
         this.directMemoryCacheAlignment = directMemoryCacheAlignment;
         return this;
     }
@@ -218,13 +193,5 @@ public final class BufferConfiguration extends ConfigurationMarshaller {
                 ", useCacheForAllThreads=" + useCacheForAllThreads +
                 ", directMemoryCacheAlignment=" + directMemoryCacheAlignment +
                 '}';
-    }
-
-    public static BufferConfiguration loadFrom() throws IOException {
-        return loadFrom(BufferConfiguration.class, "Buffer.yaml");
-    }
-
-    public void saveTo() throws IOException {
-        saveTo(this, "Buffer.yaml");
     }
 }

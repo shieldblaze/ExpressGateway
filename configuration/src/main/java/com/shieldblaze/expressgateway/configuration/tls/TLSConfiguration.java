@@ -17,15 +17,9 @@
  */
 package com.shieldblaze.expressgateway.configuration.tls;
 
-import com.fasterxml.jackson.annotation.JsonIgnore;
-import com.fasterxml.jackson.annotation.JsonProperty;
-import com.shieldblaze.expressgateway.configuration.ConfigurationMarshaller;
 import io.netty.util.internal.SystemPropertyUtil;
-import org.apache.logging.log4j.LogManager;
-import org.apache.logging.log4j.Logger;
 
 import javax.net.ssl.SSLException;
-import java.io.IOException;
 import java.security.KeyStoreException;
 import java.security.NoSuchAlgorithmException;
 import java.util.List;
@@ -35,34 +29,17 @@ import java.util.concurrent.ConcurrentSkipListMap;
 /**
  * Configuration for TLS
  */
-public final class TLSConfiguration extends ConfigurationMarshaller {
-    private static final Logger logger = LogManager.getLogger(TLSConfiguration.class);
+public final class TLSConfiguration {
 
-    @JsonIgnore
     private final Map<String, CertificateKeyPair> certificateKeyPairMap = new ConcurrentSkipListMap<>();
 
-    @JsonProperty("forServer")
     private boolean forServer;
-
-    @JsonProperty("ciphers")
     private List<Cipher> ciphers;
-
-    @JsonProperty("protocols")
     private List<Protocol> protocols;
-
-    @JsonProperty("mutualTLS")
     private MutualTLS mutualTLS = MutualTLS.NOT_REQUIRED;
-
-    @JsonProperty("useStartTLS")
     private boolean useStartTLS;
-
-    @JsonProperty("sessionTimeout")
     private int sessionTimeout;
-
-    @JsonProperty("sessionCacheSize")
     private int sessionCacheSize;
-
-    @JsonProperty("acceptAllCerts")
     private boolean acceptAllCerts;
 
     public static final TLSConfiguration DEFAULT_CLIENT = new TLSConfiguration();
@@ -121,7 +98,8 @@ public final class TLSConfiguration extends ConfigurationMarshaller {
 
     /**
      * Add a new mapping
-     *  @param host FQDN
+     *
+     * @param host               FQDN
      * @param certificateKeyPair {@link CertificateKeyPair} Instance
      */
     public void addMapping(String host, CertificateKeyPair certificateKeyPair) throws NoSuchAlgorithmException, KeyStoreException, SSLException {
@@ -237,21 +215,5 @@ public final class TLSConfiguration extends ConfigurationMarshaller {
 
     public boolean acceptAllCerts() {
         return acceptAllCerts;
-    }
-
-    public static TLSConfiguration loadClient() throws IOException {
-        return loadFrom(TLSConfiguration.class, "TLSClient.yaml");
-    }
-
-    public void saveClient() throws IOException {
-        saveTo(this, "TLSClient.yaml");
-    }
-
-    public static TLSConfiguration loadServer() throws IOException {
-        return loadFrom(TLSConfiguration.class, "TLSServer.yaml");
-    }
-
-    public void saveServer() throws IOException {
-        saveTo(this, "TLSServer.yaml");
     }
 }

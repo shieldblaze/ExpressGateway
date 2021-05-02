@@ -123,14 +123,6 @@ public final class BufferConfigurationBuilder {
      * @throws IllegalArgumentException If a required value is invalid
      */
     public BufferConfiguration build() {
-        Number.checkPositive(heapArena, "heapArena");
-        Number.checkPositive(directArena, "directArena");
-        Number.checkPositive(pageSize, "pageSize");
-        Number.checkPositive(maxOrder, "maxOrder");
-        Number.checkPositive(smallCacheSize, "smallCacheSize");
-        Number.checkPositive(normalCacheSize, "normalCacheSize");
-        Number.checkZeroOrPositive(directMemoryCacheAlignment, "directMemoryCacheAlignment");
-
         return new BufferConfiguration()
                 .preferDirect(preferDirect)
                 .heapArena(heapArena)
