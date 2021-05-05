@@ -21,6 +21,7 @@ import com.shieldblaze.expressgateway.backend.Node;
 import com.shieldblaze.expressgateway.backend.cluster.Cluster;
 import com.shieldblaze.expressgateway.backend.strategy.l7.http.HTTPBalanceRequest;
 import com.shieldblaze.expressgateway.common.utils.ReferenceCounted;
+import com.shieldblaze.expressgateway.core.ConnectionTimeoutHandler;
 import com.shieldblaze.expressgateway.protocol.http.compression.HTTPContentCompressor;
 import com.shieldblaze.expressgateway.protocol.http.compression.HTTPContentDecompressor;
 import com.shieldblaze.expressgateway.protocol.http.loadbalancer.HTTPLoadBalancer;
@@ -142,8 +143,9 @@ public final class UpstreamHandler extends ChannelDuplexHandler {
      * @return Returns {@code true} when an upgrade has happened else {@code false}
      */
     private WebSocketUpgradeProperty webSocketUpgrader(ChannelHandlerContext ctx, HttpRequest httpRequest) {
-        if (!httpRequest.headers().contains(HttpHeaderNames.CONNECTION) ||
-                !httpRequest.headers().contains(HttpHeaderNames.UPGRADE)) {
+
+        // If Header does not contain `Connection` or `Upgrade`, return null.
+        if (!httpRequest.headers().contains(HttpHeaderNames.CONNECTION) || !httpRequest.headers().contains(HttpHeaderNames.UPGRADE)) {
             return null;
         }
 
@@ -183,6 +185,8 @@ public final class UpstreamHandler extends ChannelDuplexHandler {
         if (httpConnection == null) {
             return null;
         } else if (httpConnection.isHTTP2() && httpConnection.hasReachedMaximumCapacity()) {
+            // If Connection is established over HTTP/2 and we've reached maximum capacity then
+            // close the connection and return null.
             httpConnection.close();
             return null;
         } else {

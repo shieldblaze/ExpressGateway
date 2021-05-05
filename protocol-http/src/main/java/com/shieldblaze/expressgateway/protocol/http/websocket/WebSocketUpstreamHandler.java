@@ -48,6 +48,8 @@ public final class WebSocketUpstreamHandler extends ChannelInboundHandlerAdapter
 
     @Override
     public void channelRead(ChannelHandlerContext ctx, Object msg) {
+        // If received message is WebSocketFrame then write it back
+        // to the client else release it.
         if (msg instanceof WebSocketFrame) {
             connection.writeAndFlush(msg);
         } else {

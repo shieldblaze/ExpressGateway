@@ -22,12 +22,23 @@ import io.netty.channel.Channel;
 import java.net.InetSocketAddress;
 import java.net.URI;
 
+/**
+ * This class hold important objects for fulfilling WebSocket Upgrade Request.
+ */
 public final class WebSocketUpgradeProperty {
     private final InetSocketAddress clientAddress;
     private final URI uri;
     private final String subProtocol;
     private final Channel channel;
 
+    /**
+     * Create a new {@link WebSocketUpgradeProperty} Instance
+     *
+     * @param clientAddress {@link InetSocketAddress} of Client
+     * @param uri           HTTP Request URI
+     * @param subProtocol   WebSocket SubProtocol
+     * @param channel       {@link Channel} of Client
+     */
     public WebSocketUpgradeProperty(InetSocketAddress clientAddress, URI uri, String subProtocol, Channel channel) {
         this.clientAddress = clientAddress;
         this.uri = uri;

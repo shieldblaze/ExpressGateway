@@ -17,12 +17,14 @@
  */
 package com.shieldblaze.expressgateway.common.map;
 
+import java.io.Closeable;
+import java.io.IOException;
 import java.util.Map;
 
 /**
  * Base implementation of Cleaner for auto-removing expired entries.
  */
-public abstract class Cleaner<K, V> implements Runnable {
+public abstract class Cleaner<K, V> implements Runnable, Closeable {
 
     private final SelfExpiringMap<K, V> selfExpiringMap;
 
@@ -37,5 +39,10 @@ public abstract class Cleaner<K, V> implements Runnable {
                 selfExpiringMap.remove(entry.getKey());
             }
         }
+    }
+
+    @Override
+    public void close() throws IOException {
+        selfExpiringMap.clear();
     }
 }

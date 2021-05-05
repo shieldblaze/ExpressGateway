@@ -24,11 +24,25 @@ import io.netty.channel.ChannelFuture;
 import io.netty.handler.codec.http.websocketx.TextWebSocketFrame;
 import io.netty.handler.codec.http.websocketx.WebSocketClientHandshaker;
 
+/**
+ * {@link WebSocketConnection} is a specialized connection type for WebSocket connectivity.
+ */
 final class WebSocketConnection extends Connection {
 
     private enum WebSocketState {
+        /**
+         * Connection is initiated but not completed yet.
+         */
         INITIATED,
+
+        /**
+         * Connection and WebSocket client handshake was successful.
+         */
         HANDSHAKE_SUCCESS,
+
+        /**
+         * WebSocket client handshake was unsuccessful.
+         */
         HANDSHAKE_FAILURE
     }
 
@@ -48,6 +62,7 @@ final class WebSocketConnection extends Connection {
     @Override
     protected void processBacklog(ChannelFuture channelFuture) {
         if (channelFuture.isSuccess()) {
+            // Begin handshake
             webSocketClientHandshaker.handshake(channel);
 
             // Add Listener to handle WebSocket Handshake completion.
