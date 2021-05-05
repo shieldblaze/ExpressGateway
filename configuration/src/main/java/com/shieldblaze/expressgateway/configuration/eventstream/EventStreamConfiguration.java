@@ -18,15 +18,20 @@
 
 package com.shieldblaze.expressgateway.configuration.eventstream;
 
+import com.fasterxml.jackson.annotation.JsonProperty;
 import com.shieldblaze.expressgateway.common.utils.Number;
 import com.shieldblaze.expressgateway.concurrent.eventstream.AsyncEventStream;
 import com.shieldblaze.expressgateway.concurrent.eventstream.EventStream;
+import com.shieldblaze.expressgateway.configuration.ConfigurationMarshaller;
+import com.shieldblaze.expressgateway.configuration.eventloop.EventLoopConfiguration;
 
+import java.io.IOException;
 import java.util.concurrent.Executors;
 
 public class EventStreamConfiguration {
 
-    private final int workers;
+    @JsonProperty("workers")
+    private int workers;
 
     EventStreamConfiguration(int workers) {
         Number.checkZeroOrPositive(workers, "Workers");
@@ -43,5 +48,28 @@ public class EventStreamConfiguration {
             eventStream = new AsyncEventStream(Executors.newFixedThreadPool(workers));
         }
         return eventStream;
+    }
+
+    void setWorkers(int workers) {
+        this.workers = workers;
+    }
+
+    /**
+     * Save this configuration to the file
+     *
+     * @throws IOException If an error occurs during saving
+     */
+    public void save() throws IOException {
+        ConfigurationMarshaller.save("EventStreamConfiguration.json", this);
+    }
+
+    /**
+     * Load this configuration from the file
+     *
+     * @return {@link EventStreamConfiguration} Instance
+     * @throws IOException If an error occurs during loading
+     */
+    public static EventStreamConfiguration load() throws IOException {
+        return ConfigurationMarshaller.load("EventStreamConfiguration.json", EventStreamConfiguration.class);
     }
 }

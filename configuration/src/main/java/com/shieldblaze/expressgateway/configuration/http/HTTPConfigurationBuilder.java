@@ -105,17 +105,17 @@ public final class HTTPConfigurationBuilder {
 
     public HTTPConfiguration build() {
         return new HTTPConfiguration()
-                .maxContentLength(maxContentLength)
-                .h2InitialWindowSize(h2InitialWindowSize)
-                .h2MaxConcurrentStreams(h2MaxConcurrentStreams)
-                .h2MaxHeaderListSize(h2MaxHeaderListSize)
-                .h2MaxHeaderTableSize(h2MaxHeaderTableSize)
-                .h2MaxFrameSize(h2MaxFrameSize)
-                .maxInitialLineLength(maxInitialLineLength)
-                .maxHeaderSize(maxHeaderSize)
-                .maxChunkSize(maxChunkSize)
-                .compressionThreshold(compressionThreshold)
-                .deflateCompressionLevel(deflateCompressionLevel)
-                .brotliCompressionLevel(brotliCompressionLevel);
+                .setMaxContentLength(maxContentLength)
+                .setH2InitialWindowSize(h2InitialWindowSize)
+                .setH2MaxConcurrentStreams(h2MaxConcurrentStreams)
+                .setH2MaxHeaderListSize(h2MaxHeaderListSize)
+                .setH2MaxHeaderTableSize(h2MaxHeaderTableSize)
+                .setH2MaxFrameSize(h2MaxFrameSize)
+                .setMaxInitialLineLength(maxInitialLineLength)
+                .setMaxHeaderSize(maxHeaderSize)
+                .setMaxChunkSize(maxChunkSize)
+                .setCompressionThreshold(compressionThreshold)
+                .setDeflateCompressionLevel(deflateCompressionLevel)
+                .setBrotliCompressionLevel(brotliCompressionLevel);
     }
 }

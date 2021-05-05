@@ -19,9 +19,14 @@ package com.shieldblaze.expressgateway.protocol.http.websocket;
 
 import io.netty.channel.ChannelHandlerContext;
 import io.netty.channel.ChannelInboundHandlerAdapter;
+import io.netty.channel.ChannelPipeline;
 import io.netty.handler.codec.http.FullHttpResponse;
 import io.netty.handler.codec.http.websocketx.WebSocketClientHandshaker;
 
+/**
+ * This class completes WebSocket client handshake. Once handshake is done,
+ * this handler removes itself from {@link ChannelPipeline}.
+ */
 final class WebSocketClientHandshakerFinisherHandler extends ChannelInboundHandlerAdapter {
 
     private final WebSocketClientHandshaker handshaker;
@@ -32,14 +37,17 @@ final class WebSocketClientHandshakerFinisherHandler extends ChannelInboundHandl
 
     @Override
     public void channelRead(ChannelHandlerContext ctx, Object msg) {
-        if (msg instanceof FullHttpResponse) {
-            if (!handshaker.isHandshakeComplete()) {
-                handshaker.finishHandshake(ctx.channel(), (FullHttpResponse) msg);
-                ctx.pipeline().remove(this); // Let's remove ourselves because we're done.
-                return;
-            }
+        // If Message is FullHttpResponse and handshake is incomplete
+        // then capture the FullHttpResponse and pass it to handshaker
+        // to complete the handshake.
+        if (msg instanceof FullHttpResponse && !handshaker.isHandshakeComplete()) {
+            FullHttpResponse response = (FullHttpResponse) msg;
+            handshaker.finishHandshake(ctx.channel(), response); // Finish the handshake
+            response.release();          // Release the HttpResponse
+            ctx.pipeline().remove(this); // Let's remove ourselves because we're done.
+            return;
         }
 
-        ctx.fireChannelRead(ctx);
+        ctx.fireChannelRead(msg);
     }
 }

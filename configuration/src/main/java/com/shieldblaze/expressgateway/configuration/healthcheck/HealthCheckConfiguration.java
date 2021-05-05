@@ -17,12 +17,20 @@
  */
 package com.shieldblaze.expressgateway.configuration.healthcheck;
 
+import com.fasterxml.jackson.annotation.JsonProperty;
 import com.shieldblaze.expressgateway.common.utils.Number;
+import com.shieldblaze.expressgateway.configuration.ConfigurationMarshaller;
+import com.shieldblaze.expressgateway.configuration.buffer.BufferConfiguration;
+
+import java.io.IOException;
 
 public class HealthCheckConfiguration {
 
-    private final int workers;
-    private final int timeInterval;
+    @JsonProperty("workers")
+    private int workers;
+
+    @JsonProperty("timeInterval")
+    private int timeInterval;
 
     public static final HealthCheckConfiguration DEFAULT = new HealthCheckConfiguration(
             Runtime.getRuntime().availableProcessors(),
@@ -42,5 +50,32 @@ public class HealthCheckConfiguration {
 
     public int timeInterval() {
         return timeInterval;
+    }
+
+    void setWorkers(int workers) {
+        this.workers = workers;
+    }
+
+    void setTimeInterval(int timeInterval) {
+        this.timeInterval = timeInterval;
+    }
+
+    /**
+     * Save this configuration to the file
+     *
+     * @throws IOException If an error occurs during saving
+     */
+    public void save() throws IOException {
+        ConfigurationMarshaller.save("HealthCheckConfiguration.json", this);
+    }
+
+    /**
+     * Load this configuration from the file
+     *
+     * @return {@link HealthCheckConfiguration} Instance
+     * @throws IOException If an error occurs during loading
+     */
+    public static HealthCheckConfiguration load() throws IOException {
+        return ConfigurationMarshaller.load("HealthCheckConfiguration.json", HealthCheckConfiguration.class);
     }
 }

@@ -17,14 +17,21 @@
  */
 package com.shieldblaze.expressgateway.configuration.eventloop;
 
+import com.fasterxml.jackson.annotation.JsonProperty;
 import com.shieldblaze.expressgateway.common.utils.Number;
+import com.shieldblaze.expressgateway.configuration.ConfigurationMarshaller;
+
+import java.io.IOException;
 
 /**
  * {@code EventLoop} Configuration
  */
 public final class EventLoopConfiguration {
 
+    @JsonProperty("parentWorkers")
     private int parentWorkers;
+
+    @JsonProperty("childWorkers")
     private int childWorkers;
 
     EventLoopConfiguration() {
@@ -42,7 +49,7 @@ public final class EventLoopConfiguration {
         return parentWorkers;
     }
 
-    EventLoopConfiguration parentWorkers(int parentWorkers) {
+    EventLoopConfiguration setParentWorkers(int parentWorkers) {
         Number.checkPositive(parentWorkers, "Parent Workers");
         this.parentWorkers = parentWorkers;
         return this;
@@ -52,9 +59,28 @@ public final class EventLoopConfiguration {
         return childWorkers;
     }
 
-    EventLoopConfiguration childWorkers(int childWorkers) {
+    EventLoopConfiguration setChildWorkers(int childWorkers) {
         Number.checkPositive(childWorkers, "Child Workers");
         this.childWorkers = childWorkers;
         return this;
+    }
+
+    /**
+     * Save this configuration to the file
+     *
+     * @throws IOException If an error occurs during saving
+     */
+    public void save() throws IOException {
+        ConfigurationMarshaller.save("EventLoopConfiguration.json", this);
+    }
+
+    /**
+     * Load this configuration from the file
+     *
+     * @return {@link EventLoopConfiguration} Instance
+     * @throws IOException If an error occurs during loading
+     */
+    public static EventLoopConfiguration load() throws IOException {
+        return ConfigurationMarshaller.load("EventLoopConfiguration.json", EventLoopConfiguration.class);
     }
 }

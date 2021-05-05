@@ -17,6 +17,8 @@
  */
 package com.shieldblaze.expressgateway.common.map;
 
+import java.io.Closeable;
+import java.io.IOException;
 import java.time.Duration;
 import java.util.Map;
 
@@ -26,7 +28,7 @@ import java.util.Map;
  * @param <K> Key
  * @param <V> Value
  */
-public final class SelfExpiringMap<K, V> extends ExpiringMap<K, V> {
+public final class SelfExpiringMap<K, V> extends ExpiringMap<K, V> implements Closeable {
 
     private final Cleaner<K, V> cleaner;
 
@@ -53,5 +55,10 @@ public final class SelfExpiringMap<K, V> extends ExpiringMap<K, V> {
     @Override
     public String toString() {
         return super.toString();
+    }
+
+    @Override
+    public void close() throws IOException {
+        cleaner.close();
     }
 }

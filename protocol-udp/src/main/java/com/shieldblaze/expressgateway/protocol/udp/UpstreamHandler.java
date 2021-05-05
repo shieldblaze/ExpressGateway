@@ -20,7 +20,6 @@ package com.shieldblaze.expressgateway.protocol.udp;
 import com.shieldblaze.expressgateway.backend.Node;
 import com.shieldblaze.expressgateway.backend.strategy.l4.L4Request;
 import com.shieldblaze.expressgateway.common.map.SelfExpiringMap;
-import com.shieldblaze.expressgateway.common.utils.comparator.InetSocketAddressHashCodeComparator;
 import com.shieldblaze.expressgateway.core.loadbalancer.L4LoadBalancer;
 import io.netty.channel.ChannelHandler;
 import io.netty.channel.ChannelHandlerContext;
@@ -29,10 +28,11 @@ import io.netty.channel.socket.DatagramPacket;
 import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
 
+import java.io.IOException;
 import java.net.InetSocketAddress;
 import java.time.Duration;
 import java.util.Map;
-import java.util.concurrent.ConcurrentSkipListMap;
+import java.util.concurrent.ConcurrentHashMap;
 
 @ChannelHandler.Sharable
 final class UpstreamHandler extends ChannelInboundHandlerAdapter {
@@ -47,7 +47,7 @@ final class UpstreamHandler extends ChannelInboundHandlerAdapter {
         this.l4LoadBalancer = l4LoadBalancer;
         this.bootstrapper = new Bootstrapper(l4LoadBalancer, l4LoadBalancer.eventLoopFactory().childGroup(), l4LoadBalancer.byteBufAllocator());
         connectionMap = new SelfExpiringMap<>(
-                new ConcurrentSkipListMap<>(InetSocketAddressHashCodeComparator.INSTANCE),
+                new ConcurrentHashMap<>(),
                 Duration.ofMillis(l4LoadBalancer.coreConfiguration().transportConfiguration().connectionIdleTimeout()),
                 true
         );
@@ -77,8 +77,9 @@ final class UpstreamHandler extends ChannelInboundHandlerAdapter {
     }
 
     @Override
-    public void channelInactive(ChannelHandlerContext ctx) {
+    public void channelInactive(ChannelHandlerContext ctx) throws Exception {
         logger.info("Closing All Upstream and Downstream Channels");
+        ((SelfExpiringMap<?, ?>) connectionMap).close();
         connectionMap.forEach((socketAddress, udpConnection) -> udpConnection.close());
         connectionMap.clear();
     }

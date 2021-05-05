@@ -83,7 +83,6 @@ class CompressionTest {
         forServer.addMapping("localhost", certificateKeyPair);
 
         forClient = TLSConfiguration.DEFAULT_CLIENT;
-        forClient.acceptAllCerts(true);
         forClient.defaultMapping(new CertificateKeyPair());
 
         SSLContext sslContext = SSLContext.getInstance("TLSv1.3");

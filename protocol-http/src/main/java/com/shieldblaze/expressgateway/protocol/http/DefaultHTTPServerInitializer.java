@@ -28,6 +28,7 @@ import com.shieldblaze.expressgateway.protocol.http.compression.HTTPContentDecom
 import io.netty.channel.ChannelHandlerContext;
 import io.netty.channel.ChannelPipeline;
 import io.netty.channel.socket.SocketChannel;
+import io.netty.handler.codec.http.HttpServerKeepAliveHandler;
 import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
 
@@ -48,6 +49,7 @@ public final class DefaultHTTPServerInitializer extends HTTPServerInitializer {
         // If TLS Server is not enabled then we'll only use HTTP/1.1
         if (httpLoadBalancer.tlsForServer() == null) {
             pipeline.addLast(HTTPCodecs.server(httpConfiguration));
+            pipeline.addLast(new HttpServerKeepAliveHandler());
             pipeline.addLast(new HTTPServerValidator(httpConfiguration));
             pipeline.addLast(new HTTPContentCompressor(httpConfiguration));
             pipeline.addLast(new HTTPContentDecompressor());
@@ -63,6 +65,7 @@ public final class DefaultHTTPServerInitializer extends HTTPServerInitializer {
 
                     // HTTP/1.1 Handlers
                     .withHTTP1ChannelHandler(HTTPCodecs.server(httpConfiguration))
+                    .withHTTP1ChannelHandler(new HttpServerKeepAliveHandler())
                     .withHTTP1ChannelHandler(new HTTPServerValidator(httpConfiguration))
                     .withHTTP1ChannelHandler(new HTTPContentCompressor(httpConfiguration))
                     .withHTTP1ChannelHandler(new HTTPContentDecompressor())

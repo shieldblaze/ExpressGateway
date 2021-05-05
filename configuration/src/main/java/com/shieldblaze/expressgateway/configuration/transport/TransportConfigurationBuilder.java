@@ -182,14 +182,14 @@ public final class TransportConfigurationBuilder {
         }
 
         return new TransportConfiguration()
-                .transportType(transportType)
-                .receiveBufferAllocationType(receiveBufferAllocationType)
-                .receiveBufferSizes(receiveBufferSizes)
-                .tcpConnectionBacklog(tcpConnectionBacklog)
-                .socketReceiveBufferSize(socketReceiveBufferSize)
-                .socketSendBufferSize(socketSendBufferSize)
-                .tcpFastOpenMaximumPendingRequests(tcpFastOpenMaximumPendingRequestsCount)
-                .backendConnectTimeout(backendConnectTimeout)
-                .connectionIdleTimeout(connectionIdleTimeout);
+                .setTransportType(transportType)
+                .setReceiveBufferAllocationType(receiveBufferAllocationType)
+                .setReceiveBufferSizes(receiveBufferSizes)
+                .setTcpConnectionBacklog(tcpConnectionBacklog)
+                .setSocketReceiveBufferSize(socketReceiveBufferSize)
+                .setSocketSendBufferSize(socketSendBufferSize)
+                .setTcpFastOpenMaximumPendingRequests(tcpFastOpenMaximumPendingRequestsCount)
+                .setBackendConnectTimeout(backendConnectTimeout)
+                .setConnectionIdleTimeout(connectionIdleTimeout);
     }
 }

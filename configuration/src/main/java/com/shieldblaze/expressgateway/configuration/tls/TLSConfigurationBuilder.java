@@ -131,13 +131,13 @@ public final class TLSConfigurationBuilder {
      */
     public TLSConfiguration build() throws SSLException {
         return new TLSConfiguration()
-                .forServer(forServer)
-                .acceptAllCerts(acceptAllCerts)
-                .sessionCacheSize(Number.checkZeroOrPositive(sessionCacheSize, "Session Cache Size"))
-                .sessionTimeout(Number.checkZeroOrPositive(sessionTimeout, "Session Timeout"))
-                .protocols(protocols)
-                .useStartTLS(useStartTLS)
-                .mutualTLS(mutualTLS)
-                .ciphers(ciphers);
+                .setForServer(forServer)
+                .setAcceptAllCerts(acceptAllCerts)
+                .setSessionCacheSize(Number.checkZeroOrPositive(sessionCacheSize, "Session Cache Size"))
+                .setSessionTimeout(Number.checkZeroOrPositive(sessionTimeout, "Session Timeout"))
+                .setProtocols(protocols)
+                .setUseStartTLS(useStartTLS)
+                .setMutualTLS(mutualTLS)
+                .setCiphers(ciphers);
     }
 }

@@ -17,25 +17,47 @@
  */
 package com.shieldblaze.expressgateway.configuration.transport;
 
+import com.fasterxml.jackson.annotation.JsonProperty;
+import com.shieldblaze.expressgateway.configuration.ConfigurationMarshaller;
+import com.shieldblaze.expressgateway.configuration.tls.TLSConfiguration;
 import io.netty.channel.AdaptiveRecvByteBufAllocator;
 import io.netty.channel.FixedRecvByteBufAllocator;
 import io.netty.channel.RecvByteBufAllocator;
 import io.netty.channel.epoll.Epoll;
 import io.netty.incubator.channel.uring.IOUring;
 
+import java.io.IOException;
+
 /**
  * Transport Configuration
  */
 public final class TransportConfiguration {
 
+    @JsonProperty("transportType")
     private TransportType transportType;
+
+    @JsonProperty("receiveBufferAllocationType")
     private ReceiveBufferAllocationType receiveBufferAllocationType;
+
+    @JsonProperty("receiveBufferSizes")
     private int[] receiveBufferSizes;
+
+    @JsonProperty("tcpConnectionBacklog")
     private int tcpConnectionBacklog;
+
+    @JsonProperty("socketReceiveBufferSize")
     private int socketReceiveBufferSize;
+
+    @JsonProperty("socketSendBufferSize")
     private int socketSendBufferSize;
+
+    @JsonProperty("tcpFastOpenMaximumPendingRequests")
     private int tcpFastOpenMaximumPendingRequests;
+
+    @JsonProperty("backendConnectTimeout")
     private int backendConnectTimeout;
+
+    @JsonProperty("connectionIdleTimeout")
     private int connectionIdleTimeout;
 
     public static final TransportConfiguration DEFAULT = new TransportConfiguration();
@@ -50,20 +72,20 @@ public final class TransportConfiguration {
         }
 
         DEFAULT.receiveBufferAllocationType = ReceiveBufferAllocationType.ADAPTIVE;
-        DEFAULT.receiveBufferSizes(new int[]{512, 9001, 65535});
+        DEFAULT.receiveBufferSizes = new int[]{512, 9001, 65535};
         DEFAULT.tcpConnectionBacklog = 50_000;
-        DEFAULT.socketSendBufferSize = 67108864;
-        DEFAULT.socketReceiveBufferSize = 67108864;
+        DEFAULT.socketSendBufferSize = 67_108_864;
+        DEFAULT.socketReceiveBufferSize = 67_108_864;
         DEFAULT.tcpFastOpenMaximumPendingRequests = 100_000;
-        DEFAULT.backendConnectTimeout = 1000 * 10;     // 10 Seconds
-        DEFAULT.connectionIdleTimeout = 1000 * 60 * 5; // 5 Minutes
+        DEFAULT.backendConnectTimeout = 1000 * 10;  // 10 Seconds
+        DEFAULT.connectionIdleTimeout = 1000 * 120; // 2 Minute
     }
 
     public TransportType transportType() {
         return transportType;
     }
 
-    TransportConfiguration transportType(TransportType transportType) {
+    TransportConfiguration setTransportType(TransportType transportType) {
         this.transportType = transportType;
         return this;
     }
@@ -72,7 +94,7 @@ public final class TransportConfiguration {
         return receiveBufferAllocationType;
     }
 
-    TransportConfiguration receiveBufferAllocationType(ReceiveBufferAllocationType receiveBufferAllocationType) {
+    TransportConfiguration setReceiveBufferAllocationType(ReceiveBufferAllocationType receiveBufferAllocationType) {
         this.receiveBufferAllocationType = receiveBufferAllocationType;
         return this;
     }
@@ -81,7 +103,7 @@ public final class TransportConfiguration {
         return receiveBufferSizes;
     }
 
-    TransportConfiguration receiveBufferSizes(int[] receiveBufferSizes) {
+    TransportConfiguration setReceiveBufferSizes(int[] receiveBufferSizes) {
         this.receiveBufferSizes = receiveBufferSizes;
         return this;
     }
@@ -98,7 +120,7 @@ public final class TransportConfiguration {
         return tcpConnectionBacklog;
     }
 
-    TransportConfiguration tcpConnectionBacklog(int TCPConnectionBacklog) {
+    TransportConfiguration setTcpConnectionBacklog(int TCPConnectionBacklog) {
         this.tcpConnectionBacklog = TCPConnectionBacklog;
         return this;
     }
@@ -107,7 +129,7 @@ public final class TransportConfiguration {
         return socketReceiveBufferSize;
     }
 
-    TransportConfiguration socketReceiveBufferSize(int socketReceiveBufferSize) {
+    TransportConfiguration setSocketReceiveBufferSize(int socketReceiveBufferSize) {
         this.socketReceiveBufferSize = socketReceiveBufferSize;
         return this;
     }
@@ -116,7 +138,7 @@ public final class TransportConfiguration {
         return socketSendBufferSize;
     }
 
-    TransportConfiguration socketSendBufferSize(int socketSendBufferSize) {
+    TransportConfiguration setSocketSendBufferSize(int socketSendBufferSize) {
         this.socketSendBufferSize = socketSendBufferSize;
         return this;
     }
@@ -125,7 +147,7 @@ public final class TransportConfiguration {
         return tcpFastOpenMaximumPendingRequests;
     }
 
-    TransportConfiguration tcpFastOpenMaximumPendingRequests(int TCPFastOpenMaximumPendingRequests) {
+    TransportConfiguration setTcpFastOpenMaximumPendingRequests(int TCPFastOpenMaximumPendingRequests) {
         this.tcpFastOpenMaximumPendingRequests = TCPFastOpenMaximumPendingRequests;
         return this;
     }
@@ -134,7 +156,7 @@ public final class TransportConfiguration {
         return backendConnectTimeout;
     }
 
-    TransportConfiguration backendConnectTimeout(int backendConnectTimeout) {
+    TransportConfiguration setBackendConnectTimeout(int backendConnectTimeout) {
         this.backendConnectTimeout = backendConnectTimeout;
         return this;
     }
@@ -143,8 +165,27 @@ public final class TransportConfiguration {
         return connectionIdleTimeout;
     }
 
-    TransportConfiguration connectionIdleTimeout(int connectionIdleTimeout) {
+    TransportConfiguration setConnectionIdleTimeout(int connectionIdleTimeout) {
         this.connectionIdleTimeout = connectionIdleTimeout;
         return this;
+    }
+
+    /**
+     * Save this configuration to the file
+     *
+     * @throws IOException If an error occurs during saving
+     */
+    public void save() throws IOException {
+        ConfigurationMarshaller.save("TransportConfiguration.json", this);
+    }
+
+    /**
+     * Load this configuration from the file
+     *
+     * @return {@link TransportConfiguration} Instance
+     * @throws IOException If an error occurs during loading
+     */
+    public static TransportConfiguration load() throws IOException {
+        return ConfigurationMarshaller.load("TransportConfiguration.json", TransportConfiguration.class);
     }
 }

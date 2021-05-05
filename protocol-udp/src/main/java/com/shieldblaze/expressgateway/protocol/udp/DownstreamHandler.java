@@ -17,7 +17,6 @@
  */
 package com.shieldblaze.expressgateway.protocol.udp;
 
-import com.shieldblaze.expressgateway.backend.Node;
 import io.netty.channel.Channel;
 import io.netty.channel.ChannelHandlerContext;
 import io.netty.channel.ChannelInboundHandlerAdapter;
@@ -31,14 +30,12 @@ final class DownstreamHandler extends ChannelInboundHandlerAdapter {
 
     private static final Logger logger = LogManager.getLogger(DownstreamHandler.class);
 
-    private final Channel upstream;
-    private final Node node;
+    private final Channel channel;
     private final UDPConnection udpConnection;
     private final InetSocketAddress socketAddress;
 
-    DownstreamHandler(Channel upstream, Node node, InetSocketAddress socketAddress, UDPConnection udpConnection) {
-        this.upstream = upstream;
-        this.node = node;
+    DownstreamHandler(Channel channel, InetSocketAddress socketAddress, UDPConnection udpConnection) {
+        this.channel = channel;
         this.udpConnection = udpConnection;
         this.socketAddress = socketAddress;
     }
@@ -46,7 +43,7 @@ final class DownstreamHandler extends ChannelInboundHandlerAdapter {
     @Override
     public void channelRead(ChannelHandlerContext ctx, Object msg) {
         DatagramPacket packet = (DatagramPacket) msg;            // Cast Data to DatagramPacket
-        upstream.writeAndFlush(new DatagramPacket(packet.content(), socketAddress), upstream.voidPromise()); // // Write Data back to Client
+        channel.writeAndFlush(new DatagramPacket(packet.content(), socketAddress), channel.voidPromise()); // // Write Data back to Client
     }
 
     @Override
