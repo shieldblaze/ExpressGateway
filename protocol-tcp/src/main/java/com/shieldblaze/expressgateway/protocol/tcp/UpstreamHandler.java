@@ -20,6 +20,7 @@ package com.shieldblaze.expressgateway.protocol.tcp;
 import com.shieldblaze.expressgateway.backend.Connection;
 import com.shieldblaze.expressgateway.backend.Node;
 import com.shieldblaze.expressgateway.backend.strategy.l4.L4Request;
+import com.shieldblaze.expressgateway.core.ConnectionTimeoutHandler;
 import com.shieldblaze.expressgateway.core.loadbalancer.L4LoadBalancer;
 import io.netty.buffer.ByteBuf;
 import io.netty.channel.ChannelHandlerContext;
@@ -83,6 +84,18 @@ final class UpstreamHandler extends ChannelInboundHandlerAdapter {
 
         if (tcpConnection != null && tcpConnection.state() == Connection.State.CONNECTED_AND_ACTIVE) {
             tcpConnection.close();
+        }
+    }
+
+    @Override
+    public void userEventTriggered(ChannelHandlerContext ctx, Object evt) {
+        // If ConnectionTimeoutHandler event is caught then close upstream and downstream channels.
+        if (evt instanceof ConnectionTimeoutHandler.State) {
+            ctx.channel().close();
+
+            if (tcpConnection != null && tcpConnection.state() == Connection.State.CONNECTED_AND_ACTIVE) {
+                tcpConnection.close();
+            }
         }
     }
 

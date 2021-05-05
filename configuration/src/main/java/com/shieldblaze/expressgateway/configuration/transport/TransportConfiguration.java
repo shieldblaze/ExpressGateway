@@ -55,8 +55,8 @@ public final class TransportConfiguration {
         DEFAULT.socketSendBufferSize = 67108864;
         DEFAULT.socketReceiveBufferSize = 67108864;
         DEFAULT.tcpFastOpenMaximumPendingRequests = 100_000;
-        DEFAULT.backendConnectTimeout = 1000 * 10;     // 10 Seconds
-        DEFAULT.connectionIdleTimeout = 1000 * 60 * 5; // 5 Minutes
+        DEFAULT.backendConnectTimeout = 1000 * 10;  // 10 Seconds
+        DEFAULT.connectionIdleTimeout = 1000 * 10; // 2 Minute
     }
 
     public TransportType transportType() {

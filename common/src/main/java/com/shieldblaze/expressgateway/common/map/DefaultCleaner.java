@@ -2,6 +2,8 @@ package com.shieldblaze.expressgateway.common.map;
 
 import com.shieldblaze.expressgateway.concurrent.GlobalExecutors;
 
+import java.io.IOException;
+import java.util.concurrent.ScheduledFuture;
 import java.util.concurrent.TimeUnit;
 
 /**
@@ -12,8 +14,16 @@ import java.util.concurrent.TimeUnit;
  */
 final class DefaultCleaner<K, V> extends Cleaner<K, V> {
 
+    private final ScheduledFuture<?> scheduledFuture;
+
     DefaultCleaner(SelfExpiringMap<K, V> selfExpiringMap) {
         super(selfExpiringMap);
-        GlobalExecutors.INSTANCE.submitTaskAndRunEvery(this, 1, 1, TimeUnit.SECONDS);
+        scheduledFuture = GlobalExecutors.INSTANCE.submitTaskAndRunEvery(this, 1, 1, TimeUnit.SECONDS);
+    }
+
+    @Override
+    public void close() throws IOException {
+        scheduledFuture.cancel(true);
+        super.close();
     }
 }

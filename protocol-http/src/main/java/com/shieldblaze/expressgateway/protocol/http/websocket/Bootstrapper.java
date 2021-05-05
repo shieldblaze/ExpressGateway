@@ -61,7 +61,7 @@ final class Bootstrapper {
 
     WebSocketConnection newInit(Node node, WebSocketUpgradeProperty wsProperty) {
         HttpHeaders headers = new DefaultHttpHeaders();
-        headers.set(Headers.X_FORWARDED_FOR, wsProperty.clientAddress().getAddress().getHostAddress());
+        headers.set(Headers.X_FORWARDED_FOR, wsProperty.clientAddress().getAddress().getHostAddress()); // Add Client IP Address
         WebSocketClientHandshaker factory = WebSocketClientHandshakerFactory.newHandshaker(wsProperty.uri(), V13, wsProperty.subProtocol(), true, headers);
         WebSocketConnection connection = new WebSocketConnection(node, factory);
 
