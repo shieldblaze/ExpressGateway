@@ -18,12 +18,12 @@
 package com.shieldblaze.expressgateway.backend.events.node;
 
 import com.shieldblaze.expressgateway.backend.Node;
-import com.shieldblaze.expressgateway.concurrent.event.GenericEvent;
+import com.shieldblaze.expressgateway.concurrent.event.DefaultEvent;
 
 /**
  * Base class of all {@link Node} events
  */
-public abstract class NodeEvent extends GenericEvent<Void> {
+public abstract class NodeEvent extends DefaultEvent<Void> {
     private final Node node;
 
     public NodeEvent(Node node) {

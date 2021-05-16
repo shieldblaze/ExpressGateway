@@ -18,8 +18,9 @@
 package com.shieldblaze.expressgateway.restapi.api.configuration;
 
 import com.fasterxml.jackson.core.JsonProcessingException;
+import com.google.gson.JsonObject;
+import com.google.gson.JsonParser;
 import com.shieldblaze.expressgateway.configuration.ConfigurationMarshaller;
-import com.shieldblaze.expressgateway.configuration.http.HTTPConfiguration;
 import com.shieldblaze.expressgateway.configuration.transport.TransportConfiguration;
 import com.shieldblaze.expressgateway.restapi.response.ErrorBase;
 import com.shieldblaze.expressgateway.restapi.response.FastBuilder;
@@ -42,7 +43,7 @@ public class Transport {
 
     @PostMapping(consumes = MediaType.APPLICATION_JSON_VALUE, produces = MediaType.APPLICATION_JSON_VALUE)
     public ResponseEntity<String> applyConfiguration(@RequestBody TransportConfiguration transportConfiguration) throws IOException {
-        transportConfiguration.save();
+        transportConfiguration.validate().save();
 
         APIResponse apiResponse = APIResponse.newBuilder()
                 .isSuccess(true)
@@ -56,7 +57,7 @@ public class Transport {
      */
     @GetMapping(value = "/default", produces = MediaType.APPLICATION_JSON_VALUE)
     public ResponseEntity<String> getDefaultConfiguration() throws JsonProcessingException {
-        String transport = ConfigurationMarshaller.get(TransportConfiguration.DEFAULT);
+        JsonObject transport = JsonParser.parseString(ConfigurationMarshaller.get(TransportConfiguration.DEFAULT)).getAsJsonObject();
 
         APIResponse apiResponse = APIResponse.newBuilder()
                 .isSuccess(true)
@@ -68,10 +69,10 @@ public class Transport {
 
     @GetMapping(produces = MediaType.APPLICATION_JSON_VALUE)
     public ResponseEntity<String> getConfiguration() {
-        String transport;
+        JsonObject transport;
         try {
             TransportConfiguration transportConfiguration = TransportConfiguration.load();
-            transport = ConfigurationMarshaller.get(transportConfiguration);
+            transport = JsonParser.parseString(ConfigurationMarshaller.get(transportConfiguration)).getAsJsonObject();
         } catch (Exception ex) {
             return FastBuilder.error(ErrorBase.CONFIGURATION_NOT_FOUND, ex.getMessage(), HttpResponseStatus.NOT_FOUND);
         }

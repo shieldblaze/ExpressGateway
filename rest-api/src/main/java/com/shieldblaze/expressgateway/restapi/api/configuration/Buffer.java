@@ -18,7 +18,8 @@
 package com.shieldblaze.expressgateway.restapi.api.configuration;
 
 import com.fasterxml.jackson.core.JsonProcessingException;
-import com.shieldblaze.expressgateway.common.GSON;
+import com.google.gson.JsonObject;
+import com.google.gson.JsonParser;
 import com.shieldblaze.expressgateway.configuration.ConfigurationMarshaller;
 import com.shieldblaze.expressgateway.configuration.buffer.BufferConfiguration;
 import com.shieldblaze.expressgateway.restapi.response.ErrorBase;
@@ -26,7 +27,6 @@ import com.shieldblaze.expressgateway.restapi.response.FastBuilder;
 import com.shieldblaze.expressgateway.restapi.response.builder.APIResponse;
 import com.shieldblaze.expressgateway.restapi.response.builder.Result;
 import io.netty.handler.codec.http.HttpResponseStatus;
-import org.springframework.http.HttpStatus;
 import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.GetMapping;
@@ -43,7 +43,7 @@ public class Buffer {
 
     @PostMapping(consumes = MediaType.APPLICATION_JSON_VALUE, produces = MediaType.APPLICATION_JSON_VALUE)
     public ResponseEntity<String> applyConfiguration(@RequestBody BufferConfiguration bufConf) throws IOException {
-        bufConf.save();
+        bufConf.validate().save();
 
         APIResponse apiResponse = APIResponse.newBuilder()
                 .isSuccess(true)
@@ -57,7 +57,7 @@ public class Buffer {
      */
     @GetMapping(value = "/default", produces = MediaType.APPLICATION_JSON_VALUE)
     public ResponseEntity<String> getDefaultConfiguration() throws JsonProcessingException {
-        String buffer = ConfigurationMarshaller.get(BufferConfiguration.DEFAULT);
+        JsonObject buffer = JsonParser.parseString(ConfigurationMarshaller.get(BufferConfiguration.DEFAULT)).getAsJsonObject();
 
         APIResponse apiResponse = APIResponse.newBuilder()
                 .isSuccess(true)
@@ -69,10 +69,10 @@ public class Buffer {
 
     @GetMapping(produces = MediaType.APPLICATION_JSON_VALUE)
     public ResponseEntity<String> getConfiguration() {
-        String buffer;
+        JsonObject buffer;
         try {
             BufferConfiguration bufferConf = BufferConfiguration.load();
-            buffer = ConfigurationMarshaller.get(bufferConf);
+            buffer = JsonParser.parseString(ConfigurationMarshaller.get(bufferConf)).getAsJsonObject();
         } catch (Exception ex) {
             return FastBuilder.error(ErrorBase.CONFIGURATION_NOT_FOUND, ex.getMessage(), HttpResponseStatus.NOT_FOUND);
         }

@@ -40,7 +40,6 @@ import org.bouncycastle.operator.OperatorCreationException;
 import org.bouncycastle.operator.jcajce.JcaContentVerifierProviderBuilder;
 import org.bouncycastle.operator.jcajce.JcaDigestCalculatorProviderBuilder;
 
-import java.io.IOException;
 import java.net.URI;
 import java.net.http.HttpClient;
 import java.net.http.HttpRequest;
@@ -55,7 +54,7 @@ final class OCSPClient {
 
     private static final HttpClient HTTP_CLIENT = HttpClient.newBuilder()
             .followRedirects(HttpClient.Redirect.NEVER)
-            .connectTimeout(Duration.of(5, ChronoUnit.SECONDS))
+            .connectTimeout(Duration.of(30, ChronoUnit.SECONDS))
             .build();
 
     private static final String OCSP_REQUEST_TYPE = "application/ocsp-request";
@@ -96,6 +95,7 @@ final class OCSPClient {
                 .setHeader("Content-Type", OCSP_REQUEST_TYPE)
                 .setHeader("User-Agent", "ShieldBlaze ExpressGateway OCSP Client")
                 .POST(HttpRequest.BodyPublishers.ofByteArray(request.getEncoded()))
+                .timeout(Duration.ofSeconds(30))
                 .build();
 
         HttpResponse<byte[]> httpResponse = HTTP_CLIENT.send(httpRequest, HttpResponse.BodyHandlers.ofByteArray());
@@ -103,34 +103,38 @@ final class OCSPClient {
         if (httpResponse.headers().firstValue("Content-Type").isEmpty() ||
                 !httpResponse.headers().firstValue("Content-Type").get().equalsIgnoreCase(OCSP_RESPONSE_TYPE)) {
             throw new IllegalArgumentException("Response Content-Type was: " + httpResponse.headers().firstValue("Content-Type").get() +
-                    ", Expected: " + OCSP_RESPONSE_TYPE);
+                    "; Expected: " + OCSP_RESPONSE_TYPE);
         }
 
         if (httpResponse.statusCode() != 200) {
-            throw new IllegalArgumentException("HTTP Response Code was: " + httpResponse.statusCode() + ", Expected: 200");
+            throw new IllegalArgumentException("HTTP Response Code was: " + httpResponse.statusCode() + "; Expected: 200");
         }
 
         return new OCSPResp(httpResponse.body());
     }
 
-    private static String getOcspUrlFromCertificate(X509Certificate cert) throws IOException {
-        byte[] extensionValue = cert.getExtensionValue(new ASN1ObjectIdentifier("1.3.6.1.5.5.7.1.1").getId());
+    private static String getOcspUrlFromCertificate(X509Certificate cert) {
+        try {
+            byte[] extensionValue = cert.getExtensionValue(new ASN1ObjectIdentifier("1.3.6.1.5.5.7.1.1").getId());
 
-        ASN1Sequence asn1Seq = (ASN1Sequence) JcaX509ExtensionUtils.parseExtensionValue(extensionValue);
-        Enumeration<?> objects = asn1Seq.getObjects();
+            ASN1Sequence asn1Seq = (ASN1Sequence) JcaX509ExtensionUtils.parseExtensionValue(extensionValue);
+            Enumeration<?> objects = asn1Seq.getObjects();
 
-        while (objects.hasMoreElements()) {
-            ASN1Sequence obj = (ASN1Sequence) objects.nextElement(); // AccessDescription
-            ASN1ObjectIdentifier oid = (ASN1ObjectIdentifier) obj.getObjectAt(0); // accessMethod
-            DLTaggedObject location = (DLTaggedObject) obj.getObjectAt(1); // accessLocation
+            while (objects.hasMoreElements()) {
+                ASN1Sequence obj = (ASN1Sequence) objects.nextElement(); // AccessDescription
+                ASN1ObjectIdentifier oid = (ASN1ObjectIdentifier) obj.getObjectAt(0); // accessMethod
+                DLTaggedObject location = (DLTaggedObject) obj.getObjectAt(1); // accessLocation
 
-            if (location.getTagNo() == GeneralName.uniformResourceIdentifier) {
-                DEROctetString uri = (DEROctetString) location.getObject();
-                String str = new String(uri.getOctets());
-                if (oid.equals(X509ObjectIdentifiers.id_ad_ocsp)) {
-                    return str;
+                if (location.getTagNo() == GeneralName.uniformResourceIdentifier) {
+                    DEROctetString uri = (DEROctetString) location.getObject();
+                    String str = new String(uri.getOctets());
+                    if (oid.equals(X509ObjectIdentifiers.id_ad_ocsp)) {
+                        return str;
+                    }
                 }
             }
+        } catch (Exception ex) {
+            // Ignore
         }
 
         throw new NullPointerException("Unable to find OCSP URL");

@@ -26,20 +26,13 @@ components that this product depends on.
 
 ---------------------------------
 
-This product depends on 'Netty'. License for the same can be obtained at:
+This product depends on 'Netty Framework'. License for the same can be obtained at:
 
   * LICENSE:
     * LICENSES/LICENSE.netty.txt (Apache License 2.0)
 
 ---------------------------------
 
-This product depends on 'Netty-TCNative'. License for the same can be obtained at:
-
-  * LICENSE:
-    * LICENSES/LICENSE.netty-tcnative.txt (Apache License 2.0)
-
----------------------------------
-	
 This product depends on 'Apache Log4J'. License for the same can be obtained at:
 
   * LICENSE:
@@ -89,20 +82,6 @@ This product depends on 'Google Gson'. License for the same can be obtained at:
 
 ---------------------------------
 
-This product depends on 'Google gRPC-Java'. License for the same can be obtained at:
-
-  * LICENSE:
-    * license/LICENSE.grpc-java.txt (Apache License 2.0)
-
----------------------------------
-
-This product depends on 'Javax-Annotation'. License for the same can be obtained at:
-
-  * LICENSE:
-    * license/LICENSE.javax-annotation.txt (COMMON DEVELOPMENT AND DISTRIBUTION LICENSE (CDDL) Version 1.1)
-
----------------------------------
-
 This product depends on 'JaCoCo'. License for the same can be obtained at:
 
   * LICENSE:
@@ -121,5 +100,19 @@ This product depends on 'OkHttp'. License for the same can be obtained at:
 
   * LICENSE:
     * license/LICENSE.okhttp.txt (Apache License 2.0)
+
+---------------------------------
+
+This product depends on 'Spring Framework'. License for the same can be obtained at:
+
+  * LICENSE:
+    * license/LICENSE.spring.txt (Apache License 2.0)
+
+---------------------------------
+
+This product depends on 'Amazon Corretto Crypto Provider'. License for the same can be obtained at:
+
+  * LICENSE:
+    * license/LICENSE.accp.txt (Apache License 2.0)
 
 ---------------------------------

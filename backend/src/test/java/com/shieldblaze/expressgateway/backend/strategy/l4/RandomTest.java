@@ -17,23 +17,26 @@
  */
 package com.shieldblaze.expressgateway.backend.strategy.l4;
 
-import com.shieldblaze.expressgateway.backend.Node;
+import com.shieldblaze.expressgateway.backend.NodeBuilder;
 import com.shieldblaze.expressgateway.backend.cluster.Cluster;
-import com.shieldblaze.expressgateway.backend.cluster.ClusterPool;
+import com.shieldblaze.expressgateway.backend.cluster.ClusterBuilder;
 import com.shieldblaze.expressgateway.backend.exceptions.LoadBalanceException;
 import com.shieldblaze.expressgateway.backend.strategy.l4.sessionpersistence.NOOPSessionPersistence;
-import com.shieldblaze.expressgateway.concurrent.eventstream.EventStream;
 import org.junit.jupiter.api.Test;
 
 import java.net.InetSocketAddress;
+import java.net.UnknownHostException;
 
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 class RandomTest {
 
     @Test
-    void testRandom() throws LoadBalanceException {
-        Cluster cluster = new ClusterPool(new Random(NOOPSessionPersistence.INSTANCE));
+    void testRandom() throws LoadBalanceException, UnknownHostException {
+        Cluster cluster = ClusterBuilder.newBuilder()
+                .withLoadBalance(new Random(NOOPSessionPersistence.INSTANCE))
+                .build();
+
         fastBuild(cluster, "172.16.20.1");
         fastBuild(cluster, "172.16.20.2");
         fastBuild(cluster, "172.16.20.3");
@@ -82,7 +85,10 @@ class RandomTest {
         assertTrue(fifth > 10);
     }
 
-    private Node fastBuild(Cluster cluster, String host) {
-        return new Node(cluster, new InetSocketAddress(host, 1));
+    private void fastBuild(Cluster cluster, String host) throws UnknownHostException {
+        NodeBuilder.newBuilder()
+                .withCluster(cluster)
+                .withSocketAddress(new InetSocketAddress(host, 1))
+                .build();
     }
 }

@@ -18,31 +18,22 @@
 package com.shieldblaze.expressgateway.configuration.healthcheck;
 
 import com.fasterxml.jackson.annotation.JsonProperty;
-import com.shieldblaze.expressgateway.common.utils.Number;
+import com.shieldblaze.expressgateway.common.utils.NumberUtil;
 import com.shieldblaze.expressgateway.configuration.ConfigurationMarshaller;
-import com.shieldblaze.expressgateway.configuration.buffer.BufferConfiguration;
 
 import java.io.IOException;
 
 public class HealthCheckConfiguration {
 
-    @JsonProperty("workers")
+    @JsonProperty(value = "workers")
     private int workers;
 
-    @JsonProperty("timeInterval")
+    @JsonProperty(value = "timeInterval")
     private int timeInterval;
 
-    public static final HealthCheckConfiguration DEFAULT = new HealthCheckConfiguration(
-            Runtime.getRuntime().availableProcessors(),
-            1000 * 10 // 10 Seconds
-    );
-
-    HealthCheckConfiguration(int workers, int timeInterval) {
-        Number.checkPositive(workers, "Workers");
-        Number.checkPositive(timeInterval, "TimeInterval");
-        this.workers = workers;
-        this.timeInterval = timeInterval;
-    }
+    public static final HealthCheckConfiguration DEFAULT = new HealthCheckConfiguration()
+            .setWorkers(Runtime.getRuntime().availableProcessors())
+            .setTimeInterval(1); // 1 Second
 
     public int workers() {
         return workers;
@@ -52,12 +43,22 @@ public class HealthCheckConfiguration {
         return timeInterval;
     }
 
-    void setWorkers(int workers) {
+    HealthCheckConfiguration setWorkers(int workers) {
+        NumberUtil.checkPositive(workers, "Workers");
         this.workers = workers;
+        return this;
     }
 
-    void setTimeInterval(int timeInterval) {
+    HealthCheckConfiguration setTimeInterval(int timeInterval) {
+        NumberUtil.checkPositive(timeInterval, "TimeInterval");
         this.timeInterval = timeInterval;
+        return this;
+    }
+
+    public HealthCheckConfiguration validate() {
+        NumberUtil.checkPositive(workers, "Workers");
+        NumberUtil.checkPositive(timeInterval, "TimeInterval");
+        return this;
     }
 
     /**
@@ -70,12 +71,16 @@ public class HealthCheckConfiguration {
     }
 
     /**
-     * Load this configuration from the file
+     * Load a configuration
      *
      * @return {@link HealthCheckConfiguration} Instance
-     * @throws IOException If an error occurs during loading
      */
-    public static HealthCheckConfiguration load() throws IOException {
-        return ConfigurationMarshaller.load("HealthCheckConfiguration.json", HealthCheckConfiguration.class);
+    public static HealthCheckConfiguration load() {
+        try {
+            return ConfigurationMarshaller.load("HealthCheckConfiguration.json", HealthCheckConfiguration.class);
+        } catch (Exception ex) {
+            // Ignore
+        }
+        return DEFAULT;
     }
 }

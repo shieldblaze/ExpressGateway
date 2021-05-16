@@ -17,8 +17,8 @@
  */
 package com.shieldblaze.expressgateway.restapi;
 
-import com.shieldblaze.expressgateway.restapi.response.FastBuilder;
 import com.shieldblaze.expressgateway.restapi.response.ErrorBase;
+import com.shieldblaze.expressgateway.restapi.response.FastBuilder;
 import io.netty.handler.codec.http.HttpResponseStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.ControllerAdvice;
@@ -27,8 +27,8 @@ import org.springframework.web.bind.annotation.ExceptionHandler;
 @ControllerAdvice
 public class ExceptionHandlerController {
 
-    @ExceptionHandler(value = IllegalArgumentException.class)
-    public ResponseEntity<String> exception(IllegalArgumentException ex) {
+    @ExceptionHandler(value = Exception.class)
+    public ResponseEntity<String> handler(Exception ex) {
         return FastBuilder.error(ErrorBase.INVALID_REQUEST_DATA, ex.getMessage(), HttpResponseStatus.BAD_REQUEST);
     }
 }

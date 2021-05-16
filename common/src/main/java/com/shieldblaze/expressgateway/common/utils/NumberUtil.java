@@ -17,7 +17,7 @@
  */
 package com.shieldblaze.expressgateway.common.utils;
 
-public final class Number {
+public final class NumberUtil {
 
     public static int checkZeroOrPositive(int i, String message) {
         if (i >= 0) {

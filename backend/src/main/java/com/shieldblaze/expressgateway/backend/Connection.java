@@ -74,6 +74,7 @@ public abstract class Connection {
      * Create a new {@link Connection} Instance
      * @param node {@link Node} associated with this Connection
      */
+    @NonNull
     public Connection(Node node) {
         this.node = node;
     }
@@ -177,16 +178,20 @@ public abstract class Connection {
     }
 
     /**
-     * Close this {@linkplain Connection}
+     * Close this {@link Connection}
      */
     public void close() {
-        // If Backlog Queue contains something then clear it before closing connection.
+        // If Backlog Queue contains something
+        // then clear it before closing connection.
         if (!backlogQueue.isEmpty()) {
             clearBacklog();
         }
 
-        // Close the Connection
-        channelFuture.channel().close();
+        // If Connection is Connected and Active
+        // then Close the connection.
+        if (state == State.CONNECTED_AND_ACTIVE) {
+            channelFuture.channel().close();
+        }
     }
 
     @Override

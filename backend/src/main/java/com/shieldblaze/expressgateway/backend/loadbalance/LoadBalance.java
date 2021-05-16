@@ -47,7 +47,7 @@ public abstract class LoadBalance<REQUEST, RESPONSE, KEY, VALUE> implements Even
     /**
      * @param cluster {@link Cluster} to be load balanced
      */
-    @InternalCall(1)
+    @InternalCall
     @NonNull
     public void cluster(Cluster cluster) {
         this.cluster = cluster;

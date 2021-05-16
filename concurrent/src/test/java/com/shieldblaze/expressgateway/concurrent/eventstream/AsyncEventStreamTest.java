@@ -58,7 +58,7 @@ class AsyncEventStreamTest {
         }
     }
 
-    private static final class SimpleEvent implements Event {
+    private static final class SimpleEvent implements Event<Void> {
         private final String string;
 
         public SimpleEvent(String string) {
@@ -66,7 +66,7 @@ class AsyncEventStreamTest {
         }
 
         @Override
-        public CompletableFuture future() {
+        public CompletableFuture<Void> future() {
             return null;
         }
 

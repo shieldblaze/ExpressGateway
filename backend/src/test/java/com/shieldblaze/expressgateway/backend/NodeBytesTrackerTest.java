@@ -15,31 +15,34 @@
  * You should have received a copy of the GNU General Public License
  * along with ShieldBlaze ExpressGateway.  If not, see <https://www.gnu.org/licenses/>.
  */
-
 package com.shieldblaze.expressgateway.backend;
 
 import com.shieldblaze.expressgateway.backend.cluster.Cluster;
-import com.shieldblaze.expressgateway.backend.cluster.ClusterPool;
+import com.shieldblaze.expressgateway.backend.cluster.ClusterBuilder;
 import com.shieldblaze.expressgateway.backend.strategy.l4.RoundRobin;
 import com.shieldblaze.expressgateway.backend.strategy.l4.sessionpersistence.NOOPSessionPersistence;
-import com.shieldblaze.expressgateway.concurrent.eventstream.EventStream;
-import com.shieldblaze.expressgateway.configuration.eventstream.EventStreamConfiguration;
-import com.shieldblaze.expressgateway.configuration.eventstream.EventStreamConfigurationBuilder;
 import io.netty.buffer.ByteBuf;
 import io.netty.buffer.Unpooled;
 import io.netty.channel.embedded.EmbeddedChannel;
 import org.junit.jupiter.api.Test;
 
 import java.net.InetSocketAddress;
+import java.net.UnknownHostException;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 
 class NodeBytesTrackerTest {
 
     @Test
-    void receive10MBytes() {
-        Cluster cluster = new ClusterPool(new RoundRobin(NOOPSessionPersistence.INSTANCE));
-        Node node = new Node(cluster, new InetSocketAddress("127.0.0.1", 9110));
+    void receive10MBytes() throws UnknownHostException {
+        Cluster cluster = ClusterBuilder.newBuilder()
+                .withLoadBalance(new RoundRobin(NOOPSessionPersistence.INSTANCE))
+                .build();
+
+        Node node = NodeBuilder.newBuilder()
+                .withCluster(cluster)
+                .withSocketAddress(new InetSocketAddress("127.0.0.1", 9110))
+                .build();
 
         EmbeddedChannel embeddedChannel = new EmbeddedChannel(new NodeBytesTracker(node));
 
@@ -58,9 +61,15 @@ class NodeBytesTrackerTest {
     }
 
     @Test
-    void send10MBytes() {
-        Cluster cluster = new ClusterPool(new RoundRobin(NOOPSessionPersistence.INSTANCE));
-        Node node = new Node(cluster, new InetSocketAddress("127.0.0.1", 9110));
+    void send10MBytes() throws UnknownHostException {
+        Cluster cluster = ClusterBuilder.newBuilder()
+                .withLoadBalance(new RoundRobin(NOOPSessionPersistence.INSTANCE))
+                .build();
+
+        Node node = NodeBuilder.newBuilder()
+                .withCluster(cluster)
+                .withSocketAddress(new InetSocketAddress("127.0.0.1", 9110))
+                .build();
 
         EmbeddedChannel embeddedChannel = new EmbeddedChannel(new NodeBytesTracker(node));
 

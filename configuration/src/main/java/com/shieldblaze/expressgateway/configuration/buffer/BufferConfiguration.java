@@ -18,7 +18,7 @@
 package com.shieldblaze.expressgateway.configuration.buffer;
 
 import com.fasterxml.jackson.annotation.JsonProperty;
-import com.shieldblaze.expressgateway.common.utils.Number;
+import com.shieldblaze.expressgateway.common.utils.NumberUtil;
 import com.shieldblaze.expressgateway.configuration.ConfigurationMarshaller;
 import io.netty.buffer.PooledByteBufAllocator;
 import io.netty.util.internal.PlatformDependent;
@@ -106,7 +106,7 @@ public final class BufferConfiguration {
     }
 
     BufferConfiguration setHeapArena(int heapArena) {
-        Number.checkPositive(heapArena, "heapArena");
+        NumberUtil.checkPositive(heapArena, "heapArena");
         this.heapArena = heapArena;
         return this;
     }
@@ -119,7 +119,7 @@ public final class BufferConfiguration {
     }
 
     BufferConfiguration setDirectArena(int directArena) {
-        Number.checkPositive(directArena, "directArena");
+        NumberUtil.checkPositive(directArena, "directArena");
         this.directArena = directArena;
         return this;
     }
@@ -132,7 +132,7 @@ public final class BufferConfiguration {
     }
 
     BufferConfiguration setPageSize(int pageSize) {
-        Number.checkPositive(pageSize, "pageSize");
+        NumberUtil.checkPositive(pageSize, "pageSize");
         this.pageSize = pageSize;
         return this;
     }
@@ -145,7 +145,7 @@ public final class BufferConfiguration {
     }
 
     BufferConfiguration setMaxOrder(int maxOrder) {
-        Number.checkPositive(maxOrder, "maxOrder");
+        NumberUtil.checkPositive(maxOrder, "maxOrder");
         this.maxOrder = maxOrder;
         return this;
     }
@@ -158,7 +158,7 @@ public final class BufferConfiguration {
     }
 
     BufferConfiguration setSmallCacheSize(int smallCacheSize) {
-        Number.checkPositive(smallCacheSize, "smallCacheSize");
+        NumberUtil.checkPositive(smallCacheSize, "smallCacheSize");
         this.smallCacheSize = smallCacheSize;
         return this;
     }
@@ -171,7 +171,7 @@ public final class BufferConfiguration {
     }
 
     BufferConfiguration setNormalCacheSize(int normalCacheSize) {
-        Number.checkPositive(normalCacheSize, "normalCacheSize");
+        NumberUtil.checkPositive(normalCacheSize, "normalCacheSize");
         this.normalCacheSize = normalCacheSize;
         return this;
     }
@@ -196,8 +196,19 @@ public final class BufferConfiguration {
     }
 
     BufferConfiguration setDirectMemoryCacheAlignment(int directMemoryCacheAlignment) {
-        Number.checkZeroOrPositive(directMemoryCacheAlignment, "directMemoryCacheAlignment");
+        NumberUtil.checkZeroOrPositive(directMemoryCacheAlignment, "directMemoryCacheAlignment");
         this.directMemoryCacheAlignment = directMemoryCacheAlignment;
+        return this;
+    }
+
+    public BufferConfiguration validate() {
+        NumberUtil.checkPositive(heapArena, "heapArena");
+        NumberUtil.checkPositive(directArena, "directArena");
+        NumberUtil.checkPositive(pageSize, "pageSize");
+        NumberUtil.checkPositive(maxOrder, "maxOrder");
+        NumberUtil.checkPositive(smallCacheSize, "smallCacheSize");
+        NumberUtil.checkPositive(normalCacheSize, "normalCacheSize");
+        NumberUtil.checkZeroOrPositive(directMemoryCacheAlignment, "directMemoryCacheAlignment");
         return this;
     }
 
@@ -211,12 +222,16 @@ public final class BufferConfiguration {
     }
 
     /**
-     * Load this configuration from the file
+     * Load a configuration
      *
      * @return {@link BufferConfiguration} Instance
-     * @throws IOException If an error occurs during loading
      */
-    public static BufferConfiguration load() throws IOException {
-        return ConfigurationMarshaller.load("BufferConfiguration.json", BufferConfiguration.class);
+    public static BufferConfiguration load() {
+        try {
+            return ConfigurationMarshaller.load("BufferConfiguration.json", BufferConfiguration.class);
+        } catch (Exception ex) {
+            // Ignore
+        }
+        return DEFAULT;
     }
 }

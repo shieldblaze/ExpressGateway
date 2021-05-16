@@ -23,7 +23,6 @@ import com.shieldblaze.expressgateway.backend.events.node.NodeIdleEvent;
 import com.shieldblaze.expressgateway.backend.events.node.NodeOfflineEvent;
 import com.shieldblaze.expressgateway.backend.events.node.NodeOnlineEvent;
 import com.shieldblaze.expressgateway.common.annotation.NonNull;
-import com.shieldblaze.expressgateway.concurrent.eventstream.EventPublisher;
 import com.shieldblaze.expressgateway.concurrent.eventstream.EventStream;
 import com.shieldblaze.expressgateway.healthcheck.Health;
 import com.shieldblaze.expressgateway.healthcheck.HealthCheck;
@@ -61,6 +60,7 @@ final class HealthCheckRunner implements Runnable {
             eventStream.publish(new NodeIdleEvent(node));
         } else if (node.health() == Health.BAD && oldHealth != Health.BAD) {
             node.state(State.OFFLINE);
+            node.drainConnections();
             eventStream.publish(new NodeOfflineEvent(node));
         }
     }

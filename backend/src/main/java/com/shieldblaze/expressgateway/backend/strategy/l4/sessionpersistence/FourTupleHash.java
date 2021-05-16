@@ -25,6 +25,7 @@ import com.shieldblaze.expressgateway.common.utils.comparator.InetSocketAddressH
 
 import java.net.InetSocketAddress;
 import java.time.Duration;
+import java.util.Map;
 import java.util.concurrent.ConcurrentSkipListMap;
 import java.util.concurrent.atomic.AtomicBoolean;
 
@@ -34,7 +35,7 @@ import java.util.concurrent.atomic.AtomicBoolean;
  */
 public final class FourTupleHash implements SessionPersistence<Node, Node, InetSocketAddress, Node> {
 
-    private final SelfExpiringMap<InetSocketAddress, Node> routeMap =
+    private final Map<InetSocketAddress, Node> routeMap =
             new SelfExpiringMap<>(new ConcurrentSkipListMap<>(InetSocketAddressHashCodeComparator.INSTANCE), Duration.ofHours(1), false);
 
     @Override

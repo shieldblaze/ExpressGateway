@@ -15,9 +15,9 @@
  * You should have received a copy of the GNU General Public License
  * along with ShieldBlaze ExpressGateway.  If not, see <https://www.gnu.org/licenses/>.
  */
-package com.shieldblaze.expressgateway.backend;
+package com.shieldblaze.expressgateway.backend.healthcheck;
 
-import com.shieldblaze.expressgateway.common.utils.Number;
+import com.shieldblaze.expressgateway.common.utils.NumberUtil;
 
 import java.util.Objects;
 
@@ -27,6 +27,11 @@ public final class HealthCheckTemplate {
      * Health Check Protocol
      */
     private Protocol protocol;
+
+    /**
+     * Health Check Host
+     */
+    private String host;
 
     /**
      * Health Check Port
@@ -48,8 +53,9 @@ public final class HealthCheckTemplate {
      */
     private int samples;
 
-    public HealthCheckTemplate(Protocol protocol, int port, String path, int timeout, int samples) {
+    public HealthCheckTemplate(Protocol protocol, String host, int port, String path, int timeout, int samples) {
         protocol(protocol);
+        host(host);
         path(path);
         timeout(timeout);
         samples(samples);
@@ -64,12 +70,20 @@ public final class HealthCheckTemplate {
         this.protocol = Objects.requireNonNull(protocol, "Protocol");
     }
 
+    public String host() {
+        return host;
+    }
+
+    public void host(String host) {
+        this.host = Objects.requireNonNull(host, "Host");
+    }
+
     public int port() {
         return port;
     }
 
     public void port(int port) {
-        this.port = Number.checkRange(port, 1, 65535, "Port");
+        this.port = NumberUtil.checkRange(port, 1, 65535, "Port");
     }
 
     public String path() {
@@ -85,7 +99,7 @@ public final class HealthCheckTemplate {
     }
 
     public void timeout(int timeout) {
-        this.timeout = Number.checkPositive(timeout, "Timeout");
+        this.timeout = NumberUtil.checkPositive(timeout, "Timeout");
     }
 
     public int samples() {
@@ -93,7 +107,7 @@ public final class HealthCheckTemplate {
     }
 
     public void samples(int samples) {
-        this.samples = Number.checkPositive(samples, "Samples");
+        this.samples = NumberUtil.checkPositive(samples, "Samples");
     }
 
     public enum Protocol {

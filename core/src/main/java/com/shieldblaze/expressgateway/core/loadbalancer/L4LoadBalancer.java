@@ -116,7 +116,7 @@ public abstract class L4LoadBalancer {
         L4FrontListenerStopEvent event = l4FrontListener.stop();
 
         // Close EventStream when stop event has finished.
-        event.future().whenCompleteAsync((unusedVoid, throwable) -> eventStream().close(), GlobalExecutors.INSTANCE.getExecutorService());
+        event.future().whenCompleteAsync((_Void, throwable) -> eventStream().close(), GlobalExecutors.INSTANCE.getExecutorService());
         return event;
     }
 

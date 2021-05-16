@@ -19,11 +19,24 @@ package com.shieldblaze.expressgateway.restapi;
 
 import org.springframework.boot.SpringApplication;
 import org.springframework.boot.autoconfigure.SpringBootApplication;
+import org.springframework.context.ConfigurableApplicationContext;
 
 @SpringBootApplication
 public class RestAPI {
 
+    private static ConfigurableApplicationContext ctx;
+
     public static void main(String[] args) {
-        SpringApplication.run(RestAPI.class, args);
+        start();
+    }
+
+    public static void start() {
+        ctx = SpringApplication.run(RestAPI.class);
+    }
+
+    public static void stop() {
+        if (ctx != null) {
+            ctx.stop();
+        }
     }
 }

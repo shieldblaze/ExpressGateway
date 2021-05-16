@@ -18,7 +18,7 @@
 package com.shieldblaze.expressgateway.backend.cluster;
 
 import com.shieldblaze.expressgateway.backend.Connection;
-import com.shieldblaze.expressgateway.backend.HealthCheckTemplate;
+import com.shieldblaze.expressgateway.backend.healthcheck.HealthCheckTemplate;
 import com.shieldblaze.expressgateway.backend.Node;
 import com.shieldblaze.expressgateway.backend.events.node.NodeAddedEvent;
 import com.shieldblaze.expressgateway.backend.events.node.NodeRemovedEvent;
@@ -39,8 +39,10 @@ import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
 
 import java.io.IOException;
+import java.net.InetAddress;
 import java.net.InetSocketAddress;
 import java.net.URI;
+import java.net.UnknownHostException;
 import java.time.Duration;
 import java.util.List;
 import java.util.concurrent.CopyOnWriteArrayList;
@@ -66,19 +68,18 @@ import java.util.concurrent.CopyOnWriteArrayList;
  * it is successfully built and started. Once attached, {@linkplain Node} can be added and all other
  * functionality can be performed seamlessly. </p>
  */
-public abstract class Cluster {
+public class Cluster {
 
     private static final Logger logger = LogManager.getLogger(Cluster.class);
 
     private final List<Node> nodes = new CopyOnWriteArrayList<>();
-    private final HealthCheckService healthCheckService = new HealthCheckService();
+    private HealthCheckService healthCheckService;
 
-    private boolean defaultEventStream = true;
     private EventStream eventStream = new EventStream();
     private LoadBalance<?, ?, ?, ?> loadBalance;
     private HealthCheckTemplate healthCheckTemplate;
 
-    public Cluster(LoadBalance<?, ?, ?, ?> loadBalance) {
+    Cluster(LoadBalance<?, ?, ?, ?> loadBalance) {
         loadBalance(loadBalance);
     }
 
@@ -89,15 +90,15 @@ public abstract class Cluster {
      */
     @InternalCall
     @NonNull
-    public boolean addNode(Node node) {
+    public boolean addNode(Node node) throws UnknownHostException {
         for (Node n : nodes) {
             // If both SocketAddress are same then don't add and return false.
-            if (n.socketAddress() == node.socketAddress()) {
+            if (node.equals(n)) {
                 return false;
             }
         }
 
-        configureHealthCheck(node); // Add HealthCheck if required
+        configureHealthCheckForNode(node); // Add HealthCheck if required
         nodes.add(node);   // Add this Node into the list
         eventStream.publish(new NodeAddedEvent(node)); // Publish NodeAddedEvent event
         return true;
@@ -113,8 +114,7 @@ public abstract class Cluster {
     public boolean removeNode(Node node) {
         boolean isFound = false;
         for (Node n : nodes) {
-            // If both SocketAddress are same then break the loop and remove the node
-            if (n.socketAddress() == node.socketAddress()) {
+            if (node.equals(n)) {
                 isFound = true;
                 break;
             }
@@ -122,6 +122,10 @@ public abstract class Cluster {
 
         if (!isFound) {
             return false;
+        }
+
+        if (healthCheckService != null) {
+            healthCheckService.remove(node);
         }
 
         node.close();       // Close the Node
@@ -155,7 +159,7 @@ public abstract class Cluster {
      * @param eventStream {@link EventStream}
      * @throws IllegalStateException When Load Balancer is already set
      */
-    @InternalCall(1)
+    @InternalCall(index = 1)
     @NonNull
     public void eventStream(EventStream eventStream) {
         eventStream.addSubscribersFrom(this.eventStream);
@@ -173,16 +177,18 @@ public abstract class Cluster {
     public void loadBalance(LoadBalance<?, ?, ?, ?> loadBalance) {
         try {
             if (this.loadBalance != null) {
-                eventStream.unsubscribe(loadBalance);
+                this.eventStream.unsubscribe(loadBalance);
                 this.loadBalance.close();
             }
         } catch (IOException e) {
-            logger.error("Error while closing LoadBalance", e);
+            Error error = new Error(e);
+            logger.error("Error while closing LoadBalance", error);
+            throw error;
         }
 
         loadBalance.cluster(this);
-        this.loadBalance = loadBalance;     // Set the new Load Balance
-        eventStream.subscribe(loadBalance); // Subscribe to the EventStream
+        this.loadBalance = loadBalance;          // Set the new Load Balance
+        this.eventStream.subscribe(loadBalance); // Subscribe to the EventStream
     }
 
     /**
@@ -193,30 +199,27 @@ public abstract class Cluster {
     }
 
     @NonNull
-    public void configureHealthCheck(HealthCheckConfiguration healthCheckConfiguration, HealthCheckTemplate healthCheckTemplate) {
+    void configureHealthCheck(HealthCheckConfiguration healthCheckConfiguration, HealthCheckTemplate healthCheckTemplate) {
+        this.healthCheckService = new HealthCheckService(healthCheckConfiguration, eventStream);
         this.healthCheckTemplate = healthCheckTemplate;
-        healthCheckService.healthCheckConfiguration(healthCheckConfiguration);
     }
 
     @NonNull
-    private void configureHealthCheck(Node node) {
-        // If HealthCheckTemplate is null, then we'll return early because
-        // we can't perform HealthCheck task without it.
-        if (healthCheckTemplate == null) {
+    private void configureHealthCheckForNode(Node node) throws UnknownHostException {
+        if (healthCheckService == null) {
             return;
         }
 
-        HealthCheck healthCheck = null;
-
+        HealthCheck healthCheck;
         if (healthCheckTemplate.protocol() == HealthCheckTemplate.Protocol.TCP) {
             healthCheck = new TCPHealthCheck(
-                    new InetSocketAddress(node.socketAddress().getAddress(), healthCheckTemplate.port()),
+                    new InetSocketAddress(healthCheckTemplate.host(), healthCheckTemplate.port()),
                     Duration.ofSeconds(healthCheckTemplate.timeout()),
                     healthCheckTemplate.samples()
             );
         } else if (healthCheckTemplate.protocol() == HealthCheckTemplate.Protocol.UDP) {
             healthCheck = new UDPHealthCheck(
-                    new InetSocketAddress(node.socketAddress().getAddress(), healthCheckTemplate.port()),
+                    new InetSocketAddress(healthCheckTemplate.host(), healthCheckTemplate.port()),
                     Duration.ofSeconds(healthCheckTemplate.timeout()),
                     healthCheckTemplate.samples()
             );
@@ -224,18 +227,21 @@ public abstract class Cluster {
 
             String host;
             if (healthCheckTemplate.protocol() == HealthCheckTemplate.Protocol.HTTP) {
-                host = "http://" + node.socketAddress().getAddress().getHostAddress() + ":" + healthCheckTemplate().port();
+                host = "http://" + InetAddress.getByName(healthCheckTemplate.host()).getHostAddress() + ":" + healthCheckTemplate().port();
             } else {
-                host = "https://" + node.socketAddress().getAddress().getHostAddress() + ":" + healthCheckTemplate().port();
+                host = "https://" + InetAddress.getByName(healthCheckTemplate.host()).getHostAddress() + ":" + healthCheckTemplate().port();
             }
 
             healthCheck = new HTTPHealthCheck(URI.create(host), Duration.ofSeconds(healthCheckTemplate.timeout()), healthCheckTemplate.samples());
+        } else {
+            Error error = new Error("Unknown HealthCheck Protocol: " + healthCheckTemplate.protocol());
+            logger.fatal(error);
+            throw error;
         }
 
-        // Associate HealthCheck with Node if HealthCheck Instance is not null.
-        if (healthCheck != null) {
-            node.healthCheck(healthCheck);
-        }
+        // Associate HealthCheck with Node
+        node.healthCheck(healthCheck);
+        healthCheckService.add(node);
     }
 
     /**
@@ -243,17 +249,16 @@ public abstract class Cluster {
      * <p>
      * This method is called by L4LoadBalancer when this Cluster is being unmapped.
      */
-    @InternalCall(3)
+    @InternalCall(index = 3)
     public void close() {
-        for (Node node : nodes) {
+        nodes.forEach(node -> {
             try {
                 node.close();
                 eventStream.publish(new NodeRemovedEvent(node));
             } catch (Exception ex) {
                 // Ignore
             }
-        }
-
+        });
         nodes.clear();
     }
 }

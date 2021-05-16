@@ -19,11 +19,10 @@
 package com.shieldblaze.expressgateway.configuration.eventstream;
 
 import com.fasterxml.jackson.annotation.JsonProperty;
-import com.shieldblaze.expressgateway.common.utils.Number;
+import com.shieldblaze.expressgateway.common.utils.NumberUtil;
 import com.shieldblaze.expressgateway.concurrent.eventstream.AsyncEventStream;
 import com.shieldblaze.expressgateway.concurrent.eventstream.EventStream;
 import com.shieldblaze.expressgateway.configuration.ConfigurationMarshaller;
-import com.shieldblaze.expressgateway.configuration.eventloop.EventLoopConfiguration;
 
 import java.io.IOException;
 import java.util.concurrent.Executors;
@@ -33,12 +32,7 @@ public class EventStreamConfiguration {
     @JsonProperty("workers")
     private int workers;
 
-    EventStreamConfiguration(int workers) {
-        Number.checkZeroOrPositive(workers, "Workers");
-        this.workers = workers;
-    }
-
-    public static final EventStreamConfiguration DEFAULT = new EventStreamConfiguration(Runtime.getRuntime().availableProcessors() / 2);
+    public static final EventStreamConfiguration DEFAULT = new EventStreamConfiguration().setWorkers(Runtime.getRuntime().availableProcessors() / 2);
 
     public EventStream newEventStream() {
         EventStream eventStream;
@@ -50,8 +44,19 @@ public class EventStreamConfiguration {
         return eventStream;
     }
 
-    void setWorkers(int workers) {
+    EventStreamConfiguration setWorkers(int workers) {
+        NumberUtil.checkZeroOrPositive(workers, "Workers");
         this.workers = workers;
+        return this;
+    }
+
+    public int workers() {
+        return workers;
+    }
+
+    public EventStreamConfiguration validate() {
+        NumberUtil.checkZeroOrPositive(workers, "Workers");
+        return this;
     }
 
     /**
@@ -64,12 +69,16 @@ public class EventStreamConfiguration {
     }
 
     /**
-     * Load this configuration from the file
+     * Load a configuration
      *
      * @return {@link EventStreamConfiguration} Instance
-     * @throws IOException If an error occurs during loading
      */
-    public static EventStreamConfiguration load() throws IOException {
-        return ConfigurationMarshaller.load("EventStreamConfiguration.json", EventStreamConfiguration.class);
+    public static EventStreamConfiguration load() {
+        try {
+            return ConfigurationMarshaller.load("EventStreamConfiguration.json", EventStreamConfiguration.class);
+        } catch (Exception ex) {
+            // Ignore
+        }
+        return DEFAULT;
     }
 }

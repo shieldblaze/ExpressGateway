@@ -41,6 +41,8 @@ public final class HealthCheckConfigurationBuilder {
     }
 
     public HealthCheckConfiguration build() {
-        return new HealthCheckConfiguration(workers, timeInterval);
+        return new HealthCheckConfiguration()
+                .setWorkers(workers)
+                .setTimeInterval(timeInterval);
     }
 }

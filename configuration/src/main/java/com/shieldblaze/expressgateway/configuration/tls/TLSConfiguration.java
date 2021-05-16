@@ -19,15 +19,15 @@ package com.shieldblaze.expressgateway.configuration.tls;
 
 import com.fasterxml.jackson.annotation.JsonIgnore;
 import com.fasterxml.jackson.annotation.JsonProperty;
+import com.shieldblaze.expressgateway.common.utils.ListUtil;
+import com.shieldblaze.expressgateway.common.utils.NumberUtil;
 import com.shieldblaze.expressgateway.configuration.ConfigurationMarshaller;
-import com.shieldblaze.expressgateway.configuration.buffer.BufferConfiguration;
 
 import javax.net.ssl.SSLException;
 import java.io.IOException;
-import java.security.KeyStoreException;
-import java.security.NoSuchAlgorithmException;
 import java.util.List;
 import java.util.Map;
+import java.util.Objects;
 import java.util.concurrent.ConcurrentSkipListMap;
 
 /**
@@ -38,7 +38,7 @@ public final class TLSConfiguration {
     @JsonIgnore
     private final Map<String, CertificateKeyPair> certificateKeyPairMap = new ConcurrentSkipListMap<>();
 
-    @JsonProperty("forServer")
+    @JsonIgnore
     private boolean forServer;
 
     @JsonProperty("ciphers")
@@ -64,6 +64,7 @@ public final class TLSConfiguration {
 
     @JsonIgnore
     public static final TLSConfiguration DEFAULT_CLIENT = new TLSConfiguration();
+
     @JsonIgnore
     public static final TLSConfiguration DEFAULT_SERVER = new TLSConfiguration();
 
@@ -85,7 +86,7 @@ public final class TLSConfiguration {
             DEFAULT_SERVER.protocols = IntermediateCrypto.PROTOCOLS;
 
             DEFAULT_SERVER.useStartTLS = false;
-            DEFAULT_SERVER.sessionTimeout = 43200;
+            DEFAULT_SERVER.sessionTimeout = 43_200;
             DEFAULT_SERVER.sessionCacheSize = 100_000;
         }
     }
@@ -93,7 +94,7 @@ public final class TLSConfiguration {
     /**
      * Add the default {@link CertificateKeyPair} mapping
      */
-    public void defaultMapping(CertificateKeyPair certificateKeyPair) throws NoSuchAlgorithmException, KeyStoreException, SSLException {
+    public void defaultMapping(CertificateKeyPair certificateKeyPair) throws SSLException {
         addMapping("DEFAULT", certificateKeyPair);
     }
 
@@ -110,7 +111,7 @@ public final class TLSConfiguration {
      * @param host               FQDN
      * @param certificateKeyPair {@link CertificateKeyPair} Instance
      */
-    public void addMapping(String host, CertificateKeyPair certificateKeyPair) throws NoSuchAlgorithmException, KeyStoreException, SSLException {
+    public void addMapping(String host, CertificateKeyPair certificateKeyPair) throws SSLException {
         certificateKeyPairMap.put(host, certificateKeyPair);
         certificateKeyPair.init(this);
     }
@@ -126,6 +127,13 @@ public final class TLSConfiguration {
     }
 
     /**
+     * Remove all mappings
+     */
+    public void clearMappings() {
+        certificateKeyPairMap.clear();
+    }
+
+    /**
      * Get {@link CertificateKeyPair} for a Hostname
      *
      * @param fqdn FQDN
@@ -133,6 +141,7 @@ public final class TLSConfiguration {
      * @throws NullPointerException If Mapping is not found for a Hostname
      */
     public CertificateKeyPair mapping(String fqdn) {
+        String _fqdn = fqdn;
         try {
             CertificateKeyPair certificateKeyPair = certificateKeyPairMap.get(fqdn);
 
@@ -150,29 +159,36 @@ public final class TLSConfiguration {
             // Ignore
         }
 
-        throw new NullPointerException("Mapping not found for Hostname: " + fqdn);
+        throw new NullPointerException("Mapping not found for Hostname: " + _fqdn);
     }
 
     public boolean forServer() {
         return forServer;
     }
 
+    /**
+     * Set to {@code true} if this configuration is for server
+     * else set to {@code false}.
+     */
     TLSConfiguration setForServer(boolean forServer) {
         this.forServer = forServer;
         return this;
     }
 
     TLSConfiguration setCiphers(List<Cipher> ciphers) {
+        ListUtil.checkNonEmpty(ciphers, "Ciphers");
         this.ciphers = ciphers;
         return this;
     }
 
     TLSConfiguration setProtocols(List<Protocol> protocols) {
+        ListUtil.checkNonEmpty(protocols, "Protocols");
         this.protocols = protocols;
         return this;
     }
 
     TLSConfiguration setMutualTLS(MutualTLS mutualTLS) {
+        Objects.requireNonNull(mutualTLS, "MutualTLS");
         this.mutualTLS = mutualTLS;
         return this;
     }
@@ -183,11 +199,13 @@ public final class TLSConfiguration {
     }
 
     TLSConfiguration setSessionTimeout(int sessionTimeout) {
+        NumberUtil.checkZeroOrPositive(sessionTimeout, "Session Timeout");
         this.sessionTimeout = sessionTimeout;
         return this;
     }
 
     TLSConfiguration setSessionCacheSize(int sessionCacheSize) {
+        NumberUtil.checkZeroOrPositive(sessionCacheSize, "Session Cache Size");
         this.sessionCacheSize = sessionCacheSize;
         return this;
     }
@@ -225,23 +243,36 @@ public final class TLSConfiguration {
         return acceptAllCerts;
     }
 
+    public TLSConfiguration validate() {
+        ListUtil.checkNonEmpty(ciphers, "Ciphers");
+        ListUtil.checkNonEmpty(protocols, "Protocols");
+        Objects.requireNonNull(mutualTLS, "MutualTLS");
+        NumberUtil.checkZeroOrPositive(sessionTimeout, "Session Timeout");
+        NumberUtil.checkZeroOrPositive(sessionCacheSize, "Session Cache Size");
+        return this;
+    }
+
     /**
      * Save this server configuration to the file
      *
      * @throws IOException If an error occurs during saving
      */
     public void saveServer() throws IOException {
-        ConfigurationMarshaller.save("TLSConfigurationServer.json", this);
+        ConfigurationMarshaller.save("TLSServerConfiguration.json", this);
     }
 
     /**
-     * Load this server configuration from the file
+     * Load a server configuration
      *
      * @return {@link TLSConfiguration} Server Instance
-     * @throws IOException If an error occurs during loading
      */
-    public static TLSConfiguration loadServer() throws IOException {
-        return ConfigurationMarshaller.load("TLSConfigurationServer.json", TLSConfiguration.class);
+    public static TLSConfiguration loadServer() {
+        try {
+            return ConfigurationMarshaller.load("TLSServerConfiguration.json", TLSConfiguration.class);
+        } catch (Exception ex) {
+            // Ignore
+        }
+        return DEFAULT_SERVER;
     }
 
     /**
@@ -250,16 +281,20 @@ public final class TLSConfiguration {
      * @throws IOException If an error occurs during saving
      */
     public void saveClient() throws IOException {
-        ConfigurationMarshaller.save("TLSConfigurationClient.json", this);
+        ConfigurationMarshaller.save("TLSClientConfiguration.json", this);
     }
 
     /**
-     * Load this client configuration from the file
+     * Load a client configuration
      *
      * @return {@link TLSConfiguration} Client Instance
-     * @throws IOException If an error occurs during loading
      */
-    public static TLSConfiguration loadClient() throws IOException {
-        return ConfigurationMarshaller.load("TLSConfigurationClient.json", TLSConfiguration.class);
+    public static TLSConfiguration loadClient() {
+        try {
+            return ConfigurationMarshaller.load("TLSClientConfiguration.json", TLSConfiguration.class);
+        } catch (Exception ex) {
+            // Ignore
+        }
+        return DEFAULT_CLIENT;
     }
 }

@@ -18,6 +18,8 @@
 package com.shieldblaze.expressgateway.restapi.api.configuration;
 
 import com.fasterxml.jackson.core.JsonProcessingException;
+import com.google.gson.JsonObject;
+import com.google.gson.JsonParser;
 import com.shieldblaze.expressgateway.configuration.ConfigurationMarshaller;
 import com.shieldblaze.expressgateway.configuration.eventloop.EventLoopConfiguration;
 import com.shieldblaze.expressgateway.restapi.response.ErrorBase;
@@ -41,7 +43,7 @@ public class EventLoop {
 
     @PostMapping(consumes = MediaType.APPLICATION_JSON_VALUE, produces = MediaType.APPLICATION_JSON_VALUE)
     public ResponseEntity<String> applyConfiguration(@RequestBody EventLoopConfiguration eventLoop) throws IOException {
-        eventLoop.save();
+        eventLoop.validate().save();
 
         APIResponse apiResponse = APIResponse.newBuilder()
                 .isSuccess(true)
@@ -55,7 +57,7 @@ public class EventLoop {
      */
     @GetMapping(value = "/default", produces = MediaType.APPLICATION_JSON_VALUE)
     public ResponseEntity<String> getDefaultConfiguration() throws JsonProcessingException {
-        String eventLoop = ConfigurationMarshaller.get(EventLoopConfiguration.DEFAULT);
+        JsonObject eventLoop = JsonParser.parseString(ConfigurationMarshaller.get(EventLoopConfiguration.DEFAULT)).getAsJsonObject();
 
         APIResponse apiResponse = APIResponse.newBuilder()
                 .isSuccess(true)
@@ -67,10 +69,10 @@ public class EventLoop {
 
     @GetMapping(produces = MediaType.APPLICATION_JSON_VALUE)
     public ResponseEntity<String> getConfiguration() {
-        String eventLoop;
+        JsonObject eventLoop;
         try {
             EventLoopConfiguration eventLoopConfiguration = EventLoopConfiguration.load();
-            eventLoop = ConfigurationMarshaller.get(eventLoopConfiguration);
+            eventLoop = JsonParser.parseString(ConfigurationMarshaller.get(eventLoopConfiguration)).getAsJsonObject();
         } catch (Exception ex) {
             return FastBuilder.error(ErrorBase.CONFIGURATION_NOT_FOUND, ex.getMessage(), HttpResponseStatus.NOT_FOUND);
         }

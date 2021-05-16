@@ -18,8 +18,9 @@
 package com.shieldblaze.expressgateway.restapi.api.configuration;
 
 import com.fasterxml.jackson.core.JsonProcessingException;
+import com.google.gson.JsonObject;
+import com.google.gson.JsonParser;
 import com.shieldblaze.expressgateway.configuration.ConfigurationMarshaller;
-import com.shieldblaze.expressgateway.configuration.eventstream.EventStreamConfiguration;
 import com.shieldblaze.expressgateway.configuration.healthcheck.HealthCheckConfiguration;
 import com.shieldblaze.expressgateway.restapi.response.ErrorBase;
 import com.shieldblaze.expressgateway.restapi.response.FastBuilder;
@@ -34,6 +35,7 @@ import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RestController;
 
+import javax.validation.Valid;
 import java.io.IOException;
 
 @RestController
@@ -41,8 +43,8 @@ import java.io.IOException;
 public class HealthCheck {
 
     @PostMapping(consumes = MediaType.APPLICATION_JSON_VALUE, produces = MediaType.APPLICATION_JSON_VALUE)
-    public ResponseEntity<String> applyConfiguration(@RequestBody HealthCheckConfiguration healthCheck) throws IOException {
-        healthCheck.save();
+    public ResponseEntity<String> applyConfiguration(@Valid @RequestBody HealthCheckConfiguration healthCheck) throws IOException {
+        healthCheck.validate().save();
 
         APIResponse apiResponse = APIResponse.newBuilder()
                 .isSuccess(true)
@@ -56,7 +58,7 @@ public class HealthCheck {
      */
     @GetMapping(value = "/default", produces = MediaType.APPLICATION_JSON_VALUE)
     public ResponseEntity<String> getDefaultConfiguration() throws JsonProcessingException {
-        String healthCheck = ConfigurationMarshaller.get(HealthCheckConfiguration.DEFAULT);
+        JsonObject healthCheck = JsonParser.parseString(ConfigurationMarshaller.get(HealthCheckConfiguration.DEFAULT)).getAsJsonObject();
 
         APIResponse apiResponse = APIResponse.newBuilder()
                 .isSuccess(true)
@@ -68,10 +70,10 @@ public class HealthCheck {
 
     @GetMapping(produces = MediaType.APPLICATION_JSON_VALUE)
     public ResponseEntity<String> getConfiguration() {
-        String healthCheck;
+        JsonObject healthCheck;
         try {
             HealthCheckConfiguration healthCheckConfiguration = HealthCheckConfiguration.load();
-            healthCheck = ConfigurationMarshaller.get(healthCheckConfiguration);
+            healthCheck = JsonParser.parseString(ConfigurationMarshaller.get(healthCheckConfiguration)).getAsJsonObject();
         } catch (Exception ex) {
             return FastBuilder.error(ErrorBase.CONFIGURATION_NOT_FOUND, ex.getMessage(), HttpResponseStatus.NOT_FOUND);
         }

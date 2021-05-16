@@ -18,6 +18,7 @@
 package com.shieldblaze.expressgateway.protocol.http.websocket;
 
 import com.shieldblaze.expressgateway.backend.Node;
+import com.shieldblaze.expressgateway.backend.NodeBuilder;
 import com.shieldblaze.expressgateway.backend.cluster.ClusterPool;
 import com.shieldblaze.expressgateway.backend.strategy.l7.http.HTTPRandom;
 import com.shieldblaze.expressgateway.backend.strategy.l7.http.sessionpersistence.NOOPSessionPersistence;
@@ -64,7 +65,10 @@ public class WebSocketEchoTest extends WebSocketListener {
         ClusterPool clusterPool = new ClusterPool(new HTTPRandom(NOOPSessionPersistence.INSTANCE));
         httpLoadBalancer.mapCluster("localhost:9110", clusterPool);
 
-        new Node(clusterPool, new InetSocketAddress("localhost", 5000));
+        NodeBuilder.newBuilder()
+                .withCluster(clusterPool)
+                .withSocketAddress(new InetSocketAddress("localhost", 5000))
+                .build();
     }
 
     @AfterAll

@@ -18,8 +18,9 @@
 package com.shieldblaze.expressgateway.restapi.api.configuration;
 
 import com.fasterxml.jackson.core.JsonProcessingException;
+import com.google.gson.JsonObject;
+import com.google.gson.JsonParser;
 import com.shieldblaze.expressgateway.configuration.ConfigurationMarshaller;
-import com.shieldblaze.expressgateway.configuration.http.HTTPConfiguration;
 import com.shieldblaze.expressgateway.configuration.tls.TLSConfiguration;
 import com.shieldblaze.expressgateway.restapi.response.ErrorBase;
 import com.shieldblaze.expressgateway.restapi.response.FastBuilder;
@@ -42,7 +43,7 @@ public class TLSServer {
 
     @PostMapping(consumes = MediaType.APPLICATION_JSON_VALUE, produces = MediaType.APPLICATION_JSON_VALUE)
     public ResponseEntity<String> applyConfiguration(@RequestBody TLSConfiguration tlsConfiguration) throws IOException {
-        tlsConfiguration.saveServer();
+        tlsConfiguration.validate().saveServer();
 
         APIResponse apiResponse = APIResponse.newBuilder()
                 .isSuccess(true)
@@ -56,7 +57,7 @@ public class TLSServer {
      */
     @GetMapping(value = "/default", produces = MediaType.APPLICATION_JSON_VALUE)
     public ResponseEntity<String> getDefaultConfiguration() throws JsonProcessingException {
-        String tlsServer = ConfigurationMarshaller.get(TLSConfiguration.DEFAULT_SERVER);
+        JsonObject tlsServer = JsonParser.parseString(ConfigurationMarshaller.get(TLSConfiguration.DEFAULT_SERVER)).getAsJsonObject();
 
         APIResponse apiResponse = APIResponse.newBuilder()
                 .isSuccess(true)
@@ -68,10 +69,10 @@ public class TLSServer {
 
     @GetMapping(produces = MediaType.APPLICATION_JSON_VALUE)
     public ResponseEntity<String> getConfiguration() {
-        String tlsServer;
+        JsonObject tlsServer;
         try {
             TLSConfiguration tlsConfiguration = TLSConfiguration.loadServer();
-            tlsServer = ConfigurationMarshaller.get(tlsConfiguration);
+            tlsServer = JsonParser.parseString(ConfigurationMarshaller.get(tlsConfiguration)).getAsJsonObject();
         } catch (Exception ex) {
             return FastBuilder.error(ErrorBase.CONFIGURATION_NOT_FOUND, ex.getMessage(), HttpResponseStatus.NOT_FOUND);
         }

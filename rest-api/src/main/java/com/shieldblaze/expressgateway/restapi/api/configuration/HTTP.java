@@ -18,8 +18,9 @@
 package com.shieldblaze.expressgateway.restapi.api.configuration;
 
 import com.fasterxml.jackson.core.JsonProcessingException;
+import com.google.gson.JsonObject;
+import com.google.gson.JsonParser;
 import com.shieldblaze.expressgateway.configuration.ConfigurationMarshaller;
-import com.shieldblaze.expressgateway.configuration.healthcheck.HealthCheckConfiguration;
 import com.shieldblaze.expressgateway.configuration.http.HTTPConfiguration;
 import com.shieldblaze.expressgateway.restapi.response.ErrorBase;
 import com.shieldblaze.expressgateway.restapi.response.FastBuilder;
@@ -42,7 +43,7 @@ public class HTTP {
 
     @PostMapping(consumes = MediaType.APPLICATION_JSON_VALUE, produces = MediaType.APPLICATION_JSON_VALUE)
     public ResponseEntity<String> applyConfiguration(@RequestBody HTTPConfiguration httpConfiguration) throws IOException {
-        httpConfiguration.save();
+        httpConfiguration.validate().save();
 
         APIResponse apiResponse = APIResponse.newBuilder()
                 .isSuccess(true)
@@ -56,7 +57,7 @@ public class HTTP {
      */
     @GetMapping(value = "/default", produces = MediaType.APPLICATION_JSON_VALUE)
     public ResponseEntity<String> getDefaultConfiguration() throws JsonProcessingException {
-        String http = ConfigurationMarshaller.get(HTTPConfiguration.DEFAULT);
+        JsonObject http = JsonParser.parseString(ConfigurationMarshaller.get(HTTPConfiguration.DEFAULT)).getAsJsonObject();
 
         APIResponse apiResponse = APIResponse.newBuilder()
                 .isSuccess(true)
@@ -68,10 +69,10 @@ public class HTTP {
 
     @GetMapping(produces = MediaType.APPLICATION_JSON_VALUE)
     public ResponseEntity<String> getConfiguration() {
-        String http;
+        JsonObject http;
         try {
             HTTPConfiguration httpConfiguration = HTTPConfiguration.load();
-            http = ConfigurationMarshaller.get(httpConfiguration);
+            http = JsonParser.parseString(ConfigurationMarshaller.get(httpConfiguration)).getAsJsonObject();
         } catch (Exception ex) {
             return FastBuilder.error(ErrorBase.CONFIGURATION_NOT_FOUND, ex.getMessage(), HttpResponseStatus.NOT_FOUND);
         }

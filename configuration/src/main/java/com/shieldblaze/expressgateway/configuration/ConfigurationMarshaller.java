@@ -19,7 +19,9 @@ package com.shieldblaze.expressgateway.configuration;
 
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import io.netty.util.internal.SystemPropertyUtil;
 
+import java.io.File;
 import java.io.FileWriter;
 import java.io.IOException;
 import java.nio.file.Files;
@@ -36,7 +38,7 @@ public final class ConfigurationMarshaller {
     public static void save(String fileName, Object obj) throws IOException {
         String json = OBJECT_MAPPER.writerWithDefaultPrettyPrinter().writeValueAsString(obj);
 
-        try (FileWriter writer = new FileWriter(fileName, false)) {
+        try (FileWriter writer = new FileWriter(getDir() + File.separator + fileName, false)) {
             writer.write(json);
         }
     }
@@ -46,7 +48,11 @@ public final class ConfigurationMarshaller {
     }
 
     public static <T> T load(String fileName, Class<T> clazz) throws IOException {
-        String json = Files.readString(Path.of(fileName));
+        String json = Files.readString(Path.of(getDir() + File.separator + fileName));
         return OBJECT_MAPPER.readValue(json, clazz);
+    }
+
+    private static String getDir() {
+        return SystemPropertyUtil.get("egw.dir", System.getProperty("user.home"));
     }
 }

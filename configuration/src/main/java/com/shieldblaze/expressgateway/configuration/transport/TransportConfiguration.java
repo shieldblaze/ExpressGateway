@@ -19,14 +19,15 @@ package com.shieldblaze.expressgateway.configuration.transport;
 
 import com.fasterxml.jackson.annotation.JsonProperty;
 import com.shieldblaze.expressgateway.configuration.ConfigurationMarshaller;
-import com.shieldblaze.expressgateway.configuration.tls.TLSConfiguration;
 import io.netty.channel.AdaptiveRecvByteBufAllocator;
 import io.netty.channel.FixedRecvByteBufAllocator;
 import io.netty.channel.RecvByteBufAllocator;
 import io.netty.channel.epoll.Epoll;
 import io.netty.incubator.channel.uring.IOUring;
+import io.netty.util.internal.ObjectUtil;
 
 import java.io.IOException;
+import java.util.Objects;
 
 /**
  * Transport Configuration
@@ -78,7 +79,11 @@ public final class TransportConfiguration {
         DEFAULT.socketReceiveBufferSize = 67_108_864;
         DEFAULT.tcpFastOpenMaximumPendingRequests = 100_000;
         DEFAULT.backendConnectTimeout = 1000 * 10;  // 10 Seconds
+<<<<<<< HEAD
         DEFAULT.connectionIdleTimeout = 1000 * 120; // 2 Minute
+=======
+        DEFAULT.connectionIdleTimeout = 1000 * 10; // 2 Minute
+>>>>>>> 09899b4 (Some fine grain cleanups (#88))
     }
 
     public TransportType transportType() {
@@ -86,6 +91,7 @@ public final class TransportConfiguration {
     }
 
     TransportConfiguration setTransportType(TransportType transportType) {
+        Objects.requireNonNull(transportType, "Transport Type");
         this.transportType = transportType;
         return this;
     }
@@ -95,6 +101,7 @@ public final class TransportConfiguration {
     }
 
     TransportConfiguration setReceiveBufferAllocationType(ReceiveBufferAllocationType receiveBufferAllocationType) {
+        Objects.requireNonNull(receiveBufferAllocationType, "Receive Buffer Allocation Type");
         this.receiveBufferAllocationType = receiveBufferAllocationType;
         return this;
     }
@@ -104,6 +111,7 @@ public final class TransportConfiguration {
     }
 
     TransportConfiguration setReceiveBufferSizes(int[] receiveBufferSizes) {
+        Objects.requireNonNull(receiveBufferSizes, "Receive Buffer Sizes");
         this.receiveBufferSizes = receiveBufferSizes;
         return this;
     }
@@ -121,6 +129,7 @@ public final class TransportConfiguration {
     }
 
     TransportConfiguration setTcpConnectionBacklog(int TCPConnectionBacklog) {
+        ObjectUtil.checkPositive(TCPConnectionBacklog, "TCP Connection Backlog");
         this.tcpConnectionBacklog = TCPConnectionBacklog;
         return this;
     }
@@ -130,6 +139,9 @@ public final class TransportConfiguration {
     }
 
     TransportConfiguration setSocketReceiveBufferSize(int socketReceiveBufferSize) {
+        if (socketReceiveBufferSize < 64) {
+            throw new IllegalArgumentException("Socket Receive Buffer Size Must Be Greater Than 64");
+        }
         this.socketReceiveBufferSize = socketReceiveBufferSize;
         return this;
     }
@@ -139,6 +151,9 @@ public final class TransportConfiguration {
     }
 
     TransportConfiguration setSocketSendBufferSize(int socketSendBufferSize) {
+        if (socketSendBufferSize < 64) {
+            throw new IllegalArgumentException("Socket Send Buffer Size Must Be Greater Than 64");
+        }
         this.socketSendBufferSize = socketSendBufferSize;
         return this;
     }
@@ -148,6 +163,7 @@ public final class TransportConfiguration {
     }
 
     TransportConfiguration setTcpFastOpenMaximumPendingRequests(int TCPFastOpenMaximumPendingRequests) {
+        ObjectUtil.checkPositive(TCPFastOpenMaximumPendingRequests, "TCP Fast Open Maximum Pending Requests");
         this.tcpFastOpenMaximumPendingRequests = TCPFastOpenMaximumPendingRequests;
         return this;
     }
@@ -157,6 +173,7 @@ public final class TransportConfiguration {
     }
 
     TransportConfiguration setBackendConnectTimeout(int backendConnectTimeout) {
+        ObjectUtil.checkPositive(backendConnectTimeout, "Backend Connect Timeout");
         this.backendConnectTimeout = backendConnectTimeout;
         return this;
     }
@@ -166,7 +183,62 @@ public final class TransportConfiguration {
     }
 
     TransportConfiguration setConnectionIdleTimeout(int connectionIdleTimeout) {
+        ObjectUtil.checkPositive(connectionIdleTimeout, "Connection Idle Timeout");
         this.connectionIdleTimeout = connectionIdleTimeout;
+        return this;
+    }
+
+    public TransportConfiguration validate() {
+        Objects.requireNonNull(transportType, "Transport Type");
+        Objects.requireNonNull(receiveBufferAllocationType, "Receive Buffer Allocation Type");
+        Objects.requireNonNull(receiveBufferSizes, "Receive Buffer Sizes");
+        ObjectUtil.checkPositive(tcpConnectionBacklog, "TCP Connection Backlog");
+        ObjectUtil.checkPositive(tcpFastOpenMaximumPendingRequests, "TCP Fast Open Maximum Pending Requests");
+        ObjectUtil.checkPositive(backendConnectTimeout, "Backend Connect Timeout");
+        ObjectUtil.checkPositive(connectionIdleTimeout, "Connection Idle Timeout");
+
+        if (transportType == TransportType.EPOLL && !Epoll.isAvailable()) {
+            throw new IllegalArgumentException("Epoll is not available");
+        } else if (transportType == TransportType.IO_URING && !IOUring.isAvailable()) {
+            throw new IllegalArgumentException("IOUring is not available");
+        }
+
+        if (receiveBufferAllocationType == ReceiveBufferAllocationType.ADAPTIVE) {
+            if (receiveBufferSizes.length != 3) {
+                throw new IllegalArgumentException("Receive Buffer Sizes Are Invalid");
+            }
+
+            if (receiveBufferSizes[2] > 65535) {
+                throw new IllegalArgumentException("Maximum Receive Buffer Size Cannot Be Greater Than 65535");
+            } else if (receiveBufferSizes[2] < 64) {
+                throw new IllegalArgumentException("Maximum Receive Buffer Size Cannot Be Less Than 64");
+            }
+
+            if (receiveBufferSizes[0] < 64 || receiveBufferSizes[0] > receiveBufferSizes[2]) {
+                throw new IllegalArgumentException("Minimum Receive Buffer Size Must Be In Range Of 64-" + receiveBufferSizes[2]);
+            }
+
+            if (receiveBufferSizes[1] < 64 || receiveBufferSizes[1] > receiveBufferSizes[2] || receiveBufferSizes[1] < receiveBufferSizes[0]) {
+                throw new IllegalArgumentException("Initial Receive Buffer Must Be In Range Of " + receiveBufferSizes[0] + "-" + receiveBufferSizes[2]);
+            }
+        } else {
+            if (receiveBufferSizes.length != 1) {
+                throw new IllegalArgumentException("Receive Buffer Sizes Are Invalid");
+            }
+
+            if (receiveBufferSizes[0] > 65536 || receiveBufferSizes[0] < 64) {
+                throw new IllegalArgumentException("Fixed Receive Buffer Size Cannot Be Less Than 64-65536");
+            }
+        }
+
+        if (socketReceiveBufferSize < 64) {
+            throw new IllegalArgumentException("Socket Receive Buffer Size Must Be Greater Than 64");
+        }
+
+        if (socketSendBufferSize < 64) {
+            throw new IllegalArgumentException("Socket Send Buffer Size Must Be Greater Than 64");
+        }
+
         return this;
     }
 
@@ -180,12 +252,16 @@ public final class TransportConfiguration {
     }
 
     /**
-     * Load this configuration from the file
+     * Load a configuration
      *
      * @return {@link TransportConfiguration} Instance
-     * @throws IOException If an error occurs during loading
      */
-    public static TransportConfiguration load() throws IOException {
-        return ConfigurationMarshaller.load("TransportConfiguration.json", TransportConfiguration.class);
+    public static TransportConfiguration load() {
+        try {
+            return ConfigurationMarshaller.load("TransportConfiguration.json", TransportConfiguration.class);
+        } catch (Exception ex) {
+            // Ignore
+        }
+        return DEFAULT;
     }
 }

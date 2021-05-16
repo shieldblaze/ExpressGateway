@@ -18,8 +18,9 @@
 package com.shieldblaze.expressgateway.restapi.api.configuration;
 
 import com.fasterxml.jackson.core.JsonProcessingException;
+import com.google.gson.JsonObject;
+import com.google.gson.JsonParser;
 import com.shieldblaze.expressgateway.configuration.ConfigurationMarshaller;
-import com.shieldblaze.expressgateway.configuration.eventloop.EventLoopConfiguration;
 import com.shieldblaze.expressgateway.configuration.eventstream.EventStreamConfiguration;
 import com.shieldblaze.expressgateway.restapi.response.ErrorBase;
 import com.shieldblaze.expressgateway.restapi.response.FastBuilder;
@@ -42,7 +43,7 @@ public class EventStream {
 
     @PostMapping(consumes = MediaType.APPLICATION_JSON_VALUE, produces = MediaType.APPLICATION_JSON_VALUE)
     public ResponseEntity<String> applyConfiguration(@RequestBody EventStreamConfiguration eventStream) throws IOException {
-        eventStream.save();
+        eventStream.validate().save();
 
         APIResponse apiResponse = APIResponse.newBuilder()
                 .isSuccess(true)
@@ -56,7 +57,7 @@ public class EventStream {
      */
     @GetMapping(value = "/default", produces = MediaType.APPLICATION_JSON_VALUE)
     public ResponseEntity<String> getDefaultConfiguration() throws JsonProcessingException {
-        String eventStream = ConfigurationMarshaller.get(EventStreamConfiguration.DEFAULT);
+        JsonObject eventStream = JsonParser.parseString(ConfigurationMarshaller.get(EventStreamConfiguration.DEFAULT)).getAsJsonObject();
 
         APIResponse apiResponse = APIResponse.newBuilder()
                 .isSuccess(true)
@@ -68,10 +69,10 @@ public class EventStream {
 
     @GetMapping(produces = MediaType.APPLICATION_JSON_VALUE)
     public ResponseEntity<String> getConfiguration() {
-        String eventStream;
+        JsonObject eventStream;
         try {
             EventStreamConfiguration eventStreamConfiguration = EventStreamConfiguration.load();
-            eventStream = ConfigurationMarshaller.get(eventStreamConfiguration);
+            eventStream = JsonParser.parseString(ConfigurationMarshaller.get(eventStreamConfiguration)).getAsJsonObject();
         } catch (Exception ex) {
             return FastBuilder.error(ErrorBase.CONFIGURATION_NOT_FOUND, ex.getMessage(), HttpResponseStatus.NOT_FOUND);
         }

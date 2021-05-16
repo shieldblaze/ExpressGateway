@@ -18,22 +18,26 @@
 package com.shieldblaze.expressgateway.backend.strategy.l4;
 
 import com.shieldblaze.expressgateway.backend.Node;
+import com.shieldblaze.expressgateway.backend.NodeBuilder;
 import com.shieldblaze.expressgateway.backend.cluster.Cluster;
-import com.shieldblaze.expressgateway.backend.cluster.ClusterPool;
+import com.shieldblaze.expressgateway.backend.cluster.ClusterBuilder;
 import com.shieldblaze.expressgateway.backend.exceptions.LoadBalanceException;
 import com.shieldblaze.expressgateway.backend.strategy.l4.sessionpersistence.NOOPSessionPersistence;
-import com.shieldblaze.expressgateway.concurrent.eventstream.EventStream;
 import org.junit.jupiter.api.Test;
 
 import java.net.InetSocketAddress;
+import java.net.UnknownHostException;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 
 class LeastConnectionTest {
 
     @Test
-    void testLeastConnection() throws LoadBalanceException {
-        ClusterPool cluster = new ClusterPool(new LeastConnection(NOOPSessionPersistence.INSTANCE));
+    void testLeastConnection() throws LoadBalanceException, UnknownHostException {
+        Cluster cluster = ClusterBuilder.newBuilder()
+                .withLoadBalance(new LeastConnection(NOOPSessionPersistence.INSTANCE))
+                .build();
+
         fastBuild(cluster, "10.10.1.1");
         fastBuild(cluster, "10.10.1.2");
         fastBuild(cluster, "10.10.1.3");
@@ -77,7 +81,10 @@ class LeastConnectionTest {
         assertEquals(250_000, forth);
     }
 
-    private static Node fastBuild(Cluster cluster, String host) {
-        return new Node(cluster, new InetSocketAddress(host, 1));
+    private static void fastBuild(Cluster cluster, String host) throws UnknownHostException {
+        NodeBuilder.newBuilder()
+                .withCluster(cluster)
+                .withSocketAddress(new InetSocketAddress(host, 1))
+                .build();
     }
 }

@@ -20,9 +20,9 @@ package com.shieldblaze.expressgateway.concurrent.event;
 import java.util.concurrent.CompletableFuture;
 
 /**
- * Generic implementation of {@link Event}
+ * Default implementation of {@link Event}
  */
-public class GenericEvent<T> implements Event<T> {
+public class DefaultEvent<T> implements Event<T> {
 
     private CompletableFuture<T> future = new CompletableFuture<>();
     private boolean hasFinished;
