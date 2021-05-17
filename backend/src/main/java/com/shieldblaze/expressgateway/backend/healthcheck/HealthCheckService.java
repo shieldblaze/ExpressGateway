@@ -61,7 +61,7 @@ public final class HealthCheckService implements Closeable {
      */
     @NonNull
     public void add(Node node) {
-        if (node.healthCheck() != null || nodeMap.containsKey(node)) {
+        if (nodeMap.containsKey(node)) {
             throw new IllegalArgumentException("HealthCheck is already enabled for this Node: " + node);
         }
 
