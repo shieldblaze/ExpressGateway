@@ -17,3 +17,4 @@
 #
 
 sudo cp bin/libnetty_tcnative.so /usr/lib/
+sudo cp bin/libnetty_tcnative.so /usr/lib64/
