@@ -19,10 +19,9 @@ package com.shieldblaze.expressgateway.protocol.http;
 
 import com.aayushatharva.brotli4j.decoder.DecoderJNI;
 import com.aayushatharva.brotli4j.decoder.DirectDecompress;
-import com.shieldblaze.expressgateway.backend.Node;
 import com.shieldblaze.expressgateway.backend.NodeBuilder;
 import com.shieldblaze.expressgateway.backend.cluster.Cluster;
-import com.shieldblaze.expressgateway.backend.cluster.ClusterPool;
+import com.shieldblaze.expressgateway.backend.cluster.ClusterBuilder;
 import com.shieldblaze.expressgateway.backend.strategy.l7.http.HTTPRoundRobin;
 import com.shieldblaze.expressgateway.backend.strategy.l7.http.sessionpersistence.NOOPSessionPersistence;
 import com.shieldblaze.expressgateway.configuration.CoreConfiguration;
@@ -119,10 +118,12 @@ class CompressionTest {
         httpServer.start();
         Thread.sleep(500L);
 
-        Cluster cluster = new ClusterPool(new HTTPRoundRobin(NOOPSessionPersistence.INSTANCE));
+        Cluster cluster = ClusterBuilder.newBuilder()
+                .withLoadBalance(new HTTPRoundRobin(NOOPSessionPersistence.INSTANCE))
+                .build();
 
         HTTPLoadBalancer httpLoadBalancer = HTTPLoadBalancerBuilder.newBuilder()
-                .withCoreConfiguration(CoreConfiguration.DEFAULT)
+                .withCoreConfiguration(CoreConfiguration.INSTANCE)
                 .withHTTPConfiguration(HTTPConfiguration.DEFAULT)
                 .withTLSForClient(forClient)
                 .withTLSForServer(forServer)
@@ -228,10 +229,12 @@ class CompressionTest {
         httpServer.start();
         Thread.sleep(500L);
 
-        Cluster cluster = new ClusterPool(new HTTPRoundRobin(NOOPSessionPersistence.INSTANCE));
+        Cluster cluster = ClusterBuilder.newBuilder()
+                .withLoadBalance(new HTTPRoundRobin(NOOPSessionPersistence.INSTANCE))
+                .build();
 
         HTTPLoadBalancer httpLoadBalancer = HTTPLoadBalancerBuilder.newBuilder()
-                .withCoreConfiguration(CoreConfiguration.DEFAULT)
+                .withCoreConfiguration(CoreConfiguration.INSTANCE)
                 .withHTTPConfiguration(HTTPConfiguration.DEFAULT)
                 .withTLSForClient(forClient)
                 .withTLSForServer(forServer)
@@ -318,10 +321,12 @@ class CompressionTest {
         httpServer.start();
         Thread.sleep(500L);
 
-        Cluster cluster = new ClusterPool(new HTTPRoundRobin(NOOPSessionPersistence.INSTANCE));
+        Cluster cluster = ClusterBuilder.newBuilder()
+                .withLoadBalance(new HTTPRoundRobin(NOOPSessionPersistence.INSTANCE))
+                .build();
 
         HTTPLoadBalancer httpLoadBalancer = HTTPLoadBalancerBuilder.newBuilder()
-                .withCoreConfiguration(CoreConfiguration.DEFAULT)
+                .withCoreConfiguration(CoreConfiguration.INSTANCE)
                 .withHTTPConfiguration(HTTPConfiguration.DEFAULT)
                 .withTLSForClient(forClient)
                 .withTLSForServer(forServer)

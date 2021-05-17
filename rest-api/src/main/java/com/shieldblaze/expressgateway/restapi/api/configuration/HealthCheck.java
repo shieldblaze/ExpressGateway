@@ -35,15 +35,14 @@ import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RestController;
 
-import javax.validation.Valid;
 import java.io.IOException;
 
 @RestController
 @RequestMapping("/v1/configuration/healthcheck")
-public class HealthCheck {
+public final class HealthCheck {
 
     @PostMapping(consumes = MediaType.APPLICATION_JSON_VALUE, produces = MediaType.APPLICATION_JSON_VALUE)
-    public ResponseEntity<String> applyConfiguration(@Valid @RequestBody HealthCheckConfiguration healthCheck) throws IOException {
+    public ResponseEntity<String> applyConfiguration(@RequestBody HealthCheckConfiguration healthCheck) throws IOException {
         healthCheck.validate().save();
 
         APIResponse apiResponse = APIResponse.newBuilder()

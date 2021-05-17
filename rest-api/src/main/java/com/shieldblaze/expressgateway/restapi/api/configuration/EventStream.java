@@ -39,7 +39,7 @@ import java.io.IOException;
 
 @RestController
 @RequestMapping("/v1/configuration/eventstream")
-public class EventStream {
+public final class EventStream {
 
     @PostMapping(consumes = MediaType.APPLICATION_JSON_VALUE, produces = MediaType.APPLICATION_JSON_VALUE)
     public ResponseEntity<String> applyConfiguration(@RequestBody EventStreamConfiguration eventStream) throws IOException {

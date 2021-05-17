@@ -17,10 +17,9 @@
  */
 package com.shieldblaze.expressgateway.protocol.udp;
 
-import com.shieldblaze.expressgateway.backend.Node;
 import com.shieldblaze.expressgateway.backend.NodeBuilder;
 import com.shieldblaze.expressgateway.backend.cluster.Cluster;
-import com.shieldblaze.expressgateway.backend.cluster.ClusterPool;
+import com.shieldblaze.expressgateway.backend.cluster.ClusterBuilder;
 import com.shieldblaze.expressgateway.backend.strategy.l4.RoundRobin;
 import com.shieldblaze.expressgateway.backend.strategy.l4.sessionpersistence.NOOPSessionPersistence;
 import com.shieldblaze.expressgateway.configuration.CoreConfiguration;
@@ -36,6 +35,7 @@ import java.net.DatagramPacket;
 import java.net.DatagramSocket;
 import java.net.InetAddress;
 import java.net.InetSocketAddress;
+import java.net.UnknownHostException;
 import java.util.Arrays;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
@@ -46,13 +46,15 @@ final class UpstreamHandlerTest {
     static L4LoadBalancer l4LoadBalancer;
 
     @BeforeAll
-    static void setup() {
+    static void setup() throws UnknownHostException {
         new UDPServer().start();
 
-        Cluster cluster = new ClusterPool(new RoundRobin(NOOPSessionPersistence.INSTANCE));
+        Cluster cluster = ClusterBuilder.newBuilder()
+                .withLoadBalance(new RoundRobin(NOOPSessionPersistence.INSTANCE))
+                .build();
 
         l4LoadBalancer = L4LoadBalancerBuilder.newBuilder()
-                .withCoreConfiguration(CoreConfiguration.DEFAULT)
+                .withCoreConfiguration(CoreConfiguration.INSTANCE)
                 .withBindAddress(new InetSocketAddress("127.0.0.1", 9110))
                 .withL4FrontListener(new UDPListener())
                 .build();

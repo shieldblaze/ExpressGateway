@@ -39,7 +39,7 @@ import java.io.IOException;
 
 @RestController
 @RequestMapping("/v1/configuration/buffer")
-public class Buffer {
+public final class Buffer {
 
     @PostMapping(consumes = MediaType.APPLICATION_JSON_VALUE, produces = MediaType.APPLICATION_JSON_VALUE)
     public ResponseEntity<String> applyConfiguration(@RequestBody BufferConfiguration bufConf) throws IOException {

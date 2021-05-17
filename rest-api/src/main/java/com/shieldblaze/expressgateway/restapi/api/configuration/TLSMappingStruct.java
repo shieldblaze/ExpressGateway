@@ -21,7 +21,7 @@ import com.fasterxml.jackson.annotation.JsonProperty;
 
 import java.util.Objects;
 
-public class TLSMappingStruct {
+public final class TLSMappingStruct {
 
     @JsonProperty(value = "host", required = true)
     private String host;

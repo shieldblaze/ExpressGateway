@@ -17,6 +17,8 @@
  */
 package com.shieldblaze.expressgateway.core.loadbalancer;
 
+import com.google.gson.JsonArray;
+import com.google.gson.JsonObject;
 import com.shieldblaze.expressgateway.backend.cluster.Cluster;
 import com.shieldblaze.expressgateway.common.annotation.NonNull;
 import com.shieldblaze.expressgateway.concurrent.GlobalExecutors;
@@ -34,7 +36,7 @@ import io.netty.channel.ChannelHandler;
 import java.net.InetSocketAddress;
 import java.util.Map;
 import java.util.UUID;
-import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.ConcurrentSkipListMap;
 import java.util.concurrent.atomic.AtomicInteger;
 
 /**
@@ -50,7 +52,7 @@ public abstract class L4LoadBalancer {
     private final EventStream eventStream;
     private final InetSocketAddress bindAddress;
     private final L4FrontListener l4FrontListener;
-    private final Map<String, Cluster> clusterMap = new ConcurrentHashMap<>();
+    private final Map<String, Cluster> clusterMap = new ConcurrentSkipListMap<>();
     private final CoreConfiguration coreConfiguration;
     private final TLSConfiguration tlsForServer;
     private final TLSConfiguration tlsForClient;
@@ -59,14 +61,16 @@ public abstract class L4LoadBalancer {
     private final ByteBufAllocator byteBufAllocator;
     private final EventLoopFactory eventLoopFactory;
 
+    private L4FrontListenerStartupEvent l4FrontListenerStartupEvent;
+
     /**
-     * @param name                     Name of this Load Balancer
-     * @param bindAddress              {@link InetSocketAddress} on which {@link L4FrontListener} will bind and listen.
-     * @param l4FrontListener          {@link L4FrontListener} for listening traffic
-     * @param coreConfiguration        {@link CoreConfiguration} to be applied
-     * @param tlsForServer             {@link TLSConfiguration} for Server
-     * @param tlsForClient             {@link TLSConfiguration} for Client
-     * @param channelHandler           {@link ChannelHandler} to use for handling traffic
+     * @param name              Name of this Load Balancer
+     * @param bindAddress       {@link InetSocketAddress} on which {@link L4FrontListener} will bind and listen.
+     * @param l4FrontListener   {@link L4FrontListener} for listening traffic
+     * @param coreConfiguration {@link CoreConfiguration} to be applied
+     * @param tlsForServer      {@link TLSConfiguration} for Server
+     * @param tlsForClient      {@link TLSConfiguration} for Client
+     * @param channelHandler    {@link ChannelHandler} to use for handling traffic
      * @throws NullPointerException If a required parameter if {@code null}
      */
     public L4LoadBalancer(String name,
@@ -106,7 +110,8 @@ public abstract class L4LoadBalancer {
      * Start L4 Load Balancer
      */
     public L4FrontListenerStartupEvent start() {
-        return l4FrontListener.start();
+        l4FrontListenerStartupEvent = l4FrontListener.start();
+        return l4FrontListenerStartupEvent;
     }
 
     /**
@@ -116,7 +121,7 @@ public abstract class L4LoadBalancer {
         L4FrontListenerStopEvent event = l4FrontListener.stop();
 
         // Close EventStream when stop event has finished.
-        event.future().whenCompleteAsync((_Void, throwable) -> eventStream().close(), GlobalExecutors.INSTANCE.getExecutorService());
+        event.future().whenCompleteAsync((_Void, throwable) -> eventStream().close(), GlobalExecutors.INSTANCE.executorService());
         return event;
     }
 
@@ -232,5 +237,34 @@ public abstract class L4LoadBalancer {
      */
     public EventLoopFactory eventLoopFactory() {
         return eventLoopFactory;
+    }
+
+    /**
+     * Convert Load Balancer data into {@link JsonObject}
+     * @return {@link JsonObject} Instance
+     */
+    public JsonObject toJson() {
+        JsonObject jsonObject = new JsonObject();
+
+        String state;
+        if (l4FrontListenerStartupEvent.hasFinished()) {
+            if (l4FrontListenerStartupEvent.isSuccessful()) {
+                state = "Running";
+            } else {
+                state = "Failed; " + l4FrontListenerStartupEvent.throwable().getMessage();
+            }
+        } else {
+            state = "Pending";
+        }
+
+        jsonObject.addProperty("ID", ID);
+        jsonObject.addProperty("Name", name);
+        jsonObject.addProperty("State", state);
+
+        JsonArray clusters = new JsonArray();
+        clusterMap.forEach((hostname, cluster) -> clusters.add(cluster.toJson()));
+        jsonObject.add("Clusters", clusters);
+
+        return jsonObject;
     }
 }

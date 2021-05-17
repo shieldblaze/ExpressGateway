@@ -39,7 +39,7 @@ import java.io.IOException;
 
 @RestController
 @RequestMapping("/v1/configuration/transport")
-public class Transport {
+public final class Transport {
 
     @PostMapping(consumes = MediaType.APPLICATION_JSON_VALUE, produces = MediaType.APPLICATION_JSON_VALUE)
     public ResponseEntity<String> applyConfiguration(@RequestBody TransportConfiguration transportConfiguration) throws IOException {

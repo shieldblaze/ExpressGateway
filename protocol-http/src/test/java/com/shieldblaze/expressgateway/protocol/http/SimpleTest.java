@@ -17,10 +17,9 @@
  */
 package com.shieldblaze.expressgateway.protocol.http;
 
-import com.shieldblaze.expressgateway.backend.Node;
 import com.shieldblaze.expressgateway.backend.NodeBuilder;
 import com.shieldblaze.expressgateway.backend.cluster.Cluster;
-import com.shieldblaze.expressgateway.backend.cluster.ClusterPool;
+import com.shieldblaze.expressgateway.backend.cluster.ClusterBuilder;
 import com.shieldblaze.expressgateway.backend.strategy.l7.http.HTTPRoundRobin;
 import com.shieldblaze.expressgateway.backend.strategy.l7.http.sessionpersistence.NOOPSessionPersistence;
 import com.shieldblaze.expressgateway.configuration.tls.CertificateKeyPair;
@@ -82,7 +81,9 @@ class SimpleTest {
         httpServer.start();
         Thread.sleep(500L);
 
-        Cluster cluster = new ClusterPool(new HTTPRoundRobin(NOOPSessionPersistence.INSTANCE));
+        Cluster cluster = ClusterBuilder.newBuilder()
+                .withLoadBalance(new HTTPRoundRobin(NOOPSessionPersistence.INSTANCE))
+                .build();
 
         HTTPLoadBalancer httpLoadBalancer = HTTPLoadBalancerBuilder.newBuilder()
                 .withTLSForClient(forClient)
@@ -140,7 +141,9 @@ class SimpleTest {
         httpServer.start();
         Thread.sleep(500L);
 
-        Cluster cluster = new ClusterPool(new HTTPRoundRobin(NOOPSessionPersistence.INSTANCE));
+        Cluster cluster = ClusterBuilder.newBuilder()
+                .withLoadBalance(new HTTPRoundRobin(NOOPSessionPersistence.INSTANCE))
+                .build();
 
         HTTPLoadBalancer httpLoadBalancer = HTTPLoadBalancerBuilder.newBuilder()
                 .withTLSForServer(forServer)
@@ -197,7 +200,9 @@ class SimpleTest {
         httpServer.start();
         Thread.sleep(500L);
 
-        Cluster cluster = new ClusterPool(new HTTPRoundRobin(NOOPSessionPersistence.INSTANCE));
+        Cluster cluster = ClusterBuilder.newBuilder()
+                .withLoadBalance(new HTTPRoundRobin(NOOPSessionPersistence.INSTANCE))
+                .build();
 
         HTTPLoadBalancer httpLoadBalancer = HTTPLoadBalancerBuilder.newBuilder()
                 .withTLSForClient(forClient)
@@ -242,7 +247,9 @@ class SimpleTest {
         httpServer.start();
         Thread.sleep(500L);
 
-        Cluster cluster = new ClusterPool(new HTTPRoundRobin(NOOPSessionPersistence.INSTANCE));
+        Cluster cluster = ClusterBuilder.newBuilder()
+                .withLoadBalance(new HTTPRoundRobin(NOOPSessionPersistence.INSTANCE))
+                .build();
 
         HTTPLoadBalancer httpLoadBalancer = HTTPLoadBalancerBuilder.newBuilder()
                 .withBindAddress(new InetSocketAddress("localhost", 20003))

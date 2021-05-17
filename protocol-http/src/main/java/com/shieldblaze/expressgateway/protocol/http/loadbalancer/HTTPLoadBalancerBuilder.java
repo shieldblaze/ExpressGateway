@@ -33,7 +33,7 @@ import java.util.Objects;
 public final class HTTPLoadBalancerBuilder {
     private String name;
     private InetSocketAddress bindAddress;
-    private CoreConfiguration coreConfiguration = CoreConfiguration.DEFAULT;
+    private CoreConfiguration coreConfiguration = CoreConfiguration.INSTANCE;
     private HTTPConfiguration httpConfiguration = HTTPConfiguration.DEFAULT;
     private L4FrontListener l4FrontListener;
     private HTTPServerInitializer httpServerInitializer = new DefaultHTTPServerInitializer();

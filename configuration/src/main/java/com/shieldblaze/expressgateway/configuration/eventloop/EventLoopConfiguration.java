@@ -85,7 +85,7 @@ public final class EventLoopConfiguration {
      *
      * @return {@link EventLoopConfiguration} Instance
      */
-    public static EventLoopConfiguration load() throws IOException {
+    public static EventLoopConfiguration load() {
         try {
             return ConfigurationMarshaller.load("EventLoopConfiguration.json", EventLoopConfiguration.class);
         } catch (Exception ex) {

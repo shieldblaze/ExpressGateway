@@ -17,6 +17,8 @@
  */
 package com.shieldblaze.expressgateway.backend.cluster;
 
+import com.google.gson.JsonArray;
+import com.google.gson.JsonObject;
 import com.shieldblaze.expressgateway.backend.Connection;
 import com.shieldblaze.expressgateway.backend.healthcheck.HealthCheckTemplate;
 import com.shieldblaze.expressgateway.backend.Node;
@@ -260,5 +262,21 @@ public class Cluster {
             }
         });
         nodes.clear();
+    }
+
+    /**
+     * Convert Cluster data into {@link JsonObject}
+     * @return {@link JsonObject} Instance
+     */
+    public JsonObject toJson() {
+        JsonObject jsonObject = new JsonObject();
+
+        JsonArray nodesArray = new JsonArray();
+        for (Node node : nodes) {
+            nodesArray.add(node.toJson());
+        }
+
+        jsonObject.add("Nodes", nodesArray);
+        return jsonObject;
     }
 }

@@ -17,6 +17,7 @@
  */
 package com.shieldblaze.expressgateway.backend;
 
+import com.google.gson.JsonObject;
 import com.shieldblaze.expressgateway.backend.cluster.Cluster;
 import com.shieldblaze.expressgateway.backend.exceptions.TooManyConnectionsException;
 import com.shieldblaze.expressgateway.common.Math;
@@ -144,7 +145,7 @@ public final class Node implements Comparable<Node>, Closeable {
      *
      * @param bytes Number of bytes to increment
      */
-    public void incBytesSent(int bytes) {
+    void incBytesSent(int bytes) {
         bytesSent.addAndGet(bytes);
     }
 
@@ -153,7 +154,7 @@ public final class Node implements Comparable<Node>, Closeable {
      *
      * @param bytes Number of bytes to increment
      */
-    public void incBytesReceived(int bytes) {
+    void incBytesReceived(int bytes) {
         bytesReceived.addAndGet(bytes);
     }
 
@@ -338,7 +339,7 @@ public final class Node implements Comparable<Node>, Closeable {
                 ", BytesReceived=" + bytesReceived +
                 ", Connections=" + activeConnections.size() + "/" + maxConnections +
                 ", state=" + state +
-                ", healthCheck=" + healthCheck +
+                ", health=" + health() +
                 '}';
     }
 
@@ -372,5 +373,20 @@ public final class Node implements Comparable<Node>, Closeable {
     public void close() {
         state(State.OFFLINE);
         drainConnections();
+    }
+
+    /**
+     * Convert Node data into {@link JsonObject}
+     * @return {@link JsonObject} Instance
+     */
+    public JsonObject toJson() {
+        JsonObject jsonObject = new JsonObject();
+        jsonObject.addProperty("SocketAddress", socketAddress.toString());
+        jsonObject.addProperty("Connections", activeConnections.size() + "/" + maxConnections);
+        jsonObject.addProperty("BytesSent", bytesSent);
+        jsonObject.addProperty("BytesReceived", bytesReceived);
+        jsonObject.addProperty("State", state.toString());
+        jsonObject.addProperty("Health", health().toString());
+        return jsonObject;
     }
 }

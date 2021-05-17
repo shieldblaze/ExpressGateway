@@ -44,7 +44,7 @@ import java.security.NoSuchAlgorithmException;
 
 @RestController
 @RequestMapping("/v1/configuration/tls/client")
-public class TLSClient {
+public final class TLSClient {
 
     @PostMapping(consumes = MediaType.APPLICATION_JSON_VALUE, produces = MediaType.APPLICATION_JSON_VALUE)
     public ResponseEntity<String> applyConfiguration(@RequestBody TLSConfiguration tlsConfiguration) throws IOException {

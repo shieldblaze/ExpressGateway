@@ -20,14 +20,30 @@ package com.shieldblaze.expressgateway.core.registry;
 import com.shieldblaze.expressgateway.core.events.L4FrontListenerStartupEvent;
 import com.shieldblaze.expressgateway.core.loadbalancer.L4LoadBalancer;
 
-public class LoadBalancerProperties {
-    private final L4LoadBalancer l4LoadBalancer;
-    private final L4FrontListenerStartupEvent startupEvent;
+public final class LoadBalancerProperty {
+
+    /**
+     * Load Balancer start time
+     */
     private final long startMillis = System.currentTimeMillis();
 
-    public LoadBalancerProperties(L4LoadBalancer l4LoadBalancer, L4FrontListenerStartupEvent startupEvent) {
+    /**
+     * {@link L4LoadBalancer} Instance
+     */
+    private final L4LoadBalancer l4LoadBalancer;
+
+    /**
+     * {@link L4LoadBalancer}'s {@link L4FrontListenerStartupEvent} Instance
+     */
+    private final L4FrontListenerStartupEvent startupEvent;
+
+    public LoadBalancerProperty(L4LoadBalancer l4LoadBalancer, L4FrontListenerStartupEvent startupEvent) {
         this.l4LoadBalancer = l4LoadBalancer;
         this.startupEvent = startupEvent;
+    }
+
+    public long startMillis() {
+        return startMillis;
     }
 
     public L4LoadBalancer l4LoadBalancer() {
@@ -36,9 +52,5 @@ public class LoadBalancerProperties {
 
     public L4FrontListenerStartupEvent startupEvent() {
         return startupEvent;
-    }
-
-    public long startMillis() {
-        return startMillis;
     }
 }

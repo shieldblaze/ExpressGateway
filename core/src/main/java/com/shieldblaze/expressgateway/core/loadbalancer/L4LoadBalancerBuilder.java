@@ -33,7 +33,7 @@ public final class L4LoadBalancerBuilder {
     private String name;
     private InetSocketAddress bindAddress;
     private L4FrontListener l4FrontListener;
-    private CoreConfiguration coreConfiguration = CoreConfiguration.DEFAULT;
+    private CoreConfiguration coreConfiguration = CoreConfiguration.INSTANCE;
     private TLSConfiguration tlsForServer;
     private TLSConfiguration tlsForClient;
     private ChannelHandler channelHandler;

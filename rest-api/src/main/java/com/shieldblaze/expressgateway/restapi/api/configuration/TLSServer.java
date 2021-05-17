@@ -39,7 +39,7 @@ import java.io.IOException;
 
 @RestController
 @RequestMapping("/v1/configuration/tls/server")
-public class TLSServer {
+public final class TLSServer {
 
     @PostMapping(consumes = MediaType.APPLICATION_JSON_VALUE, produces = MediaType.APPLICATION_JSON_VALUE)
     public ResponseEntity<String> applyConfiguration(@RequestBody TLSConfiguration tlsConfiguration) throws IOException {

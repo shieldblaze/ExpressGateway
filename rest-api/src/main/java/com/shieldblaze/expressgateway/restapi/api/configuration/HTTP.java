@@ -39,7 +39,7 @@ import java.io.IOException;
 
 @RestController
 @RequestMapping("/v1/configuration/http")
-public class HTTP {
+public final class HTTP {
 
     @PostMapping(consumes = MediaType.APPLICATION_JSON_VALUE, produces = MediaType.APPLICATION_JSON_VALUE)
     public ResponseEntity<String> applyConfiguration(@RequestBody HTTPConfiguration httpConfiguration) throws IOException {

@@ -17,28 +17,63 @@
  */
 package com.shieldblaze.expressgateway.core.registry;
 
-import com.shieldblaze.expressgateway.core.loadbalancer.L4LoadBalancer;
-
+import java.util.Collections;
 import java.util.Map;
+import java.util.Objects;
 import java.util.concurrent.ConcurrentHashMap;
 
+/**
+ * This class containing mapping operations of {@link LoadBalancerProperty}.
+ */
 public final class LoadBalancerRegistry {
-
-    public static final Map<String, LoadBalancerProperties> REGISTRY = new ConcurrentHashMap<>();
-
-    public static LoadBalancerProperties get(String loadBalancerID) {
-        return REGISTRY.get(loadBalancerID);
-    }
-
-    public static void add(L4LoadBalancer l4LoadBalancer, LoadBalancerProperties properties) {
-        REGISTRY.put(l4LoadBalancer.ID, properties);
-    }
-
-    public static LoadBalancerProperties remove(String loadBalancerID) {
-        return REGISTRY.remove(loadBalancerID);
-    }
 
     private LoadBalancerRegistry() {
         // Prevent outside initialization
+    }
+
+    /**
+     * Mapping of Load Balancer ID with {@link LoadBalancerProperty}
+     */
+    private static final Map<String, LoadBalancerProperty> REGISTRY = new ConcurrentHashMap<>();
+
+    /**
+     * Get mapped {@link LoadBalancerProperty} using Load Balancer ID
+     *
+     * @param id Load Balancer ID
+     * @return {@link LoadBalancerProperty} Instance if found else {@code null}
+     */
+    public static LoadBalancerProperty get(String id) {
+        Objects.requireNonNull(id, "id");
+        return REGISTRY.get(id);
+    }
+
+    /**
+     * Add mapping to {@link LoadBalancerProperty} using Load Balancer ID
+     *
+     * @param id       Load Balancer ID
+     * @param property {@link LoadBalancerProperty} Instance
+     */
+    public static void add(String id, LoadBalancerProperty property) {
+        Objects.requireNonNull(id, "id");
+        Objects.requireNonNull(property, "Property");
+        REGISTRY.put(id, property);
+    }
+
+    /**
+     * Remove mapping of {@link LoadBalancerProperty} using Load Balancer ID
+     *
+     * @param id Load Balancer ID
+     * @return {@link LoadBalancerProperty} Instance is successfully removed else {@code null}
+     */
+    public static LoadBalancerProperty remove(String id) {
+        Objects.requireNonNull(id, "id");
+        return REGISTRY.remove(id);
+    }
+
+    /**
+     * Get Registry Map
+     */
+    public static Map<String, LoadBalancerProperty> registry() {
+        return Collections.unmodifiableMap(REGISTRY);
     }
 }
