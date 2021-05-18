@@ -35,7 +35,7 @@ public final class LoadBalancerProperty {
     /**
      * {@link L4LoadBalancer}'s {@link L4FrontListenerStartupEvent} Instance
      */
-    private final L4FrontListenerStartupEvent startupEvent;
+    private L4FrontListenerStartupEvent startupEvent;
 
     public LoadBalancerProperty(L4LoadBalancer l4LoadBalancer, L4FrontListenerStartupEvent startupEvent) {
         this.l4LoadBalancer = l4LoadBalancer;
@@ -48,6 +48,10 @@ public final class LoadBalancerProperty {
 
     public L4LoadBalancer l4LoadBalancer() {
         return l4LoadBalancer;
+    }
+
+    public void startupEvent(L4FrontListenerStartupEvent startupEvent) {
+        this.startupEvent = startupEvent;
     }
 
     public L4FrontListenerStartupEvent startupEvent() {

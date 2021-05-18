@@ -19,6 +19,7 @@
 package com.shieldblaze.expressgateway.core.registry;
 
 import com.shieldblaze.expressgateway.core.L4FrontListener;
+import com.shieldblaze.expressgateway.core.events.L4FrontListenerShutdownEvent;
 import com.shieldblaze.expressgateway.core.events.L4FrontListenerStartupEvent;
 import com.shieldblaze.expressgateway.core.events.L4FrontListenerStopEvent;
 import com.shieldblaze.expressgateway.core.loadbalancer.L4LoadBalancer;
@@ -58,6 +59,11 @@ class LoadBalancerRegistryTest {
         @Override
         public L4FrontListenerStopEvent stop() {
             return new L4FrontListenerStopEvent();
+        }
+
+        @Override
+        public L4FrontListenerShutdownEvent shutdown() {
+            return new L4FrontListenerShutdownEvent();
         }
     }
 }

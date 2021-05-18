@@ -65,17 +65,17 @@ public class DefaultEvent<T> implements Event<T> {
     }
 
     @Override
-    public boolean hasFinished() {
+    public boolean isFinished() {
         return hasFinished;
     }
 
     @Override
-    public boolean isSuccessful() {
+    public boolean isSuccess() {
         return isSuccessful;
     }
 
     @Override
-    public Throwable throwable() {
+    public Throwable cause() {
         return throwable;
     }
 }

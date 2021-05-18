@@ -44,7 +44,13 @@ public final class LoadBalancerRegistry {
      */
     public static LoadBalancerProperty get(String id) {
         Objects.requireNonNull(id, "id");
-        return REGISTRY.get(id);
+
+        LoadBalancerProperty property = REGISTRY.get(id);
+        if (property == null) {
+            throw new NullPointerException("LoadBalancer not found with the ID: " + id);
+        }
+
+        return property;
     }
 
     /**

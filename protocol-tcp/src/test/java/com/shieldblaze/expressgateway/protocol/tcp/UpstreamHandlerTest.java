@@ -67,14 +67,14 @@ final class UpstreamHandlerTest {
 
         L4FrontListenerStartupEvent l4FrontListenerStartupEvent = l4LoadBalancer.start();
         l4FrontListenerStartupEvent.future().join();
-        assertTrue(l4FrontListenerStartupEvent.isSuccessful());
+        assertTrue(l4FrontListenerStartupEvent.isSuccess());
     }
 
     @AfterAll
     static void stop() {
         L4FrontListenerStopEvent l4FrontListenerStopEvent = l4LoadBalancer.stop();
         l4FrontListenerStopEvent.future().join();
-        assertTrue(l4FrontListenerStopEvent.isSuccessful());
+        assertTrue(l4FrontListenerStopEvent.isSuccess());
     }
 
     @Test

@@ -55,7 +55,7 @@ public final class LoadBalancerStartStruct {
     }
 
     public void setProtocol(String protocol) {
-        this.protocol = Objects.requireNonNull(protocol, "Protocol");
+        this.protocol = protocol;
     }
 
     public void setTlsForServer(boolean tlsForServer) {

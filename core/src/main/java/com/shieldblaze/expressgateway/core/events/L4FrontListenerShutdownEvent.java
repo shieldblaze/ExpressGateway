@@ -15,34 +15,15 @@
  * You should have received a copy of the GNU General Public License
  * along with ShieldBlaze ExpressGateway.  If not, see <https://www.gnu.org/licenses/>.
  */
-package com.shieldblaze.expressgateway.restapi;
+package com.shieldblaze.expressgateway.core.events;
 
-import org.springframework.boot.SpringApplication;
-import org.springframework.boot.autoconfigure.SpringBootApplication;
-import org.springframework.context.ConfigurableApplicationContext;
+import com.shieldblaze.expressgateway.concurrent.event.DefaultEvent;
+import com.shieldblaze.expressgateway.concurrent.event.Event;
+import com.shieldblaze.expressgateway.core.L4FrontListener;
 
-@SpringBootApplication
-public class RestAPI {
-
-    private static ConfigurableApplicationContext ctx;
-
-    public static void main(String[] args) {
-        start();
-    }
-
-    /**
-     * Start REST-API Server
-     */
-    public static void start() {
-        ctx = SpringApplication.run(RestAPI.class);
-    }
-
-    /**
-     * Shutdown REST-API Server
-     */
-    public static void stop() {
-        if (ctx != null) {
-            ctx.stop();
-        }
-    }
+/**
+ * {@link Event} for {@link L4FrontListener}
+ */
+public class L4FrontListenerShutdownEvent extends DefaultEvent<Void> {
+    // Empty
 }

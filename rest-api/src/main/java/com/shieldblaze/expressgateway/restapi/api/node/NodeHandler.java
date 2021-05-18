@@ -15,34 +15,14 @@
  * You should have received a copy of the GNU General Public License
  * along with ShieldBlaze ExpressGateway.  If not, see <https://www.gnu.org/licenses/>.
  */
-package com.shieldblaze.expressgateway.restapi;
+package com.shieldblaze.expressgateway.restapi.api.node;
 
-import org.springframework.boot.SpringApplication;
-import org.springframework.boot.autoconfigure.SpringBootApplication;
-import org.springframework.context.ConfigurableApplicationContext;
+import org.springframework.web.bind.annotation.RequestMapping;
+import org.springframework.web.bind.annotation.RestController;
 
-@SpringBootApplication
-public class RestAPI {
+@RestController
+@RequestMapping("/v1/node")
+public class NodeHandler {
 
-    private static ConfigurableApplicationContext ctx;
-
-    public static void main(String[] args) {
-        start();
-    }
-
-    /**
-     * Start REST-API Server
-     */
-    public static void start() {
-        ctx = SpringApplication.run(RestAPI.class);
-    }
-
-    /**
-     * Shutdown REST-API Server
-     */
-    public static void stop() {
-        if (ctx != null) {
-            ctx.stop();
-        }
-    }
+    
 }

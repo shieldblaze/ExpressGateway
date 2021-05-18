@@ -35,8 +35,10 @@ import com.shieldblaze.expressgateway.restapi.response.builder.Result;
 import io.netty.handler.codec.http.HttpResponseStatus;
 import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
+import org.springframework.web.bind.annotation.DeleteMapping;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PostMapping;
+import org.springframework.web.bind.annotation.PutMapping;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RequestParam;
@@ -51,9 +53,9 @@ public final class LoadBalancer {
     @PostMapping(value = "/l4/start", consumes = MediaType.APPLICATION_JSON_VALUE, produces = MediaType.APPLICATION_JSON_VALUE)
     public ResponseEntity<String> startL4(@RequestBody LoadBalancerStartStruct loadBalancerStartStruct) {
         L4FrontListener l4FrontListener;
-        if (loadBalancerStartStruct.protocol().equalsIgnoreCase("tcp")) {
+        if (loadBalancerStartStruct.protocol() != null && loadBalancerStartStruct.protocol().equalsIgnoreCase("tcp")) {
             l4FrontListener = new TCPListener();
-        } else if (loadBalancerStartStruct.protocol().equalsIgnoreCase("udp")) {
+        } else if (loadBalancerStartStruct.protocol() != null && loadBalancerStartStruct.protocol().equalsIgnoreCase("udp")) {
             l4FrontListener = new UDPListener();
         } else {
             // If Protocol is not 'TCP' or 'UDP" then throw error.
@@ -92,13 +94,6 @@ public final class LoadBalancer {
 
     @PostMapping(value = "/l7/http/start", consumes = MediaType.APPLICATION_JSON_VALUE, produces = MediaType.APPLICATION_JSON_VALUE)
     public ResponseEntity<String> start(@RequestBody LoadBalancerStartStruct loadBalancerStartStruct) {
-        L4FrontListener l4FrontListener;
-        if (loadBalancerStartStruct.protocol().equalsIgnoreCase("http")) {
-            l4FrontListener = new TCPListener();
-        } else {
-            // If Protocol is not 'TCP' or 'UDP" then throw error.
-            throw new IllegalArgumentException("Invalid L7 Protocol");
-        }
 
         TLSConfiguration tlsForClient = null;
         if (loadBalancerStartStruct.tlsForClient()) {
@@ -111,36 +106,73 @@ public final class LoadBalancer {
         }
 
         HTTPLoadBalancer httpLoadBalancer = HTTPLoadBalancerBuilder.newBuilder()
-                .withBindAddress(new InetSocketAddress("0.0.0.0", 9110))
-                .withL4FrontListener(new TCPListener())
-                .build();
-
-        L4LoadBalancer l4LoadBalancer = L4LoadBalancerBuilder.newBuilder()
                 .withBindAddress(new InetSocketAddress(loadBalancerStartStruct.bindAddress(), loadBalancerStartStruct.bindPort()))
-                .withL4FrontListener(l4FrontListener)
+                .withL4FrontListener(new TCPListener())
                 .withCoreConfiguration(CoreConfiguration.INSTANCE)
                 .withName(loadBalancerStartStruct.name())
                 .withTLSForClient(tlsForClient)
                 .withTLSForServer(tlsForServer)
                 .build();
 
-        L4FrontListenerStartupEvent event = l4LoadBalancer.start();
-        LoadBalancerRegistry.add(l4LoadBalancer.ID, new LoadBalancerProperty(l4LoadBalancer, event));
+        L4FrontListenerStartupEvent event = httpLoadBalancer.start();
+        LoadBalancerRegistry.add(httpLoadBalancer.ID, new LoadBalancerProperty(httpLoadBalancer, event));
 
         APIResponse apiResponse = APIResponse.newBuilder()
                 .isSuccess(true)
-                .withResult(Result.newBuilder().withHeader("LoadBalancerID").withMessage(l4LoadBalancer.ID).build())
+                .withResult(Result.newBuilder().withHeader("LoadBalancerID").withMessage(httpLoadBalancer.ID).build())
                 .build();
 
         return FastBuilder.response(apiResponse.getResponse(), HttpResponseStatus.CREATED);
+    }
+
+    @PutMapping(value = "/resume", produces = MediaType.APPLICATION_JSON_VALUE)
+    public ResponseEntity<String> resume(@RequestParam String id) {
+        LoadBalancerProperty property = LoadBalancerRegistry.get(id);
+
+        L4FrontListenerStartupEvent event = property.l4LoadBalancer().start();
+        property.startupEvent(event);
+
+        APIResponse apiResponse = APIResponse.newBuilder()
+                .isSuccess(true)
+                .build();
+
+        return FastBuilder.response(apiResponse.getResponse(), HttpResponseStatus.CREATED);
+    }
+
+    @PutMapping(value = "/stop", produces = MediaType.APPLICATION_JSON_VALUE)
+    public ResponseEntity<String> stop(@RequestParam String id) {
+        LoadBalancerProperty property = LoadBalancerRegistry.get(id);
+        property.l4LoadBalancer().stop();
+
+        APIResponse apiResponse = APIResponse.newBuilder()
+                .isSuccess(true)
+                .build();
+
+        return FastBuilder.response(apiResponse.getResponse(), HttpResponseStatus.OK);
+    }
+
+    @DeleteMapping(value = "/shutdown", produces = MediaType.APPLICATION_JSON_VALUE)
+    public ResponseEntity<String> shutdown(@RequestParam String id) {
+        LoadBalancerProperty property = LoadBalancerRegistry.get(id);
+        LoadBalancerRegistry.remove(id);
+
+        property.l4LoadBalancer().shutdown();
+
+        APIResponse apiResponse = APIResponse.newBuilder()
+                .isSuccess(true)
+                .build();
+
+        return FastBuilder.response(apiResponse.getResponse(), HttpResponseStatus.OK);
     }
 
     @GetMapping(value = "/get", produces = MediaType.APPLICATION_JSON_VALUE)
     public ResponseEntity<String> get(@RequestParam String id) {
         LoadBalancerProperty property = LoadBalancerRegistry.get(id);
 
-        if (property == null) {
-            throw new NullPointerException("LoadBalancer not found with the ID: " + id);
+        // If Load Balancer startup has finished and is not successful,
+        // then remove mapping of that Load Balancer.
+        if (property.startupEvent().isFinished() && !property.startupEvent().isSuccess()) {
+            LoadBalancerRegistry.remove(property.l4LoadBalancer().ID);
         }
 
         APIResponse apiResponse = APIResponse.newBuilder()

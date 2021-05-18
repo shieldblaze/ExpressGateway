@@ -17,6 +17,7 @@
  */
 package com.shieldblaze.expressgateway.backend.healthcheck;
 
+import com.fasterxml.jackson.annotation.JsonProperty;
 import com.shieldblaze.expressgateway.common.utils.NumberUtil;
 
 import java.util.Objects;
@@ -26,47 +27,53 @@ public final class HealthCheckTemplate {
     /**
      * Health Check Protocol
      */
+    @JsonProperty("protocol")
     private Protocol protocol;
 
     /**
      * Health Check Host
      */
+    @JsonProperty("host")
     private String host;
 
     /**
      * Health Check Port
      */
+    @JsonProperty("port")
     private int port;
 
     /**
      * HTTP Path
      */
+    @JsonProperty("path")
     private String path;
 
     /**
      * Timeout in seconds
      */
+    @JsonProperty("timeout")
     private int timeout;
 
     /**
      * Number of Health Check samples
      */
+    @JsonProperty("samples")
     private int samples;
 
     public HealthCheckTemplate(Protocol protocol, String host, int port, String path, int timeout, int samples) {
-        protocol(protocol);
-        host(host);
-        path(path);
-        timeout(timeout);
-        samples(samples);
-        port(port);
+        setProtocol(protocol);
+        setHost(host);
+        setPort(port);
+        setPath(path);
+        setTimeout(timeout);
+        setSamples(samples);
     }
 
     public Protocol protocol() {
         return protocol;
     }
 
-    public void protocol(Protocol protocol) {
+    public void setProtocol(Protocol protocol) {
         this.protocol = Objects.requireNonNull(protocol, "Protocol");
     }
 
@@ -74,7 +81,7 @@ public final class HealthCheckTemplate {
         return host;
     }
 
-    public void host(String host) {
+    public void setHost(String host) {
         this.host = Objects.requireNonNull(host, "Host");
     }
 
@@ -82,7 +89,7 @@ public final class HealthCheckTemplate {
         return port;
     }
 
-    public void port(int port) {
+    public void setPort(int port) {
         this.port = NumberUtil.checkRange(port, 1, 65535, "Port");
     }
 
@@ -90,7 +97,7 @@ public final class HealthCheckTemplate {
         return path;
     }
 
-    public void path(String path) {
+    public void setPath(String path) {
         this.path = Objects.requireNonNull(path, "Path");
     }
 
@@ -98,7 +105,7 @@ public final class HealthCheckTemplate {
         return timeout;
     }
 
-    public void timeout(int timeout) {
+    public void setTimeout(int timeout) {
         this.timeout = NumberUtil.checkPositive(timeout, "Timeout");
     }
 
@@ -106,7 +113,7 @@ public final class HealthCheckTemplate {
         return samples;
     }
 
-    public void samples(int samples) {
+    public void setSamples(int samples) {
         this.samples = NumberUtil.checkPositive(samples, "Samples");
     }
 

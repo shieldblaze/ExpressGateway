@@ -28,6 +28,7 @@ import com.shieldblaze.expressgateway.configuration.tls.TLSConfiguration;
 import com.shieldblaze.expressgateway.core.EventLoopFactory;
 import com.shieldblaze.expressgateway.core.L4FrontListener;
 import com.shieldblaze.expressgateway.core.PooledByteBufAllocator;
+import com.shieldblaze.expressgateway.core.events.L4FrontListenerShutdownEvent;
 import com.shieldblaze.expressgateway.core.events.L4FrontListenerStartupEvent;
 import com.shieldblaze.expressgateway.core.events.L4FrontListenerStopEvent;
 import io.netty.buffer.ByteBufAllocator;
@@ -35,6 +36,7 @@ import io.netty.channel.ChannelHandler;
 
 import java.net.InetSocketAddress;
 import java.util.Map;
+import java.util.Objects;
 import java.util.UUID;
 import java.util.concurrent.ConcurrentSkipListMap;
 import java.util.concurrent.atomic.AtomicInteger;
@@ -118,7 +120,11 @@ public abstract class L4LoadBalancer {
      * Stop L4 Load Balancer and it's child operations and services.
      */
     public L4FrontListenerStopEvent stop() {
-        L4FrontListenerStopEvent event = l4FrontListener.stop();
+        return l4FrontListener.stop();
+    }
+
+    public L4FrontListenerShutdownEvent shutdown() {
+        L4FrontListenerShutdownEvent event = l4FrontListener.shutdown();
 
         // Close EventStream when stop event has finished.
         event.future().whenCompleteAsync((_Void, throwable) -> eventStream().close(), GlobalExecutors.INSTANCE.executorService());
@@ -176,8 +182,10 @@ public abstract class L4LoadBalancer {
      * @param hostname Fully qualified Hostname and Port if non-default port is used
      * @param cluster  {@link Cluster} to be mapped
      */
-    @NonNull
     public void mapCluster(String hostname, Cluster cluster) {
+        Objects.requireNonNull(hostname, "Hostname");
+        Objects.requireNonNull(cluster, "Cluster");
+
         cluster.eventStream(eventStream); // Set EventStream
         clusterMap.put(hostname, cluster);
     }
@@ -240,6 +248,11 @@ public abstract class L4LoadBalancer {
     }
 
     /**
+     * Return the Type of Load Balancer
+     */
+    public abstract String type();
+
+    /**
      * Convert Load Balancer data into {@link JsonObject}
      * @return {@link JsonObject} Instance
      */
@@ -247,11 +260,11 @@ public abstract class L4LoadBalancer {
         JsonObject jsonObject = new JsonObject();
 
         String state;
-        if (l4FrontListenerStartupEvent.hasFinished()) {
-            if (l4FrontListenerStartupEvent.isSuccessful()) {
+        if (l4FrontListenerStartupEvent.isFinished()) {
+            if (l4FrontListenerStartupEvent.isSuccess()) {
                 state = "Running";
             } else {
-                state = "Failed; " + l4FrontListenerStartupEvent.throwable().getMessage();
+                state = "Failed; " + l4FrontListenerStartupEvent.cause().getMessage();
             }
         } else {
             state = "Pending";

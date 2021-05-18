@@ -141,7 +141,7 @@ class CompressionTest {
 
         L4FrontListenerStartupEvent l4FrontListenerStartupEvent = httpLoadBalancer.start();
         l4FrontListenerStartupEvent.future().join();
-        assertTrue(l4FrontListenerStartupEvent.isSuccessful());
+        assertTrue(l4FrontListenerStartupEvent.isSuccess());
 
         // Brotli only
         {
@@ -204,7 +204,7 @@ class CompressionTest {
         httpServer.shutdown();
         L4FrontListenerStopEvent l4FrontListenerStopEvent = httpLoadBalancer.stop();
         l4FrontListenerStopEvent.future().join();
-        assertTrue(l4FrontListenerStopEvent.isSuccessful());
+        assertTrue(l4FrontListenerStopEvent.isSuccess());
     }
 
     @Test
@@ -252,7 +252,7 @@ class CompressionTest {
 
         L4FrontListenerStartupEvent l4FrontListenerStartupEvent = httpLoadBalancer.start();
         l4FrontListenerStartupEvent.future().join();
-        assertTrue(l4FrontListenerStartupEvent.isSuccessful());
+        assertTrue(l4FrontListenerStartupEvent.isSuccess());
 
         // Gzip only
         {
@@ -296,7 +296,7 @@ class CompressionTest {
         httpServer.shutdown();
         L4FrontListenerStopEvent l4FrontListenerStopEvent = httpLoadBalancer.stop();
         l4FrontListenerStopEvent.future().join();
-        assertTrue(l4FrontListenerStopEvent.isSuccessful());
+        assertTrue(l4FrontListenerStopEvent.isSuccess());
     }
 
     @Test
@@ -344,7 +344,7 @@ class CompressionTest {
 
         L4FrontListenerStartupEvent l4FrontListenerStartupEvent = httpLoadBalancer.start();
         l4FrontListenerStartupEvent.future().join();
-        assertTrue(l4FrontListenerStartupEvent.isSuccessful());
+        assertTrue(l4FrontListenerStartupEvent.isSuccess());
 
         // Deflate only
         {
@@ -372,6 +372,6 @@ class CompressionTest {
         httpServer.shutdown();
         L4FrontListenerStopEvent l4FrontListenerStopEvent = httpLoadBalancer.stop();
         l4FrontListenerStopEvent.future().join();
-        assertTrue(l4FrontListenerStopEvent.isSuccessful());
+        assertTrue(l4FrontListenerStopEvent.isSuccess());
     }
 }
