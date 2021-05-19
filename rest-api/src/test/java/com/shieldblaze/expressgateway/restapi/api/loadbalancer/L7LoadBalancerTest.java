@@ -20,99 +20,94 @@ package com.shieldblaze.expressgateway.restapi.api.loadbalancer;
 import com.google.gson.JsonObject;
 import com.google.gson.JsonParser;
 import com.shieldblaze.expressgateway.restapi.RestAPI;
+import okhttp3.MediaType;
 import okhttp3.OkHttpClient;
 import okhttp3.Request;
 import okhttp3.RequestBody;
 import okhttp3.Response;
 import org.junit.jupiter.api.AfterAll;
 import org.junit.jupiter.api.BeforeAll;
+import org.junit.jupiter.api.MethodOrderer;
+import org.junit.jupiter.api.Order;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.TestMethodOrder;
 
 import java.io.IOException;
 
-import static org.junit.jupiter.api.Assertions.*;
+import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertNotNull;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 
-class LoadBalancerTest {
+@TestMethodOrder(MethodOrderer.OrderAnnotation.class)
+public class L7LoadBalancerTest {
 
-    private static OkHttpClient okHttpClient;
+    private static final RequestBody EMPTY_REQ_BODY = RequestBody.create(new byte[0], null);
+    private static final OkHttpClient OK_HTTP_CLIENT = new OkHttpClient();
+    public static String id;
 
     @BeforeAll
     static void startSpring() {
         RestAPI.start();
-        okHttpClient = new OkHttpClient();
     }
 
     @AfterAll
     static void teardown() {
-        okHttpClient.dispatcher().cancelAll();
+        OK_HTTP_CLIENT.dispatcher().cancelAll();
         RestAPI.stop();
     }
 
     @Test
-    void startStopResumeAndShutdownTCPLoadBalancerTest() throws IOException, InterruptedException {
+    @Order(1)
+    public void startLoadBalancer() throws IOException {
         JsonObject requestBody = new JsonObject();
         requestBody.addProperty("name", "MeowBalancer");
         requestBody.addProperty("bindAddress", "127.0.0.1");
-        requestBody.addProperty("bindPort", 9110);
-        requestBody.addProperty("protocol", "tcp");
-
-        RequestBody reqbody = RequestBody.create(new byte[0], null);
+        requestBody.addProperty("bindPort", 10001);
 
         Request request = new Request.Builder()
-                .url("http://127.0.0.1:9110/v1/loadbalancer/l4/start")
-                .post(RequestBody.create(requestBody.toString().getBytes()))
-                .header("Content-Type", "application/json")
+                .url("http://127.0.0.1:9110/v1/loadbalancer/l7/http/start")
+                .post(RequestBody.create(requestBody.toString(), MediaType.get("application/json")))
                 .build();
 
-        String loadBalancerId;
-
-        try (Response response = okHttpClient.newCall(request).execute()) {
+        try (Response response = OK_HTTP_CLIENT.newCall(request).execute()) {
             assertNotNull(response.body());
             JsonObject responseJson = JsonParser.parseString(response.body().string()).getAsJsonObject();
             assertTrue(responseJson.get("Success").getAsBoolean());
 
-            loadBalancerId = responseJson.get("Result").getAsJsonObject().get("LoadBalancerID").getAsString();
+            id = responseJson.get("Result").getAsJsonObject().get("LoadBalancerID").getAsString();
         }
+    }
 
-        // -------------------------------------- STOP ------------------------------------------
-        Thread.sleep(5000);
+    @Test
+    @Order(2)
+    public void verifyRunning() throws IOException, InterruptedException {
+        Thread.sleep(5000); // Wait for Load Balancer to completely start
 
-        request = new Request.Builder()
-                .url("http://127.0.0.1:9110/v1/loadbalancer/stop?id=" + loadBalancerId)
-                .put(reqbody)
+        Request request = new Request.Builder()
+                .url("http://127.0.0.1:9110/v1/loadbalancer/get?id=" + id)
+                .get()
                 .build();
 
-        try (Response response = okHttpClient.newCall(request).execute()) {
+        try (Response response = OK_HTTP_CLIENT.newCall(request).execute()) {
             assertNotNull(response.body());
             JsonObject responseJson = JsonParser.parseString(response.body().string()).getAsJsonObject();
             assertTrue(responseJson.get("Success").getAsBoolean());
+
+            //"Result":{"LoadBalancer":{"ID":"72c8493a-2a6c-43c8-9c48-193b42dd858d","Name":"MeowBalancer","State":"Running","Clusters":[]}}}
+            assertEquals("Running", responseJson.get("Result").getAsJsonObject().get("LoadBalancer").getAsJsonObject().get("State").getAsString());
         }
+    }
 
-        // -------------------------------------- RESUME -----------------------------------------
-
-        Thread.sleep(5000);
-
-        request = new Request.Builder()
-                .url("http://127.0.0.1:9110/v1/loadbalancer/resume?id=" + loadBalancerId)
-                .put(reqbody)
+    @Test
+    @Order(3)
+    public void stopLoadBalancer() throws IOException {
+        Request request = new Request.Builder()
+                .url("http://127.0.0.1:9110/v1/loadbalancer/stop?id=" + id)
+                .put(EMPTY_REQ_BODY)
                 .build();
 
-        try (Response response = okHttpClient.newCall(request).execute()) {
-            assertNotNull(response.body());
-            JsonObject responseJson = JsonParser.parseString(response.body().string()).getAsJsonObject();
-            assertTrue(responseJson.get("Success").getAsBoolean());
-        }
-
-        // -------------------------------------- SHUTDOWN -----------------------------------------
-
-        Thread.sleep(5000);
-
-        request = new Request.Builder()
-                .url("http://127.0.0.1:9110/v1/loadbalancer/shutdown?id=" + loadBalancerId)
-                .delete()
-                .build();
-
-        try (Response response = okHttpClient.newCall(request).execute()) {
+        try (Response response = OK_HTTP_CLIENT.newCall(request).execute()) {
             assertNotNull(response.body());
             JsonObject responseJson = JsonParser.parseString(response.body().string()).getAsJsonObject();
             assertTrue(responseJson.get("Success").getAsBoolean());
@@ -120,29 +115,56 @@ class LoadBalancerTest {
     }
 
     @Test
-    void nullLoadBalancerIDTest() throws InterruptedException, IOException {
+    @Order(4)
+    public void resumeLoadBalancer() throws IOException {
+        Request request = new Request.Builder()
+                .url("http://127.0.0.1:9110/v1/loadbalancer/resume?id=" + id)
+                .put(EMPTY_REQ_BODY)
+                .build();
+
+        try (Response response = OK_HTTP_CLIENT.newCall(request).execute()) {
+            assertNotNull(response.body());
+            JsonObject responseJson = JsonParser.parseString(response.body().string()).getAsJsonObject();
+            assertTrue(responseJson.get("Success").getAsBoolean());
+        }
+    }
+
+    @Test
+    @Order(5)
+    public void shutdownLoadBalancer() throws IOException {
+        Request request = new Request.Builder()
+                .url("http://127.0.0.1:9110/v1/loadbalancer/shutdown?id=" + id)
+                .delete()
+                .build();
+
+        try (Response response = OK_HTTP_CLIENT.newCall(request).execute()) {
+            assertNotNull(response.body());
+            JsonObject responseJson = JsonParser.parseString(response.body().string()).getAsJsonObject();
+            assertTrue(responseJson.get("Success").getAsBoolean());
+        }
+    }
+
+    @Test
+    @Order(6)
+    void nullLoadBalancerIDTest() throws IOException {
         JsonObject requestBody = new JsonObject();
         requestBody.addProperty("name", "MeowBalancer");
         requestBody.addProperty("bindAddress", "127.0.0.1");
-        requestBody.addProperty("bindPort", 9111);
+        requestBody.addProperty("bindPort", 10001);
         requestBody.addProperty("protocol", "tcp");
 
         RequestBody reqbody = RequestBody.create(new byte[0], null);
 
         Request request = new Request.Builder()
-                .url("http://127.0.0.1:9110/v1/loadbalancer/l4/start")
+                .url("http://127.0.0.1:9110/v1/loadbalancer//l7/http/start")
                 .post(RequestBody.create(requestBody.toString().getBytes()))
                 .header("Content-Type", "application/json")
                 .build();
 
-        String loadBalancerId;
-
-        try (Response response = okHttpClient.newCall(request).execute()) {
+        try (Response response = OK_HTTP_CLIENT.newCall(request).execute()) {
             assertNotNull(response.body());
             JsonObject responseJson = JsonParser.parseString(response.body().string()).getAsJsonObject();
             assertTrue(responseJson.get("Success").getAsBoolean());
-
-            loadBalancerId = responseJson.get("Result").getAsJsonObject().get("LoadBalancerID").getAsString();
         }
 
         // -------------------------------------- STOP, RESUME AND SHUTDOWN ------------------------------------------
@@ -152,7 +174,7 @@ class LoadBalancerTest {
                 .put(reqbody)
                 .build();
 
-        try (Response response = okHttpClient.newCall(request).execute()) {
+        try (Response response = OK_HTTP_CLIENT.newCall(request).execute()) {
             assertNotNull(response.body());
             JsonObject responseJson = JsonParser.parseString(response.body().string()).getAsJsonObject();
             assertFalse(responseJson.get("Success").getAsBoolean());
@@ -163,7 +185,7 @@ class LoadBalancerTest {
                 .put(reqbody)
                 .build();
 
-        try (Response response = okHttpClient.newCall(request).execute()) {
+        try (Response response = OK_HTTP_CLIENT.newCall(request).execute()) {
             assertNotNull(response.body());
             JsonObject responseJson = JsonParser.parseString(response.body().string()).getAsJsonObject();
             assertFalse(responseJson.get("Success").getAsBoolean());
@@ -174,21 +196,10 @@ class LoadBalancerTest {
                 .delete()
                 .build();
 
-        try (Response response = okHttpClient.newCall(request).execute()) {
+        try (Response response = OK_HTTP_CLIENT.newCall(request).execute()) {
             assertNotNull(response.body());
             JsonObject responseJson = JsonParser.parseString(response.body().string()).getAsJsonObject();
             assertFalse(responseJson.get("Success").getAsBoolean());
-        }
-
-        request = new Request.Builder()
-                .url("http://127.0.0.1:9110/v1/loadbalancer/shutdown?id=" + loadBalancerId)
-                .delete()
-                .build();
-
-        try (Response response = okHttpClient.newCall(request).execute()) {
-            assertNotNull(response.body());
-            JsonObject responseJson = JsonParser.parseString(response.body().string()).getAsJsonObject();
-            assertTrue(responseJson.get("Success").getAsBoolean());
         }
     }
 }

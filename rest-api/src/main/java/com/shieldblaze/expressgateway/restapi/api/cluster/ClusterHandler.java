@@ -46,11 +46,13 @@ import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.DeleteMapping;
 import org.springframework.web.bind.annotation.PostMapping;
+import org.springframework.web.bind.annotation.PutMapping;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 
+import javax.print.attribute.standard.Media;
 import java.net.InetSocketAddress;
 import java.util.Objects;
 
@@ -58,7 +60,7 @@ import java.util.Objects;
 @RequestMapping("/v1/cluster")
 public final class ClusterHandler {
 
-    @PostMapping("/create")
+    @PostMapping(value = "/create", consumes = MediaType.APPLICATION_JSON_VALUE, produces = MediaType.APPLICATION_JSON_VALUE)
     public ResponseEntity<String> create(@RequestParam String id, @RequestBody CreateClusterStruct createClusterStruct) {
         LoadBalancerProperty property = LoadBalancerRegistry.get(id);
         L4LoadBalancer l4LoadBalancer = property.l4LoadBalancer();
@@ -76,6 +78,20 @@ public final class ClusterHandler {
         APIResponse apiResponse = APIResponse.newBuilder()
                 .isSuccess(true)
                 .withResult(Result.newBuilder().withHeader("Cluster").withMessage(cluster.toJson()).build())
+                .build();
+
+        return FastBuilder.response(apiResponse.getResponse(), HttpResponseStatus.CREATED);
+    }
+
+    @PutMapping(value = "/remap", produces = MediaType.APPLICATION_JSON_VALUE)
+    public ResponseEntity<String> remap(@RequestParam String id, @RequestParam String oldHostname, @RequestParam String newHostname) {
+        LoadBalancerProperty property = LoadBalancerRegistry.get(id);
+        L4LoadBalancer l4LoadBalancer = property.l4LoadBalancer();
+
+        l4LoadBalancer.remapCluster(oldHostname, newHostname);
+
+        APIResponse apiResponse = APIResponse.newBuilder()
+                .isSuccess(true)
                 .build();
 
         return FastBuilder.response(apiResponse.getResponse(), HttpResponseStatus.CREATED);

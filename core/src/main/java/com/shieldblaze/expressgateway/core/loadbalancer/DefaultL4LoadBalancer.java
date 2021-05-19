@@ -57,6 +57,11 @@ final class DefaultL4LoadBalancer extends L4LoadBalancer {
     }
 
     @Override
+    public void remapCluster(String oldHostname, String newHostname) {
+        super.remapCluster("DEFAULT", "DEFAULT");
+    }
+
+    @Override
     public boolean removeCluster(String hostname) {
         return super.removeCluster("DEFAULT");
     }

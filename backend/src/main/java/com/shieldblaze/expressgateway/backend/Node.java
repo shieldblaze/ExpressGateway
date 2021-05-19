@@ -382,7 +382,7 @@ public final class Node implements Comparable<Node>, Closeable {
     public JsonObject toJson() {
         JsonObject jsonObject = new JsonObject();
         jsonObject.addProperty("SocketAddress", socketAddress.toString());
-        jsonObject.addProperty("Connections", activeConnections.size() + "/" + maxConnections);
+        jsonObject.addProperty("Connections", activeConnection() + "/" + maxConnections());
         jsonObject.addProperty("BytesSent", bytesSent);
         jsonObject.addProperty("BytesReceived", bytesReceived);
         jsonObject.addProperty("State", state.toString());

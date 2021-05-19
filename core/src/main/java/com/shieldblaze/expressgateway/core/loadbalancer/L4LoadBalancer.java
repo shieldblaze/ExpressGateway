@@ -191,6 +191,24 @@ public abstract class L4LoadBalancer {
     }
 
     /**
+     * Remap a {@link Cluster} from old hostname to new hostname.
+     *
+     * @param oldHostname Old Hostname
+     * @param newHostname New Hostname
+     */
+    public void remapCluster(String oldHostname, String newHostname) {
+        Objects.requireNonNull(oldHostname, "OldHostname");
+        Objects.requireNonNull(newHostname, "NewHostname");
+
+        Cluster cluster = clusterMap.remove(oldHostname);
+        if (cluster == null) {
+            throw new NullPointerException("Cluster not found with Hostname: " + oldHostname);
+        }
+
+        clusterMap.put(newHostname, cluster);
+    }
+
+    /**
      * Remove a Cluster from mapping
      *
      * @param hostname Hostname of the Cluster
@@ -254,6 +272,7 @@ public abstract class L4LoadBalancer {
 
     /**
      * Convert Load Balancer data into {@link JsonObject}
+     *
      * @return {@link JsonObject} Instance
      */
     public JsonObject toJson() {
@@ -272,6 +291,7 @@ public abstract class L4LoadBalancer {
 
         jsonObject.addProperty("ID", ID);
         jsonObject.addProperty("Name", name);
+        jsonObject.addProperty("Type", type());
         jsonObject.addProperty("State", state);
 
         JsonArray clusters = new JsonArray();

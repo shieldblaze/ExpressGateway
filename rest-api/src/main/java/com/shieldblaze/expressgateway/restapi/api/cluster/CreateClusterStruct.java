@@ -33,7 +33,7 @@ public final class CreateClusterStruct {
     @JsonProperty("sessionPersistence")
     private String sessionPersistence;
 
-    @JsonProperty("HealthCheckTemplate")
+    @JsonProperty("healthCheckTemplate")
     private HealthCheckTemplate healthCheckTemplate;
 
     public void setLoadBalance(String loadBalance) {
