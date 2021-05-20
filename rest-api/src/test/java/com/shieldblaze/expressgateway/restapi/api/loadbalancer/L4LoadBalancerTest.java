@@ -60,7 +60,7 @@ public class L4LoadBalancerTest {
         JsonObject requestBody = new JsonObject();
         requestBody.addProperty("name", "MeowBalancer");
         requestBody.addProperty("bindAddress", "127.0.0.1");
-        requestBody.addProperty("bindPort", 10000);
+        requestBody.addProperty("bindPort", 50000);
         requestBody.addProperty("protocol", "tcp");
 
         Request request = new Request.Builder()
@@ -148,7 +148,7 @@ public class L4LoadBalancerTest {
         JsonObject requestBody = new JsonObject();
         requestBody.addProperty("name", "MeowBalancer");
         requestBody.addProperty("bindAddress", "127.0.0.1");
-        requestBody.addProperty("bindPort", 10000);
+        requestBody.addProperty("bindPort", 50001);
         requestBody.addProperty("protocol", "tcp");
 
         Request request = new Request.Builder()

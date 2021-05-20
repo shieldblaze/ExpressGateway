@@ -65,9 +65,9 @@ along with ShieldBlaze ExpressGateway.  If not, see <https://www.gnu.org/license
         <module>protocol-http</module>
         <module>protocol-tcp</module>
         <module>protocol-udp</module>
+        <module>rest-api</module>
         <module>security</module>
         <module>shaded-dependencies</module>
-        <module>rest-api</module>
     </modules>
 
     <repositories>

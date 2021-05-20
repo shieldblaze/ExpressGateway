@@ -63,7 +63,7 @@ public class L7LoadBalancerTest {
         JsonObject requestBody = new JsonObject();
         requestBody.addProperty("name", "MeowBalancer");
         requestBody.addProperty("bindAddress", "127.0.0.1");
-        requestBody.addProperty("bindPort", 10001);
+        requestBody.addProperty("bindPort", 50002);
 
         Request request = new Request.Builder()
                 .url("http://127.0.0.1:9110/v1/loadbalancer/l7/http/start")
@@ -150,7 +150,7 @@ public class L7LoadBalancerTest {
         JsonObject requestBody = new JsonObject();
         requestBody.addProperty("name", "MeowBalancer");
         requestBody.addProperty("bindAddress", "127.0.0.1");
-        requestBody.addProperty("bindPort", 10001);
+        requestBody.addProperty("bindPort", 50003);
         requestBody.addProperty("protocol", "tcp");
 
 
