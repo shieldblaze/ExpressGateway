@@ -44,6 +44,12 @@ final class HealthCheckRunner implements Runnable {
 
     @Override
     public void run() {
+        // If Node is manually marked as offline
+        // then don't run Health Check.
+        if (node.state() == State.MANUAL_OFFLINE) {
+            return;
+        }
+
         final Health oldHealth = node.health(); // Store old Health
         node.healthCheck().run();               // Run a fresh Health Check
 

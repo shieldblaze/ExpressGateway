@@ -102,7 +102,10 @@ public final class ClusterHandler {
         LoadBalancerProperty property = LoadBalancerRegistry.get(id);
         Objects.requireNonNull(hostname, "Hostname");
 
-        property.l4LoadBalancer().removeCluster(hostname);
+        boolean removed = property.l4LoadBalancer().removeCluster(hostname);
+        if (!removed) {
+            throw new NullPointerException("Cluster not found with Hostname: " + hostname);
+        }
 
         APIResponse apiResponse = APIResponse.newBuilder()
                 .isSuccess(true)

@@ -15,13 +15,15 @@
  * You should have received a copy of the GNU General Public License
  * along with ShieldBlaze ExpressGateway.  If not, see <https://www.gnu.org/licenses/>.
  */
-package com.shieldblaze.expressgateway.restapi.api.cluster;
+package com.shieldblaze.expressgateway.restapi.api.node;
 
 import com.google.gson.JsonObject;
 import com.google.gson.JsonParser;
+import com.shieldblaze.expressgateway.backend.State;
 import com.shieldblaze.expressgateway.core.registry.LoadBalancerProperty;
 import com.shieldblaze.expressgateway.core.registry.LoadBalancerRegistry;
 import com.shieldblaze.expressgateway.restapi.RestAPI;
+import com.shieldblaze.expressgateway.restapi.api.cluster.ClusterHandlerTest;
 import com.shieldblaze.expressgateway.restapi.api.loadbalancer.L4LoadBalancerTest;
 import com.shieldblaze.expressgateway.restapi.api.loadbalancer.L7LoadBalancerTest;
 import okhttp3.MediaType;
@@ -38,47 +40,40 @@ import org.junit.jupiter.api.TestMethodOrder;
 
 import java.io.IOException;
 
+import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
-import static org.junit.jupiter.api.Assertions.assertNull;
-import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 @TestMethodOrder(MethodOrderer.OrderAnnotation.class)
-public class ClusterHandlerTest {
+class NodeHandlerTest {
 
     private static final RequestBody EMPTY_REQ_BODY = RequestBody.create(new byte[0], null);
     private static final OkHttpClient OK_HTTP_CLIENT = new OkHttpClient();
-    private static final L4LoadBalancerTest l4LoadBalancerTest = new L4LoadBalancerTest();
-    private static final L7LoadBalancerTest l7LoadBalancerTest = new L7LoadBalancerTest();
+    private static final ClusterHandlerTest clusterHandlerTest = new ClusterHandlerTest();
+    private static String nodeId;
 
     @BeforeAll
-    static void startSpring() {
+    static void startSpring() throws IOException, InterruptedException {
         RestAPI.start();
+        clusterHandlerTest.addL4ClusterTest();
     }
 
     @AfterAll
     static void teardown() throws IOException {
-        l4LoadBalancerTest.shutdownLoadBalancer();
+        clusterHandlerTest.deleteL4ClusterTest();
         OK_HTTP_CLIENT.dispatcher().cancelAll();
         RestAPI.stop();
     }
 
     @Test
     @Order(1)
-    public void addL4ClusterTest() throws IOException, InterruptedException {
-        l4LoadBalancerTest.startLoadBalancer();
-        l4LoadBalancerTest.verifyRunning();
-
-        final LoadBalancerProperty property = LoadBalancerRegistry.get(L4LoadBalancerTest.id);
-        assertThrows(NullPointerException.class, () -> property.l4LoadBalancer().cluster("DEFAULT"));
-
+    void createNode() throws IOException {
         JsonObject body = new JsonObject();
-        body.addProperty("Hostname", "www.shieldblaze.com"); // It will default down to 'DEFAULT'.
-        body.addProperty("LoadBalance", "RoundRobin");
-        body.addProperty("SessionPersistence", "NOOP");
+        body.addProperty("address", "127.0.0.1");
+        body.addProperty("port", 54321);
 
         Request request = new Request.Builder()
-                .url("http://127.0.0.1:9110/v1/cluster/create?id=" + L4LoadBalancerTest.id)
+                .url("http://127.0.0.1:9110/v1/node/create?id=" + L4LoadBalancerTest.id + "&clusterHostname=default")
                 .post(RequestBody.create(body.toString(), MediaType.get("application/json")))
                 .build();
 
@@ -86,68 +81,16 @@ public class ClusterHandlerTest {
             assertNotNull(response.body());
             JsonObject responseJson = JsonParser.parseString(response.body().string()).getAsJsonObject();
             assertTrue(responseJson.get("Success").getAsBoolean());
-        }
 
-        assertNotNull(property.l4LoadBalancer().cluster("DEFAULT"));
+            nodeId = responseJson.get("Result").getAsJsonObject().get("NodeID").getAsString();
+        }
     }
 
     @Test
     @Order(2)
-    public void deleteL4ClusterTest() throws IOException {
-        LoadBalancerProperty property = LoadBalancerRegistry.get(L4LoadBalancerTest.id);
-        assertNotNull(property.l4LoadBalancer().cluster("DEFAULT"));
-
+    void markManuallyOfflineTest() throws IOException {
         Request request = new Request.Builder()
-                .url("http://127.0.0.1:9110/v1/cluster/delete?id=" + L4LoadBalancerTest.id + "&hostname=null")
-                .delete()
-                .build();
-
-        try (Response response = OK_HTTP_CLIENT.newCall(request).execute()) {
-            assertNotNull(response.body());
-            JsonObject responseJson = JsonParser.parseString(response.body().string()).getAsJsonObject();
-            assertTrue(responseJson.get("Success").getAsBoolean());
-        }
-
-        assertThrows(NullPointerException.class, () -> property.l4LoadBalancer().cluster("DEFAULT"));
-    }
-
-    @Test
-    @Order(3)
-    public void addL7ClusterTest() throws IOException, InterruptedException {
-        l7LoadBalancerTest.startLoadBalancer();
-        l7LoadBalancerTest.verifyRunning();
-
-        LoadBalancerProperty property = LoadBalancerRegistry.get(L7LoadBalancerTest.id);
-        assertThrows(NullPointerException.class, () -> property.l4LoadBalancer().cluster("www.shieldblaze.com"));
-
-        JsonObject body = new JsonObject();
-        body.addProperty("Hostname", "www.shieldblaze.com");
-        body.addProperty("LoadBalance", "HTTPRoundRobin");
-        body.addProperty("SessionPersistence", "NOOP");
-
-        Request request = new Request.Builder()
-                .url("http://127.0.0.1:9110/v1/cluster/create?id=" + L7LoadBalancerTest.id)
-                .post(RequestBody.create(body.toString(), MediaType.get("application/json")))
-                .build();
-
-        try (Response response = OK_HTTP_CLIENT.newCall(request).execute()) {
-            assertNotNull(response.body());
-            JsonObject responseJson = JsonParser.parseString(response.body().string()).getAsJsonObject();
-            assertTrue(responseJson.get("Success").getAsBoolean());
-        }
-
-        assertNotNull(property.l4LoadBalancer().cluster("www.shieldblaze.com"));
-    }
-
-    @Test
-    @Order(4)
-    public void remapL7ClusterTest() throws IOException {
-        LoadBalancerProperty property = LoadBalancerRegistry.get(L7LoadBalancerTest.id);
-        assertNotNull(property.l4LoadBalancer().cluster("www.shieldblaze.com"));
-        assertThrows(NullPointerException.class, () -> property.l4LoadBalancer().cluster("shieldblaze.com"));
-
-        Request request = new Request.Builder()
-                .url("http://127.0.0.1:9110/v1/cluster/remap?id=" + L7LoadBalancerTest.id + "&oldHostname=www.shieldblaze.com&newHostname=shieldblaze.com")
+                .url("http://127.0.0.1:9110/v1/node/offline?id=" + L4LoadBalancerTest.id + "&clusterHostname=default&nodeId=" + nodeId)
                 .put(EMPTY_REQ_BODY)
                 .build();
 
@@ -157,15 +100,50 @@ public class ClusterHandlerTest {
             assertTrue(responseJson.get("Success").getAsBoolean());
         }
 
-        assertThrows(NullPointerException.class, () -> property.l4LoadBalancer().cluster("www.shieldblaze.com"));
-        assertNotNull(property.l4LoadBalancer().cluster("shieldblaze.com"));
+        LoadBalancerProperty property = LoadBalancerRegistry.get(L4LoadBalancerTest.id);
+        assertEquals(State.MANUAL_OFFLINE, property.l4LoadBalancer().cluster("default").get(nodeId).state());
     }
 
     @Test
-    @Order(5)
-    public void deleteL7ClusterTest() throws IOException {
+    @Order(3)
+    void changeMaxConnectionsTest() throws IOException {
+        LoadBalancerProperty property = LoadBalancerRegistry.get(L4LoadBalancerTest.id);
+        assertEquals(10_000, property.l4LoadBalancer().cluster("default").get(nodeId).maxConnections());
+
         Request request = new Request.Builder()
-                .url("http://127.0.0.1:9110/v1/cluster/delete?id=" + L7LoadBalancerTest.id + "&hostname=shieldblaze.com")
+                .url("http://127.0.0.1:9110/v1/node/maxConnections?id=" + L4LoadBalancerTest.id + "&clusterHostname=default&nodeId=" + nodeId + "&maxConnections=1000000")
+                .patch(EMPTY_REQ_BODY)
+                .build();
+
+        try (Response response = OK_HTTP_CLIENT.newCall(request).execute()) {
+            assertNotNull(response.body());
+            JsonObject responseJson = JsonParser.parseString(response.body().string()).getAsJsonObject();
+            assertTrue(responseJson.get("Success").getAsBoolean());
+        }
+
+        assertEquals(1_000_000, property.l4LoadBalancer().cluster("default").get(nodeId).maxConnections());
+    }
+
+    @Test
+    @Order(4)
+    void getNodeTest() throws IOException {
+        Request request = new Request.Builder()
+                .url("http://127.0.0.1:9110/v1/node/?id=" + L4LoadBalancerTest.id + "&clusterHostname=default&nodeId=" + nodeId)
+                .get()
+                .build();
+
+        try (Response response = OK_HTTP_CLIENT.newCall(request).execute()) {
+            assertNotNull(response.body());
+            JsonObject responseJson = JsonParser.parseString(response.body().string()).getAsJsonObject();
+            assertTrue(responseJson.get("Success").getAsBoolean());
+            assertEquals(nodeId, responseJson.get("Result").getAsJsonObject().get("Node").getAsJsonObject().get("ID").getAsString());
+        }
+    }
+
+    @Test
+    void deleteNodeTest() throws IOException {
+        Request request = new Request.Builder()
+                .url("http://127.0.0.1:9110/v1/node/delete?id=" + L4LoadBalancerTest.id + "&clusterHostname=default&nodeId=" + nodeId)
                 .delete()
                 .build();
 

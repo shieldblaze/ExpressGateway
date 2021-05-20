@@ -149,10 +149,15 @@ public abstract class L4LoadBalancer {
      * Get {@link Cluster} which is being Load Balanced for specific Hostname
      *
      * @param hostname FQDN Hostname
+     * @throws NullPointerException If {@link Cluster} is not found
      */
     @NonNull
     public Cluster cluster(String hostname) {
-        return clusterMap.get(hostname);
+        Cluster cluster = clusterMap.get(hostname);
+        if (cluster == null) {
+            throw new NullPointerException("Cluster not found with Hostname: " + hostname);
+        }
+        return cluster;
     }
 
     /**

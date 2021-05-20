@@ -80,7 +80,7 @@ public class L4LoadBalancerTest {
     @Test
     @Order(2)
     public void verifyRunning() throws IOException, InterruptedException {
-        Thread.sleep(5000); // Wait for Load Balancer to completely start
+        Thread.sleep(1000); // Wait for Load Balancer to completely start
 
         Request request = new Request.Builder()
                 .url("http://127.0.0.1:9110/v1/loadbalancer/get?id=" + id)
@@ -151,8 +151,6 @@ public class L4LoadBalancerTest {
         requestBody.addProperty("bindPort", 10000);
         requestBody.addProperty("protocol", "tcp");
 
-        RequestBody reqbody = RequestBody.create(new byte[0], null);
-
         Request request = new Request.Builder()
                 .url("http://127.0.0.1:9110/v1/loadbalancer/l4/start")
                 .post(RequestBody.create(requestBody.toString().getBytes()))
@@ -163,13 +161,15 @@ public class L4LoadBalancerTest {
             assertNotNull(response.body());
             JsonObject responseJson = JsonParser.parseString(response.body().string()).getAsJsonObject();
             assertTrue(responseJson.get("Success").getAsBoolean());
+
+            id = responseJson.get("Result").getAsJsonObject().get("LoadBalancerID").getAsString();
         }
 
         // -------------------------------------- STOP, RESUME AND SHUTDOWN ------------------------------------------
 
         request = new Request.Builder()
                 .url("http://127.0.0.1:9110/v1/loadbalancer/stop?id=")
-                .put(reqbody)
+                .put(EMPTY_REQ_BODY)
                 .build();
 
         try (Response response = OK_HTTP_CLIENT.newCall(request).execute()) {
@@ -180,7 +180,7 @@ public class L4LoadBalancerTest {
 
         request = new Request.Builder()
                 .url("http://127.0.0.1:9110/v1/loadbalancer/resume?id=")
-                .put(reqbody)
+                .put(EMPTY_REQ_BODY)
                 .build();
 
         try (Response response = OK_HTTP_CLIENT.newCall(request).execute()) {
@@ -198,6 +198,18 @@ public class L4LoadBalancerTest {
             assertNotNull(response.body());
             JsonObject responseJson = JsonParser.parseString(response.body().string()).getAsJsonObject();
             assertFalse(responseJson.get("Success").getAsBoolean());
+        }
+
+        // Actual Shutdown
+        request = new Request.Builder()
+                .url("http://127.0.0.1:9110/v1/loadbalancer/shutdown?id=" + id)
+                .delete()
+                .build();
+
+        try (Response response = OK_HTTP_CLIENT.newCall(request).execute()) {
+            assertNotNull(response.body());
+            JsonObject responseJson = JsonParser.parseString(response.body().string()).getAsJsonObject();
+            assertTrue(responseJson.get("Success").getAsBoolean());
         }
     }
 }

@@ -20,12 +20,12 @@ package com.shieldblaze.expressgateway.backend.cluster;
 import com.google.gson.JsonArray;
 import com.google.gson.JsonObject;
 import com.shieldblaze.expressgateway.backend.Connection;
-import com.shieldblaze.expressgateway.backend.healthcheck.HealthCheckTemplate;
 import com.shieldblaze.expressgateway.backend.Node;
 import com.shieldblaze.expressgateway.backend.events.node.NodeAddedEvent;
 import com.shieldblaze.expressgateway.backend.events.node.NodeRemovedEvent;
 import com.shieldblaze.expressgateway.backend.exceptions.LoadBalanceException;
 import com.shieldblaze.expressgateway.backend.healthcheck.HealthCheckService;
+import com.shieldblaze.expressgateway.backend.healthcheck.HealthCheckTemplate;
 import com.shieldblaze.expressgateway.backend.loadbalance.LoadBalance;
 import com.shieldblaze.expressgateway.backend.loadbalance.Request;
 import com.shieldblaze.expressgateway.backend.loadbalance.Response;
@@ -112,6 +112,7 @@ public class Cluster {
      * @param node {@link Node} to be removed
      * @return {@link Boolean#TRUE} if removal was successful else {@link Boolean#FALSE}
      */
+    @InternalCall
     @NonNull
     public boolean removeNode(Node node) {
         boolean isFound = false;
@@ -130,10 +131,26 @@ public class Cluster {
             healthCheckService.remove(node);
         }
 
-        node.close();       // Close the Node
         nodes.remove(node); // Remove the Node from the list
         eventStream.publish(new NodeRemovedEvent(node)); // Publish NodeRemovedEvent event
         return true;
+    }
+
+    /**
+     * Get a {@link Node} using it's ID
+     *
+     * @param id {@link Node} ID
+     * @return {@link Node} Instance
+     * @throws NullPointerException If {@link Node} is not found
+     */
+    public Node get(String id) {
+        for (Node node : nodes) {
+            if (node.id().equalsIgnoreCase(id)) {
+                return node;
+            }
+        }
+
+        throw new NullPointerException("Node not found with ID: " + id);
     }
 
     /**
@@ -164,7 +181,6 @@ public class Cluster {
     @InternalCall(index = 1)
     @NonNull
     public void eventStream(EventStream eventStream) {
-        eventStream.addSubscribersFrom(this.eventStream);
         this.eventStream = eventStream;
     }
 
@@ -193,6 +209,10 @@ public class Cluster {
         this.eventStream.subscribe(loadBalance); // Subscribe to the EventStream
     }
 
+    public EventStream eventStream() {
+        return eventStream;
+    }
+
     /**
      * Returns the {@link HealthCheckTemplate}
      */
@@ -213,32 +233,32 @@ public class Cluster {
         }
 
         HealthCheck healthCheck;
-        if (healthCheckTemplate.protocol() == HealthCheckTemplate.Protocol.TCP) {
-            healthCheck = new TCPHealthCheck(
-                    new InetSocketAddress(healthCheckTemplate.host(), healthCheckTemplate.port()),
-                    Duration.ofSeconds(healthCheckTemplate.timeout()),
-                    healthCheckTemplate.samples()
-            );
-        } else if (healthCheckTemplate.protocol() == HealthCheckTemplate.Protocol.UDP) {
-            healthCheck = new UDPHealthCheck(
-                    new InetSocketAddress(healthCheckTemplate.host(), healthCheckTemplate.port()),
-                    Duration.ofSeconds(healthCheckTemplate.timeout()),
-                    healthCheckTemplate.samples()
-            );
-        } else if (healthCheckTemplate.protocol() == HealthCheckTemplate.Protocol.HTTP || healthCheckTemplate.protocol() == HealthCheckTemplate.Protocol.HTTPS) {
+        switch (healthCheckTemplate.protocol()) {
+            case TCP:
+                healthCheck = new TCPHealthCheck(new InetSocketAddress(healthCheckTemplate.host(), healthCheckTemplate.port()),
+                        Duration.ofSeconds(healthCheckTemplate.timeout()), healthCheckTemplate.samples()
+                );
+                break;
+            case UDP:
+                healthCheck = new UDPHealthCheck(new InetSocketAddress(healthCheckTemplate.host(), healthCheckTemplate.port()),
+                        Duration.ofSeconds(healthCheckTemplate.timeout()), healthCheckTemplate.samples()
+                );
+                break;
+            case HTTP:
+            case HTTPS:
+                String host;
+                if (healthCheckTemplate.protocol() == HealthCheckTemplate.Protocol.HTTP) {
+                    host = "http://" + InetAddress.getByName(healthCheckTemplate.host()).getHostAddress() + ":" + healthCheckTemplate().port();
+                } else {
+                    host = "https://" + InetAddress.getByName(healthCheckTemplate.host()).getHostAddress() + ":" + healthCheckTemplate().port();
+                }
 
-            String host;
-            if (healthCheckTemplate.protocol() == HealthCheckTemplate.Protocol.HTTP) {
-                host = "http://" + InetAddress.getByName(healthCheckTemplate.host()).getHostAddress() + ":" + healthCheckTemplate().port();
-            } else {
-                host = "https://" + InetAddress.getByName(healthCheckTemplate.host()).getHostAddress() + ":" + healthCheckTemplate().port();
-            }
-
-            healthCheck = new HTTPHealthCheck(URI.create(host), Duration.ofSeconds(healthCheckTemplate.timeout()), healthCheckTemplate.samples());
-        } else {
-            Error error = new Error("Unknown HealthCheck Protocol: " + healthCheckTemplate.protocol());
-            logger.fatal(error);
-            throw error;
+                healthCheck = new HTTPHealthCheck(URI.create(host), Duration.ofSeconds(healthCheckTemplate.timeout()), healthCheckTemplate.samples());
+                break;
+            default:
+                Error error = new Error("Unknown HealthCheck Protocol: " + healthCheckTemplate.protocol());
+                logger.fatal(error);
+                throw error;
         }
 
         // Associate HealthCheck with Node
@@ -266,6 +286,7 @@ public class Cluster {
 
     /**
      * Convert Cluster data into {@link JsonObject}
+     *
      * @return {@link JsonObject} Instance
      */
     public JsonObject toJson() {

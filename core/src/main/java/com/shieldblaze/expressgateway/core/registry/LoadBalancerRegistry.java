@@ -40,7 +40,8 @@ public final class LoadBalancerRegistry {
      * Get mapped {@link LoadBalancerProperty} using Load Balancer ID
      *
      * @param id Load Balancer ID
-     * @return {@link LoadBalancerProperty} Instance if found else {@code null}
+     * @return {@link LoadBalancerProperty} Instance
+     * @throws NullPointerException If {@link LoadBalancerProperty} is not found with the ID
      */
     public static LoadBalancerProperty get(String id) {
         Objects.requireNonNull(id, "id");

@@ -19,6 +19,8 @@ package com.shieldblaze.expressgateway.restapi.api.node;
 
 import com.fasterxml.jackson.annotation.JsonProperty;
 
+import java.util.Objects;
+
 public final class NodeStruct {
 
     @JsonProperty("address")
@@ -27,8 +29,13 @@ public final class NodeStruct {
     @JsonProperty("port")
     private int port;
 
-    @JsonProperty("clusterHostname")
-    private String clusterHostname;
+    public void setAddress(String address) {
+        this.address = Objects.requireNonNull(address, "Address");
+    }
+
+    public void setPort(int port) {
+        this.port = port;
+    }
 
     public String address() {
         return address;
@@ -36,9 +43,5 @@ public final class NodeStruct {
 
     public int port() {
         return port;
-    }
-
-    public String clusterHostname() {
-        return clusterHostname;
     }
 }

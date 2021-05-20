@@ -19,6 +19,8 @@ package com.shieldblaze.expressgateway.backend;
 
 import com.google.gson.JsonObject;
 import com.shieldblaze.expressgateway.backend.cluster.Cluster;
+import com.shieldblaze.expressgateway.backend.events.node.NodeOfflineEvent;
+import com.shieldblaze.expressgateway.backend.events.node.NodeOnlineEvent;
 import com.shieldblaze.expressgateway.backend.exceptions.TooManyConnectionsException;
 import com.shieldblaze.expressgateway.common.Math;
 import com.shieldblaze.expressgateway.common.annotation.InternalCall;
@@ -102,13 +104,18 @@ public final class Node implements Comparable<Node>, Closeable {
     private int maxConnections = 10_000;
 
     /**
+     * See {@link #addedToCluster()}
+     */
+    private final boolean addedToCluster;
+
+    /**
      * Create a new Instance
      */
     @NonNull
     Node(Cluster cluster, InetSocketAddress socketAddress) throws UnknownHostException {
         this.socketAddress = socketAddress;
         this.cluster = cluster;
-        this.cluster.addNode(this);
+        addedToCluster = this.cluster.addNode(this);
 
         state(State.ONLINE);
     }
@@ -251,6 +258,14 @@ public final class Node implements Comparable<Node>, Closeable {
         this.maxConnections = NumberUtil.checkRange(maxConnections, -1, Integer.MAX_VALUE, "MaxConnections");
     }
 
+    /**
+     * Returns {@code true} if this {@link Node} has been successfully added
+     * to a {@link Cluster} else {@code false}.
+     */
+    public boolean addedToCluster() {
+        return addedToCluster;
+    }
+
     public String id() {
         return ID;
     }
@@ -265,6 +280,26 @@ public final class Node implements Comparable<Node>, Closeable {
             return 0;
         }
         return Math.percentage(activeConnection(), maxConnections);
+    }
+
+    /**
+     * Mark this {@link Node} as manually offline.
+     */
+    public boolean markManualOffline() {
+        if (state != State.MANUAL_OFFLINE) {
+            state(State.MANUAL_OFFLINE);
+            cluster.eventStream().publish(new NodeOfflineEvent(this));
+            return true;
+        }
+        return false;
+    }
+
+    /**
+     * Mark this {@link Node} as Online from {@link #markManualOffline()}
+     */
+    public void unmarkManualOffline() {
+        state(State.ONLINE);
+        cluster.eventStream().publish(new NodeOnlineEvent(this));
     }
 
     /**
@@ -337,7 +372,7 @@ public final class Node implements Comparable<Node>, Closeable {
                 ", Address=" + socketAddress +
                 ", BytesSent=" + bytesSent +
                 ", BytesReceived=" + bytesReceived +
-                ", Connections=" + activeConnections.size() + "/" + maxConnections +
+                ", Connections=" + activeConnection() + "/" + maxConnections() +
                 ", state=" + state +
                 ", health=" + health() +
                 '}';
@@ -368,11 +403,11 @@ public final class Node implements Comparable<Node>, Closeable {
      * <p> This method is called by {@link Cluster#removeNode(Node)} when this {@link Node}
      * is being removed from the cluster. </p>
      */
-    @InternalCall
     @Override
     public void close() {
         state(State.OFFLINE);
         drainConnections();
+        cluster.removeNode(this);
     }
 
     /**
@@ -381,12 +416,14 @@ public final class Node implements Comparable<Node>, Closeable {
      */
     public JsonObject toJson() {
         JsonObject jsonObject = new JsonObject();
+        jsonObject.addProperty("ID", id());
         jsonObject.addProperty("SocketAddress", socketAddress.toString());
         jsonObject.addProperty("Connections", activeConnection() + "/" + maxConnections());
         jsonObject.addProperty("BytesSent", bytesSent);
         jsonObject.addProperty("BytesReceived", bytesReceived);
         jsonObject.addProperty("State", state.toString());
         jsonObject.addProperty("Health", health().toString());
+        jsonObject.addProperty("AddedToCluster", addedToCluster);
         return jsonObject;
     }
 }
