@@ -73,7 +73,6 @@ public class EventStream implements Closeable {
 
     /**
      * Copy all subscribers from other {@link EventStream} to specified {@link EventStream}
-     * @param eventStream
      */
     public void addSubscribersFrom(EventStream eventStream) {
         subscribers.addAll(eventStream.subscribers);
@@ -86,8 +85,6 @@ public class EventStream implements Closeable {
 
     @Override
     public String toString() {
-        return "EventStream{" +
-                "subscribers=" + subscribers +
-                '}';
+        return "EventStream{subscribers=" + subscribers + '}';
     }
 }

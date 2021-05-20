@@ -70,19 +70,19 @@ import java.util.concurrent.CopyOnWriteArrayList;
  * it is successfully built and started. Once attached, {@linkplain Node} can be added and all other
  * functionality can be performed seamlessly. </p>
  */
-public class Cluster {
+public class Cluster extends ClusterOnlineNodesWorker {
 
     private static final Logger logger = LogManager.getLogger(Cluster.class);
 
     private final List<Node> nodes = new CopyOnWriteArrayList<>();
-    private HealthCheckService healthCheckService;
-
     private EventStream eventStream = new EventStream();
     private LoadBalance<?, ?, ?, ?> loadBalance;
-    private HealthCheckTemplate healthCheckTemplate;
+    private HealthCheckService healthCheckService;
+    private HealthCheckTemplate template;
 
     Cluster(LoadBalance<?, ?, ?, ?> loadBalance) {
         loadBalance(loadBalance);
+        this.eventStream.subscribe(this);
     }
 
     /**
@@ -94,14 +94,14 @@ public class Cluster {
     @NonNull
     public boolean addNode(Node node) throws UnknownHostException {
         for (Node n : nodes) {
-            // If both SocketAddress are same then don't add and return false.
+            // If both Nodes are same then don't add and return false.
             if (node.equals(n)) {
                 return false;
             }
         }
 
         configureHealthCheckForNode(node); // Add HealthCheck if required
-        nodes.add(node);   // Add this Node into the list
+        nodes.add(node);                   // Add this Node into the list
         eventStream.publish(new NodeAddedEvent(node)); // Publish NodeAddedEvent event
         return true;
     }
@@ -180,8 +180,14 @@ public class Cluster {
      */
     @InternalCall(index = 1)
     @NonNull
-    public void eventStream(EventStream eventStream) {
+    public void useMainEventStream(EventStream eventStream) {
+        EventStream oldEventStream = this.eventStream;
+
+        eventStream.addSubscribersFrom(this.eventStream);
         this.eventStream = eventStream;
+
+        // Close the old EventStream
+        oldEventStream.close();
     }
 
     /**
@@ -194,6 +200,8 @@ public class Cluster {
     @NonNull
     public void loadBalance(LoadBalance<?, ?, ?, ?> loadBalance) {
         try {
+            // If LoadBalance has changed then unsubscribe it
+            // from the old EventStream and close the LoadBalance.
             if (this.loadBalance != null) {
                 this.eventStream.unsubscribe(loadBalance);
                 this.loadBalance.close();
@@ -205,8 +213,8 @@ public class Cluster {
         }
 
         loadBalance.cluster(this);
-        this.loadBalance = loadBalance;          // Set the new Load Balance
-        this.eventStream.subscribe(loadBalance); // Subscribe to the EventStream
+        this.loadBalance = loadBalance;
+        this.eventStream.subscribe(loadBalance); // Subscribe this LoadBalance to the EventStream
     }
 
     public EventStream eventStream() {
@@ -217,13 +225,13 @@ public class Cluster {
      * Returns the {@link HealthCheckTemplate}
      */
     public HealthCheckTemplate healthCheckTemplate() {
-        return healthCheckTemplate;
+        return template;
     }
 
     @NonNull
     void configureHealthCheck(HealthCheckConfiguration healthCheckConfiguration, HealthCheckTemplate healthCheckTemplate) {
         this.healthCheckService = new HealthCheckService(healthCheckConfiguration, eventStream);
-        this.healthCheckTemplate = healthCheckTemplate;
+        this.template = healthCheckTemplate;
     }
 
     @NonNull
@@ -233,30 +241,26 @@ public class Cluster {
         }
 
         HealthCheck healthCheck;
-        switch (healthCheckTemplate.protocol()) {
+        switch (template.protocol()) {
             case TCP:
-                healthCheck = new TCPHealthCheck(new InetSocketAddress(healthCheckTemplate.host(), healthCheckTemplate.port()),
-                        Duration.ofSeconds(healthCheckTemplate.timeout()), healthCheckTemplate.samples()
-                );
+                healthCheck = new TCPHealthCheck(new InetSocketAddress(template.host(), template.port()), Duration.ofSeconds(template.timeout()), template.samples());
                 break;
             case UDP:
-                healthCheck = new UDPHealthCheck(new InetSocketAddress(healthCheckTemplate.host(), healthCheckTemplate.port()),
-                        Duration.ofSeconds(healthCheckTemplate.timeout()), healthCheckTemplate.samples()
-                );
+                healthCheck = new UDPHealthCheck(new InetSocketAddress(template.host(), template.port()), Duration.ofSeconds(template.timeout()), template.samples());
                 break;
             case HTTP:
             case HTTPS:
                 String host;
-                if (healthCheckTemplate.protocol() == HealthCheckTemplate.Protocol.HTTP) {
-                    host = "http://" + InetAddress.getByName(healthCheckTemplate.host()).getHostAddress() + ":" + healthCheckTemplate().port();
+                if (template.protocol() == HealthCheckTemplate.Protocol.HTTP) {
+                    host = "http://" + InetAddress.getByName(template.host()).getHostAddress() + ":" + healthCheckTemplate().port();
                 } else {
-                    host = "https://" + InetAddress.getByName(healthCheckTemplate.host()).getHostAddress() + ":" + healthCheckTemplate().port();
+                    host = "https://" + InetAddress.getByName(template.host()).getHostAddress() + ":" + healthCheckTemplate().port();
                 }
 
-                healthCheck = new HTTPHealthCheck(URI.create(host), Duration.ofSeconds(healthCheckTemplate.timeout()), healthCheckTemplate.samples());
+                healthCheck = new HTTPHealthCheck(URI.create(host), Duration.ofSeconds(template.timeout()), template.samples());
                 break;
             default:
-                Error error = new Error("Unknown HealthCheck Protocol: " + healthCheckTemplate.protocol());
+                Error error = new Error("Unknown HealthCheck Protocol: " + template.protocol());
                 logger.fatal(error);
                 throw error;
         }

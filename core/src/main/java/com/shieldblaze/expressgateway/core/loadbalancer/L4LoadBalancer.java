@@ -191,7 +191,7 @@ public abstract class L4LoadBalancer {
         Objects.requireNonNull(hostname, "Hostname");
         Objects.requireNonNull(cluster, "Cluster");
 
-        cluster.eventStream(eventStream); // Set EventStream
+        cluster.useMainEventStream(eventStream); // Set EventStream
         clusterMap.put(hostname, cluster);
     }
 
