@@ -17,13 +17,11 @@
  */
 package com.shieldblaze.expressgateway.protocol.tcp;
 
-import com.shieldblaze.expressgateway.backend.Node;
+import com.shieldblaze.expressgateway.backend.NodeBuilder;
 import com.shieldblaze.expressgateway.backend.cluster.Cluster;
-import com.shieldblaze.expressgateway.backend.cluster.ClusterPool;
+import com.shieldblaze.expressgateway.backend.cluster.ClusterBuilder;
 import com.shieldblaze.expressgateway.backend.strategy.l4.RoundRobin;
 import com.shieldblaze.expressgateway.backend.strategy.l4.sessionpersistence.NOOPSessionPersistence;
-import com.shieldblaze.expressgateway.concurrent.eventstream.EventStream;
-import com.shieldblaze.expressgateway.configuration.CoreConfiguration;
 import com.shieldblaze.expressgateway.core.events.L4FrontListenerStartupEvent;
 import com.shieldblaze.expressgateway.core.events.L4FrontListenerStopEvent;
 import com.shieldblaze.expressgateway.core.loadbalancer.L4LoadBalancer;
@@ -38,6 +36,7 @@ import java.net.InetAddress;
 import java.net.InetSocketAddress;
 import java.net.ServerSocket;
 import java.net.Socket;
+import java.net.UnknownHostException;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertTrue;
@@ -47,10 +46,12 @@ final class UpstreamHandlerTest {
     static L4LoadBalancer l4LoadBalancer;
 
     @BeforeAll
-    static void setup() {
+    static void setup() throws UnknownHostException {
         new TCPServer().start();
 
-        Cluster cluster = new ClusterPool(new RoundRobin(NOOPSessionPersistence.INSTANCE));
+        Cluster cluster = ClusterBuilder.newBuilder()
+                .withLoadBalance(new RoundRobin(NOOPSessionPersistence.INSTANCE))
+                .build();
 
         l4LoadBalancer = L4LoadBalancerBuilder.newBuilder()
                 .withBindAddress(new InetSocketAddress("127.0.0.1", 9110))
@@ -58,18 +59,22 @@ final class UpstreamHandlerTest {
                 .build();
 
         l4LoadBalancer.defaultCluster(cluster);
-        new Node(cluster, new InetSocketAddress("127.0.0.1", 9111));
+
+        NodeBuilder.newBuilder()
+                .withCluster(cluster)
+                .withSocketAddress(new InetSocketAddress("127.0.0.1", 9111))
+                .build();
 
         L4FrontListenerStartupEvent l4FrontListenerStartupEvent = l4LoadBalancer.start();
         l4FrontListenerStartupEvent.future().join();
-        assertTrue(l4FrontListenerStartupEvent.isSuccessful());
+        assertTrue(l4FrontListenerStartupEvent.isSuccess());
     }
 
     @AfterAll
     static void stop() {
         L4FrontListenerStopEvent l4FrontListenerStopEvent = l4LoadBalancer.stop();
         l4FrontListenerStopEvent.future().join();
-        assertTrue(l4FrontListenerStopEvent.isSuccessful());
+        assertTrue(l4FrontListenerStopEvent.isSuccess());
     }
 
     @Test

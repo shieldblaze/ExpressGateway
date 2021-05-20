@@ -47,4 +47,9 @@ public class HTTPLoadBalancer extends L4LoadBalancer {
     public HTTPConfiguration httpConfiguration() {
         return httpConfiguration;
     }
+
+    @Override
+    public String type() {
+        return "L7/HTTP";
+    }
 }

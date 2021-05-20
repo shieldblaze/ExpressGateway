@@ -17,25 +17,27 @@
  */
 package com.shieldblaze.expressgateway.backend.strategy.l4.sessionpersistence;
 
-import com.shieldblaze.expressgateway.backend.Node;
+import com.shieldblaze.expressgateway.backend.NodeBuilder;
 import com.shieldblaze.expressgateway.backend.cluster.Cluster;
-import com.shieldblaze.expressgateway.backend.cluster.ClusterPool;
+import com.shieldblaze.expressgateway.backend.cluster.ClusterBuilder;
 import com.shieldblaze.expressgateway.backend.exceptions.LoadBalanceException;
 import com.shieldblaze.expressgateway.backend.strategy.l4.L4Request;
 import com.shieldblaze.expressgateway.backend.strategy.l4.RoundRobin;
-import com.shieldblaze.expressgateway.concurrent.eventstream.EventStream;
 import org.junit.jupiter.api.Test;
 
 import java.net.InetSocketAddress;
+import java.net.UnknownHostException;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 
 class SourceIPHashTest {
 
     @Test
-    void testSourceIPHash() throws LoadBalanceException {
+    void testSourceIPHash() throws LoadBalanceException, UnknownHostException {
+        Cluster cluster = ClusterBuilder.newBuilder()
+                .withLoadBalance(new RoundRobin(new SourceIPHash()))
+                .build();
 
-        Cluster cluster = new ClusterPool(new RoundRobin(new SourceIPHash()));
         fastBuild(cluster, "172.16.20.1");
         fastBuild(cluster, "172.16.20.2");
 
@@ -76,7 +78,10 @@ class SourceIPHashTest {
                 cluster.nextNode(new L4Request(new InetSocketAddress("172.20.1.253", 1))).node().socketAddress());
     }
 
-    private Node fastBuild(Cluster cluster, String host) {
-        return new Node(cluster, new InetSocketAddress(host, 1));
+    private void fastBuild(Cluster cluster, String host) throws UnknownHostException {
+        NodeBuilder.newBuilder()
+                .withCluster(cluster)
+                .withSocketAddress(new InetSocketAddress(host, 1))
+                .build();
     }
 }

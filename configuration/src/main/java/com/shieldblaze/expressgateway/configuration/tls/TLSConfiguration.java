@@ -17,13 +17,17 @@
  */
 package com.shieldblaze.expressgateway.configuration.tls;
 
-import io.netty.util.internal.SystemPropertyUtil;
+import com.fasterxml.jackson.annotation.JsonIgnore;
+import com.fasterxml.jackson.annotation.JsonProperty;
+import com.shieldblaze.expressgateway.common.utils.ListUtil;
+import com.shieldblaze.expressgateway.common.utils.NumberUtil;
+import com.shieldblaze.expressgateway.configuration.ConfigurationMarshaller;
 
 import javax.net.ssl.SSLException;
-import java.security.KeyStoreException;
-import java.security.NoSuchAlgorithmException;
+import java.io.IOException;
 import java.util.List;
 import java.util.Map;
+import java.util.Objects;
 import java.util.concurrent.ConcurrentSkipListMap;
 
 /**
@@ -31,33 +35,45 @@ import java.util.concurrent.ConcurrentSkipListMap;
  */
 public final class TLSConfiguration {
 
+    @JsonIgnore
     private final Map<String, CertificateKeyPair> certificateKeyPairMap = new ConcurrentSkipListMap<>();
 
+    @JsonIgnore
     private boolean forServer;
+
+    @JsonProperty("ciphers")
     private List<Cipher> ciphers;
+
+    @JsonProperty("protocols")
     private List<Protocol> protocols;
+
+    @JsonProperty("mutualTLS")
     private MutualTLS mutualTLS = MutualTLS.NOT_REQUIRED;
+
+    @JsonProperty("useStartTLS")
     private boolean useStartTLS;
+
+    @JsonProperty("sessionTimeout")
     private int sessionTimeout;
+
+    @JsonProperty("sessionCacheSize")
     private int sessionCacheSize;
+
+    @JsonProperty("acceptAllCerts")
     private boolean acceptAllCerts;
 
+    @JsonIgnore
     public static final TLSConfiguration DEFAULT_CLIENT = new TLSConfiguration();
+
+    @JsonIgnore
     public static final TLSConfiguration DEFAULT_SERVER = new TLSConfiguration();
 
     static {
         // Default Client
         {
             DEFAULT_CLIENT.forServer = false;
-            boolean useModernCrypto = SystemPropertyUtil.getBoolean("useModernCrypto", false);
-
-            if (useModernCrypto) {
-                DEFAULT_CLIENT.ciphers = ModernCrypto.CIPHERS;
-                DEFAULT_CLIENT.protocols = ModernCrypto.PROTOCOLS;
-            } else {
-                DEFAULT_CLIENT.ciphers = IntermediateCrypto.CIPHERS;
-                DEFAULT_CLIENT.protocols = IntermediateCrypto.PROTOCOLS;
-            }
+            DEFAULT_CLIENT.ciphers = IntermediateCrypto.CIPHERS;
+            DEFAULT_CLIENT.protocols = IntermediateCrypto.PROTOCOLS;
 
             DEFAULT_CLIENT.useStartTLS = false;
             DEFAULT_CLIENT.acceptAllCerts = false;
@@ -66,18 +82,11 @@ public final class TLSConfiguration {
         // Default Server
         {
             DEFAULT_SERVER.forServer = true;
-            boolean useModernCrypto = SystemPropertyUtil.getBoolean("useModernCrypto", false);
-
-            if (useModernCrypto) {
-                DEFAULT_SERVER.ciphers = ModernCrypto.CIPHERS;
-                DEFAULT_SERVER.protocols = ModernCrypto.PROTOCOLS;
-            } else {
-                DEFAULT_SERVER.ciphers = IntermediateCrypto.CIPHERS;
-                DEFAULT_SERVER.protocols = IntermediateCrypto.PROTOCOLS;
-            }
+            DEFAULT_SERVER.ciphers = IntermediateCrypto.CIPHERS;
+            DEFAULT_SERVER.protocols = IntermediateCrypto.PROTOCOLS;
 
             DEFAULT_SERVER.useStartTLS = false;
-            DEFAULT_SERVER.sessionTimeout = 43200;
+            DEFAULT_SERVER.sessionTimeout = 43_200;
             DEFAULT_SERVER.sessionCacheSize = 100_000;
         }
     }
@@ -85,7 +94,7 @@ public final class TLSConfiguration {
     /**
      * Add the default {@link CertificateKeyPair} mapping
      */
-    public void defaultMapping(CertificateKeyPair certificateKeyPair) throws NoSuchAlgorithmException, KeyStoreException, SSLException {
+    public void defaultMapping(CertificateKeyPair certificateKeyPair) throws SSLException {
         addMapping("DEFAULT", certificateKeyPair);
     }
 
@@ -102,7 +111,7 @@ public final class TLSConfiguration {
      * @param host               FQDN
      * @param certificateKeyPair {@link CertificateKeyPair} Instance
      */
-    public void addMapping(String host, CertificateKeyPair certificateKeyPair) throws NoSuchAlgorithmException, KeyStoreException, SSLException {
+    public void addMapping(String host, CertificateKeyPair certificateKeyPair) throws SSLException {
         certificateKeyPairMap.put(host, certificateKeyPair);
         certificateKeyPair.init(this);
     }
@@ -118,6 +127,13 @@ public final class TLSConfiguration {
     }
 
     /**
+     * Remove all mappings
+     */
+    public void clearMappings() {
+        certificateKeyPairMap.clear();
+    }
+
+    /**
      * Get {@link CertificateKeyPair} for a Hostname
      *
      * @param fqdn FQDN
@@ -125,10 +141,11 @@ public final class TLSConfiguration {
      * @throws NullPointerException If Mapping is not found for a Hostname
      */
     public CertificateKeyPair mapping(String fqdn) {
+        String _fqdn = fqdn;
         try {
             CertificateKeyPair certificateKeyPair = certificateKeyPairMap.get(fqdn);
 
-            // If `null` it means, Mapping was not found with FQDN then we'll try Wildcard.
+            // If `null` then it means mapping was not found with FQDN. We'll try Wildcard now.
             if (certificateKeyPair == null) {
                 fqdn = "*" + fqdn.substring(fqdn.indexOf("."));
                 certificateKeyPair = certificateKeyPairMap.get(fqdn);
@@ -142,49 +159,58 @@ public final class TLSConfiguration {
             // Ignore
         }
 
-        throw new NullPointerException("Mapping not found for Hostname: " + fqdn);
+        throw new NullPointerException("Mapping not found for Hostname: " + _fqdn);
     }
 
     public boolean forServer() {
         return forServer;
     }
 
-    TLSConfiguration forServer(boolean forServer) {
+    /**
+     * Set to {@code true} if this configuration is for server
+     * else set to {@code false}.
+     */
+    TLSConfiguration setForServer(boolean forServer) {
         this.forServer = forServer;
         return this;
     }
 
-    public TLSConfiguration ciphers(List<Cipher> ciphers) {
+    TLSConfiguration setCiphers(List<Cipher> ciphers) {
+        ListUtil.checkNonEmpty(ciphers, "Ciphers");
         this.ciphers = ciphers;
         return this;
     }
 
-    public TLSConfiguration protocols(List<Protocol> protocols) {
+    TLSConfiguration setProtocols(List<Protocol> protocols) {
+        ListUtil.checkNonEmpty(protocols, "Protocols");
         this.protocols = protocols;
         return this;
     }
 
-    public TLSConfiguration mutualTLS(MutualTLS mutualTLS) {
+    TLSConfiguration setMutualTLS(MutualTLS mutualTLS) {
+        Objects.requireNonNull(mutualTLS, "MutualTLS");
         this.mutualTLS = mutualTLS;
         return this;
     }
 
-    public TLSConfiguration useStartTLS(boolean useStartTLS) {
+    TLSConfiguration setUseStartTLS(boolean useStartTLS) {
         this.useStartTLS = useStartTLS;
         return this;
     }
 
-    public TLSConfiguration sessionTimeout(int sessionTimeout) {
+    TLSConfiguration setSessionTimeout(int sessionTimeout) {
+        NumberUtil.checkZeroOrPositive(sessionTimeout, "Session Timeout");
         this.sessionTimeout = sessionTimeout;
         return this;
     }
 
-    public TLSConfiguration sessionCacheSize(int sessionCacheSize) {
+    TLSConfiguration setSessionCacheSize(int sessionCacheSize) {
+        NumberUtil.checkZeroOrPositive(sessionCacheSize, "Session Cache Size");
         this.sessionCacheSize = sessionCacheSize;
         return this;
     }
 
-    public TLSConfiguration acceptAllCerts(boolean acceptAllCerts) {
+    TLSConfiguration setAcceptAllCerts(boolean acceptAllCerts) {
         this.acceptAllCerts = acceptAllCerts;
         return this;
     }
@@ -215,5 +241,60 @@ public final class TLSConfiguration {
 
     public boolean acceptAllCerts() {
         return acceptAllCerts;
+    }
+
+    public TLSConfiguration validate() {
+        ListUtil.checkNonEmpty(ciphers, "Ciphers");
+        ListUtil.checkNonEmpty(protocols, "Protocols");
+        Objects.requireNonNull(mutualTLS, "MutualTLS");
+        NumberUtil.checkZeroOrPositive(sessionTimeout, "Session Timeout");
+        NumberUtil.checkZeroOrPositive(sessionCacheSize, "Session Cache Size");
+        return this;
+    }
+
+    /**
+     * Save this server configuration to the file
+     *
+     * @throws IOException If an error occurs during saving
+     */
+    public void saveServer() throws IOException {
+        ConfigurationMarshaller.save("TLSServerConfiguration.json", this);
+    }
+
+    /**
+     * Load a server configuration
+     *
+     * @return {@link TLSConfiguration} Server Instance
+     */
+    public static TLSConfiguration loadServer() {
+        try {
+            return ConfigurationMarshaller.load("TLSServerConfiguration.json", TLSConfiguration.class);
+        } catch (Exception ex) {
+            // Ignore
+        }
+        return DEFAULT_SERVER;
+    }
+
+    /**
+     * Save this client configuration to the file
+     *
+     * @throws IOException If an error occurs during saving
+     */
+    public void saveClient() throws IOException {
+        ConfigurationMarshaller.save("TLSClientConfiguration.json", this);
+    }
+
+    /**
+     * Load a client configuration
+     *
+     * @return {@link TLSConfiguration} Client Instance
+     */
+    public static TLSConfiguration loadClient() {
+        try {
+            return ConfigurationMarshaller.load("TLSClientConfiguration.json", TLSConfiguration.class);
+        } catch (Exception ex) {
+            // Ignore
+        }
+        return DEFAULT_CLIENT;
     }
 }

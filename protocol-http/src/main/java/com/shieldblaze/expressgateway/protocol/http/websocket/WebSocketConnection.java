@@ -21,7 +21,6 @@ import com.shieldblaze.expressgateway.backend.Connection;
 import com.shieldblaze.expressgateway.backend.Node;
 import com.shieldblaze.expressgateway.common.utils.ReferenceCounted;
 import io.netty.channel.ChannelFuture;
-import io.netty.handler.codec.http.websocketx.TextWebSocketFrame;
 import io.netty.handler.codec.http.websocketx.WebSocketClientHandshaker;
 
 /**

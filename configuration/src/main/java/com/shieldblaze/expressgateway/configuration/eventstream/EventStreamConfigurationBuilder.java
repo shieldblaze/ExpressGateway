@@ -38,6 +38,6 @@ public final class EventStreamConfigurationBuilder {
     }
 
     public EventStreamConfiguration build() {
-        return new EventStreamConfiguration(workers);
+        return new EventStreamConfiguration().setWorkers(workers);
     }
 }

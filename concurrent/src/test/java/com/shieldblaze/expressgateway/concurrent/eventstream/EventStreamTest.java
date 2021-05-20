@@ -65,17 +65,17 @@ class EventStreamTest {
         }
 
         @Override
-        public boolean hasFinished() {
+        public boolean isFinished() {
             return false;
         }
 
         @Override
-        public boolean isSuccessful() {
+        public boolean isSuccess() {
             return false;
         }
 
         @Override
-        public Throwable throwable() {
+        public Throwable cause() {
             return null;
         }
     }

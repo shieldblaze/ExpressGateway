@@ -17,12 +17,6 @@
  */
 package com.shieldblaze.expressgateway.configuration.transport;
 
-import io.netty.channel.epoll.Epoll;
-import io.netty.incubator.channel.uring.IOUring;
-import io.netty.util.internal.ObjectUtil;
-
-import java.util.Objects;
-
 /**
  * Configuration Builder for {@link TransportConfiguration}
  */
@@ -130,66 +124,15 @@ public final class TransportConfigurationBuilder {
      * @throws IllegalArgumentException If a value is invalid
      */
     public TransportConfiguration build() {
-
-        Objects.requireNonNull(transportType, "Transport Type");
-        Objects.requireNonNull(receiveBufferAllocationType, "Receive Buffer Allocation Type");
-        Objects.requireNonNull(receiveBufferSizes, "Receive Buffer Sizes");
-        ObjectUtil.checkPositive(tcpConnectionBacklog, "TCP Connection Backlog");
-        ObjectUtil.checkPositive(tcpFastOpenMaximumPendingRequestsCount, "TCP Fast Open Maximum Pending Requests");
-        ObjectUtil.checkPositive(backendConnectTimeout, "Backend Connect Timeout");
-        ObjectUtil.checkPositive(connectionIdleTimeout, "Connection Idle Timeout");
-
-        if (transportType == TransportType.EPOLL && !Epoll.isAvailable()) {
-            throw new IllegalArgumentException("Epoll is not available");
-        } else if (transportType == TransportType.IO_URING && !IOUring.isAvailable()) {
-            throw new IllegalArgumentException("IOUring is not available");
-        }
-
-        if (receiveBufferAllocationType == ReceiveBufferAllocationType.ADAPTIVE) {
-            if (receiveBufferSizes.length != 3) {
-                throw new IllegalArgumentException("Receive Buffer Sizes Are Invalid");
-            }
-
-            if (receiveBufferSizes[2] > 65536) {
-                throw new IllegalArgumentException("Maximum Receive Buffer Size Cannot Be Greater Than 65536");
-            } else if (receiveBufferSizes[2] < 64) {
-                throw new IllegalArgumentException("Maximum Receive Buffer Size Cannot Be Less Than 64");
-            }
-
-            if (receiveBufferSizes[0] < 64 || receiveBufferSizes[0] > receiveBufferSizes[2]) {
-                throw new IllegalArgumentException("Minimum Receive Buffer Size Must Be In Range Of 64-" + receiveBufferSizes[2]);
-            }
-
-            if (receiveBufferSizes[1] < 64 || receiveBufferSizes[1] > receiveBufferSizes[2] || receiveBufferSizes[1] < receiveBufferSizes[0]) {
-                throw new IllegalArgumentException("Initial Receive Buffer Must Be In Range Of " + receiveBufferSizes[0] + "-" + receiveBufferSizes[2]);
-            }
-        } else {
-            if (receiveBufferSizes.length != 1) {
-                throw new IllegalArgumentException("Receive Buffer Sizes Are Invalid");
-            }
-
-            if (receiveBufferSizes[0] > 65536 || receiveBufferSizes[0] < 64) {
-                throw new IllegalArgumentException("Fixed Receive Buffer Size Cannot Be Less Than 64-65536");
-            }
-        }
-
-        if (socketReceiveBufferSize < 64) {
-            throw new IllegalArgumentException("Socket Receive Buffer Size Must Be Greater Than 64");
-        }
-
-        if (socketSendBufferSize < 64) {
-            throw new IllegalArgumentException("Socket Send Buffer Size Must Be Greater Than 64");
-        }
-
         return new TransportConfiguration()
-                .transportType(transportType)
-                .receiveBufferAllocationType(receiveBufferAllocationType)
-                .receiveBufferSizes(receiveBufferSizes)
-                .tcpConnectionBacklog(tcpConnectionBacklog)
-                .socketReceiveBufferSize(socketReceiveBufferSize)
-                .socketSendBufferSize(socketSendBufferSize)
-                .tcpFastOpenMaximumPendingRequests(tcpFastOpenMaximumPendingRequestsCount)
-                .backendConnectTimeout(backendConnectTimeout)
-                .connectionIdleTimeout(connectionIdleTimeout);
+                .setTransportType(transportType)
+                .setReceiveBufferAllocationType(receiveBufferAllocationType)
+                .setReceiveBufferSizes(receiveBufferSizes)
+                .setTcpConnectionBacklog(tcpConnectionBacklog)
+                .setSocketReceiveBufferSize(socketReceiveBufferSize)
+                .setSocketSendBufferSize(socketSendBufferSize)
+                .setTcpFastOpenMaximumPendingRequests(tcpFastOpenMaximumPendingRequestsCount)
+                .setBackendConnectTimeout(backendConnectTimeout)
+                .setConnectionIdleTimeout(connectionIdleTimeout);
     }
 }

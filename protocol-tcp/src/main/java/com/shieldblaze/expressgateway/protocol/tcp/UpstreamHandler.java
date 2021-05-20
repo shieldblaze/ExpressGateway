@@ -22,7 +22,6 @@ import com.shieldblaze.expressgateway.backend.Node;
 import com.shieldblaze.expressgateway.backend.strategy.l4.L4Request;
 import com.shieldblaze.expressgateway.core.ConnectionTimeoutHandler;
 import com.shieldblaze.expressgateway.core.loadbalancer.L4LoadBalancer;
-import io.netty.buffer.ByteBuf;
 import io.netty.channel.ChannelHandlerContext;
 import io.netty.channel.ChannelInboundHandlerAdapter;
 import org.apache.logging.log4j.LogManager;

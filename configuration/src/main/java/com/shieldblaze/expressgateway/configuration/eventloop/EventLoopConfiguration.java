@@ -17,14 +17,21 @@
  */
 package com.shieldblaze.expressgateway.configuration.eventloop;
 
-import com.shieldblaze.expressgateway.common.utils.Number;
+import com.fasterxml.jackson.annotation.JsonProperty;
+import com.shieldblaze.expressgateway.common.utils.NumberUtil;
+import com.shieldblaze.expressgateway.configuration.ConfigurationMarshaller;
+
+import java.io.IOException;
 
 /**
  * {@code EventLoop} Configuration
  */
 public final class EventLoopConfiguration {
 
+    @JsonProperty("parentWorkers")
     private int parentWorkers;
+
+    @JsonProperty("childWorkers")
     private int childWorkers;
 
     EventLoopConfiguration() {
@@ -42,8 +49,8 @@ public final class EventLoopConfiguration {
         return parentWorkers;
     }
 
-    EventLoopConfiguration parentWorkers(int parentWorkers) {
-        Number.checkPositive(parentWorkers, "Parent Workers");
+    EventLoopConfiguration setParentWorkers(int parentWorkers) {
+        NumberUtil.checkPositive(parentWorkers, "Parent Workers");
         this.parentWorkers = parentWorkers;
         return this;
     }
@@ -52,9 +59,38 @@ public final class EventLoopConfiguration {
         return childWorkers;
     }
 
-    EventLoopConfiguration childWorkers(int childWorkers) {
-        Number.checkPositive(childWorkers, "Child Workers");
+    EventLoopConfiguration setChildWorkers(int childWorkers) {
+        NumberUtil.checkPositive(childWorkers, "Child Workers");
         this.childWorkers = childWorkers;
         return this;
+    }
+
+    public EventLoopConfiguration validate() {
+        NumberUtil.checkPositive(parentWorkers, "Parent Workers");
+        NumberUtil.checkPositive(childWorkers, "Child Workers");
+        return this;
+    }
+
+    /**
+     * Save this configuration to the file
+     *
+     * @throws IOException If an error occurs during saving
+     */
+    public void save() throws IOException {
+        ConfigurationMarshaller.save("EventLoopConfiguration.json", this);
+    }
+
+    /**
+     * Load a configuration
+     *
+     * @return {@link EventLoopConfiguration} Instance
+     */
+    public static EventLoopConfiguration load() {
+        try {
+            return ConfigurationMarshaller.load("EventLoopConfiguration.json", EventLoopConfiguration.class);
+        } catch (Exception ex) {
+            // Ignore
+        }
+        return DEFAULT;
     }
 }

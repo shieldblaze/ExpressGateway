@@ -44,9 +44,15 @@ public final class HealthCheckService implements Closeable {
 
     private final Map<Node, ScheduledFuture<?>> nodeMap = new ConcurrentHashMap<>();
 
-    private HealthCheckConfiguration config;
-    private EventStream eventStream;
-    private ScheduledExecutorService executors;
+    private final HealthCheckConfiguration config;
+    private final EventStream eventStream;
+    private final ScheduledExecutorService executors;
+
+    public HealthCheckService(HealthCheckConfiguration config, EventStream eventStream) {
+        this.config = config;
+        this.eventStream = eventStream;
+        executors = Executors.newScheduledThreadPool(config.workers());
+    }
 
     /**
      * Add a new {@link Node} to the HealthCheckService.
@@ -55,12 +61,11 @@ public final class HealthCheckService implements Closeable {
      */
     @NonNull
     public void add(Node node) {
-        if (node.healthCheck() == null) {
-            throw new IllegalArgumentException("HealthCheck is not enabled for this node.");
+        if (nodeMap.containsKey(node)) {
+            throw new IllegalArgumentException("HealthCheck is already enabled for this Node: " + node);
         }
 
-        ScheduledFuture<?> scheduledFuture = executors.scheduleAtFixedRate(new HealthCheckRunner(node, eventStream), 0, config.timeInterval(), TimeUnit.SECONDS);
-        nodeMap.put(node, scheduledFuture);
+        nodeMap.put(node, executors.scheduleAtFixedRate(new HealthCheckRunner(node, eventStream), 0, config.timeInterval(), TimeUnit.SECONDS));
     }
 
     /**
@@ -76,30 +81,6 @@ public final class HealthCheckService implements Closeable {
         } else {
             throw new IllegalArgumentException("Node not found in HealthCheckService");
         }
-    }
-
-    /**
-     * Set an EventStream. This method must be called before
-     * using {@link HealthCheckService}.
-     */
-    @NonNull
-    @InternalCall(1)
-    public void eventStream(EventStream eventStream) {
-        if (this.eventStream != null) {
-            throw new IllegalArgumentException("EventStream is already set");
-        }
-        this.eventStream = eventStream;
-    }
-
-    /**
-     * Set a new {@link HealthCheckConfiguration} to use.
-     * All running Health Check Tasks will be stopped.
-     */
-    @NonNull
-    public void healthCheckConfiguration(HealthCheckConfiguration configuration) {
-        close();
-        this.config = configuration;
-        executors = Executors.newScheduledThreadPool(configuration.workers());
     }
 
     /**

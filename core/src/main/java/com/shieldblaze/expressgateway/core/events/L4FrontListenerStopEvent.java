@@ -17,13 +17,13 @@
  */
 package com.shieldblaze.expressgateway.core.events;
 
+import com.shieldblaze.expressgateway.concurrent.event.DefaultEvent;
 import com.shieldblaze.expressgateway.concurrent.event.Event;
-import com.shieldblaze.expressgateway.concurrent.event.GenericEvent;
 import com.shieldblaze.expressgateway.core.L4FrontListener;
 
 /**
  * {@link Event} for {@link L4FrontListener}
  */
-public class L4FrontListenerStopEvent extends GenericEvent<Void> {
+public class L4FrontListenerStopEvent extends DefaultEvent<Void> {
     // Empty
 }

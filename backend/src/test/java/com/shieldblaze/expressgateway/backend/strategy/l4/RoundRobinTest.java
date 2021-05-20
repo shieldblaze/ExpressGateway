@@ -17,15 +17,15 @@
  */
 package com.shieldblaze.expressgateway.backend.strategy.l4;
 
-import com.shieldblaze.expressgateway.backend.Node;
+import com.shieldblaze.expressgateway.backend.NodeBuilder;
 import com.shieldblaze.expressgateway.backend.cluster.Cluster;
-import com.shieldblaze.expressgateway.backend.cluster.ClusterPool;
+import com.shieldblaze.expressgateway.backend.cluster.ClusterBuilder;
 import com.shieldblaze.expressgateway.backend.exceptions.LoadBalanceException;
 import com.shieldblaze.expressgateway.backend.strategy.l4.sessionpersistence.NOOPSessionPersistence;
-import com.shieldblaze.expressgateway.concurrent.eventstream.EventStream;
 import org.junit.jupiter.api.Test;
 
 import java.net.InetSocketAddress;
+import java.net.UnknownHostException;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNotEquals;
@@ -33,8 +33,8 @@ import static org.junit.jupiter.api.Assertions.assertNotEquals;
 class RoundRobinTest {
 
     @Test
-    void testRoundRobin() throws LoadBalanceException {
-        ClusterPool cluster = new ClusterPool(new RoundRobin(NOOPSessionPersistence.INSTANCE));
+    void testRoundRobin() throws LoadBalanceException, UnknownHostException {
+        Cluster cluster = ClusterBuilder.newBuilder().withLoadBalance(new RoundRobin(NOOPSessionPersistence.INSTANCE)).build();
 
         // Add Node Server Addresses
         for (int i = 1; i <= 100; i++) {
@@ -60,7 +60,10 @@ class RoundRobinTest {
         }
     }
 
-    private Node fastBuild(Cluster cluster, String host) {
-        return new Node(cluster, new InetSocketAddress(host, 1));
+    private void fastBuild(Cluster cluster, String host) throws UnknownHostException {
+        NodeBuilder.newBuilder()
+                .withCluster(cluster)
+                .withSocketAddress(new InetSocketAddress(host, 1))
+                .build();
     }
 }

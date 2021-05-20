@@ -23,8 +23,12 @@ jobs:
         uses: actions/setup-java@v1
         with:
           java-version: 11
+      - name: Permissions
+        run: chmod 777 ./setup.sh
+      - name: Setup
+        run: ./setup.sh
       - name: Build with Maven
-        run: mvn -B -ntp clean package --file pom.xml
+        run: mvn -B -ntp test -DforkCount=1 -DreuseForks=false -Dparallel=methods -DthreadCount=1 --file pom.xml
       - name: Upload Coverage Report
         run: bash <(curl -s https://codecov.io/bash)
 
@@ -39,5 +43,9 @@ jobs:
         uses: actions/setup-java@v1
         with:
           java-version: 16
+      - name: Permissions
+        run: chmod 777 ./setup.sh
+      - name: Setup
+        run: ./setup.sh
       - name: Build with Maven
-        run: mvn -B -ntp clean package --file pom.xml
+        run: mvn -B -ntp test -DforkCount=1 -DreuseForks=false -Dparallel=methods -DthreadCount=1 --file pom.xml

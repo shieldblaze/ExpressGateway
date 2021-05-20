@@ -17,10 +17,12 @@
  */
 package com.shieldblaze.expressgateway.protocol.udp;
 
+import com.shieldblaze.expressgateway.concurrent.GlobalExecutors;
 import com.shieldblaze.expressgateway.configuration.CoreConfiguration;
 import com.shieldblaze.expressgateway.configuration.transport.TransportType;
 import com.shieldblaze.expressgateway.core.BootstrapFactory;
 import com.shieldblaze.expressgateway.core.L4FrontListener;
+import com.shieldblaze.expressgateway.core.events.L4FrontListenerShutdownEvent;
 import com.shieldblaze.expressgateway.core.events.L4FrontListenerStartupEvent;
 import com.shieldblaze.expressgateway.core.events.L4FrontListenerStopEvent;
 import io.netty.bootstrap.Bootstrap;
@@ -74,7 +76,7 @@ public class UDPListener extends L4FrontListener {
         }
 
         // Add listener to last ChannelFuture to notify all listeners
-        channelFutures.get(channelFutures.size() - 1).addListener((ChannelFutureListener) future -> {
+        channelFutures.get(channelFutures.size() - 1).addListener(future -> {
             if (future.isSuccess()) {
                 l4FrontListenerStartupEvent.trySuccess(null);
             } else {
@@ -88,13 +90,10 @@ public class UDPListener extends L4FrontListener {
 
     @Override
     public L4FrontListenerStopEvent stop() {
-        l4LoadBalancer().eventLoopFactory().parentGroup().shutdownGracefully();
-        l4LoadBalancer().eventLoopFactory().childGroup().shutdownGracefully();
-
         L4FrontListenerStopEvent l4FrontListenerStopEvent = new L4FrontListenerStopEvent();
 
         channelFutures.forEach(channelFuture -> channelFuture.channel().close());
-        channelFutures.get(channelFutures.size() - 1).channel().closeFuture().addListener((ChannelFutureListener) future -> {
+        channelFutures.get(channelFutures.size() - 1).channel().closeFuture().addListener(future -> {
             if (future.isSuccess()) {
                 l4FrontListenerStopEvent.trySuccess(null);
             } else {
@@ -104,9 +103,22 @@ public class UDPListener extends L4FrontListener {
 
         // Shutdown Cluster
         l4LoadBalancer().clusters().forEach((str, cluster) -> cluster.close());
-        l4LoadBalancer().clusters().clear();
-
         l4LoadBalancer().eventStream().publish(l4FrontListenerStopEvent);
         return l4FrontListenerStopEvent;
+    }
+
+    @Override
+    public L4FrontListenerShutdownEvent shutdown() {
+        L4FrontListenerStopEvent event = stop();
+        L4FrontListenerShutdownEvent shutdownEvent = new L4FrontListenerShutdownEvent();
+
+        event.future().whenCompleteAsync((_void, throwable) -> {
+            l4LoadBalancer().clusters().clear();
+            l4LoadBalancer().eventLoopFactory().parentGroup().shutdownGracefully();
+            l4LoadBalancer().eventLoopFactory().childGroup().shutdownGracefully();
+            shutdownEvent.trySuccess(null);
+        }, GlobalExecutors.INSTANCE.executorService());
+
+        return shutdownEvent;
     }
 }

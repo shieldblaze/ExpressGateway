@@ -26,5 +26,6 @@ import java.lang.annotation.Target;
  */
 @Target({ElementType.METHOD, ElementType.PARAMETER, ElementType.CONSTRUCTOR})
 public @interface InternalCall {
-    int value() default 0;
+    int index() default 0;
+    String name() default "";
 }

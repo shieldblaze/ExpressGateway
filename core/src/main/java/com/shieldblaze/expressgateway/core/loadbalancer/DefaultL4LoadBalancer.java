@@ -17,12 +17,14 @@
  */
 package com.shieldblaze.expressgateway.core.loadbalancer;
 
+import com.shieldblaze.expressgateway.backend.cluster.Cluster;
 import com.shieldblaze.expressgateway.configuration.CoreConfiguration;
 import com.shieldblaze.expressgateway.configuration.tls.TLSConfiguration;
 import com.shieldblaze.expressgateway.core.L4FrontListener;
 import io.netty.channel.ChannelHandler;
 
 import java.net.InetSocketAddress;
+import java.util.Map;
 
 /**
  * Default implementation for {@link L4LoadBalancer}
@@ -42,5 +44,30 @@ final class DefaultL4LoadBalancer extends L4LoadBalancer {
     DefaultL4LoadBalancer(String name, InetSocketAddress bindAddress, L4FrontListener l4FrontListener, CoreConfiguration coreConfiguration,
                           TLSConfiguration tlsForServer, TLSConfiguration tlsForClient, ChannelHandler channelHandler) {
         super(name, bindAddress, l4FrontListener, coreConfiguration, tlsForServer, tlsForClient, channelHandler);
+    }
+
+    @Override
+    public Cluster cluster(String hostname) {
+        return super.cluster("DEFAULT");
+    }
+
+    @Override
+    public void mapCluster(String hostname, Cluster cluster) {
+        super.mapCluster("DEFAULT", cluster);
+    }
+
+    @Override
+    public void remapCluster(String oldHostname, String newHostname) {
+        super.remapCluster("DEFAULT", "DEFAULT");
+    }
+
+    @Override
+    public boolean removeCluster(String hostname) {
+        return super.removeCluster("DEFAULT");
+    }
+
+    @Override
+    public String type() {
+        return "L4";
     }
 }

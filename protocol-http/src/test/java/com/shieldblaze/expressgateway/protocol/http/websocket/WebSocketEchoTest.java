@@ -17,9 +17,10 @@
  */
 package com.shieldblaze.expressgateway.protocol.http.websocket;
 
-import com.shieldblaze.expressgateway.backend.Node;
-import com.shieldblaze.expressgateway.backend.cluster.ClusterPool;
-import com.shieldblaze.expressgateway.backend.strategy.l7.http.HTTPRandom;
+import com.shieldblaze.expressgateway.backend.NodeBuilder;
+import com.shieldblaze.expressgateway.backend.cluster.Cluster;
+import com.shieldblaze.expressgateway.backend.cluster.ClusterBuilder;
+import com.shieldblaze.expressgateway.backend.strategy.l7.http.HTTPRoundRobin;
 import com.shieldblaze.expressgateway.backend.strategy.l7.http.sessionpersistence.NOOPSessionPersistence;
 import com.shieldblaze.expressgateway.protocol.http.DefaultHTTPServerInitializer;
 import com.shieldblaze.expressgateway.protocol.http.loadbalancer.HTTPLoadBalancer;
@@ -37,17 +38,19 @@ import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.Test;
 
 import java.net.InetSocketAddress;
+import java.net.UnknownHostException;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.ExecutionException;
 
 public class WebSocketEchoTest extends WebSocketListener {
+
     static WebSocketEchoServer webSocketEchoServer;
     static OkHttpClient client;
     static HTTPLoadBalancer httpLoadBalancer;
     CountDownLatch countDownLatchString = new CountDownLatch(100_000);
 
     @BeforeAll
-    static void setup() throws ExecutionException, InterruptedException {
+    static void setup() throws ExecutionException, InterruptedException, UnknownHostException {
         webSocketEchoServer = new WebSocketEchoServer();
         webSocketEchoServer.startServer();
 
@@ -61,10 +64,16 @@ public class WebSocketEchoTest extends WebSocketListener {
 
         httpLoadBalancer.start().future().get();
 
-        ClusterPool clusterPool = new ClusterPool(new HTTPRandom(NOOPSessionPersistence.INSTANCE));
-        httpLoadBalancer.mapCluster("localhost:9110", clusterPool);
+        Cluster cluster = ClusterBuilder.newBuilder()
+                .withLoadBalance(new HTTPRoundRobin(NOOPSessionPersistence.INSTANCE))
+                .build();
 
-        new Node(clusterPool, new InetSocketAddress("localhost", 5000));
+        httpLoadBalancer.mapCluster("localhost:9110", cluster);
+
+        NodeBuilder.newBuilder()
+                .withCluster(cluster)
+                .withSocketAddress(new InetSocketAddress("localhost", 5000))
+                .build();
     }
 
     @AfterAll

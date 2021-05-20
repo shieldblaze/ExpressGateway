@@ -31,14 +31,14 @@ public class CoreConfiguration {
     private EventStreamConfiguration eventStreamConfiguration;
     private HealthCheckConfiguration healthCheckConfiguration;
 
-    public static final CoreConfiguration DEFAULT = new CoreConfiguration();
+    public static final CoreConfiguration INSTANCE = new CoreConfiguration();
 
     static {
-        DEFAULT.bufferConfiguration = BufferConfiguration.DEFAULT;
-        DEFAULT.eventLoopConfiguration = EventLoopConfiguration.DEFAULT;
-        DEFAULT.transportConfiguration = TransportConfiguration.DEFAULT;
-        DEFAULT.eventStreamConfiguration = EventStreamConfiguration.DEFAULT;
-        DEFAULT.healthCheckConfiguration = HealthCheckConfiguration.DEFAULT;
+        INSTANCE.bufferConfiguration = BufferConfiguration.load();
+        INSTANCE.eventLoopConfiguration = EventLoopConfiguration.load();
+        INSTANCE.transportConfiguration = TransportConfiguration.load();
+        INSTANCE.eventStreamConfiguration = EventStreamConfiguration.load();
+        INSTANCE.healthCheckConfiguration = HealthCheckConfiguration.load();
     }
 
     public TransportConfiguration transportConfiguration() {

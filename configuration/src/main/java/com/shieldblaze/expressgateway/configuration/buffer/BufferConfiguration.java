@@ -17,23 +17,44 @@
  */
 package com.shieldblaze.expressgateway.configuration.buffer;
 
-import com.shieldblaze.expressgateway.common.utils.Number;
+import com.fasterxml.jackson.annotation.JsonProperty;
+import com.shieldblaze.expressgateway.common.utils.NumberUtil;
+import com.shieldblaze.expressgateway.configuration.ConfigurationMarshaller;
 import io.netty.buffer.PooledByteBufAllocator;
 import io.netty.util.internal.PlatformDependent;
+
+import java.io.IOException;
 
 /**
  * Configuration for {@link PooledByteBufAllocator}
  */
 public final class BufferConfiguration {
 
+    @JsonProperty("preferDirect")
     private boolean preferDirect;
+
+    @JsonProperty("heapArena")
     private int heapArena;
+
+    @JsonProperty("directArena")
     private int directArena;
+
+    @JsonProperty("pageSize")
     private int pageSize;
+
+    @JsonProperty("maxOrder")
     private int maxOrder;
+
+    @JsonProperty("smallCacheSize")
     private int smallCacheSize;
+
+    @JsonProperty("normalCacheSize")
     private int normalCacheSize;
+
+    @JsonProperty("useCacheForAllThreads")
     private boolean useCacheForAllThreads;
+
+    @JsonProperty("directMemoryCacheAlignment")
     private int directMemoryCacheAlignment;
 
     BufferConfiguration() {
@@ -72,7 +93,7 @@ public final class BufferConfiguration {
         return preferDirect;
     }
 
-    BufferConfiguration preferDirect(boolean preferDirect) {
+    BufferConfiguration setPreferDirect(boolean preferDirect) {
         this.preferDirect = preferDirect;
         return this;
     }
@@ -84,8 +105,8 @@ public final class BufferConfiguration {
         return heapArena;
     }
 
-    BufferConfiguration heapArena(int heapArena) {
-        Number.checkPositive(heapArena, "heapArena");
+    BufferConfiguration setHeapArena(int heapArena) {
+        NumberUtil.checkPositive(heapArena, "heapArena");
         this.heapArena = heapArena;
         return this;
     }
@@ -97,8 +118,8 @@ public final class BufferConfiguration {
         return directArena;
     }
 
-    BufferConfiguration directArena(int directArena) {
-        Number.checkPositive(directArena, "directArena");
+    BufferConfiguration setDirectArena(int directArena) {
+        NumberUtil.checkPositive(directArena, "directArena");
         this.directArena = directArena;
         return this;
     }
@@ -110,8 +131,8 @@ public final class BufferConfiguration {
         return pageSize;
     }
 
-    BufferConfiguration pageSize(int pageSize) {
-        Number.checkPositive(pageSize, "pageSize");
+    BufferConfiguration setPageSize(int pageSize) {
+        NumberUtil.checkPositive(pageSize, "pageSize");
         this.pageSize = pageSize;
         return this;
     }
@@ -123,8 +144,8 @@ public final class BufferConfiguration {
         return maxOrder;
     }
 
-    BufferConfiguration maxOrder(int maxOrder) {
-        Number.checkPositive(maxOrder, "maxOrder");
+    BufferConfiguration setMaxOrder(int maxOrder) {
+        NumberUtil.checkPositive(maxOrder, "maxOrder");
         this.maxOrder = maxOrder;
         return this;
     }
@@ -136,8 +157,8 @@ public final class BufferConfiguration {
         return smallCacheSize;
     }
 
-    BufferConfiguration smallCacheSize(int smallCacheSize) {
-        Number.checkPositive(smallCacheSize, "smallCacheSize");
+    BufferConfiguration setSmallCacheSize(int smallCacheSize) {
+        NumberUtil.checkPositive(smallCacheSize, "smallCacheSize");
         this.smallCacheSize = smallCacheSize;
         return this;
     }
@@ -150,7 +171,7 @@ public final class BufferConfiguration {
     }
 
     BufferConfiguration setNormalCacheSize(int normalCacheSize) {
-        Number.checkPositive(normalCacheSize, "normalCacheSize");
+        NumberUtil.checkPositive(normalCacheSize, "normalCacheSize");
         this.normalCacheSize = normalCacheSize;
         return this;
     }
@@ -162,7 +183,7 @@ public final class BufferConfiguration {
         return useCacheForAllThreads;
     }
 
-    BufferConfiguration useCacheForAllThreads(boolean useCacheForAllThreads) {
+    BufferConfiguration setUseCacheForAllThreads(boolean useCacheForAllThreads) {
         this.useCacheForAllThreads = useCacheForAllThreads;
         return this;
     }
@@ -174,24 +195,43 @@ public final class BufferConfiguration {
         return directMemoryCacheAlignment;
     }
 
-    BufferConfiguration directMemoryCacheAlignment(int directMemoryCacheAlignment) {
-        Number.checkZeroOrPositive(directMemoryCacheAlignment, "directMemoryCacheAlignment");
+    BufferConfiguration setDirectMemoryCacheAlignment(int directMemoryCacheAlignment) {
+        NumberUtil.checkZeroOrPositive(directMemoryCacheAlignment, "directMemoryCacheAlignment");
         this.directMemoryCacheAlignment = directMemoryCacheAlignment;
         return this;
     }
 
-    @Override
-    public String toString() {
-        return "BufferConfiguration{" +
-                "preferDirect=" + preferDirect +
-                ", heapArena=" + heapArena +
-                ", directArena=" + directArena +
-                ", pageSize=" + pageSize +
-                ", maxOrder=" + maxOrder +
-                ", smallCacheSize=" + smallCacheSize +
-                ", normalCacheSize=" + normalCacheSize +
-                ", useCacheForAllThreads=" + useCacheForAllThreads +
-                ", directMemoryCacheAlignment=" + directMemoryCacheAlignment +
-                '}';
+    public BufferConfiguration validate() {
+        NumberUtil.checkPositive(heapArena, "heapArena");
+        NumberUtil.checkPositive(directArena, "directArena");
+        NumberUtil.checkPositive(pageSize, "pageSize");
+        NumberUtil.checkPositive(maxOrder, "maxOrder");
+        NumberUtil.checkPositive(smallCacheSize, "smallCacheSize");
+        NumberUtil.checkPositive(normalCacheSize, "normalCacheSize");
+        NumberUtil.checkZeroOrPositive(directMemoryCacheAlignment, "directMemoryCacheAlignment");
+        return this;
+    }
+
+    /**
+     * Save this configuration to the file
+     *
+     * @throws IOException If an error occurs during saving
+     */
+    public void save() throws IOException {
+        ConfigurationMarshaller.save("BufferConfiguration.json", this);
+    }
+
+    /**
+     * Load a configuration
+     *
+     * @return {@link BufferConfiguration} Instance
+     */
+    public static BufferConfiguration load() {
+        try {
+            return ConfigurationMarshaller.load("BufferConfiguration.json", BufferConfiguration.class);
+        } catch (Exception ex) {
+            // Ignore
+        }
+        return DEFAULT;
     }
 }

@@ -17,13 +17,15 @@
  */
 package com.shieldblaze.expressgateway.backend.cluster;
 
+import com.google.gson.JsonArray;
+import com.google.gson.JsonObject;
 import com.shieldblaze.expressgateway.backend.Connection;
-import com.shieldblaze.expressgateway.backend.HealthCheckTemplate;
 import com.shieldblaze.expressgateway.backend.Node;
 import com.shieldblaze.expressgateway.backend.events.node.NodeAddedEvent;
 import com.shieldblaze.expressgateway.backend.events.node.NodeRemovedEvent;
 import com.shieldblaze.expressgateway.backend.exceptions.LoadBalanceException;
 import com.shieldblaze.expressgateway.backend.healthcheck.HealthCheckService;
+import com.shieldblaze.expressgateway.backend.healthcheck.HealthCheckTemplate;
 import com.shieldblaze.expressgateway.backend.loadbalance.LoadBalance;
 import com.shieldblaze.expressgateway.backend.loadbalance.Request;
 import com.shieldblaze.expressgateway.backend.loadbalance.Response;
@@ -39,8 +41,10 @@ import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
 
 import java.io.IOException;
+import java.net.InetAddress;
 import java.net.InetSocketAddress;
 import java.net.URI;
+import java.net.UnknownHostException;
 import java.time.Duration;
 import java.util.List;
 import java.util.concurrent.CopyOnWriteArrayList;
@@ -66,20 +70,19 @@ import java.util.concurrent.CopyOnWriteArrayList;
  * it is successfully built and started. Once attached, {@linkplain Node} can be added and all other
  * functionality can be performed seamlessly. </p>
  */
-public abstract class Cluster {
+public class Cluster extends ClusterOnlineNodesWorker {
 
     private static final Logger logger = LogManager.getLogger(Cluster.class);
 
     private final List<Node> nodes = new CopyOnWriteArrayList<>();
-    private final HealthCheckService healthCheckService = new HealthCheckService();
-
-    private boolean defaultEventStream = true;
     private EventStream eventStream = new EventStream();
     private LoadBalance<?, ?, ?, ?> loadBalance;
-    private HealthCheckTemplate healthCheckTemplate;
+    private HealthCheckService healthCheckService;
+    private HealthCheckTemplate template;
 
-    public Cluster(LoadBalance<?, ?, ?, ?> loadBalance) {
+    Cluster(LoadBalance<?, ?, ?, ?> loadBalance) {
         loadBalance(loadBalance);
+        this.eventStream.subscribe(this);
     }
 
     /**
@@ -89,16 +92,16 @@ public abstract class Cluster {
      */
     @InternalCall
     @NonNull
-    public boolean addNode(Node node) {
+    public boolean addNode(Node node) throws UnknownHostException {
         for (Node n : nodes) {
-            // If both SocketAddress are same then don't add and return false.
-            if (n.socketAddress() == node.socketAddress()) {
+            // If both Nodes are same then don't add and return false.
+            if (node.equals(n)) {
                 return false;
             }
         }
 
-        configureHealthCheck(node); // Add HealthCheck if required
-        nodes.add(node);   // Add this Node into the list
+        configureHealthCheckForNode(node); // Add HealthCheck if required
+        nodes.add(node);                   // Add this Node into the list
         eventStream.publish(new NodeAddedEvent(node)); // Publish NodeAddedEvent event
         return true;
     }
@@ -109,12 +112,12 @@ public abstract class Cluster {
      * @param node {@link Node} to be removed
      * @return {@link Boolean#TRUE} if removal was successful else {@link Boolean#FALSE}
      */
+    @InternalCall
     @NonNull
     public boolean removeNode(Node node) {
         boolean isFound = false;
         for (Node n : nodes) {
-            // If both SocketAddress are same then break the loop and remove the node
-            if (n.socketAddress() == node.socketAddress()) {
+            if (node.equals(n)) {
                 isFound = true;
                 break;
             }
@@ -124,17 +127,37 @@ public abstract class Cluster {
             return false;
         }
 
-        node.close();       // Close the Node
+        if (healthCheckService != null) {
+            healthCheckService.remove(node);
+        }
+
         nodes.remove(node); // Remove the Node from the list
         eventStream.publish(new NodeRemovedEvent(node)); // Publish NodeRemovedEvent event
         return true;
     }
 
     /**
+     * Get a {@link Node} using it's ID
+     *
+     * @param id {@link Node} ID
+     * @return {@link Node} Instance
+     * @throws NullPointerException If {@link Node} is not found
+     */
+    public Node get(String id) {
+        for (Node node : nodes) {
+            if (node.id().equalsIgnoreCase(id)) {
+                return node;
+            }
+        }
+
+        throw new NullPointerException("Node not found with ID: " + id);
+    }
+
+    /**
      * Get List of all {@link Node} associated with this {@linkplain Cluster}
      */
     public List<Node> nodes() {
-        return nodes;
+        return ONLINE_NODES;
     }
 
     /**
@@ -155,11 +178,16 @@ public abstract class Cluster {
      * @param eventStream {@link EventStream}
      * @throws IllegalStateException When Load Balancer is already set
      */
-    @InternalCall(1)
+    @InternalCall(index = 1)
     @NonNull
-    public void eventStream(EventStream eventStream) {
+    public void useMainEventStream(EventStream eventStream) {
+        EventStream oldEventStream = this.eventStream;
+
         eventStream.addSubscribersFrom(this.eventStream);
         this.eventStream = eventStream;
+
+        // Close the old EventStream
+        oldEventStream.close();
     }
 
     /**
@@ -172,70 +200,74 @@ public abstract class Cluster {
     @NonNull
     public void loadBalance(LoadBalance<?, ?, ?, ?> loadBalance) {
         try {
+            // If LoadBalance has changed then unsubscribe it
+            // from the old EventStream and close the LoadBalance.
             if (this.loadBalance != null) {
-                eventStream.unsubscribe(loadBalance);
+                this.eventStream.unsubscribe(loadBalance);
                 this.loadBalance.close();
             }
         } catch (IOException e) {
-            logger.error("Error while closing LoadBalance", e);
+            Error error = new Error(e);
+            logger.error("Error while closing LoadBalance", error);
+            throw error;
         }
 
         loadBalance.cluster(this);
-        this.loadBalance = loadBalance;     // Set the new Load Balance
-        eventStream.subscribe(loadBalance); // Subscribe to the EventStream
+        this.loadBalance = loadBalance;
+        this.eventStream.subscribe(loadBalance); // Subscribe this LoadBalance to the EventStream
+    }
+
+    public EventStream eventStream() {
+        return eventStream;
     }
 
     /**
      * Returns the {@link HealthCheckTemplate}
      */
     public HealthCheckTemplate healthCheckTemplate() {
-        return healthCheckTemplate;
+        return template;
     }
 
     @NonNull
-    public void configureHealthCheck(HealthCheckConfiguration healthCheckConfiguration, HealthCheckTemplate healthCheckTemplate) {
-        this.healthCheckTemplate = healthCheckTemplate;
-        healthCheckService.healthCheckConfiguration(healthCheckConfiguration);
+    void configureHealthCheck(HealthCheckConfiguration healthCheckConfiguration, HealthCheckTemplate healthCheckTemplate) {
+        this.healthCheckService = new HealthCheckService(healthCheckConfiguration, eventStream);
+        this.template = healthCheckTemplate;
     }
 
     @NonNull
-    private void configureHealthCheck(Node node) {
-        // If HealthCheckTemplate is null, then we'll return early because
-        // we can't perform HealthCheck task without it.
-        if (healthCheckTemplate == null) {
+    private void configureHealthCheckForNode(Node node) throws UnknownHostException {
+        if (healthCheckService == null) {
             return;
         }
 
-        HealthCheck healthCheck = null;
+        HealthCheck healthCheck;
+        switch (template.protocol()) {
+            case TCP:
+                healthCheck = new TCPHealthCheck(new InetSocketAddress(template.host(), template.port()), Duration.ofSeconds(template.timeout()), template.samples());
+                break;
+            case UDP:
+                healthCheck = new UDPHealthCheck(new InetSocketAddress(template.host(), template.port()), Duration.ofSeconds(template.timeout()), template.samples());
+                break;
+            case HTTP:
+            case HTTPS:
+                String host;
+                if (template.protocol() == HealthCheckTemplate.Protocol.HTTP) {
+                    host = "http://" + InetAddress.getByName(template.host()).getHostAddress() + ":" + healthCheckTemplate().port();
+                } else {
+                    host = "https://" + InetAddress.getByName(template.host()).getHostAddress() + ":" + healthCheckTemplate().port();
+                }
 
-        if (healthCheckTemplate.protocol() == HealthCheckTemplate.Protocol.TCP) {
-            healthCheck = new TCPHealthCheck(
-                    new InetSocketAddress(node.socketAddress().getAddress(), healthCheckTemplate.port()),
-                    Duration.ofSeconds(healthCheckTemplate.timeout()),
-                    healthCheckTemplate.samples()
-            );
-        } else if (healthCheckTemplate.protocol() == HealthCheckTemplate.Protocol.UDP) {
-            healthCheck = new UDPHealthCheck(
-                    new InetSocketAddress(node.socketAddress().getAddress(), healthCheckTemplate.port()),
-                    Duration.ofSeconds(healthCheckTemplate.timeout()),
-                    healthCheckTemplate.samples()
-            );
-        } else if (healthCheckTemplate.protocol() == HealthCheckTemplate.Protocol.HTTP || healthCheckTemplate.protocol() == HealthCheckTemplate.Protocol.HTTPS) {
-
-            String host;
-            if (healthCheckTemplate.protocol() == HealthCheckTemplate.Protocol.HTTP) {
-                host = "http://" + node.socketAddress().getAddress().getHostAddress() + ":" + healthCheckTemplate().port();
-            } else {
-                host = "https://" + node.socketAddress().getAddress().getHostAddress() + ":" + healthCheckTemplate().port();
-            }
-
-            healthCheck = new HTTPHealthCheck(URI.create(host), Duration.ofSeconds(healthCheckTemplate.timeout()), healthCheckTemplate.samples());
+                healthCheck = new HTTPHealthCheck(URI.create(host), Duration.ofSeconds(template.timeout()), template.samples());
+                break;
+            default:
+                Error error = new Error("Unknown HealthCheck Protocol: " + template.protocol());
+                logger.fatal(error);
+                throw error;
         }
 
-        // Associate HealthCheck with Node if HealthCheck Instance is not null.
-        if (healthCheck != null) {
-            node.healthCheck(healthCheck);
-        }
+        // Associate HealthCheck with Node
+        node.healthCheck(healthCheck);
+        healthCheckService.add(node);
     }
 
     /**
@@ -243,17 +275,33 @@ public abstract class Cluster {
      * <p>
      * This method is called by L4LoadBalancer when this Cluster is being unmapped.
      */
-    @InternalCall(3)
+    @InternalCall(index = 3)
     public void close() {
-        for (Node node : nodes) {
+        nodes.forEach(node -> {
             try {
                 node.close();
                 eventStream.publish(new NodeRemovedEvent(node));
             } catch (Exception ex) {
                 // Ignore
             }
+        });
+        nodes.clear();
+    }
+
+    /**
+     * Convert Cluster data into {@link JsonObject}
+     *
+     * @return {@link JsonObject} Instance
+     */
+    public JsonObject toJson() {
+        JsonObject jsonObject = new JsonObject();
+
+        JsonArray nodesArray = new JsonArray();
+        for (Node node : nodes) {
+            nodesArray.add(node.toJson());
         }
 
-        nodes.clear();
+        jsonObject.add("Nodes", nodesArray);
+        return jsonObject;
     }
 }

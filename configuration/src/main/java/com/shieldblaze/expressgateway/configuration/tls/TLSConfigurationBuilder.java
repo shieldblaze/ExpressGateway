@@ -17,10 +17,6 @@
  */
 package com.shieldblaze.expressgateway.configuration.tls;
 
-import com.shieldblaze.expressgateway.common.utils.Number;
-import io.netty.handler.ssl.SslContext;
-
-import javax.net.ssl.SSLException;
 import java.util.List;
 
 /**
@@ -29,8 +25,8 @@ import java.util.List;
 public final class TLSConfigurationBuilder {
     private final boolean forServer;
 
-    private List<Cipher> ciphers;
-    private List<Protocol> protocols;
+    private List<Cipher> ciphers = IntermediateCrypto.CIPHERS;
+    private List<Protocol> protocols = IntermediateCrypto.PROTOCOLS;
     private MutualTLS mutualTLS = MutualTLS.NOT_REQUIRED;
     private boolean useStartTLS;
     private int sessionTimeout;
@@ -125,19 +121,18 @@ public final class TLSConfigurationBuilder {
      * Build {@link TLSConfiguration}
      *
      * @return {@link TLSConfiguration} Instance
-     * @throws SSLException             If there is an error while building {@link SslContext}
      * @throws NullPointerException     If a required value if {@code null}
      * @throws IllegalArgumentException If a required value is invalid
      */
-    public TLSConfiguration build() throws SSLException {
+    public TLSConfiguration build() {
         return new TLSConfiguration()
-                .forServer(forServer)
-                .acceptAllCerts(acceptAllCerts)
-                .sessionCacheSize(Number.checkZeroOrPositive(sessionCacheSize, "Session Cache Size"))
-                .sessionTimeout(Number.checkZeroOrPositive(sessionTimeout, "Session Timeout"))
-                .protocols(protocols)
-                .useStartTLS(useStartTLS)
-                .mutualTLS(mutualTLS)
-                .ciphers(ciphers);
+                .setForServer(forServer)
+                .setAcceptAllCerts(acceptAllCerts)
+                .setSessionCacheSize(sessionCacheSize)
+                .setSessionTimeout(sessionTimeout)
+                .setProtocols(protocols)
+                .setUseStartTLS(useStartTLS)
+                .setMutualTLS(mutualTLS)
+                .setCiphers(ciphers);
     }
 }

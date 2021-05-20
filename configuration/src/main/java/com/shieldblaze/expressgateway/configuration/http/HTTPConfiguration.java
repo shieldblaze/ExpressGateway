@@ -17,24 +17,51 @@
  */
 package com.shieldblaze.expressgateway.configuration.http;
 
-import com.shieldblaze.expressgateway.common.utils.Number;
+import com.fasterxml.jackson.annotation.JsonProperty;
+import com.shieldblaze.expressgateway.common.utils.NumberUtil;
+import com.shieldblaze.expressgateway.configuration.ConfigurationMarshaller;
+
+import java.io.IOException;
 
 /**
  * Configuration for HTTP
  */
 public final class HTTPConfiguration {
 
+    @JsonProperty("maxContentLength")
     private long maxContentLength;
+
+    @JsonProperty("h2InitialWindowSize")
     private int h2InitialWindowSize;
+
+    @JsonProperty("h2MaxConcurrentStreams")
     private long h2MaxConcurrentStreams;
+
+    @JsonProperty("h2MaxHeaderListSize")
     private long h2MaxHeaderListSize;
+
+    @JsonProperty("h2MaxHeaderTableSize")
     private long h2MaxHeaderTableSize;
+
+    @JsonProperty("h2MaxFrameSize")
     private int h2MaxFrameSize;
+
+    @JsonProperty("maxInitialLineLength")
     private int maxInitialLineLength;
+
+    @JsonProperty("maxHeaderSize")
     private int maxHeaderSize;
+
+    @JsonProperty("maxChunkSize")
     private int maxChunkSize;
+
+    @JsonProperty("compressionThreshold")
     private int compressionThreshold;
+
+    @JsonProperty("deflateCompressionLevel")
     private int deflateCompressionLevel;
+
+    @JsonProperty("brotliCompressionLevel")
     private int brotliCompressionLevel;
 
     public static final HTTPConfiguration DEFAULT = new HTTPConfiguration();
@@ -62,8 +89,8 @@ public final class HTTPConfiguration {
         return maxContentLength;
     }
 
-    HTTPConfiguration maxContentLength(long maxContentLength) {
-        this.maxContentLength = Number.checkPositive(maxContentLength, "maxContentLength");
+    HTTPConfiguration setMaxContentLength(long maxContentLength) {
+        this.maxContentLength = NumberUtil.checkPositive(maxContentLength, "maxContentLength");
         return this;
     }
 
@@ -71,8 +98,8 @@ public final class HTTPConfiguration {
         return h2InitialWindowSize;
     }
 
-    HTTPConfiguration h2InitialWindowSize(int h2InitialWindowSize) {
-        this.h2InitialWindowSize = Number.checkPositive(h2InitialWindowSize, "h2InitialWindowSize");
+    HTTPConfiguration setH2InitialWindowSize(int h2InitialWindowSize) {
+        this.h2InitialWindowSize = NumberUtil.checkPositive(h2InitialWindowSize, "h2InitialWindowSize");
         return this;
     }
 
@@ -80,8 +107,8 @@ public final class HTTPConfiguration {
         return h2MaxConcurrentStreams;
     }
 
-    HTTPConfiguration h2MaxConcurrentStreams(long h2MaxConcurrentStreams) {
-        this.h2MaxConcurrentStreams = Number.checkPositive(h2MaxConcurrentStreams, "h2MaxConcurrentStreams");
+    HTTPConfiguration setH2MaxConcurrentStreams(long h2MaxConcurrentStreams) {
+        this.h2MaxConcurrentStreams = NumberUtil.checkPositive(h2MaxConcurrentStreams, "h2MaxConcurrentStreams");
         return this;
     }
 
@@ -89,8 +116,8 @@ public final class HTTPConfiguration {
         return h2MaxHeaderListSize;
     }
 
-    HTTPConfiguration h2MaxHeaderListSize(long h2MaxHeaderSizeList) {
-        this.h2MaxHeaderListSize = Number.checkPositive(h2MaxHeaderSizeList, "h2MaxHeaderListSize");
+    HTTPConfiguration setH2MaxHeaderListSize(long h2MaxHeaderSizeList) {
+        this.h2MaxHeaderListSize = NumberUtil.checkPositive(h2MaxHeaderSizeList, "h2MaxHeaderListSize");
         return this;
     }
 
@@ -98,8 +125,8 @@ public final class HTTPConfiguration {
         return h2MaxHeaderTableSize;
     }
 
-    HTTPConfiguration h2MaxHeaderTableSize(long h2MaxHeaderTableSize) {
-        this.h2MaxHeaderTableSize = Number.checkPositive(h2MaxHeaderTableSize, "h2MaxHeaderTableSize");
+    HTTPConfiguration setH2MaxHeaderTableSize(long h2MaxHeaderTableSize) {
+        this.h2MaxHeaderTableSize = NumberUtil.checkPositive(h2MaxHeaderTableSize, "h2MaxHeaderTableSize");
         return this;
     }
 
@@ -107,8 +134,8 @@ public final class HTTPConfiguration {
         return h2MaxFrameSize;
     }
 
-    HTTPConfiguration h2MaxFrameSize(int h2MaxFrameSize) {
-        this.h2MaxFrameSize = Number.checkPositive(h2MaxFrameSize, "h2MaxFrameSize");
+    HTTPConfiguration setH2MaxFrameSize(int h2MaxFrameSize) {
+        this.h2MaxFrameSize = NumberUtil.checkPositive(h2MaxFrameSize, "h2MaxFrameSize");
         return this;
     }
 
@@ -116,8 +143,8 @@ public final class HTTPConfiguration {
         return maxInitialLineLength;
     }
 
-    HTTPConfiguration maxInitialLineLength(int maxInitialLineLength) {
-        this.maxInitialLineLength = Number.checkPositive(maxInitialLineLength, "maxInitialLineLength");
+    HTTPConfiguration setMaxInitialLineLength(int maxInitialLineLength) {
+        this.maxInitialLineLength = NumberUtil.checkPositive(maxInitialLineLength, "maxInitialLineLength");
         return this;
     }
 
@@ -125,8 +152,8 @@ public final class HTTPConfiguration {
         return maxHeaderSize;
     }
 
-    HTTPConfiguration maxHeaderSize(int maxHeaderSize) {
-        this.maxHeaderSize = Number.checkPositive(maxHeaderSize, "maxHeaderSize");
+    HTTPConfiguration setMaxHeaderSize(int maxHeaderSize) {
+        this.maxHeaderSize = NumberUtil.checkPositive(maxHeaderSize, "maxHeaderSize");
         return this;
     }
 
@@ -134,8 +161,8 @@ public final class HTTPConfiguration {
         return maxChunkSize;
     }
 
-    HTTPConfiguration maxChunkSize(int maxChunkSize) {
-        this.maxChunkSize = Number.checkPositive(maxChunkSize, "maxChunkSize");
+    HTTPConfiguration setMaxChunkSize(int maxChunkSize) {
+        this.maxChunkSize = NumberUtil.checkPositive(maxChunkSize, "maxChunkSize");
         return this;
     }
 
@@ -143,8 +170,8 @@ public final class HTTPConfiguration {
         return compressionThreshold;
     }
 
-    HTTPConfiguration compressionThreshold(int compressionThreshold) {
-        this.compressionThreshold = Number.checkZeroOrPositive(compressionThreshold, "compressionThreshold");
+    HTTPConfiguration setCompressionThreshold(int compressionThreshold) {
+        this.compressionThreshold = NumberUtil.checkZeroOrPositive(compressionThreshold, "compressionThreshold");
         return this;
     }
 
@@ -152,8 +179,8 @@ public final class HTTPConfiguration {
         return deflateCompressionLevel;
     }
 
-    HTTPConfiguration deflateCompressionLevel(int deflateCompressionLevel) {
-        this.deflateCompressionLevel = Number.checkRange(deflateCompressionLevel, 0, 9, "deflateCompressionLevel");
+    HTTPConfiguration setDeflateCompressionLevel(int deflateCompressionLevel) {
+        this.deflateCompressionLevel = NumberUtil.checkRange(deflateCompressionLevel, 0, 9, "deflateCompressionLevel");
         return this;
     }
 
@@ -161,8 +188,47 @@ public final class HTTPConfiguration {
         return brotliCompressionLevel;
     }
 
-    HTTPConfiguration brotliCompressionLevel(int brotliCompressionLevel) {
-        this.brotliCompressionLevel = Number.checkRange(brotliCompressionLevel, 1, 11, "brotliCompressionLevel");
+    HTTPConfiguration setBrotliCompressionLevel(int brotliCompressionLevel) {
+        this.brotliCompressionLevel = NumberUtil.checkRange(brotliCompressionLevel, 1, 11, "brotliCompressionLevel");
         return this;
+    }
+
+    public HTTPConfiguration validate() {
+        NumberUtil.checkPositive(maxContentLength, "maxContentLength");
+        NumberUtil.checkPositive(h2InitialWindowSize, "h2InitialWindowSize");
+        NumberUtil.checkPositive(h2MaxConcurrentStreams, "h2MaxConcurrentStreams");
+        NumberUtil.checkPositive(h2MaxHeaderListSize, "h2MaxHeaderListSize");
+        NumberUtil.checkPositive(h2MaxHeaderTableSize, "h2MaxHeaderTableSize");
+        NumberUtil.checkPositive(h2MaxFrameSize, "h2MaxFrameSize");
+        NumberUtil.checkPositive(maxInitialLineLength, "maxInitialLineLength");
+        NumberUtil.checkPositive(maxHeaderSize, "maxHeaderSize");
+        NumberUtil.checkPositive(maxChunkSize, "maxChunkSize");
+        NumberUtil.checkZeroOrPositive(compressionThreshold, "compressionThreshold");
+        NumberUtil.checkRange(deflateCompressionLevel, 0, 9, "deflateCompressionLevel");
+        NumberUtil.checkRange(brotliCompressionLevel, 1, 11, "brotliCompressionLevel");
+        return this;
+    }
+
+    /**
+     * Save this configuration to the file
+     *
+     * @throws IOException If an error occurs during saving
+     */
+    public void save() throws IOException {
+        ConfigurationMarshaller.save("HTTPConfiguration.json", this);
+    }
+
+    /**
+     * Load a configuration
+     *
+     * @return {@link HTTPConfiguration} Instance
+     */
+    public static HTTPConfiguration load() {
+        try {
+            return ConfigurationMarshaller.load("HTTPConfiguration.json", HTTPConfiguration.class);
+        } catch (Exception ex) {
+            // Ignore
+        }
+        return DEFAULT;
     }
 }

@@ -22,10 +22,7 @@ import com.shieldblaze.expressgateway.common.utils.ReferenceCounted;
 import com.shieldblaze.expressgateway.protocol.http.loadbalancer.HTTPLoadBalancer;
 import io.netty.channel.ChannelHandlerContext;
 import io.netty.channel.ChannelInboundHandlerAdapter;
-import io.netty.handler.codec.http.websocketx.TextWebSocketFrame;
 import io.netty.handler.codec.http.websocketx.WebSocketFrame;
-
-import java.net.URI;
 
 public final class WebSocketUpstreamHandler extends ChannelInboundHandlerAdapter {
 

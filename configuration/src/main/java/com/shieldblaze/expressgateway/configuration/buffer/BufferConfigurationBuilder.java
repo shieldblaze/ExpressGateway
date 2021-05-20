@@ -17,8 +17,6 @@
  */
 package com.shieldblaze.expressgateway.configuration.buffer;
 
-import com.shieldblaze.expressgateway.common.utils.Number;
-
 /**
  * Configuration Builder for {@link BufferConfiguration}
  */
@@ -124,14 +122,14 @@ public final class BufferConfigurationBuilder {
      */
     public BufferConfiguration build() {
         return new BufferConfiguration()
-                .preferDirect(preferDirect)
-                .heapArena(heapArena)
-                .directArena(directArena)
-                .pageSize(pageSize)
-                .maxOrder(maxOrder)
-                .smallCacheSize(smallCacheSize)
+                .setPreferDirect(preferDirect)
+                .setHeapArena(heapArena)
+                .setDirectArena(directArena)
+                .setPageSize(pageSize)
+                .setMaxOrder(maxOrder)
+                .setSmallCacheSize(smallCacheSize)
                 .setNormalCacheSize(normalCacheSize)
-                .useCacheForAllThreads(useCacheForAllThreads)
-                .directMemoryCacheAlignment(directMemoryCacheAlignment);
+                .setUseCacheForAllThreads(useCacheForAllThreads)
+                .setDirectMemoryCacheAlignment(directMemoryCacheAlignment);
     }
 }

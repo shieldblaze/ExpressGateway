@@ -29,17 +29,17 @@ public interface Event<T> {
     /**
      * Set to {@code true} if the event has finished else set to {@code false}.
      */
-    boolean hasFinished();
+    boolean isFinished();
 
     /**
      * Set to {@code true} if the event has finished and operation was successful else
      * set to {@code false}.
      */
-    boolean isSuccessful();
+    boolean isSuccess();
 
     /**
      * Returns {@link Throwable} of the event which has finished and operation was not successful
      * due to some error.
      */
-    Throwable throwable();
+    Throwable cause();
 }

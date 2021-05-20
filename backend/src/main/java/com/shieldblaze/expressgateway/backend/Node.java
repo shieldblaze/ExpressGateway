@@ -17,17 +17,21 @@
  */
 package com.shieldblaze.expressgateway.backend;
 
+import com.google.gson.JsonObject;
 import com.shieldblaze.expressgateway.backend.cluster.Cluster;
+import com.shieldblaze.expressgateway.backend.events.node.NodeOfflineEvent;
+import com.shieldblaze.expressgateway.backend.events.node.NodeOnlineEvent;
 import com.shieldblaze.expressgateway.backend.exceptions.TooManyConnectionsException;
 import com.shieldblaze.expressgateway.common.Math;
 import com.shieldblaze.expressgateway.common.annotation.InternalCall;
 import com.shieldblaze.expressgateway.common.annotation.NonNull;
-import com.shieldblaze.expressgateway.common.utils.Number;
+import com.shieldblaze.expressgateway.common.utils.NumberUtil;
 import com.shieldblaze.expressgateway.healthcheck.Health;
 import com.shieldblaze.expressgateway.healthcheck.HealthCheck;
 
 import java.io.Closeable;
 import java.net.InetSocketAddress;
+import java.net.UnknownHostException;
 import java.util.Queue;
 import java.util.UUID;
 import java.util.concurrent.ConcurrentLinkedQueue;
@@ -36,6 +40,8 @@ import java.util.concurrent.atomic.AtomicLong;
 
 /**
  * <p> {@link Node} is the server where all requests are sent. </p>
+ *
+ * Use {@link NodeBuilder} to build {@link Node} Instance.
  */
 public final class Node implements Comparable<Node>, Closeable {
 
@@ -98,13 +104,18 @@ public final class Node implements Comparable<Node>, Closeable {
     private int maxConnections = 10_000;
 
     /**
+     * See {@link #addedToCluster()}
+     */
+    private final boolean addedToCluster;
+
+    /**
      * Create a new Instance
      */
     @NonNull
-    public Node(Cluster cluster, InetSocketAddress socketAddress) {
+    Node(Cluster cluster, InetSocketAddress socketAddress) throws UnknownHostException {
         this.socketAddress = socketAddress;
         this.cluster = cluster;
-        this.cluster.addNode(this);
+        addedToCluster = this.cluster.addNode(this);
 
         state(State.ONLINE);
     }
@@ -141,7 +152,7 @@ public final class Node implements Comparable<Node>, Closeable {
      *
      * @param bytes Number of bytes to increment
      */
-    public void incBytesSent(int bytes) {
+    void incBytesSent(int bytes) {
         bytesSent.addAndGet(bytes);
     }
 
@@ -150,7 +161,7 @@ public final class Node implements Comparable<Node>, Closeable {
      *
      * @param bytes Number of bytes to increment
      */
-    public void incBytesReceived(int bytes) {
+    void incBytesReceived(int bytes) {
         bytesReceived.addAndGet(bytes);
     }
 
@@ -244,7 +255,15 @@ public final class Node implements Comparable<Node>, Closeable {
      * <p> Setting value to -1 will allow unlimited amount of connections. </p>
      */
     public void maxConnections(int maxConnections) {
-        this.maxConnections = Number.checkRange(maxConnections, -1, Integer.MAX_VALUE, "MaxConnections");
+        this.maxConnections = NumberUtil.checkRange(maxConnections, -1, Integer.MAX_VALUE, "MaxConnections");
+    }
+
+    /**
+     * Returns {@code true} if this {@link Node} has been successfully added
+     * to a {@link Cluster} else {@code false}.
+     */
+    public boolean addedToCluster() {
+        return addedToCluster;
     }
 
     public String id() {
@@ -264,14 +283,36 @@ public final class Node implements Comparable<Node>, Closeable {
     }
 
     /**
+     * Mark this {@link Node} as manually offline.
+     */
+    public boolean markManualOffline() {
+        if (state != State.MANUAL_OFFLINE) {
+            state(State.MANUAL_OFFLINE);
+            cluster.eventStream().publish(new NodeOfflineEvent(this));
+            return true;
+        }
+        return false;
+    }
+
+    /**
+     * Mark this {@link Node} as Online from {@link #markManualOffline()}
+     */
+    public void unmarkManualOffline() {
+        state(State.ONLINE);
+        cluster.eventStream().publish(new NodeOnlineEvent(this));
+    }
+
+    /**
      * Add a {@link Connection} with this {@linkplain Node}
      */
-    public void addConnection(Connection connection) throws TooManyConnectionsException {
+    public void addConnection(Connection connection) throws TooManyConnectionsException, IllegalStateException {
         // If Maximum Connection is not -1 and Number of Active connections is greater than
         // Maximum number of connections then close the connection and throw an exception.
         if (connectionFull()) {
             connection.close();
             throw new TooManyConnectionsException(this);
+        } else if (state != State.ONLINE) {
+            throw new IllegalStateException("Node is not online");
         }
         activeConnections.add(connection);
     }
@@ -298,6 +339,7 @@ public final class Node implements Comparable<Node>, Closeable {
      * Release a connection and add it into available active connection pool.
      */
     public void release0(Connection connection) {
+        // Don't add duplicate connection
         if (!availableConnections.contains(connection)) {
             availableConnections.add(connection);
         }
@@ -307,10 +349,20 @@ public final class Node implements Comparable<Node>, Closeable {
      * Returns {@code true} if connections has reached maximum limit else {@code false}.
      */
     public boolean connectionFull() {
+        // -1 means unlimited connections.
         if (maxConnections == -1) {
             return false;
         }
         return activeConnection() >= maxConnections;
+    }
+
+    /**
+     * Drain all active connection
+     */
+    public void drainConnections() {
+        activeConnections.forEach(Connection::close);
+        activeConnections.clear();
+        availableConnections.clear();
     }
 
     @Override
@@ -320,9 +372,9 @@ public final class Node implements Comparable<Node>, Closeable {
                 ", Address=" + socketAddress +
                 ", BytesSent=" + bytesSent +
                 ", BytesReceived=" + bytesReceived +
-                ", Connections=" + activeConnections.size() + "/" + maxConnections +
+                ", Connections=" + activeConnection() + "/" + maxConnections() +
                 ", state=" + state +
-                ", healthCheck=" + healthCheck +
+                ", health=" + health() +
                 '}';
     }
 
@@ -340,7 +392,7 @@ public final class Node implements Comparable<Node>, Closeable {
     public boolean equals(Object obj) {
         if (obj instanceof Node) {
             Node node = (Node) obj;
-            return ID.equalsIgnoreCase(node.ID);
+            return socketAddress == node.socketAddress;
         }
         return false;
     }
@@ -351,12 +403,27 @@ public final class Node implements Comparable<Node>, Closeable {
      * <p> This method is called by {@link Cluster#removeNode(Node)} when this {@link Node}
      * is being removed from the cluster. </p>
      */
-    @InternalCall
     @Override
     public void close() {
         state(State.OFFLINE);
-        activeConnections.forEach(Connection::close);
-        activeConnections.clear();
-        availableConnections.clear();
+        drainConnections();
+        cluster.removeNode(this);
+    }
+
+    /**
+     * Convert Node data into {@link JsonObject}
+     * @return {@link JsonObject} Instance
+     */
+    public JsonObject toJson() {
+        JsonObject jsonObject = new JsonObject();
+        jsonObject.addProperty("ID", id());
+        jsonObject.addProperty("SocketAddress", socketAddress.toString());
+        jsonObject.addProperty("Connections", activeConnection() + "/" + maxConnections());
+        jsonObject.addProperty("BytesSent", bytesSent);
+        jsonObject.addProperty("BytesReceived", bytesReceived);
+        jsonObject.addProperty("State", state.toString());
+        jsonObject.addProperty("Health", health().toString());
+        jsonObject.addProperty("AddedToCluster", addedToCluster);
+        return jsonObject;
     }
 }

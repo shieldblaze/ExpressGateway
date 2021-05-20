@@ -87,7 +87,7 @@ public final class GlobalExecutors {
         return SCHEDULED_EXECUTOR_SERVICE.scheduleWithFixedDelay(runnable, initialDelay, period, timeUnit);
     }
 
-    public ExecutorService getExecutorService() {
+    public ExecutorService executorService() {
         return EXECUTOR_SERVICE;
     }
 
