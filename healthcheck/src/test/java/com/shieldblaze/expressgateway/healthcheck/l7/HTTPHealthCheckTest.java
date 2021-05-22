@@ -33,7 +33,7 @@ final class HTTPHealthCheckTest {
 
         Thread.sleep(1000L);
 
-        HTTPHealthCheck httpHealthCheck = new HTTPHealthCheck(URI.create("http://127.0.0.1:10000"), Duration.ofSeconds(5), false);
+        HTTPHealthCheck httpHealthCheck = new HTTPHealthCheck(URI.create("http://127.0.0.1:10000"), Duration.ofSeconds(5), 100);
         httpHealthCheck.run();
 
         assertEquals(Health.GOOD, httpHealthCheck.health());
@@ -45,7 +45,7 @@ final class HTTPHealthCheckTest {
 
         Thread.sleep(1000L);
 
-        HTTPHealthCheck httpHealthCheck = new HTTPHealthCheck(URI.create("http://127.0.0.1:10001"), Duration.ofSeconds(5), false);
+        HTTPHealthCheck httpHealthCheck = new HTTPHealthCheck(URI.create("http://127.0.0.1:10001"), Duration.ofSeconds(5), 100);
         httpHealthCheck.run();
 
         assertEquals(Health.BAD, httpHealthCheck.health());
