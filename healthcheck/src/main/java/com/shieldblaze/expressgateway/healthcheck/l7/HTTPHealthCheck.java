@@ -18,14 +18,19 @@
 package com.shieldblaze.expressgateway.healthcheck.l7;
 
 import com.shieldblaze.expressgateway.healthcheck.HealthCheck;
+import io.netty.handler.ssl.util.InsecureTrustManagerFactory;
 import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
 
+import javax.net.ssl.SSLContext;
 import java.net.InetSocketAddress;
 import java.net.URI;
 import java.net.http.HttpClient;
 import java.net.http.HttpRequest;
 import java.net.http.HttpResponse;
+import java.security.KeyManagementException;
+import java.security.NoSuchAlgorithmException;
+import java.security.SecureRandom;
 import java.time.Duration;
 
 /**
@@ -47,15 +52,24 @@ public final class HTTPHealthCheck extends HealthCheck {
     private final HttpClient httpClient;
     private final URI uri;
 
-    public HTTPHealthCheck(URI uri, Duration timeout, boolean enableTLSValidation) {
-        this(uri, timeout, 100);
-    }
-
     public HTTPHealthCheck(URI uri, Duration timeout, int samples) {
         super(new InetSocketAddress(uri.getHost(), uri.getPort()), timeout, samples);
         this.uri = uri;
 
-        httpClient = HttpClient.newBuilder().followRedirects(HttpClient.Redirect.ALWAYS)
+        final SSLContext sslContext;
+        try {
+            sslContext = SSLContext.getInstance("TLSv1.3");
+            sslContext.init(null, InsecureTrustManagerFactory.INSTANCE.getTrustManagers(), new SecureRandom());
+        } catch (NoSuchAlgorithmException | KeyManagementException e) {
+            // This should never happen
+            Error error = new Error(e);
+            logger.fatal(error);
+            throw error;
+        }
+
+        httpClient = HttpClient.newBuilder()
+                .followRedirects(HttpClient.Redirect.ALWAYS)
+                .sslContext(sslContext)
                 .connectTimeout(timeout)
                 .build();
     }
