@@ -15,15 +15,20 @@
  * You should have received a copy of the GNU General Public License
  * along with ShieldBlaze ExpressGateway.  If not, see <https://www.gnu.org/licenses/>.
  */
-package com.shieldblaze.expressgateway.common;
+package com.shieldblaze.expressgateway.metrics;
 
-public final class Math {
+import com.sun.management.OperatingSystemMXBean;
 
-    public static float percentage(int current, int maximum) {
-        return current * 100f / maximum;
-    }
+import java.lang.management.ManagementFactory;
 
-    public static float percentage(long current, long maximum) {
-        return current * 100f / maximum;
+/**
+ * System CPU Load
+ */
+public final class CPU {
+
+    private static final OperatingSystemMXBean OS_BEAN = ManagementFactory.getPlatformMXBean(OperatingSystemMXBean.class);
+
+    public double cpu() {
+        return OS_BEAN.getSystemCpuLoad();
     }
 }
