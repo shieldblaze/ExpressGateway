@@ -62,13 +62,13 @@ along with ShieldBlaze ExpressGateway.  If not, see <https://www.gnu.org/license
         <module>configuration</module>
         <module>core</module>
         <module>healthcheck</module>
+        <module>metrics</module>
         <module>protocol-http</module>
         <module>protocol-tcp</module>
         <module>protocol-udp</module>
         <module>rest-api</module>
         <module>security</module>
         <module>shaded-dependencies</module>
-        <module>metrics</module>
     </modules>
 
     <repositories>
