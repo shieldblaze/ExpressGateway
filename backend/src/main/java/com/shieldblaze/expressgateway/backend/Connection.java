@@ -18,7 +18,7 @@
 package com.shieldblaze.expressgateway.backend;
 
 import com.shieldblaze.expressgateway.common.annotation.NonNull;
-import com.shieldblaze.expressgateway.common.utils.ReferenceCounted;
+import com.shieldblaze.expressgateway.common.utils.ReferenceCountedUtil;
 import io.netty.channel.Channel;
 import io.netty.channel.ChannelFuture;
 import io.netty.channel.ConnectTimeoutException;
@@ -130,7 +130,7 @@ public abstract class Connection {
      * Clear the Backlog and release all objects.
      */
     protected void clearBacklog() {
-        backlogQueue.forEach(ReferenceCounted::silentRelease);
+        backlogQueue.forEach(ReferenceCountedUtil::silentRelease);
         backlogQueue.clear();
     }
 
@@ -146,7 +146,7 @@ public abstract class Connection {
         } else if (state == State.CONNECTED_AND_ACTIVE) {
             channel.writeAndFlush(o, channel.voidPromise());
         } else {
-            ReferenceCounted.silentRelease(o);
+            ReferenceCountedUtil.silentRelease(o);
         }
     }
 

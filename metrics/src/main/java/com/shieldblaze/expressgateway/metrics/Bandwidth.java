@@ -31,8 +31,8 @@ public final class Bandwidth extends Thread implements Closeable {
 
     private static final Logger logger = LogManager.getLogger(Bandwidth.class);
 
-    private int RX;
-    private int TX;
+    private long RX;
+    private long TX;
     private boolean stop;
     private final Path rx;
     private final Path tx;
@@ -43,6 +43,7 @@ public final class Bandwidth extends Thread implements Closeable {
         tx = Path.of("/sys/class/net/" + ifName + "/statistics/tx_bytes");
     }
 
+    @SuppressWarnings("BusyWait")
     @Override
     public void run() {
         while (!stop) {
@@ -55,19 +56,19 @@ public final class Bandwidth extends Thread implements Closeable {
                 long rx_new = Long.parseLong(Files.readString(rx).trim());
                 long tx_new = Long.parseLong(Files.readString(tx).trim());
 
-                RX  = (int) (rx_new - rx_old);
-                TX = (int) (tx_new - tx_old);
+                RX  = rx_new - rx_old;
+                TX =  tx_new - tx_old;
             } catch (Exception ex) {
                 logger.error(ex);
             }
         }
     }
 
-    public int rx() {
+    public long rx() {
         return RX;
     }
 
-    public int tx() {
+    public long tx() {
         return TX;
     }
 

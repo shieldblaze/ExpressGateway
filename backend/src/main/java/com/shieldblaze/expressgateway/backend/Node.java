@@ -22,8 +22,7 @@ import com.shieldblaze.expressgateway.backend.cluster.Cluster;
 import com.shieldblaze.expressgateway.backend.events.node.NodeOfflineEvent;
 import com.shieldblaze.expressgateway.backend.events.node.NodeOnlineEvent;
 import com.shieldblaze.expressgateway.backend.exceptions.TooManyConnectionsException;
-import com.shieldblaze.expressgateway.common.Math;
-import com.shieldblaze.expressgateway.common.annotation.InternalCall;
+import com.shieldblaze.expressgateway.common.utils.MathUtil;
 import com.shieldblaze.expressgateway.common.annotation.NonNull;
 import com.shieldblaze.expressgateway.common.utils.NumberUtil;
 import com.shieldblaze.expressgateway.healthcheck.Health;
@@ -279,7 +278,7 @@ public final class Node implements Comparable<Node>, Closeable {
         if (activeConnection() == 0 || maxConnections == -1) {
             return 0;
         }
-        return Math.percentage(activeConnection(), maxConnections);
+        return MathUtil.percentage(activeConnection(), maxConnections);
     }
 
     /**

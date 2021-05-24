@@ -15,26 +15,10 @@
  * You should have received a copy of the GNU General Public License
  * along with ShieldBlaze ExpressGateway.  If not, see <https://www.gnu.org/licenses/>.
  */
-package com.shieldblaze.expressgateway.common;
+package com.shieldblaze.expressgateway.autoscaling.event;
 
-import com.google.gson.Gson;
-import com.google.gson.GsonBuilder;
+import com.shieldblaze.expressgateway.concurrent.event.DefaultEvent;
 
-/**
- * {@link Gson} Instance
- */
-public final class GSON {
-
-    private GSON() {
-        // Prevent outside initialization
-    }
-
-    /**
-     * {@link Gson} Singleton Instance
-     */
-    public static final Gson INSTANCE = new GsonBuilder()
-            .excludeFieldsWithoutExposeAnnotation()
-            .disableHtmlEscaping()
-            .setPrettyPrinting()
-            .create();
+public class AutoscalingScaleUpEvent extends DefaultEvent<Void> {
+    // Empty
 }

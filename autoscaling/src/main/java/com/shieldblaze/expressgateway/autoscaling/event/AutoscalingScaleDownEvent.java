@@ -15,15 +15,10 @@
  * You should have received a copy of the GNU General Public License
  * along with ShieldBlaze ExpressGateway.  If not, see <https://www.gnu.org/licenses/>.
  */
-package com.shieldblaze.expressgateway.common;
+package com.shieldblaze.expressgateway.autoscaling.event;
 
-public final class Math {
+import com.shieldblaze.expressgateway.concurrent.event.DefaultEvent;
 
-    public static float percentage(int current, int maximum) {
-        return current * 100f / maximum;
-    }
-
-    public static float percentage(long current, long maximum) {
-        return current * 100f / maximum;
-    }
+public class AutoscalingScaleDownEvent extends DefaultEvent<Void> {
+    // Empty
 }

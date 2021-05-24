@@ -17,18 +17,13 @@
  */
 package com.shieldblaze.expressgateway.common.utils;
 
-import io.netty.util.internal.SystemPropertyUtil;
+public final class MathUtil {
 
-import java.io.File;
-
-public final class Profile {
-
-    private Profile() {
-        // Prevent outside initialization
+    public static float percentage(int current, int maximum) {
+        return current * 100f / maximum;
     }
 
-    public static String ensure() {
-        File file = new File(SystemPropertyUtil.get("EGWConfDir", System.getProperty("user.dir")));
-        return file.getAbsolutePath() + "/";
+    public static float percentage(long current, long maximum) {
+        return current * 100f / maximum;
     }
 }

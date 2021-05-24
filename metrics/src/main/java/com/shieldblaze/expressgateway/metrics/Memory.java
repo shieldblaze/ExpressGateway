@@ -40,7 +40,7 @@
  */
 package com.shieldblaze.expressgateway.metrics;
 
-import com.shieldblaze.expressgateway.common.Math;
+import com.shieldblaze.expressgateway.common.utils.MathUtil;
 
 import java.io.BufferedReader;
 import java.io.FileReader;
@@ -175,11 +175,11 @@ public final class Memory {
         }
 
         public float physicalMemoryUsed() {
-            return Math.percentage(availablePhysicalMemory, totalPhysicalMemory);
+            return MathUtil.percentage(availablePhysicalMemory, totalPhysicalMemory);
         }
 
         public float swapSpaceUsed() {
-            return Math.percentage(availableSwapSpace, totalSwapSpace);
+            return MathUtil.percentage(availableSwapSpace, totalSwapSpace);
         }
 
         private static long toMB(long l) {

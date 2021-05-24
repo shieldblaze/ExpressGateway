@@ -18,7 +18,7 @@
 package com.shieldblaze.expressgateway.protocol.http.websocket;
 
 import com.shieldblaze.expressgateway.backend.Node;
-import com.shieldblaze.expressgateway.common.utils.ReferenceCounted;
+import com.shieldblaze.expressgateway.common.utils.ReferenceCountedUtil;
 import com.shieldblaze.expressgateway.protocol.http.loadbalancer.HTTPLoadBalancer;
 import io.netty.channel.ChannelHandlerContext;
 import io.netty.channel.ChannelInboundHandlerAdapter;
@@ -50,7 +50,7 @@ public final class WebSocketUpstreamHandler extends ChannelInboundHandlerAdapter
         if (msg instanceof WebSocketFrame) {
             connection.writeAndFlush(msg);
         } else {
-            ReferenceCounted.silentRelease(msg);
+            ReferenceCountedUtil.silentRelease(msg);
         }
     }
 

@@ -25,19 +25,19 @@ import java.util.concurrent.CompletableFuture;
 public class DefaultEvent<T> implements Event<T> {
 
     private CompletableFuture<T> future = new CompletableFuture<>();
-    private boolean hasFinished;
+    private boolean isFinished;
     private boolean isSuccessful;
     private Throwable throwable;
 
     public void trySuccess(T object) {
-        hasFinished(true);
+        isFinished(true);
         isSuccessful(true);
         throwable(null);
         future.complete(object);
     }
 
     public void tryFailure(Throwable cause) {
-        hasFinished(true);
+        isFinished(true);
         isSuccessful(false);
         throwable(cause);
         future.completeExceptionally(cause);
@@ -47,8 +47,8 @@ public class DefaultEvent<T> implements Event<T> {
         this.future = future;
     }
 
-    public void hasFinished(boolean finished) {
-        this.hasFinished = finished;
+    public void isFinished(boolean finished) {
+        this.isFinished = finished;
     }
 
     public void isSuccessful(boolean success) {
@@ -66,7 +66,7 @@ public class DefaultEvent<T> implements Event<T> {
 
     @Override
     public boolean isFinished() {
-        return hasFinished;
+        return isFinished;
     }
 
     @Override

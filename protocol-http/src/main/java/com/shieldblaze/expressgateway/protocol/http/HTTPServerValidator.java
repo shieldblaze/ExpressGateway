@@ -17,7 +17,7 @@
  */
 package com.shieldblaze.expressgateway.protocol.http;
 
-import com.shieldblaze.expressgateway.common.utils.ReferenceCounted;
+import com.shieldblaze.expressgateway.common.utils.ReferenceCountedUtil;
 import com.shieldblaze.expressgateway.configuration.http.HTTPConfiguration;
 import io.netty.channel.ChannelFutureListener;
 import io.netty.channel.ChannelHandlerContext;
@@ -67,13 +67,13 @@ final class HTTPServerValidator extends ChannelInboundHandlerAdapter {
 
             if (getContentLength(request, -1L) > maxContentLength) {
                 ctx.writeAndFlush(HTTPResponses.TOO_LARGE_413.retainedDuplicate()).addListener(ChannelFutureListener.CLOSE);
-                ReferenceCounted.silentRelease(msg);
+                ReferenceCountedUtil.silentRelease(msg);
                 return;
             }
 
             if (isUnsupportedExpectation(request)) {
                 ctx.writeAndFlush(HTTPResponses.TOO_LARGE_413.retainedDuplicate()).addListener(ChannelFutureListener.CLOSE);
-                ReferenceCounted.silentRelease(msg);
+                ReferenceCountedUtil.silentRelease(msg);
                 return;
             }
 

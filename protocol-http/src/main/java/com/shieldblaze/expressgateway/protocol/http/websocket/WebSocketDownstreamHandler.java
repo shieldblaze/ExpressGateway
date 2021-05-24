@@ -17,7 +17,7 @@
  */
 package com.shieldblaze.expressgateway.protocol.http.websocket;
 
-import com.shieldblaze.expressgateway.common.utils.ReferenceCounted;
+import com.shieldblaze.expressgateway.common.utils.ReferenceCountedUtil;
 import io.netty.channel.Channel;
 import io.netty.channel.ChannelHandlerContext;
 import io.netty.channel.ChannelInboundHandlerAdapter;
@@ -42,7 +42,7 @@ final class WebSocketDownstreamHandler extends ChannelInboundHandlerAdapter {
         if (msg instanceof WebSocketFrame) {
             channel.writeAndFlush(msg, channel.voidPromise());
         } else {
-            ReferenceCounted.silentRelease(msg);
+            ReferenceCountedUtil.silentRelease(msg);
         }
     }
 
