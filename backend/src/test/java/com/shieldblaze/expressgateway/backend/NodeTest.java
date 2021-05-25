@@ -43,8 +43,7 @@ class NodeTest {
 
         assertThrows(IllegalArgumentException.class, () -> node.maxConnections(Integer.MIN_VALUE));
         assertThrows(IllegalArgumentException.class, () -> node.maxConnections(-2));
-        assertDoesNotThrow(() -> node.maxConnections(-1));
-        assertDoesNotThrow(() -> node.maxConnections(0));
+        assertDoesNotThrow(() -> node.maxConnections(1));
         assertDoesNotThrow(() -> node.maxConnections(Integer.MAX_VALUE));
         assertDoesNotThrow(() -> node.maxConnections(5000));
 

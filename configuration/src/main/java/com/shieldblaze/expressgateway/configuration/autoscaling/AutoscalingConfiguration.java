@@ -49,6 +49,17 @@ public final class AutoscalingConfiguration {
      */
     private int maxServers;
 
+    /**
+     * Cooldown time in seconds of autoscaled servers
+     */
+    private int cooldownTime;
+
+    /**
+     * Autoscaled server will be shutdown if it's under certain load
+     * of connections.
+     */
+    private float shutdownIfConnectionBelow;
+
     public float maxCPULoad() {
         return maxCPULoad;
     }

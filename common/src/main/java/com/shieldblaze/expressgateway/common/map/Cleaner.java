@@ -36,7 +36,7 @@ public abstract class Cleaner<K, V> implements Runnable, Closeable {
     public void run() {
         for (Map.Entry<K, V> entry : selfExpiringMap.entrySet()) {
             if (selfExpiringMap.isExpired(entry.getKey())) {
-                selfExpiringMap.remove(entry.getKey());
+                selfExpiringMap.entryRemovedListener().removed(entry.getKey(), selfExpiringMap.remove(entry.getKey()));
             }
         }
     }

@@ -250,11 +250,10 @@ public final class Node implements Comparable<Node>, Closeable {
 
     /**
      * <p> Set maximum number of connections. </p>
-     * <p> Valid range: -1 to 2147483647 </p>
-     * <p> Setting value to -1 will allow unlimited amount of connections. </p>
+     * <p> Valid range: 1 to 2147483647 </p>
      */
     public void maxConnections(int maxConnections) {
-        this.maxConnections = NumberUtil.checkRange(maxConnections, -1, Integer.MAX_VALUE, "MaxConnections");
+        this.maxConnections = NumberUtil.checkRange(maxConnections, 1, Integer.MAX_VALUE, "MaxConnections");
     }
 
     /**

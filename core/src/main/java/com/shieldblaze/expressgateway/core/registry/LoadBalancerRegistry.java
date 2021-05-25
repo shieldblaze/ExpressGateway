@@ -17,10 +17,19 @@
  */
 package com.shieldblaze.expressgateway.core.registry;
 
+import com.shieldblaze.expressgateway.backend.Node;
+import com.shieldblaze.expressgateway.backend.cluster.Cluster;
+import com.shieldblaze.expressgateway.common.utils.MathUtil;
+import com.shieldblaze.expressgateway.core.loadbalancer.L4LoadBalancer;
+
+import java.util.ArrayList;
 import java.util.Collections;
+import java.util.List;
 import java.util.Map;
 import java.util.Objects;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.function.ToDoubleFunction;
+import java.util.function.ToIntFunction;
 
 /**
  * This class containing mapping operations of {@link LoadBalancerProperty}.
@@ -82,5 +91,35 @@ public final class LoadBalancerRegistry {
      */
     public static Map<String, LoadBalancerProperty> registry() {
         return Collections.unmodifiableMap(REGISTRY);
+    }
+
+    /**
+     * Get total connections across all load balancers.
+     */
+    public int totalActiveConnections() {
+        return REGISTRY.values()
+                .stream()
+                .mapToInt(loadBalancerProperty -> loadBalancerProperty.l4LoadBalancer().connectionTracker().connections())
+                .sum();
+    }
+
+    /**
+     * Get total connections load across all load balancers
+     */
+    public float totalConnectionLoad() {
+        long maxConnections = REGISTRY.values()
+                .stream()
+                .mapToLong(value -> value.l4LoadBalancer()
+                        .clusters()
+                        .values()
+                        .stream()
+                        .mapToLong(cluster -> cluster.nodes()
+                                .stream()
+                                .mapToInt(Node::maxConnections)
+                                .sum())
+                        .sum())
+                .sum();
+
+        return MathUtil.percentage(totalActiveConnections(), maxConnections);
     }
 }

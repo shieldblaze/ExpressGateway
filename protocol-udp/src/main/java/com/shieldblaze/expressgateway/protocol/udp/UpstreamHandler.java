@@ -19,6 +19,7 @@ package com.shieldblaze.expressgateway.protocol.udp;
 
 import com.shieldblaze.expressgateway.backend.Node;
 import com.shieldblaze.expressgateway.backend.strategy.l4.L4Request;
+import com.shieldblaze.expressgateway.common.map.EntryRemovedListener;
 import com.shieldblaze.expressgateway.common.map.SelfExpiringMap;
 import com.shieldblaze.expressgateway.core.loadbalancer.L4LoadBalancer;
 import io.netty.channel.ChannelHandler;
@@ -35,7 +36,7 @@ import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
 
 @ChannelHandler.Sharable
-final class UpstreamHandler extends ChannelInboundHandlerAdapter {
+final class UpstreamHandler extends ChannelInboundHandlerAdapter implements EntryRemovedListener<UDPConnection> {
 
     private static final Logger logger = LogManager.getLogger(UpstreamHandler.class);
 
@@ -61,12 +62,12 @@ final class UpstreamHandler extends ChannelInboundHandlerAdapter {
 
             // If connection is null then we need to establish a new connection to the node.
             if (udpConnection == null) {
-                Node node;
                 try {
-                    node = l4LoadBalancer.defaultCluster().nextNode(new L4Request(datagramPacket.sender())).node();
+                    Node node = l4LoadBalancer.defaultCluster().nextNode(new L4Request(datagramPacket.sender())).node();
                     udpConnection = bootstrapper.newInit(ctx.channel(), node, datagramPacket.sender());
                     node.addConnection(udpConnection);
                     connectionMap.put(datagramPacket.sender(), udpConnection);
+                    l4LoadBalancer.connectionTracker().increment();
                 } catch (Exception e) {
                     return;
                 }
@@ -87,5 +88,11 @@ final class UpstreamHandler extends ChannelInboundHandlerAdapter {
     @Override
     public void exceptionCaught(ChannelHandlerContext ctx, Throwable cause) {
         logger.error("Caught Error at Upstream Handler", cause);
+    }
+
+    @Override
+    public void removed(Object key, UDPConnection value) {
+        l4LoadBalancer.connectionTracker().decrement();
+        value.close();
     }
 }

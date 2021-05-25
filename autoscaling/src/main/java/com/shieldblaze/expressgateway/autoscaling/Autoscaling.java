@@ -23,12 +23,12 @@ import com.shieldblaze.expressgateway.concurrent.eventstream.EventStream;
 
 import java.util.List;
 
-public abstract class Autoscaling<T> {
+public abstract class Autoscaling {
 
     private final EventStream eventStream;
 
     /**
-     * Create a new {@link Autoscaling<T>} Instance
+     * Create a new {@link Autoscaling} Instance
      *
      * @param eventStream {@link EventStream} where events will be published
      */
@@ -49,8 +49,11 @@ public abstract class Autoscaling<T> {
     /**
      * List of Servers
      */
-    public abstract List<T> servers();
+    public abstract List<Server> servers();
 
+    /**
+     * {@link EventStream} for publishing events
+     */
     public EventStream eventStream() {
         return eventStream;
     }

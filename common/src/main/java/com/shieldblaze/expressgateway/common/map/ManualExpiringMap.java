@@ -74,7 +74,7 @@ public final class ManualExpiringMap<K, V> extends ExpiringMap<K, V> {
     @Override
     public boolean containsKey(Object key) {
         if (isExpired(key)) {
-            remove(key);
+            entryRemovedListener().removed(key, remove(key));
             return false;
         }
         return super.containsKey(key);
@@ -88,7 +88,7 @@ public final class ManualExpiringMap<K, V> extends ExpiringMap<K, V> {
     @Override
     public V get(Object key) {
         if (isExpired(key)) {
-            remove(key);
+            entryRemovedListener().removed(key, remove(key));
             return null;
         }
         return super.get(key);
@@ -139,9 +139,9 @@ public final class ManualExpiringMap<K, V> extends ExpiringMap<K, V> {
     }
 
     private void cleanUp() {
-        forEach((k, v) -> {
-            if (isExpired(k)) {
-                remove(k);
+        forEach((key, value) -> {
+            if (isExpired(key)) {
+                entryRemovedListener().removed(key, remove(key));
             }
         });
     }

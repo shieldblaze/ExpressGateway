@@ -19,7 +19,6 @@ package com.shieldblaze.expressgateway.autoscaling;
 
 import com.shieldblaze.expressgateway.autoscaling.event.AutoscalingScaleDownEvent;
 import com.shieldblaze.expressgateway.autoscaling.event.AutoscalingScaleUpEvent;
-import com.shieldblaze.expressgateway.common.utils.MathUtil;
 import com.shieldblaze.expressgateway.common.utils.NetworkInterfaceUtil;
 import com.shieldblaze.expressgateway.configuration.autoscaling.AutoscalingConfiguration;
 import com.shieldblaze.expressgateway.metrics.Bandwidth;
@@ -31,19 +30,20 @@ import org.apache.logging.log4j.Logger;
 
 import java.io.Closeable;
 import java.io.IOException;
-import java.util.ArrayList;
 import java.util.List;
-import java.util.Map;
-import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.Executors;
 import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.ScheduledFuture;
 import java.util.concurrent.TimeUnit;
 
-public final class Monitor implements Runnable, Closeable {
+/**
+ * {@link ScaleUpMonitor} monitors CPU, Memory, Packets and Bandwidth load
+ * and triggers scale up when necessary.
+ */
+public final class ScaleUpMonitor implements Runnable, Closeable {
 
-    private static final Logger logger = LogManager.getLogger(Monitor.class);
+    private static final Logger logger = LogManager.getLogger(ScaleUpMonitor.class);
 
     private final ScheduledExecutorService scheduledExecutorService = Executors.newSingleThreadScheduledExecutor();
     private final ScheduledFuture<?> monitorScheduledFuture;
@@ -55,14 +55,14 @@ public final class Monitor implements Runnable, Closeable {
     private final List<Bandwidth> bandwidthMap = new CopyOnWriteArrayList<>();
 
     private final AutoscalingConfiguration autoscalingConfiguration;
-    private final Autoscaling<?> autoscaling;
+    private final Autoscaling autoscaling;
 
     /**
-     * Create a new {@link Monitor} Instance
+     * Create a new {@link ScaleUpMonitor} Instance
      *
      * @param autoscalingConfiguration {@link AutoscalingConfiguration} Instance
      */
-    public Monitor(AutoscalingConfiguration autoscalingConfiguration, Autoscaling<?> autoscaling) {
+    public ScaleUpMonitor(AutoscalingConfiguration autoscalingConfiguration, Autoscaling autoscaling) {
         this.autoscalingConfiguration = autoscalingConfiguration;
         this.autoscaling = autoscaling;
 
@@ -130,7 +130,10 @@ public final class Monitor implements Runnable, Closeable {
 
         @Override
         public void run() {
+            packetsMap.forEach(Packets::close);
             packetsMap.clear();
+
+            bandwidthMap.forEach(Bandwidth::close);
             bandwidthMap.clear();
 
             List<String> ifNameList = NetworkInterfaceUtil.ifNameList();

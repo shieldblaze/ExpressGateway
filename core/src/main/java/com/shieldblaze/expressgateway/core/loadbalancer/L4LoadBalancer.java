@@ -25,6 +25,7 @@ import com.shieldblaze.expressgateway.concurrent.GlobalExecutors;
 import com.shieldblaze.expressgateway.concurrent.eventstream.EventStream;
 import com.shieldblaze.expressgateway.configuration.CoreConfiguration;
 import com.shieldblaze.expressgateway.configuration.tls.TLSConfiguration;
+import com.shieldblaze.expressgateway.core.ConnectionTracker;
 import com.shieldblaze.expressgateway.core.EventLoopFactory;
 import com.shieldblaze.expressgateway.core.L4FrontListener;
 import com.shieldblaze.expressgateway.core.PooledByteBufAllocator;
@@ -64,6 +65,7 @@ public abstract class L4LoadBalancer {
     private final EventLoopFactory eventLoopFactory;
 
     private L4FrontListenerStartupEvent l4FrontListenerStartupEvent;
+    private final ConnectionTracker connectionTracker = new ConnectionTracker();
 
     /**
      * @param name              Name of this Load Balancer
@@ -268,6 +270,13 @@ public abstract class L4LoadBalancer {
      */
     public EventLoopFactory eventLoopFactory() {
         return eventLoopFactory;
+    }
+
+    /**
+     * Get {@link ConnectionTracker} Handler
+     */
+    public ConnectionTracker connectionTracker() {
+        return connectionTracker;
     }
 
     /**

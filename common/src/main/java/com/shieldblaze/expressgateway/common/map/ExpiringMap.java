@@ -37,6 +37,7 @@ public abstract class ExpiringMap<K, V> implements Map<K, V> {
     private final Map<Object, Long> timestampsMap = new HashMap<>();
     private final long ttlNanos;
     private final boolean autoRenew;
+    private final EntryRemovedListener<V> entryRemovedListener;
 
     /**
      * Create a new {@link ExpiringMap} Instance and use {@link HashMap} as
@@ -57,6 +58,19 @@ public abstract class ExpiringMap<K, V> implements Map<K, V> {
      *                    else set to {@code false}
      */
     public ExpiringMap(Map<K, V> storageMap, Duration ttlDuration, boolean autoRenew) {
+        this(storageMap, ttlDuration, autoRenew, new IgnoreEntryRemovedListener<>());
+    }
+
+    /**
+     * Create a new {@link ExpiringMap} Instance.
+     *
+     * @param storageMap           {@link Map} Implementation to use for storing entries
+     * @param ttlDuration          TTL (Time-to-live) Duration of Entries
+     * @param autoRenew            Set to {@code true} if entries will be auto-renewed on {@link #get(Object)} call
+     *                             else set to {@code false}
+     * @param entryRemovedListener {@link EntryRemovedListener} Instance
+     */
+    public ExpiringMap(Map<K, V> storageMap, Duration ttlDuration, boolean autoRenew, EntryRemovedListener<V> entryRemovedListener) {
         this.storageMap = Objects.requireNonNull(storageMap, "StorageMap");
         ttlNanos = ttlDuration.toNanos();
         this.autoRenew = autoRenew;
@@ -64,6 +78,8 @@ public abstract class ExpiringMap<K, V> implements Map<K, V> {
         if (this.storageMap.size() != 0) {
             throw new IllegalArgumentException("StorageMap Size must be Zero (0).");
         }
+
+        this.entryRemovedListener = Objects.requireNonNull(entryRemovedListener, "EntryRemovedListener");
     }
 
     @Override
@@ -136,6 +152,10 @@ public abstract class ExpiringMap<K, V> implements Map<K, V> {
     @Override
     public String toString() {
         return storageMap.toString();
+    }
+
+    protected EntryRemovedListener<V> entryRemovedListener() {
+        return entryRemovedListener;
     }
 
     protected boolean isExpired(Object key) {
