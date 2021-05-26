@@ -17,20 +17,26 @@
  */
 package com.shieldblaze.expressgateway.autoscaling;
 
-import java.io.Closeable;
-import java.io.IOException;
+public enum State {
 
-public class ScaleDownMonitor implements Runnable, Closeable {
+    /**
+     * The server is under normal load and functioning properly.
+     */
+    NORMAL,
 
+    /**
+     * If a server has reached scale out load (default 75%),
+     * a new server will be created by Autoscaling
+     * to distribute the load.
+     */
+    COOLDOWN,
 
-
-    @Override
-    public void run() {
-
-    }
-
-    @Override
-    public void close() {
-
-    }
+    /**
+     * If a server has reached hibernate load (default 90%),
+     * DNS record pointing to this server will be removed
+     * so that new traffic can no further reach this server
+     * and autoscaling will also create new server to distribute
+     * the load.
+     */
+    HIBERNATE
 }

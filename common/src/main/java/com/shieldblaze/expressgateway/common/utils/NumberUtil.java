@@ -60,4 +60,18 @@ public final class NumberUtil {
         }
         throw new IllegalArgumentException(message + ": " + l + "; (Expected: " + start + "-" + end + ")");
     }
+
+    public static double checkRange(double d, double start, double end, String message) {
+        if (d >= start && d <= end) {
+            return d;
+        }
+        throw new IllegalArgumentException(message + ": " + d + "; (Expected: " + start + "-" + end + ")");
+    }
+
+    public static float checkRange(float f, float start, float end, String message) {
+        if (f >= start && f <= end) {
+            return f;
+        }
+        throw new IllegalArgumentException(message + ": " + f + "; (Expected: " + start + "-" + end + ")");
+    }
 }

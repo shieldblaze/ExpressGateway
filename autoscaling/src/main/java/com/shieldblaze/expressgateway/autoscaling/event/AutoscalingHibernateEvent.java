@@ -15,10 +15,11 @@
  * You should have received a copy of the GNU General Public License
  * along with ShieldBlaze ExpressGateway.  If not, see <https://www.gnu.org/licenses/>.
  */
+
 package com.shieldblaze.expressgateway.autoscaling.event;
 
 import com.shieldblaze.expressgateway.concurrent.event.DefaultEvent;
 
-public class AutoscalingScaleDownEvent extends DefaultEvent<Void> {
+public class AutoscalingHibernateEvent extends DefaultEvent<Void> {
     // Empty
 }

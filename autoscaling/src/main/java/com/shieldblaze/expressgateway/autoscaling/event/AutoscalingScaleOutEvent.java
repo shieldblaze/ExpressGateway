@@ -19,6 +19,6 @@ package com.shieldblaze.expressgateway.autoscaling.event;
 
 import com.shieldblaze.expressgateway.concurrent.event.DefaultEvent;
 
-public class AutoscalingScaleUpEvent extends DefaultEvent<Void> {
+public class AutoscalingScaleOutEvent extends DefaultEvent<Void> {
     // Empty
 }

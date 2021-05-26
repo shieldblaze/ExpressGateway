@@ -17,39 +17,67 @@
  */
 package com.shieldblaze.expressgateway.autoscaling;
 
-import com.shieldblaze.expressgateway.autoscaling.event.AutoscalingScaleDownEvent;
-import com.shieldblaze.expressgateway.autoscaling.event.AutoscalingScaleUpEvent;
+import com.shieldblaze.expressgateway.autoscaling.event.AutoscalingDehibernateEvent;
+import com.shieldblaze.expressgateway.autoscaling.event.AutoscalingHibernateEvent;
+import com.shieldblaze.expressgateway.autoscaling.event.AutoscalingScaleInEvent;
+import com.shieldblaze.expressgateway.autoscaling.event.AutoscalingScaleOutEvent;
 import com.shieldblaze.expressgateway.concurrent.eventstream.EventStream;
+import com.shieldblaze.expressgateway.configuration.autoscaling.AutoscalingConfiguration;
 
 import java.util.List;
 
+/**
+ * Base class of Autoscaling.
+ */
 public abstract class Autoscaling {
 
+    private final AutoscalingConfiguration configuration;
     private final EventStream eventStream;
 
     /**
      * Create a new {@link Autoscaling} Instance
      *
      * @param eventStream {@link EventStream} where events will be published
+     * @param configuration {@link AutoscalingConfiguration} Instance
      */
-    public Autoscaling(EventStream eventStream) {
+    public Autoscaling(EventStream eventStream, AutoscalingConfiguration configuration) {
         this.eventStream = eventStream;
+        this.configuration = configuration;
     }
 
     /**
      * Scale up servers fleet by 1 (one).
      */
-    public abstract AutoscalingScaleUpEvent scaleUp();
+    public abstract AutoscalingScaleOutEvent scaleOut();
 
     /**
      * Scale down servers fleet by 1 (one).
      */
-    public abstract AutoscalingScaleDownEvent scaleDown();
+    public abstract AutoscalingScaleInEvent scaleIn();
+
+    /**
+     * Put a server in Hibernate state
+     */
+    public abstract AutoscalingHibernateEvent hibernate();
+
+    /**
+     * Pull a server out of Hibernate state
+     */
+    public abstract AutoscalingDehibernateEvent dehibernate();
 
     /**
      * List of Servers
      */
     public abstract List<Server> servers();
+
+    /**
+     * Current Server
+     */
+    public abstract Server server();
+
+    public AutoscalingConfiguration configuration() {
+        return configuration;
+    }
 
     /**
      * {@link EventStream} for publishing events

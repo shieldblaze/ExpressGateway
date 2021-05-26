@@ -34,6 +34,16 @@ public interface Server {
     String name();
 
     /**
+     * Current state of the server
+     */
+    State state();
+
+    /**
+     * Set current state of the server
+     */
+    void state(State state);
+
+    /**
      * DNS Record of the server
      */
     DNSRecord dnsRecord();

@@ -17,17 +17,29 @@
  */
 package com.shieldblaze.expressgateway.configuration.autoscaling;
 
+import com.shieldblaze.expressgateway.common.utils.NumberUtil;
+
 public final class AutoscalingConfiguration {
 
     /**
-     * Maximum CPU Load
+     * CPU Scale out load
      */
-    private float maxCPULoad;
+    private float cpuScaleOutLoad;
 
     /**
-     * Maximum Memory Load
+     * CPU Hibernate load
      */
-    private float maxMemoryLoad;
+    private float cpuHibernateLoad;
+
+    /**
+     * Memory Scale out load
+     */
+    private float memoryScaleOutLoad;
+
+    /**
+     * Memory Hibernate load
+     */
+    private float memoryHibernateLoad;
 
     /**
      * Maximum Packets Per Second
@@ -35,9 +47,29 @@ public final class AutoscalingConfiguration {
     private int maxPacketsPerSecond;
 
     /**
+     * Packets Scale out load
+     */
+    private float packetsScaleOutLoad;
+
+    /**
+     * Packets Hibernate load
+     */
+    private float packetsHibernateLoad;
+
+    /**
      * Maximum Bytes per Second
      */
     private int maxBytesPerSecond;
+
+    /**
+     * Bytes Scale out load
+     */
+    private float bytesScaleOutLoad;
+
+    /**
+     * Bytes Hibernate load
+     */
+    private float bytesHibernateLoad;
 
     /**
      * Minimum number of Servers in fleet
@@ -55,25 +87,120 @@ public final class AutoscalingConfiguration {
     private int cooldownTime;
 
     /**
-     * Autoscaled server will be shutdown if it's under certain load
-     * of connections.
+     * If load is under certain threshold
+     * then we'll shutdown the autoscaled server.
+     *
+     * This works in combination with {@link #shutdownIfLoadUnderForSeconds}
      */
-    private float shutdownIfConnectionBelow;
+    private float shutdownIfLoadUnder;
 
-    public float maxCPULoad() {
-        return maxCPULoad;
+    /**
+     * If load is under certain threshold
+     * for certain number of seconds
+     * then we'll shutdown the autoscaled server.
+     *
+     * This works in combination with {@link #shutdownIfLoadUnder}
+     */
+    private int shutdownIfLoadUnderForSeconds;
+
+    public void setCpuScaleOutLoad(float cpuScaleOutLoad) {
+        this.cpuScaleOutLoad = NumberUtil.checkRange(cpuScaleOutLoad, 0.1f, 1.0f, "CPUScaleOutLoad");
     }
 
-    public float maxMemoryLoad() {
-        return maxMemoryLoad;
+    public void setCpuHibernateLoad(float cpuHibernateLoad) {
+        this.cpuHibernateLoad = NumberUtil.checkRange(cpuHibernateLoad, 0.1f, 1.0f, "CPUHibernateLoad");
+    }
+
+    public void setMemoryScaleOutLoad(float memoryScaleOutLoad) {
+        this.memoryScaleOutLoad = NumberUtil.checkRange(memoryScaleOutLoad, 0.1f, 1.0f, "MemoryScaleOutLoad");
+    }
+
+    public void setMemoryHibernateLoad(float memoryHibernateLoad) {
+        this.memoryHibernateLoad = NumberUtil.checkRange(memoryHibernateLoad, 0.1f, 1.0f, "MemoryHibernateLoad");
+    }
+
+    public void setMaxPacketsPerSecond(int maxPacketsPerSecond) {
+        this.maxPacketsPerSecond = NumberUtil.checkPositive(maxPacketsPerSecond, "MaxPacketsPerSecond");
+    }
+
+    public void setPacketsScaleOutLoad(float packetsScaleOutLoad) {
+        this.packetsScaleOutLoad = NumberUtil.checkRange(packetsScaleOutLoad, 0.1f, 1.0f, "PacketsScaleOutLoad");
+    }
+
+    public void setPacketsHibernateLoad(float packetsHibernateLoad) {
+        this.packetsHibernateLoad = NumberUtil.checkRange(packetsHibernateLoad, 0.1f, 1.0f, "PacketsHibernateLoad");
+    }
+
+    public void setMaxBytesPerSecond(int maxBytesPerSecond) {
+        this.maxBytesPerSecond = NumberUtil.checkPositive(maxBytesPerSecond, "MaxBytesPerSecond");
+    }
+
+    public void setBytesScaleOutLoad(float bytesScaleOutLoad) {
+        this.bytesScaleOutLoad = NumberUtil.checkRange(bytesScaleOutLoad, 0.1f, 1.0f, "BytesScaleOutLoad");
+    }
+
+    public void setBytesHibernateLoad(float bytesHibernateLoad) {
+        this.bytesHibernateLoad = NumberUtil.checkRange(bytesHibernateLoad, 0.1f, 1.0f, "BytesHibernateLoad");
+    }
+
+    public void setMinServers(int minServers) {
+        this.minServers = NumberUtil.checkPositive(minServers, "MinServers");
+    }
+
+    public void setMaxServers(int maxServers) {
+        this.maxServers = NumberUtil.checkPositive(maxServers, "MaxServers");
+    }
+
+    public void setCooldownTime(int cooldownTime) {
+        this.cooldownTime = NumberUtil.checkPositive(cooldownTime, "cooldownTime");
+    }
+
+    public void setShutdownIfLoadUnder(float shutdownIfLoadUnder) {
+        this.shutdownIfLoadUnder = NumberUtil.checkRange(shutdownIfLoadUnder, 0.1f, 1.0f, "ShutdownIfLoadUnder");
+    }
+
+    public void setShutdownIfLoadUnderForSeconds(int shutdownIfLoadUnderForSeconds) {
+        this.shutdownIfLoadUnderForSeconds = NumberUtil.checkPositive(shutdownIfLoadUnderForSeconds, "ShutdownIfLoadUnderForSeconds");
+    }
+
+    public float cpuScaleOutLoad() {
+        return cpuScaleOutLoad;
+    }
+
+    public float cpuHibernateLoad() {
+        return cpuHibernateLoad;
+    }
+
+    public float memoryScaleOutLoad() {
+        return memoryScaleOutLoad;
+    }
+
+    public float memoryHibernateLoad() {
+        return memoryHibernateLoad;
     }
 
     public int maxPacketsPerSecond() {
         return maxPacketsPerSecond;
     }
 
+    public float packetsScaleOutLoad() {
+        return packetsScaleOutLoad;
+    }
+
+    public float packetsHibernateLoad() {
+        return packetsHibernateLoad;
+    }
+
     public int maxBytesPerSecond() {
         return maxBytesPerSecond;
+    }
+
+    public float bytesScaleOutLoad() {
+        return bytesScaleOutLoad;
+    }
+
+    public float bytesHibernateLoad() {
+        return bytesHibernateLoad;
     }
 
     public int minServers() {
@@ -82,5 +209,17 @@ public final class AutoscalingConfiguration {
 
     public int maxServers() {
         return maxServers;
+    }
+
+    public int cooldownTime() {
+        return cooldownTime;
+    }
+
+    public float shutdownIfLoadUnder() {
+        return shutdownIfLoadUnder;
+    }
+
+    public int shutdownIfLoadUnderForSeconds() {
+        return shutdownIfLoadUnderForSeconds;
     }
 }
