@@ -15,33 +15,21 @@
  * You should have received a copy of the GNU General Public License
  * along with ShieldBlaze ExpressGateway.  If not, see <https://www.gnu.org/licenses/>.
  */
-package com.shieldblaze.expressgateway.restapi.api.node;
+package com.shieldblaze.expressgateway.autoscaling;
 
-import com.fasterxml.jackson.annotation.JsonProperty;
+import com.shieldblaze.expressgateway.configuration.autoscaling.AutoscalingConfiguration;
 
-import java.util.Objects;
+public class CooldownTimer extends Thread {
 
-public final class NodeStruct {
+    private final AutoscalingConfiguration autoscalingConfiguration;
 
-    @JsonProperty("address")
-    private String address;
-
-    @JsonProperty("port")
-    private int port;
-
-    public void setAddress(String address) {
-        this.address = Objects.requireNonNull(address, "Address");
+    public CooldownTimer(AutoscalingConfiguration autoscalingConfiguration) {
+        super("Cooldown-Timer");
+        this.autoscalingConfiguration = autoscalingConfiguration;
     }
 
-    public void setPort(int port) {
-        this.port = port;
-    }
+    @Override
+    public void run() {
 
-    public String address() {
-        return address;
-    }
-
-    public int port() {
-        return port;
     }
 }
