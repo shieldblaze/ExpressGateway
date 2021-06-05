@@ -40,8 +40,10 @@ final class ServerInitializer extends ChannelInitializer<SocketChannel> {
 
     @Override
     protected void initChannel(SocketChannel ch) {
+        ch.pipeline().addLast(l4LoadBalancer.connectionTracker());
+
         Duration timeout = Duration.ofMillis(l4LoadBalancer.coreConfiguration().transportConfiguration().connectionIdleTimeout());
-        ch.pipeline().addFirst(new ConnectionTimeoutHandler(timeout, true));
+        ch.pipeline().addLast(new ConnectionTimeoutHandler(timeout, true));
 
         if (l4LoadBalancer.tlsForServer() != null) {
             ch.pipeline().addLast(new SNIHandler(l4LoadBalancer.tlsForServer()));

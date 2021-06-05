@@ -22,9 +22,9 @@ import io.netty.util.ReferenceCountUtil;
 /**
  * Provides extra utilities for {@link io.netty.util.ReferenceCounted} objects.
  */
-public final class ReferenceCounted {
+public final class ReferenceCountedUtil {
 
-    private ReferenceCounted() {
+    private ReferenceCountedUtil() {
         // Prevent outside initialization
     }
 

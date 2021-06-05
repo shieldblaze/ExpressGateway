@@ -23,12 +23,11 @@ import org.apache.logging.log4j.Logger;
 import java.io.Closeable;
 import java.nio.file.Files;
 import java.nio.file.Path;
-import java.util.concurrent.atomic.AtomicInteger;
 
 /**
- * System Network Packets Load
+ * System Network Packets Metric
  */
-public final class Packets extends Thread implements Closeable {
+public class Packets extends Thread implements Closeable {
 
     private static final Logger logger = LogManager.getLogger(Packets.class);
 
@@ -44,6 +43,7 @@ public final class Packets extends Thread implements Closeable {
         tx = Path.of("/sys/class/net/" + ifName + "/statistics/tx_packets");
     }
 
+    @SuppressWarnings("BusyWait")
     @Override
     public void run() {
         while (!stop) {

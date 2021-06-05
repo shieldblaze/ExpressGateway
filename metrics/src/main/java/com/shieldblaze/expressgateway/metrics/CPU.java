@@ -22,9 +22,9 @@ import com.sun.management.OperatingSystemMXBean;
 import java.lang.management.ManagementFactory;
 
 /**
- * System CPU Load
+ * System CPU Metric
  */
-public final class CPU {
+public class CPU {
 
     private static final OperatingSystemMXBean OS_BEAN = ManagementFactory.getPlatformMXBean(OperatingSystemMXBean.class);
 

@@ -19,7 +19,7 @@ package com.shieldblaze.expressgateway.protocol.http.websocket;
 
 import com.shieldblaze.expressgateway.backend.Connection;
 import com.shieldblaze.expressgateway.backend.Node;
-import com.shieldblaze.expressgateway.common.utils.ReferenceCounted;
+import com.shieldblaze.expressgateway.common.utils.ReferenceCountedUtil;
 import io.netty.channel.ChannelFuture;
 import io.netty.handler.codec.http.websocketx.WebSocketClientHandshaker;
 
@@ -87,7 +87,7 @@ final class WebSocketConnection extends Connection {
         } else if (state == State.CONNECTED_AND_ACTIVE && webSocketState == WebSocketState.HANDSHAKE_SUCCESS) {
             channel.writeAndFlush(o, channel.voidPromise());
         } else {
-            ReferenceCounted.silentRelease(o);
+            ReferenceCountedUtil.silentRelease(o);
         }
     }
 }

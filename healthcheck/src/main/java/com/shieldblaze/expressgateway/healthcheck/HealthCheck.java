@@ -18,7 +18,7 @@
 package com.shieldblaze.expressgateway.healthcheck;
 
 import com.google.common.collect.EvictingQueue;
-import com.shieldblaze.expressgateway.common.Math;
+import com.shieldblaze.expressgateway.common.utils.MathUtil;
 
 import java.net.InetSocketAddress;
 import java.time.Duration;
@@ -75,7 +75,7 @@ public abstract class HealthCheck implements Runnable {
      * Get {@link Health} of Remote Host
      */
     public Health health() {
-        double percentage = Math.percentage(Collections.frequency(queue, true), queue.size());
+        double percentage = MathUtil.percentage(Collections.frequency(queue, true), queue.size());
         if (percentage >= 95) {
             return Health.GOOD;
         } else if (percentage >= 75) {

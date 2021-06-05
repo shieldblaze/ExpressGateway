@@ -42,8 +42,8 @@ final class DownstreamHandler extends ChannelInboundHandlerAdapter {
 
     @Override
     public void channelRead(ChannelHandlerContext ctx, Object msg) {
-        DatagramPacket packet = (DatagramPacket) msg;            // Cast Data to DatagramPacket
-        channel.writeAndFlush(new DatagramPacket(packet.content(), socketAddress), channel.voidPromise()); // // Write Data back to Client
+        DatagramPacket packet = (DatagramPacket) msg;
+        channel.writeAndFlush(new DatagramPacket(packet.content(), socketAddress), channel.voidPromise()); // Write Data back to Client
     }
 
     @Override

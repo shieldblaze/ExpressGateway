@@ -20,6 +20,9 @@ package com.shieldblaze.expressgateway.common;
 import com.google.gson.Gson;
 import com.google.gson.GsonBuilder;
 
+/**
+ * {@link Gson} Instance
+ */
 public final class GSON {
 
     private GSON() {
