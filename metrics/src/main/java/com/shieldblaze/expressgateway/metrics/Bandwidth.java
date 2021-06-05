@@ -25,9 +25,9 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 
 /**
- * System Network Bandwidth Load
+ * System Network Bandwidth Metric
  */
-public final class Bandwidth extends Thread implements Closeable {
+public class Bandwidth extends Thread implements Closeable {
 
     private static final Logger logger = LogManager.getLogger(Bandwidth.class);
 

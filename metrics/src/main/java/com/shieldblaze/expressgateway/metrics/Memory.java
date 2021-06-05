@@ -48,9 +48,9 @@ import java.io.IOException;
 import java.util.Arrays;
 
 /**
- * System Memory Load
+ * System Memory Metric
  */
-public final class Memory {
+public class Memory {
 
     public MemoryUsage memory() throws IOException {
         try (BufferedReader r = new BufferedReader(new FileReader("/proc/meminfo"))) {

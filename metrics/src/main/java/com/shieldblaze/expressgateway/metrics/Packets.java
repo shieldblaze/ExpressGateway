@@ -25,9 +25,9 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 
 /**
- * System Network Packets Load
+ * System Network Packets Metric
  */
-public final class Packets extends Thread implements Closeable {
+public class Packets extends Thread implements Closeable {
 
     private static final Logger logger = LogManager.getLogger(Packets.class);
 
