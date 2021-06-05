@@ -82,6 +82,11 @@ public final class AutoscalingConfiguration {
     private int maxServers;
 
     /**
+     * Scale out multiplier
+     */
+    private int scaleOutMultiplier;
+
+    /**
      * Cooldown time in seconds of autoscaled servers
      */
     private int cooldownTime;
@@ -151,6 +156,10 @@ public final class AutoscalingConfiguration {
         this.maxServers = NumberUtil.checkPositive(maxServers, "MaxServers");
     }
 
+    public void setScaleOutMultiplier(int scaleOutMultiplier) {
+        this.scaleOutMultiplier = NumberUtil.checkPositive(scaleOutMultiplier, "ScaleOutMultiplier");
+    }
+
     public void setCooldownTime(int cooldownTime) {
         this.cooldownTime = NumberUtil.checkPositive(cooldownTime, "cooldownTime");
     }
@@ -209,6 +218,10 @@ public final class AutoscalingConfiguration {
 
     public int maxServers() {
         return maxServers;
+    }
+
+    public int scaleOutMultiplier() {
+        return scaleOutMultiplier;
     }
 
     public int cooldownTime() {

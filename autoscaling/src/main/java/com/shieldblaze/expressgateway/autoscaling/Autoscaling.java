@@ -66,15 +66,18 @@ public abstract class Autoscaling {
     public abstract AutoscalingDehibernateEvent dehibernate();
 
     /**
-     * List of Servers
+     * List of Servers in fleet
      */
     public abstract List<Server> servers();
 
     /**
-     * Current Server
+     * Current (This) Server
      */
     public abstract Server server();
 
+    /**
+     * {@link AutoscalingConfiguration} Instance
+     */
     public AutoscalingConfiguration configuration() {
         return configuration;
     }
@@ -82,7 +85,7 @@ public abstract class Autoscaling {
     /**
      * {@link EventStream} for publishing events
      */
-    public EventStream eventStream() {
+    protected EventStream eventStream() {
         return eventStream;
     }
 }
