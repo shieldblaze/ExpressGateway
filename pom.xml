@@ -63,6 +63,8 @@ along with ShieldBlaze ExpressGateway.  If not, see <https://www.gnu.org/license
         <module>configuration</module>
         <module>core</module>
         <module>healthcheck</module>
+        <module>integration</module>
+        <module>integration-aws</module>
         <module>metrics</module>
         <module>protocol-http</module>
         <module>protocol-tcp</module>

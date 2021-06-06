@@ -15,15 +15,20 @@
  * You should have received a copy of the GNU General Public License
  * along with ShieldBlaze ExpressGateway.  If not, see <https://www.gnu.org/licenses/>.
  */
-package com.shieldblaze.expressgateway.autoscaling;
+package com.shieldblaze.expressgateway.integration.aws;
 
-import com.shieldblaze.expressgateway.configuration.autoscaling.AutoscalingConfiguration;
+import software.amazon.awssdk.auth.credentials.AwsCredentialsProvider;
+import software.amazon.awssdk.regions.Region;
 
-public final class Autoscaler {
+import java.util.Objects;
 
-    private final AutoscalingConfiguration autoscalingConfiguration;
+public abstract class AWS {
 
-    public Autoscaler(AutoscalingConfiguration autoscalingConfiguration) {
-        this.autoscalingConfiguration = autoscalingConfiguration;
+    protected final AwsCredentialsProvider awsCredentials;
+    protected final Region region;
+
+    protected AWS(AwsCredentialsProvider awsCredentialsProvider, Region region) {
+        this.awsCredentials = Objects.requireNonNull(awsCredentialsProvider, "AWSCredentialsProvider");
+        this.region = Objects.requireNonNull(region, "Region");
     }
 }
