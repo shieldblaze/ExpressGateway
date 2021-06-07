@@ -15,27 +15,26 @@
  * You should have received a copy of the GNU General Public License
  * along with ShieldBlaze ExpressGateway.  If not, see <https://www.gnu.org/licenses/>.
  */
-package com.shieldblaze.expressgateway.integration;
+package com.shieldblaze.expressgateway.integration.aws.lightsail;
 
-import com.shieldblaze.expressgateway.integration.event.FleetScaleInEvent;
-import com.shieldblaze.expressgateway.integration.event.FleetScaleOutEvent;
+/**
+ * Lightsail Bundles (Variants)
+ */
+public enum Bundles {
+    MICRO_2_1("micro_2_1"),
+    SMALL_2_1("small_2_1"),
+    MEDIUM_2_1("medium_2_1"),
+    LARGE_2_1("large_2_1"),
+    XLARGE_2_1("xlarge_2_1"),
+    X2LARGE_2_1("2xlarge_2_1");
 
-import java.util.List;
+    private final String bundle;
 
-public interface Fleet<IN, OUT> {
+    Bundles(String bundle) {
+        this.bundle = bundle;
+    }
 
-    /**
-     * List of {@link Server} in the Fleet
-     */
-    List<Server> servers();
-
-    /**
-     * Scale In server in the Fleet
-     */
-    FleetScaleInEvent<?> scaleIn(IN obj);
-
-    /**
-     * Scale Out server in the Fleet
-     */
-    FleetScaleOutEvent<?> scaleOut(OUT obj);
+    public String bundleName() {
+        return bundle;
+    }
 }

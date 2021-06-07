@@ -15,10 +15,11 @@
  * You should have received a copy of the GNU General Public License
  * along with ShieldBlaze ExpressGateway.  If not, see <https://www.gnu.org/licenses/>.
  */
-package com.shieldblaze.expressgateway.integration.event;
+package com.shieldblaze.expressgateway.integration.aws.lightsail.events;
 
-import com.shieldblaze.expressgateway.concurrent.event.DefaultEvent;
+import com.shieldblaze.expressgateway.integration.event.ServerDestroyEvent;
+import software.amazon.awssdk.services.lightsail.model.DeleteInstanceResponse;
 
-public abstract class ServerShutdownEvent<T> extends DefaultEvent<T> {
+public final class LightsailServerDestroyEvent extends ServerDestroyEvent<DeleteInstanceResponse> {
     // Empty
 }

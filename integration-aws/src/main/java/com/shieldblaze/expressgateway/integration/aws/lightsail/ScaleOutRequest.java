@@ -15,27 +15,29 @@
  * You should have received a copy of the GNU General Public License
  * along with ShieldBlaze ExpressGateway.  If not, see <https://www.gnu.org/licenses/>.
  */
-package com.shieldblaze.expressgateway.integration;
+package com.shieldblaze.expressgateway.integration.aws.lightsail;
 
-import com.shieldblaze.expressgateway.integration.event.FleetScaleInEvent;
-import com.shieldblaze.expressgateway.integration.event.FleetScaleOutEvent;
+public final class ScaleOutRequest {
 
-import java.util.List;
+    private final String instanceName;
+    private final Bundles bundle;
+    private final boolean autoscaled;
 
-public interface Fleet<IN, OUT> {
+    public ScaleOutRequest(String instanceName, Bundles bundle, boolean autoscaled) {
+        this.instanceName = instanceName;
+        this.bundle = bundle;
+        this.autoscaled = autoscaled;
+    }
 
-    /**
-     * List of {@link Server} in the Fleet
-     */
-    List<Server> servers();
+    public String instanceName() {
+        return instanceName;
+    }
 
-    /**
-     * Scale In server in the Fleet
-     */
-    FleetScaleInEvent<?> scaleIn(IN obj);
+    public Bundles bundle() {
+        return bundle;
+    }
 
-    /**
-     * Scale Out server in the Fleet
-     */
-    FleetScaleOutEvent<?> scaleOut(OUT obj);
+    public boolean autoscaled() {
+        return autoscaled;
+    }
 }

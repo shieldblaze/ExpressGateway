@@ -15,12 +15,20 @@
  * You should have received a copy of the GNU General Public License
  * along with ShieldBlaze ExpressGateway.  If not, see <https://www.gnu.org/licenses/>.
  */
-package com.shieldblaze.expressgateway.integration.aws;
+package com.shieldblaze.expressgateway.integration.aws.lightsail;
 
 import com.shieldblaze.expressgateway.integration.Server;
+import com.shieldblaze.expressgateway.integration.aws.lightsail.events.LightsailServerDestroyEvent;
+import com.shieldblaze.expressgateway.integration.aws.lightsail.events.LightsailServerRestartEvent;
+import com.shieldblaze.expressgateway.integration.event.ServerDestroyEvent;
 import com.shieldblaze.expressgateway.integration.event.ServerRestartEvent;
-import com.shieldblaze.expressgateway.integration.event.ServerShutdownEvent;
+import software.amazon.awssdk.services.lightsail.LightsailClient;
+import software.amazon.awssdk.services.lightsail.model.DeleteInstanceRequest;
+import software.amazon.awssdk.services.lightsail.model.DeleteInstanceResponse;
 import software.amazon.awssdk.services.lightsail.model.Instance;
+import software.amazon.awssdk.services.lightsail.model.OperationStatus;
+import software.amazon.awssdk.services.lightsail.model.RebootInstanceRequest;
+import software.amazon.awssdk.services.lightsail.model.RebootInstanceResponse;
 import software.amazon.awssdk.services.lightsail.model.Tag;
 
 import java.net.Inet4Address;
@@ -39,6 +47,7 @@ public class LightsailServer implements Server {
     private boolean inUse;
     private Inet4Address ipv4Address;
     private Inet6Address ipv6Address;
+    private LightsailClient lightsailClient;
 
     @Override
     public String name() {
@@ -75,13 +84,56 @@ public class LightsailServer implements Server {
     }
 
     @Override
-    public ServerRestartEvent restart() {
-        return null;
+    public ServerRestartEvent<RebootInstanceResponse> restart() {
+        LightsailServerRestartEvent event = new LightsailServerRestartEvent();
+
+        try {
+            RebootInstanceResponse rebootInstanceResponse = lightsailClient.rebootInstance(RebootInstanceRequest.builder()
+                    .instanceName(name)
+                    .build());
+
+            if (!rebootInstanceResponse.hasOperations()) {
+                throw new IllegalArgumentException("RebootInstanceResponse does not have any Operations");
+            }
+
+            OperationStatus status = rebootInstanceResponse.operations().get(0).status();
+            if (status == OperationStatus.SUCCEEDED) {
+                event.trySuccess(rebootInstanceResponse);
+            } else {
+                event.tryFailure(new IllegalArgumentException("Instance state: " + status));
+            }
+        } catch (Exception ex) {
+            event.tryFailure(ex);
+        }
+
+        return event;
     }
 
     @Override
-    public ServerShutdownEvent shutdown() {
-        return null;
+    public ServerDestroyEvent<DeleteInstanceResponse> destroy() {
+        LightsailServerDestroyEvent event = new LightsailServerDestroyEvent();
+
+        try {
+            DeleteInstanceResponse deleteInstanceResponse = lightsailClient.deleteInstance(DeleteInstanceRequest.builder()
+                    .instanceName(name)
+                    .forceDeleteAddOns(true)
+                    .build());
+
+            if (!deleteInstanceResponse.hasOperations()) {
+                throw new IllegalArgumentException("DeleteInstanceResponse does not have any Operations");
+            }
+
+            OperationStatus status = deleteInstanceResponse.operations().get(0).status();
+            if (status == OperationStatus.SUCCEEDED) {
+                event.trySuccess(deleteInstanceResponse);
+            } else {
+                event.tryFailure(new IllegalArgumentException("Instance state: " + status));
+            }
+        } catch (Exception ex) {
+            event.tryFailure(ex);
+        }
+
+        return event;
     }
 
     @Override
@@ -107,7 +159,7 @@ public class LightsailServer implements Server {
      * @throws IllegalArgumentException If {@link Instance} is not valid.
      * @throws UnknownHostException     If IP address is not valid.
      */
-    public static LightsailServer buildFrom(Instance instance) throws UnknownHostException {
+    public static LightsailServer buildFrom(LightsailClient lightsailClient, Instance instance) throws UnknownHostException {
         if (!instance.hasTags()) {
             throw new IllegalArgumentException("Instance does not have any tags");
         }
@@ -152,6 +204,7 @@ public class LightsailServer implements Server {
         lightsailServer.autoscaled = autoscaled;
         lightsailServer.ipv4Address = (Inet4Address) ipv4;
         lightsailServer.ipv6Address = (Inet6Address) ipv6;
+        lightsailServer.lightsailClient = lightsailClient;
 
         return lightsailServer;
     }

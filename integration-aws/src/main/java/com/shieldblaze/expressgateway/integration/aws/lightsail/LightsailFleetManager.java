@@ -15,30 +15,44 @@
  * You should have received a copy of the GNU General Public License
  * along with ShieldBlaze ExpressGateway.  If not, see <https://www.gnu.org/licenses/>.
  */
-package com.shieldblaze.expressgateway.integration.aws;
+package com.shieldblaze.expressgateway.integration.aws.lightsail;
 
 import com.shieldblaze.expressgateway.integration.Fleet;
 import com.shieldblaze.expressgateway.integration.Server;
+import com.shieldblaze.expressgateway.integration.aws.AWS;
 import com.shieldblaze.expressgateway.integration.event.FleetScaleInEvent;
 import com.shieldblaze.expressgateway.integration.event.FleetScaleOutEvent;
 import software.amazon.awssdk.auth.credentials.AwsCredentialsProvider;
 import software.amazon.awssdk.regions.Region;
 import software.amazon.awssdk.services.lightsail.LightsailClient;
+import software.amazon.awssdk.services.lightsail.model.CreateInstancesResponse;
+import software.amazon.awssdk.services.lightsail.model.DeleteInstanceResponse;
 import software.amazon.awssdk.services.lightsail.model.GetInstancesRequest;
 import software.amazon.awssdk.services.lightsail.model.GetInstancesResponse;
 import software.amazon.awssdk.services.lightsail.model.Instance;
 
+import java.io.Closeable;
 import java.net.UnknownHostException;
 import java.util.ArrayList;
 import java.util.List;
-import java.util.stream.Collectors;
+import java.util.concurrent.CopyOnWriteArrayList;
+import java.util.concurrent.Executors;
+import java.util.concurrent.ScheduledExecutorService;
+import java.util.concurrent.ScheduledFuture;
+import java.util.concurrent.TimeUnit;
 
-public class LightsailFleet extends AWS implements Fleet, Runnable {
+/**
+ * Lightsail Fleet Manager keeps track of
+ */
+public final class LightsailFleetManager extends AWS implements Fleet<LightsailServer, ScaleOutRequest>, Runnable, Closeable {
 
-    private final List<Server> servers = new ArrayList<>();
+    private final ScheduledExecutorService executorService = Executors.newSingleThreadScheduledExecutor();
+    private final ScheduledFuture<?> scheduledFuture = executorService.scheduleAtFixedRate(this, 0, 30, TimeUnit.SECONDS);
+
+    private final List<Server> servers = new CopyOnWriteArrayList<>();
     private final LightsailClient lightsailClient;
 
-    protected LightsailFleet(AwsCredentialsProvider awsCredentialsProvider, Region region) {
+    public LightsailFleetManager(AwsCredentialsProvider awsCredentialsProvider, Region region) {
         super(awsCredentialsProvider, region);
 
         lightsailClient = LightsailClient.builder()
@@ -48,11 +62,20 @@ public class LightsailFleet extends AWS implements Fleet, Runnable {
     }
 
     @Override
-    public List<Server> servers() {
-        return servers(null);
+    public void run() {
+        List<Server> serverList = new ArrayList<>();
+        servers(serverList, null);
+
+        servers.clear();
+        servers.addAll(serverList);
     }
 
-    private List<Server> servers(String pageToken) {
+    @Override
+    public List<Server> servers() {
+        return servers;
+    }
+
+    private void servers(List<Server> serverList, String pageToken) {
         GetInstancesResponse getInstancesResponse;
         if (pageToken == null) {
             getInstancesResponse = lightsailClient.getInstances();
@@ -62,31 +85,30 @@ public class LightsailFleet extends AWS implements Fleet, Runnable {
 
         for (Instance instance : getInstancesResponse.instances()) {
             try {
-                servers.add(LightsailServer.buildFrom(instance));
+                serverList.add(LightsailServer.buildFrom(lightsailClient, instance));
             } catch (UnknownHostException ex) {
                 // Ignore as this is never gonna happen because AWS can't have wrong IP address.
             }
         }
 
         if (getInstancesResponse.nextPageToken() != null) {
-            servers(getInstancesResponse.nextPageToken());
+            servers(serverList, getInstancesResponse.nextPageToken());
         }
-
-        return servers;
     }
 
     @Override
-    public FleetScaleInEvent<?> scaleIn(int count) {
-        return null;
+    public FleetScaleInEvent<DeleteInstanceResponse> scaleIn(LightsailServer lightsailServer) {
+        return new LightsailScaleIn(lightsailClient, lightsailServer.name()).scaleIn();
     }
 
     @Override
-    public FleetScaleOutEvent<?> scaleOut(int count) {
-        return null;
+    public FleetScaleOutEvent<CreateInstancesResponse> scaleOut(ScaleOutRequest scaleOutRequest) {
+        return new LightsailScaleOut(lightsailClient, scaleOutRequest).scaleOut();
     }
 
     @Override
-    public void run() {
-
+    public void close() {
+        scheduledFuture.cancel(true);
+        lightsailClient.close();
     }
 }

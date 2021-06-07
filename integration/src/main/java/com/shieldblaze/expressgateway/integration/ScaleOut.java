@@ -17,25 +17,11 @@
  */
 package com.shieldblaze.expressgateway.integration;
 
-import com.shieldblaze.expressgateway.integration.event.FleetScaleInEvent;
-import com.shieldblaze.expressgateway.integration.event.FleetScaleOutEvent;
-
-import java.util.List;
-
-public interface Fleet<IN, OUT> {
+@FunctionalInterface
+public interface ScaleOut<T> {
 
     /**
-     * List of {@link Server} in the Fleet
+     * Scale out a server into fleet
      */
-    List<Server> servers();
-
-    /**
-     * Scale In server in the Fleet
-     */
-    FleetScaleInEvent<?> scaleIn(IN obj);
-
-    /**
-     * Scale Out server in the Fleet
-     */
-    FleetScaleOutEvent<?> scaleOut(OUT obj);
+    T scaleOut();
 }

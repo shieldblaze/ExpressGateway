@@ -15,27 +15,10 @@
  * You should have received a copy of the GNU General Public License
  * along with ShieldBlaze ExpressGateway.  If not, see <https://www.gnu.org/licenses/>.
  */
-package com.shieldblaze.expressgateway.integration;
+package com.shieldblaze.expressgateway.integration.event;
 
-import com.shieldblaze.expressgateway.integration.event.FleetScaleInEvent;
-import com.shieldblaze.expressgateway.integration.event.FleetScaleOutEvent;
+import com.shieldblaze.expressgateway.concurrent.event.DefaultEvent;
 
-import java.util.List;
-
-public interface Fleet<IN, OUT> {
-
-    /**
-     * List of {@link Server} in the Fleet
-     */
-    List<Server> servers();
-
-    /**
-     * Scale In server in the Fleet
-     */
-    FleetScaleInEvent<?> scaleIn(IN obj);
-
-    /**
-     * Scale Out server in the Fleet
-     */
-    FleetScaleOutEvent<?> scaleOut(OUT obj);
+public abstract class ServerDestroyEvent<T> extends DefaultEvent<T> {
+    // Empty
 }

@@ -18,7 +18,7 @@
 package com.shieldblaze.expressgateway.integration;
 
 import com.shieldblaze.expressgateway.integration.event.ServerRestartEvent;
-import com.shieldblaze.expressgateway.integration.event.ServerShutdownEvent;
+import com.shieldblaze.expressgateway.integration.event.ServerDestroyEvent;
 
 import java.net.Inet4Address;
 import java.net.Inet6Address;
@@ -68,7 +68,7 @@ public interface Server {
     /**
      * Shutdown this server
      */
-    ServerShutdownEvent shutdown();
+    ServerDestroyEvent destroy();
 
     /**
      * Provider of this Server
