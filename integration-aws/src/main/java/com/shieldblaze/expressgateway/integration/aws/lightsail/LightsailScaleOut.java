@@ -26,18 +26,16 @@ import software.amazon.awssdk.services.lightsail.model.IpAddressType;
 import software.amazon.awssdk.services.lightsail.model.OperationStatus;
 import software.amazon.awssdk.services.lightsail.model.Tag;
 
-public class LightsailScaleOut implements ScaleOut<LightsailScaleOutEvent> {
+import java.util.Objects;
+
+public final class LightsailScaleOut implements ScaleOut<LightsailScaleOutEvent> {
 
     private final LightsailClient lightsailClient;
-    private final String instanceName;
-    private final String bundle;
-    private final boolean autoscaled;
+    private final ScaleOutRequest scaleOutRequest;
 
     public LightsailScaleOut(LightsailClient lightsailClient, ScaleOutRequest scaleOutRequest) {
-        this.lightsailClient = lightsailClient;
-        this.instanceName = scaleOutRequest.instanceName();
-        this.bundle = scaleOutRequest.bundle().bundleName();
-        this.autoscaled = scaleOutRequest.autoscaled();
+        this.lightsailClient = Objects.requireNonNull(lightsailClient, "LightsailClient");
+        this.scaleOutRequest = Objects.requireNonNull(scaleOutRequest, "ScaleOutRequest");
     }
 
     @Override
@@ -46,10 +44,11 @@ public class LightsailScaleOut implements ScaleOut<LightsailScaleOutEvent> {
 
         try {
             CreateInstancesResponse createInstancesResponse = lightsailClient.createInstances(CreateInstancesRequest.builder()
-                    .instanceNames(instanceName)
-                    .bundleId(bundle)
+                    .instanceNames(scaleOutRequest.instanceName())
+                    .availabilityZone(scaleOutRequest.availabilityZone())
+                    .bundleId(scaleOutRequest.bundle().bundleName())
                     .blueprintId("debian_10")
-                    .tags(Tag.builder().key("ExpressGateway").value(autoscaled ? "Autoscaled" : "Master").build())
+                    .tags(Tag.builder().key("ExpressGateway").value(scaleOutRequest.autoscaled() ? "Autoscaled" : "Master").build())
                     .ipAddressType(IpAddressType.DUALSTACK)
                     .build());
 

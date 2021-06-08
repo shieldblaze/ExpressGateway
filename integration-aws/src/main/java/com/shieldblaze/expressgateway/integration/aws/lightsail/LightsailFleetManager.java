@@ -44,10 +44,10 @@ import java.util.concurrent.TimeUnit;
 /**
  * Lightsail Fleet Manager keeps track of
  */
-public final class LightsailFleetManager extends AWS implements Fleet<LightsailServer, ScaleOutRequest>, Runnable, Closeable {
+public final class LightsailFleetManager extends AWS implements Fleet<Server, ScaleOutRequest>, Runnable, Closeable {
 
     private final ScheduledExecutorService executorService = Executors.newSingleThreadScheduledExecutor();
-    private final ScheduledFuture<?> scheduledFuture = executorService.scheduleAtFixedRate(this, 0, 30, TimeUnit.SECONDS);
+    private final ScheduledFuture<?> scheduledFuture;
 
     private final List<Server> servers = new CopyOnWriteArrayList<>();
     private final LightsailClient lightsailClient;
@@ -59,6 +59,8 @@ public final class LightsailFleetManager extends AWS implements Fleet<LightsailS
                 .credentialsProvider(awsCredentialsProvider)
                 .region(region)
                 .build();
+
+        scheduledFuture = executorService.scheduleAtFixedRate(this, 0, 10, TimeUnit.SECONDS);
     }
 
     @Override
@@ -85,7 +87,7 @@ public final class LightsailFleetManager extends AWS implements Fleet<LightsailS
 
         for (Instance instance : getInstancesResponse.instances()) {
             try {
-                serverList.add(LightsailServer.buildFrom(lightsailClient, instance));
+                serverList.add(LightsailInstance.buildFrom(lightsailClient, instance));
             } catch (UnknownHostException ex) {
                 // Ignore as this is never gonna happen because AWS can't have wrong IP address.
             }
@@ -97,8 +99,8 @@ public final class LightsailFleetManager extends AWS implements Fleet<LightsailS
     }
 
     @Override
-    public FleetScaleInEvent<DeleteInstanceResponse> scaleIn(LightsailServer lightsailServer) {
-        return new LightsailScaleIn(lightsailClient, lightsailServer.name()).scaleIn();
+    public FleetScaleInEvent<DeleteInstanceResponse> scaleIn(Server server) {
+        return new LightsailScaleIn(lightsailClient, server.name()).scaleIn();
     }
 
     @Override
@@ -109,6 +111,7 @@ public final class LightsailFleetManager extends AWS implements Fleet<LightsailS
     @Override
     public void close() {
         scheduledFuture.cancel(true);
+        executorService.shutdown();
         lightsailClient.close();
     }
 }

@@ -20,6 +20,6 @@ package com.shieldblaze.expressgateway.integration.aws.lightsail.events;
 import com.shieldblaze.expressgateway.integration.event.FleetScaleOutEvent;
 import software.amazon.awssdk.services.lightsail.model.CreateInstancesResponse;
 
-public class LightsailScaleOutEvent extends FleetScaleOutEvent<CreateInstancesResponse> {
+public final class LightsailScaleOutEvent extends FleetScaleOutEvent<CreateInstancesResponse> {
     // Empty
 }

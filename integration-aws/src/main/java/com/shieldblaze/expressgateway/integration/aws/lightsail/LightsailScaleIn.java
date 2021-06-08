@@ -25,6 +25,7 @@ import software.amazon.awssdk.services.lightsail.model.DeleteInstanceResponse;
 import software.amazon.awssdk.services.lightsail.model.OperationStatus;
 
 public final class LightsailScaleIn implements ScaleIn<LightsailScaleInEvent> {
+
     private final LightsailClient lightsailClient;
     private final String instanceName;
 

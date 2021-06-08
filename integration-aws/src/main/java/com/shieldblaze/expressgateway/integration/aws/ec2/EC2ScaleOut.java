@@ -15,35 +15,22 @@
  * You should have received a copy of the GNU General Public License
  * along with ShieldBlaze ExpressGateway.  If not, see <https://www.gnu.org/licenses/>.
  */
-package com.shieldblaze.expressgateway.integration.aws.lightsail;
+package com.shieldblaze.expressgateway.integration.aws.ec2;
 
-public final class ScaleOutRequest {
+import com.shieldblaze.expressgateway.integration.ScaleOut;
+import com.shieldblaze.expressgateway.integration.aws.ec2.events.EC2ScaleInEvent;
+import software.amazon.awssdk.services.ec2.Ec2Client;
+import software.amazon.awssdk.services.ec2.model.RunInstancesRequest;
 
-    private final String instanceName;
-    private final String availabilityZone;
-    private final Bundle bundle;
-    private final boolean autoscaled;
+public class EC2ScaleOut implements ScaleOut<EC2ScaleInEvent> {
 
-    ScaleOutRequest(String instanceName, String availabilityZone, Bundle bundle, boolean autoscaled) {
-        this.instanceName = instanceName;
-        this.availabilityZone = availabilityZone;
-        this.bundle = bundle;
-        this.autoscaled = autoscaled;
-    }
+    private Ec2Client ec2Client;
 
-    public String instanceName() {
-        return instanceName;
-    }
+    @Override
+    public EC2ScaleInEvent scaleOut() {
+        RunInstancesRequest runInstancesRequest = RunInstancesRequest.builder()
+                .build();
 
-    public String availabilityZone() {
-        return availabilityZone;
-    }
-
-    public Bundle bundle() {
-        return bundle;
-    }
-
-    public boolean autoscaled() {
-        return autoscaled;
+        return null;
     }
 }

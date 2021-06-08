@@ -15,12 +15,11 @@
  * You should have received a copy of the GNU General Public License
  * along with ShieldBlaze ExpressGateway.  If not, see <https://www.gnu.org/licenses/>.
  */
-package com.shieldblaze.expressgateway.integration.aws.lightsail;
+package com.shieldblaze.expressgateway.integration.aws.ec2.events;
 
-import static org.junit.jupiter.api.Assertions.*;
+import com.shieldblaze.expressgateway.integration.event.ServerRestartEvent;
+import software.amazon.awssdk.services.lightsail.model.RebootInstanceResponse;
 
-class LightsailFleetManagerTest {
-
-
-
+public final class EC2ServerRestartEvent extends ServerRestartEvent<RebootInstanceResponse> {
+    // Empty
 }

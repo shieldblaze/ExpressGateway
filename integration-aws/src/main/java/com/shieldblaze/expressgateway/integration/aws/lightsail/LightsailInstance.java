@@ -37,9 +37,9 @@ import java.net.InetAddress;
 import java.net.UnknownHostException;
 
 /**
- * AWS Lightsail Server
+ * AWS Lightsail Instance
  */
-public class LightsailServer implements Server {
+public final class LightsailInstance implements Server {
 
     private String name;
     private long startTime;
@@ -154,12 +154,12 @@ public class LightsailServer implements Server {
     }
 
     /**
-     * Build {@link LightsailServer} from {@link Instance}
+     * Build {@link LightsailInstance} from {@link Instance}
      *
      * @throws IllegalArgumentException If {@link Instance} is not valid.
      * @throws UnknownHostException     If IP address is not valid.
      */
-    public static LightsailServer buildFrom(LightsailClient lightsailClient, Instance instance) throws UnknownHostException {
+    public static LightsailInstance buildFrom(LightsailClient lightsailClient, Instance instance) throws UnknownHostException {
         if (!instance.hasTags()) {
             throw new IllegalArgumentException("Instance does not have any tags");
         }
@@ -198,14 +198,14 @@ public class LightsailServer implements Server {
             ipv6 = InetAddress.getByName(instance.ipv6Addresses().get(0));
         }
 
-        LightsailServer lightsailServer = new LightsailServer();
-        lightsailServer.name = instance.name();
-        lightsailServer.startTime = instance.createdAt().toEpochMilli();
-        lightsailServer.autoscaled = autoscaled;
-        lightsailServer.ipv4Address = (Inet4Address) ipv4;
-        lightsailServer.ipv6Address = (Inet6Address) ipv6;
-        lightsailServer.lightsailClient = lightsailClient;
+        LightsailInstance lightsailInstance = new LightsailInstance();
+        lightsailInstance.name = instance.name();
+        lightsailInstance.startTime = instance.createdAt().toEpochMilli();
+        lightsailInstance.autoscaled = autoscaled;
+        lightsailInstance.ipv4Address = (Inet4Address) ipv4;
+        lightsailInstance.ipv6Address = (Inet6Address) ipv6;
+        lightsailInstance.lightsailClient = lightsailClient;
 
-        return lightsailServer;
+        return lightsailInstance;
     }
 }

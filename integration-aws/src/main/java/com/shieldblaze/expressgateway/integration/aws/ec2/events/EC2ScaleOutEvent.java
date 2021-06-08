@@ -15,26 +15,11 @@
  * You should have received a copy of the GNU General Public License
  * along with ShieldBlaze ExpressGateway.  If not, see <https://www.gnu.org/licenses/>.
  */
-package com.shieldblaze.expressgateway.integration.aws.lightsail;
+package com.shieldblaze.expressgateway.integration.aws.ec2.events;
 
-/**
- * Lightsail Bundles (Variants)
- */
-public enum Bundles {
-    MICRO_2_1("micro_2_1"),
-    SMALL_2_1("small_2_1"),
-    MEDIUM_2_1("medium_2_1"),
-    LARGE_2_1("large_2_1"),
-    XLARGE_2_1("xlarge_2_1"),
-    X2LARGE_2_1("2xlarge_2_1");
+import com.shieldblaze.expressgateway.integration.event.FleetScaleOutEvent;
+import software.amazon.awssdk.services.lightsail.model.CreateInstancesResponse;
 
-    private final String bundle;
-
-    Bundles(String bundle) {
-        this.bundle = bundle;
-    }
-
-    public String bundleName() {
-        return bundle;
-    }
+public final class EC2ScaleOutEvent extends FleetScaleOutEvent<CreateInstancesResponse> {
+    // Empty
 }

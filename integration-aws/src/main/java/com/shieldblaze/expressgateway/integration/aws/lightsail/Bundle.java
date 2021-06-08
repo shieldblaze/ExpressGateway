@@ -17,33 +17,24 @@
  */
 package com.shieldblaze.expressgateway.integration.aws.lightsail;
 
-public final class ScaleOutRequest {
+/**
+ * Lightsail Bundles (Variants)
+ */
+public enum Bundle {
+    MICRO_2_1("micro_2_1"),
+    SMALL_2_1("small_2_1"),
+    MEDIUM_2_1("medium_2_1"),
+    LARGE_2_1("large_2_1"),
+    XLARGE_2_1("xlarge_2_1"),
+    X2LARGE_2_1("2xlarge_2_1");
 
-    private final String instanceName;
-    private final String availabilityZone;
-    private final Bundle bundle;
-    private final boolean autoscaled;
+    private final String bundle;
 
-    ScaleOutRequest(String instanceName, String availabilityZone, Bundle bundle, boolean autoscaled) {
-        this.instanceName = instanceName;
-        this.availabilityZone = availabilityZone;
+    Bundle(String bundle) {
         this.bundle = bundle;
-        this.autoscaled = autoscaled;
     }
 
-    public String instanceName() {
-        return instanceName;
-    }
-
-    public String availabilityZone() {
-        return availabilityZone;
-    }
-
-    public Bundle bundle() {
+    public String bundleName() {
         return bundle;
-    }
-
-    public boolean autoscaled() {
-        return autoscaled;
     }
 }

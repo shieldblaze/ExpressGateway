@@ -15,35 +15,11 @@
  * You should have received a copy of the GNU General Public License
  * along with ShieldBlaze ExpressGateway.  If not, see <https://www.gnu.org/licenses/>.
  */
-package com.shieldblaze.expressgateway.integration.aws.lightsail;
+package com.shieldblaze.expressgateway.integration.aws.ec2.events;
 
-public final class ScaleOutRequest {
+import com.shieldblaze.expressgateway.integration.event.ServerDestroyEvent;
+import software.amazon.awssdk.services.lightsail.model.DeleteInstanceResponse;
 
-    private final String instanceName;
-    private final String availabilityZone;
-    private final Bundle bundle;
-    private final boolean autoscaled;
-
-    ScaleOutRequest(String instanceName, String availabilityZone, Bundle bundle, boolean autoscaled) {
-        this.instanceName = instanceName;
-        this.availabilityZone = availabilityZone;
-        this.bundle = bundle;
-        this.autoscaled = autoscaled;
-    }
-
-    public String instanceName() {
-        return instanceName;
-    }
-
-    public String availabilityZone() {
-        return availabilityZone;
-    }
-
-    public Bundle bundle() {
-        return bundle;
-    }
-
-    public boolean autoscaled() {
-        return autoscaled;
-    }
+public final class EC2ServerDestroyEvent extends ServerDestroyEvent<DeleteInstanceResponse> {
+    // Empty
 }
