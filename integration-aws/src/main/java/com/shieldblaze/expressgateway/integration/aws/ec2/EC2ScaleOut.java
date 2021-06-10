@@ -28,8 +28,6 @@ public class EC2ScaleOut implements ScaleOut<EC2ScaleInEvent> {
 
     @Override
     public EC2ScaleInEvent scaleOut() {
-        RunInstancesRequest runInstancesRequest = RunInstancesRequest.builder()
-                .build();
 
         return null;
     }

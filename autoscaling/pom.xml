@@ -27,7 +27,7 @@
     </parent>
     <modelVersion>4.0.0</modelVersion>
 
-    <artifactId>autoscale</artifactId>
+    <artifactId>autoscaling</artifactId>
     <packaging>jar</packaging>
 
     <name>ExpressGateway/Autoscaling</name>
