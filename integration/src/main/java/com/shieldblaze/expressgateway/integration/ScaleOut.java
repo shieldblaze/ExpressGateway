@@ -17,11 +17,10 @@
  */
 package com.shieldblaze.expressgateway.integration;
 
-@FunctionalInterface
-public interface ScaleOut<T> {
+public interface ScaleOut<T, INPUT> {
 
     /**
      * Scale out a server into fleet
      */
-    T scaleOut();
+    T scaleOut(INPUT input);
 }

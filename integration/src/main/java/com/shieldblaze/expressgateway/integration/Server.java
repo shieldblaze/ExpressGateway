@@ -29,9 +29,9 @@ import java.net.Inet6Address;
 public interface Server {
 
     /**
-     * Name of this server
+     * Unique ID of this server
      */
-    String name();
+    String id();
 
     /**
      * Server start time

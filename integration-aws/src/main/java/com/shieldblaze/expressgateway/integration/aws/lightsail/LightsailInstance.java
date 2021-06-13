@@ -50,7 +50,7 @@ public final class LightsailInstance implements Server {
     private LightsailClient lightsailClient;
 
     @Override
-    public String name() {
+    public String id() {
         return name;
     }
 

@@ -42,7 +42,7 @@ import java.util.concurrent.ScheduledFuture;
 import java.util.concurrent.TimeUnit;
 
 /**
- * Lightsail Fleet Manager keeps track of
+ * Lightsail Fleet Manager
  */
 public final class LightsailFleetManager extends AWS implements Fleet<Server, ScaleOutRequest>, Runnable, Closeable {
 
@@ -51,6 +51,7 @@ public final class LightsailFleetManager extends AWS implements Fleet<Server, Sc
 
     private final List<Server> servers = new CopyOnWriteArrayList<>();
     private final LightsailClient lightsailClient;
+    private final LightsailScale lightsailScale;
 
     public LightsailFleetManager(AwsCredentialsProvider awsCredentialsProvider, Region region) {
         super(awsCredentialsProvider, region);
@@ -60,6 +61,7 @@ public final class LightsailFleetManager extends AWS implements Fleet<Server, Sc
                 .region(region)
                 .build();
 
+        lightsailScale = new LightsailScale(lightsailClient);
         scheduledFuture = executorService.scheduleAtFixedRate(this, 0, 10, TimeUnit.SECONDS);
     }
 
@@ -100,12 +102,12 @@ public final class LightsailFleetManager extends AWS implements Fleet<Server, Sc
 
     @Override
     public FleetScaleInEvent<DeleteInstanceResponse> scaleIn(Server server) {
-        return new LightsailScaleIn(lightsailClient, server.name()).scaleIn();
+        return lightsailScale.scaleIn(server.id());
     }
 
     @Override
     public FleetScaleOutEvent<CreateInstancesResponse> scaleOut(ScaleOutRequest scaleOutRequest) {
-        return new LightsailScaleOut(lightsailClient, scaleOutRequest).scaleOut();
+        return lightsailScale.scaleOut(scaleOutRequest);
     }
 
     @Override

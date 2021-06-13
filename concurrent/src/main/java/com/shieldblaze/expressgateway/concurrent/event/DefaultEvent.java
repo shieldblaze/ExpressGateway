@@ -78,4 +78,9 @@ public class DefaultEvent<T> implements Event<T> {
     public Throwable cause() {
         return throwable;
     }
+
+    @Override
+    public String toString() {
+        return "DefaultEvent{future=" + future + ", isFinished=" + isFinished + ", isSuccessful=" + isSuccessful + ", throwable=" + throwable + '}';
+    }
 }

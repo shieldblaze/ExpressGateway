@@ -40,16 +40,13 @@ public final class GlobalExecutors {
     /**
      * Cached {@link ExecutorService}
      */
-    private static final ExecutorService EXECUTOR_SERVICE = new ThreadPoolExecutor(
-            Runtime.getRuntime().availableProcessors(), Runtime.getRuntime().availableProcessors() * 10,
-            120L, TimeUnit.SECONDS,
-            new SynchronousQueue<>()
-    );
+    private static final ExecutorService EXECUTOR_SERVICE = new ThreadPoolExecutor(Runtime.getRuntime().availableProcessors(), Integer.MAX_VALUE,
+            120L, TimeUnit.SECONDS, new SynchronousQueue<>());
 
     /**
      * Scheduled {@link ExecutorService}
      */
-    private static final ScheduledExecutorService SCHEDULED_EXECUTOR_SERVICE = Executors.newScheduledThreadPool(Runtime.getRuntime().availableProcessors() * 4);
+    private static final ScheduledExecutorService SCHEDULED_EXECUTOR_SERVICE = Executors.newScheduledThreadPool(Runtime.getRuntime().availableProcessors() * 10);
 
     private GlobalExecutors() {
         // Register Shutdown Hook to shutdown all Executors
@@ -62,7 +59,7 @@ public final class GlobalExecutors {
      * @param runnable {@link Runnable} to be executed
      * @return {@link CompletableFuture} Instance of task to be executed
      */
-    public CompletableFuture<Void> submitTask(Runnable runnable) {
+    public static CompletableFuture<Void> submitTask(Runnable runnable) {
         return CompletableFuture.runAsync(runnable, EXECUTOR_SERVICE);
     }
 
@@ -73,7 +70,7 @@ public final class GlobalExecutors {
      * @param <T>      Class implementing {@link Supplier}
      * @return {@link CompletableFuture} Instance of task to be executed
      */
-    public <T> CompletableFuture<T> submitTask(Supplier<T> supplier) {
+    public static <T> CompletableFuture<T> submitTask(Supplier<T> supplier) {
         return CompletableFuture.supplyAsync(supplier, EXECUTOR_SERVICE);
     }
 
@@ -83,11 +80,11 @@ public final class GlobalExecutors {
      * @param runnable {@link Runnable} to be executed
      * @return {@link CompletableFuture} Instance of task to be executed
      */
-    public ScheduledFuture<?> submitTaskAndRunEvery(Runnable runnable, int initialDelay, int period, TimeUnit timeUnit) {
+    public static ScheduledFuture<?> submitTaskAndRunEvery(Runnable runnable, int initialDelay, int period, TimeUnit timeUnit) {
         return SCHEDULED_EXECUTOR_SERVICE.scheduleWithFixedDelay(runnable, initialDelay, period, timeUnit);
     }
 
-    public ExecutorService executorService() {
+    public static ExecutorService executorService() {
         return EXECUTOR_SERVICE;
     }
 

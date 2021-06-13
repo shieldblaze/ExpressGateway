@@ -18,8 +18,8 @@
 package com.shieldblaze.expressgateway.integration.aws.ec2.events;
 
 import com.shieldblaze.expressgateway.integration.event.FleetScaleInEvent;
-import software.amazon.awssdk.services.lightsail.model.DeleteInstanceResponse;
+import software.amazon.awssdk.services.ec2.model.TerminateInstancesResponse;
 
-public final class EC2ScaleInEvent extends FleetScaleInEvent<DeleteInstanceResponse> {
+public final class EC2ScaleInEvent extends FleetScaleInEvent<TerminateInstancesResponse> {
     // Empty
 }
