@@ -12,16 +12,12 @@ public final class ScaleOutRequest {
     private final List<String> securityGroups;
     private final boolean autoscaled;
 
-    private ScaleOutRequest(String imageId, String subnetId, InstanceType instanceType, List<String> securityGroups, boolean autoscaled) {
+    ScaleOutRequest(String imageId, String subnetId, InstanceType instanceType, List<String> securityGroups, boolean autoscaled) {
         this.imageId = imageId;
         this.subnetId = subnetId;
         this.instanceType = instanceType;
         this.securityGroups = securityGroups;
         this.autoscaled = autoscaled;
-    }
-
-    public static ScaleOutRequest of(String imageId, String subnetId, InstanceType instanceType, List<String> securityGroups, boolean autoscaled) {
-        return new ScaleOutRequest(imageId, subnetId, instanceType, securityGroups, autoscaled);
     }
 
     public String imageId() {

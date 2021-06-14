@@ -17,10 +17,10 @@
  */
 package com.shieldblaze.expressgateway.integration;
 
-public interface ScaleIn<T, INPUT> {
+public interface ScaleIn<INPUT, RETURN> {
 
     /**
      * Scale in a server into fleet
      */
-    T scaleIn(INPUT input);
+    RETURN scaleIn(INPUT input);
 }

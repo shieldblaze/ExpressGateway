@@ -18,8 +18,8 @@
 package com.shieldblaze.expressgateway.integration.aws.ec2.events;
 
 import com.shieldblaze.expressgateway.integration.event.ServerDestroyEvent;
-import software.amazon.awssdk.services.lightsail.model.DeleteInstanceResponse;
+import software.amazon.awssdk.services.ec2.model.TerminateInstancesResponse;
 
-public final class EC2ServerDestroyEvent extends ServerDestroyEvent<DeleteInstanceResponse> {
+public final class EC2ServerDestroyEvent extends ServerDestroyEvent<TerminateInstancesResponse> {
     // Empty
 }

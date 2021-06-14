@@ -18,8 +18,8 @@
 package com.shieldblaze.expressgateway.integration.aws.ec2.events;
 
 import com.shieldblaze.expressgateway.integration.event.ServerRestartEvent;
-import software.amazon.awssdk.services.lightsail.model.RebootInstanceResponse;
+import software.amazon.awssdk.services.ec2.model.RebootInstancesResponse;
 
-public final class EC2ServerRestartEvent extends ServerRestartEvent<RebootInstanceResponse> {
+public final class EC2ServerRestartEvent extends ServerRestartEvent<RebootInstancesResponse> {
     // Empty
 }

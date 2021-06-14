@@ -63,12 +63,12 @@ public interface Server {
     /**
      * Restart this server
      */
-    ServerRestartEvent restart();
+    ServerRestartEvent<?> restart();
 
     /**
      * Shutdown this server
      */
-    ServerDestroyEvent destroy();
+    ServerDestroyEvent<?> destroy();
 
     /**
      * Provider of this Server

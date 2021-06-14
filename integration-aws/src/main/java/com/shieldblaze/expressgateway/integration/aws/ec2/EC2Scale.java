@@ -41,7 +41,7 @@ import software.amazon.awssdk.services.ec2.model.TagSpecification;
 import software.amazon.awssdk.services.ec2.model.TerminateInstancesRequest;
 import software.amazon.awssdk.services.ec2.model.TerminateInstancesResponse;
 
-public final class EC2Scale implements ScaleIn<EC2ScaleInEvent, EC2Instance>, ScaleOut<EC2ScaleOutEvent, ScaleOutRequest> {
+public final class EC2Scale implements ScaleIn<EC2Instance, EC2ScaleInEvent>, ScaleOut<ScaleOutRequest, EC2ScaleOutEvent> {
 
     private final Ec2Client ec2Client;
 
@@ -120,7 +120,7 @@ public final class EC2Scale implements ScaleIn<EC2ScaleInEvent, EC2Instance>, Sc
                 Instance instance = runInstancesResponse.instances().get(0);
                 instanceId = instance.instanceId();
 
-                // Wait for 10 seconds for Instance to become available
+                // Wait for 10 seconds for Instance to become Ready
                 Thread.sleep(1000 * 10);
 
                 DescribeInstancesResponse describeInstancesResponse = ec2Client.describeInstances(DescribeInstancesRequest.builder()
@@ -128,7 +128,6 @@ public final class EC2Scale implements ScaleIn<EC2ScaleInEvent, EC2Instance>, Sc
                         .build());
 
                 instance = describeInstancesResponse.reservations().get(0).instances().get(0);
-
                 event.trySuccess(instance);
             } catch (Exception ex) {
                 try {

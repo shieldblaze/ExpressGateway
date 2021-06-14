@@ -17,17 +17,27 @@
  */
 package com.shieldblaze.expressgateway.integration.aws.ec2;
 
+import com.shieldblaze.expressgateway.common.annotation.Async;
+import com.shieldblaze.expressgateway.concurrent.GlobalExecutors;
 import com.shieldblaze.expressgateway.integration.Server;
+import com.shieldblaze.expressgateway.integration.aws.ec2.events.EC2ServerDestroyEvent;
+import com.shieldblaze.expressgateway.integration.aws.ec2.events.EC2ServerRestartEvent;
 import com.shieldblaze.expressgateway.integration.event.ServerDestroyEvent;
 import com.shieldblaze.expressgateway.integration.event.ServerRestartEvent;
+import software.amazon.awssdk.services.ec2.Ec2Client;
 import software.amazon.awssdk.services.ec2.model.Instance;
 import software.amazon.awssdk.services.ec2.model.InstanceNetworkInterface;
+import software.amazon.awssdk.services.ec2.model.RebootInstancesRequest;
+import software.amazon.awssdk.services.ec2.model.RebootInstancesResponse;
 import software.amazon.awssdk.services.ec2.model.RunInstancesResponse;
 import software.amazon.awssdk.services.ec2.model.Tag;
+import software.amazon.awssdk.services.ec2.model.TerminateInstancesRequest;
+import software.amazon.awssdk.services.ec2.model.TerminateInstancesResponse;
 
 import java.net.Inet4Address;
 import java.net.Inet6Address;
 import java.net.InetAddress;
+import java.util.Objects;
 
 public class EC2Instance implements Server {
 
@@ -37,6 +47,7 @@ public class EC2Instance implements Server {
     private boolean inUse;
     private Inet4Address inet4Address;
     private Inet6Address inet6Address;
+    private Ec2Client ec2Client;
 
     @Override
     public String id() {
@@ -72,14 +83,38 @@ public class EC2Instance implements Server {
         return inet6Address;
     }
 
+    @Async
     @Override
-    public ServerRestartEvent restart() {
-        return null;
+    public ServerRestartEvent<RebootInstancesResponse> restart() {
+        EC2ServerRestartEvent event = new EC2ServerRestartEvent();
+
+        GlobalExecutors.submitTask(() -> {
+            try {
+                RebootInstancesResponse rebootInstancesResponse = ec2Client.rebootInstances(RebootInstancesRequest.builder().instanceIds(id).build());
+                event.trySuccess(rebootInstancesResponse);
+            } catch (Exception ex) {
+                event.tryFailure(ex);
+            }
+        });
+
+        return event;
     }
 
+    @Async
     @Override
-    public ServerDestroyEvent destroy() {
-        return null;
+    public ServerDestroyEvent<TerminateInstancesResponse> destroy() {
+        EC2ServerDestroyEvent event = new EC2ServerDestroyEvent();
+
+        GlobalExecutors.submitTask(() -> {
+           try {
+               TerminateInstancesResponse terminateInstancesResponse = ec2Client.terminateInstances(TerminateInstancesRequest.builder().instanceIds(id).build());
+               event.trySuccess(terminateInstancesResponse);
+           } catch (Exception ex) {
+               event.tryFailure(ex);
+           }
+        });
+
+        return event;
     }
 
     @Override
@@ -102,7 +137,9 @@ public class EC2Instance implements Server {
     /**
      * Build {@link EC2Instance} Instance from {@link Instance}
      */
-    public static EC2Instance buildFrom(Instance instance) {
+    public static EC2Instance buildFrom(Ec2Client ec2Client, Instance instance) {
+        Objects.requireNonNull(ec2Client, "EC2Client");
+        Objects.requireNonNull(instance, "Instance");
 
         if (!instance.hasTags()) {
             throw new IllegalArgumentException("Instance does not have any tags");
@@ -133,12 +170,18 @@ public class EC2Instance implements Server {
         ec2Instance.autoscaled = autoscaled;
 
         try {
-            ec2Instance.inet4Address = (Inet4Address) InetAddress.getByName(instance.publicIpAddress());
+            if (instance.publicIpAddress() != null) {
+                ec2Instance.inet4Address = (Inet4Address) InetAddress.getByName(instance.publicIpAddress());
+            } else {
+                ec2Instance.inet4Address = (Inet4Address) InetAddress.getByName(instance.privateIpAddress());
+            }
+
             ec2Instance.inet6Address = (Inet6Address) InetAddress.getByName(instance.networkInterfaces().get(0).ipv6Addresses().get(0).ipv6Address());
         } catch (Exception ex) {
             // This should never happen
         }
 
+        ec2Instance.ec2Client = ec2Client;
         return ec2Instance;
     }
 }

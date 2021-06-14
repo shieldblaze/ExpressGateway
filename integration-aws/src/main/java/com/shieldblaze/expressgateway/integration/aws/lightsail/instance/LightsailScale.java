@@ -15,7 +15,7 @@
  * You should have received a copy of the GNU General Public License
  * along with ShieldBlaze ExpressGateway.  If not, see <https://www.gnu.org/licenses/>.
  */
-package com.shieldblaze.expressgateway.integration.aws.lightsail;
+package com.shieldblaze.expressgateway.integration.aws.lightsail.instance;
 
 import com.shieldblaze.expressgateway.integration.ScaleIn;
 import com.shieldblaze.expressgateway.integration.ScaleOut;
@@ -32,7 +32,7 @@ import software.amazon.awssdk.services.lightsail.model.Tag;
 
 import java.util.Objects;
 
-public final class LightsailScale implements ScaleIn<LightsailScaleInEvent, String>, ScaleOut<LightsailScaleOutEvent, ScaleOutRequest> {
+public final class LightsailScale implements ScaleIn<String, LightsailScaleInEvent>, ScaleOut<ScaleOutRequest, LightsailScaleOutEvent> {
 
     private final LightsailClient lightsailClient;
 
