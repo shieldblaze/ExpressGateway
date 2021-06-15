@@ -123,3 +123,10 @@ This product depends on 'FasterXML Jackson-Databind'. License for the same can b
     * license/LICENSE.jackson.txt (Apache License 2.0)
 
 ---------------------------------
+
+This product depends on 'AWS Java SDK v2'. License for the same can be obtained at:
+
+  * LICENSE:
+    * license/LICENSE.aws.txt (Apache License 2.0)
+
+---------------------------------
