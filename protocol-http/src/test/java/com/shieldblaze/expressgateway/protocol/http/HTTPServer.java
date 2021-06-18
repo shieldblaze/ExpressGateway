@@ -99,8 +99,6 @@ class HTTPServer extends Thread {
                         protected void initChannel(SocketChannel ch) {
 
                             if (tls) {
-                                ch.pipeline().addLast(sslContext.newHandler(ch.alloc()));
-
                                 Http2Connection http2Connection = new DefaultHttp2Connection(true);
 
                                 InboundHttp2ToHttpAdapter adapter = new InboundHttp2ToHttpAdapterBuilder(http2Connection)
@@ -122,6 +120,7 @@ class HTTPServer extends Thread {
                                         .withHTTP1ChannelHandler(channelHandler)
                                         .build();
 
+                                ch.pipeline().addLast(sslContext.newHandler(ch.alloc()));
                                 ch.pipeline().addLast(alpnHandler);
                             } else {
                                 ch.pipeline().addLast(new HttpServerCodec());
@@ -131,7 +130,7 @@ class HTTPServer extends Thread {
                         }
                     });
 
-            channelFuture = serverBootstrap.bind("127.0.0.1", port);
+            channelFuture = serverBootstrap.bind("127.0.0.1", port).sync();
         } catch (Exception ex) {
             ex.printStackTrace();
         }
