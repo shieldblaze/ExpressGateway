@@ -71,62 +71,62 @@ This product depends on 'Bucket4J'. License for the same can be obtained at:
 This product depends on 'Brotli4j'. License for the same can be obtained at:
 
   * LICENSE:
-    * license/LICENSE.brotli4j.txt (Apache License 2.0)
+    * LICENSES/LICENSE.brotli4j.txt (Apache License 2.0)
 
 ---------------------------------
 
 This product depends on 'Google Gson'. License for the same can be obtained at:
 
   * LICENSE:
-    * license/LICENSE.gson.txt (Apache License 2.0)
+    * LICENSES/LICENSE.gson.txt (Apache License 2.0)
 
 ---------------------------------
 
 This product depends on 'JaCoCo'. License for the same can be obtained at:
 
   * LICENSE:
-    * license/LICENSE.jacoco.txt (Apache License 2.0)
+    * LICENSES/LICENSE.jacoco.txt (Apache License 2.0)
 
 ---------------------------------
 
 This product depends on 'FastUtil'. License for the same can be obtained at:
 
   * LICENSE:
-    * license/LICENSE.fastutil.txt (Apache License 2.0)
+    * LICENSES/LICENSE.fastutil.txt (Apache License 2.0)
 
 ---------------------------------
 
 This product depends on 'OkHttp'. License for the same can be obtained at:
 
   * LICENSE:
-    * license/LICENSE.okhttp.txt (Apache License 2.0)
+    * LICENSES/LICENSE.okhttp.txt (Apache License 2.0)
 
 ---------------------------------
 
 This product depends on 'Spring Framework'. License for the same can be obtained at:
 
   * LICENSE:
-    * license/LICENSE.spring.txt (Apache License 2.0)
+    * LICENSES/LICENSE.spring.txt (Apache License 2.0)
 
 ---------------------------------
 
 This product depends on 'Amazon Corretto Crypto Provider'. License for the same can be obtained at:
 
   * LICENSE:
-    * license/LICENSE.accp.txt (Apache License 2.0)
+    * LICENSES/LICENSE.accp.txt (Apache License 2.0)
 
 ---------------------------------
 
 This product depends on 'FasterXML Jackson-Databind'. License for the same can be obtained at:
 
   * LICENSE:
-    * license/LICENSE.jackson.txt (Apache License 2.0)
+    * LICENSES/LICENSE.jackson.txt (Apache License 2.0)
 
 ---------------------------------
 
 This product depends on 'AWS Java SDK v2'. License for the same can be obtained at:
 
   * LICENSE:
-    * license/LICENSE.aws.txt (Apache License 2.0)
+    * LICENSES/LICENSE.aws.txt (Apache License 2.0)
 
 ---------------------------------
