@@ -18,6 +18,12 @@
 package com.shieldblaze.expressgateway.protocol.http.adapter.mix;
 
 import com.shieldblaze.expressgateway.protocol.http.Common;
+import okhttp3.Call;
+import okhttp3.OkHttpClient;
+import okhttp3.Request;
+import okhttp3.Request.Builder;
+import okhttp3.Response;
+import okhttp3.ResponseBody;
 import org.junit.jupiter.api.AfterAll;
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.Test;
@@ -67,7 +73,16 @@ class Http2TLSBackendAndTLSClientTest {
 
     @Test
     void http2Test() throws IOException, InterruptedException {
-        HttpRequest httpRequest = HttpRequest.newBuilder()
+        OkHttpClient client = new OkHttpClient();
+        Request request = new Builder().url("https://localhost:9110").build();
+        try (Response response = client.newCall(request).execute()) {
+            assertEquals(200, response.code());
+            assertEquals("Meow", response.body().string());
+        } catch (IOException e) {
+            // ... handle IO exception
+        }
+
+/*        HttpRequest httpRequest = HttpRequest.newBuilder()
                 .GET()
                 .uri(URI.create("https://localhost:9110"))
                 .version(HttpClient.Version.HTTP_2)
@@ -76,6 +91,6 @@ class Http2TLSBackendAndTLSClientTest {
 
         HttpResponse<String> httpResponse = httpClient.send(httpRequest, HttpResponse.BodyHandlers.ofString());
         assertEquals(200, httpResponse.statusCode());
-        assertEquals("Meow", httpResponse.body());
+        assertEquals("Meow", httpResponse.body());*/
     }
 }
