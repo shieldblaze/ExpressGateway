@@ -82,13 +82,9 @@ public final class Common {
                 .build();
 
         httpLoadBalancer = HTTPLoadBalancerBuilder.newBuilder()
-                .withCoreConfiguration(CoreConfiguration.INSTANCE)
-                .withHTTPConfiguration(HTTPConfiguration.DEFAULT)
                 .withTLSForClient(tlsClient ? forClient : null)
                 .withTLSForServer(tlsServer ? forServer : null)
                 .withBindAddress(new InetSocketAddress("localhost", 9110))
-                .withHTTPInitializer(new DefaultHTTPServerInitializer())
-                .withL4FrontListener(new TCPListener())
                 .build();
 
         httpLoadBalancer.mapCluster("localhost:9110", cluster);

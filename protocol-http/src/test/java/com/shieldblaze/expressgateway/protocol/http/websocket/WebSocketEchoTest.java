@@ -58,8 +58,6 @@ public class WebSocketEchoTest extends WebSocketListener {
 
         httpLoadBalancer = HTTPLoadBalancerBuilder.newBuilder()
                 .withBindAddress(new InetSocketAddress("0.0.0.0", 9110))
-                .withL4FrontListener(new TCPListener())
-                .withHTTPInitializer(new DefaultHTTPServerInitializer())
                 .build();
 
         httpLoadBalancer.start().future().get();
