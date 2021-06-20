@@ -23,6 +23,7 @@ import com.shieldblaze.expressgateway.configuration.tls.TLSConfiguration;
 import com.shieldblaze.expressgateway.core.L4FrontListener;
 import com.shieldblaze.expressgateway.protocol.http.DefaultHTTPServerInitializer;
 import com.shieldblaze.expressgateway.protocol.http.HTTPServerInitializer;
+import com.shieldblaze.expressgateway.protocol.tcp.TCPListener;
 
 import java.net.InetSocketAddress;
 import java.util.Objects;
@@ -35,7 +36,7 @@ public final class HTTPLoadBalancerBuilder {
     private InetSocketAddress bindAddress;
     private CoreConfiguration coreConfiguration = CoreConfiguration.INSTANCE;
     private HTTPConfiguration httpConfiguration = HTTPConfiguration.load();
-    private L4FrontListener l4FrontListener;
+    private L4FrontListener l4FrontListener = new TCPListener();
     private HTTPServerInitializer httpServerInitializer = new DefaultHTTPServerInitializer();
     private TLSConfiguration tlsServer;
     private TLSConfiguration tlsClient;
@@ -99,7 +100,6 @@ public final class HTTPLoadBalancerBuilder {
 
     public HTTPLoadBalancer build() {
         Objects.requireNonNull(bindAddress, "BindAddress");
-        Objects.requireNonNull(l4FrontListener, "L4FrontListener");
 
         return new HTTPLoadBalancer(
                 name,
