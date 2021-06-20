@@ -28,7 +28,7 @@ jobs:
       - name: Setup
         run: ./setup.sh
       - name: Build with Maven
-        run: mvn -B -ntp test -DforkCount=1 -DreuseForks=false -Dparallel=methods -DthreadCount=1 --file pom.xml
+        run: mvn -B -ntp test --file pom.xml
       - name: Upload Coverage Report
         run: bash <(curl -s https://codecov.io/bash)
 
@@ -48,4 +48,4 @@ jobs:
       - name: Setup
         run: ./setup.sh
       - name: Build with Maven
-        run: mvn -B -ntp test -DforkCount=1 -DreuseForks=false -Dparallel=methods -DthreadCount=1 --file pom.xml
+        run: mvn -B -ntp test --file pom.xml

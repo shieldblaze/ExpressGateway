@@ -57,10 +57,11 @@ public class ClusterHandlerTest {
     }
 
     @AfterAll
-    static void teardown() throws IOException {
+    static void teardown() throws IOException, InterruptedException {
         l4LoadBalancerTest.shutdownLoadBalancer();
         OK_HTTP_CLIENT.dispatcher().cancelAll();
         RestAPI.stop();
+        Thread.sleep(2500);
     }
 
     @Test

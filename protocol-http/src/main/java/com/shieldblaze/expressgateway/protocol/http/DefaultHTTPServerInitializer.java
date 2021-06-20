@@ -19,16 +19,15 @@ package com.shieldblaze.expressgateway.protocol.http;
 
 import com.shieldblaze.expressgateway.configuration.http.HTTPConfiguration;
 import com.shieldblaze.expressgateway.core.ConnectionTimeoutHandler;
-import com.shieldblaze.expressgateway.core.ConnectionTracker;
 import com.shieldblaze.expressgateway.core.SNIHandler;
 import com.shieldblaze.expressgateway.protocol.http.adapter.http2.HTTP2InboundAdapter;
 import com.shieldblaze.expressgateway.protocol.http.alpn.ALPNHandler;
 import com.shieldblaze.expressgateway.protocol.http.alpn.ALPNHandlerBuilder;
 import com.shieldblaze.expressgateway.protocol.http.compression.HTTPContentCompressor;
-import com.shieldblaze.expressgateway.protocol.http.compression.HTTPContentDecompressor;
 import io.netty.channel.ChannelHandlerContext;
 import io.netty.channel.ChannelPipeline;
 import io.netty.channel.socket.SocketChannel;
+import io.netty.handler.codec.http.HttpContentDecompressor;
 import io.netty.handler.codec.http.HttpServerKeepAliveHandler;
 import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
@@ -54,7 +53,7 @@ public final class DefaultHTTPServerInitializer extends HTTPServerInitializer {
             pipeline.addLast(new HttpServerKeepAliveHandler());
             pipeline.addLast(new HTTPServerValidator(httpConfiguration));
             pipeline.addLast(new HTTPContentCompressor(httpConfiguration));
-            pipeline.addLast(new HTTPContentDecompressor());
+            pipeline.addLast(new HttpContentDecompressor());
             pipeline.addLast(new UpstreamHandler(httpLoadBalancer, false));
         } else {
             pipeline.addLast(new SNIHandler(httpLoadBalancer.tlsForServer()));
@@ -70,7 +69,7 @@ public final class DefaultHTTPServerInitializer extends HTTPServerInitializer {
                     .withHTTP1ChannelHandler(new HttpServerKeepAliveHandler())
                     .withHTTP1ChannelHandler(new HTTPServerValidator(httpConfiguration))
                     .withHTTP1ChannelHandler(new HTTPContentCompressor(httpConfiguration))
-                    .withHTTP1ChannelHandler(new HTTPContentDecompressor())
+                    .withHTTP1ChannelHandler(new HttpContentDecompressor())
                     .withHTTP1ChannelHandler(new UpstreamHandler(httpLoadBalancer, true))
                     .build();
 

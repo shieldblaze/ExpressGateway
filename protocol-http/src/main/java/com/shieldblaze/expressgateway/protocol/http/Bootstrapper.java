@@ -25,7 +25,6 @@ import com.shieldblaze.expressgateway.protocol.http.adapter.http1.HTTPOutboundAd
 import com.shieldblaze.expressgateway.protocol.http.adapter.http2.HTTP2OutboundAdapter;
 import com.shieldblaze.expressgateway.protocol.http.alpn.ALPNHandler;
 import com.shieldblaze.expressgateway.protocol.http.alpn.ALPNHandlerBuilder;
-import com.shieldblaze.expressgateway.protocol.http.compression.HTTPContentDecompressor;
 import com.shieldblaze.expressgateway.protocol.http.loadbalancer.HTTPLoadBalancer;
 import io.netty.bootstrap.Bootstrap;
 import io.netty.buffer.ByteBufAllocator;
@@ -35,6 +34,7 @@ import io.netty.channel.ChannelInitializer;
 import io.netty.channel.ChannelPipeline;
 import io.netty.channel.EventLoopGroup;
 import io.netty.channel.socket.SocketChannel;
+import io.netty.handler.codec.http.HttpContentDecompressor;
 import io.netty.handler.ssl.SslHandler;
 
 import java.time.Duration;
@@ -70,7 +70,7 @@ final class Bootstrapper {
 
                 if (httpLoadBalancer.tlsForClient() == null) {
                     pipeline.addLast(HTTPCodecs.client(httpLoadBalancer.httpConfiguration()));
-                    pipeline.addLast(new HTTPContentDecompressor());
+                    pipeline.addLast(new HttpContentDecompressor());
                     pipeline.addLast(new HTTPOutboundAdapter());
                     pipeline.addLast(downstreamHandler);
                 } else {
@@ -88,7 +88,7 @@ final class Bootstrapper {
                             .withHTTP2ChannelHandler(downstreamHandler)
                             // HTTP/1.1 Handlers
                             .withHTTP1ChannelHandler(HTTPCodecs.client(httpLoadBalancer.httpConfiguration()))
-                            .withHTTP1ChannelHandler(new HTTPContentDecompressor())
+                            .withHTTP1ChannelHandler(new HttpContentDecompressor())
                             .withHTTP1ChannelHandler(new HTTPOutboundAdapter())
                             .withHTTP1ChannelHandler(downstreamHandler)
                             .build();

@@ -49,9 +49,10 @@ public class L4LoadBalancerTest {
     }
 
     @AfterAll
-    static void teardown() {
+    static void teardown() throws InterruptedException {
         OK_HTTP_CLIENT.dispatcher().cancelAll();
         RestAPI.stop();
+        Thread.sleep(2500);
     }
 
     @Test
