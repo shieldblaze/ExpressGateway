@@ -22,6 +22,7 @@ import com.fasterxml.jackson.annotation.JsonProperty;
 import com.shieldblaze.expressgateway.common.utils.ListUtil;
 import com.shieldblaze.expressgateway.common.utils.NumberUtil;
 import com.shieldblaze.expressgateway.configuration.ConfigurationMarshaller;
+import io.netty.handler.ssl.OpenSsl;
 
 import javax.net.ssl.SSLException;
 import java.io.IOException;

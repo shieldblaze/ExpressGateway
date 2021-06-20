@@ -28,6 +28,7 @@ import io.netty.handler.ssl.SslContext;
 import io.netty.handler.ssl.SslContextBuilder;
 import io.netty.handler.ssl.SslProvider;
 import io.netty.handler.ssl.util.InsecureTrustManagerFactory;
+import io.netty.util.internal.PlatformDependent;
 import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
 import org.bouncycastle.cert.ocsp.BasicOCSPResp;
@@ -156,8 +157,17 @@ public final class CertificateKeyPair implements Runnable, Closeable {
             throw new IllegalArgumentException("OCSP Stapling is unavailable because OpenSSL is unavailable.");
         }
 
+        List<Cipher> cipherList = new ArrayList<>(tlsConfiguration.ciphers());
+
+        // If running on Windows then don't load these cipher suites
+        // because they're not supported by BoringSSL.
+        if (PlatformDependent.isWindows()) {
+            cipherList.remove(Cipher.TLS_DHE_RSA_WITH_AES_256_GCM_SHA384);
+            cipherList.remove(Cipher.TLS_DHE_RSA_WITH_AES_128_GCM_SHA256);
+        }
+
         List<String> ciphers = new ArrayList<>();
-        for (Cipher cipher : tlsConfiguration.ciphers()) {
+        for (Cipher cipher : cipherList) {
             ciphers.add(cipher.toString());
         }
 
@@ -180,7 +190,7 @@ public final class CertificateKeyPair implements Runnable, Closeable {
                             ApplicationProtocolNames.HTTP_1_1));
 
             if (useOCSPStapling) {
-                scheduledFuture = GlobalExecutors.INSTANCE.submitTaskAndRunEvery(this, 0, 6, TimeUnit.HOURS);
+                scheduledFuture = GlobalExecutors.submitTaskAndRunEvery(this, 0, 6, TimeUnit.HOURS);
             }
         } else {
             TrustManagerFactory trustManagerFactory;
