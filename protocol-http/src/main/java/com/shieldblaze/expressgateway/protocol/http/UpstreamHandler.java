@@ -22,7 +22,6 @@ import com.shieldblaze.expressgateway.backend.cluster.Cluster;
 import com.shieldblaze.expressgateway.backend.strategy.l7.http.HTTPBalanceRequest;
 import com.shieldblaze.expressgateway.common.utils.ReferenceCountedUtil;
 import com.shieldblaze.expressgateway.protocol.http.compression.HTTPContentCompressor;
-import com.shieldblaze.expressgateway.protocol.http.compression.HTTPContentDecompressor;
 import com.shieldblaze.expressgateway.protocol.http.loadbalancer.HTTPLoadBalancer;
 import com.shieldblaze.expressgateway.protocol.http.websocket.WebSocketUpgradeProperty;
 import com.shieldblaze.expressgateway.protocol.http.websocket.WebSocketUpstreamHandler;
@@ -32,6 +31,7 @@ import io.netty.channel.ChannelHandlerContext;
 import io.netty.channel.ChannelPromise;
 import io.netty.handler.codec.http.CustomFullHttpResponse;
 import io.netty.handler.codec.http.CustomLastHttpContent;
+import io.netty.handler.codec.http.HttpContentDecompressor;
 import io.netty.handler.codec.http.HttpFrame;
 import io.netty.handler.codec.http.HttpHeaderNames;
 import io.netty.handler.codec.http.HttpHeaders;
@@ -88,7 +88,7 @@ public final class UpstreamHandler extends ChannelDuplexHandler {
             if (webSocketUpgradeProperty != null) {
                 ctx.pipeline().remove(HTTPServerValidator.class);
                 ctx.pipeline().remove(HTTPContentCompressor.class);
-                ctx.pipeline().remove(HTTPContentDecompressor.class);
+                ctx.pipeline().remove(HttpContentDecompressor.class);
                 ctx.pipeline().replace(this, "WebSocketHandler", new WebSocketUpstreamHandler(node, httpLoadBalancer, webSocketUpgradeProperty));
                 return;
             }

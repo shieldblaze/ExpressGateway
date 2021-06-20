@@ -17,7 +17,6 @@
  */
 package com.shieldblaze.expressgateway.protocol.http.adapter.http2;
 
-import com.shieldblaze.expressgateway.protocol.http.compression.HTTP2ContentDecompressor;
 import io.netty.buffer.ByteBuf;
 import io.netty.buffer.ByteBufUtil;
 import io.netty.buffer.Unpooled;
@@ -46,6 +45,7 @@ import io.netty.handler.codec.http2.DefaultHttp2FrameWriter;
 import io.netty.handler.codec.http2.DefaultHttp2Headers;
 import io.netty.handler.codec.http2.DefaultHttp2HeadersDecoder;
 import io.netty.handler.codec.http2.DefaultHttp2HeadersFrame;
+import io.netty.handler.codec.http2.DelegatingDecompressorFrameListener;
 import io.netty.handler.codec.http2.Http2Connection;
 import io.netty.handler.codec.http2.Http2ConnectionEncoder;
 import io.netty.handler.codec.http2.Http2DataFrame;
@@ -228,7 +228,7 @@ class HTTP2OutboundAdapterTest {
                 true, true);
 
         Http2FrameCodec http2FrameCodec = new Http2FrameCodec(encoder, decoder, http2Settings, false);
-        decoder.frameListener(new HTTP2ContentDecompressor(connection, decoder.frameListener()));
+        decoder.frameListener(new DelegatingDecompressorFrameListener(connection, decoder.frameListener()));
         return http2FrameCodec;
     }
 }

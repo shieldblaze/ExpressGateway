@@ -59,10 +59,11 @@ class NodeHandlerTest {
     }
 
     @AfterAll
-    static void teardown() throws IOException {
+    static void teardown() throws IOException, InterruptedException {
         clusterHandlerTest.deleteL4ClusterTest();
         OK_HTTP_CLIENT.dispatcher().cancelAll();
         RestAPI.stop();
+        Thread.sleep(2500);
     }
 
     @Test

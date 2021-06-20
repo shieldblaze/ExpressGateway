@@ -19,7 +19,6 @@ package com.shieldblaze.expressgateway.protocol.http;
 
 import com.shieldblaze.expressgateway.configuration.http.HTTPConfiguration;
 import com.shieldblaze.expressgateway.protocol.http.compression.HTTP2ContentCompressor;
-import com.shieldblaze.expressgateway.protocol.http.compression.HTTP2ContentDecompressor;
 import io.netty.handler.codec.http.HttpClientCodec;
 import io.netty.handler.codec.http.HttpServerCodec;
 import io.netty.handler.codec.http2.DefaultHttp2Connection;
@@ -28,6 +27,7 @@ import io.netty.handler.codec.http2.DefaultHttp2ConnectionEncoder;
 import io.netty.handler.codec.http2.DefaultHttp2FrameReader;
 import io.netty.handler.codec.http2.DefaultHttp2FrameWriter;
 import io.netty.handler.codec.http2.DefaultHttp2HeadersDecoder;
+import io.netty.handler.codec.http2.DelegatingDecompressorFrameListener;
 import io.netty.handler.codec.http2.Http2Connection;
 import io.netty.handler.codec.http2.Http2ConnectionEncoder;
 import io.netty.handler.codec.http2.Http2FrameCodec;
@@ -58,7 +58,7 @@ public final class HTTPCodecs {
                 Http2PromisedRequestVerifier.ALWAYS_VERIFY, true, true);
 
         Http2FrameCodec http2FrameCodec = new Http2FrameCodec(encoder, decoder, http2Settings, false);
-        decoder.frameListener(new HTTP2ContentDecompressor(connection, decoder.frameListener()));
+        decoder.frameListener(new DelegatingDecompressorFrameListener(connection, decoder.frameListener()));
 
         return http2FrameCodec;
     }
@@ -78,7 +78,7 @@ public final class HTTPCodecs {
                 Http2PromisedRequestVerifier.ALWAYS_VERIFY, true, true);
 
         Http2FrameCodec http2FrameCodec = new Http2FrameCodec(encoder, decoder, http2Settings, false);
-        decoder.frameListener(new HTTP2ContentDecompressor(connection, decoder.frameListener()));
+        decoder.frameListener(new DelegatingDecompressorFrameListener(connection, decoder.frameListener()));
 
         return http2FrameCodec;
     }

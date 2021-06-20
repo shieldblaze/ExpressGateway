@@ -52,32 +52,26 @@ import io.netty.handler.ssl.SslContextBuilder;
 import io.netty.handler.ssl.SslProvider;
 import io.netty.handler.ssl.util.SelfSignedCertificate;
 
+import java.net.InetSocketAddress;
 import java.util.Objects;
 
-class HTTPServer extends Thread {
+public class HTTPServer extends Thread {
 
-    private final int port;
+    private int port;
     private final boolean tls;
     private final ChannelHandler channelHandler;
     private EventLoopGroup eventLoopGroup;
     private ChannelFuture channelFuture;
 
-    HTTPServer(int port, boolean tls) {
-        this(port, tls, null);
-    }
-
-    HTTPServer(int port, boolean tls, ChannelHandler channelHandler) {
-        this.port = port;
+    public HTTPServer(boolean tls, ChannelHandler channelHandler) {
         this.tls = tls;
         this.channelHandler = Objects.requireNonNullElseGet(channelHandler, Handler::new);
     }
 
     @Override
     public void run() {
-
         try {
-
-            eventLoopGroup = new NioEventLoopGroup(8);
+            eventLoopGroup = new NioEventLoopGroup(Runtime.getRuntime().availableProcessors());
 
             SelfSignedCertificate selfSignedCertificate = new SelfSignedCertificate("localhost", "EC", 256);
             SslContext sslContext = SslContextBuilder.forServer(selfSignedCertificate.certificate(), selfSignedCertificate.privateKey())
@@ -130,29 +124,19 @@ class HTTPServer extends Thread {
                         }
                     });
 
-            channelFuture = serverBootstrap.bind("127.0.0.1", port);
+            channelFuture = serverBootstrap.bind("127.0.0.1", 0).sync();
+            port = ((InetSocketAddress) channelFuture.channel().localAddress()).getPort();
         } catch (Exception ex) {
             ex.printStackTrace();
         }
     }
 
+    public int port() {
+        return port;
+    }
+
     public void shutdown() {
         channelFuture.channel().close();
         eventLoopGroup.shutdownGracefully();
-    }
-
-    @ChannelHandler.Sharable
-    private static final class Handler extends SimpleChannelInboundHandler<FullHttpRequest> {
-
-        @Override
-        protected void channelRead0(ChannelHandlerContext ctx, FullHttpRequest msg) {
-            HttpResponse httpResponse = new DefaultFullHttpResponse(HttpVersion.HTTP_1_1, HttpResponseStatus.OK, Unpooled.wrappedBuffer("Meow".getBytes()));
-            if (msg.headers().contains(HttpConversionUtil.ExtensionHeaderNames.STREAM_ID.text())) {
-                httpResponse.headers().set("x-http2-stream-id", msg.headers().get(HttpConversionUtil.ExtensionHeaderNames.STREAM_ID.text()));
-            } else {
-                httpResponse.headers().set(HttpHeaderNames.CONTENT_LENGTH, 4);
-            }
-            ctx.writeAndFlush(httpResponse);
-        }
     }
 }

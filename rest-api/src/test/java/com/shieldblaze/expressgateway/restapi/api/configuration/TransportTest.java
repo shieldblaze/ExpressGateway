@@ -50,9 +50,10 @@ class TransportTest {
     }
 
     @AfterAll
-    static void teardown() {
+    static void teardown() throws InterruptedException {
         okHttpClient.dispatcher().cancelAll();
         RestAPI.stop();
+        Thread.sleep(2500);
     }
 
     @Test
