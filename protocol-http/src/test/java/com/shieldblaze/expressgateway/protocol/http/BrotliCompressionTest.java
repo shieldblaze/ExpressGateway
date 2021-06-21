@@ -19,7 +19,9 @@ package com.shieldblaze.expressgateway.protocol.http;
 
 import com.aayushatharva.brotli4j.decoder.DecoderJNI;
 import com.aayushatharva.brotli4j.decoder.DirectDecompress;
+import org.junit.jupiter.api.AfterAll;
 import org.junit.jupiter.api.AfterEach;
+import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 
@@ -36,14 +38,14 @@ class BrotliCompressionTest {
 
     private static HttpClient httpClient;
 
-    @BeforeEach
-    void setup() throws Exception {
-        Common.initialize();
+    @BeforeAll
+    static void setup() throws Exception {
+        Common.initialize(9110);
         httpClient = Common.httpClient;
     }
 
-    @AfterEach
-    void shutdown() {
+    @AfterAll
+    static void shutdown() {
         Common.shutdown();
     }
 

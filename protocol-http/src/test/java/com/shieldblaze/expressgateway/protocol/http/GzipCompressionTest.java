@@ -17,7 +17,9 @@
  */
 package com.shieldblaze.expressgateway.protocol.http;
 
+import org.junit.jupiter.api.AfterAll;
 import org.junit.jupiter.api.AfterEach;
+import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 
@@ -36,14 +38,14 @@ class GzipCompressionTest {
 
     private static HttpClient httpClient;
 
-    @BeforeEach
-    void setup() throws Exception {
-        Common.initialize();
+    @BeforeAll
+    static void setup() throws Exception {
+        Common.initialize(9112);
         httpClient = Common.httpClient;
     }
 
-    @AfterEach
-    void shutdown() {
+    @AfterAll
+    static void shutdown() {
         Common.shutdown();
     }
 
@@ -51,7 +53,7 @@ class GzipCompressionTest {
     void gzipOnlyTest() throws IOException, InterruptedException {
         HttpRequest httpRequest = HttpRequest.newBuilder()
                 .GET()
-                .uri(URI.create("https://localhost:9110"))
+                .uri(URI.create("https://localhost:9112"))
                 .version(HttpClient.Version.HTTP_2)
                 .timeout(Duration.ofSeconds(5))
                 .setHeader("Accept-Encoding", "gzip")
@@ -70,7 +72,7 @@ class GzipCompressionTest {
     void gzipAndDeflateTest() throws IOException, InterruptedException {
         HttpRequest httpRequest = HttpRequest.newBuilder()
                 .GET()
-                .uri(URI.create("https://localhost:9110"))
+                .uri(URI.create("https://localhost:9112"))
                 .version(HttpClient.Version.HTTP_2)
                 .timeout(Duration.ofSeconds(5))
                 .setHeader("Accept-Encoding", "gzip, deflate")

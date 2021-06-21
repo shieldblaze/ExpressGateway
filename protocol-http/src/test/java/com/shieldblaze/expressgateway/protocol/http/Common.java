@@ -49,11 +49,11 @@ public final class Common {
     private static HTTPServer httpServer;
     private static HTTPLoadBalancer httpLoadBalancer;
 
-    public static void initialize() throws Exception {
-        initialize(true, true, true);
+    public static void initialize(int port) throws Exception {
+        initialize(port, true, true, true);
     }
 
-    public static void initialize(boolean tlsBackend, boolean tlsServer, boolean tlsClient) throws Exception {
+    public static void initialize(int port, boolean tlsBackend, boolean tlsServer, boolean tlsClient) throws Exception {
         SelfSignedCertificate selfSignedCertificate = new SelfSignedCertificate("localhost", "EC", 256);
 
         CertificateKeyPair certificateKeyPair = CertificateKeyPair.forClient(Collections.singletonList(selfSignedCertificate.cert()), selfSignedCertificate.key());

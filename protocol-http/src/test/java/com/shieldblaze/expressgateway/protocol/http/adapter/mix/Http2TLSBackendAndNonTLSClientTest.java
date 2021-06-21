@@ -18,7 +18,9 @@
 package com.shieldblaze.expressgateway.protocol.http.adapter.mix;
 
 import com.shieldblaze.expressgateway.protocol.http.Common;
+import org.junit.jupiter.api.AfterAll;
 import org.junit.jupiter.api.AfterEach;
+import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 
@@ -39,14 +41,14 @@ class Http2TLSBackendAndNonTLSClientTest {
 
     private static HttpClient httpClient;
 
-    @BeforeEach
-    void setup() throws Exception {
-        Common.initialize(true, false, true);
+    @BeforeAll
+    static void setup() throws Exception {
+        Common.initialize(9113, true, false, true);
         httpClient = Common.httpClient;
     }
 
-    @AfterEach
-    void shutdown() {
+    @AfterAll
+    static void shutdown() {
         Common.shutdown();
     }
 
@@ -54,7 +56,7 @@ class Http2TLSBackendAndNonTLSClientTest {
     void http11Test() throws Exception {
         HttpRequest httpRequest = HttpRequest.newBuilder()
                 .GET()
-                .uri(URI.create("http://localhost:9110"))
+                .uri(URI.create("http://localhost:9113"))
                 .version(HttpClient.Version.HTTP_1_1)
                 .timeout(Duration.ofSeconds(5))
                 .build();

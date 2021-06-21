@@ -18,7 +18,9 @@
 package com.shieldblaze.expressgateway.protocol.http.adapter.mix;
 
 import com.shieldblaze.expressgateway.protocol.http.Common;
+import org.junit.jupiter.api.AfterAll;
 import org.junit.jupiter.api.AfterEach;
+import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 
@@ -40,14 +42,14 @@ class Http11BackendAndTLSClientTest {
 
     private static HttpClient httpClient;
 
-    @BeforeEach
-    void setup() throws Exception {
-        Common.initialize(false, true, false);
+    @BeforeAll
+    static void setup() throws Exception {
+        Common.initialize(9116, false, true, false);
         httpClient = Common.httpClient;
     }
 
-    @AfterEach
-    void shutdown() {
+    @AfterAll
+    static void shutdown() {
         Common.shutdown();
     }
 
@@ -55,7 +57,7 @@ class Http11BackendAndTLSClientTest {
     void http11ClientTest() throws IOException, InterruptedException {
         HttpRequest httpRequest = HttpRequest.newBuilder()
                 .GET()
-                .uri(URI.create("https://localhost:9110"))
+                .uri(URI.create("https://localhost:9116"))
                 .version(HttpClient.Version.HTTP_1_1)
                 .timeout(Duration.ofSeconds(5))
                 .build();

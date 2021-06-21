@@ -42,14 +42,14 @@ class Http2TLSBackendAndTLSClientTest {
 
     private static HttpClient httpClient;
 
-    @BeforeEach
-    void setup() throws Exception {
-        Common.initialize(true, true, true);
+    @BeforeAll
+    static void setup() throws Exception {
+        Common.initialize(9114, true, true, true);
         httpClient = Common.httpClient;
     }
 
-    @AfterEach
-    void shutdown() {
+    @AfterAll
+    static void shutdown() {
         Common.shutdown();
     }
 
@@ -57,7 +57,7 @@ class Http2TLSBackendAndTLSClientTest {
     void http11Test() throws Exception {
         HttpRequest httpRequest = HttpRequest.newBuilder()
                 .GET()
-                .uri(URI.create("https://localhost:9110"))
+                .uri(URI.create("https://localhost:9114"))
                 .version(HttpClient.Version.HTTP_1_1)
                 .timeout(Duration.ofSeconds(5))
                 .build();
@@ -71,7 +71,7 @@ class Http2TLSBackendAndTLSClientTest {
     void http2Test() throws IOException, InterruptedException {
         HttpRequest httpRequest = HttpRequest.newBuilder()
                 .GET()
-                .uri(URI.create("https://localhost:9110"))
+                .uri(URI.create("https://localhost:9114"))
                 .version(HttpClient.Version.HTTP_2)
                 .timeout(Duration.ofSeconds(5))
                 .build();
