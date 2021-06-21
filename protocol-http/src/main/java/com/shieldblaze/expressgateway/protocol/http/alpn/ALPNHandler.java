@@ -56,6 +56,7 @@ public final class ALPNHandler extends ApplicationProtocolNegotiationHandler {
     @Override
     protected void configurePipeline(ChannelHandlerContext ctx, String protocol) {
         ChannelPipeline pipeline = ctx.pipeline();
+        logger.debug("Negotiated Protocol: " + protocol);
 
         if (protocol.equalsIgnoreCase(ApplicationProtocolNames.HTTP_2)) {
 
