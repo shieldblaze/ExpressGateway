@@ -86,7 +86,7 @@ public final class Common {
                 .withHTTPConfiguration(HTTPConfiguration.DEFAULT)
                 .withTLSForClient(tlsClient ? forClient : null)
                 .withTLSForServer(tlsServer ? forServer : null)
-                .withBindAddress(new InetSocketAddress("localhost", 9110))
+                .withBindAddress(new InetSocketAddress("localhost", port))
                 .withHTTPInitializer(new DefaultHTTPServerInitializer())
                 .withL4FrontListener(new TCPListener())
                 .build();
