@@ -91,7 +91,7 @@ public final class Common {
                 .withL4FrontListener(new TCPListener())
                 .build();
 
-        httpLoadBalancer.mapCluster("localhost:9110", cluster);
+        httpLoadBalancer.mapCluster("localhost:" + port, cluster);
 
         NodeBuilder.newBuilder()
                 .withCluster(cluster)
