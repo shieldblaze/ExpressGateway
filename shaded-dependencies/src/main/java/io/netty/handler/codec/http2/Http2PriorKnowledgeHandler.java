@@ -75,7 +75,10 @@ public final class Http2PriorKnowledgeHandler extends ChannelInboundHandlerAdapt
      * into pipeline.
      */
     public void releasePreface() {
-        ctx.pipeline().remove(this);
-        ctx.fireChannelRead(prefaceBuf);
+        if (prefaceBuf != null) {
+            ctx.fireChannelRead(prefaceBuf);
+            ctx.pipeline().remove(this);
+            prefaceBuf = null;
+        }
     }
 }
