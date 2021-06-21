@@ -17,8 +17,8 @@
  */
 package com.shieldblaze.expressgateway.protocol.http;
 
-import org.junit.jupiter.api.AfterAll;
-import org.junit.jupiter.api.BeforeAll;
+import org.junit.jupiter.api.AfterEach;
+import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 
 import java.io.ByteArrayInputStream;
@@ -36,14 +36,14 @@ class GzipCompressionTest {
 
     private static HttpClient httpClient;
 
-    @BeforeAll
-    static void setup() throws Exception {
+    @BeforeEach
+    void setup() throws Exception {
         Common.initialize();
         httpClient = Common.httpClient;
     }
 
-    @AfterAll
-    static void shutdown() {
+    @AfterEach
+    void shutdown() {
         Common.shutdown();
     }
 
