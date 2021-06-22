@@ -66,10 +66,12 @@ public final class Http2PriorKnowledgeHandler extends ChannelInboundHandlerAdapt
         int bytesRead = Math.min(in.readableBytes(), prefaceLength);
 
         // If 'releaseCalled' is 'true' then everything is ready to handle HTTP/2 Messages.
-        // We'll first fire all backlog messages and then we'll fire this message.
+        // We'll first fire all backlog messages and then we'll fire this message and
+        // remove ourselves from the pipeline.
         if (releaseCalled) {
             releasePreface();
             ctx.fireChannelRead(msg);
+            ctx.pipeline().remove(this);
             return;
         }
 
@@ -85,7 +87,6 @@ public final class Http2PriorKnowledgeHandler extends ChannelInboundHandlerAdapt
                 // It was not HTTP/2 Preface, let's remove ourselves from the pipeline.
                 ctx.pipeline().remove(this);
             } else {
-                System.out.println("Added: " + in);
                 backlogList.add(in);
                 return;
             }
@@ -108,15 +109,13 @@ public final class Http2PriorKnowledgeHandler extends ChannelInboundHandlerAdapt
         // This will be used to indicate that everything on pipeline is ready to handle
         // HTTP/2 related messages (such as Preface or other frames).
         //
-        // If BacklogList is not empty then we'll fire all backlog messages into pipeline
-        // and remove ourselves from the pipeline.
+        // If BacklogList is not empty then we'll fire all backlog messages into pipeline.
         if (backlogList.isEmpty()) {
             releaseCalled = true;
         } else {
             for (Object o : backlogList) {
                 ctx.fireChannelRead(o);
             }
-            ctx.pipeline().remove(this);
         }
     }
 }
