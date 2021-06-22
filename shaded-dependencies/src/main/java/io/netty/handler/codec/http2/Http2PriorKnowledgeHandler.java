@@ -20,7 +20,7 @@ import io.netty.buffer.ByteBufUtil;
 import io.netty.channel.ChannelHandlerContext;
 import io.netty.channel.ChannelInboundHandlerAdapter;
 import io.netty.handler.ssl.ApplicationProtocolNegotiationHandler;
-import io.netty.util.ReferenceCountUtil;
+import io.netty.util.internal.RecyclableArrayList;
 
 import static io.netty.buffer.Unpooled.unreleasableBuffer;
 import static io.netty.handler.codec.http2.Http2CodecUtil.connectionPrefaceBuf;
@@ -35,7 +35,7 @@ import static io.netty.handler.codec.http2.Http2CodecUtil.connectionPrefaceBuf;
  * </p>
  *
  * <p>
- * If this class is being outside of {@link ApplicationProtocolNegotiationHandler},
+ * If this class is being used outside of {@link ApplicationProtocolNegotiationHandler},
  * user must call {@link #releasePreface()} manually once they're done configuring pipeline
  * to receive the preface message.
  * </p>
@@ -43,8 +43,9 @@ import static io.netty.handler.codec.http2.Http2CodecUtil.connectionPrefaceBuf;
 public final class Http2PriorKnowledgeHandler extends ChannelInboundHandlerAdapter {
 
     private static final ByteBuf CONNECTION_PREFACE = unreleasableBuffer(connectionPrefaceBuf());
+    private final RecyclableArrayList backlogList = RecyclableArrayList.newInstance();
     private ChannelHandlerContext ctx;
-    private ByteBuf prefaceBuf;
+    private boolean releaseCalled;
 
     @Override
     public void handlerAdded(ChannelHandlerContext ctx) throws Exception {
@@ -53,17 +54,42 @@ public final class Http2PriorKnowledgeHandler extends ChannelInboundHandlerAdapt
     }
 
     @Override
+    public void handlerRemoved(ChannelHandlerContext ctx) throws Exception {
+        backlogList.recycle();
+        super.handlerRemoved(ctx);
+    }
+
+    @Override
     public void channelRead(ChannelHandlerContext ctx, Object msg) throws Exception {
         ByteBuf in = (ByteBuf) msg;
         int prefaceLength = CONNECTION_PREFACE.readableBytes();
         int bytesRead = Math.min(in.readableBytes(), prefaceLength);
 
-        if (!ByteBufUtil.equals(CONNECTION_PREFACE, CONNECTION_PREFACE.readerIndex(), in, in.readerIndex(), bytesRead)) {
-            // It was not HTTP/2 Preface, let's remove ourselves from the pipeline.
-            ctx.pipeline().remove(this);
+        // If 'releaseCalled' is 'true' then everything is ready to handle HTTP/2 Messages.
+        // We'll first fire all backlog messages and then we'll fire this message.
+        if (releaseCalled) {
+            releasePreface();
+            ctx.fireChannelRead(msg);
+        }
+
+        if (!ByteBufUtil.equals(CONNECTION_PREFACE, CONNECTION_PREFACE.readerIndex(), in,
+                in.readerIndex(), bytesRead)) {
+
+            // If List is empty then we haven't received HTTP/2 Preface message.
+            // In this case, we'll remove ourselves from the pipeline.
+            //
+            // If List is not empty then we'll add the message to List as
+            // it could be some HTTP/2 frame.
+            if (backlogList.isEmpty()) {
+                // It was not HTTP/2 Preface, let's remove ourselves from the pipeline.
+                ctx.pipeline().remove(this);
+            } else {
+                backlogList.add(in);
+                return;
+            }
         } else if (bytesRead == prefaceLength) {
-            // We got the Preface message, let's hold it for now.
-            prefaceBuf = in;
+            // We got the Preface message, let's hold it now.
+            backlogList.add(in);
             return;
         }
 
@@ -75,10 +101,20 @@ public final class Http2PriorKnowledgeHandler extends ChannelInboundHandlerAdapt
      * into pipeline.
      */
     public void releasePreface() {
-        if (prefaceBuf != null) {
-            ctx.fireChannelRead(prefaceBuf);
+        // If BacklogList is empty then it was called by ApplicationProtocolNegotiationHandler
+        // upon successful pipeline configuration. We'll mark 'releaseCalled' as 'true'.
+        // This will be used to indicate that everything on pipeline is ready to handle
+        // HTTP/2 related messages (such as Preface or other frames).
+        //
+        // If BacklogList is not empty then we'll fire all backlog messages into pipeline
+        // and remove ourselves from the pipeline.
+        if (backlogList.isEmpty()) {
+            releaseCalled = true;
+        } else {
+            for (Object o : backlogList) {
+                ctx.fireChannelRead(o);
+            }
             ctx.pipeline().remove(this);
-            prefaceBuf = null;
         }
     }
 }

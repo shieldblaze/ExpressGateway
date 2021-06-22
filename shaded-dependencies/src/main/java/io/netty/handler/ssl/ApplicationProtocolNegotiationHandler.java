@@ -94,7 +94,7 @@ public abstract class ApplicationProtocolNegotiationHandler extends ChannelInbou
                     String protocol = sslHandler.applicationProtocol();
                     configurePipeline(ctx, protocol != null ? protocol : fallbackProtocol);
 
-                    // If Http2PriorKnowledgeHandler is present in handler
+                    // If Http2PriorKnowledgeHandler is present in handler then release preface.
                     Http2PriorKnowledgeHandler priorHandler = ctx.pipeline().get(Http2PriorKnowledgeHandler.class);
                     if (priorHandler != null) {
                         priorHandler.releasePreface();
