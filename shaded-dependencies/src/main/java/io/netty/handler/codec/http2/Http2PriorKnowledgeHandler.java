@@ -70,6 +70,7 @@ public final class Http2PriorKnowledgeHandler extends ChannelInboundHandlerAdapt
         if (releaseCalled) {
             releasePreface();
             ctx.fireChannelRead(msg);
+            return;
         }
 
         if (!ByteBufUtil.equals(CONNECTION_PREFACE, CONNECTION_PREFACE.readerIndex(), in,
