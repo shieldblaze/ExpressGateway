@@ -29,6 +29,7 @@ import io.netty.channel.ChannelPipeline;
 import io.netty.channel.socket.SocketChannel;
 import io.netty.handler.codec.http.HttpContentDecompressor;
 import io.netty.handler.codec.http.HttpServerKeepAliveHandler;
+import io.netty.handler.codec.http2.ALPNBacklogHandler;
 import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
 
@@ -73,6 +74,7 @@ public final class DefaultHTTPServerInitializer extends HTTPServerInitializer {
                     .withHTTP1ChannelHandler(new UpstreamHandler(httpLoadBalancer, true))
                     .build();
 
+            pipeline.addLast(new ALPNBacklogHandler());
             pipeline.addLast(alpnHandler);
         }
     }
