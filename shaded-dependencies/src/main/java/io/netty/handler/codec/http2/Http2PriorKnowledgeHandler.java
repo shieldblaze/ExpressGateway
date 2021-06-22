@@ -85,6 +85,7 @@ public final class Http2PriorKnowledgeHandler extends ChannelInboundHandlerAdapt
                 // It was not HTTP/2 Preface, let's remove ourselves from the pipeline.
                 ctx.pipeline().remove(this);
             } else {
+                System.out.println("Added: " + in);
                 backlogList.add(in);
                 return;
             }
