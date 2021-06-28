@@ -24,10 +24,11 @@ import java.lang.management.ManagementFactory;
 /**
  * System CPU Metric
  */
-public class CPU {
+public class CPU implements CPUMetric {
 
     private static final OperatingSystemMXBean OS_BEAN = ManagementFactory.getPlatformMXBean(OperatingSystemMXBean.class);
 
+    @Override
     public double cpu() {
         return OS_BEAN.getSystemCpuLoad();
     }
