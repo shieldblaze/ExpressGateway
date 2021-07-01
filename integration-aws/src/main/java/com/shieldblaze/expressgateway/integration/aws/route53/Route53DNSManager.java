@@ -17,25 +17,14 @@
  */
 package com.shieldblaze.expressgateway.integration.aws.route53;
 
-import com.shieldblaze.expressgateway.integration.DNS;
-import com.shieldblaze.expressgateway.integration.DNSRecord;
+import com.shieldblaze.expressgateway.integration.dns.DNS;
+import com.shieldblaze.expressgateway.integration.dns.DNSRecord;
 import com.shieldblaze.expressgateway.integration.aws.AWS;
-import com.shieldblaze.expressgateway.integration.aws.lightsail.dns.LightsailDNS;
-import com.shieldblaze.expressgateway.integration.aws.lightsail.dns.LightsailDNSRecord;
-import com.shieldblaze.expressgateway.integration.aws.lightsail.dns.LightsailDNSRecordBody;
 import com.shieldblaze.expressgateway.integration.event.DNSAddedEvent;
 import com.shieldblaze.expressgateway.integration.event.DNSRemovedEvent;
-import org.apache.logging.log4j.LogManager;
-import org.apache.logging.log4j.Logger;
 import software.amazon.awssdk.auth.credentials.AwsCredentialsProvider;
 import software.amazon.awssdk.regions.Region;
-import software.amazon.awssdk.services.lightsail.LightsailClient;
-import software.amazon.awssdk.services.lightsail.model.Domain;
-import software.amazon.awssdk.services.lightsail.model.GetDomainsRequest;
-import software.amazon.awssdk.services.lightsail.model.GetDomainsResponse;
 import software.amazon.awssdk.services.route53.Route53Client;
-import software.amazon.awssdk.services.route53.model.GetHostedZoneRequest;
-import software.amazon.awssdk.services.route53.model.GetHostedZoneResponse;
 import software.amazon.awssdk.services.route53.model.ListResourceRecordSetsRequest;
 import software.amazon.awssdk.services.route53.model.ListResourceRecordSetsResponse;
 import software.amazon.awssdk.services.route53.model.RRType;
@@ -44,7 +33,6 @@ import java.io.Closeable;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Objects;
-import java.util.Optional;
 import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.Executors;
 import java.util.concurrent.ScheduledExecutorService;

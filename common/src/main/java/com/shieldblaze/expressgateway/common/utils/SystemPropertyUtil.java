@@ -15,13 +15,24 @@
  * You should have received a copy of the GNU General Public License
  * along with ShieldBlaze ExpressGateway.  If not, see <https://www.gnu.org/licenses/>.
  */
+package com.shieldblaze.expressgateway.common.utils;
 
-package com.shieldblaze.expressgateway.integration;
-
-public interface DNSRemoveRecord<INPUT, RETURN> {
+public final class SystemPropertyUtil {
 
     /**
-     * Remove a DNS Record
+     * Get value of supplied key using {@link System#getProperty(String)}
+     * or {@link System#getenv(String)}
+     *
+     * @param key Key to look for
      */
-    RETURN removeRecord(INPUT input);
+    public static String getUsingPropertyOrEnvironment(String key) {
+        String value = System.getProperty(key);
+
+        // If null then it was not found in Property
+        if (value == null) {
+            value = System.getenv(key);
+        }
+
+        return value;
+    }
 }

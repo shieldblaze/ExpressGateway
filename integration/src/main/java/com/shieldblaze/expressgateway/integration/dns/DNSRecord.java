@@ -15,27 +15,39 @@
  * You should have received a copy of the GNU General Public License
  * along with ShieldBlaze ExpressGateway.  If not, see <https://www.gnu.org/licenses/>.
  */
-package com.shieldblaze.expressgateway.integration;
+package com.shieldblaze.expressgateway.integration.dns;
 
-import com.shieldblaze.expressgateway.integration.event.DNSAddedEvent;
-import com.shieldblaze.expressgateway.integration.event.DNSRemovedEvent;
+import java.net.InetAddress;
 
-import java.util.List;
-
-public interface DNS<T> {
+public interface DNSRecord {
 
     /**
-     * List of DNS Record
+     * Fully Qualified Domain Name
      */
-    List<DNSRecord> dnsRecords();
+    String fqdn();
 
     /**
-     * Add a new DNS Record
+     * Target IP Address of this Record
      */
-    DNSAddedEvent<?> add(T add);
+    InetAddress target();
 
     /**
-     * Remove a existing DNS Record
+     * Type of DNS Record (A or AAAA)
      */
-    DNSRemovedEvent<?> remove(T remove);
+    RecordType type();
+
+    /**
+     * TTL of the record
+     */
+    long ttl();
+
+    /**
+     * DNS Service Provider Name
+     */
+    String providerName();
+
+    enum RecordType {
+        A,
+        AAAA
+    }
 }

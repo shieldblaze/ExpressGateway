@@ -18,8 +18,7 @@
 package com.shieldblaze.expressgateway.integration.aws.route53;
 
 import com.shieldblaze.expressgateway.common.utils.NumberUtil;
-import com.shieldblaze.expressgateway.integration.DNSRecord;
-import software.amazon.awssdk.services.lightsail.model.DomainEntry;
+import com.shieldblaze.expressgateway.integration.dns.DNSRecord;
 import software.amazon.awssdk.services.route53.model.RRType;
 import software.amazon.awssdk.services.route53.model.ResourceRecordSet;
 

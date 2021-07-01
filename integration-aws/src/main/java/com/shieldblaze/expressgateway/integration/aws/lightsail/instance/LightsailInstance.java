@@ -17,7 +17,7 @@
  */
 package com.shieldblaze.expressgateway.integration.aws.lightsail.instance;
 
-import com.shieldblaze.expressgateway.integration.Server;
+import com.shieldblaze.expressgateway.integration.server.Server;
 import com.shieldblaze.expressgateway.integration.aws.lightsail.events.LightsailServerDestroyEvent;
 import com.shieldblaze.expressgateway.integration.aws.lightsail.events.LightsailServerRestartEvent;
 import com.shieldblaze.expressgateway.integration.event.ServerDestroyEvent;

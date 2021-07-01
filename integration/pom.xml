@@ -39,7 +39,7 @@
     <dependencies>
         <dependency>
             <groupId>com.shieldblaze.expressgateway</groupId>
-            <artifactId>common</artifactId>
+            <artifactId>concurrent</artifactId>
             <version>0.0.1-a</version>
         </dependency>
     </dependencies>

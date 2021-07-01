@@ -51,7 +51,7 @@
     <dependencies>
         <dependency>
             <groupId>com.shieldblaze.expressgateway</groupId>
-            <artifactId>integration</artifactId>
+            <artifactId>autoscaling</artifactId>
             <version>0.0.1-a</version>
         </dependency>
 

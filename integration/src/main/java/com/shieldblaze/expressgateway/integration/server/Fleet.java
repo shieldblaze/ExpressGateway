@@ -15,39 +15,27 @@
  * You should have received a copy of the GNU General Public License
  * along with ShieldBlaze ExpressGateway.  If not, see <https://www.gnu.org/licenses/>.
  */
-package com.shieldblaze.expressgateway.integration;
+package com.shieldblaze.expressgateway.integration.server;
 
-import java.net.InetAddress;
+import com.shieldblaze.expressgateway.integration.event.FleetScaleInEvent;
+import com.shieldblaze.expressgateway.integration.event.FleetScaleOutEvent;
 
-public interface DNSRecord {
+import java.util.List;
 
-    /**
-     * Fully Qualified Domain Name
-     */
-    String fqdn();
+public interface Fleet<IN, OUT> {
 
     /**
-     * Target IP Address of this Record
+     * List of {@link Server} in the Fleet
      */
-    InetAddress target();
+    List<Server> servers();
 
     /**
-     * Type of DNS Record (A or AAAA)
+     * Scale In server in the Fleet
      */
-    RecordType type();
+    FleetScaleInEvent<?> scaleIn(IN obj);
 
     /**
-     * TTL of the record
+     * Scale Out server in the Fleet
      */
-    long ttl();
-
-    /**
-     * DNS Service Provider Name
-     */
-    String providerName();
-
-    enum RecordType {
-        A,
-        AAAA
-    }
+    FleetScaleOutEvent<?> scaleOut(OUT obj);
 }
