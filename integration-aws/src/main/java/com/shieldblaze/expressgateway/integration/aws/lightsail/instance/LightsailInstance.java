@@ -61,11 +61,6 @@ public final class LightsailInstance implements Server {
     }
 
     @Override
-    public boolean autoscaled() {
-        return autoscaled;
-    }
-
-    @Override
     public boolean inUse() {
         return inUse;
     }
