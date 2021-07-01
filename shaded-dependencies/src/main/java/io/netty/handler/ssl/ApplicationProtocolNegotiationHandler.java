@@ -1,3 +1,4 @@
+  
 /*
  * Copyright 2015 The Netty Project
  *
@@ -22,6 +23,7 @@ import io.netty.channel.ChannelInitializer;
 import io.netty.channel.ChannelPipeline;
 import io.netty.handler.codec.DecoderException;
 import io.netty.util.internal.ObjectUtil;
+import io.netty.util.internal.RecyclableArrayList;
 import io.netty.util.internal.logging.InternalLogger;
 import io.netty.util.internal.logging.InternalLoggerFactory;
 
@@ -68,6 +70,8 @@ public abstract class ApplicationProtocolNegotiationHandler extends ChannelInbou
             InternalLoggerFactory.getInstance(ApplicationProtocolNegotiationHandler.class);
 
     private final String fallbackProtocol;
+    private final RecyclableArrayList bufferedMessages = RecyclableArrayList.newInstance();
+    private ChannelHandlerContext ctx;
 
     /**
      * Creates a new instance with the specified fallback protocol name.
@@ -77,6 +81,38 @@ public abstract class ApplicationProtocolNegotiationHandler extends ChannelInbou
      */
     protected ApplicationProtocolNegotiationHandler(String fallbackProtocol) {
         this.fallbackProtocol = ObjectUtil.checkNotNull(fallbackProtocol, "fallbackProtocol");
+    }
+
+    @Override
+    public void handlerAdded(ChannelHandlerContext ctx) throws Exception {
+        this.ctx = ctx;
+        super.handlerAdded(ctx);
+    }
+
+    @Override
+    public void handlerRemoved(ChannelHandlerContext ctx) throws Exception {
+        fireBufferedMessages();
+        bufferedMessages.recycle();
+        super.handlerRemoved(ctx);
+    }
+
+    @Override
+    public void channelRead(ChannelHandlerContext ctx, Object msg) throws Exception {
+        // Let's buffer all data until this handler will be removed from the pipeline.
+        bufferedMessages.add(msg);
+    }
+
+    /**
+     * Process all backlog into pipeline from List.
+     */
+    private void fireBufferedMessages() {
+        if (!bufferedMessages.isEmpty()) {
+            for (int i = 0; i < bufferedMessages.size(); i++) {
+                ctx.fireChannelRead(bufferedMessages.get(i));
+            }
+            ctx.fireChannelReadComplete();
+            bufferedMessages.clear();
+        }
     }
 
     @Override
@@ -92,13 +128,6 @@ public abstract class ApplicationProtocolNegotiationHandler extends ChannelInbou
                     }
                     String protocol = sslHandler.applicationProtocol();
                     configurePipeline(ctx, protocol != null ? protocol : fallbackProtocol);
-
-                    // If PipelineCallback is available, we'll mark success
-                    // since we're done configuring the pipeline.
-                    PipelineCallback callback = ctx.pipeline().get(PipelineCallback.class);
-                    if (callback != null) {
-                        callback.success();
-                    }
                 } else {
                     // if the event is not produced because of an successful handshake we will receive the same
                     // exception in exceptionCaught(...) and handle it there. This will allow us more fine-grained
@@ -108,13 +137,6 @@ public abstract class ApplicationProtocolNegotiationHandler extends ChannelInbou
                 }
             } catch (Throwable cause) {
                 exceptionCaught(ctx, cause);
-
-                // If PipelineCallback is available, we'll mark success
-                // because something went wrong.
-                PipelineCallback callback = ctx.pipeline().get(PipelineCallback.class);
-                if (callback != null) {
-                    callback.failure();
-                }
             } finally {
                 // Handshake failures are handled in exceptionCaught(...).
                 if (handshakeEvent.isSuccess()) {
@@ -129,9 +151,11 @@ public abstract class ApplicationProtocolNegotiationHandler extends ChannelInbou
     private void removeSelfIfPresent(ChannelHandlerContext ctx) {
         ChannelPipeline pipeline = ctx.pipeline();
         if (pipeline.context(this) != null) {
+            fireBufferedMessages();
             pipeline.remove(this);
         }
     }
+
     /**
      * Invoked on successful initial SSL/TLS handshake. Implement this method to configure your pipeline
      * for the negotiated application-level protocol.
@@ -164,25 +188,5 @@ public abstract class ApplicationProtocolNegotiationHandler extends ChannelInbou
         logger.warn("{} Failed to select the application-level protocol:", ctx.channel(), cause);
         ctx.fireExceptionCaught(cause);
         ctx.close();
-    }
-
-    /**
-     * This abstract class is used to handle initial messages until ALPN is configuring pipeline.
-     * Once ALPN pipeline is successfully configured then it'll call {@link #success()}.
-     */
-    public static abstract class PipelineCallback extends ChannelInboundHandlerAdapter {
-
-        /**
-         * Calling this method will indicate ALPN
-         * pipeline is successfully completed.
-         */
-        public abstract void success();
-
-        /**
-         * Calling this method will indicate that
-         * something wrong has occurred with ALPN
-         * and we should discard all initial messages.
-         */
-        public abstract void failure();
     }
 }

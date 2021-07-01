@@ -19,13 +19,10 @@ package com.shieldblaze.expressgateway.integration.aws.lightsail.dns;
 
 import com.shieldblaze.expressgateway.common.annotation.Async;
 import com.shieldblaze.expressgateway.concurrent.GlobalExecutors;
-import com.shieldblaze.expressgateway.integration.DNSAddRecord;
-import com.shieldblaze.expressgateway.integration.DNSRemoveRecord;
-import com.shieldblaze.expressgateway.integration.aws.AWS;
+import com.shieldblaze.expressgateway.integration.dns.DNSAddRecord;
+import com.shieldblaze.expressgateway.integration.dns.DNSRemoveRecord;
 import com.shieldblaze.expressgateway.integration.aws.lightsail.events.LightsailDNSAddedEvent;
 import com.shieldblaze.expressgateway.integration.aws.lightsail.events.LightsailDNSRemovedEvent;
-import software.amazon.awssdk.auth.credentials.AwsCredentialsProvider;
-import software.amazon.awssdk.regions.Region;
 import software.amazon.awssdk.services.lightsail.LightsailClient;
 import software.amazon.awssdk.services.lightsail.model.CreateDomainEntryRequest;
 import software.amazon.awssdk.services.lightsail.model.CreateDomainEntryResponse;

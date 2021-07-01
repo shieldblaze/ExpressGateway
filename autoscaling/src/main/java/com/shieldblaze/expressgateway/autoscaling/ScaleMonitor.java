@@ -20,15 +20,17 @@ package com.shieldblaze.expressgateway.autoscaling;
 import com.shieldblaze.expressgateway.common.utils.MathUtil;
 import com.shieldblaze.expressgateway.common.utils.NetworkInterfaceUtil;
 import com.shieldblaze.expressgateway.metrics.Bandwidth;
+import com.shieldblaze.expressgateway.metrics.BandwidthMetric;
 import com.shieldblaze.expressgateway.metrics.CPU;
+import com.shieldblaze.expressgateway.metrics.CPUMetric;
 import com.shieldblaze.expressgateway.metrics.Memory;
+import com.shieldblaze.expressgateway.metrics.MemoryMetric;
 import com.shieldblaze.expressgateway.metrics.Packets;
-import org.apache.logging.log4j.LogManager;
-import org.apache.logging.log4j.Logger;
+import com.shieldblaze.expressgateway.metrics.PacketsMetric;
 
 import java.io.Closeable;
-import java.io.IOException;
 import java.util.List;
+import java.util.Objects;
 import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.Executors;
 import java.util.concurrent.ScheduledExecutorService;
@@ -41,16 +43,14 @@ import java.util.concurrent.TimeUnit;
  */
 public final class ScaleMonitor implements Runnable, Closeable {
 
-    private static final Logger logger = LogManager.getLogger(ScaleMonitor.class);
-
     private final ScheduledExecutorService scheduledExecutorService = Executors.newSingleThreadScheduledExecutor();
     private final ScheduledFuture<?> monitorScheduledFuture;
-    private final ScheduledFuture<?> packetsAndBandwidthMonitorScheduledFuture;
+    private final ScheduledFuture<?> packetBandWidthMonitorFuture;
 
-    private final CPU cpu = new CPU();
-    private final Memory memory = new Memory();
-    private final List<Packets> packetsMap = new CopyOnWriteArrayList<>();
-    private final List<Bandwidth> bandwidthMap = new CopyOnWriteArrayList<>();
+    private final CPUMetric cpu;
+    private final MemoryMetric memory;
+    private final List<PacketsMetric> packetsMap = new CopyOnWriteArrayList<>();
+    private final List<BandwidthMetric> bandwidthMap = new CopyOnWriteArrayList<>();
 
     private final Autoscaling autoscaling;
 
@@ -59,118 +59,114 @@ public final class ScaleMonitor implements Runnable, Closeable {
      *
      * @param autoscaling {@link Autoscaling} Instance
      */
-    public ScaleMonitor(Autoscaling autoscaling) {
+    public ScaleMonitor(Autoscaling autoscaling, CPUMetric cpu, MemoryMetric memory) {
         this.autoscaling = autoscaling;
 
-        // Schedule this Runnable to execute every second.
+        this.cpu = Objects.requireNonNullElseGet(cpu, CPU::new);
+        this.memory = Objects.requireNonNullElseGet(memory, () -> new Memory().memory());
+
         monitorScheduledFuture = scheduledExecutorService.scheduleAtFixedRate(this, 0, 1, TimeUnit.SECONDS);
-        packetsAndBandwidthMonitorScheduledFuture = scheduledExecutorService.scheduleAtFixedRate(new PacketsAndBandwidthMonitor(), 0, 1, TimeUnit.MINUTES);
+        packetBandWidthMonitorFuture = scheduledExecutorService.scheduleAtFixedRate(new PacketsAndBandwidthMonitor(), 0, 30, TimeUnit.SECONDS);
     }
 
     @Override
     public void run() {
-        try {
-            // --------------------------------------- CPU ---------------------------------------
+        // --------------------------------------- CPU ---------------------------------------
 
-            /*
-             * If CPU load has exceeded normal level CPU load then scale out.
-             * If not, then scale in.
-             */
-            double cpuLoad = cpu.cpu();
-            if (cpuLoad > autoscaling.configuration().cpuScaleOutLoad()) {
-                autoscaling.scaleOut();
-            } else {
-                autoscaling.scaleIn();
-            }
+        /*
+         * If CPU load has exceeded normal level CPU load then scale out.
+         * If not, then scale in.
+         */
+        double cpuLoad = cpu.cpu();
+        if (cpuLoad > autoscaling.configuration().cpuScaleOutLoad()) {
+            autoscaling.scaleOut();
+        } else {
+            autoscaling.scaleIn();
+        }
 
-            /*
-             * If CPU load has exceeded hibernate level CPU load then enter in hibernation mode.
-             * If not, then dehibernate.
-             */
-            if (cpuLoad > autoscaling.configuration().cpuHibernateLoad()) {
-                autoscaling.hibernate();
-            } else {
-                autoscaling.dehibernate();
-            }
+        /*
+         * If CPU load has exceeded hibernate level CPU load then enter in hibernation mode.
+         * If not, then dehibernate.
+         */
+        if (cpuLoad > autoscaling.configuration().cpuHibernateLoad()) {
+            autoscaling.hibernate();
+        } else {
+            autoscaling.dehibernate();
+        }
 
-            // --------------------------------------- Memory ---------------------------------------
+        // --------------------------------------- Memory ---------------------------------------
 
-            /*
-             * If Memory load has exceeded normal Memory level then scale out.
-             * If not, then scale in.
-             */
-            float memoryLoad = memory.memory().physicalMemoryUsed();
-            if (memoryLoad > autoscaling.configuration().memoryScaleOutLoad()) {
-                autoscaling.scaleOut();
-            } else {
-                autoscaling.scaleIn();
-            }
+        /*
+         * If Memory load has exceeded normal Memory level then scale out.
+         * If not, then scale in.
+         */
+        float memoryLoad = memory.physicalMemoryUsed();
+        if (memoryLoad > autoscaling.configuration().memoryScaleOutLoad()) {
+            autoscaling.scaleOut();
+        } else {
+            autoscaling.scaleIn();
+        }
 
-            /*
-             * If Memory load has exceeded hibernate Memory level then enter in hibernation mode.
-             * If not, then dehibernate.
-             */
-            if (memoryLoad > autoscaling.configuration().memoryHibernateLoad()) {
-                autoscaling.hibernate();
-            } else {
-                autoscaling.dehibernate();
-            }
+        /*
+         * If Memory load has exceeded hibernate Memory level then enter in hibernation mode.
+         * If not, then dehibernate.
+         */
+        if (memoryLoad > autoscaling.configuration().memoryHibernateLoad()) {
+            autoscaling.hibernate();
+        } else {
+            autoscaling.dehibernate();
+        }
 
-            // --------------------------------------- Packets ---------------------------------------
-            int rxPck = packetsMap.stream().mapToInt(Packets::rx).sum();
-            int txPck = packetsMap.stream().mapToInt(Packets::tx).sum();
-            float rxPckLoad = MathUtil.percentage(rxPck, autoscaling.configuration().maxPacketsPerSecond());
-            float txPckLoad = MathUtil.percentage(txPck, autoscaling.configuration().maxPacketsPerSecond());
+        // --------------------------------------- Packets ---------------------------------------
+        int rxPck = packetsMap.stream().mapToInt(PacketsMetric::rx).sum();
+        int txPck = packetsMap.stream().mapToInt(PacketsMetric::tx).sum();
+        float rxPckLoad = MathUtil.percentage(rxPck, autoscaling.configuration().maxPacketsPerSecond());
+        float txPckLoad = MathUtil.percentage(txPck, autoscaling.configuration().maxPacketsPerSecond());
 
-            /*
-             * If Packets load has exceeded normal Packets load level then scale out.
-             * If not, then scale in.
-             */
-            if (rxPckLoad > autoscaling.configuration().packetsScaleOutLoad() || txPckLoad > autoscaling.configuration().packetsScaleOutLoad()) {
-                autoscaling.scaleOut();
-            } else {
-                autoscaling.scaleIn();
-            }
+        /*
+         * If Packets load has exceeded normal Packets load level then scale out.
+         * If not, then scale in.
+         */
+        if (rxPckLoad > autoscaling.configuration().packetsScaleOutLoad() || txPckLoad > autoscaling.configuration().packetsScaleOutLoad()) {
+            autoscaling.scaleOut();
+        } else {
+            autoscaling.scaleIn();
+        }
 
-            /*
-             * If Packets load has exceeded hibernate Packets level then enter in hibernation mode.
-             * If not, then scale in.
-             */
-            if (rxPckLoad > autoscaling.configuration().packetsHibernateLoad() || txPckLoad > autoscaling.configuration().packetsHibernateLoad()) {
-                autoscaling.hibernate();
-            } else {
-                autoscaling.dehibernate();
-            }
+        /*
+         * If Packets load has exceeded hibernate Packets level then enter in hibernation mode.
+         * If not, then scale in.
+         */
+        if (rxPckLoad > autoscaling.configuration().packetsHibernateLoad() || txPckLoad > autoscaling.configuration().packetsHibernateLoad()) {
+            autoscaling.hibernate();
+        } else {
+            autoscaling.dehibernate();
+        }
 
-            // --------------------------------------- Bandwidth ---------------------------------------
-            long rxBandwidth = bandwidthMap.stream().mapToLong(Bandwidth::rx).sum();
-            long txBandwidth = bandwidthMap.stream().mapToLong(Bandwidth::tx).sum();
-            float rxBandwidthLoad = MathUtil.percentage(rxBandwidth, autoscaling.configuration().maxBytesPerSecond());
-            float txBandwidthLoad = MathUtil.percentage(txBandwidth, autoscaling.configuration().maxBytesPerSecond());
+        // --------------------------------------- Bandwidth ---------------------------------------
+        long rxBandwidth = bandwidthMap.stream().mapToLong(BandwidthMetric::rx).sum();
+        long txBandwidth = bandwidthMap.stream().mapToLong(BandwidthMetric::tx).sum();
+        float rxBandwidthLoad = MathUtil.percentage(rxBandwidth, autoscaling.configuration().maxBytesPerSecond());
+        float txBandwidthLoad = MathUtil.percentage(txBandwidth, autoscaling.configuration().maxBytesPerSecond());
 
-            /*
-             * If Bandwidth load has exceeded normal Bandwidth load level then scale out.
-             * If not, then scale in.
-             */
-            if (rxBandwidthLoad > autoscaling.configuration().bytesScaleOutLoad() || txBandwidthLoad > autoscaling.configuration().bytesScaleOutLoad()) {
-                autoscaling.scaleOut();
-            } else {
-                autoscaling.scaleIn();
-            }
+        /*
+         * If Bandwidth load has exceeded normal Bandwidth load level then scale out.
+         * If not, then scale in.
+         */
+        if (rxBandwidthLoad > autoscaling.configuration().bytesScaleOutLoad() || txBandwidthLoad > autoscaling.configuration().bytesScaleOutLoad()) {
+            autoscaling.scaleOut();
+        } else {
+            autoscaling.scaleIn();
+        }
 
-            /*
-             * If Bandwidth load has exceeded hibernate Bandwidth level then enter in hibernation mode.
-             * If not, then scale in.
-             */
-            if (rxBandwidthLoad > autoscaling.configuration().bytesHibernateLoad() || txBandwidthLoad > autoscaling.configuration().bytesHibernateLoad()) {
-                autoscaling.hibernate();
-            } else {
-                autoscaling.dehibernate();
-            }
-        } catch (IOException e) {
-            // This should never happen
-            Error error = new Error(e);
-            logger.fatal(error);
+        /*
+         * If Bandwidth load has exceeded hibernate Bandwidth level then enter in hibernation mode.
+         * If not, then scale in.
+         */
+        if (rxBandwidthLoad > autoscaling.configuration().bytesHibernateLoad() || txBandwidthLoad > autoscaling.configuration().bytesHibernateLoad()) {
+            autoscaling.hibernate();
+        } else {
+            autoscaling.dehibernate();
         }
     }
 
@@ -178,10 +174,10 @@ public final class ScaleMonitor implements Runnable, Closeable {
 
         @Override
         public void run() {
-            packetsMap.forEach(Packets::close);
+            packetsMap.forEach(PacketsMetric::close);
             packetsMap.clear();
 
-            bandwidthMap.forEach(Bandwidth::close);
+            bandwidthMap.forEach(BandwidthMetric::close);
             bandwidthMap.clear();
 
             List<String> ifNameList = NetworkInterfaceUtil.ifNameList();
@@ -202,6 +198,6 @@ public final class ScaleMonitor implements Runnable, Closeable {
     public void close() {
         scheduledExecutorService.shutdown();
         monitorScheduledFuture.cancel(true);
-        packetsAndBandwidthMonitorScheduledFuture.cancel(true);
+        packetBandWidthMonitorFuture.cancel(true);
     }
 }

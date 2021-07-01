@@ -17,8 +17,8 @@
  */
 package com.shieldblaze.expressgateway.integration.aws.lightsail.instance;
 
-import com.shieldblaze.expressgateway.integration.ScaleIn;
-import com.shieldblaze.expressgateway.integration.ScaleOut;
+import com.shieldblaze.expressgateway.integration.server.ScaleIn;
+import com.shieldblaze.expressgateway.integration.server.ScaleOut;
 import com.shieldblaze.expressgateway.integration.aws.lightsail.events.LightsailScaleInEvent;
 import com.shieldblaze.expressgateway.integration.aws.lightsail.events.LightsailScaleOutEvent;
 import software.amazon.awssdk.services.lightsail.LightsailClient;

@@ -17,7 +17,7 @@
  */
 package com.shieldblaze.expressgateway.integration.aws.lightsail.dns;
 
-import com.shieldblaze.expressgateway.integration.DNSRecord;
+import com.shieldblaze.expressgateway.integration.dns.DNSRecord;
 import software.amazon.awssdk.services.lightsail.model.DomainEntry;
 
 import java.net.InetAddress;

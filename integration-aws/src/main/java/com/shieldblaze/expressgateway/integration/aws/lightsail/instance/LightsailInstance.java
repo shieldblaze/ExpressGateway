@@ -17,7 +17,7 @@
  */
 package com.shieldblaze.expressgateway.integration.aws.lightsail.instance;
 
-import com.shieldblaze.expressgateway.integration.Server;
+import com.shieldblaze.expressgateway.integration.server.Server;
 import com.shieldblaze.expressgateway.integration.aws.lightsail.events.LightsailServerDestroyEvent;
 import com.shieldblaze.expressgateway.integration.aws.lightsail.events.LightsailServerRestartEvent;
 import com.shieldblaze.expressgateway.integration.event.ServerDestroyEvent;
@@ -58,11 +58,6 @@ public final class LightsailInstance implements Server {
     @Override
     public long startTime() {
         return startTime;
-    }
-
-    @Override
-    public boolean autoscaled() {
-        return autoscaled;
     }
 
     @Override

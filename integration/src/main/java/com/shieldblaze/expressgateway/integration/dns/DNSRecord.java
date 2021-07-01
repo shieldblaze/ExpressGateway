@@ -15,13 +15,39 @@
  * You should have received a copy of the GNU General Public License
  * along with ShieldBlaze ExpressGateway.  If not, see <https://www.gnu.org/licenses/>.
  */
+package com.shieldblaze.expressgateway.integration.dns;
 
-package com.shieldblaze.expressgateway.integration;
+import java.net.InetAddress;
 
-public interface DNSRemoveRecord<INPUT, RETURN> {
+public interface DNSRecord {
 
     /**
-     * Remove a DNS Record
+     * Fully Qualified Domain Name
      */
-    RETURN removeRecord(INPUT input);
+    String fqdn();
+
+    /**
+     * Target IP Address of this Record
+     */
+    InetAddress target();
+
+    /**
+     * Type of DNS Record (A or AAAA)
+     */
+    RecordType type();
+
+    /**
+     * TTL of the record
+     */
+    long ttl();
+
+    /**
+     * DNS Service Provider Name
+     */
+    String providerName();
+
+    enum RecordType {
+        A,
+        AAAA
+    }
 }

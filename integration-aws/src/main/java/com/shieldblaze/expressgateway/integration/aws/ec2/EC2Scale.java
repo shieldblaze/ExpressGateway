@@ -19,15 +19,11 @@ package com.shieldblaze.expressgateway.integration.aws.ec2;
 
 import com.shieldblaze.expressgateway.common.annotation.Async;
 import com.shieldblaze.expressgateway.concurrent.GlobalExecutors;
-import com.shieldblaze.expressgateway.integration.ScaleIn;
-import com.shieldblaze.expressgateway.integration.ScaleOut;
+import com.shieldblaze.expressgateway.integration.server.ScaleIn;
+import com.shieldblaze.expressgateway.integration.server.ScaleOut;
 import com.shieldblaze.expressgateway.integration.aws.ec2.events.EC2ScaleInEvent;
 import com.shieldblaze.expressgateway.integration.aws.ec2.events.EC2ScaleOutEvent;
 import software.amazon.awssdk.services.ec2.Ec2Client;
-import software.amazon.awssdk.services.ec2.model.AllocateAddressRequest;
-import software.amazon.awssdk.services.ec2.model.AllocateAddressResponse;
-import software.amazon.awssdk.services.ec2.model.AssociateAddressRequest;
-import software.amazon.awssdk.services.ec2.model.AssociateAddressResponse;
 import software.amazon.awssdk.services.ec2.model.DescribeInstancesRequest;
 import software.amazon.awssdk.services.ec2.model.DescribeInstancesResponse;
 import software.amazon.awssdk.services.ec2.model.Instance;

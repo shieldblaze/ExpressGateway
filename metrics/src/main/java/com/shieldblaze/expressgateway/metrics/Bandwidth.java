@@ -23,14 +23,16 @@ import org.apache.logging.log4j.Logger;
 import java.io.Closeable;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.util.Objects;
 
 /**
  * System Network Bandwidth Metric
  */
-public class Bandwidth extends Thread implements Closeable {
+public class Bandwidth extends Thread implements BandwidthMetric, Closeable {
 
     private static final Logger logger = LogManager.getLogger(Bandwidth.class);
 
+    private final String ifName;
     private long RX;
     private long TX;
     private boolean stop;
@@ -39,8 +41,10 @@ public class Bandwidth extends Thread implements Closeable {
 
     public Bandwidth(String ifName) {
         super("IF-" + ifName + "; Packets-Monitor-Thread");
-        rx = Path.of("/sys/class/net/" + ifName + "/statistics/rx_bytes");
-        tx = Path.of("/sys/class/net/" + ifName + "/statistics/tx_bytes");
+        this.ifName = Objects.requireNonNull(ifName, "IFName");
+        rx = Path.of("/sys/class/net/" + networkInterfaceCard() + "/statistics/rx_bytes");
+        tx = Path.of("/sys/class/net/" + networkInterfaceCard() + "/statistics/tx_bytes");
+        start();
     }
 
     @SuppressWarnings("BusyWait")
@@ -64,10 +68,12 @@ public class Bandwidth extends Thread implements Closeable {
         }
     }
 
+    @Override
     public long rx() {
         return RX;
     }
 
+    @Override
     public long tx() {
         return TX;
     }
@@ -75,5 +81,10 @@ public class Bandwidth extends Thread implements Closeable {
     @Override
     public void close() {
         stop = true;
+    }
+
+    @Override
+    public String networkInterfaceCard() {
+        return ifName;
     }
 }

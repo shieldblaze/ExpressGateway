@@ -23,14 +23,16 @@ import org.apache.logging.log4j.Logger;
 import java.io.Closeable;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.util.Objects;
 
 /**
  * System Network Packets Metric
  */
-public class Packets extends Thread implements Closeable {
+public class Packets extends Thread implements PacketsMetric {
 
     private static final Logger logger = LogManager.getLogger(Packets.class);
 
+    private final String ifName;
     private int RX;
     private int TX;
     private boolean stop;
@@ -39,8 +41,10 @@ public class Packets extends Thread implements Closeable {
 
     public Packets(String ifName) {
         super("IF-" + ifName + "; Packets-Monitor-Thread");
-        rx = Path.of("/sys/class/net/" + ifName + "/statistics/rx_packets");
-        tx = Path.of("/sys/class/net/" + ifName + "/statistics/tx_packets");
+        this.ifName = Objects.requireNonNull(ifName, "IFName");
+        rx = Path.of("/sys/class/net/" + networkInterfaceCard() + "/statistics/rx_packets");
+        tx = Path.of("/sys/class/net/" + networkInterfaceCard() + "/statistics/tx_packets");
+        start();
     }
 
     @SuppressWarnings("BusyWait")
@@ -64,10 +68,12 @@ public class Packets extends Thread implements Closeable {
         }
     }
 
+    @Override
     public int rx() {
         return RX;
     }
 
+    @Override
     public int tx() {
         return TX;
     }
@@ -75,5 +81,10 @@ public class Packets extends Thread implements Closeable {
     @Override
     public void close() {
         stop = true;
+    }
+
+    @Override
+    public String networkInterfaceCard() {
+        return ifName;
     }
 }

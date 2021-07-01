@@ -41,6 +41,8 @@
 package com.shieldblaze.expressgateway.metrics;
 
 import com.shieldblaze.expressgateway.common.utils.MathUtil;
+import org.apache.logging.log4j.LogManager;
+import org.apache.logging.log4j.Logger;
 
 import java.io.BufferedReader;
 import java.io.FileReader;
@@ -52,7 +54,9 @@ import java.util.Arrays;
  */
 public class Memory {
 
-    public MemoryUsage memory() throws IOException {
+    private static final Logger logger = LogManager.getLogger(Memory.class);
+
+    public MemoryUsage memory() {
         try (BufferedReader r = new BufferedReader(new FileReader("/proc/meminfo"))) {
             long[] values = new long[4];
             Arrays.fill(values, -1);
@@ -79,6 +83,11 @@ public class Memory {
             }
 
             return new MemoryUsage(values);
+        } catch (Exception ex) {
+            // This should never happen
+            Error error = new Error(ex);
+            logger.fatal(error);
+            throw error;
         }
     }
 
@@ -120,7 +129,7 @@ public class Memory {
         }
     }
 
-    public static final class MemoryUsage {
+    public static final class MemoryUsage implements MemoryMetric{
         /**
          * Total physical memory of the system, in bytes.
          * -1 if unknown.

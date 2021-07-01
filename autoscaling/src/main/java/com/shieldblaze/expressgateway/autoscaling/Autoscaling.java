@@ -68,12 +68,12 @@ public abstract class Autoscaling {
     /**
      * List of Servers in fleet
      */
-    public abstract List<Server> servers();
+    public abstract List<AutoscalingServer> servers();
 
     /**
      * Current (This) Server
      */
-    public abstract Server server();
+    public abstract AutoscalingServer server();
 
     /**
      * {@link AutoscalingConfiguration} Instance

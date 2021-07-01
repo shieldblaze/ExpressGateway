@@ -17,8 +17,8 @@
  */
 package com.shieldblaze.expressgateway.integration.aws.ec2;
 
-import com.shieldblaze.expressgateway.integration.Fleet;
-import com.shieldblaze.expressgateway.integration.Server;
+import com.shieldblaze.expressgateway.integration.server.Fleet;
+import com.shieldblaze.expressgateway.integration.server.Server;
 import com.shieldblaze.expressgateway.integration.aws.AWS;
 import com.shieldblaze.expressgateway.integration.event.FleetScaleInEvent;
 import com.shieldblaze.expressgateway.integration.event.FleetScaleOutEvent;

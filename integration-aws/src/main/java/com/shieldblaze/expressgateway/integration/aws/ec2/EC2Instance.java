@@ -19,17 +19,15 @@ package com.shieldblaze.expressgateway.integration.aws.ec2;
 
 import com.shieldblaze.expressgateway.common.annotation.Async;
 import com.shieldblaze.expressgateway.concurrent.GlobalExecutors;
-import com.shieldblaze.expressgateway.integration.Server;
+import com.shieldblaze.expressgateway.integration.server.Server;
 import com.shieldblaze.expressgateway.integration.aws.ec2.events.EC2ServerDestroyEvent;
 import com.shieldblaze.expressgateway.integration.aws.ec2.events.EC2ServerRestartEvent;
 import com.shieldblaze.expressgateway.integration.event.ServerDestroyEvent;
 import com.shieldblaze.expressgateway.integration.event.ServerRestartEvent;
 import software.amazon.awssdk.services.ec2.Ec2Client;
 import software.amazon.awssdk.services.ec2.model.Instance;
-import software.amazon.awssdk.services.ec2.model.InstanceNetworkInterface;
 import software.amazon.awssdk.services.ec2.model.RebootInstancesRequest;
 import software.amazon.awssdk.services.ec2.model.RebootInstancesResponse;
-import software.amazon.awssdk.services.ec2.model.RunInstancesResponse;
 import software.amazon.awssdk.services.ec2.model.Tag;
 import software.amazon.awssdk.services.ec2.model.TerminateInstancesRequest;
 import software.amazon.awssdk.services.ec2.model.TerminateInstancesResponse;
@@ -57,11 +55,6 @@ public class EC2Instance implements Server {
     @Override
     public long startTime() {
         return startTime;
-    }
-
-    @Override
-    public boolean autoscaled() {
-        return autoscaled;
     }
 
     @Override

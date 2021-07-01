@@ -19,8 +19,8 @@ package com.shieldblaze.expressgateway.integration.aws.route53;
 
 import com.shieldblaze.expressgateway.common.annotation.Async;
 import com.shieldblaze.expressgateway.concurrent.GlobalExecutors;
-import com.shieldblaze.expressgateway.integration.DNSAddRecord;
-import com.shieldblaze.expressgateway.integration.DNSRemoveRecord;
+import com.shieldblaze.expressgateway.integration.dns.DNSAddRecord;
+import com.shieldblaze.expressgateway.integration.dns.DNSRemoveRecord;
 import com.shieldblaze.expressgateway.integration.aws.route53.events.Route53DNSAddedEvent;
 import com.shieldblaze.expressgateway.integration.aws.route53.events.Route53DNSRemovedEvent;
 import software.amazon.awssdk.services.route53.Route53Client;

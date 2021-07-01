@@ -15,27 +15,15 @@
  * You should have received a copy of the GNU General Public License
  * along with ShieldBlaze ExpressGateway.  If not, see <https://www.gnu.org/licenses/>.
  */
-package com.shieldblaze.expressgateway.integration;
+package com.shieldblaze.expressgateway.metrics;
 
-import com.shieldblaze.expressgateway.integration.event.DNSAddedEvent;
-import com.shieldblaze.expressgateway.integration.event.DNSRemovedEvent;
-
-import java.util.List;
-
-public interface DNS<T> {
+/**
+ * Current CPU Load
+ */
+public interface CPUMetric {
 
     /**
-     * List of DNS Record
+     * Get current CPU load
      */
-    List<DNSRecord> dnsRecords();
-
-    /**
-     * Add a new DNS Record
-     */
-    DNSAddedEvent<?> add(T add);
-
-    /**
-     * Remove a existing DNS Record
-     */
-    DNSRemovedEvent<?> remove(T remove);
+    double cpu();
 }
