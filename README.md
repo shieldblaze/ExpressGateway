@@ -1,5 +1,5 @@
 # ShieldBlaze ExpressGateway
-#### ShieldBlaze ExpressGateway is a High-Performance Virtual Network Appliance.
+#### ShieldBlaze ExpressGateway is a High-Performance, Scalable, and Highly-Available Load Balancer.
 
 ![Build](https://github.com/shieldblaze/ExpressGateway/workflows/Java%20CI%20with%20Maven/badge.svg)
 [![Total alerts](https://img.shields.io/lgtm/alerts/g/shieldblaze/ExpressGateway.svg?logo=lgtm&logoWidth=18)](https://lgtm.com/projects/g/shieldblaze/ExpressGateway/alerts/)
@@ -7,7 +7,7 @@
 [![codecov](https://codecov.io/gh/shieldblaze/ExpressGateway/branch/main/graph/badge.svg?token=3TWQDLKVAA)](https://codecov.io/gh/shieldblaze/ExpressGateway)
 
 
-#### Current Status: In-development
+#### Current Status: In-development | Last Call
 
 ## Features:
 ### L4:
@@ -59,3 +59,8 @@
 - :heavy_check_mark: Per-Connection Rate-Limit
 - :heavy_check_mark: Per-Packet Rate-Limit
 - [ ] Web Application Firewall (WAF)
+
+### Cloud Integration:
+- :heavy_check_mark: Amazon Web Services (AWS)
+- [ ] Microsoft Azure (Azure)
+- [ ] Google Cloud Platform (GCP)
