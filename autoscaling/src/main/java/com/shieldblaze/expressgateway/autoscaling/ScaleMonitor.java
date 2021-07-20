@@ -57,7 +57,7 @@ public final class ScaleMonitor implements Runnable, Closeable {
 
         this.cpu = Objects.requireNonNullElseGet(cpu, CPU::new);
         this.memory = Objects.requireNonNullElseGet(memory, Memory::new);
-        this.edgeNetworkMetric = Objects.requireNonNullElseGet(edgeNetworkMetric, EdgeNetworkMetricRecorder::new);
+        this.edgeNetworkMetric = Objects.requireNonNullElse(edgeNetworkMetric, EdgeNetworkMetricRecorder.INSTANCE);
 
         monitorScheduledFuture = scheduledExecutorService.scheduleAtFixedRate(this, 0, 1, TimeUnit.SECONDS);
     }
