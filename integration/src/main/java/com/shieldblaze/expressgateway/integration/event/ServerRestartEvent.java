@@ -19,6 +19,10 @@ package com.shieldblaze.expressgateway.integration.event;
 
 import com.shieldblaze.expressgateway.concurrent.event.DefaultEvent;
 
+/**
+ * This event is fired when a server is restarted of the fleet.
+ * @param <T> Return type
+ */
 public abstract class ServerRestartEvent<T> extends DefaultEvent<T> {
     // Empty
 }

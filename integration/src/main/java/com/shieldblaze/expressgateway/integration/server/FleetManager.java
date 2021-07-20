@@ -17,16 +17,31 @@
  */
 package com.shieldblaze.expressgateway.integration.server;
 
+import com.shieldblaze.expressgateway.integration.event.FleetScaleInEvent;
+import com.shieldblaze.expressgateway.integration.event.FleetScaleOutEvent;
+
+import java.util.List;
+
 /**
- * Interface for implementation of Scale in of server.
+ * This class is used for scaling in or out.
  *
- * @param <INPUT> Input type
- * @param <RETURN> Return type
+ * @param <IN>  Scale In type
+ * @param <OUT> Scale out type
  */
-public interface ScaleIn<INPUT, RETURN> {
+public interface FleetManager<IN, OUT> {
 
     /**
-     * Scale in a server into fleet
+     * List of {@link Server} in the Fleet
      */
-    RETURN scaleIn(INPUT input);
+    List<Server> servers();
+
+    /**
+     * Scale In server in the Fleet
+     */
+    FleetScaleInEvent<?> scaleIn(IN obj);
+
+    /**
+     * Scale Out server in the Fleet
+     */
+    FleetScaleOutEvent<?> scaleOut(OUT obj);
 }

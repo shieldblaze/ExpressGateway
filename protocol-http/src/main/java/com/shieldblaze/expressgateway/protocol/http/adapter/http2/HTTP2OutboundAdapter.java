@@ -75,7 +75,7 @@ import java.util.concurrent.ConcurrentHashMap;
  * <p>
  * For Outbound {@linkplain Http2StreamFrame}: If {@linkplain Http2HeadersFrame} has {@code endOfStream} set to {@code true}
  * then {@linkplain HTTP2InboundAdapter} will create {@linkplain FullHttpResponse} else it'll create
- * {@linkplain HttpRequest} and set {@code CONTENT-ENCODING: CHUNKED}.
+ * {@linkplain HttpRequest} and set {@code TRANSFER_ENCODING: CHUNKED}.
  * </p>
  */
 public final class HTTP2OutboundAdapter extends Http2ChannelDuplexHandler {

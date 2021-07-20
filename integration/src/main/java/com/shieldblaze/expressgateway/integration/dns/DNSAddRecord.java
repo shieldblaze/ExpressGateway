@@ -18,6 +18,9 @@
 
 package com.shieldblaze.expressgateway.integration.dns;
 
+/**
+ * Interface for implementation of DNS record addition.
+ */
 public interface DNSAddRecord<INPUT, RETURN> {
 
     /**

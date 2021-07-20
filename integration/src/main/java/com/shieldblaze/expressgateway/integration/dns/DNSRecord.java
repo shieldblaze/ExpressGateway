@@ -19,6 +19,9 @@ package com.shieldblaze.expressgateway.integration.dns;
 
 import java.net.InetAddress;
 
+/**
+ * This class holds DNS Record details such as name, target, ttl, etc.
+ */
 public interface DNSRecord {
 
     /**

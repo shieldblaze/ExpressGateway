@@ -24,7 +24,7 @@ import java.net.Inet4Address;
 import java.net.Inet6Address;
 
 /**
- * Server Interface
+ * This class holds Server details such as id, address, etc.
  */
 public interface Server {
 

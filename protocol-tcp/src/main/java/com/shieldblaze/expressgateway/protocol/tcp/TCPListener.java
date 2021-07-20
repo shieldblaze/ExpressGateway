@@ -104,7 +104,7 @@ public class TCPListener extends L4FrontListener {
                 .childHandler(channelHandler);
 
         int bindRounds = 1;
-        if (transportConfiguration.transportType() == TransportType.EPOLL || transportConfiguration.transportType() == TransportType.IO_URING) {
+        if (transportConfiguration.transportType().nativeTransport()) {
             bindRounds = l4LoadBalancer().coreConfiguration().eventLoopConfiguration().parentWorkers();
         }
 

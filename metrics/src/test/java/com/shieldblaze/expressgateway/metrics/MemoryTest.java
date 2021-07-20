@@ -15,18 +15,28 @@
  * You should have received a copy of the GNU General Public License
  * along with ShieldBlaze ExpressGateway.  If not, see <https://www.gnu.org/licenses/>.
  */
-package com.shieldblaze.expressgateway.integration.server;
+package com.shieldblaze.expressgateway.metrics;
 
-/**
- * Interface for implementation of Scale in of server.
- *
- * @param <INPUT> Input type
- * @param <RETURN> Return type
- */
-public interface ScaleIn<INPUT, RETURN> {
+import org.junit.jupiter.api.Test;
 
-    /**
-     * Scale in a server into fleet
-     */
-    RETURN scaleIn(INPUT input);
+import java.util.HashMap;
+import java.util.Map;
+
+import static org.junit.jupiter.api.Assertions.*;
+
+class MemoryTest {
+
+    @Test
+    void physicalMemoryUsedTest() {
+        MemoryMetric memoryMetric = new Memory();
+        float memoryUsedA = memoryMetric.physicalMemoryUsed();
+
+        Map<String, Integer> stringIntegerMap = new HashMap<>();
+        for (int i = 0; i < 1_000_000; i++) {
+            stringIntegerMap.put(String.valueOf(i), i);
+        }
+
+        float memoryUsedB = memoryMetric.physicalMemoryUsed();
+        assertNotEquals(memoryUsedB, memoryUsedA);
+    }
 }

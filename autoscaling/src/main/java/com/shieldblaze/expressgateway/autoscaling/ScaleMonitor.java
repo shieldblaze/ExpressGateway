@@ -18,20 +18,15 @@
 package com.shieldblaze.expressgateway.autoscaling;
 
 import com.shieldblaze.expressgateway.common.utils.MathUtil;
-import com.shieldblaze.expressgateway.common.utils.NetworkInterfaceUtil;
-import com.shieldblaze.expressgateway.metrics.Bandwidth;
-import com.shieldblaze.expressgateway.metrics.BandwidthMetric;
 import com.shieldblaze.expressgateway.metrics.CPU;
 import com.shieldblaze.expressgateway.metrics.CPUMetric;
+import com.shieldblaze.expressgateway.metrics.EdgeNetworkMetric;
+import com.shieldblaze.expressgateway.metrics.EdgeNetworkMetricRecorder;
 import com.shieldblaze.expressgateway.metrics.Memory;
 import com.shieldblaze.expressgateway.metrics.MemoryMetric;
-import com.shieldblaze.expressgateway.metrics.Packets;
-import com.shieldblaze.expressgateway.metrics.PacketsMetric;
 
 import java.io.Closeable;
-import java.util.List;
 import java.util.Objects;
-import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.Executors;
 import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.ScheduledFuture;
@@ -45,12 +40,10 @@ public final class ScaleMonitor implements Runnable, Closeable {
 
     private final ScheduledExecutorService scheduledExecutorService = Executors.newSingleThreadScheduledExecutor();
     private final ScheduledFuture<?> monitorScheduledFuture;
-    private final ScheduledFuture<?> packetBandWidthMonitorFuture;
 
     private final CPUMetric cpu;
     private final MemoryMetric memory;
-    private final List<PacketsMetric> packetsMap = new CopyOnWriteArrayList<>();
-    private final List<BandwidthMetric> bandwidthMap = new CopyOnWriteArrayList<>();
+    private final EdgeNetworkMetric edgeNetworkMetric;
 
     private final Autoscaling autoscaling;
 
@@ -59,14 +52,14 @@ public final class ScaleMonitor implements Runnable, Closeable {
      *
      * @param autoscaling {@link Autoscaling} Instance
      */
-    public ScaleMonitor(Autoscaling autoscaling, CPUMetric cpu, MemoryMetric memory) {
+    public ScaleMonitor(Autoscaling autoscaling, CPUMetric cpu, MemoryMetric memory, EdgeNetworkMetric edgeNetworkMetric) {
         this.autoscaling = autoscaling;
 
         this.cpu = Objects.requireNonNullElseGet(cpu, CPU::new);
-        this.memory = Objects.requireNonNullElseGet(memory, () -> new Memory().memory());
+        this.memory = Objects.requireNonNullElseGet(memory, Memory::new);
+        this.edgeNetworkMetric = Objects.requireNonNullElse(edgeNetworkMetric, EdgeNetworkMetricRecorder.INSTANCE);
 
         monitorScheduledFuture = scheduledExecutorService.scheduleAtFixedRate(this, 0, 1, TimeUnit.SECONDS);
-        packetBandWidthMonitorFuture = scheduledExecutorService.scheduleAtFixedRate(new PacketsAndBandwidthMonitor(), 0, 30, TimeUnit.SECONDS);
     }
 
     @Override
@@ -118,8 +111,8 @@ public final class ScaleMonitor implements Runnable, Closeable {
         }
 
         // --------------------------------------- Packets ---------------------------------------
-        int rxPck = packetsMap.stream().mapToInt(PacketsMetric::rx).sum();
-        int txPck = packetsMap.stream().mapToInt(PacketsMetric::tx).sum();
+        int rxPck = edgeNetworkMetric.packetRX();
+        int txPck = edgeNetworkMetric.packetTX();
         float rxPckLoad = MathUtil.percentage(rxPck, autoscaling.configuration().maxPacketsPerSecond());
         float txPckLoad = MathUtil.percentage(txPck, autoscaling.configuration().maxPacketsPerSecond());
 
@@ -144,8 +137,8 @@ public final class ScaleMonitor implements Runnable, Closeable {
         }
 
         // --------------------------------------- Bandwidth ---------------------------------------
-        long rxBandwidth = bandwidthMap.stream().mapToLong(BandwidthMetric::rx).sum();
-        long txBandwidth = bandwidthMap.stream().mapToLong(BandwidthMetric::tx).sum();
+        long rxBandwidth = edgeNetworkMetric.bandwidthRX();
+        long txBandwidth = edgeNetworkMetric.bandwidthTX();
         float rxBandwidthLoad = MathUtil.percentage(rxBandwidth, autoscaling.configuration().maxBytesPerSecond());
         float txBandwidthLoad = MathUtil.percentage(txBandwidth, autoscaling.configuration().maxBytesPerSecond());
 
@@ -170,34 +163,9 @@ public final class ScaleMonitor implements Runnable, Closeable {
         }
     }
 
-    private final class PacketsAndBandwidthMonitor implements Runnable {
-
-        @Override
-        public void run() {
-            packetsMap.forEach(PacketsMetric::close);
-            packetsMap.clear();
-
-            bandwidthMap.forEach(BandwidthMetric::close);
-            bandwidthMap.clear();
-
-            List<String> ifNameList = NetworkInterfaceUtil.ifNameList();
-
-            for (String ifName : ifNameList) {
-                Packets packets = new Packets(ifName);
-                packets.start();
-                packetsMap.add(packets);
-
-                Bandwidth bandwidth = new Bandwidth(ifName);
-                bandwidth.start();
-                bandwidthMap.add(bandwidth);
-            }
-        }
-    }
-
     @Override
     public void close() {
-        scheduledExecutorService.shutdown();
         monitorScheduledFuture.cancel(true);
-        packetBandWidthMonitorFuture.cancel(true);
+        scheduledExecutorService.shutdown();
     }
 }

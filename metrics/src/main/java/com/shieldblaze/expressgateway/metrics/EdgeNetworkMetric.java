@@ -15,18 +15,31 @@
  * You should have received a copy of the GNU General Public License
  * along with ShieldBlaze ExpressGateway.  If not, see <https://www.gnu.org/licenses/>.
  */
-package com.shieldblaze.expressgateway.integration.server;
+package com.shieldblaze.expressgateway.metrics;
 
 /**
- * Interface for implementation of Scale in of server.
- *
- * @param <INPUT> Input type
- * @param <RETURN> Return type
+ * This class holds implementations of Packets transmitted, Packets received,
+ * Bandwidth transmitted and bandwidth received.
  */
-public interface ScaleIn<INPUT, RETURN> {
+public interface EdgeNetworkMetric {
 
     /**
-     * Scale in a server into fleet
+     * Get current Bandwidth transmitted
      */
-    RETURN scaleIn(INPUT input);
+    long bandwidthTX();
+
+    /**
+     * Get current Bandwidth received
+     */
+    long bandwidthRX();
+
+    /**
+     * Get current Packets transmitted
+     */
+    int packetTX();
+
+    /**
+     * Get current Packets transmitted
+     */
+    int packetRX();
 }

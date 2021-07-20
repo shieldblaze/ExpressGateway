@@ -52,7 +52,7 @@ import java.util.Arrays;
 /**
  * System Memory Metric
  */
-public class Memory {
+public final class Memory implements MemoryMetric {
 
     private static final Logger logger = LogManager.getLogger(Memory.class);
 
@@ -112,6 +112,16 @@ public class Memory {
 
     private static final Suffix NONE = new Suffix("", 1);
 
+    @Override
+    public float physicalMemoryUsed() {
+        return memory().physicalMemoryUsed();
+    }
+
+    @Override
+    public float swapSpaceUsed() {
+        return memory().physicalMemoryUsed();
+    }
+
     private static class Suffix {
         final String name;
         final long multiplier;
@@ -129,7 +139,7 @@ public class Memory {
         }
     }
 
-    public static final class MemoryUsage implements MemoryMetric{
+    public static final class MemoryUsage {
         /**
          * Total physical memory of the system, in bytes.
          * -1 if unknown.

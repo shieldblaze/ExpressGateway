@@ -25,11 +25,14 @@ import com.shieldblaze.expressgateway.core.L4FrontListener;
 import com.shieldblaze.expressgateway.core.events.L4FrontListenerShutdownEvent;
 import com.shieldblaze.expressgateway.core.events.L4FrontListenerStartupEvent;
 import com.shieldblaze.expressgateway.core.events.L4FrontListenerStopEvent;
+import com.shieldblaze.expressgateway.metrics.EdgeNetworkMetricRecorder;
 import io.netty.bootstrap.Bootstrap;
 import io.netty.channel.ChannelFuture;
 import io.netty.channel.ChannelFutureListener;
 import io.netty.channel.ChannelHandler;
+import io.netty.channel.ChannelInitializer;
 import io.netty.channel.EventLoopGroup;
+import io.netty.channel.socket.DatagramChannel;
 
 import java.util.ArrayList;
 import java.util.List;
@@ -62,11 +65,16 @@ public class UDPListener extends L4FrontListener {
         }
 
         Bootstrap bootstrap = BootstrapFactory.udp(coreConfiguration, eventLoopGroup, l4LoadBalancer().byteBufAllocator())
-                .handler(channelHandler);
+                .handler(new ChannelInitializer<DatagramChannel>() {
+                    @Override
+                    protected void initChannel(DatagramChannel ch) {
+                        ch.pipeline().addFirst(EdgeNetworkMetricRecorder.INSTANCE);
+                        ch.pipeline().addLast(channelHandler);
+                    }
+                });
 
         int bindRounds = 1;
-        if (coreConfiguration.transportConfiguration().transportType() == TransportType.EPOLL ||
-                coreConfiguration.transportConfiguration().transportType() == TransportType.IO_URING) {
+        if (coreConfiguration.transportConfiguration().transportType().nativeTransport()) {
             bindRounds = coreConfiguration.eventLoopConfiguration().parentWorkers();
         }
 

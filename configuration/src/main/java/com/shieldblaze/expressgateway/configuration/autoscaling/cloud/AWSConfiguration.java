@@ -15,18 +15,7 @@
  * You should have received a copy of the GNU General Public License
  * along with ShieldBlaze ExpressGateway.  If not, see <https://www.gnu.org/licenses/>.
  */
-package com.shieldblaze.expressgateway.integration.server;
+package com.shieldblaze.expressgateway.configuration.autoscaling.cloud;
 
-/**
- * Interface for implementation of Scale in of server.
- *
- * @param <INPUT> Input type
- * @param <RETURN> Return type
- */
-public interface ScaleIn<INPUT, RETURN> {
-
-    /**
-     * Scale in a server into fleet
-     */
-    RETURN scaleIn(INPUT input);
+public final class AWSConfiguration {
 }

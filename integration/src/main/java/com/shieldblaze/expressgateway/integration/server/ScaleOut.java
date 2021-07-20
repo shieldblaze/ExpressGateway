@@ -17,6 +17,12 @@
  */
 package com.shieldblaze.expressgateway.integration.server;
 
+/**
+ * Interface for implementation of Scale out of server.
+ *
+ * @param <INPUT> Input type
+ * @param <RETURN> Return type
+ */
 public interface ScaleOut<INPUT, RETURN> {
 
     /**

@@ -19,6 +19,10 @@ package com.shieldblaze.expressgateway.integration.event;
 
 import com.shieldblaze.expressgateway.concurrent.event.DefaultEvent;
 
+/**
+ * This event is fired when a scale in is triggered for a fleet.
+ * @param <T> Return type
+ */
 public abstract class FleetScaleInEvent<T> extends DefaultEvent<T> {
     // Empty
 }

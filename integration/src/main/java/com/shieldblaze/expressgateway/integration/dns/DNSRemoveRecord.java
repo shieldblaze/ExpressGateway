@@ -18,6 +18,9 @@
 
 package com.shieldblaze.expressgateway.integration.dns;
 
+/**
+ * Interface for implementing the DNS record removal.
+ */
 public interface DNSRemoveRecord<INPUT, RETURN> {
 
     /**

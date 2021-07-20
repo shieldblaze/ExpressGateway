@@ -42,7 +42,7 @@ public enum TransportType {
      *     <li> {@link NioEventLoopGroup} </li>
      * </ul>
      */
-    NIO,
+    NIO(false),
     /**
      * <p> This uses Linux Epoll (Faster) </p>
      * Uses:
@@ -53,7 +53,7 @@ public enum TransportType {
      *     <li> {@link EpollEventLoopGroup} </li>
      * </ul>
      */
-    EPOLL,
+    EPOLL(true),
     /**
      * <p> This uses Linux IO_URING (Fastest) </p>
      * Uses:
@@ -64,5 +64,19 @@ public enum TransportType {
      *     <li> {@link IOUringEventLoopGroup} </li>
      * </ul>
      */
-    IO_URING
+    IO_URING(true);
+
+    private final boolean nativeTransport;
+
+    TransportType(boolean nativeTransport) {
+        this.nativeTransport = nativeTransport;
+    }
+
+    /**
+     * Returns {@link Boolean#TRUE} if transport type is native
+     * else {@link Boolean#FALSE}
+     */
+    public boolean nativeTransport() {
+        return nativeTransport;
+    }
 }
