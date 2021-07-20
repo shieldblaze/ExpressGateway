@@ -15,18 +15,32 @@
  * You should have received a copy of the GNU General Public License
  * along with ShieldBlaze ExpressGateway.  If not, see <https://www.gnu.org/licenses/>.
  */
-package com.shieldblaze.expressgateway.integration.server;
+package com.shieldblaze.expressgateway.integration.dns;
+
+import com.shieldblaze.expressgateway.integration.event.DNSAddedEvent;
+import com.shieldblaze.expressgateway.integration.event.DNSRemovedEvent;
+
+import java.util.List;
 
 /**
- * Interface for implementation of Scale in of server.
+ * This class is used for adding or removing records.
  *
- * @param <INPUT> Input type
- * @param <RETURN> Return type
+ * @param <T> Record type
  */
-public interface ScaleIn<INPUT, RETURN> {
+public interface DNSManager<T> {
 
     /**
-     * Scale in a server into fleet
+     * List of DNS Record
      */
-    RETURN scaleIn(INPUT input);
+    List<DNSRecord> dnsRecords();
+
+    /**
+     * Add a new DNS Record
+     */
+    DNSAddedEvent<?> add(T add);
+
+    /**
+     * Remove a existing DNS Record
+     */
+    DNSRemovedEvent<?> remove(T remove);
 }

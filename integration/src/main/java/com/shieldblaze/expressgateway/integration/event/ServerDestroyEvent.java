@@ -19,6 +19,10 @@ package com.shieldblaze.expressgateway.integration.event;
 
 import com.shieldblaze.expressgateway.concurrent.event.DefaultEvent;
 
+/**
+ * This event is fired when a server is destroyed from the fleet.
+ * @param <T> Return type
+ */
 public abstract class ServerDestroyEvent<T> extends DefaultEvent<T> {
     // Empty
 }

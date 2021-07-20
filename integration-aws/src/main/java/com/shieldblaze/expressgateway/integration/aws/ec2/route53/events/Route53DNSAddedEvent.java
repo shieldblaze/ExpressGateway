@@ -15,18 +15,10 @@
  * You should have received a copy of the GNU General Public License
  * along with ShieldBlaze ExpressGateway.  If not, see <https://www.gnu.org/licenses/>.
  */
-package com.shieldblaze.expressgateway.integration.server;
+package com.shieldblaze.expressgateway.integration.aws.ec2.route53.events;
 
-/**
- * Interface for implementation of Scale in of server.
- *
- * @param <INPUT> Input type
- * @param <RETURN> Return type
- */
-public interface ScaleIn<INPUT, RETURN> {
+import com.shieldblaze.expressgateway.integration.event.DNSAddedEvent;
 
-    /**
-     * Scale in a server into fleet
-     */
-    RETURN scaleIn(INPUT input);
+public final class Route53DNSAddedEvent extends DNSAddedEvent<Boolean> {
+    // Empty
 }

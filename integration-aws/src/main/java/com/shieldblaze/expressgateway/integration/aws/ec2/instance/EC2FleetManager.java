@@ -15,7 +15,7 @@
  * You should have received a copy of the GNU General Public License
  * along with ShieldBlaze ExpressGateway.  If not, see <https://www.gnu.org/licenses/>.
  */
-package com.shieldblaze.expressgateway.integration.aws.lightsail.instance;
+package com.shieldblaze.expressgateway.integration.aws.ec2.instance;
 
 import com.shieldblaze.expressgateway.integration.server.FleetManager;
 import com.shieldblaze.expressgateway.integration.server.Server;
@@ -24,12 +24,12 @@ import com.shieldblaze.expressgateway.integration.event.FleetScaleInEvent;
 import com.shieldblaze.expressgateway.integration.event.FleetScaleOutEvent;
 import software.amazon.awssdk.auth.credentials.AwsCredentialsProvider;
 import software.amazon.awssdk.regions.Region;
-import software.amazon.awssdk.services.lightsail.LightsailClient;
-import software.amazon.awssdk.services.lightsail.model.CreateInstancesResponse;
-import software.amazon.awssdk.services.lightsail.model.DeleteInstanceResponse;
-import software.amazon.awssdk.services.lightsail.model.GetInstancesRequest;
-import software.amazon.awssdk.services.lightsail.model.GetInstancesResponse;
-import software.amazon.awssdk.services.lightsail.model.Instance;
+import software.amazon.awssdk.services.ec2.Ec2Client;
+import software.amazon.awssdk.services.ec2.model.DescribeInstancesRequest;
+import software.amazon.awssdk.services.ec2.model.DescribeInstancesResponse;
+import software.amazon.awssdk.services.ec2.model.Instance;
+import software.amazon.awssdk.services.ec2.model.Reservation;
+import software.amazon.awssdk.services.ec2.model.TerminateInstancesResponse;
 
 import java.io.Closeable;
 import java.util.ArrayList;
@@ -41,26 +41,26 @@ import java.util.concurrent.ScheduledFuture;
 import java.util.concurrent.TimeUnit;
 
 /**
- * Lightsail Fleet Manager
+ * EC2 Fleet Manager
  */
-public final class LightsailFleetManager extends AWS implements FleetManager<Server, ScaleOutRequest>, Runnable, Closeable {
+public final class EC2FleetManager extends AWS implements FleetManager<Server, ScaleOutRequest>, Runnable, Closeable {
 
     private final ScheduledExecutorService executorService = Executors.newSingleThreadScheduledExecutor();
     private final ScheduledFuture<?> scheduledFuture;
 
     private final List<Server> servers = new CopyOnWriteArrayList<>();
-    private final LightsailClient lightsailClient;
-    private final LightsailScale lightsailScale;
+    private final Ec2Client ec2Client;
+    private final EC2Scale ec2Scale;
 
-    public LightsailFleetManager(AwsCredentialsProvider awsCredentialsProvider, Region region) {
+    protected EC2FleetManager(AwsCredentialsProvider awsCredentialsProvider, Region region) {
         super(awsCredentialsProvider, region);
 
-        lightsailClient = LightsailClient.builder()
+        ec2Client = Ec2Client.builder()
                 .credentialsProvider(awsCredentialsProvider)
                 .region(region)
                 .build();
 
-        lightsailScale = new LightsailScale(lightsailClient);
+        ec2Scale = new EC2Scale(ec2Client);
         scheduledFuture = executorService.scheduleAtFixedRate(this, 0, 10, TimeUnit.SECONDS);
     }
 
@@ -79,36 +79,38 @@ public final class LightsailFleetManager extends AWS implements FleetManager<Ser
     }
 
     private void servers(List<Server> serverList, String pageToken) {
-        GetInstancesResponse getInstancesResponse;
+        DescribeInstancesResponse describeInstancesResponse;
         if (pageToken == null) {
-            getInstancesResponse = lightsailClient.getInstances();
+            describeInstancesResponse = ec2Client.describeInstances();
         } else {
-            getInstancesResponse = lightsailClient.getInstances(GetInstancesRequest.builder().pageToken(pageToken).build());
+            describeInstancesResponse = ec2Client.describeInstances(DescribeInstancesRequest.builder().nextToken(pageToken).build());
         }
 
-        for (Instance instance : getInstancesResponse.instances()) {
-                serverList.add(LightsailInstance.buildFrom(lightsailClient, instance));
+        for (Reservation reservation : describeInstancesResponse.reservations()) {
+            for (Instance instance : reservation.instances()) {
+                serverList.add(EC2Instance.buildFrom(ec2Client, instance));
+            }
         }
 
-        if (getInstancesResponse.nextPageToken() != null) {
-            servers(serverList, getInstancesResponse.nextPageToken());
+        if (describeInstancesResponse.nextToken() != null) {
+            servers(serverList, describeInstancesResponse.nextToken());
         }
     }
 
     @Override
-    public FleetScaleInEvent<DeleteInstanceResponse> scaleIn(Server server) {
-        return lightsailScale.scaleIn(server.id());
+    public FleetScaleInEvent<TerminateInstancesResponse> scaleIn(Server server) {
+        return ec2Scale.scaleIn((EC2Instance) server);
     }
 
     @Override
-    public FleetScaleOutEvent<CreateInstancesResponse> scaleOut(ScaleOutRequest scaleOutRequest) {
-        return lightsailScale.scaleOut(scaleOutRequest);
+    public FleetScaleOutEvent<Instance> scaleOut(ScaleOutRequest scaleOutRequest) {
+        return ec2Scale.scaleOut(scaleOutRequest);
     }
 
     @Override
     public void close() {
         scheduledFuture.cancel(true);
         executorService.shutdown();
-        lightsailClient.close();
+        ec2Client.close();
     }
 }

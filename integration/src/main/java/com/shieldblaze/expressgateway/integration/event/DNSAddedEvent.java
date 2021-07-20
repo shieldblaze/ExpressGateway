@@ -19,7 +19,12 @@
 package com.shieldblaze.expressgateway.integration.event;
 
 import com.shieldblaze.expressgateway.concurrent.event.DefaultEvent;
+import com.shieldblaze.expressgateway.integration.dns.DNSRecord;
 
+/**
+ * This event is fired when a {@link DNSRecord} is added into zone.
+ * @param <T> Return value
+ */
 public abstract class DNSAddedEvent<T> extends DefaultEvent<T> {
     // Empty
 }

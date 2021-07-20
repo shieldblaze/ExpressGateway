@@ -71,7 +71,7 @@ public final class ConnectionTimeoutHandler extends ChannelDuplexHandler impleme
     @Override
     public void channelActive(ChannelHandlerContext ctx) throws Exception {
         this.ctx = ctx;
-        scheduledFuture = GlobalExecutors.INSTANCE.submitTaskAndRunEvery(this, 0, 500, TimeUnit.MILLISECONDS);
+        scheduledFuture = GlobalExecutors.submitTaskAndRunEvery(this, 0, 500, TimeUnit.MILLISECONDS);
         super.channelActive(ctx);
     }
 

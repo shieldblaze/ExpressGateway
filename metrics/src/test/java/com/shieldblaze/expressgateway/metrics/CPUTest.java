@@ -15,18 +15,26 @@
  * You should have received a copy of the GNU General Public License
  * along with ShieldBlaze ExpressGateway.  If not, see <https://www.gnu.org/licenses/>.
  */
-package com.shieldblaze.expressgateway.integration.server;
+package com.shieldblaze.expressgateway.metrics;
 
-/**
- * Interface for implementation of Scale in of server.
- *
- * @param <INPUT> Input type
- * @param <RETURN> Return type
- */
-public interface ScaleIn<INPUT, RETURN> {
+import org.junit.jupiter.api.Test;
 
-    /**
-     * Scale in a server into fleet
-     */
-    RETURN scaleIn(INPUT input);
+import static org.junit.jupiter.api.Assertions.*;
+
+class CPUTest {
+
+    @Test
+    void cpuTest() {
+        CPUMetric cpuMetric = new CPU();
+        double cpuUsagesA = cpuMetric.cpu();
+
+        // Make some noise on CPU
+        long a = 0;
+        for (long i = 0; i < (Integer.MAX_VALUE * 10L); i++) {
+            a++;
+        }
+
+        double cpuUsagesB = cpuMetric.cpu();
+        assertNotEquals(cpuUsagesB, cpuUsagesA);
+    }
 }

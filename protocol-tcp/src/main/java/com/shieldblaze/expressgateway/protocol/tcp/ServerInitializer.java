@@ -22,6 +22,7 @@ import com.shieldblaze.expressgateway.core.SNIHandler;
 import com.shieldblaze.expressgateway.core.loadbalancer.L4LoadBalancer;
 import io.netty.channel.ChannelHandlerContext;
 import io.netty.channel.ChannelInitializer;
+import io.netty.channel.ChannelPipeline;
 import io.netty.channel.socket.SocketChannel;
 import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
@@ -40,16 +41,17 @@ final class ServerInitializer extends ChannelInitializer<SocketChannel> {
 
     @Override
     protected void initChannel(SocketChannel ch) {
-        ch.pipeline().addLast(l4LoadBalancer.connectionTracker());
+        ChannelPipeline pipeline = ch.pipeline();
+        pipeline.addLast(l4LoadBalancer.connectionTracker());
 
         Duration timeout = Duration.ofMillis(l4LoadBalancer.coreConfiguration().transportConfiguration().connectionIdleTimeout());
-        ch.pipeline().addLast(new ConnectionTimeoutHandler(timeout, true));
+        pipeline.addLast(new ConnectionTimeoutHandler(timeout, true));
 
         if (l4LoadBalancer.tlsForServer() != null) {
-            ch.pipeline().addLast(new SNIHandler(l4LoadBalancer.tlsForServer()));
+            pipeline.addLast(new SNIHandler(l4LoadBalancer.tlsForServer()));
         }
 
-        ch.pipeline().addLast(new UpstreamHandler(l4LoadBalancer));
+        pipeline.addLast(new UpstreamHandler(l4LoadBalancer));
     }
 
     @Override

@@ -20,6 +20,7 @@ package com.shieldblaze.expressgateway.protocol.http;
 import com.shieldblaze.expressgateway.configuration.http.HTTPConfiguration;
 import com.shieldblaze.expressgateway.core.ConnectionTimeoutHandler;
 import com.shieldblaze.expressgateway.core.SNIHandler;
+import com.shieldblaze.expressgateway.metrics.EdgeNetworkMetricRecorder;
 import com.shieldblaze.expressgateway.protocol.http.adapter.http2.HTTP2InboundAdapter;
 import com.shieldblaze.expressgateway.protocol.http.alpn.ALPNHandler;
 import com.shieldblaze.expressgateway.protocol.http.alpn.ALPNHandlerBuilder;
@@ -41,7 +42,8 @@ public final class DefaultHTTPServerInitializer extends HTTPServerInitializer {
     @Override
     protected void initChannel(SocketChannel socketChannel) {
         ChannelPipeline pipeline = socketChannel.pipeline();
-        pipeline.addFirst(httpLoadBalancer.connectionTracker());
+        pipeline.addFirst(EdgeNetworkMetricRecorder.INSTANCE);
+        pipeline.addLast(httpLoadBalancer.connectionTracker());
 
         Duration timeout = Duration.ofMillis(httpLoadBalancer.coreConfiguration().transportConfiguration().connectionIdleTimeout());
         pipeline.addLast(new ConnectionTimeoutHandler(timeout, true));
