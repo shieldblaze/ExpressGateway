@@ -29,6 +29,6 @@ public class ExceptionHandlerController {
 
     @ExceptionHandler(value = Exception.class)
     public ResponseEntity<String> handler(Exception ex) {
-        return FastBuilder.error(ErrorBase.INVALID_REQUEST_DATA, ex.getMessage(), HttpResponseStatus.BAD_REQUEST);
+        return FastBuilder.error(ErrorBase.INVALID_REQUEST, ex.getMessage(), HttpResponseStatus.BAD_REQUEST);
     }
 }

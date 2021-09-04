@@ -19,6 +19,7 @@ package com.shieldblaze.expressgateway.configuration.tls;
 
 import io.netty.handler.ssl.OpenSsl;
 import io.netty.handler.ssl.util.SelfSignedCertificate;
+import org.junit.jupiter.api.Disabled;
 import org.junit.jupiter.api.Test;
 
 import javax.net.ssl.HttpsURLConnection;
@@ -69,6 +70,7 @@ class CertificateKeyPairTest {
     }
 
     @Test
+    @Disabled("Need Certificate with it's Private Key to run this test")
     void ocspStaplingTest() throws IOException, CertificateException, InterruptedException {
         OpenSsl.ensureAvailability();
 
@@ -84,7 +86,7 @@ class CertificateKeyPairTest {
         CertificateKeyPair certificateKeyPair = CertificateKeyPair.forServer(x509Certificates, selfSignedCertificate.key(), true);
         certificateKeyPair.init(TLSConfiguration.DEFAULT_SERVER);
 
-        Thread.sleep(1000 * 30); // Wait for 30 seconds, Timeout for OCSP HTTP Client Request
+        Thread.sleep(1000 * 15); // Wait for 15 seconds, Timeout for OCSP HTTP Client Request
 
         assertNotNull(certificateKeyPair.ocspStaplingData());
     }

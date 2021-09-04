@@ -17,7 +17,8 @@
  */
 package com.shieldblaze.expressgateway.restapi;
 
-import io.netty.util.internal.SystemPropertyUtil;
+import com.shieldblaze.expressgateway.common.utils.NumberUtil;
+import com.shieldblaze.expressgateway.common.utils.SystemPropertyUtil;
 import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
 import org.springframework.boot.web.embedded.undertow.UndertowServletWebServerFactory;
@@ -28,6 +29,10 @@ import org.springframework.context.annotation.Configuration;
 import java.net.InetAddress;
 import java.net.UnknownHostException;
 
+/**
+ * This customizer is responsible for the configuration of
+ * Undertow web server, like Bind Address and Port, TLS, etc.
+ */
 @Configuration
 public class WebServerCustomizer implements WebServerFactoryCustomizer<UndertowServletWebServerFactory> {
 
@@ -35,18 +40,39 @@ public class WebServerCustomizer implements WebServerFactoryCustomizer<UndertowS
 
     @Override
     public void customize(UndertowServletWebServerFactory factory) {
+
+        InetAddress inetAddress;
+        int port;
         try {
-            factory.setAddress(InetAddress.getByName(SystemPropertyUtil.get("api-address", "0.0.0.0")));
-        } catch (UnknownHostException e) {
-            logger.error(e);
+            inetAddress = InetAddress.getByName(SystemPropertyUtil.getPropertyOrEnv("api-address"));
+        } catch (Exception ex) {
+            logger.error("Invalid REST-API Address, Falling back to 0.0.0.0", ex);
+            try {
+                inetAddress = InetAddress.getByName("0.0.0.0");
+            } catch (UnknownHostException e) {
+                logger.error("Invalid REST-API Address 0.0.0.0, This should never happen! Shutting down...");
+                System.exit(1);
+                return;
+            }
         }
 
-        factory.setPort(SystemPropertyUtil.getInt("api-port", 9110));
+        try {
+            port = NumberUtil.checkRange(SystemPropertyUtil.getPropertyOrEnvInt("api-port", "9110"), 1, 65535, "REST-API Port");
+        } catch (Exception ex) {
+            logger.error("Invalid REST-API Port, Shutting down...", ex);
+            System.exit(1);
+            return;
+        }
+
+        factory.setAddress(inetAddress);
+        factory.setPort(port);
         factory.setIoThreads(Runtime.getRuntime().availableProcessors());
         factory.setUseDirectBuffers(true);
 
         Http2 http2 = new Http2();
         http2.setEnabled(true);
         factory.setHttp2(http2);
+
+        factory.setSsl(RestAPI.SSL);
     }
 }

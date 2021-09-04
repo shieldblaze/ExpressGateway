@@ -20,8 +20,8 @@ package com.shieldblaze.expressgateway.restapi.api.node;
 import com.shieldblaze.expressgateway.backend.Node;
 import com.shieldblaze.expressgateway.backend.NodeBuilder;
 import com.shieldblaze.expressgateway.backend.cluster.Cluster;
-import com.shieldblaze.expressgateway.core.registry.LoadBalancerProperty;
-import com.shieldblaze.expressgateway.core.registry.LoadBalancerRegistry;
+import com.shieldblaze.expressgateway.core.cluster.LoadBalancerProperty;
+import com.shieldblaze.expressgateway.core.cluster.LoadBalancerRegistry;
 import com.shieldblaze.expressgateway.restapi.response.FastBuilder;
 import com.shieldblaze.expressgateway.restapi.response.builder.APIResponse;
 import com.shieldblaze.expressgateway.restapi.response.builder.Result;
@@ -38,10 +38,8 @@ import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 
-import javax.print.attribute.standard.Media;
 import java.net.InetSocketAddress;
 import java.net.UnknownHostException;
-import java.util.Collections;
 import java.util.Objects;
 
 @RestController
@@ -49,13 +47,13 @@ import java.util.Objects;
 public class NodeHandler {
 
     @PostMapping(value = "/create", consumes = MediaType.APPLICATION_JSON_VALUE, produces = MediaType.APPLICATION_JSON_VALUE)
-    public ResponseEntity<String> create(@RequestParam String id, @RequestParam String clusterHostname, @RequestBody NodeStruct nodeStruct) throws UnknownHostException {
+    public ResponseEntity<String> create(@RequestParam String id, @RequestParam String clusterHostname, @RequestBody NodeContext nodeContext) throws UnknownHostException {
         LoadBalancerProperty property = LoadBalancerRegistry.get(id);
 
         Cluster cluster = property.l4LoadBalancer().cluster(clusterHostname);
 
         Node node = NodeBuilder.newBuilder()
-                .withSocketAddress(new InetSocketAddress(nodeStruct.address(), nodeStruct.port()))
+                .withSocketAddress(new InetSocketAddress(nodeContext.address(), nodeContext.port()))
                 .withCluster(cluster)
                 .build();
 

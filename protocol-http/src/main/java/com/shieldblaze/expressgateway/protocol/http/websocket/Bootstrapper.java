@@ -19,8 +19,8 @@ package com.shieldblaze.expressgateway.protocol.http.websocket;
 
 import com.shieldblaze.expressgateway.backend.Node;
 import com.shieldblaze.expressgateway.backend.NodeBytesTracker;
-import com.shieldblaze.expressgateway.core.BootstrapFactory;
-import com.shieldblaze.expressgateway.core.ConnectionTimeoutHandler;
+import com.shieldblaze.expressgateway.core.factory.BootstrapFactory;
+import com.shieldblaze.expressgateway.core.handlers.ConnectionTimeoutHandler;
 import com.shieldblaze.expressgateway.protocol.http.HTTPCodecs;
 import com.shieldblaze.expressgateway.protocol.http.Headers;
 import com.shieldblaze.expressgateway.protocol.http.loadbalancer.HTTPLoadBalancer;

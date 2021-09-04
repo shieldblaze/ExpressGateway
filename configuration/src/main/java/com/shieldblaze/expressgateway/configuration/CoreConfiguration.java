@@ -23,7 +23,12 @@ import com.shieldblaze.expressgateway.configuration.eventstream.EventStreamConfi
 import com.shieldblaze.expressgateway.configuration.healthcheck.HealthCheckConfiguration;
 import com.shieldblaze.expressgateway.configuration.transport.TransportConfiguration;
 
-public class CoreConfiguration {
+/**
+ * This class holds {@link TransportConfiguration}, {@link EventStreamConfiguration},
+ * {@link BufferConfiguration}, {@link EventStreamConfiguration} and
+ * {@link HealthCheckConfiguration} because they're core and vital part of ExpressGateway.
+ */
+public final class CoreConfiguration {
 
     private TransportConfiguration transportConfiguration;
     private EventLoopConfiguration eventLoopConfiguration;

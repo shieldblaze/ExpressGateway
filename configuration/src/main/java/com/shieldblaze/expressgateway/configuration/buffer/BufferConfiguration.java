@@ -26,7 +26,9 @@ import io.netty.util.internal.PlatformDependent;
 import java.io.IOException;
 
 /**
- * Configuration for {@link PooledByteBufAllocator}
+ * Configuration for {@link PooledByteBufAllocator}.
+ *
+ * Use {@link BufferConfigurationBuilder} to build {@link BufferConfiguration} Instance.
  */
 public final class BufferConfiguration {
 

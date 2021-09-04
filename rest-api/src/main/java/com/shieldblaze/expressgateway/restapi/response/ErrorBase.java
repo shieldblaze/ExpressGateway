@@ -21,7 +21,7 @@ package com.shieldblaze.expressgateway.restapi.response;
 public enum ErrorBase {
 
     // API Errors
-    INVALID_REQUEST_DATA(100, "Invalid Request Data"),
+    INVALID_REQUEST(100, "Invalid Request"),
     CONFIGURATION_NOT_FOUND(101, "Configuration Not Found");
 
     private final int ErrorCode;

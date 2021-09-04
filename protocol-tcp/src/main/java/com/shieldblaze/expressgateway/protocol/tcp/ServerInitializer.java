@@ -17,8 +17,8 @@
  */
 package com.shieldblaze.expressgateway.protocol.tcp;
 
-import com.shieldblaze.expressgateway.core.ConnectionTimeoutHandler;
-import com.shieldblaze.expressgateway.core.SNIHandler;
+import com.shieldblaze.expressgateway.core.handlers.ConnectionTimeoutHandler;
+import com.shieldblaze.expressgateway.core.handlers.SNIHandler;
 import com.shieldblaze.expressgateway.core.loadbalancer.L4LoadBalancer;
 import io.netty.channel.ChannelHandlerContext;
 import io.netty.channel.ChannelInitializer;
@@ -44,7 +44,10 @@ final class ServerInitializer extends ChannelInitializer<SocketChannel> {
         ChannelPipeline pipeline = ch.pipeline();
         pipeline.addLast(l4LoadBalancer.connectionTracker());
 
-        Duration timeout = Duration.ofMillis(l4LoadBalancer.coreConfiguration().transportConfiguration().connectionIdleTimeout());
+        Duration timeout = Duration.ofMillis(l4LoadBalancer.coreConfiguration()
+                .transportConfiguration()
+                .connectionIdleTimeout());
+
         pipeline.addLast(new ConnectionTimeoutHandler(timeout, true));
 
         if (l4LoadBalancer.tlsForServer() != null) {

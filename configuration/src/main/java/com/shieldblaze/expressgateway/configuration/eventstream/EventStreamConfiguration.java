@@ -27,12 +27,18 @@ import com.shieldblaze.expressgateway.configuration.ConfigurationMarshaller;
 import java.io.IOException;
 import java.util.concurrent.Executors;
 
-public class EventStreamConfiguration {
+/**
+ * Configuration for {@link EventStreamConfiguration}.
+ *
+ * Use {@link EventStreamConfigurationBuilder} for building {@link EventStreamConfiguration} instance.
+ */
+public final class EventStreamConfiguration {
 
     @JsonProperty("workers")
     private int workers;
 
-    public static final EventStreamConfiguration DEFAULT = new EventStreamConfiguration().setWorkers(Runtime.getRuntime().availableProcessors() / 2);
+    public static final EventStreamConfiguration DEFAULT = new EventStreamConfiguration()
+            .setWorkers(Runtime.getRuntime().availableProcessors() / 2);
 
     public EventStream newEventStream() {
         EventStream eventStream;

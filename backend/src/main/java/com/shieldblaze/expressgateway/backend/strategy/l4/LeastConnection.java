@@ -32,7 +32,7 @@ import java.net.InetSocketAddress;
 import java.util.Optional;
 
 /**
- * Select {@link Node} with least connections.
+ * Select {@link Node} with the least connections.
  */
 public final class LeastConnection extends L4Balance {
 

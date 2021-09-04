@@ -17,6 +17,7 @@
  */
 package com.shieldblaze.expressgateway.common.utils;
 
+import java.net.Inet6Address;
 import java.net.InetAddress;
 import java.net.NetworkInterface;
 import java.util.ArrayList;
@@ -25,8 +26,8 @@ import java.util.List;
 
 public final class NetworkInterfaceUtil {
 
-    public static List<String> ifNameList() {
-        List<String> ifNameList = new ArrayList<>();
+    public static List<String> getAllIps() {
+        List<String> ipAddressList = new ArrayList<>();
 
         try {
             Enumeration<NetworkInterface> interfaces = NetworkInterface.getNetworkInterfaces();
@@ -37,13 +38,19 @@ public final class NetworkInterfaceUtil {
 
                 // If NIC has at least 1 IP address then we'll add it.
                 while (ips.hasMoreElements()) {
-                    ifNameList.add(networkInterface.getName());
+                    InetAddress ip = ips.nextElement();
+                    if (ip instanceof Inet6Address && ip.getHostAddress().contains("%")) {
+                        String strIp = ip.getHostAddress();
+                        ipAddressList.add(strIp.substring(0, strIp.indexOf('%')));
+                    } else {
+                        ipAddressList.add(ip.getHostAddress());
+                    }
                 }
             }
         } catch (Exception ex) {
             // Ignore
         }
 
-        return ifNameList;
+        return ipAddressList;
     }
 }

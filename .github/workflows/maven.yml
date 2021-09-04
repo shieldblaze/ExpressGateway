@@ -23,10 +23,10 @@ jobs:
         uses: actions/setup-java@v1
         with:
           java-version: 11
-      - name: Permissions
-        run: chmod 777 ./setup.sh
-      - name: Setup
-        run: ./setup.sh
+      - name: Prepare Setup and Initialize
+        run: sudo chmod +x setup.sh && sudo chmod +x initialize.sh
+      - name: Initialize
+        run: ./setup.sh && ./initialize.sh
       - name: Build with Maven
         run: mvn -B -ntp test --file pom.xml
       - name: Upload Coverage Report
@@ -43,9 +43,9 @@ jobs:
         uses: actions/setup-java@v1
         with:
           java-version: 16
-      - name: Permissions
-        run: chmod 777 ./setup.sh
-      - name: Setup
-        run: ./setup.sh
+      - name: Prepare Setup and Initialize
+        run: sudo chmod +x setup.sh && sudo chmod +x initialize.sh
+      - name: Initialize
+        run: ./setup.sh && ./initialize.sh
       - name: Build with Maven
         run: mvn -B -ntp test --file pom.xml

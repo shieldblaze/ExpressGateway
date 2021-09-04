@@ -18,8 +18,8 @@
 package com.shieldblaze.expressgateway.protocol.http;
 
 import com.shieldblaze.expressgateway.configuration.http.HTTPConfiguration;
-import com.shieldblaze.expressgateway.core.ConnectionTimeoutHandler;
-import com.shieldblaze.expressgateway.core.SNIHandler;
+import com.shieldblaze.expressgateway.core.handlers.ConnectionTimeoutHandler;
+import com.shieldblaze.expressgateway.core.handlers.SNIHandler;
 import com.shieldblaze.expressgateway.metrics.EdgeNetworkMetricRecorder;
 import com.shieldblaze.expressgateway.protocol.http.adapter.http2.HTTP2InboundAdapter;
 import com.shieldblaze.expressgateway.protocol.http.alpn.ALPNHandler;

@@ -25,10 +25,10 @@ import com.shieldblaze.expressgateway.concurrent.GlobalExecutors;
 import com.shieldblaze.expressgateway.concurrent.eventstream.EventStream;
 import com.shieldblaze.expressgateway.configuration.CoreConfiguration;
 import com.shieldblaze.expressgateway.configuration.tls.TLSConfiguration;
-import com.shieldblaze.expressgateway.core.ConnectionTracker;
-import com.shieldblaze.expressgateway.core.EventLoopFactory;
+import com.shieldblaze.expressgateway.core.handlers.ConnectionTracker;
+import com.shieldblaze.expressgateway.core.factory.EventLoopFactory;
 import com.shieldblaze.expressgateway.core.L4FrontListener;
-import com.shieldblaze.expressgateway.core.PooledByteBufAllocator;
+import com.shieldblaze.expressgateway.core.factory.PooledByteBufAllocator;
 import com.shieldblaze.expressgateway.core.events.L4FrontListenerShutdownEvent;
 import com.shieldblaze.expressgateway.core.events.L4FrontListenerStartupEvent;
 import com.shieldblaze.expressgateway.core.events.L4FrontListenerStopEvent;
@@ -47,6 +47,7 @@ import java.util.concurrent.atomic.AtomicInteger;
  */
 public abstract class L4LoadBalancer {
 
+    public static final String DEFAULT = "DEFAULT";
     public final String ID = UUID.randomUUID().toString();
 
     private static final AtomicInteger COUNTER = new AtomicInteger(0);
@@ -119,7 +120,7 @@ public abstract class L4LoadBalancer {
     }
 
     /**
-     * Stop L4 Load Balancer and it's child operations and services.
+     * Stop L4 Load Balancer, and it's child operations and services.
      */
     public L4FrontListenerStopEvent stop() {
         return l4FrontListener.stop();
@@ -129,7 +130,8 @@ public abstract class L4LoadBalancer {
         L4FrontListenerShutdownEvent event = l4FrontListener.shutdown();
 
         // Close EventStream when stop event has finished.
-        event.future().whenCompleteAsync((_Void, throwable) -> eventStream().close(), GlobalExecutors.INSTANCE.executorService());
+        event.future()
+                .whenCompleteAsync((_Void, throwable) -> eventStream().close(), GlobalExecutors.executorService());
         return event;
     }
 

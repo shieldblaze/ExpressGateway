@@ -18,6 +18,7 @@
 package com.shieldblaze.expressgateway.common.utils;
 
 import io.netty.util.ReferenceCountUtil;
+import io.netty.util.ReferenceCounted;
 
 /**
  * Provides extra utilities for {@link io.netty.util.ReferenceCounted} objects.
@@ -46,8 +47,8 @@ public final class ReferenceCountedUtil {
 
     public static void silentFullRelease(Object msg) {
         try {
-            if (msg instanceof io.netty.util.ReferenceCounted) {
-                ReferenceCountUtil.release(msg, ((io.netty.util.ReferenceCounted) msg).refCnt());
+            if (msg instanceof ReferenceCounted) {
+                ReferenceCountUtil.release(msg, ((ReferenceCounted) msg).refCnt());
             }
         } catch (Throwable t) {
             // Swallow the throwable

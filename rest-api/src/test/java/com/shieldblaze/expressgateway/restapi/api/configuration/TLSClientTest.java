@@ -23,6 +23,7 @@ import com.google.gson.JsonParser;
 import com.shieldblaze.expressgateway.configuration.tls.Cipher;
 import com.shieldblaze.expressgateway.configuration.tls.Protocol;
 import com.shieldblaze.expressgateway.configuration.tls.TLSConfiguration;
+import com.shieldblaze.expressgateway.restapi.CustomOkHttpClient;
 import com.shieldblaze.expressgateway.restapi.RestAPI;
 import okhttp3.OkHttpClient;
 import okhttp3.Request;
@@ -41,18 +42,14 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 
 class TLSClientTest {
 
-    private static OkHttpClient okHttpClient;
-
     @BeforeAll
     static void startSpring() {
         RestAPI.start();
-        okHttpClient = new OkHttpClient();
         System.setProperty("egw.dir", System.getProperty("java.io.tmpdir"));
     }
 
     @AfterAll
     static void teardown() throws InterruptedException {
-        okHttpClient.dispatcher().cancelAll();
         RestAPI.stop();
         Thread.sleep(2500);
     }
@@ -73,12 +70,12 @@ class TLSClientTest {
         jsonBody.add("protocols", protocols);
 
         Request request = new Request.Builder()
-                .url("http://127.0.0.1:9110/v1/configuration/tls/client")
+                .url("https://127.0.0.1:9110/v1/configuration/tls/client")
                 .post(RequestBody.create(jsonBody.toString().getBytes()))
                 .header("Content-Type", "application/json")
                 .build();
 
-        try (Response response = okHttpClient.newCall(request).execute()) {
+        try (Response response = CustomOkHttpClient.INSTANCE.newCall(request).execute()) {
             assertNotNull(response.body());
             JsonObject responseJson = JsonParser.parseString(response.body().string()).getAsJsonObject();
             assertTrue(responseJson.get("Success").getAsBoolean());
@@ -99,12 +96,12 @@ class TLSClientTest {
         jsonBody.add("protocols", protocols);
 
         Request request = new Request.Builder()
-                .url("http://127.0.0.1:9110/v1/configuration/tls/client")
+                .url("https://127.0.0.1:9110/v1/configuration/tls/client")
                 .post(RequestBody.create(jsonBody.toString().getBytes()))
                 .header("Content-Type", "application/json")
                 .build();
 
-        try (Response response = okHttpClient.newCall(request).execute()) {
+        try (Response response = CustomOkHttpClient.INSTANCE.newCall(request).execute()) {
             assertNotNull(response.body());
             JsonObject responseJson = JsonParser.parseString(response.body().string()).getAsJsonObject();
             assertFalse(responseJson.get("Success").getAsBoolean());
@@ -116,11 +113,11 @@ class TLSClientTest {
         TLSConfiguration clientDefault = TLSConfiguration.DEFAULT_CLIENT;
 
         Request request = new Request.Builder()
-                .url("http://127.0.0.1:9110/v1/configuration/tls/client/default")
+                .url("https://127.0.0.1:9110/v1/configuration/tls/client/default")
                 .get()
                 .build();
 
-        try (Response response = okHttpClient.newCall(request).execute()) {
+        try (Response response = CustomOkHttpClient.INSTANCE.newCall(request).execute()) {
             assertNotNull(response.body());
             JsonObject responseJson = JsonParser.parseString(response.body().string()).getAsJsonObject();
             assertTrue(responseJson.get("Success").getAsBoolean());
@@ -158,23 +155,23 @@ class TLSClientTest {
         jsonBody.add("protocols", protocols);
 
         Request request = new Request.Builder()
-                .url("http://127.0.0.1:9110/v1/configuration/tls/client")
+                .url("https://127.0.0.1:9110/v1/configuration/tls/client")
                 .post(RequestBody.create(jsonBody.toString().getBytes()))
                 .header("Content-Type", "application/json")
                 .build();
 
-        try (Response response = okHttpClient.newCall(request).execute()) {
+        try (Response response = CustomOkHttpClient.INSTANCE.newCall(request).execute()) {
             assertNotNull(response.body());
             JsonObject responseJson = JsonParser.parseString(response.body().string()).getAsJsonObject();
             assertTrue(responseJson.get("Success").getAsBoolean());
         }
 
         request = new Request.Builder()
-                .url("http://127.0.0.1:9110/v1/configuration/tls/client")
+                .url("https://127.0.0.1:9110/v1/configuration/tls/client")
                 .get()
                 .build();
 
-        try (Response response = okHttpClient.newCall(request).execute()) {
+        try (Response response = CustomOkHttpClient.INSTANCE.newCall(request).execute()) {
             assertNotNull(response.body());
             JsonObject responseJson = JsonParser.parseString(response.body().string()).getAsJsonObject();
             assertTrue(responseJson.get("Success").getAsBoolean());
