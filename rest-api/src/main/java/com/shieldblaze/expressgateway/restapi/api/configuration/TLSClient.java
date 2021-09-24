@@ -117,7 +117,7 @@ public final class TLSClient {
 
             return FastBuilder.response(apiResponse.getResponse(), HttpResponseStatus.OK);
         } else {
-            return FastBuilder.error(ErrorBase.INVALID_REQUEST_DATA, "Mapping not found", HttpResponseStatus.NOT_FOUND);
+            return FastBuilder.error(ErrorBase.INVALID_REQUEST, "Mapping not found", HttpResponseStatus.NOT_FOUND);
         }
     }
 }

@@ -15,9 +15,11 @@
  * You should have received a copy of the GNU General Public License
  * along with ShieldBlaze ExpressGateway.  If not, see <https://www.gnu.org/licenses/>.
  */
-
 package com.shieldblaze.expressgateway.configuration.healthcheck;
 
+/**
+ * Builder for {@link HealthCheckConfiguration}
+ */
 public final class HealthCheckConfigurationBuilder {
     private int workers;
     private int timeInterval;

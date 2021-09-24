@@ -20,11 +20,11 @@ package com.shieldblaze.expressgateway.restapi.api.loadbalancer;
 import com.shieldblaze.expressgateway.configuration.CoreConfiguration;
 import com.shieldblaze.expressgateway.configuration.tls.TLSConfiguration;
 import com.shieldblaze.expressgateway.core.L4FrontListener;
+import com.shieldblaze.expressgateway.core.cluster.LoadBalancerProperty;
+import com.shieldblaze.expressgateway.core.cluster.LoadBalancerRegistry;
 import com.shieldblaze.expressgateway.core.events.L4FrontListenerStartupEvent;
 import com.shieldblaze.expressgateway.core.loadbalancer.L4LoadBalancer;
 import com.shieldblaze.expressgateway.core.loadbalancer.L4LoadBalancerBuilder;
-import com.shieldblaze.expressgateway.core.registry.LoadBalancerProperty;
-import com.shieldblaze.expressgateway.core.registry.LoadBalancerRegistry;
 import com.shieldblaze.expressgateway.protocol.http.loadbalancer.HTTPLoadBalancer;
 import com.shieldblaze.expressgateway.protocol.http.loadbalancer.HTTPLoadBalancerBuilder;
 import com.shieldblaze.expressgateway.protocol.tcp.TCPListener;
@@ -51,11 +51,11 @@ import java.net.InetSocketAddress;
 public final class LoadBalancer {
 
     @PostMapping(value = "/l4/start", consumes = MediaType.APPLICATION_JSON_VALUE, produces = MediaType.APPLICATION_JSON_VALUE)
-    public ResponseEntity<String> startL4(@RequestBody LoadBalancerStartStruct loadBalancerStartStruct) {
+    public ResponseEntity<String> startL4(@RequestBody LoadBalancerContext loadBalancerContext) {
         L4FrontListener l4FrontListener;
-        if (loadBalancerStartStruct.protocol() != null && loadBalancerStartStruct.protocol().equalsIgnoreCase("tcp")) {
+        if (loadBalancerContext.protocol() != null && loadBalancerContext.protocol().equalsIgnoreCase("tcp")) {
             l4FrontListener = new TCPListener();
-        } else if (loadBalancerStartStruct.protocol() != null && loadBalancerStartStruct.protocol().equalsIgnoreCase("udp")) {
+        } else if (loadBalancerContext.protocol() != null && loadBalancerContext.protocol().equalsIgnoreCase("udp")) {
             l4FrontListener = new UDPListener();
         } else {
             // If Protocol is not 'TCP' or 'UDP" then throw error.
@@ -63,20 +63,20 @@ public final class LoadBalancer {
         }
 
         TLSConfiguration tlsForClient = null;
-        if (loadBalancerStartStruct.tlsForClient()) {
+        if (loadBalancerContext.tlsForClient()) {
             tlsForClient = TLSConfiguration.loadClient();
         }
 
         TLSConfiguration tlsForServer = null;
-        if (loadBalancerStartStruct.tlsForServer()) {
+        if (loadBalancerContext.tlsForServer()) {
             tlsForServer = TLSConfiguration.loadServer();
         }
 
         L4LoadBalancer l4LoadBalancer = L4LoadBalancerBuilder.newBuilder()
-                .withBindAddress(new InetSocketAddress(loadBalancerStartStruct.bindAddress(), loadBalancerStartStruct.bindPort()))
+                .withBindAddress(new InetSocketAddress(loadBalancerContext.bindAddress(), loadBalancerContext.bindPort()))
                 .withL4FrontListener(l4FrontListener)
                 .withCoreConfiguration(CoreConfiguration.INSTANCE)
-                .withName(loadBalancerStartStruct.name())
+                .withName(loadBalancerContext.name())
                 .withTLSForClient(tlsForClient)
                 .withTLSForServer(tlsForServer)
                 .build();
@@ -93,23 +93,23 @@ public final class LoadBalancer {
     }
 
     @PostMapping(value = "/l7/http/start", consumes = MediaType.APPLICATION_JSON_VALUE, produces = MediaType.APPLICATION_JSON_VALUE)
-    public ResponseEntity<String> start(@RequestBody LoadBalancerStartStruct loadBalancerStartStruct) {
+    public ResponseEntity<String> start(@RequestBody LoadBalancerContext loadBalancerContext) {
 
         TLSConfiguration tlsForClient = null;
-        if (loadBalancerStartStruct.tlsForClient()) {
+        if (loadBalancerContext.tlsForClient()) {
             tlsForClient = TLSConfiguration.loadClient();
         }
 
         TLSConfiguration tlsForServer = null;
-        if (loadBalancerStartStruct.tlsForServer()) {
+        if (loadBalancerContext.tlsForServer()) {
             tlsForServer = TLSConfiguration.loadServer();
         }
 
         HTTPLoadBalancer httpLoadBalancer = HTTPLoadBalancerBuilder.newBuilder()
-                .withBindAddress(new InetSocketAddress(loadBalancerStartStruct.bindAddress(), loadBalancerStartStruct.bindPort()))
+                .withBindAddress(new InetSocketAddress(loadBalancerContext.bindAddress(), loadBalancerContext.bindPort()))
                 .withL4FrontListener(new TCPListener())
                 .withCoreConfiguration(CoreConfiguration.INSTANCE)
-                .withName(loadBalancerStartStruct.name())
+                .withName(loadBalancerContext.name())
                 .withTLSForClient(tlsForClient)
                 .withTLSForServer(tlsForServer)
                 .build();

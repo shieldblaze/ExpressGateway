@@ -100,6 +100,16 @@ public final class EdgeNetworkMetricRecorder extends ChannelDuplexHandler implem
         return packetRX.getAndSet(0);
     }
 
+    /**
+     * Reset all metrics counter
+     */
+    public void resetMetrics() {
+        bandwidthTX.set(0L);
+        bandwidthRX.set(0L);
+        packetTX.set(0);
+        packetRX.set(0);
+    }
+
     private EdgeNetworkMetricRecorder() {
         // Prevent outside initialization
     }

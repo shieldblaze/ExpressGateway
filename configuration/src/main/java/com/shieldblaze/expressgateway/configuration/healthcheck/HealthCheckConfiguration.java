@@ -23,7 +23,12 @@ import com.shieldblaze.expressgateway.configuration.ConfigurationMarshaller;
 
 import java.io.IOException;
 
-public class HealthCheckConfiguration {
+/**
+ * Configuration for {@link HealthCheckConfiguration}.
+ *
+ * Use {@link HealthCheckConfigurationBuilder} to build {@link HealthCheckConfiguration} instance.
+ */
+public final class HealthCheckConfiguration {
 
     @JsonProperty(value = "workers")
     private int workers;

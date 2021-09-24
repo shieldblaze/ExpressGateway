@@ -36,53 +36,21 @@
         <javaModuleName>com.shieldblaze.expressgateway.integration.aws</javaModuleName>
     </properties>
 
-    <dependencyManagement>
-        <dependencies>
-            <dependency>
-                <groupId>software.amazon.awssdk</groupId>
-                <artifactId>bom</artifactId>
-                <version>2.16.78</version>
-                <type>pom</type>
-                <scope>import</scope>
-            </dependency>
-        </dependencies>
-    </dependencyManagement>
-
     <dependencies>
         <dependency>
             <groupId>com.shieldblaze.expressgateway</groupId>
             <artifactId>autoscaling</artifactId>
             <version>0.0.1-a</version>
         </dependency>
-
         <dependency>
             <groupId>com.shieldblaze.expressgateway</groupId>
             <artifactId>common</artifactId>
             <version>0.0.1-a</version>
         </dependency>
-
         <dependency>
             <groupId>com.shieldblaze.expressgateway</groupId>
             <artifactId>concurrent</artifactId>
             <version>0.0.1-a</version>
-        </dependency>
-
-        <!-- https://mvnrepository.com/artifact/software.amazon.awssdk/route53 -->
-        <dependency>
-            <groupId>software.amazon.awssdk</groupId>
-            <artifactId>route53</artifactId>
-        </dependency>
-
-        <!-- https://mvnrepository.com/artifact/software.amazon.awssdk/ec2 -->
-        <dependency>
-            <groupId>software.amazon.awssdk</groupId>
-            <artifactId>ec2</artifactId>
-        </dependency>
-
-        <!-- https://mvnrepository.com/artifact/software.amazon.awssdk/lightsail -->
-        <dependency>
-            <groupId>software.amazon.awssdk</groupId>
-            <artifactId>lightsail</artifactId>
         </dependency>
     </dependencies>
 </project>

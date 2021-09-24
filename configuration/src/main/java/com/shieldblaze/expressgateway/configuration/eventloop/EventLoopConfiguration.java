@@ -24,7 +24,9 @@ import com.shieldblaze.expressgateway.configuration.ConfigurationMarshaller;
 import java.io.IOException;
 
 /**
- * {@code EventLoop} Configuration
+ * Configuration for {@link EventLoopConfiguration}.
+ *
+ * Use {@link EventLoopConfigurationBuilder} to build {@link EventLoopConfiguration} instance.
  */
 public final class EventLoopConfiguration {
 

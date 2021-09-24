@@ -20,12 +20,12 @@ package com.shieldblaze.expressgateway.restapi.api.node;
 import com.google.gson.JsonObject;
 import com.google.gson.JsonParser;
 import com.shieldblaze.expressgateway.backend.State;
-import com.shieldblaze.expressgateway.core.registry.LoadBalancerProperty;
-import com.shieldblaze.expressgateway.core.registry.LoadBalancerRegistry;
+import com.shieldblaze.expressgateway.core.cluster.LoadBalancerProperty;
+import com.shieldblaze.expressgateway.core.cluster.LoadBalancerRegistry;
+import com.shieldblaze.expressgateway.restapi.CustomOkHttpClient;
 import com.shieldblaze.expressgateway.restapi.RestAPI;
 import com.shieldblaze.expressgateway.restapi.api.cluster.ClusterHandlerTest;
 import com.shieldblaze.expressgateway.restapi.api.loadbalancer.L4LoadBalancerTest;
-import com.shieldblaze.expressgateway.restapi.api.loadbalancer.L7LoadBalancerTest;
 import okhttp3.MediaType;
 import okhttp3.OkHttpClient;
 import okhttp3.Request;
@@ -48,7 +48,6 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 class NodeHandlerTest {
 
     private static final RequestBody EMPTY_REQ_BODY = RequestBody.create(new byte[0], null);
-    private static final OkHttpClient OK_HTTP_CLIENT = new OkHttpClient();
     private static final ClusterHandlerTest clusterHandlerTest = new ClusterHandlerTest();
     private static String nodeId;
 
@@ -61,7 +60,6 @@ class NodeHandlerTest {
     @AfterAll
     static void teardown() throws IOException, InterruptedException {
         clusterHandlerTest.deleteL4ClusterTest();
-        OK_HTTP_CLIENT.dispatcher().cancelAll();
         RestAPI.stop();
         Thread.sleep(2500);
     }
@@ -74,11 +72,11 @@ class NodeHandlerTest {
         body.addProperty("port", 54321);
 
         Request request = new Request.Builder()
-                .url("http://127.0.0.1:9110/v1/node/create?id=" + L4LoadBalancerTest.id + "&clusterHostname=default")
+                .url("https://127.0.0.1:9110/v1/node/create?id=" + L4LoadBalancerTest.id + "&clusterHostname=default")
                 .post(RequestBody.create(body.toString(), MediaType.get("application/json")))
                 .build();
 
-        try (Response response = OK_HTTP_CLIENT.newCall(request).execute()) {
+        try (Response response = CustomOkHttpClient.INSTANCE.newCall(request).execute()) {
             assertNotNull(response.body());
             JsonObject responseJson = JsonParser.parseString(response.body().string()).getAsJsonObject();
             assertTrue(responseJson.get("Success").getAsBoolean());
@@ -91,11 +89,11 @@ class NodeHandlerTest {
     @Order(2)
     void markManuallyOfflineTest() throws IOException {
         Request request = new Request.Builder()
-                .url("http://127.0.0.1:9110/v1/node/offline?id=" + L4LoadBalancerTest.id + "&clusterHostname=default&nodeId=" + nodeId)
+                .url("https://127.0.0.1:9110/v1/node/offline?id=" + L4LoadBalancerTest.id + "&clusterHostname=default&nodeId=" + nodeId)
                 .put(EMPTY_REQ_BODY)
                 .build();
 
-        try (Response response = OK_HTTP_CLIENT.newCall(request).execute()) {
+        try (Response response = CustomOkHttpClient.INSTANCE.newCall(request).execute()) {
             assertNotNull(response.body());
             JsonObject responseJson = JsonParser.parseString(response.body().string()).getAsJsonObject();
             assertTrue(responseJson.get("Success").getAsBoolean());
@@ -112,11 +110,11 @@ class NodeHandlerTest {
         assertEquals(10_000, property.l4LoadBalancer().cluster("default").get(nodeId).maxConnections());
 
         Request request = new Request.Builder()
-                .url("http://127.0.0.1:9110/v1/node/maxConnections?id=" + L4LoadBalancerTest.id + "&clusterHostname=default&nodeId=" + nodeId + "&maxConnections=1000000")
+                .url("https://127.0.0.1:9110/v1/node/maxConnections?id=" + L4LoadBalancerTest.id + "&clusterHostname=default&nodeId=" + nodeId + "&maxConnections=1000000")
                 .patch(EMPTY_REQ_BODY)
                 .build();
 
-        try (Response response = OK_HTTP_CLIENT.newCall(request).execute()) {
+        try (Response response = CustomOkHttpClient.INSTANCE.newCall(request).execute()) {
             assertNotNull(response.body());
             JsonObject responseJson = JsonParser.parseString(response.body().string()).getAsJsonObject();
             assertTrue(responseJson.get("Success").getAsBoolean());
@@ -129,11 +127,11 @@ class NodeHandlerTest {
     @Order(4)
     void getNodeTest() throws IOException {
         Request request = new Request.Builder()
-                .url("http://127.0.0.1:9110/v1/node/?id=" + L4LoadBalancerTest.id + "&clusterHostname=default&nodeId=" + nodeId)
+                .url("https://127.0.0.1:9110/v1/node/?id=" + L4LoadBalancerTest.id + "&clusterHostname=default&nodeId=" + nodeId)
                 .get()
                 .build();
 
-        try (Response response = OK_HTTP_CLIENT.newCall(request).execute()) {
+        try (Response response = CustomOkHttpClient.INSTANCE.newCall(request).execute()) {
             assertNotNull(response.body());
             JsonObject responseJson = JsonParser.parseString(response.body().string()).getAsJsonObject();
             assertTrue(responseJson.get("Success").getAsBoolean());
@@ -144,11 +142,11 @@ class NodeHandlerTest {
     @Test
     void deleteNodeTest() throws IOException {
         Request request = new Request.Builder()
-                .url("http://127.0.0.1:9110/v1/node/delete?id=" + L4LoadBalancerTest.id + "&clusterHostname=default&nodeId=" + nodeId)
+                .url("https://127.0.0.1:9110/v1/node/delete?id=" + L4LoadBalancerTest.id + "&clusterHostname=default&nodeId=" + nodeId)
                 .delete()
                 .build();
 
-        try (Response response = OK_HTTP_CLIENT.newCall(request).execute()) {
+        try (Response response = CustomOkHttpClient.INSTANCE.newCall(request).execute()) {
             assertNotNull(response.body());
             JsonObject responseJson = JsonParser.parseString(response.body().string()).getAsJsonObject();
             assertTrue(responseJson.get("Success").getAsBoolean());

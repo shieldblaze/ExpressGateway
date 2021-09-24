@@ -49,8 +49,14 @@ import java.security.cert.X509Certificate;
 import java.time.Duration;
 import java.time.temporal.ChronoUnit;
 import java.util.Enumeration;
+import java.util.SplittableRandom;
 
+/**
+ * OCSP Client
+ */
 final class OCSPClient {
+
+    private static final SplittableRandom RANDOM = new SplittableRandom();
 
     private static final HttpClient HTTP_CLIENT = HttpClient.newBuilder()
             .followRedirects(HttpClient.Redirect.NEVER)
@@ -64,15 +70,19 @@ final class OCSPClient {
         CertificateID certificateID = new CertificateID(new JcaDigestCalculatorProviderBuilder().build().get(CertificateID.HASH_SHA1),
                 new JcaX509CertificateHolder(issuer), x509Certificate.getSerialNumber());
 
+        // Initialize OCSP Request Builder and add CertificateID into it.
         OCSPReqBuilder builder = new OCSPReqBuilder();
         builder.addRequest(certificateID);
 
+        // Generate 6-bytes of nonce and add it into OCSP Request builder.
         byte[] nonce = new byte[6];
-        SecureRandom.getInstanceStrong().nextBytes(nonce);
+        RANDOM.nextBytes(nonce);
         DEROctetString derNonce = new DEROctetString(nonce);
         builder.setRequestExtensions(new Extensions(new Extension(OCSPObjectIdentifiers.id_pkix_ocsp_nonce, false, derNonce)));
 
-        OCSPResp ocspResp = queryCA(URI.create(getOcspUrlFromCertificate(x509Certificate)), builder.build());
+        // Get OCSP URL from Certificate and query it.
+        URI uri = URI.create(getOcspUrlFromCertificate(x509Certificate));
+        OCSPResp ocspResp = queryCA(uri, builder.build());
         if (ocspResp.getStatus() != OCSPResponseStatus.SUCCESSFUL) {
             throw new IllegalArgumentException("OCSP Request was not successful, Status: " + ocspResp.getStatus());
         }
@@ -81,8 +91,9 @@ final class OCSPClient {
         checkNonce(basicResponse, derNonce);
         checkSignature(basicResponse, issuer);
 
-        if (basicResponse.getResponses().length != 1) {
-            throw new IllegalArgumentException("Expected number of response was 1 but we got: " + basicResponse.getResponses().length);
+        int numResponses = basicResponse.getResponses().length;
+        if (numResponses != 1) {
+            throw new IllegalArgumentException("Expected number of response was 1 but we got: " + numResponses);
         }
 
         return ocspResp;
@@ -137,7 +148,7 @@ final class OCSPClient {
             // Ignore
         }
 
-        throw new NullPointerException("Unable to find OCSP URL");
+        throw new NullPointerException("Unable to find OCSP URL from Certificate");
     }
 
     private static void checkNonce(BasicOCSPResp basicResponse, DEROctetString encodedNonce) throws OCSPException {
@@ -154,7 +165,7 @@ final class OCSPClient {
         try {
             ContentVerifierProvider verifier = new JcaContentVerifierProviderBuilder().build(certificate);
             if (!basicResponse.isSignatureValid(verifier)) {
-                throw new OCSPException("OCSP-Signature is not valid!");
+                throw new OCSPException("OCSP-Signature is not valid");
             }
         } catch (OperatorCreationException e) {
             throw new OCSPException("Error checking Ocsp-Signature", e);

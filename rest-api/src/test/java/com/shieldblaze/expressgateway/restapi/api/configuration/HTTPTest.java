@@ -20,6 +20,7 @@ package com.shieldblaze.expressgateway.restapi.api.configuration;
 import com.google.gson.JsonObject;
 import com.google.gson.JsonParser;
 import com.shieldblaze.expressgateway.configuration.http.HTTPConfiguration;
+import com.shieldblaze.expressgateway.restapi.CustomOkHttpClient;
 import com.shieldblaze.expressgateway.restapi.RestAPI;
 import okhttp3.OkHttpClient;
 import okhttp3.Request;
@@ -38,18 +39,14 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 
 class HTTPTest {
 
-    private static OkHttpClient okHttpClient;
-
     @BeforeAll
     static void startSpring() {
         RestAPI.start();
-        okHttpClient = new OkHttpClient();
         System.setProperty("egw.dir", System.getProperty("java.io.tmpdir"));
     }
 
     @AfterAll
     static void teardown() throws InterruptedException {
-        okHttpClient.dispatcher().cancelAll();
         RestAPI.stop();
         Thread.sleep(2500);
     }
@@ -71,12 +68,12 @@ class HTTPTest {
         jsonBody.addProperty("brotliCompressionLevel", 4);
 
         Request request = new Request.Builder()
-                .url("http://127.0.0.1:9110/v1/configuration/http/")
+                .url("https://127.0.0.1:9110/v1/configuration/http/")
                 .post(RequestBody.create(jsonBody.toString().getBytes()))
                 .header("Content-Type", "application/json")
                 .build();
 
-        try (Response response = okHttpClient.newCall(request).execute()) {
+        try (Response response = CustomOkHttpClient.INSTANCE.newCall(request).execute()) {
             assertNotNull(response.body());
             JsonObject responseJson = JsonParser.parseString(response.body().string()).getAsJsonObject();
             assertTrue(responseJson.get("Success").getAsBoolean());
@@ -100,12 +97,12 @@ class HTTPTest {
         jsonBody.addProperty("brotliCompressionLevel", 23); // Out of range
 
         Request request = new Request.Builder()
-                .url("http://127.0.0.1:9110/v1/configuration/http/")
+                .url("https://127.0.0.1:9110/v1/configuration/http/")
                 .post(RequestBody.create(jsonBody.toString().getBytes()))
                 .header("Content-Type", "application/json")
                 .build();
 
-        try (Response response = okHttpClient.newCall(request).execute()) {
+        try (Response response = CustomOkHttpClient.INSTANCE.newCall(request).execute()) {
             assertNotNull(response.body());
             JsonObject responseJson = JsonParser.parseString(response.body().string()).getAsJsonObject();
             assertFalse(responseJson.get("Success").getAsBoolean());
@@ -117,11 +114,11 @@ class HTTPTest {
         HTTPConfiguration httpDefault = HTTPConfiguration.DEFAULT;
 
         Request request = new Request.Builder()
-                .url("http://127.0.0.1:9110/v1/configuration/http/default")
+                .url("https://127.0.0.1:9110/v1/configuration/http/default")
                 .get()
                 .build();
 
-        try (Response response = okHttpClient.newCall(request).execute()) {
+        try (Response response = CustomOkHttpClient.INSTANCE.newCall(request).execute()) {
             assertNotNull(response.body());
             JsonObject responseJson = JsonParser.parseString(response.body().string()).getAsJsonObject();
             assertTrue(responseJson.get("Success").getAsBoolean());
@@ -160,23 +157,23 @@ class HTTPTest {
 
 
         Request request = new Request.Builder()
-                .url("http://127.0.0.1:9110/v1/configuration/http/")
+                .url("https://127.0.0.1:9110/v1/configuration/http/")
                 .post(RequestBody.create(jsonBody.toString().getBytes()))
                 .header("Content-Type", "application/json")
                 .build();
 
-        try (Response response = okHttpClient.newCall(request).execute()) {
+        try (Response response = CustomOkHttpClient.INSTANCE.newCall(request).execute()) {
             assertNotNull(response.body());
             JsonObject responseJson = JsonParser.parseString(response.body().string()).getAsJsonObject();
             assertTrue(responseJson.get("Success").getAsBoolean());
         }
 
         request = new Request.Builder()
-                .url("http://127.0.0.1:9110/v1/configuration/http/")
+                .url("https://127.0.0.1:9110/v1/configuration/http/")
                 .get()
                 .build();
 
-        try (Response response = okHttpClient.newCall(request).execute()) {
+        try (Response response = CustomOkHttpClient.INSTANCE.newCall(request).execute()) {
             assertNotNull(response.body());
             JsonObject responseJson = JsonParser.parseString(response.body().string()).getAsJsonObject();
             assertTrue(responseJson.get("Success").getAsBoolean());

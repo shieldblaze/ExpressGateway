@@ -27,36 +27,36 @@ class OCSPClientTest {
     @Test
     void fetchEC256BadOCSPUrlFromCertTest() throws Exception {
         SelfSignedCertificate selfSignedCertificate = new SelfSignedCertificate("www.shieldblaze.com", "EC", 256);
-        assertThrows(NullPointerException.class, () -> OCSPClient.response(selfSignedCertificate.cert(), selfSignedCertificate.cert()), "Unable to find OCSP URL");
+        assertThrows(NullPointerException.class, () -> OCSPClient.response(selfSignedCertificate.cert(), selfSignedCertificate.cert()));
     }
 
     @Test
     void fetchEC384BadOCSPUrlFromCertTest() throws Exception {
         SelfSignedCertificate selfSignedCertificate = new SelfSignedCertificate("www.shieldblaze.com", "EC", 384);
-        assertThrows(NullPointerException.class, () -> OCSPClient.response(selfSignedCertificate.cert(), selfSignedCertificate.cert()), "Unable to find OCSP URL");
+        assertThrows(NullPointerException.class, () -> OCSPClient.response(selfSignedCertificate.cert(), selfSignedCertificate.cert()));
     }
 
     @Test
     void fetchEC521BadOCSPUrlFromCertTest() throws Exception {
         SelfSignedCertificate selfSignedCertificate = new SelfSignedCertificate("www.shieldblaze.com", "EC", 521);
-        assertThrows(NullPointerException.class, () -> OCSPClient.response(selfSignedCertificate.cert(), selfSignedCertificate.cert()), "Unable to find OCSP URL");
+        assertThrows(NullPointerException.class, () -> OCSPClient.response(selfSignedCertificate.cert(), selfSignedCertificate.cert()));
     }
 
     @Test
     void fetchRSA2048BadOCSPUrlFromCertTest() throws Exception {
         SelfSignedCertificate selfSignedCertificate = new SelfSignedCertificate("www.shieldblaze.com", "RSA", 2048);
-        assertThrows(NullPointerException.class, () -> OCSPClient.response(selfSignedCertificate.cert(), selfSignedCertificate.cert()), "Unable to find OCSP URL");
+        assertThrows(NullPointerException.class, () -> OCSPClient.response(selfSignedCertificate.cert(), selfSignedCertificate.cert()));
     }
 
     @Test
     void fetchRSA3072BadOCSPUrlFromCertTest() throws Exception {
         SelfSignedCertificate selfSignedCertificate = new SelfSignedCertificate("www.shieldblaze.com", "RSA", 3072);
-        assertThrows(NullPointerException.class, () -> OCSPClient.response(selfSignedCertificate.cert(), selfSignedCertificate.cert()), "Unable to find OCSP URL");
+        assertThrows(NullPointerException.class, () -> OCSPClient.response(selfSignedCertificate.cert(), selfSignedCertificate.cert()));
     }
 
     @Test
     void fetchRSA4096BadOCSPUrlFromCertTest() throws Exception {
         SelfSignedCertificate selfSignedCertificate = new SelfSignedCertificate("www.shieldblaze.com", "RSA", 4096);
-        assertThrows(NullPointerException.class, () -> OCSPClient.response(selfSignedCertificate.cert(), selfSignedCertificate.cert()), "Unable to find OCSP URL");
+        assertThrows(NullPointerException.class, () -> OCSPClient.response(selfSignedCertificate.cert(), selfSignedCertificate.cert()));
     }
 }

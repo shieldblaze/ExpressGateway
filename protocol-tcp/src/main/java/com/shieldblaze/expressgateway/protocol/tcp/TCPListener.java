@@ -18,10 +18,9 @@
 package com.shieldblaze.expressgateway.protocol.tcp;
 
 import com.shieldblaze.expressgateway.concurrent.GlobalExecutors;
-import com.shieldblaze.expressgateway.configuration.CoreConfiguration;
 import com.shieldblaze.expressgateway.configuration.transport.TransportConfiguration;
 import com.shieldblaze.expressgateway.configuration.transport.TransportType;
-import com.shieldblaze.expressgateway.core.EventLoopFactory;
+import com.shieldblaze.expressgateway.core.factory.EventLoopFactory;
 import com.shieldblaze.expressgateway.core.L4FrontListener;
 import com.shieldblaze.expressgateway.core.events.L4FrontListenerShutdownEvent;
 import com.shieldblaze.expressgateway.core.events.L4FrontListenerStartupEvent;
