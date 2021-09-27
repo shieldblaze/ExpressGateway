@@ -21,6 +21,7 @@ import com.shieldblaze.expressgateway.common.utils.NumberUtil;
 import com.shieldblaze.expressgateway.common.utils.SystemPropertyUtil;
 import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
+import org.springframework.boot.web.embedded.netty.NettyReactiveWebServerFactory;
 import org.springframework.boot.web.embedded.undertow.UndertowServletWebServerFactory;
 import org.springframework.boot.web.server.Http2;
 import org.springframework.boot.web.server.WebServerFactoryCustomizer;
@@ -34,12 +35,12 @@ import java.net.UnknownHostException;
  * Undertow web server, like Bind Address and Port, TLS, etc.
  */
 @Configuration
-public class WebServerCustomizer implements WebServerFactoryCustomizer<UndertowServletWebServerFactory> {
+public class WebServerCustomizer implements WebServerFactoryCustomizer<NettyReactiveWebServerFactory> {
 
     private static final Logger logger = LogManager.getLogger(WebServerCustomizer.class);
 
     @Override
-    public void customize(UndertowServletWebServerFactory factory) {
+    public void customize(NettyReactiveWebServerFactory factory) {
 
         InetAddress inetAddress;
         int port;
@@ -66,8 +67,6 @@ public class WebServerCustomizer implements WebServerFactoryCustomizer<UndertowS
 
         factory.setAddress(inetAddress);
         factory.setPort(port);
-        factory.setIoThreads(Runtime.getRuntime().availableProcessors());
-        factory.setUseDirectBuffers(true);
 
         Http2 http2 = new Http2();
         http2.setEnabled(true);
