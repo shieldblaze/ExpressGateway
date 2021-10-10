@@ -30,7 +30,7 @@ jobs:
       - name: Build with Maven
         run: sudo mvn -B -ntp test --file pom.xml
       - name: Upload Coverage Report
-        run: sudo bash <(curl -s https://codecov.io/bash)
+        run: bash <(curl -s https://codecov.io/bash)
 
 
   BuildJDK16:
