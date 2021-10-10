@@ -26,9 +26,9 @@ jobs:
       - name: Prepare Setup and Initialize
         run: sudo chmod +x setup.sh && sudo chmod +x initialize.sh
       - name: Initialize
-        run: ./setup.sh && ./initialize.sh
+        run: sudo ./setup.sh && ./initialize.sh
       - name: Build with Maven
-        run: mvn -B -ntp test --file pom.xml
+        run: sudo mvn -B -ntp test --file pom.xml
       - name: Upload Coverage Report
         run: bash <(curl -s https://codecov.io/bash)
 
@@ -46,6 +46,6 @@ jobs:
       - name: Prepare Setup and Initialize
         run: sudo chmod +x setup.sh && sudo chmod +x initialize.sh
       - name: Initialize
-        run: ./setup.sh && ./initialize.sh
+        run: sudo ./setup.sh && ./initialize.sh
       - name: Build with Maven
-        run: mvn -B -ntp test --file pom.xml
+        run: sudo mvn -B -ntp test --file pom.xml
