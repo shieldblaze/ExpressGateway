@@ -32,7 +32,7 @@ import java.net.UnknownHostException;
 
 /**
  * This customizer is responsible for the configuration of
- * Undertow web server, like Bind Address and Port, TLS, etc.
+ * Netty web server, like Bind Address and Port, TLS, etc.
  */
 @Configuration
 public class WebServerCustomizer implements WebServerFactoryCustomizer<NettyReactiveWebServerFactory> {
