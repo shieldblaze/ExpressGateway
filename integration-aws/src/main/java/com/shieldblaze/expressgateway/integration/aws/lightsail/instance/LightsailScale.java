@@ -1,6 +1,6 @@
 /*
  * This file is part of ShieldBlaze ExpressGateway. [www.shieldblaze.com]
- * Copyright (c) 2020-2021 ShieldBlaze
+ * Copyright (c) 2020-2022 ShieldBlaze
  *
  * ShieldBlaze ExpressGateway is free software: you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -56,12 +56,12 @@ public final class LightsailScale implements ScaleIn<String, LightsailScaleInEve
 
             OperationStatus status = deleteInstanceResponse.operations().get(0).status();
             if (status == OperationStatus.SUCCEEDED) {
-                event.trySuccess(deleteInstanceResponse);
+                event.markSuccess(deleteInstanceResponse);
             } else {
-                event.tryFailure(new IllegalArgumentException("Instance state: " + status));
+                event.markFailure(new IllegalArgumentException("Instance state: " + status));
             }
         } catch (Exception ex) {
-            event.tryFailure(ex);
+            event.markFailure(ex);
         }
 
         return event;
@@ -87,12 +87,12 @@ public final class LightsailScale implements ScaleIn<String, LightsailScaleInEve
 
             OperationStatus status = createInstancesResponse.operations().get(0).status();
             if (status == OperationStatus.SUCCEEDED) {
-                event.trySuccess(createInstancesResponse);
+                event.markSuccess(createInstancesResponse);
             } else {
-                event.tryFailure(new IllegalArgumentException("Instance state: " + status));
+                event.markFailure(new IllegalArgumentException("Instance state: " + status));
             }
         } catch (Exception ex) {
-            event.tryFailure(ex);
+            event.markFailure(ex);
         }
 
         return event;

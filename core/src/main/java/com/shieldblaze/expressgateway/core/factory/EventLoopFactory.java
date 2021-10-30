@@ -1,6 +1,6 @@
 /*
  * This file is part of ShieldBlaze ExpressGateway. [www.shieldblaze.com]
- * Copyright (c) 2020-2021 ShieldBlaze
+ * Copyright (c) 2020-2022 ShieldBlaze
  *
  * ShieldBlaze ExpressGateway is free software: you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -17,6 +17,7 @@
  */
 package com.shieldblaze.expressgateway.core.factory;
 
+import com.shieldblaze.expressgateway.common.annotation.NonNull;
 import com.shieldblaze.expressgateway.configuration.CoreConfiguration;
 import com.shieldblaze.expressgateway.configuration.transport.TransportType;
 import io.netty.channel.EventLoopGroup;
@@ -24,11 +25,20 @@ import io.netty.channel.epoll.EpollEventLoopGroup;
 import io.netty.channel.nio.NioEventLoopGroup;
 import io.netty.incubator.channel.uring.IOUringEventLoopGroup;
 
+/**
+ * This class provides configured {@link EventLoopGroup} instances.
+ */
 public final class EventLoopFactory {
 
     private final EventLoopGroup parentGroup;
     private final EventLoopGroup childGroup;
 
+    /**
+     * Create a new {@link EventLoopFactory} instance
+     *
+     * @param coreConfiguration {@link CoreConfiguration} instance
+     */
+    @NonNull
     public EventLoopFactory(CoreConfiguration coreConfiguration) {
         int parentWorkers = coreConfiguration.eventLoopConfiguration().parentWorkers();
         int childWorkers = coreConfiguration.eventLoopConfiguration().childWorkers();

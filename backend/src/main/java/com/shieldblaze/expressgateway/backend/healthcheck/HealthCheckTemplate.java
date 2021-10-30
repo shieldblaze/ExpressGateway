@@ -1,6 +1,6 @@
 /*
  * This file is part of ShieldBlaze ExpressGateway. [www.shieldblaze.com]
- * Copyright (c) 2020-2021 ShieldBlaze
+ * Copyright (c) 2020-2022 ShieldBlaze
  *
  * ShieldBlaze ExpressGateway is free software: you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -90,7 +90,7 @@ public final class HealthCheckTemplate {
     }
 
     public void setPort(int port) {
-        this.port = NumberUtil.checkRange(port, 1, 65535, "Port");
+        this.port = NumberUtil.checkInRange(port, 1, 65535, "Port");
     }
 
     public String path() {

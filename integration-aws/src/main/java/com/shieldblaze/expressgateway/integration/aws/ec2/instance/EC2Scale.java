@@ -1,6 +1,6 @@
 /*
  * This file is part of ShieldBlaze ExpressGateway. [www.shieldblaze.com]
- * Copyright (c) 2020-2021 ShieldBlaze
+ * Copyright (c) 2020-2022 ShieldBlaze
  *
  * ShieldBlaze ExpressGateway is free software: you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -60,19 +60,19 @@ public final class EC2Scale implements ScaleIn<EC2Instance, EC2ScaleInEvent>, Sc
                 boolean isTerminated = !terminateInstancesResponse.terminatingInstances().isEmpty();
 
                 if (!isTerminated) {
-                    event.tryFailure(new IllegalArgumentException("Instance was not terminated"));
+                    event.markFailure(new IllegalArgumentException("Instance was not terminated"));
                 }
 
                 InstanceStateChange instanceStateChange = terminateInstancesResponse.terminatingInstances().get(0);
                 InstanceStateName instanceStateName = instanceStateChange.currentState().name();
 
                 if (isTerminated && (instanceStateName == InstanceStateName.SHUTTING_DOWN || instanceStateName == InstanceStateName.TERMINATED)) {
-                    event.trySuccess(terminateInstancesResponse);
+                    event.markSuccess(terminateInstancesResponse);
                 } else {
-                    event.tryFailure(new IllegalArgumentException("Unknown InstanceState: " + instanceStateName));
+                    event.markFailure(new IllegalArgumentException("Unknown InstanceState: " + instanceStateName));
                 }
             } catch (Exception ex) {
-                event.tryFailure(ex);
+                event.markFailure(ex);
             }
         });
 
@@ -124,7 +124,7 @@ public final class EC2Scale implements ScaleIn<EC2Instance, EC2ScaleInEvent>, Sc
                         .build());
 
                 instance = describeInstancesResponse.reservations().get(0).instances().get(0);
-                event.trySuccess(instance);
+                event.markSuccess(instance);
             } catch (Exception ex) {
                 try {
                     if (instanceId != null) {
@@ -136,7 +136,7 @@ public final class EC2Scale implements ScaleIn<EC2Instance, EC2ScaleInEvent>, Sc
                     // We can ignore this safely
                 }
 
-                event.tryFailure(ex);
+                event.markFailure(ex);
             }
         });
 

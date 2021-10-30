@@ -1,6 +1,6 @@
 /*
  * This file is part of ShieldBlaze ExpressGateway. [www.shieldblaze.com]
- * Copyright (c) 2020-2021 ShieldBlaze
+ * Copyright (c) 2020-2022 ShieldBlaze
  *
  * ShieldBlaze ExpressGateway is free software: you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -84,9 +84,9 @@ public class EC2Instance implements Server {
         GlobalExecutors.submitTask(() -> {
             try {
                 RebootInstancesResponse rebootInstancesResponse = ec2Client.rebootInstances(RebootInstancesRequest.builder().instanceIds(id).build());
-                event.trySuccess(rebootInstancesResponse);
+                event.markSuccess(rebootInstancesResponse);
             } catch (Exception ex) {
-                event.tryFailure(ex);
+                event.markFailure(ex);
             }
         });
 
@@ -101,9 +101,9 @@ public class EC2Instance implements Server {
         GlobalExecutors.submitTask(() -> {
            try {
                TerminateInstancesResponse terminateInstancesResponse = ec2Client.terminateInstances(TerminateInstancesRequest.builder().instanceIds(id).build());
-               event.trySuccess(terminateInstancesResponse);
+               event.markSuccess(terminateInstancesResponse);
            } catch (Exception ex) {
-               event.tryFailure(ex);
+               event.markFailure(ex);
            }
         });
 

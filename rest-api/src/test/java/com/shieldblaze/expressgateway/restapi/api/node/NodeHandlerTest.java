@@ -1,6 +1,6 @@
 /*
  * This file is part of ShieldBlaze ExpressGateway. [www.shieldblaze.com]
- * Copyright (c) 2020-2021 ShieldBlaze
+ * Copyright (c) 2020-2022 ShieldBlaze
  *
  * ShieldBlaze ExpressGateway is free software: you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -20,14 +20,13 @@ package com.shieldblaze.expressgateway.restapi.api.node;
 import com.google.gson.JsonObject;
 import com.google.gson.JsonParser;
 import com.shieldblaze.expressgateway.backend.State;
-import com.shieldblaze.expressgateway.core.cluster.LoadBalancerProperty;
-import com.shieldblaze.expressgateway.core.cluster.LoadBalancerRegistry;
+import com.shieldblaze.expressgateway.core.cluster.LoadBalancerContext;
+import com.shieldblaze.expressgateway.core.cluster.CoreContext;
 import com.shieldblaze.expressgateway.restapi.CustomOkHttpClient;
 import com.shieldblaze.expressgateway.restapi.RestAPI;
 import com.shieldblaze.expressgateway.restapi.api.cluster.ClusterHandlerTest;
-import com.shieldblaze.expressgateway.restapi.api.loadbalancer.L4LoadBalancerTest;
+import com.shieldblaze.expressgateway.restapi.api.loadbalancer.L4LoadBalancerHandlerTest;
 import okhttp3.MediaType;
-import okhttp3.OkHttpClient;
 import okhttp3.Request;
 import okhttp3.RequestBody;
 import okhttp3.Response;
@@ -72,7 +71,7 @@ class NodeHandlerTest {
         body.addProperty("port", 54321);
 
         Request request = new Request.Builder()
-                .url("https://127.0.0.1:9110/v1/node/create?id=" + L4LoadBalancerTest.id + "&clusterHostname=default")
+                .url("https://127.0.0.1:9110/v1/node/create?id=" + L4LoadBalancerHandlerTest.id + "&clusterHostname=default")
                 .post(RequestBody.create(body.toString(), MediaType.get("application/json")))
                 .build();
 
@@ -89,7 +88,7 @@ class NodeHandlerTest {
     @Order(2)
     void markManuallyOfflineTest() throws IOException {
         Request request = new Request.Builder()
-                .url("https://127.0.0.1:9110/v1/node/offline?id=" + L4LoadBalancerTest.id + "&clusterHostname=default&nodeId=" + nodeId)
+                .url("https://127.0.0.1:9110/v1/node/offline?id=" + L4LoadBalancerHandlerTest.id + "&clusterHostname=default&nodeId=" + nodeId)
                 .put(EMPTY_REQ_BODY)
                 .build();
 
@@ -99,18 +98,18 @@ class NodeHandlerTest {
             assertTrue(responseJson.get("Success").getAsBoolean());
         }
 
-        LoadBalancerProperty property = LoadBalancerRegistry.get(L4LoadBalancerTest.id);
+        LoadBalancerContext property = CoreContext.get(L4LoadBalancerHandlerTest.id);
         assertEquals(State.MANUAL_OFFLINE, property.l4LoadBalancer().cluster("default").get(nodeId).state());
     }
 
     @Test
     @Order(3)
     void changeMaxConnectionsTest() throws IOException {
-        LoadBalancerProperty property = LoadBalancerRegistry.get(L4LoadBalancerTest.id);
+        LoadBalancerContext property = CoreContext.get(L4LoadBalancerHandlerTest.id);
         assertEquals(10_000, property.l4LoadBalancer().cluster("default").get(nodeId).maxConnections());
 
         Request request = new Request.Builder()
-                .url("https://127.0.0.1:9110/v1/node/maxConnections?id=" + L4LoadBalancerTest.id + "&clusterHostname=default&nodeId=" + nodeId + "&maxConnections=1000000")
+                .url("https://127.0.0.1:9110/v1/node/maxConnections?id=" + L4LoadBalancerHandlerTest.id + "&clusterHostname=default&nodeId=" + nodeId + "&maxConnections=1000000")
                 .patch(EMPTY_REQ_BODY)
                 .build();
 
@@ -127,7 +126,7 @@ class NodeHandlerTest {
     @Order(4)
     void getNodeTest() throws IOException {
         Request request = new Request.Builder()
-                .url("https://127.0.0.1:9110/v1/node/?id=" + L4LoadBalancerTest.id + "&clusterHostname=default&nodeId=" + nodeId)
+                .url("https://127.0.0.1:9110/v1/node/?id=" + L4LoadBalancerHandlerTest.id + "&clusterHostname=default&nodeId=" + nodeId)
                 .get()
                 .build();
 
@@ -142,7 +141,7 @@ class NodeHandlerTest {
     @Test
     void deleteNodeTest() throws IOException {
         Request request = new Request.Builder()
-                .url("https://127.0.0.1:9110/v1/node/delete?id=" + L4LoadBalancerTest.id + "&clusterHostname=default&nodeId=" + nodeId)
+                .url("https://127.0.0.1:9110/v1/node/delete?id=" + L4LoadBalancerHandlerTest.id + "&clusterHostname=default&nodeId=" + nodeId)
                 .delete()
                 .build();
 

@@ -1,6 +1,6 @@
 /*
  * This file is part of ShieldBlaze ExpressGateway. [www.shieldblaze.com]
- * Copyright (c) 2020-2021 ShieldBlaze
+ * Copyright (c) 2020-2022 ShieldBlaze
  *
  * ShieldBlaze ExpressGateway is free software: you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -20,8 +20,8 @@ package com.shieldblaze.expressgateway.restapi.api.node;
 import com.shieldblaze.expressgateway.backend.Node;
 import com.shieldblaze.expressgateway.backend.NodeBuilder;
 import com.shieldblaze.expressgateway.backend.cluster.Cluster;
-import com.shieldblaze.expressgateway.core.cluster.LoadBalancerProperty;
-import com.shieldblaze.expressgateway.core.cluster.LoadBalancerRegistry;
+import com.shieldblaze.expressgateway.core.cluster.LoadBalancerContext;
+import com.shieldblaze.expressgateway.core.cluster.CoreContext;
 import com.shieldblaze.expressgateway.restapi.response.FastBuilder;
 import com.shieldblaze.expressgateway.restapi.response.builder.APIResponse;
 import com.shieldblaze.expressgateway.restapi.response.builder.Result;
@@ -48,7 +48,7 @@ public class NodeHandler {
 
     @PostMapping(value = "/create", consumes = MediaType.APPLICATION_JSON_VALUE, produces = MediaType.APPLICATION_JSON_VALUE)
     public ResponseEntity<String> create(@RequestParam String id, @RequestParam String clusterHostname, @RequestBody NodeContext nodeContext) throws UnknownHostException {
-        LoadBalancerProperty property = LoadBalancerRegistry.get(id);
+        LoadBalancerContext property = CoreContext.get(id);
 
         Cluster cluster = property.l4LoadBalancer().cluster(clusterHostname);
 
@@ -71,7 +71,7 @@ public class NodeHandler {
 
     @DeleteMapping(value = "/delete", produces = MediaType.APPLICATION_JSON_VALUE)
     public ResponseEntity<String> delete(@RequestParam String id, @RequestParam String clusterHostname, @RequestParam String nodeId) {
-        LoadBalancerProperty property = LoadBalancerRegistry.get(id);
+        LoadBalancerContext property = CoreContext.get(id);
         Objects.requireNonNull(clusterHostname, "ClusterHostname");
         Objects.requireNonNull(nodeId, "NodeID");
 
@@ -90,7 +90,7 @@ public class NodeHandler {
     @PutMapping(value = "/offline", produces = MediaType.APPLICATION_JSON_VALUE)
     public ResponseEntity<String> offline(@RequestParam String id, @RequestParam String clusterHostname, @RequestParam String nodeId,
                                           @RequestParam(required = false) boolean drainConnections) {
-        LoadBalancerProperty property = LoadBalancerRegistry.get(id);
+        LoadBalancerContext property = CoreContext.get(id);
         Objects.requireNonNull(clusterHostname, "ClusterHostname");
         Objects.requireNonNull(nodeId, "NodeID");
 
@@ -111,7 +111,7 @@ public class NodeHandler {
 
     @PatchMapping(value = "/drainConnections", produces = MediaType.APPLICATION_JSON_VALUE)
     public ResponseEntity<String> drainConnections(@RequestParam String id, @RequestParam String clusterHostname, @RequestParam String nodeId) {
-        LoadBalancerProperty property = LoadBalancerRegistry.get(id);
+        LoadBalancerContext property = CoreContext.get(id);
         Objects.requireNonNull(clusterHostname, "ClusterHostname");
         Objects.requireNonNull(nodeId, "NodeID");
 
@@ -130,7 +130,7 @@ public class NodeHandler {
     @PatchMapping(value = "/maxConnections", produces = MediaType.APPLICATION_JSON_VALUE)
     public ResponseEntity<String> maxConnections(@RequestParam String id, @RequestParam String clusterHostname, @RequestParam String nodeId,
                                                  @RequestParam int maxConnections) {
-        LoadBalancerProperty property = LoadBalancerRegistry.get(id);
+        LoadBalancerContext property = CoreContext.get(id);
         Objects.requireNonNull(clusterHostname, "ClusterHostname");
         Objects.requireNonNull(nodeId, "NodeID");
 
@@ -148,7 +148,7 @@ public class NodeHandler {
 
     @GetMapping(produces = MediaType.APPLICATION_JSON_VALUE)
     public ResponseEntity<String> get(@RequestParam String id, @RequestParam String clusterHostname, @RequestParam String nodeId) {
-        LoadBalancerProperty property = LoadBalancerRegistry.get(id);
+        LoadBalancerContext property = CoreContext.get(id);
         Objects.requireNonNull(clusterHostname, "ClusterHostname");
         Objects.requireNonNull(nodeId, "NodeID");
 

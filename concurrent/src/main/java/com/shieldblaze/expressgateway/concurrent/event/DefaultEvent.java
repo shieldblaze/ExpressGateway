@@ -1,6 +1,6 @@
 /*
  * This file is part of ShieldBlaze ExpressGateway. [www.shieldblaze.com]
- * Copyright (c) 2020-2021 ShieldBlaze
+ * Copyright (c) 2020-2022 ShieldBlaze
  *
  * ShieldBlaze ExpressGateway is free software: you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -24,39 +24,48 @@ import java.util.concurrent.CompletableFuture;
  */
 public class DefaultEvent<T> implements Event<T> {
 
-    private CompletableFuture<T> future = new CompletableFuture<>();
+    private final CompletableFuture<T> future = new CompletableFuture<>();
     private boolean isFinished;
     private boolean isSuccessful;
     private Throwable throwable;
 
-    public void trySuccess(T object) {
-        isFinished(true);
-        isSuccessful(true);
-        throwable(null);
+    /**
+     * Mark this event as successful with 'null' successful
+     * completion object
+     */
+    public void markSuccess() {
+        markSuccess(null);
+    }
+
+    /**
+     * Mark this event as successful
+     *
+     * @param object Successful completion object
+     */
+    public void markSuccess(T object) {
+        if (isFinished) {
+            throw new IllegalStateException("Event is already finished");
+        }
+
+        isFinished = true;
+        isSuccessful = true;
         future.complete(object);
     }
 
-    public void tryFailure(Throwable cause) {
-        isFinished(true);
-        isSuccessful(false);
-        throwable(cause);
+    /**
+     * Mark this event as failure
+     *
+     * @param cause {@link Throwable} of event failure cause
+     */
+    public void markFailure(Throwable cause) {
+        if (isFinished) {
+            throw new IllegalStateException("Event is already finished");
+        }
+
+        isFinished = true;
+        isSuccessful = true;
+        throwable = cause;
         future.completeExceptionally(cause);
-    }
-
-    public void future(CompletableFuture<T> future) {
-        this.future = future;
-    }
-
-    public void isFinished(boolean finished) {
-        this.isFinished = finished;
-    }
-
-    public void isSuccessful(boolean success) {
-        this.isSuccessful = success;
-    }
-
-    public void throwable(Throwable throwable) {
-        this.throwable = throwable;
     }
 
     @Override
@@ -81,6 +90,11 @@ public class DefaultEvent<T> implements Event<T> {
 
     @Override
     public String toString() {
-        return "DefaultEvent{future=" + future + ", isFinished=" + isFinished + ", isSuccessful=" + isSuccessful + ", throwable=" + throwable + '}';
+        return "DefaultEvent{" +
+                "future=" + future +
+                ", isFinished=" + isFinished +
+                ", isSuccessful=" + isSuccessful +
+                ", throwable=" + throwable +
+                '}';
     }
 }

@@ -1,6 +1,6 @@
 /*
  * This file is part of ShieldBlaze ExpressGateway. [www.shieldblaze.com]
- * Copyright (c) 2020-2021 ShieldBlaze
+ * Copyright (c) 2020-2022 ShieldBlaze
  *
  * ShieldBlaze ExpressGateway is free software: you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -18,17 +18,20 @@
 package com.shieldblaze.expressgateway.restapi;
 
 import com.shieldblaze.expressgateway.common.utils.NumberUtil;
+import com.shieldblaze.expressgateway.common.utils.SelfSignedCertificate;
 import com.shieldblaze.expressgateway.common.utils.SystemPropertyUtil;
 import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
 import org.springframework.boot.web.embedded.netty.NettyReactiveWebServerFactory;
-import org.springframework.boot.web.embedded.undertow.UndertowServletWebServerFactory;
 import org.springframework.boot.web.server.Http2;
+import org.springframework.boot.web.server.Shutdown;
 import org.springframework.boot.web.server.WebServerFactoryCustomizer;
 import org.springframework.context.annotation.Configuration;
 
 import java.net.InetAddress;
 import java.net.UnknownHostException;
+import java.security.cert.X509Certificate;
+import java.util.List;
 
 /**
  * This customizer is responsible for the configuration of
@@ -58,7 +61,7 @@ public class WebServerCustomizer implements WebServerFactoryCustomizer<NettyReac
         }
 
         try {
-            port = NumberUtil.checkRange(SystemPropertyUtil.getPropertyOrEnvInt("api-port", "9110"), 1, 65535, "REST-API Port");
+            port = NumberUtil.checkInRange(SystemPropertyUtil.getPropertyOrEnvInt("api-port", "9110"), 1, 65535, "REST-API Port");
         } catch (Exception ex) {
             logger.error("Invalid REST-API Port, Shutting down...", ex);
             System.exit(1);
@@ -68,10 +71,7 @@ public class WebServerCustomizer implements WebServerFactoryCustomizer<NettyReac
         factory.setAddress(inetAddress);
         factory.setPort(port);
 
-        Http2 http2 = new Http2();
-        http2.setEnabled(true);
-        factory.setHttp2(http2);
-
-        factory.setSsl(RestAPI.SSL);
+        SelfSignedCertificate ssc = SelfSignedCertificate.generateNew(List.of("127.0.0.1"));
+        factory.addServerCustomizers(new TlsCustomizer(ssc.keyPair().getPrivate(), ssc.x509Certificate()));
     }
 }

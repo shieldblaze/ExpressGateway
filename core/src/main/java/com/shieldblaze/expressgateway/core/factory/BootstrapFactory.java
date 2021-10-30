@@ -1,6 +1,6 @@
 /*
  * This file is part of ShieldBlaze ExpressGateway. [www.shieldblaze.com]
- * Copyright (c) 2020-2021 ShieldBlaze
+ * Copyright (c) 2020-2022 ShieldBlaze
  *
  * ShieldBlaze ExpressGateway is free software: you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -17,6 +17,7 @@
  */
 package com.shieldblaze.expressgateway.core.factory;
 
+import com.shieldblaze.expressgateway.common.annotation.NonNull;
 import com.shieldblaze.expressgateway.configuration.CoreConfiguration;
 import com.shieldblaze.expressgateway.configuration.transport.TransportType;
 import io.netty.bootstrap.Bootstrap;
@@ -35,12 +36,12 @@ import io.netty.incubator.channel.uring.IOUringChannelOption;
 import io.netty.incubator.channel.uring.IOUringDatagramChannel;
 import io.netty.incubator.channel.uring.IOUringSocketChannel;
 
+/**
+ * This class provides configured {@link Bootstrap} instances.
+ */
 public final class BootstrapFactory {
 
-    private BootstrapFactory() {
-        // Prevent outside initialization
-    }
-
+    @NonNull
     public static Bootstrap tcp(CoreConfiguration coreConfiguration, EventLoopGroup eventLoopGroup, ByteBufAllocator byteBufAllocator) {
         return new Bootstrap()
                 .group(eventLoopGroup)
@@ -50,7 +51,7 @@ public final class BootstrapFactory {
                 .option(ChannelOption.SO_RCVBUF, coreConfiguration.transportConfiguration().socketReceiveBufferSize())
                 .option(ChannelOption.TCP_NODELAY, true)
                 .option(ChannelOption.AUTO_READ, true)
-                .option(ChannelOption.SO_KEEPALIVE, true).option(EpollChannelOption.EPOLL_MODE, EpollMode.EDGE_TRIGGERED)
+                .option(ChannelOption.SO_KEEPALIVE, true)
                 .option(ChannelOption.CONNECT_TIMEOUT_MILLIS, coreConfiguration.transportConfiguration().backendConnectTimeout())
                 .channelFactory(() -> {
                     if (coreConfiguration.transportConfiguration().transportType() == TransportType.IO_URING) {
@@ -74,6 +75,7 @@ public final class BootstrapFactory {
                 });
     }
 
+    @NonNull
     public static Bootstrap udp(CoreConfiguration coreConfiguration, EventLoopGroup eventLoopGroup, ByteBufAllocator byteBufAllocator) {
         return new Bootstrap()
                 .group(eventLoopGroup)
@@ -87,7 +89,6 @@ public final class BootstrapFactory {
                     if (coreConfiguration.transportConfiguration().transportType() == TransportType.IO_URING) {
                         IOUringDatagramChannel datagramChannel = new IOUringDatagramChannel();
                         datagramChannel.config().setOption(IOUringChannelOption.SO_REUSEPORT, true);
-
                         return datagramChannel;
                     } else if (coreConfiguration.transportConfiguration().transportType() == TransportType.EPOLL) {
                         EpollDatagramChannel datagramChannel = new EpollDatagramChannel();
@@ -102,5 +103,9 @@ public final class BootstrapFactory {
                         return new NioDatagramChannel();
                     }
                 });
+    }
+
+    private BootstrapFactory() {
+        // Prevent outside initialization
     }
 }

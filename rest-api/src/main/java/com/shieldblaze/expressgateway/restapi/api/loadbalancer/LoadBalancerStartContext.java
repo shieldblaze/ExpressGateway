@@ -1,6 +1,6 @@
 /*
  * This file is part of ShieldBlaze ExpressGateway. [www.shieldblaze.com]
- * Copyright (c) 2020-2021 ShieldBlaze
+ * Copyright (c) 2020-2022 ShieldBlaze
  *
  * ShieldBlaze ExpressGateway is free software: you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -22,7 +22,7 @@ import com.shieldblaze.expressgateway.common.utils.NumberUtil;
 
 import java.util.Objects;
 
-public final class LoadBalancerContext {
+public final class LoadBalancerStartContext {
 
     @JsonProperty("name")
     private String name;
@@ -47,11 +47,11 @@ public final class LoadBalancerContext {
     }
 
     public void setBindAddress(String bindAddress) {
-        this.bindAddress = Objects.requireNonNull(bindAddress, "BindAddress");
+        this.bindAddress = Objects.requireNonNull(bindAddress, "Bind Address cannot be 'null'");
     }
 
     public void setBindPort(int bindPort) {
-        this.bindPort = NumberUtil.checkRange(bindPort, 1, 65535, "BindPort");
+        this.bindPort = NumberUtil.checkInRange(bindPort, 1, 65535, "Bind Port");
     }
 
     public void setProtocol(String protocol) {

@@ -1,6 +1,6 @@
 /*
  * This file is part of ShieldBlaze ExpressGateway. [www.shieldblaze.com]
- * Copyright (c) 2020-2021 ShieldBlaze
+ * Copyright (c) 2020-2022 ShieldBlaze
  *
  * ShieldBlaze ExpressGateway is free software: you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -37,11 +37,11 @@ public final class ClusterContext {
     private HealthCheckTemplate healthCheckTemplate;
 
     public void setLoadBalance(String loadBalance) {
-        this.loadBalance = Objects.requireNonNull(loadBalance, "LoadBalance");
+        this.loadBalance = Objects.requireNonNull(loadBalance, "LoadBalance cannot be 'null'");
     }
 
     public void setSessionPersistence(String sessionPersistence) {
-        this.sessionPersistence = Objects.requireNonNull(sessionPersistence, "SessionPersistence");
+        this.sessionPersistence = Objects.requireNonNull(sessionPersistence, "SessionPersistence cannot be 'null'");
     }
 
     public String hostname() {

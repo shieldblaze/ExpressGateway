@@ -1,6 +1,6 @@
 /*
  * This file is part of ShieldBlaze ExpressGateway. [www.shieldblaze.com]
- * Copyright (c) 2020-2021 ShieldBlaze
+ * Copyright (c) 2020-2022 ShieldBlaze
  *
  * ShieldBlaze ExpressGateway is free software: you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -25,13 +25,13 @@ import com.shieldblaze.expressgateway.concurrent.GlobalExecutors;
 import com.shieldblaze.expressgateway.concurrent.eventstream.EventStream;
 import com.shieldblaze.expressgateway.configuration.CoreConfiguration;
 import com.shieldblaze.expressgateway.configuration.tls.TLSConfiguration;
-import com.shieldblaze.expressgateway.core.handlers.ConnectionTracker;
-import com.shieldblaze.expressgateway.core.factory.EventLoopFactory;
 import com.shieldblaze.expressgateway.core.L4FrontListener;
-import com.shieldblaze.expressgateway.core.factory.PooledByteBufAllocator;
 import com.shieldblaze.expressgateway.core.events.L4FrontListenerShutdownEvent;
 import com.shieldblaze.expressgateway.core.events.L4FrontListenerStartupEvent;
 import com.shieldblaze.expressgateway.core.events.L4FrontListenerStopEvent;
+import com.shieldblaze.expressgateway.core.factory.EventLoopFactory;
+import com.shieldblaze.expressgateway.core.factory.PooledByteBufAllocatorFactory;
+import com.shieldblaze.expressgateway.core.handlers.ConnectionTracker;
 import io.netty.buffer.ByteBufAllocator;
 import io.netty.channel.ChannelHandler;
 
@@ -48,7 +48,7 @@ import java.util.concurrent.atomic.AtomicInteger;
 public abstract class L4LoadBalancer {
 
     public static final String DEFAULT = "DEFAULT";
-    public final String ID = UUID.randomUUID().toString();
+    private final String ID = UUID.randomUUID().toString();
 
     private static final AtomicInteger COUNTER = new AtomicInteger(0);
     private String name = "L4LoadBalancer#" + COUNTER.incrementAndGet();
@@ -98,10 +98,19 @@ public abstract class L4LoadBalancer {
         this.tlsForClient = tlsForClient;
         this.channelHandler = channelHandler;
 
-        this.byteBufAllocator = new PooledByteBufAllocator(coreConfiguration.bufferConfiguration()).Instance();
+        this.byteBufAllocator = new PooledByteBufAllocatorFactory(coreConfiguration.bufferConfiguration()).instance();
         this.eventLoopFactory = new EventLoopFactory(coreConfiguration);
 
         l4FrontListener.l4LoadBalancer(this);
+    }
+
+    /**
+     * Load Balancer UUID
+     *
+     * @return Returns the Load Balancer UUID
+     */
+    public String id() {
+        return ID;
     }
 
     /**
@@ -121,11 +130,18 @@ public abstract class L4LoadBalancer {
 
     /**
      * Stop L4 Load Balancer, and it's child operations and services.
+     *
+     * @return {@link L4FrontListenerStopEvent} instance
      */
     public L4FrontListenerStopEvent stop() {
         return l4FrontListener.stop();
     }
 
+    /**
+     * Shutdown L4 Load Balancer
+     *
+     * @return {@link L4FrontListenerShutdownEvent} instance
+     */
     public L4FrontListenerShutdownEvent shutdown() {
         L4FrontListenerShutdownEvent event = l4FrontListener.shutdown();
 
@@ -261,7 +277,7 @@ public abstract class L4LoadBalancer {
     }
 
     /**
-     * Get {@link ByteBufAllocator} created from {@link PooledByteBufAllocator}
+     * Get {@link ByteBufAllocator} created from {@link PooledByteBufAllocatorFactory}
      */
     public ByteBufAllocator byteBufAllocator() {
         return byteBufAllocator;

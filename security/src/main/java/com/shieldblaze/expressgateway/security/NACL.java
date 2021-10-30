@@ -1,6 +1,6 @@
 /*
  * This file is part of ShieldBlaze ExpressGateway. [www.shieldblaze.com]
- * Copyright (c) 2020-2021 ShieldBlaze
+ * Copyright (c) 2020-2022 ShieldBlaze
  *
  * ShieldBlaze ExpressGateway is free software: you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -90,7 +90,7 @@ public final class NACL extends IpSubnetFilter {
         try {
             // If Bucket is not `null`, it means Rate-Limit is enabled.
             if (bucket != null) {
-                if (!bucket.asAsync().tryConsume(1).get()) {
+                if (!bucket.tryConsume(1)) {
                     logger.debug("Rate-Limit exceeded, Denying new connection from {}", remoteAddress);
                     return false;
                 }

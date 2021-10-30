@@ -1,6 +1,6 @@
 /*
  * This file is part of ShieldBlaze ExpressGateway. [www.shieldblaze.com]
- * Copyright (c) 2020-2021 ShieldBlaze
+ * Copyright (c) 2020-2022 ShieldBlaze
  *
  * ShieldBlaze ExpressGateway is free software: you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -68,14 +68,16 @@ public final class CertificateKeyPair implements Runnable, Closeable {
     private SslContext sslContext;
 
     /**
-     * <p> TLS for Client </p>
+     * <p> Create a new TLS Client Instance </p>
      * This should be used when there is no need of Mutual TLS handshake.
      */
-    public static CertificateKeyPair defaultClientInstance() {
+    public static CertificateKeyPair newDefaultClientInstance() {
         return new CertificateKeyPair();
     }
 
     /**
+     * Create a new TLS Client Instance
+     *
      * @param x509Certificates {@link List} of {@link X509Certificate} certificates
      * @param privateKey       {@link PrivateKey} of certificate
      * @return {@link CertificateKeyPair} Instance
@@ -85,6 +87,8 @@ public final class CertificateKeyPair implements Runnable, Closeable {
     }
 
     /**
+     * Create a new TLS Server Instance
+     *
      * @param x509Certificates {@link List} of {@link X509Certificate} certificates
      * @param privateKey       {@link PrivateKey} of certificate
      * @param useOCSPStapling  Set to {@code true} to enable OCSP Stapling else {@code false}
@@ -95,6 +99,8 @@ public final class CertificateKeyPair implements Runnable, Closeable {
     }
 
     /**
+     * Create a new TLS Server Instance
+     *
      * @param x509Certificates {@link X509Certificate} certificate chain
      * @param privateKey       {@link PrivateKey} of certificate
      * @param useOCSPStapling  Set to {@code true} to enable OCSP Stapling else {@code false}
@@ -104,6 +110,9 @@ public final class CertificateKeyPair implements Runnable, Closeable {
         return new CertificateKeyPair(x509Certificates, privateKey, useOCSPStapling);
     }
 
+    /**
+     * @see #newDefaultClientInstance()
+     */
     private CertificateKeyPair() {
         privateKey = null;
         useOCSPStapling = false;

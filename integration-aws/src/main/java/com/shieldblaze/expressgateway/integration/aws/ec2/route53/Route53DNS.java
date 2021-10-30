@@ -1,6 +1,6 @@
 /*
  * This file is part of ShieldBlaze ExpressGateway. [www.shieldblaze.com]
- * Copyright (c) 2020-2021 ShieldBlaze
+ * Copyright (c) 2020-2022 ShieldBlaze
  *
  * ShieldBlaze ExpressGateway is free software: you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -66,12 +66,12 @@ public final class Route53DNS implements DNSAddRecord<Route53DNSRecordBody, Rout
 
                 ChangeStatus changeStatus = changeResourceRecordSetsResponse.changeInfo().status();
                 if (changeStatus == ChangeStatus.PENDING) {
-                    event.trySuccess(true);
+                    event.markSuccess(true);
                 } else {
-                    event.tryFailure(new IllegalArgumentException("ChangeInfo Status expected to be PENDING but got: " + changeStatus));
+                    event.markFailure(new IllegalArgumentException("ChangeInfo Status expected to be PENDING but got: " + changeStatus));
                 }
             } catch (Exception ex) {
-                event.tryFailure(ex);
+                event.markFailure(ex);
             }
         });
 
@@ -102,12 +102,12 @@ public final class Route53DNS implements DNSAddRecord<Route53DNSRecordBody, Rout
 
                 ChangeStatus changeStatus = changeResourceRecordSetsResponse.changeInfo().status();
                 if (changeStatus == ChangeStatus.PENDING) {
-                    event.trySuccess(true);
+                    event.markSuccess(true);
                 } else {
-                    event.tryFailure(new IllegalArgumentException("ChangeInfo Status expected to be PENDING but got: " + changeStatus));
+                    event.markFailure(new IllegalArgumentException("ChangeInfo Status expected to be PENDING but got: " + changeStatus));
                 }
             } catch (Exception ex) {
-                event.tryFailure(ex);
+                event.markFailure(ex);
             }
         });
 
