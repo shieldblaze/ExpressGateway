@@ -1,6 +1,6 @@
 /*
  * This file is part of ShieldBlaze ExpressGateway. [www.shieldblaze.com]
- * Copyright (c) 2020-2021 ShieldBlaze
+ * Copyright (c) 2020-2022 ShieldBlaze
  *
  * ShieldBlaze ExpressGateway is free software: you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -19,18 +19,22 @@ package com.shieldblaze.expressgateway.configuration.buffer;
 
 import com.fasterxml.jackson.annotation.JsonProperty;
 import com.shieldblaze.expressgateway.common.utils.NumberUtil;
+import com.shieldblaze.expressgateway.configuration.Configuration;
 import com.shieldblaze.expressgateway.configuration.ConfigurationMarshaller;
 import io.netty.buffer.PooledByteBufAllocator;
 import io.netty.util.internal.PlatformDependent;
 
 import java.io.IOException;
 
+import static com.shieldblaze.expressgateway.common.utils.NumberUtil.checkPositive;
+import static com.shieldblaze.expressgateway.common.utils.NumberUtil.checkZeroOrPositive;
+
 /**
  * Configuration for {@link PooledByteBufAllocator}.
  *
  * Use {@link BufferConfigurationBuilder} to build {@link BufferConfiguration} Instance.
  */
-public final class BufferConfiguration {
+public final class BufferConfiguration implements Configuration<BufferConfiguration> {
 
     @JsonProperty("preferDirect")
     private boolean preferDirect;
@@ -63,6 +67,9 @@ public final class BufferConfiguration {
         // Prevent outside initialization
     }
 
+    /**
+     * Default instance of {@link BufferConfiguration}
+     */
     public static final BufferConfiguration DEFAULT = new BufferConfiguration(
             true,
             16384,
@@ -108,7 +115,6 @@ public final class BufferConfiguration {
     }
 
     BufferConfiguration setHeapArena(int heapArena) {
-        NumberUtil.checkPositive(heapArena, "heapArena");
         this.heapArena = heapArena;
         return this;
     }
@@ -121,7 +127,6 @@ public final class BufferConfiguration {
     }
 
     BufferConfiguration setDirectArena(int directArena) {
-        NumberUtil.checkPositive(directArena, "directArena");
         this.directArena = directArena;
         return this;
     }
@@ -134,7 +139,6 @@ public final class BufferConfiguration {
     }
 
     BufferConfiguration setPageSize(int pageSize) {
-        NumberUtil.checkPositive(pageSize, "pageSize");
         this.pageSize = pageSize;
         return this;
     }
@@ -147,7 +151,6 @@ public final class BufferConfiguration {
     }
 
     BufferConfiguration setMaxOrder(int maxOrder) {
-        NumberUtil.checkPositive(maxOrder, "maxOrder");
         this.maxOrder = maxOrder;
         return this;
     }
@@ -160,7 +163,6 @@ public final class BufferConfiguration {
     }
 
     BufferConfiguration setSmallCacheSize(int smallCacheSize) {
-        NumberUtil.checkPositive(smallCacheSize, "smallCacheSize");
         this.smallCacheSize = smallCacheSize;
         return this;
     }
@@ -173,7 +175,6 @@ public final class BufferConfiguration {
     }
 
     BufferConfiguration setNormalCacheSize(int normalCacheSize) {
-        NumberUtil.checkPositive(normalCacheSize, "normalCacheSize");
         this.normalCacheSize = normalCacheSize;
         return this;
     }
@@ -198,19 +199,23 @@ public final class BufferConfiguration {
     }
 
     BufferConfiguration setDirectMemoryCacheAlignment(int directMemoryCacheAlignment) {
-        NumberUtil.checkZeroOrPositive(directMemoryCacheAlignment, "directMemoryCacheAlignment");
         this.directMemoryCacheAlignment = directMemoryCacheAlignment;
         return this;
     }
 
+    /**
+     * Validate all parameters of this configuration
+     *
+     * @return this class instance
+     */
     public BufferConfiguration validate() {
-        NumberUtil.checkPositive(heapArena, "heapArena");
-        NumberUtil.checkPositive(directArena, "directArena");
-        NumberUtil.checkPositive(pageSize, "pageSize");
-        NumberUtil.checkPositive(maxOrder, "maxOrder");
-        NumberUtil.checkPositive(smallCacheSize, "smallCacheSize");
-        NumberUtil.checkPositive(normalCacheSize, "normalCacheSize");
-        NumberUtil.checkZeroOrPositive(directMemoryCacheAlignment, "directMemoryCacheAlignment");
+        checkPositive(heapArena, "heapArena");
+        checkPositive(directArena, "directArena");
+        checkPositive(pageSize, "pageSize");
+        checkPositive(maxOrder, "maxOrder");
+        checkPositive(smallCacheSize, "smallCacheSize");
+        checkPositive(normalCacheSize, "normalCacheSize");
+        checkZeroOrPositive(directMemoryCacheAlignment, "directMemoryCacheAlignment");
         return this;
     }
 

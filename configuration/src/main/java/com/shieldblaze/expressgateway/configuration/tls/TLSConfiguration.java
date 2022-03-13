@@ -1,6 +1,6 @@
 /*
  * This file is part of ShieldBlaze ExpressGateway. [www.shieldblaze.com]
- * Copyright (c) 2020-2021 ShieldBlaze
+ * Copyright (c) 2020-2022 ShieldBlaze
  *
  * ShieldBlaze ExpressGateway is free software: you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -29,6 +29,7 @@ import java.io.IOException;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ConcurrentSkipListMap;
 
 /**
@@ -37,7 +38,7 @@ import java.util.concurrent.ConcurrentSkipListMap;
 public final class TLSConfiguration {
 
     @JsonIgnore
-    private final Map<String, CertificateKeyPair> certificateKeyPairMap = new ConcurrentSkipListMap<>();
+    private final Map<String, CertificateKeyPair> certificateKeyPairMap = new ConcurrentHashMap<>();
 
     @JsonIgnore
     private boolean forServer;
@@ -88,7 +89,7 @@ public final class TLSConfiguration {
 
             DEFAULT_SERVER.useStartTLS = false;
             DEFAULT_SERVER.sessionTimeout = 43_200;
-            DEFAULT_SERVER.sessionCacheSize = 100_000;
+            DEFAULT_SERVER.sessionCacheSize = 1_000_000;
         }
     }
 
@@ -146,7 +147,8 @@ public final class TLSConfiguration {
         try {
             CertificateKeyPair certificateKeyPair = certificateKeyPairMap.get(fqdn);
 
-            // If `null` then it means mapping was not found with FQDN. We'll try Wildcard now.
+            // If `null` then it means mapping was not found with FQDN.
+            // We'll try wildcard now.
             if (certificateKeyPair == null) {
                 fqdn = "*" + fqdn.substring(fqdn.indexOf("."));
                 certificateKeyPair = certificateKeyPairMap.get(fqdn);

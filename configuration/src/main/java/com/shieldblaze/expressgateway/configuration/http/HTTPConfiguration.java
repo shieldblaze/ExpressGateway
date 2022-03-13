@@ -1,6 +1,6 @@
 /*
  * This file is part of ShieldBlaze ExpressGateway. [www.shieldblaze.com]
- * Copyright (c) 2020-2021 ShieldBlaze
+ * Copyright (c) 2020-2022 ShieldBlaze
  *
  * ShieldBlaze ExpressGateway is free software: you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -180,7 +180,7 @@ public final class HTTPConfiguration {
     }
 
     HTTPConfiguration setDeflateCompressionLevel(int deflateCompressionLevel) {
-        this.deflateCompressionLevel = NumberUtil.checkRange(deflateCompressionLevel, 0, 9, "deflateCompressionLevel");
+        this.deflateCompressionLevel = NumberUtil.checkInRange(deflateCompressionLevel, 0, 9, "deflateCompressionLevel");
         return this;
     }
 
@@ -189,7 +189,7 @@ public final class HTTPConfiguration {
     }
 
     HTTPConfiguration setBrotliCompressionLevel(int brotliCompressionLevel) {
-        this.brotliCompressionLevel = NumberUtil.checkRange(brotliCompressionLevel, 1, 11, "brotliCompressionLevel");
+        this.brotliCompressionLevel = NumberUtil.checkInRange(brotliCompressionLevel, 1, 11, "brotliCompressionLevel");
         return this;
     }
 
@@ -204,8 +204,8 @@ public final class HTTPConfiguration {
         NumberUtil.checkPositive(maxHeaderSize, "maxHeaderSize");
         NumberUtil.checkPositive(maxChunkSize, "maxChunkSize");
         NumberUtil.checkZeroOrPositive(compressionThreshold, "compressionThreshold");
-        NumberUtil.checkRange(deflateCompressionLevel, 0, 9, "deflateCompressionLevel");
-        NumberUtil.checkRange(brotliCompressionLevel, 1, 11, "brotliCompressionLevel");
+        NumberUtil.checkInRange(deflateCompressionLevel, 0, 9, "deflateCompressionLevel");
+        NumberUtil.checkInRange(brotliCompressionLevel, 1, 11, "brotliCompressionLevel");
         return this;
     }
 

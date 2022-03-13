@@ -1,6 +1,6 @@
 /*
  * This file is part of ShieldBlaze ExpressGateway. [www.shieldblaze.com]
- * Copyright (c) 2020-2021 ShieldBlaze
+ * Copyright (c) 2020-2022 ShieldBlaze
  *
  * ShieldBlaze ExpressGateway is free software: you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -55,7 +55,7 @@ public class TCPListener extends L4FrontListener {
 
         // If ChannelFutureList is not 0 then this listener is already started and we won't start it again.
         if (channelFutures.size() != 0) {
-            l4FrontListenerStartupEvent.tryFailure(new IllegalArgumentException("Listener has already started and cannot be restarted."));
+            l4FrontListenerStartupEvent.markFailure(new IllegalArgumentException("Listener has already started and cannot be restarted."));
             return l4FrontListenerStartupEvent;
         }
 
@@ -115,9 +115,9 @@ public class TCPListener extends L4FrontListener {
         // Add listener to last ChannelFuture to notify all listeners
         channelFutures.get(channelFutures.size() - 1).addListener(future -> {
             if (future.isSuccess()) {
-                l4FrontListenerStartupEvent.trySuccess(null);
+                l4FrontListenerStartupEvent.markSuccess(null);
             } else {
-                l4FrontListenerStartupEvent.tryFailure(future.cause());
+                l4FrontListenerStartupEvent.markFailure(future.cause());
             }
         });
 
@@ -133,9 +133,9 @@ public class TCPListener extends L4FrontListener {
         channelFutures.get(channelFutures.size() - 1).channel().closeFuture().addListener(future -> {
             if (future.isSuccess()) {
                 channelFutures.clear();
-                l4FrontListenerStopEvent.trySuccess(null);
+                l4FrontListenerStopEvent.markSuccess(null);
             } else {
-                l4FrontListenerStopEvent.tryFailure(future.cause());
+                l4FrontListenerStopEvent.markFailure(future.cause());
             }
         });
 
@@ -154,8 +154,8 @@ public class TCPListener extends L4FrontListener {
             l4LoadBalancer().clusters().clear();
             l4LoadBalancer().eventLoopFactory().parentGroup().shutdownGracefully();
             l4LoadBalancer().eventLoopFactory().childGroup().shutdownGracefully();
-            shutdownEvent.trySuccess(null);
-        }, GlobalExecutors.INSTANCE.executorService());
+            shutdownEvent.markSuccess();
+        }, GlobalExecutors.executorService());
 
         return shutdownEvent;
     }

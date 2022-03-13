@@ -1,6 +1,6 @@
 /*
  * This file is part of ShieldBlaze ExpressGateway. [www.shieldblaze.com]
- * Copyright (c) 2020-2021 ShieldBlaze
+ * Copyright (c) 2020-2022 ShieldBlaze
  *
  * ShieldBlaze ExpressGateway is free software: you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -19,14 +19,13 @@ package com.shieldblaze.expressgateway.restapi.api.cluster;
 
 import com.google.gson.JsonObject;
 import com.google.gson.JsonParser;
-import com.shieldblaze.expressgateway.core.cluster.LoadBalancerProperty;
-import com.shieldblaze.expressgateway.core.cluster.LoadBalancerRegistry;
+import com.shieldblaze.expressgateway.core.cluster.LoadBalancerContext;
+import com.shieldblaze.expressgateway.core.cluster.CoreContext;
 import com.shieldblaze.expressgateway.restapi.CustomOkHttpClient;
 import com.shieldblaze.expressgateway.restapi.RestAPI;
-import com.shieldblaze.expressgateway.restapi.api.loadbalancer.L4LoadBalancerTest;
-import com.shieldblaze.expressgateway.restapi.api.loadbalancer.L7LoadBalancerTest;
+import com.shieldblaze.expressgateway.restapi.api.loadbalancer.L4LoadBalancerHandlerTest;
+import com.shieldblaze.expressgateway.restapi.api.loadbalancer.L7LoadBalancerHandlerTest;
 import okhttp3.MediaType;
-import okhttp3.OkHttpClient;
 import okhttp3.Request;
 import okhttp3.RequestBody;
 import okhttp3.Response;
@@ -38,8 +37,6 @@ import org.junit.jupiter.api.Order;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.TestMethodOrder;
 
-import javax.net.ssl.HostnameVerifier;
-import javax.net.ssl.SSLSession;
 import java.io.IOException;
 
 import static org.junit.jupiter.api.Assertions.assertNotNull;
@@ -52,8 +49,8 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 public class ClusterHandlerTest {
 
     private static final RequestBody EMPTY_REQ_BODY = RequestBody.create(new byte[0], null);
-    private static final L4LoadBalancerTest l4LoadBalancerTest = new L4LoadBalancerTest();
-    private static final L7LoadBalancerTest l7LoadBalancerTest = new L7LoadBalancerTest();
+    private static final L4LoadBalancerHandlerTest l4LoadBalancerTest = new L4LoadBalancerHandlerTest();
+    private static final L7LoadBalancerHandlerTest l7LoadBalancerTest = new L7LoadBalancerHandlerTest();
 
     @BeforeAll
     static void startSpring() {
@@ -74,7 +71,7 @@ public class ClusterHandlerTest {
         l4LoadBalancerTest.startLoadBalancer();
         l4LoadBalancerTest.verifyRunning();
 
-        final LoadBalancerProperty property = LoadBalancerRegistry.get(L4LoadBalancerTest.id);
+        final LoadBalancerContext property = CoreContext.get(L4LoadBalancerHandlerTest.id);
         assertThrows(NullPointerException.class, () -> property.l4LoadBalancer().cluster("DEFAULT"));
 
         JsonObject body = new JsonObject();
@@ -83,7 +80,7 @@ public class ClusterHandlerTest {
         body.addProperty("SessionPersistence", "NOOP");
 
         Request request = new Request.Builder()
-                .url("https://127.0.0.1:9110/v1/cluster/create?id=" + L4LoadBalancerTest.id)
+                .url("https://127.0.0.1:9110/v1/cluster/create?id=" + L4LoadBalancerHandlerTest.id)
                 .post(RequestBody.create(body.toString(), MediaType.get("application/json")))
                 .build();
 
@@ -99,11 +96,11 @@ public class ClusterHandlerTest {
     @Test
     @Order(2)
     public void deleteL4ClusterTest() throws IOException {
-        LoadBalancerProperty property = LoadBalancerRegistry.get(L4LoadBalancerTest.id);
+        LoadBalancerContext property = CoreContext.get(L4LoadBalancerHandlerTest.id);
         assertNotNull(property.l4LoadBalancer().cluster("DEFAULT"));
 
         Request request = new Request.Builder()
-                .url("https://127.0.0.1:9110/v1/cluster/delete?id=" + L4LoadBalancerTest.id + "&hostname=null")
+                .url("https://127.0.0.1:9110/v1/cluster/delete?id=" + L4LoadBalancerHandlerTest.id + "&hostname=null")
                 .delete()
                 .build();
 
@@ -122,7 +119,7 @@ public class ClusterHandlerTest {
         l7LoadBalancerTest.startLoadBalancer();
         l7LoadBalancerTest.verifyRunning();
 
-        LoadBalancerProperty property = LoadBalancerRegistry.get(L7LoadBalancerTest.id);
+        LoadBalancerContext property = CoreContext.get(L7LoadBalancerHandlerTest.id);
         assertThrows(NullPointerException.class, () -> property.l4LoadBalancer().cluster("www.shieldblaze.com"));
 
         JsonObject body = new JsonObject();
@@ -131,7 +128,7 @@ public class ClusterHandlerTest {
         body.addProperty("SessionPersistence", "NOOP");
 
         Request request = new Request.Builder()
-                .url("https://127.0.0.1:9110/v1/cluster/create?id=" + L7LoadBalancerTest.id)
+                .url("https://127.0.0.1:9110/v1/cluster/create?id=" + L7LoadBalancerHandlerTest.id)
                 .post(RequestBody.create(body.toString(), MediaType.get("application/json")))
                 .build();
 
@@ -147,12 +144,12 @@ public class ClusterHandlerTest {
     @Test
     @Order(4)
     public void remapL7ClusterTest() throws IOException {
-        LoadBalancerProperty property = LoadBalancerRegistry.get(L7LoadBalancerTest.id);
+        LoadBalancerContext property = CoreContext.get(L7LoadBalancerHandlerTest.id);
         assertNotNull(property.l4LoadBalancer().cluster("www.shieldblaze.com"));
         assertThrows(NullPointerException.class, () -> property.l4LoadBalancer().cluster("shieldblaze.com"));
 
         Request request = new Request.Builder()
-                .url("https://127.0.0.1:9110/v1/cluster/remap?id=" + L7LoadBalancerTest.id + "&oldHostname=www.shieldblaze.com&newHostname=shieldblaze.com")
+                .url("https://127.0.0.1:9110/v1/cluster/remap?id=" + L7LoadBalancerHandlerTest.id + "&oldHostname=www.shieldblaze.com&newHostname=shieldblaze.com")
                 .put(EMPTY_REQ_BODY)
                 .build();
 
@@ -170,7 +167,7 @@ public class ClusterHandlerTest {
     @Order(5)
     public void deleteL7ClusterTest() throws IOException {
         Request request = new Request.Builder()
-                .url("https://127.0.0.1:9110/v1/cluster/delete?id=" + L7LoadBalancerTest.id + "&hostname=shieldblaze.com")
+                .url("https://127.0.0.1:9110/v1/cluster/delete?id=" + L7LoadBalancerHandlerTest.id + "&hostname=shieldblaze.com")
                 .delete()
                 .build();
 

@@ -1,6 +1,6 @@
 /*
  * This file is part of ShieldBlaze ExpressGateway. [www.shieldblaze.com]
- * Copyright (c) 2020-2021 ShieldBlaze
+ * Copyright (c) 2020-2022 ShieldBlaze
  *
  * ShieldBlaze ExpressGateway is free software: you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -109,19 +109,19 @@ public final class AutoscalingConfiguration {
     private int shutdownIfLoadUnderForSeconds;
 
     public void setCpuScaleOutLoad(float cpuScaleOutLoad) {
-        this.cpuScaleOutLoad = NumberUtil.checkRange(cpuScaleOutLoad, 0.1f, 1.0f, "CPUScaleOutLoad");
+        this.cpuScaleOutLoad = NumberUtil.checkInRange(cpuScaleOutLoad, 0.1f, 1.0f, "CPUScaleOutLoad");
     }
 
     public void setCpuHibernateLoad(float cpuHibernateLoad) {
-        this.cpuHibernateLoad = NumberUtil.checkRange(cpuHibernateLoad, 0.1f, 1.0f, "CPUHibernateLoad");
+        this.cpuHibernateLoad = NumberUtil.checkInRange(cpuHibernateLoad, 0.1f, 1.0f, "CPUHibernateLoad");
     }
 
     public void setMemoryScaleOutLoad(float memoryScaleOutLoad) {
-        this.memoryScaleOutLoad = NumberUtil.checkRange(memoryScaleOutLoad, 0.1f, 1.0f, "MemoryScaleOutLoad");
+        this.memoryScaleOutLoad = NumberUtil.checkInRange(memoryScaleOutLoad, 0.1f, 1.0f, "MemoryScaleOutLoad");
     }
 
     public void setMemoryHibernateLoad(float memoryHibernateLoad) {
-        this.memoryHibernateLoad = NumberUtil.checkRange(memoryHibernateLoad, 0.1f, 1.0f, "MemoryHibernateLoad");
+        this.memoryHibernateLoad = NumberUtil.checkInRange(memoryHibernateLoad, 0.1f, 1.0f, "MemoryHibernateLoad");
     }
 
     public void setMaxPacketsPerSecond(int maxPacketsPerSecond) {
@@ -129,11 +129,11 @@ public final class AutoscalingConfiguration {
     }
 
     public void setPacketsScaleOutLoad(float packetsScaleOutLoad) {
-        this.packetsScaleOutLoad = NumberUtil.checkRange(packetsScaleOutLoad, 0.1f, 1.0f, "PacketsScaleOutLoad");
+        this.packetsScaleOutLoad = NumberUtil.checkInRange(packetsScaleOutLoad, 0.1f, 1.0f, "PacketsScaleOutLoad");
     }
 
     public void setPacketsHibernateLoad(float packetsHibernateLoad) {
-        this.packetsHibernateLoad = NumberUtil.checkRange(packetsHibernateLoad, 0.1f, 1.0f, "PacketsHibernateLoad");
+        this.packetsHibernateLoad = NumberUtil.checkInRange(packetsHibernateLoad, 0.1f, 1.0f, "PacketsHibernateLoad");
     }
 
     public void setMaxBytesPerSecond(int maxBytesPerSecond) {
@@ -141,11 +141,11 @@ public final class AutoscalingConfiguration {
     }
 
     public void setBytesScaleOutLoad(float bytesScaleOutLoad) {
-        this.bytesScaleOutLoad = NumberUtil.checkRange(bytesScaleOutLoad, 0.1f, 1.0f, "BytesScaleOutLoad");
+        this.bytesScaleOutLoad = NumberUtil.checkInRange(bytesScaleOutLoad, 0.1f, 1.0f, "BytesScaleOutLoad");
     }
 
     public void setBytesHibernateLoad(float bytesHibernateLoad) {
-        this.bytesHibernateLoad = NumberUtil.checkRange(bytesHibernateLoad, 0.1f, 1.0f, "BytesHibernateLoad");
+        this.bytesHibernateLoad = NumberUtil.checkInRange(bytesHibernateLoad, 0.1f, 1.0f, "BytesHibernateLoad");
     }
 
     public void setMinServers(int minServers) {
@@ -165,7 +165,7 @@ public final class AutoscalingConfiguration {
     }
 
     public void setShutdownIfLoadUnder(float shutdownIfLoadUnder) {
-        this.shutdownIfLoadUnder = NumberUtil.checkRange(shutdownIfLoadUnder, 0.1f, 1.0f, "ShutdownIfLoadUnder");
+        this.shutdownIfLoadUnder = NumberUtil.checkInRange(shutdownIfLoadUnder, 0.1f, 1.0f, "ShutdownIfLoadUnder");
     }
 
     public void setShutdownIfLoadUnderForSeconds(int shutdownIfLoadUnderForSeconds) {

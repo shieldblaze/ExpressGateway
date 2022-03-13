@@ -1,0 +1,150 @@
+/*
+ * This file is part of ShieldBlaze ExpressGateway. [www.shieldblaze.com]
+ * Copyright (c) 2020-2022 ShieldBlaze
+ *
+ * ShieldBlaze ExpressGateway is free software: you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License as published by
+ * the Free Software Foundation, either version 3 of the License, or
+ * (at your option) any later version.
+ *
+ * ShieldBlaze ExpressGateway is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
+ *
+ * You should have received a copy of the GNU General Public License
+ * along with ShieldBlaze ExpressGateway.  If not, see <https://www.gnu.org/licenses/>.
+ */
+package com.shieldblaze.expressgateway.intercommunication;
+
+import com.shieldblaze.expressgateway.intercommunication.messages.request.MemberJoinRequest;
+import com.shieldblaze.expressgateway.intercommunication.messages.request.MemberLeaveRequest;
+import com.shieldblaze.expressgateway.intercommunication.messages.response.MemberJoinResponse;
+import com.shieldblaze.expressgateway.intercommunication.messages.response.MemberLeaveResponse;
+import io.netty.buffer.ByteBuf;
+import io.netty.buffer.ByteBufUtil;
+import io.netty.buffer.Unpooled;
+import io.netty.channel.embedded.EmbeddedChannel;
+import io.netty.handler.codec.DelimiterBasedFrameDecoder;
+import org.junit.jupiter.api.Test;
+
+import java.net.InetSocketAddress;
+import java.net.SocketAddress;
+import java.security.SecureRandom;
+
+import static org.junit.jupiter.api.Assertions.assertArrayEquals;
+import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertTrue;
+
+class EncoderTest {
+
+    @Test
+    void memberJoinRequestTest() {
+        EmbeddedChannel embeddedChannel = newEmbeddedChannel();
+
+        byte[] id = new byte[16];
+        new SecureRandom().nextBytes(id);
+
+        MemberJoinRequest request = new MemberJoinRequest(Unpooled.wrappedBuffer(id));
+        embeddedChannel.writeOutbound(request);
+
+        ByteBuf firstBuf = embeddedChannel.readOutbound();
+        ByteBuf dupBuf = firstBuf.duplicate();
+
+        assertEquals(Messages.MAGIC, dupBuf.readInt());
+        assertArrayEquals(id, ByteBufUtil.getBytes(dupBuf.readBytes(16)));
+        assertEquals(Messages.JOIN_REQUEST, dupBuf.readShort());
+        assertEquals(Messages.DELIMITER, dupBuf.readInt());
+
+        embeddedChannel.writeInbound(firstBuf);
+        request = embeddedChannel.readInbound();
+
+        assertArrayEquals(id, ByteBufUtil.getBytes(request.id()));
+        assertTrue(embeddedChannel.close().isSuccess());
+    }
+
+    @Test
+    void memberJoinResponseTest() {
+        EmbeddedChannel embeddedChannel = newEmbeddedChannel();
+
+        byte[] id = new byte[16];
+        new SecureRandom().nextBytes(id);
+
+        MemberJoinResponse response = new MemberJoinResponse(Unpooled.wrappedBuffer(id));
+        embeddedChannel.writeOutbound(response);
+
+        ByteBuf firstBuf = embeddedChannel.readOutbound();
+        ByteBuf dupBuf = firstBuf.duplicate();
+
+        assertEquals(Messages.MAGIC, dupBuf.readInt());
+        assertArrayEquals(id, ByteBufUtil.getBytes(dupBuf.readBytes(16)));
+        assertEquals(Messages.JOIN_RESPONSE, dupBuf.readShort());
+        assertEquals(Messages.DELIMITER, dupBuf.readInt());
+
+        embeddedChannel.writeInbound(firstBuf);
+        response = embeddedChannel.readInbound();
+
+        assertArrayEquals(id, ByteBufUtil.getBytes(response.id()));
+        assertTrue(embeddedChannel.close().isSuccess());
+    }
+
+    @Test
+    void memberLeaveRequestTest() {
+        EmbeddedChannel embeddedChannel = newEmbeddedChannel();
+
+        byte[] id = new byte[16];
+        new SecureRandom().nextBytes(id);
+
+        MemberLeaveRequest request = new MemberLeaveRequest(Unpooled.wrappedBuffer(id));
+        embeddedChannel.writeOutbound(request);
+
+        ByteBuf firstBuf = embeddedChannel.readOutbound();
+        ByteBuf dupBuf = firstBuf.duplicate();
+
+        assertEquals(Messages.MAGIC, dupBuf.readInt());
+        assertArrayEquals(id, ByteBufUtil.getBytes(dupBuf.readBytes(16)));
+        assertEquals(Messages.LEAVE_REQUEST, dupBuf.readShort());
+        assertEquals(Messages.DELIMITER, dupBuf.readInt());
+
+        embeddedChannel.writeInbound(firstBuf);
+        request = embeddedChannel.readInbound();
+
+        assertArrayEquals(id, ByteBufUtil.getBytes(request.id()));
+        assertTrue(embeddedChannel.close().isSuccess());
+    }
+
+    @Test
+    void memberLeaveResponseTest() {
+        EmbeddedChannel embeddedChannel = newEmbeddedChannel();
+
+        byte[] id = new byte[16];
+        new SecureRandom().nextBytes(id);
+
+        MemberLeaveResponse response = new MemberLeaveResponse(Unpooled.wrappedBuffer(id));
+        embeddedChannel.writeOutbound(response);
+
+        ByteBuf firstBuf = embeddedChannel.readOutbound();
+        ByteBuf dupBuf = firstBuf.duplicate();
+
+        assertEquals(Messages.MAGIC, dupBuf.readInt());
+        assertArrayEquals(id, ByteBufUtil.getBytes(dupBuf.readBytes(16)));
+        assertEquals(Messages.LEAVE_RESPONSE, dupBuf.readShort());
+        assertEquals(Messages.DELIMITER, dupBuf.readInt());
+
+        embeddedChannel.writeInbound(firstBuf);
+        response = embeddedChannel.readInbound();
+
+        assertArrayEquals(id, ByteBufUtil.getBytes(response.id()));
+        assertTrue(embeddedChannel.close().isSuccess());
+    }
+
+    private EmbeddedChannel newEmbeddedChannel() {
+        return new EmbeddedChannel(new DelimiterBasedFrameDecoder(10_000_000,
+                Unpooled.buffer().writeInt(Messages.DELIMITER)), new Encoder(), new Decoder()) {
+            @Override
+            protected SocketAddress remoteAddress0() {
+                return new InetSocketAddress("127.0.0.1", 9110);
+            }
+        };
+    }
+}

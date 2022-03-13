@@ -1,6 +1,6 @@
 /*
  * This file is part of ShieldBlaze ExpressGateway. [www.shieldblaze.com]
- * Copyright (c) 2020-2021 ShieldBlaze
+ * Copyright (c) 2020-2022 ShieldBlaze
  *
  * ShieldBlaze ExpressGateway is free software: you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -35,8 +35,8 @@ import com.shieldblaze.expressgateway.backend.strategy.l7.http.HTTPRandom;
 import com.shieldblaze.expressgateway.backend.strategy.l7.http.HTTPRoundRobin;
 import com.shieldblaze.expressgateway.backend.strategy.l7.http.sessionpersistence.StickySession;
 import com.shieldblaze.expressgateway.configuration.healthcheck.HealthCheckConfiguration;
-import com.shieldblaze.expressgateway.core.cluster.LoadBalancerProperty;
-import com.shieldblaze.expressgateway.core.cluster.LoadBalancerRegistry;
+import com.shieldblaze.expressgateway.core.cluster.CoreContext;
+import com.shieldblaze.expressgateway.core.cluster.LoadBalancerContext;
 import com.shieldblaze.expressgateway.core.loadbalancer.L4LoadBalancer;
 import com.shieldblaze.expressgateway.restapi.response.FastBuilder;
 import com.shieldblaze.expressgateway.restapi.response.builder.APIResponse;
@@ -61,8 +61,8 @@ public final class ClusterHandler {
 
     @PostMapping(value = "/create", consumes = MediaType.APPLICATION_JSON_VALUE, produces = MediaType.APPLICATION_JSON_VALUE)
     public ResponseEntity<String> create(@RequestParam String id, @RequestBody ClusterContext clusterContext) {
-        LoadBalancerProperty property = LoadBalancerRegistry.get(id);
-        L4LoadBalancer l4LoadBalancer = property.l4LoadBalancer();
+        LoadBalancerContext context = CoreContext.get(id);
+        L4LoadBalancer l4LoadBalancer = context.l4LoadBalancer();
 
         ClusterBuilder clusterBuilder = ClusterBuilder.newBuilder();
         if (clusterContext.healthCheckTemplate() != null) {
@@ -84,7 +84,7 @@ public final class ClusterHandler {
 
     @PutMapping(value = "/remap", produces = MediaType.APPLICATION_JSON_VALUE)
     public ResponseEntity<String> remap(@RequestParam String id, @RequestParam String oldHostname, @RequestParam String newHostname) {
-        LoadBalancerProperty property = LoadBalancerRegistry.get(id);
+        LoadBalancerContext property = CoreContext.get(id);
         L4LoadBalancer l4LoadBalancer = property.l4LoadBalancer();
 
         l4LoadBalancer.remapCluster(oldHostname, newHostname);
@@ -98,7 +98,7 @@ public final class ClusterHandler {
 
     @DeleteMapping(value = "/delete", produces = MediaType.APPLICATION_JSON_VALUE)
     public ResponseEntity<String> delete(@RequestParam String id, @RequestParam String hostname) {
-        LoadBalancerProperty property = LoadBalancerRegistry.get(id);
+        LoadBalancerContext property = CoreContext.get(id);
         Objects.requireNonNull(hostname, "Hostname");
 
         boolean removed = property.l4LoadBalancer().removeCluster(hostname);
@@ -113,6 +113,15 @@ public final class ClusterHandler {
         return FastBuilder.response(apiResponse.getResponse(), HttpResponseStatus.OK);
     }
 
+    /**
+     * Determine the type of {@link LoadBalance} and {@link SessionPersistence}
+     * from {@link ClusterContext}
+     *
+     * @param l4LoadBalancer {@link L4LoadBalancer} Instance
+     * @param clusterBuilder {@link ClusterBuilder} Instance where {@link LoadBalance}
+     *                       and {@link SessionPersistence} will be applied.
+     * @param clusterContext {@link ClusterContext} Instance
+     */
     private void determineLoadBalance(L4LoadBalancer l4LoadBalancer, ClusterBuilder clusterBuilder, ClusterContext clusterContext) {
         // Determine LoadBalance and SessionPersistence for L4 and L7/HTTP
         if (l4LoadBalancer.type().equalsIgnoreCase("L4")) {

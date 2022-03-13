@@ -1,6 +1,6 @@
 /*
  * This file is part of ShieldBlaze ExpressGateway. [www.shieldblaze.com]
- * Copyright (c) 2020-2021 ShieldBlaze
+ * Copyright (c) 2020-2022 ShieldBlaze
  *
  * ShieldBlaze ExpressGateway is free software: you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -64,20 +64,20 @@ class NumberUtilTest {
 
     @Test
     void testCheckRange() {
-        assertDoesNotThrow(() -> NumberUtil.checkRange(100, -1, 100, null));
-        assertDoesNotThrow(() -> NumberUtil.checkRange(52, 52, 70, null));
-        assertDoesNotThrow(() -> NumberUtil.checkRange(9110, Integer.MIN_VALUE, Integer.MAX_VALUE, null));
+        assertDoesNotThrow(() -> NumberUtil.checkInRange(100, -1, 100, null));
+        assertDoesNotThrow(() -> NumberUtil.checkInRange(52, 52, 70, null));
+        assertDoesNotThrow(() -> NumberUtil.checkInRange(9110, Integer.MIN_VALUE, Integer.MAX_VALUE, null));
 
-        assertDoesNotThrow(() -> NumberUtil.checkRange(100L, -1L, 100L, null));
-        assertDoesNotThrow(() -> NumberUtil.checkRange(52L, 52L, 70L, null));
-        assertDoesNotThrow(() -> NumberUtil.checkRange(9110L, Long.MIN_VALUE, Long.MAX_VALUE, null));
+        assertDoesNotThrow(() -> NumberUtil.checkInRange(100L, -1L, 100L, null));
+        assertDoesNotThrow(() -> NumberUtil.checkInRange(52L, 52L, 70L, null));
+        assertDoesNotThrow(() -> NumberUtil.checkInRange(9110L, Long.MIN_VALUE, Long.MAX_VALUE, null));
 
-        assertThrows(IllegalArgumentException.class, () -> NumberUtil.checkRange(99, 100, 200, null));
-        assertThrows(IllegalArgumentException.class, () -> NumberUtil.checkRange(201, 100, 200, null));
-        assertThrows(IllegalArgumentException.class, () -> NumberUtil.checkRange(-1002, -1000, 900, null));
+        assertThrows(IllegalArgumentException.class, () -> NumberUtil.checkInRange(99, 100, 200, null));
+        assertThrows(IllegalArgumentException.class, () -> NumberUtil.checkInRange(201, 100, 200, null));
+        assertThrows(IllegalArgumentException.class, () -> NumberUtil.checkInRange(-1002, -1000, 900, null));
 
-        assertThrows(IllegalArgumentException.class, () -> NumberUtil.checkRange(99L, 100L, 200L, null));
-        assertThrows(IllegalArgumentException.class, () -> NumberUtil.checkRange(201L, 100L, 200L, null));
-        assertThrows(IllegalArgumentException.class, () -> NumberUtil.checkRange(-1002L, -1000L, 900L, null));
+        assertThrows(IllegalArgumentException.class, () -> NumberUtil.checkInRange(99L, 100L, 200L, null));
+        assertThrows(IllegalArgumentException.class, () -> NumberUtil.checkInRange(201L, 100L, 200L, null));
+        assertThrows(IllegalArgumentException.class, () -> NumberUtil.checkInRange(-1002L, -1000L, 900L, null));
     }
 }

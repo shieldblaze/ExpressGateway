@@ -1,6 +1,6 @@
 /*
  * This file is part of ShieldBlaze ExpressGateway. [www.shieldblaze.com]
- * Copyright (c) 2020-2021 ShieldBlaze
+ * Copyright (c) 2020-2022 ShieldBlaze
  *
  * ShieldBlaze ExpressGateway is free software: you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -62,12 +62,12 @@ public final class LightsailDNS implements DNSAddRecord<LightsailDNSRecordBody, 
 
                OperationStatus operationStatus = createDomainEntryResponse.operation().status();
                if (operationStatus == OperationStatus.COMPLETED) {
-                   event.trySuccess(true);
+                   event.markSuccess(true);
                } else {
-                   event.tryFailure(new IllegalArgumentException("Operation Status expected to be COMPLETED but got: " + operationStatus));
+                   event.markFailure(new IllegalArgumentException("Operation Status expected to be COMPLETED but got: " + operationStatus));
                }
            } catch (Exception ex) {
-               event.tryFailure(ex);
+               event.markFailure(ex);
            }
         });
 
@@ -93,12 +93,12 @@ public final class LightsailDNS implements DNSAddRecord<LightsailDNSRecordBody, 
 
                OperationStatus operationStatus = deleteDomainEntryResponse.operation().status();
                if (operationStatus == OperationStatus.COMPLETED) {
-                   event.trySuccess(true);
+                   event.markSuccess(true);
                } else {
-                   event.tryFailure(new IllegalArgumentException("Operation Status expected to be COMPLETED but got: " + operationStatus));
+                   event.markFailure(new IllegalArgumentException("Operation Status expected to be COMPLETED but got: " + operationStatus));
                }
            } catch (Exception ex) {
-               event.tryFailure(ex);
+               event.markFailure(ex);
            }
         });
 

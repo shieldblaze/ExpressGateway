@@ -1,6 +1,6 @@
 /*
  * This file is part of ShieldBlaze ExpressGateway. [www.shieldblaze.com]
- * Copyright (c) 2020-2021 ShieldBlaze
+ * Copyright (c) 2020-2022 ShieldBlaze
  *
  * ShieldBlaze ExpressGateway is free software: you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -64,7 +64,7 @@ public final class Common {
         TLSConfiguration forClient = TLSConfigurationBuilder.forClient()
                 .withAcceptAllCertificate(true)
                 .build();
-        forClient.defaultMapping(CertificateKeyPair.defaultClientInstance());
+        forClient.defaultMapping(CertificateKeyPair.newDefaultClientInstance());
 
         SSLContext sslContext = SSLContext.getInstance("TLSv1.3");
         sslContext.init(null, InsecureTrustManagerFactory.INSTANCE.getTrustManagers(), new SecureRandom());

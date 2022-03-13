@@ -1,6 +1,6 @@
 /*
  * This file is part of ShieldBlaze ExpressGateway. [www.shieldblaze.com]
- * Copyright (c) 2020-2021 ShieldBlaze
+ * Copyright (c) 2020-2022 ShieldBlaze
  *
  * ShieldBlaze ExpressGateway is free software: you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -130,6 +130,7 @@ public final class BufferConfigurationBuilder {
                 .setSmallCacheSize(smallCacheSize)
                 .setNormalCacheSize(normalCacheSize)
                 .setUseCacheForAllThreads(useCacheForAllThreads)
-                .setDirectMemoryCacheAlignment(directMemoryCacheAlignment);
+                .setDirectMemoryCacheAlignment(directMemoryCacheAlignment)
+                .validate(); // Validate the configuration
     }
 }

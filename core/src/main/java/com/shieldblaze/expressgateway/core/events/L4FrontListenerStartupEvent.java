@@ -1,6 +1,6 @@
 /*
  * This file is part of ShieldBlaze ExpressGateway. [www.shieldblaze.com]
- * Copyright (c) 2020-2021 ShieldBlaze
+ * Copyright (c) 2020-2022 ShieldBlaze
  *
  * ShieldBlaze ExpressGateway is free software: you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -22,7 +22,9 @@ import com.shieldblaze.expressgateway.concurrent.event.Event;
 import com.shieldblaze.expressgateway.core.L4FrontListener;
 
 /**
- * {@link Event} for {@link L4FrontListener}
+ * <p>{@link Event} for {@link L4FrontListener}</p>
+ *
+ * This event is fired when {@link L4FrontListener} is started.
  */
 public class L4FrontListenerStartupEvent extends DefaultEvent<Void> {
     // Empty

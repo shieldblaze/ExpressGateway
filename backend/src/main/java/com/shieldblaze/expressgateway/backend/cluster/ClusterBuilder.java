@@ -1,6 +1,6 @@
 /*
  * This file is part of ShieldBlaze ExpressGateway. [www.shieldblaze.com]
- * Copyright (c) 2020-2021 ShieldBlaze
+ * Copyright (c) 2020-2022 ShieldBlaze
  *
  * ShieldBlaze ExpressGateway is free software: you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -28,37 +28,41 @@ import java.util.Objects;
  */
 public final class ClusterBuilder {
 
-    private ClusterBuilder() {
-        // Prevent outside initialization
-    }
+    private LoadBalance<?, ?, ?, ?> loadBalance;
+    private HealthCheckConfiguration healthCheckConfiguration;
+    private HealthCheckTemplate healthCheckTemplate;
 
     public static ClusterBuilder newBuilder() {
         return new ClusterBuilder();
     }
-
-    private LoadBalance<?, ?, ?, ?> loadBalance;
-    private HealthCheckConfiguration healthCheckConfiguration;
-    private HealthCheckTemplate healthCheckTemplate;
 
     public ClusterBuilder withLoadBalance(LoadBalance<?, ?, ?, ?> loadBalance) {
         this.loadBalance = loadBalance;
         return this;
     }
 
-    public ClusterBuilder withHealthCheck(HealthCheckConfiguration healthCheckConfiguration, HealthCheckTemplate healthCheckTemplate) {
-        this.healthCheckConfiguration = Objects.requireNonNull(healthCheckConfiguration, "HealthCheckConfiguration");
-        this.healthCheckTemplate = Objects.requireNonNull(healthCheckTemplate, "HealthCheckTemplate");
+    public ClusterBuilder withHealthCheck(HealthCheckConfiguration healthCheckConfiguration,
+                                          HealthCheckTemplate healthCheckTemplate) {
+        this.healthCheckConfiguration = Objects.requireNonNull(healthCheckConfiguration,
+                "HealthCheckConfiguration cannot be 'null'");
+        this.healthCheckTemplate = Objects.requireNonNull(healthCheckTemplate,
+                "HealthCheckTemplate cannot be 'null'");
         return this;
     }
 
     public Cluster build() {
-        Objects.requireNonNull(loadBalance, "LoadBalance");
+        Objects.requireNonNull(loadBalance, "LoadBalance cannot be 'null'");
         Cluster cluster = new Cluster(loadBalance);
 
+        // If HealthCheck configuration is available then apply it.
         if (healthCheckConfiguration != null) {
             cluster.configureHealthCheck(healthCheckConfiguration, healthCheckTemplate);
         }
 
         return cluster;
+    }
+
+    private ClusterBuilder() {
+        // Prevent outside initialization
     }
 }

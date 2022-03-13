@@ -1,6 +1,6 @@
 /*
  * This file is part of ShieldBlaze ExpressGateway. [www.shieldblaze.com]
- * Copyright (c) 2020-2021 ShieldBlaze
+ * Copyright (c) 2020-2022 ShieldBlaze
  *
  * ShieldBlaze ExpressGateway is free software: you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -253,7 +253,7 @@ public final class Node implements Comparable<Node>, Closeable {
      * <p> Valid range: 1 to 2147483647 </p>
      */
     public void maxConnections(int maxConnections) {
-        this.maxConnections = NumberUtil.checkRange(maxConnections, 1, Integer.MAX_VALUE, "MaxConnections");
+        this.maxConnections = NumberUtil.checkInRange(maxConnections, 1, Integer.MAX_VALUE, "MaxConnections");
     }
 
     /**
