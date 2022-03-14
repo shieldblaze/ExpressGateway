@@ -21,6 +21,8 @@ import com.shieldblaze.expressgateway.intercommunication.messages.error.MemberAl
 import com.shieldblaze.expressgateway.intercommunication.messages.error.MemberDoesNotExistsError;
 import com.shieldblaze.expressgateway.intercommunication.messages.request.MemberJoinRequest;
 import com.shieldblaze.expressgateway.intercommunication.messages.request.MemberLeaveRequest;
+import com.shieldblaze.expressgateway.intercommunication.messages.request.UpsertDataRequest;
+import io.netty.buffer.Unpooled;
 import io.netty.channel.ChannelHandlerContext;
 import io.netty.channel.SimpleChannelInboundHandler;
 
@@ -28,31 +30,51 @@ import static com.shieldblaze.expressgateway.intercommunication.Broadcaster.MEMB
 
 final class InboundHandler extends SimpleChannelInboundHandler<Message> {
 
+    private ChannelHandlerContext ctx;
+
+    @Override
+    public void channelActive(ChannelHandlerContext ctx) throws Exception {
+        this.ctx = ctx;
+        super.channelActive(ctx);
+    }
+
     @Override
     protected void channelRead0(ChannelHandlerContext ctx, Message msg) {
-        if (msg instanceof MemberJoinRequest) {
-            join(ctx, (MemberJoinRequest) msg);
-        } else if (msg instanceof MemberLeaveRequest) {
-            leave(ctx, (MemberLeaveRequest) msg);
+        if (msg instanceof MemberJoinRequest request) {
+            join(ctx, request);
+        } else if (msg instanceof MemberLeaveRequest request) {
+            leave(ctx, request);
+        } else if (msg instanceof UpsertDataRequest request) {
+
         }
     }
 
-    private void join(ChannelHandlerContext ctx, MemberJoinRequest memberJoinRequest) {
-        InboundHandler thisHandler = MEMBERS.get(memberJoinRequest.id());
+    private void join(ChannelHandlerContext ctx, MemberJoinRequest request) {
+        InboundHandler thisHandler = MEMBERS.get(request.id());
 
         // Make sure member is not already added in cluster
         if (thisHandler != null) {
-            ctx.writeAndFlush(new MemberAlreadyExistsError(memberJoinRequest.id()));
+            ctx.writeAndFlush(new MemberAlreadyExistsError(request.id()));
         } else {
-            MEMBERS.put(memberJoinRequest.id(), this);
+            MEMBERS.put(request.id(), this);
         }
     }
 
-    private void leave(ChannelHandlerContext ctx, MemberLeaveRequest memberLeaveRequest) {
-        InboundHandler thisHandler = MEMBERS.remove(memberLeaveRequest.id());
+    private void leave(ChannelHandlerContext ctx, MemberLeaveRequest request) {
+        InboundHandler thisHandler = MEMBERS.remove(request.id());
 
         if (thisHandler == null) {
-            ctx.writeAndFlush(new MemberDoesNotExistsError(memberLeaveRequest.id()));
+            ctx.writeAndFlush(new MemberDoesNotExistsError(request.id()));
+        }
+    }
+
+    private void upsert(ChannelHandlerContext ctx, UpsertDataRequest request) {
+        InboundHandler thisHandler = MEMBERS.get(request.id());
+
+        if (thisHandler == null) {
+            ctx.writeAndFlush(new MemberDoesNotExistsError(request.id()));
+        } else {
+
         }
     }
 }

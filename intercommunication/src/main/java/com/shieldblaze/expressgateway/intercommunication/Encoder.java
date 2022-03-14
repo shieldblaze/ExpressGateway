@@ -29,7 +29,6 @@ import com.shieldblaze.expressgateway.intercommunication.messages.response.Simpl
 import com.shieldblaze.expressgateway.intercommunication.messages.response.UpsertDataResponse;
 import io.netty.buffer.ByteBuf;
 import io.netty.buffer.ByteBufUtil;
-import io.netty.buffer.Unpooled;
 import io.netty.channel.ChannelHandlerContext;
 import io.netty.handler.codec.MessageToByteEncoder;
 import io.netty.handler.codec.UnsupportedMessageTypeException;
@@ -41,19 +40,19 @@ final class Encoder extends MessageToByteEncoder<Message> {
 
     @Override
     protected void encode(ChannelHandlerContext ctx, Message msg, ByteBuf out) {
-        out.writeInt(Messages.MAGIC); // Write magic
-        out.writeBytes(msg.id());     // Write ID
+        out.writeBytes(Messages.MAGIC()); // Write magic
+        out.writeBytes(msg.id());         // Write ID
 
         if (msg instanceof MemberJoinRequest) {
-            out.writeShort(Messages.JOIN_REQUEST);
+            out.writeBytes(Messages.JOIN_REQUEST());
         } else if (msg instanceof MemberJoinResponse) {
-            out.writeShort(Messages.JOIN_RESPONSE);
+            out.writeBytes(Messages.JOIN_RESPONSE());
         } else if (msg instanceof MemberLeaveRequest) {
-            out.writeShort(Messages.LEAVE_REQUEST);
+            out.writeBytes(Messages.LEAVE_REQUEST());
         } else if (msg instanceof MemberLeaveResponse) {
-            out.writeShort(Messages.LEAVE_RESPONSE);
+            out.writeBytes(Messages.LEAVE_RESPONSE());
         } else if (msg instanceof UpsertDataRequest request) {
-            out.writeShort(Messages.UPSET_DATA_REQUEST);
+            out.writeBytes(Messages.UPSET_DATA_REQUEST());
             out.writeInt(request.keyValuePairs().size());  // Write Size of all key value pair
 
             for (KeyValuePair pair : request.keyValuePairs()) {
@@ -64,7 +63,7 @@ final class Encoder extends MessageToByteEncoder<Message> {
                 ByteBufUtil.writeUtf8(out, pair.value());
             }
         } else if (msg instanceof UpsertDataResponse response) {
-            out.writeShort(Messages.UPSET_DATA_RESPONSE);
+            out.writeBytes(Messages.UPSET_DATA_RESPONSE());
             out.writeInt(response.keyValuePairs().size()); // Write Size of all key value pair
 
             for (KeyValuePair pair : response.keyValuePairs()) {
@@ -72,7 +71,7 @@ final class Encoder extends MessageToByteEncoder<Message> {
                 ByteBufUtil.writeUtf8(out, pair.key());
             }
         } else if (msg instanceof DeleteDataRequest request) {
-            out.writeShort(Messages.DELETE_DATA_REQUEST);
+            out.writeBytes(Messages.DELETE_DATA_REQUEST());
             out.writeInt(request.keyValuePairs().size()); // Write Size of all key value pair
 
             for (KeyValuePair pair : request.keyValuePairs()) {
@@ -80,7 +79,7 @@ final class Encoder extends MessageToByteEncoder<Message> {
                 ByteBufUtil.writeUtf8(out, pair.key());
             }
         } else if (msg instanceof DeleteDataResponse response) {
-            out.writeShort(Messages.DELETE_DATA_RESPONSE);
+            out.writeBytes(Messages.DELETE_DATA_RESPONSE());
             out.writeInt(response.keyValuePairs().size()); // Write Size of all key value pair
 
             for (KeyValuePair pair : response.keyValuePairs()) {
@@ -88,14 +87,14 @@ final class Encoder extends MessageToByteEncoder<Message> {
                 ByteBufUtil.writeUtf8(out, pair.key());
             }
         } else if (msg instanceof SimpleMessageRequest request) {
-            out.writeShort(Messages.SIMPLE_MESSAGE_REQUEST);
+            out.writeBytes(Messages.SIMPLE_MESSAGE_REQUEST());
             out.writeBytes(request.data());
         } else if (msg instanceof SimpleMessageResponse response) {
-            out.writeShort(Messages.SIMPLE_MESSAGE_RESPONSE);
+            out.writeBytes(Messages.SIMPLE_MESSAGE_RESPONSE());
             out.writeBytes(response.data());
         } else {
             throw new UnsupportedMessageTypeException("Unknown Message: " + msg);
         }
-        out.writeInt(Messages.DELIMITER);
+        out.writeBytes(Messages.DELIMITER());
     }
 }

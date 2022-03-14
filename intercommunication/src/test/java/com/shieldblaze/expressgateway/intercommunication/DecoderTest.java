@@ -51,10 +51,10 @@ class DecoderTest {
         new SecureRandom().nextBytes(id);
 
         ByteBuf byteBuf = Unpooled.buffer();
-        byteBuf.writeInt(Messages.MAGIC);  // Write magic number
+        byteBuf.writeBytes(Messages.MAGIC());  // Write magic number
         byteBuf.writeBytes(id);            // ID
-        byteBuf.writeShort(Messages.JOIN_REQUEST);
-        byteBuf.writeInt(Messages.DELIMITER);
+        byteBuf.writeBytes(Messages.JOIN_REQUEST());
+        byteBuf.writeBytes(Messages.DELIMITER());
 
         embeddedChannel.writeInbound(byteBuf);
         MemberJoinRequest request = embeddedChannel.readInbound();
@@ -63,10 +63,10 @@ class DecoderTest {
         embeddedChannel.writeOutbound(request);
 
         byteBuf = embeddedChannel.readOutbound();
-        assertEquals(Messages.MAGIC, byteBuf.readInt());
+        assertEquals(Messages.MAGIC().readInt(), byteBuf.readInt());
         assertArrayEquals(id, ByteBufUtil.getBytes(byteBuf.readBytes(16)));
-        assertEquals(Messages.JOIN_REQUEST, byteBuf.readShort());
-        assertEquals(Messages.DELIMITER, byteBuf.readInt());
+        assertEquals(Messages.JOIN_REQUEST().readShort(), byteBuf.readShort());
+        assertEquals(Messages.DELIMITER().readInt(), byteBuf.readInt());
 
         assertTrue(embeddedChannel.close().isSuccess());
     }
@@ -79,10 +79,10 @@ class DecoderTest {
         new SecureRandom().nextBytes(id);
 
         ByteBuf byteBuf = Unpooled.buffer();
-        byteBuf.writeInt(Messages.MAGIC);  // Write magic number
+        byteBuf.writeBytes(Messages.MAGIC());  // Write magic number
         byteBuf.writeBytes(id);            // ID
-        byteBuf.writeShort(Messages.JOIN_RESPONSE);
-        byteBuf.writeInt(Messages.DELIMITER);
+        byteBuf.writeBytes(Messages.JOIN_RESPONSE());
+        byteBuf.writeBytes(Messages.DELIMITER());
 
         embeddedChannel.writeInbound(byteBuf);
         MemberJoinResponse response = embeddedChannel.readInbound();
@@ -91,10 +91,10 @@ class DecoderTest {
         embeddedChannel.writeOutbound(response);
 
         byteBuf = embeddedChannel.readOutbound();
-        assertEquals(Messages.MAGIC, byteBuf.readInt());
+        assertEquals(Messages.MAGIC().readInt(), byteBuf.readInt());
         assertArrayEquals(id, ByteBufUtil.getBytes(byteBuf.readBytes(16)));
-        assertEquals(Messages.JOIN_RESPONSE, byteBuf.readShort());
-        assertEquals(Messages.DELIMITER, byteBuf.readInt());
+        assertEquals(Messages.JOIN_RESPONSE().readShort(), byteBuf.readShort());
+        assertEquals(Messages.DELIMITER().readInt(), byteBuf.readInt());
 
         assertTrue(embeddedChannel.close().isSuccess());
     }
@@ -107,10 +107,10 @@ class DecoderTest {
         new SecureRandom().nextBytes(id);
 
         ByteBuf byteBuf = Unpooled.buffer();
-        byteBuf.writeInt(Messages.MAGIC);   // Write magic number
+        byteBuf.writeBytes(Messages.MAGIC());   // Write magic number
         byteBuf.writeBytes(id);             // ID
-        byteBuf.writeShort(Messages.LEAVE_REQUEST);
-        byteBuf.writeInt(Messages.DELIMITER);
+        byteBuf.writeBytes(Messages.LEAVE_REQUEST());
+        byteBuf.writeBytes(Messages.DELIMITER());
 
         embeddedChannel.writeInbound(byteBuf);
 
@@ -120,10 +120,10 @@ class DecoderTest {
         embeddedChannel.writeOutbound(request);
 
         byteBuf = embeddedChannel.readOutbound();
-        assertEquals(Messages.MAGIC, byteBuf.readInt());
+        assertEquals(Messages.MAGIC().readInt(), byteBuf.readInt());
         assertArrayEquals(id, ByteBufUtil.getBytes(byteBuf.readBytes(16)));
-        assertEquals(Messages.LEAVE_REQUEST, byteBuf.readShort());
-        assertEquals(Messages.DELIMITER, byteBuf.readInt());
+        assertEquals(Messages.LEAVE_REQUEST().readShort(), byteBuf.readShort());
+        assertEquals(Messages.DELIMITER().readInt(), byteBuf.readInt());
 
         assertTrue(embeddedChannel.close().isSuccess());
     }
@@ -136,10 +136,10 @@ class DecoderTest {
         new SecureRandom().nextBytes(id);
 
         ByteBuf byteBuf = Unpooled.buffer();
-        byteBuf.writeInt(Messages.MAGIC);   // Write magic number
+        byteBuf.writeBytes(Messages.MAGIC());   // Write magic number
         byteBuf.writeBytes(id);             // ID
-        byteBuf.writeShort(Messages.LEAVE_RESPONSE);
-        byteBuf.writeInt(Messages.DELIMITER);
+        byteBuf.writeBytes(Messages.LEAVE_RESPONSE());
+        byteBuf.writeBytes(Messages.DELIMITER());
 
         embeddedChannel.writeInbound(byteBuf);
 
@@ -149,10 +149,10 @@ class DecoderTest {
         embeddedChannel.writeOutbound(response);
 
         byteBuf = embeddedChannel.readOutbound();
-        assertEquals(Messages.MAGIC, byteBuf.readInt());
+        assertEquals(Messages.MAGIC().readInt(), byteBuf.readInt());
         assertArrayEquals(id, ByteBufUtil.getBytes(byteBuf.readBytes(16)));
-        assertEquals(Messages.LEAVE_RESPONSE, byteBuf.readShort());
-        assertEquals(Messages.DELIMITER, byteBuf.readInt());
+        assertEquals(Messages.LEAVE_RESPONSE().readShort(), byteBuf.readShort());
+        assertEquals(Messages.DELIMITER().readInt(), byteBuf.readInt());
 
         assertTrue(embeddedChannel.close().isSuccess());
     }
@@ -165,9 +165,9 @@ class DecoderTest {
         new SecureRandom().nextBytes(id);
 
         ByteBuf byteBuf = Unpooled.buffer();
-        byteBuf.writeInt(Messages.MAGIC);        // Write magic number
+        byteBuf.writeBytes(Messages.MAGIC());        // Write magic number
         byteBuf.writeBytes(id);         // ID
-        byteBuf.writeShort(Messages.UPSET_DATA_REQUEST);
+        byteBuf.writeBytes(Messages.UPSET_DATA_REQUEST());
         byteBuf.writeInt(100);
 
         for (int i = 0; i < 100; i++) {
@@ -179,7 +179,7 @@ class DecoderTest {
             byteBuf.writeInt(value.length());
             ByteBufUtil.writeUtf8(byteBuf, value);
         }
-        byteBuf.writeInt(Messages.DELIMITER);
+        byteBuf.writeBytes(Messages.DELIMITER());
         embeddedChannel.writeInbound(byteBuf);
 
         UpsertDataRequest upsert = embeddedChannel.readInbound();
@@ -195,9 +195,9 @@ class DecoderTest {
 
         embeddedChannel.writeOutbound(upsert);
         byteBuf = embeddedChannel.readOutbound();
-        assertEquals(Messages.MAGIC, byteBuf.readInt());
+        assertEquals(Messages.MAGIC().readInt(), byteBuf.readInt());
         assertArrayEquals(id, ByteBufUtil.getBytes(byteBuf.readBytes(16)));
-        assertEquals(Messages.UPSET_DATA_REQUEST, byteBuf.readShort());
+        assertEquals(Messages.UPSET_DATA_REQUEST().readShort(), byteBuf.readShort());
         assertEquals(100, byteBuf.readInt());
 
         for (int i = 0; i < 100; i++) {
@@ -214,7 +214,7 @@ class DecoderTest {
             assertEquals(value, _value);
         }
 
-        byteBuf.writeInt(Messages.DELIMITER);
+        byteBuf.writeBytes(Messages.DELIMITER());
         assertTrue(embeddedChannel.close().isSuccess());
     }
 
@@ -226,9 +226,9 @@ class DecoderTest {
         new SecureRandom().nextBytes(id);
 
         ByteBuf byteBuf = Unpooled.buffer();
-        byteBuf.writeInt(Messages.MAGIC);        // Write magic number
+        byteBuf.writeBytes(Messages.MAGIC());        // Write magic number
         byteBuf.writeBytes(id);                  // ID
-        byteBuf.writeShort(Messages.UPSET_DATA_RESPONSE);
+        byteBuf.writeBytes(Messages.UPSET_DATA_RESPONSE());
         byteBuf.writeInt(100);
 
         for (int i = 0; i < 100; i++) {
@@ -237,7 +237,7 @@ class DecoderTest {
             ByteBufUtil.writeUtf8(byteBuf, key);
         }
 
-        byteBuf.writeInt(Messages.DELIMITER);
+        byteBuf.writeBytes(Messages.DELIMITER());
         embeddedChannel.writeInbound(byteBuf);
 
         UpsertDataResponse response = embeddedChannel.readInbound();
@@ -252,9 +252,9 @@ class DecoderTest {
 
         embeddedChannel.writeOutbound(response);
         byteBuf = embeddedChannel.readOutbound();
-        assertEquals(Messages.MAGIC, byteBuf.readInt());
+        assertEquals(Messages.MAGIC().readInt(), byteBuf.readInt());
         assertArrayEquals(id, ByteBufUtil.getBytes(byteBuf.readBytes(16)));
-        assertEquals(Messages.UPSET_DATA_RESPONSE, byteBuf.readShort());
+        assertEquals(Messages.UPSET_DATA_RESPONSE().readShort(), byteBuf.readShort());
         assertEquals(100, byteBuf.readInt());
 
         for (int i = 0; i < 100; i++) {
@@ -265,7 +265,7 @@ class DecoderTest {
             assertEquals(key, _key);
         }
 
-        byteBuf.writeInt(Messages.DELIMITER);
+        byteBuf.writeBytes(Messages.DELIMITER());
         assertTrue(embeddedChannel.close().isSuccess());
     }
 
@@ -277,9 +277,9 @@ class DecoderTest {
         new SecureRandom().nextBytes(id);
 
         ByteBuf byteBuf = Unpooled.buffer();
-        byteBuf.writeInt(Messages.MAGIC);        // Write magic number
+        byteBuf.writeBytes(Messages.MAGIC());        // Write magic number
         byteBuf.writeBytes(id);                  // ID
-        byteBuf.writeShort(Messages.DELETE_DATA_REQUEST);
+        byteBuf.writeBytes(Messages.DELETE_DATA_REQUEST());
         byteBuf.writeInt(100);
 
         for (int i = 0; i < 100; i++) {
@@ -287,7 +287,7 @@ class DecoderTest {
             byteBuf.writeInt(key.length());
             ByteBufUtil.writeUtf8(byteBuf, key);
         }
-        byteBuf.writeInt(Messages.DELIMITER);
+        byteBuf.writeBytes(Messages.DELIMITER());
         embeddedChannel.writeInbound(byteBuf);
 
         DeleteDataRequest request = embeddedChannel.readInbound();
@@ -302,9 +302,9 @@ class DecoderTest {
 
         embeddedChannel.writeOutbound(request);
         byteBuf = embeddedChannel.readOutbound();
-        assertEquals(Messages.MAGIC, byteBuf.readInt());
+        assertEquals(Messages.MAGIC().readInt(), byteBuf.readInt());
         assertArrayEquals(id, ByteBufUtil.getBytes(byteBuf.readBytes(16)));
-        assertEquals(Messages.DELETE_DATA_REQUEST, byteBuf.readShort());
+        assertEquals(Messages.DELETE_DATA_REQUEST().readShort(), byteBuf.readShort());
         assertEquals(100, byteBuf.readInt());
 
         for (int i = 0; i < 100; i++) {
@@ -316,7 +316,7 @@ class DecoderTest {
             assertEquals(key, _key);
         }
 
-        byteBuf.writeInt(Messages.DELIMITER);
+        byteBuf.writeBytes(Messages.DELIMITER());
         assertTrue(embeddedChannel.close().isSuccess());
     }
 
@@ -328,9 +328,9 @@ class DecoderTest {
         new SecureRandom().nextBytes(id);
 
         ByteBuf byteBuf = Unpooled.buffer();
-        byteBuf.writeInt(Messages.MAGIC);        // Write magic number
+        byteBuf.writeBytes(Messages.MAGIC());        // Write magic number
         byteBuf.writeBytes(id);                  // ID
-        byteBuf.writeShort(Messages.DELETE_DATA_RESPONSE);
+        byteBuf.writeBytes(Messages.DELETE_DATA_RESPONSE());
         byteBuf.writeInt(100);
 
         for (int i = 0; i < 100; i++) {
@@ -339,7 +339,7 @@ class DecoderTest {
             ByteBufUtil.writeUtf8(byteBuf, key);
         }
 
-        byteBuf.writeInt(Messages.DELIMITER);
+        byteBuf.writeBytes(Messages.DELIMITER());
         embeddedChannel.writeInbound(byteBuf);
 
         DeleteDataResponse response = embeddedChannel.readInbound();
@@ -354,9 +354,9 @@ class DecoderTest {
 
         embeddedChannel.writeOutbound(response);
         byteBuf = embeddedChannel.readOutbound();
-        assertEquals(Messages.MAGIC, byteBuf.readInt());
+        assertEquals(Messages.MAGIC().readInt(), byteBuf.readInt());
         assertArrayEquals(id, ByteBufUtil.getBytes(byteBuf.readBytes(16)));
-        assertEquals(Messages.DELETE_DATA_RESPONSE, byteBuf.readShort());
+        assertEquals(Messages.DELETE_DATA_RESPONSE().readShort(), byteBuf.readShort());
         assertEquals(100, byteBuf.readInt());
 
         for (int i = 0; i < 100; i++) {
@@ -367,13 +367,12 @@ class DecoderTest {
             assertEquals(key, _key);
         }
 
-        byteBuf.writeInt(Messages.DELIMITER);
+        byteBuf.writeBytes(Messages.DELIMITER());
         assertTrue(embeddedChannel.close().isSuccess());
     }
 
     private EmbeddedChannel newEmbeddedChannel() {
-        return new EmbeddedChannel(new DelimiterBasedFrameDecoder(10_000_000,
-                Unpooled.buffer().writeInt(Messages.DELIMITER)), new Encoder(), new Decoder()) {
+        return new EmbeddedChannel(new DelimiterBasedFrameDecoder(10_000_000, Messages.DELIMITER()), new Encoder(), new Decoder()) {
             @Override
             protected SocketAddress remoteAddress0() {
                 return new InetSocketAddress("127.0.0.1", 9110);

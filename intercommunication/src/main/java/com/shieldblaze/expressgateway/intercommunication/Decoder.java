@@ -17,10 +17,10 @@
  */
 package com.shieldblaze.expressgateway.intercommunication;
 
-import com.shieldblaze.expressgateway.intercommunication.messages.request.SimpleMessageRequest;
 import com.shieldblaze.expressgateway.intercommunication.messages.request.DeleteDataRequest;
 import com.shieldblaze.expressgateway.intercommunication.messages.request.MemberJoinRequest;
 import com.shieldblaze.expressgateway.intercommunication.messages.request.MemberLeaveRequest;
+import com.shieldblaze.expressgateway.intercommunication.messages.request.SimpleMessageRequest;
 import com.shieldblaze.expressgateway.intercommunication.messages.request.UpsertDataRequest;
 import com.shieldblaze.expressgateway.intercommunication.messages.response.DeleteDataResponse;
 import com.shieldblaze.expressgateway.intercommunication.messages.response.MemberJoinResponse;
@@ -31,7 +31,6 @@ import io.netty.buffer.ByteBuf;
 import io.netty.channel.ChannelFutureListener;
 import io.netty.channel.ChannelHandlerContext;
 import io.netty.handler.codec.ByteToMessageDecoder;
-import io.netty.handler.codec.LengthFieldBasedFrameDecoder;
 import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
 
@@ -50,117 +49,98 @@ final class Decoder extends ByteToMessageDecoder {
     protected void decode(ChannelHandlerContext ctx, ByteBuf in, List<Object> out) {
         try {
             int magicNumber = in.readInt();
-            if (magicNumber != Messages.MAGIC) {
+            if (magicNumber != Messages.MAGIC().readInt()) {
                 forceClose(ctx);
                 return;
             }
 
             ByteBuf id = in.readBytes(16); // Read 128-bit UUID
             short type = in.readShort();
-            switch (type) {
-                case Messages.JOIN_REQUEST -> {
-                    Message join = new MemberJoinRequest(id);
-                    out.add(join);
-                    return;
+
+            if (type == Messages.JOIN_REQUEST().readShort()) {
+                Message join = new MemberJoinRequest(id);
+                out.add(join);
+                return;
+            } else if (type == Messages.JOIN_RESPONSE().readShort()) {
+                Message join = new MemberJoinResponse(id);
+                out.add(join);
+                return;
+            } else if (type == Messages.LEAVE_REQUEST().readShort()) {
+                Message leave = new MemberLeaveRequest(id);
+                out.add(leave);
+                return;
+            } else if (type == Messages.LEAVE_RESPONSE().readShort()) {
+                Message leave = new MemberLeaveResponse(id);
+                out.add(leave);
+                return;
+            } else if (type == Messages.UPSET_DATA_REQUEST().readShort()) {
+                int count = in.readInt();
+                List<KeyValuePair> keyValuePairs = new ArrayList<>(count);
+
+                for (int i = 0; i < count; i++) {
+                    int keyLength = in.readInt();
+                    String key = in.readBytes(keyLength).toString(StandardCharsets.UTF_8);
+
+                    int valueLength = in.readInt();
+                    String value = in.readBytes(valueLength).toString(StandardCharsets.UTF_8);
+
+                    keyValuePairs.add(new KeyValuePair(key, value));
                 }
 
-                case Messages.JOIN_RESPONSE -> {
-                    Message join = new MemberJoinResponse(id);
-                    out.add(join);
-                    return;
+                Message message = new UpsertDataRequest(id, keyValuePairs);
+                out.add(message);
+                return;
+            } else if (type == Messages.UPSET_DATA_RESPONSE().readShort()) {
+                int count = in.readInt();
+                List<KeyValuePair> keyValuePairs = new ArrayList<>(count);
+
+                for (int i = 0; i < count; i++) {
+                    int keyLength = in.readInt();
+                    String key = in.readBytes(keyLength).toString(StandardCharsets.UTF_8);
+                    keyValuePairs.add(new KeyValuePair(key));
                 }
 
-                case Messages.LEAVE_REQUEST -> {
-                    Message leave = new MemberLeaveRequest(id);
-                    out.add(leave);
-                    return;
+                Message message = new UpsertDataResponse(id, keyValuePairs);
+                out.add(message);
+                return;
+            } else if (type == Messages.DELETE_DATA_REQUEST().readShort()) {
+                int count = in.readInt();
+                List<KeyValuePair> keyValuePairs = new ArrayList<>(count);
+
+                for (int i = 0; i < count; i++) {
+                    int keyLength = in.readInt();
+                    String key = in.readBytes(keyLength).toString(StandardCharsets.UTF_8);
+                    keyValuePairs.add(new KeyValuePair(key));
                 }
 
-                case Messages.LEAVE_RESPONSE -> {
-                    Message leave = new MemberLeaveResponse(id);
-                    out.add(leave);
-                    return;
+                Message message = new DeleteDataRequest(id, keyValuePairs);
+                out.add(message);
+                return;
+            } else if (type == Messages.DELETE_DATA_RESPONSE().readShort()) {
+                int count = in.readInt();
+                List<KeyValuePair> keyValuePairs = new ArrayList<>(count);
+
+                for (int i = 0; i < count; i++) {
+                    int keyLength = in.readInt();
+                    String key = in.readBytes(keyLength).toString(StandardCharsets.UTF_8);
+                    keyValuePairs.add(new KeyValuePair(key));
                 }
 
-                case Messages.UPSET_DATA_REQUEST -> {
-                    int count = in.readInt();
-                    List<KeyValuePair> keyValuePairs = new ArrayList<>(count);
+                Message message = new DeleteDataResponse(id, keyValuePairs);
+                out.add(message);
+                return;
+            } else if (type == Messages.SIMPLE_MESSAGE_REQUEST().readShort()) {
+                int size = in.readInt();
 
-                    for (int i = 0; i < count; i++) {
-                        int keyLength = in.readInt();
-                        String key = in.readBytes(keyLength).toString(StandardCharsets.UTF_8);
+                Message message = new SimpleMessageRequest(id, in.readBytes(size));
+                out.add(message);
+                return;
+            } else if (type == Messages.SIMPLE_MESSAGE_RESPONSE().readShort()) {
+                int size = in.readInt();
 
-                        int valueLength = in.readInt();
-                        String value = in.readBytes(valueLength).toString(StandardCharsets.UTF_8);
-
-                        keyValuePairs.add(new KeyValuePair(key, value));
-                    }
-
-                    Message message = new UpsertDataRequest(id, keyValuePairs);
-                    out.add(message);
-                    return;
-                }
-
-                case Messages.UPSET_DATA_RESPONSE -> {
-                    int count = in.readInt();
-                    List<KeyValuePair> keyValuePairs = new ArrayList<>(count);
-
-                    for (int i = 0; i < count; i++) {
-                        int keyLength = in.readInt();
-                        String key = in.readBytes(keyLength).toString(StandardCharsets.UTF_8);
-                        keyValuePairs.add(new KeyValuePair(key));
-                    }
-
-                    Message message = new UpsertDataResponse(id, keyValuePairs);
-                    out.add(message);
-                    return;
-                }
-
-                case Messages.DELETE_DATA_REQUEST -> {
-                    int count = in.readInt();
-                    List<KeyValuePair> keyValuePairs = new ArrayList<>(count);
-
-                    for (int i = 0; i < count; i++) {
-                        int keyLength = in.readInt();
-                        String key = in.readBytes(keyLength).toString(StandardCharsets.UTF_8);
-                        keyValuePairs.add(new KeyValuePair(key));
-                    }
-
-                    Message message = new DeleteDataRequest(id, keyValuePairs);
-                    out.add(message);
-                    return;
-                }
-
-                case Messages.DELETE_DATA_RESPONSE -> {
-                    int count = in.readInt();
-                    List<KeyValuePair> keyValuePairs = new ArrayList<>(count);
-
-                    for (int i = 0; i < count; i++) {
-                        int keyLength = in.readInt();
-                        String key = in.readBytes(keyLength).toString(StandardCharsets.UTF_8);
-                        keyValuePairs.add(new KeyValuePair(key));
-                    }
-
-                    Message message = new DeleteDataResponse(id, keyValuePairs);
-                    out.add(message);
-                    return;
-                }
-
-                case Messages.SIMPLE_MESSAGE_REQUEST -> {
-                    int size = in.readInt();
-
-                    Message message = new SimpleMessageRequest(id, in.readBytes(size));
-                    out.add(message);
-                    return;
-                }
-
-                case Messages.SIMPLE_MESSAGE_RESPONSE -> {
-                    int size = in.readInt();
-
-                    Message message = new SimpleMessageResponse(id, in.readBytes(size));
-                    out.add(message);
-                    return;
-                }
+                Message message = new SimpleMessageResponse(id, in.readBytes(size));
+                out.add(message);
+                return;
             }
         } catch (Exception ex) {
             logger.error(ex);

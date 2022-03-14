@@ -17,65 +17,102 @@
  */
 package com.shieldblaze.expressgateway.intercommunication;
 
+import io.netty.buffer.ByteBuf;
+import io.netty.buffer.Unpooled;
+
 final class Messages {
 
-    /**
-     * Delimiter
-     */
-    static final int DELIMITER = 0xff123abc;
+    private static final ByteBuf DELIMITER = Unpooled.unreleasableBuffer(Unpooled.buffer(4, 4).writeInt(0xff123abc)).asReadOnly();
+    private static final ByteBuf MAGIC = Unpooled.unreleasableBuffer(Unpooled.buffer(4, 4).writeInt(0xabc123ff)).asReadOnly();
+    private static final ByteBuf JOIN_REQUEST = Unpooled.unreleasableBuffer(Unpooled.buffer(2, 2).writeShort(0xa)).asReadOnly();
+    private static final ByteBuf LEAVE_REQUEST = Unpooled.unreleasableBuffer(Unpooled.buffer(2, 2).writeShort(0xb)).asReadOnly();
+    private static final ByteBuf UPSET_DATA_REQUEST = Unpooled.unreleasableBuffer(Unpooled.buffer(2, 2).writeShort(0xc)).asReadOnly();
+    private static final ByteBuf DELETE_DATA_REQUEST = Unpooled.unreleasableBuffer(Unpooled.buffer(2, 2).writeShort(0xd)).asReadOnly();
+    private static final ByteBuf SIMPLE_MESSAGE_REQUEST = Unpooled.unreleasableBuffer(Unpooled.buffer(2, 2).writeShort(0xe)).asReadOnly();
+    private static final ByteBuf JOIN_RESPONSE = Unpooled.unreleasableBuffer(Unpooled.buffer(2, 2).writeShort(0xf)).asReadOnly();
+    private static final ByteBuf LEAVE_RESPONSE = Unpooled.unreleasableBuffer(Unpooled.buffer(2, 2).writeShort(0xaa)).asReadOnly();
+    private static final ByteBuf UPSET_DATA_RESPONSE = Unpooled.unreleasableBuffer(Unpooled.buffer(2, 2).writeShort(0xab)).asReadOnly();
+    private static final ByteBuf DELETE_DATA_RESPONSE = Unpooled.unreleasableBuffer(Unpooled.buffer(2, 2).writeShort(0xac)).asReadOnly();
+    private static final ByteBuf SIMPLE_MESSAGE_RESPONSE = Unpooled.unreleasableBuffer(Unpooled.buffer(2, 2).writeShort(0xad)).asReadOnly();
+
+    static ByteBuf DELIMITER() {
+        return DELIMITER.duplicate();
+    }
 
     /**
      * Magic number header
      */
-    static final int MAGIC = 0xabc123ff;
+    static ByteBuf MAGIC() {
+        return MAGIC.duplicate();
+    }
 
     /**
      * Member Join Request
      */
-    static final short JOIN_REQUEST = 0xa;
+    static ByteBuf JOIN_REQUEST(){
+        return JOIN_REQUEST.duplicate();
+    }
 
     /**
      * Member Leave Request
      */
-    static final short LEAVE_REQUEST = 0xb;
-
-    /**
-     * Upsert data Request
-     */
-    static final short UPSET_DATA_REQUEST = 0xc;
+    static ByteBuf LEAVE_REQUEST() {
+        return LEAVE_REQUEST.duplicate();
+    }
 
     /**
      * Delete data Request
      */
-    static final short DELETE_DATA_REQUEST = 0xd;
+    static ByteBuf UPSET_DATA_REQUEST() {
+        return UPSET_DATA_REQUEST.duplicate();
+    }
+
+    /**
+     * Delete data Request
+     */
+    static ByteBuf DELETE_DATA_REQUEST() {
+        return DELETE_DATA_REQUEST.duplicate();
+    }
 
     /**
      * Simple Message Request
      */
-    static final short SIMPLE_MESSAGE_REQUEST = 0xe;
+    static ByteBuf SIMPLE_MESSAGE_REQUEST() {
+        return SIMPLE_MESSAGE_REQUEST.duplicate();
+    }
 
     /**
      * Member Join Response
      */
-    static final short JOIN_RESPONSE = 0xf;
+    static ByteBuf JOIN_RESPONSE() {
+        return JOIN_RESPONSE.duplicate();
+    }
 
     /**
      * Member Leave Response
      */
-    static final short LEAVE_RESPONSE = 0xaa;
+    static ByteBuf LEAVE_RESPONSE() {
+        return LEAVE_RESPONSE.duplicate();
+    }
 
     /**
      * Upsert data Response
      */
-    static final short UPSET_DATA_RESPONSE = 0xab;
+    static ByteBuf UPSET_DATA_RESPONSE() {
+        return UPSET_DATA_RESPONSE.duplicate();
+    }
 
     /**
      * Delete data Response
      */
-    static final short DELETE_DATA_RESPONSE = 0xac;
+    static ByteBuf DELETE_DATA_RESPONSE() {
+        return DELETE_DATA_RESPONSE.duplicate();
+    }
 
     /**
      * Simple Message Response
      */
-    static final short SIMPLE_MESSAGE_RESPONSE = 0xad;
+    static ByteBuf SIMPLE_MESSAGE_RESPONSE() {
+        return SIMPLE_MESSAGE_RESPONSE.duplicate();
+    }
 }
