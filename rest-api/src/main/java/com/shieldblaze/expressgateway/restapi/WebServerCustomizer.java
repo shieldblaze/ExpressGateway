@@ -72,6 +72,6 @@ public class WebServerCustomizer implements WebServerFactoryCustomizer<NettyReac
         factory.setPort(port);
 
         SelfSignedCertificate ssc = SelfSignedCertificate.generateNew(List.of("127.0.0.1"));
-        factory.addServerCustomizers(new TlsCustomizer(ssc.keyPair().getPrivate(), ssc.x509Certificate()));
+        factory.addServerCustomizers(new TlsCustomizer(ssc.keyPair().getPrivate(), new X509Certificate[]{ssc.x509Certificate()}));
     }
 }
