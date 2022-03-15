@@ -22,5 +22,5 @@ package com.shieldblaze.expressgateway.configuration;
  * @param <T>
  */
 public interface Configuration<T> {
-
+    // Empty
 }

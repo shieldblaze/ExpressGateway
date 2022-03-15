@@ -19,23 +19,22 @@ package com.shieldblaze.expressgateway.intercommunication;
 
 import com.shieldblaze.expressgateway.intercommunication.messages.error.MemberAlreadyExistsError;
 import com.shieldblaze.expressgateway.intercommunication.messages.error.MemberDoesNotExistsError;
-import com.shieldblaze.expressgateway.intercommunication.messages.request.MemberJoinRequest;
-import com.shieldblaze.expressgateway.intercommunication.messages.request.MemberLeaveRequest;
-import com.shieldblaze.expressgateway.intercommunication.messages.request.UpsertDataRequest;
+import com.shieldblaze.expressgateway.intercommunication.messages.request.*;
 import io.netty.buffer.Unpooled;
 import io.netty.channel.ChannelHandlerContext;
 import io.netty.channel.SimpleChannelInboundHandler;
+
+import java.util.List;
 
 import static com.shieldblaze.expressgateway.intercommunication.Broadcaster.MEMBERS;
 
 final class InboundHandler extends SimpleChannelInboundHandler<Message> {
 
-    private ChannelHandlerContext ctx;
+    ChannelHandlerContext ctx;
 
     @Override
     public void channelActive(ChannelHandlerContext ctx) throws Exception {
         this.ctx = ctx;
-        super.channelActive(ctx);
     }
 
     @Override
@@ -45,6 +44,10 @@ final class InboundHandler extends SimpleChannelInboundHandler<Message> {
         } else if (msg instanceof MemberLeaveRequest request) {
             leave(ctx, request);
         } else if (msg instanceof UpsertDataRequest request) {
+            upsert(ctx, request);
+        } else if (msg instanceof DeleteDataRequest request) {
+
+        } else if (msg instanceof SimpleMessageRequest request) {
 
         }
     }
