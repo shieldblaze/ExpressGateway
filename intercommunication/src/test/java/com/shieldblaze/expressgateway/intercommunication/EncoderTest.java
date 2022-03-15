@@ -58,10 +58,10 @@ class EncoderTest {
         ByteBuf firstBuf = embeddedChannel.readOutbound();
         ByteBuf dupBuf = firstBuf.duplicate();
 
-        assertEquals(Messages.MAGIC, dupBuf.readInt());
+        assertEquals(Messages.MAGIC().readInt(), dupBuf.readInt());
         assertArrayEquals(id, ByteBufUtil.getBytes(dupBuf.readBytes(16)));
-        assertEquals(Messages.JOIN_REQUEST, dupBuf.readShort());
-        assertEquals(Messages.DELIMITER, dupBuf.readInt());
+        assertEquals(Messages.JOIN_REQUEST().readShort(), dupBuf.readShort());
+        assertEquals(Messages.DELIMITER().readInt(), dupBuf.readInt());
 
         embeddedChannel.writeInbound(firstBuf);
         request = embeddedChannel.readInbound();
@@ -83,10 +83,10 @@ class EncoderTest {
         ByteBuf firstBuf = embeddedChannel.readOutbound();
         ByteBuf dupBuf = firstBuf.duplicate();
 
-        assertEquals(Messages.MAGIC, dupBuf.readInt());
+        assertEquals(Messages.MAGIC().readInt(), dupBuf.readInt());
         assertArrayEquals(id, ByteBufUtil.getBytes(dupBuf.readBytes(16)));
-        assertEquals(Messages.JOIN_RESPONSE, dupBuf.readShort());
-        assertEquals(Messages.DELIMITER, dupBuf.readInt());
+        assertEquals(Messages.JOIN_RESPONSE().readShort(), dupBuf.readShort());
+        assertEquals(Messages.DELIMITER().readInt(), dupBuf.readInt());
 
         embeddedChannel.writeInbound(firstBuf);
         response = embeddedChannel.readInbound();
@@ -108,10 +108,10 @@ class EncoderTest {
         ByteBuf firstBuf = embeddedChannel.readOutbound();
         ByteBuf dupBuf = firstBuf.duplicate();
 
-        assertEquals(Messages.MAGIC, dupBuf.readInt());
+        assertEquals(Messages.MAGIC().readInt(), dupBuf.readInt());
         assertArrayEquals(id, ByteBufUtil.getBytes(dupBuf.readBytes(16)));
-        assertEquals(Messages.LEAVE_REQUEST, dupBuf.readShort());
-        assertEquals(Messages.DELIMITER, dupBuf.readInt());
+        assertEquals(Messages.LEAVE_REQUEST().readShort(), dupBuf.readShort());
+        assertEquals(Messages.DELIMITER().readInt(), dupBuf.readInt());
 
         embeddedChannel.writeInbound(firstBuf);
         request = embeddedChannel.readInbound();
@@ -133,10 +133,10 @@ class EncoderTest {
         ByteBuf firstBuf = embeddedChannel.readOutbound();
         ByteBuf dupBuf = firstBuf.duplicate();
 
-        assertEquals(Messages.MAGIC, dupBuf.readInt());
+        assertEquals(Messages.MAGIC().readInt(), dupBuf.readInt());
         assertArrayEquals(id, ByteBufUtil.getBytes(dupBuf.readBytes(16)));
-        assertEquals(Messages.LEAVE_RESPONSE, dupBuf.readShort());
-        assertEquals(Messages.DELIMITER, dupBuf.readInt());
+        assertEquals(Messages.LEAVE_RESPONSE().readShort(), dupBuf.readShort());
+        assertEquals(Messages.DELIMITER().readInt(), dupBuf.readInt());
 
         embeddedChannel.writeInbound(firstBuf);
         response = embeddedChannel.readInbound();
@@ -165,9 +165,9 @@ class EncoderTest {
 
         ByteBuf byteBuf = embeddedChannel.readOutbound();
         ByteBuf dupBuf = byteBuf.duplicate();
-        assertEquals(Messages.MAGIC, byteBuf.readInt());
+        assertEquals(Messages.MAGIC().readInt(), byteBuf.readInt());
         assertArrayEquals(id, ByteBufUtil.getBytes(byteBuf.readBytes(16)));
-        assertEquals(Messages.UPSET_DATA_REQUEST, byteBuf.readShort());
+        assertEquals(Messages.UPSET_DATA_REQUEST().readShort(), byteBuf.readShort());
         assertEquals(100, byteBuf.readInt());
 
         for (int i = 0; i < 100; i++) {
@@ -183,7 +183,7 @@ class EncoderTest {
             assertEquals(key, _key);
             assertEquals(value, _value);
         }
-        assertEquals(Messages.DELIMITER, byteBuf.readInt());
+        assertEquals(Messages.DELIMITER().readInt(), byteBuf.readInt());
 
         embeddedChannel.writeInbound(dupBuf);
         request = embeddedChannel.readInbound();
@@ -220,9 +220,9 @@ class EncoderTest {
 
         ByteBuf byteBuf = embeddedChannel.readOutbound();
         ByteBuf dupBuf = byteBuf.duplicate();
-        assertEquals(Messages.MAGIC, byteBuf.readInt());
+        assertEquals(Messages.MAGIC().readInt(), byteBuf.readInt());
         assertArrayEquals(id, ByteBufUtil.getBytes(byteBuf.readBytes(16)));
-        assertEquals(Messages.UPSET_DATA_RESPONSE, byteBuf.readShort());
+        assertEquals(Messages.UPSET_DATA_RESPONSE().readShort(), byteBuf.readShort());
         assertEquals(100, byteBuf.readInt());
 
         for (int i = 0; i < 100; i++) {
@@ -233,7 +233,7 @@ class EncoderTest {
 
             assertEquals(key, _key);
         }
-        assertEquals(Messages.DELIMITER, byteBuf.readInt());
+        assertEquals(Messages.DELIMITER().readInt(), byteBuf.readInt());
 
         embeddedChannel.writeInbound(dupBuf);
         response = embeddedChannel.readInbound();
@@ -269,9 +269,9 @@ class EncoderTest {
 
         ByteBuf byteBuf = embeddedChannel.readOutbound();
         ByteBuf dupBuf = byteBuf.duplicate();
-        assertEquals(Messages.MAGIC, byteBuf.readInt());
+        assertEquals(Messages.MAGIC().readInt(), byteBuf.readInt());
         assertArrayEquals(id, ByteBufUtil.getBytes(byteBuf.readBytes(16)));
-        assertEquals(Messages.DELETE_DATA_REQUEST, byteBuf.readShort());
+        assertEquals(Messages.DELETE_DATA_REQUEST().readShort(), byteBuf.readShort());
         assertEquals(100, byteBuf.readInt());
 
         for (int i = 0; i < 100; i++) {
@@ -282,7 +282,7 @@ class EncoderTest {
 
             assertEquals(key, _key);
         }
-        assertEquals(Messages.DELIMITER, byteBuf.readInt());
+        assertEquals(Messages.DELIMITER().readInt(), byteBuf.readInt());
 
         embeddedChannel.writeInbound(dupBuf);
         request = embeddedChannel.readInbound();
@@ -318,9 +318,9 @@ class EncoderTest {
 
         ByteBuf byteBuf = embeddedChannel.readOutbound();
         ByteBuf dupBuf = byteBuf.duplicate();
-        assertEquals(Messages.MAGIC, byteBuf.readInt());
+        assertEquals(Messages.MAGIC().readInt(), byteBuf.readInt());
         assertArrayEquals(id, ByteBufUtil.getBytes(byteBuf.readBytes(16)));
-        assertEquals(Messages.DELETE_DATA_RESPONSE, byteBuf.readShort());
+        assertEquals(Messages.DELETE_DATA_RESPONSE().readShort(), byteBuf.readShort());
         assertEquals(100, byteBuf.readInt());
 
         for (int i = 0; i < 100; i++) {
@@ -331,7 +331,8 @@ class EncoderTest {
 
             assertEquals(key, _key);
         }
-        assertEquals(Messages.DELIMITER, byteBuf.readInt());
+
+        assertEquals(Messages.DELIMITER().readInt(), byteBuf.readInt());
 
         embeddedChannel.writeInbound(dupBuf);
         response = embeddedChannel.readInbound();
@@ -349,8 +350,7 @@ class EncoderTest {
     }
 
     private EmbeddedChannel newEmbeddedChannel() {
-        return new EmbeddedChannel(new DelimiterBasedFrameDecoder(10_000_000,
-                Unpooled.buffer().writeInt(Messages.DELIMITER)), new Encoder(), new Decoder()) {
+        return new EmbeddedChannel(new DelimiterBasedFrameDecoder(10_000_000, Messages.DELIMITER()), new Encoder(), new Decoder()) {
             @Override
             protected SocketAddress remoteAddress0() {
                 return new InetSocketAddress("127.0.0.1", 9110);
