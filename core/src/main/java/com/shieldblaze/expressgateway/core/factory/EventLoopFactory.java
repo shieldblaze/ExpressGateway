@@ -18,7 +18,7 @@
 package com.shieldblaze.expressgateway.core.factory;
 
 import com.shieldblaze.expressgateway.common.annotation.NonNull;
-import com.shieldblaze.expressgateway.configuration.CoreConfiguration;
+import com.shieldblaze.expressgateway.configuration.ConfigurationContext;
 import com.shieldblaze.expressgateway.configuration.transport.TransportType;
 import io.netty.channel.EventLoopGroup;
 import io.netty.channel.epoll.EpollEventLoopGroup;
@@ -36,17 +36,17 @@ public final class EventLoopFactory {
     /**
      * Create a new {@link EventLoopFactory} instance
      *
-     * @param coreConfiguration {@link CoreConfiguration} instance
+     * @param configurationContext {@link ConfigurationContext} instance
      */
     @NonNull
-    public EventLoopFactory(CoreConfiguration coreConfiguration) {
-        int parentWorkers = coreConfiguration.eventLoopConfiguration().parentWorkers();
-        int childWorkers = coreConfiguration.eventLoopConfiguration().childWorkers();
+    public EventLoopFactory(ConfigurationContext configurationContext) {
+        int parentWorkers = configurationContext.eventLoopConfiguration().parentWorkers();
+        int childWorkers = configurationContext.eventLoopConfiguration().childWorkers();
 
-        if (coreConfiguration.transportConfiguration().transportType() == TransportType.IO_URING) {
+        if (configurationContext.transportConfiguration().transportType() == TransportType.IO_URING) {
             parentGroup = new IOUringEventLoopGroup(parentWorkers);
             childGroup = new IOUringEventLoopGroup(childWorkers);
-        } else if (coreConfiguration.transportConfiguration().transportType() == TransportType.EPOLL) {
+        } else if (configurationContext.transportConfiguration().transportType() == TransportType.EPOLL) {
             parentGroup = new EpollEventLoopGroup(parentWorkers);
             childGroup = new EpollEventLoopGroup(childWorkers);
         } else {

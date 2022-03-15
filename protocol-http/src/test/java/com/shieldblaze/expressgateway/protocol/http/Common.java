@@ -22,11 +22,9 @@ import com.shieldblaze.expressgateway.backend.cluster.Cluster;
 import com.shieldblaze.expressgateway.backend.cluster.ClusterBuilder;
 import com.shieldblaze.expressgateway.backend.strategy.l7.http.HTTPRoundRobin;
 import com.shieldblaze.expressgateway.backend.strategy.l7.http.sessionpersistence.NOOPSessionPersistence;
-import com.shieldblaze.expressgateway.configuration.CoreConfiguration;
-import com.shieldblaze.expressgateway.configuration.http.HTTPConfiguration;
-import com.shieldblaze.expressgateway.configuration.tls.CertificateKeyPair;
-import com.shieldblaze.expressgateway.configuration.tls.TLSConfiguration;
-import com.shieldblaze.expressgateway.configuration.tls.TLSConfigurationBuilder;
+import com.shieldblaze.expressgateway.configuration.ConfigurationContext;
+import com.shieldblaze.expressgateway.configuration.http.HttpConfiguration;
+import com.shieldblaze.expressgateway.configuration.tls.*;
 import com.shieldblaze.expressgateway.core.events.L4FrontListenerStartupEvent;
 import com.shieldblaze.expressgateway.core.events.L4FrontListenerStopEvent;
 import com.shieldblaze.expressgateway.protocol.http.loadbalancer.HTTPLoadBalancer;
@@ -34,6 +32,8 @@ import com.shieldblaze.expressgateway.protocol.http.loadbalancer.HTTPLoadBalance
 import com.shieldblaze.expressgateway.protocol.tcp.TCPListener;
 import io.netty.handler.ssl.util.InsecureTrustManagerFactory;
 import io.netty.handler.ssl.util.SelfSignedCertificate;
+import org.apache.logging.log4j.LogManager;
+import org.apache.logging.log4j.Logger;
 
 import javax.net.ssl.SSLContext;
 import java.net.InetSocketAddress;
@@ -45,6 +45,8 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 
 public final class Common {
 
+    private static final Logger logger = LogManager.getLogger(Common.class);
+
     public static HttpClient httpClient;
     private static HTTPServer httpServer;
     private static HTTPLoadBalancer httpLoadBalancer;
@@ -54,16 +56,24 @@ public final class Common {
     }
 
     public static void initialize(boolean tlsBackend, boolean tlsServer, boolean tlsClient) throws Exception {
-        SelfSignedCertificate selfSignedCertificate = new SelfSignedCertificate("localhost", "EC", 256);
+        logger.debug("Initializing New HTTP web server");
+        logger.debug("TLSBackend: {}, TLSServer: {}, TLSClient: {}", tlsBackend, tlsServer, tlsClient);
 
-        CertificateKeyPair certificateKeyPair = CertificateKeyPair.forClient(Collections.singletonList(selfSignedCertificate.cert()), selfSignedCertificate.key());
+        SelfSignedCertificate ssc = new SelfSignedCertificate("localhost", "EC", 256);
+        CertificateKeyPair certificateKeyPair = CertificateKeyPair.forClient(Collections.singletonList(ssc.cert()), ssc.key());
 
-        TLSConfiguration forServer = TLSConfiguration.DEFAULT_SERVER;
+        TLSConfiguration forServer = TLSServerConfiguration.DEFAULT;
+        if (tlsServer) {
+            forServer = TLSConfigurationBuilder.copy(TLSServerConfiguration.DEFAULT);
+        }
         forServer.addMapping("localhost", certificateKeyPair);
 
-        TLSConfiguration forClient = TLSConfigurationBuilder.forClient()
-                .withAcceptAllCertificate(true)
-                .build();
+        TLSConfiguration forClient = TLSClientConfiguration.DEFAULT;
+        if (tlsClient) {
+            forClient = TLSConfigurationBuilder.forClient()
+                    .withAcceptAllCertificate(true)
+                    .build();
+        }
         forClient.defaultMapping(CertificateKeyPair.newDefaultClientInstance());
 
         SSLContext sslContext = SSLContext.getInstance("TLSv1.3");
@@ -82,10 +92,7 @@ public final class Common {
                 .build();
 
         httpLoadBalancer = HTTPLoadBalancerBuilder.newBuilder()
-                .withCoreConfiguration(CoreConfiguration.INSTANCE)
-                .withHTTPConfiguration(HTTPConfiguration.DEFAULT)
-                .withTLSForClient(tlsClient ? forClient : null)
-                .withTLSForServer(tlsServer ? forServer : null)
+                .withConfigurationContext(ConfigurationContext.create(null, forClient, forServer))
                 .withBindAddress(new InetSocketAddress("localhost", 9110))
                 .withHTTPInitializer(new DefaultHTTPServerInitializer())
                 .withL4FrontListener(new TCPListener())
@@ -104,9 +111,17 @@ public final class Common {
     }
 
     public static void shutdown() {
+        logger.debug("Shutting down HTTP web server");
+
         httpServer.shutdown();
         L4FrontListenerStopEvent l4FrontListenerStopEvent = httpLoadBalancer.stop();
         l4FrontListenerStopEvent.future().join();
         assertTrue(l4FrontListenerStopEvent.isSuccess());
+
+        try {
+            Thread.sleep(2500);
+        } catch (InterruptedException e) {
+            e.printStackTrace();
+        }
     }
 }

@@ -22,7 +22,7 @@ import com.shieldblaze.expressgateway.backend.cluster.Cluster;
 import com.shieldblaze.expressgateway.backend.cluster.ClusterBuilder;
 import com.shieldblaze.expressgateway.backend.strategy.l4.RoundRobin;
 import com.shieldblaze.expressgateway.backend.strategy.l4.sessionpersistence.NOOPSessionPersistence;
-import com.shieldblaze.expressgateway.configuration.CoreConfiguration;
+import com.shieldblaze.expressgateway.configuration.ConfigurationContext;
 import com.shieldblaze.expressgateway.core.events.L4FrontListenerStartupEvent;
 import com.shieldblaze.expressgateway.core.events.L4FrontListenerStopEvent;
 import com.shieldblaze.expressgateway.core.loadbalancer.L4LoadBalancer;
@@ -54,7 +54,7 @@ final class UpstreamHandlerTest {
                 .build();
 
         l4LoadBalancer = L4LoadBalancerBuilder.newBuilder()
-                .withCoreConfiguration(CoreConfiguration.INSTANCE)
+                .withCoreConfiguration(ConfigurationContext.DEFAULT)
                 .withBindAddress(new InetSocketAddress("127.0.0.1", 9110))
                 .withL4FrontListener(new UDPListener())
                 .build();

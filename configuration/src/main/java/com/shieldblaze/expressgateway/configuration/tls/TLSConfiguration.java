@@ -21,77 +21,45 @@ import com.fasterxml.jackson.annotation.JsonIgnore;
 import com.fasterxml.jackson.annotation.JsonProperty;
 import com.shieldblaze.expressgateway.common.utils.ListUtil;
 import com.shieldblaze.expressgateway.common.utils.NumberUtil;
-import com.shieldblaze.expressgateway.configuration.ConfigurationMarshaller;
-import io.netty.handler.ssl.OpenSsl;
+import com.shieldblaze.expressgateway.configuration.Configuration;
 
 import javax.net.ssl.SSLException;
-import java.io.IOException;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
 import java.util.concurrent.ConcurrentHashMap;
-import java.util.concurrent.ConcurrentSkipListMap;
 
 /**
  * Configuration for TLS
  */
-public final class TLSConfiguration {
+public abstract class TLSConfiguration implements Configuration {
 
     @JsonIgnore
     private final Map<String, CertificateKeyPair> certificateKeyPairMap = new ConcurrentHashMap<>();
 
-    @JsonIgnore
-    private boolean forServer;
+    @JsonProperty("enabled")
+    private boolean enabled = false;
 
     @JsonProperty("ciphers")
-    private List<Cipher> ciphers;
+    protected List<Cipher> ciphers;
 
     @JsonProperty("protocols")
-    private List<Protocol> protocols;
+    protected List<Protocol> protocols;
 
     @JsonProperty("mutualTLS")
-    private MutualTLS mutualTLS = MutualTLS.NOT_REQUIRED;
+    protected MutualTLS mutualTLS = MutualTLS.NOT_REQUIRED;
 
     @JsonProperty("useStartTLS")
-    private boolean useStartTLS;
+    protected boolean useStartTLS;
 
     @JsonProperty("sessionTimeout")
-    private int sessionTimeout;
+    protected int sessionTimeout;
 
     @JsonProperty("sessionCacheSize")
-    private int sessionCacheSize;
+    protected int sessionCacheSize;
 
     @JsonProperty("acceptAllCerts")
-    private boolean acceptAllCerts;
-
-    @JsonIgnore
-    public static final TLSConfiguration DEFAULT_CLIENT = new TLSConfiguration();
-
-    @JsonIgnore
-    public static final TLSConfiguration DEFAULT_SERVER = new TLSConfiguration();
-
-    static {
-        // Default Client
-        {
-            DEFAULT_CLIENT.forServer = false;
-            DEFAULT_CLIENT.ciphers = IntermediateCrypto.CIPHERS;
-            DEFAULT_CLIENT.protocols = IntermediateCrypto.PROTOCOLS;
-
-            DEFAULT_CLIENT.useStartTLS = false;
-            DEFAULT_CLIENT.acceptAllCerts = false;
-        }
-
-        // Default Server
-        {
-            DEFAULT_SERVER.forServer = true;
-            DEFAULT_SERVER.ciphers = IntermediateCrypto.CIPHERS;
-            DEFAULT_SERVER.protocols = IntermediateCrypto.PROTOCOLS;
-
-            DEFAULT_SERVER.useStartTLS = false;
-            DEFAULT_SERVER.sessionTimeout = 43_200;
-            DEFAULT_SERVER.sessionCacheSize = 1_000_000;
-        }
-    }
+    protected boolean acceptAllCerts;
 
     /**
      * Add the default {@link CertificateKeyPair} mapping
@@ -165,17 +133,23 @@ public final class TLSConfiguration {
         throw new NullPointerException("Mapping not found for Hostname: " + _fqdn);
     }
 
-    public boolean forServer() {
-        return forServer;
+    public TLSConfiguration enable() {
+        enabled = true;
+        return this;
+    }
+
+    protected TLSConfiguration disable() {
+        enabled = false;
+        return this;
     }
 
     /**
-     * Set to {@code true} if this configuration is for server
-     * else set to {@code false}.
+     * Check whether this configuration is enabled or not
+     *
+     * @return {@code true} if enabled else {@code false}
      */
-    TLSConfiguration setForServer(boolean forServer) {
-        this.forServer = forServer;
-        return this;
+    public boolean enabled() {
+        return enabled;
     }
 
     TLSConfiguration setCiphers(List<Cipher> ciphers) {
@@ -246,58 +220,19 @@ public final class TLSConfiguration {
         return acceptAllCerts;
     }
 
-    public TLSConfiguration validate() {
+    /**
+     * Validate all parameters of this configuration
+     *
+     * @return this class instance
+     * @throws IllegalArgumentException If any value is invalid
+     * @throws NullPointerException If any value is null
+     */
+    public TLSConfiguration validate() throws IllegalArgumentException, NullPointerException {
         ListUtil.checkNonEmpty(ciphers, "Ciphers");
         ListUtil.checkNonEmpty(protocols, "Protocols");
         Objects.requireNonNull(mutualTLS, "MutualTLS");
         NumberUtil.checkZeroOrPositive(sessionTimeout, "Session Timeout");
         NumberUtil.checkZeroOrPositive(sessionCacheSize, "Session Cache Size");
         return this;
-    }
-
-    /**
-     * Save this server configuration to the file
-     *
-     * @throws IOException If an error occurs during saving
-     */
-    public void saveServer() throws IOException {
-        ConfigurationMarshaller.save("TLSServerConfiguration.json", this);
-    }
-
-    /**
-     * Load a server configuration
-     *
-     * @return {@link TLSConfiguration} Server Instance
-     */
-    public static TLSConfiguration loadServer() {
-        try {
-            return ConfigurationMarshaller.load("TLSServerConfiguration.json", TLSConfiguration.class);
-        } catch (Exception ex) {
-            // Ignore
-        }
-        return DEFAULT_SERVER;
-    }
-
-    /**
-     * Save this client configuration to the file
-     *
-     * @throws IOException If an error occurs during saving
-     */
-    public void saveClient() throws IOException {
-        ConfigurationMarshaller.save("TLSClientConfiguration.json", this);
-    }
-
-    /**
-     * Load a client configuration
-     *
-     * @return {@link TLSConfiguration} Client Instance
-     */
-    public static TLSConfiguration loadClient() {
-        try {
-            return ConfigurationMarshaller.load("TLSClientConfiguration.json", TLSConfiguration.class);
-        } catch (Exception ex) {
-            // Ignore
-        }
-        return DEFAULT_CLIENT;
     }
 }

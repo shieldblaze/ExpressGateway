@@ -20,7 +20,7 @@ package com.shieldblaze.expressgateway.configuration.transport;
 /**
  * Configuration Builder for {@link TransportConfiguration}
  */
-public final class TransportConfigurationBuilder {
+public final class  TransportConfigurationBuilder {
     private TransportType transportType;
     private ReceiveBufferAllocationType receiveBufferAllocationType;
     private int[] receiveBufferSizes;
@@ -133,6 +133,7 @@ public final class TransportConfigurationBuilder {
                 .setSocketSendBufferSize(socketSendBufferSize)
                 .setTcpFastOpenMaximumPendingRequests(tcpFastOpenMaximumPendingRequestsCount)
                 .setBackendConnectTimeout(backendConnectTimeout)
-                .setConnectionIdleTimeout(connectionIdleTimeout);
+                .setConnectionIdleTimeout(connectionIdleTimeout)
+                .validate(); // Validate the configuration
     }
 }

@@ -1,7 +1,7 @@
 package com.shieldblaze.expressgateway.restapi.response;
 
 import com.google.gson.JsonElement;
-import com.shieldblaze.expressgateway.common.GSON;
+import com.shieldblaze.expressgateway.common.Gson;
 import com.shieldblaze.expressgateway.restapi.response.builder.APIResponse;
 import com.shieldblaze.expressgateway.restapi.response.builder.ErrorMessage;
 import com.shieldblaze.expressgateway.restapi.response.builder.Message;
@@ -106,6 +106,6 @@ public final class FastBuilder {
      * @return {@link ResponseEntity} containing body, response code and headers.
      */
     public static ResponseEntity<String> response(JsonElement jsonElement, HttpResponseStatus httpResponseStatus) {
-        return new ResponseEntity<>(GSON.INSTANCE.toJson(jsonElement), MULTI_VALUE_MAP, HttpStatus.valueOf(httpResponseStatus.code()));
+        return new ResponseEntity<>(Gson.INSTANCE.toJson(jsonElement), MULTI_VALUE_MAP, HttpStatus.valueOf(httpResponseStatus.code()));
     }
 }

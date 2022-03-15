@@ -28,7 +28,6 @@ import io.netty.handler.ssl.SslContext;
 import io.netty.handler.ssl.SslContextBuilder;
 import io.netty.handler.ssl.SslProvider;
 import io.netty.handler.ssl.util.InsecureTrustManagerFactory;
-import io.netty.util.internal.PlatformDependent;
 import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
 import org.bouncycastle.cert.ocsp.BasicOCSPResp;
@@ -174,7 +173,7 @@ public final class CertificateKeyPair implements Runnable, Closeable {
         }
 
         SslContextBuilder sslContextBuilder;
-        if (tlsConfiguration.forServer()) {
+        if (tlsConfiguration instanceof TLSServerConfiguration) {
             sslContextBuilder = SslContextBuilder.forServer(privateKey, certificates)
                     .sslProvider(OpenSsl.isAvailable() ? SslProvider.OPENSSL : SslProvider.JDK)
                     .protocols(Protocol.getProtocols(tlsConfiguration.protocols()))

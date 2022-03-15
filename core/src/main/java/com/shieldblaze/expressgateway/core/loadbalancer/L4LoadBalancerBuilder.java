@@ -17,8 +17,7 @@
  */
 package com.shieldblaze.expressgateway.core.loadbalancer;
 
-import com.shieldblaze.expressgateway.configuration.CoreConfiguration;
-import com.shieldblaze.expressgateway.configuration.tls.TLSConfiguration;
+import com.shieldblaze.expressgateway.configuration.ConfigurationContext;
 import com.shieldblaze.expressgateway.core.L4FrontListener;
 import io.netty.channel.ChannelHandler;
 
@@ -33,9 +32,7 @@ public final class L4LoadBalancerBuilder {
     private String name;
     private InetSocketAddress bindAddress;
     private L4FrontListener l4FrontListener;
-    private CoreConfiguration coreConfiguration = CoreConfiguration.INSTANCE;
-    private TLSConfiguration tlsForServer;
-    private TLSConfiguration tlsForClient;
+    private ConfigurationContext configurationContext = ConfigurationContext.DEFAULT;
     private ChannelHandler channelHandler;
 
     private L4LoadBalancerBuilder() {
@@ -61,18 +58,8 @@ public final class L4LoadBalancerBuilder {
         return this;
     }
 
-    public L4LoadBalancerBuilder withCoreConfiguration(CoreConfiguration coreConfiguration) {
-        this.coreConfiguration = coreConfiguration;
-        return this;
-    }
-
-    public L4LoadBalancerBuilder withTLSForServer(TLSConfiguration tlsForServer) {
-        this.tlsForServer = tlsForServer;
-        return this;
-    }
-
-    public L4LoadBalancerBuilder withTLSForClient(TLSConfiguration tlsForClient) {
-        this.tlsForClient = tlsForClient;
+    public L4LoadBalancerBuilder withCoreConfiguration(ConfigurationContext configurationContext) {
+        this.configurationContext = configurationContext;
         return this;
     }
 
@@ -84,8 +71,8 @@ public final class L4LoadBalancerBuilder {
     public L4LoadBalancer build() {
         Objects.requireNonNull(bindAddress, "Bind Address");
         Objects.requireNonNull(l4FrontListener, "L4 FrontListener");
-        Objects.requireNonNull(coreConfiguration, "Core Configuration");
+        Objects.requireNonNull(configurationContext, "Core Configuration");
 
-        return new DefaultL4LoadBalancer(name, bindAddress, l4FrontListener, coreConfiguration, tlsForServer, tlsForClient, channelHandler);
+        return new DefaultL4LoadBalancer(name, bindAddress, l4FrontListener, configurationContext, channelHandler);
     }
 }

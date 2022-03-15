@@ -17,10 +17,11 @@
  */
 package com.shieldblaze.expressgateway.restapi.api.configuration;
 
-import com.fasterxml.jackson.core.JsonProcessingException;
 import com.google.gson.JsonObject;
 import com.google.gson.JsonParser;
-import com.shieldblaze.expressgateway.configuration.ConfigurationMarshaller;
+import com.shieldblaze.expressgateway.common.Gson;
+import com.shieldblaze.expressgateway.common.JacksonJson;
+import com.shieldblaze.expressgateway.configuration.ConfigurationStore;
 import com.shieldblaze.expressgateway.configuration.eventloop.EventLoopConfiguration;
 import com.shieldblaze.expressgateway.restapi.response.ErrorBase;
 import com.shieldblaze.expressgateway.restapi.response.FastBuilder;
@@ -30,6 +31,7 @@ import io.netty.handler.codec.http.HttpResponseStatus;
 import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.GetMapping;
+import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
@@ -38,12 +40,19 @@ import org.springframework.web.bind.annotation.RestController;
 import java.io.IOException;
 
 @RestController
-@RequestMapping("/v1/configuration/eventloop")
+@RequestMapping("/v1/configuration/{profile}/eventloop")
 public final class EventLoop {
 
-    @PostMapping(consumes = MediaType.APPLICATION_JSON_VALUE, produces = MediaType.APPLICATION_JSON_VALUE)
-    public ResponseEntity<String> applyConfiguration(@RequestBody EventLoopConfiguration eventLoop) throws IOException {
-        eventLoop.validate().save();
+    @PostMapping(value = "save", consumes = MediaType.APPLICATION_JSON_VALUE, produces = MediaType.APPLICATION_JSON_VALUE)
+    public ResponseEntity<String> applyConfiguration(@RequestBody EventLoopConfiguration eventLoopConfiguration,
+                                                     @PathVariable String profile) throws IOException {
+        if (profile.equalsIgnoreCase("default")) {
+            return FastBuilder.error(ErrorBase.CONFIGURATION_NOT_FOUND, "Default configuration cannot be modified",
+                    HttpResponseStatus.BAD_REQUEST);
+        }
+
+        eventLoopConfiguration.validate();
+        ConfigurationStore.save(profile, eventLoopConfiguration);
 
         APIResponse apiResponse = APIResponse.newBuilder()
                 .isSuccess(true)
@@ -52,27 +61,17 @@ public final class EventLoop {
         return FastBuilder.response(apiResponse.getResponse(), HttpResponseStatus.OK);
     }
 
-    /**
-     * @throws JsonProcessingException This should never happen
-     */
-    @GetMapping(value = "/default", produces = MediaType.APPLICATION_JSON_VALUE)
-    public ResponseEntity<String> getDefaultConfiguration() throws JsonProcessingException {
-        JsonObject eventLoop = JsonParser.parseString(ConfigurationMarshaller.get(EventLoopConfiguration.DEFAULT)).getAsJsonObject();
-
-        APIResponse apiResponse = APIResponse.newBuilder()
-                .isSuccess(true)
-                .withResult(Result.newBuilder().withHeader("EventLoopConfiguration").withMessage(eventLoop).build())
-                .build();
-
-        return FastBuilder.response(apiResponse.getResponse(), HttpResponseStatus.OK);
-    }
-
-    @GetMapping(produces = MediaType.APPLICATION_JSON_VALUE)
-    public ResponseEntity<String> getConfiguration() {
+    @GetMapping(value = "get", produces = MediaType.APPLICATION_JSON_VALUE)
+    public ResponseEntity<String> getConfiguration(@PathVariable String profile) {
         JsonObject eventLoop;
         try {
-            EventLoopConfiguration eventLoopConfiguration = EventLoopConfiguration.load();
-            eventLoop = JsonParser.parseString(ConfigurationMarshaller.get(eventLoopConfiguration)).getAsJsonObject();
+            EventLoopConfiguration eventLoopConfiguration;
+            if (profile.equalsIgnoreCase("default")) {
+                eventLoopConfiguration = EventLoopConfiguration.DEFAULT;
+            } else {
+                eventLoopConfiguration = ConfigurationStore.load(profile, EventLoopConfiguration.class);
+            }
+            eventLoop = JsonParser.parseString(JacksonJson.get(eventLoopConfiguration)).getAsJsonObject();
         } catch (Exception ex) {
             return FastBuilder.error(ErrorBase.CONFIGURATION_NOT_FOUND, ex.getMessage(), HttpResponseStatus.NOT_FOUND);
         }

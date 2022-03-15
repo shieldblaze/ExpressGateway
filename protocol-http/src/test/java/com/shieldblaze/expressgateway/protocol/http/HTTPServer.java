@@ -137,6 +137,10 @@ public class HTTPServer extends Thread {
 
     public void shutdown() {
         channelFuture.channel().close();
-        eventLoopGroup.shutdownGracefully();
+        try {
+            eventLoopGroup.shutdownGracefully().sync();
+        } catch (InterruptedException e) {
+            e.printStackTrace();
+        }
     }
 }

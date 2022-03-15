@@ -19,16 +19,14 @@ package com.shieldblaze.expressgateway.configuration.eventloop;
 
 import com.fasterxml.jackson.annotation.JsonProperty;
 import com.shieldblaze.expressgateway.common.utils.NumberUtil;
-import com.shieldblaze.expressgateway.configuration.ConfigurationMarshaller;
-
-import java.io.IOException;
+import com.shieldblaze.expressgateway.configuration.Configuration;
 
 /**
  * Configuration for {@link EventLoopConfiguration}.
  *
  * Use {@link EventLoopConfigurationBuilder} to build {@link EventLoopConfiguration} instance.
  */
-public final class EventLoopConfiguration {
+public final class EventLoopConfiguration implements Configuration {
 
     @JsonProperty("parentWorkers")
     private int parentWorkers;
@@ -42,6 +40,11 @@ public final class EventLoopConfiguration {
 
     public static final EventLoopConfiguration DEFAULT = new EventLoopConfiguration();
 
+    private EventLoopConfiguration(int parentWorkers, int childWorkers) {
+        this.parentWorkers = parentWorkers;
+        this.childWorkers = childWorkers;
+    }
+
     static {
         DEFAULT.parentWorkers = Runtime.getRuntime().availableProcessors();
         DEFAULT.childWorkers = DEFAULT.parentWorkers * 2;
@@ -52,7 +55,6 @@ public final class EventLoopConfiguration {
     }
 
     EventLoopConfiguration setParentWorkers(int parentWorkers) {
-        NumberUtil.checkPositive(parentWorkers, "Parent Workers");
         this.parentWorkers = parentWorkers;
         return this;
     }
@@ -62,37 +64,24 @@ public final class EventLoopConfiguration {
     }
 
     EventLoopConfiguration setChildWorkers(int childWorkers) {
-        NumberUtil.checkPositive(childWorkers, "Child Workers");
         this.childWorkers = childWorkers;
         return this;
     }
 
-    public EventLoopConfiguration validate() {
+    /**
+     * Validate all parameters of this configuration
+     *
+     * @return this class instance
+     * @throws IllegalArgumentException If any value is invalid
+     */
+    public EventLoopConfiguration validate() throws IllegalArgumentException {
         NumberUtil.checkPositive(parentWorkers, "Parent Workers");
         NumberUtil.checkPositive(childWorkers, "Child Workers");
         return this;
     }
 
-    /**
-     * Save this configuration to the file
-     *
-     * @throws IOException If an error occurs during saving
-     */
-    public void save() throws IOException {
-        ConfigurationMarshaller.save("EventLoopConfiguration.json", this);
-    }
-
-    /**
-     * Load a configuration
-     *
-     * @return {@link EventLoopConfiguration} Instance
-     */
-    public static EventLoopConfiguration load() {
-        try {
-            return ConfigurationMarshaller.load("EventLoopConfiguration.json", EventLoopConfiguration.class);
-        } catch (Exception ex) {
-            // Ignore
-        }
-        return DEFAULT;
+    @Override
+    public String name() {
+        return "EventLoopConfiguration";
     }
 }

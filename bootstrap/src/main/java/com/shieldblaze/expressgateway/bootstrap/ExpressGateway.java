@@ -17,47 +17,70 @@
  */
 package com.shieldblaze.expressgateway.bootstrap;
 
-import com.amazon.corretto.crypto.provider.AmazonCorrettoCryptoProvider;
-import com.amazon.corretto.crypto.provider.SelfTestStatus;
+import com.google.gson.JsonObject;
+import com.google.gson.JsonParser;
 import com.shieldblaze.expressgateway.restapi.RestAPI;
 import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
 
-import java.util.UUID;
+import java.io.FileNotFoundException;
+import java.io.IOException;
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.util.Scanner;
 
 /**
  * This class initializes and boots up the ExpressGateway.
  */
 public final class ExpressGateway {
-
     private static final Logger logger = LogManager.getLogger(ExpressGateway.class);
 
     static {
-        if (System.getProperty("log4j.configurationFile") == null) {
-            System.setProperty("log4j.configurationFile", "log4j2.xml");
-        }
-
-        AmazonCorrettoCryptoProvider.install();
-
-        Throwable throwable = AmazonCorrettoCryptoProvider.INSTANCE.getLoadingError();
-        if (throwable == null && AmazonCorrettoCryptoProvider.INSTANCE.runSelfTests().equals(SelfTestStatus.PASSED)) {
-            logger.info("AmazonCorrettoCryptoProvider is successfully installed");
-        } else {
-            logger.error("Failed to install AmazonCorrettoCryptoProvider", throwable);
-        }
+        System.setProperty("StartedAt", String.valueOf(System.currentTimeMillis()));
     }
 
-    /**
-     * Timestamp of ExpressGateway startup
-     */
-    public static final long STARTED_AT = System.currentTimeMillis();
-
-    /**
-     * UUID of this ExpressGateway runtime-instance
-     */
-    public static final String ID = UUID.randomUUID().toString();
-
     public static void main(String[] args) {
-        RestAPI.start();
+        System.out.println("______                               _____       _                           \n" +
+                " |  ____|                             / ____|     | |                          \n" +
+                " | |__  __  ___ __  _ __ ___  ___ ___| |  __  __ _| |_ _____      ____ _ _   _ \n" +
+                " |  __| \\ \\/ / '_ \\| '__/ _ \\/ __/ __| | |_ |/ _` | __/ _ \\ \\ /\\ / / _` | | | |\n" +
+                " | |____ >  <| |_) | | |  __/\\__ \\__ \\ |__| | (_| | ||  __/\\ V  V / (_| | |_| |\n" +
+                " |______/_/\\_\\ .__/|_|  \\___||___/___/\\_____|\\__,_|\\__\\___| \\_/\\_/ \\__,_|\\__, |\n" +
+                "             | |                                                          __/ |\n" +
+                "             |_|                                                         |___/ ");
+
+        logger.info("Starting ShieldBlaze ExpressGateway v0.1-a");
+    }
+
+    private static void loadApplicationFile() {
+        try {
+            JsonObject data = JsonParser.parseString(Files.readString(
+                    Path.of("/etc/expressgateway/application.json"))).getAsJsonObject();
+
+            String state = data.get("state").getAsString();
+            String profile = data.get("profile").getAsString();
+
+            JsonObject restApi = data.get("restApi").getAsJsonObject();
+            String restApiIpAddress = restApi.get("ipAddress").getAsString();
+            int restApiPort = restApi.get("port").getAsInt();
+
+            String password;
+            if (restApi.get("dataStorePassword").isJsonNull()) {
+                try (Scanner scanner = new Scanner(System.in)) {
+                    System.out.print("Enter DataStore Password: ");
+                    password = scanner.nextLine();
+                }
+            } else {
+                password = restApi.get("dataStorePassword").getAsString();
+            }
+
+            RestAPI.start();
+        } catch (FileNotFoundException e) {
+            logger.error("File not found in '/etc/expressgateway/application.json'");
+            System.exit(1);
+        } catch (IOException e) {
+            logger.error(e);
+            System.exit(1);
+        }
     }
 }

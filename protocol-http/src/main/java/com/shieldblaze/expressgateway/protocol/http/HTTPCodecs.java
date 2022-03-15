@@ -17,7 +17,7 @@
  */
 package com.shieldblaze.expressgateway.protocol.http;
 
-import com.shieldblaze.expressgateway.configuration.http.HTTPConfiguration;
+import com.shieldblaze.expressgateway.configuration.http.HttpConfiguration;
 import com.shieldblaze.expressgateway.protocol.http.compression.HTTP2ContentCompressor;
 import io.netty.handler.codec.http.HttpClientCodec;
 import io.netty.handler.codec.http.HttpServerCodec;
@@ -39,7 +39,7 @@ import io.netty.handler.codec.http2.Http2Settings;
 
 public final class HTTPCodecs {
 
-    static Http2FrameCodec H2ClientCodec(HTTPConfiguration httpConfiguration) {
+    static Http2FrameCodec H2ClientCodec(HttpConfiguration httpConfiguration) {
         Http2Settings http2Settings = new Http2Settings();
         http2Settings.initialWindowSize(httpConfiguration.h2InitialWindowSize());
         http2Settings.maxConcurrentStreams(httpConfiguration.h2MaxConcurrentStreams());
@@ -63,7 +63,7 @@ public final class HTTPCodecs {
         return http2FrameCodec;
     }
 
-    static Http2FrameCodec h2Server(HTTPConfiguration httpConfiguration) {
+    static Http2FrameCodec h2Server(HttpConfiguration httpConfiguration) {
         Http2Settings http2Settings = new Http2Settings();
         http2Settings.maxHeaderListSize(httpConfiguration.h2MaxHeaderListSize());
 
@@ -86,9 +86,9 @@ public final class HTTPCodecs {
     /**
      * Create new {@link HttpServerCodec} Instance
      *
-     * @param httpConfiguration {@link HTTPConfiguration} Instance
+     * @param httpConfiguration {@link HttpConfiguration} Instance
      */
-    static HttpServerCodec server(HTTPConfiguration httpConfiguration) {
+    static HttpServerCodec server(HttpConfiguration httpConfiguration) {
         int maxInitialLineLength = httpConfiguration.maxInitialLineLength();
         int maxHeaderSize = httpConfiguration.maxHeaderSize();
         int maxChunkSize = httpConfiguration.maxChunkSize();
@@ -98,9 +98,9 @@ public final class HTTPCodecs {
     /**
      * Create new {@link HttpClientCodec} Instance
      *
-     * @param httpConfiguration {@link HTTPConfiguration} Instance
+     * @param httpConfiguration {@link HttpConfiguration} Instance
      */
-    public static HttpClientCodec client(HTTPConfiguration httpConfiguration) {
+    public static HttpClientCodec client(HttpConfiguration httpConfiguration) {
         int maxInitialLineLength = httpConfiguration.maxInitialLineLength();
         int maxHeaderSize = httpConfiguration.maxHeaderSize();
         int maxChunkSize = httpConfiguration.maxChunkSize();

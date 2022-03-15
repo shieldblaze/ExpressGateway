@@ -17,10 +17,11 @@
  */
 package com.shieldblaze.expressgateway.restapi.api.configuration;
 
-import com.fasterxml.jackson.core.JsonProcessingException;
 import com.google.gson.JsonObject;
 import com.google.gson.JsonParser;
-import com.shieldblaze.expressgateway.configuration.ConfigurationMarshaller;
+import com.shieldblaze.expressgateway.common.Gson;
+import com.shieldblaze.expressgateway.common.JacksonJson;
+import com.shieldblaze.expressgateway.configuration.ConfigurationStore;
 import com.shieldblaze.expressgateway.configuration.healthcheck.HealthCheckConfiguration;
 import com.shieldblaze.expressgateway.restapi.response.ErrorBase;
 import com.shieldblaze.expressgateway.restapi.response.FastBuilder;
@@ -30,6 +31,7 @@ import io.netty.handler.codec.http.HttpResponseStatus;
 import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.GetMapping;
+import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
@@ -38,12 +40,18 @@ import org.springframework.web.bind.annotation.RestController;
 import java.io.IOException;
 
 @RestController
-@RequestMapping("/v1/configuration/healthcheck")
+@RequestMapping("/v1/configuration/{profile}/healthcheck")
 public final class HealthCheck {
 
-    @PostMapping(consumes = MediaType.APPLICATION_JSON_VALUE, produces = MediaType.APPLICATION_JSON_VALUE)
-    public ResponseEntity<String> applyConfiguration(@RequestBody HealthCheckConfiguration healthCheck) throws IOException {
-        healthCheck.validate().save();
+    @PostMapping(value = "save", consumes = MediaType.APPLICATION_JSON_VALUE, produces = MediaType.APPLICATION_JSON_VALUE)
+    public ResponseEntity<String> applyConfiguration(@RequestBody HealthCheckConfiguration healthCheck, @PathVariable String profile) throws IOException {
+        if (profile.equalsIgnoreCase("default")) {
+            return FastBuilder.error(ErrorBase.CONFIGURATION_NOT_FOUND, "Default configuration cannot be modified",
+                    HttpResponseStatus.BAD_REQUEST);
+        }
+
+        healthCheck.validate();
+        ConfigurationStore.save(profile, healthCheck);
 
         APIResponse apiResponse = APIResponse.newBuilder()
                 .isSuccess(true)
@@ -52,27 +60,17 @@ public final class HealthCheck {
         return FastBuilder.response(apiResponse.getResponse(), HttpResponseStatus.OK);
     }
 
-    /**
-     * @throws JsonProcessingException This should never happen
-     */
-    @GetMapping(value = "/default", produces = MediaType.APPLICATION_JSON_VALUE)
-    public ResponseEntity<String> getDefaultConfiguration() throws JsonProcessingException {
-        JsonObject healthCheck = JsonParser.parseString(ConfigurationMarshaller.get(HealthCheckConfiguration.DEFAULT)).getAsJsonObject();
-
-        APIResponse apiResponse = APIResponse.newBuilder()
-                .isSuccess(true)
-                .withResult(Result.newBuilder().withHeader("HealthCheckConfiguration").withMessage(healthCheck).build())
-                .build();
-
-        return FastBuilder.response(apiResponse.getResponse(), HttpResponseStatus.OK);
-    }
-
-    @GetMapping(produces = MediaType.APPLICATION_JSON_VALUE)
-    public ResponseEntity<String> getConfiguration() {
+    @GetMapping(value = "/get", produces = MediaType.APPLICATION_JSON_VALUE)
+    public ResponseEntity<String> getConfiguration(@PathVariable String profile) {
         JsonObject healthCheck;
         try {
-            HealthCheckConfiguration healthCheckConfiguration = HealthCheckConfiguration.load();
-            healthCheck = JsonParser.parseString(ConfigurationMarshaller.get(healthCheckConfiguration)).getAsJsonObject();
+            HealthCheckConfiguration healthCheckConfiguration;
+            if (profile.equalsIgnoreCase("default")) {
+                healthCheckConfiguration = HealthCheckConfiguration.DEFAULT;
+            } else {
+                healthCheckConfiguration = ConfigurationStore.load(profile, HealthCheckConfiguration.class);
+            }
+            healthCheck = JsonParser.parseString(JacksonJson.get(healthCheckConfiguration)).getAsJsonObject();
         } catch (Exception ex) {
             return FastBuilder.error(ErrorBase.CONFIGURATION_NOT_FOUND, ex.getMessage(), HttpResponseStatus.NOT_FOUND);
         }

@@ -23,8 +23,7 @@ import com.shieldblaze.expressgateway.backend.cluster.Cluster;
 import com.shieldblaze.expressgateway.common.annotation.NonNull;
 import com.shieldblaze.expressgateway.concurrent.GlobalExecutors;
 import com.shieldblaze.expressgateway.concurrent.eventstream.EventStream;
-import com.shieldblaze.expressgateway.configuration.CoreConfiguration;
-import com.shieldblaze.expressgateway.configuration.tls.TLSConfiguration;
+import com.shieldblaze.expressgateway.configuration.ConfigurationContext;
 import com.shieldblaze.expressgateway.core.L4FrontListener;
 import com.shieldblaze.expressgateway.core.events.L4FrontListenerShutdownEvent;
 import com.shieldblaze.expressgateway.core.events.L4FrontListenerStartupEvent;
@@ -39,7 +38,7 @@ import java.net.InetSocketAddress;
 import java.util.Map;
 import java.util.Objects;
 import java.util.UUID;
-import java.util.concurrent.ConcurrentSkipListMap;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.atomic.AtomicInteger;
 
 /**
@@ -56,10 +55,8 @@ public abstract class L4LoadBalancer {
     private final EventStream eventStream;
     private final InetSocketAddress bindAddress;
     private final L4FrontListener l4FrontListener;
-    private final Map<String, Cluster> clusterMap = new ConcurrentSkipListMap<>();
-    private final CoreConfiguration coreConfiguration;
-    private final TLSConfiguration tlsForServer;
-    private final TLSConfiguration tlsForClient;
+    private final Map<String, Cluster> clusterMap = new ConcurrentHashMap<>();
+    private final ConfigurationContext configurationContext;
     private final ChannelHandler channelHandler;
 
     private final ByteBufAllocator byteBufAllocator;
@@ -69,21 +66,17 @@ public abstract class L4LoadBalancer {
     private final ConnectionTracker connectionTracker = new ConnectionTracker();
 
     /**
-     * @param name              Name of this Load Balancer
-     * @param bindAddress       {@link InetSocketAddress} on which {@link L4FrontListener} will bind and listen.
-     * @param l4FrontListener   {@link L4FrontListener} for listening traffic
-     * @param coreConfiguration {@link CoreConfiguration} to be applied
-     * @param tlsForServer      {@link TLSConfiguration} for Server
-     * @param tlsForClient      {@link TLSConfiguration} for Client
-     * @param channelHandler    {@link ChannelHandler} to use for handling traffic
+     * @param name                 Name of this Load Balancer
+     * @param bindAddress          {@link InetSocketAddress} on which {@link L4FrontListener} will bind and listen.
+     * @param l4FrontListener      {@link L4FrontListener} for listening traffic
+     * @param configurationContext {@link ConfigurationContext} to be applied
+     * @param channelHandler       {@link ChannelHandler} to use for handling traffic
      * @throws NullPointerException If a required parameter if {@code null}
      */
     public L4LoadBalancer(String name,
                           @NonNull InetSocketAddress bindAddress,
                           @NonNull L4FrontListener l4FrontListener,
-                          @NonNull CoreConfiguration coreConfiguration,
-                          TLSConfiguration tlsForServer,
-                          TLSConfiguration tlsForClient,
+                          @NonNull ConfigurationContext configurationContext,
                           ChannelHandler channelHandler) {
 
         if (name != null && !name.isEmpty()) {
@@ -92,14 +85,12 @@ public abstract class L4LoadBalancer {
 
         this.bindAddress = bindAddress;
         this.l4FrontListener = l4FrontListener;
-        this.coreConfiguration = coreConfiguration;
-        this.eventStream = coreConfiguration.eventStreamConfiguration().newEventStream();
-        this.tlsForServer = tlsForServer;
-        this.tlsForClient = tlsForClient;
+        this.configurationContext = configurationContext;
+        this.eventStream = configurationContext.eventStreamConfiguration().eventStream();
         this.channelHandler = channelHandler;
 
-        this.byteBufAllocator = new PooledByteBufAllocatorFactory(coreConfiguration.bufferConfiguration()).instance();
-        this.eventLoopFactory = new EventLoopFactory(coreConfiguration);
+        this.byteBufAllocator = new PooledByteBufAllocatorFactory(configurationContext.bufferConfiguration()).instance();
+        this.eventLoopFactory = new EventLoopFactory(configurationContext);
 
         l4FrontListener.l4LoadBalancer(this);
     }
@@ -249,24 +240,10 @@ public abstract class L4LoadBalancer {
     }
 
     /**
-     * Get {@link CoreConfiguration} which is applied
+     * Get {@link ConfigurationContext} which is applied
      */
-    public CoreConfiguration coreConfiguration() {
-        return coreConfiguration;
-    }
-
-    /**
-     * Get {@link TLSConfiguration} for Server
-     */
-    public TLSConfiguration tlsForServer() {
-        return tlsForServer;
-    }
-
-    /**
-     * Get {@link TLSConfiguration} for Client
-     */
-    public TLSConfiguration tlsForClient() {
-        return tlsForClient;
+    public ConfigurationContext configurationContext() {
+        return configurationContext;
     }
 
     /**

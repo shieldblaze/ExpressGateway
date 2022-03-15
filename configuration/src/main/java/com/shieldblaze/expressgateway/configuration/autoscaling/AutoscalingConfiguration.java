@@ -18,8 +18,9 @@
 package com.shieldblaze.expressgateway.configuration.autoscaling;
 
 import com.shieldblaze.expressgateway.common.utils.NumberUtil;
+import com.shieldblaze.expressgateway.configuration.Configuration;
 
-public final class AutoscalingConfiguration {
+public final class AutoscalingConfiguration implements Configuration {
 
     /**
      * CPU Scale out load
@@ -89,7 +90,7 @@ public final class AutoscalingConfiguration {
     /**
      * Cooldown time in seconds of autoscaled servers
      */
-    private int cooldownTime;
+    private int coolDownTime;
 
     /**
      * If load is under certain threshold
@@ -160,8 +161,8 @@ public final class AutoscalingConfiguration {
         this.scaleOutMultiplier = NumberUtil.checkPositive(scaleOutMultiplier, "ScaleOutMultiplier");
     }
 
-    public void setCooldownTime(int cooldownTime) {
-        this.cooldownTime = NumberUtil.checkPositive(cooldownTime, "cooldownTime");
+    public void setCoolDownTime(int coolDownTime) {
+        this.coolDownTime = NumberUtil.checkPositive(coolDownTime, "cooldownTime");
     }
 
     public void setShutdownIfLoadUnder(float shutdownIfLoadUnder) {
@@ -224,8 +225,8 @@ public final class AutoscalingConfiguration {
         return scaleOutMultiplier;
     }
 
-    public int cooldownTime() {
-        return cooldownTime;
+    public int coolDownTime() {
+        return coolDownTime;
     }
 
     public float shutdownIfLoadUnder() {
@@ -234,5 +235,10 @@ public final class AutoscalingConfiguration {
 
     public int shutdownIfLoadUnderForSeconds() {
         return shutdownIfLoadUnderForSeconds;
+    }
+
+    @Override
+    public String name() {
+        return "AutoscalingConfiguration";
     }
 }

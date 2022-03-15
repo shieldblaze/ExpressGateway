@@ -18,13 +18,12 @@
 package com.shieldblaze.expressgateway.core.factory;
 
 import com.shieldblaze.expressgateway.common.annotation.NonNull;
-import com.shieldblaze.expressgateway.configuration.CoreConfiguration;
+import com.shieldblaze.expressgateway.configuration.ConfigurationContext;
 import com.shieldblaze.expressgateway.configuration.transport.TransportType;
 import io.netty.bootstrap.Bootstrap;
 import io.netty.buffer.ByteBufAllocator;
 import io.netty.channel.ChannelOption;
 import io.netty.channel.EventLoopGroup;
-import io.netty.channel.epoll.EpollChannelOption;
 import io.netty.channel.epoll.EpollDatagramChannel;
 import io.netty.channel.epoll.EpollDatagramChannelConfig;
 import io.netty.channel.epoll.EpollMode;
@@ -42,26 +41,26 @@ import io.netty.incubator.channel.uring.IOUringSocketChannel;
 public final class BootstrapFactory {
 
     @NonNull
-    public static Bootstrap tcp(CoreConfiguration coreConfiguration, EventLoopGroup eventLoopGroup, ByteBufAllocator byteBufAllocator) {
+    public static Bootstrap tcp(ConfigurationContext configurationContext, EventLoopGroup eventLoopGroup, ByteBufAllocator byteBufAllocator) {
         return new Bootstrap()
                 .group(eventLoopGroup)
                 .option(ChannelOption.ALLOCATOR, byteBufAllocator)
-                .option(ChannelOption.RCVBUF_ALLOCATOR, coreConfiguration.transportConfiguration().recvByteBufAllocator())
-                .option(ChannelOption.SO_SNDBUF, coreConfiguration.transportConfiguration().socketSendBufferSize())
-                .option(ChannelOption.SO_RCVBUF, coreConfiguration.transportConfiguration().socketReceiveBufferSize())
+                .option(ChannelOption.RCVBUF_ALLOCATOR, configurationContext.transportConfiguration().recvByteBufAllocator())
+                .option(ChannelOption.SO_SNDBUF, configurationContext.transportConfiguration().socketSendBufferSize())
+                .option(ChannelOption.SO_RCVBUF, configurationContext.transportConfiguration().socketReceiveBufferSize())
                 .option(ChannelOption.TCP_NODELAY, true)
                 .option(ChannelOption.AUTO_READ, true)
                 .option(ChannelOption.SO_KEEPALIVE, true)
-                .option(ChannelOption.CONNECT_TIMEOUT_MILLIS, coreConfiguration.transportConfiguration().backendConnectTimeout())
+                .option(ChannelOption.CONNECT_TIMEOUT_MILLIS, configurationContext.transportConfiguration().backendConnectTimeout())
                 .channelFactory(() -> {
-                    if (coreConfiguration.transportConfiguration().transportType() == TransportType.IO_URING) {
+                    if (configurationContext.transportConfiguration().transportType() == TransportType.IO_URING) {
                         IOUringSocketChannel socketChannel = new IOUringSocketChannel();
                         socketChannel.config()
                                 .setTcpFastOpenConnect(true)
                                 .setTcpQuickAck(true);
 
                         return socketChannel;
-                    } else if (coreConfiguration.transportConfiguration().transportType() == TransportType.EPOLL) {
+                    } else if (configurationContext.transportConfiguration().transportType() == TransportType.EPOLL) {
                         EpollSocketChannel socketChannel = new EpollSocketChannel();
                         socketChannel.config()
                                 .setEpollMode(EpollMode.EDGE_TRIGGERED)
@@ -76,21 +75,21 @@ public final class BootstrapFactory {
     }
 
     @NonNull
-    public static Bootstrap udp(CoreConfiguration coreConfiguration, EventLoopGroup eventLoopGroup, ByteBufAllocator byteBufAllocator) {
+    public static Bootstrap udp(ConfigurationContext configurationContext, EventLoopGroup eventLoopGroup, ByteBufAllocator byteBufAllocator) {
         return new Bootstrap()
                 .group(eventLoopGroup)
                 .option(ChannelOption.ALLOCATOR, byteBufAllocator)
-                .option(ChannelOption.RCVBUF_ALLOCATOR, coreConfiguration.transportConfiguration().recvByteBufAllocator())
-                .option(ChannelOption.SO_SNDBUF, coreConfiguration.transportConfiguration().socketSendBufferSize())
-                .option(ChannelOption.SO_RCVBUF, coreConfiguration.transportConfiguration().socketReceiveBufferSize())
+                .option(ChannelOption.RCVBUF_ALLOCATOR, configurationContext.transportConfiguration().recvByteBufAllocator())
+                .option(ChannelOption.SO_SNDBUF, configurationContext.transportConfiguration().socketSendBufferSize())
+                .option(ChannelOption.SO_RCVBUF, configurationContext.transportConfiguration().socketReceiveBufferSize())
                 .option(ChannelOption.AUTO_READ, true)
                 .option(ChannelOption.AUTO_CLOSE, false)
                 .channelFactory(() -> {
-                    if (coreConfiguration.transportConfiguration().transportType() == TransportType.IO_URING) {
+                    if (configurationContext.transportConfiguration().transportType() == TransportType.IO_URING) {
                         IOUringDatagramChannel datagramChannel = new IOUringDatagramChannel();
                         datagramChannel.config().setOption(IOUringChannelOption.SO_REUSEPORT, true);
                         return datagramChannel;
-                    } else if (coreConfiguration.transportConfiguration().transportType() == TransportType.EPOLL) {
+                    } else if (configurationContext.transportConfiguration().transportType() == TransportType.EPOLL) {
                         EpollDatagramChannel datagramChannel = new EpollDatagramChannel();
 
                         EpollDatagramChannelConfig config = datagramChannel.config();

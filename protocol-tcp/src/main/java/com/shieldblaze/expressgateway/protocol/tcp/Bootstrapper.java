@@ -45,10 +45,10 @@ final class Bootstrapper {
         this.byteBufAllocator = l4LoadBalancer.byteBufAllocator();
     }
 
-    public TCPConnection newInit(Node node, Channel channel) {
+    TCPConnection newInit(Node node, Channel channel) {
         TCPConnection tcpConnection = new TCPConnection(node);
 
-        Bootstrap bootstrap = BootstrapFactory.tcp(l4LoadBalancer.coreConfiguration(), eventLoopGroup, byteBufAllocator)
+        Bootstrap bootstrap = BootstrapFactory.tcp(l4LoadBalancer.configurationContext(), eventLoopGroup, byteBufAllocator)
                 .handler(new ChannelInitializer<SocketChannel>() {
                     @Override
                     protected void initChannel(SocketChannel ch) {
@@ -56,13 +56,13 @@ final class Bootstrapper {
 
                         pipeline.addFirst(new NodeBytesTracker(node));
 
-                        Duration timeout = Duration.ofMillis(l4LoadBalancer.coreConfiguration().transportConfiguration().connectionIdleTimeout());
+                        Duration timeout = Duration.ofMillis(l4LoadBalancer.configurationContext().transportConfiguration().connectionIdleTimeout());
                         pipeline.addLast(new ConnectionTimeoutHandler(timeout, false));
 
-                        if (l4LoadBalancer.tlsForClient() != null) {
+                        if (l4LoadBalancer.configurationContext().tlsClientConfiguration().enabled()) {
                             String hostname = node.socketAddress().getHostName();
                             int port = node.socketAddress().getPort();
-                            SslHandler sslHandler = l4LoadBalancer.tlsForClient()
+                            SslHandler sslHandler = l4LoadBalancer.configurationContext().tlsClientConfiguration()
                                     .defaultMapping()
                                     .sslContext()
                                     .newHandler(ch.alloc(), hostname, port);

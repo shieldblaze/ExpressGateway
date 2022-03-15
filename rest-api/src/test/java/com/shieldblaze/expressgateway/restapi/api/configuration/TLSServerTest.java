@@ -24,6 +24,7 @@ import com.google.gson.JsonParser;
 import com.shieldblaze.expressgateway.configuration.tls.Cipher;
 import com.shieldblaze.expressgateway.configuration.tls.Protocol;
 import com.shieldblaze.expressgateway.configuration.tls.TLSConfiguration;
+import com.shieldblaze.expressgateway.configuration.tls.TLSServerConfiguration;
 import com.shieldblaze.expressgateway.restapi.CustomOkHttpClient;
 import com.shieldblaze.expressgateway.restapi.RestAPI;
 import okhttp3.OkHttpClient;
@@ -32,7 +33,10 @@ import okhttp3.RequestBody;
 import okhttp3.Response;
 import org.junit.jupiter.api.AfterAll;
 import org.junit.jupiter.api.BeforeAll;
+import org.junit.jupiter.api.MethodOrderer;
+import org.junit.jupiter.api.Order;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.TestMethodOrder;
 
 import java.io.IOException;
 
@@ -41,20 +45,20 @@ import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
+@TestMethodOrder(MethodOrderer.OrderAnnotation.class)
 class TLSServerTest {
 
     @BeforeAll
     static void startSpring() {
         RestAPI.start();
-        System.setProperty("egw.dir", System.getProperty("java.io.tmpdir"));
     }
 
     @AfterAll
-    static void teardown() throws InterruptedException {
+    static void teardown() {
         RestAPI.stop();
-        Thread.sleep(2500);
     }
 
+    @Order(1)
     @Test
     void applyConfiguration() throws IOException {
         JsonArray ciphers = new JsonArray();
@@ -71,7 +75,7 @@ class TLSServerTest {
         jsonBody.add("protocols", protocols);
 
         Request request = new Request.Builder()
-                .url("https://127.0.0.1:9110/v1/configuration/tls/server")
+                .url("https://127.0.0.1:9110/v1/configuration/meow/tls/server/save")
                 .post(RequestBody.create(jsonBody.toString().getBytes()))
                 .header("Content-Type", "application/json")
                 .build();
@@ -83,6 +87,7 @@ class TLSServerTest {
         }
     }
 
+    @Order(2)
     @Test
     void applyBadConfiguration() throws IOException {
         JsonArray ciphers = new JsonArray();
@@ -97,7 +102,7 @@ class TLSServerTest {
         jsonBody.add("protocols", protocols);
 
         Request request = new Request.Builder()
-                .url("https://127.0.0.1:9110/v1/configuration/tls/server")
+                .url("https://127.0.0.1:9110/v1/configuration/meow/tls/server/save")
                 .post(RequestBody.create(jsonBody.toString().getBytes()))
                 .header("Content-Type", "application/json")
                 .build();
@@ -109,12 +114,13 @@ class TLSServerTest {
         }
     }
 
+    @Order(3)
     @Test
     void getDefaultConfiguration() throws IOException {
-        TLSConfiguration clientDefault = TLSConfiguration.DEFAULT_CLIENT;
+        TLSConfiguration clientDefault = TLSServerConfiguration.DEFAULT;
 
         Request request = new Request.Builder()
-                .url("https://127.0.0.1:9110/v1/configuration/tls/server/default")
+                .url("https://127.0.0.1:9110/v1/configuration/default/tls/server/get")
                 .get()
                 .build();
 
@@ -140,6 +146,7 @@ class TLSServerTest {
         }
     }
 
+    @Order(4)
     @Test
     void getConfiguration() throws IOException {
         JsonArray ciphers = new JsonArray();
@@ -156,7 +163,7 @@ class TLSServerTest {
         jsonBody.add("protocols", protocols);
 
         Request request = new Request.Builder()
-                .url("https://127.0.0.1:9110/v1/configuration/tls/server")
+                .url("https://127.0.0.1:9110/v1/configuration/meow/tls/server/save")
                 .post(RequestBody.create(jsonBody.toString().getBytes()))
                 .header("Content-Type", "application/json")
                 .build();
@@ -168,7 +175,7 @@ class TLSServerTest {
         }
 
         request = new Request.Builder()
-                .url("https://127.0.0.1:9110/v1/configuration/tls/server")
+                .url("https://127.0.0.1:9110/v1/configuration/meow/tls/server/get")
                 .get()
                 .build();
 

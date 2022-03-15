@@ -117,22 +117,64 @@ public final class TLSConfigurationBuilder {
         return this;
     }
 
+    public static TLSConfiguration copy(TLSConfiguration copy) {
+        if (copy instanceof TLSServerConfiguration configuration) {
+            return new TLSServerConfiguration()
+                    .setAcceptAllCerts(configuration.acceptAllCerts)
+                    .setSessionCacheSize(configuration.sessionCacheSize)
+                    .setSessionTimeout(configuration.sessionTimeout)
+                    .setProtocols(configuration.protocols)
+                    .setUseStartTLS(configuration.useStartTLS)
+                    .setMutualTLS(configuration.mutualTLS)
+                    .setCiphers(configuration.ciphers)
+                    .enable()
+                    .validate(); // Validate the configuration
+        } else if (copy instanceof TLSClientConfiguration configuration) {
+            return new TLSClientConfiguration()
+                    .setAcceptAllCerts(configuration.acceptAllCerts)
+                    .setSessionCacheSize(configuration.sessionCacheSize)
+                    .setSessionTimeout(configuration.sessionTimeout)
+                    .setProtocols(configuration.protocols)
+                    .setUseStartTLS(configuration.useStartTLS)
+                    .setMutualTLS(configuration.mutualTLS)
+                    .setCiphers(configuration.ciphers)
+                    .enable()
+                    .validate(); // Validate the configuration
+        } else {
+            throw new IllegalArgumentException("Unknown TLS Configuration: " + copy);
+        }
+    }
+
     /**
      * Build {@link TLSConfiguration}
      *
-     * @return {@link TLSConfiguration} Instance
+     * @return {@link TLSServerConfiguration} or {@link TLSClientConfiguration} Instance
      * @throws NullPointerException     If a required value if {@code null}
      * @throws IllegalArgumentException If a required value is invalid
      */
     public TLSConfiguration build() {
-        return new TLSConfiguration()
-                .setForServer(forServer)
-                .setAcceptAllCerts(acceptAllCerts)
-                .setSessionCacheSize(sessionCacheSize)
-                .setSessionTimeout(sessionTimeout)
-                .setProtocols(protocols)
-                .setUseStartTLS(useStartTLS)
-                .setMutualTLS(mutualTLS)
-                .setCiphers(ciphers);
+        if (forServer) {
+            return new TLSServerConfiguration()
+                    .setAcceptAllCerts(acceptAllCerts)
+                    .setSessionCacheSize(sessionCacheSize)
+                    .setSessionTimeout(sessionTimeout)
+                    .setProtocols(protocols)
+                    .setUseStartTLS(useStartTLS)
+                    .setMutualTLS(mutualTLS)
+                    .setCiphers(ciphers)
+                    .enable()
+                    .validate(); // Validate the configuration
+        } else {
+            return new TLSClientConfiguration()
+                    .setAcceptAllCerts(acceptAllCerts)
+                    .setSessionCacheSize(sessionCacheSize)
+                    .setSessionTimeout(sessionTimeout)
+                    .setProtocols(protocols)
+                    .setUseStartTLS(useStartTLS)
+                    .setMutualTLS(mutualTLS)
+                    .setCiphers(ciphers)
+                    .enable()
+                    .validate(); // Validate the configuration
+        }
     }
 }

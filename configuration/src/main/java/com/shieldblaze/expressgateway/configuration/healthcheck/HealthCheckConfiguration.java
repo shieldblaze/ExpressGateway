@@ -19,16 +19,14 @@ package com.shieldblaze.expressgateway.configuration.healthcheck;
 
 import com.fasterxml.jackson.annotation.JsonProperty;
 import com.shieldblaze.expressgateway.common.utils.NumberUtil;
-import com.shieldblaze.expressgateway.configuration.ConfigurationMarshaller;
-
-import java.io.IOException;
+import com.shieldblaze.expressgateway.configuration.Configuration;
 
 /**
  * Configuration for {@link HealthCheckConfiguration}.
- *
+ * <p>
  * Use {@link HealthCheckConfigurationBuilder} to build {@link HealthCheckConfiguration} instance.
  */
-public final class HealthCheckConfiguration {
+public final class HealthCheckConfiguration implements Configuration {
 
     @JsonProperty(value = "workers")
     private int workers;
@@ -49,43 +47,29 @@ public final class HealthCheckConfiguration {
     }
 
     HealthCheckConfiguration setWorkers(int workers) {
-        NumberUtil.checkPositive(workers, "Workers");
         this.workers = workers;
         return this;
     }
 
     HealthCheckConfiguration setTimeInterval(int timeInterval) {
-        NumberUtil.checkPositive(timeInterval, "TimeInterval");
         this.timeInterval = timeInterval;
         return this;
     }
 
-    public HealthCheckConfiguration validate() {
+    /**
+     * Validate all parameters of this configuration
+     *
+     * @return this class instance
+     * @throws IllegalArgumentException If any value is invalid
+     */
+    public HealthCheckConfiguration validate() throws IllegalArgumentException {
         NumberUtil.checkPositive(workers, "Workers");
         NumberUtil.checkPositive(timeInterval, "TimeInterval");
         return this;
     }
 
-    /**
-     * Save this configuration to the file
-     *
-     * @throws IOException If an error occurs during saving
-     */
-    public void save() throws IOException {
-        ConfigurationMarshaller.save("HealthCheckConfiguration.json", this);
-    }
-
-    /**
-     * Load a configuration
-     *
-     * @return {@link HealthCheckConfiguration} Instance
-     */
-    public static HealthCheckConfiguration load() {
-        try {
-            return ConfigurationMarshaller.load("HealthCheckConfiguration.json", HealthCheckConfiguration.class);
-        } catch (Exception ex) {
-            // Ignore
-        }
-        return DEFAULT;
+    @Override
+    public String name() {
+        return "HealthCheckConfiguration";
     }
 }

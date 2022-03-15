@@ -27,9 +27,7 @@ import okhttp3.OkHttpClient;
 import okhttp3.Request;
 import okhttp3.RequestBody;
 import okhttp3.Response;
-import org.junit.jupiter.api.AfterAll;
-import org.junit.jupiter.api.BeforeAll;
-import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.*;
 
 import java.io.IOException;
 
@@ -39,20 +37,20 @@ import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
+@TestMethodOrder(MethodOrderer.OrderAnnotation.class)
 class TransportTest {
 
     @BeforeAll
     static void startSpring() {
         RestAPI.start();
-        System.setProperty("egw.dir", System.getProperty("java.io.tmpdir"));
     }
 
     @AfterAll
-    static void teardown() throws InterruptedException {
+    static void teardown() {
         RestAPI.stop();
-        Thread.sleep(2500);
     }
 
+    @Order(1)
     @Test
     void applyConfiguration() throws IOException {
         JsonArray receiveSizes = new JsonArray();
@@ -70,7 +68,7 @@ class TransportTest {
         jsonBody.addProperty("connectionIdleTimeout", 1000 * 120);
 
         Request request = new Request.Builder()
-                .url("https://127.0.0.1:9110/v1/configuration/transport/")
+                .url("https://127.0.0.1:9110/v1/configuration/meow/transport/save")
                 .post(RequestBody.create(jsonBody.toString().getBytes()))
                 .header("Content-Type", "application/json")
                 .build();
@@ -82,6 +80,7 @@ class TransportTest {
         }
     }
 
+    @Order(2)
     @Test
     void applyBadConfiguration() throws IOException {
         JsonArray receiveSizes = new JsonArray();
@@ -102,7 +101,7 @@ class TransportTest {
         jsonBody.addProperty("connectionIdleTimeout", 1000 * 120);
 
         Request request = new Request.Builder()
-                .url("https://127.0.0.1:9110/v1/configuration/transport/")
+                .url("https://127.0.0.1:9110/v1/configuration/meow/transport/save")
                 .post(RequestBody.create(jsonBody.toString().getBytes()))
                 .header("Content-Type", "application/json")
                 .build();
@@ -114,12 +113,13 @@ class TransportTest {
         }
     }
 
+    @Order(3)
     @Test
     void getDefaultConfiguration() throws IOException {
         TransportConfiguration transportDefault = TransportConfiguration.DEFAULT;
 
         Request request = new Request.Builder()
-                .url("https://127.0.0.1:9110/v1/configuration/transport/default")
+                .url("https://127.0.0.1:9110/v1/configuration/default/transport/get")
                 .get()
                 .build();
 
@@ -144,6 +144,7 @@ class TransportTest {
         }
     }
 
+    @Order(4)
     @Test
     void getConfiguration() throws IOException {
         JsonArray receiveSizes = new JsonArray();
@@ -163,7 +164,7 @@ class TransportTest {
         jsonBody.addProperty("connectionIdleTimeout", 1000 * 120);
 
         Request request = new Request.Builder()
-                .url("https://127.0.0.1:9110/v1/configuration/transport/")
+                .url("https://127.0.0.1:9110/v1/configuration/meow/transport/save")
                 .post(RequestBody.create(jsonBody.toString().getBytes()))
                 .header("Content-Type", "application/json")
                 .build();
@@ -175,7 +176,7 @@ class TransportTest {
         }
 
         request = new Request.Builder()
-                .url("https://127.0.0.1:9110/v1/configuration/transport/")
+                .url("https://127.0.0.1:9110/v1/configuration/meow/transport/get")
                 .get()
                 .build();
 

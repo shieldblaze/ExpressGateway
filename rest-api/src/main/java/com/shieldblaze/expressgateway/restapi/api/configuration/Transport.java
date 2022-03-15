@@ -17,10 +17,11 @@
  */
 package com.shieldblaze.expressgateway.restapi.api.configuration;
 
-import com.fasterxml.jackson.core.JsonProcessingException;
 import com.google.gson.JsonObject;
 import com.google.gson.JsonParser;
-import com.shieldblaze.expressgateway.configuration.ConfigurationMarshaller;
+import com.shieldblaze.expressgateway.common.Gson;
+import com.shieldblaze.expressgateway.common.JacksonJson;
+import com.shieldblaze.expressgateway.configuration.ConfigurationStore;
 import com.shieldblaze.expressgateway.configuration.transport.TransportConfiguration;
 import com.shieldblaze.expressgateway.restapi.response.ErrorBase;
 import com.shieldblaze.expressgateway.restapi.response.FastBuilder;
@@ -30,6 +31,7 @@ import io.netty.handler.codec.http.HttpResponseStatus;
 import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.GetMapping;
+import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
@@ -38,12 +40,19 @@ import org.springframework.web.bind.annotation.RestController;
 import java.io.IOException;
 
 @RestController
-@RequestMapping("/v1/configuration/transport")
+@RequestMapping("/v1/configuration/{profile}/transport")
 public final class Transport {
 
-    @PostMapping(consumes = MediaType.APPLICATION_JSON_VALUE, produces = MediaType.APPLICATION_JSON_VALUE)
-    public ResponseEntity<String> applyConfiguration(@RequestBody TransportConfiguration transportConfiguration) throws IOException {
-        transportConfiguration.validate().save();
+    @PostMapping(value = "save", consumes = MediaType.APPLICATION_JSON_VALUE, produces = MediaType.APPLICATION_JSON_VALUE)
+    public ResponseEntity<String> applyConfiguration(@RequestBody TransportConfiguration transportConfiguration,
+                                                     @PathVariable String profile) throws IOException {
+        if (profile.equalsIgnoreCase("default")) {
+            return FastBuilder.error(ErrorBase.CONFIGURATION_NOT_FOUND, "Default configuration cannot be modified",
+                    HttpResponseStatus.BAD_REQUEST);
+        }
+
+        transportConfiguration.validate();
+        ConfigurationStore.save(profile, transportConfiguration);
 
         APIResponse apiResponse = APIResponse.newBuilder()
                 .isSuccess(true)
@@ -52,27 +61,17 @@ public final class Transport {
         return FastBuilder.response(apiResponse.getResponse(), HttpResponseStatus.OK);
     }
 
-    /**
-     * @throws JsonProcessingException This should never happen
-     */
-    @GetMapping(value = "/default", produces = MediaType.APPLICATION_JSON_VALUE)
-    public ResponseEntity<String> getDefaultConfiguration() throws JsonProcessingException {
-        JsonObject transport = JsonParser.parseString(ConfigurationMarshaller.get(TransportConfiguration.DEFAULT)).getAsJsonObject();
-
-        APIResponse apiResponse = APIResponse.newBuilder()
-                .isSuccess(true)
-                .withResult(Result.newBuilder().withHeader("TransportConfiguration").withMessage(transport).build())
-                .build();
-
-        return FastBuilder.response(apiResponse.getResponse(), HttpResponseStatus.OK);
-    }
-
-    @GetMapping(produces = MediaType.APPLICATION_JSON_VALUE)
-    public ResponseEntity<String> getConfiguration() {
+    @GetMapping(value = "get", produces = MediaType.APPLICATION_JSON_VALUE)
+    public ResponseEntity<String> getConfiguration(@PathVariable String profile) {
         JsonObject transport;
         try {
-            TransportConfiguration transportConfiguration = TransportConfiguration.load();
-            transport = JsonParser.parseString(ConfigurationMarshaller.get(transportConfiguration)).getAsJsonObject();
+            TransportConfiguration transportConfiguration;
+            if (profile.equalsIgnoreCase("default")) {
+                transportConfiguration = TransportConfiguration.DEFAULT;
+            } else {
+                transportConfiguration = ConfigurationStore.load(profile, TransportConfiguration.class);
+            }
+            transport = JsonParser.parseString(JacksonJson.get(transportConfiguration)).getAsJsonObject();
         } catch (Exception ex) {
             return FastBuilder.error(ErrorBase.CONFIGURATION_NOT_FOUND, ex.getMessage(), HttpResponseStatus.NOT_FOUND);
         }

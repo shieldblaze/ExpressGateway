@@ -18,7 +18,7 @@
 package com.shieldblaze.expressgateway.protocol.http;
 
 import com.shieldblaze.expressgateway.common.utils.ReferenceCountedUtil;
-import com.shieldblaze.expressgateway.configuration.http.HTTPConfiguration;
+import com.shieldblaze.expressgateway.configuration.http.HttpConfiguration;
 import io.netty.channel.ChannelFutureListener;
 import io.netty.channel.ChannelHandlerContext;
 import io.netty.channel.ChannelInboundHandlerAdapter;
@@ -39,7 +39,7 @@ final class HTTPServerValidator extends ChannelInboundHandlerAdapter {
 
     private final long maxContentLength;
 
-    HTTPServerValidator(HTTPConfiguration httpConfiguration) {
+    HTTPServerValidator(HttpConfiguration httpConfiguration) {
         this.maxContentLength = httpConfiguration.maxContentLength();
     }
 

@@ -15,12 +15,21 @@
  * You should have received a copy of the GNU General Public License
  * along with ShieldBlaze ExpressGateway.  If not, see <https://www.gnu.org/licenses/>.
  */
-package com.shieldblaze.expressgateway.configuration;
 
-/**
- * Interface for Configuration classes
- */
-public interface Configuration {
+package com.shieldblaze.expressgateway.common;
 
-    String name();
+import com.fasterxml.jackson.core.JsonProcessingException;
+import com.fasterxml.jackson.databind.ObjectMapper;
+
+public final class JacksonJson {
+
+    private static final ObjectMapper OBJECT_MAPPER = new ObjectMapper();
+
+    public static String get(Object obj) throws JsonProcessingException {
+        return OBJECT_MAPPER.writerWithDefaultPrettyPrinter().writeValueAsString(obj);
+    }
+
+    private JacksonJson() {
+        // Prevent outside initialization
+    }
 }

@@ -54,7 +54,7 @@ final class Bootstrapper {
     HTTPConnection newInit(Node node, Channel channel) {
         HTTPConnection httpConnection = new HTTPConnection(node);
 
-        Bootstrap bootstrap = BootstrapFactory.tcp(httpLoadBalancer.coreConfiguration(), eventLoopGroup, byteBufAllocator);
+        Bootstrap bootstrap = BootstrapFactory.tcp(httpLoadBalancer.configurationContext(), eventLoopGroup, byteBufAllocator);
         bootstrap.handler(new ChannelInitializer<SocketChannel>() {
             @Override
             protected void initChannel(SocketChannel ch) {
@@ -62,13 +62,13 @@ final class Bootstrapper {
 
                 pipeline.addFirst(new NodeBytesTracker(node));
 
-                Duration timeout = Duration.ofMillis(httpLoadBalancer.coreConfiguration().transportConfiguration().connectionIdleTimeout());
+                Duration timeout = Duration.ofMillis(httpLoadBalancer.configurationContext().transportConfiguration().connectionIdleTimeout());
                 pipeline.addLast(new ConnectionTimeoutHandler(timeout, false));
 
                 DownstreamHandler downstreamHandler = new DownstreamHandler(channel);
                 httpConnection.downstreamHandler(downstreamHandler);
 
-                if (httpLoadBalancer.tlsForClient() == null) {
+                if (!httpLoadBalancer.configurationContext().tlsClientConfiguration().enabled()) {
                     pipeline.addLast(HTTPCodecs.client(httpLoadBalancer.httpConfiguration()));
                     pipeline.addLast(new HttpContentDecompressor());
                     pipeline.addLast(new HTTPOutboundAdapter());
@@ -76,7 +76,7 @@ final class Bootstrapper {
                 } else {
                     String hostname = node.socketAddress().getHostName();
                     int port = node.socketAddress().getPort();
-                    SslHandler sslHandler = httpLoadBalancer.tlsForClient()
+                    SslHandler sslHandler = httpLoadBalancer.configurationContext().tlsClientConfiguration()
                             .defaultMapping()
                             .sslContext()
                             .newHandler(ch.alloc(), hostname, port);

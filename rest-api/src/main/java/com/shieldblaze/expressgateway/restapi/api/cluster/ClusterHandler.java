@@ -66,7 +66,7 @@ public final class ClusterHandler {
 
         ClusterBuilder clusterBuilder = ClusterBuilder.newBuilder();
         if (clusterContext.healthCheckTemplate() != null) {
-            clusterBuilder.withHealthCheck(HealthCheckConfiguration.load(), clusterContext.healthCheckTemplate());
+            clusterBuilder.withHealthCheck(HealthCheckConfiguration.DEFAULT, clusterContext.healthCheckTemplate());
         }
 
         determineLoadBalance(l4LoadBalancer, clusterBuilder, clusterContext);

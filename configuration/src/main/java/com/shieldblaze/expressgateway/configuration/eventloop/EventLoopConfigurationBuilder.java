@@ -60,6 +60,7 @@ public final class EventLoopConfigurationBuilder {
     public EventLoopConfiguration build() {
         return new EventLoopConfiguration()
                 .setParentWorkers(parentWorkers)
-                .setChildWorkers(childWorkers);
+                .setChildWorkers(childWorkers)
+                .validate(); // Validate the configuration
     }
 }

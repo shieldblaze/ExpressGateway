@@ -18,23 +18,19 @@
 package com.shieldblaze.expressgateway.configuration.buffer;
 
 import com.fasterxml.jackson.annotation.JsonProperty;
-import com.shieldblaze.expressgateway.common.utils.NumberUtil;
 import com.shieldblaze.expressgateway.configuration.Configuration;
-import com.shieldblaze.expressgateway.configuration.ConfigurationMarshaller;
 import io.netty.buffer.PooledByteBufAllocator;
 import io.netty.util.internal.PlatformDependent;
-
-import java.io.IOException;
 
 import static com.shieldblaze.expressgateway.common.utils.NumberUtil.checkPositive;
 import static com.shieldblaze.expressgateway.common.utils.NumberUtil.checkZeroOrPositive;
 
 /**
  * Configuration for {@link PooledByteBufAllocator}.
- *
+ * <p>
  * Use {@link BufferConfigurationBuilder} to build {@link BufferConfiguration} Instance.
  */
-public final class BufferConfiguration implements Configuration<BufferConfiguration> {
+public final class BufferConfiguration implements Configuration {
 
     @JsonProperty("preferDirect")
     private boolean preferDirect;
@@ -207,8 +203,9 @@ public final class BufferConfiguration implements Configuration<BufferConfigurat
      * Validate all parameters of this configuration
      *
      * @return this class instance
+     * @throws IllegalArgumentException If any value is invalid
      */
-    public BufferConfiguration validate() {
+    public BufferConfiguration validate() throws IllegalArgumentException {
         checkPositive(heapArena, "heapArena");
         checkPositive(directArena, "directArena");
         checkPositive(pageSize, "pageSize");
@@ -219,26 +216,8 @@ public final class BufferConfiguration implements Configuration<BufferConfigurat
         return this;
     }
 
-    /**
-     * Save this configuration to the file
-     *
-     * @throws IOException If an error occurs during saving
-     */
-    public void save() throws IOException {
-        ConfigurationMarshaller.save("BufferConfiguration.json", this);
-    }
-
-    /**
-     * Load a configuration
-     *
-     * @return {@link BufferConfiguration} Instance
-     */
-    public static BufferConfiguration load() {
-        try {
-            return ConfigurationMarshaller.load("BufferConfiguration.json", BufferConfiguration.class);
-        } catch (Exception ex) {
-            // Ignore
-        }
-        return DEFAULT;
+    @Override
+    public String name() {
+        return "BufferConfiguration";
     }
 }

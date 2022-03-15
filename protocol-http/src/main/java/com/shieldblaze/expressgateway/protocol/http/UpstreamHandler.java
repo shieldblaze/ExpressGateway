@@ -173,7 +173,7 @@ public final class UpstreamHandler extends ChannelDuplexHandler {
         String url = req.headers().get(HttpHeaderNames.HOST) + req.uri();
 
         // If TLS for Client is enabled then use `wss`.
-        if (httpLoadBalancer.tlsForClient() != null) {
+        if (httpLoadBalancer.configurationContext().tlsClientConfiguration() != null) {
             return "wss://" + url;
         }
 

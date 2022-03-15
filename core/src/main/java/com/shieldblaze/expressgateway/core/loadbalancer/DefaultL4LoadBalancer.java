@@ -18,13 +18,11 @@
 package com.shieldblaze.expressgateway.core.loadbalancer;
 
 import com.shieldblaze.expressgateway.backend.cluster.Cluster;
-import com.shieldblaze.expressgateway.configuration.CoreConfiguration;
-import com.shieldblaze.expressgateway.configuration.tls.TLSConfiguration;
+import com.shieldblaze.expressgateway.configuration.ConfigurationContext;
 import com.shieldblaze.expressgateway.core.L4FrontListener;
 import io.netty.channel.ChannelHandler;
 
 import java.net.InetSocketAddress;
-import java.util.Map;
 
 /**
  * Default implementation for {@link L4LoadBalancer}
@@ -32,18 +30,16 @@ import java.util.Map;
 final class DefaultL4LoadBalancer extends L4LoadBalancer {
 
     /**
-     * @param name              Name of this Load Balancer
-     * @param bindAddress       {@link InetSocketAddress} on which {@link L4FrontListener} will bind and listen.
-     * @param l4FrontListener   {@link L4FrontListener} for listening traffic
-     * @param coreConfiguration {@link CoreConfiguration} to be applied
-     * @param tlsForServer      {@link TLSConfiguration} for Server
-     * @param tlsForClient      {@link TLSConfiguration} for Client
-     * @param channelHandler    {@link ChannelHandler} to use for handling traffic
+     * @param name                 Name of this Load Balancer
+     * @param bindAddress          {@link InetSocketAddress} on which {@link L4FrontListener} will bind and listen.
+     * @param l4FrontListener      {@link L4FrontListener} for listening traffic
+     * @param configurationContext {@link ConfigurationContext} to be applied
+     * @param channelHandler       {@link ChannelHandler} to use for handling traffic
      * @throws NullPointerException If a required parameter if {@code null}
      */
-    DefaultL4LoadBalancer(String name, InetSocketAddress bindAddress, L4FrontListener l4FrontListener, CoreConfiguration coreConfiguration,
-                          TLSConfiguration tlsForServer, TLSConfiguration tlsForClient, ChannelHandler channelHandler) {
-        super(name, bindAddress, l4FrontListener, coreConfiguration, tlsForServer, tlsForClient, channelHandler);
+    DefaultL4LoadBalancer(String name, InetSocketAddress bindAddress, L4FrontListener l4FrontListener, ConfigurationContext configurationContext,
+                          ChannelHandler channelHandler) {
+        super(name, bindAddress, l4FrontListener, configurationContext, channelHandler);
     }
 
     @Override

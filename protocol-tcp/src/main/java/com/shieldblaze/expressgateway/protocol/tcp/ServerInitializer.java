@@ -44,14 +44,14 @@ final class ServerInitializer extends ChannelInitializer<SocketChannel> {
         ChannelPipeline pipeline = ch.pipeline();
         pipeline.addLast(l4LoadBalancer.connectionTracker());
 
-        Duration timeout = Duration.ofMillis(l4LoadBalancer.coreConfiguration()
+        Duration timeout = Duration.ofMillis(l4LoadBalancer.configurationContext()
                 .transportConfiguration()
                 .connectionIdleTimeout());
 
         pipeline.addLast(new ConnectionTimeoutHandler(timeout, true));
 
-        if (l4LoadBalancer.tlsForServer() != null) {
-            pipeline.addLast(new SNIHandler(l4LoadBalancer.tlsForServer()));
+        if (l4LoadBalancer.configurationContext().tlsServerConfiguration().enabled()) {
+            pipeline.addLast(new SNIHandler(l4LoadBalancer.configurationContext().tlsServerConfiguration()));
         }
 
         pipeline.addLast(new UpstreamHandler(l4LoadBalancer));

@@ -17,9 +17,7 @@
  */
 package com.shieldblaze.expressgateway.protocol.http.loadbalancer;
 
-import com.shieldblaze.expressgateway.configuration.CoreConfiguration;
-import com.shieldblaze.expressgateway.configuration.http.HTTPConfiguration;
-import com.shieldblaze.expressgateway.configuration.tls.TLSConfiguration;
+import com.shieldblaze.expressgateway.configuration.ConfigurationContext;
 import com.shieldblaze.expressgateway.core.L4FrontListener;
 import com.shieldblaze.expressgateway.protocol.http.DefaultHTTPServerInitializer;
 import com.shieldblaze.expressgateway.protocol.http.HTTPServerInitializer;
@@ -33,12 +31,9 @@ import java.util.Objects;
 public final class HTTPLoadBalancerBuilder {
     private String name;
     private InetSocketAddress bindAddress;
-    private CoreConfiguration coreConfiguration = CoreConfiguration.INSTANCE;
-    private HTTPConfiguration httpConfiguration = HTTPConfiguration.load();
+    private ConfigurationContext configurationContext = ConfigurationContext.DEFAULT;
     private L4FrontListener l4FrontListener;
     private HTTPServerInitializer httpServerInitializer = new DefaultHTTPServerInitializer();
-    private TLSConfiguration tlsServer;
-    private TLSConfiguration tlsClient;
 
     private HTTPLoadBalancerBuilder() {
         // Prevent outside initialization
@@ -53,13 +48,8 @@ public final class HTTPLoadBalancerBuilder {
         return this;
     }
 
-    public HTTPLoadBalancerBuilder withCoreConfiguration(CoreConfiguration coreConfiguration) {
-        this.coreConfiguration = coreConfiguration;
-        return this;
-    }
-
-    public HTTPLoadBalancerBuilder withHTTPConfiguration(HTTPConfiguration httpConfiguration) {
-        this.httpConfiguration = httpConfiguration;
+    public HTTPLoadBalancerBuilder withConfigurationContext(ConfigurationContext configurationContext) {
+        this.configurationContext = configurationContext;
         return this;
     }
 
@@ -81,22 +71,6 @@ public final class HTTPLoadBalancerBuilder {
         return this;
     }
 
-    /**
-     * Set {@link TLSConfiguration} for Client
-     */
-    public HTTPLoadBalancerBuilder withTLSForClient(TLSConfiguration tlsClient) {
-        this.tlsClient = tlsClient;
-        return this;
-    }
-
-    /**
-     * Set {@link TLSConfiguration} for Server
-     */
-    public HTTPLoadBalancerBuilder withTLSForServer(TLSConfiguration tlsServer) {
-        this.tlsServer = tlsServer;
-        return this;
-    }
-
     public HTTPLoadBalancer build() {
         Objects.requireNonNull(bindAddress, "BindAddress");
         Objects.requireNonNull(l4FrontListener, "L4FrontListener");
@@ -105,10 +79,7 @@ public final class HTTPLoadBalancerBuilder {
                 name,
                 bindAddress,
                 l4FrontListener,
-                coreConfiguration,
-                tlsServer,
-                tlsClient,
-                httpConfiguration,
+                configurationContext,
                 httpServerInitializer
         );
     }
