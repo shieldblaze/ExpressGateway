@@ -17,22 +17,21 @@
  */
 package com.shieldblaze.expressgateway.common;
 
-import com.google.gson.Gson;
 import com.google.gson.GsonBuilder;
 
 /**
- * {@link Gson} Instance
+ * {@link com.google.gson.Gson} Instance
  */
-public final class GSON {
+public final class Gson {
 
-    private GSON() {
+    private Gson() {
         // Prevent outside initialization
     }
 
     /**
-     * {@link Gson} Singleton Instance
+     * {@link com.google.gson.Gson} Singleton Instance
      */
-    public static final Gson INSTANCE = new GsonBuilder()
+    public static final com.google.gson.Gson INSTANCE = new GsonBuilder()
             .excludeFieldsWithoutExposeAnnotation()
             .disableHtmlEscaping()
             .setPrettyPrinting()

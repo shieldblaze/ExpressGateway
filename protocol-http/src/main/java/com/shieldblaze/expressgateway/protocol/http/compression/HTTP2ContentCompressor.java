@@ -17,7 +17,7 @@
  */
 package com.shieldblaze.expressgateway.protocol.http.compression;
 
-import com.shieldblaze.expressgateway.configuration.http.HTTPConfiguration;
+import com.shieldblaze.expressgateway.configuration.http.HttpConfiguration;
 import com.shieldblaze.expressgateway.protocol.http.compression.brotli.BrotliEncoder;
 import io.netty.channel.Channel;
 import io.netty.channel.ChannelHandlerContext;
@@ -45,7 +45,7 @@ public class HTTP2ContentCompressor extends CompressorHttp2ConnectionEncoder {
     private final int brotliCompressionQuality;
     private final int compressionLevel;
 
-    public HTTP2ContentCompressor(Http2ConnectionEncoder delegate, HTTPConfiguration httpConfiguration) {
+    public HTTP2ContentCompressor(Http2ConnectionEncoder delegate, HttpConfiguration httpConfiguration) {
         super(delegate);
         this.brotliCompressionQuality = httpConfiguration.brotliCompressionLevel();
         this.compressionLevel = httpConfiguration.deflateCompressionLevel();

@@ -256,14 +256,6 @@ along with ShieldBlaze ExpressGateway.  If not, see <https://www.gnu.org/license
             <artifactId>bucket4j-core</artifactId>
             <version>7.2.0</version>
         </dependency>
-
-        <!-- https://mvnrepository.com/artifact/software.amazon.cryptools/AmazonCorrettoCryptoProvider -->
-        <dependency>
-            <groupId>software.amazon.cryptools</groupId>
-            <artifactId>AmazonCorrettoCryptoProvider</artifactId>
-            <version>1.6.1</version>
-            <classifier>linux-x86_64</classifier>
-        </dependency>
     </dependencies>
 
     <build>

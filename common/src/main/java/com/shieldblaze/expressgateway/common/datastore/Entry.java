@@ -15,12 +15,15 @@
  * You should have received a copy of the GNU General Public License
  * along with ShieldBlaze ExpressGateway.  If not, see <https://www.gnu.org/licenses/>.
  */
-package com.shieldblaze.expressgateway.configuration;
+package com.shieldblaze.expressgateway.common.datastore;
 
-/**
- * Interface for Configuration classes
- */
-public interface Configuration {
+import com.shieldblaze.expressgateway.common.annotation.NonNull;
 
-    String name();
+import java.security.PrivateKey;
+import java.security.cert.Certificate;
+
+record Entry(PrivateKey privateKey, Certificate[] certificates) {
+    @NonNull
+    Entry {
+    }
 }

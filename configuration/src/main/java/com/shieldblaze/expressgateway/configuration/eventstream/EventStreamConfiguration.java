@@ -18,73 +18,75 @@
 
 package com.shieldblaze.expressgateway.configuration.eventstream;
 
+import com.fasterxml.jackson.annotation.JsonIgnore;
 import com.fasterxml.jackson.annotation.JsonProperty;
 import com.shieldblaze.expressgateway.common.utils.NumberUtil;
 import com.shieldblaze.expressgateway.concurrent.eventstream.AsyncEventStream;
 import com.shieldblaze.expressgateway.concurrent.eventstream.EventStream;
-import com.shieldblaze.expressgateway.configuration.ConfigurationMarshaller;
+import com.shieldblaze.expressgateway.configuration.Configuration;
 
-import java.io.IOException;
+import java.io.Closeable;
+import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 
 /**
  * Configuration for {@link EventStreamConfiguration}.
- *
+ * <p>
  * Use {@link EventStreamConfigurationBuilder} for building {@link EventStreamConfiguration} instance.
  */
-public final class EventStreamConfiguration {
+public final class EventStreamConfiguration implements Configuration, Closeable {
 
     @JsonProperty("workers")
     private int workers;
 
-    public static final EventStreamConfiguration DEFAULT = new EventStreamConfiguration()
-            .setWorkers(Runtime.getRuntime().availableProcessors() / 2);
+    @JsonIgnore
+    private ExecutorService executor;
 
-    public EventStream newEventStream() {
-        EventStream eventStream;
-        if (workers == 0) {
-            eventStream = new EventStream();
-        } else {
-            eventStream = new AsyncEventStream(Executors.newFixedThreadPool(workers));
-        }
-        return eventStream;
+    @JsonIgnore
+    private EventStream eventStream;
+
+    public static final EventStreamConfiguration DEFAULT = new EventStreamConfiguration(Runtime.getRuntime().availableProcessors());
+
+    public EventStreamConfiguration() {
+        // For deserialization
     }
 
-    EventStreamConfiguration setWorkers(int workers) {
-        NumberUtil.checkZeroOrPositive(workers, "Workers");
+    EventStreamConfiguration(int workers) {
         this.workers = workers;
-        return this;
+        executor = Executors.newFixedThreadPool(workers);
+        eventStream = new AsyncEventStream(executor);
     }
 
     public int workers() {
         return workers;
     }
 
-    public EventStreamConfiguration validate() {
-        NumberUtil.checkZeroOrPositive(workers, "Workers");
+    public EventStream eventStream() {
+        if (eventStream == null) {
+            executor = Executors.newFixedThreadPool(workers);
+            eventStream = new AsyncEventStream(executor);
+        }
+        return eventStream;
+    }
+
+    /**
+     * Validate all parameters of this configuration
+     *
+     * @return this class instance
+     * @throws IllegalArgumentException If any value is invalid
+     */
+    public EventStreamConfiguration validate() throws IllegalArgumentException {
+        NumberUtil.checkPositive(workers, "Workers");
         return this;
     }
 
-    /**
-     * Save this configuration to the file
-     *
-     * @throws IOException If an error occurs during saving
-     */
-    public void save() throws IOException {
-        ConfigurationMarshaller.save("EventStreamConfiguration.json", this);
+    @Override
+    public String name() {
+        return "EventStreamConfiguration";
     }
 
-    /**
-     * Load a configuration
-     *
-     * @return {@link EventStreamConfiguration} Instance
-     */
-    public static EventStreamConfiguration load() {
-        try {
-            return ConfigurationMarshaller.load("EventStreamConfiguration.json", EventStreamConfiguration.class);
-        } catch (Exception ex) {
-            // Ignore
-        }
-        return DEFAULT;
+    @Override
+    public void close() {
+        executor.shutdown();
     }
 }

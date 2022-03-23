@@ -18,7 +18,7 @@
 package com.shieldblaze.expressgateway.configuration.transport;
 
 import com.fasterxml.jackson.annotation.JsonProperty;
-import com.shieldblaze.expressgateway.configuration.ConfigurationMarshaller;
+import com.shieldblaze.expressgateway.configuration.Configuration;
 import io.netty.channel.AdaptiveRecvByteBufAllocator;
 import io.netty.channel.FixedRecvByteBufAllocator;
 import io.netty.channel.RecvByteBufAllocator;
@@ -26,13 +26,12 @@ import io.netty.channel.epoll.Epoll;
 import io.netty.incubator.channel.uring.IOUring;
 import io.netty.util.internal.ObjectUtil;
 
-import java.io.IOException;
 import java.util.Objects;
 
 /**
  * Transport Configuration
  */
-public final class TransportConfiguration {
+public final class TransportConfiguration implements Configuration {
 
     @JsonProperty("transportType")
     private TransportType transportType;
@@ -87,7 +86,6 @@ public final class TransportConfiguration {
     }
 
     TransportConfiguration setTransportType(TransportType transportType) {
-        Objects.requireNonNull(transportType, "Transport Type");
         this.transportType = transportType;
         return this;
     }
@@ -97,7 +95,6 @@ public final class TransportConfiguration {
     }
 
     TransportConfiguration setReceiveBufferAllocationType(ReceiveBufferAllocationType receiveBufferAllocationType) {
-        Objects.requireNonNull(receiveBufferAllocationType, "Receive Buffer Allocation Type");
         this.receiveBufferAllocationType = receiveBufferAllocationType;
         return this;
     }
@@ -107,7 +104,6 @@ public final class TransportConfiguration {
     }
 
     TransportConfiguration setReceiveBufferSizes(int[] receiveBufferSizes) {
-        Objects.requireNonNull(receiveBufferSizes, "Receive Buffer Sizes");
         this.receiveBufferSizes = receiveBufferSizes;
         return this;
     }
@@ -125,7 +121,6 @@ public final class TransportConfiguration {
     }
 
     TransportConfiguration setTcpConnectionBacklog(int TCPConnectionBacklog) {
-        ObjectUtil.checkPositive(TCPConnectionBacklog, "TCP Connection Backlog");
         this.tcpConnectionBacklog = TCPConnectionBacklog;
         return this;
     }
@@ -135,9 +130,6 @@ public final class TransportConfiguration {
     }
 
     TransportConfiguration setSocketReceiveBufferSize(int socketReceiveBufferSize) {
-        if (socketReceiveBufferSize < 64) {
-            throw new IllegalArgumentException("Socket Receive Buffer Size Must Be Greater Than 64");
-        }
         this.socketReceiveBufferSize = socketReceiveBufferSize;
         return this;
     }
@@ -147,9 +139,6 @@ public final class TransportConfiguration {
     }
 
     TransportConfiguration setSocketSendBufferSize(int socketSendBufferSize) {
-        if (socketSendBufferSize < 64) {
-            throw new IllegalArgumentException("Socket Send Buffer Size Must Be Greater Than 64");
-        }
         this.socketSendBufferSize = socketSendBufferSize;
         return this;
     }
@@ -159,7 +148,6 @@ public final class TransportConfiguration {
     }
 
     TransportConfiguration setTcpFastOpenMaximumPendingRequests(int TCPFastOpenMaximumPendingRequests) {
-        ObjectUtil.checkPositive(TCPFastOpenMaximumPendingRequests, "TCP Fast Open Maximum Pending Requests");
         this.tcpFastOpenMaximumPendingRequests = TCPFastOpenMaximumPendingRequests;
         return this;
     }
@@ -169,7 +157,6 @@ public final class TransportConfiguration {
     }
 
     TransportConfiguration setBackendConnectTimeout(int backendConnectTimeout) {
-        ObjectUtil.checkPositive(backendConnectTimeout, "Backend Connect Timeout");
         this.backendConnectTimeout = backendConnectTimeout;
         return this;
     }
@@ -179,12 +166,18 @@ public final class TransportConfiguration {
     }
 
     TransportConfiguration setConnectionIdleTimeout(int connectionIdleTimeout) {
-        ObjectUtil.checkPositive(connectionIdleTimeout, "Connection Idle Timeout");
         this.connectionIdleTimeout = connectionIdleTimeout;
         return this;
     }
 
-    public TransportConfiguration validate() {
+    /**
+     * Validate all parameters of this configuration
+     *
+     * @return this class instance
+     * @throws IllegalArgumentException If any value is invalid
+     * @throws NullPointerException If any value is null
+     */
+    public TransportConfiguration validate() throws IllegalArgumentException, NullPointerException {
         Objects.requireNonNull(transportType, "Transport Type");
         Objects.requireNonNull(receiveBufferAllocationType, "Receive Buffer Allocation Type");
         Objects.requireNonNull(receiveBufferSizes, "Receive Buffer Sizes");
@@ -238,26 +231,8 @@ public final class TransportConfiguration {
         return this;
     }
 
-    /**
-     * Save this configuration to the file
-     *
-     * @throws IOException If an error occurs during saving
-     */
-    public void save() throws IOException {
-        ConfigurationMarshaller.save("TransportConfiguration.json", this);
-    }
-
-    /**
-     * Load a configuration
-     *
-     * @return {@link TransportConfiguration} Instance
-     */
-    public static TransportConfiguration load() {
-        try {
-            return ConfigurationMarshaller.load("TransportConfiguration.json", TransportConfiguration.class);
-        } catch (Exception ex) {
-            // Ignore
-        }
-        return DEFAULT;
+    @Override
+    public String name() {
+        return "TransportConfiguration";
     }
 }

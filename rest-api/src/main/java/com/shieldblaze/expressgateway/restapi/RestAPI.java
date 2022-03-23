@@ -17,22 +17,14 @@
  */
 package com.shieldblaze.expressgateway.restapi;
 
-import org.bouncycastle.jce.provider.BouncyCastleProvider;
 import org.springframework.boot.SpringApplication;
 import org.springframework.boot.autoconfigure.SpringBootApplication;
 import org.springframework.context.ConfigurableApplicationContext;
-
-import java.security.Security;
 
 @SpringBootApplication
 public class RestAPI {
 
     private static ConfigurableApplicationContext ctx;
-
-    static {
-        // Initialize BouncyCastle first because we need it for TLS configuration
-        Security.addProvider(new BouncyCastleProvider());
-    }
 
     /**
      * Start the REST API Server using self-signed certificate.
@@ -52,6 +44,13 @@ public class RestAPI {
     public static void stop() {
         if (ctx != null) {
             ctx.stop();
+            try {
+                Thread.sleep(2500);
+            } catch (InterruptedException e) {
+                // This should never happen because we will never
+                // interrupt this thread.
+                e.printStackTrace();
+            }
         }
     }
 }

@@ -17,9 +17,8 @@
  */
 package com.shieldblaze.expressgateway.protocol.http.loadbalancer;
 
-import com.shieldblaze.expressgateway.configuration.CoreConfiguration;
-import com.shieldblaze.expressgateway.configuration.http.HTTPConfiguration;
-import com.shieldblaze.expressgateway.configuration.tls.TLSConfiguration;
+import com.shieldblaze.expressgateway.configuration.ConfigurationContext;
+import com.shieldblaze.expressgateway.configuration.http.HttpConfiguration;
 import com.shieldblaze.expressgateway.core.L4FrontListener;
 import com.shieldblaze.expressgateway.core.loadbalancer.L4LoadBalancer;
 import com.shieldblaze.expressgateway.protocol.http.HTTPServerInitializer;
@@ -31,21 +30,17 @@ import java.net.InetSocketAddress;
  */
 public class HTTPLoadBalancer extends L4LoadBalancer {
 
-    private final HTTPConfiguration httpConfiguration;
-
     HTTPLoadBalancer(String name, InetSocketAddress bindAddress, L4FrontListener l4FrontListener,
-                     CoreConfiguration coreConfiguration, TLSConfiguration tlsForServer, TLSConfiguration tlsForClient,
-                     HTTPConfiguration httpConfiguration, HTTPServerInitializer httpServerInitializer) {
-        super(name, bindAddress, l4FrontListener, coreConfiguration, tlsForServer, tlsForClient, httpServerInitializer);
-        this.httpConfiguration = httpConfiguration;
+                     ConfigurationContext configurationContext, HTTPServerInitializer httpServerInitializer) {
+        super(name, bindAddress, l4FrontListener, configurationContext, httpServerInitializer);
         httpServerInitializer.httpLoadBalancer(this);
     }
 
     /**
-     * Get {@link HTTPConfiguration} Instance for this {@link HTTPLoadBalancer}
+     * Get {@link HttpConfiguration} Instance for this {@link HTTPLoadBalancer}
      */
-    public HTTPConfiguration httpConfiguration() {
-        return httpConfiguration;
+    public HttpConfiguration httpConfiguration() {
+        return configurationContext().httpConfiguration();
     }
 
     @Override

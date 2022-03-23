@@ -17,8 +17,10 @@
  */
 package com.shieldblaze.expressgateway.restapi.api.loadbalancer;
 
-import com.shieldblaze.expressgateway.configuration.CoreConfiguration;
+import com.shieldblaze.expressgateway.configuration.ConfigurationContext;
+import com.shieldblaze.expressgateway.configuration.tls.TLSClientConfiguration;
 import com.shieldblaze.expressgateway.configuration.tls.TLSConfiguration;
+import com.shieldblaze.expressgateway.configuration.tls.TLSServerConfiguration;
 import com.shieldblaze.expressgateway.core.L4FrontListener;
 import com.shieldblaze.expressgateway.core.cluster.CoreContext;
 import com.shieldblaze.expressgateway.core.cluster.LoadBalancerContext;
@@ -79,32 +81,12 @@ public final class LoadBalancerHandler {
             throw new IllegalArgumentException("Invalid L4 Protocol: " + ctx.protocol() + "; Expected: TCP/UDP");
         }
 
-        // Load TLS Configuration for Client
-        TLSConfiguration tlsForClient = null;
-        if (ctx.tlsForClient()) {
-            if (l4FrontListener instanceof UDPListener) {
-                throw new InvalidLoadBalancerStartRequestException("TLS and UDP cannot be coupled together");
-            }
-            tlsForClient = TLSConfiguration.loadClient();
-        }
-
-        // Load TLS Configuration for Server
-        TLSConfiguration tlsForServer = null;
-        if (ctx.tlsForServer()) {
-            if (l4FrontListener instanceof UDPListener) {
-                throw new InvalidLoadBalancerStartRequestException("TLS and UDP cannot be coupled together");
-            }
-            tlsForServer = TLSConfiguration.loadServer();
-        }
-
         // Create a new Load Balancer
         L4LoadBalancer l4LoadBalancer = L4LoadBalancerBuilder.newBuilder()
                 .withBindAddress(new InetSocketAddress(ctx.bindAddress(), ctx.bindPort()))
                 .withL4FrontListener(l4FrontListener)
-                .withCoreConfiguration(CoreConfiguration.INSTANCE)
+                .withCoreConfiguration(ConfigurationContext.DEFAULT)
                 .withName(ctx.name())
-                .withTLSForClient(tlsForClient)
-                .withTLSForServer(tlsForServer)
                 .build();
 
         // Register the event, so we can query it later
@@ -124,25 +106,11 @@ public final class LoadBalancerHandler {
     @PostMapping(value = "/l7/http/start", consumes = MediaType.APPLICATION_JSON_VALUE, produces = MediaType.APPLICATION_JSON_VALUE)
     public ResponseEntity<String> start(@RequestBody LoadBalancerStartContext loadBalancerStartContext) {
 
-        // Load TLS Client configuration
-        TLSConfiguration tlsForClient = null;
-        if (loadBalancerStartContext.tlsForClient()) {
-            tlsForClient = TLSConfiguration.loadClient();
-        }
-
-        // Load TLS Server configuration
-        TLSConfiguration tlsForServer = null;
-        if (loadBalancerStartContext.tlsForServer()) {
-            tlsForServer = TLSConfiguration.loadServer();
-        }
-
         HTTPLoadBalancer httpLoadBalancer = HTTPLoadBalancerBuilder.newBuilder()
                 .withBindAddress(new InetSocketAddress(loadBalancerStartContext.bindAddress(), loadBalancerStartContext.bindPort()))
                 .withL4FrontListener(new TCPListener())
-                .withCoreConfiguration(CoreConfiguration.INSTANCE)
+                .withConfigurationContext(ConfigurationContext.DEFAULT)
                 .withName(loadBalancerStartContext.name())
-                .withTLSForClient(tlsForClient)
-                .withTLSForServer(tlsForServer)
                 .build();
 
         L4FrontListenerStartupEvent event = httpLoadBalancer.start();

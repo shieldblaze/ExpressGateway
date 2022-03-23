@@ -18,7 +18,7 @@
 package com.shieldblaze.expressgateway.protocol.udp;
 
 import com.shieldblaze.expressgateway.concurrent.GlobalExecutors;
-import com.shieldblaze.expressgateway.configuration.CoreConfiguration;
+import com.shieldblaze.expressgateway.configuration.ConfigurationContext;
 import com.shieldblaze.expressgateway.core.factory.BootstrapFactory;
 import com.shieldblaze.expressgateway.core.L4FrontListener;
 import com.shieldblaze.expressgateway.core.events.L4FrontListenerShutdownEvent;
@@ -52,7 +52,7 @@ public class UDPListener extends L4FrontListener {
             return l4FrontListenerStartupEvent;
         }
 
-        CoreConfiguration coreConfiguration = l4LoadBalancer().coreConfiguration();
+        ConfigurationContext configurationContext = l4LoadBalancer().configurationContext();
         EventLoopGroup eventLoopGroup = l4LoadBalancer().eventLoopFactory().parentGroup();
 
         ChannelHandler channelHandler;
@@ -62,7 +62,7 @@ public class UDPListener extends L4FrontListener {
             channelHandler = l4LoadBalancer().channelHandler();
         }
 
-        Bootstrap bootstrap = BootstrapFactory.udp(coreConfiguration, eventLoopGroup, l4LoadBalancer().byteBufAllocator())
+        Bootstrap bootstrap = BootstrapFactory.udp(configurationContext, eventLoopGroup, l4LoadBalancer().byteBufAllocator())
                 .handler(new ChannelInitializer<DatagramChannel>() {
                     @Override
                     protected void initChannel(DatagramChannel ch) {
@@ -72,8 +72,8 @@ public class UDPListener extends L4FrontListener {
                 });
 
         int bindRounds = 1;
-        if (coreConfiguration.transportConfiguration().transportType().nativeTransport()) {
-            bindRounds = coreConfiguration.eventLoopConfiguration().parentWorkers();
+        if (configurationContext.transportConfiguration().transportType().nativeTransport()) {
+            bindRounds = configurationContext.eventLoopConfiguration().parentWorkers();
         }
 
         for (int i = 0; i < bindRounds; i++) {

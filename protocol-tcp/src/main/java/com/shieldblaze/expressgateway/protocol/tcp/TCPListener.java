@@ -59,7 +59,7 @@ public class TCPListener extends L4FrontListener {
             return l4FrontListenerStartupEvent;
         }
 
-        TransportConfiguration transportConfiguration = l4LoadBalancer().coreConfiguration().transportConfiguration();
+        TransportConfiguration transportConfiguration = l4LoadBalancer().configurationContext().transportConfiguration();
         EventLoopFactory eventLoopFactory = l4LoadBalancer().eventLoopFactory();
         ByteBufAllocator byteBufAllocator = l4LoadBalancer().byteBufAllocator();
 
@@ -104,7 +104,7 @@ public class TCPListener extends L4FrontListener {
 
         int bindRounds = 1;
         if (transportConfiguration.transportType().nativeTransport()) {
-            bindRounds = l4LoadBalancer().coreConfiguration().eventLoopConfiguration().parentWorkers();
+            bindRounds = l4LoadBalancer().configurationContext().eventLoopConfiguration().parentWorkers();
         }
 
         for (int i = 0; i < bindRounds; i++) {

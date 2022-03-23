@@ -18,11 +18,8 @@
 package com.shieldblaze.expressgateway.core.factory;
 
 import com.shieldblaze.expressgateway.common.annotation.NonNull;
-import com.shieldblaze.expressgateway.configuration.CoreConfiguration;
 import com.shieldblaze.expressgateway.configuration.buffer.BufferConfiguration;
 import io.netty.buffer.PooledByteBufAllocator;
-
-import java.util.Objects;
 
 /**
  * This class provides configured {@link PooledByteBufAllocator} instance

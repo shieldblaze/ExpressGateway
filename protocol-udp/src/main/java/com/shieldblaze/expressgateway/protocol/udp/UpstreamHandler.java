@@ -29,7 +29,6 @@ import io.netty.channel.socket.DatagramPacket;
 import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
 
-import java.io.IOException;
 import java.net.InetSocketAddress;
 import java.time.Duration;
 import java.util.Map;
@@ -49,7 +48,7 @@ final class UpstreamHandler extends ChannelInboundHandlerAdapter implements Entr
         this.bootstrapper = new Bootstrapper(l4LoadBalancer, l4LoadBalancer.eventLoopFactory().childGroup(), l4LoadBalancer.byteBufAllocator());
         connectionMap = new SelfExpiringMap<>(
                 new ConcurrentHashMap<>(),
-                Duration.ofMillis(l4LoadBalancer.coreConfiguration().transportConfiguration().connectionIdleTimeout()),
+                Duration.ofMillis(l4LoadBalancer.configurationContext().transportConfiguration().connectionIdleTimeout()),
                 true
         );
     }

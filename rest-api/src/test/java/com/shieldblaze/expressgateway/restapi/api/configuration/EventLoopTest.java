@@ -28,7 +28,10 @@ import okhttp3.RequestBody;
 import okhttp3.Response;
 import org.junit.jupiter.api.AfterAll;
 import org.junit.jupiter.api.BeforeAll;
+import org.junit.jupiter.api.MethodOrderer;
+import org.junit.jupiter.api.Order;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.TestMethodOrder;
 
 import java.io.IOException;
 
@@ -37,20 +40,20 @@ import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
+@TestMethodOrder(MethodOrderer.OrderAnnotation.class)
 class EventLoopTest {
 
     @BeforeAll
     static void startSpring() {
         RestAPI.start();
-        System.setProperty("egw.dir", System.getProperty("java.io.tmpdir"));
     }
 
     @AfterAll
-    static void teardown() throws InterruptedException {
+    static void teardown() {
         RestAPI.stop();
-        Thread.sleep(2500);
     }
 
+    @Order(1)
     @Test
     void applyConfiguration() throws IOException {
         JsonObject jsonBody = new JsonObject();
@@ -58,7 +61,7 @@ class EventLoopTest {
         jsonBody.addProperty("childWorkers", 4);
 
         Request request = new Request.Builder()
-                .url("https://127.0.0.1:9110/v1/configuration/eventloop/")
+                .url("https://127.0.0.1:9110/v1/configuration/meow/eventloop/save")
                 .post(RequestBody.create(jsonBody.toString().getBytes()))
                 .header("Content-Type", "application/json")
                 .build();
@@ -70,6 +73,7 @@ class EventLoopTest {
         }
     }
 
+    @Order(2)
     @Test
     void applyBadConfiguration() throws IOException {
         JsonObject jsonBody = new JsonObject();
@@ -77,7 +81,7 @@ class EventLoopTest {
         jsonBody.addProperty("childWorkers", -4);
 
         Request request = new Request.Builder()
-                .url("https://127.0.0.1:9110/v1/configuration/eventloop/")
+                .url("https://127.0.0.1:9110/v1/configuration/meow/eventloop/save")
                 .post(RequestBody.create(jsonBody.toString().getBytes()))
                 .header("Content-Type", "application/json")
                 .build();
@@ -89,12 +93,13 @@ class EventLoopTest {
         }
     }
 
+    @Order(3)
     @Test
     void getDefaultConfiguration() throws IOException {
         EventLoopConfiguration eventLoopDefault = EventLoopConfiguration.DEFAULT;
 
         Request request = new Request.Builder()
-                .url("https://127.0.0.1:9110/v1/configuration/eventloop/default")
+                .url("https://127.0.0.1:9110/v1/configuration/default/eventloop/get")
                 .get()
                 .build();
 
@@ -109,6 +114,7 @@ class EventLoopTest {
         }
     }
 
+    @Order(4)
     @Test
     void getConfiguration() throws IOException {
         JsonObject jsonBody = new JsonObject();
@@ -116,7 +122,7 @@ class EventLoopTest {
         jsonBody.addProperty("childWorkers", 256);
 
         Request request = new Request.Builder()
-                .url("https://127.0.0.1:9110/v1/configuration/eventloop/")
+                .url("https://127.0.0.1:9110/v1/configuration/meow/eventloop/save")
                 .post(RequestBody.create(jsonBody.toString().getBytes()))
                 .header("Content-Type", "application/json")
                 .build();
@@ -128,7 +134,7 @@ class EventLoopTest {
         }
 
         request = new Request.Builder()
-                .url("https://127.0.0.1:9110/v1/configuration/eventloop/")
+                .url("https://127.0.0.1:9110/v1/configuration/meow/eventloop/get")
                 .get()
                 .build();
 

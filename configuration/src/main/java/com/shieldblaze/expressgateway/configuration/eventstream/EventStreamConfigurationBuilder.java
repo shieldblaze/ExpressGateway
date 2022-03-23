@@ -38,6 +38,7 @@ public final class EventStreamConfigurationBuilder {
     }
 
     public EventStreamConfiguration build() {
-        return new EventStreamConfiguration().setWorkers(workers);
+        return new EventStreamConfiguration(workers)
+                .validate(); // Validate the configuration
     }
 }

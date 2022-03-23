@@ -26,9 +26,7 @@ import okhttp3.OkHttpClient;
 import okhttp3.Request;
 import okhttp3.RequestBody;
 import okhttp3.Response;
-import org.junit.jupiter.api.AfterAll;
-import org.junit.jupiter.api.BeforeAll;
-import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.*;
 
 import java.io.IOException;
 
@@ -37,20 +35,20 @@ import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
+@TestMethodOrder(MethodOrderer.OrderAnnotation.class)
 class BufferTest {
 
     @BeforeAll
     static void startSpring() {
         RestAPI.start();
-        System.setProperty("egw.dir", System.getProperty("java.io.tmpdir"));
     }
 
     @AfterAll
-    static void teardown() throws InterruptedException {
+    static void teardown() {
         RestAPI.stop();
-        Thread.sleep(2500);
     }
 
+    @Order(1)
     @Test
     void applyConfigurationTest() throws IOException {
         JsonObject jsonBody = new JsonObject();
@@ -65,7 +63,7 @@ class BufferTest {
         jsonBody.addProperty("directMemoryCacheAlignment", 0);
 
         Request request = new Request.Builder()
-                .url("https://127.0.0.1:9110/v1/configuration/buffer/")
+                .url("https://127.0.0.1:9110/v1/configuration/meow/buffer/save")
                 .post(RequestBody.create(jsonBody.toString().getBytes()))
                 .header("Content-Type", "application/json")
                 .build();
@@ -77,38 +75,13 @@ class BufferTest {
         }
     }
 
-    @Test
-    void applyBadConfigurationTest() throws IOException {
-        JsonObject jsonBody = new JsonObject();
-        jsonBody.addProperty("preferDirect", true);
-        jsonBody.addProperty("heapArena", -2);
-        jsonBody.addProperty("directArena", 12);
-        jsonBody.addProperty("pageSize", 16384);
-        jsonBody.addProperty("maxOrder", 11);
-        jsonBody.addProperty("smallCacheSize", 256);
-        jsonBody.addProperty("normalCacheSize", 64);
-        jsonBody.addProperty("useCacheForAllThreads", true);
-        jsonBody.addProperty("directMemoryCacheAlignment", 0);
-
-        Request request = new Request.Builder()
-                .url("https://127.0.0.1:9110/v1/configuration/buffer/")
-                .post(RequestBody.create(jsonBody.toString().getBytes()))
-                .header("Content-Type", "application/json")
-                .build();
-
-        try (Response response = CustomOkHttpClient.INSTANCE.newCall(request).execute()) {
-            assertNotNull(response.body());
-            JsonObject responseJson = JsonParser.parseString(response.body().string()).getAsJsonObject();
-            assertFalse(responseJson.get("Success").getAsBoolean());
-        }
-    }
-
+    @Order(2)
     @Test
     void getDefaultConfigurationTest() throws IOException {
         BufferConfiguration bufferDefault = BufferConfiguration.DEFAULT;
 
         Request request = new Request.Builder()
-                .url("https://127.0.0.1:9110/v1/configuration/buffer/default")
+                .url("https://127.0.0.1:9110/v1/configuration/default/buffer/get")
                 .get()
                 .build();
 
@@ -116,6 +89,7 @@ class BufferTest {
             assertNotNull(response.body());
             JsonObject responseJson = JsonParser.parseString(response.body().string()).getAsJsonObject();
             assertTrue(responseJson.get("Success").getAsBoolean());
+
             JsonObject bufferObject = responseJson.get("Result").getAsJsonObject().get("BufferConfiguration").getAsJsonObject();
 
             assertEquals(bufferDefault.preferDirect(), bufferObject.get("preferDirect").getAsBoolean());
@@ -129,6 +103,7 @@ class BufferTest {
         }
     }
 
+    @Order(3)
     @Test
     void getConfigurationTest() throws IOException {
         JsonObject jsonBody = new JsonObject();
@@ -143,7 +118,7 @@ class BufferTest {
         jsonBody.addProperty("directMemoryCacheAlignment", 0);
 
         Request request = new Request.Builder()
-                .url("https://127.0.0.1:9110/v1/configuration/buffer/")
+                .url("https://127.0.0.1:9110/v1/configuration/meow/buffer/save")
                 .post(RequestBody.create(jsonBody.toString().getBytes()))
                 .header("Content-Type", "application/json")
                 .build();
@@ -155,7 +130,7 @@ class BufferTest {
         }
 
         request = new Request.Builder()
-                .url("https://127.0.0.1:9110/v1/configuration/buffer/")
+                .url("https://127.0.0.1:9110/v1/configuration/meow/buffer/get")
                 .get()
                 .build();
 

@@ -60,7 +60,7 @@ final class Bootstrapper {
         WebSocketClientHandshaker factory = WebSocketClientHandshakerFactory.newHandshaker(wsProperty.uri(), V13, wsProperty.subProtocol(), true, headers);
         WebSocketConnection connection = new WebSocketConnection(node, factory);
 
-        Bootstrap bootstrap = BootstrapFactory.tcp(httpLoadBalancer.coreConfiguration(), eventLoopGroup, byteBufAllocator);
+        Bootstrap bootstrap = BootstrapFactory.tcp(httpLoadBalancer.configurationContext(), eventLoopGroup, byteBufAllocator);
         bootstrap.handler(new ChannelInitializer<SocketChannel>() {
             @Override
             protected void initChannel(SocketChannel ch) {
@@ -70,14 +70,14 @@ final class Bootstrapper {
                 pipeline.addFirst(new NodeBytesTracker(node));
 
                 // Add ConnectionTimeoutHandler
-                Duration timeout = Duration.ofMillis(httpLoadBalancer.coreConfiguration().transportConfiguration().connectionIdleTimeout());
+                Duration timeout = Duration.ofMillis(httpLoadBalancer.configurationContext().transportConfiguration().connectionIdleTimeout());
                 pipeline.addLast(new ConnectionTimeoutHandler(timeout, false));
 
                 // If TLS is enabled then add TLS Handler
-                if (httpLoadBalancer.tlsForClient() != null) {
+                if (httpLoadBalancer.configurationContext().tlsClientConfiguration().enabled()) {
                     String hostname = node.socketAddress().getHostName();
                     int port = node.socketAddress().getPort();
-                    SslHandler sslHandler = httpLoadBalancer.tlsForClient()
+                    SslHandler sslHandler = httpLoadBalancer.configurationContext().tlsClientConfiguration()
                             .defaultMapping()
                             .sslContext()
                             .newHandler(ch.alloc(), hostname, port);

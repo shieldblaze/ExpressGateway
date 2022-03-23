@@ -17,22 +17,7 @@
 # along with ShieldBlaze ExpressGateway.  If not, see <https://www.gnu.org/licenses/>.
 #
 
-#Set CPU Governor
-cpupower frequency-set -g performance
+# Set JDK 17 as JAVA_HOME
+export JAVA_HOME='/opt/hostedtoolcache/Java_jdkfile_jdk/17/x64'
 
-# Max file and memory
-ulimit -n 20000000
-ulimit -l 20000000
-
-# Turn off firewalld and set conntrack to notrack.
-service firewalld stop
-iptables -t raw -A PREROUTING -j NOTRACK
-
-# -- System Tuning --
-for iface in $(ifconfig | cut -d ' ' -f1| tr ':' '\n' | awk NF)
-do
-        ifconfig "$iface" txqueuelen 10000
-        tc qdisc add dev "$iface" root fq
-done
-
-exit 0
+mvn -B -ntp clean test --file pom.xml

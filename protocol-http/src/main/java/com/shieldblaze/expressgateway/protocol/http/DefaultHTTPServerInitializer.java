@@ -17,7 +17,7 @@
  */
 package com.shieldblaze.expressgateway.protocol.http;
 
-import com.shieldblaze.expressgateway.configuration.http.HTTPConfiguration;
+import com.shieldblaze.expressgateway.configuration.http.HttpConfiguration;
 import com.shieldblaze.expressgateway.core.handlers.ConnectionTimeoutHandler;
 import com.shieldblaze.expressgateway.core.handlers.SNIHandler;
 import com.shieldblaze.expressgateway.metrics.EdgeNetworkMetricRecorder;
@@ -45,20 +45,13 @@ public final class DefaultHTTPServerInitializer extends HTTPServerInitializer {
         pipeline.addFirst(EdgeNetworkMetricRecorder.INSTANCE);
         pipeline.addLast(httpLoadBalancer.connectionTracker());
 
-        Duration timeout = Duration.ofMillis(httpLoadBalancer.coreConfiguration().transportConfiguration().connectionIdleTimeout());
+        Duration timeout = Duration.ofMillis(httpLoadBalancer.configurationContext().transportConfiguration().connectionIdleTimeout());
         pipeline.addLast(new ConnectionTimeoutHandler(timeout, true));
 
         // If TLS Server is not enabled then we'll only use HTTP/1.1
-        HTTPConfiguration httpConfiguration = httpLoadBalancer.httpConfiguration();
-        if (httpLoadBalancer.tlsForServer() == null) {
-            pipeline.addLast(HTTPCodecs.server(httpConfiguration));
-            pipeline.addLast(new HttpServerKeepAliveHandler());
-            pipeline.addLast(new HTTPServerValidator(httpConfiguration));
-            pipeline.addLast(new HTTPContentCompressor(httpConfiguration));
-            pipeline.addLast(new HttpContentDecompressor());
-            pipeline.addLast(new UpstreamHandler(httpLoadBalancer, false));
-        } else {
-            pipeline.addLast(new SNIHandler(httpLoadBalancer.tlsForServer()));
+        HttpConfiguration httpConfiguration = httpLoadBalancer.httpConfiguration();
+        if (httpLoadBalancer.configurationContext().tlsServerConfiguration().enabled()) {
+            pipeline.addLast(new SNIHandler(httpLoadBalancer.configurationContext().tlsServerConfiguration()));
 
             ALPNHandler alpnHandler = ALPNHandlerBuilder.newBuilder()
                     // HTTP/2 Handlers
@@ -76,6 +69,13 @@ public final class DefaultHTTPServerInitializer extends HTTPServerInitializer {
                     .build();
 
             pipeline.addLast(alpnHandler);
+        } else {
+            pipeline.addLast(HTTPCodecs.server(httpConfiguration));
+            pipeline.addLast(new HttpServerKeepAliveHandler());
+            pipeline.addLast(new HTTPServerValidator(httpConfiguration));
+            pipeline.addLast(new HTTPContentCompressor(httpConfiguration));
+            pipeline.addLast(new HttpContentDecompressor());
+            pipeline.addLast(new UpstreamHandler(httpLoadBalancer, false));
         }
     }
 

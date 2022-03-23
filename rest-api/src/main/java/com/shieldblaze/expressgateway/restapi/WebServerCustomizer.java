@@ -17,19 +17,16 @@
  */
 package com.shieldblaze.expressgateway.restapi;
 
-import com.shieldblaze.expressgateway.common.utils.NumberUtil;
+import com.shieldblaze.expressgateway.common.datastore.DataStore;
 import com.shieldblaze.expressgateway.common.utils.SelfSignedCertificate;
-import com.shieldblaze.expressgateway.common.utils.SystemPropertyUtil;
 import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
 import org.springframework.boot.web.embedded.netty.NettyReactiveWebServerFactory;
-import org.springframework.boot.web.server.Http2;
-import org.springframework.boot.web.server.Shutdown;
 import org.springframework.boot.web.server.WebServerFactoryCustomizer;
 import org.springframework.context.annotation.Configuration;
 
 import java.net.InetAddress;
-import java.net.UnknownHostException;
+import java.net.InetSocketAddress;
 import java.security.cert.X509Certificate;
 import java.util.List;
 
@@ -44,32 +41,30 @@ public class WebServerCustomizer implements WebServerFactoryCustomizer<NettyReac
 
     @Override
     public void customize(NettyReactiveWebServerFactory factory) {
-
-        InetAddress inetAddress;
-        int port;
         try {
-            inetAddress = InetAddress.getByName(SystemPropertyUtil.getPropertyOrEnv("api-address"));
+            InetAddress inetAddress = InetAddress.getByName(System.getProperty("restapi-address", "127.0.0.1"));
+            factory.setAddress(inetAddress);
         } catch (Exception ex) {
-            logger.error("Invalid REST-API Address, Falling back to 0.0.0.0", ex);
-            try {
-                inetAddress = InetAddress.getByName("0.0.0.0");
-            } catch (UnknownHostException e) {
-                logger.error("Invalid REST-API Address 0.0.0.0, This should never happen! Shutting down...");
-                System.exit(1);
-                return;
-            }
+            logger.error("Invalid REST-API Address, Shutting down...", ex);
+            System.exit(1);
+            return;
         }
 
         try {
-            port = NumberUtil.checkInRange(SystemPropertyUtil.getPropertyOrEnvInt("api-port", "9110"), 1, 65535, "REST-API Port");
+            int port = new InetSocketAddress(Integer.parseInt(System.getProperty("restapi-port", "9110"))).getPort();
+            factory.setPort(port);
         } catch (Exception ex) {
             logger.error("Invalid REST-API Port, Shutting down...", ex);
             System.exit(1);
             return;
         }
 
-        factory.setAddress(inetAddress);
-        factory.setPort(port);
+        // todo: add datastore support
+        try {
+            DataStore.INSTANCE.get("".toCharArray(), "RestApi");
+        } catch (Exception ex) {
+            logger.error("Failed to load RestApi DataStore Entry");
+        }
 
         SelfSignedCertificate ssc = SelfSignedCertificate.generateNew(List.of("127.0.0.1"));
         factory.addServerCustomizers(new TlsCustomizer(ssc.keyPair().getPrivate(), new X509Certificate[]{ssc.x509Certificate()}));

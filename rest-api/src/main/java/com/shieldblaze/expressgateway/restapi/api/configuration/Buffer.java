@@ -17,10 +17,11 @@
  */
 package com.shieldblaze.expressgateway.restapi.api.configuration;
 
-import com.fasterxml.jackson.core.JsonProcessingException;
 import com.google.gson.JsonObject;
 import com.google.gson.JsonParser;
-import com.shieldblaze.expressgateway.configuration.ConfigurationMarshaller;
+import com.shieldblaze.expressgateway.common.Gson;
+import com.shieldblaze.expressgateway.common.JacksonJson;
+import com.shieldblaze.expressgateway.configuration.ConfigurationStore;
 import com.shieldblaze.expressgateway.configuration.buffer.BufferConfiguration;
 import com.shieldblaze.expressgateway.restapi.response.ErrorBase;
 import com.shieldblaze.expressgateway.restapi.response.FastBuilder;
@@ -30,6 +31,7 @@ import io.netty.handler.codec.http.HttpResponseStatus;
 import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.GetMapping;
+import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
@@ -38,41 +40,41 @@ import org.springframework.web.bind.annotation.RestController;
 import java.io.IOException;
 
 @RestController
-@RequestMapping("/v1/configuration/buffer")
+@RequestMapping("/v1/configuration/{profile}/buffer")
 public final class Buffer {
 
-    @PostMapping(consumes = MediaType.APPLICATION_JSON_VALUE, produces = MediaType.APPLICATION_JSON_VALUE)
-    public ResponseEntity<String> applyConfiguration(@RequestBody BufferConfiguration bufConf) throws IOException {
-        bufConf.validate().save();
+    @PostMapping(value = "save", consumes = MediaType.APPLICATION_JSON_VALUE, produces = MediaType.APPLICATION_JSON_VALUE)
+    public ResponseEntity<String> applyConfiguration(@PathVariable String profile, @RequestBody BufferConfiguration buffer) throws IOException {
+        if (profile.equalsIgnoreCase("default")) {
+            return FastBuilder.error(ErrorBase.CONFIGURATION_NOT_FOUND, "Default configuration cannot be modified",
+                    HttpResponseStatus.BAD_REQUEST);
+        }
+
+        buffer.validate();
+        try {
+            ConfigurationStore.save(profile, buffer);
+        } catch (Exception e) {
+            e.printStackTrace();
+        }
 
         APIResponse apiResponse = APIResponse.newBuilder()
                 .isSuccess(true)
                 .build();
 
-        return FastBuilder.response(apiResponse.getResponse(), HttpResponseStatus.OK);
+        return FastBuilder.response(apiResponse.getResponse(), HttpResponseStatus.CREATED);
     }
 
-    /**
-     * @throws JsonProcessingException This should never happen
-     */
-    @GetMapping(value = "/default", produces = MediaType.APPLICATION_JSON_VALUE)
-    public ResponseEntity<String> getDefaultConfiguration() throws JsonProcessingException {
-        JsonObject buffer = JsonParser.parseString(ConfigurationMarshaller.get(BufferConfiguration.DEFAULT)).getAsJsonObject();
-
-        APIResponse apiResponse = APIResponse.newBuilder()
-                .isSuccess(true)
-                .withResult(Result.newBuilder().withHeader("BufferConfiguration").withMessage(buffer).build())
-                .build();
-
-        return FastBuilder.response(apiResponse.getResponse(), HttpResponseStatus.OK);
-    }
-
-    @GetMapping(produces = MediaType.APPLICATION_JSON_VALUE)
-    public ResponseEntity<String> getConfiguration() {
+    @GetMapping(value = "get", produces = MediaType.APPLICATION_JSON_VALUE)
+    public ResponseEntity<String> getConfiguration(@PathVariable String profile) {
         JsonObject buffer;
         try {
-            BufferConfiguration bufferConf = BufferConfiguration.load();
-            buffer = JsonParser.parseString(ConfigurationMarshaller.get(bufferConf)).getAsJsonObject();
+            BufferConfiguration bufferConf;
+            if (profile.equalsIgnoreCase("default")) {
+                bufferConf = BufferConfiguration.DEFAULT;
+            } else {
+                bufferConf = ConfigurationStore.load(profile, BufferConfiguration.class);
+            }
+            buffer = JsonParser.parseString(JacksonJson.get(bufferConf)).getAsJsonObject();
         } catch (Exception ex) {
             return FastBuilder.error(ErrorBase.CONFIGURATION_NOT_FOUND, ex.getMessage(), HttpResponseStatus.NOT_FOUND);
         }

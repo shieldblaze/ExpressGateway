@@ -19,9 +19,9 @@
 package com.shieldblaze.expressgateway.configuration.http;
 
 /**
- * Builder for {@link HTTPConfiguration}
+ * Builder for {@link HttpConfiguration}
  */
-public final class HTTPConfigurationBuilder {
+public final class HttpConfigurationBuilder {
     private long maxContentLength;
     private int h2InitialWindowSize;
     private long h2MaxConcurrentStreams;
@@ -35,76 +35,76 @@ public final class HTTPConfigurationBuilder {
     private int deflateCompressionLevel;
     private int brotliCompressionLevel;
 
-    private HTTPConfigurationBuilder() {
+    private HttpConfigurationBuilder() {
         // Prevent outside initialization
     }
 
-    public static HTTPConfigurationBuilder newBuilder() {
-        return new HTTPConfigurationBuilder();
+    public static HttpConfigurationBuilder newBuilder() {
+        return new HttpConfigurationBuilder();
     }
 
-    public HTTPConfigurationBuilder withMaxContentLength(long maxContentLength) {
+    public HttpConfigurationBuilder withMaxContentLength(long maxContentLength) {
         this.maxContentLength = maxContentLength;
         return this;
     }
 
-    public HTTPConfigurationBuilder withH2InitialWindowSize(int h2InitialWindowSize) {
+    public HttpConfigurationBuilder withH2InitialWindowSize(int h2InitialWindowSize) {
         this.h2InitialWindowSize = h2InitialWindowSize;
         return this;
     }
 
-    public HTTPConfigurationBuilder withH2MaxConcurrentStreams(long h2MaxConcurrentStreams) {
+    public HttpConfigurationBuilder withH2MaxConcurrentStreams(long h2MaxConcurrentStreams) {
         this.h2MaxConcurrentStreams = h2MaxConcurrentStreams;
         return this;
     }
 
-    public HTTPConfigurationBuilder withH2MaxHeaderListSize(long h2MaxHeaderListSize) {
+    public HttpConfigurationBuilder withH2MaxHeaderListSize(long h2MaxHeaderListSize) {
         this.h2MaxHeaderListSize = h2MaxHeaderListSize;
         return this;
     }
 
-    public HTTPConfigurationBuilder withH2MaxHeaderTableSize(long h2MaxHeaderTableSize) {
+    public HttpConfigurationBuilder withH2MaxHeaderTableSize(long h2MaxHeaderTableSize) {
         this.h2MaxHeaderTableSize = h2MaxHeaderTableSize;
         return this;
     }
 
-    public HTTPConfigurationBuilder withH2MaxFrameSize(int h2MaxFrameSize) {
+    public HttpConfigurationBuilder withH2MaxFrameSize(int h2MaxFrameSize) {
         this.h2MaxFrameSize = h2MaxFrameSize;
         return this;
     }
 
-    public HTTPConfigurationBuilder withMaxInitialLineLength(int maxInitialLineLength) {
+    public HttpConfigurationBuilder withMaxInitialLineLength(int maxInitialLineLength) {
         this.maxInitialLineLength = maxInitialLineLength;
         return this;
     }
 
-    public HTTPConfigurationBuilder withMaxHeaderSize(int maxHeaderSize) {
+    public HttpConfigurationBuilder withMaxHeaderSize(int maxHeaderSize) {
         this.maxHeaderSize = maxHeaderSize;
         return this;
     }
 
-    public HTTPConfigurationBuilder withMaxChunkSize(int maxChunkSize) {
+    public HttpConfigurationBuilder withMaxChunkSize(int maxChunkSize) {
         this.maxChunkSize = maxChunkSize;
         return this;
     }
 
-    public HTTPConfigurationBuilder withCompressionThreshold(int compressionThreshold) {
+    public HttpConfigurationBuilder withCompressionThreshold(int compressionThreshold) {
         this.compressionThreshold = compressionThreshold;
         return this;
     }
 
-    public HTTPConfigurationBuilder withDeflateCompressionLevel(int deflateCompressionLevel) {
+    public HttpConfigurationBuilder withDeflateCompressionLevel(int deflateCompressionLevel) {
         this.deflateCompressionLevel = deflateCompressionLevel;
         return this;
     }
 
-    public HTTPConfigurationBuilder withBrotliCompressionLevel(int brotliCompressionLevel) {
+    public HttpConfigurationBuilder withBrotliCompressionLevel(int brotliCompressionLevel) {
         this.brotliCompressionLevel = brotliCompressionLevel;
         return this;
     }
 
-    public HTTPConfiguration build() {
-        return new HTTPConfiguration()
+    public HttpConfiguration build() {
+        return new HttpConfiguration()
                 .setMaxContentLength(maxContentLength)
                 .setH2InitialWindowSize(h2InitialWindowSize)
                 .setH2MaxConcurrentStreams(h2MaxConcurrentStreams)
@@ -116,6 +116,7 @@ public final class HTTPConfigurationBuilder {
                 .setMaxChunkSize(maxChunkSize)
                 .setCompressionThreshold(compressionThreshold)
                 .setDeflateCompressionLevel(deflateCompressionLevel)
-                .setBrotliCompressionLevel(brotliCompressionLevel);
+                .setBrotliCompressionLevel(brotliCompressionLevel)
+                .validate(); // Validate the configuration
     }
 }

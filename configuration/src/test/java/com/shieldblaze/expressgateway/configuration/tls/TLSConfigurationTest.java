@@ -38,43 +38,43 @@ class TLSConfigurationTest {
      */
     @BeforeEach
     void clearMappings() {
-        TLSConfiguration.DEFAULT_SERVER.clearMappings();
+        TLSServerConfiguration.DEFAULT.clearMappings();
     }
 
     @Test
     void cipherSetterTest() {
-        assertThrows(IllegalArgumentException.class, () -> new TLSConfiguration().setCiphers(Collections.emptyList()));
-        assertDoesNotThrow(() -> new TLSConfiguration().setCiphers(Collections.singletonList(Cipher.TLS_AES_256_GCM_SHA384)));
+        assertThrows(IllegalArgumentException.class, () -> new TLSServerConfiguration().setCiphers(Collections.emptyList()));
+        assertDoesNotThrow(() -> new TLSServerConfiguration().setCiphers(Collections.singletonList(Cipher.TLS_AES_256_GCM_SHA384)));
     }
 
     @Test
     void protocolSetterTest() {
-        assertThrows(IllegalArgumentException.class, () -> new TLSConfiguration().setProtocols(Collections.emptyList()));
-        assertDoesNotThrow(() -> new TLSConfiguration().setProtocols(Collections.singletonList(Protocol.TLS_1_3)));
+        assertThrows(IllegalArgumentException.class, () -> new TLSServerConfiguration().setProtocols(Collections.emptyList()));
+        assertDoesNotThrow(() -> new TLSServerConfiguration().setProtocols(Collections.singletonList(Protocol.TLS_1_3)));
     }
 
     @Test
     void mutualTLSTest() {
-        assertThrows(NullPointerException.class, () -> new TLSConfiguration().setMutualTLS(null));
-        assertDoesNotThrow(() -> new TLSConfiguration().setMutualTLS(MutualTLS.REQUIRED));
+        assertThrows(NullPointerException.class, () -> new TLSServerConfiguration().setMutualTLS(null));
+        assertDoesNotThrow(() -> new TLSServerConfiguration().setMutualTLS(MutualTLS.REQUIRED));
     }
 
     @Test
     void sessionTimeoutTest() {
-        assertThrows(IllegalArgumentException.class, () -> new TLSConfiguration().setSessionTimeout(-1));
-        assertThrows(IllegalArgumentException.class, () -> new TLSConfiguration().setSessionTimeout(Integer.MIN_VALUE));
-        assertDoesNotThrow(() -> new TLSConfiguration().setSessionTimeout(0));
-        assertDoesNotThrow(() -> new TLSConfiguration().setSessionTimeout(1));
-        assertDoesNotThrow(() -> new TLSConfiguration().setSessionTimeout(Integer.MAX_VALUE));
+        assertThrows(IllegalArgumentException.class, () -> new TLSServerConfiguration().setSessionTimeout(-1));
+        assertThrows(IllegalArgumentException.class, () -> new TLSServerConfiguration().setSessionTimeout(Integer.MIN_VALUE));
+        assertDoesNotThrow(() -> new TLSServerConfiguration().setSessionTimeout(0));
+        assertDoesNotThrow(() -> new TLSServerConfiguration().setSessionTimeout(1));
+        assertDoesNotThrow(() -> new TLSServerConfiguration().setSessionTimeout(Integer.MAX_VALUE));
     }
 
     @Test
     void sessionCacheSizeTest() {
-        assertThrows(IllegalArgumentException.class, () -> new TLSConfiguration().setSessionCacheSize(-1));
-        assertThrows(IllegalArgumentException.class, () -> new TLSConfiguration().setSessionCacheSize(Integer.MIN_VALUE));
-        assertDoesNotThrow(() -> new TLSConfiguration().setSessionCacheSize(0));
-        assertDoesNotThrow(() -> new TLSConfiguration().setSessionCacheSize(1));
-        assertDoesNotThrow(() -> new TLSConfiguration().setSessionCacheSize(Integer.MAX_VALUE));
+        assertThrows(IllegalArgumentException.class, () -> new TLSServerConfiguration().setSessionCacheSize(-1));
+        assertThrows(IllegalArgumentException.class, () -> new TLSServerConfiguration().setSessionCacheSize(Integer.MIN_VALUE));
+        assertDoesNotThrow(() -> new TLSServerConfiguration().setSessionCacheSize(0));
+        assertDoesNotThrow(() -> new TLSServerConfiguration().setSessionCacheSize(1));
+        assertDoesNotThrow(() -> new TLSServerConfiguration().setSessionCacheSize(Integer.MAX_VALUE));
     }
 
     @Test
@@ -82,7 +82,7 @@ class TLSConfigurationTest {
         SelfSignedCertificate ssc = new SelfSignedCertificate("www.shieldblaze.com", "EC", 256);
         CertificateKeyPair certificateKeyPair = CertificateKeyPair.forServer(Collections.singletonList(ssc.cert()), ssc.key(), false);
 
-        TLSConfiguration tlsConfiguration = TLSConfiguration.DEFAULT_SERVER;
+        TLSConfiguration tlsConfiguration = TLSServerConfiguration.DEFAULT;
         tlsConfiguration.addMapping("www.shieldblaze.com", certificateKeyPair);
 
         assertEquals(certificateKeyPair, tlsConfiguration.mapping("www.shieldblaze.com"));
@@ -94,7 +94,7 @@ class TLSConfigurationTest {
         SelfSignedCertificate ssc = new SelfSignedCertificate("www.shieldblaze.com", "EC", 256);
         CertificateKeyPair certificateKeyPair = CertificateKeyPair.forServer(Collections.singletonList(ssc.cert()), ssc.key(), false);
 
-        TLSConfiguration tlsConfiguration = TLSConfiguration.DEFAULT_SERVER;
+        TLSConfiguration tlsConfiguration = TLSServerConfiguration.DEFAULT;
         tlsConfiguration.addMapping("*.shieldblaze.com", certificateKeyPair);
 
         assertEquals(certificateKeyPair, tlsConfiguration.mapping("www.shieldblaze.com"));
@@ -107,7 +107,7 @@ class TLSConfigurationTest {
         SelfSignedCertificate ssc = new SelfSignedCertificate("www.shieldblaze.com", "EC", 256);
         CertificateKeyPair certificateKeyPair = CertificateKeyPair.forServer(Collections.singletonList(ssc.cert()), ssc.key(), false);
 
-        TLSConfiguration tlsConfiguration = TLSConfiguration.DEFAULT_SERVER;
+        TLSConfiguration tlsConfiguration = TLSServerConfiguration.DEFAULT;
         tlsConfiguration.addMapping("*.shieldblaze.com", certificateKeyPair);
 
         assertFalse(tlsConfiguration.removeMapping("www.shieldblaze.com"));
