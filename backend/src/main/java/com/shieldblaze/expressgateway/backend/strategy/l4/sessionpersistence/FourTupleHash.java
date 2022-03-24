@@ -21,12 +21,11 @@ import com.shieldblaze.expressgateway.backend.Node;
 import com.shieldblaze.expressgateway.backend.loadbalance.Request;
 import com.shieldblaze.expressgateway.backend.loadbalance.SessionPersistence;
 import com.shieldblaze.expressgateway.common.map.SelfExpiringMap;
-import com.shieldblaze.expressgateway.common.utils.comparator.InetSocketAddressHashCodeComparator;
 
 import java.net.InetSocketAddress;
 import java.time.Duration;
 import java.util.Map;
-import java.util.concurrent.ConcurrentSkipListMap;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.atomic.AtomicBoolean;
 
 /**
@@ -36,7 +35,7 @@ import java.util.concurrent.atomic.AtomicBoolean;
 public final class FourTupleHash implements SessionPersistence<Node, Node, InetSocketAddress, Node> {
 
     private final Map<InetSocketAddress, Node> routeMap =
-            new SelfExpiringMap<>(new ConcurrentSkipListMap<>(InetSocketAddressHashCodeComparator.INSTANCE), Duration.ofHours(1), false);
+            new SelfExpiringMap<>(new ConcurrentHashMap<>(), Duration.ofHours(1), false);
 
     @Override
     public Node node(Request request) {
