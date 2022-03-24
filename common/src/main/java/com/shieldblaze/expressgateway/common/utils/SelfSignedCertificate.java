@@ -44,6 +44,7 @@ import java.security.SecureRandom;
 import java.security.cert.X509Certificate;
 import java.time.ZoneOffset;
 import java.time.ZonedDateTime;
+import java.util.Collections;
 import java.util.Date;
 import java.util.List;
 
@@ -83,15 +84,18 @@ public final class SelfSignedCertificate {
         return keyPair;
     }
 
+    public static SelfSignedCertificate generateNew(List<String> ipList) {
+        return generateNew(ipList, Collections.emptyList());
+    }
+
     /**
      * Generate new {@link SelfSignedCertificate} instance
      *
      * @param ipList  List of IP addresses in SAN
      * @return {@link SelfSignedCertificate} instance once successful
      */
-    public static SelfSignedCertificate generateNew(List<String> ipList) {
+    public static SelfSignedCertificate generateNew(List<String> ipList, List<String> hostnameList) {
         try {
-            JcaX509ExtensionUtils extUtils = new JcaX509ExtensionUtils();
 
             KeyPairGenerator keyGen = KeyPairGenerator.getInstance("EC");
             keyGen.initialize(256);
@@ -99,8 +103,8 @@ public final class SelfSignedCertificate {
 
             X500Name x500Name = new X500NameBuilder(BCStyle.INSTANCE)
                     .addRDN(BCStyle.O, "ShieldBlaze")
-                    .addRDN(BCStyle.OU, "ShieldBlaze ExpressGateway")
-                    .addRDN(BCStyle.CN, "ExpressGateway REST-API Self-Signed Certificate")
+                    .addRDN(BCStyle.OU, "ExpressGateway")
+                    .addRDN(BCStyle.CN, "Self-Signed Certificate")
                     .build();
 
             X509v3CertificateBuilder certificateHolder = new JcaX509v3CertificateBuilder(
@@ -112,6 +116,7 @@ public final class SelfSignedCertificate {
                     keyPair.getPublic()
             );
 
+            JcaX509ExtensionUtils extUtils = new JcaX509ExtensionUtils();
             certificateHolder.addExtension(Extension.subjectKeyIdentifier, false, extUtils.createSubjectKeyIdentifier(keyPair.getPublic()));
             certificateHolder.addExtension(Extension.authorityKeyIdentifier, false, extUtils.createAuthorityKeyIdentifier(keyPair.getPublic()));
 
@@ -123,9 +128,15 @@ public final class SelfSignedCertificate {
 
             // SAN
             GeneralNamesBuilder generalNamesBuilder = new GeneralNamesBuilder();
+
             for (String ip : ipList) {
                 generalNamesBuilder.addName(new GeneralName(GeneralName.iPAddress, ip));
             }
+
+            for(String hostname : hostnameList) {
+                generalNamesBuilder.addName(new GeneralName(GeneralName.dNSName, hostname));
+            }
+
             certificateHolder.addExtension(Extension.subjectAlternativeName, false, generalNamesBuilder.build());
 
             ContentSigner signer = new JcaContentSignerBuilder("SHA256withECDSA").build(keyPair.getPrivate());
@@ -136,9 +147,8 @@ public final class SelfSignedCertificate {
 
             return new SelfSignedCertificate(cert, keyPair);
         } catch (Exception ex) {
-            logger.error("Failed to generate SelfSignedCertificate | Shutting down...", ex);
-            System.exit(1);
-            return null; // We should never reach here.
+            logger.error("Failed to generate SelfSignedCertificate", ex);
+            throw new IllegalArgumentException(ex);
         }
     }
 

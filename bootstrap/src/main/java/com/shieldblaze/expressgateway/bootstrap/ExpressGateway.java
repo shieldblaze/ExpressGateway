@@ -64,15 +64,23 @@ public final class ExpressGateway {
             String restApiIpAddress = restApi.get("ipAddress").getAsString();
             int restApiPort = restApi.get("port").getAsInt();
 
+            String alias;
             String password;
             if (restApi.get("dataStorePassword").isJsonNull()) {
                 try (Scanner scanner = new Scanner(System.in)) {
+                    System.out.print("Enter DataStore Alias: ");
+                    alias = scanner.nextLine();
+
                     System.out.print("Enter DataStore Password: ");
                     password = scanner.nextLine();
                 }
             } else {
+                alias = restApi.get("dataStoreAlias").getAsString();
                 password = restApi.get("dataStorePassword").getAsString();
             }
+
+            System.setProperty("datastore.alias", alias);
+            System.setProperty("datastore.password", password);
 
             RestAPI.start();
         } catch (FileNotFoundException e) {
