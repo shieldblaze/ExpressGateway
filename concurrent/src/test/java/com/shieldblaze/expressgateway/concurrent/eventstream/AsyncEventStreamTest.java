@@ -20,8 +20,9 @@ package com.shieldblaze.expressgateway.concurrent.eventstream;
 import com.shieldblaze.expressgateway.concurrent.event.Event;
 import org.junit.jupiter.api.Test;
 
+import java.util.HashSet;
+import java.util.Set;
 import java.util.concurrent.CompletableFuture;
-import java.util.concurrent.ConcurrentSkipListSet;
 import java.util.concurrent.Executors;
 
 import static org.junit.jupiter.api.Assertions.assertTrue;
@@ -44,7 +45,7 @@ class AsyncEventStreamTest {
 
     private static final class EventListenerTest implements EventListener {
 
-        final ConcurrentSkipListSet<String> stringsSet = new ConcurrentSkipListSet<>();
+        final Set<String> stringsSet = new HashSet<>();
 
         public EventListenerTest() {
             for (int i = 0; i < 100_000; i++) {

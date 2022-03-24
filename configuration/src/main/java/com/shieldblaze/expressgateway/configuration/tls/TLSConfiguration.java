@@ -24,6 +24,7 @@ import com.shieldblaze.expressgateway.common.utils.NumberUtil;
 import com.shieldblaze.expressgateway.configuration.Configuration;
 
 import javax.net.ssl.SSLException;
+import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
@@ -35,7 +36,7 @@ import java.util.concurrent.ConcurrentHashMap;
 public abstract class TLSConfiguration implements Configuration {
 
     @JsonIgnore
-    private final Map<String, CertificateKeyPair> certificateKeyPairMap = new ConcurrentHashMap<>();
+    private final Map<String, CertificateKeyPair> certificateKeyPairMap = new HashMap<>();
 
     @JsonProperty("enabled")
     private boolean enabled = false;
