@@ -18,6 +18,7 @@
 package com.shieldblaze.expressgateway.restapi;
 
 import com.shieldblaze.expressgateway.common.datastore.DataStore;
+import com.shieldblaze.expressgateway.common.datastore.Entry;
 import com.shieldblaze.expressgateway.common.utils.SelfSignedCertificate;
 import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
@@ -27,6 +28,7 @@ import org.springframework.context.annotation.Configuration;
 
 import java.net.InetAddress;
 import java.net.InetSocketAddress;
+import java.security.cert.Certificate;
 import java.security.cert.X509Certificate;
 import java.util.List;
 
@@ -59,14 +61,20 @@ public class WebServerCustomizer implements WebServerFactoryCustomizer<NettyReac
             return;
         }
 
-        // todo: add datastore support
         try {
-            DataStore.INSTANCE.get("".toCharArray(), "RestApi");
+            Entry entry = DataStore.INSTANCE.get(System.getProperty("datastore.password").toCharArray(),
+                    System.getProperty("datastore.alias"));
+
+            X509Certificate[] x509Certificates = new X509Certificate[entry.certificates().length];
+            int i = 0;
+            for (Certificate cert : entry.certificates()) {
+                x509Certificates[i] = (X509Certificate) cert;
+                i++;
+            }
+
+            factory.addServerCustomizers(new TlsCustomizer(entry.privateKey(), x509Certificates));
         } catch (Exception ex) {
             logger.error("Failed to load RestApi DataStore Entry");
         }
-
-        SelfSignedCertificate ssc = SelfSignedCertificate.generateNew(List.of("127.0.0.1"));
-        factory.addServerCustomizers(new TlsCustomizer(ssc.keyPair().getPrivate(), new X509Certificate[]{ssc.x509Certificate()}));
     }
 }

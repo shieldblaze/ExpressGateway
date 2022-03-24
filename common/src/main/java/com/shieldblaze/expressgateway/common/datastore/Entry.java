@@ -22,8 +22,8 @@ import com.shieldblaze.expressgateway.common.annotation.NonNull;
 import java.security.PrivateKey;
 import java.security.cert.Certificate;
 
-record Entry(PrivateKey privateKey, Certificate[] certificates) {
+public record Entry(PrivateKey privateKey, Certificate[] certificates) {
     @NonNull
-    Entry {
+    public Entry {
     }
 }

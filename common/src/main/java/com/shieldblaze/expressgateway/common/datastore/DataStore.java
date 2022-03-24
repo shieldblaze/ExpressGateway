@@ -118,7 +118,7 @@ public final class DataStore {
      * Get entire DataStore file as byte-array
      *
      * @return byte-array of file
-     * @throws IOException Incase of error during reading DataStore file
+     * @throws IOException In case of error during reading DataStore file
      */
     public byte[] getEntire() throws IOException {
         try {
@@ -129,9 +129,7 @@ public final class DataStore {
         }
     }
 
-    public Entry get(char[] password, String alias)
-            throws UnrecoverableKeyException, IOException, CertificateException, KeyStoreException, NoSuchAlgorithmException {
-        password = password.clone();
+    public Entry get(char[] password, String alias) throws UnrecoverableKeyException, IOException, CertificateException, KeyStoreException, NoSuchAlgorithmException {
         try (FileInputStream fis = new FileInputStream(FILENAME)) {
             KeyStore keyStore = KeyStore.getInstance("PKCS12");
             keyStore.load(FILENAME.exists() ? fis : null, password);
@@ -147,11 +145,8 @@ public final class DataStore {
             logger.error("Failed to operate entries into KeyStore", e);
             throw e;
         } catch (UnrecoverableKeyException e) {
-            logger.error("Failed to store operate into KeyStore", e);
+            logger.error("Failed to operate into KeyStore", e);
             throw e;
-        } finally {
-            // Clear the password array
-            Arrays.fill(password, '0');
         }
     }
 
