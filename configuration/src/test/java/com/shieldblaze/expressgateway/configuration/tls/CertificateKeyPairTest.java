@@ -47,7 +47,7 @@ class CertificateKeyPairTest {
         assertNull(certificateKeyPair.sslContext());
 
         // Initialize the CertificateKeyPair
-        certificateKeyPair.init(TLSClientConfiguration.DEFAULT);
+        certificateKeyPair.init(TlsClientConfiguration.DEFAULT);
 
         assertFalse(certificateKeyPair.useOCSPStapling());
         assertNull(certificateKeyPair.ocspStaplingData());
@@ -62,7 +62,7 @@ class CertificateKeyPairTest {
         assertNull(certificateKeyPair.sslContext());
 
         // Initialize the CertificateKeyPair
-        certificateKeyPair.init(TLSClientConfiguration.DEFAULT);
+        certificateKeyPair.init(TlsClientConfiguration.DEFAULT);
 
         assertFalse(certificateKeyPair.useOCSPStapling());
         assertNull(certificateKeyPair.ocspStaplingData());
@@ -84,7 +84,7 @@ class CertificateKeyPairTest {
         List<X509Certificate> x509Certificates = new ArrayList<>(Arrays.asList(certs));
 
         CertificateKeyPair certificateKeyPair = CertificateKeyPair.forServer(x509Certificates, selfSignedCertificate.key(), true);
-        certificateKeyPair.init(TLSServerConfiguration.DEFAULT);
+        certificateKeyPair.init(TlsServerConfiguration.DEFAULT);
 
         Thread.sleep(1000 * 15); // Wait for 15 seconds, Timeout for OCSP HTTP Client Request
 

@@ -19,7 +19,6 @@ package com.shieldblaze.expressgateway.restapi;
 
 import com.shieldblaze.expressgateway.common.datastore.DataStore;
 import com.shieldblaze.expressgateway.common.datastore.Entry;
-import com.shieldblaze.expressgateway.common.utils.SelfSignedCertificate;
 import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
 import org.springframework.boot.web.embedded.netty.NettyReactiveWebServerFactory;
@@ -30,7 +29,6 @@ import java.net.InetAddress;
 import java.net.InetSocketAddress;
 import java.security.cert.Certificate;
 import java.security.cert.X509Certificate;
-import java.util.List;
 
 /**
  * This customizer is responsible for the configuration of
@@ -44,7 +42,7 @@ public class WebServerCustomizer implements WebServerFactoryCustomizer<NettyReac
     @Override
     public void customize(NettyReactiveWebServerFactory factory) {
         try {
-            InetAddress inetAddress = InetAddress.getByName(System.getProperty("restapi-address", "127.0.0.1"));
+            InetAddress inetAddress = InetAddress.getByName(System.getProperty("restapi.address", "127.0.0.1"));
             factory.setAddress(inetAddress);
         } catch (Exception ex) {
             logger.error("Invalid REST-API Address, Shutting down...", ex);
@@ -53,7 +51,7 @@ public class WebServerCustomizer implements WebServerFactoryCustomizer<NettyReac
         }
 
         try {
-            int port = new InetSocketAddress(Integer.parseInt(System.getProperty("restapi-port", "9110"))).getPort();
+            int port = new InetSocketAddress(Integer.parseInt(System.getProperty("restapi.port", "9110"))).getPort();
             factory.setPort(port);
         } catch (Exception ex) {
             logger.error("Invalid REST-API Port, Shutting down...", ex);

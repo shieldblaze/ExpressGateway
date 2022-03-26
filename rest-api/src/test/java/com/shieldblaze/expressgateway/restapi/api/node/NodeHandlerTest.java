@@ -23,7 +23,7 @@ import com.shieldblaze.expressgateway.backend.State;
 import com.shieldblaze.expressgateway.core.cluster.LoadBalancerContext;
 import com.shieldblaze.expressgateway.core.cluster.CoreContext;
 import com.shieldblaze.expressgateway.restapi.CustomOkHttpClient;
-import com.shieldblaze.expressgateway.restapi.RestAPI;
+import com.shieldblaze.expressgateway.restapi.RestApi;
 import com.shieldblaze.expressgateway.restapi.api.cluster.ClusterHandlerTest;
 import com.shieldblaze.expressgateway.restapi.api.loadbalancer.L4LoadBalancerHandlerTest;
 import okhttp3.MediaType;
@@ -52,14 +52,14 @@ class NodeHandlerTest {
 
     @BeforeAll
     static void startSpring() throws IOException, InterruptedException {
-        RestAPI.start();
+        RestApi.start();
         clusterHandlerTest.addL4ClusterTest();
     }
 
     @AfterAll
     static void teardown() throws IOException, InterruptedException {
         clusterHandlerTest.deleteL4ClusterTest();
-        RestAPI.stop();
+        RestApi.stop();
         Thread.sleep(2500);
     }
 

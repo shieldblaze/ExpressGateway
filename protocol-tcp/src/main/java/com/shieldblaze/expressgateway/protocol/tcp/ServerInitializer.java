@@ -50,7 +50,10 @@ final class ServerInitializer extends ChannelInitializer<SocketChannel> {
 
         pipeline.addLast(new ConnectionTimeoutHandler(timeout, true));
 
-        if (l4LoadBalancer.configurationContext().tlsServerConfiguration().enabled()) {
+        boolean available = l4LoadBalancer.configurationContext().tlsServerConfiguration().enabled();
+
+        logger.debug("TLS for Server available: {}", available);
+        if (available) {
             pipeline.addLast(new SNIHandler(l4LoadBalancer.configurationContext().tlsServerConfiguration()));
         }
 

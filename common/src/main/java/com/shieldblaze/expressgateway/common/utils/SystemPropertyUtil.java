@@ -102,7 +102,7 @@ public final class SystemPropertyUtil {
     /**
      * @param key Key to look for
      */
-    public static boolean getUsingPropertyOrEnvironmentBoolean(String key) {
+    public static boolean getPropertyOrEnvBoolean(String key) {
         try {
             return Boolean.parseBoolean(getPropertyOrEnv(key));
         } catch (Exception ex) {
@@ -113,7 +113,7 @@ public final class SystemPropertyUtil {
     /**
      * @param key Key to look for
      */
-    public static boolean getUsingPropertyOrEnvironmentBoolean(String key, String def) {
+    public static boolean getPropertyOrEnvBoolean(String key, String def) {
         try {
             return Boolean.parseBoolean(getPropertyOrEnv(key, def));
         } catch (Exception ex) {

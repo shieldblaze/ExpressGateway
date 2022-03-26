@@ -22,7 +22,8 @@ import com.google.gson.JsonObject;
 import com.google.gson.JsonParser;
 import com.shieldblaze.expressgateway.configuration.healthcheck.HealthCheckConfiguration;
 import com.shieldblaze.expressgateway.restapi.CustomOkHttpClient;
-import com.shieldblaze.expressgateway.restapi.RestAPI;
+import com.shieldblaze.expressgateway.restapi.RestApi;
+import com.shieldblaze.expressgateway.restapi.Utils;
 import okhttp3.Request;
 import okhttp3.RequestBody;
 import okhttp3.Response;
@@ -45,12 +46,13 @@ class HealthCheckTest {
 
     @BeforeAll
     static void startSpring() {
-        RestAPI.start();
+        Utils.initSelfSignedDataStore();
+        RestApi.start();
     }
 
     @AfterAll
     static void teardown() {
-        RestAPI.stop();
+        RestApi.stop();
     }
 
     @Order(1)
@@ -61,7 +63,7 @@ class HealthCheckTest {
         jsonBody.addProperty("timeInterval", 1000 * 60);
 
         Request request = new Request.Builder()
-                .url("https://127.0.0.1:9110/v1/configuration/meow/healthcheck/save")
+                .url("https://127.0.0.1:9110/v1/configuration/healthcheck/save?profileName=meow")
                 .post(RequestBody.create(jsonBody.toString().getBytes()))
                 .header("Content-Type", "application/json")
                 .build();
@@ -81,7 +83,7 @@ class HealthCheckTest {
         jsonBody.addProperty("timeInterval", 1000 * 10);
 
         Request request = new Request.Builder()
-                .url("https://127.0.0.1:9110/v1/configuration/meow/healthcheck/save")
+                .url("https://127.0.0.1:9110/v1/configuration/healthcheck/save?profileName=meow2")
                 .post(RequestBody.create(jsonBody.toString().getBytes()))
                 .header("Content-Type", "application/json")
                 .build();
@@ -99,7 +101,7 @@ class HealthCheckTest {
         HealthCheckConfiguration healthCheckDefault = HealthCheckConfiguration.DEFAULT;
 
         Request request = new Request.Builder()
-                .url("https://127.0.0.1:9110/v1/configuration/default/healthcheck/get")
+                .url("https://127.0.0.1:9110/v1/configuration/healthcheck/get?id=default")
                 .get()
                 .build();
 
@@ -122,19 +124,21 @@ class HealthCheckTest {
         jsonBody.addProperty("timeInterval", 1000 * 60);
 
         Request request = new Request.Builder()
-                .url("https://127.0.0.1:9110/v1/configuration/meow/healthcheck/save")
+                .url("https://127.0.0.1:9110/v1/configuration/healthcheck/save?profileName=meow")
                 .post(RequestBody.create(jsonBody.toString().getBytes()))
                 .header("Content-Type", "application/json")
                 .build();
 
+        String id;
         try (Response response = CustomOkHttpClient.INSTANCE.newCall(request).execute()) {
             assertNotNull(response.body());
             JsonObject responseJson = JsonParser.parseString(response.body().string()).getAsJsonObject();
             assertTrue(responseJson.get("Success").getAsBoolean());
+            id = responseJson.get("Result").getAsJsonObject().get("ID").getAsString();
         }
 
         request = new Request.Builder()
-                .url("https://127.0.0.1:9110/v1/configuration/meow/healthcheck/get")
+                .url("https://127.0.0.1:9110/v1/configuration/healthcheck/get?id=" + id)
                 .get()
                 .build();
 

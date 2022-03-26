@@ -20,9 +20,8 @@ package com.shieldblaze.expressgateway.restapi.api.loadbalancer;
 import com.google.gson.JsonObject;
 import com.google.gson.JsonParser;
 import com.shieldblaze.expressgateway.restapi.CustomOkHttpClient;
-import com.shieldblaze.expressgateway.restapi.RestAPI;
+import com.shieldblaze.expressgateway.restapi.RestApi;
 import okhttp3.MediaType;
-import okhttp3.OkHttpClient;
 import okhttp3.Request;
 import okhttp3.RequestBody;
 import okhttp3.Response;
@@ -50,12 +49,12 @@ public class L7LoadBalancerHandlerTest {
 
     @BeforeAll
     static void startSpring() {
-        RestAPI.start();
+        RestApi.start();
     }
 
     @AfterAll
     static void teardown() throws InterruptedException {
-        RestAPI.stop();
+        RestApi.stop();
         Thread.sleep(2500);
     }
 

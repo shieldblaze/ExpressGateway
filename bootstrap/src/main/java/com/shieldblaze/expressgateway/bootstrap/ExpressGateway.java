@@ -19,7 +19,7 @@ package com.shieldblaze.expressgateway.bootstrap;
 
 import com.google.gson.JsonObject;
 import com.google.gson.JsonParser;
-import com.shieldblaze.expressgateway.restapi.RestAPI;
+import com.shieldblaze.expressgateway.restapi.RestApi;
 import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
 
@@ -50,6 +50,7 @@ public final class ExpressGateway {
                 "             |_|                                                         |___/ ");
 
         logger.info("Starting ShieldBlaze ExpressGateway v0.1-a");
+        loadApplicationFile();
     }
 
     private static void loadApplicationFile() {
@@ -79,10 +80,15 @@ public final class ExpressGateway {
                 password = restApi.get("dataStorePassword").getAsString();
             }
 
+            // DataStore
             System.setProperty("datastore.alias", alias);
             System.setProperty("datastore.password", password);
 
-            RestAPI.start();
+            // Rest-Api
+            System.setProperty("restapi.address", restApiIpAddress);
+            System.setProperty("restapi.port", String.valueOf(restApiPort));
+
+            RestApi.start();
         } catch (FileNotFoundException e) {
             logger.error("File not found in '/etc/expressgateway/application.json'");
             System.exit(1);

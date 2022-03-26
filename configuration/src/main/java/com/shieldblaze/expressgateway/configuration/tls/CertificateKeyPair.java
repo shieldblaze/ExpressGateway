@@ -69,6 +69,7 @@ public final class CertificateKeyPair implements Runnable, Closeable {
     /**
      * <p> Create a new TLS Client Instance </p>
      * This should be used when there is no need of Mutual TLS handshake.
+     * This constructor does not use {@link X509Certificate} or {@link PrivateKey}
      */
     public static CertificateKeyPair newDefaultClientInstance() {
         return new CertificateKeyPair();
@@ -155,12 +156,12 @@ public final class CertificateKeyPair implements Runnable, Closeable {
 
     /**
      * <p> Initialize and build {@link SslContext} </p>
-     * Internal Call; Initiated by {@link TLSConfiguration#addMapping(String, CertificateKeyPair)}
+     * Internal Call; Initiated by {@link TlsConfiguration#addMapping(String, CertificateKeyPair)}
      *
-     * @param tlsConfiguration {@link TLSConfiguration} to use for initializing and building.
+     * @param tlsConfiguration {@link TlsConfiguration} to use for initializing and building.
      */
     @InternalCall
-    public CertificateKeyPair init(TLSConfiguration tlsConfiguration) throws SSLException {
+    public CertificateKeyPair init(TlsConfiguration tlsConfiguration) throws SSLException {
         if (useOCSPStapling && !OpenSsl.isOcspSupported()) {
             throw new IllegalArgumentException("OCSP Stapling is unavailable because OpenSSL is unavailable.");
         }
@@ -173,7 +174,7 @@ public final class CertificateKeyPair implements Runnable, Closeable {
         }
 
         SslContextBuilder sslContextBuilder;
-        if (tlsConfiguration instanceof TLSServerConfiguration) {
+        if (tlsConfiguration instanceof TlsServerConfiguration) {
             sslContextBuilder = SslContextBuilder.forServer(privateKey, certificates)
                     .sslProvider(OpenSsl.isAvailable() ? SslProvider.OPENSSL : SslProvider.JDK)
                     .protocols(Protocol.getProtocols(tlsConfiguration.protocols()))

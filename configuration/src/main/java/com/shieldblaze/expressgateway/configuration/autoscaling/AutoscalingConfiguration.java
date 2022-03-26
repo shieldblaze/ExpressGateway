@@ -20,7 +20,7 @@ package com.shieldblaze.expressgateway.configuration.autoscaling;
 import com.shieldblaze.expressgateway.common.utils.NumberUtil;
 import com.shieldblaze.expressgateway.configuration.Configuration;
 
-public final class AutoscalingConfiguration implements Configuration {
+public final class AutoscalingConfiguration implements Configuration<AutoscalingConfiguration> {
 
     /**
      * CPU Scale out load
@@ -238,7 +238,22 @@ public final class AutoscalingConfiguration implements Configuration {
     }
 
     @Override
-    public String name() {
-        return "AutoscalingConfiguration";
+    public String id() {
+        return null;
+    }
+
+    @Override
+    public String profileName() {
+        return null;
+    }
+
+    @Override
+    public boolean validated() {
+        return false;
+    }
+
+    @Override
+    public AutoscalingConfiguration validate() throws IllegalArgumentException {
+        return null;
     }
 }

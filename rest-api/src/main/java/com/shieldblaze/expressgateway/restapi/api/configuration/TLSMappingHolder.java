@@ -15,7 +15,22 @@
  * You should have received a copy of the GNU General Public License
  * along with ShieldBlaze ExpressGateway.  If not, see <https://www.gnu.org/licenses/>.
  */
-package com.shieldblaze.expressgateway.configuration.autoscaling.cloud;
+package com.shieldblaze.expressgateway.restapi.api.configuration;
 
-public final class AWSConfiguration {
+import com.fasterxml.jackson.annotation.JsonProperty;
+
+import java.util.Objects;
+
+final class TLSMappingHolder {
+
+    @JsonProperty(value = "host", required = true)
+    private String host;
+
+    void setHost(String host) {
+        this.host = Objects.requireNonNull(host, "Host");
+    }
+
+    public String host() {
+        return host;
+    }
 }

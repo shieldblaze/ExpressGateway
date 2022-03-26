@@ -21,8 +21,8 @@ import com.google.gson.JsonObject;
 import com.google.gson.JsonParser;
 import com.shieldblaze.expressgateway.configuration.eventloop.EventLoopConfiguration;
 import com.shieldblaze.expressgateway.restapi.CustomOkHttpClient;
-import com.shieldblaze.expressgateway.restapi.RestAPI;
-import okhttp3.OkHttpClient;
+import com.shieldblaze.expressgateway.restapi.RestApi;
+import com.shieldblaze.expressgateway.restapi.Utils;
 import okhttp3.Request;
 import okhttp3.RequestBody;
 import okhttp3.Response;
@@ -45,12 +45,13 @@ class EventLoopTest {
 
     @BeforeAll
     static void startSpring() {
-        RestAPI.start();
+        Utils.initSelfSignedDataStore();
+        RestApi.start();
     }
 
     @AfterAll
     static void teardown() {
-        RestAPI.stop();
+        RestApi.stop();
     }
 
     @Order(1)
@@ -61,7 +62,7 @@ class EventLoopTest {
         jsonBody.addProperty("childWorkers", 4);
 
         Request request = new Request.Builder()
-                .url("https://127.0.0.1:9110/v1/configuration/meow/eventloop/save")
+                .url("https://127.0.0.1:9110/v1/configuration/eventloop/save?profileName=meow")
                 .post(RequestBody.create(jsonBody.toString().getBytes()))
                 .header("Content-Type", "application/json")
                 .build();
@@ -81,7 +82,7 @@ class EventLoopTest {
         jsonBody.addProperty("childWorkers", -4);
 
         Request request = new Request.Builder()
-                .url("https://127.0.0.1:9110/v1/configuration/meow/eventloop/save")
+                .url("https://127.0.0.1:9110/v1/configuration/eventloop/save?profileName=meow2")
                 .post(RequestBody.create(jsonBody.toString().getBytes()))
                 .header("Content-Type", "application/json")
                 .build();
@@ -99,7 +100,7 @@ class EventLoopTest {
         EventLoopConfiguration eventLoopDefault = EventLoopConfiguration.DEFAULT;
 
         Request request = new Request.Builder()
-                .url("https://127.0.0.1:9110/v1/configuration/default/eventloop/get")
+                .url("https://127.0.0.1:9110/v1/configuration/eventloop/get?id=default")
                 .get()
                 .build();
 
@@ -122,19 +123,21 @@ class EventLoopTest {
         jsonBody.addProperty("childWorkers", 256);
 
         Request request = new Request.Builder()
-                .url("https://127.0.0.1:9110/v1/configuration/meow/eventloop/save")
+                .url("https://127.0.0.1:9110/v1/configuration/eventloop/save?profileName=meow")
                 .post(RequestBody.create(jsonBody.toString().getBytes()))
                 .header("Content-Type", "application/json")
                 .build();
 
+        String id;
         try (Response response = CustomOkHttpClient.INSTANCE.newCall(request).execute()) {
             assertNotNull(response.body());
             JsonObject responseJson = JsonParser.parseString(response.body().string()).getAsJsonObject();
             assertTrue(responseJson.get("Success").getAsBoolean());
+            id = responseJson.get("Result").getAsJsonObject().get("ID").getAsString();
         }
 
         request = new Request.Builder()
-                .url("https://127.0.0.1:9110/v1/configuration/meow/eventloop/get")
+                .url("https://127.0.0.1:9110/v1/configuration/eventloop/get?id=" + id)
                 .get()
                 .build();
 

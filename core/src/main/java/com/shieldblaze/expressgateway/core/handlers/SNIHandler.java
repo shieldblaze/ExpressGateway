@@ -18,7 +18,7 @@
 package com.shieldblaze.expressgateway.core.handlers;
 
 import com.shieldblaze.expressgateway.configuration.tls.CertificateKeyPair;
-import com.shieldblaze.expressgateway.configuration.tls.TLSConfiguration;
+import com.shieldblaze.expressgateway.configuration.tls.TlsConfiguration;
 import io.netty.channel.ChannelHandlerContext;
 import io.netty.handler.codec.DecoderException;
 import io.netty.handler.ssl.AbstractSniHandler;
@@ -38,7 +38,7 @@ public final class SNIHandler extends AbstractSniHandler<CertificateKeyPair> {
 
     private final AsyncMapping<String, CertificateKeyPair> promise;
 
-    public SNIHandler(TLSConfiguration tlsConfiguration) {
+    public SNIHandler(TlsConfiguration tlsConfiguration) {
         promise = (input, promise) -> {
             try {
                 return promise.setSuccess(tlsConfiguration.mapping(input));
