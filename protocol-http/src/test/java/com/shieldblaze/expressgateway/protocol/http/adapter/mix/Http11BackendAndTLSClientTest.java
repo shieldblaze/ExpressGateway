@@ -17,7 +17,7 @@
  */
 package com.shieldblaze.expressgateway.protocol.http.adapter.mix;
 
-import com.shieldblaze.expressgateway.protocol.http.Common;
+import com.shieldblaze.expressgateway.protocol.http.TestableHttpLoadBalancer;
 import org.junit.jupiter.api.AfterAll;
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.Test;
@@ -38,17 +38,23 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
  */
 class Http11BackendAndTLSClientTest {
 
-    private static HttpClient httpClient;
+    private static TestableHttpLoadBalancer testableHttpLoadBalancer;
 
     @BeforeAll
     static void setup() throws Exception {
-        Common.initialize(false, true, false);
-        httpClient = Common.httpClient;
+        testableHttpLoadBalancer = TestableHttpLoadBalancer.Builder.newBuilder()
+                .withTlsBackendEnabled(false)
+                .withTlsClientEnabled(false)
+                .withTlsServerEnabled(true)
+                .build();
+
+        testableHttpLoadBalancer.start();
     }
 
     @AfterAll
-    static void shutdown() {
-        Common.shutdown();
+    static void shutdown() throws InterruptedException {
+        testableHttpLoadBalancer.close();
+        Thread.sleep(2500);
     }
 
     @Test
@@ -60,7 +66,7 @@ class Http11BackendAndTLSClientTest {
                 .timeout(Duration.ofSeconds(5))
                 .build();
 
-        HttpResponse<String> httpResponse = httpClient.send(httpRequest, HttpResponse.BodyHandlers.ofString());
+        HttpResponse<String> httpResponse = testableHttpLoadBalancer.httpClient().send(httpRequest, HttpResponse.BodyHandlers.ofString());
         assertEquals(200, httpResponse.statusCode());
         assertEquals("Meow", httpResponse.body());
     }

@@ -18,9 +18,13 @@
 
 package com.shieldblaze.expressgateway.restapi.api.configuration;
 
+import com.google.gson.JsonArray;
 import com.google.gson.JsonObject;
 import com.google.gson.JsonParser;
-import com.shieldblaze.expressgateway.configuration.eventstream.EventStreamConfiguration;
+import com.shieldblaze.expressgateway.configuration.tls.Cipher;
+import com.shieldblaze.expressgateway.configuration.tls.Protocol;
+import com.shieldblaze.expressgateway.configuration.tls.TlsConfiguration;
+import com.shieldblaze.expressgateway.configuration.tls.TlsServerConfiguration;
 import com.shieldblaze.expressgateway.restapi.CustomOkHttpClient;
 import com.shieldblaze.expressgateway.restapi.RestApi;
 import com.shieldblaze.expressgateway.restapi.Utils;
@@ -42,7 +46,7 @@ import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 @TestMethodOrder(MethodOrderer.OrderAnnotation.class)
-class EventStreamTest {
+class TlsServerTest {
 
     @BeforeAll
     static void startSpring() {
@@ -58,11 +62,21 @@ class EventStreamTest {
     @Order(1)
     @Test
     void applyConfiguration() throws IOException {
+        JsonArray ciphers = new JsonArray();
+        ciphers.add(Cipher.TLS_AES_256_GCM_SHA384.toString());
+        ciphers.add(Cipher.TLS_AES_128_GCM_SHA256.toString());
+        ciphers.add(Cipher.TLS_CHACHA20_POLY1305_SHA256.toString());
+
+        JsonArray protocols = new JsonArray();
+        protocols.add(Protocol.TLS_1_2.toString());
+        protocols.add(Protocol.TLS_1_3.toString());
+
         JsonObject jsonBody = new JsonObject();
-        jsonBody.addProperty("workers", 64);
+        jsonBody.add("ciphers", ciphers);
+        jsonBody.add("protocols", protocols);
 
         Request request = new Request.Builder()
-                .url("https://127.0.0.1:9110/v1/configuration/eventstream/save?profileName=meow")
+                .url("https://127.0.0.1:9110/v1/configuration/tlsserver/save?profileName=meow")
                 .post(RequestBody.create(jsonBody.toString().getBytes()))
                 .header("Content-Type", "application/json")
                 .build();
@@ -77,11 +91,19 @@ class EventStreamTest {
     @Order(2)
     @Test
     void applyBadConfiguration() throws IOException {
+        JsonArray ciphers = new JsonArray();
+        ciphers.add(Cipher.TLS_AES_256_GCM_SHA384.toString());
+        ciphers.add(Cipher.TLS_AES_128_GCM_SHA256.toString());
+        ciphers.add(Cipher.TLS_CHACHA20_POLY1305_SHA256.toString());
+
+        JsonArray protocols = new JsonArray();
+
         JsonObject jsonBody = new JsonObject();
-        jsonBody.addProperty("workers", -2);
+        jsonBody.add("ciphers", ciphers);
+        jsonBody.add("protocols", protocols);
 
         Request request = new Request.Builder()
-                .url("https://127.0.0.1:9110/v1/configuration/eventstream/save?profileName=meow2")
+                .url("https://127.0.0.1:9110/v1/configuration/tlsserver/save?profileName=meow2")
                 .post(RequestBody.create(jsonBody.toString().getBytes()))
                 .header("Content-Type", "application/json")
                 .build();
@@ -96,10 +118,10 @@ class EventStreamTest {
     @Order(3)
     @Test
     void getDefaultConfiguration() throws IOException {
-        EventStreamConfiguration eventStreamDefault = EventStreamConfiguration.DEFAULT;
+        TlsConfiguration clientDefault = TlsServerConfiguration.DEFAULT;
 
         Request request = new Request.Builder()
-                .url("https://127.0.0.1:9110/v1/configuration/eventstream/get?id=default")
+                .url("https://127.0.0.1:9110/v1/configuration/tlsserver/get?id=default")
                 .get()
                 .build();
 
@@ -107,20 +129,42 @@ class EventStreamTest {
             assertNotNull(response.body());
             JsonObject responseJson = JsonParser.parseString(response.body().string()).getAsJsonObject();
             assertTrue(responseJson.get("Success").getAsBoolean());
-            JsonObject bufferObject = responseJson.get("Result").getAsJsonObject().get("EventStreamConfiguration").getAsJsonObject();
+            JsonObject bufferObject = responseJson.get("Result").getAsJsonObject().get("TlsServerConfiguration").getAsJsonObject();
 
-            assertEquals(eventStreamDefault.workers(), bufferObject.get("workers").getAsInt());
+            JsonArray ciphers = new JsonArray();
+            for (Cipher cipher : clientDefault.ciphers()) {
+                ciphers.add(cipher.toString());
+            }
+
+            JsonArray protocols = new JsonArray();
+            for (Protocol protocol : clientDefault.protocols()) {
+                protocols.add(protocol.toString());
+            }
+
+            assertEquals(ciphers, bufferObject.get("ciphers").getAsJsonArray());
+            assertEquals(protocols, bufferObject.get("protocols").getAsJsonArray());
+            assertEquals(clientDefault.mutualTLS().toString(), bufferObject.get("mutualTLS").getAsString());
         }
     }
 
     @Order(4)
     @Test
     void getConfiguration() throws IOException {
+        JsonArray ciphers = new JsonArray();
+        ciphers.add(Cipher.TLS_AES_256_GCM_SHA384.toString());
+        ciphers.add(Cipher.TLS_AES_128_GCM_SHA256.toString());
+        ciphers.add(Cipher.TLS_CHACHA20_POLY1305_SHA256.toString());
+
+        JsonArray protocols = new JsonArray();
+        protocols.add(Protocol.TLS_1_2.toString());
+        protocols.add(Protocol.TLS_1_3.toString());
+
         JsonObject jsonBody = new JsonObject();
-        jsonBody.addProperty("workers", 128);
+        jsonBody.add("ciphers", ciphers);
+        jsonBody.add("protocols", protocols);
 
         Request request = new Request.Builder()
-                .url("https://127.0.0.1:9110/v1/configuration/eventstream/save?profileName=meow")
+                .url("https://127.0.0.1:9110/v1/configuration/tlsserver/save?profileName=meow")
                 .post(RequestBody.create(jsonBody.toString().getBytes()))
                 .header("Content-Type", "application/json")
                 .build();
@@ -134,7 +178,7 @@ class EventStreamTest {
         }
 
         request = new Request.Builder()
-                .url("https://127.0.0.1:9110/v1/configuration/eventstream/get?id=" + id)
+                .url("https://127.0.0.1:9110/v1/configuration/tlsserver/get?id=" + id)
                 .get()
                 .build();
 
@@ -142,9 +186,10 @@ class EventStreamTest {
             assertNotNull(response.body());
             JsonObject responseJson = JsonParser.parseString(response.body().string()).getAsJsonObject();
             assertTrue(responseJson.get("Success").getAsBoolean());
-            JsonObject bufferObject = responseJson.get("Result").getAsJsonObject().get("EventStreamConfiguration").getAsJsonObject();
+            JsonObject bufferObject = responseJson.get("Result").getAsJsonObject().get("TlsServerConfiguration").getAsJsonObject();
 
-            assertEquals(jsonBody.get("workers").getAsBoolean(), bufferObject.get("workers").getAsBoolean());
+            assertEquals(jsonBody.get("ciphers").getAsJsonArray(), bufferObject.get("ciphers").getAsJsonArray());
+            assertEquals(jsonBody.get("protocols").getAsJsonArray(), bufferObject.get("protocols").getAsJsonArray());
         }
     }
 }

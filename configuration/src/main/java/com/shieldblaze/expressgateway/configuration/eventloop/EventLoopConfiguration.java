@@ -17,55 +17,101 @@
  */
 package com.shieldblaze.expressgateway.configuration.eventloop;
 
+import com.fasterxml.jackson.annotation.JsonIgnore;
 import com.fasterxml.jackson.annotation.JsonProperty;
 import com.shieldblaze.expressgateway.common.utils.NumberUtil;
 import com.shieldblaze.expressgateway.configuration.Configuration;
+import dev.morphia.annotations.Entity;
+import dev.morphia.annotations.Id;
+import dev.morphia.annotations.Property;
+import dev.morphia.annotations.Transient;
+
+import java.util.Objects;
+import java.util.UUID;
 
 /**
- * Configuration for {@link EventLoopConfiguration}.
- *
- * Use {@link EventLoopConfigurationBuilder} to build {@link EventLoopConfiguration} instance.
+ * Configuration for {@link EventLoopConfiguration}
  */
-public final class EventLoopConfiguration implements Configuration {
+@Entity(value = "EventLoop", useDiscriminator = false)
+public final class EventLoopConfiguration implements Configuration<EventLoopConfiguration> {
 
-    @JsonProperty("parentWorkers")
+    @Id
+    @JsonProperty
+    private String id;
+
+    @Property
+    @JsonProperty
+    private String profileName;
+
+    @Property
+    @JsonProperty
     private int parentWorkers;
 
-    @JsonProperty("childWorkers")
+    @Property
+    @JsonProperty
     private int childWorkers;
 
-    EventLoopConfiguration() {
-        // Prevent outside initialization
-    }
+    @Transient
+    @JsonIgnore
+    private boolean validated;
 
     public static final EventLoopConfiguration DEFAULT = new EventLoopConfiguration();
 
-    private EventLoopConfiguration(int parentWorkers, int childWorkers) {
-        this.parentWorkers = parentWorkers;
-        this.childWorkers = childWorkers;
-    }
-
     static {
+        DEFAULT.id = "default";
+        DEFAULT.profileName = "default";
         DEFAULT.parentWorkers = Runtime.getRuntime().availableProcessors();
         DEFAULT.childWorkers = DEFAULT.parentWorkers * 2;
+        DEFAULT.validated = true;
     }
 
+    /**
+     * Profile name
+     */
+    public EventLoopConfiguration setProfileName(String profileName) {
+        this.profileName = profileName;
+        return this;
+    }
+
+    /**
+     * Profile name
+     */
+    @Override
+    public String profileName() {
+        assertValidated();
+        return profileName;
+    }
+
+    /**
+     * Parent workers
+     */
+    public EventLoopConfiguration setParentWorkers(int parentWorkers) {
+        this.parentWorkers = parentWorkers;
+        return this;
+    }
+
+    /**
+     * Parent workers
+     */
     public int parentWorkers() {
+        assertValidated();
         return parentWorkers;
     }
 
-    EventLoopConfiguration setParentWorkers(int parentWorkers) {
-        this.parentWorkers = parentWorkers;
-        return this;
-    }
-
-    public int childWorkers() {
-        return childWorkers;
-    }
-
-    EventLoopConfiguration setChildWorkers(int childWorkers) {
+    /**
+     * Child workers
+     */
+    public EventLoopConfiguration setChildWorkers(int childWorkers) {
         this.childWorkers = childWorkers;
         return this;
+    }
+
+    /**
+     * Child workers
+     */
+    public int childWorkers() {
+        assertValidated();
+        return childWorkers;
     }
 
     /**
@@ -75,13 +121,23 @@ public final class EventLoopConfiguration implements Configuration {
      * @throws IllegalArgumentException If any value is invalid
      */
     public EventLoopConfiguration validate() throws IllegalArgumentException {
+        if (id == null) {
+            id = UUID.randomUUID().toString();
+        }
+        Objects.requireNonNull(profileName, "Profile Name");
         NumberUtil.checkPositive(parentWorkers, "Parent Workers");
         NumberUtil.checkPositive(childWorkers, "Child Workers");
+        validated = true;
         return this;
     }
 
     @Override
-    public String name() {
-        return "EventLoopConfiguration";
+    public String id() {
+        return id;
+    }
+
+    @Override
+    public boolean validated() {
+        return validated;
     }
 }

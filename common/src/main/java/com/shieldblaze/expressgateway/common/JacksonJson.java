@@ -29,6 +29,10 @@ public final class JacksonJson {
         return OBJECT_MAPPER.writerWithDefaultPrettyPrinter().writeValueAsString(obj);
     }
 
+    public static <T> T read(String json, Class<T> clazz) throws JsonProcessingException {
+        return OBJECT_MAPPER.readValue(json, clazz);
+    }
+
     private JacksonJson() {
         // Prevent outside initialization
     }

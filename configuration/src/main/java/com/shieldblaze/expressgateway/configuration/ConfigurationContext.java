@@ -17,14 +17,13 @@
  */
 package com.shieldblaze.expressgateway.configuration;
 
-import com.shieldblaze.expressgateway.configuration.autoscaling.AutoscalingConfiguration;
 import com.shieldblaze.expressgateway.configuration.buffer.BufferConfiguration;
 import com.shieldblaze.expressgateway.configuration.eventloop.EventLoopConfiguration;
 import com.shieldblaze.expressgateway.configuration.eventstream.EventStreamConfiguration;
 import com.shieldblaze.expressgateway.configuration.healthcheck.HealthCheckConfiguration;
 import com.shieldblaze.expressgateway.configuration.http.HttpConfiguration;
-import com.shieldblaze.expressgateway.configuration.tls.TLSClientConfiguration;
-import com.shieldblaze.expressgateway.configuration.tls.TLSServerConfiguration;
+import com.shieldblaze.expressgateway.configuration.tls.TlsClientConfiguration;
+import com.shieldblaze.expressgateway.configuration.tls.TlsServerConfiguration;
 import com.shieldblaze.expressgateway.configuration.transport.TransportConfiguration;
 import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
@@ -32,14 +31,13 @@ import org.apache.logging.log4j.Logger;
 import java.io.IOException;
 
 public record ConfigurationContext(String profileName,
-                                   AutoscalingConfiguration autoscalingConfiguration,
                                    BufferConfiguration bufferConfiguration,
                                    EventLoopConfiguration eventLoopConfiguration,
                                    EventStreamConfiguration eventStreamConfiguration,
                                    HealthCheckConfiguration healthCheckConfiguration,
                                    HttpConfiguration httpConfiguration,
-                                   TLSClientConfiguration tlsClientConfiguration,
-                                   TLSServerConfiguration tlsServerConfiguration,
+                                   TlsClientConfiguration tlsClientConfiguration,
+                                   TlsServerConfiguration tlsServerConfiguration,
                                    TransportConfiguration transportConfiguration) {
 
     private static final Logger logger = LogManager.getLogger(ConfigurationContext.class);
@@ -48,33 +46,29 @@ public record ConfigurationContext(String profileName,
      * Default instance of {@link ConfigurationContext} with default configurations
      */
     public static final ConfigurationContext DEFAULT = new ConfigurationContext(
-            null,
-            null,
+            "default",
             BufferConfiguration.DEFAULT,
             EventLoopConfiguration.DEFAULT,
             EventStreamConfiguration.DEFAULT,
             HealthCheckConfiguration.DEFAULT,
             HttpConfiguration.DEFAULT,
-            TLSClientConfiguration.DEFAULT,
-            TLSServerConfiguration.DEFAULT,
+            TlsClientConfiguration.DEFAULT,
+            TlsServerConfiguration.DEFAULT,
             TransportConfiguration.DEFAULT
     );
 
     public static ConfigurationContext create(String profileName, Configuration... configurations) {
-        AutoscalingConfiguration autoscalingConfiguration = null;
         BufferConfiguration bufferConfiguration = BufferConfiguration.DEFAULT;
         EventLoopConfiguration eventLoopConfiguration = EventLoopConfiguration.DEFAULT;
         EventStreamConfiguration eventStreamConfiguration = EventStreamConfiguration.DEFAULT;
         HealthCheckConfiguration healthCheckConfiguration = HealthCheckConfiguration.DEFAULT;
         HttpConfiguration httpConfiguration = HttpConfiguration.DEFAULT;
-        TLSClientConfiguration tlsClientConfiguration = TLSClientConfiguration.DEFAULT;
-        TLSServerConfiguration tlsServerConfiguration = TLSServerConfiguration.DEFAULT;
+        TlsClientConfiguration tlsClientConfiguration = TlsClientConfiguration.DEFAULT;
+        TlsServerConfiguration tlsServerConfiguration = TlsServerConfiguration.DEFAULT;
         TransportConfiguration transportConfiguration = TransportConfiguration.DEFAULT;
 
         for (Configuration configuration : configurations) {
-            if (configuration instanceof AutoscalingConfiguration) {
-                autoscalingConfiguration = (AutoscalingConfiguration) configuration;
-            } else if (configuration instanceof BufferConfiguration) {
+            if (configuration instanceof BufferConfiguration) {
                 bufferConfiguration = (BufferConfiguration) configuration;
             } else if (configuration instanceof EventLoopConfiguration) {
                 eventLoopConfiguration = (EventLoopConfiguration) configuration;
@@ -84,10 +78,10 @@ public record ConfigurationContext(String profileName,
                 healthCheckConfiguration = (HealthCheckConfiguration) configuration;
             } else if (configuration instanceof HttpConfiguration) {
                 httpConfiguration = (HttpConfiguration) configuration;
-            } else if (configuration instanceof TLSClientConfiguration) {
-                tlsClientConfiguration = (TLSClientConfiguration) configuration;
-            } else if (configuration instanceof TLSServerConfiguration) {
-                tlsServerConfiguration = (TLSServerConfiguration) configuration;
+            } else if (configuration instanceof TlsClientConfiguration) {
+                tlsClientConfiguration = (TlsClientConfiguration) configuration;
+            } else if (configuration instanceof TlsServerConfiguration) {
+                tlsServerConfiguration = (TlsServerConfiguration) configuration;
             } else if (configuration instanceof TransportConfiguration) {
                 transportConfiguration = (TransportConfiguration) configuration;
             } else {
@@ -96,7 +90,6 @@ public record ConfigurationContext(String profileName,
         }
 
         return new ConfigurationContext(profileName,
-                autoscalingConfiguration,
                 bufferConfiguration,
                 eventLoopConfiguration,
                 eventStreamConfiguration,
@@ -108,17 +101,15 @@ public record ConfigurationContext(String profileName,
     }
 
     public ConfigurationContext(String profileName,
-                                AutoscalingConfiguration autoscalingConfiguration,
                                 BufferConfiguration bufferConfiguration,
                                 EventLoopConfiguration eventLoopConfiguration,
                                 EventStreamConfiguration eventStreamConfiguration,
                                 HealthCheckConfiguration healthCheckConfiguration,
                                 HttpConfiguration httpConfiguration,
-                                TLSClientConfiguration tlsClientConfiguration,
-                                TLSServerConfiguration tlsServerConfiguration,
+                                TlsClientConfiguration tlsClientConfiguration,
+                                TlsServerConfiguration tlsServerConfiguration,
                                 TransportConfiguration transportConfiguration) {
         this.profileName = profileName;
-        this.autoscalingConfiguration = autoscalingConfiguration;
         this.bufferConfiguration = bufferConfiguration;
         this.eventLoopConfiguration = eventLoopConfiguration;
         this.eventStreamConfiguration = eventStreamConfiguration;
@@ -131,19 +122,17 @@ public record ConfigurationContext(String profileName,
 
     public static ConfigurationContext load(String profileName) throws IOException {
         try {
-            AutoscalingConfiguration autoscalingConfiguration = ConfigurationStore.load(profileName, AutoscalingConfiguration.class);
             BufferConfiguration bufferConfiguration = ConfigurationStore.load(profileName, BufferConfiguration.class);
             EventLoopConfiguration eventLoopConfiguration = ConfigurationStore.load(profileName, EventLoopConfiguration.class);
             EventStreamConfiguration eventStreamConfiguration = ConfigurationStore.load(profileName, EventStreamConfiguration.class);
             HealthCheckConfiguration healthCheckConfiguration = ConfigurationStore.load(profileName, HealthCheckConfiguration.class);
             HttpConfiguration httpConfiguration = ConfigurationStore.load(profileName, HttpConfiguration.class);
-            TLSClientConfiguration tlsClientConfiguration = ConfigurationStore.load(profileName, TLSClientConfiguration.class);
-            TLSServerConfiguration tlsServerConfiguration = ConfigurationStore.load(profileName, TLSServerConfiguration.class);
+            TlsClientConfiguration tlsClientConfiguration = ConfigurationStore.load(profileName, TlsClientConfiguration.class);
+            TlsServerConfiguration tlsServerConfiguration = ConfigurationStore.load(profileName, TlsServerConfiguration.class);
             TransportConfiguration transportConfiguration = ConfigurationStore.load(profileName, TransportConfiguration.class);
 
             return new ConfigurationContext(
                     profileName,
-                    autoscalingConfiguration,
                     bufferConfiguration,
                     eventLoopConfiguration,
                     eventStreamConfiguration,
@@ -165,7 +154,6 @@ public record ConfigurationContext(String profileName,
                 throw new IllegalArgumentException("Cannot save configurations because Profile Name is not present");
             }
 
-            ConfigurationStore.save(profileName, autoscalingConfiguration);
             ConfigurationStore.save(profileName, bufferConfiguration);
             ConfigurationStore.save(profileName, eventLoopConfiguration);
             ConfigurationStore.save(profileName, eventStreamConfiguration);

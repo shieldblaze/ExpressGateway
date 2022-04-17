@@ -21,7 +21,8 @@ import com.google.gson.JsonObject;
 import com.google.gson.JsonParser;
 import com.shieldblaze.expressgateway.configuration.http.HttpConfiguration;
 import com.shieldblaze.expressgateway.restapi.CustomOkHttpClient;
-import com.shieldblaze.expressgateway.restapi.RestAPI;
+import com.shieldblaze.expressgateway.restapi.RestApi;
+import com.shieldblaze.expressgateway.restapi.Utils;
 import okhttp3.Request;
 import okhttp3.RequestBody;
 import okhttp3.Response;
@@ -44,12 +45,13 @@ class HttpTest {
 
     @BeforeAll
     static void startSpring() {
-        RestAPI.start();
+        Utils.initSelfSignedDataStore();
+        RestApi.start();
     }
 
     @AfterAll
     static void teardown() {
-        RestAPI.stop();
+        RestApi.stop();
     }
 
     @Order(1)
@@ -70,7 +72,7 @@ class HttpTest {
         jsonBody.addProperty("brotliCompressionLevel", 4);
 
         Request request = new Request.Builder()
-                .url("https://127.0.0.1:9110/v1/configuration/meow/http/save")
+                .url("https://127.0.0.1:9110/v1/configuration/http/save?profileName=meow")
                 .post(RequestBody.create(jsonBody.toString().getBytes()))
                 .header("Content-Type", "application/json")
                 .build();
@@ -101,7 +103,7 @@ class HttpTest {
         jsonBody.addProperty("brotliCompressionLevel", 23); // Out of range
 
         Request request = new Request.Builder()
-                .url("https://127.0.0.1:9110/v1/configuration/meow/http/save")
+                .url("https://127.0.0.1:9110/v1/configuration/http/save?profileName=meow2")
                 .post(RequestBody.create(jsonBody.toString().getBytes()))
                 .header("Content-Type", "application/json")
                 .build();
@@ -119,7 +121,7 @@ class HttpTest {
         HttpConfiguration httpDefault = HttpConfiguration.DEFAULT;
 
         Request request = new Request.Builder()
-                .url("https://127.0.0.1:9110/v1/configuration/default/http/get")
+                .url("https://127.0.0.1:9110/v1/configuration/http/get?id=default")
                 .get()
                 .build();
 
@@ -127,7 +129,7 @@ class HttpTest {
             assertNotNull(response.body());
             JsonObject responseJson = JsonParser.parseString(response.body().string()).getAsJsonObject();
             assertTrue(responseJson.get("Success").getAsBoolean());
-            JsonObject bufferObject = responseJson.get("Result").getAsJsonObject().get("HTTPConfiguration").getAsJsonObject();
+            JsonObject bufferObject = responseJson.get("Result").getAsJsonObject().get("HttpConfiguration").getAsJsonObject();
 
             assertEquals(httpDefault.maxContentLength(), bufferObject.get("maxContentLength").getAsInt());
             assertEquals(httpDefault.h2InitialWindowSize(), bufferObject.get("h2InitialWindowSize").getAsInt());
@@ -163,19 +165,21 @@ class HttpTest {
 
 
         Request request = new Request.Builder()
-                .url("https://127.0.0.1:9110/v1/configuration/meow/http/save")
+                .url("https://127.0.0.1:9110/v1/configuration/http/save?profileName=meow")
                 .post(RequestBody.create(jsonBody.toString().getBytes()))
                 .header("Content-Type", "application/json")
                 .build();
 
+        String id;
         try (Response response = CustomOkHttpClient.INSTANCE.newCall(request).execute()) {
             assertNotNull(response.body());
             JsonObject responseJson = JsonParser.parseString(response.body().string()).getAsJsonObject();
             assertTrue(responseJson.get("Success").getAsBoolean());
+            id = responseJson.get("Result").getAsJsonObject().get("ID").getAsString();
         }
 
         request = new Request.Builder()
-                .url("https://127.0.0.1:9110/v1/configuration/meow/http/get")
+                .url("https://127.0.0.1:9110/v1/configuration/http/get?id=" + id)
                 .get()
                 .build();
 
@@ -183,7 +187,7 @@ class HttpTest {
             assertNotNull(response.body());
             JsonObject responseJson = JsonParser.parseString(response.body().string()).getAsJsonObject();
             assertTrue(responseJson.get("Success").getAsBoolean());
-            JsonObject bufferObject = responseJson.get("Result").getAsJsonObject().get("HTTPConfiguration").getAsJsonObject();
+            JsonObject bufferObject = responseJson.get("Result").getAsJsonObject().get("HttpConfiguration").getAsJsonObject();
 
             assertEquals(jsonBody.get("maxContentLength").getAsInt(), bufferObject.get("maxContentLength").getAsInt());
             assertEquals(jsonBody.get("h2InitialWindowSize").getAsInt(), bufferObject.get("h2InitialWindowSize").getAsInt());

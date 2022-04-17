@@ -22,12 +22,10 @@ import com.shieldblaze.expressgateway.common.utils.SelfSignedCertificate;
 import io.netty.handler.ssl.util.InsecureTrustManagerFactory;
 import org.junit.jupiter.api.Test;
 
-import javax.net.ssl.HttpsURLConnection;
 import javax.net.ssl.SSLContext;
 import javax.net.ssl.SSLSession;
 import javax.net.ssl.SSLSocket;
 import javax.net.ssl.SSLSocketFactory;
-import java.net.Socket;
 import java.security.SecureRandom;
 import java.util.List;
 
@@ -37,16 +35,10 @@ class WebServerCustomizerTest {
 
     @Test
     void generateAndLoadSelfSignedCertificateTest() throws Exception {
-        final String password = "MeowMeowCatCat";
-        final String alias = "meowAlias";
-
-        SelfSignedCertificate selfSignedCertificate = SelfSignedCertificate.generateNew(List.of("127.0.0.1"), List.of("localhost"));
-        DataStore.INSTANCE.store(password.toCharArray(), alias, selfSignedCertificate.keyPair().getPrivate(), selfSignedCertificate.x509Certificate());
-        System.setProperty("datastore.alias", alias);
-        System.setProperty("datastore.password", password);
+        Utils.initSelfSignedDataStore();
 
         // Start the Rest-Api Server
-        RestAPI.start();
+        RestApi.start();
 
         // Wait 2.5 seconds for everything to be initialized
         Thread.sleep(2500);
@@ -61,9 +53,14 @@ class WebServerCustomizerTest {
 
         SSLSession session = socket.getSession();
 
-        assertArrayEquals(selfSignedCertificate.x509Certificate().getEncoded(), session.getPeerCertificates()[0].getEncoded());
+        assertArrayEquals(Utils.selfSignedCertificate().x509Certificate().getEncoded(), session.getPeerCertificates()[0].getEncoded());
+        assertEquals("TLSv1.3", session.getProtocol());
+        assertEquals("TLS_AES_256_GCM_SHA384", session.getCipherSuite());
         socket.close();
 
         assertTrue(DataStore.INSTANCE.destroy());
+
+        // Stop the Rest-Api Server
+        RestApi.stop();
     }
 }

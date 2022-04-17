@@ -31,21 +31,25 @@ import java.net.http.HttpResponse;
 import java.time.Duration;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
-import static org.junit.jupiter.api.Assertions.assertTrue;
 
 class BrotliCompressionTest {
 
-    private static HttpClient httpClient;
+    private static TestableHttpLoadBalancer testableHttpLoadBalancer;
 
     @BeforeAll
     static void setup() throws Exception {
-        Common.initialize();
-        httpClient = Common.httpClient;
+        testableHttpLoadBalancer = TestableHttpLoadBalancer.Builder.newBuilder()
+                .withTlsBackendEnabled(true)
+                .withTlsClientEnabled(true)
+                .withTlsServerEnabled(true)
+                .build();
+
+        testableHttpLoadBalancer.start();
     }
 
     @AfterAll
     static void shutdown() {
-        Common.shutdown();
+        testableHttpLoadBalancer.close();
     }
 
     @Test
@@ -58,7 +62,7 @@ class BrotliCompressionTest {
                 .setHeader("Accept-Encoding", "br")
                 .build();
 
-        HttpResponse<byte[]> httpResponse = httpClient.send(httpRequest, HttpResponse.BodyHandlers.ofByteArray());
+        HttpResponse<byte[]> httpResponse = testableHttpLoadBalancer.httpClient().send(httpRequest, HttpResponse.BodyHandlers.ofByteArray());
         assertEquals(200, httpResponse.statusCode());
         assertEquals("br", httpResponse.headers().firstValue("Content-Encoding").get());
 
@@ -77,7 +81,7 @@ class BrotliCompressionTest {
                 .setHeader("Accept-Encoding", "gzip, br")
                 .build();
 
-        HttpResponse<byte[]> httpResponse = httpClient.send(httpRequest, HttpResponse.BodyHandlers.ofByteArray());
+        HttpResponse<byte[]> httpResponse = testableHttpLoadBalancer.httpClient().send(httpRequest, HttpResponse.BodyHandlers.ofByteArray());
         assertEquals(200, httpResponse.statusCode());
         assertEquals("br", httpResponse.headers().firstValue("Content-Encoding").get());
 
@@ -96,7 +100,7 @@ class BrotliCompressionTest {
                 .setHeader("Accept-Encoding", "gzip, deflate, br")
                 .build();
 
-        HttpResponse<byte[]> httpResponse = httpClient.send(httpRequest, HttpResponse.BodyHandlers.ofByteArray());
+        HttpResponse<byte[]> httpResponse = testableHttpLoadBalancer.httpClient().send(httpRequest, HttpResponse.BodyHandlers.ofByteArray());
         assertEquals(200, httpResponse.statusCode());
         assertEquals("br", httpResponse.headers().firstValue("Content-Encoding").get());
 

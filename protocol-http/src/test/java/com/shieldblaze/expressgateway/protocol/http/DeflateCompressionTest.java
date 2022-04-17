@@ -34,17 +34,22 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 
 class DeflateCompressionTest {
 
-    private static HttpClient httpClient;
+    private static TestableHttpLoadBalancer testableHttpLoadBalancer;
 
     @BeforeAll
     static void setup() throws Exception {
-        Common.initialize();
-        httpClient = Common.httpClient;
+        testableHttpLoadBalancer = TestableHttpLoadBalancer.Builder.newBuilder()
+                .withTlsBackendEnabled(true)
+                .withTlsClientEnabled(true)
+                .withTlsServerEnabled(true)
+                .build();
+
+        testableHttpLoadBalancer.start();
     }
 
     @AfterAll
     static void shutdown() {
-        Common.shutdown();
+        testableHttpLoadBalancer.close();
     }
 
     @Test
@@ -57,7 +62,7 @@ class DeflateCompressionTest {
                 .setHeader("Accept-Encoding", "deflate")
                 .build();
 
-        HttpResponse<byte[]> httpResponse = httpClient.send(httpRequest, HttpResponse.BodyHandlers.ofByteArray());
+        HttpResponse<byte[]> httpResponse = testableHttpLoadBalancer.httpClient().send(httpRequest, HttpResponse.BodyHandlers.ofByteArray());
         assertEquals(200, httpResponse.statusCode());
         assertEquals("deflate", httpResponse.headers().firstValue("Content-Encoding").get());
 

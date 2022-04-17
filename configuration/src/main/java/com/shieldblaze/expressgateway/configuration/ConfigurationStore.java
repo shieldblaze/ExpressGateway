@@ -18,6 +18,8 @@
 package com.shieldblaze.expressgateway.configuration;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.shieldblaze.expressgateway.common.MongoDB;
+import dev.morphia.query.experimental.filters.Filters;
 import io.netty.util.internal.StringUtil;
 import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
@@ -44,61 +46,73 @@ public final class ConfigurationStore {
     /**
      * Marshal and save {@link Configuration} into Json
      *
-     * @param profile       Profile name
+     * @param id            ID
      * @param configuration {@link Configuration} to save
      * @throws IOException If an error occurs during operation
      */
-    public static void save(String profile, Configuration configuration) throws IOException {
-        String json = OBJECT_MAPPER.writerWithDefaultPrettyPrinter().writeValueAsString(configuration);
+    public static void save(String id, Configuration<?> configuration) throws IOException {
+        // If MongoDB is enabled then store the configuration into the Database
+        // otherwise we'll use file-based storage.
+        if (MongoDB.enabled()) {
+            MongoDB.getInstance().save(configuration);
+        } else {
+            String json = OBJECT_MAPPER.writerWithDefaultPrettyPrinter().writeValueAsString(configuration);
 
-        StringBuilder fileName = new StringBuilder()
-                .append("/etc/expressgateway").append("/") // -> /etc/expressgateway
-                .append("conf.d").append("/")              // -> /etc/expressgateway/conf.d/
-                .append(profile).append("/");              // -> /etc/expressgateway/conf.d/$PROFILE_NAME/
+            StringBuilder fileName = new StringBuilder()
+                    .append("/etc/expressgateway").append("/") // -> /etc/expressgateway
+                    .append("conf.d").append("/")              // -> /etc/expressgateway/conf.d/
+                    .append(id).append("/");                   // -> /etc/expressgateway/conf.d/$PROFILE_NAME/
 
-        // Ensure directory exists so we can create file
-        logger.info("Creating directory for configuration: {}, Created: {}", fileName.toString(), new File(fileName.toString()).mkdirs());
-        fileName.append(StringUtil.simpleClassName(configuration)).append(".json"); // -> /etc/expressgateway/conf.d/$PROFILE_NAME/$CONFIG.json
+            // Ensure directory exists so we can create file
+            logger.info("Creating directory for configuration: {}, Created: {}", fileName.toString(), new File(fileName.toString()).mkdirs());
+            fileName.append(StringUtil.simpleClassName(configuration)).append(".json"); // -> /etc/expressgateway/conf.d/$PROFILE_NAME/$CONFIG.json
 
-        try (FileWriter writer = new FileWriter(fileName.toString(), false)) {
-            writer.write(json);
+            try (FileWriter writer = new FileWriter(fileName.toString(), false)) {
+                writer.write(json);
+            }
         }
     }
 
     /**
      * Unmarshal and load Json into {@link Configuration}
      *
-     * @param profile Profile name
-     * @param clazz   Class reference to load
-     * @param <T>     Class
+     * @param id    Configuration ID
+     * @param clazz Class reference to load
+     * @param <T>   Class
      * @return Class instance
      * @throws IOException If an error occurs during operation
      */
-    public static <T> T load(String profile, Class<T> clazz) throws IOException {
-        String fileName = new StringBuilder()
-                .append("/etc/expressgateway").append("/")                 // -> /etc/expressgateway
-                .append("conf.d").append("/")                              // -> /etc/expressgateway/conf.d/
-                .append(profile).append(File.separator)                    // -> /etc/expressgateway/conf.d/$PROFILE_NAME/
-                .append(StringUtil.simpleClassName(clazz)).append(".json") // -> /etc/expressgateway/conf.d/$PROFILE_NAME/$CONFIG.json
-                .toString();
+    public static <T> T load(String id, Class<T> clazz) throws IOException {
+        if (MongoDB.enabled()) {
+            return MongoDB.getInstance().find(clazz)
+                    .filter(Filters.eq("_id", id))
+                    .first();
+        } else {
+            String fileName = new StringBuilder()
+                    .append("/etc/expressgateway").append("/")                 // -> /etc/expressgateway
+                    .append("conf.d").append("/")                              // -> /etc/expressgateway/conf.d/
+                    .append(id).append("/")                                    // -> /etc/expressgateway/conf.d/$PROFILE_NAME/
+                    .append(StringUtil.simpleClassName(clazz)).append(".json") // -> /etc/expressgateway/conf.d/$PROFILE_NAME/$CONFIG.json
+                    .toString();
 
-        String json = Files.readString(Path.of(fileName));
-        return OBJECT_MAPPER.readValue(json, clazz);
+            String json = Files.readString(Path.of(fileName));
+            return OBJECT_MAPPER.readValue(json, clazz);
+        }
     }
 
     /**
      * Delete configuration file
      *
-     * @param profile Profile name
-     * @param clazz   Class reference to delete
-     * @param <T>     Class
+     * @param id    Configuration ID
+     * @param clazz Class reference to delete
+     * @param <T>   Class
      * @return {@code true} if deletion was successful else {@code false}
      */
-    public static <T> boolean delete(String profile, Class<T> clazz) {
+    public static <T> boolean delete(String id, Class<T> clazz) {
         String fileName = new StringBuilder()
                 .append("/etc/expressgateway").append("/")                 // -> /etc/expressgateway
                 .append("conf.d").append("/")                              // -> /etc/expressgateway/conf.d/
-                .append(profile).append(File.separator)                    // -> /etc/expressgateway/conf.d/$PROFILE_NAME/
+                .append(id).append("/")                                    // -> /etc/expressgateway/conf.d/$PROFILE_NAME/
                 .append(StringUtil.simpleClassName(clazz)).append(".json") // -> /etc/expressgateway/conf.d/$PROFILE_NAME/$CONFIG.json
                 .toString();
 

@@ -22,7 +22,7 @@ import com.google.gson.JsonParser;
 import com.shieldblaze.expressgateway.core.cluster.LoadBalancerContext;
 import com.shieldblaze.expressgateway.core.cluster.CoreContext;
 import com.shieldblaze.expressgateway.restapi.CustomOkHttpClient;
-import com.shieldblaze.expressgateway.restapi.RestAPI;
+import com.shieldblaze.expressgateway.restapi.RestApi;
 import com.shieldblaze.expressgateway.restapi.api.loadbalancer.L4LoadBalancerHandlerTest;
 import com.shieldblaze.expressgateway.restapi.api.loadbalancer.L7LoadBalancerHandlerTest;
 import okhttp3.MediaType;
@@ -54,14 +54,14 @@ public class ClusterHandlerTest {
 
     @BeforeAll
     static void startSpring() {
-        RestAPI.start();
+        RestApi.start();
     }
 
     @AfterAll
     static void teardown() throws IOException, InterruptedException {
         l4LoadBalancerTest.shutdownLoadBalancer();
         l7LoadBalancerTest.shutdownLoadBalancer();
-        RestAPI.stop();
+        RestApi.stop();
         Thread.sleep(2500);
     }
 

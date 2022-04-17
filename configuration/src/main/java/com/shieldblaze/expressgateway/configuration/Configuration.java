@@ -18,9 +18,47 @@
 package com.shieldblaze.expressgateway.configuration;
 
 /**
- * Interface for Configuration classes
+ * Interface for Configuration
  */
-public interface Configuration {
+public interface Configuration<T> {
 
-    String name();
+    /**
+     * ID of this Configuration
+     */
+    String id();
+
+    /**
+     * Profile name of this Configuration
+     */
+    String profileName();
+
+    /**
+     * Check if this Configuration is validated or not
+     */
+    boolean validated();
+
+    /**
+     * Validate this Configuration
+     *
+     * @return This configuration instance
+     * @throws IllegalArgumentException If there is an error during validation
+     */
+    T validate() throws IllegalArgumentException;
+
+    /**
+     * Friendly name of this Configuration.
+     * It is made up of {id:profileName}
+     */
+    default String friendlyName() {
+        return id() + ":" + profileName();
+    }
+
+    /**
+     * Assert successful validation check of this Configuration.
+     * This method must be called whenever this Configuration
+     * values are being accessed.
+     */
+    default void assertValidated() {
+        assert validated() : "Configuration is not validated";
+    }
 }

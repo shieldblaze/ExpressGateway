@@ -17,186 +17,257 @@
  */
 package com.shieldblaze.expressgateway.configuration.buffer;
 
+import com.fasterxml.jackson.annotation.JsonIgnore;
 import com.fasterxml.jackson.annotation.JsonProperty;
 import com.shieldblaze.expressgateway.configuration.Configuration;
+import dev.morphia.annotations.Entity;
+import dev.morphia.annotations.Id;
+import dev.morphia.annotations.Property;
+import dev.morphia.annotations.Transient;
 import io.netty.buffer.PooledByteBufAllocator;
 import io.netty.util.internal.PlatformDependent;
 
+import java.util.UUID;
+
 import static com.shieldblaze.expressgateway.common.utils.NumberUtil.checkPositive;
 import static com.shieldblaze.expressgateway.common.utils.NumberUtil.checkZeroOrPositive;
+import static java.util.Objects.requireNonNull;
 
 /**
- * Configuration for {@link PooledByteBufAllocator}.
- * <p>
- * Use {@link BufferConfigurationBuilder} to build {@link BufferConfiguration} Instance.
+ * Configuration for {@link PooledByteBufAllocator}
  */
-public final class BufferConfiguration implements Configuration {
+@Entity(value = "Buffer", useDiscriminator = false)
+public final class BufferConfiguration implements Configuration<BufferConfiguration> {
 
-    @JsonProperty("preferDirect")
+    @Id
+    @JsonProperty
+    private String id;
+
+    @Property
+    @JsonProperty
+    private String profileName;
+
+    @Property
+    @JsonProperty(required = true)
     private boolean preferDirect;
 
-    @JsonProperty("heapArena")
+    @Property
+    @JsonProperty(required = true)
     private int heapArena;
 
-    @JsonProperty("directArena")
+    @Property
+    @JsonProperty(required = true)
     private int directArena;
 
-    @JsonProperty("pageSize")
+    @Property
+    @JsonProperty(required = true)
     private int pageSize;
 
-    @JsonProperty("maxOrder")
+    @Property
+    @JsonProperty(required = true)
     private int maxOrder;
 
-    @JsonProperty("smallCacheSize")
+    @Property
+    @JsonProperty(required = true)
     private int smallCacheSize;
 
-    @JsonProperty("normalCacheSize")
+    @Property
+    @JsonProperty(required = true)
     private int normalCacheSize;
 
-    @JsonProperty("useCacheForAllThreads")
+    @Property
+    @JsonProperty(required = true)
     private boolean useCacheForAllThreads;
 
-    @JsonProperty("directMemoryCacheAlignment")
+    @Property
+    @JsonProperty(required = true)
     private int directMemoryCacheAlignment;
 
-    BufferConfiguration() {
-        // Prevent outside initialization
-    }
+    @Transient
+    @JsonIgnore
+    private boolean validated;
 
     /**
      * Default instance of {@link BufferConfiguration}
      */
-    public static final BufferConfiguration DEFAULT = new BufferConfiguration(
-            true,
-            16384,
-            11,
-            (int) Math.max(0, Math.min((long) Runtime.getRuntime().availableProcessors() * 2, Runtime.getRuntime().maxMemory() / 16384 << 11 / 2 / 3)),
-            (int) Math.max(0, Math.min((long) Runtime.getRuntime().availableProcessors() * 2, PlatformDependent.maxDirectMemory() / 16384 << 11 / 2 / 3)),
-            256,
-            64,
-            true,
-            0
-    );
+    public static final BufferConfiguration DEFAULT = new BufferConfiguration();
 
-    private BufferConfiguration(boolean preferDirect, int pageSize, int maxOrder, int heapArena, int directArena, int smallCacheSize,
-                                int normalCacheSize, boolean useCacheForAllThreads, int directMemoryCacheAlignment) {
-        this.preferDirect = preferDirect;
-        this.heapArena = heapArena;
-        this.directArena = directArena;
-        this.pageSize = pageSize;
-        this.maxOrder = maxOrder;
-        this.smallCacheSize = smallCacheSize;
-        this.normalCacheSize = normalCacheSize;
-        this.useCacheForAllThreads = useCacheForAllThreads;
-        this.directMemoryCacheAlignment = directMemoryCacheAlignment;
+    static {
+        DEFAULT.id = "default";
+        DEFAULT.profileName = "default";
+        DEFAULT.preferDirect = true;
+        DEFAULT.pageSize = 16_384;
+        DEFAULT.maxOrder = 11;
+        DEFAULT.heapArena = (int) Math.max(0, Math.min((long) Runtime.getRuntime().availableProcessors() * 2,
+                Runtime.getRuntime().maxMemory() / 16384 << 11 / 2 / 3));
+        DEFAULT.directArena = (int) Math.max(0, Math.min((long) Runtime.getRuntime().availableProcessors() * 2,
+                PlatformDependent.maxDirectMemory() / 16384 << 11 / 2 / 3));
+        DEFAULT.smallCacheSize = 256;
+        DEFAULT.normalCacheSize = 64;
+        DEFAULT.useCacheForAllThreads = true;
+        DEFAULT.directMemoryCacheAlignment = 0;
+        DEFAULT.validated = true;
     }
 
     /**
-     * @see BufferConfigurationBuilder#withPreferDirect(boolean)
+     * Profile name
+     */
+    @Override
+    public String profileName() {
+        assertValidated();
+        return profileName;
+    }
+
+    /**
+     * Profile name
+     */
+    public BufferConfiguration setProfileName(String profileName) {
+        this.profileName = profileName;
+        return this;
+    }
+
+    /**
+     * {@code true} to use direct memory else set to {@code false}
+     */
+    public BufferConfiguration setPreferDirect(boolean preferDirect) {
+        this.preferDirect = preferDirect;
+        return this;
+    }
+
+    /**
+     * {@code true} to use direct memory else set to {@code false}
      */
     public boolean preferDirect() {
+        assertValidated();
         return preferDirect;
     }
 
-    BufferConfiguration setPreferDirect(boolean preferDirect) {
-        this.preferDirect = preferDirect;
-        return this;
-    }
-
     /**
-     * @see BufferConfigurationBuilder#withHeapArena(int)
+     * Heap Arena Size
      */
-    public int heapArena() {
-        return heapArena;
-    }
-
-    BufferConfiguration setHeapArena(int heapArena) {
+    public BufferConfiguration setHeapArena(int heapArena) {
         this.heapArena = heapArena;
         return this;
     }
 
     /**
-     * @see BufferConfigurationBuilder#withDirectArena(int)
+     * Heap Arena Size
      */
-    public int directArena() {
-        return directArena;
+    public int heapArena() {
+        assertValidated();
+        return heapArena;
     }
 
-    BufferConfiguration setDirectArena(int directArena) {
+    /**
+     * Direct Arena Size
+     */
+    public BufferConfiguration setDirectArena(int directArena) {
         this.directArena = directArena;
         return this;
     }
 
     /**
-     * @see BufferConfigurationBuilder#withPageSize(int)
+     * Direct Arena Size
      */
-    public int pageSize() {
-        return pageSize;
+    public int directArena() {
+        assertValidated();
+        return directArena;
     }
 
-    BufferConfiguration setPageSize(int pageSize) {
+    /**
+     * Page Size
+     */
+    public BufferConfiguration setPageSize(int pageSize) {
         this.pageSize = pageSize;
         return this;
     }
 
     /**
-     * @see BufferConfigurationBuilder#withMaxOrder(int)
+     * Page Size
      */
-    public int maxOrder() {
-        return maxOrder;
+    public int pageSize() {
+        assertValidated();
+        return pageSize;
     }
 
-    BufferConfiguration setMaxOrder(int maxOrder) {
+    /**
+     * Max Order
+     */
+    public BufferConfiguration setMaxOrder(int maxOrder) {
         this.maxOrder = maxOrder;
         return this;
     }
 
     /**
-     * @see BufferConfigurationBuilder#withSmallCacheSize(int)
+     * Max Order
      */
-    public int smallCacheSize() {
-        return smallCacheSize;
+    public int maxOrder() {
+        assertValidated();
+        return maxOrder;
     }
 
-    BufferConfiguration setSmallCacheSize(int smallCacheSize) {
+    /**
+     * Small Cache Size
+     */
+    public BufferConfiguration setSmallCacheSize(int smallCacheSize) {
         this.smallCacheSize = smallCacheSize;
         return this;
     }
 
     /**
-     * @see BufferConfigurationBuilder#withNormalCacheSize(int)
+     * Small Cache Size
      */
-    public int normalCacheSize() {
-        return normalCacheSize;
+    public int smallCacheSize() {
+        assertValidated();
+        return smallCacheSize;
     }
 
-    BufferConfiguration setNormalCacheSize(int normalCacheSize) {
+    /**
+     * Normal Cache Size
+     */
+    public BufferConfiguration setNormalCacheSize(int normalCacheSize) {
         this.normalCacheSize = normalCacheSize;
         return this;
     }
 
     /**
-     * @see BufferConfigurationBuilder#withUseCacheForAllThreads(boolean)
+     * Normal Cache Size
      */
-    public boolean useCacheForAllThreads() {
-        return useCacheForAllThreads;
+    public int normalCacheSize() {
+        assertValidated();
+        return normalCacheSize;
     }
 
-    BufferConfiguration setUseCacheForAllThreads(boolean useCacheForAllThreads) {
+    /**
+     * {@code true} to use Cache for all threads else set to {@code false}
+     */
+    public BufferConfiguration setUseCacheForAllThreads(boolean useCacheForAllThreads) {
         this.useCacheForAllThreads = useCacheForAllThreads;
         return this;
     }
 
     /**
-     * @see BufferConfigurationBuilder#withDirectMemoryCacheAlignment(int)
+     * {@code true} to use Cache for all threads else set to {@code false}
      */
-    public int directMemoryCacheAlignment() {
-        return directMemoryCacheAlignment;
+    public boolean useCacheForAllThreads() {
+        assertValidated();
+        return useCacheForAllThreads;
     }
 
-    BufferConfiguration setDirectMemoryCacheAlignment(int directMemoryCacheAlignment) {
+    /**
+     * Direct Memory Cache Alignment
+     */
+    public BufferConfiguration setDirectMemoryCacheAlignment(int directMemoryCacheAlignment) {
         this.directMemoryCacheAlignment = directMemoryCacheAlignment;
         return this;
+    }
+
+    /**
+     * Direct Memory Cache Alignment
+     */
+    public int directMemoryCacheAlignment() {
+        assertValidated();
+        return directMemoryCacheAlignment;
     }
 
     /**
@@ -206,18 +277,28 @@ public final class BufferConfiguration implements Configuration {
      * @throws IllegalArgumentException If any value is invalid
      */
     public BufferConfiguration validate() throws IllegalArgumentException {
-        checkPositive(heapArena, "heapArena");
-        checkPositive(directArena, "directArena");
-        checkPositive(pageSize, "pageSize");
-        checkPositive(maxOrder, "maxOrder");
-        checkPositive(smallCacheSize, "smallCacheSize");
-        checkPositive(normalCacheSize, "normalCacheSize");
-        checkZeroOrPositive(directMemoryCacheAlignment, "directMemoryCacheAlignment");
+        if (id == null) {
+            id = UUID.randomUUID().toString();
+        }
+        requireNonNull(profileName, "Profile Name");
+        checkPositive(heapArena, "Heap Arena");
+        checkPositive(directArena, "Direct Arena");
+        checkPositive(pageSize, "Page Size");
+        checkPositive(maxOrder, "Max Order");
+        checkPositive(smallCacheSize, "Small Cache Size");
+        checkPositive(normalCacheSize, "Normal Cache Size");
+        checkZeroOrPositive(directMemoryCacheAlignment, "Direct Memory Cache Alignment");
+        validated = true;
         return this;
     }
 
     @Override
-    public String name() {
-        return "BufferConfiguration";
+    public String id() {
+        return id;
+    }
+
+    @Override
+    public boolean validated() {
+        return validated;
     }
 }

@@ -24,44 +24,91 @@ import com.shieldblaze.expressgateway.common.utils.NumberUtil;
 import com.shieldblaze.expressgateway.concurrent.eventstream.AsyncEventStream;
 import com.shieldblaze.expressgateway.concurrent.eventstream.EventStream;
 import com.shieldblaze.expressgateway.configuration.Configuration;
+import dev.morphia.annotations.Entity;
+import dev.morphia.annotations.Id;
+import dev.morphia.annotations.Property;
+import dev.morphia.annotations.Transient;
 
 import java.io.Closeable;
+import java.util.Objects;
+import java.util.UUID;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 
 /**
- * Configuration for {@link EventStreamConfiguration}.
- * <p>
- * Use {@link EventStreamConfigurationBuilder} for building {@link EventStreamConfiguration} instance.
+ * Configuration for {@link EventStreamConfiguration}
  */
-public final class EventStreamConfiguration implements Configuration, Closeable {
+@Entity(value = "EventStream", useDiscriminator = false)
+public final class EventStreamConfiguration implements Configuration<EventStreamConfiguration>, Closeable {
 
-    @JsonProperty("workers")
+    @Id
+    @JsonProperty
+    private String id;
+
+    @Property
+    @JsonProperty
+    private String profileName;
+
+    @Property
+    @JsonProperty
     private int workers;
 
+    @Transient
+    @JsonIgnore
+    private boolean validated;
+
+    @Transient
     @JsonIgnore
     private ExecutorService executor;
 
+    @Transient
     @JsonIgnore
     private EventStream eventStream;
 
-    public static final EventStreamConfiguration DEFAULT = new EventStreamConfiguration(Runtime.getRuntime().availableProcessors());
+    public static final EventStreamConfiguration DEFAULT = new EventStreamConfiguration();
 
-    public EventStreamConfiguration() {
-        // For deserialization
+    static {
+        DEFAULT.id = "default";
+        DEFAULT.profileName = "default";
+        DEFAULT.workers = Runtime.getRuntime().availableProcessors();
+        DEFAULT.validated = true;
     }
 
-    EventStreamConfiguration(int workers) {
+    /**
+     * Profile name
+     */
+    public EventStreamConfiguration setProfileName(String profileName) {
+        this.profileName = profileName;
+        return this;
+    }
+
+    /**
+     * Profile name
+     */
+    @Override
+    public String profileName() {
+        assertValidated();
+        return profileName;
+    }
+
+    /**
+     * Workers
+     */
+    public EventStreamConfiguration setWorkers(int workers) {
         this.workers = workers;
-        executor = Executors.newFixedThreadPool(workers);
-        eventStream = new AsyncEventStream(executor);
+        return this;
     }
 
+    /**
+     * Workers
+     */
     public int workers() {
+        assertValidated();
         return workers;
     }
 
     public EventStream eventStream() {
+        // Lazy initialization of Executors
         if (eventStream == null) {
             executor = Executors.newFixedThreadPool(workers);
             eventStream = new AsyncEventStream(executor);
@@ -76,13 +123,23 @@ public final class EventStreamConfiguration implements Configuration, Closeable 
      * @throws IllegalArgumentException If any value is invalid
      */
     public EventStreamConfiguration validate() throws IllegalArgumentException {
+        if (id == null) {
+            id = UUID.randomUUID().toString();
+        }
+        Objects.requireNonNull(profileName, "Profile Name");
         NumberUtil.checkPositive(workers, "Workers");
+        validated = true;
         return this;
     }
 
     @Override
-    public String name() {
-        return "EventStreamConfiguration";
+    public String id() {
+        return id;
+    }
+
+    @Override
+    public boolean validated() {
+        return validated;
     }
 
     @Override

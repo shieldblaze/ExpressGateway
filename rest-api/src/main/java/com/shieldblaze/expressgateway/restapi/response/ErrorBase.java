@@ -22,7 +22,8 @@ public enum ErrorBase {
 
     // API Errors
     INVALID_REQUEST(100, "Invalid Request"),
-    CONFIGURATION_NOT_FOUND(101, "Configuration Not Found");
+    CONFIGURATION_NOT_FOUND(101, "Configuration Not Found"),
+    DEFAULT_CONFIGURATION_CANNOT_BE_MODIFIED(102, "Default Configuration Cannot Be Modified");
 
     private final int ErrorCode;
     private final String ErrorMessage;

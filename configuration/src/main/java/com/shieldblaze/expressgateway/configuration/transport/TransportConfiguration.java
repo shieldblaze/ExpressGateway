@@ -17,8 +17,13 @@
  */
 package com.shieldblaze.expressgateway.configuration.transport;
 
+import com.fasterxml.jackson.annotation.JsonIgnore;
 import com.fasterxml.jackson.annotation.JsonProperty;
 import com.shieldblaze.expressgateway.configuration.Configuration;
+import dev.morphia.annotations.Entity;
+import dev.morphia.annotations.Id;
+import dev.morphia.annotations.Property;
+import dev.morphia.annotations.Transient;
 import io.netty.channel.AdaptiveRecvByteBufAllocator;
 import io.netty.channel.FixedRecvByteBufAllocator;
 import io.netty.channel.RecvByteBufAllocator;
@@ -27,11 +32,21 @@ import io.netty.incubator.channel.uring.IOUring;
 import io.netty.util.internal.ObjectUtil;
 
 import java.util.Objects;
+import java.util.UUID;
 
 /**
  * Transport Configuration
  */
+@Entity(value = "Transport", useDiscriminator = false)
 public final class TransportConfiguration implements Configuration {
+
+    @Id
+    @JsonProperty
+    private String id;
+
+    @Property
+    @JsonProperty
+    private String profileName;
 
     @JsonProperty("transportType")
     private TransportType transportType;
@@ -60,6 +75,10 @@ public final class TransportConfiguration implements Configuration {
     @JsonProperty("connectionIdleTimeout")
     private int connectionIdleTimeout;
 
+    @Transient
+    @JsonIgnore
+    private boolean validated;
+
     public static final TransportConfiguration DEFAULT = new TransportConfiguration();
 
     static {
@@ -71,6 +90,8 @@ public final class TransportConfiguration implements Configuration {
             DEFAULT.transportType = TransportType.NIO;
         }
 
+        DEFAULT.id = "default";
+        DEFAULT.profileName = "default";
         DEFAULT.receiveBufferAllocationType = ReceiveBufferAllocationType.ADAPTIVE;
         DEFAULT.receiveBufferSizes = new int[]{512, 9001, 65535};
         DEFAULT.tcpConnectionBacklog = 50_000;
@@ -79,35 +100,73 @@ public final class TransportConfiguration implements Configuration {
         DEFAULT.tcpFastOpenMaximumPendingRequests = 100_000;
         DEFAULT.backendConnectTimeout = 1000 * 10;  // 10 Seconds
         DEFAULT.connectionIdleTimeout = 1000 * 120; // 2 Minute
+        DEFAULT.validated = true;
     }
 
-    public TransportType transportType() {
-        return transportType;
+    /**
+     * Profile Name
+     */
+    public TransportConfiguration setProfileName(String profileName) {
+        this.profileName = profileName;
+        return this;
     }
 
-    TransportConfiguration setTransportType(TransportType transportType) {
+    /**
+     * Profile Name
+     */
+    @Override
+    public String profileName() {
+        return profileName;
+    }
+
+    /**
+     * Transport Type
+     */
+    public TransportConfiguration setTransportType(TransportType transportType) {
         this.transportType = transportType;
         return this;
     }
 
-    public ReceiveBufferAllocationType receiveBufferAllocationType() {
-        return receiveBufferAllocationType;
+    /**
+     * Transport Type
+     */
+    public TransportType transportType() {
+        return transportType;
     }
 
-    TransportConfiguration setReceiveBufferAllocationType(ReceiveBufferAllocationType receiveBufferAllocationType) {
+    /**
+     * Receive Buffer Allocation Type
+     */
+    public TransportConfiguration setReceiveBufferAllocationType(ReceiveBufferAllocationType receiveBufferAllocationType) {
         this.receiveBufferAllocationType = receiveBufferAllocationType;
         return this;
     }
 
-    public int[] receiveBufferSizes() {
-        return receiveBufferSizes;
+    /**
+     * Receive Buffer Allocation Type
+     */
+    public ReceiveBufferAllocationType receiveBufferAllocationType() {
+        return receiveBufferAllocationType;
     }
 
-    TransportConfiguration setReceiveBufferSizes(int[] receiveBufferSizes) {
+    /**
+     * Receive Buffer Sizes
+     */
+    public TransportConfiguration setReceiveBufferSizes(int[] receiveBufferSizes) {
         this.receiveBufferSizes = receiveBufferSizes;
         return this;
     }
 
+    /**
+     * Receive Buffer Sizes
+     */
+    public int[] receiveBufferSizes() {
+        return receiveBufferSizes;
+    }
+
+    /**
+     * Returns a new appropriate {@link RecvByteBufAllocator} implementation
+     */
     public RecvByteBufAllocator recvByteBufAllocator() {
         if (receiveBufferAllocationType == ReceiveBufferAllocationType.FIXED) {
             return new FixedRecvByteBufAllocator(receiveBufferSizes[0]);
@@ -116,58 +175,95 @@ public final class TransportConfiguration implements Configuration {
         }
     }
 
-    public int tcpConnectionBacklog() {
-        return tcpConnectionBacklog;
-    }
-
-    TransportConfiguration setTcpConnectionBacklog(int TCPConnectionBacklog) {
+    /**
+     * TCP Connection Backlog
+     */
+    public TransportConfiguration setTcpConnectionBacklog(int TCPConnectionBacklog) {
         this.tcpConnectionBacklog = TCPConnectionBacklog;
         return this;
     }
 
+    /**
+     * TCP Connection Backlog
+     */
+    public int tcpConnectionBacklog() {
+        return tcpConnectionBacklog;
+    }
+
+    /**
+     * Socket Receive Buffer Size
+     */
     public int socketReceiveBufferSize() {
         return socketReceiveBufferSize;
     }
 
-    TransportConfiguration setSocketReceiveBufferSize(int socketReceiveBufferSize) {
+    /**
+     * Socket Receive Buffer Size
+     */
+    public TransportConfiguration setSocketReceiveBufferSize(int socketReceiveBufferSize) {
         this.socketReceiveBufferSize = socketReceiveBufferSize;
         return this;
     }
 
+
+    /**
+     * Socket Send Buffer Size
+     */
     public int socketSendBufferSize() {
         return socketSendBufferSize;
     }
 
-    TransportConfiguration setSocketSendBufferSize(int socketSendBufferSize) {
+    /**
+     * Socket Send Buffer Size
+     */
+    public TransportConfiguration setSocketSendBufferSize(int socketSendBufferSize) {
         this.socketSendBufferSize = socketSendBufferSize;
         return this;
     }
 
-    public int tcpFastOpenMaximumPendingRequests() {
-        return tcpFastOpenMaximumPendingRequests;
-    }
-
-    TransportConfiguration setTcpFastOpenMaximumPendingRequests(int TCPFastOpenMaximumPendingRequests) {
+    /**
+     * TCP Fast Open Maximum Pending Requests
+     */
+    public TransportConfiguration setTcpFastOpenMaximumPendingRequests(int TCPFastOpenMaximumPendingRequests) {
         this.tcpFastOpenMaximumPendingRequests = TCPFastOpenMaximumPendingRequests;
         return this;
     }
 
-    public int backendConnectTimeout() {
-        return backendConnectTimeout;
+    /**
+     * TCP Fast Open Maximum Pending Requests
+     */
+    public int tcpFastOpenMaximumPendingRequests() {
+        return tcpFastOpenMaximumPendingRequests;
     }
 
-    TransportConfiguration setBackendConnectTimeout(int backendConnectTimeout) {
+    /**
+     * Backend Connect Timeout
+     */
+    public TransportConfiguration setBackendConnectTimeout(int backendConnectTimeout) {
         this.backendConnectTimeout = backendConnectTimeout;
         return this;
     }
 
-    public int connectionIdleTimeout() {
-        return connectionIdleTimeout;
+    /**
+     * Backend Connect Timeout
+     */
+    public int backendConnectTimeout() {
+        return backendConnectTimeout;
     }
 
-    TransportConfiguration setConnectionIdleTimeout(int connectionIdleTimeout) {
+    /**
+     * Connection Idle Timeout
+     */
+    public TransportConfiguration setConnectionIdleTimeout(int connectionIdleTimeout) {
         this.connectionIdleTimeout = connectionIdleTimeout;
         return this;
+    }
+
+    /**
+     * Connection Idle Timeout
+     */
+    public int connectionIdleTimeout() {
+        return connectionIdleTimeout;
     }
 
     /**
@@ -178,6 +274,10 @@ public final class TransportConfiguration implements Configuration {
      * @throws NullPointerException If any value is null
      */
     public TransportConfiguration validate() throws IllegalArgumentException, NullPointerException {
+        if (id == null) {
+            id = UUID.randomUUID().toString();
+        }
+        Objects.requireNonNull(profileName, "Profile Name");
         Objects.requireNonNull(transportType, "Transport Type");
         Objects.requireNonNull(receiveBufferAllocationType, "Receive Buffer Allocation Type");
         Objects.requireNonNull(receiveBufferSizes, "Receive Buffer Sizes");
@@ -228,11 +328,17 @@ public final class TransportConfiguration implements Configuration {
             throw new IllegalArgumentException("Socket Send Buffer Size Must Be Greater Than 64");
         }
 
+        validated = true;
         return this;
     }
 
     @Override
-    public String name() {
-        return "TransportConfiguration";
+    public String id() {
+        return id;
+    }
+
+    @Override
+    public boolean validated() {
+        return validated;
     }
 }

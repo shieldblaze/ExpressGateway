@@ -17,43 +17,101 @@
  */
 package com.shieldblaze.expressgateway.configuration.healthcheck;
 
+import com.fasterxml.jackson.annotation.JsonIgnore;
 import com.fasterxml.jackson.annotation.JsonProperty;
 import com.shieldblaze.expressgateway.common.utils.NumberUtil;
 import com.shieldblaze.expressgateway.configuration.Configuration;
+import dev.morphia.annotations.Entity;
+import dev.morphia.annotations.Id;
+import dev.morphia.annotations.Property;
+import dev.morphia.annotations.Transient;
+
+import java.util.Objects;
+import java.util.UUID;
 
 /**
- * Configuration for {@link HealthCheckConfiguration}.
- * <p>
- * Use {@link HealthCheckConfigurationBuilder} to build {@link HealthCheckConfiguration} instance.
+ * Configuration for {@link HealthCheckConfiguration}
  */
-public final class HealthCheckConfiguration implements Configuration {
+@Entity(value = "HealthCheck", useDiscriminator = false)
+public final class HealthCheckConfiguration implements Configuration<HealthCheckConfiguration> {
 
-    @JsonProperty(value = "workers")
+    @Id
+    @JsonProperty
+    private String id;
+
+    @Property
+    @JsonProperty
+    private String profileName;
+
+    @Property
+    @JsonProperty
     private int workers;
 
-    @JsonProperty(value = "timeInterval")
+    @Property
+    @JsonProperty
     private int timeInterval;
 
-    public static final HealthCheckConfiguration DEFAULT = new HealthCheckConfiguration()
-            .setWorkers(Runtime.getRuntime().availableProcessors())
-            .setTimeInterval(1); // 1 Second
+    @Transient
+    @JsonIgnore
+    private boolean validated;
 
-    public int workers() {
-        return workers;
+    public static final HealthCheckConfiguration DEFAULT = new HealthCheckConfiguration();
+
+    static {
+        DEFAULT.id = "default";
+        DEFAULT.profileName = "default";
+        DEFAULT.workers = Runtime.getRuntime().availableProcessors();
+        DEFAULT.timeInterval = 1;
+        DEFAULT.validated = true;
     }
 
-    public int timeInterval() {
-        return timeInterval;
+    /**
+     * Profile name
+     */
+    public HealthCheckConfiguration setProfileName(String profileName) {
+        this.profileName = profileName;
+        return this;
     }
 
-    HealthCheckConfiguration setWorkers(int workers) {
+    /**
+     * Profile name
+     */
+    @Override
+    public String profileName() {
+        assertValidated();
+        return profileName;
+    }
+
+    /**
+     * Workers
+     */
+    public HealthCheckConfiguration setWorkers(int workers) {
         this.workers = workers;
         return this;
     }
 
-    HealthCheckConfiguration setTimeInterval(int timeInterval) {
+    /**
+     * Workers
+     */
+    public int workers() {
+        assertValidated();
+        return workers;
+    }
+
+    /**
+     * Time Interval
+     */
+    public HealthCheckConfiguration setTimeInterval(int timeInterval) {
         this.timeInterval = timeInterval;
         return this;
+    }
+
+    /**
+     * Time Interval
+     */
+    public int timeInterval() {
+        assertValidated();
+        return timeInterval;
     }
 
     /**
@@ -63,13 +121,23 @@ public final class HealthCheckConfiguration implements Configuration {
      * @throws IllegalArgumentException If any value is invalid
      */
     public HealthCheckConfiguration validate() throws IllegalArgumentException {
+        if (id == null) {
+            id = UUID.randomUUID().toString();
+        }
+        Objects.requireNonNull(profileName, "Profile Name");
         NumberUtil.checkPositive(workers, "Workers");
         NumberUtil.checkPositive(timeInterval, "TimeInterval");
+        validated = true;
         return this;
     }
 
     @Override
-    public String name() {
-        return "HealthCheckConfiguration";
+    public String id() {
+        return id;
+    }
+
+    @Override
+    public boolean validated() {
+        return validated;
     }
 }
