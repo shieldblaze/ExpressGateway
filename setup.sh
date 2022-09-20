@@ -50,10 +50,7 @@ fs.nr_open=52428800
 
 # -- Upgrade Kernel to latest mainline kernel, disable SELinux and Reboot the Server --
 if [ -f /etc/redhat-release ]; then
-  sudo rpm --import https://yum.corretto.aws/corretto.key
-  sudo curl -L -o /etc/yum.repos.d/corretto.repo https://yum.corretto.aws/corretto.repo
   sudo yum update -y
-  sudo yum install epel-release tc net-tools java-11-amazon-corretto-devel -y
   sudo rpm --import https://www.elrepo.org/RPM-GPG-KEY-elrepo.org
   sudo yum install https://www.elrepo.org/elrepo-release-8.el8.elrepo.noarch.rpm -y
   sudo yum update -y
