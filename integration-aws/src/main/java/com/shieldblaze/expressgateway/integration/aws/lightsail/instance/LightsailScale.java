@@ -17,10 +17,10 @@
  */
 package com.shieldblaze.expressgateway.integration.aws.lightsail.instance;
 
-import com.shieldblaze.expressgateway.integration.server.ScaleIn;
-import com.shieldblaze.expressgateway.integration.server.ScaleOut;
 import com.shieldblaze.expressgateway.integration.aws.lightsail.events.LightsailScaleInEvent;
 import com.shieldblaze.expressgateway.integration.aws.lightsail.events.LightsailScaleOutEvent;
+import com.shieldblaze.expressgateway.integration.server.ScaleIn;
+import com.shieldblaze.expressgateway.integration.server.ScaleOut;
 import software.amazon.awssdk.services.lightsail.LightsailClient;
 import software.amazon.awssdk.services.lightsail.model.CreateInstancesRequest;
 import software.amazon.awssdk.services.lightsail.model.CreateInstancesResponse;

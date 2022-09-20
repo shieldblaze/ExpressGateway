@@ -35,7 +35,10 @@ import org.junit.jupiter.api.TestMethodOrder;
 
 import java.io.IOException;
 
-import static org.junit.jupiter.api.Assertions.*;
+import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertNotNull;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 
 @Disabled("Disabled due to some fault, it'll be enabled in upcoming PR")
 @TestMethodOrder(MethodOrderer.OrderAnnotation.class)

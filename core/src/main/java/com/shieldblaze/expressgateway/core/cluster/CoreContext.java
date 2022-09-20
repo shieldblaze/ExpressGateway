@@ -18,7 +18,6 @@
 package com.shieldblaze.expressgateway.core.cluster;
 
 import com.shieldblaze.expressgateway.backend.Node;
-import com.shieldblaze.expressgateway.common.utils.MathUtil;
 
 import java.util.Map;
 import java.util.Objects;

@@ -19,11 +19,11 @@ package com.shieldblaze.expressgateway.integration.aws.ec2.instance;
 
 import com.shieldblaze.expressgateway.common.annotation.Async;
 import com.shieldblaze.expressgateway.concurrent.GlobalExecutors;
-import com.shieldblaze.expressgateway.integration.server.Server;
 import com.shieldblaze.expressgateway.integration.aws.ec2.events.EC2ServerDestroyEvent;
 import com.shieldblaze.expressgateway.integration.aws.ec2.events.EC2ServerRestartEvent;
 import com.shieldblaze.expressgateway.integration.event.ServerDestroyEvent;
 import com.shieldblaze.expressgateway.integration.event.ServerRestartEvent;
+import com.shieldblaze.expressgateway.integration.server.Server;
 import software.amazon.awssdk.services.ec2.Ec2Client;
 import software.amazon.awssdk.services.ec2.model.Instance;
 import software.amazon.awssdk.services.ec2.model.RebootInstancesRequest;

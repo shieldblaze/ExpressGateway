@@ -19,10 +19,10 @@ package com.shieldblaze.expressgateway.integration.aws.ec2.route53;
 
 import com.shieldblaze.expressgateway.common.annotation.Async;
 import com.shieldblaze.expressgateway.concurrent.GlobalExecutors;
-import com.shieldblaze.expressgateway.integration.dns.DNSAddRecord;
-import com.shieldblaze.expressgateway.integration.dns.DNSRemoveRecord;
 import com.shieldblaze.expressgateway.integration.aws.ec2.route53.events.Route53DNSAddedEvent;
 import com.shieldblaze.expressgateway.integration.aws.ec2.route53.events.Route53DNSRemovedEvent;
+import com.shieldblaze.expressgateway.integration.dns.DNSAddRecord;
+import com.shieldblaze.expressgateway.integration.dns.DNSRemoveRecord;
 import software.amazon.awssdk.services.route53.Route53Client;
 import software.amazon.awssdk.services.route53.model.Change;
 import software.amazon.awssdk.services.route53.model.ChangeAction;

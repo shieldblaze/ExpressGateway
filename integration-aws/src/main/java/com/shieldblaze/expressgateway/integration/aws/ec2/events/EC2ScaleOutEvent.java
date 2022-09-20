@@ -19,8 +19,6 @@ package com.shieldblaze.expressgateway.integration.aws.ec2.events;
 
 import com.shieldblaze.expressgateway.integration.event.FleetScaleOutEvent;
 import software.amazon.awssdk.services.ec2.model.Instance;
-import software.amazon.awssdk.services.ec2.model.RunInstancesResponse;
-import software.amazon.awssdk.services.lightsail.model.CreateInstancesResponse;
 
 public final class EC2ScaleOutEvent extends FleetScaleOutEvent<Instance> {
     // Empty
