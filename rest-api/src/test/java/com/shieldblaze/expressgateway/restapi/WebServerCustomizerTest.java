@@ -18,7 +18,6 @@
 package com.shieldblaze.expressgateway.restapi;
 
 import com.shieldblaze.expressgateway.common.datastore.DataStore;
-import com.shieldblaze.expressgateway.common.utils.SelfSignedCertificate;
 import io.netty.handler.ssl.util.InsecureTrustManagerFactory;
 import org.junit.jupiter.api.Test;
 
@@ -27,9 +26,10 @@ import javax.net.ssl.SSLSession;
 import javax.net.ssl.SSLSocket;
 import javax.net.ssl.SSLSocketFactory;
 import java.security.SecureRandom;
-import java.util.List;
 
-import static org.junit.jupiter.api.Assertions.*;
+import static org.junit.jupiter.api.Assertions.assertArrayEquals;
+import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 
 class WebServerCustomizerTest {
 

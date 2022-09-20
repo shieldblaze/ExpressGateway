@@ -17,9 +17,9 @@
  */
 package com.shieldblaze.expressgateway.integration.aws.ec2.route53;
 
+import com.shieldblaze.expressgateway.integration.aws.AWS;
 import com.shieldblaze.expressgateway.integration.dns.DNSManager;
 import com.shieldblaze.expressgateway.integration.dns.DNSRecord;
-import com.shieldblaze.expressgateway.integration.aws.AWS;
 import com.shieldblaze.expressgateway.integration.event.DNSAddedEvent;
 import com.shieldblaze.expressgateway.integration.event.DNSRemovedEvent;
 import software.amazon.awssdk.auth.credentials.AwsCredentialsProvider;

@@ -17,8 +17,8 @@
  */
 package com.shieldblaze.expressgateway.integration.server;
 
-import com.shieldblaze.expressgateway.integration.event.ServerRestartEvent;
 import com.shieldblaze.expressgateway.integration.event.ServerDestroyEvent;
+import com.shieldblaze.expressgateway.integration.event.ServerRestartEvent;
 
 import java.net.Inet4Address;
 import java.net.Inet6Address;

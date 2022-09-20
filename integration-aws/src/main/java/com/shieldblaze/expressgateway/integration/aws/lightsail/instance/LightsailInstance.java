@@ -17,11 +17,11 @@
  */
 package com.shieldblaze.expressgateway.integration.aws.lightsail.instance;
 
-import com.shieldblaze.expressgateway.integration.server.Server;
 import com.shieldblaze.expressgateway.integration.aws.lightsail.events.LightsailServerDestroyEvent;
 import com.shieldblaze.expressgateway.integration.aws.lightsail.events.LightsailServerRestartEvent;
 import com.shieldblaze.expressgateway.integration.event.ServerDestroyEvent;
 import com.shieldblaze.expressgateway.integration.event.ServerRestartEvent;
+import com.shieldblaze.expressgateway.integration.server.Server;
 import software.amazon.awssdk.services.lightsail.LightsailClient;
 import software.amazon.awssdk.services.lightsail.model.DeleteInstanceRequest;
 import software.amazon.awssdk.services.lightsail.model.DeleteInstanceResponse;

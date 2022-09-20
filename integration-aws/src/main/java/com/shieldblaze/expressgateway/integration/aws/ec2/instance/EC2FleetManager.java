@@ -17,11 +17,11 @@
  */
 package com.shieldblaze.expressgateway.integration.aws.ec2.instance;
 
-import com.shieldblaze.expressgateway.integration.server.FleetManager;
-import com.shieldblaze.expressgateway.integration.server.Server;
 import com.shieldblaze.expressgateway.integration.aws.AWS;
 import com.shieldblaze.expressgateway.integration.event.FleetScaleInEvent;
 import com.shieldblaze.expressgateway.integration.event.FleetScaleOutEvent;
+import com.shieldblaze.expressgateway.integration.server.FleetManager;
+import com.shieldblaze.expressgateway.integration.server.Server;
 import software.amazon.awssdk.auth.credentials.AwsCredentialsProvider;
 import software.amazon.awssdk.regions.Region;
 import software.amazon.awssdk.services.ec2.Ec2Client;
