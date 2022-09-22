@@ -120,4 +120,8 @@ public final class SystemPropertyUtil {
             return false;
         }
     }
+
+    private SystemPropertyUtil() {
+        // Prevent outside initialization
+    }
 }

@@ -35,10 +35,6 @@ import java.util.Scanner;
 public final class ExpressGateway {
     private static final Logger logger = LogManager.getLogger(ExpressGateway.class);
 
-    static {
-        System.setProperty("StartedAt", String.valueOf(System.currentTimeMillis()));
-    }
-
     public static void main(String[] args) {
         System.out.println("______                               _____       _                           \n" +
                 " |  ____|                             / ____|     | |                          \n" +

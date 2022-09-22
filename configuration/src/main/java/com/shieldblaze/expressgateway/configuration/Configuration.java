@@ -59,6 +59,6 @@ public interface Configuration<T> {
      * values are being accessed.
      */
     default void assertValidated() {
-        assert validated() : "Configuration is not validated";
+        assert validated() : "Configuration must be validated";
     }
 }

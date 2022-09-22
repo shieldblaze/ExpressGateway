@@ -154,14 +154,14 @@ public record ConfigurationContext(String profileName,
                 throw new IllegalArgumentException("Cannot save configurations because Profile Name is not present");
             }
 
-            ConfigurationStore.save(profileName, bufferConfiguration);
-            ConfigurationStore.save(profileName, eventLoopConfiguration);
-            ConfigurationStore.save(profileName, eventStreamConfiguration);
-            ConfigurationStore.save(profileName, healthCheckConfiguration);
-            ConfigurationStore.save(profileName, httpConfiguration);
-            ConfigurationStore.save(profileName, tlsClientConfiguration);
-            ConfigurationStore.save(profileName, tlsServerConfiguration);
-            ConfigurationStore.save(profileName, transportConfiguration);
+            ConfigurationStore.save(bufferConfiguration);
+            ConfigurationStore.save(eventLoopConfiguration);
+            ConfigurationStore.save(eventStreamConfiguration);
+            ConfigurationStore.save(healthCheckConfiguration);
+            ConfigurationStore.save(httpConfiguration);
+            ConfigurationStore.save(tlsClientConfiguration);
+            ConfigurationStore.save(tlsServerConfiguration);
+            ConfigurationStore.save(transportConfiguration);
         } catch (IOException e) {
             logger.error("Failed to save Profile: " + profileName);
             throw e;
