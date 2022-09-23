@@ -25,7 +25,6 @@ import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
 
 import java.io.File;
-import java.io.FileWriter;
 import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
@@ -46,31 +45,11 @@ public final class ConfigurationStore {
     /**
      * Marshal and save {@link Configuration} into Json
      *
-     * @param id            ID
      * @param configuration {@link Configuration} to save
      * @throws IOException If an error occurs during operation
      */
-    public static void save(String id, Configuration<?> configuration) throws IOException {
-        // If MongoDB is enabled then store the configuration into the Database
-        // otherwise we'll use file-based storage.
-        if (MongoDB.enabled()) {
-            MongoDB.getInstance().save(configuration);
-        } else {
-            String json = OBJECT_MAPPER.writerWithDefaultPrettyPrinter().writeValueAsString(configuration);
-
-            StringBuilder fileName = new StringBuilder()
-                    .append("/etc/expressgateway").append("/") // -> /etc/expressgateway
-                    .append("conf.d").append("/")              // -> /etc/expressgateway/conf.d/
-                    .append(id).append("/");                   // -> /etc/expressgateway/conf.d/$PROFILE_NAME/
-
-            // Ensure directory exists so we can create file
-            logger.info("Creating directory for configuration: {}, Created: {}", fileName.toString(), new File(fileName.toString()).mkdirs());
-            fileName.append(StringUtil.simpleClassName(configuration)).append(".json"); // -> /etc/expressgateway/conf.d/$PROFILE_NAME/$CONFIG.json
-
-            try (FileWriter writer = new FileWriter(fileName.toString(), false)) {
-                writer.write(json);
-            }
-        }
+    public static void save(Configuration<?> configuration) throws IOException {
+        MongoDB.getInstance().save(configuration);
     }
 
     /**
@@ -83,21 +62,9 @@ public final class ConfigurationStore {
      * @throws IOException If an error occurs during operation
      */
     public static <T> T load(String id, Class<T> clazz) throws IOException {
-        if (MongoDB.enabled()) {
-            return MongoDB.getInstance().find(clazz)
-                    .filter(Filters.eq("_id", id))
-                    .first();
-        } else {
-            String fileName = new StringBuilder()
-                    .append("/etc/expressgateway").append("/")                 // -> /etc/expressgateway
-                    .append("conf.d").append("/")                              // -> /etc/expressgateway/conf.d/
-                    .append(id).append("/")                                    // -> /etc/expressgateway/conf.d/$PROFILE_NAME/
-                    .append(StringUtil.simpleClassName(clazz)).append(".json") // -> /etc/expressgateway/conf.d/$PROFILE_NAME/$CONFIG.json
-                    .toString();
-
-            String json = Files.readString(Path.of(fileName));
-            return OBJECT_MAPPER.readValue(json, clazz);
-        }
+        return MongoDB.getInstance().find(clazz)
+                .filter(Filters.eq("_id", id))
+                .first();
     }
 
     /**

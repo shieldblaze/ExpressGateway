@@ -169,7 +169,7 @@ public final class Handler {
         }
 
         configuration.validate(); // This will validate the Configuration and generate ID if necessary
-        ConfigurationStore.save(configuration.id(), configuration);
+        ConfigurationStore.save(configuration);
 
         APIResponse apiResponse = APIResponse.newBuilder()
                 .isSuccess(true)

@@ -17,14 +17,29 @@
  */
 package com.shieldblaze.expressgateway.common;
 
+import com.mongodb.ConnectionString;
+import com.mongodb.MongoClientSettings;
 import com.mongodb.client.MongoClient;
 import com.mongodb.client.MongoClients;
 import com.shieldblaze.expressgateway.common.utils.SystemPropertyUtil;
 import dev.morphia.Datastore;
 import dev.morphia.Morphia;
 import dev.morphia.mapping.MapperOptions;
+import org.apache.logging.log4j.LogManager;
+import org.apache.logging.log4j.Logger;
+import org.conscrypt.Conscrypt;
 
+import javax.net.ssl.SSLContext;
+import javax.net.ssl.SSLEngine;
+import javax.net.ssl.TrustManager;
+import javax.net.ssl.TrustManagerFactory;
+import javax.net.ssl.X509ExtendedTrustManager;
 import java.io.Closeable;
+import java.net.Socket;
+import java.security.KeyStore;
+import java.security.SecureRandom;
+import java.security.cert.CertificateException;
+import java.security.cert.X509Certificate;
 
 /**
  * This class holds {@link Datastore} for accessing
@@ -32,44 +47,122 @@ import java.io.Closeable;
  */
 public final class MongoDB implements Closeable {
 
-    private static final boolean enabled;
-    private static MongoClient mongoClient;
+    private static final Logger logger = LogManager.getLogger(MongoDB.class);
+    private static final MongoDB INSTANCE = new MongoDB();
 
-    /**
-     * Morphia {@link Datastore} Instance
-     */
-    private static Datastore DATASTORE;
+    private final MongoClient mongoClient;
+    private final Datastore DATASTORE;
 
-    static {
-        enabled = SystemPropertyUtil.getPropertyOrEnvBoolean("mongodb", "false");
-        if (enabled) {
-            mongoClient = MongoClients.create(SystemPropertyUtil.getPropertyOrEnv("MONGO_CONNECTION_STRING"));
-            DATASTORE = Morphia.createDatastore(mongoClient, SystemPropertyUtil.getPropertyOrEnv("MONGO_DATABASE"), MapperOptions.builder()
-                    .storeNulls(true)
-                    .storeEmpties(true)
-                    .ignoreFinals(false)
-                    .cacheClassLookups(true)
-                    .build());
+    private MongoDB() {
+        SSLContext sslContext;
+        try {
+            TrustManagerFactory tmf = TrustManagerFactory.getInstance(TrustManagerFactory.getDefaultAlgorithm());
+            tmf.init((KeyStore) null);
+
+            TrustManager[] tm = tmf.getTrustManagers();
+            assert tm.length == 1 : "TrustManagers must be 1 (one)";
+
+            TrustManager[] delegateTrustManager = {new DelegatingTrustManager((X509ExtendedTrustManager) tm[0])};
+
+            sslContext = SSLContext.getInstance("TLSv1.3", Conscrypt.newProvider());
+            sslContext.init(null, delegateTrustManager, SecureRandom.getInstanceStrong());
+
+            logger.info("Successfully initialized Conscrypt TLSv1.3 for MongoDB Connection");
+        } catch (Exception ex) {
+            logger.fatal("Failed to initialize Conscrypt TLSv1.3 for MongoDB Connection", ex);
+            throw new RuntimeException(ex);
         }
+
+        mongoClient = MongoClients.create(
+                MongoClientSettings.builder()
+                        .applyConnectionString(new ConnectionString(SystemPropertyUtil.getPropertyOrEnv("MONGO_CONNECTION_STRING")))
+                        .applyToSslSettings(builder -> builder
+                                .enabled(true)
+                                .invalidHostNameAllowed(false)
+                                .context(sslContext))
+                        .build());
+
+        DATASTORE = Morphia.createDatastore(mongoClient, SystemPropertyUtil.getPropertyOrEnv("MONGO_DATABASE"), MapperOptions.builder()
+                .storeNulls(true)
+                .storeEmpties(true)
+                .ignoreFinals(false)
+                .cacheClassLookups(true)
+                .build());
     }
 
     public static Datastore getInstance() {
-        if (!enabled()) {
-            throw new UnsupportedOperationException("MongoDB support is disabled");
-        }
-        return DATASTORE;
+        return INSTANCE.DATASTORE;
+    }
+
+    public static MongoClient mongoClient() {
+        return INSTANCE.mongoClient;
     }
 
     /**
-     * Returns {@code true} when MongoDB is enabled
-     * else {@code false}
+     * Calls {@link #close()}
      */
-    public static boolean enabled() {
-        return enabled;
+    public static void shutdown() {
+        INSTANCE.close();
     }
 
+    /**
+     * Close {@link MongoClient}
+     */
     @Override
     public void close() {
-        mongoClient.close();
+        INSTANCE.mongoClient.close();
+    }
+
+    /**
+     * Delegating {@link TrustManager}.
+     *
+     * @link <a href="https://github.com/google/conscrypt/issues/1033">See Bug Fix</a>
+     */
+    private static final class DelegatingTrustManager extends X509ExtendedTrustManager {
+
+        private final X509ExtendedTrustManager delegate;
+
+        private DelegatingTrustManager(X509ExtendedTrustManager delegate) {
+            this.delegate = delegate;
+        }
+
+        @Override
+        public void checkClientTrusted(X509Certificate[] chain, String authType, Socket socket) throws CertificateException {
+            delegate.checkClientTrusted(chain, authType, socket);
+        }
+
+        public void checkServerTrusted(X509Certificate[] chain, String authType, Socket socket) throws CertificateException {
+            // See: https://github.com/google/conscrypt/issues/1033#issuecomment-982701272
+            if ("GENERIC".equals(authType)) {
+                authType = "UNKNOWN";
+            }
+
+            delegate.checkServerTrusted(chain, authType, socket);
+        }
+
+        @Override
+        public void checkClientTrusted(X509Certificate[] chain, String authType, SSLEngine engine) throws CertificateException {
+            delegate.checkClientTrusted(chain, authType, engine);
+        }
+
+        @Override
+        public void checkServerTrusted(X509Certificate[] chain, String authType, SSLEngine engine) throws CertificateException {
+            delegate.checkServerTrusted(chain, authType, engine);
+        }
+
+        @Override
+        public void checkClientTrusted(X509Certificate[] chain, String authType) throws CertificateException {
+            delegate.checkClientTrusted(chain, authType);
+        }
+
+        @Override
+        public void checkServerTrusted(X509Certificate[] chain, String authType) throws CertificateException {
+            delegate.checkServerTrusted(chain, authType);
+        }
+
+        @Override
+        public X509Certificate[] getAcceptedIssuers() {
+            return delegate.getAcceptedIssuers();
+        }
     }
 }
