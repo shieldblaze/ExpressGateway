@@ -18,41 +18,30 @@
 package com.shieldblaze.expressgateway.common.datastore;
 
 import com.shieldblaze.expressgateway.common.utils.SelfSignedCertificate;
-import org.junit.jupiter.api.MethodOrderer;
-import org.junit.jupiter.api.Order;
 import org.junit.jupiter.api.Test;
-import org.junit.jupiter.api.TestMethodOrder;
 
-import java.io.IOException;
+import java.io.ByteArrayInputStream;
+import java.io.ByteArrayOutputStream;
 import java.util.List;
 
 import static org.junit.jupiter.api.Assertions.assertArrayEquals;
-import static org.junit.jupiter.api.Assertions.assertTrue;
 
-@TestMethodOrder(MethodOrderer.OrderAnnotation.class)
 class DataStoreTest {
 
-    @Order(1)
     @Test
-    void storeAndGetTest() throws Exception {
+    void storeAndFetchTest() throws Exception {
         char[] password = "meow".toCharArray();
-        SelfSignedCertificate ssc = SelfSignedCertificate.generateNew(List.of("127.0.0.1"));
-        DataStore.INSTANCE.store(password, "Cat", ssc.keyPair().getPrivate(), ssc.x509Certificate());
+        SelfSignedCertificate ssc = SelfSignedCertificate.generateNew(List.of("127.0.0.1"), List.of("shieldblaze.com"));
+        ByteArrayOutputStream outputStream = new ByteArrayOutputStream();
+        DataStore.storePrivateKeyAndCertificate(null, outputStream, password, "Cat", ssc.keyPair().getPrivate(), ssc.x509Certificate());
 
-        Entry entry = DataStore.INSTANCE.get(password, "Cat");
+        ByteArrayInputStream inputStream = new ByteArrayInputStream(outputStream.toByteArray());
+        outputStream.close();
+
+        Entry entry = DataStore.fetchPrivateKeyCertificateEntry(inputStream, password, "Cat");
         assertArrayEquals(ssc.keyPair().getPrivate().getEncoded(), entry.privateKey().getEncoded());
         assertArrayEquals(ssc.x509Certificate().getEncoded(), entry.certificates()[0].getEncoded());
-    }
 
-    @Order(2)
-    @Test
-    void getEntireTest() throws IOException {
-        assertTrue(DataStore.INSTANCE.getEntire().length > 0);
-    }
-
-    @Order(3)
-    @Test
-    void destroyTest() {
-        assertTrue(DataStore.INSTANCE.destroy());
+        inputStream.close();
     }
 }

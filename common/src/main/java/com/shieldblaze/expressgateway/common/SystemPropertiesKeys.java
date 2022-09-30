@@ -15,22 +15,20 @@
  * You should have received a copy of the GNU General Public License
  * along with ShieldBlaze ExpressGateway.  If not, see <https://www.gnu.org/licenses/>.
  */
-package com.shieldblaze.expressgateway.bootstrap;
+package com.shieldblaze.expressgateway.common;
 
-import dev.morphia.annotations.Entity;
-import dev.morphia.annotations.Id;
-import dev.morphia.annotations.Property;
+public final class SystemPropertiesKeys {
 
-@Entity(value = "ExpressGateway", useDiscriminator = false)
-public final class ExpressGateway {
+    public static final String SYSTEM_ID = "system.id";
+    public static final String REST_API_IP_ADDRESS = "rest-api.ipAddress";
+    public static final String REST_API_PORT = "rest-api.port";
+    public static final String MONGODB_CONNECTION_STRING = "mongodb.connection-string";
+    public static final String CLUSTER_ID = "mongodb.cluster-id";
+    public static final String CRYPTO_PASSWORD = "crypto.password";
 
-    /**
-     * This id is cluster id
-     */
-    @Id
-    private String id;
+    public static final String ZOOKEEPER_ADDRESS = "zookeeper-address";
 
-    @Property
-    private String clusterName;
-
+    private SystemPropertiesKeys() {
+        // Prevent outside initialization
+    }
 }

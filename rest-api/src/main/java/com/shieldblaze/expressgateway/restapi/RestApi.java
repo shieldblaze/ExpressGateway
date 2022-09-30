@@ -24,7 +24,6 @@ import org.springframework.boot.autoconfigure.SpringBootApplication;
 import org.springframework.boot.autoconfigure.mongo.MongoAutoConfiguration;
 import org.springframework.context.ConfigurableApplicationContext;
 
-
 @SpringBootApplication(exclude = MongoAutoConfiguration.class)
 public class RestApi {
     private static final Logger logger = LogManager.getLogger(RestApi.class);

@@ -15,22 +15,18 @@
  * You should have received a copy of the GNU General Public License
  * along with ShieldBlaze ExpressGateway.  If not, see <https://www.gnu.org/licenses/>.
  */
-package com.shieldblaze.expressgateway.bootstrap;
+package com.shieldblaze.expressgateway.common.curator;
 
-import dev.morphia.annotations.Entity;
-import dev.morphia.annotations.Id;
-import dev.morphia.annotations.Property;
+import org.junit.jupiter.api.Test;
 
-@Entity(value = "ExpressGateway", useDiscriminator = false)
-public final class ExpressGateway {
+import java.util.concurrent.ExecutionException;
 
-    /**
-     * This id is cluster id
-     */
-    @Id
-    private String id;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 
-    @Property
-    private String clusterName;
+class CuratorTest {
 
+    @Test
+    void successfulConnectionTest() throws ExecutionException, InterruptedException {
+        assertTrue(Curator.connectionFuture().get());
+    }
 }

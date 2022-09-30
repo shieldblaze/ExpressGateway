@@ -40,6 +40,8 @@ import java.security.KeyStore;
 import java.security.SecureRandom;
 import java.security.cert.CertificateException;
 import java.security.cert.X509Certificate;
+import java.util.Objects;
+import java.util.concurrent.CompletableFuture;
 
 /**
  * This class holds {@link Datastore} for accessing
@@ -48,6 +50,7 @@ import java.security.cert.X509Certificate;
 public final class MongoDB implements Closeable {
 
     private static final Logger logger = LogManager.getLogger(MongoDB.class);
+    private static final CompletableFuture<Boolean> CONNECTION_FUTURE = new CompletableFuture<>();
     private static final MongoDB INSTANCE = new MongoDB();
 
     private final MongoClient mongoClient;
@@ -64,30 +67,58 @@ public final class MongoDB implements Closeable {
 
             TrustManager[] delegateTrustManager = {new DelegatingTrustManager((X509ExtendedTrustManager) tm[0])};
 
-            sslContext = SSLContext.getInstance("TLSv1.3", Conscrypt.newProvider());
-            sslContext.init(null, delegateTrustManager, SecureRandom.getInstanceStrong());
+            if (Conscrypt.isAvailable()) {
+                sslContext = SSLContext.getInstance("TLSv1.3", Conscrypt.newProvider());
+                sslContext.init(null, delegateTrustManager, SecureRandom.getInstanceStrong());
+                logger.info("Successfully initialized Conscrypt TLSv1.3 for MongoDB Connection");
+            } else {
+                sslContext = SSLContext.getInstance("TLSv1.3");
+                sslContext.init(null, tmf.getTrustManagers(), SecureRandom.getInstanceStrong());
+                logger.info("Successfully initialized JDK TLSv1.3 for MongoDB Connection");
+            }
 
-            logger.info("Successfully initialized Conscrypt TLSv1.3 for MongoDB Connection");
         } catch (Exception ex) {
             logger.fatal("Failed to initialize Conscrypt TLSv1.3 for MongoDB Connection", ex);
             throw new RuntimeException(ex);
         }
 
+        ConnectionString connectionString = new ConnectionString(SystemPropertyUtil.getPropertyOrEnv("MONGO_CONNECTION_STRING"));
+        Objects.requireNonNull(connectionString.getDatabase(), "Database Name must be defined");
+
         mongoClient = MongoClients.create(
                 MongoClientSettings.builder()
-                        .applyConnectionString(new ConnectionString(SystemPropertyUtil.getPropertyOrEnv("MONGO_CONNECTION_STRING")))
+                        .applyConnectionString(connectionString)
                         .applyToSslSettings(builder -> builder
                                 .enabled(true)
                                 .invalidHostNameAllowed(false)
                                 .context(sslContext))
                         .build());
 
-        DATASTORE = Morphia.createDatastore(mongoClient, SystemPropertyUtil.getPropertyOrEnv("MONGO_DATABASE"), MapperOptions.builder()
+        DATASTORE = Morphia.createDatastore(mongoClient, connectionString.getDatabase(), MapperOptions.builder()
                 .storeNulls(true)
                 .storeEmpties(true)
                 .ignoreFinals(false)
                 .cacheClassLookups(true)
                 .build());
+
+        CONNECTION_FUTURE.completeAsync(() -> {
+            for (int i = 0; i < 30; i++) {
+
+                // If ServerSession is not 'null' then connection has been established.
+                if (INSTANCE.mongoClient.startSession().getServerSession() != null) {
+                    return true;
+                }
+
+                try {
+                    Thread.sleep(1000);
+                } catch (InterruptedException e) {
+                    logger.error("ConnectionFuture sleep thread interrupted", e);
+                    throw new RuntimeException(e);
+                }
+            }
+
+            return false;
+        });
     }
 
     public static Datastore getInstance() {
@@ -96,6 +127,14 @@ public final class MongoDB implements Closeable {
 
     public static MongoClient mongoClient() {
         return INSTANCE.mongoClient;
+    }
+
+    /**
+     * This {@link CompletableFuture} returns {@link Boolean#TRUE} once
+     * MongoDB connection has been successfully else returns {@link Boolean#FALSE}
+     */
+    public static CompletableFuture<Boolean> connectionFuture() {
+        return CONNECTION_FUTURE;
     }
 
     /**

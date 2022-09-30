@@ -17,18 +17,22 @@
  */
 package com.shieldblaze.expressgateway.restapi;
 
-import com.shieldblaze.expressgateway.common.datastore.DataStore;
-import com.shieldblaze.expressgateway.common.datastore.Entry;
+import io.netty.handler.ssl.ClientAuth;
+import io.netty.handler.ssl.OpenSsl;
+import io.netty.handler.ssl.SslProvider;
 import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
 import org.springframework.boot.web.embedded.netty.NettyReactiveWebServerFactory;
+import org.springframework.boot.web.embedded.netty.NettyServerCustomizer;
 import org.springframework.boot.web.server.WebServerFactoryCustomizer;
 import org.springframework.context.annotation.Configuration;
+import reactor.netty.http.Http2SslContextSpec;
+import reactor.netty.http.HttpProtocol;
+import reactor.netty.http.server.HttpServer;
 
-import java.net.InetAddress;
-import java.net.InetSocketAddress;
-import java.security.cert.Certificate;
+import java.security.PrivateKey;
 import java.security.cert.X509Certificate;
+import java.util.List;
 
 /**
  * This customizer is responsible for the configuration of
@@ -41,8 +45,8 @@ public class WebServerCustomizer implements WebServerFactoryCustomizer<NettyReac
 
     @Override
     public void customize(NettyReactiveWebServerFactory factory) {
-        try {
-            InetAddress inetAddress = InetAddress.getByName(System.getProperty("restapi.address", "127.0.0.1"));
+        /*try {
+            InetAddress inetAddress = InetAddress.getByName(REST_API_IP_ADDRESS);
             factory.setAddress(inetAddress);
         } catch (Exception ex) {
             logger.error("Invalid REST-API Address, Shutting down...", ex);
@@ -51,7 +55,7 @@ public class WebServerCustomizer implements WebServerFactoryCustomizer<NettyReac
         }
 
         try {
-            int port = new InetSocketAddress(Integer.parseInt(System.getProperty("restapi.port", "9110"))).getPort();
+            int port = Integer.parseInt(REST_API_PORT);
             factory.setPort(port);
         } catch (Exception ex) {
             logger.error("Invalid REST-API Port, Shutting down...", ex);
@@ -60,7 +64,7 @@ public class WebServerCustomizer implements WebServerFactoryCustomizer<NettyReac
         }
 
         try {
-            Entry entry = DataStore.INSTANCE.get(System.getProperty("datastore.password").toCharArray(),
+            Entry entry = DataStore.fetchPrivateKeyCertificateEntry(System.getProperty("datastore.password").toCharArray(),
                     System.getProperty("datastore.alias"));
 
             X509Certificate[] x509Certificates = new X509Certificate[entry.certificates().length];
@@ -73,6 +77,23 @@ public class WebServerCustomizer implements WebServerFactoryCustomizer<NettyReac
             factory.addServerCustomizers(new TlsCustomizer(entry.privateKey(), x509Certificates));
         } catch (Exception ex) {
             logger.error("Failed to load RestApi DataStore Entry");
+        }*/
+    }
+
+    record TlsCustomizer(PrivateKey privateKey, X509Certificate[] x509Certificates) implements NettyServerCustomizer {
+
+        @Override
+        public HttpServer apply(HttpServer httpServer) {
+            Http2SslContextSpec http2SslContextSpec = Http2SslContextSpec.forServer(privateKey, x509Certificates);
+            http2SslContextSpec.configure(sslContextBuilder -> sslContextBuilder
+                    .sslProvider(OpenSsl.isAvailable() ? SslProvider.OPENSSL : SslProvider.JDK)
+                    .protocols("TLSv1.3")
+                    .ciphers(List.of("TLS_AES_256_GCM_SHA384"))
+                    .clientAuth(ClientAuth.NONE)
+            );
+
+            return httpServer.secure(sslContextSpec -> sslContextSpec.sslContext(http2SslContextSpec))
+                    .protocol(HttpProtocol.H2);
         }
     }
 }
