@@ -15,36 +15,18 @@
  * You should have received a copy of the GNU General Public License
  * along with ShieldBlaze ExpressGateway.  If not, see <https://www.gnu.org/licenses/>.
  */
-package com.shieldblaze.expressgateway.common;
+package com.shieldblaze.expressgateway.common.curator;
 
-import com.shieldblaze.expressgateway.common.curator.Curator;
-import org.junit.jupiter.api.MethodOrderer;
-import org.junit.jupiter.api.Order;
 import org.junit.jupiter.api.Test;
-import org.junit.jupiter.api.TestMethodOrder;
 
 import java.util.concurrent.ExecutionException;
 
-import static org.junit.jupiter.api.Assertions.*;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 
-@TestMethodOrder(MethodOrderer.OrderAnnotation.class)
 class CuratorTest {
 
-    @Order(1)
     @Test
     void successfulConnectionTest() throws ExecutionException, InterruptedException {
         assertTrue(Curator.connectionFuture().get());
-    }
-
-    @Order(2)
-    @Test
-    void closeConnectionTest() {
-        Curator.shutdown();
-    }
-
-    @Order(3)
-    @Test
-    void unsuccessfulConnectionTest() {
-        assertFalse(Curator.getInstance().getZookeeperClient().isConnected());
     }
 }

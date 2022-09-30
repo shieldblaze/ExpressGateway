@@ -40,7 +40,6 @@ class CuratorUtilsTest {
     @AfterAll
     static void shutdown() throws Exception {
         deleteData(getInstance(), ZNodePath.create("expressgateway"), true);
-        getInstance().close();
     }
 
     @Test
