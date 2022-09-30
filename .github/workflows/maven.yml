@@ -15,19 +15,18 @@ on:
 env:
   MONGO_DATABASE: ${{ secrets.MONGO_DATABASE }}
   MONGO_CONNECTION_STRING: ${{ secrets.MONGO_CONNECTION_STRING }}
+  ZOOKEEPER_ADDRESS: ${{ secrets.ZOOKEEPER_ADDRESS }}
 
 jobs:
   JDK17:
-    runs-on: ubuntu-latest
+    runs-on: self-hosted
     steps:
       - uses: actions/checkout@v3
-      - uses: actions/setup-java@v3
-        with:
-          distribution: corretto
-          java-version: 17
       - name: Grant Permission
         run: sudo chmod +x ./mvnw
+      - name: Install
+        run: ./mvnw -B -ntp install -DskipTests
       - name: Run Tests
-        run: ./mvnw -B -ntp clean test --file pom.xml
+        run: ./mvnw -B -ntp test -pl :common
       - name: Upload Code Coverage
         run: bash <(curl -s https://codecov.io/bash)

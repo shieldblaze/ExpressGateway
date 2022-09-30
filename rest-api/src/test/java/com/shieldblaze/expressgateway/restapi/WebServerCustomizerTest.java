@@ -17,7 +17,6 @@
  */
 package com.shieldblaze.expressgateway.restapi;
 
-import com.shieldblaze.expressgateway.common.datastore.DataStore;
 import io.netty.handler.ssl.util.InsecureTrustManagerFactory;
 import org.junit.jupiter.api.Test;
 
@@ -58,7 +57,7 @@ class WebServerCustomizerTest {
         assertEquals("TLS_AES_256_GCM_SHA384", session.getCipherSuite());
         socket.close();
 
-        assertTrue(DataStore.INSTANCE.destroy());
+//        assertTrue(DataStore.INSTANCE.destroy());
 
         // Stop the Rest-Api Server
         RestApi.stop();

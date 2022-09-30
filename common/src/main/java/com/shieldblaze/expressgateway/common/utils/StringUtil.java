@@ -15,22 +15,15 @@
  * You should have received a copy of the GNU General Public License
  * along with ShieldBlaze ExpressGateway.  If not, see <https://www.gnu.org/licenses/>.
  */
-package com.shieldblaze.expressgateway.bootstrap;
+package com.shieldblaze.expressgateway.common.utils;
 
-import dev.morphia.annotations.Entity;
-import dev.morphia.annotations.Id;
-import dev.morphia.annotations.Property;
+public final class StringUtil {
 
-@Entity(value = "ExpressGateway", useDiscriminator = false)
-public final class ExpressGateway {
+    public static boolean checkNullOrEmpty(String str) {
+        return str == null || str.isEmpty();
+    }
 
-    /**
-     * This id is cluster id
-     */
-    @Id
-    private String id;
-
-    @Property
-    private String clusterName;
-
+    private StringUtil() {
+        // Prevent outside initialization
+    }
 }

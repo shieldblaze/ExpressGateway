@@ -18,7 +18,6 @@
 
 package com.shieldblaze.expressgateway.restapi;
 
-import com.shieldblaze.expressgateway.common.datastore.DataStore;
 import com.shieldblaze.expressgateway.common.utils.SelfSignedCertificate;
 
 import java.util.List;
@@ -36,7 +35,7 @@ public final class Utils {
         final String password = "MeowMeowCatCat";
         final String alias = "meowAlias";
 
-        DataStore.INSTANCE.store(password.toCharArray(), alias, selfSignedCertificate.keyPair().getPrivate(), selfSignedCertificate.x509Certificate());
+//        DataStore.INSTANCE.store(password.toCharArray(), alias, selfSignedCertificate.keyPair().getPrivate(), selfSignedCertificate.x509Certificate());
         System.setProperty("datastore.alias", alias);
         System.setProperty("datastore.password", password);
     }

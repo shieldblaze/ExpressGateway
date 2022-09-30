@@ -15,22 +15,23 @@
  * You should have received a copy of the GNU General Public License
  * along with ShieldBlaze ExpressGateway.  If not, see <https://www.gnu.org/licenses/>.
  */
-package com.shieldblaze.expressgateway.bootstrap;
+package com.shieldblaze.expressgateway.common.curator;
 
-import dev.morphia.annotations.Entity;
-import dev.morphia.annotations.Id;
-import dev.morphia.annotations.Property;
+/**
+ * Environments for ZooKeeper
+ */
+public enum Environment {
+    DEVELOPMENT("dev"),
+    QUALITY_ASSURANCE("qa"),
+    PRODUCTION("prod");
 
-@Entity(value = "ExpressGateway", useDiscriminator = false)
-public final class ExpressGateway {
+    private final String env;
 
-    /**
-     * This id is cluster id
-     */
-    @Id
-    private String id;
+    Environment(String env) {
+        this.env = env;
+    }
 
-    @Property
-    private String clusterName;
-
+    public String env() {
+        return env;
+    }
 }

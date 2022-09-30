@@ -17,16 +17,13 @@
  */
 package com.shieldblaze.expressgateway.common.datastore;
 
-import com.shieldblaze.expressgateway.common.utils.SystemPropertyUtil;
 import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
 
 import javax.crypto.spec.PBEParameterSpec;
-import java.io.File;
-import java.io.FileInputStream;
-import java.io.FileOutputStream;
 import java.io.IOException;
-import java.nio.file.Files;
+import java.io.InputStream;
+import java.io.OutputStream;
 import java.security.Key;
 import java.security.KeyStore;
 import java.security.KeyStoreException;
@@ -37,7 +34,6 @@ import java.security.UnrecoverableKeyException;
 import java.security.cert.Certificate;
 import java.security.cert.CertificateException;
 import java.security.cert.X509Certificate;
-import java.util.Arrays;
 import java.util.Iterator;
 
 /**
@@ -47,122 +43,83 @@ import java.util.Iterator;
  */
 public final class DataStore {
     private static final Logger logger = LogManager.getLogger(DataStore.class);
-    public static final DataStore INSTANCE = new DataStore();
-    private static final File FILENAME = new File(SystemPropertyUtil.getPropertyOrEnv("datastore.file", "datastore.p12"));
+
+    /**
+     * Store an entry of {@link PrivateKey} and {@link X509Certificate}s in {@link KeyStore}
+     *
+     * @param inputStream      {@link InputStream} containing {@link KeyStore} data if entry has to
+     *                         be stored in existing {@link KeyStore}. Else, this
+     *                         can be set to {@code null} if we want to create new
+     *                         {@link KeyStore}
+     * @param outputStream     {@link OutputStream} where {@link KeyStore} data will be stored
+     * @param password         Password to secure the entry
+     * @param alias            Alias name of entry
+     * @param privateKey       {@link PrivateKey} to store with this entry
+     * @param x509Certificates {@link X509Certificate} associated with this entry
+     * @throws KeyStoreException        Thrown in case of exception with {@link KeyStore}
+     * @throws CertificateException     Thrown in case of exception with {@link X509Certificate}
+     * @throws IOException              Thrown in case of exception with I/O streams
+     * @throws NoSuchAlgorithmException Thrown in case of unavailability of PKCS12 in {@link KeyStore}
+     */
+    public static void storePrivateKeyAndCertificate(InputStream inputStream, OutputStream outputStream, char[] password, String alias,
+                                                     PrivateKey privateKey, X509Certificate... x509Certificates)
+            throws KeyStoreException, CertificateException, IOException, NoSuchAlgorithmException {
+
+        SecureRandom secureRandom;
+        try {
+            secureRandom = SecureRandom.getInstanceStrong();
+        } catch (NoSuchAlgorithmException e) {
+            logger.error("SecureRandom Strongest Algorithm not available");
+            secureRandom = new SecureRandom();
+        }
+
+        KeyStore keyStore = KeyStore.getInstance("PKCS12");
+        keyStore.load(inputStream, password);
+
+        byte[] salt = new byte[20];
+        secureRandom.nextBytes(salt);
+
+        // Delete any previous key entry
+        Iterator<String> iterator = keyStore.aliases().asIterator();
+        while (iterator.hasNext()) {
+            String str = iterator.next();
+            if (str.equalsIgnoreCase(alias)) {
+                keyStore.deleteEntry(alias);
+            }
+        }
+
+        keyStore.setEntry(alias, new KeyStore.PrivateKeyEntry(privateKey, x509Certificates),
+                new KeyStore.PasswordProtection(password, "PBEWithHmacSHA512AndAES_256", new PBEParameterSpec(salt, 1_000_000)));
+
+        keyStore.store(outputStream, password);
+        outputStream.flush();
+    }
+
+    /**
+     * Fetch entry of {@link PrivateKey} and {@link X509Certificate}s from {@link KeyStore}
+     *
+     * @param inputStream {@link InputStream} containing {@link KeyStore} data
+     * @param password    Password to secure the entry
+     * @param alias       Alias name of entry
+     * @return {@link Entry} instance holding {@link PrivateKey} and {@link X509Certificate}s
+     * @throws UnrecoverableKeyException Thrown when entry cannot be recovered
+     * @throws IOException               Thrown in case of exception with I/O streams
+     * @throws CertificateException      Thrown in case of exception with {@link X509Certificate}
+     * @throws KeyStoreException         Thrown in case of exception with {@link KeyStore}
+     * @throws NoSuchAlgorithmException  Thrown in case of unavailability of PKCS12 in {@link KeyStore}
+     */
+    public static Entry fetchPrivateKeyCertificateEntry(InputStream inputStream, char[] password, String alias) throws UnrecoverableKeyException, IOException,
+            CertificateException, KeyStoreException, NoSuchAlgorithmException {
+        KeyStore keyStore = KeyStore.getInstance("PKCS12");
+        keyStore.load(inputStream, password);
+
+        Certificate[] certificates = keyStore.getCertificateChain(alias);
+        Key privateKey = keyStore.getKey(alias, password);
+
+        return new Entry((PrivateKey) privateKey, certificates);
+    }
 
     private DataStore() {
         // Prevent outside initialization
-    }
-
-    /**
-     * Store an entry of {@link PrivateKey} and {@link X509Certificate}s
-     *
-     * @param password         Password to use for storing
-     * @param alias            Alias name
-     * @param privateKey       {@link PrivateKey} instance
-     * @param x509Certificates {@link X509Certificate} chains
-     */
-    public void store(char[] password, String alias, PrivateKey privateKey, X509Certificate... x509Certificates) {
-        password = password.clone();
-        FileInputStream fis = null;
-        try {
-            SecureRandom secureRandom;
-            try {
-                secureRandom = SecureRandom.getInstanceStrong();
-            } catch (NoSuchAlgorithmException e) {
-                logger.error("SecureRandom Strongest Algorithm not available");
-                secureRandom = new SecureRandom();
-            }
-
-            if (FILENAME.exists()) {
-                fis = new FileInputStream(FILENAME);
-            }
-
-            KeyStore keyStore = KeyStore.getInstance("PKCS12");
-            keyStore.load(fis, password);
-
-            byte[] salt = new byte[20];
-            secureRandom.nextBytes(salt);
-
-            // Delete any previous key entry
-            Iterator<String> iterator = keyStore.aliases().asIterator();
-            while (iterator.hasNext()) {
-                String str = iterator.next();
-                if (str.equalsIgnoreCase(alias)) {
-                    keyStore.deleteEntry(alias);
-                }
-            }
-
-            keyStore.setEntry(alias, new KeyStore.PrivateKeyEntry(privateKey, x509Certificates),
-                    new KeyStore.PasswordProtection(password, "PBEWithHmacSHA512AndAES_256",
-                            new PBEParameterSpec(salt, 1_000_000)));
-
-            FileOutputStream fos = new FileOutputStream(FILENAME, false);
-            keyStore.store(fos, password);
-            fos.close();
-        } catch (KeyStoreException e) {
-            logger.fatal("KeyStore PKCS12 is not available. This should never happen!", e);
-            System.exit(1);
-        } catch (IOException e) {
-            e.printStackTrace();
-            logger.fatal("Failed loading KeyStore");
-        } catch (CertificateException | NoSuchAlgorithmException e) {
-            logger.error("Failed to store operate into KeyStore", e);
-        } finally {
-            // Clear the password array
-            Arrays.fill(password, '0');
-        }
-    }
-
-    /**
-     * Get entire DataStore file as byte-array
-     *
-     * @return byte-array of file
-     * @throws IOException In case of error during reading DataStore file
-     */
-    public byte[] getEntire() throws IOException {
-        try {
-            return Files.readAllBytes(FILENAME.toPath());
-        } catch (IOException e) {
-            logger.error("Failed to read DataStore file", e);
-            throw e;
-        }
-    }
-
-    public Entry get(char[] password, String alias) throws UnrecoverableKeyException, IOException, CertificateException, KeyStoreException, NoSuchAlgorithmException {
-        try (FileInputStream fis = new FileInputStream(FILENAME)) {
-            KeyStore keyStore = KeyStore.getInstance("PKCS12");
-            keyStore.load(FILENAME.exists() ? fis : null, password);
-
-            Certificate[] certificates = keyStore.getCertificateChain(alias);
-            Key privateKey = keyStore.getKey(alias, password);
-
-            return new Entry((PrivateKey) privateKey, certificates);
-        } catch (IOException e) {
-            logger.fatal("Failed loading KeyStore");
-            throw e;
-        } catch (CertificateException | KeyStoreException | NoSuchAlgorithmException e) {
-            logger.error("Failed to operate entries into KeyStore", e);
-            throw e;
-        } catch (UnrecoverableKeyException e) {
-            logger.error("Failed to operate into KeyStore", e);
-            throw e;
-        }
-    }
-
-    /**
-     * Destroy the Datastore file
-     */
-    public boolean destroy() {
-        if (FILENAME.exists()) {
-            boolean deleted = FILENAME.delete();
-            if (!deleted) {
-                logger.error("Failed to delete DataStore file");
-            }
-            return deleted;
-        } else {
-            logger.error("DataStore file does not exists");
-        }
-        return false;
     }
 }

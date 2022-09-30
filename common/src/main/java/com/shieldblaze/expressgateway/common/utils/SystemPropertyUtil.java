@@ -24,7 +24,7 @@ package com.shieldblaze.expressgateway.common.utils;
 public final class SystemPropertyUtil {
 
     /**
-     * @param key Key to look for
+     * @param key Key to lookup for
      */
     public static String getPropertyOrEnv(String key) {
         String value = System.getProperty(key);
@@ -38,7 +38,7 @@ public final class SystemPropertyUtil {
     }
 
     /**
-     * @param key Key to look for
+     * @param key Key to lookup for
      */
     public static String getPropertyOrEnv(String key, String def) {
         String value = System.getProperty(key, def);
@@ -56,51 +56,51 @@ public final class SystemPropertyUtil {
     }
 
     /**
-     * @param key Key to look for
+     * @param key Key to lookup for
      */
-    public static int getPropertyOrEnvInt(String key) {
+    public static Integer getPropertyOrEnvInt(String key) {
         try {
             return Integer.parseInt(getPropertyOrEnv(key));
         } catch (Exception ex) {
-            return -1;
+            return null;
         }
     }
 
     /**
-     * @param key Key to look for
+     * @param key Key to lookup for
      */
-    public static int getPropertyOrEnvInt(String key, String def) {
+    public static Integer getPropertyOrEnvInt(String key, String def) {
         try {
             return Integer.parseInt(getPropertyOrEnv(key, def));
         } catch (Exception ex) {
-            return -1;
+            return null;
         }
     }
 
     /**
-     * @param key Key to look for
+     * @param key Key to lookup for
      */
-    public static long getUsingPropertyOrEnvironmentLong(String key) {
+    public static Long getUsingPropertyOrEnvironmentLong(String key) {
         try {
             return Long.parseLong(getPropertyOrEnv(key));
         } catch (Exception ex) {
-            return -1;
+            return null;
         }
     }
 
     /**
-     * @param key Key to look for
+     * @param key Key to lookup for
      */
-    public static long getUsingPropertyOrEnvironmentLong(String key, String def) {
+    public static Long getUsingPropertyOrEnvironmentLong(String key, String def) {
         try {
             return Long.parseLong(getPropertyOrEnv(key, def));
         } catch (Exception ex) {
-            return -1;
+            return null;
         }
     }
 
     /**
-     * @param key Key to look for
+     * @param key Key to lookup for
      */
     public static boolean getPropertyOrEnvBoolean(String key) {
         try {
@@ -111,7 +111,7 @@ public final class SystemPropertyUtil {
     }
 
     /**
-     * @param key Key to look for
+     * @param key Key to lookup for
      */
     public static boolean getPropertyOrEnvBoolean(String key, String def) {
         try {
