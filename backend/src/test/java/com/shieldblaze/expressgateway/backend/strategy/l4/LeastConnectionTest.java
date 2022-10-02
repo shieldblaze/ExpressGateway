@@ -21,19 +21,17 @@ import com.shieldblaze.expressgateway.backend.Node;
 import com.shieldblaze.expressgateway.backend.NodeBuilder;
 import com.shieldblaze.expressgateway.backend.cluster.Cluster;
 import com.shieldblaze.expressgateway.backend.cluster.ClusterBuilder;
-import com.shieldblaze.expressgateway.backend.exceptions.LoadBalanceException;
 import com.shieldblaze.expressgateway.backend.strategy.l4.sessionpersistence.NOOPSessionPersistence;
 import org.junit.jupiter.api.Test;
 
 import java.net.InetSocketAddress;
-import java.net.UnknownHostException;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 
 class LeastConnectionTest {
 
     @Test
-    void testLeastConnection() throws LoadBalanceException, UnknownHostException {
+    void testLeastConnection() throws Exception {
         Cluster cluster = ClusterBuilder.newBuilder()
                 .withLoadBalance(new LeastConnection(NOOPSessionPersistence.INSTANCE))
                 .build();
@@ -81,7 +79,7 @@ class LeastConnectionTest {
         assertEquals(250_000, forth);
     }
 
-    private static void fastBuild(Cluster cluster, String host) throws UnknownHostException {
+    private static void fastBuild(Cluster cluster, String host) throws Exception {
         NodeBuilder.newBuilder()
                 .withCluster(cluster)
                 .withSocketAddress(new InetSocketAddress(host, 1))

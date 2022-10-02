@@ -27,10 +27,11 @@ import com.shieldblaze.expressgateway.common.utils.MathUtil;
 import com.shieldblaze.expressgateway.common.utils.NumberUtil;
 import com.shieldblaze.expressgateway.healthcheck.Health;
 import com.shieldblaze.expressgateway.healthcheck.HealthCheck;
+import org.apache.logging.log4j.LogManager;
+import org.apache.logging.log4j.Logger;
 
 import java.io.Closeable;
 import java.net.InetSocketAddress;
-import java.net.UnknownHostException;
 import java.util.Queue;
 import java.util.UUID;
 import java.util.concurrent.ConcurrentLinkedQueue;
@@ -43,6 +44,8 @@ import java.util.concurrent.atomic.AtomicLong;
  * Use {@link NodeBuilder} to build {@link Node} Instance.
  */
 public final class Node implements Comparable<Node>, Closeable {
+
+    private static final Logger logger = LogManager.getLogger(Node.class);
 
     /**
      * Unique identifier of the Node
@@ -111,7 +114,7 @@ public final class Node implements Comparable<Node>, Closeable {
      * Create a new Instance
      */
     @NonNull
-    Node(Cluster cluster, InetSocketAddress socketAddress) throws UnknownHostException {
+    Node(Cluster cluster, InetSocketAddress socketAddress) throws Exception {
         this.socketAddress = socketAddress;
         this.cluster = cluster;
         addedToCluster = this.cluster.addNode(this);
@@ -388,8 +391,7 @@ public final class Node implements Comparable<Node>, Closeable {
 
     @Override
     public boolean equals(Object obj) {
-        if (obj instanceof Node) {
-            Node node = (Node) obj;
+        if (obj instanceof Node node) {
             return socketAddress == node.socketAddress;
         }
         return false;
@@ -403,9 +405,18 @@ public final class Node implements Comparable<Node>, Closeable {
      */
     @Override
     public void close() {
-        state(State.OFFLINE);
-        drainConnections();
-        cluster.removeNode(this);
+        try {
+            logger.info("Closing Node: {} from Cluster: {}", this, cluster);
+
+            state(State.OFFLINE);
+            drainConnections();
+            cluster.removeNode(this);
+
+            logger.info("Successfully closed Node: {} from Cluster: {}", this, cluster);
+        } catch (Exception ex) {
+            logger.error("Failed to close Node: {} from Cluster: {}", this, cluster);
+            throw ex;
+        }
     }
 
     /**

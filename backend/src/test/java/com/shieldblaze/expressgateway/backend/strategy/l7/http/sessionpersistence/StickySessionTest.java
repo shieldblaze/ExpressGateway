@@ -20,7 +20,6 @@ package com.shieldblaze.expressgateway.backend.strategy.l7.http.sessionpersisten
 import com.shieldblaze.expressgateway.backend.NodeBuilder;
 import com.shieldblaze.expressgateway.backend.cluster.Cluster;
 import com.shieldblaze.expressgateway.backend.cluster.ClusterBuilder;
-import com.shieldblaze.expressgateway.backend.exceptions.LoadBalanceException;
 import com.shieldblaze.expressgateway.backend.strategy.l7.http.HTTPBalanceRequest;
 import com.shieldblaze.expressgateway.backend.strategy.l7.http.HTTPBalanceResponse;
 import com.shieldblaze.expressgateway.backend.strategy.l7.http.HTTPRoundRobin;
@@ -28,14 +27,13 @@ import io.netty.handler.codec.http.EmptyHttpHeaders;
 import org.junit.jupiter.api.Test;
 
 import java.net.InetSocketAddress;
-import java.net.UnknownHostException;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 
 class StickySessionTest {
 
     @Test
-    void testStickySession() throws LoadBalanceException, UnknownHostException {
+    void testStickySession() throws Exception {
         Cluster cluster = ClusterBuilder.newBuilder()
                 .withLoadBalance(new HTTPRoundRobin(new StickySession()))
                 .build();
@@ -66,7 +64,7 @@ class StickySessionTest {
         }
     }
 
-    private void fastBuild(Cluster cluster, String host) throws UnknownHostException {
+    private void fastBuild(Cluster cluster, String host) throws Exception {
         NodeBuilder.newBuilder()
                 .withCluster(cluster)
                 .withSocketAddress(new InetSocketAddress(host, 1))

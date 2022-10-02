@@ -27,14 +27,13 @@ import io.netty.channel.embedded.EmbeddedChannel;
 import org.junit.jupiter.api.Test;
 
 import java.net.InetSocketAddress;
-import java.net.UnknownHostException;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 
 class NodeBytesTrackerTest {
 
     @Test
-    void receive10MBytes() throws UnknownHostException {
+    void receive10MBytes() throws Exception {
         Cluster cluster = ClusterBuilder.newBuilder()
                 .withLoadBalance(new RoundRobin(NOOPSessionPersistence.INSTANCE))
                 .build();
@@ -61,7 +60,7 @@ class NodeBytesTrackerTest {
     }
 
     @Test
-    void send10MBytes() throws UnknownHostException {
+    void send10MBytes() throws Exception {
         Cluster cluster = ClusterBuilder.newBuilder()
                 .withLoadBalance(new RoundRobin(NOOPSessionPersistence.INSTANCE))
                 .build();

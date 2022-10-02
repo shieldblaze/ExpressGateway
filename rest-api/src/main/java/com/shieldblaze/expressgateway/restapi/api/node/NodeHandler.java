@@ -39,7 +39,6 @@ import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 
 import java.net.InetSocketAddress;
-import java.net.UnknownHostException;
 import java.util.Objects;
 
 @RestController
@@ -47,7 +46,7 @@ import java.util.Objects;
 public class NodeHandler {
 
     @PostMapping(value = "/create", consumes = MediaType.APPLICATION_JSON_VALUE, produces = MediaType.APPLICATION_JSON_VALUE)
-    public ResponseEntity<String> create(@RequestParam String id, @RequestParam String clusterHostname, @RequestBody NodeContext nodeContext) throws UnknownHostException {
+    public ResponseEntity<String> create(@RequestParam String id, @RequestParam String clusterHostname, @RequestBody NodeContext nodeContext) throws Exception {
         LoadBalancerContext property = CoreContext.get(id);
 
         Cluster cluster = property.l4LoadBalancer().cluster(clusterHostname);

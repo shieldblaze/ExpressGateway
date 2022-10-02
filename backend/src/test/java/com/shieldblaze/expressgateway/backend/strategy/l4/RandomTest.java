@@ -20,19 +20,17 @@ package com.shieldblaze.expressgateway.backend.strategy.l4;
 import com.shieldblaze.expressgateway.backend.NodeBuilder;
 import com.shieldblaze.expressgateway.backend.cluster.Cluster;
 import com.shieldblaze.expressgateway.backend.cluster.ClusterBuilder;
-import com.shieldblaze.expressgateway.backend.exceptions.LoadBalanceException;
 import com.shieldblaze.expressgateway.backend.strategy.l4.sessionpersistence.NOOPSessionPersistence;
 import org.junit.jupiter.api.Test;
 
 import java.net.InetSocketAddress;
-import java.net.UnknownHostException;
 
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 class RandomTest {
 
     @Test
-    void testRandom() throws LoadBalanceException, UnknownHostException {
+    void testRandom() throws Exception {
         Cluster cluster = ClusterBuilder.newBuilder()
                 .withLoadBalance(new Random(NOOPSessionPersistence.INSTANCE))
                 .build();
@@ -85,7 +83,7 @@ class RandomTest {
         assertTrue(fifth > 10);
     }
 
-    private void fastBuild(Cluster cluster, String host) throws UnknownHostException {
+    private void fastBuild(Cluster cluster, String host) throws Exception {
         NodeBuilder.newBuilder()
                 .withCluster(cluster)
                 .withSocketAddress(new InetSocketAddress(host, 1))
