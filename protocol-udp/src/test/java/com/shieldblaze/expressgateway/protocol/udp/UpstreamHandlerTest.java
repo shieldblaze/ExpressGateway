@@ -35,7 +35,6 @@ import java.net.DatagramPacket;
 import java.net.DatagramSocket;
 import java.net.InetAddress;
 import java.net.InetSocketAddress;
-import java.net.UnknownHostException;
 import java.util.Arrays;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
@@ -46,7 +45,7 @@ final class UpstreamHandlerTest {
     static L4LoadBalancer l4LoadBalancer;
 
     @BeforeAll
-    static void setup() throws UnknownHostException {
+    static void setup() throws Exception {
         new UDPServer().start();
 
         Cluster cluster = ClusterBuilder.newBuilder()

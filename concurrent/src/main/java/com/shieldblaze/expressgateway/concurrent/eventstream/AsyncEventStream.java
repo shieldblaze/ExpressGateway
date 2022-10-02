@@ -18,6 +18,8 @@
 package com.shieldblaze.expressgateway.concurrent.eventstream;
 
 import com.shieldblaze.expressgateway.concurrent.event.Event;
+import org.apache.logging.log4j.LogManager;
+import org.apache.logging.log4j.Logger;
 
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.TimeUnit;
@@ -28,6 +30,8 @@ import java.util.concurrent.TimeUnit;
  */
 public final class AsyncEventStream extends EventStream {
 
+    private static final Logger logger = LogManager.getLogger(AsyncEventStream.class);
+
     /**
      * {@link ExecutorService} for execution of {@link #publish(Event)}
      */
@@ -35,6 +39,7 @@ public final class AsyncEventStream extends EventStream {
 
     public AsyncEventStream(ExecutorService executorService) {
         this.executorService = executorService;
+        logger.info("Initialized new AsyncEventStream with Executor: {}", executorService);
     }
 
     /**
@@ -45,16 +50,22 @@ public final class AsyncEventStream extends EventStream {
     @SuppressWarnings({"unchecked"})
     @Override
     public void publish(Event event) {
-        executorService.execute(() -> subscribers.forEach(eventListener -> executorService.execute(() -> eventListener.accept(event))));
+        executorService.execute(() -> subscribers.forEach(eventListener -> eventListener.accept(event)));
     }
 
     @Override
     public void close() {
         try {
-            executorService.awaitTermination(1, TimeUnit.SECONDS);
+            logger.info("Trying to shutdown Executor");
+
+            // Await for termination
+            boolean successfulTermination = executorService.awaitTermination(2, TimeUnit.SECONDS);
+            logger.info("Executor shutdown result: {}", successfulTermination);
         } catch (InterruptedException e) {
             throw new IllegalStateException("EventStream executor interrupted while waiting for termination", e);
         } finally {
+            logger.info("Shutting down Executor");
+
             executorService.shutdown();
             super.close();
         }

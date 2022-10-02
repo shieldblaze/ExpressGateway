@@ -26,7 +26,6 @@ import io.netty.channel.ChannelFuture;
 import org.junit.jupiter.api.Test;
 
 import java.net.InetSocketAddress;
-import java.net.UnknownHostException;
 
 import static org.junit.jupiter.api.Assertions.assertDoesNotThrow;
 import static org.junit.jupiter.api.Assertions.assertThrows;
@@ -34,7 +33,7 @@ import static org.junit.jupiter.api.Assertions.assertThrows;
 class NodeTest {
 
     @Test
-    void maxConnectionTest() throws UnknownHostException {
+    void maxConnectionTest() throws Exception {
         Cluster cluster = ClusterBuilder.newBuilder().withLoadBalance(new RoundRobin(NOOPSessionPersistence.INSTANCE)).build();
 
         Node node = NodeBuilder.newBuilder()

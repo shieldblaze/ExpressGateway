@@ -20,20 +20,18 @@ package com.shieldblaze.expressgateway.backend.strategy.l4.sessionpersistence;
 import com.shieldblaze.expressgateway.backend.NodeBuilder;
 import com.shieldblaze.expressgateway.backend.cluster.Cluster;
 import com.shieldblaze.expressgateway.backend.cluster.ClusterBuilder;
-import com.shieldblaze.expressgateway.backend.exceptions.LoadBalanceException;
 import com.shieldblaze.expressgateway.backend.strategy.l4.L4Request;
 import com.shieldblaze.expressgateway.backend.strategy.l4.RoundRobin;
 import org.junit.jupiter.api.Test;
 
 import java.net.InetSocketAddress;
-import java.net.UnknownHostException;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 
 class SourceIPHashTest {
 
     @Test
-    void testSourceIPHash() throws LoadBalanceException, UnknownHostException {
+    void testSourceIPHash() throws Exception {
         Cluster cluster = ClusterBuilder.newBuilder()
                 .withLoadBalance(new RoundRobin(new SourceIPHash()))
                 .build();
@@ -78,7 +76,7 @@ class SourceIPHashTest {
                 cluster.nextNode(new L4Request(new InetSocketAddress("172.20.1.253", 1))).node().socketAddress());
     }
 
-    private void fastBuild(Cluster cluster, String host) throws UnknownHostException {
+    private void fastBuild(Cluster cluster, String host) throws Exception {
         NodeBuilder.newBuilder()
                 .withCluster(cluster)
                 .withSocketAddress(new InetSocketAddress(host, 1))

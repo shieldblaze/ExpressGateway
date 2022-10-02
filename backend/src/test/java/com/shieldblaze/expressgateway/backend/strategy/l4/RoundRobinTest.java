@@ -20,12 +20,10 @@ package com.shieldblaze.expressgateway.backend.strategy.l4;
 import com.shieldblaze.expressgateway.backend.NodeBuilder;
 import com.shieldblaze.expressgateway.backend.cluster.Cluster;
 import com.shieldblaze.expressgateway.backend.cluster.ClusterBuilder;
-import com.shieldblaze.expressgateway.backend.exceptions.LoadBalanceException;
 import com.shieldblaze.expressgateway.backend.strategy.l4.sessionpersistence.NOOPSessionPersistence;
 import org.junit.jupiter.api.Test;
 
 import java.net.InetSocketAddress;
-import java.net.UnknownHostException;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNotEquals;
@@ -33,7 +31,7 @@ import static org.junit.jupiter.api.Assertions.assertNotEquals;
 class RoundRobinTest {
 
     @Test
-    void testRoundRobin() throws LoadBalanceException, UnknownHostException {
+    void testRoundRobin() throws Exception {
         Cluster cluster = ClusterBuilder.newBuilder().withLoadBalance(new RoundRobin(NOOPSessionPersistence.INSTANCE)).build();
 
         // Add Node Server Addresses
@@ -60,7 +58,7 @@ class RoundRobinTest {
         }
     }
 
-    private void fastBuild(Cluster cluster, String host) throws UnknownHostException {
+    private void fastBuild(Cluster cluster, String host) throws Exception {
         NodeBuilder.newBuilder()
                 .withCluster(cluster)
                 .withSocketAddress(new InetSocketAddress(host, 1))

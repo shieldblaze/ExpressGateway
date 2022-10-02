@@ -39,7 +39,6 @@ import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.Test;
 
 import java.net.InetSocketAddress;
-import java.net.UnknownHostException;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 
@@ -73,7 +72,7 @@ class HealthCheckServiceTest {
     }
 
     @Test
-    void healthCheckTest() throws InterruptedException, UnknownHostException {
+    void healthCheckTest() throws Exception {
         HealthCheckTemplate healthCheckTemplate = new HealthCheckTemplate(
                 HealthCheckTemplate.Protocol.TCP,
                 "127.0.0.1",

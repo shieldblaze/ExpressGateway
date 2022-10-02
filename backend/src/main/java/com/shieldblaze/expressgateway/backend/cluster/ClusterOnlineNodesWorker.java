@@ -33,8 +33,7 @@ class ClusterOnlineNodesWorker implements EventListener<Void> {
 
     @Override
     public void accept(Event<Void> event) {
-        if (event instanceof NodeEvent) {
-            NodeEvent nodeEvent = (NodeEvent) event;
+        if (event instanceof NodeEvent nodeEvent) {
 
             if (nodeEvent instanceof NodeOnlineEvent || nodeEvent instanceof NodeAddedEvent) {
                 ONLINE_NODES.add(nodeEvent.node());

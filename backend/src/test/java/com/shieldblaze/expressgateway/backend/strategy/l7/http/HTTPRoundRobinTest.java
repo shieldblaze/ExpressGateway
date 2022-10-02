@@ -20,13 +20,11 @@ package com.shieldblaze.expressgateway.backend.strategy.l7.http;
 import com.shieldblaze.expressgateway.backend.NodeBuilder;
 import com.shieldblaze.expressgateway.backend.cluster.Cluster;
 import com.shieldblaze.expressgateway.backend.cluster.ClusterBuilder;
-import com.shieldblaze.expressgateway.backend.exceptions.LoadBalanceException;
 import com.shieldblaze.expressgateway.backend.strategy.l7.http.sessionpersistence.NOOPSessionPersistence;
 import io.netty.handler.codec.http.EmptyHttpHeaders;
 import org.junit.jupiter.api.Test;
 
 import java.net.InetSocketAddress;
-import java.net.UnknownHostException;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNotEquals;
@@ -34,7 +32,7 @@ import static org.junit.jupiter.api.Assertions.assertNotEquals;
 class HTTPRoundRobinTest {
 
     @Test
-    void testRoundRobin() throws LoadBalanceException, UnknownHostException {
+    void testRoundRobin() throws Exception {
         Cluster cluster = ClusterBuilder.newBuilder().withLoadBalance(new HTTPRoundRobin(NOOPSessionPersistence.INSTANCE)).build();
 
         // Add Node Server Addresses
@@ -61,7 +59,7 @@ class HTTPRoundRobinTest {
         }
     }
 
-    private void fastBuild(Cluster cluster, String host) throws UnknownHostException {
+    private void fastBuild(Cluster cluster, String host) throws Exception {
         NodeBuilder.newBuilder()
                 .withCluster(cluster)
                 .withSocketAddress(new InetSocketAddress(host, 1))

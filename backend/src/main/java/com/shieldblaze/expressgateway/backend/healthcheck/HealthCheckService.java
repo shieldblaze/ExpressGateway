@@ -70,7 +70,7 @@ public final class HealthCheckService implements Closeable {
     /**
      * Remove a existing {@link Node} from the HealthCheckService.
      *
-     * @throws IllegalArgumentException If this node was not found.
+     * @throws NullPointerException If this node was not found.
      */
     @NonNull
     public void remove(Node node) {
@@ -78,7 +78,7 @@ public final class HealthCheckService implements Closeable {
         if (scheduledFuture != null) {
             scheduledFuture.cancel(true);
         } else {
-            throw new IllegalArgumentException("Node not found in HealthCheckService");
+            throw new NullPointerException("Node not found in HealthCheckService");
         }
     }
 

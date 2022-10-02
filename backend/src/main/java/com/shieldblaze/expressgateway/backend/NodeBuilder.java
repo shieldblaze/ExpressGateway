@@ -20,7 +20,6 @@ package com.shieldblaze.expressgateway.backend;
 import com.shieldblaze.expressgateway.backend.cluster.Cluster;
 
 import java.net.InetSocketAddress;
-import java.net.UnknownHostException;
 import java.util.Objects;
 
 /**
@@ -54,7 +53,7 @@ public final class NodeBuilder {
      *
      * @throws NullPointerException If any value is 'null'.
      */
-    public Node build() throws NullPointerException, UnknownHostException {
+    public Node build() throws Exception {
         Objects.requireNonNull(cluster, "Cluster");
         Objects.requireNonNull(socketAddress, "SocketAddress");
 

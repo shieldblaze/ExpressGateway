@@ -38,7 +38,6 @@ import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.Test;
 
 import java.net.InetSocketAddress;
-import java.net.UnknownHostException;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.ExecutionException;
 
@@ -50,7 +49,7 @@ public class WebSocketEchoTest extends WebSocketListener {
     CountDownLatch countDownLatchString = new CountDownLatch(100_000);
 
     @BeforeAll
-    static void setup() throws ExecutionException, InterruptedException, UnknownHostException {
+    static void setup() throws Exception {
         webSocketEchoServer = new WebSocketEchoServer();
         webSocketEchoServer.startServer();
 

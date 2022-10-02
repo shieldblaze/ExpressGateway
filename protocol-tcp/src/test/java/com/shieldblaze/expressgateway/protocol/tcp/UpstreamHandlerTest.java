@@ -36,7 +36,6 @@ import java.net.InetAddress;
 import java.net.InetSocketAddress;
 import java.net.ServerSocket;
 import java.net.Socket;
-import java.net.UnknownHostException;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertTrue;
@@ -46,7 +45,7 @@ final class UpstreamHandlerTest {
     static L4LoadBalancer l4LoadBalancer;
 
     @BeforeAll
-    static void setup() throws UnknownHostException {
+    static void setup() throws Exception {
         new TCPServer().start();
 
         Cluster cluster = ClusterBuilder.newBuilder()

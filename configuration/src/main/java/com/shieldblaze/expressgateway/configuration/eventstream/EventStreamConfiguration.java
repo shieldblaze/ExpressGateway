@@ -29,16 +29,14 @@ import dev.morphia.annotations.Id;
 import dev.morphia.annotations.Property;
 import dev.morphia.annotations.Transient;
 
-import java.io.Closeable;
 import java.util.UUID;
-import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 
 /**
  * Configuration for {@link EventStreamConfiguration}
  */
 @Entity(value = "EventStream", useDiscriminator = false)
-public final class EventStreamConfiguration implements Configuration<EventStreamConfiguration>, Closeable {
+public final class EventStreamConfiguration implements Configuration<EventStreamConfiguration> {
 
     @Id
     @JsonProperty
@@ -52,19 +50,11 @@ public final class EventStreamConfiguration implements Configuration<EventStream
     @JsonIgnore
     private boolean validated;
 
-    @Transient
-    @JsonIgnore
-    private ExecutorService executor;
-
-    @Transient
-    @JsonIgnore
-    private EventStream eventStream;
-
     public static final EventStreamConfiguration DEFAULT = new EventStreamConfiguration();
 
     static {
         DEFAULT.id = "default";
-        DEFAULT.workers = Runtime.getRuntime().availableProcessors();
+        DEFAULT.workers = Runtime.getRuntime().availableProcessors() * 2;
         DEFAULT.validated = true;
     }
 
@@ -84,13 +74,8 @@ public final class EventStreamConfiguration implements Configuration<EventStream
         return workers;
     }
 
-    public EventStream eventStream() {
-        // Lazy initialization of Executors
-        if (eventStream == null) {
-            executor = Executors.newFixedThreadPool(workers);
-            eventStream = new AsyncEventStream(executor);
-        }
-        return eventStream;
+    public EventStream newEventStream() {
+        return new AsyncEventStream(Executors.newFixedThreadPool(workers));
     }
 
     /**
@@ -116,10 +101,5 @@ public final class EventStreamConfiguration implements Configuration<EventStream
     @Override
     public boolean validated() {
         return validated;
-    }
-
-    @Override
-    public void close() {
-        executor.shutdown();
     }
 }
