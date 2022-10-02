@@ -27,6 +27,6 @@ jobs:
       - name: Install
         run: ./mvnw -B -ntp install -DskipTests
       - name: Run Tests
-        run: ./mvnw -B -ntp test -pl :rest-api
+        run: ./mvnw -B -ntp test
       - name: Upload Code Coverage
         run: bash <(curl -s https://codecov.io/bash)
