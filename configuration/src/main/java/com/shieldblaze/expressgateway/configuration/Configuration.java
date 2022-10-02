@@ -28,11 +28,6 @@ public interface Configuration<T> {
     String id();
 
     /**
-     * Profile name of this Configuration
-     */
-    String profileName();
-
-    /**
      * Check if this Configuration is validated or not
      */
     boolean validated();
@@ -50,7 +45,7 @@ public interface Configuration<T> {
      * It is made up of {id:profileName}
      */
     default String friendlyName() {
-        return id() + ":" + profileName();
+        return id() + ":" + getClass().getSimpleName();
     }
 
     /**

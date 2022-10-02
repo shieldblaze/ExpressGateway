@@ -31,7 +31,6 @@ import java.util.UUID;
 
 import static com.shieldblaze.expressgateway.common.utils.NumberUtil.checkPositive;
 import static com.shieldblaze.expressgateway.common.utils.NumberUtil.checkZeroOrPositive;
-import static java.util.Objects.requireNonNull;
 
 /**
  * Configuration for {@link PooledByteBufAllocator}
@@ -42,10 +41,6 @@ public final class BufferConfiguration implements Configuration<BufferConfigurat
     @Id
     @JsonProperty
     private String id;
-
-    @Property
-    @JsonProperty
-    private String profileName;
 
     @Property
     @JsonProperty(required = true)
@@ -94,7 +89,6 @@ public final class BufferConfiguration implements Configuration<BufferConfigurat
 
     static {
         DEFAULT.id = "default";
-        DEFAULT.profileName = "default";
         DEFAULT.preferDirect = true;
         DEFAULT.pageSize = 16_384;
         DEFAULT.maxOrder = 11;
@@ -107,23 +101,6 @@ public final class BufferConfiguration implements Configuration<BufferConfigurat
         DEFAULT.useCacheForAllThreads = true;
         DEFAULT.directMemoryCacheAlignment = 0;
         DEFAULT.validated = true;
-    }
-
-    /**
-     * Profile name
-     */
-    @Override
-    public String profileName() {
-        assertValidated();
-        return profileName;
-    }
-
-    /**
-     * Profile name
-     */
-    public BufferConfiguration setProfileName(String profileName) {
-        this.profileName = profileName;
-        return this;
     }
 
     /**
@@ -276,11 +253,14 @@ public final class BufferConfiguration implements Configuration<BufferConfigurat
      * @return this class instance
      * @throws IllegalArgumentException If any value is invalid
      */
+    @Override
     public BufferConfiguration validate() throws IllegalArgumentException {
         if (id == null) {
             id = UUID.randomUUID().toString();
+        } else {
+            // Revalidate UUID before using
+            id = UUID.fromString(id).toString();
         }
-        requireNonNull(profileName, "Profile Name");
         checkPositive(heapArena, "Heap Arena");
         checkPositive(directArena, "Direct Arena");
         checkPositive(pageSize, "Page Size");

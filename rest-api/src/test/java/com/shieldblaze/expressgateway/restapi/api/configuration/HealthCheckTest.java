@@ -20,10 +20,11 @@ package com.shieldblaze.expressgateway.restapi.api.configuration;
 
 import com.google.gson.JsonObject;
 import com.google.gson.JsonParser;
+import com.shieldblaze.expressgateway.common.datastore.CryptoEntry;
+import com.shieldblaze.expressgateway.common.utils.SelfSignedCertificate;
 import com.shieldblaze.expressgateway.configuration.healthcheck.HealthCheckConfiguration;
 import com.shieldblaze.expressgateway.restapi.CustomOkHttpClient;
 import com.shieldblaze.expressgateway.restapi.RestApi;
-import com.shieldblaze.expressgateway.restapi.Utils;
 import okhttp3.Request;
 import okhttp3.RequestBody;
 import okhttp3.Response;
@@ -35,6 +36,8 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.TestMethodOrder;
 
 import java.io.IOException;
+import java.security.cert.X509Certificate;
+import java.util.List;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
@@ -46,8 +49,9 @@ class HealthCheckTest {
 
     @BeforeAll
     static void startSpring() {
-        Utils.initSelfSignedDataStore();
-        RestApi.start();
+        SelfSignedCertificate ssc = SelfSignedCertificate.generateNew(List.of("127.0.0.1"), List.of("shieldblaze.com"));
+        CryptoEntry cryptoEntry = new CryptoEntry(ssc.keyPair().getPrivate(), new X509Certificate[]{ssc.x509Certificate()});
+        RestApi.start(cryptoEntry);
     }
 
     @AfterAll
@@ -63,7 +67,7 @@ class HealthCheckTest {
         jsonBody.addProperty("timeInterval", 1000 * 60);
 
         Request request = new Request.Builder()
-                .url("https://127.0.0.1:9110/v1/configuration/healthcheck/save?profileName=meow")
+                .url("https://127.0.0.1:9110/v1/configuration/healthcheck")
                 .post(RequestBody.create(jsonBody.toString().getBytes()))
                 .header("Content-Type", "application/json")
                 .build();
@@ -83,7 +87,7 @@ class HealthCheckTest {
         jsonBody.addProperty("timeInterval", 1000 * 10);
 
         Request request = new Request.Builder()
-                .url("https://127.0.0.1:9110/v1/configuration/healthcheck/save?profileName=meow2")
+                .url("https://127.0.0.1:9110/v1/configuration/healthcheck")
                 .post(RequestBody.create(jsonBody.toString().getBytes()))
                 .header("Content-Type", "application/json")
                 .build();
@@ -101,7 +105,7 @@ class HealthCheckTest {
         HealthCheckConfiguration healthCheckDefault = HealthCheckConfiguration.DEFAULT;
 
         Request request = new Request.Builder()
-                .url("https://127.0.0.1:9110/v1/configuration/healthcheck/get?id=default")
+                .url("https://127.0.0.1:9110/v1/configuration/healthcheck/?id=default")
                 .get()
                 .build();
 
@@ -124,7 +128,7 @@ class HealthCheckTest {
         jsonBody.addProperty("timeInterval", 1000 * 60);
 
         Request request = new Request.Builder()
-                .url("https://127.0.0.1:9110/v1/configuration/healthcheck/save?profileName=meow")
+                .url("https://127.0.0.1:9110/v1/configuration/healthcheck")
                 .post(RequestBody.create(jsonBody.toString().getBytes()))
                 .header("Content-Type", "application/json")
                 .build();
@@ -138,7 +142,7 @@ class HealthCheckTest {
         }
 
         request = new Request.Builder()
-                .url("https://127.0.0.1:9110/v1/configuration/healthcheck/get?id=" + id)
+                .url("https://127.0.0.1:9110/v1/configuration/healthcheck/?id=" + id)
                 .get()
                 .build();
 

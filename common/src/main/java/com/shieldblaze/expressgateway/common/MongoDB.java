@@ -42,6 +42,7 @@ import java.security.cert.CertificateException;
 import java.security.cert.X509Certificate;
 import java.util.Objects;
 import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.ExecutionException;
 
 /**
  * This class holds {@link Datastore} for accessing
@@ -121,7 +122,8 @@ public final class MongoDB implements Closeable {
         });
     }
 
-    public static Datastore getInstance() {
+    public static Datastore getInstance() throws ExecutionException, InterruptedException {
+        assert CONNECTION_FUTURE.get() : "Connection must be established before accessing database";
         return INSTANCE.DATASTORE;
     }
 

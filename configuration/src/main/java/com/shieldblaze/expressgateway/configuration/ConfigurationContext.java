@@ -120,7 +120,7 @@ public record ConfigurationContext(String profileName,
         this.transportConfiguration = transportConfiguration;
     }
 
-    public static ConfigurationContext load(String profileName) throws IOException {
+    public static ConfigurationContext load(String profileName) throws Exception {
         try {
             BufferConfiguration bufferConfiguration = ConfigurationStore.load(profileName, BufferConfiguration.class);
             EventLoopConfiguration eventLoopConfiguration = ConfigurationStore.load(profileName, EventLoopConfiguration.class);
@@ -148,7 +148,7 @@ public record ConfigurationContext(String profileName,
         }
     }
 
-    public void save() throws IOException {
+    public void save() throws Exception {
         try {
             if (profileName == null) {
                 throw new IllegalArgumentException("Cannot save configurations because Profile Name is not present");
@@ -162,7 +162,7 @@ public record ConfigurationContext(String profileName,
             ConfigurationStore.save(tlsClientConfiguration);
             ConfigurationStore.save(tlsServerConfiguration);
             ConfigurationStore.save(transportConfiguration);
-        } catch (IOException e) {
+        } catch (Exception e) {
             logger.error("Failed to save Profile: " + profileName);
             throw e;
         }

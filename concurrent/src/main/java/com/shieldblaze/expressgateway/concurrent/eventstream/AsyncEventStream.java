@@ -20,6 +20,7 @@ package com.shieldblaze.expressgateway.concurrent.eventstream;
 import com.shieldblaze.expressgateway.concurrent.event.Event;
 
 import java.util.concurrent.ExecutorService;
+import java.util.concurrent.TimeUnit;
 
 /**
  * {@linkplain AsyncEventStream} uses {@link ExecutorService} to
@@ -49,7 +50,13 @@ public final class AsyncEventStream extends EventStream {
 
     @Override
     public void close() {
-        executorService.shutdown();
-        super.close();
+        try {
+            executorService.awaitTermination(1, TimeUnit.SECONDS);
+        } catch (InterruptedException e) {
+            throw new IllegalStateException("EventStream executor interrupted while waiting for termination", e);
+        } finally {
+            executorService.shutdown();
+            super.close();
+        }
     }
 }

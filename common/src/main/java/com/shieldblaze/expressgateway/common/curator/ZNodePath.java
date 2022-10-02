@@ -17,14 +17,18 @@
  */
 package com.shieldblaze.expressgateway.common.curator;
 
+import java.util.Objects;
 import java.util.UUID;
 
+/**
+ * This class builds ZNode path for ZooKeeper
+ */
 public final class ZNodePath {
 
     private final String path;
 
     private ZNodePath(String path) {
-        this.path = path;
+        this.path = Objects.requireNonNull(path, "ZNode path cannot be 'null'");
     }
 
     /**

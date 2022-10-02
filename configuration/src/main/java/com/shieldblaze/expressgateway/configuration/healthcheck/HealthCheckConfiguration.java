@@ -26,7 +26,6 @@ import dev.morphia.annotations.Id;
 import dev.morphia.annotations.Property;
 import dev.morphia.annotations.Transient;
 
-import java.util.Objects;
 import java.util.UUID;
 
 /**
@@ -38,10 +37,6 @@ public final class HealthCheckConfiguration implements Configuration<HealthCheck
     @Id
     @JsonProperty
     private String id;
-
-    @Property
-    @JsonProperty
-    private String profileName;
 
     @Property
     @JsonProperty
@@ -59,27 +54,9 @@ public final class HealthCheckConfiguration implements Configuration<HealthCheck
 
     static {
         DEFAULT.id = "default";
-        DEFAULT.profileName = "default";
         DEFAULT.workers = Runtime.getRuntime().availableProcessors();
         DEFAULT.timeInterval = 1;
         DEFAULT.validated = true;
-    }
-
-    /**
-     * Profile name
-     */
-    public HealthCheckConfiguration setProfileName(String profileName) {
-        this.profileName = profileName;
-        return this;
-    }
-
-    /**
-     * Profile name
-     */
-    @Override
-    public String profileName() {
-        assertValidated();
-        return profileName;
     }
 
     /**
@@ -124,7 +101,6 @@ public final class HealthCheckConfiguration implements Configuration<HealthCheck
         if (id == null) {
             id = UUID.randomUUID().toString();
         }
-        Objects.requireNonNull(profileName, "Profile Name");
         NumberUtil.checkPositive(workers, "Workers");
         NumberUtil.checkPositive(timeInterval, "TimeInterval");
         validated = true;

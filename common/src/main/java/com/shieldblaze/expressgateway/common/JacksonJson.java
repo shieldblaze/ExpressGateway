@@ -15,20 +15,38 @@
  * You should have received a copy of the GNU General Public License
  * along with ShieldBlaze ExpressGateway.  If not, see <https://www.gnu.org/licenses/>.
  */
-
 package com.shieldblaze.expressgateway.common;
 
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.ObjectMapper;
 
+/**
+ * This class contains methods to read and write Json.
+ */
 public final class JacksonJson {
 
-    private static final ObjectMapper OBJECT_MAPPER = new ObjectMapper();
+    public static final ObjectMapper OBJECT_MAPPER = new ObjectMapper();
 
+    /**
+     * Convert {@link Object} into Json {@link String} with pretty-printing
+     *
+     * @param obj {@link Object} to convert
+     * @return Converted {@link String}
+     * @throws JsonProcessingException In case of an error during conversion
+     */
     public static String get(Object obj) throws JsonProcessingException {
         return OBJECT_MAPPER.writerWithDefaultPrettyPrinter().writeValueAsString(obj);
     }
 
+    /**
+     * Create a class from Json {@link String}
+     *
+     * @param json  Json {@link String}
+     * @param clazz Class to create
+     * @param <T>   Class type
+     * @return Initialized class
+     * @throws JsonProcessingException In case of an error during creation
+     */
     public static <T> T read(String json, Class<T> clazz) throws JsonProcessingException {
         return OBJECT_MAPPER.readValue(json, clazz);
     }

@@ -65,19 +65,11 @@ public final class DataStore {
                                                      PrivateKey privateKey, X509Certificate... x509Certificates)
             throws KeyStoreException, CertificateException, IOException, NoSuchAlgorithmException {
 
-        SecureRandom secureRandom;
-        try {
-            secureRandom = SecureRandom.getInstanceStrong();
-        } catch (NoSuchAlgorithmException e) {
-            logger.error("SecureRandom Strongest Algorithm not available");
-            secureRandom = new SecureRandom();
-        }
-
         KeyStore keyStore = KeyStore.getInstance("PKCS12");
         keyStore.load(inputStream, password);
 
         byte[] salt = new byte[20];
-        secureRandom.nextBytes(salt);
+        secureRandom().nextBytes(salt);
 
         // Delete any previous key entry
         Iterator<String> iterator = keyStore.aliases().asIterator();
@@ -101,14 +93,14 @@ public final class DataStore {
      * @param inputStream {@link InputStream} containing {@link KeyStore} data
      * @param password    Password to secure the entry
      * @param alias       Alias name of entry
-     * @return {@link Entry} instance holding {@link PrivateKey} and {@link X509Certificate}s
+     * @return {@link CryptoEntry} instance holding {@link PrivateKey} and {@link X509Certificate}s
      * @throws UnrecoverableKeyException Thrown when entry cannot be recovered
      * @throws IOException               Thrown in case of exception with I/O streams
      * @throws CertificateException      Thrown in case of exception with {@link X509Certificate}
      * @throws KeyStoreException         Thrown in case of exception with {@link KeyStore}
      * @throws NoSuchAlgorithmException  Thrown in case of unavailability of PKCS12 in {@link KeyStore}
      */
-    public static Entry fetchPrivateKeyCertificateEntry(InputStream inputStream, char[] password, String alias) throws UnrecoverableKeyException, IOException,
+    public static CryptoEntry fetchPrivateKeyCertificateEntry(InputStream inputStream, char[] password, String alias) throws UnrecoverableKeyException, IOException,
             CertificateException, KeyStoreException, NoSuchAlgorithmException {
         KeyStore keyStore = KeyStore.getInstance("PKCS12");
         keyStore.load(inputStream, password);
@@ -116,7 +108,16 @@ public final class DataStore {
         Certificate[] certificates = keyStore.getCertificateChain(alias);
         Key privateKey = keyStore.getKey(alias, password);
 
-        return new Entry((PrivateKey) privateKey, certificates);
+        return new CryptoEntry((PrivateKey) privateKey, certificates);
+    }
+
+    private static SecureRandom secureRandom() {
+        try {
+            return SecureRandom.getInstanceStrong();
+        } catch (NoSuchAlgorithmException e) {
+            logger.error("SecureRandom Strongest Algorithm not available");
+            return new SecureRandom();
+        }
     }
 
     private DataStore() {

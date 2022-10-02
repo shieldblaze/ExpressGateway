@@ -26,7 +26,6 @@ import dev.morphia.annotations.Id;
 import dev.morphia.annotations.Property;
 import dev.morphia.annotations.Transient;
 
-import java.util.Objects;
 import java.util.UUID;
 
 /**
@@ -38,10 +37,6 @@ public final class HttpConfiguration implements Configuration<HttpConfiguration>
     @Id
     @JsonProperty
     private String id;
-
-    @Property
-    @JsonProperty
-    private String profileName;
 
     @Property
     @JsonProperty
@@ -99,7 +94,6 @@ public final class HttpConfiguration implements Configuration<HttpConfiguration>
 
     static {
         DEFAULT.id = "default";
-        DEFAULT.profileName = "default";
         DEFAULT.maxContentLength = 500000000;
         DEFAULT.h2InitialWindowSize = 65535;
         DEFAULT.h2MaxConcurrentStreams = 1000;
@@ -117,23 +111,6 @@ public final class HttpConfiguration implements Configuration<HttpConfiguration>
 
     HttpConfiguration() {
         // Prevent outside initialization
-    }
-
-    /**
-     * Profile name
-     */
-    public HttpConfiguration setProfileName(String profileName) {
-        this.profileName = profileName;
-        return this;
-    }
-
-    /**
-     * Profile name
-     */
-    @Override
-    public String profileName() {
-        assertValidated();
-        return profileName;
     }
 
     /**
@@ -335,7 +312,6 @@ public final class HttpConfiguration implements Configuration<HttpConfiguration>
         if (id == null) {
             id = UUID.randomUUID().toString();
         }
-        Objects.requireNonNull(profileName, "Profile Name");
         NumberUtil.checkPositive(maxContentLength, "maxContentLength");
         NumberUtil.checkPositive(h2InitialWindowSize, "h2InitialWindowSize");
         NumberUtil.checkPositive(h2MaxConcurrentStreams, "h2MaxConcurrentStreams");

@@ -17,7 +17,6 @@
  */
 package com.shieldblaze.expressgateway.protocol.tcp;
 
-import com.shieldblaze.expressgateway.concurrent.GlobalExecutors;
 import com.shieldblaze.expressgateway.configuration.transport.TransportConfiguration;
 import com.shieldblaze.expressgateway.configuration.transport.TransportType;
 import com.shieldblaze.expressgateway.core.L4FrontListener;
@@ -155,7 +154,7 @@ public class TCPListener extends L4FrontListener {
             l4LoadBalancer().eventLoopFactory().parentGroup().shutdownGracefully();
             l4LoadBalancer().eventLoopFactory().childGroup().shutdownGracefully();
             shutdownEvent.markSuccess();
-        }, GlobalExecutors.executorService());
+        }).thenRun(() -> l4LoadBalancer().eventStream().close());
 
         return shutdownEvent;
     }

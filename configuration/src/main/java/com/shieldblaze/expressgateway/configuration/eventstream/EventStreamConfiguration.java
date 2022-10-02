@@ -30,7 +30,6 @@ import dev.morphia.annotations.Property;
 import dev.morphia.annotations.Transient;
 
 import java.io.Closeable;
-import java.util.Objects;
 import java.util.UUID;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
@@ -44,10 +43,6 @@ public final class EventStreamConfiguration implements Configuration<EventStream
     @Id
     @JsonProperty
     private String id;
-
-    @Property
-    @JsonProperty
-    private String profileName;
 
     @Property
     @JsonProperty
@@ -69,26 +64,8 @@ public final class EventStreamConfiguration implements Configuration<EventStream
 
     static {
         DEFAULT.id = "default";
-        DEFAULT.profileName = "default";
         DEFAULT.workers = Runtime.getRuntime().availableProcessors();
         DEFAULT.validated = true;
-    }
-
-    /**
-     * Profile name
-     */
-    public EventStreamConfiguration setProfileName(String profileName) {
-        this.profileName = profileName;
-        return this;
-    }
-
-    /**
-     * Profile name
-     */
-    @Override
-    public String profileName() {
-        assertValidated();
-        return profileName;
     }
 
     /**
@@ -126,7 +103,6 @@ public final class EventStreamConfiguration implements Configuration<EventStream
         if (id == null) {
             id = UUID.randomUUID().toString();
         }
-        Objects.requireNonNull(profileName, "Profile Name");
         NumberUtil.checkPositive(workers, "Workers");
         validated = true;
         return this;

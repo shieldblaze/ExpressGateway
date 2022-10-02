@@ -60,12 +60,9 @@ public final class LoadBalancerHandler {
      *
      * @param ctx {@link LoadBalancerStartContext} instance
      * @return {@link ResponseEntity} containing result response
-     * @throws InvalidLoadBalancerStartRequestException See {@link InvalidLoadBalancerStartRequestException}
-     * @throws IllegalArgumentException                 If any parameter is invalid
      */
     @PostMapping(value = "/l4/start", consumes = MediaType.APPLICATION_JSON_VALUE, produces = MediaType.APPLICATION_JSON_VALUE)
-    public ResponseEntity<String> startL4LoadBalancer(@RequestBody LoadBalancerStartContext ctx)
-            throws InvalidLoadBalancerStartRequestException {
+    public ResponseEntity<String> startL4LoadBalancer(@RequestBody LoadBalancerStartContext ctx) {
 
         // Determine the L4 Protocol (TCP/UDP)
         L4FrontListener l4FrontListener;

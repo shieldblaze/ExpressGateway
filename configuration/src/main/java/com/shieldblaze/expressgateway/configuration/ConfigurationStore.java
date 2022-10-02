@@ -17,17 +17,18 @@
  */
 package com.shieldblaze.expressgateway.configuration;
 
-import com.fasterxml.jackson.databind.ObjectMapper;
 import com.shieldblaze.expressgateway.common.MongoDB;
+import com.shieldblaze.expressgateway.common.curator.Curator;
+import com.shieldblaze.expressgateway.common.curator.Environment;
+import com.shieldblaze.expressgateway.common.curator.ZNodePath;
 import dev.morphia.query.experimental.filters.Filters;
-import io.netty.util.internal.StringUtil;
 import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
 
-import java.io.File;
-import java.io.IOException;
-import java.nio.file.Files;
-import java.nio.file.Path;
+import static com.shieldblaze.expressgateway.common.JacksonJson.OBJECT_MAPPER;
+import static com.shieldblaze.expressgateway.common.SystemPropertiesKeys.CLUSTER_ID;
+import static com.shieldblaze.expressgateway.common.curator.CuratorUtils.createNew;
+import static com.shieldblaze.expressgateway.common.curator.CuratorUtils.deleteData;
 
 /**
  * {@link ConfigurationStore} is responsible for marshalling/unmarshalling of
@@ -36,57 +37,83 @@ import java.nio.file.Path;
 public final class ConfigurationStore {
 
     private static final Logger logger = LogManager.getLogger(ConfigurationStore.class);
-    private static final ObjectMapper OBJECT_MAPPER = new ObjectMapper();
-
-    private ConfigurationStore() {
-        // Prevent outside initialization
-    }
 
     /**
-     * Marshal and save {@link Configuration} into Json
+     * Save {@link Configuration} into ZooKeeper
      *
      * @param configuration {@link Configuration} to save
-     * @throws IOException If an error occurs during operation
+     * @throws Exception If an error occurs during operation
      */
-    public static void save(Configuration<?> configuration) throws IOException {
-        MongoDB.getInstance().save(configuration);
+    public static void applyConfiguration(Configuration<?> configuration) throws Exception {
+        configuration.assertValidated();
+        logger.info("Begin applying and saving configuration into ZooKeeper");
+
+        String configurationJson = OBJECT_MAPPER.valueToTree(configuration).toString();
+        createNew(Curator.getInstance(), buildZNodePath(configuration), configurationJson.getBytes());
+
+        logger.info("Successfully applied and saved configuration into Zookeeper");
     }
 
     /**
-     * Unmarshal and load Json into {@link Configuration}
+     * Remove {@link Configuration} from ZooKeeper
+     *
+     * @param configuration {@link Configuration} to remove
+     * @throws Exception If an error occurs during operation
+     */
+    public static void removeConfiguration(Configuration<?> configuration) throws Exception {
+        deleteData(Curator.getInstance(), buildZNodePath(configuration));
+    }
+
+    /**
+     * Save {@link Configuration} into MongoDB database
+     *
+     * @param configuration {@link Configuration} to save
+     * @throws Exception If an error occurs during operation
+     */
+    public static void save(Configuration<?> configuration) throws Exception {
+        configuration.assertValidated();
+        logger.info("Begin saving configuration into MongoDB database");
+
+        // Save Configuration in MongoDB database also
+        MongoDB.getInstance().save(configuration);
+
+        logger.info("Successfully saved configuration into MongoDB database");
+    }
+
+    /**
+     * load {@link Configuration} from MongoDB database
      *
      * @param id    Configuration ID
      * @param clazz Class reference to load
      * @param <T>   Class
      * @return Class instance
-     * @throws IOException If an error occurs during operation
+     * @throws Exception If an error occurs during operation
      */
-    public static <T> T load(String id, Class<T> clazz) throws IOException {
+    public static <T> T load(String id, Class<T> clazz) throws Exception {
         return MongoDB.getInstance().find(clazz)
                 .filter(Filters.eq("_id", id))
                 .first();
     }
 
     /**
-     * Delete configuration file
+     * Delete configuration from MongoDB database
      *
-     * @param id    Configuration ID
-     * @param clazz Class reference to delete
-     * @param <T>   Class
+     * @param configuration {@link Configuration} to delete
      * @return {@code true} if deletion was successful else {@code false}
      */
-    public static <T> boolean delete(String id, Class<T> clazz) {
-        String fileName = new StringBuilder()
-                .append("/etc/expressgateway").append("/")                 // -> /etc/expressgateway
-                .append("conf.d").append("/")                              // -> /etc/expressgateway/conf.d/
-                .append(id).append("/")                                    // -> /etc/expressgateway/conf.d/$PROFILE_NAME/
-                .append(StringUtil.simpleClassName(clazz)).append(".json") // -> /etc/expressgateway/conf.d/$PROFILE_NAME/$CONFIG.json
-                .toString();
+    public static boolean delete(Configuration<?> configuration) throws Exception {
+        return MongoDB.getInstance().delete(configuration).wasAcknowledged();
+    }
 
-        try {
-            return new File(fileName).delete();
-        } catch (Exception ex) {
-            return false;
-        }
+    private static ZNodePath buildZNodePath(Configuration<?> configuration) {
+        // Build ZNodePath for ZooKeeper
+        return ZNodePath.create("ExpressGateway", // ExpressGateway will be root
+                Environment.detectEnv(),        // Auto-detect environment
+                System.getProperty(CLUSTER_ID), // Use Cluster ID as ID
+                configuration.friendlyName());  // Use Configuration name as component
+    }
+
+    private ConfigurationStore() {
+        // Prevent outside initialization
     }
 }

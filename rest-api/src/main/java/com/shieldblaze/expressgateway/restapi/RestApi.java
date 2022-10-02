@@ -17,6 +17,7 @@
  */
 package com.shieldblaze.expressgateway.restapi;
 
+import com.shieldblaze.expressgateway.common.datastore.CryptoEntry;
 import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
 import org.springframework.boot.SpringApplication;
@@ -24,20 +25,23 @@ import org.springframework.boot.autoconfigure.SpringBootApplication;
 import org.springframework.boot.autoconfigure.mongo.MongoAutoConfiguration;
 import org.springframework.context.ConfigurableApplicationContext;
 
+import java.util.Objects;
+
 @SpringBootApplication(exclude = MongoAutoConfiguration.class)
 public class RestApi {
     private static final Logger logger = LogManager.getLogger(RestApi.class);
     private static ConfigurableApplicationContext ctx;
+    protected static CryptoEntry CRYPTO_ENTRY;
 
-    /**
-     * Start the REST API Server using self-signed certificate.
-     */
-    public static void start() {
+    public static void start(CryptoEntry cryptoEntry) {
+        CRYPTO_ENTRY = Objects.requireNonNull(cryptoEntry, "CryptoEntry cannot be 'null'");
+
         if (ctx == null) {
             ctx = SpringApplication.run(RestApi.class);
         } else {
-            stop();
-            ctx.start();
+            ctx.stop();
+            ctx = null;
+            start(cryptoEntry);
         }
     }
 
