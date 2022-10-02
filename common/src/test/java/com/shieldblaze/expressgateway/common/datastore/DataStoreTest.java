@@ -32,16 +32,16 @@ class DataStoreTest {
     void storeAndFetchTest() throws Exception {
         char[] password = "meow".toCharArray();
         SelfSignedCertificate ssc = SelfSignedCertificate.generateNew(List.of("127.0.0.1"), List.of("shieldblaze.com"));
-        ByteArrayOutputStream outputStream = new ByteArrayOutputStream();
-        DataStore.storePrivateKeyAndCertificate(null, outputStream, password, "Cat", ssc.keyPair().getPrivate(), ssc.x509Certificate());
 
-        ByteArrayInputStream inputStream = new ByteArrayInputStream(outputStream.toByteArray());
-        outputStream.close();
+        try (ByteArrayOutputStream outputStream = new ByteArrayOutputStream()) {
+            DataStore.storePrivateKeyAndCertificate(null, outputStream, password, "Cat", ssc.keyPair().getPrivate(), ssc.x509Certificate());
 
-        Entry entry = DataStore.fetchPrivateKeyCertificateEntry(inputStream, password, "Cat");
-        assertArrayEquals(ssc.keyPair().getPrivate().getEncoded(), entry.privateKey().getEncoded());
-        assertArrayEquals(ssc.x509Certificate().getEncoded(), entry.certificates()[0].getEncoded());
+            try (ByteArrayInputStream inputStream = new ByteArrayInputStream(outputStream.toByteArray())) {
 
-        inputStream.close();
+                CryptoEntry cryptoEntry = DataStore.fetchPrivateKeyCertificateEntry(inputStream, password, "Cat");
+                assertArrayEquals(ssc.keyPair().getPrivate().getEncoded(), cryptoEntry.privateKey().getEncoded());
+                assertArrayEquals(ssc.x509Certificate().getEncoded(), cryptoEntry.certificates()[0].getEncoded());
+            }
+        }
     }
 }

@@ -19,6 +19,8 @@ package com.shieldblaze.expressgateway.restapi.api.loadbalancer;
 
 import com.google.gson.JsonObject;
 import com.google.gson.JsonParser;
+import com.shieldblaze.expressgateway.common.datastore.CryptoEntry;
+import com.shieldblaze.expressgateway.common.utils.SelfSignedCertificate;
 import com.shieldblaze.expressgateway.restapi.CustomOkHttpClient;
 import com.shieldblaze.expressgateway.restapi.RestApi;
 import okhttp3.MediaType;
@@ -27,29 +29,31 @@ import okhttp3.RequestBody;
 import okhttp3.Response;
 import org.junit.jupiter.api.AfterAll;
 import org.junit.jupiter.api.BeforeAll;
-import org.junit.jupiter.api.Disabled;
 import org.junit.jupiter.api.MethodOrderer;
 import org.junit.jupiter.api.Order;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.TestMethodOrder;
 
 import java.io.IOException;
+import java.security.cert.X509Certificate;
+import java.util.List;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
-@Disabled("Disabled due to some fault, it'll be enabled in upcoming PR")
 @TestMethodOrder(MethodOrderer.OrderAnnotation.class)
-public class L4LoadBalancerHandlerTest {
+public class L7LoadBalancerConfigurationEndpointHandlerTest {
 
     private static final RequestBody EMPTY_REQ_BODY = RequestBody.create(new byte[0], null);
     public static String id;
 
     @BeforeAll
     static void startSpring() {
-        RestApi.start();
+        SelfSignedCertificate ssc = SelfSignedCertificate.generateNew(List.of("127.0.0.1"), List.of("shieldblaze.com"));
+        CryptoEntry cryptoEntry = new CryptoEntry(ssc.keyPair().getPrivate(), new X509Certificate[]{ssc.x509Certificate()});
+        RestApi.start(cryptoEntry);
     }
 
     @AfterAll
@@ -64,17 +68,17 @@ public class L4LoadBalancerHandlerTest {
         JsonObject requestBody = new JsonObject();
         requestBody.addProperty("name", "MeowBalancer");
         requestBody.addProperty("bindAddress", "127.0.0.1");
-        requestBody.addProperty("bindPort", 50000);
-        requestBody.addProperty("protocol", "tcp");
+        requestBody.addProperty("bindPort", 50002);
 
         Request request = new Request.Builder()
-                .url("https://127.0.0.1:9110/v1/loadbalancer/l4/start")
+                .url("https://127.0.0.1:9110/v1/loadbalancer/l7/http/start")
                 .post(RequestBody.create(requestBody.toString(), MediaType.get("application/json")))
                 .build();
 
         try (Response response = CustomOkHttpClient.INSTANCE.newCall(request).execute()) {
             assertNotNull(response.body());
             JsonObject responseJson = JsonParser.parseString(response.body().string()).getAsJsonObject();
+            System.out.println(responseJson);
             assertTrue(responseJson.get("Success").getAsBoolean());
 
             id = responseJson.get("Result").getAsJsonObject().get("LoadBalancerID").getAsString();
@@ -94,10 +98,14 @@ public class L4LoadBalancerHandlerTest {
         try (Response response = CustomOkHttpClient.INSTANCE.newCall(request).execute()) {
             assertNotNull(response.body());
             JsonObject responseJson = JsonParser.parseString(response.body().string()).getAsJsonObject();
+            System.out.println(responseJson);
             assertTrue(responseJson.get("Success").getAsBoolean());
 
             //"Result":{"LoadBalancer":{"ID":"72c8493a-2a6c-43c8-9c48-193b42dd858d","Name":"MeowBalancer","State":"Running","Clusters":[]}}}
-            assertEquals("Running", responseJson.get("Result").getAsJsonObject().get("LoadBalancer").getAsJsonObject().get("State").getAsString());
+            assertEquals("Running", responseJson
+                    .get("Result").getAsJsonObject()
+                    .get("LoadBalancer").getAsJsonObject()
+                    .get("State").getAsString());
         }
     }
 
@@ -112,6 +120,7 @@ public class L4LoadBalancerHandlerTest {
         try (Response response = CustomOkHttpClient.INSTANCE.newCall(request).execute()) {
             assertNotNull(response.body());
             JsonObject responseJson = JsonParser.parseString(response.body().string()).getAsJsonObject();
+            System.out.println(responseJson);
             assertTrue(responseJson.get("Success").getAsBoolean());
         }
     }
@@ -127,6 +136,7 @@ public class L4LoadBalancerHandlerTest {
         try (Response response = CustomOkHttpClient.INSTANCE.newCall(request).execute()) {
             assertNotNull(response.body());
             JsonObject responseJson = JsonParser.parseString(response.body().string()).getAsJsonObject();
+            System.out.println(responseJson);
             assertTrue(responseJson.get("Success").getAsBoolean());
         }
     }
@@ -142,6 +152,7 @@ public class L4LoadBalancerHandlerTest {
         try (Response response = CustomOkHttpClient.INSTANCE.newCall(request).execute()) {
             assertNotNull(response.body());
             JsonObject responseJson = JsonParser.parseString(response.body().string()).getAsJsonObject();
+            System.out.println(responseJson);
             assertTrue(responseJson.get("Success").getAsBoolean());
         }
     }
@@ -152,11 +163,12 @@ public class L4LoadBalancerHandlerTest {
         JsonObject requestBody = new JsonObject();
         requestBody.addProperty("name", "MeowBalancer");
         requestBody.addProperty("bindAddress", "127.0.0.1");
-        requestBody.addProperty("bindPort", 50001);
+        requestBody.addProperty("bindPort", 50003);
         requestBody.addProperty("protocol", "tcp");
 
+
         Request request = new Request.Builder()
-                .url("https://127.0.0.1:9110/v1/loadbalancer/l4/start")
+                .url("https://127.0.0.1:9110/v1/loadbalancer/l7/http/start")
                 .post(RequestBody.create(requestBody.toString().getBytes()))
                 .header("Content-Type", "application/json")
                 .build();
@@ -164,6 +176,7 @@ public class L4LoadBalancerHandlerTest {
         try (Response response = CustomOkHttpClient.INSTANCE.newCall(request).execute()) {
             assertNotNull(response.body());
             JsonObject responseJson = JsonParser.parseString(response.body().string()).getAsJsonObject();
+            System.out.println(responseJson);
             assertTrue(responseJson.get("Success").getAsBoolean());
 
             id = responseJson.get("Result").getAsJsonObject().get("LoadBalancerID").getAsString();
@@ -179,6 +192,7 @@ public class L4LoadBalancerHandlerTest {
         try (Response response = CustomOkHttpClient.INSTANCE.newCall(request).execute()) {
             assertNotNull(response.body());
             JsonObject responseJson = JsonParser.parseString(response.body().string()).getAsJsonObject();
+            System.out.println(responseJson);
             assertFalse(responseJson.get("Success").getAsBoolean());
         }
 
@@ -190,6 +204,7 @@ public class L4LoadBalancerHandlerTest {
         try (Response response = CustomOkHttpClient.INSTANCE.newCall(request).execute()) {
             assertNotNull(response.body());
             JsonObject responseJson = JsonParser.parseString(response.body().string()).getAsJsonObject();
+            System.out.println(responseJson);
             assertFalse(responseJson.get("Success").getAsBoolean());
         }
 
@@ -201,6 +216,7 @@ public class L4LoadBalancerHandlerTest {
         try (Response response = CustomOkHttpClient.INSTANCE.newCall(request).execute()) {
             assertNotNull(response.body());
             JsonObject responseJson = JsonParser.parseString(response.body().string()).getAsJsonObject();
+            System.out.println(responseJson);
             assertFalse(responseJson.get("Success").getAsBoolean());
         }
 
@@ -213,6 +229,7 @@ public class L4LoadBalancerHandlerTest {
         try (Response response = CustomOkHttpClient.INSTANCE.newCall(request).execute()) {
             assertNotNull(response.body());
             JsonObject responseJson = JsonParser.parseString(response.body().string()).getAsJsonObject();
+            System.out.println(responseJson);
             assertTrue(responseJson.get("Success").getAsBoolean());
         }
     }

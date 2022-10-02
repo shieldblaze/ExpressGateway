@@ -32,6 +32,7 @@ import java.nio.file.LinkOption;
 import java.nio.file.Path;
 import java.nio.file.StandardOpenOption;
 import java.util.UUID;
+import java.util.concurrent.ExecutionException;
 
 import static com.shieldblaze.expressgateway.bootstrap.Utils.checkNullEnv;
 import static com.shieldblaze.expressgateway.bootstrap.Utils.checkNullOrEmptyConf;
@@ -169,10 +170,13 @@ public final class Bootstrap {
             // Fetch Data from MongoDB
             fetchMetadataFromMongoDb(clusterId);
 
-            RestApi.start();
+            // TODO: 02-10-2022 FIX ME
+            RestApi.start(null);
         } catch (IOException e) {
             logger.error(e);
             System.exit(1);
+        } catch (ExecutionException | InterruptedException e) {
+            throw new RuntimeException(e);
         }
     }
 
@@ -188,7 +192,7 @@ public final class Bootstrap {
         });
     }
 
-    private static void fetchMetadataFromMongoDb(String clusterId) {
+    private static void fetchMetadataFromMongoDb(String clusterId) throws ExecutionException, InterruptedException {
         ExpressGateway expressGateway = MongoDB.getInstance().find(ExpressGateway.class)
                 .filter(Filters.eq("_id", clusterId))
                 .first();

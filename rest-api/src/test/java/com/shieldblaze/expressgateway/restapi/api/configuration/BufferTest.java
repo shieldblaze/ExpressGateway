@@ -19,10 +19,11 @@ package com.shieldblaze.expressgateway.restapi.api.configuration;
 
 import com.google.gson.JsonObject;
 import com.google.gson.JsonParser;
+import com.shieldblaze.expressgateway.common.datastore.CryptoEntry;
+import com.shieldblaze.expressgateway.common.utils.SelfSignedCertificate;
 import com.shieldblaze.expressgateway.configuration.buffer.BufferConfiguration;
 import com.shieldblaze.expressgateway.restapi.CustomOkHttpClient;
 import com.shieldblaze.expressgateway.restapi.RestApi;
-import com.shieldblaze.expressgateway.restapi.Utils;
 import okhttp3.Request;
 import okhttp3.RequestBody;
 import okhttp3.Response;
@@ -34,6 +35,8 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.TestMethodOrder;
 
 import java.io.IOException;
+import java.security.cert.X509Certificate;
+import java.util.List;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
@@ -44,8 +47,9 @@ class BufferTest {
 
     @BeforeAll
     static void startSpring() {
-        Utils.initSelfSignedDataStore();
-        RestApi.start();
+        SelfSignedCertificate ssc = SelfSignedCertificate.generateNew(List.of("127.0.0.1"), List.of("shieldblaze.com"));
+        CryptoEntry cryptoEntry = new CryptoEntry(ssc.keyPair().getPrivate(), new X509Certificate[]{ssc.x509Certificate()});
+        RestApi.start(cryptoEntry);
     }
 
     @AfterAll
@@ -68,7 +72,7 @@ class BufferTest {
         jsonBody.addProperty("directMemoryCacheAlignment", 0);
 
         Request request = new Request.Builder()
-                .url("https://127.0.0.1:9110/v1/configuration/buffer/save?profileName=meow")
+                .url("https://127.0.0.1:9110/v1/configuration/buffer")
                 .post(RequestBody.create(jsonBody.toString().getBytes()))
                 .header("Content-Type", "application/json")
                 .build();
@@ -76,6 +80,7 @@ class BufferTest {
         try (Response response = CustomOkHttpClient.INSTANCE.newCall(request).execute()) {
             assertNotNull(response.body());
             JsonObject responseJson = JsonParser.parseString(response.body().string()).getAsJsonObject();
+            System.out.println(responseJson);
             assertTrue(responseJson.get("Success").getAsBoolean());
         }
     }
@@ -86,7 +91,7 @@ class BufferTest {
         BufferConfiguration bufferDefault = BufferConfiguration.DEFAULT;
 
         Request request = new Request.Builder()
-                .url("https://127.0.0.1:9110/v1/configuration/buffer/get?id=default")
+                .url("https://127.0.0.1:9110/v1/configuration/buffer")
                 .get()
                 .build();
 
@@ -123,7 +128,7 @@ class BufferTest {
         jsonBody.addProperty("directMemoryCacheAlignment", 0);
 
         Request request = new Request.Builder()
-                .url("https://127.0.0.1:9110/v1/configuration/buffer/save?profileName=meow")
+                .url("https://127.0.0.1:9110/v1/configuration/buffer")
                 .post(RequestBody.create(jsonBody.toString().getBytes()))
                 .header("Content-Type", "application/json")
                 .build();
@@ -137,7 +142,7 @@ class BufferTest {
         }
 
         request = new Request.Builder()
-                .url("https://127.0.0.1:9110/v1/configuration/buffer/get?id=" + id)
+                .url("https://127.0.0.1:9110/v1/configuration/buffer/?id=" + id)
                 .get()
                 .build();
 

@@ -21,7 +21,6 @@ import com.fasterxml.jackson.annotation.JsonIgnore;
 import com.fasterxml.jackson.annotation.JsonProperty;
 import dev.morphia.annotations.Entity;
 import dev.morphia.annotations.Id;
-import dev.morphia.annotations.Property;
 import dev.morphia.annotations.Transient;
 
 import java.util.UUID;
@@ -35,10 +34,6 @@ public final class TlsServerConfiguration extends TlsConfiguration {
     @Id
     @JsonProperty
     private String id;
-
-    @Property
-    @JsonProperty
-    private String profileName;
 
     @Transient
     @JsonIgnore
@@ -56,29 +51,12 @@ public final class TlsServerConfiguration extends TlsConfiguration {
 
     static {
         DEFAULT.id = "default";
-        DEFAULT.profileName = "default";
         DEFAULT.ciphers = IntermediateCrypto.CIPHERS;
         DEFAULT.protocols = IntermediateCrypto.PROTOCOLS;
         DEFAULT.useStartTLS = false;
         DEFAULT.sessionTimeout = 43_200;
         DEFAULT.sessionCacheSize = 1_000_000;
         DEFAULT.validated = true;
-    }
-
-    /**
-     * Profile Name
-     */
-    @Override
-    public String profileName() {
-        return profileName;
-    }
-
-    /**
-     * Profile Name
-     */
-    public TlsServerConfiguration setProfileName(String profileName) {
-        this.profileName = profileName;
-        return this;
     }
 
     @Override

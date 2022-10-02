@@ -17,13 +17,23 @@
  */
 package com.shieldblaze.expressgateway.common.datastore;
 
-import com.shieldblaze.expressgateway.common.annotation.NonNull;
-
 import java.security.PrivateKey;
 import java.security.cert.Certificate;
 
-public record Entry(PrivateKey privateKey, Certificate[] certificates) {
-    @NonNull
-    public Entry {
+public class CryptoEntry {
+    private final PrivateKey privateKey;
+    private final Certificate[] certificates;
+
+    public CryptoEntry(PrivateKey privateKey, Certificate[] certificates) {
+        this.privateKey = privateKey;
+        this.certificates = certificates;
+    }
+
+    public PrivateKey privateKey() {
+        return privateKey;
+    }
+
+    public Certificate[] certificates() {
+        return certificates;
     }
 }

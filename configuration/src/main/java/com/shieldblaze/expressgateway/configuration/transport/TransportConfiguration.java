@@ -22,7 +22,6 @@ import com.fasterxml.jackson.annotation.JsonProperty;
 import com.shieldblaze.expressgateway.configuration.Configuration;
 import dev.morphia.annotations.Entity;
 import dev.morphia.annotations.Id;
-import dev.morphia.annotations.Property;
 import dev.morphia.annotations.Transient;
 import io.netty.channel.AdaptiveRecvByteBufAllocator;
 import io.netty.channel.FixedRecvByteBufAllocator;
@@ -43,10 +42,6 @@ public final class TransportConfiguration implements Configuration {
     @Id
     @JsonProperty
     private String id;
-
-    @Property
-    @JsonProperty
-    private String profileName;
 
     @JsonProperty("transportType")
     private TransportType transportType;
@@ -91,7 +86,6 @@ public final class TransportConfiguration implements Configuration {
         }
 
         DEFAULT.id = "default";
-        DEFAULT.profileName = "default";
         DEFAULT.receiveBufferAllocationType = ReceiveBufferAllocationType.ADAPTIVE;
         DEFAULT.receiveBufferSizes = new int[]{512, 9001, 65535};
         DEFAULT.tcpConnectionBacklog = 50_000;
@@ -101,22 +95,6 @@ public final class TransportConfiguration implements Configuration {
         DEFAULT.backendConnectTimeout = 1000 * 10;  // 10 Seconds
         DEFAULT.connectionIdleTimeout = 1000 * 120; // 2 Minute
         DEFAULT.validated = true;
-    }
-
-    /**
-     * Profile Name
-     */
-    public TransportConfiguration setProfileName(String profileName) {
-        this.profileName = profileName;
-        return this;
-    }
-
-    /**
-     * Profile Name
-     */
-    @Override
-    public String profileName() {
-        return profileName;
     }
 
     /**
@@ -277,7 +255,6 @@ public final class TransportConfiguration implements Configuration {
         if (id == null) {
             id = UUID.randomUUID().toString();
         }
-        Objects.requireNonNull(profileName, "Profile Name");
         Objects.requireNonNull(transportType, "Transport Type");
         Objects.requireNonNull(receiveBufferAllocationType, "Receive Buffer Allocation Type");
         Objects.requireNonNull(receiveBufferSizes, "Receive Buffer Sizes");

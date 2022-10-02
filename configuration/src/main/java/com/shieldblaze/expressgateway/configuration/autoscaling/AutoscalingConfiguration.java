@@ -243,11 +243,6 @@ public final class AutoscalingConfiguration implements Configuration<Autoscaling
     }
 
     @Override
-    public String profileName() {
-        return null;
-    }
-
-    @Override
     public boolean validated() {
         return false;
     }

@@ -26,7 +26,6 @@ import dev.morphia.annotations.Id;
 import dev.morphia.annotations.Property;
 import dev.morphia.annotations.Transient;
 
-import java.util.Objects;
 import java.util.UUID;
 
 /**
@@ -38,10 +37,6 @@ public final class EventLoopConfiguration implements Configuration<EventLoopConf
     @Id
     @JsonProperty
     private String id;
-
-    @Property
-    @JsonProperty
-    private String profileName;
 
     @Property
     @JsonProperty
@@ -59,27 +54,9 @@ public final class EventLoopConfiguration implements Configuration<EventLoopConf
 
     static {
         DEFAULT.id = "default";
-        DEFAULT.profileName = "default";
         DEFAULT.parentWorkers = Runtime.getRuntime().availableProcessors();
         DEFAULT.childWorkers = DEFAULT.parentWorkers * 2;
         DEFAULT.validated = true;
-    }
-
-    /**
-     * Profile name
-     */
-    public EventLoopConfiguration setProfileName(String profileName) {
-        this.profileName = profileName;
-        return this;
-    }
-
-    /**
-     * Profile name
-     */
-    @Override
-    public String profileName() {
-        assertValidated();
-        return profileName;
     }
 
     /**
@@ -124,7 +101,6 @@ public final class EventLoopConfiguration implements Configuration<EventLoopConf
         if (id == null) {
             id = UUID.randomUUID().toString();
         }
-        Objects.requireNonNull(profileName, "Profile Name");
         NumberUtil.checkPositive(parentWorkers, "Parent Workers");
         NumberUtil.checkPositive(childWorkers, "Child Workers");
         validated = true;

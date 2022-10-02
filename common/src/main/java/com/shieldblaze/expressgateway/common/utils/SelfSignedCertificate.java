@@ -91,7 +91,8 @@ public final class SelfSignedCertificate {
     /**
      * Generate new {@link SelfSignedCertificate} instance
      *
-     * @param ipList  List of IP addresses in SAN
+     * @param ipList       {@link List} of IP addresses in SAN
+     * @param hostnameList {@link List} of hostnames in SAN
      * @return {@link SelfSignedCertificate} instance once successful
      */
     public static SelfSignedCertificate generateNew(List<String> ipList, List<String> hostnameList) {
@@ -133,7 +134,7 @@ public final class SelfSignedCertificate {
                 generalNamesBuilder.addName(new GeneralName(GeneralName.iPAddress, ip));
             }
 
-            for(String hostname : hostnameList) {
+            for (String hostname : hostnameList) {
                 generalNamesBuilder.addName(new GeneralName(GeneralName.dNSName, hostname));
             }
 

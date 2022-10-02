@@ -17,6 +17,7 @@
  */
 package com.shieldblaze.expressgateway.restapi;
 
+import com.shieldblaze.expressgateway.common.utils.SystemPropertyUtil;
 import io.netty.handler.ssl.ClientAuth;
 import io.netty.handler.ssl.OpenSsl;
 import io.netty.handler.ssl.SslProvider;
@@ -30,9 +31,15 @@ import reactor.netty.http.Http2SslContextSpec;
 import reactor.netty.http.HttpProtocol;
 import reactor.netty.http.server.HttpServer;
 
+import java.net.InetAddress;
 import java.security.PrivateKey;
+import java.security.cert.Certificate;
 import java.security.cert.X509Certificate;
 import java.util.List;
+
+import static com.shieldblaze.expressgateway.common.SystemPropertiesKeys.REST_API_IP_ADDRESS;
+import static com.shieldblaze.expressgateway.common.SystemPropertiesKeys.REST_API_PORT;
+import static com.shieldblaze.expressgateway.restapi.RestApi.CRYPTO_ENTRY;
 
 /**
  * This customizer is responsible for the configuration of
@@ -45,39 +52,38 @@ public class WebServerCustomizer implements WebServerFactoryCustomizer<NettyReac
 
     @Override
     public void customize(NettyReactiveWebServerFactory factory) {
-        /*try {
-            InetAddress inetAddress = InetAddress.getByName(REST_API_IP_ADDRESS);
+        try {
+            InetAddress inetAddress = InetAddress.getByName(SystemPropertyUtil.getPropertyOrEnv(REST_API_IP_ADDRESS, "127.0.0.1"));
             factory.setAddress(inetAddress);
         } catch (Exception ex) {
-            logger.error("Invalid REST-API Address, Shutting down...", ex);
+            logger.error("Error while setting REST-API server address, Shutting down...", ex);
             System.exit(1);
             return;
         }
 
         try {
-            int port = Integer.parseInt(REST_API_PORT);
+            int port = Integer.parseInt(SystemPropertyUtil.getPropertyOrEnv(REST_API_PORT, "9110"));
             factory.setPort(port);
         } catch (Exception ex) {
-            logger.error("Invalid REST-API Port, Shutting down...", ex);
+            logger.error("Error while setting REST-API server port, Shutting down...", ex);
             System.exit(1);
             return;
         }
 
         try {
-            Entry entry = DataStore.fetchPrivateKeyCertificateEntry(System.getProperty("datastore.password").toCharArray(),
-                    System.getProperty("datastore.alias"));
+            X509Certificate[] x509Certificates = new X509Certificate[CRYPTO_ENTRY.certificates().length];
 
-            X509Certificate[] x509Certificates = new X509Certificate[entry.certificates().length];
             int i = 0;
-            for (Certificate cert : entry.certificates()) {
+            for (Certificate cert : CRYPTO_ENTRY.certificates()) {
                 x509Certificates[i] = (X509Certificate) cert;
                 i++;
             }
 
-            factory.addServerCustomizers(new TlsCustomizer(entry.privateKey(), x509Certificates));
+            factory.addServerCustomizers(new TlsCustomizer(CRYPTO_ENTRY.privateKey(), x509Certificates));
         } catch (Exception ex) {
-            logger.error("Failed to load RestApi DataStore Entry");
-        }*/
+            logger.error("Failed to load initialize TLS configuration for REST-API server", ex);
+            System.exit(1);
+        }
     }
 
     record TlsCustomizer(PrivateKey privateKey, X509Certificate[] x509Certificates) implements NettyServerCustomizer {

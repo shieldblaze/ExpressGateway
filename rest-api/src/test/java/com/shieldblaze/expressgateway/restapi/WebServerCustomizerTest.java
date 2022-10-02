@@ -17,6 +17,8 @@
  */
 package com.shieldblaze.expressgateway.restapi;
 
+import com.shieldblaze.expressgateway.common.datastore.CryptoEntry;
+import com.shieldblaze.expressgateway.common.utils.SelfSignedCertificate;
 import io.netty.handler.ssl.util.InsecureTrustManagerFactory;
 import org.junit.jupiter.api.Test;
 
@@ -25,6 +27,8 @@ import javax.net.ssl.SSLSession;
 import javax.net.ssl.SSLSocket;
 import javax.net.ssl.SSLSocketFactory;
 import java.security.SecureRandom;
+import java.security.cert.X509Certificate;
+import java.util.List;
 
 import static org.junit.jupiter.api.Assertions.assertArrayEquals;
 import static org.junit.jupiter.api.Assertions.assertEquals;
@@ -34,13 +38,11 @@ class WebServerCustomizerTest {
 
     @Test
     void generateAndLoadSelfSignedCertificateTest() throws Exception {
-        Utils.initSelfSignedDataStore();
+        SelfSignedCertificate ssc = SelfSignedCertificate.generateNew(List.of("127.0.0.1"), List.of("shieldblaze.com"));
+        CryptoEntry cryptoEntry = new CryptoEntry(ssc.keyPair().getPrivate(), new X509Certificate[]{ssc.x509Certificate()});
 
         // Start the Rest-Api Server
-        RestApi.start();
-
-        // Wait 2.5 seconds for everything to be initialized
-        Thread.sleep(2500);
+        RestApi.start(cryptoEntry);
 
         SSLContext sslContext = SSLContext.getInstance("TLSv1.3");
         sslContext.init(null, InsecureTrustManagerFactory.INSTANCE.getTrustManagers(), new SecureRandom());
@@ -52,12 +54,10 @@ class WebServerCustomizerTest {
 
         SSLSession session = socket.getSession();
 
-        assertArrayEquals(Utils.selfSignedCertificate().x509Certificate().getEncoded(), session.getPeerCertificates()[0].getEncoded());
+        assertArrayEquals(cryptoEntry.certificates()[0].getEncoded(), session.getPeerCertificates()[0].getEncoded());
         assertEquals("TLSv1.3", session.getProtocol());
         assertEquals("TLS_AES_256_GCM_SHA384", session.getCipherSuite());
         socket.close();
-
-//        assertTrue(DataStore.INSTANCE.destroy());
 
         // Stop the Rest-Api Server
         RestApi.stop();

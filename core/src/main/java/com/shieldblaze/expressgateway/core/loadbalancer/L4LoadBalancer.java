@@ -21,7 +21,6 @@ import com.google.gson.JsonArray;
 import com.google.gson.JsonObject;
 import com.shieldblaze.expressgateway.backend.cluster.Cluster;
 import com.shieldblaze.expressgateway.common.annotation.NonNull;
-import com.shieldblaze.expressgateway.concurrent.GlobalExecutors;
 import com.shieldblaze.expressgateway.concurrent.eventstream.EventStream;
 import com.shieldblaze.expressgateway.configuration.ConfigurationContext;
 import com.shieldblaze.expressgateway.core.L4FrontListener;
@@ -134,12 +133,7 @@ public abstract class L4LoadBalancer {
      * @return {@link L4FrontListenerShutdownEvent} instance
      */
     public L4FrontListenerShutdownEvent shutdown() {
-        L4FrontListenerShutdownEvent event = l4FrontListener.shutdown();
-
-        // Close EventStream when stop event has finished.
-        event.future()
-                .whenCompleteAsync((_Void, throwable) -> eventStream().close(), GlobalExecutors.executorService());
-        return event;
+        return l4FrontListener.shutdown();
     }
 
     /**

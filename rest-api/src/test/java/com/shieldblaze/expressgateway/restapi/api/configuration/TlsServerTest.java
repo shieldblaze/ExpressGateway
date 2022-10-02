@@ -21,13 +21,14 @@ package com.shieldblaze.expressgateway.restapi.api.configuration;
 import com.google.gson.JsonArray;
 import com.google.gson.JsonObject;
 import com.google.gson.JsonParser;
+import com.shieldblaze.expressgateway.common.datastore.CryptoEntry;
+import com.shieldblaze.expressgateway.common.utils.SelfSignedCertificate;
 import com.shieldblaze.expressgateway.configuration.tls.Cipher;
 import com.shieldblaze.expressgateway.configuration.tls.Protocol;
 import com.shieldblaze.expressgateway.configuration.tls.TlsConfiguration;
 import com.shieldblaze.expressgateway.configuration.tls.TlsServerConfiguration;
 import com.shieldblaze.expressgateway.restapi.CustomOkHttpClient;
 import com.shieldblaze.expressgateway.restapi.RestApi;
-import com.shieldblaze.expressgateway.restapi.Utils;
 import okhttp3.Request;
 import okhttp3.RequestBody;
 import okhttp3.Response;
@@ -39,6 +40,8 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.TestMethodOrder;
 
 import java.io.IOException;
+import java.security.cert.X509Certificate;
+import java.util.List;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
@@ -50,8 +53,9 @@ class TlsServerTest {
 
     @BeforeAll
     static void startSpring() {
-        Utils.initSelfSignedDataStore();
-        RestApi.start();
+        SelfSignedCertificate ssc = SelfSignedCertificate.generateNew(List.of("127.0.0.1"), List.of("shieldblaze.com"));
+        CryptoEntry cryptoEntry = new CryptoEntry(ssc.keyPair().getPrivate(), new X509Certificate[]{ssc.x509Certificate()});
+        RestApi.start(cryptoEntry);
     }
 
     @AfterAll
@@ -76,7 +80,7 @@ class TlsServerTest {
         jsonBody.add("protocols", protocols);
 
         Request request = new Request.Builder()
-                .url("https://127.0.0.1:9110/v1/configuration/tlsserver/save?profileName=meow")
+                .url("https://127.0.0.1:9110/v1/configuration/tlsserver")
                 .post(RequestBody.create(jsonBody.toString().getBytes()))
                 .header("Content-Type", "application/json")
                 .build();
@@ -103,7 +107,7 @@ class TlsServerTest {
         jsonBody.add("protocols", protocols);
 
         Request request = new Request.Builder()
-                .url("https://127.0.0.1:9110/v1/configuration/tlsserver/save?profileName=meow2")
+                .url("https://127.0.0.1:9110/v1/configuration/tlsserver")
                 .post(RequestBody.create(jsonBody.toString().getBytes()))
                 .header("Content-Type", "application/json")
                 .build();
@@ -121,7 +125,7 @@ class TlsServerTest {
         TlsConfiguration clientDefault = TlsServerConfiguration.DEFAULT;
 
         Request request = new Request.Builder()
-                .url("https://127.0.0.1:9110/v1/configuration/tlsserver/get?id=default")
+                .url("https://127.0.0.1:9110/v1/configuration/tlsserver/?id=default")
                 .get()
                 .build();
 
@@ -164,7 +168,7 @@ class TlsServerTest {
         jsonBody.add("protocols", protocols);
 
         Request request = new Request.Builder()
-                .url("https://127.0.0.1:9110/v1/configuration/tlsserver/save?profileName=meow")
+                .url("https://127.0.0.1:9110/v1/configuration/tlsserver")
                 .post(RequestBody.create(jsonBody.toString().getBytes()))
                 .header("Content-Type", "application/json")
                 .build();
@@ -178,7 +182,7 @@ class TlsServerTest {
         }
 
         request = new Request.Builder()
-                .url("https://127.0.0.1:9110/v1/configuration/tlsserver/get?id=" + id)
+                .url("https://127.0.0.1:9110/v1/configuration/tlsserver/?id=" + id)
                 .get()
                 .build();
 
