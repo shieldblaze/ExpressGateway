@@ -227,7 +227,7 @@ class HTTP2OutboundAdapterTest {
         DefaultHttp2ConnectionDecoder decoder = new DefaultHttp2ConnectionDecoder(connection, encoder, reader, Http2PromisedRequestVerifier.ALWAYS_VERIFY,
                 true, true);
 
-        Http2FrameCodec http2FrameCodec = new Http2FrameCodec(encoder, decoder, http2Settings, false);
+        Http2FrameCodec http2FrameCodec = new Http2FrameCodec(encoder, decoder, http2Settings, false, true);
         decoder.frameListener(new DelegatingDecompressorFrameListener(connection, decoder.frameListener()));
         return http2FrameCodec;
     }
