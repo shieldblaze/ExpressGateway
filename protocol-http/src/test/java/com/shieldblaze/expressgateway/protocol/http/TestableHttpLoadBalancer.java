@@ -33,8 +33,6 @@ import com.shieldblaze.expressgateway.protocol.http.loadbalancer.HTTPLoadBalance
 import com.shieldblaze.expressgateway.protocol.http.loadbalancer.HTTPLoadBalancerBuilder;
 import com.shieldblaze.expressgateway.protocol.tcp.TCPListener;
 import io.netty.handler.ssl.util.InsecureTrustManagerFactory;
-import org.apache.logging.log4j.LogManager;
-import org.apache.logging.log4j.Logger;
 
 import javax.net.ssl.SSLContext;
 import java.io.Closeable;
@@ -42,12 +40,11 @@ import java.net.InetSocketAddress;
 import java.net.http.HttpClient;
 import java.security.SecureRandom;
 import java.util.List;
+import java.util.concurrent.ExecutionException;
 
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 public final class TestableHttpLoadBalancer implements Closeable {
-
-    private static final Logger logger = LogManager.getLogger(TestableHttpLoadBalancer.class);
 
     private boolean tlsServerEnabled;
     private boolean tlsClientEnabled;
@@ -83,7 +80,7 @@ public final class TestableHttpLoadBalancer implements Closeable {
 
         httpServer = new HttpServer(tlsBackendEnabled);
         httpServer.start();
-        Thread.sleep(2500);
+        httpServer.START_FUTURE.get();
 
         Cluster cluster = ClusterBuilder.newBuilder()
                 .withLoadBalance(new HTTPRoundRobin(NOOPSessionPersistence.INSTANCE))
@@ -115,6 +112,11 @@ public final class TestableHttpLoadBalancer implements Closeable {
     @Override
     public void close() {
         httpServer.shutdown();
+        try {
+            httpServer.SHUTDOWN_FUTURE.get();
+        } catch (InterruptedException | ExecutionException e) {
+            throw new RuntimeException(e);
+        }
 
         TlsServerConfiguration.DEFAULT.disable();
         TlsServerConfiguration.DEFAULT.clearMappings();

@@ -54,6 +54,8 @@ import org.apache.logging.log4j.Logger;
 
 import java.net.InetSocketAddress;
 import java.util.Objects;
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.CompletionException;
 
 import static io.netty.handler.codec.http.HttpResponseStatus.OK;
 
@@ -66,6 +68,8 @@ final class HttpServer extends Thread {
     private int port;
     private EventLoopGroup eventLoopGroup;
     private ChannelFuture channelFuture;
+    public final CompletableFuture<Void> START_FUTURE = new CompletableFuture<>();
+    public final CompletableFuture<Void> SHUTDOWN_FUTURE = new CompletableFuture<>();
 
     HttpServer(boolean useTls) {
         this(useTls, null);
@@ -134,8 +138,15 @@ final class HttpServer extends Thread {
                         }
                     });
 
-            channelFuture = serverBootstrap.bind("127.0.0.1", 0).sync();
-            port = ((InetSocketAddress) channelFuture.channel().localAddress()).getPort();
+            channelFuture = serverBootstrap.bind("127.0.0.1", 0).addListener(f -> {
+                if (f.isSuccess()) {
+                    port = ((InetSocketAddress) channelFuture.channel().localAddress()).getPort();
+                    START_FUTURE.complete(null);
+                } else {
+                    START_FUTURE.completeExceptionally(f.cause());
+                    throw new CompletionException(f.cause());
+                }
+            });
         } catch (Exception ex) {
             logger.error(ex);
         }
@@ -147,11 +158,13 @@ final class HttpServer extends Thread {
 
     public void shutdown() {
         channelFuture.channel().close();
-        try {
-            eventLoopGroup.shutdownGracefully().sync();
-        } catch (InterruptedException ex) {
-            logger.error(ex);
-        }
+        eventLoopGroup.shutdownGracefully().addListener(future -> {
+            if (future.isSuccess()) {
+                SHUTDOWN_FUTURE.complete(null);
+            } else {
+                SHUTDOWN_FUTURE.completeExceptionally(future.cause());
+            }
+        });
     }
 
     private static final class Handler extends SimpleChannelInboundHandler<FullHttpRequest> {
