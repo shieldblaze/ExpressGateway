@@ -50,9 +50,8 @@ class Http2TLSBackendAndNonTLSClientTest {
     }
 
     @AfterAll
-    static void shutdown() throws InterruptedException {
+    static void shutdown() {
         testableHttpLoadBalancer.close();
-        Thread.sleep(2500);
     }
 
     @Test
