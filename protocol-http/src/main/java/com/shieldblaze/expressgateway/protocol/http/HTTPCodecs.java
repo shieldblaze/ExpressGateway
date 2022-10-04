@@ -46,7 +46,7 @@ public final class HTTPCodecs {
 
     private static final Logger logger = LogManager.getLogger(HTTPCodecs.class);
 
-    static Http2FrameCodec H2ClientCodec(HttpConfiguration httpConfiguration) {
+    public static Http2FrameCodec http2ClientCodec(HttpConfiguration httpConfiguration) {
         Http2Settings http2Settings = new Http2Settings();
         http2Settings.initialWindowSize(httpConfiguration.h2InitialWindowSize());
         http2Settings.maxConcurrentStreams(httpConfiguration.h2MaxConcurrentStreams());
@@ -65,13 +65,13 @@ public final class HTTPCodecs {
                 Http2PromisedRequestVerifier.ALWAYS_VERIFY, true, true);
 
         try {
-            Constructor<Http2FrameCodec> constructor = Http2FrameCodec.class.getConstructor(
+            Constructor<Http2FrameCodec> constructor = Http2FrameCodec.class.getDeclaredConstructor(
                     Http2ConnectionEncoder.class,
                     Http2ConnectionDecoder.class,
                     Http2Settings.class,
                     boolean.class,
                     boolean.class);
-
+constructor.setAccessible(true);
             Object[] obj = {encoder, decoder, http2Settings, false, true};
             Http2FrameCodec http2FrameCodec = constructor.newInstance(obj);
             decoder.frameListener(new DelegatingDecompressorFrameListener(connection, decoder.frameListener()));
@@ -83,7 +83,7 @@ public final class HTTPCodecs {
         }
     }
 
-    static Http2FrameCodec h2Server(HttpConfiguration httpConfiguration) {
+    public static Http2FrameCodec h2Server(HttpConfiguration httpConfiguration) {
         Http2Settings http2Settings = new Http2Settings();
         http2Settings.maxHeaderListSize(httpConfiguration.h2MaxHeaderListSize());
 
@@ -98,13 +98,13 @@ public final class HTTPCodecs {
                 Http2PromisedRequestVerifier.ALWAYS_VERIFY, true, true);
 
         try {
-            Constructor<Http2FrameCodec> constructor = Http2FrameCodec.class.getConstructor(
+            Constructor<Http2FrameCodec> constructor = Http2FrameCodec.class.getDeclaredConstructor(
                     Http2ConnectionEncoder.class,
                     Http2ConnectionDecoder.class,
                     Http2Settings.class,
                     boolean.class,
                     boolean.class);
-
+            constructor.setAccessible(true);
             Object[] obj = {encoder, decoder, http2Settings, false, true};
             Http2FrameCodec http2FrameCodec = constructor.newInstance(obj);
             decoder.frameListener(new DelegatingDecompressorFrameListener(connection, decoder.frameListener()));

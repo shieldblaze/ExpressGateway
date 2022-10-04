@@ -83,7 +83,7 @@ final class Bootstrapper {
 
                     ALPNHandler alpnHandler = ALPNHandlerBuilder.newBuilder()
                             // HTTP/2 Handlers
-                            .withHTTP2ChannelHandler(HTTPCodecs.H2ClientCodec(httpLoadBalancer.httpConfiguration()))
+                            .withHTTP2ChannelHandler(HTTPCodecs.http2ClientCodec(httpLoadBalancer.httpConfiguration()))
                             .withHTTP2ChannelHandler(new HTTP2OutboundAdapter())
                             .withHTTP2ChannelHandler(downstreamHandler)
                             // HTTP/1.1 Handlers
