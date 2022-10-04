@@ -85,9 +85,22 @@ import java.util.concurrent.ConcurrentHashMap;
 public final class HTTP2OutboundAdapter extends Http2ChannelDuplexHandler {
 
     private static final Logger logger = LogManager.getLogger(HTTP2OutboundAdapter.class);
+    private static final Method FRAME_CODEC_METHOD;
+
+    static {
+        // Cache the lookup
+        Method method = null;
+        try {
+            Class<?> clazz = Class.forName("io.netty.handler.codec.http2.Http2FrameCodec$DefaultHttp2FrameStream");
+            method = Http2FrameCodec.class.getDeclaredMethod("initializeNewStream", ChannelHandlerContext.class, clazz, ChannelPromise.class);
+            method.setAccessible(true);
+        } catch (ClassNotFoundException | NoSuchMethodException ex) {
+            logger.error("Failed to initialize method 'Http2FrameCodec#initializeNewStream'", ex);
+        }
+        FRAME_CODEC_METHOD = method;
+    }
 
     private Http2FrameCodec FRAME_CODEC_INSTANCE;
-    private Method FRAME_CODEC_METHOD;
 
     /**
      * <p> Integer: HTTP/2 Stream ID </p>
@@ -104,15 +117,6 @@ public final class HTTP2OutboundAdapter extends Http2ChannelDuplexHandler {
     @Override
     protected void handlerAdded0(ChannelHandlerContext ctx) throws Exception {
         FRAME_CODEC_INSTANCE = getHttp2FrameCodec();
-
-        try {
-            Class<?> clazz = Class.forName("io.netty.handler.codec.http2.Http2FrameCodec$DefaultHttp2FrameStream");
-            FRAME_CODEC_METHOD = Http2FrameCodec.class.getDeclaredMethod("initializeNewStream", ChannelHandlerContext.class, clazz, ChannelPromise.class);
-            FRAME_CODEC_METHOD.setAccessible(true);
-        } catch (ClassNotFoundException | NoSuchMethodException ex) {
-            logger.error("Failed to initialize method 'Http2FrameCodec#initializeNewStream'", ex);
-            throw ex;
-        }
     }
 
     @Override
