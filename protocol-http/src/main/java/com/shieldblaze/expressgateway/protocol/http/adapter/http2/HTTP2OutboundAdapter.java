@@ -86,6 +86,9 @@ public final class HTTP2OutboundAdapter extends Http2ChannelDuplexHandler {
 
     private static final Logger logger = LogManager.getLogger(HTTP2OutboundAdapter.class);
 
+    private Http2FrameCodec FRAME_CODEC_INSTANCE;
+    private Method FRAME_CODEC_METHOD;
+
     /**
      * <p> Integer: HTTP/2 Stream ID </p>
      * <p> Long: Request ID </p>
@@ -99,12 +102,28 @@ public final class HTTP2OutboundAdapter extends Http2ChannelDuplexHandler {
     private final Map<Long, OutboundProperty> streamIdMap = new ConcurrentHashMap<>();
 
     @Override
+    protected void handlerAdded0(ChannelHandlerContext ctx) throws Exception {
+        FRAME_CODEC_INSTANCE = getHttp2FrameCodec();
+
+        try {
+            Class<?> clazz = Class.forName("io.netty.handler.codec.http2.Http2FrameCodec$DefaultHttp2FrameStream");
+            FRAME_CODEC_METHOD = Http2FrameCodec.class.getDeclaredMethod("initializeNewStream", ChannelHandlerContext.class, clazz, ChannelPromise.class);
+            FRAME_CODEC_METHOD.setAccessible(true);
+        } catch (ClassNotFoundException | NoSuchMethodException ex) {
+            logger.error("Failed to initialize method 'Http2FrameCodec#initializeNewStream'", ex);
+            throw ex;
+        }
+    }
+
+    @Override
     public void write(ChannelHandlerContext ctx, Object msg, ChannelPromise promise) throws Exception {
         if (msg instanceof HttpRequest) {
             HttpFrame httpFrame = (HttpFrame) msg;
 
             Http2FrameStream http2FrameStream = newStream();
-            invokeInitializeNewStream(getHttp2FrameCodec(), ctx, http2FrameStream, promise);
+
+            // Invoke and initialize new 'Http2FrameStream'
+            invokeInitializeNewStream(ctx, http2FrameStream, promise);
             long id = httpFrame.id();
 
             // Put the stream ID and Outbound Property into the map.
@@ -269,13 +288,10 @@ public final class HTTP2OutboundAdapter extends Http2ChannelDuplexHandler {
         }
     }
 
-    private static void invokeInitializeNewStream(Http2FrameCodec frameCodec, ChannelHandlerContext ctx, Http2FrameStream stream, ChannelPromise promise) {
+    private void invokeInitializeNewStream(ChannelHandlerContext ctx, Http2FrameStream stream, ChannelPromise promise) {
         try {
-            Class<?> clazz = Class.forName("io.netty.handler.codec.http2.Http2FrameCodec$DefaultHttp2FrameStream");
-            Method method = Http2FrameCodec.class.getDeclaredMethod("initializeNewStream", ChannelHandlerContext.class, clazz, ChannelPromise.class);
-            method.setAccessible(true);
-            method.invoke(frameCodec, ctx, stream, promise);
-        } catch (ClassNotFoundException | InvocationTargetException | NoSuchMethodException | IllegalAccessException e) {
+            FRAME_CODEC_METHOD.invoke(FRAME_CODEC_INSTANCE, ctx, stream, promise);
+        } catch (InvocationTargetException | IllegalAccessException e) {
             logger.error("Failed to invoke 'Http2FrameCodec#initializeNewStream'", e);
         }
     }
