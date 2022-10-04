@@ -37,10 +37,14 @@ import io.netty.handler.codec.http2.Http2FrameWriter;
 import io.netty.handler.codec.http2.Http2HeadersEncoder;
 import io.netty.handler.codec.http2.Http2PromisedRequestVerifier;
 import io.netty.handler.codec.http2.Http2Settings;
+import org.apache.logging.log4j.LogManager;
+import org.apache.logging.log4j.Logger;
 
 import java.lang.reflect.Constructor;
 
 public final class HTTPCodecs {
+
+    private static final Logger logger = LogManager.getLogger(HTTPCodecs.class);
 
     static Http2FrameCodec H2ClientCodec(HttpConfiguration httpConfiguration) {
         Http2Settings http2Settings = new Http2Settings();
@@ -60,7 +64,6 @@ public final class HTTPCodecs {
         DefaultHttp2ConnectionDecoder decoder = new DefaultHttp2ConnectionDecoder(connection, encoder, reader,
                 Http2PromisedRequestVerifier.ALWAYS_VERIFY, true, true);
 
-        Http2FrameCodec http2FrameCodec;
         try {
             Constructor<Http2FrameCodec> constructor = Http2FrameCodec.class.getConstructor(
                     Http2ConnectionEncoder.class,
@@ -70,16 +73,14 @@ public final class HTTPCodecs {
                     boolean.class);
 
             Object[] obj = {encoder, decoder, http2Settings, false, true};
-            http2FrameCodec = constructor.newInstance(obj);
+            Http2FrameCodec http2FrameCodec = constructor.newInstance(obj);
+            decoder.frameListener(new DelegatingDecompressorFrameListener(connection, decoder.frameListener()));
+
+            return http2FrameCodec;
         } catch (Exception ex) {
-            ex.printStackTrace();
+            logger.fatal("Failed to initialize Http2FrameCodec", ex);
             return null;
         }
-
-//        Http2FrameCodec http2FrameCodec = new Http2FrameCodec(encoder, decoder, http2Settings, false, true);
-        decoder.frameListener(new DelegatingDecompressorFrameListener(connection, decoder.frameListener()));
-
-        return http2FrameCodec;
     }
 
     static Http2FrameCodec h2Server(HttpConfiguration httpConfiguration) {
@@ -96,10 +97,23 @@ public final class HTTPCodecs {
         DefaultHttp2ConnectionDecoder decoder = new DefaultHttp2ConnectionDecoder(connection, encoder, reader,
                 Http2PromisedRequestVerifier.ALWAYS_VERIFY, true, true);
 
-        Http2FrameCodec http2FrameCodec = new Http2FrameCodec(encoder, decoder, http2Settings, false, true);
-        decoder.frameListener(new DelegatingDecompressorFrameListener(connection, decoder.frameListener()));
+        try {
+            Constructor<Http2FrameCodec> constructor = Http2FrameCodec.class.getConstructor(
+                    Http2ConnectionEncoder.class,
+                    Http2ConnectionDecoder.class,
+                    Http2Settings.class,
+                    boolean.class,
+                    boolean.class);
 
-        return http2FrameCodec;
+            Object[] obj = {encoder, decoder, http2Settings, false, true};
+            Http2FrameCodec http2FrameCodec = constructor.newInstance(obj);
+            decoder.frameListener(new DelegatingDecompressorFrameListener(connection, decoder.frameListener()));
+
+            return http2FrameCodec;
+        } catch (Exception ex) {
+            logger.fatal("Failed to initialize Http2FrameCodec", ex);
+            return null;
+        }
     }
 
     /**
