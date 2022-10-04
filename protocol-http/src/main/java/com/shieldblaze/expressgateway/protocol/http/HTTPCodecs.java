@@ -71,7 +71,7 @@ public final class HTTPCodecs {
                     Http2Settings.class,
                     boolean.class,
                     boolean.class);
-constructor.setAccessible(true);
+            constructor.setAccessible(true);
             Object[] obj = {encoder, decoder, http2Settings, false, true};
             Http2FrameCodec http2FrameCodec = constructor.newInstance(obj);
             decoder.frameListener(new DelegatingDecompressorFrameListener(connection, decoder.frameListener()));
@@ -83,7 +83,7 @@ constructor.setAccessible(true);
         }
     }
 
-    public static Http2FrameCodec h2Server(HttpConfiguration httpConfiguration) {
+    public static Http2FrameCodec http2ServerCodec(HttpConfiguration httpConfiguration) {
         Http2Settings http2Settings = new Http2Settings();
         http2Settings.maxHeaderListSize(httpConfiguration.h2MaxHeaderListSize());
 
@@ -121,7 +121,7 @@ constructor.setAccessible(true);
      *
      * @param httpConfiguration {@link HttpConfiguration} Instance
      */
-    static HttpServerCodec server(HttpConfiguration httpConfiguration) {
+    static HttpServerCodec http1ServerCodec(HttpConfiguration httpConfiguration) {
         int maxInitialLineLength = httpConfiguration.maxInitialLineLength();
         int maxHeaderSize = httpConfiguration.maxHeaderSize();
         int maxChunkSize = httpConfiguration.maxChunkSize();
@@ -133,7 +133,7 @@ constructor.setAccessible(true);
      *
      * @param httpConfiguration {@link HttpConfiguration} Instance
      */
-    public static HttpClientCodec client(HttpConfiguration httpConfiguration) {
+    public static HttpClientCodec http1ClientCodec(HttpConfiguration httpConfiguration) {
         int maxInitialLineLength = httpConfiguration.maxInitialLineLength();
         int maxHeaderSize = httpConfiguration.maxHeaderSize();
         int maxChunkSize = httpConfiguration.maxChunkSize();
