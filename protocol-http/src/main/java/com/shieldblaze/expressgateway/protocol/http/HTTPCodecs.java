@@ -29,6 +29,7 @@ import io.netty.handler.codec.http2.DefaultHttp2FrameWriter;
 import io.netty.handler.codec.http2.DefaultHttp2HeadersDecoder;
 import io.netty.handler.codec.http2.DelegatingDecompressorFrameListener;
 import io.netty.handler.codec.http2.Http2Connection;
+import io.netty.handler.codec.http2.Http2ConnectionDecoder;
 import io.netty.handler.codec.http2.Http2ConnectionEncoder;
 import io.netty.handler.codec.http2.Http2FrameCodec;
 import io.netty.handler.codec.http2.Http2FrameReader;
@@ -36,6 +37,8 @@ import io.netty.handler.codec.http2.Http2FrameWriter;
 import io.netty.handler.codec.http2.Http2HeadersEncoder;
 import io.netty.handler.codec.http2.Http2PromisedRequestVerifier;
 import io.netty.handler.codec.http2.Http2Settings;
+
+import java.lang.reflect.Constructor;
 
 public final class HTTPCodecs {
 
@@ -57,7 +60,23 @@ public final class HTTPCodecs {
         DefaultHttp2ConnectionDecoder decoder = new DefaultHttp2ConnectionDecoder(connection, encoder, reader,
                 Http2PromisedRequestVerifier.ALWAYS_VERIFY, true, true);
 
-        Http2FrameCodec http2FrameCodec = new Http2FrameCodec(encoder, decoder, http2Settings, false, true);
+        Http2FrameCodec http2FrameCodec;
+        try {
+            Constructor<Http2FrameCodec> constructor = Http2FrameCodec.class.getConstructor(
+                    Http2ConnectionEncoder.class,
+                    Http2ConnectionDecoder.class,
+                    Http2Settings.class,
+                    boolean.class,
+                    boolean.class);
+
+            Object[] obj = {encoder, decoder, http2Settings, false, true};
+            http2FrameCodec = constructor.newInstance(obj);
+        } catch (Exception ex) {
+            ex.printStackTrace();
+            return null;
+        }
+
+//        Http2FrameCodec http2FrameCodec = new Http2FrameCodec(encoder, decoder, http2Settings, false, true);
         decoder.frameListener(new DelegatingDecompressorFrameListener(connection, decoder.frameListener()));
 
         return http2FrameCodec;
