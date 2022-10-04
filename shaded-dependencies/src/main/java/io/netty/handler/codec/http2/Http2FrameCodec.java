@@ -182,7 +182,7 @@ public class Http2FrameCodec extends Http2ConnectionHandler {
             new IntObjectHashMap<DefaultHttp2FrameStream>(8);
 
     public Http2FrameCodec(Http2ConnectionEncoder encoder, Http2ConnectionDecoder decoder, Http2Settings initialSettings,
-                           boolean decoupleCloseAndGoAway, boolean flushPreface) {
+                    boolean decoupleCloseAndGoAway, boolean flushPreface) {
         super(decoder, encoder, initialSettings, decoupleCloseAndGoAway, flushPreface);
 
         decoder.frameListener(new FrameListener());
@@ -745,7 +745,7 @@ public class Http2FrameCodec extends Http2ConnectionHandler {
      * {@link Http2FrameStream} implementation.
      */
     // TODO(buchgr): Merge Http2FrameStream and Http2Stream.
-    public static class DefaultHttp2FrameStream implements Http2FrameStream {
+    static class DefaultHttp2FrameStream implements Http2FrameStream {
 
         private volatile int id = -1;
         private volatile Http2Stream stream;

@@ -41,12 +41,15 @@ import io.netty.handler.codec.http2.Http2ChannelDuplexHandler;
 import io.netty.handler.codec.http2.Http2DataFrame;
 import io.netty.handler.codec.http2.Http2Error;
 import io.netty.handler.codec.http2.Http2FrameCodec;
+import io.netty.handler.codec.http2.Http2FrameStream;
 import io.netty.handler.codec.http2.Http2Headers;
 import io.netty.handler.codec.http2.Http2HeadersFrame;
 import io.netty.handler.codec.http2.Http2StreamFrame;
 import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
 
+import java.lang.reflect.InvocationTargetException;
+import java.lang.reflect.Method;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
 
@@ -98,8 +101,9 @@ public final class HTTP2OutboundAdapter extends Http2ChannelDuplexHandler {
     public void write(ChannelHandlerContext ctx, Object msg, ChannelPromise promise) throws Exception {
         if (msg instanceof HttpRequest) {
             HttpFrame httpFrame = (HttpFrame) msg;
-            Http2FrameCodec.DefaultHttp2FrameStream http2FrameStream = (Http2FrameCodec.DefaultHttp2FrameStream) newStream();
-            frameCodec.initializeNewStream(ctx, http2FrameStream, promise);
+
+            Http2FrameStream http2FrameStream = newStream();
+            invokeInitializeNewStream(frameCodec, ctx, http2FrameStream, promise);
             long id = httpFrame.id();
 
             // Put the stream ID and Outbound Property into the map.
@@ -255,5 +259,15 @@ public final class HTTP2OutboundAdapter extends Http2ChannelDuplexHandler {
     @Override
     public void exceptionCaught(ChannelHandlerContext ctx, Throwable cause) {
         logger.error("Caught error at HTTP2OutboundAdapter", cause);
+    }
+
+    private static void invokeInitializeNewStream(Http2FrameCodec frameCodec, ChannelHandlerContext ctx, Http2FrameStream stream, ChannelPromise promise) {
+        try {
+            Class<?> clazz = Class.forName("io.netty.handler.codec.http2.Http2FrameCodec$DefaultHttp2FrameStream");
+            Method method = Http2FrameCodec.class.getDeclaredMethod("initializeNewStream", ChannelHandlerContext.class, clazz, ChannelPromise.class);
+            method.invoke(frameCodec, ctx, stream, promise);
+        } catch (ClassNotFoundException | InvocationTargetException | NoSuchMethodException | IllegalAccessException e) {
+            logger.error("Failed to invoke 'Http2FrameCodec#initializeNewStream'");
+        }
     }
 }
