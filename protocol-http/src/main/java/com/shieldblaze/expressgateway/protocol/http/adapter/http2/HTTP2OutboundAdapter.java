@@ -41,12 +41,16 @@ import io.netty.handler.codec.http2.Http2ChannelDuplexHandler;
 import io.netty.handler.codec.http2.Http2DataFrame;
 import io.netty.handler.codec.http2.Http2Error;
 import io.netty.handler.codec.http2.Http2FrameCodec;
+import io.netty.handler.codec.http2.Http2FrameStream;
 import io.netty.handler.codec.http2.Http2Headers;
 import io.netty.handler.codec.http2.Http2HeadersFrame;
 import io.netty.handler.codec.http2.Http2StreamFrame;
 import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
 
+import java.lang.reflect.Field;
+import java.lang.reflect.InvocationTargetException;
+import java.lang.reflect.Method;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
 
@@ -81,6 +85,22 @@ import java.util.concurrent.ConcurrentHashMap;
 public final class HTTP2OutboundAdapter extends Http2ChannelDuplexHandler {
 
     private static final Logger logger = LogManager.getLogger(HTTP2OutboundAdapter.class);
+    private static final Method FRAME_CODEC_METHOD;
+
+    static {
+        // Cache the lookup
+        Method method = null;
+        try {
+            Class<?> clazz = Class.forName("io.netty.handler.codec.http2.Http2FrameCodec$DefaultHttp2FrameStream");
+            method = Http2FrameCodec.class.getDeclaredMethod("initializeNewStream", ChannelHandlerContext.class, clazz, ChannelPromise.class);
+            method.setAccessible(true);
+        } catch (ClassNotFoundException | NoSuchMethodException ex) {
+            logger.error("Failed to initialize method 'Http2FrameCodec#initializeNewStream'", ex);
+        }
+        FRAME_CODEC_METHOD = method;
+    }
+
+    private Http2FrameCodec FRAME_CODEC_INSTANCE;
 
     /**
      * <p> Integer: HTTP/2 Stream ID </p>
@@ -95,18 +115,25 @@ public final class HTTP2OutboundAdapter extends Http2ChannelDuplexHandler {
     private final Map<Long, OutboundProperty> streamIdMap = new ConcurrentHashMap<>();
 
     @Override
+    protected void handlerAdded0(ChannelHandlerContext ctx) throws Exception {
+        FRAME_CODEC_INSTANCE = getHttp2FrameCodec();
+    }
+
+    @Override
     public void write(ChannelHandlerContext ctx, Object msg, ChannelPromise promise) throws Exception {
         if (msg instanceof HttpRequest) {
             HttpFrame httpFrame = (HttpFrame) msg;
-            Http2FrameCodec.DefaultHttp2FrameStream http2FrameStream = (Http2FrameCodec.DefaultHttp2FrameStream) newStream();
-            frameCodec.initializeNewStream(ctx, http2FrameStream, promise);
+
+            Http2FrameStream http2FrameStream = newStream();
+
+            // Invoke and initialize new 'Http2FrameStream'
+            invokeInitializeNewStream(ctx, http2FrameStream, promise);
             long id = httpFrame.id();
 
             // Put the stream ID and Outbound Property into the map.
             addStream(new OutboundProperty(id, http2FrameStream, httpFrame.protocol()));
 
-            if (msg instanceof FullHttpRequest) {
-                FullHttpRequest fullHttpRequest = (FullHttpRequest) msg;
+            if (msg instanceof FullHttpRequest fullHttpRequest) {
 
                 if (fullHttpRequest.content().readableBytes() == 0) {
                     Http2Headers http2Headers = HTTPConversionUtil.toHttp2Headers(fullHttpRequest);
@@ -125,8 +152,7 @@ public final class HTTP2OutboundAdapter extends Http2ChannelDuplexHandler {
                 Http2HeadersFrame http2HeadersFrame = new DefaultHttp2HeadersFrame(http2Headers, false);
                 writeHeaders(ctx, id, http2HeadersFrame, promise);
             }
-        } else if (msg instanceof HttpContent) {
-            HttpContent httpContent = (HttpContent) msg;
+        } else if (msg instanceof HttpContent httpContent) {
             long id = ((HttpFrame) httpContent).id();
 
             if (msg instanceof LastHttpContent) {
@@ -155,8 +181,7 @@ public final class HTTP2OutboundAdapter extends Http2ChannelDuplexHandler {
 
     @Override
     public void channelRead(ChannelHandlerContext ctx, Object msg) throws Exception {
-        if (msg instanceof Http2HeadersFrame) {
-            Http2HeadersFrame headersFrame = (Http2HeadersFrame) msg;
+        if (msg instanceof Http2HeadersFrame headersFrame) {
             int streamId = headersFrame.stream().id();
             OutboundProperty outboundProperty = outboundProperty(streamId);
 
@@ -195,8 +220,7 @@ public final class HTTP2OutboundAdapter extends Http2ChannelDuplexHandler {
 
                 ctx.fireChannelRead(httpResponse);
             }
-        } else if (msg instanceof Http2DataFrame) {
-            Http2DataFrame dataFrame = (Http2DataFrame) msg;
+        } else if (msg instanceof Http2DataFrame dataFrame) {
             int streamId = dataFrame.stream().id();
             OutboundProperty outboundProperty = outboundProperty(streamId);
 
@@ -255,5 +279,24 @@ public final class HTTP2OutboundAdapter extends Http2ChannelDuplexHandler {
     @Override
     public void exceptionCaught(ChannelHandlerContext ctx, Throwable cause) {
         logger.error("Caught error at HTTP2OutboundAdapter", cause);
+    }
+
+    private Http2FrameCodec getHttp2FrameCodec() {
+        try {
+            Field http2FrameCodecField = HTTP2OutboundAdapter.class.getSuperclass().getDeclaredField("frameCodec");
+            http2FrameCodecField.setAccessible(true);
+            return (Http2FrameCodec) http2FrameCodecField.get(this);
+        } catch (Exception ex) {
+            logger.error("Failed to access 'frameCodec' instance", ex);
+            return null;
+        }
+    }
+
+    private void invokeInitializeNewStream(ChannelHandlerContext ctx, Http2FrameStream stream, ChannelPromise promise) {
+        try {
+            FRAME_CODEC_METHOD.invoke(FRAME_CODEC_INSTANCE, ctx, stream, promise);
+        } catch (InvocationTargetException | IllegalAccessException e) {
+            logger.error("Failed to invoke 'Http2FrameCodec#initializeNewStream'", e);
+        }
     }
 }

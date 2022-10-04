@@ -86,7 +86,7 @@ final class Bootstrapper {
                 }
 
                 // Add HTTP Client
-                pipeline.addLast(HTTPCodecs.client(httpLoadBalancer.httpConfiguration()));
+                pipeline.addLast(HTTPCodecs.http1ClientCodec(httpLoadBalancer.httpConfiguration()));
 
                 // Add HTTP Object Aggregator to aggregate HTTP Objects
                 pipeline.addLast(new HttpObjectAggregator(8196));

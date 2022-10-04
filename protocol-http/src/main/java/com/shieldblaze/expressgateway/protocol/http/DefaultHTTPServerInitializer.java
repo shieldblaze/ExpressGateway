@@ -55,12 +55,12 @@ public final class DefaultHTTPServerInitializer extends HTTPServerInitializer {
 
             ALPNHandler alpnHandler = ALPNHandlerBuilder.newBuilder()
                     // HTTP/2 Handlers
-                    .withHTTP2ChannelHandler(HTTPCodecs.h2Server(httpConfiguration))
+                    .withHTTP2ChannelHandler(HTTPCodecs.http2ServerCodec(httpConfiguration))
                     .withHTTP2ChannelHandler(new HTTP2InboundAdapter())
                     .withHTTP2ChannelHandler(new UpstreamHandler(httpLoadBalancer, true))
 
                     // HTTP/1.1 Handlers
-                    .withHTTP1ChannelHandler(HTTPCodecs.server(httpConfiguration))
+                    .withHTTP1ChannelHandler(HTTPCodecs.http1ServerCodec(httpConfiguration))
                     .withHTTP1ChannelHandler(new HttpServerKeepAliveHandler())
                     .withHTTP1ChannelHandler(new HTTPServerValidator(httpConfiguration))
                     .withHTTP1ChannelHandler(new HTTPContentCompressor(httpConfiguration))
@@ -70,7 +70,7 @@ public final class DefaultHTTPServerInitializer extends HTTPServerInitializer {
 
             pipeline.addLast(alpnHandler);
         } else {
-            pipeline.addLast(HTTPCodecs.server(httpConfiguration));
+            pipeline.addLast(HTTPCodecs.http1ServerCodec(httpConfiguration));
             pipeline.addLast(new HttpServerKeepAliveHandler());
             pipeline.addLast(new HTTPServerValidator(httpConfiguration));
             pipeline.addLast(new HTTPContentCompressor(httpConfiguration));

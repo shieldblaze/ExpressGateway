@@ -69,7 +69,7 @@ final class Bootstrapper {
                 httpConnection.downstreamHandler(downstreamHandler);
 
                 if (!httpLoadBalancer.configurationContext().tlsClientConfiguration().enabled()) {
-                    pipeline.addLast(HTTPCodecs.client(httpLoadBalancer.httpConfiguration()));
+                    pipeline.addLast(HTTPCodecs.http1ClientCodec(httpLoadBalancer.httpConfiguration()));
                     pipeline.addLast(new HttpContentDecompressor());
                     pipeline.addLast(new HTTPOutboundAdapter());
                     pipeline.addLast(downstreamHandler);
@@ -83,11 +83,11 @@ final class Bootstrapper {
 
                     ALPNHandler alpnHandler = ALPNHandlerBuilder.newBuilder()
                             // HTTP/2 Handlers
-                            .withHTTP2ChannelHandler(HTTPCodecs.H2ClientCodec(httpLoadBalancer.httpConfiguration()))
+                            .withHTTP2ChannelHandler(HTTPCodecs.http2ClientCodec(httpLoadBalancer.httpConfiguration()))
                             .withHTTP2ChannelHandler(new HTTP2OutboundAdapter())
                             .withHTTP2ChannelHandler(downstreamHandler)
                             // HTTP/1.1 Handlers
-                            .withHTTP1ChannelHandler(HTTPCodecs.client(httpLoadBalancer.httpConfiguration()))
+                            .withHTTP1ChannelHandler(HTTPCodecs.http1ClientCodec(httpLoadBalancer.httpConfiguration()))
                             .withHTTP1ChannelHandler(new HttpContentDecompressor())
                             .withHTTP1ChannelHandler(new HTTPOutboundAdapter())
                             .withHTTP1ChannelHandler(downstreamHandler)

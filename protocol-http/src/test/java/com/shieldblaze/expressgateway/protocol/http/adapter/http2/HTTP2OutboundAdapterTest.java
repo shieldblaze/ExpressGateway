@@ -17,6 +17,8 @@
  */
 package com.shieldblaze.expressgateway.protocol.http.adapter.http2;
 
+import com.shieldblaze.expressgateway.configuration.http.HttpConfiguration;
+import com.shieldblaze.expressgateway.protocol.http.HTTPCodecs;
 import io.netty.buffer.ByteBuf;
 import io.netty.buffer.ByteBufUtil;
 import io.netty.buffer.Unpooled;
@@ -36,27 +38,12 @@ import io.netty.handler.codec.http.HttpMethod;
 import io.netty.handler.codec.http.HttpRequest;
 import io.netty.handler.codec.http.HttpResponse;
 import io.netty.handler.codec.http.HttpVersion;
-import io.netty.handler.codec.http2.DefaultHttp2Connection;
-import io.netty.handler.codec.http2.DefaultHttp2ConnectionDecoder;
-import io.netty.handler.codec.http2.DefaultHttp2ConnectionEncoder;
 import io.netty.handler.codec.http2.DefaultHttp2DataFrame;
-import io.netty.handler.codec.http2.DefaultHttp2FrameReader;
-import io.netty.handler.codec.http2.DefaultHttp2FrameWriter;
 import io.netty.handler.codec.http2.DefaultHttp2Headers;
-import io.netty.handler.codec.http2.DefaultHttp2HeadersDecoder;
 import io.netty.handler.codec.http2.DefaultHttp2HeadersFrame;
-import io.netty.handler.codec.http2.DelegatingDecompressorFrameListener;
-import io.netty.handler.codec.http2.Http2Connection;
-import io.netty.handler.codec.http2.Http2ConnectionEncoder;
 import io.netty.handler.codec.http2.Http2DataFrame;
-import io.netty.handler.codec.http2.Http2FrameCodec;
-import io.netty.handler.codec.http2.Http2FrameReader;
-import io.netty.handler.codec.http2.Http2FrameWriter;
 import io.netty.handler.codec.http2.Http2Headers;
-import io.netty.handler.codec.http2.Http2HeadersEncoder;
 import io.netty.handler.codec.http2.Http2HeadersFrame;
-import io.netty.handler.codec.http2.Http2PromisedRequestVerifier;
-import io.netty.handler.codec.http2.Http2Settings;
 import org.junit.jupiter.api.Test;
 
 import java.util.Random;
@@ -71,7 +58,7 @@ class HTTP2OutboundAdapterTest {
     @Test
     void simpleGETRequestAndResponse() {
         EmbeddedChannel embeddedChannel = new EmbeddedChannel(
-                newCodec(),
+                HTTPCodecs.http2ClientCodec(HttpConfiguration.DEFAULT),
                 new ChannelDuplexHandler() {
                     @Override
                     public void write(ChannelHandlerContext ctx, Object msg, ChannelPromise promise) {
@@ -121,7 +108,7 @@ class HTTP2OutboundAdapterTest {
         final int numBytesReceived = 1024 * 200;
 
         EmbeddedChannel embeddedChannel = new EmbeddedChannel(
-                newCodec(),
+                HTTPCodecs.http2ClientCodec(HttpConfiguration.DEFAULT),
                 new ChannelDuplexHandler() {
                     int i = 1;
                     int received = 0;
@@ -214,21 +201,5 @@ class HTTP2OutboundAdapterTest {
         assertNull(embeddedChannel.readInbound());
 
         embeddedChannel.close();
-    }
-
-    Http2FrameCodec newCodec() {
-        Http2Settings http2Settings = Http2Settings.defaultSettings();
-        Http2Connection connection = new DefaultHttp2Connection(false);
-
-        Http2FrameReader reader = new DefaultHttp2FrameReader(new DefaultHttp2HeadersDecoder(true, http2Settings.maxHeaderListSize()));
-        Http2FrameWriter writer = new DefaultHttp2FrameWriter(Http2HeadersEncoder.NEVER_SENSITIVE, false);
-
-        Http2ConnectionEncoder encoder = new DefaultHttp2ConnectionEncoder(connection, writer);
-        DefaultHttp2ConnectionDecoder decoder = new DefaultHttp2ConnectionDecoder(connection, encoder, reader, Http2PromisedRequestVerifier.ALWAYS_VERIFY,
-                true, true);
-
-        Http2FrameCodec http2FrameCodec = new Http2FrameCodec(encoder, decoder, http2Settings, false, true);
-        decoder.frameListener(new DelegatingDecompressorFrameListener(connection, decoder.frameListener()));
-        return http2FrameCodec;
     }
 }
