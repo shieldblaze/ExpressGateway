@@ -15,7 +15,7 @@
  * You should have received a copy of the GNU General Public License
  * along with ShieldBlaze ExpressGateway.  If not, see <https://www.gnu.org/licenses/>.
  */
-package com.shieldblaze.expressgateway.common.datastore;
+package com.shieldblaze.expressgateway.common.crypto.cryptostore;
 
 import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
@@ -37,12 +37,12 @@ import java.security.cert.X509Certificate;
 import java.util.Iterator;
 
 /**
- * {@link DataStore} is implementation of {@link KeyStore} which
+ * {@link CryptoStore} is implementation of {@link KeyStore} which
  * simplifies store and fetch operations of {@link Certificate} and
  * {@link PrivateKey}.
  */
-public final class DataStore {
-    private static final Logger logger = LogManager.getLogger(DataStore.class);
+public final class CryptoStore {
+    private static final Logger logger = LogManager.getLogger(CryptoStore.class);
 
     /**
      * Store an entry of {@link PrivateKey} and {@link X509Certificate}s in {@link KeyStore}
@@ -120,7 +120,7 @@ public final class DataStore {
         }
     }
 
-    private DataStore() {
+    private CryptoStore() {
         // Prevent outside initialization
     }
 }

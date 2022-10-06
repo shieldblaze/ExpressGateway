@@ -30,8 +30,7 @@ import org.apache.logging.log4j.Logger;
 
 import java.io.IOException;
 
-public record ConfigurationContext(String profileName,
-                                   BufferConfiguration bufferConfiguration,
+public record ConfigurationContext(BufferConfiguration bufferConfiguration,
                                    EventLoopConfiguration eventLoopConfiguration,
                                    EventStreamConfiguration eventStreamConfiguration,
                                    HealthCheckConfiguration healthCheckConfiguration,
@@ -46,7 +45,6 @@ public record ConfigurationContext(String profileName,
      * Default instance of {@link ConfigurationContext} with default configurations
      */
     public static final ConfigurationContext DEFAULT = new ConfigurationContext(
-            "default",
             BufferConfiguration.DEFAULT,
             EventLoopConfiguration.DEFAULT,
             EventStreamConfiguration.DEFAULT,
@@ -57,7 +55,7 @@ public record ConfigurationContext(String profileName,
             TransportConfiguration.DEFAULT
     );
 
-    public static ConfigurationContext create(String profileName, Configuration... configurations) {
+    public static ConfigurationContext create(Configuration<?>... configurations) {
         BufferConfiguration bufferConfiguration = BufferConfiguration.DEFAULT;
         EventLoopConfiguration eventLoopConfiguration = EventLoopConfiguration.DEFAULT;
         EventStreamConfiguration eventStreamConfiguration = EventStreamConfiguration.DEFAULT;
@@ -67,7 +65,7 @@ public record ConfigurationContext(String profileName,
         TlsServerConfiguration tlsServerConfiguration = TlsServerConfiguration.DEFAULT;
         TransportConfiguration transportConfiguration = TransportConfiguration.DEFAULT;
 
-        for (Configuration configuration : configurations) {
+        for (Configuration<?> configuration : configurations) {
             if (configuration instanceof BufferConfiguration) {
                 bufferConfiguration = (BufferConfiguration) configuration;
             } else if (configuration instanceof EventLoopConfiguration) {
@@ -89,7 +87,7 @@ public record ConfigurationContext(String profileName,
             }
         }
 
-        return new ConfigurationContext(profileName,
+        return new ConfigurationContext(
                 bufferConfiguration,
                 eventLoopConfiguration,
                 eventStreamConfiguration,
@@ -100,8 +98,7 @@ public record ConfigurationContext(String profileName,
                 transportConfiguration);
     }
 
-    public ConfigurationContext(String profileName,
-                                BufferConfiguration bufferConfiguration,
+    public ConfigurationContext(BufferConfiguration bufferConfiguration,
                                 EventLoopConfiguration eventLoopConfiguration,
                                 EventStreamConfiguration eventStreamConfiguration,
                                 HealthCheckConfiguration healthCheckConfiguration,
@@ -109,7 +106,6 @@ public record ConfigurationContext(String profileName,
                                 TlsClientConfiguration tlsClientConfiguration,
                                 TlsServerConfiguration tlsServerConfiguration,
                                 TransportConfiguration transportConfiguration) {
-        this.profileName = profileName;
         this.bufferConfiguration = bufferConfiguration;
         this.eventLoopConfiguration = eventLoopConfiguration;
         this.eventStreamConfiguration = eventStreamConfiguration;
@@ -118,53 +114,5 @@ public record ConfigurationContext(String profileName,
         this.tlsClientConfiguration = tlsClientConfiguration;
         this.tlsServerConfiguration = tlsServerConfiguration;
         this.transportConfiguration = transportConfiguration;
-    }
-
-    public static ConfigurationContext load(String profileName) throws Exception {
-        try {
-            BufferConfiguration bufferConfiguration = ConfigurationStore.load(profileName, BufferConfiguration.class);
-            EventLoopConfiguration eventLoopConfiguration = ConfigurationStore.load(profileName, EventLoopConfiguration.class);
-            EventStreamConfiguration eventStreamConfiguration = ConfigurationStore.load(profileName, EventStreamConfiguration.class);
-            HealthCheckConfiguration healthCheckConfiguration = ConfigurationStore.load(profileName, HealthCheckConfiguration.class);
-            HttpConfiguration httpConfiguration = ConfigurationStore.load(profileName, HttpConfiguration.class);
-            TlsClientConfiguration tlsClientConfiguration = ConfigurationStore.load(profileName, TlsClientConfiguration.class);
-            TlsServerConfiguration tlsServerConfiguration = ConfigurationStore.load(profileName, TlsServerConfiguration.class);
-            TransportConfiguration transportConfiguration = ConfigurationStore.load(profileName, TransportConfiguration.class);
-
-            return new ConfigurationContext(
-                    profileName,
-                    bufferConfiguration,
-                    eventLoopConfiguration,
-                    eventStreamConfiguration,
-                    healthCheckConfiguration,
-                    httpConfiguration,
-                    tlsClientConfiguration,
-                    tlsServerConfiguration,
-                    transportConfiguration
-            );
-        } catch (IOException e) {
-            logger.error("Failed to load Profile: " + profileName, e);
-            throw e;
-        }
-    }
-
-    public void save() throws Exception {
-        try {
-            if (profileName == null) {
-                throw new IllegalArgumentException("Cannot save configurations because Profile Name is not present");
-            }
-
-            ConfigurationStore.save(bufferConfiguration);
-            ConfigurationStore.save(eventLoopConfiguration);
-            ConfigurationStore.save(eventStreamConfiguration);
-            ConfigurationStore.save(healthCheckConfiguration);
-            ConfigurationStore.save(httpConfiguration);
-            ConfigurationStore.save(tlsClientConfiguration);
-            ConfigurationStore.save(tlsServerConfiguration);
-            ConfigurationStore.save(transportConfiguration);
-        } catch (Exception e) {
-            logger.error("Failed to save Profile: " + profileName);
-            throw e;
-        }
     }
 }

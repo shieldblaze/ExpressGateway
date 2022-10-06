@@ -17,20 +17,17 @@
  */
 package com.shieldblaze.expressgateway.bootstrap;
 
-import dev.morphia.annotations.Entity;
-import dev.morphia.annotations.Id;
-import dev.morphia.annotations.Property;
-
-@Entity(value = "ExpressGateway", useDiscriminator = false)
-public final class ExpressGateway {
+public enum RunningMode {
 
     /**
-     * This id is cluster id
+     * Standalone mode runs on 1 single node without the
+     * support of MongoDB database and Apache ZooKeeper.
      */
-    @Id
-    private String id;
+    STANDALONE,
 
-    @Property
-    private String clusterName;
-
+    /**
+     * Replica mode uses replication to run on multiple nodes in
+     * a cluster. It uses Apache ZooKeeper for coordination.
+     */
+    REPLICA
 }

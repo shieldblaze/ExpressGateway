@@ -13,9 +13,7 @@ on:
         default: 'GitHub Actions'
 
 env:
-  MONGO_DATABASE: ${{ secrets.MONGO_DATABASE }}
-  MONGO_CONNECTION_STRING: ${{ secrets.MONGO_CONNECTION_STRING }}
-  ZOOKEEPER_ADDRESS: ${{ secrets.ZOOKEEPER_ADDRESS }}
+  ZOOKEEPER_CONNECTION_STRING : ${{ secrets.ZOOKEEPER_ADDRESS }}
 
 jobs:
   JDK17:

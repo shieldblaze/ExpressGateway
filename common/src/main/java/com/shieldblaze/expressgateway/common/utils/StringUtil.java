@@ -23,6 +23,23 @@ public final class StringUtil {
         return str == null || str.isEmpty();
     }
 
+    /**
+     * Validate if a {@link String} is not null or empty
+     *
+     * @param str {@link String} to validate
+     * @return Returns {@link String} if validation was successful
+     * @throws NullPointerException     If {@link String} is null
+     * @throws IllegalArgumentException If {@link String} is empty or black
+     */
+    public static String validateNotNullOrEmpty(String str) {
+        if (str == null) {
+            throw new NullPointerException("String is 'null'");
+        } else if (str.isEmpty() || str.isBlank()) {
+            throw new IllegalArgumentException("String is empty is blank");
+        }
+        return str;
+    }
+
     private StringUtil() {
         // Prevent outside initialization
     }

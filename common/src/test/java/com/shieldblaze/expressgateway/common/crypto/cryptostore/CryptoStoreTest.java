@@ -15,7 +15,7 @@
  * You should have received a copy of the GNU General Public License
  * along with ShieldBlaze ExpressGateway.  If not, see <https://www.gnu.org/licenses/>.
  */
-package com.shieldblaze.expressgateway.common.datastore;
+package com.shieldblaze.expressgateway.common.crypto.cryptostore;
 
 import com.shieldblaze.expressgateway.common.utils.SelfSignedCertificate;
 import org.junit.jupiter.api.Test;
@@ -26,19 +26,19 @@ import java.util.List;
 
 import static org.junit.jupiter.api.Assertions.assertArrayEquals;
 
-class DataStoreTest {
+class CryptoStoreTest {
 
     @Test
     void storeAndFetchTest() throws Exception {
-        char[] password = "meow".toCharArray();
+        char[] password = "meow" .toCharArray();
         SelfSignedCertificate ssc = SelfSignedCertificate.generateNew(List.of("127.0.0.1"), List.of("shieldblaze.com"));
 
         try (ByteArrayOutputStream outputStream = new ByteArrayOutputStream()) {
-            DataStore.storePrivateKeyAndCertificate(null, outputStream, password, "Cat", ssc.keyPair().getPrivate(), ssc.x509Certificate());
+            CryptoStore.storePrivateKeyAndCertificate(null, outputStream, password, "Cat", ssc.keyPair().getPrivate(), ssc.x509Certificate());
 
             try (ByteArrayInputStream inputStream = new ByteArrayInputStream(outputStream.toByteArray())) {
 
-                CryptoEntry cryptoEntry = DataStore.fetchPrivateKeyCertificateEntry(inputStream, password, "Cat");
+                CryptoEntry cryptoEntry = CryptoStore.fetchPrivateKeyCertificateEntry(inputStream, password, "Cat");
                 assertArrayEquals(ssc.keyPair().getPrivate().getEncoded(), cryptoEntry.privateKey().getEncoded());
                 assertArrayEquals(ssc.x509Certificate().getEncoded(), cryptoEntry.certificates()[0].getEncoded());
             }

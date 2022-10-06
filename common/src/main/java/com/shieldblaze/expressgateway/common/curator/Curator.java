@@ -17,7 +17,6 @@
  */
 package com.shieldblaze.expressgateway.common.curator;
 
-import com.shieldblaze.expressgateway.common.utils.SystemPropertyUtil;
 import org.apache.curator.RetryPolicy;
 import org.apache.curator.framework.CuratorFramework;
 import org.apache.curator.framework.CuratorFrameworkFactory;
@@ -27,9 +26,11 @@ import org.apache.logging.log4j.Logger;
 import org.apache.zookeeper.ClientCnxnSocketNetty;
 
 import java.io.Closeable;
-import java.util.Objects;
 import java.util.concurrent.CompletableFuture;
 
+import static com.shieldblaze.expressgateway.common.SystemPropertiesKeys.ZOOKEEPER_CONNECTION_STRING;
+import static com.shieldblaze.expressgateway.common.utils.SystemPropertyUtil.getPropertyOrEnv;
+import static java.util.Objects.requireNonNull;
 import static org.apache.zookeeper.client.ZKClientConfig.ZOOKEEPER_CLIENT_CNXN_SOCKET;
 
 public final class Curator implements Closeable {
@@ -49,7 +50,7 @@ public final class Curator implements Closeable {
         RetryPolicy retryPolicy = new RetryNTimes(maxRetries, sleepMsBetweenRetries);
 
         CuratorFrameworkFactory.Builder builder = CuratorFrameworkFactory.builder()
-                .connectString(Objects.requireNonNull(SystemPropertyUtil.getPropertyOrEnv("ZOOKEEPER_ADDRESS"), "ZooKeeper address is required"))
+                .connectString(requireNonNull(getPropertyOrEnv(ZOOKEEPER_CONNECTION_STRING.name()), "ZooKeeper address is required"))
                 .retryPolicy(retryPolicy);
 
         curatorFramework = builder.build();

@@ -23,11 +23,6 @@ package com.shieldblaze.expressgateway.configuration;
 public interface Configuration<T> {
 
     /**
-     * ID of this Configuration
-     */
-    String id();
-
-    /**
      * Check if this Configuration is validated or not
      */
     boolean validated();
@@ -45,7 +40,7 @@ public interface Configuration<T> {
      * It is made up of {id:profileName}
      */
     default String friendlyName() {
-        return id() + ":" + getClass().getSimpleName();
+        return getClass().getSimpleName();
     }
 
     /**

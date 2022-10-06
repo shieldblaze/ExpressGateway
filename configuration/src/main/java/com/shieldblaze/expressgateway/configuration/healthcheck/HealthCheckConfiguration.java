@@ -21,39 +21,24 @@ import com.fasterxml.jackson.annotation.JsonIgnore;
 import com.fasterxml.jackson.annotation.JsonProperty;
 import com.shieldblaze.expressgateway.common.utils.NumberUtil;
 import com.shieldblaze.expressgateway.configuration.Configuration;
-import dev.morphia.annotations.Entity;
-import dev.morphia.annotations.Id;
-import dev.morphia.annotations.Property;
-import dev.morphia.annotations.Transient;
-
-import java.util.UUID;
 
 /**
  * Configuration for {@link HealthCheckConfiguration}
  */
-@Entity(value = "HealthCheck", useDiscriminator = false)
 public final class HealthCheckConfiguration implements Configuration<HealthCheckConfiguration> {
 
-    @Id
-    @JsonProperty
-    private String id;
-
-    @Property
     @JsonProperty
     private int workers;
 
-    @Property
     @JsonProperty
     private int timeInterval;
 
-    @Transient
     @JsonIgnore
     private boolean validated;
 
     public static final HealthCheckConfiguration DEFAULT = new HealthCheckConfiguration();
 
     static {
-        DEFAULT.id = "default";
         DEFAULT.workers = Runtime.getRuntime().availableProcessors();
         DEFAULT.timeInterval = 1;
         DEFAULT.validated = true;
@@ -98,18 +83,10 @@ public final class HealthCheckConfiguration implements Configuration<HealthCheck
      * @throws IllegalArgumentException If any value is invalid
      */
     public HealthCheckConfiguration validate() throws IllegalArgumentException {
-        if (id == null) {
-            id = UUID.randomUUID().toString();
-        }
         NumberUtil.checkPositive(workers, "Workers");
         NumberUtil.checkPositive(timeInterval, "TimeInterval");
         validated = true;
         return this;
-    }
-
-    @Override
-    public String id() {
-        return id;
     }
 
     @Override
