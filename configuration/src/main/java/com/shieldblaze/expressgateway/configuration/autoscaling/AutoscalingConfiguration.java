@@ -238,11 +238,6 @@ public final class AutoscalingConfiguration implements Configuration<Autoscaling
     }
 
     @Override
-    public String id() {
-        return null;
-    }
-
-    @Override
     public boolean validated() {
         return false;
     }

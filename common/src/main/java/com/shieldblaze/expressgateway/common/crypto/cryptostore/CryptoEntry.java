@@ -15,34 +15,21 @@
  * You should have received a copy of the GNU General Public License
  * along with ShieldBlaze ExpressGateway.  If not, see <https://www.gnu.org/licenses/>.
  */
-package com.shieldblaze.expressgateway.common;
+package com.shieldblaze.expressgateway.common.crypto.cryptostore;
 
-import org.junit.jupiter.api.MethodOrderer;
-import org.junit.jupiter.api.Order;
-import org.junit.jupiter.api.Test;
-import org.junit.jupiter.api.TestMethodOrder;
+import com.shieldblaze.expressgateway.common.annotation.NonNull;
 
-import static org.junit.jupiter.api.Assertions.assertNotNull;
-import static org.junit.jupiter.api.Assertions.assertThrows;
+import java.security.PrivateKey;
+import java.security.cert.Certificate;
 
-@TestMethodOrder(MethodOrderer.OrderAnnotation.class)
-class MongoDBTest {
+/**
+ * {@link CryptoEntry} holds {@link PrivateKey} and {@link Certificate}s instances
+ * @param privateKey {@link PrivateKey} instance
+ * @param certificates {@link Certificate} instance
+ */
+public record CryptoEntry(PrivateKey privateKey, Certificate... certificates) {
 
-    @Order(1)
-    @Test
-    void successfulConnectionTest() {
-        assertNotNull(MongoDB.mongoClient().startSession().getServerSession());
-    }
-
-    @Order(2)
-    @Test
-    void closeConnectionTest() {
-        MongoDB.shutdown();
-    }
-
-    @Order(3)
-    @Test
-    void unsuccessfulConnectionTest() {
-        assertThrows(IllegalStateException.class, MongoDB.mongoClient()::startSession);
+    @NonNull
+    public CryptoEntry {
     }
 }

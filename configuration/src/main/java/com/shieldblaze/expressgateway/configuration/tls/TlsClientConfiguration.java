@@ -18,24 +18,12 @@
 package com.shieldblaze.expressgateway.configuration.tls;
 
 import com.fasterxml.jackson.annotation.JsonIgnore;
-import com.fasterxml.jackson.annotation.JsonProperty;
-import dev.morphia.annotations.Entity;
-import dev.morphia.annotations.Id;
-import dev.morphia.annotations.Transient;
-
-import java.util.UUID;
 
 /**
  * Configuration for TLS Client (ExpressGateway--to--Backend)
  */
-@Entity(value = "TlsClient", useDiscriminator = false)
 public final class TlsClientConfiguration extends TlsConfiguration {
 
-    @Id
-    @JsonProperty
-    String id;
-
-    @Transient
     @JsonIgnore
     private boolean validated;
 
@@ -43,14 +31,13 @@ public final class TlsClientConfiguration extends TlsConfiguration {
      * This is the default implementation of {@link TlsClientConfiguration}
      * which is disabled by default.
      * </p>
-     *
+     * <p>
      * To enable this, call {@link #enabled()}.
      */
     @JsonIgnore
     public static final TlsClientConfiguration DEFAULT = new TlsClientConfiguration();
 
     static {
-        DEFAULT.id = "default";
         DEFAULT.ciphers = IntermediateCrypto.CIPHERS;
         DEFAULT.protocols = IntermediateCrypto.PROTOCOLS;
         DEFAULT.useStartTLS = false;
@@ -60,17 +47,9 @@ public final class TlsClientConfiguration extends TlsConfiguration {
 
     @Override
     public TlsConfiguration validate() throws IllegalArgumentException, NullPointerException {
-        if (id == null) {
-            id = UUID.randomUUID().toString();
-        }
         super.validate();
         validated = true;
         return this;
-    }
-
-    @Override
-    public String id() {
-        return id;
     }
 
     @Override

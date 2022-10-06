@@ -19,7 +19,7 @@ package com.shieldblaze.expressgateway.restapi.api.cluster;
 
 import com.google.gson.JsonObject;
 import com.google.gson.JsonParser;
-import com.shieldblaze.expressgateway.common.datastore.CryptoEntry;
+import com.shieldblaze.expressgateway.common.crypto.cryptostore.CryptoEntry;
 import com.shieldblaze.expressgateway.common.utils.SelfSignedCertificate;
 import com.shieldblaze.expressgateway.core.cluster.CoreContext;
 import com.shieldblaze.expressgateway.core.cluster.LoadBalancerContext;

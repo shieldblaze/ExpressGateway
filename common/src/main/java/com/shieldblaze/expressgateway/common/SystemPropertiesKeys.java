@@ -17,18 +17,18 @@
  */
 package com.shieldblaze.expressgateway.common;
 
-public final class SystemPropertiesKeys {
+public enum SystemPropertiesKeys {
 
-    public static final String SYSTEM_ID = "system.id";
-    public static final String REST_API_IP_ADDRESS = "rest-api.ipAddress";
-    public static final String REST_API_PORT = "rest-api.port";
-    public static final String MONGODB_CONNECTION_STRING = "mongodb.connection-string";
-    public static final String CLUSTER_ID = "mongodb.cluster-id";
-    public static final String CRYPTO_PASSWORD = "crypto.password";
-
-    public static final String ZOOKEEPER_ADDRESS = "zookeeper-address";
-
-    private SystemPropertiesKeys() {
-        // Prevent outside initialization
-    }
+    CONFIGURATION_DIRECTORY,
+    RUNNING_MODE,
+    CLUSTER_ID,
+    REST_API_IP_ADDRESS,
+    REST_API_PORT,
+    ZOOKEEPER_CONNECTION_STRING,
+    CRYPTO_REST_API_PKCS12_FILE,
+    CRYPTO_REST_API_PASSWORD,
+    CRYPTO_ZOOKEEPER_PKCS12_FILE,
+    CRYPTO_ZOOKEEPER_PASSWORD,
+    CRYPTO_LOADBALANCER_PKCS12_FILE,
+    CRYPTO_LOADBALANCER_PASSWORD;
 }

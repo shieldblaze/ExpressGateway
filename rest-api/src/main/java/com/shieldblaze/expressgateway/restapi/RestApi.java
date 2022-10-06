@@ -17,7 +17,7 @@
  */
 package com.shieldblaze.expressgateway.restapi;
 
-import com.shieldblaze.expressgateway.common.datastore.CryptoEntry;
+import com.shieldblaze.expressgateway.common.crypto.cryptostore.CryptoEntry;
 import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
 import org.springframework.boot.SpringApplication;

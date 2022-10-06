@@ -24,36 +24,23 @@ import com.shieldblaze.expressgateway.common.utils.NumberUtil;
 import com.shieldblaze.expressgateway.concurrent.eventstream.AsyncEventStream;
 import com.shieldblaze.expressgateway.concurrent.eventstream.EventStream;
 import com.shieldblaze.expressgateway.configuration.Configuration;
-import dev.morphia.annotations.Entity;
-import dev.morphia.annotations.Id;
-import dev.morphia.annotations.Property;
-import dev.morphia.annotations.Transient;
 
-import java.util.UUID;
 import java.util.concurrent.Executors;
 
 /**
  * Configuration for {@link EventStreamConfiguration}
  */
-@Entity(value = "EventStream", useDiscriminator = false)
 public final class EventStreamConfiguration implements Configuration<EventStreamConfiguration> {
 
-    @Id
-    @JsonProperty
-    private String id;
-
-    @Property
     @JsonProperty
     private int workers;
 
-    @Transient
     @JsonIgnore
     private boolean validated;
 
     public static final EventStreamConfiguration DEFAULT = new EventStreamConfiguration();
 
     static {
-        DEFAULT.id = "default";
         DEFAULT.workers = Runtime.getRuntime().availableProcessors() * 2;
         DEFAULT.validated = true;
     }
@@ -85,17 +72,9 @@ public final class EventStreamConfiguration implements Configuration<EventStream
      * @throws IllegalArgumentException If any value is invalid
      */
     public EventStreamConfiguration validate() throws IllegalArgumentException {
-        if (id == null) {
-            id = UUID.randomUUID().toString();
-        }
         NumberUtil.checkPositive(workers, "Workers");
         validated = true;
         return this;
-    }
-
-    @Override
-    public String id() {
-        return id;
     }
 
     @Override

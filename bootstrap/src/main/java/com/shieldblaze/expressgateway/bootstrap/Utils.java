@@ -37,6 +37,10 @@ final class Utils {
         }
     }
 
+    static boolean checkNullOrEmptyEnv(String str) {
+        return StringUtil.checkNullOrEmpty(str);
+    }
+
     static void checkNullEnv(Object object, String componentMessage) {
         if (object == null) {
             System.err.println(componentMessage + " is not configured in Property/Environment Variable");
@@ -52,6 +56,10 @@ final class Utils {
         } else {
             return jsonElement.getAsString();
         }
+    }
+
+    static boolean checkNullOrEmptyConf(JsonElement jsonElement) {
+        return StringUtil.checkNullOrEmpty(jsonElement.getAsString());
     }
 
     private Utils() {

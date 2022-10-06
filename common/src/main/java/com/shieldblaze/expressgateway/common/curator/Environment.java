@@ -37,13 +37,28 @@ public enum Environment {
         return env;
     }
 
+    /**
+     * Automatically detect environment from System Property or System environment variable.
+     * Default value is {@link #PRODUCTION}.
+     *
+     * @return {@link Environment} type
+     */
     public static Environment detectEnv() {
         String env = SystemPropertyUtil.getPropertyOrEnv("runtime.environment", PRODUCTION.env()).toLowerCase();
         return switch (env) {
-            case "dev" -> DEVELOPMENT;
-            case "qa" -> QUALITY_ASSURANCE;
-            case "prod" -> PRODUCTION;
+            case "dev", "development" -> DEVELOPMENT;
+            case "qa", "quality-assurance" -> QUALITY_ASSURANCE;
+            case "prod", "production" -> PRODUCTION;
             default -> null;
         };
+    }
+
+    /**
+     * Set environment in System Property
+     *
+     * @param environment {@link Environment} to set
+     */
+    public static void setEnvironment(Environment environment) {
+        System.setProperty("runtime.environment", environment.env().toLowerCase());
     }
 }

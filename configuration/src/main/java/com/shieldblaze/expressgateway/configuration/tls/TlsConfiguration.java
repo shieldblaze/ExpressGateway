@@ -22,8 +22,6 @@ import com.fasterxml.jackson.annotation.JsonProperty;
 import com.shieldblaze.expressgateway.common.utils.ListUtil;
 import com.shieldblaze.expressgateway.common.utils.NumberUtil;
 import com.shieldblaze.expressgateway.configuration.Configuration;
-import dev.morphia.annotations.Property;
-import dev.morphia.annotations.Transient;
 
 import javax.net.ssl.SSLException;
 import java.util.HashMap;
@@ -36,39 +34,30 @@ import java.util.Objects;
  */
 public abstract class TlsConfiguration implements Configuration<TlsConfiguration> {
 
-    @Transient
     @JsonIgnore
     private final Map<String, CertificateKeyPair> certificateKeyPairMap = new HashMap<>();
 
-    @Property
     @JsonProperty("enabled")
     private boolean enabled = false;
 
-    @Property
     @JsonProperty("ciphers")
     protected List<Cipher> ciphers;
 
-    @Property
     @JsonProperty("protocols")
     protected List<Protocol> protocols;
 
-    @Property
     @JsonProperty("mutualTLS")
     protected MutualTLS mutualTLS = MutualTLS.NOT_REQUIRED;
 
-    @Property
     @JsonProperty("useStartTLS")
     protected boolean useStartTLS;
 
-    @Property
     @JsonProperty("sessionTimeout")
     protected int sessionTimeout;
 
-    @Property
     @JsonProperty("sessionCacheSize")
     protected int sessionCacheSize;
 
-    @Property
     @JsonProperty("acceptAllCerts")
     protected boolean acceptAllCerts;
 

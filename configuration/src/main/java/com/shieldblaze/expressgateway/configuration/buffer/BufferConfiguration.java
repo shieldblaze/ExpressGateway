@@ -20,65 +20,43 @@ package com.shieldblaze.expressgateway.configuration.buffer;
 import com.fasterxml.jackson.annotation.JsonIgnore;
 import com.fasterxml.jackson.annotation.JsonProperty;
 import com.shieldblaze.expressgateway.configuration.Configuration;
-import dev.morphia.annotations.Entity;
-import dev.morphia.annotations.Id;
-import dev.morphia.annotations.Property;
-import dev.morphia.annotations.Transient;
-import io.netty.buffer.PooledByteBufAllocator;
 import io.netty.util.internal.PlatformDependent;
-
-import java.util.UUID;
 
 import static com.shieldblaze.expressgateway.common.utils.NumberUtil.checkPositive;
 import static com.shieldblaze.expressgateway.common.utils.NumberUtil.checkZeroOrPositive;
 
 /**
- * Configuration for {@link PooledByteBufAllocator}
+ * Configuration for {@link BufferConfiguration}
  */
-@Entity(value = "Buffer", useDiscriminator = false)
 public final class BufferConfiguration implements Configuration<BufferConfiguration> {
 
-    @Id
-    @JsonProperty
-    private String id;
-
-    @Property
     @JsonProperty(required = true)
     private boolean preferDirect;
 
-    @Property
     @JsonProperty(required = true)
     private int heapArena;
 
-    @Property
     @JsonProperty(required = true)
     private int directArena;
 
-    @Property
     @JsonProperty(required = true)
     private int pageSize;
 
-    @Property
     @JsonProperty(required = true)
     private int maxOrder;
 
-    @Property
     @JsonProperty(required = true)
     private int smallCacheSize;
 
-    @Property
     @JsonProperty(required = true)
     private int normalCacheSize;
 
-    @Property
     @JsonProperty(required = true)
     private boolean useCacheForAllThreads;
 
-    @Property
     @JsonProperty(required = true)
     private int directMemoryCacheAlignment;
 
-    @Transient
     @JsonIgnore
     private boolean validated;
 
@@ -88,7 +66,6 @@ public final class BufferConfiguration implements Configuration<BufferConfigurat
     public static final BufferConfiguration DEFAULT = new BufferConfiguration();
 
     static {
-        DEFAULT.id = "default";
         DEFAULT.preferDirect = true;
         DEFAULT.pageSize = 16_384;
         DEFAULT.maxOrder = 11;
@@ -255,12 +232,6 @@ public final class BufferConfiguration implements Configuration<BufferConfigurat
      */
     @Override
     public BufferConfiguration validate() throws IllegalArgumentException {
-        if (id == null) {
-            id = UUID.randomUUID().toString();
-        } else {
-            // Revalidate UUID before using
-            id = UUID.fromString(id).toString();
-        }
         checkPositive(heapArena, "Heap Arena");
         checkPositive(directArena, "Direct Arena");
         checkPositive(pageSize, "Page Size");
@@ -270,11 +241,6 @@ public final class BufferConfiguration implements Configuration<BufferConfigurat
         checkZeroOrPositive(directMemoryCacheAlignment, "Direct Memory Cache Alignment");
         validated = true;
         return this;
-    }
-
-    @Override
-    public String id() {
-        return id;
     }
 
     @Override

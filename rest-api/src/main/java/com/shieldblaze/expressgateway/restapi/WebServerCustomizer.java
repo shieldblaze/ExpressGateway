@@ -17,7 +17,6 @@
  */
 package com.shieldblaze.expressgateway.restapi;
 
-import com.shieldblaze.expressgateway.common.utils.SystemPropertyUtil;
 import io.netty.handler.ssl.ClientAuth;
 import io.netty.handler.ssl.OpenSsl;
 import io.netty.handler.ssl.SslProvider;
@@ -39,6 +38,7 @@ import java.util.List;
 
 import static com.shieldblaze.expressgateway.common.SystemPropertiesKeys.REST_API_IP_ADDRESS;
 import static com.shieldblaze.expressgateway.common.SystemPropertiesKeys.REST_API_PORT;
+import static com.shieldblaze.expressgateway.common.utils.SystemPropertyUtil.getPropertyOrEnv;
 import static com.shieldblaze.expressgateway.restapi.RestApi.CRYPTO_ENTRY;
 
 /**
@@ -53,7 +53,7 @@ public class WebServerCustomizer implements WebServerFactoryCustomizer<NettyReac
     @Override
     public void customize(NettyReactiveWebServerFactory factory) {
         try {
-            InetAddress inetAddress = InetAddress.getByName(SystemPropertyUtil.getPropertyOrEnv(REST_API_IP_ADDRESS, "127.0.0.1"));
+            InetAddress inetAddress = InetAddress.getByName(getPropertyOrEnv(REST_API_IP_ADDRESS.name(), "127.0.0.1"));
             factory.setAddress(inetAddress);
         } catch (Exception ex) {
             logger.error("Error while setting REST-API server address, Shutting down...", ex);
@@ -62,7 +62,7 @@ public class WebServerCustomizer implements WebServerFactoryCustomizer<NettyReac
         }
 
         try {
-            int port = Integer.parseInt(SystemPropertyUtil.getPropertyOrEnv(REST_API_PORT, "9110"));
+            int port = Integer.parseInt(getPropertyOrEnv(REST_API_PORT.name(), "9110"));
             factory.setPort(port);
         } catch (Exception ex) {
             logger.error("Error while setting REST-API server port, Shutting down...", ex);

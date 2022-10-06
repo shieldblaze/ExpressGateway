@@ -87,7 +87,7 @@ public final class TestableHttpLoadBalancer implements Closeable {
                 .build();
 
         httpLoadBalancer = HTTPLoadBalancerBuilder.newBuilder()
-                .withConfigurationContext(ConfigurationContext.create(null, tlsClientConfiguration, tlsServerConfiguration))
+                .withConfigurationContext(ConfigurationContext.create(tlsClientConfiguration, tlsServerConfiguration))
                 .withBindAddress(new InetSocketAddress("localhost", 9110))
                 .withHTTPInitializer(new DefaultHTTPServerInitializer())
                 .withL4FrontListener(new TCPListener())

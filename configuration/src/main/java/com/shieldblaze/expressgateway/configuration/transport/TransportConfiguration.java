@@ -20,9 +20,6 @@ package com.shieldblaze.expressgateway.configuration.transport;
 import com.fasterxml.jackson.annotation.JsonIgnore;
 import com.fasterxml.jackson.annotation.JsonProperty;
 import com.shieldblaze.expressgateway.configuration.Configuration;
-import dev.morphia.annotations.Entity;
-import dev.morphia.annotations.Id;
-import dev.morphia.annotations.Transient;
 import io.netty.channel.AdaptiveRecvByteBufAllocator;
 import io.netty.channel.FixedRecvByteBufAllocator;
 import io.netty.channel.RecvByteBufAllocator;
@@ -31,17 +28,11 @@ import io.netty.incubator.channel.uring.IOUring;
 import io.netty.util.internal.ObjectUtil;
 
 import java.util.Objects;
-import java.util.UUID;
 
 /**
  * Transport Configuration
  */
-@Entity(value = "Transport", useDiscriminator = false)
-public final class TransportConfiguration implements Configuration {
-
-    @Id
-    @JsonProperty
-    private String id;
+public final class TransportConfiguration implements Configuration<TransportConfiguration> {
 
     @JsonProperty("transportType")
     private TransportType transportType;
@@ -70,7 +61,6 @@ public final class TransportConfiguration implements Configuration {
     @JsonProperty("connectionIdleTimeout")
     private int connectionIdleTimeout;
 
-    @Transient
     @JsonIgnore
     private boolean validated;
 
@@ -85,7 +75,6 @@ public final class TransportConfiguration implements Configuration {
             DEFAULT.transportType = TransportType.NIO;
         }
 
-        DEFAULT.id = "default";
         DEFAULT.receiveBufferAllocationType = ReceiveBufferAllocationType.ADAPTIVE;
         DEFAULT.receiveBufferSizes = new int[]{512, 9001, 65535};
         DEFAULT.tcpConnectionBacklog = 50_000;
@@ -249,12 +238,9 @@ public final class TransportConfiguration implements Configuration {
      *
      * @return this class instance
      * @throws IllegalArgumentException If any value is invalid
-     * @throws NullPointerException If any value is null
+     * @throws NullPointerException     If any value is null
      */
     public TransportConfiguration validate() throws IllegalArgumentException, NullPointerException {
-        if (id == null) {
-            id = UUID.randomUUID().toString();
-        }
         Objects.requireNonNull(transportType, "Transport Type");
         Objects.requireNonNull(receiveBufferAllocationType, "Receive Buffer Allocation Type");
         Objects.requireNonNull(receiveBufferSizes, "Receive Buffer Sizes");
@@ -307,11 +293,6 @@ public final class TransportConfiguration implements Configuration {
 
         validated = true;
         return this;
-    }
-
-    @Override
-    public String id() {
-        return id;
     }
 
     @Override

@@ -21,79 +21,54 @@ import com.fasterxml.jackson.annotation.JsonIgnore;
 import com.fasterxml.jackson.annotation.JsonProperty;
 import com.shieldblaze.expressgateway.common.utils.NumberUtil;
 import com.shieldblaze.expressgateway.configuration.Configuration;
-import dev.morphia.annotations.Entity;
-import dev.morphia.annotations.Id;
-import dev.morphia.annotations.Property;
-import dev.morphia.annotations.Transient;
-
-import java.util.UUID;
 
 /**
  * Configuration for HTTP
  */
-@Entity(value = "Http", useDiscriminator = false)
 public final class HttpConfiguration implements Configuration<HttpConfiguration> {
 
-    @Id
-    @JsonProperty
-    private String id;
-
-    @Property
     @JsonProperty
     private long maxContentLength;
 
-    @Property
     @JsonProperty
     private int maxInitialLineLength;
 
-    @Property
     @JsonProperty
     private int maxHeaderSize;
 
-    @Property
     @JsonProperty
     private int maxChunkSize;
 
-    @Property
     @JsonProperty
     private int h2InitialWindowSize;
 
-    @Property
     @JsonProperty
     private long h2MaxConcurrentStreams;
 
-    @Property
     @JsonProperty
     private long h2MaxHeaderListSize;
 
-    @Property
     @JsonProperty
     private long h2MaxHeaderTableSize;
 
-    @Property
     @JsonProperty
     private int h2MaxFrameSize;
 
-    @Property
     @JsonProperty
     private int compressionThreshold;
 
-    @Property
     @JsonProperty
     private int deflateCompressionLevel;
 
-    @Property
     @JsonProperty
     private int brotliCompressionLevel;
 
-    @Transient
     @JsonIgnore
     private boolean validated;
 
     public static final HttpConfiguration DEFAULT = new HttpConfiguration();
 
     static {
-        DEFAULT.id = "default";
         DEFAULT.maxContentLength = 500000000;
         DEFAULT.h2InitialWindowSize = 65535;
         DEFAULT.h2MaxConcurrentStreams = 1000;
@@ -309,9 +284,6 @@ public final class HttpConfiguration implements Configuration<HttpConfiguration>
      * @throws IllegalArgumentException If any value is invalid
      */
     public HttpConfiguration validate() throws IllegalArgumentException {
-        if (id == null) {
-            id = UUID.randomUUID().toString();
-        }
         NumberUtil.checkPositive(maxContentLength, "maxContentLength");
         NumberUtil.checkPositive(h2InitialWindowSize, "h2InitialWindowSize");
         NumberUtil.checkPositive(h2MaxConcurrentStreams, "h2MaxConcurrentStreams");
@@ -326,11 +298,6 @@ public final class HttpConfiguration implements Configuration<HttpConfiguration>
         NumberUtil.checkInRange(brotliCompressionLevel, 1, 11, "brotliCompressionLevel");
         validated = true;
         return this;
-    }
-
-    @Override
-    public String id() {
-        return id;
     }
 
     @Override

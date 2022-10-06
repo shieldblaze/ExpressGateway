@@ -17,7 +17,7 @@
  */
 package com.shieldblaze.expressgateway.restapi;
 
-import com.shieldblaze.expressgateway.common.datastore.CryptoEntry;
+import com.shieldblaze.expressgateway.common.crypto.cryptostore.CryptoEntry;
 import com.shieldblaze.expressgateway.common.utils.SelfSignedCertificate;
 import io.netty.handler.ssl.util.InsecureTrustManagerFactory;
 import org.junit.jupiter.api.Test;

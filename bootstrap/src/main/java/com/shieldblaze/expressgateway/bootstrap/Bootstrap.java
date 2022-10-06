@@ -17,39 +17,71 @@
  */
 package com.shieldblaze.expressgateway.bootstrap;
 
+import com.google.gson.JsonElement;
 import com.google.gson.JsonObject;
 import com.google.gson.JsonParser;
-import com.shieldblaze.expressgateway.common.MongoDB;
-import com.shieldblaze.expressgateway.common.utils.SystemPropertyUtil;
+import com.shieldblaze.expressgateway.common.crypto.cryptostore.CryptoEntry;
+import com.shieldblaze.expressgateway.common.crypto.cryptostore.CryptoStore;
 import com.shieldblaze.expressgateway.restapi.RestApi;
-import dev.morphia.query.experimental.filters.Filters;
 import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
 
+import java.io.ByteArrayInputStream;
 import java.io.IOException;
 import java.nio.file.Files;
-import java.nio.file.LinkOption;
 import java.nio.file.Path;
-import java.nio.file.StandardOpenOption;
-import java.util.UUID;
-import java.util.concurrent.ExecutionException;
+import java.security.KeyStoreException;
+import java.security.NoSuchAlgorithmException;
+import java.security.UnrecoverableKeyException;
+import java.security.cert.CertificateException;
 
 import static com.shieldblaze.expressgateway.bootstrap.Utils.checkNullEnv;
 import static com.shieldblaze.expressgateway.bootstrap.Utils.checkNullOrEmptyConf;
 import static com.shieldblaze.expressgateway.bootstrap.Utils.checkNullOrEmptyEnv;
 import static com.shieldblaze.expressgateway.bootstrap.Utils.validateEnforce;
 import static com.shieldblaze.expressgateway.common.SystemPropertiesKeys.CLUSTER_ID;
-import static com.shieldblaze.expressgateway.common.SystemPropertiesKeys.CRYPTO_PASSWORD;
-import static com.shieldblaze.expressgateway.common.SystemPropertiesKeys.MONGODB_CONNECTION_STRING;
+import static com.shieldblaze.expressgateway.common.SystemPropertiesKeys.CONFIGURATION_DIRECTORY;
+import static com.shieldblaze.expressgateway.common.SystemPropertiesKeys.CRYPTO_LOADBALANCER_PASSWORD;
+import static com.shieldblaze.expressgateway.common.SystemPropertiesKeys.CRYPTO_LOADBALANCER_PKCS12_FILE;
+import static com.shieldblaze.expressgateway.common.SystemPropertiesKeys.CRYPTO_REST_API_PASSWORD;
+import static com.shieldblaze.expressgateway.common.SystemPropertiesKeys.CRYPTO_REST_API_PKCS12_FILE;
+import static com.shieldblaze.expressgateway.common.SystemPropertiesKeys.CRYPTO_ZOOKEEPER_PASSWORD;
+import static com.shieldblaze.expressgateway.common.SystemPropertiesKeys.CRYPTO_ZOOKEEPER_PKCS12_FILE;
 import static com.shieldblaze.expressgateway.common.SystemPropertiesKeys.REST_API_IP_ADDRESS;
 import static com.shieldblaze.expressgateway.common.SystemPropertiesKeys.REST_API_PORT;
-import static com.shieldblaze.expressgateway.common.SystemPropertiesKeys.SYSTEM_ID;
+import static com.shieldblaze.expressgateway.common.SystemPropertiesKeys.RUNNING_MODE;
+import static com.shieldblaze.expressgateway.common.SystemPropertiesKeys.ZOOKEEPER_CONNECTION_STRING;
+import static com.shieldblaze.expressgateway.common.utils.SystemPropertyUtil.getPropertyOrEnv;
+import static com.shieldblaze.expressgateway.common.utils.SystemPropertyUtil.getPropertyOrEnvInt;
 
 /**
  * This class initializes and boots up the ExpressGateway.
  */
 public final class Bootstrap {
     private static final Logger logger = LogManager.getLogger(Bootstrap.class);
+
+    private static String configurationDirectory;
+
+    private static boolean enforceConfigurationFileData = false;
+    private static RunningMode runningMode;
+    private static String clusterId;
+
+    private static String restApiIpAddress;
+    private static Integer restApiPort;
+
+    private static String zooKeeperConnectionString;
+
+    private static boolean cryptoRestApiEnabled;
+    private static String cryptoRestApiPkcs12File;
+    private static String cryptoRestApiPassword;
+
+    private static boolean cryptoZooKeeperEnabled;
+    private static String cryptoZooKeeperPkcs12File;
+    private static String cryptoZooKeeperPassword;
+
+    private static boolean cryptoLoadBalancerEnabled;
+    private static String cryptoLoadBalancerPkcs12File;
+    private static String cryptoLoadBalancerPassword;
 
     public static void main(String[] args) {
         System.out.println("______                               _____       _                           \n" +
@@ -67,134 +99,187 @@ public final class Bootstrap {
 
     private static void loadApplicationFile() {
         try {
-            String applicationConfigurationDirectory = SystemPropertyUtil.getPropertyOrEnv("application.configuration.directory", "/etc/expressgateway/");
-            String systemId;
-            String restApiIpAddress = SystemPropertyUtil.getPropertyOrEnv(REST_API_IP_ADDRESS);
-            Integer restApiPort = SystemPropertyUtil.getPropertyOrEnvInt(REST_API_PORT);
-            String mongoDbConnectionString = SystemPropertyUtil.getPropertyOrEnv(MONGODB_CONNECTION_STRING);
-            String clusterId = SystemPropertyUtil.getPropertyOrEnv(CLUSTER_ID);
-            String cryptoPassword = SystemPropertyUtil.getPropertyOrEnv(CRYPTO_PASSWORD);
+            // Initialize Global Variables
+            initGlobalVariables();
+            logger.info("Configuration directory: {}", configurationDirectory);
 
-            Path configurationFilePath = Path.of(applicationConfigurationDirectory + "application.json");
-            boolean applicationConfigurationFileExists = Files.exists(configurationFilePath, LinkOption.NOFOLLOW_LINKS);
-            boolean enforceConfigurationFileData = false;
+            Path configurationFilesPath = Path.of(configurationDirectory + "configuration.json");
 
-            JsonObject globalData = new JsonObject();
-            if (applicationConfigurationFileExists) {
-                System.out.println("Found Application Configuration file: " + configurationFilePath.toAbsolutePath());
+            logger.info("Loading ExpressGateway Configuration file: {}", configurationFilesPath.toAbsolutePath());
+            JsonObject globalData = JsonParser.parseString(Files.readString(configurationFilesPath)).getAsJsonObject();
+            enforceConfigurationFileData = globalData.get("enforceConfigurationFileData").getAsBoolean();
 
-                globalData = JsonParser.parseString(Files.readString(configurationFilePath)).getAsJsonObject();
-                enforceConfigurationFileData = globalData.get("enforceConfigurationFileData").getAsBoolean();
-            }
+            // Initialize Rest-Api
+            initRestApiServer(globalData);
 
-            Path systemIdFilePath = Path.of(applicationConfigurationDirectory + "system.id");
-            boolean systemIdFileExists = Files.exists(systemIdFilePath, LinkOption.NOFOLLOW_LINKS);
+            // Initialize ZooKeeper
+            initZooKeeper(globalData);
 
-            // If System ID file exists then read it else create a new System ID file
-            if (systemIdFileExists) {
-                systemId = Files.readString(systemIdFilePath);
+            // Initialize Crypto
+            initCrypto(globalData);
 
-                try {
-                    systemId = UUID.fromString(systemId).toString();
-                } catch (IllegalArgumentException ex) {
-                    logger.fatal("Invalid System Id", ex);
-                    logger.fatal("Shutting down...");
-                    System.exit(1);
-                    return;
-                }
-            } else {
-                systemId = UUID.randomUUID().toString();
-                Files.writeString(systemIdFilePath, systemId, StandardOpenOption.CREATE, StandardOpenOption.WRITE);
-            }
+            // Initialize Global Properties
+            initGlobalProperties();
 
-            JsonObject restApiData = globalData.getAsJsonObject("rest-api");
-
-            // If Rest-Api data is null then we will load variables by environment variables.
-            if (restApiData == null) {
-                // If enforcing is set to 'true' then we will throw an error and shutdown.
-                validateEnforce(enforceConfigurationFileData, "Rest-Api");
-
-                // If Rest-Api IP Address environment variable is 'null' or empty then we will throw error and shutdown.
-                checkNullOrEmptyEnv(restApiIpAddress, "Rest-Api IP Address");
-
-                // If Rest-Api Port environment variable is 'null' or empty then we will throw error and shutdown.
-                checkNullEnv(restApiPort, "Rest-Api Port");
-            } else {
-                // If Rest-Api IP Address data is 'null' or empty then we will throw error and shutdown.
-                restApiIpAddress = checkNullOrEmptyConf(restApiData.get("ipAddress"), "Rest-Api IP Address");
-
-                // If Rest-Api Port data is 'null' or empty then we will throw error and shutdown.
-                restApiPort = Integer.parseInt(checkNullOrEmptyConf(restApiData.get("port"), "Rest-Api Port"));
-            }
-
-            JsonObject databaseData = globalData.getAsJsonObject("database");
-            if (databaseData == null) {
-                // If enforcing is set to 'true' then we will throw an error and shutdown.
-                validateEnforce(enforceConfigurationFileData, "Database");
-
-                // If Database MongoDbConnectionString environment variable is 'null' or empty then we will throw error and shutdown.
-                checkNullOrEmptyEnv(mongoDbConnectionString, "Database MongoDbConnectionString");
-
-                // If Database ClusterId environment variable is 'null' or empty then we will throw error and shutdown.
-                checkNullOrEmptyEnv(clusterId, "Database ClusterId");
-            } else {
-                // If Database MongoDbConnectionString is 'null' or empty then we will throw error and shutdown.
-                mongoDbConnectionString = checkNullOrEmptyConf(databaseData.get("mongoDbConnectionString"), "Database MongoDbConnectionString");
-
-                // If Database ClusterId is 'null' or empty then we will throw error and shutdown.
-                clusterId = checkNullOrEmptyConf(databaseData.get("clusterId"), "Database ClusterId");
-            }
-
-            JsonObject cryptoData = globalData.getAsJsonObject("crypto");
-            if (cryptoData == null) {
-                // If enforcing is set to 'true' then we will throw an error and shutdown.
-                validateEnforce(enforceConfigurationFileData, "Crypto");
-
-                // If Crypto Password environment variable is 'null' or empty then we will throw error and shutdown.
-                checkNullOrEmptyEnv(cryptoPassword, "Crypto Password");
-            } else {
-                // If Crypto Password is 'null' or empty then we will throw error and shutdown.
-                cryptoPassword = checkNullOrEmptyConf(cryptoData.get("password"), "Crypto Password");
-            }
-
-            System.setProperty(SYSTEM_ID, systemId);
-            System.setProperty(REST_API_IP_ADDRESS, restApiIpAddress);
-            System.setProperty(REST_API_PORT, String.valueOf(restApiPort));
-            System.setProperty(MONGODB_CONNECTION_STRING, mongoDbConnectionString);
-            System.setProperty(CLUSTER_ID, clusterId);
-            System.setProperty(CRYPTO_PASSWORD, cryptoPassword);
-
-            // Wait for MongoDB connection to establish
-            waitForMongoDbConnection();
-
-            // Fetch Data from MongoDB
-            fetchMetadataFromMongoDb(clusterId);
-
-            // TODO: 02-10-2022 FIX ME
-            RestApi.start(null);
-        } catch (IOException e) {
+            // Initialize Rest-Api Server
+            initRestApiServer();
+        } catch (Exception e) {
             logger.error(e);
             System.exit(1);
-        } catch (ExecutionException | InterruptedException e) {
-            throw new RuntimeException(e);
         }
     }
 
-    private static void waitForMongoDbConnection() {
-        MongoDB.connectionFuture().whenComplete((aBoolean, throwable) -> {
-            if (throwable == null) {
-                logger.info("MongoDB connection successfully established");
-            } else {
-                logger.fatal("MongoDB connection could not be established", throwable);
-                logger.fatal("Shutting down...");
-                System.exit(1);
-            }
-        });
+    /**
+     * Initialize global variables
+     */
+    private static void initGlobalVariables() {
+        configurationDirectory = getPropertyOrEnv(CONFIGURATION_DIRECTORY.name(), "/etc/expressgateway/conf.d/default/");
+        runningMode = RunningMode.valueOf(getPropertyOrEnv(RUNNING_MODE.name(), "STANDALONE").toUpperCase());
+        clusterId = getPropertyOrEnv(CLUSTER_ID.name());
+
+        restApiIpAddress = getPropertyOrEnv(REST_API_IP_ADDRESS.name());
+        restApiPort = getPropertyOrEnvInt(REST_API_PORT.name());
+
+        zooKeeperConnectionString = getPropertyOrEnv(ZOOKEEPER_CONNECTION_STRING.name());
+
+        cryptoRestApiPkcs12File = getPropertyOrEnv(CRYPTO_REST_API_PKCS12_FILE.name());
+        cryptoRestApiPassword = getPropertyOrEnv(CRYPTO_REST_API_PASSWORD.name());
+
+        cryptoZooKeeperPkcs12File = getPropertyOrEnv(CRYPTO_ZOOKEEPER_PKCS12_FILE.name());
+        cryptoZooKeeperPassword = getPropertyOrEnv(CRYPTO_ZOOKEEPER_PASSWORD.name());
+
+        cryptoLoadBalancerPkcs12File = getPropertyOrEnv(CRYPTO_LOADBALANCER_PKCS12_FILE.name());
+        cryptoLoadBalancerPkcs12File = getPropertyOrEnv(CRYPTO_LOADBALANCER_PASSWORD.name());
     }
 
-    private static void fetchMetadataFromMongoDb(String clusterId) throws ExecutionException, InterruptedException {
-        ExpressGateway expressGateway = MongoDB.getInstance().find(ExpressGateway.class)
-                .filter(Filters.eq("_id", clusterId))
-                .first();
+    private static void initRestApiServer(JsonObject globalData) {
+        JsonObject restApiData = globalData.getAsJsonObject("rest-api");
+
+        // If Rest-Api data is null then we will load variables by environment variables.
+        if (restApiData == null) {
+            // If enforcing is set to 'true' then we will throw an error and shutdown.
+            validateEnforce(enforceConfigurationFileData, "Rest-Api");
+
+            // If Rest-Api IP Address environment variable is 'null' or empty then we will throw error and shutdown.
+            checkNullOrEmptyEnv(restApiIpAddress, "Rest-Api IP Address");
+
+            // If Rest-Api Port environment variable is 'null' or empty then we will throw error and shutdown.
+            checkNullEnv(restApiPort, "Rest-Api Port");
+        } else {
+            // If Rest-Api IP Address data is 'null' or empty then we will throw error and shutdown.
+            restApiIpAddress = checkNullOrEmptyConf(restApiData.get("ipAddress"), "Rest-Api IP Address");
+
+            // If Rest-Api Port data is 'null' or empty then we will throw error and shutdown.
+            restApiPort = Integer.parseInt(checkNullOrEmptyConf(restApiData.get("port"), "Rest-Api Port"));
+        }
+    }
+
+    private static void initZooKeeper(JsonObject globalData) {
+        JsonObject zookeeperData = globalData.getAsJsonObject("zookeeper");
+
+        // If ZooKeeper data is null then we will load variables by environment variables.
+        if (zookeeperData == null) {
+            // If enforcing is set to 'true' then we will throw an error and shutdown.
+            validateEnforce(enforceConfigurationFileData, "ZooKeeper");
+
+            // If ZooKeeper ConnectionString environment variable is 'null' or empty then we will throw error and shutdown.
+            checkNullOrEmptyEnv(zooKeeperConnectionString, "ZooKeeper ConnectionString");
+        } else {
+            // If ZooKeeper ConnectionString data is 'null' or empty then we will throw error and shutdown.
+            zooKeeperConnectionString = checkNullOrEmptyConf(zookeeperData.get("connectionString"), "ZooKeeper ConnectionString");
+        }
+    }
+
+    private static void initCrypto(JsonObject globalData) {
+        JsonObject cryptoData = globalData.getAsJsonObject("crypto");
+        if (cryptoData == null) {
+            // If enforcing is set to 'true' then we will throw an error and shutdown.
+            validateEnforce(enforceConfigurationFileData, "Crypto");
+
+            // If Crypto Rest-Api Pkcs12 file environment variable is 'null' or empty then we will throw error and shutdown.
+            checkNullOrEmptyEnv(cryptoRestApiPkcs12File, "Crypto Rest-Api PKCS12 File");
+
+            // If Crypto Rest-Api Password environment variable is 'null' or empty then we will throw error and shutdown.
+            checkNullOrEmptyEnv(cryptoRestApiPassword, "Crypto Rest-Api Password");
+        } else {
+            JsonElement restApiElement = cryptoData.get("rest-api");
+            checkNullOrEmptyConf(restApiElement, "Crypto Rest-Api");
+            checkNullOrEmptyConf(restApiElement.getAsJsonObject().get("pkcs12File"), "Crypto Rest-Api PKCS12 File");
+            checkNullOrEmptyConf(restApiElement.getAsJsonObject().get("password"), "Crypto Rest-Api Password");
+
+            // If Crypto Rest-Api PKCS12 is empty then the feature is disabled
+            if (restApiElement.getAsJsonObject().get("pkcs12File").getAsString().isEmpty()) {
+                logger.info("Crypto Rest-Api is disabled");
+            } else {
+                cryptoRestApiPkcs12File = restApiElement.getAsJsonObject().get("pkcs12File").getAsString();
+                cryptoRestApiPassword = restApiElement.getAsJsonObject().get("password").getAsString();
+            }
+
+            // -----------------------------------------------------
+
+            JsonElement zooKeeperElement = cryptoData.get("zookeeper");
+            checkNullOrEmptyConf(zooKeeperElement, "Crypto ZooKeeper");
+            checkNullOrEmptyConf(zooKeeperElement.getAsJsonObject().get("pkcs12File"), "Crypto ZooKeeper PKCS12 File");
+            checkNullOrEmptyConf(zooKeeperElement.getAsJsonObject().get("password"), "Crypto ZooKeeper Password");
+
+            // If Crypto ZooKeeper PKCS12 is empty then the feature is disabled
+            if (zooKeeperElement.getAsJsonObject().get("pkcs12File").getAsString().isEmpty()) {
+                logger.info("Crypto ZooKeeper is disabled");
+            } else {
+                cryptoZooKeeperPkcs12File = zooKeeperElement.getAsJsonObject().get("pkcs12File").getAsString();
+                cryptoZooKeeperPassword = zooKeeperElement.getAsJsonObject().get("password").getAsString();
+            }
+
+            // -----------------------------------------------------
+
+            JsonElement loadBalancerElement = cryptoData.get("loadBalancer");
+            checkNullOrEmptyConf(loadBalancerElement, "Crypto LoadBalancer");
+            checkNullOrEmptyConf(loadBalancerElement.getAsJsonObject().get("pkcs12File"), "Crypto Rest-Api PKCS12 File");
+            checkNullOrEmptyConf(loadBalancerElement.getAsJsonObject().get("password"), "Crypto Rest-Api Password");
+
+            // If Crypto LoadBalancer PKCS12 is empty then the feature is disabled
+            if (loadBalancerElement.getAsJsonObject().get("pkcs12File").getAsString().isEmpty()) {
+                logger.info("Crypto LoadBalancer is disabled");
+            } else {
+                cryptoLoadBalancerPkcs12File = loadBalancerElement.getAsJsonObject().get("pkcs12File").getAsString();
+                cryptoLoadBalancerPassword = loadBalancerElement.getAsJsonObject().get("password").getAsString();
+            }
+        }
+    }
+
+    private static void initGlobalProperties() {
+        System.setProperty(CONFIGURATION_DIRECTORY.name(), configurationDirectory);
+        System.setProperty(RUNNING_MODE.name(), runningMode.name());
+        System.setProperty(CLUSTER_ID.name(), clusterId);
+
+        System.setProperty(REST_API_IP_ADDRESS.name(), restApiIpAddress);
+        System.setProperty(REST_API_PORT.name(), String.valueOf(restApiPort));
+
+        System.setProperty(ZOOKEEPER_CONNECTION_STRING.name(), zooKeeperConnectionString);
+
+        System.setProperty(CRYPTO_REST_API_PKCS12_FILE.name(), cryptoRestApiPkcs12File);
+        System.setProperty(CRYPTO_REST_API_PASSWORD.name(), cryptoRestApiPassword);
+
+        System.setProperty(CRYPTO_ZOOKEEPER_PKCS12_FILE.name(), cryptoZooKeeperPkcs12File);
+        System.setProperty(CRYPTO_ZOOKEEPER_PASSWORD.name(), cryptoZooKeeperPassword);
+
+        System.setProperty(CRYPTO_LOADBALANCER_PKCS12_FILE.name(), cryptoLoadBalancerPkcs12File);
+        System.setProperty(CRYPTO_LOADBALANCER_PASSWORD.name(), cryptoLoadBalancerPassword);
+    }
+
+    private static void initRestApiServer() throws IOException, UnrecoverableKeyException, CertificateException, KeyStoreException, NoSuchAlgorithmException {
+        if (cryptoRestApiPkcs12File.isEmpty()) {
+            logger.info("Initializing Rest-Api Server without TLS");
+        } else {
+            logger.info("Loading Crypto Rest-Api PKCS12 File for TLS support");
+
+            byte[] cryptoRestApiFile = Files.readAllBytes(Path.of(cryptoRestApiPkcs12File));
+            try (ByteArrayInputStream inputStream = new ByteArrayInputStream(cryptoRestApiFile)) {
+                CryptoEntry cryptoEntry = CryptoStore.fetchPrivateKeyCertificateEntry(inputStream, cryptoRestApiPassword.toCharArray(), "rest-api");
+                RestApi.start(cryptoEntry);
+            }
+
+            logger.info("Successfully initialized Rest-Api Server with TLS");
+        }
     }
 }

@@ -19,7 +19,8 @@ package com.shieldblaze.expressgateway.restapi.api.configuration;
 
 import com.google.gson.JsonObject;
 import com.google.gson.JsonParser;
-import com.shieldblaze.expressgateway.common.datastore.CryptoEntry;
+import com.shieldblaze.expressgateway.common.crypto.cryptostore.CryptoEntry;
+import com.shieldblaze.expressgateway.common.curator.Environment;
 import com.shieldblaze.expressgateway.common.utils.SelfSignedCertificate;
 import com.shieldblaze.expressgateway.configuration.eventloop.EventLoopConfiguration;
 import com.shieldblaze.expressgateway.restapi.CustomOkHttpClient;
@@ -48,6 +49,7 @@ class EventLoopTest {
 
     @BeforeAll
     static void startSpring() {
+        Environment.setEnvironment(Environment.DEVELOPMENT);
         SelfSignedCertificate ssc = SelfSignedCertificate.generateNew(List.of("127.0.0.1"), List.of("shieldblaze.com"));
         CryptoEntry cryptoEntry = new CryptoEntry(ssc.keyPair().getPrivate(), new X509Certificate[]{ssc.x509Certificate()});
         RestApi.start(cryptoEntry);
@@ -104,7 +106,7 @@ class EventLoopTest {
         EventLoopConfiguration eventLoopDefault = EventLoopConfiguration.DEFAULT;
 
         Request request = new Request.Builder()
-                .url("https://127.0.0.1:9110/v1/configuration/eventloop")
+                .url("https://127.0.0.1:9110/v1/configuration/eventloop/default")
                 .get()
                 .build();
 
@@ -132,16 +134,14 @@ class EventLoopTest {
                 .header("Content-Type", "application/json")
                 .build();
 
-        String id;
         try (Response response = CustomOkHttpClient.INSTANCE.newCall(request).execute()) {
             assertNotNull(response.body());
             JsonObject responseJson = JsonParser.parseString(response.body().string()).getAsJsonObject();
             assertTrue(responseJson.get("Success").getAsBoolean());
-            id = responseJson.get("Result").getAsJsonObject().get("ID").getAsString();
         }
 
         request = new Request.Builder()
-                .url("https://127.0.0.1:9110/v1/configuration/eventloop/?id=" + id)
+                .url("https://127.0.0.1:9110/v1/configuration/eventloop")
                 .get()
                 .build();
 

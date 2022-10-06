@@ -37,6 +37,7 @@ import com.shieldblaze.expressgateway.restapi.response.FastBuilder;
 import com.shieldblaze.expressgateway.restapi.response.builder.APIResponse;
 import com.shieldblaze.expressgateway.restapi.response.builder.Result;
 import io.netty.handler.codec.http.HttpResponseStatus;
+import io.netty.util.internal.StringUtil;
 import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.DeleteMapping;
@@ -54,12 +55,13 @@ import static com.shieldblaze.expressgateway.configuration.ConfigurationStore.lo
 public final class ConfigurationEndpointHandler {
 
     @GetMapping(value = "/buffer", produces = MediaType.APPLICATION_JSON_VALUE)
-    public ResponseEntity<String> getBuffer(@RequestParam(defaultValue = "default") String id) throws Exception {
-        if (id.equalsIgnoreCase("default")) {
-            return response(BufferConfiguration.DEFAULT);
-        } else {
-            return response(load(id, BufferConfiguration.class));
-        }
+    public ResponseEntity<String> getBuffer() throws Exception {
+        return response(load(BufferConfiguration.class));
+    }
+
+    @GetMapping(value = "/buffer/default", produces = MediaType.APPLICATION_JSON_VALUE)
+    public ResponseEntity<String> getBufferDefault() throws Exception {
+        return response(BufferConfiguration.DEFAULT);
     }
 
     @PostMapping(value = "/buffer", consumes = MediaType.APPLICATION_JSON_VALUE, produces = MediaType.APPLICATION_JSON_VALUE)
@@ -68,12 +70,13 @@ public final class ConfigurationEndpointHandler {
     }
 
     @GetMapping(value = "/eventloop", produces = MediaType.APPLICATION_JSON_VALUE)
-    public ResponseEntity<String> getEventLoop(@RequestParam(defaultValue = "default") String id) throws Exception {
-        if (id.equalsIgnoreCase("default")) {
-            return response(EventLoopConfiguration.DEFAULT);
-        } else {
-            return response(load(id, EventLoopConfiguration.class));
-        }
+    public ResponseEntity<String> getEventLoop() throws Exception {
+        return response(load(EventLoopConfiguration.class));
+    }
+
+    @GetMapping(value = "/eventloop/default", produces = MediaType.APPLICATION_JSON_VALUE)
+    public ResponseEntity<String> getEventLoopDefault() throws Exception {
+        return response(EventLoopConfiguration.DEFAULT);
     }
 
     @PostMapping(value = "/eventloop", consumes = MediaType.APPLICATION_JSON_VALUE, produces = MediaType.APPLICATION_JSON_VALUE)
@@ -82,12 +85,13 @@ public final class ConfigurationEndpointHandler {
     }
 
     @GetMapping(value = "/eventstream", produces = MediaType.APPLICATION_JSON_VALUE)
-    public ResponseEntity<String> getEventStream(@RequestParam(defaultValue = "default") String id) throws Exception {
-        if (id.equalsIgnoreCase("default")) {
-            return response(EventStreamConfiguration.DEFAULT);
-        } else {
-            return response(load(id, EventStreamConfiguration.class));
-        }
+    public ResponseEntity<String> getEventStream() throws Exception {
+        return response(load(EventStreamConfiguration.class));
+    }
+
+    @GetMapping(value = "/eventstream/default", produces = MediaType.APPLICATION_JSON_VALUE)
+    public ResponseEntity<String> getEventStreamDefault() throws Exception {
+        return response(EventStreamConfiguration.DEFAULT);
     }
 
     @PostMapping(value = "/eventstream", consumes = MediaType.APPLICATION_JSON_VALUE, produces = MediaType.APPLICATION_JSON_VALUE)
@@ -97,11 +101,12 @@ public final class ConfigurationEndpointHandler {
 
     @GetMapping(value = "/healthcheck", produces = MediaType.APPLICATION_JSON_VALUE)
     public ResponseEntity<String> getHealthCheck(@RequestParam(defaultValue = "default") String id) throws Exception {
-        if (id.equalsIgnoreCase("default")) {
-            return response(HealthCheckConfiguration.DEFAULT);
-        } else {
-            return response(load(id, HealthCheckConfiguration.class));
-        }
+        return response(load(HealthCheckConfiguration.class));
+    }
+
+    @GetMapping(value = "/healthcheck/default", produces = MediaType.APPLICATION_JSON_VALUE)
+    public ResponseEntity<String> getHealthCheckDefault() throws Exception {
+        return response(HealthCheckConfiguration.DEFAULT);
     }
 
     @PostMapping(value = "/healthcheck", consumes = MediaType.APPLICATION_JSON_VALUE, produces = MediaType.APPLICATION_JSON_VALUE)
@@ -110,12 +115,13 @@ public final class ConfigurationEndpointHandler {
     }
 
     @GetMapping(value = "/http", produces = MediaType.APPLICATION_JSON_VALUE)
-    public ResponseEntity<String> getHttp(@RequestParam(defaultValue = "default") String id) throws Exception {
-        if (id.equalsIgnoreCase("default")) {
-            return response(HttpConfiguration.DEFAULT);
-        } else {
-            return response(load(id, HttpConfiguration.class));
-        }
+    public ResponseEntity<String> getHttp() throws Exception {
+        return response(load(HttpConfiguration.class));
+    }
+
+    @GetMapping(value = "/http/default", produces = MediaType.APPLICATION_JSON_VALUE)
+    public ResponseEntity<String> getHttpDefault() throws Exception {
+        return response(HttpConfiguration.DEFAULT);
     }
 
     @PostMapping(value = "/http", consumes = MediaType.APPLICATION_JSON_VALUE, produces = MediaType.APPLICATION_JSON_VALUE)
@@ -124,12 +130,13 @@ public final class ConfigurationEndpointHandler {
     }
 
     @GetMapping(value = "/transport", produces = MediaType.APPLICATION_JSON_VALUE)
-    public ResponseEntity<String> getTransport(@RequestParam(defaultValue = "default") String id) throws Exception {
-        if (id.equalsIgnoreCase("default")) {
-            return response(TransportConfiguration.DEFAULT);
-        } else {
-            return response(load(id, TransportConfiguration.class));
-        }
+    public ResponseEntity<String> getTransport() throws Exception {
+        return response(load(TransportConfiguration.class));
+    }
+
+    @GetMapping(value = "/transport/default", produces = MediaType.APPLICATION_JSON_VALUE)
+    public ResponseEntity<String> getTransportDefault() throws Exception {
+        return response(TransportConfiguration.DEFAULT);
     }
 
     @PostMapping(value = "/transport", consumes = MediaType.APPLICATION_JSON_VALUE, produces = MediaType.APPLICATION_JSON_VALUE)
@@ -137,30 +144,32 @@ public final class ConfigurationEndpointHandler {
         return saveAndGenerateResponse(configuration);
     }
 
-    @GetMapping(value = "/tlsserver", produces = MediaType.APPLICATION_JSON_VALUE)
-    public ResponseEntity<String> getTlsServer(@RequestParam(defaultValue = "default") String id) throws Exception {
-        if (id.equalsIgnoreCase("default")) {
-            return response(TlsServerConfiguration.DEFAULT);
-        } else {
-            return response(load(id, TlsServerConfiguration.class));
-        }
+    @GetMapping(value = "/tls/server", produces = MediaType.APPLICATION_JSON_VALUE)
+    public ResponseEntity<String> getTlsServer() throws Exception {
+        return response(load(TlsServerConfiguration.class));
     }
 
-    @PostMapping(value = "/tlsserver", consumes = MediaType.APPLICATION_JSON_VALUE, produces = MediaType.APPLICATION_JSON_VALUE)
+    @GetMapping(value = "/tls/server/default", produces = MediaType.APPLICATION_JSON_VALUE)
+    public ResponseEntity<String> getTlsServerDefault() throws Exception {
+        return response(TlsServerConfiguration.DEFAULT);
+    }
+
+    @PostMapping(value = "/tls/server", consumes = MediaType.APPLICATION_JSON_VALUE, produces = MediaType.APPLICATION_JSON_VALUE)
     public ResponseEntity<String> setTlsServer(@RequestBody TlsServerConfiguration configuration) throws Exception {
         return saveAndGenerateResponse(configuration);
     }
 
-    @GetMapping(value = "/tlsclient", produces = MediaType.APPLICATION_JSON_VALUE)
-    public ResponseEntity<String> getTlsClient(@RequestParam(defaultValue = "default") String id) throws Exception {
-        if (id.equalsIgnoreCase("default")) {
-            return response(TlsClientConfiguration.DEFAULT);
-        } else {
-            return response(load(id, TlsClientConfiguration.class));
-        }
+    @GetMapping(value = "/tls/client", produces = MediaType.APPLICATION_JSON_VALUE)
+    public ResponseEntity<String> getTlsClient() throws Exception {
+        return response(load(TlsClientConfiguration.class));
     }
 
-    @PostMapping(value = "/tlsclient", consumes = MediaType.APPLICATION_JSON_VALUE, produces = MediaType.APPLICATION_JSON_VALUE)
+    @GetMapping(value = "/tls/client/default", produces = MediaType.APPLICATION_JSON_VALUE)
+    public ResponseEntity<String> getTlsClientDefault() throws Exception {
+        return response(TlsClientConfiguration.DEFAULT);
+    }
+
+    @PostMapping(value = "/tls/client", consumes = MediaType.APPLICATION_JSON_VALUE, produces = MediaType.APPLICATION_JSON_VALUE)
     public ResponseEntity<String> setTlsClient(@RequestBody TlsClientConfiguration configuration) throws Exception {
         return saveAndGenerateResponse(configuration);
     }
@@ -176,11 +185,6 @@ public final class ConfigurationEndpointHandler {
     }
 
     private static ResponseEntity<String> saveAndGenerateResponse(Configuration<?> configuration) throws Exception {
-        // Default configuration cannot be modified
-        if (configuration.id() != null && configuration.id().equalsIgnoreCase("default")) {
-            return FastBuilder.error(ErrorBase.DEFAULT_CONFIGURATION_CANNOT_BE_MODIFIED, HttpResponseStatus.NOT_MODIFIED);
-        }
-
         // Instantiate class from payload and validate it
         configuration.validate();
 
@@ -190,15 +194,15 @@ public final class ConfigurationEndpointHandler {
         // Build API response
         APIResponse apiResponse = APIResponse.newBuilder()
                 .isSuccess(true)
-                .withResult(Result.newBuilder().withHeader("ID").withMessage(configuration.id()).build())
+                .withResult(Result.newBuilder().withHeader(StringUtil.simpleClassName(configuration.getClass())).withMessage("Saved").build())
                 .build();
 
         return FastBuilder.response(apiResponse.getResponse(), HttpResponseStatus.OK);
     }
 
-    @PostMapping("/tls/addmapping")
-    public ResponseEntity<String> addMapping(@RequestParam String id, @RequestBody CertificateKeyPairHolder certificateKeyPairHolder) throws Exception {
-        TlsClientConfiguration tlsClient = load(id, TlsClientConfiguration.class);
+    @PostMapping("/tls/client/mapping")
+    public ResponseEntity<String> addClientMapping(@RequestBody CertificateKeyPairHolder certificateKeyPairHolder) throws Exception {
+        TlsClientConfiguration tlsClient = load(TlsClientConfiguration.class);
         tlsClient.addMapping(certificateKeyPairHolder.host(),
                 CertificateKeyPair.forClient(certificateKeyPairHolder.x509Certificates(), certificateKeyPairHolder.privateKey()));
 
@@ -209,9 +213,9 @@ public final class ConfigurationEndpointHandler {
         return FastBuilder.response(apiResponse.getResponse(), HttpResponseStatus.OK);
     }
 
-    @DeleteMapping("/tls/removemapping")
-    public ResponseEntity<String> removeMapping(@RequestBody TLSMappingHolder tlsMappingHolder, @RequestParam String id) throws Exception {
-        TlsClientConfiguration tlsClient = load(id, TlsClientConfiguration.class);
+    @DeleteMapping("/tls/client/mapping")
+    public ResponseEntity<String> removeClientMapping(@RequestBody TLSMappingHolder tlsMappingHolder) throws Exception {
+        TlsClientConfiguration tlsClient = load(TlsClientConfiguration.class);
         boolean isRemoved = tlsClient.removeMapping(tlsMappingHolder.host());
 
         APIResponse apiResponse;

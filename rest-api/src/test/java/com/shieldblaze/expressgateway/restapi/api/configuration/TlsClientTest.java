@@ -20,7 +20,8 @@ package com.shieldblaze.expressgateway.restapi.api.configuration;
 import com.google.gson.JsonArray;
 import com.google.gson.JsonObject;
 import com.google.gson.JsonParser;
-import com.shieldblaze.expressgateway.common.datastore.CryptoEntry;
+import com.shieldblaze.expressgateway.common.crypto.cryptostore.CryptoEntry;
+import com.shieldblaze.expressgateway.common.curator.Environment;
 import com.shieldblaze.expressgateway.common.utils.SelfSignedCertificate;
 import com.shieldblaze.expressgateway.configuration.tls.Cipher;
 import com.shieldblaze.expressgateway.configuration.tls.Protocol;
@@ -52,6 +53,7 @@ class TlsClientTest {
 
     @BeforeAll
     static void startSpring() {
+        Environment.setEnvironment(Environment.DEVELOPMENT);
         SelfSignedCertificate ssc = SelfSignedCertificate.generateNew(List.of("127.0.0.1"), List.of("shieldblaze.com"));
         CryptoEntry cryptoEntry = new CryptoEntry(ssc.keyPair().getPrivate(), new X509Certificate[]{ssc.x509Certificate()});
         RestApi.start(cryptoEntry);
@@ -79,7 +81,7 @@ class TlsClientTest {
         jsonBody.add("protocols", protocols);
 
         Request request = new Request.Builder()
-                .url("https://127.0.0.1:9110/v1/configuration/tlsclient")
+                .url("https://127.0.0.1:9110/v1/configuration/tls/client")
                 .post(RequestBody.create(jsonBody.toString().getBytes()))
                 .header("Content-Type", "application/json")
                 .build();
@@ -106,7 +108,7 @@ class TlsClientTest {
         jsonBody.add("protocols", protocols);
 
         Request request = new Request.Builder()
-                .url("https://127.0.0.1:9110/v1/configuration/tlsclient")
+                .url("https://127.0.0.1:9110/v1/configuration/tls/client")
                 .post(RequestBody.create(jsonBody.toString().getBytes()))
                 .header("Content-Type", "application/json")
                 .build();
@@ -124,7 +126,7 @@ class TlsClientTest {
         TlsConfiguration clientDefault = TlsClientConfiguration.DEFAULT;
 
         Request request = new Request.Builder()
-                .url("https://127.0.0.1:9110/v1/configuration/tlsclient/?id=default")
+                .url("https://127.0.0.1:9110/v1/configuration/tls/client/default")
                 .get()
                 .build();
 
@@ -167,21 +169,19 @@ class TlsClientTest {
         jsonBody.add("protocols", protocols);
 
         Request request = new Request.Builder()
-                .url("https://127.0.0.1:9110/v1/configuration/tlsclient")
+                .url("https://127.0.0.1:9110/v1/configuration/tls/client")
                 .post(RequestBody.create(jsonBody.toString().getBytes()))
                 .header("Content-Type", "application/json")
                 .build();
 
-        String id;
         try (Response response = CustomOkHttpClient.INSTANCE.newCall(request).execute()) {
             assertNotNull(response.body());
             JsonObject responseJson = JsonParser.parseString(response.body().string()).getAsJsonObject();
             assertTrue(responseJson.get("Success").getAsBoolean());
-            id = responseJson.get("Result").getAsJsonObject().get("ID").getAsString();
         }
 
         request = new Request.Builder()
-                .url("https://127.0.0.1:9110/v1/configuration/tlsclient/?id=" + id)
+                .url("https://127.0.0.1:9110/v1/configuration/tls/client/")
                 .get()
                 .build();
 
