@@ -19,8 +19,6 @@ package com.shieldblaze.expressgateway.common.curator;
 
 import com.shieldblaze.expressgateway.common.utils.SystemPropertyUtil;
 
-import java.io.File;
-
 /**
  * Environments for ZooKeeper
  */
@@ -61,6 +59,6 @@ public enum Environment {
      * @param environment {@link Environment} to set
      */
     public static void setEnvironment(Environment environment) {
-        System.setProperty("runtime.environment" + File.separator, environment.env().toLowerCase());
+        System.setProperty("runtime.environment", environment.env().toLowerCase());
     }
 }

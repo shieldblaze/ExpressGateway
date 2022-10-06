@@ -24,6 +24,7 @@ import io.netty.util.internal.StringUtil;
 import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
 
+import java.io.File;
 import java.io.FileWriter;
 import java.io.IOException;
 import java.nio.file.Files;
@@ -132,7 +133,7 @@ public final class ConfigurationStore {
         if (Environment.detectEnv() == Environment.PRODUCTION) {
             return getProperty(CONFIGURATION_DIRECTORY.name()) + StringUtil.simpleClassName(clazz) + ".json";
         } else {
-            return getProperty(CONFIGURATION_DIRECTORY.name(), getProperty("java.io.tmpdir")) + StringUtil.simpleClassName(clazz) + ".json";
+            return getProperty(CONFIGURATION_DIRECTORY.name(), getProperty("java.io.tmpdir")) + File.separator + StringUtil.simpleClassName(clazz) + ".json";
         }
     }
 
