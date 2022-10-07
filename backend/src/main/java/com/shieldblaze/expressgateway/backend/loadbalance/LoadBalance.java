@@ -71,4 +71,12 @@ public abstract class LoadBalance<REQUEST, RESPONSE, KEY, VALUE> implements Even
     public SessionPersistence<REQUEST, RESPONSE, KEY, VALUE> sessionPersistence() {
         return sessionPersistence;
     }
+
+    @Override
+    public String toString() {
+        return "LoadBalance{" +
+                "sessionPersistence=" + sessionPersistence +
+                ", cluster=" + cluster +
+                '}';
+    }
 }

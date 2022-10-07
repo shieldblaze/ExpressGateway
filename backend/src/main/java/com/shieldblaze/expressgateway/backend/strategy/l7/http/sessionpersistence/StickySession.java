@@ -98,6 +98,13 @@ public final class StickySession implements SessionPersistence<HTTPBalanceRespon
     }
 
     @Override
+    public String toString() {
+        return "StickySession{" +
+                "nodes=" + nodes +
+                '}';
+    }
+
+    @Override
     public String name() {
         return "StickySession";
     }

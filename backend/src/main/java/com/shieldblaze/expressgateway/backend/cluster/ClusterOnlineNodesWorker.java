@@ -42,4 +42,11 @@ class ClusterOnlineNodesWorker implements EventListener<Void> {
             }
         }
     }
+
+    @Override
+    public String toString() {
+        return "ClusterOnlineNodesWorker{" +
+                "ONLINE_NODES=" + ONLINE_NODES.size() +
+                '}';
+    }
 }

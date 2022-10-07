@@ -333,6 +333,17 @@ public class Cluster extends ClusterOnlineNodesWorker {
         }
     }
 
+    @Override
+    public String toString() {
+        return "Cluster{" +
+                "nodes=" + nodes.size() +
+                ", eventStream=" + eventStream +
+                ", loadBalance=" + loadBalance.name() +
+                ", healthCheckService=" + healthCheckService +
+                ", healthCheckTemplate=" + healthCheckTemplate +
+                '}';
+    }
+
     /**
      * Convert Cluster data into {@link JsonObject}
      *

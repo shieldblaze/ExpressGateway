@@ -123,4 +123,16 @@ public final class HealthCheckTemplate {
         HTTP,
         HTTPS
     }
+
+    @Override
+    public String toString() {
+        return "HealthCheckTemplate{" +
+                "protocol=" + protocol +
+                ", host='" + host + '\'' +
+                ", port=" + port +
+                ", path='" + path + '\'' +
+                ", timeout=" + timeout +
+                ", samples=" + samples +
+                '}';
+    }
 }

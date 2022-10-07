@@ -73,6 +73,13 @@ public final class FourTupleHash implements SessionPersistence<Node, Node, InetS
     }
 
     @Override
+    public String toString() {
+        return "FourTupleHash{" +
+                "routeMap=" + routeMap +
+                '}';
+    }
+
+    @Override
     public String name() {
         return "FourTupleHash";
     }

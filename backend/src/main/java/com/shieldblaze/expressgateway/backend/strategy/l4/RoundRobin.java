@@ -90,6 +90,14 @@ public final class RoundRobin extends L4Balance {
     }
 
     @Override
+    public String toString() {
+        return "RoundRobin{" +
+                "sessionPersistence=" + sessionPersistence +
+                ", cluster=" + cluster +
+                '}';
+    }
+
+    @Override
     public void close() throws IOException {
         sessionPersistence.clear();
     }

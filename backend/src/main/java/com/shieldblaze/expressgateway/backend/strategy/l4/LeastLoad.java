@@ -88,6 +88,14 @@ public final class LeastLoad extends L4Balance {
     }
 
     @Override
+    public String toString() {
+        return "LeastLoad{" +
+                "sessionPersistence=" + sessionPersistence +
+                ", cluster=" + cluster +
+                '}';
+    }
+
+    @Override
     public void close() throws IOException {
         sessionPersistence.clear();
     }

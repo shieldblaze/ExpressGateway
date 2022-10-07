@@ -45,4 +45,11 @@ public final class HTTPBalanceRequest extends Request {
     public HttpHeaders httpHeaders() {
         return httpHeaders;
     }
+
+    @Override
+    public String toString() {
+        return "HTTPBalanceRequest{" +
+                "httpHeaders=" + httpHeaders +
+                '}';
+    }
 }

@@ -85,6 +85,14 @@ public final class Random extends L4Balance {
     }
 
     @Override
+    public String toString() {
+        return "Random{" +
+                "sessionPersistence=" + sessionPersistence +
+                ", cluster=" + cluster +
+                '}';
+    }
+
+    @Override
     public void close() throws IOException {
         sessionPersistence.clear();
     }

@@ -82,6 +82,16 @@ public final class HealthCheckService implements Closeable {
         }
     }
 
+    @Override
+    public String toString() {
+        return "HealthCheckService{" +
+                "nodeMap=" + nodeMap +
+                ", config=" + config +
+                ", eventStream=" + eventStream +
+                ", executors=" + executors +
+                '}';
+    }
+
     /**
      * Close this HealthCheckService and stops all running operations.
      */

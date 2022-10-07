@@ -41,4 +41,12 @@ public abstract class HTTPBalance extends LoadBalance<HTTPBalanceResponse, HTTPB
     public Response response(Request request) throws LoadBalanceException {
         return response((HTTPBalanceRequest) request);
     }
+
+    @Override
+    public String toString() {
+        return "HTTPBalance{" +
+                "sessionPersistence=" + sessionPersistence +
+                ", cluster=" + cluster +
+                '}';
+    }
 }
