@@ -40,4 +40,11 @@ public abstract class Request {
     public InetSocketAddress socketAddress() {
         return socketAddress;
     }
+
+    @Override
+    public String toString() {
+        return "Request{" +
+                "socketAddress=" + socketAddress +
+                '}';
+    }
 }

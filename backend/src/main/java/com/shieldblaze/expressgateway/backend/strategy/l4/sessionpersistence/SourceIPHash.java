@@ -101,6 +101,13 @@ public final class SourceIPHash implements SessionPersistence<Node, Node, InetSo
     }
 
     @Override
+    public String toString() {
+        return "SourceIPHash{" +
+                "routeMap=" + routeMap +
+                '}';
+    }
+
+    @Override
     public String name() {
         return "SourceIPHash";
     }

@@ -91,6 +91,14 @@ public final class HTTPRoundRobin extends HTTPBalance {
     }
 
     @Override
+    public String toString() {
+        return "HTTPRoundRobin{" +
+                "sessionPersistence=" + sessionPersistence +
+                ", cluster=" + cluster +
+                '}';
+    }
+
+    @Override
     public void close() throws IOException {
         sessionPersistence.clear();
     }

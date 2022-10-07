@@ -62,4 +62,12 @@ public abstract class L4Balance extends LoadBalance<Node, Node, InetSocketAddres
     public Response response(Request request) throws LoadBalanceException {
         return response((L4Request) request);
     }
+
+    @Override
+    public String toString() {
+        return "L4Balance{" +
+                "sessionPersistence=" + sessionPersistence +
+                ", cluster=" + cluster +
+                '}';
+    }
 }
