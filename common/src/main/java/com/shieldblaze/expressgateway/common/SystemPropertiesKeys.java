@@ -20,6 +20,7 @@ package com.shieldblaze.expressgateway.common;
 public enum SystemPropertiesKeys {
 
     CONFIGURATION_DIRECTORY,
+    CONFIGURATION_FILE_NAME,
     RUNNING_MODE,
     CLUSTER_ID,
     REST_API_IP_ADDRESS,

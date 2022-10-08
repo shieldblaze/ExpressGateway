@@ -22,43 +22,40 @@ import com.shieldblaze.expressgateway.common.utils.StringUtil;
 
 final class Utils {
 
-    static void validateEnforce(boolean enforceConfigurationFileData, String componentMessage) {
+    static void validateEnforcing(boolean enforceConfigurationFileData, String componentMessage) {
         if (enforceConfigurationFileData) {
-            System.err.println(componentMessage + " configuration was not found in configuration file");
-            System.exit(1);
+            throw new IllegalArgumentException(componentMessage + " configuration was not found in configuration file");
         }
     }
 
-    static void checkNullOrEmptyEnv(String str, String componentMessage) {
-        // If environment variable is 'null' or empty then we will throw error and shutdown.
+    static void checkStringNullOrEmptyEnv(String str, String componentMessage) {
+        // If environment variable is 'null' or empty then we will throw error.
         if (StringUtil.checkNullOrEmpty(str)) {
-            System.err.println(componentMessage + " is not configured in Property/Environment Variable");
-            System.exit(1);
+            throw new IllegalArgumentException(componentMessage + " is not configured in Property/Environment Variable");
         }
-    }
-
-    static boolean checkNullOrEmptyEnv(String str) {
-        return StringUtil.checkNullOrEmpty(str);
     }
 
     static void checkNullEnv(Object object, String componentMessage) {
         if (object == null) {
-            System.err.println(componentMessage + " is not configured in Property/Environment Variable");
-            System.exit(1);
+            throw new IllegalArgumentException(componentMessage + " is not configured in Property/Environment Variable");
         }
     }
 
-    static String checkNullOrEmptyConf(JsonElement jsonElement, String componentMessage) {
+    static void checkJsonElementNull(JsonElement jsonElement, String componentMessage) {
+        if (jsonElement == null || jsonElement.isJsonNull()) {
+            throw new IllegalArgumentException(componentMessage + " is not configured in configuration file");
+        }
+    }
+
+    static String checkStringNullOrEmptyConf(JsonElement jsonElement, String componentMessage) {
         if (jsonElement.isJsonNull() || StringUtil.checkNullOrEmpty(jsonElement.getAsString())) {
-            System.err.println(componentMessage + " is not configured in configuration file");
-            System.exit(1);
-            return null; // We will never reach here
+            throw new IllegalArgumentException(componentMessage + " is not configured in configuration file");
         } else {
             return jsonElement.getAsString();
         }
     }
 
-    static boolean checkNullOrEmptyConf(JsonElement jsonElement) {
+    static boolean checkStringNullOrEmptyConf(JsonElement jsonElement) {
         return StringUtil.checkNullOrEmpty(jsonElement.getAsString());
     }
 

@@ -19,8 +19,10 @@ package com.shieldblaze.expressgateway.common.utils;
 
 public final class StringUtil {
 
+    public static final String EMPTY_STRING = "";
+
     public static boolean checkNullOrEmpty(String str) {
-        return str == null || str.isEmpty();
+        return str == null || str.isEmpty() || str.isBlank();
     }
 
     /**
@@ -35,7 +37,7 @@ public final class StringUtil {
         if (str == null) {
             throw new NullPointerException("String is 'null'");
         } else if (str.isEmpty() || str.isBlank()) {
-            throw new IllegalArgumentException("String is empty is blank");
+            throw new IllegalArgumentException("String is empty or blank");
         }
         return str;
     }
