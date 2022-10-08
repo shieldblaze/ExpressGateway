@@ -1,0 +1,26 @@
+{
+    "EnforceConfigurationFileData" : true,
+    "RunningMode" : "",
+    "ClusterID" : "1-2-3-4-5-f",
+    "Rest-API" : {
+        "IPAddress" : "127.0.0.1",
+        "Port" : 9110
+    },
+    "Zookeeper" : {
+        "ConnectionString" : ""
+    },
+    "Crypto" : {
+        "Rest-API" : {
+            "PKCS12File" : "target/test-classes/default/restapi.p12",
+            "Password" : "shieldblaze"
+        },
+        "Zookeeper" : {
+            "PKCS12File" : "target/test-classes/default/zookeeper.p12",
+            "Password" : "expressgateway"
+        },
+        "LoadBalancer" : {
+            "PKCS12File" : "target/test-classes/default/loadbalancer.p12",
+            "Password" : "shieldblazeexpressgateway"
+        }
+    }
+}
