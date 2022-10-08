@@ -34,45 +34,56 @@ class UtilsTest {
     }
 
     @Test
-    void checkStringNullOrEmptyEnvTest() {
-        assertThrows(IllegalArgumentException.class, () -> checkStringNullOrEmptyEnv(null, "Test"));
-        assertThrows(IllegalArgumentException.class, () -> checkStringNullOrEmptyEnv(EMPTY_STRING, "Test"));
-        assertThrows(IllegalArgumentException.class, () -> checkStringNullOrEmptyEnv(" ", "Test"));
+    void validateStringNullOrEmptyEnvTest() {
+        assertThrows(IllegalArgumentException.class, () -> validateStringNullOrEmptyEnv(null, "Test"));
+        assertThrows(IllegalArgumentException.class, () -> validateStringNullOrEmptyEnv(EMPTY_STRING, "Test"));
+        assertThrows(IllegalArgumentException.class, () -> validateStringNullOrEmptyEnv(" ", "Test"));
 
-        assertDoesNotThrow(() -> checkStringNullOrEmptyEnv(".", "Test"));
-        assertDoesNotThrow(() -> checkStringNullOrEmptyEnv("@", "Test"));
-        assertDoesNotThrow(() -> checkStringNullOrEmptyEnv("Test", "Test"));
+        assertDoesNotThrow(() -> validateStringNullOrEmptyEnv(".", "Test"));
+        assertDoesNotThrow(() -> validateStringNullOrEmptyEnv("@", "Test"));
+        assertDoesNotThrow(() -> validateStringNullOrEmptyEnv("Test", "Test"));
     }
 
     @Test
-    void checkNullTest() {
-        assertThrows(NullPointerException.class, () -> checkNullEnv(null, "Test"));
+    void validateNullTest() {
+        assertThrows(NullPointerException.class, () -> validateNullEnv(null, "Test"));
 
-        assertDoesNotThrow(() -> checkNullEnv(new Object(), "Test"));
+        assertDoesNotThrow(() -> validateNullEnv(new Object(), "Test"));
     }
 
     @Test
-    void checkJsonElementNullTest() {
+    void validateJsonElementNullTest() {
         JsonObject jsonObject = new JsonObject();
         jsonObject.addProperty("Name", "ShieldBlaze");
 
-        assertThrows(NullPointerException.class, () -> checkJsonElementNullConf(jsonObject.get("ShieldBlaze"), "Test"));
-        assertThrows(NullPointerException.class, () -> checkJsonElementNullConf(JsonNull.INSTANCE, "Test"));
+        assertThrows(NullPointerException.class, () -> validateJsonElementNullConf(jsonObject.get("ShieldBlaze"), "Test"));
+        assertThrows(NullPointerException.class, () -> validateJsonElementNullConf(JsonNull.INSTANCE, "Test"));
 
-        assertDoesNotThrow(() -> checkJsonElementNullConf(jsonObject.get("Name"), "Test"));
+        assertDoesNotThrow(() -> validateJsonElementNullConf(jsonObject.get("Name"), "Test"));
     }
 
     @Test
-    void checkStringNullOrEmptyConfTest() {
+    void validateStringNullOrEmptyConfTest() {
         JsonObject jsonObject = new JsonObject();
         jsonObject.addProperty("Name", "ShieldBlaze");
         jsonObject.addProperty("Running", 1);
 
-        assertThrows(NullPointerException.class, () -> checkStringNullOrEmptyConf(JsonNull.INSTANCE, "Test"));
-        assertThrows(NullPointerException.class, () -> checkStringNullOrEmptyConf(jsonObject.get("ShieldBlaze"), "Test"));
-        assertThrows(NullPointerException.class, () -> checkStringNullOrEmptyConf(null, "Test"));
+        assertThrows(NullPointerException.class, () -> validateStringNullOrEmptyConf(JsonNull.INSTANCE, "Test"));
+        assertThrows(NullPointerException.class, () -> validateStringNullOrEmptyConf(jsonObject.get("ShieldBlaze"), "Test"));
+        assertThrows(NullPointerException.class, () -> validateStringNullOrEmptyConf(null, "Test"));
 
-        assertDoesNotThrow(() -> checkStringNullOrEmptyConf(jsonObject.get("Name"), "Test"));
-        assertDoesNotThrow(() -> checkStringNullOrEmptyConf(jsonObject.get("Running"), "Test"));
+        assertDoesNotThrow(() -> validateStringNullOrEmptyConf(jsonObject.get("Name"), "Test"));
+        assertDoesNotThrow(() -> validateStringNullOrEmptyConf(jsonObject.get("Running"), "Test"));
+    }
+
+    @Test
+    void checkStringNullOrEmptyTest() {
+        assertTrue(checkStringNullOrEmpty(null));
+        assertTrue(checkStringNullOrEmpty(JsonNull.INSTANCE));
+
+        JsonObject jsonObject = new JsonObject();
+        jsonObject.addProperty("Name", "ShieldBlaze");
+
+        assertFalse(checkStringNullOrEmpty(jsonObject.get("Name")));
     }
 }

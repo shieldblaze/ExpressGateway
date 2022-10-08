@@ -26,6 +26,7 @@ import java.io.File;
 
 import static com.shieldblaze.expressgateway.common.SystemPropertiesKeys.CLUSTER_ID;
 import static com.shieldblaze.expressgateway.common.SystemPropertiesKeys.CONFIGURATION_DIRECTORY;
+import static com.shieldblaze.expressgateway.common.SystemPropertiesKeys.CONFIGURATION_FILE_NAME;
 import static com.shieldblaze.expressgateway.common.SystemPropertiesKeys.CRYPTO_LOADBALANCER_PASSWORD;
 import static com.shieldblaze.expressgateway.common.SystemPropertiesKeys.CRYPTO_LOADBALANCER_PKCS12_FILE;
 import static com.shieldblaze.expressgateway.common.SystemPropertiesKeys.CRYPTO_REST_API_PASSWORD;
@@ -53,18 +54,15 @@ class BootstrapTest {
         assertNotNull(getPropertyOrEnv(CONFIGURATION_DIRECTORY.name()));
     }
 
-    @BeforeEach
-    void createNewBootstrapInstance() throws Exception {
-        Bootstrap.main();
-    }
-
     @AfterEach
     void shutdownBootstrapInstance() {
         Bootstrap.shutdown();
     }
 
     @Test
-    void loadConfigurationFileAndCheckSystemPropertiesTest() {
+    void loadConfigurationFileAndCheckSystemPropertiesTest() throws Exception {
+        Bootstrap.main();
+
         assertEquals(RunningMode.STANDALONE, RunningMode.valueOf(getPropertyOrEnv(RUNNING_MODE.name())));
         assertEquals("1-2-3-4-5-f", getPropertyOrEnv(CLUSTER_ID.name()));
 
@@ -84,7 +82,17 @@ class BootstrapTest {
     }
 
     @Test
-    void loadConfigurationAndUseNonEnforcingTest() throws Exception {
+    void loadConfigurationAndUseEnforcingTest() {
+        System.setProperty(CONFIGURATION_FILE_NAME.name(), "enforcingConfiguration.json");
+        assertThrows(NullPointerException.class, Bootstrap::main);
+    }
 
+    @Test
+    void loadConfigurationAndUseNonEnforcingTest() {
+        System.setProperty(CONFIGURATION_FILE_NAME.name(), "nonEnforcingConfiguration.json");
+        System.setProperty(RUNNING_MODE.name(), "STANDALONE");
+
+        assertDoesNotThrow(() -> Bootstrap.main());
+        assertEquals(RunningMode.STANDALONE.name(), getPropertyOrEnv(RUNNING_MODE.name()));
     }
 }

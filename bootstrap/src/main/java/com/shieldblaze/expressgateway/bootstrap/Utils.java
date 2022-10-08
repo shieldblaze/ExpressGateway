@@ -28,27 +28,31 @@ final class Utils {
         }
     }
 
-    static void checkStringNullOrEmptyEnv(String str, String componentMessage) {
+    static void validateStringNullOrEmptyEnv(String str, String componentMessage) {
         // If environment variable is 'null' or empty then we will throw error.
         if (StringUtil.checkNullOrEmpty(str)) {
             throw new IllegalArgumentException(componentMessage + " is not configured in Property/Environment Variable");
         }
     }
 
-    static void checkNullEnv(Object object, String componentMessage) {
+    static void validateNullEnv(Object object, String componentMessage) {
         if (object == null) {
             throw new NullPointerException(componentMessage + " is not configured in Property/Environment Variable");
         }
     }
 
-    static void checkJsonElementNullConf(JsonElement jsonElement, String componentMessage) {
+    static void validateJsonElementNullConf(JsonElement jsonElement, String componentMessage) {
         if (jsonElement == null || jsonElement.isJsonNull()) {
             throw new NullPointerException(componentMessage + " is not configured in configuration file");
         }
     }
 
-    static String checkStringNullOrEmptyConf(JsonElement jsonElement, String componentMessage) {
-        checkJsonElementNullConf(jsonElement, componentMessage);
+    static boolean checkStringNullOrEmpty(JsonElement jsonElement) {
+        return jsonElement == null || jsonElement.isJsonNull() || StringUtil.checkNullOrEmpty(jsonElement.getAsString());
+    }
+
+    static String validateStringNullOrEmptyConf(JsonElement jsonElement, String componentMessage) {
+        validateJsonElementNullConf(jsonElement, componentMessage);
         if (StringUtil.checkNullOrEmpty(jsonElement.getAsString())) {
             throw new IllegalArgumentException(componentMessage + " is not configured in configuration file");
         } else {
