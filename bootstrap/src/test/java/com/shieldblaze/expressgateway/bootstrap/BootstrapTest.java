@@ -19,7 +19,6 @@ package com.shieldblaze.expressgateway.bootstrap;
 
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeAll;
-import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 
 import java.io.File;
@@ -38,7 +37,11 @@ import static com.shieldblaze.expressgateway.common.SystemPropertiesKeys.REST_AP
 import static com.shieldblaze.expressgateway.common.SystemPropertiesKeys.RUNNING_MODE;
 import static com.shieldblaze.expressgateway.common.SystemPropertiesKeys.ZOOKEEPER_CONNECTION_STRING;
 import static com.shieldblaze.expressgateway.common.utils.SystemPropertyUtil.getPropertyOrEnv;
-import static org.junit.jupiter.api.Assertions.*;
+import static org.junit.jupiter.api.Assertions.assertDoesNotThrow;
+import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertNotNull;
+import static org.junit.jupiter.api.Assertions.assertNull;
+import static org.junit.jupiter.api.Assertions.assertThrows;
 
 class BootstrapTest {
 
@@ -84,7 +87,7 @@ class BootstrapTest {
     @Test
     void loadConfigurationAndUseEnforcingTest() {
         System.setProperty(CONFIGURATION_FILE_NAME.name(), "enforcingConfiguration.json");
-        assertThrows(NullPointerException.class, Bootstrap::main);
+        assertThrows(IllegalArgumentException.class, Bootstrap::main);
     }
 
     @Test
