@@ -17,6 +17,8 @@
  */
 package com.shieldblaze.expressgateway.bootstrap;
 
+import com.google.gson.JsonNull;
+import com.google.gson.JsonObject;
 import org.junit.jupiter.api.Test;
 
 import static com.shieldblaze.expressgateway.bootstrap.Utils.*;
@@ -27,38 +29,50 @@ class UtilsTest {
 
     @Test
     void validateEnforcingTest() {
-        assertThrows(IllegalArgumentException.class, () -> validateEnforcing(true, "Demo"));
-        assertDoesNotThrow(() -> validateEnforcing(false, "Demo"));
+        assertThrows(IllegalArgumentException.class, () -> validateEnforcing(true, "Test"));
+        assertDoesNotThrow(() -> validateEnforcing(false, "Test"));
     }
 
     @Test
     void checkStringNullOrEmptyEnvTest() {
-        assertThrows(IllegalArgumentException.class, () -> checkStringNullOrEmptyEnv(null, "Demo"));
-        assertThrows(IllegalArgumentException.class, () -> checkStringNullOrEmptyEnv(EMPTY_STRING, "Demo"));
-        assertThrows(IllegalArgumentException.class, () -> checkStringNullOrEmptyEnv(" ", "Demo"));
+        assertThrows(IllegalArgumentException.class, () -> checkStringNullOrEmptyEnv(null, "Test"));
+        assertThrows(IllegalArgumentException.class, () -> checkStringNullOrEmptyEnv(EMPTY_STRING, "Test"));
+        assertThrows(IllegalArgumentException.class, () -> checkStringNullOrEmptyEnv(" ", "Test"));
 
-        assertDoesNotThrow(() -> checkStringNullOrEmptyEnv(".", "Demo"));
-        assertDoesNotThrow(() -> checkStringNullOrEmptyEnv("@", "Demo"));
-        assertDoesNotThrow(() -> checkStringNullOrEmptyEnv("Test", "Demo"));
+        assertDoesNotThrow(() -> checkStringNullOrEmptyEnv(".", "Test"));
+        assertDoesNotThrow(() -> checkStringNullOrEmptyEnv("@", "Test"));
+        assertDoesNotThrow(() -> checkStringNullOrEmptyEnv("Test", "Test"));
     }
 
     @Test
-    void testCheckStringNullOrEmptyEnv() {
+    void checkNullTest() {
+        assertThrows(NullPointerException.class, () -> checkNullEnv(null, "Test"));
+
+        assertDoesNotThrow(() -> checkNullEnv(new Object(), "Test"));
     }
 
     @Test
-    void checkNullEnv() {
+    void checkJsonElementNullTest() {
+        JsonObject jsonObject = new JsonObject();
+        jsonObject.addProperty("Name", "ShieldBlaze");
+
+        assertThrows(NullPointerException.class, () -> checkJsonElementNullConf(jsonObject.get("ShieldBlaze"), "Test"));
+        assertThrows(NullPointerException.class, () -> checkJsonElementNullConf(JsonNull.INSTANCE, "Test"));
+
+        assertDoesNotThrow(() -> checkJsonElementNullConf(jsonObject.get("Name"), "Test"));
     }
 
     @Test
-    void checkJsonElementNull() {
-    }
+    void checkStringNullOrEmptyConfTest() {
+        JsonObject jsonObject = new JsonObject();
+        jsonObject.addProperty("Name", "ShieldBlaze");
+        jsonObject.addProperty("Running", 1);
 
-    @Test
-    void checkStringNullOrEmptyConf() {
-    }
+        assertThrows(NullPointerException.class, () -> checkStringNullOrEmptyConf(JsonNull.INSTANCE, "Test"));
+        assertThrows(NullPointerException.class, () -> checkStringNullOrEmptyConf(jsonObject.get("ShieldBlaze"), "Test"));
+        assertThrows(NullPointerException.class, () -> checkStringNullOrEmptyConf(null, "Test"));
 
-    @Test
-    void testCheckStringNullOrEmptyConf() {
+        assertDoesNotThrow(() -> checkStringNullOrEmptyConf(jsonObject.get("Name"), "Test"));
+        assertDoesNotThrow(() -> checkStringNullOrEmptyConf(jsonObject.get("Running"), "Test"));
     }
 }

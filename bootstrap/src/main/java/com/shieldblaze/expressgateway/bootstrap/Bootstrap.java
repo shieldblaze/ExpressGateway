@@ -36,7 +36,7 @@ import java.security.NoSuchAlgorithmException;
 import java.security.UnrecoverableKeyException;
 import java.security.cert.CertificateException;
 
-import static com.shieldblaze.expressgateway.bootstrap.Utils.checkJsonElementNull;
+import static com.shieldblaze.expressgateway.bootstrap.Utils.checkJsonElementNullConf;
 import static com.shieldblaze.expressgateway.bootstrap.Utils.checkNullEnv;
 import static com.shieldblaze.expressgateway.bootstrap.Utils.checkStringNullOrEmptyConf;
 import static com.shieldblaze.expressgateway.bootstrap.Utils.checkStringNullOrEmptyEnv;
@@ -114,7 +114,7 @@ public final class Bootstrap {
             logger.info("Loading ExpressGateway Configuration file: {}", configurationFile.toAbsolutePath());
             JsonObject globalData = JsonParser.parseString(Files.readString(configurationFile)).getAsJsonObject();
 
-            checkJsonElementNull(globalData.get("enforceConfigurationFileData"), "EnforceConfigurationFileData");
+            checkJsonElementNullConf(globalData.get("enforceConfigurationFileData"), "EnforceConfigurationFileData");
             enforceConfigurationFileData = globalData.get("enforceConfigurationFileData").getAsBoolean();
 
             if (globalData.get("runningMode") == null) {
@@ -122,7 +122,7 @@ public final class Bootstrap {
 
                 checkStringNullOrEmptyEnv(runningMode.name(), "Running Mode");
             } else {
-                checkJsonElementNull(globalData.get("runningMode"), "Running Mode");
+                checkJsonElementNullConf(globalData.get("runningMode"), "Running Mode");
                 runningMode = RunningMode.valueOf(globalData.get("runningMode").getAsString().toUpperCase());
             }
 
@@ -131,7 +131,7 @@ public final class Bootstrap {
 
                 checkStringNullOrEmptyEnv(clusterId, "Cluster ID");
             } else {
-                checkJsonElementNull(globalData.get("clusterId"), "Cluster ID");
+                checkJsonElementNullConf(globalData.get("clusterId"), "Cluster ID");
                 clusterId = globalData.get("clusterId").getAsString();
             }
 
@@ -193,10 +193,10 @@ public final class Bootstrap {
             checkNullEnv(restApiPort, "Rest-Api Port");
         } else {
             // If Rest-Api IP Address data is 'null' or empty then we will throw error and shutdown.
-            restApiIpAddress = Utils.checkStringNullOrEmptyConf(restApiData.get("ipAddress"), "Rest-Api IP Address");
+            restApiIpAddress = checkStringNullOrEmptyConf(restApiData.get("ipAddress"), "Rest-Api IP Address");
 
             // If Rest-Api Port data is 'null' or empty then we will throw error and shutdown.
-            restApiPort = Integer.parseInt(Utils.checkStringNullOrEmptyConf(restApiData.get("port"), "Rest-Api Port"));
+            restApiPort = Integer.parseInt(checkStringNullOrEmptyConf(restApiData.get("port"), "Rest-Api Port"));
         }
     }
 
@@ -218,7 +218,7 @@ public final class Bootstrap {
             checkStringNullOrEmptyEnv(zooKeeperConnectionString, "ZooKeeper ConnectionString");
         } else {
             // If ZooKeeper ConnectionString data is 'null' or empty then we will throw error and shutdown.
-            zooKeeperConnectionString = Utils.checkStringNullOrEmptyConf(zookeeperData.get("connectionString"), "ZooKeeper ConnectionString");
+            zooKeeperConnectionString = checkStringNullOrEmptyConf(zookeeperData.get("connectionString"), "ZooKeeper ConnectionString");
         }
     }
 
@@ -235,7 +235,7 @@ public final class Bootstrap {
             checkStringNullOrEmptyEnv(cryptoRestApiPassword, "Crypto Rest-Api Password");
         } else {
             JsonElement restApiElement = cryptoData.get("rest-api");
-            checkJsonElementNull(restApiElement, "Crypto Rest-Api");
+            checkJsonElementNullConf(restApiElement, "Crypto Rest-Api");
             checkStringNullOrEmptyConf(restApiElement.getAsJsonObject().get("pkcs12File"), "Crypto Rest-Api PKCS12 File");
             checkStringNullOrEmptyConf(restApiElement.getAsJsonObject().get("password"), "Crypto Rest-Api Password");
 
@@ -250,7 +250,7 @@ public final class Bootstrap {
             // -----------------------------------------------------
 
             JsonElement zooKeeperElement = cryptoData.get("zookeeper");
-            checkJsonElementNull(zooKeeperElement, "Crypto ZooKeeper");
+            checkJsonElementNullConf(zooKeeperElement, "Crypto ZooKeeper");
             checkStringNullOrEmptyConf(zooKeeperElement.getAsJsonObject().get("pkcs12File"), "Crypto ZooKeeper PKCS12 File");
             checkStringNullOrEmptyConf(zooKeeperElement.getAsJsonObject().get("password"), "Crypto ZooKeeper Password");
 
@@ -265,7 +265,7 @@ public final class Bootstrap {
             // -----------------------------------------------------
 
             JsonElement loadBalancerElement = cryptoData.get("loadBalancer");
-            checkJsonElementNull(loadBalancerElement, "Crypto LoadBalancer");
+            checkJsonElementNullConf(loadBalancerElement, "Crypto LoadBalancer");
             checkStringNullOrEmptyConf(loadBalancerElement.getAsJsonObject().get("pkcs12File"), "Crypto Rest-Api PKCS12 File");
             checkStringNullOrEmptyConf(loadBalancerElement.getAsJsonObject().get("password"), "Crypto Rest-Api Password");
 

@@ -37,26 +37,23 @@ final class Utils {
 
     static void checkNullEnv(Object object, String componentMessage) {
         if (object == null) {
-            throw new IllegalArgumentException(componentMessage + " is not configured in Property/Environment Variable");
+            throw new NullPointerException(componentMessage + " is not configured in Property/Environment Variable");
         }
     }
 
-    static void checkJsonElementNull(JsonElement jsonElement, String componentMessage) {
+    static void checkJsonElementNullConf(JsonElement jsonElement, String componentMessage) {
         if (jsonElement == null || jsonElement.isJsonNull()) {
-            throw new IllegalArgumentException(componentMessage + " is not configured in configuration file");
+            throw new NullPointerException(componentMessage + " is not configured in configuration file");
         }
     }
 
     static String checkStringNullOrEmptyConf(JsonElement jsonElement, String componentMessage) {
-        if (jsonElement.isJsonNull() || StringUtil.checkNullOrEmpty(jsonElement.getAsString())) {
+        checkJsonElementNullConf(jsonElement, componentMessage);
+        if (StringUtil.checkNullOrEmpty(jsonElement.getAsString())) {
             throw new IllegalArgumentException(componentMessage + " is not configured in configuration file");
         } else {
             return jsonElement.getAsString();
         }
-    }
-
-    static boolean checkStringNullOrEmptyConf(JsonElement jsonElement) {
-        return StringUtil.checkNullOrEmpty(jsonElement.getAsString());
     }
 
     private Utils() {
