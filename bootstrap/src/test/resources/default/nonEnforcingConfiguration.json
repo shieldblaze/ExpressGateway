@@ -6,7 +6,7 @@
         "IPAddress" : "127.0.0.1",
         "Port" : 9110
     },
-    "Zookeeper" : {
+    "ZooKeeper" : {
         "ConnectionString" : ""
     },
     "Crypto" : {
@@ -14,7 +14,7 @@
             "PKCS12File" : "target/test-classes/default/restapi.p12",
             "Password" : "shieldblaze"
         },
-        "Zookeeper" : {
+        "ZooKeeper" : {
             "PKCS12File" : "target/test-classes/default/zookeeper.p12",
             "Password" : "expressgateway"
         },
