@@ -206,7 +206,7 @@ public final class Bootstrap {
     }
 
     private void initZooKeeper(JsonObject globalData) {
-        JsonObject zookeeperData = globalData.getAsJsonObject("Zookeeper");
+        JsonObject zookeeperData = globalData.getAsJsonObject("ZooKeeper");
 
         // If RunningMode is STANDALONE then we don't need to load ZooKeeper ConnectionString
         if (runningMode == RunningMode.STANDALONE) {
@@ -270,7 +270,7 @@ public final class Bootstrap {
 
             // -----------------------------------------------------
 
-            JsonElement zooKeeperElement = cryptoData.get("Zookeeper");
+            JsonElement zooKeeperElement = cryptoData.get("ZooKeeper");
             validateJsonElementNullConf(zooKeeperElement, "Crypto ZooKeeper");
             validateStringNullOrEmptyConf(zooKeeperElement.getAsJsonObject().get("PKCS12File"), "Crypto ZooKeeper PKCS12 File");
             validateStringNullOrEmptyConf(zooKeeperElement.getAsJsonObject().get("Password"), "Crypto ZooKeeper Password");
