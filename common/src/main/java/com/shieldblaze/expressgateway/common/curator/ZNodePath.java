@@ -74,16 +74,31 @@ public final class ZNodePath {
      * @return {@link ZNodePath} instance
      */
     public static ZNodePath create(String rootPath, Environment environment, String id, String component) {
-        return new ZNodePath(buildZNodePath(rootPath, environment, id, component));
+        return new ZNodePath(buildZNodePath(rootPath, environment, id, component, null));
     }
 
-    private static String buildZNodePath(String rootPath, Environment environment, String id, String component) {
+    /**
+     * Create a new {@link ZNodePath} instance
+     *
+     * @param rootPath    Root level path name
+     * @param environment {@link Environment} to use
+     * @param id          {@link UUID} to use
+     * @param component   Component name
+     * @param friendlyName Friendly name
+     * @return {@link ZNodePath} instance
+     */
+    public static ZNodePath create(String rootPath, Environment environment, String id, String component, String friendlyName) {
+        return new ZNodePath(buildZNodePath(rootPath, environment, id, component, friendlyName));
+    }
+
+    private static String buildZNodePath(String rootPath, Environment environment, String id, String component, String friendlyName) {
         /*
          * Example:
          *          /RootPath
          *          /RootPath/Prod
          *          /RootPath/Prod/1-2-3-4-5-f
          *          /RootPath/Prod/1-2-3-4-5-f/TransportConfig
+         *          /RootPath/Prod/1-2-3-4-5-f/TransportConfig/Default
          */
         StringBuilder path = new StringBuilder()
                 .append('/').append(rootPath);
@@ -100,10 +115,21 @@ public final class ZNodePath {
             path.append('/').append(component);
         }
 
+        if (friendlyName != null) {
+            path.append('/').append(friendlyName);
+        }
+
         return path.toString();
     }
 
     public String path() {
         return path;
+    }
+
+    @Override
+    public String toString() {
+        return "ZNodePath{" +
+                "path='" + path + '\'' +
+                '}';
     }
 }

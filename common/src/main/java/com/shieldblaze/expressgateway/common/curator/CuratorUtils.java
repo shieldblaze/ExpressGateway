@@ -47,11 +47,11 @@ public final class CuratorUtils {
      */
     public static boolean createNew(CuratorFramework curatorFramework, ZNodePath zNodePath, byte[] data, boolean setDataIfPathExists) throws Exception {
         if (setDataIfPathExists) {
-                return curatorFramework.create()
-                        .orSetData()
-                        .creatingParentsIfNeeded()
-                        .withMode(CreateMode.PERSISTENT)
-                        .forPath(zNodePath.path(), data) != null;
+            return curatorFramework.create()
+                    .orSetData()
+                    .creatingParentsIfNeeded()
+                    .withMode(CreateMode.PERSISTENT)
+                    .forPath(zNodePath.path(), data) != null;
         } else {
             return curatorFramework.create()
                     .creatingParentsIfNeeded()

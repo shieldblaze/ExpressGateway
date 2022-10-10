@@ -38,11 +38,11 @@ import java.security.UnrecoverableKeyException;
 import java.security.cert.CertificateException;
 
 import static com.shieldblaze.expressgateway.bootstrap.Utils.checkStringNullOrEmpty;
+import static com.shieldblaze.expressgateway.bootstrap.Utils.validateEnforcing;
 import static com.shieldblaze.expressgateway.bootstrap.Utils.validateJsonElementNullConf;
 import static com.shieldblaze.expressgateway.bootstrap.Utils.validateNullEnv;
 import static com.shieldblaze.expressgateway.bootstrap.Utils.validateStringNullOrEmptyConf;
 import static com.shieldblaze.expressgateway.bootstrap.Utils.validateStringNullOrEmptyEnv;
-import static com.shieldblaze.expressgateway.bootstrap.Utils.validateEnforcing;
 import static com.shieldblaze.expressgateway.common.SystemPropertiesKeys.CLUSTER_ID;
 import static com.shieldblaze.expressgateway.common.SystemPropertiesKeys.CONFIGURATION_DIRECTORY;
 import static com.shieldblaze.expressgateway.common.SystemPropertiesKeys.CONFIGURATION_FILE_NAME;
@@ -338,6 +338,10 @@ public final class Bootstrap {
 
             logger.info("Successfully initialized Rest-API Server with TLS");
         }
+    }
+
+    private void initCryptoLoadBalancer() {
+
     }
 
     static void shutdown() {

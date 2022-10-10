@@ -84,8 +84,14 @@ public final class SelfSignedCertificate {
         return keyPair;
     }
 
+    /**
+     * Generate new {@link SelfSignedCertificate} instance
+     *
+     * @param ipList       {@link List} of IP addresses in SAN
+     * @return {@link SelfSignedCertificate} instance once successful
+     */
     public static SelfSignedCertificate generateNew(List<String> ipList) {
-        return generateNew(ipList, Collections.emptyList());
+        return generateNew(ipList, Collections.emptyList(), true);
     }
 
     /**
@@ -96,11 +102,31 @@ public final class SelfSignedCertificate {
      * @return {@link SelfSignedCertificate} instance once successful
      */
     public static SelfSignedCertificate generateNew(List<String> ipList, List<String> hostnameList) {
+        return generateNew(ipList, hostnameList, true);
+    }
+
+    /**
+     * Generate new {@link SelfSignedCertificate} instance
+     *
+     * @param ipList       {@link List} of IP addresses in SAN
+     * @param hostnameList {@link List} of hostnames in SAN
+     * @param useECC       Use Elliptic Curve Cryptography (ECC)
+     * @return {@link SelfSignedCertificate} instance once successful
+     */
+    public static SelfSignedCertificate generateNew(List<String> ipList, List<String> hostnameList, boolean useECC) {
         try {
 
-            KeyPairGenerator keyGen = KeyPairGenerator.getInstance("EC");
-            keyGen.initialize(256);
-            KeyPair keyPair = keyGen.generateKeyPair();
+            KeyPairGenerator keyGen;
+            KeyPair keyPair;
+
+            if (useECC) {
+                keyGen = KeyPairGenerator.getInstance("EC");
+                keyGen.initialize(256);
+            } else {
+                keyGen = KeyPairGenerator.getInstance("RSA");
+                keyGen.initialize(2048);
+            }
+            keyPair = keyGen.generateKeyPair();
 
             X500Name x500Name = new X500NameBuilder(BCStyle.INSTANCE)
                     .addRDN(BCStyle.O, "ShieldBlaze")
@@ -140,7 +166,7 @@ public final class SelfSignedCertificate {
 
             certificateHolder.addExtension(Extension.subjectAlternativeName, false, generalNamesBuilder.build());
 
-            ContentSigner signer = new JcaContentSignerBuilder("SHA256withECDSA").build(keyPair.getPrivate());
+            ContentSigner signer = new JcaContentSignerBuilder(useECC ? "SHA256withECDSA" : "SHA256WithRSA").build(keyPair.getPrivate());
             X509CertificateHolder certHolder = certificateHolder.build(signer);
             X509Certificate cert = new JcaX509CertificateConverter()
                     .setProvider(PROVIDER)

@@ -57,7 +57,7 @@ public final class ConfigurationStore {
             configuration.assertValidated();
 
             String configurationJson = OBJECT_MAPPER.valueToTree(configuration).toString();
-            createNew(Curator.getInstance(), buildZNodePath(configuration), configurationJson.getBytes());
+            createNew(Curator.getInstance(), of(configuration), configurationJson.getBytes());
 
             logger.info("Successfully applied and saved configuration into Zookeeper");
         } catch (Exception ex) {
@@ -75,7 +75,7 @@ public final class ConfigurationStore {
     public static void removeConfiguration(Configuration<?> configuration) throws Exception {
         try {
             logger.info("Being removing configuration from ZooKeeper");
-            deleteData(Curator.getInstance(), buildZNodePath(configuration));
+            deleteData(Curator.getInstance(), of(configuration));
             logger.info("Successfully removed configuration from ZooKeeper");
         } catch (Exception ex) {
             logger.fatal("Failed to remove configuration from ZooKeeper", ex);
@@ -137,7 +137,7 @@ public final class ConfigurationStore {
         }
     }
 
-    private static ZNodePath buildZNodePath(Configuration<?> configuration) {
+    private static ZNodePath of(Configuration<?> configuration) {
         // Build ZNodePath for ZooKeeper
         return ZNodePath.create("ExpressGateway", // ExpressGateway will be root
                 Environment.detectEnv(),                  // Auto-detect environment
