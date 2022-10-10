@@ -21,7 +21,11 @@ public final class StringUtil {
 
     public static final String EMPTY_STRING = "";
 
-    public static boolean checkNullOrEmpty(String str) {
+    /**
+     * Return {@link Boolean#TRUE} if {@link String} is {@code null}, empty or blank
+     * else returns {@link Boolean#FALSE}
+     */
+    public static boolean isNullOrEmpty(String str) {
         return str == null || str.isEmpty() || str.isBlank();
     }
 

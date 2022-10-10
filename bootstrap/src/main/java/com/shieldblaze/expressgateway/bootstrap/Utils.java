@@ -30,7 +30,7 @@ final class Utils {
 
     static void validateStringNullOrEmptyEnv(String str, String componentMessage) {
         // If environment variable is 'null' or empty then we will throw error.
-        if (StringUtil.checkNullOrEmpty(str)) {
+        if (StringUtil.isNullOrEmpty(str)) {
             throw new IllegalArgumentException(componentMessage + " is not configured in Property/Environment Variable");
         }
     }
@@ -48,12 +48,12 @@ final class Utils {
     }
 
     static boolean checkStringNullOrEmpty(JsonElement jsonElement) {
-        return jsonElement == null || jsonElement.isJsonNull() || StringUtil.checkNullOrEmpty(jsonElement.getAsString());
+        return jsonElement == null || jsonElement.isJsonNull() || StringUtil.isNullOrEmpty(jsonElement.getAsString());
     }
 
     static String validateStringNullOrEmptyConf(JsonElement jsonElement, String componentMessage) {
         validateJsonElementNullConf(jsonElement, componentMessage);
-        if (StringUtil.checkNullOrEmpty(jsonElement.getAsString())) {
+        if (StringUtil.isNullOrEmpty(jsonElement.getAsString())) {
             throw new IllegalArgumentException(componentMessage + " is not configured in configuration file");
         } else {
             return jsonElement.getAsString();

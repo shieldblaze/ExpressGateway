@@ -47,22 +47,22 @@ public final class CryptoStore {
     /**
      * Store an entry of {@link PrivateKey} and {@link X509Certificate}s in {@link KeyStore}
      *
-     * @param inputStream      {@link InputStream} containing {@link KeyStore} data if entry has to
-     *                         be stored in existing {@link KeyStore}. Else, this
-     *                         can be set to {@code null} if we want to create new
-     *                         {@link KeyStore}
-     * @param outputStream     {@link OutputStream} where {@link KeyStore} data will be stored
-     * @param password         Password to secure the entry
-     * @param alias            Alias name of entry
-     * @param privateKey       {@link PrivateKey} to store with this entry
-     * @param x509Certificates {@link X509Certificate} associated with this entry
+     * @param inputStream  {@link InputStream} containing {@link KeyStore} data if entry has to
+     *                     be stored in existing {@link KeyStore}. Else, this
+     *                     can be set to {@code null} if we want to create new
+     *                     {@link KeyStore}
+     * @param outputStream {@link OutputStream} where {@link KeyStore} data will be stored
+     * @param password     Password to secure the entry
+     * @param alias        Alias name of entry
+     * @param privateKey   {@link PrivateKey} to store with this entry
+     * @param certificates {@link Certificate} associated with this entry
      * @throws KeyStoreException        Thrown in case of exception with {@link KeyStore}
-     * @throws CertificateException     Thrown in case of exception with {@link X509Certificate}
+     * @throws CertificateException     Thrown in case of exception with {@link Certificate}
      * @throws IOException              Thrown in case of exception with I/O streams
      * @throws NoSuchAlgorithmException Thrown in case of unavailability of PKCS12 in {@link KeyStore}
      */
     public static void storePrivateKeyAndCertificate(InputStream inputStream, OutputStream outputStream, char[] password, String alias,
-                                                     PrivateKey privateKey, X509Certificate... x509Certificates)
+                                                     PrivateKey privateKey, Certificate... certificates)
             throws KeyStoreException, CertificateException, IOException, NoSuchAlgorithmException {
 
         KeyStore keyStore = KeyStore.getInstance("PKCS12");
@@ -80,8 +80,8 @@ public final class CryptoStore {
             }
         }
 
-        keyStore.setEntry(alias, new KeyStore.PrivateKeyEntry(privateKey, x509Certificates),
-                new KeyStore.PasswordProtection(password, "PBEWithHmacSHA512AndAES_256", new PBEParameterSpec(salt, 1_000_000)));
+        keyStore.setEntry(alias, new KeyStore.PrivateKeyEntry(privateKey, certificates),
+                new KeyStore.PasswordProtection(password, "PBEWithHmacSHA512AndAES_256", new PBEParameterSpec(salt, 1024)));
 
         keyStore.store(outputStream, password);
         outputStream.flush();

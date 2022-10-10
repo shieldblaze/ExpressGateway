@@ -25,7 +25,7 @@ import java.security.cert.Certificate;
 /**
  * {@link CryptoEntry} holds {@link PrivateKey} and {@link Certificate}s instances
  * @param privateKey {@link PrivateKey} instance
- * @param certificates {@link Certificate} instance
+ * @param certificates {@link Certificate}s instances
  */
 public record CryptoEntry(PrivateKey privateKey, Certificate... certificates) {
 

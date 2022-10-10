@@ -20,21 +20,24 @@ package com.shieldblaze.expressgateway.common.utils;
 import org.junit.jupiter.api.Test;
 
 import static com.shieldblaze.expressgateway.common.utils.StringUtil.EMPTY_STRING;
-import static com.shieldblaze.expressgateway.common.utils.StringUtil.checkNullOrEmpty;
+import static com.shieldblaze.expressgateway.common.utils.StringUtil.isNullOrEmpty;
 import static com.shieldblaze.expressgateway.common.utils.StringUtil.validateNotNullOrEmpty;
-import static org.junit.jupiter.api.Assertions.*;
+import static org.junit.jupiter.api.Assertions.assertDoesNotThrow;
+import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertThrows;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 
 class StringUtilTest {
 
     @Test
     void checkNullOrEmptyTest() {
-        assertTrue(checkNullOrEmpty(EMPTY_STRING));
-        assertTrue(checkNullOrEmpty(null));
-        assertTrue(checkNullOrEmpty(" "));
+        assertTrue(isNullOrEmpty(EMPTY_STRING));
+        assertTrue(isNullOrEmpty(null));
+        assertTrue(isNullOrEmpty(" "));
 
-        assertFalse(checkNullOrEmpty("Test"));
-        assertFalse(checkNullOrEmpty("@"));
-        assertFalse(checkNullOrEmpty("."));
+        assertFalse(isNullOrEmpty("Test"));
+        assertFalse(isNullOrEmpty("@"));
+        assertFalse(isNullOrEmpty("."));
     }
 
     @Test
