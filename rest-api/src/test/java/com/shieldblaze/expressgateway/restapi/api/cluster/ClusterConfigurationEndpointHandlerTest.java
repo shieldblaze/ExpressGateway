@@ -66,7 +66,6 @@ public class ClusterConfigurationEndpointHandlerTest {
         l4LoadBalancerTest.shutdownLoadBalancer();
         l7LoadBalancerTest.shutdownLoadBalancer();
         RestApi.stop();
-        Thread.sleep(2500);
     }
 
     @Test
