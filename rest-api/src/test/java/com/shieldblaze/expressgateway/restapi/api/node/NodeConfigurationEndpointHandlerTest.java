@@ -21,9 +21,7 @@ import com.google.gson.JsonObject;
 import com.google.gson.JsonParser;
 import com.shieldblaze.expressgateway.backend.State;
 import com.shieldblaze.expressgateway.common.ExpressGateway;
-import com.shieldblaze.expressgateway.common.crypto.cryptostore.CryptoEntry;
 import com.shieldblaze.expressgateway.common.curator.Curator;
-import com.shieldblaze.expressgateway.common.utils.SelfSignedCertificate;
 import com.shieldblaze.expressgateway.core.cluster.CoreContext;
 import com.shieldblaze.expressgateway.core.cluster.LoadBalancerContext;
 import com.shieldblaze.expressgateway.restapi.CustomOkHttpClient;
@@ -43,8 +41,6 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.TestMethodOrder;
 
 import java.io.IOException;
-import java.security.cert.X509Certificate;
-import java.util.List;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
@@ -71,7 +67,6 @@ class NodeConfigurationEndpointHandlerTest {
     static void teardown() throws IOException, InterruptedException {
         clusterHandlerTest.deleteL4ClusterTest();
         RestApi.stop();
-        Thread.sleep(2500);
     }
 
     @Test
