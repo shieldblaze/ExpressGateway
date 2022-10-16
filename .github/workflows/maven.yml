@@ -12,9 +12,6 @@ on:
         required: true
         default: 'GitHub Actions'
 
-env:
-  ZOOKEEPER_CONNECTION_STRING : ${{ secrets.ZOOKEEPER_ADDRESS }}
-
 jobs:
   JDK17:
     runs-on: self-hosted
