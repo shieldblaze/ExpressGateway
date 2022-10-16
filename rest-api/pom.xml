@@ -62,6 +62,11 @@
             <artifactId>backend</artifactId>
             <version>0.0.1-a</version>
         </dependency>
+        <dependency>
+            <groupId>com.shieldblaze.expressgateway</groupId>
+            <artifactId>testing</artifactId>
+            <version>0.0.1-a</version>
+        </dependency>
     </dependencies>
 
 </project>

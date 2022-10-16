@@ -17,7 +17,10 @@
  */
 package com.shieldblaze.expressgateway.common.curator;
 
+import com.shieldblaze.expressgateway.common.ExpressGateway;
+import org.apache.curator.test.TestingServer;
 import org.junit.jupiter.api.AfterAll;
+import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.Test;
 
 import java.util.UUID;
@@ -28,6 +31,7 @@ import static com.shieldblaze.expressgateway.common.curator.CuratorUtils.deleteD
 import static com.shieldblaze.expressgateway.common.curator.CuratorUtils.doesPathExists;
 import static com.shieldblaze.expressgateway.common.curator.CuratorUtils.getData;
 import static com.shieldblaze.expressgateway.common.curator.CuratorUtils.setData;
+import static com.shieldblaze.expressgateway.common.curator.ExpressGatewayUtils.forTest;
 import static org.junit.jupiter.api.Assertions.assertDoesNotThrow;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
@@ -35,16 +39,30 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 
 class CuratorUtilsTest {
 
-    private final UUID RANDOM_UUID = UUID.randomUUID();
+    private static TestingServer testingServer;
+
+    @BeforeAll
+    static void setUp() throws Exception {
+        testingServer = new TestingServer();
+        testingServer.start();
+
+        ExpressGateway.setInstance(forTest(testingServer.getConnectString()));
+        Curator.init();
+    }
 
     @AfterAll
     static void shutdown() throws Exception {
-        deleteData(getInstance(), ZNodePath.create("expressgateway"), true);
+        try {
+            deleteData(getInstance(), ZNodePath.create("expressgateway"), true);
+        } finally {
+            Curator.shutdown();
+            testingServer.close();
+        }
     }
 
     @Test
     void allCaseCombinedTest() throws Exception {
-        ZNodePath zNodePath = ZNodePath.create("expressgateway", Environment.DEVELOPMENT, RANDOM_UUID.toString(), "utils");
+        ZNodePath zNodePath = ZNodePath.create("expressgateway", Environment.detectEnv(), ExpressGateway.getInstance().clusterID(), "utils");
 
         // Path does not exist yet
         assertFalse(doesPathExists(getInstance(), zNodePath));

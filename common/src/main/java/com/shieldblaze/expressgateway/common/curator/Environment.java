@@ -17,16 +17,15 @@
  */
 package com.shieldblaze.expressgateway.common.curator;
 
+import com.shieldblaze.expressgateway.common.ExpressGateway;
 import com.shieldblaze.expressgateway.common.utils.SystemPropertyUtil;
-
-import static com.shieldblaze.expressgateway.common.SystemPropertiesKeys.RUNTIME_ENVIRONMENT;
 
 /**
  * Environments for ZooKeeper
  */
 public enum Environment {
     DEVELOPMENT("dev"),
-    QUALITY_ASSURANCE("qa"),
+    TESTING("test"),
     PRODUCTION("prod");
 
     private final String env;
@@ -46,21 +45,12 @@ public enum Environment {
      * @return {@link Environment} type
      */
     public static Environment detectEnv() {
-        String env = SystemPropertyUtil.getPropertyOrEnv(RUNTIME_ENVIRONMENT.name(), PRODUCTION.env()).toLowerCase();
+        String env = ExpressGateway.getInstance().environment().env().toLowerCase();
         return switch (env) {
             case "dev", "development" -> DEVELOPMENT;
-            case "qa", "quality-assurance" -> QUALITY_ASSURANCE;
+            case "test", "quality-assurance" -> TESTING;
             case "prod", "production" -> PRODUCTION;
             default -> null;
         };
-    }
-
-    /**
-     * Set environment in System Property
-     *
-     * @param environment {@link Environment} to set
-     */
-    public static void setEnvironment(Environment environment) {
-        System.setProperty(RUNTIME_ENVIRONMENT.name(), environment.env().toLowerCase());
     }
 }

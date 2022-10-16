@@ -46,6 +46,24 @@ public final class StringUtil {
         return str;
     }
 
+    /**
+     * Validate if a {@link String} is not null or empty
+     *
+     * @param str  {@link String} to validate
+     * @param name Name of {@link String} for logging in exception
+     * @return Returns {@link String} if validation was successful
+     * @throws NullPointerException     If {@link String} is null
+     * @throws IllegalArgumentException If {@link String} is empty or black
+     */
+    public static String validateNotNullOrEmpty(String str, String name) {
+        if (str == null) {
+            throw new NullPointerException(name + " is 'null'");
+        } else if (str.isEmpty() || str.isBlank()) {
+            throw new IllegalArgumentException(name + " is empty or blank");
+        }
+        return str;
+    }
+
     private StringUtil() {
         // Prevent outside initialization
     }

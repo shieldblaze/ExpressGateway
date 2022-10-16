@@ -17,13 +17,35 @@
  */
 package com.shieldblaze.expressgateway.common.curator;
 
+import com.shieldblaze.expressgateway.common.ExpressGateway;
+import org.apache.curator.test.TestingServer;
+import org.junit.jupiter.api.AfterAll;
+import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.Test;
 
 import java.util.concurrent.ExecutionException;
 
+import static com.shieldblaze.expressgateway.common.curator.ExpressGatewayUtils.forTest;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 class CuratorTest {
+
+    private static TestingServer testingServer;
+
+    @BeforeAll
+    static void setUp() throws Exception {
+        testingServer = new TestingServer();
+        testingServer.start();
+
+        ExpressGateway.setInstance(forTest(testingServer.getConnectString()));
+        Curator.init();
+    }
+
+    @AfterAll
+    static void shutdown() throws Exception {
+        Curator.shutdown();
+        testingServer.close();
+    }
 
     @Test
     void successfulConnectionTest() throws ExecutionException, InterruptedException {

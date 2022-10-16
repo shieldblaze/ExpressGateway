@@ -17,6 +17,7 @@
  */
 package com.shieldblaze.expressgateway.configuration;
 
+import com.shieldblaze.expressgateway.common.ExpressGateway;
 import com.shieldblaze.expressgateway.common.curator.Curator;
 import com.shieldblaze.expressgateway.common.curator.Environment;
 import com.shieldblaze.expressgateway.common.curator.ZNodePath;
@@ -32,8 +33,6 @@ import java.nio.file.Path;
 import java.nio.file.StandardOpenOption;
 
 import static com.shieldblaze.expressgateway.common.JacksonJson.OBJECT_MAPPER;
-import static com.shieldblaze.expressgateway.common.SystemPropertiesKeys.CLUSTER_ID;
-import static com.shieldblaze.expressgateway.common.SystemPropertiesKeys.CONFIGURATION_DIRECTORY;
 import static com.shieldblaze.expressgateway.common.curator.CuratorUtils.createNew;
 import static com.shieldblaze.expressgateway.common.curator.CuratorUtils.deleteData;
 import static java.lang.System.getProperty;
@@ -131,18 +130,18 @@ public final class ConfigurationStore {
     private static String configDirPath(Class<?> clazz) {
         // -> /etc/expressgateway/conf.d/default/CONFIG.json
         if (Environment.detectEnv() == Environment.PRODUCTION) {
-            return getProperty(CONFIGURATION_DIRECTORY.name()) + StringUtil.simpleClassName(clazz) + ".json";
+            return getProperty("CONFIGURATION_DIRECTORY") + StringUtil.simpleClassName(clazz) + ".json";
         } else {
-            return getProperty(CONFIGURATION_DIRECTORY.name(), getProperty("java.io.tmpdir")) + File.separator + StringUtil.simpleClassName(clazz) + ".json";
+            return getProperty("CONFIGURATION_DIRECTORY", getProperty("java.io.tmpdir")) + File.separator + StringUtil.simpleClassName(clazz) + ".json";
         }
     }
 
     private static ZNodePath of(Configuration<?> configuration) {
         // Build ZNodePath for ZooKeeper
-        return ZNodePath.create("ExpressGateway", // ExpressGateway will be root
-                Environment.detectEnv(),                  // Auto-detect environment
-                getProperty(CLUSTER_ID.name()),           // Use Cluster ID as ID
-                configuration.friendlyName());            // Use Configuration name as component
+        return ZNodePath.create("ExpressGateway",               // ExpressGateway will be root
+                Environment.detectEnv(),                                // Auto-detect environment
+                getProperty(ExpressGateway.getInstance().clusterID()),  // Use Cluster ID as ID
+                configuration.friendlyName());                          // Use Configuration name as component
     }
 
     private ConfigurationStore() {
