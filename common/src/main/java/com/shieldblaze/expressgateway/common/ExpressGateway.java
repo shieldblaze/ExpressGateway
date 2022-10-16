@@ -44,6 +44,9 @@ public class ExpressGateway {
     @JsonProperty("LoadBalancerTLS")
     private LoadBalancerTLS loadBalancerTLS;
 
+    public ExpressGateway() {
+    }
+
     /**
      * This should be used in testing only.
      */
@@ -112,6 +115,9 @@ public class ExpressGateway {
 
         @JsonIgnore
         private char[] PasswordAsChars;
+
+        public RestApi() {
+        }
 
         /**
          * This should be used in testing only.
@@ -196,6 +202,9 @@ public class ExpressGateway {
 
         @JsonIgnore
         private char[] TrustStorePasswordAsChars;
+
+        public ZooKeeper() {
+        }
 
         /**
          * This should be used in testing only.
@@ -287,6 +296,9 @@ public class ExpressGateway {
 
         @JsonIgnore
         private char[] PasswordAsChars;
+
+        public LoadBalancerTLS() {
+        }
 
         /**
          * This should be used in testing only.
