@@ -1,23 +1,27 @@
 {
     "RunningMode" : "STANDALONE",
     "ClusterID" : "1-2-3-4-5-f",
+    "Environment" : "DEVELOPMENT",
     "Rest-API" : {
         "IPAddress" : "127.0.0.1",
         "Port" : 9110,
+        "EnableTLS" : true,
         "PKCS12File" : "target/test-classes/default/restapi.p12",
         "Password" : "shieldblaze"
     },
     "ZooKeeper" : {
-        "ConnectionString" : "localhost:2181",
-        "HostnameVerification" : false,
+        "ConnectionString" : "",
         "RetryTimes" : 3,
         "SleepMsBetweenRetries" : 100,
+        "EnableTLS" : true,
+        "HostnameVerification" : false,
         "KeyStoreFile" : "",
         "KeyStorePassword" : "",
         "TrustStoreFile" : "",
         "TrustStorePassword" : ""
     },
     "LoadBalancerTLS" : {
+        "EnableTLS" : true,
         "PKCS12File" : "target/test-classes/default/loadbalancer.p12",
         "Password" : "shieldblazeexpressgateway"
     }
