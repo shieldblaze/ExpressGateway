@@ -47,6 +47,7 @@ class CuratorUtilsTest {
         testingServer.start();
 
         ExpressGateway.setInstance(forTest(testingServer.getConnectString()));
+        Curator.init();
     }
 
     @AfterAll
@@ -54,7 +55,8 @@ class CuratorUtilsTest {
         try {
             deleteData(getInstance(), ZNodePath.create("expressgateway"), true);
         } finally {
-            testingServer.stop();
+            Curator.shutdown();
+            testingServer.close();
         }
     }
 

@@ -46,7 +46,7 @@ public final class CertificateManager {
     public static final CertificateManager INSTANCE = new CertificateManager();
 
     private CertificateManager() {
-        if (Curator.ENABLED) {
+        if (ExpressGateway.getInstance().runningMode() == ExpressGateway.RunningMode.REPLICA) {
             try {
                 CuratorCacheListener listener = CuratorCacheListener.builder()
                         .forInitialized(() -> INITIALIZED.complete(true)) // Mark initialization successful

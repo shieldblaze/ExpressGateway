@@ -22,6 +22,7 @@ import com.google.gson.JsonParser;
 import com.shieldblaze.expressgateway.backend.State;
 import com.shieldblaze.expressgateway.common.ExpressGateway;
 import com.shieldblaze.expressgateway.common.crypto.cryptostore.CryptoEntry;
+import com.shieldblaze.expressgateway.common.curator.Curator;
 import com.shieldblaze.expressgateway.common.utils.SelfSignedCertificate;
 import com.shieldblaze.expressgateway.core.cluster.CoreContext;
 import com.shieldblaze.expressgateway.core.cluster.LoadBalancerContext;
@@ -61,6 +62,7 @@ class NodeConfigurationEndpointHandlerTest {
         ExpressGateway expressGateway = ExpressGatewayConfigured.forTest();
         ExpressGateway.setInstance(expressGateway);
 
+        Curator.init();
         RestApi.start();
         clusterHandlerTest.addL4ClusterTest();
     }

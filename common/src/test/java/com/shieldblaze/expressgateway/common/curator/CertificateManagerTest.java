@@ -29,11 +29,9 @@ import org.junit.jupiter.api.Order;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.TestMethodOrder;
 
-import java.io.File;
 import java.security.cert.X509Certificate;
 import java.util.List;
 import java.util.Optional;
-import java.util.UUID;
 import java.util.concurrent.TimeUnit;
 
 import static com.shieldblaze.expressgateway.common.curator.CertificateManager.retrieveEntry;
@@ -57,6 +55,7 @@ class CertificateManagerTest {
         testingServer.start();
 
         ExpressGateway.setInstance(forTest(testingServer.getConnectString()));
+        Curator.init();
         CertificateManager.INSTANCE.isInitialized().get(30, TimeUnit.SECONDS);
     }
 
@@ -65,7 +64,8 @@ class CertificateManagerTest {
         try {
             CuratorUtils.deleteData(Curator.getInstance(), ZNodePath.create("ExpressGateway", Environment.detectEnv()), true);
         } finally {
-            testingServer.stop();
+            Curator.shutdown();
+            testingServer.close();
         }
     }
 

@@ -38,11 +38,13 @@ class CuratorTest {
         testingServer.start();
 
         ExpressGateway.setInstance(forTest(testingServer.getConnectString()));
+        Curator.init();
     }
 
     @AfterAll
     static void shutdown() throws Exception {
-        testingServer.stop();
+        Curator.shutdown();
+        testingServer.close();
     }
 
     @Test

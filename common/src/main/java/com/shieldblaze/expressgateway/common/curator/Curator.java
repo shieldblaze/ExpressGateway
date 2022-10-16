@@ -31,21 +31,35 @@ import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ExecutionException;
 import java.util.concurrent.TimeUnit;
 
-import static com.shieldblaze.expressgateway.common.utils.StringUtil.isNullOrEmpty;
 import static org.apache.zookeeper.client.ZKClientConfig.SECURE_CLIENT;
 import static org.apache.zookeeper.client.ZKClientConfig.ZOOKEEPER_CLIENT_CNXN_SOCKET;
 
 public final class Curator implements Closeable {
 
     private static final Logger logger = LogManager.getLogger(Curator.class);
-    public static final boolean ENABLED = ExpressGateway.getInstance().runningMode() == ExpressGateway.RunningMode.REPLICA;
-
-    private static final CompletableFuture<Boolean> CONNECTION_FUTURE = new CompletableFuture<>();
     private static final Curator INSTANCE = new Curator();
+
+    private CompletableFuture<Boolean> connectionFuture;
     private CuratorFramework curatorFramework;
 
-    private Curator() {
+    /**
+     * Returns {@link CuratorFramework} instance
+     */
+    public static CuratorFramework getInstance() throws ExecutionException, InterruptedException {
+        assert connectionFuture().get() : "Connection must be established before accessing CuratorFramework Instance";
+        return INSTANCE.curatorFramework;
+    }
+
+    public static void init() {
+        INSTANCE.connectionFuture = new CompletableFuture<>();
         if (ExpressGateway.getInstance().runningMode() == ExpressGateway.RunningMode.REPLICA) {
+
+            // If ConnectionFuture is not 'null' then we have existing Curator instance running.
+            // We will close the existing instance before we build fresh one.
+            if (INSTANCE.connectionFuture != null) {
+                logger.info("Closing existing Curator instance");
+                INSTANCE.close();
+            }
 
             // Use Netty client with TLS
             if (ExpressGateway.getInstance().zooKeeper().enableTLS()) {
@@ -72,15 +86,15 @@ public final class Curator implements Closeable {
                     .connectString(ExpressGateway.getInstance().zooKeeper().connectionString())
                     .retryPolicy(retryPolicy);
 
-            curatorFramework = builder.build();
-            curatorFramework.start();
+            INSTANCE.curatorFramework = builder.build();
+            INSTANCE.curatorFramework.start();
 
-            CONNECTION_FUTURE.completeAsync(() -> {
+            INSTANCE.connectionFuture.completeAsync(() -> {
                 try {
-                    curatorFramework.blockUntilConnected(30, TimeUnit.SECONDS);
+                    INSTANCE.curatorFramework.blockUntilConnected(30, TimeUnit.SECONDS);
 
                     // When isConnected is true then connection has been established successfully
-                    if (curatorFramework.getZookeeperClient().isConnected()) {
+                    if (INSTANCE.curatorFramework.getZookeeperClient().isConnected()) {
                         logger.info("Started Apache Zookeeper Curator. Connected: {}", true);
                         return true;
                     } else {
@@ -93,17 +107,9 @@ public final class Curator implements Closeable {
                 }
             });
         } else {
-            connectionFuture().complete(false);
+            INSTANCE.connectionFuture.complete(false);
             logger.info("Skipping ZooKeeper initialization because ZooKeeper was disabled");
         }
-    }
-
-    /**
-     * Returns {@link CuratorFramework} instance
-     */
-    public static CuratorFramework getInstance() throws ExecutionException, InterruptedException {
-        assert connectionFuture().get() : "Connection must be established before accessing CuratorFramework Instance";
-        return INSTANCE.curatorFramework;
     }
 
     /**
@@ -111,7 +117,7 @@ public final class Curator implements Closeable {
      * MongoDB connection has been successfully else returns {@link Boolean#FALSE}
      */
     public static CompletableFuture<Boolean> connectionFuture() {
-        return CONNECTION_FUTURE;
+        return INSTANCE.connectionFuture;
     }
 
     /**
@@ -124,5 +130,9 @@ public final class Curator implements Closeable {
     @Override
     public void close() {
         curatorFramework.close();
+    }
+
+    private Curator() {
+        // Prevent outside initialization
     }
 }

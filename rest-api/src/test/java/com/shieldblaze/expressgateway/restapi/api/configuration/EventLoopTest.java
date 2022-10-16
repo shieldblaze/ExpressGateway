@@ -20,6 +20,7 @@ package com.shieldblaze.expressgateway.restapi.api.configuration;
 import com.google.gson.JsonObject;
 import com.google.gson.JsonParser;
 import com.shieldblaze.expressgateway.common.ExpressGateway;
+import com.shieldblaze.expressgateway.common.curator.Curator;
 import com.shieldblaze.expressgateway.configuration.eventloop.EventLoopConfiguration;
 import com.shieldblaze.expressgateway.restapi.CustomOkHttpClient;
 import com.shieldblaze.expressgateway.restapi.RestApi;
@@ -49,6 +50,7 @@ class EventLoopTest {
         ExpressGateway expressGateway = ExpressGatewayConfigured.forTest();
         ExpressGateway.setInstance(expressGateway);
 
+        Curator.init();
         RestApi.start();
     }
 
