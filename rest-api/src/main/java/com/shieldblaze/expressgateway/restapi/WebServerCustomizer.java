@@ -36,11 +36,7 @@ import java.io.ByteArrayInputStream;
 import java.net.InetAddress;
 import java.nio.file.Files;
 import java.nio.file.Path;
-import java.security.KeyStoreException;
-import java.security.NoSuchAlgorithmException;
 import java.security.PrivateKey;
-import java.security.UnrecoverableKeyException;
-import java.security.cert.CertificateException;
 import java.security.cert.X509Certificate;
 import java.util.List;
 
@@ -96,12 +92,6 @@ public class WebServerCustomizer implements WebServerFactoryCustomizer<NettyReac
         }
     }
 
-    /**
-     * This customizer uses TLS
-     *
-     * @param privateKey       {@link PrivateKey} to use for TLS
-     * @param x509Certificates {@link X509Certificate}s to use for TLS
-     */
     record TlsCustomizer(PrivateKey privateKey, X509Certificate[] x509Certificates) implements NettyServerCustomizer {
 
         @Override
