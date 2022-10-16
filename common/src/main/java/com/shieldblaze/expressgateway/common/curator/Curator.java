@@ -129,7 +129,9 @@ public final class Curator implements Closeable {
 
     @Override
     public void close() {
-        curatorFramework.close();
+        if (curatorFramework != null) {
+            curatorFramework.close();
+        }
     }
 
     private Curator() {
