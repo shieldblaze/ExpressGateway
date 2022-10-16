@@ -21,13 +21,14 @@ import com.shieldblaze.expressgateway.common.annotation.NonNull;
 
 import java.security.PrivateKey;
 import java.security.cert.Certificate;
+import java.security.cert.X509Certificate;
 
 /**
  * {@link CryptoEntry} holds {@link PrivateKey} and {@link Certificate}s instances
  * @param privateKey {@link PrivateKey} instance
  * @param certificates {@link Certificate}s instances
  */
-public record CryptoEntry(PrivateKey privateKey, Certificate... certificates) {
+public record CryptoEntry(PrivateKey privateKey, X509Certificate... certificates) {
 
     @NonNull
     public CryptoEntry {

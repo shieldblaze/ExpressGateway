@@ -1,26 +1,24 @@
 {
-    "EnforceConfigurationFileData" : true,
-    "RunningMode" : "standalone",
+    "RunningMode" : "STANDALONE",
     "ClusterID" : "1-2-3-4-5-f",
     "Rest-API" : {
         "IPAddress" : "127.0.0.1",
-        "Port" : 9110
+        "Port" : 9110,
+        "PKCS12File" : "target/test-classes/default/restapi.p12",
+        "Password" : "shieldblaze"
     },
     "ZooKeeper" : {
-        "ConnectionString" : ""
+        "ConnectionString" : "localhost:2181",
+        "HostnameVerification" : false,
+        "RetryTimes" : 3,
+        "SleepMsBetweenRetries" : 100,
+        "KeyStoreFile" : "",
+        "KeyStorePassword" : "",
+        "TrustStoreFile" : "",
+        "TrustStorePassword" : ""
     },
-    "Crypto" : {
-        "Rest-API" : {
-            "PKCS12File" : "target/test-classes/default/restapi.p12",
-            "Password" : "shieldblaze"
-        },
-        "ZooKeeper" : {
-            "PKCS12File" : "target/test-classes/default/zookeeper.p12",
-            "Password" : "expressgateway"
-        },
-        "LoadBalancer" : {
-            "PKCS12File" : "target/test-classes/default/loadbalancer.p12",
-            "Password" : "shieldblazeexpressgateway"
-        }
+    "LoadBalancerTLS" : {
+        "PKCS12File" : "target/test-classes/default/loadbalancer.p12",
+        "Password" : "shieldblazeexpressgateway"
     }
 }

@@ -17,9 +17,11 @@
  */
 package com.shieldblaze.expressgateway.common.curator;
 
+import com.shieldblaze.expressgateway.common.ExpressGateway;
 import com.shieldblaze.expressgateway.common.crypto.cryptostore.CryptoEntry;
 import com.shieldblaze.expressgateway.common.utils.SelfSignedCertificate;
 import org.apache.curator.framework.recipes.cache.ChildData;
+import org.apache.curator.test.TestingServer;
 import org.junit.jupiter.api.AfterAll;
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.MethodOrderer;
@@ -27,16 +29,18 @@ import org.junit.jupiter.api.Order;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.TestMethodOrder;
 
+import java.io.File;
+import java.security.cert.X509Certificate;
 import java.util.List;
 import java.util.Optional;
-import java.util.concurrent.ExecutionException;
+import java.util.UUID;
 import java.util.concurrent.TimeUnit;
-import java.util.concurrent.TimeoutException;
 
-import static com.shieldblaze.expressgateway.common.SystemPropertiesKeys.CRYPTO_LOADBALANCER_PASSWORD;
 import static com.shieldblaze.expressgateway.common.curator.CertificateManager.retrieveEntry;
 import static com.shieldblaze.expressgateway.common.curator.CertificateManager.storeEntry;
+import static com.shieldblaze.expressgateway.common.curator.ExpressGatewayUtils.forTest;
 import static org.junit.jupiter.api.Assertions.assertArrayEquals;
+import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 @TestMethodOrder(MethodOrderer.OrderAnnotation.class)
@@ -45,23 +49,30 @@ class CertificateManagerTest {
     private static final byte[] data = new byte[1024];
     private static final String HOSTNAME = "expressgateway.shieldblaze.com";
     private static final SelfSignedCertificate ssc = SelfSignedCertificate.generateNew(List.of("127.0.0.1"), List.of(HOSTNAME));
+    private static TestingServer testingServer;
 
     @BeforeAll
-    static void setUp() throws ExecutionException, InterruptedException, TimeoutException {
-        System.setProperty(CRYPTO_LOADBALANCER_PASSWORD.name(), "Meow");
-        Environment.setEnvironment(Environment.DEVELOPMENT);
+    static void setUp() throws Exception {
+        testingServer = new TestingServer();
+        testingServer.start();
+
+        ExpressGateway.setInstance(forTest(testingServer.getConnectString()));
         CertificateManager.INSTANCE.isInitialized().get(30, TimeUnit.SECONDS);
     }
 
     @AfterAll
     static void shutdown() throws Exception {
-        CuratorUtils.deleteData(Curator.getInstance(), ZNodePath.create("ExpressGateway", Environment.detectEnv()), true);
+        try {
+            CuratorUtils.deleteData(Curator.getInstance(), ZNodePath.create("ExpressGateway", Environment.detectEnv()), true);
+        } finally {
+            testingServer.stop();
+        }
     }
 
     @Order(1)
     @Test
     void storeEntryTest() throws Exception {
-        CryptoEntry cryptoEntry = new CryptoEntry(ssc.keyPair().getPrivate(), ssc.x509Certificate());
+        CryptoEntry cryptoEntry = new CryptoEntry(ssc.keyPair().getPrivate(), new X509Certificate[]{ssc.x509Certificate()});
         storeEntry(true, HOSTNAME, cryptoEntry);
 
         Thread.sleep(1000); // 1 second should be enough for sync
@@ -71,6 +82,7 @@ class CertificateManagerTest {
     @Test
     void retrieveEntryTest() throws Exception {
         CryptoEntry cryptoEntry = retrieveEntry(true, HOSTNAME);
+        assertNotNull(cryptoEntry);
         assertArrayEquals(ssc.keyPair().getPrivate().getEncoded(), cryptoEntry.privateKey().getEncoded());
         assertArrayEquals(ssc.x509Certificate().getEncoded(), cryptoEntry.certificates()[0].getEncoded());
     }

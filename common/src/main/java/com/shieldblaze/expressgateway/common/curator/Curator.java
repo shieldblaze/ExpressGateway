@@ -17,6 +17,7 @@
  */
 package com.shieldblaze.expressgateway.common.curator;
 
+import com.shieldblaze.expressgateway.common.ExpressGateway;
 import org.apache.curator.RetryPolicy;
 import org.apache.curator.framework.CuratorFramework;
 import org.apache.curator.framework.CuratorFrameworkFactory;
@@ -30,32 +31,45 @@ import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ExecutionException;
 import java.util.concurrent.TimeUnit;
 
-import static com.shieldblaze.expressgateway.common.SystemPropertiesKeys.ZOOKEEPER_CONNECTION_STRING;
 import static com.shieldblaze.expressgateway.common.utils.StringUtil.isNullOrEmpty;
-import static com.shieldblaze.expressgateway.common.utils.SystemPropertyUtil.getPropertyOrEnv;
-import static java.util.Objects.requireNonNull;
+import static org.apache.zookeeper.client.ZKClientConfig.SECURE_CLIENT;
 import static org.apache.zookeeper.client.ZKClientConfig.ZOOKEEPER_CLIENT_CNXN_SOCKET;
 
 public final class Curator implements Closeable {
 
     private static final Logger logger = LogManager.getLogger(Curator.class);
-    public static final boolean ENABLED = !isNullOrEmpty(getPropertyOrEnv(ZOOKEEPER_CONNECTION_STRING.name()));
+    public static final boolean ENABLED = ExpressGateway.getInstance().runningMode() == ExpressGateway.RunningMode.REPLICA;
 
     private static final CompletableFuture<Boolean> CONNECTION_FUTURE = new CompletableFuture<>();
     private static final Curator INSTANCE = new Curator();
     private CuratorFramework curatorFramework;
 
     private Curator() {
-        if (ENABLED) {
-            // Use Netty
+        if (ExpressGateway.getInstance().runningMode() == ExpressGateway.RunningMode.REPLICA) {
+
+            // Use Netty client with TLS
+            if (ExpressGateway.getInstance().zooKeeper().enableTLS()) {
+                System.setProperty(SECURE_CLIENT, "true");
+
+                // If KeyStore file is defined then we will load it for mTLS
+                if (!ExpressGateway.getInstance().zooKeeper().keyStoreFile().isEmpty()) {
+                    System.setProperty("zookeeper.ssl.keyStore.location", ExpressGateway.getInstance().zooKeeper().keyStoreFile());
+                    System.setProperty("zookeeper.ssl.keyStore.password", new String(ExpressGateway.getInstance().zooKeeper().keyStorePasswordAsChars()));
+                }
+
+                System.setProperty("zookeeper.ssl.hostnameVerification", String.valueOf(ExpressGateway.getInstance().zooKeeper().hostnameVerification()));
+                System.setProperty("zookeeper.ssl.trustStore.location", ExpressGateway.getInstance().zooKeeper().trustStoreFile());
+                System.setProperty("zookeeper.ssl.trustStore.password", new String(ExpressGateway.getInstance().zooKeeper().trustStorePasswordAsChars()));
+            }
+
+            // Always use Netty transport
             System.setProperty(ZOOKEEPER_CLIENT_CNXN_SOCKET, ClientCnxnSocketNetty.class.getCanonicalName());
 
-            int sleepMsBetweenRetries = 100;
-            int maxRetries = 3;
-            RetryPolicy retryPolicy = new RetryNTimes(maxRetries, sleepMsBetweenRetries);
+            RetryPolicy retryPolicy = new RetryNTimes(ExpressGateway.getInstance().zooKeeper().retryTimes(),
+                    ExpressGateway.getInstance().zooKeeper().sleepMsBetweenRetries());
 
             CuratorFrameworkFactory.Builder builder = CuratorFrameworkFactory.builder()
-                    .connectString(requireNonNull(getPropertyOrEnv(ZOOKEEPER_CONNECTION_STRING.name()), "ZooKeeper address is required"))
+                    .connectString(ExpressGateway.getInstance().zooKeeper().connectionString())
                     .retryPolicy(retryPolicy);
 
             curatorFramework = builder.build();

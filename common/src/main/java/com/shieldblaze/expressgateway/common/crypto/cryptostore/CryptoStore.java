@@ -34,7 +34,9 @@ import java.security.UnrecoverableKeyException;
 import java.security.cert.Certificate;
 import java.security.cert.CertificateException;
 import java.security.cert.X509Certificate;
+import java.util.HashMap;
 import java.util.Iterator;
+import java.util.Map;
 
 /**
  * {@link CryptoStore} is implementation of {@link KeyStore} which
@@ -106,9 +108,51 @@ public final class CryptoStore {
         keyStore.load(inputStream, password);
 
         Certificate[] certificates = keyStore.getCertificateChain(alias);
+        X509Certificate[] x509Certificates = new X509Certificate[certificates.length];
+
+        for (int i = 0; i < certificates.length; i++) {
+            x509Certificates[i] = (X509Certificate) certificates[i];
+        }
+
         Key privateKey = keyStore.getKey(alias, password);
 
-        return new CryptoEntry((PrivateKey) privateKey, certificates);
+        return new CryptoEntry((PrivateKey) privateKey, x509Certificates);
+    }
+
+    /**
+     * Fetch entry of {@link PrivateKey} and {@link X509Certificate}s from {@link KeyStore}
+     *
+     * @param inputStream {@link InputStream} containing {@link KeyStore} data
+     * @param password    Password to secure the entry
+     * @return {@link Map} instance holding {@link PrivateKey} and {@link X509Certificate}s with hostname
+     * @throws UnrecoverableKeyException Thrown when entry cannot be recovered
+     * @throws IOException               Thrown in case of exception with I/O streams
+     * @throws CertificateException      Thrown in case of exception with {@link X509Certificate}
+     * @throws KeyStoreException         Thrown in case of exception with {@link KeyStore}
+     * @throws NoSuchAlgorithmException  Thrown in case of unavailability of PKCS12 in {@link KeyStore}
+     */
+    public static Map<String, CryptoEntry> fetchAllPrivateKeyCertificateEntry(InputStream inputStream, char[] password) throws UnrecoverableKeyException, IOException,
+            CertificateException, KeyStoreException, NoSuchAlgorithmException {
+        KeyStore keyStore = KeyStore.getInstance("PKCS12");
+        keyStore.load(inputStream, password);
+
+        Map<String, CryptoEntry> entryMap = new HashMap<>();
+
+        Iterator<String> aliases = keyStore.aliases().asIterator();
+        while (aliases.hasNext()) {
+            String alias = aliases.next();
+            Certificate[] certificates = keyStore.getCertificateChain(alias);
+            X509Certificate[] x509Certificates = new X509Certificate[certificates.length];
+
+            for (int i = 0; i < certificates.length; i++) {
+                x509Certificates[i] = (X509Certificate) certificates[i];
+            }
+            Key privateKey = keyStore.getKey(alias, password);
+
+            entryMap.put(alias, new CryptoEntry((PrivateKey) privateKey, x509Certificates));
+        }
+
+        return entryMap;
     }
 
     private static SecureRandom secureRandom() {

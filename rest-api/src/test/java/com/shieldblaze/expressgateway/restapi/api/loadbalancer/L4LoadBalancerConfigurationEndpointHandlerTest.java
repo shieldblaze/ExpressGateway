@@ -19,10 +19,12 @@ package com.shieldblaze.expressgateway.restapi.api.loadbalancer;
 
 import com.google.gson.JsonObject;
 import com.google.gson.JsonParser;
+import com.shieldblaze.expressgateway.common.ExpressGateway;
 import com.shieldblaze.expressgateway.common.crypto.cryptostore.CryptoEntry;
 import com.shieldblaze.expressgateway.common.utils.SelfSignedCertificate;
 import com.shieldblaze.expressgateway.restapi.CustomOkHttpClient;
 import com.shieldblaze.expressgateway.restapi.RestApi;
+import com.shieldblaze.expressgateway.testing.ExpressGatewayConfigured;
 import okhttp3.MediaType;
 import okhttp3.Request;
 import okhttp3.RequestBody;
@@ -50,10 +52,11 @@ public class L4LoadBalancerConfigurationEndpointHandlerTest {
     public static String id;
 
     @BeforeAll
-    static void startSpring() {
-        SelfSignedCertificate ssc = SelfSignedCertificate.generateNew(List.of("127.0.0.1"), List.of("shieldblaze.com"));
-        CryptoEntry cryptoEntry = new CryptoEntry(ssc.keyPair().getPrivate(), new X509Certificate[]{ssc.x509Certificate()});
-        RestApi.start(cryptoEntry);
+    static void startSpring() throws IOException {
+        ExpressGateway expressGateway = ExpressGatewayConfigured.forTest();
+        ExpressGateway.setInstance(expressGateway);
+
+        RestApi.start();
     }
 
     @AfterAll

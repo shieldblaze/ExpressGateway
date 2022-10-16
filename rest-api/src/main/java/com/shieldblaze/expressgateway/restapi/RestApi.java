@@ -17,37 +17,26 @@
  */
 package com.shieldblaze.expressgateway.restapi;
 
-import com.shieldblaze.expressgateway.common.crypto.cryptostore.CryptoEntry;
 import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
 import org.springframework.boot.Banner;
-import org.springframework.boot.SpringApplication;
 import org.springframework.boot.autoconfigure.SpringBootApplication;
 import org.springframework.boot.autoconfigure.mongo.MongoAutoConfiguration;
 import org.springframework.boot.builder.SpringApplicationBuilder;
 import org.springframework.context.ConfigurableApplicationContext;
 
-import java.util.Objects;
+import java.io.IOException;
 
 @SpringBootApplication(exclude = MongoAutoConfiguration.class)
 public class RestApi {
     private static final Logger logger = LogManager.getLogger(RestApi.class);
     private static ConfigurableApplicationContext ctx;
-    protected static CryptoEntry CRYPTO_ENTRY;
 
-    public static void start(CryptoEntry cryptoEntry) {
-        CRYPTO_ENTRY = Objects.requireNonNull(cryptoEntry, "CryptoEntry cannot be 'null'");
-
-        if (ctx == null) {
-            ctx = new SpringApplicationBuilder()
-                    .bannerMode(Banner.Mode.OFF)
-                    .sources(RestApi.class)
-                    .run();
-        } else {
-            ctx.stop();
-            ctx = null;
-            start(cryptoEntry);
-        }
+    public static void start() throws IOException {
+        ctx = new SpringApplicationBuilder()
+                .bannerMode(Banner.Mode.OFF)
+                .sources(RestApi.class)
+                .run();
     }
 
     /**

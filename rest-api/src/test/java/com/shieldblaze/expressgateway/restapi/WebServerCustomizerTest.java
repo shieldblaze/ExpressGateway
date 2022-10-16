@@ -17,8 +17,10 @@
  */
 package com.shieldblaze.expressgateway.restapi;
 
+import com.shieldblaze.expressgateway.common.ExpressGateway;
 import com.shieldblaze.expressgateway.common.crypto.cryptostore.CryptoEntry;
 import com.shieldblaze.expressgateway.common.utils.SelfSignedCertificate;
+import com.shieldblaze.expressgateway.testing.ExpressGatewayConfigured;
 import io.netty.handler.ssl.util.InsecureTrustManagerFactory;
 import org.junit.jupiter.api.Test;
 
@@ -26,10 +28,14 @@ import javax.net.ssl.SSLContext;
 import javax.net.ssl.SSLSession;
 import javax.net.ssl.SSLSocket;
 import javax.net.ssl.SSLSocketFactory;
+import java.io.ByteArrayInputStream;
+import java.nio.file.Files;
+import java.nio.file.Path;
 import java.security.SecureRandom;
 import java.security.cert.X509Certificate;
 import java.util.List;
 
+import static com.shieldblaze.expressgateway.common.crypto.cryptostore.CryptoStore.fetchPrivateKeyCertificateEntry;
 import static org.junit.jupiter.api.Assertions.assertArrayEquals;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertTrue;
@@ -38,11 +44,11 @@ class WebServerCustomizerTest {
 
     @Test
     void generateAndLoadSelfSignedCertificateTest() throws Exception {
-        SelfSignedCertificate ssc = SelfSignedCertificate.generateNew(List.of("127.0.0.1"), List.of("shieldblaze.com"));
-        CryptoEntry cryptoEntry = new CryptoEntry(ssc.keyPair().getPrivate(), new X509Certificate[]{ssc.x509Certificate()});
+        ExpressGateway expressGateway = ExpressGatewayConfigured.forTest();
+        ExpressGateway.setInstance(expressGateway);
 
         // Start the Rest-Api Server
-        RestApi.start(cryptoEntry);
+        RestApi.start();
 
         SSLContext sslContext = SSLContext.getInstance("TLSv1.3");
         sslContext.init(null, InsecureTrustManagerFactory.INSTANCE.getTrustManagers(), new SecureRandom());
@@ -54,10 +60,15 @@ class WebServerCustomizerTest {
 
         SSLSession session = socket.getSession();
 
-        assertArrayEquals(cryptoEntry.certificates()[0].getEncoded(), session.getPeerCertificates()[0].getEncoded());
-        assertEquals("TLSv1.3", session.getProtocol());
-        assertEquals("TLS_AES_256_GCM_SHA384", session.getCipherSuite());
-        socket.close();
+        byte[] restApiPkcs12Data = Files.readAllBytes(Path.of(ExpressGateway.getInstance().restApi().PKCS12File()).toAbsolutePath());
+        try (ByteArrayInputStream inputStream = new ByteArrayInputStream(restApiPkcs12Data)) {
+            CryptoEntry cryptoEntry = fetchPrivateKeyCertificateEntry(inputStream, ExpressGateway.getInstance().restApi().passwordAsChars(), "rest-api");
+            assertArrayEquals(cryptoEntry.certificates()[0].getEncoded(), session.getPeerCertificates()[0].getEncoded());
+            assertEquals("TLSv1.3", session.getProtocol());
+            assertEquals("TLS_AES_256_GCM_SHA384", session.getCipherSuite());
+        } finally {
+            socket.close();
+        }
 
         // Stop the Rest-Api Server
         RestApi.stop();

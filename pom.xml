@@ -73,6 +73,7 @@ along with ShieldBlaze ExpressGateway.  If not, see <https://www.gnu.org/license
         <module>rest-api</module>
         <module>security</module>
         <module>shaded-dependencies</module>
+      <module>testing</module>
     </modules>
 
     <repositories>

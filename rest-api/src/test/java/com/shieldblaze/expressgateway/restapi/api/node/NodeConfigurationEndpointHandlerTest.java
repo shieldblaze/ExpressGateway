@@ -20,6 +20,7 @@ package com.shieldblaze.expressgateway.restapi.api.node;
 import com.google.gson.JsonObject;
 import com.google.gson.JsonParser;
 import com.shieldblaze.expressgateway.backend.State;
+import com.shieldblaze.expressgateway.common.ExpressGateway;
 import com.shieldblaze.expressgateway.common.crypto.cryptostore.CryptoEntry;
 import com.shieldblaze.expressgateway.common.utils.SelfSignedCertificate;
 import com.shieldblaze.expressgateway.core.cluster.CoreContext;
@@ -28,6 +29,7 @@ import com.shieldblaze.expressgateway.restapi.CustomOkHttpClient;
 import com.shieldblaze.expressgateway.restapi.RestApi;
 import com.shieldblaze.expressgateway.restapi.api.cluster.ClusterConfigurationEndpointHandlerTest;
 import com.shieldblaze.expressgateway.restapi.api.loadbalancer.L4LoadBalancerConfigurationEndpointHandlerTest;
+import com.shieldblaze.expressgateway.testing.ExpressGatewayConfigured;
 import okhttp3.MediaType;
 import okhttp3.Request;
 import okhttp3.RequestBody;
@@ -56,9 +58,10 @@ class NodeConfigurationEndpointHandlerTest {
 
     @BeforeAll
     static void startSpring() throws IOException, InterruptedException {
-        SelfSignedCertificate ssc = SelfSignedCertificate.generateNew(List.of("127.0.0.1"), List.of("shieldblaze.com"));
-        CryptoEntry cryptoEntry = new CryptoEntry(ssc.keyPair().getPrivate(), new X509Certificate[]{ssc.x509Certificate()});
-        RestApi.start(cryptoEntry);
+        ExpressGateway expressGateway = ExpressGatewayConfigured.forTest();
+        ExpressGateway.setInstance(expressGateway);
+
+        RestApi.start();
         clusterHandlerTest.addL4ClusterTest();
     }
 

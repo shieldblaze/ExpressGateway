@@ -17,6 +17,7 @@
  */
 package com.shieldblaze.expressgateway.common.curator;
 
+import com.shieldblaze.expressgateway.common.ExpressGateway;
 import com.shieldblaze.expressgateway.common.crypto.cryptostore.CryptoEntry;
 import com.shieldblaze.expressgateway.common.crypto.cryptostore.CryptoStore;
 import org.apache.curator.framework.recipes.cache.ChildData;
@@ -33,14 +34,9 @@ import java.security.NoSuchAlgorithmException;
 import java.security.UnrecoverableKeyException;
 import java.security.cert.CertificateException;
 import java.util.Optional;
-import java.util.UUID;
 import java.util.concurrent.CompletableFuture;
 
-import static com.shieldblaze.expressgateway.common.SystemPropertiesKeys.CLUSTER_ID;
-import static com.shieldblaze.expressgateway.common.SystemPropertiesKeys.CRYPTO_LOADBALANCER_PASSWORD;
-import static java.lang.System.getProperty;
-import static java.lang.System.setProperty;
-import static java.util.Objects.requireNonNull;
+import static com.shieldblaze.expressgateway.common.crypto.cryptostore.CryptoStore.fetchPrivateKeyCertificateEntry;
 
 public final class CertificateManager {
 
@@ -86,7 +82,7 @@ public final class CertificateManager {
 
         logger.info("Processing CryptoEntry");
         try (ByteArrayInputStream inputStream = new ByteArrayInputStream(childData.get().getData())) {
-            CryptoEntry cryptoEntry = CryptoStore.fetchPrivateKeyCertificateEntry(inputStream, getProperty(CRYPTO_LOADBALANCER_PASSWORD.name()).toCharArray(), hostname);
+            CryptoEntry cryptoEntry = fetchPrivateKeyCertificateEntry(inputStream, ExpressGateway.getInstance().loadBalancerTLS().passwordAsChars(), hostname);
             logger.info("Successfully retrieved and processed CryptoEntry");
             return cryptoEntry;
         } catch (IOException | UnrecoverableKeyException | CertificateException | KeyStoreException | NoSuchAlgorithmException ex) {
@@ -99,7 +95,7 @@ public final class CertificateManager {
         logger.info("Storing CryptoEntry in ZooKeeper");
 
         try (ByteArrayOutputStream outputStream = new ByteArrayOutputStream()) {
-            CryptoStore.storePrivateKeyAndCertificate(null, outputStream, getProperty(CRYPTO_LOADBALANCER_PASSWORD.name()).toCharArray(),
+            CryptoStore.storePrivateKeyAndCertificate(null, outputStream, ExpressGateway.getInstance().loadBalancerTLS().passwordAsChars(),
                     hostname, cryptoEntry.privateKey(), cryptoEntry.certificates());
 
             store(server, hostname, outputStream.toByteArray());
@@ -148,21 +144,9 @@ public final class CertificateManager {
 
     private static ZNodePath of(boolean server, String hostname) {
         Environment environment = Environment.detectEnv();
-
-        String id = getProperty(CLUSTER_ID.name());
-        if (environment == Environment.PRODUCTION) {
-            requireNonNull(id, "ClusterID must be present");
-        } else {
-            // Generate Cluster ID in dev and qa environment
-            if (id == null) {
-                id = UUID.randomUUID().toString();
-                setProperty(CLUSTER_ID.name(), id);
-            }
-        }
-
         return ZNodePath.create("ExpressGateway",
                 environment,
-                id,
+                ExpressGateway.getInstance().clusterID(),
                 server ? "CertificateManagerServer" : "CertificateManagerClient",
                 hostname);
     }
