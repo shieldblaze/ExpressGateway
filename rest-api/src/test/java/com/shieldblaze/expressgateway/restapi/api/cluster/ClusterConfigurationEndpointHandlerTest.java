@@ -62,7 +62,7 @@ public class ClusterConfigurationEndpointHandlerTest {
     }
 
     @AfterAll
-    static void teardown() throws IOException, InterruptedException {
+    static void teardown() throws IOException {
         l4LoadBalancerTest.shutdownLoadBalancer();
         l7LoadBalancerTest.shutdownLoadBalancer();
         RestApi.stop();

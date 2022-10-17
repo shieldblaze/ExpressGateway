@@ -17,19 +17,15 @@
  */
 package com.shieldblaze.expressgateway.restapi;
 
-import org.apache.logging.log4j.LogManager;
-import org.apache.logging.log4j.Logger;
 import org.springframework.boot.Banner;
 import org.springframework.boot.autoconfigure.SpringBootApplication;
-import org.springframework.boot.autoconfigure.mongo.MongoAutoConfiguration;
 import org.springframework.boot.builder.SpringApplicationBuilder;
 import org.springframework.context.ConfigurableApplicationContext;
 
 import java.io.IOException;
 
-@SpringBootApplication(exclude = MongoAutoConfiguration.class)
+@SpringBootApplication
 public class RestApi {
-    private static final Logger logger = LogManager.getLogger(RestApi.class);
     private static ConfigurableApplicationContext ctx;
 
     public static void start() throws IOException {
@@ -45,13 +41,6 @@ public class RestApi {
     public static void stop() {
         if (ctx != null) {
             ctx.stop();
-            try {
-                Thread.sleep(2500);
-            } catch (InterruptedException e) {
-                // This should never happen because we will never
-                // interrupt this thread.
-                logger.error(e);
-            }
         }
     }
 }

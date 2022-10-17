@@ -64,7 +64,7 @@ class NodeConfigurationEndpointHandlerTest {
     }
 
     @AfterAll
-    static void teardown() throws IOException, InterruptedException {
+    static void teardown() throws IOException {
         clusterHandlerTest.deleteL4ClusterTest();
         RestApi.stop();
     }

@@ -18,6 +18,7 @@
 package com.shieldblaze.expressgateway.bootstrap;
 
 import com.shieldblaze.expressgateway.common.ExpressGateway;
+import com.shieldblaze.expressgateway.common.curator.Environment;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.Test;
@@ -25,6 +26,8 @@ import org.junit.jupiter.api.Test;
 import java.io.File;
 
 import static com.shieldblaze.expressgateway.common.utils.SystemPropertyUtil.getPropertyOrEnv;
+import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertNull;
 
@@ -52,6 +55,13 @@ class BootstrapTest {
         Bootstrap.main();
 
         assertNotNull(ExpressGateway.getInstance());
-        assertNotNull(ExpressGateway.getInstance().toString());
+
+        assertEquals(ExpressGateway.RunningMode.STANDALONE, ExpressGateway.getInstance().runningMode());
+        assertEquals("1-2-3-4-5-f", ExpressGateway.getInstance().clusterID());
+        assertEquals(Environment.DEVELOPMENT, ExpressGateway.getInstance().environment());
+
+        assertEquals("127.0.0.1", ExpressGateway.getInstance().restApi().IPAddress());
+        assertEquals(9110, ExpressGateway.getInstance().restApi().port());
+        assertFalse(ExpressGateway.getInstance().restApi().enableTLS());
     }
 }
