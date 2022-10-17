@@ -58,7 +58,7 @@ public class L7LoadBalancerConfigurationEndpointHandlerTest {
     }
 
     @AfterAll
-    static void teardown() throws InterruptedException {
+    static void teardown() {
         RestApi.stop();
     }
 

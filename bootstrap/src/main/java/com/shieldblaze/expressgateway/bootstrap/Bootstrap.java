@@ -69,6 +69,7 @@ public final class Bootstrap {
 
             logger.info("[CONFIGURATION] RunningMode: {}", ExpressGateway.getInstance().runningMode());
             logger.info("[CONFIGURATION] ClusterID: {}", ExpressGateway.getInstance().clusterID());
+            logger.info("[CONFIGURATION] Environment: {}", ExpressGateway.getInstance().environment());
             logger.info("[CONFIGURATION] Rest-API: {}", ExpressGateway.getInstance().restApi());
             logger.info("[CONFIGURATION] ZooKeeper: {}", ExpressGateway.getInstance().zooKeeper());
             logger.info("[CONFIGURATION] LoadBalancerTLS: {}", ExpressGateway.getInstance().loadBalancerTLS());
