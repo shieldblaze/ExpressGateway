@@ -18,37 +18,87 @@
 package com.shieldblaze.expressgateway.common.curator;
 
 import com.shieldblaze.expressgateway.common.ExpressGateway;
+import org.apache.curator.test.InstanceSpec;
 import org.apache.curator.test.TestingServer;
-import org.junit.jupiter.api.AfterAll;
-import org.junit.jupiter.api.BeforeAll;
+import org.junit.jupiter.api.MethodOrderer;
+import org.junit.jupiter.api.Order;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.TestMethodOrder;
 
-import java.util.concurrent.ExecutionException;
+import java.io.File;
+import java.util.HashMap;
+import java.util.Map;
 
 import static com.shieldblaze.expressgateway.common.curator.ExpressGatewayUtils.forTest;
+import static org.apache.zookeeper.client.ZKClientConfig.SECURE_CLIENT;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
+@TestMethodOrder(MethodOrderer.OrderAnnotation.class)
 class CuratorTest {
 
-    private static TestingServer testingServer;
-
-    @BeforeAll
-    static void setUp() throws Exception {
-        testingServer = new TestingServer();
-        testingServer.start();
-
-        ExpressGateway.setInstance(forTest(testingServer.getConnectString()));
-        Curator.init();
-    }
-
-    @AfterAll
-    static void shutdown() throws Exception {
-        Curator.shutdown();
-        testingServer.close();
-    }
-
+    @Order(1)
     @Test
-    void successfulConnectionTest() throws ExecutionException, InterruptedException {
-        assertTrue(Curator.connectionFuture().get());
+    void connectToZooKeeperWithoutTLSTest() throws Exception {
+        System.setProperty("zookeeper.serverCnxnFactory", "org.apache.zookeeper.server.NettyServerCnxnFactory");
+        try (TestingServer testingServer = new TestingServer()) {
+
+            ExpressGateway.setInstance(forTest(testingServer.getConnectString()));
+            Curator.init();
+
+            assertTrue(Curator.connectionFuture().get());
+        } finally {
+            Curator.shutdown();
+        }
+    }
+
+    @Order(2)
+    @Test
+    void connectToZooKeeperUsingTLSTest() throws Exception {
+        ClassLoader classLoader = CuratorTest.class.getClassLoader();
+        File file = new File(classLoader.getResource("default").getFile());
+        String absolutePath = file.getAbsolutePath();
+
+        int randomUsablePort = InstanceSpec.getRandomPort();
+
+        Map<String, Object> customProperties = new HashMap<>();
+        customProperties.put("secureClientPort", String.valueOf(randomUsablePort));
+        customProperties.put("ssl.keyStore.location", absolutePath + File.separator + "KeyStore.jks");
+        customProperties.put("ssl.keyStore.password", "123456");
+        customProperties.put("ssl.trustStore.location", absolutePath + File.separator + "TrustStore.jks");
+        customProperties.put("ssl.trustStore.password", "123456");
+        customProperties.put("ssl.hostnameVerification", "false");
+        customProperties.put("serverCnxnFactory", "org.apache.zookeeper.server.NettyServerCnxnFactory");
+
+        InstanceSpec instanceSpec = new InstanceSpec(null,
+                randomUsablePort,
+                -1,
+                -1,
+                true,
+                -1,
+                -1,
+                -1,
+                customProperties);
+
+        try (TestingServer testingServer = new TestingServer(instanceSpec, true)) {
+            ExpressGateway.setInstance(forTest(new ExpressGateway.ZooKeeper(testingServer.getConnectString(),
+                    3,
+                    100,
+                    true,
+                    false,
+                    "",
+                    "",
+                    absolutePath + File.separator + "TrustStore.jks",
+                    "123456")));
+
+            Curator.init();
+            assertTrue(Curator.connectionFuture().get());
+        } finally {
+            System.clearProperty(SECURE_CLIENT);
+            System.clearProperty("zookeeper.ssl.keyStore.location");
+            System.clearProperty("zookeeper.ssl.keyStore.password");
+            System.clearProperty("zookeeper.ssl.hostnameVerification");
+            System.clearProperty("zookeeper.ssl.trustStore.location");
+            System.clearProperty("zookeeper.ssl.trustStore.password");
+        }
     }
 }

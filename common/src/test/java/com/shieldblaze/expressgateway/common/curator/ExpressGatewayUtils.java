@@ -52,4 +52,23 @@ public class ExpressGatewayUtils {
                 zooKeeper,
                 loadBalancerTLS);
     }
+
+    public static ExpressGateway forTest(ExpressGateway.ZooKeeper zooKeeper) {
+        ExpressGateway.RestApi restApi = new ExpressGateway.RestApi("127.0.0.1",
+                9110,
+                false,
+                "",
+                "");
+
+        ExpressGateway.LoadBalancerTLS loadBalancerTLS = new ExpressGateway.LoadBalancerTLS(false,
+                "",
+                "");
+
+        return new ExpressGateway(ExpressGateway.RunningMode.REPLICA,
+                UUID.randomUUID().toString(),
+                Environment.DEVELOPMENT,
+                restApi,
+                zooKeeper,
+                loadBalancerTLS);
+    }
 }
