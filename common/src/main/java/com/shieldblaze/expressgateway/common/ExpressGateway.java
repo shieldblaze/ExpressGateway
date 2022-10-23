@@ -19,7 +19,7 @@ package com.shieldblaze.expressgateway.common;
 
 import com.fasterxml.jackson.annotation.JsonIgnore;
 import com.fasterxml.jackson.annotation.JsonProperty;
-import com.shieldblaze.expressgateway.common.curator.Environment;
+import com.shieldblaze.expressgateway.common.zookeeper.Environment;
 
 public class ExpressGateway {
 

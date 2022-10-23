@@ -15,10 +15,9 @@
  * You should have received a copy of the GNU General Public License
  * along with ShieldBlaze ExpressGateway.  If not, see <https://www.gnu.org/licenses/>.
  */
-package com.shieldblaze.expressgateway.common.curator;
+package com.shieldblaze.expressgateway.common.zookeeper;
 
 import com.shieldblaze.expressgateway.common.ExpressGateway;
-import com.shieldblaze.expressgateway.common.utils.SystemPropertyUtil;
 
 /**
  * Environments for ZooKeeper

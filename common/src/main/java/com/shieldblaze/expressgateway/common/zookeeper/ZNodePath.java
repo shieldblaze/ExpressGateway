@@ -15,7 +15,7 @@
  * You should have received a copy of the GNU General Public License
  * along with ShieldBlaze ExpressGateway.  If not, see <https://www.gnu.org/licenses/>.
  */
-package com.shieldblaze.expressgateway.common.curator;
+package com.shieldblaze.expressgateway.common.zookeeper;
 
 import java.util.Objects;
 import java.util.UUID;

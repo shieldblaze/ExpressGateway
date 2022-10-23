@@ -15,7 +15,7 @@
  * You should have received a copy of the GNU General Public License
  * along with ShieldBlaze ExpressGateway.  If not, see <https://www.gnu.org/licenses/>.
  */
-package com.shieldblaze.expressgateway.common.curator;
+package com.shieldblaze.expressgateway.common.zookeeper;
 
 import com.shieldblaze.expressgateway.common.ExpressGateway;
 import com.shieldblaze.expressgateway.common.crypto.cryptostore.CryptoEntry;
@@ -34,9 +34,9 @@ import java.util.List;
 import java.util.Optional;
 import java.util.concurrent.TimeUnit;
 
-import static com.shieldblaze.expressgateway.common.curator.CertificateManager.retrieveEntry;
-import static com.shieldblaze.expressgateway.common.curator.CertificateManager.storeEntry;
-import static com.shieldblaze.expressgateway.common.curator.ExpressGatewayUtils.forTest;
+import static com.shieldblaze.expressgateway.common.zookeeper.CertificateManager.retrieveEntry;
+import static com.shieldblaze.expressgateway.common.zookeeper.CertificateManager.storeEntry;
+import static com.shieldblaze.expressgateway.common.zookeeper.ExpressGatewayUtils.forTest;
 import static org.junit.jupiter.api.Assertions.assertArrayEquals;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;

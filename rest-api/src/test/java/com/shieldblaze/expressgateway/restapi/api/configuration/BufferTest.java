@@ -20,7 +20,7 @@ package com.shieldblaze.expressgateway.restapi.api.configuration;
 import com.google.gson.JsonObject;
 import com.google.gson.JsonParser;
 import com.shieldblaze.expressgateway.common.ExpressGateway;
-import com.shieldblaze.expressgateway.common.curator.Curator;
+import com.shieldblaze.expressgateway.common.zookeeper.Curator;
 import com.shieldblaze.expressgateway.configuration.buffer.BufferConfiguration;
 import com.shieldblaze.expressgateway.restapi.CustomOkHttpClient;
 import com.shieldblaze.expressgateway.restapi.RestApi;

@@ -15,7 +15,7 @@
  * You should have received a copy of the GNU General Public License
  * along with ShieldBlaze ExpressGateway.  If not, see <https://www.gnu.org/licenses/>.
  */
-package com.shieldblaze.expressgateway.common.curator;
+package com.shieldblaze.expressgateway.common.zookeeper;
 
 import com.shieldblaze.expressgateway.common.ExpressGateway;
 import org.apache.curator.test.InstanceSpec;
@@ -29,7 +29,7 @@ import java.io.File;
 import java.util.HashMap;
 import java.util.Map;
 
-import static com.shieldblaze.expressgateway.common.curator.ExpressGatewayUtils.forTest;
+import static com.shieldblaze.expressgateway.common.zookeeper.ExpressGatewayUtils.forTest;
 import static org.apache.zookeeper.client.ZKClientConfig.SECURE_CLIENT;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 

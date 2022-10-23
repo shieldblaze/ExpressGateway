@@ -18,7 +18,7 @@
 package com.shieldblaze.expressgateway.testing;
 
 import com.shieldblaze.expressgateway.common.ExpressGateway;
-import com.shieldblaze.expressgateway.common.curator.Environment;
+import com.shieldblaze.expressgateway.common.zookeeper.Environment;
 
 import java.io.File;
 import java.util.UUID;
