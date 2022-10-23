@@ -20,10 +20,7 @@ package com.shieldblaze.expressgateway.restapi.api.configuration;
 import com.google.gson.JsonObject;
 import com.google.gson.JsonParser;
 import com.shieldblaze.expressgateway.common.ExpressGateway;
-import com.shieldblaze.expressgateway.common.crypto.cryptostore.CryptoEntry;
-import com.shieldblaze.expressgateway.common.curator.Curator;
-import com.shieldblaze.expressgateway.common.curator.Environment;
-import com.shieldblaze.expressgateway.common.utils.SelfSignedCertificate;
+import com.shieldblaze.expressgateway.common.zookeeper.Curator;
 import com.shieldblaze.expressgateway.configuration.http.HttpConfiguration;
 import com.shieldblaze.expressgateway.restapi.CustomOkHttpClient;
 import com.shieldblaze.expressgateway.restapi.RestApi;
@@ -39,8 +36,6 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.TestMethodOrder;
 
 import java.io.IOException;
-import java.security.cert.X509Certificate;
-import java.util.List;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;

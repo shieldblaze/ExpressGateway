@@ -15,7 +15,7 @@
  * You should have received a copy of the GNU General Public License
  * along with ShieldBlaze ExpressGateway.  If not, see <https://www.gnu.org/licenses/>.
  */
-package com.shieldblaze.expressgateway.common.curator;
+package com.shieldblaze.expressgateway.common.zookeeper;
 
 import com.shieldblaze.expressgateway.common.ExpressGateway;
 import org.apache.curator.test.TestingServer;
@@ -23,15 +23,13 @@ import org.junit.jupiter.api.AfterAll;
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.Test;
 
-import java.util.UUID;
-
-import static com.shieldblaze.expressgateway.common.curator.Curator.getInstance;
-import static com.shieldblaze.expressgateway.common.curator.CuratorUtils.createNew;
-import static com.shieldblaze.expressgateway.common.curator.CuratorUtils.deleteData;
-import static com.shieldblaze.expressgateway.common.curator.CuratorUtils.doesPathExists;
-import static com.shieldblaze.expressgateway.common.curator.CuratorUtils.getData;
-import static com.shieldblaze.expressgateway.common.curator.CuratorUtils.setData;
-import static com.shieldblaze.expressgateway.common.curator.ExpressGatewayUtils.forTest;
+import static com.shieldblaze.expressgateway.common.zookeeper.Curator.getInstance;
+import static com.shieldblaze.expressgateway.common.zookeeper.CuratorUtils.createNew;
+import static com.shieldblaze.expressgateway.common.zookeeper.CuratorUtils.deleteData;
+import static com.shieldblaze.expressgateway.common.zookeeper.CuratorUtils.doesPathExists;
+import static com.shieldblaze.expressgateway.common.zookeeper.CuratorUtils.getData;
+import static com.shieldblaze.expressgateway.common.zookeeper.CuratorUtils.setData;
+import static com.shieldblaze.expressgateway.common.zookeeper.ExpressGatewayUtils.forTest;
 import static org.junit.jupiter.api.Assertions.assertDoesNotThrow;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;

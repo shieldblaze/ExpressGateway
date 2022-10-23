@@ -18,9 +18,9 @@
 package com.shieldblaze.expressgateway.configuration;
 
 import com.shieldblaze.expressgateway.common.ExpressGateway;
-import com.shieldblaze.expressgateway.common.curator.Curator;
-import com.shieldblaze.expressgateway.common.curator.Environment;
-import com.shieldblaze.expressgateway.common.curator.ZNodePath;
+import com.shieldblaze.expressgateway.common.zookeeper.Curator;
+import com.shieldblaze.expressgateway.common.zookeeper.Environment;
+import com.shieldblaze.expressgateway.common.zookeeper.ZNodePath;
 import io.netty.util.internal.StringUtil;
 import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
@@ -33,8 +33,8 @@ import java.nio.file.Path;
 import java.nio.file.StandardOpenOption;
 
 import static com.shieldblaze.expressgateway.common.JacksonJson.OBJECT_MAPPER;
-import static com.shieldblaze.expressgateway.common.curator.CuratorUtils.createNew;
-import static com.shieldblaze.expressgateway.common.curator.CuratorUtils.deleteData;
+import static com.shieldblaze.expressgateway.common.zookeeper.CuratorUtils.createNew;
+import static com.shieldblaze.expressgateway.common.zookeeper.CuratorUtils.deleteData;
 import static java.lang.System.getProperty;
 
 /**

@@ -18,7 +18,7 @@
 package com.shieldblaze.expressgateway.bootstrap;
 
 import com.shieldblaze.expressgateway.common.ExpressGateway;
-import com.shieldblaze.expressgateway.common.curator.Environment;
+import com.shieldblaze.expressgateway.common.zookeeper.Environment;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.Test;
