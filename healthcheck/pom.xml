@@ -39,7 +39,7 @@ along with ShieldBlaze ExpressGateway.  If not, see <https://www.gnu.org/license
         <dependency>
             <groupId>com.shieldblaze.expressgateway</groupId>
             <artifactId>common</artifactId>
-            <version>0.0.1-a</version>
+            <version>${project.parent.version}</version>
         </dependency>
     </dependencies>
 
