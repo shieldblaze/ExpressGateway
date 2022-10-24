@@ -40,17 +40,17 @@
         <dependency>
             <groupId>com.shieldblaze.expressgateway</groupId>
             <artifactId>integration</artifactId>
-            <version>0.0.1-a</version>
+            <version>${project.parent.version}</version>
         </dependency>
         <dependency>
             <groupId>com.shieldblaze.expressgateway</groupId>
             <artifactId>configuration</artifactId>
-            <version>0.0.1-a</version>
+            <version>${project.parent.version}</version>
         </dependency>
         <dependency>
             <groupId>com.shieldblaze.expressgateway</groupId>
             <artifactId>metrics</artifactId>
-            <version>0.0.1-a</version>
+            <version>${project.parent.version}</version>
         </dependency>
     </dependencies>
 </project>

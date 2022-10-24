@@ -40,27 +40,27 @@
         <dependency>
             <groupId>com.shieldblaze.expressgateway</groupId>
             <artifactId>backend</artifactId>
-            <version>0.0.1-a</version>
+            <version>${project.parent.version}</version>
         </dependency>
         <dependency>
             <groupId>com.shieldblaze.expressgateway</groupId>
             <artifactId>shaded-dependencies</artifactId>
-            <version>0.0.1-a</version>
+            <version>${project.parent.version}</version>
         </dependency>
         <dependency>
             <groupId>com.shieldblaze.expressgateway</groupId>
             <artifactId>core</artifactId>
-            <version>0.0.1-a</version>
+            <version>${project.parent.version}</version>
         </dependency>
         <dependency>
             <groupId>com.shieldblaze.expressgateway</groupId>
             <artifactId>protocol-tcp</artifactId>
-            <version>0.0.1-a</version>
+            <version>${project.parent.version}</version>
         </dependency>
         <dependency>
             <groupId>com.shieldblaze.expressgateway</groupId>
             <artifactId>metrics</artifactId>
-            <version>0.0.1-a</version>
+            <version>${project.parent.version}</version>
         </dependency>
     </dependencies>
 
