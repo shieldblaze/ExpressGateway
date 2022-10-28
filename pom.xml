@@ -31,6 +31,11 @@ along with ShieldBlaze ExpressGateway.  If not, see <https://www.gnu.org/license
         <java.version>17</java.version>
         <maven.compiler.source>17</maven.compiler.source>
         <maven.compiler.target>17</maven.compiler.target>
+
+        <!-- Version Management -->
+        <apache.curator>5.3.0</apache.curator>
+        <netty>4.1.84.Final</netty>
+        <spring.boot>2.7.5</spring.boot>
     </properties>
 
     <packaging>pom</packaging>
@@ -72,8 +77,9 @@ along with ShieldBlaze ExpressGateway.  If not, see <https://www.gnu.org/license
         <module>protocol-udp</module>
         <module>rest-api</module>
         <module>security</module>
+        <module>service-discovery-server</module>
         <module>shaded-dependencies</module>
-      <module>testing</module>
+        <module>testing</module>
     </modules>
 
     <repositories>
@@ -103,11 +109,25 @@ along with ShieldBlaze ExpressGateway.  If not, see <https://www.gnu.org/license
 
     <dependencies>
 
-        <!-- https://mvnrepository.com/artifact/io.netty/netty-all -->
+        <!-- https://mvnrepository.com/artifact/io.netty -->
         <dependency>
             <groupId>io.netty</groupId>
-            <artifactId>netty-all</artifactId>
-            <version>4.1.82.Final</version>
+            <artifactId>netty-codec-http</artifactId>
+            <version>${netty}</version>
+        </dependency>
+
+        <!-- https://mvnrepository.com/artifact/io.netty -->
+        <dependency>
+            <groupId>io.netty</groupId>
+            <artifactId>netty-codec-http2</artifactId>
+            <version>${netty}</version>
+        </dependency>
+
+        <!-- https://mvnrepository.com/artifact/io.netty -->
+        <dependency>
+            <groupId>io.netty</groupId>
+            <artifactId>netty-transport-classes-epoll</artifactId>
+            <version>4.1.84.Final</version>
         </dependency>
 
         <!-- https://mvnrepository.com/artifact/io.netty/netty-tcnative -->
@@ -215,13 +235,21 @@ along with ShieldBlaze ExpressGateway.  If not, see <https://www.gnu.org/license
         <dependency>
             <groupId>org.springframework.boot</groupId>
             <artifactId>spring-boot-starter-webflux</artifactId>
-            <version>2.7.4</version>
+            <version>${spring.boot}</version>
             <exclusions>
                 <exclusion>
                     <groupId>org.springframework.boot</groupId>
                     <artifactId>spring-boot-starter-logging</artifactId>
                 </exclusion>
             </exclusions>
+        </dependency>
+
+        <!-- https://mvnrepository.com/artifact/org.springframework.boot/spring-boot-starter-test -->
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-starter-test</artifactId>
+            <version>${spring.boot}</version>
+            <scope>test</scope>
         </dependency>
 
         <!-- https://mvnrepository.com/artifact/org.yaml/snakeyaml -->
@@ -280,7 +308,7 @@ along with ShieldBlaze ExpressGateway.  If not, see <https://www.gnu.org/license
         <dependency>
             <groupId>org.apache.curator</groupId>
             <artifactId>curator-framework</artifactId>
-            <version>5.3.0</version>
+            <version>${apache.curator}</version>
             <exclusions>
                 <!-- Remove log4j dependency -->
                 <exclusion>
@@ -294,7 +322,28 @@ along with ShieldBlaze ExpressGateway.  If not, see <https://www.gnu.org/license
         <dependency>
             <groupId>org.apache.curator</groupId>
             <artifactId>curator-recipes</artifactId>
-            <version>5.3.0</version>
+            <version>${apache.curator}</version>
+        </dependency>
+
+        <!-- https://mvnrepository.com/artifact/org.apache.curator/curator-x-discovery -->
+        <dependency>
+            <groupId>org.apache.curator</groupId>
+            <artifactId>curator-x-discovery</artifactId>
+            <version>${apache.curator}</version>
+        </dependency>
+
+        <!-- https://mvnrepository.com/artifact/org.apache.curator/curator-test -->
+        <dependency>
+            <groupId>org.apache.curator</groupId>
+            <artifactId>curator-test</artifactId>
+            <version>${apache.curator}</version>
+            <scope>test</scope>
+            <exclusions>
+                <exclusion>
+                    <groupId>log4j</groupId>
+                    <artifactId>log4j</artifactId>
+                </exclusion>
+            </exclusions>
         </dependency>
 
         <!-- https://mvnrepository.com/artifact/org.mockito/mockito-core -->
