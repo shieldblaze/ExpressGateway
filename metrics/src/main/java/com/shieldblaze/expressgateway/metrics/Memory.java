@@ -122,22 +122,15 @@ public final class Memory implements MemoryMetric {
         return memory().physicalMemoryUsed();
     }
 
-    private static class Suffix {
-        final String name;
-        final long multiplier;
-
-        private Suffix(String name, long multiplier) {
-            this.name = name;
-            this.multiplier = multiplier;
-        }
+    private record Suffix(String name, long multiplier) {
 
         static Suffix find(String line) {
-            for (Suffix s : SUFFIXES)
-                if (line.substring(line.length() - s.name.length()).equalsIgnoreCase(s.name))
-                    return s;
-            return NONE;
+                for (Suffix s : SUFFIXES)
+                    if (line.substring(line.length() - s.name.length()).equalsIgnoreCase(s.name))
+                        return s;
+                return NONE;
+            }
         }
-    }
 
     public static final class MemoryUsage {
         /**

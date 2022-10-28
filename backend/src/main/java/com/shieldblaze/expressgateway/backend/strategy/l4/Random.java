@@ -76,8 +76,7 @@ public final class Random extends L4Balance {
 
     @Override
     public void accept(Event event) {
-        if (event instanceof NodeEvent) {
-            NodeEvent nodeEvent = (NodeEvent) event;
+        if (event instanceof NodeEvent nodeEvent) {
             if (nodeEvent instanceof NodeOfflineEvent || nodeEvent instanceof NodeRemovedEvent) {
                 sessionPersistence.remove(nodeEvent.node());
             }

@@ -68,8 +68,7 @@ public final class UpstreamHandler extends ChannelDuplexHandler {
 
     @Override
     public void channelRead(ChannelHandlerContext ctx, Object msg) throws Exception {
-        if (msg instanceof HttpRequest) {
-            HttpRequest request = (HttpRequest) msg;
+        if (msg instanceof HttpRequest request) {
 
             InetSocketAddress socketAddress = (InetSocketAddress) ctx.channel().remoteAddress();
             Cluster cluster = httpLoadBalancer.cluster(request.headers().getAsString(HttpHeaderNames.HOST));

@@ -26,8 +26,7 @@ final class WebSocketHandler extends SimpleChannelInboundHandler<WebSocketFrame>
 
     @Override
     protected void channelRead0(ChannelHandlerContext ctx, WebSocketFrame webSocketFrame) {
-        if (webSocketFrame instanceof TextWebSocketFrame) {
-            TextWebSocketFrame frame = (TextWebSocketFrame) webSocketFrame;
+        if (webSocketFrame instanceof TextWebSocketFrame frame) {
 
             // Echo Back
             ctx.writeAndFlush(new TextWebSocketFrame(frame.text()));

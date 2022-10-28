@@ -151,11 +151,9 @@ public class CustomFullHttpRequest extends CustomHttpRequest implements FullHttp
 
     @Override
     public boolean equals(Object o) {
-        if (!(o instanceof CustomFullHttpRequest)) {
+        if (!(o instanceof CustomFullHttpRequest other)) {
             return false;
         }
-
-        CustomFullHttpRequest other = (CustomFullHttpRequest) o;
 
         return super.equals(other) &&
                 content().equals(other.content()) &&
@@ -164,6 +162,6 @@ public class CustomFullHttpRequest extends CustomHttpRequest implements FullHttp
 
     @Override
     public String toString() {
-        return HttpMessageUtil.appendFullRequest(new StringBuilder(256), this).toString() + "/" + id();
+        return HttpMessageUtil.appendFullRequest(new StringBuilder(256), this) + "/" + id();
     }
 }

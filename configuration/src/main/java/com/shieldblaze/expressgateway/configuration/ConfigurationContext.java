@@ -28,8 +28,6 @@ import com.shieldblaze.expressgateway.configuration.transport.TransportConfigura
 import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
 
-import java.io.IOException;
-
 public record ConfigurationContext(BufferConfiguration bufferConfiguration,
                                    EventLoopConfiguration eventLoopConfiguration,
                                    EventStreamConfiguration eventStreamConfiguration,

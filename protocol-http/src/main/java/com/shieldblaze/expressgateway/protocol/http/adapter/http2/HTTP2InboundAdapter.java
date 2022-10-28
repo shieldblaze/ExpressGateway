@@ -205,8 +205,7 @@ public final class HTTP2InboundAdapter extends ChannelDuplexHandler {
                 writeHeaders(ctx, inboundProperty, headersFrame, promise);
             }
         } else if (msg instanceof HttpContent) {
-            if (msg instanceof CustomLastHttpContent) {
-                CustomLastHttpContent lastHttpContent = (CustomLastHttpContent) msg;
+            if (msg instanceof CustomLastHttpContent lastHttpContent) {
                 InboundProperty property = stream(lastHttpContent.id());
 
                 // > If Trailing Headers are empty then we'll write HTTP/2 Data Frame with 'endOfStream' set to 'true.
@@ -226,8 +225,7 @@ public final class HTTP2InboundAdapter extends ChannelDuplexHandler {
 
                 // We're done with this Stream
                 removeStream(property);
-            } else if (msg instanceof CustomHttpContent) {
-                CustomHttpContent httpContent = (CustomHttpContent) msg;
+            } else if (msg instanceof CustomHttpContent httpContent) {
                 InboundProperty property = stream(httpContent.id());
 
                 Http2DataFrame dataFrame = new DefaultHttp2DataFrame(httpContent.content(), false);

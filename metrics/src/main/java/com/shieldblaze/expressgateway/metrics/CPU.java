@@ -30,6 +30,6 @@ public class CPU implements CPUMetric {
 
     @Override
     public double cpu() {
-        return OS_BEAN.getSystemCpuLoad();
+        return OS_BEAN.getCpuLoad();
     }
 }

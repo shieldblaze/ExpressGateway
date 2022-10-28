@@ -37,8 +37,7 @@ public final class PrivateKeyUtil {
             PEMParser reader = new PEMParser(new StringReader(pem));
 
             Object obj = reader.readObject();
-            if (obj instanceof PEMKeyPair) {
-                PEMKeyPair pemKeyPair = (PEMKeyPair) obj;
+            if (obj instanceof PEMKeyPair pemKeyPair) {
                 JcaPEMKeyConverter jcaPEMKeyConverter = new JcaPEMKeyConverter().setProvider(new BouncyCastleProvider());
                 KeyPair keyPair = jcaPEMKeyConverter.getKeyPair(pemKeyPair);
 

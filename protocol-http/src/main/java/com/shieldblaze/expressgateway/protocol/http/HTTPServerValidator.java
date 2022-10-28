@@ -50,8 +50,7 @@ final class HTTPServerValidator extends ChannelInboundHandlerAdapter {
             return;
         }
 
-        if (msg instanceof HttpRequest) {
-            HttpRequest request = (HttpRequest) msg;
+        if (msg instanceof HttpRequest request) {
 
             // We don't support HTTP/1.0. Throw error back if we get HTTP/1.0 request.
             if (request.protocolVersion() == HttpVersion.HTTP_1_0) {

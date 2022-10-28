@@ -142,11 +142,9 @@ public class CustomFullHttpResponse extends CustomHttpResponse implements FullHt
 
     @Override
     public boolean equals(Object o) {
-        if (!(o instanceof CustomFullHttpResponse)) {
+        if (!(o instanceof CustomFullHttpResponse other)) {
             return false;
         }
-
-        CustomFullHttpResponse other = (CustomFullHttpResponse) o;
 
         return super.equals(other) &&
                 content().equals(other.content()) &&
@@ -155,6 +153,6 @@ public class CustomFullHttpResponse extends CustomHttpResponse implements FullHt
 
     @Override
     public String toString() {
-        return HttpMessageUtil.appendFullResponse(new StringBuilder(256), this).toString() + "/" + id();
+        return HttpMessageUtil.appendFullResponse(new StringBuilder(256), this) + "/" + id();
     }
 }

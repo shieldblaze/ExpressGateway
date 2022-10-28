@@ -19,7 +19,6 @@ package com.shieldblaze.expressgateway.security;
 
 import io.github.bucket4j.Bandwidth;
 import io.github.bucket4j.Bucket;
-import io.github.bucket4j.Bucket4j;
 import io.netty.channel.ChannelHandler;
 import io.netty.channel.ChannelHandlerContext;
 import io.netty.handler.ipfilter.IpSubnetFilter;
@@ -80,7 +79,7 @@ public final class NACL extends IpSubnetFilter {
             logger.info("Connection Rate-Limit is Disabled");
         } else {
             Bandwidth limit = Bandwidth.simple(connections, duration);
-            bucket = Bucket4j.builder().addLimit(limit).withNanosecondPrecision().build();
+            bucket = Bucket.builder().addLimit(limit).withNanosecondPrecision().build();
             logger.info("Connection Rate-Limit is Enabled for {} connection(s) in {}", connections, duration);
         }
     }

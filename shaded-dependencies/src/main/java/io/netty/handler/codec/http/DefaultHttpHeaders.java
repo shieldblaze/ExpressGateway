@@ -62,30 +62,24 @@ import static io.netty.util.AsciiString.CASE_SENSITIVE_HASHER;
  */
 public class DefaultHttpHeaders extends HttpHeaders {
     private static final int HIGHEST_INVALID_VALUE_CHAR_MASK = ~15;
-    private static final ByteProcessor HEADER_NAME_VALIDATOR = new ByteProcessor() {
-        @Override
-        public boolean process(byte value) throws Exception {
-            validateHeaderNameElement(value);
-            return true;
-        }
+    private static final ByteProcessor HEADER_NAME_VALIDATOR = value -> {
+        validateHeaderNameElement(value);
+        return true;
     };
-    public static final NameValidator<CharSequence> HttpNameValidator = new NameValidator<CharSequence>() {
-        @Override
-        public void validateName(CharSequence name) {
-            if (name == null || name.length() == 0) {
-                throw new IllegalArgumentException("empty headers are not allowed [" + name + "]");
+    public static final NameValidator<CharSequence> HttpNameValidator = name -> {
+        if (name == null || name.length() == 0) {
+            throw new IllegalArgumentException("empty headers are not allowed [" + name + "]");
+        }
+        if (name instanceof AsciiString) {
+            try {
+                ((AsciiString) name).forEachByte(HEADER_NAME_VALIDATOR);
+            } catch (Exception e) {
+                PlatformDependent.throwException(e);
             }
-            if (name instanceof AsciiString) {
-                try {
-                    ((AsciiString) name).forEachByte(HEADER_NAME_VALIDATOR);
-                } catch (Exception e) {
-                    PlatformDependent.throwException(e);
-                }
-            } else {
-                // Go through each character in the name
-                for (int index = 0; index < name.length(); ++index) {
-                    validateHeaderNameElement(name.charAt(index));
-                }
+        } else {
+            // Go through each character in the name
+            for (int index = 0; index < name.length(); ++index) {
+                validateHeaderNameElement(name.charAt(index));
             }
         }
     };
@@ -113,7 +107,7 @@ public class DefaultHttpHeaders extends HttpHeaders {
     }
 
     protected DefaultHttpHeaders(boolean validate, NameValidator<CharSequence> nameValidator) {
-        this(new DefaultHeadersImpl<CharSequence, CharSequence>(CASE_INSENSITIVE_HASHER,
+        this(new DefaultHeadersImpl<>(CASE_INSENSITIVE_HASHER,
                 valueConverter(validate),
                 nameValidator));
     }
@@ -287,7 +281,7 @@ public class DefaultHttpHeaders extends HttpHeaders {
         if (isEmpty()) {
             return Collections.emptyList();
         }
-        List<Entry<String, String>> entriesConverted = new ArrayList<Entry<String, String>>(
+        List<Entry<String, String>> entriesConverted = new ArrayList<>(
                 headers.size());
         for (Entry<String, String> entry : this) {
             entriesConverted.add(entry);
@@ -309,7 +303,7 @@ public class DefaultHttpHeaders extends HttpHeaders {
     @Override
     public Iterator<String> valueStringIterator(CharSequence name) {
         final Iterator<CharSequence> itr = valueCharSequenceIterator(name);
-        return new Iterator<String>() {
+        return new Iterator<>() {
             @Override
             public boolean hasNext() {
                 return itr.hasNext();
@@ -487,12 +481,11 @@ public class DefaultHttpHeaders extends HttpHeaders {
             if ((character & HIGHEST_INVALID_VALUE_CHAR_MASK) == 0) {
                 // Check the absolutely prohibited characters.
                 switch (character) {
-                    case 0x0: // NULL
-                        throw new IllegalArgumentException("a header value contains a prohibited character '\0': " + seq);
-                    case 0x0b: // Vertical tab
-                        throw new IllegalArgumentException("a header value contains a prohibited character '\\v': " + seq);
-                    case '\f':
-                        throw new IllegalArgumentException("a header value contains a prohibited character '\\f': " + seq);
+                    case 0x0 -> // NULL
+                            throw new IllegalArgumentException("a header value contains a prohibited character '\0': " + seq);
+                    case 0x0b -> // Vertical tab
+                            throw new IllegalArgumentException("a header value contains a prohibited character '\\v': " + seq);
+                    case '\f' -> throw new IllegalArgumentException("a header value contains a prohibited character '\\f': " + seq);
                 }
             }
 
@@ -507,20 +500,15 @@ public class DefaultHttpHeaders extends HttpHeaders {
                     }
                     break;
                 case 1:
-                    switch (character) {
-                        case '\n':
-                            return 2;
-                        default:
-                            throw new IllegalArgumentException("only '\\n' is allowed after '\\r': " + seq);
+                    if (character == '\n') {
+                        return 2;
                     }
+                    throw new IllegalArgumentException("only '\\n' is allowed after '\\r': " + seq);
                 case 2:
-                    switch (character) {
-                        case '\t':
-                        case ' ':
-                            return 0;
-                        default:
-                            throw new IllegalArgumentException("only ' ' and '\\t' are allowed after '\\n': " + seq);
-                    }
+                    return switch (character) {
+                        case '\t', ' ' -> 0;
+                        default -> throw new IllegalArgumentException("only ' ' and '\\t' are allowed after '\\n': " + seq);
+                    };
             }
             return state;
         }

@@ -58,20 +58,12 @@ public class HTTPContentCompressor extends HttpContentCompressor {
             return null;
         }
 
-        ChannelHandler compressor;
-        switch (targetContentEncoding) {
-            case "gzip":
-                compressor = ZlibCodecFactory.newZlibEncoder(ZlibWrapper.GZIP, compressionLevel, 15, 8);
-                break;
-            case "deflate":
-                compressor = ZlibCodecFactory.newZlibEncoder(ZlibWrapper.ZLIB, compressionLevel, 15, 8);
-                break;
-            case "br":
-                compressor = new BrotliEncoder(brotliCompressionQuality);
-                break;
-            default:
-                throw new Error();
-        }
+        ChannelHandler compressor = switch (targetContentEncoding) {
+            case "gzip" -> ZlibCodecFactory.newZlibEncoder(ZlibWrapper.GZIP, compressionLevel, 15, 8);
+            case "deflate" -> ZlibCodecFactory.newZlibEncoder(ZlibWrapper.ZLIB, compressionLevel, 15, 8);
+            case "br" -> new BrotliEncoder(brotliCompressionQuality);
+            default -> throw new Error();
+        };
 
         return new Result(targetContentEncoding, new EmbeddedChannel(ctx.channel().id(), ctx.channel().metadata().hasDisconnect(), ctx.channel().config(), compressor));
     }

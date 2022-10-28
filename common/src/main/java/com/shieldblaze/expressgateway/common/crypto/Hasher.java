@@ -44,13 +44,10 @@ public final class Hasher {
     }
 
     private static MessageDigest messageDigest(Algorithm algorithm) throws NoSuchAlgorithmException {
-        switch (algorithm) {
-            case SHA256:
-                return MessageDigest.getInstance("SHA-256");
-            case SHA384:
-                return MessageDigest.getInstance("SHA-384");
-            default:
-                throw new IllegalArgumentException("Unknown Algorithm: " + algorithm);
-        }
+        return switch (algorithm) {
+            case SHA256 -> MessageDigest.getInstance("SHA-256");
+            case SHA384 -> MessageDigest.getInstance("SHA-384");
+            default -> throw new IllegalArgumentException("Unknown Algorithm: " + algorithm);
+        };
     }
 }

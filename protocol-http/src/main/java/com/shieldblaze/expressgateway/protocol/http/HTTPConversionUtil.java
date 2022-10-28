@@ -162,8 +162,7 @@ public class HTTPConversionUtil {
     public static Http2Headers toHttp2Headers(HttpMessage in) {
         HttpHeaders inHeaders = in.headers();
         Http2Headers out = new DefaultHttp2Headers(false, inHeaders.size());
-        if (in instanceof HttpRequest) {
-            HttpRequest request = (HttpRequest) in;
+        if (in instanceof HttpRequest request) {
             URI requestTargetUri = URI.create(request.uri());
             out.path(toHttp2Path(requestTargetUri));
             out.method(request.method().asciiName());
@@ -173,8 +172,7 @@ public class HTTPConversionUtil {
                 String host = inHeaders.getAsString(HttpHeaderNames.HOST);
                 setHttp2Authority((host == null || host.isEmpty()) ? requestTargetUri.getAuthority() : host, out);
             }
-        } else if (in instanceof HttpResponse) {
-            HttpResponse response = (HttpResponse) in;
+        } else if (in instanceof HttpResponse response) {
             out.status(response.status().codeAsText());
         }
 

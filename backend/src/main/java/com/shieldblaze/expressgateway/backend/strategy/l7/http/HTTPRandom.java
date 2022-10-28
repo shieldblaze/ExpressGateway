@@ -78,8 +78,7 @@ public final class HTTPRandom extends HTTPBalance {
 
     @Override
     public void accept(Event event) {
-        if (event instanceof NodeEvent) {
-            NodeEvent nodeEvent = (NodeEvent) event;
+        if (event instanceof NodeEvent nodeEvent) {
             if (nodeEvent instanceof NodeOfflineEvent || nodeEvent instanceof NodeRemovedEvent || nodeEvent instanceof NodeIdleEvent) {
                 sessionPersistence.remove(nodeEvent.node());
             }

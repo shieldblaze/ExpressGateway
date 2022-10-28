@@ -19,32 +19,11 @@ package com.shieldblaze.expressgateway.integration.aws.lightsail.dns;
 
 import java.util.Objects;
 
-public final class LightsailDNSRecordBody {
-    private final String name;
-    private final String domainName;
-    private final String type;
-    private final String target;
-
+public record LightsailDNSRecordBody(String name, String domainName, String type, String target) {
     public LightsailDNSRecordBody(String name, String domainName, String type, String target) {
         this.name = Objects.requireNonNull(name, "Name");
         this.domainName = Objects.requireNonNull(domainName, "DomainName");
         this.type = Objects.requireNonNull(type, "Type");
         this.target = Objects.requireNonNull(target, "Target");
-    }
-
-    public String name() {
-        return name;
-    }
-
-    public String domainName() {
-        return domainName;
-    }
-
-    public String type() {
-        return type;
-    }
-
-    public String target() {
-        return target;
     }
 }
