@@ -39,8 +39,7 @@ public enum Environment {
     }
 
     /**
-     * Automatically detect environment from System Property or System environment variable.
-     * Default value is {@link #PRODUCTION}.
+     * Automatically detect environment
      *
      * @return {@link Environment} type
      */
