@@ -18,7 +18,6 @@
 package com.shieldblaze.expressgateway.common.curator;
 
 import com.shieldblaze.expressgateway.common.ExpressGateway;
-import com.shieldblaze.expressgateway.common.utils.SystemPropertyUtil;
 
 /**
  * Environments for ZooKeeper
@@ -39,7 +38,8 @@ public enum Environment {
     }
 
     /**
-     * Automatically detect environment
+     * Automatically detect environment from System Property or System environment variable.
+     * Default value is {@link #PRODUCTION}.
      *
      * @return {@link Environment} type
      */
