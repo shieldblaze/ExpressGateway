@@ -20,29 +20,7 @@ package com.shieldblaze.expressgateway.protocol.http.adapter.http2;
 import io.netty.handler.codec.http.HttpFrame;
 import io.netty.handler.codec.http2.Http2FrameStream;
 
-final class InboundProperty {
-
-    private final HttpFrame httpFrame;
-    private final Http2FrameStream stream;
-    private final String acceptEncoding;
-
-    InboundProperty(HttpFrame httpFrame, Http2FrameStream stream, String acceptEncoding) {
-        this.httpFrame = httpFrame;
-        this.stream = stream;
-        this.acceptEncoding = acceptEncoding;
-    }
-
-    HttpFrame httpFrame() {
-        return httpFrame;
-    }
-
-    Http2FrameStream stream() {
-        return stream;
-    }
-
-    String acceptEncoding() {
-        return acceptEncoding;
-    }
+record InboundProperty(HttpFrame httpFrame, Http2FrameStream stream, String acceptEncoding) {
 
     @Override
     public String toString() {

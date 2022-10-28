@@ -19,7 +19,6 @@ package com.shieldblaze.expressgateway.restapi;
 
 import com.shieldblaze.expressgateway.common.ExpressGateway;
 import com.shieldblaze.expressgateway.common.crypto.cryptostore.CryptoEntry;
-import com.shieldblaze.expressgateway.common.utils.SelfSignedCertificate;
 import com.shieldblaze.expressgateway.testing.ExpressGatewayConfigured;
 import io.netty.handler.ssl.util.InsecureTrustManagerFactory;
 import org.junit.jupiter.api.Test;
@@ -32,8 +31,6 @@ import java.io.ByteArrayInputStream;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.security.SecureRandom;
-import java.security.cert.X509Certificate;
-import java.util.List;
 
 import static com.shieldblaze.expressgateway.common.crypto.cryptostore.CryptoStore.fetchPrivateKeyCertificateEntry;
 import static org.junit.jupiter.api.Assertions.assertArrayEquals;

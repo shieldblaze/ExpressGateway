@@ -261,21 +261,23 @@ public abstract class HttpObjectDecoder extends ByteToMessageDecoder {
                     HttpFrame httpFrame = (HttpFrame) message;
                     currentState = nextState;
                     switch (nextState) {
-                        case SKIP_CONTROL_CHARS:
+                        case SKIP_CONTROL_CHARS -> {
                             // fast-path
                             // No content is expected.
                             out.add(message);
                             out.add(new CustomLastHttpContent(Unpooled.EMPTY_BUFFER, httpFrame.protocol(), httpFrame.id()));
                             resetNow();
                             return;
-                        case READ_CHUNK_SIZE:
+                        }
+                        case READ_CHUNK_SIZE -> {
                             if (!chunkedSupported) {
                                 throw new IllegalArgumentException("Chunked messages not supported");
                             }
                             // Chunked encoding - generate HttpMessage first.  HttpChunks will follow.
                             out.add(message);
                             return;
-                        default:
+                        }
+                        default -> {
                             /**
                              * <a href="https://tools.ietf.org/html/rfc7230#section-3.3.3">RFC 7230, 3.3.3</a> states that if a
                              * request does not have either a transfer-encoding or a content-length header then the message body
@@ -289,11 +291,8 @@ public abstract class HttpObjectDecoder extends ByteToMessageDecoder {
                                 resetNow();
                                 return;
                             }
-
                             assert nextState == State.READ_FIXED_LENGTH_CONTENT || nextState == State.READ_VARIABLE_LENGTH_CONTENT;
-
                             out.add(message);
-
                             if (nextState == State.READ_FIXED_LENGTH_CONTENT) {
                                 // chunkSize will be decreased as the READ_FIXED_LENGTH_CONTENT state reads data chunk by chunk.
                                 chunkSize = contentLength;
@@ -301,6 +300,7 @@ public abstract class HttpObjectDecoder extends ByteToMessageDecoder {
 
                             // We return here, this forces decode to be called again where we will decode the content
                             return;
+                        }
                     }
                 } catch (Exception e) {
                     out.add(invalidMessage(buffer, e));
@@ -485,21 +485,16 @@ public abstract class HttpObjectDecoder extends ByteToMessageDecoder {
     public void userEventTriggered(ChannelHandlerContext ctx, Object evt) throws Exception {
         if (evt instanceof HttpExpectationFailedEvent) {
             switch (currentState) {
-                case READ_FIXED_LENGTH_CONTENT:
-                case READ_VARIABLE_LENGTH_CONTENT:
-                case READ_CHUNK_SIZE:
-                    reset();
-                    break;
-                default:
-                    break;
+                case READ_FIXED_LENGTH_CONTENT, READ_VARIABLE_LENGTH_CONTENT, READ_CHUNK_SIZE -> reset();
+                default -> {
+                }
             }
         }
         super.userEventTriggered(ctx, evt);
     }
 
     protected boolean isContentAlwaysEmpty(HttpMessage msg) {
-        if (msg instanceof HttpResponse) {
-            HttpResponse res = (HttpResponse) msg;
+        if (msg instanceof HttpResponse res) {
             int code = res.status().code();
 
             // Correctly handle return codes of 1xx.

@@ -52,31 +52,26 @@ class EventStreamTest {
         }
     }
 
-    private static final class SimpleEvent implements Event {
-        private final String string;
-
-        public SimpleEvent(String string) {
-            this.string = string;
-        }
+    private record SimpleEvent(String string) implements Event {
 
         @Override
-        public CompletableFuture future() {
-            return null;
-        }
+            public CompletableFuture future() {
+                return null;
+            }
 
-        @Override
-        public boolean isFinished() {
-            return false;
-        }
+            @Override
+            public boolean isFinished() {
+                return false;
+            }
 
-        @Override
-        public boolean isSuccess() {
-            return false;
-        }
+            @Override
+            public boolean isSuccess() {
+                return false;
+            }
 
-        @Override
-        public Throwable cause() {
-            return null;
+            @Override
+            public Throwable cause() {
+                return null;
+            }
         }
-    }
 }

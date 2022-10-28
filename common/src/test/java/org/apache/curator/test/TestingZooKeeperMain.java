@@ -50,7 +50,7 @@ public class TestingZooKeeperMain implements ZooKeeperMainFace
     private static final Logger log = LoggerFactory.getLogger(TestingZooKeeperMain.class);
 
     private final CountDownLatch latch = new CountDownLatch(1);
-    private final AtomicReference<Exception> startingException = new AtomicReference<Exception>(null);
+    private final AtomicReference<Exception> startingException = new AtomicReference<>(null);
 
     private volatile ServerCnxnFactory cnxnFactory;
     private volatile TestZooKeeperServer zkServer;

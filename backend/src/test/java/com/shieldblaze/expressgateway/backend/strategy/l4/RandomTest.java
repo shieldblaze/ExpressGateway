@@ -51,28 +51,28 @@ class RandomTest {
 
         for (int i = 0; i < 1000; i++) {
             switch (cluster.nextNode(l4Request).node().socketAddress().getHostString()) {
-                case "172.16.20.1": {
+                case "172.16.20.1" -> {
                     first++;
                     break;
                 }
-                case "172.16.20.2": {
+                case "172.16.20.2" -> {
                     second++;
                     break;
                 }
-                case "172.16.20.3": {
+                case "172.16.20.3" -> {
                     third++;
                     break;
                 }
-                case "172.16.20.4": {
+                case "172.16.20.4" -> {
                     forth++;
                     break;
                 }
-                case "172.16.20.5": {
+                case "172.16.20.5" -> {
                     fifth++;
                     break;
                 }
-                default:
-                    break;
+                default -> {
+                }
             }
         }
 

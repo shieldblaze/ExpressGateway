@@ -22,12 +22,11 @@ import com.fasterxml.jackson.databind.node.ObjectNode;
 import org.apache.curator.x.discovery.ServiceDiscovery;
 import org.apache.curator.x.discovery.ServiceInstance;
 import org.apache.curator.x.discovery.ServiceInstanceBuilder;
-import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.http.HttpStatus;
+import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.DeleteMapping;
 import org.springframework.web.bind.annotation.GetMapping;
-import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.PutMapping;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
@@ -38,7 +37,6 @@ import java.util.Collection;
 
 import static com.shieldblaze.expressgateway.common.JacksonJson.OBJECT_MAPPER;
 import static com.shieldblaze.expressgateway.servicediscovery.server.ServiceDiscoveryServer.SERVICE_NAME;
-import static io.netty.handler.codec.http.HttpHeaders.Values.APPLICATION_JSON;
 
 @RestController
 @RequestMapping("/api/v1/service/")
@@ -50,7 +48,7 @@ public class Handler {
         this.serviceDiscovery = serviceDiscovery;
     }
 
-    @PutMapping(value = "/register", produces = APPLICATION_JSON)
+    @PutMapping(value = "/register", produces = MediaType.APPLICATION_JSON_VALUE)
     public ResponseEntity<String> register(@RequestBody Node node) throws Exception {
         serviceDiscovery.registerService(instance(node));
 
@@ -60,7 +58,7 @@ public class Handler {
         return ResponseEntity.status(HttpStatus.OK).body(objectNode.toPrettyString());
     }
 
-    @DeleteMapping(value = "/unregister", produces = APPLICATION_JSON)
+    @DeleteMapping(value = "/unregister", produces = MediaType.APPLICATION_JSON_VALUE)
     public ResponseEntity<String> unregister(@RequestBody Node node) throws Exception {
         serviceDiscovery.unregisterService(instance(node));
 
@@ -70,7 +68,7 @@ public class Handler {
         return ResponseEntity.status(HttpStatus.OK).body(objectNode.toPrettyString());
     }
 
-    @GetMapping(value = "/get", produces = APPLICATION_JSON)
+    @GetMapping(value = "/get", produces = MediaType.APPLICATION_JSON_VALUE)
     public ResponseEntity<String> get(@RequestParam String id) throws Exception {
         ServiceInstance<Node> serviceInstance = serviceDiscovery.queryForInstance(SERVICE_NAME, id);
 
@@ -82,7 +80,7 @@ public class Handler {
         return ResponseEntity.status(HttpStatus.OK).body(objectNode.toPrettyString());
     }
 
-    @GetMapping(value = "/getall", produces = APPLICATION_JSON)
+    @GetMapping(value = "/getall", produces = MediaType.APPLICATION_JSON_VALUE)
     public ResponseEntity<String> getAll() throws Exception {
         Collection<ServiceInstance<Node>> serviceInstances = serviceDiscovery.queryForInstances(SERVICE_NAME);
 

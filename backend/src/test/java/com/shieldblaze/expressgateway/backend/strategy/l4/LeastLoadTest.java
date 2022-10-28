@@ -52,24 +52,24 @@ class LeastLoadTest {
             Node node = cluster.nextNode(l4Request).node();
             node.incActiveConnection0();
             switch (node.socketAddress().getHostString()) {
-                case "10.10.1.1": {
+                case "10.10.1.1" -> {
                     first++;
                     break;
                 }
-                case "10.10.1.2": {
+                case "10.10.1.2" -> {
                     second++;
                     break;
                 }
-                case "10.10.1.3": {
+                case "10.10.1.3" -> {
                     third++;
                     break;
                 }
-                case "10.10.1.4": {
+                case "10.10.1.4" -> {
                     forth++;
                     break;
                 }
-                default:
-                    break;
+                default -> {
+                }
             }
         }
 

@@ -111,8 +111,7 @@ public abstract class HttpObjectEncoder<H extends HttpMessage> extends MessageTo
         //     ch.write(Unpooled.EMPTY_BUFFER).addListener(ChannelFutureListener.CLOSE);
         //
         // See https://github.com/netty/netty/issues/2983 for more information.
-        if (msg instanceof ByteBuf) {
-            final ByteBuf potentialEmptyBuf = (ByteBuf) msg;
+        if (msg instanceof final ByteBuf potentialEmptyBuf) {
             if (!potentialEmptyBuf.isReadable()) {
                 out.add(potentialEmptyBuf.retain());
                 return;

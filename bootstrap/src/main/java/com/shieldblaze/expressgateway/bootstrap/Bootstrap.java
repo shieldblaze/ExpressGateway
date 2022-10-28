@@ -19,17 +19,13 @@ package com.shieldblaze.expressgateway.bootstrap;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.shieldblaze.expressgateway.common.ExpressGateway;
-import com.shieldblaze.expressgateway.common.crypto.cryptostore.CryptoEntry;
 import com.shieldblaze.expressgateway.restapi.RestApi;
 import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
 
-import java.io.ByteArrayInputStream;
 import java.io.File;
-import java.nio.file.Files;
 import java.nio.file.Path;
 
-import static com.shieldblaze.expressgateway.common.crypto.cryptostore.CryptoStore.fetchPrivateKeyCertificateEntry;
 import static com.shieldblaze.expressgateway.common.utils.SystemPropertyUtil.getPropertyOrEnv;
 
 /**
@@ -43,14 +39,15 @@ public final class Bootstrap {
     }
 
     public static void main(String[] args) throws Exception {
-        System.out.println("  ______                               _____       _                           \n" +
-                " |  ____|                             / ____|     | |                          \n" +
-                " | |__  __  ___ __  _ __ ___  ___ ___| |  __  __ _| |_ _____      ____ _ _   _ \n" +
-                " |  __| \\ \\/ / '_ \\| '__/ _ \\/ __/ __| | |_ |/ _` | __/ _ \\ \\ /\\ / / _` | | | |\n" +
-                " | |____ >  <| |_) | | |  __/\\__ \\__ \\ |__| | (_| | ||  __/\\ V  V / (_| | |_| |\n" +
-                " |______/_/\\_\\ .__/|_|  \\___||___/___/\\_____|\\__,_|\\__\\___| \\_/\\_/ \\__,_|\\__, |\n" +
-                "             | |                                                          __/ |\n" +
-                "             |_|                                                         |___/ ");
+        System.out.println("""
+                 ______                               _____       _                          \s
+                |  ____|                             / ____|     | |                         \s
+                | |__  __  ___ __  _ __ ___  ___ ___| |  __  __ _| |_ _____      ____ _ _   _\s
+                |  __| \\ \\/ / '_ \\| '__/ _ \\/ __/ __| | |_ |/ _` | __/ _ \\ \\ /\\ / / _` | | | |
+                | |____ >  <| |_) | | |  __/\\__ \\__ \\ |__| | (_| | ||  __/\\ V  V / (_| | |_| |
+                |______/_/\\_\\ .__/|_|  \\___||___/___/\\_____|\\__,_|\\__\\___| \\_/\\_/ \\__,_|\\__, |
+                            | |                                                          __/ |
+                            |_|                                                         |___/\s""".indent(1));
 
         logger.info("Starting ShieldBlaze ExpressGateway v0.1-a");
         loadApplicationFile();

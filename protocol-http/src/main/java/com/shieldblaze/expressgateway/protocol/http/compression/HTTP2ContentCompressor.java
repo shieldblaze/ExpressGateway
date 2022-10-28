@@ -54,19 +54,13 @@ public class HTTP2ContentCompressor extends CompressorHttp2ConnectionEncoder {
     @Override
     protected EmbeddedChannel newContentCompressor(ChannelHandlerContext ctx, CharSequence contentEncoding) {
         Channel channel = ctx.channel();
-        switch (contentEncoding.toString().toLowerCase()) {
-            case "gzip":
-            case "x-gzip":
-                return new EmbeddedChannel(channel.id(), channel.metadata().hasDisconnect(), channel.config(),
-                        ZlibCodecFactory.newZlibEncoder(ZlibWrapper.GZIP, compressionLevel, 15, 8));
-            case "deflate":
-            case "x-deflate":
-                return new EmbeddedChannel(channel.id(), channel.metadata().hasDisconnect(), channel.config(),
-                        ZlibCodecFactory.newZlibEncoder(ZlibWrapper.ZLIB, compressionLevel, 15, 8));
-            case "br":
-                return new EmbeddedChannel(channel.id(), channel.metadata().hasDisconnect(), channel.config(), new BrotliEncoder(brotliCompressionQuality));
-            default:
-                return null;
-        }
+        return switch (contentEncoding.toString().toLowerCase()) {
+            case "gzip", "x-gzip" -> new EmbeddedChannel(channel.id(), channel.metadata().hasDisconnect(), channel.config(),
+                    ZlibCodecFactory.newZlibEncoder(ZlibWrapper.GZIP, compressionLevel, 15, 8));
+            case "deflate", "x-deflate" -> new EmbeddedChannel(channel.id(), channel.metadata().hasDisconnect(), channel.config(),
+                    ZlibCodecFactory.newZlibEncoder(ZlibWrapper.ZLIB, compressionLevel, 15, 8));
+            case "br" -> new EmbeddedChannel(channel.id(), channel.metadata().hasDisconnect(), channel.config(), new BrotliEncoder(brotliCompressionQuality));
+            default -> null;
+        };
     }
 }

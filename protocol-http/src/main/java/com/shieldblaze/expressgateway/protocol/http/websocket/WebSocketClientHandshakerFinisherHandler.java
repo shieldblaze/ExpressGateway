@@ -40,8 +40,7 @@ final class WebSocketClientHandshakerFinisherHandler extends ChannelInboundHandl
         // If Message is FullHttpResponse and handshake is incomplete
         // then capture the FullHttpResponse and pass it to handshaker
         // to complete the handshake.
-        if (msg instanceof FullHttpResponse && !handshaker.isHandshakeComplete()) {
-            FullHttpResponse response = (FullHttpResponse) msg;
+        if (msg instanceof FullHttpResponse response && !handshaker.isHandshakeComplete()) {
             handshaker.finishHandshake(ctx.channel(), response); // Finish the handshake
             response.release();          // Release the HttpResponse
             ctx.pipeline().remove(this); // Let's remove ourselves because we're done.

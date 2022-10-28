@@ -83,11 +83,9 @@ public class CustomHttpRequest extends DefaultHttpMessage implements HttpRequest
 
     @Override
     public boolean equals(Object o) {
-        if (!(o instanceof DefaultHttpRequest)) {
+        if (!(o instanceof DefaultHttpRequest other)) {
             return false;
         }
-
-        DefaultHttpRequest other = (DefaultHttpRequest) o;
 
         return method().equals(other.method()) &&
                 uri().equalsIgnoreCase(other.uri()) &&

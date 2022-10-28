@@ -53,6 +53,8 @@ import java.util.SplittableRandom;
 /**
  * OCSP Client
  */
+// TODO: 28-10-2022 REPLACE WITH https://github.com/netty/netty/pull/12898
+@SuppressWarnings("deprecation")
 final class OCSPClient {
 
     private static final SplittableRandom RANDOM = new SplittableRandom();

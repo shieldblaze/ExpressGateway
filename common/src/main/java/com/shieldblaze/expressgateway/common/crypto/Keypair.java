@@ -38,12 +38,10 @@ public final class Keypair {
         PEMParser pemParser = new PEMParser(new StringReader(privateKeyString));
         Object object = pemParser.readObject();
 
-        if (object instanceof PEMKeyPair) {
-            PEMKeyPair pemKeyPair = (PEMKeyPair) object;
+        if (object instanceof PEMKeyPair pemKeyPair) {
             JcaPEMKeyConverter converter = new JcaPEMKeyConverter().setProvider("BC");
             return converter.getKeyPair(pemKeyPair).getPrivate();
-        } else if (object instanceof PrivateKeyInfo) {
-            PrivateKeyInfo privateKeyInfo = (PrivateKeyInfo) object;
+        } else if (object instanceof PrivateKeyInfo privateKeyInfo) {
             JcaPEMKeyConverter converter = new JcaPEMKeyConverter().setProvider("BC");
             return converter.getPrivateKey(privateKeyInfo);
         }

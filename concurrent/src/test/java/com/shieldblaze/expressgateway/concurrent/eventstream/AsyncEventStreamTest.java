@@ -59,31 +59,26 @@ class AsyncEventStreamTest {
         }
     }
 
-    private static final class SimpleEvent implements Event<Void> {
-        private final String string;
-
-        public SimpleEvent(String string) {
-            this.string = string;
-        }
+    private record SimpleEvent(String string) implements Event<Void> {
 
         @Override
-        public CompletableFuture<Void> future() {
-            return null;
-        }
+            public CompletableFuture<Void> future() {
+                return null;
+            }
 
-        @Override
-        public boolean isFinished() {
-            return false;
-        }
+            @Override
+            public boolean isFinished() {
+                return false;
+            }
 
-        @Override
-        public boolean isSuccess() {
-            return false;
-        }
+            @Override
+            public boolean isSuccess() {
+                return false;
+            }
 
-        @Override
-        public Throwable cause() {
-            return null;
+            @Override
+            public Throwable cause() {
+                return null;
+            }
         }
-    }
 }

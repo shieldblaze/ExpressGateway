@@ -46,7 +46,7 @@ public final class PacketRateLimit extends ChannelDuplexHandler {
      */
     public PacketRateLimit(int packet, Duration duration) {
         Bandwidth limit = Bandwidth.simple(packet, duration);
-        bucket = Bucket4j.builder().addLimit(limit).withNanosecondPrecision().build();
+        bucket = Bucket.builder().addLimit(limit).withNanosecondPrecision().build();
     }
 
     @Override

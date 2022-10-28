@@ -21,38 +21,12 @@ import com.shieldblaze.expressgateway.common.utils.NumberUtil;
 
 import java.util.Objects;
 
-public final class Route53DNSRecordBody {
-    private final String hostedZoneId;
-    private final String fqdn;
-    private final String type;
-    private final String target;
-    private final long ttl;
-
+public record Route53DNSRecordBody(String hostedZoneId, String fqdn, String type, String target, long ttl) {
     public Route53DNSRecordBody(String hostedZoneId, String fqdn, String type, String target, long ttl) {
         this.hostedZoneId = Objects.requireNonNull(hostedZoneId, "HostedZoneID");
         this.fqdn = Objects.requireNonNull(fqdn, "FQDN");
         this.type = Objects.requireNonNull(type, "Type");
         this.target = Objects.requireNonNull(target, "Target");
         this.ttl = NumberUtil.checkPositive(ttl, "TTL");
-    }
-
-    public String hostedZoneId() {
-        return hostedZoneId;
-    }
-
-    public String fqdn() {
-        return fqdn;
-    }
-
-    public String type() {
-        return type;
-    }
-
-    public String target() {
-        return target;
-    }
-
-    public long ttl() {
-        return ttl;
     }
 }

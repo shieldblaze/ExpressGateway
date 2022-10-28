@@ -20,18 +20,7 @@ package com.shieldblaze.expressgateway.protocol.http.adapter.http2;
 import io.netty.handler.codec.http2.Http2FrameStream;
 import io.netty.handler.codec.http2.Http2Stream;
 
-final class CustomHttp2FrameStream implements Http2FrameStream {
-
-    private final int id;
-
-    CustomHttp2FrameStream(int id) {
-        this.id = id;
-    }
-
-    @Override
-    public int id() {
-        return id;
-    }
+record CustomHttp2FrameStream(int id) implements Http2FrameStream {
 
     @Override
     public Http2Stream.State state() {

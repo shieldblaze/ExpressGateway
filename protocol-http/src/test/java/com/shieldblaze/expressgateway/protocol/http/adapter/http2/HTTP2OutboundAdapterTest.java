@@ -62,8 +62,7 @@ class HTTP2OutboundAdapterTest {
                 new ChannelDuplexHandler() {
                     @Override
                     public void write(ChannelHandlerContext ctx, Object msg, ChannelPromise promise) {
-                        if (msg instanceof Http2HeadersFrame) {
-                            Http2HeadersFrame headersFrame = (Http2HeadersFrame) msg;
+                        if (msg instanceof Http2HeadersFrame headersFrame) {
                             assertTrue(headersFrame.isEndStream());
                             assertEquals(3, headersFrame.stream().id());
 
@@ -115,8 +114,7 @@ class HTTP2OutboundAdapterTest {
 
                     @Override
                     public void write(ChannelHandlerContext ctx, Object msg, ChannelPromise promise) {
-                        if (msg instanceof Http2HeadersFrame) {
-                            Http2HeadersFrame headersFrame = (Http2HeadersFrame) msg;
+                        if (msg instanceof Http2HeadersFrame headersFrame) {
                             assertFalse(headersFrame.isEndStream());
                             assertEquals(3, headersFrame.stream().id());
 
@@ -129,8 +127,7 @@ class HTTP2OutboundAdapterTest {
                             ctx.fireChannelRead(responseHeadersFrame);
 
                             return;
-                        } else if (msg instanceof Http2DataFrame) {
-                            Http2DataFrame dataFrame = (Http2DataFrame) msg;
+                        } else if (msg instanceof Http2DataFrame dataFrame) {
                             assertEquals("MeowSent" + ++received, new String(ByteBufUtil.getBytes(dataFrame.content())));
                             dataFrame.release();
 
