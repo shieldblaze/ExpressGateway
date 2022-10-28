@@ -17,27 +17,22 @@
  */
 package com.shieldblaze.expressgateway.servicediscovery.server;
 
-import com.shieldblaze.expressgateway.common.curator.Environment;
-import com.shieldblaze.expressgateway.common.curator.ZNodePath;
 import com.shieldblaze.expressgateway.common.utils.SystemPropertyUtil;
+import com.shieldblaze.expressgateway.common.zookeeper.Environment;
+import com.shieldblaze.expressgateway.common.zookeeper.ZNodePath;
 import org.apache.curator.framework.CuratorFramework;
 import org.apache.curator.framework.CuratorFrameworkFactory;
 import org.apache.curator.retry.RetryNTimes;
 import org.apache.curator.x.discovery.ServiceDiscovery;
 import org.apache.curator.x.discovery.ServiceDiscoveryBuilder;
 import org.apache.curator.x.discovery.details.JsonInstanceSerializer;
-import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.ApplicationArguments;
 import org.springframework.context.annotation.Bean;
 import org.springframework.stereotype.Component;
 
-import javax.annotation.PreDestroy;
-
-import java.io.IOException;
-
-import static com.shieldblaze.expressgateway.common.curator.Environment.DEVELOPMENT;
-import static com.shieldblaze.expressgateway.common.curator.Environment.PRODUCTION;
-import static com.shieldblaze.expressgateway.common.curator.Environment.TESTING;
+import static com.shieldblaze.expressgateway.common.zookeeper.Environment.DEVELOPMENT;
+import static com.shieldblaze.expressgateway.common.zookeeper.Environment.PRODUCTION;
+import static com.shieldblaze.expressgateway.common.zookeeper.Environment.TESTING;
 import static com.shieldblaze.expressgateway.servicediscovery.server.ServiceDiscoveryServer.SERVICE_NAME;
 
 @Component
