@@ -332,6 +332,20 @@ along with ShieldBlaze ExpressGateway.  If not, see <https://www.gnu.org/license
             <version>${apache.curator}</version>
         </dependency>
 
+        <!-- https://mvnrepository.com/artifact/org.apache.curator/curator-test -->
+        <dependency>
+            <groupId>org.apache.curator</groupId>
+            <artifactId>curator-test</artifactId>
+            <version>${apache.curator}</version>
+            <scope>test</scope>
+            <exclusions>
+                <exclusion>
+                    <groupId>log4j</groupId>
+                    <artifactId>log4j</artifactId>
+                </exclusion>
+            </exclusions>
+        </dependency>
+
         <!-- https://mvnrepository.com/artifact/org.mockito/mockito-core -->
         <dependency>
             <groupId>org.mockito</groupId>

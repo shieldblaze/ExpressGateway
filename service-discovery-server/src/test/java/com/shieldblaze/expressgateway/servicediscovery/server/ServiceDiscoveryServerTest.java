@@ -19,6 +19,9 @@ package com.shieldblaze.expressgateway.servicediscovery.server;
 
 import com.google.gson.JsonObject;
 import com.google.gson.JsonParser;
+import org.apache.curator.test.TestingServer;
+import org.junit.jupiter.api.AfterAll;
+import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.MethodOrderer;
 import org.junit.jupiter.api.Order;
 import org.junit.jupiter.api.Test;
@@ -31,15 +34,17 @@ import org.springframework.http.HttpMethod;
 import org.springframework.http.RequestEntity;
 import org.springframework.http.ResponseEntity;
 
+import java.io.IOException;
 import java.net.URI;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
+@SpringBootTest(webEnvironment = SpringBootTest.WebEnvironment.RANDOM_PORT, args = "localhost:9001")
 @TestMethodOrder(MethodOrderer.OrderAnnotation.class)
-@SpringBootTest(webEnvironment = SpringBootTest.WebEnvironment.RANDOM_PORT, args = "localhost:2181")
 class ServiceDiscoveryServerTest {
 
     private static final Node NODE = new Node("1-2-3-4-5-f", "127.0.0.1", 9110, false);
+    private static TestingServer zooKeeperServer;
 
     @LocalServerPort
     private int ServerPort;
@@ -49,6 +54,18 @@ class ServiceDiscoveryServerTest {
 
     @Autowired
     private Handler handler;
+
+    @BeforeAll
+    static void setup() throws Exception {
+        zooKeeperServer = new TestingServer(9001);
+    }
+
+    @AfterAll
+    static void shutdown() throws IOException {
+        if (zooKeeperServer != null) {
+            zooKeeperServer.close();
+        }
+    }
 
     @Order(1)
     @Test

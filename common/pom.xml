@@ -41,20 +41,6 @@ along with ShieldBlaze ExpressGateway.  If not, see <https://www.gnu.org/license
             <artifactId>concurrent</artifactId>
             <version>0.0.1-a</version>
         </dependency>
-
-        <!-- https://mvnrepository.com/artifact/org.apache.curator/curator-test -->
-        <dependency>
-            <groupId>org.apache.curator</groupId>
-            <artifactId>curator-test</artifactId>
-            <version>5.3.0</version>
-            <scope>test</scope>
-            <exclusions>
-                <exclusion>
-                    <groupId>log4j</groupId>
-                    <artifactId>log4j</artifactId>
-                </exclusion>
-            </exclusions>
-        </dependency>
     </dependencies>
 
 </project>
