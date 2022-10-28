@@ -18,6 +18,7 @@
 package com.shieldblaze.expressgateway.common.curator;
 
 import com.shieldblaze.expressgateway.common.ExpressGateway;
+import com.shieldblaze.expressgateway.common.utils.SystemPropertyUtil;
 
 /**
  * Environments for ZooKeeper
