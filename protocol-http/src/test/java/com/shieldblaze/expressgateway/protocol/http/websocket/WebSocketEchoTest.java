@@ -22,6 +22,9 @@ import com.shieldblaze.expressgateway.backend.cluster.Cluster;
 import com.shieldblaze.expressgateway.backend.cluster.ClusterBuilder;
 import com.shieldblaze.expressgateway.backend.strategy.l7.http.HTTPRoundRobin;
 import com.shieldblaze.expressgateway.backend.strategy.l7.http.sessionpersistence.NOOPSessionPersistence;
+import com.shieldblaze.expressgateway.configuration.ConfigurationContext;
+import com.shieldblaze.expressgateway.configuration.tls.TlsClientConfiguration;
+import com.shieldblaze.expressgateway.configuration.tls.TlsServerConfiguration;
 import com.shieldblaze.expressgateway.protocol.http.DefaultHTTPServerInitializer;
 import com.shieldblaze.expressgateway.protocol.http.loadbalancer.HTTPLoadBalancer;
 import com.shieldblaze.expressgateway.protocol.http.loadbalancer.HTTPLoadBalancerBuilder;
@@ -46,7 +49,7 @@ public class WebSocketEchoTest extends WebSocketListener {
     static WebSocketEchoServer webSocketEchoServer;
     static OkHttpClient client;
     static HTTPLoadBalancer httpLoadBalancer;
-    CountDownLatch countDownLatchString = new CountDownLatch(100_000);
+    final CountDownLatch countDownLatchString = new CountDownLatch(100_000);
 
     @BeforeAll
     static void setup() throws Exception {
@@ -55,7 +58,11 @@ public class WebSocketEchoTest extends WebSocketListener {
 
         client = new OkHttpClient();
 
+        TlsClientConfiguration tlsClientConfiguration = TlsClientConfiguration.copyFrom(TlsClientConfiguration.DEFAULT);
+        TlsServerConfiguration tlsServerConfiguration = TlsServerConfiguration.copyFrom(TlsServerConfiguration.DEFAULT);
+
         httpLoadBalancer = HTTPLoadBalancerBuilder.newBuilder()
+                .withConfigurationContext(ConfigurationContext.create(tlsClientConfiguration, tlsServerConfiguration))
                 .withBindAddress(new InetSocketAddress("0.0.0.0", 9110))
                 .withL4FrontListener(new TCPListener())
                 .withHTTPInitializer(new DefaultHTTPServerInitializer())

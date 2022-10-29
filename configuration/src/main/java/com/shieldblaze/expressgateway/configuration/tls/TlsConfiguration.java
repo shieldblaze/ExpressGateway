@@ -35,7 +35,7 @@ import java.util.Objects;
 public abstract class TlsConfiguration implements Configuration<TlsConfiguration> {
 
     @JsonIgnore
-    private final Map<String, CertificateKeyPair> certificateKeyPairMap = new HashMap<>();
+    protected final Map<String, CertificateKeyPair> certificateKeyPairMap = new HashMap<>();
 
     @JsonProperty("enabled")
     private boolean enabled = false;

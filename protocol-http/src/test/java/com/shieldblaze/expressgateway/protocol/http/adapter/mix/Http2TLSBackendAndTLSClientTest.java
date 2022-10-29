@@ -65,7 +65,7 @@ class Http2TLSBackendAndTLSClientTest {
                 .timeout(Duration.ofSeconds(5))
                 .build();
 
-        HttpResponse<String> httpResponse = testableHttpLoadBalancer.httpClient().send(httpRequest, HttpResponse.BodyHandlers.ofString());
+        HttpResponse<String> httpResponse = TestableHttpLoadBalancer.httpClient().send(httpRequest, HttpResponse.BodyHandlers.ofString());
         assertEquals(200, httpResponse.statusCode());
         assertEquals("Meow", httpResponse.body());
     }
@@ -79,7 +79,7 @@ class Http2TLSBackendAndTLSClientTest {
                 .timeout(Duration.ofSeconds(5))
                 .build();
 
-        HttpResponse<String> httpResponse = testableHttpLoadBalancer.httpClient().send(httpRequest, HttpResponse.BodyHandlers.ofString());
+        HttpResponse<String> httpResponse = TestableHttpLoadBalancer.httpClient().send(httpRequest, HttpResponse.BodyHandlers.ofString());
         assertEquals(200, httpResponse.statusCode());
         assertEquals("Meow", httpResponse.body());
     }

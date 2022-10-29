@@ -57,4 +57,22 @@ public final class TlsServerConfiguration extends TlsConfiguration {
     public boolean validated() {
         return validated;
     }
+
+    public static TlsServerConfiguration copyFrom(TlsServerConfiguration from) {
+        from.validate();
+
+        TlsServerConfiguration configuration = new TlsServerConfiguration();
+        configuration.certificateKeyPairMap.putAll(from.certificateKeyPairMap);
+
+        configuration.ciphers = from.ciphers;
+        configuration.protocols = from.protocols;
+        configuration.mutualTLS = from.mutualTLS;
+        configuration.useStartTLS = from.useStartTLS;
+        configuration.sessionTimeout = from.sessionTimeout;
+        configuration.sessionCacheSize = from.sessionCacheSize;
+        configuration.acceptAllCerts = from.acceptAllCerts;
+
+        configuration.validate();
+        return configuration;
+    }
 }

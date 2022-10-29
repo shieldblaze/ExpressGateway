@@ -57,8 +57,8 @@ public final class TestableHttpLoadBalancer implements Closeable {
         SelfSignedCertificate ssc = SelfSignedCertificate.generateNew(List.of("127.0.0.1"), List.of("localhost"));
         CertificateKeyPair certificateKeyPair = CertificateKeyPair.forClient(List.of(ssc.x509Certificate()), ssc.keyPair().getPrivate());
 
-        TlsClientConfiguration tlsClientConfiguration = TlsClientConfiguration.DEFAULT;
-        TlsServerConfiguration tlsServerConfiguration = TlsServerConfiguration.DEFAULT;
+        TlsClientConfiguration tlsClientConfiguration = TlsClientConfiguration.copyFrom(TlsClientConfiguration.DEFAULT);
+        TlsServerConfiguration tlsServerConfiguration = TlsServerConfiguration.copyFrom(TlsServerConfiguration.DEFAULT);
 
         if (tlsServerEnabled) {
             tlsServerConfiguration.enable();
@@ -99,19 +99,18 @@ public final class TestableHttpLoadBalancer implements Closeable {
     }
 
     public static HttpClient httpClient() {
-        if (httpClient == null) {
-            try {
-                SSLContext sslContext = SSLContext.getInstance("TLSv1.3");
-                sslContext.init(null, InsecureTrustManagerFactory.INSTANCE.getTrustManagers(), new SecureRandom());
+        try {
+            SSLContext sslContext = SSLContext.getInstance("TLSv1.3");
+            sslContext.init(null, InsecureTrustManagerFactory.INSTANCE.getTrustManagers(), new SecureRandom());
 
-                httpClient = HttpClient.newBuilder()
-                        .sslContext(sslContext)
-                        .followRedirects(HttpClient.Redirect.ALWAYS)
-                        .build();
-            } catch (Exception ex) {
-                throw new IllegalStateException(ex);
-            }
+            httpClient = HttpClient.newBuilder()
+                    .sslContext(sslContext)
+                    .followRedirects(HttpClient.Redirect.ALWAYS)
+                    .build();
+        } catch (Exception ex) {
+            throw new IllegalStateException(ex);
         }
+
         return httpClient;
     }
 
@@ -123,12 +122,6 @@ public final class TestableHttpLoadBalancer implements Closeable {
         } catch (InterruptedException | ExecutionException e) {
             throw new RuntimeException(e);
         }
-
-        TlsServerConfiguration.DEFAULT.disable();
-        TlsServerConfiguration.DEFAULT.clearMappings();
-
-        TlsClientConfiguration.DEFAULT.disable();
-        TlsClientConfiguration.DEFAULT.clearMappings();
 
         L4FrontListenerStopEvent l4FrontListenerStopEvent = httpLoadBalancer.stop();
         l4FrontListenerStopEvent.future().join();
@@ -163,7 +156,7 @@ public final class TestableHttpLoadBalancer implements Closeable {
             return this;
         }
 
-        public TestableHttpLoadBalancer build() throws Exception {
+        public TestableHttpLoadBalancer build() {
             TestableHttpLoadBalancer testableHttpLoadBalancer = new TestableHttpLoadBalancer();
             testableHttpLoadBalancer.tlsClientEnabled = this.tlsClientEnabled;
             testableHttpLoadBalancer.tlsServerEnabled = this.tlsServerEnabled;
