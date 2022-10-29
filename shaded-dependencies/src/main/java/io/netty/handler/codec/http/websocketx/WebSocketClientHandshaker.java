@@ -399,7 +399,7 @@ public abstract class WebSocketClientHandshaker {
      * @param response
      *            HTTP response containing the closing handshake details
      * @return future
-     *            the {@link ChannelFuture} which is notified once the handshake completes.
+     *            the {@link ChannelFuture} which is notified once the handshake completes.
      */
     public final ChannelFuture processHandshake(final Channel channel, HttpResponse response) {
         return processHandshake(channel, response, channel.newPromise());
@@ -415,7 +415,7 @@ public abstract class WebSocketClientHandshaker {
      * @param promise
      *            the {@link ChannelPromise} to notify once the handshake completes.
      * @return future
-     *            the {@link ChannelFuture} which is notified once the handshake completes.
+     *            the {@link ChannelFuture} which is notified once the handshake completes.
      */
     public final ChannelFuture processHandshake(final Channel channel, HttpResponse response,
                                                 final ChannelPromise promise) {

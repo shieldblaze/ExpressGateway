@@ -15,27 +15,24 @@
  * You should have received a copy of the GNU General Public License
  * along with ShieldBlaze ExpressGateway.  If not, see <https://www.gnu.org/licenses/>.
  */
-
 package com.shieldblaze.expressgateway.protocol.http.adapter.http2;
 
 import io.netty.buffer.ByteBufUtil;
 import io.netty.buffer.Unpooled;
 import io.netty.channel.embedded.EmbeddedChannel;
-import io.netty.handler.codec.http.CustomFullHttpRequest;
-import io.netty.handler.codec.http.CustomFullHttpResponse;
-import io.netty.handler.codec.http.CustomHttpContent;
-import io.netty.handler.codec.http.CustomHttpRequest;
-import io.netty.handler.codec.http.CustomHttpResponse;
-import io.netty.handler.codec.http.CustomLastHttpContent;
+import io.netty.handler.codec.http.DefaultFullHttpResponse;
+import io.netty.handler.codec.http.DefaultHttpContent;
+import io.netty.handler.codec.http.DefaultHttpResponse;
+import io.netty.handler.codec.http.DefaultLastHttpContent;
 import io.netty.handler.codec.http.FullHttpRequest;
 import io.netty.handler.codec.http.HttpContent;
-import io.netty.handler.codec.http.HttpFrame;
 import io.netty.handler.codec.http.HttpHeaderNames;
 import io.netty.handler.codec.http.HttpHeaderValues;
 import io.netty.handler.codec.http.HttpRequest;
 import io.netty.handler.codec.http.HttpResponse;
 import io.netty.handler.codec.http.HttpResponseStatus;
 import io.netty.handler.codec.http.HttpVersion;
+import io.netty.handler.codec.http.LastHttpContent;
 import io.netty.handler.codec.http2.DefaultHttp2DataFrame;
 import io.netty.handler.codec.http2.DefaultHttp2Headers;
 import io.netty.handler.codec.http2.DefaultHttp2HeadersFrame;
@@ -50,6 +47,7 @@ import java.util.Random;
 import static org.junit.jupiter.api.Assertions.assertArrayEquals;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 class HTTP2InboundAdapterTest {
@@ -79,15 +77,13 @@ class HTTP2InboundAdapterTest {
 
         embeddedChannel.writeInbound(http2HeadersFrame);
         embeddedChannel.flushInbound();
-        CustomFullHttpRequest fullHttpRequest = embeddedChannel.readInbound();
-        assertEquals(HttpFrame.Protocol.H2, fullHttpRequest.protocol());
+        FullHttpRequest fullHttpRequest = embeddedChannel.readInbound();
 
         assertEquals("GET", fullHttpRequest.method().name());
         assertEquals("/", fullHttpRequest.uri());
         assertEquals("localhost", fullHttpRequest.headers().get("host"));
 
-        HttpResponse httpResponse = new CustomFullHttpResponse(HttpVersion.HTTP_1_1, HttpResponseStatus.OK,
-                Unpooled.wrappedBuffer("Meow".getBytes()), HttpFrame.Protocol.H2, fullHttpRequest.id());
+        HttpResponse httpResponse = new DefaultFullHttpResponse(HttpVersion.HTTP_1_1, HttpResponseStatus.OK, Unpooled.wrappedBuffer("Meow".getBytes()));
         httpResponse.headers().set("x-meow-key", "MeowXD");
 
         embeddedChannel.writeOutbound(httpResponse);
@@ -119,15 +115,12 @@ class HTTP2InboundAdapterTest {
         embeddedChannel.writeInbound(http2HeadersFrame);
         embeddedChannel.flushInbound();
         FullHttpRequest fullHttpRequest = embeddedChannel.readInbound();
-        HttpFrame httpFrame = (HttpFrame) fullHttpRequest;
-        assertEquals(HttpFrame.Protocol.H2, httpFrame.protocol());
 
         assertEquals("POST", fullHttpRequest.method().name());
         assertEquals("/meow", fullHttpRequest.uri());
         assertEquals("www.shieldblaze.com", fullHttpRequest.headers().get("host"));
 
-        HttpResponse httpResponse = new CustomFullHttpResponse(HttpVersion.HTTP_1_1, HttpResponseStatus.OK, Unpooled.EMPTY_BUFFER,
-                HttpFrame.Protocol.H2, httpFrame.id());
+        HttpResponse httpResponse = new DefaultFullHttpResponse(HttpVersion.HTTP_1_1, HttpResponseStatus.OK, Unpooled.EMPTY_BUFFER);
         httpResponse.headers().set("x-meow-key", "MeowXD");
 
         embeddedChannel.writeOutbound(httpResponse);
@@ -152,9 +145,8 @@ class HTTP2InboundAdapterTest {
 
         embeddedChannel.writeInbound(http2HeadersFrame);
         embeddedChannel.flushInbound();
+
         HttpRequest httpRequest = embeddedChannel.readInbound();
-        HttpFrame httpFrame = (HttpFrame) httpRequest;
-        assertEquals(HttpFrame.Protocol.H2, httpFrame.protocol());
 
         assertEquals("POST", httpRequest.method().name());
         assertEquals("/meow", httpRequest.uri());
@@ -164,10 +156,9 @@ class HTTP2InboundAdapterTest {
         http2DataFrame.stream(http2HeadersFrame.stream());
         embeddedChannel.writeInbound(http2DataFrame);
         embeddedChannel.flushInbound();
-        CustomLastHttpContent lastHttpContent = embeddedChannel.readInbound();
+        LastHttpContent lastHttpContent = embeddedChannel.readInbound();
 
         assertEquals("MeowMeow", new String(ByteBufUtil.getBytes(lastHttpContent.content())));
-
         lastHttpContent.release();
     }
 
@@ -183,8 +174,6 @@ class HTTP2InboundAdapterTest {
         embeddedChannel.writeInbound(http2HeadersFrame);
         embeddedChannel.flushInbound();
         HttpRequest httpRequest = embeddedChannel.readInbound();
-        HttpFrame httpFrame = (HttpFrame) httpRequest;
-        assertEquals(HttpFrame.Protocol.H2, httpFrame.protocol());
 
         assertEquals("POST", httpRequest.method().name());
         assertEquals("/meow", httpRequest.uri());
@@ -194,7 +183,7 @@ class HTTP2InboundAdapterTest {
         http2DataFrame.stream(http2HeadersFrame.stream());
         embeddedChannel.writeInbound(http2DataFrame);
         embeddedChannel.flushInbound();
-        CustomHttpContent httpContent = embeddedChannel.readInbound();
+        HttpContent httpContent = embeddedChannel.readInbound();
 
         assertEquals("Meow", new String(ByteBufUtil.getBytes(httpContent.content())));
 
@@ -202,7 +191,7 @@ class HTTP2InboundAdapterTest {
         http2DataFrame.stream(http2HeadersFrame.stream());
         embeddedChannel.writeInbound(http2DataFrame);
         embeddedChannel.flushInbound();
-        CustomLastHttpContent lastHttpContent = embeddedChannel.readInbound();
+        LastHttpContent lastHttpContent = embeddedChannel.readInbound();
 
         assertEquals("MeowMeow", new String(ByteBufUtil.getBytes(lastHttpContent.content())));
 
@@ -221,11 +210,11 @@ class HTTP2InboundAdapterTest {
 
         embeddedChannel.writeInbound(http2HeadersFrame);
         embeddedChannel.flushInbound();
-        CustomFullHttpRequest fullHttpRequest = embeddedChannel.readInbound();
+        FullHttpRequest fullHttpRequest = embeddedChannel.readInbound();
 
         final int bytesCount = 1024 * 1000;
 
-        HttpResponse httpResponse = new CustomHttpResponse(HttpVersion.HTTP_1_1, HttpResponseStatus.OK, HttpFrame.Protocol.H2, fullHttpRequest.id());
+        HttpResponse httpResponse = new DefaultHttpResponse(HttpVersion.HTTP_1_1, HttpResponseStatus.OK);
         httpResponse.headers().set(HttpHeaderNames.CONTENT_LENGTH, bytesCount);
         embeddedChannel.writeOutbound(httpResponse);
         embeddedChannel.flushOutbound();
@@ -234,17 +223,16 @@ class HTTP2InboundAdapterTest {
         assertEquals("200", responseHeadersFrame.headers().status().toString());
         assertEquals(String.valueOf(bytesCount), responseHeadersFrame.headers().get(HttpHeaderNames.CONTENT_LENGTH));
 
-        long id = ((HttpFrame) httpResponse).id();
-
+        Random random = new Random();
         for (int i = 1; i <= bytesCount; i++) {
             byte[] bytes = new byte[1];
-            new Random().nextBytes(bytes);
+            random.nextBytes(bytes);
 
             HttpContent httpContent;
             if (i == bytesCount) {
-                httpContent = new CustomLastHttpContent(Unpooled.wrappedBuffer(bytes), HttpFrame.Protocol.H2, id);
+                httpContent = new DefaultLastHttpContent(Unpooled.wrappedBuffer(bytes));
             } else {
-                httpContent = new CustomHttpContent(Unpooled.wrappedBuffer(bytes), HttpFrame.Protocol.H2, id);
+                httpContent = new DefaultHttpContent(Unpooled.wrappedBuffer(bytes));
             }
             embeddedChannel.writeOutbound(httpContent);
             embeddedChannel.flushOutbound();
@@ -274,17 +262,15 @@ class HTTP2InboundAdapterTest {
 
         embeddedChannel.writeInbound(http2HeadersFrame);
         embeddedChannel.flushInbound();
-        CustomHttpRequest fullHttpRequest = embeddedChannel.readInbound();
+        assertNotNull(embeddedChannel.readInbound());
 
-        HttpResponse httpResponse = new CustomHttpResponse(HttpVersion.HTTP_1_1, HttpResponseStatus.OK, HttpFrame.Protocol.H2, fullHttpRequest.id());
+        HttpResponse httpResponse = new DefaultHttpResponse(HttpVersion.HTTP_1_1, HttpResponseStatus.OK);
         httpResponse.headers().set(HttpHeaderNames.TRANSFER_ENCODING, HttpHeaderValues.CHUNKED);
         embeddedChannel.writeOutbound(httpResponse);
         embeddedChannel.flushOutbound();
 
         Http2HeadersFrame responseHeadersFrame = embeddedChannel.readOutbound();
         assertEquals("200", responseHeadersFrame.headers().status().toString());
-
-        long id = ((HttpFrame) httpResponse).id();
 
         final Random random = new Random();
         final int bytesCount = 1024 * 1000;
@@ -294,9 +280,9 @@ class HTTP2InboundAdapterTest {
 
             HttpContent httpContent;
             if (i == bytesCount) {
-                httpContent = new CustomLastHttpContent(Unpooled.wrappedBuffer(bytes), HttpFrame.Protocol.H2, id);
+                httpContent = new DefaultLastHttpContent(Unpooled.wrappedBuffer(bytes));
             } else {
-                httpContent = new CustomHttpContent(Unpooled.wrappedBuffer(bytes), HttpFrame.Protocol.H2, id);
+                httpContent = new DefaultHttpContent(Unpooled.wrappedBuffer(bytes));
             }
 
             embeddedChannel.writeOutbound(httpContent);

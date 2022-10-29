@@ -18,15 +18,15 @@
 package com.shieldblaze.expressgateway.protocol.http.adapter.http2;
 
 import com.shieldblaze.expressgateway.protocol.http.HTTPConversionUtil;
+import com.shieldblaze.expressgateway.protocol.http.NonceWrapped;
 import io.netty.buffer.Unpooled;
 import io.netty.channel.ChannelHandlerContext;
 import io.netty.channel.ChannelPromise;
-import io.netty.handler.codec.http.CustomHttpContent;
-import io.netty.handler.codec.http.CustomLastHttpContent;
+import io.netty.handler.codec.http.DefaultHttpContent;
+import io.netty.handler.codec.http.DefaultLastHttpContent;
 import io.netty.handler.codec.http.FullHttpRequest;
 import io.netty.handler.codec.http.FullHttpResponse;
 import io.netty.handler.codec.http.HttpContent;
-import io.netty.handler.codec.http.HttpFrame;
 import io.netty.handler.codec.http.HttpHeaderNames;
 import io.netty.handler.codec.http.HttpHeaderValues;
 import io.netty.handler.codec.http.HttpObject;
@@ -121,80 +121,71 @@ public final class HTTP2OutboundAdapter extends Http2ChannelDuplexHandler {
 
     @Override
     public void write(ChannelHandlerContext ctx, Object msg, ChannelPromise promise) throws Exception {
-        if (msg instanceof HttpRequest) {
-            HttpFrame httpFrame = (HttpFrame) msg;
-
+//        System.out.println(msg);
+        NonceWrapped<?> nonceWrapped = (NonceWrapped<?>) msg;
+        if (nonceWrapped.get() instanceof HttpRequest httpRequest) {
             Http2FrameStream http2FrameStream = newStream();
 
             // Invoke and initialize new 'Http2FrameStream'
             invokeInitializeNewStream(ctx, http2FrameStream, promise);
-            long id = httpFrame.id();
 
             // Put the stream ID and Outbound Property into the map.
-            addStream(new OutboundProperty(id, http2FrameStream, httpFrame.protocol()));
+            addStream(new OutboundProperty(nonceWrapped.nonce(), http2FrameStream, HttpVersion.HTTP_1_1));
 
-            if (msg instanceof FullHttpRequest fullHttpRequest) {
+            if (httpRequest instanceof FullHttpRequest fullHttpRequest) {
 
                 if (fullHttpRequest.content().readableBytes() == 0) {
                     Http2Headers http2Headers = HTTPConversionUtil.toHttp2Headers(fullHttpRequest);
                     Http2HeadersFrame http2HeadersFrame = new DefaultHttp2HeadersFrame(http2Headers, true);
-                    writeHeaders(ctx, id, http2HeadersFrame, promise);
+                    writeHeaders(ctx, nonceWrapped.nonce(), http2HeadersFrame, promise);
                 } else {
                     Http2Headers http2Headers = HTTPConversionUtil.toHttp2Headers(fullHttpRequest);
                     Http2HeadersFrame http2HeadersFrame = new DefaultHttp2HeadersFrame(http2Headers, false);
-                    writeHeaders(ctx, id, http2HeadersFrame, promise);
+                    writeHeaders(ctx, nonceWrapped.nonce(), http2HeadersFrame, promise);
 
                     Http2DataFrame dataFrame = new DefaultHttp2DataFrame(fullHttpRequest.content(), true);
-                    writeData(ctx, id, dataFrame, ctx.voidPromise());
+                    writeData(ctx, nonceWrapped.nonce(), dataFrame, ctx.voidPromise());
                 }
             } else {
-                Http2Headers http2Headers = HTTPConversionUtil.toHttp2Headers(((HttpRequest) msg));
+                Http2Headers http2Headers = HTTPConversionUtil.toHttp2Headers(httpRequest);
                 Http2HeadersFrame http2HeadersFrame = new DefaultHttp2HeadersFrame(http2Headers, false);
-                writeHeaders(ctx, id, http2HeadersFrame, promise);
+                writeHeaders(ctx, nonceWrapped.nonce(), http2HeadersFrame, promise);
             }
-        } else if (msg instanceof HttpContent httpContent) {
-            long id = ((HttpFrame) httpContent).id();
-
-            if (msg instanceof LastHttpContent) {
-                LastHttpContent lastHttpContent = (LastHttpContent) httpContent;
+        } else if (nonceWrapped.get() instanceof HttpContent httpContent) {
+            if (httpContent instanceof LastHttpContent) {
+                LastHttpContent lastHttpContent = (LastHttpContent) nonceWrapped.get();
 
                 // > If Trailing Headers are empty then we'll write HTTP/2 Data Frame with 'endOfStream' set to 'true.
                 // > If Trailing Headers are present then we'll write HTTP/2 Data Frame followed by HTTP/2 Header Frame
-                // which will have 'endOfStream' set to 'true.
+                //   which will have 'endOfStream' set to 'true.
                 if (lastHttpContent.trailingHeaders().isEmpty()) {
                     Http2DataFrame dataFrame = new DefaultHttp2DataFrame(httpContent.content(), true);
-                    writeData(ctx, id, dataFrame, promise);
+                    writeData(ctx, nonceWrapped.nonce(), dataFrame, promise);
                 } else {
                     Http2DataFrame dataFrame = new DefaultHttp2DataFrame(httpContent.content(), false);
-                    writeData(ctx, id, dataFrame, promise);
+                    writeData(ctx, nonceWrapped.nonce(), dataFrame, promise);
 
                     Http2Headers http2Headers = HTTPConversionUtil.toHttp2Headers(lastHttpContent.trailingHeaders());
                     Http2HeadersFrame http2HeadersFrame = new DefaultHttp2HeadersFrame(http2Headers, true);
-                    writeHeaders(ctx, id, http2HeadersFrame, promise);
+                    writeHeaders(ctx, nonceWrapped.nonce(), http2HeadersFrame, promise);
                 }
             } else {
                 Http2DataFrame dataFrame = new DefaultHttp2DataFrame(httpContent.content(), false);
-                writeData(ctx, id, dataFrame, promise);
+                writeData(ctx, nonceWrapped.nonce(), dataFrame, promise);
             }
         }
     }
 
     @Override
     public void channelRead(ChannelHandlerContext ctx, Object msg) throws Exception {
+//        System.err.println(msg);
         if (msg instanceof Http2HeadersFrame headersFrame) {
             int streamId = headersFrame.stream().id();
             OutboundProperty outboundProperty = outboundProperty(streamId);
 
-            HttpVersion httpVersion;
-            if (outboundProperty.protocol().equals(HttpFrame.Protocol.HTTP_1_0)) {
-                httpVersion = HttpVersion.HTTP_1_0;
-            } else {
-                httpVersion = HttpVersion.HTTP_1_1;
-            }
-
             // If initial read is already performed then this Header frame is part of Last trailing frame.
             if (outboundProperty.initialRead()) {
-                LastHttpContent httpContent = new CustomLastHttpContent(Unpooled.EMPTY_BUFFER, outboundProperty.protocol(), outboundProperty.id());
+                LastHttpContent httpContent = new DefaultLastHttpContent(Unpooled.EMPTY_BUFFER);
 
                 HTTPConversionUtil.addHttp2ToHttpHeaders(headersFrame.headers(), httpContent.trailingHeaders(), true, false);
                 ctx.fireChannelRead(httpContent);
@@ -207,29 +198,29 @@ public final class HTTP2OutboundAdapter extends Http2ChannelDuplexHandler {
             } else {
                 outboundProperty.fireInitialRead();
 
-                HttpResponse httpResponse;
+                NonceWrapped<HttpResponse> nonceWrapped;
 
                 // If 'endOfStream' flag is set to 'true' then we will create FullHttpResponse and remove mapping.
                 if (headersFrame.isEndStream()) {
-                    httpResponse = HTTPConversionUtil.toFullHttpResponse(outboundProperty.id(), headersFrame.headers(), Unpooled.EMPTY_BUFFER, httpVersion);
+                    nonceWrapped = HTTPConversionUtil.toFullHttpResponse(headersFrame.headers(), Unpooled.EMPTY_BUFFER, HttpVersion.HTTP_1_1);
                     removeStreamMapping(streamId);
                 } else {
-                    httpResponse = HTTPConversionUtil.toHttpResponse(outboundProperty.id(), headersFrame.headers(), httpVersion);
-                    httpResponse.headers().set(HttpHeaderNames.TRANSFER_ENCODING, HttpHeaderValues.CHUNKED);
+                    nonceWrapped = HTTPConversionUtil.toHttpResponse(headersFrame.headers(), HttpVersion.HTTP_1_1);
+                    nonceWrapped.get().headers().set(HttpHeaderNames.TRANSFER_ENCODING, HttpHeaderValues.CHUNKED);
                 }
 
-                ctx.fireChannelRead(httpResponse);
+                ctx.fireChannelRead(nonceWrapped);
             }
         } else if (msg instanceof Http2DataFrame dataFrame) {
             int streamId = dataFrame.stream().id();
             OutboundProperty outboundProperty = outboundProperty(streamId);
 
-            HttpContent httpContent;
+            NonceWrapped<HttpContent> httpContent;
             if (dataFrame.isEndStream()) {
-                httpContent = new CustomLastHttpContent(dataFrame.content(), outboundProperty.protocol(), outboundProperty.id());
+                httpContent = new NonceWrapped<>(outboundProperty.nonce(), new DefaultLastHttpContent(dataFrame.content()));
                 removeStreamMapping(streamId);
             } else {
-                httpContent = new CustomHttpContent(dataFrame.content(), outboundProperty.protocol(), outboundProperty.id());
+                httpContent = new NonceWrapped<>(outboundProperty.nonce(), new DefaultHttpContent(dataFrame.content()));
             }
 
             ctx.fireChannelRead(httpContent);
@@ -253,8 +244,8 @@ public final class HTTP2OutboundAdapter extends Http2ChannelDuplexHandler {
     }
 
     private void addStream(OutboundProperty outboundProperty) {
-        requestIdToStreamIdMap.put(outboundProperty.stream().id(), outboundProperty.id());
-        streamIdMap.put(outboundProperty.id(), outboundProperty);
+        requestIdToStreamIdMap.put(outboundProperty.stream().id(), outboundProperty.nonce());
+        streamIdMap.put(outboundProperty.nonce(), outboundProperty);
     }
 
     private OutboundProperty outboundProperty(int streamId) {

@@ -29,13 +29,13 @@ import io.netty.channel.ChannelDuplexHandler;
 import io.netty.channel.ChannelFutureListener;
 import io.netty.channel.ChannelHandlerContext;
 import io.netty.channel.ChannelPromise;
-import io.netty.handler.codec.http.CustomFullHttpResponse;
-import io.netty.handler.codec.http.CustomLastHttpContent;
+import io.netty.handler.codec.http.FullHttpResponse;
+import io.netty.handler.codec.http.HttpContent;
 import io.netty.handler.codec.http.HttpContentDecompressor;
-import io.netty.handler.codec.http.HttpFrame;
 import io.netty.handler.codec.http.HttpHeaderNames;
 import io.netty.handler.codec.http.HttpHeaders;
 import io.netty.handler.codec.http.HttpRequest;
+import io.netty.handler.codec.http.LastHttpContent;
 import io.netty.handler.codec.http.websocketx.WebSocketServerHandshaker;
 import io.netty.handler.codec.http.websocketx.WebSocketServerHandshakerFactory;
 import it.unimi.dsi.fastutil.longs.Long2ObjectMap;
@@ -55,6 +55,7 @@ public final class UpstreamHandler extends ChannelDuplexHandler {
      * HTTPConnection: {@link HTTPConnection} Instance
      */
     private final Long2ObjectMap<HTTPConnection> connectionMap = new Long2ObjectOpenHashMap<>();
+    private long lastNonce;
 
     private final HTTPLoadBalancer httpLoadBalancer;
     private final Bootstrapper bootstrapper;
@@ -109,24 +110,26 @@ public final class UpstreamHandler extends ChannelDuplexHandler {
                 connection.upstreamChannel(ctx.channel());
             }
 
-            // Map Id with Connection
-            long id = ((HttpFrame) msg).id();
-            connectionMap.put(id, connection);
+            // Map nonce with Connection
+            NonceWrapped<HttpRequest> nonceWrappedRequest = new NonceWrapped<>(request);
+            lastNonce = nonceWrappedRequest.nonce();
+            connectionMap.put(lastNonce, connection);
 
-            // Add request Id in outstanding list and increment total number of requests.
-            connection.addOutstandingRequest(id);
+            // Add Nonce value in outstanding list and increment total number of requests.
+            connection.addOutstandingRequest(lastNonce);
             connection.incrementTotalRequests();
 
             // Modify Request Headers
-            onHeadersRead(request.headers(), socketAddress);
+            onHeadersRead(nonceWrappedRequest.get().headers(), socketAddress);
 
             // Write the request to Backend
-            connection.writeAndFlush(request);
+            connection.writeAndFlush(nonceWrappedRequest);
             return;
-        } else if (msg instanceof HttpFrame) {
-            HTTPConnection httpConnection = connectionMap.get(((HttpFrame) msg).id());
+        } else if (msg instanceof HttpContent httpContent) {
+
+            HTTPConnection httpConnection = connectionMap.get(lastNonce);
             if (httpConnection != null) {
-                httpConnection.writeAndFlush(msg);
+                httpConnection.writeAndFlush(new NonceWrapped<>(lastNonce, httpContent));
                 return;
             }
         }
@@ -183,7 +186,7 @@ public final class UpstreamHandler extends ChannelDuplexHandler {
         if (httpConnection == null) {
             return null;
         } else if (httpConnection.isHTTP2() && httpConnection.hasReachedMaximumCapacity()) {
-            // If Connection is established over HTTP/2 and we've reached maximum capacity then
+            // If Connection is established over HTTP/2, and we've reached maximum capacity then
             // close the connection and return null.
             httpConnection.close();
             return null;
@@ -205,13 +208,14 @@ public final class UpstreamHandler extends ChannelDuplexHandler {
 
     @Override
     public void write(ChannelHandlerContext ctx, Object msg, ChannelPromise promise) throws Exception {
-        if (msg instanceof CustomFullHttpResponse || msg instanceof CustomLastHttpContent) {
-            long id = ((HttpFrame) msg).id();
-            HTTPConnection connection = connectionMap.remove(id); // Remove mapping of finished Request.
-            connection.finishedOutstandingRequest(id);
+        NonceWrapped<?> nonceWrapped = (NonceWrapped<?>) msg;
+        if (nonceWrapped.get() instanceof FullHttpResponse || nonceWrapped.get() instanceof LastHttpContent) {
+            // Remove mapping of finished Request.
+            HTTPConnection connection = connectionMap.remove(nonceWrapped.nonce());
+            connection.finishedOutstandingRequest(nonceWrapped.nonce());
             connection.release();
         }
-        super.write(ctx, msg, promise);
+        super.write(ctx, nonceWrapped.get(), promise);
     }
 
     @Override

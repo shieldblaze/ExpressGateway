@@ -15,22 +15,39 @@
  * You should have received a copy of the GNU General Public License
  * along with ShieldBlaze ExpressGateway.  If not, see <https://www.gnu.org/licenses/>.
  */
-package com.shieldblaze.expressgateway.common.crypto.cryptostore;
+package com.shieldblaze.expressgateway.protocol.http;
 
-import com.shieldblaze.expressgateway.common.annotation.NonNull;
+import java.util.SplittableRandom;
 
-import java.security.PrivateKey;
-import java.security.cert.X509Certificate;
+public class NonceWrapped<T> {
 
-/**
- * {@link CryptoEntry} holds {@link PrivateKey} and {@link X509Certificate}s instances
- *
- * @param privateKey   {@link PrivateKey} instance
- * @param certificates {@link X509Certificate}s instances
- */
-public record CryptoEntry(PrivateKey privateKey, X509Certificate... certificates) {
+    private static final SplittableRandom RANDOM = new SplittableRandom();
 
-    @NonNull
-    public CryptoEntry {
+    private final long nonce;
+    private final T wrapped;
+
+    public NonceWrapped(T wrapped) {
+        this(RANDOM.nextLong(), wrapped);
+    }
+
+    public NonceWrapped(long nonce, T wrapped) {
+        this.wrapped = wrapped;
+        this.nonce = nonce;
+    }
+
+    public long nonce() {
+        return nonce;
+    }
+
+    public T get() {
+        return wrapped;
+    }
+
+    @Override
+    public String toString() {
+        return "NonceWrapped{" +
+                "nonce=" + nonce +
+                ", wrapped=" + wrapped.getClass() +
+                '}';
     }
 }

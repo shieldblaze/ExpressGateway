@@ -17,23 +17,23 @@
  */
 package com.shieldblaze.expressgateway.protocol.http.adapter.http2;
 
-import io.netty.handler.codec.http.HttpFrame;
+import io.netty.handler.codec.http.HttpVersion;
 import io.netty.handler.codec.http2.Http2FrameStream;
 
 final class OutboundProperty {
-    private final long id;
+    private final long nonce;
     private final Http2FrameStream stream;
     private boolean isInitialRead;
-    private final HttpFrame.Protocol protocol;
+    private final HttpVersion httpVersion;
 
-    OutboundProperty(long id, Http2FrameStream stream, HttpFrame.Protocol protocol) {
-        this.id = id;
+    OutboundProperty(long nonce, Http2FrameStream stream, HttpVersion httpVersion) {
+        this.nonce = nonce;
         this.stream = stream;
-        this.protocol = protocol;
+        this.httpVersion = httpVersion;
     }
 
-    long id() {
-        return id;
+    long nonce() {
+        return nonce;
     }
 
     Http2FrameStream stream() {
@@ -48,7 +48,7 @@ final class OutboundProperty {
         isInitialRead = true;
     }
 
-    HttpFrame.Protocol protocol() {
-        return protocol;
+    HttpVersion httpVersion() {
+        return httpVersion;
     }
 }
