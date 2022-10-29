@@ -17,7 +17,6 @@
  */
 package com.shieldblaze.expressgateway.protocol.http.adapter.http2;
 
-import com.shieldblaze.expressgateway.protocol.http.NonceWrapped;
 import io.netty.buffer.ByteBufUtil;
 import io.netty.buffer.Unpooled;
 import io.netty.channel.embedded.EmbeddedChannel;
@@ -48,6 +47,7 @@ import java.util.Random;
 import static org.junit.jupiter.api.Assertions.assertArrayEquals;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 class HTTP2InboundAdapterTest {
@@ -77,15 +77,14 @@ class HTTP2InboundAdapterTest {
 
         embeddedChannel.writeInbound(http2HeadersFrame);
         embeddedChannel.flushInbound();
-        NonceWrapped<FullHttpRequest> fullHttpRequest = embeddedChannel.readInbound();
+        FullHttpRequest fullHttpRequest = embeddedChannel.readInbound();
 
-        assertEquals("GET", fullHttpRequest.get().method().name());
-        assertEquals("/", fullHttpRequest.get().uri());
-        assertEquals("localhost", fullHttpRequest.get().headers().get("host"));
+        assertEquals("GET", fullHttpRequest.method().name());
+        assertEquals("/", fullHttpRequest.uri());
+        assertEquals("localhost", fullHttpRequest.headers().get("host"));
 
-        NonceWrapped<HttpResponse> httpResponse = new NonceWrapped<>(fullHttpRequest.nonce(), new DefaultFullHttpResponse(HttpVersion.HTTP_1_1, HttpResponseStatus.OK,
-                Unpooled.wrappedBuffer("Meow".getBytes())));
-        httpResponse.get().headers().set("x-meow-key", "MeowXD");
+        HttpResponse httpResponse = new DefaultFullHttpResponse(HttpVersion.HTTP_1_1, HttpResponseStatus.OK, Unpooled.wrappedBuffer("Meow".getBytes()));
+        httpResponse.headers().set("x-meow-key", "MeowXD");
 
         embeddedChannel.writeOutbound(httpResponse);
         embeddedChannel.flushOutbound();
@@ -100,7 +99,7 @@ class HTTP2InboundAdapterTest {
         assertEquals("Meow", new String(ByteBufUtil.getBytes(responseDataFrame.content())));
         assertEquals(2, responseDataFrame.stream().id());
 
-        fullHttpRequest.get().release();
+        fullHttpRequest.release();
         responseDataFrame.release();
     }
 
@@ -115,15 +114,14 @@ class HTTP2InboundAdapterTest {
 
         embeddedChannel.writeInbound(http2HeadersFrame);
         embeddedChannel.flushInbound();
-        NonceWrapped<FullHttpRequest> fullHttpRequest = embeddedChannel.readInbound();
+        FullHttpRequest fullHttpRequest = embeddedChannel.readInbound();
 
-        assertEquals("POST", fullHttpRequest.get().method().name());
-        assertEquals("/meow", fullHttpRequest.get().uri());
-        assertEquals("www.shieldblaze.com", fullHttpRequest.get().headers().get("host"));
+        assertEquals("POST", fullHttpRequest.method().name());
+        assertEquals("/meow", fullHttpRequest.uri());
+        assertEquals("www.shieldblaze.com", fullHttpRequest.headers().get("host"));
 
-        NonceWrapped<HttpResponse> httpResponse = new NonceWrapped<>(fullHttpRequest.nonce(),
-                new DefaultFullHttpResponse(HttpVersion.HTTP_1_1, HttpResponseStatus.OK, Unpooled.EMPTY_BUFFER));
-        httpResponse.get().headers().set("x-meow-key", "MeowXD");
+        HttpResponse httpResponse = new DefaultFullHttpResponse(HttpVersion.HTTP_1_1, HttpResponseStatus.OK, Unpooled.EMPTY_BUFFER);
+        httpResponse.headers().set("x-meow-key", "MeowXD");
 
         embeddedChannel.writeOutbound(httpResponse);
         embeddedChannel.flushOutbound();
@@ -133,7 +131,7 @@ class HTTP2InboundAdapterTest {
         assertEquals("200", responseHeadersFrame.headers().status().toString());
         assertEquals("MeowXD", responseHeadersFrame.headers().get("x-meow-key").toString());
 
-        fullHttpRequest.get().release();
+        fullHttpRequest.release();
     }
 
     @Test
@@ -148,20 +146,20 @@ class HTTP2InboundAdapterTest {
         embeddedChannel.writeInbound(http2HeadersFrame);
         embeddedChannel.flushInbound();
 
-        NonceWrapped<HttpRequest> httpRequest = embeddedChannel.readInbound();
+        HttpRequest httpRequest = embeddedChannel.readInbound();
 
-        assertEquals("POST", httpRequest.get().method().name());
-        assertEquals("/meow", httpRequest.get().uri());
-        assertEquals("www.shieldblaze.com", httpRequest.get().headers().get("host"));
+        assertEquals("POST", httpRequest.method().name());
+        assertEquals("/meow", httpRequest.uri());
+        assertEquals("www.shieldblaze.com", httpRequest.headers().get("host"));
 
         Http2DataFrame http2DataFrame = new DefaultHttp2DataFrame(Unpooled.wrappedBuffer("MeowMeow".getBytes()), true);
         http2DataFrame.stream(http2HeadersFrame.stream());
         embeddedChannel.writeInbound(http2DataFrame);
         embeddedChannel.flushInbound();
-        NonceWrapped<LastHttpContent> lastHttpContent = embeddedChannel.readInbound();
+        LastHttpContent lastHttpContent = embeddedChannel.readInbound();
 
-        assertEquals("MeowMeow", new String(ByteBufUtil.getBytes(lastHttpContent.get().content())));
-        lastHttpContent.get().release();
+        assertEquals("MeowMeow", new String(ByteBufUtil.getBytes(lastHttpContent.content())));
+        lastHttpContent.release();
     }
 
     @Test
@@ -175,30 +173,30 @@ class HTTP2InboundAdapterTest {
 
         embeddedChannel.writeInbound(http2HeadersFrame);
         embeddedChannel.flushInbound();
-        NonceWrapped<HttpRequest> httpRequest = embeddedChannel.readInbound();
+        HttpRequest httpRequest = embeddedChannel.readInbound();
 
-        assertEquals("POST", httpRequest.get().method().name());
-        assertEquals("/meow", httpRequest.get().uri());
-        assertEquals("www.shieldblaze.com", httpRequest.get().headers().get("host"));
+        assertEquals("POST", httpRequest.method().name());
+        assertEquals("/meow", httpRequest.uri());
+        assertEquals("www.shieldblaze.com", httpRequest.headers().get("host"));
 
         Http2DataFrame http2DataFrame = new DefaultHttp2DataFrame(Unpooled.wrappedBuffer("Meow".getBytes()), false);
         http2DataFrame.stream(http2HeadersFrame.stream());
         embeddedChannel.writeInbound(http2DataFrame);
         embeddedChannel.flushInbound();
-        NonceWrapped<HttpContent> httpContent = embeddedChannel.readInbound();
+        HttpContent httpContent = embeddedChannel.readInbound();
 
-        assertEquals("Meow", new String(ByteBufUtil.getBytes(httpContent.get().content())));
+        assertEquals("Meow", new String(ByteBufUtil.getBytes(httpContent.content())));
 
         http2DataFrame = new DefaultHttp2DataFrame(Unpooled.wrappedBuffer("MeowMeow".getBytes()), true);
         http2DataFrame.stream(http2HeadersFrame.stream());
         embeddedChannel.writeInbound(http2DataFrame);
         embeddedChannel.flushInbound();
-        NonceWrapped<LastHttpContent> lastHttpContent = embeddedChannel.readInbound();
+        LastHttpContent lastHttpContent = embeddedChannel.readInbound();
 
-        assertEquals("MeowMeow", new String(ByteBufUtil.getBytes(lastHttpContent.get().content())));
+        assertEquals("MeowMeow", new String(ByteBufUtil.getBytes(lastHttpContent.content())));
 
-        httpContent.get().release();
-        lastHttpContent.get().release();
+        httpContent.release();
+        lastHttpContent.release();
     }
 
     @Test
@@ -212,12 +210,12 @@ class HTTP2InboundAdapterTest {
 
         embeddedChannel.writeInbound(http2HeadersFrame);
         embeddedChannel.flushInbound();
-        NonceWrapped<FullHttpRequest> fullHttpRequest = embeddedChannel.readInbound();
+        FullHttpRequest fullHttpRequest = embeddedChannel.readInbound();
 
         final int bytesCount = 1024 * 1000;
 
-        NonceWrapped<HttpResponse> httpResponse = new NonceWrapped<>(fullHttpRequest.nonce(), new DefaultHttpResponse(HttpVersion.HTTP_1_1, HttpResponseStatus.OK));
-        httpResponse.get().headers().set(HttpHeaderNames.CONTENT_LENGTH, bytesCount);
+        HttpResponse httpResponse = new DefaultHttpResponse(HttpVersion.HTTP_1_1, HttpResponseStatus.OK);
+        httpResponse.headers().set(HttpHeaderNames.CONTENT_LENGTH, bytesCount);
         embeddedChannel.writeOutbound(httpResponse);
         embeddedChannel.flushOutbound();
 
@@ -230,11 +228,11 @@ class HTTP2InboundAdapterTest {
             byte[] bytes = new byte[1];
             random.nextBytes(bytes);
 
-            NonceWrapped<HttpContent> httpContent;
+            HttpContent httpContent;
             if (i == bytesCount) {
-                httpContent = new NonceWrapped<>(httpResponse.nonce(), new DefaultLastHttpContent(Unpooled.wrappedBuffer(bytes)));
+                httpContent = new DefaultLastHttpContent(Unpooled.wrappedBuffer(bytes));
             } else {
-                httpContent = new NonceWrapped<>(httpResponse.nonce(), new DefaultHttpContent(Unpooled.wrappedBuffer(bytes)));
+                httpContent = new DefaultHttpContent(Unpooled.wrappedBuffer(bytes));
             }
             embeddedChannel.writeOutbound(httpContent);
             embeddedChannel.flushOutbound();
@@ -250,7 +248,7 @@ class HTTP2InboundAdapterTest {
             }
         }
 
-        fullHttpRequest.get().release();
+        fullHttpRequest.release();
     }
 
     @Test
@@ -264,10 +262,10 @@ class HTTP2InboundAdapterTest {
 
         embeddedChannel.writeInbound(http2HeadersFrame);
         embeddedChannel.flushInbound();
-        NonceWrapped<FullHttpRequest> fullHttpRequest = embeddedChannel.readInbound();
+        assertNotNull(embeddedChannel.readInbound());
 
-        NonceWrapped<HttpResponse> httpResponse = new NonceWrapped<>(fullHttpRequest.nonce(), new DefaultHttpResponse(HttpVersion.HTTP_1_1, HttpResponseStatus.OK));
-        httpResponse.get().headers().set(HttpHeaderNames.TRANSFER_ENCODING, HttpHeaderValues.CHUNKED);
+        HttpResponse httpResponse = new DefaultHttpResponse(HttpVersion.HTTP_1_1, HttpResponseStatus.OK);
+        httpResponse.headers().set(HttpHeaderNames.TRANSFER_ENCODING, HttpHeaderValues.CHUNKED);
         embeddedChannel.writeOutbound(httpResponse);
         embeddedChannel.flushOutbound();
 
@@ -280,11 +278,11 @@ class HTTP2InboundAdapterTest {
             byte[] bytes = new byte[1];
             random.nextBytes(bytes);
 
-            NonceWrapped<HttpContent> httpContent;
+            HttpContent httpContent;
             if (i == bytesCount) {
-                httpContent = new NonceWrapped<>(httpResponse.nonce(), new DefaultLastHttpContent(Unpooled.wrappedBuffer(bytes)));
+                httpContent = new DefaultLastHttpContent(Unpooled.wrappedBuffer(bytes));
             } else {
-                httpContent = new NonceWrapped<>(httpResponse.nonce(), new DefaultHttpContent(Unpooled.wrappedBuffer(bytes)));
+                httpContent = new DefaultHttpContent(Unpooled.wrappedBuffer(bytes));
             }
 
             embeddedChannel.writeOutbound(httpContent);

@@ -236,6 +236,14 @@ public final class HTTP2InboundAdapter extends ChannelDuplexHandler {
         }
     }
 
+    public Http2FrameStream frameStream() {
+        return frameStream;
+    }
+
+    public String acceptEncoding() {
+        return acceptEncoding;
+    }
+
     @Override
     public void exceptionCaught(ChannelHandlerContext ctx, Throwable cause) {
         logger.error("Caught error at HTTP2InboundAdapter", cause);
