@@ -39,7 +39,7 @@ public final class Curator implements Closeable {
     private static final Logger logger = LogManager.getLogger(Curator.class);
     private static final Curator INSTANCE = new Curator();
 
-    private CompletableFuture<Boolean> connectionFuture;
+    private CompletableFuture<Boolean> connectionFuture = new CompletableFuture<>();
     private CuratorFramework curatorFramework;
 
     /**
@@ -51,14 +51,14 @@ public final class Curator implements Closeable {
     }
 
     public static void init() {
-        INSTANCE.connectionFuture = new CompletableFuture<>();
         if (ExpressGateway.getInstance().runningMode() == ExpressGateway.RunningMode.REPLICA) {
 
-            // If ConnectionFuture is not 'null' then we have existing Curator instance running.
+            // If ConnectionFuture is in 'Done' state then we have existing Curator instance running.
             // We will close the existing instance before we build fresh one.
-            if (INSTANCE.connectionFuture != null) {
+            if (INSTANCE.connectionFuture.isDone()) {
                 logger.info("Closing existing Curator instance");
                 INSTANCE.close();
+                INSTANCE.connectionFuture = new CompletableFuture<>();
             }
 
             // Use Netty client with TLS
