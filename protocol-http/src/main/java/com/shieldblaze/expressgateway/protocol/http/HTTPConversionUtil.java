@@ -193,11 +193,8 @@ public class HTTPConversionUtil {
             out.path(toHttp2Path(requestTargetUri));
             out.method(request.method().asciiName());
 
-            if (!isOriginForm(requestTargetUri) && !isAsteriskForm(requestTargetUri)) {
-                // Attempt to take from HOST header before taking from the request-line
-                String host = inHeaders.getAsString(HttpHeaderNames.HOST);
-                setHttp2Authority((host == null || host.isEmpty()) ? requestTargetUri.getAuthority() : host, out);
-            }
+            String host = inHeaders.getAsString(HttpHeaderNames.HOST);
+            setHttp2Authority((host == null || host.isEmpty()) ? requestTargetUri.getAuthority() : host, out);
         } else if (in instanceof HttpResponse response) {
             out.status(response.status().codeAsText());
         }

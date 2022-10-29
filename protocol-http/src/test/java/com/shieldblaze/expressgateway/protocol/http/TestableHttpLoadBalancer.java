@@ -51,7 +51,7 @@ public final class TestableHttpLoadBalancer implements Closeable {
     private boolean tlsBackendEnabled;
     private HTTPLoadBalancer httpLoadBalancer;
     private HttpServer httpServer;
-    private HttpClient httpClient;
+    private static HttpClient httpClient;
 
     public void start() throws Exception {
         SelfSignedCertificate ssc = SelfSignedCertificate.generateNew(List.of("127.0.0.1"), List.of("localhost"));
@@ -70,13 +70,6 @@ public final class TestableHttpLoadBalancer implements Closeable {
             tlsClientConfiguration.setAcceptAllCerts(true);
         }
         tlsClientConfiguration.defaultMapping(CertificateKeyPair.newDefaultClientInstance());
-
-        SSLContext sslContext = SSLContext.getInstance("TLSv1.3");
-        sslContext.init(null, InsecureTrustManagerFactory.INSTANCE.getTrustManagers(), new SecureRandom());
-
-        httpClient = HttpClient.newBuilder()
-                .sslContext(sslContext)
-                .build();
 
         httpServer = new HttpServer(tlsBackendEnabled);
         httpServer.start();
@@ -105,7 +98,20 @@ public final class TestableHttpLoadBalancer implements Closeable {
         assertTrue(l4FrontListenerStartupEvent.isSuccess());
     }
 
-    public HttpClient httpClient() {
+    public static HttpClient httpClient() {
+        if (httpClient == null) {
+            try {
+                SSLContext sslContext = SSLContext.getInstance("TLSv1.3");
+                sslContext.init(null, InsecureTrustManagerFactory.INSTANCE.getTrustManagers(), new SecureRandom());
+
+                httpClient = HttpClient.newBuilder()
+                        .sslContext(sslContext)
+                        .followRedirects(HttpClient.Redirect.ALWAYS)
+                        .build();
+            } catch (Exception ex) {
+                throw new IllegalStateException(ex);
+            }
+        }
         return httpClient;
     }
 

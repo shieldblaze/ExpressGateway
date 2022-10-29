@@ -42,9 +42,11 @@ import io.netty.handler.codec.http2.Http2DataFrame;
 import io.netty.handler.codec.http2.Http2Error;
 import io.netty.handler.codec.http2.Http2FrameCodec;
 import io.netty.handler.codec.http2.Http2FrameStream;
+import io.netty.handler.codec.http2.Http2FrameStreamEvent;
 import io.netty.handler.codec.http2.Http2Headers;
 import io.netty.handler.codec.http2.Http2HeadersFrame;
 import io.netty.handler.codec.http2.Http2StreamFrame;
+import io.netty.handler.ssl.SslHandler;
 import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
 
@@ -114,14 +116,16 @@ public final class HTTP2OutboundAdapter extends Http2ChannelDuplexHandler {
      */
     private final Map<Long, OutboundProperty> streamIdMap = new ConcurrentHashMap<>();
 
+    private boolean isTLSConnection = false;
+
     @Override
-    protected void handlerAdded0(ChannelHandlerContext ctx) throws Exception {
+    protected void handlerAdded0(ChannelHandlerContext ctx) {
         FRAME_CODEC_INSTANCE = getHttp2FrameCodec();
+        isTLSConnection = ctx.pipeline().get(SslHandler.class) != null;
     }
 
     @Override
     public void write(ChannelHandlerContext ctx, Object msg, ChannelPromise promise) throws Exception {
-//        System.out.println(msg);
         NonceWrapped<?> nonceWrapped = (NonceWrapped<?>) msg;
         if (nonceWrapped.get() instanceof HttpRequest httpRequest) {
             Http2FrameStream http2FrameStream = newStream();
@@ -134,14 +138,14 @@ public final class HTTP2OutboundAdapter extends Http2ChannelDuplexHandler {
 
             if (httpRequest instanceof FullHttpRequest fullHttpRequest) {
 
-                if (fullHttpRequest.content().readableBytes() == 0) {
+                if (!fullHttpRequest.content().isReadable()) {
                     Http2Headers http2Headers = HTTPConversionUtil.toHttp2Headers(fullHttpRequest);
                     Http2HeadersFrame http2HeadersFrame = new DefaultHttp2HeadersFrame(http2Headers, true);
-                    writeHeaders(ctx, nonceWrapped.nonce(), http2HeadersFrame, promise);
+                    writeHeaders(ctx, nonceWrapped.nonce(), http2HeadersFrame, promise, true);
                 } else {
                     Http2Headers http2Headers = HTTPConversionUtil.toHttp2Headers(fullHttpRequest);
                     Http2HeadersFrame http2HeadersFrame = new DefaultHttp2HeadersFrame(http2Headers, false);
-                    writeHeaders(ctx, nonceWrapped.nonce(), http2HeadersFrame, promise);
+                    writeHeaders(ctx, nonceWrapped.nonce(), http2HeadersFrame, promise, true);
 
                     Http2DataFrame dataFrame = new DefaultHttp2DataFrame(fullHttpRequest.content(), true);
                     writeData(ctx, nonceWrapped.nonce(), dataFrame, ctx.voidPromise());
@@ -149,7 +153,7 @@ public final class HTTP2OutboundAdapter extends Http2ChannelDuplexHandler {
             } else {
                 Http2Headers http2Headers = HTTPConversionUtil.toHttp2Headers(httpRequest);
                 Http2HeadersFrame http2HeadersFrame = new DefaultHttp2HeadersFrame(http2Headers, false);
-                writeHeaders(ctx, nonceWrapped.nonce(), http2HeadersFrame, promise);
+                writeHeaders(ctx, nonceWrapped.nonce(), http2HeadersFrame, promise, true);
             }
         } else if (nonceWrapped.get() instanceof HttpContent httpContent) {
             if (httpContent instanceof LastHttpContent) {
@@ -167,7 +171,7 @@ public final class HTTP2OutboundAdapter extends Http2ChannelDuplexHandler {
 
                     Http2Headers http2Headers = HTTPConversionUtil.toHttp2Headers(lastHttpContent.trailingHeaders());
                     Http2HeadersFrame http2HeadersFrame = new DefaultHttp2HeadersFrame(http2Headers, true);
-                    writeHeaders(ctx, nonceWrapped.nonce(), http2HeadersFrame, promise);
+                    writeHeaders(ctx, nonceWrapped.nonce(), http2HeadersFrame, promise, false);
                 }
             } else {
                 Http2DataFrame dataFrame = new DefaultHttp2DataFrame(httpContent.content(), false);
@@ -178,7 +182,6 @@ public final class HTTP2OutboundAdapter extends Http2ChannelDuplexHandler {
 
     @Override
     public void channelRead(ChannelHandlerContext ctx, Object msg) throws Exception {
-//        System.err.println(msg);
         if (msg instanceof Http2HeadersFrame headersFrame) {
             int streamId = headersFrame.stream().id();
             OutboundProperty outboundProperty = outboundProperty(streamId);
@@ -230,8 +233,12 @@ public final class HTTP2OutboundAdapter extends Http2ChannelDuplexHandler {
     /**
      * Write and Flush {@linkplain Http2HeadersFrame}
      */
-    private void writeHeaders(ChannelHandlerContext ctx, long id, Http2HeadersFrame headersFrame, ChannelPromise channelPromise) throws Exception {
-        headersFrame.stream(outboundProperty(id).stream());
+    private void writeHeaders(ChannelHandlerContext ctx, long nonce, Http2HeadersFrame headersFrame,
+                              ChannelPromise channelPromise, boolean addScheme) throws Exception {
+        headersFrame.stream(outboundProperty(nonce).stream());
+        if (addScheme) {
+            headersFrame.headers().scheme(isTLSConnection ? "https" : "http");
+        }
         super.write(ctx, headersFrame, channelPromise);
     }
 
@@ -253,12 +260,12 @@ public final class HTTP2OutboundAdapter extends Http2ChannelDuplexHandler {
     }
 
     /**
-     * Get {@linkplain OutboundProperty} using {@code ID}
+     * Get {@linkplain OutboundProperty} using nonce
      */
-    private OutboundProperty outboundProperty(long id) {
-        OutboundProperty outboundProperty = streamIdMap.get(id);
+    private OutboundProperty outboundProperty(long nonce) {
+        OutboundProperty outboundProperty = streamIdMap.get(nonce);
         if (outboundProperty == null) {
-            throw new IllegalArgumentException("Stream does not exist for StreamHash: " + id);
+            throw new IllegalArgumentException("Stream does not exist for Nonce: " + nonce);
         }
         return outboundProperty;
     }
