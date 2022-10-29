@@ -31,6 +31,7 @@ import org.apache.zookeeper.server.persistence.FileTxnSnapLog;
 import org.apache.zookeeper.server.quorum.QuorumPeerConfig;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+
 import javax.management.JMException;
 import java.io.IOException;
 import java.lang.reflect.Field;

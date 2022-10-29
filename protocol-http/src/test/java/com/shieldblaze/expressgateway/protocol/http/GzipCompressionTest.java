@@ -62,7 +62,7 @@ class GzipCompressionTest {
                 .setHeader("Accept-Encoding", "gzip")
                 .build();
 
-        HttpResponse<byte[]> httpResponse = testableHttpLoadBalancer.httpClient().send(httpRequest, HttpResponse.BodyHandlers.ofByteArray());
+        HttpResponse<byte[]> httpResponse = TestableHttpLoadBalancer.httpClient().send(httpRequest, HttpResponse.BodyHandlers.ofByteArray());
         assertEquals(200, httpResponse.statusCode());
         assertEquals("gzip", httpResponse.headers().firstValue("Content-Encoding").get());
 
@@ -81,7 +81,7 @@ class GzipCompressionTest {
                 .setHeader("Accept-Encoding", "gzip, deflate")
                 .build();
 
-        HttpResponse<byte[]> httpResponse = testableHttpLoadBalancer.httpClient().send(httpRequest, HttpResponse.BodyHandlers.ofByteArray());
+        HttpResponse<byte[]> httpResponse = TestableHttpLoadBalancer.httpClient().send(httpRequest, HttpResponse.BodyHandlers.ofByteArray());
         assertEquals(200, httpResponse.statusCode());
         assertEquals("gzip", httpResponse.headers().firstValue("Content-Encoding").get());
 

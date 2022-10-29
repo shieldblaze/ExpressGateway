@@ -200,7 +200,10 @@ public abstract class L4LoadBalancer {
         try {
             Cluster cluster = clusterMap.get(hostname);
             if (cluster == null) {
-                throw new NullPointerException("Cluster not found with Hostname: " + hostname);
+                cluster = clusterMap.get("DEFAULT");
+                if (cluster == null) {
+                    throw new NullPointerException("Cluster not found with Hostname: " + hostname);
+                }
             }
             return cluster;
         } catch (Exception ex) {

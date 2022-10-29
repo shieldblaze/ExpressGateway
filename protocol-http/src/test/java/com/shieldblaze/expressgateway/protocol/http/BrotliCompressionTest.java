@@ -62,7 +62,7 @@ class BrotliCompressionTest {
                 .setHeader("Accept-Encoding", "br")
                 .build();
 
-        HttpResponse<byte[]> httpResponse = testableHttpLoadBalancer.httpClient().send(httpRequest, HttpResponse.BodyHandlers.ofByteArray());
+        HttpResponse<byte[]> httpResponse = TestableHttpLoadBalancer.httpClient().send(httpRequest, HttpResponse.BodyHandlers.ofByteArray());
         assertEquals(200, httpResponse.statusCode());
         assertEquals("br", httpResponse.headers().firstValue("Content-Encoding").get());
 
@@ -81,7 +81,7 @@ class BrotliCompressionTest {
                 .setHeader("Accept-Encoding", "gzip, br")
                 .build();
 
-        HttpResponse<byte[]> httpResponse = testableHttpLoadBalancer.httpClient().send(httpRequest, HttpResponse.BodyHandlers.ofByteArray());
+        HttpResponse<byte[]> httpResponse = TestableHttpLoadBalancer.httpClient().send(httpRequest, HttpResponse.BodyHandlers.ofByteArray());
         assertEquals(200, httpResponse.statusCode());
         assertEquals("br", httpResponse.headers().firstValue("Content-Encoding").get());
 
@@ -100,7 +100,7 @@ class BrotliCompressionTest {
                 .setHeader("Accept-Encoding", "gzip, deflate, br")
                 .build();
 
-        HttpResponse<byte[]> httpResponse = testableHttpLoadBalancer.httpClient().send(httpRequest, HttpResponse.BodyHandlers.ofByteArray());
+        HttpResponse<byte[]> httpResponse = TestableHttpLoadBalancer.httpClient().send(httpRequest, HttpResponse.BodyHandlers.ofByteArray());
         assertEquals(200, httpResponse.statusCode());
         assertEquals("br", httpResponse.headers().firstValue("Content-Encoding").get());
 
