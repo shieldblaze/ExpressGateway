@@ -15,31 +15,16 @@
  * You should have received a copy of the GNU General Public License
  * along with ShieldBlaze ExpressGateway.  If not, see <https://www.gnu.org/licenses/>.
  */
-/*
- * Copyright 2014 The Netty Project
- *
- * The Netty Project licenses this file to you under the Apache License, version 2.0 (the
- * "License"); you may not use this file except in compliance with the License. You may obtain a
- * copy of the License at:
- *
- * https://www.apache.org/licenses/LICENSE-2.0
- *
- * Unless required by applicable law or agreed to in writing, software distributed under the License
- * is distributed on an "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express
- * or implied. See the License for the specific language governing permissions and limitations under
- * the License.
- */
+
 package com.shieldblaze.expressgateway.protocol.http;
 
 import io.netty.buffer.ByteBuf;
 import io.netty.handler.codec.UnsupportedValueConverter;
-import io.netty.handler.codec.http.CustomFullHttpRequest;
-import io.netty.handler.codec.http.CustomFullHttpResponse;
-import io.netty.handler.codec.http.CustomHttpRequest;
-import io.netty.handler.codec.http.CustomHttpResponse;
+import io.netty.handler.codec.http.DefaultFullHttpRequest;
+import io.netty.handler.codec.http.DefaultFullHttpResponse;
+import io.netty.handler.codec.http.DefaultHttpResponse;
 import io.netty.handler.codec.http.FullHttpRequest;
 import io.netty.handler.codec.http.FullHttpResponse;
-import io.netty.handler.codec.http.HttpFrame;
 import io.netty.handler.codec.http.HttpHeaderNames;
 import io.netty.handler.codec.http.HttpHeaders;
 import io.netty.handler.codec.http.HttpMessage;
@@ -106,9 +91,51 @@ public class HTTPConversionUtil {
         HTTP_TO_HTTP2_HEADER_BLACKLIST.add(HttpConversionUtil.ExtensionHeaderNames.PATH.text(), EMPTY_STRING);
     }
 
-    public static FullHttpResponse toFullHttpResponse(long id, Http2Headers http2Headers, ByteBuf content, HttpVersion httpVersion) throws Http2Exception {
+    public static NonceWrapped<HttpResponse> toFullHttpResponse(Http2Headers http2Headers, ByteBuf content, HttpVersion httpVersion) throws Http2Exception {
         HttpResponseStatus status = parseStatus(http2Headers.status());
-        FullHttpResponse msg = new CustomFullHttpResponse(httpVersion, status, content, HttpFrame.Protocol.H2, id);
+        FullHttpResponse msg = new DefaultFullHttpResponse(httpVersion, status, content);
+        try {
+            addHttp2ToHttpHeaders(http2Headers, msg.headers(), false, false);
+        } catch (Exception e) {
+            msg.release();
+            throw e;
+        }
+        return new NonceWrapped<>(msg);
+    }
+
+    public static NonceWrapped<HttpRequest> toFullHttpRequest(Http2Headers http2Headers, ByteBuf content) {
+        CharSequence method = http2Headers.method();
+        CharSequence path = http2Headers.path();
+
+        FullHttpRequest msg = new DefaultFullHttpRequest(HttpVersion.HTTP_1_1, HttpMethod.valueOf(method.toString()), path.toString(), content);
+        try {
+            addHttp2ToHttpHeaders(http2Headers, msg.headers(), false, true);
+        } catch (Exception ex) {
+            msg.release();
+            throw ex;
+        }
+        return new NonceWrapped<>(msg);
+    }
+
+    public static NonceWrapped<HttpRequest> toHttpRequest(Http2Headers http2Headers) {
+        CharSequence method = http2Headers.method();
+        CharSequence path = http2Headers.path();
+
+        HttpRequest msg = new DefaultFullHttpRequest(HttpVersion.HTTP_1_1, HttpMethod.valueOf(method.toString()), path.toString());
+        addHttp2ToHttpHeaders(http2Headers, msg.headers(), false, true);
+        return new NonceWrapped<>(msg);
+    }
+
+    public static NonceWrapped<HttpResponse> toHttpResponse(Http2Headers http2Headers, HttpVersion httpVersion) throws Http2Exception {
+        HttpResponseStatus status = parseStatus(http2Headers.status());
+        HttpResponse msg = new DefaultHttpResponse(httpVersion, status);
+        addHttp2ToHttpHeaders(http2Headers, msg.headers(), false, false);
+        return new NonceWrapped<>(msg);
+    }
+
+    public static HttpResponse toFullHttpResponseNormal(Http2Headers http2Headers, ByteBuf content, HttpVersion httpVersion) throws Http2Exception {
+        HttpResponseStatus status = parseStatus(http2Headers.status());
+        FullHttpResponse msg = new DefaultFullHttpResponse(httpVersion, status, content);
         try {
             addHttp2ToHttpHeaders(http2Headers, msg.headers(), false, false);
         } catch (Exception e) {
@@ -118,12 +145,11 @@ public class HTTPConversionUtil {
         return msg;
     }
 
-    public static FullHttpRequest toFullHttpRequest(long id, Http2Headers http2Headers, ByteBuf content) {
+    public static HttpRequest toFullHttpRequestNormal(Http2Headers http2Headers, ByteBuf content) {
         CharSequence method = http2Headers.method();
         CharSequence path = http2Headers.path();
 
-        FullHttpRequest msg = new CustomFullHttpRequest(HttpVersion.HTTP_1_1, HttpMethod.valueOf(method.toString()), path.toString(),
-                content, HttpFrame.Protocol.H2, id);
+        FullHttpRequest msg = new DefaultFullHttpRequest(HttpVersion.HTTP_1_1, HttpMethod.valueOf(method.toString()), path.toString(), content);
         try {
             addHttp2ToHttpHeaders(http2Headers, msg.headers(), false, true);
         } catch (Exception ex) {
@@ -133,18 +159,18 @@ public class HTTPConversionUtil {
         return msg;
     }
 
-    public static HttpRequest toHttpRequest(long id, Http2Headers http2Headers) {
+    public static HttpRequest toHttpRequestNormal(Http2Headers http2Headers) {
         CharSequence method = http2Headers.method();
         CharSequence path = http2Headers.path();
 
-        HttpRequest msg = new CustomHttpRequest(HttpVersion.HTTP_1_1, HttpMethod.valueOf(method.toString()), path.toString(), HttpFrame.Protocol.H2, id);
+        HttpRequest msg = new DefaultFullHttpRequest(HttpVersion.HTTP_1_1, HttpMethod.valueOf(method.toString()), path.toString());
         addHttp2ToHttpHeaders(http2Headers, msg.headers(), false, true);
         return msg;
     }
 
-    public static HttpResponse toHttpResponse(long id, Http2Headers http2Headers, HttpVersion httpVersion) throws Http2Exception {
+    public static HttpResponse toHttpResponseNormal(Http2Headers http2Headers, HttpVersion httpVersion) throws Http2Exception {
         HttpResponseStatus status = parseStatus(http2Headers.status());
-        HttpResponse msg = new CustomHttpResponse(httpVersion, status, HttpFrame.Protocol.H2, id);
+        HttpResponse msg = new DefaultHttpResponse(httpVersion, status);
         addHttp2ToHttpHeaders(http2Headers, msg.headers(), false, false);
         return msg;
     }

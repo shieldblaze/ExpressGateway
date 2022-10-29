@@ -15,29 +15,28 @@
  * You should have received a copy of the GNU General Public License
  * along with ShieldBlaze ExpressGateway.  If not, see <https://www.gnu.org/licenses/>.
  */
-
 package com.shieldblaze.expressgateway.protocol.http.adapter.http1;
 
+import com.shieldblaze.expressgateway.protocol.http.NonceWrapped;
 import io.netty.buffer.ByteBuf;
-import io.netty.buffer.ByteBufUtil;
 import io.netty.buffer.Unpooled;
 import io.netty.channel.embedded.EmbeddedChannel;
-import io.netty.handler.codec.http.CustomFullHttpResponse;
-import io.netty.handler.codec.http.CustomHttpContent;
-import io.netty.handler.codec.http.CustomHttpRequest;
-import io.netty.handler.codec.http.CustomHttpResponse;
-import io.netty.handler.codec.http.CustomLastHttpContent;
+import io.netty.handler.codec.http.DefaultFullHttpRequest;
+import io.netty.handler.codec.http.DefaultFullHttpResponse;
+import io.netty.handler.codec.http.DefaultHttpContent;
+import io.netty.handler.codec.http.DefaultHttpRequest;
+import io.netty.handler.codec.http.DefaultHttpResponse;
+import io.netty.handler.codec.http.DefaultLastHttpContent;
 import io.netty.handler.codec.http.HttpContent;
-import io.netty.handler.codec.http.HttpFrame;
 import io.netty.handler.codec.http.HttpMethod;
 import io.netty.handler.codec.http.HttpRequest;
 import io.netty.handler.codec.http.HttpResponse;
 import io.netty.handler.codec.http.HttpResponseStatus;
-import io.netty.handler.codec.http.HttpVersion;
 import org.junit.jupiter.api.Test;
 
-import java.util.Random;
+import java.nio.charset.StandardCharsets;
 
+import static io.netty.handler.codec.http.HttpVersion.HTTP_1_1;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 
 class HTTPOutboundAdapterTest {
@@ -46,34 +45,35 @@ class HTTPOutboundAdapterTest {
     void simpleGETRequestAndResponseTest() {
         EmbeddedChannel embeddedChannel = new EmbeddedChannel(new HTTPOutboundAdapter());
 
-        CustomHttpRequest httpRequest = new CustomHttpRequest(HttpVersion.HTTP_1_1, HttpMethod.GET, "/", HttpFrame.Protocol.HTTP_1_1, 1);
+        NonceWrapped<HttpRequest> httpRequest = new NonceWrapped<>(1, new DefaultFullHttpRequest(HTTP_1_1, HttpMethod.GET, "/"));
         embeddedChannel.writeOutbound(httpRequest);
         embeddedChannel.flushOutbound();
 
-        HttpResponse httpResponse = new CustomHttpResponse(HttpVersion.HTTP_1_1, HttpResponseStatus.OK, HttpFrame.Protocol.HTTP_1_1, 1);
+        NonceWrapped<HttpResponse> httpResponse = new NonceWrapped<>(1, new DefaultHttpResponse(HTTP_1_1, HttpResponseStatus.OK));
         embeddedChannel.writeInbound(httpResponse);
         embeddedChannel.flushInbound();
 
-        assertEquals(1, httpRequest.id());
+        assertEquals(1, httpRequest.nonce());
 
         embeddedChannel.readInbound();
 
         final int numBytes = 1024 * 100;
         for (int i = 1; i <= numBytes; i++) {
             ByteBuf byteBuf = Unpooled.wrappedBuffer(("Meow" + i).getBytes());
+
             HttpContent httpContent;
             if (i == numBytes) {
-                httpContent = new CustomLastHttpContent(byteBuf, HttpFrame.Protocol.HTTP_1_1, 1);
+                httpContent = new DefaultLastHttpContent(byteBuf);
             } else {
-                httpContent = new CustomHttpContent(byteBuf, HttpFrame.Protocol.HTTP_1_1, 1);
+                httpContent = new DefaultHttpContent(byteBuf);
             }
             embeddedChannel.writeInbound(httpContent);
             embeddedChannel.flushInbound();
 
-            CustomHttpContent responseHttpContent = embeddedChannel.readInbound();
-            assertEquals("Meow" + i, new String(ByteBufUtil.getBytes(byteBuf)));
-            assertEquals(1, responseHttpContent.id());
-            responseHttpContent.release();
+            NonceWrapped<HttpContent> wrappedHttpContent = embeddedChannel.readInbound();
+            assertEquals("Meow" + i, byteBuf.toString(StandardCharsets.UTF_8));
+            assertEquals(1, wrappedHttpContent.nonce());
+            wrappedHttpContent.get().release();
         }
 
         embeddedChannel.close();
@@ -83,34 +83,30 @@ class HTTPOutboundAdapterTest {
     void chunkedPOSTRequestAndResponse() {
         EmbeddedChannel embeddedChannel = new EmbeddedChannel(new HTTPOutboundAdapter());
 
-        HttpRequest httpRequest = new CustomHttpRequest(HttpVersion.HTTP_1_1, HttpMethod.POST, "/", HttpFrame.Protocol.HTTP_1_1, 1);
+        NonceWrapped<HttpRequest> httpRequest = new NonceWrapped<>(1, new DefaultHttpRequest(HTTP_1_1, HttpMethod.POST, "/"));
         embeddedChannel.writeOutbound(httpRequest);
         embeddedChannel.flushOutbound();
 
-        HttpResponse httpResponse = new CustomFullHttpResponse(HttpVersion.HTTP_1_1, HttpResponseStatus.OK,
-                embeddedChannel.alloc().buffer(), HttpFrame.Protocol.HTTP_1_1, 1);
+        NonceWrapped<HttpResponse> httpResponse = new NonceWrapped<>(1, new DefaultFullHttpResponse(HTTP_1_1, HttpResponseStatus.OK, embeddedChannel.alloc().buffer()));
         embeddedChannel.writeOutbound(httpResponse);
         embeddedChannel.flushOutbound();
 
         final int numBytes = 1024 * 100;
         for (int i = 1; i <= numBytes; i++) {
-            byte[] bytes = new byte[1];
-            new Random().nextBytes(bytes);
-
             ByteBuf byteBuf = Unpooled.wrappedBuffer(("Meow" + i).getBytes());
             HttpContent httpContent;
             if (i == numBytes) {
-                httpContent = new CustomLastHttpContent(byteBuf, HttpFrame.Protocol.HTTP_1_1, 1);
+                httpContent = new DefaultLastHttpContent(byteBuf);
             } else {
-                httpContent = new CustomHttpContent(byteBuf, HttpFrame.Protocol.HTTP_1_1, 1);
+                httpContent = new DefaultHttpContent(byteBuf);
             }
             embeddedChannel.writeInbound(httpContent);
             embeddedChannel.flushInbound();
 
-            CustomHttpContent responseHttpContent = embeddedChannel.readInbound();
-            assertEquals("Meow" + i, new String(ByteBufUtil.getBytes(byteBuf)));
-            assertEquals(1, responseHttpContent.id());
-            responseHttpContent.release();
+            NonceWrapped<HttpContent> wrappedHttpContent = embeddedChannel.readInbound();
+            assertEquals("Meow" + i, byteBuf.toString(StandardCharsets.UTF_8));
+            assertEquals(1, wrappedHttpContent.nonce());
+            wrappedHttpContent.get().release();
         }
 
         embeddedChannel.close();

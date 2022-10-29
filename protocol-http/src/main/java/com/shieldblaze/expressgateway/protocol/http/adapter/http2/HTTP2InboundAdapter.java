@@ -24,14 +24,11 @@ import io.netty.buffer.Unpooled;
 import io.netty.channel.ChannelDuplexHandler;
 import io.netty.channel.ChannelHandlerContext;
 import io.netty.channel.ChannelPromise;
-import io.netty.handler.codec.http.CustomFullHttpResponse;
-import io.netty.handler.codec.http.CustomHttpContent;
-import io.netty.handler.codec.http.CustomHttpResponse;
-import io.netty.handler.codec.http.CustomLastHttpContent;
+import io.netty.handler.codec.http.DefaultHttpContent;
+import io.netty.handler.codec.http.DefaultLastHttpContent;
 import io.netty.handler.codec.http.FullHttpRequest;
 import io.netty.handler.codec.http.FullHttpResponse;
 import io.netty.handler.codec.http.HttpContent;
-import io.netty.handler.codec.http.HttpFrame;
 import io.netty.handler.codec.http.HttpHeaderNames;
 import io.netty.handler.codec.http.HttpHeaderValues;
 import io.netty.handler.codec.http.HttpObject;
@@ -43,16 +40,12 @@ import io.netty.handler.codec.http2.DefaultHttp2GoAwayFrame;
 import io.netty.handler.codec.http2.DefaultHttp2HeadersFrame;
 import io.netty.handler.codec.http2.Http2DataFrame;
 import io.netty.handler.codec.http2.Http2Error;
-import io.netty.handler.codec.http2.Http2Exception;
+import io.netty.handler.codec.http2.Http2FrameStream;
 import io.netty.handler.codec.http2.Http2Headers;
 import io.netty.handler.codec.http2.Http2HeadersFrame;
 import io.netty.handler.codec.http2.Http2StreamFrame;
 import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
-
-import java.util.Map;
-import java.util.SplittableRandom;
-import java.util.concurrent.ConcurrentHashMap;
 
 /**
  * <p>
@@ -84,152 +77,122 @@ import java.util.concurrent.ConcurrentHashMap;
  */
 public final class HTTP2InboundAdapter extends ChannelDuplexHandler {
 
-    /**
-     * Logger
-     */
     private static final Logger logger = LogManager.getLogger(HTTP2InboundAdapter.class);
 
-    /**
-     * Fast Random Number Generator
-     */
-    private static final SplittableRandom RANDOM = new SplittableRandom();
-
-    /**
-     * <p> {@link Long}: HTTP Request ID </p>
-     * <p> {@link Integer}: HTTP/2 Stream ID  </p>
-     */
-    private final Map<Long, Integer> requestIdToStreamIdMap = new ConcurrentHashMap<>();
-
-    /**
-     * <p> {@link Integer}: HTTP/2 Stream ID </p>
-     * <p> {@link InboundProperty}: {@linkplain InboundProperty} associated with the HTTP Request.  </p>
-     */
-    private final Map<Integer, InboundProperty> streamIdMap = new ConcurrentHashMap<>();
+    private Http2FrameStream frameStream;
+    private String acceptEncoding;
 
     @Override
     public void channelRead(ChannelHandlerContext ctx, Object msg) throws Exception {
-        if (msg instanceof Http2HeadersFrame) {
-            onHttp2HeadersRead(ctx, (Http2HeadersFrame) msg);
-        } else if (msg instanceof Http2DataFrame) {
-            onHttp2DataRead(ctx, (Http2DataFrame) msg);
+        if (msg instanceof Http2HeadersFrame headersFrame) {
+            onHttp2HeadersRead(ctx, headersFrame);
+        } else if (msg instanceof Http2DataFrame dataFrame) {
+            onHttp2DataRead(ctx, dataFrame);
         } else {
             // Unsupported message type
         }
     }
 
-    private void onHttp2HeadersRead(ChannelHandlerContext ctx, Http2HeadersFrame headersFrame) throws Http2Exception {
-        int streamId = headersFrame.stream().id();
+    private void bound(Http2FrameStream frameStream, String acceptEncoding) {
+        this.frameStream = frameStream;
+        this.acceptEncoding = acceptEncoding;
+    }
 
-        if (streamIdMap.containsKey(streamId)) {
-            InboundProperty property = stream(streamId);
+    private void reset() {
+        this.frameStream = null;
+        this.acceptEncoding = null;
+    }
 
-            LastHttpContent httpContent = new CustomLastHttpContent(Unpooled.EMPTY_BUFFER, HttpFrame.Protocol.HTTP_1_1, property.httpFrame().id());
+    private void onHttp2HeadersRead(ChannelHandlerContext ctx, Http2HeadersFrame headersFrame) {
+        if (frameStream != null) {
+            LastHttpContent httpContent = new DefaultLastHttpContent(Unpooled.EMPTY_BUFFER, true);
             HTTPConversionUtil.addHttp2ToHttpHeaders(headersFrame.headers(), httpContent.trailingHeaders(), true, true);
             ctx.fireChannelRead(httpContent);
 
             // Trailing Header must have 'endOfStream' flag set to 'true'. If not, we'll send GOAWAY frame.
             if (!headersFrame.isEndStream()) {
-                ctx.writeAndFlush(new DefaultHttp2GoAwayFrame(Http2Error.PROTOCOL_ERROR).setExtraStreamIds(streamId), ctx.voidPromise());
-                removeStream(property);
+                ctx.writeAndFlush(new DefaultHttp2GoAwayFrame(Http2Error.PROTOCOL_ERROR).setExtraStreamIds(headersFrame.stream().id()), ctx.voidPromise());
+                reset();
             }
         } else {
-            long id = RANDOM.nextLong();
-
             HttpRequest httpRequest;
             if (headersFrame.isEndStream()) {
-                httpRequest = HTTPConversionUtil.toFullHttpRequest(id, headersFrame.headers(), Unpooled.EMPTY_BUFFER);
+                httpRequest = HTTPConversionUtil.toFullHttpRequestNormal(headersFrame.headers(), Unpooled.EMPTY_BUFFER);
             } else {
-                httpRequest = HTTPConversionUtil.toHttpRequest(id, headersFrame.headers());
+                httpRequest = HTTPConversionUtil.toHttpRequestNormal(headersFrame.headers());
                 httpRequest.headers().set(HttpHeaderNames.TRANSFER_ENCODING, HttpHeaderValues.CHUNKED);
             }
 
-            String acceptEncoding;
             if (headersFrame.headers().contains(HttpHeaderNames.ACCEPT_ENCODING)) {
                 acceptEncoding = headersFrame.headers().get(HttpHeaderNames.ACCEPT_ENCODING).toString();
             } else {
                 acceptEncoding = null;
             }
 
-            HttpFrame httpFrame = (HttpFrame) httpRequest;
-            InboundProperty property = new InboundProperty(httpFrame, headersFrame.stream(), acceptEncoding);
-            addStream(property);
-
+            bound(headersFrame.stream(), acceptEncoding);
             ctx.fireChannelRead(httpRequest);
         }
     }
 
     private void onHttp2DataRead(ChannelHandlerContext ctx, Http2DataFrame dataFrame) {
-        long id = stream(dataFrame.stream().id()).httpFrame().id();
-
         HttpContent httpContent;
         if (dataFrame.isEndStream()) {
-            httpContent = new CustomLastHttpContent(dataFrame.content(), HttpFrame.Protocol.H2, id);
+            httpContent = new DefaultLastHttpContent(dataFrame.content());
         } else {
-            httpContent = new CustomHttpContent(dataFrame.content(), HttpFrame.Protocol.H2, id);
+            httpContent = new DefaultHttpContent(dataFrame.content());
         }
         ctx.fireChannelRead(httpContent);
     }
 
     @Override
     public void write(ChannelHandlerContext ctx, Object msg, ChannelPromise promise) {
-        if (msg instanceof HttpResponse) {
-            if (msg instanceof FullHttpResponse) {
-                CustomFullHttpResponse httpResponse = (CustomFullHttpResponse) msg;
-                InboundProperty inboundProperty = stream(httpResponse.id());
-                Http2Headers http2Headers = HTTPConversionUtil.toHttp2Headers(httpResponse);
+        if (msg instanceof FullHttpResponse fullHttpResponse) {
+            Http2Headers http2Headers = HTTPConversionUtil.toHttp2Headers(fullHttpResponse);
 
-                applyCompression(http2Headers, inboundProperty);
+            applyCompression(http2Headers);
 
-                // If 'readableBytes' is 0 then there is no Data frame to write. We'll mark Header frame as 'endOfStream'.
-                if (httpResponse.content().readableBytes() == 0) {
-                    Http2HeadersFrame headersFrame = new DefaultHttp2HeadersFrame(http2Headers, true);
-                    writeHeaders(ctx, inboundProperty, headersFrame, promise);
-                } else {
-                    Http2HeadersFrame headersFrame = new DefaultHttp2HeadersFrame(http2Headers, false);
-                    writeHeaders(ctx, inboundProperty, headersFrame, promise);
-
-                    Http2DataFrame dataFrame = new DefaultHttp2DataFrame(httpResponse.content(), true);
-                    writeData(ctx, inboundProperty, dataFrame, ctx.voidPromise(), true);
-                }
-
-                // We're done with this Stream
-                removeStream(inboundProperty);
+            // If 'readableBytes' is 0 then there is no Data frame to write. We'll mark Header frame as 'endOfStream'.
+            if (fullHttpResponse.content().readableBytes() == 0) {
+                Http2HeadersFrame headersFrame = new DefaultHttp2HeadersFrame(http2Headers, true);
+                writeHeaders(ctx, headersFrame, promise);
             } else {
-                CustomHttpResponse httpResponse = (CustomHttpResponse) msg;
-                InboundProperty inboundProperty = stream(httpResponse.id());
-                Http2Headers http2Headers = HTTPConversionUtil.toHttp2Headers(httpResponse);
-
-                applyCompression(http2Headers, inboundProperty);
-
                 Http2HeadersFrame headersFrame = new DefaultHttp2HeadersFrame(http2Headers, false);
-                writeHeaders(ctx, inboundProperty, headersFrame, promise);
-            }
-        } else if (msg instanceof HttpContent) {
-            if (msg instanceof CustomLastHttpContent lastHttpContent) {
-                InboundProperty property = stream(lastHttpContent.id());
+                writeHeaders(ctx, headersFrame, promise);
 
+                Http2DataFrame dataFrame = new DefaultHttp2DataFrame(fullHttpResponse.content(), true);
+                writeData(ctx, dataFrame, ctx.voidPromise(), true);
+            }
+
+            // We're done with this Stream
+            reset();
+        } else if (msg instanceof HttpResponse httpResponse) {
+            Http2Headers http2Headers = HTTPConversionUtil.toHttp2Headers(httpResponse);
+            applyCompression(http2Headers);
+
+            Http2HeadersFrame headersFrame = new DefaultHttp2HeadersFrame(http2Headers, false);
+            writeHeaders(ctx, headersFrame, promise);
+        } else if (msg instanceof HttpContent httpContent) {
+            if (httpContent instanceof LastHttpContent lastHttpContent) {
                 // > If Trailing Headers are empty then we'll write HTTP/2 Data Frame with 'endOfStream' set to 'true.
                 // > If Trailing Headers are present then we'll write HTTP/2 Data Frame followed by HTTP/2 Header Frame
                 //   which will have 'endOfStream' set to 'true.
                 if (lastHttpContent.trailingHeaders().isEmpty()) {
                     Http2DataFrame dataFrame = new DefaultHttp2DataFrame(lastHttpContent.content(), true);
-                    writeData(ctx, property, dataFrame, promise, false);
+                    writeData(ctx, dataFrame, promise, false);
                 } else {
                     Http2DataFrame dataFrame = new DefaultHttp2DataFrame(lastHttpContent.content(), false);
-                    writeData(ctx, property, dataFrame, promise, false);
+                    writeData(ctx, dataFrame, promise, false);
 
                     Http2Headers http2Headers = HTTPConversionUtil.toHttp2Headers(lastHttpContent.trailingHeaders());
                     Http2HeadersFrame headersFrame = new DefaultHttp2HeadersFrame(http2Headers, true);
-                    writeHeaders(ctx, property, headersFrame, ctx.voidPromise());
+                    writeHeaders(ctx, headersFrame, ctx.voidPromise());
                 }
 
                 // We're done with this Stream
-                removeStream(property);
-            } else if (msg instanceof CustomHttpContent httpContent) {
-                InboundProperty property = stream(httpContent.id());
-
+                reset();
+            } else {
                 Http2DataFrame dataFrame = new DefaultHttp2DataFrame(httpContent.content(), false);
-                writeData(ctx, property, dataFrame, promise, false);
+                writeData(ctx, dataFrame, promise, false);
             }
         }
     }
@@ -238,15 +201,15 @@ public final class HTTP2InboundAdapter extends ChannelDuplexHandler {
      * <p> Determine whether compression can be applied or not. </p>
      *
      * <p> If {@link Http2Headers} does not contain 'CONTENT-ENCODING' and
-     * {@link InboundProperty#acceptEncoding()} is not 'null' then
+     * {@link #acceptEncoding} is not 'null' then
      * we'll call {@link HTTPCompressionUtil#targetEncoding(Http2Headers, String)}
      * to determine whether the content is compressible or not.
      * If content is compressible then we'll add 'CONTENT-ENCODING' headers so it
      * can be compressed by {@link HTTP2ContentCompressor}. </p>
      */
-    private void applyCompression(Http2Headers headers, InboundProperty inboundProperty) {
-        if (!headers.contains(HttpHeaderNames.CONTENT_ENCODING) && inboundProperty.acceptEncoding() != null) {
-            String targetEncoding = HTTPCompressionUtil.targetEncoding(headers, inboundProperty.acceptEncoding());
+    private void applyCompression(Http2Headers headers) {
+        if (!headers.contains(HttpHeaderNames.CONTENT_ENCODING) && acceptEncoding != null) {
+            String targetEncoding = HTTPCompressionUtil.targetEncoding(headers, acceptEncoding);
             if (targetEncoding != null) {
                 headers.set(HttpHeaderNames.CONTENT_ENCODING, targetEncoding);
             }
@@ -256,40 +219,21 @@ public final class HTTP2InboundAdapter extends ChannelDuplexHandler {
     /**
      * Write {@linkplain Http2HeadersFrame}
      */
-    private void writeHeaders(ChannelHandlerContext ctx, InboundProperty inboundProperty, Http2HeadersFrame headersFrame, ChannelPromise channelPromise) {
-        headersFrame.stream(inboundProperty.stream());
+    private void writeHeaders(ChannelHandlerContext ctx, Http2HeadersFrame headersFrame, ChannelPromise channelPromise) {
+        headersFrame.stream(frameStream);
         ctx.write(headersFrame, channelPromise);
     }
 
     /**
      * Write and Flush {@linkplain Http2DataFrame}
      */
-    private void writeData(ChannelHandlerContext ctx, InboundProperty inboundProperty, Http2DataFrame dataFrame, ChannelPromise channelPromise, boolean flush) {
-        dataFrame.stream(inboundProperty.stream());
+    private void writeData(ChannelHandlerContext ctx, Http2DataFrame dataFrame, ChannelPromise channelPromise, boolean flush) {
+        dataFrame.stream(frameStream);
         if (flush) {
             ctx.writeAndFlush(dataFrame, channelPromise);
         } else {
             ctx.write(dataFrame, channelPromise);
         }
-    }
-
-    private void addStream(InboundProperty inboundProperty) {
-        requestIdToStreamIdMap.put(inboundProperty.httpFrame().id(), inboundProperty.stream().id());
-        streamIdMap.put(inboundProperty.stream().id(), inboundProperty);
-    }
-
-    private void removeStream(InboundProperty inboundProperty) {
-        requestIdToStreamIdMap.remove(inboundProperty.httpFrame().id());
-        streamIdMap.remove(inboundProperty.stream().id());
-    }
-
-    private InboundProperty stream(long id) {
-        int streamId = requestIdToStreamIdMap.get(id);
-        return stream(streamId);
-    }
-
-    private InboundProperty stream(int streamId) {
-        return streamIdMap.get(streamId);
     }
 
     @Override

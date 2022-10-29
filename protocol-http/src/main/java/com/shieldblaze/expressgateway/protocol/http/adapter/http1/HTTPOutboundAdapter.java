@@ -17,11 +17,11 @@
  */
 package com.shieldblaze.expressgateway.protocol.http.adapter.http1;
 
+import com.shieldblaze.expressgateway.protocol.http.NonceWrapped;
 import com.shieldblaze.expressgateway.protocol.http.adapter.http2.HTTP2InboundAdapter;
 import io.netty.channel.ChannelDuplexHandler;
 import io.netty.channel.ChannelHandlerContext;
 import io.netty.channel.ChannelPromise;
-import io.netty.handler.codec.http.HttpFrame;
 
 /**
  * {@linkplain HTTPOutboundAdapter} handles incoming HTTP/1.x responses
@@ -29,21 +29,17 @@ import io.netty.handler.codec.http.HttpFrame;
  */
 public final class HTTPOutboundAdapter extends ChannelDuplexHandler {
 
-    private long id;
+    private long nonce;
 
     @Override
     public void write(ChannelHandlerContext ctx, Object msg, ChannelPromise promise) {
-        if (msg instanceof HttpFrame httpFrame) {
-            id = httpFrame.id();
-        }
-        ctx.write(msg, promise);
+        NonceWrapped<?> nonceWrapped = (NonceWrapped<?>) msg;
+        nonce = nonceWrapped.nonce();
+        ctx.write(nonceWrapped.get(), promise);
     }
 
     @Override
     public void channelRead(ChannelHandlerContext ctx, Object msg) {
-        if (msg instanceof HttpFrame httpFrame) {
-            httpFrame.id(id);
-        }
-        ctx.fireChannelRead(msg);
+        ctx.fireChannelRead(new NonceWrapped<>(nonce, msg));
     }
 }
