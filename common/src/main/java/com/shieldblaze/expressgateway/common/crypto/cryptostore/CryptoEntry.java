@@ -23,10 +23,7 @@ import java.security.PrivateKey;
 import java.security.cert.X509Certificate;
 
 /**
- * {@link CryptoEntry} holds {@link PrivateKey} and {@link X509Certificate}s instances
- *
- * @param privateKey   {@link PrivateKey} instance
- * @param certificates {@link X509Certificate}s instances
+ * {@link CryptoEntry} holds {@link PrivateKey} and {@link X509Certificate}s instances.
  */
 public record CryptoEntry(PrivateKey privateKey, X509Certificate... certificates) {
 
