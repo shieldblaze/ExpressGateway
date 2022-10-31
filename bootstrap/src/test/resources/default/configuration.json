@@ -6,6 +6,7 @@
         "IPAddress" : "127.0.0.1",
         "Port" : 9110,
         "EnableTLS" : false,
+        "MTLS" : "NONE",
         "PKCS12File" : "target/test-classes/default/restapi.p12",
         "Password" : "shieldblaze"
     },
@@ -14,6 +15,14 @@
         "RetryTimes" : 3,
         "SleepMsBetweenRetries" : 100,
         "EnableTLS" : true,
+        "HostnameVerification" : false,
+        "KeyStoreFile" : "",
+        "KeyStorePassword" : "",
+        "TrustStoreFile" : "",
+        "TrustStorePassword" : ""
+    },
+    "ServiceDiscovery" : {
+        "URI" : "http://127.0.0.1:25250/ExpressGateway/Servers",
         "HostnameVerification" : false,
         "KeyStoreFile" : "",
         "KeyStorePassword" : "",

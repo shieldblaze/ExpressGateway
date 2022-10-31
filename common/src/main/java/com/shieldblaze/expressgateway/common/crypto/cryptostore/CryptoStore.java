@@ -107,6 +107,10 @@ public final class CryptoStore {
         KeyStore keyStore = KeyStore.getInstance("PKCS12");
         keyStore.load(inputStream, password);
 
+        if (alias == null || alias.isEmpty()) {
+            alias = keyStore.aliases().nextElement();
+        }
+
         Certificate[] certificates = keyStore.getCertificateChain(alias);
         X509Certificate[] x509Certificates = new X509Certificate[certificates.length];
 

@@ -19,6 +19,7 @@ package com.shieldblaze.expressgateway.testing;
 
 import com.shieldblaze.expressgateway.common.ExpressGateway;
 import com.shieldblaze.expressgateway.common.zookeeper.Environment;
+import io.netty.handler.ssl.ClientAuth;
 
 import java.io.File;
 import java.util.UUID;
@@ -40,6 +41,7 @@ public final class ExpressGatewayConfigured {
         ExpressGateway.RestApi restApi = new ExpressGateway.RestApi("127.0.0.1",
                 9110,
                 true,
+                ClientAuth.NONE,
                 absolutePath + File.separator + "restapi.p12", "shieldblaze");
 
         ExpressGateway.ZooKeeper zooKeeper = new ExpressGateway.ZooKeeper(zooKeeperConnectionString,
@@ -52,6 +54,15 @@ public final class ExpressGatewayConfigured {
                 "" ,
                 "");
 
+        ExpressGateway.ServiceDiscovery serviceDiscovery = new ExpressGateway.ServiceDiscovery(
+                "http://127.0.0.1:25250/ExpressGateway/Servers",
+                false,
+                "",
+                "",
+                "",
+                ""
+        );
+
         ExpressGateway.LoadBalancerTLS loadBalancerTLS = new ExpressGateway.LoadBalancerTLS(false,
                 "",
                 "");
@@ -61,6 +72,7 @@ public final class ExpressGatewayConfigured {
                 Environment.DEVELOPMENT,
                 restApi,
                 zooKeeper,
+                serviceDiscovery,
                 loadBalancerTLS);
     }
 

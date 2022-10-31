@@ -20,6 +20,7 @@ package com.shieldblaze.expressgateway.common;
 import com.fasterxml.jackson.annotation.JsonIgnore;
 import com.fasterxml.jackson.annotation.JsonProperty;
 import com.shieldblaze.expressgateway.common.zookeeper.Environment;
+import io.netty.handler.ssl.ClientAuth;
 
 public class ExpressGateway {
 
@@ -41,6 +42,9 @@ public class ExpressGateway {
     @JsonProperty("ZooKeeper")
     private ZooKeeper zooKeeper;
 
+    @JsonProperty("ServiceDiscovery")
+    private ServiceDiscovery serviceDiscovery;
+
     @JsonProperty("LoadBalancerTLS")
     private LoadBalancerTLS loadBalancerTLS;
 
@@ -51,12 +55,13 @@ public class ExpressGateway {
      * This should be used in testing only.
      */
     public ExpressGateway(RunningMode runningMode, String clusterID, Environment environment, RestApi restApi,
-                          ZooKeeper zooKeeper, LoadBalancerTLS loadBalancerTLS) {
+                          ZooKeeper zooKeeper, ServiceDiscovery serviceDiscovery, LoadBalancerTLS loadBalancerTLS) {
         this.runningMode = runningMode;
         ClusterID = clusterID;
         this.environment = environment;
         this.restApi = restApi;
         this.zooKeeper = zooKeeper;
+        this.serviceDiscovery = serviceDiscovery;
         this.loadBalancerTLS = loadBalancerTLS;
     }
 
@@ -80,6 +85,10 @@ public class ExpressGateway {
         return zooKeeper;
     }
 
+    public ServiceDiscovery serviceDiscovery() {
+        return serviceDiscovery;
+    }
+
     public LoadBalancerTLS loadBalancerTLS() {
         return loadBalancerTLS;
     }
@@ -92,11 +101,12 @@ public class ExpressGateway {
                 ", ClusterID='" + ClusterID + '\'' +
                 ", restApi=" + restApi +
                 ", zooKeeper=" + zooKeeper +
+                ", serviceDiscovery=" + serviceDiscovery +
                 ", loadBalancerTLS=" + loadBalancerTLS +
                 '}';
     }
 
-    public static class RestApi implements CleanSensitiveData {
+    public static class RestApi {
 
         @JsonProperty
         private String IPAddress;
@@ -106,6 +116,9 @@ public class ExpressGateway {
 
         @JsonProperty
         private Boolean EnableTLS;
+
+        @JsonProperty
+        private ClientAuth MTLS;
 
         @JsonProperty
         private String PKCS12File;
@@ -122,10 +135,11 @@ public class ExpressGateway {
         /**
          * This should be used in testing only.
          */
-        public RestApi(String IPAddress, Integer port, Boolean enableTLS, String PKCS12File, String password) {
+        public RestApi(String IPAddress, Integer port, Boolean enableTLS, ClientAuth MTLS, String PKCS12File, String password) {
             this.IPAddress = IPAddress;
             Port = port;
             EnableTLS = enableTLS;
+            this.MTLS = MTLS;
             this.PKCS12File = PKCS12File;
             Password = password;
         }
@@ -142,6 +156,10 @@ public class ExpressGateway {
             return EnableTLS;
         }
 
+        public ClientAuth mTLS() {
+            return MTLS;
+        }
+
         public String PKCS12File() {
             return PKCS12File;
         }
@@ -156,19 +174,18 @@ public class ExpressGateway {
                     "IPAddress='" + IPAddress + '\'' +
                     ", Port=" + Port +
                     ", EnableTLS=" + EnableTLS +
+                    ", MTLS=" + MTLS +
                     ", PKCS12File='" + PKCS12File + '\'' +
-                    ", Password=*****" +
-                    '}';
+                    ", Password='*****'}";
         }
 
-        @Override
         public void clean() {
             PasswordAsChars = Password.toCharArray();
             Password = null;
         }
     }
 
-    public static class ZooKeeper implements CleanSensitiveData {
+    public static class ZooKeeper {
 
         @JsonProperty
         private String ConnectionString;
@@ -267,13 +284,11 @@ public class ExpressGateway {
                     ", EnableTLS=" + EnableTLS +
                     ", HostnameVerification=" + HostnameVerification +
                     ", KeyStoreFile='" + KeyStoreFile + '\'' +
-                    ", KeyStorePassword=*****" +
+                    ", KeyStorePassword='*****'" +
                     ", TrustStoreFile='" + TrustStoreFile + '\'' +
-                    ", TrustStorePassword=*****" +
-                    '}';
+                    ", TrustStorePassword='*****'}";
         }
 
-        @Override
         public void clean() {
             KeyStorePasswordAsChars = KeyStorePassword.toCharArray();
             KeyStorePassword = null;
@@ -283,7 +298,90 @@ public class ExpressGateway {
         }
     }
 
-    public static class LoadBalancerTLS implements CleanSensitiveData {
+    public static class ServiceDiscovery {
+
+        @JsonProperty
+        private String URI;
+
+        @JsonProperty
+        private Boolean HostnameVerification;
+
+        @JsonProperty
+        private String KeyStoreFile;
+
+        @JsonProperty
+        private String KeyStorePassword;
+
+        @JsonIgnore
+        private char[] KeyStorePasswordAsChars;
+
+        @JsonProperty
+        private String TrustStoreFile;
+
+        @JsonProperty
+        private String TrustStorePassword;
+
+        @JsonIgnore
+        private char[] TrustStorePasswordAsChars;
+
+        /**
+         * This should be used in testing only.
+         */
+        public ServiceDiscovery(String URI, Boolean hostnameVerification, String keyStoreFile, String keyStorePassword,
+                                String trustStoreFile, String trustStorePassword) {
+            this.URI = URI;
+            HostnameVerification = hostnameVerification;
+            KeyStoreFile = keyStoreFile;
+            KeyStorePassword = keyStorePassword;
+            TrustStoreFile = trustStoreFile;
+            TrustStorePassword = trustStorePassword;
+        }
+
+        public String URI() {
+            return URI;
+        }
+
+        public Boolean hostnameVerification() {
+            return HostnameVerification;
+        }
+
+        public String keyStoreFile() {
+            return KeyStoreFile;
+        }
+
+        public char[] keyStorePasswordAsChars() {
+            return KeyStorePasswordAsChars;
+        }
+
+        public String trustStoreFile() {
+            return TrustStoreFile;
+        }
+
+        public char[] trustStorePasswordAsChars() {
+            return TrustStorePasswordAsChars;
+        }
+
+        @Override
+        public String toString() {
+            return "ServiceDiscovery{" +
+                    "URI='" + URI + '\'' +
+                    ", HostnameVerification=" + HostnameVerification +
+                    ", KeyStoreFile='" + KeyStoreFile + '\'' +
+                    ", KeyStorePassword='*****'" +
+                    ", TrustStoreFile='" + TrustStoreFile + '\'' +
+                    ", TrustStorePassword='*****'}";
+        }
+
+        public void clean() {
+            KeyStorePasswordAsChars = KeyStorePassword.toCharArray();
+            KeyStorePassword = null;
+
+            TrustStorePasswordAsChars = TrustStorePassword.toCharArray();
+            TrustStorePassword = null;
+        }
+    }
+
+    public static class LoadBalancerTLS {
 
         @JsonProperty
         private Boolean EnableTLS;
@@ -326,11 +424,9 @@ public class ExpressGateway {
             return "LoadBalancerTLS{" +
                     "EnableTLS='" + EnableTLS + '\'' +
                     "PKCS12File='" + PKCS12File + '\'' +
-                    ", Password=*****" +
-                    '}';
+                    ", Password='*****'}";
         }
 
-        @Override
         public void clean() {
             PasswordAsChars = Password.toCharArray();
             Password = null;
@@ -340,8 +436,7 @@ public class ExpressGateway {
     public enum RunningMode {
 
         /**
-         * Standalone mode runs on 1 single node without the
-         * support of MongoDB database and Apache ZooKeeper.
+         * Standalone mode runs on 1 single node without the support of Apache ZooKeeper.
          */
         STANDALONE,
 
@@ -361,13 +456,10 @@ public class ExpressGateway {
         return INSTANCE;
     }
 
-    private interface CleanSensitiveData {
-        void clean();
-    }
-
     public void cleanSensitiveData() {
         restApi().clean();
         zooKeeper().clean();
+        serviceDiscovery().clean();
         loadBalancerTLS().clean();
 
         // Run GC to wipe all sensitive information

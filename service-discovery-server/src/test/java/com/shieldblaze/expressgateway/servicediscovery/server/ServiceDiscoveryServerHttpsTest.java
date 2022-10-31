@@ -27,12 +27,17 @@ import org.junit.jupiter.api.Order;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.TestMethodOrder;
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.boot.autoconfigure.web.client.RestTemplateBuilderConfigurer;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.boot.test.web.client.TestRestTemplate;
 import org.springframework.boot.test.web.server.LocalServerPort;
+import org.springframework.boot.web.client.RestTemplateBuilder;
+import org.springframework.boot.web.client.RestTemplateCustomizer;
+import org.springframework.context.annotation.Bean;
 import org.springframework.http.HttpMethod;
 import org.springframework.http.RequestEntity;
 import org.springframework.http.ResponseEntity;
+import org.springframework.web.client.RestTemplate;
 
 import java.io.File;
 import java.io.IOException;
@@ -42,30 +47,30 @@ import static org.assertj.core.api.Assertions.assertThat;
 
 @SpringBootTest(webEnvironment = SpringBootTest.WebEnvironment.RANDOM_PORT)
 @TestMethodOrder(MethodOrderer.OrderAnnotation.class)
-class ServiceDiscoveryServerTest {
+class ServiceDiscoveryServerHttpsTest {
 
     private static final Node NODE = new Node("1-2-3-4-5-f", "127.0.0.1", 9110, false);
     private static TestingServer zooKeeperServer;
 
     static {
-        ClassLoader classLoader = ServiceDiscoveryServerTest.class.getClassLoader();
-        File file = new File(classLoader.getResource("configuration.json").getFile());
+        ClassLoader classLoader = ServiceDiscoveryServerHttpsTest.class.getClassLoader();
+        File file = new File(classLoader.getResource("secureConfiguration.json").getFile());
         String absolutePath = file.getAbsolutePath();
 
         System.setProperty("config.file", absolutePath);
     }
 
+    private final TestRestTemplate restTemplate = new TestRestTemplate(TestRestTemplate.HttpClientOption.SSL);
+
     @LocalServerPort
     private int ServerPort;
-
-    private final TestRestTemplate restTemplate = new TestRestTemplate(TestRestTemplate.HttpClientOption.SSL);
 
     @Autowired
     private Handler handler;
 
     @BeforeAll
     static void setup() throws Exception {
-        zooKeeperServer = new TestingServer(9001);
+        zooKeeperServer = new TestingServer(9002);
     }
 
     @AfterAll
@@ -84,7 +89,7 @@ class ServiceDiscoveryServerTest {
     @Order(2)
     @Test
     public void registerServiceValidateSuccessful() {
-        RequestEntity<Node> request = new RequestEntity<>(NODE, HttpMethod.PUT, URI.create("http://localhost:" + ServerPort + "/api/v1/service/register"));
+        RequestEntity<Node> request = new RequestEntity<>(NODE, HttpMethod.PUT, URI.create("https://localhost:" + ServerPort + "/api/v1/service/register"));
 
         ResponseEntity<String> response = restTemplate.exchange(request, String.class);
         assertThat(response.getBody()).isNotNull();
@@ -94,7 +99,7 @@ class ServiceDiscoveryServerTest {
     @Order(3)
     @Test
     public void getServiceAndValidateSuccessful() {
-        String result = restTemplate.getForObject("http://localhost:" + ServerPort + "/api/v1/service/get?id=1-2-3-4-5-f", String.class);
+        String result = restTemplate.getForObject("https://localhost:" + ServerPort + "/api/v1/service/get?id=1-2-3-4-5-f", String.class);
         JsonObject jsonObject = JsonParser.parseString(result).getAsJsonObject();
 
         assertThat(jsonObject.get("Success").getAsBoolean()).isTrue();
@@ -103,7 +108,7 @@ class ServiceDiscoveryServerTest {
     @Order(4)
     @Test
     public void getAllServicesAndValidateSuccessful() {
-        String result = restTemplate.getForObject("http://localhost:" + ServerPort + "/api/v1/service/getall", String.class);
+        String result = restTemplate.getForObject("https://localhost:" + ServerPort + "/api/v1/service/getall", String.class);
 
         JsonObject jsonObject = JsonParser.parseString(result).getAsJsonObject();
         assertThat(jsonObject.get("Success").getAsBoolean()).isTrue();
@@ -112,7 +117,7 @@ class ServiceDiscoveryServerTest {
     @Order(5)
     @Test
     public void unregisterServiceAndValidateSuccessful() {
-        RequestEntity<Node> request = new RequestEntity<>(NODE, HttpMethod.DELETE, URI.create("http://localhost:" + ServerPort + "/api/v1/service/unregister"));
+        RequestEntity<Node> request = new RequestEntity<>(NODE, HttpMethod.DELETE, URI.create("https://localhost:" + ServerPort + "/api/v1/service/unregister"));
 
         ResponseEntity<String> response = restTemplate.exchange(request, String.class);
         assertThat(response.getBody()).isNotNull();

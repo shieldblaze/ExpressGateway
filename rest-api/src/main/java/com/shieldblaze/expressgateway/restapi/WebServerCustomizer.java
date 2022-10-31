@@ -19,7 +19,6 @@ package com.shieldblaze.expressgateway.restapi;
 
 import com.shieldblaze.expressgateway.common.ExpressGateway;
 import com.shieldblaze.expressgateway.common.crypto.cryptostore.CryptoEntry;
-import io.netty.handler.ssl.ClientAuth;
 import io.netty.handler.ssl.OpenSsl;
 import io.netty.handler.ssl.SslProvider;
 import org.apache.logging.log4j.LogManager;
@@ -53,8 +52,10 @@ public class WebServerCustomizer implements WebServerFactoryCustomizer<NettyReac
 
     @Override
     public void customize(NettyReactiveWebServerFactory factory) {
+        ExpressGateway.RestApi restApi = ExpressGateway.getInstance().restApi();
+
         try {
-            InetAddress inetAddress = InetAddress.getByName(ExpressGateway.getInstance().restApi().IPAddress());
+            InetAddress inetAddress = InetAddress.getByName(restApi.IPAddress());
             factory.setAddress(inetAddress);
         } catch (Exception ex) {
             logger.error("Error while configuring Rest-API server address, Shutting down...", ex);
@@ -63,7 +64,7 @@ public class WebServerCustomizer implements WebServerFactoryCustomizer<NettyReac
         }
 
         try {
-            int port = ExpressGateway.getInstance().restApi().port();
+            int port = restApi.port();
             factory.setPort(port);
         } catch (Exception ex) {
             logger.error("Error while configuring Rest-API server port, Shutting down...", ex);
@@ -72,12 +73,12 @@ public class WebServerCustomizer implements WebServerFactoryCustomizer<NettyReac
         }
 
         try {
-            if (ExpressGateway.getInstance().restApi().enableTLS()) {
+            if (restApi.enableTLS()) {
                 logger.info("Loading Rest-API PKCS12 File for TLS support");
 
-                byte[] restApiPkcs12Data = Files.readAllBytes(Path.of(ExpressGateway.getInstance().restApi().PKCS12File()).toAbsolutePath());
+                byte[] restApiPkcs12Data = Files.readAllBytes(Path.of(restApi.PKCS12File()).toAbsolutePath());
                 try (ByteArrayInputStream inputStream = new ByteArrayInputStream(restApiPkcs12Data)) {
-                    CryptoEntry cryptoEntry = fetchPrivateKeyCertificateEntry(inputStream, ExpressGateway.getInstance().restApi().passwordAsChars(), "rest-api");
+                    CryptoEntry cryptoEntry = fetchPrivateKeyCertificateEntry(inputStream, restApi.passwordAsChars(), "rest-api");
                     factory.addServerCustomizers(new TlsCustomizer(cryptoEntry.privateKey(), cryptoEntry.certificates()));
                 }
 
@@ -101,7 +102,7 @@ public class WebServerCustomizer implements WebServerFactoryCustomizer<NettyReac
                     .sslProvider(OpenSsl.isAvailable() ? SslProvider.OPENSSL : SslProvider.JDK)
                     .protocols("TLSv1.3")
                     .ciphers(List.of("TLS_AES_256_GCM_SHA384"))
-                    .clientAuth(ClientAuth.NONE)
+                    .clientAuth(ExpressGateway.getInstance().restApi().mTLS())
             );
 
             return httpServer.secure(sslContextSpec -> sslContextSpec.sslContext(http2SslContextSpec))

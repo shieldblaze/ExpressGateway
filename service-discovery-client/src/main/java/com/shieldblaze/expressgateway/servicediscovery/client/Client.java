@@ -15,16 +15,11 @@
  * You should have received a copy of the GNU General Public License
  * along with ShieldBlaze ExpressGateway.  If not, see <https://www.gnu.org/licenses/>.
  */
-package com.shieldblaze.expressgateway.servicediscovery.server;
+package com.shieldblaze.expressgateway.servicediscovery.client;
 
-import org.springframework.boot.SpringApplication;
-import org.springframework.boot.autoconfigure.SpringBootApplication;
+public class Client {
 
-@SpringBootApplication
-public class ServiceDiscoveryServer {
-    public static final String SERVICE_NAME = "ExpressGateway";
+    public static void main(String[] args) {
 
-    public void main(String[] args) {
-        SpringApplication.run(ServiceDiscoveryServer.class);
     }
 }
