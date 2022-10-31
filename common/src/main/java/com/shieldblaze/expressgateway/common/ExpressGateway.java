@@ -49,6 +49,7 @@ public class ExpressGateway {
     private LoadBalancerTLS loadBalancerTLS;
 
     public ExpressGateway() {
+        // To be used by Jackson Deserializer
     }
 
     /**
@@ -130,6 +131,7 @@ public class ExpressGateway {
         private char[] PasswordAsChars;
 
         public RestApi() {
+            // To be used by Jackson Deserializer
         }
 
         /**
@@ -221,6 +223,7 @@ public class ExpressGateway {
         private char[] TrustStorePasswordAsChars;
 
         public ZooKeeper() {
+            // To be used by Jackson Deserializer
         }
 
         /**
@@ -324,6 +327,10 @@ public class ExpressGateway {
         @JsonIgnore
         private char[] TrustStorePasswordAsChars;
 
+        public ServiceDiscovery() {
+            // To be used by Jackson Deserializer
+        }
+
         /**
          * This should be used in testing only.
          */
@@ -396,6 +403,7 @@ public class ExpressGateway {
         private char[] PasswordAsChars;
 
         public LoadBalancerTLS() {
+            // To be used by Jackson Deserializer
         }
 
         /**
