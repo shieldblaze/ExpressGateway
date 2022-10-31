@@ -93,12 +93,7 @@ class CuratorTest {
             Curator.init();
             assertTrue(Curator.connectionFuture().get());
         } finally {
-            System.clearProperty(SECURE_CLIENT);
-            System.clearProperty("zookeeper.ssl.keyStore.location");
-            System.clearProperty("zookeeper.ssl.keyStore.password");
-            System.clearProperty("zookeeper.ssl.hostnameVerification");
-            System.clearProperty("zookeeper.ssl.trustStore.location");
-            System.clearProperty("zookeeper.ssl.trustStore.password");
+            System.getProperties().clear();
         }
     }
 }

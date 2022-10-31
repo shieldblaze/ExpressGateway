@@ -75,6 +75,7 @@ class ServiceDiscoveryServerHttpsTest {
 
     @AfterAll
     static void shutdown() throws IOException {
+        System.getProperties().clear();
         if (zooKeeperServer != null) {
             zooKeeperServer.close();
         }
