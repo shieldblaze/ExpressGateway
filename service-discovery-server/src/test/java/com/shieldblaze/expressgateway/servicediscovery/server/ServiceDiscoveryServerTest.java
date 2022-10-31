@@ -58,7 +58,8 @@ class ServiceDiscoveryServerTest {
     @LocalServerPort
     private int ServerPort;
 
-    private final TestRestTemplate restTemplate = new TestRestTemplate(TestRestTemplate.HttpClientOption.SSL);
+    @Autowired
+    private TestRestTemplate restTemplate;
 
     @Autowired
     private Handler handler;
