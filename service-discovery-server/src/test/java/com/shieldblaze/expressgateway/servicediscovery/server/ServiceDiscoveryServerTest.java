@@ -70,7 +70,7 @@ class ServiceDiscoveryServerTest {
 
     @AfterAll
     static void shutdown() throws IOException {
-        System.getProperties().clear();
+        System.clearProperty("config.file");
         if (zooKeeperServer != null) {
             zooKeeperServer.close();
         }
