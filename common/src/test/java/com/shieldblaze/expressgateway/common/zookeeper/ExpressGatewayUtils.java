@@ -19,6 +19,7 @@
 package com.shieldblaze.expressgateway.common.zookeeper;
 
 import com.shieldblaze.expressgateway.common.ExpressGateway;
+import io.netty.handler.ssl.ClientAuth;
 
 import java.util.UUID;
 
@@ -28,6 +29,7 @@ public class ExpressGatewayUtils {
         ExpressGateway.RestApi restApi = new ExpressGateway.RestApi("127.0.0.1",
                 9110,
                 false,
+                ClientAuth.NONE,
                 "",
                 "");
 
@@ -41,6 +43,15 @@ public class ExpressGatewayUtils {
                 "" ,
                 "");
 
+        ExpressGateway.ServiceDiscovery serviceDiscovery = new ExpressGateway.ServiceDiscovery(
+                "http://127.0.0.1:25250/ExpressGateway/Servers",
+                false,
+                "",
+                "",
+                "",
+                ""
+        );
+
         ExpressGateway.LoadBalancerTLS loadBalancerTLS = new ExpressGateway.LoadBalancerTLS(false,
                 "",
                 "");
@@ -50,6 +61,7 @@ public class ExpressGatewayUtils {
                 Environment.DEVELOPMENT,
                 restApi,
                 zooKeeper,
+                serviceDiscovery,
                 loadBalancerTLS);
     }
 
@@ -57,8 +69,18 @@ public class ExpressGatewayUtils {
         ExpressGateway.RestApi restApi = new ExpressGateway.RestApi("127.0.0.1",
                 9110,
                 false,
+                ClientAuth.NONE,
                 "",
                 "");
+
+        ExpressGateway.ServiceDiscovery serviceDiscovery = new ExpressGateway.ServiceDiscovery(
+                "http://127.0.0.1:25250/ExpressGateway/Servers",
+                false,
+                "",
+                "",
+                "",
+                ""
+        );
 
         ExpressGateway.LoadBalancerTLS loadBalancerTLS = new ExpressGateway.LoadBalancerTLS(false,
                 "",
@@ -69,6 +91,7 @@ public class ExpressGatewayUtils {
                 Environment.DEVELOPMENT,
                 restApi,
                 zooKeeper,
+                serviceDiscovery,
                 loadBalancerTLS);
     }
 }

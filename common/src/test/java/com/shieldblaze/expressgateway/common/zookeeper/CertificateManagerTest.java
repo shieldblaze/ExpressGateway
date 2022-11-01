@@ -72,7 +72,7 @@ class CertificateManagerTest {
     @Order(1)
     @Test
     void storeEntryTest() throws Exception {
-        CryptoEntry cryptoEntry = new CryptoEntry(ssc.keyPair().getPrivate(), new X509Certificate[]{ssc.x509Certificate()});
+        CryptoEntry cryptoEntry = new CryptoEntry(ssc.keyPair().getPrivate(), ssc.x509Certificate());
         storeEntry(true, HOSTNAME, cryptoEntry);
 
         Thread.sleep(1000); // 1 second should be enough for sync

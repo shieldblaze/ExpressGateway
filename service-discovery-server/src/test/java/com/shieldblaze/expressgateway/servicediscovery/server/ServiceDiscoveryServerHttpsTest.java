@@ -40,22 +40,22 @@ import java.net.URI;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
-@SpringBootTest(webEnvironment = SpringBootTest.WebEnvironment.RANDOM_PORT)
+@SpringBootTest(webEnvironment = SpringBootTest.WebEnvironment.DEFINED_PORT)
 @TestMethodOrder(MethodOrderer.OrderAnnotation.class)
-class ServiceDiscoveryServerTest {
+class ServiceDiscoveryServerHttpsTest {
 
     private static final Node NODE = new Node("1-2-3-4-5-f", "127.0.0.1", 9110, false);
     private static TestingServer zooKeeperServer;
 
     static {
-        ClassLoader classLoader = ServiceDiscoveryServerTest.class.getClassLoader();
-        File file = new File(classLoader.getResource("configuration.json").getFile());
+        ClassLoader classLoader = ServiceDiscoveryServerHttpsTest.class.getClassLoader();
+        File file = new File(classLoader.getResource("secureConfiguration.json").getFile());
         String absolutePath = file.getAbsolutePath();
 
         System.setProperty("config.file", absolutePath);
     }
 
-    private final TestRestTemplate restTemplate = new TestRestTemplate();
+    private final TestRestTemplate restTemplate = new TestRestTemplate(TestRestTemplate.HttpClientOption.SSL);
 
     @LocalServerPort
     private int ServerPort;
@@ -65,7 +65,7 @@ class ServiceDiscoveryServerTest {
 
     @BeforeAll
     static void setup() throws Exception {
-        zooKeeperServer = new TestingServer(9001);
+        zooKeeperServer = new TestingServer(9002);
     }
 
     @AfterAll
@@ -85,7 +85,7 @@ class ServiceDiscoveryServerTest {
     @Order(2)
     @Test
     public void registerServiceValidateSuccessful() {
-        RequestEntity<Node> request = new RequestEntity<>(NODE, HttpMethod.PUT, URI.create("http://localhost:" + ServerPort + "/api/v1/service/register"));
+        RequestEntity<Node> request = new RequestEntity<>(NODE, HttpMethod.PUT, URI.create("https://localhost:" + ServerPort + "/api/v1/service/register"));
 
         ResponseEntity<String> response = restTemplate.exchange(request, String.class);
         assertThat(response.getBody()).isNotNull();
@@ -95,7 +95,7 @@ class ServiceDiscoveryServerTest {
     @Order(3)
     @Test
     public void getServiceAndValidateSuccessful() {
-        String result = restTemplate.getForObject("http://localhost:" + ServerPort + "/api/v1/service/get?id=1-2-3-4-5-f", String.class);
+        String result = restTemplate.getForObject("https://localhost:" + ServerPort + "/api/v1/service/get?id=1-2-3-4-5-f", String.class);
         JsonObject jsonObject = JsonParser.parseString(result).getAsJsonObject();
 
         assertThat(jsonObject.get("Success").getAsBoolean()).isTrue();
@@ -104,7 +104,7 @@ class ServiceDiscoveryServerTest {
     @Order(4)
     @Test
     public void getAllServicesAndValidateSuccessful() {
-        String result = restTemplate.getForObject("http://localhost:" + ServerPort + "/api/v1/service/getall", String.class);
+        String result = restTemplate.getForObject("https://localhost:" + ServerPort + "/api/v1/service/getall", String.class);
 
         JsonObject jsonObject = JsonParser.parseString(result).getAsJsonObject();
         assertThat(jsonObject.get("Success").getAsBoolean()).isTrue();
@@ -113,7 +113,7 @@ class ServiceDiscoveryServerTest {
     @Order(5)
     @Test
     public void unregisterServiceAndValidateSuccessful() {
-        RequestEntity<Node> request = new RequestEntity<>(NODE, HttpMethod.DELETE, URI.create("http://localhost:" + ServerPort + "/api/v1/service/unregister"));
+        RequestEntity<Node> request = new RequestEntity<>(NODE, HttpMethod.DELETE, URI.create("https://localhost:" + ServerPort + "/api/v1/service/unregister"));
 
         ResponseEntity<String> response = restTemplate.exchange(request, String.class);
         assertThat(response.getBody()).isNotNull();

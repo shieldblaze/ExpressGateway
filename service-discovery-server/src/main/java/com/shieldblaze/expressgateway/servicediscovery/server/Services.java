@@ -26,7 +26,6 @@ import org.apache.curator.retry.RetryNTimes;
 import org.apache.curator.x.discovery.ServiceDiscovery;
 import org.apache.curator.x.discovery.ServiceDiscoveryBuilder;
 import org.apache.curator.x.discovery.details.JsonInstanceSerializer;
-import org.springframework.boot.ApplicationArguments;
 import org.springframework.context.annotation.Bean;
 import org.springframework.stereotype.Component;
 
@@ -38,15 +37,12 @@ import static com.shieldblaze.expressgateway.servicediscovery.server.ServiceDisc
 @Component
 public class Services {
 
-    private final ApplicationArguments applicationArguments;
-
-    public Services(ApplicationArguments applicationArguments) {
-        this.applicationArguments = applicationArguments;
-    }
-
     @Bean(destroyMethod = "close")
     public ServiceDiscovery<Node> serviceDiscovery() throws Exception {
-        CuratorFramework curatorFramework = CuratorFrameworkFactory.newClient(applicationArguments.getSourceArgs()[0], new RetryNTimes(3, 100));
+        CuratorFramework curatorFramework = CuratorFrameworkFactory.newClient(
+                ServiceDiscoveryContext.getInstance().zooKeeperConnectionString(),
+                new RetryNTimes(5, 100)
+        );
         curatorFramework.start();
 
         String path = ZNodePath.create(SERVICE_NAME,
