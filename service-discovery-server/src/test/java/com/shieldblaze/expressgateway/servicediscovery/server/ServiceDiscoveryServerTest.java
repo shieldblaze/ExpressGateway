@@ -55,11 +55,10 @@ class ServiceDiscoveryServerTest {
         System.setProperty("config.file", absolutePath);
     }
 
+    private final TestRestTemplate restTemplate = new TestRestTemplate();
+
     @LocalServerPort
     private int ServerPort;
-
-    @Autowired
-    private TestRestTemplate restTemplate;
 
     @Autowired
     private Handler handler;

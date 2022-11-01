@@ -1,6 +1,6 @@
 {
     "IPAddress": "127.0.0.1",
-    "Port": 0,
+    "Port": 50001,
     "ZooKeeperConnectionString" : "localhost:9002",
     "EnableTLS": true,
     "MTLS": "NONE",
