@@ -29,7 +29,7 @@ import java.security.SecureRandom;
 
 public final class Client {
 
-    public static HttpClient HTTP_CLIENT;
+    public static final HttpClient HTTP_CLIENT;
 
     static {
         ExpressGateway.ServiceDiscovery serviceDiscovery = ExpressGateway.getInstance().serviceDiscovery();
@@ -71,7 +71,7 @@ public final class Client {
         }
     }
 
-    public static void main(String[] args) throws Exception {
+    public static void register() {
 
     }
 }
