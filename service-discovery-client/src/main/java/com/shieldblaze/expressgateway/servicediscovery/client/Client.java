@@ -17,9 +17,61 @@
  */
 package com.shieldblaze.expressgateway.servicediscovery.client;
 
-public class Client {
+import com.shieldblaze.expressgateway.common.ExpressGateway;
+import com.shieldblaze.expressgateway.common.utils.StringUtil;
+import org.apache.zookeeper.common.X509Util;
 
-    public static void main(String[] args) {
+import javax.net.ssl.KeyManager;
+import javax.net.ssl.SSLContext;
+import javax.net.ssl.TrustManager;
+import java.net.http.HttpClient;
+import java.security.SecureRandom;
+
+public final class Client {
+
+    public static HttpClient HTTP_CLIENT;
+
+    static {
+        ExpressGateway.ServiceDiscovery serviceDiscovery = ExpressGateway.getInstance().serviceDiscovery();
+
+        if (serviceDiscovery.URI().startsWith("https")) {
+            try {
+                KeyManager[] keyManagers = null;
+                if (StringUtil.isNullOrEmpty(serviceDiscovery.keyStoreFile())) {
+                    keyManagers = new KeyManager[]{X509Util.createKeyManager(
+                            serviceDiscovery.keyStoreFile(),
+                            String.valueOf(serviceDiscovery.keyStorePasswordAsChars()),
+                            ""
+                    )};
+                }
+
+                TrustManager[] trustManagers = new TrustManager[]{X509Util.createTrustManager(
+                        serviceDiscovery.trustStoreFile(),
+                        String.valueOf(serviceDiscovery.trustStorePasswordAsChars()),
+                        "",
+                        false,
+                        false,
+                        serviceDiscovery.hostnameVerification(),
+                        serviceDiscovery.hostnameVerification()
+                )};
+
+                SSLContext sslContext = SSLContext.getInstance("TLSv1.3");
+                sslContext.init(keyManagers, trustManagers, new SecureRandom());
+
+                HTTP_CLIENT = HttpClient.newBuilder()
+                        .sslContext(sslContext)
+                        .build();
+            } catch (Exception ex) {
+                throw new RuntimeException(ex);
+            }
+        } else if (serviceDiscovery.URI().startsWith("http")) {
+            HTTP_CLIENT = HttpClient.newHttpClient();
+        } else {
+            throw new IllegalArgumentException("Unsupported URI Protocol: " + serviceDiscovery.URI());
+        }
+    }
+
+    public static void main(String[] args) throws Exception {
 
     }
 }
