@@ -22,10 +22,17 @@ import com.fasterxml.jackson.annotation.JsonProperty;
 import com.shieldblaze.expressgateway.common.zookeeper.Environment;
 import io.netty.handler.ssl.ClientAuth;
 
+import java.util.UUID;
+
 public class ExpressGateway {
 
     @JsonIgnore
     private static ExpressGateway INSTANCE;
+
+    /**
+     * Unique Runtime ID
+     */
+    private final String ID = UUID.randomUUID().toString();
 
     @JsonProperty("RunningMode")
     private RunningMode runningMode;
@@ -64,6 +71,10 @@ public class ExpressGateway {
         this.zooKeeper = zooKeeper;
         this.serviceDiscovery = serviceDiscovery;
         this.loadBalancerTLS = loadBalancerTLS;
+    }
+
+    public String ID() {
+        return ID;
     }
 
     public RunningMode runningMode() {

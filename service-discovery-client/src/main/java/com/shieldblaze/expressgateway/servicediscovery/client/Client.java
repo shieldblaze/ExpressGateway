@@ -17,6 +17,8 @@
  */
 package com.shieldblaze.expressgateway.servicediscovery.client;
 
+import com.google.gson.JsonObject;
+import com.google.gson.JsonParser;
 import com.shieldblaze.expressgateway.common.ExpressGateway;
 import com.shieldblaze.expressgateway.common.utils.StringUtil;
 import org.apache.zookeeper.common.X509Util;
@@ -24,7 +26,11 @@ import org.apache.zookeeper.common.X509Util;
 import javax.net.ssl.KeyManager;
 import javax.net.ssl.SSLContext;
 import javax.net.ssl.TrustManager;
+import java.io.IOException;
+import java.net.URI;
 import java.net.http.HttpClient;
+import java.net.http.HttpRequest;
+import java.net.http.HttpResponse;
 import java.security.SecureRandom;
 
 public final class Client {
@@ -71,7 +77,24 @@ public final class Client {
         }
     }
 
-    public static void register() {
+    public static void register() throws IOException, InterruptedException {
+        JsonObject node = new JsonObject();
+        node.addProperty("ID", ExpressGateway.getInstance().ID());
+        node.addProperty("IPAddress", ExpressGateway.getInstance().restApi().IPAddress());
+        node.addProperty("Port", ExpressGateway.getInstance().restApi().port());
+        node.addProperty("TLSEnabled", ExpressGateway.getInstance().restApi().enableTLS());
 
+        HttpRequest httpRequest = HttpRequest.newBuilder()
+                .uri(URI.create(ExpressGateway.getInstance().serviceDiscovery().URI()))
+                .PUT(HttpRequest.BodyPublishers.ofString(node.toString()))
+                .setHeader("User-Agent", "ExpressGateway Service Discovery Client")
+                .build();
+
+        HttpResponse<String> httpResponse = HTTP_CLIENT.send(httpRequest, HttpResponse.BodyHandlers.ofString());
+
+        JsonObject response = JsonParser.parseString(httpResponse.body()).getAsJsonObject();
+        if (!response.get("Success").getAsBoolean()) {
+            throw new IllegalStateException("Registration failed, Response: " + response);
+        }
     }
 }
