@@ -77,6 +77,12 @@ public final class Client {
         }
     }
 
+    /**
+     * Register this service on service discovery
+     *
+     * @throws IOException          On error
+     * @throws InterruptedException Thread interrupted while waiting for response
+     */
     public static void register() throws IOException, InterruptedException {
         HttpRequest httpRequest = HttpRequest.newBuilder()
                 .uri(URI.create(ExpressGateway.getInstance().serviceDiscovery().URI() + "/register"))
@@ -92,6 +98,12 @@ public final class Client {
         }
     }
 
+    /**
+     * Deregister this service from service discovery
+     *
+     * @throws IOException          On error
+     * @throws InterruptedException Thread interrupted while waiting for response
+     */
     public static void deregister() throws IOException, InterruptedException {
         HttpRequest httpRequest = HttpRequest.newBuilder()
                 .uri(URI.create(ExpressGateway.getInstance().serviceDiscovery().URI() + "/deregister"))
