@@ -112,8 +112,8 @@ class ServiceDiscoveryServerTest {
 
     @Order(5)
     @Test
-    public void unregisterServiceAndValidateSuccessful() {
-        RequestEntity<Node> request = new RequestEntity<>(NODE, HttpMethod.DELETE, URI.create("http://localhost:" + ServerPort + "/api/v1/service/unregister"));
+    public void deregisterServiceAndValidateSuccessful() {
+        RequestEntity<Node> request = new RequestEntity<>(NODE, HttpMethod.DELETE, URI.create("http://localhost:" + ServerPort + "/api/v1/service/deregister"));
 
         ResponseEntity<String> response = restTemplate.exchange(request, String.class);
         assertThat(response.getBody()).isNotNull();

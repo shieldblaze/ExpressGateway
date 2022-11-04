@@ -78,15 +78,9 @@ public final class Client {
     }
 
     public static void register() throws IOException, InterruptedException {
-        JsonObject node = new JsonObject();
-        node.addProperty("ID", ExpressGateway.getInstance().ID());
-        node.addProperty("IPAddress", ExpressGateway.getInstance().restApi().IPAddress());
-        node.addProperty("Port", ExpressGateway.getInstance().restApi().port());
-        node.addProperty("TLSEnabled", ExpressGateway.getInstance().restApi().enableTLS());
-
         HttpRequest httpRequest = HttpRequest.newBuilder()
-                .uri(URI.create(ExpressGateway.getInstance().serviceDiscovery().URI()))
-                .PUT(HttpRequest.BodyPublishers.ofString(node.toString()))
+                .uri(URI.create(ExpressGateway.getInstance().serviceDiscovery().URI() + "/register"))
+                .PUT(HttpRequest.BodyPublishers.ofString(requestJson()))
                 .setHeader("User-Agent", "ExpressGateway Service Discovery Client")
                 .build();
 
@@ -96,5 +90,29 @@ public final class Client {
         if (!response.get("Success").getAsBoolean()) {
             throw new IllegalStateException("Registration failed, Response: " + response);
         }
+    }
+
+    public static void deregister() throws IOException, InterruptedException {
+        HttpRequest httpRequest = HttpRequest.newBuilder()
+                .uri(URI.create(ExpressGateway.getInstance().serviceDiscovery().URI() + "/deregister"))
+                .method("DELETE", HttpRequest.BodyPublishers.ofString(requestJson()))
+                .setHeader("User-Agent", "ExpressGateway Service Discovery Client")
+                .build();
+
+        HttpResponse<String> httpResponse = HTTP_CLIENT.send(httpRequest, HttpResponse.BodyHandlers.ofString());
+
+        JsonObject response = JsonParser.parseString(httpResponse.body()).getAsJsonObject();
+        if (!response.get("Success").getAsBoolean()) {
+            throw new IllegalStateException("Deregistration failed, Response: " + response);
+        }
+    }
+
+    private static String requestJson() {
+        JsonObject node = new JsonObject();
+        node.addProperty("ID", ExpressGateway.getInstance().ID());
+        node.addProperty("IPAddress", ExpressGateway.getInstance().restApi().IPAddress());
+        node.addProperty("Port", ExpressGateway.getInstance().restApi().port());
+        node.addProperty("TLSEnabled", ExpressGateway.getInstance().restApi().enableTLS());
+        return node.toString();
     }
 }

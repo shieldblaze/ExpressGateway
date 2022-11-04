@@ -58,8 +58,8 @@ public class Handler {
         return ResponseEntity.status(HttpStatus.OK).body(objectNode.toPrettyString());
     }
 
-    @DeleteMapping(value = "/unregister", produces = MediaType.APPLICATION_JSON_VALUE)
-    public ResponseEntity<String> unregister(@RequestBody Node node) throws Exception {
+    @DeleteMapping(value = "/deregister", produces = MediaType.APPLICATION_JSON_VALUE)
+    public ResponseEntity<String> deregister(@RequestBody Node node) throws Exception {
         serviceDiscovery.unregisterService(instance(node));
 
         ObjectNode objectNode = OBJECT_MAPPER.createObjectNode();
