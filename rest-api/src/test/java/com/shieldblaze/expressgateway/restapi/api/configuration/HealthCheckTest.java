@@ -48,7 +48,7 @@ class HealthCheckTest {
 
     @BeforeAll
     static void startSpring() throws IOException {
-        ExpressGateway expressGateway = ExpressGatewayConfigured.forTest();
+        ExpressGateway expressGateway = ExpressGatewayConfigured.forZooKeeperTest();
         ExpressGateway.setInstance(expressGateway);
 
         Curator.init();

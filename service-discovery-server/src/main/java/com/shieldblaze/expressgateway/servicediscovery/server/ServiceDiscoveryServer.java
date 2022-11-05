@@ -19,12 +19,21 @@ package com.shieldblaze.expressgateway.servicediscovery.server;
 
 import org.springframework.boot.SpringApplication;
 import org.springframework.boot.autoconfigure.SpringBootApplication;
+import org.springframework.context.ConfigurableApplicationContext;
 
 @SpringBootApplication
 public class ServiceDiscoveryServer {
     public static final String SERVICE_NAME = "ExpressGateway";
+    private static ConfigurableApplicationContext ctx;
 
-    public void main(String[] args) {
-        SpringApplication.run(ServiceDiscoveryServer.class);
+    public static void main(String[] args) {
+        ctx = SpringApplication.run(ServiceDiscoveryServer.class, args);
+    }
+
+    public static void shutdown() {
+        if (ctx != null) {
+            ctx.close();
+            ctx = null;
+        }
     }
 }

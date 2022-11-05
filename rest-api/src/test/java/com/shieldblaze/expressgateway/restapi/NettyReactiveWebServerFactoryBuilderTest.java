@@ -41,7 +41,7 @@ class NettyReactiveWebServerFactoryBuilderTest {
 
     @Test
     void generateAndLoadSelfSignedCertificateTest() throws Exception {
-        ExpressGateway expressGateway = ExpressGatewayConfigured.forTest();
+        ExpressGateway expressGateway = ExpressGatewayConfigured.forZooKeeperTest();
         ExpressGateway.setInstance(expressGateway);
 
         // Start the Rest-Api Server
