@@ -28,6 +28,7 @@ import org.apache.logging.log4j.Logger;
 
 import java.io.File;
 import java.nio.file.Path;
+import java.util.concurrent.TimeUnit;
 
 import static com.shieldblaze.expressgateway.common.utils.SystemPropertyUtil.getPropertyOrEnv;
 
@@ -76,6 +77,7 @@ public final class Bootstrap {
             logger.info("[CONFIGURATION] LoadBalancerTLS: {}", ExpressGateway.getInstance().loadBalancerTLS());
 
             // Initialize
+            Curator.init();
             assert Curator.isInitialized().get() : "Failed to initialize ZooKeeper";
             assert CertificateManager.isInitialized().get() : "Failed to initialize CertificateManager";
 

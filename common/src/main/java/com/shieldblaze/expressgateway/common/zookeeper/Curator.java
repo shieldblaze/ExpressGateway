@@ -107,7 +107,7 @@ public final class Curator implements Closeable {
                 }
             });
         } else {
-            INSTANCE.initializationFuture.complete(false);
+            INSTANCE.initializationFuture.complete(true);
             logger.info("Skipping ZooKeeper initialization because ZooKeeper was disabled");
         }
     }
