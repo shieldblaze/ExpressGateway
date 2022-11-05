@@ -29,7 +29,7 @@ import java.io.File;
 import java.util.HashMap;
 import java.util.Map;
 
-import static com.shieldblaze.expressgateway.common.zookeeper.ExpressGatewayUtils.forTest;
+import static com.shieldblaze.expressgateway.common.zookeeper.ExpressGatewayCustomizedUtil.forTest;
 import static org.apache.zookeeper.client.ZKClientConfig.SECURE_CLIENT;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
@@ -45,7 +45,7 @@ class CuratorTest {
             ExpressGateway.setInstance(forTest(testingServer.getConnectString()));
             Curator.init();
 
-            assertTrue(Curator.connectionFuture().get());
+            assertTrue(Curator.isInitialized().get());
         } finally {
             Curator.shutdown();
         }
@@ -91,7 +91,7 @@ class CuratorTest {
                     "123456")));
 
             Curator.init();
-            assertTrue(Curator.connectionFuture().get());
+            assertTrue(Curator.isInitialized().get());
         } finally {
             System.clearProperty(SECURE_CLIENT);
             System.clearProperty("zookeeper.ssl.keyStore.location");

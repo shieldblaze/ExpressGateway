@@ -39,7 +39,7 @@ import static com.shieldblaze.expressgateway.common.JacksonJson.OBJECT_MAPPER;
 import static com.shieldblaze.expressgateway.servicediscovery.server.ServiceDiscoveryServer.SERVICE_NAME;
 
 @RestController
-@RequestMapping("/api/v1/service/")
+@RequestMapping("/api/v1/service")
 public class Handler {
 
     private final ServiceDiscovery<Node> serviceDiscovery;
@@ -48,7 +48,7 @@ public class Handler {
         this.serviceDiscovery = serviceDiscovery;
     }
 
-    @PutMapping(value = "/register", produces = MediaType.APPLICATION_JSON_VALUE)
+    @PutMapping(value = "register", produces = MediaType.APPLICATION_JSON_VALUE)
     public ResponseEntity<String> register(@RequestBody Node node) throws Exception {
         serviceDiscovery.registerService(instance(node));
 
@@ -58,7 +58,7 @@ public class Handler {
         return ResponseEntity.status(HttpStatus.OK).body(objectNode.toPrettyString());
     }
 
-    @DeleteMapping(value = "/deregister", produces = MediaType.APPLICATION_JSON_VALUE)
+    @DeleteMapping(value = "deregister", produces = MediaType.APPLICATION_JSON_VALUE)
     public ResponseEntity<String> deregister(@RequestBody Node node) throws Exception {
         serviceDiscovery.unregisterService(instance(node));
 
@@ -68,7 +68,7 @@ public class Handler {
         return ResponseEntity.status(HttpStatus.OK).body(objectNode.toPrettyString());
     }
 
-    @GetMapping(value = "/get", produces = MediaType.APPLICATION_JSON_VALUE)
+    @GetMapping(value = "get", produces = MediaType.APPLICATION_JSON_VALUE)
     public ResponseEntity<String> get(@RequestParam String id) throws Exception {
         ServiceInstance<Node> serviceInstance = serviceDiscovery.queryForInstance(SERVICE_NAME, id);
 
@@ -80,7 +80,7 @@ public class Handler {
         return ResponseEntity.status(HttpStatus.OK).body(objectNode.toPrettyString());
     }
 
-    @GetMapping(value = "/getall", produces = MediaType.APPLICATION_JSON_VALUE)
+    @GetMapping(value = "getall", produces = MediaType.APPLICATION_JSON_VALUE)
     public ResponseEntity<String> getAll() throws Exception {
         Collection<ServiceInstance<Node>> serviceInstances = serviceDiscovery.queryForInstances(SERVICE_NAME);
 

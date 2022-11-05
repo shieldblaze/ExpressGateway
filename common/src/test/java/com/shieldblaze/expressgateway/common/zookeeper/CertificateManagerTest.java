@@ -29,14 +29,13 @@ import org.junit.jupiter.api.Order;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.TestMethodOrder;
 
-import java.security.cert.X509Certificate;
 import java.util.List;
 import java.util.Optional;
 import java.util.concurrent.TimeUnit;
 
 import static com.shieldblaze.expressgateway.common.zookeeper.CertificateManager.retrieveEntry;
 import static com.shieldblaze.expressgateway.common.zookeeper.CertificateManager.storeEntry;
-import static com.shieldblaze.expressgateway.common.zookeeper.ExpressGatewayUtils.forTest;
+import static com.shieldblaze.expressgateway.common.zookeeper.ExpressGatewayCustomizedUtil.forTest;
 import static org.junit.jupiter.api.Assertions.assertArrayEquals;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;

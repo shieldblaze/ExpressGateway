@@ -19,7 +19,10 @@ package com.shieldblaze.expressgateway.bootstrap;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.shieldblaze.expressgateway.common.ExpressGateway;
+import com.shieldblaze.expressgateway.common.zookeeper.CertificateManager;
+import com.shieldblaze.expressgateway.common.zookeeper.Curator;
 import com.shieldblaze.expressgateway.restapi.RestApi;
+import com.shieldblaze.expressgateway.servicediscovery.client.ServiceDiscoveryClient;
 import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
 
@@ -71,6 +74,27 @@ public final class Bootstrap {
             logger.info("[CONFIGURATION] ZooKeeper: {}", ExpressGateway.getInstance().zooKeeper());
             logger.info("[CONFIGURATION] ServiceDiscovery: {}", ExpressGateway.getInstance().serviceDiscovery());
             logger.info("[CONFIGURATION] LoadBalancerTLS: {}", ExpressGateway.getInstance().loadBalancerTLS());
+
+            // Initialize
+            assert Curator.isInitialized().get() : "Failed to initialize ZooKeeper";
+            assert CertificateManager.isInitialized().get() : "Failed to initialize CertificateManager";
+
+            // If we are running on REPLICA mode then we will register ourselves at Service Discovery.
+            if (ExpressGateway.getInstance().runningMode() == ExpressGateway.RunningMode.REPLICA) {
+                ServiceDiscoveryClient.register();
+
+                // Add shutdown hook to deregister from Service Discovery on exit.
+                Runtime.getRuntime().addShutdownHook(new Thread("ServiceDiscoveryClient-Deregister") {
+                    @Override
+                    public void run() {
+                        try {
+                            ServiceDiscoveryClient.deregister();
+                        } catch (Exception ex) {
+                            logger.fatal(ex);
+                        }
+                    }
+                });
+            }
 
             RestApi.start();
         } catch (Exception ex) {

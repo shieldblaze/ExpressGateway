@@ -50,7 +50,7 @@ public class L7LoadBalancerConfigurationEndpointHandlerTest {
 
     @BeforeAll
     static void startSpring() throws IOException {
-        ExpressGateway expressGateway = ExpressGatewayConfigured.forTest();
+        ExpressGateway expressGateway = ExpressGatewayConfigured.forZooKeeperTest();
         ExpressGateway.setInstance(expressGateway);
 
         Curator.init();

@@ -29,43 +29,26 @@ import java.util.UUID;
  */
 public final class ExpressGatewayConfigured {
 
-    public static ExpressGateway forTest() {
-        return forTest("localhost:2181");
+    public static ExpressGateway forZooKeeperTest() {
+        return forZooKeeperTest("localhost:2181");
     }
 
-    public static ExpressGateway forTest(String zooKeeperConnectionString) {
+    public static ExpressGateway forZooKeeperTest(String zooKeeperConnectionString) {
         ClassLoader classLoader = ExpressGatewayConfigured.class.getClassLoader();
         File file = new File(classLoader.getResource("default").getFile());
         String absolutePath = file.getAbsolutePath();
 
         ExpressGateway.RestApi restApi = new ExpressGateway.RestApi("127.0.0.1",
-                9110,
-                true,
-                ClientAuth.NONE,
-                absolutePath + File.separator + "restapi.p12", "shieldblaze");
+                9110, true, ClientAuth.NONE, absolutePath + File.separator + "restapi.p12", "shieldblaze");
 
-        ExpressGateway.ZooKeeper zooKeeper = new ExpressGateway.ZooKeeper(zooKeeperConnectionString,
-                3,
-                100,
-                false,
-                false,
-                "",
-                "",
-                "" ,
-                "");
+        ExpressGateway.ZooKeeper zooKeeper = new ExpressGateway.ZooKeeper(zooKeeperConnectionString, 3, 100,
+                false, false, "", "", "" , "");
 
-        ExpressGateway.ServiceDiscovery serviceDiscovery = new ExpressGateway.ServiceDiscovery(
-                "http://127.0.0.1:25250/ExpressGateway/Servers",
-                false,
-                "",
-                "",
-                "",
-                ""
+        ExpressGateway.ServiceDiscovery serviceDiscovery = new ExpressGateway.ServiceDiscovery("http://127.0.0.1:25250/ExpressGateway/Servers",
+                true, false, "", "", "", ""
         );
 
-        ExpressGateway.LoadBalancerTLS loadBalancerTLS = new ExpressGateway.LoadBalancerTLS(false,
-                "",
-                "");
+        ExpressGateway.LoadBalancerTLS loadBalancerTLS = new ExpressGateway.LoadBalancerTLS(false, "", "");
 
         return new ExpressGateway(ExpressGateway.RunningMode.STANDALONE,
                 UUID.randomUUID().toString(),

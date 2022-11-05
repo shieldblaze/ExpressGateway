@@ -39,14 +39,14 @@ public final class Curator implements Closeable {
     private static final Logger logger = LogManager.getLogger(Curator.class);
     private static final Curator INSTANCE = new Curator();
 
-    private CompletableFuture<Boolean> connectionFuture = new CompletableFuture<>();
+    private CompletableFuture<Boolean> initializationFuture = new CompletableFuture<>();
     private CuratorFramework curatorFramework;
 
     /**
      * Returns {@link CuratorFramework} instance
      */
     public static CuratorFramework getInstance() throws ExecutionException, InterruptedException {
-        assert connectionFuture().get() : "Connection must be established before accessing CuratorFramework Instance";
+        assert isInitialized().get() : "Connection must be established before accessing CuratorFramework Instance";
         return INSTANCE.curatorFramework;
     }
 
@@ -55,10 +55,10 @@ public final class Curator implements Closeable {
 
             // If ConnectionFuture is in 'Done' state then we have existing Curator instance running.
             // We will close the existing instance before we build fresh one.
-            if (INSTANCE.connectionFuture.isDone()) {
+            if (INSTANCE.initializationFuture.isDone()) {
                 logger.info("Closing existing Curator instance");
                 INSTANCE.close();
-                INSTANCE.connectionFuture = new CompletableFuture<>();
+                INSTANCE.initializationFuture = new CompletableFuture<>();
             }
 
             // Use Netty client with TLS
@@ -89,7 +89,7 @@ public final class Curator implements Closeable {
             INSTANCE.curatorFramework = builder.build();
             INSTANCE.curatorFramework.start();
 
-            INSTANCE.connectionFuture.completeAsync(() -> {
+            INSTANCE.initializationFuture.completeAsync(() -> {
                 try {
                     INSTANCE.curatorFramework.blockUntilConnected(30, TimeUnit.SECONDS);
 
@@ -107,7 +107,7 @@ public final class Curator implements Closeable {
                 }
             });
         } else {
-            INSTANCE.connectionFuture.complete(false);
+            INSTANCE.initializationFuture.complete(false);
             logger.info("Skipping ZooKeeper initialization because ZooKeeper was disabled");
         }
     }
@@ -116,8 +116,8 @@ public final class Curator implements Closeable {
      * This {@link CompletableFuture} returns {@link Boolean#TRUE} once
      * MongoDB connection has been successfully else returns {@link Boolean#FALSE}
      */
-    public static CompletableFuture<Boolean> connectionFuture() {
-        return INSTANCE.connectionFuture;
+    public static CompletableFuture<Boolean> isInitialized() {
+        return INSTANCE.initializationFuture;
     }
 
     /**

@@ -193,8 +193,10 @@ public class ExpressGateway {
         }
 
         public void clean() {
-            PasswordAsChars = Password.toCharArray();
-            Password = null;
+            if (Password != null) {
+                PasswordAsChars = Password.toCharArray();
+                Password = null;
+            }
         }
     }
 
@@ -304,11 +306,15 @@ public class ExpressGateway {
         }
 
         public void clean() {
-            KeyStorePasswordAsChars = KeyStorePassword.toCharArray();
-            KeyStorePassword = null;
+            if (KeyStorePassword != null) {
+                KeyStorePasswordAsChars = KeyStorePassword.toCharArray();
+                KeyStorePassword = null;
+            }
 
-            TrustStorePasswordAsChars = TrustStorePassword.toCharArray();
-            TrustStorePassword = null;
+            if (TrustStorePassword != null) {
+                TrustStorePasswordAsChars = TrustStorePassword.toCharArray();
+                TrustStorePassword = null;
+            }
         }
     }
 
@@ -316,6 +322,9 @@ public class ExpressGateway {
 
         @JsonProperty
         private String URI;
+
+        @JsonProperty
+        private Boolean TrustAllCerts;
 
         @JsonProperty
         private Boolean HostnameVerification;
@@ -345,9 +354,10 @@ public class ExpressGateway {
         /**
          * This should be used in testing only.
          */
-        public ServiceDiscovery(String URI, Boolean hostnameVerification, String keyStoreFile, String keyStorePassword,
+        public ServiceDiscovery(String URI, Boolean TrustAllCerts, Boolean hostnameVerification, String keyStoreFile, String keyStorePassword,
                                 String trustStoreFile, String trustStorePassword) {
             this.URI = URI;
+            this.TrustAllCerts = TrustAllCerts;
             HostnameVerification = hostnameVerification;
             KeyStoreFile = keyStoreFile;
             KeyStorePassword = keyStorePassword;
@@ -357,6 +367,10 @@ public class ExpressGateway {
 
         public String URI() {
             return URI;
+        }
+
+        public Boolean trustAllCerts() {
+            return TrustAllCerts;
         }
 
         public Boolean hostnameVerification() {
@@ -383,6 +397,7 @@ public class ExpressGateway {
         public String toString() {
             return "ServiceDiscovery{" +
                     "URI='" + URI + '\'' +
+                    ", TrustAllCerts=" + TrustAllCerts +
                     ", HostnameVerification=" + HostnameVerification +
                     ", KeyStoreFile='" + KeyStoreFile + '\'' +
                     ", KeyStorePassword='*****'" +
@@ -391,11 +406,15 @@ public class ExpressGateway {
         }
 
         public void clean() {
-            KeyStorePasswordAsChars = KeyStorePassword.toCharArray();
-            KeyStorePassword = null;
+            if (KeyStorePassword != null) {
+                KeyStorePasswordAsChars = KeyStorePassword.toCharArray();
+                KeyStorePassword = null;
+            }
 
-            TrustStorePasswordAsChars = TrustStorePassword.toCharArray();
-            TrustStorePassword = null;
+            if (TrustStorePassword != null) {
+                TrustStorePasswordAsChars = TrustStorePassword.toCharArray();
+                TrustStorePassword = null;
+            }
         }
     }
 
@@ -447,8 +466,10 @@ public class ExpressGateway {
         }
 
         public void clean() {
-            PasswordAsChars = Password.toCharArray();
-            Password = null;
+            if (Password != null) {
+                PasswordAsChars = Password.toCharArray();
+                Password = null;
+            }
         }
     }
 

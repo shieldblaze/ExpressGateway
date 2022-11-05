@@ -29,7 +29,7 @@ import static com.shieldblaze.expressgateway.common.zookeeper.CuratorUtils.delet
 import static com.shieldblaze.expressgateway.common.zookeeper.CuratorUtils.doesPathExists;
 import static com.shieldblaze.expressgateway.common.zookeeper.CuratorUtils.getData;
 import static com.shieldblaze.expressgateway.common.zookeeper.CuratorUtils.setData;
-import static com.shieldblaze.expressgateway.common.zookeeper.ExpressGatewayUtils.forTest;
+import static com.shieldblaze.expressgateway.common.zookeeper.ExpressGatewayCustomizedUtil.forTest;
 import static org.junit.jupiter.api.Assertions.assertDoesNotThrow;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;

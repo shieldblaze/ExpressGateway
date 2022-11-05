@@ -15,7 +15,6 @@
  * You should have received a copy of the GNU General Public License
  * along with ShieldBlaze ExpressGateway.  If not, see <https://www.gnu.org/licenses/>.
  */
-
 package com.shieldblaze.expressgateway.common.zookeeper;
 
 import com.shieldblaze.expressgateway.common.ExpressGateway;
@@ -23,16 +22,9 @@ import io.netty.handler.ssl.ClientAuth;
 
 import java.util.UUID;
 
-public class ExpressGatewayUtils {
+class ExpressGatewayCustomizedUtil {
 
-    public static ExpressGateway forTest(String zooKeeperConnectionString) {
-        ExpressGateway.RestApi restApi = new ExpressGateway.RestApi("127.0.0.1",
-                9110,
-                false,
-                ClientAuth.NONE,
-                "",
-                "");
-
+    static ExpressGateway forTest(String zooKeeperConnectionString) {
         ExpressGateway.ZooKeeper zooKeeper = new ExpressGateway.ZooKeeper(zooKeeperConnectionString,
                 3,
                 100,
@@ -40,46 +32,17 @@ public class ExpressGatewayUtils {
                 false,
                 "",
                 "",
-                "" ,
-                "");
-
-        ExpressGateway.ServiceDiscovery serviceDiscovery = new ExpressGateway.ServiceDiscovery(
-                "http://127.0.0.1:25250/ExpressGateway/Servers",
-                false,
-                "",
-                "",
-                "",
-                ""
-        );
-
-        ExpressGateway.LoadBalancerTLS loadBalancerTLS = new ExpressGateway.LoadBalancerTLS(false,
                 "",
                 "");
 
-        return new ExpressGateway(ExpressGateway.RunningMode.REPLICA,
-                UUID.randomUUID().toString(),
-                Environment.DEVELOPMENT,
-                restApi,
-                zooKeeper,
-                serviceDiscovery,
-                loadBalancerTLS);
+        return forTest(zooKeeper);
     }
 
-    public static ExpressGateway forTest(ExpressGateway.ZooKeeper zooKeeper) {
-        ExpressGateway.RestApi restApi = new ExpressGateway.RestApi("127.0.0.1",
-                9110,
-                false,
-                ClientAuth.NONE,
-                "",
-                "");
+    static ExpressGateway forTest(ExpressGateway.ZooKeeper zooKeeper) {
+        ExpressGateway.RestApi restApi = new ExpressGateway.RestApi("127.0.0.1", 9110, false, ClientAuth.NONE, "", "");
 
-        ExpressGateway.ServiceDiscovery serviceDiscovery = new ExpressGateway.ServiceDiscovery(
-                "http://127.0.0.1:25250/ExpressGateway/Servers",
-                false,
-                "",
-                "",
-                "",
-                ""
+        ExpressGateway.ServiceDiscovery serviceDiscovery = new ExpressGateway.ServiceDiscovery("http://127.0.0.1:25250/ExpressGateway/Servers",
+                true, false, "", "", "", ""
         );
 
         ExpressGateway.LoadBalancerTLS loadBalancerTLS = new ExpressGateway.LoadBalancerTLS(false,

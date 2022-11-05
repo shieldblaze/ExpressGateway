@@ -21,6 +21,7 @@ import com.google.gson.JsonObject;
 import com.google.gson.JsonParser;
 import com.shieldblaze.expressgateway.common.ExpressGateway;
 import com.shieldblaze.expressgateway.common.utils.StringUtil;
+import io.netty.handler.ssl.util.InsecureTrustManagerFactory;
 import org.apache.zookeeper.common.X509Util;
 
 import javax.net.ssl.KeyManager;
@@ -33,40 +34,49 @@ import java.net.http.HttpRequest;
 import java.net.http.HttpResponse;
 import java.security.SecureRandom;
 
-public final class Client {
+public final class ServiceDiscoveryClient {
 
-    public static final HttpClient HTTP_CLIENT;
+    private static final HttpClient HTTP_CLIENT;
 
     static {
         ExpressGateway.ServiceDiscovery serviceDiscovery = ExpressGateway.getInstance().serviceDiscovery();
 
         if (serviceDiscovery.URI().startsWith("https")) {
             try {
-                KeyManager[] keyManagers = null;
-                if (StringUtil.isNullOrEmpty(serviceDiscovery.keyStoreFile())) {
-                    keyManagers = new KeyManager[]{X509Util.createKeyManager(
-                            serviceDiscovery.keyStoreFile(),
-                            String.valueOf(serviceDiscovery.keyStorePasswordAsChars()),
-                            ""
+                if (serviceDiscovery.trustAllCerts()) {
+                    SSLContext sslContext = SSLContext.getInstance("TLSv1.3");
+                    sslContext.init(null, InsecureTrustManagerFactory.INSTANCE.getTrustManagers(), new SecureRandom());
+
+                    HTTP_CLIENT = HttpClient.newBuilder()
+                            .sslContext(sslContext)
+                            .build();
+                } else {
+                    KeyManager[] keyManagers = null;
+                    if (StringUtil.isNullOrEmpty(serviceDiscovery.keyStoreFile())) {
+                        keyManagers = new KeyManager[]{X509Util.createKeyManager(
+                                serviceDiscovery.keyStoreFile(),
+                                String.valueOf(serviceDiscovery.keyStorePasswordAsChars()),
+                                ""
+                        )};
+                    }
+
+                    TrustManager[] trustManagers = new TrustManager[]{X509Util.createTrustManager(
+                            serviceDiscovery.trustStoreFile(),
+                            String.valueOf(serviceDiscovery.trustStorePasswordAsChars()),
+                            "",
+                            false,
+                            false,
+                            serviceDiscovery.hostnameVerification(),
+                            serviceDiscovery.hostnameVerification()
                     )};
+
+                    SSLContext sslContext = SSLContext.getInstance("TLSv1.3");
+                    sslContext.init(keyManagers, trustManagers, new SecureRandom());
+
+                    HTTP_CLIENT = HttpClient.newBuilder()
+                            .sslContext(sslContext)
+                            .build();
                 }
-
-                TrustManager[] trustManagers = new TrustManager[]{X509Util.createTrustManager(
-                        serviceDiscovery.trustStoreFile(),
-                        String.valueOf(serviceDiscovery.trustStorePasswordAsChars()),
-                        "",
-                        false,
-                        false,
-                        serviceDiscovery.hostnameVerification(),
-                        serviceDiscovery.hostnameVerification()
-                )};
-
-                SSLContext sslContext = SSLContext.getInstance("TLSv1.3");
-                sslContext.init(keyManagers, trustManagers, new SecureRandom());
-
-                HTTP_CLIENT = HttpClient.newBuilder()
-                        .sslContext(sslContext)
-                        .build();
             } catch (Exception ex) {
                 throw new RuntimeException(ex);
             }
@@ -85,9 +95,10 @@ public final class Client {
      */
     public static void register() throws IOException, InterruptedException {
         HttpRequest httpRequest = HttpRequest.newBuilder()
-                .uri(URI.create(ExpressGateway.getInstance().serviceDiscovery().URI() + "/register"))
+                .uri(URI.create(ExpressGateway.getInstance().serviceDiscovery().URI() + "/api/v1/service/register"))
                 .PUT(HttpRequest.BodyPublishers.ofString(requestJson()))
                 .setHeader("User-Agent", "ExpressGateway Service Discovery Client")
+                .setHeader("Content-Type", "application/json")
                 .build();
 
         HttpResponse<String> httpResponse = HTTP_CLIENT.send(httpRequest, HttpResponse.BodyHandlers.ofString());
@@ -106,9 +117,10 @@ public final class Client {
      */
     public static void deregister() throws IOException, InterruptedException {
         HttpRequest httpRequest = HttpRequest.newBuilder()
-                .uri(URI.create(ExpressGateway.getInstance().serviceDiscovery().URI() + "/deregister"))
+                .uri(URI.create(ExpressGateway.getInstance().serviceDiscovery().URI() + "/api/v1/service/deregister"))
                 .method("DELETE", HttpRequest.BodyPublishers.ofString(requestJson()))
                 .setHeader("User-Agent", "ExpressGateway Service Discovery Client")
+                .setHeader("Content-Type", "application/json")
                 .build();
 
         HttpResponse<String> httpResponse = HTTP_CLIENT.send(httpRequest, HttpResponse.BodyHandlers.ofString());
@@ -119,12 +131,16 @@ public final class Client {
         }
     }
 
-    private static String requestJson() {
+    static String requestJson() {
         JsonObject node = new JsonObject();
         node.addProperty("ID", ExpressGateway.getInstance().ID());
         node.addProperty("IPAddress", ExpressGateway.getInstance().restApi().IPAddress());
         node.addProperty("Port", ExpressGateway.getInstance().restApi().port());
         node.addProperty("TLSEnabled", ExpressGateway.getInstance().restApi().enableTLS());
         return node.toString();
+    }
+
+    private ServiceDiscoveryClient() {
+        // Prevent outside initialization
     }
 }

@@ -23,6 +23,7 @@
     },
     "ServiceDiscovery" : {
         "URI" : "http://127.0.0.1:25250/ExpressGateway/Servers",
+        "TrustAllCerts" : true,
         "HostnameVerification" : false,
         "KeyStoreFile" : "",
         "KeyStorePassword" : "",

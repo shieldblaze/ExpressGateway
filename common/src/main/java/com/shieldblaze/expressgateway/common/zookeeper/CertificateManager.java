@@ -42,14 +42,14 @@ public final class CertificateManager {
 
     private static final Logger logger = LogManager.getLogger(CertificateManager.class);
     private CuratorCache curatorCache;
-    private final CompletableFuture<Boolean> INITIALIZED = new CompletableFuture<>();
+    private final CompletableFuture<Boolean> initializationFuture = new CompletableFuture<>();
     public static final CertificateManager INSTANCE = new CertificateManager();
 
     private CertificateManager() {
         if (ExpressGateway.getInstance().runningMode() == ExpressGateway.RunningMode.REPLICA) {
             try {
                 CuratorCacheListener listener = CuratorCacheListener.builder()
-                        .forInitialized(() -> INITIALIZED.complete(true)) // Mark initialization successful
+                        .forInitialized(() -> initializationFuture.complete(true)) // Mark initialization successful
                         .build();
 
                 curatorCache = CuratorCache.build(Curator.getInstance(), "/ExpressGateway");
@@ -60,12 +60,12 @@ public final class CertificateManager {
             }
         } else {
             logger.info("CertificateManager is disabled because ZooKeeper is disabled");
-            INITIALIZED.complete(false);
+            initializationFuture.complete(false);
         }
     }
 
-    public CompletableFuture<Boolean> isInitialized() {
-        return INITIALIZED;
+    public static CompletableFuture<Boolean> isInitialized() {
+        return INSTANCE.initializationFuture;
     }
 
     // ------------------- High-Level API -------------------
