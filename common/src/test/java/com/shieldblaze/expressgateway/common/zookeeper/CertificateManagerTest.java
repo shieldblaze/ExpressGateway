@@ -29,6 +29,7 @@ import org.junit.jupiter.api.Order;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.TestMethodOrder;
 
+import java.security.cert.X509Certificate;
 import java.util.List;
 import java.util.Optional;
 import java.util.concurrent.TimeUnit;
@@ -71,7 +72,7 @@ class CertificateManagerTest {
     @Order(1)
     @Test
     void storeEntryTest() throws Exception {
-        CryptoEntry cryptoEntry = new CryptoEntry(ssc.keyPair().getPrivate(), ssc.x509Certificate());
+        CryptoEntry cryptoEntry = new CryptoEntry(ssc.keyPair().getPrivate(), new X509Certificate[]{ssc.x509Certificate()});
         storeEntry(true, HOSTNAME, cryptoEntry);
 
         Thread.sleep(1000); // 1 second should be enough for sync
