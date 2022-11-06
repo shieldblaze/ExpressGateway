@@ -109,7 +109,7 @@ public class BasicTcpUdpServerTest {
 
     @Order(2)
     @Test
-    public void startUdpLoadBalancer() {
+    public void startUdpLoadBalancer() throws IOException, InterruptedException {
         JsonObject requestBody = new JsonObject();
         requestBody.addProperty("name", "MeowBalancer");
         requestBody.addProperty("bindAddress", "127.0.0.1");
