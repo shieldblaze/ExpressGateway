@@ -17,13 +17,20 @@
  */
 package com.shieldblaze.expressgateway.testsuite.standalone;
 
-import com.google.gson.JsonObject;
-import com.google.gson.JsonParser;
-import com.shieldblaze.expressgateway.backend.State;
-import com.shieldblaze.expressgateway.bootstrap.Bootstrap;
+import com.shieldblaze.expressgateway.backend.NodeBuilder;
+import com.shieldblaze.expressgateway.backend.cluster.Cluster;
+import com.shieldblaze.expressgateway.backend.cluster.ClusterBuilder;
+import com.shieldblaze.expressgateway.backend.strategy.l4.RoundRobin;
+import com.shieldblaze.expressgateway.backend.strategy.l4.sessionpersistence.NOOPSessionPersistence;
 import com.shieldblaze.expressgateway.common.utils.AvailablePortUtil;
+import com.shieldblaze.expressgateway.configuration.ConfigurationContext;
 import com.shieldblaze.expressgateway.core.cluster.CoreContext;
 import com.shieldblaze.expressgateway.core.cluster.LoadBalancerContext;
+import com.shieldblaze.expressgateway.core.events.L4FrontListenerStartupEvent;
+import com.shieldblaze.expressgateway.core.loadbalancer.L4LoadBalancer;
+import com.shieldblaze.expressgateway.core.loadbalancer.L4LoadBalancerBuilder;
+import com.shieldblaze.expressgateway.protocol.tcp.TCPListener;
+import com.shieldblaze.expressgateway.protocol.udp.UDPListener;
 import io.netty.channel.socket.DatagramPacket;
 import org.junit.jupiter.api.AfterAll;
 import org.junit.jupiter.api.BeforeAll;
@@ -38,17 +45,12 @@ import reactor.netty.tcp.TcpServer;
 import reactor.netty.udp.UdpServer;
 
 import java.io.File;
-import java.io.IOException;
 import java.io.InputStream;
 import java.io.OutputStream;
 import java.net.DatagramSocket;
 import java.net.InetSocketAddress;
 import java.net.Socket;
 import java.net.SocketTimeoutException;
-import java.net.URI;
-import java.net.http.HttpClient;
-import java.net.http.HttpRequest;
-import java.net.http.HttpResponse;
 import java.util.Random;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
@@ -57,11 +59,9 @@ import java.util.concurrent.atomic.AtomicInteger;
 import static com.shieldblaze.expressgateway.common.utils.SystemPropertyUtil.getPropertyOrEnv;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.junit.jupiter.api.Assertions.assertDoesNotThrow;
-import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
-import static org.junit.jupiter.api.Assertions.assertTrue;
 
 @TestMethodOrder(MethodOrderer.OrderAnnotation.class)
 public class BasicTcpUdpServerTest {
@@ -74,10 +74,8 @@ public class BasicTcpUdpServerTest {
     private static final int LoadBalancerTcpPort = AvailablePortUtil.getTcpPort();
     private static final int LoadBalancerUdpPort = AvailablePortUtil.getUdpPort();
 
-    private static String tcpId;
-    private static String udpId;
-    private static String tcpNodeId;
-    private static String udpNodeId;
+    private static L4LoadBalancer tcpLoadBalancer;
+    private static L4LoadBalancer udpLoadBalancer;
 
     private static DisposableServer tcpServer;
     private static Connection udpServer;
@@ -96,8 +94,6 @@ public class BasicTcpUdpServerTest {
         System.setProperty("CONFIGURATION_FILE_NAME", "BasicTcpUdpServerTest.json");
         System.setProperty("CONFIGURATION_DIRECTORY", absolutePath);
         assertNotNull(getPropertyOrEnv("CONFIGURATION_DIRECTORY"));
-
-        Bootstrap.main();
 
         tcpServer = TcpServer.create()
                 .host("127.0.0.1")
@@ -121,8 +117,14 @@ public class BasicTcpUdpServerTest {
     }
 
     @AfterAll
-    static void shutdown() {
-        Bootstrap.shutdown();
+    static void shutdown() throws Exception {
+        if (tcpLoadBalancer != null) {
+            tcpLoadBalancer.shutdown().future().get();
+        }
+
+        if (udpLoadBalancer != null) {
+            udpLoadBalancer.shutdown().future().get();
+        }
 
         if (tcpServer != null) {
             tcpServer.disposeNow();
@@ -135,147 +137,70 @@ public class BasicTcpUdpServerTest {
 
     @Order(1)
     @Test
-    public void startTcpLoadBalancer() throws IOException, InterruptedException {
-        JsonObject requestBody = new JsonObject();
-        requestBody.addProperty("name", "MeowBalancer");
-        requestBody.addProperty("bindAddress", "127.0.0.1");
-        requestBody.addProperty("bindPort", LoadBalancerTcpPort);
-        requestBody.addProperty("protocol", "tcp");
-
-        HttpRequest httpRequest = HttpRequest.newBuilder()
-                .uri(URI.create("http://127.0.0.1:54321/v1/loadbalancer/l4/start"))
-                .POST(HttpRequest.BodyPublishers.ofString(requestBody.toString()))
-                .header("Content-Type", "application/json")
-                .version(HttpClient.Version.HTTP_1_1)
+    public void startTcpLoadBalancer() throws Exception {
+        L4LoadBalancer l4LoadBalancer = L4LoadBalancerBuilder.newBuilder()
+                .withL4FrontListener(new TCPListener())
+                .withBindAddress(new InetSocketAddress("127.0.0.1", LoadBalancerTcpPort))
+                .withCoreConfiguration(ConfigurationContext.DEFAULT)
                 .build();
 
-        HttpResponse<String> httpResponse = HttpClient.newHttpClient().send(httpRequest, HttpResponse.BodyHandlers.ofString());
-        assertThat(httpResponse.statusCode()).isEqualTo(201);
+        tcpLoadBalancer = l4LoadBalancer;
 
-        JsonObject responseJson = JsonParser.parseString(httpResponse.body()).getAsJsonObject();
-        System.out.println(responseJson);
-        assertTrue(responseJson.get("Success").getAsBoolean());
-
-        tcpId = responseJson.get("Result").getAsJsonObject().get("LoadBalancerID").getAsString();
-        System.err.println(tcpId);
+        L4FrontListenerStartupEvent event = l4LoadBalancer.start();
+        CoreContext.add("default-tcp", new LoadBalancerContext(l4LoadBalancer, event));
     }
 
     @Order(2)
     @Test
-    public void startUdpLoadBalancer() throws IOException, InterruptedException {
-        JsonObject requestBody = new JsonObject();
-        requestBody.addProperty("name", "MeowBalancer");
-        requestBody.addProperty("bindAddress", "127.0.0.1");
-        requestBody.addProperty("bindPort", LoadBalancerUdpPort);
-        requestBody.addProperty("protocol", "udp");
-
-        HttpRequest httpRequest = HttpRequest.newBuilder()
-                .uri(URI.create("http://127.0.0.1:54321/v1/loadbalancer/l4/start"))
-                .POST(HttpRequest.BodyPublishers.ofString(requestBody.toString()))
-                .header("Content-Type", "application/json")
-                .version(HttpClient.Version.HTTP_1_1)
+    public void startUdpLoadBalancer() throws Exception {
+        L4LoadBalancer l4LoadBalancer = L4LoadBalancerBuilder.newBuilder()
+                .withL4FrontListener(new UDPListener())
+                .withBindAddress(new InetSocketAddress("127.0.0.1", LoadBalancerUdpPort))
+                .withCoreConfiguration(ConfigurationContext.DEFAULT)
                 .build();
 
-        HttpResponse<String> httpResponse = HttpClient.newHttpClient().send(httpRequest, HttpResponse.BodyHandlers.ofString());
-        assertThat(httpResponse.statusCode()).isEqualTo(201);
+        udpLoadBalancer = l4LoadBalancer;
 
-        JsonObject responseJson = JsonParser.parseString(httpResponse.body()).getAsJsonObject();
-        System.out.println(responseJson);
-        assertTrue(responseJson.get("Success").getAsBoolean());
-
-        udpId = responseJson.get("Result").getAsJsonObject().get("LoadBalancerID").getAsString();
+        L4FrontListenerStartupEvent event = l4LoadBalancer.start();
+        CoreContext.add("default-udp", new LoadBalancerContext(l4LoadBalancer, event));
     }
 
     @Order(3)
     @Test
     public void createTcpL4Cluster() throws Exception {
-        JsonObject requestBody = new JsonObject();
-        requestBody.addProperty("Hostname", "www.shieldblaze.com"); // It will default down to 'DEFAULT'.
-        requestBody.addProperty("LoadBalance", "RoundRobin");
-        requestBody.addProperty("SessionPersistence", "NOOP");
-
-        HttpRequest httpRequest = HttpRequest.newBuilder()
-                .uri(URI.create("http://127.0.0.1:54321/v1/cluster/create?id=" + tcpId))
-                .POST(HttpRequest.BodyPublishers.ofString(requestBody.toString()))
-                .header("Content-Type", "application/json")
-                .version(HttpClient.Version.HTTP_1_1)
+        Cluster tcpCluster = ClusterBuilder.newBuilder()
+                .withLoadBalance(new RoundRobin(NOOPSessionPersistence.INSTANCE))
                 .build();
 
-        HttpResponse<String> httpResponse = HttpClient.newHttpClient().send(httpRequest, HttpResponse.BodyHandlers.ofString());
-        assertThat(httpResponse.statusCode()).isEqualTo(201);
-
-        JsonObject responseJson = JsonParser.parseString(httpResponse.body()).getAsJsonObject();
-        System.out.println(responseJson);
-        assertTrue(responseJson.get("Success").getAsBoolean());
+        CoreContext.get("default-tcp").l4LoadBalancer().defaultCluster(tcpCluster);
     }
 
     @Order(4)
     @Test
-    public void createUdpL4Cluster() throws Exception {
-        JsonObject requestBody = new JsonObject();
-        requestBody.addProperty("Hostname", "localhost"); // It will default down to 'DEFAULT'.
-        requestBody.addProperty("LoadBalance", "RoundRobin");
-        requestBody.addProperty("SessionPersistence", "NOOP");
-
-        HttpRequest httpRequest = HttpRequest.newBuilder()
-                .uri(URI.create("http://127.0.0.1:54321/v1/cluster/create?id=" + udpId))
-                .POST(HttpRequest.BodyPublishers.ofString(requestBody.toString()))
-                .header("Content-Type", "application/json")
-                .version(HttpClient.Version.HTTP_1_1)
+    public void createUdpL4Cluster() {
+        Cluster udpCluster = ClusterBuilder.newBuilder()
+                .withLoadBalance(new RoundRobin(NOOPSessionPersistence.INSTANCE))
                 .build();
 
-        HttpResponse<String> httpResponse = HttpClient.newHttpClient().send(httpRequest, HttpResponse.BodyHandlers.ofString());
-        assertThat(httpResponse.statusCode()).isEqualTo(201);
-
-        JsonObject responseJson = JsonParser.parseString(httpResponse.body()).getAsJsonObject();
-        System.out.println(responseJson);
-        assertTrue(responseJson.get("Success").getAsBoolean());
+        CoreContext.get("default-udp").l4LoadBalancer().defaultCluster(udpCluster);
     }
 
     @Order(5)
     @Test
     void createTcpBackendNode() throws Exception {
-        JsonObject body = new JsonObject();
-        body.addProperty("address", "127.0.0.1");
-        body.addProperty("port", BackendTcpNodePort);
-
-        HttpRequest httpRequest = HttpRequest.newBuilder()
-                .uri(URI.create("http://127.0.0.1:54321/v1/node/create?id=" + tcpId + "&clusterHostname=default"))
-                .POST(HttpRequest.BodyPublishers.ofString(body.toString()))
-                .header("Content-Type", "application/json")
-                .version(HttpClient.Version.HTTP_1_1)
+        NodeBuilder.newBuilder()
+                .withCluster(tcpLoadBalancer.defaultCluster())
+                .withSocketAddress(new InetSocketAddress("127.0.0.1", BackendTcpNodePort))
                 .build();
-
-        HttpResponse<String> httpResponse = HttpClient.newHttpClient().send(httpRequest, HttpResponse.BodyHandlers.ofString());
-        assertThat(httpResponse.statusCode()).isEqualTo(201);
-
-        JsonObject responseJson = JsonParser.parseString(httpResponse.body()).getAsJsonObject();
-        System.out.println(responseJson);
-
-        tcpNodeId = responseJson.get("Result").getAsJsonObject().get("NodeID").getAsString();
     }
 
     @Order(6)
     @Test
     void createUdpBackendNode() throws Exception {
-        JsonObject body = new JsonObject();
-        body.addProperty("address", "127.0.0.1");
-        body.addProperty("port", BackendUdpNodePort);
-
-        HttpRequest httpRequest = HttpRequest.newBuilder()
-                .uri(URI.create("http://127.0.0.1:54321/v1/node/create?id=" + udpId + "&clusterHostname=default"))
-                .POST(HttpRequest.BodyPublishers.ofString(body.toString()))
-                .header("Content-Type", "application/json")
-                .version(HttpClient.Version.HTTP_1_1)
+        NodeBuilder.newBuilder()
+                .withCluster(udpLoadBalancer.defaultCluster())
+                .withSocketAddress(new InetSocketAddress("127.0.0.1", BackendUdpNodePort))
                 .build();
-
-        HttpResponse<String> httpResponse = HttpClient.newHttpClient().send(httpRequest, HttpResponse.BodyHandlers.ofString());
-        assertThat(httpResponse.statusCode()).isEqualTo(201);
-
-        JsonObject responseJson = JsonParser.parseString(httpResponse.body()).getAsJsonObject();
-        System.out.println(responseJson);
-
-        udpNodeId = responseJson.get("Result").getAsJsonObject().get("NodeID").getAsString();
     }
 
     @Order(7)
@@ -362,21 +287,11 @@ public class BasicTcpUdpServerTest {
     @Order(9)
     @Test
     void markTcpBackendOffline() throws Exception {
-        HttpRequest httpRequest = HttpRequest.newBuilder()
-                .uri(URI.create("http://127.0.0.1:54321/v1/node/offline?id=" + tcpId + "&clusterHostname=default&nodeId=" + tcpNodeId))
-                .PUT(HttpRequest.BodyPublishers.noBody())
-                .header("Content-Type", "application/json")
-                .build();
-
-        HttpResponse<String> httpResponse = HttpClient.newHttpClient().send(httpRequest, HttpResponse.BodyHandlers.ofString());
-        assertThat(httpResponse.statusCode()).isEqualTo(200);
-
-        JsonObject responseJson = JsonParser.parseString(httpResponse.body()).getAsJsonObject();
-        System.out.println(responseJson);
-        assertTrue(responseJson.get("Success").getAsBoolean());
-
-        LoadBalancerContext property = CoreContext.get(tcpId);
-        assertEquals(State.MANUAL_OFFLINE, property.l4LoadBalancer().cluster("default").get(tcpNodeId).state());
+        CoreContext.get("default-tcp").l4LoadBalancer()
+                .defaultCluster()
+                .nodes()
+                .get(0)
+                .markManualOffline();
     }
 
     @Order(10)
@@ -396,21 +311,11 @@ public class BasicTcpUdpServerTest {
     @Order(11)
     @Test
     void markUdpBackendOffline() throws Exception {
-        HttpRequest httpRequest = HttpRequest.newBuilder()
-                .uri(URI.create("http://127.0.0.1:54321/v1/node/offline?id=" + udpId + "&clusterHostname=default&nodeId=" + udpNodeId))
-                .PUT(HttpRequest.BodyPublishers.noBody())
-                .header("Content-Type", "application/json")
-                .build();
-
-        HttpResponse<String> httpResponse = HttpClient.newHttpClient().send(httpRequest, HttpResponse.BodyHandlers.ofString());
-        assertThat(httpResponse.statusCode()).isEqualTo(200);
-
-        JsonObject responseJson = JsonParser.parseString(httpResponse.body()).getAsJsonObject();
-        System.out.println(responseJson);
-        assertTrue(responseJson.get("Success").getAsBoolean());
-
-        LoadBalancerContext property = CoreContext.get(udpId);
-        assertEquals(State.MANUAL_OFFLINE, property.l4LoadBalancer().cluster("default").get(udpNodeId).state());
+        CoreContext.get("default-udp").l4LoadBalancer()
+                .defaultCluster()
+                .nodes()
+                .get(0)
+                .markManualOffline();
     }
 
     @Order(12)

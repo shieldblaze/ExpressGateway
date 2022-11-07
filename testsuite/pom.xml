@@ -39,7 +39,17 @@
     <dependencies>
         <dependency>
             <groupId>com.shieldblaze.expressgateway</groupId>
-            <artifactId>bootstrap</artifactId>
+            <artifactId>core</artifactId>
+            <version>${project.parent.version}</version>
+        </dependency>
+        <dependency>
+            <groupId>com.shieldblaze.expressgateway</groupId>
+            <artifactId>protocol-tcp</artifactId>
+            <version>${project.parent.version}</version>
+        </dependency>
+        <dependency>
+            <groupId>com.shieldblaze.expressgateway</groupId>
+            <artifactId>protocol-udp</artifactId>
             <version>${project.parent.version}</version>
         </dependency>
     </dependencies>
