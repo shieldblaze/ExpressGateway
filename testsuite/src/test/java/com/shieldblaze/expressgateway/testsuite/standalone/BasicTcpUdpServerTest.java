@@ -25,8 +25,6 @@ import com.shieldblaze.expressgateway.common.utils.AvailablePortUtil;
 import com.shieldblaze.expressgateway.core.cluster.CoreContext;
 import com.shieldblaze.expressgateway.core.cluster.LoadBalancerContext;
 import io.netty.channel.socket.DatagramPacket;
-import okhttp3.Request;
-import okhttp3.Response;
 import org.junit.jupiter.api.AfterAll;
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.MethodOrderer;
@@ -39,13 +37,10 @@ import reactor.netty.DisposableServer;
 import reactor.netty.tcp.TcpServer;
 import reactor.netty.udp.UdpServer;
 
-import java.io.BufferedReader;
-import java.io.BufferedWriter;
 import java.io.File;
 import java.io.IOException;
 import java.io.InputStream;
 import java.io.OutputStream;
-import java.net.ConnectException;
 import java.net.DatagramSocket;
 import java.net.InetSocketAddress;
 import java.net.Socket;
@@ -386,7 +381,7 @@ public class BasicTcpUdpServerTest {
 
     @Order(10)
     @Test
-    void sendTcpTrafficOnClosedBackend() throws Exception {
+    void sendTcpTrafficOnOfflineBackend() throws Exception {
         try (Socket socket = new Socket()) {
             assertDoesNotThrow(() -> socket.connect(new InetSocketAddress("127.0.0.1", LoadBalancerTcpPort), 1000 * 10));
             assertThat(socket.isConnected()).isTrue();
@@ -395,6 +390,41 @@ public class BasicTcpUdpServerTest {
             Thread.sleep(1000);
 
             assertThat(socket.getInputStream().read()).isEqualTo(-1);
+        }
+    }
+
+    @Order(11)
+    @Test
+    void markUdpBackendOffline() throws Exception {
+        HttpRequest httpRequest = HttpRequest.newBuilder()
+                .uri(URI.create("http://127.0.0.1:54321/v1/node/offline?id=" + udpId + "&clusterHostname=default&nodeId=" + udpNodeId))
+                .PUT(HttpRequest.BodyPublishers.noBody())
+                .header("Content-Type", "application/json")
+                .build();
+
+        HttpResponse<String> httpResponse = HttpClient.newHttpClient().send(httpRequest, HttpResponse.BodyHandlers.ofString());
+        assertThat(httpResponse.statusCode()).isEqualTo(200);
+
+        JsonObject responseJson = JsonParser.parseString(httpResponse.body()).getAsJsonObject();
+        System.out.println(responseJson);
+        assertTrue(responseJson.get("Success").getAsBoolean());
+
+        LoadBalancerContext property = CoreContext.get(udpId);
+        assertEquals(State.MANUAL_OFFLINE, property.l4LoadBalancer().cluster("default").get(udpNodeId).state());
+    }
+
+    @Order(12)
+    @Test
+    void sendUdpTrafficOnOfflineBackend() throws Exception {
+        try (DatagramSocket socket = new DatagramSocket()) {
+            socket.setSoTimeout(1000 * 5);
+
+            java.net.DatagramPacket packet = new java.net.DatagramPacket("Meow".getBytes(), 4, new InetSocketAddress("127.0.0.1", LoadBalancerUdpPort));
+            assertDoesNotThrow(() -> socket.send(packet));
+
+            byte[] data = new byte[4];
+            java.net.DatagramPacket receivingPacket = new java.net.DatagramPacket(data, data.length);
+            assertThrows(SocketTimeoutException.class, () -> socket.receive(receivingPacket));
         }
     }
 }
