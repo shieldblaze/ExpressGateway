@@ -17,6 +17,7 @@
  */
 package com.shieldblaze.expressgateway.testsuite.standalone;
 
+import com.shieldblaze.expressgateway.backend.Node;
 import com.shieldblaze.expressgateway.backend.NodeBuilder;
 import com.shieldblaze.expressgateway.backend.cluster.Cluster;
 import com.shieldblaze.expressgateway.backend.cluster.ClusterBuilder;
@@ -52,7 +53,9 @@ import java.net.InetSocketAddress;
 import java.net.Socket;
 import java.net.SocketTimeoutException;
 import java.util.Random;
+import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.Executors;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
 
@@ -363,5 +366,88 @@ public class BasicTcpUdpServerTest {
     @Test
     void sendUdpTrafficInMultiplexingWayAfterMarkingOnline() throws Exception {
         sendUdpTrafficInMultiplexingWay();
+    }
+
+    @Order(17)
+    @Test
+    void sendTcpTrafficInMultiplexingWayAndMarkBackendOfflineWithoutDrainingConnection() throws Exception {
+        CompletableFuture<Boolean> future = new CompletableFuture<>();
+
+        new Thread(() -> {
+            try {
+                sendTcpTrafficInMultiplexingWay();
+                future.complete(true);
+            } catch (Exception e) {
+                future.completeExceptionally(e);
+                throw new RuntimeException(e);
+            }
+        }).start();
+
+        Thread.sleep(1000);
+
+        // Now mark
+        CoreContext.get("default-tcp").l4LoadBalancer()
+                .defaultCluster()
+                .onlineNodes()
+                .get(0)
+                .markOffline();
+
+        future.get(3, TimeUnit.MINUTES);
+    }
+
+    @Order(18)
+    @Test
+    void markTcpBackendOnlineAgain() {
+        markTcpBackendOnline();
+    }
+
+    @Order(19)
+    @Test
+    void sendTcpTrafficInMultiplexingWayAndMarkBackendOfflineWithDrainingConnection() throws Exception {
+        assertThat(TCP_FRAMES.get()).isEqualTo(0);
+
+        final int frames = 10_000;
+        final int threads = 10;
+        final int dataSize = 128;
+        final CountDownLatch latch = new CountDownLatch(threads);
+
+        for (int i = 0; i < threads; i++) {
+
+            new Thread(() -> {
+                try (Socket socket = new Socket("127.0.0.1", LoadBalancerTcpPort)) {
+                    InputStream inputStream = socket.getInputStream();
+                    OutputStream outputStream = socket.getOutputStream();
+
+                    for (int messagesCount = 0; messagesCount < frames; messagesCount++) {
+                        byte[] randomData = new byte[dataSize];
+                        RANDOM.nextBytes(randomData);
+
+                        outputStream.write(randomData);
+                        outputStream.flush();
+
+                        assertThat(inputStream.readNBytes(dataSize)).isEqualTo(randomData);
+                        TCP_FRAMES.incrementAndGet();
+                    }
+                } catch (Exception ex) {
+                    throw new RuntimeException(ex);
+                } finally {
+                    latch.countDown();
+                }
+            }).start();
+        }
+
+        Thread.sleep(1000);
+
+        // Mark the Backend offline and drain connections
+        Node node = CoreContext.get("default-udp").l4LoadBalancer()
+                .defaultCluster()
+                .onlineNodes()
+                .get(0);
+
+        node.markOffline();
+        node.drainConnections();
+
+        assertThat(latch.await(1, TimeUnit.MINUTES)).isTrue();
+        assertThat(TCP_FRAMES.getAndSet(0)).isBetween(1, (frames * threads));
     }
 }

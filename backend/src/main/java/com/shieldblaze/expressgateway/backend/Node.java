@@ -284,7 +284,7 @@ public final class Node implements Comparable<Node>, Closeable {
     }
 
     /**
-     * Mark this {@link Node} as manually offline.
+     * Mark this {@link Node} as offline.
      */
     public boolean markOffline() {
         if (state != State.MANUAL_OFFLINE) {
