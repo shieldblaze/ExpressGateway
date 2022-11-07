@@ -46,7 +46,7 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 public class L4LoadBalancerConfigurationEndpointHandlerTest {
 
     private static final RequestBody EMPTY_REQ_BODY = RequestBody.create(new byte[0], null);
-    public static String id;
+    public static String ID;
 
     @BeforeAll
     static void startSpring() throws IOException {
@@ -82,7 +82,7 @@ public class L4LoadBalancerConfigurationEndpointHandlerTest {
             System.out.println(responseJson);
             assertTrue(responseJson.get("Success").getAsBoolean());
 
-            id = responseJson.get("Result").getAsJsonObject().get("LoadBalancerID").getAsString();
+            ID = responseJson.get("Result").getAsJsonObject().get("LoadBalancerID").getAsString();
         }
     }
 
@@ -92,7 +92,7 @@ public class L4LoadBalancerConfigurationEndpointHandlerTest {
         Thread.sleep(1000); // Wait for Load Balancer to completely start
 
         Request request = new Request.Builder()
-                .url("https://127.0.0.1:9110/v1/loadbalancer/get?id=" + id)
+                .url("https://127.0.0.1:9110/v1/loadbalancer/get?id=" + ID)
                 .get()
                 .build();
 
@@ -111,7 +111,7 @@ public class L4LoadBalancerConfigurationEndpointHandlerTest {
     @Order(3)
     public void stopLoadBalancer() throws IOException {
         Request request = new Request.Builder()
-                .url("https://127.0.0.1:9110/v1/loadbalancer/stop?id=" + id)
+                .url("https://127.0.0.1:9110/v1/loadbalancer/stop?id=" + ID)
                 .put(EMPTY_REQ_BODY)
                 .build();
 
@@ -127,7 +127,7 @@ public class L4LoadBalancerConfigurationEndpointHandlerTest {
     @Order(4)
     public void resumeLoadBalancer() throws IOException {
         Request request = new Request.Builder()
-                .url("https://127.0.0.1:9110/v1/loadbalancer/resume?id=" + id)
+                .url("https://127.0.0.1:9110/v1/loadbalancer/resume?id=" + ID)
                 .put(EMPTY_REQ_BODY)
                 .build();
 
@@ -143,7 +143,7 @@ public class L4LoadBalancerConfigurationEndpointHandlerTest {
     @Order(5)
     public void shutdownLoadBalancer() throws IOException {
         Request request = new Request.Builder()
-                .url("https://127.0.0.1:9110/v1/loadbalancer/shutdown?id=" + id)
+                .url("https://127.0.0.1:9110/v1/loadbalancer/shutdown?id=" + ID)
                 .delete()
                 .build();
 
@@ -176,7 +176,7 @@ public class L4LoadBalancerConfigurationEndpointHandlerTest {
             System.out.println(responseJson);
             assertTrue(responseJson.get("Success").getAsBoolean());
 
-            id = responseJson.get("Result").getAsJsonObject().get("LoadBalancerID").getAsString();
+            ID = responseJson.get("Result").getAsJsonObject().get("LoadBalancerID").getAsString();
         }
 
         // -------------------------------------- STOP, RESUME AND SHUTDOWN ------------------------------------------
@@ -219,7 +219,7 @@ public class L4LoadBalancerConfigurationEndpointHandlerTest {
 
         // Actual Shutdown
         request = new Request.Builder()
-                .url("https://127.0.0.1:9110/v1/loadbalancer/shutdown?id=" + id)
+                .url("https://127.0.0.1:9110/v1/loadbalancer/shutdown?id=" + ID)
                 .delete()
                 .build();
 
