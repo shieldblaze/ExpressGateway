@@ -74,7 +74,7 @@ public class ClusterConfigurationEndpointHandlerTest {
         l4LoadBalancerTest.startLoadBalancer();
         l4LoadBalancerTest.verifyRunning();
 
-        final LoadBalancerContext property = CoreContext.get(L4LoadBalancerConfigurationEndpointHandlerTest.id);
+        final LoadBalancerContext property = CoreContext.get(L4LoadBalancerConfigurationEndpointHandlerTest.ID);
         assertThrows(NullPointerException.class, () -> property.l4LoadBalancer().cluster("DEFAULT"));
 
         JsonObject body = new JsonObject();
@@ -83,7 +83,7 @@ public class ClusterConfigurationEndpointHandlerTest {
         body.addProperty("SessionPersistence", "NOOP");
 
         Request request = new Request.Builder()
-                .url("https://127.0.0.1:9110/v1/cluster/create?id=" + L4LoadBalancerConfigurationEndpointHandlerTest.id)
+                .url("https://127.0.0.1:9110/v1/cluster/create?id=" + L4LoadBalancerConfigurationEndpointHandlerTest.ID)
                 .post(RequestBody.create(body.toString(), MediaType.get("application/json")))
                 .build();
 
@@ -100,11 +100,11 @@ public class ClusterConfigurationEndpointHandlerTest {
     @Test
     @Order(2)
     public void deleteL4ClusterTest() throws IOException {
-        LoadBalancerContext property = CoreContext.get(L4LoadBalancerConfigurationEndpointHandlerTest.id);
+        LoadBalancerContext property = CoreContext.get(L4LoadBalancerConfigurationEndpointHandlerTest.ID);
         assertNotNull(property.l4LoadBalancer().cluster("DEFAULT"));
 
         Request request = new Request.Builder()
-                .url("https://127.0.0.1:9110/v1/cluster/delete?id=" + L4LoadBalancerConfigurationEndpointHandlerTest.id + "&hostname=null")
+                .url("https://127.0.0.1:9110/v1/cluster/delete?id=" + L4LoadBalancerConfigurationEndpointHandlerTest.ID + "&hostname=null")
                 .delete()
                 .build();
 

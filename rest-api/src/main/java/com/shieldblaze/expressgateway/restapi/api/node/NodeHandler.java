@@ -95,7 +95,7 @@ public class NodeHandler {
 
         Cluster cluster = property.l4LoadBalancer().cluster(clusterHostname);
         Node node = cluster.get(nodeId);
-        boolean success = node.markManualOffline();
+        boolean success = node.markOffline();
 
         if (drainConnections) {
             node.drainConnections();

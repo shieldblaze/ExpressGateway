@@ -284,9 +284,9 @@ public final class Node implements Comparable<Node>, Closeable {
     }
 
     /**
-     * Mark this {@link Node} as manually offline.
+     * Mark this {@link Node} as offline.
      */
-    public boolean markManualOffline() {
+    public boolean markOffline() {
         if (state != State.MANUAL_OFFLINE) {
             state(State.MANUAL_OFFLINE);
             cluster.eventStream().publish(new NodeOfflineEvent(this));
@@ -296,9 +296,9 @@ public final class Node implements Comparable<Node>, Closeable {
     }
 
     /**
-     * Mark this {@link Node} as Online from {@link #markManualOffline()}
+     * Mark this {@link Node} as Online from {@link #markOffline()}
      */
-    public void unmarkManualOffline() {
+    public void markOnline() {
         state(State.ONLINE);
         cluster.eventStream().publish(new NodeOnlineEvent(this));
     }

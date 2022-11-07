@@ -69,7 +69,7 @@ public final class HTTPRoundRobin extends HTTPBalance {
 
         Node node;
         try {
-            node = cluster.nodes().get(roundRobinIndexGenerator.next());
+            node = cluster.onlineNodes().get(roundRobinIndexGenerator.next());
         } catch (Exception ex) {
             throw new NoNodeAvailableException();
         }

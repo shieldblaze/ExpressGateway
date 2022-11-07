@@ -26,7 +26,6 @@ import com.shieldblaze.expressgateway.backend.events.node.NodeOfflineEvent;
 import com.shieldblaze.expressgateway.backend.events.node.NodeOnlineEvent;
 import com.shieldblaze.expressgateway.backend.events.node.NodeRemovedEvent;
 import com.shieldblaze.expressgateway.backend.exceptions.LoadBalanceException;
-import com.shieldblaze.expressgateway.backend.exceptions.NoNodeAvailableException;
 import com.shieldblaze.expressgateway.backend.loadbalance.SessionPersistence;
 import com.shieldblaze.expressgateway.common.algo.roundrobin.RoundRobinIndexGenerator;
 import com.shieldblaze.expressgateway.concurrent.event.Event;
@@ -66,10 +65,11 @@ public final class RoundRobin extends L4Balance {
             }
         }
 
-        try {
-            node = cluster.nodes().get(roundRobinIndexGenerator.next());
-        } catch (Exception ex) {
-            throw new NoNodeAvailableException(ex);
+        int index = roundRobinIndexGenerator.next();
+        if (index >= 0) {
+            node = cluster.onlineNodes().get(index);
+        } else {
+            return L4Response.NO_NODE;
         }
 
         sessionPersistence.addRoute(l4Request.socketAddress(), node);

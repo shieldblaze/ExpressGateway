@@ -77,7 +77,7 @@ class NodeConfigurationEndpointHandlerTest {
         body.addProperty("port", 54321);
 
         Request request = new Request.Builder()
-                .url("https://127.0.0.1:9110/v1/node/create?id=" + L4LoadBalancerConfigurationEndpointHandlerTest.id + "&clusterHostname=default")
+                .url("https://127.0.0.1:9110/v1/node/create?id=" + L4LoadBalancerConfigurationEndpointHandlerTest.ID + "&clusterHostname=default")
                 .post(RequestBody.create(body.toString(), MediaType.get("application/json")))
                 .build();
 
@@ -95,7 +95,7 @@ class NodeConfigurationEndpointHandlerTest {
     @Order(2)
     void markManuallyOfflineTest() throws IOException {
         Request request = new Request.Builder()
-                .url("https://127.0.0.1:9110/v1/node/offline?id=" + L4LoadBalancerConfigurationEndpointHandlerTest.id + "&clusterHostname=default&nodeId=" + nodeId)
+                .url("https://127.0.0.1:9110/v1/node/offline?id=" + L4LoadBalancerConfigurationEndpointHandlerTest.ID + "&clusterHostname=default&nodeId=" + nodeId)
                 .put(EMPTY_REQ_BODY)
                 .build();
 
@@ -106,18 +106,19 @@ class NodeConfigurationEndpointHandlerTest {
             assertTrue(responseJson.get("Success").getAsBoolean());
         }
 
-        LoadBalancerContext property = CoreContext.get(L4LoadBalancerConfigurationEndpointHandlerTest.id);
+        LoadBalancerContext property = CoreContext.get(L4LoadBalancerConfigurationEndpointHandlerTest.ID);
         assertEquals(State.MANUAL_OFFLINE, property.l4LoadBalancer().cluster("default").get(nodeId).state());
     }
 
     @Test
     @Order(3)
     void changeMaxConnectionsTest() throws IOException {
-        LoadBalancerContext property = CoreContext.get(L4LoadBalancerConfigurationEndpointHandlerTest.id);
+        LoadBalancerContext property = CoreContext.get(L4LoadBalancerConfigurationEndpointHandlerTest.ID);
         assertEquals(10_000, property.l4LoadBalancer().cluster("default").get(nodeId).maxConnections());
 
         Request request = new Request.Builder()
-                .url("https://127.0.0.1:9110/v1/node/maxConnections?id=" + L4LoadBalancerConfigurationEndpointHandlerTest.id + "&clusterHostname=default&nodeId=" + nodeId + "&maxConnections=1000000")
+                .url("https://127.0.0.1:9110/v1/node/maxConnections?id=" + L4LoadBalancerConfigurationEndpointHandlerTest.ID +
+                        "&clusterHostname=default&nodeId=" + nodeId + "&maxConnections=1000000")
                 .patch(EMPTY_REQ_BODY)
                 .build();
 
@@ -135,7 +136,7 @@ class NodeConfigurationEndpointHandlerTest {
     @Order(4)
     void getNodeTest() throws IOException {
         Request request = new Request.Builder()
-                .url("https://127.0.0.1:9110/v1/node/?id=" + L4LoadBalancerConfigurationEndpointHandlerTest.id + "&clusterHostname=default&nodeId=" + nodeId)
+                .url("https://127.0.0.1:9110/v1/node/?id=" + L4LoadBalancerConfigurationEndpointHandlerTest.ID + "&clusterHostname=default&nodeId=" + nodeId)
                 .get()
                 .build();
 
@@ -151,7 +152,7 @@ class NodeConfigurationEndpointHandlerTest {
     @Test
     void deleteNodeTest() throws IOException {
         Request request = new Request.Builder()
-                .url("https://127.0.0.1:9110/v1/node/delete?id=" + L4LoadBalancerConfigurationEndpointHandlerTest.id + "&clusterHostname=default&nodeId=" + nodeId)
+                .url("https://127.0.0.1:9110/v1/node/delete?id=" + L4LoadBalancerConfigurationEndpointHandlerTest.ID + "&clusterHostname=default&nodeId=" + nodeId)
                 .delete()
                 .build();
 

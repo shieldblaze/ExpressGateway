@@ -165,10 +165,17 @@ public class Cluster extends ClusterOnlineNodesWorker {
     }
 
     /**
+     * Get List of online {@link Node} associated with this {@linkplain Cluster}
+     */
+    public List<Node> onlineNodes() {
+        return ONLINE_NODES;
+    }
+
+    /**
      * Get List of all {@link Node} associated with this {@linkplain Cluster}
      */
-    public List<Node> nodes() {
-        return ONLINE_NODES;
+    public List<Node> allNodes() {
+        return nodes;
     }
 
     /**

@@ -24,6 +24,8 @@ import com.shieldblaze.expressgateway.backend.Node;
  */
 public final class NoNodeAvailableException extends LoadBalanceException {
 
+    public static final NoNodeAvailableException INSTANCE = new NoNodeAvailableException("No Node is available to handle this exception");
+
     public NoNodeAvailableException() {
         super();
     }

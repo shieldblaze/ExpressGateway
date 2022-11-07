@@ -143,7 +143,7 @@ public abstract class Connection {
     public void writeAndFlush(Object o) {
         if (state == State.INITIALIZED) {
             backlogQueue.add(o);
-        } else if (state == State.CONNECTED_AND_ACTIVE) {
+        } else if (state == State.CONNECTED_AND_ACTIVE && channel != null) {
             channel.writeAndFlush(o, channel.voidPromise());
         } else {
             ReferenceCountedUtil.silentRelease(o);

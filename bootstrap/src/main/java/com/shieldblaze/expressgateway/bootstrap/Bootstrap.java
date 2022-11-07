@@ -86,16 +86,13 @@ public final class Bootstrap {
                 ServiceDiscoveryClient.register();
 
                 // Add shutdown hook to deregister from Service Discovery on exit.
-                Runtime.getRuntime().addShutdownHook(new Thread("ServiceDiscoveryClient-Deregister") {
-                    @Override
-                    public void run() {
-                        try {
-                            ServiceDiscoveryClient.deregister();
-                        } catch (Exception ex) {
-                            logger.fatal(ex);
-                        }
+                Runtime.getRuntime().addShutdownHook(new Thread(() -> {
+                    try {
+                        ServiceDiscoveryClient.deregister();
+                    } catch (Exception ex) {
+                        logger.fatal(ex);
                     }
-                });
+                }));
             }
 
             RestApi.start();
@@ -105,7 +102,7 @@ public final class Bootstrap {
         }
     }
 
-    static void shutdown() {
+    public static void shutdown() {
         // Shutdown the Rest API Server
         RestApi.stop();
     }

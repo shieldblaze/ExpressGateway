@@ -41,12 +41,9 @@ public final class ClusterBuilder {
         return this;
     }
 
-    public ClusterBuilder withHealthCheck(HealthCheckConfiguration healthCheckConfiguration,
-                                          HealthCheckTemplate healthCheckTemplate) {
-        this.healthCheckConfiguration = Objects.requireNonNull(healthCheckConfiguration,
-                "HealthCheckConfiguration cannot be 'null'");
-        this.healthCheckTemplate = Objects.requireNonNull(healthCheckTemplate,
-                "HealthCheckTemplate cannot be 'null'");
+    public ClusterBuilder withHealthCheck(HealthCheckConfiguration healthCheckConfiguration, HealthCheckTemplate healthCheckTemplate) {
+        this.healthCheckConfiguration = Objects.requireNonNull(healthCheckConfiguration, "HealthCheckConfiguration cannot be 'null'");
+        this.healthCheckTemplate = Objects.requireNonNull(healthCheckTemplate, "HealthCheckTemplate cannot be 'null'");
         return this;
     }
 

@@ -12,6 +12,9 @@ on:
         required: true
         default: 'GitHub Actions'
 
+env:
+  MAVEN_OPTS: -Dio.netty.tryReflectionSetAccessible=true
+
 jobs:
   JDK17:
     runs-on: self-hosted
