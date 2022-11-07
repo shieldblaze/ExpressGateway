@@ -286,12 +286,12 @@ public class BasicTcpUdpServerTest {
 
     @Order(9)
     @Test
-    void markTcpBackendOffline() throws Exception {
+    void markTcpBackendOffline() {
         CoreContext.get("default-tcp").l4LoadBalancer()
                 .defaultCluster()
-                .nodes()
+                .onlineNodes()
                 .get(0)
-                .markManualOffline();
+                .markOffline();
     }
 
     @Order(10)
@@ -313,9 +313,9 @@ public class BasicTcpUdpServerTest {
     void markUdpBackendOffline() throws Exception {
         CoreContext.get("default-udp").l4LoadBalancer()
                 .defaultCluster()
-                .nodes()
+                .onlineNodes()
                 .get(0)
-                .markManualOffline();
+                .markOffline();
     }
 
     @Order(12)
@@ -331,5 +331,37 @@ public class BasicTcpUdpServerTest {
             java.net.DatagramPacket receivingPacket = new java.net.DatagramPacket(data, data.length);
             assertThrows(SocketTimeoutException.class, () -> socket.receive(receivingPacket));
         }
+    }
+
+    @Order(13)
+    @Test
+    void markTcpBackendOnline() {
+        CoreContext.get("default-tcp").l4LoadBalancer()
+                .defaultCluster()
+                .allNodes()
+                .get(0)
+                .markOnline();
+    }
+
+    @Order(14)
+    @Test
+    void sendTcpTrafficInMultiplexingWayAfterMarkingOnline() throws Exception {
+        sendTcpTrafficInMultiplexingWay();
+    }
+
+    @Order(15)
+    @Test
+    void markUdpBackendOnline() {
+        CoreContext.get("default-udp").l4LoadBalancer()
+                .defaultCluster()
+                .allNodes()
+                .get(0)
+                .markOnline();
+    }
+
+    @Order(16)
+    @Test
+    void sendUdpTrafficInMultiplexingWayAfterMarkingOnline() throws Exception {
+        sendUdpTrafficInMultiplexingWay();
     }
 }

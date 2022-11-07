@@ -48,19 +48,19 @@ class StickySessionTest {
             HTTPBalanceRequest httpBalanceRequest = new HTTPBalanceRequest(socketAddress, EmptyHttpHeaders.INSTANCE);
 
             HTTPBalanceResponse httpBalanceResponse = (HTTPBalanceResponse) cluster.nextNode(httpBalanceRequest);
-            assertEquals(cluster.nodes().get(0), httpBalanceResponse.node());
+            assertEquals(cluster.onlineNodes().get(0), httpBalanceResponse.node());
 
             httpBalanceRequest = new HTTPBalanceRequest(socketAddress, httpBalanceResponse.getHTTPHeaders());
             httpBalanceResponse = (HTTPBalanceResponse) cluster.nextNode(httpBalanceRequest);
-            assertEquals(cluster.nodes().get(1), httpBalanceResponse.node());
+            assertEquals(cluster.onlineNodes().get(1), httpBalanceResponse.node());
 
             httpBalanceRequest = new HTTPBalanceRequest(socketAddress, httpBalanceResponse.getHTTPHeaders());
             httpBalanceResponse = (HTTPBalanceResponse) cluster.nextNode(httpBalanceRequest);
-            assertEquals(cluster.nodes().get(2), httpBalanceResponse.node());
+            assertEquals(cluster.onlineNodes().get(2), httpBalanceResponse.node());
 
             httpBalanceRequest = new HTTPBalanceRequest(socketAddress, httpBalanceResponse.getHTTPHeaders());
             httpBalanceResponse = (HTTPBalanceResponse) cluster.nextNode(httpBalanceRequest);
-            assertEquals(cluster.nodes().get(3), httpBalanceResponse.node());
+            assertEquals(cluster.onlineNodes().get(3), httpBalanceResponse.node());
         }
     }
 

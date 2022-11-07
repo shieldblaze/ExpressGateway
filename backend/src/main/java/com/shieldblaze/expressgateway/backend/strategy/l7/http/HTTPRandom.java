@@ -67,7 +67,7 @@ public final class HTTPRandom extends HTTPBalance {
 
         Node node;
         try {
-            node = cluster.nodes().get(RANDOM.nextInt(cluster.nodes().size()));
+            node = cluster.onlineNodes().get(RANDOM.nextInt(cluster.onlineNodes().size()));
         } catch (Exception ex) {
             throw new NoNodeAvailableException(ex);
         }

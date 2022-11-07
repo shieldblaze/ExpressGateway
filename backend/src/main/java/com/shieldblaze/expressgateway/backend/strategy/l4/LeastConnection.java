@@ -62,7 +62,7 @@ public final class LeastConnection extends L4Balance {
         }
 
         // Get the Node with the least amount of active connections
-        Optional<Node> optionalNode = cluster.nodes()
+        Optional<Node> optionalNode = cluster.onlineNodes()
                 .stream()
                 .reduce((a, b) -> a.activeConnection() < b.activeConnection() ? a : b);
 

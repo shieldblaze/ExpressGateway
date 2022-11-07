@@ -96,7 +96,7 @@ public final class CoreContext {
                         .clusters()
                         .values()
                         .stream()
-                        .mapToLong(cluster -> cluster.nodes()
+                        .mapToLong(cluster -> cluster.onlineNodes()
                                 .stream()
                                 .mapToInt(Node::maxConnections)
                                 .sum())
