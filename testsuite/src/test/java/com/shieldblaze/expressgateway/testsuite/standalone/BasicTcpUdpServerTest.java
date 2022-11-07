@@ -19,9 +19,14 @@ package com.shieldblaze.expressgateway.testsuite.standalone;
 
 import com.google.gson.JsonObject;
 import com.google.gson.JsonParser;
+import com.shieldblaze.expressgateway.backend.State;
 import com.shieldblaze.expressgateway.bootstrap.Bootstrap;
 import com.shieldblaze.expressgateway.common.utils.AvailablePortUtil;
+import com.shieldblaze.expressgateway.core.cluster.CoreContext;
+import com.shieldblaze.expressgateway.core.cluster.LoadBalancerContext;
 import io.netty.channel.socket.DatagramPacket;
+import okhttp3.Request;
+import okhttp3.Response;
 import org.junit.jupiter.api.AfterAll;
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.MethodOrderer;
@@ -34,13 +39,17 @@ import reactor.netty.DisposableServer;
 import reactor.netty.tcp.TcpServer;
 import reactor.netty.udp.UdpServer;
 
+import java.io.BufferedReader;
+import java.io.BufferedWriter;
 import java.io.File;
 import java.io.IOException;
 import java.io.InputStream;
 import java.io.OutputStream;
+import java.net.ConnectException;
 import java.net.DatagramSocket;
 import java.net.InetSocketAddress;
 import java.net.Socket;
+import java.net.SocketTimeoutException;
 import java.net.URI;
 import java.net.http.HttpClient;
 import java.net.http.HttpRequest;
@@ -48,11 +57,15 @@ import java.net.http.HttpResponse;
 import java.util.Random;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicInteger;
 
 import static com.shieldblaze.expressgateway.common.utils.SystemPropertyUtil.getPropertyOrEnv;
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.junit.jupiter.api.Assertions.assertDoesNotThrow;
+import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertNull;
+import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 @TestMethodOrder(MethodOrderer.OrderAnnotation.class)
@@ -74,6 +87,9 @@ public class BasicTcpUdpServerTest {
     private static DisposableServer tcpServer;
     private static Connection udpServer;
 
+    private static final AtomicInteger TCP_FRAMES = new AtomicInteger();
+    private static final AtomicInteger UDP_FRAMES = new AtomicInteger();
+
     @BeforeAll
     static void setup() throws Exception {
         assertNull(getPropertyOrEnv("CONFIGURATION_DIRECTORY"));
@@ -89,6 +105,7 @@ public class BasicTcpUdpServerTest {
         Bootstrap.main();
 
         tcpServer = TcpServer.create()
+                .host("127.0.0.1")
                 .port(BackendTcpNodePort)
                 .handle((nettyInbound, nettyOutbound) -> nettyOutbound.send(nettyInbound.receive().retain()))
                 .bindNow();
@@ -269,6 +286,9 @@ public class BasicTcpUdpServerTest {
     @Order(7)
     @Test
     void sendTcpTrafficInMultiplexingWay() throws Exception {
+        assertThat(TCP_FRAMES.get()).isEqualTo(0);
+
+        final int frames = 10_000;
         final int threads = 10;
         final int dataSize = 128;
         final CountDownLatch latch = new CountDownLatch(threads);
@@ -280,7 +300,7 @@ public class BasicTcpUdpServerTest {
                     InputStream inputStream = socket.getInputStream();
                     OutputStream outputStream = socket.getOutputStream();
 
-                    for (int messagesCount = 0; messagesCount < 10_000; messagesCount++) {
+                    for (int messagesCount = 0; messagesCount < frames; messagesCount++) {
                         byte[] randomData = new byte[dataSize];
                         RANDOM.nextBytes(randomData);
 
@@ -288,6 +308,7 @@ public class BasicTcpUdpServerTest {
                         outputStream.flush();
 
                         assertThat(inputStream.readNBytes(dataSize)).isEqualTo(randomData);
+                        TCP_FRAMES.incrementAndGet();
                     }
                 } catch (Exception ex) {
                     throw new RuntimeException(ex);
@@ -298,11 +319,15 @@ public class BasicTcpUdpServerTest {
         }
 
         assertThat(latch.await(1, TimeUnit.MINUTES)).isTrue();
+        assertThat(TCP_FRAMES.getAndSet(0)).isEqualTo(frames * threads);
     }
 
     @Order(8)
     @Test
     void sendUdpTrafficInMultiplexingWay() throws Exception {
+        assertThat(UDP_FRAMES.get()).isEqualTo(0);
+
+        final int frames = 10_000;
         final int threads = 10;
         final int dataSize = 128;
         final InetSocketAddress address = new InetSocketAddress("127.0.0.1", LoadBalancerUdpPort);
@@ -313,7 +338,7 @@ public class BasicTcpUdpServerTest {
             new Thread(() -> {
                 try (DatagramSocket socket = new DatagramSocket()) {
 
-                    for (int messagesCount = 0; messagesCount < 10_000; messagesCount++) {
+                    for (int messagesCount = 0; messagesCount < frames; messagesCount++) {
                         byte[] randomData = new byte[dataSize];
                         RANDOM.nextBytes(randomData);
 
@@ -325,6 +350,7 @@ public class BasicTcpUdpServerTest {
                         socket.receive(inboundPacket);
 
                         assertThat(buffer).isEqualTo(randomData);
+                        UDP_FRAMES.incrementAndGet();
                     }
                 } catch (Exception ex) {
                     throw new RuntimeException(ex);
@@ -335,5 +361,40 @@ public class BasicTcpUdpServerTest {
         }
 
         assertThat(latch.await(1, TimeUnit.MINUTES)).isTrue();
+        assertThat(UDP_FRAMES.getAndSet(0)).isEqualTo(frames * threads);
+    }
+
+    @Order(9)
+    @Test
+    void markTcpBackendOffline() throws Exception {
+        HttpRequest httpRequest = HttpRequest.newBuilder()
+                .uri(URI.create("http://127.0.0.1:54321/v1/node/offline?id=" + tcpId + "&clusterHostname=default&nodeId=" + tcpNodeId))
+                .PUT(HttpRequest.BodyPublishers.noBody())
+                .header("Content-Type", "application/json")
+                .build();
+
+        HttpResponse<String> httpResponse = HttpClient.newHttpClient().send(httpRequest, HttpResponse.BodyHandlers.ofString());
+        assertThat(httpResponse.statusCode()).isEqualTo(200);
+
+        JsonObject responseJson = JsonParser.parseString(httpResponse.body()).getAsJsonObject();
+        System.out.println(responseJson);
+        assertTrue(responseJson.get("Success").getAsBoolean());
+
+        LoadBalancerContext property = CoreContext.get(tcpId);
+        assertEquals(State.MANUAL_OFFLINE, property.l4LoadBalancer().cluster("default").get(tcpNodeId).state());
+    }
+
+    @Order(10)
+    @Test
+    void sendTcpTrafficOnClosedBackend() throws Exception {
+        try (Socket socket = new Socket()) {
+            assertDoesNotThrow(() -> socket.connect(new InetSocketAddress("127.0.0.1", LoadBalancerTcpPort), 1000 * 10));
+            assertThat(socket.isConnected()).isTrue();
+
+            // Wait for 1 second for connection to be closed
+            Thread.sleep(1000);
+
+            assertThat(socket.getInputStream().read()).isEqualTo(-1);
+        }
     }
 }

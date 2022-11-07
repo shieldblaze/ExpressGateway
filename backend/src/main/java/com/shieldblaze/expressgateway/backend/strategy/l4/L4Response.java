@@ -26,6 +26,11 @@ import com.shieldblaze.expressgateway.backend.loadbalance.Response;
 public final class L4Response extends Response {
 
     /**
+     * {@link L4Response} with no node
+     */
+    public static final L4Response NO_NODE = new L4Response(null);
+
+    /**
      * Create a new {@link L4Response} Instance
      *
      * @param node Selected {@linkplain Node} for the request

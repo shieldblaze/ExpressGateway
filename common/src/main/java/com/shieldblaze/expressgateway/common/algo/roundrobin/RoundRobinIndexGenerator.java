@@ -45,7 +45,12 @@ public class RoundRobinIndexGenerator {
             nextIndex = currentIndex < Integer.MAX_VALUE ? currentIndex + 1 : 0;
         } while (!atomicInteger.compareAndSet(currentIndex, nextIndex));
 
-        return nextIndex % maxIndex.get();
+        int index = maxIndex.get();
+        if (index == 0) {
+            return -1;
+        }
+
+        return nextIndex % index;
     }
 
     public void incMaxIndex() {

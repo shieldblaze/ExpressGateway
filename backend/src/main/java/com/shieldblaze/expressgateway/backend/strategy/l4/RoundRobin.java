@@ -66,10 +66,11 @@ public final class RoundRobin extends L4Balance {
             }
         }
 
-        try {
-            node = cluster.nodes().get(roundRobinIndexGenerator.next());
-        } catch (Exception ex) {
-            throw new NoNodeAvailableException(ex);
+        int index = roundRobinIndexGenerator.next();
+        if (index >= 0) {
+            node = cluster.nodes().get(index);
+        } else {
+            return L4Response.NO_NODE;
         }
 
         sessionPersistence.addRoute(l4Request.socketAddress(), node);

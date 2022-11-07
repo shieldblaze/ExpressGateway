@@ -20,6 +20,7 @@ package com.shieldblaze.expressgateway.protocol.tcp;
 import com.shieldblaze.expressgateway.backend.Connection;
 import com.shieldblaze.expressgateway.backend.Node;
 import com.shieldblaze.expressgateway.backend.strategy.l4.L4Request;
+import com.shieldblaze.expressgateway.backend.strategy.l4.L4Response;
 import com.shieldblaze.expressgateway.core.handlers.ConnectionTimeoutHandler;
 import com.shieldblaze.expressgateway.core.loadbalancer.L4LoadBalancer;
 import io.netty.channel.ChannelHandlerContext;
@@ -44,12 +45,17 @@ final class UpstreamHandler extends ChannelInboundHandlerAdapter {
 
     @Override
     public void channelActive(ChannelHandlerContext ctx) throws Exception {
-        Node node;
         try {
-            node = l4LoadBalancer.defaultCluster()
-                    .nextNode(new L4Request((InetSocketAddress) ctx.channel().remoteAddress())).node();
-            tcpConnection = bootstrapper.newInit(node, ctx.channel());
-            node.addConnection(tcpConnection);
+            L4Response response = (L4Response) l4LoadBalancer.defaultCluster().nextNode(new L4Request((InetSocketAddress) ctx.channel().remoteAddress()));
+
+            // Close the connection since we have no node available to handle this request
+            if (response == L4Response.NO_NODE) {
+                ctx.channel().close();
+                return;
+            }
+
+            tcpConnection = bootstrapper.newInit(response.node(), ctx.channel());
+            response.node().addConnection(tcpConnection);
         } catch (Exception ex) {
             ctx.close();
             throw ex;
