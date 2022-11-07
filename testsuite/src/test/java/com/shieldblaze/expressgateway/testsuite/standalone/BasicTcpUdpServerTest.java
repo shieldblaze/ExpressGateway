@@ -60,11 +60,11 @@ public class BasicTcpUdpServerTest {
 
     private static final Random RANDOM = new Random();
 
-    private static int BackendTcpNodePort = AvailablePortUtil.getTcpPort();
-    private static int BackendUdpNodePort = AvailablePortUtil.getUdpPort();
+    private static final int BackendTcpNodePort = AvailablePortUtil.getTcpPort();
+    private static final int BackendUdpNodePort = AvailablePortUtil.getUdpPort();
 
-    private static int LoadBalancerTcpPort = AvailablePortUtil.getTcpPort();
-    private static int LoadBalancerUdpPort = AvailablePortUtil.getUdpPort();
+    private static final int LoadBalancerTcpPort = AvailablePortUtil.getTcpPort();
+    private static final int LoadBalancerUdpPort = AvailablePortUtil.getUdpPort();
 
     private static String tcpId;
     private static String udpId;
