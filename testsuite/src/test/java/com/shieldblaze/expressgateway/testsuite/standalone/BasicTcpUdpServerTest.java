@@ -20,6 +20,7 @@ package com.shieldblaze.expressgateway.testsuite.standalone;
 import com.google.gson.JsonObject;
 import com.google.gson.JsonParser;
 import com.shieldblaze.expressgateway.bootstrap.Bootstrap;
+import com.shieldblaze.expressgateway.common.utils.AvailablePortUtil;
 import io.netty.channel.socket.DatagramPacket;
 import org.junit.jupiter.api.AfterAll;
 import org.junit.jupiter.api.BeforeAll;
@@ -59,6 +60,12 @@ public class BasicTcpUdpServerTest {
 
     private static final Random RANDOM = new Random();
 
+    private static int BackendTcpNodePort = AvailablePortUtil.getTcpPort();
+    private static int BackendUdpNodePort = AvailablePortUtil.getUdpPort();
+
+    private static int LoadBalancerTcpPort = AvailablePortUtil.getTcpPort();
+    private static int LoadBalancerUdpPort = AvailablePortUtil.getUdpPort();
+
     private static String tcpId;
     private static String udpId;
     private static String tcpNodeId;
@@ -82,12 +89,12 @@ public class BasicTcpUdpServerTest {
         Bootstrap.main();
 
         tcpServer = TcpServer.create()
-                .port(55555)
+                .port(BackendTcpNodePort)
                 .handle((nettyInbound, nettyOutbound) -> nettyOutbound.send(nettyInbound.receive().retain()))
                 .bindNow();
 
         udpServer = UdpServer.create()
-                .port(55555)
+                .port(BackendUdpNodePort)
                 .handle((in, out) -> out.sendObject(in.receiveObject()
                         .map(o -> {
                             if (o instanceof DatagramPacket packet) {
@@ -119,7 +126,7 @@ public class BasicTcpUdpServerTest {
         JsonObject requestBody = new JsonObject();
         requestBody.addProperty("name", "MeowBalancer");
         requestBody.addProperty("bindAddress", "127.0.0.1");
-        requestBody.addProperty("bindPort", 12345);
+        requestBody.addProperty("bindPort", LoadBalancerTcpPort);
         requestBody.addProperty("protocol", "tcp");
 
         HttpRequest httpRequest = HttpRequest.newBuilder()
@@ -146,7 +153,7 @@ public class BasicTcpUdpServerTest {
         JsonObject requestBody = new JsonObject();
         requestBody.addProperty("name", "MeowBalancer");
         requestBody.addProperty("bindAddress", "127.0.0.1");
-        requestBody.addProperty("bindPort", 12345);
+        requestBody.addProperty("bindPort", LoadBalancerUdpPort);
         requestBody.addProperty("protocol", "udp");
 
         HttpRequest httpRequest = HttpRequest.newBuilder()
@@ -217,7 +224,7 @@ public class BasicTcpUdpServerTest {
     void createTcpBackendNode() throws Exception {
         JsonObject body = new JsonObject();
         body.addProperty("address", "127.0.0.1");
-        body.addProperty("port", 55555);
+        body.addProperty("port", BackendTcpNodePort);
 
         HttpRequest httpRequest = HttpRequest.newBuilder()
                 .uri(URI.create("http://127.0.0.1:54321/v1/node/create?id=" + tcpId + "&clusterHostname=default"))
@@ -240,7 +247,7 @@ public class BasicTcpUdpServerTest {
     void createUdpBackendNode() throws Exception {
         JsonObject body = new JsonObject();
         body.addProperty("address", "127.0.0.1");
-        body.addProperty("port", 55555);
+        body.addProperty("port", BackendUdpNodePort);
 
         HttpRequest httpRequest = HttpRequest.newBuilder()
                 .uri(URI.create("http://127.0.0.1:54321/v1/node/create?id=" + udpId + "&clusterHostname=default"))
@@ -268,7 +275,7 @@ public class BasicTcpUdpServerTest {
         for (int i = 0; i < threads; i++) {
 
             new Thread(() -> {
-                try (Socket socket = new Socket("127.0.0.1", 12345)) {
+                try (Socket socket = new Socket("127.0.0.1", LoadBalancerTcpPort)) {
                     InputStream inputStream = socket.getInputStream();
                     OutputStream outputStream = socket.getOutputStream();
 
@@ -297,7 +304,7 @@ public class BasicTcpUdpServerTest {
     void sendUdpTrafficInMultiplexingWay() throws Exception {
         final int threads = 10;
         final int dataSize = 128;
-        final InetSocketAddress address = new InetSocketAddress("127.0.0.1", 12345);
+        final InetSocketAddress address = new InetSocketAddress("127.0.0.1", LoadBalancerUdpPort);
         final CountDownLatch latch = new CountDownLatch(threads);
 
         for (int i = 0; i < threads; i++) {
