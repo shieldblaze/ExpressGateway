@@ -94,6 +94,7 @@ public class BasicTcpUdpServerTest {
                 .bindNow();
 
         udpServer = UdpServer.create()
+                .host("127.0.0.1")
                 .port(BackendUdpNodePort)
                 .handle((in, out) -> out.sendObject(in.receiveObject()
                         .map(o -> {

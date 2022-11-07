@@ -28,6 +28,13 @@
     <modelVersion>4.0.0</modelVersion>
 
     <artifactId>testsuite</artifactId>
+    <packaging>jar</packaging>
+
+    <name>ExpressGateway/Testsuite</name>
+
+    <properties>
+        <javaModuleName>com.shieldblaze.expressgateway.testsuite</javaModuleName>
+    </properties>
 
     <dependencies>
         <dependency>
