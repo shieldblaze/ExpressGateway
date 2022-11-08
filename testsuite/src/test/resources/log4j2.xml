@@ -8,7 +8,8 @@
     </Appenders>
 
     <Loggers>
-        <Root level="debug">
+        <!-- Don't use DEBUG because these tests generate huge traffic and standard output will be screwed -->
+        <Root level="info">
             <AppenderRef ref="ConsoleAppender"/>
         </Root>
     </Loggers>

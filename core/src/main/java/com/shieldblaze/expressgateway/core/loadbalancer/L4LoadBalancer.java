@@ -196,7 +196,7 @@ public abstract class L4LoadBalancer {
      */
     @NonNull
     public Cluster cluster(String hostname) {
-        logger.info("Looking up for Cluster with hostname: {}", hostname);
+        logger.debug("Looking up for Cluster with hostname: {}", hostname);
         try {
             Cluster cluster = clusterMap.get(hostname);
             if (cluster == null) {
