@@ -18,7 +18,6 @@
 package com.shieldblaze.expressgateway.servicediscovery.server;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
-import com.shieldblaze.expressgateway.common.ExpressGateway;
 import com.shieldblaze.expressgateway.common.crypto.cryptostore.CryptoEntry;
 import io.netty.handler.ssl.OpenSsl;
 import io.netty.handler.ssl.SslProvider;
