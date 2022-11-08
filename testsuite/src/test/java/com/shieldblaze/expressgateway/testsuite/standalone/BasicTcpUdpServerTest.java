@@ -86,17 +86,7 @@ public class BasicTcpUdpServerTest {
     private static final AtomicInteger UDP_FRAMES = new AtomicInteger();
 
     @BeforeAll
-    static void setup() throws Exception {
-        assertNull(getPropertyOrEnv("CONFIGURATION_DIRECTORY"));
-
-        ClassLoader classLoader = BasicTcpUdpServerTest.class.getClassLoader();
-        File file = new File(classLoader.getResource("").getFile());
-        String absolutePath = file.getAbsolutePath();
-
-        System.setProperty("CONFIGURATION_FILE_NAME", "BasicTcpUdpServerTest.json");
-        System.setProperty("CONFIGURATION_DIRECTORY", absolutePath);
-        assertNotNull(getPropertyOrEnv("CONFIGURATION_DIRECTORY"));
-
+    static void setup() {
         tcpServer = TcpServer.create()
                 .host("127.0.0.1")
                 .port(BackendTcpNodePort)
