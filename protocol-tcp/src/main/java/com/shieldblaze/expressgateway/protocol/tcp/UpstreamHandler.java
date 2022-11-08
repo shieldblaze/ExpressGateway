@@ -18,7 +18,6 @@
 package com.shieldblaze.expressgateway.protocol.tcp;
 
 import com.shieldblaze.expressgateway.backend.Connection;
-import com.shieldblaze.expressgateway.backend.Node;
 import com.shieldblaze.expressgateway.backend.strategy.l4.L4Request;
 import com.shieldblaze.expressgateway.backend.strategy.l4.L4Response;
 import com.shieldblaze.expressgateway.core.handlers.ConnectionTimeoutHandler;
