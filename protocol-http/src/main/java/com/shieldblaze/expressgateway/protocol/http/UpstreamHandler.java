@@ -26,6 +26,7 @@ import com.shieldblaze.expressgateway.protocol.http.loadbalancer.HTTPLoadBalance
 import com.shieldblaze.expressgateway.protocol.http.websocket.WebSocketUpgradeProperty;
 import com.shieldblaze.expressgateway.protocol.http.websocket.WebSocketUpstreamHandler;
 import io.netty.channel.ChannelDuplexHandler;
+import io.netty.channel.ChannelFuture;
 import io.netty.channel.ChannelFutureListener;
 import io.netty.channel.ChannelHandlerContext;
 import io.netty.channel.ChannelPromise;

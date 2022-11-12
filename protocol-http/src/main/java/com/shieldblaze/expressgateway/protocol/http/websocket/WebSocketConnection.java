@@ -21,6 +21,7 @@ import com.shieldblaze.expressgateway.backend.Connection;
 import com.shieldblaze.expressgateway.backend.Node;
 import com.shieldblaze.expressgateway.common.utils.ReferenceCountedUtil;
 import io.netty.channel.ChannelFuture;
+import io.netty.channel.ChannelPromise;
 import io.netty.handler.codec.http.websocketx.WebSocketClientHandshaker;
 
 /**
@@ -80,14 +81,17 @@ final class WebSocketConnection extends Connection {
     }
 
     @Override
-    public void writeAndFlush(Object o) {
+    public ChannelFuture writeAndFlush(Object o) {
         // If Connection State or WebSocket State is `Initiated`, add the data to backlog.
         if (state == State.INITIALIZED || webSocketState == WebSocketState.INITIATED) {
-            backlogQueue.add(o);
+            ChannelFuture ChannelFuture = channel.newPromise();
+            backlogQueue.add(new BacklogData(o, ChannelFuture));
+            return ChannelFuture;
         } else if (state == State.CONNECTED_AND_ACTIVE && webSocketState == WebSocketState.HANDSHAKE_SUCCESS) {
-            channel.writeAndFlush(o, channel.voidPromise());
+            return channel.writeAndFlush(o);
         } else {
             ReferenceCountedUtil.silentRelease(o);
+            return null;
         }
     }
 }

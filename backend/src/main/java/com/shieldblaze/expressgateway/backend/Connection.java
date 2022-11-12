@@ -21,6 +21,7 @@ import com.shieldblaze.expressgateway.common.annotation.NonNull;
 import com.shieldblaze.expressgateway.common.utils.ReferenceCountedUtil;
 import io.netty.channel.Channel;
 import io.netty.channel.ChannelFuture;
+import io.netty.channel.ChannelPromise;
 import io.netty.channel.ConnectTimeoutException;
 
 import java.net.InetSocketAddress;
@@ -62,7 +63,7 @@ public abstract class Connection {
     /**
      * Backlog Queue contains objects pending to be written once connection establishes.
      */
-    protected final ConcurrentLinkedQueue<Object> backlogQueue = new ConcurrentLinkedQueue<>();
+    protected final ConcurrentLinkedQueue<BacklogData> backlogQueue = new ConcurrentLinkedQueue<>();
 
     private final Node node;
     protected ChannelFuture channelFuture;
@@ -140,13 +141,16 @@ public abstract class Connection {
      * @param o Data to be written
      */
     @NonNull
-    public void writeAndFlush(Object o) {
+    public ChannelFuture writeAndFlush(Object o) {
         if (state == State.INITIALIZED) {
-            backlogQueue.add(o);
+            ChannelFuture ChannelFuture = channel.newPromise();
+            backlogQueue.add(new BacklogData(o, ChannelFuture));
+            return ChannelFuture;
         } else if (state == State.CONNECTED_AND_ACTIVE && channel != null) {
-            channel.writeAndFlush(o, channel.voidPromise());
+            return channel.writeAndFlush(o);
         } else {
             ReferenceCountedUtil.silentRelease(o);
+            return null;
         }
     }
 
@@ -197,5 +201,9 @@ public abstract class Connection {
     @Override
     public String toString() {
         return '{' + "node=" + node + ", socketAddress=" + socketAddress + ", state=" + state + '}';
+    }
+
+    public record BacklogData(Object o, ChannelFuture channelFuture) {
+        // Simple tuple record
     }
 }

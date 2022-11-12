@@ -63,6 +63,9 @@ public final class HttpConfiguration implements Configuration<HttpConfiguration>
     @JsonProperty
     private int brotliCompressionLevel;
 
+    @JsonProperty
+    private boolean useDedicatedConnection;
+
     @JsonIgnore
     private boolean validated;
 
@@ -81,6 +84,7 @@ public final class HttpConfiguration implements Configuration<HttpConfiguration>
         DEFAULT.compressionThreshold = 1024;
         DEFAULT.deflateCompressionLevel = 6;
         DEFAULT.brotliCompressionLevel = 4;
+        DEFAULT.useDedicatedConnection = true;
         DEFAULT.validated = true;
     }
 
@@ -275,6 +279,22 @@ public final class HttpConfiguration implements Configuration<HttpConfiguration>
     public int brotliCompressionLevel() {
         assertValidated();
         return brotliCompressionLevel;
+    }
+
+    /**
+     * Use Dedicated Connection
+     */
+    public HttpConfiguration setUseDedicatedConnection(boolean useDedicatedConnection) {
+        this.useDedicatedConnection = useDedicatedConnection;
+        return this;
+    }
+
+    /**
+     * Use Dedicated Connection
+     */
+    public boolean useDedicatedConnection() {
+        assertValidated();
+        return useDedicatedConnection;
     }
 
     /**
