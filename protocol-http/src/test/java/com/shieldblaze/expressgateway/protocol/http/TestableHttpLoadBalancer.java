@@ -31,7 +31,6 @@ import com.shieldblaze.expressgateway.core.events.L4FrontListenerStartupEvent;
 import com.shieldblaze.expressgateway.core.events.L4FrontListenerStopEvent;
 import com.shieldblaze.expressgateway.protocol.http.loadbalancer.HTTPLoadBalancer;
 import com.shieldblaze.expressgateway.protocol.http.loadbalancer.HTTPLoadBalancerBuilder;
-import com.shieldblaze.expressgateway.protocol.tcp.TCPListener;
 import io.netty.handler.ssl.util.InsecureTrustManagerFactory;
 
 import javax.net.ssl.SSLContext;
@@ -51,7 +50,6 @@ public final class TestableHttpLoadBalancer implements Closeable {
     private boolean tlsBackendEnabled;
     private HTTPLoadBalancer httpLoadBalancer;
     private HttpServer httpServer;
-    private static HttpClient httpClient;
 
     public void start() throws Exception {
         SelfSignedCertificate ssc = SelfSignedCertificate.generateNew(List.of("127.0.0.1"), List.of("localhost"));
@@ -82,8 +80,6 @@ public final class TestableHttpLoadBalancer implements Closeable {
         httpLoadBalancer = HTTPLoadBalancerBuilder.newBuilder()
                 .withConfigurationContext(ConfigurationContext.create(tlsClientConfiguration, tlsServerConfiguration))
                 .withBindAddress(new InetSocketAddress("localhost", 9110))
-                .withHTTPInitializer(new DefaultHTTPServerInitializer())
-                .withL4FrontListener(new TCPListener())
                 .build();
 
         httpLoadBalancer.mapCluster("localhost:9110", cluster);
@@ -99,6 +95,7 @@ public final class TestableHttpLoadBalancer implements Closeable {
     }
 
     public static HttpClient httpClient() {
+        HttpClient httpClient;
         try {
             SSLContext sslContext = SSLContext.getInstance("TLSv1.3");
             sslContext.init(null, InsecureTrustManagerFactory.INSTANCE.getTrustManagers(), new SecureRandom());

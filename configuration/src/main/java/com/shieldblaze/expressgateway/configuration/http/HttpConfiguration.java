@@ -22,13 +22,14 @@ import com.fasterxml.jackson.annotation.JsonProperty;
 import com.shieldblaze.expressgateway.common.utils.NumberUtil;
 import com.shieldblaze.expressgateway.configuration.Configuration;
 
+import static io.netty.handler.codec.http.HttpObjectDecoder.DEFAULT_MAX_CHUNK_SIZE;
+import static io.netty.handler.codec.http.HttpObjectDecoder.DEFAULT_MAX_HEADER_SIZE;
+import static io.netty.handler.codec.http.HttpObjectDecoder.DEFAULT_MAX_INITIAL_LINE_LENGTH;
+
 /**
  * Configuration for HTTP
  */
 public final class HttpConfiguration implements Configuration<HttpConfiguration> {
-
-    @JsonProperty
-    private long maxContentLength;
 
     @JsonProperty
     private int maxInitialLineLength;
@@ -38,21 +39,6 @@ public final class HttpConfiguration implements Configuration<HttpConfiguration>
 
     @JsonProperty
     private int maxChunkSize;
-
-    @JsonProperty
-    private int h2InitialWindowSize;
-
-    @JsonProperty
-    private long h2MaxConcurrentStreams;
-
-    @JsonProperty
-    private long h2MaxHeaderListSize;
-
-    @JsonProperty
-    private long h2MaxHeaderTableSize;
-
-    @JsonProperty
-    private int h2MaxFrameSize;
 
     @JsonProperty
     private int compressionThreshold;
@@ -69,15 +55,9 @@ public final class HttpConfiguration implements Configuration<HttpConfiguration>
     public static final HttpConfiguration DEFAULT = new HttpConfiguration();
 
     static {
-        DEFAULT.maxContentLength = 500000000;
-        DEFAULT.h2InitialWindowSize = 65535;
-        DEFAULT.h2MaxConcurrentStreams = 1000;
-        DEFAULT.h2MaxHeaderListSize = 262144;
-        DEFAULT.h2MaxHeaderTableSize = 65536;
-        DEFAULT.h2MaxFrameSize = 16777215;
-        DEFAULT.maxInitialLineLength = 1024 * 8;
-        DEFAULT.maxHeaderSize = 1024 * 8;
-        DEFAULT.maxChunkSize = 1024 * 8;
+        DEFAULT.maxInitialLineLength = DEFAULT_MAX_INITIAL_LINE_LENGTH;
+        DEFAULT.maxHeaderSize = DEFAULT_MAX_HEADER_SIZE;
+        DEFAULT.maxChunkSize = DEFAULT_MAX_CHUNK_SIZE;
         DEFAULT.compressionThreshold = 1024;
         DEFAULT.deflateCompressionLevel = 6;
         DEFAULT.brotliCompressionLevel = 4;
@@ -86,22 +66,6 @@ public final class HttpConfiguration implements Configuration<HttpConfiguration>
 
     HttpConfiguration() {
         // Prevent outside initialization
-    }
-
-    /**
-     * Max Content Length
-     */
-    public HttpConfiguration setMaxContentLength(long maxContentLength) {
-        this.maxContentLength = maxContentLength;
-        return this;
-    }
-
-    /**
-     * Max Content Length
-     */
-    public long maxContentLength() {
-        assertValidated();
-        return maxContentLength;
     }
 
     /**
@@ -150,86 +114,6 @@ public final class HttpConfiguration implements Configuration<HttpConfiguration>
     public int maxChunkSize() {
         assertValidated();
         return maxChunkSize;
-    }
-
-    /**
-     * HTTP/2 Initial Window Size
-     */
-    public HttpConfiguration setH2InitialWindowSize(int h2InitialWindowSize) {
-        this.h2InitialWindowSize = h2InitialWindowSize;
-        return this;
-    }
-
-    /**
-     * HTTP/2 Initial Window Size
-     */
-    public int h2InitialWindowSize() {
-        assertValidated();
-        return h2InitialWindowSize;
-    }
-
-    /**
-     * HTTP/2 Max Concurrent Streams
-     */
-    public HttpConfiguration setH2MaxConcurrentStreams(long h2MaxConcurrentStreams) {
-        this.h2MaxConcurrentStreams = h2MaxConcurrentStreams;
-        return this;
-    }
-
-    /**
-     * HTTP/2 Max Concurrent Streams
-     */
-    public long h2MaxConcurrentStreams() {
-        assertValidated();
-        return h2MaxConcurrentStreams;
-    }
-
-    /**
-     * HTTP/2 Max Header List Size
-     */
-    public HttpConfiguration setH2MaxHeaderListSize(long h2MaxHeaderSizeList) {
-        this.h2MaxHeaderListSize = h2MaxHeaderSizeList;
-        return this;
-    }
-
-    /**
-     * HTTP/2 Max Header List Size
-     */
-    public long h2MaxHeaderListSize() {
-        assertValidated();
-        return h2MaxHeaderListSize;
-    }
-
-    /**
-     * HTTP/2 Max Header Table Size
-     */
-    public HttpConfiguration setH2MaxHeaderTableSize(long h2MaxHeaderTableSize) {
-        this.h2MaxHeaderTableSize = h2MaxHeaderTableSize;
-        return this;
-    }
-
-    /**
-     * HTTP/2 Max Header Table Size
-     */
-    public long h2MaxHeaderTableSize() {
-        assertValidated();
-        return h2MaxHeaderTableSize;
-    }
-
-    /**
-     * HTTP/2 Max Frame Size
-     */
-    public HttpConfiguration setH2MaxFrameSize(int h2MaxFrameSize) {
-        this.h2MaxFrameSize = h2MaxFrameSize;
-        return this;
-    }
-
-    /**
-     * HTTP/2 Max Frame Size
-     */
-    public int h2MaxFrameSize() {
-        assertValidated();
-        return h2MaxFrameSize;
     }
 
     /**
@@ -284,18 +168,12 @@ public final class HttpConfiguration implements Configuration<HttpConfiguration>
      * @throws IllegalArgumentException If any value is invalid
      */
     public HttpConfiguration validate() throws IllegalArgumentException {
-        NumberUtil.checkPositive(maxContentLength, "maxContentLength");
-        NumberUtil.checkPositive(h2InitialWindowSize, "h2InitialWindowSize");
-        NumberUtil.checkPositive(h2MaxConcurrentStreams, "h2MaxConcurrentStreams");
-        NumberUtil.checkPositive(h2MaxHeaderListSize, "h2MaxHeaderListSize");
-        NumberUtil.checkPositive(h2MaxHeaderTableSize, "h2MaxHeaderTableSize");
-        NumberUtil.checkPositive(h2MaxFrameSize, "h2MaxFrameSize");
-        NumberUtil.checkPositive(maxInitialLineLength, "maxInitialLineLength");
-        NumberUtil.checkPositive(maxHeaderSize, "maxHeaderSize");
-        NumberUtil.checkPositive(maxChunkSize, "maxChunkSize");
-        NumberUtil.checkZeroOrPositive(compressionThreshold, "compressionThreshold");
-        NumberUtil.checkInRange(deflateCompressionLevel, 0, 9, "deflateCompressionLevel");
-        NumberUtil.checkInRange(brotliCompressionLevel, 1, 11, "brotliCompressionLevel");
+        NumberUtil.checkPositive(maxInitialLineLength, "MaxInitialLineLength");
+        NumberUtil.checkPositive(maxHeaderSize, "MaxHeaderSize");
+        NumberUtil.checkPositive(maxChunkSize, "MaxChunkSize");
+        NumberUtil.checkZeroOrPositive(compressionThreshold, "CompressionThreshold");
+        NumberUtil.checkInRange(deflateCompressionLevel, 0, 9, "DeflateCompressionLevel");
+        NumberUtil.checkInRange(brotliCompressionLevel, 1, 11, "BrotliCompressionLevel");
         validated = true;
         return this;
     }

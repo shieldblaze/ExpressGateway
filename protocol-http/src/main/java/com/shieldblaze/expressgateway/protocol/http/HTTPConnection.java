@@ -19,28 +19,58 @@ package com.shieldblaze.expressgateway.protocol.http;
 
 import com.shieldblaze.expressgateway.backend.Connection;
 import com.shieldblaze.expressgateway.backend.Node;
+import com.shieldblaze.expressgateway.common.annotation.NonNull;
+import com.shieldblaze.expressgateway.configuration.http.HttpConfiguration;
 import com.shieldblaze.expressgateway.protocol.http.alpn.ALPNHandler;
-import io.netty.channel.Channel;
+import io.netty.buffer.Unpooled;
 import io.netty.channel.ChannelFuture;
+import io.netty.channel.ChannelFutureListener;
+import io.netty.handler.codec.UnsupportedMessageTypeException;
+import io.netty.handler.codec.http.DefaultHttpContent;
+import io.netty.handler.codec.http.DefaultLastHttpContent;
+import io.netty.handler.codec.http.FullHttpRequest;
+import io.netty.handler.codec.http.HttpContent;
+import io.netty.handler.codec.http.HttpHeaders;
+import io.netty.handler.codec.http.HttpRequest;
+import io.netty.handler.codec.http.LastHttpContent;
+import io.netty.handler.codec.http.websocketx.WebSocketFrame;
+import io.netty.handler.codec.http2.DefaultHttp2DataFrame;
+import io.netty.handler.codec.http2.DefaultHttp2HeadersFrame;
+import io.netty.handler.codec.http2.Http2ChannelDuplexHandler;
+import io.netty.handler.codec.http2.Http2DataFrame;
+import io.netty.handler.codec.http2.Http2Exception;
+import io.netty.handler.codec.http2.Http2FrameStream;
+import io.netty.handler.codec.http2.Http2GoAwayFrame;
+import io.netty.handler.codec.http2.Http2Headers;
+import io.netty.handler.codec.http2.Http2HeadersFrame;
+import io.netty.handler.codec.http2.Http2PingFrame;
+import io.netty.handler.codec.http2.Http2ResetFrame;
+import io.netty.handler.codec.http2.Http2SettingsAckFrame;
+import io.netty.handler.codec.http2.Http2SettingsFrame;
+import io.netty.handler.codec.http2.Http2StreamFrame;
+import io.netty.handler.codec.http2.Http2WindowUpdateFrame;
+import io.netty.handler.codec.http2.HttpConversionUtil;
 import io.netty.handler.ssl.ApplicationProtocolNames;
-import it.unimi.dsi.fastutil.longs.LongArrayList;
-import it.unimi.dsi.fastutil.longs.LongList;
+import io.netty.handler.ssl.SslHandler;
+import io.netty.util.ReferenceCountUtil;
 
-import java.util.concurrent.atomic.AtomicInteger;
+import static io.netty.handler.codec.http.HttpHeaderNames.ACCEPT_ENCODING;
 
-final class HTTPConnection extends Connection {
+final class HttpConnection extends Connection {
 
-    private final AtomicInteger totalRequests = new AtomicInteger();
-    private final LongList outstandingRequests = new LongArrayList();
+    private final StreamPropertyMap MAP = new StreamPropertyMap();
+    final HttpConfiguration httpConfiguration;
+    private StreamPropertyMap.StreamProperty lastTranslatedStreamProperty;
 
     /**
      * Set to {@code true} if this connection is established on top of HTTP/2 (h2)
      */
-    private boolean isHTTP2;
-    private DownstreamHandler downstreamHandler;
+    private boolean isConnectionHttp2;
 
-    HTTPConnection(Node node) {
+    @NonNull
+    HttpConnection(Node node, HttpConfiguration httpConfiguration) {
         super(node);
+        this.httpConfiguration = httpConfiguration;
     }
 
     @Override
@@ -56,16 +86,14 @@ final class HTTPConnection extends Connection {
 
                     // If throwable is 'null' then task is completed successfully without any error.
                     if (throwable == null) {
-
                         if (protocol.equalsIgnoreCase(ApplicationProtocolNames.HTTP_2)) {
-                            isHTTP2 = true;
+                            isConnectionHttp2 = true;
                         }
-
                         writeBacklog();
                     } else {
                         clearBacklog();
                     }
-                }, channelFuture.channel().eventLoop());
+                }, channel.eventLoop());
             } else {
                 writeBacklog();
             }
@@ -74,40 +102,234 @@ final class HTTPConnection extends Connection {
         }
     }
 
-    boolean isHTTP2() {
-        return isHTTP2;
+    @Override
+    protected void writeBacklog() {
+        for (Object o : backlogQueue) {
+            try {
+                writeIntoChannel(o);
+            } catch (Exception ex) {
+                throw new IllegalStateException(ex);
+            }
+        }
+        backlogQueue.clear(); // Clear the new queue because we're done with it.
     }
 
-    void downstreamHandler(DownstreamHandler downstreamHandler) {
-        this.downstreamHandler = downstreamHandler;
+    @NonNull
+    @Override
+    public void writeAndFlush(Object o) {
+        if (state == State.INITIALIZED) {
+            backlogQueue.add(o);
+        } else if (state == State.CONNECTED_AND_ACTIVE && channel != null) {
+            try {
+                writeIntoChannel(o);
+            } catch (Exception ex) {
+                throw new IllegalStateException(ex);
+            }
+        } else {
+            ReferenceCountUtil.release(o);
+        }
     }
 
-    void upstreamChannel(Channel channel) {
-        downstreamHandler.channel(channel);
+    private void writeIntoChannel(Object o) throws Http2Exception {
+        // If connection protocol is HTTP/2 and request is HTTP/1.1 then convert the request to HTTP/2.
+        //
+        // If connection protocol is HTTP/2 and request is HTTP/2 then proxy it.
+        if (o instanceof HttpRequest || o instanceof HttpContent) {
+            if (isConnectionHttp2) {
+                proxyOutboundHttp11ToHttp2(o);
+            } else {
+
+                // Apply compression
+                if (o instanceof HttpRequest httpRequest) {
+                    applySupportedCompressionHeaders(httpRequest.headers());
+                }
+
+                // Proxy HTTP/1.1 requests without any modification
+                channel.writeAndFlush(o);
+            }
+        } else if (o instanceof Http2HeadersFrame || o instanceof Http2DataFrame) {
+            if (isConnectionHttp2) {
+                proxyOutboundHttp2ToHttp2((Http2StreamFrame) o);
+            } else {
+                proxyOutboundHttp2ToHttp11(o);
+            }
+        } else if (o instanceof Http2SettingsFrame || o instanceof Http2PingFrame || o instanceof Http2SettingsAckFrame) {
+            channel.writeAndFlush(o);
+        } else if (o instanceof Http2GoAwayFrame goAwayFrame) {
+            if (isConnectionHttp2) {
+                channel.writeAndFlush(goAwayFrame).addListener(ChannelFutureListener.CLOSE);
+            }
+        } else if (o instanceof Http2WindowUpdateFrame windowUpdateFrame) {
+            if (isConnectionHttp2) {
+                StreamPropertyMap.StreamProperty streamProperty = MAP.getProxyFromClientID(windowUpdateFrame.stream().id());
+                windowUpdateFrame.stream(streamProperty.proxyFrameStream());
+
+                channel.writeAndFlush(windowUpdateFrame);
+            }
+        } else if (o instanceof Http2ResetFrame http2ResetFrame) {
+            if (isConnectionHttp2) {
+                Http2FrameStream normalFrameStream = http2ResetFrame.stream();
+
+                StreamPropertyMap.StreamProperty streamProperty = MAP.getProxyFromClientID(http2ResetFrame.stream().id());
+                http2ResetFrame.stream(streamProperty.proxyFrameStream());
+                channel.writeAndFlush(http2ResetFrame);
+
+                MAP.remove(streamProperty.proxyFrameStream().id(), normalFrameStream.id());
+            }
+        } else if (o instanceof WebSocketFrame) {
+            channel.writeAndFlush(o);
+        } else {
+            ReferenceCountUtil.release(o);
+            throw new UnsupportedMessageTypeException(o);
+        }
     }
 
-    void addOutstandingRequest(long id) {
-        outstandingRequests.add(id);
+    private void proxyOutboundHttp2ToHttp11(Object o) throws Http2Exception {
+        if (o instanceof Http2HeadersFrame headersFrame) {
+            // Apply compression
+            applySupportedCompressionHeaders(headersFrame.headers());
+
+            if (headersFrame.isEndStream()) {
+                FullHttpRequest fullHttpRequest = HttpConversionUtil.toFullHttpRequest(-1, headersFrame.headers(), Unpooled.EMPTY_BUFFER, true);
+                channel.writeAndFlush(fullHttpRequest);
+
+                clearTranslatedStreamProperty();
+            } else {
+                HttpRequest httpRequest = HttpConversionUtil.toHttpRequest(-1, headersFrame.headers(), true);
+                channel.writeAndFlush(httpRequest);
+
+                lastTranslatedStreamProperty = new StreamPropertyMap.StreamProperty(httpRequest.headers().get(ACCEPT_ENCODING),
+                        headersFrame.stream(), headersFrame.stream());
+            }
+        } else if (o instanceof Http2DataFrame dataFrame) {
+            lastTranslatedStreamProperty = new StreamPropertyMap.StreamProperty(null, dataFrame.stream(), dataFrame.stream());
+
+            if (dataFrame.isEndStream()) {
+                LastHttpContent lastHttpContent = new DefaultLastHttpContent(dataFrame.content());
+                channel.writeAndFlush(lastHttpContent);
+            } else {
+                HttpContent httpContent = new DefaultHttpContent(dataFrame.content());
+                channel.writeAndFlush(httpContent);
+            }
+        } else {
+            ReferenceCountUtil.release(o);
+            throw new UnsupportedMessageTypeException(o);
+        }
     }
 
-    boolean isRequestOutstanding(long id) {
-        return outstandingRequests.contains(id);
+    /**
+     * Proxy {@link Http2HeadersFrame} and {@link Http2DataFrame}
+     */
+    private void proxyOutboundHttp2ToHttp2(Http2StreamFrame streamFrame) {
+        if (streamFrame instanceof Http2HeadersFrame headersFrame) {
+            // Apply compression
+            CharSequence clientAcceptEncoding = headersFrame.headers().get(ACCEPT_ENCODING);
+            applySupportedCompressionHeaders(headersFrame.headers());
+
+            Http2FrameStream clientFrameStream = headersFrame.stream();
+            Http2FrameStream proxyFrameStream = newFrameStream();
+            headersFrame.stream(proxyFrameStream);
+            channel.writeAndFlush(headersFrame);
+
+            MAP.put(proxyFrameStream.id(), clientFrameStream.id(),
+                    new StreamPropertyMap.StreamProperty(String.valueOf(clientAcceptEncoding), clientFrameStream, proxyFrameStream));
+        } else if (streamFrame instanceof Http2DataFrame dataFrame) {
+            Http2FrameStream oldFrameStream = dataFrame.stream();
+            dataFrame.stream(MAP.getProxyFromClientID(oldFrameStream.id()).proxyFrameStream());
+
+            channel.writeAndFlush(dataFrame);
+        }
     }
 
-    void finishedOutstandingRequest(long id) {
-        outstandingRequests.rem(id);
+    /**
+     * Proxy {@link HttpRequest} and {@link HttpContent}
+     */
+    private void proxyOutboundHttp11ToHttp2(Object o) {
+        if (o instanceof HttpRequest httpRequest) {
+            String clientAcceptEncoding = httpRequest.headers().get(ACCEPT_ENCODING);
+            boolean isTLSConnection = channel.pipeline().get(SslHandler.class) != null;
+            Http2Headers http2Headers = HttpConversionUtil.toHttp2Headers(httpRequest, true);
+            http2Headers.scheme(isTLSConnection ? "https" : "http");
+            Http2FrameStream frameStream = newFrameStream();
+
+            // Apply compression
+            applySupportedCompressionHeaders(http2Headers);
+
+            if (httpRequest instanceof FullHttpRequest fullHttpRequest) {
+                Http2HeadersFrame headersFrame = new DefaultHttp2HeadersFrame(http2Headers, false);
+                headersFrame.stream(frameStream);
+
+                Http2DataFrame dataFrame = new DefaultHttp2DataFrame(fullHttpRequest.content(), true);
+                dataFrame.stream(frameStream);
+
+                channel.write(headersFrame);
+                channel.writeAndFlush(dataFrame);
+            } else {
+                Http2HeadersFrame http2HeadersFrame = new DefaultHttp2HeadersFrame(http2Headers, false);
+                http2HeadersFrame.stream(frameStream);
+                channel.writeAndFlush(http2HeadersFrame);
+
+                // There are HttpContent in queue to process, so we will store this FrameStream for further use.
+                lastTranslatedStreamProperty = new StreamPropertyMap.StreamProperty(clientAcceptEncoding, frameStream, frameStream);
+            }
+        } else if (o instanceof HttpContent httpContent) {
+            if (httpContent instanceof LastHttpContent lastHttpContent) {
+
+                // > If Trailing Headers are empty then we'll write HTTP/2 Data Frame with 'endOfStream' set to 'true.
+                // > If Trailing Headers are present then we'll write HTTP/2 Data Frame followed by HTTP/2 Header Frame which will have 'endOfStream' set to 'true.
+                if (lastHttpContent.trailingHeaders().isEmpty()) {
+                    Http2DataFrame dataFrame = new DefaultHttp2DataFrame(httpContent.content(), true);
+                    dataFrame.stream(lastTranslatedStreamProperty.proxyFrameStream());
+                    clearTranslatedStreamProperty();
+
+                    channel.writeAndFlush(dataFrame);
+                } else {
+                    Http2DataFrame dataFrame = new DefaultHttp2DataFrame(httpContent.content(), false);
+                    dataFrame.stream(lastTranslatedStreamProperty.proxyFrameStream());
+
+                    Http2Headers http2Headers = HttpConversionUtil.toHttp2Headers(lastHttpContent.trailingHeaders(), true);
+                    Http2HeadersFrame headersFrame = new DefaultHttp2HeadersFrame(http2Headers, true);
+                    headersFrame.stream(lastTranslatedStreamProperty.proxyFrameStream());
+                    clearTranslatedStreamProperty();
+
+                    channel.write(headersFrame);
+                    channel.writeAndFlush(dataFrame);
+                }
+            } else {
+                Http2DataFrame dataFrame = new DefaultHttp2DataFrame(httpContent.content(), false);
+                dataFrame.stream(lastTranslatedStreamProperty.proxyFrameStream());
+                channel.writeAndFlush(dataFrame);
+            }
+        }
     }
 
-    void incrementTotalRequests() {
-        totalRequests.incrementAndGet();
+    private void applySupportedCompressionHeaders(Object o) {
+        // Set supported compression headers
+        if (o instanceof HttpHeaders headers) {
+            headers.set(ACCEPT_ENCODING, "br, gzip, deflate");
+        } else if (o instanceof Http2Headers headers) {
+            headers.set(ACCEPT_ENCODING, "br, gzip, deflate");
+        }
     }
 
-    boolean hasReachedMaximumCapacity() {
-        return totalRequests.get() > 1073741823; // ((Integer.MAX_VALUE - 1) / 2)
+    private Http2FrameStream newFrameStream() {
+        return channel.pipeline().get(Http2ChannelDuplexHandler.class).newStream();
+    }
+
+    public StreamPropertyMap.StreamProperty lastTranslatedStreamProperty() {
+        return lastTranslatedStreamProperty;
+    }
+
+    public void clearTranslatedStreamProperty() {
+        lastTranslatedStreamProperty = null;
+    }
+
+    public StreamPropertyMap streamPropertyMap() {
+        return MAP;
     }
 
     @Override
     public String toString() {
-        return "HTTPConnection{" + "isHTTP2=" + isHTTP2 + ", Connection=" + super.toString() + '}';
+        return "HTTPConnection{" + "isConnectionHttp2=" + isConnectionHttp2 + ", Connection=" + super.toString() + '}';
     }
 }

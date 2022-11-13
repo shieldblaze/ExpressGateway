@@ -47,17 +47,35 @@ public final class StickySession implements SessionPersistence<HTTPBalanceRespon
     }
 
     public HTTPBalanceResponse getBackend(HTTPBalanceRequest httpBalanceRequest) {
-        if (httpBalanceRequest.httpHeaders().contains(HttpHeaderNames.COOKIE)) {
-            List<String> cookies = httpBalanceRequest.httpHeaders().getAllAsString(HttpHeaderNames.COOKIE);
-            for (String cookieAsString : cookies) {
-                Cookie cookie = ClientCookieDecoder.STRICT.decode(cookieAsString);
-                if (cookie.name().equalsIgnoreCase(COOKIE_NAME)) {
-                    try {
-                        String value = cookie.value();
-                        int index = Collections.binarySearch(nodes, value, StickySessionSearchComparator.INSTANCE);
-                        return new HTTPBalanceResponse(nodes.get(index), EmptyHttpHeaders.INSTANCE);
-                    } catch (Exception ex) {
-                        break;
+        if (httpBalanceRequest.http2Headers() != null) {
+            if (httpBalanceRequest.http2Headers().contains(HttpHeaderNames.COOKIE)) {
+                List<CharSequence> cookies = httpBalanceRequest.http2Headers().getAll(HttpHeaderNames.COOKIE);
+                for (CharSequence cookieAsString : cookies) {
+                    Cookie cookie = ClientCookieDecoder.STRICT.decode(cookieAsString.toString());
+                    if (cookie.name().equalsIgnoreCase(COOKIE_NAME)) {
+                        try {
+                            String value = cookie.value();
+                            int index = Collections.binarySearch(nodes, value, StickySessionSearchComparator.INSTANCE);
+                            return new HTTPBalanceResponse(nodes.get(index), EmptyHttpHeaders.INSTANCE);
+                        } catch (Exception ex) {
+                            break;
+                        }
+                    }
+                }
+            }
+        } else if (httpBalanceRequest.httpHeaders() != null) {
+            if (httpBalanceRequest.httpHeaders().contains(HttpHeaderNames.COOKIE)) {
+                List<String> cookies = httpBalanceRequest.httpHeaders().getAllAsString(HttpHeaderNames.COOKIE);
+                for (String cookieAsString : cookies) {
+                    Cookie cookie = ClientCookieDecoder.STRICT.decode(cookieAsString);
+                    if (cookie.name().equalsIgnoreCase(COOKIE_NAME)) {
+                        try {
+                            String value = cookie.value();
+                            int index = Collections.binarySearch(nodes, value, StickySessionSearchComparator.INSTANCE);
+                            return new HTTPBalanceResponse(nodes.get(index), EmptyHttpHeaders.INSTANCE);
+                        } catch (Exception ex) {
+                            break;
+                        }
                     }
                 }
             }

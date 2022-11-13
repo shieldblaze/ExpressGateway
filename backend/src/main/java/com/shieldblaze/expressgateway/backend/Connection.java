@@ -72,6 +72,7 @@ public abstract class Connection {
 
     /**
      * Create a new {@link Connection} Instance
+     *
      * @param node {@link Node} associated with this Connection
      */
     @NonNull
@@ -144,18 +145,10 @@ public abstract class Connection {
         if (state == State.INITIALIZED) {
             backlogQueue.add(o);
         } else if (state == State.CONNECTED_AND_ACTIVE && channel != null) {
-            channel.writeAndFlush(o, channel.voidPromise());
+            channel.writeAndFlush(o);
         } else {
             ReferenceCountedUtil.silentRelease(o);
         }
-    }
-
-    /**
-     * Release this {@linkplain Connection} back to connection pool.
-     */
-    public Connection release() {
-        node.release0(this);
-        return this;
     }
 
     /**
@@ -181,17 +174,13 @@ public abstract class Connection {
      * Close this {@link Connection}
      */
     public void close() {
-        // If Backlog Queue contains something
-        // then clear it before closing connection.
+        // If Backlog Queue contains something then clear it before closing connection.
         if (!backlogQueue.isEmpty()) {
             clearBacklog();
         }
 
-        // If Connection is Connected and Active
-        // then Close the connection.
-        if (state == State.CONNECTED_AND_ACTIVE) {
-            channelFuture.channel().close();
-        }
+        node.removeConnection(this);
+        channel.close();
     }
 
     @Override

@@ -120,7 +120,8 @@ public class BasicHttpServerTest {
         NodeBuilder.newBuilder()
                 .withCluster(httpLoadBalancer.defaultCluster())
                 .withSocketAddress(new InetSocketAddress("127.0.0.1", BackendTcpNodePort))
-                .build();
+                .build()
+                .maxConnections(1_000_000);
     }
 
     @Order(4)
@@ -237,7 +238,7 @@ public class BasicHttpServerTest {
             }).start();
         }
 
-        assertThat(latch.await(1, TimeUnit.MINUTES)).isTrue();
+        assertThat(latch.await(5, TimeUnit.MINUTES)).isTrue();
         assertThat(GET_REQUESTS.getAndSet(0)).isEqualTo(frames * threads);
         assertThat(POST_REQUESTS.getAndSet(0)).isEqualTo(frames * threads);
         assertThat(WEBSOCKET_FRAMES.getAndSet(0)).isEqualTo(frames * threads);

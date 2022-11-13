@@ -136,12 +136,6 @@ class HttpTest {
             assertTrue(responseJson.get("Success").getAsBoolean());
             JsonObject bufferObject = responseJson.get("Result").getAsJsonObject().get("HttpConfiguration").getAsJsonObject();
 
-            assertEquals(httpDefault.maxContentLength(), bufferObject.get("maxContentLength").getAsInt());
-            assertEquals(httpDefault.h2InitialWindowSize(), bufferObject.get("h2InitialWindowSize").getAsInt());
-            assertEquals(httpDefault.h2MaxConcurrentStreams(), bufferObject.get("h2MaxConcurrentStreams").getAsLong());
-            assertEquals(httpDefault.h2MaxHeaderListSize(), bufferObject.get("h2MaxHeaderListSize").getAsLong());
-            assertEquals(httpDefault.h2MaxHeaderTableSize(), bufferObject.get("h2MaxHeaderTableSize").getAsLong());
-            assertEquals(httpDefault.h2MaxFrameSize(), bufferObject.get("h2MaxFrameSize").getAsInt());
             assertEquals(httpDefault.maxInitialLineLength(), bufferObject.get("maxInitialLineLength").getAsInt());
             assertEquals(httpDefault.maxHeaderSize(), bufferObject.get("maxHeaderSize").getAsInt());
             assertEquals(httpDefault.maxChunkSize(), bufferObject.get("maxChunkSize").getAsInt());

@@ -17,11 +17,14 @@
  */
 package com.shieldblaze.expressgateway.protocol.http.loadbalancer;
 
+import com.aayushatharva.brotli4j.encoder.Encoder;
 import com.shieldblaze.expressgateway.configuration.ConfigurationContext;
 import com.shieldblaze.expressgateway.configuration.http.HttpConfiguration;
 import com.shieldblaze.expressgateway.core.L4FrontListener;
 import com.shieldblaze.expressgateway.core.loadbalancer.L4LoadBalancer;
-import com.shieldblaze.expressgateway.protocol.http.HTTPServerInitializer;
+import com.shieldblaze.expressgateway.protocol.http.HttpServerInitializer;
+import io.netty.handler.codec.compression.CompressionOptions;
+import io.netty.handler.codec.compression.StandardCompressionOptions;
 
 import java.net.InetSocketAddress;
 
@@ -30,10 +33,16 @@ import java.net.InetSocketAddress;
  */
 public class HTTPLoadBalancer extends L4LoadBalancer {
 
+    private final CompressionOptions[] compressionOptions = new CompressionOptions[3];
+
     HTTPLoadBalancer(String name, InetSocketAddress bindAddress, L4FrontListener l4FrontListener,
-                     ConfigurationContext configurationContext, HTTPServerInitializer httpServerInitializer) {
+                     ConfigurationContext configurationContext, HttpServerInitializer httpServerInitializer) {
         super(name, bindAddress, l4FrontListener, configurationContext, httpServerInitializer);
         httpServerInitializer.httpLoadBalancer(this);
+
+        compressionOptions[0] = StandardCompressionOptions.brotli(new Encoder.Parameters().setQuality(httpConfiguration().brotliCompressionLevel()));
+        compressionOptions[1] = StandardCompressionOptions.gzip(httpConfiguration().deflateCompressionLevel(), 15, 8);
+        compressionOptions[2] = StandardCompressionOptions.deflate(httpConfiguration().deflateCompressionLevel(), 15, 8);
     }
 
     /**
@@ -41,6 +50,10 @@ public class HTTPLoadBalancer extends L4LoadBalancer {
      */
     public HttpConfiguration httpConfiguration() {
         return configurationContext().httpConfiguration();
+    }
+
+    public CompressionOptions[] compressionOptions() {
+        return compressionOptions;
     }
 
     @Override

@@ -23,8 +23,8 @@ jobs:
       - name: Grant Permission
         run: sudo chmod +x ./mvnw
       - name: Install
-        run: ./mvnw -T 4C -B -ntp install -DskipTests
+        run: ./mvnw -T 4C -B -ntp clean install -DskipTests
       - name: Run Tests
-        run: ./mvnw -B -ntp test
+        run: ./mvnw -B -ntp clean test
       - name: Upload Code Coverage
         run: bash <(curl -s https://codecov.io/bash)

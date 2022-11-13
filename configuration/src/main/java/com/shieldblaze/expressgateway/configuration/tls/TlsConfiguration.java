@@ -111,7 +111,10 @@ public abstract class TlsConfiguration implements Configuration<TlsConfiguration
      * @throws NullPointerException If Mapping is not found for a Hostname
      */
     public CertificateKeyPair mapping(String fqdn) {
-        String _fqdn = fqdn;
+        if (fqdn == null || fqdn.isEmpty()) {
+            return defaultMapping();
+        }
+
         try {
             CertificateKeyPair certificateKeyPair = certificateKeyPairMap.get(fqdn);
 
@@ -122,15 +125,17 @@ public abstract class TlsConfiguration implements Configuration<TlsConfiguration
                 certificateKeyPair = certificateKeyPairMap.get(fqdn);
                 if (certificateKeyPair != null) {
                     return certificateKeyPair;
+                } else {
+                    return defaultMapping();
                 }
             } else {
                 return certificateKeyPair;
             }
         } catch (Exception ex) {
-            // Ignore
+            ex.printStackTrace();
         }
 
-        throw new NullPointerException("Mapping not found for Hostname: " + _fqdn);
+        throw new NullPointerException("Mapping not found for Hostname: " + fqdn);
     }
 
     /**

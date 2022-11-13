@@ -167,6 +167,7 @@ final class HttpServer extends Thread {
         });
     }
 
+    @ChannelHandler.Sharable
     private static final class Handler extends SimpleChannelInboundHandler<FullHttpRequest> {
 
         @Override
