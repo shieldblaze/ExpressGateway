@@ -162,7 +162,7 @@ public class WebsiteProxyTest {
                 }
                 logger.info("Domain: {}; Successful", domain);
             } catch (Exception ex) {
-                logger.error(ex.getMessage());
+                logger.error("Failed Domain Proxy: {}, Reason: {}", domain, ex.getMessage());
                 throw ex;
             } finally {
                 ConnectionPool connectionPool = OK_HTTP_CLIENT.connectionPool();
