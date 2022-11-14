@@ -40,7 +40,9 @@ import okhttp3.Response;
 import okhttp3.ResponseBody;
 import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
+import org.junit.jupiter.api.AfterAll;
 import org.junit.jupiter.api.AfterEach;
+import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 
@@ -59,13 +61,12 @@ public class WebsiteProxyTest {
     private static final List<String> WEBSITES = List.of(
             "www.facebook.com",
             "www.amazon.com",
-            "www.google.com",
             "aws.amazon.com",
+            "www.google.com",
             "www.youtube.com",
             "www.instagram.com",
             "www.cloudflare.com",
             "www.netflix.com",
-            "www.twitter.com",
             "www.shieldblaze.com"
     );
 
@@ -86,11 +87,11 @@ public class WebsiteProxyTest {
         }
     }
 
-    private int LoadBalancerPort;
-    private HTTPLoadBalancer httpLoadBalancer;
+    private static int LoadBalancerPort;
+    private static HTTPLoadBalancer httpLoadBalancer;
 
-    @BeforeEach
-    void setup() throws Exception {
+    @BeforeAll
+    static void setup() throws Exception {
         SelfSignedCertificate ssc = SelfSignedCertificate.generateNew(List.of("127.0.0.1"), WEBSITES);
         CertificateKeyPair certificateKeyPair = CertificateKeyPair.forClient(List.of(ssc.x509Certificate()), ssc.keyPair().getPrivate());
 
@@ -131,8 +132,8 @@ public class WebsiteProxyTest {
         }
     }
 
-    @AfterEach
-    void shutdown() throws Exception {
+    @AfterAll
+    static void shutdown() throws Exception {
         httpLoadBalancer.shutdown().future().get();
     }
 
