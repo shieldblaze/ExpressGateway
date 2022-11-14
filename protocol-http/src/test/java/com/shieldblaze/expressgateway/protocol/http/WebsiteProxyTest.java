@@ -41,9 +41,7 @@ import okhttp3.ResponseBody;
 import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
 import org.junit.jupiter.api.AfterAll;
-import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeAll;
-import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 
 import javax.net.ssl.SSLContext;
@@ -59,8 +57,6 @@ public class WebsiteProxyTest {
     private static final Logger logger = LogManager.getLogger(WebsiteProxyTest.class);
 
     private static final List<String> WEBSITES = List.of(
-            "www.amazon.com",
-            "www.google.com",
             "www.shieldblaze.com"
     );
 
@@ -132,16 +128,7 @@ public class WebsiteProxyTest {
     }
 
     @Test
-    void loadWebsitesExpect200To399AndValidateBodyTest() throws Exception {
-        run(true);
-    }
-
-    @Test
-    void loadWebsitesExpect200To399AndDoNotValidateBodyTest() throws Exception {
-        run(false);
-    }
-
-    void run(boolean validateBody) throws Exception {
+    void loadWebsitesExpect200To399AndValidateBody() throws Exception {
         for (String domain : WEBSITES) {
             System.out.println("Connecting to: " + domain);
 
@@ -155,11 +142,10 @@ public class WebsiteProxyTest {
             try (Response response = OK_HTTP_CLIENT.newCall(request).execute()) {
                 assertThat(response.code()).isBetween(200, 399);
 
-                if (validateBody) {
-                    ResponseBody responseBody = response.body();
-                    assertThat(responseBody).isNotNull();
-                    assertThat(responseBody.bytes()).isNotNull();
-                }
+                ResponseBody responseBody = response.body();
+                assertThat(responseBody).isNotNull();
+                assertThat(responseBody.bytes()).isNotNull();
+
                 logger.info("Domain: {}; Successful", domain);
             } catch (Exception ex) {
                 logger.error("Failed Domain Proxy: {}, Reason: {}", domain, ex.getMessage());
@@ -170,6 +156,8 @@ public class WebsiteProxyTest {
                 assertThat(connectionPool.connectionCount()).isEqualTo(0);
                 logger.info("Closed all connections in ConnectionPool for Domain: {}", domain);
             }
+
+            Thread.sleep(250);
         }
     }
 }

@@ -55,10 +55,10 @@ final class Bootstrapper {
     }
 
     HttpConnection create(Node node, Channel channel) {
-        return create(node, channel, Http2Settings.defaultSettings());
+        return create(node, channel, Http2Settings.defaultSettings(), false);
     }
 
-    HttpConnection create(Node node, Channel channel, Http2Settings http2Settings) {
+    HttpConnection create(Node node, Channel channel, Http2Settings http2Settings, boolean beginClientStreamIdAtOne) {
         HttpConfiguration httpConfiguration = httpLoadBalancer.httpConfiguration();
         HttpConnection httpConnection = new HttpConnection(node, httpConfiguration);
 
@@ -75,7 +75,10 @@ final class Bootstrapper {
 
                 if (httpLoadBalancer.configurationContext().tlsClientConfiguration().enabled()) {
                     ALPNHandler alpnHandler = ALPNHandlerBuilder.newBuilder()
-                            .withHTTP2ChannelHandler(CompressibleHttp2FrameCodec.forClient(httpLoadBalancer.compressionOptions()).initialSettings(http2Settings).build())
+                            .withHTTP2ChannelHandler(CompressibleHttp2FrameCodec
+                                    .forClient(httpLoadBalancer.compressionOptions(), beginClientStreamIdAtOne)
+                                    .initialSettings(http2Settings)
+                                    .build())
                             .withHTTP2ChannelHandler(new Http2ChannelDuplexHandler() {
                                 @Override
                                 protected void handlerAdded0(ChannelHandlerContext ctx) throws Exception {

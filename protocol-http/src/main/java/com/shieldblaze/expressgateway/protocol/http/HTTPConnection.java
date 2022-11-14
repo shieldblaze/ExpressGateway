@@ -161,22 +161,10 @@ final class HttpConnection extends Connection {
             // If Connection is HTTP/2 then send GOAWAY to server.
             // Else close the HTTP/1.1 connection.
             if (isConnectionHttp2) {
+                System.exit(1);
                 Http2GoAwayFrame http2GoAwayFrame = new DefaultHttp2GoAwayFrame(goAwayFrame.errorCode(), goAwayFrame.content());
-
-                if (goAwayFrame.lastStreamId() == Integer.MAX_VALUE) {
-                    http2GoAwayFrame.setExtraStreamIds(Integer.MAX_VALUE);
-                } else {
-                    int clientId  = goAwayFrame.lastStreamId();
-                    StreamPropertyMap.StreamProperty streamProperty = streamPropertyMap().getProxyFromClientID(clientId);
-
-                    if (streamProperty == null) {
-                        http2GoAwayFrame.setExtraStreamIds(Integer.MAX_VALUE);
-                    } else {
-                        int proxyId = streamProperty.proxyFrameStream().id();
-                        http2GoAwayFrame.setExtraStreamIds(proxyId);
-                        streamPropertyMap().remove(proxyId, clientId);
-                    }
-                }
+                http2GoAwayFrame.setExtraStreamIds(goAwayFrame.lastStreamId());
+                streamPropertyMap().remove(goAwayFrame.lastStreamId());
 
                 channel.writeAndFlush(goAwayFrame);
             } else {
@@ -185,20 +173,15 @@ final class HttpConnection extends Connection {
             }
         } else if (o instanceof Http2WindowUpdateFrame windowUpdateFrame) {
             if (isConnectionHttp2) {
-                StreamPropertyMap.StreamProperty streamProperty = MAP.getProxyFromClientID(windowUpdateFrame.stream().id());
+                StreamPropertyMap.StreamProperty streamProperty = streamPropertyMap().get(windowUpdateFrame.stream());
                 windowUpdateFrame.stream(streamProperty.proxyFrameStream());
 
                 channel.writeAndFlush(windowUpdateFrame);
             }
         } else if (o instanceof Http2ResetFrame http2ResetFrame) {
             if (isConnectionHttp2) {
-                Http2FrameStream normalFrameStream = http2ResetFrame.stream();
-
-                StreamPropertyMap.StreamProperty streamProperty = MAP.getProxyFromClientID(http2ResetFrame.stream().id());
-                http2ResetFrame.stream(streamProperty.proxyFrameStream());
+                http2ResetFrame.stream(streamPropertyMap().remove(http2ResetFrame.stream()).proxyFrameStream());
                 channel.writeAndFlush(http2ResetFrame);
-
-                MAP.remove(streamProperty.proxyFrameStream().id(), normalFrameStream.id());
             }
         } else if (o instanceof WebSocketFrame) {
             channel.writeAndFlush(o);
@@ -255,11 +238,10 @@ final class HttpConnection extends Connection {
             headersFrame.stream(proxyFrameStream);
             channel.writeAndFlush(headersFrame);
 
-            MAP.put(proxyFrameStream.id(), clientFrameStream.id(),
-                    new StreamPropertyMap.StreamProperty(String.valueOf(clientAcceptEncoding), clientFrameStream, proxyFrameStream));
+            streamPropertyMap().put(proxyFrameStream.id(), new StreamPropertyMap.StreamProperty(String.valueOf(clientAcceptEncoding), clientFrameStream, proxyFrameStream));
         } else if (streamFrame instanceof Http2DataFrame dataFrame) {
             Http2FrameStream oldFrameStream = dataFrame.stream();
-            dataFrame.stream(MAP.getProxyFromClientID(oldFrameStream.id()).proxyFrameStream());
+            dataFrame.stream(streamPropertyMap().get(oldFrameStream).proxyFrameStream());
 
             channel.writeAndFlush(dataFrame);
         }
