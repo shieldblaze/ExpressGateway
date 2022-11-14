@@ -20,48 +20,35 @@ package com.shieldblaze.expressgateway.protocol.http;
 import io.netty.handler.codec.http2.Http2FrameStream;
 import it.unimi.dsi.fastutil.ints.Int2ObjectArrayMap;
 import it.unimi.dsi.fastutil.ints.Int2ObjectMap;
+import it.unimi.dsi.fastutil.ints.Int2ObjectOpenHashMap;
 
 final class StreamPropertyMap {
 
-    private final Int2ObjectMap<StreamProperty> k1Map = new Int2ObjectArrayMap<>();
-    private final Int2ObjectMap<StreamProperty> k2Map = new Int2ObjectArrayMap<>();
+    private final Int2ObjectMap<StreamProperty> map = new Int2ObjectOpenHashMap<>();
 
-    void put(int proxyId, int clientId, StreamProperty v) {
-        k1Map.put(proxyId, v);
-        k2Map.put(clientId, v);
+    void put(int streamId, StreamProperty streamProperty) {
+        map.put(streamId, streamProperty);
     }
 
-    void remove(int proxyId, int clientId) {
-        k1Map.remove(proxyId);
-        k2Map.remove(clientId);
+    StreamProperty remove(Http2FrameStream frameStream) {
+        return map.remove(frameStream.id());
     }
 
-    StreamProperty getClientFromProxyID(int k1) {
-        return get(k1, -1);
+    StreamProperty remove(int streamId) {
+        return map.remove(streamId);
     }
 
-    StreamProperty getProxyFromClientID(int k2) {
-        return get(-1, k2);
+    StreamProperty get(Http2FrameStream streamFrame) {
+        return map.get(streamFrame.id());
     }
 
-    private StreamProperty get(int k1, int k2) {
-        if (k1Map.containsKey(k1) && k2Map.containsKey(k2)) {
-            if (k1Map.get(k1).equals(k2Map.get(k2))) {
-                return k1Map.get(k1);
-            } else {
-                throw new IllegalArgumentException("Failed to find Mapping");
-            }
-        } else if (k1Map.containsKey(k1)) {
-            return k1Map.get(k1);
-        } else return k2Map.getOrDefault(k2, null);
+    StreamProperty get(int streamId) {
+        return map.get(streamId);
     }
 
     @Override
     public String toString() {
-        return "StreamPropertyMap{" +
-                "k1Map=" + k1Map +
-                ", k2Map=" + k2Map +
-                '}';
+        return "StreamPropertyMap{map=" + map + '}';
     }
 
     record StreamProperty(String acceptEncoding, Http2FrameStream clientFrameStream, Http2FrameStream proxyFrameStream) {

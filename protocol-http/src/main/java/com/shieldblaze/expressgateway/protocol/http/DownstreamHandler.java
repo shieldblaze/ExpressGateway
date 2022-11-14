@@ -21,7 +21,6 @@ import com.shieldblaze.expressgateway.common.utils.ReferenceCountedUtil;
 import com.shieldblaze.expressgateway.protocol.http.compression.CompressionUtil;
 import io.netty.buffer.Unpooled;
 import io.netty.channel.Channel;
-import io.netty.channel.ChannelFutureListener;
 import io.netty.channel.ChannelHandlerContext;
 import io.netty.channel.ChannelInboundHandlerAdapter;
 import io.netty.handler.codec.UnsupportedMessageTypeException;
@@ -101,9 +100,7 @@ final class DownstreamHandler extends ChannelInboundHandlerAdapter implements Cl
             }
         } else if (msg instanceof Http2WindowUpdateFrame windowUpdateFrame) {
             if (isConnectionHttp2) {
-                Http2FrameStream proxiedFrameStream = windowUpdateFrame.stream();
-
-                Http2FrameStream frameStream = httpConnection.streamPropertyMap().getClientFromProxyID(proxiedFrameStream.id()).clientFrameStream();
+                Http2FrameStream frameStream = httpConnection.streamPropertyMap().get(windowUpdateFrame.stream()).clientFrameStream();
                 windowUpdateFrame.stream(frameStream);
                 inboundChannel.writeAndFlush(windowUpdateFrame);
             }
@@ -122,15 +119,14 @@ final class DownstreamHandler extends ChannelInboundHandlerAdapter implements Cl
                     if (goAwayFrame.lastStreamId() == Integer.MAX_VALUE) {
                         http2GoAwayFrame.setExtraStreamIds(Integer.MAX_VALUE);
                     } else {
-                        int proxyId  = goAwayFrame.lastStreamId();
-                        StreamPropertyMap.StreamProperty streamProperty = httpConnection.streamPropertyMap().getClientFromProxyID(proxyId);
+                        StreamPropertyMap.StreamProperty streamProperty = httpConnection.streamPropertyMap().get(goAwayFrame.lastStreamId());
 
                         if (streamProperty == null) {
                             http2GoAwayFrame.setExtraStreamIds(Integer.MAX_VALUE);
                         } else {
                             int clientId = streamProperty.clientFrameStream().id();
                             http2GoAwayFrame.setExtraStreamIds(clientId);
-                            httpConnection.streamPropertyMap().remove(proxyId, clientId);
+                            httpConnection.streamPropertyMap().remove(goAwayFrame.lastStreamId());
                         }
                     }
 
@@ -139,13 +135,9 @@ final class DownstreamHandler extends ChannelInboundHandlerAdapter implements Cl
             }
         } else if (msg instanceof Http2ResetFrame http2ResetFrame) {
             if (isConnectionHttp2) {
-                Http2FrameStream proxiedFrameStream = http2ResetFrame.stream();
-
-                Http2FrameStream clientFrameStream = httpConnection.streamPropertyMap().getClientFromProxyID(proxiedFrameStream.id()).clientFrameStream();
+                Http2FrameStream clientFrameStream = httpConnection.streamPropertyMap().remove(http2ResetFrame.stream()).clientFrameStream();
                 http2ResetFrame.stream(clientFrameStream);
                 inboundChannel.writeAndFlush(http2ResetFrame);
-
-                httpConnection.streamPropertyMap().remove(proxiedFrameStream.id(), clientFrameStream.id());
             }
         } else if (msg instanceof WebSocketFrame) {
             inboundChannel.writeAndFlush(msg);
@@ -191,8 +183,7 @@ final class DownstreamHandler extends ChannelInboundHandlerAdapter implements Cl
     }
 
     private void proxyInboundHttp2ToHttp2(Http2StreamFrame streamFrame) {
-        Http2FrameStream proxiedFrameStream = streamFrame.stream();
-        StreamPropertyMap.StreamProperty streamProperty = httpConnection.streamPropertyMap().getClientFromProxyID(proxiedFrameStream.id());
+        StreamPropertyMap.StreamProperty streamProperty = httpConnection.streamPropertyMap().get(streamFrame.stream());
 
         if (streamProperty == null) {
             ReferenceCountedUtil.silentRelease(streamFrame);
@@ -201,16 +192,15 @@ final class DownstreamHandler extends ChannelInboundHandlerAdapter implements Cl
             streamFrame.stream(streamProperty.clientFrameStream());
         }
 
-        final int clientFrameStreamId = streamProperty.clientFrameStream().id();
         if (streamFrame instanceof Http2HeadersFrame headersFrame) {
             applyCompressionOnHttp2(headersFrame.headers(), streamProperty.acceptEncoding());
 
             if (headersFrame.isEndStream()) {
-                httpConnection.streamPropertyMap().remove(proxiedFrameStream.id(), clientFrameStreamId);
+                httpConnection.streamPropertyMap().remove(streamProperty.clientFrameStream());
             }
         } else if (streamFrame instanceof Http2DataFrame dataFrame) {
             if (dataFrame.isEndStream()) {
-                httpConnection.streamPropertyMap().remove(proxiedFrameStream.id(), clientFrameStreamId);
+                httpConnection.streamPropertyMap().remove(streamProperty.clientFrameStream());
             }
         }
 

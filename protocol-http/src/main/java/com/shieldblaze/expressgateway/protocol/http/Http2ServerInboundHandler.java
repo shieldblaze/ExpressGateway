@@ -98,7 +98,7 @@ public final class Http2ServerInboundHandler extends ChannelInboundHandlerAdapte
                     return;
                 }
 
-                httpConnection = bootstrapper.create(node, ctx.channel(), http2SettingsFrame.settings());
+                httpConnection = bootstrapper.create(node, ctx.channel(), http2SettingsFrame.settings(), headersFrame.stream().id() == 1);
                 node.addConnection(httpConnection);
             }
 
@@ -123,7 +123,6 @@ public final class Http2ServerInboundHandler extends ChannelInboundHandlerAdapte
         }
 
         if (httpConnection == null) {
-            System.err.println("HTTPConnection is null: " + msg);
             ReferenceCountedUtil.silentRelease(msg);
         } else {
             httpConnection.writeAndFlush(msg);
