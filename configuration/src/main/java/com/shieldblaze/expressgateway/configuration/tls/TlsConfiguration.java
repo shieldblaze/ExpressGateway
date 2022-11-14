@@ -132,10 +132,8 @@ public abstract class TlsConfiguration implements Configuration<TlsConfiguration
                 return certificateKeyPair;
             }
         } catch (Exception ex) {
-            ex.printStackTrace();
+            throw new NullPointerException("Mapping not found for Hostname: " + fqdn);
         }
-
-        throw new NullPointerException("Mapping not found for Hostname: " + fqdn);
     }
 
     /**
