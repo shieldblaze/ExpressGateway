@@ -51,6 +51,7 @@ import java.net.URI;
 import java.net.http.HttpClient;
 import java.net.http.HttpRequest;
 import java.net.http.HttpResponse;
+import java.time.Duration;
 import java.util.Random;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
@@ -145,6 +146,7 @@ public class BasicHttpServerTest {
                             .GET()
                             .uri(URI.create("http://127.0.0.1:" + LoadBalancerTcpPort + "/get"))
                             .version(HttpClient.Version.HTTP_1_1)
+                            .timeout(Duration.ofSeconds(5))
                             .build();
 
                     for (int messagesCount = 0; messagesCount < frames; messagesCount++) {
@@ -171,6 +173,7 @@ public class BasicHttpServerTest {
                                 .POST(HttpRequest.BodyPublishers.ofByteArray(randomData))
                                 .uri(URI.create("http://127.0.0.1:" + LoadBalancerTcpPort + "/post"))
                                 .version(HttpClient.Version.HTTP_1_1)
+                                .timeout(Duration.ofSeconds(5))
                                 .build();
 
                         HttpResponse<byte[]> httpResponse = HTTP_CLIENT.send(httpRequest, HttpResponse.BodyHandlers.ofByteArray());

@@ -31,7 +31,7 @@ public class Http11CorrectContentCompressor extends HttpContentCompressor {
 
     @Override
     protected Result beginEncode(HttpResponse httpResponse, String acceptEncoding) throws Exception {
-        if (CompressionUtil.isCompressible(httpResponse.headers().get(CONTENT_TYPE))) {
+        if (httpResponse.headers().contains(CONTENT_TYPE) && CompressionUtil.isCompressible(httpResponse.headers().get(CONTENT_TYPE))) {
             return super.beginEncode(httpResponse, acceptEncoding);
         } else {
             return null;

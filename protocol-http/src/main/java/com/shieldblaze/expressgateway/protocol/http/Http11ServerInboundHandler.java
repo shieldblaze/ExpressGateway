@@ -125,7 +125,7 @@ public class Http11ServerInboundHandler extends ChannelInboundHandlerAdapter imp
 
             // Write the request to Backend
             httpConnection.writeAndFlush(request);
-        } else if (msg instanceof HttpContent) {
+        } else if (msg instanceof HttpContent && httpConnection != null) {
             httpConnection.writeAndFlush(msg);
         } else {
             ReferenceCountUtil.release(msg);
