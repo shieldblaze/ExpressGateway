@@ -37,6 +37,7 @@ import io.netty.handler.codec.http.HttpVersion;
 import io.netty.handler.codec.http.LastHttpContent;
 import io.netty.handler.codec.http.websocketx.WebSocketFrame;
 import io.netty.handler.codec.http2.DefaultHttp2DataFrame;
+import io.netty.handler.codec.http2.DefaultHttp2GoAwayFrame;
 import io.netty.handler.codec.http2.DefaultHttp2HeadersFrame;
 import io.netty.handler.codec.http2.Http2DataFrame;
 import io.netty.handler.codec.http2.Http2Exception;
@@ -110,9 +111,31 @@ final class DownstreamHandler extends ChannelInboundHandlerAdapter implements Cl
             if (isConnectionHttp2) {
                 inboundChannel.writeAndFlush(msg);
             }
-        } else if (msg instanceof Http2GoAwayFrame) {
+        } else if (msg instanceof Http2GoAwayFrame goAwayFrame) {
             if (isConnectionHttp2) {
-                inboundChannel.writeAndFlush(msg).addListener(ChannelFutureListener.CLOSE);
+                // If LastStreamID is 'Integer.MAX_VALUE' then we have to shut down the entire connection.
+                if (goAwayFrame.lastStreamId() == Integer.MAX_VALUE) {
+                    inboundChannel.writeAndFlush(msg);
+                } else {
+                    Http2GoAwayFrame http2GoAwayFrame = new DefaultHttp2GoAwayFrame(goAwayFrame.errorCode(), goAwayFrame.content());
+
+                    if (goAwayFrame.lastStreamId() == Integer.MAX_VALUE) {
+                        http2GoAwayFrame.setExtraStreamIds(Integer.MAX_VALUE);
+                    } else {
+                        int proxyId  = goAwayFrame.lastStreamId();
+                        StreamPropertyMap.StreamProperty streamProperty = httpConnection.streamPropertyMap().getClientFromProxyID(proxyId);
+
+                        if (streamProperty == null) {
+                            http2GoAwayFrame.setExtraStreamIds(Integer.MAX_VALUE);
+                        } else {
+                            int clientId = streamProperty.clientFrameStream().id();
+                            http2GoAwayFrame.setExtraStreamIds(clientId);
+                            httpConnection.streamPropertyMap().remove(proxyId, clientId);
+                        }
+                    }
+
+                    inboundChannel.writeAndFlush(http2GoAwayFrame);
+                }
             }
         } else if (msg instanceof Http2ResetFrame http2ResetFrame) {
             if (isConnectionHttp2) {

@@ -35,6 +35,7 @@ import io.netty.handler.codec.http.HttpRequest;
 import io.netty.handler.codec.http.LastHttpContent;
 import io.netty.handler.codec.http.websocketx.WebSocketFrame;
 import io.netty.handler.codec.http2.DefaultHttp2DataFrame;
+import io.netty.handler.codec.http2.DefaultHttp2GoAwayFrame;
 import io.netty.handler.codec.http2.DefaultHttp2HeadersFrame;
 import io.netty.handler.codec.http2.Http2ChannelDuplexHandler;
 import io.netty.handler.codec.http2.Http2DataFrame;
@@ -156,8 +157,31 @@ final class HttpConnection extends Connection {
         } else if (o instanceof Http2SettingsFrame || o instanceof Http2PingFrame || o instanceof Http2SettingsAckFrame) {
             channel.writeAndFlush(o);
         } else if (o instanceof Http2GoAwayFrame goAwayFrame) {
+
+            // If Connection is HTTP/2 then send GOAWAY to server.
+            // Else close the HTTP/1.1 connection.
             if (isConnectionHttp2) {
-                channel.writeAndFlush(goAwayFrame).addListener(ChannelFutureListener.CLOSE);
+                Http2GoAwayFrame http2GoAwayFrame = new DefaultHttp2GoAwayFrame(goAwayFrame.errorCode(), goAwayFrame.content());
+
+                if (goAwayFrame.lastStreamId() == Integer.MAX_VALUE) {
+                    http2GoAwayFrame.setExtraStreamIds(Integer.MAX_VALUE);
+                } else {
+                    int clientId  = goAwayFrame.lastStreamId();
+                    StreamPropertyMap.StreamProperty streamProperty = streamPropertyMap().getProxyFromClientID(clientId);
+
+                    if (streamProperty == null) {
+                        http2GoAwayFrame.setExtraStreamIds(Integer.MAX_VALUE);
+                    } else {
+                        int proxyId = streamProperty.proxyFrameStream().id();
+                        http2GoAwayFrame.setExtraStreamIds(proxyId);
+                        streamPropertyMap().remove(proxyId, clientId);
+                    }
+                }
+
+                channel.writeAndFlush(goAwayFrame);
+            } else {
+                ReferenceCountUtil.release(goAwayFrame);
+                close();
             }
         } else if (o instanceof Http2WindowUpdateFrame windowUpdateFrame) {
             if (isConnectionHttp2) {
