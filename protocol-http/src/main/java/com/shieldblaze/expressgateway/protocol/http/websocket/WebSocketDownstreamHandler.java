@@ -17,47 +17,63 @@
  */
 package com.shieldblaze.expressgateway.protocol.http.websocket;
 
-import com.shieldblaze.expressgateway.common.utils.ReferenceCountedUtil;
+import com.shieldblaze.expressgateway.common.annotation.NonNull;
 import io.netty.channel.Channel;
 import io.netty.channel.ChannelHandlerContext;
 import io.netty.channel.ChannelInboundHandlerAdapter;
 import io.netty.handler.codec.http.websocketx.WebSocketFrame;
+import io.netty.util.ReferenceCountUtil;
 import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
 
-final class WebSocketDownstreamHandler extends ChannelInboundHandlerAdapter {
+import java.io.Closeable;
+import java.io.IOException;
+
+final class WebSocketDownstreamHandler extends ChannelInboundHandlerAdapter implements Closeable {
 
     private static final Logger logger = LogManager.getLogger(WebSocketDownstreamHandler.class);
 
-    private final Channel channel;
+    private Channel upstreamChannel;
 
-    WebSocketDownstreamHandler(Channel channel) {
-        this.channel = channel;
+    @NonNull
+    WebSocketDownstreamHandler(Channel upstreamChannel) {
+        this.upstreamChannel = upstreamChannel;
     }
 
     @Override
     public void channelRead(ChannelHandlerContext ctx, Object msg) {
-        // If received message is WebSocketFrame then write it back
-        // to the client else release it.
+        // If received message is WebSocketFrame then write it back to the client else release it.
         if (msg instanceof WebSocketFrame) {
-            channel.writeAndFlush(msg, channel.voidPromise());
+            upstreamChannel.writeAndFlush(msg);
         } else {
-            ReferenceCountedUtil.silentRelease(msg);
+            ReferenceCountUtil.release(msg);
         }
     }
 
     @Override
     public void channelInactive(ChannelHandlerContext ctx) {
-        channel.close();
+        close();
     }
 
-    @Override
-    public void handlerRemoved(ChannelHandlerContext ctx) {
-        channel.close();
-    }
-
+    @SuppressWarnings("StatementWithEmptyBody")
     @Override
     public void exceptionCaught(ChannelHandlerContext ctx, Throwable cause) {
-        logger.error("Caught Error at Downstream Handler", cause);
+        try {
+            if (cause instanceof IOException) {
+                // Swallow this harmless IOException
+            } else {
+                logger.error("Caught error, Closing connections", cause);
+            }
+        } finally {
+            close();
+        }
+    }
+
+    @Override
+    public void close() {
+        if (upstreamChannel != null) {
+            upstreamChannel.close();
+            upstreamChannel = null;
+        }
     }
 }

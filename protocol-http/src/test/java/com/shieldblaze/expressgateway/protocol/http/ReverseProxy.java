@@ -30,7 +30,6 @@ import com.shieldblaze.expressgateway.configuration.tls.TlsServerConfiguration;
 import com.shieldblaze.expressgateway.core.events.L4FrontListenerStartupEvent;
 import com.shieldblaze.expressgateway.protocol.http.loadbalancer.HTTPLoadBalancer;
 import com.shieldblaze.expressgateway.protocol.http.loadbalancer.HTTPLoadBalancerBuilder;
-import com.shieldblaze.expressgateway.protocol.tcp.TCPListener;
 
 import java.net.InetSocketAddress;
 import java.util.List;
@@ -61,8 +60,6 @@ public class ReverseProxy {
         HTTPLoadBalancer httpLoadBalancer = HTTPLoadBalancerBuilder.newBuilder()
                 .withConfigurationContext(ConfigurationContext.create(tlsClientConfiguration, tlsServerConfiguration))
                 .withBindAddress(new InetSocketAddress("0.0.0.0", 9110))
-                .withHTTPInitializer(new DefaultHTTPServerInitializer())
-                .withL4FrontListener(new TCPListener())
                 .build();
 
         httpLoadBalancer.defaultCluster(cluster);

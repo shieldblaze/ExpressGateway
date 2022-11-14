@@ -22,6 +22,7 @@ import com.shieldblaze.expressgateway.backend.cluster.Cluster;
 import com.shieldblaze.expressgateway.backend.cluster.ClusterBuilder;
 import com.shieldblaze.expressgateway.backend.strategy.l7.http.HTTPRoundRobin;
 import com.shieldblaze.expressgateway.backend.strategy.l7.http.sessionpersistence.NOOPSessionPersistence;
+import com.shieldblaze.expressgateway.common.utils.AvailablePortUtil;
 import com.shieldblaze.expressgateway.common.utils.SelfSignedCertificate;
 import com.shieldblaze.expressgateway.configuration.ConfigurationContext;
 import com.shieldblaze.expressgateway.configuration.tls.CertificateKeyPair;
@@ -31,42 +32,61 @@ import com.shieldblaze.expressgateway.core.events.L4FrontListenerStartupEvent;
 import com.shieldblaze.expressgateway.protocol.http.loadbalancer.HTTPLoadBalancer;
 import com.shieldblaze.expressgateway.protocol.http.loadbalancer.HTTPLoadBalancerBuilder;
 import com.shieldblaze.expressgateway.protocol.tcp.TCPListener;
-import io.netty.handler.codec.http.HttpHeaderNames;
+import io.netty.handler.ssl.util.InsecureTrustManagerFactory;
+import okhttp3.ConnectionPool;
+import okhttp3.OkHttpClient;
+import okhttp3.Request;
+import okhttp3.Response;
+import okhttp3.ResponseBody;
+import org.apache.logging.log4j.LogManager;
+import org.apache.logging.log4j.Logger;
 import org.junit.jupiter.api.AfterAll;
+import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeAll;
+import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 
+import javax.net.ssl.SSLContext;
+import javax.net.ssl.X509TrustManager;
 import java.net.InetSocketAddress;
-import java.net.URI;
-import java.net.http.HttpClient;
-import java.net.http.HttpRequest;
-import java.net.http.HttpResponse;
+import java.security.SecureRandom;
 import java.util.List;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
 public class WebsiteProxyTest {
 
+    private static final Logger logger = LogManager.getLogger(WebsiteProxyTest.class);
+
     private static final List<String> WEBSITES = List.of(
-            "www.facebook.com",
             "www.amazon.com",
             "www.google.com",
-            "www.microsoft.com",
-            "www.youtube.com",
-            "www.instagram.com",
-            "www.cloudflare.com",
-            "www.netflix.com",
-            "www.twitter.com",
             "www.shieldblaze.com"
     );
 
+    private static final OkHttpClient OK_HTTP_CLIENT;
+
+    static {
+        try {
+            SSLContext sslContext = SSLContext.getInstance("TLSv1.3");
+            sslContext.init(null, InsecureTrustManagerFactory.INSTANCE.getTrustManagers(), new SecureRandom());
+
+            OK_HTTP_CLIENT = new OkHttpClient().newBuilder()
+                    .sslSocketFactory(sslContext.getSocketFactory(), (X509TrustManager) InsecureTrustManagerFactory.INSTANCE.getTrustManagers()[0])
+                    .followRedirects(false)
+                    .followSslRedirects(false)
+                    .build();
+        } catch (Exception ex) {
+            throw new RuntimeException(ex);
+        }
+    }
+
+    private static int LoadBalancerPort;
     private static HTTPLoadBalancer httpLoadBalancer;
 
     @BeforeAll
     static void setup() throws Exception {
-        String Hostname = "www.shieldblaze.com";
-
-        SelfSignedCertificate ssc = SelfSignedCertificate.generateNew(List.of("127.0.0.1"), List.of("localhost"));
+        SelfSignedCertificate ssc = SelfSignedCertificate.generateNew(List.of("127.0.0.1"), WEBSITES);
         CertificateKeyPair certificateKeyPair = CertificateKeyPair.forClient(List.of(ssc.x509Certificate()), ssc.keyPair().getPrivate());
 
         TlsClientConfiguration tlsClientConfiguration = TlsClientConfiguration.DEFAULT;
@@ -80,26 +100,30 @@ public class WebsiteProxyTest {
         tlsClientConfiguration.setAcceptAllCerts(true);
         tlsClientConfiguration.defaultMapping(CertificateKeyPair.newDefaultClientInstance());
 
-        Cluster cluster = ClusterBuilder.newBuilder()
-                .withLoadBalance(new HTTPRoundRobin(NOOPSessionPersistence.INSTANCE))
-                .build();
+        LoadBalancerPort = AvailablePortUtil.getTcpPort();
 
         httpLoadBalancer = HTTPLoadBalancerBuilder.newBuilder()
                 .withConfigurationContext(ConfigurationContext.create(tlsClientConfiguration, tlsServerConfiguration))
-                .withBindAddress(new InetSocketAddress("0.0.0.0", 9110))
-                .withHTTPInitializer(new DefaultHTTPServerInitializer())
+                .withBindAddress(new InetSocketAddress("127.0.0.1", LoadBalancerPort))
                 .withL4FrontListener(new TCPListener())
-                .build();
-
-        httpLoadBalancer.defaultCluster(cluster);
-
-        NodeBuilder.newBuilder()
-                .withCluster(cluster)
-                .withSocketAddress(new InetSocketAddress(Hostname, 443))
+                .withName("HttpLoadBalancer")
                 .build();
 
         L4FrontListenerStartupEvent l4FrontListenerStartupEvent = httpLoadBalancer.start();
         l4FrontListenerStartupEvent.future().get();
+
+        for (String domain : WEBSITES) {
+            Cluster cluster = ClusterBuilder.newBuilder()
+                    .withLoadBalance(new HTTPRoundRobin(NOOPSessionPersistence.INSTANCE))
+                    .build();
+
+            NodeBuilder.newBuilder()
+                    .withCluster(cluster)
+                    .withSocketAddress(new InetSocketAddress(domain, 443))
+                    .build();
+
+            httpLoadBalancer.mapCluster(domain, cluster);
+        }
     }
 
     @AfterAll
@@ -108,19 +132,44 @@ public class WebsiteProxyTest {
     }
 
     @Test
-    void loadWebsitesAndExpect200Test() throws Exception {
-        HttpClient httpClient = TestableHttpLoadBalancer.httpClient();
+    void loadWebsitesExpect200To399AndValidateBodyTest() throws Exception {
+        run(true);
+    }
 
+    @Test
+    void loadWebsitesExpect200To399AndDoNotValidateBodyTest() throws Exception {
+        run(false);
+    }
+
+    void run(boolean validateBody) throws Exception {
         for (String domain : WEBSITES) {
-            HttpRequest httpRequest = HttpRequest.newBuilder()
-                    .GET()
-                    .setHeader(HttpHeaderNames.USER_AGENT.toString(),
-                            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/106.0.0.0 Safari/537.36")
-                    .uri(URI.create("https://" + domain + '/'))
+            System.out.println("Connecting to: " + domain);
+
+            Request request = new Request.Builder()
+                    .get()
+                    .url("https://127.0.0.1:" + LoadBalancerPort + "/")
+                    .header("Host", domain)
+                    .header("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/106.0.0.0 Safari/537.36")
                     .build();
 
-            HttpResponse<Void> httpResponse = httpClient.send(httpRequest, HttpResponse.BodyHandlers.discarding());
-            assertThat(httpResponse.statusCode()).isEqualTo(200);
+            try (Response response = OK_HTTP_CLIENT.newCall(request).execute()) {
+                assertThat(response.code()).isBetween(200, 399);
+
+                if (validateBody) {
+                    ResponseBody responseBody = response.body();
+                    assertThat(responseBody).isNotNull();
+                    assertThat(responseBody.bytes()).isNotNull();
+                }
+                logger.info("Domain: {}; Successful", domain);
+            } catch (Exception ex) {
+                logger.error("Failed Domain Proxy: {}, Reason: {}", domain, ex.getMessage());
+                throw ex;
+            } finally {
+                ConnectionPool connectionPool = OK_HTTP_CLIENT.connectionPool();
+                connectionPool.evictAll();
+                assertThat(connectionPool.connectionCount()).isEqualTo(0);
+                logger.info("Closed all connections in ConnectionPool for Domain: {}", domain);
+            }
         }
     }
 }

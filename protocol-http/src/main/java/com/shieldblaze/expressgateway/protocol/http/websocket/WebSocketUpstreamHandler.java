@@ -18,13 +18,15 @@
 package com.shieldblaze.expressgateway.protocol.http.websocket;
 
 import com.shieldblaze.expressgateway.backend.Node;
-import com.shieldblaze.expressgateway.common.utils.ReferenceCountedUtil;
 import com.shieldblaze.expressgateway.protocol.http.loadbalancer.HTTPLoadBalancer;
 import io.netty.channel.ChannelHandlerContext;
 import io.netty.channel.ChannelInboundHandlerAdapter;
 import io.netty.handler.codec.http.websocketx.WebSocketFrame;
+import io.netty.util.ReferenceCountUtil;
 
-public final class WebSocketUpstreamHandler extends ChannelInboundHandlerAdapter {
+import java.io.Closeable;
+
+public final class WebSocketUpstreamHandler extends ChannelInboundHandlerAdapter implements Closeable {
 
     private final Node node;
     private final HTTPLoadBalancer httpLoadBalancer;
@@ -50,21 +52,25 @@ public final class WebSocketUpstreamHandler extends ChannelInboundHandlerAdapter
         if (msg instanceof WebSocketFrame) {
             connection.writeAndFlush(msg);
         } else {
-            ReferenceCountedUtil.silentRelease(msg);
+            ReferenceCountUtil.release(msg);
         }
     }
 
     @Override
-    public void channelInactive(ChannelHandlerContext ctx) {
-        if (connection != null) {
-            connection.close();
-        }
+    public void exceptionCaught(ChannelHandlerContext ctx, Throwable cause) {
+        cause.printStackTrace();
     }
 
     @Override
     public void handlerRemoved(ChannelHandlerContext ctx) {
+        close();
+    }
+
+    @Override
+    public void close() {
         if (connection != null) {
             connection.close();
+            connection = null;
         }
     }
 }

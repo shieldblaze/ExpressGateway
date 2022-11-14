@@ -52,14 +52,6 @@ public final class Node implements Comparable<Node>, Closeable {
      */
     private final String ID = UUID.randomUUID().toString();
 
-    // Cache the hashCode
-    private final int hashCode = ID.hashCode();
-
-    /**
-     * Available Connections Queue
-     */
-    private final Queue<Connection> availableConnections = new ConcurrentLinkedQueue<>();
-
     /**
      * Active Connections Queue
      */
@@ -322,28 +314,7 @@ public final class Node implements Comparable<Node>, Closeable {
      * Remove and close a {@link Connection} from this {@linkplain Node}
      */
     public void removeConnection(Connection connection) {
-        availableConnections.remove(connection);
         activeConnections.remove(connection);
-        connection.close();
-    }
-
-    /**
-     * Try to lease an available active connection.
-     *
-     * @return {@link Connection} if an available active connection is available else {@code null}
-     */
-    public Connection tryLease() {
-        return availableConnections.poll();
-    }
-
-    /**
-     * Release a connection and add it into available active connection pool.
-     */
-    public void release0(Connection connection) {
-        // Don't add duplicate connection
-        if (!availableConnections.contains(connection)) {
-            availableConnections.add(connection);
-        }
     }
 
     /**
@@ -363,7 +334,6 @@ public final class Node implements Comparable<Node>, Closeable {
     public void drainConnections() {
         activeConnections.forEach(Connection::close);
         activeConnections.clear();
-        availableConnections.clear();
     }
 
     @Override
@@ -386,7 +356,7 @@ public final class Node implements Comparable<Node>, Closeable {
 
     @Override
     public int hashCode() {
-        return hashCode;
+        return ID.hashCode();
     }
 
     @Override

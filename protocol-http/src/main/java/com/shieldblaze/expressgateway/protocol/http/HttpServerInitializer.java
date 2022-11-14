@@ -15,22 +15,19 @@
  * You should have received a copy of the GNU General Public License
  * along with ShieldBlaze ExpressGateway.  If not, see <https://www.gnu.org/licenses/>.
  */
-package com.shieldblaze.expressgateway.protocol.http.adapter.http2;
+package com.shieldblaze.expressgateway.protocol.http;
 
-import io.netty.handler.codec.http2.Http2FrameStream;
-import io.netty.handler.codec.http2.Http2Stream;
+import com.shieldblaze.expressgateway.common.annotation.NonNull;
+import com.shieldblaze.expressgateway.protocol.http.loadbalancer.HTTPLoadBalancer;
+import io.netty.channel.ChannelInitializer;
+import io.netty.channel.socket.SocketChannel;
 
-record CustomHttp2FrameStream(int id) implements Http2FrameStream {
+public abstract class HttpServerInitializer extends ChannelInitializer<SocketChannel> {
 
-    @Override
-    public Http2Stream.State state() {
-        return Http2Stream.State.OPEN;
-    }
+    protected HTTPLoadBalancer httpLoadBalancer;
 
-    @Override
-    public String toString() {
-        return "CustomHttp2FrameStream{" +
-                "id=" + id +
-                '}';
+    @NonNull
+    public void httpLoadBalancer(HTTPLoadBalancer httpLoadBalancer) {
+        this.httpLoadBalancer = httpLoadBalancer;
     }
 }

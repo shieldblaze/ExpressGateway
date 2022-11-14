@@ -21,7 +21,6 @@ import com.shieldblaze.expressgateway.backend.Node;
 import com.shieldblaze.expressgateway.backend.NodeBytesTracker;
 import com.shieldblaze.expressgateway.core.factory.BootstrapFactory;
 import com.shieldblaze.expressgateway.core.handlers.ConnectionTimeoutHandler;
-import com.shieldblaze.expressgateway.protocol.http.HTTPCodecs;
 import com.shieldblaze.expressgateway.protocol.http.Headers;
 import com.shieldblaze.expressgateway.protocol.http.loadbalancer.HTTPLoadBalancer;
 import io.netty.bootstrap.Bootstrap;
@@ -32,6 +31,7 @@ import io.netty.channel.ChannelPipeline;
 import io.netty.channel.EventLoopGroup;
 import io.netty.channel.socket.SocketChannel;
 import io.netty.handler.codec.http.DefaultHttpHeaders;
+import io.netty.handler.codec.http.HttpClientCodec;
 import io.netty.handler.codec.http.HttpHeaders;
 import io.netty.handler.codec.http.HttpObjectAggregator;
 import io.netty.handler.codec.http.websocketx.WebSocketClientHandshaker;
@@ -86,13 +86,16 @@ final class Bootstrapper {
                 }
 
                 // Add HTTP Client
-                pipeline.addLast(HTTPCodecs.http1ClientCodec(httpLoadBalancer.httpConfiguration()));
+                pipeline.addLast(new HttpClientCodec(
+                        httpLoadBalancer.httpConfiguration().maxInitialLineLength(),
+                        httpLoadBalancer.httpConfiguration().maxHeaderSize(),
+                        httpLoadBalancer.httpConfiguration().maxChunkSize()
+                ));
 
                 // Add HTTP Object Aggregator to aggregate HTTP Objects
                 pipeline.addLast(new HttpObjectAggregator(8196));
 
-                // Add WebSocketClientHandshakerFinisherHandler which will finish the
-                // handshaking process.
+                // Add WebSocketClientHandshakerFinisherHandler which will finish the handshaking process.
                 pipeline.addLast(new WebSocketClientHandshakerFinisherHandler(factory));
 
                 // Add Downstream Handler

@@ -19,10 +19,9 @@ package com.shieldblaze.expressgateway.protocol.http;
 
 import com.shieldblaze.expressgateway.backend.Node;
 import com.shieldblaze.expressgateway.backend.NodeBytesTracker;
+import com.shieldblaze.expressgateway.configuration.http.HttpConfiguration;
 import com.shieldblaze.expressgateway.core.factory.BootstrapFactory;
 import com.shieldblaze.expressgateway.core.handlers.ConnectionTimeoutHandler;
-import com.shieldblaze.expressgateway.protocol.http.adapter.http1.HTTPOutboundAdapter;
-import com.shieldblaze.expressgateway.protocol.http.adapter.http2.HTTP2OutboundAdapter;
 import com.shieldblaze.expressgateway.protocol.http.alpn.ALPNHandler;
 import com.shieldblaze.expressgateway.protocol.http.alpn.ALPNHandlerBuilder;
 import com.shieldblaze.expressgateway.protocol.http.loadbalancer.HTTPLoadBalancer;
@@ -30,12 +29,16 @@ import io.netty.bootstrap.Bootstrap;
 import io.netty.buffer.ByteBufAllocator;
 import io.netty.channel.Channel;
 import io.netty.channel.ChannelFuture;
+import io.netty.channel.ChannelHandlerContext;
 import io.netty.channel.ChannelInitializer;
 import io.netty.channel.ChannelPipeline;
 import io.netty.channel.EventLoopGroup;
 import io.netty.channel.socket.SocketChannel;
+import io.netty.handler.codec.http.HttpClientCodec;
 import io.netty.handler.codec.http.HttpContentDecompressor;
-import io.netty.handler.ssl.SslHandler;
+import io.netty.handler.codec.http.HttpServerCodec;
+import io.netty.handler.codec.http2.Http2ChannelDuplexHandler;
+import io.netty.handler.codec.http2.Http2Settings;
 
 import java.time.Duration;
 
@@ -51,8 +54,13 @@ final class Bootstrapper {
         this.byteBufAllocator = httpLoadBalancer.byteBufAllocator();
     }
 
-    HTTPConnection newInit(Node node, Channel channel) {
-        HTTPConnection httpConnection = new HTTPConnection(node);
+    HttpConnection create(Node node, Channel channel) {
+        return create(node, channel, Http2Settings.defaultSettings());
+    }
+
+    HttpConnection create(Node node, Channel channel, Http2Settings http2Settings) {
+        HttpConfiguration httpConfiguration = httpLoadBalancer.httpConfiguration();
+        HttpConnection httpConnection = new HttpConnection(node, httpConfiguration);
 
         Bootstrap bootstrap = BootstrapFactory.tcp(httpLoadBalancer.configurationContext(), eventLoopGroup, byteBufAllocator);
         bootstrap.handler(new ChannelInitializer<SocketChannel>() {
@@ -65,36 +73,35 @@ final class Bootstrapper {
                 Duration timeout = Duration.ofMillis(httpLoadBalancer.configurationContext().transportConfiguration().connectionIdleTimeout());
                 pipeline.addLast(new ConnectionTimeoutHandler(timeout, false));
 
-                DownstreamHandler downstreamHandler = new DownstreamHandler(channel);
-                httpConnection.downstreamHandler(downstreamHandler);
-
-                if (!httpLoadBalancer.configurationContext().tlsClientConfiguration().enabled()) {
-                    pipeline.addLast(HTTPCodecs.http1ClientCodec(httpLoadBalancer.httpConfiguration()));
-                    pipeline.addLast(new HttpContentDecompressor());
-                    pipeline.addLast(new HTTPOutboundAdapter());
-                    pipeline.addLast(downstreamHandler);
-                } else {
-                    String hostname = node.socketAddress().getHostName();
-                    int port = node.socketAddress().getPort();
-                    SslHandler sslHandler = httpLoadBalancer.configurationContext().tlsClientConfiguration()
-                            .defaultMapping()
-                            .sslContext()
-                            .newHandler(ch.alloc(), hostname, port);
-
+                if (httpLoadBalancer.configurationContext().tlsClientConfiguration().enabled()) {
                     ALPNHandler alpnHandler = ALPNHandlerBuilder.newBuilder()
-                            // HTTP/2 Handlers
-                            .withHTTP2ChannelHandler(HTTPCodecs.http2ClientCodec(httpLoadBalancer.httpConfiguration()))
-                            .withHTTP2ChannelHandler(new HTTP2OutboundAdapter())
-                            .withHTTP2ChannelHandler(downstreamHandler)
-                            // HTTP/1.1 Handlers
-                            .withHTTP1ChannelHandler(HTTPCodecs.http1ClientCodec(httpLoadBalancer.httpConfiguration()))
+                            .withHTTP2ChannelHandler(CompressibleHttp2FrameCodec.forClient(httpLoadBalancer.compressionOptions()).initialSettings(http2Settings).build())
+                            .withHTTP2ChannelHandler(new Http2ChannelDuplexHandler() {
+                                @Override
+                                protected void handlerAdded0(ChannelHandlerContext ctx) throws Exception {
+                                    super.handlerAdded0(ctx);
+                                }
+                            })
+                            .withHTTP2ChannelHandler(new DownstreamHandler(httpConnection, channel))
+                            .withHTTP1ChannelHandler(new HttpServerCodec(
+                                    httpConfiguration.maxInitialLineLength(),
+                                    httpConfiguration.maxHeaderSize(),
+                                    httpConfiguration.maxChunkSize(),
+                                    true
+                            ))
                             .withHTTP1ChannelHandler(new HttpContentDecompressor())
-                            .withHTTP1ChannelHandler(new HTTPOutboundAdapter())
-                            .withHTTP1ChannelHandler(downstreamHandler)
+                            .withHTTP1ChannelHandler(new DownstreamHandler(httpConnection, channel))
                             .build();
 
-                    pipeline.addLast(sslHandler);
+                    pipeline.addLast(httpLoadBalancer.configurationContext().tlsClientConfiguration()
+                            .defaultMapping()
+                            .sslContext()
+                            .newHandler(ch.alloc(), node.socketAddress().getHostName(), node.socketAddress().getPort()));
                     pipeline.addLast(alpnHandler);
+                } else {
+                    pipeline.addLast(new HttpClientCodec(httpConfiguration.maxInitialLineLength(), httpConfiguration.maxHeaderSize(), httpConfiguration.maxChunkSize()));
+                    pipeline.addLast(new HttpContentDecompressor());
+                    pipeline.addLast(new DownstreamHandler(httpConnection, channel));
                 }
             }
         });

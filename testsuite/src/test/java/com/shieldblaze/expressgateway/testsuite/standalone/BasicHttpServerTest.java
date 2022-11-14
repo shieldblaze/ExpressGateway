@@ -51,6 +51,7 @@ import java.net.URI;
 import java.net.http.HttpClient;
 import java.net.http.HttpRequest;
 import java.net.http.HttpResponse;
+import java.time.Duration;
 import java.util.Random;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
@@ -120,7 +121,8 @@ public class BasicHttpServerTest {
         NodeBuilder.newBuilder()
                 .withCluster(httpLoadBalancer.defaultCluster())
                 .withSocketAddress(new InetSocketAddress("127.0.0.1", BackendTcpNodePort))
-                .build();
+                .build()
+                .maxConnections(1_000_000);
     }
 
     @Order(4)
@@ -144,6 +146,7 @@ public class BasicHttpServerTest {
                             .GET()
                             .uri(URI.create("http://127.0.0.1:" + LoadBalancerTcpPort + "/get"))
                             .version(HttpClient.Version.HTTP_1_1)
+                            .timeout(Duration.ofSeconds(5))
                             .build();
 
                     for (int messagesCount = 0; messagesCount < frames; messagesCount++) {
@@ -170,6 +173,7 @@ public class BasicHttpServerTest {
                                 .POST(HttpRequest.BodyPublishers.ofByteArray(randomData))
                                 .uri(URI.create("http://127.0.0.1:" + LoadBalancerTcpPort + "/post"))
                                 .version(HttpClient.Version.HTTP_1_1)
+                                .timeout(Duration.ofSeconds(5))
                                 .build();
 
                         HttpResponse<byte[]> httpResponse = HTTP_CLIENT.send(httpRequest, HttpResponse.BodyHandlers.ofByteArray());
@@ -237,7 +241,7 @@ public class BasicHttpServerTest {
             }).start();
         }
 
-        assertThat(latch.await(1, TimeUnit.MINUTES)).isTrue();
+        assertThat(latch.await(5, TimeUnit.MINUTES)).isTrue();
         assertThat(GET_REQUESTS.getAndSet(0)).isEqualTo(frames * threads);
         assertThat(POST_REQUESTS.getAndSet(0)).isEqualTo(frames * threads);
         assertThat(WEBSOCKET_FRAMES.getAndSet(0)).isEqualTo(frames * threads);

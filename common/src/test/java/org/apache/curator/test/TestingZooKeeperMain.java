@@ -146,7 +146,6 @@ public class TestingZooKeeperMain implements ZooKeeperMainFace
         }
     }
 
-    @SuppressWarnings("SynchronizationOnLocalVariableOrMethodParameter")
     @Override
     public void blockUntilStarted()
     {

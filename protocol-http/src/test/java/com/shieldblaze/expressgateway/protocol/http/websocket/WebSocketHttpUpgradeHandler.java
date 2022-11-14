@@ -28,8 +28,7 @@ final class WebSocketHttpUpgradeHandler extends SimpleChannelInboundHandler<Full
 
     @Override
     protected void channelRead0(ChannelHandlerContext ctx, FullHttpRequest msg) {
-        if ("Upgrade".equalsIgnoreCase(msg.headers().get(HttpHeaderNames.CONNECTION)) &&
-                "WebSocket".equalsIgnoreCase(msg.headers().get(HttpHeaderNames.UPGRADE))) {
+        if ("Upgrade".equalsIgnoreCase(msg.headers().get(HttpHeaderNames.CONNECTION)) && "WebSocket".equalsIgnoreCase(msg.headers().get(HttpHeaderNames.UPGRADE))) {
 
             // Replace this Handler with WebSocket Handler
             ctx.pipeline().replace(this, "WebSocketHandler", new WebSocketHandler());

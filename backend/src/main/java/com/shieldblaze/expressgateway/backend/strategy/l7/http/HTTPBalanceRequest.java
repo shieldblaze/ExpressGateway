@@ -19,6 +19,7 @@ package com.shieldblaze.expressgateway.backend.strategy.l7.http;
 
 import com.shieldblaze.expressgateway.backend.loadbalance.Request;
 import io.netty.handler.codec.http.HttpHeaders;
+import io.netty.handler.codec.http2.Http2Headers;
 
 import java.net.InetSocketAddress;
 
@@ -27,6 +28,7 @@ import java.net.InetSocketAddress;
  */
 public final class HTTPBalanceRequest extends Request {
     private final HttpHeaders httpHeaders;
+    private final Http2Headers http2Headers;
 
     /**
      * Create a new {@link HTTPBalanceRequest} Instance
@@ -35,21 +37,51 @@ public final class HTTPBalanceRequest extends Request {
      * @param httpHeaders   {@link HttpHeaders} of Client
      */
     public HTTPBalanceRequest(InetSocketAddress socketAddress, HttpHeaders httpHeaders) {
-        super(socketAddress);
-        this.httpHeaders = httpHeaders;
+        this(socketAddress, httpHeaders, null);
     }
 
     /**
-     * Get Client {@link HttpHeaders}
+     * Create a new {@link HTTPBalanceRequest} Instance
+     *
+     * @param socketAddress {@link InetSocketAddress} of Client
+     * @param http2Headers  {@link Http2Headers} of Client
+     */
+    public HTTPBalanceRequest(InetSocketAddress socketAddress, Http2Headers http2Headers) {
+        this(socketAddress, null, http2Headers);
+    }
+
+    /**
+     * Create a new {@link HTTPBalanceRequest} Instance
+     *
+     * @param socketAddress {@link InetSocketAddress} of Client
+     * @param httpHeaders   {@link HttpHeaders} of Client
+     * @param http2Headers  {@link Http2Headers} of Client
+     */
+    public HTTPBalanceRequest(InetSocketAddress socketAddress, HttpHeaders httpHeaders, Http2Headers http2Headers) {
+        super(socketAddress);
+        this.httpHeaders = httpHeaders;
+        this.http2Headers = http2Headers;
+    }
+
+    /**
+     * Client {@link HttpHeaders}
      */
     public HttpHeaders httpHeaders() {
         return httpHeaders;
+    }
+
+    /**
+     * Client {@link Http2Headers}
+     */
+    public Http2Headers http2Headers() {
+        return http2Headers;
     }
 
     @Override
     public String toString() {
         return "HTTPBalanceRequest{" +
                 "httpHeaders=" + httpHeaders +
+                ", http2Headers=" + http2Headers +
                 '}';
     }
 }

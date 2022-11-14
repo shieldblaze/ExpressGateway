@@ -25,10 +25,8 @@ import com.shieldblaze.expressgateway.backend.strategy.l7.http.sessionpersistenc
 import com.shieldblaze.expressgateway.configuration.ConfigurationContext;
 import com.shieldblaze.expressgateway.configuration.tls.TlsClientConfiguration;
 import com.shieldblaze.expressgateway.configuration.tls.TlsServerConfiguration;
-import com.shieldblaze.expressgateway.protocol.http.DefaultHTTPServerInitializer;
 import com.shieldblaze.expressgateway.protocol.http.loadbalancer.HTTPLoadBalancer;
 import com.shieldblaze.expressgateway.protocol.http.loadbalancer.HTTPLoadBalancerBuilder;
-import com.shieldblaze.expressgateway.protocol.tcp.TCPListener;
 import okhttp3.OkHttpClient;
 import okhttp3.Request;
 import okhttp3.Response;
@@ -64,8 +62,6 @@ public class WebSocketEchoTest extends WebSocketListener {
         httpLoadBalancer = HTTPLoadBalancerBuilder.newBuilder()
                 .withConfigurationContext(ConfigurationContext.create(tlsClientConfiguration, tlsServerConfiguration))
                 .withBindAddress(new InetSocketAddress("0.0.0.0", 9110))
-                .withL4FrontListener(new TCPListener())
-                .withHTTPInitializer(new DefaultHTTPServerInitializer())
                 .build();
 
         httpLoadBalancer.start().future().get();

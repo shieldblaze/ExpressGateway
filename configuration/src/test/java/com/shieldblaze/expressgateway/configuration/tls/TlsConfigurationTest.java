@@ -28,6 +28,7 @@ import java.util.Collections;
 import static org.junit.jupiter.api.Assertions.assertDoesNotThrow;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
@@ -86,7 +87,7 @@ class TlsConfigurationTest {
         tlsConfiguration.addMapping("www.shieldblaze.com", certificateKeyPair);
 
         assertEquals(certificateKeyPair, tlsConfiguration.mapping("www.shieldblaze.com"));
-        assertThrows(NullPointerException.class, () -> tlsConfiguration.mapping("shieldblaze.com"));
+        assertNull(tlsConfiguration.mapping("shieldblaze.com"));
     }
 
     @Test
@@ -99,7 +100,7 @@ class TlsConfigurationTest {
 
         assertEquals(certificateKeyPair, tlsConfiguration.mapping("www.shieldblaze.com"));
         assertEquals(certificateKeyPair, tlsConfiguration.mapping("meow.shieldblaze.com"));
-        assertThrows(NullPointerException.class, () -> tlsConfiguration.mapping("shieldblaze.com"));
+        assertNull(tlsConfiguration.mapping("shieldblaze.com"));
     }
 
     @Test

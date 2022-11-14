@@ -19,8 +19,8 @@ package com.shieldblaze.expressgateway.protocol.http.loadbalancer;
 
 import com.shieldblaze.expressgateway.configuration.ConfigurationContext;
 import com.shieldblaze.expressgateway.core.L4FrontListener;
-import com.shieldblaze.expressgateway.protocol.http.DefaultHTTPServerInitializer;
-import com.shieldblaze.expressgateway.protocol.http.HTTPServerInitializer;
+import com.shieldblaze.expressgateway.protocol.http.HttpServerInitializer;
+import com.shieldblaze.expressgateway.protocol.tcp.TCPListener;
 
 import java.net.InetSocketAddress;
 import java.util.Objects;
@@ -32,8 +32,8 @@ public final class HTTPLoadBalancerBuilder {
     private String name;
     private InetSocketAddress bindAddress;
     private ConfigurationContext configurationContext = ConfigurationContext.DEFAULT;
-    private L4FrontListener l4FrontListener;
-    private HTTPServerInitializer httpServerInitializer = new DefaultHTTPServerInitializer();
+    private L4FrontListener l4FrontListener = new TCPListener();
+    private HttpServerInitializer httpServerInitializer = new StandardHttpServerInitializer();
 
     private HTTPLoadBalancerBuilder() {
         // Prevent outside initialization
@@ -53,7 +53,7 @@ public final class HTTPLoadBalancerBuilder {
         return this;
     }
 
-    public HTTPLoadBalancerBuilder withHTTPInitializer(HTTPServerInitializer httpServerInitializer) {
+    public HTTPLoadBalancerBuilder withHTTPInitializer(HttpServerInitializer httpServerInitializer) {
         this.httpServerInitializer = httpServerInitializer;
         return this;
     }

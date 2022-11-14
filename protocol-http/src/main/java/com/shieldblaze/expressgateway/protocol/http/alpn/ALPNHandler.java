@@ -36,8 +36,8 @@ public final class ALPNHandler extends ApplicationProtocolNegotiationHandler {
 
     private static final Logger logger = LogManager.getLogger(ALPNHandler.class);
 
-    private final Map<String, ChannelHandler> http1ChannelHandlerMap;
-    private final Map<String, ChannelHandler> http2ChannelHandlerMap;
+    private Map<String, ChannelHandler> http1ChannelHandlerMap;
+    private Map<String, ChannelHandler> http2ChannelHandlerMap;
     private final CompletableFuture<String> ALPNProtocol;
 
     /**
@@ -83,8 +83,8 @@ public final class ALPNHandler extends ApplicationProtocolNegotiationHandler {
 
     private void complete(String protocol) {
         ALPNProtocol.complete(protocol);
-        http1ChannelHandlerMap.clear();
-        http2ChannelHandlerMap.clear();
+        http1ChannelHandlerMap = null;
+        http2ChannelHandlerMap = null;
     }
 
     @Override

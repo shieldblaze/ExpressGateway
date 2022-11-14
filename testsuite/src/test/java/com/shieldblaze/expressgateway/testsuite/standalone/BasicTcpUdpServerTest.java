@@ -45,7 +45,6 @@ import reactor.netty.DisposableServer;
 import reactor.netty.tcp.TcpServer;
 import reactor.netty.udp.UdpServer;
 
-import java.io.File;
 import java.io.InputStream;
 import java.io.OutputStream;
 import java.net.DatagramSocket;
@@ -58,11 +57,8 @@ import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
 
-import static com.shieldblaze.expressgateway.common.utils.SystemPropertyUtil.getPropertyOrEnv;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.junit.jupiter.api.Assertions.assertDoesNotThrow;
-import static org.junit.jupiter.api.Assertions.assertNotNull;
-import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 
 @TestMethodOrder(MethodOrderer.OrderAnnotation.class)

@@ -85,7 +85,7 @@ final class WebSocketConnection extends Connection {
         if (state == State.INITIALIZED || webSocketState == WebSocketState.INITIATED) {
             backlogQueue.add(o);
         } else if (state == State.CONNECTED_AND_ACTIVE && webSocketState == WebSocketState.HANDSHAKE_SUCCESS) {
-            channel.writeAndFlush(o, channel.voidPromise());
+            channel.writeAndFlush(o);
         } else {
             ReferenceCountedUtil.silentRelease(o);
         }

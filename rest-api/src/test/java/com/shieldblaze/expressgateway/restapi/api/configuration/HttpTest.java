@@ -63,12 +63,6 @@ class HttpTest {
     @Test
     void applyConfiguration() throws IOException {
         JsonObject jsonBody = new JsonObject();
-        jsonBody.addProperty("maxContentLength", 1024 * 1024);
-        jsonBody.addProperty("h2InitialWindowSize", 65535);
-        jsonBody.addProperty("h2MaxConcurrentStreams", 1000);
-        jsonBody.addProperty("h2MaxHeaderListSize", 262144);
-        jsonBody.addProperty("h2MaxHeaderTableSize", 65536);
-        jsonBody.addProperty("h2MaxFrameSize", 16777215);
         jsonBody.addProperty("maxInitialLineLength", 1024 * 8);
         jsonBody.addProperty("maxHeaderSize", 1024 * 8);
         jsonBody.addProperty("maxChunkSize", 1024 * 8);
@@ -94,12 +88,6 @@ class HttpTest {
     @Test
     void applyBadConfiguration() throws IOException {
         JsonObject jsonBody = new JsonObject();
-        jsonBody.addProperty("maxContentLength", 1024 * 1024);
-        jsonBody.addProperty("h2InitialWindowSize", 65535);
-        jsonBody.addProperty("h2MaxConcurrentStreams", 1000);
-        jsonBody.addProperty("h2MaxHeaderListSize", 262144);
-        jsonBody.addProperty("h2MaxHeaderTableSize", 65536);
-        jsonBody.addProperty("h2MaxFrameSize", 16777215);
         jsonBody.addProperty("maxInitialLineLength", 1024 * 8);
         jsonBody.addProperty("maxHeaderSize", 1024 * 8);
         jsonBody.addProperty("maxChunkSize", 1024 * 8);
@@ -136,12 +124,6 @@ class HttpTest {
             assertTrue(responseJson.get("Success").getAsBoolean());
             JsonObject bufferObject = responseJson.get("Result").getAsJsonObject().get("HttpConfiguration").getAsJsonObject();
 
-            assertEquals(httpDefault.maxContentLength(), bufferObject.get("maxContentLength").getAsInt());
-            assertEquals(httpDefault.h2InitialWindowSize(), bufferObject.get("h2InitialWindowSize").getAsInt());
-            assertEquals(httpDefault.h2MaxConcurrentStreams(), bufferObject.get("h2MaxConcurrentStreams").getAsLong());
-            assertEquals(httpDefault.h2MaxHeaderListSize(), bufferObject.get("h2MaxHeaderListSize").getAsLong());
-            assertEquals(httpDefault.h2MaxHeaderTableSize(), bufferObject.get("h2MaxHeaderTableSize").getAsLong());
-            assertEquals(httpDefault.h2MaxFrameSize(), bufferObject.get("h2MaxFrameSize").getAsInt());
             assertEquals(httpDefault.maxInitialLineLength(), bufferObject.get("maxInitialLineLength").getAsInt());
             assertEquals(httpDefault.maxHeaderSize(), bufferObject.get("maxHeaderSize").getAsInt());
             assertEquals(httpDefault.maxChunkSize(), bufferObject.get("maxChunkSize").getAsInt());
@@ -155,12 +137,6 @@ class HttpTest {
     @Test
     void getConfiguration() throws IOException {
         JsonObject jsonBody = new JsonObject();
-        jsonBody.addProperty("maxContentLength", 1024 * 1024);
-        jsonBody.addProperty("h2InitialWindowSize", 65535);
-        jsonBody.addProperty("h2MaxConcurrentStreams", 1000);
-        jsonBody.addProperty("h2MaxHeaderListSize", 262144);
-        jsonBody.addProperty("h2MaxHeaderTableSize", 65536);
-        jsonBody.addProperty("h2MaxFrameSize", 16777215);
         jsonBody.addProperty("maxInitialLineLength", 1024 * 8);
         jsonBody.addProperty("maxHeaderSize", 1024 * 8);
         jsonBody.addProperty("maxChunkSize", 1024 * 8);
@@ -192,12 +168,6 @@ class HttpTest {
             assertTrue(responseJson.get("Success").getAsBoolean());
             JsonObject bufferObject = responseJson.get("Result").getAsJsonObject().get("HttpConfiguration").getAsJsonObject();
 
-            assertEquals(jsonBody.get("maxContentLength").getAsInt(), bufferObject.get("maxContentLength").getAsInt());
-            assertEquals(jsonBody.get("h2InitialWindowSize").getAsInt(), bufferObject.get("h2InitialWindowSize").getAsInt());
-            assertEquals(jsonBody.get("h2MaxConcurrentStreams").getAsInt(), bufferObject.get("h2MaxConcurrentStreams").getAsLong());
-            assertEquals(jsonBody.get("h2MaxHeaderListSize").getAsInt(), bufferObject.get("h2MaxHeaderListSize").getAsLong());
-            assertEquals(jsonBody.get("h2MaxHeaderTableSize").getAsInt(), bufferObject.get("h2MaxHeaderTableSize").getAsLong());
-            assertEquals(jsonBody.get("h2MaxFrameSize").getAsInt(), bufferObject.get("h2MaxFrameSize").getAsInt());
             assertEquals(jsonBody.get("maxInitialLineLength").getAsInt(), bufferObject.get("maxInitialLineLength").getAsInt());
             assertEquals(jsonBody.get("maxHeaderSize").getAsInt(), bufferObject.get("maxHeaderSize").getAsInt());
             assertEquals(jsonBody.get("maxChunkSize").getAsInt(), bufferObject.get("maxChunkSize").getAsInt());
