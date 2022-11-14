@@ -173,14 +173,16 @@ public abstract class Connection {
     /**
      * Close this {@link Connection}
      */
-    public void close() {
+    public synchronized void close() {
         // If Backlog Queue contains something then clear it before closing connection.
         if (!backlogQueue.isEmpty()) {
             clearBacklog();
         }
 
         node.removeConnection(this);
-        channel.close();
+        if (this.channel != null) {
+            channel.close();
+        }
     }
 
     @Override
