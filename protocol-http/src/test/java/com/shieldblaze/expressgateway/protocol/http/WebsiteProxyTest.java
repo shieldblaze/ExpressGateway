@@ -42,7 +42,7 @@ import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
-import org.junit.jupiter.api.RepeatedTest;
+import org.junit.jupiter.api.Test;
 
 import javax.net.ssl.SSLContext;
 import javax.net.ssl.X509TrustManager;
@@ -136,12 +136,12 @@ public class WebsiteProxyTest {
         httpLoadBalancer.shutdown().future().get();
     }
 
-    @RepeatedTest(10)
+    @Test
     void loadWebsitesExpect200To399AndValidateBodyTest() throws Exception {
         run(true);
     }
 
-    @RepeatedTest(10)
+    @Test
     void loadWebsitesExpect200To399AndDoNotValidateBodyTest() throws Exception {
         run(false);
     }
