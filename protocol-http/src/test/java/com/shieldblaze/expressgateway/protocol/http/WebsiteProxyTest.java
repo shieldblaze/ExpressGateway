@@ -59,14 +59,8 @@ public class WebsiteProxyTest {
     private static final Logger logger = LogManager.getLogger(WebsiteProxyTest.class);
 
     private static final List<String> WEBSITES = List.of(
-            "www.facebook.com",
             "www.amazon.com",
-            "aws.amazon.com",
             "www.google.com",
-            "www.youtube.com",
-            "www.instagram.com",
-            "www.cloudflare.com",
-            "www.netflix.com",
             "www.shieldblaze.com"
     );
 
