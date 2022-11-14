@@ -142,6 +142,12 @@ public class Http11ServerInboundHandler extends ChannelInboundHandlerAdapter imp
      */
     private WebSocketUpgradeProperty validateWebSocketRequest(ChannelHandlerContext ctx, HttpRequest httpRequest) {
         HttpHeaders headers = httpRequest.headers();
+        String connection = headers.get(CONNECTION);
+        String upgrade = headers.get(UPGRADE);
+
+        if (connection == null || upgrade == null) {
+            return null;
+        }
 
         // If 'Connection:Upgrade' and 'Upgrade:WebSocket' then begin WebSocket Upgrade Process.
         if (headers.get(CONNECTION).equalsIgnoreCase("Upgrade") && headers.get(UPGRADE).equalsIgnoreCase("WebSocket")) {
