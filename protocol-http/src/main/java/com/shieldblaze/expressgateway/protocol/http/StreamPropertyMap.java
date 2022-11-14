@@ -64,13 +64,6 @@ final class StreamPropertyMap {
                 '}';
     }
 
-    /**
-     * Simple Key-Value pair store
-     *
-     * @param acceptEncoding    Accept-Encoding header values of request
-     * @param clientFrameStream {@link Http2FrameStream} of the request
-     * @param proxyFrameStream  {@link Http2FrameStream} of proxy request
-     */
     record StreamProperty(String acceptEncoding, Http2FrameStream clientFrameStream, Http2FrameStream proxyFrameStream) {
         // Simple record
     }
