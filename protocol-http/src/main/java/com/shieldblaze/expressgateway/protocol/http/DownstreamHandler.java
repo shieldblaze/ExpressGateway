@@ -111,22 +111,11 @@ final class DownstreamHandler extends ChannelInboundHandlerAdapter implements Cl
         } else if (msg instanceof Http2GoAwayFrame goAwayFrame) {
             if (isConnectionHttp2) {
                 Http2GoAwayFrame http2GoAwayFrame = new DefaultHttp2GoAwayFrame(goAwayFrame.errorCode(), goAwayFrame.content());
-
-                if (goAwayFrame.lastStreamId() == Integer.MAX_VALUE) {
-                    http2GoAwayFrame.setExtraStreamIds(Integer.MAX_VALUE);
-                } else {
-                    StreamPropertyMap.StreamProperty streamProperty = httpConnection.streamPropertyMap().get(goAwayFrame.lastStreamId());
-
-                    if (streamProperty == null) {
-                        http2GoAwayFrame.setExtraStreamIds(Integer.MAX_VALUE);
-                    } else {
-                        int clientId = streamProperty.clientFrameStream().id();
-                        http2GoAwayFrame.setExtraStreamIds(clientId);
-                        httpConnection.streamPropertyMap().remove(goAwayFrame.lastStreamId());
-                    }
-                }
-
+                http2GoAwayFrame.setExtraStreamIds(goAwayFrame.lastStreamId());
                 inboundChannel.writeAndFlush(http2GoAwayFrame);
+
+                // Try to remove the stream if it exists
+                httpConnection.streamPropertyMap().remove(goAwayFrame.lastStreamId());
             }
         } else if (msg instanceof Http2ResetFrame http2ResetFrame) {
             if (isConnectionHttp2) {
