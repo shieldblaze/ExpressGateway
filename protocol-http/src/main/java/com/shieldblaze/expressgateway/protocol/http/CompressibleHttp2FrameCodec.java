@@ -58,7 +58,7 @@ public final class CompressibleHttp2FrameCodec extends Http2FrameCodecBuilder {
     public CompressibleHttp2FrameCodec(boolean isServer, boolean beginClientStreamIdAtOne, CompressionOptions[] compressionOptions) {
         this.isServer = isServer;
         this.beginClientStreamIdAtOne = beginClientStreamIdAtOne;
-        this.compressionOptions = compressionOptions;
+        this.compressionOptions = compressionOptions.clone();
     }
 
     @Override
@@ -72,7 +72,7 @@ public final class CompressibleHttp2FrameCodec extends Http2FrameCodecBuilder {
             maxHeaderListSize = DEFAULT_HEADER_LIST_SIZE;
         }
 
-        Http2Connection connection = new DefaultHttp2Connection(isServer, beginClientStreamIdAtOne);
+        Http2Connection connection = new DelegatingHttp2Connection(isServer);
 
         Http2FrameReader reader = new DefaultHttp2FrameReader(new DefaultHttp2HeadersDecoder(true, maxHeaderListSize));
         Http2FrameWriter writer = new DefaultHttp2FrameWriter(Http2HeadersEncoder.NEVER_SENSITIVE, false);
