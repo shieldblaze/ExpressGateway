@@ -55,6 +55,7 @@ import static io.netty.handler.codec.http2.Http2Stream.State.OPEN;
 import static io.netty.handler.codec.http2.Http2Stream.State.RESERVED_LOCAL;
 import static io.netty.handler.codec.http2.Http2Stream.State.RESERVED_REMOTE;
 import static io.netty.util.internal.ObjectUtil.checkNotNull;
+import static io.netty.util.internal.ObjectUtil.checkPositive;
 import static io.netty.util.internal.ObjectUtil.checkPositiveOrZero;
 import static java.lang.Integer.MAX_VALUE;
 
@@ -91,25 +92,12 @@ public class DefaultHttp2Connection implements Http2Connection {
         this(server, DEFAULT_MAX_RESERVED_STREAMS);
     }
 
-    public DefaultHttp2Connection(boolean server, boolean beginClientStreamIdAtOne) {
-        this(server, DEFAULT_MAX_RESERVED_STREAMS, beginClientStreamIdAtOne);
-    }
-
     /**
      * Creates a new connection with the given settings.
      * @param server whether or not this end-point is the server-side of the HTTP/2 connection.
      * @param maxReservedStreams The maximum amount of streams which can exist in the reserved state for each endpoint.
      */
     public DefaultHttp2Connection(boolean server, int maxReservedStreams) {
-        this(server, maxReservedStreams, false);
-    }
-
-    /**
-     * Creates a new connection with the given settings.
-     * @param server whether or not this end-point is the server-side of the HTTP/2 connection.
-     * @param maxReservedStreams The maximum amount of streams which can exist in the reserved state for each endpoint.
-     */
-    public DefaultHttp2Connection(boolean server, int maxReservedStreams, boolean beginClientStreamIdAtOne) {
         activeStreams = new ActiveStreams(listeners);
         // Reserved streams are excluded from the SETTINGS_MAX_CONCURRENT_STREAMS limit according to [1] and the RFC
         // doesn't define a way to communicate the limit on reserved streams. We rely upon the peer to send RST_STREAM
@@ -118,12 +106,6 @@ public class DefaultHttp2Connection implements Http2Connection {
         // [2] https://tools.ietf.org/html/rfc7540#section-8.2.2
         localEndpoint = new DefaultEndpoint<Http2LocalFlowController>(server, server ? MAX_VALUE : maxReservedStreams);
         remoteEndpoint = new DefaultEndpoint<Http2RemoteFlowController>(!server, maxReservedStreams);
-
-        // START WITH -1 SO NEXT GENERATED CLIENT ID WILL BE 1.
-        // (-1 + 2) = 1
-        if (beginClientStreamIdAtOne) {
-            localEndpoint.nextReservationStreamId = -1;
-        }
 
         // Add the connection stream to the map.
         streamMap.put(connectionStream.id(), connectionStream);
@@ -687,7 +669,7 @@ public class DefaultHttp2Connection implements Http2Connection {
     /**
      * Simple endpoint implementation.
      */
-    private final class DefaultEndpoint<F extends Http2FlowController> implements Endpoint<F> {
+    final class DefaultEndpoint<F extends Http2FlowController> implements Endpoint<F> {
         private final boolean server;
         /**
          * The minimum stream ID allowed when creating the next stream. This only applies at the time the stream is
@@ -724,6 +706,7 @@ public class DefaultHttp2Connection implements Http2Connection {
                 nextReservationStreamId = 0;
             } else {
                 nextStreamIdToCreate = 1;
+                // For manually created client-side streams, 1 is reserved for HTTP upgrade, so start at 3.
                 nextReservationStreamId = 1;
             }
 
@@ -736,7 +719,42 @@ public class DefaultHttp2Connection implements Http2Connection {
 
         @Override
         public int incrementAndGetNextStreamId() {
-            return nextReservationStreamId += 2;
+            return nextReservationStreamId >= 0 ? nextReservationStreamId += 2 : nextReservationStreamId;
+        }
+
+        /**
+         * Set a custom stream ID which will be created on next stream initialization.
+         *
+         * @param streamId Custom stream ID
+         * @throws IllegalArgumentException If custom Stream ID is not valid
+         */
+        void setReservationStreamId(int streamId) {
+            // Stream ID must be greater than 0.
+            checkPositive(streamId, "Stream ID must be greater than 0 (zero)");
+
+            // If Stream ID is 1 then we will not validate
+            if (!(streamId == 1 || streamId > 1 && streamId > nextReservationStreamId)) {
+                throw new IllegalArgumentException("Stream ID must be >= 1 and must be greater than last Stream ID");
+            }
+
+            final boolean isStreamIDEvenNumber = (nextReservationStreamId + 2) % 2 == 0;
+            if (server) {
+                // Server Stream ID must be even. If stream ID is valid then we will update 'nextReservationStreamId'.
+                // Else, if Stream ID not even then we will throw an exception.
+                if (isStreamIDEvenNumber) {
+                    nextReservationStreamId = streamId;
+                } else {
+                    throw new IllegalArgumentException("Server Stream ID must be even");
+                }
+            } else {
+                // Client Stream ID must be odd. If stream ID is valid then we will update 'nextReservationStreamId'.
+                // Else, if Stream ID not odd then we will throw an exception.
+                if (!isStreamIDEvenNumber) {
+                    nextReservationStreamId = streamId;
+                } else {
+                    throw new IllegalArgumentException("Client Stream ID must be odd");
+                }
+            }
         }
 
         private void incrementExpectedStreamId(int streamId) {

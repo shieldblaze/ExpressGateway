@@ -24,7 +24,6 @@ import com.shieldblaze.expressgateway.configuration.http.HttpConfiguration;
 import com.shieldblaze.expressgateway.protocol.http.alpn.ALPNHandler;
 import io.netty.buffer.Unpooled;
 import io.netty.channel.ChannelFuture;
-import io.netty.channel.ChannelFutureListener;
 import io.netty.handler.codec.UnsupportedMessageTypeException;
 import io.netty.handler.codec.http.DefaultHttpContent;
 import io.netty.handler.codec.http.DefaultLastHttpContent;
@@ -234,7 +233,8 @@ final class HttpConnection extends Connection {
             applySupportedCompressionHeaders(headersFrame.headers());
 
             Http2FrameStream clientFrameStream = headersFrame.stream();
-            Http2FrameStream proxyFrameStream = newFrameStream();
+            System.out.println(streamFrame);
+            Http2FrameStream proxyFrameStream = newFrameStream(clientFrameStream.id());
             headersFrame.stream(proxyFrameStream);
             channel.writeAndFlush(headersFrame);
 
@@ -309,7 +309,7 @@ final class HttpConnection extends Connection {
         }
     }
 
-    private void applySupportedCompressionHeaders(Object o) {
+    private static void applySupportedCompressionHeaders(Object o) {
         // Set supported compression headers
         if (o instanceof HttpHeaders headers) {
             headers.set(ACCEPT_ENCODING, "br, gzip, deflate");
@@ -320,6 +320,10 @@ final class HttpConnection extends Connection {
 
     private Http2FrameStream newFrameStream() {
         return channel.pipeline().get(Http2ChannelDuplexHandler.class).newStream();
+    }
+
+    private Http2FrameStream newFrameStream(int streamId) {
+        return channel.pipeline().get(Http2ChannelDuplexHandler.class).newStream(streamId);
     }
 
     public StreamPropertyMap.StreamProperty lastTranslatedStreamProperty() {

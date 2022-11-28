@@ -98,7 +98,7 @@ public final class Http2ServerInboundHandler extends ChannelInboundHandlerAdapte
                     return;
                 }
 
-                httpConnection = bootstrapper.create(node, ctx.channel(), http2SettingsFrame.settings(), headersFrame.stream().id() == 1);
+                httpConnection = bootstrapper.create(node, ctx.channel(), http2SettingsFrame.settings());
                 node.addConnection(httpConnection);
             }
 
@@ -134,7 +134,6 @@ public final class Http2ServerInboundHandler extends ChannelInboundHandlerAdapte
         close();
     }
 
-    @SuppressWarnings("StatementWithEmptyBody")
     @Override
     public void exceptionCaught(ChannelHandlerContext ctx, Throwable cause) {
         try {
