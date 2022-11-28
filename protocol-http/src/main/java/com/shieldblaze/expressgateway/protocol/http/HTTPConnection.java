@@ -233,6 +233,7 @@ final class HttpConnection extends Connection {
             applySupportedCompressionHeaders(headersFrame.headers());
 
             Http2FrameStream clientFrameStream = headersFrame.stream();
+            System.out.println(streamFrame);
             Http2FrameStream proxyFrameStream = newFrameStream(clientFrameStream.id());
             headersFrame.stream(proxyFrameStream);
             channel.writeAndFlush(headersFrame);

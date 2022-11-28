@@ -55,6 +55,7 @@ import static io.netty.handler.codec.http2.Http2Stream.State.OPEN;
 import static io.netty.handler.codec.http2.Http2Stream.State.RESERVED_LOCAL;
 import static io.netty.handler.codec.http2.Http2Stream.State.RESERVED_REMOTE;
 import static io.netty.util.internal.ObjectUtil.checkNotNull;
+import static io.netty.util.internal.ObjectUtil.checkPositive;
 import static io.netty.util.internal.ObjectUtil.checkPositiveOrZero;
 import static java.lang.Integer.MAX_VALUE;
 
@@ -728,16 +729,19 @@ public class DefaultHttp2Connection implements Http2Connection {
          * @throws IllegalArgumentException If custom Stream ID is not valid
          */
         void setReservationStreamId(int streamId) {
-            if (!(streamId > nextReservationStreamId && nextReservationStreamId >= 0)) {
-                throw new IllegalArgumentException("Stream ID must be greater then previous stream ID " +
-                        "and must be greater than 0");
+            // Stream ID must be greater than 0.
+            checkPositive(streamId, "Stream ID must be greater than 0 (zero)");
+
+            // If Stream ID is 1 then we will not validate
+            if (!(streamId == 1 || streamId > 1 && streamId > nextReservationStreamId)) {
+                throw new IllegalArgumentException("Stream ID must be >= 1 and must be greater than last Stream ID");
             }
 
-            final int nextRequestedStreamId = nextReservationStreamId + 2;
+            final boolean isStreamIDEvenNumber = (nextReservationStreamId + 2) % 2 == 0;
             if (server) {
                 // Server Stream ID must be even. If stream ID is valid then we will update 'nextReservationStreamId'.
                 // Else, if Stream ID not even then we will throw an exception.
-                if (nextRequestedStreamId % 2 == 0) {
+                if (isStreamIDEvenNumber) {
                     nextReservationStreamId = streamId;
                 } else {
                     throw new IllegalArgumentException("Server Stream ID must be even");
@@ -745,7 +749,7 @@ public class DefaultHttp2Connection implements Http2Connection {
             } else {
                 // Client Stream ID must be odd. If stream ID is valid then we will update 'nextReservationStreamId'.
                 // Else, if Stream ID not odd then we will throw an exception.
-                if (nextRequestedStreamId % 2 != 0) {
+                if (!isStreamIDEvenNumber) {
                     nextReservationStreamId = streamId;
                 } else {
                     throw new IllegalArgumentException("Client Stream ID must be odd");
