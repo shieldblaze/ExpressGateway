@@ -43,21 +43,19 @@ import static io.netty.handler.codec.http2.Http2CodecUtil.DEFAULT_HEADER_LIST_SI
 public final class CompressibleHttp2FrameCodec extends Http2FrameCodecBuilder {
 
     private final boolean isServer;
-    private final boolean beginClientStreamIdAtOne;
     private final CompressionOptions[] compressionOptions;
 
     public static CompressibleHttp2FrameCodec forServer(CompressionOptions[] compressionOptions) {
-        return new CompressibleHttp2FrameCodec(true, false, compressionOptions);
+        return new CompressibleHttp2FrameCodec(true, compressionOptions);
     }
 
-    public static CompressibleHttp2FrameCodec forClient(CompressionOptions[] compressionOptions, boolean beginClientStreamIdAtOne) {
-        return new CompressibleHttp2FrameCodec(false, beginClientStreamIdAtOne, compressionOptions);
+    public static CompressibleHttp2FrameCodec forClient(CompressionOptions[] compressionOptions) {
+        return new CompressibleHttp2FrameCodec(false, compressionOptions);
     }
 
     @NonNull
-    public CompressibleHttp2FrameCodec(boolean isServer, boolean beginClientStreamIdAtOne, CompressionOptions[] compressionOptions) {
+    public CompressibleHttp2FrameCodec(boolean isServer, CompressionOptions[] compressionOptions) {
         this.isServer = isServer;
-        this.beginClientStreamIdAtOne = beginClientStreamIdAtOne;
         this.compressionOptions = compressionOptions.clone();
     }
 
@@ -72,7 +70,7 @@ public final class CompressibleHttp2FrameCodec extends Http2FrameCodecBuilder {
             maxHeaderListSize = DEFAULT_HEADER_LIST_SIZE;
         }
 
-        Http2Connection connection = new DelegatingHttp2Connection(isServer);
+        Http2Connection connection = new DefaultHttp2Connection(isServer);
 
         Http2FrameReader reader = new DefaultHttp2FrameReader(new DefaultHttp2HeadersDecoder(true, maxHeaderListSize));
         Http2FrameWriter writer = new DefaultHttp2FrameWriter(Http2HeadersEncoder.NEVER_SENSITIVE, false);

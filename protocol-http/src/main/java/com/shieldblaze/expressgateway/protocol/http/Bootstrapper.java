@@ -50,15 +50,15 @@ final class Bootstrapper {
 
     Bootstrapper(HTTPLoadBalancer httpLoadBalancer) {
         this.httpLoadBalancer = httpLoadBalancer;
-        this.eventLoopGroup = httpLoadBalancer.eventLoopFactory().childGroup();
-        this.byteBufAllocator = httpLoadBalancer.byteBufAllocator();
+        eventLoopGroup = httpLoadBalancer.eventLoopFactory().childGroup();
+        byteBufAllocator = httpLoadBalancer.byteBufAllocator();
     }
 
     HttpConnection create(Node node, Channel channel) {
-        return create(node, channel, Http2Settings.defaultSettings(), false);
+        return create(node, channel, Http2Settings.defaultSettings());
     }
 
-    HttpConnection create(Node node, Channel channel, Http2Settings http2Settings, boolean beginClientStreamIdAtOne) {
+    HttpConnection create(Node node, Channel channel, Http2Settings http2Settings) {
         HttpConfiguration httpConfiguration = httpLoadBalancer.httpConfiguration();
         HttpConnection httpConnection = new HttpConnection(node, httpConfiguration);
 
@@ -76,7 +76,7 @@ final class Bootstrapper {
                 if (httpLoadBalancer.configurationContext().tlsClientConfiguration().enabled()) {
                     ALPNHandler alpnHandler = ALPNHandlerBuilder.newBuilder()
                             .withHTTP2ChannelHandler(CompressibleHttp2FrameCodec
-                                    .forClient(httpLoadBalancer.compressionOptions(), beginClientStreamIdAtOne)
+                                    .forClient(httpLoadBalancer.compressionOptions())
                                     .initialSettings(http2Settings)
                                     .build())
                             .withHTTP2ChannelHandler(new Http2ChannelDuplexHandler() {

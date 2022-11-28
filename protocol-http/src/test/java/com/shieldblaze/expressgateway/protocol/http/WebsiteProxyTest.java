@@ -134,22 +134,26 @@ public class WebsiteProxyTest {
 
             Request request = new Request.Builder()
                     .get()
-                    .url("https://127.0.0.1:" + LoadBalancerPort + "/")
+                    .url("https://127.0.0.1:" + LoadBalancerPort + '/')
                     .header("Host", domain)
                     .header("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/106.0.0.0 Safari/537.36")
                     .build();
 
-            try (Response response = OK_HTTP_CLIENT.newCall(request).execute()) {
-                assertThat(response.code()).isBetween(200, 399);
+            try {
+                for (int i = 0; i < 5; i++) {
+                    try (Response response = OK_HTTP_CLIENT.newCall(request).execute()) {
+                        assertThat(response.code()).isBetween(200, 399);
 
-                ResponseBody responseBody = response.body();
-                assertThat(responseBody).isNotNull();
-                assertThat(responseBody.bytes()).isNotNull();
+                        ResponseBody responseBody = response.body();
+                        assertThat(responseBody).isNotNull();
+                        assertThat(responseBody.bytes()).isNotNull();
 
-                logger.info("Domain: {}; Successful", domain);
-            } catch (Exception ex) {
-                logger.error("Failed Domain Proxy: {}, Reason: {}", domain, ex.getMessage());
-                throw ex;
+                        logger.info("Domain: {}; Successful", domain);
+                    } catch (Exception ex) {
+                        logger.error("Failed Domain Proxy: {}, Reason: {}", domain, ex.getMessage());
+                        throw ex;
+                    }
+                }
             } finally {
                 ConnectionPool connectionPool = OK_HTTP_CLIENT.connectionPool();
                 connectionPool.evictAll();

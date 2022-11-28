@@ -69,7 +69,7 @@ final class DownstreamHandler extends ChannelInboundHandlerAdapter implements Cl
     private final boolean isConnectionHttp2;
     private ChannelHandlerContext ctx;
     private Channel inboundChannel;
-    private boolean headerRead = false;
+    private boolean headerRead;
 
     DownstreamHandler(HttpConnection httpConnection, Channel inboundChannel) {
         this.httpConnection = httpConnection;
@@ -254,7 +254,6 @@ final class DownstreamHandler extends ChannelInboundHandlerAdapter implements Cl
         close();
     }
 
-    @SuppressWarnings("StatementWithEmptyBody")
     @Override
     public void exceptionCaught(ChannelHandlerContext ctx, Throwable cause) {
         try {
