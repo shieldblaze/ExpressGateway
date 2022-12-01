@@ -20,29 +20,23 @@ package com.shieldblaze.expressgateway.protocol.http;
 import io.netty.handler.codec.http2.Http2FrameStream;
 import it.unimi.dsi.fastutil.ints.Int2ObjectArrayMap;
 import it.unimi.dsi.fastutil.ints.Int2ObjectMap;
-import it.unimi.dsi.fastutil.ints.Int2ObjectOpenHashMap;
 
-final class StreamPropertyMap {
+final class Streams {
+    private final Int2ObjectMap<Stream> map = new Int2ObjectArrayMap<>();
 
-    private final Int2ObjectMap<StreamProperty> map = new Int2ObjectOpenHashMap<>();
-
-    void put(int streamId, StreamProperty streamProperty) {
-        map.put(streamId, streamProperty);
+    void put(int streamId, Stream stream) {
+        synchronized (map) {
+            map.put(streamId, stream);
+        }
     }
 
-    StreamProperty remove(Http2FrameStream frameStream) {
-        return map.remove(frameStream.id());
+    Stream remove(int streamId) {
+        synchronized (map) {
+            return map.remove(streamId);
+        }
     }
 
-    StreamProperty remove(int streamId) {
-        return map.remove(streamId);
-    }
-
-    StreamProperty get(Http2FrameStream streamFrame) {
-        return map.get(streamFrame.id());
-    }
-
-    StreamProperty get(int streamId) {
+    Stream get(int streamId) {
         return map.get(streamId);
     }
 
@@ -51,7 +45,7 @@ final class StreamPropertyMap {
         return "StreamPropertyMap{map=" + map + '}';
     }
 
-    record StreamProperty(String acceptEncoding, Http2FrameStream clientFrameStream, Http2FrameStream proxyFrameStream) {
+    record Stream(String acceptEncoding, Http2FrameStream clientStream, Http2FrameStream proxyStream) {
         // Simple record
     }
 }
