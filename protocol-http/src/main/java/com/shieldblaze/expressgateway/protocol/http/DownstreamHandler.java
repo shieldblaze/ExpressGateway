@@ -247,7 +247,7 @@ final class DownstreamHandler extends ChannelInboundHandlerAdapter implements Cl
             }
         } else {
             ReferenceCountUtil.release(o);
-
+            throw new UnsupportedMessageTypeException("Unsupported");
         }
     }
 
