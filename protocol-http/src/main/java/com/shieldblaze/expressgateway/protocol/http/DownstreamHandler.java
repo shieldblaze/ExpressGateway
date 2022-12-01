@@ -100,8 +100,10 @@ final class DownstreamHandler extends ChannelInboundHandlerAdapter implements Cl
             }
         } else if (msg instanceof Http2WindowUpdateFrame windowUpdateFrame) {
             if (isConnectionHttp2) {
-                Http2FrameStream frameStream = httpConnection.streamPropertyMap().get(windowUpdateFrame.stream()).clientFrameStream();
+                final int streamId = windowUpdateFrame.stream().id();
+                Http2FrameStream frameStream = httpConnection.streamPropertyMap().get(streamId).clientStream();
                 windowUpdateFrame.stream(frameStream);
+
                 inboundChannel.writeAndFlush(windowUpdateFrame);
             }
         } else if (msg instanceof Http2SettingsFrame || msg instanceof Http2PingFrame || msg instanceof Http2SettingsAckFrame) {
@@ -119,8 +121,10 @@ final class DownstreamHandler extends ChannelInboundHandlerAdapter implements Cl
             }
         } else if (msg instanceof Http2ResetFrame http2ResetFrame) {
             if (isConnectionHttp2) {
-                Http2FrameStream clientFrameStream = httpConnection.streamPropertyMap().remove(http2ResetFrame.stream()).clientFrameStream();
+                final int streamId = http2ResetFrame.stream().id();
+                Http2FrameStream clientFrameStream = httpConnection.streamPropertyMap().remove(streamId).clientStream();
                 http2ResetFrame.stream(clientFrameStream);
+
                 inboundChannel.writeAndFlush(http2ResetFrame);
             }
         } else if (msg instanceof WebSocketFrame) {
@@ -162,29 +166,31 @@ final class DownstreamHandler extends ChannelInboundHandlerAdapter implements Cl
             }
         } else {
             ReferenceCountedUtil.silentRelease(o);
-            throw new IllegalArgumentException("Unsupported Message: " + o);
+            throw new UnsupportedMessageTypeException("Unsupported Message: " + o.getClass().getSimpleName(),
+                    Http2HeadersFrame.class, Http2DataFrame.class);
         }
     }
 
     private void proxyInboundHttp2ToHttp2(Http2StreamFrame streamFrame) {
-        StreamPropertyMap.StreamProperty streamProperty = httpConnection.streamPropertyMap().get(streamFrame.stream());
+        final int streamId = streamFrame.stream().id();
+        Streams.Stream stream = httpConnection.streamPropertyMap().get(streamId);
 
-        if (streamProperty == null) {
-            ReferenceCountedUtil.silentRelease(streamFrame);
+        if (stream == null) {
+            ReferenceCountUtil.release(streamFrame);
             return;
         } else {
-            streamFrame.stream(streamProperty.clientFrameStream());
+            streamFrame.stream(stream.clientStream());
         }
 
         if (streamFrame instanceof Http2HeadersFrame headersFrame) {
-            applyCompressionOnHttp2(headersFrame.headers(), streamProperty.acceptEncoding());
+            applyCompressionOnHttp2(headersFrame.headers(), stream.acceptEncoding());
 
             if (headersFrame.isEndStream()) {
-                httpConnection.streamPropertyMap().remove(streamProperty.clientFrameStream());
+                httpConnection.streamPropertyMap().remove(streamId);
             }
         } else if (streamFrame instanceof Http2DataFrame dataFrame) {
             if (dataFrame.isEndStream()) {
-                httpConnection.streamPropertyMap().remove(streamProperty.clientFrameStream());
+                httpConnection.streamPropertyMap().remove(streamId);
             }
         }
 
@@ -197,17 +203,17 @@ final class DownstreamHandler extends ChannelInboundHandlerAdapter implements Cl
 
             if (httpResponse instanceof FullHttpResponse fullHttpResponse) {
                 Http2HeadersFrame http2HeadersFrame = new DefaultHttp2HeadersFrame(http2Headers, false);
-                http2HeadersFrame.stream(httpConnection.lastTranslatedStreamProperty().clientFrameStream());
+                http2HeadersFrame.stream(httpConnection.lastTranslatedStreamProperty().clientStream());
 
                 Http2DataFrame dataFrame = new DefaultHttp2DataFrame(fullHttpResponse.content(), true);
-                dataFrame.stream(httpConnection.lastTranslatedStreamProperty().clientFrameStream());
+                dataFrame.stream(httpConnection.lastTranslatedStreamProperty().clientStream());
                 httpConnection.clearTranslatedStreamProperty();
 
                 inboundChannel.write(http2Headers);
                 inboundChannel.writeAndFlush(dataFrame);
             } else {
                 Http2HeadersFrame http2HeadersFrame = new DefaultHttp2HeadersFrame(http2Headers, false);
-                http2HeadersFrame.stream(httpConnection.lastTranslatedStreamProperty().clientFrameStream());
+                http2HeadersFrame.stream(httpConnection.lastTranslatedStreamProperty().clientStream());
 
                 inboundChannel.writeAndFlush(http2HeadersFrame);
             }
@@ -218,17 +224,17 @@ final class DownstreamHandler extends ChannelInboundHandlerAdapter implements Cl
                 // > If Trailing Headers are present then we'll write HTTP/2 Data Frame followed by HTTP/2 Header Frame which will have 'endOfStream' set to 'true.
                 if (lastHttpContent.trailingHeaders().isEmpty()) {
                     Http2DataFrame dataFrame = new DefaultHttp2DataFrame(httpContent.content(), true);
-                    dataFrame.stream(httpConnection.lastTranslatedStreamProperty().clientFrameStream());
+                    dataFrame.stream(httpConnection.lastTranslatedStreamProperty().clientStream());
                     httpConnection.clearTranslatedStreamProperty();
 
                     inboundChannel.writeAndFlush(dataFrame);
                 } else {
                     Http2DataFrame dataFrame = new DefaultHttp2DataFrame(httpContent.content(), false);
-                    dataFrame.stream(httpConnection.lastTranslatedStreamProperty().clientFrameStream());
+                    dataFrame.stream(httpConnection.lastTranslatedStreamProperty().clientStream());
 
                     Http2Headers http2Headers = HttpConversionUtil.toHttp2Headers(lastHttpContent.trailingHeaders(), true);
                     Http2HeadersFrame http2HeadersFrame = new DefaultHttp2HeadersFrame(http2Headers, true);
-                    http2HeadersFrame.stream(httpConnection.lastTranslatedStreamProperty().clientFrameStream());
+                    http2HeadersFrame.stream(httpConnection.lastTranslatedStreamProperty().clientStream());
                     httpConnection.clearTranslatedStreamProperty();
 
                     inboundChannel.write(dataFrame);
@@ -236,9 +242,12 @@ final class DownstreamHandler extends ChannelInboundHandlerAdapter implements Cl
                 }
             } else {
                 Http2DataFrame dataFrame = new DefaultHttp2DataFrame(httpContent.content(), false);
-                dataFrame.stream(httpConnection.lastTranslatedStreamProperty().clientFrameStream());
+                dataFrame.stream(httpConnection.lastTranslatedStreamProperty().clientStream());
                 inboundChannel.writeAndFlush(dataFrame);
             }
+        } else {
+            ReferenceCountUtil.release(o);
+
         }
     }
 
