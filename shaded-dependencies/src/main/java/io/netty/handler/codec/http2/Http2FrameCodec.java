@@ -404,14 +404,10 @@ public class Http2FrameCodec extends Http2ConnectionHandler {
         //
         // In both cases, we will initialize the stream.
         if (initialStreamId == -1 || isStreamIdValid(initialStreamId) && connection().stream(initialStreamId) == null) {
-            try {
-                boolean initialize = initializeNewStream(ctx, (DefaultHttp2FrameStream) headersFrame.stream(), promise);
-                if (initialize) {
-                    writeHeadersForNewInitializedStream(ctx, headersFrame, promise);
-                    return;
-                }
-            } catch (Exception ex) {
-                ex.printStackTrace();
+            boolean initialize = initializeNewStream(ctx, (DefaultHttp2FrameStream) headersFrame.stream(), promise);
+            if (initialize) {
+                writeHeadersForNewInitializedStream(ctx, headersFrame, promise);
+                return;
             }
         }
 

@@ -131,7 +131,14 @@ final class DownstreamHandler extends ChannelInboundHandlerAdapter implements Cl
             inboundChannel.writeAndFlush(msg);
         } else {
             ReferenceCountUtil.release(msg);
-            throw new UnsupportedMessageTypeException(msg);
+            throw new UnsupportedMessageTypeException("Unsupported Object: " + msg.getClass().getSimpleName(),
+                    HttpResponse.class, HttpContent.class,
+                    Http2HeadersFrame.class, Http2DataFrame.class,
+                    Http2WindowUpdateFrame.class,
+                    Http2SettingsFrame.class, Http2PingFrame.class, Http2SettingsAckFrame.class,
+                    Http2GoAwayFrame.class,
+                    Http2ResetFrame.class,
+                    WebSocketFrame.class);
         }
     }
 
@@ -178,9 +185,9 @@ final class DownstreamHandler extends ChannelInboundHandlerAdapter implements Cl
         if (stream == null) {
             ReferenceCountUtil.release(streamFrame);
             return;
-        } else {
-            streamFrame.stream(stream.clientStream());
         }
+
+        streamFrame.stream(stream.clientStream());
 
         if (streamFrame instanceof Http2HeadersFrame headersFrame) {
             applyCompressionOnHttp2(headersFrame.headers(), stream.acceptEncoding());
@@ -247,7 +254,8 @@ final class DownstreamHandler extends ChannelInboundHandlerAdapter implements Cl
             }
         } else {
             ReferenceCountUtil.release(o);
-            throw new UnsupportedMessageTypeException("Unsupported");
+            throw new UnsupportedMessageTypeException("Unsupported Object: " + o.getClass().getSimpleName(),
+                    HttpResponse.class, HttpContent.class);
         }
     }
 
