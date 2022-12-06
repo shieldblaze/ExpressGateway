@@ -18,9 +18,9 @@
 package com.shieldblaze.expressgateway.autoscaling;
 
 import com.shieldblaze.expressgateway.concurrent.eventstream.EventStream;
-import com.shieldblaze.expressgateway.metrics.CPU;
-import com.shieldblaze.expressgateway.metrics.EdgeNetworkMetricRecorder;
-import com.shieldblaze.expressgateway.metrics.Memory;
+import com.shieldblaze.expressgateway.metrics.StandardCPUMetric;
+import com.shieldblaze.expressgateway.metrics.StandardEdgeNetworkMetricRecorder;
+import com.shieldblaze.expressgateway.metrics.StandardMemoryMetric;
 import io.netty.buffer.ByteBuf;
 import io.netty.buffer.Unpooled;
 import io.netty.channel.embedded.EmbeddedChannel;
@@ -42,8 +42,7 @@ class ScaleMonitorTest {
     @BeforeAll
     static void setup() {
         dummyAutoscaling = new DummyAutoscaling(eventStream, null);
-
-        scaleMonitor = new ScaleMonitor(dummyAutoscaling, new CPU(), new Memory(), EdgeNetworkMetricRecorder.INSTANCE);
+        scaleMonitor = new ScaleMonitor(dummyAutoscaling, StandardCPUMetric.INSTANCE, StandardMemoryMetric.INSTANCE, StandardEdgeNetworkMetricRecorder.INSTANCE);
     }
 
     @AfterAll
@@ -53,13 +52,12 @@ class ScaleMonitorTest {
     }
 
     @Test
-    @Disabled("needs revisit")
     void testScaleOutDueToPackets() {
         assertFalse(dummyAutoscaling.isScaleOut());
 
-        EmbeddedChannel channel = new EmbeddedChannel(EdgeNetworkMetricRecorder.INSTANCE);
+        EmbeddedChannel channel = new EmbeddedChannel(StandardEdgeNetworkMetricRecorder.INSTANCE);
 
-        for (int i = 0; i < 100; i++) {
+        for (int i = 0; i < 1000; i++) {
             ByteBuf byteBuf = Unpooled.buffer();
             byteBuf.writeZero(100_000);
 

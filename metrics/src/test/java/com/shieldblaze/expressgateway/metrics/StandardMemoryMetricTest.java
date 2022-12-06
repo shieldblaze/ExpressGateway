@@ -17,14 +17,26 @@
  */
 package com.shieldblaze.expressgateway.metrics;
 
-/**
- * Current physical memory and swap space used.
- */
-@FunctionalInterface
-public interface MemoryMetric {
+import org.junit.jupiter.api.Test;
 
-    /**
-     * Get current percentage of memory used
-     */
-    float physicalMemoryUsed();
+import java.util.HashMap;
+import java.util.Map;
+
+import static org.junit.jupiter.api.Assertions.assertNotEquals;
+
+class StandardMemoryMetricTest {
+
+    @Test
+    void physicalMemoryUsedTest() {
+        MemoryMetric memoryMetric = StandardMemoryMetric.INSTANCE;
+        float memoryUsed = memoryMetric.physicalMemoryUsed();
+
+        Map<String, Integer> stringIntegerMap = new HashMap<>();
+        for (int i = 0; i < 1_000_000; i++) {
+            stringIntegerMap.put(String.valueOf(i), i);
+        }
+
+        float memoryUsedB = memoryMetric.physicalMemoryUsed();
+        assertNotEquals(memoryUsedB, memoryUsed);
+    }
 }

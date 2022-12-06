@@ -36,10 +36,15 @@ public interface EdgeNetworkMetric {
     /**
      * Get current Packets transmitted
      */
-    int packetTX();
+    long packetTX();
 
     /**
      * Get current Packets transmitted
      */
-    int packetRX();
+    long packetRX();
+
+    /**
+     * Reset all metrics
+     */
+    void reset();
 }

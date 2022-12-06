@@ -40,7 +40,7 @@ public abstract class Autoscaling {
      * @param eventStream {@link EventStream} where events will be published
      * @param configuration {@link AutoscalingConfiguration} Instance
      */
-    public Autoscaling(EventStream eventStream, AutoscalingConfiguration configuration) {
+    protected Autoscaling(EventStream eventStream, AutoscalingConfiguration configuration) {
         this.eventStream = eventStream;
         this.configuration = configuration;
     }

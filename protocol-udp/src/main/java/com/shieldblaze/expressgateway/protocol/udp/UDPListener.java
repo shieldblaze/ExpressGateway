@@ -24,7 +24,7 @@ import com.shieldblaze.expressgateway.core.events.L4FrontListenerShutdownEvent;
 import com.shieldblaze.expressgateway.core.events.L4FrontListenerStartupEvent;
 import com.shieldblaze.expressgateway.core.events.L4FrontListenerStopEvent;
 import com.shieldblaze.expressgateway.core.factory.BootstrapFactory;
-import com.shieldblaze.expressgateway.metrics.EdgeNetworkMetricRecorder;
+import com.shieldblaze.expressgateway.metrics.StandardEdgeNetworkMetricRecorder;
 import io.netty.bootstrap.Bootstrap;
 import io.netty.channel.ChannelFuture;
 import io.netty.channel.ChannelHandler;
@@ -66,7 +66,7 @@ public class UDPListener extends L4FrontListener {
                 .handler(new ChannelInitializer<DatagramChannel>() {
                     @Override
                     protected void initChannel(DatagramChannel ch) {
-                        ch.pipeline().addFirst(EdgeNetworkMetricRecorder.INSTANCE);
+                        ch.pipeline().addFirst(StandardEdgeNetworkMetricRecorder.INSTANCE);
                         ch.pipeline().addLast(channelHandler);
                     }
                 });

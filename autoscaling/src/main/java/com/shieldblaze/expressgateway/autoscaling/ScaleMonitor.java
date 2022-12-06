@@ -18,11 +18,11 @@
 package com.shieldblaze.expressgateway.autoscaling;
 
 import com.shieldblaze.expressgateway.common.utils.MathUtil;
-import com.shieldblaze.expressgateway.metrics.CPU;
+import com.shieldblaze.expressgateway.metrics.StandardCPUMetric;
 import com.shieldblaze.expressgateway.metrics.CPUMetric;
 import com.shieldblaze.expressgateway.metrics.EdgeNetworkMetric;
-import com.shieldblaze.expressgateway.metrics.EdgeNetworkMetricRecorder;
-import com.shieldblaze.expressgateway.metrics.Memory;
+import com.shieldblaze.expressgateway.metrics.StandardEdgeNetworkMetricRecorder;
+import com.shieldblaze.expressgateway.metrics.StandardMemoryMetric;
 import com.shieldblaze.expressgateway.metrics.MemoryMetric;
 
 import java.io.Closeable;
@@ -31,6 +31,8 @@ import java.util.concurrent.Executors;
 import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.ScheduledFuture;
 import java.util.concurrent.TimeUnit;
+
+import static com.shieldblaze.expressgateway.common.utils.MathUtil.percentage;
 
 /**
  * {@link ScaleMonitor} monitors CPU, Memory, Packets and Bandwidth load
@@ -55,9 +57,9 @@ public final class ScaleMonitor implements Runnable, Closeable {
     public ScaleMonitor(Autoscaling autoscaling, CPUMetric cpu, MemoryMetric memory, EdgeNetworkMetric edgeNetworkMetric) {
         this.autoscaling = autoscaling;
 
-        this.cpu = Objects.requireNonNullElseGet(cpu, CPU::new);
-        this.memory = Objects.requireNonNullElseGet(memory, Memory::new);
-        this.edgeNetworkMetric = Objects.requireNonNullElse(edgeNetworkMetric, EdgeNetworkMetricRecorder.INSTANCE);
+        this.cpu = Objects.requireNonNullElse(cpu, StandardCPUMetric.INSTANCE);
+        this.memory = Objects.requireNonNullElse(memory, StandardMemoryMetric.INSTANCE);
+        this.edgeNetworkMetric = Objects.requireNonNullElse(edgeNetworkMetric, StandardEdgeNetworkMetricRecorder.INSTANCE);
 
         monitorScheduledFuture = scheduledExecutorService.scheduleAtFixedRate(this, 0, 1, TimeUnit.SECONDS);
     }
@@ -70,7 +72,7 @@ public final class ScaleMonitor implements Runnable, Closeable {
          * If CPU load has exceeded normal level CPU load then scale out.
          * If not, then scale in.
          */
-        double cpuLoad = cpu.cpu();
+        double cpuLoad = cpu.load();
         if (cpuLoad > autoscaling.configuration().cpuScaleOutLoad()) {
             autoscaling.scaleOut();
         } else {
@@ -111,10 +113,10 @@ public final class ScaleMonitor implements Runnable, Closeable {
         }
 
         // --------------------------------------- Packets ---------------------------------------
-        int rxPck = edgeNetworkMetric.packetRX();
-        int txPck = edgeNetworkMetric.packetTX();
-        float rxPckLoad = MathUtil.percentage(rxPck, autoscaling.configuration().maxPacketsPerSecond());
-        float txPckLoad = MathUtil.percentage(txPck, autoscaling.configuration().maxPacketsPerSecond());
+        long rxPck = edgeNetworkMetric.packetRX();
+        long txPck = edgeNetworkMetric.packetTX();
+        float rxPckLoad = percentage(rxPck, autoscaling.configuration().maxPacketsPerSecond());
+        float txPckLoad = percentage(txPck, autoscaling.configuration().maxPacketsPerSecond());
 
         /*
          * If Packets load has exceeded normal Packets load level then scale out.
@@ -139,8 +141,8 @@ public final class ScaleMonitor implements Runnable, Closeable {
         // --------------------------------------- Bandwidth ---------------------------------------
         long rxBandwidth = edgeNetworkMetric.bandwidthRX();
         long txBandwidth = edgeNetworkMetric.bandwidthTX();
-        float rxBandwidthLoad = MathUtil.percentage(rxBandwidth, autoscaling.configuration().maxBytesPerSecond());
-        float txBandwidthLoad = MathUtil.percentage(txBandwidth, autoscaling.configuration().maxBytesPerSecond());
+        float rxBandwidthLoad = percentage(rxBandwidth, autoscaling.configuration().maxBytesPerSecond());
+        float txBandwidthLoad = percentage(txBandwidth, autoscaling.configuration().maxBytesPerSecond());
 
         /*
          * If Bandwidth load has exceeded normal Bandwidth load level then scale out.

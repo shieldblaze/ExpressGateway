@@ -20,10 +20,11 @@ package com.shieldblaze.expressgateway.metrics;
 /**
  * Current CPU Load
  */
+@FunctionalInterface
 public interface CPUMetric {
 
     /**
      * Get current CPU load
      */
-    double cpu();
+    double load();
 }

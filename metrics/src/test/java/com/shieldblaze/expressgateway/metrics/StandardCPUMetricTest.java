@@ -17,14 +17,24 @@
  */
 package com.shieldblaze.expressgateway.metrics;
 
-/**
- * Current physical memory and swap space used.
- */
-@FunctionalInterface
-public interface MemoryMetric {
+import org.junit.jupiter.api.Test;
 
-    /**
-     * Get current percentage of memory used
-     */
-    float physicalMemoryUsed();
+import static org.junit.jupiter.api.Assertions.assertNotEquals;
+
+class StandardCPUMetricTest {
+
+    @Test
+    void cpuTest() {
+        CPUMetric cpuMetric = StandardCPUMetric.INSTANCE;
+        double cpuUsages = cpuMetric.load();
+
+        // Make some noise on CPU
+        long a = 0;
+        for (long i = 0; i < Integer.MAX_VALUE * 10L; i++) {
+            a++;
+        }
+
+        double cpuUsagesB = cpuMetric.load();
+        assertNotEquals(cpuUsagesB, cpuUsages);
+    }
 }

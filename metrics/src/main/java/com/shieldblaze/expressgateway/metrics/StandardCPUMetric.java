@@ -17,14 +17,24 @@
  */
 package com.shieldblaze.expressgateway.metrics;
 
-/**
- * Current physical memory and swap space used.
- */
-@FunctionalInterface
-public interface MemoryMetric {
+import com.sun.management.OperatingSystemMXBean;
 
-    /**
-     * Get current percentage of memory used
-     */
-    float physicalMemoryUsed();
+import java.lang.management.ManagementFactory;
+
+/**
+ * System CPU Metric
+ */
+public final class StandardCPUMetric implements CPUMetric {
+
+    public static final StandardCPUMetric INSTANCE = new StandardCPUMetric();
+    private static final OperatingSystemMXBean OS_BEAN = ManagementFactory.getPlatformMXBean(OperatingSystemMXBean.class);
+
+    @Override
+    public double load() {
+        return OS_BEAN.getCpuLoad();
+    }
+
+    private StandardCPUMetric() {
+        // Prevent outside initialization
+    }
 }
