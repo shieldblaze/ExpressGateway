@@ -61,7 +61,6 @@ along with ShieldBlaze ExpressGateway.  If not, see <https://www.gnu.org/license
     <inceptionYear>2020</inceptionYear>
 
     <modules>
-        <module>autoscaling</module>
         <module>backend</module>
         <module>bootstrap</module>
         <module>common</module>
