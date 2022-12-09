@@ -76,6 +76,8 @@ along with ShieldBlaze ExpressGateway.  If not, see <https://www.gnu.org/license
         <module>protocol-udp</module>
         <module>rest-api</module>
         <module>security</module>
+        <module>service-discovery-client</module>
+        <module>service-discovery-server</module>
         <module>shaded-dependencies</module>
         <module>testing</module>
         <module>testsuite</module>

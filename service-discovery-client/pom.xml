@@ -27,21 +27,16 @@
     </parent>
     <modelVersion>4.0.0</modelVersion>
 
-    <artifactId>bootstrap</artifactId>
+    <artifactId>service-discovery-client</artifactId>
     <packaging>jar</packaging>
 
-    <name>ExpressGateway/Bootstrap</name>
+    <name>ExpressGateway/ServiceDiscovery-Client</name>
 
     <properties>
-        <javaModuleName>com.shieldblaze.expressgateway.bootstrap</javaModuleName>
+        <javaModuleName>com.shieldblaze.expressgateway.servicediscovery.client</javaModuleName>
     </properties>
 
     <dependencies>
-        <dependency>
-            <groupId>com.shieldblaze.expressgateway</groupId>
-            <artifactId>rest-api</artifactId>
-            <version>${project.parent.version}</version>
-        </dependency>
         <dependency>
             <groupId>com.shieldblaze.expressgateway</groupId>
             <artifactId>common</artifactId>
@@ -49,8 +44,13 @@
         </dependency>
         <dependency>
             <groupId>com.shieldblaze.expressgateway</groupId>
-            <artifactId>service-discovery-client</artifactId>
-            <version>0.0.1-a</version>
+            <artifactId>service-discovery-server</artifactId>
+            <version>${project.parent.version}</version>
+        </dependency>
+        <dependency>
+            <groupId>com.shieldblaze.expressgateway</groupId>
+            <artifactId>testing</artifactId>
+            <version>${project.parent.version}</version>
         </dependency>
     </dependencies>
 </project>

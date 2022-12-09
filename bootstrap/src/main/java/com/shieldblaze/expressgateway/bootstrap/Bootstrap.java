@@ -22,6 +22,7 @@ import com.shieldblaze.expressgateway.common.ExpressGateway;
 import com.shieldblaze.expressgateway.common.zookeeper.CertificateManager;
 import com.shieldblaze.expressgateway.common.zookeeper.Curator;
 import com.shieldblaze.expressgateway.restapi.RestApi;
+import com.shieldblaze.expressgateway.servicediscovery.client.ServiceDiscoveryClient;
 import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
 
@@ -78,6 +79,20 @@ public final class Bootstrap {
             Curator.init();
             assert Curator.isInitialized().get() : "Failed to initialize ZooKeeper";
             assert CertificateManager.isInitialized().get() : "Failed to initialize CertificateManager";
+
+            // If we are running on REPLICA mode then we will register ourselves at Service Discovery.
+            if (ExpressGateway.getInstance().runningMode() == ExpressGateway.RunningMode.REPLICA) {
+                ServiceDiscoveryClient.register();
+
+                // Add shutdown hook to deregister from Service Discovery on exit.
+                Runtime.getRuntime().addShutdownHook(new Thread(() -> {
+                    try {
+                        ServiceDiscoveryClient.deregister();
+                    } catch (Exception ex) {
+                        logger.fatal(ex);
+                    }
+                }));
+            }
 
             RestApi.start();
         } catch (Exception ex) {
