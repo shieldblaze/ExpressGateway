@@ -39,11 +39,6 @@
     <dependencies>
         <dependency>
             <groupId>com.shieldblaze.expressgateway</groupId>
-            <artifactId>autoscaling</artifactId>
-            <version>${project.parent.version}</version>
-        </dependency>
-        <dependency>
-            <groupId>com.shieldblaze.expressgateway</groupId>
             <artifactId>common</artifactId>
             <version>${project.parent.version}</version>
         </dependency>

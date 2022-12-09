@@ -20,7 +20,7 @@ package com.shieldblaze.expressgateway.protocol.http.loadbalancer;
 import com.shieldblaze.expressgateway.configuration.http.HttpConfiguration;
 import com.shieldblaze.expressgateway.core.handlers.ConnectionTimeoutHandler;
 import com.shieldblaze.expressgateway.core.handlers.SNIHandler;
-import com.shieldblaze.expressgateway.metrics.EdgeNetworkMetricRecorder;
+import com.shieldblaze.expressgateway.metrics.StandardEdgeNetworkMetricRecorder;
 import com.shieldblaze.expressgateway.protocol.http.CompressibleHttp2FrameCodec;
 import com.shieldblaze.expressgateway.protocol.http.Http11ServerInboundHandler;
 import com.shieldblaze.expressgateway.protocol.http.Http2ServerInboundHandler;
@@ -46,7 +46,7 @@ final class StandardHttpServerInitializer extends HttpServerInitializer {
     @Override
     protected void initChannel(SocketChannel socketChannel) {
         ChannelPipeline pipeline = socketChannel.pipeline();
-        pipeline.addFirst(EdgeNetworkMetricRecorder.INSTANCE);
+        pipeline.addFirst(StandardEdgeNetworkMetricRecorder.INSTANCE);
         pipeline.addLast(httpLoadBalancer.connectionTracker());
 
         Duration timeout = Duration.ofMillis(httpLoadBalancer.configurationContext().transportConfiguration().connectionIdleTimeout());

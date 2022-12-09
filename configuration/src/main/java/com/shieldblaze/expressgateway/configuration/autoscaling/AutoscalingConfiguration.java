@@ -17,224 +17,312 @@
  */
 package com.shieldblaze.expressgateway.configuration.autoscaling;
 
-import com.shieldblaze.expressgateway.common.utils.NumberUtil;
+import com.fasterxml.jackson.annotation.JsonIgnore;
+import com.fasterxml.jackson.annotation.JsonProperty;
 import com.shieldblaze.expressgateway.configuration.Configuration;
 
+import static com.shieldblaze.expressgateway.common.utils.NumberUtil.checkInRange;
+import static com.shieldblaze.expressgateway.common.utils.NumberUtil.checkPositive;
+
 public final class AutoscalingConfiguration implements Configuration<AutoscalingConfiguration> {
+
+    public static final AutoscalingConfiguration DEFAULT = new AutoscalingConfiguration();
+
+    static {
+        DEFAULT.cpuIsolateLoad = 0.70f;
+        DEFAULT.cpuScaleOutLoad = 0.85f;
+
+        DEFAULT.memoryIsolateLoad = 0.70f;
+        DEFAULT.memoryScaleOutLoad = 0.85f;
+
+        DEFAULT.packetsIsolateLoad = 0.70f;
+        DEFAULT.packetsScaleOutLoad = 0.85f;
+        DEFAULT.maxPackets = -1;
+
+        DEFAULT.bytesIsolateLoad = 0.70f;
+        DEFAULT.bytesScaleOutLoad = 0.85f;
+        DEFAULT.maxBytes = -1;
+
+        DEFAULT.validated = true;
+    }
 
     /**
      * CPU Scale out load
      */
+    @JsonProperty
     private float cpuScaleOutLoad;
 
     /**
-     * CPU Hibernate load
+     * CPU Isolate load
      */
-    private float cpuHibernateLoad;
+    @JsonProperty
+    private float cpuIsolateLoad;
 
     /**
      * Memory Scale out load
      */
+    @JsonProperty
     private float memoryScaleOutLoad;
 
     /**
-     * Memory Hibernate load
+     * Memory Isolate load
      */
-    private float memoryHibernateLoad;
-
-    /**
-     * Maximum Packets Per Second
-     */
-    private int maxPacketsPerSecond;
+    @JsonProperty
+    private float memoryIsolateLoad;
 
     /**
      * Packets Scale out load
      */
+    @JsonProperty
     private float packetsScaleOutLoad;
 
     /**
-     * Packets Hibernate load
+     * Packets Isolate load
      */
-    private float packetsHibernateLoad;
+    @JsonProperty
+    private float packetsIsolateLoad;
 
     /**
-     * Maximum Bytes per Second
+     * Maximum Packets Count
      */
-    private int maxBytesPerSecond;
+    @JsonProperty
+    private long maxPackets;
 
     /**
      * Bytes Scale out load
      */
+    @JsonProperty
     private float bytesScaleOutLoad;
 
     /**
-     * Bytes Hibernate load
+     * Bytes Isolate load
      */
-    private float bytesHibernateLoad;
+    @JsonProperty
+    private float bytesIsolateLoad;
+
+    /**
+     * Maximum Bytes Count
+     */
+    @JsonProperty
+    private long maxBytes;
 
     /**
      * Minimum number of Servers in fleet
      */
+    @JsonProperty
     private int minServers;
 
     /**
      * Maximum number of Server to be autoscaled in fleet
      */
+    @JsonProperty
     private int maxServers;
 
     /**
      * Scale out multiplier
      */
+    @JsonProperty
     private int scaleOutMultiplier;
+
+    /**
+     * Isolation warmup time
+     */
+    @JsonProperty
+    private int isolationWarmupTime;
 
     /**
      * Cooldown time in seconds of autoscaled servers
      */
+    @JsonProperty
     private int coolDownTime;
 
     /**
-     * If load is under certain threshold
-     * then we'll shutdown the autoscaled server.
-     *
+     * If load is under certain threshold then we'll shut down the autoscaled server.
+     * <p>
      * This works in combination with {@link #shutdownIfLoadUnderForSeconds}
      */
+    @JsonProperty
     private float shutdownIfLoadUnder;
 
     /**
-     * If load is under certain threshold
-     * for certain number of seconds
-     * then we'll shutdown the autoscaled server.
-     *
+     * If load is under certain threshold for certain number of seconds then we'll shut down the autoscaled server.
+     * <p>
      * This works in combination with {@link #shutdownIfLoadUnder}
      */
+    @JsonProperty
     private int shutdownIfLoadUnderForSeconds;
 
-    public void setCpuScaleOutLoad(float cpuScaleOutLoad) {
-        this.cpuScaleOutLoad = NumberUtil.checkInRange(cpuScaleOutLoad, 0.1f, 1.0f, "CPUScaleOutLoad");
-    }
-
-    public void setCpuHibernateLoad(float cpuHibernateLoad) {
-        this.cpuHibernateLoad = NumberUtil.checkInRange(cpuHibernateLoad, 0.1f, 1.0f, "CPUHibernateLoad");
-    }
-
-    public void setMemoryScaleOutLoad(float memoryScaleOutLoad) {
-        this.memoryScaleOutLoad = NumberUtil.checkInRange(memoryScaleOutLoad, 0.1f, 1.0f, "MemoryScaleOutLoad");
-    }
-
-    public void setMemoryHibernateLoad(float memoryHibernateLoad) {
-        this.memoryHibernateLoad = NumberUtil.checkInRange(memoryHibernateLoad, 0.1f, 1.0f, "MemoryHibernateLoad");
-    }
-
-    public void setMaxPacketsPerSecond(int maxPacketsPerSecond) {
-        this.maxPacketsPerSecond = NumberUtil.checkPositive(maxPacketsPerSecond, "MaxPacketsPerSecond");
-    }
-
-    public void setPacketsScaleOutLoad(float packetsScaleOutLoad) {
-        this.packetsScaleOutLoad = NumberUtil.checkInRange(packetsScaleOutLoad, 0.1f, 1.0f, "PacketsScaleOutLoad");
-    }
-
-    public void setPacketsHibernateLoad(float packetsHibernateLoad) {
-        this.packetsHibernateLoad = NumberUtil.checkInRange(packetsHibernateLoad, 0.1f, 1.0f, "PacketsHibernateLoad");
-    }
-
-    public void setMaxBytesPerSecond(int maxBytesPerSecond) {
-        this.maxBytesPerSecond = NumberUtil.checkPositive(maxBytesPerSecond, "MaxBytesPerSecond");
-    }
-
-    public void setBytesScaleOutLoad(float bytesScaleOutLoad) {
-        this.bytesScaleOutLoad = NumberUtil.checkInRange(bytesScaleOutLoad, 0.1f, 1.0f, "BytesScaleOutLoad");
-    }
-
-    public void setBytesHibernateLoad(float bytesHibernateLoad) {
-        this.bytesHibernateLoad = NumberUtil.checkInRange(bytesHibernateLoad, 0.1f, 1.0f, "BytesHibernateLoad");
-    }
-
-    public void setMinServers(int minServers) {
-        this.minServers = NumberUtil.checkPositive(minServers, "MinServers");
-    }
-
-    public void setMaxServers(int maxServers) {
-        this.maxServers = NumberUtil.checkPositive(maxServers, "MaxServers");
-    }
-
-    public void setScaleOutMultiplier(int scaleOutMultiplier) {
-        this.scaleOutMultiplier = NumberUtil.checkPositive(scaleOutMultiplier, "ScaleOutMultiplier");
-    }
-
-    public void setCoolDownTime(int coolDownTime) {
-        this.coolDownTime = NumberUtil.checkPositive(coolDownTime, "cooldownTime");
-    }
-
-    public void setShutdownIfLoadUnder(float shutdownIfLoadUnder) {
-        this.shutdownIfLoadUnder = NumberUtil.checkInRange(shutdownIfLoadUnder, 0.1f, 1.0f, "ShutdownIfLoadUnder");
-    }
-
-    public void setShutdownIfLoadUnderForSeconds(int shutdownIfLoadUnderForSeconds) {
-        this.shutdownIfLoadUnderForSeconds = NumberUtil.checkPositive(shutdownIfLoadUnderForSeconds, "ShutdownIfLoadUnderForSeconds");
-    }
+    @JsonIgnore
+    private boolean validated;
 
     public float cpuScaleOutLoad() {
         return cpuScaleOutLoad;
     }
 
-    public float cpuHibernateLoad() {
-        return cpuHibernateLoad;
+    public AutoscalingConfiguration cpuScaleOutLoad(float cpuScaleOutLoad) {
+        assertValidated();
+        this.cpuScaleOutLoad = cpuScaleOutLoad;
+        return this;
+    }
+
+    public float cpuIsolateLoad() {
+        return cpuIsolateLoad;
+    }
+
+    public AutoscalingConfiguration cpuIsolateLoad(float cpuIsolateLoad) {
+        assertValidated();
+        this.cpuIsolateLoad = cpuIsolateLoad;
+        return this;
     }
 
     public float memoryScaleOutLoad() {
         return memoryScaleOutLoad;
     }
 
-    public float memoryHibernateLoad() {
-        return memoryHibernateLoad;
+    public AutoscalingConfiguration memoryScaleOutLoad(float memoryScaleOutLoad) {
+        assertValidated();
+        this.memoryScaleOutLoad = memoryScaleOutLoad;
+        return this;
     }
 
-    public int maxPacketsPerSecond() {
-        return maxPacketsPerSecond;
+    public float memoryIsolateLoad() {
+        return memoryIsolateLoad;
+    }
+
+    public AutoscalingConfiguration memoryIsolateLoad(float memoryIsolateLoad) {
+        assertValidated();
+        this.memoryIsolateLoad = memoryIsolateLoad;
+        return this;
     }
 
     public float packetsScaleOutLoad() {
         return packetsScaleOutLoad;
     }
 
-    public float packetsHibernateLoad() {
-        return packetsHibernateLoad;
+    public AutoscalingConfiguration packetsScaleOutLoad(float packetsScaleOutLoad) {
+        assertValidated();
+        this.packetsScaleOutLoad = packetsScaleOutLoad;
+        return this;
     }
 
-    public int maxBytesPerSecond() {
-        return maxBytesPerSecond;
+    public float packetsIsolateLoad() {
+        return packetsIsolateLoad;
+    }
+
+    public AutoscalingConfiguration packetsIsolateLoad(float packetsIsolateLoad) {
+        assertValidated();
+        this.packetsIsolateLoad = packetsIsolateLoad;
+        return this;
+    }
+
+    public long maxPackets() {
+        return maxPackets;
+    }
+
+    public AutoscalingConfiguration maxPackets(long maxPackets) {
+        assertValidated();
+        this.maxPackets = maxPackets;
+        return this;
     }
 
     public float bytesScaleOutLoad() {
         return bytesScaleOutLoad;
     }
 
-    public float bytesHibernateLoad() {
-        return bytesHibernateLoad;
+    public AutoscalingConfiguration bytesScaleOutLoad(float bytesScaleOutLoad) {
+        assertValidated();
+        this.bytesScaleOutLoad = bytesScaleOutLoad;
+        return this;
+    }
+
+    public float bytesIsolateLoad() {
+        return bytesIsolateLoad;
+    }
+
+    public AutoscalingConfiguration bytesIsolateLoad(float bytesIsolateLoad) {
+        assertValidated();
+        this.bytesIsolateLoad = bytesIsolateLoad;
+        return this;
+    }
+
+    public long maxBytes() {
+        return maxBytes;
+    }
+
+    public AutoscalingConfiguration maxBytes(long maxBytes) {
+        assertValidated();
+        this.maxBytes = maxBytes;
+        return this;
     }
 
     public int minServers() {
         return minServers;
     }
 
+    public AutoscalingConfiguration minServers(int minServers) {
+        assertValidated();
+        this.minServers = minServers;
+        return this;
+    }
+
     public int maxServers() {
         return maxServers;
+    }
+
+    public AutoscalingConfiguration maxServers(int maxServers) {
+        assertValidated();
+        this.maxServers = maxServers;
+        return this;
     }
 
     public int scaleOutMultiplier() {
         return scaleOutMultiplier;
     }
 
+    public AutoscalingConfiguration scaleOutMultiplier(int scaleOutMultiplier) {
+        assertValidated();
+        this.scaleOutMultiplier = scaleOutMultiplier;
+        return this;
+    }
+
+    public int isolationWarmupTime() {
+        return isolationWarmupTime;
+    }
+
+    public AutoscalingConfiguration isolationWarmupTime(int isolationWarmupTime) {
+        assertValidated();
+        this.isolationWarmupTime = isolationWarmupTime;
+        return this;
+    }
+
     public int coolDownTime() {
         return coolDownTime;
+    }
+
+    public AutoscalingConfiguration coolDownTime(int coolDownTime) {
+        assertValidated();
+        this.coolDownTime = coolDownTime;
+        return this;
     }
 
     public float shutdownIfLoadUnder() {
         return shutdownIfLoadUnder;
     }
 
+    public AutoscalingConfiguration shutdownIfLoadUnder(float shutdownIfLoadUnder) {
+        assertValidated();
+        this.shutdownIfLoadUnder = shutdownIfLoadUnder;
+        return this;
+    }
+
     public int shutdownIfLoadUnderForSeconds() {
         return shutdownIfLoadUnderForSeconds;
+    }
+
+    public AutoscalingConfiguration shutdownIfLoadUnderForSeconds(int shutdownIfLoadUnderForSeconds) {
+        assertValidated();
+        this.shutdownIfLoadUnderForSeconds = shutdownIfLoadUnderForSeconds;
+        return this;
     }
 
     @Override
@@ -243,7 +331,17 @@ public final class AutoscalingConfiguration implements Configuration<Autoscaling
     }
 
     @Override
-    public AutoscalingConfiguration validate() throws IllegalArgumentException {
-        return null;
+    public AutoscalingConfiguration validate() {
+        checkInRange(cpuScaleOutLoad, 0.1f, 1.0f, "CPU Scale Out Load");
+        checkInRange(cpuIsolateLoad, 0.1f, 1.0f, "CPU Isolate Load");
+        checkInRange(memoryScaleOutLoad, 0.1f, 1.0f, "Memory Scale Out Load");
+        checkInRange(memoryIsolateLoad, 0.1f, 1.0f, "Memory Isolate Load");
+        checkInRange(packetsScaleOutLoad, 0.1f, 1.0f, "Packets Scale Out Load");
+        checkInRange(packetsIsolateLoad, 0.1f, 1.0f, "Packets Isolate Load");
+        checkPositive(maxPackets, "Maximum Packets");
+        checkInRange(bytesScaleOutLoad, 0.1f, 1.0f, "Bytes Scale Out Load");
+        checkInRange(bytesIsolateLoad, 0.1f, 1.0f, "Bytes Isolate Load");
+        checkPositive(maxBytes, "Maximum Bytes");
+        return this;
     }
 }
