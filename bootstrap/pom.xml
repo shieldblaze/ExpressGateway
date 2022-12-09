@@ -47,10 +47,5 @@
             <artifactId>common</artifactId>
             <version>${project.parent.version}</version>
         </dependency>
-        <dependency>
-            <groupId>com.shieldblaze.expressgateway</groupId>
-            <artifactId>service-discovery-client</artifactId>
-            <version>0.0.1-a</version>
-        </dependency>
     </dependencies>
 </project>
