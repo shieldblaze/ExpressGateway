@@ -61,6 +61,7 @@ along with ShieldBlaze ExpressGateway.  If not, see <https://www.gnu.org/license
     <inceptionYear>2020</inceptionYear>
 
     <modules>
+        <module>autoscaling</module>
         <module>backend</module>
         <module>bootstrap</module>
         <module>common</module>
@@ -68,6 +69,8 @@ along with ShieldBlaze ExpressGateway.  If not, see <https://www.gnu.org/license
         <module>configuration</module>
         <module>core</module>
         <module>healthcheck</module>
+        <module>integration</module>
+        <module>integration-aws</module>
         <module>metrics</module>
         <module>protocol-http</module>
         <module>protocol-tcp</module>
@@ -336,6 +339,13 @@ along with ShieldBlaze ExpressGateway.  If not, see <https://www.gnu.org/license
             <artifactId>mockito-core</artifactId>
             <version>4.8.0</version>
             <scope>test</scope>
+        </dependency>
+
+        <!-- https://mvnrepository.com/artifact/io.micrometer/micrometer-core -->
+        <dependency>
+            <groupId>io.micrometer</groupId>
+            <artifactId>micrometer-core</artifactId>
+            <version>1.10.2</version>
         </dependency>
     </dependencies>
 
