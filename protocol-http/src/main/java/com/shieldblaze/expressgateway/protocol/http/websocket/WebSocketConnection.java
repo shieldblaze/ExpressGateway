@@ -21,7 +21,15 @@ import com.shieldblaze.expressgateway.backend.Connection;
 import com.shieldblaze.expressgateway.backend.Node;
 import com.shieldblaze.expressgateway.common.utils.ReferenceCountedUtil;
 import io.netty.channel.ChannelFuture;
+import io.netty.channel.ChannelHandlerContext;
+import io.netty.channel.ChannelInboundHandlerAdapter;
+import io.netty.channel.ChannelPromise;
 import io.netty.handler.codec.http.websocketx.WebSocketClientHandshaker;
+import io.netty.handler.codec.http.websocketx.WebSocketClientProtocolHandler;
+import io.netty.handler.codec.http.websocketx.WebSocketClientProtocolHandler.ClientHandshakeStateEvent;
+
+import static io.netty.handler.codec.http.websocketx.WebSocketClientProtocolHandler.ClientHandshakeStateEvent.HANDSHAKE_COMPLETE;
+import static io.netty.handler.codec.http.websocketx.WebSocketClientProtocolHandler.ClientHandshakeStateEvent.HANDSHAKE_TIMEOUT;
 
 /**
  * {@link WebSocketConnection} is a specialized connection type for WebSocket connectivity.
@@ -45,7 +53,6 @@ final class WebSocketConnection extends Connection {
         HANDSHAKE_FAILURE
     }
 
-    private final WebSocketClientHandshaker webSocketClientHandshaker;
     private WebSocketState webSocketState = WebSocketState.INITIATED;
 
     /**
@@ -53,19 +60,18 @@ final class WebSocketConnection extends Connection {
      *
      * @param node {@link Node} associated with this Connection
      */
-    WebSocketConnection(Node node, WebSocketClientHandshaker webSocketClientHandshaker) {
+    WebSocketConnection(Node node) {
         super(node);
-        this.webSocketClientHandshaker = webSocketClientHandshaker;
     }
 
     @Override
     protected void processBacklog(ChannelFuture channelFuture) {
         if (channelFuture.isSuccess()) {
-            // Begin handshake
-            webSocketClientHandshaker.handshake(channel);
+            ChannelPromise channelPromise = channel.newPromise();
+            channel.pipeline().addLast(new WebSocketEventListener(channelPromise));
 
             // Add Listener to handle WebSocket Handshake completion.
-            webSocketClientHandshaker.handshakeFuture().addListener(future -> {
+            channelPromise.addListener(future -> {
                 if (future.isSuccess()) {
                     webSocketState = WebSocketState.HANDSHAKE_SUCCESS;
                     writeBacklog();
@@ -88,6 +94,28 @@ final class WebSocketConnection extends Connection {
             channel.writeAndFlush(o);
         } else {
             ReferenceCountedUtil.silentRelease(o);
+        }
+    }
+
+    private static final class WebSocketEventListener extends ChannelInboundHandlerAdapter {
+
+        private final ChannelPromise channelPromise;
+
+        WebSocketEventListener(ChannelPromise channelPromise) {
+            this.channelPromise = channelPromise;
+        }
+
+        @Override
+        public void userEventTriggered(ChannelHandlerContext ctx, Object evt) throws Exception {
+            if (evt instanceof ClientHandshakeStateEvent event) {
+                if (event == HANDSHAKE_COMPLETE) {
+                    channelPromise.setSuccess();
+                    ctx.pipeline().remove(this);
+                } else if (event == HANDSHAKE_TIMEOUT) {
+                    channelPromise.setFailure(new IllegalStateException("WebSocket Handshake Failed, Event: HANDSHAKE_TIMEOUT"));
+                    ctx.pipeline().remove(this);
+                }
+            }
         }
     }
 }

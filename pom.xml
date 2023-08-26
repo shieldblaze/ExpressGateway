@@ -34,7 +34,7 @@ along with ShieldBlaze ExpressGateway.  If not, see <https://www.gnu.org/license
 
         <!-- Version Management -->
         <apache.curator>5.3.0</apache.curator>
-        <netty>4.1.86.Final</netty>
+        <netty>4.1.97.Final</netty>
         <spring.boot>2.7.5</spring.boot>
     </properties>
 
@@ -135,14 +135,14 @@ along with ShieldBlaze ExpressGateway.  If not, see <https://www.gnu.org/license
         <dependency>
             <groupId>io.netty</groupId>
             <artifactId>netty-tcnative</artifactId>
-            <version>2.0.54.Final</version>
+            <version>2.0.61.Final</version>
         </dependency>
 
         <!-- https://mvnrepository.com/artifact/io.netty.incubator/netty-incubator-transport-native-io_uring -->
         <dependency>
             <groupId>io.netty.incubator</groupId>
             <artifactId>netty-incubator-transport-native-io_uring</artifactId>
-            <version>0.0.15.Final</version>
+            <version>0.0.21.Final</version>
         </dependency>
 
         <!-- https://mvnrepository.com/artifact/org.apache.logging.log4j/log4j-api -->
@@ -200,7 +200,7 @@ along with ShieldBlaze ExpressGateway.  If not, see <https://www.gnu.org/license
         <dependency>
             <groupId>com.aayushatharva.brotli4j</groupId>
             <artifactId>brotli4j</artifactId>
-            <version>1.9.0</version>
+            <version>1.12.0</version>
         </dependency>
 
         <!-- https://mvnrepository.com/artifact/com.google.code.gson/gson -->

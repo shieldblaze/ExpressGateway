@@ -37,16 +37,24 @@ final class WebSocketClientHandshakerFinisherHandler extends ChannelInboundHandl
 
     @Override
     public void channelRead(ChannelHandlerContext ctx, Object msg) {
+        System.out.println(msg);
+
         // If Message is FullHttpResponse and handshake is incomplete
         // then capture the FullHttpResponse and pass it to handshaker
         // to complete the handshake.
         if (msg instanceof FullHttpResponse response && !handshaker.isHandshakeComplete()) {
+            System.out.println("Completing handshake");
             handshaker.finishHandshake(ctx.channel(), response); // Finish the handshake
             response.release();          // Release the HttpResponse
-            ctx.pipeline().remove(this); // Let's remove ourselves because we're done.
+//            ctx.pipeline().remove(this); // Let's remove ourselves because we're done.
             return;
         }
 
         ctx.fireChannelRead(msg);
+    }
+
+    @Override
+    public void userEventTriggered(ChannelHandlerContext ctx, Object evt) throws Exception {
+        System.err.println(evt);
     }
 }

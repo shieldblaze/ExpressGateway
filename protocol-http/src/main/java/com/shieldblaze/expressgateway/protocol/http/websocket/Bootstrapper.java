@@ -34,8 +34,7 @@ import io.netty.handler.codec.http.DefaultHttpHeaders;
 import io.netty.handler.codec.http.HttpClientCodec;
 import io.netty.handler.codec.http.HttpHeaders;
 import io.netty.handler.codec.http.HttpObjectAggregator;
-import io.netty.handler.codec.http.websocketx.WebSocketClientHandshaker;
-import io.netty.handler.codec.http.websocketx.WebSocketClientHandshakerFactory;
+import io.netty.handler.codec.http.websocketx.WebSocketClientProtocolHandler;
 import io.netty.handler.ssl.SslHandler;
 
 import java.time.Duration;
@@ -57,8 +56,7 @@ final class Bootstrapper {
     WebSocketConnection newInit(Node node, WebSocketUpgradeProperty wsProperty) {
         HttpHeaders headers = new DefaultHttpHeaders();
         headers.set(Headers.X_FORWARDED_FOR, wsProperty.clientAddress().getAddress().getHostAddress()); // Add Client IP Address
-        WebSocketClientHandshaker factory = WebSocketClientHandshakerFactory.newHandshaker(wsProperty.uri(), V13, wsProperty.subProtocol(), true, headers);
-        WebSocketConnection connection = new WebSocketConnection(node, factory);
+        WebSocketConnection connection = new WebSocketConnection(node);
 
         Bootstrap bootstrap = BootstrapFactory.tcp(httpLoadBalancer.configurationContext(), eventLoopGroup, byteBufAllocator);
         bootstrap.handler(new ChannelInitializer<SocketChannel>() {
@@ -96,7 +94,7 @@ final class Bootstrapper {
                 pipeline.addLast(new HttpObjectAggregator(8196));
 
                 // Add WebSocketClientHandshakerFinisherHandler which will finish the handshaking process.
-                pipeline.addLast(new WebSocketClientHandshakerFinisherHandler(factory));
+                pipeline.addLast(new WebSocketClientProtocolHandler(wsProperty.uri(), V13, wsProperty.subProtocol(), true, headers, 65536));
 
                 // Add Downstream Handler
                 pipeline.addLast(new WebSocketDownstreamHandler(wsProperty.channel()));
