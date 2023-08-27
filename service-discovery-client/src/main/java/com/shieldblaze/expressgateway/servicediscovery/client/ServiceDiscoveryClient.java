@@ -60,14 +60,15 @@ public final class ServiceDiscoveryClient {
                         )};
                     }
 
-                    TrustManager[] trustManagers = new TrustManager[]{X509Util.createTrustManager(
+                    TrustManager[] trustManagers = {X509Util.createTrustManager(
                             serviceDiscovery.trustStoreFile(),
                             String.valueOf(serviceDiscovery.trustStorePasswordAsChars()),
                             "",
                             false,
                             false,
                             serviceDiscovery.hostnameVerification(),
-                            serviceDiscovery.hostnameVerification()
+                            serviceDiscovery.hostnameVerification(),
+                            false
                     )};
 
                     SSLContext sslContext = SSLContext.getInstance("TLSv1.3");

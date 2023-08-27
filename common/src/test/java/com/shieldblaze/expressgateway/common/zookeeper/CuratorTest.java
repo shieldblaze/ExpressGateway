@@ -20,6 +20,7 @@ package com.shieldblaze.expressgateway.common.zookeeper;
 import com.shieldblaze.expressgateway.common.ExpressGateway;
 import org.apache.curator.test.InstanceSpec;
 import org.apache.curator.test.TestingServer;
+import org.jetbrains.annotations.NotNull;
 import org.junit.jupiter.api.MethodOrderer;
 import org.junit.jupiter.api.Order;
 import org.junit.jupiter.api.Test;
@@ -58,29 +59,11 @@ class CuratorTest {
         File file = new File(classLoader.getResource("default").getFile());
         String absolutePath = file.getAbsolutePath();
 
-        int randomUsablePort = InstanceSpec.getRandomPort();
-
-        Map<String, Object> customProperties = new HashMap<>();
-        customProperties.put("secureClientPort", String.valueOf(randomUsablePort));
-        customProperties.put("ssl.keyStore.location", absolutePath + File.separator + "KeyStore.jks");
-        customProperties.put("ssl.keyStore.password", "123456");
-        customProperties.put("ssl.trustStore.location", absolutePath + File.separator + "TrustStore.jks");
-        customProperties.put("ssl.trustStore.password", "123456");
-        customProperties.put("ssl.hostnameVerification", "false");
-        customProperties.put("serverCnxnFactory", "org.apache.zookeeper.server.NettyServerCnxnFactory");
-
-        InstanceSpec instanceSpec = new InstanceSpec(null,
-                randomUsablePort,
-                -1,
-                -1,
-                true,
-                -1,
-                -1,
-                -1,
-                customProperties);
+        int securePort = InstanceSpec.getRandomPort();
+        InstanceSpec instanceSpec = instanceSpec(securePort, absolutePath);
 
         try (TestingServer testingServer = new TestingServer(instanceSpec, true)) {
-            ExpressGateway.setInstance(forTest(new ExpressGateway.ZooKeeper(testingServer.getConnectString(),
+            ExpressGateway.setInstance(forTest(new ExpressGateway.ZooKeeper("127.0.0.1:" + securePort,
                     3,
                     100,
                     true,
@@ -100,5 +83,27 @@ class CuratorTest {
             System.clearProperty("zookeeper.ssl.trustStore.location");
             System.clearProperty("zookeeper.ssl.trustStore.password");
         }
+    }
+
+    @NotNull
+    private static InstanceSpec instanceSpec(int securePort, String absolutePath) {
+        Map<String, Object> customProperties = new HashMap<>();
+        customProperties.put("secureClientPort", String.valueOf(securePort));
+        customProperties.put("ssl.keyStore.location", absolutePath + File.separator + "KeyStore.jks");
+        customProperties.put("ssl.keyStore.password", "123456");
+        customProperties.put("ssl.trustStore.location", absolutePath + File.separator + "TrustStore.jks");
+        customProperties.put("ssl.trustStore.password", "123456");
+        customProperties.put("ssl.hostnameVerification", "false");
+        customProperties.put("serverCnxnFactory", "org.apache.zookeeper.server.NettyServerCnxnFactory");
+
+        return new InstanceSpec(null,
+                InstanceSpec.getRandomPort(),
+                -1,
+                -1,
+                true,
+                -1,
+                -1,
+                -1,
+                customProperties);
     }
 }
