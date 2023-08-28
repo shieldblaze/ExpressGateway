@@ -196,7 +196,7 @@ public abstract class Connection {
      */
     public synchronized void close() {
         // If Backlog Queue contains something then clear it before closing connection.
-        if (!backlogQueue.isEmpty()) {
+        if (backlogQueue != null && !backlogQueue.isEmpty()) {
             clearBacklog();
         }
 
