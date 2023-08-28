@@ -18,7 +18,7 @@ final class DefaultCleaner<K, V> extends Cleaner<K, V> {
 
     DefaultCleaner(SelfExpiringMap<K, V> selfExpiringMap) {
         super(selfExpiringMap);
-        scheduledFuture = GlobalExecutors.INSTANCE.submitTaskAndRunEvery(this, 1, 1, TimeUnit.SECONDS);
+        scheduledFuture = GlobalExecutors.submitTaskAndRunEvery(this, 1, 1, TimeUnit.SECONDS);
     }
 
     @Override

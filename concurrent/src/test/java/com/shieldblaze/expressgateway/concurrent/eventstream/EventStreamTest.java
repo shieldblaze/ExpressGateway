@@ -43,7 +43,7 @@ class EventStreamTest {
 
     private static final class EventListenerTest implements EventListener {
 
-        int expect = 0;
+        int expect;
 
         @Override
         public void accept(Event event) {

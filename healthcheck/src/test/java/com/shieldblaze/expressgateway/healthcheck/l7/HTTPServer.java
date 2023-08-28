@@ -24,13 +24,13 @@ import java.net.InetAddress;
 import java.net.ServerSocket;
 import java.net.Socket;
 
-final class HTTPServer extends Thread{
+final class HTTPServer extends Thread {
 
-    private final static String CRLF = "\r\n";
+    private static final String CRLF = "\r\n";
     private final String responseStatus;
     private final int port;
 
-    public HTTPServer(String responseStatus, int port) {
+    HTTPServer(String responseStatus, int port) {
         this.responseStatus = responseStatus;
         this.port = port;
     }
@@ -39,14 +39,14 @@ final class HTTPServer extends Thread{
     public void run() {
         try (ServerSocket serverSocket = new ServerSocket(port, 1000, InetAddress.getByName("127.0.0.1"))) {
             Socket clientSocket = serverSocket.accept();
-            PrintWriter out = new PrintWriter(new BufferedWriter(new OutputStreamWriter(clientSocket.getOutputStream())),true);
+            PrintWriter out = new PrintWriter(new BufferedWriter(new OutputStreamWriter(clientSocket.getOutputStream())), true);
 
             out.write("HTTP/1.1 " + responseStatus + CRLF);
-            out.write("Server: Apache/0.8.4"+ CRLF);
-            out.write("Content-Type: text/html"+ CRLF);
-            out.write("Content-Length: 17"+ CRLF);
+            out.write("Server: Apache/0.8.4" + CRLF);
+            out.write("Content-Type: text/html" + CRLF);
+            out.write("Content-Length: 17" + CRLF);
             out.write(CRLF);
-            out.write("<TITLE>OK</TITLE>"+ CRLF);
+            out.write("<TITLE>OK</TITLE>" + CRLF);
             out.flush();
         } catch (Exception ex) {
             ex.printStackTrace();

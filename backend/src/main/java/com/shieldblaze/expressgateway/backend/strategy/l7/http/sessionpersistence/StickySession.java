@@ -102,7 +102,7 @@ public final class StickySession implements SessionPersistence<HTTPBalanceRespon
 
     @Override
     public boolean removeRoute(HTTPBalanceRequest httpBalanceRequest, Node node) {
-        return this.nodes.remove(node);
+        return nodes.remove(node);
     }
 
     @Override

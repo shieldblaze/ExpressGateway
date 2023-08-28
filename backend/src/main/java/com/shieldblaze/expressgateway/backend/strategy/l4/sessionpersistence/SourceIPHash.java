@@ -112,20 +112,20 @@ public final class SourceIPHash implements SessionPersistence<Node, Node, InetSo
         return "SourceIPHash";
     }
 
-    private int ipv4WithMask(Request request) {
+    private static int ipv4WithMask(Request request) {
         return ipv4WithMask(request.socketAddress());
     }
 
-    private BigInteger ipv6WithMask(Request request) {
+    private static BigInteger ipv6WithMask(Request request) {
         return ipv6WithMask(request.socketAddress());
     }
 
-    private int ipv4WithMask(InetSocketAddress socketAddress) {
+    private static int ipv4WithMask(InetSocketAddress socketAddress) {
         int ipAddress = NetUtil.ipv4AddressToInt((Inet4Address) socketAddress.getAddress());
         return ipAddress & prefixToSubnetMaskIPv4();
     }
 
-    private BigInteger ipv6WithMask(InetSocketAddress socketAddress) {
+    private static BigInteger ipv6WithMask(InetSocketAddress socketAddress) {
         BigInteger ipAddress = ipToInt((Inet6Address) socketAddress.getAddress());
         return ipAddress.and(prefixToSubnetMaskIPv6());
     }

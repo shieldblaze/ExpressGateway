@@ -43,7 +43,7 @@ final class WebSocketHttpUpgradeHandler extends SimpleChannelInboundHandler<Full
         }
     }
 
-    private String uri(FullHttpRequest msg) {
+    private static String uri(FullHttpRequest msg) {
         return "ws://" + msg.headers().get(HttpHeaderNames.HOST) + msg.uri();
     }
 }

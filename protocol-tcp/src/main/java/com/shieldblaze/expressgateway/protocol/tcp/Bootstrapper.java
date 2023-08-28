@@ -41,8 +41,8 @@ final class Bootstrapper {
 
     Bootstrapper(L4LoadBalancer l4LoadBalancer) {
         this.l4LoadBalancer = l4LoadBalancer;
-        this.eventLoopGroup = l4LoadBalancer.eventLoopFactory().childGroup();
-        this.byteBufAllocator = l4LoadBalancer.byteBufAllocator();
+        eventLoopGroup = l4LoadBalancer.eventLoopFactory().childGroup();
+        byteBufAllocator = l4LoadBalancer.byteBufAllocator();
     }
 
     TCPConnection newInit(Node node, Channel channel) {

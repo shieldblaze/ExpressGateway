@@ -19,6 +19,10 @@ package com.shieldblaze.expressgateway.common.utils;
 
 public final class MathUtil {
 
+    private MathUtil() {
+        // Prevent outside initialization
+    }
+
     public static float percentage(int current, int maximum) {
         return current * 100f / maximum;
     }

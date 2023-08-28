@@ -40,7 +40,8 @@ public final class StringUtil {
     public static String validateNotNullOrEmpty(String str) {
         if (str == null) {
             throw new NullPointerException("String is 'null'");
-        } else if (str.isEmpty() || str.isBlank()) {
+        }
+        if (str.isEmpty() || str.isBlank()) {
             throw new IllegalArgumentException("String is empty or blank");
         }
         return str;
@@ -58,7 +59,8 @@ public final class StringUtil {
     public static String validateNotNullOrEmpty(String str, String name) {
         if (str == null) {
             throw new NullPointerException(name + " is 'null'");
-        } else if (str.isEmpty() || str.isBlank()) {
+        }
+        if (str.isEmpty() || str.isBlank()) {
             throw new IllegalArgumentException(name + " is empty or blank");
         }
         return str;

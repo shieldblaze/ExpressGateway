@@ -120,7 +120,7 @@ public class ClusterConfigurationEndpointHandlerTest {
 
     @Test
     @Order(3)
-    public void addL7ClusterTest() throws IOException, InterruptedException {
+    public void addL7ClusterTest() throws Exception {
         l7LoadBalancerTest.startLoadBalancer();
         l7LoadBalancerTest.verifyRunning();
 

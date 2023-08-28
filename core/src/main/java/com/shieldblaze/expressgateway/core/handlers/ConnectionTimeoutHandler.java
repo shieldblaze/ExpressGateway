@@ -64,7 +64,7 @@ public final class ConnectionTimeoutHandler extends ChannelDuplexHandler impleme
      * @param isUpstream Set to {@code true} if this Instance is placed in Upstream Pipeline
      */
     public ConnectionTimeoutHandler(Duration timeout, boolean isUpstream) {
-        this.timeoutNanos = timeout.toNanos();
+        timeoutNanos = timeout.toNanos();
         this.isUpstream = isUpstream;
     }
 

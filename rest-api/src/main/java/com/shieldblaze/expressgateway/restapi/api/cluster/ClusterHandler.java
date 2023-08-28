@@ -60,7 +60,7 @@ import java.util.Objects;
 public final class ClusterHandler {
 
     @PostMapping(value = "/create", consumes = MediaType.APPLICATION_JSON_VALUE, produces = MediaType.APPLICATION_JSON_VALUE)
-    public ResponseEntity<String> create(@RequestParam String id, @RequestBody ClusterContext clusterContext) {
+    public static ResponseEntity<String> create(@RequestParam String id, @RequestBody ClusterContext clusterContext) {
         LoadBalancerContext context = CoreContext.get(id);
         L4LoadBalancer l4LoadBalancer = context.l4LoadBalancer();
 
@@ -122,50 +122,50 @@ public final class ClusterHandler {
      *                       and {@link SessionPersistence} will be applied.
      * @param clusterContext {@link ClusterContext} Instance
      */
-    private void determineLoadBalance(L4LoadBalancer l4LoadBalancer, ClusterBuilder clusterBuilder, ClusterContext clusterContext) {
+    private static void determineLoadBalance(L4LoadBalancer l4LoadBalancer, ClusterBuilder clusterBuilder, ClusterContext clusterContext) {
         // Determine LoadBalance and SessionPersistence for L4 and L7/HTTP
-        if (l4LoadBalancer.type().equalsIgnoreCase("L4")) {
+        if ("L4".equalsIgnoreCase(l4LoadBalancer.type())) {
             LoadBalance<Node, Node, InetSocketAddress, Node> loadBalance;
             SessionPersistence<Node, Node, InetSocketAddress, Node> sessionPersistence;
 
-            if (clusterContext.sessionPersistence().equalsIgnoreCase("FiveTupleHash")) {
+            if ("FiveTupleHash".equalsIgnoreCase(clusterContext.sessionPersistence())) {
                 sessionPersistence = new FourTupleHash();
-            } else if (clusterContext.sessionPersistence().equalsIgnoreCase("SourceIPHash")) {
+            } else if ("SourceIPHash".equalsIgnoreCase(clusterContext.sessionPersistence())) {
                 sessionPersistence = new SourceIPHash();
-            } else if (clusterContext.sessionPersistence().equalsIgnoreCase("NOOP")) {
+            } else if ("NOOP".equalsIgnoreCase(clusterContext.sessionPersistence())) {
                 sessionPersistence = NOOPSessionPersistence.INSTANCE;
             } else {
                 throw new IllegalArgumentException("Invalid SessionPersistence: " + clusterContext.sessionPersistence());
             }
 
-            if (clusterContext.loadBalance().equalsIgnoreCase("LeastConnection")) {
+            if ("LeastConnection".equalsIgnoreCase(clusterContext.loadBalance())) {
                 loadBalance = new LeastConnection(sessionPersistence);
-            } else if (clusterContext.loadBalance().equalsIgnoreCase("LeastLoad")) {
+            } else if ("LeastLoad".equalsIgnoreCase(clusterContext.loadBalance())) {
                 loadBalance = new LeastLoad(sessionPersistence);
-            } else if (clusterContext.loadBalance().equalsIgnoreCase("Random")) {
+            } else if ("Random".equalsIgnoreCase(clusterContext.loadBalance())) {
                 loadBalance = new Random(sessionPersistence);
-            } else if (clusterContext.loadBalance().equalsIgnoreCase("RoundRobin")) {
+            } else if ("RoundRobin".equalsIgnoreCase(clusterContext.loadBalance())) {
                 loadBalance = new RoundRobin(sessionPersistence);
             } else {
                 throw new IllegalArgumentException("Invalid LoadBalance: " + clusterContext.loadBalance());
             }
 
             clusterBuilder.withLoadBalance(loadBalance);
-        } else if (l4LoadBalancer.type().equalsIgnoreCase("L7/HTTP")) {
+        } else if ("L7/HTTP".equalsIgnoreCase(l4LoadBalancer.type())) {
             LoadBalance<HTTPBalanceResponse, HTTPBalanceResponse, HTTPBalanceRequest, Node> loadBalance;
             SessionPersistence<HTTPBalanceResponse, HTTPBalanceResponse, HTTPBalanceRequest, Node> sessionPersistence;
 
-            if (clusterContext.sessionPersistence().equalsIgnoreCase("StickySession")) {
+            if ("StickySession".equalsIgnoreCase(clusterContext.sessionPersistence())) {
                 sessionPersistence = new StickySession();
-            } else if (clusterContext.sessionPersistence().equalsIgnoreCase("NOOP")) {
+            } else if ("NOOP".equalsIgnoreCase(clusterContext.sessionPersistence())) {
                 sessionPersistence = com.shieldblaze.expressgateway.backend.strategy.l7.http.sessionpersistence.NOOPSessionPersistence.INSTANCE;
             } else {
                 throw new IllegalArgumentException("Invalid SessionPersistence: " + clusterContext.sessionPersistence());
             }
 
-            if (clusterContext.loadBalance().equalsIgnoreCase("HTTPRandom")) {
+            if ("HTTPRandom".equalsIgnoreCase(clusterContext.loadBalance())) {
                 loadBalance = new HTTPRandom(sessionPersistence);
-            } else if (clusterContext.loadBalance().equalsIgnoreCase("HTTPRoundRobin")) {
+            } else if ("HTTPRoundRobin".equalsIgnoreCase(clusterContext.loadBalance())) {
                 loadBalance = new HTTPRoundRobin(sessionPersistence);
             } else {
                 throw new IllegalArgumentException("Invalid LoadBalance: " + clusterContext.loadBalance());

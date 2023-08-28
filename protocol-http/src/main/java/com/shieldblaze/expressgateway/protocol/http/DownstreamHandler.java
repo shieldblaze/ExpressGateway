@@ -239,7 +239,7 @@ final class DownstreamHandler extends ChannelInboundHandlerAdapter implements Cl
                     Http2DataFrame dataFrame = new DefaultHttp2DataFrame(httpContent.content(), false);
                     dataFrame.stream(httpConnection.lastTranslatedStreamProperty().clientStream());
 
-                    Http2Headers http2Headers = HttpConversionUtil.toHttp2Headers(lastHttpContent.trailingHeaders(), true);
+                    Http2Headers http2Headers = toHttp2Headers(lastHttpContent.trailingHeaders(), true);
                     Http2HeadersFrame http2HeadersFrame = new DefaultHttp2HeadersFrame(http2Headers, true);
                     http2HeadersFrame.stream(httpConnection.lastTranslatedStreamProperty().clientStream());
                     httpConnection.clearTranslatedStreamProperty();

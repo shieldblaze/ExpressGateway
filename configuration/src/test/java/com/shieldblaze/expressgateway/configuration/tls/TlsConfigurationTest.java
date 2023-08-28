@@ -79,7 +79,7 @@ class TlsConfigurationTest {
     }
 
     @Test
-    void addMappingTest() throws CertificateException, SSLException {
+    void addMappingTest() throws Exception {
         SelfSignedCertificate ssc = new SelfSignedCertificate("www.shieldblaze.com", "EC", 256);
         CertificateKeyPair certificateKeyPair = CertificateKeyPair.forServer(Collections.singletonList(ssc.cert()), ssc.key(), false);
 
@@ -91,7 +91,7 @@ class TlsConfigurationTest {
     }
 
     @Test
-    void addMappingWildcardTest() throws CertificateException, SSLException {
+    void addMappingWildcardTest() throws Exception {
         SelfSignedCertificate ssc = new SelfSignedCertificate("www.shieldblaze.com", "EC", 256);
         CertificateKeyPair certificateKeyPair = CertificateKeyPair.forServer(Collections.singletonList(ssc.cert()), ssc.key(), false);
 
@@ -104,7 +104,7 @@ class TlsConfigurationTest {
     }
 
     @Test
-    void removeMappingTest() throws CertificateException, SSLException {
+    void removeMappingTest() throws Exception {
         SelfSignedCertificate ssc = new SelfSignedCertificate("www.shieldblaze.com", "EC", 256);
         CertificateKeyPair certificateKeyPair = CertificateKeyPair.forServer(Collections.singletonList(ssc.cert()), ssc.key(), false);
 

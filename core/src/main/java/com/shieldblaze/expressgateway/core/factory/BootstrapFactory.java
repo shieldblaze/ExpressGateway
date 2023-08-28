@@ -87,7 +87,7 @@ public final class BootstrapFactory {
                 .channelFactory(() -> {
                     if (configurationContext.transportConfiguration().transportType() == TransportType.IO_URING) {
                         IOUringDatagramChannel datagramChannel = new IOUringDatagramChannel();
-                        datagramChannel.config().setOption(IOUringChannelOption.SO_REUSEPORT, true);
+                        datagramChannel.config().setOption(UnixChannelOption.SO_REUSEPORT, true);
                         return datagramChannel;
                     } else if (configurationContext.transportConfiguration().transportType() == TransportType.EPOLL) {
                         EpollDatagramChannel datagramChannel = new EpollDatagramChannel();

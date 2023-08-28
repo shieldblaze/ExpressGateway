@@ -76,11 +76,11 @@ public abstract class L4LoadBalancer {
      * @param channelHandler       {@link ChannelHandler} to use for handling traffic
      * @throws NullPointerException If a required parameter if {@code null}
      */
-    public L4LoadBalancer(String name,
-                          @NonNull InetSocketAddress bindAddress,
-                          @NonNull L4FrontListener l4FrontListener,
-                          @NonNull ConfigurationContext configurationContext,
-                          ChannelHandler channelHandler) {
+    protected L4LoadBalancer(String name,
+                             @NonNull InetSocketAddress bindAddress,
+                             @NonNull L4FrontListener l4FrontListener,
+                             @NonNull ConfigurationContext configurationContext,
+                             ChannelHandler channelHandler) {
 
         if (name != null && !name.isEmpty()) {
             this.name = name;
@@ -89,11 +89,11 @@ public abstract class L4LoadBalancer {
         this.bindAddress = bindAddress;
         this.l4FrontListener = l4FrontListener;
         this.configurationContext = configurationContext;
-        this.eventStream = configurationContext.eventStreamConfiguration().newEventStream();
+        eventStream = configurationContext.eventStreamConfiguration().newEventStream();
         this.channelHandler = channelHandler;
 
-        this.byteBufAllocator = new PooledByteBufAllocatorFactory(configurationContext.bufferConfiguration()).instance();
-        this.eventLoopFactory = new EventLoopFactory(configurationContext);
+        byteBufAllocator = new PooledByteBufAllocatorFactory(configurationContext.bufferConfiguration()).instance();
+        eventLoopFactory = new EventLoopFactory(configurationContext);
 
         l4FrontListener.l4LoadBalancer(this);
     }

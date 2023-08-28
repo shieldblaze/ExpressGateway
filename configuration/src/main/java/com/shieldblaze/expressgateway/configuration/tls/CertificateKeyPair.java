@@ -62,7 +62,7 @@ public final class CertificateKeyPair implements Runnable, Closeable {
     private final PrivateKey privateKey;
     private final boolean useOCSPStapling;
 
-    private byte[] ocspStaplingData = null;
+    private byte[] ocspStaplingData;
     private ScheduledFuture<?> scheduledFuture;
     private SslContext sslContext;
 
@@ -229,7 +229,7 @@ public final class CertificateKeyPair implements Runnable, Closeable {
             }
         }
 
-        this.sslContext = sslContextBuilder.build();
+        sslContext = sslContextBuilder.build();
         return this;
     }
 
@@ -257,7 +257,6 @@ public final class CertificateKeyPair implements Runnable, Closeable {
                 return;
             }
         } catch (Exception ex) {
-            ex.printStackTrace();
             logger.error(ex);
         }
         ocspStaplingData = null;

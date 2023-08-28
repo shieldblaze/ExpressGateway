@@ -36,7 +36,7 @@ import java.util.SplittableRandom;
  */
 public final class Random extends L4Balance {
 
-    private final SplittableRandom RANDOM = new SplittableRandom();
+    private final SplittableRandom random = new SplittableRandom();
 
     /**
      * Create {@link Random} Instance
@@ -64,7 +64,7 @@ public final class Random extends L4Balance {
         }
 
         try {
-            node = cluster.onlineNodes().get(RANDOM.nextInt(cluster.onlineNodes().size()));
+            node = cluster.onlineNodes().get(random.nextInt(cluster.onlineNodes().size()));
         } catch (Exception ex) {
             throw new NoNodeAvailableException(ex);
         }

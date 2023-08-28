@@ -44,7 +44,7 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 
 class HealthCheckServiceTest {
 
-    private final static EventLoopGroup eventLoopGroup = new NioEventLoopGroup(2);
+    private static final EventLoopGroup eventLoopGroup = new NioEventLoopGroup(2);
 
     @BeforeAll
     static void setup() throws InterruptedException {

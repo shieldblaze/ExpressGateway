@@ -60,7 +60,7 @@ public final class ServiceDiscoveryClient {
                         )};
                     }
 
-                    TrustManager[] trustManagers = new TrustManager[]{X509Util.createTrustManager(
+                    TrustManager[] trustManagers = {X509Util.createTrustManager(
                             serviceDiscovery.trustStoreFile(),
                             String.valueOf(serviceDiscovery.trustStorePasswordAsChars()),
                             "",

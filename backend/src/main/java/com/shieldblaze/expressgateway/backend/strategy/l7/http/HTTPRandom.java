@@ -36,7 +36,7 @@ import java.util.SplittableRandom;
  */
 public final class HTTPRandom extends HTTPBalance {
 
-    private final SplittableRandom RANDOM = new SplittableRandom();
+    private final SplittableRandom random = new SplittableRandom();
 
     /**
      * Create {@link HTTPRandom} Instance
@@ -67,7 +67,7 @@ public final class HTTPRandom extends HTTPBalance {
 
         Node node;
         try {
-            node = cluster.onlineNodes().get(RANDOM.nextInt(cluster.onlineNodes().size()));
+            node = cluster.onlineNodes().get(random.nextInt(cluster.onlineNodes().size()));
         } catch (Exception ex) {
             throw new NoNodeAvailableException(ex);
         }

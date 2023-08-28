@@ -50,8 +50,8 @@ final class DownstreamHandler extends ChannelInboundHandlerAdapter {
     public void channelInactive(ChannelHandlerContext ctx) {
         if (logger.isDebugEnabled()) {
             logger.debug("Closing Upstream {} and Downstream {} Channel",
-                    socketAddress.getAddress().getHostAddress() + ":" + socketAddress.getPort(),
-                    udpConnection.socketAddress().getAddress().getHostAddress() + ":" + udpConnection.socketAddress().getPort());
+                    socketAddress.getAddress().getHostAddress() + ':' + socketAddress.getPort(),
+                    udpConnection.socketAddress().getAddress().getHostAddress() + ':' + udpConnection.socketAddress().getPort());
         }
 
         udpConnection.close();

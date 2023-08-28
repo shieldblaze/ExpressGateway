@@ -27,7 +27,7 @@ import java.net.InetSocketAddress;
 import java.util.concurrent.ConcurrentLinkedQueue;
 
 /**
- * <p> Base class for Connection. Protocol implementations must extend this class. </p>
+ * <p> Base class for Connection. A connection is a Downstream {@link Channel}. Protocol implementations must extend this class. </p>
  *
  * <p> {@link #init(ChannelFuture)} must be called once {@link ChannelFuture} is ready
  * for a new connection. </p>
@@ -39,7 +39,7 @@ public abstract class Connection {
      */
     public enum State {
         /**
-         * Connection has been initialized.
+         * Connection has been initialized but not connected (or ready) yet.
          */
         INITIALIZED,
 
@@ -49,20 +49,22 @@ public abstract class Connection {
         CONNECTION_TIMEOUT,
 
         /**
-         * Connection has been closed with remote host.
+         * Connection has been closed with downstream channel.
          */
         CONNECTION_CLOSED,
 
         /**
-         * Connection has been connected successfully and is active.
+         * Connection has been connected successfully, active and ready to accept traffic.
          */
         CONNECTED_AND_ACTIVE
     }
 
     /**
      * Backlog Queue contains objects pending to be written once connection establishes.
+     * <p></p>
+     * This queue will be {@code null} once backlog is processed (either via {@link #writeBacklog()} or {@link #clearBacklog()})
      */
-    protected final ConcurrentLinkedQueue<Object> backlogQueue = new ConcurrentLinkedQueue<>();
+    protected ConcurrentLinkedQueue<Object> backlogQueue;
 
     private final Node node;
     protected ChannelFuture channelFuture;
@@ -76,12 +78,15 @@ public abstract class Connection {
      * @param node {@link Node} associated with this Connection
      */
     @NonNull
-    public Connection(Node node) {
+    protected Connection(Node node) {
         this.node = node;
+        backlogQueue(new ConcurrentLinkedQueue<>());
     }
 
     /**
-     * Initialize this Connection
+     * Initialize this Connection with {@link ChannelFuture}
+     *
+     * @param channelFuture {@link ChannelFuture} associated with this Connection (of Upstream or Downstream)
      */
     @NonNull
     public void init(ChannelFuture channelFuture) {
@@ -120,11 +125,11 @@ public abstract class Connection {
     protected abstract void processBacklog(ChannelFuture channelFuture);
 
     /**
-     * Write and Process the Backlog
+     * Write Backlog to the {@link Channel}
      */
     protected void writeBacklog() {
         backlogQueue.forEach(this::writeAndFlush);
-        backlogQueue.clear(); // Clear the new queue because we're done with it.
+        backlogQueue = null;
     }
 
     /**
@@ -132,7 +137,7 @@ public abstract class Connection {
      */
     protected void clearBacklog() {
         backlogQueue.forEach(ReferenceCountedUtil::silentRelease);
-        backlogQueue.clear();
+        backlogQueue = null;
     }
 
     /**
@@ -158,16 +163,32 @@ public abstract class Connection {
         return channelFuture;
     }
 
+    /**
+     * Get {@link Node} associated with this connection.
+     */
     public Node node() {
         return node;
     }
 
+    /**
+     * {@link InetSocketAddress} of this {@link Connection}
+     */
     public InetSocketAddress socketAddress() {
         return socketAddress;
     }
 
+    /**
+     * Current {@link State} of this {@link Connection}
+     */
     public State state() {
         return state;
+    }
+
+    /**
+     * Set the {@link State} of this {@link Connection}
+     */
+    public void backlogQueue(ConcurrentLinkedQueue<Object> newQueue) {
+        backlogQueue = newQueue;
     }
 
     /**
@@ -179,8 +200,12 @@ public abstract class Connection {
             clearBacklog();
         }
 
+        // Remove this connection from Node
         node.removeConnection(this);
-        if (this.channel != null) {
+
+        // If Channel is not null then close it.
+        // Channel can be null if the connection is not initialized.
+        if (channel != null) {
             channel.close();
         }
     }

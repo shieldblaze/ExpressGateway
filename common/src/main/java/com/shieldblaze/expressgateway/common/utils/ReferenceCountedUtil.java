@@ -21,7 +21,7 @@ import io.netty.util.ReferenceCountUtil;
 import io.netty.util.ReferenceCounted;
 
 /**
- * Provides extra utilities for {@link io.netty.util.ReferenceCounted} objects.
+ * Provides extra utilities for {@link ReferenceCounted} objects.
  */
 public final class ReferenceCountedUtil {
 

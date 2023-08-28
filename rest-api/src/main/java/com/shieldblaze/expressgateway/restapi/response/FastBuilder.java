@@ -23,6 +23,10 @@ public final class FastBuilder {
         MULTI_VALUE_MAP.set(HttpHeaderNames.CONTENT_TYPE.toString(), HttpHeaderValues.APPLICATION_JSON.toString());
     }
 
+    private FastBuilder() {
+        // Prevent outside initialization
+    }
+
     /**
      * Build error {@link ResponseEntity} with {@link APIResponse.APIResponseBuilder#isSuccess(boolean)} set to {@code false}
      * and {@link Error} built using {@link ErrorBase}

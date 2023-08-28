@@ -22,6 +22,10 @@ import java.nio.charset.StandardCharsets;
 public final class Hex {
     private static final byte[] HEX_ARRAY = "0123456789ABCDEF".getBytes(StandardCharsets.UTF_8);
 
+    private Hex() {
+        // Prevent outside initialization
+    }
+
     /**
      * Convert byte array to Hex {@linkplain String}.
      * @param bytes Byte array

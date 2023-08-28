@@ -54,7 +54,7 @@ import static io.netty.util.internal.logging.InternalLogLevel.DEBUG;
  * {@link Http2FrameCodecBuilder}. It's recommended for channel handlers to inherit from the
  * {@link Http2ChannelDuplexHandler}, as it provides additional functionality like iterating over all active streams or
  * creating outbound streams.
- *
+ * <p>
  * <h3>Stream Lifecycle</h3>
  * <p>
  * The frame codec delivers and writes frames for active streams. An active stream is closed when either side sends a
@@ -64,7 +64,7 @@ import static io.netty.util.internal.logging.InternalLogLevel.DEBUG;
  * <p>{@link Http2StreamFrame}s read from the channel always a {@link Http2FrameStream} object set, while when writing a
  * {@link Http2StreamFrame} the application code needs to set a {@link Http2FrameStream} object using
  * {@link Http2StreamFrame#stream(Http2FrameStream)}.
- *
+ * <p>
  * <h3>Flow control</h3>
  * <p>
  * The frame codec automatically increments stream and connection flow control windows.
@@ -78,12 +78,12 @@ import static io.netty.util.internal.logging.InternalLogLevel.DEBUG;
  * <p>The connection-level flow control window can be changed by writing a {@link Http2WindowUpdateFrame} with the
  * desired window size <em>increment</em> in bytes and the stream identifier set to {@code 0}. By default the initial
  * connection-level flow control window is the same as initial stream-level flow control window.
- *
+ * <p>
  * <h3>New inbound Streams</h3>
  * <p>
  * The first frame of an HTTP/2 stream must be an {@link Http2HeadersFrame}, which will have an {@link Http2FrameStream}
  * object attached.
- *
+ * <p>
  * <h3>New outbound Streams</h3>
  * <p>
  * A outbound HTTP/2 stream can be created by first instantiating a new {@link Http2FrameStream} object via
@@ -102,11 +102,11 @@ import static io.netty.util.internal.logging.InternalLogLevel.DEBUG;
  *             } else {
  *                 // Stream failed to become active. Handle error.
  *                 if (f.cause() instanceof Http2NoMoreStreamIdsException) {
- *
+ * <p>
  *                 } else if (f.cause() instanceof Http2GoAwayException) {
- *
+ * <p>
  *                 } else {
- *
+ * <p>
  *                 }
  *             }
  *         }
@@ -125,21 +125,21 @@ import static io.netty.util.internal.logging.InternalLogLevel.DEBUG;
  * get closed or a GO_AWAY frame might be received. In the first case, all writes of buffered streams will fail with a
  * {@link Http2ChannelClosedException}. In the second case, all writes of buffered streams with an identifier less than
  * the last stream identifier of the GO_AWAY frame will fail with a {@link Http2GoAwayException}.
- *
+ * <p>
  * <h3>Error Handling</h3>
  * <p>
  * Exceptions and errors are propagated via {@link ChannelInboundHandler#exceptionCaught}. Exceptions that apply to
  * a specific HTTP/2 stream are wrapped in a {@link Http2FrameStreamException} and have the corresponding
  * {@link Http2FrameStream} object attached.
- *
+ * <p>
  * <h3>Reference Counting</h3>
  * <p>
  * Some {@link Http2StreamFrame}s implement the {@link ReferenceCounted} interface, as they carry
  * reference counted objects (e.g. {@link ByteBuf}s). The frame codec will call {@link ReferenceCounted#retain()} before
  * propagating a reference counted object through the pipeline, and thus an application handler needs to release such
- * an object after having consumed it. For more information on reference counting take a look at
- * https://netty.io/wiki/reference-counted-objects.html
- *
+ * an object after having consumed it. For more information on r<a href="eference">counting take a look at
+ * https://netty.io</a>/wiki/reference-counted-objects.html
+ * <p>
  * <h3>HTTP Upgrade</h3>
  * <p>
  * Server-side HTTP to HTTP/2 upgrade is supported in conjunction with {@link Http2ServerUpgradeCodec}; the necessary
@@ -720,12 +720,12 @@ public class Http2FrameCodec extends Http2ConnectionHandler {
         }
     }
 
-    private void onUpgradeEvent(ChannelHandlerContext ctx, UpgradeEvent evt) {
+    private static void onUpgradeEvent(ChannelHandlerContext ctx, UpgradeEvent evt) {
         ctx.fireUserEventTriggered(evt);
     }
 
-    private void onHttp2StreamWritabilityChanged(ChannelHandlerContext ctx, DefaultHttp2FrameStream stream,
-                                                 @SuppressWarnings("unused") boolean writable) {
+    private static void onHttp2StreamWritabilityChanged(ChannelHandlerContext ctx, DefaultHttp2FrameStream stream,
+                                                        @SuppressWarnings("unused") boolean writable) {
         ctx.fireUserEventTriggered(stream.writabilityChanged);
     }
 

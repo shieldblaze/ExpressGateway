@@ -82,7 +82,8 @@ public final class HealthCheckConfiguration implements Configuration<HealthCheck
      * @return this class instance
      * @throws IllegalArgumentException If any value is invalid
      */
-    public HealthCheckConfiguration validate() throws IllegalArgumentException {
+    @Override
+    public HealthCheckConfiguration validate() {
         NumberUtil.checkPositive(workers, "Workers");
         NumberUtil.checkPositive(timeInterval, "TimeInterval");
         validated = true;

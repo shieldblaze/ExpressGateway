@@ -52,8 +52,8 @@ public class TCPListener extends L4FrontListener {
     public L4FrontListenerStartupEvent start() {
         L4FrontListenerStartupEvent l4FrontListenerStartupEvent = new L4FrontListenerStartupEvent();
 
-        // If ChannelFutureList is not 0 then this listener is already started and we won't start it again.
-        if (channelFutures.size() != 0) {
+        // If ChannelFutureList is not empty then this listener is already started and we won't start it again.
+        if (!channelFutures.isEmpty()) {
             l4FrontListenerStartupEvent.markFailure(new IllegalArgumentException("Listener has already started and cannot be restarted."));
             return l4FrontListenerStartupEvent;
         }
@@ -83,7 +83,7 @@ public class TCPListener extends L4FrontListener {
                 .channelFactory(() -> {
                     if (transportConfiguration.transportType() == TransportType.IO_URING) {
                         IOUringServerSocketChannel serverSocketChannel = new IOUringServerSocketChannel();
-                        serverSocketChannel.config().setOption(IOUringChannelOption.SO_REUSEPORT, true);
+                        serverSocketChannel.config().setOption(UnixChannelOption.SO_REUSEPORT, true);
                         return serverSocketChannel;
                     } else if (transportConfiguration.transportType() == TransportType.EPOLL) {
                         EpollServerSocketChannel serverSocketChannel = new EpollServerSocketChannel();
@@ -128,7 +128,16 @@ public class TCPListener extends L4FrontListener {
     public L4FrontListenerStopEvent stop() {
         L4FrontListenerStopEvent l4FrontListenerStopEvent = new L4FrontListenerStopEvent();
 
+        // If ChannelFutureList is empty then this listener is already stopped and we won't stop it again.
+        if (channelFutures.isEmpty()) {
+            l4FrontListenerStopEvent.markFailure(new IllegalArgumentException("Listener has already stopped and cannot be stopped again."));
+            return l4FrontListenerStopEvent;
+        }
+
+        // Close all ChannelFutures
         channelFutures.forEach(channelFuture -> channelFuture.channel().close());
+
+        // Add listener to last ChannelFuture to notify all listeners
         channelFutures.get(channelFutures.size() - 1).channel().closeFuture().addListener(future -> {
             if (future.isSuccess()) {
                 channelFutures.clear();
