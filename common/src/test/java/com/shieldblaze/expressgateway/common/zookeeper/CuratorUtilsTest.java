@@ -18,10 +18,16 @@
 package com.shieldblaze.expressgateway.common.zookeeper;
 
 import com.shieldblaze.expressgateway.common.ExpressGateway;
+import org.apache.curator.test.InstanceSpec;
+import org.apache.curator.test.QuorumConfigBuilder;
+import org.apache.curator.test.QuorumPeerConfigBuilder;
 import org.apache.curator.test.TestingServer;
+import org.apache.curator.test.ZooKeeperServerEmbeddedAdapter;
 import org.junit.jupiter.api.AfterAll;
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.Test;
+
+import java.util.Collections;
 
 import static com.shieldblaze.expressgateway.common.zookeeper.Curator.getInstance;
 import static com.shieldblaze.expressgateway.common.zookeeper.CuratorUtils.createNew;

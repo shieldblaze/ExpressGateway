@@ -67,7 +67,8 @@ public final class ServiceDiscoveryClient {
                             false,
                             false,
                             serviceDiscovery.hostnameVerification(),
-                            serviceDiscovery.hostnameVerification()
+                            serviceDiscovery.hostnameVerification(),
+                            false
                     )};
 
                     SSLContext sslContext = SSLContext.getInstance("TLSv1.3");
