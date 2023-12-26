@@ -34,7 +34,7 @@ along with ShieldBlaze ExpressGateway.  If not, see <https://www.gnu.org/license
 
         <!-- Version Management -->
         <apache.curator>5.5.0</apache.curator>
-        <netty>4.1.97.Final</netty>
+        <netty>4.1.100.Final</netty>
         <spring.boot>2.7.5</spring.boot>
     </properties>
 
