@@ -28,6 +28,7 @@ import com.shieldblaze.expressgateway.testing.ExpressGatewayConfigured;
 import okhttp3.Request;
 import okhttp3.RequestBody;
 import okhttp3.Response;
+import org.jetbrains.annotations.NotNull;
 import org.junit.jupiter.api.AfterAll;
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.MethodOrderer;
@@ -61,16 +62,7 @@ class BufferTest {
     @Order(1)
     @Test
     void applyConfigurationTest() throws IOException {
-        JsonObject jsonBody = new JsonObject();
-        jsonBody.addProperty("preferDirect", true);
-        jsonBody.addProperty("heapArena", 12);
-        jsonBody.addProperty("directArena", 12);
-        jsonBody.addProperty("pageSize", 16384);
-        jsonBody.addProperty("maxOrder", 11);
-        jsonBody.addProperty("smallCacheSize", 256);
-        jsonBody.addProperty("normalCacheSize", 64);
-        jsonBody.addProperty("useCacheForAllThreads", true);
-        jsonBody.addProperty("directMemoryCacheAlignment", 0);
+        JsonObject jsonBody = jsonObject();
 
         Request request = new Request.Builder()
                 .url("https://127.0.0.1:9110/v1/configuration/buffer")
@@ -84,6 +76,21 @@ class BufferTest {
             System.out.println(responseJson);
             assertTrue(responseJson.get("Success").getAsBoolean());
         }
+    }
+
+    @NotNull
+    private static JsonObject jsonObject() {
+        JsonObject jsonBody = new JsonObject();
+        jsonBody.addProperty("preferDirect", true);
+        jsonBody.addProperty("heapArena", 12);
+        jsonBody.addProperty("directArena", 12);
+        jsonBody.addProperty("pageSize", 16384);
+        jsonBody.addProperty("maxOrder", 11);
+        jsonBody.addProperty("smallCacheSize", 256);
+        jsonBody.addProperty("normalCacheSize", 64);
+        jsonBody.addProperty("useCacheForAllThreads", true);
+        jsonBody.addProperty("directMemoryCacheAlignment", 0);
+        return jsonBody;
     }
 
     @Order(2)
@@ -117,16 +124,7 @@ class BufferTest {
     @Order(3)
     @Test
     void getConfigurationTest() throws IOException {
-        JsonObject jsonBody = new JsonObject();
-        jsonBody.addProperty("preferDirect", true);
-        jsonBody.addProperty("heapArena", 256);
-        jsonBody.addProperty("directArena", 512);
-        jsonBody.addProperty("pageSize", 16384);
-        jsonBody.addProperty("maxOrder", 66);
-        jsonBody.addProperty("smallCacheSize", 512);
-        jsonBody.addProperty("normalCacheSize", 128);
-        jsonBody.addProperty("useCacheForAllThreads", true);
-        jsonBody.addProperty("directMemoryCacheAlignment", 0);
+        JsonObject jsonBody = object();
 
         Request request = new Request.Builder()
                 .url("https://127.0.0.1:9110/v1/configuration/buffer")
@@ -161,5 +159,20 @@ class BufferTest {
             assertEquals(jsonBody.get("useCacheForAllThreads").getAsBoolean(), bufferObject.get("useCacheForAllThreads").getAsBoolean());
             assertEquals(jsonBody.get("directMemoryCacheAlignment").getAsInt(), bufferObject.get("directMemoryCacheAlignment").getAsInt());
         }
+    }
+
+    @NotNull
+    private static JsonObject object() {
+        JsonObject jsonBody = new JsonObject();
+        jsonBody.addProperty("preferDirect", true);
+        jsonBody.addProperty("heapArena", 256);
+        jsonBody.addProperty("directArena", 512);
+        jsonBody.addProperty("pageSize", 16384);
+        jsonBody.addProperty("maxOrder", 66);
+        jsonBody.addProperty("smallCacheSize", 512);
+        jsonBody.addProperty("normalCacheSize", 128);
+        jsonBody.addProperty("useCacheForAllThreads", true);
+        jsonBody.addProperty("directMemoryCacheAlignment", 0);
+        return jsonBody;
     }
 }

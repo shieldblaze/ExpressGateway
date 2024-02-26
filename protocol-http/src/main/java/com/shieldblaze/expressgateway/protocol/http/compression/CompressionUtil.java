@@ -69,13 +69,17 @@ public final class CompressionUtil {
     public static String checkCompressibleForHttp2(Http2Headers headers, String acceptEncoding, long compressionThreshold) {
         if (headers.contains(CONTENT_ENCODING)) {
             return null;
-        } else if (acceptEncoding == null) {
+        }
+        if (acceptEncoding == null) {
             return null;
-        } else if (!headers.contains(CONTENT_TYPE)) {
+        }
+        if (!headers.contains(CONTENT_TYPE)) {
             return null;
-        } else if (!MIME_TYPES.contains(headers.get(CONTENT_TYPE).toString().split(";")[0])) {
+        }
+        if (!MIME_TYPES.contains(headers.get(CONTENT_TYPE).toString().split(";")[0])) {
             return null;
-        } else if (headers.contains(CONTENT_LENGTH)) {
+        }
+        if (headers.contains(CONTENT_LENGTH)) {
             if (!(headers.getLong(CONTENT_LENGTH, -1) >= compressionThreshold)) {
                 return null;
             }
@@ -140,5 +144,9 @@ public final class CompressionUtil {
             }
         }
         return null;
+    }
+
+    private CompressionUtil() {
+        // Prevent outside initialization
     }
 }

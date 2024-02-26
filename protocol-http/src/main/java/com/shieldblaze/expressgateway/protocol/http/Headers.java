@@ -21,4 +21,8 @@ package com.shieldblaze.expressgateway.protocol.http;
 public final class Headers {
     public static final String X_FORWARDED_FOR = "x-forwarded-for";
     public static final String X_FORWARDED_PROTO = "x-forwarded-proto";
+
+    private Headers() {
+        // Prevent outside initialization
+    }
 }

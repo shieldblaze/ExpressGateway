@@ -74,13 +74,13 @@ class ServiceDiscoveryClientTest {
 
     @Order(1)
     @Test
-    void register() throws IOException, InterruptedException {
+    void register() throws Exception {
         ServiceDiscoveryClient.register();
     }
 
     @Order(2)
     @Test
-    void deregister() throws IOException, InterruptedException {
+    void deregister() throws Exception {
         ServiceDiscoveryClient.deregister();
     }
 }

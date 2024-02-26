@@ -42,8 +42,8 @@ public class ErrorMessage {
         public com.shieldblaze.expressgateway.restapi.response.builder.ErrorMessage build() {
 
             if (errorBase != null) {
-                this.ErrorCode = errorBase.code();
-                this.ErrorMessage = errorBase.message();
+                ErrorCode = errorBase.code();
+                ErrorMessage = errorBase.message();
             }
 
             return new ErrorMessage(this);

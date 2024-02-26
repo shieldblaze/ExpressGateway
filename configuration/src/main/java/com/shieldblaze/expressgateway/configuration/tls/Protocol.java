@@ -49,13 +49,15 @@ public enum Protocol {
     }
 
     public static Protocol get(String protocol) {
-        if (protocol.equalsIgnoreCase("TLSv1.1")) {
+        if ("TLSv1.1".equalsIgnoreCase(protocol)) {
             return TLS_1_1;
-        } else if (protocol.equalsIgnoreCase("TLSv1.2")) {
+        }
+        if ("TLSv1.2".equalsIgnoreCase(protocol)) {
             return TLS_1_2;
-        } else if (protocol.equalsIgnoreCase("TLSv1.3")) {
+        }
+        if ("TLSv1.3".equalsIgnoreCase(protocol)) {
             return TLS_1_3;
         }
-       throw new NoSuchElementException("Invalid Protocol: " + protocol);
+        throw new NoSuchElementException("Invalid Protocol: " + protocol);
     }
 }

@@ -88,8 +88,7 @@ public final class NumberUtil {
         if (i >= start && i <= end) {
             return i;
         }
-        throw new IllegalArgumentException("Invalid " + message + ": " + i +
-                "; (Expected: " + start + "-" + end + ")");
+        throw new IllegalArgumentException("Invalid " + message + ": " + i + "; (Expected: " + start + '-' + end + ')');
     }
 
     /**
@@ -106,8 +105,7 @@ public final class NumberUtil {
             return l;
         }
 
-        throw new IllegalArgumentException("Invalid " + message + ": " + l +
-                "; (Expected: " + start + "-" + end + ")");
+        throw new IllegalArgumentException("Invalid " + message + ": " + l + "; (Expected: " + start + '-' + end + ')');
     }
 
     /**
@@ -123,8 +121,7 @@ public final class NumberUtil {
         if (d >= start && d <= end) {
             return d;
         }
-        throw new IllegalArgumentException("Invalid " + message + ": " + d +
-                "; (Expected: " + start + "-" + end + ")");
+        throw new IllegalArgumentException("Invalid " + message + ": " + d + "; (Expected: " + start + '-' + end + ')');
     }
 
     /**
@@ -140,8 +137,7 @@ public final class NumberUtil {
         if (f >= start && f <= end) {
             return f;
         }
-        throw new IllegalArgumentException("Invalid " + message + ": " + f +
-                "; (Expected: " + start + "-" + end + ")");
+        throw new IllegalArgumentException("Invalid " + message + ": " + f + "; (Expected: " + start + '-' + end + ')');
     }
 
     private NumberUtil() {

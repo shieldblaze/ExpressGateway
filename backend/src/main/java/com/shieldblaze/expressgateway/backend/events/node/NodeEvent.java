@@ -26,7 +26,7 @@ import com.shieldblaze.expressgateway.concurrent.event.DefaultEvent;
 public abstract class NodeEvent extends DefaultEvent<Void> {
     private final Node node;
 
-    public NodeEvent(Node node) {
+    protected NodeEvent(Node node) {
         this.node = node;
     }
 

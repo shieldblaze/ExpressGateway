@@ -198,7 +198,7 @@ public class BasicHttpServerTest {
 
                     OK_HTTP_CLIENT.newWebSocket(request, new WebSocketListener() {
 
-                        private int framesSent = 0;
+                        private int framesSent;
                         private final byte[] randomData = new byte[dataSize];
 
                         @Override

@@ -40,7 +40,7 @@ public abstract class HealthCheck implements Runnable {
      * @param socketAddress {@link InetSocketAddress} of remote host to check
      * @param timeout       Timeout in seconds for health check
      */
-    public HealthCheck(InetSocketAddress socketAddress, Duration timeout) {
+    protected HealthCheck(InetSocketAddress socketAddress, Duration timeout) {
         this(socketAddress, timeout, 100);
     }
 
@@ -51,10 +51,10 @@ public abstract class HealthCheck implements Runnable {
      * @param timeout       Timeout for health check
      * @param samples       Number of samples to use for evaluating Health of remote host
      */
-    public HealthCheck(InetSocketAddress socketAddress, Duration timeout, int samples) {
+    protected HealthCheck(InetSocketAddress socketAddress, Duration timeout, int samples) {
         this.socketAddress = socketAddress;
         this.timeout = (int) timeout.toMillis();
-        this.queue = EvictingQueue.create(samples);
+        queue = EvictingQueue.create(samples);
     }
 
     /**

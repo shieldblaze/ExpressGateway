@@ -19,13 +19,17 @@ package com.shieldblaze.expressgateway.backend.exceptions;
 
 import com.shieldblaze.expressgateway.backend.loadbalance.LoadBalance;
 
+import java.io.Serial;
+
 /**
  * Thrown when there was an error during load-balancing by {@link LoadBalance}
  */
 public class LoadBalanceException extends Exception {
 
+    @Serial
+    private static final long serialVersionUID = 1841399446385743110L;
+
     public LoadBalanceException() {
-        super();
     }
 
     public LoadBalanceException(String message) {

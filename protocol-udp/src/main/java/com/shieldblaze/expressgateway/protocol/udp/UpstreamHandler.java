@@ -29,6 +29,7 @@ import io.netty.channel.socket.DatagramPacket;
 import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
 
+import java.io.Closeable;
 import java.net.InetSocketAddress;
 import java.time.Duration;
 import java.util.Map;
@@ -45,7 +46,7 @@ final class UpstreamHandler extends ChannelInboundHandlerAdapter implements Entr
 
     UpstreamHandler(L4LoadBalancer l4LoadBalancer) {
         this.l4LoadBalancer = l4LoadBalancer;
-        this.bootstrapper = new Bootstrapper(l4LoadBalancer, l4LoadBalancer.eventLoopFactory().childGroup(), l4LoadBalancer.byteBufAllocator());
+        bootstrapper = new Bootstrapper(l4LoadBalancer, l4LoadBalancer.eventLoopFactory().childGroup(), l4LoadBalancer.byteBufAllocator());
         connectionMap = new SelfExpiringMap<>(
                 new ConcurrentHashMap<>(),
                 Duration.ofMillis(l4LoadBalancer.configurationContext().transportConfiguration().connectionIdleTimeout()),
@@ -79,7 +80,7 @@ final class UpstreamHandler extends ChannelInboundHandlerAdapter implements Entr
     @Override
     public void channelInactive(ChannelHandlerContext ctx) throws Exception {
         logger.info("Closing All Upstream and Downstream Channels");
-        ((SelfExpiringMap<?, ?>) connectionMap).close();
+        ((Closeable) connectionMap).close();
         connectionMap.forEach((socketAddress, udpConnection) -> udpConnection.close());
         connectionMap.clear();
     }

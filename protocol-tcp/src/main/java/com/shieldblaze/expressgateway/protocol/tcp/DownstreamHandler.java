@@ -37,7 +37,7 @@ final class DownstreamHandler extends ChannelInboundHandlerAdapter {
     DownstreamHandler(Channel upstream, Node node) {
         this.upstream = upstream;
         this.node = node;
-        this.upstreamAddress = (InetSocketAddress) upstream.remoteAddress();
+        upstreamAddress = (InetSocketAddress) upstream.remoteAddress();
     }
 
     @Override
@@ -45,13 +45,17 @@ final class DownstreamHandler extends ChannelInboundHandlerAdapter {
         upstream.writeAndFlush(msg, upstream.voidPromise()); // Write Data back to Client
     }
 
+    /**
+     * Downstream Channel is closed, so we close the Upstream Channel as well.
+     */
     @Override
     public void channelInactive(ChannelHandlerContext ctx) {
         if (logger.isInfoEnabled()) {
             logger.info("Closing Upstream {} and Downstream {} Channel",
-                    upstreamAddress.getAddress().getHostAddress() + ":" + upstreamAddress.getPort(),
-                    node.socketAddress().getAddress().getHostAddress() + ":" + node.socketAddress().getPort());
+                    upstreamAddress.getAddress().getHostAddress() + ':' + upstreamAddress.getPort(),
+                    node.socketAddress().getAddress().getHostAddress() + ':' + node.socketAddress().getPort());
         }
+
         upstream.close();      // Close Upstream Channel
         ctx.channel().close(); // Close Downstream Channel
     }

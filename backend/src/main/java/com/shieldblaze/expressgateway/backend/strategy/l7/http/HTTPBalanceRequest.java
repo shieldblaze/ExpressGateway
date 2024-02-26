@@ -27,6 +27,7 @@ import java.net.InetSocketAddress;
  * {@link HTTPBalanceRequest} contains {@link InetSocketAddress} and {@link HttpHeaders} of Client
  */
 public final class HTTPBalanceRequest extends Request {
+
     private final HttpHeaders httpHeaders;
     private final Http2Headers http2Headers;
 

@@ -37,6 +37,10 @@ import static com.shieldblaze.expressgateway.common.utils.SystemPropertyUtil.get
 public final class Bootstrap {
     private static final Logger logger = LogManager.getLogger(Bootstrap.class);
 
+    private Bootstrap() {
+        // Prevent outside initialization
+    }
+
     public static void main() throws Exception {
         main(new String[0]);
     }

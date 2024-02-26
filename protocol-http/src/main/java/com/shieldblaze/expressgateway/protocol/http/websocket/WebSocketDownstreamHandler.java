@@ -55,7 +55,6 @@ final class WebSocketDownstreamHandler extends ChannelInboundHandlerAdapter impl
         close();
     }
 
-    @SuppressWarnings("StatementWithEmptyBody")
     @Override
     public void exceptionCaught(ChannelHandlerContext ctx, Throwable cause) {
         try {

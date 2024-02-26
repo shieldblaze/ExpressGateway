@@ -23,6 +23,10 @@ import java.util.Objects;
 
 public final class ListUtil {
 
+    private ListUtil() {
+        // Prevent outside initialization
+    }
+
     public static <T> T[] checkNonEmpty(T[] array, String name) {
         Objects.requireNonNull(array, name);
         NumberUtil.checkPositive(array.length, name);

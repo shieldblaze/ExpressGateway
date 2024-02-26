@@ -53,7 +53,7 @@ class BrotliCompressionTest {
     }
 
     @Test
-    void brotliOnlyTest() throws IOException, InterruptedException {
+    void brotliOnlyTest() throws Exception {
         HttpRequest httpRequest = HttpRequest.newBuilder()
                 .GET()
                 .uri(URI.create("https://localhost:9110"))
@@ -72,7 +72,7 @@ class BrotliCompressionTest {
     }
 
     @Test
-    void brotliAndGzipTest() throws IOException, InterruptedException {
+    void brotliAndGzipTest() throws Exception {
         HttpRequest httpRequest = HttpRequest.newBuilder()
                 .GET()
                 .uri(URI.create("https://localhost:9110"))
@@ -91,7 +91,7 @@ class BrotliCompressionTest {
     }
 
     @Test
-    void brotliGzipAndDeflateTest() throws IOException, InterruptedException {
+    void brotliGzipAndDeflateTest() throws Exception {
         HttpRequest httpRequest = HttpRequest.newBuilder()
                 .GET()
                 .uri(URI.create("https://localhost:9110"))

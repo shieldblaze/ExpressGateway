@@ -28,7 +28,7 @@ public abstract class Cleaner<K, V> implements Runnable, Closeable {
 
     private final SelfExpiringMap<K, V> selfExpiringMap;
 
-    public Cleaner(SelfExpiringMap<K, V> selfExpiringMap) {
+    protected Cleaner(SelfExpiringMap<K, V> selfExpiringMap) {
         this.selfExpiringMap = selfExpiringMap;
     }
 

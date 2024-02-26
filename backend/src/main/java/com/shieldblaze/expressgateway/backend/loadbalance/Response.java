@@ -30,7 +30,7 @@ public abstract class Response {
      *
      * @param node Selected {@linkplain Node} for the request
      */
-    public Response(Node node) {
+    protected Response(Node node) {
         this.node = node;
     }
 

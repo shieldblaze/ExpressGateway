@@ -53,23 +53,18 @@ class RandomTest {
             switch (cluster.nextNode(l4Request).node().socketAddress().getHostString()) {
                 case "172.16.20.1" -> {
                     first++;
-                    break;
                 }
                 case "172.16.20.2" -> {
                     second++;
-                    break;
                 }
                 case "172.16.20.3" -> {
                     third++;
-                    break;
                 }
                 case "172.16.20.4" -> {
                     forth++;
-                    break;
                 }
                 case "172.16.20.5" -> {
                     fifth++;
-                    break;
                 }
                 default -> {
                 }
@@ -83,7 +78,7 @@ class RandomTest {
         assertTrue(fifth > 10);
     }
 
-    private void fastBuild(Cluster cluster, String host) throws Exception {
+    private static void fastBuild(Cluster cluster, String host) throws Exception {
         NodeBuilder.newBuilder()
                 .withCluster(cluster)
                 .withSocketAddress(new InetSocketAddress(host, 1))

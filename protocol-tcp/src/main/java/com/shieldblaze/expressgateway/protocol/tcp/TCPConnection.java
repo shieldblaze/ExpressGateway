@@ -19,14 +19,23 @@ package com.shieldblaze.expressgateway.protocol.tcp;
 
 import com.shieldblaze.expressgateway.backend.Connection;
 import com.shieldblaze.expressgateway.backend.Node;
+import io.netty.channel.Channel;
 import io.netty.channel.ChannelFuture;
 
+/**
+ * Downstream {@link Connection} for TCP Protocol
+ */
 final class TCPConnection extends Connection {
 
     TCPConnection(Node node) {
         super(node);
     }
 
+    /**
+     * Process Backlog
+     *
+     * @param channelFuture If the {@link ChannelFuture} is successful, write the backlog to the {@link Channel}
+     */
     @Override
     protected void processBacklog(ChannelFuture channelFuture) {
         if (channelFuture.isSuccess()) {

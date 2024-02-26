@@ -82,7 +82,8 @@ public final class EventLoopConfiguration implements Configuration<EventLoopConf
      * @return this class instance
      * @throws IllegalArgumentException If any value is invalid
      */
-    public EventLoopConfiguration validate() throws IllegalArgumentException {
+    @Override
+    public EventLoopConfiguration validate() {
         NumberUtil.checkPositive(parentWorkers, "Parent Workers");
         NumberUtil.checkPositive(childWorkers, "Child Workers");
         validated = true;

@@ -58,7 +58,7 @@ public final class CertificateKeyPairHolder {
     }
 
     public void setPrivateKeyAsString(String privateKey) {
-        this.privateKeyAsString = Objects.requireNonNull(privateKey, "PrivateKey");
+        privateKeyAsString = Objects.requireNonNull(privateKey, "PrivateKey");
         this.privateKey = PrivateKeyUtil.parsePrivateKey(privateKey);
     }
 

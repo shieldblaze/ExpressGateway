@@ -65,9 +65,9 @@ public final class LoadBalancerHandler {
 
         // Determine the L4 Protocol (TCP/UDP)
         L4FrontListener l4FrontListener;
-        if (ctx.protocol() != null && ctx.protocol().equalsIgnoreCase("tcp")) {
+        if (ctx.protocol() != null && "tcp".equalsIgnoreCase(ctx.protocol())) {
             l4FrontListener = new TCPListener();
-        } else if (ctx.protocol() != null && ctx.protocol().equalsIgnoreCase("udp")) {
+        } else if (ctx.protocol() != null && "udp".equalsIgnoreCase(ctx.protocol())) {
             l4FrontListener = new UDPListener();
         } else {
             // If Protocol is not 'TCP' or 'UDP' then throw error.

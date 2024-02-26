@@ -47,7 +47,7 @@ class AsyncEventStreamTest {
 
         final Set<String> stringsSet = new HashSet<>();
 
-        public EventListenerTest() {
+        private EventListenerTest() {
             for (int i = 0; i < 100_000; i++) {
                 stringsSet.add("Meow" + i);
             }

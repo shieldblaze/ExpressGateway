@@ -19,9 +19,13 @@ package com.shieldblaze.expressgateway.backend.strategy.l7.http.sessionpersisten
 
 import com.shieldblaze.expressgateway.backend.Node;
 
+import java.io.Serial;
+import java.io.Serializable;
 import java.util.Comparator;
 
-final class StickySessionSearchComparator implements Comparator<Object> {
+final class StickySessionSearchComparator implements Comparator<Object>, Serializable {
+    @Serial
+    private static final long serialVersionUID = 6565521040672349803L;
 
     static final StickySessionSearchComparator INSTANCE = new StickySessionSearchComparator();
 

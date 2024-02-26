@@ -28,6 +28,10 @@ public final class Hasher {
 
     private static final Logger logger = LogManager.getLogger(Hasher.class);
 
+    private Hasher() {
+        // Prevent outside initialization
+    }
+
     public enum Algorithm {
         SHA256,
         SHA384
@@ -47,7 +51,6 @@ public final class Hasher {
         return switch (algorithm) {
             case SHA256 -> MessageDigest.getInstance("SHA-256");
             case SHA384 -> MessageDigest.getInstance("SHA-384");
-            default -> throw new IllegalArgumentException("Unknown Algorithm: " + algorithm);
         };
     }
 }

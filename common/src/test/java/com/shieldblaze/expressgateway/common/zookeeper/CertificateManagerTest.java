@@ -56,7 +56,7 @@ class CertificateManagerTest {
 
         ExpressGateway.setInstance(forTest(testingServer.getConnectString()));
         Curator.init();
-        CertificateManager.INSTANCE.isInitialized().get(30, TimeUnit.SECONDS);
+        CertificateManager.isInitialized().get(30, TimeUnit.SECONDS);
     }
 
     @AfterAll

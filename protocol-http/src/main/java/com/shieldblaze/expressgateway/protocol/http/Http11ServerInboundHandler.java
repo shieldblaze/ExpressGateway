@@ -67,7 +67,7 @@ public class Http11ServerInboundHandler extends ChannelInboundHandlerAdapter imp
 
     public Http11ServerInboundHandler(HTTPLoadBalancer httpLoadBalancer, boolean isTLSConnection) {
         this.httpLoadBalancer = httpLoadBalancer;
-        this.bootstrapper = new Bootstrapper(httpLoadBalancer);
+        bootstrapper = new Bootstrapper(httpLoadBalancer);
         this.isTLSConnection = isTLSConnection;
     }
 
@@ -150,7 +150,7 @@ public class Http11ServerInboundHandler extends ChannelInboundHandlerAdapter imp
         }
 
         // If 'Connection:Upgrade' and 'Upgrade:WebSocket' then begin WebSocket Upgrade Process.
-        if (headers.get(CONNECTION).equalsIgnoreCase("Upgrade") && headers.get(UPGRADE).equalsIgnoreCase("WebSocket")) {
+        if ("Upgrade".equalsIgnoreCase(headers.get(CONNECTION)) && "WebSocket".equalsIgnoreCase(headers.get(UPGRADE))) {
 
             // Handshake for WebSocket
             String uri = webSocketURL(httpRequest);
@@ -163,7 +163,7 @@ public class Http11ServerInboundHandler extends ChannelInboundHandlerAdapter imp
                 handshaker.handshake(ctx.channel(), httpRequest);
             }
 
-            return new WebSocketUpgradeProperty(((InetSocketAddress) ctx.channel().remoteAddress()), URI.create(uri), subProtocol, ctx.channel());
+            return new WebSocketUpgradeProperty((InetSocketAddress) ctx.channel().remoteAddress(), URI.create(uri), subProtocol, ctx.channel());
         } else {
             return null;
         }
@@ -185,7 +185,6 @@ public class Http11ServerInboundHandler extends ChannelInboundHandlerAdapter imp
         close();
     }
 
-    @SuppressWarnings("StatementWithEmptyBody")
     @Override
     public void exceptionCaught(ChannelHandlerContext ctx, Throwable cause) {
         try {

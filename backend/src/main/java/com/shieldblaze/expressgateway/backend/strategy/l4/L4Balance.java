@@ -45,7 +45,7 @@ public abstract class L4Balance extends LoadBalance<Node, Node, InetSocketAddres
      * @param sessionPersistence {@link SessionPersistence} Implementation Instance
      */
     @NonNull
-    public L4Balance(SessionPersistence<Node, Node, InetSocketAddress, Node> sessionPersistence) {
+    protected L4Balance(SessionPersistence<Node, Node, InetSocketAddress, Node> sessionPersistence) {
         super(sessionPersistence);
     }
 

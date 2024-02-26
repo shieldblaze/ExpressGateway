@@ -53,7 +53,7 @@ class DeflateCompressionTest {
     }
 
     @Test
-    void deflateOnlyTest() throws DataFormatException, IOException, InterruptedException {
+    void deflateOnlyTest() throws Exception {
         HttpRequest httpRequest = HttpRequest.newBuilder()
                 .GET()
                 .uri(URI.create("https://localhost:9110"))

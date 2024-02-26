@@ -433,6 +433,6 @@ public class BasicTcpUdpServerTest {
         node.drainConnections();
 
         assertThat(latch.await(1, TimeUnit.MINUTES)).isTrue();
-        assertThat(TCP_FRAMES.getAndSet(0)).isBetween(1, (frames * threads));
+        assertThat(TCP_FRAMES.getAndSet(0)).isBetween(1, frames * threads);
     }
 }

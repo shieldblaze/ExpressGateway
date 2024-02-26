@@ -167,7 +167,8 @@ public final class HttpConfiguration implements Configuration<HttpConfiguration>
      * @return this class instance
      * @throws IllegalArgumentException If any value is invalid
      */
-    public HttpConfiguration validate() throws IllegalArgumentException {
+    @Override
+    public HttpConfiguration validate() {
         NumberUtil.checkPositive(maxInitialLineLength, "MaxInitialLineLength");
         NumberUtil.checkPositive(maxHeaderSize, "MaxHeaderSize");
         NumberUtil.checkPositive(maxChunkSize, "MaxChunkSize");
