@@ -141,7 +141,7 @@ class TransportTest {
             JsonObject bufferObject = responseJson.get("Result").getAsJsonObject().get("TransportConfiguration").getAsJsonObject();
 
             JsonArray sizes = bufferObject.get("receiveBufferSizes").getAsJsonArray();
-            int[] receiveSizes = new int[]{sizes.get(0).getAsInt(), sizes.get(1).getAsInt(), sizes.get(2).getAsInt()};
+            int[] receiveSizes = {sizes.get(0).getAsInt(), sizes.get(1).getAsInt(), sizes.get(2).getAsInt()};
 
             assertEquals(transportDefault.transportType().toString(), bufferObject.get("transportType").getAsString());
             assertEquals(transportDefault.receiveBufferAllocationType().toString(), bufferObject.get("receiveBufferAllocationType").getAsString());
@@ -198,10 +198,10 @@ class TransportTest {
             JsonObject bufferObject = responseJson.get("Result").getAsJsonObject().get("TransportConfiguration").getAsJsonObject();
 
             JsonArray sizesA = jsonBody.get("receiveBufferSizes").getAsJsonArray();
-            int[] receiveSizesIntA = new int[]{sizesA.get(0).getAsInt(), sizesA.get(1).getAsInt(), sizesA.get(2).getAsInt()};
+            int[] receiveSizesIntA = {sizesA.get(0).getAsInt(), sizesA.get(1).getAsInt(), sizesA.get(2).getAsInt()};
 
             JsonArray sizesB = bufferObject.get("receiveBufferSizes").getAsJsonArray();
-            int[] receiveSizesIntB = new int[]{sizesB.get(0).getAsInt(), sizesB.get(1).getAsInt(), sizesB.get(2).getAsInt()};
+            int[] receiveSizesIntB = {sizesB.get(0).getAsInt(), sizesB.get(1).getAsInt(), sizesB.get(2).getAsInt()};
 
             assertEquals(jsonBody.get("transportType").getAsString(), bufferObject.get("transportType").getAsString());
             assertEquals(jsonBody.get("receiveBufferAllocationType").getAsString(), bufferObject.get("receiveBufferAllocationType").getAsString());

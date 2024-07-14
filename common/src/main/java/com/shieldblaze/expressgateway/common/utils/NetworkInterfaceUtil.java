@@ -26,6 +26,10 @@ import java.util.List;
 
 public final class NetworkInterfaceUtil {
 
+    private NetworkInterfaceUtil() {
+        // Prevent outside initialization
+    }
+
     public static List<String> getAllIps() {
         List<String> ipAddressList = new ArrayList<>();
 

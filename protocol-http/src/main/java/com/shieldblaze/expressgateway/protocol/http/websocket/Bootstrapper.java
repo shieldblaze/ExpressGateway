@@ -49,8 +49,8 @@ final class Bootstrapper {
 
     Bootstrapper(HTTPLoadBalancer httpLoadBalancer) {
         this.httpLoadBalancer = httpLoadBalancer;
-        this.eventLoopGroup = httpLoadBalancer.eventLoopFactory().childGroup();
-        this.byteBufAllocator = httpLoadBalancer.byteBufAllocator();
+        eventLoopGroup = httpLoadBalancer.eventLoopFactory().childGroup();
+        byteBufAllocator = httpLoadBalancer.byteBufAllocator();
     }
 
     WebSocketConnection newInit(Node node, WebSocketUpgradeProperty wsProperty) {

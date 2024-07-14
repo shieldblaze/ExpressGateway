@@ -155,9 +155,9 @@ public final class TestableHttpLoadBalancer implements Closeable {
 
         public TestableHttpLoadBalancer build() {
             TestableHttpLoadBalancer testableHttpLoadBalancer = new TestableHttpLoadBalancer();
-            testableHttpLoadBalancer.tlsClientEnabled = this.tlsClientEnabled;
-            testableHttpLoadBalancer.tlsServerEnabled = this.tlsServerEnabled;
-            testableHttpLoadBalancer.tlsBackendEnabled = this.tlsBackendEnabled;
+            testableHttpLoadBalancer.tlsClientEnabled = tlsClientEnabled;
+            testableHttpLoadBalancer.tlsServerEnabled = tlsServerEnabled;
+            testableHttpLoadBalancer.tlsBackendEnabled = tlsBackendEnabled;
             return testableHttpLoadBalancer;
         }
     }

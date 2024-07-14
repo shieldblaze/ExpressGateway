@@ -53,7 +53,7 @@ class GzipCompressionTest {
     }
 
     @Test
-    void gzipOnlyTest() throws IOException, InterruptedException {
+    void gzipOnlyTest() throws Exception {
         HttpRequest httpRequest = HttpRequest.newBuilder()
                 .GET()
                 .uri(URI.create("https://localhost:9110"))
@@ -72,7 +72,7 @@ class GzipCompressionTest {
     }
 
     @Test
-    void gzipAndDeflateTest() throws IOException, InterruptedException {
+    void gzipAndDeflateTest() throws Exception {
         HttpRequest httpRequest = HttpRequest.newBuilder()
                 .GET()
                 .uri(URI.create("https://localhost:9110"))

@@ -39,7 +39,7 @@ import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicLong;
 
 /**
- * <p> {@link Node} is the server where all requests are sent. </p>
+ * <p> {@link Node} is the server (downstream) where all requests are sent. </p>
  *
  * Use {@link NodeBuilder} to build {@link Node} Instance.
  */
@@ -298,13 +298,14 @@ public final class Node implements Comparable<Node>, Closeable {
     /**
      * Add a {@link Connection} with this {@linkplain Node}
      */
-    public void addConnection(Connection connection) throws TooManyConnectionsException, IllegalStateException {
+    public void addConnection(Connection connection) throws TooManyConnectionsException {
         // If Maximum Connection is not -1 and Number of Active connections is greater than
         // Maximum number of connections then close the connection and throw an exception.
         if (connectionFull()) {
             connection.close();
             throw new TooManyConnectionsException(this);
-        } else if (state != State.ONLINE) {
+        }
+        if (state != State.ONLINE) {
             throw new IllegalStateException("Node is not online");
         }
         activeConnections.add(connection);
@@ -343,7 +344,7 @@ public final class Node implements Comparable<Node>, Closeable {
                 ", Address=" + socketAddress +
                 ", BytesSent=" + bytesSent +
                 ", BytesReceived=" + bytesReceived +
-                ", Connections=" + activeConnection() + "/" + maxConnections() +
+                ", Connections=" + activeConnection() + '/' + maxConnections() +
                 ", state=" + state +
                 ", health=" + health() +
                 '}';

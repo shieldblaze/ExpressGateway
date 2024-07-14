@@ -71,7 +71,8 @@ public final class EventStreamConfiguration implements Configuration<EventStream
      * @return this class instance
      * @throws IllegalArgumentException If any value is invalid
      */
-    public EventStreamConfiguration validate() throws IllegalArgumentException {
+    @Override
+    public EventStreamConfiguration validate() {
         NumberUtil.checkPositive(workers, "Workers");
         validated = true;
         return this;

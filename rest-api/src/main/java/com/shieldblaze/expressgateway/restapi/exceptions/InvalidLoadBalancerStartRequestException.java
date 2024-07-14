@@ -19,11 +19,16 @@ package com.shieldblaze.expressgateway.restapi.exceptions;
 
 import com.shieldblaze.expressgateway.restapi.api.loadbalancer.LoadBalancerHandler;
 
+import java.io.Serial;
+
 /**
  * This exception is fired when {@link LoadBalancerHandler} receives
  * invalid Load Balancer start request.
  */
 public final class InvalidLoadBalancerStartRequestException extends Exception {
+
+    @Serial
+    private static final long serialVersionUID = 3601889734250297574L;
 
     public InvalidLoadBalancerStartRequestException() {
     }

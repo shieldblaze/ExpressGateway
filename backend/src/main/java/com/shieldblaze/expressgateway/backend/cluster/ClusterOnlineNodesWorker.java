@@ -29,16 +29,16 @@ import java.util.concurrent.CopyOnWriteArrayList;
 
 class ClusterOnlineNodesWorker implements EventListener<Void> {
 
-    protected final List<Node> ONLINE_NODES = new CopyOnWriteArrayList<>();
+    protected final List<Node> onlineNodes = new CopyOnWriteArrayList<>();
 
     @Override
     public void accept(Event<Void> event) {
         if (event instanceof NodeEvent nodeEvent) {
 
             if (nodeEvent instanceof NodeOnlineEvent || nodeEvent instanceof NodeAddedEvent) {
-                ONLINE_NODES.add(nodeEvent.node());
+                onlineNodes.add(nodeEvent.node());
             } else {
-                ONLINE_NODES.remove(nodeEvent.node());
+                onlineNodes.remove(nodeEvent.node());
             }
         }
     }
@@ -46,7 +46,7 @@ class ClusterOnlineNodesWorker implements EventListener<Void> {
     @Override
     public String toString() {
         return "ClusterOnlineNodesWorker{" +
-                "ONLINE_NODES=" + ONLINE_NODES.size() +
+                "onlineNodes=" + onlineNodes +
                 '}';
     }
 }

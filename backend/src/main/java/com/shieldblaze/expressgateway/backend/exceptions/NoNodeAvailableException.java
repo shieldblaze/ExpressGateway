@@ -19,15 +19,19 @@ package com.shieldblaze.expressgateway.backend.exceptions;
 
 import com.shieldblaze.expressgateway.backend.Node;
 
+import java.io.Serial;
+
 /**
  * Thrown when there is no {@link Node} available to handle request.
  */
 public final class NoNodeAvailableException extends LoadBalanceException {
 
+    @Serial
+    private static final long serialVersionUID = 3016237192356488630L;
+
     public static final NoNodeAvailableException INSTANCE = new NoNodeAvailableException("No Node is available to handle this exception");
 
     public NoNodeAvailableException() {
-        super();
     }
 
     public NoNodeAvailableException(String message) {
@@ -42,7 +46,7 @@ public final class NoNodeAvailableException extends LoadBalanceException {
         super(cause);
     }
 
-    protected NoNodeAvailableException(String message, Throwable cause, boolean enableSuppression, boolean writableStackTrace) {
+    private NoNodeAvailableException(String message, Throwable cause, boolean enableSuppression, boolean writableStackTrace) {
         super(message, cause, enableSuppression, writableStackTrace);
     }
 }

@@ -146,7 +146,7 @@ public final class TransportConfiguration implements Configuration<TransportConf
      * TCP Connection Backlog
      */
     public TransportConfiguration setTcpConnectionBacklog(int TCPConnectionBacklog) {
-        this.tcpConnectionBacklog = TCPConnectionBacklog;
+        tcpConnectionBacklog = TCPConnectionBacklog;
         return this;
     }
 
@@ -192,7 +192,7 @@ public final class TransportConfiguration implements Configuration<TransportConf
      * TCP Fast Open Maximum Pending Requests
      */
     public TransportConfiguration setTcpFastOpenMaximumPendingRequests(int TCPFastOpenMaximumPendingRequests) {
-        this.tcpFastOpenMaximumPendingRequests = TCPFastOpenMaximumPendingRequests;
+        tcpFastOpenMaximumPendingRequests = TCPFastOpenMaximumPendingRequests;
         return this;
     }
 
@@ -240,7 +240,8 @@ public final class TransportConfiguration implements Configuration<TransportConf
      * @throws IllegalArgumentException If any value is invalid
      * @throws NullPointerException     If any value is null
      */
-    public TransportConfiguration validate() throws IllegalArgumentException, NullPointerException {
+    @Override
+    public TransportConfiguration validate() {
         Objects.requireNonNull(transportType, "Transport Type");
         Objects.requireNonNull(receiveBufferAllocationType, "Receive Buffer Allocation Type");
         Objects.requireNonNull(receiveBufferSizes, "Receive Buffer Sizes");
@@ -251,7 +252,8 @@ public final class TransportConfiguration implements Configuration<TransportConf
 
         if (transportType == TransportType.EPOLL && !Epoll.isAvailable()) {
             throw new IllegalArgumentException("Epoll is not available");
-        } else if (transportType == TransportType.IO_URING && !IOUring.isAvailable()) {
+        }
+        if (transportType == TransportType.IO_URING && !IOUring.isAvailable()) {
             throw new IllegalArgumentException("IOUring is not available");
         }
 
@@ -262,7 +264,8 @@ public final class TransportConfiguration implements Configuration<TransportConf
 
             if (receiveBufferSizes[2] > 65535) {
                 throw new IllegalArgumentException("Maximum Receive Buffer Size Cannot Be Greater Than 65535");
-            } else if (receiveBufferSizes[2] < 64) {
+            }
+            if (receiveBufferSizes[2] < 64) {
                 throw new IllegalArgumentException("Maximum Receive Buffer Size Cannot Be Less Than 64");
             }
 
@@ -271,7 +274,7 @@ public final class TransportConfiguration implements Configuration<TransportConf
             }
 
             if (receiveBufferSizes[1] < 64 || receiveBufferSizes[1] > receiveBufferSizes[2] || receiveBufferSizes[1] < receiveBufferSizes[0]) {
-                throw new IllegalArgumentException("Initial Receive Buffer Must Be In Range Of " + receiveBufferSizes[0] + "-" + receiveBufferSizes[2]);
+                throw new IllegalArgumentException("Initial Receive Buffer Must Be In Range Of " + receiveBufferSizes[0] + '-' + receiveBufferSizes[2]);
             }
         } else {
             if (receiveBufferSizes.length != 1) {

@@ -58,7 +58,7 @@ class RoundRobinTest {
         }
     }
 
-    private void fastBuild(Cluster cluster, String host) throws Exception {
+    private static void fastBuild(Cluster cluster, String host) throws Exception {
         NodeBuilder.newBuilder()
                 .withCluster(cluster)
                 .withSocketAddress(new InetSocketAddress(host, 1))

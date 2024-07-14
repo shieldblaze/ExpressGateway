@@ -33,7 +33,7 @@ public interface Configuration<T> {
      * @return This configuration instance
      * @throws IllegalArgumentException If there is an error during validation
      */
-    T validate() throws IllegalArgumentException;
+    T validate();
 
     /**
      * Friendly name of this Configuration.

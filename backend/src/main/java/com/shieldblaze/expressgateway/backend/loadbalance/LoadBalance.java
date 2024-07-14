@@ -40,7 +40,7 @@ public abstract class LoadBalance<REQUEST, RESPONSE, KEY, VALUE> implements Even
      * @param sessionPersistence {@link SessionPersistence} Implementation Instance
      */
     @NonNull
-    public LoadBalance(SessionPersistence<REQUEST, RESPONSE, KEY, VALUE> sessionPersistence) {
+    protected LoadBalance(SessionPersistence<REQUEST, RESPONSE, KEY, VALUE> sessionPersistence) {
         this.sessionPersistence = sessionPersistence;
     }
 

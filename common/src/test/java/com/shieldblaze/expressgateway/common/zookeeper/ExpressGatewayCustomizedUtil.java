@@ -22,7 +22,11 @@ import io.netty.handler.ssl.ClientAuth;
 
 import java.util.UUID;
 
-class ExpressGatewayCustomizedUtil {
+final class ExpressGatewayCustomizedUtil {
+
+    private ExpressGatewayCustomizedUtil() {
+        // Prevent outside initialization
+    }
 
     static ExpressGateway forTest(String zooKeeperConnectionString) {
         ExpressGateway.ZooKeeper zooKeeper = new ExpressGateway.ZooKeeper(zooKeeperConnectionString,

@@ -22,6 +22,10 @@ import com.shieldblaze.expressgateway.common.utils.NumberUtil;
 
 import java.util.Objects;
 
+import static com.shieldblaze.expressgateway.common.utils.NumberUtil.checkInRange;
+import static com.shieldblaze.expressgateway.common.utils.NumberUtil.checkPositive;
+import static java.util.Objects.requireNonNull;
+
 public final class HealthCheckTemplate {
 
     /**
@@ -74,7 +78,7 @@ public final class HealthCheckTemplate {
     }
 
     public void setProtocol(Protocol protocol) {
-        this.protocol = Objects.requireNonNull(protocol, "Protocol");
+        this.protocol = requireNonNull(protocol, "Protocol");
     }
 
     public String host() {
@@ -82,7 +86,7 @@ public final class HealthCheckTemplate {
     }
 
     public void setHost(String host) {
-        this.host = Objects.requireNonNull(host, "Host");
+        this.host = requireNonNull(host, "Host");
     }
 
     public int port() {
@@ -90,7 +94,7 @@ public final class HealthCheckTemplate {
     }
 
     public void setPort(int port) {
-        this.port = NumberUtil.checkInRange(port, 1, 65535, "Port");
+        this.port = checkInRange(port, 1, 65535, "Port");
     }
 
     public String path() {
@@ -98,7 +102,7 @@ public final class HealthCheckTemplate {
     }
 
     public void setPath(String path) {
-        this.path = Objects.requireNonNull(path, "Path");
+        this.path = requireNonNull(path, "Path");
     }
 
     public int timeout() {
@@ -106,7 +110,7 @@ public final class HealthCheckTemplate {
     }
 
     public void setTimeout(int timeout) {
-        this.timeout = NumberUtil.checkPositive(timeout, "Timeout");
+        this.timeout = checkPositive(timeout, "Timeout");
     }
 
     public int samples() {
@@ -114,7 +118,7 @@ public final class HealthCheckTemplate {
     }
 
     public void setSamples(int samples) {
-        this.samples = NumberUtil.checkPositive(samples, "Samples");
+        this.samples = checkPositive(samples, "Samples");
     }
 
     public enum Protocol {

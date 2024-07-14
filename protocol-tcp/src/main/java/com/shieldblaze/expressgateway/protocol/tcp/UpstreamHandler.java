@@ -45,6 +45,7 @@ final class UpstreamHandler extends ChannelInboundHandlerAdapter {
     @Override
     public void channelActive(ChannelHandlerContext ctx) throws Exception {
         try {
+            // Get the next node from the cluster to handle this request
             L4Response response = (L4Response) l4LoadBalancer.defaultCluster().nextNode(new L4Request((InetSocketAddress) ctx.channel().remoteAddress()));
 
             // Close the connection since we have no node available to handle this request
@@ -53,6 +54,7 @@ final class UpstreamHandler extends ChannelInboundHandlerAdapter {
                 return;
             }
 
+            // Create a new TCPConnection and add it to the node
             tcpConnection = bootstrapper.newInit(response.node(), ctx.channel());
             response.node().addConnection(tcpConnection);
         } catch (Exception ex) {
@@ -73,20 +75,22 @@ final class UpstreamHandler extends ChannelInboundHandlerAdapter {
     @Override
     public void channelInactive(ChannelHandlerContext ctx) {
         if (logger.isInfoEnabled()) {
-            InetSocketAddress socketAddress = ((InetSocketAddress) ctx.channel().remoteAddress());
+            InetSocketAddress socketAddress = (InetSocketAddress) ctx.channel().remoteAddress();
             if (tcpConnection == null || tcpConnection.socketAddress() == null) {
-                logger.info("Closing Upstream {}", socketAddress.getAddress().getHostAddress() + ":" + socketAddress.getPort());
+                logger.info("Closing Upstream {}", socketAddress.getAddress().getHostAddress() + ':' + socketAddress.getPort());
             } else {
                 logger.info("Closing Upstream {} and Downstream {} Channel",
-                        socketAddress.getAddress().getHostAddress() + ":" + socketAddress.getPort(),
-                        tcpConnection.socketAddress().getAddress().getHostAddress() + ":" + tcpConnection.socketAddress().getPort());
+                        socketAddress.getAddress().getHostAddress() + ':' + socketAddress.getPort(),
+                        tcpConnection.socketAddress().getAddress().getHostAddress() + ':' + tcpConnection.socketAddress().getPort());
             }
         }
 
+        // Close the upstream channel if it is active
         if (ctx.channel().isActive()) {
             ctx.channel().close();
         }
 
+        // Close the downstream channel if it is active
         if (tcpConnection != null && tcpConnection.state() == Connection.State.CONNECTED_AND_ACTIVE) {
             tcpConnection.close();
         }

@@ -231,7 +231,7 @@ public final class BufferConfiguration implements Configuration<BufferConfigurat
      * @throws IllegalArgumentException If any value is invalid
      */
     @Override
-    public BufferConfiguration validate() throws IllegalArgumentException {
+    public BufferConfiguration validate() {
         checkPositive(heapArena, "Heap Arena");
         checkPositive(directArena, "Direct Arena");
         checkPositive(pageSize, "Page Size");

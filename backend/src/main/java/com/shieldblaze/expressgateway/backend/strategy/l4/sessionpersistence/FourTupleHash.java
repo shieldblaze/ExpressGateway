@@ -34,8 +34,7 @@ import java.util.concurrent.atomic.AtomicBoolean;
  */
 public final class FourTupleHash implements SessionPersistence<Node, Node, InetSocketAddress, Node> {
 
-    private final Map<InetSocketAddress, Node> routeMap =
-            new SelfExpiringMap<>(new ConcurrentHashMap<>(), Duration.ofHours(1), false);
+    private final Map<InetSocketAddress, Node> routeMap = new SelfExpiringMap<>(new ConcurrentHashMap<>(), Duration.ofHours(1), false);
 
     @Override
     public Node node(Request request) {

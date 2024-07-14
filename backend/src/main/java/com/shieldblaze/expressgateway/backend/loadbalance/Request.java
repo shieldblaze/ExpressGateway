@@ -30,7 +30,7 @@ public abstract class Request {
      *
      * @param socketAddress {@link InetSocketAddress} of Client
      */
-    public Request(InetSocketAddress socketAddress) {
+    protected Request(InetSocketAddress socketAddress) {
         this.socketAddress = socketAddress;
     }
 

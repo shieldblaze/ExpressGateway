@@ -15,7 +15,7 @@ public final class APIResponse {
     private final JsonObject finalResponse;
 
     private APIResponse(APIResponseBuilder APIResponseBuilder) {
-        this.finalResponse = APIResponseBuilder.finalResponse;
+        finalResponse = APIResponseBuilder.finalResponse;
     }
 
     /**
@@ -49,7 +49,7 @@ public final class APIResponse {
         private boolean Success;
 
         public APIResponseBuilder isSuccess(boolean isSuccess) {
-            this.Success = isSuccess;
+            Success = isSuccess;
             return this;
         }
 
@@ -64,23 +64,23 @@ public final class APIResponse {
         }
 
         public APIResponseBuilder withMessages(List<Message> messageList) {
-            this.MessagesList = messageList;
+            MessagesList = messageList;
             return this;
         }
 
         public APIResponseBuilder withMessage(Message message) {
-            this.Message = message;
+            Message = message;
             return this;
         }
 
         public APIResponseBuilder withResult(Result result) {
-            this.ResultList = Collections.singletonList(result);
+            ResultList = Collections.singletonList(result);
             return this;
         }
 
 
         public APIResponseBuilder withResults(List<Result> resultList) {
-            this.ResultList = resultList;
+            ResultList = resultList;
             return this;
         }
 
@@ -102,7 +102,7 @@ public final class APIResponse {
              * Build Error response
              */
             {
-                if (errorList != null && errorList.size() != 0) {
+                if (errorList != null && !errorList.isEmpty()) {
                     JsonArray jsonArray = new JsonArray();
                     for (ErrorMessage error : errorList) {
                         JsonObject errorBody = new JsonObject();
@@ -127,7 +127,7 @@ public final class APIResponse {
              * Build Message response
              */
             {
-                if (MessagesList != null && MessagesList.size() > 0) {
+                if (MessagesList != null && !MessagesList.isEmpty()) {
                     JsonArray jsonArray = new JsonArray();
                     for (Message message : MessagesList) {
                         JsonObject errorBody = new JsonObject();
@@ -150,7 +150,7 @@ public final class APIResponse {
              * Build Result response
              */
             {
-                if (ResultList != null && ResultList.size() > 0) {
+                if (ResultList != null && !ResultList.isEmpty()) {
                     JsonObject resultBody = new JsonObject();
                     for (Result result : ResultList) {
                         if (result.getMessage() instanceof JsonElement) {

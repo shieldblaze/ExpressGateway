@@ -27,7 +27,7 @@ import org.springframework.web.bind.annotation.ExceptionHandler;
 @ControllerAdvice
 public class ExceptionHandlerController {
 
-    @ExceptionHandler(value = Exception.class)
+    @ExceptionHandler(Exception.class)
     public ResponseEntity<String> handler(Exception ex) {
         return FastBuilder.error(ErrorBase.INVALID_REQUEST, ex.getMessage(), HttpResponseStatus.BAD_REQUEST);
     }

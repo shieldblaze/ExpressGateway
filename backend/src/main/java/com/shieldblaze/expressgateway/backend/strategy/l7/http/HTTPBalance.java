@@ -31,7 +31,7 @@ public abstract class HTTPBalance extends LoadBalance<HTTPBalanceResponse, HTTPB
      *
      * @param sessionPersistence {@link SessionPersistence} Implementation Instance
      */
-    public HTTPBalance(SessionPersistence<HTTPBalanceResponse, HTTPBalanceResponse, HTTPBalanceRequest, Node> sessionPersistence) {
+    protected HTTPBalance(SessionPersistence<HTTPBalanceResponse, HTTPBalanceResponse, HTTPBalanceRequest, Node> sessionPersistence) {
         super(sessionPersistence);
     }
 

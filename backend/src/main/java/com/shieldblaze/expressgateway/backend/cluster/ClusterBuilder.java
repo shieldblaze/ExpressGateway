@@ -23,6 +23,9 @@ import com.shieldblaze.expressgateway.configuration.healthcheck.HealthCheckConfi
 
 import java.util.Objects;
 
+import static com.shieldblaze.expressgateway.common.utils.ObjectUtils.nonNull;
+import static java.util.Objects.requireNonNull;
+
 /**
  * Builder for {@link Cluster}
  */
@@ -42,13 +45,13 @@ public final class ClusterBuilder {
     }
 
     public ClusterBuilder withHealthCheck(HealthCheckConfiguration healthCheckConfiguration, HealthCheckTemplate healthCheckTemplate) {
-        this.healthCheckConfiguration = Objects.requireNonNull(healthCheckConfiguration, "HealthCheckConfiguration cannot be 'null'");
-        this.healthCheckTemplate = Objects.requireNonNull(healthCheckTemplate, "HealthCheckTemplate cannot be 'null'");
+        this.healthCheckConfiguration = nonNull(healthCheckConfiguration, HealthCheckConfiguration.class);
+        this.healthCheckTemplate = nonNull(healthCheckTemplate, HealthCheckTemplate.class);
         return this;
     }
 
     public Cluster build() {
-        Objects.requireNonNull(loadBalance, "LoadBalance cannot be 'null'");
+        nonNull(loadBalance, LoadBalance.class);
         Cluster cluster = new Cluster(loadBalance);
 
         // If HealthCheck configuration is available then apply it.

@@ -19,10 +19,15 @@ package com.shieldblaze.expressgateway.backend.exceptions;
 
 import com.shieldblaze.expressgateway.backend.Node;
 
+import java.io.Serial;
+
 /**
  * Thrown when a {@link Node} has exceeded the maximum number of connections count.
  */
 public final class TooManyConnectionsException extends Exception {
+
+    @Serial
+    private static final long serialVersionUID = 6390465718005428833L;
 
     public TooManyConnectionsException(Node node) {
         super("Node (" + node + ") has reached maximum number of connections.");

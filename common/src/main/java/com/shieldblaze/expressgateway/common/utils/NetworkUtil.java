@@ -58,7 +58,7 @@ public final class NetworkUtil {
      * @param port    Port to check
      * @throws IllegalArgumentException Thrown if address or port is not valid
      */
-    public static void checkAddressAndPort(String address, int port) throws IllegalArgumentException {
+    public static void checkAddressAndPort(String address, int port) {
         if (!(isAddressValid(address) && isPortValid(port))) {
             throw new IllegalArgumentException("Invalid Address or Port");
         }

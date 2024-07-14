@@ -96,21 +96,4 @@ public record ConfigurationContext(BufferConfiguration bufferConfiguration,
                 transportConfiguration);
     }
 
-    public ConfigurationContext(BufferConfiguration bufferConfiguration,
-                                EventLoopConfiguration eventLoopConfiguration,
-                                EventStreamConfiguration eventStreamConfiguration,
-                                HealthCheckConfiguration healthCheckConfiguration,
-                                HttpConfiguration httpConfiguration,
-                                TlsClientConfiguration tlsClientConfiguration,
-                                TlsServerConfiguration tlsServerConfiguration,
-                                TransportConfiguration transportConfiguration) {
-        this.bufferConfiguration = bufferConfiguration;
-        this.eventLoopConfiguration = eventLoopConfiguration;
-        this.eventStreamConfiguration = eventStreamConfiguration;
-        this.healthCheckConfiguration = healthCheckConfiguration;
-        this.httpConfiguration = httpConfiguration;
-        this.tlsClientConfiguration = tlsClientConfiguration;
-        this.tlsServerConfiguration = tlsServerConfiguration;
-        this.transportConfiguration = transportConfiguration;
-    }
 }

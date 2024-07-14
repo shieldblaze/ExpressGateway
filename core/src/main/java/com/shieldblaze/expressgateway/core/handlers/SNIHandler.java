@@ -67,7 +67,7 @@ public final class SNIHandler extends AbstractSniHandler<CertificateKeyPair> {
         replaceHandler(ctx, certificateKeyPair);
     }
 
-    protected void replaceHandler(ChannelHandlerContext ctx, CertificateKeyPair certificateKeyPair) {
+    private void replaceHandler(ChannelHandlerContext ctx, CertificateKeyPair certificateKeyPair) {
         SslHandler sslHandler = null;
         try {
             sslHandler = new TLSHandler(certificateKeyPair.sslContext().newHandler(ctx.alloc()).engine());

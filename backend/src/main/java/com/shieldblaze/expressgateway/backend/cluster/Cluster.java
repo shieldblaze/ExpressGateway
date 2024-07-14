@@ -80,7 +80,7 @@ public class Cluster extends ClusterOnlineNodesWorker {
 
     Cluster(LoadBalance<?, ?, ?, ?> loadBalance) {
         loadBalance(loadBalance);
-        this.eventStream.subscribe(this);
+        eventStream.subscribe(this);
     }
 
     /**
@@ -168,7 +168,7 @@ public class Cluster extends ClusterOnlineNodesWorker {
      * Get List of online {@link Node} associated with this {@linkplain Cluster}
      */
     public List<Node> onlineNodes() {
-        return ONLINE_NODES;
+        return onlineNodes;
     }
 
     /**
@@ -261,7 +261,7 @@ public class Cluster extends ClusterOnlineNodesWorker {
 
     @NonNull
     void configureHealthCheck(HealthCheckConfiguration healthCheckConfiguration, HealthCheckTemplate healthCheckTemplate) {
-        this.healthCheckService = new HealthCheckService(healthCheckConfiguration, eventStream);
+        healthCheckService = new HealthCheckService(healthCheckConfiguration, eventStream);
         this.healthCheckTemplate = healthCheckTemplate;
     }
 
@@ -284,9 +284,9 @@ public class Cluster extends ClusterOnlineNodesWorker {
                 case HTTP, HTTPS -> {
                     String host;
                     if (healthCheckTemplate.protocol() == HealthCheckTemplate.Protocol.HTTP) {
-                        host = "http://" + InetAddress.getByName(healthCheckTemplate.host()).getHostAddress() + ":" + healthCheckTemplate().port();
+                        host = "http://" + InetAddress.getByName(healthCheckTemplate.host()).getHostAddress() + ':' + healthCheckTemplate().port();
                     } else {
-                        host = "https://" + InetAddress.getByName(healthCheckTemplate.host()).getHostAddress() + ":" + healthCheckTemplate().port();
+                        host = "https://" + InetAddress.getByName(healthCheckTemplate.host()).getHostAddress() + ':' + healthCheckTemplate().port();
                     }
                     healthCheck = new HTTPHealthCheck(URI.create(host), Duration.ofSeconds(healthCheckTemplate.timeout()), healthCheckTemplate.samples());
                 }

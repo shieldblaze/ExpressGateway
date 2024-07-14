@@ -46,7 +46,7 @@ public final class TlsClientConfiguration extends TlsConfiguration {
     }
 
     @Override
-    public TlsConfiguration validate() throws IllegalArgumentException, NullPointerException {
+    public TlsConfiguration validate() {
         super.validate();
         validated = true;
         return this;

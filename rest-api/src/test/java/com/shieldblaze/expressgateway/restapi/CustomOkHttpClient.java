@@ -58,4 +58,7 @@ public final class CustomOkHttpClient {
     }
 
     public static final OkHttpClient INSTANCE = builder.hostnameVerifier((hostname, session) -> true).build();
+
+    private CustomOkHttpClient() {
+    }
 }

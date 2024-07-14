@@ -64,7 +64,7 @@ public final class ALPNHandlerBuilder {
      * @return {@linkplain ALPNHandler Instance}
      */
     public ALPNHandler build() {
-        if (!(HTTP1ChannelHandlers.size() > 0 || HTTP2ChannelHandlers.size() > 0)) {
+        if (!(!HTTP1ChannelHandlers.isEmpty() || !HTTP2ChannelHandlers.isEmpty())) {
             throw new IllegalArgumentException("There must be at least one Handler for both HTTP/2 and HTTP/1.1");
         }
         return new ALPNHandler(HTTP1ChannelHandlers, HTTP2ChannelHandlers);

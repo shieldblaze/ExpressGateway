@@ -54,7 +54,7 @@ public final class Http2ServerInboundHandler extends ChannelInboundHandlerAdapte
 
     public Http2ServerInboundHandler(HTTPLoadBalancer httpLoadBalancer, boolean isTLSConnection) {
         this.httpLoadBalancer = httpLoadBalancer;
-        this.bootstrapper = new Bootstrapper(httpLoadBalancer);
+        bootstrapper = new Bootstrapper(httpLoadBalancer);
         this.isTLSConnection = isTLSConnection;
     }
 

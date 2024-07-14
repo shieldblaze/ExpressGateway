@@ -45,7 +45,7 @@ public abstract class ExpiringMap<K, V> implements Map<K, V> {
      *
      * @param ttlDuration TTL (Time-to-live) duration of entries
      */
-    public ExpiringMap(Duration ttlDuration) {
+    protected ExpiringMap(Duration ttlDuration) {
         this(new HashMap<>(), ttlDuration, true);
     }
 
@@ -57,7 +57,7 @@ public abstract class ExpiringMap<K, V> implements Map<K, V> {
      * @param autoRenew   Set to {@code true} if entries will be auto-renewed on {@link #get(Object)} call
      *                    else set to {@code false}
      */
-    public ExpiringMap(Map<K, V> storageMap, Duration ttlDuration, boolean autoRenew) {
+    protected ExpiringMap(Map<K, V> storageMap, Duration ttlDuration, boolean autoRenew) {
         this(storageMap, ttlDuration, autoRenew, new IgnoreEntryRemovedListener<>());
     }
 
@@ -70,12 +70,12 @@ public abstract class ExpiringMap<K, V> implements Map<K, V> {
      *                             else set to {@code false}
      * @param entryRemovedListener {@link EntryRemovedListener} Instance
      */
-    public ExpiringMap(Map<K, V> storageMap, Duration ttlDuration, boolean autoRenew, EntryRemovedListener<V> entryRemovedListener) {
+    protected ExpiringMap(Map<K, V> storageMap, Duration ttlDuration, boolean autoRenew, EntryRemovedListener<V> entryRemovedListener) {
         this.storageMap = Objects.requireNonNull(storageMap, "StorageMap");
         ttlNanos = ttlDuration.toNanos();
         this.autoRenew = autoRenew;
 
-        if (this.storageMap.size() != 0) {
+        if (!this.storageMap.isEmpty()) {
             throw new IllegalArgumentException("StorageMap Size must be Zero (0).");
         }
 

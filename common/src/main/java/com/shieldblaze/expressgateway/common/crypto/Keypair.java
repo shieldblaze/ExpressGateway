@@ -34,6 +34,10 @@ public final class Keypair {
         Security.addProvider(new BouncyCastleProvider());
     }
 
+    private Keypair() {
+        // Prevent outside initialization
+    }
+
     public static PrivateKey parse(String privateKeyString) throws IOException {
         PEMParser pemParser = new PEMParser(new StringReader(privateKeyString));
         Object object = pemParser.readObject();
@@ -41,7 +45,8 @@ public final class Keypair {
         if (object instanceof PEMKeyPair pemKeyPair) {
             JcaPEMKeyConverter converter = new JcaPEMKeyConverter().setProvider("BC");
             return converter.getKeyPair(pemKeyPair).getPrivate();
-        } else if (object instanceof PrivateKeyInfo privateKeyInfo) {
+        }
+        if (object instanceof PrivateKeyInfo privateKeyInfo) {
             JcaPEMKeyConverter converter = new JcaPEMKeyConverter().setProvider("BC");
             return converter.getPrivateKey(privateKeyInfo);
         }

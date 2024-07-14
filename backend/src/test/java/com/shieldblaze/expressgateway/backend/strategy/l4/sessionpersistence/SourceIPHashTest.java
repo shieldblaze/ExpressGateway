@@ -76,7 +76,7 @@ class SourceIPHashTest {
                 cluster.nextNode(new L4Request(new InetSocketAddress("172.20.1.253", 1))).node().socketAddress());
     }
 
-    private void fastBuild(Cluster cluster, String host) throws Exception {
+    private static void fastBuild(Cluster cluster, String host) throws Exception {
         NodeBuilder.newBuilder()
                 .withCluster(cluster)
                 .withSocketAddress(new InetSocketAddress(host, 1))

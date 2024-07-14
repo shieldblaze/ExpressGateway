@@ -40,7 +40,7 @@ import static org.junit.jupiter.api.Assertions.assertNull;
 class CertificateKeyPairTest {
 
     @Test
-    void clientECCCertificateKeyTest() throws CertificateException, SSLException {
+    void clientECCCertificateKeyTest() throws Exception {
         SelfSignedCertificate selfSignedCertificate = new SelfSignedCertificate("www.shieldblaze.com", "EC", 256);
 
         CertificateKeyPair certificateKeyPair = CertificateKeyPair.forClient(Collections.singletonList(selfSignedCertificate.cert()), selfSignedCertificate.key());
@@ -55,7 +55,7 @@ class CertificateKeyPairTest {
     }
 
     @Test
-    void clientRSACertificateKeyTest() throws CertificateException, SSLException {
+    void clientRSACertificateKeyTest() throws Exception {
         SelfSignedCertificate selfSignedCertificate = new SelfSignedCertificate("www.shieldblaze.com", "RSA", 2048);
 
         CertificateKeyPair certificateKeyPair = CertificateKeyPair.forClient(Collections.singletonList(selfSignedCertificate.cert()), selfSignedCertificate.key());
@@ -71,7 +71,7 @@ class CertificateKeyPairTest {
 
     @Test
     @Disabled("Need Certificate with it's Private Key to run this test")
-    void ocspStaplingTest() throws IOException, CertificateException, InterruptedException {
+    void ocspStaplingTest() throws Exception {
         OpenSsl.ensureAvailability();
 
         SelfSignedCertificate selfSignedCertificate = new SelfSignedCertificate("www.shieldblaze.com", "EC", 256);

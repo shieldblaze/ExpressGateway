@@ -3,7 +3,7 @@ package com.shieldblaze.expressgateway.configuration.tls;
 import java.util.List;
 
 /**
- * https://wiki.mozilla.org/Security/Server_Side_TLS#Modern_compatibility
+ * <a href="https://wiki.mozilla.org/Security/Server_Side_TLS#Modern_compatibility">...</a>
  */
 public final class ModernCrypto {
 
@@ -14,4 +14,8 @@ public final class ModernCrypto {
             Cipher.TLS_AES_128_GCM_SHA256,
             Cipher.TLS_CHACHA20_POLY1305_SHA256
     );
+
+    private ModernCrypto() {
+        // Prevent outside initialization
+    }
 }

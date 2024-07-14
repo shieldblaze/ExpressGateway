@@ -41,7 +41,7 @@ public final class PrivateKeyUtil {
                 JcaPEMKeyConverter jcaPEMKeyConverter = new JcaPEMKeyConverter().setProvider(new BouncyCastleProvider());
                 KeyPair keyPair = jcaPEMKeyConverter.getKeyPair(pemKeyPair);
 
-                if (keyPair.getPrivate().getAlgorithm().equalsIgnoreCase("DSA")) {
+                if ("DSA".equalsIgnoreCase(keyPair.getPrivate().getAlgorithm())) {
                     throw new IllegalArgumentException("Unsupported Private Key");
                 }
 

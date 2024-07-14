@@ -38,7 +38,7 @@ public abstract class TlsConfiguration implements Configuration<TlsConfiguration
     protected final Map<String, CertificateKeyPair> certificateKeyPairMap = new HashMap<>();
 
     @JsonProperty("enabled")
-    private boolean enabled = false;
+    private boolean enabled;
 
     @JsonProperty("ciphers")
     protected List<Cipher> ciphers;
@@ -121,7 +121,7 @@ public abstract class TlsConfiguration implements Configuration<TlsConfiguration
             // If `null` then it means mapping was not found with FQDN.
             // We'll try wildcard now.
             if (certificateKeyPair == null) {
-                fqdn = "*" + fqdn.substring(fqdn.indexOf("."));
+                fqdn = '*' + fqdn.substring(fqdn.indexOf('.'));
                 certificateKeyPair = certificateKeyPairMap.get(fqdn);
                 if (certificateKeyPair != null) {
                     return certificateKeyPair;
@@ -278,7 +278,8 @@ public abstract class TlsConfiguration implements Configuration<TlsConfiguration
      * @throws IllegalArgumentException If any value is invalid
      * @throws NullPointerException     If any value is null
      */
-    public TlsConfiguration validate() throws IllegalArgumentException, NullPointerException {
+    @Override
+    public TlsConfiguration validate() {
         ListUtil.checkNonEmpty(ciphers, "Ciphers");
         ListUtil.checkNonEmpty(protocols, "Protocols");
         Objects.requireNonNull(mutualTLS, "MutualTLS");

@@ -47,7 +47,7 @@ public class UDPListener extends L4FrontListener {
         L4FrontListenerStartupEvent l4FrontListenerStartupEvent = new L4FrontListenerStartupEvent();
 
         // If ChannelFutureList is not 0 then this listener is already started and we won't start it again.
-        if (channelFutures.size() != 0) {
+        if (!channelFutures.isEmpty()) {
             l4FrontListenerStartupEvent.markFailure(new IllegalArgumentException("Listener has already started and cannot be restarted."));
             return l4FrontListenerStartupEvent;
         }
@@ -123,7 +123,7 @@ public class UDPListener extends L4FrontListener {
             l4LoadBalancer().eventLoopFactory().parentGroup().shutdownGracefully();
             l4LoadBalancer().eventLoopFactory().childGroup().shutdownGracefully();
             shutdownEvent.markSuccess(null);
-        }, GlobalExecutors.INSTANCE.executorService());
+        }, GlobalExecutors.executorService());
 
         return shutdownEvent;
     }
