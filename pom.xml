@@ -346,6 +346,20 @@ along with ShieldBlaze ExpressGateway.  If not, see <https://www.gnu.org/license
             <artifactId>micrometer-core</artifactId>
             <version>1.10.2</version>
         </dependency>
+
+        <!-- https://mvnrepository.com/artifact/org.jetbrains/annotations -->
+        <dependency>
+            <groupId>org.jetbrains</groupId>
+            <artifactId>annotations</artifactId>
+            <version>24.1.0</version>
+        </dependency>
+
+        <!-- https://mvnrepository.com/artifact/com.github.f4b6a3/tsid-creator -->
+        <dependency>
+            <groupId>com.github.f4b6a3</groupId>
+            <artifactId>tsid-creator</artifactId>
+            <version>5.2.6</version>
+        </dependency>
     </dependencies>
 
     <build>

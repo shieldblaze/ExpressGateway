@@ -181,7 +181,7 @@ public final class ConfigurationEndpointHandler {
                 .withResult(Result.newBuilder().withHeader(configuration.getClass().getSimpleName()).withMessage(json).build())
                 .build();
 
-        return FastBuilder.response(apiResponse.getResponse(), HttpResponseStatus.OK);
+        return FastBuilder.response(apiResponse.response(), HttpResponseStatus.OK);
     }
 
     private static ResponseEntity<String> saveAndGenerateResponse(Configuration<?> configuration) throws Exception {
@@ -197,7 +197,7 @@ public final class ConfigurationEndpointHandler {
                 .withResult(Result.newBuilder().withHeader(StringUtil.simpleClassName(configuration.getClass())).withMessage("Saved").build())
                 .build();
 
-        return FastBuilder.response(apiResponse.getResponse(), HttpResponseStatus.OK);
+        return FastBuilder.response(apiResponse.response(), HttpResponseStatus.OK);
     }
 
     @PostMapping("/tls/client/mapping")
@@ -210,7 +210,7 @@ public final class ConfigurationEndpointHandler {
                 .isSuccess(true)
                 .build();
 
-        return FastBuilder.response(apiResponse.getResponse(), HttpResponseStatus.OK);
+        return FastBuilder.response(apiResponse.response(), HttpResponseStatus.OK);
     }
 
     @DeleteMapping("/tls/client/mapping")
@@ -224,7 +224,7 @@ public final class ConfigurationEndpointHandler {
                     .isSuccess(true)
                     .build();
 
-            return FastBuilder.response(apiResponse.getResponse(), HttpResponseStatus.OK);
+            return FastBuilder.response(apiResponse.response(), HttpResponseStatus.OK);
         } else {
             return FastBuilder.error(ErrorBase.INVALID_REQUEST, "Mapping not found", HttpResponseStatus.NOT_FOUND);
         }

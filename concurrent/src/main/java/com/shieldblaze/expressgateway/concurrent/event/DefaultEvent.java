@@ -20,7 +20,7 @@ package com.shieldblaze.expressgateway.concurrent.event;
 import java.util.concurrent.CompletableFuture;
 
 /**
- * Default implementation of {@link Event}
+ * Default implementation of an {@link Event}
  */
 public class DefaultEvent<T> implements Event<T> {
 
@@ -30,8 +30,7 @@ public class DefaultEvent<T> implements Event<T> {
     private Throwable throwable;
 
     /**
-     * Mark this event as successful with 'null' successful
-     * completion object
+     * Mark this event as successful with 'null' successfulcompletion object
      */
     public void markSuccess() {
         markSuccess(null);

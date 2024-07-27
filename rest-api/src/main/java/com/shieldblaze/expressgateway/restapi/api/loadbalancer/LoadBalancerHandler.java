@@ -20,7 +20,6 @@ package com.shieldblaze.expressgateway.restapi.api.loadbalancer;
 import com.shieldblaze.expressgateway.configuration.ConfigurationContext;
 import com.shieldblaze.expressgateway.core.L4FrontListener;
 import com.shieldblaze.expressgateway.core.cluster.CoreContext;
-import com.shieldblaze.expressgateway.core.cluster.LoadBalancerContext;
 import com.shieldblaze.expressgateway.core.events.L4FrontListenerStartupEvent;
 import com.shieldblaze.expressgateway.core.loadbalancer.L4LoadBalancer;
 import com.shieldblaze.expressgateway.core.loadbalancer.L4LoadBalancerBuilder;
@@ -46,16 +45,16 @@ import org.springframework.web.bind.annotation.RestController;
 import java.net.InetSocketAddress;
 
 /**
- * <p> LoadBalancerHandler takes care of fetching registered load balancers,
+ * LoadBalancerHandler takes care of fetching registered load balancers,
  * creating new load balancers (L4/L7), stopping load balancers, resuming
- * load balancers and shutting down load balancers. </p>
+ * load balancers and shutting down load balancers.
  */
 @RestController
 @RequestMapping("/v1/loadbalancer")
 public final class LoadBalancerHandler {
 
     /**
-     * This method will start a L4 Load Balancer (TCP /UDP).
+     * This method will start an L4 Load Balancer (TCP /UDP).
      *
      * @param ctx {@link LoadBalancerStartContext} instance
      * @return {@link ResponseEntity} containing result response
@@ -85,7 +84,7 @@ public final class LoadBalancerHandler {
         // Register the event, so we can query it later
         // for its status, for reboot or shutdown.
         L4FrontListenerStartupEvent event = l4LoadBalancer.start();
-        CoreContext.add(l4LoadBalancer.id(), new LoadBalancerContext(l4LoadBalancer, event));
+        CoreContext.add(l4LoadBalancer.id(), l4LoadBalancer);
 
         // Build the API call response
         APIResponse apiResponse = APIResponse.newBuilder()
@@ -93,7 +92,7 @@ public final class LoadBalancerHandler {
                 .withResult(Result.newBuilder().withHeader("LoadBalancerID").withMessage(l4LoadBalancer.id()).build())
                 .build();
 
-        return FastBuilder.response(apiResponse.getResponse(), HttpResponseStatus.CREATED);
+        return FastBuilder.response(apiResponse.response(), HttpResponseStatus.CREATED);
     }
 
     @PostMapping(value = "/l7/http/start", consumes = MediaType.APPLICATION_JSON_VALUE, produces = MediaType.APPLICATION_JSON_VALUE)
@@ -107,71 +106,73 @@ public final class LoadBalancerHandler {
                 .build();
 
         L4FrontListenerStartupEvent event = httpLoadBalancer.start();
-        CoreContext.add(httpLoadBalancer.id(), new LoadBalancerContext(httpLoadBalancer, event));
+        CoreContext.add(httpLoadBalancer.id(), httpLoadBalancer);
 
         APIResponse apiResponse = APIResponse.newBuilder()
                 .isSuccess(true)
                 .withResult(Result.newBuilder().withHeader("LoadBalancerID").withMessage(httpLoadBalancer.id()).build())
                 .build();
 
-        return FastBuilder.response(apiResponse.getResponse(), HttpResponseStatus.CREATED);
+        return FastBuilder.response(apiResponse.response(), HttpResponseStatus.CREATED);
     }
 
     @PutMapping(value = "/resume", produces = MediaType.APPLICATION_JSON_VALUE)
     public ResponseEntity<String> resume(@RequestParam String id) {
-        LoadBalancerContext context = CoreContext.get(id);
+        L4LoadBalancer context = CoreContext.getContext(id);
 
-        L4FrontListenerStartupEvent event = context.l4LoadBalancer().start();
-        context.modifyStartupEvent(event);
+        L4FrontListenerStartupEvent event = context.start();
+//        context.modifyStartupEvent(event);
+
+        // TODO: Fix me
 
         APIResponse apiResponse = APIResponse.newBuilder()
                 .isSuccess(true)
                 .build();
 
-        return FastBuilder.response(apiResponse.getResponse(), HttpResponseStatus.CREATED);
+        return FastBuilder.response(apiResponse.response(), HttpResponseStatus.CREATED);
     }
 
     @PutMapping(value = "/stop", produces = MediaType.APPLICATION_JSON_VALUE)
     public ResponseEntity<String> stop(@RequestParam String id) {
-        LoadBalancerContext property = CoreContext.get(id);
-        property.l4LoadBalancer().stop();
+        L4LoadBalancer property = CoreContext.getContext(id);
+        property.stop();
 
         APIResponse apiResponse = APIResponse.newBuilder()
                 .isSuccess(true)
                 .build();
 
-        return FastBuilder.response(apiResponse.getResponse(), HttpResponseStatus.OK);
+        return FastBuilder.response(apiResponse.response(), HttpResponseStatus.OK);
     }
 
     @DeleteMapping(value = "/shutdown", produces = MediaType.APPLICATION_JSON_VALUE)
     public ResponseEntity<String> shutdown(@RequestParam String id) {
-        LoadBalancerContext property = CoreContext.get(id);
+        L4LoadBalancer property = CoreContext.getContext(id);
         CoreContext.remove(id);
 
-        property.l4LoadBalancer().shutdown();
+        property.shutdown();
 
         APIResponse apiResponse = APIResponse.newBuilder()
                 .isSuccess(true)
                 .build();
 
-        return FastBuilder.response(apiResponse.getResponse(), HttpResponseStatus.OK);
+        return FastBuilder.response(apiResponse.response(), HttpResponseStatus.OK);
     }
 
     @GetMapping(value = "/get", produces = MediaType.APPLICATION_JSON_VALUE)
     public ResponseEntity<String> get(@RequestParam String id) {
-        LoadBalancerContext property = CoreContext.get(id);
+        L4LoadBalancer property = CoreContext.getContext(id);
 
         // If Load Balancer startup has finished and is not successful,
         // then remove mapping of that Load Balancer.
-        if (property.modifyStartupEvent().isFinished() && !property.modifyStartupEvent().isSuccess()) {
-            CoreContext.remove(property.l4LoadBalancer().id());
+        if (property.event().isFinished() && !property.event().isSuccess()) {
+            CoreContext.remove(property.id());
         }
 
         APIResponse apiResponse = APIResponse.newBuilder()
                 .isSuccess(true)
-                .withResult(Result.newBuilder().withHeader("LoadBalancer").withMessage(property.l4LoadBalancer().toJson()).build())
+                .withResult(Result.newBuilder().withHeader("LoadBalancer").withMessage(property.toJson()).build())
                 .build();
 
-        return FastBuilder.response(apiResponse.getResponse(), HttpResponseStatus.OK);
+        return FastBuilder.response(apiResponse.response(), HttpResponseStatus.OK);
     }
 }

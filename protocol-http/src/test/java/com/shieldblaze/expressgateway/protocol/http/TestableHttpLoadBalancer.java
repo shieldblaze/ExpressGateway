@@ -82,7 +82,7 @@ public final class TestableHttpLoadBalancer implements Closeable {
                 .withBindAddress(new InetSocketAddress("localhost", 9110))
                 .build();
 
-        httpLoadBalancer.mapCluster("localhost:9110", cluster);
+        httpLoadBalancer.mappedCluster("localhost:9110", cluster);
 
         NodeBuilder.newBuilder()
                 .withCluster(cluster)

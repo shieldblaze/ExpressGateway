@@ -26,8 +26,6 @@ import com.shieldblaze.expressgateway.backend.strategy.l4.sessionpersistence.NOO
 import com.shieldblaze.expressgateway.common.utils.AvailablePortUtil;
 import com.shieldblaze.expressgateway.configuration.ConfigurationContext;
 import com.shieldblaze.expressgateway.core.cluster.CoreContext;
-import com.shieldblaze.expressgateway.core.cluster.LoadBalancerContext;
-import com.shieldblaze.expressgateway.core.events.L4FrontListenerStartupEvent;
 import com.shieldblaze.expressgateway.core.loadbalancer.L4LoadBalancer;
 import com.shieldblaze.expressgateway.core.loadbalancer.L4LoadBalancerBuilder;
 import com.shieldblaze.expressgateway.protocol.tcp.TCPListener;
@@ -134,8 +132,8 @@ public class BasicTcpUdpServerTest {
 
         tcpLoadBalancer = l4LoadBalancer;
 
-        L4FrontListenerStartupEvent event = l4LoadBalancer.start();
-        CoreContext.add("default-tcp", new LoadBalancerContext(l4LoadBalancer, event));
+        l4LoadBalancer.start();
+        CoreContext.add("default-tcp", l4LoadBalancer);
     }
 
     @Order(2)
@@ -149,8 +147,8 @@ public class BasicTcpUdpServerTest {
 
         udpLoadBalancer = l4LoadBalancer;
 
-        L4FrontListenerStartupEvent event = l4LoadBalancer.start();
-        CoreContext.add("default-udp", new LoadBalancerContext(l4LoadBalancer, event));
+        l4LoadBalancer.start();
+        CoreContext.add("default-udp", l4LoadBalancer);
     }
 
     @Order(3)
@@ -160,7 +158,7 @@ public class BasicTcpUdpServerTest {
                 .withLoadBalance(new RoundRobin(NOOPSessionPersistence.INSTANCE))
                 .build();
 
-        CoreContext.get("default-tcp").l4LoadBalancer().defaultCluster(tcpCluster);
+        CoreContext.getContext("default-tcp").defaultCluster(tcpCluster);
     }
 
     @Order(4)
@@ -170,7 +168,7 @@ public class BasicTcpUdpServerTest {
                 .withLoadBalance(new RoundRobin(NOOPSessionPersistence.INSTANCE))
                 .build();
 
-        CoreContext.get("default-udp").l4LoadBalancer().defaultCluster(udpCluster);
+        CoreContext.getContext("default-udp").defaultCluster(udpCluster);
     }
 
     @Order(5)
@@ -275,7 +273,7 @@ public class BasicTcpUdpServerTest {
     @Order(9)
     @Test
     void markTcpBackendOffline() {
-        CoreContext.get("default-tcp").l4LoadBalancer()
+        CoreContext.getContext("default-tcp")
                 .defaultCluster()
                 .onlineNodes()
                 .get(0)
@@ -299,7 +297,7 @@ public class BasicTcpUdpServerTest {
     @Order(11)
     @Test
     void markUdpBackendOffline() throws Exception {
-        CoreContext.get("default-udp").l4LoadBalancer()
+        CoreContext.getContext("default-udp")
                 .defaultCluster()
                 .onlineNodes()
                 .get(0)
@@ -324,7 +322,7 @@ public class BasicTcpUdpServerTest {
     @Order(13)
     @Test
     void markTcpBackendOnline() {
-        CoreContext.get("default-tcp").l4LoadBalancer()
+        CoreContext.getContext("default-tcp")
                 .defaultCluster()
                 .allNodes()
                 .get(0)
@@ -340,7 +338,7 @@ public class BasicTcpUdpServerTest {
     @Order(15)
     @Test
     void markUdpBackendOnline() {
-        CoreContext.get("default-udp").l4LoadBalancer()
+        CoreContext.getContext("default-udp")
                 .defaultCluster()
                 .allNodes()
                 .get(0)
@@ -371,7 +369,7 @@ public class BasicTcpUdpServerTest {
         Thread.sleep(1000);
 
         // Now mark
-        CoreContext.get("default-tcp").l4LoadBalancer()
+        CoreContext.getContext("default-tcp")
                 .defaultCluster()
                 .onlineNodes()
                 .get(0)
@@ -424,7 +422,7 @@ public class BasicTcpUdpServerTest {
         Thread.sleep(1000);
 
         // Mark the Backend offline and drain connections
-        Node node = CoreContext.get("default-udp").l4LoadBalancer()
+        Node node = CoreContext.getContext("default-udp")
                 .defaultCluster()
                 .onlineNodes()
                 .get(0);

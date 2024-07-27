@@ -23,6 +23,9 @@ import com.shieldblaze.expressgateway.core.L4FrontListener;
 
 /**
  * {@link Event} for {@link L4FrontListener}
+ * </p>
+ *
+ * This event is fired when {@link L4FrontListener} is stopped.
  */
 public class L4FrontListenerStopEvent extends DefaultEvent<Void> {
     // Empty

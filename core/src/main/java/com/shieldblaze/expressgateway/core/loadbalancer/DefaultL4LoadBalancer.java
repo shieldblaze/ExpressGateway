@@ -26,6 +26,9 @@ import java.net.InetSocketAddress;
 
 /**
  * Default implementation for {@link L4LoadBalancer}
+ * </p>
+ *
+ * This load balancer will always use {@link L4LoadBalancer#DEFAULT} as hostname.
  */
 final class DefaultL4LoadBalancer extends L4LoadBalancer {
 
@@ -37,8 +40,8 @@ final class DefaultL4LoadBalancer extends L4LoadBalancer {
      * @param channelHandler       {@link ChannelHandler} to use for handling traffic
      * @throws NullPointerException If a required parameter if {@code null}
      */
-    DefaultL4LoadBalancer(String name, InetSocketAddress bindAddress, L4FrontListener l4FrontListener, ConfigurationContext configurationContext,
-                          ChannelHandler channelHandler) {
+    DefaultL4LoadBalancer(String name, InetSocketAddress bindAddress, L4FrontListener l4FrontListener,
+                          ConfigurationContext configurationContext, ChannelHandler channelHandler) {
         super(name, bindAddress, l4FrontListener, configurationContext, channelHandler);
     }
 
@@ -48,13 +51,14 @@ final class DefaultL4LoadBalancer extends L4LoadBalancer {
     }
 
     @Override
-    public void mapCluster(String hostname, Cluster cluster) {
-        super.mapCluster(DEFAULT, cluster);
+    public void mappedCluster(String hostname, Cluster cluster) {
+        super.mappedCluster(DEFAULT, cluster);
     }
 
     @Override
-    public void remapCluster(String oldHostname, String newHostname) {
-        super.remapCluster(DEFAULT, "DEFAULT");
+    public boolean remapCluster(String oldHostname, String newHostname) {
+        // Always return true because this is a default load balancer and hostname is always DEFAULT.
+        return true;
     }
 
     @Override

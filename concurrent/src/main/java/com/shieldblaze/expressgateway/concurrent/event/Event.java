@@ -19,6 +19,11 @@ package com.shieldblaze.expressgateway.concurrent.event;
 
 import java.util.concurrent.CompletableFuture;
 
+/**
+ * {@link Event} is an object which is created as a result of an operation.
+ *
+ * @param <T> Type of the operation result
+ */
 public interface Event<T> {
 
     /**
@@ -28,12 +33,17 @@ public interface Event<T> {
 
     /**
      * Set to {@code true} if the event has finished else set to {@code false}.
+     * </p>
+     * Note: This does not mean that the operation was successful. Use {@link #isSuccess()} to check that.
      */
     boolean isFinished();
 
     /**
      * Set to {@code true} if the event has finished and operation was successful else
      * set to {@code false}.
+     * <p>
+     * </p>
+     * {@link #isFinished()} will always return {@code true} if this method returns {@code true}.
      */
     boolean isSuccess();
 

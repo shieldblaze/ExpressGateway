@@ -36,7 +36,6 @@ import com.shieldblaze.expressgateway.backend.strategy.l7.http.HTTPRoundRobin;
 import com.shieldblaze.expressgateway.backend.strategy.l7.http.sessionpersistence.StickySession;
 import com.shieldblaze.expressgateway.configuration.healthcheck.HealthCheckConfiguration;
 import com.shieldblaze.expressgateway.core.cluster.CoreContext;
-import com.shieldblaze.expressgateway.core.cluster.LoadBalancerContext;
 import com.shieldblaze.expressgateway.core.loadbalancer.L4LoadBalancer;
 import com.shieldblaze.expressgateway.restapi.response.FastBuilder;
 import com.shieldblaze.expressgateway.restapi.response.builder.APIResponse;
@@ -61,8 +60,7 @@ public final class ClusterHandler {
 
     @PostMapping(value = "/create", consumes = MediaType.APPLICATION_JSON_VALUE, produces = MediaType.APPLICATION_JSON_VALUE)
     public static ResponseEntity<String> create(@RequestParam String id, @RequestBody ClusterContext clusterContext) {
-        LoadBalancerContext context = CoreContext.get(id);
-        L4LoadBalancer l4LoadBalancer = context.l4LoadBalancer();
+        L4LoadBalancer l4LoadBalancer = CoreContext.getContext(id);
 
         ClusterBuilder clusterBuilder = ClusterBuilder.newBuilder();
         if (clusterContext.healthCheckTemplate() != null) {
@@ -72,20 +70,19 @@ public final class ClusterHandler {
         determineLoadBalance(l4LoadBalancer, clusterBuilder, clusterContext);
 
         Cluster cluster = clusterBuilder.build();
-        l4LoadBalancer.mapCluster(clusterContext.hostname(), cluster);
+        l4LoadBalancer.mappedCluster(clusterContext.hostname(), cluster);
 
         APIResponse apiResponse = APIResponse.newBuilder()
                 .isSuccess(true)
                 .withResult(Result.newBuilder().withHeader("Cluster").withMessage(cluster.toJson()).build())
                 .build();
 
-        return FastBuilder.response(apiResponse.getResponse(), HttpResponseStatus.CREATED);
+        return FastBuilder.response(apiResponse.response(), HttpResponseStatus.CREATED);
     }
 
     @PutMapping(value = "/remap", produces = MediaType.APPLICATION_JSON_VALUE)
     public ResponseEntity<String> remap(@RequestParam String id, @RequestParam String oldHostname, @RequestParam String newHostname) {
-        LoadBalancerContext property = CoreContext.get(id);
-        L4LoadBalancer l4LoadBalancer = property.l4LoadBalancer();
+        L4LoadBalancer l4LoadBalancer = CoreContext.getContext(id);
 
         l4LoadBalancer.remapCluster(oldHostname, newHostname);
 
@@ -93,15 +90,15 @@ public final class ClusterHandler {
                 .isSuccess(true)
                 .build();
 
-        return FastBuilder.response(apiResponse.getResponse(), HttpResponseStatus.CREATED);
+        return FastBuilder.response(apiResponse.response(), HttpResponseStatus.CREATED);
     }
 
     @DeleteMapping(value = "/delete", produces = MediaType.APPLICATION_JSON_VALUE)
     public ResponseEntity<String> delete(@RequestParam String id, @RequestParam String hostname) {
-        LoadBalancerContext property = CoreContext.get(id);
+        L4LoadBalancer l4LoadBalancer = CoreContext.getContext(id);
         Objects.requireNonNull(hostname, "Hostname");
 
-        boolean removed = property.l4LoadBalancer().removeCluster(hostname);
+        boolean removed = l4LoadBalancer.removeCluster(hostname);
         if (!removed) {
             throw new NullPointerException("Cluster not found with Hostname: " + hostname);
         }
@@ -110,7 +107,7 @@ public final class ClusterHandler {
                 .isSuccess(true)
                 .build();
 
-        return FastBuilder.response(apiResponse.getResponse(), HttpResponseStatus.OK);
+        return FastBuilder.response(apiResponse.response(), HttpResponseStatus.OK);
     }
 
     /**

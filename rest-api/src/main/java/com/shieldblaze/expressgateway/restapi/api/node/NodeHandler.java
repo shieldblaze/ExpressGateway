@@ -21,7 +21,7 @@ import com.shieldblaze.expressgateway.backend.Node;
 import com.shieldblaze.expressgateway.backend.NodeBuilder;
 import com.shieldblaze.expressgateway.backend.cluster.Cluster;
 import com.shieldblaze.expressgateway.core.cluster.CoreContext;
-import com.shieldblaze.expressgateway.core.cluster.LoadBalancerContext;
+import com.shieldblaze.expressgateway.core.loadbalancer.L4LoadBalancer;
 import com.shieldblaze.expressgateway.restapi.response.FastBuilder;
 import com.shieldblaze.expressgateway.restapi.response.builder.APIResponse;
 import com.shieldblaze.expressgateway.restapi.response.builder.Result;
@@ -47,9 +47,9 @@ public class NodeHandler {
 
     @PostMapping(value = "/create", consumes = MediaType.APPLICATION_JSON_VALUE, produces = MediaType.APPLICATION_JSON_VALUE)
     public ResponseEntity<String> create(@RequestParam String id, @RequestParam String clusterHostname, @RequestBody NodeContext nodeContext) throws Exception {
-        LoadBalancerContext property = CoreContext.get(id);
+        L4LoadBalancer property = CoreContext.getContext(id);
 
-        Cluster cluster = property.l4LoadBalancer().cluster(clusterHostname);
+        Cluster cluster = property.cluster(clusterHostname);
 
         Node node = NodeBuilder.newBuilder()
                 .withSocketAddress(new InetSocketAddress(nodeContext.address(), nodeContext.port()))
@@ -65,16 +65,16 @@ public class NodeHandler {
             throw new IllegalArgumentException("Node cannot be added to Cluster because it already exists in Cluster");
         }
 
-        return FastBuilder.response(apiResponseBuilder.build().getResponse(), HttpResponseStatus.CREATED);
+        return FastBuilder.response(apiResponseBuilder.build().response(), HttpResponseStatus.CREATED);
     }
 
     @DeleteMapping(value = "/delete", produces = MediaType.APPLICATION_JSON_VALUE)
     public ResponseEntity<String> delete(@RequestParam String id, @RequestParam String clusterHostname, @RequestParam String nodeId) {
-        LoadBalancerContext property = CoreContext.get(id);
+        L4LoadBalancer property = CoreContext.getContext(id);
         Objects.requireNonNull(clusterHostname, "ClusterHostname");
         Objects.requireNonNull(nodeId, "NodeID");
 
-        Cluster cluster = property.l4LoadBalancer().cluster(clusterHostname);
+        Cluster cluster = property.cluster(clusterHostname);
 
         Node node = cluster.get(nodeId);
         node.close();
@@ -83,17 +83,17 @@ public class NodeHandler {
                 .isSuccess(true)
                 .build();
 
-        return FastBuilder.response(apiResponse.getResponse(), HttpResponseStatus.OK);
+        return FastBuilder.response(apiResponse.response(), HttpResponseStatus.OK);
     }
 
     @PutMapping(value = "/offline", produces = MediaType.APPLICATION_JSON_VALUE)
     public ResponseEntity<String> offline(@RequestParam String id, @RequestParam String clusterHostname, @RequestParam String nodeId,
                                           @RequestParam(required = false) boolean drainConnections) {
-        LoadBalancerContext property = CoreContext.get(id);
+        L4LoadBalancer property = CoreContext.getContext(id);
         Objects.requireNonNull(clusterHostname, "ClusterHostname");
         Objects.requireNonNull(nodeId, "NodeID");
 
-        Cluster cluster = property.l4LoadBalancer().cluster(clusterHostname);
+        Cluster cluster = property.cluster(clusterHostname);
         Node node = cluster.get(nodeId);
         boolean success = node.markOffline();
 
@@ -105,16 +105,16 @@ public class NodeHandler {
                 .isSuccess(success)
                 .build();
 
-        return FastBuilder.response(apiResponse.getResponse(), HttpResponseStatus.OK);
+        return FastBuilder.response(apiResponse.response(), HttpResponseStatus.OK);
     }
 
     @PatchMapping(value = "/drainConnections", produces = MediaType.APPLICATION_JSON_VALUE)
     public ResponseEntity<String> drainConnections(@RequestParam String id, @RequestParam String clusterHostname, @RequestParam String nodeId) {
-        LoadBalancerContext property = CoreContext.get(id);
+        L4LoadBalancer property = CoreContext.getContext(id);
         Objects.requireNonNull(clusterHostname, "ClusterHostname");
         Objects.requireNonNull(nodeId, "NodeID");
 
-        Cluster cluster = property.l4LoadBalancer().cluster(clusterHostname);
+        Cluster cluster = property.cluster(clusterHostname);
 
         Node node = cluster.get(nodeId);
         node.drainConnections();
@@ -123,17 +123,17 @@ public class NodeHandler {
                 .isSuccess(true)
                 .build();
 
-        return FastBuilder.response(apiResponse.getResponse(), HttpResponseStatus.OK);
+        return FastBuilder.response(apiResponse.response(), HttpResponseStatus.OK);
     }
 
     @PatchMapping(value = "/maxConnections", produces = MediaType.APPLICATION_JSON_VALUE)
     public ResponseEntity<String> maxConnections(@RequestParam String id, @RequestParam String clusterHostname, @RequestParam String nodeId,
                                                  @RequestParam int maxConnections) {
-        LoadBalancerContext property = CoreContext.get(id);
+        L4LoadBalancer property = CoreContext.getContext(id);
         Objects.requireNonNull(clusterHostname, "ClusterHostname");
         Objects.requireNonNull(nodeId, "NodeID");
 
-        Cluster cluster = property.l4LoadBalancer().cluster(clusterHostname);
+        Cluster cluster = property.cluster(clusterHostname);
 
         Node node = cluster.get(nodeId);
         node.maxConnections(maxConnections);
@@ -142,16 +142,16 @@ public class NodeHandler {
                 .isSuccess(true)
                 .build();
 
-        return FastBuilder.response(apiResponse.getResponse(), HttpResponseStatus.OK);
+        return FastBuilder.response(apiResponse.response(), HttpResponseStatus.OK);
     }
 
     @GetMapping(produces = MediaType.APPLICATION_JSON_VALUE)
     public ResponseEntity<String> get(@RequestParam String id, @RequestParam String clusterHostname, @RequestParam String nodeId) {
-        LoadBalancerContext property = CoreContext.get(id);
+        L4LoadBalancer property = CoreContext.getContext(id);
         Objects.requireNonNull(clusterHostname, "ClusterHostname");
         Objects.requireNonNull(nodeId, "NodeID");
 
-        Cluster cluster = property.l4LoadBalancer().cluster(clusterHostname);
+        Cluster cluster = property.cluster(clusterHostname);
         Node node = cluster.get(nodeId);
 
         APIResponse apiResponse = APIResponse.newBuilder()
@@ -159,6 +159,6 @@ public class NodeHandler {
                 .withResult(Result.newBuilder().withHeader("Node").withMessage(node.toJson()).build())
                 .build();
 
-        return FastBuilder.response(apiResponse.getResponse(), HttpResponseStatus.OK);
+        return FastBuilder.response(apiResponse.response(), HttpResponseStatus.OK);
     }
 }

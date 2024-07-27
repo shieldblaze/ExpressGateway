@@ -19,6 +19,7 @@ import org.springframework.util.MultiValueMap;
 public final class FastBuilder {
 
     private static final MultiValueMap<String, String> MULTI_VALUE_MAP = new LinkedMultiValueMap<>();
+
     static {
         MULTI_VALUE_MAP.set(HttpHeaderNames.CONTENT_TYPE.toString(), HttpHeaderValues.APPLICATION_JSON.toString());
     }
@@ -48,7 +49,7 @@ public final class FastBuilder {
                 .build();
 
         // Return the Response
-        return response(apiResponse.getResponse(), httpResponseStatus);
+        return response(apiResponse.response(), httpResponseStatus);
     }
 
     /**
@@ -73,7 +74,7 @@ public final class FastBuilder {
                 .build();
 
         // Return the Response
-        return response(apiResponse.getResponse(), httpResponseStatus);
+        return response(apiResponse.response(), httpResponseStatus);
     }
 
     /**
@@ -99,7 +100,7 @@ public final class FastBuilder {
                 .build();
 
         // Return the Response
-        return response(apiResponse.getResponse(), httpResponseStatus);
+        return response(apiResponse.response(), httpResponseStatus);
     }
 
     /**

@@ -118,7 +118,7 @@ public class WebsiteProxyTest {
                     .withSocketAddress(new InetSocketAddress(domain, 443))
                     .build();
 
-            httpLoadBalancer.mapCluster(domain, cluster);
+            httpLoadBalancer.mappedCluster(domain, cluster);
         }
     }
 

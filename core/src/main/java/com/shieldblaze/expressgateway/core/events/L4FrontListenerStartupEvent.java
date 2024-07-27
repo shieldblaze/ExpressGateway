@@ -22,7 +22,8 @@ import com.shieldblaze.expressgateway.concurrent.event.Event;
 import com.shieldblaze.expressgateway.core.L4FrontListener;
 
 /**
- * <p>{@link Event} for {@link L4FrontListener}</p>
+ * {@link Event} for {@link L4FrontListener}
+ * </p>
  *
  * This event is fired when {@link L4FrontListener} is started.
  */

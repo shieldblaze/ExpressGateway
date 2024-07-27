@@ -7,15 +7,20 @@ import com.google.gson.JsonObject;
 import java.util.Collections;
 import java.util.List;
 
+import static java.util.Collections.unmodifiableList;
+
 /**
  * <p> Response and Response Builder </p>
  */
 public final class APIResponse {
 
+    private static final JsonObject EMPTY_JSON_OBJECT = new JsonObject();
+    private static final JsonArray EMPTY_JSON_ARRAY = new JsonArray();
+
     private final JsonObject finalResponse;
 
-    private APIResponse(APIResponseBuilder APIResponseBuilder) {
-        finalResponse = APIResponseBuilder.finalResponse;
+    private APIResponse(APIResponseBuilder apiResponseBuilder) {
+        finalResponse = apiResponseBuilder.finalResponse;
     }
 
     /**
@@ -32,7 +37,7 @@ public final class APIResponse {
      *
      * @return JsonObject of response
      */
-    public JsonObject getResponse() {
+    public JsonObject response() {
         return finalResponse;
     }
 
@@ -43,18 +48,18 @@ public final class APIResponse {
 
         private List<ErrorMessage> errorList;
         private ErrorMessage errorMessage;
-        private List<Message> MessagesList;
+        private List<Message> messageList;
         private Message Message;
-        private List<Result> ResultList;
-        private boolean Success;
+        private List<Result> resultList;
+        private boolean success;
 
         public APIResponseBuilder isSuccess(boolean isSuccess) {
-            Success = isSuccess;
+            success = isSuccess;
             return this;
         }
 
         public APIResponseBuilder withErrors(List<ErrorMessage> errorList) {
-            this.errorList = errorList;
+            this.errorList = unmodifiableList(errorList);
             return this;
         }
 
@@ -64,7 +69,7 @@ public final class APIResponse {
         }
 
         public APIResponseBuilder withMessages(List<Message> messageList) {
-            MessagesList = messageList;
+            this.messageList = unmodifiableList(messageList);
             return this;
         }
 
@@ -74,13 +79,13 @@ public final class APIResponse {
         }
 
         public APIResponseBuilder withResult(Result result) {
-            ResultList = Collections.singletonList(result);
+            resultList = Collections.singletonList(result);
             return this;
         }
 
 
         public APIResponseBuilder withResults(List<Result> resultList) {
-            ResultList = resultList;
+            this.resultList = unmodifiableList(resultList);
             return this;
         }
 
@@ -95,7 +100,7 @@ public final class APIResponse {
              * Build Success response
              */
             {
-                response.addProperty("Success", Success);
+                response.addProperty("Success", success);
             }
 
             /*
@@ -119,7 +124,7 @@ public final class APIResponse {
                     jsonArray.add(errorBody);
                     response.add("Errors", jsonArray);
                 } else {
-                    response.add("Errors", new JsonArray());
+                    response.add("Errors", EMPTY_JSON_ARRAY);
                 }
             }
 
@@ -127,9 +132,9 @@ public final class APIResponse {
              * Build Message response
              */
             {
-                if (MessagesList != null && !MessagesList.isEmpty()) {
+                if (messageList != null && !messageList.isEmpty()) {
                     JsonArray jsonArray = new JsonArray();
-                    for (Message message : MessagesList) {
+                    for (Message message : messageList) {
                         JsonObject errorBody = new JsonObject();
                         errorBody.addProperty(message.getHeader(), message.getMessage());
                         jsonArray.add(errorBody);
@@ -142,7 +147,7 @@ public final class APIResponse {
                     jsonArray.add(errorBody);
                     response.add("Messages", jsonArray);
                 } else {
-                    response.add("Messages", new JsonArray());
+                    response.add("Messages", EMPTY_JSON_ARRAY);
                 }
             }
 
@@ -150,9 +155,9 @@ public final class APIResponse {
              * Build Result response
              */
             {
-                if (ResultList != null && !ResultList.isEmpty()) {
+                if (resultList != null && !resultList.isEmpty()) {
                     JsonObject resultBody = new JsonObject();
-                    for (Result result : ResultList) {
+                    for (Result result : resultList) {
                         if (result.getMessage() instanceof JsonElement) {
                             resultBody.add(result.getHeader(), (JsonElement) result.getMessage());
                         } else if (result.getMessage() instanceof String) {
@@ -167,7 +172,7 @@ public final class APIResponse {
                     }
                     response.add("Result", resultBody);
                 } else {
-                    response.add("Result", new JsonObject());
+                    response.add("Result", EMPTY_JSON_OBJECT);
                 }
             }
 

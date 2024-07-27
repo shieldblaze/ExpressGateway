@@ -41,9 +41,9 @@ class CoreContextTest {
 
         L4FrontListenerStartupEvent l4FrontListenerStartupEvent = l4LoadBalancer.start();
 
-        CoreContext.add(l4LoadBalancer.id(), new LoadBalancerContext(l4LoadBalancer, l4FrontListenerStartupEvent));
-        assertEquals(l4FrontListenerStartupEvent, CoreContext.get(l4LoadBalancer.id()).modifyStartupEvent());
-        assertEquals(l4FrontListenerStartupEvent, CoreContext.remove(l4LoadBalancer.id()).modifyStartupEvent());
+        CoreContext.add(l4LoadBalancer.id(), l4LoadBalancer);
+        assertEquals(l4FrontListenerStartupEvent, CoreContext.getContext(l4LoadBalancer.id()).event());
+        assertEquals(l4FrontListenerStartupEvent, CoreContext.remove(l4LoadBalancer.id()).event());
     }
 
     private static final class DummyL4FrontListener extends L4FrontListener {

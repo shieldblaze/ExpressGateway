@@ -22,7 +22,7 @@ import com.google.gson.JsonParser;
 import com.shieldblaze.expressgateway.common.ExpressGateway;
 import com.shieldblaze.expressgateway.common.zookeeper.Curator;
 import com.shieldblaze.expressgateway.core.cluster.CoreContext;
-import com.shieldblaze.expressgateway.core.cluster.LoadBalancerContext;
+import com.shieldblaze.expressgateway.core.loadbalancer.L4LoadBalancer;
 import com.shieldblaze.expressgateway.restapi.CustomOkHttpClient;
 import com.shieldblaze.expressgateway.restapi.RestApi;
 import com.shieldblaze.expressgateway.restapi.api.loadbalancer.L4LoadBalancerConfigurationEndpointHandlerTest;
@@ -74,8 +74,8 @@ public class ClusterConfigurationEndpointHandlerTest {
         l4LoadBalancerTest.startLoadBalancer();
         l4LoadBalancerTest.verifyRunning();
 
-        final LoadBalancerContext property = CoreContext.get(L4LoadBalancerConfigurationEndpointHandlerTest.ID);
-        assertThrows(NullPointerException.class, () -> property.l4LoadBalancer().cluster("DEFAULT"));
+        final L4LoadBalancer property = CoreContext.getContext(L4LoadBalancerConfigurationEndpointHandlerTest.ID);
+        assertThrows(NullPointerException.class, () -> property.cluster("DEFAULT"));
 
         JsonObject body = new JsonObject();
         body.addProperty("Hostname", "www.shieldblaze.com"); // It will default down to 'DEFAULT'.
@@ -94,14 +94,14 @@ public class ClusterConfigurationEndpointHandlerTest {
             assertTrue(responseJson.get("Success").getAsBoolean());
         }
 
-        assertNotNull(property.l4LoadBalancer().cluster("DEFAULT"));
+        assertNotNull(property.cluster("DEFAULT"));
     }
 
     @Test
     @Order(2)
     public void deleteL4ClusterTest() throws IOException {
-        LoadBalancerContext property = CoreContext.get(L4LoadBalancerConfigurationEndpointHandlerTest.ID);
-        assertNotNull(property.l4LoadBalancer().cluster("DEFAULT"));
+        L4LoadBalancer property = CoreContext.getContext(L4LoadBalancerConfigurationEndpointHandlerTest.ID);
+        assertNotNull(property.cluster("DEFAULT"));
 
         Request request = new Request.Builder()
                 .url("https://127.0.0.1:9110/v1/cluster/delete?id=" + L4LoadBalancerConfigurationEndpointHandlerTest.ID + "&hostname=null")
@@ -115,7 +115,7 @@ public class ClusterConfigurationEndpointHandlerTest {
             assertTrue(responseJson.get("Success").getAsBoolean());
         }
 
-        assertThrows(NullPointerException.class, () -> property.l4LoadBalancer().cluster("DEFAULT"));
+        assertThrows(NullPointerException.class, () -> property.cluster("DEFAULT"));
     }
 
     @Test
@@ -124,8 +124,8 @@ public class ClusterConfigurationEndpointHandlerTest {
         l7LoadBalancerTest.startLoadBalancer();
         l7LoadBalancerTest.verifyRunning();
 
-        LoadBalancerContext property = CoreContext.get(L7LoadBalancerConfigurationEndpointHandlerTest.id);
-        assertThrows(NullPointerException.class, () -> property.l4LoadBalancer().cluster("www.shieldblaze.com"));
+        L4LoadBalancer property = CoreContext.getContext(L7LoadBalancerConfigurationEndpointHandlerTest.id);
+        assertThrows(NullPointerException.class, () -> property.cluster("www.shieldblaze.com"));
 
         JsonObject body = new JsonObject();
         body.addProperty("Hostname", "www.shieldblaze.com");
@@ -144,15 +144,15 @@ public class ClusterConfigurationEndpointHandlerTest {
             assertTrue(responseJson.get("Success").getAsBoolean());
         }
 
-        assertNotNull(property.l4LoadBalancer().cluster("www.shieldblaze.com"));
+        assertNotNull(property.cluster("www.shieldblaze.com"));
     }
 
     @Test
     @Order(4)
     public void remapL7ClusterTest() throws IOException {
-        LoadBalancerContext property = CoreContext.get(L7LoadBalancerConfigurationEndpointHandlerTest.id);
-        assertNotNull(property.l4LoadBalancer().cluster("www.shieldblaze.com"));
-        assertThrows(NullPointerException.class, () -> property.l4LoadBalancer().cluster("shieldblaze.com"));
+        L4LoadBalancer property = CoreContext.getContext(L7LoadBalancerConfigurationEndpointHandlerTest.id);
+        assertNotNull(property.cluster("www.shieldblaze.com"));
+        assertThrows(NullPointerException.class, () -> property.cluster("shieldblaze.com"));
 
         Request request = new Request.Builder()
                 .url("https://127.0.0.1:9110/v1/cluster/remap?id=" + L7LoadBalancerConfigurationEndpointHandlerTest.id + "&oldHostname=www.shieldblaze.com&newHostname=shieldblaze.com")
@@ -166,8 +166,8 @@ public class ClusterConfigurationEndpointHandlerTest {
             assertTrue(responseJson.get("Success").getAsBoolean());
         }
 
-        assertThrows(NullPointerException.class, () -> property.l4LoadBalancer().cluster("www.shieldblaze.com"));
-        assertNotNull(property.l4LoadBalancer().cluster("shieldblaze.com"));
+        assertThrows(NullPointerException.class, () -> property.cluster("www.shieldblaze.com"));
+        assertNotNull(property.cluster("shieldblaze.com"));
     }
 
     @Test

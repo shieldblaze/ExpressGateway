@@ -31,8 +31,7 @@ import io.netty.util.concurrent.Future;
 import javax.net.ssl.SSLEngine;
 
 /**
- * {@link SNIHandler} TLS Server Name Indication (SNI) and serve the correct
- * {@link CertificateKeyPair} as requested in SNI.
+ * {@link SNIHandler} TLS Server Name Indication (SNI) and serve the correct {@link CertificateKeyPair} as requested in SNI.
  */
 public final class SNIHandler extends AbstractSniHandler<CertificateKeyPair> {
 

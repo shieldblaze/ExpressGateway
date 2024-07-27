@@ -23,7 +23,7 @@ import com.shieldblaze.expressgateway.backend.State;
 import com.shieldblaze.expressgateway.common.ExpressGateway;
 import com.shieldblaze.expressgateway.common.zookeeper.Curator;
 import com.shieldblaze.expressgateway.core.cluster.CoreContext;
-import com.shieldblaze.expressgateway.core.cluster.LoadBalancerContext;
+import com.shieldblaze.expressgateway.core.loadbalancer.L4LoadBalancer;
 import com.shieldblaze.expressgateway.restapi.CustomOkHttpClient;
 import com.shieldblaze.expressgateway.restapi.RestApi;
 import com.shieldblaze.expressgateway.restapi.api.cluster.ClusterConfigurationEndpointHandlerTest;
@@ -106,15 +106,15 @@ class NodeConfigurationEndpointHandlerTest {
             assertTrue(responseJson.get("Success").getAsBoolean());
         }
 
-        LoadBalancerContext property = CoreContext.get(L4LoadBalancerConfigurationEndpointHandlerTest.ID);
-        assertEquals(State.MANUAL_OFFLINE, property.l4LoadBalancer().cluster("default").get(nodeId).state());
+        L4LoadBalancer property = CoreContext.getContext(L4LoadBalancerConfigurationEndpointHandlerTest.ID);
+        assertEquals(State.MANUAL_OFFLINE, property.cluster("default").get(nodeId).state());
     }
 
     @Test
     @Order(3)
     void changeMaxConnectionsTest() throws IOException {
-        LoadBalancerContext property = CoreContext.get(L4LoadBalancerConfigurationEndpointHandlerTest.ID);
-        assertEquals(10_000, property.l4LoadBalancer().cluster("default").get(nodeId).maxConnections());
+        L4LoadBalancer property = CoreContext.getContext(L4LoadBalancerConfigurationEndpointHandlerTest.ID);
+        assertEquals(10_000, property.cluster("default").get(nodeId).maxConnections());
 
         Request request = new Request.Builder()
                 .url("https://127.0.0.1:9110/v1/node/maxConnections?id=" + L4LoadBalancerConfigurationEndpointHandlerTest.ID +
@@ -129,7 +129,7 @@ class NodeConfigurationEndpointHandlerTest {
             assertTrue(responseJson.get("Success").getAsBoolean());
         }
 
-        assertEquals(1_000_000, property.l4LoadBalancer().cluster("default").get(nodeId).maxConnections());
+        assertEquals(1_000_000, property.cluster("default").get(nodeId).maxConnections());
     }
 
     @Test
