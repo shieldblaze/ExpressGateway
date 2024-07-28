@@ -62,8 +62,8 @@ final class DefaultL4LoadBalancer extends L4LoadBalancer {
     }
 
     @Override
-    public boolean removeCluster(String hostname) {
-        return super.removeCluster(DEFAULT);
+    public boolean removeClusters(String hostname) {
+        return super.removeClusters(DEFAULT);
     }
 
     @Override

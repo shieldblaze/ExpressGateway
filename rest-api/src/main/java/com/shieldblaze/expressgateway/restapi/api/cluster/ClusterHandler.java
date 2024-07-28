@@ -98,7 +98,7 @@ public final class ClusterHandler {
         L4LoadBalancer l4LoadBalancer = CoreContext.getContext(id);
         Objects.requireNonNull(hostname, "Hostname");
 
-        boolean removed = l4LoadBalancer.removeCluster(hostname);
+        boolean removed = l4LoadBalancer.removeClusters(hostname);
         if (!removed) {
             throw new NullPointerException("Cluster not found with Hostname: " + hostname);
         }

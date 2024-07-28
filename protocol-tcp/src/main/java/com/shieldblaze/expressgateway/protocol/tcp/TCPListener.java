@@ -35,7 +35,6 @@ import io.netty.channel.epoll.EpollServerSocketChannel;
 import io.netty.channel.epoll.EpollServerSocketChannelConfig;
 import io.netty.channel.socket.nio.NioServerSocketChannel;
 import io.netty.channel.unix.UnixChannelOption;
-import io.netty.incubator.channel.uring.IOUringChannelOption;
 import io.netty.incubator.channel.uring.IOUringServerSocketChannel;
 
 import java.util.List;
@@ -128,7 +127,7 @@ public class TCPListener extends L4FrontListener {
     public L4FrontListenerStopEvent stop() {
         L4FrontListenerStopEvent l4FrontListenerStopEvent = new L4FrontListenerStopEvent();
 
-        // If ChannelFutureList is empty then this listener is already stopped and we won't stop it again.
+        // If ChannelFutureList is empty, then this listener is already stopped, and we won't stop it again.
         if (channelFutures.isEmpty()) {
             l4FrontListenerStopEvent.markFailure(new IllegalArgumentException("Listener has already stopped and cannot be stopped again."));
             return l4FrontListenerStopEvent;
@@ -137,7 +136,7 @@ public class TCPListener extends L4FrontListener {
         // Close all ChannelFutures
         channelFutures.forEach(channelFuture -> channelFuture.channel().close());
 
-        // Add listener to last ChannelFuture to notify all listeners
+        // Add a listener to last ChannelFuture to notify all listeners
         channelFutures.get(channelFutures.size() - 1).channel().closeFuture().addListener(future -> {
             if (future.isSuccess()) {
                 channelFutures.clear();
@@ -159,7 +158,7 @@ public class TCPListener extends L4FrontListener {
         L4FrontListenerShutdownEvent shutdownEvent = new L4FrontListenerShutdownEvent();
 
         event.future().whenCompleteAsync((_void, throwable) -> {
-            l4LoadBalancer().clusters().clear();
+            l4LoadBalancer().removeClusters();
             l4LoadBalancer().eventLoopFactory().parentGroup().shutdownGracefully();
             l4LoadBalancer().eventLoopFactory().childGroup().shutdownGracefully();
             shutdownEvent.markSuccess();

@@ -40,7 +40,6 @@ import org.apache.logging.log4j.Logger;
 import java.net.InetSocketAddress;
 import java.util.Collections;
 import java.util.Map;
-import java.util.Objects;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.atomic.AtomicInteger;
 
@@ -232,6 +231,13 @@ public abstract class L4LoadBalancer {
     }
 
     /**
+     * Remove all Clusters from Load Balancer
+     */
+    public void removeClusters() {
+        clusterMap.clear();
+    }
+
+    /**
      * Set the default {@link Cluster}
      */
     public void defaultCluster(Cluster cluster) {
@@ -305,7 +311,7 @@ public abstract class L4LoadBalancer {
      * @param hostname Hostname of the Cluster
      * @return Returns {@link Boolean#TRUE} if removal was successful else {@link Boolean#FALSE}
      */
-    public boolean removeCluster(String hostname) {
+    public boolean removeClusters(String hostname) {
         boolean removed = false;
         try {
             Cluster cluster = clusterMap.remove(hostname);
