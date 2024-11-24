@@ -195,7 +195,7 @@ public abstract class Connection {
      * Close this {@link Connection}
      */
     public synchronized void close() {
-        // If Backlog Queue contains something then clear it before closing connection.
+        // If Backlog Queue contains something, then clear it before closing the connection.
         if (backlogQueue != null && !backlogQueue.isEmpty()) {
             clearBacklog();
         }
@@ -203,7 +203,7 @@ public abstract class Connection {
         // Remove this connection from Node
         node.removeConnection(this);
 
-        // If Channel is not null then close it.
+        // If Channel is not null, then close it.
         // Channel can be null if the connection is not initialized.
         if (channel != null) {
             channel.close();

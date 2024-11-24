@@ -26,9 +26,19 @@ import java.time.Duration;
 import java.util.concurrent.ScheduledFuture;
 import java.util.concurrent.TimeUnit;
 
+/**
+ * {@linkplain ConnectionTimeoutHandler} is a {@linkplain ChannelDuplexHandler} that is used to handle Connection Timeout.
+ * <p>
+ * This Handler is used to handle Connection Timeout for both Upstream and Downstream Connections.
+ * </p>
+ */
 public final class ConnectionTimeoutHandler extends ChannelDuplexHandler implements Runnable {
 
+    /**
+     * Enum to represent the State of Connection Timeout
+     */
     public enum State {
+
         /**
          * When Upstream Read(Receiving) is Idle
          */

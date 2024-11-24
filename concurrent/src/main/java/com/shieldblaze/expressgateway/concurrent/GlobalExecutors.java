@@ -54,10 +54,10 @@ public final class GlobalExecutors {
     }
 
     /**
-     * Submit a new {@link Runnable} task to executed
+     * Submit a new {@link Runnable} task to execute
      *
      * @param runnable {@link Runnable} to be executed
-     * @return {@link CompletableFuture} Instance of task to be executed
+     * @return {@link CompletableFuture} Instance of a task to be executed
      */
     public static CompletableFuture<Void> submitTask(Runnable runnable) {
         return CompletableFuture.runAsync(runnable, EXECUTOR_SERVICE);
@@ -66,9 +66,9 @@ public final class GlobalExecutors {
     /**
      * Submit a new task to be executed
      *
-     * @param supplier {@link Supplier} implementing task to be executed
+     * @param supplier {@link Supplier} implementing a task to be executed
      * @param <T>      Class implementing {@link Supplier}
-     * @return {@link CompletableFuture} Instance of task to be executed
+     * @return {@link CompletableFuture} Instance of a task to be executed
      */
     public static <T> CompletableFuture<T> submitTask(Supplier<T> supplier) {
         return CompletableFuture.supplyAsync(supplier, EXECUTOR_SERVICE);
@@ -78,7 +78,7 @@ public final class GlobalExecutors {
      * Submit and schedule a new {@link Runnable} task to be executed with a fixed delay
      *
      * @param runnable {@link Runnable} to be executed
-     * @return {@link CompletableFuture} Instance of task to be executed
+     * @return {@link CompletableFuture} Instance of a task to be executed
      */
     public static ScheduledFuture<?> submitTaskAndRunEvery(Runnable runnable, int initialDelay, int period, TimeUnit timeUnit) {
         return SCHEDULED_EXECUTOR_SERVICE.scheduleWithFixedDelay(runnable, initialDelay, period, timeUnit);

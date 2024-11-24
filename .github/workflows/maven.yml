@@ -16,7 +16,7 @@ env:
   MAVEN_OPTS: -Dio.netty.tryReflectionSetAccessible=true
 
 jobs:
-  JDK17:
+  JDK21:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
