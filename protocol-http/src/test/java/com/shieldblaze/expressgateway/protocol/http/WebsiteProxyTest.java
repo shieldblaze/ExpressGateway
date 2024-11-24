@@ -57,7 +57,7 @@ public class WebsiteProxyTest {
     private static final Logger logger = LogManager.getLogger(WebsiteProxyTest.class);
 
     private static final List<String> WEBSITES = List.of(
-            "www.shieldblaze.com"
+            "www.google.com"
     );
 
     private static final OkHttpClient OK_HTTP_CLIENT;
