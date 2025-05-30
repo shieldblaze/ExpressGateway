@@ -20,9 +20,9 @@ package com.shieldblaze.expressgateway.protocol.udp;
 import com.shieldblaze.expressgateway.concurrent.GlobalExecutors;
 import com.shieldblaze.expressgateway.configuration.ConfigurationContext;
 import com.shieldblaze.expressgateway.core.L4FrontListener;
-import com.shieldblaze.expressgateway.core.events.L4FrontListenerShutdownEvent;
-import com.shieldblaze.expressgateway.core.events.L4FrontListenerStartupEvent;
-import com.shieldblaze.expressgateway.core.events.L4FrontListenerStopEvent;
+import com.shieldblaze.expressgateway.core.events.L4FrontListenerShutdownTask;
+import com.shieldblaze.expressgateway.core.events.L4FrontListenerStartupTask;
+import com.shieldblaze.expressgateway.core.events.L4FrontListenerStopTask;
 import com.shieldblaze.expressgateway.core.factory.BootstrapFactory;
 import com.shieldblaze.expressgateway.metrics.StandardEdgeNetworkMetricRecorder;
 import io.netty.bootstrap.Bootstrap;
@@ -43,8 +43,8 @@ public class UDPListener extends L4FrontListener {
     private final List<ChannelFuture> channelFutures = new ArrayList<>();
 
     @Override
-    public L4FrontListenerStartupEvent start() {
-        L4FrontListenerStartupEvent l4FrontListenerStartupEvent = new L4FrontListenerStartupEvent();
+    public L4FrontListenerStartupTask start() {
+        L4FrontListenerStartupTask l4FrontListenerStartupEvent = new L4FrontListenerStartupTask();
 
         // If ChannelFutureList is not 0 then this listener is already started and we won't start it again.
         if (!channelFutures.isEmpty()) {
@@ -95,12 +95,16 @@ public class UDPListener extends L4FrontListener {
     }
 
     @Override
-    public L4FrontListenerStopEvent stop() {
-        L4FrontListenerStopEvent l4FrontListenerStopEvent = new L4FrontListenerStopEvent();
+    public L4FrontListenerStopTask stop() {
+        L4FrontListenerStopTask l4FrontListenerStopEvent = new L4FrontListenerStopTask();
 
+        // Close all ChannelFutures
         channelFutures.forEach(channelFuture -> channelFuture.channel().close());
+
+        // Add a listener to last ChannelFuture to notify all listeners
         channelFutures.get(channelFutures.size() - 1).channel().closeFuture().addListener(future -> {
             if (future.isSuccess()) {
+                channelFutures.clear();
                 l4FrontListenerStopEvent.markSuccess(null);
             } else {
                 l4FrontListenerStopEvent.markFailure(future.cause());
@@ -108,18 +112,18 @@ public class UDPListener extends L4FrontListener {
         });
 
         // Shutdown Cluster
-        l4LoadBalancer().clusters().forEach((str, cluster) -> cluster.close());
+        l4LoadBalancer().clusters().forEach((hostname, cluster) -> cluster.close());
         l4LoadBalancer().eventStream().publish(l4FrontListenerStopEvent);
         return l4FrontListenerStopEvent;
     }
 
     @Override
-    public L4FrontListenerShutdownEvent shutdown() {
-        L4FrontListenerStopEvent event = stop();
-        L4FrontListenerShutdownEvent shutdownEvent = new L4FrontListenerShutdownEvent();
+    public L4FrontListenerShutdownTask shutdown() {
+        L4FrontListenerStopTask event = stop();
+        L4FrontListenerShutdownTask shutdownEvent = new L4FrontListenerShutdownTask();
 
         event.future().whenCompleteAsync((_void, throwable) -> {
-            l4LoadBalancer().clusters().clear();
+            l4LoadBalancer().removeClusters();
             l4LoadBalancer().eventLoopFactory().parentGroup().shutdownGracefully();
             l4LoadBalancer().eventLoopFactory().childGroup().shutdownGracefully();
             shutdownEvent.markSuccess(null);

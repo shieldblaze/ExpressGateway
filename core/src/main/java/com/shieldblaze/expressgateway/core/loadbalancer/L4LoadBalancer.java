@@ -25,9 +25,9 @@ import com.shieldblaze.expressgateway.common.annotation.NonNull;
 import com.shieldblaze.expressgateway.concurrent.eventstream.EventStream;
 import com.shieldblaze.expressgateway.configuration.ConfigurationContext;
 import com.shieldblaze.expressgateway.core.L4FrontListener;
-import com.shieldblaze.expressgateway.core.events.L4FrontListenerShutdownEvent;
-import com.shieldblaze.expressgateway.core.events.L4FrontListenerStartupEvent;
-import com.shieldblaze.expressgateway.core.events.L4FrontListenerStopEvent;
+import com.shieldblaze.expressgateway.core.events.L4FrontListenerShutdownTask;
+import com.shieldblaze.expressgateway.core.events.L4FrontListenerStartupTask;
+import com.shieldblaze.expressgateway.core.events.L4FrontListenerStopTask;
 import com.shieldblaze.expressgateway.core.exceptions.NotFoundException;
 import com.shieldblaze.expressgateway.core.factory.EventLoopFactory;
 import com.shieldblaze.expressgateway.core.factory.PooledByteBufAllocatorFactory;
@@ -71,7 +71,7 @@ public abstract class L4LoadBalancer {
     private final ByteBufAllocator byteBufAllocator;
     private final EventLoopFactory eventLoopFactory;
 
-    private L4FrontListenerStartupEvent l4FrontListenerStartupEvent;
+    private L4FrontListenerStartupTask l4FrontListenerStartupEvent;
 
     /**
      * @param name                 Name of this Load Balancer
@@ -122,7 +122,7 @@ public abstract class L4LoadBalancer {
     /**
      * Start L4 Load Balancer
      */
-    public L4FrontListenerStartupEvent start() {
+    public L4FrontListenerStartupTask start() {
         try {
             logger.info("Trying to start L4FrontListener");
 
@@ -140,10 +140,10 @@ public abstract class L4LoadBalancer {
     /**
      * Stop L4 Load Balancer, and it's child operations and services.
      *
-     * @return {@link L4FrontListenerStopEvent} instance
+     * @return {@link L4FrontListenerStopTask} instance
      */
-    public L4FrontListenerStopEvent stop() {
-        L4FrontListenerStopEvent event = null;
+    public L4FrontListenerStopTask stop() {
+        L4FrontListenerStopTask event = null;
         try {
             logger.info("Trying to stop L4FrontListener");
 
@@ -161,10 +161,10 @@ public abstract class L4LoadBalancer {
     /**
      * Shutdown L4 Load Balancer
      *
-     * @return {@link L4FrontListenerShutdownEvent} instance
+     * @return {@link L4FrontListenerShutdownTask} instance
      */
-    public L4FrontListenerShutdownEvent shutdown() {
-        L4FrontListenerShutdownEvent event = null;
+    public L4FrontListenerShutdownTask shutdown() {
+        L4FrontListenerShutdownTask event = null;
         try {
             logger.info("Trying to shutdown L4FrontListener");
 
@@ -380,9 +380,9 @@ public abstract class L4LoadBalancer {
     }
 
     /**
-     * Get the {@link L4FrontListenerStartupEvent} instance
+     * Get the {@link L4FrontListenerStartupTask} instance
      */
-    public L4FrontListenerStartupEvent event() {
+    public L4FrontListenerStartupTask event() {
         return l4FrontListenerStartupEvent;
     }
 
@@ -399,7 +399,7 @@ public abstract class L4LoadBalancer {
             if (l4FrontListenerStartupEvent.isSuccess()) {
                 state = "Running";
             } else {
-                state = "Failed; " + l4FrontListenerStartupEvent.cause().getMessage();
+                state = "Failed; " + l4FrontListenerStartupEvent.taskError();
             }
         } else {
             state = "Pending";

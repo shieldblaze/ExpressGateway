@@ -3,7 +3,7 @@ package com.shieldblaze.expressgateway.configuration.tls;
 import java.util.List;
 
 /**
- * <a href="https://wiki.mozilla.org/Security/Server_Side_TLS#Intermediate_compatibility_.28recommended.29">...</a>
+ * <a href="https://wiki.mozilla.org/Security/Server_Side_TLS#Intermediate_compatibility_.28recommended.29">Intermediate Crypto</a>
  */
 public final class IntermediateCrypto {
 

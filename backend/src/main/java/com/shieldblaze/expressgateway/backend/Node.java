@@ -19,8 +19,8 @@ package com.shieldblaze.expressgateway.backend;
 
 import com.google.gson.JsonObject;
 import com.shieldblaze.expressgateway.backend.cluster.Cluster;
-import com.shieldblaze.expressgateway.backend.events.node.NodeOfflineEvent;
-import com.shieldblaze.expressgateway.backend.events.node.NodeOnlineEvent;
+import com.shieldblaze.expressgateway.backend.events.node.NodeOfflineTask;
+import com.shieldblaze.expressgateway.backend.events.node.NodeOnlineTask;
 import com.shieldblaze.expressgateway.backend.exceptions.TooManyConnectionsException;
 import com.shieldblaze.expressgateway.common.annotation.NonNull;
 import com.shieldblaze.expressgateway.common.utils.MathUtil;
@@ -281,7 +281,7 @@ public final class Node implements Comparable<Node>, Closeable {
     public boolean markOffline() {
         if (state != State.MANUAL_OFFLINE) {
             state(State.MANUAL_OFFLINE);
-            cluster.eventStream().publish(new NodeOfflineEvent(this));
+            cluster.eventStream().publish(new NodeOfflineTask(this));
             return true;
         }
         return false;
@@ -292,7 +292,7 @@ public final class Node implements Comparable<Node>, Closeable {
      */
     public void markOnline() {
         state(State.ONLINE);
-        cluster.eventStream().publish(new NodeOnlineEvent(this));
+        cluster.eventStream().publish(new NodeOnlineTask(this));
     }
 
     /**

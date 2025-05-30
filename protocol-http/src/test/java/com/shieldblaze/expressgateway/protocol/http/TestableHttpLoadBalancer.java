@@ -27,8 +27,8 @@ import com.shieldblaze.expressgateway.configuration.ConfigurationContext;
 import com.shieldblaze.expressgateway.configuration.tls.CertificateKeyPair;
 import com.shieldblaze.expressgateway.configuration.tls.TlsClientConfiguration;
 import com.shieldblaze.expressgateway.configuration.tls.TlsServerConfiguration;
-import com.shieldblaze.expressgateway.core.events.L4FrontListenerStartupEvent;
-import com.shieldblaze.expressgateway.core.events.L4FrontListenerStopEvent;
+import com.shieldblaze.expressgateway.core.events.L4FrontListenerStartupTask;
+import com.shieldblaze.expressgateway.core.events.L4FrontListenerStopTask;
 import com.shieldblaze.expressgateway.protocol.http.loadbalancer.HTTPLoadBalancer;
 import com.shieldblaze.expressgateway.protocol.http.loadbalancer.HTTPLoadBalancerBuilder;
 import io.netty.handler.ssl.util.InsecureTrustManagerFactory;
@@ -89,7 +89,7 @@ public final class TestableHttpLoadBalancer implements Closeable {
                 .withSocketAddress(new InetSocketAddress("localhost", httpServer.port()))
                 .build();
 
-        L4FrontListenerStartupEvent l4FrontListenerStartupEvent = httpLoadBalancer.start();
+        L4FrontListenerStartupTask l4FrontListenerStartupEvent = httpLoadBalancer.start();
         l4FrontListenerStartupEvent.future().join();
         assertTrue(l4FrontListenerStartupEvent.isSuccess());
     }
@@ -120,7 +120,7 @@ public final class TestableHttpLoadBalancer implements Closeable {
             throw new RuntimeException(e);
         }
 
-        L4FrontListenerStopEvent l4FrontListenerStopEvent = httpLoadBalancer.stop();
+        L4FrontListenerStopTask l4FrontListenerStopEvent = httpLoadBalancer.stop();
         l4FrontListenerStopEvent.future().join();
         assertTrue(l4FrontListenerStopEvent.isSuccess());
     }

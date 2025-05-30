@@ -17,7 +17,7 @@
  */
 package com.shieldblaze.expressgateway.concurrent.eventstream;
 
-import com.shieldblaze.expressgateway.concurrent.event.Event;
+import com.shieldblaze.expressgateway.concurrent.task.Task;
 import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
 
@@ -33,7 +33,7 @@ public final class AsyncEventStream extends EventStream {
     private static final Logger logger = LogManager.getLogger(AsyncEventStream.class);
 
     /**
-     * {@link ExecutorService} for execution of {@link #publish(Event)}
+     * {@link ExecutorService} for execution of {@link #publish(Task)}
      */
     private final ExecutorService executorService;
 
@@ -45,12 +45,12 @@ public final class AsyncEventStream extends EventStream {
     /**
      * Publish an Event to all subscribed {@linkplain EventListener} asynchronously.
      *
-     * @param event Event to publish
+     * @param task Event to publish
      */
     @SuppressWarnings("unchecked")
     @Override
-    public void publish(Event event) {
-        executorService.execute(() -> subscribers.forEach(eventListener -> eventListener.accept(event)));
+    public void publish(Task task) {
+        executorService.execute(() -> subscribers.forEach(eventListener -> eventListener.accept(task)));
     }
 
     @Override

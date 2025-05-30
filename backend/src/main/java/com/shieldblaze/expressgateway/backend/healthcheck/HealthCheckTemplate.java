@@ -18,37 +18,47 @@
 package com.shieldblaze.expressgateway.backend.healthcheck;
 
 import com.fasterxml.jackson.annotation.JsonProperty;
-import com.shieldblaze.expressgateway.common.utils.NumberUtil;
+import com.shieldblaze.expressgateway.common.JakartaValidator;
+import jakarta.validation.constraints.Max;
+import jakarta.validation.constraints.Min;
+import jakarta.validation.constraints.NotNull;
+import lombok.Builder;
+import lombok.Getter;
+import lombok.ToString;
+import lombok.experimental.Accessors;
 
-import java.util.Objects;
-
-import static com.shieldblaze.expressgateway.common.utils.NumberUtil.checkInRange;
-import static com.shieldblaze.expressgateway.common.utils.NumberUtil.checkPositive;
-import static java.util.Objects.requireNonNull;
-
+@Getter
+@ToString
+@Accessors(fluent = true)
+@Builder(builderClassName = "Builder")
 public final class HealthCheckTemplate {
 
     /**
      * Health Check Protocol
      */
     @JsonProperty("protocol")
+    @NotNull
     private Protocol protocol;
 
     /**
      * Health Check Host
      */
+    @NotNull
     @JsonProperty("host")
     private String host;
 
     /**
      * Health Check Port
      */
+    @Min(1)
+    @Max(65535)
     @JsonProperty("port")
     private int port;
 
     /**
      * HTTP Path
      */
+    @NotNull
     @JsonProperty("path")
     private String path;
 
@@ -64,61 +74,13 @@ public final class HealthCheckTemplate {
     @JsonProperty("samples")
     private int samples;
 
-    public HealthCheckTemplate(Protocol protocol, String host, int port, String path, int timeout, int samples) {
-        setProtocol(protocol);
-        setHost(host);
-        setPort(port);
-        setPath(path);
-        setTimeout(timeout);
-        setSamples(samples);
-    }
+    public static class Builder {
 
-    public Protocol protocol() {
-        return protocol;
-    }
-
-    public void setProtocol(Protocol protocol) {
-        this.protocol = requireNonNull(protocol, "Protocol");
-    }
-
-    public String host() {
-        return host;
-    }
-
-    public void setHost(String host) {
-        this.host = requireNonNull(host, "Host");
-    }
-
-    public int port() {
-        return port;
-    }
-
-    public void setPort(int port) {
-        this.port = checkInRange(port, 1, 65535, "Port");
-    }
-
-    public String path() {
-        return path;
-    }
-
-    public void setPath(String path) {
-        this.path = requireNonNull(path, "Path");
-    }
-
-    public int timeout() {
-        return timeout;
-    }
-
-    public void setTimeout(int timeout) {
-        this.timeout = checkPositive(timeout, "Timeout");
-    }
-
-    public int samples() {
-        return samples;
-    }
-
-    public void setSamples(int samples) {
-        this.samples = checkPositive(samples, "Samples");
+        public HealthCheckTemplate build() {
+            HealthCheckTemplate instance = new HealthCheckTemplate(protocol, host, port, path, timeout, samples);
+            JakartaValidator.validate(instance);
+            return instance;
+        }
     }
 
     public enum Protocol {
@@ -126,17 +88,5 @@ public final class HealthCheckTemplate {
         UDP,
         HTTP,
         HTTPS
-    }
-
-    @Override
-    public String toString() {
-        return "HealthCheckTemplate{" +
-                "protocol=" + protocol +
-                ", host='" + host + '\'' +
-                ", port=" + port +
-                ", path='" + path + '\'' +
-                ", timeout=" + timeout +
-                ", samples=" + samples +
-                '}';
     }
 }

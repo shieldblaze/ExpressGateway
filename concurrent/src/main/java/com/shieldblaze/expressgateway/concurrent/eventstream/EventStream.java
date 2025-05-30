@@ -17,7 +17,7 @@
  */
 package com.shieldblaze.expressgateway.concurrent.eventstream;
 
-import com.shieldblaze.expressgateway.concurrent.event.Event;
+import com.shieldblaze.expressgateway.concurrent.task.Task;
 import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
 
@@ -66,11 +66,11 @@ public class EventStream implements Closeable {
     /**
      * Publish an Event to all subscribed {@linkplain EventListener}
      *
-     * @param event Event to publish
+     * @param task Event to publish
      */
     @SuppressWarnings("unchecked")
-    public void publish(Event event) {
-        subscribers.forEach(eventListener -> eventListener.accept(event));
+    public void publish(Task task) {
+        subscribers.forEach(eventListener -> eventListener.accept(task));
     }
 
     /**

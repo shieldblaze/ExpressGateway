@@ -17,11 +17,11 @@
  */
 package com.shieldblaze.expressgateway.concurrent.eventstream;
 
-import com.shieldblaze.expressgateway.concurrent.event.Event;
+import com.shieldblaze.expressgateway.concurrent.task.Task;
 
 /**
- * {@linkplain EventPublisher} exposes {@link EventStream#publish(Event)}
- * via {@link #publish(Event)}.
+ * {@linkplain EventPublisher} exposes {@link EventStream#publish(Task)}
+ * via {@link #publish(Task)}.
  */
 public final class EventPublisher {
 
@@ -31,7 +31,7 @@ public final class EventPublisher {
         this.eventStream = eventStream;
     }
 
-    public <T> EventPublisher publish(Event<T> object) {
+    public <T> EventPublisher publish(Task<T> object) {
         eventStream.publish(object);
         return this;
     }

@@ -20,9 +20,9 @@ package com.shieldblaze.expressgateway.protocol.tcp;
 import com.shieldblaze.expressgateway.configuration.transport.TransportConfiguration;
 import com.shieldblaze.expressgateway.configuration.transport.TransportType;
 import com.shieldblaze.expressgateway.core.L4FrontListener;
-import com.shieldblaze.expressgateway.core.events.L4FrontListenerShutdownEvent;
-import com.shieldblaze.expressgateway.core.events.L4FrontListenerStartupEvent;
-import com.shieldblaze.expressgateway.core.events.L4FrontListenerStopEvent;
+import com.shieldblaze.expressgateway.core.events.L4FrontListenerShutdownTask;
+import com.shieldblaze.expressgateway.core.events.L4FrontListenerStartupTask;
+import com.shieldblaze.expressgateway.core.events.L4FrontListenerStopTask;
 import com.shieldblaze.expressgateway.core.factory.EventLoopFactory;
 import io.netty.bootstrap.ServerBootstrap;
 import io.netty.buffer.ByteBufAllocator;
@@ -48,8 +48,8 @@ public class TCPListener extends L4FrontListener {
     private final List<ChannelFuture> channelFutures = new CopyOnWriteArrayList<>();
 
     @Override
-    public L4FrontListenerStartupEvent start() {
-        L4FrontListenerStartupEvent l4FrontListenerStartupEvent = new L4FrontListenerStartupEvent();
+    public L4FrontListenerStartupTask start() {
+        L4FrontListenerStartupTask l4FrontListenerStartupEvent = new L4FrontListenerStartupTask();
 
         // If ChannelFutureList is not empty then this listener is already started and we won't start it again.
         if (!channelFutures.isEmpty()) {
@@ -124,8 +124,8 @@ public class TCPListener extends L4FrontListener {
     }
 
     @Override
-    public L4FrontListenerStopEvent stop() {
-        L4FrontListenerStopEvent l4FrontListenerStopEvent = new L4FrontListenerStopEvent();
+    public L4FrontListenerStopTask stop() {
+        L4FrontListenerStopTask l4FrontListenerStopEvent = new L4FrontListenerStopTask();
 
         // If ChannelFutureList is empty, then this listener is already stopped, and we won't stop it again.
         if (channelFutures.isEmpty()) {
@@ -153,9 +153,9 @@ public class TCPListener extends L4FrontListener {
     }
 
     @Override
-    public L4FrontListenerShutdownEvent shutdown() {
-        L4FrontListenerStopEvent event = stop();
-        L4FrontListenerShutdownEvent shutdownEvent = new L4FrontListenerShutdownEvent();
+    public L4FrontListenerShutdownTask shutdown() {
+        L4FrontListenerStopTask event = stop();
+        L4FrontListenerShutdownTask shutdownEvent = new L4FrontListenerShutdownTask();
 
         event.future().whenCompleteAsync((_void, throwable) -> {
             l4LoadBalancer().removeClusters();
