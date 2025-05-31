@@ -23,8 +23,8 @@ import com.shieldblaze.expressgateway.backend.cluster.ClusterBuilder;
 import com.shieldblaze.expressgateway.backend.strategy.l4.RoundRobin;
 import com.shieldblaze.expressgateway.backend.strategy.l4.sessionpersistence.NOOPSessionPersistence;
 import com.shieldblaze.expressgateway.configuration.ConfigurationContext;
-import com.shieldblaze.expressgateway.core.events.L4FrontListenerStartupEvent;
-import com.shieldblaze.expressgateway.core.events.L4FrontListenerStopEvent;
+import com.shieldblaze.expressgateway.core.events.L4FrontListenerStartupTask;
+import com.shieldblaze.expressgateway.core.events.L4FrontListenerStopTask;
 import com.shieldblaze.expressgateway.core.loadbalancer.L4LoadBalancer;
 import com.shieldblaze.expressgateway.core.loadbalancer.L4LoadBalancerBuilder;
 import org.junit.jupiter.api.AfterAll;
@@ -65,14 +65,14 @@ final class UpstreamHandlerTest {
                 .withSocketAddress(new InetSocketAddress("127.0.0.1", 9111))
                 .build();
 
-        L4FrontListenerStartupEvent l4FrontListenerStartupEvent = l4LoadBalancer.start();
+        L4FrontListenerStartupTask l4FrontListenerStartupEvent = l4LoadBalancer.start();
         l4FrontListenerStartupEvent.future().join();
         assertTrue(l4FrontListenerStartupEvent.isSuccess());
     }
 
     @AfterAll
     static void stop() {
-        L4FrontListenerStopEvent l4FrontListenerStopEvent = l4LoadBalancer.stop();
+        L4FrontListenerStopTask l4FrontListenerStopEvent = l4LoadBalancer.stop();
         l4FrontListenerStopEvent.future().join();
         assertTrue(l4FrontListenerStopEvent.isSuccess());
     }

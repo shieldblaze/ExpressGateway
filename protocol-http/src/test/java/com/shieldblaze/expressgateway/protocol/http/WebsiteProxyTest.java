@@ -28,7 +28,7 @@ import com.shieldblaze.expressgateway.configuration.ConfigurationContext;
 import com.shieldblaze.expressgateway.configuration.tls.CertificateKeyPair;
 import com.shieldblaze.expressgateway.configuration.tls.TlsClientConfiguration;
 import com.shieldblaze.expressgateway.configuration.tls.TlsServerConfiguration;
-import com.shieldblaze.expressgateway.core.events.L4FrontListenerStartupEvent;
+import com.shieldblaze.expressgateway.core.events.L4FrontListenerStartupTask;
 import com.shieldblaze.expressgateway.protocol.http.loadbalancer.HTTPLoadBalancer;
 import com.shieldblaze.expressgateway.protocol.http.loadbalancer.HTTPLoadBalancerBuilder;
 import com.shieldblaze.expressgateway.protocol.tcp.TCPListener;
@@ -57,7 +57,7 @@ public class WebsiteProxyTest {
     private static final Logger logger = LogManager.getLogger(WebsiteProxyTest.class);
 
     private static final List<String> WEBSITES = List.of(
-            "www.shieldblaze.com"
+            "www.google.com"
     );
 
     private static final OkHttpClient OK_HTTP_CLIENT;
@@ -105,7 +105,7 @@ public class WebsiteProxyTest {
                 .withName("HttpLoadBalancer")
                 .build();
 
-        L4FrontListenerStartupEvent l4FrontListenerStartupEvent = httpLoadBalancer.start();
+        L4FrontListenerStartupTask l4FrontListenerStartupEvent = httpLoadBalancer.start();
         l4FrontListenerStartupEvent.future().get();
 
         for (String domain : WEBSITES) {
@@ -118,7 +118,7 @@ public class WebsiteProxyTest {
                     .withSocketAddress(new InetSocketAddress(domain, 443))
                     .build();
 
-            httpLoadBalancer.mapCluster(domain, cluster);
+            httpLoadBalancer.mappedCluster(domain, cluster);
         }
     }
 

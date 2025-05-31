@@ -20,9 +20,9 @@ package com.shieldblaze.expressgateway.protocol.tcp;
 import com.shieldblaze.expressgateway.configuration.transport.TransportConfiguration;
 import com.shieldblaze.expressgateway.configuration.transport.TransportType;
 import com.shieldblaze.expressgateway.core.L4FrontListener;
-import com.shieldblaze.expressgateway.core.events.L4FrontListenerShutdownEvent;
-import com.shieldblaze.expressgateway.core.events.L4FrontListenerStartupEvent;
-import com.shieldblaze.expressgateway.core.events.L4FrontListenerStopEvent;
+import com.shieldblaze.expressgateway.core.events.L4FrontListenerShutdownTask;
+import com.shieldblaze.expressgateway.core.events.L4FrontListenerStartupTask;
+import com.shieldblaze.expressgateway.core.events.L4FrontListenerStopTask;
 import com.shieldblaze.expressgateway.core.factory.EventLoopFactory;
 import io.netty.bootstrap.ServerBootstrap;
 import io.netty.buffer.ByteBufAllocator;
@@ -35,7 +35,6 @@ import io.netty.channel.epoll.EpollServerSocketChannel;
 import io.netty.channel.epoll.EpollServerSocketChannelConfig;
 import io.netty.channel.socket.nio.NioServerSocketChannel;
 import io.netty.channel.unix.UnixChannelOption;
-import io.netty.incubator.channel.uring.IOUringChannelOption;
 import io.netty.incubator.channel.uring.IOUringServerSocketChannel;
 
 import java.util.List;
@@ -49,8 +48,8 @@ public class TCPListener extends L4FrontListener {
     private final List<ChannelFuture> channelFutures = new CopyOnWriteArrayList<>();
 
     @Override
-    public L4FrontListenerStartupEvent start() {
-        L4FrontListenerStartupEvent l4FrontListenerStartupEvent = new L4FrontListenerStartupEvent();
+    public L4FrontListenerStartupTask start() {
+        L4FrontListenerStartupTask l4FrontListenerStartupEvent = new L4FrontListenerStartupTask();
 
         // If ChannelFutureList is not empty then this listener is already started and we won't start it again.
         if (!channelFutures.isEmpty()) {
@@ -125,10 +124,10 @@ public class TCPListener extends L4FrontListener {
     }
 
     @Override
-    public L4FrontListenerStopEvent stop() {
-        L4FrontListenerStopEvent l4FrontListenerStopEvent = new L4FrontListenerStopEvent();
+    public L4FrontListenerStopTask stop() {
+        L4FrontListenerStopTask l4FrontListenerStopEvent = new L4FrontListenerStopTask();
 
-        // If ChannelFutureList is empty then this listener is already stopped and we won't stop it again.
+        // If ChannelFutureList is empty, then this listener is already stopped, and we won't stop it again.
         if (channelFutures.isEmpty()) {
             l4FrontListenerStopEvent.markFailure(new IllegalArgumentException("Listener has already stopped and cannot be stopped again."));
             return l4FrontListenerStopEvent;
@@ -137,7 +136,7 @@ public class TCPListener extends L4FrontListener {
         // Close all ChannelFutures
         channelFutures.forEach(channelFuture -> channelFuture.channel().close());
 
-        // Add listener to last ChannelFuture to notify all listeners
+        // Add a listener to last ChannelFuture to notify all listeners
         channelFutures.get(channelFutures.size() - 1).channel().closeFuture().addListener(future -> {
             if (future.isSuccess()) {
                 channelFutures.clear();
@@ -154,12 +153,12 @@ public class TCPListener extends L4FrontListener {
     }
 
     @Override
-    public L4FrontListenerShutdownEvent shutdown() {
-        L4FrontListenerStopEvent event = stop();
-        L4FrontListenerShutdownEvent shutdownEvent = new L4FrontListenerShutdownEvent();
+    public L4FrontListenerShutdownTask shutdown() {
+        L4FrontListenerStopTask event = stop();
+        L4FrontListenerShutdownTask shutdownEvent = new L4FrontListenerShutdownTask();
 
         event.future().whenCompleteAsync((_void, throwable) -> {
-            l4LoadBalancer().clusters().clear();
+            l4LoadBalancer().removeClusters();
             l4LoadBalancer().eventLoopFactory().parentGroup().shutdownGracefully();
             l4LoadBalancer().eventLoopFactory().childGroup().shutdownGracefully();
             shutdownEvent.markSuccess();

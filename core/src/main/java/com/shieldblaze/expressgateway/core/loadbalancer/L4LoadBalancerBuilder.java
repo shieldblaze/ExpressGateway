@@ -24,6 +24,8 @@ import io.netty.channel.ChannelHandler;
 import java.net.InetSocketAddress;
 import java.util.Objects;
 
+import static java.util.Objects.requireNonNull;
+
 /**
  * Builder for {@link L4LoadBalancer}
  */
@@ -69,9 +71,9 @@ public final class L4LoadBalancerBuilder {
     }
 
     public L4LoadBalancer build() {
-        Objects.requireNonNull(bindAddress, "Bind Address");
-        Objects.requireNonNull(l4FrontListener, "L4 FrontListener");
-        Objects.requireNonNull(configurationContext, "Core Configuration");
+        requireNonNull(bindAddress, "Bind Address");
+        requireNonNull(l4FrontListener, "L4 FrontListener");
+        requireNonNull(configurationContext, "Core Configuration");
 
         return new DefaultL4LoadBalancer(name, bindAddress, l4FrontListener, configurationContext, channelHandler);
     }

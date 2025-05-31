@@ -17,9 +17,9 @@
  */
 package com.shieldblaze.expressgateway.core;
 
-import com.shieldblaze.expressgateway.core.events.L4FrontListenerShutdownEvent;
-import com.shieldblaze.expressgateway.core.events.L4FrontListenerStartupEvent;
-import com.shieldblaze.expressgateway.core.events.L4FrontListenerStopEvent;
+import com.shieldblaze.expressgateway.core.events.L4FrontListenerShutdownTask;
+import com.shieldblaze.expressgateway.core.events.L4FrontListenerStartupTask;
+import com.shieldblaze.expressgateway.core.events.L4FrontListenerStopTask;
 import com.shieldblaze.expressgateway.core.loadbalancer.L4LoadBalancer;
 
 /**
@@ -32,17 +32,17 @@ public abstract class L4FrontListener {
     /**
      * @see L4LoadBalancer#start()
      */
-    public abstract L4FrontListenerStartupEvent start();
+    public abstract L4FrontListenerStartupTask start();
 
     /**
      * @see L4LoadBalancer#stop()
      */
-    public abstract L4FrontListenerStopEvent stop();
+    public abstract L4FrontListenerStopTask stop();
 
     /**
      * @see L4LoadBalancer#stop()
      */
-    public abstract L4FrontListenerShutdownEvent shutdown();
+    public abstract L4FrontListenerShutdownTask shutdown();
 
     /**
      * Returns {@link L4LoadBalancer} associated with this listener

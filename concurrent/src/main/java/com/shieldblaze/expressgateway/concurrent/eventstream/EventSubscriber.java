@@ -17,10 +17,10 @@
  */
 package com.shieldblaze.expressgateway.concurrent.eventstream;
 
-import com.shieldblaze.expressgateway.concurrent.event.Event;
+import com.shieldblaze.expressgateway.concurrent.task.Task;
 
 /**
- * {@linkplain EventSubscriber} exposes {@link EventStream#publish(Event)}
+ * {@linkplain EventSubscriber} exposes {@link EventStream#publish(Task)}
  * via {@link #subscribe(EventListener)}.
  */
 public final class EventSubscriber {

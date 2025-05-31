@@ -27,6 +27,7 @@ import static io.netty.handler.codec.http.HttpHeaderNames.CONTENT_LENGTH;
 import static io.netty.handler.codec.http.HttpHeaderNames.CONTENT_TYPE;
 
 public final class CompressionUtil {
+
     private static final boolean EnableBrotli = true;
     private static final boolean EnableGzip = true;
     private static final boolean EnableDeflate = true;

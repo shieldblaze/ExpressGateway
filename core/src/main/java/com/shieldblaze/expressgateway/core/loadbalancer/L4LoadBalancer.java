@@ -17,6 +17,7 @@
  */
 package com.shieldblaze.expressgateway.core.loadbalancer;
 
+import com.github.f4b6a3.tsid.TsidCreator;
 import com.google.gson.JsonArray;
 import com.google.gson.JsonObject;
 import com.shieldblaze.expressgateway.backend.cluster.Cluster;
@@ -24,9 +25,10 @@ import com.shieldblaze.expressgateway.common.annotation.NonNull;
 import com.shieldblaze.expressgateway.concurrent.eventstream.EventStream;
 import com.shieldblaze.expressgateway.configuration.ConfigurationContext;
 import com.shieldblaze.expressgateway.core.L4FrontListener;
-import com.shieldblaze.expressgateway.core.events.L4FrontListenerShutdownEvent;
-import com.shieldblaze.expressgateway.core.events.L4FrontListenerStartupEvent;
-import com.shieldblaze.expressgateway.core.events.L4FrontListenerStopEvent;
+import com.shieldblaze.expressgateway.core.events.L4FrontListenerShutdownTask;
+import com.shieldblaze.expressgateway.core.events.L4FrontListenerStartupTask;
+import com.shieldblaze.expressgateway.core.events.L4FrontListenerStopTask;
+import com.shieldblaze.expressgateway.core.exceptions.NotFoundException;
 import com.shieldblaze.expressgateway.core.factory.EventLoopFactory;
 import com.shieldblaze.expressgateway.core.factory.PooledByteBufAllocatorFactory;
 import com.shieldblaze.expressgateway.core.handlers.ConnectionTracker;
@@ -36,11 +38,12 @@ import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
 
 import java.net.InetSocketAddress;
+import java.util.Collections;
 import java.util.Map;
-import java.util.Objects;
-import java.util.UUID;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.atomic.AtomicInteger;
+
+import static java.util.Objects.requireNonNull;
 
 /**
  * {@link L4LoadBalancer} holds base functions for a L4-Load Balancer.
@@ -50,9 +53,12 @@ public abstract class L4LoadBalancer {
     private static final Logger logger = LogManager.getLogger(L4LoadBalancer.class);
 
     public static final String DEFAULT = "DEFAULT";
-    private final String ID = UUID.randomUUID().toString();
 
     private static final AtomicInteger COUNTER = new AtomicInteger(0);
+
+    private final String loadBalancerId = TsidCreator.getTsid().toString();
+    private final ConnectionTracker connectionTracker = new ConnectionTracker();
+
     private String name = "L4LoadBalancer#" + COUNTER.incrementAndGet();
 
     private final EventStream eventStream;
@@ -65,8 +71,7 @@ public abstract class L4LoadBalancer {
     private final ByteBufAllocator byteBufAllocator;
     private final EventLoopFactory eventLoopFactory;
 
-    private L4FrontListenerStartupEvent l4FrontListenerStartupEvent;
-    private final ConnectionTracker connectionTracker = new ConnectionTracker();
+    private L4FrontListenerStartupTask l4FrontListenerStartupEvent;
 
     /**
      * @param name                 Name of this Load Balancer
@@ -99,12 +104,12 @@ public abstract class L4LoadBalancer {
     }
 
     /**
-     * Load Balancer UUID
+     * Load Balancer ID
      *
-     * @return Returns the Load Balancer UUID
+     * @return Returns the Load Balancer ID
      */
     public String id() {
-        return ID;
+        return loadBalancerId;
     }
 
     /**
@@ -117,7 +122,7 @@ public abstract class L4LoadBalancer {
     /**
      * Start L4 Load Balancer
      */
-    public L4FrontListenerStartupEvent start() {
+    public L4FrontListenerStartupTask start() {
         try {
             logger.info("Trying to start L4FrontListener");
 
@@ -135,10 +140,10 @@ public abstract class L4LoadBalancer {
     /**
      * Stop L4 Load Balancer, and it's child operations and services.
      *
-     * @return {@link L4FrontListenerStopEvent} instance
+     * @return {@link L4FrontListenerStopTask} instance
      */
-    public L4FrontListenerStopEvent stop() {
-        L4FrontListenerStopEvent event = null;
+    public L4FrontListenerStopTask stop() {
+        L4FrontListenerStopTask event = null;
         try {
             logger.info("Trying to stop L4FrontListener");
 
@@ -156,10 +161,10 @@ public abstract class L4LoadBalancer {
     /**
      * Shutdown L4 Load Balancer
      *
-     * @return {@link L4FrontListenerShutdownEvent} instance
+     * @return {@link L4FrontListenerShutdownTask} instance
      */
-    public L4FrontListenerShutdownEvent shutdown() {
-        L4FrontListenerShutdownEvent event = null;
+    public L4FrontListenerShutdownTask shutdown() {
+        L4FrontListenerShutdownTask event = null;
         try {
             logger.info("Trying to shutdown L4FrontListener");
 
@@ -191,7 +196,7 @@ public abstract class L4LoadBalancer {
     /**
      * Get {@link Cluster} which is being Load Balanced for specific Hostname
      *
-     * @param hostname FQDN Hostname
+     * @param hostname FQDN to lookup for
      * @throws NullPointerException If {@link Cluster} is not found
      */
     @NonNull
@@ -199,10 +204,14 @@ public abstract class L4LoadBalancer {
         logger.debug("Looking up for Cluster with hostname: {}", hostname);
         try {
             Cluster cluster = clusterMap.get(hostname);
+
+            // If Cluster is not found, then lookup for DEFAULT Cluster
             if (cluster == null) {
+
+                // If DEFAULT Cluster is not found, then throw exception
                 cluster = clusterMap.get("DEFAULT");
                 if (cluster == null) {
-                    throw new NullPointerException("Cluster not found with Hostname: " + hostname);
+                    throw new NotFoundException("Cluster not found with Hostname: " + hostname);
                 }
             }
             return cluster;
@@ -213,17 +222,26 @@ public abstract class L4LoadBalancer {
     }
 
     /**
-     * Get all {@link Cluster}
+     * Get all {@link Cluster} instances linked with this Load Balancer
+     *
+     * @return Unmodifiable Map of {@link Cluster} instances
      */
     public Map<String, Cluster> clusters() {
-        return clusterMap;
+        return Collections.unmodifiableMap(clusterMap);
+    }
+
+    /**
+     * Remove all Clusters from Load Balancer
+     */
+    public void removeClusters() {
+        clusterMap.clear();
     }
 
     /**
      * Set the default {@link Cluster}
      */
     public void defaultCluster(Cluster cluster) {
-        mapCluster("DEFAULT", cluster);
+        mappedCluster("DEFAULT", cluster);
     }
 
     /**
@@ -239,9 +257,9 @@ public abstract class L4LoadBalancer {
      * @param hostname Fully qualified Hostname and Port if non-default port is used
      * @param cluster  {@link Cluster} to be mapped
      */
-    public void mapCluster(String hostname, Cluster cluster) {
-        Objects.requireNonNull(hostname, "Hostname");
-        Objects.requireNonNull(cluster, "Cluster");
+    public void mappedCluster(String hostname, Cluster cluster) {
+        requireNonNull(hostname, "Hostname");
+        requireNonNull(cluster, "Cluster");
 
         try {
             logger.info("Mapping Cluster: {} with Hostname: {} and EventStream: {}", cluster, hostname, eventStream);
@@ -261,23 +279,28 @@ public abstract class L4LoadBalancer {
      *
      * @param oldHostname Old Hostname
      * @param newHostname New Hostname
+     *
+     * @return Returns {@code true} if remapping was successful else {@code false}
      */
-    public void remapCluster(String oldHostname, String newHostname) {
-        Objects.requireNonNull(oldHostname, "OldHostname");
-        Objects.requireNonNull(newHostname, "NewHostname");
+    public boolean remapCluster(String oldHostname, String newHostname) {
+        requireNonNull(oldHostname, "OldHostname");
+        requireNonNull(newHostname, "NewHostname");
 
         try {
             logger.info("Remapping Cluster from Hostname: {} to Hostname: {}", oldHostname, newHostname);
 
             Cluster cluster = clusterMap.remove(oldHostname);
+
+            // If Cluster is not found, then return false
             if (cluster == null) {
-                throw new NullPointerException("Cluster not found with Hostname: " + oldHostname);
+                return false;
             }
 
             clusterMap.put(newHostname, cluster);
             logger.info("Successfully remapped Cluster: {}, from Hostname: {} to Hostname: {}", cluster, oldHostname, newHostname);
+            return true;
         } catch (Exception ex) {
-            logger.error("Failed to Remap Cluster", ex);
+            logger.error("Failed to Remap Cluster, oldHostname {}, newHostname {}", oldHostname, newHostname, ex);
             throw ex;
         }
     }
@@ -288,7 +311,7 @@ public abstract class L4LoadBalancer {
      * @param hostname Hostname of the Cluster
      * @return Returns {@link Boolean#TRUE} if removal was successful else {@link Boolean#FALSE}
      */
-    public boolean removeCluster(String hostname) {
+    public boolean removeClusters(String hostname) {
         boolean removed = false;
         try {
             Cluster cluster = clusterMap.remove(hostname);
@@ -357,6 +380,13 @@ public abstract class L4LoadBalancer {
     }
 
     /**
+     * Get the {@link L4FrontListenerStartupTask} instance
+     */
+    public L4FrontListenerStartupTask event() {
+        return l4FrontListenerStartupEvent;
+    }
+
+    /**
      * Convert Load Balancer data into {@link JsonObject}
      *
      * @return {@link JsonObject} Instance
@@ -369,13 +399,13 @@ public abstract class L4LoadBalancer {
             if (l4FrontListenerStartupEvent.isSuccess()) {
                 state = "Running";
             } else {
-                state = "Failed; " + l4FrontListenerStartupEvent.cause().getMessage();
+                state = "Failed; " + l4FrontListenerStartupEvent.taskError();
             }
         } else {
             state = "Pending";
         }
 
-        jsonObject.addProperty("ID", ID);
+        jsonObject.addProperty("ID", loadBalancerId);
         jsonObject.addProperty("Name", name);
         jsonObject.addProperty("Type", type());
         jsonObject.addProperty("State", state);

@@ -19,13 +19,13 @@ package com.shieldblaze.expressgateway.backend.strategy.l4;
 
 import com.shieldblaze.expressgateway.backend.Node;
 import com.shieldblaze.expressgateway.backend.State;
-import com.shieldblaze.expressgateway.backend.events.node.NodeEvent;
-import com.shieldblaze.expressgateway.backend.events.node.NodeOfflineEvent;
-import com.shieldblaze.expressgateway.backend.events.node.NodeRemovedEvent;
+import com.shieldblaze.expressgateway.backend.events.node.NodeOfflineTask;
+import com.shieldblaze.expressgateway.backend.events.node.NodeRemovedTask;
+import com.shieldblaze.expressgateway.backend.events.node.NodeTask;
 import com.shieldblaze.expressgateway.backend.exceptions.LoadBalanceException;
 import com.shieldblaze.expressgateway.backend.exceptions.NoNodeAvailableException;
 import com.shieldblaze.expressgateway.backend.loadbalance.SessionPersistence;
-import com.shieldblaze.expressgateway.concurrent.event.Event;
+import com.shieldblaze.expressgateway.concurrent.task.Task;
 
 import java.io.IOException;
 import java.net.InetSocketAddress;
@@ -78,9 +78,9 @@ public final class LeastConnection extends L4Balance {
     }
 
     @Override
-    public void accept(Event event) {
-        if (event instanceof NodeEvent nodeEvent) {
-            if (nodeEvent instanceof NodeOfflineEvent || nodeEvent instanceof NodeRemovedEvent) {
+    public void accept(Task task) {
+        if (task instanceof NodeTask nodeEvent) {
+            if (nodeEvent instanceof NodeOfflineTask || nodeEvent instanceof NodeRemovedTask) {
                 sessionPersistence.remove(nodeEvent.node());
             }
         }

@@ -18,81 +18,92 @@
 package com.shieldblaze.expressgateway.core.cluster;
 
 import com.shieldblaze.expressgateway.backend.Node;
+import com.shieldblaze.expressgateway.core.exceptions.NotFoundException;
+import com.shieldblaze.expressgateway.core.loadbalancer.L4LoadBalancer;
 
 import java.util.Map;
-import java.util.Objects;
 import java.util.concurrent.ConcurrentHashMap;
 
+import static com.shieldblaze.expressgateway.common.utils.ObjectUtils.nonNullObject;
+
 /**
- * This class holds all information about all load balancers.
+ * {@link CoreContext} holds all the {@link L4LoadBalancer} instances
  */
 public final class CoreContext {
 
     /**
-     * Mapping of Load Balancer ID with {@link LoadBalancerContext}
+     * Mapping of Load Balancer ID with {@link L4LoadBalancer}
      */
-    private static final Map<String, LoadBalancerContext> REGISTRY = new ConcurrentHashMap<>();
+    private static final Map<String, L4LoadBalancer> REGISTRY = new ConcurrentHashMap<>();
 
     /**
-     * Get mapped {@link LoadBalancerContext} using Load Balancer ID
+     * Get mapped {@link L4LoadBalancer} using Load Balancer ID
      *
      * @param id Load Balancer ID
-     * @return {@link LoadBalancerContext} Instance
-     * @throws NullPointerException If {@link LoadBalancerContext} is not found with the ID
+     * @return {@link L4LoadBalancer} Instance
+     * @throws NotFoundException    If {@link L4LoadBalancer} is not found with the ID
+     * @throws NullPointerException If {@code id} is {@code null}
      */
-    public static LoadBalancerContext get(String id) {
-        Objects.requireNonNull(id, "ID cannot be 'null'");
+    public static L4LoadBalancer getContext(String id) {
+        nonNullObject(id, "ID");
 
-        LoadBalancerContext property = REGISTRY.get(id);
-        Objects.requireNonNull(property, "Load Balancer was not found with the ID: " + id);
+        L4LoadBalancer property = REGISTRY.get(id);
+
+        if (property == null) {
+            throw new NotFoundException("Load Balancer was not found with the ID: " + id);
+        }
 
         return property;
     }
 
     /**
-     * Add mapping to {@link LoadBalancerContext} using Load Balancer ID
+     * Add mapping to {@link L4LoadBalancer} using Load Balancer ID
      *
-     * @param id       Load Balancer ID
-     * @param context {@link LoadBalancerContext} Instance
-     * @throws NullPointerException If {@code id} or {@link LoadBalancerContext} is 'null'
+     * @param id      Load Balancer ID
+     * @param context {@link L4LoadBalancer} Instance
+     * @throws NullPointerException If {@code id} or {@link L4LoadBalancer} is 'null'
      */
-    public static void add(String id, LoadBalancerContext context) {
-        Objects.requireNonNull(id, "ID cannot be 'null'");
-        Objects.requireNonNull(context, "Property cannot be 'null'");
+    public static void add(String id, L4LoadBalancer context) {
+        nonNullObject(id, "ID");
+        nonNullObject(context, "LoadBalancerContext");
+
+        if (REGISTRY.containsKey(id)) {
+            throw new IllegalArgumentException("Load Balancer already exists with the ID: " + id);
+        }
 
         REGISTRY.put(id, context);
     }
 
     /**
-     * Remove mapping of {@link LoadBalancerContext} using Load Balancer ID
+     * Remove mapping of {@link L4LoadBalancer} using Load Balancer ID
      *
      * @param id Load Balancer ID
-     * @return {@link LoadBalancerContext} Instance is successfully removed else {@code null}
+     * @return {@link L4LoadBalancer} Instance is successfully removed else {@code null}
      */
-    public static LoadBalancerContext remove(String id) {
-        Objects.requireNonNull(id, "ID cannot be 'null'");
+    public static L4LoadBalancer remove(String id) {
+        nonNullObject(id, "ID");
         return REGISTRY.remove(id);
     }
 
     /**
-     * Get total connections across all load balancers.
+     * Get total active connections across all load balancers.
      */
     public int totalActiveConnections() {
         return REGISTRY.values()
                 .stream()
-                .mapToInt(loadBalancerProperty -> loadBalancerProperty.l4LoadBalancer()
+                .mapToInt(L4LoadBalancer -> L4LoadBalancer
                         .connectionTracker()
                         .connections())
                 .sum();
     }
 
     /**
-     * Get total connections load across all load balancers
+     * Get the total connections load across all load balancers
      */
     public long totalConnections() {
-         return REGISTRY.values()
+        return REGISTRY.values()
                 .stream()
-                .mapToLong(value -> value.l4LoadBalancer()
+                .mapToLong(value -> value
                         .clusters()
                         .values()
                         .stream()

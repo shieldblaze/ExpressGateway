@@ -73,14 +73,14 @@ class HealthCheckServiceTest {
 
     @Test
     void healthCheckTest() throws Exception {
-        HealthCheckTemplate healthCheckTemplate = new HealthCheckTemplate(
-                HealthCheckTemplate.Protocol.TCP,
-                "127.0.0.1",
-                9000,
-                "",
-                1,
-                10
-        );
+        HealthCheckTemplate healthCheckTemplate = HealthCheckTemplate.builder()
+                .protocol(HealthCheckTemplate.Protocol.TCP)
+                .host("127.0.0.1")
+                .port(9000)
+                .path("")
+                .timeout(1)
+                .samples(10)
+                .build();
 
         Cluster cluster = ClusterBuilder.newBuilder()
                 .withLoadBalance(new RoundRobin(NOOPSessionPersistence.INSTANCE))

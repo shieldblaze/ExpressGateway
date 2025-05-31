@@ -19,16 +19,16 @@ package com.shieldblaze.expressgateway.backend.strategy.l4;
 
 import com.shieldblaze.expressgateway.backend.Node;
 import com.shieldblaze.expressgateway.backend.State;
-import com.shieldblaze.expressgateway.backend.events.node.NodeAddedEvent;
-import com.shieldblaze.expressgateway.backend.events.node.NodeEvent;
-import com.shieldblaze.expressgateway.backend.events.node.NodeIdleEvent;
-import com.shieldblaze.expressgateway.backend.events.node.NodeOfflineEvent;
-import com.shieldblaze.expressgateway.backend.events.node.NodeOnlineEvent;
-import com.shieldblaze.expressgateway.backend.events.node.NodeRemovedEvent;
+import com.shieldblaze.expressgateway.backend.events.node.NodeAddedTask;
+import com.shieldblaze.expressgateway.backend.events.node.NodeOnlineTask;
+import com.shieldblaze.expressgateway.backend.events.node.NodeRemovedTask;
+import com.shieldblaze.expressgateway.backend.events.node.NodeTask;
+import com.shieldblaze.expressgateway.backend.events.node.NodeIdleTask;
+import com.shieldblaze.expressgateway.backend.events.node.NodeOfflineTask;
 import com.shieldblaze.expressgateway.backend.exceptions.LoadBalanceException;
 import com.shieldblaze.expressgateway.backend.loadbalance.SessionPersistence;
 import com.shieldblaze.expressgateway.common.algo.roundrobin.RoundRobinIndexGenerator;
-import com.shieldblaze.expressgateway.concurrent.event.Event;
+import com.shieldblaze.expressgateway.concurrent.task.Task;
 
 import java.io.IOException;
 import java.net.InetSocketAddress;
@@ -77,12 +77,12 @@ public final class RoundRobin extends L4Balance {
     }
 
     @Override
-    public void accept(Event event) {
-        if (event instanceof NodeEvent nodeEvent) {
-            if (nodeEvent instanceof NodeOfflineEvent || nodeEvent instanceof NodeRemovedEvent || nodeEvent instanceof NodeIdleEvent) {
+    public void accept(Task task) {
+        if (task instanceof NodeTask nodeEvent) {
+            if (nodeEvent instanceof NodeOfflineTask || nodeEvent instanceof NodeRemovedTask || nodeEvent instanceof NodeIdleTask) {
                 sessionPersistence.remove(nodeEvent.node());
                 roundRobinIndexGenerator.decMaxIndex();
-            } else if (nodeEvent instanceof NodeOnlineEvent || nodeEvent instanceof NodeAddedEvent) {
+            } else if (nodeEvent instanceof NodeOnlineTask || nodeEvent instanceof NodeAddedTask) {
                 roundRobinIndexGenerator.incMaxIndex();
             }
         }

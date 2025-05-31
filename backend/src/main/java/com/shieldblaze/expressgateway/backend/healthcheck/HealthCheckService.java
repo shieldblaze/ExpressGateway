@@ -18,11 +18,15 @@
 package com.shieldblaze.expressgateway.backend.healthcheck;
 
 import com.shieldblaze.expressgateway.backend.Node;
+import com.shieldblaze.expressgateway.backend.exceptions.NodeNotFoundException;
+import com.shieldblaze.expressgateway.backend.exceptions.StacklessException;
 import com.shieldblaze.expressgateway.common.annotation.NonNull;
 import com.shieldblaze.expressgateway.concurrent.eventstream.EventStream;
+import com.shieldblaze.expressgateway.concurrent.task.SyncTask;
 import com.shieldblaze.expressgateway.configuration.healthcheck.HealthCheckConfiguration;
 import com.shieldblaze.expressgateway.healthcheck.Health;
 import com.shieldblaze.expressgateway.healthcheck.HealthCheck;
+import lombok.ToString;
 
 import java.io.Closeable;
 import java.util.Map;
@@ -32,6 +36,8 @@ import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.ScheduledFuture;
 import java.util.concurrent.TimeUnit;
 
+import static com.shieldblaze.expressgateway.common.utils.ObjectUtils.nonNull;
+
 /**
  * <p> {@link HealthCheckService} performs {@link HealthCheck} operation to
  * check {@link Health} of {@link Node}. It uses {@link ScheduledExecutorService}
@@ -39,7 +45,8 @@ import java.util.concurrent.TimeUnit;
  *
  * <p> {@link #close()} must be called if this HealthCheckService is not going to be used. </p>
  */
-public final class HealthCheckService implements Closeable {
+@ToString
+public final class HealthCheckService implements com.shieldblaze.expressgateway.backend.healthcheck.HealthCheck {
 
     private final Map<Node, ScheduledFuture<?>> nodeMap = new ConcurrentHashMap<>();
 
@@ -48,48 +55,36 @@ public final class HealthCheckService implements Closeable {
     private final ScheduledExecutorService executors;
 
     public HealthCheckService(HealthCheckConfiguration config, EventStream eventStream) {
-        this.config = config;
-        this.eventStream = eventStream;
+        this.config = nonNull(config, HealthCheckConfiguration.class);
+        this.eventStream = nonNull(eventStream, EventStream.class);
         executors = Executors.newScheduledThreadPool(config.workers());
     }
 
-    /**
-     * Add a new {@link Node} to the HealthCheckService.
-     *
-     * @throws IllegalArgumentException If HealthCheck is not enabled for this {@link Node}
-     */
     @NonNull
-    public void add(Node node) {
+    public SyncTask<Boolean> add(Node node) {
+        // Throw exception if HealthCheck is already enabled for this Node
         if (nodeMap.containsKey(node)) {
-            throw new IllegalArgumentException("HealthCheck is already enabled for this Node: " + node);
+           return SyncTask.of(new StacklessException("HealthCheck is already enabled for this Node: " + node));
         }
 
         nodeMap.put(node, executors.scheduleAtFixedRate(new HealthCheckRunner(node, eventStream), 0, config.timeInterval(), TimeUnit.SECONDS));
+        return SyncTask.of(true);
     }
 
     /**
-     * Remove a existing {@link Node} from the HealthCheckService.
+     * Remove an existing {@link Node} from the HealthCheckService.
      *
      * @throws NullPointerException If this node was not found.
      */
-    @NonNull
-    public void remove(Node node) {
-        ScheduledFuture<?> scheduledFuture = nodeMap.get(node);
-        if (scheduledFuture != null) {
-            scheduledFuture.cancel(true);
-        } else {
-            throw new NullPointerException("Node not found in HealthCheckService");
-        }
-    }
-
     @Override
-    public String toString() {
-        return "HealthCheckService{" +
-                "nodeMap=" + nodeMap +
-                ", config=" + config +
-                ", eventStream=" + eventStream +
-                ", executors=" + executors +
-                '}';
+    @NonNull
+    public SyncTask<Boolean> remove(Node node) {
+        ScheduledFuture<?> scheduledFuture = nodeMap.remove(node);
+        if (scheduledFuture == null) {
+            throw new NodeNotFoundException("HealthCheck is not enabled for this Node: " + node);
+        }
+        scheduledFuture.cancel(true);
+        return SyncTask.of(true);
     }
 
     /**

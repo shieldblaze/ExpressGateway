@@ -27,7 +27,7 @@ import com.shieldblaze.expressgateway.configuration.ConfigurationContext;
 import com.shieldblaze.expressgateway.configuration.tls.CertificateKeyPair;
 import com.shieldblaze.expressgateway.configuration.tls.TlsClientConfiguration;
 import com.shieldblaze.expressgateway.configuration.tls.TlsServerConfiguration;
-import com.shieldblaze.expressgateway.core.events.L4FrontListenerStartupEvent;
+import com.shieldblaze.expressgateway.core.events.L4FrontListenerStartupTask;
 import com.shieldblaze.expressgateway.protocol.http.loadbalancer.HTTPLoadBalancer;
 import com.shieldblaze.expressgateway.protocol.http.loadbalancer.HTTPLoadBalancerBuilder;
 
@@ -69,7 +69,7 @@ public class ReverseProxy {
                 .withSocketAddress(new InetSocketAddress(Hostname, 443))
                 .build();
 
-        L4FrontListenerStartupEvent l4FrontListenerStartupEvent = httpLoadBalancer.start();
+        L4FrontListenerStartupTask l4FrontListenerStartupEvent = httpLoadBalancer.start();
         l4FrontListenerStartupEvent.future().get();
     }
 }

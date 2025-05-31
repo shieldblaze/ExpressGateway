@@ -19,9 +19,9 @@ package com.shieldblaze.expressgateway.backend.healthcheck;
 
 import com.shieldblaze.expressgateway.backend.Node;
 import com.shieldblaze.expressgateway.backend.State;
-import com.shieldblaze.expressgateway.backend.events.node.NodeIdleEvent;
-import com.shieldblaze.expressgateway.backend.events.node.NodeOfflineEvent;
-import com.shieldblaze.expressgateway.backend.events.node.NodeOnlineEvent;
+import com.shieldblaze.expressgateway.backend.events.node.NodeIdleTask;
+import com.shieldblaze.expressgateway.backend.events.node.NodeOfflineTask;
+import com.shieldblaze.expressgateway.backend.events.node.NodeOnlineTask;
 import com.shieldblaze.expressgateway.common.annotation.NonNull;
 import com.shieldblaze.expressgateway.concurrent.eventstream.EventStream;
 import com.shieldblaze.expressgateway.healthcheck.Health;
@@ -59,14 +59,14 @@ final class HealthCheckRunner implements Runnable {
          */
         if (node.health() == Health.GOOD && oldHealth != Health.GOOD) {
             node.state(State.ONLINE);
-            eventStream.publish(new NodeOnlineEvent(node));
+            eventStream.publish(new NodeOnlineTask(node));
         } else if (node.health() == Health.MEDIUM && oldHealth != Health.MEDIUM) {
             node.state(State.IDLE);
-            eventStream.publish(new NodeIdleEvent(node));
+            eventStream.publish(new NodeIdleTask(node));
         } else if (node.health() == Health.BAD && oldHealth != Health.BAD) {
             node.state(State.OFFLINE);
             node.drainConnections();
-            eventStream.publish(new NodeOfflineEvent(node));
+            eventStream.publish(new NodeOfflineTask(node));
         }
     }
 }

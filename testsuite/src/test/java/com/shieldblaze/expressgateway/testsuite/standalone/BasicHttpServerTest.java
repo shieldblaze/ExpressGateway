@@ -24,8 +24,6 @@ import com.shieldblaze.expressgateway.backend.strategy.l7.http.HTTPRoundRobin;
 import com.shieldblaze.expressgateway.backend.strategy.l7.http.sessionpersistence.NOOPSessionPersistence;
 import com.shieldblaze.expressgateway.common.utils.AvailablePortUtil;
 import com.shieldblaze.expressgateway.core.cluster.CoreContext;
-import com.shieldblaze.expressgateway.core.cluster.LoadBalancerContext;
-import com.shieldblaze.expressgateway.core.events.L4FrontListenerStartupEvent;
 import com.shieldblaze.expressgateway.protocol.http.loadbalancer.HTTPLoadBalancer;
 import com.shieldblaze.expressgateway.protocol.http.loadbalancer.HTTPLoadBalancerBuilder;
 import com.shieldblaze.expressgateway.protocol.tcp.TCPListener;
@@ -101,8 +99,8 @@ public class BasicHttpServerTest {
                 .withL4FrontListener(new TCPListener())
                 .build();
 
-        L4FrontListenerStartupEvent event = httpLoadBalancer.start();
-        CoreContext.add("default-http", new LoadBalancerContext(httpLoadBalancer, event));
+        httpLoadBalancer.start();
+        CoreContext.add("default-http", httpLoadBalancer);
     }
 
     @Order(2)
@@ -112,7 +110,7 @@ public class BasicHttpServerTest {
                 .withLoadBalance(new HTTPRoundRobin(NOOPSessionPersistence.INSTANCE))
                 .build();
 
-        CoreContext.get("default-http").l4LoadBalancer().defaultCluster(tcpCluster);
+        CoreContext.getContext("default-http").defaultCluster(tcpCluster);
     }
 
     @Order(3)

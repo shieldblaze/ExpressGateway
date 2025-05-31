@@ -19,9 +19,9 @@
 package com.shieldblaze.expressgateway.core.cluster;
 
 import com.shieldblaze.expressgateway.core.L4FrontListener;
-import com.shieldblaze.expressgateway.core.events.L4FrontListenerShutdownEvent;
-import com.shieldblaze.expressgateway.core.events.L4FrontListenerStartupEvent;
-import com.shieldblaze.expressgateway.core.events.L4FrontListenerStopEvent;
+import com.shieldblaze.expressgateway.core.events.L4FrontListenerShutdownTask;
+import com.shieldblaze.expressgateway.core.events.L4FrontListenerStartupTask;
+import com.shieldblaze.expressgateway.core.events.L4FrontListenerStopTask;
 import com.shieldblaze.expressgateway.core.loadbalancer.L4LoadBalancer;
 import com.shieldblaze.expressgateway.core.loadbalancer.L4LoadBalancerBuilder;
 import org.junit.jupiter.api.Test;
@@ -39,28 +39,28 @@ class CoreContextTest {
                 .withBindAddress(new InetSocketAddress("127.0.0.1", 9110))
                 .build();
 
-        L4FrontListenerStartupEvent l4FrontListenerStartupEvent = l4LoadBalancer.start();
+        L4FrontListenerStartupTask l4FrontListenerStartupEvent = l4LoadBalancer.start();
 
-        CoreContext.add(l4LoadBalancer.id(), new LoadBalancerContext(l4LoadBalancer, l4FrontListenerStartupEvent));
-        assertEquals(l4FrontListenerStartupEvent, CoreContext.get(l4LoadBalancer.id()).modifyStartupEvent());
-        assertEquals(l4FrontListenerStartupEvent, CoreContext.remove(l4LoadBalancer.id()).modifyStartupEvent());
+        CoreContext.add(l4LoadBalancer.id(), l4LoadBalancer);
+        assertEquals(l4FrontListenerStartupEvent, CoreContext.getContext(l4LoadBalancer.id()).event());
+        assertEquals(l4FrontListenerStartupEvent, CoreContext.remove(l4LoadBalancer.id()).event());
     }
 
     private static final class DummyL4FrontListener extends L4FrontListener {
 
         @Override
-        public L4FrontListenerStartupEvent start() {
-            return new L4FrontListenerStartupEvent();
+        public L4FrontListenerStartupTask start() {
+            return new L4FrontListenerStartupTask();
         }
 
         @Override
-        public L4FrontListenerStopEvent stop() {
-            return new L4FrontListenerStopEvent();
+        public L4FrontListenerStopTask stop() {
+            return new L4FrontListenerStopTask();
         }
 
         @Override
-        public L4FrontListenerShutdownEvent shutdown() {
-            return new L4FrontListenerShutdownEvent();
+        public L4FrontListenerShutdownTask shutdown() {
+            return new L4FrontListenerShutdownTask();
         }
     }
 }

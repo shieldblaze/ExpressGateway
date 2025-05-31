@@ -70,7 +70,7 @@ public class WebSocketEchoTest extends WebSocketListener {
                 .withLoadBalance(new HTTPRoundRobin(NOOPSessionPersistence.INSTANCE))
                 .build();
 
-        httpLoadBalancer.mapCluster("localhost:9110", cluster);
+        httpLoadBalancer.mappedCluster("localhost:9110", cluster);
 
         NodeBuilder.newBuilder()
                 .withCluster(cluster)

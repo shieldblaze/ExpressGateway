@@ -18,10 +18,10 @@
 package com.shieldblaze.expressgateway.backend.cluster;
 
 import com.shieldblaze.expressgateway.backend.Node;
-import com.shieldblaze.expressgateway.backend.events.node.NodeAddedEvent;
-import com.shieldblaze.expressgateway.backend.events.node.NodeEvent;
-import com.shieldblaze.expressgateway.backend.events.node.NodeOnlineEvent;
-import com.shieldblaze.expressgateway.concurrent.event.Event;
+import com.shieldblaze.expressgateway.backend.events.node.NodeAddedTask;
+import com.shieldblaze.expressgateway.backend.events.node.NodeOnlineTask;
+import com.shieldblaze.expressgateway.backend.events.node.NodeTask;
+import com.shieldblaze.expressgateway.concurrent.task.Task;
 import com.shieldblaze.expressgateway.concurrent.eventstream.EventListener;
 
 import java.util.List;
@@ -32,10 +32,10 @@ class ClusterOnlineNodesWorker implements EventListener<Void> {
     protected final List<Node> onlineNodes = new CopyOnWriteArrayList<>();
 
     @Override
-    public void accept(Event<Void> event) {
-        if (event instanceof NodeEvent nodeEvent) {
+    public void accept(Task<Void> task) {
+        if (task instanceof NodeTask nodeEvent) {
 
-            if (nodeEvent instanceof NodeOnlineEvent || nodeEvent instanceof NodeAddedEvent) {
+            if (nodeEvent instanceof NodeOnlineTask || nodeEvent instanceof NodeAddedTask) {
                 onlineNodes.add(nodeEvent.node());
             } else {
                 onlineNodes.remove(nodeEvent.node());

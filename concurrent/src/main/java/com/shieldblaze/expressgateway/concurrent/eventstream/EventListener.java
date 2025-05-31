@@ -17,11 +17,11 @@
  */
 package com.shieldblaze.expressgateway.concurrent.eventstream;
 
-import com.shieldblaze.expressgateway.concurrent.event.Event;
+import com.shieldblaze.expressgateway.concurrent.task.Task;
 
 /**
  * Interface to implement to become a subscriber and accept
- * events using {@link #accept(Event)}.
+ * events using {@link #accept(Task)}.
  */
 @FunctionalInterface
 public interface EventListener<T> {
@@ -29,7 +29,7 @@ public interface EventListener<T> {
     /**
      * This method is called when an event is published.
      *
-     * @param event Event that was published.
+     * @param task Event that was published.
      */
-    void accept(Event<T> event);
+    void accept(Task<T> task);
 }

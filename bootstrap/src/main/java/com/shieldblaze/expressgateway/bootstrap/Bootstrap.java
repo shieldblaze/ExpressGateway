@@ -21,7 +21,6 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.shieldblaze.expressgateway.common.ExpressGateway;
 import com.shieldblaze.expressgateway.common.zookeeper.CertificateManager;
 import com.shieldblaze.expressgateway.common.zookeeper.Curator;
-import com.shieldblaze.expressgateway.restapi.RestApi;
 import com.shieldblaze.expressgateway.servicediscovery.client.ServiceDiscoveryClient;
 import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
@@ -98,7 +97,7 @@ public final class Bootstrap {
                 }));
             }
 
-            RestApi.start();
+//            RestApi.start();
         } catch (Exception ex) {
             logger.error("Failed to Bootstrap", ex);
             throw ex;
@@ -107,6 +106,6 @@ public final class Bootstrap {
 
     public static void shutdown() {
         // Shutdown the Rest API Server
-        RestApi.stop();
+//        RestApi.stop();
     }
 }

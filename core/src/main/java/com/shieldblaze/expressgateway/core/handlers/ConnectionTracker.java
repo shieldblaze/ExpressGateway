@@ -24,7 +24,7 @@ import io.netty.channel.ChannelInboundHandlerAdapter;
 import java.util.concurrent.atomic.AtomicInteger;
 
 /**
- * {@link ConnectionTracker} tracks number of active connections.
+ * {@link ConnectionTracker} is a special handler that tracks number of active connections.
  */
 @ChannelHandler.Sharable
 public final class ConnectionTracker extends ChannelInboundHandlerAdapter {
@@ -43,16 +43,22 @@ public final class ConnectionTracker extends ChannelInboundHandlerAdapter {
         super.channelInactive(ctx);
     }
 
+    /**
+     * Increment in the number of active connections
+     */
     public void increment() {
         connections.incrementAndGet();
     }
 
+    /**
+     * Decrement in the number of active connections
+     */
     public void decrement() {
         connections.decrementAndGet();
     }
 
     /**
-     * Get number of active connections
+     * Get the number of active connections
      */
     public int connections() {
         return connections.get();

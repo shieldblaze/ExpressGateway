@@ -21,9 +21,10 @@ import com.google.gson.JsonArray;
 import com.google.gson.JsonObject;
 import com.shieldblaze.expressgateway.backend.Connection;
 import com.shieldblaze.expressgateway.backend.Node;
-import com.shieldblaze.expressgateway.backend.events.node.NodeAddedEvent;
-import com.shieldblaze.expressgateway.backend.events.node.NodeRemovedEvent;
+import com.shieldblaze.expressgateway.backend.events.node.NodeAddedTask;
+import com.shieldblaze.expressgateway.backend.events.node.NodeRemovedTask;
 import com.shieldblaze.expressgateway.backend.exceptions.LoadBalanceException;
+import com.shieldblaze.expressgateway.backend.exceptions.NodeNotFoundException;
 import com.shieldblaze.expressgateway.backend.healthcheck.HealthCheckService;
 import com.shieldblaze.expressgateway.backend.healthcheck.HealthCheckTemplate;
 import com.shieldblaze.expressgateway.backend.loadbalance.LoadBalance;
@@ -37,8 +38,7 @@ import com.shieldblaze.expressgateway.healthcheck.HealthCheck;
 import com.shieldblaze.expressgateway.healthcheck.l4.TCPHealthCheck;
 import com.shieldblaze.expressgateway.healthcheck.l4.UDPHealthCheck;
 import com.shieldblaze.expressgateway.healthcheck.l7.HTTPHealthCheck;
-import org.apache.logging.log4j.LogManager;
-import org.apache.logging.log4j.Logger;
+import lombok.extern.log4j.Log4j2;
 
 import java.net.InetAddress;
 import java.net.InetSocketAddress;
@@ -53,8 +53,8 @@ import java.util.concurrent.CopyOnWriteArrayList;
  *
  * <ul>
  *
- * <li> {@linkplain Cluster} uses {@link EventStream} to publish {@link NodeAddedEvent} and
- * {@link NodeRemovedEvent} events on addition and removal of server {@link Node}.</li>
+ * <li> {@linkplain Cluster} uses {@link EventStream} to publish {@link NodeAddedTask} and
+ * {@link NodeRemovedTask} events on addition and removal of server {@link Node}.</li>
  *
  * <li> {@linkplain Cluster} uses {@linkplain LoadBalance} to load-balance when called
  * {@link #nextNode(Request)}. </li>
@@ -68,9 +68,8 @@ import java.util.concurrent.CopyOnWriteArrayList;
  * it is successfully built and started. Once attached, {@linkplain Node} can be added and all other
  * functionality can be performed seamlessly. </p>
  */
+@Log4j2
 public class Cluster extends ClusterOnlineNodesWorker {
-
-    private static final Logger logger = LogManager.getLogger(Cluster.class);
 
     private final List<Node> nodes = new CopyOnWriteArrayList<>();
     private EventStream eventStream = new EventStream();
@@ -92,24 +91,22 @@ public class Cluster extends ClusterOnlineNodesWorker {
     @NonNull
     public boolean addNode(Node node) throws Exception {
         try {
-            logger.info("Adding Node: {} into Cluster: {}", node, this);
+            log.info("Adding Node: {} into Cluster: {}", node, this);
 
-            for (Node n : nodes) {
-                // If Node already exists then don't add
-                if (node.equals(n)) {
-                    logger.info("Duplicate node detected: {}", n);
-                    return false;
-                }
+            boolean nodeExists = nodes.stream().anyMatch(n -> node.equals(n));
+            if (nodeExists) {
+                log.info("Duplicate node detected: {}", node);
+                return false;
             }
 
-            configureHealthCheckForNode(node); // Add HealthCheck if required
-            nodes.add(node);                   // Add this Node into the list
-            eventStream.publish(new NodeAddedEvent(node)); // Publish NodeAddedEvent event
+            configureHealthCheckForNode(node);
+            nodes.add(node);
+            eventStream.publish(new NodeAddedTask(node));
 
-            logger.info("Successfully added Node: {} into Cluster: {}", node, this);
+            log.info("Successfully added Node: {} into Cluster: {}", node, this);
             return true;
         } catch (Exception ex) {
-            logger.error("Failed to add Node: {} into Cluster: {}", node, this);
+            log.error("Failed to add Node: {} into Cluster: {}", node, this);
             throw ex;
         }
     }
@@ -124,27 +121,22 @@ public class Cluster extends ClusterOnlineNodesWorker {
     @InternalCall
     @NonNull
     public boolean removeNode(Node node) {
-        try {
-            logger.info("Removing Node: {} from Cluster: {}", node, this);
+        log.info("Removing Node: {} from Cluster: {}", node, this);
 
-            // If Node could not be removed then it was not found
-            if (!nodes.remove(node)) {
-                throw new NullPointerException("Node not found in Cluster");
-            }
-
-            // If Health check service is available then remove the node from that too.
-            if (healthCheckService != null) {
-                healthCheckService.remove(node);
-            }
-
-            eventStream.publish(new NodeRemovedEvent(node)); // Publish NodeRemovedEvent event
-
-            logger.info("Successfully removed Node: {} from Cluster: {}", node, this);
-            return true;
-        } catch (Exception ex) {
-            logger.error("Failed to remove Node:{} from Cluster: {}", node, this);
-            throw ex;
+        // If Node could not be removed then it was not found
+        if (!nodes.remove(node)) {
+            throw new NodeNotFoundException("Node not found in Cluster: " + this);
         }
+
+        // If Health check service is available then remove the node from that too.
+        if (healthCheckService != null) {
+            healthCheckService.remove(node);
+        }
+
+        eventStream.publish(new NodeRemovedTask(node)); // Publish NodeRemovedEvent event
+
+        log.info("Successfully removed Node: {} from Cluster: {}", node, this);
+        return true;
     }
 
     /**
@@ -152,16 +144,13 @@ public class Cluster extends ClusterOnlineNodesWorker {
      *
      * @param id {@link Node} ID
      * @return {@link Node} Instance
-     * @throws NullPointerException If {@link Node} is not found
+     * @throws NodeNotFoundException If {@link Node} is not found
      */
     public Node get(String id) {
-        for (Node node : nodes) {
-            if (node.id().equalsIgnoreCase(id)) {
-                return node;
-            }
-        }
-
-        throw new NullPointerException("Node not found with ID: " + id);
+        return nodes.stream()
+                .filter(node -> node.id().equalsIgnoreCase(id))
+                .findFirst()
+                .orElseThrow(() -> new NodeNotFoundException("Node not found with ID: " + id));
     }
 
     /**
@@ -206,15 +195,15 @@ public class Cluster extends ClusterOnlineNodesWorker {
     @NonNull
     public void useEventStream(EventStream eventStream) {
         try {
-            logger.info("Configuring Cluster: {} using Old EventStream: {} to use New EventStream: {}",
+            log.info("Configuring Cluster: {} using Old EventStream: {} to use New EventStream: {}",
                     this, this.eventStream, eventStream);
 
             eventStream.addSubscribersFrom(this.eventStream);
             this.eventStream = eventStream;
 
-            logger.info("Successfully configured Cluster: {} to use new EventStream: {}", this, eventStream);
+            log.info("Successfully configured Cluster: {} to use new EventStream: {}", this, eventStream);
         } catch (Exception ex) {
-            logger.error("Failed to configure cluster to use new EventStream", ex);
+            log.error("Failed to configure cluster to use new EventStream", ex);
             throw ex;
         }
     }
@@ -229,7 +218,7 @@ public class Cluster extends ClusterOnlineNodesWorker {
     @NonNull
     public void loadBalance(LoadBalance<?, ?, ?, ?> loadBalance) {
         try {
-            logger.info("Configuration Cluster: {} to use LoadBalance: {}", this, loadBalance);
+            log.info("Configuration Cluster: {} to use LoadBalance: {}", this, loadBalance);
 
             // If LoadBalance has changed then unsubscribe it from the old EventStream
             // because we will be firing events to new LoadBalance
@@ -241,9 +230,9 @@ public class Cluster extends ClusterOnlineNodesWorker {
             loadBalance.cluster(this);
             this.loadBalance = loadBalance;
 
-            logger.info("Successfully configured Cluster: {} to use new LoadBalance: {}", this, loadBalance);
+            log.info("Successfully configured Cluster: {} to use new LoadBalance: {}", this, loadBalance);
         } catch (Exception ex) {
-            logger.error("Failed to configure cluster to use new LoadBalance", ex);
+            log.error("Failed to configure cluster to use new LoadBalance", ex);
             throw ex;
         }
     }
@@ -268,43 +257,39 @@ public class Cluster extends ClusterOnlineNodesWorker {
     @NonNull
     private void configureHealthCheckForNode(Node node) throws Exception {
         try {
-            logger.info("Configuring Node: {} in Cluster: {} to use HealthCheckService", node, this);
+            log.info("Configuring Node: {} in Cluster: {} to use HealthCheckService", node, this);
 
             if (healthCheckTemplate() == null) {
-                logger.info("HealthCheckService is not enabled");
+                log.info("HealthCheckService is not enabled");
                 return;
             }
 
-            HealthCheck healthCheck;
-            switch (healthCheckTemplate().protocol()) {
+            HealthCheck healthCheck = switch (healthCheckTemplate().protocol()) {
                 case TCP ->
-                        healthCheck = new TCPHealthCheck(new InetSocketAddress(healthCheckTemplate.host(), healthCheckTemplate.port()), Duration.ofSeconds(healthCheckTemplate.timeout()), healthCheckTemplate.samples());
+                        new TCPHealthCheck(new InetSocketAddress(healthCheckTemplate.host(), healthCheckTemplate.port()), Duration.ofSeconds(healthCheckTemplate.timeout()), healthCheckTemplate.samples());
                 case UDP ->
-                        healthCheck = new UDPHealthCheck(new InetSocketAddress(healthCheckTemplate.host(), healthCheckTemplate.port()), Duration.ofSeconds(healthCheckTemplate.timeout()), healthCheckTemplate.samples());
+                        new UDPHealthCheck(new InetSocketAddress(healthCheckTemplate.host(), healthCheckTemplate.port()), Duration.ofSeconds(healthCheckTemplate.timeout()), healthCheckTemplate.samples());
                 case HTTP, HTTPS -> {
-                    String host;
-                    if (healthCheckTemplate.protocol() == HealthCheckTemplate.Protocol.HTTP) {
-                        host = "http://" + InetAddress.getByName(healthCheckTemplate.host()).getHostAddress() + ':' + healthCheckTemplate().port();
-                    } else {
-                        host = "https://" + InetAddress.getByName(healthCheckTemplate.host()).getHostAddress() + ':' + healthCheckTemplate().port();
-                    }
-                    healthCheck = new HTTPHealthCheck(URI.create(host), Duration.ofSeconds(healthCheckTemplate.timeout()), healthCheckTemplate.samples());
+                    String protocol = healthCheckTemplate.protocol() == HealthCheckTemplate.Protocol.HTTP ? "http" : "https";
+                    String host = protocol + "://" + InetAddress.getByName(healthCheckTemplate.host()).getHostAddress() + ':' + healthCheckTemplate.port();
+                    yield new HTTPHealthCheck(URI.create(host), Duration.ofSeconds(healthCheckTemplate.timeout()), healthCheckTemplate.samples());
                 }
-                default -> {
-                    Error error = new Error("Unknown HealthCheck Protocol: " + healthCheckTemplate.protocol());
-                    logger.fatal("Failed to select HealthCheck protocol: " + healthCheckTemplate.protocol());
-                    throw error;
-                }
+            };
+
+            if (healthCheck == null) {
+                log.error("Failed to create HealthCheck for Node: {} in Cluster: {}", node, this);
+                throw new NullPointerException("Failed to create HealthCheck for Node");
             }
-            logger.info("Selected HealthCheck: {} for Node: {}", healthCheck, node);
+
+            log.info("Selected HealthCheck: {} for Node: {}", healthCheck, node);
 
             // Associate HealthCheck with Node
             node.healthCheck(healthCheck);
             healthCheckService.add(node);
 
-            logger.info("Successfully configured HealthCheck for Node: {} in Cluster: {}", node, this);
+            log.info("Successfully configured HealthCheck for Node: {} in Cluster: {}", node, this);
         } catch (Exception ex) {
-            logger.fatal("Failed to configure Node to use HealthCheckService", ex);
+            log.fatal("Failed to configure Node to use HealthCheckService", ex);
             throw ex;
         }
     }
@@ -317,25 +302,25 @@ public class Cluster extends ClusterOnlineNodesWorker {
     @InternalCall(index = 3)
     public void close() {
         try {
-            logger.info("Shutting down Cluster: {} and removing all Nodes: {}", this, nodes);
+            log.info("Shutting down Cluster: {} and removing all Nodes: {}", this, nodes);
 
             nodes.forEach(node -> {
                 try {
                     // Just close the node because node will take
                     // care of removing itself from this Cluster.
                     node.close();
-                    eventStream.publish(new NodeRemovedEvent(node));
+                    eventStream.publish(new NodeRemovedTask(node));
 
-                    logger.info("Closed Node: {} from Cluster: {}", node, this);
+                    log.info("Closed Node: {} from Cluster: {}", node, this);
                 } catch (Exception ex) {
-                    logger.error("Failed to close Node: {} from Cluster: {}", node, this);
+                    log.error("Failed to close Node: {} from Cluster: {}", node, this);
                 }
             });
             nodes.clear();
 
-            logger.info("Successfully shutdown Cluster: {}", this);
+            log.info("Successfully shutdown Cluster: {}", this);
         } catch (Exception ex) {
-            logger.error("Failed to shutdown Cluster", ex);
+            log.error("Failed to shutdown Cluster", ex);
             throw ex;
         }
     }
