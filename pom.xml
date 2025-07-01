@@ -280,7 +280,7 @@ along with ShieldBlaze ExpressGateway.  If not, see <https://www.gnu.org/license
         <dependency>
             <groupId>org.apache.zookeeper</groupId>
             <artifactId>zookeeper</artifactId>
-            <version>3.9.2</version>
+            <version>3.9.3</version>
             <exclusions>
                 <exclusion>
                     <groupId>ch.qos.logback</groupId>
