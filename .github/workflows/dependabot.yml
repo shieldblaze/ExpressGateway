@@ -1,0 +1,20 @@
+name: "Dependabot periodic run"
+
+on:
+  schedule:
+    # every day at midnight UTC; adjust as needed
+    - cron: '0 0 * * *'
+  workflow_dispatch: {}    # allows manual triggering
+
+jobs:
+  notify:
+    name: Notify about Dependabot schedule
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repo
+        uses: actions/checkout@v6
+      - name: Log message
+        run: |
+          echo "This workflow is intended to accompany the dependabot config."
+          echo "Dependabot itself is managed by the service using .github/dependabot.yml."
+          echo "It will run daily and can also be triggered manually via the 'Run workflow' button."

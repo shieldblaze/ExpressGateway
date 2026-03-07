@@ -36,6 +36,3 @@ jobs:
         
       - name: Run Tests
         run: ./mvnw -B -ntp clean test
-        
-      - name: Upload Code Coverage
-        run: bash <(curl -s https://codecov.io/bash)

@@ -1,0 +1,25 @@
+version: 2
+
+# Dependabot configuration: checks for dependency updates on a daily basis.
+# You can adjust the package-ecosystem entries or add more as needed (e.g. "github-actions").
+# See https://docs.github.com/en/code-security/supply-chain-security/keeping-your-dependencies-updated-automatically/configuration-options-for-dependency-updates
+updates:
+  - package-ecosystem: "maven"
+    directory: "/"
+    schedule:
+      interval: "daily"
+    open-pull-requests-limit: 1
+    groups:
+      dependencies:
+        patterns:
+          - "*"
+
+  - package-ecosystem: "github-actions"
+    directory: "/"
+    schedule:
+      interval: "daily"
+    open-pull-requests-limit: 1
+    groups:
+      actions:
+        patterns:
+          - "*"
