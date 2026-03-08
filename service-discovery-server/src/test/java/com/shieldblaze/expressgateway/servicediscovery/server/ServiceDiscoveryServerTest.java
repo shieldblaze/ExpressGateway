@@ -28,11 +28,11 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.TestMethodOrder;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
-import org.springframework.boot.test.web.client.TestRestTemplate;
 import org.springframework.boot.test.web.server.LocalServerPort;
 import org.springframework.http.HttpMethod;
 import org.springframework.http.RequestEntity;
 import org.springframework.http.ResponseEntity;
+import org.springframework.web.client.RestTemplate;
 
 import java.io.File;
 import java.io.IOException;
@@ -55,7 +55,7 @@ class ServiceDiscoveryServerTest {
         System.setProperty("config.file", absolutePath);
     }
 
-    private final TestRestTemplate restTemplate = new TestRestTemplate();
+    private final RestTemplate restTemplate = new RestTemplate();
 
     @LocalServerPort
     private int ServerPort;
@@ -89,7 +89,7 @@ class ServiceDiscoveryServerTest {
 
         ResponseEntity<String> response = restTemplate.exchange(request, String.class);
         assertThat(response.getBody()).isNotNull();
-        assertThat(response.getStatusCodeValue()).isEqualTo(200);
+        assertThat(response.getStatusCode().value()).isEqualTo(200);
     }
 
     @Order(3)
@@ -117,6 +117,6 @@ class ServiceDiscoveryServerTest {
 
         ResponseEntity<String> response = restTemplate.exchange(request, String.class);
         assertThat(response.getBody()).isNotNull();
-        assertThat(response.getStatusCodeValue()).isEqualTo(200);
+        assertThat(response.getStatusCode().value()).isEqualTo(200);
     }
 }

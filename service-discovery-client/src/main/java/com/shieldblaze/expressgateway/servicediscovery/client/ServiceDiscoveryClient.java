@@ -68,6 +68,7 @@ public final class ServiceDiscoveryClient {
                             false,
                             serviceDiscovery.hostnameVerification(),
                             serviceDiscovery.hostnameVerification(),
+                            false,
                             false
                     )};
 

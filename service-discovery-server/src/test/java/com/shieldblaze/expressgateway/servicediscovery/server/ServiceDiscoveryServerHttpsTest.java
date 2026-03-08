@@ -28,15 +28,21 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.TestMethodOrder;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
-import org.springframework.boot.test.web.client.TestRestTemplate;
 import org.springframework.boot.test.web.server.LocalServerPort;
 import org.springframework.http.HttpMethod;
 import org.springframework.http.RequestEntity;
 import org.springframework.http.ResponseEntity;
+import org.springframework.http.client.SimpleClientHttpRequestFactory;
+import org.springframework.web.client.RestTemplate;
 
+import javax.net.ssl.HttpsURLConnection;
+import javax.net.ssl.SSLContext;
+import javax.net.ssl.TrustManager;
+import javax.net.ssl.X509TrustManager;
 import java.io.File;
 import java.io.IOException;
 import java.net.URI;
+import java.security.cert.X509Certificate;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
@@ -55,7 +61,7 @@ class ServiceDiscoveryServerHttpsTest {
         System.setProperty("config.file", absolutePath);
     }
 
-    private final TestRestTemplate restTemplate = new TestRestTemplate(TestRestTemplate.HttpClientOption.SSL);
+    private final RestTemplate restTemplate = createTrustAllRestTemplate();
 
     @LocalServerPort
     private int ServerPort;
@@ -76,6 +82,25 @@ class ServiceDiscoveryServerHttpsTest {
         }
     }
 
+    private static RestTemplate createTrustAllRestTemplate() {
+        try {
+            TrustManager[] trustAllCerts = new TrustManager[]{
+                    new X509TrustManager() {
+                        public X509Certificate[] getAcceptedIssuers() { return null; }
+                        public void checkClientTrusted(X509Certificate[] certs, String authType) { }
+                        public void checkServerTrusted(X509Certificate[] certs, String authType) { }
+                    }
+            };
+            SSLContext sslContext = SSLContext.getInstance("TLS");
+            sslContext.init(null, trustAllCerts, new java.security.SecureRandom());
+            HttpsURLConnection.setDefaultSSLSocketFactory(sslContext.getSocketFactory());
+            HttpsURLConnection.setDefaultHostnameVerifier((hostname, session) -> true);
+            return new RestTemplate(new SimpleClientHttpRequestFactory());
+        } catch (Exception e) {
+            throw new RuntimeException(e);
+        }
+    }
+
     @Order(1)
     @Test
     public void loadHandlerTest() {
@@ -89,7 +114,7 @@ class ServiceDiscoveryServerHttpsTest {
 
         ResponseEntity<String> response = restTemplate.exchange(request, String.class);
         assertThat(response.getBody()).isNotNull();
-        assertThat(response.getStatusCodeValue()).isEqualTo(200);
+        assertThat(response.getStatusCode().value()).isEqualTo(200);
     }
 
     @Order(3)
@@ -117,6 +142,6 @@ class ServiceDiscoveryServerHttpsTest {
 
         ResponseEntity<String> response = restTemplate.exchange(request, String.class);
         assertThat(response.getBody()).isNotNull();
-        assertThat(response.getStatusCodeValue()).isEqualTo(200);
+        assertThat(response.getStatusCode().value()).isEqualTo(200);
     }
 }

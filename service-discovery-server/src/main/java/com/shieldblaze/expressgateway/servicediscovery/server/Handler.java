@@ -69,7 +69,7 @@ public class Handler {
     }
 
     @GetMapping(value = "get", produces = MediaType.APPLICATION_JSON_VALUE)
-    public ResponseEntity<String> get(@RequestParam String id) throws Exception {
+    public ResponseEntity<String> get(@RequestParam("id") String id) throws Exception {
         ServiceInstance<Node> serviceInstance = serviceDiscovery.queryForInstance(SERVICE_NAME, id);
 
         ObjectNode objectNode = OBJECT_MAPPER.createObjectNode();
