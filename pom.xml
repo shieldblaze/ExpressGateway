@@ -34,7 +34,7 @@ along with ShieldBlaze ExpressGateway.  If not, see <https://www.gnu.org/license
 
         <!-- Version Management -->
         <apache.curator>5.9.0</apache.curator>
-        <netty>4.2.10.Final</netty>
+        <netty>4.2.11.Final</netty>
         <spring.boot>4.0.4</spring.boot>
     </properties>
 
@@ -100,7 +100,7 @@ along with ShieldBlaze ExpressGateway.  If not, see <https://www.gnu.org/license
             <dependency>
                 <groupId>software.amazon.awssdk</groupId>
                 <artifactId>bom</artifactId>
-                <version>2.42.17</version>
+                <version>2.42.20</version>
                 <type>pom</type>
                 <scope>import</scope>
             </dependency>
@@ -228,7 +228,7 @@ along with ShieldBlaze ExpressGateway.  If not, see <https://www.gnu.org/license
         <dependency>
             <groupId>com.fasterxml.jackson.core</groupId>
             <artifactId>jackson-databind</artifactId>
-            <version>2.21.1</version>
+            <version>2.21.2</version>
         </dependency>
 
         <!-- https://mvnrepository.com/artifact/org.springframework.boot/spring-boot-starter-webflux -->
