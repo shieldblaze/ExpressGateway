@@ -23,7 +23,7 @@
     <parent>
         <groupId>com.shieldblaze.expressgateway</groupId>
         <artifactId>parent</artifactId>
-        <version>0.0.1-a</version>
+        <version>1.0.0</version>
     </parent>
     <modelVersion>4.0.0</modelVersion>
 
@@ -44,11 +44,6 @@
         </dependency>
         <dependency>
             <groupId>com.shieldblaze.expressgateway</groupId>
-            <artifactId>shaded-dependencies</artifactId>
-            <version>${project.parent.version}</version>
-        </dependency>
-        <dependency>
-            <groupId>com.shieldblaze.expressgateway</groupId>
             <artifactId>core</artifactId>
             <version>${project.parent.version}</version>
         </dependency>
@@ -62,6 +57,32 @@
             <artifactId>metrics</artifactId>
             <version>${project.parent.version}</version>
         </dependency>
+        <dependency>
+            <groupId>com.shieldblaze.expressgateway</groupId>
+            <artifactId>protocol-quic</artifactId>
+            <version>${project.parent.version}</version>
+        </dependency>
+        <dependency>
+            <groupId>io.netty</groupId>
+            <artifactId>netty-codec-http3</artifactId>
+            <version>${netty}</version>
+        </dependency>
     </dependencies>
+
+    <build>
+        <plugins>
+            <plugin>
+                <groupId>org.apache.maven.plugins</groupId>
+                <artifactId>maven-surefire-plugin</artifactId>
+                <configuration>
+                    <!-- Run each test class in its own forked JVM to prevent Netty EventLoop
+                         and port-binding state from leaking between test classes. Without this,
+                         tests that bind server sockets (compression, websocket, proxy combination)
+                         interfere with each other when run in the same JVM. -->
+                    <reuseForks>false</reuseForks>
+                </configuration>
+            </plugin>
+        </plugins>
+    </build>
 
 </project>

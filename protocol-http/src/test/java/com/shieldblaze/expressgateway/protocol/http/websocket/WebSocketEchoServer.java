@@ -27,12 +27,15 @@ import io.netty.channel.socket.nio.NioServerSocketChannel;
 import io.netty.handler.codec.http.HttpObjectAggregator;
 import io.netty.handler.codec.http.HttpServerCodec;
 
+import java.net.InetSocketAddress;
+
 final class WebSocketEchoServer {
 
     private EventLoopGroup eventLoopGroup;
     private ChannelFuture channelFuture;
+    private int port;
 
-    void startServer() {
+    void startServer() throws InterruptedException {
         eventLoopGroup = new NioEventLoopGroup(2);
 
         ServerBootstrap serverBootstrap = new ServerBootstrap()
@@ -47,7 +50,13 @@ final class WebSocketEchoServer {
                     }
                 });
 
-        channelFuture = serverBootstrap.bind(5000);
+        // Bind to port 0 to let the OS assign an available port
+        channelFuture = serverBootstrap.bind(0).sync();
+        port = ((InetSocketAddress) channelFuture.channel().localAddress()).getPort();
+    }
+
+    int port() {
+        return port;
     }
 
     void shutdown() {

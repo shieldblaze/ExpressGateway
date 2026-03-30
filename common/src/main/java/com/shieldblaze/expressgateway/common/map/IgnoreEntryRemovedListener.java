@@ -20,7 +20,7 @@ package com.shieldblaze.expressgateway.common.map;
 final class IgnoreEntryRemovedListener<V> implements EntryRemovedListener<V> {
 
     @Override
-    public void removed(Object key, V value) {
+    public void removed(V value) {
         // Ignore
     }
 }

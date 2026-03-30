@@ -29,14 +29,18 @@ import com.shieldblaze.expressgateway.backend.loadbalance.SessionPersistence;
 import com.shieldblaze.expressgateway.concurrent.task.Task;
 
 import java.io.IOException;
-import java.util.SplittableRandom;
+import java.util.concurrent.ThreadLocalRandom;
 
 /**
  * Select {@link Node} Randomly
  */
 public final class HTTPRandom extends HTTPBalance {
 
-    private final SplittableRandom random = new SplittableRandom();
+    // BUG-HTTPRANDOM-THREAD: SplittableRandom is NOT thread-safe. Using a single
+    // instance across multiple Netty EventLoop threads causes data races (not just
+    // contention — SplittableRandom has no synchronization and can produce correlated
+    // sequences or even identical values under concurrent access). ThreadLocalRandom
+    // is designed for exactly this use case: one instance per thread, no contention.
 
     /**
      * Create {@link HTTPRandom} Instance
@@ -53,7 +57,7 @@ public final class HTTPRandom extends HTTPBalance {
     }
 
     @Override
-    public HTTPBalanceResponse response(HTTPBalanceRequest request) throws LoadBalanceException {
+    public HTTPBalanceResponse balance(HTTPBalanceRequest request) throws LoadBalanceException {
         HTTPBalanceResponse httpBalanceResponse = sessionPersistence.node(request);
         if (httpBalanceResponse != null) {
             // If Backend is ONLINE then return the response
@@ -66,11 +70,11 @@ public final class HTTPRandom extends HTTPBalance {
         }
 
         Node node;
-        try {
-            node = cluster.onlineNodes().get(random.nextInt(cluster.onlineNodes().size()));
-        } catch (Exception ex) {
-            throw new NoNodeAvailableException(ex);
+        var nodes = cluster.onlineNodes();
+        if (nodes.isEmpty()) {
+            throw new NoNodeAvailableException();
         }
+        node = nodes.get(ThreadLocalRandom.current().nextInt(nodes.size()));
 
         // Add to session persistence and return
         return sessionPersistence.addRoute(request, node);

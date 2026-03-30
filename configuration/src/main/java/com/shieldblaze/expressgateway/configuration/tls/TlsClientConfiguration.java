@@ -42,6 +42,7 @@ public final class TlsClientConfiguration extends TlsConfiguration {
         DEFAULT.protocols = IntermediateCrypto.PROTOCOLS;
         DEFAULT.useStartTLS = false;
         DEFAULT.acceptAllCerts = false;
+        DEFAULT.sessionTimeout = 300; // 5 minutes -- reasonable default for TLS session caching
         DEFAULT.validated = true;
     }
 

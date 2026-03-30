@@ -22,6 +22,8 @@ import com.shieldblaze.expressgateway.configuration.eventloop.EventLoopConfigura
 import com.shieldblaze.expressgateway.configuration.eventstream.EventStreamConfiguration;
 import com.shieldblaze.expressgateway.configuration.healthcheck.HealthCheckConfiguration;
 import com.shieldblaze.expressgateway.configuration.http.HttpConfiguration;
+import com.shieldblaze.expressgateway.configuration.http3.Http3Configuration;
+import com.shieldblaze.expressgateway.configuration.quic.QuicConfiguration;
 import com.shieldblaze.expressgateway.configuration.tls.TlsClientConfiguration;
 import com.shieldblaze.expressgateway.configuration.tls.TlsServerConfiguration;
 import com.shieldblaze.expressgateway.configuration.transport.TransportConfiguration;
@@ -33,6 +35,8 @@ public record ConfigurationContext(BufferConfiguration bufferConfiguration,
                                    EventStreamConfiguration eventStreamConfiguration,
                                    HealthCheckConfiguration healthCheckConfiguration,
                                    HttpConfiguration httpConfiguration,
+                                   Http3Configuration http3Configuration,
+                                   QuicConfiguration quicConfiguration,
                                    TlsClientConfiguration tlsClientConfiguration,
                                    TlsServerConfiguration tlsServerConfiguration,
                                    TransportConfiguration transportConfiguration) {
@@ -48,6 +52,8 @@ public record ConfigurationContext(BufferConfiguration bufferConfiguration,
             EventStreamConfiguration.DEFAULT,
             HealthCheckConfiguration.DEFAULT,
             HttpConfiguration.DEFAULT,
+            Http3Configuration.DEFAULT,
+            QuicConfiguration.DEFAULT,
             TlsClientConfiguration.DEFAULT,
             TlsServerConfiguration.DEFAULT,
             TransportConfiguration.DEFAULT
@@ -59,29 +65,25 @@ public record ConfigurationContext(BufferConfiguration bufferConfiguration,
         EventStreamConfiguration eventStreamConfiguration = EventStreamConfiguration.DEFAULT;
         HealthCheckConfiguration healthCheckConfiguration = HealthCheckConfiguration.DEFAULT;
         HttpConfiguration httpConfiguration = HttpConfiguration.DEFAULT;
+        Http3Configuration http3Configuration = Http3Configuration.DEFAULT;
+        QuicConfiguration quicConfiguration = QuicConfiguration.DEFAULT;
         TlsClientConfiguration tlsClientConfiguration = TlsClientConfiguration.DEFAULT;
         TlsServerConfiguration tlsServerConfiguration = TlsServerConfiguration.DEFAULT;
         TransportConfiguration transportConfiguration = TransportConfiguration.DEFAULT;
 
         for (Configuration<?> configuration : configurations) {
-            if (configuration instanceof BufferConfiguration) {
-                bufferConfiguration = (BufferConfiguration) configuration;
-            } else if (configuration instanceof EventLoopConfiguration) {
-                eventLoopConfiguration = (EventLoopConfiguration) configuration;
-            } else if (configuration instanceof EventStreamConfiguration) {
-                eventStreamConfiguration = (EventStreamConfiguration) configuration;
-            } else if (configuration instanceof HealthCheckConfiguration) {
-                healthCheckConfiguration = (HealthCheckConfiguration) configuration;
-            } else if (configuration instanceof HttpConfiguration) {
-                httpConfiguration = (HttpConfiguration) configuration;
-            } else if (configuration instanceof TlsClientConfiguration) {
-                tlsClientConfiguration = (TlsClientConfiguration) configuration;
-            } else if (configuration instanceof TlsServerConfiguration) {
-                tlsServerConfiguration = (TlsServerConfiguration) configuration;
-            } else if (configuration instanceof TransportConfiguration) {
-                transportConfiguration = (TransportConfiguration) configuration;
-            } else {
-                throw new IllegalArgumentException("Unknown Configuration: " + configuration);
+            switch (configuration) {
+                case BufferConfiguration c -> bufferConfiguration = c;
+                case EventLoopConfiguration c -> eventLoopConfiguration = c;
+                case EventStreamConfiguration c -> eventStreamConfiguration = c;
+                case HealthCheckConfiguration c -> healthCheckConfiguration = c;
+                case HttpConfiguration c -> httpConfiguration = c;
+                case Http3Configuration c -> http3Configuration = c;
+                case QuicConfiguration c -> quicConfiguration = c;
+                case TlsClientConfiguration c -> tlsClientConfiguration = c;
+                case TlsServerConfiguration c -> tlsServerConfiguration = c;
+                case TransportConfiguration c -> transportConfiguration = c;
+                default -> throw new IllegalArgumentException("Unknown Configuration: " + configuration);
             }
         }
 
@@ -91,6 +93,8 @@ public record ConfigurationContext(BufferConfiguration bufferConfiguration,
                 eventStreamConfiguration,
                 healthCheckConfiguration,
                 httpConfiguration,
+                http3Configuration,
+                quicConfiguration,
                 tlsClientConfiguration,
                 tlsServerConfiguration,
                 transportConfiguration);

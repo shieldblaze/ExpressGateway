@@ -54,6 +54,7 @@ public final class CompressionUtil {
         MIME_TYPES.add("application/x-font-ttf");
         MIME_TYPES.add("application/x-font-opentype");
         MIME_TYPES.add("application/x-font-truetype");
+        MIME_TYPES.add("application/wasm");
         MIME_TYPES.add("image/svg+xml");
         MIME_TYPES.add("image/x-icon");
         MIME_TYPES.add("image/vnd.microsoft.icon");
@@ -101,7 +102,7 @@ public final class CompressionUtil {
             int equalsPos = encoding.indexOf('=');
             if (equalsPos != -1) {
                 try {
-                    q = Float.parseFloat(encoding.substring(equalsPos + 1));
+                    q = Float.parseFloat(encoding.substring(equalsPos + 1).trim());
                 } catch (NumberFormatException e) {
                     // Ignore encoding
                     q = 0.0f;

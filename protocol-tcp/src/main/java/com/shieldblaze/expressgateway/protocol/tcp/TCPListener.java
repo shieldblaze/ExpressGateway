@@ -26,6 +26,7 @@ import com.shieldblaze.expressgateway.core.events.L4FrontListenerStopTask;
 import com.shieldblaze.expressgateway.core.factory.EventLoopFactory;
 import io.netty.bootstrap.ServerBootstrap;
 import io.netty.buffer.ByteBufAllocator;
+import io.netty.channel.Channel;
 import io.netty.channel.ChannelFuture;
 import io.netty.channel.ChannelHandler;
 import io.netty.channel.ChannelOption;
@@ -33,19 +34,52 @@ import io.netty.channel.WriteBufferWaterMark;
 import io.netty.channel.epoll.EpollMode;
 import io.netty.channel.epoll.EpollServerSocketChannel;
 import io.netty.channel.epoll.EpollServerSocketChannelConfig;
+import io.netty.channel.group.ChannelGroup;
+import io.netty.channel.group.DefaultChannelGroup;
 import io.netty.channel.socket.nio.NioServerSocketChannel;
 import io.netty.channel.unix.UnixChannelOption;
 import io.netty.incubator.channel.uring.IOUringServerSocketChannel;
+import io.netty.util.concurrent.GlobalEventExecutor;
+import org.apache.logging.log4j.LogManager;
+import org.apache.logging.log4j.Logger;
 
 import java.util.List;
 import java.util.concurrent.CopyOnWriteArrayList;
+import java.util.concurrent.TimeUnit;
 
 /**
  * TCP Listener for handling incoming TCP requests.
  */
 public class TCPListener extends L4FrontListener {
 
+    private static final Logger logger = LogManager.getLogger(TCPListener.class);
+
+    /**
+     * Default drain timeout in seconds. Active connections are given this
+     * duration to complete before being forcefully closed on shutdown.
+     */
+    private static final int DEFAULT_DRAIN_TIMEOUT_SECONDS = 30;
+
     private final List<ChannelFuture> channelFutures = new CopyOnWriteArrayList<>();
+    private final ChannelGroup activeConnections = new DefaultChannelGroup(GlobalEventExecutor.INSTANCE);
+    private int drainTimeoutSeconds = DEFAULT_DRAIN_TIMEOUT_SECONDS;
+
+    /**
+     * HIGH-11: Set the drain timeout in seconds for graceful shutdown.
+     * Active connections are given this duration to complete before being forcefully closed.
+     *
+     * @param seconds drain timeout in seconds, must be non-negative
+     */
+    public void setDrainTimeoutSeconds(int seconds) {
+        this.drainTimeoutSeconds = Math.max(0, seconds);
+    }
+
+    /**
+     * Get the active connections channel group for tracking.
+     */
+    ChannelGroup activeConnections() {
+        return activeConnections;
+    }
 
     @Override
     public L4FrontListenerStartupTask start() {
@@ -63,26 +97,46 @@ public class TCPListener extends L4FrontListener {
 
         ChannelHandler channelHandler;
         if (l4LoadBalancer().channelHandler() == null) {
-            channelHandler = new ServerInitializer(l4LoadBalancer());
+            channelHandler = new ServerInitializer(l4LoadBalancer(), activeConnections);
         } else {
             channelHandler = l4LoadBalancer().channelHandler();
         }
+
+        // MED-14: Normalize WriteBufferWaterMark across all transports
+        WriteBufferWaterMark writeBufferWaterMark = new WriteBufferWaterMark(32 * 1024, 64 * 1024);
 
         ServerBootstrap serverBootstrap = new ServerBootstrap()
                 .group(eventLoopFactory.parentGroup(), eventLoopFactory.childGroup())
                 .option(ChannelOption.ALLOCATOR, byteBufAllocator)
                 .option(ChannelOption.RCVBUF_ALLOCATOR, transportConfiguration.recvByteBufAllocator())
                 .option(ChannelOption.SO_RCVBUF, transportConfiguration.socketReceiveBufferSize())
+                .option(ChannelOption.SO_SNDBUF, transportConfiguration.socketSendBufferSize())
                 .option(ChannelOption.SO_BACKLOG, transportConfiguration.tcpConnectionBacklog())
+                .option(ChannelOption.WRITE_BUFFER_WATER_MARK, writeBufferWaterMark)
                 .option(ChannelOption.AUTO_READ, true)
                 .option(ChannelOption.AUTO_CLOSE, true)
                 .childOption(ChannelOption.SO_SNDBUF, transportConfiguration.socketSendBufferSize())
                 .childOption(ChannelOption.SO_RCVBUF, transportConfiguration.socketReceiveBufferSize())
                 .childOption(ChannelOption.RCVBUF_ALLOCATOR, transportConfiguration.recvByteBufAllocator())
-                .channelFactory(() -> {
+                .childOption(ChannelOption.TCP_NODELAY, true)
+                .childOption(ChannelOption.SO_KEEPALIVE, true)  // MED-15: Detect dead clients via TCP keepalive
+                .childOption(ChannelOption.ALLOW_HALF_CLOSURE, true) // RFC 9293 Sec 3.6: half-close support
+                .childOption(ChannelOption.WRITE_BUFFER_WATER_MARK, writeBufferWaterMark) // MED-14: Consistent across transports
+                ;
+
+        // TCP_QUICKACK on accepted child channels — disable delayed ACK for lower latency.
+        // Only available on native transports (Epoll, io_uring); NIO does not expose this option.
+        if (transportConfiguration.transportType() == TransportType.EPOLL) {
+            serverBootstrap.childOption(io.netty.channel.epoll.EpollChannelOption.TCP_QUICKACK, true);
+        } else if (transportConfiguration.transportType() == TransportType.IO_URING) {
+            serverBootstrap.childOption(io.netty.incubator.channel.uring.IOUringChannelOption.TCP_QUICKACK, true);
+        }
+
+        serverBootstrap.channelFactory(() -> {
                     if (transportConfiguration.transportType() == TransportType.IO_URING) {
                         IOUringServerSocketChannel serverSocketChannel = new IOUringServerSocketChannel();
                         serverSocketChannel.config().setOption(UnixChannelOption.SO_REUSEPORT, true);
+                        serverSocketChannel.config().setTcpFastopen(transportConfiguration.tcpFastOpenMaximumPendingRequests());
                         return serverSocketChannel;
                     } else if (transportConfiguration.transportType() == TransportType.EPOLL) {
                         EpollServerSocketChannel serverSocketChannel = new EpollServerSocketChannel();
@@ -90,7 +144,6 @@ public class TCPListener extends L4FrontListener {
                         config.setOption(UnixChannelOption.SO_REUSEPORT, true);
                         config.setTcpFastopen(transportConfiguration.tcpFastOpenMaximumPendingRequests());
                         config.setEpollMode(EpollMode.EDGE_TRIGGERED);
-                        config.setWriteBufferWaterMark(new WriteBufferWaterMark(0, Integer.MAX_VALUE));
                         config.setPerformancePreferences(100, 100, 100);
 
                         return serverSocketChannel;
@@ -133,14 +186,31 @@ public class TCPListener extends L4FrontListener {
             return l4FrontListenerStopEvent;
         }
 
-        // Close all ChannelFutures
+        // HIGH-11: Stop accepting new connections by closing server channels
         channelFutures.forEach(channelFuture -> channelFuture.channel().close());
 
         // Add a listener to last ChannelFuture to notify all listeners
         channelFutures.get(channelFutures.size() - 1).channel().closeFuture().addListener(future -> {
             if (future.isSuccess()) {
-                channelFutures.clear();
-                l4FrontListenerStopEvent.markSuccess(null);
+                int activeCount = activeConnections.size();
+                if (activeCount > 0 && drainTimeoutSeconds > 0) {
+                    // HIGH-11: Graceful drain -- wait for active connections to complete
+                    logger.info("Draining {} active connections (timeout: {}s)", activeCount, drainTimeoutSeconds);
+                    GlobalEventExecutor.INSTANCE.schedule(() -> {
+                        int remaining = activeConnections.size();
+                        if (remaining > 0) {
+                            logger.info("Drain timeout reached, forcefully closing {} remaining connections", remaining);
+                            activeConnections.close();
+                        }
+                        channelFutures.clear();
+                        l4FrontListenerStopEvent.markSuccess(null);
+                    }, drainTimeoutSeconds, TimeUnit.SECONDS);
+                } else {
+                    // No active connections or zero drain timeout -- close immediately
+                    activeConnections.close().awaitUninterruptibly(5, TimeUnit.SECONDS);
+                    channelFutures.clear();
+                    l4FrontListenerStopEvent.markSuccess(null);
+                }
             } else {
                 l4FrontListenerStopEvent.markFailure(future.cause());
             }

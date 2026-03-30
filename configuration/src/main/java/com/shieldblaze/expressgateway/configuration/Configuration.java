@@ -47,8 +47,12 @@ public interface Configuration<T> {
      * Assert successful validation check of this Configuration.
      * This method must be called whenever this Configuration
      * values are being accessed.
+     *
+     * @throws IllegalStateException if configuration has not been validated
      */
     default void assertValidated() {
-        assert validated() : "Configuration must be validated";
+        if (!validated()) {
+            throw new IllegalStateException("Configuration not validated: " + friendlyName());
+        }
     }
 }

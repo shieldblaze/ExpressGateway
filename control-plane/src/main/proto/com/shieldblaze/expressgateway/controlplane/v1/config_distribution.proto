@@ -1,0 +1,89 @@
+syntax = "proto3";
+
+package com.shieldblaze.expressgateway.controlplane.v1;
+
+option java_package = "com.shieldblaze.expressgateway.controlplane.v1";
+option java_multiple_files = true;
+option java_outer_classname = "ConfigDistributionProto";
+
+import "com/shieldblaze/expressgateway/controlplane/v1/common.proto";
+
+// Aggregated Discovery Service (ADS) pattern for configuration distribution.
+// Supports both streaming (push) and unary (pull) modes.
+service ConfigDistributionService {
+  // Bidirectional ADS stream. Nodes send subscriptions and ack/nack responses;
+  // the control plane pushes config updates as they become available.
+  rpc StreamConfig(stream ConfigRequest) returns (stream ConfigResponse);
+
+  // Unary fetch for nodes that need a one-shot config pull (e.g. during
+  // startup before the streaming channel is established).
+  rpc FetchConfig(ConfigFetchRequest) returns (ConfigFetchResponse);
+}
+
+message ConfigRequest {
+  string node_id = 1;
+  string session_token = 2;
+  oneof request_type {
+    ConfigSubscription subscribe = 3;
+    ConfigAck ack = 4;
+    ConfigNack nack = 5;
+  }
+}
+
+message ConfigSubscription {
+  string type_url = 1;
+  string version = 2;
+  // Per-resource versions for delta/incremental subscription.
+  map<string, string> initial_resource_versions = 3;
+  // If non-empty, subscribe only to these named resources (wildcard otherwise).
+  repeated string resource_names = 4;
+}
+
+message ConfigAck {
+  string type_url = 1;
+  string version = 2;
+  string response_nonce = 3;
+}
+
+message ConfigNack {
+  string type_url = 1;
+  string version = 2;
+  string response_nonce = 3;
+  ConfigError error = 4;
+}
+
+message ConfigError {
+  int32 code = 1;
+  string message = 2;
+  repeated string failed_resources = 3;
+}
+
+message ConfigResponse {
+  string type_url = 1;
+  string version = 2;
+  // Opaque nonce that the node must echo back in ConfigAck/ConfigNack to
+  // correlate responses with the push that produced them.
+  string nonce = 3;
+  repeated Resource resources = 4;
+  // Resource names removed since the last version (delta mode).
+  repeated string removed_resources = 5;
+  // When true, `resources` is a complete snapshot; the node should replace
+  // its entire local state for this type_url.
+  bool is_full_snapshot = 6;
+  string control_plane_id = 7;
+}
+
+message ConfigFetchRequest {
+  string node_id = 1;
+  string session_token = 2;
+  string type_url = 3;
+  repeated string resource_names = 4;
+}
+
+message ConfigFetchResponse {
+  string type_url = 1;
+  string version = 2;
+  repeated Resource resources = 3;
+  // Resource names removed since the node's last known version (delta mode).
+  repeated string removed_resources = 4;
+}

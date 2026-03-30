@@ -21,16 +21,20 @@ import com.shieldblaze.expressgateway.common.ExpressGateway;
 import com.shieldblaze.expressgateway.common.zookeeper.Curator;
 import com.shieldblaze.expressgateway.common.zookeeper.Environment;
 import com.shieldblaze.expressgateway.common.zookeeper.ZNodePath;
+import com.shieldblaze.expressgateway.configuration.distributed.ConfigRolloutState;
+import com.shieldblaze.expressgateway.configuration.distributed.ConfigStorageBackend;
+import com.shieldblaze.expressgateway.configuration.distributed.DistributedConfigurationManager;
 import io.netty.util.internal.StringUtil;
 import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
 
 import java.io.File;
-import java.io.FileWriter;
 import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.StandardOpenOption;
+import java.util.List;
+import java.util.concurrent.CompletableFuture;
 
 import static com.shieldblaze.expressgateway.common.JacksonJson.OBJECT_MAPPER;
 import static com.shieldblaze.expressgateway.common.zookeeper.CuratorUtils.createNew;
@@ -95,12 +99,10 @@ public final class ConfigurationStore {
             configuration.assertValidated();
             String json = OBJECT_MAPPER.writerWithDefaultPrettyPrinter().writeValueAsString(configuration);
 
-            try (FileWriter writer = new FileWriter(configDirPath(configuration.getClass()), false)) {
-                writer.write(json);
-            }
-
-            // Write configuration into file
-            Files.writeString(Path.of(configDirPath(configuration.getClass())), json, StandardOpenOption.CREATE, StandardOpenOption.WRITE);
+            // Atomic write: TRUNCATE_EXISTING prevents stale trailing bytes if the new
+            // content is shorter than the old file. CREATE ensures the file is made if absent.
+            Files.writeString(Path.of(configDirPath(configuration.getClass())), json,
+                    StandardOpenOption.CREATE, StandardOpenOption.WRITE, StandardOpenOption.TRUNCATE_EXISTING);
 
             logger.info("Successfully saved configuration into config directory");
         } catch (Exception ex) {
@@ -142,6 +144,150 @@ public final class ConfigurationStore {
                 Environment.detectEnv(),                                // Auto-detect environment
                 getProperty(ExpressGateway.getInstance().clusterID()),  // Use Cluster ID as ID
                 configuration.friendlyName());                          // Use Configuration name as component
+    }
+
+    // --- Distributed Configuration Methods ---
+
+    private static volatile DistributedConfigurationManager distributedManager;
+
+    /**
+     * Initialize and start the distributed configuration manager.
+     *
+     * <p>This method enables distributed mode, allowing configuration to be managed
+     * via ZooKeeper with versioning, leader election, and fallback support.
+     * Calling this method does not affect the existing non-distributed API.</p>
+     *
+     * @param clusterId   The cluster identifier
+     * @param environment The deployment environment
+     * @throws Exception If an error occurs during initialization
+     */
+    public static synchronized void startDistributed(String clusterId, Environment environment) throws Exception {
+        startDistributed(clusterId, environment, null);
+    }
+
+    /**
+     * Initialize and start the distributed configuration manager with an explicit storage backend.
+     *
+     * <p>If {@code storageBackend} is {@code null}, the default Curator-backed backend is used.</p>
+     *
+     * @param clusterId      The cluster identifier
+     * @param environment    The deployment environment
+     * @param storageBackend The storage backend (may be {@code null} for default Curator backend)
+     * @throws Exception If an error occurs during initialization
+     */
+    public static synchronized void startDistributed(String clusterId, Environment environment,
+                                                     ConfigStorageBackend storageBackend) throws Exception {
+        if (distributedManager != null) {
+            throw new IllegalStateException("Distributed configuration manager is already started");
+        }
+
+        logger.info("Starting distributed configuration mode for cluster: {}", clusterId);
+        DistributedConfigurationManager manager;
+        if (storageBackend != null) {
+            manager = new DistributedConfigurationManager(clusterId, environment, 3, storageBackend);
+        } else {
+            manager = new DistributedConfigurationManager(clusterId, environment);
+        }
+        manager.start();
+        distributedManager = manager;
+        logger.info("Distributed configuration mode started");
+    }
+
+    /**
+     * Propose a new configuration context via the distributed manager.
+     *
+     * @param context The proposed {@link ConfigurationContext}
+     * @return A {@link CompletableFuture} that completes with the final {@link ConfigRolloutState}
+     * @throws IllegalStateException If distributed mode is not enabled or this node is not the leader
+     */
+    public static CompletableFuture<ConfigRolloutState> proposeDistributed(ConfigurationContext context) {
+        DistributedConfigurationManager manager = distributedManager;
+        if (manager == null) {
+            throw new IllegalStateException("Distributed configuration manager is not started");
+        }
+        return manager.proposeConfig(context);
+    }
+
+    /**
+     * Get the current configuration context from the distributed manager.
+     *
+     * @return The current {@link ConfigurationContext}
+     * @throws IllegalStateException If distributed mode is not enabled
+     */
+    public static ConfigurationContext getDistributedConfig() {
+        DistributedConfigurationManager manager = distributedManager;
+        if (manager == null) {
+            throw new IllegalStateException("Distributed configuration manager is not started");
+        }
+        return manager.getCurrentConfig();
+    }
+
+    /**
+     * Rollback to a previous configuration version via the distributed manager.
+     *
+     * @param version The version number to roll back to
+     * @throws Exception If an error occurs during the rollback
+     * @throws IllegalStateException If distributed mode is not enabled or this node is not the leader
+     */
+    public static void rollbackDistributed(int version) throws Exception {
+        DistributedConfigurationManager manager = distributedManager;
+        if (manager == null) {
+            throw new IllegalStateException("Distributed configuration manager is not started");
+        }
+        manager.rollback(version);
+    }
+
+    /**
+     * List all available distributed configuration versions.
+     *
+     * @return A list of version numbers in ascending order
+     * @throws Exception If an error occurs reading from ZooKeeper
+     * @throws IllegalStateException If distributed mode is not enabled
+     */
+    public static List<Integer> listDistributedVersions() throws Exception {
+        DistributedConfigurationManager manager = distributedManager;
+        if (manager == null) {
+            throw new IllegalStateException("Distributed configuration manager is not started");
+        }
+        return manager.listVersions();
+    }
+
+    /**
+     * Check if distributed mode is enabled and this node is the leader.
+     *
+     * @return {@code true} if distributed mode is enabled and this node is the leader
+     */
+    public static boolean isDistributedLeader() {
+        DistributedConfigurationManager manager = distributedManager;
+        return manager != null && manager.isLeader();
+    }
+
+    /**
+     * Check if distributed mode is currently enabled.
+     *
+     * @return {@code true} if distributed mode is enabled
+     */
+    public static boolean isDistributedMode() {
+        return distributedManager != null;
+    }
+
+    /**
+     * Shut down the distributed configuration manager.
+     *
+     * <p>This method does not affect the existing non-distributed API.</p>
+     */
+    public static void stopDistributed() {
+        DistributedConfigurationManager manager = distributedManager;
+        if (manager != null) {
+            try {
+                manager.close();
+                logger.info("Distributed configuration manager stopped");
+            } catch (IOException e) {
+                logger.error("Error closing distributed configuration manager", e);
+            } finally {
+                distributedManager = null;
+            }
+        }
     }
 
     private ConfigurationStore() {

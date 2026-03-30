@@ -1,0 +1,46 @@
+# ============================================================================
+# ShieldBlaze ExpressGateway - Control Plane (Standalone)
+# Multi-stage build with Google Distroless runtime
+#
+# The control plane can run embedded in the load balancer or standalone.
+# This image uses the same bootstrap JAR but with a CP-only configuration.
+# ============================================================================
+
+# Stage 1: Build with Maven
+FROM maven:3.9-eclipse-temurin-21 AS builder
+
+WORKDIR /build
+
+# Copy entire project (dockerignore filters build artifacts)
+COPY . .
+
+# Build the fat JAR
+RUN --mount=type=cache,target=/root/.m2/repository \
+    mvn clean package -pl bootstrap -am -DskipTests -q \
+    && cp bootstrap/target/bootstrap-1.0.0.jar /build/app.jar
+
+# Stage 2: Runtime with Google Distroless
+FROM gcr.io/distroless/java21-debian12:nonroot
+
+LABEL maintainer="ShieldBlaze <team@shieldblaze.com>"
+LABEL description="ShieldBlaze ExpressGateway Control Plane"
+LABEL version="1.0.0"
+
+ENV CONFIGURATION_DIRECTORY=/etc/expressgateway/conf.d
+
+COPY --from=builder /build/app.jar /app/expressgateway-cp.jar
+
+# Control Plane ports:
+#   9443 - gRPC (node registration, config distribution, heartbeat, stats)
+EXPOSE 9443
+
+# Tuned for control plane workload:
+#   - G1GC is fine for CP (not latency-critical like the proxy path)
+ENTRYPOINT ["java", \
+    "-XX:+UseContainerSupport", \
+    "-XX:MaxRAMPercentage=75.0", \
+    "-XX:+UseG1GC", \
+    "--add-exports", "java.base/jdk.internal.misc=ALL-UNNAMED", \
+    "--add-opens", "java.base/java.nio=ALL-UNNAMED", \
+    "-Dio.netty.tryReflectionSetAccessible=true", \
+    "-jar", "/app/expressgateway-cp.jar"]

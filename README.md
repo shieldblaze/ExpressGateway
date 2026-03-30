@@ -25,7 +25,7 @@
 - [ ] HTTP Caching
 
 ### TLS:
-- :heavy_check_mark: TLS Support (v1.1, v1.2 and v1.3)
+- :heavy_check_mark: TLS Support (v1.2 and v1.3)
 - :heavy_check_mark: TLS Offload
 - :heavy_check_mark: Mutual TLS
 - :heavy_check_mark: OCSP Stapling
@@ -49,7 +49,7 @@
 - :heavy_check_mark: HTTP Round Robin
 
 ### Session Persistence:
-- :heavy_check_mark: 5-Tuple Hash (Source IP + Source Port +  Destination IP +  Destination Port + Protocol)
+- :heavy_check_mark: 4-Tuple Hash (Source IP + Source Port + Destination IP + Destination Port)
 - :heavy_check_mark: Source IP Hash
 - :heavy_check_mark: Long-Lived Sessions
 - :heavy_check_mark: HTTP Cookie

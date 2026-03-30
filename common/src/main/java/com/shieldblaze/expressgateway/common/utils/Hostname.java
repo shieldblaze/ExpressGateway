@@ -20,27 +20,23 @@ package com.shieldblaze.expressgateway.common.utils;
 public final class Hostname {
 
     private Hostname() {
-        // Prevent outside initialization
     }
 
     public static boolean doesHostAndPortMatch(String hostname, int port, String hostHeaderValue) {
         try {
             String[] valueSplit = hostHeaderValue.split(":");
 
-            // If length is 2 then we got Hostname and Port.
-            // If length is 1 then we got Hostname only.
-            if (valueSplit.length == 2) {
-                return hostname.equalsIgnoreCase(valueSplit[0]) && checkPort(port) && port == Integer.parseInt(valueSplit[1]);
-            } else if (valueSplit.length == 1) {
-                return hostname.equalsIgnoreCase(valueSplit[0]);
-            }
+            return switch (valueSplit.length) {
+                case 2 -> hostname.equalsIgnoreCase(valueSplit[0]) && checkPort(port) && port == Integer.parseInt(valueSplit[1]);
+                case 1 -> hostname.equalsIgnoreCase(valueSplit[0]);
+                default -> false;
+            };
         } catch (Exception ex) {
             return false;
         }
-        return false;
     }
 
     private static boolean checkPort(int port) {
-        return port > 0 && port < 65535;
+        return port > 0 && port <= 65535;
     }
 }

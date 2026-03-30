@@ -23,7 +23,7 @@ along with ShieldBlaze ExpressGateway.  If not, see <https://www.gnu.org/license
 
     <groupId>com.shieldblaze.expressgateway</groupId>
     <artifactId>parent</artifactId>
-    <version>0.0.1-a</version>
+    <version>1.0.0</version>
 
     <properties>
         <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
@@ -36,6 +36,9 @@ along with ShieldBlaze ExpressGateway.  If not, see <https://www.gnu.org/license
         <apache.curator>5.9.0</apache.curator>
         <netty>4.2.12.Final</netty>
         <spring.boot>4.0.5</spring.boot>
+        <grpc.version>1.72.0</grpc.version>
+        <protobuf.version>4.31.1</protobuf.version>
+        <jackson>2.21.2</jackson>
     </properties>
 
     <packaging>pom</packaging>
@@ -68,16 +71,17 @@ along with ShieldBlaze ExpressGateway.  If not, see <https://www.gnu.org/license
         <module>configuration</module>
         <module>core</module>
         <module>healthcheck</module>
-        <module>integration</module>
-        <module>integration-aws</module>
+        <!-- BUILD-02: integration and integration-aws excluded from v1.0.0 release (Cloud Integration deferred) -->
         <module>metrics</module>
         <module>protocol-http</module>
         <module>protocol-tcp</module>
         <module>protocol-udp</module>
+        <module>protocol-quic</module>
         <module>security</module>
         <module>service-discovery-client</module>
         <module>service-discovery-server</module>
-        <module>shaded-dependencies</module>
+        <module>control-plane</module>
+        <module>control-plane-agent</module>
         <module>testing</module>
         <module>testsuite</module>
     </modules>
@@ -98,11 +102,34 @@ along with ShieldBlaze ExpressGateway.  If not, see <https://www.gnu.org/license
     <dependencyManagement>
         <dependencies>
             <dependency>
-                <groupId>software.amazon.awssdk</groupId>
-                <artifactId>bom</artifactId>
-                <version>2.42.23</version>
-                <type>pom</type>
-                <scope>import</scope>
+                <groupId>org.jctools</groupId>
+                <artifactId>jctools-core</artifactId>
+                <version>4.0.5</version>
+            </dependency>
+            <dependency>
+                <groupId>org.agrona</groupId>
+                <artifactId>agrona</artifactId>
+                <version>1.23.0</version>
+            </dependency>
+            <dependency>
+                <groupId>com.google.guava</groupId>
+                <artifactId>guava</artifactId>
+                <version>33.5.0-jre</version>
+            </dependency>
+            <dependency>
+                <groupId>io.netty</groupId>
+                <artifactId>netty-handler</artifactId>
+                <version>${netty}</version>
+            </dependency>
+            <dependency>
+                <groupId>com.fasterxml.jackson.core</groupId>
+                <artifactId>jackson-annotations</artifactId>
+                <version>2.21</version>
+            </dependency>
+            <dependency>
+                <groupId>com.fasterxml.jackson.core</groupId>
+                <artifactId>jackson-core</artifactId>
+                <version>${jackson}</version>
             </dependency>
         </dependencies>
     </dependencyManagement>
@@ -120,6 +147,13 @@ along with ShieldBlaze ExpressGateway.  If not, see <https://www.gnu.org/license
         <dependency>
             <groupId>io.netty</groupId>
             <artifactId>netty-codec-http2</artifactId>
+            <version>${netty}</version>
+        </dependency>
+
+        <!-- Netty QUIC and HTTP/3 codec (stable, graduated from incubator in Netty 4.2) -->
+        <dependency>
+            <groupId>io.netty</groupId>
+            <artifactId>netty-codec-http3</artifactId>
             <version>${netty}</version>
         </dependency>
 
@@ -189,11 +223,10 @@ along with ShieldBlaze ExpressGateway.  If not, see <https://www.gnu.org/license
             <scope>test</scope>
         </dependency>
 
-        <!-- https://mvnrepository.com/artifact/com.google.guava/guava -->
+        <!-- https://mvnrepository.com/artifact/com.google.guava/guava (version managed in dependencyManagement) -->
         <dependency>
             <groupId>com.google.guava</groupId>
             <artifactId>guava</artifactId>
-            <version>33.5.0-jre</version>
         </dependency>
 
         <!-- https://mvnrepository.com/artifact/org.bouncycastle/bcpkix-jdk15on -->
@@ -217,18 +250,11 @@ along with ShieldBlaze ExpressGateway.  If not, see <https://www.gnu.org/license
             <version>2.13.2</version>
         </dependency>
 
-        <!-- https://mvnrepository.com/artifact/it.unimi.dsi/fastutil -->
-        <dependency>
-            <groupId>it.unimi.dsi</groupId>
-            <artifactId>fastutil</artifactId>
-            <version>8.5.18</version>
-        </dependency>
-
         <!-- https://mvnrepository.com/artifact/com.fasterxml.jackson.core/jackson-databind -->
         <dependency>
             <groupId>com.fasterxml.jackson.core</groupId>
             <artifactId>jackson-databind</artifactId>
-            <version>2.21.2</version>
+            <version>${jackson}</version>
         </dependency>
 
         <!-- https://mvnrepository.com/artifact/org.springframework.boot/spring-boot-starter-webflux -->
@@ -252,29 +278,12 @@ along with ShieldBlaze ExpressGateway.  If not, see <https://www.gnu.org/license
             <scope>test</scope>
         </dependency>
 
-        <!-- https://mvnrepository.com/artifact/software.amazon.awssdk/route53 -->
-        <dependency>
-            <groupId>software.amazon.awssdk</groupId>
-            <artifactId>route53</artifactId>
-        </dependency>
-
-        <!-- https://mvnrepository.com/artifact/software.amazon.awssdk/ec2 -->
-        <dependency>
-            <groupId>software.amazon.awssdk</groupId>
-            <artifactId>ec2</artifactId>
-        </dependency>
-
-        <!-- https://mvnrepository.com/artifact/software.amazon.awssdk/lightsail -->
-        <dependency>
-            <groupId>software.amazon.awssdk</groupId>
-            <artifactId>lightsail</artifactId>
-        </dependency>
-
         <!-- https://mvnrepository.com/artifact/com.squareup.okhttp3/okhttp-jvm -->
         <dependency>
             <groupId>com.squareup.okhttp3</groupId>
             <artifactId>okhttp-jvm</artifactId>
             <version>5.3.2</version>
+            <scope>test</scope>
         </dependency>
 
         <!-- https://mvnrepository.com/artifact/com.github.vladimir-bukhtoyarov/bucket4j-core -->
@@ -414,6 +423,13 @@ along with ShieldBlaze ExpressGateway.  If not, see <https://www.gnu.org/license
                 <configuration>
                     <source>21</source>
                     <target>21</target>
+                    <annotationProcessorPaths>
+                        <path>
+                            <groupId>org.projectlombok</groupId>
+                            <artifactId>lombok</artifactId>
+                            <version>1.18.44</version>
+                        </path>
+                    </annotationProcessorPaths>
                 </configuration>
             </plugin>
             <plugin>
@@ -423,6 +439,8 @@ along with ShieldBlaze ExpressGateway.  If not, see <https://www.gnu.org/license
                 <configuration>
                     <argLine>
                         --add-exports java.base/jdk.internal.misc=ALL-UNNAMED
+                        -Dio.netty.leakDetection.level=PARANOID
+                        -Dapi.version=1.43
                     </argLine>
                 </configuration>
             </plugin>
@@ -442,6 +460,34 @@ along with ShieldBlaze ExpressGateway.  If not, see <https://www.gnu.org/license
                         <goals>
                             <goal>report</goal>
                         </goals>
+                    </execution>
+                    <execution>
+                        <id>check</id>
+                        <phase>verify</phase>
+                        <goals>
+                            <goal>check</goal>
+                        </goals>
+                        <configuration>
+                            <rules>
+                                <rule>
+                                    <element>BUNDLE</element>
+                                    <limits>
+                                        <limit>
+                                            <counter>LINE</counter>
+                                            <value>COVEREDRATIO</value>
+                                            <minimum>0.80</minimum>
+                                        </limit>
+                                    </limits>
+                                    <includes>
+                                        <include>com.shieldblaze.expressgateway.protocol.http.*</include>
+                                        <include>com.shieldblaze.expressgateway.protocol.tcp.*</include>
+                                        <include>com.shieldblaze.expressgateway.protocol.udp.*</include>
+                                        <include>com.shieldblaze.expressgateway.core.*</include>
+                                        <include>com.shieldblaze.expressgateway.security.*</include>
+                                    </includes>
+                                </rule>
+                            </rules>
+                        </configuration>
                     </execution>
                 </executions>
             </plugin>

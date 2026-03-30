@@ -67,11 +67,14 @@ public final class CoreContext {
         nonNullObject(id, "ID");
         nonNullObject(context, "LoadBalancerContext");
 
-        if (REGISTRY.containsKey(id)) {
+        // CM-05: Use putIfAbsent() to eliminate the TOCTOU race between containsKey()
+        // and put(). With ConcurrentHashMap, two threads calling add() concurrently with
+        // the same ID could both pass containsKey() and overwrite each other's entry.
+        // putIfAbsent() is atomic and returns null only if the key was absent.
+        L4LoadBalancer existing = REGISTRY.putIfAbsent(id, context);
+        if (existing != null) {
             throw new IllegalArgumentException("Load Balancer already exists with the ID: " + id);
         }
-
-        REGISTRY.put(id, context);
     }
 
     /**

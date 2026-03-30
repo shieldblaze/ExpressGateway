@@ -69,10 +69,16 @@ public final class BufferConfiguration implements Configuration<BufferConfigurat
         DEFAULT.preferDirect = true;
         DEFAULT.pageSize = 16_384;
         DEFAULT.maxOrder = 11;
+        // Netty's PooledByteBufAllocator default arena count formula:
+        // min(availableProcessors * 2, maxMemory / chunkSize / 2 / 3)
+        // where chunkSize = pageSize << maxOrder = 16384 << 11 = 32 MB.
+        // The original expression had an operator precedence bug: division binds
+        // tighter than shift, so "/ 16384 << 11 / 2 / 3" was parsed as
+        // "/ 16384 << (11/2/3)" = "<< 1" instead of the intended "/ (16384 << 11) / 2 / 3".
         DEFAULT.heapArena = (int) Math.max(0, Math.min((long) Runtime.getRuntime().availableProcessors() * 2,
-                Runtime.getRuntime().maxMemory() / 16384 << 11 / 2 / 3));
+                Runtime.getRuntime().maxMemory() / (16384L << 11) / 2 / 3));
         DEFAULT.directArena = (int) Math.max(0, Math.min((long) Runtime.getRuntime().availableProcessors() * 2,
-                PlatformDependent.maxDirectMemory() / 16384 << 11 / 2 / 3));
+                PlatformDependent.maxDirectMemory() / (16384L << 11) / 2 / 3));
         DEFAULT.smallCacheSize = 256;
         DEFAULT.normalCacheSize = 64;
         DEFAULT.useCacheForAllThreads = true;

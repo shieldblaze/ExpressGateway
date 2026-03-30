@@ -27,11 +27,14 @@ import io.netty.buffer.ByteBufAllocator;
 import io.netty.channel.Channel;
 import io.netty.channel.ChannelFuture;
 import io.netty.channel.ChannelInitializer;
+import io.netty.channel.ChannelOption;
 import io.netty.channel.ChannelPipeline;
 import io.netty.channel.EventLoopGroup;
 import io.netty.channel.socket.SocketChannel;
 import io.netty.handler.ssl.SslHandler;
 
+import javax.net.ssl.SSLEngine;
+import javax.net.ssl.SSLParameters;
 import java.time.Duration;
 
 final class Bootstrapper {
@@ -47,8 +50,13 @@ final class Bootstrapper {
 
     TCPConnection newInit(Node node, Channel channel) {
         TCPConnection tcpConnection = new TCPConnection(node);
+        tcpConnection.clientChannel(channel); // HIGH-13: Wire client channel for connect failure notification
 
         Bootstrap bootstrap = BootstrapFactory.tcp(l4LoadBalancer.configurationContext(), eventLoopGroup, byteBufAllocator)
+                // RFC 9293 Section 3.6: Enable half-close on backend channels so that
+                // a FIN from the backend only shuts down the read side, allowing the
+                // proxy to finish flushing data to the client before closing.
+                .option(ChannelOption.ALLOW_HALF_CLOSURE, true)
                 .handler(new ChannelInitializer<SocketChannel>() {
                     @Override
                     protected void initChannel(SocketChannel ch) {
@@ -66,6 +74,19 @@ final class Bootstrapper {
                                     .defaultMapping()
                                     .sslContext()
                                     .newHandler(ch.alloc(), hostname, port);
+
+                            // Enable hostname verification to prevent MITM attacks.
+                            // Without this, any valid CA-signed certificate is accepted
+                            // regardless of whether it matches the backend hostname.
+                            //
+                            // CF-02: Skip hostname verification when acceptAllCerts is enabled.
+                            // See HTTP Bootstrapper CF-02 comment for full rationale.
+                            if (!l4LoadBalancer.configurationContext().tlsClientConfiguration().acceptAllCerts()) {
+                                SSLEngine engine = sslHandler.engine();
+                                SSLParameters params = engine.getSSLParameters();
+                                params.setEndpointIdentificationAlgorithm("HTTPS");
+                                engine.setSSLParameters(params);
+                            }
 
                             pipeline.addLast(sslHandler);
                         }

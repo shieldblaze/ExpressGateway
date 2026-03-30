@@ -1,0 +1,59 @@
+syntax = "proto3";
+
+package com.shieldblaze.expressgateway.controlplane.v1;
+
+option java_package = "com.shieldblaze.expressgateway.controlplane.v1";
+option java_multiple_files = true;
+option java_outer_classname = "CommonProto";
+
+// Identifies a data-plane node within the mesh.
+message NodeIdentity {
+  string node_id = 1;
+  string cluster_id = 2;
+  string environment = 3;
+  string address = 4;
+  string build_version = 5;
+  repeated string capabilities = 6;
+  map<string, string> metadata = 7;
+}
+
+// Tracks the version of a resource type, including per-resource versions for delta updates.
+message ResourceVersion {
+  string type_url = 1;
+  string version = 2;
+  // Per-resource version tracking for delta/incremental distribution.
+  map<string, string> resource_versions = 3;
+}
+
+// A versioned, typed configuration resource with a JSON-encoded payload.
+message Resource {
+  string name = 1;
+  string type_url = 2;
+  string version = 3;
+  // JSON-encoded payload. The control plane serialises typed config into JSON
+  // so that data-plane nodes can decode without compiled proto knowledge of
+  // every resource type.
+  bytes payload = 4;
+}
+
+// Health status of a data-plane node.
+enum NodeHealthStatus {
+  NODE_HEALTH_UNKNOWN = 0;
+  NODE_HEALTH_HEALTHY = 1;
+  NODE_HEALTH_DEGRADED = 2;
+  NODE_HEALTH_UNHEALTHY = 3;
+  NODE_HEALTH_DRAINING = 4;
+}
+
+// Millisecond-precision timestamp.
+message Timestamp {
+  int64 epoch_millis = 1;
+}
+
+// Status code carried in control-plane responses.
+enum ResponseStatus {
+  OK = 0;
+  ERROR = 1;
+  NACK = 2;
+  STALE = 3;
+}

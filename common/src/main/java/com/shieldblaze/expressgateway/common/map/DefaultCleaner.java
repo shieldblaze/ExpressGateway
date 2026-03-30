@@ -14,11 +14,21 @@ import java.util.concurrent.TimeUnit;
  */
 final class DefaultCleaner<K, V> extends Cleaner<K, V> {
 
+    /**
+     * Default cleanup interval in seconds. Increased from 1s to reduce CPU usage
+     * for long-TTL maps where second-level precision is unnecessary.
+     */
+    private static final int DEFAULT_CLEANUP_INTERVAL_SECONDS = 2;
+
     private final ScheduledFuture<?> scheduledFuture;
 
     DefaultCleaner(SelfExpiringMap<K, V> selfExpiringMap) {
+        this(selfExpiringMap, DEFAULT_CLEANUP_INTERVAL_SECONDS, TimeUnit.SECONDS);
+    }
+
+    DefaultCleaner(SelfExpiringMap<K, V> selfExpiringMap, int interval, TimeUnit unit) {
         super(selfExpiringMap);
-        scheduledFuture = GlobalExecutors.submitTaskAndRunEvery(this, 1, 1, TimeUnit.SECONDS);
+        scheduledFuture = GlobalExecutors.submitTaskAndRunEvery(this, interval, interval, unit);
     }
 
     @Override

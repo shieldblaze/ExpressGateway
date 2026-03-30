@@ -98,6 +98,11 @@ public class UDPListener extends L4FrontListener {
     public L4FrontListenerStopTask stop() {
         L4FrontListenerStopTask l4FrontListenerStopEvent = new L4FrontListenerStopTask();
 
+        if (channelFutures.isEmpty()) {
+            l4FrontListenerStopEvent.markSuccess(null);
+            return l4FrontListenerStopEvent;
+        }
+
         // Close all ChannelFutures
         channelFutures.forEach(channelFuture -> channelFuture.channel().close());
 

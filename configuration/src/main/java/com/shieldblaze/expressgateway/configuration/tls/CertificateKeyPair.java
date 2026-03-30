@@ -28,6 +28,7 @@ import io.netty.handler.ssl.SslContext;
 import io.netty.handler.ssl.SslContextBuilder;
 import io.netty.handler.ssl.SslProvider;
 import io.netty.handler.ssl.util.InsecureTrustManagerFactory;
+import io.netty.util.ReferenceCountUtil;
 import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
 import org.bouncycastle.cert.ocsp.BasicOCSPResp;
@@ -45,7 +46,11 @@ import java.security.cert.Certificate;
 import java.security.cert.CertificateException;
 import java.security.cert.CertificateFactory;
 import java.security.cert.X509Certificate;
+import java.time.Duration;
+import java.time.Instant;
 import java.util.ArrayList;
+import java.util.Arrays;
+import java.util.Date;
 import java.util.List;
 import java.util.Objects;
 import java.util.concurrent.ScheduledFuture;
@@ -62,9 +67,24 @@ public final class CertificateKeyPair implements Runnable, Closeable {
     private final PrivateKey privateKey;
     private final boolean useOCSPStapling;
 
-    private byte[] ocspStaplingData;
+    // TLS-01: Must be volatile — updated by the OCSP refresh scheduled task running
+    // on GlobalExecutors and read by Netty I/O threads in the SslHandler callback.
+    // Without volatile, I/O threads may read stale/partially-written data.
+    private volatile byte[] ocspStaplingData;
     private ScheduledFuture<?> scheduledFuture;
-    private SslContext sslContext;
+    // TLS-F1: Must be volatile — init() builds the SslContext on an application thread
+    // and sslContext() is read from Netty I/O threads during TLS handshake setup.
+    // Without volatile, the I/O thread may see null or a partially-constructed SslContext
+    // due to JMM reordering of the constructor and field assignment.
+    private volatile SslContext sslContext;
+
+    /**
+     * Configurable ALPN protocol list. Defaults to [h2, http/1.1].
+     */
+    private List<String> alpnProtocols = Arrays.asList(
+            ApplicationProtocolNames.HTTP_2,
+            ApplicationProtocolNames.HTTP_1_1
+    );
 
     /**
      * <p> Create a new TLS Client Instance </p>
@@ -129,6 +149,9 @@ public final class CertificateKeyPair implements Runnable, Closeable {
         certificates.addAll(x509Certificates);
         this.privateKey = privateKey;
         this.useOCSPStapling = useOCSPStapling;
+
+        // SEC-08: Check certificate expiration at construction time.
+        checkCertificateExpiration();
     }
 
     /**
@@ -152,6 +175,41 @@ public final class CertificateKeyPair implements Runnable, Closeable {
             logger.error(e);
             throw new IllegalArgumentException("Error Occurred: " + e);
         }
+
+        // SEC-08: Check certificate expiration at construction time.
+        checkCertificateExpiration();
+    }
+
+    /**
+     * SEC-08: Check if any certificate in the chain expires within 30 days and log a warning.
+     * Expired certificates cause TLS handshake failures. Near-expiration warnings give
+     * operators time to rotate certificates before outages occur. This mirrors the
+     * approach used by Nginx (ssl_certificate_expiry_warning) and HAProxy (cert-expiry).
+     */
+    private void checkCertificateExpiration() {
+        Instant now = Instant.now();
+        Duration warningThreshold = Duration.ofDays(30);
+
+        for (X509Certificate cert : certificates) {
+            Date notAfter = cert.getNotAfter();
+            if (notAfter == null) {
+                continue;
+            }
+
+            Instant expiry = notAfter.toInstant();
+            Duration remaining = Duration.between(now, expiry);
+
+            String subject = cert.getSubjectX500Principal().getName();
+
+            if (remaining.isNegative()) {
+                logger.error("Certificate has EXPIRED: subject='{}', expired on {}. " +
+                        "TLS handshakes will fail until the certificate is replaced.", subject, notAfter);
+            } else if (remaining.compareTo(warningThreshold) < 0) {
+                long daysRemaining = remaining.toDays();
+                logger.warn("Certificate expiring soon: subject='{}', expires on {} ({} days remaining). " +
+                        "Rotate the certificate to avoid service disruption.", subject, notAfter, daysRemaining);
+            }
+        }
     }
 
     /**
@@ -173,10 +231,21 @@ public final class CertificateKeyPair implements Runnable, Closeable {
             ciphers.add(cipher.toString());
         }
 
+        // TLS-05: Prefer FATAL_ALERT per RFC 7301 — if the client's ALPN list does not
+        // contain any protocol the server supports, the connection should be terminated
+        // with a fatal alert rather than silently accepting an unsupported protocol.
+        // However, OpenSSL's ALPN implementation does not support FATAL_ALERT behavior,
+        // so we fall back to ACCEPT when using the OpenSSL provider.
+        SslProvider sslProvider = OpenSsl.isAvailable() ? SslProvider.OPENSSL : SslProvider.JDK;
+        ApplicationProtocolConfig.SelectedListenerFailureBehavior alpnFailureBehavior =
+                sslProvider == SslProvider.JDK
+                        ? ApplicationProtocolConfig.SelectedListenerFailureBehavior.FATAL_ALERT
+                        : ApplicationProtocolConfig.SelectedListenerFailureBehavior.ACCEPT;
+
         SslContextBuilder sslContextBuilder;
-        if (tlsConfiguration instanceof TlsServerConfiguration) {
+        if (tlsConfiguration instanceof TlsServerConfiguration serverConfig) {
             sslContextBuilder = SslContextBuilder.forServer(privateKey, certificates)
-                    .sslProvider(OpenSsl.isAvailable() ? SslProvider.OPENSSL : SslProvider.JDK)
+                    .sslProvider(sslProvider)
                     .protocols(Protocol.getProtocols(tlsConfiguration.protocols()))
                     .ciphers(ciphers)
                     .enableOcsp(useOCSPStapling)
@@ -187,9 +256,14 @@ public final class CertificateKeyPair implements Runnable, Closeable {
                     .applicationProtocolConfig(new ApplicationProtocolConfig(
                             ApplicationProtocolConfig.Protocol.ALPN,
                             ApplicationProtocolConfig.SelectorFailureBehavior.NO_ADVERTISE,
-                            ApplicationProtocolConfig.SelectedListenerFailureBehavior.ACCEPT,
-                            ApplicationProtocolNames.HTTP_2,
-                            ApplicationProtocolNames.HTTP_1_1));
+                            alpnFailureBehavior,
+                            alpnProtocols));
+
+            // BUG-009 fix: When mTLS is REQUIRED or OPTIONAL, configure the trust manager
+            // so the server can validate client certificates against a custom CA store.
+            if (tlsConfiguration.mutualTLS() == MutualTLS.REQUIRED || tlsConfiguration.mutualTLS() == MutualTLS.OPTIONAL) {
+                sslContextBuilder.trustManager(serverConfig.buildTrustManagerFactory());
+            }
 
             if (useOCSPStapling) {
                 scheduledFuture = GlobalExecutors.submitTaskAndRunEvery(this, 0, 6, TimeUnit.HOURS);
@@ -210,19 +284,26 @@ public final class CertificateKeyPair implements Runnable, Closeable {
                 }
             }
 
+            // BUG-016: Do NOT set clientAuth on a client-side SslContext. The clientAuth
+            // setting is a server-side concept (controls whether the server requests a
+            // client certificate). On a client SslContext:
+            //   - JDK provider: silently ignored.
+            //   - OpenSSL/BoringSSL provider: can cause SSL_CTX_set_verify to set
+            //     SSL_VERIFY_FAIL_IF_NO_PEER_CERT on the client side, which makes
+            //     the OpenSSL engine treat the server's certificate presentation as
+            //     a client-auth requirement and can produce spurious
+            //     PEER_DID_NOT_RETURN_A_CERTIFICATE errors during handshake.
             sslContextBuilder = SslContextBuilder.forClient()
-                    .sslProvider(OpenSsl.isAvailable() ? SslProvider.OPENSSL : SslProvider.JDK)
+                    .sslProvider(sslProvider)
                     .protocols(Protocol.getProtocols(tlsConfiguration.protocols()))
                     .ciphers(ciphers)
-                    .clientAuth(tlsConfiguration.mutualTLS().clientAuth())
                     .trustManager(trustManagerFactory)
                     .startTls(tlsConfiguration.useStartTLS())
                     .applicationProtocolConfig(new ApplicationProtocolConfig(
                             ApplicationProtocolConfig.Protocol.ALPN,
                             ApplicationProtocolConfig.SelectorFailureBehavior.NO_ADVERTISE,
-                            ApplicationProtocolConfig.SelectedListenerFailureBehavior.ACCEPT,
-                            ApplicationProtocolNames.HTTP_2,
-                            ApplicationProtocolNames.HTTP_1_1));
+                            alpnFailureBehavior,
+                            alpnProtocols));
 
             if (tlsConfiguration.mutualTLS() == MutualTLS.REQUIRED || tlsConfiguration.mutualTLS() == MutualTLS.OPTIONAL) {
                 sslContextBuilder.keyManager(privateKey, certificates);
@@ -237,27 +318,100 @@ public final class CertificateKeyPair implements Runnable, Closeable {
         return sslContext;
     }
 
+    /**
+     * Get the {@link PrivateKey} associated with this certificate pair.
+     *
+     * <p>Required by QUIC-TLS (RFC 9001) which uses BoringSSL natively and cannot
+     * reuse a pre-built Netty {@link SslContext}. The QUIC SSL context builder
+     * ({@code QuicSslContextBuilder.forServer}) requires the raw private key and
+     * certificate chain directly.</p>
+     *
+     * @return the private key, or {@code null} for default client instances
+     */
+    public PrivateKey privateKey() {
+        return privateKey;
+    }
+
+    /**
+     * Get the {@link X509Certificate} chain associated with this certificate pair.
+     *
+     * <p>Returns an unmodifiable view of the certificate chain. Required by QUIC-TLS
+     * (RFC 9001) which uses BoringSSL natively and cannot reuse a pre-built Netty
+     * {@link SslContext}.</p>
+     *
+     * @return unmodifiable list of certificates in the chain
+     */
+    public List<X509Certificate> certificates() {
+        return List.copyOf(certificates);
+    }
+
+    /**
+     * TLS-F2: Return a defensive copy of the OCSP stapling data.
+     * The internal array is written by the OCSP refresh task and read by Netty I/O threads.
+     * Without copying, a caller could mutate the array contents, corrupting the stapled
+     * response sent to clients during the TLS handshake.
+     */
     public byte[] ocspStaplingData() {
-        return ocspStaplingData;
+        byte[] data = ocspStaplingData;
+        return data != null ? data.clone() : null;
     }
 
     public boolean useOCSPStapling() {
         return useOCSPStapling;
     }
 
+    /**
+     * Get the configured ALPN protocol list.
+     */
+    public List<String> alpnProtocols() {
+        return alpnProtocols;
+    }
+
+    /**
+     * Set the ALPN protocol list. Defaults to [h2, http/1.1].
+     *
+     * @param alpnProtocols list of ALPN protocol names
+     * @return this instance
+     */
+    public CertificateKeyPair setAlpnProtocols(List<String> alpnProtocols) {
+        Objects.requireNonNull(alpnProtocols, "alpnProtocols");
+        if (alpnProtocols.isEmpty()) {
+            throw new IllegalArgumentException("alpnProtocols must not be empty");
+        }
+        this.alpnProtocols = alpnProtocols;
+        return this;
+    }
+
     @Override
     public void run() {
         try {
+            // TLS-04: Guard against certificate chains with fewer than 2 certificates.
+            // OCSP stapling requires both the end-entity certificate and the issuer
+            // certificate. A self-signed cert or incomplete chain would cause an
+            // IndexOutOfBoundsException here.
+            if (certificates.size() < 2) {
+                logger.warn("OCSP stapling requires at least 2 certificates in chain (end-entity + issuer), " +
+                        "but chain has {} certificate(s). Skipping OCSP refresh.", certificates.size());
+                ocspStaplingData = null;
+                return;
+            }
             OCSPResp response = OCSPClient.response(certificates.get(0), certificates.get(1));
             SingleResp ocspResp = ((BasicOCSPResp) response.getResponseObject()).getResponses()[0];
 
             // null indicates good status.
             if (ocspResp.getCertStatus() == null) {
+                // TLS-F2: getEncoded() returns a fresh array each call, so this assignment
+                // is already a safe snapshot. The defensive copy is on the getter side.
                 ocspStaplingData = response.getEncoded();
                 return;
             }
         } catch (Exception ex) {
-            logger.error(ex);
+            logger.error("OCSP stapling refresh failed; stapling data will be cleared", ex);
+        }
+        // MED-22: Log when OCSP stapling data is nullified so operators have visibility
+        if (ocspStaplingData != null) {
+            logger.warn("OCSP stapling data cleared for certificate CN={}; TLS clients will not receive stapled response",
+                    certificates.get(0).getSubjectX500Principal().getName());
         }
         ocspStaplingData = null;
     }
@@ -266,6 +420,16 @@ public final class CertificateKeyPair implements Runnable, Closeable {
     public void close() throws IOException {
         if (scheduledFuture != null && !scheduledFuture.isCancelled()) {
             scheduledFuture.cancel(true);
+        }
+
+        // TLS-F7: When using the OpenSSL provider, SslContext implements ReferenceCounted
+        // and holds a native SSL_CTX pointer. If not explicitly released, the native memory
+        // is leaked until GC finalizes the object (if ever). With the JDK provider,
+        // ReferenceCountUtil.release() is a safe no-op since JdkSslContext does not
+        // implement ReferenceCounted.
+        if (sslContext != null) {
+            ReferenceCountUtil.release(sslContext);
+            sslContext = null;
         }
     }
 }

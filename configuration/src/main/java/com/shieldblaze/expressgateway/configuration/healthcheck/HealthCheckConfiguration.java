@@ -94,4 +94,12 @@ public final class HealthCheckConfiguration implements Configuration<HealthCheck
     public boolean validated() {
         return validated;
     }
+
+    @Override
+    public String toString() {
+        return "HealthCheckConfiguration{" +
+                "workers=" + workers +
+                ", timeInterval=" + timeInterval +
+                '}';
+    }
 }

@@ -28,10 +28,10 @@ import java.util.concurrent.CompletableFuture;
 public class DefaultTask<T> implements Task<T> {
 
     private final CompletableFuture<T> future = new CompletableFuture<>();
-    private boolean isFinished;
-    private boolean isSuccessful;
-    private Throwable throwable;
-    private T object;
+    private volatile boolean isFinished;
+    private volatile boolean isSuccessful;
+    private volatile Throwable throwable;
+    private volatile T object;
 
     /**
      * Mark this event as successful with 'null' successfulcompletion object
@@ -55,7 +55,6 @@ public class DefaultTask<T> implements Task<T> {
         future.complete(object);
         this.object = object;
 
-        System.out.println("DefaultTask.markSuccess() called, isFinished: " + isFinished + ", isSuccessful: " + isSuccessful + ", object: " + object);
     }
 
     /**
@@ -69,13 +68,12 @@ public class DefaultTask<T> implements Task<T> {
         }
 
         isFinished = true;
-        isSuccessful = true;
+        isSuccessful = false;
         throwable = cause;
         future.completeExceptionally(cause);
     }
 
     public CompletableFuture<T> future() {
-        System.out.println("DefaultTask.future() called, isFinished: " + isFinished + ", isSuccessful: " + isSuccessful + ", object: " + object);
         return future;
     }
 

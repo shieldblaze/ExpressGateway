@@ -56,11 +56,11 @@ public abstract class L4Balance extends LoadBalance<Node, Node, InetSocketAddres
     }
 
     @NonNull
-    public abstract L4Response response(L4Request l4Request) throws LoadBalanceException;
+    public abstract L4Response balance(L4Request l4Request) throws LoadBalanceException;
 
     @Override
-    public Response response(Request request) throws LoadBalanceException {
-        return response((L4Request) request);
+    public final Response response(Request request) throws LoadBalanceException {
+        return balance((L4Request) request);
     }
 
     @Override

@@ -17,6 +17,8 @@
  */
 package com.shieldblaze.expressgateway.common.crypto;
 
+import org.apache.logging.log4j.LogManager;
+import org.apache.logging.log4j.Logger;
 import org.bouncycastle.jce.provider.BouncyCastleProvider;
 import org.bouncycastle.openssl.PEMKeyPair;
 import org.bouncycastle.openssl.PEMParser;
@@ -27,6 +29,8 @@ import java.security.KeyPair;
 import java.security.PrivateKey;
 
 public final class PrivateKeyUtil {
+
+    private static final Logger logger = LogManager.getLogger(PrivateKeyUtil.class);
 
     private PrivateKeyUtil() {
         // Prevent outside initialization
@@ -50,7 +54,7 @@ public final class PrivateKeyUtil {
         } catch (IllegalArgumentException ex) {
             throw ex;
         } catch (Exception ex) {
-            // Ignore
+            logger.warn("Failed to parse private key", ex);
         }
 
         throw new IllegalArgumentException("Invalid Private Key");

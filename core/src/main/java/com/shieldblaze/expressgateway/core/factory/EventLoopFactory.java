@@ -24,47 +24,50 @@ import io.netty.channel.EventLoopGroup;
 import io.netty.channel.epoll.EpollEventLoopGroup;
 import io.netty.channel.nio.NioEventLoopGroup;
 import io.netty.incubator.channel.uring.IOUringEventLoopGroup;
+import org.apache.logging.log4j.LogManager;
+import org.apache.logging.log4j.Logger;
 
-/**
- * This class provides configured {@link EventLoopGroup} instances.
- */
 public final class EventLoopFactory {
+
+    private static final Logger logger = LogManager.getLogger(EventLoopFactory.class);
 
     private final EventLoopGroup parentGroup;
     private final EventLoopGroup childGroup;
 
-    /**
-     * Create a new {@link EventLoopFactory} instance
-     *
-     * @param configurationContext {@link ConfigurationContext} instance
-     */
     @NonNull
     public EventLoopFactory(ConfigurationContext configurationContext) {
         int parentWorkers = configurationContext.eventLoopConfiguration().parentWorkers();
         int childWorkers = configurationContext.eventLoopConfiguration().childWorkers();
 
-        if (configurationContext.transportConfiguration().transportType() == TransportType.IO_URING) {
-            parentGroup = new IOUringEventLoopGroup(parentWorkers);
-            childGroup = new IOUringEventLoopGroup(childWorkers);
-        } else if (configurationContext.transportConfiguration().transportType() == TransportType.EPOLL) {
-            parentGroup = new EpollEventLoopGroup(parentWorkers);
-            childGroup = new EpollEventLoopGroup(childWorkers);
-        } else {
-            parentGroup = new NioEventLoopGroup(parentWorkers);
-            childGroup = new NioEventLoopGroup(childWorkers);
-        }
+        String kernelVersion = System.getProperty("os.version", "unknown");
+        TransportType transportType = configurationContext.transportConfiguration().transportType();
+
+        record EventLoopPair(EventLoopGroup parent, EventLoopGroup child) {}
+
+        var pair = switch (transportType) {
+            case IO_URING -> {
+                logger.info("Transport selected: IO_URING (kernel: {})", kernelVersion);
+                yield new EventLoopPair(new IOUringEventLoopGroup(parentWorkers), new IOUringEventLoopGroup(childWorkers));
+            }
+            case EPOLL -> {
+                logger.info("Transport selected: EPOLL (kernel: {})", kernelVersion);
+                yield new EventLoopPair(new EpollEventLoopGroup(parentWorkers), new EpollEventLoopGroup(childWorkers));
+            }
+            case NIO -> {
+                logger.info("Transport selected: NIO (kernel: {})", kernelVersion);
+                logger.warn("NIO transport selected — native transport (epoll/io_uring) recommended for production");
+                yield new EventLoopPair(new NioEventLoopGroup(parentWorkers), new NioEventLoopGroup(childWorkers));
+            }
+        };
+
+        this.parentGroup = pair.parent();
+        this.childGroup = pair.child();
     }
 
-    /**
-     * Get {@code Parent} {@link EventLoopGroup}
-     */
     public EventLoopGroup parentGroup() {
         return parentGroup;
     }
 
-    /**
-     * Get {@code Child} {@link EventLoopGroup}
-     */
     public EventLoopGroup childGroup() {
         return childGroup;
     }

@@ -17,12 +17,15 @@
  */
 package com.shieldblaze.expressgateway.protocol.tcp;
 
+import com.shieldblaze.expressgateway.configuration.transport.ProxyProtocolMode;
 import com.shieldblaze.expressgateway.core.handlers.ConnectionTimeoutHandler;
+import com.shieldblaze.expressgateway.core.handlers.ProxyProtocolHandler;
 import com.shieldblaze.expressgateway.core.handlers.SNIHandler;
 import com.shieldblaze.expressgateway.core.loadbalancer.L4LoadBalancer;
 import io.netty.channel.ChannelHandlerContext;
 import io.netty.channel.ChannelInitializer;
 import io.netty.channel.ChannelPipeline;
+import io.netty.channel.group.ChannelGroup;
 import io.netty.channel.socket.SocketChannel;
 import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
@@ -34,15 +37,32 @@ final class ServerInitializer extends ChannelInitializer<SocketChannel> {
     private static final Logger logger = LogManager.getLogger(ServerInitializer.class);
 
     private final L4LoadBalancer l4LoadBalancer;
+    private final ChannelGroup activeConnections;
 
     ServerInitializer(L4LoadBalancer l4LoadBalancer) {
+        this(l4LoadBalancer, null);
+    }
+
+    ServerInitializer(L4LoadBalancer l4LoadBalancer, ChannelGroup activeConnections) {
         this.l4LoadBalancer = l4LoadBalancer;
+        this.activeConnections = activeConnections;
     }
 
     @Override
     protected void initChannel(SocketChannel ch) {
         ChannelPipeline pipeline = ch.pipeline();
         pipeline.addLast(l4LoadBalancer.connectionTracker());
+
+        // HIGH-11: Track active connections for graceful draining
+        if (activeConnections != null) {
+            activeConnections.add(ch);
+        }
+
+        // Add PROXY protocol handler if enabled
+        ProxyProtocolMode proxyMode = l4LoadBalancer.configurationContext().transportConfiguration().proxyProtocolMode();
+        if (proxyMode != null && proxyMode != ProxyProtocolMode.OFF) {
+            pipeline.addLast(new ProxyProtocolHandler(proxyMode));
+        }
 
         // Add Connection Timeout Handler
         Duration timeout = Duration.ofMillis(l4LoadBalancer.configurationContext().transportConfiguration().connectionIdleTimeout());

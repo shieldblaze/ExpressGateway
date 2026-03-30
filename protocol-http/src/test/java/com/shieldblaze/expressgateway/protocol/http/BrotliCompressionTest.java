@@ -22,6 +22,7 @@ import com.aayushatharva.brotli4j.decoder.DirectDecompress;
 import org.junit.jupiter.api.AfterAll;
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.Timeout;
 
 import java.io.IOException;
 import java.net.URI;
@@ -29,9 +30,11 @@ import java.net.http.HttpClient;
 import java.net.http.HttpRequest;
 import java.net.http.HttpResponse;
 import java.time.Duration;
+import java.util.concurrent.TimeUnit;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 
+@Timeout(value = 120, unit = TimeUnit.SECONDS)
 class BrotliCompressionTest {
 
     private static TestableHttpLoadBalancer testableHttpLoadBalancer;
@@ -56,7 +59,7 @@ class BrotliCompressionTest {
     void brotliOnlyTest() throws Exception {
         HttpRequest httpRequest = HttpRequest.newBuilder()
                 .GET()
-                .uri(URI.create("https://localhost:9110"))
+                .uri(URI.create("https://localhost:" + testableHttpLoadBalancer.port()))
                 .version(HttpClient.Version.HTTP_2)
                 .timeout(Duration.ofSeconds(5))
                 .setHeader("Accept-Encoding", "br")
@@ -75,7 +78,7 @@ class BrotliCompressionTest {
     void brotliAndGzipTest() throws Exception {
         HttpRequest httpRequest = HttpRequest.newBuilder()
                 .GET()
-                .uri(URI.create("https://localhost:9110"))
+                .uri(URI.create("https://localhost:" + testableHttpLoadBalancer.port()))
                 .version(HttpClient.Version.HTTP_2)
                 .timeout(Duration.ofSeconds(5))
                 .setHeader("Accept-Encoding", "gzip, br")
@@ -94,7 +97,7 @@ class BrotliCompressionTest {
     void brotliGzipAndDeflateTest() throws Exception {
         HttpRequest httpRequest = HttpRequest.newBuilder()
                 .GET()
-                .uri(URI.create("https://localhost:9110"))
+                .uri(URI.create("https://localhost:" + testableHttpLoadBalancer.port()))
                 .version(HttpClient.Version.HTTP_2)
                 .timeout(Duration.ofSeconds(5))
                 .setHeader("Accept-Encoding", "gzip, deflate, br")

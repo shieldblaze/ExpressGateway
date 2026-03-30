@@ -20,10 +20,9 @@ package com.shieldblaze.expressgateway.backend.events.node;
 import com.shieldblaze.expressgateway.backend.Node;
 import com.shieldblaze.expressgateway.concurrent.task.DefaultTask;
 
-/**
- * Base class of all {@link Node} events
- */
-public abstract class NodeTask extends DefaultTask<Void> {
+public abstract sealed class NodeTask extends DefaultTask<Void>
+        permits NodeAddedTask, NodeIdleTask, NodeOfflineTask, NodeOnlineTask, NodeRemovedTask {
+
     private final Node node;
 
     protected NodeTask(Node node) {

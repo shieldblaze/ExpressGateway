@@ -37,9 +37,11 @@ final class HTTPServer extends Thread {
 
     @Override
     public void run() {
-        try (ServerSocket serverSocket = new ServerSocket(port, 1000, InetAddress.getByName("127.0.0.1"))) {
-            Socket clientSocket = serverSocket.accept();
-            PrintWriter out = new PrintWriter(new BufferedWriter(new OutputStreamWriter(clientSocket.getOutputStream())), true);
+        try (ServerSocket serverSocket = new ServerSocket(port, 1000, InetAddress.getByName("127.0.0.1"));
+             Socket clientSocket = serverSocket.accept();
+             OutputStreamWriter osw = new OutputStreamWriter(clientSocket.getOutputStream());
+             BufferedWriter bw = new BufferedWriter(osw);
+             PrintWriter out = new PrintWriter(bw, true)) {
 
             out.write("HTTP/1.1 " + responseStatus + CRLF);
             out.write("Server: Apache/0.8.4" + CRLF);

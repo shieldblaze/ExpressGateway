@@ -22,7 +22,7 @@
     <parent>
         <groupId>com.shieldblaze.expressgateway</groupId>
         <artifactId>parent</artifactId>
-        <version>0.0.1-a</version>
+        <version>1.0.0</version>
     </parent>
     <modelVersion>4.0.0</modelVersion>
 
@@ -34,4 +34,25 @@
     <properties>
         <javaModuleName>com.shieldblaze.expressgateway.security</javaModuleName>
     </properties>
+
+    <dependencies>
+        <dependency>
+            <groupId>org.jctools</groupId>
+            <artifactId>jctools-core</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>org.agrona</groupId>
+            <artifactId>agrona</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>io.netty</groupId>
+            <artifactId>netty-handler</artifactId>
+            <version>${netty}</version>
+        </dependency>
+        <dependency>
+            <groupId>com.google.guava</groupId>
+            <artifactId>guava</artifactId>
+            <version>33.5.0-jre</version>
+        </dependency>
+    </dependencies>
 </project>

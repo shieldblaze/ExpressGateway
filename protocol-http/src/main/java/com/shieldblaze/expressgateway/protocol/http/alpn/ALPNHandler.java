@@ -90,6 +90,10 @@ public final class ALPNHandler extends ApplicationProtocolNegotiationHandler {
     @Override
     public void exceptionCaught(ChannelHandlerContext ctx, Throwable cause) {
         logger.error("Caught Error at ALPN Handler", cause);
+        // TLS-02: Close the channel on error to prevent lingering half-open
+        // connections. Without this, a failed TLS handshake or ALPN negotiation
+        // leaves the channel open indefinitely, leaking file descriptors.
+        ctx.close();
     }
 
     /**

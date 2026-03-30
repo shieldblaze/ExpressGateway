@@ -22,7 +22,7 @@ along with ShieldBlaze ExpressGateway.  If not, see <https://www.gnu.org/license
     <parent>
         <groupId>com.shieldblaze.expressgateway</groupId>
         <artifactId>parent</artifactId>
-        <version>0.0.1-a</version>
+        <version>1.0.0</version>
     </parent>
     <modelVersion>4.0.0</modelVersion>
 
@@ -50,6 +50,10 @@ along with ShieldBlaze ExpressGateway.  If not, see <https://www.gnu.org/license
             <groupId>com.shieldblaze.expressgateway</groupId>
             <artifactId>concurrent</artifactId>
             <version>${project.parent.version}</version>
+        </dependency>
+        <dependency>
+            <groupId>org.agrona</groupId>
+            <artifactId>agrona</artifactId>
         </dependency>
     </dependencies>
 

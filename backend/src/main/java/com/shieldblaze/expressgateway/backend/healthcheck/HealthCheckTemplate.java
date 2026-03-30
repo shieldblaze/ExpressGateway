@@ -22,7 +22,6 @@ import com.shieldblaze.expressgateway.common.JakartaValidator;
 import jakarta.validation.constraints.Max;
 import jakarta.validation.constraints.Min;
 import jakarta.validation.constraints.NotNull;
-import lombok.Builder;
 import lombok.Getter;
 import lombok.ToString;
 import lombok.experimental.Accessors;
@@ -30,7 +29,6 @@ import lombok.experimental.Accessors;
 @Getter
 @ToString
 @Accessors(fluent = true)
-@Builder(builderClassName = "Builder")
 public final class HealthCheckTemplate {
 
     /**
@@ -74,10 +72,61 @@ public final class HealthCheckTemplate {
     @JsonProperty("samples")
     private int samples;
 
+    HealthCheckTemplate() {
+        // For builder
+    }
+
+    public static Builder builder() {
+        return new Builder();
+    }
+
     public static class Builder {
 
+        private Protocol protocol;
+        private String host;
+        private int port;
+        private String path;
+        private int timeout;
+        private int samples;
+
+        public Builder protocol(Protocol protocol) {
+            this.protocol = protocol;
+            return this;
+        }
+
+        public Builder host(String host) {
+            this.host = host;
+            return this;
+        }
+
+        public Builder port(int port) {
+            this.port = port;
+            return this;
+        }
+
+        public Builder path(String path) {
+            this.path = path;
+            return this;
+        }
+
+        public Builder timeout(int timeout) {
+            this.timeout = timeout;
+            return this;
+        }
+
+        public Builder samples(int samples) {
+            this.samples = samples;
+            return this;
+        }
+
         public HealthCheckTemplate build() {
-            HealthCheckTemplate instance = new HealthCheckTemplate(protocol, host, port, path, timeout, samples);
+            HealthCheckTemplate instance = new HealthCheckTemplate();
+            instance.protocol = this.protocol;
+            instance.host = this.host;
+            instance.port = this.port;
+            instance.path = this.path;
+            instance.timeout = this.timeout;
+            instance.samples = this.samples;
             JakartaValidator.validate(instance);
             return instance;
         }

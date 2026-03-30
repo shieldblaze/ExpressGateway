@@ -17,14 +17,17 @@
  */
 package com.shieldblaze.expressgateway.backend.strategy.l4;
 
+import com.shieldblaze.expressgateway.backend.Node;
 import com.shieldblaze.expressgateway.backend.NodeBuilder;
 import com.shieldblaze.expressgateway.backend.cluster.Cluster;
 import com.shieldblaze.expressgateway.backend.cluster.ClusterBuilder;
+import com.shieldblaze.expressgateway.backend.exceptions.NoNodeAvailableException;
 import com.shieldblaze.expressgateway.backend.strategy.l4.sessionpersistence.NOOPSessionPersistence;
 import org.junit.jupiter.api.Test;
 
 import java.net.InetSocketAddress;
 
+import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 class RandomTest {
@@ -78,8 +81,62 @@ class RandomTest {
         assertTrue(fifth > 10);
     }
 
+    /**
+     * Verifies that calling response() when all nodes are offline throws
+     * NoNodeAvailableException rather than IllegalArgumentException from
+     * SplittableRandom.nextInt(0).
+     */
+    @Test
+    void testRandomWithAllNodesOffline() throws Exception {
+        Cluster cluster = ClusterBuilder.newBuilder()
+                .withLoadBalance(new Random(NOOPSessionPersistence.INSTANCE))
+                .build();
+
+        // Add nodes then mark them all offline
+        Node node1 = fastBuildAndReturn(cluster, "172.16.20.1");
+        Node node2 = fastBuildAndReturn(cluster, "172.16.20.2");
+        Node node3 = fastBuildAndReturn(cluster, "172.16.20.3");
+
+        node1.markOffline();
+        node2.markOffline();
+        node3.markOffline();
+
+        L4Request l4Request = new L4Request(new InetSocketAddress("192.168.1.1", 1));
+
+        // Must throw NoNodeAvailableException, not IllegalArgumentException
+        assertThrows(NoNodeAvailableException.class, () -> cluster.nextNode(l4Request));
+
+        // Close Cluster to prevent memory leaks.
+        cluster.close();
+    }
+
+    /**
+     * Verifies that calling response() on a cluster with zero nodes throws
+     * NoNodeAvailableException (the empty-pool guard path).
+     */
+    @Test
+    void testRandomWithEmptyCluster() {
+        Cluster cluster = ClusterBuilder.newBuilder()
+                .withLoadBalance(new Random(NOOPSessionPersistence.INSTANCE))
+                .build();
+
+        L4Request l4Request = new L4Request(new InetSocketAddress("192.168.1.1", 1));
+
+        assertThrows(NoNodeAvailableException.class, () -> cluster.nextNode(l4Request));
+
+        // Close Cluster to prevent memory leaks.
+        cluster.close();
+    }
+
     private static void fastBuild(Cluster cluster, String host) throws Exception {
         NodeBuilder.newBuilder()
+                .withCluster(cluster)
+                .withSocketAddress(new InetSocketAddress(host, 1))
+                .build();
+    }
+
+    private static Node fastBuildAndReturn(Cluster cluster, String host) throws Exception {
+        return NodeBuilder.newBuilder()
                 .withCluster(cluster)
                 .withSocketAddress(new InetSocketAddress(host, 1))
                 .build();

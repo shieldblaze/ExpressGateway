@@ -21,6 +21,17 @@ package com.shieldblaze.expressgateway.protocol.http;
 public final class Headers {
     public static final String X_FORWARDED_FOR = "x-forwarded-for";
     public static final String X_FORWARDED_PROTO = "x-forwarded-proto";
+    public static final String X_FORWARDED_HOST = "x-forwarded-host";
+    public static final String X_FORWARDED_PORT = "x-forwarded-port";
+    public static final String VIA = "via";
+
+    /**
+     * Unique request identifier for end-to-end request correlation across
+     * proxy, backend, and observability systems. If the client sends this
+     * header, the proxy preserves it (does not overwrite). Otherwise, the
+     * proxy generates a UUID v4 and injects it before forwarding.
+     */
+    public static final String X_REQUEST_ID = "x-request-id";
 
     private Headers() {
         // Prevent outside initialization

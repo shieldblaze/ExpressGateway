@@ -25,16 +25,22 @@ import com.shieldblaze.expressgateway.backend.exceptions.TooManyConnectionsExcep
 import com.shieldblaze.expressgateway.common.annotation.NonNull;
 import com.shieldblaze.expressgateway.common.utils.MathUtil;
 import com.shieldblaze.expressgateway.common.utils.NumberUtil;
+import com.shieldblaze.expressgateway.configuration.healthcheck.CircuitBreakerConfiguration;
 import com.shieldblaze.expressgateway.healthcheck.Health;
 import com.shieldblaze.expressgateway.healthcheck.HealthCheck;
 import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
 
+import io.netty.channel.ChannelFuture;
+
 import java.io.Closeable;
 import java.net.InetSocketAddress;
+import java.util.ArrayList;
+import java.util.List;
 import java.util.Queue;
 import java.util.UUID;
 import java.util.concurrent.ConcurrentLinkedQueue;
+import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicLong;
 
@@ -56,6 +62,15 @@ public final class Node implements Comparable<Node>, Closeable {
      * Active Connections Queue
      */
     private final Queue<Connection> activeConnections = new ConcurrentLinkedQueue<>();
+
+    /**
+     * CM-04: O(1) counter tracking the number of items in {@link #activeConnections}.
+     * ConcurrentLinkedQueue.size() is O(n) — it traverses the entire linked list on every call.
+     * At 10K+ connections per node, this becomes a measurable CPU drain on every load-balancing
+     * decision, health-check poll, and metrics scrape. An AtomicInteger provides O(1) reads
+     * with minimal contention via CAS.
+     */
+    private final AtomicInteger connectionCount = new AtomicInteger(0);
 
     /**
      * Address of this {@link Node}
@@ -85,7 +100,7 @@ public final class Node implements Comparable<Node>, Closeable {
     /**
      * Current State of this {@link Node}
      */
-    private State state;
+    private volatile State state;
 
     /**
      * Health Check for this {@link Node}
@@ -93,9 +108,14 @@ public final class Node implements Comparable<Node>, Closeable {
     private HealthCheck healthCheck;
 
     /**
+     * Circuit Breaker for this {@link Node}
+     */
+    private CircuitBreaker circuitBreaker;
+
+    /**
      * Max Connections handled by this {@link Node}
      */
-    private int maxConnections = 10_000;
+    private volatile int maxConnections = 10_000;
 
     /**
      * See {@link #addedToCluster()}
@@ -129,16 +149,16 @@ public final class Node implements Comparable<Node>, Closeable {
     }
 
     /**
-     * Get number of active connections
+     * Get number of active connections.
+     * Returns the sum of both tracking mechanisms: the connection queue
+     * (managed via addConnection/removeConnection) and the secondary atomic
+     * counter (managed via incActiveConnection0/decActiveConnection0).
+     * <p>
+     * CM-04: Uses AtomicInteger counter instead of ConcurrentLinkedQueue.size()
+     * which is O(n). The counter is maintained by addConnection/removeConnection.
      */
     public int activeConnection() {
-
-        // If active connection is initialized (value not set to 0) then return it.
-        if (activeConnection0() != 0) {
-            return activeConnection0();
-        }
-
-        return activeConnections.size();
+        return connectionCount.get() + activeConnection0();
     }
 
     /**
@@ -201,10 +221,18 @@ public final class Node implements Comparable<Node>, Closeable {
     }
 
     /**
-     * Decrements the number of active connections in secondary implementation
+     * Decrements the number of active connections in secondary implementation.
+     * Will not go below zero to prevent counter corruption from mismatched
+     * increment/decrement calls.
      */
     public Node decActiveConnection0() {
-        activeConnection0.incrementAndGet();
+        int prev;
+        do {
+            prev = activeConnection0.get();
+            if (prev <= 0) {
+                return this;
+            }
+        } while (!activeConnection0.compareAndSet(prev, prev - 1));
         return this;
     }
 
@@ -212,7 +240,7 @@ public final class Node implements Comparable<Node>, Closeable {
      * Reset the number of active connections in secondary implementation
      */
     public Node resetActiveConnection0() {
-        activeConnection0.set(-1);
+        activeConnection0.set(0);
         return this;
     }
 
@@ -234,6 +262,23 @@ public final class Node implements Comparable<Node>, Closeable {
 
     public HealthCheck healthCheck() {
         return healthCheck;
+    }
+
+    /**
+     * Initialize the circuit breaker for this Node using the provided configuration.
+     * If the configuration is disabled, the circuit breaker will still be created
+     * but will always allow requests through.
+     */
+    @NonNull
+    public void circuitBreaker(CircuitBreakerConfiguration config) {
+        this.circuitBreaker = new CircuitBreaker(config);
+    }
+
+    /**
+     * Returns the {@link CircuitBreaker} for this Node, or {@code null} if not configured.
+     */
+    public CircuitBreaker circuitBreaker() {
+        return circuitBreaker;
     }
 
     /**
@@ -297,10 +342,16 @@ public final class Node implements Comparable<Node>, Closeable {
 
     /**
      * Add a {@link Connection} with this {@linkplain Node}
+     *
+     * <p>LB-F4: The connectionFull() check and the queue insertion are performed
+     * atomically inside the synchronized block to eliminate the TOCTOU race where
+     * two threads could both pass the check and exceed maxConnections.</p>
+     *
+     * <p>Uses {@code synchronized} instead of {@link java.util.concurrent.locks.ReentrantLock}
+     * because virtual threads (JDK 21+) unmount from carrier threads when blocking on
+     * {@code synchronized}, but {@code ReentrantLock.lock()} pins the carrier thread.</p>
      */
-    public void addConnection(Connection connection) throws TooManyConnectionsException {
-        // If Maximum Connection is not -1 and Number of Active connections is greater than
-        // Maximum number of connections then close the connection and throw an exception.
+    public synchronized void addConnection(Connection connection) throws TooManyConnectionsException {
         if (connectionFull()) {
             connection.close();
             throw new TooManyConnectionsException(this);
@@ -309,13 +360,16 @@ public final class Node implements Comparable<Node>, Closeable {
             throw new IllegalStateException("Node is not online");
         }
         activeConnections.add(connection);
+        connectionCount.incrementAndGet();
     }
 
     /**
      * Remove and close a {@link Connection} from this {@linkplain Node}
      */
-    public void removeConnection(Connection connection) {
-        activeConnections.remove(connection);
+    public synchronized void removeConnection(Connection connection) {
+        if (activeConnections.remove(connection)) {
+            connectionCount.decrementAndGet();
+        }
     }
 
     /**
@@ -330,11 +384,70 @@ public final class Node implements Comparable<Node>, Closeable {
     }
 
     /**
-     * Drain all active connection
+     * Grace period in seconds before forcibly closing HTTP/2 connections
+     * after GOAWAY has been sent. Per RFC 9113 Section 6.8, the peer
+     * should finish in-flight streams within this window. 5 seconds is
+     * consistent with Nginx's default http2_idle_timeout and what
+     * envoy uses for its drain period.
+     */
+    private static final long GOAWAY_GRACE_PERIOD_SECONDS = 5;
+
+    /**
+     * Drain all active connections with graceful shutdown for HTTP/2.
+     * <p>
+     * For HTTP/2 connections (per RFC 9113 Section 6.8): sends a GOAWAY frame
+     * with NO_ERROR to signal the peer to stop sending new streams, then
+     * schedules a delayed close after {@link #GOAWAY_GRACE_PERIOD_SECONDS}
+     * to allow in-flight requests to complete.
+     * <p>
+     * For non-HTTP/2 connections: closes immediately.
      */
     public void drainConnections() {
-        activeConnections.forEach(Connection::close);
-        activeConnections.clear();
+        // Snapshot and clear the queue atomically to prevent double-close
+        // if drainConnections() is called concurrently (e.g., close() racing
+        // with a health-check-triggered drain).
+        // Atomically drain: snapshot, clear, and reset counter while holding
+        // the queue as a monitor to prevent concurrent add/remove from corrupting
+        // the counter (e.g., an addConnection between clear() and set(0)).
+        List<Connection> snapshot;
+        synchronized (this) {
+            snapshot = new ArrayList<>(activeConnections);
+            activeConnections.clear();
+            connectionCount.set(0);
+        }
+
+        for (Connection connection : snapshot) {
+            if (connection.isHttp2()) {
+                // Send GOAWAY with NO_ERROR, then schedule a forced close
+                // after the grace period to clean up lingering streams.
+                ChannelFuture goawayFuture = connection.sendGoaway();
+                if (goawayFuture != null) {
+                    goawayFuture.addListener(future -> {
+                        if (!future.isSuccess()) {
+                            logger.warn("Failed to send GOAWAY to {}: {}",
+                                    connection, future.cause() != null ? future.cause().getMessage() : "unknown");
+                            // GOAWAY send failed — close immediately, no point waiting.
+                            connection.close();
+                        } else {
+                            // Schedule a delayed close to allow in-flight requests to finish.
+                            // We use the channel's EventLoop so the close runs on the correct
+                            // I/O thread, avoiding cross-thread channel operations.
+                            goawayFuture.channel().eventLoop().schedule(
+                                    connection::close,
+                                    GOAWAY_GRACE_PERIOD_SECONDS,
+                                    TimeUnit.SECONDS
+                            );
+                        }
+                    });
+                } else {
+                    // sendGoaway() returned null — channel is already inactive or not H2.
+                    // Fall through to immediate close.
+                    connection.close();
+                }
+            } else {
+                connection.close();
+            }
+        }
     }
 
     @Override
@@ -357,15 +470,15 @@ public final class Node implements Comparable<Node>, Closeable {
 
     @Override
     public int hashCode() {
-        return ID.hashCode();
+        return socketAddress.hashCode();
     }
 
     @Override
     public boolean equals(Object obj) {
-        if (obj instanceof Node node) {
-            return socketAddress == node.socketAddress;
+        if (this == obj) {
+            return true;
         }
-        return false;
+        return obj instanceof Node node && socketAddress.equals(node.socketAddress);
     }
 
     /**
@@ -399,8 +512,8 @@ public final class Node implements Comparable<Node>, Closeable {
         jsonObject.addProperty("ID", id());
         jsonObject.addProperty("SocketAddress", socketAddress.toString());
         jsonObject.addProperty("Connections", activeConnection() + "/" + maxConnections());
-        jsonObject.addProperty("BytesSent", bytesSent);
-        jsonObject.addProperty("BytesReceived", bytesReceived);
+        jsonObject.addProperty("BytesSent", bytesSent.get());
+        jsonObject.addProperty("BytesReceived", bytesReceived.get());
         jsonObject.addProperty("State", state.toString());
         jsonObject.addProperty("Health", health().toString());
         jsonObject.addProperty("AddedToCluster", addedToCluster);

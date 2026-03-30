@@ -3,12 +3,32 @@
 
     <Appenders>
         <Console name="ConsoleAppender" target="SYSTEM_OUT">
-            <PatternLayout pattern="%d{dd MMM yyyy HH:mm:ss.SSS} [%t] %-5level %c{1.} - %msg%n"/>
+            <PatternLayout pattern="%d{yyyy-MM-dd'T'HH:mm:ss.SSSZ} [%t] %-5level %c{1.} - %msg%n"/>
+        </Console>
+
+        <!-- JSON structured logging appender for production log aggregation
+             (ELK, Splunk, Datadog). Enable by adding AppenderRef to a Logger. -->
+        <Console name="JsonAppender" target="SYSTEM_OUT">
+            <JsonLayout compact="true" eventEol="true" stacktraceAsString="true"
+                        properties="true" includeTimeMillis="true"/>
         </Console>
     </Appenders>
 
     <Loggers>
-        <Root level="debug">
+        <!-- MED-25: INFO for production — DEBUG at 100K RPS produces 100K+ log lines/sec -->
+        <Logger name="com.shieldblaze" level="info" additivity="false">
+            <AppenderRef ref="ConsoleAppender"/>
+        </Logger>
+
+        <!-- Dedicated access log logger — separate from application logs
+             so it can be routed to its own file/pipeline independently -->
+        <Logger name="accesslog" level="info" additivity="false">
+            <AppenderRef ref="ConsoleAppender"/>
+        </Logger>
+
+        <!-- INFO default: suppresses noisy DEBUG from Netty, Curator, Jackson, etc.
+             Previous DEBUG default flooded logs at ~10k lines/sec under load. -->
+        <Root level="info">
             <AppenderRef ref="ConsoleAppender"/>
         </Root>
     </Loggers>

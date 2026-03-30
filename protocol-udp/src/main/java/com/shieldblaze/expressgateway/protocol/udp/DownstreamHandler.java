@@ -21,6 +21,7 @@ import io.netty.channel.Channel;
 import io.netty.channel.ChannelHandlerContext;
 import io.netty.channel.ChannelInboundHandlerAdapter;
 import io.netty.channel.socket.DatagramPacket;
+import io.netty.util.ReferenceCountUtil;
 import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
 
@@ -43,7 +44,16 @@ final class DownstreamHandler extends ChannelInboundHandlerAdapter {
     @Override
     public void channelRead(ChannelHandlerContext ctx, Object msg) {
         DatagramPacket packet = (DatagramPacket) msg;
-        channel.writeAndFlush(new DatagramPacket(packet.content(), socketAddress), channel.voidPromise()); // Write Data back to Client
+        try {
+            // LOW-26: Wrap in try-finally to prevent double-release on synchronous write failure.
+            // We retain the content so the new DatagramPacket owns one ref and the original packet
+            // owns another. The finally block releases the original packet (its envelope + content ref).
+            // If writeAndFlush succeeds, the pipeline releases the new DatagramPacket's content ref.
+            // If writeAndFlush fails synchronously, the pipeline still releases the new ref.
+            channel.writeAndFlush(new DatagramPacket(packet.content().retain(), socketAddress), channel.voidPromise());
+        } finally {
+            ReferenceCountUtil.safeRelease(packet);
+        }
     }
 
     @Override

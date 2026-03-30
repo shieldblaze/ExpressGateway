@@ -35,8 +35,8 @@ final class StickySessionSearchComparator implements Comparator<Object>, Seriali
 
     @Override
     public int compare(Object o1, Object o2) {
-        String key = (String) o1;
-        Node node = (Node) o2;
+        Node node = (Node) o1;
+        String key = (String) o2;
         return node.id().compareToIgnoreCase(key);
     }
 }

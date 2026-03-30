@@ -48,7 +48,7 @@ import java.security.cert.X509Certificate;
 import java.time.Duration;
 import java.time.temporal.ChronoUnit;
 import java.util.Enumeration;
-import java.util.SplittableRandom;
+import java.security.SecureRandom;
 
 /**
  * OCSP Client
@@ -57,10 +57,14 @@ import java.util.SplittableRandom;
 @SuppressWarnings("deprecation")
 final class OCSPClient {
 
-    private static final SplittableRandom RANDOM = new SplittableRandom();
+    private static final org.apache.logging.log4j.Logger logger =
+            org.apache.logging.log4j.LogManager.getLogger(OCSPClient.class);
+
+    // HIGH-06: Use SecureRandom for OCSP nonce — SplittableRandom is not crypto-safe
+    private static final SecureRandom RANDOM = new SecureRandom();
 
     private static final HttpClient HTTP_CLIENT = HttpClient.newBuilder()
-            .followRedirects(HttpClient.Redirect.NEVER)
+            .followRedirects(HttpClient.Redirect.NORMAL)
             .connectTimeout(Duration.of(30, ChronoUnit.SECONDS))
             .build();
 
@@ -79,8 +83,10 @@ final class OCSPClient {
         OCSPReqBuilder builder = new OCSPReqBuilder();
         builder.addRequest(certificateID);
 
-        // Generate 6-bytes of nonce and add it into OCSP Request builder.
-        byte[] nonce = new byte[6];
+        // TLS-07: Generate 16-byte nonce per RFC 8954 recommendation. The previous
+        // 6-byte nonce was too short and could be brute-forced by a MITM replaying
+        // a cached OCSP response. 16 bytes provides 128 bits of entropy.
+        byte[] nonce = new byte[16];
         RANDOM.nextBytes(nonce);
         DEROctetString derNonce = new DEROctetString(nonce);
         builder.setRequestExtensions(new Extensions(new Extension(OCSPObjectIdentifiers.id_pkix_ocsp_nonce, false, derNonce)));
@@ -107,7 +113,7 @@ final class OCSPClient {
     private static OCSPResp queryCA(URI uri, OCSPReq request) throws Exception {
         HttpRequest httpRequest = HttpRequest.newBuilder()
                 .uri(uri)
-                .setHeader("Accept-Content", OCSP_RESPONSE_TYPE)
+                .setHeader("Accept", OCSP_RESPONSE_TYPE)
                 .setHeader("Content-Type", OCSP_REQUEST_TYPE)
                 .setHeader("User-Agent", "ShieldBlaze ExpressGateway OCSP Client")
                 .POST(HttpRequest.BodyPublishers.ofByteArray(request.getEncoded()))
@@ -163,6 +169,9 @@ final class OCSPClient {
             if (!responseNonceString.equals(encodedNonce)) {
                 throw new OCSPException("Nonce Mismatch");
             }
+        } else {
+            // OCSP response did not include nonce -- potential replay risk (RFC 6960 Section 4.4.1)
+            logger.warn("OCSP response does not include nonce extension; response may be vulnerable to replay attacks");
         }
     }
 
