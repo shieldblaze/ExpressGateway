@@ -24,14 +24,11 @@ import java.net.Socket;
 import java.time.Duration;
 
 /**
- * <p> TCP based {@link HealthCheck} </p>
- * <p> How it works:
- * <ol>
- *     <li> It starts a TCP client and connects to remote host. </li>
- *     <li> If connection is successful, it'll pass the Health Check and close the connection. </li>
- *     <li> If connection is not successful, it'll fail the Health Check. </li>
- * </ol>
- * </p>
+ * TCP based {@link HealthCheck}.
+ *
+ * <p>Connects to the remote host via TCP. If the connection succeeds
+ * within the timeout, the check passes. Both connect timeout and
+ * SO_TIMEOUT are enforced.</p>
  */
 public final class TCPHealthCheck extends HealthCheck {
 
@@ -43,9 +40,17 @@ public final class TCPHealthCheck extends HealthCheck {
         super(socketAddress, timeout, samples);
     }
 
+    public TCPHealthCheck(InetSocketAddress socketAddress, Duration timeout, int samples,
+                          int rise, int fall) {
+        super(socketAddress, timeout, samples, rise, fall,
+                Duration.ofSeconds(5), 1000L, 60_000L);
+    }
+
     @Override
     public void run() {
         try (Socket socket = new Socket()) {
+            socket.setSoTimeout(timeout);
+            socket.setReuseAddress(true);
             socket.connect(socketAddress, timeout);
             if (socket.isConnected()) {
                 markSuccess();

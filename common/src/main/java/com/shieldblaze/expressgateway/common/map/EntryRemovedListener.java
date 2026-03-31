@@ -22,8 +22,7 @@ public interface EntryRemovedListener<V> {
 
     /**
      * Called when an entry is removed from Map
-     * @param key Key
      * @param value Value
      */
-    void removed(Object key, V value);
+    void removed(V value);
 }

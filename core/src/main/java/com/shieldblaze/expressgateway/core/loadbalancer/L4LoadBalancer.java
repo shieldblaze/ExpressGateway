@@ -39,6 +39,8 @@ import org.apache.logging.log4j.Logger;
 
 import java.net.InetSocketAddress;
 import java.util.Collections;
+
+import static com.shieldblaze.expressgateway.common.utils.LogSanitizer.sanitize;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.atomic.AtomicInteger;
@@ -128,12 +130,12 @@ public abstract class L4LoadBalancer {
 
             // Start the listener
             l4FrontListenerStartupEvent = l4FrontListener.start();
+            // LOW-27: Log success only in the success path, not in finally block
+            logger.info("Started L4FrontListener: {}", l4FrontListenerStartupEvent);
             return l4FrontListenerStartupEvent;
         } catch (Exception ex) {
             logger.fatal("Failed to start L4FrontListener", ex);
             throw ex;
-        } finally {
-            logger.info("Started L4FrontListener: {}", l4FrontListenerStartupEvent);
         }
     }
 
@@ -143,18 +145,17 @@ public abstract class L4LoadBalancer {
      * @return {@link L4FrontListenerStopTask} instance
      */
     public L4FrontListenerStopTask stop() {
-        L4FrontListenerStopTask event = null;
         try {
             logger.info("Trying to stop L4FrontListener");
 
-            // Start the listener
-            event = l4FrontListener.stop();
+            // Stop the listener
+            L4FrontListenerStopTask event = l4FrontListener.stop();
+            // LOW-27: Log success only in the success path, not in finally block
+            logger.info("Stopped L4FrontListener: {}", event);
             return event;
         } catch (Exception ex) {
             logger.fatal("Failed to stop L4FrontListener", ex);
             throw ex;
-        } finally {
-            logger.info("Stopped L4FrontListener: {}", event);
         }
     }
 
@@ -164,18 +165,17 @@ public abstract class L4LoadBalancer {
      * @return {@link L4FrontListenerShutdownTask} instance
      */
     public L4FrontListenerShutdownTask shutdown() {
-        L4FrontListenerShutdownTask event = null;
         try {
             logger.info("Trying to shutdown L4FrontListener");
 
-            // Start the listener
-            event = l4FrontListener.shutdown();
+            // Shutdown the listener
+            L4FrontListenerShutdownTask event = l4FrontListener.shutdown();
+            // LOW-27: Log success only in the success path, not in finally block
+            logger.info("Shutdown L4FrontListener: {}", event);
             return event;
         } catch (Exception ex) {
             logger.fatal("Failed to shutdown L4FrontListener", ex);
             throw ex;
-        } finally {
-            logger.info("Shutdown L4FrontListener: {}", event);
         }
     }
 
@@ -201,7 +201,9 @@ public abstract class L4LoadBalancer {
      */
     @NonNull
     public Cluster cluster(String hostname) {
-        logger.debug("Looking up for Cluster with hostname: {}", hostname);
+        // Sanitize hostname for logging to prevent log injection (CWE-117).
+        String safeHostname = sanitize(hostname);
+        logger.debug("Looking up for Cluster with hostname: {}", safeHostname);
         try {
             Cluster cluster = clusterMap.get(hostname);
 
@@ -211,7 +213,7 @@ public abstract class L4LoadBalancer {
                 // If DEFAULT Cluster is not found, then throw exception
                 cluster = clusterMap.get("DEFAULT");
                 if (cluster == null) {
-                    throw new NotFoundException("Cluster not found with Hostname: " + hostname);
+                    throw new NotFoundException("Cluster not found with Hostname: " + safeHostname);
                 }
             }
             return cluster;
@@ -331,7 +333,7 @@ public abstract class L4LoadBalancer {
                 logger.info("Failed to remove Cluster from Hostname mapping: {}", hostname);
             }
         }
-        return true;
+        return removed;
     }
 
     /**

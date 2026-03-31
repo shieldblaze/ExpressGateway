@@ -87,7 +87,9 @@ class TlsConfigurationTest {
         tlsConfiguration.addMapping("www.shieldblaze.com", certificateKeyPair);
 
         assertEquals(certificateKeyPair, tlsConfiguration.mapping("www.shieldblaze.com"));
-        assertNull(tlsConfiguration.mapping("shieldblaze.com"));
+        // TLS-03: mapping() now throws IllegalStateException when no match is found
+        // and no default mapping is configured, instead of returning null.
+        assertThrows(IllegalStateException.class, () -> tlsConfiguration.mapping("shieldblaze.com"));
     }
 
     @Test
@@ -100,7 +102,9 @@ class TlsConfigurationTest {
 
         assertEquals(certificateKeyPair, tlsConfiguration.mapping("www.shieldblaze.com"));
         assertEquals(certificateKeyPair, tlsConfiguration.mapping("meow.shieldblaze.com"));
-        assertNull(tlsConfiguration.mapping("shieldblaze.com"));
+        // TLS-03: mapping() now throws IllegalStateException when no match is found
+        // and no default mapping is configured, instead of returning null.
+        assertThrows(IllegalStateException.class, () -> tlsConfiguration.mapping("shieldblaze.com"));
     }
 
     @Test

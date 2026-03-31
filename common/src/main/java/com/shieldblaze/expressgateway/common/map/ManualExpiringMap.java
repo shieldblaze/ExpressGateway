@@ -18,8 +18,10 @@
 package com.shieldblaze.expressgateway.common.map;
 
 import java.time.Duration;
+import java.util.ArrayList;
 import java.util.Collection;
 import java.util.HashMap;
+import java.util.List;
 import java.util.Map;
 import java.util.Set;
 
@@ -74,7 +76,7 @@ public final class ManualExpiringMap<K, V> extends ExpiringMap<K, V> {
     @Override
     public boolean containsKey(Object key) {
         if (isExpired(key)) {
-            entryRemovedListener().removed(key, remove(key));
+            entryRemovedListener().removed(remove(key));
             return false;
         }
         return super.containsKey(key);
@@ -88,7 +90,7 @@ public final class ManualExpiringMap<K, V> extends ExpiringMap<K, V> {
     @Override
     public V get(Object key) {
         if (isExpired(key)) {
-            entryRemovedListener().removed(key, remove(key));
+            entryRemovedListener().removed(remove(key));
             return null;
         }
         return super.get(key);
@@ -139,10 +141,16 @@ public final class ManualExpiringMap<K, V> extends ExpiringMap<K, V> {
     }
 
     private void cleanUp() {
+        // Collect expired keys first to avoid ConcurrentModificationException
+        // from removing entries during forEach iteration over HashMap
+        List<K> expiredKeys = new ArrayList<>();
         forEach((key, value) -> {
             if (isExpired(key)) {
-                entryRemovedListener().removed(key, remove(key));
+                expiredKeys.add(key);
             }
         });
+        for (K key : expiredKeys) {
+            entryRemovedListener().removed(remove(key));
+        }
     }
 }

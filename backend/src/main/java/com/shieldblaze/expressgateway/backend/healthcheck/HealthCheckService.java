@@ -34,6 +34,7 @@ import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.Executors;
 import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.ScheduledFuture;
+import java.util.concurrent.ThreadLocalRandom;
 import java.util.concurrent.TimeUnit;
 
 import static com.shieldblaze.expressgateway.common.utils.ObjectUtils.nonNull;
@@ -45,11 +46,12 @@ import static com.shieldblaze.expressgateway.common.utils.ObjectUtils.nonNull;
  *
  * <p> {@link #close()} must be called if this HealthCheckService is not going to be used. </p>
  */
-@ToString
+@ToString(onlyExplicitlyIncluded = true)
 public final class HealthCheckService implements com.shieldblaze.expressgateway.backend.healthcheck.HealthCheck {
 
     private final Map<Node, ScheduledFuture<?>> nodeMap = new ConcurrentHashMap<>();
 
+    @ToString.Include
     private final HealthCheckConfiguration config;
     private final EventStream eventStream;
     private final ScheduledExecutorService executors;
@@ -60,14 +62,23 @@ public final class HealthCheckService implements com.shieldblaze.expressgateway.
         executors = Executors.newScheduledThreadPool(config.workers());
     }
 
+    @Override
     @NonNull
     public SyncTask<Boolean> add(Node node) {
-        // Throw exception if HealthCheck is already enabled for this Node
-        if (nodeMap.containsKey(node)) {
-           return SyncTask.of(new StacklessException("HealthCheck is already enabled for this Node: " + node));
-        }
+        // HC-02: Add random jitter to the initial delay to prevent thundering herd.
+        long initialDelayMs = ThreadLocalRandom.current().nextLong(config.timeInterval() * 1000L);
+        ScheduledFuture<?> future = executors.scheduleAtFixedRate(new HealthCheckRunner(node, eventStream),
+                initialDelayMs, config.timeInterval() * 1000L, TimeUnit.MILLISECONDS);
 
-        nodeMap.put(node, executors.scheduleAtFixedRate(new HealthCheckRunner(node, eventStream), 0, config.timeInterval(), TimeUnit.SECONDS));
+        // Use putIfAbsent to prevent TOCTOU race: two concurrent add() calls for
+        // the same node could both pass a containsKey check and both schedule tasks,
+        // leaking the first ScheduledFuture.
+        ScheduledFuture<?> existing = nodeMap.putIfAbsent(node, future);
+        if (existing != null) {
+            // Another thread already registered this node — cancel our duplicate task.
+            future.cancel(true);
+            return SyncTask.of(new StacklessException("HealthCheck is already enabled for this Node: " + node));
+        }
         return SyncTask.of(true);
     }
 

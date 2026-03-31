@@ -26,6 +26,7 @@ import com.shieldblaze.expressgateway.backend.events.node.NodeTask;
 import com.shieldblaze.expressgateway.backend.events.node.NodeIdleTask;
 import com.shieldblaze.expressgateway.backend.events.node.NodeOfflineTask;
 import com.shieldblaze.expressgateway.backend.exceptions.LoadBalanceException;
+import com.shieldblaze.expressgateway.backend.exceptions.NoNodeAvailableException;
 import com.shieldblaze.expressgateway.backend.loadbalance.SessionPersistence;
 import com.shieldblaze.expressgateway.common.algo.roundrobin.RoundRobinIndexGenerator;
 import com.shieldblaze.expressgateway.concurrent.task.Task;
@@ -33,18 +34,10 @@ import com.shieldblaze.expressgateway.concurrent.task.Task;
 import java.io.IOException;
 import java.net.InetSocketAddress;
 
-/**
- * Select {@link Node} based on Round-Robin
- */
 public final class RoundRobin extends L4Balance {
 
     private final RoundRobinIndexGenerator roundRobinIndexGenerator = new RoundRobinIndexGenerator(0);
 
-    /**
-     * Create {@link RoundRobin} Instance
-     *
-     * @param sessionPersistence {@link SessionPersistence} Implementation Instance
-     */
     public RoundRobin(SessionPersistence<Node, Node, InetSocketAddress, Node> sessionPersistence) {
         super(sessionPersistence);
     }
@@ -55,22 +48,21 @@ public final class RoundRobin extends L4Balance {
     }
 
     @Override
-    public L4Response response(L4Request l4Request) throws LoadBalanceException {
+    public L4Response balance(L4Request l4Request) throws LoadBalanceException {
         Node node = sessionPersistence.node(l4Request);
         if (node != null) {
             if (node.state() == State.ONLINE) {
                 return new L4Response(node);
-            } else {
-                sessionPersistence.removeRoute(l4Request.socketAddress(), node);
             }
+            sessionPersistence.removeRoute(l4Request.socketAddress(), node);
         }
 
-        int index = roundRobinIndexGenerator.next();
-        if (index >= 0) {
-            node = cluster.onlineNodes().get(index);
-        } else {
-            return L4Response.NO_NODE;
+        var onlineNodes = cluster.onlineNodes();
+        if (onlineNodes.isEmpty()) {
+            throw new NoNodeAvailableException();
         }
+        int index = roundRobinIndexGenerator.next();
+        node = onlineNodes.get(Math.floorMod(index, onlineNodes.size()));
 
         sessionPersistence.addRoute(l4Request.socketAddress(), node);
         return new L4Response(node);

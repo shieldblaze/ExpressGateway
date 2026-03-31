@@ -61,6 +61,9 @@ public final class TransportConfiguration implements Configuration<TransportConf
     @JsonProperty("connectionIdleTimeout")
     private int connectionIdleTimeout;
 
+    @JsonProperty("proxyProtocolMode")
+    private ProxyProtocolMode proxyProtocolMode;
+
     @JsonIgnore
     private boolean validated;
 
@@ -78,11 +81,12 @@ public final class TransportConfiguration implements Configuration<TransportConf
         DEFAULT.receiveBufferAllocationType = ReceiveBufferAllocationType.ADAPTIVE;
         DEFAULT.receiveBufferSizes = new int[]{512, 9001, 65535};
         DEFAULT.tcpConnectionBacklog = 50_000;
-        DEFAULT.socketSendBufferSize = 67_108_864;
-        DEFAULT.socketReceiveBufferSize = 67_108_864;
+        DEFAULT.socketSendBufferSize = 262_144;     // 256 KB — sane default; 67 MB per socket exhausts memory at scale
+        DEFAULT.socketReceiveBufferSize = 262_144;  // 256 KB — kernel auto-tunes beyond this when needed
         DEFAULT.tcpFastOpenMaximumPendingRequests = 100_000;
         DEFAULT.backendConnectTimeout = 1000 * 10;  // 10 Seconds
         DEFAULT.connectionIdleTimeout = 1000 * 120; // 2 Minute
+        DEFAULT.proxyProtocolMode = ProxyProtocolMode.OFF;
         DEFAULT.validated = true;
     }
 
@@ -98,6 +102,7 @@ public final class TransportConfiguration implements Configuration<TransportConf
      * Transport Type
      */
     public TransportType transportType() {
+        assertValidated();
         return transportType;
     }
 
@@ -113,6 +118,7 @@ public final class TransportConfiguration implements Configuration<TransportConf
      * Receive Buffer Allocation Type
      */
     public ReceiveBufferAllocationType receiveBufferAllocationType() {
+        assertValidated();
         return receiveBufferAllocationType;
     }
 
@@ -128,6 +134,7 @@ public final class TransportConfiguration implements Configuration<TransportConf
      * Receive Buffer Sizes
      */
     public int[] receiveBufferSizes() {
+        assertValidated();
         return receiveBufferSizes;
     }
 
@@ -135,6 +142,7 @@ public final class TransportConfiguration implements Configuration<TransportConf
      * Returns a new appropriate {@link RecvByteBufAllocator} implementation
      */
     public RecvByteBufAllocator recvByteBufAllocator() {
+        assertValidated();
         if (receiveBufferAllocationType == ReceiveBufferAllocationType.FIXED) {
             return new FixedRecvByteBufAllocator(receiveBufferSizes[0]);
         } else {
@@ -154,6 +162,7 @@ public final class TransportConfiguration implements Configuration<TransportConf
      * TCP Connection Backlog
      */
     public int tcpConnectionBacklog() {
+        assertValidated();
         return tcpConnectionBacklog;
     }
 
@@ -161,6 +170,7 @@ public final class TransportConfiguration implements Configuration<TransportConf
      * Socket Receive Buffer Size
      */
     public int socketReceiveBufferSize() {
+        assertValidated();
         return socketReceiveBufferSize;
     }
 
@@ -177,6 +187,7 @@ public final class TransportConfiguration implements Configuration<TransportConf
      * Socket Send Buffer Size
      */
     public int socketSendBufferSize() {
+        assertValidated();
         return socketSendBufferSize;
     }
 
@@ -200,6 +211,7 @@ public final class TransportConfiguration implements Configuration<TransportConf
      * TCP Fast Open Maximum Pending Requests
      */
     public int tcpFastOpenMaximumPendingRequests() {
+        assertValidated();
         return tcpFastOpenMaximumPendingRequests;
     }
 
@@ -215,6 +227,7 @@ public final class TransportConfiguration implements Configuration<TransportConf
      * Backend Connect Timeout
      */
     public int backendConnectTimeout() {
+        assertValidated();
         return backendConnectTimeout;
     }
 
@@ -230,7 +243,26 @@ public final class TransportConfiguration implements Configuration<TransportConf
      * Connection Idle Timeout
      */
     public int connectionIdleTimeout() {
+        assertValidated();
         return connectionIdleTimeout;
+    }
+
+    /**
+     * HAProxy PROXY protocol mode
+     */
+    public TransportConfiguration setProxyProtocolMode(ProxyProtocolMode proxyProtocolMode) {
+        this.proxyProtocolMode = proxyProtocolMode;
+        return this;
+    }
+
+    /**
+     * HAProxy PROXY protocol mode
+     */
+    public ProxyProtocolMode proxyProtocolMode() {
+        if (proxyProtocolMode == null) {
+            return ProxyProtocolMode.OFF;
+        }
+        return proxyProtocolMode;
     }
 
     /**

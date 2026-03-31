@@ -20,7 +20,6 @@ package com.shieldblaze.expressgateway.protocol.udp;
 import com.shieldblaze.expressgateway.backend.Node;
 import com.shieldblaze.expressgateway.backend.NodeBytesTracker;
 import com.shieldblaze.expressgateway.core.factory.BootstrapFactory;
-import com.shieldblaze.expressgateway.core.handlers.ConnectionTimeoutHandler;
 import com.shieldblaze.expressgateway.core.loadbalancer.L4LoadBalancer;
 import io.netty.bootstrap.Bootstrap;
 import io.netty.buffer.ByteBufAllocator;
@@ -31,7 +30,6 @@ import io.netty.channel.ChannelPipeline;
 import io.netty.channel.EventLoopGroup;
 
 import java.net.InetSocketAddress;
-import java.time.Duration;
 
 final class Bootstrapper {
 
@@ -45,6 +43,14 @@ final class Bootstrapper {
         this.byteBufAllocator = byteBufAllocator;
     }
 
+    /**
+     * MED-19: UDP source port preservation.
+     * Ideally the backend channel would bind to the same source port as the client used
+     * to reach the frontend, preserving the source port end-to-end (as AWS NLB and HAProxy do).
+     * However, this is not possible when multiple clients use the same source port, or when
+     * multiple backend connections are needed. The backend channel binds to an ephemeral port.
+     * This is a known limitation documented in STANDARD_RELEASE.md.
+     */
     UDPConnection newInit(Channel channel, Node node, InetSocketAddress socketAddress) {
         UDPConnection udpConnection = new UDPConnection(node);
 
@@ -54,9 +60,9 @@ final class Bootstrapper {
             protected void initChannel(Channel ch) {
                 ChannelPipeline pipeline = ch.pipeline();
 
-                Duration timeout = Duration.ofMillis(l4LoadBalancer.configurationContext().transportConfiguration().connectionIdleTimeout());
+                // MED-17: Removed redundant ConnectionTimeoutHandler -- SelfExpiringMap
+                // in UpstreamHandler already handles UDP session timeout via entry expiry.
                 pipeline.addLast(new NodeBytesTracker(node));
-                pipeline.addLast(new ConnectionTimeoutHandler(timeout, false));
                 pipeline.addLast(new DownstreamHandler(channel, socketAddress, udpConnection));
             }
         });

@@ -19,6 +19,7 @@ package com.shieldblaze.expressgateway.backend.strategy.l4;
 
 import com.shieldblaze.expressgateway.backend.Node;
 import com.shieldblaze.expressgateway.backend.State;
+import com.shieldblaze.expressgateway.backend.events.node.NodeIdleTask;
 import com.shieldblaze.expressgateway.backend.events.node.NodeRemovedTask;
 import com.shieldblaze.expressgateway.backend.events.node.NodeTask;
 import com.shieldblaze.expressgateway.backend.events.node.NodeOfflineTask;
@@ -29,18 +30,10 @@ import com.shieldblaze.expressgateway.concurrent.task.Task;
 
 import java.io.IOException;
 import java.net.InetSocketAddress;
-import java.util.Optional;
+import java.util.List;
 
-/**
- * Select a {@link Node} with least load.
- */
 public final class LeastLoad extends L4Balance {
 
-    /**
-     * Create {@link LeastLoad} Instance
-     *
-     * @param sessionPersistence {@link SessionPersistence} Implementation Instance
-     */
     public LeastLoad(SessionPersistence<Node, Node, InetSocketAddress, Node> sessionPersistence) {
         super(sessionPersistence);
     }
@@ -51,27 +44,30 @@ public final class LeastLoad extends L4Balance {
     }
 
     @Override
-    public L4Response response(L4Request l4Request) throws LoadBalanceException {
+    public L4Response balance(L4Request l4Request) throws LoadBalanceException {
         Node node = sessionPersistence.node(l4Request);
         if (node != null) {
             if (node.state() == State.ONLINE) {
                 return new L4Response(node);
-            } else {
-                sessionPersistence.removeRoute(l4Request.socketAddress(), node);
             }
+            sessionPersistence.removeRoute(l4Request.socketAddress(), node);
         }
 
-        // Get the Node with least amount of active connections
-        Optional<Node> optionalNode = cluster.onlineNodes()
-                .stream()
-                .reduce((node1, node2) -> node1.load() < 100 ? node1 : node2);
-
-        // If we don't have any node available then throw an exception.
-        if (optionalNode.isEmpty()) {
+        List<Node> onlineNodes = cluster.onlineNodes();
+        if (onlineNodes.isEmpty()) {
             throw new NoNodeAvailableException();
         }
 
-        node = optionalNode.get();
+        node = onlineNodes.get(0);
+        for (int i = 1, size = onlineNodes.size(); i < size; i++) {
+            Node candidate = onlineNodes.get(i);
+            float candidateLoad = candidate.load();
+            float currentLoad = node.load();
+            if (candidateLoad < currentLoad ||
+                    (candidateLoad == 0 && currentLoad == 0 && candidate.activeConnection() < node.activeConnection())) {
+                node = candidate;
+            }
+        }
 
         sessionPersistence.addRoute(l4Request.socketAddress(), node);
         return new L4Response(node);
@@ -80,7 +76,7 @@ public final class LeastLoad extends L4Balance {
     @Override
     public void accept(Task task) {
         if (task instanceof NodeTask nodeEvent) {
-            if (nodeEvent instanceof NodeOfflineTask || nodeEvent instanceof NodeRemovedTask) {
+            if (nodeEvent instanceof NodeOfflineTask || nodeEvent instanceof NodeRemovedTask || nodeEvent instanceof NodeIdleTask) {
                 sessionPersistence.remove(nodeEvent.node());
             }
         }

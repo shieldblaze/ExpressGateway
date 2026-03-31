@@ -327,7 +327,7 @@ public final class AutoscalingConfiguration implements Configuration<Autoscaling
 
     @Override
     public boolean validated() {
-        return false;
+        return validated;
     }
 
     @Override
@@ -342,6 +342,7 @@ public final class AutoscalingConfiguration implements Configuration<Autoscaling
         checkInRange(bytesScaleOutLoad, 0.1f, 1.0f, "Bytes Scale Out Load");
         checkInRange(bytesIsolateLoad, 0.1f, 1.0f, "Bytes Isolate Load");
         checkPositive(maxBytes, "Maximum Bytes");
+        validated = true;
         return this;
     }
 }

@@ -20,23 +20,43 @@ package com.shieldblaze.expressgateway.common.utils;
 import io.netty.handler.ssl.util.InsecureTrustManagerFactory;
 
 import javax.net.ssl.SSLContext;
+import javax.net.ssl.TrustManagerFactory;
 import java.net.http.HttpClient;
+import java.security.KeyStore;
 import java.security.SecureRandom;
 
 public final class HttpClientUtils {
 
     /**
-     * {@link HttpClient} that trust all TLS certificates (including self-signed).
+     * {@link HttpClient} that uses the system default trust store for TLS certificate validation.
      */
     public static final HttpClient CLIENT;
 
+    /**
+     * {@link HttpClient} that trusts all TLS certificates (including self-signed).
+     * <b>Use only for testing or explicitly opted-in insecure configurations.</b>
+     */
+    public static final HttpClient INSECURE_CLIENT;
+
     static {
         try {
-            SSLContext sslContext = SSLContext.getInstance("TLSv1.3");
-            sslContext.init(null, InsecureTrustManagerFactory.INSTANCE.getTrustManagers(), new SecureRandom());
+            // Secure client using system default trust store
+            TrustManagerFactory tmf = TrustManagerFactory.getInstance(TrustManagerFactory.getDefaultAlgorithm());
+            tmf.init((KeyStore) null);
+
+            SSLContext secureSslContext = SSLContext.getInstance("TLSv1.3");
+            secureSslContext.init(null, tmf.getTrustManagers(), new SecureRandom());
 
             CLIENT = HttpClient.newBuilder()
-                    .sslContext(sslContext)
+                    .sslContext(secureSslContext)
+                    .build();
+
+            // Insecure client for testing / opt-in insecure mode
+            SSLContext insecureSslContext = SSLContext.getInstance("TLSv1.3");
+            insecureSslContext.init(null, InsecureTrustManagerFactory.INSTANCE.getTrustManagers(), new SecureRandom());
+
+            INSECURE_CLIENT = HttpClient.newBuilder()
+                    .sslContext(insecureSslContext)
                     .build();
         } catch (Exception ex) {
             throw new RuntimeException(ex);

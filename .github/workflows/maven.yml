@@ -35,4 +35,5 @@ jobs:
         run: ./mvnw -T 4C -B -ntp clean install -DskipTests
         
       - name: Run Tests
-        run: ./mvnw -B -ntp clean test
+        run: ./mvnw -B -ntp clean test -Dsurefire.timeout=900
+        timeout-minutes: 30

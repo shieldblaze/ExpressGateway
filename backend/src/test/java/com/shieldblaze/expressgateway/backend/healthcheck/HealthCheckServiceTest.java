@@ -23,6 +23,7 @@ import com.shieldblaze.expressgateway.backend.cluster.Cluster;
 import com.shieldblaze.expressgateway.backend.cluster.ClusterBuilder;
 import com.shieldblaze.expressgateway.backend.strategy.l4.RoundRobin;
 import com.shieldblaze.expressgateway.backend.strategy.l4.sessionpersistence.NOOPSessionPersistence;
+import com.shieldblaze.expressgateway.common.utils.AvailablePortUtil;
 import com.shieldblaze.expressgateway.configuration.healthcheck.HealthCheckConfiguration;
 import com.shieldblaze.expressgateway.healthcheck.Health;
 import io.netty.bootstrap.ServerBootstrap;
@@ -45,9 +46,12 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 class HealthCheckServiceTest {
 
     private static final EventLoopGroup eventLoopGroup = new NioEventLoopGroup(2);
+    private static int serverPort;
 
     @BeforeAll
     static void setup() throws InterruptedException {
+        serverPort = AvailablePortUtil.getTcpPort();
+
         ServerBootstrap serverBootstrap = new ServerBootstrap()
                 .group(eventLoopGroup, eventLoopGroup)
                 .channel(NioServerSocketChannel.class)
@@ -63,7 +67,7 @@ class HealthCheckServiceTest {
                     }
                 });
 
-        serverBootstrap.bind("127.0.0.1", 9000).sync();
+        serverBootstrap.bind("127.0.0.1", serverPort).sync();
     }
 
     @AfterAll
@@ -76,7 +80,7 @@ class HealthCheckServiceTest {
         HealthCheckTemplate healthCheckTemplate = HealthCheckTemplate.builder()
                 .protocol(HealthCheckTemplate.Protocol.TCP)
                 .host("127.0.0.1")
-                .port(9000)
+                .port(serverPort)
                 .path("")
                 .timeout(1)
                 .samples(10)
@@ -87,9 +91,11 @@ class HealthCheckServiceTest {
                 .withHealthCheck(HealthCheckConfiguration.DEFAULT, healthCheckTemplate)
                 .build();
 
+        // Node address must match the actual test server (127.0.0.1:serverPort)
+        // so that health checks target the correct backend.
         Node node = NodeBuilder.newBuilder()
                 .withCluster(cluster)
-                .withSocketAddress(new InetSocketAddress(9110))
+                .withSocketAddress(new InetSocketAddress("127.0.0.1", serverPort))
                 .build();
 
         cluster.addNode(node);

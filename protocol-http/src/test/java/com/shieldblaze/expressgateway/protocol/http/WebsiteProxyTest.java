@@ -43,15 +43,18 @@ import org.apache.logging.log4j.Logger;
 import org.junit.jupiter.api.AfterAll;
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.Timeout;
 
 import javax.net.ssl.SSLContext;
 import javax.net.ssl.X509TrustManager;
 import java.net.InetSocketAddress;
 import java.security.SecureRandom;
 import java.util.List;
+import java.util.concurrent.TimeUnit;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
+@Timeout(value = 120, unit = TimeUnit.SECONDS)
 public class WebsiteProxyTest {
 
     private static final Logger logger = LogManager.getLogger(WebsiteProxyTest.class);
@@ -85,8 +88,15 @@ public class WebsiteProxyTest {
         SelfSignedCertificate ssc = SelfSignedCertificate.generateNew(List.of("127.0.0.1"), WEBSITES);
         CertificateKeyPair certificateKeyPair = CertificateKeyPair.forClient(List.of(ssc.x509Certificate()), ssc.keyPair().getPrivate());
 
-        TlsClientConfiguration tlsClientConfiguration = TlsClientConfiguration.DEFAULT;
-        TlsServerConfiguration tlsServerConfiguration = TlsServerConfiguration.DEFAULT;
+        // BUG-SINGLETON: Use copyFrom() instead of directly mutating the DEFAULT
+        // singletons. Mutating DEFAULT pollutes other tests that call copyFrom(DEFAULT)
+        // or use ConfigurationContext.DEFAULT — they inherit the mutated enabled/acceptAllCerts
+        // state, causing cascading test failures (e.g., ConcurrentH2ToH1Test unexpectedly
+        // attempting TLS to a cleartext backend).
+        TlsClientConfiguration tlsClientConfiguration =
+                TlsClientConfiguration.copyFrom(TlsClientConfiguration.DEFAULT);
+        TlsServerConfiguration tlsServerConfiguration =
+                TlsServerConfiguration.copyFrom(TlsServerConfiguration.DEFAULT);
 
         tlsServerConfiguration.enable();
         tlsServerConfiguration.addMapping("localhost", certificateKeyPair);
@@ -106,7 +116,7 @@ public class WebsiteProxyTest {
                 .build();
 
         L4FrontListenerStartupTask l4FrontListenerStartupEvent = httpLoadBalancer.start();
-        l4FrontListenerStartupEvent.future().get();
+        l4FrontListenerStartupEvent.future().get(30, TimeUnit.SECONDS);
 
         for (String domain : WEBSITES) {
             Cluster cluster = ClusterBuilder.newBuilder()
@@ -124,7 +134,7 @@ public class WebsiteProxyTest {
 
     @AfterAll
     static void shutdown() throws Exception {
-        httpLoadBalancer.shutdown().future().get();
+        httpLoadBalancer.shutdown().future().get(30, TimeUnit.SECONDS);
     }
 
     @Test

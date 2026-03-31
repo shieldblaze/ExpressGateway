@@ -26,16 +26,9 @@ import java.time.Duration;
 import java.util.Arrays;
 
 /**
- * <p> UDP based {@link HealthCheck} </p>
- * <p> How it works:
- * <ol>
- *     <li> It starts a UDP client and send "PING" packet to remote host. </li>
- *     <li> If remote host responds back with "PING" or "PONG" packet back,
- *              it'll pass the Health Check and close the UDP client. </li>
- *     <li> If remote host does not responds back with "PING" or "PONG" packet back,
- *              it'll fail the Health Check. </li>
- * </ol>
- * </p>
+ * UDP based {@link HealthCheck}.
+ *
+ * <p>Sends a PING packet and expects a PING or PONG response within timeout.</p>
  */
 public final class UDPHealthCheck extends HealthCheck {
 
@@ -50,6 +43,12 @@ public final class UDPHealthCheck extends HealthCheck {
         super(socketAddress, timeout, samples);
     }
 
+    public UDPHealthCheck(InetSocketAddress socketAddress, Duration timeout, int samples,
+                          int rise, int fall) {
+        super(socketAddress, timeout, samples, rise, fall,
+                Duration.ofSeconds(5), 1000L, 60_000L);
+    }
+
     @Override
     public void run() {
         try (DatagramSocket datagramSocket = new DatagramSocket()) {
@@ -57,11 +56,11 @@ public final class UDPHealthCheck extends HealthCheck {
             DatagramPacket datagramPacket = new DatagramPacket(PING, 4, socketAddress);
             datagramSocket.send(datagramPacket);
 
-            byte[] bytes = new byte[4];
-            datagramPacket = new DatagramPacket(bytes, 4);
+            byte[] bytes = new byte[64];
+            datagramPacket = new DatagramPacket(bytes, bytes.length);
             datagramSocket.receive(datagramPacket);
 
-            byte[] packet = Arrays.copyOfRange(datagramPacket.getData(), 0, 4);
+            byte[] packet = Arrays.copyOfRange(datagramPacket.getData(), 0, datagramPacket.getLength());
             if (Arrays.equals(packet, PING) || Arrays.equals(packet, PONG)) {
                 markSuccess();
             } else {

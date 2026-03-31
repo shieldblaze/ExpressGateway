@@ -19,6 +19,7 @@ package com.shieldblaze.expressgateway.backend.strategy.l4;
 
 import com.shieldblaze.expressgateway.backend.Node;
 import com.shieldblaze.expressgateway.backend.State;
+import com.shieldblaze.expressgateway.backend.events.node.NodeIdleTask;
 import com.shieldblaze.expressgateway.backend.events.node.NodeRemovedTask;
 import com.shieldblaze.expressgateway.backend.events.node.NodeTask;
 import com.shieldblaze.expressgateway.backend.events.node.NodeOfflineTask;
@@ -29,20 +30,10 @@ import com.shieldblaze.expressgateway.concurrent.task.Task;
 
 import java.io.IOException;
 import java.net.InetSocketAddress;
-import java.util.SplittableRandom;
+import java.util.concurrent.ThreadLocalRandom;
 
-/**
- * Select {@link Node} Randomly
- */
 public final class Random extends L4Balance {
 
-    private final SplittableRandom random = new SplittableRandom();
-
-    /**
-     * Create {@link Random} Instance
-     *
-     * @param sessionPersistence {@link SessionPersistence} Implementation Instance
-     */
     public Random(SessionPersistence<Node, Node, InetSocketAddress, Node> sessionPersistence) {
         super(sessionPersistence);
     }
@@ -53,23 +44,21 @@ public final class Random extends L4Balance {
     }
 
     @Override
-    public L4Response response(L4Request l4Request) throws LoadBalanceException {
+    public L4Response balance(L4Request l4Request) throws LoadBalanceException {
         Node node = sessionPersistence.node(l4Request);
         if (node != null) {
             if (node.state() == State.ONLINE) {
                 return new L4Response(node);
-            } else {
-                sessionPersistence.removeRoute(l4Request.socketAddress(), node);
             }
+            sessionPersistence.removeRoute(l4Request.socketAddress(), node);
         }
 
-        try {
-            node = cluster.onlineNodes().get(random.nextInt(cluster.onlineNodes().size()));
-        } catch (Exception ex) {
-            throw new NoNodeAvailableException(ex);
+        var nodes = cluster.onlineNodes();
+        if (nodes.isEmpty()) {
+            throw new NoNodeAvailableException();
         }
+        node = nodes.get(ThreadLocalRandom.current().nextInt(nodes.size()));
 
-        // Add to session persistence
         sessionPersistence.addRoute(l4Request.socketAddress(), node);
         return new L4Response(node);
     }
@@ -77,7 +66,7 @@ public final class Random extends L4Balance {
     @Override
     public void accept(Task task) {
         if (task instanceof NodeTask nodeEvent) {
-            if (nodeEvent instanceof NodeOfflineTask || nodeEvent instanceof NodeRemovedTask) {
+            if (nodeEvent instanceof NodeOfflineTask || nodeEvent instanceof NodeRemovedTask || nodeEvent instanceof NodeIdleTask) {
                 sessionPersistence.remove(nodeEvent.node());
             }
         }

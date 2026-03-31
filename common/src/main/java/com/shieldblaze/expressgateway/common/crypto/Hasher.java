@@ -18,15 +18,11 @@
 package com.shieldblaze.expressgateway.common.crypto;
 
 import com.shieldblaze.expressgateway.common.utils.Hex;
-import org.apache.logging.log4j.LogManager;
-import org.apache.logging.log4j.Logger;
 
 import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
 
 public final class Hasher {
-
-    private static final Logger logger = LogManager.getLogger(Hasher.class);
 
     private Hasher() {
         // Prevent outside initialization
@@ -37,14 +33,21 @@ public final class Hasher {
         SHA384
     }
 
+    /**
+     * Compute a hash of the given data using the specified algorithm.
+     *
+     * @param algorithm the hash algorithm to use
+     * @param data      the data to hash
+     * @return the hex-encoded hash string
+     * @throws IllegalStateException if the hash algorithm is unavailable
+     */
     public static String hash(Algorithm algorithm, byte[] data) {
         try {
             MessageDigest messageDigest = messageDigest(algorithm);
             return Hex.hexString(messageDigest.digest(data));
         } catch (Exception ex) {
-            logger.error("Error Occurred While Hashing", ex);
+            throw new IllegalStateException("Failed to compute hash with algorithm " + algorithm, ex);
         }
-        return null;
     }
 
     private static MessageDigest messageDigest(Algorithm algorithm) throws NoSuchAlgorithmException {

@@ -22,20 +22,55 @@ import com.shieldblaze.expressgateway.backend.loadbalance.Request;
 import com.shieldblaze.expressgateway.backend.loadbalance.SessionPersistence;
 import com.shieldblaze.expressgateway.common.map.SelfExpiringMap;
 import io.netty.util.NetUtil;
+import org.apache.logging.log4j.LogManager;
+import org.apache.logging.log4j.Logger;
 
 import java.math.BigInteger;
 import java.net.Inet4Address;
 import java.net.Inet6Address;
 import java.net.InetSocketAddress;
 import java.time.Duration;
+import java.util.Iterator;
 import java.util.concurrent.ConcurrentHashMap;
-import java.util.concurrent.atomic.AtomicBoolean;
 
 public final class SourceIPHash implements SessionPersistence<Node, Node, InetSocketAddress, Node> {
 
+    private static final Logger logger = LogManager.getLogger(SourceIPHash.class);
+
     private static final BigInteger MINUS_ONE = BigInteger.valueOf(-1);
 
+    /**
+     * LB-F3: Maximum number of session persistence entries.
+     * <p>
+     * At ~64 bytes per entry (masked IP key + Node reference + timestamp), 100_000
+     * entries consumes roughly 10-15 MB. The /24 (IPv4) and /48 (IPv6) masking means
+     * one entry per subnet, so 100K entries covers 100K distinct subnets which is
+     * generous for most deployments.
+     */
+    static final int DEFAULT_MAX_ENTRIES = 100_000;
+
     private final SelfExpiringMap<Object, Node> routeMap = new SelfExpiringMap<>(new ConcurrentHashMap<>(), Duration.ofHours(1), false);
+    private final int maxEntries;
+
+    /**
+     * Create a {@link SourceIPHash} instance with the default max entries limit.
+     */
+    public SourceIPHash() {
+        this(DEFAULT_MAX_ENTRIES);
+    }
+
+    /**
+     * Create a {@link SourceIPHash} instance with a custom max entries limit.
+     *
+     * @param maxEntries Maximum number of session persistence entries before eviction.
+     *                   Must be positive.
+     */
+    public SourceIPHash(int maxEntries) {
+        if (maxEntries <= 0) {
+            throw new IllegalArgumentException("maxEntries must be positive: " + maxEntries);
+        }
+        this.maxEntries = maxEntries;
+    }
 
     @Override
     public Node node(Request request) {
@@ -66,6 +101,15 @@ public final class SourceIPHash implements SessionPersistence<Node, Node, InetSo
             key = ipv6WithMask(socketAddress);
         }
 
+        // LB-F3: Enforce max size to prevent unbounded memory growth.
+        // When the map is at capacity and this is a new key, evict a batch of the
+        // oldest entries. ConcurrentHashMap iteration order is arbitrary but stable
+        // enough for eviction purposes -- we just need to shed load, not guarantee
+        // perfect LRU ordering. Evicting ~10% amortizes the cost of iteration.
+        if (routeMap.size() >= maxEntries && !routeMap.containsKey(key)) {
+            evictOldest();
+        }
+
         routeMap.put(key, node);
         return node;
     }
@@ -83,16 +127,7 @@ public final class SourceIPHash implements SessionPersistence<Node, Node, InetSo
 
     @Override
     public boolean remove(Node nodeToRemove) {
-        AtomicBoolean isRemoved = new AtomicBoolean(false);
-
-        routeMap.forEach((object, node) -> {
-            if (node == nodeToRemove) {
-                routeMap.remove(object, node);
-                isRemoved.set(true);
-            }
-        });
-
-        return isRemoved.get();
+        return routeMap.entrySet().removeIf(entry -> entry.getValue() == nodeToRemove);
     }
 
     @Override
@@ -110,6 +145,37 @@ public final class SourceIPHash implements SessionPersistence<Node, Node, InetSo
     @Override
     public String name() {
         return "SourceIPHash";
+    }
+
+    /**
+     * Returns the current number of entries in the session map.
+     * Useful for monitoring and metrics.
+     */
+    public int size() {
+        return routeMap.size();
+    }
+
+    /**
+     * LB-F3: Evicts approximately 10% of entries to make room for new sessions.
+     * <p>
+     * We evict a batch rather than a single entry to amortize the O(n) iteration cost
+     * over multiple subsequent puts. The ConcurrentHashMap iterator does not guarantee
+     * oldest-first ordering, but for session persistence the goal is simply to bound
+     * memory -- not to preserve the most valuable sessions. Expired entries are naturally
+     * cleaned up by the SelfExpiringMap's background cleaner.
+     */
+    private void evictOldest() {
+        int toEvict = Math.max(1, maxEntries / 10);
+        int evicted = 0;
+        Iterator<java.util.Map.Entry<Object, Node>> it = routeMap.entrySet().iterator();
+        while (it.hasNext() && evicted < toEvict) {
+            it.next();
+            it.remove();
+            evicted++;
+        }
+        if (evicted > 0) {
+            logger.debug("SourceIPHash: evicted {} entries (map size was at capacity {})", evicted, maxEntries);
+        }
     }
 
     private static int ipv4WithMask(Request request) {
@@ -131,7 +197,7 @@ public final class SourceIPHash implements SessionPersistence<Node, Node, InetSo
     }
 
     private static BigInteger ipToInt(Inet6Address ipAddress) {
-        return new BigInteger(ipAddress.getAddress());
+        return new BigInteger(1, ipAddress.getAddress());
     }
 
     private static int prefixToSubnetMaskIPv4() {

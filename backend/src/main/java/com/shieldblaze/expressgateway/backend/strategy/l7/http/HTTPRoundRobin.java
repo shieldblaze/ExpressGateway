@@ -55,7 +55,7 @@ public final class HTTPRoundRobin extends HTTPBalance {
     }
 
     @Override
-    public HTTPBalanceResponse response(HTTPBalanceRequest request) throws LoadBalanceException {
+    public HTTPBalanceResponse balance(HTTPBalanceRequest request) throws LoadBalanceException {
         HTTPBalanceResponse httpBalanceResponse = sessionPersistence.node(request);
         if (httpBalanceResponse != null) {
             // If Backend is ONLINE then return the response
@@ -68,11 +68,15 @@ public final class HTTPRoundRobin extends HTTPBalance {
         }
 
         Node node;
-        try {
-            node = cluster.onlineNodes().get(roundRobinIndexGenerator.next());
-        } catch (Exception ex) {
+        var onlineNodes = cluster.onlineNodes();
+        if (onlineNodes.isEmpty()) {
             throw new NoNodeAvailableException();
         }
+        // LB-F1: Math.abs(Integer.MIN_VALUE) returns Integer.MIN_VALUE (negative) due
+        // to two's complement overflow. Math.floorMod always returns a non-negative result
+        // for a positive divisor, which is safe for list indexing.
+        int index = roundRobinIndexGenerator.next();
+        node = onlineNodes.get(Math.floorMod(index, onlineNodes.size()));
 
         return sessionPersistence.addRoute(request, node);
     }

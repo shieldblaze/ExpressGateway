@@ -22,6 +22,7 @@ import com.shieldblaze.expressgateway.backend.cluster.Cluster;
 import com.shieldblaze.expressgateway.backend.cluster.ClusterBuilder;
 import com.shieldblaze.expressgateway.backend.strategy.l4.RoundRobin;
 import com.shieldblaze.expressgateway.backend.strategy.l4.sessionpersistence.NOOPSessionPersistence;
+import com.shieldblaze.expressgateway.common.utils.AvailablePortUtil;
 import com.shieldblaze.expressgateway.core.events.L4FrontListenerStartupTask;
 import com.shieldblaze.expressgateway.core.events.L4FrontListenerStopTask;
 import com.shieldblaze.expressgateway.core.loadbalancer.L4LoadBalancer;
@@ -43,17 +44,22 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 final class UpstreamHandlerTest {
 
     static L4LoadBalancer l4LoadBalancer;
+    static int lbPort;
+    static int backendPort;
 
     @BeforeAll
     static void setup() throws Exception {
-        new TCPServer().start();
+        lbPort = AvailablePortUtil.getTcpPort();
+        backendPort = AvailablePortUtil.getTcpPort();
+
+        new TCPServer(backendPort).start();
 
         Cluster cluster = ClusterBuilder.newBuilder()
                 .withLoadBalance(new RoundRobin(NOOPSessionPersistence.INSTANCE))
                 .build();
 
         l4LoadBalancer = L4LoadBalancerBuilder.newBuilder()
-                .withBindAddress(new InetSocketAddress("127.0.0.1", 9110))
+                .withBindAddress(new InetSocketAddress("127.0.0.1", lbPort))
                 .withL4FrontListener(new TCPListener())
                 .build();
 
@@ -61,7 +67,7 @@ final class UpstreamHandlerTest {
 
         NodeBuilder.newBuilder()
                 .withCluster(cluster)
-                .withSocketAddress(new InetSocketAddress("127.0.0.1", 9111))
+                .withSocketAddress(new InetSocketAddress("127.0.0.1", backendPort))
                 .build();
 
         L4FrontListenerStartupTask l4FrontListenerStartupEvent = l4LoadBalancer.start();
@@ -78,9 +84,9 @@ final class UpstreamHandlerTest {
 
     @Test
     void tcpClient() throws Exception {
-        try (Socket client = new Socket("127.0.0.1", 9110)) {
-            DataInputStream in = new DataInputStream(client.getInputStream());
-            DataOutputStream out = new DataOutputStream(client.getOutputStream());
+        try (Socket client = new Socket("127.0.0.1", lbPort);
+             DataInputStream in = new DataInputStream(client.getInputStream());
+             DataOutputStream out = new DataOutputStream(client.getOutputStream())) {
 
             out.writeUTF("HELLO_FROM_CLIENT");
             out.flush();
@@ -93,12 +99,19 @@ final class UpstreamHandlerTest {
 
     private static final class TCPServer extends Thread {
 
+        private final int port;
+
+        TCPServer(int port) {
+            this.port = port;
+            setDaemon(true);
+        }
+
         @Override
         public void run() {
-            try (ServerSocket serverSocket = new ServerSocket(9111, 1000, InetAddress.getByName("127.0.0.1"))) {
-                Socket clientSocket = serverSocket.accept();
-                DataInputStream input = new DataInputStream(clientSocket.getInputStream());
-                DataOutputStream out = new DataOutputStream(clientSocket.getOutputStream());
+            try (ServerSocket serverSocket = new ServerSocket(port, 1000, InetAddress.getByName("127.0.0.1"));
+                 Socket clientSocket = serverSocket.accept();
+                 DataInputStream input = new DataInputStream(clientSocket.getInputStream());
+                 DataOutputStream out = new DataOutputStream(clientSocket.getOutputStream())) {
 
                 assertEquals("HELLO_FROM_CLIENT", input.readUTF());
 

@@ -27,6 +27,7 @@ import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.DeleteMapping;
 import org.springframework.web.bind.annotation.GetMapping;
+import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.PutMapping;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
@@ -43,14 +44,21 @@ import static com.shieldblaze.expressgateway.servicediscovery.server.ServiceDisc
 public class Handler {
 
     private final ServiceDiscovery<Node> serviceDiscovery;
+    private final RegistrationStore registrationStore;
+    private final HealthAggregator healthAggregator;
 
-    public Handler(ServiceDiscovery<Node> serviceDiscovery) {
+    public Handler(ServiceDiscovery<Node> serviceDiscovery,
+                   RegistrationStore registrationStore,
+                   HealthAggregator healthAggregator) {
         this.serviceDiscovery = serviceDiscovery;
+        this.registrationStore = registrationStore;
+        this.healthAggregator = healthAggregator;
     }
 
     @PutMapping(value = "register", produces = MediaType.APPLICATION_JSON_VALUE)
     public ResponseEntity<String> register(@RequestBody Node node) throws Exception {
         serviceDiscovery.registerService(instance(node));
+        registrationStore.register(node, 0);
 
         ObjectNode objectNode = OBJECT_MAPPER.createObjectNode();
         objectNode.put("Success", true);
@@ -61,6 +69,7 @@ public class Handler {
     @DeleteMapping(value = "deregister", produces = MediaType.APPLICATION_JSON_VALUE)
     public ResponseEntity<String> deregister(@RequestBody Node node) throws Exception {
         serviceDiscovery.unregisterService(instance(node));
+        registrationStore.deregister(node.id());
 
         ObjectNode objectNode = OBJECT_MAPPER.createObjectNode();
         objectNode.put("Success", true);
@@ -73,6 +82,12 @@ public class Handler {
         ServiceInstance<Node> serviceInstance = serviceDiscovery.queryForInstance(SERVICE_NAME, id);
 
         ObjectNode objectNode = OBJECT_MAPPER.createObjectNode();
+        if (serviceInstance == null) {
+            objectNode.put("Success", false);
+            objectNode.put("Error", "Instance not found: " + id);
+            return ResponseEntity.status(HttpStatus.NOT_FOUND).body(objectNode.toPrettyString());
+        }
+
         objectNode.put("Success", true);
         ArrayNode arrayNode = objectNode.putArray("Instances");
         arrayNode.addPOJO(serviceInstance);
@@ -91,6 +106,74 @@ public class Handler {
         for (ServiceInstance<Node> instance : serviceInstances) {
             arrayNode.addPOJO(instance);
         }
+
+        return ResponseEntity.status(HttpStatus.OK).body(objectNode.toPrettyString());
+    }
+
+    // ---- Bulk Operations ----
+
+    @PutMapping(value = "bulk/register", produces = MediaType.APPLICATION_JSON_VALUE)
+    public ResponseEntity<String> bulkRegister(@RequestBody BulkRequest request) throws Exception {
+        request.validate();
+
+        int registered = 0;
+        for (Node node : request.nodes()) {
+            serviceDiscovery.registerService(instance(node));
+            registrationStore.register(node, request.ttlSeconds());
+            registered++;
+        }
+
+        ObjectNode objectNode = OBJECT_MAPPER.createObjectNode();
+        objectNode.put("Success", true);
+        objectNode.put("Registered", registered);
+
+        return ResponseEntity.status(HttpStatus.OK).body(objectNode.toPrettyString());
+    }
+
+    @DeleteMapping(value = "bulk/deregister", produces = MediaType.APPLICATION_JSON_VALUE)
+    public ResponseEntity<String> bulkDeregister(@RequestBody BulkRequest request) throws Exception {
+        request.validate();
+
+        int deregistered = 0;
+        for (Node node : request.nodes()) {
+            serviceDiscovery.unregisterService(instance(node));
+            registrationStore.deregister(node.id());
+            deregistered++;
+        }
+
+        ObjectNode objectNode = OBJECT_MAPPER.createObjectNode();
+        objectNode.put("Success", true);
+        objectNode.put("Deregistered", deregistered);
+
+        return ResponseEntity.status(HttpStatus.OK).body(objectNode.toPrettyString());
+    }
+
+    // ---- Health Endpoints ----
+
+    @PostMapping(value = "heartbeat", produces = MediaType.APPLICATION_JSON_VALUE)
+    public ResponseEntity<String> heartbeat(@RequestParam("id") String id) {
+        boolean updated = healthAggregator.processHeartbeat(id);
+
+        ObjectNode objectNode = OBJECT_MAPPER.createObjectNode();
+        objectNode.put("Success", updated);
+        if (!updated) {
+            objectNode.put("Error", "Node not found: " + id);
+        }
+
+        return ResponseEntity.status(updated ? HttpStatus.OK : HttpStatus.NOT_FOUND)
+                .body(objectNode.toPrettyString());
+    }
+
+    @GetMapping(value = "health", produces = MediaType.APPLICATION_JSON_VALUE)
+    public ResponseEntity<String> healthSummary() {
+        HealthAggregator.HealthSummary summary = healthAggregator.summarize();
+
+        ObjectNode objectNode = OBJECT_MAPPER.createObjectNode();
+        objectNode.put("Success", true);
+        objectNode.put("Total", summary.total());
+        objectNode.put("Healthy", summary.healthy());
+        objectNode.put("Unhealthy", summary.unhealthy());
+        objectNode.put("Expired", summary.expired());
 
         return ResponseEntity.status(HttpStatus.OK).body(objectNode.toPrettyString());
     }

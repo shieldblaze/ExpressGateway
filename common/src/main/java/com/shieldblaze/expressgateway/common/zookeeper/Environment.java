@@ -49,7 +49,8 @@ public enum Environment {
             case "dev", "development" -> DEVELOPMENT;
             case "test", "quality-assurance" -> TESTING;
             case "prod", "production" -> PRODUCTION;
-            default -> null;
+            default -> throw new IllegalArgumentException(
+                    "Unknown environment: '" + env + "'. Expected: dev, development, test, quality-assurance, prod, or production");
         };
     }
 }

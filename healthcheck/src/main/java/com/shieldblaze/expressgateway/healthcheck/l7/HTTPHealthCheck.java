@@ -18,32 +18,28 @@
 package com.shieldblaze.expressgateway.healthcheck.l7;
 
 import com.shieldblaze.expressgateway.healthcheck.HealthCheck;
-import io.netty.handler.ssl.util.InsecureTrustManagerFactory;
 import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
 
 import javax.net.ssl.SSLContext;
+import javax.net.ssl.TrustManagerFactory;
 import java.net.InetSocketAddress;
 import java.net.URI;
 import java.net.http.HttpClient;
 import java.net.http.HttpRequest;
 import java.net.http.HttpResponse;
 import java.security.KeyManagementException;
+import java.security.KeyStore;
 import java.security.NoSuchAlgorithmException;
 import java.security.SecureRandom;
 import java.time.Duration;
 
 /**
- * <p> HTTP based {@link HealthCheck} </p>
- * <p> How it works:
- * <ol>
- *     <li> It starts a HTTP client and connects to remote host. </li>
- *     <li> If connection is successful and host replies with HTTP Response code between 200-299,
- *     it'll pass the Health Check and close the connection. </li>
- *     <li> If connection is not successful or host does not replies with HTTP Response code between 200-299,
- *     it'll fail the Health Check. </li>
- * </ol>
- * </p>
+ * HTTP based {@link HealthCheck}.
+ *
+ * <p>Performs an HTTP GET and considers 2xx responses healthy.
+ * Uses secure TLS with system trust store by default.
+ * Supports configurable request timeout enforcement.</p>
  */
 public final class HTTPHealthCheck extends HealthCheck {
 
@@ -51,24 +47,46 @@ public final class HTTPHealthCheck extends HealthCheck {
 
     private final HttpClient httpClient;
     private final URI uri;
+    private final Duration requestTimeout;
 
+    /**
+     * Create with system default trust store (secure TLS verification).
+     */
     public HTTPHealthCheck(URI uri, Duration timeout, int samples) {
+        this(uri, timeout, samples, false);
+    }
+
+    /**
+     * Create with optional insecure TLS.
+     */
+    public HTTPHealthCheck(URI uri, Duration timeout, int samples, boolean insecureTls) {
         super(new InetSocketAddress(uri.getHost(), uri.getPort()), timeout, samples);
         this.uri = uri;
+        this.requestTimeout = timeout;
 
         final SSLContext sslContext;
         try {
             sslContext = SSLContext.getInstance("TLSv1.3");
-            sslContext.init(null, InsecureTrustManagerFactory.INSTANCE.getTrustManagers(), new SecureRandom());
-        } catch (NoSuchAlgorithmException | KeyManagementException e) {
-            // This should never happen
+
+            if (insecureTls) {
+                logger.warn("Health check for {} using INSECURE TLS", uri);
+                sslContext.init(null,
+                        io.netty.handler.ssl.util.InsecureTrustManagerFactory.INSTANCE.getTrustManagers(),
+                        new SecureRandom());
+            } else {
+                TrustManagerFactory tmf = TrustManagerFactory.getInstance(
+                        TrustManagerFactory.getDefaultAlgorithm());
+                tmf.init((KeyStore) null);
+                sslContext.init(null, tmf.getTrustManagers(), new SecureRandom());
+            }
+        } catch (NoSuchAlgorithmException | KeyManagementException | java.security.KeyStoreException e) {
             Error error = new Error(e);
             logger.fatal(error);
             throw error;
         }
 
         httpClient = HttpClient.newBuilder()
-                .followRedirects(HttpClient.Redirect.ALWAYS)
+                .followRedirects(HttpClient.Redirect.NEVER)
                 .sslContext(sslContext)
                 .connectTimeout(timeout)
                 .build();
@@ -81,6 +99,7 @@ public final class HTTPHealthCheck extends HealthCheck {
                     .GET()
                     .setHeader("User-Agent", "ExpressGateway HealthCheck Agent")
                     .uri(uri)
+                    .timeout(requestTimeout)
                     .build();
 
             HttpResponse<Void> response = httpClient.send(request, HttpResponse.BodyHandlers.discarding());

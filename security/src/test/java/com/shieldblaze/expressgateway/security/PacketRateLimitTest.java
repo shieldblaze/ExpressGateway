@@ -25,58 +25,104 @@ import org.junit.jupiter.api.Test;
 import java.net.SocketAddress;
 import java.time.Duration;
 
-import static org.junit.jupiter.api.Assertions.assertEquals;
-import static org.junit.jupiter.api.Assertions.assertNull;
-import static org.junit.jupiter.api.Assertions.assertTrue;
+import static org.junit.jupiter.api.Assertions.*;
 
 class PacketRateLimitTest {
 
     @Test
-    void test() throws InterruptedException {
-        PacketRateLimit packetRateLimit = new PacketRateLimit(5, Duration.ofSeconds(10));
+    void globalRateLimitDropsExcessPackets() {
+        PacketRateLimit limiter = new PacketRateLimit(5, Duration.ofSeconds(10));
 
-        EmbeddedChannel embeddedChannel = newEmbeddedInetChannel(packetRateLimit);
-        for (int i = 0; i < 100; i++) {
-            assertTrue(embeddedChannel.writeInbound("LOL" + i));
+        EmbeddedChannel ch = newEmbeddedInetChannel(limiter);
+
+        // Send 10 string packets
+        for (int i = 0; i < 10; i++) {
+            ch.writeInbound("PKT" + i);
         }
-        embeddedChannel.flushInbound();
+        ch.flushInbound();
 
-        // Successfully Sent
-        assertEquals("LOL0", embeddedChannel.readInbound());
-        assertEquals("LOL1", embeddedChannel.readInbound());
-        assertEquals("LOL2", embeddedChannel.readInbound());
-        assertEquals("LOL3", embeddedChannel.readInbound());
-        assertEquals("LOL4", embeddedChannel.readInbound());
+        // First 5 should pass
+        assertEquals("PKT0", ch.readInbound());
+        assertEquals("PKT1", ch.readInbound());
+        assertEquals("PKT2", ch.readInbound());
+        assertEquals("PKT3", ch.readInbound());
+        assertEquals("PKT4", ch.readInbound());
 
-        // Rate-Limited
-        assertNull(embeddedChannel.readInbound());
-        assertNull(embeddedChannel.readInbound());
-        assertNull(embeddedChannel.readInbound());
-        assertNull(embeddedChannel.readInbound());
-        assertNull(embeddedChannel.readInbound());
+        // Rest should be rate-limited
+        assertNull(ch.readInbound());
 
-        Thread.sleep(15000L);
+        assertEquals(5, limiter.acceptedPackets());
+        assertEquals(5, limiter.droppedPackets());
 
-        for (int i = 0; i < 100; i++) {
-            assertTrue(embeddedChannel.writeInbound("LOL" + i));
+        ch.close();
+    }
+
+    @Test
+    void constructorValidation() {
+        assertThrows(IllegalArgumentException.class,
+                () -> new PacketRateLimit(0, Duration.ofSeconds(1)));
+        assertThrows(IllegalArgumentException.class,
+                () -> new PacketRateLimit(-1, Duration.ofSeconds(1)));
+        assertThrows(NullPointerException.class,
+                () -> new PacketRateLimit(5, null));
+    }
+
+    @Test
+    void perIpRateLimiting() {
+        PacketRateLimit limiter = new PacketRateLimit(
+                100, Duration.ofSeconds(10),          // global: generous
+                3, Duration.ofSeconds(10),             // per-IP: 3/10s
+                0, PacketRateLimit.OverLimitAction.DROP,
+                1000
+        );
+
+        EmbeddedChannel ch = newEmbeddedInetChannel(limiter);
+
+        // First 3 pass per-IP limit
+        for (int i = 0; i < 3; i++) {
+            ch.writeInbound("PKT" + i);
         }
-        embeddedChannel.flushInbound();
+        ch.flushInbound();
 
-        // Successfully Sent
-        assertEquals("LOL0", embeddedChannel.readInbound());
-        assertEquals("LOL1", embeddedChannel.readInbound());
-        assertEquals("LOL2", embeddedChannel.readInbound());
-        assertEquals("LOL3", embeddedChannel.readInbound());
-        assertEquals("LOL4", embeddedChannel.readInbound());
+        assertEquals("PKT0", ch.readInbound());
+        assertEquals("PKT1", ch.readInbound());
+        assertEquals("PKT2", ch.readInbound());
 
-        // Rate-Limited
-        assertNull(embeddedChannel.readInbound());
-        assertNull(embeddedChannel.readInbound());
-        assertNull(embeddedChannel.readInbound());
-        assertNull(embeddedChannel.readInbound());
-        assertNull(embeddedChannel.readInbound());
+        // 4th should be dropped by per-IP limit
+        ch.writeInbound("PKT3");
+        ch.flushInbound();
+        assertNull(ch.readInbound());
 
-        assertTrue(embeddedChannel.close().isSuccess());
+        ch.close();
+    }
+
+    @Test
+    void burstAllowsExtraPackets() {
+        PacketRateLimit limiter = new PacketRateLimit(
+                100, Duration.ofSeconds(10),
+                3, Duration.ofSeconds(10),
+                2, PacketRateLimit.OverLimitAction.DROP, // burst = 2
+                1000
+        );
+
+        EmbeddedChannel ch = newEmbeddedInetChannel(limiter);
+
+        // With burst=2, effective capacity = 3+2 = 5
+        for (int i = 0; i < 5; i++) {
+            ch.writeInbound("PKT" + i);
+        }
+        ch.flushInbound();
+
+        for (int i = 0; i < 5; i++) {
+            assertEquals("PKT" + i, ch.readInbound());
+        }
+
+        // 6th should be dropped
+        ch.writeInbound("PKT5");
+        ch.flushInbound();
+        assertNull(ch.readInbound());
+
+        ch.close();
     }
 
     private static EmbeddedChannel newEmbeddedInetChannel(ChannelHandler... handlers) {

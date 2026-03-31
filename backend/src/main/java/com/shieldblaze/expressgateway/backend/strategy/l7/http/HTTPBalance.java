@@ -35,11 +35,11 @@ public abstract class HTTPBalance extends LoadBalance<HTTPBalanceResponse, HTTPB
         super(sessionPersistence);
     }
 
-    public abstract HTTPBalanceResponse response(HTTPBalanceRequest httpBalanceRequest) throws LoadBalanceException;
+    public abstract HTTPBalanceResponse balance(HTTPBalanceRequest httpBalanceRequest) throws LoadBalanceException;
 
     @Override
-    public Response response(Request request) throws LoadBalanceException {
-        return response((HTTPBalanceRequest) request);
+    public final Response response(Request request) throws LoadBalanceException {
+        return balance((HTTPBalanceRequest) request);
     }
 
     @Override

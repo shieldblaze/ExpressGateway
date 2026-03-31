@@ -78,6 +78,8 @@ final class HttpServer extends Thread {
     HttpServer(boolean useTls, ChannelHandler channelHandler) {
         this.useTls = useTls;
         this.channelHandler = Objects.requireNonNullElseGet(channelHandler, Handler::new);
+        setDaemon(true);
+        setName("HttpServer-" + System.identityHashCode(this));
     }
 
     @Override
@@ -148,7 +150,8 @@ final class HttpServer extends Thread {
                 }
             });
         } catch (Exception ex) {
-            logger.error(ex);
+            logger.error("HttpServer failed to start", ex);
+            START_FUTURE.completeExceptionally(ex);
         }
     }
 

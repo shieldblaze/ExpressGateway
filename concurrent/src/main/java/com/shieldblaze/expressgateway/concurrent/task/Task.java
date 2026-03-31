@@ -17,37 +17,13 @@
  */
 package com.shieldblaze.expressgateway.concurrent.task;
 
-/**
- * {@link Task} is an object which is created as a result of an operation.
- *
- * @param <T> Type of the operation result
- */
 public interface Task<T> {
 
-    /**
-     * Get the task result
-     */
     T get();
 
-    /**
-     * Set to {@code true} if the event has finished else set to {@code false}.
-     * </p>
-     * Note: This does not mean that the operation was successful. Use {@link #isSuccess()} to check that.
-     */
     boolean isFinished();
 
-    /**
-     * Set to {@code true} if the event has finished and operation was successful else
-     * set to {@code false}.
-     * <p>
-     * </p>
-     * {@link #isFinished()} will always return {@code true} if this method returns {@code true}.
-     */
     boolean isSuccess();
 
-    /**
-     * Returns {@link Throwable} of the event which has finished and operation was not successful
-     * due to some error.
-     */
     TaskError taskError();
 }

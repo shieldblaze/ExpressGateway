@@ -77,14 +77,14 @@ final class UDPHealthCheckTest {
                 datagramSocket.receive(datagramPacket);
 
                 InetAddress inetAddress = datagramPacket.getAddress();
-                int port = datagramPacket.getPort();
+                int remotePort = datagramPacket.getPort();
 
                 assertArrayEquals(PING, Arrays.copyOf(datagramPacket.getData(), datagramPacket.getLength()));
 
                 if (ping) {
-                    datagramPacket = new DatagramPacket(PING, 4, inetAddress, port);
+                    datagramPacket = new DatagramPacket(PING, 4, inetAddress, remotePort);
                 } else {
-                    datagramPacket = new DatagramPacket(PONG, 4, inetAddress, port);
+                    datagramPacket = new DatagramPacket(PONG, 4, inetAddress, remotePort);
                 }
 
                 datagramSocket.send(datagramPacket);

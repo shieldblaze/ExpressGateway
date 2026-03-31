@@ -69,11 +69,18 @@ public final class SNIHandler extends AbstractSniHandler<CertificateKeyPair> {
     private void replaceHandler(ChannelHandlerContext ctx, CertificateKeyPair certificateKeyPair) {
         SslHandler sslHandler = null;
         try {
-            sslHandler = new TLSHandler(certificateKeyPair.sslContext().newHandler(ctx.alloc()).engine());
+            // Use newEngine() directly to avoid creating an intermediate SslHandler
+            // that would be discarded. With the OpenSSL provider, discarding the
+            // intermediate SslHandler leaks native memory (ReferenceCountedOpenSslEngine).
+            SSLEngine engine = certificateKeyPair.sslContext().newEngine(ctx.alloc());
+            sslHandler = new TLSHandler(engine);
+            // RES-01: Explicitly set TLS handshake timeout to defend against slow-TLS attacks.
+            // Netty's default is 10s, but we set it explicitly for defense-in-depth.
+            sslHandler.setHandshakeTimeoutMillis(10_000);
 
             try {
-                if (sslHandler.engine() instanceof ReferenceCountedOpenSslEngine && certificateKeyPair.useOCSPStapling()) {
-                    ((ReferenceCountedOpenSslEngine) sslHandler.engine()).setOcspResponse(certificateKeyPair.ocspStaplingData());
+                if (engine instanceof ReferenceCountedOpenSslEngine && certificateKeyPair.useOCSPStapling()) {
+                    ((ReferenceCountedOpenSslEngine) engine).setOcspResponse(certificateKeyPair.ocspStaplingData());
                 }
             } catch (Exception ex) {
                 ctx.fireExceptionCaught(ex);

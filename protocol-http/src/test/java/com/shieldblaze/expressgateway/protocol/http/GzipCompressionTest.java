@@ -20,6 +20,7 @@ package com.shieldblaze.expressgateway.protocol.http;
 import org.junit.jupiter.api.AfterAll;
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.Timeout;
 
 import java.io.ByteArrayInputStream;
 import java.io.IOException;
@@ -28,10 +29,12 @@ import java.net.http.HttpClient;
 import java.net.http.HttpRequest;
 import java.net.http.HttpResponse;
 import java.time.Duration;
+import java.util.concurrent.TimeUnit;
 import java.util.zip.GZIPInputStream;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 
+@Timeout(value = 120, unit = TimeUnit.SECONDS)
 class GzipCompressionTest {
 
     private static TestableHttpLoadBalancer testableHttpLoadBalancer;
@@ -56,7 +59,7 @@ class GzipCompressionTest {
     void gzipOnlyTest() throws Exception {
         HttpRequest httpRequest = HttpRequest.newBuilder()
                 .GET()
-                .uri(URI.create("https://localhost:9110"))
+                .uri(URI.create("https://localhost:" + testableHttpLoadBalancer.port()))
                 .version(HttpClient.Version.HTTP_2)
                 .timeout(Duration.ofSeconds(5))
                 .setHeader("Accept-Encoding", "gzip")
@@ -75,7 +78,7 @@ class GzipCompressionTest {
     void gzipAndDeflateTest() throws Exception {
         HttpRequest httpRequest = HttpRequest.newBuilder()
                 .GET()
-                .uri(URI.create("https://localhost:9110"))
+                .uri(URI.create("https://localhost:" + testableHttpLoadBalancer.port()))
                 .version(HttpClient.Version.HTTP_2)
                 .timeout(Duration.ofSeconds(5))
                 .setHeader("Accept-Encoding", "gzip, deflate")

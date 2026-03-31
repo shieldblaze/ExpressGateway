@@ -22,6 +22,7 @@ import com.shieldblaze.expressgateway.backend.cluster.Cluster;
 import com.shieldblaze.expressgateway.backend.cluster.ClusterBuilder;
 import com.shieldblaze.expressgateway.backend.strategy.l7.http.HTTPRoundRobin;
 import com.shieldblaze.expressgateway.backend.strategy.l7.http.sessionpersistence.NOOPSessionPersistence;
+import com.shieldblaze.expressgateway.common.utils.AvailablePortUtil;
 import com.shieldblaze.expressgateway.common.utils.SelfSignedCertificate;
 import com.shieldblaze.expressgateway.configuration.ConfigurationContext;
 import com.shieldblaze.expressgateway.configuration.tls.CertificateKeyPair;
@@ -40,6 +41,8 @@ import java.net.http.HttpClient;
 import java.security.SecureRandom;
 import java.util.List;
 import java.util.concurrent.ExecutionException;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.TimeoutException;
 
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
@@ -50,6 +53,7 @@ public final class TestableHttpLoadBalancer implements Closeable {
     private boolean tlsBackendEnabled;
     private HTTPLoadBalancer httpLoadBalancer;
     private HttpServer httpServer;
+    private int lbPort;
 
     public void start() throws Exception {
         SelfSignedCertificate ssc = SelfSignedCertificate.generateNew(List.of("127.0.0.1"), List.of("localhost"));
@@ -62,6 +66,7 @@ public final class TestableHttpLoadBalancer implements Closeable {
             tlsServerConfiguration.enable();
         }
         tlsServerConfiguration.addMapping("localhost", certificateKeyPair);
+        tlsServerConfiguration.defaultMapping(certificateKeyPair);
 
         if (tlsClientEnabled) {
             tlsClientConfiguration.enable();
@@ -71,7 +76,9 @@ public final class TestableHttpLoadBalancer implements Closeable {
 
         httpServer = new HttpServer(tlsBackendEnabled);
         httpServer.start();
-        httpServer.START_FUTURE.get();
+        httpServer.START_FUTURE.get(30, TimeUnit.SECONDS);
+
+        lbPort = AvailablePortUtil.getTcpPort();
 
         Cluster cluster = ClusterBuilder.newBuilder()
                 .withLoadBalance(new HTTPRoundRobin(NOOPSessionPersistence.INSTANCE))
@@ -79,10 +86,10 @@ public final class TestableHttpLoadBalancer implements Closeable {
 
         httpLoadBalancer = HTTPLoadBalancerBuilder.newBuilder()
                 .withConfigurationContext(ConfigurationContext.create(tlsClientConfiguration, tlsServerConfiguration))
-                .withBindAddress(new InetSocketAddress("localhost", 9110))
+                .withBindAddress(new InetSocketAddress("127.0.0.1", lbPort))
                 .build();
 
-        httpLoadBalancer.mappedCluster("localhost:9110", cluster);
+        httpLoadBalancer.mappedCluster("localhost:" + lbPort, cluster);
 
         NodeBuilder.newBuilder()
                 .withCluster(cluster)
@@ -90,7 +97,7 @@ public final class TestableHttpLoadBalancer implements Closeable {
                 .build();
 
         L4FrontListenerStartupTask l4FrontListenerStartupEvent = httpLoadBalancer.start();
-        l4FrontListenerStartupEvent.future().join();
+        l4FrontListenerStartupEvent.future().get(30, TimeUnit.SECONDS);
         assertTrue(l4FrontListenerStartupEvent.isSuccess());
     }
 
@@ -111,17 +118,28 @@ public final class TestableHttpLoadBalancer implements Closeable {
         return httpClient;
     }
 
+    /**
+     * Returns the dynamically allocated port the load balancer is listening on.
+     */
+    public int port() {
+        return lbPort;
+    }
+
     @Override
     public void close() {
         httpServer.shutdown();
         try {
-            httpServer.SHUTDOWN_FUTURE.get();
-        } catch (InterruptedException | ExecutionException e) {
+            httpServer.SHUTDOWN_FUTURE.get(30, TimeUnit.SECONDS);
+        } catch (InterruptedException | ExecutionException | TimeoutException e) {
             throw new RuntimeException(e);
         }
 
         L4FrontListenerStopTask l4FrontListenerStopEvent = httpLoadBalancer.stop();
-        l4FrontListenerStopEvent.future().join();
+        try {
+            l4FrontListenerStopEvent.future().get(30, TimeUnit.SECONDS);
+        } catch (InterruptedException | ExecutionException | TimeoutException e) {
+            throw new RuntimeException(e);
+        }
         assertTrue(l4FrontListenerStopEvent.isSuccess());
     }
 

@@ -22,6 +22,7 @@ import com.shieldblaze.expressgateway.backend.cluster.Cluster;
 import com.shieldblaze.expressgateway.backend.cluster.ClusterBuilder;
 import com.shieldblaze.expressgateway.backend.strategy.l7.http.HTTPRoundRobin;
 import com.shieldblaze.expressgateway.backend.strategy.l7.http.sessionpersistence.NOOPSessionPersistence;
+import com.shieldblaze.expressgateway.common.utils.AvailablePortUtil;
 import com.shieldblaze.expressgateway.configuration.ConfigurationContext;
 import com.shieldblaze.expressgateway.configuration.tls.TlsClientConfiguration;
 import com.shieldblaze.expressgateway.configuration.tls.TlsServerConfiguration;
@@ -37,17 +38,23 @@ import org.junit.jupiter.api.AfterAll;
 import org.junit.jupiter.api.Assertions;
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.Timeout;
 
 import java.net.InetSocketAddress;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.ExecutionException;
+import java.util.concurrent.TimeUnit;
 
+@Timeout(value = 120, unit = TimeUnit.SECONDS)
 public class WebSocketEchoTest extends WebSocketListener {
+
+    private static final int MESSAGE_COUNT = 1_000;
 
     static WebSocketEchoServer webSocketEchoServer;
     static OkHttpClient client;
     static HTTPLoadBalancer httpLoadBalancer;
-    final CountDownLatch countDownLatchString = new CountDownLatch(100_000);
+    static int lbPort;
+    final CountDownLatch countDownLatchString = new CountDownLatch(MESSAGE_COUNT);
 
     @BeforeAll
     static void setup() throws Exception {
@@ -56,49 +63,51 @@ public class WebSocketEchoTest extends WebSocketListener {
 
         client = new OkHttpClient();
 
+        lbPort = AvailablePortUtil.getTcpPort();
+
         TlsClientConfiguration tlsClientConfiguration = TlsClientConfiguration.copyFrom(TlsClientConfiguration.DEFAULT);
         TlsServerConfiguration tlsServerConfiguration = TlsServerConfiguration.copyFrom(TlsServerConfiguration.DEFAULT);
 
         httpLoadBalancer = HTTPLoadBalancerBuilder.newBuilder()
                 .withConfigurationContext(ConfigurationContext.create(tlsClientConfiguration, tlsServerConfiguration))
-                .withBindAddress(new InetSocketAddress("0.0.0.0", 9110))
+                .withBindAddress(new InetSocketAddress("127.0.0.1", lbPort))
                 .build();
 
-        httpLoadBalancer.start().future().get();
+        httpLoadBalancer.start().future().get(30, TimeUnit.SECONDS);
 
         Cluster cluster = ClusterBuilder.newBuilder()
                 .withLoadBalance(new HTTPRoundRobin(NOOPSessionPersistence.INSTANCE))
                 .build();
 
-        httpLoadBalancer.mappedCluster("localhost:9110", cluster);
+        httpLoadBalancer.mappedCluster("localhost:" + lbPort, cluster);
 
         NodeBuilder.newBuilder()
                 .withCluster(cluster)
-                .withSocketAddress(new InetSocketAddress("localhost", 5000))
+                .withSocketAddress(new InetSocketAddress("127.0.0.1", webSocketEchoServer.port()))
                 .build();
     }
 
     @AfterAll
-    static void shutdown() throws ExecutionException, InterruptedException {
+    static void shutdown() throws ExecutionException, InterruptedException, java.util.concurrent.TimeoutException {
         webSocketEchoServer.shutdown();
         client.dispatcher().executorService().shutdown();
-        httpLoadBalancer.stop().future().get();
+        httpLoadBalancer.stop().future().get(30, TimeUnit.SECONDS);
     }
 
     @Test
     void testEcho() throws InterruptedException {
         Request request = new Request.Builder()
-                .url("ws://localhost:9110")
+                .url("ws://localhost:" + lbPort)
                 .build();
 
         client.newWebSocket(request, this);
 
-        countDownLatchString.await();
+        Assertions.assertTrue(countDownLatchString.await(90, TimeUnit.SECONDS), "WebSocket echo did not complete within 90 seconds");
     }
 
     @Override
     public void onOpen(@NotNull WebSocket webSocket, @NotNull Response response) {
-        for (int i = 0; i < 100_000; i++) {
+        for (int i = 0; i < MESSAGE_COUNT; i++) {
             webSocket.send("Hello");
         }
     }

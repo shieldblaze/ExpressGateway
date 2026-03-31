@@ -17,7 +17,6 @@
  */
 package com.shieldblaze.expressgateway.core.handlers;
 
-import com.shieldblaze.expressgateway.concurrent.GlobalExecutors;
 import io.netty.channel.ChannelDuplexHandler;
 import io.netty.channel.ChannelHandlerContext;
 import io.netty.channel.ChannelPromise;
@@ -31,8 +30,27 @@ import java.util.concurrent.TimeUnit;
  * <p>
  * This Handler is used to handle Connection Timeout for both Upstream and Downstream Connections.
  * </p>
+ *
+ * <p><b>CM-F2 fix:</b> The periodic idle check is now scheduled on the channel's own
+ * {@link io.netty.channel.EventLoop} instead of a global {@code ScheduledExecutorService}.
+ * This eliminates cross-thread visibility issues (no volatile needed on timestamp fields),
+ * avoids the overhead of marshalling events back to the EventLoop, and ensures the timer
+ * is automatically cleaned up when the EventLoop shuts down.</p>
+ *
+ * <h3>IT-01: Mid-Request Idle Timeout Behavior</h3>
+ * <p>The idle timeout is reset on every {@code channelRead()} event, which includes
+ * each chunk of HTTP request body data during an upload. This means the idle timer
+ * will <b>not</b> fire while a client is actively sending body data — each received
+ * chunk resets the clock. The timer only fires if the client stops sending data
+ * entirely for longer than the configured timeout duration.</p>
+ *
+ * <p>A client that pauses mid-upload beyond the timeout is treated as dead — this
+ * is intentional and consistent with how Nginx ({@code client_body_timeout}) and
+ * HAProxy ({@code timeout client}) handle stalled uploads. There is no need for
+ * request-state-aware timeout logic: the per-read reset provides the correct
+ * behavior for both idle connections and active transfers.</p>
  */
-public final class ConnectionTimeoutHandler extends ChannelDuplexHandler implements Runnable {
+public final class ConnectionTimeoutHandler extends ChannelDuplexHandler {
 
     /**
      * Enum to represent the State of Connection Timeout
@@ -62,9 +80,12 @@ public final class ConnectionTimeoutHandler extends ChannelDuplexHandler impleme
 
     private final long timeoutNanos;
     private final boolean isUpstream;
+
+    // CM-F2: Since both the timer callback and channelRead/write now execute on the
+    // same EventLoop thread, volatile is no longer needed. Single-threaded access
+    // guarantees visibility without memory barriers.
     private long lastTransferredRead = System.nanoTime();
     private long lastTransferredWrite = lastTransferredRead;
-    private ChannelHandlerContext ctx;
     private ScheduledFuture<?> scheduledFuture;
 
     /**
@@ -80,14 +101,21 @@ public final class ConnectionTimeoutHandler extends ChannelDuplexHandler impleme
 
     @Override
     public void channelActive(ChannelHandlerContext ctx) throws Exception {
-        this.ctx = ctx;
-        scheduledFuture = GlobalExecutors.submitTaskAndRunEvery(this, 0, 500, TimeUnit.MILLISECONDS);
+        // CM-F2: Schedule the idle check on the channel's EventLoop. This runs on the
+        // same thread as channelRead/write, so no cross-thread synchronization is needed.
+        // The EventLoop's task queue handles cancellation on channel close automatically,
+        // but we still cancel explicitly in channelInactive for deterministic cleanup.
+        scheduledFuture = ctx.channel().eventLoop().scheduleAtFixedRate(
+                () -> checkIdleTimeout(ctx), 500, 500, TimeUnit.MILLISECONDS);
         super.channelActive(ctx);
     }
 
     @Override
     public void channelInactive(ChannelHandlerContext ctx) throws Exception {
-        scheduledFuture.cancel(true);
+        if (scheduledFuture != null) {
+            scheduledFuture.cancel(false);
+            scheduledFuture = null;
+        }
         super.channelInactive(ctx);
     }
 
@@ -103,15 +131,23 @@ public final class ConnectionTimeoutHandler extends ChannelDuplexHandler impleme
         super.write(ctx, msg, promise);
     }
 
-    @Override
-    public void run() {
+    /**
+     * Checks whether read or write has been idle beyond the configured timeout.
+     * This method runs on the channel's EventLoop thread, so all field accesses
+     * are single-threaded and pipeline operations are safe without marshalling.
+     */
+    private void checkIdleTimeout(ChannelHandlerContext ctx) {
+        if (!ctx.channel().isActive()) {
+            return;
+        }
         long nanoTime = System.nanoTime();
+        boolean readIdle = nanoTime - lastTransferredRead > timeoutNanos;
+        boolean writeIdle = nanoTime - lastTransferredWrite > timeoutNanos;
 
-        if (nanoTime - lastTransferredRead > timeoutNanos) {
+        if (readIdle) {
             ctx.fireUserEventTriggered(isUpstream ? State.UPSTREAM_READ_IDLE : State.DOWNSTREAM_READ_IDLE);
         }
-
-        if (nanoTime - lastTransferredWrite > timeoutNanos) {
+        if (writeIdle) {
             ctx.fireUserEventTriggered(isUpstream ? State.UPSTREAM_WRITE_IDLE : State.DOWNSTREAM_WRITE_IDLE);
         }
     }

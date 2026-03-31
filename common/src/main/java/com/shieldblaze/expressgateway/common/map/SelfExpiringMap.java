@@ -52,6 +52,20 @@ public final class SelfExpiringMap<K, V> extends ExpiringMap<K, V> implements Cl
         this.cleaner = cleaner;
     }
 
+    /**
+     * Create a new {@link SelfExpiringMap} with an {@link EntryRemovedListener} for
+     * notification when entries expire. Uses a {@link DefaultCleaner} internally.
+     *
+     * @param storageMap           {@link Map} implementation to use for storing entries
+     * @param duration             TTL (Time-to-live) duration of entries
+     * @param autoRenew            Set to {@code true} to auto-renew entries on get
+     * @param entryRemovedListener listener notified when entries are removed due to expiry
+     */
+    public SelfExpiringMap(Map<K, V> storageMap, Duration duration, boolean autoRenew, EntryRemovedListener<V> entryRemovedListener) {
+        super(storageMap, duration, autoRenew, entryRemovedListener);
+        cleaner = new DefaultCleaner<>(this);
+    }
+
     @Override
     public String toString() {
         return super.toString();

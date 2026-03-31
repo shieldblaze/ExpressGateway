@@ -27,7 +27,7 @@ import java.util.UUID;
 public class ExpressGateway {
 
     @JsonIgnore
-    private static ExpressGateway INSTANCE;
+    private static volatile ExpressGateway INSTANCE;
 
     /**
      * Unique Runtime ID
@@ -55,6 +55,9 @@ public class ExpressGateway {
     @JsonProperty("LoadBalancerTLS")
     private LoadBalancerTLS loadBalancerTLS;
 
+    @JsonProperty("ControlPlane")
+    private ControlPlane controlPlane;
+
     public ExpressGateway() {
         // To be used by Jackson Deserializer
     }
@@ -64,6 +67,15 @@ public class ExpressGateway {
      */
     public ExpressGateway(RunningMode runningMode, String clusterID, Environment environment, RestApi restApi,
                           ZooKeeper zooKeeper, ServiceDiscovery serviceDiscovery, LoadBalancerTLS loadBalancerTLS) {
+        this(runningMode, clusterID, environment, restApi, zooKeeper, serviceDiscovery, loadBalancerTLS, null);
+    }
+
+    /**
+     * This should be used in testing only.
+     */
+    public ExpressGateway(RunningMode runningMode, String clusterID, Environment environment, RestApi restApi,
+                          ZooKeeper zooKeeper, ServiceDiscovery serviceDiscovery, LoadBalancerTLS loadBalancerTLS,
+                          ControlPlane controlPlane) {
         this.runningMode = runningMode;
         ClusterID = clusterID;
         this.environment = environment;
@@ -71,6 +83,7 @@ public class ExpressGateway {
         this.zooKeeper = zooKeeper;
         this.serviceDiscovery = serviceDiscovery;
         this.loadBalancerTLS = loadBalancerTLS;
+        this.controlPlane = controlPlane;
     }
 
     public String ID() {
@@ -105,6 +118,10 @@ public class ExpressGateway {
         return loadBalancerTLS;
     }
 
+    public ControlPlane controlPlane() {
+        return controlPlane;
+    }
+
     @Override
     public String toString() {
         return "ExpressGateway{" +
@@ -115,6 +132,7 @@ public class ExpressGateway {
                 ", zooKeeper=" + zooKeeper +
                 ", serviceDiscovery=" + serviceDiscovery +
                 ", loadBalancerTLS=" + loadBalancerTLS +
+                ", controlPlane=" + controlPlane +
                 '}';
     }
 
@@ -473,6 +491,125 @@ public class ExpressGateway {
         }
     }
 
+    public static class ControlPlane {
+
+        @JsonProperty
+        private Boolean Enabled;
+
+        @JsonProperty
+        private Integer GrpcPort;
+
+        @JsonProperty
+        private String GrpcBindAddress;
+
+        @JsonProperty
+        private String KvStoreType; // "ZOOKEEPER", "CONSUL", "ETCD"
+
+        @JsonProperty
+        private Long HeartbeatIntervalMs;
+
+        @JsonProperty
+        private Integer HeartbeatMissThreshold;
+
+        @JsonProperty
+        private Long WriteBatchWindowMs;
+
+        @JsonProperty
+        private Integer MaxNodes;
+
+        // -- Control Plane Agent settings (for data plane nodes) --
+
+        @JsonProperty
+        private String ControlPlaneAddress; // Address to connect to when acting as data plane node
+
+        @JsonProperty
+        private Integer ControlPlanePort; // Port to connect to
+
+        public ControlPlane() {
+            // To be used by Jackson Deserializer
+        }
+
+        public Boolean enabled() {
+            return Enabled;
+        }
+
+        public Integer grpcPort() {
+            return GrpcPort;
+        }
+
+        public String grpcBindAddress() {
+            return GrpcBindAddress;
+        }
+
+        public String kvStoreType() {
+            return KvStoreType;
+        }
+
+        public Long heartbeatIntervalMs() {
+            return HeartbeatIntervalMs;
+        }
+
+        public Integer heartbeatMissThreshold() {
+            return HeartbeatMissThreshold;
+        }
+
+        public Long writeBatchWindowMs() {
+            return WriteBatchWindowMs;
+        }
+
+        public Integer maxNodes() {
+            return MaxNodes;
+        }
+
+        public String controlPlaneAddress() {
+            return ControlPlaneAddress;
+        }
+
+        public Integer controlPlanePort() {
+            return ControlPlanePort;
+        }
+
+        private static final java.util.Set<String> VALID_KV_STORE_TYPES =
+                java.util.Set.of("ZOOKEEPER", "CONSUL", "ETCD");
+
+        /**
+         * Validates the ControlPlane configuration.
+         *
+         * @throws IllegalStateException if required fields are invalid
+         */
+        public void validate() {
+            if (Boolean.TRUE.equals(Enabled)) {
+                if (GrpcPort != null && (GrpcPort < 1 || GrpcPort > 65535)) {
+                    throw new IllegalStateException("ControlPlane GrpcPort must be in range [1, 65535], got: " + GrpcPort);
+                }
+                if (KvStoreType != null && !VALID_KV_STORE_TYPES.contains(KvStoreType)) {
+                    throw new IllegalStateException("ControlPlane KvStoreType must be one of: ZOOKEEPER, CONSUL, ETCD; got: " + KvStoreType);
+                }
+            }
+            if (ControlPlaneAddress != null) {
+                if (ControlPlanePort == null || ControlPlanePort < 1 || ControlPlanePort > 65535) {
+                    throw new IllegalStateException("ControlPlane ControlPlanePort must be in range [1, 65535] when ControlPlaneAddress is set");
+                }
+            }
+        }
+
+        @Override
+        public String toString() {
+            return "ControlPlane{" +
+                    "Enabled=" + Enabled +
+                    ", GrpcPort=" + GrpcPort +
+                    ", GrpcBindAddress='" + GrpcBindAddress + '\'' +
+                    ", KvStoreType='" + KvStoreType + '\'' +
+                    ", HeartbeatIntervalMs=" + HeartbeatIntervalMs +
+                    ", HeartbeatMissThreshold=" + HeartbeatMissThreshold +
+                    ", WriteBatchWindowMs=" + WriteBatchWindowMs +
+                    ", MaxNodes=" + MaxNodes +
+                    ", ControlPlaneAddress='" + ControlPlaneAddress + '\'' +
+                    ", ControlPlanePort=" + ControlPlanePort +
+                    '}';
+        }
+    }
+
     public enum RunningMode {
 
         /**
@@ -487,6 +624,35 @@ public class ExpressGateway {
         REPLICA
     }
 
+    /**
+     * Validates the configuration after deserialization.
+     * Fails fast with clear error messages if required fields are missing.
+     *
+     * @throws IllegalStateException if validation fails
+     */
+    public void validate() {
+        if (runningMode == null) {
+            throw new IllegalStateException("RunningMode must not be null");
+        }
+        if (environment == null) {
+            throw new IllegalStateException("Environment must not be null");
+        }
+        if (runningMode == RunningMode.REPLICA) {
+            if (zooKeeper == null) {
+                throw new IllegalStateException("ZooKeeper configuration required in REPLICA mode");
+            }
+            if (zooKeeper.connectionString() == null || zooKeeper.connectionString().isEmpty()) {
+                throw new IllegalStateException("ZooKeeper ConnectionString must not be empty in REPLICA mode");
+            }
+            if (serviceDiscovery == null) {
+                throw new IllegalStateException("ServiceDiscovery configuration required in REPLICA mode");
+            }
+            if (controlPlane != null) {
+                controlPlane.validate();
+            }
+        }
+    }
+
     public static void setInstance(ExpressGateway expressGateway) {
         INSTANCE = expressGateway;
         INSTANCE.cleanSensitiveData();
@@ -497,12 +663,9 @@ public class ExpressGateway {
     }
 
     public void cleanSensitiveData() {
-        restApi().clean();
-        zooKeeper().clean();
-        serviceDiscovery().clean();
-        loadBalancerTLS().clean();
-
-        // Run GC to wipe all sensitive information
-        System.gc();
+        if (restApi() != null) restApi().clean();
+        if (zooKeeper() != null) zooKeeper().clean();
+        if (serviceDiscovery() != null) serviceDiscovery().clean();
+        if (loadBalancerTLS() != null) loadBalancerTLS().clean();
     }
 }

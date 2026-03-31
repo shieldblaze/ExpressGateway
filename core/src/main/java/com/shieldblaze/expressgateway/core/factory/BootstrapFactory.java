@@ -24,6 +24,7 @@ import io.netty.bootstrap.Bootstrap;
 import io.netty.buffer.ByteBufAllocator;
 import io.netty.channel.ChannelOption;
 import io.netty.channel.EventLoopGroup;
+import io.netty.channel.WriteBufferWaterMark;
 import io.netty.channel.epoll.EpollDatagramChannel;
 import io.netty.channel.epoll.EpollDatagramChannelConfig;
 import io.netty.channel.epoll.EpollMode;
@@ -40,6 +41,8 @@ import io.netty.incubator.channel.uring.IOUringSocketChannel;
  */
 public final class BootstrapFactory {
 
+    private static final WriteBufferWaterMark WRITE_BUFFER_WATER_MARK = new WriteBufferWaterMark(32 * 1024, 64 * 1024);
+
     @NonNull
     public static Bootstrap tcp(ConfigurationContext configurationContext, EventLoopGroup eventLoopGroup, ByteBufAllocator byteBufAllocator) {
         return new Bootstrap()
@@ -49,8 +52,10 @@ public final class BootstrapFactory {
                 .option(ChannelOption.SO_SNDBUF, configurationContext.transportConfiguration().socketSendBufferSize())
                 .option(ChannelOption.SO_RCVBUF, configurationContext.transportConfiguration().socketReceiveBufferSize())
                 .option(ChannelOption.TCP_NODELAY, true)
+                .option(ChannelOption.WRITE_BUFFER_WATER_MARK, WRITE_BUFFER_WATER_MARK)
                 .option(ChannelOption.AUTO_READ, true)
                 .option(ChannelOption.SO_KEEPALIVE, true)
+                .option(ChannelOption.ALLOW_HALF_CLOSURE, true)
                 .option(ChannelOption.CONNECT_TIMEOUT_MILLIS, configurationContext.transportConfiguration().backendConnectTimeout())
                 .channelFactory(() -> {
                     if (configurationContext.transportConfiguration().transportType() == TransportType.IO_URING) {
@@ -96,6 +101,11 @@ public final class BootstrapFactory {
                         config.setEpollMode(EpollMode.EDGE_TRIGGERED);
                         config.setOption(UnixChannelOption.SO_REUSEPORT, true);
                         config.setUdpGro(true);
+                        // GSO (UDP_SEGMENT) for QUIC packet batching is handled internally
+                        // by netty-incubator-codec-quic (quiche). The Netty 4.2.x epoll
+                        // transport does not expose a setGso() API at the channel config
+                        // level — GSO segmentation is applied per-sendmsg by the QUIC codec
+                        // when the kernel supports it (Linux 4.18+).
 
                         return datagramChannel;
                     } else {

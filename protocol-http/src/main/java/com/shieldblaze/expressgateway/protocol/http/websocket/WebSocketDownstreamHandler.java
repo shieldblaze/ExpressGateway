@@ -21,6 +21,9 @@ import com.shieldblaze.expressgateway.common.annotation.NonNull;
 import io.netty.channel.Channel;
 import io.netty.channel.ChannelHandlerContext;
 import io.netty.channel.ChannelInboundHandlerAdapter;
+import io.netty.handler.codec.http.websocketx.CloseWebSocketFrame;
+import io.netty.handler.codec.http.websocketx.PingWebSocketFrame;
+import io.netty.handler.codec.http.websocketx.PongWebSocketFrame;
 import io.netty.handler.codec.http.websocketx.WebSocketFrame;
 import io.netty.util.ReferenceCountUtil;
 import org.apache.logging.log4j.LogManager;
@@ -33,21 +36,74 @@ final class WebSocketDownstreamHandler extends ChannelInboundHandlerAdapter impl
 
     private static final Logger logger = LogManager.getLogger(WebSocketDownstreamHandler.class);
 
-    private Channel upstreamChannel;
+    // HIGH-02: volatile for safe cross-thread visibility — close() may null this
+    // from a different thread than channelWritabilityChanged() / channelRead().
+    private volatile Channel upstreamChannel;
+    private final int maxFramePayloadSize;
 
     @NonNull
     WebSocketDownstreamHandler(Channel upstreamChannel) {
+        this(upstreamChannel, 65536);
+    }
+
+    @NonNull
+    WebSocketDownstreamHandler(Channel upstreamChannel, int maxFramePayloadSize) {
         this.upstreamChannel = upstreamChannel;
+        this.maxFramePayloadSize = maxFramePayloadSize;
     }
 
     @Override
     public void channelRead(ChannelHandlerContext ctx, Object msg) {
-        // If received message is WebSocketFrame then write it back to the client else release it.
-        if (msg instanceof WebSocketFrame) {
-            upstreamChannel.writeAndFlush(msg);
+        if (msg instanceof WebSocketFrame wsFrame) {
+            // MED-16: Handle Ping/Pong locally — don't forward to client.
+            if (msg instanceof PingWebSocketFrame ping) {
+                ctx.writeAndFlush(new PongWebSocketFrame(ping.content().retain()));
+                ReferenceCountUtil.release(msg);
+                return;
+            }
+            if (msg instanceof PongWebSocketFrame) {
+                ReferenceCountUtil.release(msg);
+                return;
+            }
+
+            // HIGH-02: Local capture to avoid NPE if close() nulls upstreamChannel concurrently.
+            Channel ch = this.upstreamChannel;
+
+            // HIGH-12: Enforce frame size limit on downstream (backend) frames.
+            if (wsFrame.content().readableBytes() > maxFramePayloadSize) {
+                logger.warn("HIGH-12: Backend sent WebSocket frame exceeding max payload size: {} > {} bytes",
+                        wsFrame.content().readableBytes(), maxFramePayloadSize);
+                ReferenceCountUtil.release(msg);
+                if (ch != null) {
+                    ch.writeAndFlush(new CloseWebSocketFrame(1009, "Message Too Big"));
+                }
+                ctx.close();
+                return;
+            }
+
+            if (ch != null && ch.isActive()) {
+                ch.writeAndFlush(msg);
+            } else {
+                // HIGH-05: Release the frame if upstream channel is gone.
+                ReferenceCountUtil.release(msg);
+            }
         } else {
             ReferenceCountUtil.release(msg);
         }
+    }
+
+    // WS-04: Backpressure — when the upstream (client-facing) channel is not writable,
+    // pause reading from the backend to avoid unbounded buffering in the proxy.
+    @Override
+    public void channelWritabilityChanged(ChannelHandlerContext ctx) throws Exception {
+        // HIGH-02: Local capture to eliminate TOCTOU race — close() can null
+        // the volatile field between the null-check and isWritable() call.
+        Channel ch = this.upstreamChannel;
+        if (ch != null) {
+            boolean writable = ch.isWritable();
+            ctx.channel().config().setAutoRead(writable);
+        }
+        super.channelWritabilityChanged(ctx);
     }
 
     @Override
@@ -69,10 +125,12 @@ final class WebSocketDownstreamHandler extends ChannelInboundHandlerAdapter impl
     }
 
     @Override
-    public void close() {
-        if (upstreamChannel != null) {
-            upstreamChannel.close();
-            upstreamChannel = null;
+    public synchronized void close() {
+        // HIGH-05: Capture and null atomically to prevent double-close.
+        Channel ch = this.upstreamChannel;
+        if (ch != null) {
+            this.upstreamChannel = null;
+            ch.close();
         }
     }
 }

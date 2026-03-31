@@ -20,53 +20,76 @@ package com.shieldblaze.expressgateway.concurrent.eventstream;
 import com.shieldblaze.expressgateway.concurrent.task.Task;
 import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
+import org.jctools.queues.MpscUnboundedArrayQueue;
 
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicInteger;
 
-/**
- * {@linkplain AsyncEventStream} uses {@link ExecutorService} to
- * publish events asynchronously.
- */
 public final class AsyncEventStream extends EventStream {
 
     private static final Logger logger = LogManager.getLogger(AsyncEventStream.class);
 
-    /**
-     * {@link ExecutorService} for execution of {@link #publish(Task)}
-     */
     private final ExecutorService executorService;
+    private final MpscUnboundedArrayQueue<Task> pendingTasks;
+    private final AtomicInteger drainScheduled = new AtomicInteger(0);
 
     public AsyncEventStream(ExecutorService executorService) {
         this.executorService = executorService;
+        this.pendingTasks = new MpscUnboundedArrayQueue<>(1024);
         logger.info("Initialized new AsyncEventStream with Executor: {}", executorService);
     }
 
-    /**
-     * Publish an Event to all subscribed {@linkplain EventListener} asynchronously.
-     *
-     * @param task Event to publish
-     */
     @SuppressWarnings("unchecked")
     @Override
     public void publish(Task task) {
-        executorService.execute(() -> subscribers.forEach(eventListener -> eventListener.accept(task)));
+        // offer() on MpscUnboundedArrayQueue always returns true (unbounded), safe to ignore
+        boolean offered = pendingTasks.offer(task);
+        assert offered : "MpscUnboundedArrayQueue.offer() should never fail";
+        if (drainScheduled.getAndIncrement() == 0) {
+            executorService.execute(this::drainQueue);
+        }
+    }
+
+    @SuppressWarnings("unchecked")
+    private void drainQueue() {
+        do {
+            drainScheduled.set(1);
+            Task task;
+            while ((task = pendingTasks.poll()) != null) {
+                Task t = task;
+                for (EventListener eventListener : subscribers) {
+                    try {
+                        eventListener.accept(t);
+                    } catch (Exception ex) {
+                        logger.error("Subscriber {} threw exception processing task", eventListener, ex);
+                    }
+                }
+            }
+        } while (!drainScheduled.compareAndSet(1, 0));
     }
 
     @Override
     public void close() {
         try {
-            logger.info("Trying to shutdown Executor");
+            logger.info("Shutting down Executor");
+            // Schedule a final drain on the executor to respect the MPSC contract
+            // (only the single consumer thread should poll the queue).
+            executorService.execute(this::drainQueue);
+            executorService.shutdown();
 
-            // Await for termination
             boolean successfulTermination = executorService.awaitTermination(2, TimeUnit.SECONDS);
             logger.info("Executor shutdown result: {}", successfulTermination);
+
+            if (!successfulTermination) {
+                logger.warn("Executor did not terminate gracefully, forcing shutdown");
+                executorService.shutdownNow();
+            }
         } catch (InterruptedException e) {
+            executorService.shutdownNow();
+            Thread.currentThread().interrupt();
             throw new IllegalStateException("EventStream executor interrupted while waiting for termination", e);
         } finally {
-            logger.info("Shutting down Executor");
-
-            executorService.shutdown();
             super.close();
         }
     }

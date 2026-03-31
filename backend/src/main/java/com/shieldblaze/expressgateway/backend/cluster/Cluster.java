@@ -40,7 +40,6 @@ import com.shieldblaze.expressgateway.healthcheck.l4.UDPHealthCheck;
 import com.shieldblaze.expressgateway.healthcheck.l7.HTTPHealthCheck;
 import lombok.extern.log4j.Log4j2;
 
-import java.net.InetAddress;
 import java.net.InetSocketAddress;
 import java.net.URI;
 import java.time.Duration;
@@ -264,14 +263,21 @@ public class Cluster extends ClusterOnlineNodesWorker {
                 return;
             }
 
+            // Use the node's actual address for health checks, not the template address.
+            // The template provides protocol/timeout/samples configuration, but the target
+            // must be the specific node we are checking.
+            InetSocketAddress nodeAddress = node.socketAddress();
+
             HealthCheck healthCheck = switch (healthCheckTemplate().protocol()) {
                 case TCP ->
-                        new TCPHealthCheck(new InetSocketAddress(healthCheckTemplate.host(), healthCheckTemplate.port()), Duration.ofSeconds(healthCheckTemplate.timeout()), healthCheckTemplate.samples());
+                        new TCPHealthCheck(nodeAddress, Duration.ofSeconds(healthCheckTemplate.timeout()), healthCheckTemplate.samples());
                 case UDP ->
-                        new UDPHealthCheck(new InetSocketAddress(healthCheckTemplate.host(), healthCheckTemplate.port()), Duration.ofSeconds(healthCheckTemplate.timeout()), healthCheckTemplate.samples());
+                        new UDPHealthCheck(nodeAddress, Duration.ofSeconds(healthCheckTemplate.timeout()), healthCheckTemplate.samples());
                 case HTTP, HTTPS -> {
                     String protocol = healthCheckTemplate.protocol() == HealthCheckTemplate.Protocol.HTTP ? "http" : "https";
-                    String host = protocol + "://" + InetAddress.getByName(healthCheckTemplate.host()).getHostAddress() + ':' + healthCheckTemplate.port();
+                    // LOW-13: Include the configured health check path from HealthCheckTemplate
+                    String path = healthCheckTemplate.path() != null ? healthCheckTemplate.path() : "/";
+                    String host = protocol + "://" + nodeAddress.getAddress().getHostAddress() + ':' + nodeAddress.getPort() + path;
                     yield new HTTPHealthCheck(URI.create(host), Duration.ofSeconds(healthCheckTemplate.timeout()), healthCheckTemplate.samples());
                 }
             };

@@ -28,3 +28,4 @@ target/
 #IntelliJ
 .idea/
 *.iml
+.claude/worktrees/

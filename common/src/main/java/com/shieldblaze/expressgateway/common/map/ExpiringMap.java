@@ -23,7 +23,9 @@ import java.util.HashMap;
 import java.util.Map;
 import java.util.Objects;
 import java.util.Set;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.function.BiConsumer;
+import java.util.function.Function;
 
 /**
  * Base Expiring Map Implementation.
@@ -34,7 +36,7 @@ import java.util.function.BiConsumer;
 public abstract class ExpiringMap<K, V> implements Map<K, V> {
 
     private final Map<K, V> storageMap;
-    private final Map<Object, Long> timestampsMap = new HashMap<>();
+    private final Map<Object, Long> timestampsMap = new ConcurrentHashMap<>();
     private final long ttlNanos;
     private final boolean autoRenew;
     private final EntryRemovedListener<V> entryRemovedListener;
@@ -99,7 +101,7 @@ public abstract class ExpiringMap<K, V> implements Map<K, V> {
 
     @Override
     public boolean containsValue(Object value) {
-        return storageMap.containsKey(value);
+        return storageMap.containsValue(value);
     }
 
     @Override
@@ -149,6 +151,42 @@ public abstract class ExpiringMap<K, V> implements Map<K, V> {
         return storageMap.entrySet();
     }
 
+    /**
+     * Atomically compute a value if absent. When the underlying {@code storageMap}
+     * is a {@link ConcurrentHashMap}, this inherits its per-bin locking — no global
+     * synchronization is needed. The timestamp is recorded only when a new entry is
+     * actually created, guaranteeing TTL accuracy.
+     *
+     * <p>If {@code autoRenew} is enabled and the key already exists, its timestamp
+     * is refreshed — matching the behaviour of {@link #get(Object)}.
+     *
+     * @param key             the key
+     * @param mappingFunction function to compute a value if absent
+     * @return the existing or newly computed value
+     */
+    @Override
+    public V computeIfAbsent(K key, Function<? super K, ? extends V> mappingFunction) {
+        // Track whether the mapping function was invoked so we can distinguish
+        // "existing hit" from "new creation" without a second map lookup.
+        boolean[] created = {false};
+
+        V value = storageMap.computeIfAbsent(key, k -> {
+            V v = mappingFunction.apply(k);
+            if (v != null) {
+                timestampsMap.put(k, System.nanoTime());
+                created[0] = true;
+            }
+            return v;
+        });
+
+        // Renew the timestamp on cache hit, consistent with get() auto-renew behaviour.
+        if (!created[0] && autoRenew && value != null) {
+            timestampsMap.put(key, System.nanoTime());
+        }
+
+        return value;
+    }
+
     @Override
     public String toString() {
         return storageMap.toString();
@@ -159,6 +197,11 @@ public abstract class ExpiringMap<K, V> implements Map<K, V> {
     }
 
     protected boolean isExpired(Object key) {
-        return System.nanoTime() - timestampsMap.get(key) > ttlNanos;
+        Long timestamp = timestampsMap.get(key);
+        // Key may have been concurrently removed between keySet() iteration and this check
+        if (timestamp == null) {
+            return true;
+        }
+        return System.nanoTime() - timestamp > ttlNanos;
     }
 }

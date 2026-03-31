@@ -36,7 +36,11 @@ class ClusterOnlineNodesWorker implements EventListener<Void> {
         if (task instanceof NodeTask nodeEvent) {
 
             if (nodeEvent instanceof NodeOnlineTask || nodeEvent instanceof NodeAddedTask) {
-                onlineNodes.add(nodeEvent.node());
+                // MED-23: Check for duplicates before adding. Both NodeOnlineTask and
+                // NodeAddedTask fire when a node is first added, causing duplicate entries.
+                if (!onlineNodes.contains(nodeEvent.node())) {
+                    onlineNodes.add(nodeEvent.node());
+                }
             } else {
                 onlineNodes.remove(nodeEvent.node());
             }

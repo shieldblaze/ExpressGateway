@@ -37,6 +37,8 @@ import io.netty.handler.codec.http.HttpObjectAggregator;
 import io.netty.handler.codec.http.websocketx.WebSocketClientProtocolHandler;
 import io.netty.handler.ssl.SslHandler;
 
+import javax.net.ssl.SSLEngine;
+import javax.net.ssl.SSLParameters;
 import java.time.Duration;
 
 import static io.netty.handler.codec.http.websocketx.WebSocketVersion.V13;
@@ -80,6 +82,19 @@ final class Bootstrapper {
                             .sslContext()
                             .newHandler(ch.alloc(), hostname, port);
 
+                    // Enable hostname verification to prevent MITM attacks.
+                    // Without this, any valid CA-signed certificate is accepted
+                    // regardless of whether it matches the backend hostname.
+                    //
+                    // CF-02: Skip hostname verification when acceptAllCerts is enabled.
+                    // See HTTP Bootstrapper CF-02 comment for full rationale.
+                    if (!httpLoadBalancer.configurationContext().tlsClientConfiguration().acceptAllCerts()) {
+                        SSLEngine engine = sslHandler.engine();
+                        SSLParameters params = engine.getSSLParameters();
+                        params.setEndpointIdentificationAlgorithm("HTTPS");
+                        engine.setSSLParameters(params);
+                    }
+
                     pipeline.addLast(sslHandler);
                 }
 
@@ -91,13 +106,16 @@ final class Bootstrapper {
                 ));
 
                 // Add HTTP Object Aggregator to aggregate HTTP Objects
-                pipeline.addLast(new HttpObjectAggregator(8196));
+                // MED-15: Fixed from 8196 (typo for 8192, too small) to 65536
+                pipeline.addLast(new HttpObjectAggregator(65536));
 
-                // Add WebSocketClientHandshakerFinisherHandler which will finish the handshaking process.
+                // Add WebSocket protocol handler which manages the handshaking process.
                 pipeline.addLast(new WebSocketClientProtocolHandler(wsProperty.uri(), V13, wsProperty.subProtocol(), true, headers, 65536));
 
-                // Add Downstream Handler
-                pipeline.addLast(new WebSocketDownstreamHandler(wsProperty.channel()));
+                // Add WebSocket close handshake (RFC 6455 Section 7) and idle timeout
+                // handlers before the downstream handler.
+                pipeline.addLast("ws-downstream", new WebSocketDownstreamHandler(wsProperty.channel()));
+                WebSocketPipelineUtils.addWebSocketHandlers(pipeline, "ws-downstream");
             }
         });
 
