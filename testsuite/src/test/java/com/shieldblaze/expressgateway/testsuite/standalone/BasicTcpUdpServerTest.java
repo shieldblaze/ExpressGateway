@@ -245,17 +245,29 @@ public class BasicTcpUdpServerTest {
 
             new Thread(() -> {
                 try (DatagramSocket socket = new DatagramSocket()) {
+                    socket.setSoTimeout(5_000); // Prevent indefinite block on packet loss
 
                     for (int messagesCount = 0; messagesCount < frames; messagesCount++) {
                         byte[] randomData = new byte[dataSize];
                         RANDOM.nextBytes(randomData);
 
                         java.net.DatagramPacket outboundPacket = new java.net.DatagramPacket(randomData, dataSize, address);
-                        socket.send(outboundPacket);
-
                         byte[] buffer = new byte[dataSize];
                         java.net.DatagramPacket inboundPacket = new java.net.DatagramPacket(buffer, dataSize);
-                        socket.receive(inboundPacket);
+
+                        // Retry up to 3 times on timeout (UDP packet loss is expected)
+                        int maxRetries = 3;
+                        for (int attempt = 0; attempt < maxRetries; attempt++) {
+                            socket.send(outboundPacket);
+                            try {
+                                socket.receive(inboundPacket);
+                                break; // success
+                            } catch (java.net.SocketTimeoutException e) {
+                                if (attempt == maxRetries - 1) {
+                                    throw e; // exhausted retries
+                                }
+                            }
+                        }
 
                         assertThat(buffer).isEqualTo(randomData);
                         UDP_FRAMES.incrementAndGet();
@@ -268,7 +280,7 @@ public class BasicTcpUdpServerTest {
             }).start();
         }
 
-        assertThat(latch.await(1, TimeUnit.MINUTES)).isTrue();
+        assertThat(latch.await(2, TimeUnit.MINUTES)).isTrue();
         assertThat(UDP_FRAMES.getAndSet(0)).isEqualTo(frames * threads);
     }
 

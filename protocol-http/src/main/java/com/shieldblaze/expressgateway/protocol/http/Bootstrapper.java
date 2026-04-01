@@ -20,8 +20,10 @@ package com.shieldblaze.expressgateway.protocol.http;
 import com.shieldblaze.expressgateway.backend.Node;
 import com.shieldblaze.expressgateway.backend.NodeBytesTracker;
 import com.shieldblaze.expressgateway.configuration.http.HttpConfiguration;
+import com.shieldblaze.expressgateway.configuration.transport.BackendProxyProtocolMode;
 import com.shieldblaze.expressgateway.core.factory.BootstrapFactory;
 import com.shieldblaze.expressgateway.core.handlers.ConnectionTimeoutHandler;
+import com.shieldblaze.expressgateway.core.handlers.ProxyProtocolEncoder;
 import com.shieldblaze.expressgateway.protocol.http.alpn.ALPNHandler;
 import com.shieldblaze.expressgateway.protocol.http.alpn.ALPNHandlerBuilder;
 import com.shieldblaze.expressgateway.protocol.http.loadbalancer.HTTPLoadBalancer;
@@ -84,6 +86,15 @@ final class Bootstrapper {
                 // *no data at all* is received within the window, protecting against backends
                 // that accept a connection but never respond (e.g., stuck in GC, deadlock).
                 pipeline.addLast(new ReadTimeoutHandler(httpConfiguration.backendResponseTimeoutSeconds(), TimeUnit.SECONDS));
+
+                // Send PROXY protocol header to backend if configured.
+                // Must be before SslHandler so the header is raw TCP bytes
+                // preceding any TLS ClientHello.
+                BackendProxyProtocolMode ppMode = httpLoadBalancer.configurationContext()
+                        .transportConfiguration().backendProxyProtocolMode();
+                if (ppMode != BackendProxyProtocolMode.OFF) {
+                    pipeline.addLast(new ProxyProtocolEncoder(ppMode, channel));
+                }
 
                 if (httpLoadBalancer.configurationContext().tlsClientConfiguration().enabled()) {
                     ALPNHandler alpnHandler = ALPNHandlerBuilder.newBuilder()
