@@ -19,8 +19,10 @@ package com.shieldblaze.expressgateway.protocol.http.websocket;
 
 import com.shieldblaze.expressgateway.backend.Node;
 import com.shieldblaze.expressgateway.backend.NodeBytesTracker;
+import com.shieldblaze.expressgateway.configuration.transport.BackendProxyProtocolMode;
 import com.shieldblaze.expressgateway.core.factory.BootstrapFactory;
 import com.shieldblaze.expressgateway.core.handlers.ConnectionTimeoutHandler;
+import com.shieldblaze.expressgateway.core.handlers.ProxyProtocolEncoder;
 import com.shieldblaze.expressgateway.protocol.http.Headers;
 import com.shieldblaze.expressgateway.protocol.http.loadbalancer.HTTPLoadBalancer;
 import io.netty.bootstrap.Bootstrap;
@@ -72,6 +74,13 @@ final class Bootstrapper {
                 // Add ConnectionTimeoutHandler
                 Duration timeout = Duration.ofMillis(httpLoadBalancer.configurationContext().transportConfiguration().connectionIdleTimeout());
                 pipeline.addLast(new ConnectionTimeoutHandler(timeout, false));
+
+                // Send PROXY protocol header to backend if configured.
+                BackendProxyProtocolMode ppMode = httpLoadBalancer.configurationContext()
+                        .transportConfiguration().backendProxyProtocolMode();
+                if (ppMode != BackendProxyProtocolMode.OFF) {
+                    pipeline.addLast(new ProxyProtocolEncoder(ppMode, wsProperty.channel()));
+                }
 
                 // If TLS is enabled then add TLS Handler
                 if (httpLoadBalancer.configurationContext().tlsClientConfiguration().enabled()) {

@@ -64,6 +64,9 @@ public final class TransportConfiguration implements Configuration<TransportConf
     @JsonProperty("proxyProtocolMode")
     private ProxyProtocolMode proxyProtocolMode;
 
+    @JsonProperty("backendProxyProtocolMode")
+    private BackendProxyProtocolMode backendProxyProtocolMode;
+
     @JsonIgnore
     private boolean validated;
 
@@ -87,6 +90,7 @@ public final class TransportConfiguration implements Configuration<TransportConf
         DEFAULT.backendConnectTimeout = 1000 * 10;  // 10 Seconds
         DEFAULT.connectionIdleTimeout = 1000 * 120; // 2 Minute
         DEFAULT.proxyProtocolMode = ProxyProtocolMode.OFF;
+        DEFAULT.backendProxyProtocolMode = BackendProxyProtocolMode.OFF;
         DEFAULT.validated = true;
     }
 
@@ -248,7 +252,7 @@ public final class TransportConfiguration implements Configuration<TransportConf
     }
 
     /**
-     * HAProxy PROXY protocol mode
+     * HAProxy PROXY protocol mode (inbound: decoding headers from upstream proxies)
      */
     public TransportConfiguration setProxyProtocolMode(ProxyProtocolMode proxyProtocolMode) {
         this.proxyProtocolMode = proxyProtocolMode;
@@ -256,13 +260,31 @@ public final class TransportConfiguration implements Configuration<TransportConf
     }
 
     /**
-     * HAProxy PROXY protocol mode
+     * HAProxy PROXY protocol mode (inbound: decoding headers from upstream proxies)
      */
     public ProxyProtocolMode proxyProtocolMode() {
         if (proxyProtocolMode == null) {
             return ProxyProtocolMode.OFF;
         }
         return proxyProtocolMode;
+    }
+
+    /**
+     * Backend HAProxy PROXY protocol mode (outbound: encoding headers sent to backend servers)
+     */
+    public TransportConfiguration setBackendProxyProtocolMode(BackendProxyProtocolMode backendProxyProtocolMode) {
+        this.backendProxyProtocolMode = backendProxyProtocolMode;
+        return this;
+    }
+
+    /**
+     * Backend HAProxy PROXY protocol mode (outbound: encoding headers sent to backend servers)
+     */
+    public BackendProxyProtocolMode backendProxyProtocolMode() {
+        if (backendProxyProtocolMode == null) {
+            return BackendProxyProtocolMode.OFF;
+        }
+        return backendProxyProtocolMode;
     }
 
     /**
