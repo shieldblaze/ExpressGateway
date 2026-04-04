@@ -17,16 +17,21 @@
  */
 package com.shieldblaze.expressgateway.configuration.healthcheck;
 
-import com.fasterxml.jackson.annotation.JsonIgnore;
 import com.fasterxml.jackson.annotation.JsonProperty;
 import com.shieldblaze.expressgateway.common.utils.NumberUtil;
 import com.shieldblaze.expressgateway.configuration.Configuration;
+import lombok.Getter;
+import lombok.Setter;
 import lombok.ToString;
+import lombok.experimental.Accessors;
 
 /**
  * Configuration for health check scheduling.
  */
-@ToString(exclude = "validated")
+@Getter
+@Setter
+@Accessors(fluent = true, chain = true)
+@ToString
 public final class HealthCheckConfiguration implements Configuration<HealthCheckConfiguration> {
 
     @JsonProperty
@@ -35,47 +40,11 @@ public final class HealthCheckConfiguration implements Configuration<HealthCheck
     @JsonProperty
     private int timeInterval;
 
-    @JsonIgnore
-    private boolean validated;
-
     public static final HealthCheckConfiguration DEFAULT = new HealthCheckConfiguration();
 
     static {
         DEFAULT.workers = Runtime.getRuntime().availableProcessors();
         DEFAULT.timeInterval = 1;
-        DEFAULT.validated = true;
-    }
-
-    /**
-     * Workers
-     */
-    public HealthCheckConfiguration setWorkers(int workers) {
-        this.workers = workers;
-        return this;
-    }
-
-    /**
-     * Workers
-     */
-    public int workers() {
-        assertValidated();
-        return workers;
-    }
-
-    /**
-     * Time Interval
-     */
-    public HealthCheckConfiguration setTimeInterval(int timeInterval) {
-        this.timeInterval = timeInterval;
-        return this;
-    }
-
-    /**
-     * Time Interval
-     */
-    public int timeInterval() {
-        assertValidated();
-        return timeInterval;
     }
 
     /**
@@ -88,13 +57,6 @@ public final class HealthCheckConfiguration implements Configuration<HealthCheck
     public HealthCheckConfiguration validate() {
         NumberUtil.checkPositive(workers, "Workers");
         NumberUtil.checkPositive(timeInterval, "TimeInterval");
-        validated = true;
         return this;
     }
-
-    @Override
-    public boolean validated() {
-        return validated;
-    }
-
 }

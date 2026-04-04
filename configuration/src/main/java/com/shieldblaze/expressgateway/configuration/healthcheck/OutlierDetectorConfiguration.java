@@ -17,11 +17,13 @@
  */
 package com.shieldblaze.expressgateway.configuration.healthcheck;
 
-import com.fasterxml.jackson.annotation.JsonIgnore;
 import com.fasterxml.jackson.annotation.JsonProperty;
 import com.shieldblaze.expressgateway.common.utils.NumberUtil;
 import com.shieldblaze.expressgateway.configuration.Configuration;
+import lombok.Getter;
+import lombok.Setter;
 import lombok.ToString;
+import lombok.experimental.Accessors;
 
 /**
  * Configuration for passive health checking (outlier detection).
@@ -32,7 +34,10 @@ import lombok.ToString;
  *
  * <p>Similar to Envoy's outlier detection feature.</p>
  */
-@ToString(exclude = "validated")
+@Getter
+@Setter
+@Accessors(fluent = true, chain = true)
+@ToString
 public final class OutlierDetectorConfiguration implements Configuration<OutlierDetectorConfiguration> {
 
     @JsonProperty
@@ -50,9 +55,6 @@ public final class OutlierDetectorConfiguration implements Configuration<Outlier
     @JsonProperty
     private int maxEjectionPercent;
 
-    @JsonIgnore
-    private boolean validated;
-
     /**
      * Default: disabled, 5 consecutive failures, 10s interval, 30s ejection, max 50% ejected
      */
@@ -64,74 +66,10 @@ public final class OutlierDetectorConfiguration implements Configuration<Outlier
         DEFAULT.intervalMs = 10_000;
         DEFAULT.ejectionTimeMs = 30_000;
         DEFAULT.maxEjectionPercent = 50;
-        DEFAULT.validated = true;
     }
 
     OutlierDetectorConfiguration() {
         // Prevent outside initialization
-    }
-
-    public OutlierDetectorConfiguration setEnabled(boolean enabled) {
-        this.enabled = enabled;
-        return this;
-    }
-
-    public boolean enabled() {
-        assertValidated();
-        return enabled;
-    }
-
-    /**
-     * Number of consecutive failures before ejecting a backend
-     */
-    public OutlierDetectorConfiguration setConsecutiveFailures(int consecutiveFailures) {
-        this.consecutiveFailures = consecutiveFailures;
-        return this;
-    }
-
-    public int consecutiveFailures() {
-        assertValidated();
-        return consecutiveFailures;
-    }
-
-    /**
-     * Evaluation window interval in milliseconds
-     */
-    public OutlierDetectorConfiguration setIntervalMs(long intervalMs) {
-        this.intervalMs = intervalMs;
-        return this;
-    }
-
-    public long intervalMs() {
-        assertValidated();
-        return intervalMs;
-    }
-
-    /**
-     * Duration in milliseconds a backend stays ejected before being allowed back
-     */
-    public OutlierDetectorConfiguration setEjectionTimeMs(long ejectionTimeMs) {
-        this.ejectionTimeMs = ejectionTimeMs;
-        return this;
-    }
-
-    public long ejectionTimeMs() {
-        assertValidated();
-        return ejectionTimeMs;
-    }
-
-    /**
-     * Maximum percentage of backends that can be ejected simultaneously (0-100).
-     * Prevents ejecting all backends during a widespread issue.
-     */
-    public OutlierDetectorConfiguration setMaxEjectionPercent(int maxEjectionPercent) {
-        this.maxEjectionPercent = maxEjectionPercent;
-        return this;
-    }
-
-    public int maxEjectionPercent() {
-        assertValidated();
-        return maxEjectionPercent;
     }
 
     @Override
@@ -140,12 +78,6 @@ public final class OutlierDetectorConfiguration implements Configuration<Outlier
         NumberUtil.checkPositive(intervalMs, "IntervalMs");
         NumberUtil.checkPositive(ejectionTimeMs, "EjectionTimeMs");
         NumberUtil.checkInRange(maxEjectionPercent, 1, 100, "MaxEjectionPercent");
-        validated = true;
         return this;
-    }
-
-    @Override
-    public boolean validated() {
-        return validated;
     }
 }

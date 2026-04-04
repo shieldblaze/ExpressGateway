@@ -115,7 +115,7 @@ public final class QuicProxyHandler extends ChannelInboundHandlerAdapter
         // Read session timeout and CID routing flag from QuicConfiguration.
         QuicConfiguration quicConfig = l4LoadBalancer.configurationContext().quicConfiguration();
         Duration sessionIdleTimeout;
-        if (quicConfig != null && quicConfig.validated()) {
+        if (quicConfig != null) {
             sessionIdleTimeout = Duration.ofSeconds(quicConfig.quicProxySessionIdleTimeoutSeconds());
             this.cidRoutingEnabled = quicConfig.cidBasedRoutingEnabled();
         } else {

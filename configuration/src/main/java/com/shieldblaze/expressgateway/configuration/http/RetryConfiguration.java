@@ -17,11 +17,13 @@
  */
 package com.shieldblaze.expressgateway.configuration.http;
 
-import com.fasterxml.jackson.annotation.JsonIgnore;
 import com.fasterxml.jackson.annotation.JsonProperty;
 import com.shieldblaze.expressgateway.common.utils.NumberUtil;
 import com.shieldblaze.expressgateway.configuration.Configuration;
+import lombok.Getter;
+import lombok.Setter;
 import lombok.ToString;
+import lombok.experimental.Accessors;
 
 import java.util.EnumSet;
 import java.util.Objects;
@@ -34,7 +36,10 @@ import java.util.Set;
  * at most {@link #retryBudgetPercent} of recent requests may be retries,
  * preventing retry storms under failure conditions.</p>
  */
-@ToString(exclude = "validated")
+@Getter
+@Setter
+@Accessors(fluent = true, chain = true)
+@ToString
 public final class RetryConfiguration implements Configuration<RetryConfiguration> {
 
     /**
@@ -67,9 +72,6 @@ public final class RetryConfiguration implements Configuration<RetryConfiguratio
     @JsonProperty
     private long perTryTimeoutMs;
 
-    @JsonIgnore
-    private boolean validated;
-
     /**
      * Default configuration: 2 retries, connect failures and 502/503/504, 20% budget
      */
@@ -85,76 +87,10 @@ public final class RetryConfiguration implements Configuration<RetryConfiguratio
         );
         DEFAULT.retryBudgetPercent = 20;
         DEFAULT.perTryTimeoutMs = 0; // 0 means use the global timeout
-        DEFAULT.validated = true;
     }
 
     RetryConfiguration() {
         // Prevent outside initialization
-    }
-
-    /**
-     * Maximum number of retry attempts per request
-     */
-    public RetryConfiguration setMaxRetries(int maxRetries) {
-        this.maxRetries = maxRetries;
-        return this;
-    }
-
-    /**
-     * Maximum number of retry attempts per request
-     */
-    public int maxRetries() {
-        assertValidated();
-        return maxRetries;
-    }
-
-    /**
-     * Set of conditions that trigger a retry
-     */
-    public RetryConfiguration setRetryOn(Set<RetryCondition> retryOn) {
-        this.retryOn = retryOn;
-        return this;
-    }
-
-    /**
-     * Set of conditions that trigger a retry
-     */
-    public Set<RetryCondition> retryOn() {
-        assertValidated();
-        return retryOn;
-    }
-
-    /**
-     * Maximum percentage of total requests that can be retries (0-100).
-     * This prevents retry storms under cascading failure conditions.
-     */
-    public RetryConfiguration setRetryBudgetPercent(int retryBudgetPercent) {
-        this.retryBudgetPercent = retryBudgetPercent;
-        return this;
-    }
-
-    /**
-     * Maximum percentage of total requests that can be retries (0-100)
-     */
-    public int retryBudgetPercent() {
-        assertValidated();
-        return retryBudgetPercent;
-    }
-
-    /**
-     * Per-try timeout in milliseconds. 0 means use the global backend connect timeout.
-     */
-    public RetryConfiguration setPerTryTimeoutMs(long perTryTimeoutMs) {
-        this.perTryTimeoutMs = perTryTimeoutMs;
-        return this;
-    }
-
-    /**
-     * Per-try timeout in milliseconds
-     */
-    public long perTryTimeoutMs() {
-        assertValidated();
-        return perTryTimeoutMs;
     }
 
     @Override
@@ -163,12 +99,6 @@ public final class RetryConfiguration implements Configuration<RetryConfiguratio
         Objects.requireNonNull(retryOn, "RetryOn");
         NumberUtil.checkInRange(retryBudgetPercent, 0, 100, "RetryBudgetPercent");
         NumberUtil.checkZeroOrPositive(perTryTimeoutMs, "PerTryTimeoutMs");
-        validated = true;
         return this;
-    }
-
-    @Override
-    public boolean validated() {
-        return validated;
     }
 }

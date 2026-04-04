@@ -68,11 +68,11 @@ class CircuitBreakerStateTest {
                 CircuitBreakerConfiguration.class.getDeclaredConstructor();
         ctor.setAccessible(true);
         return ctor.newInstance()
-                .setEnabled(enabled)
-                .setFailureThreshold(failureThreshold)
-                .setSuccessThreshold(successThreshold)
-                .setOpenDurationMs(openDurationMs)
-                .setHalfOpenMaxConcurrent(halfOpenMaxConcurrent)
+                .enabled(enabled)
+                .failureThreshold(failureThreshold)
+                .successThreshold(successThreshold)
+                .openDurationMs(openDurationMs)
+                .halfOpenMaxConcurrent(halfOpenMaxConcurrent)
                 .validate();
     }
 

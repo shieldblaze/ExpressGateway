@@ -25,7 +25,6 @@ import org.junit.jupiter.api.TestMethodOrder;
 
 import static org.junit.jupiter.api.Assertions.assertDoesNotThrow;
 import static org.junit.jupiter.api.Assertions.assertEquals;
-import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
@@ -96,12 +95,6 @@ class BackendProxyProtocolModeTest {
                         "to ensure backward compatibility with existing deployments");
     }
 
-    @Order(5)
-    @Test
-    void defaultTransportConfigurationIsPreValidated() {
-        assertTrue(TransportConfiguration.DEFAULT.validated(),
-                "TransportConfiguration.DEFAULT must be pre-validated");
-    }
 
     // =========================================================================
     // 3. Set / get round-trip on a new TransportConfiguration
@@ -111,7 +104,7 @@ class BackendProxyProtocolModeTest {
     @Test
     void setAndGetOffMode() {
         TransportConfiguration config = buildValidConfig();
-        config.setBackendProxyProtocolMode(BackendProxyProtocolMode.OFF);
+        config.backendProxyProtocolMode(BackendProxyProtocolMode.OFF);
         config.validate();
 
         assertEquals(BackendProxyProtocolMode.OFF, config.backendProxyProtocolMode(),
@@ -122,7 +115,7 @@ class BackendProxyProtocolModeTest {
     @Test
     void setAndGetV1Mode() {
         TransportConfiguration config = buildValidConfig();
-        config.setBackendProxyProtocolMode(BackendProxyProtocolMode.V1);
+        config.backendProxyProtocolMode(BackendProxyProtocolMode.V1);
         config.validate();
 
         assertEquals(BackendProxyProtocolMode.V1, config.backendProxyProtocolMode(),
@@ -133,7 +126,7 @@ class BackendProxyProtocolModeTest {
     @Test
     void setAndGetV2Mode() {
         TransportConfiguration config = buildValidConfig();
-        config.setBackendProxyProtocolMode(BackendProxyProtocolMode.V2);
+        config.backendProxyProtocolMode(BackendProxyProtocolMode.V2);
         config.validate();
 
         assertEquals(BackendProxyProtocolMode.V2, config.backendProxyProtocolMode(),
@@ -165,7 +158,7 @@ class BackendProxyProtocolModeTest {
     @Test
     void jsonRoundTripSerializesOffCorrectly() throws Exception {
         TransportConfiguration config = buildValidConfig();
-        config.setBackendProxyProtocolMode(BackendProxyProtocolMode.OFF);
+        config.backendProxyProtocolMode(BackendProxyProtocolMode.OFF);
 
         String json = MAPPER.writeValueAsString(config);
         assertTrue(json.contains("\"backendProxyProtocolMode\""),
@@ -182,7 +175,7 @@ class BackendProxyProtocolModeTest {
     @Test
     void jsonRoundTripSerializesV1Correctly() throws Exception {
         TransportConfiguration config = buildValidConfig();
-        config.setBackendProxyProtocolMode(BackendProxyProtocolMode.V1);
+        config.backendProxyProtocolMode(BackendProxyProtocolMode.V1);
 
         String json = MAPPER.writeValueAsString(config);
         assertTrue(json.contains("\"V1\""),
@@ -197,7 +190,7 @@ class BackendProxyProtocolModeTest {
     @Test
     void jsonRoundTripSerializesV2Correctly() throws Exception {
         TransportConfiguration config = buildValidConfig();
-        config.setBackendProxyProtocolMode(BackendProxyProtocolMode.V2);
+        config.backendProxyProtocolMode(BackendProxyProtocolMode.V2);
 
         String json = MAPPER.writeValueAsString(config);
         assertTrue(json.contains("\"V2\""),
@@ -229,7 +222,7 @@ class BackendProxyProtocolModeTest {
     void validateAcceptsAllThreeModes() {
         for (BackendProxyProtocolMode mode : BackendProxyProtocolMode.values()) {
             TransportConfiguration config = buildValidConfig();
-            config.setBackendProxyProtocolMode(mode);
+            config.backendProxyProtocolMode(mode);
             assertDoesNotThrow(config::validate,
                     "validate() must accept backendProxyProtocolMode=" + mode);
             assertEquals(mode, config.backendProxyProtocolMode(),
@@ -246,8 +239,8 @@ class BackendProxyProtocolModeTest {
     void backendProxyProtocolModeIsIndependentOfInboundMode() {
         // Setting backendProxyProtocolMode=V2 must not change proxyProtocolMode (inbound)
         TransportConfiguration config = buildValidConfig();
-        config.setProxyProtocolMode(ProxyProtocolMode.OFF);
-        config.setBackendProxyProtocolMode(BackendProxyProtocolMode.V2);
+        config.proxyProtocolMode(ProxyProtocolMode.OFF);
+        config.backendProxyProtocolMode(BackendProxyProtocolMode.V2);
         config.validate();
 
         assertEquals(ProxyProtocolMode.OFF, config.proxyProtocolMode(),
@@ -261,8 +254,8 @@ class BackendProxyProtocolModeTest {
     void bothModesCanBeSetIndependently() {
         // Both inbound and outbound modes can be configured simultaneously
         TransportConfiguration config = buildValidConfig();
-        config.setProxyProtocolMode(ProxyProtocolMode.AUTO);
-        config.setBackendProxyProtocolMode(BackendProxyProtocolMode.V1);
+        config.proxyProtocolMode(ProxyProtocolMode.AUTO);
+        config.backendProxyProtocolMode(BackendProxyProtocolMode.V1);
         config.validate();
 
         assertEquals(ProxyProtocolMode.AUTO, config.proxyProtocolMode(),
@@ -282,16 +275,16 @@ class BackendProxyProtocolModeTest {
      */
     private static TransportConfiguration buildValidConfig() {
         return new TransportConfiguration()
-                .setTransportType(TransportType.NIO)
-                .setReceiveBufferAllocationType(ReceiveBufferAllocationType.ADAPTIVE)
-                .setReceiveBufferSizes(new int[]{512, 9001, 65535})
-                .setTcpConnectionBacklog(1024)
-                .setSocketReceiveBufferSize(65536)
-                .setSocketSendBufferSize(65536)
-                .setTcpFastOpenMaximumPendingRequests(100)
-                .setBackendConnectTimeout(5_000)
-                .setConnectionIdleTimeout(60_000)
-                .setProxyProtocolMode(ProxyProtocolMode.OFF)
-                .setBackendProxyProtocolMode(BackendProxyProtocolMode.OFF);
+                .transportType(TransportType.NIO)
+                .receiveBufferAllocationType(ReceiveBufferAllocationType.ADAPTIVE)
+                .receiveBufferSizes(new int[]{512, 9001, 65535})
+                .tcpConnectionBacklog(1024)
+                .socketReceiveBufferSize(65536)
+                .socketSendBufferSize(65536)
+                .tcpFastOpenMaximumPendingRequests(100)
+                .backendConnectTimeout(5_000)
+                .connectionIdleTimeout(60_000)
+                .proxyProtocolMode(ProxyProtocolMode.OFF)
+                .backendProxyProtocolMode(BackendProxyProtocolMode.OFF);
     }
 }

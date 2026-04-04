@@ -23,11 +23,6 @@ package com.shieldblaze.expressgateway.configuration;
 public interface Configuration<T> {
 
     /**
-     * Check if this Configuration is validated or not
-     */
-    boolean validated();
-
-    /**
      * Validate this Configuration
      *
      * @return This configuration instance
@@ -41,18 +36,5 @@ public interface Configuration<T> {
      */
     default String friendlyName() {
         return getClass().getSimpleName();
-    }
-
-    /**
-     * Assert successful validation check of this Configuration.
-     * This method must be called whenever this Configuration
-     * values are being accessed.
-     *
-     * @throws IllegalStateException if configuration has not been validated
-     */
-    default void assertValidated() {
-        if (!validated()) {
-            throw new IllegalStateException("Configuration not validated: " + friendlyName());
-        }
     }
 }

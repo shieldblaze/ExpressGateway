@@ -17,15 +17,20 @@
  */
 package com.shieldblaze.expressgateway.configuration.autoscaling;
 
-import com.fasterxml.jackson.annotation.JsonIgnore;
 import com.fasterxml.jackson.annotation.JsonProperty;
 import com.shieldblaze.expressgateway.configuration.Configuration;
+import lombok.Getter;
+import lombok.Setter;
 import lombok.ToString;
+import lombok.experimental.Accessors;
 
 import static com.shieldblaze.expressgateway.common.utils.NumberUtil.checkInRange;
 import static com.shieldblaze.expressgateway.common.utils.NumberUtil.checkPositive;
 
-@ToString(exclude = "validated")
+@Getter
+@Setter
+@Accessors(fluent = true, chain = true)
+@ToString
 public final class AutoscalingConfiguration implements Configuration<AutoscalingConfiguration> {
 
     public static final AutoscalingConfiguration DEFAULT = new AutoscalingConfiguration();
@@ -45,7 +50,6 @@ public final class AutoscalingConfiguration implements Configuration<Autoscaling
         DEFAULT.bytesScaleOutLoad = 0.85f;
         DEFAULT.maxBytes = Long.MAX_VALUE;
 
-        DEFAULT.validated = true;
     }
 
     /**
@@ -154,184 +158,6 @@ public final class AutoscalingConfiguration implements Configuration<Autoscaling
     @JsonProperty
     private int shutdownIfLoadUnderForSeconds;
 
-    @JsonIgnore
-    private boolean validated;
-
-    public float cpuScaleOutLoad() {
-        assertValidated();
-        return cpuScaleOutLoad;
-    }
-
-    public AutoscalingConfiguration setCpuScaleOutLoad(float cpuScaleOutLoad) {
-        this.cpuScaleOutLoad = cpuScaleOutLoad;
-        return this;
-    }
-
-    public float cpuIsolateLoad() {
-        assertValidated();
-        return cpuIsolateLoad;
-    }
-
-    public AutoscalingConfiguration setCpuIsolateLoad(float cpuIsolateLoad) {
-        this.cpuIsolateLoad = cpuIsolateLoad;
-        return this;
-    }
-
-    public float memoryScaleOutLoad() {
-        assertValidated();
-        return memoryScaleOutLoad;
-    }
-
-    public AutoscalingConfiguration setMemoryScaleOutLoad(float memoryScaleOutLoad) {
-        this.memoryScaleOutLoad = memoryScaleOutLoad;
-        return this;
-    }
-
-    public float memoryIsolateLoad() {
-        assertValidated();
-        return memoryIsolateLoad;
-    }
-
-    public AutoscalingConfiguration setMemoryIsolateLoad(float memoryIsolateLoad) {
-        this.memoryIsolateLoad = memoryIsolateLoad;
-        return this;
-    }
-
-    public float packetsScaleOutLoad() {
-        assertValidated();
-        return packetsScaleOutLoad;
-    }
-
-    public AutoscalingConfiguration setPacketsScaleOutLoad(float packetsScaleOutLoad) {
-        this.packetsScaleOutLoad = packetsScaleOutLoad;
-        return this;
-    }
-
-    public float packetsIsolateLoad() {
-        assertValidated();
-        return packetsIsolateLoad;
-    }
-
-    public AutoscalingConfiguration setPacketsIsolateLoad(float packetsIsolateLoad) {
-        this.packetsIsolateLoad = packetsIsolateLoad;
-        return this;
-    }
-
-    public long maxPackets() {
-        assertValidated();
-        return maxPackets;
-    }
-
-    public AutoscalingConfiguration setMaxPackets(long maxPackets) {
-        this.maxPackets = maxPackets;
-        return this;
-    }
-
-    public float bytesScaleOutLoad() {
-        assertValidated();
-        return bytesScaleOutLoad;
-    }
-
-    public AutoscalingConfiguration setBytesScaleOutLoad(float bytesScaleOutLoad) {
-        this.bytesScaleOutLoad = bytesScaleOutLoad;
-        return this;
-    }
-
-    public float bytesIsolateLoad() {
-        assertValidated();
-        return bytesIsolateLoad;
-    }
-
-    public AutoscalingConfiguration setBytesIsolateLoad(float bytesIsolateLoad) {
-        this.bytesIsolateLoad = bytesIsolateLoad;
-        return this;
-    }
-
-    public long maxBytes() {
-        assertValidated();
-        return maxBytes;
-    }
-
-    public AutoscalingConfiguration setMaxBytes(long maxBytes) {
-        this.maxBytes = maxBytes;
-        return this;
-    }
-
-    public int minServers() {
-        assertValidated();
-        return minServers;
-    }
-
-    public AutoscalingConfiguration setMinServers(int minServers) {
-        this.minServers = minServers;
-        return this;
-    }
-
-    public int maxServers() {
-        assertValidated();
-        return maxServers;
-    }
-
-    public AutoscalingConfiguration setMaxServers(int maxServers) {
-        this.maxServers = maxServers;
-        return this;
-    }
-
-    public int scaleOutMultiplier() {
-        assertValidated();
-        return scaleOutMultiplier;
-    }
-
-    public AutoscalingConfiguration setScaleOutMultiplier(int scaleOutMultiplier) {
-        this.scaleOutMultiplier = scaleOutMultiplier;
-        return this;
-    }
-
-    public int isolationWarmupTime() {
-        assertValidated();
-        return isolationWarmupTime;
-    }
-
-    public AutoscalingConfiguration setIsolationWarmupTime(int isolationWarmupTime) {
-        this.isolationWarmupTime = isolationWarmupTime;
-        return this;
-    }
-
-    public int coolDownTime() {
-        assertValidated();
-        return coolDownTime;
-    }
-
-    public AutoscalingConfiguration setCoolDownTime(int coolDownTime) {
-        this.coolDownTime = coolDownTime;
-        return this;
-    }
-
-    public float shutdownIfLoadUnder() {
-        assertValidated();
-        return shutdownIfLoadUnder;
-    }
-
-    public AutoscalingConfiguration setShutdownIfLoadUnder(float shutdownIfLoadUnder) {
-        this.shutdownIfLoadUnder = shutdownIfLoadUnder;
-        return this;
-    }
-
-    public int shutdownIfLoadUnderForSeconds() {
-        assertValidated();
-        return shutdownIfLoadUnderForSeconds;
-    }
-
-    public AutoscalingConfiguration setShutdownIfLoadUnderForSeconds(int shutdownIfLoadUnderForSeconds) {
-        this.shutdownIfLoadUnderForSeconds = shutdownIfLoadUnderForSeconds;
-        return this;
-    }
-
-    @Override
-    public boolean validated() {
-        return validated;
-    }
-
     @Override
     public AutoscalingConfiguration validate() {
         checkInRange(cpuScaleOutLoad, 0.1f, 1.0f, "CPU Scale Out Load");
@@ -344,7 +170,6 @@ public final class AutoscalingConfiguration implements Configuration<Autoscaling
         checkInRange(bytesScaleOutLoad, 0.1f, 1.0f, "Bytes Scale Out Load");
         checkInRange(bytesIsolateLoad, 0.1f, 1.0f, "Bytes Isolate Load");
         checkPositive(maxBytes, "Maximum Bytes");
-        validated = true;
         return this;
     }
 }

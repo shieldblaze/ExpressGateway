@@ -57,7 +57,6 @@ public final class ConfigurationStore {
     public static void applyConfiguration(Configuration<?> configuration) throws Exception {
         try {
             logger.info("Begin applying and saving configuration into ZooKeeper");
-            configuration.assertValidated();
 
             String configurationJson = OBJECT_MAPPER.valueToTree(configuration).toString();
             createNew(Curator.getInstance(), of(configuration), configurationJson.getBytes());
@@ -96,7 +95,6 @@ public final class ConfigurationStore {
         try {
             logger.info("Begin saving configuration into config directory");
 
-            configuration.assertValidated();
             String json = OBJECT_MAPPER.writerWithDefaultPrettyPrinter().writeValueAsString(configuration);
 
             // Atomic write: TRUNCATE_EXISTING prevents stale trailing bytes if the new

@@ -17,7 +17,6 @@
  */
 package com.shieldblaze.expressgateway.configuration.transport;
 
-import com.fasterxml.jackson.annotation.JsonIgnore;
 import com.fasterxml.jackson.annotation.JsonProperty;
 import com.shieldblaze.expressgateway.configuration.Configuration;
 import io.netty.channel.AdaptiveRecvByteBufAllocator;
@@ -27,14 +26,20 @@ import io.netty.channel.epoll.Epoll;
 import io.netty.incubator.channel.uring.IOUring;
 import io.netty.util.internal.ObjectUtil;
 
+import lombok.Getter;
+import lombok.Setter;
 import lombok.ToString;
+import lombok.experimental.Accessors;
 
 import java.util.Objects;
 
 /**
  * Transport Configuration
  */
-@ToString(exclude = "validated")
+@Getter
+@Setter
+@Accessors(fluent = true, chain = true)
+@ToString
 public final class TransportConfiguration implements Configuration<TransportConfiguration> {
 
     @JsonProperty("transportType")
@@ -70,9 +75,6 @@ public final class TransportConfiguration implements Configuration<TransportConf
     @JsonProperty("backendProxyProtocolMode")
     private BackendProxyProtocolMode backendProxyProtocolMode;
 
-    @JsonIgnore
-    private boolean validated;
-
     public static final TransportConfiguration DEFAULT = new TransportConfiguration();
 
     static {
@@ -94,62 +96,12 @@ public final class TransportConfiguration implements Configuration<TransportConf
         DEFAULT.connectionIdleTimeout = 1000 * 120; // 2 Minute
         DEFAULT.proxyProtocolMode = ProxyProtocolMode.OFF;
         DEFAULT.backendProxyProtocolMode = BackendProxyProtocolMode.OFF;
-        DEFAULT.validated = true;
-    }
-
-    /**
-     * Transport Type
-     */
-    public TransportConfiguration setTransportType(TransportType transportType) {
-        this.transportType = transportType;
-        return this;
-    }
-
-    /**
-     * Transport Type
-     */
-    public TransportType transportType() {
-        assertValidated();
-        return transportType;
-    }
-
-    /**
-     * Receive Buffer Allocation Type
-     */
-    public TransportConfiguration setReceiveBufferAllocationType(ReceiveBufferAllocationType receiveBufferAllocationType) {
-        this.receiveBufferAllocationType = receiveBufferAllocationType;
-        return this;
-    }
-
-    /**
-     * Receive Buffer Allocation Type
-     */
-    public ReceiveBufferAllocationType receiveBufferAllocationType() {
-        assertValidated();
-        return receiveBufferAllocationType;
-    }
-
-    /**
-     * Receive Buffer Sizes
-     */
-    public TransportConfiguration setReceiveBufferSizes(int[] receiveBufferSizes) {
-        this.receiveBufferSizes = receiveBufferSizes;
-        return this;
-    }
-
-    /**
-     * Receive Buffer Sizes
-     */
-    public int[] receiveBufferSizes() {
-        assertValidated();
-        return receiveBufferSizes;
     }
 
     /**
      * Returns a new appropriate {@link RecvByteBufAllocator} implementation
      */
     public RecvByteBufAllocator recvByteBufAllocator() {
-        assertValidated();
         if (receiveBufferAllocationType == ReceiveBufferAllocationType.FIXED) {
             return new FixedRecvByteBufAllocator(receiveBufferSizes[0]);
         } else {
@@ -157,114 +109,6 @@ public final class TransportConfiguration implements Configuration<TransportConf
         }
     }
 
-    /**
-     * TCP Connection Backlog
-     */
-    public TransportConfiguration setTcpConnectionBacklog(int TCPConnectionBacklog) {
-        tcpConnectionBacklog = TCPConnectionBacklog;
-        return this;
-    }
-
-    /**
-     * TCP Connection Backlog
-     */
-    public int tcpConnectionBacklog() {
-        assertValidated();
-        return tcpConnectionBacklog;
-    }
-
-    /**
-     * Socket Receive Buffer Size
-     */
-    public int socketReceiveBufferSize() {
-        assertValidated();
-        return socketReceiveBufferSize;
-    }
-
-    /**
-     * Socket Receive Buffer Size
-     */
-    public TransportConfiguration setSocketReceiveBufferSize(int socketReceiveBufferSize) {
-        this.socketReceiveBufferSize = socketReceiveBufferSize;
-        return this;
-    }
-
-
-    /**
-     * Socket Send Buffer Size
-     */
-    public int socketSendBufferSize() {
-        assertValidated();
-        return socketSendBufferSize;
-    }
-
-    /**
-     * Socket Send Buffer Size
-     */
-    public TransportConfiguration setSocketSendBufferSize(int socketSendBufferSize) {
-        this.socketSendBufferSize = socketSendBufferSize;
-        return this;
-    }
-
-    /**
-     * TCP Fast Open Maximum Pending Requests
-     */
-    public TransportConfiguration setTcpFastOpenMaximumPendingRequests(int TCPFastOpenMaximumPendingRequests) {
-        tcpFastOpenMaximumPendingRequests = TCPFastOpenMaximumPendingRequests;
-        return this;
-    }
-
-    /**
-     * TCP Fast Open Maximum Pending Requests
-     */
-    public int tcpFastOpenMaximumPendingRequests() {
-        assertValidated();
-        return tcpFastOpenMaximumPendingRequests;
-    }
-
-    /**
-     * Backend Connect Timeout
-     */
-    public TransportConfiguration setBackendConnectTimeout(int backendConnectTimeout) {
-        this.backendConnectTimeout = backendConnectTimeout;
-        return this;
-    }
-
-    /**
-     * Backend Connect Timeout
-     */
-    public int backendConnectTimeout() {
-        assertValidated();
-        return backendConnectTimeout;
-    }
-
-    /**
-     * Connection Idle Timeout
-     */
-    public TransportConfiguration setConnectionIdleTimeout(int connectionIdleTimeout) {
-        this.connectionIdleTimeout = connectionIdleTimeout;
-        return this;
-    }
-
-    /**
-     * Connection Idle Timeout
-     */
-    public int connectionIdleTimeout() {
-        assertValidated();
-        return connectionIdleTimeout;
-    }
-
-    /**
-     * HAProxy PROXY protocol mode (inbound: decoding headers from upstream proxies)
-     */
-    public TransportConfiguration setProxyProtocolMode(ProxyProtocolMode proxyProtocolMode) {
-        this.proxyProtocolMode = proxyProtocolMode;
-        return this;
-    }
-
-    /**
-     * HAProxy PROXY protocol mode (inbound: decoding headers from upstream proxies)
-     */
     public ProxyProtocolMode proxyProtocolMode() {
         if (proxyProtocolMode == null) {
             return ProxyProtocolMode.OFF;
@@ -272,17 +116,6 @@ public final class TransportConfiguration implements Configuration<TransportConf
         return proxyProtocolMode;
     }
 
-    /**
-     * Backend HAProxy PROXY protocol mode (outbound: encoding headers sent to backend servers)
-     */
-    public TransportConfiguration setBackendProxyProtocolMode(BackendProxyProtocolMode backendProxyProtocolMode) {
-        this.backendProxyProtocolMode = backendProxyProtocolMode;
-        return this;
-    }
-
-    /**
-     * Backend HAProxy PROXY protocol mode (outbound: encoding headers sent to backend servers)
-     */
     public BackendProxyProtocolMode backendProxyProtocolMode() {
         if (backendProxyProtocolMode == null) {
             return BackendProxyProtocolMode.OFF;
@@ -351,12 +184,6 @@ public final class TransportConfiguration implements Configuration<TransportConf
             throw new IllegalArgumentException("Socket Send Buffer Size Must Be Greater Than 64");
         }
 
-        validated = true;
         return this;
-    }
-
-    @Override
-    public boolean validated() {
-        return validated;
     }
 }

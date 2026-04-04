@@ -17,11 +17,13 @@
  */
 package com.shieldblaze.expressgateway.configuration.http3;
 
-import com.fasterxml.jackson.annotation.JsonIgnore;
 import com.fasterxml.jackson.annotation.JsonProperty;
 import com.shieldblaze.expressgateway.common.utils.NumberUtil;
 import com.shieldblaze.expressgateway.configuration.Configuration;
+import lombok.Getter;
+import lombok.Setter;
 import lombok.ToString;
+import lombok.experimental.Accessors;
 
 /**
  * Configuration for HTTP/3 application-layer settings (RFC 9114).
@@ -31,7 +33,10 @@ import lombok.ToString;
  * This configuration retains only HTTP/3-specific settings: QPACK compression
  * and Alt-Svc advertisement.</p>
  */
-@ToString(exclude = "validated")
+@Getter
+@Setter
+@Accessors(fluent = true, chain = true)
+@ToString
 public final class Http3Configuration implements Configuration<Http3Configuration> {
 
     /**
@@ -57,50 +62,16 @@ public final class Http3Configuration implements Configuration<Http3Configuratio
     @JsonProperty
     private long qpackBlockedStreams;
 
-    @JsonIgnore
-    private boolean validated;
-
     public static final Http3Configuration DEFAULT = new Http3Configuration();
 
     static {
         DEFAULT.altSvcMaxAge = 0;
         DEFAULT.qpackMaxTableCapacity = 0;
         DEFAULT.qpackBlockedStreams = 0;
-        DEFAULT.validated = true;
     }
 
     Http3Configuration() {
         // Prevent outside initialization
-    }
-
-    public long altSvcMaxAge() {
-        assertValidated();
-        return altSvcMaxAge;
-    }
-
-    public Http3Configuration setAltSvcMaxAge(long altSvcMaxAge) {
-        this.altSvcMaxAge = altSvcMaxAge;
-        return this;
-    }
-
-    public long qpackMaxTableCapacity() {
-        assertValidated();
-        return qpackMaxTableCapacity;
-    }
-
-    public Http3Configuration setQpackMaxTableCapacity(long qpackMaxTableCapacity) {
-        this.qpackMaxTableCapacity = qpackMaxTableCapacity;
-        return this;
-    }
-
-    public long qpackBlockedStreams() {
-        assertValidated();
-        return qpackBlockedStreams;
-    }
-
-    public Http3Configuration setQpackBlockedStreams(long qpackBlockedStreams) {
-        this.qpackBlockedStreams = qpackBlockedStreams;
-        return this;
     }
 
     @Override
@@ -108,12 +79,6 @@ public final class Http3Configuration implements Configuration<Http3Configuratio
         NumberUtil.checkZeroOrPositive(altSvcMaxAge, "AltSvcMaxAge");
         NumberUtil.checkZeroOrPositive(qpackMaxTableCapacity, "QpackMaxTableCapacity");
         NumberUtil.checkZeroOrPositive(qpackBlockedStreams, "QpackBlockedStreams");
-        validated = true;
         return this;
-    }
-
-    @Override
-    public boolean validated() {
-        return validated;
     }
 }

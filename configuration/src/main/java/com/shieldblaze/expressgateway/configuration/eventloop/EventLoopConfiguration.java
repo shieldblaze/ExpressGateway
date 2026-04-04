@@ -17,16 +17,21 @@
  */
 package com.shieldblaze.expressgateway.configuration.eventloop;
 
-import com.fasterxml.jackson.annotation.JsonIgnore;
 import com.fasterxml.jackson.annotation.JsonProperty;
 import com.shieldblaze.expressgateway.common.utils.NumberUtil;
 import com.shieldblaze.expressgateway.configuration.Configuration;
+import lombok.Getter;
+import lombok.Setter;
 import lombok.ToString;
+import lombok.experimental.Accessors;
 
 /**
  * Configuration for event loop thread pools.
  */
-@ToString(exclude = "validated")
+@Getter
+@Setter
+@Accessors(fluent = true, chain = true)
+@ToString
 public final class EventLoopConfiguration implements Configuration<EventLoopConfiguration> {
 
     @JsonProperty
@@ -35,47 +40,11 @@ public final class EventLoopConfiguration implements Configuration<EventLoopConf
     @JsonProperty
     private int childWorkers;
 
-    @JsonIgnore
-    private boolean validated;
-
     public static final EventLoopConfiguration DEFAULT = new EventLoopConfiguration();
 
     static {
         DEFAULT.parentWorkers = Runtime.getRuntime().availableProcessors();
         DEFAULT.childWorkers = DEFAULT.parentWorkers * 2;
-        DEFAULT.validated = true;
-    }
-
-    /**
-     * Parent workers
-     */
-    public EventLoopConfiguration setParentWorkers(int parentWorkers) {
-        this.parentWorkers = parentWorkers;
-        return this;
-    }
-
-    /**
-     * Parent workers
-     */
-    public int parentWorkers() {
-        assertValidated();
-        return parentWorkers;
-    }
-
-    /**
-     * Child workers
-     */
-    public EventLoopConfiguration setChildWorkers(int childWorkers) {
-        this.childWorkers = childWorkers;
-        return this;
-    }
-
-    /**
-     * Child workers
-     */
-    public int childWorkers() {
-        assertValidated();
-        return childWorkers;
     }
 
     /**
@@ -88,12 +57,6 @@ public final class EventLoopConfiguration implements Configuration<EventLoopConf
     public EventLoopConfiguration validate() {
         NumberUtil.checkPositive(parentWorkers, "Parent Workers");
         NumberUtil.checkPositive(childWorkers, "Child Workers");
-        validated = true;
         return this;
-    }
-
-    @Override
-    public boolean validated() {
-        return validated;
     }
 }

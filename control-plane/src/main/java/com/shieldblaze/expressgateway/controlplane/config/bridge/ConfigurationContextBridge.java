@@ -219,16 +219,16 @@ public final class ConfigurationContextBridge {
                 : ProxyProtocolMode.OFF;
 
         return new TransportConfiguration()
-                .setTransportType(type)
-                .setReceiveBufferAllocationType(TransportConfiguration.DEFAULT.receiveBufferAllocationType())
-                .setReceiveBufferSizes(TransportConfiguration.DEFAULT.receiveBufferSizes())
-                .setTcpConnectionBacklog(TransportConfiguration.DEFAULT.tcpConnectionBacklog())
-                .setSocketReceiveBufferSize(spec.receiveBufferSize())
-                .setSocketSendBufferSize(spec.sendBufferSize())
-                .setTcpFastOpenMaximumPendingRequests(tcpFastOpenPending)
-                .setBackendConnectTimeout(TransportConfiguration.DEFAULT.backendConnectTimeout())
-                .setConnectionIdleTimeout(TransportConfiguration.DEFAULT.connectionIdleTimeout())
-                .setProxyProtocolMode(proxyMode)
+                .transportType(type)
+                .receiveBufferAllocationType(TransportConfiguration.DEFAULT.receiveBufferAllocationType())
+                .receiveBufferSizes(TransportConfiguration.DEFAULT.receiveBufferSizes())
+                .tcpConnectionBacklog(TransportConfiguration.DEFAULT.tcpConnectionBacklog())
+                .socketReceiveBufferSize(spec.receiveBufferSize())
+                .socketSendBufferSize(spec.sendBufferSize())
+                .tcpFastOpenMaximumPendingRequests(tcpFastOpenPending)
+                .backendConnectTimeout(TransportConfiguration.DEFAULT.backendConnectTimeout())
+                .connectionIdleTimeout(TransportConfiguration.DEFAULT.connectionIdleTimeout())
+                .proxyProtocolMode(proxyMode)
                 .validate();
     }
 
@@ -298,8 +298,8 @@ public final class ConfigurationContextBridge {
         }
 
         return new HealthCheckConfiguration()
-                .setWorkers(HealthCheckConfiguration.DEFAULT.workers())
-                .setTimeInterval(spec.intervalSeconds())
+                .workers(HealthCheckConfiguration.DEFAULT.workers())
+                .timeInterval(spec.intervalSeconds())
                 .validate();
     }
 

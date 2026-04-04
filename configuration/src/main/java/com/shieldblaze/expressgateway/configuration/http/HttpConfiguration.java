@@ -17,11 +17,13 @@
  */
 package com.shieldblaze.expressgateway.configuration.http;
 
-import com.fasterxml.jackson.annotation.JsonIgnore;
 import com.fasterxml.jackson.annotation.JsonProperty;
 import com.shieldblaze.expressgateway.common.utils.NumberUtil;
 import com.shieldblaze.expressgateway.configuration.Configuration;
+import lombok.Getter;
+import lombok.Setter;
 import lombok.ToString;
+import lombok.experimental.Accessors;
 
 import java.util.Set;
 
@@ -32,7 +34,10 @@ import static io.netty.handler.codec.http.HttpObjectDecoder.DEFAULT_MAX_INITIAL_
 /**
  * Configuration for HTTP/1.1 and HTTP/2 protocol settings.
  */
-@ToString(exclude = "validated")
+@Getter
+@Setter
+@Accessors(fluent = true, chain = true)
+@ToString
 public final class HttpConfiguration implements Configuration<HttpConfiguration> {
 
     @JsonProperty
@@ -198,9 +203,6 @@ public final class HttpConfiguration implements Configuration<HttpConfiguration>
     @JsonProperty
     private RetryConfiguration retryConfiguration;
 
-    @JsonIgnore
-    private boolean validated;
-
     public static final HttpConfiguration DEFAULT = new HttpConfiguration();
 
     static {
@@ -226,364 +228,20 @@ public final class HttpConfiguration implements Configuration<HttpConfiguration>
         DEFAULT.gracefulShutdownDrainMs = 5000; // 5 seconds — per RFC 9113 Section 6.8, allow in-flight streams to complete
         DEFAULT.allowedMethods = Set.of("GET", "HEAD", "POST", "PUT", "DELETE", "PATCH", "OPTIONS");
         DEFAULT.retryConfiguration = RetryConfiguration.DEFAULT;
-        DEFAULT.validated = true;
     }
 
     HttpConfiguration() {
         // Prevent outside initialization
     }
 
-    /**
-     * Max Initial Line Length
-     */
-    public HttpConfiguration setMaxInitialLineLength(int maxInitialLineLength) {
-        this.maxInitialLineLength = maxInitialLineLength;
-        return this;
-    }
-
-    /**
-     * Max Initial Line Length
-     */
-    public int maxInitialLineLength() {
-        assertValidated();
-        return maxInitialLineLength;
-    }
-
-    /**
-     * Max Header Size
-     */
-    public HttpConfiguration setMaxHeaderSize(int maxHeaderSize) {
-        this.maxHeaderSize = maxHeaderSize;
-        return this;
-    }
-
-    /**
-     * Max Header Size
-     */
-    public int maxHeaderSize() {
-        assertValidated();
-        return maxHeaderSize;
-    }
-
-    /**
-     * Max Chunk Size
-     */
-    public HttpConfiguration setMaxChunkSize(int maxChunkSize) {
-        this.maxChunkSize = maxChunkSize;
-        return this;
-    }
-
-    /**
-     * Max Chunk Size
-     */
-    public int maxChunkSize() {
-        assertValidated();
-        return maxChunkSize;
-    }
-
-    /**
-     * Compression Threshold
-     */
-    public HttpConfiguration setCompressionThreshold(int compressionThreshold) {
-        this.compressionThreshold = compressionThreshold;
-        return this;
-    }
-
-    /**
-     * Compression Threshold
-     */
-    public int compressionThreshold() {
-        assertValidated();
-        return compressionThreshold;
-    }
-
-    /**
-     * Deflate Compression Level
-     */
-    public HttpConfiguration setDeflateCompressionLevel(int deflateCompressionLevel) {
-        this.deflateCompressionLevel = deflateCompressionLevel;
-        return this;
-    }
-
-    public int deflateCompressionLevel() {
-        assertValidated();
-        return deflateCompressionLevel;
-    }
-
-    /**
-     * Brotli Compression Level
-     */
-    public HttpConfiguration setBrotliCompressionLevel(int brotliCompressionLevel) {
-        this.brotliCompressionLevel = brotliCompressionLevel;
-        return this;
-    }
-
-    /**
-     * Brotli Compression Level
-     */
-    public int brotliCompressionLevel() {
-        assertValidated();
-        return brotliCompressionLevel;
-    }
-
-    /**
-     * Maximum number of concurrent HTTP/2 streams per connection.
-     * Per RFC 9113 Section 6.5.2 (SETTINGS_MAX_CONCURRENT_STREAMS).
-     */
-    public HttpConfiguration setMaxConcurrentStreams(long maxConcurrentStreams) {
-        this.maxConcurrentStreams = maxConcurrentStreams;
-        return this;
-    }
-
-    /**
-     * Maximum number of concurrent HTTP/2 streams per connection.
-     * Per RFC 9113 Section 6.5.2 (SETTINGS_MAX_CONCURRENT_STREAMS).
-     * Default value is 100.
-     */
-    public long maxConcurrentStreams() {
-        assertValidated();
-        return maxConcurrentStreams;
-    }
-
-    public HttpConfiguration setBackendResponseTimeoutSeconds(long backendResponseTimeoutSeconds) {
-        this.backendResponseTimeoutSeconds = backendResponseTimeoutSeconds;
-        return this;
-    }
-
-    /**
-     * Backend response timeout in seconds. Default is 60.
-     */
-    public long backendResponseTimeoutSeconds() {
-        assertValidated();
-        return backendResponseTimeoutSeconds;
-    }
-
-    public HttpConfiguration setMaxRequestBodySize(long maxRequestBodySize) {
-        this.maxRequestBodySize = maxRequestBodySize;
-        return this;
-    }
-
-    /**
-     * Maximum request body size in bytes. Default is 10 MB.
-     */
-    public long maxRequestBodySize() {
-        assertValidated();
-        return maxRequestBodySize;
-    }
-
-    public HttpConfiguration setMaxResponseBodySize(long maxResponseBodySize) {
-        this.maxResponseBodySize = maxResponseBodySize;
-        return this;
-    }
-
-    /**
-     * Maximum response body size in bytes. 0 means unlimited (default).
-     */
-    public long maxResponseBodySize() {
-        assertValidated();
-        return maxResponseBodySize;
-    }
-
-    /**
-     * Set the HTTP/2 SETTINGS_INITIAL_WINDOW_SIZE.
-     * Per RFC 9113 Section 6.9.2, the legal range is 0 to 2^31-1 (2147483647).
-     */
-    public HttpConfiguration setInitialWindowSize(int initialWindowSize) {
-        this.initialWindowSize = initialWindowSize;
-        return this;
-    }
-
-    /**
-     * HTTP/2 SETTINGS_INITIAL_WINDOW_SIZE (RFC 9113 Section 6.5.2).
-     * Default is 1048576 (1 MB).
-     */
-    public int initialWindowSize() {
-        assertValidated();
-        return initialWindowSize;
-    }
-
-    /**
-     * Set the HTTP/2 connection-level flow control window size.
-     * Per RFC 9113 Section 6.9.2, the connection window starts at 65535 and is
-     * increased via WINDOW_UPDATE on stream 0. The minimum meaningful value is 65535
-     * (the RFC default); the maximum is 2^31-1 (2147483647).
-     *
-     * @param h2ConnectionWindowSize desired connection window in bytes
-     * @return this configuration for chaining
-     */
-    public HttpConfiguration setH2ConnectionWindowSize(int h2ConnectionWindowSize) {
-        this.h2ConnectionWindowSize = h2ConnectionWindowSize;
-        return this;
-    }
-
-    /**
-     * HTTP/2 connection-level flow control window size (RFC 9113 Section 6.9.2).
-     * Default is 1048576 (1 MB). The RFC default is 65535 but that bottlenecks
-     * throughput under heavy multiplexing.
-     */
-    public int h2ConnectionWindowSize() {
-        assertValidated();
-        return h2ConnectionWindowSize;
-    }
-
-    /**
-     * F-13: Set the maximum aggregate request body bytes across all streams
-     * on a single HTTP/2 connection.
-     */
-    public HttpConfiguration setMaxConnectionBodySize(long maxConnectionBodySize) {
-        this.maxConnectionBodySize = maxConnectionBodySize;
-        return this;
-    }
-
-    /**
-     * F-13: Maximum aggregate request body bytes across all streams on a single
-     * HTTP/2 connection. Default is 256 MB (268435456 bytes).
-     */
-    public long maxConnectionBodySize() {
-        assertValidated();
-        return maxConnectionBodySize;
-    }
-
-    /**
-     * F-14: Set the HTTP/2 SETTINGS_MAX_HEADER_LIST_SIZE.
-     * Per RFC 9113 Section 6.5.2, this advertises the maximum size of header
-     * list the sender is prepared to accept.
-     */
-    public HttpConfiguration setMaxHeaderListSize(long maxHeaderListSize) {
-        this.maxHeaderListSize = maxHeaderListSize;
-        return this;
-    }
-
-    /**
-     * F-14: HTTP/2 SETTINGS_MAX_HEADER_LIST_SIZE (RFC 9113 Section 6.5.2).
-     * Controls HPACK decoder limit. Default is 8192 bytes.
-     */
-    public long maxHeaderListSize() {
-        assertValidated();
-        return maxHeaderListSize;
-    }
-
-    public HttpConfiguration setRequestHeaderTimeoutSeconds(long requestHeaderTimeoutSeconds) {
-        this.requestHeaderTimeoutSeconds = requestHeaderTimeoutSeconds;
-        return this;
-    }
-
-    /**
-     * SEC-02: Maximum time in seconds to wait for request headers. Default is 30.
-     */
-    public long requestHeaderTimeoutSeconds() {
-        assertValidated();
-        return requestHeaderTimeoutSeconds;
-    }
-
-    public HttpConfiguration setRequestBodyTimeoutSeconds(long requestBodyTimeoutSeconds) {
-        this.requestBodyTimeoutSeconds = requestBodyTimeoutSeconds;
-        return this;
-    }
-
-    /**
-     * ME-04: Maximum time in seconds for request body delivery. Default is 60. 0 to disable.
-     */
-    public long requestBodyTimeoutSeconds() {
-        assertValidated();
-        return requestBodyTimeoutSeconds;
-    }
-
-    public HttpConfiguration setMaxH1ConnectionsPerNode(int maxH1ConnectionsPerNode) {
-        this.maxH1ConnectionsPerNode = maxH1ConnectionsPerNode;
-        return this;
-    }
-
-    /**
-     * Maximum idle H1 backend connections per Node. Default is 32.
-     */
-    public int maxH1ConnectionsPerNode() {
-        assertValidated();
-        return maxH1ConnectionsPerNode;
-    }
-
-    public HttpConfiguration setMaxH2ConnectionsPerNode(int maxH2ConnectionsPerNode) {
-        this.maxH2ConnectionsPerNode = maxH2ConnectionsPerNode;
-        return this;
-    }
-
-    /**
-     * Maximum H2 backend connections per Node. Default is 4.
-     */
-    public int maxH2ConnectionsPerNode() {
-        assertValidated();
-        return maxH2ConnectionsPerNode;
-    }
-
-    /**
-     * RES-02: Set the maximum idle time for pooled HTTP/1.1 backend connections.
-     */
-    public HttpConfiguration setPoolIdleTimeoutSeconds(long poolIdleTimeoutSeconds) {
-        this.poolIdleTimeoutSeconds = poolIdleTimeoutSeconds;
-        return this;
-    }
-
-    /**
-     * RES-02: Maximum idle time in seconds for pooled HTTP/1.1 backend connections.
-     * Default is 60 seconds. Set to 0 to disable idle eviction.
-     */
-    public long poolIdleTimeoutSeconds() {
-        assertValidated();
-        return poolIdleTimeoutSeconds;
-    }
-
-    /**
-     * RES-DRAIN: Set the graceful shutdown drain timeout in milliseconds.
-     * When closing an HTTP/2 frontend connection, GOAWAY is sent first and the
-     * actual close is delayed by this duration to allow in-flight streams to complete.
-     */
-    public HttpConfiguration setGracefulShutdownDrainMs(long gracefulShutdownDrainMs) {
-        this.gracefulShutdownDrainMs = gracefulShutdownDrainMs;
-        return this;
-    }
-
-    /**
-     * RES-DRAIN: Graceful shutdown drain timeout in milliseconds. Default is 5000ms.
-     * Set to 0 to disable drain and close immediately.
-     */
-    public long gracefulShutdownDrainMs() {
-        assertValidated();
-        return gracefulShutdownDrainMs;
-    }
-
-    /**
-     * Set the allowed HTTP methods. Only methods in this set are forwarded to backends.
-     * Requests with other methods receive 405 Method Not Allowed.
-     */
-    public HttpConfiguration setAllowedMethods(Set<String> allowedMethods) {
-        this.allowedMethods = allowedMethods;
-        return this;
-    }
-
-    /**
-     * Allowed HTTP methods. Default: GET, HEAD, POST, PUT, DELETE, PATCH, OPTIONS.
-     */
     public Set<String> allowedMethods() {
-        assertValidated();
         if (allowedMethods == null) {
             return Set.of("GET", "HEAD", "POST", "PUT", "DELETE", "PATCH", "OPTIONS");
         }
         return allowedMethods;
     }
 
-    /**
-     * Retry Configuration
-     */
-    public HttpConfiguration setRetryConfiguration(RetryConfiguration retryConfiguration) {
-        this.retryConfiguration = retryConfiguration;
-        return this;
-    }
-
-    /**
-     * Retry Configuration
-     */
     public RetryConfiguration retryConfiguration() {
-        assertValidated();
         if (retryConfiguration == null) {
             return RetryConfiguration.DEFAULT;
         }
@@ -621,12 +279,6 @@ public final class HttpConfiguration implements Configuration<HttpConfiguration>
         NumberUtil.checkPositive(maxH2ConnectionsPerNode, "MaxH2ConnectionsPerNode");
         NumberUtil.checkZeroOrPositive(poolIdleTimeoutSeconds, "PoolIdleTimeoutSeconds");
         NumberUtil.checkZeroOrPositive(gracefulShutdownDrainMs, "GracefulShutdownDrainMs");
-        validated = true;
         return this;
-    }
-
-    @Override
-    public boolean validated() {
-        return validated;
     }
 }

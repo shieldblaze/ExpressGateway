@@ -266,17 +266,17 @@ class HttpProxyProtocolIntegrationTest {
             backend.start();
 
             TransportConfiguration transportConfig = new TransportConfiguration()
-                    .setTransportType(TransportType.NIO)
-                    .setReceiveBufferAllocationType(ReceiveBufferAllocationType.ADAPTIVE)
-                    .setReceiveBufferSizes(new int[]{512, 9001, 65535})
-                    .setTcpConnectionBacklog(1024)
-                    .setSocketReceiveBufferSize(65536)
-                    .setSocketSendBufferSize(65536)
-                    .setTcpFastOpenMaximumPendingRequests(100)
-                    .setBackendConnectTimeout(5_000)
-                    .setConnectionIdleTimeout(60_000)
-                    .setProxyProtocolMode(ProxyProtocolMode.OFF)
-                    .setBackendProxyProtocolMode(ppMode)
+                    .transportType(TransportType.NIO)
+                    .receiveBufferAllocationType(ReceiveBufferAllocationType.ADAPTIVE)
+                    .receiveBufferSizes(new int[]{512, 9001, 65535})
+                    .tcpConnectionBacklog(1024)
+                    .socketReceiveBufferSize(65536)
+                    .socketSendBufferSize(65536)
+                    .tcpFastOpenMaximumPendingRequests(100)
+                    .backendConnectTimeout(5_000)
+                    .connectionIdleTimeout(60_000)
+                    .proxyProtocolMode(ProxyProtocolMode.OFF)
+                    .backendProxyProtocolMode(ppMode)
                     .validate();
 
             ConfigurationContext configCtx = ConfigurationContext.create(transportConfig);

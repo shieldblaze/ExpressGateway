@@ -24,9 +24,6 @@ import com.fasterxml.jackson.annotation.JsonIgnore;
  */
 public final class TlsClientConfiguration extends TlsConfiguration {
 
-    @JsonIgnore
-    private boolean validated;
-
     /**
      * This is the default implementation of {@link TlsClientConfiguration}
      * which is disabled by default.
@@ -42,19 +39,12 @@ public final class TlsClientConfiguration extends TlsConfiguration {
         DEFAULT.useStartTLS = false;
         DEFAULT.acceptAllCerts = false;
         DEFAULT.sessionTimeout = 300; // 5 minutes -- reasonable default for TLS session caching
-        DEFAULT.validated = true;
     }
 
     @Override
     public TlsConfiguration validate() {
         super.validate();
-        validated = true;
         return this;
-    }
-
-    @Override
-    public boolean validated() {
-        return validated;
     }
 
     public static TlsClientConfiguration copyFrom(TlsClientConfiguration from) {

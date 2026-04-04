@@ -41,9 +41,6 @@ public final class TlsServerConfiguration extends TlsConfiguration {
 
     private static final Logger logger = LogManager.getLogger(TlsServerConfiguration.class);
 
-    @JsonIgnore
-    private boolean validated;
-
     /**
      * Path to a CRL (Certificate Revocation List) file in PEM or DER format.
      * When set and mTLS is enabled, client certificates will be checked against this CRL.
@@ -75,7 +72,6 @@ public final class TlsServerConfiguration extends TlsConfiguration {
         DEFAULT.useStartTLS = false;
         DEFAULT.sessionTimeout = 43_200;
         DEFAULT.sessionCacheSize = 1_000_000;
-        DEFAULT.validated = true;
     }
 
     /**
@@ -141,7 +137,6 @@ public final class TlsServerConfiguration extends TlsConfiguration {
             logger.info("CRL checking enabled with file: {}", crlFile);
         }
 
-        validated = true;
         return this;
     }
 
@@ -185,11 +180,6 @@ public final class TlsServerConfiguration extends TlsConfiguration {
         try (FileInputStream fis = new FileInputStream(crlFile)) {
             return (X509CRL) cf.generateCRL(fis);
         }
-    }
-
-    @Override
-    public boolean validated() {
-        return validated;
     }
 
     public static TlsServerConfiguration copyFrom(TlsServerConfiguration from) {

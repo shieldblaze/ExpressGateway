@@ -86,18 +86,18 @@ class Http3LifecycleTest {
     private static QuicConfiguration buildValidatedQuicConfig(int maxConnsPerNode, long maxStreamsBidi,
                                                                 long maxIdleTimeoutMs) {
         QuicConfiguration config = newMutableQuicConfig();
-        config.setEnabled(true)
-                .setMaxIdleTimeoutMs(maxIdleTimeoutMs)
-                .setInitialMaxData(10_000_000)
-                .setInitialMaxStreamDataBidiLocal(1_000_000)
-                .setInitialMaxStreamDataBidiRemote(1_000_000)
-                .setInitialMaxStreamDataUni(1_000_000)
-                .setInitialMaxStreamsBidi(maxStreamsBidi)
-                .setInitialMaxStreamsUni(3)
-                .setMaxConnectionsPerNode(maxConnsPerNode)
-                .setPort(443)
-                .setZeroRttEnabled(false)
-                .setGracefulShutdownDrainMs(5000);
+        config.enabled(true)
+                .maxIdleTimeoutMs(maxIdleTimeoutMs)
+                .initialMaxData(10_000_000)
+                .initialMaxStreamDataBidiLocal(1_000_000)
+                .initialMaxStreamDataBidiRemote(1_000_000)
+                .initialMaxStreamDataUni(1_000_000)
+                .initialMaxStreamsBidi(maxStreamsBidi)
+                .initialMaxStreamsUni(3)
+                .maxConnectionsPerNode(maxConnsPerNode)
+                .port(443)
+                .zeroRttEnabled(false)
+                .gracefulShutdownDrainMs(5000);
         config.validate();
         return config;
     }
@@ -114,7 +114,6 @@ class Http3LifecycleTest {
         @DisplayName("DEFAULT instance has correct defaults and is validated")
         void defaultInstanceHasCorrectDefaults() {
             Http3Configuration config = Http3Configuration.DEFAULT;
-            assertTrue(config.validated(), "DEFAULT must be pre-validated");
 
             assertEquals(0L, config.altSvcMaxAge(),
                     "Default Alt-Svc max-age must be 0 (disabled)");
@@ -128,29 +127,19 @@ class Http3LifecycleTest {
         @DisplayName("valid configuration validates successfully")
         void validConfigurationValidates() {
             Http3Configuration config = newMutableH3Config();
-            config.setAltSvcMaxAge(7200)
-                    .setQpackMaxTableCapacity(4096)
-                    .setQpackBlockedStreams(100);
+            config.altSvcMaxAge(7200)
+                    .qpackMaxTableCapacity(4096)
+                    .qpackBlockedStreams(100);
 
-            assertFalse(config.validated());
             assertDoesNotThrow(config::validate);
-            assertTrue(config.validated());
         }
 
-        @Test
-        @DisplayName("accessing getter on unvalidated config throws IllegalStateException")
-        void unvalidatedConfigThrowsOnAccess() {
-            Http3Configuration config = newMutableH3Config();
-            assertThrows(IllegalStateException.class, config::altSvcMaxAge);
-            assertThrows(IllegalStateException.class, config::qpackMaxTableCapacity);
-            assertThrows(IllegalStateException.class, config::qpackBlockedStreams);
-        }
 
         @Test
         @DisplayName("validation rejects negative altSvcMaxAge")
         void validationRejectsNegativeAltSvcMaxAge() {
             Http3Configuration config = newMutableH3Config();
-            config.setAltSvcMaxAge(-1).setQpackMaxTableCapacity(0).setQpackBlockedStreams(0);
+            config.altSvcMaxAge(-1).qpackMaxTableCapacity(0).qpackBlockedStreams(0);
             assertThrows(IllegalArgumentException.class, config::validate);
         }
 
@@ -158,7 +147,7 @@ class Http3LifecycleTest {
         @DisplayName("validation rejects negative qpackMaxTableCapacity")
         void validationRejectsNegativeQpackMaxTableCapacity() {
             Http3Configuration config = newMutableH3Config();
-            config.setAltSvcMaxAge(0).setQpackMaxTableCapacity(-1).setQpackBlockedStreams(0);
+            config.altSvcMaxAge(0).qpackMaxTableCapacity(-1).qpackBlockedStreams(0);
             assertThrows(IllegalArgumentException.class, config::validate);
         }
 
@@ -166,7 +155,7 @@ class Http3LifecycleTest {
         @DisplayName("validation rejects negative qpackBlockedStreams")
         void validationRejectsNegativeQpackBlockedStreams() {
             Http3Configuration config = newMutableH3Config();
-            config.setAltSvcMaxAge(0).setQpackMaxTableCapacity(0).setQpackBlockedStreams(-1);
+            config.altSvcMaxAge(0).qpackMaxTableCapacity(0).qpackBlockedStreams(-1);
             assertThrows(IllegalArgumentException.class, config::validate);
         }
 
@@ -174,7 +163,7 @@ class Http3LifecycleTest {
         @DisplayName("validation accepts zero altSvcMaxAge")
         void validationAcceptsZeroAltSvcMaxAge() {
             Http3Configuration config = newMutableH3Config();
-            config.setAltSvcMaxAge(0).setQpackMaxTableCapacity(0).setQpackBlockedStreams(0);
+            config.altSvcMaxAge(0).qpackMaxTableCapacity(0).qpackBlockedStreams(0);
             assertDoesNotThrow(config::validate);
         }
     }
@@ -191,7 +180,6 @@ class Http3LifecycleTest {
         @DisplayName("DEFAULT instance has spec-compliant defaults")
         void defaultInstanceHasCorrectDefaults() {
             QuicConfiguration config = QuicConfiguration.DEFAULT;
-            assertTrue(config.validated());
             assertTrue(config.enabled());
             assertEquals(30_000L, config.maxIdleTimeoutMs());
             assertEquals(10_000_000L, config.initialMaxData());
@@ -210,11 +198,11 @@ class Http3LifecycleTest {
         @DisplayName("validation rejects zero initialMaxData")
         void validationRejectsZeroInitialMaxData() {
             QuicConfiguration config = newMutableQuicConfig();
-            config.setEnabled(true).setMaxIdleTimeoutMs(30_000).setInitialMaxData(0)
-                    .setInitialMaxStreamDataBidiLocal(1_000_000).setInitialMaxStreamDataBidiRemote(1_000_000)
-                    .setInitialMaxStreamDataUni(1_000_000).setInitialMaxStreamsBidi(100)
-                    .setInitialMaxStreamsUni(3).setMaxConnectionsPerNode(4).setPort(443)
-                    .setGracefulShutdownDrainMs(5000);
+            config.enabled(true).maxIdleTimeoutMs(30_000).initialMaxData(0)
+                    .initialMaxStreamDataBidiLocal(1_000_000).initialMaxStreamDataBidiRemote(1_000_000)
+                    .initialMaxStreamDataUni(1_000_000).initialMaxStreamsBidi(100)
+                    .initialMaxStreamsUni(3).maxConnectionsPerNode(4).port(443)
+                    .gracefulShutdownDrainMs(5000);
             assertThrows(IllegalArgumentException.class, config::validate);
         }
 
@@ -222,11 +210,11 @@ class Http3LifecycleTest {
         @DisplayName("validation rejects zero port")
         void validationRejectsZeroPort() {
             QuicConfiguration config = newMutableQuicConfig();
-            config.setEnabled(true).setMaxIdleTimeoutMs(30_000).setInitialMaxData(10_000_000)
-                    .setInitialMaxStreamDataBidiLocal(1_000_000).setInitialMaxStreamDataBidiRemote(1_000_000)
-                    .setInitialMaxStreamDataUni(1_000_000).setInitialMaxStreamsBidi(100)
-                    .setInitialMaxStreamsUni(3).setMaxConnectionsPerNode(4).setPort(0)
-                    .setGracefulShutdownDrainMs(5000);
+            config.enabled(true).maxIdleTimeoutMs(30_000).initialMaxData(10_000_000)
+                    .initialMaxStreamDataBidiLocal(1_000_000).initialMaxStreamDataBidiRemote(1_000_000)
+                    .initialMaxStreamDataUni(1_000_000).initialMaxStreamsBidi(100)
+                    .initialMaxStreamsUni(3).maxConnectionsPerNode(4).port(0)
+                    .gracefulShutdownDrainMs(5000);
             assertThrows(IllegalArgumentException.class, config::validate);
         }
 
@@ -234,11 +222,11 @@ class Http3LifecycleTest {
         @DisplayName("validation accepts zero maxIdleTimeoutMs")
         void validationAcceptsZeroMaxIdleTimeout() {
             QuicConfiguration config = newMutableQuicConfig();
-            config.setEnabled(true).setMaxIdleTimeoutMs(0).setInitialMaxData(10_000_000)
-                    .setInitialMaxStreamDataBidiLocal(1_000_000).setInitialMaxStreamDataBidiRemote(1_000_000)
-                    .setInitialMaxStreamDataUni(1_000_000).setInitialMaxStreamsBidi(100)
-                    .setInitialMaxStreamsUni(3).setMaxConnectionsPerNode(4).setPort(443)
-                    .setGracefulShutdownDrainMs(5000);
+            config.enabled(true).maxIdleTimeoutMs(0).initialMaxData(10_000_000)
+                    .initialMaxStreamDataBidiLocal(1_000_000).initialMaxStreamDataBidiRemote(1_000_000)
+                    .initialMaxStreamDataUni(1_000_000).initialMaxStreamsBidi(100)
+                    .initialMaxStreamsUni(3).maxConnectionsPerNode(4).port(443)
+                    .gracefulShutdownDrainMs(5000);
             assertDoesNotThrow(config::validate);
         }
     }

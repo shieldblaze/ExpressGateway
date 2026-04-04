@@ -17,11 +17,13 @@
  */
 package com.shieldblaze.expressgateway.configuration.healthcheck;
 
-import com.fasterxml.jackson.annotation.JsonIgnore;
 import com.fasterxml.jackson.annotation.JsonProperty;
 import com.shieldblaze.expressgateway.common.utils.NumberUtil;
 import com.shieldblaze.expressgateway.configuration.Configuration;
+import lombok.Getter;
+import lombok.Setter;
 import lombok.ToString;
+import lombok.experimental.Accessors;
 
 /**
  * Configuration for per-node circuit breaker.
@@ -35,7 +37,10 @@ import lombok.ToString;
  *   HALF_OPEN --(any failure)-----------------------------> OPEN
  * </pre>
  */
-@ToString(exclude = "validated")
+@Getter
+@Setter
+@Accessors(fluent = true, chain = true)
+@ToString
 public final class CircuitBreakerConfiguration implements Configuration<CircuitBreakerConfiguration> {
 
     @JsonProperty
@@ -53,9 +58,6 @@ public final class CircuitBreakerConfiguration implements Configuration<CircuitB
     @JsonProperty
     private int halfOpenMaxConcurrent;
 
-    @JsonIgnore
-    private boolean validated;
-
     /**
      * Default: disabled, 5 failures to open, 3 successes to close, 30s open duration
      */
@@ -67,73 +69,10 @@ public final class CircuitBreakerConfiguration implements Configuration<CircuitB
         DEFAULT.successThreshold = 3;
         DEFAULT.openDurationMs = 30_000;
         DEFAULT.halfOpenMaxConcurrent = 1;
-        DEFAULT.validated = true;
     }
 
     CircuitBreakerConfiguration() {
         // Prevent outside initialization
-    }
-
-    public CircuitBreakerConfiguration setEnabled(boolean enabled) {
-        this.enabled = enabled;
-        return this;
-    }
-
-    public boolean enabled() {
-        assertValidated();
-        return enabled;
-    }
-
-    /**
-     * Number of consecutive failures before the circuit opens
-     */
-    public CircuitBreakerConfiguration setFailureThreshold(int failureThreshold) {
-        this.failureThreshold = failureThreshold;
-        return this;
-    }
-
-    public int failureThreshold() {
-        assertValidated();
-        return failureThreshold;
-    }
-
-    /**
-     * Number of consecutive successes in HALF_OPEN state before closing the circuit
-     */
-    public CircuitBreakerConfiguration setSuccessThreshold(int successThreshold) {
-        this.successThreshold = successThreshold;
-        return this;
-    }
-
-    public int successThreshold() {
-        assertValidated();
-        return successThreshold;
-    }
-
-    /**
-     * Duration in milliseconds to stay in OPEN state before transitioning to HALF_OPEN
-     */
-    public CircuitBreakerConfiguration setOpenDurationMs(long openDurationMs) {
-        this.openDurationMs = openDurationMs;
-        return this;
-    }
-
-    public long openDurationMs() {
-        assertValidated();
-        return openDurationMs;
-    }
-
-    /**
-     * Maximum concurrent requests allowed in HALF_OPEN state
-     */
-    public CircuitBreakerConfiguration setHalfOpenMaxConcurrent(int halfOpenMaxConcurrent) {
-        this.halfOpenMaxConcurrent = halfOpenMaxConcurrent;
-        return this;
-    }
-
-    public int halfOpenMaxConcurrent() {
-        assertValidated();
-        return halfOpenMaxConcurrent;
     }
 
     @Override
@@ -142,12 +81,6 @@ public final class CircuitBreakerConfiguration implements Configuration<CircuitB
         NumberUtil.checkPositive(successThreshold, "SuccessThreshold");
         NumberUtil.checkPositive(openDurationMs, "OpenDurationMs");
         NumberUtil.checkPositive(halfOpenMaxConcurrent, "HalfOpenMaxConcurrent");
-        validated = true;
         return this;
-    }
-
-    @Override
-    public boolean validated() {
-        return validated;
     }
 }

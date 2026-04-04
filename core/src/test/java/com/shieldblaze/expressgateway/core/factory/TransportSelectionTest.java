@@ -73,21 +73,21 @@ class TransportSelectionTest {
     @Test
     void nioTransport_createsNioEventLoopGroups() throws Exception {
         TransportConfiguration transportConfig = new TransportConfiguration()
-                .setTransportType(TransportType.NIO)
-                .setReceiveBufferAllocationType(
+                .transportType(TransportType.NIO)
+                .receiveBufferAllocationType(
                         com.shieldblaze.expressgateway.configuration.transport.ReceiveBufferAllocationType.ADAPTIVE)
-                .setReceiveBufferSizes(new int[]{512, 9001, 65535})
-                .setTcpConnectionBacklog(1024)
-                .setSocketReceiveBufferSize(262144)
-                .setSocketSendBufferSize(262144)
-                .setTcpFastOpenMaximumPendingRequests(100)
-                .setBackendConnectTimeout(10000)
-                .setConnectionIdleTimeout(120000)
+                .receiveBufferSizes(new int[]{512, 9001, 65535})
+                .tcpConnectionBacklog(1024)
+                .socketReceiveBufferSize(262144)
+                .socketSendBufferSize(262144)
+                .tcpFastOpenMaximumPendingRequests(100)
+                .backendConnectTimeout(10000)
+                .connectionIdleTimeout(120000)
                 .validate();
 
         EventLoopConfiguration elConfig = new EventLoopConfiguration()
-                .setParentWorkers(1)
-                .setChildWorkers(2)
+                .parentWorkers(1)
+                .childWorkers(2)
                 .validate();
 
         ConfigurationContext ctx = new ConfigurationContext(
@@ -127,8 +127,8 @@ class TransportSelectionTest {
         int childWorkers = 4;
 
         EventLoopConfiguration elConfig = new EventLoopConfiguration()
-                .setParentWorkers(parentWorkers)
-                .setChildWorkers(childWorkers)
+                .parentWorkers(parentWorkers)
+                .childWorkers(childWorkers)
                 .validate();
 
         ConfigurationContext ctx = buildConfigContext(TransportType.NIO, elConfig);
@@ -159,8 +159,8 @@ class TransportSelectionTest {
     @EnabledIf("isEpollAvailable")
     void epollTransport_createsEpollEventLoopGroups() throws Exception {
         EventLoopConfiguration elConfig = new EventLoopConfiguration()
-                .setParentWorkers(1)
-                .setChildWorkers(2)
+                .parentWorkers(1)
+                .childWorkers(2)
                 .validate();
 
         ConfigurationContext ctx = buildConfigContext(TransportType.EPOLL, elConfig);
@@ -187,8 +187,8 @@ class TransportSelectionTest {
     @EnabledIf("isIOUringAvailable")
     void ioUringTransport_createsIOUringEventLoopGroups() throws Exception {
         EventLoopConfiguration elConfig = new EventLoopConfiguration()
-                .setParentWorkers(1)
-                .setChildWorkers(2)
+                .parentWorkers(1)
+                .childWorkers(2)
                 .validate();
 
         ConfigurationContext ctx = buildConfigContext(TransportType.IO_URING, elConfig);
@@ -275,16 +275,16 @@ class TransportSelectionTest {
 
     private ConfigurationContext buildConfigContext(TransportType type, EventLoopConfiguration elConfig) {
         TransportConfiguration transportConfig = new TransportConfiguration()
-                .setTransportType(type)
-                .setReceiveBufferAllocationType(
+                .transportType(type)
+                .receiveBufferAllocationType(
                         com.shieldblaze.expressgateway.configuration.transport.ReceiveBufferAllocationType.ADAPTIVE)
-                .setReceiveBufferSizes(new int[]{512, 9001, 65535})
-                .setTcpConnectionBacklog(1024)
-                .setSocketReceiveBufferSize(262144)
-                .setSocketSendBufferSize(262144)
-                .setTcpFastOpenMaximumPendingRequests(100)
-                .setBackendConnectTimeout(10000)
-                .setConnectionIdleTimeout(120000)
+                .receiveBufferSizes(new int[]{512, 9001, 65535})
+                .tcpConnectionBacklog(1024)
+                .socketReceiveBufferSize(262144)
+                .socketSendBufferSize(262144)
+                .tcpFastOpenMaximumPendingRequests(100)
+                .backendConnectTimeout(10000)
+                .connectionIdleTimeout(120000)
                 .validate();
 
         return new ConfigurationContext(

@@ -17,11 +17,13 @@
  */
 package com.shieldblaze.expressgateway.configuration.quic;
 
-import com.fasterxml.jackson.annotation.JsonIgnore;
 import com.fasterxml.jackson.annotation.JsonProperty;
 import com.shieldblaze.expressgateway.common.utils.NumberUtil;
 import com.shieldblaze.expressgateway.configuration.Configuration;
+import lombok.Getter;
+import lombok.Setter;
 import lombok.ToString;
+import lombok.experimental.Accessors;
 
 /**
  * Configuration for QUIC transport parameters (RFC 9000).
@@ -33,7 +35,10 @@ import lombok.ToString;
  * <p>QUIC transport parameters are advertised during the handshake (RFC 9000 Section 18)
  * and constrain the peer's behavior for the lifetime of the connection.</p>
  */
-@ToString(exclude = "validated")
+@Getter
+@Setter
+@Accessors(fluent = true, chain = true)
+@ToString
 public final class QuicConfiguration implements Configuration<QuicConfiguration> {
 
     /**
@@ -143,9 +148,6 @@ public final class QuicConfiguration implements Configuration<QuicConfiguration>
     @JsonProperty
     private boolean cidBasedRoutingEnabled = true;
 
-    @JsonIgnore
-    private boolean validated;
-
     public static final QuicConfiguration DEFAULT = new QuicConfiguration();
 
     static {
@@ -163,151 +165,10 @@ public final class QuicConfiguration implements Configuration<QuicConfiguration>
         DEFAULT.gracefulShutdownDrainMs = 5000;
         DEFAULT.quicProxySessionIdleTimeoutSeconds = 30;
         DEFAULT.cidBasedRoutingEnabled = true;
-        DEFAULT.validated = true;
     }
 
     QuicConfiguration() {
         // Prevent outside initialization
-    }
-
-    public boolean enabled() {
-        assertValidated();
-        return enabled;
-    }
-
-    public QuicConfiguration setEnabled(boolean enabled) {
-        this.enabled = enabled;
-        return this;
-    }
-
-    public long maxIdleTimeoutMs() {
-        assertValidated();
-        return maxIdleTimeoutMs;
-    }
-
-    public QuicConfiguration setMaxIdleTimeoutMs(long maxIdleTimeoutMs) {
-        this.maxIdleTimeoutMs = maxIdleTimeoutMs;
-        return this;
-    }
-
-    public long initialMaxData() {
-        assertValidated();
-        return initialMaxData;
-    }
-
-    public QuicConfiguration setInitialMaxData(long initialMaxData) {
-        this.initialMaxData = initialMaxData;
-        return this;
-    }
-
-    public long initialMaxStreamDataBidiLocal() {
-        assertValidated();
-        return initialMaxStreamDataBidiLocal;
-    }
-
-    public QuicConfiguration setInitialMaxStreamDataBidiLocal(long initialMaxStreamDataBidiLocal) {
-        this.initialMaxStreamDataBidiLocal = initialMaxStreamDataBidiLocal;
-        return this;
-    }
-
-    public long initialMaxStreamDataBidiRemote() {
-        assertValidated();
-        return initialMaxStreamDataBidiRemote;
-    }
-
-    public QuicConfiguration setInitialMaxStreamDataBidiRemote(long initialMaxStreamDataBidiRemote) {
-        this.initialMaxStreamDataBidiRemote = initialMaxStreamDataBidiRemote;
-        return this;
-    }
-
-    public long initialMaxStreamDataUni() {
-        assertValidated();
-        return initialMaxStreamDataUni;
-    }
-
-    public QuicConfiguration setInitialMaxStreamDataUni(long initialMaxStreamDataUni) {
-        this.initialMaxStreamDataUni = initialMaxStreamDataUni;
-        return this;
-    }
-
-    public long initialMaxStreamsBidi() {
-        assertValidated();
-        return initialMaxStreamsBidi;
-    }
-
-    public QuicConfiguration setInitialMaxStreamsBidi(long initialMaxStreamsBidi) {
-        this.initialMaxStreamsBidi = initialMaxStreamsBidi;
-        return this;
-    }
-
-    public long initialMaxStreamsUni() {
-        assertValidated();
-        return initialMaxStreamsUni;
-    }
-
-    public QuicConfiguration setInitialMaxStreamsUni(long initialMaxStreamsUni) {
-        this.initialMaxStreamsUni = initialMaxStreamsUni;
-        return this;
-    }
-
-    public int maxConnectionsPerNode() {
-        assertValidated();
-        return maxConnectionsPerNode;
-    }
-
-    public QuicConfiguration setMaxConnectionsPerNode(int maxConnectionsPerNode) {
-        this.maxConnectionsPerNode = maxConnectionsPerNode;
-        return this;
-    }
-
-    public int port() {
-        assertValidated();
-        return port;
-    }
-
-    public QuicConfiguration setPort(int port) {
-        this.port = port;
-        return this;
-    }
-
-    public boolean zeroRttEnabled() {
-        assertValidated();
-        return zeroRttEnabled;
-    }
-
-    public QuicConfiguration setZeroRttEnabled(boolean zeroRttEnabled) {
-        this.zeroRttEnabled = zeroRttEnabled;
-        return this;
-    }
-
-    public long gracefulShutdownDrainMs() {
-        assertValidated();
-        return gracefulShutdownDrainMs;
-    }
-
-    public QuicConfiguration setGracefulShutdownDrainMs(long gracefulShutdownDrainMs) {
-        this.gracefulShutdownDrainMs = gracefulShutdownDrainMs;
-        return this;
-    }
-
-    public long quicProxySessionIdleTimeoutSeconds() {
-        assertValidated();
-        return quicProxySessionIdleTimeoutSeconds;
-    }
-
-    public QuicConfiguration setQuicProxySessionIdleTimeoutSeconds(long quicProxySessionIdleTimeoutSeconds) {
-        this.quicProxySessionIdleTimeoutSeconds = quicProxySessionIdleTimeoutSeconds;
-        return this;
-    }
-
-    public boolean cidBasedRoutingEnabled() {
-        assertValidated();
-        return cidBasedRoutingEnabled;
-    }
-
-    public QuicConfiguration setCidBasedRoutingEnabled(boolean cidBasedRoutingEnabled) {
-        this.cidBasedRoutingEnabled = cidBasedRoutingEnabled;
-        return this;
     }
 
     @Override
@@ -323,12 +184,6 @@ public final class QuicConfiguration implements Configuration<QuicConfiguration>
         NumberUtil.checkPositive(port, "Port");
         NumberUtil.checkZeroOrPositive(gracefulShutdownDrainMs, "GracefulShutdownDrainMs");
         NumberUtil.checkPositive(quicProxySessionIdleTimeoutSeconds, "QuicProxySessionIdleTimeoutSeconds");
-        validated = true;
         return this;
-    }
-
-    @Override
-    public boolean validated() {
-        return validated;
     }
 }

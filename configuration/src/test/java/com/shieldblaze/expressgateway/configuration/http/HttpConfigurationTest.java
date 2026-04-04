@@ -21,9 +21,7 @@ import org.junit.jupiter.api.Test;
 
 import static org.junit.jupiter.api.Assertions.assertDoesNotThrow;
 import static org.junit.jupiter.api.Assertions.assertEquals;
-import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertThrows;
-import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /**
  * Tests for {@link HttpConfiguration}, focusing on the maxConcurrentStreams
@@ -37,24 +35,24 @@ class HttpConfigurationTest {
      */
     private static HttpConfiguration validConfig() {
         HttpConfiguration config = new HttpConfiguration();
-        config.setMaxInitialLineLength(4096);
-        config.setMaxHeaderSize(8192);
-        config.setMaxChunkSize(8192);
-        config.setCompressionThreshold(1024);
-        config.setDeflateCompressionLevel(6);
-        config.setBrotliCompressionLevel(4);
-        config.setMaxConcurrentStreams(100);
-        config.setBackendResponseTimeoutSeconds(60);
-        config.setMaxRequestBodySize(10L * 1024 * 1024);
-        config.setInitialWindowSize(1048576);
-        config.setH2ConnectionWindowSize(1048576);
-        config.setMaxConnectionBodySize(256L * 1024 * 1024);
-        config.setMaxHeaderListSize(8192);
-        config.setRequestHeaderTimeoutSeconds(30);
-        config.setMaxH1ConnectionsPerNode(32);
-        config.setMaxH2ConnectionsPerNode(4);
-        config.setPoolIdleTimeoutSeconds(60);
-        config.setGracefulShutdownDrainMs(5000);
+        config.maxInitialLineLength(4096);
+        config.maxHeaderSize(8192);
+        config.maxChunkSize(8192);
+        config.compressionThreshold(1024);
+        config.deflateCompressionLevel(6);
+        config.brotliCompressionLevel(4);
+        config.maxConcurrentStreams(100);
+        config.backendResponseTimeoutSeconds(60);
+        config.maxRequestBodySize(10L * 1024 * 1024);
+        config.initialWindowSize(1048576);
+        config.h2ConnectionWindowSize(1048576);
+        config.maxConnectionBodySize(256L * 1024 * 1024);
+        config.maxHeaderListSize(8192);
+        config.requestHeaderTimeoutSeconds(30);
+        config.maxH1ConnectionsPerNode(32);
+        config.maxH2ConnectionsPerNode(4);
+        config.poolIdleTimeoutSeconds(60);
+        config.gracefulShutdownDrainMs(5000);
         return config;
     }
 
@@ -68,7 +66,7 @@ class HttpConfigurationTest {
     @Test
     void testCustomMaxConcurrentStreams() {
         HttpConfiguration config = validConfig();
-        config.setMaxConcurrentStreams(250);
+        config.maxConcurrentStreams(250);
         config.validate();
 
         assertEquals(250, config.maxConcurrentStreams(),
@@ -78,7 +76,7 @@ class HttpConfigurationTest {
     @Test
     void testMaxConcurrentStreamsValidationRejectsZero() {
         HttpConfiguration config = validConfig();
-        config.setMaxConcurrentStreams(0);
+        config.maxConcurrentStreams(0);
 
         assertThrows(IllegalArgumentException.class, config::validate,
                 "maxConcurrentStreams of 0 must be rejected by validation");
@@ -87,7 +85,7 @@ class HttpConfigurationTest {
     @Test
     void testMaxConcurrentStreamsValidationRejectsNegative() {
         HttpConfiguration config = validConfig();
-        config.setMaxConcurrentStreams(-1);
+        config.maxConcurrentStreams(-1);
 
         assertThrows(IllegalArgumentException.class, config::validate,
                 "Negative maxConcurrentStreams must be rejected by validation");
@@ -96,7 +94,7 @@ class HttpConfigurationTest {
     @Test
     void testMaxConcurrentStreamsValidationAcceptsOne() {
         HttpConfiguration config = validConfig();
-        config.setMaxConcurrentStreams(1);
+        config.maxConcurrentStreams(1);
 
         assertDoesNotThrow(config::validate,
                 "maxConcurrentStreams of 1 must be accepted");
@@ -106,32 +104,11 @@ class HttpConfigurationTest {
     @Test
     void testMaxConcurrentStreamsLargeValue() {
         HttpConfiguration config = validConfig();
-        config.setMaxConcurrentStreams(Integer.MAX_VALUE);
+        config.maxConcurrentStreams(Integer.MAX_VALUE);
 
         assertDoesNotThrow(config::validate,
                 "Large maxConcurrentStreams value must be accepted");
         assertEquals(Integer.MAX_VALUE, config.maxConcurrentStreams());
     }
 
-    @Test
-    void testDefaultConfigurationIsValidated() {
-        // The DEFAULT static instance must already be validated
-        assertTrue(HttpConfiguration.DEFAULT.validated(),
-                "DEFAULT configuration must be pre-validated");
-    }
-
-    @Test
-    void testConfigurationNotValidatedBeforeValidateCall() {
-        HttpConfiguration config = validConfig();
-
-        // Before validate() is called, the config must report as not validated
-        assertFalse(config.validated(),
-                "Configuration must not be validated before validate() is called");
-
-        config.validate();
-
-        assertTrue(config.validated(),
-                "Configuration must be validated after validate() is called");
-        assertEquals(100, config.maxConcurrentStreams());
-    }
 }

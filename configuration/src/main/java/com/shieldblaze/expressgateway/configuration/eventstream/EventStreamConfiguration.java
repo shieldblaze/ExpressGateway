@@ -18,49 +18,34 @@
 
 package com.shieldblaze.expressgateway.configuration.eventstream;
 
-import com.fasterxml.jackson.annotation.JsonIgnore;
 import com.fasterxml.jackson.annotation.JsonProperty;
 import com.shieldblaze.expressgateway.common.utils.NumberUtil;
 import com.shieldblaze.expressgateway.concurrent.eventstream.AsyncEventStream;
 import com.shieldblaze.expressgateway.concurrent.eventstream.EventStream;
 import com.shieldblaze.expressgateway.configuration.Configuration;
+import lombok.Getter;
+import lombok.Setter;
 import lombok.ToString;
+import lombok.experimental.Accessors;
 
 import java.util.concurrent.Executors;
 
 /**
  * Configuration for asynchronous event stream workers.
  */
-@ToString(exclude = "validated")
+@Getter
+@Setter
+@Accessors(fluent = true, chain = true)
+@ToString
 public final class EventStreamConfiguration implements Configuration<EventStreamConfiguration> {
 
     @JsonProperty
     private int workers;
 
-    @JsonIgnore
-    private boolean validated;
-
     public static final EventStreamConfiguration DEFAULT = new EventStreamConfiguration();
 
     static {
         DEFAULT.workers = Runtime.getRuntime().availableProcessors() * 2;
-        DEFAULT.validated = true;
-    }
-
-    /**
-     * Workers
-     */
-    public EventStreamConfiguration setWorkers(int workers) {
-        this.workers = workers;
-        return this;
-    }
-
-    /**
-     * Workers
-     */
-    public int workers() {
-        assertValidated();
-        return workers;
     }
 
     public EventStream newEventStream() {
@@ -76,12 +61,6 @@ public final class EventStreamConfiguration implements Configuration<EventStream
     @Override
     public EventStreamConfiguration validate() {
         NumberUtil.checkPositive(workers, "Workers");
-        validated = true;
         return this;
-    }
-
-    @Override
-    public boolean validated() {
-        return validated;
     }
 }

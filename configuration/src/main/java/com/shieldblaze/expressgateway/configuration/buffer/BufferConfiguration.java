@@ -17,11 +17,13 @@
  */
 package com.shieldblaze.expressgateway.configuration.buffer;
 
-import com.fasterxml.jackson.annotation.JsonIgnore;
 import com.fasterxml.jackson.annotation.JsonProperty;
 import com.shieldblaze.expressgateway.configuration.Configuration;
 import io.netty.util.internal.PlatformDependent;
+import lombok.Getter;
+import lombok.Setter;
 import lombok.ToString;
+import lombok.experimental.Accessors;
 
 import static com.shieldblaze.expressgateway.common.utils.NumberUtil.checkPositive;
 import static com.shieldblaze.expressgateway.common.utils.NumberUtil.checkZeroOrPositive;
@@ -29,7 +31,10 @@ import static com.shieldblaze.expressgateway.common.utils.NumberUtil.checkZeroOr
 /**
  * Configuration for Netty buffer allocator settings.
  */
-@ToString(exclude = "validated")
+@Getter
+@Setter
+@Accessors(fluent = true, chain = true)
+@ToString
 public final class BufferConfiguration implements Configuration<BufferConfiguration> {
 
     @JsonProperty(required = true)
@@ -59,9 +64,6 @@ public final class BufferConfiguration implements Configuration<BufferConfigurat
     @JsonProperty(required = true)
     private int directMemoryCacheAlignment;
 
-    @JsonIgnore
-    private boolean validated;
-
     public static final BufferConfiguration DEFAULT = new BufferConfiguration();
 
     static {
@@ -76,97 +78,6 @@ public final class BufferConfiguration implements Configuration<BufferConfigurat
         DEFAULT.normalCacheSize = 64;
         DEFAULT.useCacheForAllThreads = true;
         DEFAULT.directMemoryCacheAlignment = 0;
-        DEFAULT.validated = true;
-    }
-
-    public BufferConfiguration setPreferDirect(boolean preferDirect) {
-        this.preferDirect = preferDirect;
-        return this;
-    }
-
-    public boolean preferDirect() {
-        assertValidated();
-        return preferDirect;
-    }
-
-    public BufferConfiguration setHeapArena(int heapArena) {
-        this.heapArena = heapArena;
-        return this;
-    }
-
-    public int heapArena() {
-        assertValidated();
-        return heapArena;
-    }
-
-    public BufferConfiguration setDirectArena(int directArena) {
-        this.directArena = directArena;
-        return this;
-    }
-
-    public int directArena() {
-        assertValidated();
-        return directArena;
-    }
-
-    public BufferConfiguration setPageSize(int pageSize) {
-        this.pageSize = pageSize;
-        return this;
-    }
-
-    public int pageSize() {
-        assertValidated();
-        return pageSize;
-    }
-
-    public BufferConfiguration setMaxOrder(int maxOrder) {
-        this.maxOrder = maxOrder;
-        return this;
-    }
-
-    public int maxOrder() {
-        assertValidated();
-        return maxOrder;
-    }
-
-    public BufferConfiguration setSmallCacheSize(int smallCacheSize) {
-        this.smallCacheSize = smallCacheSize;
-        return this;
-    }
-
-    public int smallCacheSize() {
-        assertValidated();
-        return smallCacheSize;
-    }
-
-    public BufferConfiguration setNormalCacheSize(int normalCacheSize) {
-        this.normalCacheSize = normalCacheSize;
-        return this;
-    }
-
-    public int normalCacheSize() {
-        assertValidated();
-        return normalCacheSize;
-    }
-
-    public BufferConfiguration setUseCacheForAllThreads(boolean useCacheForAllThreads) {
-        this.useCacheForAllThreads = useCacheForAllThreads;
-        return this;
-    }
-
-    public boolean useCacheForAllThreads() {
-        assertValidated();
-        return useCacheForAllThreads;
-    }
-
-    public BufferConfiguration setDirectMemoryCacheAlignment(int directMemoryCacheAlignment) {
-        this.directMemoryCacheAlignment = directMemoryCacheAlignment;
-        return this;
-    }
-
-    public int directMemoryCacheAlignment() {
-        assertValidated();
-        return directMemoryCacheAlignment;
     }
 
     @Override
@@ -178,12 +89,6 @@ public final class BufferConfiguration implements Configuration<BufferConfigurat
         checkPositive(smallCacheSize, "Small Cache Size");
         checkPositive(normalCacheSize, "Normal Cache Size");
         checkZeroOrPositive(directMemoryCacheAlignment, "Direct Memory Cache Alignment");
-        validated = true;
         return this;
-    }
-
-    @Override
-    public boolean validated() {
-        return validated;
     }
 }
