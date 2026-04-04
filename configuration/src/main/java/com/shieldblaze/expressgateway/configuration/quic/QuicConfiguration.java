@@ -21,6 +21,7 @@ import com.fasterxml.jackson.annotation.JsonIgnore;
 import com.fasterxml.jackson.annotation.JsonProperty;
 import com.shieldblaze.expressgateway.common.utils.NumberUtil;
 import com.shieldblaze.expressgateway.configuration.Configuration;
+import lombok.ToString;
 
 /**
  * Configuration for QUIC transport parameters (RFC 9000).
@@ -32,6 +33,7 @@ import com.shieldblaze.expressgateway.configuration.Configuration;
  * <p>QUIC transport parameters are advertised during the handshake (RFC 9000 Section 18)
  * and constrain the peer's behavior for the lifetime of the connection.</p>
  */
+@ToString(exclude = "validated")
 public final class QuicConfiguration implements Configuration<QuicConfiguration> {
 
     /**

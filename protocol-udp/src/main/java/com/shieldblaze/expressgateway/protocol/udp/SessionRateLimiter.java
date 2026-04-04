@@ -17,8 +17,7 @@
  */
 package com.shieldblaze.expressgateway.protocol.udp;
 
-import org.apache.logging.log4j.LogManager;
-import org.apache.logging.log4j.Logger;
+import lombok.extern.log4j.Log4j2;
 
 import java.net.InetAddress;
 import java.util.concurrent.ConcurrentHashMap;
@@ -41,9 +40,8 @@ import java.util.concurrent.atomic.LongAdder;
  *       map growth under diverse source traffic.</li>
  * </ul></p>
  */
+@Log4j2
 final class SessionRateLimiter {
-
-    private static final Logger logger = LogManager.getLogger(SessionRateLimiter.class);
 
     /**
      * Rate limiter configuration.
@@ -76,16 +74,17 @@ final class SessionRateLimiter {
 
     /**
      * Per-source token bucket state. Uses a single AtomicLong to store tokens
-     * (scaled by TOKEN_SCALE for sub-packet precision) and a volatile long for
-     * the last refill timestamp in nanoseconds.
+     * (scaled by TOKEN_SCALE for sub-packet precision) and an AtomicLong for
+     * the last refill timestamp in nanoseconds (CAS-protected to prevent
+     * double-crediting when multiple threads refill concurrently).
      */
     private static final class Bucket {
         private final AtomicLong tokens;
-        private volatile long lastRefillNanos;
+        private final AtomicLong lastRefillNanos;
 
         Bucket(long initialTokens) {
             this.tokens = new AtomicLong(initialTokens * TOKEN_SCALE);
-            this.lastRefillNanos = System.nanoTime();
+            this.lastRefillNanos = new AtomicLong(System.nanoTime());
         }
     }
 
@@ -139,21 +138,27 @@ final class SessionRateLimiter {
 
     /**
      * Lazily refill tokens based on elapsed time since last refill.
+     * Uses CAS on lastRefillNanos to prevent double-crediting when
+     * multiple threads refill the same bucket concurrently.
      */
     private void refill(Bucket bucket) {
+        long lastRefill = bucket.lastRefillNanos.get();
         long now = System.nanoTime();
-        long elapsed = now - bucket.lastRefillNanos;
+        long elapsed = now - lastRefill;
         if (elapsed <= 0) {
             return;
         }
 
-        // Calculate new tokens: (elapsed_ns / 1_000_000_000) * packetsPerSecond * TOKEN_SCALE
-        // Rearranged to avoid overflow: (elapsed * packetsPerSecond * TOKEN_SCALE) / 1_000_000_000
-        // Further split to prevent overflow for large elapsed values:
-        long newTokens = (elapsed * config.packetsPerSecond() / 1_000_000_000L) * TOKEN_SCALE;
+        // Calculate new tokens using millisecond precision to handle sub-second refills
+        // without overflow: (elapsed_ms * pps / 1000) * TOKEN_SCALE.
+        long elapsedMs = elapsed / 1_000_000L;
+        long newTokens = (elapsedMs * config.packetsPerSecond() / 1_000L) * TOKEN_SCALE;
 
         if (newTokens > 0) {
-            bucket.lastRefillNanos = now;
+            // CAS the timestamp first -- only the winner adds tokens, preventing double-credit.
+            if (!bucket.lastRefillNanos.compareAndSet(lastRefill, now)) {
+                return;
+            }
             long maxTokens = config.burstSize() * TOKEN_SCALE;
             // CAS loop to add tokens without exceeding capacity
             while (true) {
@@ -179,7 +184,7 @@ final class SessionRateLimiter {
         var it = buckets.entrySet().iterator();
         while (it.hasNext()) {
             var entry = it.next();
-            if (now - entry.getValue().lastRefillNanos > staleThresholdNanos) {
+            if (now - entry.getValue().lastRefillNanos.get() > staleThresholdNanos) {
                 it.remove();
                 evicted++;
             }

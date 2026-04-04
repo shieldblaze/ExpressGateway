@@ -23,8 +23,7 @@ import io.netty.channel.Channel;
 import io.netty.channel.ChannelDuplexHandler;
 import io.netty.channel.ChannelHandlerContext;
 import io.netty.channel.ChannelPromise;
-import org.apache.logging.log4j.LogManager;
-import org.apache.logging.log4j.Logger;
+import lombok.extern.log4j.Log4j2;
 
 import java.net.Inet4Address;
 import java.net.Inet6Address;
@@ -65,9 +64,8 @@ import java.util.Objects;
  * <p>Reference: <a href="https://www.haproxy.org/download/2.9/doc/proxy-protocol.txt">
  * PROXY Protocol Specification</a></p>
  */
+@Log4j2
 public final class ProxyProtocolEncoder extends ChannelDuplexHandler {
-
-    private static final Logger logger = LogManager.getLogger(ProxyProtocolEncoder.class);
 
     /**
      * PROXY protocol v2 binary signature (12 bytes)

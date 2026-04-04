@@ -17,9 +17,9 @@
  */
 package com.shieldblaze.expressgateway.servicediscovery.server;
 
+import lombok.RequiredArgsConstructor;
+import lombok.extern.slf4j.Slf4j;
 import org.apache.curator.x.discovery.ServiceDiscovery;
-import org.apache.logging.log4j.LogManager;
-import org.apache.logging.log4j.Logger;
 import org.springframework.scheduling.annotation.EnableScheduling;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Component;
@@ -32,28 +32,25 @@ import org.springframework.stereotype.Component;
  * <p>This ensures that nodes whose TTL has expired (no heartbeat received
  * within the TTL window) are automatically cleaned up from the service registry.</p>
  */
+@Slf4j
 @Component
 @EnableScheduling
+@RequiredArgsConstructor
 public final class TtlEvictionScheduler {
-
-    private static final Logger logger = LogManager.getLogger(TtlEvictionScheduler.class);
 
     private final RegistrationStore registrationStore;
     private final ServiceDiscovery<Node> serviceDiscovery;
 
-    public TtlEvictionScheduler(RegistrationStore registrationStore,
-                                ServiceDiscovery<Node> serviceDiscovery) {
-        this.registrationStore = registrationStore;
-        this.serviceDiscovery = serviceDiscovery;
-    }
-
     /**
      * Evict expired entries every 10 seconds.
+     *
+     * <p>For each expired entry, we attempt to unregister from ZooKeeper first.
+     * Only entries that were successfully unregistered (or where the ZK entry was
+     * already gone) are evicted from the local store to avoid orphaned ZK entries.</p>
      */
     @Scheduled(fixedRate = 10_000)
     public void evictExpired() {
         try {
-            // Get expired entries before evicting (so we can unregister from ZK)
             var expired = registrationStore.getAll().stream()
                     .filter(RegistrationEntry::isExpired)
                     .toList();
@@ -62,22 +59,36 @@ public final class TtlEvictionScheduler {
                 return;
             }
 
+            int evicted = 0;
             for (var entry : expired) {
+                boolean zkCleanedUp = false;
                 try {
                     serviceDiscovery.unregisterService(Handler.instance(entry.node()));
-                    logger.info("Unregistered expired node from ZooKeeper: {}", entry.node().id());
+                    zkCleanedUp = true;
+                    log.info("Unregistered expired node from ZooKeeper: {}", entry.node().id());
                 } catch (Exception ex) {
-                    logger.warn("Failed to unregister expired node {} from ZooKeeper: {}",
-                            entry.node().id(), ex.getMessage());
+                    // If the ZK node is already gone (e.g., session expired), treat as success
+                    String msg = ex.getMessage();
+                    if (msg != null && (msg.contains("NoNode") || msg.contains("not found"))) {
+                        zkCleanedUp = true;
+                        log.debug("Expired node {} already removed from ZooKeeper", entry.node().id());
+                    } else {
+                        log.warn("Failed to unregister expired node {} from ZooKeeper, will retry: {}",
+                                entry.node().id(), msg);
+                    }
+                }
+
+                if (zkCleanedUp) {
+                    registrationStore.deregister(entry.node().id());
+                    evicted++;
                 }
             }
 
-            int evicted = registrationStore.evictExpired();
             if (evicted > 0) {
-                logger.info("Evicted {} expired registration(s)", evicted);
+                log.info("Evicted {} expired registration(s)", evicted);
             }
         } catch (Exception ex) {
-            logger.error("Error during TTL eviction", ex);
+            log.error("Error during TTL eviction", ex);
         }
     }
 }

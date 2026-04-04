@@ -23,8 +23,7 @@ import com.shieldblaze.expressgateway.common.zookeeper.CertificateManager;
 import com.shieldblaze.expressgateway.common.zookeeper.Curator;
 import com.shieldblaze.expressgateway.concurrent.GlobalExecutors;
 import com.shieldblaze.expressgateway.servicediscovery.client.ServiceDiscoveryClient;
-import org.apache.logging.log4j.LogManager;
-import org.apache.logging.log4j.Logger;
+import lombok.extern.slf4j.Slf4j;
 
 import java.io.File;
 import java.nio.file.Path;
@@ -45,8 +44,8 @@ import static com.shieldblaze.expressgateway.common.utils.SystemPropertyUtil.get
  * <p>Startup metrics are collected for each component and a health check runs after
  * initialization to verify all subsystems are ready before the gateway advertises itself.</p>
  */
+@Slf4j
 public final class Bootstrap {
-    private static final Logger logger = LogManager.getLogger(Bootstrap.class);
 
     /**
      * Timeout in seconds for graceful shutdown. After this period, any
@@ -103,7 +102,7 @@ public final class Bootstrap {
                             | |                                                          __/ |
                             |_|                                                         |___/\s""".indent(1));
 
-        logger.info("Starting ShieldBlaze ExpressGateway v0.1-a");
+        log.info("Starting ShieldBlaze ExpressGateway v0.1-a");
 
         STARTUP_METRICS.markStartupBegin();
 
@@ -117,8 +116,10 @@ public final class Bootstrap {
         STARTUP_METRICS.timeComponent("startup-health-check", () -> {
             StartupHealthCheck.Result result = StartupHealthCheck.runChecks();
             if (!result.healthy()) {
+                log.error("Startup health check failures: {}", result.failed());
                 throw new IllegalStateException("Startup health checks failed: " + result.failed());
             }
+            log.info("All startup health checks passed: {}", result.passed());
         });
 
         STARTUP_METRICS.markStartupComplete();
@@ -139,18 +140,18 @@ public final class Bootstrap {
      */
     private static void installShutdownHook() {
         Runtime.getRuntime().addShutdownHook(Thread.ofVirtual().unstarted(() -> {
-            logger.info("Initiating graceful shutdown...");
+            log.info("Initiating graceful shutdown...");
 
             // Step 1: Deregister from service discovery first so upstream
             // load balancers stop sending new traffic immediately.
             try {
                 if (ExpressGateway.getInstance() != null &&
                         ExpressGateway.getInstance().runningMode() == ExpressGateway.RunningMode.REPLICA) {
-                    logger.info("Deregistering from service discovery");
+                    log.info("Deregistering from service discovery");
                     ServiceDiscoveryClient.deregister();
                 }
             } catch (Exception ex) {
-                logger.warn("Failed to deregister from service discovery during shutdown", ex);
+                log.warn("Failed to deregister from service discovery during shutdown", ex);
             }
 
             // Step 2: Execute registered shutdown actions in parallel using virtual threads.
@@ -160,7 +161,7 @@ public final class Bootstrap {
                     try {
                         action.run();
                     } catch (Exception ex) {
-                        logger.warn("Shutdown action failed", ex);
+                        log.warn("Shutdown action failed", ex);
                     } finally {
                         latch.countDown();
                     }
@@ -171,11 +172,11 @@ public final class Bootstrap {
             try {
                 boolean drained = latch.await(GRACEFUL_SHUTDOWN_TIMEOUT_SECONDS, TimeUnit.SECONDS);
                 if (!drained) {
-                    logger.warn("Graceful shutdown timed out after {}s; some connections may have been forcibly closed",
+                    log.warn("Graceful shutdown timed out after {}s; some connections may have been forcibly closed",
                             GRACEFUL_SHUTDOWN_TIMEOUT_SECONDS);
                 }
             } catch (InterruptedException e) {
-                logger.warn("Shutdown hook interrupted while waiting for drain", e);
+                log.warn("Shutdown hook interrupted while waiting for drain", e);
                 Thread.currentThread().interrupt();
             }
 
@@ -185,23 +186,23 @@ public final class Bootstrap {
                     Curator.getInstance().close();
                 }
             } catch (Exception ex) {
-                logger.warn("Failed to close Curator/ZooKeeper connection during shutdown", ex);
+                log.warn("Failed to close Curator/ZooKeeper connection during shutdown", ex);
             }
 
             // Step 5: Shutdown executor pools last (after all work is drained)
             GlobalExecutors.INSTANCE.shutdownAll();
 
-            logger.info("Graceful shutdown complete");
+            log.info("Graceful shutdown complete");
         }));
     }
 
     private static void loadApplicationFile() throws Exception {
         try {
             String configurationDirectory = getPropertyOrEnv("CONFIGURATION_DIRECTORY", "/etc/expressgateway/conf.d");
-            logger.info("Configuration directory: {}", configurationDirectory);
+            log.info("Configuration directory: {}", configurationDirectory);
 
             Path configurationFile = Path.of(configurationDirectory + File.separator + getPropertyOrEnv("CONFIGURATION_FILE_NAME", "configuration.json"));
-            logger.info("Loading ExpressGateway Configuration file: {}", configurationFile.toAbsolutePath());
+            log.info("Loading ExpressGateway Configuration file: {}", configurationFile.toAbsolutePath());
 
             STARTUP_METRICS.timeComponent("configuration-load", () -> {
                 ObjectMapper objectMapper = new ObjectMapper();
@@ -209,13 +210,13 @@ public final class Bootstrap {
                 ExpressGateway.setInstance(expressGateway);
             });
 
-            logger.info("[CONFIGURATION] RunningMode: {}", ExpressGateway.getInstance().runningMode());
-            logger.info("[CONFIGURATION] ClusterID: {}", ExpressGateway.getInstance().clusterID());
-            logger.info("[CONFIGURATION] Environment: {}", ExpressGateway.getInstance().environment());
-            logger.info("[CONFIGURATION] Rest-API: {}", ExpressGateway.getInstance().restApi());
-            logger.info("[CONFIGURATION] ZooKeeper: {}", ExpressGateway.getInstance().zooKeeper());
-            logger.info("[CONFIGURATION] ServiceDiscovery: {}", ExpressGateway.getInstance().serviceDiscovery());
-            logger.info("[CONFIGURATION] LoadBalancerTLS: {}", ExpressGateway.getInstance().loadBalancerTLS());
+            log.info("[CONFIGURATION] RunningMode: {}", ExpressGateway.getInstance().runningMode());
+            log.info("[CONFIGURATION] ClusterID: {}", ExpressGateway.getInstance().clusterID());
+            log.info("[CONFIGURATION] Environment: {}", ExpressGateway.getInstance().environment());
+            log.info("[CONFIGURATION] Rest-API: {}", ExpressGateway.getInstance().restApi());
+            log.info("[CONFIGURATION] ZooKeeper: {}", ExpressGateway.getInstance().zooKeeper());
+            log.info("[CONFIGURATION] ServiceDiscovery: {}", ExpressGateway.getInstance().serviceDiscovery());
+            log.info("[CONFIGURATION] LoadBalancerTLS: {}", ExpressGateway.getInstance().loadBalancerTLS());
 
             // Only initialize Curator when running in REPLICA mode (ZooKeeper required)
             if (ExpressGateway.getInstance().runningMode() == ExpressGateway.RunningMode.REPLICA) {
@@ -231,17 +232,48 @@ public final class Bootstrap {
 
                 STARTUP_METRICS.timeComponent("service-discovery-register", ServiceDiscoveryClient::register);
             } else {
-                logger.info("Skipping ZooKeeper/Curator initialization in STANDALONE mode");
+                log.info("Skipping ZooKeeper/Curator initialization in STANDALONE mode");
             }
 
         } catch (Exception ex) {
-            logger.error("Failed to Bootstrap", ex);
+            log.error("Failed to Bootstrap", ex);
             throw ex;
         }
     }
 
+    /**
+     * Programmatic shutdown that executes all registered shutdown actions,
+     * then shuts down executor pools. Unlike the JVM shutdown hook, this
+     * method blocks until all actions complete or the timeout elapses.
+     */
     public static void shutdown() {
-        // Explicitly shut down executor pools
+        log.info("Programmatic shutdown requested");
+
+        // Execute registered shutdown actions in parallel using virtual threads
+        CountDownLatch latch = new CountDownLatch(SHUTDOWN_ACTIONS.size());
+        for (Runnable action : SHUTDOWN_ACTIONS) {
+            Thread.ofVirtual().name("expressgateway-shutdown-action").start(() -> {
+                try {
+                    action.run();
+                } catch (Exception ex) {
+                    log.warn("Shutdown action failed", ex);
+                } finally {
+                    latch.countDown();
+                }
+            });
+        }
+
+        try {
+            boolean drained = latch.await(GRACEFUL_SHUTDOWN_TIMEOUT_SECONDS, TimeUnit.SECONDS);
+            if (!drained) {
+                log.warn("Programmatic shutdown timed out after {}s", GRACEFUL_SHUTDOWN_TIMEOUT_SECONDS);
+            }
+        } catch (InterruptedException e) {
+            log.warn("Programmatic shutdown interrupted while waiting for drain", e);
+            Thread.currentThread().interrupt();
+        }
+
         GlobalExecutors.INSTANCE.shutdownAll();
+        log.info("Programmatic shutdown complete");
     }
 }

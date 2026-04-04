@@ -21,6 +21,7 @@ import com.google.gson.JsonObject;
 import com.shieldblaze.expressgateway.backend.cluster.Cluster;
 import com.shieldblaze.expressgateway.backend.events.node.NodeOfflineTask;
 import com.shieldblaze.expressgateway.backend.events.node.NodeOnlineTask;
+import com.shieldblaze.expressgateway.backend.exceptions.NodeNotFoundException;
 import com.shieldblaze.expressgateway.backend.exceptions.TooManyConnectionsException;
 import com.shieldblaze.expressgateway.common.annotation.NonNull;
 import com.shieldblaze.expressgateway.common.utils.MathUtil;
@@ -28,8 +29,7 @@ import com.shieldblaze.expressgateway.common.utils.NumberUtil;
 import com.shieldblaze.expressgateway.configuration.healthcheck.CircuitBreakerConfiguration;
 import com.shieldblaze.expressgateway.healthcheck.Health;
 import com.shieldblaze.expressgateway.healthcheck.HealthCheck;
-import org.apache.logging.log4j.LogManager;
-import org.apache.logging.log4j.Logger;
+import lombok.extern.log4j.Log4j2;
 
 import io.netty.channel.ChannelFuture;
 
@@ -37,9 +37,7 @@ import java.io.Closeable;
 import java.net.InetSocketAddress;
 import java.util.ArrayList;
 import java.util.List;
-import java.util.Queue;
 import java.util.UUID;
-import java.util.concurrent.ConcurrentLinkedQueue;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicLong;
@@ -49,9 +47,8 @@ import java.util.concurrent.atomic.AtomicLong;
  *
  * Use {@link NodeBuilder} to build {@link Node} Instance.
  */
+@Log4j2
 public final class Node implements Comparable<Node>, Closeable {
-
-    private static final Logger logger = LogManager.getLogger(Node.class);
 
     /**
      * Unique identifier of the Node
@@ -59,16 +56,17 @@ public final class Node implements Comparable<Node>, Closeable {
     private final String ID = UUID.randomUUID().toString();
 
     /**
-     * Active Connections Queue
+     * Active Connections list. All access is guarded by {@code synchronized(this)} in
+     * addConnection/removeConnection/drainConnections, so a plain ArrayList is used
+     * instead of ConcurrentLinkedQueue to avoid its per-element node allocation overhead
+     * and O(n) size() traversal.
      */
-    private final Queue<Connection> activeConnections = new ConcurrentLinkedQueue<>();
+    private final List<Connection> activeConnections = new ArrayList<>();
 
     /**
      * CM-04: O(1) counter tracking the number of items in {@link #activeConnections}.
-     * ConcurrentLinkedQueue.size() is O(n) — it traverses the entire linked list on every call.
-     * At 10K+ connections per node, this becomes a measurable CPU drain on every load-balancing
-     * decision, health-check poll, and metrics scrape. An AtomicInteger provides O(1) reads
-     * with minimal contention via CAS.
+     * An AtomicInteger provides O(1) reads with minimal contention via CAS for callers
+     * that read the count outside of the synchronized block (e.g., load balancing decisions).
      */
     private final AtomicInteger connectionCount = new AtomicInteger(0);
 
@@ -309,15 +307,17 @@ public final class Node implements Comparable<Node>, Closeable {
     }
 
     /**
-     * Get load factor of this {@link Node}
+     * Get load factor of this {@link Node} as a percentage of active connections
+     * relative to {@link #maxConnections()}.
+     *
+     * @return load percentage (0.0 if no active connections)
      */
     public float load() {
-        // If number of active connections is 0 (zero) or max connections is -1 (negative one)
-        // then return 0 (zero) because we cannot get the percentage.
-        if (activeConnection() == 0 || maxConnections == -1) {
+        int active = activeConnection();
+        if (active == 0) {
             return 0;
         }
-        return MathUtil.percentage(activeConnection(), maxConnections);
+        return MathUtil.percentage(active, maxConnections);
     }
 
     /**
@@ -424,7 +424,7 @@ public final class Node implements Comparable<Node>, Closeable {
                 if (goawayFuture != null) {
                     goawayFuture.addListener(future -> {
                         if (!future.isSuccess()) {
-                            logger.warn("Failed to send GOAWAY to {}: {}",
+                            log.warn("Failed to send GOAWAY to {}: {}",
                                     connection, future.cause() != null ? future.cause().getMessage() : "unknown");
                             // GOAWAY send failed — close immediately, no point waiting.
                             connection.close();
@@ -490,15 +490,22 @@ public final class Node implements Comparable<Node>, Closeable {
     @Override
     public void close() {
         try {
-            logger.info("Closing Node: {} from Cluster: {}", this, cluster);
+            log.info("Closing Node: {} from Cluster: {}", this, cluster);
 
             state(State.OFFLINE);
             drainConnections();
-            cluster.removeNode(this);
 
-            logger.info("Successfully closed Node: {} from Cluster: {}", this, cluster);
+            try {
+                cluster.removeNode(this);
+            } catch (NodeNotFoundException e) {
+                // Node was already removed from the cluster (e.g., Cluster.close()
+                // iterates nodes and calls node.close() which calls removeNode).
+                log.debug("Node already removed from cluster during close: {}", this);
+            }
+
+            log.info("Successfully closed Node: {} from Cluster: {}", this, cluster);
         } catch (Exception ex) {
-            logger.error("Failed to close Node: {} from Cluster: {}", this, cluster);
+            log.error("Failed to close Node: {} from Cluster: {}", this, cluster);
             throw ex;
         }
     }

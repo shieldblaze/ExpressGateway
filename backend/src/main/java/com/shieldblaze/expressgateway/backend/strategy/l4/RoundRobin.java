@@ -59,7 +59,7 @@ public final class RoundRobin extends L4Balance {
 
         var onlineNodes = cluster.onlineNodes();
         if (onlineNodes.isEmpty()) {
-            throw new NoNodeAvailableException();
+            throw NoNodeAvailableException.INSTANCE;
         }
         int index = roundRobinIndexGenerator.next();
         node = onlineNodes.get(Math.floorMod(index, onlineNodes.size()));

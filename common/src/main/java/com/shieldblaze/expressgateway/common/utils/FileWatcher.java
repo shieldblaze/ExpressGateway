@@ -17,8 +17,7 @@
  */
 package com.shieldblaze.expressgateway.common.utils;
 
-import org.apache.logging.log4j.LogManager;
-import org.apache.logging.log4j.Logger;
+import lombok.extern.slf4j.Slf4j;
 
 import java.io.Closeable;
 import java.io.IOException;
@@ -53,9 +52,8 @@ import java.util.function.Consumer;
  *
  * <p>Thread-safe: callbacks can be registered/unregistered from any thread.</p>
  */
+@Slf4j
 public final class FileWatcher implements Closeable {
-
-    private static final Logger logger = LogManager.getLogger(FileWatcher.class);
 
     private final WatchService watchService;
     private final Map<Path, Set<Consumer<Path>>> callbacks = new ConcurrentHashMap<>();
@@ -93,7 +91,7 @@ public final class FileWatcher implements Closeable {
         if (!watchKeys.containsKey(dir)) {
             WatchKey key = dir.register(watchService, StandardWatchEventKinds.ENTRY_MODIFY);
             watchKeys.put(dir, key);
-            logger.info("FileWatcher: registered directory {} for monitoring", dir);
+            log.info("FileWatcher: registered directory {} for monitoring", dir);
         }
     }
 
@@ -108,7 +106,7 @@ public final class FileWatcher implements Closeable {
         watchThread = new Thread(this::watchLoop, "file-watcher");
         watchThread.setDaemon(true);
         watchThread.start();
-        logger.info("FileWatcher started");
+        log.info("FileWatcher started");
     }
 
     private void watchLoop() {
@@ -134,26 +132,26 @@ public final class FileWatcher implements Closeable {
 
                     Set<Consumer<Path>> fileCallbacks = callbacks.get(fullPath);
                     if (fileCallbacks != null) {
-                        logger.info("FileWatcher: detected change in {}", fullPath);
+                        log.info("FileWatcher: detected change in {}", fullPath);
 
                         for (Consumer<Path> callback : fileCallbacks) {
                             try {
                                 callback.accept(fullPath);
                             } catch (Exception ex) {
-                                logger.error("FileWatcher: callback failed for {}", fullPath, ex);
+                                log.error("FileWatcher: callback failed for {}", fullPath, ex);
                             }
                         }
                     }
                 }
 
                 if (!key.reset()) {
-                    logger.warn("FileWatcher: watch key invalidated, some files may no longer be monitored");
+                    log.warn("FileWatcher: watch key invalidated, some files may no longer be monitored");
                 }
             } catch (InterruptedException e) {
                 Thread.currentThread().interrupt();
                 break;
             } catch (Exception ex) {
-                logger.error("FileWatcher: error in watch loop", ex);
+                log.error("FileWatcher: error in watch loop", ex);
             }
         }
     }
@@ -177,6 +175,6 @@ public final class FileWatcher implements Closeable {
             key.cancel();
         }
         watchService.close();
-        logger.info("FileWatcher stopped");
+        log.info("FileWatcher stopped");
     }
 }

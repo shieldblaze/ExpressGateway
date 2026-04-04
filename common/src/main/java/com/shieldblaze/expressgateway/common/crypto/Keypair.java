@@ -17,6 +17,8 @@
  */
 package com.shieldblaze.expressgateway.common.crypto;
 
+import lombok.AccessLevel;
+import lombok.NoArgsConstructor;
 import org.bouncycastle.asn1.pkcs.PrivateKeyInfo;
 import org.bouncycastle.jce.provider.BouncyCastleProvider;
 import org.bouncycastle.openssl.PEMKeyPair;
@@ -28,29 +30,38 @@ import java.io.StringReader;
 import java.security.PrivateKey;
 import java.security.Security;
 
+/**
+ * Parses PEM-encoded private keys using BouncyCastle.
+ * Supports PKCS#1 (RSA/EC key pairs) and PKCS#8 (standalone private keys).
+ */
+@NoArgsConstructor(access = AccessLevel.PRIVATE)
 public final class Keypair {
+
+    private static final JcaPEMKeyConverter CONVERTER;
 
     static {
         Security.addProvider(new BouncyCastleProvider());
-    }
-
-    private Keypair() {
-        // Prevent outside initialization
+        CONVERTER = new JcaPEMKeyConverter().setProvider("BC");
     }
 
     public static PrivateKey parse(String privateKeyString) throws IOException {
-        PEMParser pemParser = new PEMParser(new StringReader(privateKeyString));
-        Object object = pemParser.readObject();
+        try (PEMParser pemParser = new PEMParser(new StringReader(privateKeyString))) {
+            Object object = pemParser.readObject();
 
-        if (object instanceof PEMKeyPair pemKeyPair) {
-            JcaPEMKeyConverter converter = new JcaPEMKeyConverter().setProvider("BC");
-            return converter.getKeyPair(pemKeyPair).getPrivate();
-        }
-        if (object instanceof PrivateKeyInfo privateKeyInfo) {
-            JcaPEMKeyConverter converter = new JcaPEMKeyConverter().setProvider("BC");
-            return converter.getPrivateKey(privateKeyInfo);
-        }
+            PrivateKey key;
+            if (object instanceof PEMKeyPair pemKeyPair) {
+                key = CONVERTER.getKeyPair(pemKeyPair).getPrivate();
+            } else if (object instanceof PrivateKeyInfo privateKeyInfo) {
+                key = CONVERTER.getPrivateKey(privateKeyInfo);
+            } else {
+                throw new IllegalArgumentException("Unknown Private Key type: " +
+                        (object != null ? object.getClass().getSimpleName() : "null"));
+            }
 
-        throw new IllegalArgumentException("Unknown Private Key: " + object);
+            if ("DSA".equalsIgnoreCase(key.getAlgorithm())) {
+                throw new IllegalArgumentException("DSA keys are not supported; use RSA or EC keys");
+            }
+            return key;
+        }
     }
 }

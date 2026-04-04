@@ -17,12 +17,18 @@
  */
 package com.shieldblaze.expressgateway.common.algo.roundrobin;
 
+import lombok.Getter;
+import lombok.experimental.Accessors;
+
 import java.util.Collection;
 import java.util.concurrent.atomic.AtomicInteger;
 
 public class RoundRobinIndexGenerator {
 
     private final AtomicInteger atomicInteger = new AtomicInteger(-1);
+
+    @Getter
+    @Accessors(fluent = true)
     private final AtomicInteger maxIndex;
 
     public RoundRobinIndexGenerator(Collection<?> collection) {
@@ -34,20 +40,23 @@ public class RoundRobinIndexGenerator {
     }
 
     public int next() {
+        int max = maxIndex.get();
+        if (max == 0) {
+            return -1;
+        }
+
         int currentIndex;
         int nextIndex;
-
         do {
             currentIndex = atomicInteger.get();
             nextIndex = currentIndex < Integer.MAX_VALUE ? currentIndex + 1 : 0;
         } while (!atomicInteger.compareAndSet(currentIndex, nextIndex));
 
-        int index = maxIndex.get();
-        return index == 0 ? -1 : nextIndex % index;
+        return nextIndex % max;
     }
 
     public void incMaxIndex() {
-        maxIndex.addAndGet(1);
+        maxIndex.incrementAndGet();
         atomicInteger.set(-1);
     }
 
@@ -59,9 +68,5 @@ public class RoundRobinIndexGenerator {
     public void setMaxIndex(int maxIndex) {
         this.maxIndex.set(maxIndex);
         atomicInteger.set(-1);
-    }
-
-    public AtomicInteger maxIndex() {
-        return maxIndex;
     }
 }

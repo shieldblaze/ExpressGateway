@@ -100,23 +100,53 @@ public final class ConnectionTimeoutHandler extends ChannelDuplexHandler {
     }
 
     @Override
+    public void handlerAdded(ChannelHandlerContext ctx) throws Exception {
+        // Schedule here in addition to channelActive to handle the case where this
+        // handler is added to a pipeline that is already active (e.g. backend connection
+        // pipeline assembled after connect). handlerAdded fires in both cases.
+        if (ctx.channel().isActive()) {
+            scheduleIdleCheck(ctx);
+        }
+    }
+
+    @Override
     public void channelActive(ChannelHandlerContext ctx) throws Exception {
+        scheduleIdleCheck(ctx);
+        super.channelActive(ctx);
+    }
+
+    private void scheduleIdleCheck(ChannelHandlerContext ctx) {
+        if (scheduledFuture != null) {
+            return; // Already scheduled (handlerAdded + channelActive both fired)
+        }
         // CM-F2: Schedule the idle check on the channel's EventLoop. This runs on the
         // same thread as channelRead/write, so no cross-thread synchronization is needed.
-        // The EventLoop's task queue handles cancellation on channel close automatically,
-        // but we still cancel explicitly in channelInactive for deterministic cleanup.
+        // Check interval is capped: at least 250ms (avoid busy-loop on very short timeouts)
+        // and at most half the timeout duration (detect idle within one timeout period).
+        long checkIntervalMs = Math.max(250, TimeUnit.NANOSECONDS.toMillis(timeoutNanos) / 2);
         scheduledFuture = ctx.channel().eventLoop().scheduleAtFixedRate(
-                () -> checkIdleTimeout(ctx), 500, 500, TimeUnit.MILLISECONDS);
-        super.channelActive(ctx);
+                () -> checkIdleTimeout(ctx), checkIntervalMs, checkIntervalMs, TimeUnit.MILLISECONDS);
     }
 
     @Override
     public void channelInactive(ChannelHandlerContext ctx) throws Exception {
+        cancelScheduledCheck();
+        super.channelInactive(ctx);
+    }
+
+    @Override
+    public void handlerRemoved(ChannelHandlerContext ctx) throws Exception {
+        // Defense-in-depth: cancel the timer if the handler is removed from the
+        // pipeline before channelInactive fires (e.g. pipeline reconfiguration).
+        cancelScheduledCheck();
+        super.handlerRemoved(ctx);
+    }
+
+    private void cancelScheduledCheck() {
         if (scheduledFuture != null) {
             scheduledFuture.cancel(false);
             scheduledFuture = null;
         }
-        super.channelInactive(ctx);
     }
 
     @Override

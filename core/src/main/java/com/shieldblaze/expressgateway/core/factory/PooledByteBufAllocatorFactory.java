@@ -20,13 +20,22 @@ package com.shieldblaze.expressgateway.core.factory;
 import com.shieldblaze.expressgateway.common.annotation.NonNull;
 import com.shieldblaze.expressgateway.configuration.buffer.BufferConfiguration;
 import io.netty.buffer.PooledByteBufAllocator;
+import lombok.Getter;
+import lombok.experimental.Accessors;
 
 /**
- * This class provides configured {@link PooledByteBufAllocator} instance
+ * This class provides configured {@link PooledByteBufAllocator} instance.
+ *
+ * <p>Uses Netty's pooled allocator with arena-based memory management for
+ * high-throughput buffer allocation with minimal contention. The configuration
+ * controls direct vs heap preference, arena counts, page sizes, and thread-local
+ * caching behavior.</p>
  */
+@Getter
+@Accessors(fluent = true)
 public final class PooledByteBufAllocatorFactory {
 
-    private final PooledByteBufAllocator pooledByteBufAllocator;
+    private final PooledByteBufAllocator instance;
 
     /**
      * Create a new {@link PooledByteBufAllocatorFactory} instance
@@ -35,7 +44,7 @@ public final class PooledByteBufAllocatorFactory {
      */
     @NonNull
     public PooledByteBufAllocatorFactory(BufferConfiguration bufferConfiguration) {
-        pooledByteBufAllocator = new PooledByteBufAllocator(
+        instance = new PooledByteBufAllocator(
                 bufferConfiguration.preferDirect(),
                 bufferConfiguration.heapArena(),
                 bufferConfiguration.directArena(),
@@ -46,12 +55,5 @@ public final class PooledByteBufAllocatorFactory {
                 bufferConfiguration.useCacheForAllThreads(),
                 bufferConfiguration.directMemoryCacheAlignment()
         );
-    }
-
-    /**
-     * Get instance of {@link PooledByteBufAllocator}
-     */
-    public PooledByteBufAllocator instance() {
-        return pooledByteBufAllocator;
     }
 }

@@ -24,8 +24,7 @@ import com.fasterxml.jackson.datatype.jsr310.JavaTimeModule;
 import com.shieldblaze.expressgateway.controlplane.kvstore.KVEntry;
 import com.shieldblaze.expressgateway.controlplane.kvstore.KVStore;
 import com.shieldblaze.expressgateway.controlplane.kvstore.KVStoreException;
-import org.apache.logging.log4j.LogManager;
-import org.apache.logging.log4j.Logger;
+import lombok.extern.log4j.Log4j2;
 
 import java.io.IOException;
 import java.time.Instant;
@@ -53,9 +52,9 @@ import java.util.concurrent.atomic.AtomicLong;
  *   <li>Data plane nodes call {@link #entriesSince(long)} to fetch only changes since their last known revision</li>
  * </ol>
  */
+@Log4j2
 public final class ChangeJournal {
 
-    private static final Logger logger = LogManager.getLogger(ChangeJournal.class);
     private static final ObjectMapper MAPPER = new ObjectMapper();
 
     static {
@@ -123,13 +122,13 @@ public final class ChangeJournal {
                 JournalEntry journalEntry = MAPPER.readValue(entry.value(), JournalEntry.class);
                 cache.put(rev, journalEntry);
             } catch (NumberFormatException e) {
-                logger.warn("Skipping non-numeric journal key: {}", key);
+                log.warn("Skipping non-numeric journal key: {}", key);
             } catch (IOException e) {
-                logger.error("Failed to deserialize journal entry at key={} during startup", key, e);
+                log.error("Failed to deserialize journal entry at key={} during startup", key, e);
             }
         }
         this.currentRevision = new AtomicLong(maxRevision);
-        logger.info("ChangeJournal initialized at basePath={}, currentRevision={}, cachedEntries={}",
+        log.info("ChangeJournal initialized at basePath={}, currentRevision={}, cachedEntries={}",
                 basePath, maxRevision, cache.size());
     }
 
@@ -175,7 +174,7 @@ public final class ChangeJournal {
         currentRevision.set(newRevision);
         cache.put(newRevision, entry);
 
-        logger.debug("Appended journal entry: revision={}, mutations={}", newRevision, mutations.size());
+        log.debug("Appended journal entry: revision={}, mutations={}", newRevision, mutations.size());
         return newRevision;
     }
 
@@ -214,7 +213,7 @@ public final class ChangeJournal {
                 }
             } catch (IOException e) {
                 String key = kvEntry.key();
-                logger.error("Failed to deserialize journal entry at key={}", key, e);
+                log.error("Failed to deserialize journal entry at key={}", key, e);
             }
         }
 
@@ -261,11 +260,11 @@ public final class ChangeJournal {
                     removed++;
                 }
             } catch (NumberFormatException e) {
-                logger.warn("Skipping non-numeric journal key during compaction: {}", key);
+                log.warn("Skipping non-numeric journal key during compaction: {}", key);
             }
         }
 
-        logger.info("Compacted journal: removed {} entries up to revision {}", removed, upToRevision);
+        log.info("Compacted journal: removed {} entries up to revision {}", removed, upToRevision);
     }
 
     private String entryKey(long revision) {

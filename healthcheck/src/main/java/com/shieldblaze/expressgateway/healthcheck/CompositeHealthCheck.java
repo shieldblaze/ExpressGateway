@@ -17,8 +17,7 @@
  */
 package com.shieldblaze.expressgateway.healthcheck;
 
-import org.apache.logging.log4j.LogManager;
-import org.apache.logging.log4j.Logger;
+import lombok.extern.slf4j.Slf4j;
 
 import java.net.InetSocketAddress;
 import java.time.Duration;
@@ -39,9 +38,8 @@ import java.util.concurrent.TimeUnit;
  * <p>This enables patterns like "TCP connect + HTTP health endpoint" to
  * ensure both connectivity and application health.</p>
  */
+@Slf4j
 public final class CompositeHealthCheck extends HealthCheck {
-
-    private static final Logger logger = LogManager.getLogger(CompositeHealthCheck.class);
 
     private final List<HealthCheck> components;
     private final long perCheckTimeoutMs;
@@ -98,7 +96,7 @@ public final class CompositeHealthCheck extends HealthCheck {
                         allPassed = false;
                     }
                 } catch (Exception e) {
-                    logger.debug("Composite health check component {} failed: {}",
+                    log.debug("Composite health check component {} failed: {}",
                             components.get(i).socketAddress(), e.getMessage());
                     allPassed = false;
                 }

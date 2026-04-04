@@ -21,6 +21,7 @@ import com.fasterxml.jackson.annotation.JsonIgnore;
 import com.fasterxml.jackson.annotation.JsonProperty;
 import com.shieldblaze.expressgateway.common.utils.NumberUtil;
 import com.shieldblaze.expressgateway.configuration.Configuration;
+import lombok.ToString;
 
 /**
  * Configuration for per-node circuit breaker.
@@ -34,6 +35,7 @@ import com.shieldblaze.expressgateway.configuration.Configuration;
  *   HALF_OPEN --(any failure)-----------------------------> OPEN
  * </pre>
  */
+@ToString(exclude = "validated")
 public final class CircuitBreakerConfiguration implements Configuration<CircuitBreakerConfiguration> {
 
     @JsonProperty

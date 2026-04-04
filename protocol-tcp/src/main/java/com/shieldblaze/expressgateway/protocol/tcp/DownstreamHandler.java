@@ -20,18 +20,20 @@ package com.shieldblaze.expressgateway.protocol.tcp;
 import com.shieldblaze.expressgateway.backend.Node;
 import com.shieldblaze.expressgateway.core.handlers.ConnectionTimeoutHandler;
 import io.netty.buffer.ByteBuf;
+import io.netty.buffer.Unpooled;
 import io.netty.channel.Channel;
 import io.netty.channel.ChannelHandlerContext;
 import io.netty.channel.ChannelInboundHandlerAdapter;
 import io.netty.channel.ChannelOption;
-import org.apache.logging.log4j.LogManager;
-import org.apache.logging.log4j.Logger;
+import io.netty.channel.socket.ChannelInputShutdownEvent;
+import io.netty.channel.socket.SocketChannel;
+import io.netty.util.ReferenceCountUtil;
+import lombok.extern.log4j.Log4j2;
 
 import java.net.InetSocketAddress;
 
+@Log4j2
 final class DownstreamHandler extends ChannelInboundHandlerAdapter {
-
-    private static final Logger logger = LogManager.getLogger(DownstreamHandler.class);
 
     private final Channel upstream;
     private final Node node;
@@ -81,7 +83,7 @@ final class DownstreamHandler extends ChannelInboundHandlerAdapter {
         if (upstream.isActive()) {
             upstream.write(msg);
         } else {
-            io.netty.util.ReferenceCountUtil.release(msg);
+            ReferenceCountUtil.release(msg);
             return;
         }
 
@@ -109,13 +111,17 @@ final class DownstreamHandler extends ChannelInboundHandlerAdapter {
     @Override
     public void userEventTriggered(ChannelHandlerContext ctx, Object evt) throws Exception {
         if (evt instanceof ConnectionTimeoutHandler.State) {
-            logger.info("Backend idle timeout detected for upstream {}, closing connections",
+            log.info("Backend idle timeout detected for upstream {}, closing connections",
                     upstreamAddress.getAddress().getHostAddress() + ':' + upstreamAddress.getPort());
             closeAll(ctx);
-        } else if (evt instanceof io.netty.channel.socket.ChannelInputShutdownEvent) {
+        } else if (evt instanceof ChannelInputShutdownEvent) {
             // RFC 9293 Sec 3.6: Backend sent FIN (half-close). Relay to client.
+            // Flush any pending data to the client before shutting down output to
+            // ensure all data written before the FIN arrived is delivered.
             if (upstream.isActive()) {
-                ((io.netty.channel.socket.SocketChannel) upstream).shutdownOutput();
+                upstream.writeAndFlush(Unpooled.EMPTY_BUFFER).addListener(future ->
+                    ((SocketChannel) upstream).shutdownOutput()
+                );
             }
         } else {
             super.userEventTriggered(ctx, evt);
@@ -131,8 +137,8 @@ final class DownstreamHandler extends ChannelInboundHandlerAdapter {
             return; // LOW-24: Prevent double-close
         }
 
-        if (logger.isInfoEnabled()) {
-            logger.info("Closing Upstream {} and Downstream {} Channel",
+        if (log.isInfoEnabled()) {
+            log.info("Closing Upstream {} and Downstream {} Channel",
                     upstreamAddress.getAddress().getHostAddress() + ':' + upstreamAddress.getPort(),
                     node.socketAddress().getAddress().getHostAddress() + ':' + node.socketAddress().getPort());
         }
@@ -151,7 +157,7 @@ final class DownstreamHandler extends ChannelInboundHandlerAdapter {
 
     @Override
     public void exceptionCaught(ChannelHandlerContext ctx, Throwable cause) {
-        logger.error("Caught Error at Downstream Handler", cause);
+        log.error("Caught Error at Downstream Handler", cause);
 
         // MED-13: Propagate RST from backend to client via SO_LINGER(0).
         // Connection reset is detected as an IOException in exceptionCaught,
@@ -162,7 +168,7 @@ final class DownstreamHandler extends ChannelInboundHandlerAdapter {
                 try {
                     upstream.config().setOption(ChannelOption.SO_LINGER, 0);
                 } catch (Exception e) {
-                    logger.debug("Failed to set SO_LINGER(0) for RST propagation", e);
+                    log.debug("Failed to set SO_LINGER(0) for RST propagation", e);
                 }
             }
         }

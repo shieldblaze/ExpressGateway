@@ -18,14 +18,14 @@
 
 package com.shieldblaze.expressgateway.common.utils;
 
+import lombok.AccessLevel;
+import lombok.NoArgsConstructor;
+
 import java.util.Collection;
 import java.util.Objects;
 
+@NoArgsConstructor(access = AccessLevel.PRIVATE)
 public final class ListUtil {
-
-    private ListUtil() {
-        // Prevent outside initialization
-    }
 
     public static <T> T[] checkNonEmpty(T[] array, String name) {
         Objects.requireNonNull(array, name);

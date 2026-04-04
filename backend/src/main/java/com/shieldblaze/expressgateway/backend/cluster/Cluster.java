@@ -92,8 +92,7 @@ public class Cluster extends ClusterOnlineNodesWorker {
         try {
             log.info("Adding Node: {} into Cluster: {}", node, this);
 
-            boolean nodeExists = nodes.stream().anyMatch(n -> node.equals(n));
-            if (nodeExists) {
+            if (nodes.contains(node)) {
                 log.info("Duplicate node detected: {}", node);
                 return false;
             }
@@ -219,10 +218,10 @@ public class Cluster extends ClusterOnlineNodesWorker {
         try {
             log.info("Configuration Cluster: {} to use LoadBalance: {}", this, loadBalance);
 
-            // If LoadBalance has changed then unsubscribe it from the old EventStream
-            // because we will be firing events to new LoadBalance
+            // If LoadBalance has changed then unsubscribe the OLD load balance from the
+            // EventStream because we will be firing events to the new LoadBalance.
             if (this.loadBalance != null) {
-                eventStream.unsubscribe(loadBalance);
+                eventStream.unsubscribe(this.loadBalance);
             }
 
             eventStream.subscribe(loadBalance); // Subscribe this LoadBalance to the EventStream
@@ -275,17 +274,11 @@ public class Cluster extends ClusterOnlineNodesWorker {
                         new UDPHealthCheck(nodeAddress, Duration.ofSeconds(healthCheckTemplate.timeout()), healthCheckTemplate.samples());
                 case HTTP, HTTPS -> {
                     String protocol = healthCheckTemplate.protocol() == HealthCheckTemplate.Protocol.HTTP ? "http" : "https";
-                    // LOW-13: Include the configured health check path from HealthCheckTemplate
                     String path = healthCheckTemplate.path() != null ? healthCheckTemplate.path() : "/";
                     String host = protocol + "://" + nodeAddress.getAddress().getHostAddress() + ':' + nodeAddress.getPort() + path;
                     yield new HTTPHealthCheck(URI.create(host), Duration.ofSeconds(healthCheckTemplate.timeout()), healthCheckTemplate.samples());
                 }
             };
-
-            if (healthCheck == null) {
-                log.error("Failed to create HealthCheck for Node: {} in Cluster: {}", node, this);
-                throw new NullPointerException("Failed to create HealthCheck for Node");
-            }
 
             log.info("Selected HealthCheck: {} for Node: {}", healthCheck, node);
 
@@ -312,11 +305,9 @@ public class Cluster extends ClusterOnlineNodesWorker {
 
             nodes.forEach(node -> {
                 try {
-                    // Just close the node because node will take
-                    // care of removing itself from this Cluster.
+                    // node.close() handles state transition, connection draining,
+                    // and removal from this cluster (including NodeRemovedTask event).
                     node.close();
-                    eventStream.publish(new NodeRemovedTask(node));
-
                     log.info("Closed Node: {} from Cluster: {}", node, this);
                 } catch (Exception ex) {
                     log.error("Failed to close Node: {} from Cluster: {}", node, this);

@@ -55,7 +55,7 @@ public final class Random extends L4Balance {
 
         var nodes = cluster.onlineNodes();
         if (nodes.isEmpty()) {
-            throw new NoNodeAvailableException();
+            throw NoNodeAvailableException.INSTANCE;
         }
         node = nodes.get(ThreadLocalRandom.current().nextInt(nodes.size()));
 

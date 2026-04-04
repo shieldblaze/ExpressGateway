@@ -22,12 +22,12 @@ import com.google.common.cache.CacheBuilder;
 import io.netty.channel.ChannelHandler;
 import io.netty.channel.ChannelHandlerContext;
 import io.netty.channel.ChannelInboundHandlerAdapter;
-import org.apache.logging.log4j.LogManager;
-import org.apache.logging.log4j.Logger;
+import lombok.extern.slf4j.Slf4j;
 
 import java.net.InetSocketAddress;
 import java.time.Duration;
 import java.util.Objects;
+import java.util.concurrent.ExecutionException;
 import java.util.concurrent.atomic.LongAdder;
 
 /**
@@ -44,10 +44,9 @@ import java.util.concurrent.atomic.LongAdder;
  * application handlers. It is {@link ChannelHandler.Sharable} and can be
  * added to multiple channels.</p>
  */
+@Slf4j
 @ChannelHandler.Sharable
 public final class ConnectionRateLimiter extends ChannelInboundHandlerAdapter {
-
-    private static final Logger logger = LogManager.getLogger(ConnectionRateLimiter.class);
     private static final int DEFAULT_MAX_TRACKED_IPS = 100_000;
 
     private final int maxConnectionsPerWindow;
@@ -91,12 +90,20 @@ public final class ConnectionRateLimiter extends ChannelInboundHandlerAdapter {
         var remoteAddr = ctx.channel().remoteAddress();
         if (remoteAddr instanceof InetSocketAddress inet) {
             String key = inet.getAddress().getHostAddress();
-            SlidingWindowCounter counter = perIpCounters.get(key,
-                    () -> new SlidingWindowCounter(maxConnectionsPerWindow));
+            SlidingWindowCounter counter;
+            try {
+                counter = perIpCounters.get(key,
+                        () -> new SlidingWindowCounter(maxConnectionsPerWindow));
+            } catch (ExecutionException e) {
+                log.warn("Failed to create rate limit counter for {}", key, e);
+                totalRejected.increment();
+                ctx.close();
+                return;
+            }
 
             long now = System.nanoTime();
             if (!counter.tryAcquire(now, windowNanos)) {
-                logger.debug("Connection rate limit exceeded for {}", key);
+                log.debug("Connection rate limit exceeded for {}", key);
                 totalRejected.increment();
                 ctx.close();
                 return;

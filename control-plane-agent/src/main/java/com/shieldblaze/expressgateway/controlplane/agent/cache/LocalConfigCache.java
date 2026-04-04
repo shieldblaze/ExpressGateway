@@ -19,8 +19,7 @@ package com.shieldblaze.expressgateway.controlplane.agent.cache;
 
 import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.ObjectMapper;
-import org.apache.logging.log4j.LogManager;
-import org.apache.logging.log4j.Logger;
+import lombok.extern.slf4j.Slf4j;
 
 import java.io.IOException;
 import java.nio.file.Files;
@@ -68,9 +67,9 @@ import java.util.concurrent.locks.ReentrantReadWriteLock;
  *
  * <p>Thread safety: all public methods are guarded by a {@link ReadWriteLock}.</p>
  */
+@Slf4j
 public final class LocalConfigCache {
 
-    private static final Logger logger = LogManager.getLogger(LocalConfigCache.class);
     private static final ObjectMapper MAPPER = new ObjectMapper();
     private static final String MANIFEST_FILE = "manifest.json";
     private static final String MANIFEST_BACKUP = "manifest.json.bak";
@@ -105,7 +104,7 @@ public final class LocalConfigCache {
 
         // Load existing manifest
         loadManifest();
-        logger.info("LocalConfigCache initialized at {}, {} versions loaded, maxVersions={}",
+        log.info("LocalConfigCache initialized at {}, {} versions loaded, maxVersions={}",
                 cacheDir, versions.size(), maxVersions);
     }
 
@@ -155,7 +154,7 @@ public final class LocalConfigCache {
                     versions.pollFirstEntry();
                     Path oldFile = dataFilePath(oldest.getKey());
                     Files.deleteIfExists(oldFile);
-                    logger.debug("Evicted old config version: revision={}", oldest.getKey());
+                    log.debug("Evicted old config version: revision={}", oldest.getKey());
                 }
             }
 
@@ -171,7 +170,7 @@ public final class LocalConfigCache {
                 throw e;
             }
 
-            logger.info("Stored config version: revision={}, checksum={}, size={}",
+            log.info("Stored config version: revision={}, checksum={}, size={}",
                     revision, checksum, data.length);
             return version;
         } catch (IOException e) {
@@ -199,7 +198,7 @@ public final class LocalConfigCache {
 
             Path dataFile = dataFilePath(revision);
             if (!Files.exists(dataFile)) {
-                logger.warn("Data file missing for revision {}", revision);
+                log.warn("Data file missing for revision {}", revision);
                 return Optional.empty();
             }
 
@@ -207,14 +206,14 @@ public final class LocalConfigCache {
             String actualChecksum = sha256(data);
 
             if (!actualChecksum.equals(version.checksum())) {
-                logger.error("Checksum mismatch for revision {}: expected={}, actual={}",
+                log.error("Checksum mismatch for revision {}: expected={}, actual={}",
                         revision, version.checksum(), actualChecksum);
                 return Optional.empty();
             }
 
             return Optional.of(data);
         } catch (IOException e) {
-            logger.error("Failed to load config data for revision {}", revision, e);
+            log.error("Failed to load config data for revision {}", revision, e);
             return Optional.empty();
         } finally {
             lock.readLock().unlock();
@@ -284,7 +283,7 @@ public final class LocalConfigCache {
             ConfigVersion tagged = existing.withTag(tag);
             versions.put(revision, tagged);
             persistManifest();
-            logger.info("Tagged config version: revision={}, tag={}", revision, tag);
+            log.info("Tagged config version: revision={}, tag={}", revision, tag);
             return Optional.of(tagged);
         } finally {
             lock.writeLock().unlock();
@@ -338,7 +337,7 @@ public final class LocalConfigCache {
                 }
             }
             if (!corrupted.isEmpty()) {
-                logger.warn("Integrity check found {} corrupted versions: {}", corrupted.size(), corrupted);
+                log.warn("Integrity check found {} corrupted versions: {}", corrupted.size(), corrupted);
             }
             return Collections.unmodifiableList(corrupted);
         } finally {
@@ -359,7 +358,7 @@ public final class LocalConfigCache {
             for (long revision : corruptedRevisions) {
                 versions.remove(revision);
                 Files.deleteIfExists(dataFilePath(revision));
-                logger.info("Purged corrupted config version: revision={}", revision);
+                log.info("Purged corrupted config version: revision={}", revision);
             }
             persistManifest();
         } finally {
@@ -375,7 +374,7 @@ public final class LocalConfigCache {
             // Try to recover from backup
             Path backupPath = cacheDir.resolve(MANIFEST_BACKUP);
             if (Files.exists(backupPath)) {
-                logger.warn("Primary manifest missing, attempting recovery from backup: {}", backupPath);
+                log.warn("Primary manifest missing, attempting recovery from backup: {}", backupPath);
                 try {
                     List<ConfigVersion> loaded = MAPPER.readValue(backupPath.toFile(),
                             new TypeReference<List<ConfigVersion>>() {});
@@ -384,10 +383,10 @@ public final class LocalConfigCache {
                     }
                     // Restore the primary manifest from backup
                     Files.copy(backupPath, manifestPath, StandardCopyOption.REPLACE_EXISTING);
-                    logger.info("Successfully recovered manifest from backup ({} versions)", versions.size());
+                    log.info("Successfully recovered manifest from backup ({} versions)", versions.size());
                     return;
                 } catch (IOException e) {
-                    logger.error("Failed to recover manifest from backup, starting fresh", e);
+                    log.error("Failed to recover manifest from backup, starting fresh", e);
                 }
             }
             return;
@@ -399,7 +398,7 @@ public final class LocalConfigCache {
                 versions.put(v.revision(), v);
             }
         } catch (IOException e) {
-            logger.warn("Failed to load manifest from {}, attempting recovery from backup", manifestPath, e);
+            log.warn("Failed to load manifest from {}, attempting recovery from backup", manifestPath, e);
             // Attempt recovery from backup
             Path backupPath = cacheDir.resolve(MANIFEST_BACKUP);
             if (Files.exists(backupPath)) {
@@ -409,10 +408,10 @@ public final class LocalConfigCache {
                     for (ConfigVersion v : loaded) {
                         versions.put(v.revision(), v);
                     }
-                    logger.info("Recovered manifest from backup ({} versions)", versions.size());
+                    log.info("Recovered manifest from backup ({} versions)", versions.size());
                     return;
                 } catch (IOException ex) {
-                    logger.error("Failed to recover manifest from backup, starting fresh", ex);
+                    log.error("Failed to recover manifest from backup, starting fresh", ex);
                 }
             }
         }

@@ -17,6 +17,9 @@
  */
 package com.shieldblaze.expressgateway.common.utils;
 
+import lombok.AccessLevel;
+import lombok.NoArgsConstructor;
+
 /**
  * Utility to sanitize user-controlled values before logging, preventing
  * CWE-117 log injection attacks by stripping CR/LF characters.
@@ -24,10 +27,8 @@ package com.shieldblaze.expressgateway.common.utils;
  * Because this method is not modeled in CodeQL's taint-tracking summaries,
  * it acts as a taint barrier — CodeQL will not propagate taint through it.
  */
+@NoArgsConstructor(access = AccessLevel.PRIVATE)
 public final class LogSanitizer {
-
-    private LogSanitizer() {
-    }
 
     /**
      * Sanitizes a string for safe inclusion in log messages by replacing

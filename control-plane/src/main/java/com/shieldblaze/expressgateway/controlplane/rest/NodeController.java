@@ -26,6 +26,8 @@ import lombok.extern.log4j.Log4j2;
 
 import static com.shieldblaze.expressgateway.common.utils.LogSanitizer.sanitize;
 
+import org.springframework.http.HttpStatus;
+import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.DeleteMapping;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
@@ -63,59 +65,65 @@ public class NodeController {
     }
 
     @GetMapping("/{nodeId}")
-    public ApiResponse<NodeDto> getNode(@PathVariable String nodeId) {
+    public ResponseEntity<ApiResponse<NodeDto>> getNode(@PathVariable String nodeId) {
         Optional<DataPlaneNode> node = nodeRegistry.get(nodeId);
         if (node.isEmpty()) {
-            return ApiResponse.error("Node not found: " + nodeId);
+            return ResponseEntity.status(HttpStatus.NOT_FOUND)
+                    .body(ApiResponse.error("Node not found: " + nodeId));
         }
-        return ApiResponse.ok(NodeDto.from(node.get()));
+        return ResponseEntity.ok(ApiResponse.ok(NodeDto.from(node.get())));
     }
 
     @PostMapping("/{nodeId}/drain")
-    public ApiResponse<String> drainNode(@PathVariable String nodeId) {
+    public ResponseEntity<ApiResponse<String>> drainNode(@PathVariable String nodeId) {
         Optional<DataPlaneNode> node = nodeRegistry.get(nodeId);
         if (node.isEmpty()) {
-            return ApiResponse.error("Node not found: " + nodeId);
+            return ResponseEntity.status(HttpStatus.NOT_FOUND)
+                    .body(ApiResponse.error("Node not found: " + nodeId));
         }
 
         DataPlaneNode n = node.get();
         if (n.state() == DataPlaneNodeState.DISCONNECTED) {
-            return ApiResponse.error("Cannot drain a disconnected node: " + nodeId);
+            return ResponseEntity.badRequest()
+                    .body(ApiResponse.error("Cannot drain a disconnected node: " + nodeId));
         }
         if (n.state() == DataPlaneNodeState.DRAINING) {
-            return ApiResponse.ok("Node is already draining", nodeId);
+            return ResponseEntity.ok(ApiResponse.ok("Node is already draining", nodeId));
         }
 
         n.markDraining();
         log.info("Drained node via REST: {}", sanitize(nodeId));
-        return ApiResponse.ok("Node marked as draining", nodeId);
+        return ResponseEntity.ok(ApiResponse.ok("Node marked as draining", nodeId));
     }
 
     @PostMapping("/{nodeId}/undrain")
-    public ApiResponse<String> undrainNode(@PathVariable String nodeId) {
+    public ResponseEntity<ApiResponse<String>> undrainNode(@PathVariable String nodeId) {
         Optional<DataPlaneNode> node = nodeRegistry.get(nodeId);
         if (node.isEmpty()) {
-            return ApiResponse.error("Node not found: " + nodeId);
+            return ResponseEntity.status(HttpStatus.NOT_FOUND)
+                    .body(ApiResponse.error("Node not found: " + nodeId));
         }
 
         DataPlaneNode n = node.get();
         if (n.state() != DataPlaneNodeState.DRAINING) {
-            return ApiResponse.error("Node is not in DRAINING state: " + nodeId + " (current: " + n.state() + ")");
+            return ResponseEntity.badRequest()
+                    .body(ApiResponse.error("Node is not in DRAINING state: " + nodeId + " (current: " + n.state() + ")"));
         }
 
         n.markHealthy();
         log.info("Undrained node via REST: {}", sanitize(nodeId));
-        return ApiResponse.ok("Node marked as healthy", nodeId);
+        return ResponseEntity.ok(ApiResponse.ok("Node marked as healthy", nodeId));
     }
 
     @DeleteMapping("/{nodeId}")
-    public ApiResponse<String> removeNode(@PathVariable String nodeId) {
+    public ResponseEntity<ApiResponse<String>> removeNode(@PathVariable String nodeId) {
         DataPlaneNode removed = nodeRegistry.deregister(nodeId);
         if (removed == null) {
-            return ApiResponse.error("Node not found: " + nodeId);
+            return ResponseEntity.status(HttpStatus.NOT_FOUND)
+                    .body(ApiResponse.error("Node not found: " + nodeId));
         }
 
         log.info("Force-removed node via REST: {}", sanitize(nodeId));
-        return ApiResponse.ok("Node removed", nodeId);
+        return ResponseEntity.ok(ApiResponse.ok("Node removed", nodeId));
     }
 }

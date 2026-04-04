@@ -151,7 +151,17 @@ public final class QuicCidSessionMap implements Closeable {
     }
 
     private void invalidateCidLengthCache() {
-        cachedCidLengths = cidLengthCounts.keySet().stream().mapToInt(Integer::intValue).toArray();
+        // Avoid Stream API allocation: cidLengthCounts typically has 1-3 entries
+        var keys = cidLengthCounts.keySet();
+        int[] result = new int[keys.size()];
+        int i = 0;
+        for (Integer key : keys) {
+            if (i < result.length) {
+                result[i++] = key;
+            }
+        }
+        // Trim if concurrent removal shrank the keyset between size() and iteration
+        cachedCidLengths = (i == result.length) ? result : java.util.Arrays.copyOf(result, i);
     }
 
     /**
@@ -165,10 +175,11 @@ public final class QuicCidSessionMap implements Closeable {
         try {
             long now = System.nanoTime();
             long timeoutNanos = idleTimeout.toNanos();
-            int beforeSize = cidLengthCounts.size();
+            boolean[] anyEvicted = {false};
             map.entrySet().removeIf(e -> {
                 if (now - e.getValue().lastAccessNanos() > timeoutNanos) {
                     decrementCidLengthCount(e.getValue().cidLength());
+                    anyEvicted[0] = true;
                     if (logger.isDebugEnabled()) {
                         logger.debug("Evicted expired CID mapping: {}", e.getKey());
                     }
@@ -176,8 +187,10 @@ public final class QuicCidSessionMap implements Closeable {
                 }
                 return false;
             });
-            // Invalidate cache if any CID length buckets were removed during eviction
-            if (cidLengthCounts.size() != beforeSize) {
+            // Invalidate cache if any entries were evicted, since CID length bucket
+            // counts may have changed (a bucket may have been removed via
+            // decrementCidLengthCount returning null)
+            if (anyEvicted[0]) {
                 invalidateCidLengthCache();
             }
         } catch (Exception e) {

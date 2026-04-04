@@ -27,11 +27,14 @@ import io.netty.channel.epoll.Epoll;
 import io.netty.incubator.channel.uring.IOUring;
 import io.netty.util.internal.ObjectUtil;
 
+import lombok.ToString;
+
 import java.util.Objects;
 
 /**
  * Transport Configuration
  */
+@ToString(exclude = "validated")
 public final class TransportConfiguration implements Configuration<TransportConfiguration> {
 
     @JsonProperty("transportType")

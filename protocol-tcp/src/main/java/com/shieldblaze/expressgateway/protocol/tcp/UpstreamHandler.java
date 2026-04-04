@@ -24,19 +24,21 @@ import com.shieldblaze.expressgateway.backend.strategy.l4.L4Response;
 import com.shieldblaze.expressgateway.core.handlers.ConnectionTimeoutHandler;
 import com.shieldblaze.expressgateway.core.loadbalancer.L4LoadBalancer;
 import io.netty.buffer.ByteBuf;
+import io.netty.buffer.Unpooled;
 import io.netty.channel.Channel;
 import io.netty.channel.ChannelHandlerContext;
 import io.netty.channel.ChannelInboundHandlerAdapter;
+import io.netty.channel.ChannelOption;
+import io.netty.channel.socket.ChannelInputShutdownEvent;
+import io.netty.channel.socket.SocketChannel;
 import io.netty.util.ReferenceCountUtil;
-import org.apache.logging.log4j.LogManager;
-import org.apache.logging.log4j.Logger;
+import lombok.extern.log4j.Log4j2;
 
 import java.io.IOException;
 import java.net.InetSocketAddress;
 
+@Log4j2
 final class UpstreamHandler extends ChannelInboundHandlerAdapter {
-
-    private static final Logger logger = LogManager.getLogger(UpstreamHandler.class);
 
     private final L4LoadBalancer l4LoadBalancer;
     private final Bootstrapper bootstrapper;
@@ -73,7 +75,7 @@ final class UpstreamHandler extends ChannelInboundHandlerAdapter {
 
             // Close the connection since we have no node available to handle this request
             if (response == L4Response.NO_NODE) {
-                ctx.channel().close();
+                ctx.close();
                 return;
             }
 
@@ -82,18 +84,15 @@ final class UpstreamHandler extends ChannelInboundHandlerAdapter {
             try {
                 response.node().addConnection(tcpConnection);
             } catch (TooManyConnectionsException ex) {
-                logger.warn("Node {} rejected connection: too many connections", response.node().socketAddress());
+                log.warn("Node {} rejected connection: too many connections", response.node().socketAddress());
                 tcpConnection = null;
                 ctx.close();
                 return;
             }
         } catch (Exception ex) {
+            tcpConnection = null;
             ctx.close();
             throw ex;
-        } finally {
-            if (tcpConnection == null) {
-                ctx.close();
-            }
         }
     }
 
@@ -120,7 +119,7 @@ final class UpstreamHandler extends ChannelInboundHandlerAdapter {
     // HIGH-10: Use write() instead of writeAndFlush() for flush coalescing
     @Override
     public void channelRead(ChannelHandlerContext ctx, Object msg) {
-        if (tcpConnection == null || draining) {
+        if (closed || tcpConnection == null || draining) {
             ReferenceCountUtil.release(msg);
             return;
         }
@@ -158,12 +157,12 @@ final class UpstreamHandler extends ChannelInboundHandlerAdapter {
             return; // LOW-25: Prevent double-close
         }
 
-        if (logger.isInfoEnabled()) {
+        if (log.isInfoEnabled()) {
             InetSocketAddress socketAddress = (InetSocketAddress) ctx.channel().remoteAddress();
             if (tcpConnection == null || tcpConnection.socketAddress() == null) {
-                logger.info("Closing Upstream {}", socketAddress.getAddress().getHostAddress() + ':' + socketAddress.getPort());
+                log.info("Closing Upstream {}", socketAddress.getAddress().getHostAddress() + ':' + socketAddress.getPort());
             } else {
-                logger.info("Closing Upstream {} and Downstream {} Channel",
+                log.info("Closing Upstream {} and Downstream {} Channel",
                         socketAddress.getAddress().getHostAddress() + ':' + socketAddress.getPort(),
                         tcpConnection.socketAddress().getAddress().getHostAddress() + ':' + tcpConnection.socketAddress().getPort());
             }
@@ -177,7 +176,7 @@ final class UpstreamHandler extends ChannelInboundHandlerAdapter {
         // If ConnectionTimeoutHandler event is caught then close upstream and downstream channels.
         if (evt instanceof ConnectionTimeoutHandler.State) {
             closeAll(ctx);
-        } else if (evt instanceof io.netty.channel.socket.ChannelInputShutdownEvent) {
+        } else if (evt instanceof ChannelInputShutdownEvent) {
             // RFC 9293 Section 3.6: Client sent FIN (half-close). Relay to backend.
             // Flush any pending data before shutting down output to ensure the backend
             // receives all data that was written before the FIN arrived.
@@ -186,8 +185,8 @@ final class UpstreamHandler extends ChannelInboundHandlerAdapter {
                 Channel backendChannel = tcpConnection.channel();
                 if (backendChannel != null && backendChannel.isActive()) {
                     // Flush then shutdownOutput via a listener to ensure ordering
-                    backendChannel.writeAndFlush(io.netty.buffer.Unpooled.EMPTY_BUFFER).addListener(future ->
-                        ((io.netty.channel.socket.SocketChannel) backendChannel).shutdownOutput()
+                    backendChannel.writeAndFlush(Unpooled.EMPTY_BUFFER).addListener(future ->
+                        ((SocketChannel) backendChannel).shutdownOutput()
                     );
                 }
             }
@@ -207,15 +206,21 @@ final class UpstreamHandler extends ChannelInboundHandlerAdapter {
             ctx.channel().close();
         }
 
-        // Close the downstream channel if it is active
-        if (tcpConnection != null && tcpConnection.state() == Connection.State.CONNECTED_AND_ACTIVE) {
-            tcpConnection.close();
+        // Close the downstream connection. Handle both INITIALIZED (still connecting)
+        // and CONNECTED_AND_ACTIVE states. A connection in INITIALIZED state has a
+        // pending ChannelFuture; closing it cancels the connect attempt and releases
+        // any queued backlog messages.
+        if (tcpConnection != null) {
+            Connection.State state = tcpConnection.state();
+            if (state == Connection.State.CONNECTED_AND_ACTIVE || state == Connection.State.INITIALIZED) {
+                tcpConnection.close();
+            }
         }
     }
 
     @Override
     public void exceptionCaught(ChannelHandlerContext ctx, Throwable cause) {
-        logger.error("Caught Error at Upstream Handler", cause);
+        log.error("Caught Error at Upstream Handler", cause);
 
         // MED-13: RST propagation -- when the client sends a TCP RST (detected as an
         // IOException containing "reset"), propagate it to the backend by setting
@@ -224,9 +229,9 @@ final class UpstreamHandler extends ChannelInboundHandlerAdapter {
         if (cause instanceof IOException && tcpConnection != null) {
             String msg = cause.getMessage();
             if (msg != null && msg.contains("reset")) {
-                io.netty.channel.Channel backendChannel = tcpConnection.channel();
+                Channel backendChannel = tcpConnection.channel();
                 if (backendChannel != null && backendChannel.isActive()) {
-                    backendChannel.config().setOption(io.netty.channel.ChannelOption.SO_LINGER, 0);
+                    backendChannel.config().setOption(ChannelOption.SO_LINGER, 0);
                 }
             }
         }

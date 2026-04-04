@@ -231,7 +231,6 @@ public final class QuicProxyHandler extends ChannelInboundHandlerAdapter
                 session = createSession(ctx.channel(), sender, dcid, dcidLength);
                 if (session == null) {
                     // No backend available -- drop the packet.
-                    ReferenceCountUtil.safeRelease(datagramPacket);
                     return;
                 }
                 sessionMap.put(sender, session);
@@ -239,11 +238,12 @@ public final class QuicProxyHandler extends ChannelInboundHandlerAdapter
             }
 
             // Forward the raw QUIC datagram content to the backend.
-            // retain() because the DatagramPacket will be released after this method.
+            // retain() because we still need the content after the DatagramPacket is released.
             session.writeAndFlush(content.retain());
-        } catch (Exception e) {
-            ReferenceCountUtil.safeRelease(datagramPacket);
-            logger.error("Error processing QUIC proxy packet", e);
+        } finally {
+            // Always release the inbound DatagramPacket. Previously the success path
+            // never released it, causing a ByteBuf leak on every forwarded packet.
+            datagramPacket.release();
         }
     }
 

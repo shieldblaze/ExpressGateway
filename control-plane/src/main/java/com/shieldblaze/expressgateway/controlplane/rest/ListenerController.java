@@ -32,6 +32,8 @@ import lombok.extern.log4j.Log4j2;
 
 import static com.shieldblaze.expressgateway.common.utils.LogSanitizer.sanitize;
 
+import org.springframework.http.HttpStatus;
+import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.DeleteMapping;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
@@ -96,23 +98,25 @@ public class ListenerController {
     }
 
     @GetMapping("/{listenerId}")
-    public ApiResponse<ListenerDto> getListener(@PathVariable String listenerId,
+    public ResponseEntity<ApiResponse<ListenerDto>> getListener(@PathVariable String listenerId,
                                                 @RequestParam(defaultValue = "global") String scope) throws Exception {
         ConfigResourceId id = new ConfigResourceId(ConfigKind.LISTENER.name(), scope, listenerId);
         Optional<ConfigResource> resource = ConfigResourceHelper.getResource(id, kvStore);
         if (resource.isEmpty()) {
-            return ApiResponse.error("Listener not found: " + listenerId);
+            return ResponseEntity.status(HttpStatus.NOT_FOUND)
+                    .body(ApiResponse.error("Listener not found: " + listenerId));
         }
-        return ApiResponse.ok(ListenerDto.from((ListenerSpec) resource.get().spec()));
+        return ResponseEntity.ok(ApiResponse.ok(ListenerDto.from((ListenerSpec) resource.get().spec())));
     }
 
     @PutMapping("/{listenerId}")
-    public ApiResponse<String> updateListener(@PathVariable String listenerId, @RequestBody ListenerDto dto,
+    public ResponseEntity<ApiResponse<String>> updateListener(@PathVariable String listenerId, @RequestBody ListenerDto dto,
                                               @RequestParam(defaultValue = "global") String scope) throws Exception {
         ConfigResourceId id = new ConfigResourceId(ConfigKind.LISTENER.name(), scope, listenerId);
         Optional<ConfigResource> existing = ConfigResourceHelper.getResource(id, kvStore);
         if (existing.isEmpty()) {
-            return ApiResponse.error("Listener not found: " + listenerId);
+            return ResponseEntity.status(HttpStatus.NOT_FOUND)
+                    .body(ApiResponse.error("Listener not found: " + listenerId));
         }
 
         ListenerSpec spec = dto.toSpec();
@@ -122,7 +126,7 @@ public class ListenerController {
         ConfigResourceHelper.persistAndDistributeWithLeaderCheck(updated, kvStore, distributor, cluster, forwarder);
 
         log.info("Updated listener: {}", sanitize(listenerId));
-        return ApiResponse.ok("Listener updated", listenerId);
+        return ResponseEntity.ok(ApiResponse.ok("Listener updated", listenerId));
     }
 
     @DeleteMapping("/{listenerId}")

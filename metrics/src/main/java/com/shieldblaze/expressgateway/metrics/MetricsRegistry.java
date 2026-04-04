@@ -21,6 +21,7 @@ import com.google.gson.Gson;
 import com.google.gson.GsonBuilder;
 
 import java.util.Collections;
+import java.util.LinkedHashMap;
 import java.util.Map;
 import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
@@ -159,7 +160,7 @@ public final class MetricsRegistry {
      * Export all metrics as JSON.
      */
     public String exportJson() {
-        Map<String, Object> snapshot = new ConcurrentHashMap<>();
+        Map<String, Object> snapshot = new LinkedHashMap<>();
 
         Map<String, Long> counterSnapshot = counters.entrySet().stream()
                 .collect(Collectors.toMap(Map.Entry::getKey, e -> e.getValue().sum()));
@@ -172,7 +173,7 @@ public final class MetricsRegistry {
         Map<String, Map<String, Long>> histSnapshot = histograms.entrySet().stream()
                 .collect(Collectors.toMap(Map.Entry::getKey, e -> {
                     LatencyHistogram h = e.getValue();
-                    Map<String, Long> m = new ConcurrentHashMap<>();
+                    Map<String, Long> m = new LinkedHashMap<>();
                     m.put("count", h.count());
                     m.put("sum", h.sum());
                     m.put("min", h.min());
@@ -188,7 +189,7 @@ public final class MetricsRegistry {
         Map<String, Map<String, Object>> meterSnapshot = throughputMeters.entrySet().stream()
                 .collect(Collectors.toMap(Map.Entry::getKey, e -> {
                     ThroughputMeter m = e.getValue();
-                    Map<String, Object> data = new ConcurrentHashMap<>();
+                    Map<String, Object> data = new LinkedHashMap<>();
                     data.put("total", m.totalCount());
                     data.put("rate", m.rate());
                     return data;
@@ -198,7 +199,35 @@ public final class MetricsRegistry {
         return GSON.toJson(snapshot);
     }
 
+    /**
+     * Register standard JVM system metrics (CPU, memory, GC).
+     * Call once during bootstrap to populate system gauges.
+     */
+    public void registerSystemMetrics() {
+        Runtime runtime = Runtime.getRuntime();
+        gauge("system.cpu.available_processors", runtime::availableProcessors);
+        gauge("system.memory.total", runtime::totalMemory);
+        gauge("system.memory.free", runtime::freeMemory);
+        gauge("system.memory.max", runtime::maxMemory);
+        gauge("system.memory.used", () -> runtime.totalMemory() - runtime.freeMemory());
+
+        // GC metrics from MXBeans
+        for (java.lang.management.GarbageCollectorMXBean gc :
+                java.lang.management.ManagementFactory.getGarbageCollectorMXBeans()) {
+            String safeName = prometheusName(gc.getName());
+            gauge("system.gc." + safeName + ".count", gc::getCollectionCount);
+            gauge("system.gc." + safeName + ".time_ms", gc::getCollectionTime);
+        }
+
+        // Thread metrics
+        java.lang.management.ThreadMXBean threadMx =
+                java.lang.management.ManagementFactory.getThreadMXBean();
+        gauge("system.threads.count", threadMx::getThreadCount);
+        gauge("system.threads.daemon", threadMx::getDaemonThreadCount);
+        gauge("system.threads.peak", threadMx::getPeakThreadCount);
+    }
+
     private static String prometheusName(String name) {
-        return name.replace('.', '_').replace('-', '_');
+        return name.replace('.', '_').replace('-', '_').replace(' ', '_');
     }
 }

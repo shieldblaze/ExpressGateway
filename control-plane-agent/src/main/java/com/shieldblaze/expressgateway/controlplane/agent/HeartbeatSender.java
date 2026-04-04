@@ -24,7 +24,7 @@ import com.shieldblaze.expressgateway.controlplane.v1.NodeRegistrationServiceGrp
 import com.shieldblaze.expressgateway.controlplane.v1.ReconnectDirective;
 import com.shieldblaze.expressgateway.controlplane.v1.Timestamp;
 import io.grpc.stub.StreamObserver;
-import lombok.extern.log4j.Log4j2;
+import lombok.extern.slf4j.Slf4j;
 
 import java.io.Closeable;
 import java.util.List;
@@ -45,7 +45,7 @@ import java.util.function.IntSupplier;
  * on the scheduler thread while gRPC callbacks fire on the gRPC executor thread;
  * gRPC's StreamObserver is NOT thread-safe.</p>
  */
-@Log4j2
+@Slf4j
 public final class HeartbeatSender implements Closeable {
 
     /**
@@ -89,11 +89,9 @@ public final class HeartbeatSender implements Closeable {
         this.nodeId = nodeId;
         this.sessionToken = sessionToken;
         this.intervalMs = intervalMs;
-        this.scheduler = Executors.newSingleThreadScheduledExecutor(r -> {
-            Thread t = new Thread(r, "cp-agent-heartbeat");
-            t.setDaemon(true);
-            return t;
-        });
+        this.scheduler = Executors.newSingleThreadScheduledExecutor(Thread.ofVirtual()
+                .name("cp-agent-heartbeat")
+                .factory());
     }
 
     /**

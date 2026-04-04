@@ -18,6 +18,8 @@
 package com.shieldblaze.expressgateway.common.utils;
 
 import io.netty.handler.ssl.util.InsecureTrustManagerFactory;
+import lombok.AccessLevel;
+import lombok.NoArgsConstructor;
 
 import javax.net.ssl.SSLContext;
 import javax.net.ssl.TrustManagerFactory;
@@ -25,6 +27,7 @@ import java.net.http.HttpClient;
 import java.security.KeyStore;
 import java.security.SecureRandom;
 
+@NoArgsConstructor(access = AccessLevel.PRIVATE)
 public final class HttpClientUtils {
 
     /**
@@ -59,11 +62,8 @@ public final class HttpClientUtils {
                     .sslContext(insecureSslContext)
                     .build();
         } catch (Exception ex) {
-            throw new RuntimeException(ex);
+            throw new ExceptionInInitializerError(ex);
         }
     }
 
-    private HttpClientUtils() {
-        // Prevent outside initialization
-    }
 }

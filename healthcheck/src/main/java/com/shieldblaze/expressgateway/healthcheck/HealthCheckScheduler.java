@@ -17,8 +17,7 @@
  */
 package com.shieldblaze.expressgateway.healthcheck;
 
-import org.apache.logging.log4j.LogManager;
-import org.apache.logging.log4j.Logger;
+import lombok.extern.slf4j.Slf4j;
 
 import java.time.Duration;
 import java.util.List;
@@ -28,6 +27,7 @@ import java.util.concurrent.Executors;
 import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicLong;
 
 /**
  * Scheduler that runs health checks using virtual threads with per-backend
@@ -37,16 +37,24 @@ import java.util.concurrent.atomic.AtomicBoolean;
  * I/O multiplexing, allowing thousands of concurrent health checks without
  * platform thread exhaustion.</p>
  */
+@Slf4j
 public final class HealthCheckScheduler implements AutoCloseable {
 
-    private static final Logger logger = LogManager.getLogger(HealthCheckScheduler.class);
-
     /**
-     * A registered health check with its configured interval.
+     * A registered health check with its configured interval and last-run tracking.
      */
     public record ScheduledCheck(HealthCheck healthCheck, Duration interval) {}
 
-    private final CopyOnWriteArrayList<ScheduledCheck> checks = new CopyOnWriteArrayList<>();
+    private static final class TrackedCheck {
+        final ScheduledCheck scheduled;
+        final AtomicLong lastRunNanos = new AtomicLong(0);
+
+        TrackedCheck(ScheduledCheck scheduled) {
+            this.scheduled = scheduled;
+        }
+    }
+
+    private final CopyOnWriteArrayList<TrackedCheck> checks = new CopyOnWriteArrayList<>();
     private final ScheduledExecutorService scheduler;
     private final ExecutorService virtualThreadExecutor;
     private final AtomicBoolean running = new AtomicBoolean(false);
@@ -64,14 +72,14 @@ public final class HealthCheckScheduler implements AutoCloseable {
      * Register a health check with its interval.
      */
     public void register(HealthCheck healthCheck, Duration interval) {
-        checks.add(new ScheduledCheck(healthCheck, interval));
+        checks.add(new TrackedCheck(new ScheduledCheck(healthCheck, interval)));
     }
 
     /**
      * Unregister a health check.
      */
     public void unregister(HealthCheck healthCheck) {
-        checks.removeIf(sc -> sc.healthCheck() == healthCheck);
+        checks.removeIf(tc -> tc.scheduled.healthCheck() == healthCheck);
     }
 
     /**
@@ -81,19 +89,19 @@ public final class HealthCheckScheduler implements AutoCloseable {
     public void start() {
         if (running.compareAndSet(false, true)) {
             scheduler.scheduleAtFixedRate(this::tick, 0, 1, TimeUnit.SECONDS);
-            logger.info("Health check scheduler started with {} checks", checks.size());
+            log.info("Health check scheduler started with {} checks", checks.size());
         }
     }
 
     /**
-     * Stop the scheduler.
+     * Stop the scheduler. Uses shutdownNow() to cancel pending tick tasks.
      */
     @Override
     public void close() {
         if (running.compareAndSet(true, false)) {
-            scheduler.shutdown();
+            scheduler.shutdownNow();
             virtualThreadExecutor.close();
-            logger.info("Health check scheduler stopped");
+            log.info("Health check scheduler stopped");
         }
     }
 
@@ -101,7 +109,14 @@ public final class HealthCheckScheduler implements AutoCloseable {
      * Returns the registered checks.
      */
     public List<ScheduledCheck> checks() {
-        return List.copyOf(checks);
+        return checks.stream().map(tc -> tc.scheduled).toList();
+    }
+
+    /**
+     * Returns the number of registered health checks.
+     */
+    public int size() {
+        return checks.size();
     }
 
     /**
@@ -112,18 +127,30 @@ public final class HealthCheckScheduler implements AutoCloseable {
     }
 
     private void tick() {
-        for (ScheduledCheck sc : checks) {
+        long now = System.nanoTime();
+        for (TrackedCheck tc : checks) {
+            long intervalNanos = tc.scheduled.interval().toNanos();
+            long lastRun = tc.lastRunNanos.get();
 
-            // Simple scheduling: submit if enough time has passed
-            // In production this would track last-run timestamps per check
-            virtualThreadExecutor.submit(() -> {
-                try {
-                    sc.healthCheck().run();
-                } catch (Exception e) {
-                    logger.warn("Health check failed for {}: {}",
-                            sc.healthCheck().socketAddress(), e.getMessage());
+            // Apply exponential backoff: use backoff delay instead of the normal interval
+            // when the health check has consecutive failures.
+            long backoffMs = tc.scheduled.healthCheck().currentBackoffMs();
+            long effectiveIntervalNanos = backoffMs > 0
+                    ? Math.max(intervalNanos, backoffMs * 1_000_000L)
+                    : intervalNanos;
+
+            if (now - lastRun >= effectiveIntervalNanos) {
+                if (tc.lastRunNanos.compareAndSet(lastRun, now)) {
+                    virtualThreadExecutor.submit(() -> {
+                        try {
+                            tc.scheduled.healthCheck().run();
+                        } catch (Exception e) {
+                            log.warn("Health check failed for {}: {}",
+                                    tc.scheduled.healthCheck().socketAddress(), e.getMessage());
+                        }
+                    });
                 }
-            });
+            }
         }
     }
 }

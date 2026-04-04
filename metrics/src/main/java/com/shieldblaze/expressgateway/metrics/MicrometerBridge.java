@@ -120,7 +120,18 @@ public final class MicrometerBridge {
                 .description("Total rate limit rejections")
                 .register(registry);
 
-        // --- Dynamic per-key metrics (MultiGauge) ---
+        // --- Connection pool ---
+        FunctionCounter.builder(PREFIX + ".pool.hits", m, StandardEdgeNetworkMetricRecorder::poolHits)
+                .description("Total connection pool hits")
+                .register(registry);
+        FunctionCounter.builder(PREFIX + ".pool.misses", m, StandardEdgeNetworkMetricRecorder::poolMisses)
+                .description("Total connection pool misses")
+                .register(registry);
+
+        // --- Retries ---
+        FunctionCounter.builder(PREFIX + ".retries.total", m, StandardEdgeNetworkMetricRecorder::retryAttempts)
+                .description("Total retry attempts")
+                .register(registry);
 
         // --- Dynamic per-key metrics (MultiGauge) ---
         statusCodeGauge = MultiGauge.builder(PREFIX + ".http.status")
@@ -138,6 +149,13 @@ public final class MicrometerBridge {
         healthStatusGauge = MultiGauge.builder(PREFIX + ".backend.health")
                 .description("Backend health status (1=healthy, 0=unhealthy)")
                 .register(registry);
+    }
+
+    /**
+     * Returns true if a registry is currently bound.
+     */
+    public static boolean isBound() {
+        return boundRegistry != null;
     }
 
     /**
@@ -169,7 +187,22 @@ public final class MicrometerBridge {
         }
         backendLatencyGauge.register(latencyRows, true);
 
-        h2StreamGauge.register(List.of(), true);
-        healthStatusGauge.register(List.of(), true);
+        // --- Per-backend connection counts (proxy for H2 stream visibility) ---
+        List<MultiGauge.Row<?>> connRows = new ArrayList<>();
+        for (Map.Entry<String, Integer> entry : m.backendConnections().entrySet()) {
+            connRows.add(MultiGauge.Row.of(Tags.of("backend", entry.getKey()), entry.getValue()));
+        }
+        h2StreamGauge.register(connRows, true);
+
+        // --- Pool hit/miss ratio as a health signal ---
+        List<MultiGauge.Row<?>> healthRows = new ArrayList<>();
+        long hits = m.poolHits();
+        long misses = m.poolMisses();
+        long total = hits + misses;
+        if (total > 0) {
+            healthRows.add(MultiGauge.Row.of(Tags.of("metric", "pool_hit_ratio"),
+                    (long) (100.0 * hits / total)));
+        }
+        healthStatusGauge.register(healthRows, true);
     }
 }

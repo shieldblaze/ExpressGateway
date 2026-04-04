@@ -17,11 +17,12 @@
  */
 package com.shieldblaze.expressgateway.controlplane.agent;
 
-import java.util.Random;
+import java.util.concurrent.ThreadLocalRandom;
+import java.util.concurrent.atomic.AtomicInteger;
 
 /**
  * Exponential backoff with jitter for reconnection to Control Plane.
- * Base=1s, max=30s, full jitter.
+ * Base=1s, max=30s, full jitter. Thread-safe.
  *
  * <p>Full jitter uniformly distributes the delay in {@code [0, min(maxDelay, base * 2^attempt))},
  * which spreads reconnecting clients across time and avoids thundering-herd problems when many
@@ -31,8 +32,7 @@ public final class ReconnectStrategy {
 
     private final long baseDelayMs;
     private final long maxDelayMs;
-    private final Random random;
-    private int attempt;
+    private final AtomicInteger attempt = new AtomicInteger(0);
 
     public ReconnectStrategy() {
         this(1000, 30_000);
@@ -50,8 +50,6 @@ public final class ReconnectStrategy {
         }
         this.baseDelayMs = baseDelayMs;
         this.maxDelayMs = maxDelayMs;
-        this.random = new Random();
-        this.attempt = 0;
     }
 
     /**
@@ -64,16 +62,16 @@ public final class ReconnectStrategy {
      * @return delay in milliseconds, always >= 0
      */
     public long nextDelay() {
-        long exponentialDelay = Math.min(maxDelayMs, baseDelayMs * (1L << Math.min(attempt, 20)));
-        attempt++;
+        int currentAttempt = attempt.getAndIncrement();
+        long exponentialDelay = Math.min(maxDelayMs, baseDelayMs * (1L << Math.min(currentAttempt, 20)));
         // Full jitter: uniform random [0, exponentialDelay)
-        return random.nextLong(Math.max(1, exponentialDelay));
+        return ThreadLocalRandom.current().nextLong(Math.max(1, exponentialDelay));
     }
 
     /**
      * Reset after successful connection.
      */
     public void reset() {
-        attempt = 0;
+        attempt.set(0);
     }
 }

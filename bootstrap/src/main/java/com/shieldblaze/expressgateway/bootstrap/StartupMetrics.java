@@ -17,8 +17,7 @@
  */
 package com.shieldblaze.expressgateway.bootstrap;
 
-import org.apache.logging.log4j.LogManager;
-import org.apache.logging.log4j.Logger;
+import lombok.extern.slf4j.Slf4j;
 
 import java.time.Duration;
 import java.util.Map;
@@ -32,9 +31,8 @@ import java.util.concurrent.ConcurrentMap;
  * <p>Metrics are logged at INFO level and can be queried programmatically for
  * health check endpoints or monitoring dashboards.</p>
  */
+@Slf4j
 public final class StartupMetrics {
-
-    private static final Logger logger = LogManager.getLogger(StartupMetrics.class);
 
     private final ConcurrentMap<String, Duration> componentTimes = new ConcurrentHashMap<>();
     private volatile long startTimeNanos;
@@ -53,9 +51,9 @@ public final class StartupMetrics {
     public void markStartupComplete() {
         readyTimeNanos = System.nanoTime();
         Duration total = timeToReady();
-        logger.info("Startup complete. Time-to-ready: {}ms", total.toMillis());
+        log.info("Startup complete. Time-to-ready: {}ms", total.toMillis());
         componentTimes.forEach((name, duration) ->
-                logger.info("  Component '{}': {}ms", name, duration.toMillis()));
+                log.info("  Component '{}': {}ms", name, duration.toMillis()));
     }
 
     /**
@@ -71,7 +69,7 @@ public final class StartupMetrics {
             task.run();
             Duration elapsed = Duration.ofNanos(System.nanoTime() - start);
             componentTimes.put(componentName, elapsed);
-            logger.info("Component '{}' initialized in {}ms", componentName, elapsed.toMillis());
+            log.info("Component '{}' initialized in {}ms", componentName, elapsed.toMillis());
         } catch (Exception ex) {
             Duration elapsed = Duration.ofNanos(System.nanoTime() - start);
             componentTimes.put(componentName + " (FAILED)", elapsed);

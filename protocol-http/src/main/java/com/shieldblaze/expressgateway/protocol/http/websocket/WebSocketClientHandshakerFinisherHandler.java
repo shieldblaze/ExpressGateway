@@ -22,12 +22,16 @@ import io.netty.channel.ChannelInboundHandlerAdapter;
 import io.netty.channel.ChannelPipeline;
 import io.netty.handler.codec.http.FullHttpResponse;
 import io.netty.handler.codec.http.websocketx.WebSocketClientHandshaker;
+import org.apache.logging.log4j.LogManager;
+import org.apache.logging.log4j.Logger;
 
 /**
  * This class completes WebSocket client handshake. Once handshake is done,
  * this handler removes itself from {@link ChannelPipeline}.
  */
 final class WebSocketClientHandshakerFinisherHandler extends ChannelInboundHandlerAdapter {
+
+    private static final Logger logger = LogManager.getLogger(WebSocketClientHandshakerFinisherHandler.class);
 
     private final WebSocketClientHandshaker handshaker;
 
@@ -37,16 +41,16 @@ final class WebSocketClientHandshakerFinisherHandler extends ChannelInboundHandl
 
     @Override
     public void channelRead(ChannelHandlerContext ctx, Object msg) {
-        System.out.println(msg);
+        logger.debug("WebSocket handshaker received: {}", msg);
 
         // If Message is FullHttpResponse and handshake is incomplete
         // then capture the FullHttpResponse and pass it to handshaker
         // to complete the handshake.
         if (msg instanceof FullHttpResponse response && !handshaker.isHandshakeComplete()) {
-            System.out.println("Completing handshake");
+            logger.debug("Completing WebSocket client handshake");
             handshaker.finishHandshake(ctx.channel(), response); // Finish the handshake
             response.release();          // Release the HttpResponse
-//            ctx.pipeline().remove(this); // Let's remove ourselves because we're done.
+            ctx.pipeline().remove(this); // Remove ourselves — handshake is done.
             return;
         }
 
@@ -55,6 +59,7 @@ final class WebSocketClientHandshakerFinisherHandler extends ChannelInboundHandl
 
     @Override
     public void userEventTriggered(ChannelHandlerContext ctx, Object evt) throws Exception {
-        System.err.println(evt);
+        logger.debug("WebSocket handshaker user event: {}", evt);
+        super.userEventTriggered(ctx, evt);
     }
 }

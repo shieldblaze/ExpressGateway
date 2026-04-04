@@ -27,9 +27,6 @@ import com.shieldblaze.expressgateway.configuration.quic.QuicConfiguration;
 import com.shieldblaze.expressgateway.configuration.tls.TlsClientConfiguration;
 import com.shieldblaze.expressgateway.configuration.tls.TlsServerConfiguration;
 import com.shieldblaze.expressgateway.configuration.transport.TransportConfiguration;
-import org.apache.logging.log4j.LogManager;
-import org.apache.logging.log4j.Logger;
-
 public record ConfigurationContext(BufferConfiguration bufferConfiguration,
                                    EventLoopConfiguration eventLoopConfiguration,
                                    EventStreamConfiguration eventStreamConfiguration,
@@ -40,8 +37,6 @@ public record ConfigurationContext(BufferConfiguration bufferConfiguration,
                                    TlsClientConfiguration tlsClientConfiguration,
                                    TlsServerConfiguration tlsServerConfiguration,
                                    TransportConfiguration transportConfiguration) {
-
-    private static final Logger logger = LogManager.getLogger(ConfigurationContext.class);
 
     /**
      * Default instance of {@link ConfigurationContext} with default configurations

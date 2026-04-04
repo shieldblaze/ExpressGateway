@@ -196,9 +196,10 @@ public final class NatRebindingDetector {
             return false;
         }
 
-        // Remove old address mapping before adding new one to prevent stale entries
-        addressSessionMap.remove(oldAddress);
+        // Put new mapping first to avoid a window where neither address resolves.
+        // Then remove old mapping to prevent stale entries from accumulating.
         addressSessionMap.put(newAddress, session);
+        addressSessionMap.remove(oldAddress);
 
         totalRebindings.incrementAndGet();
         if (logger.isDebugEnabled()) {

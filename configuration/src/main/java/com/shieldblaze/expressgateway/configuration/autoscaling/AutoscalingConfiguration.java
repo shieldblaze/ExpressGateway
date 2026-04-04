@@ -20,10 +20,12 @@ package com.shieldblaze.expressgateway.configuration.autoscaling;
 import com.fasterxml.jackson.annotation.JsonIgnore;
 import com.fasterxml.jackson.annotation.JsonProperty;
 import com.shieldblaze.expressgateway.configuration.Configuration;
+import lombok.ToString;
 
 import static com.shieldblaze.expressgateway.common.utils.NumberUtil.checkInRange;
 import static com.shieldblaze.expressgateway.common.utils.NumberUtil.checkPositive;
 
+@ToString(exclude = "validated")
 public final class AutoscalingConfiguration implements Configuration<AutoscalingConfiguration> {
 
     public static final AutoscalingConfiguration DEFAULT = new AutoscalingConfiguration();
@@ -37,11 +39,11 @@ public final class AutoscalingConfiguration implements Configuration<Autoscaling
 
         DEFAULT.packetsIsolateLoad = 0.70f;
         DEFAULT.packetsScaleOutLoad = 0.85f;
-        DEFAULT.maxPackets = -1;
+        DEFAULT.maxPackets = Long.MAX_VALUE;
 
         DEFAULT.bytesIsolateLoad = 0.70f;
         DEFAULT.bytesScaleOutLoad = 0.85f;
-        DEFAULT.maxBytes = -1;
+        DEFAULT.maxBytes = Long.MAX_VALUE;
 
         DEFAULT.validated = true;
     }
@@ -156,171 +158,171 @@ public final class AutoscalingConfiguration implements Configuration<Autoscaling
     private boolean validated;
 
     public float cpuScaleOutLoad() {
+        assertValidated();
         return cpuScaleOutLoad;
     }
 
-    public AutoscalingConfiguration cpuScaleOutLoad(float cpuScaleOutLoad) {
-        assertValidated();
+    public AutoscalingConfiguration setCpuScaleOutLoad(float cpuScaleOutLoad) {
         this.cpuScaleOutLoad = cpuScaleOutLoad;
         return this;
     }
 
     public float cpuIsolateLoad() {
+        assertValidated();
         return cpuIsolateLoad;
     }
 
-    public AutoscalingConfiguration cpuIsolateLoad(float cpuIsolateLoad) {
-        assertValidated();
+    public AutoscalingConfiguration setCpuIsolateLoad(float cpuIsolateLoad) {
         this.cpuIsolateLoad = cpuIsolateLoad;
         return this;
     }
 
     public float memoryScaleOutLoad() {
+        assertValidated();
         return memoryScaleOutLoad;
     }
 
-    public AutoscalingConfiguration memoryScaleOutLoad(float memoryScaleOutLoad) {
-        assertValidated();
+    public AutoscalingConfiguration setMemoryScaleOutLoad(float memoryScaleOutLoad) {
         this.memoryScaleOutLoad = memoryScaleOutLoad;
         return this;
     }
 
     public float memoryIsolateLoad() {
+        assertValidated();
         return memoryIsolateLoad;
     }
 
-    public AutoscalingConfiguration memoryIsolateLoad(float memoryIsolateLoad) {
-        assertValidated();
+    public AutoscalingConfiguration setMemoryIsolateLoad(float memoryIsolateLoad) {
         this.memoryIsolateLoad = memoryIsolateLoad;
         return this;
     }
 
     public float packetsScaleOutLoad() {
+        assertValidated();
         return packetsScaleOutLoad;
     }
 
-    public AutoscalingConfiguration packetsScaleOutLoad(float packetsScaleOutLoad) {
-        assertValidated();
+    public AutoscalingConfiguration setPacketsScaleOutLoad(float packetsScaleOutLoad) {
         this.packetsScaleOutLoad = packetsScaleOutLoad;
         return this;
     }
 
     public float packetsIsolateLoad() {
+        assertValidated();
         return packetsIsolateLoad;
     }
 
-    public AutoscalingConfiguration packetsIsolateLoad(float packetsIsolateLoad) {
-        assertValidated();
+    public AutoscalingConfiguration setPacketsIsolateLoad(float packetsIsolateLoad) {
         this.packetsIsolateLoad = packetsIsolateLoad;
         return this;
     }
 
     public long maxPackets() {
+        assertValidated();
         return maxPackets;
     }
 
-    public AutoscalingConfiguration maxPackets(long maxPackets) {
-        assertValidated();
+    public AutoscalingConfiguration setMaxPackets(long maxPackets) {
         this.maxPackets = maxPackets;
         return this;
     }
 
     public float bytesScaleOutLoad() {
+        assertValidated();
         return bytesScaleOutLoad;
     }
 
-    public AutoscalingConfiguration bytesScaleOutLoad(float bytesScaleOutLoad) {
-        assertValidated();
+    public AutoscalingConfiguration setBytesScaleOutLoad(float bytesScaleOutLoad) {
         this.bytesScaleOutLoad = bytesScaleOutLoad;
         return this;
     }
 
     public float bytesIsolateLoad() {
+        assertValidated();
         return bytesIsolateLoad;
     }
 
-    public AutoscalingConfiguration bytesIsolateLoad(float bytesIsolateLoad) {
-        assertValidated();
+    public AutoscalingConfiguration setBytesIsolateLoad(float bytesIsolateLoad) {
         this.bytesIsolateLoad = bytesIsolateLoad;
         return this;
     }
 
     public long maxBytes() {
+        assertValidated();
         return maxBytes;
     }
 
-    public AutoscalingConfiguration maxBytes(long maxBytes) {
-        assertValidated();
+    public AutoscalingConfiguration setMaxBytes(long maxBytes) {
         this.maxBytes = maxBytes;
         return this;
     }
 
     public int minServers() {
+        assertValidated();
         return minServers;
     }
 
-    public AutoscalingConfiguration minServers(int minServers) {
-        assertValidated();
+    public AutoscalingConfiguration setMinServers(int minServers) {
         this.minServers = minServers;
         return this;
     }
 
     public int maxServers() {
+        assertValidated();
         return maxServers;
     }
 
-    public AutoscalingConfiguration maxServers(int maxServers) {
-        assertValidated();
+    public AutoscalingConfiguration setMaxServers(int maxServers) {
         this.maxServers = maxServers;
         return this;
     }
 
     public int scaleOutMultiplier() {
+        assertValidated();
         return scaleOutMultiplier;
     }
 
-    public AutoscalingConfiguration scaleOutMultiplier(int scaleOutMultiplier) {
-        assertValidated();
+    public AutoscalingConfiguration setScaleOutMultiplier(int scaleOutMultiplier) {
         this.scaleOutMultiplier = scaleOutMultiplier;
         return this;
     }
 
     public int isolationWarmupTime() {
+        assertValidated();
         return isolationWarmupTime;
     }
 
-    public AutoscalingConfiguration isolationWarmupTime(int isolationWarmupTime) {
-        assertValidated();
+    public AutoscalingConfiguration setIsolationWarmupTime(int isolationWarmupTime) {
         this.isolationWarmupTime = isolationWarmupTime;
         return this;
     }
 
     public int coolDownTime() {
+        assertValidated();
         return coolDownTime;
     }
 
-    public AutoscalingConfiguration coolDownTime(int coolDownTime) {
-        assertValidated();
+    public AutoscalingConfiguration setCoolDownTime(int coolDownTime) {
         this.coolDownTime = coolDownTime;
         return this;
     }
 
     public float shutdownIfLoadUnder() {
+        assertValidated();
         return shutdownIfLoadUnder;
     }
 
-    public AutoscalingConfiguration shutdownIfLoadUnder(float shutdownIfLoadUnder) {
-        assertValidated();
+    public AutoscalingConfiguration setShutdownIfLoadUnder(float shutdownIfLoadUnder) {
         this.shutdownIfLoadUnder = shutdownIfLoadUnder;
         return this;
     }
 
     public int shutdownIfLoadUnderForSeconds() {
+        assertValidated();
         return shutdownIfLoadUnderForSeconds;
     }
 
-    public AutoscalingConfiguration shutdownIfLoadUnderForSeconds(int shutdownIfLoadUnderForSeconds) {
-        assertValidated();
+    public AutoscalingConfiguration setShutdownIfLoadUnderForSeconds(int shutdownIfLoadUnderForSeconds) {
         this.shutdownIfLoadUnderForSeconds = shutdownIfLoadUnderForSeconds;
         return this;
     }

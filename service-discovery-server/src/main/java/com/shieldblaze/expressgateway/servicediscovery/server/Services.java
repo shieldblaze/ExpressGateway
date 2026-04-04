@@ -26,6 +26,7 @@ import org.apache.curator.retry.RetryNTimes;
 import org.apache.curator.x.discovery.ServiceDiscovery;
 import org.apache.curator.x.discovery.ServiceDiscoveryBuilder;
 import org.apache.curator.x.discovery.details.JsonInstanceSerializer;
+import lombok.extern.slf4j.Slf4j;
 import org.springframework.context.annotation.Bean;
 import org.springframework.stereotype.Component;
 
@@ -34,6 +35,7 @@ import static com.shieldblaze.expressgateway.common.zookeeper.Environment.PRODUC
 import static com.shieldblaze.expressgateway.common.zookeeper.Environment.TESTING;
 import static com.shieldblaze.expressgateway.servicediscovery.server.ServiceDiscoveryServer.SERVICE_NAME;
 
+@Slf4j
 @Component
 public class Services {
 
@@ -62,18 +64,17 @@ public class Services {
     }
 
     /**
-     * Automatically detect environment.
-     * Default is: {@link Environment#TESTING}
+     * Automatically detect environment from system property or environment variable.
+     * Defaults to {@link Environment#TESTING} for unrecognized values.
      *
-     * @return {@link Environment} type
+     * @return {@link Environment} type, never null
      */
     public static Environment detectEnv() {
         String env = SystemPropertyUtil.getPropertyOrEnv("runtime.env", "test").toLowerCase();
         return switch (env) {
             case "dev", "development" -> DEVELOPMENT;
-            case "test", "quality-assurance" -> TESTING;
             case "prod", "production" -> PRODUCTION;
-            default -> null;
+            default -> TESTING;
         };
     }
 }

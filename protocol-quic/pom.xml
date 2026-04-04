@@ -70,6 +70,16 @@
             <version>${netty}</version>
             <classifier>linux-x86_64</classifier>
         </dependency>
+        <!-- JCTools lock-free collections for hot-path concurrent data structures -->
+        <dependency>
+            <groupId>org.jctools</groupId>
+            <artifactId>jctools-core</artifactId>
+        </dependency>
+        <!-- Agrona for primitive-friendly collections (avoiding Long boxing in replay detection) -->
+        <dependency>
+            <groupId>org.agrona</groupId>
+            <artifactId>agrona</artifactId>
+        </dependency>
     </dependencies>
 
     <build>

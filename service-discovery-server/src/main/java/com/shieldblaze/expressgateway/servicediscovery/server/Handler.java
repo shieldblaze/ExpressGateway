@@ -19,6 +19,9 @@ package com.shieldblaze.expressgateway.servicediscovery.server;
 
 import com.fasterxml.jackson.databind.node.ArrayNode;
 import com.fasterxml.jackson.databind.node.ObjectNode;
+import com.shieldblaze.expressgateway.common.utils.LogSanitizer;
+import lombok.RequiredArgsConstructor;
+import lombok.extern.slf4j.Slf4j;
 import org.apache.curator.x.discovery.ServiceDiscovery;
 import org.apache.curator.x.discovery.ServiceInstance;
 import org.apache.curator.x.discovery.ServiceInstanceBuilder;
@@ -26,6 +29,7 @@ import org.springframework.http.HttpStatus;
 import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.DeleteMapping;
+import org.springframework.web.bind.annotation.ExceptionHandler;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.PutMapping;
@@ -39,21 +43,15 @@ import java.util.Collection;
 import static com.shieldblaze.expressgateway.common.JacksonJson.OBJECT_MAPPER;
 import static com.shieldblaze.expressgateway.servicediscovery.server.ServiceDiscoveryServer.SERVICE_NAME;
 
+@Slf4j
 @RestController
 @RequestMapping("/api/v1/service")
+@RequiredArgsConstructor
 public class Handler {
 
     private final ServiceDiscovery<Node> serviceDiscovery;
     private final RegistrationStore registrationStore;
     private final HealthAggregator healthAggregator;
-
-    public Handler(ServiceDiscovery<Node> serviceDiscovery,
-                   RegistrationStore registrationStore,
-                   HealthAggregator healthAggregator) {
-        this.serviceDiscovery = serviceDiscovery;
-        this.registrationStore = registrationStore;
-        this.healthAggregator = healthAggregator;
-    }
 
     @PutMapping(value = "register", produces = MediaType.APPLICATION_JSON_VALUE)
     public ResponseEntity<String> register(@RequestBody Node node) throws Exception {
@@ -84,7 +82,7 @@ public class Handler {
         ObjectNode objectNode = OBJECT_MAPPER.createObjectNode();
         if (serviceInstance == null) {
             objectNode.put("Success", false);
-            objectNode.put("Error", "Instance not found: " + id);
+            objectNode.put("Error", "Instance not found: " + LogSanitizer.sanitize(id));
             return ResponseEntity.status(HttpStatus.NOT_FOUND).body(objectNode.toPrettyString());
         }
 
@@ -157,7 +155,7 @@ public class Handler {
         ObjectNode objectNode = OBJECT_MAPPER.createObjectNode();
         objectNode.put("Success", updated);
         if (!updated) {
-            objectNode.put("Error", "Node not found: " + id);
+            objectNode.put("Error", "Node not found: " + LogSanitizer.sanitize(id));
         }
 
         return ResponseEntity.status(updated ? HttpStatus.OK : HttpStatus.NOT_FOUND)
@@ -195,5 +193,23 @@ public class Handler {
         }
 
         return serviceInstanceBuilder.build();
+    }
+
+    @ExceptionHandler(IllegalArgumentException.class)
+    public ResponseEntity<String> handleValidationError(IllegalArgumentException ex) {
+        log.warn("Validation error: {}", ex.getMessage());
+        ObjectNode objectNode = OBJECT_MAPPER.createObjectNode();
+        objectNode.put("Success", false);
+        objectNode.put("Error", ex.getMessage());
+        return ResponseEntity.status(HttpStatus.BAD_REQUEST).body(objectNode.toPrettyString());
+    }
+
+    @ExceptionHandler(Exception.class)
+    public ResponseEntity<String> handleGenericError(Exception ex) {
+        log.error("Internal error in service discovery handler", ex);
+        ObjectNode objectNode = OBJECT_MAPPER.createObjectNode();
+        objectNode.put("Success", false);
+        objectNode.put("Error", "Internal server error");
+        return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR).body(objectNode.toPrettyString());
     }
 }

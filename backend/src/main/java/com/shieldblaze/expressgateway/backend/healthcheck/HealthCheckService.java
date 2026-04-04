@@ -100,6 +100,8 @@ public final class HealthCheckService implements com.shieldblaze.expressgateway.
 
     /**
      * Close this HealthCheckService and stops all running operations.
+     * Cancels all scheduled tasks and shuts down the executor, waiting
+     * up to 5 seconds for in-flight health checks to complete.
      */
     @Override
     public void close() {
@@ -107,6 +109,14 @@ public final class HealthCheckService implements com.shieldblaze.expressgateway.
         nodeMap.clear();
         if (executors != null) {
             executors.shutdown();
+            try {
+                if (!executors.awaitTermination(5, TimeUnit.SECONDS)) {
+                    executors.shutdownNow();
+                }
+            } catch (InterruptedException e) {
+                executors.shutdownNow();
+                Thread.currentThread().interrupt();
+            }
         }
     }
 }

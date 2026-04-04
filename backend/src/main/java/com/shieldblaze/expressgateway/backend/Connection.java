@@ -343,7 +343,19 @@ public abstract class Connection {
     @NonNull
     public void write(Object o) {
         if (state == State.INITIALIZED) {
-            backlogQueue.add(o);
+            ConcurrentLinkedQueue<Object> queue = backlogQueue;
+            if (queue != null) {
+                int currentSize = backlogSize.incrementAndGet();
+                int limit = effectiveBacklogLimit();
+                if (currentSize > limit) {
+                    backlogSize.decrementAndGet();
+                    ReferenceCountedUtil.silentRelease(o);
+                    throw new BacklogOverflowException("Backlog queue capacity exceeded: " + limit);
+                }
+                queue.add(o);
+            } else {
+                ReferenceCountedUtil.silentRelease(o);
+            }
         } else if (state == State.CONNECTED_AND_ACTIVE && channel != null) {
             channel.write(o);
         } else {

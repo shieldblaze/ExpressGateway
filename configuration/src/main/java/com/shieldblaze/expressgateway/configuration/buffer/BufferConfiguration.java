@@ -21,13 +21,15 @@ import com.fasterxml.jackson.annotation.JsonIgnore;
 import com.fasterxml.jackson.annotation.JsonProperty;
 import com.shieldblaze.expressgateway.configuration.Configuration;
 import io.netty.util.internal.PlatformDependent;
+import lombok.ToString;
 
 import static com.shieldblaze.expressgateway.common.utils.NumberUtil.checkPositive;
 import static com.shieldblaze.expressgateway.common.utils.NumberUtil.checkZeroOrPositive;
 
 /**
- * Configuration for {@link BufferConfiguration}
+ * Configuration for Netty buffer allocator settings.
  */
+@ToString(exclude = "validated")
 public final class BufferConfiguration implements Configuration<BufferConfiguration> {
 
     @JsonProperty(required = true)
@@ -60,21 +62,12 @@ public final class BufferConfiguration implements Configuration<BufferConfigurat
     @JsonIgnore
     private boolean validated;
 
-    /**
-     * Default instance of {@link BufferConfiguration}
-     */
     public static final BufferConfiguration DEFAULT = new BufferConfiguration();
 
     static {
         DEFAULT.preferDirect = true;
         DEFAULT.pageSize = 16_384;
         DEFAULT.maxOrder = 11;
-        // Netty's PooledByteBufAllocator default arena count formula:
-        // min(availableProcessors * 2, maxMemory / chunkSize / 2 / 3)
-        // where chunkSize = pageSize << maxOrder = 16384 << 11 = 32 MB.
-        // The original expression had an operator precedence bug: division binds
-        // tighter than shift, so "/ 16384 << 11 / 2 / 3" was parsed as
-        // "/ 16384 << (11/2/3)" = "<< 1" instead of the intended "/ (16384 << 11) / 2 / 3".
         DEFAULT.heapArena = (int) Math.max(0, Math.min((long) Runtime.getRuntime().availableProcessors() * 2,
                 Runtime.getRuntime().maxMemory() / (16384L << 11) / 2 / 3));
         DEFAULT.directArena = (int) Math.max(0, Math.min((long) Runtime.getRuntime().availableProcessors() * 2,
@@ -86,156 +79,96 @@ public final class BufferConfiguration implements Configuration<BufferConfigurat
         DEFAULT.validated = true;
     }
 
-    /**
-     * {@code true} to use direct memory else set to {@code false}
-     */
     public BufferConfiguration setPreferDirect(boolean preferDirect) {
         this.preferDirect = preferDirect;
         return this;
     }
 
-    /**
-     * {@code true} to use direct memory else set to {@code false}
-     */
     public boolean preferDirect() {
         assertValidated();
         return preferDirect;
     }
 
-    /**
-     * Heap Arena Size
-     */
     public BufferConfiguration setHeapArena(int heapArena) {
         this.heapArena = heapArena;
         return this;
     }
 
-    /**
-     * Heap Arena Size
-     */
     public int heapArena() {
         assertValidated();
         return heapArena;
     }
 
-    /**
-     * Direct Arena Size
-     */
     public BufferConfiguration setDirectArena(int directArena) {
         this.directArena = directArena;
         return this;
     }
 
-    /**
-     * Direct Arena Size
-     */
     public int directArena() {
         assertValidated();
         return directArena;
     }
 
-    /**
-     * Page Size
-     */
     public BufferConfiguration setPageSize(int pageSize) {
         this.pageSize = pageSize;
         return this;
     }
 
-    /**
-     * Page Size
-     */
     public int pageSize() {
         assertValidated();
         return pageSize;
     }
 
-    /**
-     * Max Order
-     */
     public BufferConfiguration setMaxOrder(int maxOrder) {
         this.maxOrder = maxOrder;
         return this;
     }
 
-    /**
-     * Max Order
-     */
     public int maxOrder() {
         assertValidated();
         return maxOrder;
     }
 
-    /**
-     * Small Cache Size
-     */
     public BufferConfiguration setSmallCacheSize(int smallCacheSize) {
         this.smallCacheSize = smallCacheSize;
         return this;
     }
 
-    /**
-     * Small Cache Size
-     */
     public int smallCacheSize() {
         assertValidated();
         return smallCacheSize;
     }
 
-    /**
-     * Normal Cache Size
-     */
     public BufferConfiguration setNormalCacheSize(int normalCacheSize) {
         this.normalCacheSize = normalCacheSize;
         return this;
     }
 
-    /**
-     * Normal Cache Size
-     */
     public int normalCacheSize() {
         assertValidated();
         return normalCacheSize;
     }
 
-    /**
-     * {@code true} to use Cache for all threads else set to {@code false}
-     */
     public BufferConfiguration setUseCacheForAllThreads(boolean useCacheForAllThreads) {
         this.useCacheForAllThreads = useCacheForAllThreads;
         return this;
     }
 
-    /**
-     * {@code true} to use Cache for all threads else set to {@code false}
-     */
     public boolean useCacheForAllThreads() {
         assertValidated();
         return useCacheForAllThreads;
     }
 
-    /**
-     * Direct Memory Cache Alignment
-     */
     public BufferConfiguration setDirectMemoryCacheAlignment(int directMemoryCacheAlignment) {
         this.directMemoryCacheAlignment = directMemoryCacheAlignment;
         return this;
     }
 
-    /**
-     * Direct Memory Cache Alignment
-     */
     public int directMemoryCacheAlignment() {
         assertValidated();
         return directMemoryCacheAlignment;
     }
 
-    /**
-     * Validate all parameters of this configuration
-     *
-     * @return this class instance
-     * @throws IllegalArgumentException If any value is invalid
-     */
     @Override
     public BufferConfiguration validate() {
         checkPositive(heapArena, "Heap Arena");

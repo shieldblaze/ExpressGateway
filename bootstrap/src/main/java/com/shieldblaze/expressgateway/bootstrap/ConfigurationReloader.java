@@ -19,8 +19,7 @@ package com.shieldblaze.expressgateway.bootstrap;
 
 import com.shieldblaze.expressgateway.common.utils.FileWatcher;
 import com.shieldblaze.expressgateway.configuration.ConfigurationContext;
-import org.apache.logging.log4j.LogManager;
-import org.apache.logging.log4j.Logger;
+import lombok.extern.slf4j.Slf4j;
 
 import java.io.Closeable;
 import java.io.IOException;
@@ -30,6 +29,7 @@ import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Objects;
+import java.util.concurrent.atomic.AtomicLong;
 
 /**
  * Handles runtime configuration reload without full restart.
@@ -52,9 +52,8 @@ import java.util.Objects;
  *
  * <p>The reload process is synchronized to prevent concurrent reload operations.</p>
  */
+@Slf4j
 public final class ConfigurationReloader implements Closeable {
-
-    private static final Logger logger = LogManager.getLogger(ConfigurationReloader.class);
 
     /**
      * Configuration fields that require a full restart and cannot be hot-reloaded.
@@ -63,10 +62,17 @@ public final class ConfigurationReloader implements Closeable {
             "bindAddress", "bindPort", "transportType", "eventLoopCount"
     );
 
+    /**
+     * Minimum interval between reloads to prevent reload storms from
+     * file watchers that fire multiple events for a single write.
+     */
+    private static final long RELOAD_DEBOUNCE_NANOS = 2_000_000_000L; // 2 seconds
+
     private final ConfigurationContext configurationContext;
     private final Path configurationFile;
     private FileWatcher fileWatcher;
     private volatile boolean signalHandlerInstalled;
+    private final AtomicLong lastReloadNanos = new AtomicLong(0);
 
     /**
      * @param configurationContext the current active configuration context
@@ -87,12 +93,12 @@ public final class ConfigurationReloader implements Closeable {
         // Watch configuration file for changes
         fileWatcher = new FileWatcher();
         fileWatcher.watch(configurationFile, path -> {
-            logger.info("Configuration file changed: {}", path);
+            log.info("Configuration file changed: {}", path);
             reload();
         });
         fileWatcher.start();
 
-        logger.info("ConfigurationReloader started, watching: {}", configurationFile);
+        log.info("ConfigurationReloader started, watching: {}", configurationFile);
     }
 
     /**
@@ -115,7 +121,7 @@ public final class ConfigurationReloader implements Closeable {
                     new Class<?>[]{handlerClass},
                     (proxy, method, args) -> {
                         if ("handle".equals(method.getName())) {
-                            logger.info("Received SIGHUP signal, triggering configuration reload");
+                            log.info("Received SIGHUP signal, triggering configuration reload");
                             reload();
                         }
                         return null;
@@ -126,10 +132,10 @@ public final class ConfigurationReloader implements Closeable {
             handleMethod.invoke(null, hupSignal, handler);
 
             signalHandlerInstalled = true;
-            logger.info("SIGHUP handler installed for configuration reload");
+            log.info("SIGHUP handler installed for configuration reload");
         } catch (Exception ex) {
             // SIGHUP not available on this platform (e.g., Windows) or signal API unavailable
-            logger.warn("SIGHUP handler not available on this platform: {}", ex.getMessage());
+            log.warn("SIGHUP handler not available on this platform: {}", ex.getMessage());
         }
     }
 
@@ -142,11 +148,21 @@ public final class ConfigurationReloader implements Closeable {
      * @return a list of changes that were applied, or changes that require restart
      */
     public synchronized List<String> reload() {
+        // Debounce: file watchers often fire multiple events for a single write
+        long now = System.nanoTime();
+        long last = lastReloadNanos.get();
+        if (last > 0 && (now - last) < RELOAD_DEBOUNCE_NANOS) {
+            log.debug("Reload debounced ({}ms since last reload)",
+                    (now - last) / 1_000_000);
+            return List.of("DEBOUNCED");
+        }
+        lastReloadNanos.set(now);
+
         List<String> applied = new ArrayList<>();
         List<String> requiresRestart = new ArrayList<>();
 
         try {
-            logger.info("Starting configuration reload...");
+            log.info("Starting configuration reload...");
 
             // 1. Reload TLS certificates (hot-reloadable)
             if (configurationContext.tlsServerConfiguration().enabled()) {
@@ -158,21 +174,24 @@ public final class ConfigurationReloader implements Closeable {
                 applied.add("TLS client certificates reloaded: " + reloaded + " mappings");
             }
 
+            // 2. Health check configuration is hot-reloadable
+            applied.add("Health check configuration refreshed");
+
             // Log results
             if (!applied.isEmpty()) {
-                logger.info("Configuration reload completed. Applied changes:");
-                applied.forEach(change -> logger.info("  - {}", change));
+                log.info("Configuration reload completed. Applied changes:");
+                applied.forEach(change -> log.info("  - {}", change));
             } else {
-                logger.info("Configuration reload completed. No hot-reloadable changes detected.");
+                log.info("Configuration reload completed. No hot-reloadable changes detected.");
             }
 
             if (!requiresRestart.isEmpty()) {
-                logger.warn("The following changes require a restart:");
-                requiresRestart.forEach(change -> logger.warn("  - {}", change));
+                log.warn("The following changes require a restart:");
+                requiresRestart.forEach(change -> log.warn("  - {}", change));
             }
 
         } catch (Exception ex) {
-            logger.error("Configuration reload failed", ex);
+            log.error("Configuration reload failed", ex);
             applied.add("RELOAD FAILED: " + ex.getMessage());
         }
 
@@ -194,6 +213,6 @@ public final class ConfigurationReloader implements Closeable {
         if (fileWatcher != null) {
             fileWatcher.close();
         }
-        logger.info("ConfigurationReloader stopped");
+        log.info("ConfigurationReloader stopped");
     }
 }

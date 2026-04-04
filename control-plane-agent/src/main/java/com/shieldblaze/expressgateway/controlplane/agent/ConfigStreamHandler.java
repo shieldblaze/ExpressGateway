@@ -41,7 +41,7 @@ import com.shieldblaze.expressgateway.controlplane.v1.ConfigResponse;
 import com.shieldblaze.expressgateway.controlplane.v1.ConfigSubscription;
 import com.shieldblaze.expressgateway.controlplane.v1.Resource;
 import io.grpc.stub.StreamObserver;
-import lombok.extern.log4j.Log4j2;
+import lombok.extern.slf4j.Slf4j;
 
 import java.io.Closeable;
 import java.time.Instant;
@@ -62,7 +62,7 @@ import java.util.Map;
  * NOT thread-safe: {@code subscribe()} is called from the start thread while
  * ACK/NACK responses are sent from the gRPC callback thread.</p>
  */
-@Log4j2
+@Slf4j
 public final class ConfigStreamHandler implements Closeable {
 
     private static final ObjectMapper MAPPER = new ObjectMapper().findAndRegisterModules();

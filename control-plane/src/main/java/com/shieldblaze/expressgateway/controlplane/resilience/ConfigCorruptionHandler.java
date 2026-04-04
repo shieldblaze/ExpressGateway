@@ -17,8 +17,7 @@
  */
 package com.shieldblaze.expressgateway.controlplane.resilience;
 
-import org.apache.logging.log4j.LogManager;
-import org.apache.logging.log4j.Logger;
+import lombok.extern.log4j.Log4j2;
 
 import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
@@ -49,9 +48,8 @@ import java.util.concurrent.CopyOnWriteArrayList;
  *
  * <p>Thread safety: all public methods are safe for concurrent use.</p>
  */
+@Log4j2
 public final class ConfigCorruptionHandler {
-
-    private static final Logger logger = LogManager.getLogger(ConfigCorruptionHandler.class);
 
     /**
      * A recorded corruption event.
@@ -154,19 +152,19 @@ public final class ConfigCorruptionHandler {
         }
 
         // Corruption detected
-        logger.error("Config corruption detected for {}: expected={}, actual={}",
+        log.error("Config corruption detected for {}: expected={}, actual={}",
                 resourcePath, expectedChecksum, actualChecksum);
 
         boolean rollbackSuccess = false;
         try {
             rollbackSuccess = rollbackCallback.rollback(resourcePath);
             if (rollbackSuccess) {
-                logger.info("Rollback succeeded for corrupted resource: {}", resourcePath);
+                log.info("Rollback succeeded for corrupted resource: {}", resourcePath);
             } else {
-                logger.error("Rollback FAILED for corrupted resource: {}", resourcePath);
+                log.error("Rollback FAILED for corrupted resource: {}", resourcePath);
             }
         } catch (Exception e) {
-            logger.error("Rollback threw exception for resource: {}", resourcePath, e);
+            log.error("Rollback threw exception for resource: {}", resourcePath, e);
         }
 
         CorruptionEvent event = new CorruptionEvent(
@@ -214,7 +212,7 @@ public final class ConfigCorruptionHandler {
             try {
                 listener.onCorruption(event);
             } catch (Exception e) {
-                logger.warn("Corruption alert listener threw exception", e);
+                log.warn("Corruption alert listener threw exception", e);
             }
         }
     }

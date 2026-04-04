@@ -21,10 +21,12 @@ import com.fasterxml.jackson.annotation.JsonIgnore;
 import com.fasterxml.jackson.annotation.JsonProperty;
 import com.shieldblaze.expressgateway.common.utils.NumberUtil;
 import com.shieldblaze.expressgateway.configuration.Configuration;
+import lombok.ToString;
 
 /**
- * Configuration for {@link EventLoopConfiguration}
+ * Configuration for event loop thread pools.
  */
+@ToString(exclude = "validated")
 public final class EventLoopConfiguration implements Configuration<EventLoopConfiguration> {
 
     @JsonProperty

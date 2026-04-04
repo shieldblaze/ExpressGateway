@@ -24,12 +24,17 @@ import io.netty.channel.EventLoopGroup;
 import io.netty.channel.epoll.EpollEventLoopGroup;
 import io.netty.channel.nio.NioEventLoopGroup;
 import io.netty.incubator.channel.uring.IOUringEventLoopGroup;
-import org.apache.logging.log4j.LogManager;
-import org.apache.logging.log4j.Logger;
+import io.netty.util.concurrent.DefaultThreadFactory;
+import lombok.Getter;
+import lombok.experimental.Accessors;
+import lombok.extern.log4j.Log4j2;
 
+import java.util.concurrent.TimeUnit;
+
+@Log4j2
+@Getter
+@Accessors(fluent = true)
 public final class EventLoopFactory {
-
-    private static final Logger logger = LogManager.getLogger(EventLoopFactory.class);
 
     private final EventLoopGroup parentGroup;
     private final EventLoopGroup childGroup;
@@ -46,17 +51,26 @@ public final class EventLoopFactory {
 
         var pair = switch (transportType) {
             case IO_URING -> {
-                logger.info("Transport selected: IO_URING (kernel: {})", kernelVersion);
-                yield new EventLoopPair(new IOUringEventLoopGroup(parentWorkers), new IOUringEventLoopGroup(childWorkers));
+                log.info("Transport selected: IO_URING (kernel: {})", kernelVersion);
+                yield new EventLoopPair(
+                        new IOUringEventLoopGroup(parentWorkers, new DefaultThreadFactory("eg-uring-parent", true)),
+                        new IOUringEventLoopGroup(childWorkers, new DefaultThreadFactory("eg-uring-child", true))
+                );
             }
             case EPOLL -> {
-                logger.info("Transport selected: EPOLL (kernel: {})", kernelVersion);
-                yield new EventLoopPair(new EpollEventLoopGroup(parentWorkers), new EpollEventLoopGroup(childWorkers));
+                log.info("Transport selected: EPOLL (kernel: {})", kernelVersion);
+                yield new EventLoopPair(
+                        new EpollEventLoopGroup(parentWorkers, new DefaultThreadFactory("eg-epoll-parent", true)),
+                        new EpollEventLoopGroup(childWorkers, new DefaultThreadFactory("eg-epoll-child", true))
+                );
             }
             case NIO -> {
-                logger.info("Transport selected: NIO (kernel: {})", kernelVersion);
-                logger.warn("NIO transport selected — native transport (epoll/io_uring) recommended for production");
-                yield new EventLoopPair(new NioEventLoopGroup(parentWorkers), new NioEventLoopGroup(childWorkers));
+                log.info("Transport selected: NIO (kernel: {})", kernelVersion);
+                log.warn("NIO transport selected — native transport (epoll/io_uring) recommended for production");
+                yield new EventLoopPair(
+                        new NioEventLoopGroup(parentWorkers, new DefaultThreadFactory("eg-nio-parent", true)),
+                        new NioEventLoopGroup(childWorkers, new DefaultThreadFactory("eg-nio-child", true))
+                );
             }
         };
 
@@ -64,11 +78,26 @@ public final class EventLoopFactory {
         this.childGroup = pair.child();
     }
 
-    public EventLoopGroup parentGroup() {
-        return parentGroup;
+    /**
+     * Gracefully shut down both event loop groups.
+     * Uses a 2-second quiet period and 5-second timeout for in-flight tasks
+     * to complete before forcing termination.
+     *
+     * <p>The quiet period ensures that tasks submitted during shutdown (e.g.,
+     * cleanup callbacks from closing channels) have time to execute. Without it,
+     * the executor shuts down immediately after the last running task, potentially
+     * losing cleanup work.</p>
+     */
+    public void shutdown() {
+        parentGroup.shutdownGracefully(2, 5, TimeUnit.SECONDS);
+        childGroup.shutdownGracefully(2, 5, TimeUnit.SECONDS);
     }
 
-    public EventLoopGroup childGroup() {
-        return childGroup;
+    /**
+     * Returns {@code true} if both event loop groups have terminated.
+     */
+    public boolean isShutdown() {
+        return parentGroup.isShutdown() && childGroup.isShutdown();
     }
+
 }

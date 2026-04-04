@@ -18,8 +18,8 @@
 package com.shieldblaze.expressgateway.servicediscovery.server;
 
 import com.shieldblaze.expressgateway.common.utils.LogSanitizer;
-import org.apache.logging.log4j.LogManager;
-import org.apache.logging.log4j.Logger;
+import lombok.RequiredArgsConstructor;
+import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Component;
 
 /**
@@ -32,16 +32,12 @@ import org.springframework.stereotype.Component;
  *   <li>Active health checks (optional, driven by the heartbeat endpoint)</li>
  * </ul>
  */
+@Slf4j
 @Component
+@RequiredArgsConstructor
 public final class HealthAggregator {
 
-    private static final Logger logger = LogManager.getLogger(HealthAggregator.class);
-
     private final RegistrationStore registrationStore;
-
-    public HealthAggregator(RegistrationStore registrationStore) {
-        this.registrationStore = registrationStore;
-    }
 
     /**
      * Compute a health summary of all registered services.
@@ -74,9 +70,9 @@ public final class HealthAggregator {
     public boolean processHeartbeat(String nodeId) {
         boolean updated = registrationStore.heartbeat(nodeId);
         if (updated) {
-            logger.debug("Heartbeat received for node: {}", LogSanitizer.sanitize(nodeId));
+            log.debug("Heartbeat received for node: {}", LogSanitizer.sanitize(nodeId));
         } else {
-            logger.warn("Heartbeat for unknown node: {}", LogSanitizer.sanitize(nodeId));
+            log.warn("Heartbeat for unknown node: {}", LogSanitizer.sanitize(nodeId));
         }
         return updated;
     }
@@ -86,7 +82,7 @@ public final class HealthAggregator {
      */
     public void markUnhealthy(String nodeId) {
         registrationStore.markUnhealthy(nodeId);
-        logger.info("Marked node as unhealthy: {}", LogSanitizer.sanitize(nodeId));
+        log.info("Marked node as unhealthy: {}", LogSanitizer.sanitize(nodeId));
     }
 
     /**

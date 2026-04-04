@@ -22,7 +22,6 @@ import com.shieldblaze.expressgateway.core.L4FrontListener;
 import io.netty.channel.ChannelHandler;
 
 import java.net.InetSocketAddress;
-import java.util.Objects;
 
 import static java.util.Objects.requireNonNull;
 

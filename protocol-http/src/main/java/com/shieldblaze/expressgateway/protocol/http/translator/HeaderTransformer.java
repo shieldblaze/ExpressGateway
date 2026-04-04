@@ -99,12 +99,21 @@ public final class HeaderTransformer {
         if (connectionValue == null || connectionValue.isEmpty()) {
             return HOP_BY_HOP;
         }
+        // Zero-alloc comma parsing to avoid split(",") String[] allocation on hot path.
         Set<String> expanded = new HashSet<>(HOP_BY_HOP);
-        for (String token : connectionValue.split(",")) {
-            String trimmed = token.trim().toLowerCase();
-            if (!trimmed.isEmpty()) {
-                expanded.add(trimmed);
+        int start = 0;
+        int len = connectionValue.length();
+        while (start < len) {
+            int comma = connectionValue.indexOf(',', start);
+            if (comma < 0) comma = len;
+            int tokenStart = start;
+            while (tokenStart < comma && connectionValue.charAt(tokenStart) <= ' ') tokenStart++;
+            int tokenEnd = comma;
+            while (tokenEnd > tokenStart && connectionValue.charAt(tokenEnd - 1) <= ' ') tokenEnd--;
+            if (tokenEnd > tokenStart) {
+                expanded.add(connectionValue.substring(tokenStart, tokenEnd).toLowerCase());
             }
+            start = comma + 1;
         }
         return expanded;
     }

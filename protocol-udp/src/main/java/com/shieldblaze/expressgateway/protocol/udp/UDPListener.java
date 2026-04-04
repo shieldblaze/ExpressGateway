@@ -32,15 +32,15 @@ import io.netty.channel.ChannelInitializer;
 import io.netty.channel.EventLoopGroup;
 import io.netty.channel.socket.DatagramChannel;
 
-import java.util.ArrayList;
 import java.util.List;
+import java.util.concurrent.CopyOnWriteArrayList;
 
 /**
  * UDP Listener for handling incoming UDP requests.
  */
 public class UDPListener extends L4FrontListener {
 
-    private final List<ChannelFuture> channelFutures = new ArrayList<>();
+    private final List<ChannelFuture> channelFutures = new CopyOnWriteArrayList<>();
 
     @Override
     public L4FrontListenerStartupTask start() {
@@ -132,7 +132,7 @@ public class UDPListener extends L4FrontListener {
             l4LoadBalancer().eventLoopFactory().parentGroup().shutdownGracefully();
             l4LoadBalancer().eventLoopFactory().childGroup().shutdownGracefully();
             shutdownEvent.markSuccess(null);
-        }, GlobalExecutors.executorService());
+        }, GlobalExecutors.executorService()).thenRun(() -> l4LoadBalancer().eventStream().close());
 
         return shutdownEvent;
     }

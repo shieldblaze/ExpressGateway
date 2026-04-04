@@ -25,9 +25,10 @@ import io.netty.channel.ChannelHandler;
 import io.netty.channel.ChannelHandlerContext;
 import io.netty.handler.ipfilter.IpSubnetFilter;
 import io.netty.handler.ipfilter.IpSubnetFilterRule;
-import org.apache.logging.log4j.LogManager;
-import org.apache.logging.log4j.Logger;
+import lombok.extern.slf4j.Slf4j;
 
+import java.lang.invoke.MethodHandles;
+import java.lang.invoke.VarHandle;
 import java.net.Inet6Address;
 import java.net.InetAddress;
 import java.net.InetSocketAddress;
@@ -59,10 +60,9 @@ import java.util.concurrent.atomic.LongAdder;
  * lists still work and delegate to Netty's {@link IpSubnetFilter} for legacy rule evaluation.
  * The new radix trie rules are evaluated in addition to (not replacing) the legacy path.</p>
  */
+@Slf4j
 @ChannelHandler.Sharable
 public final class NACL extends IpSubnetFilter {
-
-    private static final Logger logger = LogManager.getLogger(NACL.class);
 
     /**
      * ACL operating mode.
@@ -91,11 +91,21 @@ public final class NACL extends IpSubnetFilter {
 
     /**
      * Radix trie state for O(prefix_length) CIDR matching. Accessed via volatile read
-     * on the hot path; updated via copy-on-write in {@link #updateRules(List)}.
+     * on the hot path; updated via CAS in {@link #updateRules(List)} and {@link #setMode(Mode)}.
      * The record groups ipv4Trie, ipv6Trie, and mode into a single atomic reference
      * to prevent torn reads when updateRules() and setMode() are called concurrently.
      */
     private volatile TrieState trieState;
+
+    private static final VarHandle TRIE_STATE;
+
+    static {
+        try {
+            TRIE_STATE = MethodHandles.lookup().findVarHandle(NACL.class, "trieState", TrieState.class);
+        } catch (ReflectiveOperationException e) {
+            throw new ExceptionInInitializerError(e);
+        }
+    }
 
     private final LongAdder totalAccepted = new LongAdder();
     private final LongAdder totalDenied = new LongAdder();
@@ -181,10 +191,10 @@ public final class NACL extends IpSubnetFilter {
             }
             Bandwidth limit = Bandwidth.simple(globalConnections, globalDuration);
             globalBucket = Bucket.builder().addLimit(limit).withNanosecondPrecision().build();
-            logger.info("Global connection Rate-Limit: {} connection(s) in {}", globalConnections, globalDuration);
+            log.info("Global connection Rate-Limit: {} connection(s) in {}", globalConnections, globalDuration);
         } else {
             globalBucket = null;
-            logger.info("Global connection Rate-Limit is Disabled");
+            log.info("Global connection Rate-Limit is Disabled");
         }
 
         // Per-IP rate limit
@@ -206,7 +216,7 @@ public final class NACL extends IpSubnetFilter {
                 .build();
 
         if (this.perIpConnections > 0) {
-            logger.info("Per-IP connection Rate-Limit: {} connection(s) in {} (max {} tracked IPs)",
+            log.info("Per-IP connection Rate-Limit: {} connection(s) in {} (max {} tracked IPs)",
                     this.perIpConnections, this.perIpDuration, maxPerIpEntries);
         }
     }
@@ -216,7 +226,7 @@ public final class NACL extends IpSubnetFilter {
         try {
             // 1. Global rate limit check (cheapest check first)
             if (globalBucket != null && !globalBucket.tryConsume(1)) {
-                logger.debug("Global Rate-Limit exceeded, denying connection from {}", remoteAddress);
+                log.debug("Global Rate-Limit exceeded, denying connection from {}", remoteAddress);
                 totalDenied.increment();
                 return false;
             }
@@ -231,12 +241,12 @@ public final class NACL extends IpSubnetFilter {
                         return Bucket.builder().addLimit(limit).withNanosecondPrecision().build();
                     });
                 } catch (ExecutionException e) {
-                    logger.warn("Failed to create per-IP bucket for {}", remoteAddress, e);
+                    log.warn("Failed to create per-IP bucket for {}", remoteAddress, e);
                     totalDenied.increment();
                     return false;
                 }
                 if (!ipBucket.tryConsume(1)) {
-                    logger.debug("Per-IP Rate-Limit exceeded for {}, denying connection", remoteAddress);
+                    log.debug("Per-IP Rate-Limit exceeded for {}, denying connection", remoteAddress);
                     totalDenied.increment();
                     return false;
                 }
@@ -256,7 +266,7 @@ public final class NACL extends IpSubnetFilter {
                     case DENYLIST -> !(matchedRule instanceof NACLRule.Deny);
                 };
                 if (!accepted) {
-                    logger.debug("ACL rule denied connection from {}", remoteAddress);
+                    log.debug("ACL rule denied connection from {}", remoteAddress);
                     totalDenied.increment();
                     return false;
                 }
@@ -272,7 +282,7 @@ public final class NACL extends IpSubnetFilter {
             };
 
             if (!defaultAccept) {
-                logger.debug("No ACL rule matched for {} in {} mode, denying", remoteAddress, snapshot.mode());
+                log.debug("No ACL rule matched for {} in {} mode, denying", remoteAddress, snapshot.mode());
                 totalDenied.increment();
                 return false;
             }
@@ -286,14 +296,15 @@ public final class NACL extends IpSubnetFilter {
             }
             return legacyResult;
         } catch (Exception ex) {
-            logger.warn("Error evaluating ACL for {}", remoteAddress, ex);
+            log.warn("Error evaluating ACL for {}", remoteAddress, ex);
             totalDenied.increment();
         }
         return false;
     }
 
     /**
-     * Atomically replace all NACL rules. Builds a new radix trie and swaps it in.
+     * Atomically replace all NACL rules. Builds a new radix trie and swaps it in
+     * using a CAS loop to avoid losing concurrent mode changes.
      * No lock contention on the read path -- readers see either the old or new trie.
      *
      * @param newRules the new rule set
@@ -308,20 +319,30 @@ public final class NACL extends IpSubnetFilter {
                 v6.insert(rule);
             }
         }
-        // Atomically swap all three fields via the single TrieState reference
-        this.trieState = new TrieState(v4, v6, this.trieState.mode());
-        logger.info("ACL rules updated: {} rules loaded", newRules.size());
+        // CAS loop to atomically swap tries while preserving the current mode,
+        // even if setMode() runs concurrently.
+        TrieState current;
+        TrieState next;
+        do {
+            current = this.trieState;
+            next = new TrieState(v4, v6, current.mode());
+        } while (!TRIE_STATE.compareAndSet(this, current, next));
+        log.info("ACL rules updated: {} rules loaded", newRules.size());
     }
 
     /**
-     * Change the operating mode dynamically.
+     * Change the operating mode dynamically using CAS to avoid losing
+     * concurrent rule updates.
      */
     public void setMode(Mode mode) {
         Objects.requireNonNull(mode, "mode");
-        // Atomically swap the mode while preserving the current tries
-        TrieState current = this.trieState;
-        this.trieState = new TrieState(current.ipv4Trie(), current.ipv6Trie(), mode);
-        logger.info("ACL mode changed to {}", mode);
+        TrieState current;
+        TrieState next;
+        do {
+            current = this.trieState;
+            next = new TrieState(current.ipv4Trie(), current.ipv6Trie(), mode);
+        } while (!TRIE_STATE.compareAndSet(this, current, next));
+        log.info("ACL mode changed to {}", mode);
     }
 
     /**

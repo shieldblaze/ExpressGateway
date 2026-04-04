@@ -40,8 +40,7 @@ import io.netty.channel.socket.nio.NioServerSocketChannel;
 import io.netty.channel.unix.UnixChannelOption;
 import io.netty.incubator.channel.uring.IOUringServerSocketChannel;
 import io.netty.util.concurrent.GlobalEventExecutor;
-import org.apache.logging.log4j.LogManager;
-import org.apache.logging.log4j.Logger;
+import lombok.extern.log4j.Log4j2;
 
 import java.util.List;
 import java.util.concurrent.CopyOnWriteArrayList;
@@ -50,9 +49,8 @@ import java.util.concurrent.TimeUnit;
 /**
  * TCP Listener for handling incoming TCP requests.
  */
+@Log4j2
 public class TCPListener extends L4FrontListener {
-
-    private static final Logger logger = LogManager.getLogger(TCPListener.class);
 
     /**
      * Default drain timeout in seconds. Active connections are given this
@@ -195,11 +193,11 @@ public class TCPListener extends L4FrontListener {
                 int activeCount = activeConnections.size();
                 if (activeCount > 0 && drainTimeoutSeconds > 0) {
                     // HIGH-11: Graceful drain -- wait for active connections to complete
-                    logger.info("Draining {} active connections (timeout: {}s)", activeCount, drainTimeoutSeconds);
+                    log.info("Draining {} active connections (timeout: {}s)", activeCount, drainTimeoutSeconds);
                     GlobalEventExecutor.INSTANCE.schedule(() -> {
                         int remaining = activeConnections.size();
                         if (remaining > 0) {
-                            logger.info("Drain timeout reached, forcefully closing {} remaining connections", remaining);
+                            log.info("Drain timeout reached, forcefully closing {} remaining connections", remaining);
                             activeConnections.close();
                         }
                         channelFutures.clear();

@@ -23,42 +23,16 @@ import java.net.InetSocketAddress;
 import java.net.URI;
 
 /**
- * This class hold important objects for fulfilling WebSocket Upgrade Request.
+ * Holds the properties required to fulfill a WebSocket upgrade request.
+ *
+ * @param clientAddress {@link InetSocketAddress} of the client
+ * @param uri           the HTTP request URI being upgraded
+ * @param subProtocol   the WebSocket sub-protocol (may be {@code null})
+ * @param channel       the client {@link Channel}
  */
-public final class WebSocketUpgradeProperty {
-    private final InetSocketAddress clientAddress;
-    private final URI uri;
-    private final String subProtocol;
-    private final Channel channel;
-
-    /**
-     * Create a new {@link WebSocketUpgradeProperty} Instance
-     *
-     * @param clientAddress {@link InetSocketAddress} of Client
-     * @param uri           HTTP Request URI
-     * @param subProtocol   WebSocket SubProtocol
-     * @param channel       {@link Channel} of Client
-     */
-    public WebSocketUpgradeProperty(InetSocketAddress clientAddress, URI uri, String subProtocol, Channel channel) {
-        this.clientAddress = clientAddress;
-        this.uri = uri;
-        this.subProtocol = subProtocol;
-        this.channel = channel;
-    }
-
-    InetSocketAddress clientAddress() {
-        return clientAddress;
-    }
-
-    URI uri() {
-        return uri;
-    }
-
-    String subProtocol() {
-        return subProtocol;
-    }
-
-    Channel channel() {
-        return channel;
-    }
-}
+public record WebSocketUpgradeProperty(
+        InetSocketAddress clientAddress,
+        URI uri,
+        String subProtocol,
+        Channel channel
+) {}

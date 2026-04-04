@@ -18,13 +18,10 @@
 package com.shieldblaze.expressgateway.protocol.tcp;
 
 import io.netty.channel.Channel;
-import org.apache.logging.log4j.LogManager;
-import org.apache.logging.log4j.Logger;
+import lombok.extern.log4j.Log4j2;
 
 import java.net.InetSocketAddress;
 import java.time.Duration;
-import java.util.Iterator;
-import java.util.Queue;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ConcurrentLinkedQueue;
 import java.util.concurrent.atomic.AtomicBoolean;
@@ -51,9 +48,8 @@ import java.util.concurrent.atomic.AtomicInteger;
  * <p>Thread safety: all operations are lock-free. ConcurrentHashMap provides per-bin
  * locking for the address map; ConcurrentLinkedQueue provides non-blocking FIFO.</p>
  */
+@Log4j2
 final class ConnectionPool implements AutoCloseable {
-
-    private static final Logger logger = LogManager.getLogger(ConnectionPool.class);
 
     /**
      * Pool configuration.
@@ -111,7 +107,7 @@ final class ConnectionPool implements AutoCloseable {
         while ((entry = queue.poll()) != null) {
             totalSize.decrementAndGet();
             if (entry.isUsable()) {
-                logger.debug("Pool hit for backend {}", backendAddress);
+                log.debug("Pool hit for backend {}", backendAddress);
                 return entry.channel();
             }
             // Dead connection -- close and try next
@@ -159,16 +155,17 @@ final class ConnectionPool implements AutoCloseable {
             return false;
         }
 
-        // Strip all handlers except the head/tail to prepare for reuse.
-        // When the channel is acquired again, a new DownstreamHandler + pipeline
-        // will be installed by the caller.
-        // NOTE: We intentionally do NOT strip handlers here because the channel
-        // may still have data in flight. The caller is responsible for pipeline
-        // reconfiguration on reuse.
+        // Reset autoRead before pooling. Backpressure handling may have toggled
+        // autoRead to false during the previous proxy session. A pooled connection
+        // with autoRead=false would silently stop reading when reused, causing
+        // the downstream to appear hung.
+        if (channel.config() != null) {
+            channel.config().setAutoRead(true);
+        }
 
         queue.offer(new ConnectionPoolEntry(channel, backendAddress));
         totalSize.incrementAndGet();
-        logger.debug("Released connection to pool for backend {} (pool size: {})",
+        log.debug("Released connection to pool for backend {} (pool size: {})",
                 backendAddress, totalSize.get());
         return true;
     }
@@ -177,29 +174,45 @@ final class ConnectionPool implements AutoCloseable {
      * Evict connections that have been idle longer than {@link Config#idleTimeout()}.
      * This method should be called periodically by a scheduled task.
      *
+     * <p>Uses a drain-and-re-add approach: all entries are polled from the queue,
+     * survivors are collected, then re-offered back. This is O(n) total vs O(n^2)
+     * for Iterator.remove() on ConcurrentLinkedQueue (which re-traverses from head).
+     * Entries added by concurrent {@link #release} calls during the drain are safe:
+     * they remain in the queue because poll() only removes from the head.</p>
+     *
      * @return number of connections evicted
      */
     int evictIdle() {
         int evicted = 0;
-        for (var entry : pool.entrySet()) {
-            ConcurrentLinkedQueue<ConnectionPoolEntry> queue = entry.getValue();
-            Iterator<ConnectionPoolEntry> it = queue.iterator();
-            while (it.hasNext()) {
-                ConnectionPoolEntry poolEntry = it.next();
-                if (!poolEntry.isUsable() || poolEntry.isIdleLongerThan(config.idleTimeout())) {
-                    it.remove();
+        for (var mapEntry : pool.entrySet()) {
+            ConcurrentLinkedQueue<ConnectionPoolEntry> queue = mapEntry.getValue();
+            int batchSize = queue.size();
+            int evictedFromQueue = 0;
+
+            // Drain at most batchSize entries to avoid spinning on concurrent additions.
+            // Any entries added by release() after we start are left in the queue untouched.
+            for (int i = 0; i < batchSize; i++) {
+                ConnectionPoolEntry poolEntry = queue.poll();
+                if (poolEntry == null) {
+                    break;
+                }
+                if (poolEntry.isUsable() && !poolEntry.isIdleLongerThan(config.idleTimeout())) {
+                    queue.offer(poolEntry);
+                } else {
                     totalSize.decrementAndGet();
                     poolEntry.channel().close();
-                    evicted++;
+                    evictedFromQueue++;
                 }
             }
+            evicted += evictedFromQueue;
+
             // Clean up empty queues to prevent map growth
             if (queue.isEmpty()) {
-                pool.remove(entry.getKey(), queue);
+                pool.remove(mapEntry.getKey(), queue);
             }
         }
         if (evicted > 0) {
-            logger.debug("Evicted {} idle connections from pool (remaining: {})", evicted, totalSize.get());
+            log.debug("Evicted {} idle connections from pool (remaining: {})", evicted, totalSize.get());
         }
         return evicted;
     }
@@ -237,7 +250,7 @@ final class ConnectionPool implements AutoCloseable {
                 }
             }
             pool.clear();
-            logger.info("Connection pool closed");
+            log.info("Connection pool closed");
         }
     }
 }

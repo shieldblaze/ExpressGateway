@@ -98,17 +98,15 @@ public final class ConnectionTracker extends ChannelInboundHandlerAdapter {
     public void channelInactive(ChannelHandlerContext ctx) throws Exception {
         decrement();
 
-        // SEC-09: Decrement per-IP counter
+        // SEC-09: Decrement per-IP counter. Use compute() for atomic decrement-and-remove
+        // to avoid race where a concurrent increment sees a zero-count entry between
+        // decrementAndGet() and remove().
         if (maxConnectionsPerIp > 0 && ctx.channel().remoteAddress() instanceof InetSocketAddress isa) {
             InetAddress remoteIp = isa.getAddress();
-            AtomicInteger count = perIpConnections.get(remoteIp);
-            if (count != null) {
+            perIpConnections.computeIfPresent(remoteIp, (key, count) -> {
                 int remaining = count.decrementAndGet();
-                // Clean up zero-count entries to prevent unbounded map growth
-                if (remaining <= 0) {
-                    perIpConnections.remove(remoteIp, count);
-                }
-            }
+                return remaining <= 0 ? null : count;
+            });
         }
 
         super.channelInactive(ctx);

@@ -17,6 +17,9 @@
  */
 package com.shieldblaze.expressgateway.common.map;
 
+import lombok.AccessLevel;
+import lombok.RequiredArgsConstructor;
+
 import java.io.Closeable;
 import java.io.IOException;
 import java.util.Map;
@@ -24,13 +27,10 @@ import java.util.Map;
 /**
  * Base implementation of Cleaner for auto-removing expired entries.
  */
+@RequiredArgsConstructor(access = AccessLevel.PROTECTED)
 public abstract class Cleaner<K, V> implements Runnable, Closeable {
 
     private final SelfExpiringMap<K, V> selfExpiringMap;
-
-    protected Cleaner(SelfExpiringMap<K, V> selfExpiringMap) {
-        this.selfExpiringMap = selfExpiringMap;
-    }
 
     @Override
     public void run() {

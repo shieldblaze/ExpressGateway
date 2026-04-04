@@ -17,8 +17,10 @@
  */
 package com.shieldblaze.expressgateway.common.utils;
 
-import org.apache.logging.log4j.LogManager;
-import org.apache.logging.log4j.Logger;
+import lombok.Getter;
+import lombok.ToString;
+import lombok.experimental.Accessors;
+import lombok.extern.log4j.Log4j2;
 import org.bouncycastle.asn1.x500.X500Name;
 import org.bouncycastle.asn1.x500.X500NameBuilder;
 import org.bouncycastle.asn1.x500.style.BCStyle;
@@ -57,11 +59,15 @@ import java.util.List;
  * Use {@link #generateNew(List)} method to create a new Instance of
  * {@link SelfSignedCertificate}.
  */
+@Log4j2
+@Getter
+@Accessors(fluent = true)
+@ToString(onlyExplicitlyIncluded = true)
 public final class SelfSignedCertificate {
 
-    private static final Logger logger = LogManager.getLogger(SelfSignedCertificate.class);
     private static final Provider PROVIDER = new BouncyCastleProvider();
 
+    @ToString.Include
     private final X509Certificate x509Certificate;
     private final KeyPair keyPair;
 
@@ -74,14 +80,6 @@ public final class SelfSignedCertificate {
     private SelfSignedCertificate(X509Certificate x509Certificate, KeyPair keyPair) {
         this.x509Certificate = x509Certificate;
         this.keyPair = keyPair;
-    }
-
-    public X509Certificate x509Certificate() {
-        return x509Certificate;
-    }
-
-    public KeyPair keyPair() {
-        return keyPair;
     }
 
     /**
@@ -116,15 +114,16 @@ public final class SelfSignedCertificate {
     public static SelfSignedCertificate generateNew(List<String> ipList, List<String> hostnameList, boolean useECC) {
         try {
 
+            SecureRandom secureRandom = new SecureRandom();
             KeyPairGenerator keyGen;
             KeyPair keyPair;
 
             if (useECC) {
                 keyGen = KeyPairGenerator.getInstance("EC");
-                keyGen.initialize(256);
+                keyGen.initialize(256, secureRandom);
             } else {
                 keyGen = KeyPairGenerator.getInstance("RSA");
-                keyGen.initialize(2048);
+                keyGen.initialize(4096, secureRandom);
             }
             keyPair = keyGen.generateKeyPair();
 
@@ -174,13 +173,9 @@ public final class SelfSignedCertificate {
 
             return new SelfSignedCertificate(cert, keyPair);
         } catch (Exception ex) {
-            logger.error("Failed to generate SelfSignedCertificate", ex);
+            log.error("Failed to generate SelfSignedCertificate", ex);
             throw new IllegalArgumentException(ex);
         }
     }
 
-    @Override
-    public String toString() {
-        return "SelfSignedCertificate{x509Certificate=" + x509Certificate + '}';
-    }
 }

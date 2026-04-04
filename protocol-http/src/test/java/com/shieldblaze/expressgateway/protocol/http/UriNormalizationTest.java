@@ -103,7 +103,7 @@ class UriNormalizationTest {
             "/a/b/c/../../d/e/../f, /a/d/f",
     })
     void removeDotSegments(String input, String expected) {
-        assertEquals(expected, Http11ServerInboundHandler.removeDotSegments(input));
+        assertEquals(expected, UriNormalizer.removeDotSegments(input));
     }
 
     /**
@@ -115,11 +115,11 @@ class UriNormalizationTest {
     void removeDotSegments_absorbsExcessDotDotAtRoot() {
         // RFC 3986 Section 5.2.4 absorbs ".." at root
         assertEquals("/etc/passwd",
-                Http11ServerInboundHandler.removeDotSegments("/../../etc/passwd"));
+                UriNormalizer.removeDotSegments("/../../etc/passwd"));
         assertEquals("/etc/shadow",
-                Http11ServerInboundHandler.removeDotSegments("/a/../../../../etc/shadow"));
+                UriNormalizer.removeDotSegments("/a/../../../../etc/shadow"));
         assertEquals("/a",
-                Http11ServerInboundHandler.removeDotSegments("/../a"));
+                UriNormalizer.removeDotSegments("/../a"));
     }
 
     // ──────────────────────────────────────────────────────────────────────
@@ -128,44 +128,44 @@ class UriNormalizationTest {
 
     @Test
     void escapesRoot_detectsSimpleTraversal() {
-        assertTrue(Http11ServerInboundHandler.escapesRoot("/../../etc/passwd"));
+        assertTrue(UriNormalizer.escapesRoot("/../../etc/passwd"));
     }
 
     @Test
     void escapesRoot_detectsDeepTraversal() {
-        assertTrue(Http11ServerInboundHandler.escapesRoot("/a/../../../../etc/shadow"));
+        assertTrue(UriNormalizer.escapesRoot("/a/../../../../etc/shadow"));
     }
 
     @Test
     void escapesRoot_detectsSingleParentFromRoot() {
-        assertTrue(Http11ServerInboundHandler.escapesRoot("/../"));
-        assertTrue(Http11ServerInboundHandler.escapesRoot("/../a"));
+        assertTrue(UriNormalizer.escapesRoot("/../"));
+        assertTrue(UriNormalizer.escapesRoot("/../a"));
     }
 
     @Test
     void escapesRoot_allowsTraversalWithinRoot() {
-        assertFalse(Http11ServerInboundHandler.escapesRoot("/a/b/../c"));
-        assertFalse(Http11ServerInboundHandler.escapesRoot("/a/b/c/../../d"));
+        assertFalse(UriNormalizer.escapesRoot("/a/b/../c"));
+        assertFalse(UriNormalizer.escapesRoot("/a/b/c/../../d"));
     }
 
     @Test
     void escapesRoot_allowsCleanPaths() {
-        assertFalse(Http11ServerInboundHandler.escapesRoot("/"));
-        assertFalse(Http11ServerInboundHandler.escapesRoot("/a/b/c"));
-        assertFalse(Http11ServerInboundHandler.escapesRoot("/a/."));
+        assertFalse(UriNormalizer.escapesRoot("/"));
+        assertFalse(UriNormalizer.escapesRoot("/a/b/c"));
+        assertFalse(UriNormalizer.escapesRoot("/a/."));
     }
 
     @Test
     void escapesRoot_handlesDoubleSlashes() {
-        assertFalse(Http11ServerInboundHandler.escapesRoot("//a//b"));
+        assertFalse(UriNormalizer.escapesRoot("//a//b"));
     }
 
     @Test
     void escapesRoot_exactDepthBoundary() {
         // /a/.. goes to depth 1 then back to 0 — not escaping
-        assertFalse(Http11ServerInboundHandler.escapesRoot("/a/.."));
+        assertFalse(UriNormalizer.escapesRoot("/a/.."));
         // /a/../.. goes to depth 1, then 0, then -1 — escaping
-        assertTrue(Http11ServerInboundHandler.escapesRoot("/a/../.."));
+        assertTrue(UriNormalizer.escapesRoot("/a/../.."));
     }
 
     // ──────────────────────────────────────────────────────────────────────
@@ -175,66 +175,66 @@ class UriNormalizationTest {
     @Test
     void normalizeUri_preservesQueryString() {
         assertEquals("/a/c?q=1&r=2",
-                Http11ServerInboundHandler.normalizeUri("/a/b/../c?q=1&r=2"));
+                UriNormalizer.normalizeUri("/a/b/../c?q=1&r=2"));
     }
 
     @Test
     void normalizeUri_identityForCleanPath() {
         assertEquals("/api/v1/users",
-                Http11ServerInboundHandler.normalizeUri("/api/v1/users"));
+                UriNormalizer.normalizeUri("/api/v1/users"));
     }
 
     @Test
     void normalizeUri_asteriskPassthrough() {
-        assertEquals("*", Http11ServerInboundHandler.normalizeUri("*"));
+        assertEquals("*", UriNormalizer.normalizeUri("*"));
     }
 
     @Test
     void normalizeUri_nullAndEmptyPassthrough() {
-        assertNull(Http11ServerInboundHandler.normalizeUri(null));
-        assertEquals("", Http11ServerInboundHandler.normalizeUri(""));
+        assertNull(UriNormalizer.normalizeUri(null));
+        assertEquals("", UriNormalizer.normalizeUri(""));
     }
 
     @Test
     void normalizeUri_rejectsRootEscape() {
         // "/../../etc/passwd" — ".." exceeds depth, must return null
-        assertNull(Http11ServerInboundHandler.normalizeUri("/../../etc/passwd"));
+        assertNull(UriNormalizer.normalizeUri("/../../etc/passwd"));
     }
 
     @Test
     void normalizeUri_rejectsRootEscapeWithQuery() {
-        assertNull(Http11ServerInboundHandler.normalizeUri("/../../etc/passwd?foo=bar"));
+        assertNull(UriNormalizer.normalizeUri("/../../etc/passwd?foo=bar"));
     }
 
     @Test
     void normalizeUri_deepTraversalRejected() {
         // More ".." segments than real path depth
-        assertNull(Http11ServerInboundHandler.normalizeUri("/a/../../../../etc/shadow"));
+        assertNull(UriNormalizer.normalizeUri("/a/../../../../etc/shadow"));
     }
 
     @Test
     void normalizeUri_singleParentFromRoot() {
-        assertNull(Http11ServerInboundHandler.normalizeUri("/../"));
-        assertNull(Http11ServerInboundHandler.normalizeUri("/../a"));
+        assertNull(UriNormalizer.normalizeUri("/../"));
+        assertNull(UriNormalizer.normalizeUri("/../a"));
     }
 
     @Test
     void normalizeUri_dotDoesNotEscape() {
         // Single dot at various positions — never escapes
-        assertEquals("/", Http11ServerInboundHandler.normalizeUri("/."));
-        assertEquals("/a/", Http11ServerInboundHandler.normalizeUri("/a/."));
+        assertEquals("/", UriNormalizer.normalizeUri("/."));
+        assertEquals("/a/", UriNormalizer.normalizeUri("/a/."));
     }
 
     @Test
     void normalizeUri_emptyQueryString() {
         assertEquals("/a/b?",
-                Http11ServerInboundHandler.normalizeUri("/a/b?"));
+                UriNormalizer.normalizeUri("/a/b?"));
     }
 
     @Test
     void normalizeUri_withinRootTraversalNormalized() {
         // /a/b/../c has ".." within depth — should normalize to /a/c
-        String result = Http11ServerInboundHandler.normalizeUri("/a/b/../c");
+        String result = UriNormalizer.normalizeUri("/a/b/../c");
         assertNotNull(result, "Within-root traversal should not be rejected");
         assertEquals("/a/c", result);
     }
@@ -242,7 +242,7 @@ class UriNormalizationTest {
     @Test
     void normalizeUri_rfcExampleWithQuery() {
         assertEquals("/a/g?y",
-                Http11ServerInboundHandler.normalizeUri("/a/b/c/./../../g?y"));
+                UriNormalizer.normalizeUri("/a/b/c/./../../g?y"));
     }
 
     // ──────────────────────────────────────────────────────────────────────
@@ -252,43 +252,43 @@ class UriNormalizationTest {
     @Test
     void normalizeUri_rejectsDoubleEncodedDotTraversal() {
         // %252e decodes to %2e, which decodes to '.' — double-encoded traversal
-        assertNull(Http11ServerInboundHandler.normalizeUri("/%252e%252e/etc/passwd"),
+        assertNull(UriNormalizer.normalizeUri("/%252e%252e/etc/passwd"),
                 "Double-encoded dot traversal %252e%252e must be rejected");
     }
 
     @Test
     void normalizeUri_rejectsDoubleEncodedDotMixedCase() {
         // Mixed case: %252E (uppercase E) must also be caught
-        assertNull(Http11ServerInboundHandler.normalizeUri("/%252E%252e/etc/passwd"),
+        assertNull(UriNormalizer.normalizeUri("/%252E%252e/etc/passwd"),
                 "Mixed-case double-encoded dot %252E%252e must be rejected");
-        assertNull(Http11ServerInboundHandler.normalizeUri("/%252e%252E/etc/passwd"),
+        assertNull(UriNormalizer.normalizeUri("/%252e%252E/etc/passwd"),
                 "Mixed-case double-encoded dot %252e%252E must be rejected");
-        assertNull(Http11ServerInboundHandler.normalizeUri("/%252E%252E/etc/passwd"),
+        assertNull(UriNormalizer.normalizeUri("/%252E%252E/etc/passwd"),
                 "Uppercase double-encoded dot %252E%252E must be rejected");
     }
 
     @Test
     void normalizeUri_rejectsDoubleEncodedDotDeepInPath() {
         // Double-encoded dot buried deep in the path
-        assertNull(Http11ServerInboundHandler.normalizeUri("/a/b/%252e%252e/%252e%252e/etc/passwd"),
+        assertNull(UriNormalizer.normalizeUri("/a/b/%252e%252e/%252e%252e/etc/passwd"),
                 "Double-encoded dots deep in path must be rejected");
     }
 
     @Test
     void normalizeUri_rejectsDoubleEncodedDotWithQuery() {
         // Double-encoded dot in path portion, with a query string
-        assertNull(Http11ServerInboundHandler.normalizeUri("/%252e%252e/etc/passwd?foo=bar"),
+        assertNull(UriNormalizer.normalizeUri("/%252e%252e/etc/passwd?foo=bar"),
                 "Double-encoded dot traversal with query string must be rejected");
     }
 
     @Test
     void containsDoubleEncodedDot_directUnitTests() {
-        assertTrue(Http11ServerInboundHandler.containsDoubleEncodedDot("/%252e%252e/"));
-        assertTrue(Http11ServerInboundHandler.containsDoubleEncodedDot("/foo/%252E/bar"));
-        assertFalse(Http11ServerInboundHandler.containsDoubleEncodedDot("/foo/bar"));
-        assertFalse(Http11ServerInboundHandler.containsDoubleEncodedDot("/%2e%2e/"));
+        assertTrue(UriNormalizer.containsDoubleEncodedDot("/%252e%252e/"));
+        assertTrue(UriNormalizer.containsDoubleEncodedDot("/foo/%252E/bar"));
+        assertFalse(UriNormalizer.containsDoubleEncodedDot("/foo/bar"));
+        assertFalse(UriNormalizer.containsDoubleEncodedDot("/%2e%2e/"));
         // %25 followed by something other than 2e should not trigger
-        assertFalse(Http11ServerInboundHandler.containsDoubleEncodedDot("/%2541/test"));
+        assertFalse(UriNormalizer.containsDoubleEncodedDot("/%2541/test"));
     }
 
     // ──────────────────────────────────────────────────────────────────────
@@ -298,20 +298,20 @@ class UriNormalizationTest {
     @Test
     void normalizeUri_rejectsNullByteInPath() {
         // %00 in path — null byte can cause string truncation in C backends
-        assertNull(Http11ServerInboundHandler.normalizeUri("/etc/passwd%00.jpg"),
+        assertNull(UriNormalizer.normalizeUri("/etc/passwd%00.jpg"),
                 "Null byte %00 in path must be rejected");
     }
 
     @Test
     void normalizeUri_rejectsNullByteAtStart() {
-        assertNull(Http11ServerInboundHandler.normalizeUri("/%00/secret"),
+        assertNull(UriNormalizer.normalizeUri("/%00/secret"),
                 "Null byte %00 at start of path must be rejected");
     }
 
     @Test
     void normalizeUri_rejectsLiteralNullByteInPath() {
         // Literal null character (unlikely from HTTP parsing but defense in depth)
-        assertNull(Http11ServerInboundHandler.normalizeUri("/etc/passwd\0.jpg"),
+        assertNull(UriNormalizer.normalizeUri("/etc/passwd\0.jpg"),
                 "Literal null byte in path must be rejected");
     }
 
@@ -320,7 +320,7 @@ class UriNormalizationTest {
         // %25 in query string is legitimate (e.g., "100%25" means "100%")
         // and must not be rejected. Only the path is checked.
         assertEquals("/search?q=100%25",
-                Http11ServerInboundHandler.normalizeUri("/search?q=100%25"));
+                UriNormalizer.normalizeUri("/search?q=100%25"));
     }
 
     @Test
@@ -328,14 +328,14 @@ class UriNormalizationTest {
         // %00 in query string should not trigger rejection (only path is checked).
         // While unusual, query string content is backend-interpreted.
         assertEquals("/search?q=%00",
-                Http11ServerInboundHandler.normalizeUri("/search?q=%00"));
+                UriNormalizer.normalizeUri("/search?q=%00"));
     }
 
     @Test
     void normalizeUri_cleanPathWithPercentEncodingStillWorks() {
         // A path with normal percent-encoding that is not a dot or null
         assertEquals("/path/%20with%20spaces",
-                Http11ServerInboundHandler.normalizeUri("/path/%20with%20spaces"));
+                UriNormalizer.normalizeUri("/path/%20with%20spaces"));
     }
 
     // ──────────────────────────────────────────────────────────────────────

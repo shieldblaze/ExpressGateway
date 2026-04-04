@@ -17,32 +17,28 @@
  */
 package com.shieldblaze.expressgateway.common.utils;
 
+import lombok.AccessLevel;
+import lombok.NoArgsConstructor;
+import lombok.extern.log4j.Log4j2;
+
 import java.net.Inet6Address;
 import java.net.InetAddress;
 import java.net.NetworkInterface;
+import java.net.SocketException;
 import java.util.ArrayList;
-import java.util.Enumeration;
+import java.util.Collections;
 import java.util.List;
 
+@Log4j2
+@NoArgsConstructor(access = AccessLevel.PRIVATE)
 public final class NetworkInterfaceUtil {
-
-    private NetworkInterfaceUtil() {
-        // Prevent outside initialization
-    }
 
     public static List<String> getAllIps() {
         List<String> ipAddressList = new ArrayList<>();
 
         try {
-            Enumeration<NetworkInterface> interfaces = NetworkInterface.getNetworkInterfaces();
-
-            while (interfaces.hasMoreElements()) {
-                NetworkInterface networkInterface = interfaces.nextElement();
-                Enumeration<InetAddress> ips = networkInterface.getInetAddresses();
-
-                // If NIC has at least 1 IP address then we'll add it.
-                while (ips.hasMoreElements()) {
-                    InetAddress ip = ips.nextElement();
+            for (NetworkInterface networkInterface : Collections.list(NetworkInterface.getNetworkInterfaces())) {
+                for (InetAddress ip : Collections.list(networkInterface.getInetAddresses())) {
                     if (ip instanceof Inet6Address && ip.getHostAddress().contains("%")) {
                         String strIp = ip.getHostAddress();
                         ipAddressList.add(strIp.substring(0, strIp.indexOf('%')));
@@ -51,8 +47,8 @@ public final class NetworkInterfaceUtil {
                     }
                 }
             }
-        } catch (Exception ex) {
-            // Ignore
+        } catch (SocketException ex) {
+            log.warn("Failed to enumerate network interfaces", ex);
         }
 
         return ipAddressList;

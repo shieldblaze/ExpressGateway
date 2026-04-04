@@ -32,6 +32,8 @@ import lombok.extern.log4j.Log4j2;
 
 import static com.shieldblaze.expressgateway.common.utils.LogSanitizer.sanitize;
 
+import org.springframework.http.HttpStatus;
+import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.DeleteMapping;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
@@ -96,23 +98,25 @@ public class HealthCheckController {
     }
 
     @GetMapping("/{healthCheckId}")
-    public ApiResponse<HealthCheckDto> getHealthCheck(@PathVariable String healthCheckId,
+    public ResponseEntity<ApiResponse<HealthCheckDto>> getHealthCheck(@PathVariable String healthCheckId,
                                                       @RequestParam(defaultValue = "global") String scope) throws Exception {
         ConfigResourceId id = new ConfigResourceId(ConfigKind.HEALTH_CHECK.name(), scope, healthCheckId);
         Optional<ConfigResource> resource = ConfigResourceHelper.getResource(id, kvStore);
         if (resource.isEmpty()) {
-            return ApiResponse.error("Health check not found: " + healthCheckId);
+            return ResponseEntity.status(HttpStatus.NOT_FOUND)
+                    .body(ApiResponse.error("Health check not found: " + healthCheckId));
         }
-        return ApiResponse.ok(HealthCheckDto.from((HealthCheckSpec) resource.get().spec()));
+        return ResponseEntity.ok(ApiResponse.ok(HealthCheckDto.from((HealthCheckSpec) resource.get().spec())));
     }
 
     @PutMapping("/{healthCheckId}")
-    public ApiResponse<String> updateHealthCheck(@PathVariable String healthCheckId, @RequestBody HealthCheckDto dto,
+    public ResponseEntity<ApiResponse<String>> updateHealthCheck(@PathVariable String healthCheckId, @RequestBody HealthCheckDto dto,
                                                  @RequestParam(defaultValue = "global") String scope) throws Exception {
         ConfigResourceId id = new ConfigResourceId(ConfigKind.HEALTH_CHECK.name(), scope, healthCheckId);
         Optional<ConfigResource> existing = ConfigResourceHelper.getResource(id, kvStore);
         if (existing.isEmpty()) {
-            return ApiResponse.error("Health check not found: " + healthCheckId);
+            return ResponseEntity.status(HttpStatus.NOT_FOUND)
+                    .body(ApiResponse.error("Health check not found: " + healthCheckId));
         }
 
         HealthCheckSpec spec = dto.toSpec();
@@ -122,7 +126,7 @@ public class HealthCheckController {
         ConfigResourceHelper.persistAndDistributeWithLeaderCheck(updated, kvStore, distributor, cluster, forwarder);
 
         log.info("Updated health check: {}", sanitize(healthCheckId));
-        return ApiResponse.ok("Health check updated", healthCheckId);
+        return ResponseEntity.ok(ApiResponse.ok("Health check updated", healthCheckId));
     }
 
     @DeleteMapping("/{healthCheckId}")

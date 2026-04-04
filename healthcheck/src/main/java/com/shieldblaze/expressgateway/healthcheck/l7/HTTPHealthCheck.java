@@ -18,8 +18,7 @@
 package com.shieldblaze.expressgateway.healthcheck.l7;
 
 import com.shieldblaze.expressgateway.healthcheck.HealthCheck;
-import org.apache.logging.log4j.LogManager;
-import org.apache.logging.log4j.Logger;
+import lombok.extern.slf4j.Slf4j;
 
 import javax.net.ssl.SSLContext;
 import javax.net.ssl.TrustManagerFactory;
@@ -33,6 +32,7 @@ import java.security.KeyStore;
 import java.security.NoSuchAlgorithmException;
 import java.security.SecureRandom;
 import java.time.Duration;
+import java.util.concurrent.atomic.AtomicBoolean;
 
 /**
  * HTTP based {@link HealthCheck}.
@@ -41,13 +41,13 @@ import java.time.Duration;
  * Uses secure TLS with system trust store by default.
  * Supports configurable request timeout enforcement.</p>
  */
+@Slf4j
 public final class HTTPHealthCheck extends HealthCheck {
-
-    private static final Logger logger = LogManager.getLogger(HTTPHealthCheck.class);
 
     private final HttpClient httpClient;
     private final URI uri;
     private final Duration requestTimeout;
+    private final AtomicBoolean closed = new AtomicBoolean(false);
 
     /**
      * Create with system default trust store (secure TLS verification).
@@ -69,7 +69,7 @@ public final class HTTPHealthCheck extends HealthCheck {
             sslContext = SSLContext.getInstance("TLSv1.3");
 
             if (insecureTls) {
-                logger.warn("Health check for {} using INSECURE TLS", uri);
+                log.warn("Health check for {} using INSECURE TLS", uri);
                 sslContext.init(null,
                         io.netty.handler.ssl.util.InsecureTrustManagerFactory.INSTANCE.getTrustManagers(),
                         new SecureRandom());
@@ -81,7 +81,7 @@ public final class HTTPHealthCheck extends HealthCheck {
             }
         } catch (NoSuchAlgorithmException | KeyManagementException | java.security.KeyStoreException e) {
             Error error = new Error(e);
-            logger.fatal(error);
+            log.error("Fatal TLS initialization error", error);
             throw error;
         }
 
@@ -94,6 +94,10 @@ public final class HTTPHealthCheck extends HealthCheck {
 
     @Override
     public void run() {
+        if (closed.get()) {
+            return;
+        }
+
         try {
             HttpRequest request = HttpRequest.newBuilder()
                     .GET()
@@ -110,8 +114,18 @@ public final class HTTPHealthCheck extends HealthCheck {
                 markFailure();
             }
         } catch (Exception e) {
-            logger.debug("Health Check Failure For Address: " + socketAddress, e);
+            log.debug("Health Check Failure For Address: {}", socketAddress, e);
             markFailure();
+        }
+    }
+
+    /**
+     * Close the underlying HttpClient. Once closed, subsequent run() calls are no-ops.
+     * HttpClient in Java 21+ implements AutoCloseable, so this releases its thread pool.
+     */
+    public void close() {
+        if (closed.compareAndSet(false, true)) {
+            httpClient.close();
         }
     }
 }

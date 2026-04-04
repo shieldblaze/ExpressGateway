@@ -19,10 +19,10 @@ package com.shieldblaze.expressgateway.servicediscovery.server;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.shieldblaze.expressgateway.common.crypto.cryptostore.CryptoEntry;
+import io.netty.handler.ssl.ClientAuth;
 import io.netty.handler.ssl.OpenSsl;
 import io.netty.handler.ssl.SslProvider;
-import org.apache.logging.log4j.LogManager;
-import org.apache.logging.log4j.Logger;
+import lombok.extern.slf4j.Slf4j;
 import org.springframework.boot.reactor.netty.NettyReactiveWebServerFactory;
 import org.springframework.boot.reactor.netty.NettyServerCustomizer;
 import org.springframework.boot.web.server.WebServerFactoryCustomizer;
@@ -46,10 +46,9 @@ import static com.shieldblaze.expressgateway.common.crypto.cryptostore.CryptoSto
  * This customizer is responsible for the configuration of
  * Netty web server, like Bind Address and Port, TLS, etc.
  */
+@Slf4j
 @Configuration
 public class WebServerCustomizer implements WebServerFactoryCustomizer<NettyReactiveWebServerFactory> {
-
-    private static final Logger logger = LogManager.getLogger(WebServerCustomizer.class);
 
     @Override
     public void customize(NettyReactiveWebServerFactory factory) {
@@ -59,13 +58,13 @@ public class WebServerCustomizer implements WebServerFactoryCustomizer<NettyReac
         try {
             ObjectMapper objectMapper = new ObjectMapper();
             ServiceDiscoveryContext.setInstance(objectMapper.readValue(file, ServiceDiscoveryContext.class));
-            logger.info("[CONFIGURATION] ServiceDiscovery: {}", ServiceDiscoveryContext.getInstance());
+            log.info("[CONFIGURATION] ServiceDiscovery: {}", ServiceDiscoveryContext.getInstance());
 
             factory.setAddress( InetAddress.getByName(ServiceDiscoveryContext.getInstance().IPAddress()));
             factory.setPort(ServiceDiscoveryContext.getInstance().port());
 
             if (ServiceDiscoveryContext.getInstance().enableTLS()) {
-                logger.info("Loading Service Discovery Server PKCS12 File for TLS support");
+                log.info("Loading Service Discovery Server PKCS12 File for TLS support");
 
                 byte[] serverPkcs12Data = Files.readAllBytes(Path.of(ServiceDiscoveryContext.getInstance().PKCS12File()).toAbsolutePath());
                 try (ByteArrayInputStream inputStream = new ByteArrayInputStream(serverPkcs12Data)) {
@@ -73,9 +72,9 @@ public class WebServerCustomizer implements WebServerFactoryCustomizer<NettyReac
                     factory.addServerCustomizers(new TlsCustomizer(cryptoEntry.privateKey(), cryptoEntry.certificates()));
                 }
 
-                logger.info("Successfully initialized Service Discovery Server with TLS");
+                log.info("Successfully initialized Service Discovery Server with TLS");
             } else {
-                logger.info("Configuring Service Discovery Server without TLS");
+                log.info("Configuring Service Discovery Server without TLS");
                 factory.addServerCustomizers(new NormalCustomizer());
             }
         } catch (Exception ex) {
@@ -88,12 +87,16 @@ public class WebServerCustomizer implements WebServerFactoryCustomizer<NettyReac
         @Override
         public HttpServer apply(HttpServer httpServer) {
             Http2SslContextSpec http2SslContextSpec = Http2SslContextSpec.forServer(privateKey, x509Certificates);
-            http2SslContextSpec.configure(sslContextBuilder -> sslContextBuilder
-                    .sslProvider(OpenSsl.isAvailable() ? SslProvider.OPENSSL : SslProvider.JDK)
-                    .protocols("TLSv1.3")
-                    .ciphers(List.of("TLS_AES_256_GCM_SHA384"))
-                    .clientAuth(ServiceDiscoveryContext.getInstance().mTLS())
-            );
+            http2SslContextSpec.configure(sslContextBuilder -> {
+                sslContextBuilder
+                        .sslProvider(OpenSsl.isAvailable() ? SslProvider.OPENSSL : SslProvider.JDK)
+                        .protocols("TLSv1.3")
+                        .ciphers(List.of("TLS_AES_256_GCM_SHA384"));
+                ClientAuth mTLS = ServiceDiscoveryContext.getInstance().getMTLS();
+                if (mTLS != null) {
+                    sslContextBuilder.clientAuth(mTLS);
+                }
+            });
 
             return httpServer.secure(sslContextSpec -> sslContextSpec.sslContext(http2SslContextSpec))
                     .protocol(HttpProtocol.H2, HttpProtocol.HTTP11);

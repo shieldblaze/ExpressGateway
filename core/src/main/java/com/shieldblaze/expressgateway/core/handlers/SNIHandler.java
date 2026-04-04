@@ -25,15 +25,38 @@ import io.netty.handler.ssl.AbstractSniHandler;
 import io.netty.handler.ssl.ReferenceCountedOpenSslEngine;
 import io.netty.handler.ssl.SslHandler;
 import io.netty.util.AsyncMapping;
+import io.netty.util.AttributeKey;
 import io.netty.util.ReferenceCountUtil;
 import io.netty.util.concurrent.Future;
+import lombok.extern.log4j.Log4j2;
 
 import javax.net.ssl.SSLEngine;
 
 /**
- * {@link SNIHandler} TLS Server Name Indication (SNI) and serve the correct {@link CertificateKeyPair} as requested in SNI.
+ * {@link SNIHandler} handles TLS Server Name Indication (SNI) and serves the correct
+ * {@link CertificateKeyPair} as requested in SNI.
+ *
+ * <p>After TLS handshake completes, the negotiated ALPN protocol (h2, http/1.1) is
+ * stored in the channel attribute {@link #NEGOTIATED_PROTOCOL} for downstream handlers
+ * to use for protocol routing decisions.</p>
  */
+@Log4j2
 public final class SNIHandler extends AbstractSniHandler<CertificateKeyPair> {
+
+    /**
+     * Channel attribute key for the ALPN-negotiated protocol (e.g., "h2", "http/1.1").
+     * Set after TLS handshake completes. Downstream handlers can use this for
+     * protocol-specific pipeline construction.
+     */
+    public static final AttributeKey<String> NEGOTIATED_PROTOCOL =
+            AttributeKey.valueOf("TLS_NEGOTIATED_PROTOCOL");
+
+    /**
+     * Channel attribute key for the SNI hostname extracted during TLS handshake.
+     * Used for hostname-based routing decisions.
+     */
+    public static final AttributeKey<String> SNI_HOSTNAME =
+            AttributeKey.valueOf("TLS_SNI_HOSTNAME");
 
     private final AsyncMapping<String, CertificateKeyPair> promise;
 
@@ -56,11 +79,15 @@ public final class SNIHandler extends AbstractSniHandler<CertificateKeyPair> {
     protected void onLookupComplete(ChannelHandlerContext ctx, String hostname, Future<CertificateKeyPair> future) {
         if (!future.isSuccess()) {
             final Throwable cause = future.cause();
+            log.warn("SNI lookup failed for hostname: {}", hostname, cause);
             if (cause instanceof Error) {
                 throw (Error) cause;
             }
             throw new DecoderException("Failed to get the CertificateKeyPair for: " + hostname, cause);
         }
+
+        // Store the SNI hostname for downstream routing
+        ctx.channel().attr(SNI_HOSTNAME).set(hostname);
 
         CertificateKeyPair certificateKeyPair = future.getNow();
         replaceHandler(ctx, certificateKeyPair);
@@ -73,10 +100,11 @@ public final class SNIHandler extends AbstractSniHandler<CertificateKeyPair> {
             // that would be discarded. With the OpenSSL provider, discarding the
             // intermediate SslHandler leaks native memory (ReferenceCountedOpenSslEngine).
             SSLEngine engine = certificateKeyPair.sslContext().newEngine(ctx.alloc());
-            sslHandler = new TLSHandler(engine);
+            SslHandler handler = new TLSHandler(engine);
+            sslHandler = handler;
             // RES-01: Explicitly set TLS handshake timeout to defend against slow-TLS attacks.
             // Netty's default is 10s, but we set it explicitly for defense-in-depth.
-            sslHandler.setHandshakeTimeoutMillis(10_000);
+            handler.setHandshakeTimeoutMillis(10_000);
 
             try {
                 if (engine instanceof ReferenceCountedOpenSslEngine && certificateKeyPair.useOCSPStapling()) {
@@ -86,7 +114,20 @@ public final class SNIHandler extends AbstractSniHandler<CertificateKeyPair> {
                 ctx.fireExceptionCaught(ex);
             }
 
-            ctx.pipeline().replace(this, "TLSHandler", sslHandler);
+            // Capture ALPN-negotiated protocol after TLS handshake completes.
+            // This enables downstream handlers to route based on the negotiated
+            // application protocol (h2, http/1.1).
+            handler.handshakeFuture().addListener(f -> {
+                if (f.isSuccess()) {
+                    String protocol = handler.applicationProtocol();
+                    if (protocol != null) {
+                        ctx.channel().attr(NEGOTIATED_PROTOCOL).set(protocol);
+                        log.debug("ALPN negotiated protocol: {}", protocol);
+                    }
+                }
+            });
+
+            ctx.pipeline().replace(this, "TLSHandler", handler);
             sslHandler = null;
         } finally {
             // Since the SslHandler was not inserted into the pipeline the ownership of the SSLEngine was not

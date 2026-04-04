@@ -22,8 +22,7 @@ import org.apache.curator.RetryPolicy;
 import org.apache.curator.framework.CuratorFramework;
 import org.apache.curator.framework.CuratorFrameworkFactory;
 import org.apache.curator.retry.RetryNTimes;
-import org.apache.logging.log4j.LogManager;
-import org.apache.logging.log4j.Logger;
+import lombok.extern.log4j.Log4j2;
 import org.apache.zookeeper.ClientCnxnSocketNetty;
 
 import java.io.Closeable;
@@ -34,9 +33,8 @@ import java.util.concurrent.TimeUnit;
 import static org.apache.zookeeper.client.ZKClientConfig.SECURE_CLIENT;
 import static org.apache.zookeeper.client.ZKClientConfig.ZOOKEEPER_CLIENT_CNXN_SOCKET;
 
+@Log4j2
 public final class Curator implements Closeable {
-
-    private static final Logger logger = LogManager.getLogger(Curator.class);
     private static final Curator INSTANCE = new Curator();
 
     private CompletableFuture<Boolean> initializationFuture = new CompletableFuture<>();
@@ -56,7 +54,7 @@ public final class Curator implements Closeable {
             // If ConnectionFuture is in 'Done' state then we have existing Curator instance running.
             // We will close the existing instance before we build fresh one.
             if (INSTANCE.initializationFuture.isDone()) {
-                logger.info("Closing existing Curator instance");
+                log.info("Closing existing Curator instance");
                 INSTANCE.close();
                 INSTANCE.initializationFuture = new CompletableFuture<>();
             }
@@ -95,20 +93,20 @@ public final class Curator implements Closeable {
 
                     // When isConnected is true then connection has been established successfully
                     if (INSTANCE.curatorFramework.getZookeeperClient().isConnected()) {
-                        logger.info("Started Apache Zookeeper Curator. Connected: {}", true);
+                        log.info("Started Apache Zookeeper Curator. Connected: {}", true);
                         return true;
                     } else {
-                        logger.fatal("Failed to start Apache Zookeeper Curator");
+                        log.fatal("Failed to start Apache Zookeeper Curator");
                         return false;
                     }
                 } catch (InterruptedException e) {
-                    logger.error("ConnectionFuture sleep thread interrupted", e);
+                    log.error("ConnectionFuture sleep thread interrupted", e);
                     throw new RuntimeException(e);
                 }
             });
         } else {
             INSTANCE.initializationFuture.complete(true);
-            logger.info("Skipping ZooKeeper initialization because ZooKeeper was disabled");
+            log.info("Skipping ZooKeeper initialization because ZooKeeper was disabled");
         }
     }
 

@@ -112,6 +112,7 @@ public final class ControlPlaneCluster implements Closeable {
     private volatile Closeable pendingMutationsWatch;
     private volatile ConfigDistributor configDistributor;
     private volatile ConcurrentHashMap<String, Long> processedNonceMap;
+    private volatile java.util.concurrent.ScheduledFuture<?> nonceCleanupFuture;
 
     /**
      * Creates a new cluster manager.
@@ -405,8 +406,10 @@ public final class ControlPlaneCluster implements Closeable {
         ConcurrentHashMap<String, Long> processedNonces = new ConcurrentHashMap<>();
         this.processedNonceMap = processedNonces;
 
-        // Schedule periodic cleanup of stale nonces (every 60 seconds)
-        scheduler.scheduleAtFixedRate(() -> {
+        // Schedule periodic cleanup of stale nonces (every 60 seconds).
+        // Track the future so closePendingMutationsWatch() can cancel it on leadership loss,
+        // preventing accumulation of cleanup tasks under rapid leadership flips.
+        nonceCleanupFuture = scheduler.scheduleAtFixedRate(() -> {
             try {
                 long cutoff = System.currentTimeMillis() - NONCE_EXPIRY_MS;
                 processedNonces.entrySet().removeIf(e -> e.getValue() < cutoff);
@@ -501,9 +504,17 @@ public final class ControlPlaneCluster implements Closeable {
     }
 
     /**
-     * Closes the pending-mutations watch if it is currently active.
+     * Closes the pending-mutations watch and cancels the nonce cleanup task
+     * if they are currently active.
      */
     private void closePendingMutationsWatch() {
+        // Cancel the nonce cleanup task to prevent accumulation under rapid leadership flips
+        java.util.concurrent.ScheduledFuture<?> cleanupTask = this.nonceCleanupFuture;
+        if (cleanupTask != null) {
+            cleanupTask.cancel(false);
+            this.nonceCleanupFuture = null;
+        }
+
         Closeable watch = this.pendingMutationsWatch;
         if (watch != null) {
             try {

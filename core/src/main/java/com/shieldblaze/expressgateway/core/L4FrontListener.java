@@ -22,12 +22,14 @@ import com.shieldblaze.expressgateway.core.events.L4FrontListenerStartupTask;
 import com.shieldblaze.expressgateway.core.events.L4FrontListenerStopTask;
 import com.shieldblaze.expressgateway.core.loadbalancer.L4LoadBalancer;
 
+import java.util.concurrent.atomic.AtomicReference;
+
 /**
  * This class handles L4 Load Balancer states like start, stop, and shutdown.
  */
 public abstract class L4FrontListener {
 
-    private L4LoadBalancer l4LoadBalancer;
+    private final AtomicReference<L4LoadBalancer> l4LoadBalancerRef = new AtomicReference<>();
 
     /**
      * @see L4LoadBalancer#start()
@@ -48,20 +50,21 @@ public abstract class L4FrontListener {
      * Returns {@link L4LoadBalancer} associated with this listener
      */
     protected L4LoadBalancer l4LoadBalancer() {
-        return l4LoadBalancer;
+        return l4LoadBalancerRef.get();
     }
 
     /**
      * This method is automatically called by {@link L4LoadBalancer} while initializing.
+     * Uses CAS to eliminate the TOCTOU race between the null-check and assignment
+     * that existed with the previous volatile field + if-check pattern.
      *
      * @param l4LoadBalancer {@link L4LoadBalancer} Instance
      * @throws IllegalArgumentException If {@link L4LoadBalancer} is tried to be set again
      */
     public L4FrontListener l4LoadBalancer(L4LoadBalancer l4LoadBalancer) {
-        if (this.l4LoadBalancer != null) {
+        if (!l4LoadBalancerRef.compareAndSet(null, l4LoadBalancer)) {
             throw new IllegalArgumentException("L4LoadBalancer is already set");
         }
-        this.l4LoadBalancer = l4LoadBalancer;
         return this;
     }
 }

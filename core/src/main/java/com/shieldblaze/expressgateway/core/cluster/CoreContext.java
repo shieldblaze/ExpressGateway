@@ -20,15 +20,22 @@ package com.shieldblaze.expressgateway.core.cluster;
 import com.shieldblaze.expressgateway.backend.Node;
 import com.shieldblaze.expressgateway.core.exceptions.NotFoundException;
 import com.shieldblaze.expressgateway.core.loadbalancer.L4LoadBalancer;
+import lombok.extern.log4j.Log4j2;
 
+import java.util.Collections;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
 
 import static com.shieldblaze.expressgateway.common.utils.ObjectUtils.nonNullObject;
 
 /**
- * {@link CoreContext} holds all the {@link L4LoadBalancer} instances
+ * {@link CoreContext} holds all the {@link L4LoadBalancer} instances.
+ *
+ * <p>This is a global static registry -- all load balancer instances are registered
+ * here on creation and looked up by ID for management operations (control plane,
+ * REST API, metrics collection).</p>
  */
+@Log4j2
 public final class CoreContext {
 
     /**
@@ -89,33 +96,44 @@ public final class CoreContext {
     }
 
     /**
-     * Get total active connections across all load balancers.
+     * Get an unmodifiable view of all registered load balancers.
      */
-    public int totalActiveConnections() {
-        return REGISTRY.values()
-                .stream()
-                .mapToInt(L4LoadBalancer -> L4LoadBalancer
-                        .connectionTracker()
-                        .connections())
-                .sum();
+    public static Map<String, L4LoadBalancer> all() {
+        return Collections.unmodifiableMap(REGISTRY);
     }
 
     /**
-     * Get the total connections load across all load balancers
+     * Get the number of registered load balancers.
      */
-    public long totalConnections() {
-        return REGISTRY.values()
-                .stream()
-                .mapToLong(value -> value
-                        .clusters()
-                        .values()
-                        .stream()
-                        .mapToLong(cluster -> cluster.onlineNodes()
-                                .stream()
-                                .mapToInt(Node::maxConnections)
-                                .sum())
-                        .sum())
-                .sum();
+    public static int size() {
+        return REGISTRY.size();
+    }
+
+    /**
+     * Get total active connections across all load balancers.
+     */
+    public static int totalActiveConnections() {
+        int total = 0;
+        for (L4LoadBalancer lb : REGISTRY.values()) {
+            total += lb.connectionTracker().connections();
+        }
+        return total;
+    }
+
+    /**
+     * Get the total maximum connections capacity across all load balancers.
+     * This sums {@link Node#maxConnections()} for all online nodes across all clusters.
+     */
+    public static long totalConnectionCapacity() {
+        long total = 0;
+        for (L4LoadBalancer lb : REGISTRY.values()) {
+            for (var cluster : lb.clusters().values()) {
+                for (Node node : cluster.onlineNodes()) {
+                    total += node.maxConnections();
+                }
+            }
+        }
+        return total;
     }
 
     private CoreContext() {

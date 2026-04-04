@@ -20,7 +20,6 @@ package com.shieldblaze.expressgateway.protocol.http.compression;
 import io.netty.handler.codec.http2.Http2Headers;
 
 import java.util.Set;
-import java.util.TreeSet;
 
 import static io.netty.handler.codec.http.HttpHeaderNames.CONTENT_ENCODING;
 import static io.netty.handler.codec.http.HttpHeaderNames.CONTENT_LENGTH;
@@ -33,39 +32,45 @@ public final class CompressionUtil {
     private static final boolean EnableDeflate = true;
     private static final boolean EnableZstd = true;
 
-    private static final Set<String> MIME_TYPES = new TreeSet<>();
-
-    static {
-        MIME_TYPES.add("text/html");
-        MIME_TYPES.add("text/css");
-        MIME_TYPES.add("text/plain");
-        MIME_TYPES.add("text/xml");
-        MIME_TYPES.add("text/x-component");
-        MIME_TYPES.add("text/javascript");
-        MIME_TYPES.add("application/x-javascript");
-        MIME_TYPES.add("application/javascript");
-        MIME_TYPES.add("application/json");
-        MIME_TYPES.add("application/manifest+json");
-        MIME_TYPES.add("application/xml");
-        MIME_TYPES.add("application/xhtml+xml");
-        MIME_TYPES.add("application/rss+xml");
-        MIME_TYPES.add("application/atom+xml");
-        MIME_TYPES.add("application/vnd.ms-fontobject");
-        MIME_TYPES.add("application/x-font-ttf");
-        MIME_TYPES.add("application/x-font-opentype");
-        MIME_TYPES.add("application/x-font-truetype");
-        MIME_TYPES.add("application/wasm");
-        MIME_TYPES.add("image/svg+xml");
-        MIME_TYPES.add("image/x-icon");
-        MIME_TYPES.add("image/vnd.microsoft.icon");
-        MIME_TYPES.add("font/ttf");
-        MIME_TYPES.add("font/eot");
-        MIME_TYPES.add("font/otf");
-        MIME_TYPES.add("font/opentype");
-    }
+    /**
+     * Immutable set of compressible MIME types. Uses {@code Set.of()} for O(1) hash-based
+     * lookups instead of {@code TreeSet}'s O(log n) tree traversal. The set is unmodifiable
+     * and internally optimized by the JDK for small-to-medium cardinalities.
+     */
+    private static final Set<String> MIME_TYPES = Set.of(
+            "text/html",
+            "text/css",
+            "text/plain",
+            "text/xml",
+            "text/x-component",
+            "text/javascript",
+            "application/x-javascript",
+            "application/javascript",
+            "application/json",
+            "application/manifest+json",
+            "application/xml",
+            "application/xhtml+xml",
+            "application/rss+xml",
+            "application/atom+xml",
+            "application/vnd.ms-fontobject",
+            "application/x-font-ttf",
+            "application/x-font-opentype",
+            "application/x-font-truetype",
+            "application/wasm",
+            "image/svg+xml",
+            "image/x-icon",
+            "image/vnd.microsoft.icon",
+            "font/ttf",
+            "font/eot",
+            "font/otf",
+            "font/opentype"
+    );
 
     public static boolean isCompressible(String contentType) {
-        return MIME_TYPES.contains(contentType.split(";")[0]);
+        // Avoid split(";") allocation on hot path — find the semicolon index manually.
+        int semicolon = contentType.indexOf(';');
+        String mimeType = semicolon >= 0 ? contentType.substring(0, semicolon) : contentType;
+        return MIME_TYPES.contains(mimeType);
     }
 
     public static String checkCompressibleForHttp2(Http2Headers headers, String acceptEncoding, long compressionThreshold) {
@@ -78,7 +83,9 @@ public final class CompressionUtil {
         if (!headers.contains(CONTENT_TYPE)) {
             return null;
         }
-        if (!MIME_TYPES.contains(headers.get(CONTENT_TYPE).toString().split(";")[0])) {
+        String ct = headers.get(CONTENT_TYPE).toString();
+        int semi = ct.indexOf(';');
+        if (!MIME_TYPES.contains(semi >= 0 ? ct.substring(0, semi) : ct)) {
             return null;
         }
         if (headers.contains(CONTENT_LENGTH)) {
@@ -98,26 +105,32 @@ public final class CompressionUtil {
         float gzipQ = -1.0f;
         float deflateQ = -1.0f;
         for (String encoding : acceptEncoding.split(",")) {
+            // Parse "encoding;q=value" — extract the token before ';' and the q-value after '='.
+            String token;
             float q = 1.0f;
-            int equalsPos = encoding.indexOf('=');
-            if (equalsPos != -1) {
-                try {
-                    q = Float.parseFloat(encoding.substring(equalsPos + 1).trim());
-                } catch (NumberFormatException e) {
-                    // Ignore encoding
-                    q = 0.0f;
+            int semiPos = encoding.indexOf(';');
+            if (semiPos != -1) {
+                token = encoding.substring(0, semiPos).trim().toLowerCase();
+                int equalsPos = encoding.indexOf('=', semiPos);
+                if (equalsPos != -1) {
+                    try {
+                        q = Float.parseFloat(encoding.substring(equalsPos + 1).trim());
+                    } catch (NumberFormatException e) {
+                        q = 0.0f;
+                    }
                 }
+            } else {
+                token = encoding.trim().toLowerCase();
             }
-            if (encoding.contains("*")) {
-                starQ = q;
-            } else if (encoding.contains("br") && q > brQ) {
-                brQ = q;
-            } else if (encoding.contains("zstd") && q > zstdQ) {
-                zstdQ = q;
-            } else if (encoding.contains("gzip") && q > gzipQ) {
-                gzipQ = q;
-            } else if (encoding.contains("deflate") && q > deflateQ) {
-                deflateQ = q;
+            // Match exact encoding tokens to prevent false positives
+            // (e.g., "br" must not match "x-br-custom").
+            switch (token) {
+                case "*" -> starQ = q;
+                case "br" -> { if (q > brQ) brQ = q; }
+                case "zstd" -> { if (q > zstdQ) zstdQ = q; }
+                case "gzip" -> { if (q > gzipQ) gzipQ = q; }
+                case "deflate" -> { if (q > deflateQ) deflateQ = q; }
+                default -> { /* unsupported encoding, ignore */ }
             }
         }
         if (brQ > 0.0f || zstdQ > 0.0f || gzipQ > 0.0f || deflateQ > 0.0f) {

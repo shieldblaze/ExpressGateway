@@ -21,6 +21,7 @@ import com.fasterxml.jackson.annotation.JsonIgnore;
 import com.fasterxml.jackson.annotation.JsonProperty;
 import com.shieldblaze.expressgateway.common.utils.NumberUtil;
 import com.shieldblaze.expressgateway.configuration.Configuration;
+import lombok.ToString;
 
 /**
  * Configuration for HTTP/3 application-layer settings (RFC 9114).
@@ -30,6 +31,7 @@ import com.shieldblaze.expressgateway.configuration.Configuration;
  * This configuration retains only HTTP/3-specific settings: QPACK compression
  * and Alt-Svc advertisement.</p>
  */
+@ToString(exclude = "validated")
 public final class Http3Configuration implements Configuration<Http3Configuration> {
 
     /**

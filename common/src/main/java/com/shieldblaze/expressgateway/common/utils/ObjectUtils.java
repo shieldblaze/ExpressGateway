@@ -1,10 +1,10 @@
 package com.shieldblaze.expressgateway.common.utils;
 
-public final class ObjectUtils {
+import lombok.AccessLevel;
+import lombok.NoArgsConstructor;
 
-    private ObjectUtils() {
-        // Prevent outside initialization
-    }
+@NoArgsConstructor(access = AccessLevel.PRIVATE)
+public final class ObjectUtils {
 
     /**
      * Check if the object is not null and throw a {@link NullPointerException} if it is.

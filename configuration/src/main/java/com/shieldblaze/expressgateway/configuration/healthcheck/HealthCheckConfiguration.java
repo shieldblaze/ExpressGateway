@@ -21,10 +21,12 @@ import com.fasterxml.jackson.annotation.JsonIgnore;
 import com.fasterxml.jackson.annotation.JsonProperty;
 import com.shieldblaze.expressgateway.common.utils.NumberUtil;
 import com.shieldblaze.expressgateway.configuration.Configuration;
+import lombok.ToString;
 
 /**
- * Configuration for {@link HealthCheckConfiguration}
+ * Configuration for health check scheduling.
  */
+@ToString(exclude = "validated")
 public final class HealthCheckConfiguration implements Configuration<HealthCheckConfiguration> {
 
     @JsonProperty
@@ -95,11 +97,4 @@ public final class HealthCheckConfiguration implements Configuration<HealthCheck
         return validated;
     }
 
-    @Override
-    public String toString() {
-        return "HealthCheckConfiguration{" +
-                "workers=" + workers +
-                ", timeInterval=" + timeInterval +
-                '}';
-    }
 }

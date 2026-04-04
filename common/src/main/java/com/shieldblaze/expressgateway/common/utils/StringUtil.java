@@ -17,6 +17,10 @@
  */
 package com.shieldblaze.expressgateway.common.utils;
 
+import lombok.AccessLevel;
+import lombok.NoArgsConstructor;
+
+@NoArgsConstructor(access = AccessLevel.PRIVATE)
 public final class StringUtil {
 
     public static final String EMPTY_STRING = "";
@@ -66,7 +70,4 @@ public final class StringUtil {
         return str;
     }
 
-    private StringUtil() {
-        // Prevent outside initialization
-    }
 }

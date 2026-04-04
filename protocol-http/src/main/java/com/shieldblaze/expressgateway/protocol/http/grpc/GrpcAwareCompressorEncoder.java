@@ -109,11 +109,8 @@ public final class GrpcAwareCompressorEncoder extends DecoratingHttp2ConnectionE
     }
 
     private static boolean isGrpcContentType(Http2Headers headers) {
-        CharSequence contentType = headers.get(GrpcConstants.CONTENT_TYPE);
-        if (contentType == null) {
-            return false;
-        }
-        String ct = contentType.toString();
-        return ct.startsWith(GrpcConstants.CONTENT_TYPE_GRPC_PREFIX);
+        // Delegate to GrpcDetector which uses zero-allocation char-by-char prefix matching
+        // instead of toString().startsWith() which allocates on every H2 HEADERS write.
+        return GrpcDetector.isGrpc(headers);
     }
 }

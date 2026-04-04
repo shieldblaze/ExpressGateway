@@ -17,8 +17,7 @@
  */
 package com.shieldblaze.expressgateway.controlplane.config;
 
-import org.apache.logging.log4j.LogManager;
-import org.apache.logging.log4j.Logger;
+import lombok.extern.log4j.Log4j2;
 
 import java.util.Collection;
 import java.util.Collections;
@@ -38,9 +37,9 @@ import java.util.concurrent.ConcurrentHashMap;
  * <p>This registry is thread-safe and uses {@link ConcurrentHashMap} for lock-free reads
  * on the hot path.</p>
  */
+@Log4j2
 public final class ConfigKindRegistry {
 
-    private static final Logger logger = LogManager.getLogger(ConfigKindRegistry.class);
     private static final ConcurrentHashMap<String, ConfigKindRegistration> REGISTRY = new ConcurrentHashMap<>();
 
     static {
@@ -56,10 +55,10 @@ public final class ConfigKindRegistry {
             ConfigKindRegistration reg = provider.registration();
             ConfigKindRegistration existing = REGISTRY.putIfAbsent(reg.kind().name(), reg);
             if (existing != null) {
-                logger.warn("Duplicate ConfigKindProvider for kind '{}': ignoring {} in favor of {}",
+                log.warn("Duplicate ConfigKindProvider for kind '{}': ignoring {} in favor of {}",
                         reg.kind().name(), reg.specClass().getName(), existing.specClass().getName());
             } else {
-                logger.info("Registered config kind '{}' -> {}", reg.kind().name(), reg.specClass().getName());
+                log.info("Registered config kind '{}' -> {}", reg.kind().name(), reg.specClass().getName());
             }
         });
     }
@@ -85,10 +84,10 @@ public final class ConfigKindRegistry {
         Objects.requireNonNull(registration, "registration");
         ConfigKindRegistration previous = REGISTRY.put(registration.kind().name(), registration);
         if (previous != null) {
-            logger.info("Replaced config kind '{}': {} -> {}",
+            log.info("Replaced config kind '{}': {} -> {}",
                     registration.kind().name(), previous.specClass().getName(), registration.specClass().getName());
         } else {
-            logger.info("Registered config kind '{}' -> {}",
+            log.info("Registered config kind '{}' -> {}",
                     registration.kind().name(), registration.specClass().getName());
         }
     }

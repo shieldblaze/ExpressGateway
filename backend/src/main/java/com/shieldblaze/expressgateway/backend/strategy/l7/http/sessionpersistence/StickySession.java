@@ -183,20 +183,26 @@ public final class StickySession implements SessionPersistence<HTTPBalanceRespon
 
     @Override
     public boolean removeRoute(HTTPBalanceRequest httpBalanceRequest, Node node) {
-        hashedIdToNode.remove(hashNodeId(node.id()));
-        return nodes.remove(node);
+        synchronized (nodes) {
+            hashedIdToNode.remove(hashNodeId(node.id()));
+            return nodes.remove(node);
+        }
     }
 
     @Override
     public boolean remove(Node node) {
-        hashedIdToNode.remove(hashNodeId(node.id()));
-        return nodes.remove(node);
+        synchronized (nodes) {
+            hashedIdToNode.remove(hashNodeId(node.id()));
+            return nodes.remove(node);
+        }
     }
 
     @Override
     public void clear() {
-        nodes.clear();
-        hashedIdToNode.clear();
+        synchronized (nodes) {
+            nodes.clear();
+            hashedIdToNode.clear();
+        }
     }
 
     @Override
@@ -221,16 +227,28 @@ public final class StickySession implements SessionPersistence<HTTPBalanceRespon
     }
 
     /**
-     * MED-27: Hash a node ID with SHA-256 to avoid leaking internal UUIDs in cookies.
+     * ThreadLocal MessageDigest to avoid per-call provider lookup and allocation.
+     * MessageDigest is not thread-safe, so a per-thread instance is required.
+     * SHA-256 is guaranteed by the JCA spec, so the NoSuchAlgorithmException
+     * should never occur.
      */
-    private static String hashNodeId(String nodeId) {
+    private static final ThreadLocal<MessageDigest> SHA256_DIGEST = ThreadLocal.withInitial(() -> {
         try {
-            MessageDigest digest = MessageDigest.getInstance("SHA-256");
-            byte[] hash = digest.digest(nodeId.getBytes(StandardCharsets.UTF_8));
-            return HexFormat.of().formatHex(hash);
+            return MessageDigest.getInstance("SHA-256");
         } catch (NoSuchAlgorithmException e) {
             throw new AssertionError("SHA-256 not available", e);
         }
+    });
+
+    /**
+     * MED-27: Hash a node ID with SHA-256 to avoid leaking internal UUIDs in cookies.
+     * Uses a ThreadLocal MessageDigest to avoid per-call provider lookup overhead.
+     */
+    private static String hashNodeId(String nodeId) {
+        MessageDigest digest = SHA256_DIGEST.get();
+        digest.reset();
+        byte[] hash = digest.digest(nodeId.getBytes(StandardCharsets.UTF_8));
+        return HexFormat.of().formatHex(hash);
     }
 
     private void addIfAbsent(Node node) {

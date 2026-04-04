@@ -17,14 +17,19 @@
  */
 package com.shieldblaze.expressgateway.common.utils;
 
+import lombok.AccessLevel;
+import lombok.NoArgsConstructor;
+
+import java.util.regex.Pattern;
+
+@NoArgsConstructor(access = AccessLevel.PRIVATE)
 public final class Hostname {
 
-    private Hostname() {
-    }
+    private static final Pattern COLON = Pattern.compile(":", Pattern.LITERAL);
 
     public static boolean doesHostAndPortMatch(String hostname, int port, String hostHeaderValue) {
         try {
-            String[] valueSplit = hostHeaderValue.split(":");
+            String[] valueSplit = COLON.split(hostHeaderValue, 3);
 
             return switch (valueSplit.length) {
                 case 2 -> hostname.equalsIgnoreCase(valueSplit[0]) && checkPort(port) && port == Integer.parseInt(valueSplit[1]);

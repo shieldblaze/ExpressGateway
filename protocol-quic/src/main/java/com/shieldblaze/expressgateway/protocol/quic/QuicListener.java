@@ -256,37 +256,46 @@ public class QuicListener extends L4FrontListener {
             return l4FrontListenerStopEvent;
         }
 
-        channelFutures.forEach(channelFuture -> channelFuture.channel().close());
+        // Close all UDP sockets and track completion. With SO_REUSEPORT, we must
+        // wait for ALL sockets to close before proceeding to drain/shutdown.
+        AtomicInteger remainingCloses = new AtomicInteger(channelFutures.size());
+        final Throwable[] closeFailure = {null};
 
-        channelFutures.get(channelFutures.size() - 1).channel().closeFuture().addListener(future -> {
-            if (future.isSuccess()) {
-                int activeCount = activeQuicConnections.size();
-                if (activeCount > 0 && drainTimeoutSeconds > 0) {
-                    logger.info("Draining {} active QUIC connections (timeout: {}s)",
-                            activeCount, drainTimeoutSeconds);
+        for (ChannelFuture channelFuture : channelFutures) {
+            channelFuture.channel().close().addListener(future -> {
+                if (!future.isSuccess() && closeFailure[0] == null) {
+                    closeFailure[0] = future.cause();
+                }
+                if (remainingCloses.decrementAndGet() == 0) {
+                    if (closeFailure[0] != null) {
+                        l4FrontListenerStopEvent.markFailure(closeFailure[0]);
+                        return;
+                    }
+                    int activeCount = activeQuicConnections.size();
+                    if (activeCount > 0 && drainTimeoutSeconds > 0) {
+                        logger.info("Draining {} active QUIC connections (timeout: {}s)",
+                                activeCount, drainTimeoutSeconds);
 
-                    GlobalEventExecutor.INSTANCE.schedule(() -> {
-                        int remaining = activeQuicConnections.size();
-                        if (remaining > 0) {
-                            logger.info("Drain timeout reached, forcefully closing {} remaining QUIC connections",
-                                    remaining);
-                            activeQuicConnections.close();
-                        }
+                        GlobalEventExecutor.INSTANCE.schedule(() -> {
+                            int remaining = activeQuicConnections.size();
+                            if (remaining > 0) {
+                                logger.info("Drain timeout reached, forcefully closing {} remaining QUIC connections",
+                                        remaining);
+                                activeQuicConnections.close();
+                            }
+                            channelFutures.clear();
+                            l4LoadBalancer().clusters().forEach((hostname, cluster) -> cluster.close());
+                            l4FrontListenerStopEvent.markSuccess(null);
+                        }, drainTimeoutSeconds, TimeUnit.SECONDS);
+                    } else {
+                        activeQuicConnections.close().awaitUninterruptibly(5, TimeUnit.SECONDS);
                         channelFutures.clear();
-                        // Close clusters AFTER drain completes so in-flight requests retain routing
                         l4LoadBalancer().clusters().forEach((hostname, cluster) -> cluster.close());
                         l4FrontListenerStopEvent.markSuccess(null);
-                    }, drainTimeoutSeconds, TimeUnit.SECONDS);
-                } else {
-                    activeQuicConnections.close().awaitUninterruptibly(5, TimeUnit.SECONDS);
-                    channelFutures.clear();
-                    l4LoadBalancer().clusters().forEach((hostname, cluster) -> cluster.close());
-                    l4FrontListenerStopEvent.markSuccess(null);
+                    }
                 }
-            } else {
-                l4FrontListenerStopEvent.markFailure(future.cause());
-            }
-        });
+            });
+        }
 
         l4LoadBalancer().eventStream().publish(l4FrontListenerStopEvent);
         return l4FrontListenerStopEvent;
@@ -307,6 +316,7 @@ public class QuicListener extends L4FrontListener {
                     });
         });
 
+        l4LoadBalancer().eventStream().publish(shutdownEvent);
         return shutdownEvent;
     }
 }

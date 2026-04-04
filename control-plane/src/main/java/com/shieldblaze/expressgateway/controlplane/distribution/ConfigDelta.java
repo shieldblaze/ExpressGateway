@@ -46,14 +46,6 @@ public record ConfigDelta(
     }
 
     /**
-     * Returns a defensive copy of the mutations list.
-     */
-    @Override
-    public List<ConfigMutation> mutations() {
-        return List.copyOf(mutations);
-    }
-
-    /**
      * Returns {@code true} if this delta contains no mutations.
      * An empty delta means the node is already at the target revision.
      */

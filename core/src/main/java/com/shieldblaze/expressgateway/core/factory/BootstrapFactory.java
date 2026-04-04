@@ -87,6 +87,7 @@ public final class BootstrapFactory {
                 .option(ChannelOption.RCVBUF_ALLOCATOR, configurationContext.transportConfiguration().recvByteBufAllocator())
                 .option(ChannelOption.SO_SNDBUF, configurationContext.transportConfiguration().socketSendBufferSize())
                 .option(ChannelOption.SO_RCVBUF, configurationContext.transportConfiguration().socketReceiveBufferSize())
+                .option(ChannelOption.WRITE_BUFFER_WATER_MARK, WRITE_BUFFER_WATER_MARK)
                 .option(ChannelOption.AUTO_READ, true)
                 .option(ChannelOption.AUTO_CLOSE, false)
                 .channelFactory(() -> {

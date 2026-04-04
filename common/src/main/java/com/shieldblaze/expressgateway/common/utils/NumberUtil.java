@@ -17,6 +17,10 @@
  */
 package com.shieldblaze.expressgateway.common.utils;
 
+import lombok.AccessLevel;
+import lombok.NoArgsConstructor;
+
+@NoArgsConstructor(access = AccessLevel.PRIVATE)
 public final class NumberUtil {
 
     /**
@@ -140,7 +144,4 @@ public final class NumberUtil {
         throw new IllegalArgumentException("Invalid " + message + ": " + f + "; (Expected: " + start + '-' + end + ')');
     }
 
-    private NumberUtil() {
-        // Prevent outside initialization
-    }
 }

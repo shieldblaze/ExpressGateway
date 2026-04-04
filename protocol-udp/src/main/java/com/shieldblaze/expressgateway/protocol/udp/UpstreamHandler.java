@@ -25,24 +25,20 @@ import com.shieldblaze.expressgateway.core.loadbalancer.L4LoadBalancer;
 import io.netty.channel.ChannelHandler;
 import io.netty.channel.ChannelHandlerContext;
 import io.netty.channel.ChannelInboundHandlerAdapter;
-import io.netty.channel.EventLoop;
 import io.netty.channel.socket.DatagramPacket;
 import io.netty.util.ReferenceCountUtil;
-import org.apache.logging.log4j.LogManager;
-import org.apache.logging.log4j.Logger;
+import lombok.extern.log4j.Log4j2;
 
 import java.io.Closeable;
 import java.net.InetSocketAddress;
 import java.time.Duration;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
-import java.util.concurrent.RejectedExecutionException;
 import java.util.concurrent.atomic.LongAdder;
 
+@Log4j2
 @ChannelHandler.Sharable
 final class UpstreamHandler extends ChannelInboundHandlerAdapter implements EntryRemovedListener<UDPConnection> {
-
-    private static final Logger logger = LogManager.getLogger(UpstreamHandler.class);
 
     // UDP-F3: Named constant for the default UDP session idle timeout. UDP is connectionless,
     // so "sessions" are synthetic mappings from client address to upstream connection.
@@ -90,19 +86,20 @@ final class UpstreamHandler extends ChannelInboundHandlerAdapter implements Entr
 
     @Override
     public void channelRead(ChannelHandlerContext ctx, Object msg) {
-        // HIGH-14: Avoid unnecessary thread hop -- process directly if already on a child EventLoop
-        EventLoop childEventLoop = l4LoadBalancer.eventLoopFactory().childGroup().next();
-        if (childEventLoop.inEventLoop()) {
-            processPacket(ctx, msg);
-        } else {
-            try {
-                childEventLoop.execute(() -> processPacket(ctx, msg));
-            } catch (RejectedExecutionException e) {
-                // MED-18: Release message on task rejection during shutdown to prevent ByteBuf leak
-                ReferenceCountUtil.safeRelease(msg);
-                logger.warn("EventLoop rejected task during shutdown, released message", e);
-            }
-        }
+        // Process directly on the current EventLoop. The handler is @Sharable and the
+        // connectionMap is backed by ConcurrentHashMap, so it's thread-safe.
+        //
+        // The previous implementation dispatched to childGroup().next() which round-robins
+        // across child EventLoops. This caused two bugs:
+        // 1. Different packets from the same client could race on connectionMap, creating
+        //    duplicate UDPConnections for the same source address.
+        // 2. The "already on child EventLoop" optimization checked inEventLoop() on a
+        //    rotating EventLoop, so the same thread could be "in" one iteration and "not in"
+        //    the next, causing inconsistent dispatch behavior.
+        //
+        // For UDP, the parent EventLoop handles both inbound reads and backend bootstrapping.
+        // There is no child pipeline (unlike TCP's ServerBootstrap accepting connections).
+        processPacket(ctx, msg);
     }
 
     private void processPacket(ChannelHandlerContext ctx, Object msg) {
@@ -110,7 +107,7 @@ final class UpstreamHandler extends ChannelInboundHandlerAdapter implements Entr
         try {
             // Rate limiting check -- per source IP
             if (!rateLimiter.tryAcquire(datagramPacket.sender().getAddress())) {
-                logger.debug("Rate limited datagram from {}", datagramPacket.sender());
+                log.debug("Rate limited datagram from {}", datagramPacket.sender());
                 ReferenceCountUtil.safeRelease(datagramPacket);
                 return;
             }
@@ -142,21 +139,36 @@ final class UpstreamHandler extends ChannelInboundHandlerAdapter implements Entr
             // MED-18: Ensure message is released on any unexpected exception
             undeliverableCount.increment();
             ReferenceCountUtil.safeRelease(datagramPacket);
-            logger.error("Error processing UDP packet", e);
+            log.error("Error processing UDP packet", e);
         }
     }
 
     @Override
     public void channelInactive(ChannelHandlerContext ctx) throws Exception {
-        logger.info("Closing All Upstream and Downstream Channels");
-        ((Closeable) connectionMap).close();
-        connectionMap.forEach((socketAddress, udpConnection) -> udpConnection.close());
+        log.info("Closing all UDP sessions ({} active)", connectionMap.size());
+
+        // Close all backend connections first, then stop the cleaner and clear the map.
+        // Order matters: closing connections before stopping the cleaner prevents the
+        // cleaner from racing with our explicit cleanup and double-closing connections.
+        connectionMap.forEach((socketAddress, udpConnection) -> {
+            try {
+                udpConnection.close();
+            } catch (Exception e) {
+                log.debug("Error closing UDP connection to {}", socketAddress, e);
+            }
+        });
+
+        try {
+            ((Closeable) connectionMap).close();
+        } catch (Exception e) {
+            log.debug("Error closing SelfExpiringMap cleaner", e);
+        }
         connectionMap.clear();
     }
 
     @Override
     public void exceptionCaught(ChannelHandlerContext ctx, Throwable cause) {
-        logger.error("Caught Error at Upstream Handler", cause);
+        log.error("Caught Error at Upstream Handler", cause);
         ctx.channel().close();
     }
 

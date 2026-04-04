@@ -29,7 +29,7 @@ import io.grpc.netty.GrpcSslContexts;
 import io.grpc.netty.NettyChannelBuilder;
 import io.netty.handler.ssl.SslContext;
 import io.netty.handler.ssl.SslContextBuilder;
-import lombok.extern.log4j.Log4j2;
+import lombok.extern.slf4j.Slf4j;
 
 import java.io.Closeable;
 import java.net.InetAddress;
@@ -46,7 +46,7 @@ import java.util.concurrent.TimeUnit;
  * <p>Lifecycle: connect -> register -> subscribe to config -> heartbeat -> apply config.
  * On disconnect: operate on last-known-good config, reconnect with backoff.</p>
  */
-@Log4j2
+@Slf4j
 public final class ControlPlaneAgent implements Closeable {
 
     private final AgentConfiguration config;
@@ -69,11 +69,9 @@ public final class ControlPlaneAgent implements Closeable {
         this.config = config;
         this.applier = new ConfigApplier();
         this.lkgStore = new LKGStore(config.lkgPath());
-        this.reconnectScheduler = Executors.newSingleThreadScheduledExecutor(r -> {
-            Thread t = new Thread(r, "cp-agent-reconnect");
-            t.setDaemon(true);
-            return t;
-        });
+        this.reconnectScheduler = Executors.newSingleThreadScheduledExecutor(Thread.ofVirtual()
+                .name("cp-agent-reconnect")
+                .factory());
         this.reconnectStrategy = new ReconnectStrategy();
     }
 

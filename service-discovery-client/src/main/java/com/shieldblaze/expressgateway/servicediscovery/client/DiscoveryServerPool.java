@@ -17,6 +17,8 @@
  */
 package com.shieldblaze.expressgateway.servicediscovery.client;
 
+import lombok.extern.slf4j.Slf4j;
+
 import java.util.List;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicLong;
@@ -29,6 +31,7 @@ import java.util.concurrent.atomic.AtomicLong;
  * failure count exceeds the configured threshold. Unhealthy servers are periodically
  * retried to detect recovery.</p>
  */
+@Slf4j
 public final class DiscoveryServerPool {
 
     private final List<ServerState> servers;
@@ -58,7 +61,7 @@ public final class DiscoveryServerPool {
      */
     public String selectServer() {
         int size = servers.size();
-        int startIdx = currentIndex.getAndIncrement() % size;
+        int startIdx = Math.floorMod(currentIndex.getAndIncrement(), size);
 
         // First pass: find a healthy server
         for (int i = 0; i < size; i++) {

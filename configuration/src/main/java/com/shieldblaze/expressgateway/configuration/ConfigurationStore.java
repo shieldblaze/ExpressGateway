@@ -77,7 +77,7 @@ public final class ConfigurationStore {
      */
     public static void removeConfiguration(Configuration<?> configuration) throws Exception {
         try {
-            logger.info("Being removing configuration from ZooKeeper");
+            logger.info("Begin removing configuration from ZooKeeper");
             deleteData(Curator.getInstance(), of(configuration));
             logger.info("Successfully removed configuration from ZooKeeper");
         } catch (Exception ex) {

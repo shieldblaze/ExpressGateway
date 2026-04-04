@@ -30,9 +30,8 @@ public final class TlsClientConfiguration extends TlsConfiguration {
     /**
      * This is the default implementation of {@link TlsClientConfiguration}
      * which is disabled by default.
-     * </p>
-     * <p>
-     * To enable this, call {@link #enabled()}.
+     *
+     * <p>To enable this, call {@link #enable()}.</p>
      */
     @JsonIgnore
     public static final TlsClientConfiguration DEFAULT = new TlsClientConfiguration();

@@ -17,33 +17,34 @@
  */
 package com.shieldblaze.expressgateway.common.crypto;
 
+import lombok.AccessLevel;
+import lombok.NoArgsConstructor;
+
 import java.io.ByteArrayInputStream;
 import java.io.IOException;
 import java.io.InputStream;
+import java.nio.charset.StandardCharsets;
 import java.security.cert.CertificateException;
 import java.security.cert.CertificateFactory;
 import java.security.cert.X509Certificate;
 
+@NoArgsConstructor(access = AccessLevel.PRIVATE)
 public final class CertificateUtil {
 
-    private CertificateUtil() {
-        // Prevent outside initialization
-    }
+    private static final ThreadLocal<CertificateFactory> CERTIFICATE_FACTORY =
+            ThreadLocal.withInitial(() -> {
+                try {
+                    return CertificateFactory.getInstance("X.509");
+                } catch (CertificateException e) {
+                    throw new IllegalStateException("X.509 CertificateFactory unavailable", e);
+                }
+            });
 
     public static X509Certificate parseX509Certificate(String certificate) {
-        CertificateFactory certificateFactory;
-
-        try {
-            certificateFactory = CertificateFactory.getInstance("X.509");
-        } catch (CertificateException e) {
-            // This can never happen
-            return null;
-        }
-
-        try (InputStream is = new ByteArrayInputStream(certificate.getBytes())) {
-            return (X509Certificate) certificateFactory.generateCertificate(is);
+        try (InputStream is = new ByteArrayInputStream(certificate.getBytes(StandardCharsets.UTF_8))) {
+            return (X509Certificate) CERTIFICATE_FACTORY.get().generateCertificate(is);
         } catch (IOException | CertificateException e) {
-            throw new IllegalArgumentException("Invalid Certificate");
+            throw new IllegalArgumentException("Invalid Certificate", e);
         }
     }
 }

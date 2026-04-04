@@ -17,12 +17,19 @@
  */
 package com.shieldblaze.expressgateway.common.zookeeper;
 
+import lombok.Getter;
+import lombok.ToString;
+import lombok.experimental.Accessors;
+
 import java.util.Objects;
 import java.util.UUID;
 
 /**
  * This class builds ZNode path for ZooKeeper
  */
+@Getter
+@Accessors(fluent = true)
+@ToString
 public final class ZNodePath {
 
     private final String path;
@@ -122,14 +129,4 @@ public final class ZNodePath {
         return path.toString();
     }
 
-    public String path() {
-        return path;
-    }
-
-    @Override
-    public String toString() {
-        return "ZNodePath{" +
-                "path='" + path + '\'' +
-                '}';
-    }
 }

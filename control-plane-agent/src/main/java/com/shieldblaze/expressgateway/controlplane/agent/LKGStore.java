@@ -19,7 +19,7 @@ package com.shieldblaze.expressgateway.controlplane.agent;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.shieldblaze.expressgateway.controlplane.config.ConfigResource;
-import lombok.extern.log4j.Log4j2;
+import lombok.extern.slf4j.Slf4j;
 
 import java.io.IOException;
 import java.nio.file.Files;
@@ -37,7 +37,7 @@ import java.util.Objects;
  * <p>Storage format: JSON file at configurable path.
  * Atomic write: write to temp file, then rename (POSIX atomic on same filesystem).</p>
  */
-@Log4j2
+@Slf4j
 public final class LKGStore {
 
     private final Path storagePath;

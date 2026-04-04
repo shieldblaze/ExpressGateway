@@ -151,6 +151,14 @@ public final class ConnectionMigrationHandler {
     private final ConcurrentHashMap<MigrationKey, MigrationEvent> activeMigrations = new ConcurrentHashMap<>();
 
     /**
+     * Secondary index: new address -> composite migration key.
+     * Eliminates O(n) linear scans in tryConsumeAmplificationBudget(), canSendTo(),
+     * trackBytesReceived(), isMigrating(), and getMigrationEvent() which all need
+     * to find an active migration by the new address.
+     */
+    private final ConcurrentHashMap<InetSocketAddress, MigrationKey> addressToMigrationKey = new ConcurrentHashMap<>();
+
+    /**
      * Rate limiter: tracks migration attempts per original address.
      * Key: original (pre-migration) address, Value: timestamp of last migration attempt.
      */
@@ -270,6 +278,7 @@ public final class ConnectionMigrationHandler {
                 oldAddress, newAddress, dcid, MigrationState.VALIDATING,
                 packetSize, 0, System.nanoTime());
         activeMigrations.put(migrationKey, event);
+        addressToMigrationKey.put(newAddress, migrationKey);
 
         if (logger.isInfoEnabled()) {
             logger.info("Connection migration detected: {} -> {}, initiating path validation on both paths",
@@ -289,29 +298,27 @@ public final class ConnectionMigrationHandler {
     public MigrationState processPathResponse(InetSocketAddress fromAddress, byte[] responseData) {
         PathValidator.ValidationResult result = pathValidator.validateResponse(fromAddress, responseData);
 
-        // Find the migration event for this address (scan by new address component of the composite key)
-        MigrationKey matchedKey = null;
-        MigrationEvent event = null;
-        for (Map.Entry<MigrationKey, MigrationEvent> entry : activeMigrations.entrySet()) {
-            if (entry.getKey().newAddress().equals(fromAddress)) {
-                matchedKey = entry.getKey();
-                event = entry.getValue();
-                break;
-            }
+        // O(1) lookup via secondary index instead of linear scan
+        MigrationKey matchedKey = addressToMigrationKey.get(fromAddress);
+        if (matchedKey == null) {
+            return MigrationState.FAILED;
         }
+        MigrationEvent event = activeMigrations.get(matchedKey);
         if (event == null) {
+            addressToMigrationKey.remove(fromAddress);
             return MigrationState.FAILED;
         }
 
-        final MigrationKey keyToRemove = matchedKey;
         return switch (result) {
             case VALIDATED -> {
                 completeMigration(event);
-                activeMigrations.remove(keyToRemove);
+                activeMigrations.remove(matchedKey);
+                addressToMigrationKey.remove(fromAddress);
                 yield MigrationState.COMPLETED;
             }
             case EXPIRED -> {
-                activeMigrations.remove(keyToRemove);
+                activeMigrations.remove(matchedKey);
+                addressToMigrationKey.remove(fromAddress);
                 yield MigrationState.FAILED;
             }
             case NO_MATCH -> MigrationState.FAILED;
@@ -325,12 +332,10 @@ public final class ConnectionMigrationHandler {
      * @param bytesReceived the number of bytes received
      */
     public void trackBytesReceived(InetSocketAddress fromAddress, long bytesReceived) {
-        for (MigrationKey key : activeMigrations.keySet()) {
-            if (key.newAddress().equals(fromAddress)) {
-                activeMigrations.computeIfPresent(key, (k, event) ->
-                        event.withReceivedBytes(bytesReceived));
-                return;
-            }
+        MigrationKey key = addressToMigrationKey.get(fromAddress);
+        if (key != null) {
+            activeMigrations.computeIfPresent(key, (k, event) ->
+                    event.withReceivedBytes(bytesReceived));
         }
     }
 
@@ -344,20 +349,19 @@ public final class ConnectionMigrationHandler {
      * @return true if sending is allowed and the budget was consumed
      */
     public boolean tryConsumeAmplificationBudget(InetSocketAddress toAddress, long bytesToSend) {
-        for (MigrationKey key : activeMigrations.keySet()) {
-            if (key.newAddress().equals(toAddress)) {
-                boolean[] allowed = {false};
-                activeMigrations.computeIfPresent(key, (k, event) -> {
-                    if (event.canSendBytes(bytesToSend)) {
-                        allowed[0] = true;
-                        return event.withSentBytes(bytesToSend);
-                    }
-                    return event;
-                });
-                return allowed[0];
-            }
+        MigrationKey key = addressToMigrationKey.get(toAddress);
+        if (key == null) {
+            return true; // No active migration -- no amplification limit
         }
-        return true; // No active migration -- no amplification limit
+        boolean[] allowed = {false};
+        activeMigrations.computeIfPresent(key, (k, event) -> {
+            if (event.canSendBytes(bytesToSend)) {
+                allowed[0] = true;
+                return event.withSentBytes(bytesToSend);
+            }
+            return event;
+        });
+        return allowed[0];
     }
 
     /**
@@ -368,16 +372,15 @@ public final class ConnectionMigrationHandler {
      * @return true if sending is allowed within anti-amplification limits
      */
     public boolean canSendTo(InetSocketAddress toAddress, long bytesToSend) {
-        for (MigrationKey key : activeMigrations.keySet()) {
-            if (key.newAddress().equals(toAddress)) {
-                MigrationEvent event = activeMigrations.get(key);
-                if (event == null) {
-                    return true;
-                }
-                return event.canSendBytes(bytesToSend);
-            }
+        MigrationKey key = addressToMigrationKey.get(toAddress);
+        if (key == null) {
+            return true; // No active migration -- no amplification limit
         }
-        return true; // No active migration -- no amplification limit
+        MigrationEvent event = activeMigrations.get(key);
+        if (event == null) {
+            return true;
+        }
+        return event.canSendBytes(bytesToSend);
     }
 
     /**
@@ -387,12 +390,10 @@ public final class ConnectionMigrationHandler {
      * @param bytesSent the number of bytes sent
      */
     public void trackBytesSent(InetSocketAddress toAddress, long bytesSent) {
-        for (MigrationKey key : activeMigrations.keySet()) {
-            if (key.newAddress().equals(toAddress)) {
-                activeMigrations.computeIfPresent(key, (k, event) ->
-                        event.withSentBytes(bytesSent));
-                return;
-            }
+        MigrationKey key = addressToMigrationKey.get(toAddress);
+        if (key != null) {
+            activeMigrations.computeIfPresent(key, (k, event) ->
+                    event.withSentBytes(bytesSent));
         }
     }
 
@@ -403,24 +404,23 @@ public final class ConnectionMigrationHandler {
      * @return true if a migration to this address is in progress
      */
     public boolean isMigrating(InetSocketAddress address) {
-        for (Map.Entry<MigrationKey, MigrationEvent> entry : activeMigrations.entrySet()) {
-            if (entry.getKey().newAddress().equals(address)) {
-                return entry.getValue().state() == MigrationState.VALIDATING;
-            }
+        MigrationKey key = addressToMigrationKey.get(address);
+        if (key == null) {
+            return false;
         }
-        return false;
+        MigrationEvent event = activeMigrations.get(key);
+        return event != null && event.state() == MigrationState.VALIDATING;
     }
 
     /**
      * Get the current migration event for an address, if any.
      */
     public MigrationEvent getMigrationEvent(InetSocketAddress address) {
-        for (Map.Entry<MigrationKey, MigrationEvent> entry : activeMigrations.entrySet()) {
-            if (entry.getKey().newAddress().equals(address)) {
-                return entry.getValue();
-            }
+        MigrationKey key = addressToMigrationKey.get(address);
+        if (key == null) {
+            return null;
         }
-        return null;
+        return activeMigrations.get(key);
     }
 
     public long totalMigrations() {
@@ -450,6 +450,7 @@ public final class ConnectionMigrationHandler {
         int[] evicted = {0};
         activeMigrations.entrySet().removeIf(e -> {
             if (now - e.getValue().createdAtNanos() > maxAgeNanos) {
+                addressToMigrationKey.remove(e.getKey().newAddress());
                 evicted[0]++;
                 return true;
             }

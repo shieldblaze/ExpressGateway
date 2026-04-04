@@ -25,8 +25,7 @@ import io.netty.channel.epoll.EpollSocketChannel;
 import io.netty.channel.socket.SocketChannel;
 import io.netty.incubator.channel.uring.IOUringChannelOption;
 import io.netty.incubator.channel.uring.IOUringSocketChannel;
-import org.apache.logging.log4j.LogManager;
-import org.apache.logging.log4j.Logger;
+import lombok.extern.log4j.Log4j2;
 
 /**
  * Transport-specific socket option tuner for TCP channels.
@@ -41,9 +40,8 @@ import org.apache.logging.log4j.Logger;
  * <p>These tunings are applied to backend (downstream) channels after creation.
  * Frontend channels are tuned by TCPListener via ServerBootstrap options.</p>
  */
+@Log4j2
 final class SocketTuner {
-
-    private static final Logger logger = LogManager.getLogger(SocketTuner.class);
 
     private SocketTuner() {
     }
@@ -106,7 +104,7 @@ final class SocketTuner {
                 }
             }
         } catch (Exception e) {
-            logger.debug("Failed to apply socket tuning for transport {}: {}",
+            log.debug("Failed to apply socket tuning for transport {}: {}",
                     transportType, e.getMessage());
         }
     }

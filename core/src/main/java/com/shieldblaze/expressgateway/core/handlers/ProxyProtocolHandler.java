@@ -22,8 +22,7 @@ import io.netty.buffer.ByteBuf;
 import io.netty.channel.ChannelHandlerContext;
 import io.netty.handler.codec.ByteToMessageDecoder;
 import io.netty.util.AttributeKey;
-import org.apache.logging.log4j.LogManager;
-import org.apache.logging.log4j.Logger;
+import lombok.extern.log4j.Log4j2;
 
 import java.net.InetSocketAddress;
 import java.nio.charset.StandardCharsets;
@@ -45,9 +44,8 @@ import java.util.Objects;
  * <p>This handler removes itself from the pipeline after decoding the
  * PROXY protocol header (one-shot decoder).</p>
  */
+@Log4j2
 public final class ProxyProtocolHandler extends ByteToMessageDecoder {
-
-    private static final Logger logger = LogManager.getLogger(ProxyProtocolHandler.class);
 
     /**
      * Channel attribute key for the real client address extracted from the PROXY protocol header.
@@ -102,21 +100,21 @@ public final class ProxyProtocolHandler extends ByteToMessageDecoder {
             } else if (matchesV1Prefix(in, readerIndex)) {
                 decodeV1(ctx, in);
             } else {
-                logger.error("PROXY protocol: unrecognized header, closing connection");
+                log.error("PROXY protocol: unrecognized header, closing connection");
                 ctx.close();
             }
         } else if (mode == ProxyProtocolMode.V1) {
             if (matchesV1Prefix(in, readerIndex)) {
                 decodeV1(ctx, in);
             } else {
-                logger.error("PROXY protocol v1 expected but not found, closing connection");
+                log.error("PROXY protocol v1 expected but not found, closing connection");
                 ctx.close();
             }
         } else if (mode == ProxyProtocolMode.V2) {
             if (matchesV2Signature(in, readerIndex)) {
                 decodeV2(ctx, in);
             } else {
-                logger.error("PROXY protocol v2 expected but not found, closing connection");
+                log.error("PROXY protocol v2 expected but not found, closing connection");
                 ctx.close();
             }
         }
@@ -143,7 +141,7 @@ public final class ProxyProtocolHandler extends ByteToMessageDecoder {
         if (lineEnd < 0) {
             if (readableBytes >= V1_MAX_LENGTH) {
                 // Header too long -- protocol violation
-                logger.error("PROXY protocol v1: header exceeds maximum length, closing connection");
+                log.error("PROXY protocol v1: header exceeds maximum length, closing connection");
                 ctx.close();
             }
             // Otherwise wait for more data (incomplete header)
@@ -167,13 +165,13 @@ public final class ProxyProtocolHandler extends ByteToMessageDecoder {
                 InetSocketAddress realAddress = new InetSocketAddress(srcIp, srcPort);
 
                 ctx.channel().attr(REAL_CLIENT_ADDRESS).set(realAddress);
-                logger.debug("PROXY v1: real client address = {}", sanitize(realAddress.toString()));
+                log.debug("PROXY v1: real client address = {}", sanitize(realAddress.toString()));
             } catch (Exception ex) {
-                logger.warn("PROXY protocol v1: failed to parse header '{}', ignoring", sanitize(header), ex);
+                log.warn("PROXY protocol v1: failed to parse header '{}', ignoring", sanitize(header), ex);
             }
         } else if (parts.length >= 2 && parts[1].equals("UNKNOWN")) {
             // UNKNOWN means the connection was not initiated from a known source
-            logger.debug("PROXY v1: UNKNOWN protocol family, no real address extracted");
+            log.debug("PROXY v1: UNKNOWN protocol family, no real address extracted");
         }
 
         // Remove this handler from the pipeline -- one-shot decode
@@ -204,7 +202,7 @@ public final class ProxyProtocolHandler extends ByteToMessageDecoder {
         int command = verCmd & 0x0F;
 
         if (version != 2) {
-            logger.error("PROXY protocol v2: unsupported version {}, closing connection", version);
+            log.error("PROXY protocol v2: unsupported version {}, closing connection", version);
             ctx.close();
             return;
         }
@@ -224,7 +222,7 @@ public final class ProxyProtocolHandler extends ByteToMessageDecoder {
 
         if (command == 0x00) {
             // LOCAL command -- health check / internal, no address to extract
-            logger.debug("PROXY v2: LOCAL command, no address extracted");
+            log.debug("PROXY v2: LOCAL command, no address extracted");
         } else if (command == 0x01) {
             // PROXY command -- extract source address
             if (addressFamily == 0x01) {
@@ -239,7 +237,7 @@ public final class ProxyProtocolHandler extends ByteToMessageDecoder {
                             (srcAddr[2] & 0xFF) + "." + (srcAddr[3] & 0xFF);
                     InetSocketAddress realAddress = new InetSocketAddress(srcIp, srcPort);
                     ctx.channel().attr(REAL_CLIENT_ADDRESS).set(realAddress);
-                    logger.debug("PROXY v2: real client address (IPv4) = {}", realAddress);
+                    log.debug("PROXY v2: real client address (IPv4) = {}", realAddress);
                 }
             } else if (addressFamily == 0x02) {
                 // AF_INET6 (IPv6): 16 bytes src, 16 bytes dst, 2 bytes src port, 2 bytes dst port = 36 bytes
@@ -256,11 +254,11 @@ public final class ProxyProtocolHandler extends ByteToMessageDecoder {
                     }
                     InetSocketAddress realAddress = new InetSocketAddress(sb.toString(), srcPort);
                     ctx.channel().attr(REAL_CLIENT_ADDRESS).set(realAddress);
-                    logger.debug("PROXY v2: real client address (IPv6) = {}", realAddress);
+                    log.debug("PROXY v2: real client address (IPv6) = {}", realAddress);
                 }
             } else if (addressFamily == 0x00) {
                 // AF_UNSPEC -- no address
-                logger.debug("PROXY v2: UNSPEC address family, no address extracted");
+                log.debug("PROXY v2: UNSPEC address family, no address extracted");
             }
         }
 

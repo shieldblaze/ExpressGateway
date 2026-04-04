@@ -19,6 +19,9 @@ package com.shieldblaze.expressgateway.servicediscovery.server;
 
 import com.fasterxml.jackson.annotation.JsonProperty;
 import com.fasterxml.jackson.annotation.JsonRootName;
+import lombok.AllArgsConstructor;
+import lombok.NoArgsConstructor;
+import lombok.ToString;
 
 import java.net.InetAddress;
 import java.net.InetSocketAddress;
@@ -26,6 +29,9 @@ import java.net.InetSocketAddress;
 import static com.shieldblaze.expressgateway.common.utils.StringUtil.validateNotNullOrEmpty;
 
 @JsonRootName("ExpressGatewayNode")
+@NoArgsConstructor
+@AllArgsConstructor
+@ToString
 public class Node {
 
     @JsonProperty("ID")
@@ -39,17 +45,6 @@ public class Node {
 
     @JsonProperty("TLSEnabled")
     private boolean tlsEnabled;
-
-    public Node() {
-        this(null, null, -1, false);
-    }
-
-    public Node(String id, String ipAddress, int port, boolean tlsEnabled) {
-        this.id = id;
-        this.ipAddress = ipAddress;
-        this.port = port;
-        this.tlsEnabled = tlsEnabled;
-    }
 
     public String id() {
         return id;
@@ -87,14 +82,5 @@ public class Node {
         } catch (Exception ex) {
             throw new IllegalArgumentException(ex);
         }
-    }
-
-    @Override
-    public String toString() {
-        return "ExpressGatewayNode{" +
-                "ipAddress='" + ipAddress + '\'' +
-                ", port=" + port +
-                ", tlsEnabled=" + tlsEnabled +
-                '}';
     }
 }

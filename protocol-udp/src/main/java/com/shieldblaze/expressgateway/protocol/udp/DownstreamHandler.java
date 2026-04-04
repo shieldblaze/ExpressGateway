@@ -18,18 +18,17 @@
 package com.shieldblaze.expressgateway.protocol.udp;
 
 import io.netty.channel.Channel;
+import io.netty.channel.ChannelFutureListener;
 import io.netty.channel.ChannelHandlerContext;
 import io.netty.channel.ChannelInboundHandlerAdapter;
 import io.netty.channel.socket.DatagramPacket;
 import io.netty.util.ReferenceCountUtil;
-import org.apache.logging.log4j.LogManager;
-import org.apache.logging.log4j.Logger;
+import lombok.extern.log4j.Log4j2;
 
 import java.net.InetSocketAddress;
 
+@Log4j2
 final class DownstreamHandler extends ChannelInboundHandlerAdapter {
-
-    private static final Logger logger = LogManager.getLogger(DownstreamHandler.class);
 
     private final Channel channel;
     private final UDPConnection udpConnection;
@@ -50,7 +49,12 @@ final class DownstreamHandler extends ChannelInboundHandlerAdapter {
             // owns another. The finally block releases the original packet (its envelope + content ref).
             // If writeAndFlush succeeds, the pipeline releases the new DatagramPacket's content ref.
             // If writeAndFlush fails synchronously, the pipeline still releases the new ref.
-            channel.writeAndFlush(new DatagramPacket(packet.content().retain(), socketAddress), channel.voidPromise());
+            //
+            // Use default promise (not voidPromise) so write failures propagate to
+            // exceptionCaught rather than being silently swallowed. VoidPromise ignores
+            // all errors, making undeliverable response datagrams invisible to monitoring.
+            channel.writeAndFlush(new DatagramPacket(packet.content().retain(), socketAddress))
+                    .addListener(ChannelFutureListener.FIRE_EXCEPTION_ON_FAILURE);
         } finally {
             ReferenceCountUtil.safeRelease(packet);
         }
@@ -58,8 +62,8 @@ final class DownstreamHandler extends ChannelInboundHandlerAdapter {
 
     @Override
     public void channelInactive(ChannelHandlerContext ctx) {
-        if (logger.isDebugEnabled()) {
-            logger.debug("Closing Upstream {} and Downstream {} Channel",
+        if (log.isDebugEnabled()) {
+            log.debug("Closing Upstream {} and Downstream {} Channel",
                     socketAddress.getAddress().getHostAddress() + ':' + socketAddress.getPort(),
                     udpConnection.socketAddress().getAddress().getHostAddress() + ':' + udpConnection.socketAddress().getPort());
         }
@@ -70,6 +74,8 @@ final class DownstreamHandler extends ChannelInboundHandlerAdapter {
 
     @Override
     public void exceptionCaught(ChannelHandlerContext ctx, Throwable cause) {
-        logger.error("Caught Error at Downstream Handler", cause);
+        log.error("Caught Error at Downstream Handler", cause);
+        udpConnection.close();
+        ctx.channel().close();
     }
 }

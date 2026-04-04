@@ -18,8 +18,7 @@
 package com.shieldblaze.expressgateway.controlplane.kvstore;
 
 import com.shieldblaze.expressgateway.configuration.distributed.ConfigStorageBackend;
-import org.apache.logging.log4j.LogManager;
-import org.apache.logging.log4j.Logger;
+import lombok.extern.log4j.Log4j2;
 
 import java.io.Closeable;
 import java.io.IOException;
@@ -36,9 +35,8 @@ import java.util.concurrent.CopyOnWriteArrayList;
  * <p>This adapter bridges the control-plane KVStore abstraction into the configuration
  * module, eliminating direct Curator/ZooKeeper dependencies from the config classes.</p>
  */
+@Log4j2
 public final class KVStoreConfigBackend implements ConfigStorageBackend {
-
-    private static final Logger logger = LogManager.getLogger(KVStoreConfigBackend.class);
 
     private final KVStore kvStore;
     private final List<Runnable> connectionLossListeners = new CopyOnWriteArrayList<>();
@@ -211,7 +209,7 @@ public final class KVStoreConfigBackend implements ConfigStorageBackend {
             try {
                 listener.run();
             } catch (Exception e) {
-                logger.warn("Connection loss listener threw exception", e);
+                log.warn("Connection loss listener threw exception", e);
             }
         }
     }

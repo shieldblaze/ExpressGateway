@@ -18,7 +18,8 @@
 
 package com.shieldblaze.expressgateway.concurrent.task;
 
-import java.util.Arrays;
+import java.io.PrintWriter;
+import java.io.StringWriter;
 
 public class DefaultTaskError implements TaskError {
     private final StringBuilder message = new StringBuilder();
@@ -26,8 +27,13 @@ public class DefaultTaskError implements TaskError {
 
     @Override
     public void addThrowable(Throwable throwable) {
+        if (throwable == null) {
+            return;
+        }
         message.append(throwable.getMessage()).append('\n');
-        stackTrace.append(Arrays.toString(throwable.getStackTrace())).append('\n');
+        StringWriter sw = new StringWriter();
+        throwable.printStackTrace(new PrintWriter(sw));
+        stackTrace.append(sw).append('\n');
     }
 
     @Override
@@ -37,6 +43,6 @@ public class DefaultTaskError implements TaskError {
 
     @Override
     public String toString() {
-        return message + stackTrace.toString();
+        return message.toString() + stackTrace;
     }
 }

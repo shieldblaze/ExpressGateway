@@ -19,8 +19,7 @@ package com.shieldblaze.expressgateway.controlplane.resilience;
 
 import com.shieldblaze.expressgateway.controlplane.cluster.ControlPlaneCluster;
 import com.shieldblaze.expressgateway.controlplane.cluster.ControlPlaneInstance;
-import org.apache.logging.log4j.LogManager;
-import org.apache.logging.log4j.Logger;
+import lombok.extern.log4j.Log4j2;
 
 import java.time.Duration;
 import java.time.Instant;
@@ -50,9 +49,8 @@ import java.util.concurrent.atomic.AtomicReference;
  * {@link PartitionSnapshot} managed via {@link AtomicReference} with CAS,
  * ensuring they are always consistent.</p>
  */
+@Log4j2
 public final class PartitionHandler {
-
-    private static final Logger logger = LogManager.getLogger(PartitionHandler.class);
 
     /**
      * Partition state.
@@ -245,12 +243,12 @@ public final class PartitionHandler {
     }
 
     private void fireStateChange(PartitionState from, PartitionState to, String reason) {
-        logger.warn("Partition state change: {} -> {} (reason: {})", from, to, reason);
+        log.warn("Partition state change: {} -> {} (reason: {})", from, to, reason);
         for (PartitionListener listener : listeners) {
             try {
                 listener.onPartitionStateChange(from, to, reason);
             } catch (Exception e) {
-                logger.error("Partition listener threw exception", e);
+                log.error("Partition listener threw exception", e);
             }
         }
     }

@@ -17,8 +17,9 @@
  */
 package com.shieldblaze.expressgateway.common.crypto.cryptostore;
 
-import org.apache.logging.log4j.LogManager;
-import org.apache.logging.log4j.Logger;
+import lombok.AccessLevel;
+import lombok.NoArgsConstructor;
+import lombok.extern.log4j.Log4j2;
 
 import javax.crypto.spec.PBEParameterSpec;
 import java.io.IOException;
@@ -43,8 +44,9 @@ import java.util.Map;
  * simplifies store and fetch operations of {@link Certificate} and
  * {@link PrivateKey}.
  */
+@Log4j2
+@NoArgsConstructor(access = AccessLevel.PRIVATE)
 public final class CryptoStore {
-    private static final Logger logger = LogManager.getLogger(CryptoStore.class);
 
     /**
      * Store an entry of {@link PrivateKey} and {@link X509Certificate}s in {@link KeyStore}
@@ -163,12 +165,9 @@ public final class CryptoStore {
         try {
             return SecureRandom.getInstanceStrong();
         } catch (NoSuchAlgorithmException e) {
-            logger.error("SecureRandom Strongest Algorithm not available");
+            log.error("SecureRandom Strongest Algorithm not available");
             return new SecureRandom();
         }
     }
 
-    private CryptoStore() {
-        // Prevent outside initialization
-    }
 }

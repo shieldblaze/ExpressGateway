@@ -58,6 +58,9 @@ public final class SyncTask<T> implements Task<T> {
 
     @Override
     public TaskError taskError() {
+        if (throwable == null) {
+            return null;
+        }
         DefaultTaskError error = new DefaultTaskError();
         error.addThrowable(throwable);
         return error;

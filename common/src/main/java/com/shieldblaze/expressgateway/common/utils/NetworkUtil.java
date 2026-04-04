@@ -17,8 +17,12 @@
  */
 package com.shieldblaze.expressgateway.common.utils;
 
+import lombok.AccessLevel;
+import lombok.NoArgsConstructor;
+
 import java.net.InetAddress;
 
+@NoArgsConstructor(access = AccessLevel.PRIVATE)
 public final class NetworkUtil {
 
     /**
@@ -64,7 +68,4 @@ public final class NetworkUtil {
         }
     }
 
-    private NetworkUtil() {
-        // Prevent outside initialization
-    }
 }

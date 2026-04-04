@@ -36,7 +36,7 @@ import com.shieldblaze.expressgateway.controlplane.config.types.TlsCertSpec;
 import com.shieldblaze.expressgateway.controlplane.config.types.TransportSpec;
 import com.shieldblaze.expressgateway.core.cluster.CoreContext;
 import com.shieldblaze.expressgateway.core.loadbalancer.L4LoadBalancer;
-import lombok.extern.log4j.Log4j2;
+import lombok.extern.slf4j.Slf4j;
 
 import java.util.List;
 import java.util.Map;
@@ -53,7 +53,7 @@ import java.util.concurrent.ConcurrentHashMap;
  * and {@link #registerDeleteHandler} for extensibility and testability. Built-in handlers
  * are registered by default for well-known config kinds.</p>
  */
-@Log4j2
+@Slf4j
 public final class ConfigApplier {
 
     /**

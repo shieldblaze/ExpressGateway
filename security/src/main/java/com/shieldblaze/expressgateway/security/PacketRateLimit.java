@@ -25,8 +25,7 @@ import io.netty.channel.ChannelDuplexHandler;
 import io.netty.channel.ChannelHandlerContext;
 import io.netty.channel.socket.DatagramPacket;
 import io.netty.util.ReferenceCountUtil;
-import org.apache.logging.log4j.LogManager;
-import org.apache.logging.log4j.Logger;
+import lombok.extern.slf4j.Slf4j;
 
 import java.net.InetSocketAddress;
 import java.time.Duration;
@@ -45,9 +44,8 @@ import java.util.concurrent.atomic.LongAdder;
  * <p>Counters use {@link LongAdder} for lock-free, low-contention tracking
  * on the hot path (every packet read).</p>
  */
+@Slf4j
 public final class PacketRateLimit extends ChannelDuplexHandler {
-
-    private static final Logger logger = LogManager.getLogger(PacketRateLimit.class);
 
     /**
      * Action to take when a packet exceeds the rate limit.
@@ -162,9 +160,9 @@ public final class PacketRateLimit extends ChannelDuplexHandler {
         droppedPackets.increment();
 
         if (msg instanceof DatagramPacket datagramPacket) {
-            logger.debug("Rate-Limit ({}) exceeded, denying packet from {}", source, datagramPacket.sender());
+            log.debug("Rate-Limit ({}) exceeded, denying packet from {}", source, datagramPacket.sender());
         } else {
-            logger.debug("Rate-Limit ({}) exceeded, denying packet from {}", source, ctx.channel().remoteAddress());
+            log.debug("Rate-Limit ({}) exceeded, denying packet from {}", source, ctx.channel().remoteAddress());
         }
 
         ReferenceCountUtil.release(msg);

@@ -17,8 +17,7 @@
  */
 package com.shieldblaze.expressgateway.controlplane.region;
 
-import org.apache.logging.log4j.LogManager;
-import org.apache.logging.log4j.Logger;
+import lombok.extern.log4j.Log4j2;
 
 import java.time.Duration;
 import java.time.Instant;
@@ -50,9 +49,8 @@ import java.util.concurrent.atomic.AtomicReference;
  *
  * <p>Thread safety: all public methods are safe for concurrent use.</p>
  */
+@Log4j2
 public final class RegionFailoverPolicy {
-
-    private static final Logger logger = LogManager.getLogger(RegionFailoverPolicy.class);
 
     /**
      * Failover event type.
@@ -165,21 +163,21 @@ public final class RegionFailoverPolicy {
         AtomicReference<String> ref = activeFailovers.computeIfAbsent(failedRegion, k -> new AtomicReference<>());
         // If already failed over, return immediately
         if (ref.get() != null) {
-            logger.debug("Region {} already failed over to {}", failedRegion, ref.get());
+            log.debug("Region {} already failed over to {}", failedRegion, ref.get());
             return CompletableFuture.completedFuture(Optional.empty());
         }
 
         // Check cooldown
         Instant lastFailover = lastFailoverTime.get(failedRegion);
         if (lastFailover != null && Duration.between(lastFailover, Instant.now()).compareTo(cooldownPeriod) < 0) {
-            logger.debug("Failover cooldown active for region {}", failedRegion);
+            log.debug("Failover cooldown active for region {}", failedRegion);
             return CompletableFuture.completedFuture(Optional.empty());
         }
 
         // Find best failover target
         Optional<String> target = selectFailoverTarget(failedRegion);
         if (target.isEmpty()) {
-            logger.warn("No available failover target for region {}", failedRegion);
+            log.warn("No available failover target for region {}", failedRegion);
             return CompletableFuture.completedFuture(Optional.empty());
         }
 
@@ -187,7 +185,7 @@ public final class RegionFailoverPolicy {
 
         // CAS: try to set the target atomically. If someone else won, bail out.
         if (!ref.compareAndSet(null, targetRegion)) {
-            logger.debug("Concurrent failover for region {} already in progress (target: {})",
+            log.debug("Concurrent failover for region {} already in progress (target: {})",
                     failedRegion, ref.get());
             return CompletableFuture.completedFuture(Optional.empty());
         }
@@ -204,7 +202,7 @@ public final class RegionFailoverPolicy {
                 completeDrain(failedRegion, targetRegion);
                 future.complete(Optional.of(targetRegion));
             } catch (Exception e) {
-                logger.error("Error completing drain for region {}", failedRegion, e);
+                log.error("Error completing drain for region {}", failedRegion, e);
                 future.completeExceptionally(e);
             }
         }, drainTimeout.toMillis(), TimeUnit.MILLISECONDS);
@@ -222,7 +220,7 @@ public final class RegionFailoverPolicy {
         try {
             return evaluateFailoverAsync(failedRegion).get();
         } catch (Exception e) {
-            logger.error("Error during failover evaluation for region {}", failedRegion, e);
+            log.error("Error during failover evaluation for region {}", failedRegion, e);
             return Optional.empty();
         }
     }
@@ -240,7 +238,7 @@ public final class RegionFailoverPolicy {
         fireEvent(new FailoverEvent(FailoverType.FAILOVER, failedRegion, targetRegion,
                 Instant.now(), "Failed over from " + failedRegion + " to " + targetRegion));
 
-        logger.info("Executed failover: {} -> {}", failedRegion, targetRegion);
+        log.info("Executed failover: {} -> {}", failedRegion, targetRegion);
     }
 
     /**
@@ -269,7 +267,7 @@ public final class RegionFailoverPolicy {
         // Check cooldown
         Instant lastFailover = lastFailoverTime.get(originalRegion);
         if (lastFailover != null && Duration.between(lastFailover, Instant.now()).compareTo(cooldownPeriod) < 0) {
-            logger.debug("Failback cooldown active for region {}", originalRegion);
+            log.debug("Failback cooldown active for region {}", originalRegion);
             return false;
         }
 
@@ -282,7 +280,7 @@ public final class RegionFailoverPolicy {
         fireEvent(new FailoverEvent(FailoverType.FAILBACK, failoverTarget, originalRegion,
                 Instant.now(), "Region " + originalRegion + " recovered, failing back from " + failoverTarget));
 
-        logger.info("Executed failback: {} -> {} (original region recovered)", failoverTarget, originalRegion);
+        log.info("Executed failback: {} -> {} (original region recovered)", failoverTarget, originalRegion);
         return true;
     }
 
@@ -363,7 +361,7 @@ public final class RegionFailoverPolicy {
             try {
                 listener.onFailover(event);
             } catch (Exception e) {
-                logger.warn("Failover listener threw exception", e);
+                log.warn("Failover listener threw exception", e);
             }
         }
     }

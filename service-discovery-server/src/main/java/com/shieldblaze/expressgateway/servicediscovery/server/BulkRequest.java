@@ -18,6 +18,8 @@
 package com.shieldblaze.expressgateway.servicediscovery.server;
 
 import com.fasterxml.jackson.annotation.JsonProperty;
+import lombok.AllArgsConstructor;
+import lombok.NoArgsConstructor;
 
 import java.util.List;
 
@@ -26,6 +28,8 @@ import java.util.List;
  * Allows clients to register or deregister multiple nodes in a single HTTP call,
  * reducing network round-trips during fleet-wide deployments.
  */
+@NoArgsConstructor
+@AllArgsConstructor
 public final class BulkRequest {
 
     @JsonProperty("Nodes")
@@ -33,14 +37,6 @@ public final class BulkRequest {
 
     @JsonProperty("TTLSeconds")
     private long ttlSeconds;
-
-    public BulkRequest() {
-    }
-
-    public BulkRequest(List<Node> nodes, long ttlSeconds) {
-        this.nodes = nodes;
-        this.ttlSeconds = ttlSeconds;
-    }
 
     public List<Node> nodes() {
         return nodes;

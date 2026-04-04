@@ -19,10 +19,13 @@ package com.shieldblaze.expressgateway.common;
 
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import lombok.AccessLevel;
+import lombok.NoArgsConstructor;
 
 /**
  * This class contains methods to read and write Json.
  */
+@NoArgsConstructor(access = AccessLevel.PRIVATE)
 public final class JacksonJson {
 
     public static final ObjectMapper OBJECT_MAPPER = new ObjectMapper();
@@ -51,7 +54,4 @@ public final class JacksonJson {
         return OBJECT_MAPPER.readValue(json, clazz);
     }
 
-    private JacksonJson() {
-        // Prevent outside initialization
-    }
 }

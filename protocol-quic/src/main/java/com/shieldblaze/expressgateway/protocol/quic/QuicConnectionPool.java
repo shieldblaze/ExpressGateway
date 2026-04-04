@@ -114,6 +114,7 @@ public class QuicConnectionPool<C extends QuicConnection> {
     public C acquire(Node node) {
         CopyOnWriteArrayList<C> conns = pool.get(node);
         if (conns == null) {
+            StandardEdgeNetworkMetricRecorder.INSTANCE.recordPoolMiss();
             return null;
         }
 
@@ -144,9 +145,22 @@ public class QuicConnectionPool<C extends QuicConnection> {
             int claimed = best.incrementActiveStreams();
             if (claimed > maxConcurrentStreams) {
                 best.decrementActiveStreams();
+                StandardEdgeNetworkMetricRecorder.INSTANCE.recordPoolMiss();
+                return null;
+            }
+            // Re-check state after claiming: the connection may have closed between
+            // the scan and the increment. Without this check, we return a dead
+            // connection with a phantom stream count that never gets decremented.
+            Connection.State recheck = best.state();
+            if (recheck == Connection.State.CONNECTION_CLOSED
+                    || recheck == Connection.State.CONNECTION_TIMEOUT) {
+                best.decrementActiveStreams();
+                StandardEdgeNetworkMetricRecorder.INSTANCE.recordPoolMiss();
                 return null;
             }
             StandardEdgeNetworkMetricRecorder.INSTANCE.recordPoolHit();
+        } else {
+            StandardEdgeNetworkMetricRecorder.INSTANCE.recordPoolMiss();
         }
         return best;
     }

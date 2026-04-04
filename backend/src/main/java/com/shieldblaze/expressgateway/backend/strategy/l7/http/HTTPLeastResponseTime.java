@@ -102,7 +102,7 @@ public final class HTTPLeastResponseTime extends HTTPBalance {
 
         List<Node> onlineNodes = cluster.onlineNodes();
         if (onlineNodes.isEmpty()) {
-            throw new NoNodeAvailableException();
+            throw NoNodeAvailableException.INSTANCE;
         }
 
         Node node = selectNode(onlineNodes);

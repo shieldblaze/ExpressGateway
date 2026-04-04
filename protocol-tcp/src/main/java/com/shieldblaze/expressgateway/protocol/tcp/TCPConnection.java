@@ -21,15 +21,13 @@ import com.shieldblaze.expressgateway.backend.Connection;
 import com.shieldblaze.expressgateway.backend.Node;
 import io.netty.channel.Channel;
 import io.netty.channel.ChannelFuture;
-import org.apache.logging.log4j.LogManager;
-import org.apache.logging.log4j.Logger;
+import lombok.extern.log4j.Log4j2;
 
 /**
  * Downstream {@link Connection} for TCP Protocol
  */
+@Log4j2
 final class TCPConnection extends Connection {
-
-    private static final Logger logger = LogManager.getLogger(TCPConnection.class);
 
     private Channel clientChannel;
 
@@ -55,7 +53,7 @@ final class TCPConnection extends Connection {
             writeBacklog();
         } else {
             // HIGH-13: On backend connect failure, close the client channel to signal error
-            logger.error("Backend connect failed for node {}: {}",
+            log.error("Backend connect failed for node {}: {}",
                     node().socketAddress(), channelFuture.cause() != null ? channelFuture.cause().getMessage() : "unknown");
             clearBacklog();
             if (clientChannel != null && clientChannel.isActive()) {

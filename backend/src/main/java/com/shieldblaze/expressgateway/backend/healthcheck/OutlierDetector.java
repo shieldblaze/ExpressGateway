@@ -23,8 +23,7 @@ import com.shieldblaze.expressgateway.backend.events.node.NodeIdleTask;
 import com.shieldblaze.expressgateway.backend.events.node.NodeOfflineTask;
 import com.shieldblaze.expressgateway.concurrent.eventstream.EventStream;
 import com.shieldblaze.expressgateway.configuration.healthcheck.OutlierDetectorConfiguration;
-import org.apache.logging.log4j.LogManager;
-import org.apache.logging.log4j.Logger;
+import lombok.extern.log4j.Log4j2;
 
 import java.io.Closeable;
 import java.util.List;
@@ -51,9 +50,8 @@ import java.util.concurrent.atomic.LongAdder;
  *
  * <p>Similar to Envoy's outlier detection feature.</p>
  */
+@Log4j2
 public final class OutlierDetector implements Closeable {
-
-    private static final Logger logger = LogManager.getLogger(OutlierDetector.class);
 
     private final OutlierDetectorConfiguration config;
     private final EventStream eventStream;
@@ -99,7 +97,7 @@ public final class OutlierDetector implements Closeable {
                 config.intervalMs(),
                 TimeUnit.MILLISECONDS
         );
-        logger.info("Outlier detector started with interval={}ms, ejectionTime={}ms, failureThreshold={}",
+        log.info("Outlier detector started with interval={}ms, ejectionTime={}ms, failureThreshold={}",
                 config.intervalMs(), config.ejectionTimeMs(), config.consecutiveFailures());
     }
 
@@ -161,7 +159,7 @@ public final class OutlierDetector implements Closeable {
                     if (node.state() == State.OFFLINE) {
                         node.state(State.IDLE);
                         eventStream.publish(new NodeIdleTask(node));
-                        logger.info("Outlier detector: restoring ejected node {} to IDLE after {}ms", node.socketAddress(), elapsedMs);
+                        log.info("Outlier detector: restoring ejected node {} to IDLE after {}ms", node.socketAddress(), elapsedMs);
                     }
                     return true;
                 }
@@ -186,8 +184,9 @@ public final class OutlierDetector implements Closeable {
                 if (failures >= config.consecutiveFailures()) {
                     // Check max ejection percentage
                     if (currentlyEjected >= maxEjectable) {
-                        logger.warn("Outlier detector: node {} exceeded failure threshold ({}) but max ejection limit reached ({}/{})",
+                        log.warn("Outlier detector: node {} exceeded failure threshold ({}) but max ejection limit reached ({}/{})",
                                 node.socketAddress(), failures, currentlyEjected, maxEjectable);
+                        counters.reset();
                         continue;
                     }
 
@@ -197,15 +196,16 @@ public final class OutlierDetector implements Closeable {
                     eventStream.publish(new NodeOfflineTask(node));
                     currentlyEjected++;
 
-                    logger.warn("Outlier detector: ejecting node {} after {} consecutive failures, ejection time={}ms",
+                    log.warn("Outlier detector: ejecting node {} after {} consecutive failures, ejection time={}ms",
                             node.socketAddress(), failures, config.ejectionTimeMs());
                 }
 
-                // Reset counters for next interval
+                // Reset aggregate counters for next interval.
+                // consecutiveFailures is NOT reset here (handled per-node on success).
                 counters.reset();
             }
         } catch (Exception ex) {
-            logger.error("Outlier detector evaluation failed", ex);
+            log.error("Outlier detector evaluation failed", ex);
         }
     }
 

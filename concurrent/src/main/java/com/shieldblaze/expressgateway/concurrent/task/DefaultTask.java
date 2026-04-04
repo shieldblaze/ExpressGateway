@@ -20,6 +20,7 @@ package com.shieldblaze.expressgateway.concurrent.task;
 import lombok.ToString;
 
 import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.atomic.AtomicBoolean;
 
 /**
  * Default implementation of an {@link Task}
@@ -28,13 +29,13 @@ import java.util.concurrent.CompletableFuture;
 public class DefaultTask<T> implements Task<T> {
 
     private final CompletableFuture<T> future = new CompletableFuture<>();
-    private volatile boolean isFinished;
+    private final AtomicBoolean finished = new AtomicBoolean(false);
     private volatile boolean isSuccessful;
     private volatile Throwable throwable;
     private volatile T object;
 
     /**
-     * Mark this event as successful with 'null' successfulcompletion object
+     * Mark this event as successful with 'null' successful completion object
      */
     public void markSuccess() {
         markSuccess(null);
@@ -46,15 +47,12 @@ public class DefaultTask<T> implements Task<T> {
      * @param object Successful completion object
      */
     public void markSuccess(T object) {
-        if (isFinished) {
+        if (!finished.compareAndSet(false, true)) {
             throw new IllegalStateException("Event is already finished");
         }
-
-        isFinished = true;
+        this.object = object;
         isSuccessful = true;
         future.complete(object);
-        this.object = object;
-
     }
 
     /**
@@ -63,11 +61,9 @@ public class DefaultTask<T> implements Task<T> {
      * @param cause {@link Throwable} of event failure cause
      */
     public void markFailure(Throwable cause) {
-        if (isFinished) {
+        if (!finished.compareAndSet(false, true)) {
             throw new IllegalStateException("Event is already finished");
         }
-
-        isFinished = true;
         isSuccessful = false;
         throwable = cause;
         future.completeExceptionally(cause);
@@ -84,7 +80,7 @@ public class DefaultTask<T> implements Task<T> {
 
     @Override
     public boolean isFinished() {
-        return isFinished;
+        return finished.get();
     }
 
     @Override
@@ -94,8 +90,12 @@ public class DefaultTask<T> implements Task<T> {
 
     @Override
     public TaskError taskError() {
+        Throwable t = throwable;
+        if (t == null) {
+            return null;
+        }
         DefaultTaskError error = new DefaultTaskError();
-        error.addThrowable(throwable);
+        error.addThrowable(t);
         return error;
     }
 }

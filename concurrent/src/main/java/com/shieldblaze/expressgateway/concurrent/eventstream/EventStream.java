@@ -18,8 +18,7 @@
 package com.shieldblaze.expressgateway.concurrent.eventstream;
 
 import com.shieldblaze.expressgateway.concurrent.task.Task;
-import org.apache.logging.log4j.LogManager;
-import org.apache.logging.log4j.Logger;
+import lombok.extern.log4j.Log4j2;
 
 import java.io.Closeable;
 import java.util.List;
@@ -28,9 +27,8 @@ import java.util.concurrent.CopyOnWriteArrayList;
 /**
  * {@linkplain EventStream} is a simple pub-sub stream channel.
  */
+@Log4j2
 public class EventStream implements Closeable {
-
-    private static final Logger logger = LogManager.getLogger(EventStream.class);
 
     /**
      * List of subscribers
@@ -82,15 +80,15 @@ public class EventStream implements Closeable {
 
     @Override
     public void close() {
-        logger.info("Unsubscribing all subscribers. Subscribers size: {}", subscribers.size());
+        log.info("Unsubscribing all subscribers. Subscribers size: {}", subscribers.size());
 
         // If Debug is enabled then log all subscribers
-        if (logger.isDebugEnabled()) {
-            logger.debug("Subscribers: {}", subscribers);
+        if (log.isDebugEnabled()) {
+            log.debug("Subscribers: {}", subscribers);
         }
 
         unsubscribeAll();
-        logger.info("Subscribed all subscribers. Subscribers size: {}", subscribers.size());
+        log.info("Unsubscribed all subscribers. Subscribers size: {}", subscribers.size());
     }
 
     @Override

@@ -1208,8 +1208,12 @@ public final class Http2ServerInboundHandler extends ChannelInboundHandlerAdapte
                             // GRPC-DL-04: Send RST_STREAM with CANCEL (0x8) to the backend
                             // to stop processing. Per gRPC spec, a deadline exceeded is a
                             // cancellation from the backend's perspective.
-                            deadlineConn.writeAndFlush(
-                                    new DefaultHttp2ResetFrame(Http2Error.CANCEL));
+                            // FIX: Set the client stream on the frame so writeIntoChannel()
+                            // can look up the forward mapping and remap to the backend stream.
+                            // Without this, stream() returns null causing NPE in writeIntoChannel.
+                            DefaultHttp2ResetFrame rstFrame = new DefaultHttp2ResetFrame(Http2Error.CANCEL);
+                            rstFrame.stream(clientStream);
+                            deadlineConn.writeAndFlush(rstFrame);
 
                             // Clean up backend resources.
                             deadlineConn.decrementActiveStreams();

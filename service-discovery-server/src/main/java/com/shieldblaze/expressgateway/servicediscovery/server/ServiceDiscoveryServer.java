@@ -17,10 +17,12 @@
  */
 package com.shieldblaze.expressgateway.servicediscovery.server;
 
+import lombok.extern.slf4j.Slf4j;
 import org.springframework.boot.SpringApplication;
 import org.springframework.boot.autoconfigure.SpringBootApplication;
 import org.springframework.context.ConfigurableApplicationContext;
 
+@Slf4j
 @SpringBootApplication
 public class ServiceDiscoveryServer {
     public static final String SERVICE_NAME = "ExpressGateway";

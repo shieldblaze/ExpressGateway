@@ -122,7 +122,7 @@ public final class WeightedRoundRobin extends L4Balance {
 
         List<Node> onlineNodes = cluster.onlineNodes();
         if (onlineNodes.isEmpty()) {
-            throw new NoNodeAvailableException();
+            throw NoNodeAvailableException.INSTANCE;
         }
 
         // Smooth weighted round-robin selection.
@@ -156,7 +156,7 @@ public final class WeightedRoundRobin extends L4Balance {
             node = best;
         } else {
             // Should not happen if onlineNodes is non-empty, but guard defensively.
-            throw new NoNodeAvailableException();
+            throw NoNodeAvailableException.INSTANCE;
         }
 
         sessionPersistence.addRoute(l4Request.socketAddress(), node);
@@ -216,10 +216,8 @@ public final class WeightedRoundRobin extends L4Balance {
     }
 
     @Override
-    public void close() throws IOException {
+    public synchronized void close() throws IOException {
         sessionPersistence.clear();
-        synchronized (this) {
-            weights.clear();
-        }
+        weights.clear();
     }
 }

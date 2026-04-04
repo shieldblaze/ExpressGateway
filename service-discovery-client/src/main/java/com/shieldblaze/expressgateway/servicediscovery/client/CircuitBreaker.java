@@ -17,6 +17,8 @@
  */
 package com.shieldblaze.expressgateway.servicediscovery.client;
 
+import lombok.extern.slf4j.Slf4j;
+
 import java.time.Duration;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicLong;
@@ -33,6 +35,7 @@ import java.util.concurrent.atomic.AtomicReference;
  *   <li>HALF_OPEN: one trial request is allowed. On success, transitions to CLOSED. On failure, transitions back to OPEN.</li>
  * </ul>
  */
+@Slf4j
 public final class CircuitBreaker {
 
     /**

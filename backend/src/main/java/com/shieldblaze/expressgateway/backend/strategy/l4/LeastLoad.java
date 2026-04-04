@@ -55,7 +55,7 @@ public final class LeastLoad extends L4Balance {
 
         List<Node> onlineNodes = cluster.onlineNodes();
         if (onlineNodes.isEmpty()) {
-            throw new NoNodeAvailableException();
+            throw NoNodeAvailableException.INSTANCE;
         }
 
         node = onlineNodes.get(0);

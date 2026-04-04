@@ -257,11 +257,21 @@ final class DownstreamHandler extends ChannelInboundHandlerAdapter implements Cl
                 // equalsIgnoreCase check, which would miss "keep-alive, close".
                 String connectionHeader = httpResponse.headers().get(HttpHeaderNames.CONNECTION);
                 if (connectionHeader != null) {
-                    for (String token : connectionHeader.split(",")) {
-                        if (token.trim().equalsIgnoreCase("close")) {
+                    // Zero-allocation comma-separated token scan to detect "close".
+                    int start = 0;
+                    int len = connectionHeader.length();
+                    while (start < len) {
+                        int comma = connectionHeader.indexOf(',', start);
+                        if (comma < 0) comma = len;
+                        int tokenStart = start;
+                        while (tokenStart < comma && connectionHeader.charAt(tokenStart) <= ' ') tokenStart++;
+                        int tokenEnd = comma;
+                        while (tokenEnd > tokenStart && connectionHeader.charAt(tokenEnd - 1) <= ' ') tokenEnd--;
+                        if (tokenEnd - tokenStart == 5 && connectionHeader.regionMatches(true, tokenStart, "close", 0, 5)) {
                             backendConnectionClose = true;
                             break;
                         }
+                        start = comma + 1;
                     }
                 }
 

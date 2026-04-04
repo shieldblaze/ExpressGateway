@@ -72,7 +72,7 @@ public final class HTTPRandom extends HTTPBalance {
         Node node;
         var nodes = cluster.onlineNodes();
         if (nodes.isEmpty()) {
-            throw new NoNodeAvailableException();
+            throw NoNodeAvailableException.INSTANCE;
         }
         node = nodes.get(ThreadLocalRandom.current().nextInt(nodes.size()));
 

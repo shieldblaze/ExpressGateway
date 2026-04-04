@@ -21,6 +21,7 @@ import com.fasterxml.jackson.annotation.JsonIgnore;
 import com.fasterxml.jackson.annotation.JsonProperty;
 import com.shieldblaze.expressgateway.common.utils.NumberUtil;
 import com.shieldblaze.expressgateway.configuration.Configuration;
+import lombok.ToString;
 
 /**
  * Configuration for passive health checking (outlier detection).
@@ -31,6 +32,7 @@ import com.shieldblaze.expressgateway.configuration.Configuration;
  *
  * <p>Similar to Envoy's outlier detection feature.</p>
  */
+@ToString(exclude = "validated")
 public final class OutlierDetectorConfiguration implements Configuration<OutlierDetectorConfiguration> {
 
     @JsonProperty

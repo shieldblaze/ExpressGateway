@@ -18,18 +18,17 @@
 package com.shieldblaze.expressgateway.concurrent.eventstream;
 
 import com.shieldblaze.expressgateway.concurrent.task.Task;
+import lombok.RequiredArgsConstructor;
+import lombok.AccessLevel;
 
 /**
  * {@linkplain EventSubscriber} exposes {@link EventStream#publish(Task)}
  * via {@link #subscribe(EventListener)}.
  */
+@RequiredArgsConstructor(access = AccessLevel.PACKAGE)
 public final class EventSubscriber {
 
     private final EventStream eventStream;
-
-    EventSubscriber(EventStream eventStream) {
-        this.eventStream = eventStream;
-    }
 
     public <T> EventSubscriber subscribe(EventListener<T> eventListener) {
         eventStream.subscribe(eventListener);

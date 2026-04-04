@@ -18,17 +18,15 @@
 package com.shieldblaze.expressgateway.concurrent.eventstream;
 
 import com.shieldblaze.expressgateway.concurrent.task.Task;
-import org.apache.logging.log4j.LogManager;
-import org.apache.logging.log4j.Logger;
+import lombok.extern.log4j.Log4j2;
 import org.jctools.queues.MpscUnboundedArrayQueue;
 
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
 
+@Log4j2
 public final class AsyncEventStream extends EventStream {
-
-    private static final Logger logger = LogManager.getLogger(AsyncEventStream.class);
 
     private final ExecutorService executorService;
     private final MpscUnboundedArrayQueue<Task> pendingTasks;
@@ -37,7 +35,7 @@ public final class AsyncEventStream extends EventStream {
     public AsyncEventStream(ExecutorService executorService) {
         this.executorService = executorService;
         this.pendingTasks = new MpscUnboundedArrayQueue<>(1024);
-        logger.info("Initialized new AsyncEventStream with Executor: {}", executorService);
+        log.info("Initialized new AsyncEventStream with Executor: {}", executorService);
     }
 
     @SuppressWarnings("unchecked")
@@ -62,7 +60,7 @@ public final class AsyncEventStream extends EventStream {
                     try {
                         eventListener.accept(t);
                     } catch (Exception ex) {
-                        logger.error("Subscriber {} threw exception processing task", eventListener, ex);
+                        log.error("Subscriber {} threw exception processing task", eventListener, ex);
                     }
                 }
             }
@@ -72,17 +70,17 @@ public final class AsyncEventStream extends EventStream {
     @Override
     public void close() {
         try {
-            logger.info("Shutting down Executor");
+            log.info("Shutting down Executor");
             // Schedule a final drain on the executor to respect the MPSC contract
             // (only the single consumer thread should poll the queue).
             executorService.execute(this::drainQueue);
             executorService.shutdown();
 
             boolean successfulTermination = executorService.awaitTermination(2, TimeUnit.SECONDS);
-            logger.info("Executor shutdown result: {}", successfulTermination);
+            log.info("Executor shutdown result: {}", successfulTermination);
 
             if (!successfulTermination) {
-                logger.warn("Executor did not terminate gracefully, forcing shutdown");
+                log.warn("Executor did not terminate gracefully, forcing shutdown");
                 executorService.shutdownNow();
             }
         } catch (InterruptedException e) {

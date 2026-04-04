@@ -129,12 +129,12 @@ public final class CidGenerator {
         byte[] cid = new byte[cidLength];
         System.arraycopy(serverIdPrefix, 0, cid, 0, SERVER_ID_PREFIX_LEN);
 
-        // Fill remaining bytes with cryptographically secure random data
-        int randomLen = cidLength - SERVER_ID_PREFIX_LEN;
-        if (randomLen > 0) {
-            byte[] randomBytes = new byte[randomLen];
-            threadLocalRandom.get().nextBytes(randomBytes);
-            System.arraycopy(randomBytes, 0, cid, SERVER_ID_PREFIX_LEN, randomLen);
+        // Fill remaining bytes with cryptographically secure random data.
+        // Use nextBytes on the full array then overwrite the prefix, avoiding
+        // an intermediate allocation for the random portion.
+        if (cidLength > SERVER_ID_PREFIX_LEN) {
+            threadLocalRandom.get().nextBytes(cid);
+            System.arraycopy(serverIdPrefix, 0, cid, 0, SERVER_ID_PREFIX_LEN);
         }
 
         return cid;

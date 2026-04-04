@@ -17,27 +17,22 @@
  */
 package com.shieldblaze.expressgateway.common.utils;
 
-import java.nio.charset.StandardCharsets;
+import lombok.AccessLevel;
+import lombok.NoArgsConstructor;
 
+import java.util.HexFormat;
+
+@NoArgsConstructor(access = AccessLevel.PRIVATE)
 public final class Hex {
-    private static final byte[] HEX_ARRAY = "0123456789ABCDEF".getBytes(StandardCharsets.UTF_8);
 
-    private Hex() {
-        // Prevent outside initialization
-    }
+    private static final HexFormat HEX = HexFormat.of().withUpperCase();
 
     /**
      * Convert byte array to Hex {@linkplain String}.
      * @param bytes Byte array
-     * @return {@link String} containing Hex
+     * @return {@link String} containing uppercase hex
      */
     public static String hexString(byte[] bytes) {
-        byte[] hexChars = new byte[bytes.length * 2];
-        for (int j = 0; j < bytes.length; j++) {
-            int v = bytes[j] & 0xFF;
-            hexChars[j * 2] = HEX_ARRAY[v >>> 4];
-            hexChars[j * 2 + 1] = HEX_ARRAY[v & 0x0F];
-        }
-        return new String(hexChars, StandardCharsets.UTF_8);
+        return HEX.formatHex(bytes);
     }
 }

@@ -22,8 +22,7 @@ import com.google.gson.JsonParser;
 import com.shieldblaze.expressgateway.common.ExpressGateway;
 import com.shieldblaze.expressgateway.common.utils.StringUtil;
 import io.netty.handler.ssl.util.InsecureTrustManagerFactory;
-import org.apache.logging.log4j.LogManager;
-import org.apache.logging.log4j.Logger;
+import lombok.extern.slf4j.Slf4j;
 import org.apache.zookeeper.common.X509Util;
 
 import javax.net.ssl.KeyManager;
@@ -48,9 +47,8 @@ import java.util.concurrent.locks.ReentrantLock;
  * <p>New features are accessible via the {@link #builder()} API for creating
  * configured instances.</p>
  */
+@Slf4j
 public final class ServiceDiscoveryClient {
-
-    private static final Logger logger = LogManager.getLogger(ServiceDiscoveryClient.class);
 
     // ---- Static legacy API (backward-compatible) ----
 
@@ -201,7 +199,7 @@ public final class ServiceDiscoveryClient {
         String body = serviceEntryToJson(entry);
         executeWithResilience("/api/v1/service/register", "PUT", body);
         cache.put(entry.id(), entry);
-        logger.info("Registered service: {}", entry.id());
+        log.info("Registered service: {}", entry.id());
     }
 
     /**
@@ -214,7 +212,7 @@ public final class ServiceDiscoveryClient {
         String body = serviceEntryToJson(entry);
         executeWithResilience("/api/v1/service/deregister", "DELETE", body);
         cache.remove(entry.id());
-        logger.info("Deregistered service: {}", entry.id());
+        log.info("Deregistered service: {}", entry.id());
     }
 
     /**
@@ -228,7 +226,7 @@ public final class ServiceDiscoveryClient {
         // Check cache first
         var cached = cache.get(serviceId);
         if (cached.isPresent() && cached.get().fresh()) {
-            logger.debug("Cache hit for service: {}", serviceId);
+            log.debug("Cache hit for service: {}", serviceId);
             return cached.get().entry();
         }
 
@@ -252,12 +250,12 @@ public final class ServiceDiscoveryClient {
                 }
             }
         } catch (Exception ex) {
-            logger.warn("Discovery lookup failed for {}, trying cache/DNS fallback", serviceId, ex);
+            log.warn("Discovery lookup failed for {}, trying cache/DNS fallback", serviceId, ex);
         }
 
         // Return stale cache entry if available
         if (cached.isPresent()) {
-            logger.info("Returning stale cache entry for: {}", serviceId);
+            log.info("Returning stale cache entry for: {}", serviceId);
             return cached.get().entry();
         }
 
@@ -265,7 +263,7 @@ public final class ServiceDiscoveryClient {
         if (dnsFallback != null) {
             List<ServiceEntry> dnsEntries = dnsFallback.resolve();
             if (!dnsEntries.isEmpty()) {
-                logger.info("DNS fallback resolved {} entries", dnsEntries.size());
+                log.info("DNS fallback resolved {} entries", dnsEntries.size());
                 cache.putAll(dnsEntries);
                 return dnsEntries.getFirst();
             }
@@ -322,11 +320,11 @@ public final class ServiceDiscoveryClient {
             } catch (IOException ex) {
                 lastException = ex;
                 serverPool.recordFailure(serverUri);
-                logger.warn("Attempt {} to {} failed: {}", attempt + 1, serverUri + path, ex.getMessage());
+                log.warn("Attempt {} to {} failed: {}", attempt + 1, serverUri + path, ex.getMessage());
             } catch (RuntimeException ex) {
                 lastException = new IOException("Request failed: " + ex.getMessage(), ex);
                 serverPool.recordFailure(serverUri);
-                logger.warn("Attempt {} to {} failed: {}", attempt + 1, serverUri + path, ex.getMessage());
+                log.warn("Attempt {} to {} failed: {}", attempt + 1, serverUri + path, ex.getMessage());
             }
         }
 

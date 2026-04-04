@@ -18,15 +18,14 @@
 package com.shieldblaze.expressgateway.common;
 
 import com.google.gson.GsonBuilder;
+import lombok.AccessLevel;
+import lombok.NoArgsConstructor;
 
 /**
  * {@link com.google.gson.Gson} Instance
  */
+@NoArgsConstructor(access = AccessLevel.PRIVATE)
 public final class Gson {
-
-    private Gson() {
-        // Prevent outside initialization
-    }
 
     /**
      * {@link com.google.gson.Gson} Singleton Instance

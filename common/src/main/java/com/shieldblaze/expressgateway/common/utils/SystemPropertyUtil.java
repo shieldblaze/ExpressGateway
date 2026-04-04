@@ -17,10 +17,14 @@
  */
 package com.shieldblaze.expressgateway.common.utils;
 
+import lombok.AccessLevel;
+import lombok.NoArgsConstructor;
+
 /**
  * Get value of supplied key using {@link System#getProperty(String)}
  * or {@link System#getenv(String)}
  */
+@NoArgsConstructor(access = AccessLevel.PRIVATE)
 public final class SystemPropertyUtil {
 
     /**
@@ -39,20 +43,16 @@ public final class SystemPropertyUtil {
 
     /**
      * @param key Key to lookup for
+     * @param def Default value if not found in system properties or environment
      */
     public static String getPropertyOrEnv(String key, String def) {
-        String value = System.getProperty(key, def);
+        String value = System.getProperty(key);
 
-        // If null then it was not found in Property
         if (value == null) {
             value = System.getenv(key);
         }
 
-        if (value == null) {
-            value = def;
-        }
-
-        return value;
+        return value != null ? value : def;
     }
 
     /**
@@ -121,7 +121,4 @@ public final class SystemPropertyUtil {
         }
     }
 
-    private SystemPropertyUtil() {
-        // Prevent outside initialization
-    }
 }

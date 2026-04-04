@@ -18,18 +18,17 @@
 package com.shieldblaze.expressgateway.concurrent.eventstream;
 
 import com.shieldblaze.expressgateway.concurrent.task.Task;
+import lombok.AccessLevel;
+import lombok.RequiredArgsConstructor;
 
 /**
  * {@linkplain EventPublisher} exposes {@link EventStream#publish(Task)}
  * via {@link #publish(Task)}.
  */
+@RequiredArgsConstructor(access = AccessLevel.PACKAGE)
 public final class EventPublisher {
 
     private final EventStream eventStream;
-
-    EventPublisher(EventStream eventStream) {
-        this.eventStream = eventStream;
-    }
 
     public <T> EventPublisher publish(Task<T> object) {
         eventStream.publish(object);

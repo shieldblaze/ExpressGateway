@@ -27,14 +27,12 @@ import io.netty.channel.ChannelInitializer;
 import io.netty.channel.ChannelPipeline;
 import io.netty.channel.group.ChannelGroup;
 import io.netty.channel.socket.SocketChannel;
-import org.apache.logging.log4j.LogManager;
-import org.apache.logging.log4j.Logger;
+import lombok.extern.log4j.Log4j2;
 
 import java.time.Duration;
 
+@Log4j2
 final class ServerInitializer extends ChannelInitializer<SocketChannel> {
-
-    private static final Logger logger = LogManager.getLogger(ServerInitializer.class);
 
     private final L4LoadBalancer l4LoadBalancer;
     private final ChannelGroup activeConnections;
@@ -79,11 +77,11 @@ final class ServerInitializer extends ChannelInitializer<SocketChannel> {
         pipeline.addLast(new UpstreamHandler(l4LoadBalancer));
 
         // Log TLS availability
-        logger.debug("TLS for Server available: {}", available);
+        log.debug("TLS for Server available: {}", available);
     }
 
     @Override
     public void exceptionCaught(ChannelHandlerContext ctx, Throwable cause) {
-        logger.error("Caught Error At ServerInitializer", cause);
+        log.error("Caught Error At ServerInitializer", cause);
     }
 }

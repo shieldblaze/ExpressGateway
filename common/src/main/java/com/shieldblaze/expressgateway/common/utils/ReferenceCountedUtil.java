@@ -19,15 +19,14 @@ package com.shieldblaze.expressgateway.common.utils;
 
 import io.netty.util.ReferenceCountUtil;
 import io.netty.util.ReferenceCounted;
+import lombok.AccessLevel;
+import lombok.NoArgsConstructor;
 
 /**
  * Provides extra utilities for {@link ReferenceCounted} objects.
  */
+@NoArgsConstructor(access = AccessLevel.PRIVATE)
 public final class ReferenceCountedUtil {
-
-    private ReferenceCountedUtil() {
-        // Prevent outside initialization
-    }
 
     public static void silentRelease(Object msg) {
         try {
@@ -47,8 +46,8 @@ public final class ReferenceCountedUtil {
 
     public static void silentFullRelease(Object msg) {
         try {
-            if (msg instanceof ReferenceCounted) {
-                ReferenceCountUtil.release(msg, ((ReferenceCounted) msg).refCnt());
+            if (msg instanceof ReferenceCounted rc) {
+                ReferenceCountUtil.release(rc, rc.refCnt());
             }
         } catch (Throwable t) {
             // Swallow the throwable

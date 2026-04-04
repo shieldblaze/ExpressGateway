@@ -17,9 +17,12 @@
  */
 package com.shieldblaze.expressgateway.common.zookeeper;
 
+import lombok.AccessLevel;
+import lombok.NoArgsConstructor;
 import org.apache.curator.framework.CuratorFramework;
 import org.apache.zookeeper.CreateMode;
 
+@NoArgsConstructor(access = AccessLevel.PRIVATE)
 public final class CuratorUtils {
 
     /**
@@ -124,7 +127,4 @@ public final class CuratorUtils {
         }
     }
 
-    private CuratorUtils() {
-        // Prevent outside initialization
-    }
 }

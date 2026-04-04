@@ -62,19 +62,19 @@ public final class ReplayDetector {
     private static final Logger logger = LogManager.getLogger(ReplayDetector.class);
 
     /**
-     * An identifier entry in the strike register.
-     * Uses nanoTime for monotonic timing (immune to wall-clock adjustments).
+     * Sentinel value for the presence set. ConcurrentHashMap does not allow null values,
+     * so we use a static singleton Boolean to avoid per-entry object allocation.
      */
-    private record StrikeEntry(long insertedAtNanos) {
-    }
+    private static final Boolean PRESENT = Boolean.TRUE;
 
     /**
      * Double-buffered window state. Holds the current and previous window maps
      * and the timestamp when the current window started.
+     * Uses Boolean.TRUE as a sentinel value -- we only need set membership, not per-entry data.
      */
     private record WindowState(
-            ConcurrentHashMap<Long, StrikeEntry> current,
-            ConcurrentHashMap<Long, StrikeEntry> previous,
+            ConcurrentHashMap<Long, Boolean> current,
+            ConcurrentHashMap<Long, Boolean> previous,
             long windowStartNanos
     ) {
     }
@@ -156,7 +156,7 @@ public final class ReplayDetector {
         }
 
         // Not seen -- register in current window
-        StrikeEntry existing = state.current().putIfAbsent(identifier, new StrikeEntry(System.nanoTime()));
+        Boolean existing = state.current().putIfAbsent(identifier, PRESENT);
         if (existing != null) {
             // Another thread registered it between our check and putIfAbsent
             replaysDetected.incrementAndGet();

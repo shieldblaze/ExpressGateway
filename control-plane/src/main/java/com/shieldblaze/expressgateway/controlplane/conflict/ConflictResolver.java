@@ -19,8 +19,7 @@ package com.shieldblaze.expressgateway.controlplane.conflict;
 
 import com.shieldblaze.expressgateway.controlplane.config.ConfigKind;
 import com.shieldblaze.expressgateway.controlplane.config.ConfigResource;
-import org.apache.logging.log4j.LogManager;
-import org.apache.logging.log4j.Logger;
+import lombok.extern.log4j.Log4j2;
 
 import java.util.Map;
 import java.util.Objects;
@@ -46,9 +45,8 @@ import java.util.concurrent.ConcurrentHashMap;
  * <p>Thread safety: this class is thread-safe. Policy registration and resolution
  * can be called from any thread.</p>
  */
+@Log4j2
 public final class ConflictResolver {
-
-    private static final Logger logger = LogManager.getLogger(ConflictResolver.class);
 
     private static final ConflictPolicy DEFAULT_POLICY = new ConflictPolicy.LastWriterWins();
 
@@ -65,7 +63,7 @@ public final class ConflictResolver {
         Objects.requireNonNull(kind, "kind");
         Objects.requireNonNull(policy, "policy");
         policies.put(kind.name(), policy);
-        logger.info("Registered conflict policy {} for kind '{}'", policy.getClass().getSimpleName(), kind.name());
+        log.info("Registered conflict policy {} for kind '{}'", policy.getClass().getSimpleName(), kind.name());
     }
 
     /**
@@ -123,17 +121,17 @@ public final class ConflictResolver {
             case EQUAL -> {
                 // If content is identical, return existing (no-op)
                 if (contentEquals(existing, incoming)) {
-                    logger.debug("Equal clocks with identical content for {}, returning existing (no-op)",
+                    log.debug("Equal clocks with identical content for {}, returning existing (no-op)",
                             incoming.id().toPath());
                     yield Optional.of(existing);
                 }
                 // Content differs with equal clocks: treat as CONCURRENT
-                logger.info("Equal clocks with different content for {}, treating as concurrent",
+                log.info("Equal clocks with different content for {}, treating as concurrent",
                         incoming.id().toPath());
                 yield resolveConcurrent(existing, incoming);
             }
             case BEFORE -> {
-                logger.debug("Incoming write for {} is causally before existing, discarding",
+                log.debug("Incoming write for {} is causally before existing, discarding",
                         incoming.id().toPath());
                 yield Optional.empty();
             }
@@ -160,7 +158,7 @@ public final class ConflictResolver {
         ConflictPolicy policy = policies.getOrDefault(incoming.kind().name(), DEFAULT_POLICY);
         String resourcePath = incoming.id().toPath();
 
-        logger.info("Concurrent write detected for {}, applying policy {}", resourcePath,
+        log.info("Concurrent write detected for {}, applying policy {}", resourcePath,
                 policy.getClass().getSimpleName());
 
         return switch (policy) {
@@ -194,19 +192,19 @@ public final class ConflictResolver {
             case ConflictPolicy.Merge merge -> {
                 ConfigResource merged = merge.mergeFunction().apply(existing, incoming);
                 if (merged == null) {
-                    logger.warn("Merge function returned null for {}, rejecting write", resourcePath);
+                    log.warn("Merge function returned null for {}, rejecting write", resourcePath);
                     yield Optional.empty();
                 }
                 yield Optional.of(merged);
             }
             case ConflictPolicy.Reject() -> {
-                logger.warn("Rejecting concurrent write for {} (Reject policy)", resourcePath);
+                log.warn("Rejecting concurrent write for {} (Reject policy)", resourcePath);
                 yield Optional.empty();
             }
             case ConflictPolicy.Custom custom -> {
                 ConfigResource result = custom.resolver().apply(existing, incoming);
                 if (result == null) {
-                    logger.warn("Custom resolver returned null for {}, rejecting write", resourcePath);
+                    log.warn("Custom resolver returned null for {}, rejecting write", resourcePath);
                     yield Optional.empty();
                 }
                 yield Optional.of(result);

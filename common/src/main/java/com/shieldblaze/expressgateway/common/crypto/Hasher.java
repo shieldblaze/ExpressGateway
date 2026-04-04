@@ -18,15 +18,14 @@
 package com.shieldblaze.expressgateway.common.crypto;
 
 import com.shieldblaze.expressgateway.common.utils.Hex;
+import lombok.AccessLevel;
+import lombok.NoArgsConstructor;
 
 import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
 
+@NoArgsConstructor(access = AccessLevel.PRIVATE)
 public final class Hasher {
-
-    private Hasher() {
-        // Prevent outside initialization
-    }
 
     public enum Algorithm {
         SHA256,

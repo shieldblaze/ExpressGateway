@@ -17,14 +17,20 @@
  */
 package com.shieldblaze.expressgateway.concurrent;
 
+import lombok.AccessLevel;
+import lombok.NoArgsConstructor;
+
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.ScheduledFuture;
+import java.util.concurrent.ThreadFactory;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicInteger;
 import java.util.function.Supplier;
 
+@NoArgsConstructor(access = AccessLevel.PRIVATE)
 public final class GlobalExecutors {
 
     private static final int PROCESSORS = Runtime.getRuntime().availableProcessors();
@@ -33,10 +39,17 @@ public final class GlobalExecutors {
 
     private static final ExecutorService EXECUTOR_SERVICE = Executors.newVirtualThreadPerTaskExecutor();
 
-    private static final ScheduledExecutorService SCHEDULED_EXECUTOR_SERVICE = Executors.newScheduledThreadPool(PROCESSORS * 2);
+    private static final ScheduledExecutorService SCHEDULED_EXECUTOR_SERVICE =
+            Executors.newScheduledThreadPool(PROCESSORS * 2, new ThreadFactory() {
+                private final AtomicInteger counter = new AtomicInteger(0);
 
-    private GlobalExecutors() {
-    }
+                @Override
+                public Thread newThread(Runnable r) {
+                    Thread t = new Thread(r, "eg-scheduled-" + counter.getAndIncrement());
+                    t.setDaemon(true);
+                    return t;
+                }
+            });
 
     public static CompletableFuture<Void> submitTask(Runnable runnable) {
         return CompletableFuture.runAsync(runnable, EXECUTOR_SERVICE);
@@ -52,6 +65,10 @@ public final class GlobalExecutors {
 
     public static ExecutorService executorService() {
         return EXECUTOR_SERVICE;
+    }
+
+    public static ScheduledExecutorService scheduledExecutorService() {
+        return SCHEDULED_EXECUTOR_SERVICE;
     }
 
     public void shutdownAll() {

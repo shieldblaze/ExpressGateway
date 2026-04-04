@@ -17,8 +17,7 @@
  */
 package com.shieldblaze.expressgateway.controlplane.agent.cache;
 
-import org.apache.logging.log4j.LogManager;
-import org.apache.logging.log4j.Logger;
+import lombok.extern.slf4j.Slf4j;
 
 import java.util.List;
 import java.util.Objects;
@@ -41,9 +40,8 @@ import java.util.Optional;
  *
  * <p>After recovery completes, the recovery status is reported for monitoring/alerting.</p>
  */
+@Slf4j
 public final class ColdStartRecovery {
-
-    private static final Logger logger = LogManager.getLogger(ColdStartRecovery.class);
 
     /**
      * Recovery outcome.
@@ -108,16 +106,16 @@ public final class ColdStartRecovery {
      * @return the recovery result
      */
     public RecoveryResult recover(byte[] defaultConfig) {
-        logger.info("Starting cold start recovery");
+        log.info("Starting cold start recovery");
 
         // Step 0: Verify integrity and purge corrupted versions
         List<Long> corrupted = cache.verifyIntegrity();
         if (!corrupted.isEmpty()) {
-            logger.warn("Found {} corrupted versions during cold start, purging", corrupted.size());
+            log.warn("Found {} corrupted versions during cold start, purging", corrupted.size());
             try {
                 cache.purgeCorrupted(corrupted);
             } catch (Exception e) {
-                logger.error("Failed to purge corrupted versions during cold start", e);
+                log.error("Failed to purge corrupted versions during cold start", e);
             }
         }
 
@@ -126,12 +124,12 @@ public final class ColdStartRecovery {
         if (latest.isPresent()) {
             Optional<byte[]> data = cache.load(latest.get().revision());
             if (data.isPresent()) {
-                logger.info("Cold start recovery: loaded latest version (revision={})",
+                log.info("Cold start recovery: loaded latest version (revision={})",
                         latest.get().revision());
                 return new RecoveryResult(RecoveryStatus.RECOVERED_LATEST, data.get(),
                         latest.get(), "Recovered from latest cached version at revision " + latest.get().revision());
             }
-            logger.warn("Latest version (revision={}) failed integrity check", latest.get().revision());
+            log.warn("Latest version (revision={}) failed integrity check", latest.get().revision());
         }
 
         // Step 2: Try previous versions in descending order
@@ -140,7 +138,7 @@ public final class ColdStartRecovery {
             ConfigVersion prev = allVersions.get(i);
             Optional<byte[]> data = cache.load(prev.revision());
             if (data.isPresent()) {
-                logger.info("Cold start recovery: loaded previous version (revision={})", prev.revision());
+                log.info("Cold start recovery: loaded previous version (revision={})", prev.revision());
                 return new RecoveryResult(RecoveryStatus.RECOVERED_PREVIOUS, data.get(),
                         prev, "Recovered from previous cached version at revision " + prev.revision());
             }
@@ -151,7 +149,7 @@ public final class ColdStartRecovery {
         if (knownGood.isPresent()) {
             Optional<byte[]> data = cache.load(knownGood.get().revision());
             if (data.isPresent()) {
-                logger.info("Cold start recovery: loaded known-good tagged version (revision={})",
+                log.info("Cold start recovery: loaded known-good tagged version (revision={})",
                         knownGood.get().revision());
                 return new RecoveryResult(RecoveryStatus.RECOVERED_TAGGED, data.get(),
                         knownGood.get(), "Recovered from known-good tagged version at revision " +
@@ -161,13 +159,13 @@ public final class ColdStartRecovery {
 
         // Step 4: Use default config
         if (defaultConfig != null && defaultConfig.length > 0) {
-            logger.warn("Cold start recovery: no valid cached config found, using default");
+            log.warn("Cold start recovery: no valid cached config found, using default");
             return new RecoveryResult(RecoveryStatus.USED_DEFAULT, defaultConfig,
                     null, "No valid cached config available, using default configuration");
         }
 
         // Step 5: Complete failure
-        logger.error("Cold start recovery FAILED: no cached config and no default available");
+        log.error("Cold start recovery FAILED: no cached config and no default available");
         return new RecoveryResult(RecoveryStatus.FAILED, null, null,
                 "No cached config and no default config available. Node will start without configuration.");
     }

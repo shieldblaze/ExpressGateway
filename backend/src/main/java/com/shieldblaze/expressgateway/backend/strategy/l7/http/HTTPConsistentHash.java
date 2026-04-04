@@ -125,7 +125,7 @@ public final class HTTPConsistentHash extends HTTPBalance {
         ringLock.readLock().lock();
         try {
             if (ring.isEmpty()) {
-                throw new NoNodeAvailableException();
+                throw NoNodeAvailableException.INSTANCE;
             }
 
             Map.Entry<Long, Node> entry = ring.ceilingEntry(hash);
@@ -139,7 +139,7 @@ public final class HTTPConsistentHash extends HTTPBalance {
             if (node.state() != State.ONLINE) {
                 node = findNextOnlineNode(hash);
                 if (node == null) {
-                    throw new NoNodeAvailableException();
+                    throw NoNodeAvailableException.INSTANCE;
                 }
             }
         } finally {

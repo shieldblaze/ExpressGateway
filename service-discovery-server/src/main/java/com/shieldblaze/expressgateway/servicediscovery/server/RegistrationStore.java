@@ -18,8 +18,7 @@
 package com.shieldblaze.expressgateway.servicediscovery.server;
 
 import com.shieldblaze.expressgateway.common.utils.LogSanitizer;
-import org.apache.logging.log4j.LogManager;
-import org.apache.logging.log4j.Logger;
+import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Component;
 
 import java.util.Collection;
@@ -35,10 +34,9 @@ import java.util.concurrent.ConcurrentHashMap;
  *
  * <p>Thread-safe for concurrent registration/deregistration from multiple HTTP handlers.</p>
  */
+@Slf4j
 @Component
 public final class RegistrationStore {
-
-    private static final Logger logger = LogManager.getLogger(RegistrationStore.class);
 
     private final Map<String, RegistrationEntry> entries = new ConcurrentHashMap<>();
 
@@ -48,10 +46,10 @@ public final class RegistrationStore {
     public RegistrationEntry register(Node node, long ttlSeconds) {
         return entries.compute(node.id(), (key, existing) -> {
             if (existing != null) {
-                logger.info("Updating existing registration for node: {}", key);
+                log.info("Updating existing registration for node: {}", key);
                 return existing.withHeartbeat();
             }
-            logger.info("New registration for node: {}", key);
+            log.info("New registration for node: {}", key);
             return RegistrationEntry.create(node, ttlSeconds);
         });
     }
@@ -64,7 +62,7 @@ public final class RegistrationStore {
     public RegistrationEntry deregister(String nodeId) {
         RegistrationEntry removed = entries.remove(nodeId);
         if (removed != null) {
-            logger.info("Deregistered node: {}", LogSanitizer.sanitize(nodeId));
+            log.info("Deregistered node: {}", LogSanitizer.sanitize(nodeId));
         }
         return removed;
     }
@@ -94,46 +92,57 @@ public final class RegistrationStore {
 
     /**
      * Send a heartbeat for the given node ID, updating its lastHeartbeat timestamp.
+     * Uses computeIfPresent for atomic read-modify-write to avoid race conditions.
      *
      * @return true if the node was found and updated
      */
     public boolean heartbeat(String nodeId) {
-        RegistrationEntry existing = entries.get(nodeId);
-        if (existing != null) {
-            entries.put(nodeId, existing.withHeartbeat());
-            return true;
-        }
-        return false;
+        RegistrationEntry updated = entries.computeIfPresent(nodeId,
+                (key, existing) -> existing.withHeartbeat());
+        return updated != null;
     }
 
     /**
      * Evict all expired entries and return the count of evicted entries.
+     * Re-checks expiry atomically at removal time to avoid TOCTOU races
+     * where a heartbeat arrives between the initial scan and the removal.
      */
     public int evictExpired() {
-        List<String> expired = entries.entrySet().stream()
+        List<String> candidates = entries.entrySet().stream()
                 .filter(e -> e.getValue().isExpired())
                 .map(Map.Entry::getKey)
                 .toList();
 
-        for (String key : expired) {
-            entries.remove(key);
-            logger.info("Evicted expired registration: {}", key);
+        int evicted = 0;
+        for (String key : candidates) {
+            // computeIfPresent returns null when the remapping function returns null (entry removed),
+            // but also returns null if the key was already absent. Track removal via a flag.
+            boolean[] removed = {false};
+            entries.computeIfPresent(key, (k, v) -> {
+                if (v.isExpired()) {
+                    removed[0] = true;
+                    return null;
+                }
+                return v;
+            });
+            if (removed[0]) {
+                log.info("Evicted expired registration: {}", key);
+                evicted++;
+            }
         }
-        return expired.size();
+        return evicted;
     }
 
     /**
      * Mark a node as unhealthy.
+     * Uses computeIfPresent for atomic read-modify-write.
      *
      * @return true if the node was found and updated
      */
     public boolean markUnhealthy(String nodeId) {
-        RegistrationEntry existing = entries.get(nodeId);
-        if (existing != null) {
-            entries.put(nodeId, existing.asUnhealthy());
-            return true;
-        }
-        return false;
+        RegistrationEntry updated = entries.computeIfPresent(nodeId,
+                (key, existing) -> existing.asUnhealthy());
+        return updated != null;
     }
 
     /**

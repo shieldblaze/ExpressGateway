@@ -70,7 +70,7 @@ public final class HTTPRoundRobin extends HTTPBalance {
         Node node;
         var onlineNodes = cluster.onlineNodes();
         if (onlineNodes.isEmpty()) {
-            throw new NoNodeAvailableException();
+            throw NoNodeAvailableException.INSTANCE;
         }
         // LB-F1: Math.abs(Integer.MIN_VALUE) returns Integer.MIN_VALUE (negative) due
         // to two's complement overflow. Math.floorMod always returns a non-negative result

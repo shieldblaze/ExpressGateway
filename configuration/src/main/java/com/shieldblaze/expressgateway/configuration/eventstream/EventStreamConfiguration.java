@@ -24,12 +24,14 @@ import com.shieldblaze.expressgateway.common.utils.NumberUtil;
 import com.shieldblaze.expressgateway.concurrent.eventstream.AsyncEventStream;
 import com.shieldblaze.expressgateway.concurrent.eventstream.EventStream;
 import com.shieldblaze.expressgateway.configuration.Configuration;
+import lombok.ToString;
 
 import java.util.concurrent.Executors;
 
 /**
- * Configuration for {@link EventStreamConfiguration}
+ * Configuration for asynchronous event stream workers.
  */
+@ToString(exclude = "validated")
 public final class EventStreamConfiguration implements Configuration<EventStreamConfiguration> {
 
     @JsonProperty

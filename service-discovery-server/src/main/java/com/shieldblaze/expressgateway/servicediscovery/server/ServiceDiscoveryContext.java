@@ -20,11 +20,20 @@ package com.shieldblaze.expressgateway.servicediscovery.server;
 import com.fasterxml.jackson.annotation.JsonIgnore;
 import com.fasterxml.jackson.annotation.JsonProperty;
 import io.netty.handler.ssl.ClientAuth;
+import lombok.extern.slf4j.Slf4j;
 
+/**
+ * Configuration context for the Service Discovery Server.
+ *
+ * <p>Deserialized from the JSON configuration file. The password is scrubbed
+ * from the String field into a char[] after deserialization to reduce the
+ * window of exposure in heap dumps.</p>
+ */
+@Slf4j
 public class ServiceDiscoveryContext {
 
     @JsonIgnore
-    private static ServiceDiscoveryContext INSTANCE;
+    private static volatile ServiceDiscoveryContext INSTANCE;
 
     @JsonProperty
     private String IPAddress;
@@ -96,6 +105,13 @@ public class ServiceDiscoveryContext {
         return MTLS;
     }
 
+    /**
+     * Getter-style accessor for mTLS (used by WebServerCustomizer).
+     */
+    public ClientAuth getMTLS() {
+        return MTLS;
+    }
+
     public String PKCS12File() {
         return PKCS12File;
     }
@@ -116,8 +132,16 @@ public class ServiceDiscoveryContext {
                 ", Password='*****'}";
     }
 
-    public void clean() {
-        PasswordAsChars = Password.toCharArray();
-        Password = null;
+    /**
+     * Convert password String to char[] and scrub the String field to limit
+     * exposure in heap dumps.
+     */
+    void clean() {
+        if (Password != null) {
+            PasswordAsChars = Password.toCharArray();
+            Password = null;
+        } else {
+            PasswordAsChars = new char[0];
+        }
     }
 }

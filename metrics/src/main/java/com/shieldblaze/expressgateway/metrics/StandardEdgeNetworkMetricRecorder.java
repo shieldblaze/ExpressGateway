@@ -29,6 +29,7 @@ import java.util.Arrays;
 import java.util.Collections;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicLong;
 import java.util.concurrent.atomic.LongAdder;
 import java.util.stream.Collectors;
@@ -91,12 +92,12 @@ public final class StandardEdgeNetworkMetricRecorder extends ChannelDuplexHandle
     private final LongAdder poolMissCount = new LongAdder();
 
     // --- H2 stream and retry counters ---
-    private final ConcurrentHashMap<String, java.util.concurrent.atomic.AtomicInteger> activeH2StreamCounts =
+    private final ConcurrentHashMap<String, AtomicInteger> activeH2StreamCounts =
             new ConcurrentHashMap<>();
     private final LongAdder retryAttemptCount = new LongAdder();
 
     // --- Per-backend connection count ---
-    private final ConcurrentHashMap<String, java.util.concurrent.atomic.AtomicInteger> backendConnectionCounts =
+    private final ConcurrentHashMap<String, AtomicInteger> backendConnectionCounts =
             new ConcurrentHashMap<>();
 
     /**
@@ -411,12 +412,12 @@ public final class StandardEdgeNetworkMetricRecorder extends ChannelDuplexHandle
 
     @Override
     public void recordBackendConnections(String backend, int count) {
-        java.util.concurrent.atomic.AtomicInteger ai = backendConnectionCounts.get(backend);
+        AtomicInteger ai = backendConnectionCounts.get(backend);
         if (ai != null) {
             ai.set(count);
         } else if (backendConnectionCounts.size() < MAX_PER_KEY_MAP_SIZE) {
             backendConnectionCounts.computeIfAbsent(backend,
-                    k -> new java.util.concurrent.atomic.AtomicInteger()).set(count);
+                    k -> new AtomicInteger()).set(count);
         }
     }
 
@@ -458,12 +459,12 @@ public final class StandardEdgeNetworkMetricRecorder extends ChannelDuplexHandle
 
     @Override
     public void recordActiveH2Streams(String backend, int count) {
-        java.util.concurrent.atomic.AtomicInteger ai = activeH2StreamCounts.get(backend);
+        AtomicInteger ai = activeH2StreamCounts.get(backend);
         if (ai != null) {
             ai.set(count);
         } else if (activeH2StreamCounts.size() < MAX_PER_KEY_MAP_SIZE) {
             activeH2StreamCounts.computeIfAbsent(backend,
-                    k -> new java.util.concurrent.atomic.AtomicInteger()).set(count);
+                    k -> new AtomicInteger()).set(count);
         }
     }
 

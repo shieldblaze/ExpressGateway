@@ -19,8 +19,7 @@ package com.shieldblaze.expressgateway.controlplane.region;
 
 import com.shieldblaze.expressgateway.controlplane.config.ConfigMutation;
 import com.shieldblaze.expressgateway.controlplane.conflict.VectorClock;
-import org.apache.logging.log4j.LogManager;
-import org.apache.logging.log4j.Logger;
+import lombok.extern.log4j.Log4j2;
 
 import java.io.Closeable;
 import java.time.Instant;
@@ -49,9 +48,8 @@ import java.util.concurrent.atomic.AtomicLong;
  *
  * <p>Thread safety: all public methods are safe for concurrent use.</p>
  */
+@Log4j2
 public final class CrossRegionReplicator implements Closeable {
-
-    private static final Logger logger = LogManager.getLogger(CrossRegionReplicator.class);
 
     /** Maximum number of retry attempts for failed batch replication. */
     private static final int MAX_RETRIES = 3;
@@ -160,7 +158,7 @@ public final class CrossRegionReplicator implements Closeable {
     public void start() {
         running = true;
         scheduler.scheduleWithFixedDelay(this::flushBatch, batchWindowMs, batchWindowMs, TimeUnit.MILLISECONDS);
-        logger.info("CrossRegionReplicator started: localRegion={}, batchWindow={}ms, maxBatch={}",
+        log.info("CrossRegionReplicator started: localRegion={}, batchWindow={}ms, maxBatch={}",
                 localRegion, batchWindowMs, maxBatchSize);
     }
 
@@ -216,7 +214,7 @@ public final class CrossRegionReplicator implements Closeable {
             scheduler.shutdownNow();
             Thread.currentThread().interrupt();
         }
-        logger.info("CrossRegionReplicator closed: replicated={}, failed={}", replicatedCount.get(), failedCount.get());
+        log.info("CrossRegionReplicator closed: replicated={}, failed={}", replicatedCount.get(), failedCount.get());
     }
 
     private void flushBatch() {
@@ -246,7 +244,7 @@ public final class CrossRegionReplicator implements Closeable {
 
         if (targets.isEmpty()) {
             // Re-enqueue entries so they are not lost when no remote regions exist
-            logger.debug("No remote regions to replicate to, re-enqueuing batch {} with {} entries",
+            log.debug("No remote regions to replicate to, re-enqueuing batch {} with {} entries",
                     batchId, batch.size());
             pendingQueue.addAll(batch);
             return;
@@ -272,12 +270,12 @@ public final class CrossRegionReplicator implements Closeable {
                     .whenComplete((v, ex) -> {
                         if (ex != null) {
                             if (attempt < MAX_RETRIES) {
-                                logger.warn("Replication to region {} failed for batch {} (attempt {}), retrying: {}",
+                                log.warn("Replication to region {} failed for batch {} (attempt {}), retrying: {}",
                                         targetRegionId, batch.batchId(), attempt + 1, ex.getMessage());
                                 replicateWithRetry(targetRegionId, batch, entryCount, counted, attempt + 1);
                             } else {
                                 failedCount.addAndGet(entryCount);
-                                logger.error("Replication to region {} failed for batch {} after {} attempts: {}",
+                                log.error("Replication to region {} failed for batch {} after {} attempts: {}",
                                         targetRegionId, batch.batchId(), attempt + 1, ex.getMessage());
                             }
                         } else {
@@ -285,18 +283,18 @@ public final class CrossRegionReplicator implements Closeable {
                             if (counted.compareAndSet(false, true)) {
                                 replicatedCount.addAndGet(entryCount);
                             }
-                            logger.debug("Replicated batch {} ({} entries) to region {}",
+                            log.debug("Replicated batch {} ({} entries) to region {}",
                                     batch.batchId(), entryCount, targetRegionId);
                         }
                     });
         } catch (Exception e) {
             if (attempt < MAX_RETRIES) {
-                logger.warn("Failed to submit replication to region {} (attempt {}), retrying",
+                log.warn("Failed to submit replication to region {} (attempt {}), retrying",
                         targetRegionId, attempt + 1, e);
                 replicateWithRetry(targetRegionId, batch, entryCount, counted, attempt + 1);
             } else {
                 failedCount.addAndGet(entryCount);
-                logger.error("Failed to submit replication to region {} after {} attempts",
+                log.error("Failed to submit replication to region {} after {} attempts",
                         targetRegionId, attempt + 1, e);
             }
         }

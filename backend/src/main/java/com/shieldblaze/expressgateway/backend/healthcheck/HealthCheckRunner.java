@@ -26,11 +26,13 @@ import com.shieldblaze.expressgateway.common.annotation.NonNull;
 import com.shieldblaze.expressgateway.concurrent.eventstream.EventStream;
 import com.shieldblaze.expressgateway.healthcheck.Health;
 import com.shieldblaze.expressgateway.healthcheck.HealthCheck;
+import lombok.extern.log4j.Log4j2;
 
 /**
  * {@link HealthCheckService} executes {@link HealthCheck} for
  * getting the latest {@link Health} of a {@link Node}.
  */
+@Log4j2
 final class HealthCheckRunner implements Runnable {
 
     private final Node node;
@@ -44,29 +46,41 @@ final class HealthCheckRunner implements Runnable {
 
     @Override
     public void run() {
-        // If Node is manually marked as offline, then don't run Health Check.
-        if (node.state() == State.MANUAL_OFFLINE) {
-            return;
-        }
+        try {
+            // If Node is manually marked as offline, then don't run Health Check.
+            if (node.state() == State.MANUAL_OFFLINE) {
+                return;
+            }
 
-        final Health oldHealth = node.health(); // Store old Health
-        node.healthCheck().run();               // Run a fresh Health Check
+            HealthCheck hc = node.healthCheck();
+            if (hc == null) {
+                return;
+            }
 
-        /*
-         * > If new Health is GOOD and old Health is not GOOD then update 'ONLINE' state in Node.
-         * > If new Health is MEDIUM and old Health is not MEDIUM then update 'IDLE' state in Node.
-         * > If new Health is BAD and old Health is not BAD then update 'OFFLINE' state in Node.
-         */
-        if (node.health() == Health.GOOD && oldHealth != Health.GOOD) {
-            node.state(State.ONLINE);
-            eventStream.publish(new NodeOnlineTask(node));
-        } else if (node.health() == Health.MEDIUM && oldHealth != Health.MEDIUM) {
-            node.state(State.IDLE);
-            eventStream.publish(new NodeIdleTask(node));
-        } else if (node.health() == Health.BAD && oldHealth != Health.BAD) {
-            node.state(State.OFFLINE);
-            node.drainConnections();
-            eventStream.publish(new NodeOfflineTask(node));
+            final Health oldHealth = node.health(); // Store old Health
+            hc.run();                               // Run a fresh Health Check
+
+            /*
+             * > If new Health is GOOD and old Health is not GOOD then update 'ONLINE' state in Node.
+             * > If new Health is MEDIUM and old Health is not MEDIUM then update 'IDLE' state in Node.
+             * > If new Health is BAD and old Health is not BAD then update 'OFFLINE' state in Node.
+             */
+            if (node.health() == Health.GOOD && oldHealth != Health.GOOD) {
+                node.state(State.ONLINE);
+                eventStream.publish(new NodeOnlineTask(node));
+            } else if (node.health() == Health.MEDIUM && oldHealth != Health.MEDIUM) {
+                node.state(State.IDLE);
+                eventStream.publish(new NodeIdleTask(node));
+            } else if (node.health() == Health.BAD && oldHealth != Health.BAD) {
+                node.state(State.OFFLINE);
+                node.drainConnections();
+                eventStream.publish(new NodeOfflineTask(node));
+            }
+        } catch (Exception ex) {
+            // Catch all exceptions to prevent the ScheduledExecutorService from
+            // silently stopping this task. Uncaught exceptions in scheduled tasks
+            // cause the task to be de-scheduled without any notification.
+            log.error("Health check failed for node: {}", node, ex);
         }
     }
 }

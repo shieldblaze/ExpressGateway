@@ -18,8 +18,7 @@
 package com.shieldblaze.expressgateway.backend;
 
 import com.shieldblaze.expressgateway.configuration.healthcheck.CircuitBreakerConfiguration;
-import org.apache.logging.log4j.LogManager;
-import org.apache.logging.log4j.Logger;
+import lombok.extern.log4j.Log4j2;
 
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicReference;
@@ -39,9 +38,8 @@ import java.util.concurrent.atomic.AtomicReference;
  * <p>Thread-safe: uses AtomicReference for state and AtomicInteger for counters.
  * All state transitions are performed via CAS to avoid external synchronization.</p>
  */
+@Log4j2
 public final class CircuitBreaker {
-
-    private static final Logger logger = LogManager.getLogger(CircuitBreaker.class);
 
     /**
      * Circuit breaker states
@@ -101,7 +99,7 @@ public final class CircuitBreaker {
                         // set(0) + incrementAndGet() to avoid a window where another thread
                         // increments between set(0) and our own increment.
                         halfOpenInFlight.set(1);
-                        logger.info("Circuit breaker transitioning from OPEN to HALF_OPEN after {}ms", elapsedMs);
+                        log.info("Circuit breaker transitioning from OPEN to HALF_OPEN after {}ms", elapsedMs);
                         yield 1 <= config.halfOpenMaxConcurrent();
                     }
                     // CAS lost: another thread already transitioned. Fall through to
@@ -141,7 +139,7 @@ public final class CircuitBreaker {
                 if (state.compareAndSet(CircuitState.HALF_OPEN, CircuitState.CLOSED)) {
                     consecutiveSuccesses.set(0);
                     halfOpenInFlight.set(0);
-                    logger.info("Circuit breaker CLOSED after {} consecutive successes", successes);
+                    log.info("Circuit breaker CLOSED after {} consecutive successes", successes);
                 }
             }
         }
@@ -165,7 +163,7 @@ public final class CircuitBreaker {
             if (state.compareAndSet(CircuitState.HALF_OPEN, CircuitState.OPEN)) {
                 openedAtNanos = System.nanoTime();
                 halfOpenInFlight.set(0);
-                logger.warn("Circuit breaker re-opened from HALF_OPEN after failure");
+                log.warn("Circuit breaker re-opened from HALF_OPEN after failure");
             }
         } else if (currentState == CircuitState.CLOSED) {
             int failures = consecutiveFailures.incrementAndGet();
@@ -174,7 +172,7 @@ public final class CircuitBreaker {
                 if (state.compareAndSet(CircuitState.CLOSED, CircuitState.OPEN)) {
                     openedAtNanos = System.nanoTime();
                     consecutiveFailures.set(0);
-                    logger.warn("Circuit breaker OPENED after {} consecutive failures", failures);
+                    log.warn("Circuit breaker OPENED after {} consecutive failures", failures);
                 }
             }
         }
@@ -198,7 +196,7 @@ public final class CircuitBreaker {
         if (newState == CircuitState.OPEN) {
             openedAtNanos = System.nanoTime();
         }
-        logger.info("Circuit breaker forced from {} to {}", old, newState);
+        log.info("Circuit breaker forced from {} to {}", old, newState);
     }
 
     /**

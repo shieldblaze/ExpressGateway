@@ -213,22 +213,21 @@ public final class StatelessRetryHandler implements QuicTokenHandler {
     }
 
     /**
-     * Evicts the oldest used token entries when the tracking map exceeds capacity.
-     * Removes entries older than the token max age, or the oldest 25% if all are recent.
+     * Evicts used token entries when the tracking map exceeds capacity.
+     * Removes entries older than the token max age. If still over limit,
+     * evicts entries from the oldest half of the token age window.
      */
     private void evictOldUsedTokens() {
         long now = System.currentTimeMillis();
         // First pass: remove entries older than tokenMaxAgeMs (they can't be replayed anyway)
         usedTokens.entrySet().removeIf(e -> now - e.getValue() > tokenMaxAgeMs);
 
-        // If still over limit, remove oldest 25%
+        // If still over limit, evict entries from the older half of the valid window.
+        // This is more correct than removing by iterator order (which is hash-order,
+        // not chronological) and avoids O(n log n) sorting.
         if (usedTokens.size() > MAX_USED_TOKENS) {
-            int toRemove = usedTokens.size() / 4;
-            var iterator = usedTokens.entrySet().iterator();
-            for (int i = 0; i < toRemove && iterator.hasNext(); i++) {
-                iterator.next();
-                iterator.remove();
-            }
+            long midpointMs = now - (tokenMaxAgeMs / 2);
+            usedTokens.entrySet().removeIf(e -> e.getValue() < midpointMs);
         }
     }
 }

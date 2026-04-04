@@ -17,9 +17,13 @@
  */
 package com.shieldblaze.expressgateway.common.utils;
 
+import lombok.AccessLevel;
+import lombok.NoArgsConstructor;
+
 import java.net.DatagramSocket;
 import java.net.ServerSocket;
 
+@NoArgsConstructor(access = AccessLevel.PRIVATE)
 public final class AvailablePortUtil {
 
     /**
@@ -27,6 +31,7 @@ public final class AvailablePortUtil {
      */
     public static int getTcpPort() {
         try (ServerSocket socket = new ServerSocket(0)) {
+            socket.setReuseAddress(true);
             return socket.getLocalPort();
         } catch (Exception ex) {
             return -1;
@@ -38,13 +43,11 @@ public final class AvailablePortUtil {
      */
     public static int getUdpPort() {
         try (DatagramSocket socket = new DatagramSocket(0)) {
+            socket.setReuseAddress(true);
             return socket.getLocalPort();
         } catch (Exception ex) {
             return -1;
         }
     }
 
-    private AvailablePortUtil() {
-        // Prevent outside initialization
-    }
 }

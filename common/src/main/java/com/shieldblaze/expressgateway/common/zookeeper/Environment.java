@@ -18,24 +18,22 @@
 package com.shieldblaze.expressgateway.common.zookeeper;
 
 import com.shieldblaze.expressgateway.common.ExpressGateway;
+import lombok.Getter;
+import lombok.RequiredArgsConstructor;
+import lombok.experimental.Accessors;
 
 /**
  * Environments for ZooKeeper
  */
+@Getter
+@Accessors(fluent = true)
+@RequiredArgsConstructor
 public enum Environment {
     DEVELOPMENT("dev"),
     TESTING("test"),
     PRODUCTION("prod");
 
     private final String env;
-
-    Environment(String env) {
-        this.env = env;
-    }
-
-    public String env() {
-        return env;
-    }
 
     /**
      * Automatically detect environment from System Property or System environment variable.

@@ -18,8 +18,7 @@
 package com.shieldblaze.expressgateway.controlplane.distribution;
 
 import com.shieldblaze.expressgateway.controlplane.registry.DataPlaneNode;
-import org.apache.logging.log4j.LogManager;
-import org.apache.logging.log4j.Logger;
+import lombok.extern.log4j.Log4j2;
 
 import java.time.Duration;
 import java.time.Instant;
@@ -51,9 +50,8 @@ import java.util.concurrent.atomic.AtomicReference;
  * <p>Thread safety: this class is safe for concurrent use. The deployment state
  * is tracked via an {@link AtomicReference} with CAS transitions.</p>
  */
+@Log4j2
 public final class CanaryDeployment {
-
-    private static final Logger logger = LogManager.getLogger(CanaryDeployment.class);
 
     /**
      * Deployment state.
@@ -253,7 +251,7 @@ public final class CanaryDeployment {
         List<DataPlaneNode> remainingNodes = shuffled.subList(canarySize, shuffled.size());
         List<String> canaryIds = canaryNodes.stream().map(DataPlaneNode::nodeId).toList();
 
-        logger.info("Starting canary deployment: {}/{} nodes, delta [{} -> {}]",
+        log.info("Starting canary deployment: {}/{} nodes, delta [{} -> {}]",
                 canarySize, targets.size(), delta.fromRevision(), delta.toRevision());
 
         // Push to canary nodes, tracking which nodes succeeded
@@ -264,13 +262,13 @@ public final class CanaryDeployment {
                 boolean accepted = pushCallback.push(node, delta);
                 if (!accepted) {
                     canaryPushSuccess = false;
-                    logger.warn("Canary node {} NACKed the delta", node.nodeId());
+                    log.warn("Canary node {} NACKed the delta", node.nodeId());
                     break;
                 }
                 successfulCanaryNodes.add(node);
             } catch (Exception e) {
                 canaryPushSuccess = false;
-                logger.error("Failed to push canary config to node {}", node.nodeId(), e);
+                log.error("Failed to push canary config to node {}", node.nodeId(), e);
                 break;
             }
         }
@@ -284,7 +282,7 @@ public final class CanaryDeployment {
         }
 
         // Observe canary health using ScheduledExecutorService (no Thread.sleep)
-        logger.info("Canary push succeeded, observing for {}", criteria.observationTime());
+        log.info("Canary push succeeded, observing for {}", criteria.observationTime());
         CompletableFuture<Void> observationFuture = new CompletableFuture<>();
         scheduler.schedule(() -> observationFuture.complete(null),
                 criteria.observationTime().toMillis(), TimeUnit.MILLISECONDS);
@@ -309,7 +307,7 @@ public final class CanaryDeployment {
 
         if (!healthy) {
             state.set(DeploymentState.ROLLED_BACK);
-            logger.warn("Canary health check failed, rolling back canary nodes");
+            log.warn("Canary health check failed, rolling back canary nodes");
             rollbackNodes(successfulCanaryNodes, delta);
             return new DeploymentResult(DeploymentState.ROLLED_BACK, canaryIds, startTime, Instant.now(),
                     "Canary health check failed: error rate or latency exceeded thresholds");
@@ -317,7 +315,7 @@ public final class CanaryDeployment {
 
         // Canary passed -- promote to remaining nodes
         state.set(DeploymentState.CANARY_SUCCEEDED);
-        logger.info("Canary health check passed, promoting to remaining {} nodes", remainingNodes.size());
+        log.info("Canary health check passed, promoting to remaining {} nodes", remainingNodes.size());
 
         List<String> failedPromotionNodes = new ArrayList<>();
         for (DataPlaneNode node : remainingNodes) {
@@ -325,16 +323,16 @@ public final class CanaryDeployment {
                 boolean accepted = pushCallback.push(node, delta);
                 if (!accepted) {
                     failedPromotionNodes.add(node.nodeId());
-                    logger.warn("Node {} NACKed during promotion", node.nodeId());
+                    log.warn("Node {} NACKed during promotion", node.nodeId());
                 }
             } catch (Exception e) {
                 failedPromotionNodes.add(node.nodeId());
-                logger.error("Failed to push config to node {} during promotion", node.nodeId(), e);
+                log.error("Failed to push config to node {} during promotion", node.nodeId(), e);
             }
         }
 
         if (!failedPromotionNodes.isEmpty()) {
-            logger.warn("Promotion completed with {} failures: {}", failedPromotionNodes.size(), failedPromotionNodes);
+            log.warn("Promotion completed with {} failures: {}", failedPromotionNodes.size(), failedPromotionNodes);
         }
 
         state.set(DeploymentState.PROMOTED);
@@ -356,9 +354,9 @@ public final class CanaryDeployment {
                     ConfigDelta reverseDelta = new ConfigDelta(delta.toRevision(), delta.fromRevision(), List.of());
                     pushCallback.push(node, reverseDelta);
                 }
-                logger.info("Rolled back canary config on node {}", node.nodeId());
+                log.info("Rolled back canary config on node {}", node.nodeId());
             } catch (Exception e) {
-                logger.error("Failed to rollback canary config on node {}", node.nodeId(), e);
+                log.error("Failed to rollback canary config on node {}", node.nodeId(), e);
             }
         }
     }

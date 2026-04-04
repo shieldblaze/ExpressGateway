@@ -32,6 +32,8 @@ import lombok.extern.log4j.Log4j2;
 
 import static com.shieldblaze.expressgateway.common.utils.LogSanitizer.sanitize;
 
+import org.springframework.http.HttpStatus;
+import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.DeleteMapping;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
@@ -96,23 +98,25 @@ public class TlsCertController {
     }
 
     @GetMapping("/{certId}")
-    public ApiResponse<TlsCertDto> getTlsCert(@PathVariable String certId,
+    public ResponseEntity<ApiResponse<TlsCertDto>> getTlsCert(@PathVariable String certId,
                                               @RequestParam(defaultValue = "global") String scope) throws Exception {
         ConfigResourceId id = new ConfigResourceId(ConfigKind.TLS_CERTIFICATE.name(), scope, certId);
         Optional<ConfigResource> resource = ConfigResourceHelper.getResource(id, kvStore);
         if (resource.isEmpty()) {
-            return ApiResponse.error("TLS certificate not found: " + certId);
+            return ResponseEntity.status(HttpStatus.NOT_FOUND)
+                    .body(ApiResponse.error("TLS certificate not found: " + certId));
         }
-        return ApiResponse.ok(TlsCertDto.from((TlsCertSpec) resource.get().spec()));
+        return ResponseEntity.ok(ApiResponse.ok(TlsCertDto.from((TlsCertSpec) resource.get().spec())));
     }
 
     @PutMapping("/{certId}")
-    public ApiResponse<String> updateTlsCert(@PathVariable String certId, @RequestBody TlsCertDto dto,
+    public ResponseEntity<ApiResponse<String>> updateTlsCert(@PathVariable String certId, @RequestBody TlsCertDto dto,
                                              @RequestParam(defaultValue = "global") String scope) throws Exception {
         ConfigResourceId id = new ConfigResourceId(ConfigKind.TLS_CERTIFICATE.name(), scope, certId);
         Optional<ConfigResource> existing = ConfigResourceHelper.getResource(id, kvStore);
         if (existing.isEmpty()) {
-            return ApiResponse.error("TLS certificate not found: " + certId);
+            return ResponseEntity.status(HttpStatus.NOT_FOUND)
+                    .body(ApiResponse.error("TLS certificate not found: " + certId));
         }
 
         TlsCertSpec spec = dto.toSpec();
@@ -122,7 +126,7 @@ public class TlsCertController {
         ConfigResourceHelper.persistAndDistributeWithLeaderCheck(updated, kvStore, distributor, cluster, forwarder);
 
         log.info("Updated TLS certificate: {}", sanitize(certId));
-        return ApiResponse.ok("TLS certificate updated", certId);
+        return ResponseEntity.ok(ApiResponse.ok("TLS certificate updated", certId));
     }
 
     @DeleteMapping("/{certId}")

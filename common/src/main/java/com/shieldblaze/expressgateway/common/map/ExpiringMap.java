@@ -17,6 +17,10 @@
  */
 package com.shieldblaze.expressgateway.common.map;
 
+import lombok.AccessLevel;
+import lombok.Getter;
+import lombok.experimental.Accessors;
+
 import java.time.Duration;
 import java.util.Collection;
 import java.util.HashMap;
@@ -39,6 +43,9 @@ public abstract class ExpiringMap<K, V> implements Map<K, V> {
     private final Map<Object, Long> timestampsMap = new ConcurrentHashMap<>();
     private final long ttlNanos;
     private final boolean autoRenew;
+
+    @Getter(AccessLevel.PROTECTED)
+    @Accessors(fluent = true)
     private final EntryRemovedListener<V> entryRemovedListener;
 
     /**
@@ -190,10 +197,6 @@ public abstract class ExpiringMap<K, V> implements Map<K, V> {
     @Override
     public String toString() {
         return storageMap.toString();
-    }
-
-    protected EntryRemovedListener<V> entryRemovedListener() {
-        return entryRemovedListener;
     }
 
     protected boolean isExpired(Object key) {

@@ -29,7 +29,13 @@ public final class NoNodeAvailableException extends LoadBalanceException {
     @Serial
     private static final long serialVersionUID = 3016237192356488630L;
 
-    public static final NoNodeAvailableException INSTANCE = new NoNodeAvailableException("No Node is available to handle this exception");
+    /**
+     * Shared stackless instance for hot-path use. Because this instance has no stack
+     * trace ({@code writableStackTrace=false}), it is safe to rethrow from any context
+     * without leaking a stale throw location.
+     */
+    public static final NoNodeAvailableException INSTANCE = new NoNodeAvailableException(
+            "No Node is available to handle this request", null, true, false);
 
     public NoNodeAvailableException() {
     }

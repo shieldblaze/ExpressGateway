@@ -17,8 +17,7 @@
  */
 package com.shieldblaze.expressgateway.servicediscovery.client;
 
-import org.apache.logging.log4j.LogManager;
-import org.apache.logging.log4j.Logger;
+import lombok.extern.slf4j.Slf4j;
 
 import javax.naming.NamingEnumeration;
 import javax.naming.NamingException;
@@ -38,9 +37,8 @@ import java.util.List;
  * (e.g., {@code _expressgateway._tcp.service.local}) resolves to active service instances.
  * SRV records provide port information; plain A/AAAA records use a default port.</p>
  */
+@Slf4j
 public final class DnsServiceDiscovery {
-
-    private static final Logger logger = LogManager.getLogger(DnsServiceDiscovery.class);
 
     private final String dnsName;
     private final int defaultPort;
@@ -72,10 +70,11 @@ public final class DnsServiceDiscovery {
      */
     private List<ServiceEntry> resolveSrv() {
         List<ServiceEntry> entries = new ArrayList<>();
+        DirContext ctx = null;
         try {
             Hashtable<String, String> env = new Hashtable<>();
             env.put("java.naming.factory.initial", "com.sun.jndi.dns.DnsContextFactory");
-            DirContext ctx = new InitialDirContext(env);
+            ctx = new InitialDirContext(env);
 
             Attributes attrs = ctx.getAttributes(dnsName, new String[]{"SRV"});
             NamingEnumeration<?> srvRecords = attrs.get("SRV") != null ? attrs.get("SRV").getAll() : null;
@@ -90,7 +89,7 @@ public final class DnsServiceDiscovery {
                         try {
                             port = Integer.parseInt(parts[2]);
                         } catch (NumberFormatException e) {
-                            logger.warn("Invalid port in SRV record '{}': {}", record, e.getMessage());
+                            log.warn("Invalid port in SRV record '{}': {}", record, e.getMessage());
                             continue;
                         }
                         String host = parts[3];
@@ -105,14 +104,20 @@ public final class DnsServiceDiscovery {
                                     "dns-" + addr.getHostAddress() + "-" + port,
                                     addr.getHostAddress(), port, false));
                         } catch (Exception ex) {
-                            logger.warn("Failed to resolve SRV target host: {}", host, ex);
+                            log.warn("Failed to resolve SRV target host: {}", host, ex);
                         }
                     }
                 }
             }
-            ctx.close();
         } catch (NamingException ex) {
-            logger.debug("SRV lookup failed for {}: {}", dnsName, ex.getMessage());
+            log.debug("SRV lookup failed for {}: {}", dnsName, ex.getMessage());
+        } finally {
+            if (ctx != null) {
+                try {
+                    ctx.close();
+                } catch (NamingException ignored) {
+                }
+            }
         }
         return entries;
     }
@@ -130,7 +135,7 @@ public final class DnsServiceDiscovery {
                         addr.getHostAddress(), defaultPort, false));
             }
         } catch (Exception ex) {
-            logger.debug("DNS A/AAAA lookup failed for {}: {}", dnsName, ex.getMessage());
+            log.debug("DNS A/AAAA lookup failed for {}: {}", dnsName, ex.getMessage());
         }
         return entries;
     }

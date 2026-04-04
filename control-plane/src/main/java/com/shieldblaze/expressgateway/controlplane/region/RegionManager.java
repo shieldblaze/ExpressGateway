@@ -17,8 +17,7 @@
  */
 package com.shieldblaze.expressgateway.controlplane.region;
 
-import org.apache.logging.log4j.LogManager;
-import org.apache.logging.log4j.Logger;
+import lombok.extern.log4j.Log4j2;
 
 import java.time.Instant;
 import java.util.Collection;
@@ -43,9 +42,8 @@ import java.util.concurrent.ConcurrentHashMap;
  *
  * <p>Thread safety: all operations are backed by {@link ConcurrentHashMap}.</p>
  */
+@Log4j2
 public final class RegionManager {
-
-    private static final Logger logger = LogManager.getLogger(RegionManager.class);
 
     /**
      * Health state of a region.
@@ -138,9 +136,9 @@ public final class RegionManager {
         Objects.requireNonNull(state, "state");
         RegionState previous = regions.put(state.regionId(), state);
         if (previous == null) {
-            logger.info("Discovered new region: {}", state.regionId());
+            log.info("Discovered new region: {}", state.regionId());
         } else if (previous.health() != state.health()) {
-            logger.info("Region {} health changed: {} -> {}", state.regionId(), previous.health(), state.health());
+            log.info("Region {} health changed: {} -> {}", state.regionId(), previous.health(), state.health());
         }
     }
 
@@ -244,7 +242,7 @@ public final class RegionManager {
             if (existing != null) {
                 // Remove latency entries involving this region while holding the compute lock
                 latencies.keySet().removeIf(k -> k.startsWith(regionId + "->") || k.endsWith("->" + regionId));
-                logger.info("Removed region: {}", regionId);
+                log.info("Removed region: {}", regionId);
                 removed[0] = true;
             }
             return null; // return null to remove the entry

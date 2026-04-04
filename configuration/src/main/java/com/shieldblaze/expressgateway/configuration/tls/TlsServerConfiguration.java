@@ -61,11 +61,10 @@ public final class TlsServerConfiguration extends TlsConfiguration {
     private File trustCertificateFile;
 
     /**
-     * This is the default implementation of {@link TlsClientConfiguration}
+     * This is the default implementation of {@link TlsServerConfiguration}
      * which is disabled by default.
-     * </p>
-     * <p>
-     * To enable this, call {@link #enabled()}.
+     *
+     * <p>To enable this, call {@link #enable()}.</p>
      */
     @JsonIgnore
     public static final TlsServerConfiguration DEFAULT = new TlsServerConfiguration();

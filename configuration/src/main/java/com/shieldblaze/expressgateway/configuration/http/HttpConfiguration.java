@@ -21,6 +21,7 @@ import com.fasterxml.jackson.annotation.JsonIgnore;
 import com.fasterxml.jackson.annotation.JsonProperty;
 import com.shieldblaze.expressgateway.common.utils.NumberUtil;
 import com.shieldblaze.expressgateway.configuration.Configuration;
+import lombok.ToString;
 
 import java.util.Set;
 
@@ -29,8 +30,9 @@ import static io.netty.handler.codec.http.HttpObjectDecoder.DEFAULT_MAX_HEADER_S
 import static io.netty.handler.codec.http.HttpObjectDecoder.DEFAULT_MAX_INITIAL_LINE_LENGTH;
 
 /**
- * Configuration for HTTP
+ * Configuration for HTTP/1.1 and HTTP/2 protocol settings.
  */
+@ToString(exclude = "validated")
 public final class HttpConfiguration implements Configuration<HttpConfiguration> {
 
     @JsonProperty

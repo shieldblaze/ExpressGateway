@@ -32,6 +32,8 @@ import lombok.extern.log4j.Log4j2;
 
 import static com.shieldblaze.expressgateway.common.utils.LogSanitizer.sanitize;
 
+import org.springframework.http.HttpStatus;
+import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.DeleteMapping;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
@@ -96,24 +98,26 @@ public class ClusterController {
     }
 
     @GetMapping("/{clusterId}")
-    public ApiResponse<ClusterDto> getCluster(@PathVariable String clusterId,
+    public ResponseEntity<ApiResponse<ClusterDto>> getCluster(@PathVariable String clusterId,
                                               @RequestParam(defaultValue = "global") String scope) throws Exception {
         ConfigResourceId id = new ConfigResourceId(ConfigKind.CLUSTER.name(), scope, clusterId);
         Optional<ConfigResource> resource = ConfigResourceHelper.getResource(id, kvStore);
         if (resource.isEmpty()) {
-            return ApiResponse.error("Cluster not found: " + clusterId);
+            return ResponseEntity.status(HttpStatus.NOT_FOUND)
+                    .body(ApiResponse.error("Cluster not found: " + clusterId));
         }
         ConfigResource r = resource.get();
-        return ApiResponse.ok(ClusterDto.from((ClusterSpec) r.spec(), r.labels()));
+        return ResponseEntity.ok(ApiResponse.ok(ClusterDto.from((ClusterSpec) r.spec(), r.labels())));
     }
 
     @PutMapping("/{clusterId}")
-    public ApiResponse<String> updateCluster(@PathVariable String clusterId, @RequestBody ClusterDto dto,
+    public ResponseEntity<ApiResponse<String>> updateCluster(@PathVariable String clusterId, @RequestBody ClusterDto dto,
                                              @RequestParam(defaultValue = "global") String scope) throws Exception {
         ConfigResourceId id = new ConfigResourceId(ConfigKind.CLUSTER.name(), scope, clusterId);
         Optional<ConfigResource> existing = ConfigResourceHelper.getResource(id, kvStore);
         if (existing.isEmpty()) {
-            return ApiResponse.error("Cluster not found: " + clusterId);
+            return ResponseEntity.status(HttpStatus.NOT_FOUND)
+                    .body(ApiResponse.error("Cluster not found: " + clusterId));
         }
 
         ClusterSpec spec = dto.toSpec();
@@ -123,7 +127,7 @@ public class ClusterController {
         ConfigResourceHelper.persistAndDistributeWithLeaderCheck(updated, kvStore, distributor, cluster, forwarder);
 
         log.info("Updated cluster: {}", sanitize(clusterId));
-        return ApiResponse.ok("Cluster updated", clusterId);
+        return ResponseEntity.ok(ApiResponse.ok("Cluster updated", clusterId));
     }
 
     @DeleteMapping("/{clusterId}")

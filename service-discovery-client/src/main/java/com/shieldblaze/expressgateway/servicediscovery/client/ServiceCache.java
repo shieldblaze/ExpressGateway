@@ -17,7 +17,6 @@
  */
 package com.shieldblaze.expressgateway.servicediscovery.client;
 
-import java.time.Instant;
 import java.util.List;
 import java.util.Optional;
 import java.util.concurrent.ConcurrentHashMap;
@@ -31,9 +30,13 @@ import java.util.concurrent.ConcurrentMap;
  * <p>The cache uses a simple time-based eviction strategy. Entries are not proactively
  * removed; they are checked for freshness on read. This avoids background threads and
  * keeps the cache lightweight.</p>
+ *
+ * <p>Uses monotonic {@link System#nanoTime()} for TTL checks to avoid wall-clock
+ * drift caused by NTP adjustments or system clock changes.</p>
  */
 public final class ServiceCache {
 
+    private final long ttlNanos;
     private final long ttlMillis;
     private final ConcurrentMap<String, CachedEntry> cache = new ConcurrentHashMap<>();
 
@@ -45,20 +48,21 @@ public final class ServiceCache {
             throw new IllegalArgumentException("ttlMillis must be positive, got: " + ttlMillis);
         }
         this.ttlMillis = ttlMillis;
+        this.ttlNanos = ttlMillis * 1_000_000L;
     }
 
     /**
      * Store a service entry in the cache, keyed by service ID.
      */
     public void put(String serviceId, ServiceEntry entry) {
-        cache.put(serviceId, new CachedEntry(entry, Instant.now()));
+        cache.put(serviceId, new CachedEntry(entry, System.nanoTime()));
     }
 
     /**
      * Store multiple service entries.
      */
     public void putAll(List<ServiceEntry> entries) {
-        Instant now = Instant.now();
+        long now = System.nanoTime();
         for (ServiceEntry entry : entries) {
             cache.put(entry.id(), new CachedEntry(entry, now));
         }
@@ -125,7 +129,7 @@ public final class ServiceCache {
     }
 
     private boolean isFresh(CachedEntry entry) {
-        return Instant.now().toEpochMilli() - entry.cachedAt.toEpochMilli() < ttlMillis;
+        return System.nanoTime() - entry.cachedAtNanos < ttlNanos;
     }
 
     /**
@@ -134,6 +138,6 @@ public final class ServiceCache {
     public record CacheResult(ServiceEntry entry, boolean fresh) {
     }
 
-    private record CachedEntry(ServiceEntry entry, Instant cachedAt) {
+    private record CachedEntry(ServiceEntry entry, long cachedAtNanos) {
     }
 }

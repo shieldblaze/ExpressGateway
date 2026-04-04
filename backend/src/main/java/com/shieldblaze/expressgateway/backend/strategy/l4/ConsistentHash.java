@@ -116,7 +116,7 @@ public final class ConsistentHash extends L4Balance {
         ringLock.readLock().lock();
         try {
             if (ring.isEmpty()) {
-                throw new NoNodeAvailableException();
+                throw NoNodeAvailableException.INSTANCE;
             }
 
             // Walk the ring clockwise from the hash position.
@@ -135,7 +135,7 @@ public final class ConsistentHash extends L4Balance {
             if (node.state() != State.ONLINE) {
                 node = findNextOnlineNode(hash);
                 if (node == null) {
-                    throw new NoNodeAvailableException();
+                    throw NoNodeAvailableException.INSTANCE;
                 }
             }
         } finally {

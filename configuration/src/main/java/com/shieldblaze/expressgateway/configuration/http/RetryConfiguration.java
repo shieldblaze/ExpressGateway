@@ -21,6 +21,7 @@ import com.fasterxml.jackson.annotation.JsonIgnore;
 import com.fasterxml.jackson.annotation.JsonProperty;
 import com.shieldblaze.expressgateway.common.utils.NumberUtil;
 import com.shieldblaze.expressgateway.configuration.Configuration;
+import lombok.ToString;
 
 import java.util.EnumSet;
 import java.util.Objects;
@@ -33,6 +34,7 @@ import java.util.Set;
  * at most {@link #retryBudgetPercent} of recent requests may be retries,
  * preventing retry storms under failure conditions.</p>
  */
+@ToString(exclude = "validated")
 public final class RetryConfiguration implements Configuration<RetryConfiguration> {
 
     /**

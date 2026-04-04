@@ -17,27 +17,42 @@
  */
 package com.shieldblaze.expressgateway.healthcheck;
 
-import com.google.common.collect.EvictingQueue;
 import com.shieldblaze.expressgateway.common.utils.MathUtil;
 
 import java.net.InetSocketAddress;
 import java.time.Duration;
 import java.time.Instant;
-import java.util.Collections;
+import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicReference;
+import java.util.concurrent.locks.ReentrantLock;
 
 /**
  * Health Check for checking health of remote host.
  *
  * <p>Supports configurable rise/fall thresholds (HAProxy-style), health result
  * caching, and exponential backoff for consecutive failures.</p>
+ *
+ * <p>Thread safety: Internal state is protected by a {@link ReentrantLock} to
+ * avoid contention from virtual-thread pinning that {@code synchronized} blocks
+ * cause. The lock is only held during the brief state mutation in markSuccess/markFailure.
+ * The health() read path uses an atomic cached value for lock-free reads.</p>
  */
-@SuppressWarnings("UnstableApiUsage")
 public abstract class HealthCheck implements Runnable {
 
     protected final InetSocketAddress socketAddress;
-    private final EvictingQueue<Boolean> queue;
     protected final int timeout;
+
+    /**
+     * Circular buffer for health check sample history (replaces Guava EvictingQueue).
+     * Using a plain array with modular index avoids the Guava @Beta/unstable API warning
+     * and eliminates the autoboxing overhead of EvictingQueue&lt;Boolean&gt;.
+     */
+    private final boolean[] samples;
+    private final int sampleCapacity;
+    private int sampleHead;
+    private int sampleCount;
+
+    private final ReentrantLock lock = new ReentrantLock();
 
     /**
      * Rise/fall thresholds for state transition hysteresis.
@@ -45,7 +60,7 @@ public abstract class HealthCheck implements Runnable {
     private final int consecutiveSuccessesForHealthy;
     private final int consecutiveFailuresForUnhealthy;
     private int consecutiveSuccesses;
-    private int consecutiveFailures;
+    private final AtomicInteger consecutiveFailureCount = new AtomicInteger(0);
 
     /**
      * Cached health result to avoid recomputation on every query.
@@ -59,11 +74,8 @@ public abstract class HealthCheck implements Runnable {
      */
     private final long baseBackoffMs;
     private final long maxBackoffMs;
-    private int currentBackoffMultiplier;
+    private volatile int currentBackoffMultiplier;
 
-    /**
-     * Health check result record for caching.
-     */
     record CachedHealth(Health health, Instant timestamp) {}
 
     /**
@@ -98,19 +110,26 @@ public abstract class HealthCheck implements Runnable {
      *
      * @param socketAddress                    Remote host address
      * @param timeout                          Check timeout
-     * @param samples                          Sample window size
+     * @param sampleSize                       Sample window size
      * @param consecutiveSuccessesForHealthy   Rise threshold
      * @param consecutiveFailuresForUnhealthy  Fall threshold
      * @param cacheTtl                         How long to cache health results
      * @param baseBackoffMs                    Base backoff in ms for exponential backoff
      * @param maxBackoffMs                     Maximum backoff in ms
      */
-    protected HealthCheck(InetSocketAddress socketAddress, Duration timeout, int samples,
+    protected HealthCheck(InetSocketAddress socketAddress, Duration timeout, int sampleSize,
                           int consecutiveSuccessesForHealthy, int consecutiveFailuresForUnhealthy,
                           Duration cacheTtl, long baseBackoffMs, long maxBackoffMs) {
         this.socketAddress = socketAddress;
         this.timeout = (int) timeout.toMillis();
-        this.queue = EvictingQueue.create(samples);
+
+        if (sampleSize < 1) {
+            throw new IllegalArgumentException("sampleSize must be >= 1, got: " + sampleSize);
+        }
+        this.sampleCapacity = sampleSize;
+        this.samples = new boolean[sampleSize];
+        this.sampleHead = 0;
+        this.sampleCount = 0;
 
         if (consecutiveSuccessesForHealthy < 1) {
             throw new IllegalArgumentException(
@@ -132,15 +151,18 @@ public abstract class HealthCheck implements Runnable {
      * If Health Check was successful, call this method.
      */
     protected void markSuccess() {
-        synchronized (queue) {
+        lock.lock();
+        try {
             consecutiveSuccesses++;
-            consecutiveFailures = 0;
-            currentBackoffMultiplier = 0; // Reset backoff on success
+            consecutiveFailureCount.set(0);
+            currentBackoffMultiplier = 0;
 
             if (consecutiveSuccesses >= consecutiveSuccessesForHealthy) {
-                queue.add(true);
+                addSample(true);
             }
             invalidateCache();
+        } finally {
+            lock.unlock();
         }
     }
 
@@ -148,19 +170,29 @@ public abstract class HealthCheck implements Runnable {
      * If Health Check was unsuccessful, call this method.
      */
     protected void markFailure() {
-        synchronized (queue) {
-            consecutiveFailures++;
+        lock.lock();
+        try {
+            int failures = consecutiveFailureCount.incrementAndGet();
             consecutiveSuccesses = 0;
 
-            // Exponential backoff: increase multiplier on each consecutive failure
-            if (currentBackoffMultiplier < 20) { // cap to prevent overflow
+            if (currentBackoffMultiplier < 20) {
                 currentBackoffMultiplier++;
             }
 
-            if (consecutiveFailures >= consecutiveFailuresForUnhealthy) {
-                queue.add(false);
+            if (failures >= consecutiveFailuresForUnhealthy) {
+                addSample(false);
             }
             invalidateCache();
+        } finally {
+            lock.unlock();
+        }
+    }
+
+    private void addSample(boolean success) {
+        samples[sampleHead] = success;
+        sampleHead = (sampleHead + 1) % sampleCapacity;
+        if (sampleCount < sampleCapacity) {
+            sampleCount++;
         }
     }
 
@@ -169,10 +201,16 @@ public abstract class HealthCheck implements Runnable {
     }
 
     private Health computeHealth() {
-        if (queue.isEmpty()) {
+        if (sampleCount == 0) {
             return Health.UNKNOWN;
         }
-        double percentage = MathUtil.percentage(Collections.frequency(queue, true), queue.size());
+        int successCount = 0;
+        for (int i = 0; i < sampleCount; i++) {
+            if (samples[i]) {
+                successCount++;
+            }
+        }
+        double percentage = MathUtil.percentage(successCount, sampleCount);
         if (percentage >= 95) {
             return Health.GOOD;
         } else if (percentage >= 75) {
@@ -185,17 +223,34 @@ public abstract class HealthCheck implements Runnable {
     /**
      * Get {@link Health} of Remote Host.
      * Returns a cached result if the cache TTL has not expired.
+     * Uses double-check locking: fast path reads the atomic cached value,
+     * slow path acquires the lock and re-checks before recomputing.
      */
     public Health health() {
         CachedHealth cached = cachedHealth.get();
         if (Duration.between(cached.timestamp(), Instant.now()).compareTo(cacheTtl) < 0) {
             return cached.health();
         }
-        synchronized (queue) {
+        lock.lock();
+        try {
+            // Double-check: another thread may have refreshed while we waited for the lock
+            cached = cachedHealth.get();
+            if (Duration.between(cached.timestamp(), Instant.now()).compareTo(cacheTtl) < 0) {
+                return cached.health();
+            }
             Health h = computeHealth();
             cachedHealth.set(new CachedHealth(h, Instant.now()));
             return h;
+        } finally {
+            lock.unlock();
         }
+    }
+
+    /**
+     * Get the {@link InetSocketAddress} of the remote host being checked.
+     */
+    public InetSocketAddress socketAddress() {
+        return socketAddress;
     }
 
     /**
@@ -204,18 +259,12 @@ public abstract class HealthCheck implements Runnable {
      * Uses exponential backoff: baseBackoffMs * 2^(failures-1), capped at maxBackoffMs.
      */
     public long currentBackoffMs() {
-        if (currentBackoffMultiplier <= 0) {
+        int multiplier = currentBackoffMultiplier;
+        if (multiplier <= 0) {
             return 0;
         }
-        long backoff = baseBackoffMs * (1L << Math.min(currentBackoffMultiplier - 1, 30));
+        long backoff = baseBackoffMs * (1L << Math.min(multiplier - 1, 30));
         return Math.min(backoff, maxBackoffMs);
-    }
-
-    /**
-     * Returns the remote address being checked.
-     */
-    public InetSocketAddress socketAddress() {
-        return socketAddress;
     }
 
     /**
@@ -236,6 +285,6 @@ public abstract class HealthCheck implements Runnable {
      * Returns the current number of consecutive failures.
      */
     public int currentConsecutiveFailures() {
-        return consecutiveFailures;
+        return consecutiveFailureCount.get();
     }
 }

@@ -19,8 +19,7 @@ package com.shieldblaze.expressgateway.bootstrap;
 
 import com.shieldblaze.expressgateway.common.ExpressGateway;
 import com.shieldblaze.expressgateway.common.zookeeper.Curator;
-import org.apache.logging.log4j.LogManager;
-import org.apache.logging.log4j.Logger;
+import lombok.extern.slf4j.Slf4j;
 
 import java.util.ArrayList;
 import java.util.List;
@@ -33,9 +32,8 @@ import java.util.List;
  * before the gateway advertises itself as ready (e.g., via service discovery).
  * If any critical check fails, the gateway should abort startup.</p>
  */
+@Slf4j
 public final class StartupHealthCheck {
-
-    private static final Logger logger = LogManager.getLogger(StartupHealthCheck.class);
 
     /**
      * A single health check with a name and a check function.
@@ -91,22 +89,22 @@ public final class StartupHealthCheck {
             try {
                 if (check.fn().check()) {
                     passed.add(check.name());
-                    logger.info("Health check PASSED: {}", check.name());
+                    log.info("Health check PASSED: {}", check.name());
                 } else {
                     failed.add(check.name());
-                    logger.error("Health check FAILED: {}", check.name());
+                    log.error("Health check FAILED: {}", check.name());
                 }
             } catch (Exception ex) {
                 failed.add(check.name() + " (exception: " + ex.getMessage() + ")");
-                logger.error("Health check EXCEPTION: {}", check.name(), ex);
+                log.error("Health check EXCEPTION: {}", check.name(), ex);
             }
         }
 
         boolean healthy = failed.isEmpty();
         if (healthy) {
-            logger.info("All {} startup health checks passed", passed.size());
+            log.info("All {} startup health checks passed", passed.size());
         } else {
-            logger.error("{} of {} startup health checks failed", failed.size(), checks.size());
+            log.error("{} of {} startup health checks failed", failed.size(), checks.size());
         }
 
         return new Result(healthy, List.copyOf(passed), List.copyOf(failed));

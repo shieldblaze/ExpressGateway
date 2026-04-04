@@ -18,8 +18,7 @@
 package com.shieldblaze.expressgateway.controlplane.distribution;
 
 import com.shieldblaze.expressgateway.controlplane.registry.DataPlaneNode;
-import org.apache.logging.log4j.LogManager;
-import org.apache.logging.log4j.Logger;
+import lombok.extern.log4j.Log4j2;
 
 import java.time.Duration;
 import java.time.Instant;
@@ -53,9 +52,8 @@ import java.util.concurrent.atomic.AtomicReference;
  * <p>Thread safety: this class is safe for concurrent use. Each rollout creates
  * its own tracking state.</p>
  */
+@Log4j2
 public final class AtomicRollout {
-
-    private static final Logger logger = LogManager.getLogger(AtomicRollout.class);
 
     /** Maximum number of retry attempts for failed commit ACKs. */
     private static final int COMMIT_MAX_RETRIES = 1;
@@ -208,7 +206,7 @@ public final class AtomicRollout {
                         allPrepared.set(false);
                     }
                 } catch (Exception e) {
-                    logger.error("Prepare failed for node {}", node.nodeId(), e);
+                    log.error("Prepare failed for node {}", node.nodeId(), e);
                     nodeStatus.put(node.nodeId(), AckStatus.PREPARE_NACK);
                     allPrepared.set(false);
                 } finally {
@@ -228,7 +226,7 @@ public final class AtomicRollout {
                     }
                 }
                 allPrepared.set(false);
-                logger.warn("Prepare phase timed out after {}", prepareTimeout);
+                log.warn("Prepare phase timed out after {}", prepareTimeout);
             }
         } catch (InterruptedException e) {
             Thread.currentThread().interrupt();
@@ -238,7 +236,7 @@ public final class AtomicRollout {
         // Phase 2: Commit or Abort
         if (allPrepared.get()) {
             // All nodes prepared -- commit
-            logger.info("All {} nodes prepared, sending COMMIT for delta [{} -> {}]",
+            log.info("All {} nodes prepared, sending COMMIT for delta [{} -> {}]",
                     targets.size(), delta.fromRevision(), delta.toRevision());
             boolean commitSuccess = commitAll(delta, targets, nodeStatus);
             Phase phase = commitSuccess ? Phase.COMMITTED : Phase.ABORTED;
@@ -249,7 +247,7 @@ public final class AtomicRollout {
                     .filter(e -> e.getValue() != AckStatus.PREPARE_ACK)
                     .map(Map.Entry::getKey)
                     .collect(java.util.stream.Collectors.toSet());
-            logger.warn("Prepare phase failed for nodes {}, sending ABORT for delta [{} -> {}]",
+            log.warn("Prepare phase failed for nodes {}, sending ABORT for delta [{} -> {}]",
                     failedNodes, delta.fromRevision(), delta.toRevision());
             abortAll(delta, targets, nodeStatus);
             return new RolloutResult(Phase.ABORTED, new java.util.HashMap<>(nodeStatus), startTime, Instant.now());
@@ -268,7 +266,7 @@ public final class AtomicRollout {
                     boolean ack = commitWithRetry(node, delta);
                     nodeStatus.put(node.nodeId(), ack ? AckStatus.COMMIT_ACK : AckStatus.PREPARE_NACK);
                 } catch (Exception e) {
-                    logger.error("Commit failed for node {} after retries", node.nodeId(), e);
+                    log.error("Commit failed for node {} after retries", node.nodeId(), e);
                     nodeStatus.put(node.nodeId(), AckStatus.PREPARE_NACK);
                 } finally {
                     commitLatch.countDown();
@@ -285,7 +283,7 @@ public final class AtomicRollout {
         for (DataPlaneNode node : targets) {
             AckStatus status = nodeStatus.get(node.nodeId());
             if (status != AckStatus.COMMIT_ACK) {
-                logger.warn("Commit phase failed: node {} has status {}", node.nodeId(), status);
+                log.warn("Commit phase failed: node {} has status {}", node.nodeId(), status);
                 return false;
             }
         }
@@ -304,10 +302,10 @@ public final class AtomicRollout {
                     return true;
                 }
             } catch (Exception e) {
-                logger.warn("Commit attempt {} failed for node {}", attempt + 1, node.nodeId(), e);
+                log.warn("Commit attempt {} failed for node {}", attempt + 1, node.nodeId(), e);
             }
             if (attempt < COMMIT_MAX_RETRIES) {
-                logger.info("Retrying commit for node {} (attempt {})", node.nodeId(), attempt + 2);
+                log.info("Retrying commit for node {} (attempt {})", node.nodeId(), attempt + 2);
             }
         }
         return ack;
@@ -324,7 +322,7 @@ public final class AtomicRollout {
                 try {
                     callback.abort(node, delta);
                 } catch (Exception e) {
-                    logger.debug("Abort notification failed for node {} (best-effort)", node.nodeId(), e);
+                    log.debug("Abort notification failed for node {} (best-effort)", node.nodeId(), e);
                 } finally {
                     abortLatch.countDown();
                 }

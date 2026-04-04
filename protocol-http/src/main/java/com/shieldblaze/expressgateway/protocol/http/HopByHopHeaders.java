@@ -54,6 +54,7 @@ public final class HopByHopHeaders {
             "keep-alive",
             "proxy-authenticate",
             "proxy-authorization",
+            "proxy-connection",
             "te",
             "trailers",
             "transfer-encoding",
@@ -121,6 +122,7 @@ public final class HopByHopHeaders {
         headers.remove("keep-alive");
         headers.remove(HttpHeaderNames.PROXY_AUTHENTICATE);
         headers.remove(HttpHeaderNames.PROXY_AUTHORIZATION);
+        headers.remove("proxy-connection");
         headers.remove(HttpHeaderNames.TE);
         headers.remove("trailers");
         if (stripTransferEncoding) {
@@ -185,6 +187,7 @@ public final class HopByHopHeaders {
         headers.remove("keep-alive");
         headers.remove("proxy-authenticate");
         headers.remove("proxy-authorization");
+        headers.remove("proxy-connection");
         headers.remove("te");
         headers.remove("trailers");
         // Transfer-Encoding is not meaningful in HTTP/2 (RFC 9113 Section 8.2.2),
