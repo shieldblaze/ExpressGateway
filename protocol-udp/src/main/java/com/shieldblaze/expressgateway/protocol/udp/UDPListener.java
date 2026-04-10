@@ -117,7 +117,7 @@ public class UDPListener extends L4FrontListener {
         });
 
         // Shutdown Cluster
-        l4LoadBalancer().clusters().forEach((hostname, cluster) -> cluster.close());
+        l4LoadBalancer().clusters().forEach((_, cluster) -> cluster.close());
         l4LoadBalancer().eventStream().publish(l4FrontListenerStopEvent);
         return l4FrontListenerStopEvent;
     }
@@ -127,7 +127,7 @@ public class UDPListener extends L4FrontListener {
         L4FrontListenerStopTask event = stop();
         L4FrontListenerShutdownTask shutdownEvent = new L4FrontListenerShutdownTask();
 
-        event.future().whenCompleteAsync((_void, throwable) -> {
+        event.future().whenCompleteAsync((_, _) -> {
             l4LoadBalancer().removeClusters();
             l4LoadBalancer().eventLoopFactory().parentGroup().shutdownGracefully();
             l4LoadBalancer().eventLoopFactory().childGroup().shutdownGracefully();

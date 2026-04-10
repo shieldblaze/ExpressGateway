@@ -402,13 +402,13 @@ public final class EtcdKVStore implements KVStore {
          * Checks whether the throwable indicates an etcd compaction event.
          */
         private static boolean isCompactionError(Throwable throwable) {
-            if (throwable instanceof CompactedException) {
+            if (throwable instanceof CompactedException _) {
                 return true;
             }
             // Walk the cause chain -- jetcd sometimes wraps CompactedException
             Throwable cause = throwable;
             while (cause != null) {
-                if (cause instanceof CompactedException) {
+                if (cause instanceof CompactedException _) {
                     return true;
                 }
                 // Also check the message for gRPC status detail matching compaction
@@ -740,7 +740,7 @@ public final class EtcdKVStore implements KVStore {
             cause = e.getCause();
         }
 
-        if (cause instanceof CompactedException) {
+        if (cause instanceof CompactedException _) {
             return new KVStoreException(KVStoreException.Code.CONNECTION_LOST,
                     "Compacted revision while accessing key: " + key, e);
         }

@@ -220,7 +220,7 @@ public final class HeartbeatSender implements Closeable {
                 synchronized (writeLock) {
                     observer.onCompleted();
                 }
-            } catch (Exception ignored) {
+            } catch (Exception _) {
                 // Stream may already be closed
             }
         }

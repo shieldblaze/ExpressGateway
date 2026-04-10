@@ -55,7 +55,7 @@ final class CuratorConfigStorageBackend implements ConfigStorageBackend {
 
     CuratorConfigStorageBackend() {
         // Register a Curator ConnectionStateListener that delegates to our connection loss listeners
-        this.curatorConnectionListener = (client, newState) -> {
+        this.curatorConnectionListener = (_, newState) -> {
             if (newState == ConnectionState.LOST || newState == ConnectionState.SUSPENDED) {
                 for (Runnable listener : connectionLossListeners) {
                     try {
@@ -176,7 +176,7 @@ final class CuratorConfigStorageBackend implements ConfigStorageBackend {
         CuratorCache cache = CuratorCache.build(curator, path);
 
         CuratorCacheListener cacheListener = CuratorCacheListener.builder()
-                .forChanges((oldNode, newNode) -> listener.onDataChanged(newNode.getData()))
+                .forChanges((_, newNode) -> listener.onDataChanged(newNode.getData()))
                 .forCreates(childData -> listener.onDataChanged(childData.getData()))
                 .build();
 

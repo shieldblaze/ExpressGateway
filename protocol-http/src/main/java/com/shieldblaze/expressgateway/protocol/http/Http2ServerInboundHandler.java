@@ -1487,7 +1487,7 @@ public final class Http2ServerInboundHandler extends ChannelInboundHandlerAdapte
         try {
             return httpLoadBalancer.clusters().values().stream()
                     .anyMatch(c -> !c.allNodes().isEmpty());
-        } catch (Exception e) {
+        } catch (Exception _) {
             return false;
         }
     }

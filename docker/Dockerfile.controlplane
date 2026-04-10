@@ -7,7 +7,7 @@
 # ============================================================================
 
 # Stage 1: Build with Maven
-FROM maven:3.9-eclipse-temurin-21 AS builder
+FROM maven:3.9-eclipse-temurin-25 AS builder
 
 WORKDIR /build
 
@@ -20,7 +20,7 @@ RUN --mount=type=cache,target=/root/.m2/repository \
     && cp bootstrap/target/bootstrap-1.0.0.jar /build/app.jar
 
 # Stage 2: Runtime with Google Distroless
-FROM gcr.io/distroless/java21-debian12:nonroot
+FROM eclipse-temurin:25-jre-noble
 
 LABEL maintainer="ShieldBlaze <team@shieldblaze.com>"
 LABEL description="ShieldBlaze ExpressGateway Control Plane"
@@ -42,5 +42,9 @@ ENTRYPOINT ["java", \
     "-XX:+UseG1GC", \
     "--add-exports", "java.base/jdk.internal.misc=ALL-UNNAMED", \
     "--add-opens", "java.base/java.nio=ALL-UNNAMED", \
+    "--add-opens", "java.base/jdk.internal.misc=ALL-UNNAMED", \
+    "--add-opens", "java.base/java.lang=ALL-UNNAMED", \
+    "--add-opens", "java.base/java.lang.invoke=ALL-UNNAMED", \
+    "--add-opens", "java.base/sun.nio.ch=ALL-UNNAMED", \
     "-Dio.netty.tryReflectionSetAccessible=true", \
     "-jar", "/app/expressgateway-cp.jar"]

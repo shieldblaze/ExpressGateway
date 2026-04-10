@@ -130,24 +130,23 @@ public class TCPListener extends L4FrontListener {
             serverBootstrap.childOption(io.netty.incubator.channel.uring.IOUringChannelOption.TCP_QUICKACK, true);
         }
 
-        serverBootstrap.channelFactory(() -> {
-                    if (transportConfiguration.transportType() == TransportType.IO_URING) {
+        serverBootstrap.channelFactory(() -> switch (transportConfiguration.transportType()) {
+                    case IO_URING -> {
                         IOUringServerSocketChannel serverSocketChannel = new IOUringServerSocketChannel();
                         serverSocketChannel.config().setOption(UnixChannelOption.SO_REUSEPORT, true);
                         serverSocketChannel.config().setTcpFastopen(transportConfiguration.tcpFastOpenMaximumPendingRequests());
-                        return serverSocketChannel;
-                    } else if (transportConfiguration.transportType() == TransportType.EPOLL) {
+                        yield serverSocketChannel;
+                    }
+                    case EPOLL -> {
                         EpollServerSocketChannel serverSocketChannel = new EpollServerSocketChannel();
                         EpollServerSocketChannelConfig config = serverSocketChannel.config();
                         config.setOption(UnixChannelOption.SO_REUSEPORT, true);
                         config.setTcpFastopen(transportConfiguration.tcpFastOpenMaximumPendingRequests());
                         config.setEpollMode(EpollMode.EDGE_TRIGGERED);
                         config.setPerformancePreferences(100, 100, 100);
-
-                        return serverSocketChannel;
-                    } else {
-                        return new NioServerSocketChannel();
+                        yield serverSocketChannel;
                     }
+                    case NIO -> new NioServerSocketChannel();
                 })
                 .childHandler(channelHandler);
 
@@ -215,7 +214,7 @@ public class TCPListener extends L4FrontListener {
         });
 
         // Shutdown Cluster
-        l4LoadBalancer().clusters().forEach((hostname, cluster) -> cluster.close());
+        l4LoadBalancer().clusters().forEach((_, cluster) -> cluster.close());
         l4LoadBalancer().eventStream().publish(l4FrontListenerStopEvent);
         return l4FrontListenerStopEvent;
     }
@@ -225,7 +224,7 @@ public class TCPListener extends L4FrontListener {
         L4FrontListenerStopTask event = stop();
         L4FrontListenerShutdownTask shutdownEvent = new L4FrontListenerShutdownTask();
 
-        event.future().whenCompleteAsync((_void, throwable) -> {
+        event.future().whenCompleteAsync((_, _) -> {
             l4LoadBalancer().removeClusters();
             l4LoadBalancer().eventLoopFactory().parentGroup().shutdownGracefully();
             l4LoadBalancer().eventLoopFactory().childGroup().shutdownGracefully();

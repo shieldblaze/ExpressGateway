@@ -172,7 +172,7 @@ public final class CidRouter implements Closeable {
         ByteArrayKey newKey = new ByteArrayKey(newCid);
         ByteArrayKey primaryKey = new ByteArrayKey(primaryCid);
         cidToConnectionKey.put(newKey, primaryKey);
-        connectionCids.computeIfAbsent(primaryKey, k -> ConcurrentHashMap.newKeySet()).add(newKey);
+        connectionCids.computeIfAbsent(primaryKey, _ -> ConcurrentHashMap.newKeySet()).add(newKey);
 
         if (logger.isDebugEnabled()) {
             logger.debug("Issued new CID (rotation) for session to {}",
@@ -194,7 +194,7 @@ public final class CidRouter implements Closeable {
 
         ByteArrayKey newKey = new ByteArrayKey(newCid);
         cidToConnectionKey.put(newKey, newKey);
-        connectionCids.computeIfAbsent(newKey, k -> ConcurrentHashMap.newKeySet()).add(newKey);
+        connectionCids.computeIfAbsent(newKey, _ -> ConcurrentHashMap.newKeySet()).add(newKey);
 
         if (logger.isDebugEnabled()) {
             logger.debug("Issued new CID (rotation) for session to {}",
@@ -228,7 +228,7 @@ public final class CidRouter implements Closeable {
         ByteArrayKey cidKey = new ByteArrayKey(cid);
         ByteArrayKey primaryKey = new ByteArrayKey(primaryCid);
         cidToConnectionKey.put(cidKey, primaryKey);
-        connectionCids.computeIfAbsent(primaryKey, k -> ConcurrentHashMap.newKeySet()).add(cidKey);
+        connectionCids.computeIfAbsent(primaryKey, _ -> ConcurrentHashMap.newKeySet()).add(cidKey);
     }
 
     /**

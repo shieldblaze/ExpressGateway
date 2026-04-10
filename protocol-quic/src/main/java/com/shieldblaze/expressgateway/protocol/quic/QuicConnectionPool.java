@@ -181,7 +181,7 @@ public class QuicConnectionPool<C extends QuicConnection> {
      * @return {@code true} if registered, {@code false} if at capacity
      */
     public boolean tryRegister(Node node, C conn) {
-        CopyOnWriteArrayList<C> conns = pool.computeIfAbsent(node, k -> new CopyOnWriteArrayList<>());
+        CopyOnWriteArrayList<C> conns = pool.computeIfAbsent(node, _ -> new CopyOnWriteArrayList<>());
         synchronized (conns) {
             if (conns.size() >= maxPerNode) {
                 return false;
@@ -195,7 +195,7 @@ public class QuicConnectionPool<C extends QuicConnection> {
      * Register a newly created connection into the pool unconditionally.
      */
     public void register(Node node, C conn) {
-        pool.computeIfAbsent(node, k -> new CopyOnWriteArrayList<>()).add(conn);
+        pool.computeIfAbsent(node, _ -> new CopyOnWriteArrayList<>()).add(conn);
     }
 
     /**

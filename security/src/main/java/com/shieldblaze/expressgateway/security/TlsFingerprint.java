@@ -182,7 +182,7 @@ public record TlsFingerprint(
 
             return new TlsFingerprint(clientVersion, List.copyOf(ciphers), List.copyOf(extList),
                     List.copyOf(curves), List.copyOf(pointFormats), ja3Str, hash);
-        } catch (Exception e) {
+        } catch (Exception _) {
             return null; // Malformed ClientHello
         } finally {
             buf.readerIndex(readerIdx);

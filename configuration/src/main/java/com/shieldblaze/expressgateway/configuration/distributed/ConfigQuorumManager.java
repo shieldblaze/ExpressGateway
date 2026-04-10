@@ -198,7 +198,7 @@ public final class ConfigQuorumManager implements Closeable {
             waiter.timeoutFuture = timeoutFuture;
 
             // Handle external cancellation
-            future.whenComplete((result, throwable) -> {
+            future.whenComplete((_, _) -> {
                 timeoutFuture.cancel(false);
                 cleanupWaiter(version);
             });

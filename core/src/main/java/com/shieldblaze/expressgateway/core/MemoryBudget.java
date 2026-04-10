@@ -112,7 +112,7 @@ public final class MemoryBudget {
                     }
                 }
             }
-        } catch (Exception e) {
+        } catch (Exception _) {
             // SecurityManager or other restriction -- fall through to default
         }
         return DEFAULT_MAX_DIRECT_MEMORY_BYTES;
@@ -139,7 +139,7 @@ public final class MemoryBudget {
         }
         try {
             return Long.parseLong(value) * multiplier;
-        } catch (NumberFormatException e) {
+        } catch (NumberFormatException _) {
             return -1;
         }
     }

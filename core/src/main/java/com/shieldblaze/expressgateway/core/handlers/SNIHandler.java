@@ -80,8 +80,8 @@ public final class SNIHandler extends AbstractSniHandler<CertificateKeyPair> {
         if (!future.isSuccess()) {
             final Throwable cause = future.cause();
             log.warn("SNI lookup failed for hostname: {}", hostname, cause);
-            if (cause instanceof Error) {
-                throw (Error) cause;
+            if (cause instanceof Error error) {
+                throw error;
             }
             throw new DecoderException("Failed to get the CertificateKeyPair for: " + hostname, cause);
         }
@@ -107,8 +107,8 @@ public final class SNIHandler extends AbstractSniHandler<CertificateKeyPair> {
             handler.setHandshakeTimeoutMillis(10_000);
 
             try {
-                if (engine instanceof ReferenceCountedOpenSslEngine && certificateKeyPair.useOCSPStapling()) {
-                    ((ReferenceCountedOpenSslEngine) engine).setOcspResponse(certificateKeyPair.ocspStaplingData());
+                if (engine instanceof ReferenceCountedOpenSslEngine openSslEngine && certificateKeyPair.useOCSPStapling()) {
+                    openSslEngine.setOcspResponse(certificateKeyPair.ocspStaplingData());
                 }
             } catch (Exception ex) {
                 ctx.fireExceptionCaught(ex);

@@ -177,7 +177,7 @@ public final class RetryTokenCodec {
             GCMParameterSpec gcmSpec = new GCMParameterSpec(GCM_TAG_BITS, nonce);
             cipher.init(Cipher.DECRYPT_MODE, secretKey, gcmSpec);
             plaintext = cipher.doFinal(ciphertext);
-        } catch (Exception e) {
+        } catch (Exception _) {
             // Tampered, wrong key, or corrupt -- GCM authentication failed
             return null;
         }
@@ -212,7 +212,7 @@ public final class RetryTokenCodec {
         InetAddress tokenAddress;
         try {
             tokenAddress = InetAddress.getByAddress(ipBytes);
-        } catch (Exception e) {
+        } catch (Exception _) {
             return null;
         }
 

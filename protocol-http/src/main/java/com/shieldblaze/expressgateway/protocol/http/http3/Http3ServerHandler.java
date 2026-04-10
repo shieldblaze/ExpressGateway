@@ -460,7 +460,7 @@ final class Http3ServerHandler extends Http3RequestStreamInboundHandler {
         Cluster cluster;
         try {
             cluster = loadBalancer.cluster(authorityStr);
-        } catch (Exception e) {
+        } catch (Exception _) {
             cluster = null;
         }
 

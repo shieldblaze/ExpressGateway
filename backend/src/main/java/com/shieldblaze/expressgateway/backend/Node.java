@@ -497,7 +497,7 @@ public final class Node implements Comparable<Node>, Closeable {
 
             try {
                 cluster.removeNode(this);
-            } catch (NodeNotFoundException e) {
+            } catch (NodeNotFoundException _) {
                 // Node was already removed from the cluster (e.g., Cluster.close()
                 // iterates nodes and calls node.close() which calls removeNode).
                 log.debug("Node already removed from cluster during close: {}", this);

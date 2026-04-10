@@ -199,7 +199,7 @@ public final class QuicCidSessionMap implements Closeable {
     }
 
     private void decrementCidLengthCount(int cidLength) {
-        cidLengthCounts.computeIfPresent(cidLength, (k, v) -> v <= 1 ? null : v - 1);
+        cidLengthCounts.computeIfPresent(cidLength, (_, v) -> v <= 1 ? null : v - 1);
     }
 
     @Override

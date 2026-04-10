@@ -140,7 +140,7 @@ final class ConnectionPool implements AutoCloseable {
         }
 
         ConcurrentLinkedQueue<ConnectionPoolEntry> queue =
-                pool.computeIfAbsent(backendAddress, k -> new ConcurrentLinkedQueue<>());
+                pool.computeIfAbsent(backendAddress, _ -> new ConcurrentLinkedQueue<>());
 
         // Check per-backend limit (approximate -- ConcurrentLinkedQueue.size() is O(n)
         // but acceptable here since release is not a hot-path operation compared to reads)

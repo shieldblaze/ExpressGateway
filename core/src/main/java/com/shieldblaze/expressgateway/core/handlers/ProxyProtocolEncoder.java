@@ -187,7 +187,7 @@ public final class ProxyProtocolEncoder extends ChannelDuplexHandler {
                 if (mapped && bytes[10] == (byte) 0xFF && bytes[11] == (byte) 0xFF) {
                     try {
                         return Inet4Address.getByAddress(new byte[]{bytes[12], bytes[13], bytes[14], bytes[15]});
-                    } catch (Exception e) {
+                    } catch (Exception _) {
                         // Fall through to return original
                     }
                 }

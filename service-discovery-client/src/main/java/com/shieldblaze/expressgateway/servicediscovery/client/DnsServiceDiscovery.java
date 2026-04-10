@@ -115,7 +115,7 @@ public final class DnsServiceDiscovery {
             if (ctx != null) {
                 try {
                     ctx.close();
-                } catch (NamingException ignored) {
+                } catch (NamingException _) {
                 }
             }
         }

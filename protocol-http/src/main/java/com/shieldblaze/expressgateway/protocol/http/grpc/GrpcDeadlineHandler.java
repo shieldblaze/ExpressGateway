@@ -72,34 +72,23 @@ public final class GrpcDeadlineHandler {
         }
 
         char unit = grpcTimeout.charAt(length - 1);
-        long multiplier;
-        switch (unit) {
-            case 'H':
-                multiplier = NANOS_PER_HOUR;
-                break;
-            case 'M':
-                multiplier = NANOS_PER_MINUTE;
-                break;
-            case 'S':
-                multiplier = NANOS_PER_SECOND;
-                break;
-            case 'm':
-                multiplier = NANOS_PER_MILLI;
-                break;
-            case 'u':
-                multiplier = NANOS_PER_MICRO;
-                break;
-            case 'n':
-                multiplier = 1;
-                break;
-            default:
-                return -1;
+        long multiplier = switch (unit) {
+            case 'H' -> NANOS_PER_HOUR;
+            case 'M' -> NANOS_PER_MINUTE;
+            case 'S' -> NANOS_PER_SECOND;
+            case 'm' -> NANOS_PER_MILLI;
+            case 'u' -> NANOS_PER_MICRO;
+            case 'n' -> 1;
+            default -> -1;
+        };
+        if (multiplier == -1) {
+            return -1;
         }
 
         long value;
         try {
             value = Long.parseLong(grpcTimeout, 0, length - 1, 10);
-        } catch (NumberFormatException e) {
+        } catch (NumberFormatException _) {
             return -1;
         }
 

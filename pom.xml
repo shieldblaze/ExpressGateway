@@ -28,9 +28,9 @@ along with ShieldBlaze ExpressGateway.  If not, see <https://www.gnu.org/license
     <properties>
         <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
         <project.reporting.outputEncoding>UTF-8</project.reporting.outputEncoding>
-        <java.version>21</java.version>
-        <maven.compiler.source>21</maven.compiler.source>
-        <maven.compiler.target>21</maven.compiler.target>
+        <java.version>25</java.version>
+        <maven.compiler.source>25</maven.compiler.source>
+        <maven.compiler.target>25</maven.compiler.target>
 
         <!-- Version Management -->
         <apache.curator>5.9.0</apache.curator>
@@ -64,6 +64,15 @@ along with ShieldBlaze ExpressGateway.  If not, see <https://www.gnu.org/license
     <inceptionYear>2020</inceptionYear>
 
     <modules>
+        <!-- New architecture modules -->
+        <module>coordination-api</module>
+        <module>coordination-zookeeper</module>
+        <module>coordination-etcd</module>
+        <module>coordination-consul</module>
+        <module>config-core</module>
+        <module>bootstrap-core</module>
+
+        <!-- Existing modules -->
         <module>backend</module>
         <module>bootstrap</module>
         <module>common</module>
@@ -433,8 +442,8 @@ along with ShieldBlaze ExpressGateway.  If not, see <https://www.gnu.org/license
                 <artifactId>maven-compiler-plugin</artifactId>
                 <version>3.15.0</version>
                 <configuration>
-                    <source>21</source>
-                    <target>21</target>
+                    <source>25</source>
+                    <target>25</target>
                     <annotationProcessorPaths>
                         <path>
                             <groupId>org.projectlombok</groupId>
@@ -451,6 +460,12 @@ along with ShieldBlaze ExpressGateway.  If not, see <https://www.gnu.org/license
                 <configuration>
                     <argLine>
                         --add-exports java.base/jdk.internal.misc=ALL-UNNAMED
+                        --add-opens java.base/java.nio=ALL-UNNAMED
+                        --add-opens java.base/jdk.internal.misc=ALL-UNNAMED
+                        --add-opens java.base/java.lang=ALL-UNNAMED
+                        --add-opens java.base/java.lang.invoke=ALL-UNNAMED
+                        --add-opens java.base/sun.nio.ch=ALL-UNNAMED
+                        -Dio.netty.tryReflectionSetAccessible=true
                         -Dio.netty.leakDetection.level=PARANOID
                         -Dapi.version=1.43
                     </argLine>

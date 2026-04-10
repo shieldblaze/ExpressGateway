@@ -118,7 +118,7 @@ final class SessionRateLimiter {
             return true;
         }
 
-        Bucket bucket = buckets.computeIfAbsent(source, key -> new Bucket(config.burstSize()));
+        Bucket bucket = buckets.computeIfAbsent(source, _ -> new Bucket(config.burstSize()));
         refill(bucket);
 
         // CAS loop to atomically consume one token

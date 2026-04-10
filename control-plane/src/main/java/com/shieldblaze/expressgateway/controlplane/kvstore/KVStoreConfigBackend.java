@@ -101,7 +101,7 @@ public final class KVStoreConfigBackend implements ConfigStorageBackend {
                     if (seq > maxSeq) {
                         maxSeq = seq;
                     }
-                } catch (NumberFormatException ignored) {
+                } catch (NumberFormatException _) {
                 }
             }
         }

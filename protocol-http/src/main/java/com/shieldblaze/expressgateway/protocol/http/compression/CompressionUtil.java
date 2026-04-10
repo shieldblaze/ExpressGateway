@@ -115,7 +115,7 @@ public final class CompressionUtil {
                 if (equalsPos != -1) {
                     try {
                         q = Float.parseFloat(encoding.substring(equalsPos + 1).trim());
-                    } catch (NumberFormatException e) {
+                    } catch (NumberFormatException _) {
                         q = 0.0f;
                     }
                 }

@@ -334,7 +334,7 @@ public final class ConnectionMigrationHandler {
     public void trackBytesReceived(InetSocketAddress fromAddress, long bytesReceived) {
         MigrationKey key = addressToMigrationKey.get(fromAddress);
         if (key != null) {
-            activeMigrations.computeIfPresent(key, (k, event) ->
+            activeMigrations.computeIfPresent(key, (_, event) ->
                     event.withReceivedBytes(bytesReceived));
         }
     }
@@ -354,7 +354,7 @@ public final class ConnectionMigrationHandler {
             return true; // No active migration -- no amplification limit
         }
         boolean[] allowed = {false};
-        activeMigrations.computeIfPresent(key, (k, event) -> {
+        activeMigrations.computeIfPresent(key, (_, event) -> {
             if (event.canSendBytes(bytesToSend)) {
                 allowed[0] = true;
                 return event.withSentBytes(bytesToSend);
@@ -392,7 +392,7 @@ public final class ConnectionMigrationHandler {
     public void trackBytesSent(InetSocketAddress toAddress, long bytesSent) {
         MigrationKey key = addressToMigrationKey.get(toAddress);
         if (key != null) {
-            activeMigrations.computeIfPresent(key, (k, event) ->
+            activeMigrations.computeIfPresent(key, (_, event) ->
                     event.withSentBytes(bytesSent));
         }
     }
@@ -506,7 +506,7 @@ public final class ConnectionMigrationHandler {
         long now = System.nanoTime();
         boolean[] allowed = {false};
 
-        migrationAttemptTimestamps.compute(address, (addr, lastAttempt) -> {
+        migrationAttemptTimestamps.compute(address, (_, lastAttempt) -> {
             if (lastAttempt == null || now - lastAttempt >= migrationRateLimitNanos) {
                 allowed[0] = true;
                 return now;

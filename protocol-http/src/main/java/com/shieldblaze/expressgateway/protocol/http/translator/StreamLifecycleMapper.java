@@ -283,7 +283,7 @@ public final class StreamLifecycleMapper {
     private TransitionResult computeTransition(int streamId, java.util.function.Function<StreamState, StreamState> transitionFn) {
         StreamState[] result = new StreamState[2]; // [0] = previous, [1] = new (null if invalid)
 
-        states.compute(streamId, (id, current) -> {
+        states.compute(streamId, (_, current) -> {
             if (current == null) {
                 result[0] = null;
                 result[1] = null;

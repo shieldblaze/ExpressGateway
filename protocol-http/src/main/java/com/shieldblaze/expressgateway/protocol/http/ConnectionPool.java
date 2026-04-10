@@ -344,7 +344,7 @@ public final class ConnectionPool {
         }
 
         if (isH2) {
-            h2Pool.computeIfAbsent(node, k -> new CopyOnWriteArrayList<>()).add(conn);
+            h2Pool.computeIfAbsent(node, _ -> new CopyOnWriteArrayList<>()).add(conn);
         }
         // H1 connections are registered on release (when they become idle),
         // not on creation (when they're immediately in-use).
@@ -371,12 +371,12 @@ public final class ConnectionPool {
             return;
         }
 
-        Deque<HttpConnection> deque = h1Pool.computeIfAbsent(node, k -> new ConcurrentLinkedDeque<>());
+        Deque<HttpConnection> deque = h1Pool.computeIfAbsent(node, _ -> new ConcurrentLinkedDeque<>());
         // NP-03: Use atomic counter instead of O(n) deque.size().
         // CAS loop atomically reserves a slot only if below max, preventing any
         // transient over-count that the increment-then-rollback pattern would allow.
         java.util.concurrent.atomic.AtomicInteger sizeCounter =
-                h1PoolSize.computeIfAbsent(node, k -> new java.util.concurrent.atomic.AtomicInteger());
+                h1PoolSize.computeIfAbsent(node, _ -> new java.util.concurrent.atomic.AtomicInteger());
         int current;
         do {
             current = sizeCounter.get();

@@ -144,7 +144,7 @@ public final class ManualExpiringMap<K, V> extends ExpiringMap<K, V> {
         // Collect expired keys first to avoid ConcurrentModificationException
         // from removing entries during forEach iteration over HashMap
         List<K> expiredKeys = new ArrayList<>();
-        forEach((key, value) -> {
+        forEach((key, _) -> {
             if (isExpired(key)) {
                 expiredKeys.add(key);
             }

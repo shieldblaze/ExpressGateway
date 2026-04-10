@@ -293,7 +293,7 @@ public final class ConfigStreamHandler implements Closeable {
                 synchronized (writeLock) {
                     observer.onCompleted();
                 }
-            } catch (Exception ignored) {
+            } catch (Exception _) {
                 // Stream may already be closed
             }
         }

@@ -81,7 +81,7 @@ public final class ConnectionTracker extends ChannelInboundHandlerAdapter {
         // SEC-09: Track per-IP connections and enforce limit
         if (maxConnectionsPerIp > 0) {
             InetAddress remoteIp = ((InetSocketAddress) ctx.channel().remoteAddress()).getAddress();
-            AtomicInteger count = perIpConnections.computeIfAbsent(remoteIp, k -> new AtomicInteger());
+            AtomicInteger count = perIpConnections.computeIfAbsent(remoteIp, _ -> new AtomicInteger());
             int current = count.incrementAndGet();
             if (current > maxConnectionsPerIp) {
                 count.decrementAndGet();
@@ -103,7 +103,7 @@ public final class ConnectionTracker extends ChannelInboundHandlerAdapter {
         // decrementAndGet() and remove().
         if (maxConnectionsPerIp > 0 && ctx.channel().remoteAddress() instanceof InetSocketAddress isa) {
             InetAddress remoteIp = isa.getAddress();
-            perIpConnections.computeIfPresent(remoteIp, (key, count) -> {
+            perIpConnections.computeIfPresent(remoteIp, (_, count) -> {
                 int remaining = count.decrementAndGet();
                 return remaining <= 0 ? null : count;
             });

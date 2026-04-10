@@ -417,7 +417,7 @@ public abstract class L4LoadBalancer {
         jsonObject.addProperty("State", state);
 
         JsonArray clusters = new JsonArray();
-        clusterMap.forEach((hostname, cluster) -> clusters.add(cluster.toJson()));
+        clusterMap.forEach((_, cluster) -> clusters.add(cluster.toJson()));
         jsonObject.add("Clusters", clusters);
 
         return jsonObject;

@@ -1,0 +1,45 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project xmlns="http://maven.apache.org/POM/4.0.0"
+         xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+         xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 http://maven.apache.org/xsd/maven-4.0.0.xsd">
+    <modelVersion>4.0.0</modelVersion>
+
+    <parent>
+        <groupId>com.shieldblaze.expressgateway</groupId>
+        <artifactId>parent</artifactId>
+        <version>1.0.0</version>
+    </parent>
+
+    <artifactId>coordination-zookeeper</artifactId>
+    <name>ExpressGateway Coordination - ZooKeeper</name>
+    <description>ZooKeeper/Curator implementation of CoordinationProvider</description>
+
+    <dependencies>
+        <dependency>
+            <groupId>com.shieldblaze.expressgateway</groupId>
+            <artifactId>coordination-api</artifactId>
+            <version>${project.version}</version>
+        </dependency>
+
+        <!-- Apache Curator (brings ZooKeeper transitively) -->
+        <dependency>
+            <groupId>org.apache.curator</groupId>
+            <artifactId>curator-framework</artifactId>
+            <version>${apache.curator}</version>
+        </dependency>
+        <dependency>
+            <groupId>org.apache.curator</groupId>
+            <artifactId>curator-recipes</artifactId>
+            <version>${apache.curator}</version>
+        </dependency>
+
+        <!-- Test -->
+        <dependency>
+            <groupId>org.apache.curator</groupId>
+            <artifactId>curator-test</artifactId>
+            <version>${apache.curator}</version>
+            <scope>test</scope>
+        </dependency>
+    </dependencies>
+
+</project>

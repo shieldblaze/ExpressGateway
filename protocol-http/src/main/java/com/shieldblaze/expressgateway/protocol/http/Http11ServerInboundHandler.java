@@ -392,7 +392,7 @@ public class Http11ServerInboundHandler extends ChannelInboundHandlerAdapter imp
                         ctx.writeAndFlush(response).addListener(ChannelFutureListener.CLOSE);
                         return;
                     }
-                } catch (NumberFormatException e) {
+                } catch (NumberFormatException _) {
                     // Can occur for digit-only strings that overflow Long.MAX_VALUE.
                     logger.warn("Content-Length overflows long: {}, responding 400", sanitize(contentLengthStr));
                     ReferenceCountUtil.release(msg);
@@ -524,7 +524,7 @@ public class Http11ServerInboundHandler extends ChannelInboundHandlerAdapter imp
                             // maxForwards > 0: Decrement Max-Forwards before forwarding to backend.
                             request.headers().setInt(HttpHeaderNames.MAX_FORWARDS, maxForwards - 1);
                         }
-                    } catch (NumberFormatException e) {
+                    } catch (NumberFormatException _) {
                         // DEF-H1-01: RFC 9110 Section 7.6.2 — Max-Forwards is 1*DIGIT.
                         // A non-numeric value is malformed; reject with 400.
                         logger.warn("Non-numeric Max-Forwards value: {}, responding 400", sanitize(maxForwardsStr));
@@ -1090,7 +1090,7 @@ public class Http11ServerInboundHandler extends ChannelInboundHandlerAdapter imp
         try {
             return httpLoadBalancer.clusters().values().stream()
                     .anyMatch(c -> !c.allNodes().isEmpty());
-        } catch (Exception e) {
+        } catch (Exception _) {
             return false;
         }
     }

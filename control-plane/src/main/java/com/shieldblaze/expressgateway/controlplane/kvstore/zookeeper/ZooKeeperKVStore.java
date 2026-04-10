@@ -425,35 +425,30 @@ public final class ZooKeeperKVStore implements KVStore {
      * Maps ZooKeeper / Curator exceptions to {@link KVStoreException} with the appropriate code.
      */
     private static KVStoreException mapException(Exception e, String key) {
-        if (e instanceof KeeperException.NoNodeException) {
-            return new KVStoreException(KVStoreException.Code.KEY_NOT_FOUND,
-                    "Key not found: " + key, e);
-        }
-        if (e instanceof KeeperException.BadVersionException) {
-            return new KVStoreException(KVStoreException.Code.VERSION_CONFLICT,
-                    "Version conflict for key: " + key, e);
-        }
-        if (e instanceof KeeperException.ConnectionLossException
-                || e instanceof KeeperException.SessionExpiredException) {
-            return new KVStoreException(KVStoreException.Code.CONNECTION_LOST,
-                    "Connection lost while accessing key: " + key, e);
-        }
-        if (e instanceof KeeperException.NoAuthException
-                || e instanceof KeeperException.AuthFailedException) {
-            return new KVStoreException(KVStoreException.Code.UNAUTHORIZED,
-                    "Unauthorized access to key: " + key, e);
-        }
-        if (e instanceof KeeperException.OperationTimeoutException) {
-            return new KVStoreException(KVStoreException.Code.OPERATION_TIMEOUT,
-                    "Operation timed out for key: " + key, e);
-        }
-        if (e instanceof InterruptedException) {
-            Thread.currentThread().interrupt();
-            return new KVStoreException(KVStoreException.Code.OPERATION_TIMEOUT,
-                    "Operation interrupted for key: " + key, e);
-        }
-        return new KVStoreException(KVStoreException.Code.INTERNAL_ERROR,
-                "Internal error for key: " + key, e);
+        return switch (e) {
+            case KeeperException.NoNodeException _ ->
+                    new KVStoreException(KVStoreException.Code.KEY_NOT_FOUND,
+                            "Key not found: " + key, e);
+            case KeeperException.BadVersionException _ ->
+                    new KVStoreException(KVStoreException.Code.VERSION_CONFLICT,
+                            "Version conflict for key: " + key, e);
+            case KeeperException.ConnectionLossException _, KeeperException.SessionExpiredException _ ->
+                    new KVStoreException(KVStoreException.Code.CONNECTION_LOST,
+                            "Connection lost while accessing key: " + key, e);
+            case KeeperException.NoAuthException _, KeeperException.AuthFailedException _ ->
+                    new KVStoreException(KVStoreException.Code.UNAUTHORIZED,
+                            "Unauthorized access to key: " + key, e);
+            case KeeperException.OperationTimeoutException _ ->
+                    new KVStoreException(KVStoreException.Code.OPERATION_TIMEOUT,
+                            "Operation timed out for key: " + key, e);
+            case InterruptedException _ -> {
+                Thread.currentThread().interrupt();
+                yield new KVStoreException(KVStoreException.Code.OPERATION_TIMEOUT,
+                        "Operation interrupted for key: " + key, e);
+            }
+            default -> new KVStoreException(KVStoreException.Code.INTERNAL_ERROR,
+                    "Internal error for key: " + key, e);
+        };
     }
 
     // ---- LeaderElection wrapper over LeaderLatch ----
@@ -476,7 +471,7 @@ public final class ZooKeeperKVStore implements KVStore {
             }
             try {
                 return latch.hasLeadership();
-            } catch (IllegalStateException e) {
+            } catch (IllegalStateException _) {
                 // LeaderLatch throws if not started or already closed
                 return false;
             }
