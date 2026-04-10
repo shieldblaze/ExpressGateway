@@ -1,9 +1,0 @@
-{
-    "IPAddress": "127.0.0.1",
-    "Port": 0,
-    "ZooKeeperConnectionString" : "localhost:9001",
-    "EnableTLS": false,
-    "MTLS": "NONE",
-    "PKCS12File": "target/test-classes/tls.p12",
-    "Password": "123456"
-}

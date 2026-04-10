@@ -1,0 +1,155 @@
+# ============================================================================
+# ExpressGateway -- default configuration
+# ============================================================================
+
+# ---------- Global ----------------------------------------------------------
+[global]
+environment   = "production"   # "production" or "development"
+log_level     = "info"         # trace | debug | info | warn | error
+metrics_bind  = "0.0.0.0:9090"
+
+# ---------- Runtime ---------------------------------------------------------
+[runtime]
+backend        = "auto"        # auto | io_uring | epoll
+worker_threads = 0             # 0 = number of CPUs
+xdp_enabled    = false
+xdp_interface  = ""
+xdp_mode       = "driver"      # driver | generic
+
+# ---------- Transport -------------------------------------------------------
+[transport]
+recv_buf_size      = 262144
+send_buf_size      = 262144
+tcp_nodelay        = true
+tcp_quickack       = true
+tcp_keepalive      = true
+tcp_fastopen       = true
+tcp_fastopen_queue = 256
+so_backlog         = 50000
+so_reuseport       = true
+connect_timeout_ms = 10000
+
+# ---------- Buffer pool -----------------------------------------------------
+[buffer]
+page_size        = 16384
+max_order        = 11
+small_cache_size = 256
+normal_cache_size = 64
+
+# ---------- TLS -------------------------------------------------------------
+[tls]
+enabled            = false
+profile            = "intermediate"  # modern | intermediate
+handshake_timeout_ms = 10000
+session_timeout_s  = 3600
+session_cache_size = 20000
+
+[tls.server]
+default_cert = ""
+default_key  = ""
+mutual_tls   = "not_required"  # not_required | optional | required
+trust_ca     = ""
+crl_file     = ""
+
+[tls.client]
+verify_hostname  = true
+session_timeout_s = 3600
+
+# ---------- Listeners -------------------------------------------------------
+[[listeners]]
+name           = "http-default"
+protocol       = "http"
+bind           = "0.0.0.0:8080"
+
+# ---------- Clusters --------------------------------------------------------
+[[clusters]]
+name                     = "default"
+lb_strategy              = "round_robin"
+max_connections_per_node = 10000
+drain_timeout_s          = 30
+
+[[clusters.nodes]]
+address         = "127.0.0.1:8081"
+weight          = 1
+max_connections = 10000
+
+# ---------- Routes ----------------------------------------------------------
+[[routes]]
+path     = "/"
+cluster  = "default"
+priority = 100
+
+# ---------- HTTP ------------------------------------------------------------
+[http]
+max_request_body_size     = 10485760   # 10 MB
+max_response_body_size    = 10485760   # 10 MB
+max_connection_body_size  = 104857600  # 100 MB
+max_header_size           = 8192
+max_uri_length            = 4096
+request_header_timeout_ms = 30000
+request_body_timeout_ms   = 60000
+idle_timeout_s            = 300
+keepalive_timeout_s       = 60
+max_concurrent_streams    = 128
+h2_connection_window_size = 1048576
+
+[http.compression]
+enabled    = true
+min_size   = 1024
+algorithms = ["gzip", "brotli", "zstd"]
+
+[http.sticky_session]
+enabled     = false
+cookie_name = "EG_SESSION"
+
+# ---------- Proxy Protocol --------------------------------------------------
+[proxy_protocol]
+inbound  = "off"   # off | v1 | v2 | auto
+outbound = "off"   # off | v1 | v2
+
+# ---------- Health Check ----------------------------------------------------
+[health_check]
+interval_s = 10
+timeout_ms = 5000
+rise       = 2
+fall       = 3
+samples    = 100
+
+[health_check.http]
+method          = "GET"
+path            = "/healthz"
+expected_status = [200]
+
+# ---------- Circuit Breaker -------------------------------------------------
+[circuit_breaker]
+failure_threshold = 5
+success_threshold = 3
+open_duration_s   = 30
+
+# ---------- Security --------------------------------------------------------
+[security]
+mode           = "denylist"    # allowlist | denylist
+max_tracked_ips = 1000000
+
+[security.connection_rate_limit]
+max_per_ip = 100
+window_s   = 60
+
+[security.packet_rate_limit]
+global_pps   = 1000000
+per_ip_pps   = 10000
+per_ip_burst = 1000
+action       = "drop"          # drop | reset | tarpit
+
+# ---------- Control Plane ---------------------------------------------------
+[controlplane]
+enabled                      = true
+grpc_bind                    = "0.0.0.0:50051"
+rest_bind                    = "0.0.0.0:9091"
+heartbeat_interval_s         = 10
+heartbeat_miss_threshold     = 3
+heartbeat_disconnect_threshold = 5
+
+# ---------- Graceful Shutdown -----------------------------------------------
+[graceful_shutdown]
+drain_timeout_s = 30

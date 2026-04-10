@@ -1,0 +1,37 @@
+[package]
+name = "expressgateway-protocol-http"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+expressgateway-core = { path = "../core" }
+expressgateway-runtime = { path = "../runtime" }
+expressgateway-tls = { path = "../tls" }
+expressgateway-lb = { path = "../lb" }
+expressgateway-pool = { path = "../pool" }
+expressgateway-compression = { path = "../compression" }
+expressgateway-security = { path = "../security" }
+expressgateway-proxy-protocol = { path = "../proxy-protocol" }
+expressgateway-metrics = { path = "../metrics" }
+
+hyper.workspace = true
+hyper-util.workspace = true
+h2.workspace = true
+http.workspace = true
+http-body.workspace = true
+http-body-util.workspace = true
+tokio.workspace = true
+tracing.workspace = true
+thiserror.workspace = true
+anyhow.workspace = true
+bytes.workspace = true
+futures.workspace = true
+uuid.workspace = true
+parking_lot.workspace = true
+dashmap.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+tower.workspace = true
+tower-service.workspace = true
+async-trait.workspace = true
+pin-project-lite.workspace = true

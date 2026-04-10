@@ -1,0 +1,19 @@
+[package]
+name = "expressgateway-protocol-ws"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+expressgateway-core = { path = "../core" }
+expressgateway-protocol-http = { path = "../protocol-http" }
+tokio-tungstenite.workspace = true
+tokio.workspace = true
+tracing.workspace = true
+thiserror.workspace = true
+anyhow.workspace = true
+bytes.workspace = true
+futures.workspace = true
+http.workspace = true
+hyper.workspace = true
+parking_lot.workspace = true
+ring.workspace = true

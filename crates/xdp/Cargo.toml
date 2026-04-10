@@ -1,0 +1,18 @@
+[package]
+name = "expressgateway-xdp"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+expressgateway-core = { path = "../core" }
+expressgateway-config = { path = "../config" }
+
+tracing.workspace = true
+thiserror.workspace = true
+anyhow.workspace = true
+tokio.workspace = true
+dashmap.workspace = true
+bytes.workspace = true
+
+[target.'cfg(target_os = "linux")'.dependencies]
+aya.workspace = true

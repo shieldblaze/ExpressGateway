@@ -1,0 +1,21 @@
+[package]
+name = "expressgateway-security"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+expressgateway-core = { path = "../core" }
+expressgateway-config = { path = "../config" }
+
+dashmap.workspace = true
+parking_lot.workspace = true
+tracing.workspace = true
+thiserror.workspace = true
+anyhow.workspace = true
+lru.workspace = true
+tokio.workspace = true
+md-5.workspace = true
+crossbeam.workspace = true
+bytes.workspace = true
+arc-swap.workspace = true
+rand.workspace = true

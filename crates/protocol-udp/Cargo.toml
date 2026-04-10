@@ -1,0 +1,20 @@
+[package]
+name = "expressgateway-protocol-udp"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+expressgateway-core = { path = "../core" }
+expressgateway-runtime = { path = "../runtime" }
+expressgateway-lb = { path = "../lb" }
+expressgateway-security = { path = "../security" }
+expressgateway-metrics = { path = "../metrics" }
+
+tokio.workspace = true
+tracing.workspace = true
+thiserror.workspace = true
+anyhow.workspace = true
+bytes.workspace = true
+futures.workspace = true
+dashmap.workspace = true
+parking_lot.workspace = true

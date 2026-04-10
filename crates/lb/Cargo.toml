@@ -1,0 +1,22 @@
+[package]
+name = "expressgateway-lb"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+expressgateway-core = { path = "../core" }
+
+dashmap.workspace = true
+parking_lot.workspace = true
+crossbeam.workspace = true
+tracing.workspace = true
+thiserror.workspace = true
+anyhow.workspace = true
+rand.workspace = true
+murmur3.workspace = true
+sha2.workspace = true
+arc-swap.workspace = true
+bytes.workspace = true
+tokio.workspace = true
+async-trait.workspace = true
+lru.workspace = true

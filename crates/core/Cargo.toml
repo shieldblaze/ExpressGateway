@@ -1,0 +1,22 @@
+[package]
+name = "expressgateway-core"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+thiserror.workspace = true
+serde.workspace = true
+bytes.workspace = true
+uuid.workspace = true
+tracing.workspace = true
+async-trait.workspace = true
+tokio.workspace = true
+parking_lot.workspace = true
+crossbeam.workspace = true
+dashmap.workspace = true
+arc-swap.workspace = true
+chrono.workspace = true
+pin-project-lite.workspace = true
+futures.workspace = true
+anyhow.workspace = true
+rand.workspace = true

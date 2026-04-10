@@ -1,0 +1,24 @@
+[package]
+name = "expressgateway-protocol-h3"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+expressgateway-core = { path = "../core" }
+expressgateway-runtime = { path = "../runtime" }
+expressgateway-tls = { path = "../tls" }
+expressgateway-lb = { path = "../lb" }
+expressgateway-pool = { path = "../pool" }
+expressgateway-metrics = { path = "../metrics" }
+
+quinn.workspace = true
+h3.workspace = true
+h3-quinn.workspace = true
+tokio.workspace = true
+tracing.workspace = true
+thiserror.workspace = true
+anyhow.workspace = true
+bytes.workspace = true
+futures.workspace = true
+parking_lot.workspace = true
+http.workspace = true

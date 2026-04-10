@@ -1,9 +1,0 @@
-{
-  "RunningMode": "STANDALONE",
-  "ClusterID": "expressgateway-lb",
-  "Environment": "DEVELOPMENT",
-  "Rest-API": {
-    "IPAddress": "0.0.0.0",
-    "Port": 9090
-  }
-}

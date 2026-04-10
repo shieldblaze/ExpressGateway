@@ -1,0 +1,32 @@
+[package]
+name = "expressgateway-bootstrap"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+expressgateway-core = { path = "../core" }
+expressgateway-config = { path = "../config" }
+expressgateway-xdp = { path = "../xdp" }
+expressgateway-runtime = { path = "../runtime" }
+expressgateway-tls = { path = "../tls" }
+expressgateway-lb = { path = "../lb" }
+expressgateway-health = { path = "../health" }
+expressgateway-pool = { path = "../pool" }
+expressgateway-security = { path = "../security" }
+expressgateway-protocol-tcp = { path = "../protocol-tcp" }
+expressgateway-protocol-udp = { path = "../protocol-udp" }
+expressgateway-protocol-http = { path = "../protocol-http" }
+expressgateway-protocol-h3 = { path = "../protocol-h3" }
+expressgateway-protocol-grpc = { path = "../protocol-grpc" }
+expressgateway-protocol-ws = { path = "../protocol-ws" }
+expressgateway-compression = { path = "../compression" }
+expressgateway-proxy-protocol = { path = "../proxy-protocol" }
+expressgateway-metrics = { path = "../metrics" }
+expressgateway-controlplane = { path = "../controlplane" }
+expressgateway-agent = { path = "../agent" }
+tokio.workspace = true
+tracing.workspace = true
+tracing-subscriber.workspace = true
+clap.workspace = true
+anyhow.workspace = true
+serde.workspace = true
