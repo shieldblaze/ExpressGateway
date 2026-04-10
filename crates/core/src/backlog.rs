@@ -1,4 +1,8 @@
 //! Connection backlog queue for buffering data while backend connects.
+//!
+//! Uses a bounded `VecDeque` behind a `parking_lot::Mutex` (never held across
+//! `.await`) with a separate atomic length for O(1) `len()` checks from the
+//! hot path without acquiring the lock.
 
 use std::collections::VecDeque;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
@@ -13,6 +17,9 @@ const DEFAULT_MAX_SIZE: usize = 10_000;
 const DRAIN_BATCH_SIZE: usize = 64;
 
 /// Bounded queue for buffering client data while backend connection establishes.
+///
+/// Thread-safe (`Send + Sync`). The internal `parking_lot::Mutex` is never held
+/// across `.await` points.
 pub struct ConnectionBacklog {
     queue: Mutex<VecDeque<BytesMut>>,
     size: AtomicUsize,
@@ -36,7 +43,8 @@ impl ConnectionBacklog {
         }
     }
 
-    /// Enqueue data. Returns false if the queue is full.
+    /// Enqueue data. Returns `false` if the queue is full.
+    #[inline]
     pub fn enqueue(&self, data: BytesMut) -> bool {
         let effective_max = if self.memory_pressure.load(Ordering::Relaxed) {
             self.max_size / 4
@@ -58,6 +66,7 @@ impl ConnectionBacklog {
     }
 
     /// Drain up to `DRAIN_BATCH_SIZE` items from the queue.
+    #[inline]
     pub fn drain_batch(&self) -> Vec<BytesMut> {
         let mut queue = self.queue.lock();
         let count = queue.len().min(DRAIN_BATCH_SIZE);
@@ -73,17 +82,20 @@ impl ConnectionBacklog {
         self.size.store(0, Ordering::Release);
     }
 
-    /// O(1) size check.
+    /// O(1) size check from the atomic counter (no lock).
+    #[inline]
     pub fn len(&self) -> usize {
         self.size.load(Ordering::Relaxed)
     }
 
     /// Whether the queue is empty.
+    #[inline]
     pub fn is_empty(&self) -> bool {
         self.len() == 0
     }
 
-    /// Set memory pressure flag. When active, effective limit is max/4.
+    /// Set memory pressure flag. When active, effective limit is `max_size / 4`.
+    #[inline]
     pub fn set_memory_pressure(&self, pressure: bool) {
         self.memory_pressure.store(pressure, Ordering::Release);
     }

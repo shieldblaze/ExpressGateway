@@ -30,21 +30,32 @@ const HOP_BY_HOP_NAMES: &[&str] = &[
 /// The `Upgrade` header is preserved when its value indicates a WebSocket
 /// upgrade, to allow WebSocket protocol switching.
 ///
-/// Uses zero-allocation comma scanning for the Connection header value.
+/// The `TE` header is preserved when its value is exactly `trailers`, per
+/// RFC 9113 Section 8.2.2 (the only TE value allowed in HTTP/2).
+///
+/// Uses a small inline buffer (no heap allocation for <= 8 dynamic names).
 pub fn strip_hop_by_hop(headers: &mut HeaderMap) {
-    // First, collect dynamic hop-by-hop names from the Connection header.
-    let mut dynamic_names: Vec<HeaderName> = Vec::new();
+    // Collect dynamic hop-by-hop names from the Connection header.
+    // Use a small inline buffer to avoid allocation in the common case.
+    let mut dynamic_names: [Option<HeaderName>; 8] = Default::default();
+    let mut dynamic_count = 0usize;
+    let mut overflow: Vec<HeaderName> = Vec::new();
+
     if let Some(conn_val) = headers.get(header::CONNECTION)
         && let Ok(s) = conn_val.to_str()
     {
-        // Zero-allocation comma scanning: iterate bytes for commas.
         for token in comma_split(s) {
             let trimmed = token.trim();
             if trimmed.is_empty() {
                 continue;
             }
             if let Ok(name) = HeaderName::from_bytes(trimmed.as_bytes()) {
-                dynamic_names.push(name);
+                if dynamic_count < dynamic_names.len() {
+                    dynamic_names[dynamic_count] = Some(name);
+                    dynamic_count += 1;
+                } else {
+                    overflow.push(name);
+                }
             }
         }
     }
@@ -55,18 +66,37 @@ pub fn strip_hop_by_hop(headers: &mut HeaderMap) {
         .and_then(|v| v.to_str().ok())
         .is_some_and(|v| v.eq_ignore_ascii_case("websocket"));
 
+    // Check if TE is exactly "trailers" (RFC 9113 §8.2.2: the only TE value
+    // allowed in HTTP/2 and HTTP/3).
+    let te_is_trailers = headers
+        .get(header::TE)
+        .and_then(|v| v.to_str().ok())
+        .is_some_and(|v| v.eq_ignore_ascii_case("trailers"));
+
     // Remove static hop-by-hop headers.
     for &name in HOP_BY_HOP_NAMES {
         // Preserve Upgrade for WebSocket.
         if name == "upgrade" && is_websocket {
             continue;
         }
+        // Preserve TE when value is "trailers" (required for gRPC over H2).
+        if name == "te" && te_is_trailers {
+            continue;
+        }
         headers.remove(name);
     }
 
     // Remove dynamic hop-by-hop headers.
-    for name in &dynamic_names {
+    let all_dynamic = dynamic_names[..dynamic_count]
+        .iter()
+        .filter_map(|n| n.as_ref())
+        .chain(overflow.iter());
+
+    for name in all_dynamic {
         if *name == header::UPGRADE && is_websocket {
+            continue;
+        }
+        if *name == header::TE && te_is_trailers {
             continue;
         }
         headers.remove(name);
@@ -162,7 +192,9 @@ mod tests {
             HeaderName::from_static("keep-alive"),
             HeaderValue::from_static("timeout=5"),
         );
-        headers.insert(header::TE, HeaderValue::from_static("trailers"));
+        // TE: trailers is preserved per RFC 9113 §8.2.2 (tested separately).
+        // Use a non-trailers TE value here to test stripping.
+        headers.insert(header::TE, HeaderValue::from_static("gzip"));
         headers.insert(
             header::TRANSFER_ENCODING,
             HeaderValue::from_static("chunked"),
@@ -235,6 +267,36 @@ mod tests {
 
         assert!(!headers.contains_key(header::UPGRADE));
         assert!(!headers.contains_key(header::CONNECTION));
+    }
+
+    #[test]
+    fn preserves_te_trailers() {
+        // RFC 9113 §8.2.2: `te: trailers` is the only TE value allowed in H2.
+        let mut headers = HeaderMap::new();
+        headers.insert(header::TE, HeaderValue::from_static("trailers"));
+        headers.insert(header::HOST, HeaderValue::from_static("example.com"));
+
+        strip_hop_by_hop(&mut headers);
+
+        // TE: trailers should be preserved.
+        assert!(headers.contains_key(header::TE));
+        assert_eq!(
+            headers.get(header::TE).unwrap().to_str().unwrap(),
+            "trailers"
+        );
+    }
+
+    #[test]
+    fn strips_te_non_trailers() {
+        // Any TE value other than "trailers" must be stripped.
+        let mut headers = HeaderMap::new();
+        headers.insert(header::TE, HeaderValue::from_static("gzip, trailers"));
+        headers.insert(header::HOST, HeaderValue::from_static("example.com"));
+
+        strip_hop_by_hop(&mut headers);
+
+        // TE with value other than exactly "trailers" should be stripped.
+        assert!(!headers.contains_key(header::TE));
     }
 
     #[test]

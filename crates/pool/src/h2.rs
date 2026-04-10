@@ -1,4 +1,10 @@
 //! HTTP/2 connection pool with shared connections and stream multiplexing.
+//!
+//! Unlike HTTP/1.1, multiple requests share the same underlying connection via
+//! HTTP/2 streams. A new connection is only created when all existing connections
+//! for a node are at their concurrent stream limit.
+//!
+//! Stream acquisition uses CAS for lock-free concurrency.
 
 use std::sync::atomic::{AtomicU32, Ordering};
 use std::time::{Duration, Instant};
@@ -55,6 +61,7 @@ impl std::fmt::Debug for H2PooledConnection {
 
 impl H2PooledConnection {
     /// Create a new HTTP/2 pooled connection.
+    #[inline]
     pub fn new(id: u64, max_concurrent_streams: u32) -> Self {
         Self {
             id,
@@ -65,6 +72,7 @@ impl H2PooledConnection {
     }
 
     /// Whether this connection has capacity for another stream.
+    #[inline]
     pub fn has_capacity(&self) -> bool {
         self.active_streams.load(Ordering::Acquire) < self.max_concurrent_streams
     }
@@ -73,6 +81,7 @@ impl H2PooledConnection {
     ///
     /// Returns `true` if a stream was successfully acquired via CAS.
     /// Returns `false` if the connection is at capacity.
+    #[inline]
     pub fn acquire_stream(&self) -> bool {
         loop {
             let current = self.active_streams.load(Ordering::Acquire);
@@ -86,33 +95,32 @@ impl H2PooledConnection {
                 Ordering::Acquire,
             ) {
                 Ok(_) => return true,
-                Err(_) => continue, // retry CAS
+                Err(_) => continue,
             }
         }
     }
 
     /// Release a stream on this connection.
+    #[inline]
     pub fn release_stream(&self) {
         let prev = self.active_streams.fetch_sub(1, Ordering::AcqRel);
         debug_assert!(prev > 0, "release_stream called with 0 active streams");
     }
 
     /// Number of active streams.
+    #[inline]
     pub fn active_streams(&self) -> u32 {
         self.active_streams.load(Ordering::Relaxed)
     }
 
     /// Age of this connection since creation.
+    #[inline]
     pub fn age(&self) -> Duration {
         self.created_at.elapsed()
     }
 }
 
 /// HTTP/2 connection pool supporting stream multiplexing.
-///
-/// Unlike H1, multiple requests share the same underlying connection via HTTP/2
-/// streams. A new connection is only created when all existing connections for a
-/// node are at their concurrent stream limit.
 pub struct H2Pool {
     pools: DashMap<String, Vec<H2PooledConnection>>,
     config: H2PoolConfig,
@@ -164,13 +172,23 @@ impl H2Pool {
     }
 
     /// Number of connections for a given node.
+    #[inline]
     pub fn connection_count(&self, node_id: &str) -> usize {
         self.pools.get(node_id).map(|p| p.len()).unwrap_or(0)
     }
 
     /// Whether a new connection can be created for the node.
+    #[inline]
     pub fn can_add_connection(&self, node_id: &str) -> bool {
         self.connection_count(node_id) < self.config.max_per_node
+    }
+
+    /// Drain all connections for a specific node (backend removal).
+    pub fn drain_node(&self, node_id: &str) -> usize {
+        match self.pools.remove(node_id) {
+            Some((_, pool)) => pool.len(),
+            None => 0,
+        }
     }
 
     /// Remove connections that have exceeded the max age and have no active streams.
@@ -180,7 +198,6 @@ impl H2Pool {
             let pool = entry.value_mut();
             let before = pool.len();
             pool.retain(|conn| {
-                // Only evict connections that are idle (no active streams) and old.
                 !(conn.age() > self.config.max_age
                     && conn.active_streams.load(Ordering::Relaxed) == 0)
             });
@@ -211,10 +228,8 @@ mod tests {
         assert!(conn.acquire_stream());
         assert!(!conn.has_capacity());
 
-        // At capacity, acquire should fail.
         assert!(!conn.acquire_stream());
 
-        // Release one stream, capacity returns.
         conn.release_stream();
         assert!(conn.has_capacity());
         assert!(conn.acquire_stream());
@@ -231,18 +246,15 @@ mod tests {
 
         pool.add_connection("node-a", H2PooledConnection::new(1, 2));
 
-        // Acquire two streams (fills connection).
-        let id1 = pool.acquire_stream("node-a").unwrap();
+        let id1 = pool.acquire_stream("node-a").expect("should acquire");
         assert_eq!(id1, 1);
-        let id2 = pool.acquire_stream("node-a").unwrap();
+        let id2 = pool.acquire_stream("node-a").expect("should acquire");
         assert_eq!(id2, 1);
 
-        // Connection is full, should return None.
         assert!(pool.acquire_stream("node-a").is_none());
 
-        // Release a stream, should be available again.
         pool.release_stream("node-a", 1);
-        let id3 = pool.acquire_stream("node-a").unwrap();
+        let id3 = pool.acquire_stream("node-a").expect("should acquire after release");
         assert_eq!(id3, 1);
     }
 
@@ -257,7 +269,7 @@ mod tests {
 
         assert!(pool.add_connection("node-a", H2PooledConnection::new(1, 100)));
         assert!(pool.add_connection("node-a", H2PooledConnection::new(2, 100)));
-        assert!(!pool.add_connection("node-a", H2PooledConnection::new(3, 100))); // rejected
+        assert!(!pool.add_connection("node-a", H2PooledConnection::new(3, 100)));
 
         assert_eq!(pool.connection_count("node-a"), 2);
     }
@@ -274,15 +286,12 @@ mod tests {
         pool.add_connection("node-a", H2PooledConnection::new(1, 1));
         pool.add_connection("node-a", H2PooledConnection::new(2, 1));
 
-        // First acquire goes to connection 1.
-        let id1 = pool.acquire_stream("node-a").unwrap();
+        let id1 = pool.acquire_stream("node-a").expect("conn 1");
         assert_eq!(id1, 1);
 
-        // Connection 1 is full, should go to connection 2.
-        let id2 = pool.acquire_stream("node-a").unwrap();
+        let id2 = pool.acquire_stream("node-a").expect("conn 2");
         assert_eq!(id2, 2);
 
-        // Both full.
         assert!(pool.acquire_stream("node-a").is_none());
     }
 
@@ -291,7 +300,7 @@ mod tests {
         let config = H2PoolConfig {
             max_per_node: 4,
             max_concurrent_streams: 100,
-            max_age: Duration::from_millis(0), // immediate
+            max_age: Duration::from_millis(0),
         };
         let pool = H2Pool::new(config);
 
@@ -315,12 +324,22 @@ mod tests {
         pool.add_connection("node-a", H2PooledConnection::new(1, 100));
         pool.add_connection("node-a", H2PooledConnection::new(2, 100));
 
-        // Put a stream on connection 1.
         pool.acquire_stream("node-a");
 
         let evicted = pool.evict_aged();
-        // Only connection 2 (idle) should be evicted.
         assert_eq!(evicted, 1);
         assert_eq!(pool.connection_count("node-a"), 1);
+    }
+
+    #[test]
+    fn drain_node_removes_all() {
+        let pool = H2Pool::new(H2PoolConfig::default());
+
+        pool.add_connection("node-a", H2PooledConnection::new(1, 100));
+        pool.add_connection("node-a", H2PooledConnection::new(2, 100));
+
+        let drained = pool.drain_node("node-a");
+        assert_eq!(drained, 2);
+        assert_eq!(pool.connection_count("node-a"), 0);
     }
 }

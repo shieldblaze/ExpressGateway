@@ -15,3 +15,4 @@ parking_lot.workspace = true
 dashmap.workspace = true
 crossbeam.workspace = true
 async-trait.workspace = true
+bytes.workspace = true

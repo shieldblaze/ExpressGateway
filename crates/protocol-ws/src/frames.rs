@@ -1,6 +1,6 @@
 //! WebSocket frame handling.
 //!
-//! Frame types, size limits, and Ping/Pong management.
+//! Frame types, size limits, and Ping/Pong management per RFC 6455.
 
 use bytes::Bytes;
 
@@ -13,17 +13,29 @@ pub const CLOSE_CODE_TOO_BIG: u16 = 1009;
 /// WebSocket close code for going away (RFC 6455 section 7.4.1).
 pub const CLOSE_CODE_GOING_AWAY: u16 = 1001;
 
-/// WebSocket close code for normal closure.
+/// WebSocket close code for normal closure (RFC 6455 section 7.4.1).
 pub const CLOSE_CODE_NORMAL: u16 = 1000;
 
-/// WebSocket frame types.
-#[derive(Debug, Clone, PartialEq, Eq)]
+/// WebSocket close code for protocol error (RFC 6455 section 7.4.1).
+pub const CLOSE_CODE_PROTOCOL_ERROR: u16 = 1002;
+
+/// WebSocket close code for policy violation (RFC 6455 section 7.4.1).
+pub const CLOSE_CODE_POLICY_VIOLATION: u16 = 1008;
+
+/// WebSocket frame types per RFC 6455 section 5.2.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum FrameType {
+    /// UTF-8 text data (opcode 0x1).
     Text,
+    /// Binary data (opcode 0x2).
     Binary,
+    /// Ping control frame (opcode 0x9).
     Ping,
+    /// Pong control frame (opcode 0xA).
     Pong,
+    /// Close control frame (opcode 0x8).
     Close,
+    /// Continuation frame (opcode 0x0).
     Continuation,
 }
 
@@ -31,14 +43,20 @@ pub enum FrameType {
 #[derive(Debug, Clone)]
 pub struct FrameConfig {
     /// Maximum payload size in bytes. Frames exceeding this are rejected
-    /// with close code 1009.
+    /// with close code 1009 (Message Too Big).
     pub max_frame_size: usize,
+
+    /// Whether to forward pings to the backend or handle them locally.
+    /// When `false` (default), the proxy responds to pings locally with
+    /// a pong and does not forward the ping upstream.
+    pub forward_pings: bool,
 }
 
 impl Default for FrameConfig {
     fn default() -> Self {
         Self {
             max_frame_size: DEFAULT_MAX_FRAME_SIZE,
+            forward_pings: false,
         }
     }
 }
@@ -46,10 +64,14 @@ impl Default for FrameConfig {
 impl FrameConfig {
     /// Create a new config with a custom max frame size.
     pub fn with_max_frame_size(max_frame_size: usize) -> Self {
-        Self { max_frame_size }
+        Self {
+            max_frame_size,
+            ..Self::default()
+        }
     }
 
     /// Returns `true` if the payload exceeds the configured maximum.
+    #[inline]
     pub fn is_oversize(&self, payload_len: usize) -> bool {
         payload_len > self.max_frame_size
     }
@@ -74,7 +96,7 @@ impl PingPongTracker {
     }
 
     /// Record that we received a Ping with the given payload and should
-    /// respond with a Pong locally. Returns the Pong payload.
+    /// respond with a Pong locally. Returns the Pong payload (same bytes).
     pub fn handle_ping(&mut self, payload: Bytes) -> Bytes {
         self.last_ping_payload = Some(payload.clone());
         payload
@@ -82,8 +104,10 @@ impl PingPongTracker {
 
     /// Returns `true` if we should suppress this Pong because we already
     /// sent one for the same payload locally.
-    pub fn should_suppress_pong(&self, payload: &Bytes) -> bool {
-        self.last_ping_payload.as_ref() == Some(payload)
+    pub fn should_suppress_pong(&self, payload: &[u8]) -> bool {
+        self.last_ping_payload
+            .as_ref()
+            .is_some_and(|p| p.as_ref() == payload)
     }
 }
 
@@ -101,6 +125,7 @@ mod tests {
     fn default_max_frame_size() {
         let config = FrameConfig::default();
         assert_eq!(config.max_frame_size, 64 * 1024);
+        assert!(!config.forward_pings);
     }
 
     #[test]
@@ -154,5 +179,7 @@ mod tests {
         assert_eq!(CLOSE_CODE_TOO_BIG, 1009);
         assert_eq!(CLOSE_CODE_GOING_AWAY, 1001);
         assert_eq!(CLOSE_CODE_NORMAL, 1000);
+        assert_eq!(CLOSE_CODE_PROTOCOL_ERROR, 1002);
+        assert_eq!(CLOSE_CODE_POLICY_VIOLATION, 1008);
     }
 }

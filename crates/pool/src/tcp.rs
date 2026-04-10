@@ -1,4 +1,7 @@
 //! TCP (L4) connection pool with FIFO ordering for even connection aging.
+//!
+//! FIFO ordering ensures connections age evenly and no single connection sits
+//! idle indefinitely while newer ones are used.
 
 use std::collections::VecDeque;
 use std::sync::atomic::{AtomicUsize, Ordering};
@@ -44,6 +47,7 @@ pub struct TcpPooledConnection {
 
 impl TcpPooledConnection {
     /// Create a new pooled TCP connection.
+    #[inline]
     pub fn new(id: u64) -> Self {
         let now = Instant::now();
         Self {
@@ -55,35 +59,37 @@ impl TcpPooledConnection {
     }
 
     /// Age of the connection since creation.
+    #[inline]
     pub fn age(&self) -> Duration {
         self.created_at.elapsed()
     }
 
     /// Time since last use.
+    #[inline]
     pub fn idle_time(&self) -> Duration {
         self.last_used.elapsed()
     }
 
     /// Whether this connection is usable.
+    #[inline]
     pub fn is_usable(&self) -> bool {
         self.usable
     }
 
     /// Mark this connection as dead/unusable.
+    #[inline]
     pub fn mark_dead(&mut self) {
         self.usable = false;
     }
 
     /// Touch the connection to update last-used time.
+    #[inline]
     fn touch(&mut self) {
         self.last_used = Instant::now();
     }
 }
 
 /// TCP connection pool using FIFO ordering (oldest connection first).
-///
-/// FIFO ordering ensures connections age evenly and no single connection sits
-/// idle indefinitely while newer ones are used.
 pub struct TcpPool {
     pools: DashMap<String, VecDeque<TcpPooledConnection>>,
     config: TcpPoolConfig,
@@ -110,11 +116,9 @@ impl TcpPool {
         while let Some(mut conn) = pool.pop_front() {
             self.total_pooled.fetch_sub(1, Ordering::Relaxed);
             if !conn.is_usable() {
-                // Dead connection, silently discard.
                 continue;
             }
             if conn.idle_time() > self.config.idle_timeout {
-                // Expired, discard.
                 continue;
             }
             conn.touch();
@@ -134,7 +138,6 @@ impl TcpPool {
             return;
         }
 
-        // Check global limit.
         let current_total = self.total_pooled.load(Ordering::Relaxed);
         if current_total >= self.config.max_total {
             return;
@@ -144,13 +147,12 @@ impl TcpPool {
         let mut pool = self
             .pools
             .entry(backend_id.to_owned())
-            .or_insert_with(|| VecDeque::with_capacity(self.config.max_per_backend));
+            .or_insert_with(|| VecDeque::with_capacity(self.config.max_per_backend.min(32)));
 
         if pool.len() >= self.config.max_per_backend {
             return;
         }
 
-        // FIFO: push to back, pop from front.
         pool.push_back(conn);
         self.total_pooled.fetch_add(1, Ordering::Relaxed);
     }
@@ -171,12 +173,26 @@ impl TcpPool {
         total
     }
 
+    /// Drain all connections for a specific backend (backend removal).
+    pub fn drain_backend(&self, backend_id: &str) -> usize {
+        match self.pools.remove(backend_id) {
+            Some((_, pool)) => {
+                let count = pool.len();
+                self.total_pooled.fetch_sub(count, Ordering::Relaxed);
+                count
+            }
+            None => 0,
+        }
+    }
+
     /// Number of pooled connections for a given backend.
+    #[inline]
     pub fn pooled_count(&self, backend_id: &str) -> usize {
         self.pools.get(backend_id).map(|p| p.len()).unwrap_or(0)
     }
 
     /// Total number of pooled connections across all backends.
+    #[inline]
     pub fn total_pooled(&self) -> usize {
         self.total_pooled.load(Ordering::Relaxed)
     }
@@ -196,19 +212,16 @@ mod tests {
     fn fifo_ordering() {
         let pool = TcpPool::new(TcpPoolConfig::default());
 
-        // Release connections 1, 2, 3 in order.
         pool.release("backend-a", TcpPooledConnection::new(1));
         pool.release("backend-a", TcpPooledConnection::new(2));
         pool.release("backend-a", TcpPooledConnection::new(3));
 
-        // FIFO: should get 1, 2, 3 back (oldest first).
-        let c = pool.acquire("backend-a").unwrap();
+        let c = pool.acquire("backend-a").expect("conn 1");
         assert_eq!(c.id, 1);
-        let c = pool.acquire("backend-a").unwrap();
+        let c = pool.acquire("backend-a").expect("conn 2");
         assert_eq!(c.id, 2);
-        let c = pool.acquire("backend-a").unwrap();
+        let c = pool.acquire("backend-a").expect("conn 3");
         assert_eq!(c.id, 3);
-
         assert!(pool.acquire("backend-a").is_none());
     }
 
@@ -218,18 +231,16 @@ mod tests {
 
         let mut dead = TcpPooledConnection::new(1);
         dead.mark_dead();
-        pool.release("backend-a", dead); // not usable, should not be added
+        pool.release("backend-a", dead);
         assert_eq!(pool.pooled_count("backend-a"), 0);
 
-        // Also test: dead connection already in pool.
         let conn = TcpPooledConnection::new(2);
         pool.release("backend-a", conn);
         assert_eq!(pool.pooled_count("backend-a"), 1);
 
-        // Manually mark it dead by acquiring, marking, re-releasing.
-        let mut c = pool.acquire("backend-a").unwrap();
+        let mut c = pool.acquire("backend-a").expect("should have conn");
         c.mark_dead();
-        pool.release("backend-a", c); // dead, won't be pooled
+        pool.release("backend-a", c);
         assert_eq!(pool.pooled_count("backend-a"), 0);
     }
 
@@ -244,7 +255,7 @@ mod tests {
 
         pool.release("backend-a", TcpPooledConnection::new(1));
         pool.release("backend-a", TcpPooledConnection::new(2));
-        pool.release("backend-a", TcpPooledConnection::new(3)); // dropped
+        pool.release("backend-a", TcpPooledConnection::new(3));
 
         assert_eq!(pool.pooled_count("backend-a"), 2);
     }
@@ -260,7 +271,7 @@ mod tests {
 
         pool.release("backend-a", TcpPooledConnection::new(1));
         pool.release("backend-b", TcpPooledConnection::new(2));
-        pool.release("backend-c", TcpPooledConnection::new(3)); // dropped (global limit)
+        pool.release("backend-c", TcpPooledConnection::new(3));
 
         assert_eq!(pool.total_pooled(), 2);
     }
@@ -270,7 +281,7 @@ mod tests {
         let config = TcpPoolConfig {
             max_per_backend: 8,
             max_total: 256,
-            idle_timeout: Duration::from_millis(0), // immediate
+            idle_timeout: Duration::from_millis(0),
         };
         let pool = TcpPool::new(config);
 
@@ -293,7 +304,6 @@ mod tests {
 
         pool.release("backend-a", TcpPooledConnection::new(1));
 
-        // Connection is idle > 0ms, should be discarded on acquire.
         assert!(pool.acquire("backend-a").is_none());
     }
 
@@ -305,7 +315,21 @@ mod tests {
         pool.release("backend-b", TcpPooledConnection::new(2));
 
         assert!(pool.acquire("backend-c").is_none());
-        let a = pool.acquire("backend-a").unwrap();
+        let a = pool.acquire("backend-a").expect("backend-a conn");
         assert_eq!(a.id, 1);
+    }
+
+    #[test]
+    fn drain_backend_removes_all() {
+        let pool = TcpPool::new(TcpPoolConfig::default());
+
+        pool.release("backend-a", TcpPooledConnection::new(1));
+        pool.release("backend-a", TcpPooledConnection::new(2));
+        pool.release("backend-b", TcpPooledConnection::new(3));
+
+        let drained = pool.drain_backend("backend-a");
+        assert_eq!(drained, 2);
+        assert_eq!(pool.pooled_count("backend-a"), 0);
+        assert_eq!(pool.pooled_count("backend-b"), 1);
     }
 }

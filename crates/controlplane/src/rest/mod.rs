@@ -6,10 +6,12 @@ pub mod clusters;
 pub mod config;
 pub mod health_checks;
 pub mod listeners;
+pub mod metrics;
 pub mod nodes;
 pub mod routes;
 pub mod status;
 pub mod tls_certs;
+pub mod traffic;
 
 use axum::Router;
 use std::sync::Arc;
@@ -37,6 +39,8 @@ pub fn router(store: Arc<ControlPlaneStore>) -> Router {
         .merge(tls_certs::routes())
         .merge(status::routes())
         .merge(config::routes())
+        .merge(traffic::routes())
+        .merge(metrics::routes())
         .with_state(state);
 
     Router::new().nest("/api/v1/controlplane", api)

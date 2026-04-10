@@ -7,6 +7,9 @@
 //! - Supports half-close (RFC 9293)
 //! - Tracks connections through a state machine
 //! - Provides graceful drain with configurable timeout
+//! - Applies configurable TCP socket options (nodelay, keepalive, quickack, fastopen)
+//! - Enforces backpressure via write-buffer water marks
+//! - Tracks per-connection byte counters for observability
 
 pub mod connection;
 pub mod drain;
@@ -15,5 +18,5 @@ pub mod proxy;
 
 pub use connection::{ConnectionTracker, TcpConnectionState, TrackedConnection};
 pub use drain::DrainHandle;
-pub use options::TcpProxyConfig;
-pub use proxy::TcpProxy;
+pub use options::{TcpKeepalive, TcpProxyConfig, TcpSocketOptions};
+pub use proxy::{TcpProxy, TcpProxyError};

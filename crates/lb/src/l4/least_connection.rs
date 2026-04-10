@@ -1,28 +1,29 @@
 //! Least-connection L4 load balancer.
 //!
 //! Selects the online backend node with the fewest active connections via a
-//! simple O(n) scan.
+//! simple O(n) scan. Uses `ArcSwap` for lock-free reads on the hot path.
 
 use std::sync::Arc;
 
+use arc_swap::ArcSwap;
 use expressgateway_core::error::{Error, Result};
 use expressgateway_core::lb::{L4Request, L4Response, LoadBalancer};
 use expressgateway_core::node::Node;
-use parking_lot::RwLock;
 
 /// Least-connection L4 load balancer.
 ///
 /// On each selection, scans all online nodes and picks the one with the
-/// lowest `active_connections()` count.
+/// lowest `active_connections()` count. The scan is lock-free (reads
+/// through `ArcSwap`) and allocation-free.
 pub struct LeastConnectionBalancer {
-    nodes: RwLock<Vec<Arc<dyn Node>>>,
+    nodes: ArcSwap<Vec<Arc<dyn Node>>>,
 }
 
 impl LeastConnectionBalancer {
     /// Create a new least-connection balancer with no nodes.
     pub fn new() -> Self {
         Self {
-            nodes: RwLock::new(Vec::new()),
+            nodes: ArcSwap::new(Arc::new(Vec::new())),
         }
     }
 }
@@ -35,7 +36,7 @@ impl Default for LeastConnectionBalancer {
 
 impl LoadBalancer<L4Request, L4Response> for LeastConnectionBalancer {
     fn select(&self, _request: &L4Request) -> Result<L4Response> {
-        let nodes = self.nodes.read();
+        let nodes = self.nodes.load();
         let best = nodes
             .iter()
             .filter(|n| n.is_online())
@@ -49,32 +50,32 @@ impl LoadBalancer<L4Request, L4Response> for LeastConnectionBalancer {
     }
 
     fn add_node(&self, node: Arc<dyn Node>) {
-        self.nodes.write().push(node);
+        let old = self.nodes.load();
+        let mut new_nodes = (**old).clone();
+        new_nodes.push(node);
+        self.nodes.store(Arc::new(new_nodes));
     }
 
     fn remove_node(&self, node_id: &str) {
-        self.nodes.write().retain(|n| n.id() != node_id);
+        let old = self.nodes.load();
+        let mut new_nodes = (**old).clone();
+        new_nodes.retain(|n| n.id() != node_id);
+        self.nodes.store(Arc::new(new_nodes));
     }
 
     fn online_nodes(&self) -> Vec<Arc<dyn Node>> {
-        self.nodes
-            .read()
-            .iter()
-            .filter(|n| n.is_online())
-            .cloned()
-            .collect()
+        let nodes = self.nodes.load();
+        nodes.iter().filter(|n| n.is_online()).cloned().collect()
     }
 
     fn all_nodes(&self) -> Vec<Arc<dyn Node>> {
-        self.nodes.read().clone()
+        let nodes = self.nodes.load();
+        (**nodes).clone()
     }
 
     fn get_node(&self, node_id: &str) -> Option<Arc<dyn Node>> {
-        self.nodes
-            .read()
-            .iter()
-            .find(|n| n.id() == node_id)
-            .cloned()
+        let nodes = self.nodes.load();
+        nodes.iter().find(|n| n.id() == node_id).cloned()
     }
 }
 

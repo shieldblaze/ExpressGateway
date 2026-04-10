@@ -68,6 +68,8 @@ pub fn h1_to_h2_headers(
     };
 
     // Build clean headers without hop-by-hop and without Host.
+    // Per RFC 9113 §8.2.2, connection-specific headers are forbidden in HTTP/2
+    // except `te: trailers` which is the only allowed TE value.
     let mut clean_headers = HeaderMap::new();
     for (name, value) in headers.iter() {
         // Skip Host (promoted to :authority) and connection-specific headers.
@@ -78,6 +80,16 @@ pub fn h1_to_h2_headers(
             || name == header::UPGRADE
             || name == HeaderName::from_static("proxy-connection")
         {
+            continue;
+        }
+        // TE header: only `trailers` is allowed in HTTP/2 (RFC 9113 §8.2.2).
+        if name == header::TE {
+            if let Ok(v) = value.to_str()
+                && v.eq_ignore_ascii_case("trailers")
+            {
+                clean_headers.append(name.clone(), value.clone());
+            }
+            // Skip any non-"trailers" TE values.
             continue;
         }
         clean_headers.append(name.clone(), value.clone());
@@ -235,6 +247,33 @@ mod tests {
 
         assert!(!result.headers.contains_key(header::CONNECTION));
         assert!(!result.headers.contains_key(header::TRANSFER_ENCODING));
+    }
+
+    #[test]
+    fn h1_to_h2_preserves_te_trailers() {
+        // RFC 9113 §8.2.2: `te: trailers` is the only TE value allowed in H2.
+        let mut headers = HeaderMap::new();
+        headers.insert(header::HOST, HeaderValue::from_static("example.com"));
+        headers.insert(header::TE, HeaderValue::from_static("trailers"));
+
+        let uri: Uri = "/".parse().unwrap();
+        let result = h1_to_h2_headers(&Method::POST, &uri, &headers, false).unwrap();
+        assert!(result.headers.contains_key(header::TE));
+        assert_eq!(
+            result.headers.get(header::TE).unwrap().to_str().unwrap(),
+            "trailers"
+        );
+    }
+
+    #[test]
+    fn h1_to_h2_strips_te_non_trailers() {
+        let mut headers = HeaderMap::new();
+        headers.insert(header::HOST, HeaderValue::from_static("example.com"));
+        headers.insert(header::TE, HeaderValue::from_static("gzip"));
+
+        let uri: Uri = "/".parse().unwrap();
+        let result = h1_to_h2_headers(&Method::POST, &uri, &headers, false).unwrap();
+        assert!(!result.headers.contains_key(header::TE));
     }
 
     #[test]

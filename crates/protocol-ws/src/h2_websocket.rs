@@ -14,8 +14,49 @@ use http::{Method, Request};
 pub const H2_WS_PROTOCOL: &str = "websocket";
 
 /// Extension type representing the HTTP/2 `:protocol` pseudo-header.
+///
+/// Uses `&'static str` for the common case to avoid allocation; falls back
+/// to `String` for dynamic values.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct H2Protocol(pub String);
+pub struct H2Protocol(H2ProtocolInner);
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum H2ProtocolInner {
+    Static(&'static str),
+    Owned(String),
+}
+
+impl H2Protocol {
+    /// Create from a static string (zero allocation).
+    #[inline]
+    pub const fn from_static(s: &'static str) -> Self {
+        Self(H2ProtocolInner::Static(s))
+    }
+
+    /// Create from an owned string.
+    #[inline]
+    pub fn from_owned(s: String) -> Self {
+        Self(H2ProtocolInner::Owned(s))
+    }
+
+    /// The WebSocket protocol constant.
+    pub const WEBSOCKET: Self = Self::from_static("websocket");
+
+    /// Get the protocol value as a string slice.
+    #[inline]
+    pub fn as_str(&self) -> &str {
+        match &self.0 {
+            H2ProtocolInner::Static(s) => s,
+            H2ProtocolInner::Owned(s) => s.as_str(),
+        }
+    }
+}
+
+impl std::fmt::Display for H2Protocol {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(self.as_str())
+    }
+}
 
 /// Check if an HTTP/2 request is an Extended CONNECT for WebSocket.
 ///
@@ -30,8 +71,7 @@ pub fn is_h2_websocket_upgrade<T>(req: &Request<T>) -> bool {
         && req
             .extensions()
             .get::<H2Protocol>()
-            .map(|p| p.0.eq_ignore_ascii_case(H2_WS_PROTOCOL))
-            .unwrap_or(false)
+            .is_some_and(|p| p.as_str().eq_ignore_ascii_case(H2_WS_PROTOCOL))
 }
 
 /// Metadata for an HTTP/2 WebSocket stream.
@@ -71,20 +111,19 @@ impl H2WebSocketStream {
 mod tests {
     use super::*;
 
-    fn connect_request_with_protocol(protocol: &str) -> Request<()> {
+    fn connect_request_with_protocol(protocol: H2Protocol) -> Request<()> {
         let mut req = Request::builder()
             .method(Method::CONNECT)
             .uri("https://example.com/ws")
             .body(())
             .unwrap();
-        req.extensions_mut()
-            .insert(H2Protocol(protocol.to_string()));
+        req.extensions_mut().insert(protocol);
         req
     }
 
     #[test]
     fn detects_h2_websocket() {
-        let req = connect_request_with_protocol("websocket");
+        let req = connect_request_with_protocol(H2Protocol::WEBSOCKET);
         assert!(is_h2_websocket_upgrade(&req));
     }
 
@@ -95,8 +134,7 @@ mod tests {
             .uri("https://example.com/ws")
             .body(())
             .unwrap();
-        req.extensions_mut()
-            .insert(H2Protocol("websocket".to_string()));
+        req.extensions_mut().insert(H2Protocol::WEBSOCKET);
         assert!(!is_h2_websocket_upgrade(&req));
     }
 
@@ -112,7 +150,7 @@ mod tests {
 
     #[test]
     fn rejects_wrong_protocol() {
-        let req = connect_request_with_protocol("h2c");
+        let req = connect_request_with_protocol(H2Protocol::from_static("h2c"));
         assert!(!is_h2_websocket_upgrade(&req));
     }
 
@@ -124,8 +162,7 @@ mod tests {
             .header("sec-websocket-protocol", "graphql-ws")
             .body(())
             .unwrap();
-        req.extensions_mut()
-            .insert(H2Protocol("websocket".to_string()));
+        req.extensions_mut().insert(H2Protocol::WEBSOCKET);
 
         let stream = H2WebSocketStream::from_request(&req, 3).unwrap();
         assert_eq!(stream.stream_id, 3);
@@ -135,7 +172,16 @@ mod tests {
 
     #[test]
     fn case_insensitive_protocol() {
-        let req = connect_request_with_protocol("WebSocket");
+        let req = connect_request_with_protocol(H2Protocol::from_owned("WebSocket".into()));
         assert!(is_h2_websocket_upgrade(&req));
+    }
+
+    #[test]
+    fn h2_protocol_display() {
+        assert_eq!(H2Protocol::WEBSOCKET.to_string(), "websocket");
+        assert_eq!(
+            H2Protocol::from_owned("custom".into()).to_string(),
+            "custom"
+        );
     }
 }

@@ -1,22 +1,22 @@
 //! Round-robin HTTP load balancer.
 //!
 //! Identical algorithm to the L4 round-robin but operates on
-//! [`HttpRequest`]/[`HttpResponse`].
+//! [`HttpRequest`]/[`HttpResponse`]. Uses `ArcSwap` for lock-free reads.
 
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
+use arc_swap::ArcSwap;
 use expressgateway_core::error::{Error, Result};
 use expressgateway_core::lb::{HttpRequest, HttpResponse, LoadBalancer};
 use expressgateway_core::node::Node;
-use parking_lot::RwLock;
 
 /// Round-robin HTTP load balancer.
 ///
 /// Distributes HTTP requests evenly across all online backend nodes using an
-/// atomic rotating counter.
+/// atomic rotating counter and lock-free node list reads.
 pub struct HttpRoundRobinBalancer {
-    nodes: RwLock<Vec<Arc<dyn Node>>>,
+    nodes: ArcSwap<Vec<Arc<dyn Node>>>,
     index: AtomicUsize,
 }
 
@@ -24,7 +24,7 @@ impl HttpRoundRobinBalancer {
     /// Create a new HTTP round-robin balancer with no nodes.
     pub fn new() -> Self {
         Self {
-            nodes: RwLock::new(Vec::new()),
+            nodes: ArcSwap::new(Arc::new(Vec::new())),
             index: AtomicUsize::new(0),
         }
     }
@@ -38,45 +38,53 @@ impl Default for HttpRoundRobinBalancer {
 
 impl LoadBalancer<HttpRequest, HttpResponse> for HttpRoundRobinBalancer {
     fn select(&self, _request: &HttpRequest) -> Result<HttpResponse> {
-        let nodes = self.nodes.read();
-        let online: Vec<_> = nodes.iter().filter(|n| n.is_online()).cloned().collect();
-        if online.is_empty() {
+        let nodes = self.nodes.load();
+
+        let online_count = nodes.iter().filter(|n| n.is_online()).count();
+        if online_count == 0 {
             return Err(Error::NoHealthyBackend);
         }
-        let idx = self.index.fetch_add(1, Ordering::Relaxed) % online.len();
+
+        let idx = self.index.fetch_add(1, Ordering::Relaxed) % online_count;
+        let node = nodes
+            .iter()
+            .filter(|n| n.is_online())
+            .nth(idx)
+            .expect("online_count > 0 guarantees nth(idx) exists");
+
         Ok(HttpResponse {
-            node: online[idx].clone(),
+            node: node.clone(),
             headers_to_add: Vec::new(),
         })
     }
 
     fn add_node(&self, node: Arc<dyn Node>) {
-        self.nodes.write().push(node);
+        let old = self.nodes.load();
+        let mut new_nodes = (**old).clone();
+        new_nodes.push(node);
+        self.nodes.store(Arc::new(new_nodes));
     }
 
     fn remove_node(&self, node_id: &str) {
-        self.nodes.write().retain(|n| n.id() != node_id);
+        let old = self.nodes.load();
+        let mut new_nodes = (**old).clone();
+        new_nodes.retain(|n| n.id() != node_id);
+        self.nodes.store(Arc::new(new_nodes));
     }
 
     fn online_nodes(&self) -> Vec<Arc<dyn Node>> {
-        self.nodes
-            .read()
-            .iter()
-            .filter(|n| n.is_online())
-            .cloned()
-            .collect()
+        let nodes = self.nodes.load();
+        nodes.iter().filter(|n| n.is_online()).cloned().collect()
     }
 
     fn all_nodes(&self) -> Vec<Arc<dyn Node>> {
-        self.nodes.read().clone()
+        let nodes = self.nodes.load();
+        (**nodes).clone()
     }
 
     fn get_node(&self, node_id: &str) -> Option<Arc<dyn Node>> {
-        self.nodes
-            .read()
-            .iter()
-            .find(|n| n.id() == node_id)
-            .cloned()
+        let nodes = self.nodes.load();
+        nodes.iter().find(|n| n.id() == node_id).cloned()
     }
 }
 

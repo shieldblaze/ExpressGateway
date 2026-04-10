@@ -16,27 +16,35 @@ use bytes::Bytes;
 /// The path for the gRPC health check RPC.
 pub const HEALTH_CHECK_PATH: &str = "/grpc.health.v1.Health/Check";
 
-/// The protobuf-encoded `HealthCheckResponse { status: SERVING }`.
-const HEALTH_RESPONSE_BODY: &[u8] = &[0x08, 0x01];
+/// The path for the gRPC health watch RPC.
+pub const HEALTH_WATCH_PATH: &str = "/grpc.health.v1.Health/Watch";
+
+/// Pre-built gRPC length-prefixed health response: SERVING.
+///
+/// Layout: [0x00, 0x00, 0x00, 0x00, 0x02, 0x08, 0x01]
+///   - byte 0:    compression flag (0 = uncompressed)
+///   - bytes 1-4: big-endian u32 length (2)
+///   - bytes 5-6: protobuf HealthCheckResponse { status: SERVING(1) }
+static HEALTH_RESPONSE: &[u8] = &[0x00, 0x00, 0x00, 0x00, 0x02, 0x08, 0x01];
 
 /// Build a length-prefixed gRPC message frame for the health check response.
 ///
-/// Returns the 5-byte header followed by the protobuf body.
+/// Returns a static `Bytes` -- zero allocation on the hot path.
+#[inline]
 pub fn health_check_response() -> Bytes {
-    let body_len = HEALTH_RESPONSE_BODY.len() as u32;
-    let mut buf = Vec::with_capacity(5 + HEALTH_RESPONSE_BODY.len());
-    // Compression flag: 0 (no compression)
-    buf.push(0);
-    // 4-byte big-endian length
-    buf.extend_from_slice(&body_len.to_be_bytes());
-    // Protobuf body
-    buf.extend_from_slice(HEALTH_RESPONSE_BODY);
-    Bytes::from(buf)
+    Bytes::from_static(HEALTH_RESPONSE)
 }
 
 /// Returns `true` if the request path matches the health check RPC.
+#[inline]
 pub fn is_health_check(path: &str) -> bool {
     path == HEALTH_CHECK_PATH
+}
+
+/// Returns `true` if the request path matches the health watch RPC.
+#[inline]
+pub fn is_health_watch(path: &str) -> bool {
+    path == HEALTH_WATCH_PATH
 }
 
 #[cfg(test)]
@@ -67,6 +75,12 @@ mod tests {
     }
 
     #[test]
+    fn watch_path_detection() {
+        assert!(is_health_watch("/grpc.health.v1.Health/Watch"));
+        assert!(!is_health_watch("/grpc.health.v1.Health/Check"));
+    }
+
+    #[test]
     fn response_has_correct_grpc_frame() {
         let resp = health_check_response();
         let compression = resp[0];
@@ -75,5 +89,13 @@ mod tests {
 
         assert_eq!(compression, 0);
         assert_eq!(length as usize, body.len());
+    }
+
+    #[test]
+    fn response_is_static_no_alloc() {
+        let a = health_check_response();
+        let b = health_check_response();
+        // Both should point to the same static data.
+        assert_eq!(a.as_ptr(), b.as_ptr());
     }
 }

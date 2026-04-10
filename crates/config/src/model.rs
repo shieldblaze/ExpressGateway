@@ -331,6 +331,9 @@ pub struct ListenerConfig {
     pub xdp_accelerated: Option<bool>,
     /// Alt-Svc max-age for HTTP/3 advertisement.
     pub alt_svc_max_age: Option<u32>,
+    /// Per-listener I/O backend override: `"auto"`, `"io_uring"`, `"epoll"`.
+    /// When `None`, uses the global `runtime.backend` setting.
+    pub io_backend: Option<String>,
 }
 
 impl Default for ListenerConfig {
@@ -343,6 +346,7 @@ impl Default for ListenerConfig {
             http_versions: None,
             xdp_accelerated: None,
             alt_svc_max_age: None,
+            io_backend: None,
         }
     }
 }

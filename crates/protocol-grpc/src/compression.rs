@@ -1,8 +1,8 @@
 //! gRPC-aware compression negotiation.
 //!
-//! gRPC uses the `grpc-encoding` header to signal the compression algorithm
-//! applied to individual messages. This module parses and validates that
-//! header.
+//! gRPC uses `grpc-encoding` to signal the compression algorithm applied to
+//! individual messages, and `grpc-accept-encoding` to advertise which
+//! algorithms the sender can decompress.
 
 use http::HeaderMap;
 
@@ -15,6 +15,10 @@ pub enum GrpcEncoding {
     Gzip,
     /// Deflate compression.
     Deflate,
+    /// Snappy compression (used by some gRPC implementations).
+    Snappy,
+    /// Zstandard compression (increasingly common).
+    Zstd,
 }
 
 impl GrpcEncoding {
@@ -24,6 +28,8 @@ impl GrpcEncoding {
             "identity" => Some(Self::Identity),
             "gzip" => Some(Self::Gzip),
             "deflate" => Some(Self::Deflate),
+            "snappy" => Some(Self::Snappy),
+            "zstd" => Some(Self::Zstd),
             _ => None,
         }
     }
@@ -34,6 +40,8 @@ impl GrpcEncoding {
             Self::Identity => "identity",
             Self::Gzip => "gzip",
             Self::Deflate => "deflate",
+            Self::Snappy => "snappy",
+            Self::Zstd => "zstd",
         }
     }
 }
@@ -54,13 +62,58 @@ pub fn encoding_from_headers(headers: &HeaderMap) -> Option<GrpcEncoding> {
         .and_then(GrpcEncoding::from_header)
 }
 
+/// Parse the `grpc-accept-encoding` header into a list of accepted encodings.
+///
+/// The header value is a comma-separated list of encoding names.
+/// Unknown encodings are silently ignored.
+pub fn accepted_encodings_from_headers(headers: &HeaderMap) -> Vec<GrpcEncoding> {
+    headers
+        .get("grpc-accept-encoding")
+        .and_then(|v| v.to_str().ok())
+        .map(|v| {
+            v.split(',')
+                .filter_map(|s| GrpcEncoding::from_header(s.trim()))
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+/// Build the `grpc-accept-encoding` header value for our supported encodings.
+pub fn supported_accept_encoding_value() -> &'static str {
+    "identity,gzip,deflate,snappy,zstd"
+}
+
 /// All encodings that this gateway supports for gRPC.
 pub fn supported_encodings() -> &'static [GrpcEncoding] {
     &[
         GrpcEncoding::Identity,
         GrpcEncoding::Gzip,
         GrpcEncoding::Deflate,
+        GrpcEncoding::Snappy,
+        GrpcEncoding::Zstd,
     ]
+}
+
+/// Select the best encoding from the client's accepted list that we support.
+///
+/// Returns `Identity` if no common encoding is found (identity is always
+/// implicitly accepted per the gRPC spec).
+pub fn negotiate_encoding(accepted: &[GrpcEncoding]) -> GrpcEncoding {
+    // Prefer in order: zstd > gzip > snappy > deflate > identity
+    const PREFERENCE: &[GrpcEncoding] = &[
+        GrpcEncoding::Zstd,
+        GrpcEncoding::Gzip,
+        GrpcEncoding::Snappy,
+        GrpcEncoding::Deflate,
+    ];
+
+    for &pref in PREFERENCE {
+        if accepted.contains(&pref) {
+            return pref;
+        }
+    }
+
+    GrpcEncoding::Identity
 }
 
 #[cfg(test)]
@@ -90,8 +143,21 @@ mod tests {
     }
 
     #[test]
+    fn parse_snappy() {
+        assert_eq!(
+            GrpcEncoding::from_header("snappy"),
+            Some(GrpcEncoding::Snappy)
+        );
+    }
+
+    #[test]
+    fn parse_zstd() {
+        assert_eq!(GrpcEncoding::from_header("zstd"), Some(GrpcEncoding::Zstd));
+    }
+
+    #[test]
     fn unsupported_encoding() {
-        assert_eq!(GrpcEncoding::from_header("snappy"), None);
+        assert_eq!(GrpcEncoding::from_header("brotli"), None);
     }
 
     #[test]
@@ -105,5 +171,46 @@ mod tests {
     fn from_headers_absent() {
         let headers = HeaderMap::new();
         assert_eq!(encoding_from_headers(&headers), None);
+    }
+
+    #[test]
+    fn accepted_encodings() {
+        let mut headers = HeaderMap::new();
+        headers.insert(
+            "grpc-accept-encoding",
+            HeaderValue::from_static("gzip, identity, deflate"),
+        );
+        let accepted = accepted_encodings_from_headers(&headers);
+        assert_eq!(
+            accepted,
+            vec![
+                GrpcEncoding::Gzip,
+                GrpcEncoding::Identity,
+                GrpcEncoding::Deflate
+            ]
+        );
+    }
+
+    #[test]
+    fn accepted_encodings_ignores_unknown() {
+        let mut headers = HeaderMap::new();
+        headers.insert(
+            "grpc-accept-encoding",
+            HeaderValue::from_static("gzip, brotli, zstd"),
+        );
+        let accepted = accepted_encodings_from_headers(&headers);
+        assert_eq!(accepted, vec![GrpcEncoding::Gzip, GrpcEncoding::Zstd]);
+    }
+
+    #[test]
+    fn negotiate_prefers_zstd() {
+        let accepted = vec![GrpcEncoding::Gzip, GrpcEncoding::Zstd];
+        assert_eq!(negotiate_encoding(&accepted), GrpcEncoding::Zstd);
+    }
+
+    #[test]
+    fn negotiate_falls_back_to_identity() {
+        let accepted = vec![];
+        assert_eq!(negotiate_encoding(&accepted), GrpcEncoding::Identity);
     }
 }

@@ -90,10 +90,26 @@ fn contains_encoded_null(path: &str) -> bool {
 }
 
 /// Check if a path contains double-encoded dots (`%252e` or `%252E`).
+///
+/// Scans bytes directly without allocating a lowercase copy.
 fn contains_double_encoded_dot(path: &str) -> bool {
     // %252e decodes to %2e which decodes to `.`
-    let lower = path.to_ascii_lowercase();
-    lower.contains("%252e")
+    // Match case-insensitively: %252e, %252E, %25 2e, etc.
+    let bytes = path.as_bytes();
+    if bytes.len() < 5 {
+        return false;
+    }
+    for i in 0..=bytes.len() - 5 {
+        if bytes[i] == b'%'
+            && bytes[i + 1] == b'2'
+            && bytes[i + 2] == b'5'
+            && bytes[i + 3] == b'2'
+            && (bytes[i + 4] == b'e' || bytes[i + 4] == b'E')
+        {
+            return true;
+        }
+    }
+    false
 }
 
 /// Check if a raw path has a traversal attempt that would escape the root.

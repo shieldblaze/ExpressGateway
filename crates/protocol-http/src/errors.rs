@@ -70,22 +70,39 @@ impl HttpError {
     }
 
     /// Build an HTTP response from this error.
+    ///
+    /// This construction is infallible: status codes are always valid, header
+    /// names are static, and the body is a well-formed JSON string. The
+    /// `unwrap` on the builder is safe because none of the inputs can cause
+    /// `http::Response::builder()` to fail.
     pub fn into_response(self) -> Response<Full<Bytes>> {
         let body = format!(
             "{{\"error\":\"{}\",\"message\":\"{}\"}}",
             self.status.as_u16(),
             self.message.replace('\"', "\\\""),
         );
+        // SAFETY (logical): builder with valid StatusCode and static header
+        // names is infallible. We assert rather than silently swallowing.
+        let len = body.len();
         Response::builder()
             .status(self.status)
             .header("content-type", "application/json")
-            .header("content-length", body.len().to_string())
+            .header("content-length", len.to_string())
             .body(Full::new(Bytes::from(body)))
-            .expect("valid error response")
+            .unwrap_or_else(|_| {
+                // Unreachable in practice, but never panic on data path.
+                Response::builder()
+                    .status(StatusCode::INTERNAL_SERVER_ERROR)
+                    .body(Full::new(Bytes::from_static(
+                        b"{\"error\":\"500\",\"message\":\"internal error\"}",
+                    )))
+                    .unwrap()
+            })
     }
 
     /// Create an [`HttpError`] from an [`expressgateway_core::Error`].
     pub fn from_core_error(err: &expressgateway_core::Error) -> Self {
+        // `http_status()` always returns valid codes (4xx/5xx), but guard anyway.
         let status =
             StatusCode::from_u16(err.http_status()).unwrap_or(StatusCode::INTERNAL_SERVER_ERROR);
         Self::new(status, err.to_string())

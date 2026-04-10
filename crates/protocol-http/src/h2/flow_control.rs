@@ -11,6 +11,9 @@ pub const DEFAULT_INITIAL_WINDOW_SIZE: i64 = 65_535;
 /// Default connection-level window size (1 MB).
 pub const DEFAULT_CONNECTION_WINDOW_SIZE: i64 = 1_048_576;
 
+/// Maximum flow control window size per RFC 9113 §6.9.1 (2^31 - 1).
+pub const MAX_FLOW_CONTROL_WINDOW: i64 = (1 << 31) - 1;
+
 /// A flow control window tracking available send/receive capacity.
 ///
 /// Uses atomic operations for lock-free concurrent access.
@@ -57,8 +60,25 @@ impl FlowWindow {
     }
 
     /// Add capacity back to the window (e.g., after receiving WINDOW_UPDATE).
-    pub fn replenish(&self, bytes: i64) {
-        self.available.fetch_add(bytes, Ordering::AcqRel);
+    ///
+    /// Per RFC 9113 §6.9.1, the flow control window MUST NOT exceed 2^31 - 1.
+    /// Returns `true` if the replenishment was applied, `false` if it would
+    /// overflow the maximum window size (a FLOW_CONTROL_ERROR).
+    pub fn replenish(&self, bytes: i64) -> bool {
+        loop {
+            let current = self.available.load(Ordering::Acquire);
+            let new_val = current.saturating_add(bytes);
+            if new_val > MAX_FLOW_CONTROL_WINDOW {
+                return false;
+            }
+            if self
+                .available
+                .compare_exchange_weak(current, new_val, Ordering::AcqRel, Ordering::Acquire)
+                .is_ok()
+            {
+                return true;
+            }
+        }
     }
 
     /// Current available window size.
@@ -115,15 +135,19 @@ impl FlowController {
         // Check stream-level window.
         if !stream_window.try_consume(bytes) {
             // Rollback connection-level consumption.
-            self.connection_window.replenish(bytes);
+            // This replenish cannot overflow because we just consumed these bytes.
+            let _ = self.connection_window.replenish(bytes);
             return false;
         }
         true
     }
 
     /// Handle a connection-level WINDOW_UPDATE.
-    pub fn connection_window_update(&self, increment: i64) {
-        self.connection_window.replenish(increment);
+    ///
+    /// Returns `true` if the update was applied, `false` if it would exceed
+    /// the maximum flow control window (RFC 9113 §6.9.1 FLOW_CONTROL_ERROR).
+    pub fn connection_window_update(&self, increment: i64) -> bool {
+        self.connection_window.replenish(increment)
     }
 
     /// Create a new stream-level flow window with the default initial size.
@@ -163,7 +187,7 @@ mod tests {
         assert!(!w.try_consume(50)); // Not enough.
         assert_eq!(w.available(), 40);
 
-        w.replenish(30);
+        assert!(w.replenish(30));
         assert_eq!(w.available(), 70);
     }
 
@@ -210,9 +234,24 @@ mod tests {
         assert!(fc.is_connection_blocked());
 
         // Replenish connection window.
-        fc.connection_window_update(100);
+        assert!(fc.connection_window_update(100));
         assert!(!fc.is_connection_blocked());
         assert!(fc.try_send(&sw, 50));
+    }
+
+    #[test]
+    fn flow_window_replenish_overflow_rejected() {
+        // RFC 9113 §6.9.1: window MUST NOT exceed 2^31 - 1.
+        let w = FlowWindow::new(MAX_FLOW_CONTROL_WINDOW - 10);
+        assert!(w.replenish(10)); // Exactly at max.
+        assert!(!w.replenish(1)); // Would exceed max.
+    }
+
+    #[test]
+    fn connection_window_update_overflow_rejected() {
+        let fc = FlowController::new(MAX_FLOW_CONTROL_WINDOW - 5, 65_535);
+        assert!(fc.connection_window_update(5));
+        assert!(!fc.connection_window_update(1));
     }
 
     #[test]

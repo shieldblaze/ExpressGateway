@@ -7,6 +7,7 @@ use std::sync::Arc;
 
 use crate::config_version::ConfigVersionStore;
 use crate::node_registry::NodeEntry;
+use crate::rest::traffic::TrafficPolicy;
 
 /// A cluster entry in the control plane store.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -94,6 +95,7 @@ pub struct ControlPlaneStore {
     pub listeners: DashMap<String, ListenerEntry>,
     pub health_checks: DashMap<String, HealthCheckEntry>,
     pub tls_certs: DashMap<String, TlsCertEntry>,
+    pub traffic_policies: DashMap<String, TrafficPolicy>,
     pub config_versions: ConfigVersionStore,
 }
 
@@ -107,6 +109,7 @@ impl ControlPlaneStore {
             listeners: DashMap::new(),
             health_checks: DashMap::new(),
             tls_certs: DashMap::new(),
+            traffic_policies: DashMap::new(),
             config_versions: ConfigVersionStore::new(),
         }
     }

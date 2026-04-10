@@ -16,7 +16,8 @@ pub enum ProxyVersion {
 /// The minimum number of bytes needed to reliably distinguish v1 from v2.
 ///
 /// The v2 signature is 12 bytes; the v1 prefix `PROXY ` is 6 bytes.
-/// We need at least 12 bytes to be sure it is *not* v2 before falling back.
+/// We need at least 12 bytes to be sure it is *not* v2 before falling back
+/// to v1 detection.
 pub const DETECT_MIN_BYTES: usize = 12;
 
 /// Attempt to detect whether the buffer contains a v1 or v2 PROXY protocol
@@ -25,12 +26,15 @@ pub const DETECT_MIN_BYTES: usize = 12;
 /// Returns `None` if neither signature is recognized **or** if there are
 /// fewer than [`DETECT_MIN_BYTES`] bytes available (in which case the caller
 /// should wait for more data before retrying).
+#[inline]
 pub fn detect(buf: &[u8]) -> Option<ProxyVersion> {
     if buf.len() < V1_PREFIX.len() {
         return None;
     }
 
-    // Check v2 first (longer, more specific signature).
+    // Check v2 first (longer, more specific signature -- avoids false
+    // positive from a v1 line that happens to start with bytes matching
+    // the v2 signature prefix).
     if buf.len() >= V2_SIGNATURE.len() && buf[..V2_SIGNATURE.len()] == V2_SIGNATURE {
         return Some(ProxyVersion::V2);
     }

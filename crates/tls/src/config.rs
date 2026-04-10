@@ -5,13 +5,13 @@
 
 use std::sync::Arc;
 
-use anyhow::Result;
 use expressgateway_core::types::{MutualTlsMode, TlsProfile};
 use rustls::pki_types::{CertificateDer, PrivateKeyDer};
 use rustls::{ClientConfig, RootCertStore, ServerConfig};
 
 use crate::alpn;
 use crate::ciphers;
+use crate::error::{Result, TlsError};
 use crate::mtls;
 
 /// Builder for TLS configurations.
@@ -29,29 +29,31 @@ impl TlsConfigBuilder {
         cert_chain: Vec<CertificateDer<'static>>,
         key: PrivateKeyDer<'static>,
         profile: TlsProfile,
-        mtls: MutualTlsMode,
+        mtls_mode: MutualTlsMode,
         trust_ca: Option<&[u8]>,
     ) -> Result<ServerConfig> {
         let cipher_suites = ciphers::cipher_suites_for_profile(profile);
         let versions = ciphers::protocol_versions_for_profile(profile);
 
-        // Build a custom CryptoProvider with our selected cipher suites.
         let base_provider = rustls::crypto::ring::default_provider();
         let provider = rustls::crypto::CryptoProvider {
             cipher_suites,
             ..base_provider
         };
 
-        let verifier = mtls::build_client_cert_verifier(mtls, trust_ca)?;
+        let verifier = mtls::build_client_cert_verifier(mtls_mode, trust_ca)?;
 
         let mut config = ServerConfig::builder_with_provider(Arc::new(provider))
             .with_protocol_versions(&versions)
-            .map_err(|e| anyhow::anyhow!("failed to set protocol versions: {e}"))?
+            .map_err(|e| TlsError::ProtocolVersion {
+                reason: e.to_string(),
+            })?
             .with_client_cert_verifier(verifier)
             .with_single_cert(cert_chain, key)
-            .map_err(|e| anyhow::anyhow!("failed to set server certificate: {e}"))?;
+            .map_err(|e| TlsError::ServerCert {
+                reason: e.to_string(),
+            })?;
 
-        // Configure ALPN for HTTP/2 and HTTP/1.1.
         alpn::configure_alpn(&mut config);
 
         Ok(config)
@@ -71,16 +73,19 @@ impl TlsConfigBuilder {
 
             let config = ClientConfig::builder_with_provider(provider)
                 .with_safe_default_protocol_versions()
-                .map_err(|e| anyhow::anyhow!("failed to set protocol versions: {e}"))?
+                .map_err(|e| TlsError::ProtocolVersion {
+                    reason: e.to_string(),
+                })?
                 .with_root_certificates(root_store)
                 .with_no_client_auth();
 
             Ok(config)
         } else {
-            // Dangerous: skip hostname verification (testing only).
             let config = ClientConfig::builder_with_provider(provider)
                 .with_safe_default_protocol_versions()
-                .map_err(|e| anyhow::anyhow!("failed to set protocol versions: {e}"))?
+                .map_err(|e| TlsError::ProtocolVersion {
+                    reason: e.to_string(),
+                })?
                 .dangerous()
                 .with_custom_certificate_verifier(Arc::new(NoVerifier))
                 .with_no_client_auth();
@@ -103,7 +108,7 @@ impl rustls::client::danger::ServerCertVerifier for NoVerifier {
         _server_name: &rustls::pki_types::ServerName<'_>,
         _ocsp_response: &[u8],
         _now: rustls::pki_types::UnixTime,
-    ) -> Result<rustls::client::danger::ServerCertVerified, rustls::Error> {
+    ) -> std::result::Result<rustls::client::danger::ServerCertVerified, rustls::Error> {
         Ok(rustls::client::danger::ServerCertVerified::assertion())
     }
 
@@ -112,7 +117,7 @@ impl rustls::client::danger::ServerCertVerifier for NoVerifier {
         _message: &[u8],
         _cert: &CertificateDer<'_>,
         _dss: &rustls::DigitallySignedStruct,
-    ) -> Result<rustls::client::danger::HandshakeSignatureValid, rustls::Error> {
+    ) -> std::result::Result<rustls::client::danger::HandshakeSignatureValid, rustls::Error> {
         Ok(rustls::client::danger::HandshakeSignatureValid::assertion())
     }
 
@@ -121,7 +126,7 @@ impl rustls::client::danger::ServerCertVerifier for NoVerifier {
         _message: &[u8],
         _cert: &CertificateDer<'_>,
         _dss: &rustls::DigitallySignedStruct,
-    ) -> Result<rustls::client::danger::HandshakeSignatureValid, rustls::Error> {
+    ) -> std::result::Result<rustls::client::danger::HandshakeSignatureValid, rustls::Error> {
         Ok(rustls::client::danger::HandshakeSignatureValid::assertion())
     }
 

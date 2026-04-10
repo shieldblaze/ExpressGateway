@@ -3,14 +3,16 @@
 //! Wraps an inner HTTP load balancer and adds session affinity via a
 //! `Set-Cookie` header. The cookie value is a SHA-256 hash of the node ID
 //! to avoid leaking internal identifiers.
+//!
+//! The hash-to-node map uses `DashMap` for lock-free concurrent reads on
+//! the hot path.
 
-use std::collections::HashMap;
 use std::sync::Arc;
 
+use dashmap::DashMap;
 use expressgateway_core::error::Result;
 use expressgateway_core::lb::{HttpRequest, HttpResponse, LoadBalancer};
 use expressgateway_core::node::Node;
-use parking_lot::RwLock;
 use sha2::{Digest, Sha256};
 
 /// Cookie name used for sticky session routing.
@@ -37,7 +39,7 @@ fn hash_node_id(node_id: &str) -> String {
 pub struct StickySessionBalancer {
     inner: Arc<dyn LoadBalancer<HttpRequest, HttpResponse>>,
     /// Maps hashed node ID -> node, for O(1) cookie lookups.
-    hashed_id_to_node: RwLock<HashMap<String, Arc<dyn Node>>>,
+    hashed_id_to_node: DashMap<String, Arc<dyn Node>>,
     /// Whether to set the Secure cookie attribute.
     tls: bool,
 }
@@ -49,7 +51,7 @@ impl StickySessionBalancer {
     pub fn new(inner: Arc<dyn LoadBalancer<HttpRequest, HttpResponse>>, tls: bool) -> Self {
         Self {
             inner,
-            hashed_id_to_node: RwLock::new(HashMap::new()),
+            hashed_id_to_node: DashMap::new(),
             tls,
         }
     }
@@ -94,11 +96,11 @@ impl StickySessionBalancer {
 impl LoadBalancer<HttpRequest, HttpResponse> for StickySessionBalancer {
     fn select(&self, request: &HttpRequest) -> Result<HttpResponse> {
         // Check for existing cookie.
-        if let Some(cookie_val) = Self::extract_cookie(request) {
-            let map = self.hashed_id_to_node.read();
-            if let Some(node) = map.get(&cookie_val)
-                && node.is_online()
-            {
+        if let Some(cookie_val) = Self::extract_cookie(request)
+            && let Some(entry) = self.hashed_id_to_node.get(&cookie_val)
+        {
+            let node = entry.value();
+            if node.is_online() {
                 return Ok(HttpResponse {
                     node: node.clone(),
                     headers_to_add: Vec::new(),
@@ -111,10 +113,8 @@ impl LoadBalancer<HttpRequest, HttpResponse> for StickySessionBalancer {
 
         // Register the node in our hash map.
         let hashed = hash_node_id(resp.node.id());
-        {
-            let mut map = self.hashed_id_to_node.write();
-            map.insert(hashed, resp.node.clone());
-        }
+        self.hashed_id_to_node
+            .insert(hashed, resp.node.clone());
 
         // Inject Set-Cookie header.
         let cookie = self.build_cookie(resp.node.as_ref(), request.host.as_deref());
@@ -125,13 +125,13 @@ impl LoadBalancer<HttpRequest, HttpResponse> for StickySessionBalancer {
 
     fn add_node(&self, node: Arc<dyn Node>) {
         let hashed = hash_node_id(node.id());
-        self.hashed_id_to_node.write().insert(hashed, node.clone());
+        self.hashed_id_to_node.insert(hashed, node.clone());
         self.inner.add_node(node);
     }
 
     fn remove_node(&self, node_id: &str) {
         let hashed = hash_node_id(node_id);
-        self.hashed_id_to_node.write().remove(&hashed);
+        self.hashed_id_to_node.remove(&hashed);
         self.inner.remove_node(node_id);
     }
 

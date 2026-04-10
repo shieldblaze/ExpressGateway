@@ -4,6 +4,17 @@
 //! in both text (v1) and binary (v2) formats, plus auto-detection of which
 //! version a given byte stream uses.
 //!
+//! # Features
+//!
+//! - **v1**: Text format (`PROXY TCP4|TCP6|UDP4|UDP6|UNKNOWN ...`).
+//! - **v2**: Binary format with 12-byte signature, supporting:
+//!   - AF_INET, AF_INET6, AF_UNIX address families
+//!   - STREAM and DGRAM transport protocols
+//!   - TLV extensions (ALPN, SSL, Authority, etc.)
+//! - **Auto-detection**: Inspect the first 12 bytes to determine version.
+//! - **Zero-copy parsing**: Parses directly from `BytesMut` without
+//!   intermediate heap allocations on the hot path.
+//!
 //! # Quick start
 //!
 //! ```rust
@@ -31,4 +42,7 @@ pub mod v2;
 
 // Re-export key types at crate root for convenience.
 pub use detect::ProxyVersion;
-pub use header::{ProxyCommand, ProxyHeader, TransportProtocol};
+pub use header::{
+    ProxyAddresses, ProxyCommand, ProxyHeader, Tlv, TransportProtocol,
+    tlv_types,
+};

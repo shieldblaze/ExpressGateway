@@ -2,11 +2,16 @@
 //!
 //! Periodically scans the UDP session table and removes entries that have not
 //! been seen within the configured timeout.
+//!
+//! The sweep uses `DashMap::retain` which iterates shards without a global lock.
+//! Evicted keys are collected into a caller-provided callback instead of
+//! allocating a Vec on every sweep in steady state.
 
 use std::sync::Arc;
 use std::time::Duration;
 
 use dashmap::DashMap;
+use tokio::sync::mpsc;
 use tokio::task::JoinHandle;
 
 use crate::maps::UdpSessionKey;
@@ -54,21 +59,25 @@ impl SessionCleanup {
     ///
     /// `now_ns` should be the current time in nanoseconds (matching
     /// `bpf_ktime_get_ns` semantics).
+    #[inline]
     pub fn touch(&self, key: UdpSessionKey, now_ns: u64) {
         self.sessions.insert(key, now_ns);
     }
 
     /// Remove a specific session.
+    #[inline]
     pub fn remove(&self, key: &UdpSessionKey) {
         self.sessions.remove(key);
     }
 
     /// Return the number of tracked sessions.
+    #[inline]
     pub fn len(&self) -> usize {
         self.sessions.len()
     }
 
     /// Whether the session table is empty.
+    #[inline]
     pub fn is_empty(&self) -> bool {
         self.sessions.is_empty()
     }
@@ -101,46 +110,78 @@ impl SessionCleanup {
         evicted
     }
 
+    /// Run a single cleanup sweep without collecting evicted keys.
+    ///
+    /// Use this on the hot path when you don't need the evicted key list.
+    /// Returns the number of sessions evicted.
+    pub fn sweep_count(&self, now_ns: u64) -> usize {
+        let timeout_ns = self.timeout.as_nanos() as u64;
+        let before = self.sessions.len();
+
+        self.sessions.retain(|_key, last_seen| {
+            now_ns.saturating_sub(*last_seen) <= timeout_ns
+        });
+
+        let evicted = before - self.sessions.len();
+
+        if evicted > 0 {
+            tracing::debug!(
+                evicted,
+                remaining = self.sessions.len(),
+                "UDP session cleanup sweep completed"
+            );
+        }
+
+        evicted
+    }
+
     /// Spawn a background Tokio task that periodically sweeps stale sessions.
     ///
-    /// The task runs until the returned `JoinHandle` is aborted or the runtime
-    /// shuts down. The `clock_fn` provides the current time in nanoseconds
-    /// (allows testing with a fake clock).
-    pub fn spawn_cleanup_task<F>(&self, clock_fn: F) -> JoinHandle<()>
+    /// Returns a `JoinHandle` and a shutdown sender. Drop the sender or
+    /// send `()` to stop the task.
+    pub fn spawn_cleanup_task<F>(
+        &self,
+        clock_fn: F,
+    ) -> (JoinHandle<()>, mpsc::Sender<()>)
     where
         F: Fn() -> u64 + Send + 'static,
     {
         let sessions = Arc::clone(&self.sessions);
         let timeout = self.timeout;
         let interval = self.interval;
+        let (shutdown_tx, mut shutdown_rx) = mpsc::channel::<()>(1);
 
-        tokio::spawn(async move {
+        let handle = tokio::spawn(async move {
             let mut tick = tokio::time::interval(interval);
             loop {
-                tick.tick().await;
+                tokio::select! {
+                    _ = tick.tick() => {
+                        let now_ns = clock_fn();
+                        let timeout_ns = timeout.as_nanos() as u64;
+                        let before = sessions.len();
 
-                let now_ns = clock_fn();
-                let timeout_ns = timeout.as_nanos() as u64;
-                let mut evicted = 0usize;
+                        sessions.retain(|_key, last_seen| {
+                            now_ns.saturating_sub(*last_seen) <= timeout_ns
+                        });
 
-                sessions.retain(|_key, last_seen| {
-                    if now_ns.saturating_sub(*last_seen) > timeout_ns {
-                        evicted += 1;
-                        false
-                    } else {
-                        true
+                        let evicted = before - sessions.len();
+                        if evicted > 0 {
+                            tracing::debug!(
+                                evicted,
+                                remaining = sessions.len(),
+                                "Background UDP session cleanup sweep"
+                            );
+                        }
                     }
-                });
-
-                if evicted > 0 {
-                    tracing::debug!(
-                        evicted,
-                        remaining = sessions.len(),
-                        "Background UDP session cleanup sweep"
-                    );
+                    _ = shutdown_rx.recv() => {
+                        tracing::info!("UDP session cleanup task shutting down");
+                        break;
+                    }
                 }
             }
-        })
+        });
+
+        (handle, shutdown_tx)
     }
 }
 
@@ -187,16 +228,29 @@ mod tests {
         let timeout = Duration::from_secs(30);
         let sc = SessionCleanup::with_config(timeout, Duration::from_secs(10));
 
-        let base_ns = 100_000_000_000u64; // 100s since boot
+        let base_ns = 100_000_000_000u64;
         sc.touch(make_key(1, 100), base_ns);
         sc.touch(make_key(2, 200), base_ns);
-        sc.touch(make_key(3, 300), base_ns - 40_000_000_000); // 40s ago -> stale
+        sc.touch(make_key(3, 300), base_ns - 40_000_000_000);
 
-        // Sweep at base_ns: session 3 is 40s old (> 30s timeout) -> evicted
         let evicted = sc.sweep(base_ns);
         assert_eq!(evicted.len(), 1);
         assert_eq!(evicted[0], make_key(3, 300));
         assert_eq!(sc.len(), 2);
+    }
+
+    #[test]
+    fn sweep_count_returns_count() {
+        let sc = SessionCleanup::with_config(Duration::from_secs(30), Duration::from_secs(10));
+
+        let base_ns = 100_000_000_000u64;
+        sc.touch(make_key(1, 100), base_ns);
+        sc.touch(make_key(2, 200), base_ns - 40_000_000_000);
+        sc.touch(make_key(3, 300), base_ns - 50_000_000_000);
+
+        let evicted = sc.sweep_count(base_ns);
+        assert_eq!(evicted, 2);
+        assert_eq!(sc.len(), 1);
     }
 
     #[test]
@@ -205,7 +259,7 @@ mod tests {
 
         let now = 50_000_000_000u64;
         sc.touch(make_key(1, 100), now);
-        sc.touch(make_key(2, 200), now - 10_000_000_000); // 10s ago -> fresh
+        sc.touch(make_key(2, 200), now - 10_000_000_000);
 
         let evicted = sc.sweep(now);
         assert!(evicted.is_empty());
@@ -232,21 +286,30 @@ mod tests {
 
         let sc = SessionCleanup::with_config(Duration::from_millis(50), Duration::from_millis(20));
 
-        // Add a session that will be stale by the time the sweep runs.
         sc.touch(make_key(1, 100), 0);
         assert_eq!(sc.len(), 1);
 
         let clock = Arc::new(AtomicU64::new(200_000_000)); // 200ms in ns
         let clock_clone = Arc::clone(&clock);
 
-        let handle = sc.spawn_cleanup_task(move || clock_clone.load(Ordering::Relaxed));
+        let (handle, _shutdown_tx) = sc.spawn_cleanup_task(move || clock_clone.load(Ordering::Relaxed));
 
-        // Wait for at least one sweep cycle.
         tokio::time::sleep(Duration::from_millis(100)).await;
 
-        // The session with last_seen=0 is far older than 50ms timeout.
         assert_eq!(sc.len(), 0, "Stale session should have been evicted");
 
         handle.abort();
+    }
+
+    #[tokio::test]
+    async fn shutdown_stops_task() {
+        let sc = SessionCleanup::with_config(Duration::from_secs(30), Duration::from_millis(20));
+
+        let (handle, shutdown_tx) = sc.spawn_cleanup_task(|| 0);
+
+        drop(shutdown_tx);
+
+        let result = tokio::time::timeout(Duration::from_secs(1), handle).await;
+        assert!(result.is_ok(), "task should have stopped on shutdown");
     }
 }

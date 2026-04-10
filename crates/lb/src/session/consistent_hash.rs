@@ -3,15 +3,18 @@
 //! Stateless session persistence that hashes the client source IP (without
 //! port) onto a ring of backend nodes. No per-session storage is needed;
 //! the ring deterministically maps clients to backends.
+//!
+//! Uses `ArcSwap` for lock-free reads on the hot path.
 
 use std::collections::BTreeMap;
 use std::io::Cursor;
 use std::net::IpAddr;
 use std::sync::Arc;
 
+use arc_swap::ArcSwap;
 use expressgateway_core::node::Node;
 use expressgateway_core::session::SessionPersistence;
-use parking_lot::RwLock;
+use parking_lot::Mutex;
 
 /// Number of virtual nodes per real backend node.
 const VIRTUAL_NODES: usize = 150;
@@ -21,6 +24,12 @@ fn murmur3_hash(data: &[u8]) -> u128 {
     murmur3::murmur3_x64_128(&mut Cursor::new(data), 0).unwrap_or(0)
 }
 
+/// Snapshot of ring + node list, swapped atomically.
+struct RingSnapshot {
+    ring: BTreeMap<u128, String>,
+    nodes: Vec<Arc<dyn Node>>,
+}
+
 /// Consistent-hash session persistence.
 ///
 /// This is a stateless implementation: it does not store any per-session data.
@@ -28,46 +37,55 @@ fn murmur3_hash(data: &[u8]) -> u128 {
 /// corresponding backend node ID. The ring is rebuilt when nodes are added or
 /// removed.
 pub struct ConsistentHashPersistence {
-    /// Hash ring: hash value -> node ID.
-    ring: RwLock<BTreeMap<u128, String>>,
-    /// Tracked nodes for ring management.
-    nodes: RwLock<Vec<Arc<dyn Node>>>,
+    snapshot: ArcSwap<RingSnapshot>,
+    mutation_lock: Mutex<()>,
 }
 
 impl ConsistentHashPersistence {
     /// Create a new consistent-hash persistence with an empty ring.
     pub fn new() -> Self {
         Self {
-            ring: RwLock::new(BTreeMap::new()),
-            nodes: RwLock::new(Vec::new()),
+            snapshot: ArcSwap::new(Arc::new(RingSnapshot {
+                ring: BTreeMap::new(),
+                nodes: Vec::new(),
+            })),
+            mutation_lock: Mutex::new(()),
         }
     }
 
     /// Add a backend node to the ring.
     pub fn add_node(&self, node: Arc<dyn Node>) {
+        let _guard = self.mutation_lock.lock();
+        let old = self.snapshot.load();
+        let mut ring = old.ring.clone();
+        let mut nodes = old.nodes.clone();
+
         let node_id = node.id().to_string();
-        {
-            let mut ring = self.ring.write();
-            for i in 0..VIRTUAL_NODES {
-                let vnode_key = format!("{}-vnode-{}", node_id, i);
-                let hash = murmur3_hash(vnode_key.as_bytes());
-                ring.insert(hash, node_id.clone());
-            }
+        for i in 0..VIRTUAL_NODES {
+            let vnode_key = format!("{}-vnode-{}", node_id, i);
+            let hash = murmur3_hash(vnode_key.as_bytes());
+            ring.insert(hash, node_id.clone());
         }
-        self.nodes.write().push(node);
+        nodes.push(node);
+
+        self.snapshot.store(Arc::new(RingSnapshot { ring, nodes }));
     }
 
     /// Remove a backend node from the ring.
     pub fn remove_node(&self, node_id: &str) {
-        {
-            let mut ring = self.ring.write();
-            for i in 0..VIRTUAL_NODES {
-                let vnode_key = format!("{}-vnode-{}", node_id, i);
-                let hash = murmur3_hash(vnode_key.as_bytes());
-                ring.remove(&hash);
-            }
+        let _guard = self.mutation_lock.lock();
+        let old = self.snapshot.load();
+        let mut ring = old.ring.clone();
+        let mut nodes = old.nodes.clone();
+
+        for i in 0..VIRTUAL_NODES {
+            let vnode_key = format!("{}-vnode-{}", node_id, i);
+            let hash = murmur3_hash(vnode_key.as_bytes());
+            ring.remove(&hash);
         }
-        self.nodes.write().retain(|n| n.id() != node_id);
+        nodes.retain(|n| n.id() != node_id);
+
+        self.snapshot.store(Arc::new(RingSnapshot { ring, nodes }));
     }
 }
 
@@ -79,8 +97,8 @@ impl Default for ConsistentHashPersistence {
 
 impl SessionPersistence<IpAddr, String> for ConsistentHashPersistence {
     fn get(&self, key: &IpAddr) -> Option<String> {
-        let ring = self.ring.read();
-        if ring.is_empty() {
+        let snap = self.snapshot.load();
+        if snap.ring.is_empty() {
             return None;
         }
 
@@ -89,11 +107,10 @@ impl SessionPersistence<IpAddr, String> for ConsistentHashPersistence {
         let hash = murmur3_hash(ip_str.as_bytes());
 
         // Walk the ring clockwise, checking for online nodes.
-        let nodes = self.nodes.read();
-        let candidates = ring.range(hash..).chain(ring.range(..hash));
+        let candidates = snap.ring.range(hash..).chain(snap.ring.range(..hash));
 
         for (_, node_id) in candidates {
-            if let Some(node) = nodes.iter().find(|n| n.id() == node_id)
+            if let Some(node) = snap.nodes.iter().find(|n| n.id() == node_id)
                 && node.is_online()
             {
                 return Some(node_id.clone());
@@ -114,7 +131,8 @@ impl SessionPersistence<IpAddr, String> for ConsistentHashPersistence {
 
     fn len(&self) -> usize {
         // Return the number of nodes on the ring, not sessions.
-        self.nodes.read().len()
+        let snap = self.snapshot.load();
+        snap.nodes.len()
     }
 }
 

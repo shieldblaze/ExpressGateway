@@ -25,6 +25,10 @@ tower.workspace = true
 http.workspace = true
 chrono.workspace = true
 arc-swap.workspace = true
+prometheus.workspace = true
+futures.workspace = true
+tokio-util = { version = "0.7", features = ["rt"] }
+tokio-stream = "0.1"
 
 [dev-dependencies]
 tokio = { workspace = true, features = ["full", "test-util"] }

@@ -13,11 +13,11 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 use std::time::Duration;
 
+use arc_swap::ArcSwap;
 use dashmap::DashMap;
 use expressgateway_core::error::{Error, Result};
 use expressgateway_core::lb::{HttpRequest, HttpResponse, LoadBalancer};
 use expressgateway_core::node::Node;
-use parking_lot::RwLock;
 
 /// Number of samples before EWMA kicks in.
 const COLD_THRESHOLD: u64 = 10;
@@ -88,7 +88,7 @@ impl NodeEwma {
 /// preferred so they can gather samples. Once all are warm, the node with the
 /// lowest EWMA is selected.
 pub struct EwmaBalancer {
-    nodes: RwLock<Vec<Arc<dyn Node>>>,
+    nodes: ArcSwap<Vec<Arc<dyn Node>>>,
     ewma_state: DashMap<String, Arc<NodeEwma>>,
     /// EWMA smoothing factor (0.0 - 1.0).
     alpha: f64,
@@ -105,7 +105,7 @@ impl EwmaBalancer {
     /// Create a new EWMA balancer with a custom alpha parameter.
     pub fn with_alpha(alpha: f64) -> Self {
         Self {
-            nodes: RwLock::new(Vec::new()),
+            nodes: ArcSwap::new(Arc::new(Vec::new())),
             ewma_state: DashMap::new(),
             alpha,
             rr_index: AtomicUsize::new(0),
@@ -141,7 +141,7 @@ impl Default for EwmaBalancer {
 
 impl LoadBalancer<HttpRequest, HttpResponse> for EwmaBalancer {
     fn select(&self, _request: &HttpRequest) -> Result<HttpResponse> {
-        let nodes = self.nodes.read();
+        let nodes = self.nodes.load();
         let online: Vec<_> = nodes.iter().filter(|n| n.is_online()).cloned().collect();
         if online.is_empty() {
             return Err(Error::NoHealthyBackend);
@@ -185,33 +185,33 @@ impl LoadBalancer<HttpRequest, HttpResponse> for EwmaBalancer {
     fn add_node(&self, node: Arc<dyn Node>) {
         let id = node.id().to_string();
         self.ewma_state.insert(id, Arc::new(NodeEwma::new()));
-        self.nodes.write().push(node);
+        let old = self.nodes.load();
+        let mut new_nodes = (**old).clone();
+        new_nodes.push(node);
+        self.nodes.store(Arc::new(new_nodes));
     }
 
     fn remove_node(&self, node_id: &str) {
         self.ewma_state.remove(node_id);
-        self.nodes.write().retain(|n| n.id() != node_id);
+        let old = self.nodes.load();
+        let mut new_nodes = (**old).clone();
+        new_nodes.retain(|n| n.id() != node_id);
+        self.nodes.store(Arc::new(new_nodes));
     }
 
     fn online_nodes(&self) -> Vec<Arc<dyn Node>> {
-        self.nodes
-            .read()
-            .iter()
-            .filter(|n| n.is_online())
-            .cloned()
-            .collect()
+        let nodes = self.nodes.load();
+        nodes.iter().filter(|n| n.is_online()).cloned().collect()
     }
 
     fn all_nodes(&self) -> Vec<Arc<dyn Node>> {
-        self.nodes.read().clone()
+        let nodes = self.nodes.load();
+        (**nodes).clone()
     }
 
     fn get_node(&self, node_id: &str) -> Option<Arc<dyn Node>> {
-        self.nodes
-            .read()
-            .iter()
-            .find(|n| n.id() == node_id)
-            .cloned()
+        let nodes = self.nodes.load();
+        nodes.iter().find(|n| n.id() == node_id).cloned()
     }
 }
 

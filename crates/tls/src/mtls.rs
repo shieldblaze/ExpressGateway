@@ -7,11 +7,13 @@
 
 use std::sync::Arc;
 
-use anyhow::{Context, Result};
 use expressgateway_core::types::MutualTlsMode;
+use rustls::pki_types::CertificateDer;
 use rustls::server::WebPkiClientVerifier;
 use rustls::server::danger::ClientCertVerifier;
-use rustls::{RootCertStore, pki_types::CertificateDer};
+use rustls::RootCertStore;
+
+use crate::error::{Result, TlsError};
 
 /// Build a [`ClientCertVerifier`] for the given mTLS mode.
 ///
@@ -24,39 +26,38 @@ pub fn build_client_cert_verifier(
     trust_ca_der: Option<&[u8]>,
 ) -> Result<Arc<dyn ClientCertVerifier>> {
     match mode {
-        MutualTlsMode::NotRequired => {
-            // Return the NoClientAuth verifier (which is what
-            // `with_no_client_auth` uses internally).
-            Ok(Arc::new(rustls::server::NoClientAuth))
-        }
+        MutualTlsMode::NotRequired => Ok(Arc::new(rustls::server::NoClientAuth)),
         MutualTlsMode::Optional => {
-            let roots = build_root_store(trust_ca_der)?;
+            let roots = build_root_store(trust_ca_der, "Optional")?;
             let verifier = WebPkiClientVerifier::builder(Arc::new(roots))
                 .allow_unauthenticated()
                 .build()
-                .map_err(|e| anyhow::anyhow!("failed to build optional client verifier: {e}"))?;
+                .map_err(|e| TlsError::ClientVerifier {
+                    reason: e.to_string(),
+                })?;
             Ok(verifier)
         }
         MutualTlsMode::Required => {
-            let roots = build_root_store(trust_ca_der)?;
+            let roots = build_root_store(trust_ca_der, "Required")?;
             let verifier = WebPkiClientVerifier::builder(Arc::new(roots))
                 .build()
-                .map_err(|e| anyhow::anyhow!("failed to build required client verifier: {e}"))?;
+                .map_err(|e| TlsError::ClientVerifier {
+                    reason: e.to_string(),
+                })?;
             Ok(verifier)
         }
     }
 }
 
 /// Build a [`RootCertStore`] from a DER-encoded CA certificate.
-fn build_root_store(trust_ca_der: Option<&[u8]>) -> Result<RootCertStore> {
-    let ca_bytes =
-        trust_ca_der.context("trust CA certificate is required for mTLS Optional/Required mode")?;
+fn build_root_store(trust_ca_der: Option<&[u8]>, mode: &'static str) -> Result<RootCertStore> {
+    let ca_bytes = trust_ca_der.ok_or(TlsError::MissingTrustCa { mode })?;
 
     let mut roots = RootCertStore::empty();
     let cert = CertificateDer::from(ca_bytes.to_vec());
-    roots
-        .add(cert)
-        .map_err(|e| anyhow::anyhow!("failed to add trust CA to root store: {e}"))?;
+    roots.add(cert).map_err(|e| TlsError::TrustCaAdd {
+        reason: e.to_string(),
+    })?;
 
     Ok(roots)
 }
@@ -75,11 +76,19 @@ mod tests {
     fn optional_without_ca_fails() {
         let verifier = build_client_cert_verifier(MutualTlsMode::Optional, None);
         assert!(verifier.is_err(), "Optional without CA should fail");
+        assert!(matches!(
+            verifier.unwrap_err(),
+            TlsError::MissingTrustCa { mode: "Optional" }
+        ));
     }
 
     #[test]
     fn required_without_ca_fails() {
         let verifier = build_client_cert_verifier(MutualTlsMode::Required, None);
         assert!(verifier.is_err(), "Required without CA should fail");
+        assert!(matches!(
+            verifier.unwrap_err(),
+            TlsError::MissingTrustCa { mode: "Required" }
+        ));
     }
 }

@@ -148,6 +148,14 @@ pub fn validate(config: &Config) -> Result<()> {
                 listener.protocol
             ));
         }
+
+        if let Some(ref backend) = listener.io_backend
+            && !["auto", "io_uring", "epoll"].contains(&backend.as_str())
+        {
+            errors.push(format!(
+                "{label}.io_backend must be auto/io_uring/epoll, got \"{backend}\""
+            ));
+        }
     }
 
     // -- Clusters -------------------------------------------------------------

@@ -36,6 +36,7 @@ impl DrainHandle {
     }
 
     /// Whether draining has been initiated.
+    #[inline]
     pub fn is_draining(&self) -> bool {
         self.draining.load(Ordering::Acquire)
     }
@@ -64,7 +65,7 @@ impl DrainHandle {
     pub async fn wait_for_drain(&self, tracker: &ConnectionTracker) -> bool {
         let notifier = self.all_drained.clone();
 
-        // Spawn a background task that polls the connection count.
+        // Poll the connection count at a reasonable interval.
         let poll_interval = Duration::from_millis(100);
         let check = async {
             loop {
@@ -100,6 +101,7 @@ impl DrainHandle {
     }
 
     /// Get the drain timeout.
+    #[inline]
     pub fn timeout(&self) -> Duration {
         self.timeout
     }

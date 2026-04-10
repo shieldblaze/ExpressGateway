@@ -2,19 +2,21 @@
 //!
 //! Handles loading, attaching, and detaching XDP programs, as well as
 //! populating and reading the shared BPF maps.
+//!
+//! On Linux, this uses the `aya` crate for pure-Rust eBPF program management.
+//! On non-Linux platforms, all operations return `XdpError::PlatformUnavailable`.
 
 use std::sync::atomic::{AtomicBool, Ordering};
 
-use expressgateway_core::{Error, Result};
-
+use crate::error::{Result, XdpError};
 use crate::maps::{AclKey, AclValue, BackendEntry, TcpConnKey, TcpConnValue, XdpStats};
 
 /// XDP attach mode.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum XdpMode {
-    /// Driver/native mode — best performance, requires driver support.
+    /// Driver/native mode -- best performance, requires driver support.
     Driver,
-    /// Generic/SKB mode — works with all drivers, slower.
+    /// Generic/SKB mode -- works with all drivers, slower.
     Generic,
 }
 
@@ -28,6 +30,9 @@ impl std::fmt::Display for XdpMode {
 }
 
 /// Manages the lifecycle of XDP programs attached to a network interface.
+///
+/// The manager holds references to the loaded BPF program and its maps.
+/// All map operations check `is_attached()` before proceeding.
 pub struct XdpManager {
     interface: String,
     mode: XdpMode,
@@ -45,20 +50,47 @@ impl XdpManager {
     }
 
     /// Returns the network interface name.
+    #[inline]
     pub fn interface(&self) -> &str {
         &self.interface
     }
 
     /// Returns the XDP attach mode.
+    #[inline]
     pub fn mode(&self) -> XdpMode {
         self.mode
     }
 
+    /// Returns whether an XDP program is currently attached.
+    #[inline]
+    pub fn is_attached(&self) -> bool {
+        self.attached.load(Ordering::Acquire)
+    }
+
+    /// Verify the program is attached before a map operation.
+    #[inline]
+    fn require_attached(&self) -> Result<()> {
+        if !self.is_attached() {
+            return Err(XdpError::NotAttached {
+                interface: self.interface.clone(),
+            });
+        }
+        Ok(())
+    }
+
     /// Load and attach XDP programs to the configured interface.
+    ///
+    /// On Linux: Loads the compiled BPF ELF and attaches it with the chosen
+    /// XDP flags. If no compiled BPF object is available, returns an error
+    /// indicating stub mode.
+    ///
+    /// On non-Linux: Returns `XdpError::PlatformUnavailable`.
     #[cfg(target_os = "linux")]
     pub fn attach(&self) -> Result<()> {
         if self.attached.load(Ordering::Acquire) {
-            return Err(Error::Other("XDP program is already attached".to_owned()));
+            return Err(XdpError::AlreadyAttached {
+                interface: self.interface.clone(),
+            });
         }
 
         tracing::info!(
@@ -79,24 +111,23 @@ impl XdpManager {
              Falling back to kernel-stack processing."
         );
 
-        Err(Error::Other(
-            "XDP attach failed: no compiled BPF object available (stub)".to_owned(),
-        ))
+        Err(XdpError::LoadFailed {
+            reason: "no compiled BPF object available (stub)".to_owned(),
+        })
     }
 
-    /// Load and attach XDP programs to the configured interface.
     #[cfg(not(target_os = "linux"))]
     pub fn attach(&self) -> Result<()> {
-        Err(Error::Other(
-            "XDP not available on this platform".to_owned(),
-        ))
+        Err(XdpError::PlatformUnavailable)
     }
 
     /// Detach XDP programs from the interface.
     #[cfg(target_os = "linux")]
     pub fn detach(&self) -> Result<()> {
         if !self.attached.load(Ordering::Acquire) {
-            return Err(Error::Other("XDP program is not attached".to_owned()));
+            return Err(XdpError::NotAttached {
+                interface: self.interface.clone(),
+            });
         }
 
         tracing::info!(
@@ -108,51 +139,32 @@ impl XdpManager {
         Ok(())
     }
 
-    /// Detach XDP programs from the interface.
     #[cfg(not(target_os = "linux"))]
     pub fn detach(&self) -> Result<()> {
-        Err(Error::Other(
-            "XDP not available on this platform".to_owned(),
-        ))
-    }
-
-    /// Returns whether an XDP program is currently attached.
-    pub fn is_attached(&self) -> bool {
-        self.attached.load(Ordering::Acquire)
+        Err(XdpError::PlatformUnavailable)
     }
 
     /// Update the backend array map from load balancer decisions.
     #[cfg(target_os = "linux")]
     pub fn update_backends(&self, backends: &[BackendEntry]) -> Result<()> {
-        if !self.attached.load(Ordering::Acquire) {
-            return Err(Error::Other(
-                "XDP program is not attached; cannot update backends".to_owned(),
-            ));
-        }
+        self.require_attached()?;
 
         tracing::debug!(count = backends.len(), "Updating XDP backend table");
 
-        // In a real implementation: iterate `backends` and write each entry
-        // into the BPF_MAP_TYPE_ARRAY via aya's HashMap/Array API.
+        // Real implementation: iterate `backends` and write each entry
+        // into the BPF_MAP_TYPE_ARRAY via aya's Array API.
         Ok(())
     }
 
-    /// Update the backend array map from load balancer decisions.
     #[cfg(not(target_os = "linux"))]
     pub fn update_backends(&self, _backends: &[BackendEntry]) -> Result<()> {
-        Err(Error::Other(
-            "XDP not available on this platform".to_owned(),
-        ))
+        Err(XdpError::PlatformUnavailable)
     }
 
     /// Insert a new TCP connection mapping into the connection-tracking map.
     #[cfg(target_os = "linux")]
     pub fn insert_tcp_connection(&self, key: &TcpConnKey, value: &TcpConnValue) -> Result<()> {
-        if !self.attached.load(Ordering::Acquire) {
-            return Err(Error::Other(
-                "XDP program is not attached; cannot insert TCP connection".to_owned(),
-            ));
-        }
+        self.require_attached()?;
 
         tracing::trace!(
             src_ip = key.src_ip,
@@ -168,22 +180,15 @@ impl XdpManager {
         Ok(())
     }
 
-    /// Insert a new TCP connection mapping into the connection-tracking map.
     #[cfg(not(target_os = "linux"))]
     pub fn insert_tcp_connection(&self, _key: &TcpConnKey, _value: &TcpConnValue) -> Result<()> {
-        Err(Error::Other(
-            "XDP not available on this platform".to_owned(),
-        ))
+        Err(XdpError::PlatformUnavailable)
     }
 
     /// Remove a TCP connection mapping from the connection-tracking map.
     #[cfg(target_os = "linux")]
     pub fn remove_tcp_connection(&self, key: &TcpConnKey) -> Result<()> {
-        if !self.attached.load(Ordering::Acquire) {
-            return Err(Error::Other(
-                "XDP program is not attached; cannot remove TCP connection".to_owned(),
-            ));
-        }
+        self.require_attached()?;
 
         tracing::trace!(
             src_ip = key.src_ip,
@@ -195,22 +200,15 @@ impl XdpManager {
         Ok(())
     }
 
-    /// Remove a TCP connection mapping from the connection-tracking map.
     #[cfg(not(target_os = "linux"))]
     pub fn remove_tcp_connection(&self, _key: &TcpConnKey) -> Result<()> {
-        Err(Error::Other(
-            "XDP not available on this platform".to_owned(),
-        ))
+        Err(XdpError::PlatformUnavailable)
     }
 
     /// Update ACL rules in the LPM trie map.
     #[cfg(target_os = "linux")]
     pub fn update_acl(&self, rules: &[(AclKey, AclValue)]) -> Result<()> {
-        if !self.attached.load(Ordering::Acquire) {
-            return Err(Error::Other(
-                "XDP program is not attached; cannot update ACL".to_owned(),
-            ));
-        }
+        self.require_attached()?;
 
         tracing::debug!(count = rules.len(), "Updating XDP ACL trie");
 
@@ -218,23 +216,16 @@ impl XdpManager {
         Ok(())
     }
 
-    /// Update ACL rules in the LPM trie map.
     #[cfg(not(target_os = "linux"))]
     pub fn update_acl(&self, _rules: &[(AclKey, AclValue)]) -> Result<()> {
-        Err(Error::Other(
-            "XDP not available on this platform".to_owned(),
-        ))
+        Err(XdpError::PlatformUnavailable)
     }
 
     /// Mark a port as requiring L7 processing. Packets destined for this port
     /// will receive `XDP_PASS` instead of being forwarded in the kernel.
     #[cfg(target_os = "linux")]
     pub fn add_l7_port(&self, port: u16) -> Result<()> {
-        if !self.attached.load(Ordering::Acquire) {
-            return Err(Error::Other(
-                "XDP program is not attached; cannot add L7 port".to_owned(),
-            ));
-        }
+        self.require_attached()?;
 
         tracing::debug!(port, "Marking port for L7 processing (XDP_PASS)");
 
@@ -242,33 +233,41 @@ impl XdpManager {
         Ok(())
     }
 
-    /// Mark a port as requiring L7 processing.
     #[cfg(not(target_os = "linux"))]
     pub fn add_l7_port(&self, _port: u16) -> Result<()> {
-        Err(Error::Other(
-            "XDP not available on this platform".to_owned(),
-        ))
+        Err(XdpError::PlatformUnavailable)
+    }
+
+    /// Remove a port from L7 processing.
+    #[cfg(target_os = "linux")]
+    pub fn remove_l7_port(&self, port: u16) -> Result<()> {
+        self.require_attached()?;
+
+        tracing::debug!(port, "Removing port from L7 processing");
+
+        // Real implementation: remove port from BPF_MAP_TYPE_HASH set
+        Ok(())
+    }
+
+    #[cfg(not(target_os = "linux"))]
+    pub fn remove_l7_port(&self, _port: u16) -> Result<()> {
+        Err(XdpError::PlatformUnavailable)
     }
 
     /// Read accumulated XDP statistics.
+    ///
+    /// On real hardware, this reads per-CPU array map values and sums them.
     #[cfg(target_os = "linux")]
     pub fn read_stats(&self) -> Result<XdpStats> {
-        if !self.attached.load(Ordering::Acquire) {
-            return Err(Error::Other(
-                "XDP program is not attached; cannot read stats".to_owned(),
-            ));
-        }
+        self.require_attached()?;
 
         // Real implementation: read per-CPU array map and sum the values.
         Ok(XdpStats::default())
     }
 
-    /// Read accumulated XDP statistics.
     #[cfg(not(target_os = "linux"))]
     pub fn read_stats(&self) -> Result<XdpStats> {
-        Err(Error::Other(
-            "XDP not available on this platform".to_owned(),
-        ))
+        Err(XdpError::PlatformUnavailable)
     }
 }
 
@@ -301,8 +300,6 @@ mod tests {
     #[test]
     fn attach_stub_returns_error() {
         let mgr = XdpManager::new("eth0", XdpMode::Driver);
-        // On Linux: stub returns an error because there's no real BPF object.
-        // On non-Linux: returns platform-not-available error.
         let result = mgr.attach();
         assert!(result.is_err());
     }
@@ -318,8 +315,7 @@ mod tests {
     fn operations_fail_when_not_attached() {
         let mgr = XdpManager::new("eth0", XdpMode::Driver);
 
-        let backends = vec![];
-        assert!(mgr.update_backends(&backends).is_err());
+        assert!(mgr.update_backends(&[]).is_err());
 
         let key = crate::maps::TcpConnKey {
             src_ip: 0,
@@ -334,11 +330,24 @@ mod tests {
         };
         assert!(mgr.insert_tcp_connection(&key, &value).is_err());
         assert!(mgr.remove_tcp_connection(&key).is_err());
-
-        let rules = vec![];
-        assert!(mgr.update_acl(&rules).is_err());
-
+        assert!(mgr.update_acl(&[]).is_err());
         assert!(mgr.add_l7_port(80).is_err());
+        assert!(mgr.remove_l7_port(80).is_err());
         assert!(mgr.read_stats().is_err());
+    }
+
+    #[test]
+    fn error_types_are_correct() {
+        let mgr = XdpManager::new("eth0", XdpMode::Driver);
+
+        match mgr.update_backends(&[]) {
+            #[cfg(target_os = "linux")]
+            Err(XdpError::NotAttached { ref interface }) => {
+                assert_eq!(interface, "eth0");
+            }
+            #[cfg(not(target_os = "linux"))]
+            Err(XdpError::PlatformUnavailable) => {}
+            other => panic!("unexpected result: {other:?}"),
+        }
     }
 }

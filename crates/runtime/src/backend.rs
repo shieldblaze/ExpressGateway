@@ -1,14 +1,15 @@
 //! Runtime backend detection and selection.
 //!
-//! Determines whether to use io_uring (Linux 5.1+) or fall back to
-//! tokio's default epoll-based reactor.
+//! Determines whether to use io_uring (Linux 5.11+) or fall back to
+//! tokio's default epoll-based reactor.  Detection uses `libc::uname(2)`
+//! directly to avoid spawning a child process on the hot startup path.
 
 use std::fmt;
 
 /// The async I/O backend powering the runtime.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum RuntimeBackend {
-    /// Linux io_uring (requires kernel >= 5.1).
+    /// Linux io_uring (requires kernel >= 5.11 for SQPOLL + multi-shot).
     IoUring,
     /// Classic epoll via tokio (works on all supported platforms).
     Epoll,
@@ -17,13 +18,24 @@ pub enum RuntimeBackend {
 impl RuntimeBackend {
     /// Auto-detect the best available backend for the current platform.
     ///
-    /// On Linux with kernel >= 5.1 this returns [`RuntimeBackend::IoUring`];
+    /// On Linux with kernel >= 5.11 this returns [`RuntimeBackend::IoUring`];
     /// otherwise it returns [`RuntimeBackend::Epoll`].
     pub fn detect() -> Self {
         if Self::io_uring_available() {
             RuntimeBackend::IoUring
         } else {
             RuntimeBackend::Epoll
+        }
+    }
+
+    /// Resolve a backend from the config string (`"auto"`, `"io_uring"`,
+    /// `"epoll"`).  Returns `None` for unrecognised values.
+    pub fn from_config(value: &str) -> Option<Self> {
+        match value {
+            "auto" => Some(Self::detect()),
+            "io_uring" => Some(Self::IoUring),
+            "epoll" => Some(Self::Epoll),
+            _ => None,
         }
     }
 
@@ -39,18 +51,28 @@ impl RuntimeBackend {
         }
     }
 
-    /// Parse the kernel version from `uname -r` and check >= 5.1.
+    /// Parse the kernel version from `uname(2)` and check >= 5.11.
+    ///
+    /// We require 5.11 (not 5.1) because that is the minimum for SQPOLL
+    /// mode and multi-shot accept/recv which the io_uring backend relies on.
     #[cfg(target_os = "linux")]
     fn check_kernel_version() -> bool {
-        use std::process::Command;
+        // SAFETY: `libc::uname` writes into a `libc::utsname` struct.
+        // The struct is zero-initialised and the pointer is valid for the
+        // duration of the call.  `uname(2)` does not retain the pointer.
+        let mut info: libc::utsname = unsafe { std::mem::zeroed() };
+        let ret = unsafe { libc::uname(&mut info) };
+        if ret != 0 {
+            return false;
+        }
 
-        let output = match Command::new("uname").arg("-r").output() {
-            Ok(o) => o,
-            Err(_) => return false,
+        // `release` is a [c_char; 65] like "6.17.0-1010-aws".
+        let release = unsafe {
+            std::ffi::CStr::from_ptr(info.release.as_ptr())
         };
 
-        let version_str = match std::str::from_utf8(&output.stdout) {
-            Ok(s) => s.trim().to_string(),
+        let version_str = match release.to_str() {
+            Ok(s) => s,
             Err(_) => return false,
         };
 
@@ -69,7 +91,7 @@ impl RuntimeBackend {
             Err(_) => return false,
         };
 
-        major > 5 || (major == 5 && minor >= 1)
+        major > 5 || (major == 5 && minor >= 11)
     }
 }
 
@@ -89,7 +111,6 @@ mod tests {
     #[test]
     fn detect_returns_valid_backend() {
         let backend = RuntimeBackend::detect();
-        // On any platform we must get one of the two variants.
         assert!(backend == RuntimeBackend::IoUring || backend == RuntimeBackend::Epoll);
     }
 
@@ -106,13 +127,33 @@ mod tests {
         assert_eq!(a, b);
     }
 
+    #[test]
+    fn from_config_auto() {
+        let b = RuntimeBackend::from_config("auto").unwrap();
+        assert!(b == RuntimeBackend::IoUring || b == RuntimeBackend::Epoll);
+    }
+
+    #[test]
+    fn from_config_explicit() {
+        assert_eq!(
+            RuntimeBackend::from_config("epoll"),
+            Some(RuntimeBackend::Epoll)
+        );
+        assert_eq!(
+            RuntimeBackend::from_config("io_uring"),
+            Some(RuntimeBackend::IoUring)
+        );
+    }
+
+    #[test]
+    fn from_config_invalid() {
+        assert_eq!(RuntimeBackend::from_config("magic"), None);
+    }
+
     #[cfg(target_os = "linux")]
     #[test]
-    fn linux_has_io_uring_on_modern_kernel() {
-        // On CI/modern Linux, kernel is typically >= 5.1 so io_uring is available.
-        // This test documents the expectation; it will pass on any kernel >= 5.1.
+    fn linux_detection_does_not_panic() {
         let backend = RuntimeBackend::detect();
-        // We just verify it doesn't panic. The actual value depends on the kernel.
         let _ = backend;
     }
 }

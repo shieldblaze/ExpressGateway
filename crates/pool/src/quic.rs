@@ -1,4 +1,9 @@
 //! QUIC connection pool with connection ID routing and stream multiplexing.
+//!
+//! Similar to HTTP/2 pooling but adds QUIC-specific features:
+//! - Connection ID (DCID/SCID) routing for packet-level demuxing
+//! - Stream multiplexing with CAS-based acquire/release
+//! - Age-based eviction respecting active streams
 
 use std::sync::atomic::{AtomicU32, Ordering};
 use std::time::{Duration, Instant};
@@ -72,11 +77,13 @@ impl QuicPooledConnection {
     }
 
     /// Whether this connection has capacity for another stream.
+    #[inline]
     pub fn has_capacity(&self) -> bool {
         self.active_streams.load(Ordering::Acquire) < self.max_concurrent_streams
     }
 
     /// Try to acquire a stream on this connection via CAS.
+    #[inline]
     pub fn acquire_stream(&self) -> bool {
         loop {
             let current = self.active_streams.load(Ordering::Acquire);
@@ -96,17 +103,20 @@ impl QuicPooledConnection {
     }
 
     /// Release a stream on this connection.
+    #[inline]
     pub fn release_stream(&self) {
         let prev = self.active_streams.fetch_sub(1, Ordering::AcqRel);
         debug_assert!(prev > 0, "release_stream called with 0 active streams");
     }
 
     /// Number of active streams.
+    #[inline]
     pub fn active_streams(&self) -> u32 {
         self.active_streams.load(Ordering::Relaxed)
     }
 
     /// Age of this connection since creation.
+    #[inline]
     pub fn age(&self) -> Duration {
         self.created_at.elapsed()
     }
@@ -172,8 +182,17 @@ impl QuicPool {
     }
 
     /// Number of connections for a given node.
+    #[inline]
     pub fn connection_count(&self, node_id: &str) -> usize {
         self.pools.get(node_id).map(|p| p.len()).unwrap_or(0)
+    }
+
+    /// Drain all connections for a specific node (backend removal).
+    pub fn drain_node(&self, node_id: &str) -> usize {
+        match self.pools.remove(node_id) {
+            Some((_, pool)) => pool.len(),
+            None => 0,
+        }
     }
 
     /// Remove connections that have exceeded the max age and have no active streams.
@@ -285,11 +304,22 @@ mod tests {
         pool.add_connection("node-a", QuicPooledConnection::new(1, vec![], vec![], 100));
         pool.add_connection("node-a", QuicPooledConnection::new(2, vec![], vec![], 100));
 
-        // Acquire a stream on connection 1.
         pool.acquire_stream("node-a");
 
         let evicted = pool.evict_aged();
-        assert_eq!(evicted, 1); // only connection 2 evicted
+        assert_eq!(evicted, 1);
         assert_eq!(pool.connection_count("node-a"), 1);
+    }
+
+    #[test]
+    fn drain_node_removes_all() {
+        let pool = QuicPool::new(QuicPoolConfig::default());
+
+        pool.add_connection("node-a", QuicPooledConnection::new(1, vec![], vec![], 100));
+        pool.add_connection("node-a", QuicPooledConnection::new(2, vec![], vec![], 100));
+
+        let drained = pool.drain_node("node-a");
+        assert_eq!(drained, 2);
+        assert_eq!(pool.connection_count("node-a"), 0);
     }
 }

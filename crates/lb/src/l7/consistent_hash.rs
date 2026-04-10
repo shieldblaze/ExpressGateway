@@ -3,15 +3,19 @@
 //! Maps HTTP requests onto a hash ring using a configurable key source:
 //! either a specific HTTP header value or the client IP address. Falls back
 //! to the client IP when the requested header is absent.
+//!
+//! Uses `ArcSwap` for lock-free reads of the ring and node list on the
+//! hot path. Mutations are serialised with a `Mutex`.
 
 use std::collections::BTreeMap;
 use std::io::Cursor;
 use std::sync::Arc;
 
+use arc_swap::ArcSwap;
 use expressgateway_core::error::{Error, Result};
 use expressgateway_core::lb::{HttpRequest, HttpResponse, LoadBalancer};
 use expressgateway_core::node::Node;
-use parking_lot::RwLock;
+use parking_lot::Mutex;
 
 /// Number of virtual nodes per real backend node on the hash ring.
 const VIRTUAL_NODES: usize = 150;
@@ -25,13 +29,19 @@ pub enum HashKeySource {
     ClientIp,
 }
 
+/// Snapshot of ring + node list, swapped atomically.
+struct RingSnapshot {
+    ring: BTreeMap<u128, String>,
+    nodes: Vec<Arc<dyn Node>>,
+}
+
 /// Consistent-hash HTTP load balancer.
 ///
 /// Uses a Murmur3-128 hash ring with 150 virtual nodes per backend. The hash
 /// key is derived from either an HTTP header or the client IP.
 pub struct HttpConsistentHashBalancer {
-    ring: RwLock<BTreeMap<u128, String>>,
-    nodes: RwLock<Vec<Arc<dyn Node>>>,
+    snapshot: ArcSwap<RingSnapshot>,
+    mutation_lock: Mutex<()>,
     key_source: HashKeySource,
 }
 
@@ -41,8 +51,11 @@ impl HttpConsistentHashBalancer {
     /// The `key_source` determines what request data is hashed for ring lookup.
     pub fn new(key_source: HashKeySource) -> Self {
         Self {
-            ring: RwLock::new(BTreeMap::new()),
-            nodes: RwLock::new(Vec::new()),
+            snapshot: ArcSwap::new(Arc::new(RingSnapshot {
+                ring: BTreeMap::new(),
+                nodes: Vec::new(),
+            })),
+            mutation_lock: Mutex::new(()),
             key_source,
         }
     }
@@ -66,10 +79,9 @@ fn murmur3_hash(data: &[u8]) -> u128 {
 
 impl LoadBalancer<HttpRequest, HttpResponse> for HttpConsistentHashBalancer {
     fn select(&self, request: &HttpRequest) -> Result<HttpResponse> {
-        let ring = self.ring.read();
-        let nodes = self.nodes.read();
+        let snap = self.snapshot.load();
 
-        if ring.is_empty() || nodes.is_empty() {
+        if snap.ring.is_empty() || snap.nodes.is_empty() {
             return Err(Error::NoHealthyBackend);
         }
 
@@ -91,10 +103,10 @@ impl LoadBalancer<HttpRequest, HttpResponse> for HttpConsistentHashBalancer {
         let hash = murmur3_hash(key.as_bytes());
 
         // Walk the ring clockwise.
-        let candidates = ring.range(hash..).chain(ring.range(..hash));
+        let candidates = snap.ring.range(hash..).chain(snap.ring.range(..hash));
 
         for (_ring_hash, node_id) in candidates {
-            if let Some(node) = nodes.iter().find(|n| n.id() == node_id)
+            if let Some(node) = snap.nodes.iter().find(|n| n.id() == node_id)
                 && node.is_online()
             {
                 return Ok(HttpResponse {
@@ -108,33 +120,41 @@ impl LoadBalancer<HttpRequest, HttpResponse> for HttpConsistentHashBalancer {
     }
 
     fn add_node(&self, node: Arc<dyn Node>) {
+        let _guard = self.mutation_lock.lock();
+        let old = self.snapshot.load();
+        let mut ring = old.ring.clone();
+        let mut nodes = old.nodes.clone();
+
         let node_id = node.id().to_string();
-        {
-            let mut ring = self.ring.write();
-            for i in 0..VIRTUAL_NODES {
-                let vnode_key = format!("{}-vnode-{}", node_id, i);
-                let hash = murmur3_hash(vnode_key.as_bytes());
-                ring.insert(hash, node_id.clone());
-            }
+        for i in 0..VIRTUAL_NODES {
+            let vnode_key = format!("{}-vnode-{}", node_id, i);
+            let hash = murmur3_hash(vnode_key.as_bytes());
+            ring.insert(hash, node_id.clone());
         }
-        self.nodes.write().push(node);
+        nodes.push(node);
+
+        self.snapshot.store(Arc::new(RingSnapshot { ring, nodes }));
     }
 
     fn remove_node(&self, node_id: &str) {
-        {
-            let mut ring = self.ring.write();
-            for i in 0..VIRTUAL_NODES {
-                let vnode_key = format!("{}-vnode-{}", node_id, i);
-                let hash = murmur3_hash(vnode_key.as_bytes());
-                ring.remove(&hash);
-            }
+        let _guard = self.mutation_lock.lock();
+        let old = self.snapshot.load();
+        let mut ring = old.ring.clone();
+        let mut nodes = old.nodes.clone();
+
+        for i in 0..VIRTUAL_NODES {
+            let vnode_key = format!("{}-vnode-{}", node_id, i);
+            let hash = murmur3_hash(vnode_key.as_bytes());
+            ring.remove(&hash);
         }
-        self.nodes.write().retain(|n| n.id() != node_id);
+        nodes.retain(|n| n.id() != node_id);
+
+        self.snapshot.store(Arc::new(RingSnapshot { ring, nodes }));
     }
 
     fn online_nodes(&self) -> Vec<Arc<dyn Node>> {
-        self.nodes
-            .read()
+        let snap = self.snapshot.load();
+        snap.nodes
             .iter()
             .filter(|n| n.is_online())
             .cloned()
@@ -142,15 +162,13 @@ impl LoadBalancer<HttpRequest, HttpResponse> for HttpConsistentHashBalancer {
     }
 
     fn all_nodes(&self) -> Vec<Arc<dyn Node>> {
-        self.nodes.read().clone()
+        let snap = self.snapshot.load();
+        snap.nodes.clone()
     }
 
     fn get_node(&self, node_id: &str) -> Option<Arc<dyn Node>> {
-        self.nodes
-            .read()
-            .iter()
-            .find(|n| n.id() == node_id)
-            .cloned()
+        let snap = self.snapshot.load();
+        snap.nodes.iter().find(|n| n.id() == node_id).cloned()
     }
 }
 

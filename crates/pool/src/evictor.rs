@@ -2,9 +2,14 @@
 //!
 //! A single background tokio task sweeps all registered pools on a fixed
 //! interval, preventing thread explosion (one task, not per-pool).
+//!
+//! Uses `tokio_util::sync::CancellationToken` semantics via a channel for
+//! graceful shutdown.
 
 use std::sync::Arc;
 use std::time::Duration;
+
+use tokio::sync::mpsc;
 
 /// Trait for pool types that support eviction of expired connections.
 pub trait Evictable: Send + Sync {
@@ -41,6 +46,7 @@ impl PoolEvictor {
     }
 
     /// Number of registered pools.
+    #[inline]
     pub fn pool_count(&self) -> usize {
         self.pools.len()
     }
@@ -76,6 +82,31 @@ impl PoolEvictor {
             }
         }
     }
+
+    /// Run the evictor with graceful shutdown support.
+    ///
+    /// Returns a shutdown sender. Drop it or send `()` to stop the evictor.
+    pub fn run_with_shutdown(self) -> (tokio::task::JoinHandle<()>, mpsc::Sender<()>) {
+        let (shutdown_tx, mut shutdown_rx) = mpsc::channel::<()>(1);
+        let handle = tokio::spawn(async move {
+            let mut interval = tokio::time::interval(self.interval);
+            loop {
+                tokio::select! {
+                    _ = interval.tick() => {
+                        let total = self.sweep();
+                        if total > 0 {
+                            tracing::info!(total, "evictor sweep completed");
+                        }
+                    }
+                    _ = shutdown_rx.recv() => {
+                        tracing::info!("evictor shutting down");
+                        break;
+                    }
+                }
+            }
+        });
+        (handle, shutdown_tx)
+    }
 }
 
 impl Default for PoolEvictor {
@@ -108,7 +139,7 @@ mod tests {
     impl Evictable for FakePool {
         fn evict_expired(&self) -> usize {
             self.evict_count.fetch_add(1, Ordering::Relaxed);
-            5 // pretend we evicted 5
+            5
         }
     }
 
@@ -124,11 +155,10 @@ mod tests {
         assert_eq!(evictor.pool_count(), 2);
 
         let total = evictor.sweep();
-        assert_eq!(total, 10); // 5 + 5
+        assert_eq!(total, 10);
         assert_eq!(pool1.evict_calls(), 1);
         assert_eq!(pool2.evict_calls(), 1);
 
-        // Sweep again.
         let total = evictor.sweep();
         assert_eq!(total, 10);
         assert_eq!(pool1.evict_calls(), 2);
@@ -159,17 +189,30 @@ mod tests {
         let pool = Arc::new(FakePool::new());
         evictor.register(pool.clone());
 
-        // Run the evictor for a short duration.
         let handle = tokio::spawn(evictor.run());
         tokio::time::sleep(Duration::from_millis(160)).await;
         handle.abort();
 
-        // Should have swept at least twice (50ms interval over 160ms).
         assert!(
             pool.evict_calls() >= 2,
             "expected >= 2 sweeps, got {}",
             pool.evict_calls()
         );
+    }
+
+    #[tokio::test]
+    async fn run_with_shutdown_stops_cleanly() {
+        let mut evictor = PoolEvictor::with_interval(Duration::from_millis(50));
+        let pool = Arc::new(FakePool::new());
+        evictor.register(pool.clone());
+
+        let (handle, shutdown_tx) = evictor.run_with_shutdown();
+        tokio::time::sleep(Duration::from_millis(120)).await;
+
+        drop(shutdown_tx);
+        let result = tokio::time::timeout(Duration::from_secs(1), handle).await;
+        assert!(result.is_ok(), "evictor should have stopped");
+        assert!(pool.evict_calls() >= 1);
     }
 
     #[test]

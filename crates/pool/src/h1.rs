@@ -1,4 +1,9 @@
 //! HTTP/1.1 connection pool with LIFO ordering for warm connection reuse.
+//!
+//! Uses `DashMap` for per-node sharding and `VecDeque` for the per-node pool.
+//! LIFO ordering keeps recently-used connections warm in CPU cache and is more
+//! likely to return connections that the OS has not yet marked for TCP keep-alive
+//! probes.
 
 use std::collections::VecDeque;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -50,6 +55,7 @@ pub struct PooledConnection {
 
 impl PooledConnection {
     /// Create a new pooled connection with the given id.
+    #[inline]
     pub fn new(id: u64) -> Self {
         let now = Instant::now();
         Self {
@@ -69,16 +75,19 @@ impl PooledConnection {
     }
 
     /// Age of the connection since creation.
+    #[inline]
     pub fn age(&self) -> Duration {
         self.created_at.elapsed()
     }
 
     /// Time since last use.
+    #[inline]
     pub fn idle_time(&self) -> Duration {
         self.last_used.elapsed()
     }
 
     /// Touch the connection to update last-used time.
+    #[inline]
     fn touch(&mut self) {
         self.last_used = Instant::now();
     }
@@ -91,9 +100,10 @@ struct NodePool {
 }
 
 impl NodePool {
+    #[inline]
     fn new(max_size: usize) -> Self {
         Self {
-            connections: VecDeque::with_capacity(max_size),
+            connections: VecDeque::with_capacity(max_size.min(64)),
             max_size,
         }
     }
@@ -139,7 +149,6 @@ impl H1Pool {
         };
         // LIFO: pop from back (most recently returned)
         while let Some(mut conn) = pool.connections.pop_back() {
-            // Skip expired connections.
             if conn.idle_time() > self.config.idle_timeout || conn.age() > self.config.max_age {
                 self.evictions.fetch_add(1, Ordering::Relaxed);
                 continue;
@@ -163,7 +172,6 @@ impl H1Pool {
             .or_insert_with(|| NodePool::new(self.config.max_per_node));
 
         if pool.connections.len() >= pool.max_size {
-            // Pool is full; drop the connection.
             return;
         }
         // LIFO: push to back so it will be the next acquired.
@@ -188,7 +196,18 @@ impl H1Pool {
         total
     }
 
+    /// Drain all connections for a specific node (backend removal).
+    ///
+    /// Returns the number of connections drained.
+    pub fn drain_node(&self, node_id: &str) -> usize {
+        match self.pools.remove(node_id) {
+            Some((_, pool)) => pool.connections.len(),
+            None => 0,
+        }
+    }
+
     /// Get current pool statistics.
+    #[inline]
     pub fn stats(&self) -> PoolStats {
         PoolStats {
             hits: self.hits.load(Ordering::Relaxed),
@@ -198,6 +217,7 @@ impl H1Pool {
     }
 
     /// Number of pooled connections for a given node.
+    #[inline]
     pub fn pooled_count(&self, node_id: &str) -> usize {
         self.pools
             .get(node_id)
@@ -226,20 +246,16 @@ mod tests {
         let config = H1PoolConfig::default();
         let pool = H1Pool::new(config);
 
-        // Release connections 1, 2, 3 in order.
         pool.release("node-a", PooledConnection::new(1));
         pool.release("node-a", PooledConnection::new(2));
         pool.release("node-a", PooledConnection::new(3));
 
-        // LIFO: should get 3, 2, 1 back.
-        let c = pool.acquire("node-a").unwrap();
+        let c = pool.acquire("node-a").expect("should get conn 3");
         assert_eq!(c.id, 3);
-        let c = pool.acquire("node-a").unwrap();
+        let c = pool.acquire("node-a").expect("should get conn 2");
         assert_eq!(c.id, 2);
-        let c = pool.acquire("node-a").unwrap();
+        let c = pool.acquire("node-a").expect("should get conn 1");
         assert_eq!(c.id, 1);
-
-        // Pool is empty now.
         assert!(pool.acquire("node-a").is_none());
     }
 
@@ -247,14 +263,13 @@ mod tests {
     fn hit_miss_counters() {
         let pool = H1Pool::new(H1PoolConfig::default());
 
-        // Miss on empty pool.
         assert!(pool.acquire("node-a").is_none());
         let stats = pool.stats();
         assert_eq!(stats.misses, 1);
         assert_eq!(stats.hits, 0);
 
         pool.release("node-a", PooledConnection::new(1));
-        let _ = pool.acquire("node-a").unwrap();
+        let _ = pool.acquire("node-a").expect("should hit");
         let stats = pool.stats();
         assert_eq!(stats.hits, 1);
     }
@@ -269,7 +284,7 @@ mod tests {
 
         pool.release("node-a", PooledConnection::new(1));
         pool.release("node-a", PooledConnection::new(2));
-        pool.release("node-a", PooledConnection::new(3)); // dropped (over limit)
+        pool.release("node-a", PooledConnection::new(3));
 
         assert_eq!(pool.pooled_count("node-a"), 2);
     }
@@ -278,7 +293,7 @@ mod tests {
     fn idle_eviction() {
         let config = H1PoolConfig {
             max_per_node: 64,
-            idle_timeout: Duration::from_millis(0), // immediate expiry
+            idle_timeout: Duration::from_millis(0),
             max_age: Duration::from_secs(300),
         };
         let pool = H1Pool::new(config);
@@ -286,7 +301,6 @@ mod tests {
         pool.release("node-a", PooledConnection::new(1));
         pool.release("node-a", PooledConnection::new(2));
 
-        // By the time we evict, connections have non-zero idle time (> 0ms).
         let evicted = pool.evict_idle();
         assert_eq!(evicted, 2);
         assert_eq!(pool.pooled_count("node-a"), 0);
@@ -297,13 +311,12 @@ mod tests {
         let config = H1PoolConfig {
             max_per_node: 64,
             idle_timeout: Duration::from_secs(60),
-            max_age: Duration::from_millis(0), // immediate age-out
+            max_age: Duration::from_millis(0),
         };
         let pool = H1Pool::new(config);
 
         pool.release("node-a", PooledConnection::new(1));
 
-        // Connection is already older than 0ms.
         let evicted = pool.evict_idle();
         assert_eq!(evicted, 1);
     }
@@ -319,10 +332,8 @@ mod tests {
 
         pool.release("node-a", PooledConnection::new(1));
 
-        // Connection idle_time > 0ms threshold, so acquire should miss.
         assert!(pool.acquire("node-a").is_none());
         let stats = pool.stats();
-        // The expired connection counts as an eviction during acquire.
         assert!(stats.evictions >= 1);
     }
 
@@ -334,9 +345,9 @@ mod tests {
         pool.release("node-b", PooledConnection::new(2));
 
         assert!(pool.acquire("node-c").is_none());
-        let a = pool.acquire("node-a").unwrap();
+        let a = pool.acquire("node-a").expect("node-a should have conn");
         assert_eq!(a.id, 1);
-        let b = pool.acquire("node-b").unwrap();
+        let b = pool.acquire("node-b").expect("node-b should have conn");
         assert_eq!(b.id, 2);
     }
 
@@ -349,5 +360,25 @@ mod tests {
         pool.release("node-b", PooledConnection::new(3));
 
         assert_eq!(pool.total_pooled(), 3);
+    }
+
+    #[test]
+    fn drain_node_removes_all() {
+        let pool = H1Pool::new(H1PoolConfig::default());
+
+        pool.release("node-a", PooledConnection::new(1));
+        pool.release("node-a", PooledConnection::new(2));
+        pool.release("node-b", PooledConnection::new(3));
+
+        let drained = pool.drain_node("node-a");
+        assert_eq!(drained, 2);
+        assert_eq!(pool.pooled_count("node-a"), 0);
+        assert_eq!(pool.pooled_count("node-b"), 1);
+    }
+
+    #[test]
+    fn drain_nonexistent_node() {
+        let pool = H1Pool::new(H1PoolConfig::default());
+        assert_eq!(pool.drain_node("nonexistent"), 0);
     }
 }

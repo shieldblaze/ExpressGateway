@@ -11,6 +11,7 @@
 //! - **manager**: Userspace manager that loads, attaches, and configures XDP programs.
 //! - **session_cleanup**: Background task for evicting stale UDP sessions.
 //! - **fallback**: Detection of XDP availability and fallback warnings.
+//! - **error**: Crate-specific error types.
 //!
 //! # Platform support
 //!
@@ -18,11 +19,13 @@
 //! errors and [`fallback::is_xdp_available`] returns `false`. The crate
 //! compiles on all platforms.
 
+pub mod error;
 pub mod fallback;
 pub mod manager;
 pub mod maps;
 pub mod session_cleanup;
 
+pub use error::XdpError;
 pub use fallback::is_xdp_available;
 pub use manager::{XdpManager, XdpMode};
 pub use maps::{

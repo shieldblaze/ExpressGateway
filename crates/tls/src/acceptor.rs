@@ -5,19 +5,26 @@
 //! - SNI hostname extraction
 //! - ALPN negotiated protocol extraction
 //! - TLS version and cipher suite reporting
+//! - Client certificate extraction for mTLS
 
 use std::sync::Arc;
 use std::time::Duration;
 
-use anyhow::{Context, Result};
 use rustls::ServerConfig;
 use tokio::net::TcpStream;
 use tracing::debug;
+
+use crate::error::{Result, TlsError};
 
 /// Default handshake timeout: 10 seconds (Slowloris defense).
 const DEFAULT_HANDSHAKE_TIMEOUT: Duration = Duration::from_secs(10);
 
 /// Information extracted from a completed TLS handshake.
+///
+/// All fields are owned so this struct can be moved across tasks without
+/// lifetime concerns. The allocations here happen once per accepted connection,
+/// which is acceptable -- the handshake itself is orders of magnitude more
+/// expensive.
 #[derive(Debug, Clone)]
 pub struct TlsInfo {
     /// The SNI hostname sent by the client, if any.
@@ -40,6 +47,7 @@ pub struct TlsAcceptor {
 
 impl TlsAcceptor {
     /// Create a new TLS acceptor with the default 10-second handshake timeout.
+    #[inline]
     pub fn new(config: Arc<ServerConfig>) -> Self {
         Self {
             inner: tokio_rustls::TlsAcceptor::from(config),
@@ -48,6 +56,7 @@ impl TlsAcceptor {
     }
 
     /// Create a new TLS acceptor with a custom handshake timeout.
+    #[inline]
     pub fn with_timeout(config: Arc<ServerConfig>, timeout: Duration) -> Self {
         Self {
             inner: tokio_rustls::TlsAcceptor::from(config),
@@ -66,10 +75,13 @@ impl TlsAcceptor {
     ) -> Result<(tokio_rustls::server::TlsStream<TcpStream>, TlsInfo)> {
         let tls_stream = tokio::time::timeout(self.handshake_timeout, self.inner.accept(stream))
             .await
-            .context("TLS handshake timed out")?
-            .context("TLS handshake failed")?;
+            .map_err(|_| TlsError::HandshakeTimeout {
+                timeout_ms: self.handshake_timeout.as_millis() as u64,
+            })?
+            .map_err(|e| TlsError::HandshakeFailed {
+                reason: e.to_string(),
+            })?;
 
-        // Extract metadata from the completed handshake.
         let (_, server_conn) = tls_stream.get_ref();
 
         let sni_hostname = server_conn.server_name().map(String::from);

@@ -3,6 +3,10 @@
 //! Produces a smooth, interleaved distribution of requests according to node
 //! weights. For example, weights {5,1,1} yield the sequence A,A,B,A,C,A,A
 //! rather than the clumpy A,A,A,A,A,B,C.
+//!
+//! The smooth WRR algorithm requires mutable state per selection, so a
+//! `parking_lot::Mutex` is used. The critical section is O(n) with no
+//! allocation and no syscalls, keeping lock hold time minimal.
 
 use std::sync::Arc;
 
@@ -54,11 +58,11 @@ impl LoadBalancer<L4Request, L4Response> for WeightedRoundRobinBalancer {
     fn select(&self, _request: &L4Request) -> Result<L4Response> {
         let mut state = self.state.lock();
 
-        // Collect indices of online nodes.
+        // Collect indices of online nodes with non-zero effective weight.
         let online_indices: Vec<usize> = state
             .iter()
             .enumerate()
-            .filter(|(_, wn)| wn.node.is_online())
+            .filter(|(_, wn)| wn.node.is_online() && wn.effective_weight > 0)
             .map(|(i, _)| i)
             .collect();
 
@@ -78,10 +82,11 @@ impl LoadBalancer<L4Request, L4Response> for WeightedRoundRobinBalancer {
         }
 
         // Select the node with the highest current_weight among online nodes.
+        // Safe: online_indices is non-empty (checked above).
         let best_idx = *online_indices
             .iter()
             .max_by_key(|&&i| state[i].current_weight)
-            .unwrap();
+            .expect("online_indices is non-empty");
 
         // Subtract total_weight from the selected node.
         state[best_idx].current_weight -= total_weight;

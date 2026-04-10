@@ -837,14 +837,18 @@ dependencies = [
  "expressgateway-health",
  "expressgateway-lb",
  "expressgateway-metrics",
+ "futures",
  "http",
  "http-body-util",
  "parking_lot",
+ "prometheus",
  "prost",
  "serde",
  "serde_json",
  "thiserror 2.0.18",
  "tokio",
+ "tokio-stream",
+ "tokio-util",
  "tonic",
  "tower 0.5.3",
  "tracing",
@@ -933,6 +937,7 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "async-trait",
+ "bytes",
  "crossbeam",
  "dashmap",
  "expressgateway-core",
@@ -1069,6 +1074,7 @@ name = "expressgateway-protocol-ws"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "base64",
  "bytes",
  "expressgateway-core",
  "expressgateway-protocol-http",
@@ -1087,7 +1093,6 @@ dependencies = [
 name = "expressgateway-proxy-protocol"
 version = "0.1.0"
 dependencies = [
- "anyhow",
  "bytes",
  "expressgateway-core",
  "thiserror 2.0.18",
@@ -1145,6 +1150,7 @@ dependencies = [
  "expressgateway-config",
  "expressgateway-core",
  "md-5",
+ "notify",
  "parking_lot",
  "ring",
  "rustls",
@@ -2946,6 +2952,7 @@ dependencies = [
  "bytes",
  "futures-core",
  "futures-sink",
+ "futures-util",
  "pin-project-lite",
  "tokio",
 ]

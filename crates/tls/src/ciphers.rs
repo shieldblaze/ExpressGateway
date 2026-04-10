@@ -3,6 +3,10 @@
 //! Provides two profiles:
 //! - **Modern**: TLS 1.3 only (3 cipher suites)
 //! - **Intermediate**: TLS 1.2 + 1.3 (7 cipher suites)
+//!
+//! Cipher suite filtering uses a static lookup table keyed by `CipherSuite`
+//! discriminant. The result is collected into a `Vec` -- this runs once during
+//! config construction, not per-handshake.
 
 use expressgateway_core::types::TlsProfile;
 use rustls::crypto::ring as ring_provider;
@@ -25,27 +29,43 @@ const INTERMEDIATE_TLS12_SUITES: &[CipherSuite] = &[
 ];
 
 /// Return the filtered set of cipher suites for the given [`TlsProfile`].
+///
+/// Called during config construction, not on the handshake hot path.
 pub fn cipher_suites_for_profile(profile: TlsProfile) -> Vec<SupportedCipherSuite> {
-    let allowed: Vec<CipherSuite> = match profile {
-        TlsProfile::Modern => MODERN_SUITES.to_vec(),
+    let allowed: &[CipherSuite] = match profile {
+        TlsProfile::Modern => MODERN_SUITES,
         TlsProfile::Intermediate => {
-            let mut suites = MODERN_SUITES.to_vec();
-            suites.extend_from_slice(INTERMEDIATE_TLS12_SUITES);
-            suites
+            // For Intermediate we need both sets. Build a combined list on the
+            // stack (7 elements, 14 bytes) to avoid a heap allocation just for
+            // the lookup table.
+            return filter_suites_combined(MODERN_SUITES, INTERMEDIATE_TLS12_SUITES);
         }
     };
 
     ring_provider::ALL_CIPHER_SUITES
         .iter()
+        .filter(|cs| allowed.contains(&cs.suite()))
+        .copied()
+        .collect()
+}
+
+/// Filter ring's cipher suites against two allowlists combined.
+fn filter_suites_combined(
+    a: &[CipherSuite],
+    b: &[CipherSuite],
+) -> Vec<SupportedCipherSuite> {
+    ring_provider::ALL_CIPHER_SUITES
+        .iter()
         .filter(|cs| {
-            let suite_id = cs.suite();
-            allowed.contains(&suite_id)
+            let id = cs.suite();
+            a.contains(&id) || b.contains(&id)
         })
         .copied()
         .collect()
 }
 
 /// Return the protocol versions enabled for the given [`TlsProfile`].
+#[inline]
 pub fn protocol_versions_for_profile(
     profile: TlsProfile,
 ) -> Vec<&'static SupportedProtocolVersion> {

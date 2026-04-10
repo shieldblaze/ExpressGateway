@@ -16,7 +16,7 @@ const DEFAULT_LOW_WATER_MARK: usize = 32_768;
 /// to provide flow-control backpressure.
 ///
 /// The controller is safe to share across threads (`Send + Sync`) and uses
-/// atomic operations internally.
+/// atomic operations internally.  All operations are lock-free.
 #[derive(Debug)]
 pub struct BackpressureController {
     /// Current number of pending bytes in the write buffer.
@@ -55,8 +55,9 @@ impl BackpressureController {
 
     /// Record `bytes` as newly pending in the write buffer.
     ///
-    /// Returns `true` if the caller should **pause** producing — i.e. the
+    /// Returns `true` if the caller should **pause** producing -- i.e. the
     /// pending bytes now exceed the high water mark.
+    #[inline]
     pub fn add_pending(&self, bytes: usize) -> bool {
         let prev = self.write_buffer_size.fetch_add(bytes, Ordering::AcqRel);
         let new_size = prev + bytes;
@@ -70,11 +71,25 @@ impl BackpressureController {
 
     /// Record `bytes` as drained (written to the network).
     ///
-    /// Returns `true` if the caller should **resume** producing — i.e. the
+    /// Returns `true` if the caller should **resume** producing -- i.e. the
     /// pending bytes dropped below the low water mark while paused.
+    ///
+    /// Uses a CAS loop to prevent underflow of the atomic counter.
+    #[inline]
     pub fn drain(&self, bytes: usize) -> bool {
-        let prev = self.write_buffer_size.fetch_sub(bytes, Ordering::AcqRel);
-        let new_size = prev.saturating_sub(bytes);
+        // CAS loop to saturate at zero and avoid wrapping.
+        let new_size = loop {
+            let current = self.write_buffer_size.load(Ordering::Acquire);
+            let target = current.saturating_sub(bytes);
+            if self
+                .write_buffer_size
+                .compare_exchange_weak(current, target, Ordering::AcqRel, Ordering::Relaxed)
+                .is_ok()
+            {
+                break target;
+            }
+        };
+
         if new_size <= self.low_water_mark && self.paused.load(Ordering::Acquire) {
             self.paused.store(false, Ordering::Release);
             true
@@ -84,21 +99,25 @@ impl BackpressureController {
     }
 
     /// Whether the producer is currently paused due to backpressure.
+    #[inline]
     pub fn is_paused(&self) -> bool {
         self.paused.load(Ordering::Acquire)
     }
 
     /// The current number of pending bytes in the write buffer.
+    #[inline]
     pub fn pending_bytes(&self) -> usize {
         self.write_buffer_size.load(Ordering::Acquire)
     }
 
     /// The configured high water mark.
+    #[inline]
     pub fn high_water_mark(&self) -> usize {
         self.high_water_mark
     }
 
     /// The configured low water mark.
+    #[inline]
     pub fn low_water_mark(&self) -> usize {
         self.low_water_mark
     }
@@ -140,13 +159,13 @@ mod tests {
     fn pause_on_high_water_mark() {
         let ctrl = BackpressureController::with_marks(100, 50);
 
-        // Add 80 bytes — below high water mark.
+        // Add 80 bytes -- below high water mark.
         let should_pause = ctrl.add_pending(80);
         assert!(!should_pause);
         assert!(!ctrl.is_paused());
         assert_eq!(ctrl.pending_bytes(), 80);
 
-        // Add 30 more — now at 110, exceeds high water mark.
+        // Add 30 more -- now at 110, exceeds high water mark.
         let should_pause = ctrl.add_pending(30);
         assert!(should_pause);
         assert!(ctrl.is_paused());
@@ -161,13 +180,13 @@ mod tests {
         ctrl.add_pending(120);
         assert!(ctrl.is_paused());
 
-        // Drain 30 bytes — still at 90, above low water mark.
+        // Drain 30 bytes -- still at 90, above low water mark.
         let should_resume = ctrl.drain(30);
         assert!(!should_resume);
         assert!(ctrl.is_paused());
         assert_eq!(ctrl.pending_bytes(), 90);
 
-        // Drain 50 more — now at 40, below low water mark.
+        // Drain 50 more -- now at 40, below low water mark.
         let should_resume = ctrl.drain(50);
         assert!(should_resume);
         assert!(!ctrl.is_paused());
@@ -233,10 +252,16 @@ mod tests {
     fn drain_does_not_underflow() {
         let ctrl = BackpressureController::with_marks(100, 50);
         ctrl.add_pending(10);
-        // Draining more than pending uses saturating_sub for the check.
-        // The AtomicUsize::fetch_sub will wrap but our logic handles it.
-        // We use saturating_sub on the result for the comparison.
-        ctrl.drain(10);
+        // Draining more than pending saturates at zero.
+        ctrl.drain(20);
+        assert_eq!(ctrl.pending_bytes(), 0);
+    }
+
+    #[test]
+    fn drain_much_more_than_pending_stays_zero() {
+        let ctrl = BackpressureController::with_marks(100, 50);
+        ctrl.add_pending(5);
+        ctrl.drain(1_000_000);
         assert_eq!(ctrl.pending_bytes(), 0);
     }
 }

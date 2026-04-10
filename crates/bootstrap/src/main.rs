@@ -6,6 +6,8 @@
 mod shutdown;
 mod startup;
 
+use std::path::PathBuf;
+
 use clap::Parser;
 
 #[derive(Parser, Debug)]
@@ -31,10 +33,11 @@ struct Args {
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
     let args = Args::parse();
+    let config_path = PathBuf::from(&args.config);
 
     // Step 1: Load config
-    let mut config = if std::path::Path::new(&args.config).exists() {
-        expressgateway_config::load_from_file(std::path::Path::new(&args.config))?
+    let mut config = if config_path.exists() {
+        expressgateway_config::load_from_file(&config_path)?
     } else {
         // Cannot use tracing yet (subscriber not initialised), so print to
         // stderr instead.
@@ -58,5 +61,10 @@ async fn main() -> anyhow::Result<()> {
     }
 
     // Step 3: Hand off to the full startup sequence
-    startup::start(config).await
+    let path = if config_path.exists() {
+        Some(config_path)
+    } else {
+        None
+    };
+    startup::start(config, path).await
 }

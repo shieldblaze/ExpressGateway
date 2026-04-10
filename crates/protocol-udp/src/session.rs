@@ -19,9 +19,15 @@ pub struct UdpSession {
     pub backend_addr: SocketAddr,
     /// Timestamp of last activity (send or receive).
     pub last_seen: Instant,
+    /// Packets forwarded in this session (monotonic counter).
+    pub packets: u64,
+    /// Bytes forwarded in this session (monotonic counter).
+    pub bytes: u64,
 }
 
 /// Rate limiter state for a single source IP.
+///
+/// Uses a fixed 1-second sliding window for simplicity and predictability.
 #[derive(Debug)]
 struct RateLimitEntry {
     /// Packet count in the current window.
@@ -63,30 +69,35 @@ impl SessionManager {
         }
     }
 
-    /// Get or create a session for the given client address.
+    /// Get an existing session for the given client address.
     ///
     /// If a session exists and hasn't expired, returns the backend address and
-    /// updates `last_seen`. If it has expired or doesn't exist, returns `None`
-    /// so the caller can select a new backend.
+    /// updates `last_seen`. If it has expired or doesn't exist, returns `None`.
     pub fn get_session(&self, client_addr: &SocketAddr) -> Option<SocketAddr> {
-        if let Some(mut entry) = self.sessions.get_mut(client_addr) {
-            if entry.last_seen.elapsed() > self.session_timeout {
-                // Expired: remove it
-                drop(entry);
-                self.sessions.remove(client_addr);
-                return None;
-            }
-            entry.last_seen = Instant::now();
-            Some(entry.backend_addr)
-        } else {
-            None
+        let mut entry = self.sessions.get_mut(client_addr)?;
+
+        if entry.last_seen.elapsed() > self.session_timeout {
+            // Expired: drop the mutable ref before removing, to avoid
+            // DashMap deadlock (remove acquires the shard lock).
+            let addr = *client_addr;
+            drop(entry);
+            self.sessions.remove(&addr);
+            return None;
         }
+
+        entry.last_seen = Instant::now();
+        Some(entry.backend_addr)
     }
 
     /// Create a new session mapping client_addr to backend_addr.
     ///
     /// Returns `true` if the session was created, `false` if the session
     /// limit has been reached.
+    ///
+    /// Note: the session count check is not perfectly atomic with the
+    /// insert, but over-admission by a handful of sessions under extreme
+    /// concurrency is acceptable for a UDP proxy where sessions are
+    /// lightweight and short-lived.
     pub fn create_session(&self, client_addr: SocketAddr, backend_addr: SocketAddr) -> bool {
         if self.sessions.len() >= self.max_sessions {
             return false;
@@ -96,9 +107,21 @@ impl SessionManager {
             UdpSession {
                 backend_addr,
                 last_seen: Instant::now(),
+                packets: 0,
+                bytes: 0,
             },
         );
         true
+    }
+
+    /// Record a forwarded packet for an existing session.
+    #[inline]
+    pub fn record_packet(&self, client_addr: &SocketAddr, n_bytes: usize) {
+        if let Some(mut entry) = self.sessions.get_mut(client_addr) {
+            entry.packets += 1;
+            entry.bytes += n_bytes as u64;
+            entry.last_seen = Instant::now();
+        }
     }
 
     /// Remove a session.
@@ -107,6 +130,7 @@ impl SessionManager {
     }
 
     /// Number of active sessions.
+    #[inline]
     pub fn session_count(&self) -> usize {
         self.sessions.len()
     }
@@ -134,7 +158,7 @@ impl SessionManager {
 
         let mut window_start = entry.window_start.lock();
         if window_start.elapsed() >= Duration::from_secs(1) {
-            // New window
+            // New window.
             *window_start = Instant::now();
             entry.count.store(1, Ordering::Relaxed);
             true
@@ -158,7 +182,7 @@ impl SessionManager {
             keep
         });
 
-        // Also clean up stale rate limit entries (older than 2x session timeout)
+        // Also clean up stale rate limit entries (older than 2x session timeout).
         let rate_limit_expiry = timeout * 2;
         self.rate_limits
             .retain(|_, entry| entry.window_start.lock().elapsed() < rate_limit_expiry);
@@ -208,6 +232,7 @@ impl SessionManager {
     }
 
     /// Whether the background cleanup task is running.
+    #[inline]
     pub fn is_cleanup_running(&self) -> bool {
         self.cleanup_running.load(Ordering::Relaxed)
     }
@@ -251,7 +276,6 @@ mod tests {
 
     #[test]
     fn test_session_expiry() {
-        // Use a very short timeout so we can test expiry
         let mgr = SessionManager::new(Duration::from_millis(50), 1000, None);
 
         let client: SocketAddr = "10.0.0.1:5000".parse().unwrap();
@@ -260,10 +284,10 @@ mod tests {
         assert!(mgr.create_session(client, backend));
         assert_eq!(mgr.get_session(&client), Some(backend));
 
-        // Wait for expiry
+        // Wait for expiry.
         std::thread::sleep(Duration::from_millis(100));
 
-        // Session should be expired
+        // Session should be expired.
         assert!(mgr.get_session(&client).is_none());
         assert_eq!(mgr.session_count(), 0);
     }
@@ -279,7 +303,7 @@ mod tests {
 
         assert!(mgr.create_session(c1, backend));
         assert!(mgr.create_session(c2, backend));
-        // Third should fail
+        // Third should fail.
         assert!(!mgr.create_session(c3, backend));
     }
 
@@ -311,7 +335,7 @@ mod tests {
         mgr.create_session(c2, backend);
         assert_eq!(mgr.session_count(), 2);
 
-        // Wait for expiry
+        // Wait for expiry.
         std::thread::sleep(Duration::from_millis(100));
 
         let removed = mgr.cleanup_expired();
@@ -327,7 +351,7 @@ mod tests {
         for _ in 0..10 {
             assert!(mgr.check_rate_limit(&client));
         }
-        // 11th should be rejected
+        // 11th should be rejected.
         assert!(!mgr.check_rate_limit(&client));
     }
 
@@ -336,7 +360,7 @@ mod tests {
         let mgr = SessionManager::new(Duration::from_secs(30), 1000, None);
         let client: SocketAddr = "10.0.0.1:5000".parse().unwrap();
 
-        // Should always be allowed
+        // Should always be allowed.
         for _ in 0..1000 {
             assert!(mgr.check_rate_limit(&client));
         }
@@ -347,16 +371,16 @@ mod tests {
         let mgr = SessionManager::new(Duration::from_secs(30), 1000, Some(5));
         let client: SocketAddr = "10.0.0.1:5000".parse().unwrap();
 
-        // Exhaust the limit
+        // Exhaust the limit.
         for _ in 0..5 {
             assert!(mgr.check_rate_limit(&client));
         }
         assert!(!mgr.check_rate_limit(&client));
 
-        // Wait for window to reset
+        // Wait for window to reset.
         std::thread::sleep(Duration::from_secs(1));
 
-        // Should be allowed again
+        // Should be allowed again.
         assert!(mgr.check_rate_limit(&client));
     }
 
@@ -373,7 +397,6 @@ mod tests {
         assert!(mgr.is_cleanup_running());
 
         // Wait long enough for the session to expire and cleanup to run.
-        // Cleanup interval = timeout/2 = 25ms, so wait 150ms to be safe.
         tokio::time::sleep(Duration::from_millis(150)).await;
 
         assert_eq!(mgr.session_count(), 0);
@@ -392,7 +415,7 @@ mod tests {
 
         mgr.create_session(client, backend);
 
-        // Access the session at 50ms intervals, before the 100ms timeout
+        // Access the session at 50ms intervals, before the 100ms timeout.
         for _ in 0..3 {
             std::thread::sleep(Duration::from_millis(50));
             assert_eq!(
@@ -405,5 +428,20 @@ mod tests {
         // Total elapsed ~150ms, but session should still be alive because
         // each get_session() refreshes last_seen.
         assert_eq!(mgr.get_session(&client), Some(backend));
+    }
+
+    #[test]
+    fn test_record_packet() {
+        let mgr = SessionManager::new(Duration::from_secs(30), 1000, None);
+        let client: SocketAddr = "10.0.0.1:5000".parse().unwrap();
+        let backend: SocketAddr = "10.0.0.2:8080".parse().unwrap();
+
+        mgr.create_session(client, backend);
+        mgr.record_packet(&client, 100);
+        mgr.record_packet(&client, 200);
+
+        let session = mgr.remove_session(&client).unwrap();
+        assert_eq!(session.packets, 2);
+        assert_eq!(session.bytes, 300);
     }
 }

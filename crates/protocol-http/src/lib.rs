@@ -38,7 +38,10 @@ pub use body_limits::{BodyLimitsConfig, ConnectionBodyTracker, StreamBodyTracker
 pub use errors::HttpError;
 pub use flood_protection::{ControlFrameRateLimiter, ControlFrameType, ENHANCE_YOUR_CALM};
 pub use h1::{H1ProxyConfig, H1ProxyHandler, PipelineQueue};
-pub use h2::{ConnectRequest, FlowController, FlowWindow, H2ProxyConfig, H2ProxyHandler};
+pub use h2::{
+    ConnectRequest, FlowController, FlowWindow, H2ProxyConfig, H2ProxyHandler,
+    MAX_FLOW_CONTROL_WINDOW,
+};
 pub use headers::{inject_proxy_headers, strip_hop_by_hop};
 pub use health::{HealthState, handle_health, handle_ready};
 pub use translation::{H1BodyEncoding, H2PseudoHeaders, h1_to_h2_headers, h2_to_h1_request};

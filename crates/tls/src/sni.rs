@@ -4,7 +4,7 @@
 //! - Exact hostname matching
 //! - Wildcard matching (`*.example.com`)
 //! - Default certificate fallback
-//! - Thread-safe via [`ArcSwap`]
+//! - Thread-safe via [`ArcSwap`] (lock-free reads, atomic updates)
 
 use std::collections::HashMap;
 use std::fmt;
@@ -16,13 +16,12 @@ use rustls::sign::CertifiedKey;
 
 /// Internal map of SNI hostnames to certified keys.
 struct SniCertMap {
-    /// Exact hostname -> certificate mapping.
     exact: HashMap<String, Arc<CertifiedKey>>,
-    /// Wildcard patterns and their certificates (e.g., `*.example.com`).
     wildcard: Vec<(String, Arc<CertifiedKey>)>,
 }
 
 impl SniCertMap {
+    #[inline]
     fn new() -> Self {
         Self {
             exact: HashMap::new(),
@@ -79,7 +78,6 @@ impl SniResolver {
         };
 
         if hostname.starts_with("*.") {
-            // Store wildcard: remove existing entry for same pattern, then add
             new_map.wildcard.retain(|(p, _)| p != &hostname);
             new_map.wildcard.push((hostname, cert));
         } else {
@@ -108,12 +106,25 @@ impl SniResolver {
         self.certs.store(Arc::new(new_map));
     }
 
+    /// Return the number of exact entries.
+    #[inline]
+    pub fn exact_count(&self) -> usize {
+        self.certs.load().exact.len()
+    }
+
+    /// Return the number of wildcard entries.
+    #[inline]
+    pub fn wildcard_count(&self) -> usize {
+        self.certs.load().wildcard.len()
+    }
+
     /// Resolve a hostname to a certificate.
     ///
     /// Resolution order:
     /// 1. Exact match
     /// 2. Wildcard match (first matching `*.domain` pattern)
     /// 3. Default certificate
+    #[inline]
     fn resolve_hostname(&self, hostname: &str) -> Option<Arc<CertifiedKey>> {
         let hostname = hostname.to_lowercase();
         let map = self.certs.load();
@@ -150,7 +161,6 @@ impl ResolvesServerCert for SniResolver {
         match client_hello.server_name() {
             Some(name) => self.resolve_hostname(name),
             None => {
-                // No SNI provided, use default certificate
                 let default = self.default_cert.load();
                 default.as_ref().as_ref().map(Arc::clone)
             }
@@ -165,22 +175,20 @@ mod tests {
     use rustls::pki_types::{CertificateDer, PrivateKeyDer};
     use rustls::sign::CertifiedKey;
 
-    /// Create a dummy CertifiedKey for testing.
-    /// We use a real cert+key pair so CertifiedKey::from_der succeeds.
     fn make_test_certified_key() -> Arc<CertifiedKey> {
         let cert_pem = include_str!("../tests/data/cert.pem");
         let key_pem = include_str!("../tests/data/key.pem");
 
         let certs: Vec<CertificateDer<'static>> = rustls_pemfile::certs(&mut cert_pem.as_bytes())
-            .collect::<Result<Vec<_>, _>>()
-            .unwrap();
+            .collect::<std::result::Result<Vec<_>, _>>()
+            .expect("test certs should parse");
 
         let key: PrivateKeyDer<'static> = rustls_pemfile::private_key(&mut key_pem.as_bytes())
-            .unwrap()
-            .unwrap();
+            .expect("test key should parse")
+            .expect("test key should exist");
 
         let provider = ring_provider::default_provider();
-        let ck = CertifiedKey::from_der(certs, key, &provider).unwrap();
+        let ck = CertifiedKey::from_der(certs, key, &provider).expect("certified key should build");
         Arc::new(ck)
     }
 
@@ -213,11 +221,8 @@ mod tests {
         let ck = make_test_certified_key();
         resolver.add("*.example.com", Arc::clone(&ck));
 
-        let result = resolver.resolve_hostname("foo.example.com");
-        assert!(result.is_some(), "wildcard should match sub.example.com");
-
-        let result = resolver.resolve_hostname("bar.example.com");
-        assert!(result.is_some(), "wildcard should match bar.example.com");
+        assert!(resolver.resolve_hostname("foo.example.com").is_some());
+        assert!(resolver.resolve_hostname("bar.example.com").is_some());
     }
 
     #[test]
@@ -226,9 +231,8 @@ mod tests {
         let ck = make_test_certified_key();
         resolver.add("*.example.com", Arc::clone(&ck));
 
-        let result = resolver.resolve_hostname("example.com");
         assert!(
-            result.is_none(),
+            resolver.resolve_hostname("example.com").is_none(),
             "wildcard *.example.com should not match example.com"
         );
     }
@@ -239,11 +243,7 @@ mod tests {
         let ck = make_test_certified_key();
         resolver.set_default(Arc::clone(&ck));
 
-        let result = resolver.resolve_hostname("unknown.com");
-        assert!(
-            result.is_some(),
-            "default should be returned for unknown hostname"
-        );
+        assert!(resolver.resolve_hostname("unknown.com").is_some());
     }
 
     #[test]
@@ -255,15 +255,13 @@ mod tests {
         resolver.add("*.example.com", ck1);
         resolver.add("special.example.com", ck2);
 
-        let result = resolver.resolve_hostname("special.example.com");
-        assert!(result.is_some(), "exact match should take priority");
+        assert!(resolver.resolve_hostname("special.example.com").is_some());
     }
 
     #[test]
     fn no_match_returns_none_without_default() {
         let resolver = SniResolver::new();
-        let result = resolver.resolve_hostname("unknown.com");
-        assert!(result.is_none(), "should return None without default");
+        assert!(resolver.resolve_hostname("unknown.com").is_none());
     }
 
     #[test]
@@ -273,8 +271,7 @@ mod tests {
         resolver.add("example.com", Arc::clone(&ck));
         resolver.remove("example.com");
 
-        let result = resolver.resolve_hostname("example.com");
-        assert!(result.is_none(), "removed hostname should not resolve");
+        assert!(resolver.resolve_hostname("example.com").is_none());
     }
 
     #[test]
@@ -284,7 +281,18 @@ mod tests {
         resolver.add("*.example.com", Arc::clone(&ck));
         resolver.remove("*.example.com");
 
-        let result = resolver.resolve_hostname("foo.example.com");
-        assert!(result.is_none(), "removed wildcard should not resolve");
+        assert!(resolver.resolve_hostname("foo.example.com").is_none());
+    }
+
+    #[test]
+    fn counts() {
+        let resolver = SniResolver::new();
+        let ck = make_test_certified_key();
+        resolver.add("a.com", Arc::clone(&ck));
+        resolver.add("b.com", Arc::clone(&ck));
+        resolver.add("*.c.com", Arc::clone(&ck));
+
+        assert_eq!(resolver.exact_count(), 2);
+        assert_eq!(resolver.wildcard_count(), 1);
     }
 }

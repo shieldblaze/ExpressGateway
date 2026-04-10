@@ -24,3 +24,4 @@ sha2.workspace = true
 md-5.workspace = true
 chrono.workspace = true
 dashmap.workspace = true
+notify.workspace = true

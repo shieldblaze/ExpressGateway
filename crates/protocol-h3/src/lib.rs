@@ -22,7 +22,7 @@ pub mod translation;
 pub use alt_svc::AltSvcHeader;
 pub use connection::QuicConnection;
 pub use flow_control::FlowController;
-pub use proxy::H3ProxyHandler;
+pub use proxy::{H3ProxyConfig, H3ProxyHandler};
 pub use quic::{QuicConfig, QuicTransport};
 pub use retry::RetryTokenHandler;
 pub use translation::{h1_to_h3_request, h3_to_h1_response};

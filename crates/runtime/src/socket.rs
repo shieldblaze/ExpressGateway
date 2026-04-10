@@ -19,11 +19,11 @@ pub struct SocketOptions {
     pub recv_buf_size: usize,
     /// SO_SNDBUF size in bytes.
     pub send_buf_size: usize,
-    /// TCP_NODELAY — disable Nagle's algorithm.
+    /// TCP_NODELAY -- disable Nagle's algorithm.
     pub tcp_nodelay: bool,
-    /// TCP_QUICKACK — disable delayed ACKs (Linux only).
+    /// TCP_QUICKACK -- disable delayed ACKs (Linux only).
     pub tcp_quickack: bool,
-    /// SO_KEEPALIVE — enable TCP keep-alive probes.
+    /// SO_KEEPALIVE -- enable TCP keep-alive probes.
     pub tcp_keepalive: bool,
     /// TCP_FASTOPEN queue length (server) or TCP_FASTOPEN_CONNECT (client).
     /// `None` disables fast-open.
@@ -83,6 +83,25 @@ impl SocketOptions {
             so_reuseaddr: false,
             so_reuseport: false,
             backlog: 0, // not applicable for client sockets
+        }
+    }
+
+    /// Build socket options from a config's transport section.
+    pub fn from_transport_config(transport: &TransportConfigRef) -> Self {
+        Self {
+            recv_buf_size: transport.recv_buf_size,
+            send_buf_size: transport.send_buf_size,
+            tcp_nodelay: transport.tcp_nodelay,
+            tcp_quickack: transport.tcp_quickack,
+            tcp_keepalive: transport.tcp_keepalive,
+            tcp_fastopen: if transport.tcp_fastopen {
+                Some(transport.tcp_fastopen_queue)
+            } else {
+                None
+            },
+            so_reuseaddr: true,
+            so_reuseport: transport.so_reuseport,
+            backlog: transport.so_backlog,
         }
     }
 
@@ -153,6 +172,23 @@ impl SocketOptions {
     }
 }
 
+/// View of transport config fields needed to build [`SocketOptions`].
+///
+/// All fields are public for direct construction. Avoids depending directly
+/// on the config crate (which would create a circular dependency).
+#[derive(Debug, Clone, Copy)]
+pub struct TransportConfigRef {
+    pub recv_buf_size: usize,
+    pub send_buf_size: usize,
+    pub tcp_nodelay: bool,
+    pub tcp_quickack: bool,
+    pub tcp_keepalive: bool,
+    pub tcp_fastopen: bool,
+    pub tcp_fastopen_queue: u32,
+    pub so_reuseport: bool,
+    pub so_backlog: u32,
+}
+
 /// Set `TCP_QUICKACK` on a socket (Linux only).
 #[cfg(target_os = "linux")]
 fn set_tcp_quickack(socket: &Socket) -> io::Result<()> {
@@ -160,6 +196,14 @@ fn set_tcp_quickack(socket: &Socket) -> io::Result<()> {
 
     let fd = socket.as_raw_fd();
     let val: libc::c_int = 1;
+
+    // SAFETY: `setsockopt` is called with:
+    // - `fd`: a valid, open file descriptor obtained from `socket.as_raw_fd()`
+    // - `IPPROTO_TCP`, `TCP_QUICKACK`: valid level + option for TCP sockets
+    // - `&val`: pointer to a stack-local `c_int` with value 1, valid for the
+    //   duration of the call
+    // - `size_of::<c_int>()`: exact size of the option value
+    // The kernel copies the value during the syscall and does not retain the pointer.
     let ret = unsafe {
         libc::setsockopt(
             fd,
@@ -182,6 +226,14 @@ fn set_tcp_fastopen(socket: &Socket, queue_len: u32) -> io::Result<()> {
 
     let fd = socket.as_raw_fd();
     let val: libc::c_int = queue_len as libc::c_int;
+
+    // SAFETY: `setsockopt` is called with:
+    // - `fd`: a valid, open file descriptor obtained from `socket.as_raw_fd()`
+    // - `IPPROTO_TCP`, `TCP_FASTOPEN`: valid level + option for TCP listener sockets
+    // - `&val`: pointer to a stack-local `c_int` holding the queue length,
+    //   valid for the duration of the call
+    // - `size_of::<c_int>()`: exact size of the option value
+    // The kernel copies the value during the syscall and does not retain the pointer.
     let ret = unsafe {
         libc::setsockopt(
             fd,
@@ -203,9 +255,18 @@ fn set_tcp_fastopen_connect(socket: &Socket) -> io::Result<()> {
     use std::os::unix::io::AsRawFd;
 
     let fd = socket.as_raw_fd();
-    // TCP_FASTOPEN_CONNECT = 30 on Linux.
+    // TCP_FASTOPEN_CONNECT = 30 on Linux (defined since kernel 4.11).
     const TCP_FASTOPEN_CONNECT: libc::c_int = 30;
     let val: libc::c_int = 1;
+
+    // SAFETY: `setsockopt` is called with:
+    // - `fd`: a valid, open file descriptor obtained from `socket.as_raw_fd()`
+    // - `IPPROTO_TCP`, `TCP_FASTOPEN_CONNECT` (30): valid level + option for
+    //   TCP client sockets on Linux >= 4.11
+    // - `&val`: pointer to a stack-local `c_int` with value 1, valid for the
+    //   duration of the call
+    // - `size_of::<c_int>()`: exact size of the option value
+    // The kernel copies the value during the syscall and does not retain the pointer.
     let ret = unsafe {
         libc::setsockopt(
             fd,
@@ -251,6 +312,43 @@ mod tests {
         assert_eq!(opts.tcp_fastopen, Some(1));
         assert!(!opts.so_reuseaddr);
         assert!(!opts.so_reuseport);
+    }
+
+    #[test]
+    fn from_transport_config_builds_correctly() {
+        let tc = TransportConfigRef {
+            recv_buf_size: 131072,
+            send_buf_size: 131072,
+            tcp_nodelay: true,
+            tcp_quickack: false,
+            tcp_keepalive: true,
+            tcp_fastopen: true,
+            tcp_fastopen_queue: 128,
+            so_reuseport: true,
+            so_backlog: 1024,
+        };
+        let opts = SocketOptions::from_transport_config(&tc);
+        assert_eq!(opts.recv_buf_size, 131072);
+        assert!(!opts.tcp_quickack);
+        assert_eq!(opts.tcp_fastopen, Some(128));
+        assert_eq!(opts.backlog, 1024);
+    }
+
+    #[test]
+    fn from_transport_config_no_fastopen() {
+        let tc = TransportConfigRef {
+            recv_buf_size: 131072,
+            send_buf_size: 131072,
+            tcp_nodelay: true,
+            tcp_quickack: false,
+            tcp_keepalive: true,
+            tcp_fastopen: false,
+            tcp_fastopen_queue: 0,
+            so_reuseport: true,
+            so_backlog: 1024,
+        };
+        let opts = SocketOptions::from_transport_config(&tc);
+        assert_eq!(opts.tcp_fastopen, None);
     }
 
     #[test]

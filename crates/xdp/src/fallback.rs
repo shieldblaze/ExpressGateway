@@ -7,12 +7,14 @@
 ///
 /// On Linux, this checks whether the platform is capable of running XDP programs.
 /// On non-Linux platforms, this always returns `false`.
+#[inline]
 pub fn is_xdp_available() -> bool {
     #[cfg(target_os = "linux")]
     {
         // On Linux, XDP is theoretically available. A more thorough check would
-        // probe the kernel version and driver capabilities, but for now we report
-        // true and let attach() surface actual errors.
+        // probe the kernel version (>= 4.8 for basic XDP, >= 5.3 for full
+        // features) and driver capabilities, but for now we report true and let
+        // attach() surface actual errors.
         true
     }
     #[cfg(not(target_os = "linux"))]
@@ -30,6 +32,12 @@ pub fn warn_fallback() {
     );
 }
 
+/// Minimum kernel version for basic XDP support.
+pub const MIN_KERNEL_VERSION: &str = "4.8";
+
+/// Minimum kernel version for full XDP features (XDP_REDIRECT, AF_XDP, etc.).
+pub const FULL_FEATURES_KERNEL_VERSION: &str = "5.3";
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -46,7 +54,12 @@ mod tests {
 
     #[test]
     fn warn_fallback_does_not_panic() {
-        // Just ensure calling the function doesn't panic.
         warn_fallback();
+    }
+
+    #[test]
+    fn kernel_version_constants() {
+        assert_eq!(MIN_KERNEL_VERSION, "4.8");
+        assert_eq!(FULL_FEATURES_KERNEL_VERSION, "5.3");
     }
 }

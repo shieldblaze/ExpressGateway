@@ -170,15 +170,18 @@ pub fn h3_to_h2_response<B>(response: Response<B>) -> Result<Response<B>, Transl
 }
 
 /// Check if a header is a connection-specific header that must be stripped
-/// in HTTP/2 and HTTP/3 per RFC 7540 Section 8.1.2 and RFC 9114 Section 4.2.
+/// in HTTP/2 and HTTP/3.
+///
+/// Per RFC 9114 §4.2 and RFC 9113 §8.2.2, the following are connection-specific:
+/// `Connection`, `Keep-Alive`, `Proxy-Connection`, `Transfer-Encoding`, `Upgrade`.
+///
+/// Note: `Proxy-Authenticate` and `Proxy-Authorization` are NOT connection-specific
+/// headers. They are end-to-end authentication headers per RFC 9110 §11.7 and must
+/// be forwarded.
 fn is_connection_header(name: &HeaderName) -> bool {
     matches!(
         name,
-        &header::CONNECTION
-            | &header::TRANSFER_ENCODING
-            | &header::UPGRADE
-            | &header::PROXY_AUTHENTICATE
-            | &header::PROXY_AUTHORIZATION
+        &header::CONNECTION | &header::TRANSFER_ENCODING | &header::UPGRADE
     ) || name.as_str() == "keep-alive"
         || name.as_str() == "proxy-connection"
 }
@@ -288,6 +291,22 @@ mod tests {
             h2_resp.headers().get("x-custom").unwrap().to_str().unwrap(),
             "value"
         );
+    }
+
+    #[test]
+    fn h1_to_h3_preserves_proxy_auth_headers() {
+        // proxy-authenticate and proxy-authorization are end-to-end headers
+        // per RFC 9110 §11.7 and must NOT be stripped.
+        let request = Request::builder()
+            .method(Method::GET)
+            .uri("https://example.com/api")
+            .header("host", "example.com")
+            .header("proxy-authorization", "Basic dXNlcjpwYXNz")
+            .body(())
+            .unwrap();
+
+        let h3_req = h1_to_h3_request(request).unwrap();
+        assert!(h3_req.headers().get("proxy-authorization").is_some());
     }
 
     #[test]

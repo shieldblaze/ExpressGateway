@@ -11,6 +11,6 @@ pub mod h2c;
 pub mod proxy;
 
 pub use connect::ConnectRequest;
-pub use flow_control::{FlowController, FlowWindow};
+pub use flow_control::{FlowController, FlowWindow, MAX_FLOW_CONTROL_WINDOW};
 pub use h2c::{H2C_PREFACE, detect_h2c_preface};
 pub use proxy::{H2ProxyConfig, H2ProxyHandler};

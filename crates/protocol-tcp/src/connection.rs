@@ -15,6 +15,8 @@ use dashmap::DashMap;
 use expressgateway_core::FourTuple;
 use parking_lot::Mutex;
 
+use crate::options::{TcpKeepalive, TcpSocketOptions};
+
 /// Connection states for the TCP proxy state machine.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum TcpConnectionState {
@@ -30,6 +32,7 @@ pub enum TcpConnectionState {
 
 impl TcpConnectionState {
     /// Returns true if a transition from `self` to `next` is valid.
+    #[inline]
     pub fn can_transition_to(self, next: TcpConnectionState) -> bool {
         matches!(
             (self, next),
@@ -66,6 +69,10 @@ pub struct TrackedConnection {
     pub created_at: Instant,
     /// When the last data was transferred (either direction).
     pub last_activity: Mutex<Instant>,
+    /// Bytes forwarded client -> backend.
+    pub bytes_sent: AtomicU64,
+    /// Bytes forwarded backend -> client.
+    pub bytes_received: AtomicU64,
 }
 
 impl TrackedConnection {
@@ -78,10 +85,13 @@ impl TrackedConnection {
             state: Mutex::new(TcpConnectionState::Connecting),
             created_at: now,
             last_activity: Mutex::new(now),
+            bytes_sent: AtomicU64::new(0),
+            bytes_received: AtomicU64::new(0),
         }
     }
 
     /// Get the current state.
+    #[inline]
     pub fn state(&self) -> TcpConnectionState {
         *self.state.lock()
     }
@@ -99,18 +109,33 @@ impl TrackedConnection {
     }
 
     /// Update the last activity timestamp.
+    #[inline]
     pub fn touch(&self) {
         *self.last_activity.lock() = Instant::now();
     }
 
     /// Duration since this connection was created.
+    #[inline]
     pub fn age(&self) -> std::time::Duration {
         self.created_at.elapsed()
     }
 
     /// Duration since last activity.
+    #[inline]
     pub fn idle_time(&self) -> std::time::Duration {
         self.last_activity.lock().elapsed()
+    }
+
+    /// Record bytes forwarded from client to backend.
+    #[inline]
+    pub fn record_sent(&self, n: u64) {
+        self.bytes_sent.fetch_add(n, Ordering::Relaxed);
+    }
+
+    /// Record bytes forwarded from backend to client.
+    #[inline]
+    pub fn record_received(&self, n: u64) {
+        self.bytes_received.fetch_add(n, Ordering::Relaxed);
     }
 }
 
@@ -143,7 +168,7 @@ impl ConnectionTracker {
         four_tuple: FourTuple,
         backend_addr: SocketAddr,
     ) -> Option<Arc<TrackedConnection>> {
-        // CAS loop to atomically check-and-increment
+        // CAS loop to atomically check-and-increment.
         loop {
             let current = self.count.load(Ordering::Acquire);
             if current >= self.max_connections {
@@ -175,21 +200,25 @@ impl ConnectionTracker {
     }
 
     /// Get a connection by its four-tuple.
+    #[inline]
     pub fn get(&self, four_tuple: &FourTuple) -> Option<Arc<TrackedConnection>> {
         self.connections.get(four_tuple).map(|r| r.value().clone())
     }
 
     /// Current number of active connections.
+    #[inline]
     pub fn active_count(&self) -> usize {
         self.count.load(Ordering::Relaxed)
     }
 
     /// Total connections ever accepted.
+    #[inline]
     pub fn total_accepted(&self) -> u64 {
         self.total_accepted.load(Ordering::Relaxed)
     }
 
     /// Maximum allowed connections.
+    #[inline]
     pub fn max_connections(&self) -> usize {
         self.max_connections
     }
@@ -226,6 +255,11 @@ pub fn set_rst_linger(socket: &tokio::net::TcpStream) -> std::io::Result<()> {
         l_onoff: 1,
         l_linger: 0,
     };
+
+    // SAFETY: `fd` is a valid file descriptor obtained from a live
+    // `TcpStream`.  The `linger` struct is on the stack with correct
+    // size.  `setsockopt` reads exactly `size_of::<linger>()` bytes
+    // from the pointer.  No aliasing or lifetime issues.
     let ret = unsafe {
         libc::setsockopt(
             fd,
@@ -233,6 +267,61 @@ pub fn set_rst_linger(socket: &tokio::net::TcpStream) -> std::io::Result<()> {
             libc::SO_LINGER,
             &linger as *const libc::linger as *const libc::c_void,
             std::mem::size_of::<libc::linger>() as libc::socklen_t,
+        )
+    };
+    if ret != 0 {
+        Err(std::io::Error::last_os_error())
+    } else {
+        Ok(())
+    }
+}
+
+/// Apply configured TCP socket options to a `TcpStream`.
+pub fn apply_socket_options(
+    socket: &tokio::net::TcpStream,
+    opts: &TcpSocketOptions,
+) -> std::io::Result<()> {
+    use std::os::fd::AsRawFd;
+    let fd = socket.as_raw_fd();
+
+    socket.set_nodelay(opts.nodelay)?;
+
+    if opts.quickack {
+        set_tcp_int_option(fd, libc::IPPROTO_TCP, libc::TCP_QUICKACK, 1)?;
+    }
+
+    if let Some(ref ka) = opts.keepalive {
+        apply_keepalive(fd, ka)?;
+    }
+
+    if let Some(qlen) = opts.fastopen_qlen {
+        set_tcp_int_option(fd, libc::IPPROTO_TCP, libc::TCP_FASTOPEN, qlen as i32)?;
+    }
+
+    Ok(())
+}
+
+/// Apply TCP keepalive parameters to a raw file descriptor.
+fn apply_keepalive(fd: i32, ka: &TcpKeepalive) -> std::io::Result<()> {
+    set_tcp_int_option(fd, libc::SOL_SOCKET, libc::SO_KEEPALIVE, 1)?;
+    set_tcp_int_option(fd, libc::IPPROTO_TCP, libc::TCP_KEEPIDLE, ka.idle.as_secs() as i32)?;
+    set_tcp_int_option(fd, libc::IPPROTO_TCP, libc::TCP_KEEPINTVL, ka.interval.as_secs() as i32)?;
+    set_tcp_int_option(fd, libc::IPPROTO_TCP, libc::TCP_KEEPCNT, ka.count as i32)?;
+    Ok(())
+}
+
+/// Set an integer-valued socket option.
+fn set_tcp_int_option(fd: i32, level: i32, optname: i32, value: i32) -> std::io::Result<()> {
+    // SAFETY: `fd` is a valid file descriptor.  `value` is on the stack
+    // and `setsockopt` reads exactly `size_of::<i32>()` bytes from the
+    // pointer.
+    let ret = unsafe {
+        libc::setsockopt(
+            fd,
+            level,
+            optname,
+            &value as *const i32 as *const libc::c_void,
+            std::mem::size_of::<i32>() as libc::socklen_t,
         )
     };
     if ret != 0 {
@@ -290,7 +379,6 @@ mod tests {
 
     #[test]
     fn test_connecting_to_closed() {
-        // Backend connection failed immediately
         let conn = TrackedConnection::new(
             FourTuple {
                 src_addr: "10.0.0.1:1234".parse().unwrap(),
@@ -305,7 +393,6 @@ mod tests {
 
     #[test]
     fn test_active_to_closed() {
-        // Abrupt close (e.g., RST) skipping drain
         let conn = TrackedConnection::new(
             FourTuple {
                 src_addr: "10.0.0.1:1234".parse().unwrap(),
@@ -454,11 +541,28 @@ mod tests {
         );
 
         let idle_before = conn.idle_time();
-        // Spin briefly to let some time pass
         std::thread::sleep(std::time::Duration::from_millis(10));
         conn.touch();
         let idle_after = conn.idle_time();
 
         assert!(idle_after < idle_before + std::time::Duration::from_millis(50));
+    }
+
+    #[test]
+    fn test_byte_counters() {
+        let conn = TrackedConnection::new(
+            FourTuple {
+                src_addr: "10.0.0.1:1234".parse().unwrap(),
+                dst_addr: "10.0.0.2:80".parse().unwrap(),
+            },
+            "10.0.0.3:8080".parse().unwrap(),
+        );
+
+        conn.record_sent(100);
+        conn.record_sent(200);
+        conn.record_received(50);
+
+        assert_eq!(conn.bytes_sent.load(Ordering::Relaxed), 300);
+        assert_eq!(conn.bytes_received.load(Ordering::Relaxed), 50);
     }
 }

@@ -85,13 +85,20 @@ pub fn handle_ready(state: &HealthState) -> Response<Full<Bytes>> {
 }
 
 /// Build a JSON response with the given status and body.
+///
+/// Infallible in practice: status is always valid and header names are static.
 fn json_response(status: StatusCode, body: &str) -> Response<Full<Bytes>> {
     Response::builder()
         .status(status)
         .header("content-type", "application/json")
         .header("content-length", body.len().to_string())
         .body(Full::new(Bytes::from(body.to_owned())))
-        .expect("valid health response")
+        .unwrap_or_else(|_| {
+            // Unreachable, but never panic on the data path.
+            Response::new(Full::new(Bytes::from_static(
+                b"{\"status\":\"error\"}",
+            )))
+        })
 }
 
 #[cfg(test)]

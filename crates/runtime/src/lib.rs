@@ -1,7 +1,7 @@
 //! Async runtime abstraction with io_uring support for ExpressGateway.
 //!
 //! This crate provides a unified async I/O interface that uses io_uring when
-//! available (Linux kernel >= 5.1) and falls back to tokio's epoll-based
+//! available (Linux kernel >= 5.11) and falls back to tokio's epoll-based
 //! reactor on all other platforms.
 //!
 //! # Modules
@@ -22,5 +22,5 @@ pub mod socket;
 pub use backend::RuntimeBackend;
 pub use backpressure::BackpressureController;
 pub use listener::TcpListenerBuilder;
-pub use runtime::Runtime;
-pub use socket::SocketOptions;
+pub use runtime::{Runtime, RuntimeConfig};
+pub use socket::{SocketOptions, TransportConfigRef};

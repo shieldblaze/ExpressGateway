@@ -1,6 +1,7 @@
 //! ALPN (Application-Layer Protocol Negotiation) configuration.
 //!
 //! Supported protocols: `h2` and `http/1.1`.
+//! Uses static byte slices -- zero allocation on the hot path.
 
 /// ALPN protocol identifier for HTTP/2.
 pub const ALPN_H2: &[u8] = b"h2";
@@ -9,11 +10,16 @@ pub const ALPN_H2: &[u8] = b"h2";
 pub const ALPN_HTTP11: &[u8] = b"http/1.1";
 
 /// Return the default ALPN protocol list (h2 preferred, http/1.1 fallback).
+///
+/// This allocates two small `Vec<u8>` -- called once during config construction,
+/// not on the handshake hot path.
+#[inline]
 pub fn default_alpn_protocols() -> Vec<Vec<u8>> {
     vec![ALPN_H2.to_vec(), ALPN_HTTP11.to_vec()]
 }
 
 /// Configure ALPN protocols on a `ServerConfig`.
+#[inline]
 pub fn configure_alpn(config: &mut rustls::ServerConfig) {
     config.alpn_protocols = default_alpn_protocols();
 }
@@ -33,7 +39,6 @@ mod tests {
     #[test]
     fn h2_is_preferred_over_http11() {
         let protos = default_alpn_protocols();
-        // h2 comes first, meaning it is preferred
         assert_eq!(protos[0], ALPN_H2);
         assert_eq!(protos[1], ALPN_HTTP11);
     }

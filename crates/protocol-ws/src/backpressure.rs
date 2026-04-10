@@ -1,12 +1,17 @@
 //! WebSocket backpressure management.
 //!
 //! Pauses client reads when the backend is not writable and resumes when the
-//! backend drains.
+//! backend drains. Uses lock-free atomics for cross-task coordination.
 
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 
 /// Tracks backpressure state between client and backend WebSocket connections.
+///
+/// Both halves of the proxy share a clone of this state. When the backend
+/// write buffer fills, the writing side calls [`pause`] to signal the reading
+/// side to stop pulling frames. When the buffer drains, [`resume`] unblocks
+/// the reader.
 #[derive(Debug, Clone)]
 pub struct BackpressureState {
     /// When `true`, the client side should pause reading frames.
@@ -21,16 +26,19 @@ impl BackpressureState {
     }
 
     /// Signal that the backend is not writable -- pause client reads.
+    #[inline]
     pub fn pause(&self) {
         self.paused.store(true, Ordering::Release);
     }
 
     /// Signal that the backend has drained -- resume client reads.
+    #[inline]
     pub fn resume(&self) {
         self.paused.store(false, Ordering::Release);
     }
 
     /// Returns `true` if client reads should be paused.
+    #[inline]
     pub fn is_paused(&self) -> bool {
         self.paused.load(Ordering::Acquire)
     }

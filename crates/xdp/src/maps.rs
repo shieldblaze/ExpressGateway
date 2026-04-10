@@ -1,7 +1,16 @@
 //! BPF map definitions shared between eBPF programs and userspace.
 //!
 //! All structs use `#[repr(C)]` for stable ABI layout matching what the
-//! kernel-side BPF programs expect.
+//! kernel-side BPF programs expect. Fields that cross the kernel/userspace
+//! boundary must remain `#[repr(C)]` -- never `#[repr(Rust)]`.
+//!
+//! # Map types used
+//!
+//! - `BPF_MAP_TYPE_HASH` -- TCP connection tracking (`TcpConnKey` -> `TcpConnValue`)
+//! - `BPF_MAP_TYPE_HASH` -- UDP session tracking (`UdpSessionKey` -> `UdpSessionValue`)
+//! - `BPF_MAP_TYPE_ARRAY` -- Backend list (`u32` index -> `BackendEntry`)
+//! - `BPF_MAP_TYPE_LPM_TRIE` -- ACL rules (`AclKey` -> `AclValue`)
+//! - `BPF_MAP_TYPE_PERCPU_ARRAY` -- Statistics (`u32` index -> `XdpStats`)
 
 /// TCP connection table key (network byte order for IP fields).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -66,6 +75,8 @@ pub mod backend_state {
 }
 
 /// ACL trie key (longest-prefix-match).
+///
+/// Layout matches `struct bpf_lpm_trie_key` plus the data field.
 #[derive(Debug, Clone, Copy)]
 #[repr(C)]
 pub struct AclKey {
@@ -73,6 +84,25 @@ pub struct AclKey {
     pub prefix_len: u32,
     /// IPv4 (first 4 bytes) or IPv6 (all 16 bytes).
     pub ip: [u8; 16],
+}
+
+impl AclKey {
+    /// Create an ACL key from an IPv4 address and prefix length.
+    #[inline]
+    pub fn from_ipv4(addr: [u8; 4], prefix_len: u32) -> Self {
+        let mut ip = [0u8; 16];
+        ip[..4].copy_from_slice(&addr);
+        Self { prefix_len, ip }
+    }
+
+    /// Create an ACL key from an IPv6 address and prefix length.
+    #[inline]
+    pub fn from_ipv6(addr: [u8; 16], prefix_len: u32) -> Self {
+        Self {
+            prefix_len,
+            ip: addr,
+        }
+    }
 }
 
 /// ACL trie value.
@@ -103,6 +133,25 @@ pub struct XdpStats {
     pub bytes_redirect: u64,
 }
 
+impl XdpStats {
+    /// Merge per-CPU stats by summing all fields.
+    #[inline]
+    pub fn merge(&mut self, other: &XdpStats) {
+        self.packets_tx += other.packets_tx;
+        self.packets_redirect += other.packets_redirect;
+        self.packets_pass += other.packets_pass;
+        self.packets_drop += other.packets_drop;
+        self.bytes_tx += other.bytes_tx;
+        self.bytes_redirect += other.bytes_redirect;
+    }
+
+    /// Total packets processed across all actions.
+    #[inline]
+    pub fn total_packets(&self) -> u64 {
+        self.packets_tx + self.packets_redirect + self.packets_pass + self.packets_drop
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -110,10 +159,8 @@ mod tests {
 
     #[test]
     fn tcp_conn_key_size() {
-        // u32 + u16 + u32 + u16 = 12 bytes, but repr(C) alignment may add padding.
         let size = mem::size_of::<TcpConnKey>();
         assert!(size >= 12, "TcpConnKey too small: {size}");
-        // Verify alignment requirements are met.
         assert_eq!(mem::align_of::<TcpConnKey>(), mem::align_of::<u32>());
     }
 
@@ -143,7 +190,6 @@ mod tests {
 
     #[test]
     fn acl_key_size() {
-        // u32 + [u8; 16] = 20 bytes.
         let size = mem::size_of::<AclKey>();
         assert_eq!(size, 20);
     }
@@ -156,7 +202,6 @@ mod tests {
 
     #[test]
     fn xdp_stats_size() {
-        // 6 x u64 = 48 bytes.
         assert_eq!(mem::size_of::<XdpStats>(), 48);
     }
 
@@ -169,6 +214,32 @@ mod tests {
         assert_eq!(stats.packets_drop, 0);
         assert_eq!(stats.bytes_tx, 0);
         assert_eq!(stats.bytes_redirect, 0);
+    }
+
+    #[test]
+    fn xdp_stats_merge() {
+        let mut a = XdpStats {
+            packets_tx: 10,
+            packets_redirect: 5,
+            packets_pass: 3,
+            packets_drop: 1,
+            bytes_tx: 1000,
+            bytes_redirect: 500,
+        };
+        let b = XdpStats {
+            packets_tx: 20,
+            packets_redirect: 10,
+            packets_pass: 7,
+            packets_drop: 2,
+            bytes_tx: 2000,
+            bytes_redirect: 1000,
+        };
+        a.merge(&b);
+        assert_eq!(a.packets_tx, 30);
+        assert_eq!(a.packets_redirect, 15);
+        assert_eq!(a.packets_pass, 10);
+        assert_eq!(a.packets_drop, 3);
+        assert_eq!(a.total_packets(), 58);
     }
 
     #[test]
@@ -186,5 +257,21 @@ mod tests {
         let mut set = HashSet::new();
         set.insert(a);
         assert!(set.contains(&b));
+    }
+
+    #[test]
+    fn acl_key_from_ipv4() {
+        let key = AclKey::from_ipv4([10, 0, 0, 0], 8);
+        assert_eq!(key.prefix_len, 8);
+        assert_eq!(&key.ip[..4], &[10, 0, 0, 0]);
+        assert_eq!(&key.ip[4..], &[0u8; 12]);
+    }
+
+    #[test]
+    fn acl_key_from_ipv6() {
+        let addr = [0xfe, 0x80, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1];
+        let key = AclKey::from_ipv6(addr, 64);
+        assert_eq!(key.prefix_len, 64);
+        assert_eq!(key.ip, addr);
     }
 }

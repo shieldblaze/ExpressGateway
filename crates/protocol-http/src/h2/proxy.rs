@@ -182,9 +182,23 @@ impl H2ProxyHandler {
     }
 
     /// Release a stream slot.
+    ///
+    /// Uses a CAS loop to prevent underflow to `u32::MAX`.
     pub fn release_stream(&self) {
-        let prev = self.active_streams.fetch_sub(1, Ordering::AcqRel);
-        debug_assert!(prev > 0, "release_stream called with 0 active streams");
+        loop {
+            let current = self.active_streams.load(Ordering::Acquire);
+            if current == 0 {
+                tracing::error!("release_stream called with 0 active streams");
+                return;
+            }
+            if self
+                .active_streams
+                .compare_exchange_weak(current, current - 1, Ordering::AcqRel, Ordering::Acquire)
+                .is_ok()
+            {
+                return;
+            }
+        }
     }
 
     /// Number of currently active streams.

@@ -8,4 +8,3 @@ expressgateway-core = { path = "../core" }
 bytes.workspace = true
 tracing.workspace = true
 thiserror.workspace = true
-anyhow.workspace = true

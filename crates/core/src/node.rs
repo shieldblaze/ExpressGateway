@@ -1,4 +1,8 @@
 //! Backend node definition and management.
+//!
+//! [`NodeImpl`] is the concrete, lock-free backend node used on the data path.
+//! All counters use atomic operations so a `NodeImpl` can be shared across
+//! worker threads behind an `Arc` with zero contention on reads.
 
 use std::net::SocketAddr;
 use std::sync::Arc;
@@ -16,7 +20,8 @@ pub enum NodeState {
     Online,
     /// Marked offline by health check.
     Offline,
-    /// Transitional state after restoration from offline (awaiting health check verification).
+    /// Transitional state after restoration from offline (awaiting health check
+    /// verification).
     Idle,
     /// Manually taken offline by operator.
     ManualOffline,
@@ -58,6 +63,7 @@ pub trait Node: Send + Sync {
     fn inc_connections(&self) -> u64;
 
     /// Decrement active connection count. Returns the new count.
+    /// Saturates at zero -- never underflows.
     fn dec_connections(&self) -> u64;
 
     /// Add to bytes sent counter.
@@ -70,12 +76,16 @@ pub trait Node: Send + Sync {
     fn try_acquire_connection(&self) -> bool;
 
     /// Whether the node is available for traffic.
+    #[inline]
     fn is_online(&self) -> bool {
         self.state() == NodeState::Online
     }
 }
 
-/// Concrete implementation of `Node` with atomic counters.
+/// Concrete implementation of [`Node`] with atomic counters.
+///
+/// All mutable state is behind atomics so no locks are required on the hot
+/// path. The struct is `Send + Sync` by construction.
 pub struct NodeImpl {
     id: String,
     address: SocketAddr,
@@ -115,76 +125,113 @@ impl NodeImpl {
     }
 
     /// Set the health state.
+    #[inline]
     pub fn set_health(&self, health: Health) {
         self.health.store(health);
     }
 
     /// Set the weight.
+    #[inline]
     pub fn set_weight(&self, weight: u32) {
         self.weight.store(weight);
     }
 }
 
 impl Node for NodeImpl {
+    #[inline]
     fn id(&self) -> &str {
         &self.id
     }
 
+    #[inline]
     fn address(&self) -> SocketAddr {
         self.address
     }
 
+    #[inline]
     fn state(&self) -> NodeState {
         self.state.load()
     }
 
+    #[inline]
     fn set_state(&self, state: NodeState) {
         self.state.store(state);
     }
 
+    #[inline]
     fn active_connections(&self) -> u64 {
         self.active_connections.load(Ordering::Relaxed)
     }
 
+    #[inline]
     fn max_connections(&self) -> Option<u64> {
         self.max_connections
     }
 
+    #[inline]
     fn bytes_sent(&self) -> u64 {
         self.bytes_sent.load(Ordering::Relaxed)
     }
 
+    #[inline]
     fn bytes_received(&self) -> u64 {
         self.bytes_received.load(Ordering::Relaxed)
     }
 
+    #[inline]
     fn health(&self) -> Health {
         self.health.load()
     }
 
+    #[inline]
     fn weight(&self) -> u32 {
         self.weight.load()
     }
 
+    #[inline]
     fn inc_connections(&self) -> u64 {
         self.active_connections.fetch_add(1, Ordering::Relaxed) + 1
     }
 
+    /// Decrement active connections, saturating at zero.
+    ///
+    /// Uses a CAS loop to prevent underflow when called more times than
+    /// `inc_connections`.
+    #[inline]
     fn dec_connections(&self) -> u64 {
-        self.active_connections.fetch_sub(1, Ordering::Relaxed) - 1
+        loop {
+            let current = self.active_connections.load(Ordering::Acquire);
+            if current == 0 {
+                return 0;
+            }
+            if self
+                .active_connections
+                .compare_exchange_weak(
+                    current,
+                    current - 1,
+                    Ordering::AcqRel,
+                    Ordering::Relaxed,
+                )
+                .is_ok()
+            {
+                return current - 1;
+            }
+        }
     }
 
+    #[inline]
     fn add_bytes_sent(&self, bytes: u64) {
         self.bytes_sent.fetch_add(bytes, Ordering::Relaxed);
     }
 
+    #[inline]
     fn add_bytes_received(&self, bytes: u64) {
         self.bytes_received.fetch_add(bytes, Ordering::Relaxed);
     }
 
     fn try_acquire_connection(&self) -> bool {
         if let Some(max) = self.max_connections {
-            // TOCTOU-safe: CAS loop
+            // CAS loop: atomically check capacity and increment.
             loop {
                 let current = self.active_connections.load(Ordering::Acquire);
                 if current >= max {
@@ -257,6 +304,16 @@ mod tests {
 
         assert_eq!(node.dec_connections(), 1);
         assert_eq!(node.active_connections(), 1);
+    }
+
+    #[test]
+    fn test_dec_connections_saturates_at_zero() {
+        let node = NodeImpl::new("test-1".into(), "127.0.0.1:8080".parse().unwrap(), 1, None);
+        assert_eq!(node.active_connections(), 0);
+        // Must not underflow.
+        assert_eq!(node.dec_connections(), 0);
+        assert_eq!(node.dec_connections(), 0);
+        assert_eq!(node.active_connections(), 0);
     }
 
     #[test]

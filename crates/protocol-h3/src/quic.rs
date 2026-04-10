@@ -62,10 +62,10 @@ impl QuicTransport {
 
         let mut server_config = quinn::ServerConfig::with_crypto(Arc::new(quic_server_config));
         let mut transport = quinn::TransportConfig::default();
-        transport.max_concurrent_bidi_streams(
-            quinn::VarInt::from_u64(config.max_concurrent_streams)
-                .unwrap_or(quinn::VarInt::from_u32(100)),
-        );
+        let max_streams = quinn::VarInt::from_u64(config.max_concurrent_streams).context(
+            "max_concurrent_streams exceeds QUIC VarInt range (2^62 - 1)",
+        )?;
+        transport.max_concurrent_bidi_streams(max_streams);
         transport.max_idle_timeout(Some(
             config
                 .max_idle_timeout
@@ -100,10 +100,10 @@ impl QuicTransport {
 
         let mut client_config = quinn::ClientConfig::new(Arc::new(quic_client_config));
         let mut transport = quinn::TransportConfig::default();
-        transport.max_concurrent_bidi_streams(
-            quinn::VarInt::from_u64(config.max_concurrent_streams)
-                .unwrap_or(quinn::VarInt::from_u32(100)),
-        );
+        let max_streams = quinn::VarInt::from_u64(config.max_concurrent_streams).context(
+            "max_concurrent_streams exceeds QUIC VarInt range (2^62 - 1)",
+        )?;
+        transport.max_concurrent_bidi_streams(max_streams);
         transport.max_idle_timeout(Some(
             config
                 .max_idle_timeout
