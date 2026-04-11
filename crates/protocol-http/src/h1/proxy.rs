@@ -84,6 +84,20 @@ impl H1ProxyHandler {
         client_addr: SocketAddr,
         is_tls: bool,
     ) -> Result<ProcessedRequest, Box<Response<Full<Bytes>>>> {
+        // ── Request smuggling defense ────────────────────────────────────
+        // RFC 9112 §6.3: If both Transfer-Encoding and Content-Length are
+        // present, or if Transfer-Encoding contains an obfuscated value, or
+        // if there are multiple conflicting Content-Length values, the
+        // message framing is ambiguous. A proxy MUST reject such requests
+        // to prevent CL.TE / TE.CL / TE.TE smuggling attacks.
+        validate_request_framing(req).map_err(|e| Box::new(e.into_response()))?;
+
+        // ── Host header validation ───────────────────────────────────────
+        // RFC 9112 §3.2: A server MUST respond with 400 to any HTTP/1.1
+        // request that lacks a Host header field or that contains more than
+        // one.
+        validate_host_header(req).map_err(|e| Box::new(e.into_response()))?;
+
         // Check URI length.
         let uri_str = req.uri().to_string();
         if uri_str.len() > self.config.max_uri_length {
@@ -132,11 +146,7 @@ impl H1ProxyHandler {
                 .and_then(|v| v.to_str().ok())
                 .map(|s| s.to_string()),
             path: normalized.path.clone(),
-            headers: req
-                .headers()
-                .iter()
-                .map(|(k, v)| (k.to_string(), v.to_str().unwrap_or_default().to_string()))
-                .collect(),
+            headers: req.headers().clone(),
         };
 
         // Select backend.
@@ -156,14 +166,9 @@ impl H1ProxyHandler {
             &self.config.proxy_name,
         );
 
-        // Add any headers from the load balancer.
+        // Add any headers from the load balancer (e.g. Set-Cookie from sticky sessions).
         for (name, value) in &lb_resp.headers_to_add {
-            if let (Ok(n), Ok(v)) = (
-                http::header::HeaderName::from_bytes(name.as_bytes()),
-                http::header::HeaderValue::from_str(value),
-            ) {
-                fwd_headers.insert(n, v);
-            }
+            fwd_headers.insert(name.clone(), value.clone());
         }
 
         debug!(
@@ -253,6 +258,102 @@ pub fn gateway_timeout() -> Response<Full<Bytes>> {
     HttpError::gateway_timeout().into_response()
 }
 
+/// Validate HTTP/1.1 message framing to prevent request smuggling.
+///
+/// Rejects the following ambiguous framing per RFC 9112 §6.3:
+/// - Both `Transfer-Encoding` and `Content-Length` present (CL.TE / TE.CL).
+/// - Multiple `Content-Length` headers with different values.
+/// - `Transfer-Encoding` with any value other than exactly `chunked`
+///   (prevents TE.TE obfuscation via e.g. `chunked, identity` or
+///   `Transfer-Encoding: chunked\r\nTransfer-Encoding: identity`).
+fn validate_request_framing(req: &Request<()>) -> Result<(), HttpError> {
+    let has_te = req.headers().contains_key(http::header::TRANSFER_ENCODING);
+    let has_cl = req.headers().contains_key(http::header::CONTENT_LENGTH);
+
+    // RFC 9112 §6.3: If a message is received with both Transfer-Encoding
+    // and Content-Length, the Transfer-Encoding overrides, but a proxy MUST
+    // reject such a message to avoid smuggling.
+    if has_te && has_cl {
+        return Err(HttpError::bad_request(
+            "request contains both Transfer-Encoding and Content-Length (RFC 9112 §6.3)",
+        ));
+    }
+
+    // TE.TE defense: only accept exactly "chunked" (case-insensitive).
+    // Reject obfuscated variants like "chunked, identity", " chunked",
+    // "chunked\t", or multiple TE headers.
+    if has_te {
+        let te_values: Vec<_> = req
+            .headers()
+            .get_all(http::header::TRANSFER_ENCODING)
+            .iter()
+            .collect();
+        if te_values.len() != 1 {
+            return Err(HttpError::bad_request(
+                "multiple Transfer-Encoding headers (RFC 9112 §6.3)",
+            ));
+        }
+        if let Ok(val) = te_values[0].to_str() {
+            if !val.eq_ignore_ascii_case("chunked") {
+                return Err(HttpError::bad_request(
+                    "Transfer-Encoding value must be exactly \"chunked\" (RFC 9112 §6.3)",
+                ));
+            }
+        } else {
+            return Err(HttpError::bad_request(
+                "Transfer-Encoding contains non-ASCII bytes",
+            ));
+        }
+    }
+
+    // Conflicting Content-Length values: multiple CL headers must all
+    // carry the same value, otherwise framing is ambiguous.
+    if has_cl {
+        let cl_values: Vec<_> = req
+            .headers()
+            .get_all(http::header::CONTENT_LENGTH)
+            .iter()
+            .collect();
+        if cl_values.len() > 1 {
+            let first = cl_values[0].as_bytes();
+            for val in &cl_values[1..] {
+                if val.as_bytes() != first {
+                    return Err(HttpError::bad_request(
+                        "conflicting Content-Length values (RFC 9112 §6.3)",
+                    ));
+                }
+            }
+        }
+    }
+
+    Ok(())
+}
+
+/// Validate the Host header per RFC 9112 §3.2.
+///
+/// An HTTP/1.1 request MUST contain exactly one Host header field. Requests
+/// with zero or more than one Host header are rejected with 400.
+fn validate_host_header(req: &Request<()>) -> Result<(), HttpError> {
+    // RFC 9112 §3.2: A server MUST respond with a 400 (Bad Request) status
+    // code to any HTTP/1.1 request message that lacks a Host header field
+    // and to any request message that contains more than one Host header
+    // field line or a Host header field with an invalid field-value.
+    if req.version() == Version::HTTP_11 {
+        let host_count = req.headers().get_all(http::header::HOST).iter().count();
+        if host_count == 0 {
+            return Err(HttpError::bad_request(
+                "missing Host header (RFC 9112 §3.2)",
+            ));
+        }
+        if host_count > 1 {
+            return Err(HttpError::bad_request(
+                "multiple Host headers (RFC 9112 §3.2)",
+            ));
+        }
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -269,7 +370,7 @@ mod tests {
         fn select(&self, _request: &HttpRequest) -> expressgateway_core::Result<HttpResponse> {
             Ok(HttpResponse {
                 node: self.node.clone(),
-                headers_to_add: Vec::new(),
+                headers_to_add: http::HeaderMap::new(),
             })
         }
 
@@ -311,7 +412,11 @@ mod tests {
     fn rejects_long_uri() {
         let handler = make_handler();
         let long_path = format!("/{}", "a".repeat(9000));
-        let req = Request::builder().uri(long_path.as_str()).body(()).unwrap();
+        let req = Request::builder()
+            .uri(long_path.as_str())
+            .header("host", "example.com")
+            .body(())
+            .unwrap();
         let client = "10.0.0.1:1234".parse().unwrap();
         let result = handler.process_request(&req, client, false);
         assert!(result.is_err());
@@ -322,7 +427,11 @@ mod tests {
     #[test]
     fn rejects_path_traversal() {
         let handler = make_handler();
-        let req = Request::builder().uri("/../etc/passwd").body(()).unwrap();
+        let req = Request::builder()
+            .uri("/../etc/passwd")
+            .header("host", "example.com")
+            .body(())
+            .unwrap();
         let client = "10.0.0.1:1234".parse().unwrap();
         let result = handler.process_request(&req, client, false);
         assert!(result.is_err());
@@ -405,5 +514,84 @@ mod tests {
 
         let pr2 = ProcessedRequest { query: None, ..pr };
         assert_eq!(pr2.uri_string(), "/foo");
+    }
+
+    // ── Request smuggling defense tests ──────────────────────────────
+
+    #[test]
+    fn rejects_cl_te_smuggling() {
+        // CL.TE: both Content-Length and Transfer-Encoding present.
+        let handler = make_handler();
+        let req = Request::builder()
+            .uri("/")
+            .header("host", "example.com")
+            .header("content-length", "10")
+            .header("transfer-encoding", "chunked")
+            .body(())
+            .unwrap();
+        let client = "10.0.0.1:1234".parse().unwrap();
+        let result = handler.process_request(&req, client, false);
+        assert!(result.is_err());
+        assert_eq!(result.unwrap_err().status(), HttpStatusCode::BAD_REQUEST);
+    }
+
+    #[test]
+    fn rejects_te_te_obfuscation() {
+        // TE.TE: Transfer-Encoding with obfuscated value.
+        let handler = make_handler();
+        let req = Request::builder()
+            .uri("/")
+            .header("host", "example.com")
+            .header("transfer-encoding", "chunked, identity")
+            .body(())
+            .unwrap();
+        let client = "10.0.0.1:1234".parse().unwrap();
+        let result = handler.process_request(&req, client, false);
+        assert!(result.is_err());
+        assert_eq!(result.unwrap_err().status(), HttpStatusCode::BAD_REQUEST);
+    }
+
+    #[test]
+    fn allows_valid_chunked_te() {
+        let handler = make_handler();
+        let req = Request::builder()
+            .uri("/")
+            .header("host", "example.com")
+            .header("transfer-encoding", "chunked")
+            .body(())
+            .unwrap();
+        let client = "10.0.0.1:1234".parse().unwrap();
+        let result = handler.process_request(&req, client, false);
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn rejects_missing_host_http11() {
+        let handler = make_handler();
+        let req = Request::builder()
+            .version(Version::HTTP_11)
+            .uri("/")
+            .body(())
+            .unwrap();
+        let client = "10.0.0.1:1234".parse().unwrap();
+        let result = handler.process_request(&req, client, false);
+        assert!(result.is_err());
+        assert_eq!(result.unwrap_err().status(), HttpStatusCode::BAD_REQUEST);
+    }
+
+    #[test]
+    fn rejects_multiple_host_headers() {
+        let handler = make_handler();
+        let req = Request::builder()
+            .version(Version::HTTP_11)
+            .uri("/")
+            .header("host", "example.com")
+            .header("host", "evil.com")
+            .body(())
+            .unwrap();
+        let client = "10.0.0.1:1234".parse().unwrap();
+        let result = handler.process_request(&req, client, false);
+        assert!(result.is_err());
+        assert_eq!(result.unwrap_err().status(), HttpStatusCode::BAD_REQUEST);
     }
 }

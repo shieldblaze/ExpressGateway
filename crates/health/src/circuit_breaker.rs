@@ -46,6 +46,10 @@ impl CircuitBreaker {
     }
 
     /// Current circuit breaker state.
+    ///
+    /// This method may trigger a lazy OPEN -> HALF_OPEN transition if the
+    /// open duration has elapsed. The transition is performed via CAS so
+    /// exactly one caller will execute it.
     pub fn state(&self) -> CircuitBreakerState {
         let raw = self.state.load(Ordering::Acquire);
         // Check for OPEN -> HALF_OPEN transition based on elapsed time.
@@ -55,7 +59,15 @@ impl CircuitBreaker {
                 let now_nanos = nanos_since_epoch();
                 let elapsed = Duration::from_nanos(now_nanos.saturating_sub(last_failure_nanos));
                 if elapsed >= self.config.open_duration {
-                    // Try to transition to HALF_OPEN.
+                    // Reset counters BEFORE the CAS so that any thread
+                    // observing STATE_HALF_OPEN (via Acquire on the CAS)
+                    // sees the zeroed counters. The extra stores are
+                    // harmless if the CAS fails (we remain OPEN and the
+                    // values are unused until the next successful transition).
+                    self.success_count.store(0, Ordering::Release);
+                    self.half_open_permits
+                        .store(self.max_half_open_permits, Ordering::Release);
+
                     if self
                         .state
                         .compare_exchange(
@@ -66,9 +78,6 @@ impl CircuitBreaker {
                         )
                         .is_ok()
                     {
-                        self.success_count.store(0, Ordering::Release);
-                        self.half_open_permits
-                            .store(self.max_half_open_permits, Ordering::Release);
                         return CircuitBreakerState::HalfOpen;
                     }
                 }

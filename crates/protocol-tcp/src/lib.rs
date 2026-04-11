@@ -4,11 +4,12 @@
 //! - Accepts TCP connections on a listener
 //! - Selects a backend via a pluggable load balancer
 //! - Performs bidirectional data forwarding (client <-> backend)
+//! - Uses Linux splice(2) for zero-copy forwarding when available
+//! - Falls back to userspace relay on non-Linux or when splice is unsupported
 //! - Supports half-close (RFC 9293)
 //! - Tracks connections through a state machine
 //! - Provides graceful drain with configurable timeout
 //! - Applies configurable TCP socket options (nodelay, keepalive, quickack, fastopen)
-//! - Enforces backpressure via write-buffer water marks
 //! - Tracks per-connection byte counters for observability
 
 pub mod connection;

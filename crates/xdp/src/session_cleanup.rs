@@ -122,7 +122,9 @@ impl SessionCleanup {
             now_ns.saturating_sub(*last_seen) <= timeout_ns
         });
 
-        let evicted = before - self.sessions.len();
+        // Use saturating_sub: concurrent `touch()` calls can insert entries
+        // during `retain()`, making len() > before.
+        let evicted = before.saturating_sub(self.sessions.len());
 
         if evicted > 0 {
             tracing::debug!(
@@ -164,7 +166,9 @@ impl SessionCleanup {
                             now_ns.saturating_sub(*last_seen) <= timeout_ns
                         });
 
-                        let evicted = before - sessions.len();
+                        // Use saturating_sub: concurrent `touch()` calls can
+                        // insert entries during `retain()`, making len() > before.
+                        let evicted = before.saturating_sub(sessions.len());
                         if evicted > 0 {
                             tracing::debug!(
                                 evicted,
@@ -199,6 +203,7 @@ mod tests {
         UdpSessionKey {
             src_ip: ip,
             src_port: port,
+            _pad: 0,
         }
     }
 

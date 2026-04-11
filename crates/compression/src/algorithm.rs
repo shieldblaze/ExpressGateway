@@ -37,12 +37,24 @@ impl CompressionAlgorithm {
     }
 
     /// Try to parse a `Content-Encoding` / `Accept-Encoding` token into an algorithm.
+    ///
+    /// Zero-allocation: uses a stack buffer for case-insensitive matching.
     pub fn from_encoding(encoding: &str) -> Option<Self> {
-        match encoding.trim().to_ascii_lowercase().as_str() {
-            "br" => Some(CompressionAlgorithm::Brotli),
-            "zstd" => Some(CompressionAlgorithm::Zstd),
-            "gzip" => Some(CompressionAlgorithm::Gzip),
-            "deflate" => Some(CompressionAlgorithm::Deflate),
+        let trimmed = encoding.trim().as_bytes();
+        // Longest known token is "deflate" (7 bytes).
+        let mut buf = [0u8; 16];
+        if trimmed.len() > buf.len() {
+            return None;
+        }
+        let lower = &mut buf[..trimmed.len()];
+        for (dst, src) in lower.iter_mut().zip(trimmed) {
+            *dst = src.to_ascii_lowercase();
+        }
+        match &*lower {
+            b"br" => Some(CompressionAlgorithm::Brotli),
+            b"zstd" => Some(CompressionAlgorithm::Zstd),
+            b"gzip" => Some(CompressionAlgorithm::Gzip),
+            b"deflate" => Some(CompressionAlgorithm::Deflate),
             _ => None,
         }
     }
@@ -92,22 +104,24 @@ impl std::fmt::Display for CompressionAlgorithm {
 // ---------------------------------------------------------------------------
 
 fn compress_brotli(data: &[u8]) -> Result<Bytes, CompressionError> {
-    let mut output = Vec::new();
+    // Pre-size to input length; compressed output is typically smaller.
+    let mut output = Vec::with_capacity(data.len());
     {
         // quality 6 is a good speed/ratio trade-off for proxies.
         let mut writer = brotli::CompressorWriter::new(&mut output, 4096, 6, 22);
         writer
             .write_all(data)
             .map_err(CompressionError::CompressFailed)?;
-        // CompressorWriter flushes on drop, but we flush explicitly to
-        // catch errors.
+        // CompressorWriter finalizes the brotli stream on Drop.  Flush
+        // pushes the internal buffer through; the Vec<u8> sink cannot fail
+        // on write so the Drop path is infallible.
         writer.flush().map_err(CompressionError::CompressFailed)?;
     }
     Ok(Bytes::from(output))
 }
 
 fn decompress_brotli(data: &[u8]) -> Result<Bytes, CompressionError> {
-    let mut output = Vec::new();
+    let mut output = Vec::with_capacity(data.len() * 2);
     let mut reader = brotli::Decompressor::new(data, 4096);
     reader
         .read_to_end(&mut output)
@@ -134,7 +148,8 @@ fn decompress_zstd(data: &[u8]) -> Result<Bytes, CompressionError> {
 // ---------------------------------------------------------------------------
 
 fn compress_gzip(data: &[u8]) -> Result<Bytes, CompressionError> {
-    let mut encoder = flate2::write::GzEncoder::new(Vec::new(), flate2::Compression::fast());
+    let mut encoder =
+        flate2::write::GzEncoder::new(Vec::with_capacity(data.len()), flate2::Compression::fast());
     encoder
         .write_all(data)
         .map_err(CompressionError::CompressFailed)?;
@@ -144,7 +159,7 @@ fn compress_gzip(data: &[u8]) -> Result<Bytes, CompressionError> {
 
 fn decompress_gzip(data: &[u8]) -> Result<Bytes, CompressionError> {
     let mut decoder = flate2::read::GzDecoder::new(data);
-    let mut output = Vec::new();
+    let mut output = Vec::with_capacity(data.len() * 2);
     decoder
         .read_to_end(&mut output)
         .map_err(CompressionError::DecompressFailed)?;
@@ -156,7 +171,10 @@ fn decompress_gzip(data: &[u8]) -> Result<Bytes, CompressionError> {
 // ---------------------------------------------------------------------------
 
 fn compress_deflate(data: &[u8]) -> Result<Bytes, CompressionError> {
-    let mut encoder = flate2::write::DeflateEncoder::new(Vec::new(), flate2::Compression::fast());
+    let mut encoder = flate2::write::DeflateEncoder::new(
+        Vec::with_capacity(data.len()),
+        flate2::Compression::fast(),
+    );
     encoder
         .write_all(data)
         .map_err(CompressionError::CompressFailed)?;
@@ -166,7 +184,7 @@ fn compress_deflate(data: &[u8]) -> Result<Bytes, CompressionError> {
 
 fn decompress_deflate(data: &[u8]) -> Result<Bytes, CompressionError> {
     let mut decoder = flate2::read::DeflateDecoder::new(data);
-    let mut output = Vec::new();
+    let mut output = Vec::with_capacity(data.len() * 2);
     decoder
         .read_to_end(&mut output)
         .map_err(CompressionError::DecompressFailed)?;

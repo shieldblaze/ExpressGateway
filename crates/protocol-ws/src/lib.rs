@@ -28,7 +28,7 @@ pub use frames::{
     PingPongTracker,
 };
 pub use h2_websocket::{H2Protocol, H2WebSocketStream, is_h2_websocket_upgrade};
-pub use proxy::{ProxyConfig, forward_frames, run_proxy};
+pub use proxy::{ProxyConfig, run_proxy};
 pub use timeout::{
     CloseHandshakeTimeout, DEFAULT_CLOSE_HANDSHAKE_TIMEOUT, DEFAULT_HANDSHAKE_TIMEOUT,
     DEFAULT_IDLE_TIMEOUT, HandshakeTimeout, IdleTimeout,

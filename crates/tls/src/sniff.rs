@@ -80,12 +80,14 @@ impl ProtocolSniffer {
             return DetectedProtocol::Tls;
         }
 
-        // HTTP/2 connection preface: "PRI * HTTP/2.0\r\n\r\nSM\r\n\r\n"
+        // HTTP/2 connection preface: "PRI * HTTP/2.0\r\n\r\nSM\r\n\r\n" (24 bytes)
+        // Per RFC 9113 section 3.4, the preface starts with this exact sequence.
+        // We require at least "PRI * " (6 bytes) for partial matches to avoid
+        // false positives (e.g., data starting with "PRIV" or "PRINT").
         if buf.len() >= H2_PREFACE.len() && &buf[..H2_PREFACE.len()] == H2_PREFACE {
             return DetectedProtocol::Http2;
         }
-        // Partial HTTP/2 preface check (if we got fewer bytes)
-        if buf.len() >= 3 && &buf[..3] == b"PRI" {
+        if buf.len() >= 6 && &buf[..6] == b"PRI * " {
             return DetectedProtocol::Http2;
         }
 
@@ -139,8 +141,19 @@ mod tests {
 
     #[test]
     fn detect_http2_partial_preface() {
+        // "PRI * " (6 bytes) is the minimum partial match.
         let buf = b"PRI * H";
         assert_eq!(ProtocolSniffer::detect(buf), DetectedProtocol::Http2);
+
+        let buf = b"PRI * ";
+        assert_eq!(ProtocolSniffer::detect(buf), DetectedProtocol::Http2);
+    }
+
+    #[test]
+    fn three_byte_pri_is_not_http2() {
+        // "PRI" alone is too short to be confident -- could be "PRIV", "PRINT", etc.
+        let buf = b"PRI";
+        assert_eq!(ProtocolSniffer::detect(buf), DetectedProtocol::Unknown);
     }
 
     #[test]

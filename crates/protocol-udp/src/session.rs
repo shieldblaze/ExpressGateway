@@ -227,7 +227,7 @@ impl SessionManager {
 
         CleanupHandle {
             running,
-            _join: join,
+            join,
         }
     }
 
@@ -241,19 +241,24 @@ impl SessionManager {
 /// Handle for the background cleanup task. When dropped, the task is stopped.
 pub struct CleanupHandle {
     running: Arc<AtomicBool>,
-    _join: tokio::task::JoinHandle<()>,
+    join: tokio::task::JoinHandle<()>,
 }
 
 impl CleanupHandle {
     /// Signal the cleanup task to stop.
+    ///
+    /// Sets the stop flag and aborts the tokio task so it does not linger
+    /// sleeping for the remainder of the cleanup interval.
     pub fn stop(&self) {
         self.running.store(false, Ordering::Release);
+        self.join.abort();
     }
 }
 
 impl Drop for CleanupHandle {
     fn drop(&mut self) {
         self.running.store(false, Ordering::Release);
+        self.join.abort();
     }
 }
 

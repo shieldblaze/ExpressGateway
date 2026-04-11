@@ -35,7 +35,7 @@ impl AltSvcHeader {
     }
 
     /// Convenience: inject Alt-Svc into an HTTP response builder.
-    pub fn inject_into_response<T>(
+    pub fn inject_into_response(
         &self,
         response: http::response::Builder,
     ) -> http::response::Builder {
@@ -108,7 +108,7 @@ mod tests {
     fn inject_into_http_response() {
         let alt_svc = AltSvcHeader::new(443, 86400);
         let builder = http::Response::builder().status(200);
-        let builder = alt_svc.inject_into_response::<()>(builder);
+        let builder = alt_svc.inject_into_response(builder);
         let response = builder.body(()).unwrap();
 
         let header = response.headers().get("alt-svc").unwrap();

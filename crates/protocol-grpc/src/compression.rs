@@ -62,20 +62,47 @@ pub fn encoding_from_headers(headers: &HeaderMap) -> Option<GrpcEncoding> {
         .and_then(GrpcEncoding::from_header)
 }
 
-/// Parse the `grpc-accept-encoding` header into a list of accepted encodings.
+/// A compact bitset of accepted gRPC encodings. Stack-allocated, zero heap
+/// allocation. Fits all 5 known encodings in a single `u8`.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct EncodingSet(u8);
+
+impl EncodingSet {
+    /// Insert an encoding into the set.
+    #[inline]
+    pub fn insert(&mut self, enc: GrpcEncoding) {
+        self.0 |= 1 << (enc as u8);
+    }
+
+    /// Check if an encoding is in the set.
+    #[inline]
+    pub fn contains(self, enc: GrpcEncoding) -> bool {
+        self.0 & (1 << (enc as u8)) != 0
+    }
+
+    /// Returns `true` if the set is empty.
+    #[inline]
+    pub fn is_empty(self) -> bool {
+        self.0 == 0
+    }
+}
+
+/// Parse the `grpc-accept-encoding` header into a set of accepted encodings.
 ///
 /// The header value is a comma-separated list of encoding names.
 /// Unknown encodings are silently ignored.
-pub fn accepted_encodings_from_headers(headers: &HeaderMap) -> Vec<GrpcEncoding> {
-    headers
-        .get("grpc-accept-encoding")
-        .and_then(|v| v.to_str().ok())
-        .map(|v| {
-            v.split(',')
-                .filter_map(|s| GrpcEncoding::from_header(s.trim()))
-                .collect()
-        })
-        .unwrap_or_default()
+///
+/// Returns a stack-allocated [`EncodingSet`] -- zero heap allocation.
+pub fn accepted_encodings_from_headers(headers: &HeaderMap) -> EncodingSet {
+    let mut set = EncodingSet::default();
+    if let Some(value) = headers.get("grpc-accept-encoding").and_then(|v| v.to_str().ok()) {
+        for token in value.split(',') {
+            if let Some(enc) = GrpcEncoding::from_header(token.trim()) {
+                set.insert(enc);
+            }
+        }
+    }
+    set
 }
 
 /// Build the `grpc-accept-encoding` header value for our supported encodings.
@@ -94,11 +121,11 @@ pub fn supported_encodings() -> &'static [GrpcEncoding] {
     ]
 }
 
-/// Select the best encoding from the client's accepted list that we support.
+/// Select the best encoding from the client's accepted set that we support.
 ///
 /// Returns `Identity` if no common encoding is found (identity is always
 /// implicitly accepted per the gRPC spec).
-pub fn negotiate_encoding(accepted: &[GrpcEncoding]) -> GrpcEncoding {
+pub fn negotiate_encoding(accepted: EncodingSet) -> GrpcEncoding {
     // Prefer in order: zstd > gzip > snappy > deflate > identity
     const PREFERENCE: &[GrpcEncoding] = &[
         GrpcEncoding::Zstd,
@@ -108,7 +135,7 @@ pub fn negotiate_encoding(accepted: &[GrpcEncoding]) -> GrpcEncoding {
     ];
 
     for &pref in PREFERENCE {
-        if accepted.contains(&pref) {
+        if accepted.contains(pref) {
             return pref;
         }
     }
@@ -181,14 +208,11 @@ mod tests {
             HeaderValue::from_static("gzip, identity, deflate"),
         );
         let accepted = accepted_encodings_from_headers(&headers);
-        assert_eq!(
-            accepted,
-            vec![
-                GrpcEncoding::Gzip,
-                GrpcEncoding::Identity,
-                GrpcEncoding::Deflate
-            ]
-        );
+        assert!(accepted.contains(GrpcEncoding::Gzip));
+        assert!(accepted.contains(GrpcEncoding::Identity));
+        assert!(accepted.contains(GrpcEncoding::Deflate));
+        assert!(!accepted.contains(GrpcEncoding::Zstd));
+        assert!(!accepted.contains(GrpcEncoding::Snappy));
     }
 
     #[test]
@@ -199,18 +223,22 @@ mod tests {
             HeaderValue::from_static("gzip, brotli, zstd"),
         );
         let accepted = accepted_encodings_from_headers(&headers);
-        assert_eq!(accepted, vec![GrpcEncoding::Gzip, GrpcEncoding::Zstd]);
+        assert!(accepted.contains(GrpcEncoding::Gzip));
+        assert!(accepted.contains(GrpcEncoding::Zstd));
+        assert!(!accepted.contains(GrpcEncoding::Deflate));
     }
 
     #[test]
     fn negotiate_prefers_zstd() {
-        let accepted = vec![GrpcEncoding::Gzip, GrpcEncoding::Zstd];
-        assert_eq!(negotiate_encoding(&accepted), GrpcEncoding::Zstd);
+        let mut accepted = EncodingSet::default();
+        accepted.insert(GrpcEncoding::Gzip);
+        accepted.insert(GrpcEncoding::Zstd);
+        assert_eq!(negotiate_encoding(accepted), GrpcEncoding::Zstd);
     }
 
     #[test]
     fn negotiate_falls_back_to_identity() {
-        let accepted = vec![];
-        assert_eq!(negotiate_encoding(&accepted), GrpcEncoding::Identity);
+        let accepted = EncodingSet::default();
+        assert_eq!(negotiate_encoding(accepted), GrpcEncoding::Identity);
     }
 }

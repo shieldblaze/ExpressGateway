@@ -190,7 +190,7 @@ impl Node for NodeImpl {
 
     #[inline]
     fn inc_connections(&self) -> u64 {
-        self.active_connections.fetch_add(1, Ordering::Relaxed) + 1
+        self.active_connections.fetch_add(1, Ordering::AcqRel) + 1
     }
 
     /// Decrement active connections, saturating at zero.

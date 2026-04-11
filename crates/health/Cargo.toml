@@ -15,3 +15,4 @@ parking_lot.workspace = true
 dashmap.workspace = true
 async-trait.workspace = true
 crossbeam.workspace = true
+tokio-util.workspace = true

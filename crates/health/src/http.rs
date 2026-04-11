@@ -50,7 +50,7 @@ impl HealthChecker for HttpHealthChecker {
             stream.write_all(request.as_bytes()).await?;
 
             // Read response (only need the status line).
-            let mut buf = vec![0u8; 1024];
+            let mut buf = [0u8; 1024];
             let n = stream.read(&mut buf).await?;
             if n == 0 {
                 return Err(std::io::Error::new(

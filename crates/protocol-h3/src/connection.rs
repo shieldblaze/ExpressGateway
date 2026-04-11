@@ -14,6 +14,12 @@ pub struct QuicConnection {
     inner: quinn::Connection,
     /// Whether a migration event has been detected on this connection.
     migration_detected: AtomicBool,
+    /// Whether this connection was established using 0-RTT early data.
+    ///
+    /// Per RFC 9001 Section 4.1, 0-RTT data is replayable. The HTTP/3 layer
+    /// MUST reject non-idempotent methods (POST, PATCH, DELETE) arriving over
+    /// 0-RTT unless the application explicitly opts in to replay risk.
+    accepted_0rtt: AtomicBool,
     /// The last observed remote address, used for rebinding detection.
     last_remote_addr: Mutex<SocketAddr>,
 }
@@ -25,8 +31,31 @@ impl QuicConnection {
         Self {
             inner,
             migration_detected: AtomicBool::new(false),
+            accepted_0rtt: AtomicBool::new(false),
             last_remote_addr: Mutex::new(remote),
         }
+    }
+
+    /// Wrap a [`quinn::Connection`] established via 0-RTT early data.
+    ///
+    /// Sets the `accepted_0rtt` flag so the HTTP/3 layer can enforce
+    /// idempotency checks per RFC 9001 Section 4.1.
+    pub fn new_0rtt(inner: quinn::Connection) -> Self {
+        let remote = inner.remote_address();
+        Self {
+            inner,
+            migration_detected: AtomicBool::new(false),
+            accepted_0rtt: AtomicBool::new(true),
+            last_remote_addr: Mutex::new(remote),
+        }
+    }
+
+    /// Whether this connection was established via 0-RTT.
+    ///
+    /// When `true`, the HTTP/3 proxy layer should reject non-idempotent
+    /// methods to prevent replay attacks (RFC 9001 §4.1).
+    pub fn is_0rtt(&self) -> bool {
+        self.accepted_0rtt.load(Ordering::Acquire)
     }
 
     /// Return a reference to the underlying [`quinn::Connection`].
@@ -131,8 +160,9 @@ impl std::fmt::Debug for QuicConnection {
             .field("stable_id", &self.inner.stable_id())
             .field(
                 "migration_detected",
-                &self.migration_detected.load(Ordering::Relaxed),
+                &self.migration_detected.load(Ordering::Acquire),
             )
+            .field("accepted_0rtt", &self.accepted_0rtt.load(Ordering::Acquire))
             .finish()
     }
 }

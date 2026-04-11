@@ -24,8 +24,8 @@ pub mod streaming;
 pub mod trailers;
 
 pub use compression::{
-    GrpcEncoding, accepted_encodings_from_headers, encoding_from_headers, negotiate_encoding,
-    supported_encodings,
+    EncodingSet, GrpcEncoding, accepted_encodings_from_headers, encoding_from_headers,
+    negotiate_encoding, supported_encodings,
 };
 pub use deadline::{Deadline, DeadlineError, MAX_DEADLINE};
 pub use detect::{is_any_grpc, is_grpc, is_grpc_web, is_grpc_web_text};

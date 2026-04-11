@@ -1,10 +1,257 @@
 //! Configuration model types for ExpressGateway.
 //!
-//! Every struct derives `Debug, Clone, Serialize, Deserialize` and provides
-//! sensible production defaults via the `Default` trait.
+//! Every struct derives `Debug, Clone, PartialEq, Eq, Serialize, Deserialize`
+//! and provides sensible production defaults via the `Default` trait.
+//!
+//! Enum fields use `#[serde(rename_all = "snake_case")]` so that the TOML
+//! representation uses lowercase underscore names (e.g. `"round_robin"`).
 
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
+use std::fmt;
+
+// ---------------------------------------------------------------------------
+// String-typed enum helpers
+// ---------------------------------------------------------------------------
+
+/// Environment preset.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Environment {
+    Production,
+    Development,
+}
+
+impl fmt::Display for Environment {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Production => f.write_str("production"),
+            Self::Development => f.write_str("development"),
+        }
+    }
+}
+
+/// Log level (mirrors `tracing::Level` names).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum LogLevel {
+    Trace,
+    Debug,
+    Info,
+    Warn,
+    Error,
+}
+
+impl fmt::Display for LogLevel {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let s = match self {
+            Self::Trace => "trace",
+            Self::Debug => "debug",
+            Self::Info => "info",
+            Self::Warn => "warn",
+            Self::Error => "error",
+        };
+        f.write_str(s)
+    }
+}
+
+/// I/O backend selection.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum IoBackend {
+    Auto,
+    IoUring,
+    Epoll,
+}
+
+impl fmt::Display for IoBackend {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Auto => f.write_str("auto"),
+            Self::IoUring => f.write_str("io_uring"),
+            Self::Epoll => f.write_str("epoll"),
+        }
+    }
+}
+
+/// XDP attach mode.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum XdpMode {
+    Driver,
+    Generic,
+}
+
+impl fmt::Display for XdpMode {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Driver => f.write_str("driver"),
+            Self::Generic => f.write_str("generic"),
+        }
+    }
+}
+
+/// TLS profile preset.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum TlsProfile {
+    /// TLS 1.3 only.
+    Modern,
+    /// TLS 1.2 + 1.3.
+    Intermediate,
+}
+
+impl fmt::Display for TlsProfile {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Modern => f.write_str("modern"),
+            Self::Intermediate => f.write_str("intermediate"),
+        }
+    }
+}
+
+/// Mutual TLS mode.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum MutualTlsMode {
+    NotRequired,
+    Optional,
+    Required,
+}
+
+impl fmt::Display for MutualTlsMode {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::NotRequired => f.write_str("not_required"),
+            Self::Optional => f.write_str("optional"),
+            Self::Required => f.write_str("required"),
+        }
+    }
+}
+
+/// Listener protocol.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ListenerProtocol {
+    Http,
+    Https,
+    Tcp,
+    Udp,
+}
+
+impl fmt::Display for ListenerProtocol {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Http => f.write_str("http"),
+            Self::Https => f.write_str("https"),
+            Self::Tcp => f.write_str("tcp"),
+            Self::Udp => f.write_str("udp"),
+        }
+    }
+}
+
+/// Load-balancing strategy.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum LbStrategy {
+    RoundRobin,
+    LeastConnections,
+    IpHash,
+    Random,
+    Weighted,
+}
+
+impl fmt::Display for LbStrategy {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::RoundRobin => f.write_str("round_robin"),
+            Self::LeastConnections => f.write_str("least_connections"),
+            Self::IpHash => f.write_str("ip_hash"),
+            Self::Random => f.write_str("random"),
+            Self::Weighted => f.write_str("weighted"),
+        }
+    }
+}
+
+/// PROXY protocol version.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ProxyProtoMode {
+    Off,
+    V1,
+    V2,
+}
+
+/// PROXY protocol inbound mode (adds `auto`-detect).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ProxyProtoInbound {
+    Off,
+    V1,
+    V2,
+    Auto,
+}
+
+/// Security filter mode.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum SecurityMode {
+    Allowlist,
+    Denylist,
+}
+
+/// Action when a rate-limit is exceeded.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum RateLimitAction {
+    Drop,
+    Reset,
+    Tarpit,
+}
+
+/// Compression algorithm.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum CompressionAlgorithm {
+    Gzip,
+    Brotli,
+    Zstd,
+}
+
+impl fmt::Display for CompressionAlgorithm {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Gzip => f.write_str("gzip"),
+            Self::Brotli => f.write_str("brotli"),
+            Self::Zstd => f.write_str("zstd"),
+        }
+    }
+}
+
+/// HTTP method for health-check probes.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "UPPERCASE")]
+pub enum HttpMethod {
+    Get,
+    Head,
+    Post,
+    Put,
+    Delete,
+    Options,
+}
+
+impl fmt::Display for HttpMethod {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Get => f.write_str("GET"),
+            Self::Head => f.write_str("HEAD"),
+            Self::Post => f.write_str("POST"),
+            Self::Put => f.write_str("PUT"),
+            Self::Delete => f.write_str("DELETE"),
+            Self::Options => f.write_str("OPTIONS"),
+        }
+    }
+}
 
 // ---------------------------------------------------------------------------
 // Root
@@ -15,7 +262,7 @@ use std::collections::HashMap;
 /// Each section controls a different subsystem.  The default values are
 /// suitable for a single-node development setup; production deployments
 /// should tune transport, buffer, and security settings.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct Config {
     /// Global settings (environment, logging, metrics).
@@ -48,6 +295,8 @@ pub struct Config {
     pub controlplane: ControlPlaneConfig,
     /// Graceful shutdown behaviour.
     pub graceful_shutdown: GracefulShutdownConfig,
+    /// Backend retry policy.
+    pub retry: RetryConfig,
 }
 
 impl Default for Config {
@@ -68,6 +317,7 @@ impl Default for Config {
             security: SecurityConfig::default(),
             controlplane: ControlPlaneConfig::default(),
             graceful_shutdown: GracefulShutdownConfig::default(),
+            retry: RetryConfig::default(),
         }
     }
 }
@@ -77,13 +327,13 @@ impl Default for Config {
 // ---------------------------------------------------------------------------
 
 /// Global gateway settings.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct GlobalConfig {
-    /// `"production"` or `"development"`.
-    pub environment: String,
-    /// Log level: `"trace"`, `"debug"`, `"info"`, `"warn"`, `"error"`.
-    pub log_level: String,
+    /// `Production` or `Development`.
+    pub environment: Environment,
+    /// Log level.
+    pub log_level: LogLevel,
     /// Bind address for the Prometheus metrics endpoint.
     pub metrics_bind: String,
 }
@@ -91,8 +341,8 @@ pub struct GlobalConfig {
 impl Default for GlobalConfig {
     fn default() -> Self {
         Self {
-            environment: "production".into(),
-            log_level: "info".into(),
+            environment: Environment::Production,
+            log_level: LogLevel::Info,
             metrics_bind: "0.0.0.0:9090".into(),
         }
     }
@@ -103,29 +353,29 @@ impl Default for GlobalConfig {
 // ---------------------------------------------------------------------------
 
 /// Async runtime configuration.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct RuntimeConfig {
-    /// `"auto"`, `"io_uring"`, or `"epoll"`.
-    pub backend: String,
+    /// I/O backend selection.
+    pub backend: IoBackend,
     /// Worker thread count; 0 means use all available CPUs.
     pub worker_threads: usize,
     /// Enable XDP acceleration.
     pub xdp_enabled: bool,
     /// Network interface for XDP (e.g. `"eth0"`).
     pub xdp_interface: String,
-    /// `"driver"` or `"generic"`.
-    pub xdp_mode: String,
+    /// XDP attach mode.
+    pub xdp_mode: XdpMode,
 }
 
 impl Default for RuntimeConfig {
     fn default() -> Self {
         Self {
-            backend: "auto".into(),
+            backend: IoBackend::Auto,
             worker_threads: 0,
             xdp_enabled: false,
             xdp_interface: String::new(),
-            xdp_mode: "driver".into(),
+            xdp_mode: XdpMode::Driver,
         }
     }
 }
@@ -135,7 +385,7 @@ impl Default for RuntimeConfig {
 // ---------------------------------------------------------------------------
 
 /// TCP/socket transport settings.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct TransportConfig {
     /// SO_RCVBUF size in bytes.
@@ -182,7 +432,7 @@ impl Default for TransportConfig {
 // ---------------------------------------------------------------------------
 
 /// Memory buffer-pool settings.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct BufferConfig {
     /// Base page size in bytes.
@@ -211,13 +461,13 @@ impl Default for BufferConfig {
 // ---------------------------------------------------------------------------
 
 /// TLS termination and origination settings.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct TlsConfig {
     /// Whether TLS is enabled at all.
     pub enabled: bool,
-    /// `"modern"` (TLS 1.3 only) or `"intermediate"` (TLS 1.2+1.3).
-    pub profile: String,
+    /// TLS profile preset.
+    pub profile: TlsProfile,
     /// TLS handshake timeout in milliseconds.
     pub handshake_timeout_ms: u64,
     /// Session ticket lifetime in seconds.
@@ -236,7 +486,7 @@ impl Default for TlsConfig {
     fn default() -> Self {
         Self {
             enabled: false,
-            profile: "intermediate".into(),
+            profile: TlsProfile::Intermediate,
             handshake_timeout_ms: 10_000,
             session_timeout_s: 3600,
             session_cache_size: 20_000,
@@ -248,15 +498,15 @@ impl Default for TlsConfig {
 }
 
 /// Server-side TLS configuration.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct TlsServerConfig {
     /// Path to the default PEM certificate.
     pub default_cert: String,
     /// Path to the default PEM private key.
     pub default_key: String,
-    /// Mutual TLS mode: `"not_required"`, `"optional"`, `"required"`.
-    pub mutual_tls: String,
+    /// Mutual TLS mode.
+    pub mutual_tls: MutualTlsMode,
     /// Path to the trust CA bundle for mTLS.
     pub trust_ca: String,
     /// Path to a CRL file.
@@ -268,7 +518,7 @@ impl Default for TlsServerConfig {
         Self {
             default_cert: String::new(),
             default_key: String::new(),
-            mutual_tls: "not_required".into(),
+            mutual_tls: MutualTlsMode::NotRequired,
             trust_ca: String::new(),
             crl_file: String::new(),
         }
@@ -276,7 +526,7 @@ impl Default for TlsServerConfig {
 }
 
 /// Client-side (backend origination) TLS configuration.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct TlsClientConfig {
     /// Verify the backend's hostname against its certificate.
@@ -295,9 +545,8 @@ impl Default for TlsClientConfig {
 }
 
 /// Per-hostname SNI certificate entry.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
 #[serde(default)]
-#[derive(Default)]
 pub struct SniCertConfig {
     /// SNI hostname to match.
     pub hostname: String,
@@ -314,33 +563,33 @@ pub struct SniCertConfig {
 // ---------------------------------------------------------------------------
 
 /// A frontend listener that accepts connections.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct ListenerConfig {
     /// Human-readable name.
     pub name: String,
-    /// Protocol: `"http"`, `"https"`, `"tcp"`, `"udp"`.
-    pub protocol: String,
+    /// Protocol.
+    pub protocol: ListenerProtocol,
     /// Socket bind address (e.g. `"0.0.0.0:8080"`).
     pub bind: String,
     /// Optional TLS profile override.
-    pub tls_profile: Option<String>,
+    pub tls_profile: Option<TlsProfile>,
     /// Accepted HTTP versions (e.g. `["h1", "h2"]`).
     pub http_versions: Option<Vec<String>>,
     /// Whether this listener uses XDP acceleration.
     pub xdp_accelerated: Option<bool>,
     /// Alt-Svc max-age for HTTP/3 advertisement.
     pub alt_svc_max_age: Option<u32>,
-    /// Per-listener I/O backend override: `"auto"`, `"io_uring"`, `"epoll"`.
+    /// Per-listener I/O backend override.
     /// When `None`, uses the global `runtime.backend` setting.
-    pub io_backend: Option<String>,
+    pub io_backend: Option<IoBackend>,
 }
 
 impl Default for ListenerConfig {
     fn default() -> Self {
         Self {
             name: "default".into(),
-            protocol: "http".into(),
+            protocol: ListenerProtocol::Http,
             bind: "0.0.0.0:8080".into(),
             tls_profile: None,
             http_versions: None,
@@ -356,14 +605,13 @@ impl Default for ListenerConfig {
 // ---------------------------------------------------------------------------
 
 /// A group of backend nodes behind a load-balancing strategy.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct ClusterConfig {
     /// Unique cluster name referenced by routes.
     pub name: String,
-    /// Load-balancing strategy: `"round_robin"`, `"least_connections"`,
-    /// `"ip_hash"`, `"random"`, `"weighted"`.
-    pub lb_strategy: String,
+    /// Load-balancing strategy.
+    pub lb_strategy: LbStrategy,
     /// Maximum concurrent connections per node.
     pub max_connections_per_node: Option<u64>,
     /// Drain timeout in seconds before forcibly closing connections.
@@ -376,7 +624,7 @@ impl Default for ClusterConfig {
     fn default() -> Self {
         Self {
             name: "default".into(),
-            lb_strategy: "round_robin".into(),
+            lb_strategy: LbStrategy::RoundRobin,
             max_connections_per_node: Some(10_000),
             drain_timeout_s: Some(30),
             nodes: vec![NodeConfig::default()],
@@ -385,7 +633,7 @@ impl Default for ClusterConfig {
 }
 
 /// A single backend node.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct NodeConfig {
     /// Socket address (e.g. `"127.0.0.1:8081"`).
@@ -411,7 +659,7 @@ impl Default for NodeConfig {
 // ---------------------------------------------------------------------------
 
 /// A routing rule that directs traffic to a cluster.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct RouteConfig {
     /// Match requests by `Host` header.
@@ -425,7 +673,7 @@ pub struct RouteConfig {
     /// Evaluation priority (lower = higher priority).
     pub priority: u32,
     /// Per-route load-balancing override.
-    pub lb_strategy: Option<String>,
+    pub lb_strategy: Option<LbStrategy>,
 }
 
 impl Default for RouteConfig {
@@ -446,7 +694,7 @@ impl Default for RouteConfig {
 // ---------------------------------------------------------------------------
 
 /// HTTP/1.1 and HTTP/2 protocol settings.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct HttpConfig {
     /// Maximum request body size in bytes.
@@ -498,15 +746,18 @@ impl Default for HttpConfig {
 }
 
 /// Response compression settings.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct CompressionConfig {
     /// Whether compression is enabled.
     pub enabled: bool,
     /// Minimum response body size before compressing (bytes).
     pub min_size: usize,
-    /// Ordered list of algorithms: `"gzip"`, `"brotli"`, `"zstd"`.
-    pub algorithms: Vec<String>,
+    /// Ordered list of compression algorithms.
+    pub algorithms: Vec<CompressionAlgorithm>,
+    /// Compression level per algorithm (algorithm name -> level).
+    /// Gzip: 1-9 (default 6), Brotli: 0-11 (default 4), Zstd: 1-22 (default 3).
+    pub levels: HashMap<CompressionAlgorithm, u32>,
 }
 
 impl Default for CompressionConfig {
@@ -514,13 +765,18 @@ impl Default for CompressionConfig {
         Self {
             enabled: true,
             min_size: 1_024,
-            algorithms: vec!["gzip".into(), "brotli".into(), "zstd".into()],
+            algorithms: vec![
+                CompressionAlgorithm::Gzip,
+                CompressionAlgorithm::Brotli,
+                CompressionAlgorithm::Zstd,
+            ],
+            levels: HashMap::new(),
         }
     }
 }
 
 /// Sticky session (session affinity) settings.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct StickySessionConfig {
     /// Whether sticky sessions are enabled.
@@ -543,20 +799,20 @@ impl Default for StickySessionConfig {
 // ---------------------------------------------------------------------------
 
 /// PROXY protocol settings for preserving client addresses.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct ProxyProtocolConfig {
-    /// Inbound mode: `"off"`, `"v1"`, `"v2"`, `"auto"`.
-    pub inbound: String,
-    /// Outbound mode: `"off"`, `"v1"`, `"v2"`.
-    pub outbound: String,
+    /// Inbound mode.
+    pub inbound: ProxyProtoInbound,
+    /// Outbound mode.
+    pub outbound: ProxyProtoMode,
 }
 
 impl Default for ProxyProtocolConfig {
     fn default() -> Self {
         Self {
-            inbound: "off".into(),
-            outbound: "off".into(),
+            inbound: ProxyProtoInbound::Off,
+            outbound: ProxyProtoMode::Off,
         }
     }
 }
@@ -566,7 +822,7 @@ impl Default for ProxyProtocolConfig {
 // ---------------------------------------------------------------------------
 
 /// Health-check configuration group including HTTP probe settings.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct HealthCheckGroupConfig {
     /// Interval between probes (seconds).
@@ -597,11 +853,11 @@ impl Default for HealthCheckGroupConfig {
 }
 
 /// HTTP health-check probe settings.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct HttpHealthCheckConfig {
     /// HTTP method for the probe.
-    pub method: String,
+    pub method: HttpMethod,
     /// URI path for the probe.
     pub path: String,
     /// Expected HTTP status codes (any match = healthy).
@@ -611,7 +867,7 @@ pub struct HttpHealthCheckConfig {
 impl Default for HttpHealthCheckConfig {
     fn default() -> Self {
         Self {
-            method: "GET".into(),
+            method: HttpMethod::Get,
             path: "/healthz".into(),
             expected_status: vec![200],
         }
@@ -623,7 +879,7 @@ impl Default for HttpHealthCheckConfig {
 // ---------------------------------------------------------------------------
 
 /// Circuit-breaker thresholds.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct CircuitBreakerCfg {
     /// Failures before opening.
@@ -649,11 +905,11 @@ impl Default for CircuitBreakerCfg {
 // ---------------------------------------------------------------------------
 
 /// Security settings for IP filtering and rate-limiting.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct SecurityConfig {
-    /// `"allowlist"` or `"denylist"`.
-    pub mode: String,
+    /// Filter mode.
+    pub mode: SecurityMode,
     /// Maximum number of tracked unique IPs.
     pub max_tracked_ips: usize,
     /// Connection-rate limiting.
@@ -665,7 +921,7 @@ pub struct SecurityConfig {
 impl Default for SecurityConfig {
     fn default() -> Self {
         Self {
-            mode: "denylist".into(),
+            mode: SecurityMode::Denylist,
             max_tracked_ips: 1_000_000,
             connection_rate_limit: ConnectionRateLimitConfig::default(),
             packet_rate_limit: PacketRateLimitConfig::default(),
@@ -674,7 +930,7 @@ impl Default for SecurityConfig {
 }
 
 /// Connection-rate limit configuration.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct ConnectionRateLimitConfig {
     /// Maximum new connections per IP within the window.
@@ -693,7 +949,7 @@ impl Default for ConnectionRateLimitConfig {
 }
 
 /// Packet-rate limit configuration.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct PacketRateLimitConfig {
     /// Global packets-per-second limit.
@@ -702,8 +958,8 @@ pub struct PacketRateLimitConfig {
     pub per_ip_pps: u64,
     /// Per-IP burst allowance.
     pub per_ip_burst: u64,
-    /// Action when limit is exceeded: `"drop"`, `"reset"`, `"tarpit"`.
-    pub action: String,
+    /// Action when limit is exceeded.
+    pub action: RateLimitAction,
 }
 
 impl Default for PacketRateLimitConfig {
@@ -712,7 +968,7 @@ impl Default for PacketRateLimitConfig {
             global_pps: 1_000_000,
             per_ip_pps: 10_000,
             per_ip_burst: 1_000,
-            action: "drop".into(),
+            action: RateLimitAction::Drop,
         }
     }
 }
@@ -722,7 +978,7 @@ impl Default for PacketRateLimitConfig {
 // ---------------------------------------------------------------------------
 
 /// Control-plane gRPC and REST API settings.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct ControlPlaneConfig {
     /// Whether the control-plane API is enabled.
@@ -757,7 +1013,7 @@ impl Default for ControlPlaneConfig {
 // ---------------------------------------------------------------------------
 
 /// Graceful shutdown configuration.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct GracefulShutdownConfig {
     /// Drain timeout in seconds before force-closing connections.
@@ -768,6 +1024,44 @@ impl Default for GracefulShutdownConfig {
     fn default() -> Self {
         Self {
             drain_timeout_s: 30,
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Retry
+// ---------------------------------------------------------------------------
+
+/// Backend retry policy configuration.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct RetryConfig {
+    /// Whether retries are enabled.
+    pub enabled: bool,
+    /// Maximum number of retry attempts (0 = no retries).
+    pub max_retries: u32,
+    /// Initial backoff delay in milliseconds.
+    pub initial_backoff_ms: u64,
+    /// Maximum backoff delay in milliseconds.
+    pub max_backoff_ms: u64,
+    /// Backoff multiplier (fixed-point: 2 means 2x, 3 means 3x).
+    pub backoff_multiplier: u32,
+    /// Whether to retry on connection errors.
+    pub retry_on_connect_failure: bool,
+    /// Whether to retry on 5xx responses.
+    pub retry_on_5xx: bool,
+}
+
+impl Default for RetryConfig {
+    fn default() -> Self {
+        Self {
+            enabled: true,
+            max_retries: 2,
+            initial_backoff_ms: 100,
+            max_backoff_ms: 10_000,
+            backoff_multiplier: 2,
+            retry_on_connect_failure: true,
+            retry_on_5xx: false,
         }
     }
 }
@@ -785,16 +1079,14 @@ mod tests {
         let cfg = Config::default();
         let toml_str = toml::to_string_pretty(&cfg).expect("serialize");
         let parsed: Config = toml::from_str(&toml_str).expect("deserialize");
-        assert_eq!(parsed.global.environment, cfg.global.environment);
-        assert_eq!(parsed.transport.recv_buf_size, cfg.transport.recv_buf_size);
-        assert_eq!(parsed.listeners.len(), cfg.listeners.len());
+        assert_eq!(parsed, cfg);
     }
 
     #[test]
     fn empty_toml_uses_defaults() {
         let cfg: Config = toml::from_str("").expect("empty toml");
-        assert_eq!(cfg.global.environment, "production");
-        assert_eq!(cfg.transport.tcp_nodelay, true);
+        assert_eq!(cfg.global.environment, Environment::Production);
+        assert!(cfg.transport.tcp_nodelay);
         assert_eq!(cfg.buffer.page_size, 16_384);
     }
 
@@ -805,8 +1097,66 @@ mod tests {
 log_level = "debug"
 "#;
         let cfg: Config = toml::from_str(toml_str).expect("partial");
-        assert_eq!(cfg.global.log_level, "debug");
+        assert_eq!(cfg.global.log_level, LogLevel::Debug);
         // everything else stays at default
-        assert_eq!(cfg.global.environment, "production");
+        assert_eq!(cfg.global.environment, Environment::Production);
+    }
+
+    #[test]
+    fn invalid_enum_value_rejected_by_serde() {
+        let toml_str = r#"
+[global]
+environment = "staging"
+"#;
+        let result: Result<Config, _> = toml::from_str(toml_str);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn lb_strategy_round_trips() {
+        let toml_str = r#"
+[[clusters]]
+name = "backend"
+lb_strategy = "least_connections"
+
+[[clusters.nodes]]
+address = "127.0.0.1:8081"
+"#;
+        let cfg: Config = toml::from_str(toml_str).expect("parse");
+        assert_eq!(cfg.clusters[0].lb_strategy, LbStrategy::LeastConnections);
+        let serialized = toml::to_string_pretty(&cfg).expect("serialize");
+        assert!(serialized.contains("least_connections"));
+    }
+
+    #[test]
+    fn retry_config_defaults() {
+        let cfg = Config::default();
+        assert!(cfg.retry.enabled);
+        assert_eq!(cfg.retry.max_retries, 2);
+        assert_eq!(cfg.retry.initial_backoff_ms, 100);
+    }
+
+    #[test]
+    fn compression_levels_configurable() {
+        let toml_str = r#"
+[http.compression]
+enabled = true
+min_size = 512
+algorithms = ["gzip", "zstd"]
+
+[http.compression.levels]
+gzip = 9
+zstd = 5
+"#;
+        let cfg: Config = toml::from_str(toml_str).expect("parse");
+        assert_eq!(cfg.http.compression.algorithms.len(), 2);
+        assert_eq!(
+            cfg.http.compression.levels.get(&CompressionAlgorithm::Gzip),
+            Some(&9)
+        );
+        assert_eq!(
+            cfg.http.compression.levels.get(&CompressionAlgorithm::Zstd),
+            Some(&5)
+        );
     }
 }

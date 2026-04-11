@@ -22,3 +22,5 @@ bytes.workspace = true
 futures.workspace = true
 parking_lot.workspace = true
 http.workspace = true
+ring.workspace = true
+rand.workspace = true

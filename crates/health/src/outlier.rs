@@ -110,6 +110,10 @@ impl OutlierDetector {
         let now_nanos = nanos_since_epoch();
         let total_nodes = nodes.len();
 
+        // Track which nodes were just restored so Phase 2 does not
+        // immediately re-eject them in the same evaluation cycle.
+        let mut just_restored: Vec<&str> = Vec::new();
+
         // Phase 1: Restore nodes whose ejection time has elapsed.
         for node in nodes {
             if let Some(state) = self.states.get(node.id())
@@ -117,10 +121,9 @@ impl OutlierDetector {
             {
                 let ejection_time = state.ejection_time.load(Ordering::Acquire);
                 let ejection_count = state.ejection_count.load(Ordering::Acquire);
-                let ejection_duration = self
-                    .config
-                    .ejection_duration
-                    .saturating_mul(ejection_count.max(1) as u32);
+                // Cap the multiplier to avoid overflow in Duration::saturating_mul.
+                let multiplier = ejection_count.clamp(1, 100) as u32;
+                let ejection_duration = self.config.ejection_duration.saturating_mul(multiplier);
 
                 let elapsed = Duration::from_nanos(now_nanos.saturating_sub(ejection_time));
                 if elapsed >= ejection_duration {
@@ -128,6 +131,7 @@ impl OutlierDetector {
                     state.ejection_time.store(0, Ordering::Release);
                     state.consecutive_failures.store(0, Ordering::Release);
                     node.set_state(NodeState::Idle);
+                    just_restored.push(node.id());
                 }
             }
         }
@@ -145,6 +149,11 @@ impl OutlierDetector {
             }
 
             if node.state() == NodeState::Offline || node.state() == NodeState::ManualOffline {
+                continue;
+            }
+
+            // Never re-eject a node that was just restored in this cycle.
+            if just_restored.contains(&node.id()) {
                 continue;
             }
 

@@ -24,14 +24,14 @@ const COMPRESSIBLE_TYPES: &[&str] = &[
     "image/svg+xml",
     "font/ttf",
     "font/otf",
-    "font/woff",
-    "font/woff2",
+    // font/woff and font/woff2 are already internally compressed (zlib / brotli).
+    // application/font-woff, application/font-woff2 are deprecated aliases for
+    // the same already-compressed formats.
     "application/vnd.ms-fontobject",
     "application/x-font-ttf",
     "application/x-font-opentype",
-    "application/font-woff",
-    "application/font-woff2",
-    "application/octet-stream",
+    // application/octet-stream is a catch-all for arbitrary binary data. Most
+    // binary payloads are already compressed or incompressible.
     "multipart/bag",
     "multipart/mixed",
 ];
@@ -85,8 +85,16 @@ mod tests {
     #[test]
     fn font_types_compressible() {
         assert!(is_compressible("font/ttf"));
-        assert!(is_compressible("font/woff2"));
+        assert!(is_compressible("font/otf"));
         assert!(is_compressible("application/vnd.ms-fontobject"));
+    }
+
+    #[test]
+    fn already_compressed_fonts_not_compressible() {
+        assert!(!is_compressible("font/woff"));
+        assert!(!is_compressible("font/woff2"));
+        assert!(!is_compressible("application/font-woff"));
+        assert!(!is_compressible("application/font-woff2"));
     }
 
     #[test]
@@ -128,7 +136,7 @@ mod tests {
     }
 
     #[test]
-    fn octet_stream_compressible() {
-        assert!(is_compressible("application/octet-stream"));
+    fn octet_stream_not_compressible() {
+        assert!(!is_compressible("application/octet-stream"));
     }
 }

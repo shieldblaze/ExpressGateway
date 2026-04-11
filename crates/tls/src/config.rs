@@ -8,6 +8,7 @@ use std::sync::Arc;
 use expressgateway_core::types::{MutualTlsMode, TlsProfile};
 use rustls::pki_types::{CertificateDer, PrivateKeyDer};
 use rustls::{ClientConfig, RootCertStore, ServerConfig};
+use tracing::warn;
 
 use crate::alpn;
 use crate::ciphers;
@@ -81,6 +82,10 @@ impl TlsConfigBuilder {
 
             Ok(config)
         } else {
+            warn!(
+                "Building TLS ClientConfig with certificate verification DISABLED. \
+                 This is insecure and should only be used for testing."
+            );
             let config = ClientConfig::builder_with_provider(provider)
                 .with_safe_default_protocol_versions()
                 .map_err(|e| TlsError::ProtocolVersion {

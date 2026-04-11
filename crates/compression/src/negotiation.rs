@@ -2,20 +2,14 @@
 //!
 //! Parses the value of an `Accept-Encoding` HTTP header and selects the best
 //! compression algorithm that both the client and server support.
+//!
+//! The implementation is zero-allocation: it parses the header and selects the
+//! best algorithm in a single pass over the comma-separated tokens without
+//! any heap allocation.
 
 use crate::algorithm::CompressionAlgorithm;
 
-/// A single parsed entry from an `Accept-Encoding` header value.
-#[derive(Debug, Clone)]
-struct EncodingEntry {
-    /// The encoding token (e.g. `br`, `gzip`, `*`).
-    token: String,
-    /// Quality value in the range `[0.0, 1.0]`.  Defaults to `1.0` when the
-    /// `q` parameter is absent.
-    quality: f32,
-}
-
-/// All algorithms that this server is willing to use, in preference order.
+/// All algorithms that this server is willing to use.
 const ALL_ALGORITHMS: [CompressionAlgorithm; 4] = [
     CompressionAlgorithm::Brotli,
     CompressionAlgorithm::Zstd,
@@ -35,43 +29,39 @@ fn parse_quality(s: &str) -> f32 {
     s.parse::<f32>().unwrap_or(1.0).clamp(0.0, 1.0)
 }
 
-/// Parse the full `Accept-Encoding` header value into a list of entries.
+/// Extract the quality value from the parameters portion of a token.
 ///
-/// Example input: `"br;q=1.0, gzip;q=0.8, *;q=0.1"`
-fn parse_accept_encoding(header: &str) -> Vec<EncodingEntry> {
-    header
-        .split(',')
-        .filter_map(|part| {
-            let part = part.trim();
-            if part.is_empty() {
-                return None;
-            }
+/// `params` is everything after the first `;` in a single comma-separated
+/// entry, e.g. `"q=0.8"` or `"level=5;q=0.8"`.
+fn extract_quality(params: &str) -> f32 {
+    for p in params.split(';') {
+        let mut kv = p.splitn(2, '=');
+        let Some(key) = kv.next() else { continue };
+        if key.trim().eq_ignore_ascii_case("q") {
+            return parse_quality(kv.next().unwrap_or(""));
+        }
+    }
+    1.0
+}
 
-            let mut segments = part.splitn(2, ';');
-            let token = segments.next()?.trim().to_ascii_lowercase();
-            if token.is_empty() {
-                return None;
-            }
+/// Try to match a trimmed, lowercase token against one of our supported
+/// algorithms.  Returns the algorithm and its server-side priority.
+fn match_token(token: &str) -> Option<CompressionAlgorithm> {
+    // We inline the matching instead of calling `from_encoding` to avoid
+    // an extra `to_ascii_lowercase` allocation -- the caller already holds
+    // a lowercase view.
+    match token {
+        "br" => Some(CompressionAlgorithm::Brotli),
+        "zstd" => Some(CompressionAlgorithm::Zstd),
+        "gzip" => Some(CompressionAlgorithm::Gzip),
+        "deflate" => Some(CompressionAlgorithm::Deflate),
+        _ => None,
+    }
+}
 
-            let quality = segments
-                .next()
-                .and_then(|params| {
-                    // Look for `q=<value>` among the parameters.
-                    params.split(';').find_map(|p| {
-                        let mut kv = p.splitn(2, '=');
-                        let key = kv.next()?.trim();
-                        if key.eq_ignore_ascii_case("q") {
-                            Some(parse_quality(kv.next().unwrap_or("")))
-                        } else {
-                            None
-                        }
-                    })
-                })
-                .unwrap_or(1.0);
-
-            Some(EncodingEntry { token, quality })
-        })
-        .collect()
+/// Returns `true` if candidate `(quality, priority)` beats the current best.
+fn is_better(quality: f32, priority: u8, best_quality: f32, best_priority: u8) -> bool {
+    quality > best_quality || (quality == best_quality && priority > best_priority)
 }
 
 /// Select the best compression algorithm based on an `Accept-Encoding` header.
@@ -84,42 +74,92 @@ fn parse_accept_encoding(header: &str) -> Vec<EncodingEntry> {
 /// 2. When quality values are equal, the server-side preference order is used:
 ///    `br > zstd > gzip > deflate`.
 /// 3. The wildcard `*` matches any encoding the server supports.
+///
+/// This function performs zero heap allocations.
 pub fn negotiate(accept_encoding: &str) -> Option<CompressionAlgorithm> {
-    let entries = parse_accept_encoding(accept_encoding);
-    if entries.is_empty() {
-        return None;
-    }
+    let mut best: Option<CompressionAlgorithm> = None;
+    let mut best_quality: f32 = 0.0;
+    let mut best_priority: u8 = 0;
 
-    // Build a candidate list: (algorithm, quality, priority).
-    let mut candidates: Vec<(CompressionAlgorithm, f32, u8)> = Vec::new();
+    // First pass: find directly-named algorithms and remember the wildcard
+    // quality, if any.
+    //
+    // We need two passes because a wildcard appearing *before* an explicit
+    // `gzip;q=0` in the header should still respect the explicit exclusion.
+    // Doing it in one pass would require tracking per-algorithm exclusion
+    // state, which is more complex than a second trivial pass.
+    let mut wildcard_quality: Option<f32> = None;
 
-    // Wildcard quality (if present).
-    let wildcard_quality = entries.iter().find(|e| e.token == "*").map(|e| e.quality);
+    // Per-algorithm quality from explicit entries.  `None` means the algorithm
+    // was not explicitly mentioned.  `Some(0.0)` means explicitly excluded.
+    let mut explicit: [Option<f32>; 4] = [None; 4];
 
-    for algo in &ALL_ALGORITHMS {
-        let encoding_name = algo.content_encoding();
+    for part in accept_encoding.split(',') {
+        let part = part.trim();
+        if part.is_empty() {
+            continue;
+        }
 
-        // Check for a direct match first.
-        if let Some(entry) = entries.iter().find(|e| e.token == encoding_name) {
-            if entry.quality > 0.0 {
-                candidates.push((*algo, entry.quality, algo.priority()));
+        let (token_raw, quality) = match part.find(';') {
+            Some(pos) => {
+                let (t, params) = part.split_at(pos);
+                // Skip the ';' itself.
+                (t.trim(), extract_quality(&params[1..]))
             }
-        } else if let Some(wq) = wildcard_quality {
-            // Fall back to wildcard.
-            if wq > 0.0 {
-                candidates.push((*algo, wq, algo.priority()));
+            None => (part.trim(), 1.0_f32),
+        };
+
+        // We need a lowercase view for matching.  Rather than allocating a
+        // String, we use a small stack buffer.  Accept-Encoding tokens are
+        // at most 7 bytes ("deflate").  Anything longer is not a known
+        // algorithm and we skip it (unless it is "*").
+        if token_raw == "*" {
+            wildcard_quality = Some(quality);
+            continue;
+        }
+
+        // Stack-local lowercase: tokens are short (max "deflate" = 7 bytes).
+        let mut buf = [0u8; 16];
+        let token_bytes = token_raw.as_bytes();
+        if token_bytes.len() > buf.len() {
+            // Not a known algorithm.
+            continue;
+        }
+        let lower = &mut buf[..token_bytes.len()];
+        for (dst, src) in lower.iter_mut().zip(token_bytes) {
+            *dst = src.to_ascii_lowercase();
+        }
+        // SAFETY: input is ASCII (HTTP header values), lowering ASCII preserves
+        // validity.
+        let token = std::str::from_utf8(lower).unwrap_or("");
+
+        if let Some(algo) = match_token(token) {
+            let idx = algo.priority() as usize - 1; // priority is 1-based
+            explicit[idx] = Some(quality);
+            if quality > 0.0 && is_better(quality, algo.priority(), best_quality, best_priority) {
+                best = Some(algo);
+                best_quality = quality;
+                best_priority = algo.priority();
             }
         }
     }
 
-    // Sort: highest quality first, then highest priority first.
-    candidates.sort_by(|a, b| {
-        b.1.partial_cmp(&a.1)
-            .unwrap_or(std::cmp::Ordering::Equal)
-            .then_with(|| b.2.cmp(&a.2))
-    });
+    // Second pass: apply wildcard to algorithms that were not explicitly named.
+    if let Some(wq) = wildcard_quality
+        && wq > 0.0 {
+            for algo in &ALL_ALGORITHMS {
+                let idx = algo.priority() as usize - 1;
+                if explicit[idx].is_none()
+                    && is_better(wq, algo.priority(), best_quality, best_priority)
+                {
+                    best = Some(*algo);
+                    best_quality = wq;
+                    best_priority = algo.priority();
+                }
+            }
+        }
 
-    candidates.first().map(|c| c.0)
+    best
 }
 
 // ---------------------------------------------------------------------------

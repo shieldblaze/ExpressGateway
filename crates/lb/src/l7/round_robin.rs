@@ -10,6 +10,7 @@ use arc_swap::ArcSwap;
 use expressgateway_core::error::{Error, Result};
 use expressgateway_core::lb::{HttpRequest, HttpResponse, LoadBalancer};
 use expressgateway_core::node::Node;
+use parking_lot::Mutex;
 
 /// Round-robin HTTP load balancer.
 ///
@@ -18,6 +19,8 @@ use expressgateway_core::node::Node;
 pub struct HttpRoundRobinBalancer {
     nodes: ArcSwap<Vec<Arc<dyn Node>>>,
     index: AtomicUsize,
+    /// Serialises add/remove to prevent lost updates from concurrent mutations.
+    mutation_lock: Mutex<()>,
 }
 
 impl HttpRoundRobinBalancer {
@@ -26,6 +29,7 @@ impl HttpRoundRobinBalancer {
         Self {
             nodes: ArcSwap::new(Arc::new(Vec::new())),
             index: AtomicUsize::new(0),
+            mutation_lock: Mutex::new(()),
         }
     }
 }
@@ -40,25 +44,23 @@ impl LoadBalancer<HttpRequest, HttpResponse> for HttpRoundRobinBalancer {
     fn select(&self, _request: &HttpRequest) -> Result<HttpResponse> {
         let nodes = self.nodes.load();
 
-        let online_count = nodes.iter().filter(|n| n.is_online()).count();
-        if online_count == 0 {
+        // Collect online nodes into a single pass to avoid TOCTOU between
+        // counting and indexing (a node can go offline between the two).
+        let online: Vec<_> = nodes.iter().filter(|n| n.is_online()).collect();
+        if online.is_empty() {
             return Err(Error::NoHealthyBackend);
         }
 
-        let idx = self.index.fetch_add(1, Ordering::Relaxed) % online_count;
-        let node = nodes
-            .iter()
-            .filter(|n| n.is_online())
-            .nth(idx)
-            .expect("online_count > 0 guarantees nth(idx) exists");
+        let idx = self.index.fetch_add(1, Ordering::Relaxed) % online.len();
 
         Ok(HttpResponse {
-            node: node.clone(),
-            headers_to_add: Vec::new(),
+            node: online[idx].clone(),
+            headers_to_add: http::HeaderMap::new(),
         })
     }
 
     fn add_node(&self, node: Arc<dyn Node>) {
+        let _guard = self.mutation_lock.lock();
         let old = self.nodes.load();
         let mut new_nodes = (**old).clone();
         new_nodes.push(node);
@@ -66,6 +68,7 @@ impl LoadBalancer<HttpRequest, HttpResponse> for HttpRoundRobinBalancer {
     }
 
     fn remove_node(&self, node_id: &str) {
+        let _guard = self.mutation_lock.lock();
         let old = self.nodes.load();
         let mut new_nodes = (**old).clone();
         new_nodes.retain(|n| n.id() != node_id);
@@ -102,7 +105,7 @@ mod tests {
             client_addr: "10.0.0.1:5000".parse().unwrap(),
             host: Some("example.com".into()),
             path: "/".into(),
-            headers: Vec::new(),
+            headers: http::HeaderMap::new(),
         }
     }
 

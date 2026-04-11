@@ -57,16 +57,23 @@ impl RuntimeBackend {
     /// mode and multi-shot accept/recv which the io_uring backend relies on.
     #[cfg(target_os = "linux")]
     fn check_kernel_version() -> bool {
-        // SAFETY: `libc::uname` writes into a `libc::utsname` struct.
-        // The struct is zero-initialised and the pointer is valid for the
-        // duration of the call.  `uname(2)` does not retain the pointer.
+        // SAFETY: `libc::utsname` is a POD struct of fixed-size `c_char` arrays.
+        // Zero-initialisation produces a valid (if meaningless) value -- every
+        // field is a NUL-terminated empty string, which is a valid state.
         let mut info: libc::utsname = unsafe { std::mem::zeroed() };
+
+        // SAFETY: `libc::uname` writes into the caller-provided `libc::utsname`
+        // through a valid, mutable, aligned pointer.  The struct lives on the
+        // stack for the duration of the call.  `uname(2)` does not retain the
+        // pointer.  On success the kernel NUL-terminates every field.
         let ret = unsafe { libc::uname(&mut info) };
         if ret != 0 {
             return false;
         }
 
-        // `release` is a [c_char; 65] like "6.17.0-1010-aws".
+        // SAFETY: On success, `uname(2)` guarantees `release` is a
+        // NUL-terminated C string within the fixed-size array.  `as_ptr()`
+        // yields a pointer into the stack-local `info`, which is alive here.
         let release = unsafe {
             std::ffi::CStr::from_ptr(info.release.as_ptr())
         };
@@ -76,17 +83,22 @@ impl RuntimeBackend {
             Err(_) => return false,
         };
 
-        // Parse "major.minor..." from the version string.
-        let parts: Vec<&str> = version_str.split('.').collect();
-        if parts.len() < 2 {
-            return false;
-        }
+        // Parse "major.minor..." without allocating a Vec.
+        let mut parts = version_str.splitn(3, '.');
+        let major_str = match parts.next() {
+            Some(s) => s,
+            None => return false,
+        };
+        let minor_str = match parts.next() {
+            Some(s) => s,
+            None => return false,
+        };
 
-        let major: u32 = match parts[0].parse() {
+        let major: u32 = match major_str.parse() {
             Ok(v) => v,
             Err(_) => return false,
         };
-        let minor: u32 = match parts[1].parse() {
+        let minor: u32 = match minor_str.parse() {
             Ok(v) => v,
             Err(_) => return false,
         };

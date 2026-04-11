@@ -35,6 +35,7 @@ pub fn routes() -> Router<AppState> {
     Router::new()
         .route("/routes", post(create_route))
         .route("/routes", get(list_routes))
+        .route("/routes/{id}", get(get_route))
         .route("/routes/{id}", put(update_route))
         .route("/routes/{id}", delete(delete_route))
 }
@@ -71,6 +72,19 @@ async fn list_routes(State(state): State<AppState>) -> Json<Vec<RouteEntry>> {
         .collect();
     routes.sort_by_key(|r| r.priority);
     Json(routes)
+}
+
+/// GET /routes/:id - Get a specific route.
+async fn get_route(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+) -> Result<Json<RouteEntry>, StatusCode> {
+    state
+        .store
+        .routes
+        .get(&id)
+        .map(|r| Json(r.value().clone()))
+        .ok_or(StatusCode::NOT_FOUND)
 }
 
 /// PUT /routes/:id - Update a route.

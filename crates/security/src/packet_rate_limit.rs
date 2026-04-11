@@ -5,10 +5,19 @@
 
 use std::net::IpAddr;
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::time::Duration;
+use std::time::Instant;
 
 use dashmap::DashMap;
 use tracing::trace;
+
+use std::sync::OnceLock;
+
+/// Process-wide monotonic epoch for `TokenBucket` timestamps.
+/// All nanos are relative to this `Instant`, avoiding `SystemTime` clock skew.
+fn epoch() -> Instant {
+    static EPOCH: OnceLock<Instant> = OnceLock::new();
+    *EPOCH.get_or_init(Instant::now)
+}
 
 /// Maximum number of per-IP entries.
 const DEFAULT_MAX_PER_IP_ENTRIES: usize = 50_000;
@@ -107,6 +116,14 @@ impl TokenBucket {
     }
 
     /// Refill tokens based on elapsed time since last refill.
+    ///
+    /// Note: there is a benign race between the CAS on `last_refill` and the
+    /// subsequent token-add loop. If thread A wins the CAS but is preempted
+    /// before adding tokens, thread B may see no tokens to add (small delta)
+    /// and skip refill. The result is a brief under-refill that self-corrects
+    /// on the next call. This is acceptable for rate-limiting; a fully
+    /// linearizable design would require packing both fields into a single
+    /// atomic (e.g. AtomicU128) or using a lock.
     fn refill(&self) {
         let now = Self::now_nanos();
         let last = self.last_refill.load(Ordering::Relaxed);
@@ -156,15 +173,10 @@ impl TokenBucket {
     }
 
     fn now_nanos() -> u64 {
-        // Use monotonic clock. We store nanos since process start.
-        // std::time::Instant doesn't give us raw nanos easily, so we use
-        // a simple approach with SystemTime offset. For the token bucket
-        // this is fine since we only care about deltas.
-        use std::time::SystemTime;
-        SystemTime::now()
-            .duration_since(SystemTime::UNIX_EPOCH)
-            .unwrap_or(Duration::ZERO)
-            .as_nanos() as u64
+        // Monotonic clock: nanos since process-wide epoch (Instant).
+        // Immune to NTP adjustments, wall-clock jumps, and leap seconds.
+        // Will not overflow u64 for ~584 years of process uptime.
+        epoch().elapsed().as_nanos() as u64
     }
 }
 
@@ -191,35 +203,61 @@ impl PacketRateLimiter {
 
     /// Check if a packet from the given IP should be allowed.
     ///
-    /// Returns `true` if the packet passes both global and per-IP limits.
+    /// Returns `true` if the packet passes both per-IP and global limits.
+    /// Per-IP is checked first so that a single abusive IP cannot drain the
+    /// global bucket and starve legitimate traffic.
     pub fn check(&self, ip: &IpAddr) -> bool {
-        // Check global limit first
-        if !self.global_bucket.try_acquire() {
-            trace!(?ip, "packet dropped: global rate limit");
-            return false;
-        }
-
-        // Check per-IP limit
+        // Check per-IP limit first to avoid draining global tokens on abusive IPs.
         if let Some(bucket) = self.per_ip.get(ip) {
             if !bucket.try_acquire() {
                 trace!(?ip, "packet dropped: per-IP rate limit");
                 return false;
             }
+            // Per-IP passed; now check global.
+            if !self.global_bucket.try_acquire() {
+                trace!(?ip, "packet dropped: global rate limit");
+                return false;
+            }
             return true;
         }
 
-        // New IP - create bucket
+        // New IP -- may need to evict stale entries first.
         if self.per_ip.len() >= self.config.max_per_ip_entries {
-            // At capacity, evict nothing (lazy approach) - allow through
+            self.evict_stale_buckets();
+        }
+
+        // If still over capacity after eviction, fail-open for new IPs
+        // but still enforce the global limit.
+        if self.per_ip.len() >= self.config.max_per_ip_entries {
             trace!(?ip, "packet limiter at per-IP capacity, allowing");
+            if !self.global_bucket.try_acquire() {
+                trace!(?ip, "packet dropped: global rate limit");
+                return false;
+            }
             return true;
         }
 
         let bucket = TokenBucket::new(self.config.per_ip_rate, self.config.per_ip_burst);
-        // Consume one token from the new bucket
+        // Consume one token from the new bucket.
         bucket.try_acquire();
         self.per_ip.insert(*ip, bucket);
+
+        // Now check global.
+        if !self.global_bucket.try_acquire() {
+            trace!(?ip, "packet dropped: global rate limit");
+            return false;
+        }
         true
+    }
+
+    /// Evict per-IP buckets that are fully replenished (idle).
+    ///
+    /// A bucket at full capacity (`available() == burst`) has not been used
+    /// recently, so it is safe to evict -- if the IP returns, a fresh bucket
+    /// will be created starting at full burst, which is the same state.
+    fn evict_stale_buckets(&self) {
+        self.per_ip
+            .retain(|_ip, bucket| bucket.available() < self.config.per_ip_burst);
     }
 
     /// Return the configured action for exceeded limits.
@@ -244,6 +282,7 @@ impl PacketRateLimiter {
 mod tests {
     use super::*;
     use std::net::Ipv4Addr;
+    use std::time::Duration;
 
     #[test]
     fn test_token_bucket_basic() {

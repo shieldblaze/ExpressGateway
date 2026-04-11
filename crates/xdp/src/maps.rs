@@ -13,16 +13,24 @@
 //! - `BPF_MAP_TYPE_PERCPU_ARRAY` -- Statistics (`u32` index -> `XdpStats`)
 
 /// TCP connection table key (network byte order for IP fields).
+///
+/// Field order is chosen to eliminate padding: two `u32` fields first,
+/// then two `u16` fields, giving a packed 12-byte layout under `#[repr(C)]`.
+/// This is critical because BPF hash maps compare keys as raw bytes --
+/// uninitialized padding bytes would cause lookup misses.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 #[repr(C)]
 pub struct TcpConnKey {
     pub src_ip: u32,
-    pub src_port: u16,
     pub dst_ip: u32,
+    pub src_port: u16,
     pub dst_port: u16,
 }
 
 /// TCP connection table value.
+///
+/// Explicit `_pad` field ensures the struct is exactly 8 bytes with no
+/// uninitialized padding, matching the BPF-side layout.
 #[derive(Debug, Clone, Copy)]
 #[repr(C)]
 pub struct TcpConnValue {
@@ -30,6 +38,7 @@ pub struct TcpConnValue {
     pub backend_port: u16,
     /// Connection state: 0 = NEW, 1 = ESTABLISHED, 2 = CLOSING.
     pub state: u8,
+    pub _pad: u8,
 }
 
 /// TCP connection states.
@@ -40,24 +49,37 @@ pub mod tcp_state {
 }
 
 /// UDP session table key.
+///
+/// Explicit `_pad` field ensures the struct is exactly 8 bytes with no
+/// uninitialized padding, matching the BPF-side layout. BPF hash maps
+/// compare keys as raw bytes.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 #[repr(C)]
 pub struct UdpSessionKey {
     pub src_ip: u32,
     pub src_port: u16,
+    pub _pad: u16,
 }
 
 /// UDP session table value.
+///
+/// Field order: `u64` first, then `u32`, then `u16` -- largest alignment
+/// first eliminates all internal padding. Total: 14 bytes + 2 pad = 16.
+/// Explicit `_pad` ensures no uninitialized bytes cross the BPF boundary.
 #[derive(Debug, Clone, Copy)]
 #[repr(C)]
 pub struct UdpSessionValue {
-    pub backend_ip: u32,
-    pub backend_port: u16,
     /// Nanoseconds since boot (from `bpf_ktime_get_ns`).
     pub last_seen: u64,
+    pub backend_ip: u32,
+    pub backend_port: u16,
+    pub _pad: u16,
 }
 
 /// Backend entry in the backend array map.
+///
+/// Explicit `_pad` field after `state` ensures the struct is exactly 12 bytes
+/// with deterministic layout matching the BPF-side definition.
 #[derive(Debug, Clone, Copy)]
 #[repr(C)]
 pub struct BackendEntry {
@@ -66,6 +88,7 @@ pub struct BackendEntry {
     pub weight: u16,
     /// Backend state: 0 = OFFLINE, 1 = ONLINE.
     pub state: u8,
+    pub _pad: [u8; 3],
 }
 
 /// Backend states.
@@ -106,13 +129,17 @@ impl AclKey {
 }
 
 /// ACL trie value.
+///
+/// `rate_limit_id` (u32) placed first to avoid 3 bytes of padding before it.
+/// `action` (u8) follows with explicit `_pad` to fill to 8 bytes.
 #[derive(Debug, Clone, Copy)]
 #[repr(C)]
 pub struct AclValue {
-    /// Action: 0 = DENY, 1 = ALLOW.
-    pub action: u8,
     /// Associated rate-limit rule ID (0 = none).
     pub rate_limit_id: u32,
+    /// Action: 0 = DENY, 1 = ALLOW.
+    pub action: u8,
+    pub _pad: [u8; 3],
 }
 
 /// ACL actions.
@@ -135,20 +162,26 @@ pub struct XdpStats {
 
 impl XdpStats {
     /// Merge per-CPU stats by summing all fields.
+    ///
+    /// Uses `saturating_add` to prevent panic in debug builds and silent
+    /// wraparound in release builds on high-throughput data paths.
     #[inline]
     pub fn merge(&mut self, other: &XdpStats) {
-        self.packets_tx += other.packets_tx;
-        self.packets_redirect += other.packets_redirect;
-        self.packets_pass += other.packets_pass;
-        self.packets_drop += other.packets_drop;
-        self.bytes_tx += other.bytes_tx;
-        self.bytes_redirect += other.bytes_redirect;
+        self.packets_tx = self.packets_tx.saturating_add(other.packets_tx);
+        self.packets_redirect = self.packets_redirect.saturating_add(other.packets_redirect);
+        self.packets_pass = self.packets_pass.saturating_add(other.packets_pass);
+        self.packets_drop = self.packets_drop.saturating_add(other.packets_drop);
+        self.bytes_tx = self.bytes_tx.saturating_add(other.bytes_tx);
+        self.bytes_redirect = self.bytes_redirect.saturating_add(other.bytes_redirect);
     }
 
     /// Total packets processed across all actions.
     #[inline]
     pub fn total_packets(&self) -> u64 {
-        self.packets_tx + self.packets_redirect + self.packets_pass + self.packets_drop
+        self.packets_tx
+            .saturating_add(self.packets_redirect)
+            .saturating_add(self.packets_pass)
+            .saturating_add(self.packets_drop)
     }
 }
 
@@ -159,45 +192,44 @@ mod tests {
 
     #[test]
     fn tcp_conn_key_size() {
-        let size = mem::size_of::<TcpConnKey>();
-        assert!(size >= 12, "TcpConnKey too small: {size}");
+        // Two u32 (8) + two u16 (4) = 12 bytes, zero padding.
+        assert_eq!(mem::size_of::<TcpConnKey>(), 12);
         assert_eq!(mem::align_of::<TcpConnKey>(), mem::align_of::<u32>());
     }
 
     #[test]
     fn tcp_conn_value_size() {
-        let size = mem::size_of::<TcpConnValue>();
-        assert!(size >= 7, "TcpConnValue too small: {size}");
+        // u32 (4) + u16 (2) + u8 (1) + u8 pad (1) = 8 bytes.
+        assert_eq!(mem::size_of::<TcpConnValue>(), 8);
     }
 
     #[test]
     fn udp_session_key_size() {
-        let size = mem::size_of::<UdpSessionKey>();
-        assert!(size >= 6, "UdpSessionKey too small: {size}");
+        // u32 (4) + u16 (2) + u16 pad (2) = 8 bytes.
+        assert_eq!(mem::size_of::<UdpSessionKey>(), 8);
     }
 
     #[test]
     fn udp_session_value_size() {
-        let size = mem::size_of::<UdpSessionValue>();
-        assert!(size >= 14, "UdpSessionValue too small: {size}");
+        // u64 (8) + u32 (4) + u16 (2) + u16 pad (2) = 16 bytes.
+        assert_eq!(mem::size_of::<UdpSessionValue>(), 16);
     }
 
     #[test]
     fn backend_entry_size() {
-        let size = mem::size_of::<BackendEntry>();
-        assert!(size >= 7, "BackendEntry too small: {size}");
+        // u32 (4) + u16 (2) + u16 (2) + u8 (1) + [u8; 3] pad (3) = 12 bytes.
+        assert_eq!(mem::size_of::<BackendEntry>(), 12);
     }
 
     #[test]
     fn acl_key_size() {
-        let size = mem::size_of::<AclKey>();
-        assert_eq!(size, 20);
+        assert_eq!(mem::size_of::<AclKey>(), 20);
     }
 
     #[test]
     fn acl_value_size() {
-        let size = mem::size_of::<AclValue>();
-        assert!(size >= 5, "AclValue too small: {size}");
+        // u32 (4) + u8 (1) + [u8; 3] pad (3) = 8 bytes.
+        assert_eq!(mem::size_of::<AclValue>(), 8);
     }
 
     #[test]
@@ -246,8 +278,8 @@ mod tests {
     fn tcp_conn_key_hash_eq() {
         let a = TcpConnKey {
             src_ip: 0x0100007f,
-            src_port: 8080,
             dst_ip: 0x0200007f,
+            src_port: 8080,
             dst_port: 80,
         };
         let b = a;

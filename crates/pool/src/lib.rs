@@ -21,6 +21,6 @@ pub use buffer::BufferPool;
 pub use error::PoolError;
 pub use evictor::{Evictable, PoolEvictor};
 pub use h1::{H1Pool, H1PoolConfig, PoolStats, PooledConnection};
-pub use h2::{H2Pool, H2PoolConfig, H2PooledConnection};
-pub use quic::{QuicPool, QuicPoolConfig, QuicPooledConnection};
+pub use h2::{H2Pool, H2PoolConfig, H2PoolStats, H2PooledConnection};
+pub use quic::{ConnectionId, QuicPool, QuicPoolConfig, QuicPoolStats, QuicPooledConnection};
 pub use tcp::{TcpPool, TcpPoolConfig, TcpPooledConnection};

@@ -25,6 +25,7 @@ expressgateway-metrics = { path = "../metrics" }
 expressgateway-controlplane = { path = "../controlplane" }
 expressgateway-agent = { path = "../agent" }
 tokio.workspace = true
+tokio-util.workspace = true
 tracing.workspace = true
 tracing-subscriber.workspace = true
 clap.workspace = true

@@ -4,18 +4,12 @@ version = "0.1.0"
 edition = "2024"
 
 [dependencies]
-expressgateway-core = { path = "../core" }
-expressgateway-config = { path = "../config" }
-expressgateway-lb = { path = "../lb" }
-expressgateway-health = { path = "../health" }
-expressgateway-metrics = { path = "../metrics" }
 axum.workspace = true
 tonic.workspace = true
 prost.workspace = true
 tokio.workspace = true
 tracing.workspace = true
 thiserror.workspace = true
-anyhow.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 uuid.workspace = true
@@ -25,7 +19,6 @@ tower.workspace = true
 http.workspace = true
 chrono.workspace = true
 arc-swap.workspace = true
-prometheus.workspace = true
 futures.workspace = true
 tokio-util = { version = "0.7", features = ["rt"] }
 tokio-stream = "0.1"

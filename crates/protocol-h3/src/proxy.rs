@@ -131,20 +131,12 @@ impl H3ProxyHandler {
                             );
 
                             // Build load-balancer request.
+                            // Clone headers directly — they are already an http::HeaderMap.
                             let lb_req = HttpRequest {
                                 client_addr,
                                 host: request.uri().authority().map(|a| a.to_string()),
                                 path: request.uri().path().to_string(),
-                                headers: request
-                                    .headers()
-                                    .iter()
-                                    .map(|(k, v)| {
-                                        (
-                                            k.to_string(),
-                                            v.to_str().unwrap_or_default().to_string(),
-                                        )
-                                    })
-                                    .collect(),
+                                headers: request.headers().clone(),
                             };
 
                             // Select backend via load balancer.
@@ -164,7 +156,7 @@ impl H3ProxyHandler {
 
                                     // Add any headers from the load balancer.
                                     for (name, value) in &lb_resp.headers_to_add {
-                                        builder = builder.header(name.as_str(), value.as_str());
+                                        builder = builder.header(name, value);
                                     }
 
                                     builder.body(()).unwrap_or_else(|_| {

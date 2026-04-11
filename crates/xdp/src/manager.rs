@@ -121,6 +121,61 @@ impl XdpManager {
         Err(XdpError::PlatformUnavailable)
     }
 
+    /// Try to attach in `Driver` mode first; if that fails, retry in `Generic`
+    /// mode. Returns the mode that succeeded.
+    ///
+    /// This is the recommended entry point for production use. Native/driver
+    /// mode (`XDP_FLAGS_DRV_MODE`) gives the best performance but requires NIC
+    /// driver support. Generic/SKB mode (`XDP_FLAGS_SKB_MODE`) works with any
+    /// driver at the cost of higher latency.
+    #[cfg(target_os = "linux")]
+    pub fn attach_with_fallback(interface: &str) -> std::result::Result<Self, XdpError> {
+        let driver = Self::new(interface, XdpMode::Driver);
+        match driver.attach() {
+            Ok(()) => {
+                tracing::info!(
+                    interface,
+                    mode = %XdpMode::Driver,
+                    "XDP attached in driver mode"
+                );
+                Ok(driver)
+            }
+            Err(driver_err) => {
+                tracing::warn!(
+                    interface,
+                    error = %driver_err,
+                    "Driver-mode XDP attach failed, falling back to generic/SKB mode"
+                );
+                let generic = Self::new(interface, XdpMode::Generic);
+                match generic.attach() {
+                    Ok(()) => {
+                        tracing::info!(
+                            interface,
+                            mode = %XdpMode::Generic,
+                            "XDP attached in generic/SKB mode (fallback)"
+                        );
+                        Ok(generic)
+                    }
+                    Err(generic_err) => {
+                        tracing::error!(
+                            interface,
+                            driver_error = %driver_err,
+                            generic_error = %generic_err,
+                            "XDP attach failed in both driver and generic modes"
+                        );
+                        Err(generic_err)
+                    }
+                }
+            }
+        }
+    }
+
+    #[cfg(not(target_os = "linux"))]
+    pub fn attach_with_fallback(interface: &str) -> std::result::Result<Self, XdpError> {
+        let _ = interface;
+        Err(XdpError::PlatformUnavailable)
+    }
+
     /// Detach XDP programs from the interface.
     #[cfg(target_os = "linux")]
     pub fn detach(&self) -> Result<()> {
@@ -319,14 +374,15 @@ mod tests {
 
         let key = crate::maps::TcpConnKey {
             src_ip: 0,
-            src_port: 0,
             dst_ip: 0,
+            src_port: 0,
             dst_port: 0,
         };
         let value = crate::maps::TcpConnValue {
             backend_ip: 0,
             backend_port: 0,
             state: 0,
+            _pad: 0,
         };
         assert!(mgr.insert_tcp_connection(&key, &value).is_err());
         assert!(mgr.remove_tcp_connection(&key).is_err());
@@ -334,6 +390,13 @@ mod tests {
         assert!(mgr.add_l7_port(80).is_err());
         assert!(mgr.remove_l7_port(80).is_err());
         assert!(mgr.read_stats().is_err());
+    }
+
+    #[test]
+    fn attach_with_fallback_returns_error_in_stub() {
+        let result = XdpManager::attach_with_fallback("eth0");
+        // In stub mode, both driver and generic attach fail.
+        assert!(result.is_err());
     }
 
     #[test]

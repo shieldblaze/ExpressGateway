@@ -164,19 +164,36 @@ impl TlsReloader {
                             "Certificate file change detected, reloading"
                         );
 
-                        let ca_ref = trust_ca.as_deref();
-                        match reloader.reload_from_files(
-                            &cert_path,
-                            &key_path,
-                            profile,
-                            mtls_mode,
-                            ca_ref,
-                        ) {
-                            Ok(()) => info!("TLS certificate hot-reload succeeded"),
-                            Err(e) => {
+                        // Run blocking file I/O on the blocking threadpool
+                        // to avoid starving the tokio runtime.
+                        let r = Arc::clone(&reloader);
+                        let cp = cert_path.clone();
+                        let kp = key_path.clone();
+                        let ca = trust_ca.clone();
+                        let result = tokio::task::spawn_blocking(move || {
+                            r.reload_from_files(
+                                &cp,
+                                &kp,
+                                profile,
+                                mtls_mode,
+                                ca.as_deref(),
+                            )
+                        })
+                        .await;
+
+                        match result {
+                            Ok(Ok(())) => info!("TLS certificate hot-reload succeeded"),
+                            Ok(Err(e)) => {
                                 error!(
                                     error = %e,
                                     "TLS certificate hot-reload failed; \
+                                     existing config remains active"
+                                );
+                            }
+                            Err(e) => {
+                                error!(
+                                    error = %e,
+                                    "TLS reload task panicked; \
                                      existing config remains active"
                                 );
                             }

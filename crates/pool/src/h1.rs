@@ -166,6 +166,17 @@ impl H1Pool {
     /// If the per-node pool is full, the connection is silently dropped.
     pub fn release(&self, node_id: &str, mut conn: PooledConnection) {
         conn.touch();
+
+        // Fast path: node already exists, no allocation needed.
+        if let Some(mut pool) = self.pools.get_mut(node_id) {
+            if pool.connections.len() >= pool.max_size {
+                return;
+            }
+            pool.connections.push_back(conn);
+            return;
+        }
+
+        // Slow path: first connection for this node, allocate key.
         let mut pool = self
             .pools
             .entry(node_id.to_owned())
@@ -174,7 +185,6 @@ impl H1Pool {
         if pool.connections.len() >= pool.max_size {
             return;
         }
-        // LIFO: push to back so it will be the next acquired.
         pool.connections.push_back(conn);
     }
 

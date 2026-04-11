@@ -10,6 +10,7 @@ use std::sync::Arc;
 use anyhow::{Context, Result};
 use expressgateway_config::{Config, ConfigWatcher};
 use tokio::sync::broadcast;
+use tokio_util::sync::CancellationToken;
 
 use crate::shutdown;
 
@@ -23,25 +24,33 @@ pub async fn start(config: Config, config_path: Option<PathBuf>) -> Result<()> {
         "ExpressGateway starting"
     );
 
-    // -- 2. Metrics registry ---------------------------------------------------
+    // -- 2. Shutdown coordination ----------------------------------------------
+    // CancellationToken is the primary mechanism.  The broadcast channel is a
+    // legacy fallback for subsystems that haven't migrated yet.
+    let cancel = CancellationToken::new();
+    let (shutdown_tx, _shutdown_rx) = broadcast::channel::<()>(1);
+
+    // -- 3. Metrics registry ---------------------------------------------------
     let _metrics = expressgateway_metrics::register_all();
     tracing::info!("metrics registry initialised");
 
-    // -- 3. Metrics HTTP server ------------------------------------------------
+    // -- 4. Metrics HTTP server ------------------------------------------------
     let metrics_addr: SocketAddr = config
         .global
         .metrics_bind
         .parse()
         .context("invalid metrics_bind address")?;
 
-    tokio::spawn(async move {
-        if let Err(e) = expressgateway_metrics::serve_metrics(metrics_addr).await {
+    let metrics_cancel = cancel.clone();
+    let metrics_handle = tokio::spawn(async move {
+        let shutdown = metrics_cancel.cancelled_owned();
+        if let Err(e) = expressgateway_metrics::serve_metrics(metrics_addr, shutdown).await {
             tracing::error!(error = %e, "metrics server failed");
         }
     });
     tracing::info!(bind = %metrics_addr, "metrics server started");
 
-    // -- 4. Config watcher (hot-reload) ----------------------------------------
+    // -- 5. Config watcher (hot-reload) ----------------------------------------
     let config_watcher = if let Some(ref path) = config_path {
         let watcher = Arc::new(ConfigWatcher::from_config(config.clone(), path.clone()));
         match watcher.spawn_watchers() {
@@ -60,7 +69,7 @@ pub async fn start(config: Config, config_path: Option<PathBuf>) -> Result<()> {
         None
     };
 
-    // -- 5. XDP acceleration ---------------------------------------------------
+    // -- 6. XDP acceleration ---------------------------------------------------
     if config.runtime.xdp_enabled {
         #[cfg(target_os = "linux")]
         {
@@ -76,17 +85,7 @@ pub async fn start(config: Config, config_path: Option<PathBuf>) -> Result<()> {
         }
     }
 
-    // -- 6. Shutdown coordination channel --------------------------------------
-    let (shutdown_tx, _) = broadcast::channel::<()>(1);
-
-    // -- 7. Log summary --------------------------------------------------------
-    tracing::info!(
-        listeners = config.listeners.len(),
-        clusters = config.clusters.len(),
-        routes = config.routes.len(),
-        "ExpressGateway started successfully"
-    );
-
+    // -- 7. Log configured resources ------------------------------------------
     for listener in &config.listeners {
         tracing::info!(
             name = %listener.name,
@@ -114,18 +113,32 @@ pub async fn start(config: Config, config_path: Option<PathBuf>) -> Result<()> {
         );
     }
 
-    // -- 8. Wait for shutdown signal -------------------------------------------
-    wait_for_shutdown_signal().await;
+    // -- 8. Ready -------------------------------------------------------------
+    tracing::info!(
+        listeners = config.listeners.len(),
+        clusters = config.clusters.len(),
+        routes = config.routes.len(),
+        "ExpressGateway ready"
+    );
+
+    // -- 9. Wait for shutdown signal ------------------------------------------
+    wait_for_shutdown_signal().await?;
 
     tracing::info!("received shutdown signal");
 
-    // -- 9. Graceful shutdown --------------------------------------------------
+    // -- 10. Graceful shutdown ------------------------------------------------
     let drain_timeout = std::time::Duration::from_secs(config.graceful_shutdown.drain_timeout_s);
+
+    // Cancel all subsystem tasks.
+    cancel.cancel();
 
     // Drop the config watcher to stop file-watching tasks.
     drop(config_watcher);
 
     shutdown::graceful_shutdown(drain_timeout, shutdown_tx).await;
+
+    // Wait for the metrics server to finish.
+    let _ = metrics_handle.await;
 
     tracing::info!("ExpressGateway stopped");
     Ok(())
@@ -135,15 +148,15 @@ pub async fn start(config: Config, config_path: Option<PathBuf>) -> Result<()> {
 ///
 /// On Unix this listens for both SIGTERM and SIGINT.  On non-Unix it falls
 /// back to `tokio::signal::ctrl_c()`.
-async fn wait_for_shutdown_signal() {
+async fn wait_for_shutdown_signal() -> Result<()> {
     #[cfg(unix)]
     {
         use tokio::signal::unix::{SignalKind, signal};
 
         let mut sigterm = signal(SignalKind::terminate())
-            .expect("failed to register SIGTERM handler");
+            .context("failed to register SIGTERM handler")?;
         let mut sigint = signal(SignalKind::interrupt())
-            .expect("failed to register SIGINT handler");
+            .context("failed to register SIGINT handler")?;
 
         tokio::select! {
             _ = sigterm.recv() => {
@@ -159,8 +172,10 @@ async fn wait_for_shutdown_signal() {
     {
         tokio::signal::ctrl_c()
             .await
-            .expect("failed to listen for ctrl-c");
+            .context("failed to listen for ctrl-c")?;
     }
+
+    Ok(())
 }
 
 /// Initialise the `tracing` subscriber with JSON formatting and an
@@ -169,7 +184,7 @@ fn init_tracing(config: &Config) -> Result<()> {
     use tracing_subscriber::{EnvFilter, fmt, prelude::*};
 
     let filter = EnvFilter::try_from_default_env()
-        .unwrap_or_else(|_| EnvFilter::new(&config.global.log_level));
+        .unwrap_or_else(|_| EnvFilter::new(config.global.log_level.to_string()));
 
     tracing_subscriber::registry()
         .with(fmt::layer().json())

@@ -16,12 +16,11 @@ use crate::socket::SocketOptions;
 /// # Example
 ///
 /// ```no_run
-/// # async fn example() -> std::io::Result<()> {
+/// # fn example() -> std::io::Result<()> {
 /// use expressgateway_runtime::listener::TcpListenerBuilder;
 ///
 /// let listener = TcpListenerBuilder::new("0.0.0.0:8080".parse().unwrap())
-///     .build()
-///     .await?;
+///     .build()?;
 /// # Ok(())
 /// # }
 /// ```
@@ -73,7 +72,13 @@ impl TcpListenerBuilder {
     ///
     /// This creates a raw socket, applies all configured options, binds,
     /// listens, then converts to a non-blocking tokio listener.
-    pub async fn build(self) -> std::io::Result<TcpListener> {
+    ///
+    /// This method is synchronous despite returning `io::Result` -- all
+    /// operations are non-blocking syscalls (`socket`, `setsockopt`, `bind`,
+    /// `listen`).  It is kept non-async intentionally to avoid an unnecessary
+    /// state-machine transformation and to make it safe to call from both
+    /// sync and async contexts.
+    pub fn build(self) -> std::io::Result<TcpListener> {
         let domain = if self.addr.is_ipv4() {
             Domain::IPV4
         } else {
@@ -89,8 +94,10 @@ impl TcpListenerBuilder {
         let addr: socket2::SockAddr = self.addr.into();
         socket.bind(&addr)?;
 
-        // Listen with the configured backlog.
-        socket.listen(self.options.backlog as i32)?;
+        // Listen with the configured backlog.  Clamp to i32::MAX to prevent
+        // truncation on the `as i32` cast.
+        let backlog = self.options.backlog.min(i32::MAX as u32) as i32;
+        socket.listen(backlog)?;
 
         // Convert to non-blocking for tokio.
         socket.set_nonblocking(true)?;
@@ -128,7 +135,6 @@ mod tests {
         let addr = SocketAddr::V4(SocketAddrV4::new(Ipv4Addr::LOCALHOST, 0));
         let listener = TcpListenerBuilder::new(addr)
             .build()
-            .await
             .expect("failed to build listener");
 
         let local_addr = listener.local_addr().expect("no local addr");
@@ -160,7 +166,6 @@ mod tests {
         let listener = TcpListenerBuilder::new(addr)
             .backlog(128)
             .build()
-            .await
             .expect("failed to build listener with custom backlog");
 
         // Just verify it bound successfully.
@@ -173,7 +178,6 @@ mod tests {
         let addr: SocketAddr = "[::1]:0".parse().unwrap();
         let listener = TcpListenerBuilder::new(addr)
             .build()
-            .await
             .expect("failed to build IPv6 listener");
 
         let local = listener.local_addr().unwrap();

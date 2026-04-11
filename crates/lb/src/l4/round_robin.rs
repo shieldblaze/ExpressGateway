@@ -11,6 +11,7 @@ use arc_swap::ArcSwap;
 use expressgateway_core::error::{Error, Result};
 use expressgateway_core::lb::{L4Request, L4Response, LoadBalancer};
 use expressgateway_core::node::Node;
+use parking_lot::Mutex;
 
 /// Round-robin L4 load balancer.
 ///
@@ -20,6 +21,8 @@ use expressgateway_core::node::Node;
 pub struct RoundRobinBalancer {
     nodes: ArcSwap<Vec<Arc<dyn Node>>>,
     index: AtomicUsize,
+    /// Serialises add/remove to prevent lost updates from concurrent mutations.
+    mutation_lock: Mutex<()>,
 }
 
 impl RoundRobinBalancer {
@@ -28,6 +31,7 @@ impl RoundRobinBalancer {
         Self {
             nodes: ArcSwap::new(Arc::new(Vec::new())),
             index: AtomicUsize::new(0),
+            mutation_lock: Mutex::new(()),
         }
     }
 }
@@ -42,25 +46,22 @@ impl LoadBalancer<L4Request, L4Response> for RoundRobinBalancer {
     fn select(&self, _request: &L4Request) -> Result<L4Response> {
         let nodes = self.nodes.load();
 
-        // Count online nodes and find the one at our index without allocating.
-        let online_count = nodes.iter().filter(|n| n.is_online()).count();
-        if online_count == 0 {
+        // Single-pass collect avoids TOCTOU between count and nth
+        // (a node can go offline between the two scans).
+        let online: Vec<_> = nodes.iter().filter(|n| n.is_online()).collect();
+        if online.is_empty() {
             return Err(Error::NoHealthyBackend);
         }
 
-        let idx = self.index.fetch_add(1, Ordering::Relaxed) % online_count;
-        let node = nodes
-            .iter()
-            .filter(|n| n.is_online())
-            .nth(idx)
-            .expect("online_count > 0 guarantees nth(idx) exists");
+        let idx = self.index.fetch_add(1, Ordering::Relaxed) % online.len();
 
         Ok(L4Response {
-            node: node.clone(),
+            node: online[idx].clone(),
         })
     }
 
     fn add_node(&self, node: Arc<dyn Node>) {
+        let _guard = self.mutation_lock.lock();
         let old = self.nodes.load();
         let mut new_nodes = (**old).clone();
         new_nodes.push(node);
@@ -68,6 +69,7 @@ impl LoadBalancer<L4Request, L4Response> for RoundRobinBalancer {
     }
 
     fn remove_node(&self, node_id: &str) {
+        let _guard = self.mutation_lock.lock();
         let old = self.nodes.load();
         let mut new_nodes = (**old).clone();
         new_nodes.retain(|n| n.id() != node_id);

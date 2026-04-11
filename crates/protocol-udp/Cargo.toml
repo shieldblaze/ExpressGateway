@@ -18,3 +18,4 @@ bytes.workspace = true
 futures.workspace = true
 dashmap.workspace = true
 parking_lot.workspace = true
+socket2 = { version = "0.5", features = ["all"] }

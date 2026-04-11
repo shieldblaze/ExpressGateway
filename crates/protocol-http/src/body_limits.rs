@@ -75,17 +75,29 @@ impl ConnectionBodyTracker {
 
     /// Record bytes received and check the aggregate limit.
     ///
+    /// Uses a CAS loop to atomically check-then-add, preventing TOCTOU races
+    /// where concurrent streams could both pass the limit check before either
+    /// observes the other's addition.
+    ///
     /// Returns `Ok(new_total)` if the limit is not exceeded, or
     /// `Err(BodyLimitError::ConnectionLimitExceeded)` if it is.
     pub fn record_bytes(&self, bytes: u64) -> Result<u64, BodyLimitError> {
-        let new_total = self.total_received.fetch_add(bytes, Ordering::AcqRel) + bytes;
-        if new_total > self.limit {
-            Err(BodyLimitError::ConnectionLimitExceeded {
-                received: new_total,
-                limit: self.limit,
-            })
-        } else {
-            Ok(new_total)
+        loop {
+            let current = self.total_received.load(Ordering::Acquire);
+            let new_total = current + bytes;
+            if new_total > self.limit {
+                return Err(BodyLimitError::ConnectionLimitExceeded {
+                    received: new_total,
+                    limit: self.limit,
+                });
+            }
+            if self
+                .total_received
+                .compare_exchange_weak(current, new_total, Ordering::AcqRel, Ordering::Acquire)
+                .is_ok()
+            {
+                return Ok(new_total);
+            }
         }
     }
 

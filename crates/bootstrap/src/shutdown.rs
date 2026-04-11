@@ -42,7 +42,7 @@ pub async fn graceful_shutdown(drain_timeout: Duration, shutdown_tx: broadcast::
         timeout_s = drain_timeout.as_secs(),
         "waiting for in-flight requests to drain"
     );
-    tokio::time::sleep(drain_timeout.min(Duration::from_secs(1))).await;
+    tokio::time::sleep(drain_timeout).await;
 
     // Phase 5: Close backend connection pools.
     tracing::debug!("closed backend connection pools");

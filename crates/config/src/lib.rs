@@ -23,6 +23,6 @@ pub mod model;
 pub mod watcher;
 
 // Re-export the most commonly used items at crate root for convenience.
-pub use loader::{load_from_file, load_from_str, validate};
+pub use loader::{load_from_file, load_from_file_async, load_from_str, validate};
 pub use model::*;
 pub use watcher::ConfigWatcher;

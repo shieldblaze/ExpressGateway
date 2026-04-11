@@ -72,14 +72,70 @@ impl ConfigWatcher {
     /// The new file is parsed and fully validated **before** the swap is
     /// performed.  If validation fails the existing config is retained and
     /// an error is returned.
-    pub fn reload(&self) -> Result<()> {
+    ///
+    /// This is an async method that offloads blocking I/O to
+    /// `tokio::task::spawn_blocking`.
+    pub async fn reload(&self) -> Result<()> {
         info!(path = %self.path.display(), "reloading configuration");
 
-        let new_config = loader::load_from_file(&self.path).context("config reload failed")?;
+        let new_config = loader::load_from_file_async(&self.path)
+            .await
+            .context("config reload failed")?;
 
-        self.config.store(Arc::new(new_config));
-        info!("configuration reloaded successfully");
+        let old = self.config.load();
+        if **old != new_config {
+            self.log_diff(&old, &new_config);
+            self.config.store(Arc::new(new_config));
+            info!("configuration reloaded successfully");
+        } else {
+            info!("configuration unchanged, no swap needed");
+        }
         Ok(())
+    }
+
+    /// Synchronous reload for use outside of async contexts (e.g. tests).
+    pub fn reload_sync(&self) -> Result<()> {
+        info!(path = %self.path.display(), "reloading configuration (sync)");
+
+        let new_config = loader::load_from_file(&self.path)
+            .context("config reload failed")?;
+
+        let old = self.config.load();
+        if **old != new_config {
+            self.log_diff(&old, &new_config);
+            self.config.store(Arc::new(new_config));
+            info!("configuration reloaded successfully");
+        } else {
+            info!("configuration unchanged, no swap needed");
+        }
+        Ok(())
+    }
+
+    /// Log which top-level config sections changed.
+    fn log_diff(&self, old: &Config, new: &Config) {
+        macro_rules! diff_section {
+            ($field:ident) => {
+                if old.$field != new.$field {
+                    info!(section = stringify!($field), "config section changed");
+                }
+            };
+        }
+        diff_section!(global);
+        diff_section!(runtime);
+        diff_section!(transport);
+        diff_section!(buffer);
+        diff_section!(tls);
+        diff_section!(listeners);
+        diff_section!(clusters);
+        diff_section!(routes);
+        diff_section!(http);
+        diff_section!(proxy_protocol);
+        diff_section!(health_check);
+        diff_section!(circuit_breaker);
+        diff_section!(security);
+        diff_section!(controlplane);
+        diff_section!(graceful_shutdown);
+        diff_section!(retry);
     }
 
     /// Spawn background tasks that trigger [`reload`](Self::reload) on:
@@ -91,19 +147,19 @@ impl ConfigWatcher {
     /// [`tokio::sync::mpsc::Sender`].  Dropping the sender (or sending a
     /// message) shuts everything down gracefully.
     pub fn spawn_watchers(self: &Arc<Self>) -> Result<mpsc::Sender<()>> {
-        let (shutdown_tx, mut shutdown_rx) = mpsc::channel::<()>(1);
+        let (shutdown_tx, shutdown_rx) = mpsc::channel::<()>(1);
 
         // -- File watcher (notify) -------------------------------------------
         let watcher_self = Arc::clone(self);
-        let (notify_tx, mut notify_rx) = mpsc::channel::<()>(16);
+        let (notify_tx, notify_rx) = mpsc::channel::<()>(16);
 
         let path_clone = self.path.clone();
-        let notify_tx_clone = notify_tx.clone();
+        let mut shutdown_file = shutdown_tx.clone().subscribe_to_close(shutdown_rx);
         // `RecommendedWatcher` must be kept alive in the spawned task.
         tokio::spawn(async move {
             // Build a synchronous notify watcher that sends into the async
             // channel.
-            let tx = notify_tx_clone;
+            let tx = notify_tx;
             let mut watcher: RecommendedWatcher = match notify::recommended_watcher(
                 move |res: std::result::Result<Event, notify::Error>| {
                     if let Ok(event) = res
@@ -122,29 +178,45 @@ impl ConfigWatcher {
 
             // Watch the parent directory (some editors do atomic saves by
             // writing a new file and renaming).
-            let watch_path = path_clone.parent().unwrap_or_else(|| Path::new("."));
-            if let Err(e) = watcher.watch(watch_path, RecursiveMode::NonRecursive) {
-                error!("failed to start watching {}: {e}", watch_path.display());
+            let watch_dir = path_clone
+                .parent()
+                .filter(|p| !p.as_os_str().is_empty())
+                .unwrap_or_else(|| Path::new("."));
+            if let Err(e) = watcher.watch(watch_dir, RecursiveMode::NonRecursive) {
+                error!("failed to start watching {}: {e}", watch_dir.display());
                 return;
             }
 
-            info!(path = %watch_path.display(), "file watcher started");
+            info!(path = %watch_dir.display(), "file watcher started");
 
             // Keep the watcher alive until shutdown.
-            shutdown_rx.recv().await;
+            shutdown_file.recv().await;
             info!("file watcher shutting down");
         });
 
-        // -- Notify event consumer -------------------------------------------
+        // -- Notify event consumer with debounce -----------------------------
         let reload_self = Arc::clone(&watcher_self);
+        let shutdown_tx_clone = shutdown_tx.clone();
         tokio::spawn(async move {
-            while notify_rx.recv().await.is_some() {
-                // Debounce: drain any queued duplicate events.
-                while notify_rx.try_recv().is_ok() {}
+            let mut notify_rx = notify_rx;
+            loop {
+                tokio::select! {
+                    msg = notify_rx.recv() => {
+                        if msg.is_none() {
+                            break;
+                        }
+                        // Debounce: wait 100ms then drain any queued duplicates.
+                        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+                        while notify_rx.try_recv().is_ok() {}
 
-                match reload_self.reload() {
-                    Ok(()) => {}
-                    Err(e) => warn!("config reload failed (keeping previous): {e}"),
+                        match reload_self.reload().await {
+                            Ok(()) => {}
+                            Err(e) => warn!("config reload failed (keeping previous): {e}"),
+                        }
+                    }
+                    _ = shutdown_tx_clone.closed() => {
+                        break;
+                    }
                 }
             }
         });
@@ -153,6 +225,7 @@ impl ConfigWatcher {
         #[cfg(unix)]
         {
             let sighup_self = Arc::clone(&watcher_self);
+            let sighup_shutdown = shutdown_tx.clone();
             tokio::spawn(async move {
                 let mut sig =
                     match tokio::signal::unix::signal(tokio::signal::unix::SignalKind::hangup()) {
@@ -164,17 +237,39 @@ impl ConfigWatcher {
                     };
 
                 loop {
-                    sig.recv().await;
-                    info!("received SIGHUP, reloading configuration");
-                    match sighup_self.reload() {
-                        Ok(()) => {}
-                        Err(e) => warn!("SIGHUP reload failed (keeping previous): {e}"),
+                    tokio::select! {
+                        result = sig.recv() => {
+                            if result.is_none() {
+                                break;
+                            }
+                            info!("received SIGHUP, reloading configuration");
+                            match sighup_self.reload().await {
+                                Ok(()) => {}
+                                Err(e) => warn!("SIGHUP reload failed (keeping previous): {e}"),
+                            }
+                        }
+                        _ = sighup_shutdown.closed() => {
+                            info!("SIGHUP handler shutting down");
+                            break;
+                        }
                     }
                 }
             });
         }
 
         Ok(shutdown_tx)
+    }
+}
+
+// Helper trait to get a "close" future from the shutdown channel.
+// We use the mpsc::Sender's `closed()` method on clones to detect shutdown.
+trait SubscribeToClose {
+    fn subscribe_to_close(self, rx: mpsc::Receiver<()>) -> mpsc::Receiver<()>;
+}
+
+impl SubscribeToClose for mpsc::Sender<()> {
+    fn subscribe_to_close(self, rx: mpsc::Receiver<()>) -> mpsc::Receiver<()> {
+        rx
     }
 }
 
@@ -235,7 +330,10 @@ environment = "staging"
         write_valid_toml(&path);
 
         let watcher = ConfigWatcher::new(&path).expect("should load");
-        assert_eq!(watcher.current().global.log_level, "debug");
+        assert_eq!(
+            watcher.current().global.log_level,
+            crate::model::LogLevel::Debug
+        );
 
         let _ = std::fs::remove_dir_all(&dir);
     }
@@ -248,12 +346,21 @@ environment = "staging"
         write_valid_toml(&path);
 
         let watcher = ConfigWatcher::new(&path).expect("initial load");
-        assert_eq!(watcher.current().global.log_level, "debug");
+        assert_eq!(
+            watcher.current().global.log_level,
+            crate::model::LogLevel::Debug
+        );
 
         write_updated_toml(&path);
-        watcher.reload().expect("reload should succeed");
-        assert_eq!(watcher.current().global.log_level, "warn");
-        assert_eq!(watcher.current().global.environment, "production");
+        watcher.reload_sync().expect("reload should succeed");
+        assert_eq!(
+            watcher.current().global.log_level,
+            crate::model::LogLevel::Warn
+        );
+        assert_eq!(
+            watcher.current().global.environment,
+            crate::model::Environment::Production
+        );
 
         let _ = std::fs::remove_dir_all(&dir);
     }
@@ -266,10 +373,10 @@ environment = "staging"
         write_valid_toml(&path);
 
         let watcher = ConfigWatcher::new(&path).expect("initial load");
-        let old_env = watcher.current().global.environment.clone();
+        let old_env = watcher.current().global.environment;
 
         write_invalid_toml(&path);
-        let result = watcher.reload();
+        let result = watcher.reload_sync();
         assert!(result.is_err());
         // Config should still be the original.
         assert_eq!(watcher.current().global.environment, old_env);
@@ -281,7 +388,10 @@ environment = "staging"
     fn from_config_works() {
         let cfg = Config::default();
         let watcher = ConfigWatcher::from_config(cfg, PathBuf::from("/tmp/nonexistent.toml"));
-        assert_eq!(watcher.current().global.environment, "production");
+        assert_eq!(
+            watcher.current().global.environment,
+            crate::model::Environment::Production
+        );
     }
 
     #[test]
@@ -289,6 +399,9 @@ environment = "staging"
         let cfg = Config::default();
         let watcher = ConfigWatcher::from_config(cfg, PathBuf::from("/tmp/nonexistent.toml"));
         let handle = watcher.handle();
-        assert_eq!(handle.load().global.environment, "production");
+        assert_eq!(
+            handle.load().global.environment,
+            crate::model::Environment::Production
+        );
     }
 }

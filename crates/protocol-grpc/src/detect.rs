@@ -13,8 +13,8 @@ use http::HeaderMap;
 /// Per the spec, `content-type` must be `application/grpc` optionally followed
 /// by `+<subtype>` (e.g. `application/grpc+proto`, `application/grpc+json`).
 pub fn is_grpc(headers: &HeaderMap) -> bool {
-    match extract_content_type(headers) {
-        Some(ct) => is_native_grpc_content_type(ct),
+    match extract_content_type_lower(headers) {
+        Some(ct) => is_native_grpc_content_type(&ct),
         None => false,
     }
 }
@@ -24,7 +24,7 @@ pub fn is_grpc(headers: &HeaderMap) -> bool {
 /// gRPC-Web content types: `application/grpc-web`, `application/grpc-web+proto`,
 /// `application/grpc-web-text`, `application/grpc-web-text+proto`.
 pub fn is_grpc_web(headers: &HeaderMap) -> bool {
-    match extract_content_type(headers) {
+    match extract_content_type_lower(headers) {
         Some(ct) => ct.starts_with("application/grpc-web"),
         None => false,
     }
@@ -32,7 +32,7 @@ pub fn is_grpc_web(headers: &HeaderMap) -> bool {
 
 /// Returns `true` for either native gRPC or gRPC-Web.
 pub fn is_any_grpc(headers: &HeaderMap) -> bool {
-    match extract_content_type(headers) {
+    match extract_content_type_lower(headers) {
         Some(ct) => ct.starts_with("application/grpc"),
         None => false,
     }
@@ -41,23 +41,29 @@ pub fn is_any_grpc(headers: &HeaderMap) -> bool {
 /// Returns `true` if the gRPC-Web content type uses text encoding
 /// (base64-encoded bodies).
 pub fn is_grpc_web_text(headers: &HeaderMap) -> bool {
-    match extract_content_type(headers) {
+    match extract_content_type_lower(headers) {
         Some(ct) => ct.starts_with("application/grpc-web-text"),
         None => false,
     }
 }
 
-/// Extract content-type header value as a string slice.
-fn extract_content_type(headers: &HeaderMap) -> Option<&str> {
+/// Extract content-type header value as a lowercase string.
+///
+/// Media types are case-insensitive per RFC 9110 Section 8.3.1, so we
+/// normalize to lowercase before matching.
+fn extract_content_type_lower(headers: &HeaderMap) -> Option<String> {
     headers
         .get(http::header::CONTENT_TYPE)
         .and_then(|v| v.to_str().ok())
+        .map(|s| s.to_ascii_lowercase())
 }
 
 /// Check if a content-type is native gRPC (not gRPC-Web).
 ///
 /// `application/grpc` followed by nothing, `+proto`, `+json`, etc. but NOT
 /// `application/grpc-web*`.
+///
+/// The input must already be lowercased.
 fn is_native_grpc_content_type(ct: &str) -> bool {
     if !ct.starts_with("application/grpc") {
         return false;
@@ -169,5 +175,36 @@ mod tests {
             HeaderValue::from_static("application/grpc;charset=utf-8"),
         );
         assert!(is_grpc(&headers));
+    }
+
+    /// Per RFC 9110 Section 8.3.1, media types are case-insensitive.
+    #[test]
+    fn case_insensitive_detection() {
+        let mut h1 = HeaderMap::new();
+        h1.insert(CONTENT_TYPE, HeaderValue::from_static("Application/GRPC"));
+        assert!(is_grpc(&h1));
+        assert!(is_any_grpc(&h1));
+
+        let mut h2 = HeaderMap::new();
+        h2.insert(
+            CONTENT_TYPE,
+            HeaderValue::from_static("APPLICATION/GRPC+PROTO"),
+        );
+        assert!(is_grpc(&h2));
+
+        let mut h3 = HeaderMap::new();
+        h3.insert(
+            CONTENT_TYPE,
+            HeaderValue::from_static("Application/Grpc-Web"),
+        );
+        assert!(is_grpc_web(&h3));
+        assert!(!is_grpc(&h3));
+
+        let mut h4 = HeaderMap::new();
+        h4.insert(
+            CONTENT_TYPE,
+            HeaderValue::from_static("APPLICATION/GRPC-WEB-TEXT+PROTO"),
+        );
+        assert!(is_grpc_web_text(&h4));
     }
 }

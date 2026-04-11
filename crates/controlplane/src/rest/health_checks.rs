@@ -48,6 +48,7 @@ pub fn routes() -> Router<AppState> {
     Router::new()
         .route("/health-checks", post(create_health_check))
         .route("/health-checks", get(list_health_checks))
+        .route("/health-checks/{id}", get(get_health_check))
         .route("/health-checks/{id}", put(update_health_check))
         .route("/health-checks/{id}", delete(delete_health_check))
 }
@@ -85,6 +86,19 @@ async fn list_health_checks(State(state): State<AppState>) -> Json<Vec<HealthChe
         .map(|r| r.value().clone())
         .collect();
     Json(checks)
+}
+
+/// GET /health-checks/:id - Get a specific health check.
+async fn get_health_check(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+) -> Result<Json<HealthCheckEntry>, StatusCode> {
+    state
+        .store
+        .health_checks
+        .get(&id)
+        .map(|r| Json(r.value().clone()))
+        .ok_or(StatusCode::NOT_FOUND)
 }
 
 /// PUT /health-checks/:id - Update a health check.

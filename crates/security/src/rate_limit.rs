@@ -52,14 +52,21 @@ impl ConnectionRateLimiter {
     ///
     /// Returns `true` if the connection is allowed, `false` if the rate
     /// limit has been exceeded.
+    ///
+    /// Note: there is a benign TOCTOU race between `get_mut` returning `None`
+    /// and `insert` for the same IP from two threads. The worst case is that
+    /// the second `insert` overwrites the first, resetting the counter once.
+    /// This is acceptable for rate limiting -- the window is one connection's
+    /// worth of slack on first appearance of a new IP under contention. Using
+    /// `DashMap::entry` would deadlock because we also need `len()` and
+    /// `retain()`, which acquire shard locks.
     pub fn check_and_increment(&self, ip: &IpAddr) -> bool {
         let now = Instant::now();
 
-        // Fast path: existing entry
+        // Fast path: existing entry.
         if let Some(mut entry) = self.limits.get_mut(ip) {
             let elapsed = now.duration_since(entry.window_start);
             if elapsed >= self.window {
-                // Window expired, reset
                 entry.count = 1;
                 entry.window_start = now;
                 trace!(?ip, "rate limit window reset");
@@ -73,12 +80,11 @@ impl ConnectionRateLimiter {
             return true;
         }
 
-        // Slow path: new IP
+        // Slow path: new IP.
         if self.limits.len() >= self.max_tracked {
             self.evict_expired(now);
         }
 
-        // If still over capacity after eviction, fail-open for new IPs
         if self.limits.len() >= self.max_tracked {
             trace!(?ip, "rate limiter at capacity, allowing new IP");
             return true;

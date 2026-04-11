@@ -160,25 +160,50 @@ impl Ja3Extractor {
     }
 }
 
-/// Thread-safe JA3 block list.
+/// Default maximum entries in the JA3 block list.
+const DEFAULT_MAX_BLOCKLIST_ENTRIES: usize = 100_000;
+
+/// Thread-safe JA3 block list with bounded cardinality.
 ///
 /// Stores MD5 hashes of known-bad JA3 fingerprints and provides O(1)
-/// lookup to check if a fingerprint is blocked.
+/// lookup to check if a fingerprint is blocked. The block list is capped
+/// at `max_entries` to prevent memory exhaustion.
 pub struct Ja3BlockList {
     blocked: DashMap<String, ()>,
+    max_entries: usize,
 }
 
 impl Ja3BlockList {
-    /// Create a new empty block list.
+    /// Create a new empty block list with the default capacity limit.
     pub fn new() -> Self {
         Self {
             blocked: DashMap::new(),
+            max_entries: DEFAULT_MAX_BLOCKLIST_ENTRIES,
+        }
+    }
+
+    /// Create a new empty block list with a custom capacity limit.
+    pub fn with_max_entries(max_entries: usize) -> Self {
+        Self {
+            blocked: DashMap::with_capacity(max_entries.min(1024)),
+            max_entries,
         }
     }
 
     /// Add a JA3 hash to the block list.
-    pub fn add(&self, hash: impl Into<String>) {
-        self.blocked.insert(hash.into(), ());
+    ///
+    /// Returns `false` if the block list is at capacity and the hash was
+    /// not already present. Returns `true` if inserted or already present.
+    pub fn add(&self, hash: impl Into<String>) -> bool {
+        let hash = hash.into();
+        if self.blocked.contains_key(&hash) {
+            return true;
+        }
+        if self.blocked.len() >= self.max_entries {
+            return false;
+        }
+        self.blocked.insert(hash, ());
+        true
     }
 
     /// Remove a JA3 hash from the block list.
@@ -216,19 +241,32 @@ impl Default for Ja3BlockList {
 // ── Helpers ─────────────────────────────────────────────────────────────────
 
 fn join_u16(values: &[u16]) -> String {
-    values
-        .iter()
-        .map(|v| v.to_string())
-        .collect::<Vec<_>>()
-        .join("-")
+    use std::fmt::Write;
+    // Pre-size: each u16 is at most 5 digits, plus a separator.
+    let mut buf = String::with_capacity(values.len() * 6);
+    for (i, v) in values.iter().enumerate() {
+        if i > 0 {
+            buf.push('-');
+        }
+        // write! to a String is infallible.
+        let _ = write!(buf, "{}", v);
+    }
+    buf
 }
 
 fn md5_hex(input: &str) -> String {
     let mut hasher = Md5::new();
     hasher.update(input.as_bytes());
     let result = hasher.finalize();
-    // Format as lowercase hex
-    result.iter().map(|b| format!("{:02x}", b)).collect()
+    // Write directly into a pre-sized string -- no per-byte allocation.
+    let mut hex = String::with_capacity(32);
+    for b in &result {
+        // Two nibbles per byte, written directly.
+        const HEX: &[u8; 16] = b"0123456789abcdef";
+        hex.push(HEX[(b >> 4) as usize] as char);
+        hex.push(HEX[(b & 0x0f) as usize] as char);
+    }
+    hex
 }
 
 /// Simple byte reader for parsing TLS records.

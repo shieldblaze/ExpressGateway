@@ -4,17 +4,21 @@ use std::sync::atomic::{AtomicU8, Ordering};
 use std::time::{Duration, Instant};
 
 use expressgateway_core::Health;
-use parking_lot::Mutex;
+use parking_lot::RwLock;
 
 /// Default cache TTL of 5 seconds.
 const DEFAULT_TTL: Duration = Duration::from_secs(5);
 
 /// Cached health check value with double-check pattern for refresh.
+///
+/// The `last_refresh` timestamp is behind a `RwLock` so that concurrent
+/// `get()` calls (the hot path) take only a shared read lock, while the
+/// infrequent `update()`/`set()`/`invalidate()` calls take the write lock.
 pub struct HealthCache {
     /// Cached health value stored atomically.
     health: AtomicU8,
-    /// Last refresh time, protected by mutex for double-check.
-    last_refresh: Mutex<Option<Instant>>,
+    /// Last refresh time, protected by RwLock for concurrent reads.
+    last_refresh: RwLock<Option<Instant>>,
     /// Time-to-live for cached values.
     ttl: Duration,
 }
@@ -24,7 +28,7 @@ impl HealthCache {
     pub fn new() -> Self {
         Self {
             health: AtomicU8::new(health_to_u8(Health::Unknown)),
-            last_refresh: Mutex::new(None),
+            last_refresh: RwLock::new(None),
             ttl: DEFAULT_TTL,
         }
     }
@@ -33,14 +37,14 @@ impl HealthCache {
     pub fn with_ttl(ttl: Duration) -> Self {
         Self {
             health: AtomicU8::new(health_to_u8(Health::Unknown)),
-            last_refresh: Mutex::new(None),
+            last_refresh: RwLock::new(None),
             ttl,
         }
     }
 
     /// Get the cached health value, or `None` if expired.
     pub fn get(&self) -> Option<Health> {
-        let last = self.last_refresh.lock();
+        let last = self.last_refresh.read();
         match *last {
             Some(instant) if instant.elapsed() < self.ttl => {
                 Some(u8_to_health(self.health.load(Ordering::Acquire)))
@@ -54,7 +58,7 @@ impl HealthCache {
     /// If the cache is still valid (not expired), this is a no-op and returns
     /// the existing cached value. Otherwise, stores the new value.
     pub fn update(&self, health: Health) -> Health {
-        let mut last = self.last_refresh.lock();
+        let mut last = self.last_refresh.write();
 
         // Double-check: another thread may have refreshed while we waited.
         if let Some(instant) = *last
@@ -70,14 +74,14 @@ impl HealthCache {
 
     /// Force-set the cached value regardless of TTL.
     pub fn set(&self, health: Health) {
-        let mut last = self.last_refresh.lock();
+        let mut last = self.last_refresh.write();
         self.health.store(health_to_u8(health), Ordering::Release);
         *last = Some(Instant::now());
     }
 
     /// Invalidate the cache.
     pub fn invalidate(&self) {
-        let mut last = self.last_refresh.lock();
+        let mut last = self.last_refresh.write();
         *last = None;
     }
 }

@@ -53,6 +53,37 @@ pub struct HealthCheckConfig {
     pub samples: u32,
 }
 
+impl HealthCheckConfig {
+    /// Validate that the configuration is internally consistent.
+    ///
+    /// Returns an error string describing the first inconsistency found:
+    /// - `timeout` must be less than `interval`
+    /// - `rise` and `fall` must be > 0
+    /// - `samples` must be >= max(rise, fall)
+    pub fn validate(&self) -> std::result::Result<(), String> {
+        if self.timeout >= self.interval {
+            return Err(format!(
+                "timeout ({:?}) must be less than interval ({:?})",
+                self.timeout, self.interval
+            ));
+        }
+        if self.rise == 0 {
+            return Err("rise must be > 0".into());
+        }
+        if self.fall == 0 {
+            return Err("fall must be > 0".into());
+        }
+        if self.samples < self.rise.max(self.fall) {
+            return Err(format!(
+                "samples ({}) must be >= max(rise, fall) ({})",
+                self.samples,
+                self.rise.max(self.fall)
+            ));
+        }
+        Ok(())
+    }
+}
+
 impl Default for HealthCheckConfig {
     fn default() -> Self {
         Self {

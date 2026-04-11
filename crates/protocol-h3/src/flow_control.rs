@@ -8,10 +8,16 @@ use std::sync::atomic::{AtomicU64, Ordering};
 
 use tracing::debug;
 
-/// Flow control window manager for QUIC connections and streams.
+/// Advisory flow control window tracker for QUIC connections and streams.
 ///
 /// Tracks consumed and available bytes at both connection and stream level,
 /// and determines when to send `MAX_DATA` / `MAX_STREAM_DATA` window updates.
+///
+/// **Note:** This is an advisory layer on top of quinn's transport-level flow
+/// control. Quinn enforces the actual QUIC flow control windows (RFC 9000
+/// Sections 4.1-4.2). This tracker uses relaxed atomic ordering because a
+/// missed or duplicate window-update signal is harmless -- quinn will never
+/// allow the peer to exceed the real window.
 #[derive(Debug)]
 pub struct FlowController {
     /// Connection-level window size (MAX_DATA).

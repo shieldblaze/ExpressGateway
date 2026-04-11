@@ -18,6 +18,7 @@ use dashmap::DashMap;
 use expressgateway_core::error::{Error, Result};
 use expressgateway_core::lb::{HttpRequest, HttpResponse, LoadBalancer};
 use expressgateway_core::node::Node;
+use parking_lot::Mutex;
 
 /// Number of samples before EWMA kicks in.
 const COLD_THRESHOLD: u64 = 10;
@@ -94,6 +95,8 @@ pub struct EwmaBalancer {
     alpha: f64,
     /// Round-robin index for cold-start phase.
     rr_index: AtomicUsize,
+    /// Serialises add/remove to prevent lost updates from concurrent mutations.
+    mutation_lock: Mutex<()>,
 }
 
 impl EwmaBalancer {
@@ -109,6 +112,7 @@ impl EwmaBalancer {
             ewma_state: DashMap::new(),
             alpha,
             rr_index: AtomicUsize::new(0),
+            mutation_lock: Mutex::new(()),
         }
     }
 
@@ -178,11 +182,12 @@ impl LoadBalancer<HttpRequest, HttpResponse> for EwmaBalancer {
 
         Ok(HttpResponse {
             node: selected,
-            headers_to_add: Vec::new(),
+            headers_to_add: http::HeaderMap::new(),
         })
     }
 
     fn add_node(&self, node: Arc<dyn Node>) {
+        let _guard = self.mutation_lock.lock();
         let id = node.id().to_string();
         self.ewma_state.insert(id, Arc::new(NodeEwma::new()));
         let old = self.nodes.load();
@@ -192,6 +197,7 @@ impl LoadBalancer<HttpRequest, HttpResponse> for EwmaBalancer {
     }
 
     fn remove_node(&self, node_id: &str) {
+        let _guard = self.mutation_lock.lock();
         self.ewma_state.remove(node_id);
         let old = self.nodes.load();
         let mut new_nodes = (**old).clone();
@@ -229,7 +235,7 @@ mod tests {
             client_addr: "10.0.0.1:5000".parse().unwrap(),
             host: Some("example.com".into()),
             path: "/".into(),
-            headers: Vec::new(),
+            headers: http::HeaderMap::new(),
         }
     }
 

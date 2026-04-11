@@ -2,12 +2,13 @@
 
 use std::collections::HashMap;
 use std::sync::Arc;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use expressgateway_core::node::{Node, NodeState};
 use expressgateway_core::{Health, HealthCheckConfig, HealthChecker, HealthState};
 use parking_lot::RwLock;
 use tokio::task::JoinHandle;
+use tokio_util::sync::CancellationToken;
 use tracing::{debug, info, warn};
 
 use crate::backoff::ExponentialBackoff;
@@ -17,6 +18,10 @@ use crate::tracker::HealthTracker;
 struct NodeHealthState {
     tracker: HealthTracker,
     backoff: ExponentialBackoff,
+    /// Instant at which the current backoff delay expires. Checks are skipped
+    /// (not slept through) until this time, so one node's backoff never blocks
+    /// the other nodes in the same tick.
+    backoff_until: Option<Instant>,
 }
 
 /// Background health check scheduler that periodically checks all registered nodes.
@@ -29,6 +34,8 @@ pub struct HealthCheckScheduler {
     node_states: Arc<RwLock<HashMap<String, NodeHealthState>>>,
     /// Handle to the background task.
     task_handle: RwLock<Option<JoinHandle<()>>>,
+    /// Cancellation token for graceful shutdown.
+    cancel: CancellationToken,
 }
 
 impl HealthCheckScheduler {
@@ -39,6 +46,7 @@ impl HealthCheckScheduler {
             config,
             node_states: Arc::new(RwLock::new(HashMap::new())),
             task_handle: RwLock::new(None),
+            cancel: CancellationToken::new(),
         }
     }
 
@@ -47,6 +55,7 @@ impl HealthCheckScheduler {
         let checker = self.checker.clone();
         let config = self.config.clone();
         let node_states = self.node_states.clone();
+        let cancel = self.cancel.clone();
 
         // Initialize per-node state.
         {
@@ -57,15 +66,27 @@ impl HealthCheckScheduler {
                     .or_insert_with(|| NodeHealthState {
                         tracker: HealthTracker::new(config.samples, config.rise, config.fall),
                         backoff: ExponentialBackoff::default(),
+                        backoff_until: None,
                     });
             }
         }
 
         let handle = tokio::spawn(async move {
             let mut interval = tokio::time::interval(config.interval);
+            // Delay missed ticks instead of bursting, preventing pile-up
+            // when a tick takes longer than the interval.
+            interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
 
             loop {
-                interval.tick().await;
+                tokio::select! {
+                    _ = cancel.cancelled() => {
+                        info!("health check scheduler shutting down gracefully");
+                        break;
+                    }
+                    _ = interval.tick() => {}
+                }
+
+                let now = Instant::now();
 
                 for node in &nodes {
                     if node.state() == NodeState::ManualOffline {
@@ -73,22 +94,21 @@ impl HealthCheckScheduler {
                         continue;
                     }
 
-                    // Check backoff delay.
-                    let delay = {
+                    // Check whether this node is still in a backoff window.
+                    // We skip instead of sleeping so that one backed-off node
+                    // does not delay checks on all subsequent nodes.
+                    {
                         let states = node_states.read();
-                        states
-                            .get(node.id())
-                            .map(|s| s.backoff.next_delay())
-                            .unwrap_or(Duration::ZERO)
-                    };
-
-                    if delay > Duration::ZERO {
-                        debug!(
-                            node_id = node.id(),
-                            delay_ms = delay.as_millis(),
-                            "backing off health check"
-                        );
-                        tokio::time::sleep(delay).await;
+                        if let Some(ns) = states.get(node.id())
+                            && let Some(until) = ns.backoff_until
+                                && now < until {
+                                    debug!(
+                                        node_id = node.id(),
+                                        remaining_ms = (until - now).as_millis(),
+                                        "skipping health check (backoff)"
+                                    );
+                                    continue;
+                                }
                     }
 
                     let result = checker.check(node.address()).await;
@@ -108,8 +128,15 @@ impl HealthCheckScheduler {
 
                         if success {
                             node_state.backoff.record_success();
+                            node_state.backoff_until = None;
                         } else {
                             node_state.backoff.record_failure();
+                            let delay = node_state.backoff.next_delay();
+                            node_state.backoff_until = if delay > Duration::ZERO {
+                                Some(Instant::now() + delay)
+                            } else {
+                                None
+                            };
                         }
 
                         // Update node state based on tracker.
@@ -123,8 +150,9 @@ impl HealthCheckScheduler {
         *self.task_handle.write() = Some(handle);
     }
 
-    /// Stop the background health check loop.
+    /// Stop the background health check loop gracefully.
     pub fn stop(&self) {
+        self.cancel.cancel();
         if let Some(handle) = self.task_handle.write().take() {
             handle.abort();
             info!("health check scheduler stopped");

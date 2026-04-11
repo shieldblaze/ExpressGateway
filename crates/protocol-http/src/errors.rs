@@ -72,14 +72,15 @@ impl HttpError {
     /// Build an HTTP response from this error.
     ///
     /// This construction is infallible: status codes are always valid, header
-    /// names are static, and the body is a well-formed JSON string. The
-    /// `unwrap` on the builder is safe because none of the inputs can cause
-    /// `http::Response::builder()` to fail.
+    /// names are static, and the body is a well-formed JSON string.
+    ///
+    /// JSON-escapes the message to prevent injection of control characters
+    /// (newlines, tabs, backslashes, quotes) into the response body.
     pub fn into_response(self) -> Response<Full<Bytes>> {
         let body = format!(
             "{{\"error\":\"{}\",\"message\":\"{}\"}}",
             self.status.as_u16(),
-            self.message.replace('\"', "\\\""),
+            json_escape(&self.message),
         );
         // SAFETY (logical): builder with valid StatusCode and static header
         // names is infallible. We assert rather than silently swallowing.
@@ -91,12 +92,11 @@ impl HttpError {
             .body(Full::new(Bytes::from(body)))
             .unwrap_or_else(|_| {
                 // Unreachable in practice, but never panic on data path.
-                Response::builder()
-                    .status(StatusCode::INTERNAL_SERVER_ERROR)
-                    .body(Full::new(Bytes::from_static(
-                        b"{\"error\":\"500\",\"message\":\"internal error\"}",
-                    )))
-                    .unwrap()
+                // This builder is also infallible (valid status, no headers
+                // besides the body), so the second unwrap is safe.
+                Response::new(Full::new(Bytes::from_static(
+                    b"{\"error\":\"500\",\"message\":\"internal error\"}",
+                )))
             })
     }
 
@@ -107,6 +107,32 @@ impl HttpError {
             StatusCode::from_u16(err.http_status()).unwrap_or(StatusCode::INTERNAL_SERVER_ERROR);
         Self::new(status, err.to_string())
     }
+}
+
+/// Escape a string for embedding in a JSON string value.
+///
+/// Handles: `"`, `\`, `/`, `\b`, `\f`, `\n`, `\r`, `\t`, and control
+/// characters below 0x20. This avoids pulling in a full JSON serializer
+/// for a single string field.
+fn json_escape(s: &str) -> String {
+    let mut out = String::with_capacity(s.len());
+    for ch in s.chars() {
+        match ch {
+            '"' => out.push_str("\\\""),
+            '\\' => out.push_str("\\\\"),
+            '\n' => out.push_str("\\n"),
+            '\r' => out.push_str("\\r"),
+            '\t' => out.push_str("\\t"),
+            '\x08' => out.push_str("\\b"),
+            '\x0C' => out.push_str("\\f"),
+            c if c < '\x20' => {
+                // Unicode escape for other control characters.
+                out.push_str(&format!("\\u{:04x}", c as u32));
+            }
+            c => out.push(c),
+        }
+    }
+    out
 }
 
 impl std::fmt::Display for HttpError {
@@ -208,5 +234,28 @@ mod tests {
         };
         let http_err = HttpError::from_core_error(&core_err);
         assert_eq!(http_err.status, StatusCode::BAD_GATEWAY);
+    }
+
+    #[test]
+    fn json_escape_special_characters() {
+        assert_eq!(json_escape(r#"a"b"#), r#"a\"b"#);
+        assert_eq!(json_escape("a\\b"), "a\\\\b");
+        assert_eq!(json_escape("a\nb"), "a\\nb");
+        assert_eq!(json_escape("a\rb"), "a\\rb");
+        assert_eq!(json_escape("a\tb"), "a\\tb");
+    }
+
+    #[test]
+    fn json_escape_control_characters() {
+        assert_eq!(json_escape("\x00"), "\\u0000");
+        assert_eq!(json_escape("\x1f"), "\\u001f");
+    }
+
+    #[test]
+    fn error_response_no_panic_on_special_chars() {
+        // Ensure the error response builder handles all characters without panic.
+        let err = HttpError::bad_request("quote: \" newline: \n backslash: \\");
+        let resp = err.into_response();
+        assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
     }
 }

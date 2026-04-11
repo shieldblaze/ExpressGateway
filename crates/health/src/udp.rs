@@ -1,9 +1,14 @@
 //! UDP health checker -- validates connectivity by sending a PING datagram.
 
-use std::net::SocketAddr;
+use std::net::{Ipv4Addr, Ipv6Addr, SocketAddr, SocketAddrV4, SocketAddrV6};
 use std::time::{Duration, Instant};
 
 use expressgateway_core::{HealthCheckResult, HealthChecker, HealthState};
+
+/// Ephemeral bind addresses, constructed as consts to avoid runtime parsing.
+const BIND_V4: SocketAddr = SocketAddr::V4(SocketAddrV4::new(Ipv4Addr::UNSPECIFIED, 0));
+const BIND_V6: SocketAddr =
+    SocketAddr::V6(SocketAddrV6::new(Ipv6Addr::UNSPECIFIED, 0, 0, 0));
 
 /// UDP health checker that validates a backend by sending a "PING" datagram
 /// and expecting a "PING" or "PONG" response within the configured timeout.
@@ -25,11 +30,7 @@ impl HealthChecker for UdpHealthChecker {
 
         let result = tokio::time::timeout(self.timeout, async {
             // Bind to an ephemeral port matching the target address family.
-            let bind_addr: SocketAddr = if addr.is_ipv4() {
-                "0.0.0.0:0".parse().unwrap()
-            } else {
-                "[::]:0".parse().unwrap()
-            };
+            let bind_addr = if addr.is_ipv4() { BIND_V4 } else { BIND_V6 };
 
             let socket = tokio::net::UdpSocket::bind(bind_addr).await?;
             socket.connect(addr).await?;

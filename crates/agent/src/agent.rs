@@ -55,6 +55,18 @@ pub enum AgentState {
     ShuttingDown,
 }
 
+impl std::fmt::Display for AgentState {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Disconnected => f.write_str("disconnected"),
+            Self::Connecting => f.write_str("connecting"),
+            Self::Connected => f.write_str("connected"),
+            Self::Reconnecting => f.write_str("reconnecting"),
+            Self::ShuttingDown => f.write_str("shutting_down"),
+        }
+    }
+}
+
 /// Data plane agent that communicates with the control plane.
 ///
 /// Handles registration, heartbeating, configuration fetching, and
@@ -376,11 +388,18 @@ impl DataPlaneAgent {
                         }
                     }
 
-                    // Exponential backoff with cap.
-                    backoff = Duration::from_secs_f64(
-                        (backoff.as_secs_f64() * self.reconnect_config.backoff_multiplier)
-                            .min(self.reconnect_config.max_backoff.as_secs_f64()),
-                    );
+                    // Exponential backoff with cap.  Guard against NaN / negative
+                    // / infinity from a misconfigured multiplier -- clamp to a
+                    // sane range so we never panic in `Duration::from_secs_f64`.
+                    let next = backoff.as_secs_f64() * self.reconnect_config.backoff_multiplier;
+                    let capped = next
+                        .min(self.reconnect_config.max_backoff.as_secs_f64())
+                        .clamp(0.0, self.reconnect_config.max_backoff.as_secs_f64());
+                    backoff = if capped.is_finite() {
+                        Duration::from_secs_f64(capped)
+                    } else {
+                        self.reconnect_config.max_backoff
+                    };
                 }
             }
         }

@@ -124,10 +124,7 @@ impl H2ProxyHandler {
                 Some(authority.to_string())
             },
             path: normalized.path.clone(),
-            headers: req_headers
-                .iter()
-                .map(|(k, v)| (k.to_string(), v.to_str().unwrap_or_default().to_string()))
-                .collect(),
+            headers: req_headers.clone(),
         };
 
         // Select backend.
@@ -253,7 +250,7 @@ mod tests {
         fn select(&self, _request: &HttpRequest) -> expressgateway_core::Result<HttpResponse> {
             Ok(HttpResponse {
                 node: self.node.clone(),
-                headers_to_add: Vec::new(),
+                headers_to_add: http::HeaderMap::new(),
             })
         }
         fn add_node(&self, _node: Arc<dyn Node>) {}

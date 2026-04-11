@@ -115,7 +115,11 @@ impl QuicTransport {
         }
         client_config.transport_config(Arc::new(transport));
 
-        let bind_addr: SocketAddr = "[::]:0".parse().unwrap();
+        // SAFETY: "[::]:0" is a valid SocketAddr literal — parse cannot fail.
+        let bind_addr: SocketAddr = match "[::]:0".parse() {
+            Ok(addr) => addr,
+            Err(_) => unreachable!("\"[::]:0\" is a valid socket address"),
+        };
         let mut endpoint =
             quinn::Endpoint::client(bind_addr).context("failed to create QUIC client endpoint")?;
         endpoint.set_default_client_config(client_config);
@@ -125,6 +129,10 @@ impl QuicTransport {
     }
 
     /// Accept an incoming QUIC connection from a client.
+    ///
+    /// When 0-RTT is enabled and accepted, the returned [`QuicConnection`] has
+    /// `is_0rtt() == true` so the HTTP/3 layer can reject non-idempotent methods
+    /// to prevent replay attacks per RFC 9001 Section 4.1.
     pub async fn accept(&self) -> Result<QuicConnection> {
         let incoming = self
             .endpoint
@@ -132,7 +140,7 @@ impl QuicTransport {
             .await
             .ok_or_else(|| anyhow::anyhow!("endpoint closed"))?;
 
-        let connection = if self.config.enable_0rtt {
+        if self.config.enable_0rtt {
             match incoming.accept() {
                 Ok(connecting) => match connecting.into_0rtt() {
                     Ok((conn, _zero_rtt_accepted)) => {
@@ -140,18 +148,18 @@ impl QuicTransport {
                             remote = %conn.remote_address(),
                             "accepted QUIC connection with 0-RTT"
                         );
-                        conn
+                        Ok(QuicConnection::new_0rtt(conn))
                     }
                     Err(connecting) => {
                         let conn = connecting.await.context("QUIC handshake failed")?;
                         debug!(
                             remote = %conn.remote_address(),
-                            "accepted QUIC connection (0-RTT rejected)"
+                            "accepted QUIC connection (0-RTT rejected, full handshake)"
                         );
-                        conn
+                        Ok(QuicConnection::new(conn))
                     }
                 },
-                Err(e) => return Err(anyhow::anyhow!("failed to accept incoming: {e}")),
+                Err(e) => Err(anyhow::anyhow!("failed to accept incoming: {e}")),
             }
         } else {
             let connecting = incoming
@@ -159,10 +167,8 @@ impl QuicTransport {
                 .map_err(|e| anyhow::anyhow!("failed to accept incoming: {e}"))?;
             let conn = connecting.await.context("QUIC handshake failed")?;
             debug!(remote = %conn.remote_address(), "accepted QUIC connection");
-            conn
-        };
-
-        Ok(QuicConnection::new(connection))
+            Ok(QuicConnection::new(conn))
+        }
     }
 
     /// Connect to a remote QUIC server.
@@ -172,31 +178,29 @@ impl QuicTransport {
             .connect(addr, server_name)
             .context("failed to start QUIC connection")?;
 
-        let connection = if self.config.enable_0rtt {
+        if self.config.enable_0rtt {
             match connecting.into_0rtt() {
                 Ok((conn, _zero_rtt_accepted)) => {
                     debug!(
                         remote = %conn.remote_address(),
                         "connected to QUIC server with 0-RTT"
                     );
-                    conn
+                    Ok(QuicConnection::new_0rtt(conn))
                 }
                 Err(connecting) => {
                     let conn = connecting.await.context("QUIC handshake failed")?;
                     debug!(
                         remote = %conn.remote_address(),
-                        "connected to QUIC server (0-RTT rejected)"
+                        "connected to QUIC server (0-RTT rejected, full handshake)"
                     );
-                    conn
+                    Ok(QuicConnection::new(conn))
                 }
             }
         } else {
             let conn = connecting.await.context("QUIC handshake failed")?;
             debug!(remote = %conn.remote_address(), "connected to QUIC server");
-            conn
-        };
-
-        Ok(QuicConnection::new(connection))
+            Ok(QuicConnection::new(conn))
+        }
     }
 
     /// Return a reference to the underlying [`quinn::Endpoint`].

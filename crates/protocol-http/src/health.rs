@@ -84,15 +84,16 @@ pub fn handle_ready(state: &HealthState) -> Response<Full<Bytes>> {
     }
 }
 
-/// Build a JSON response with the given status and body.
+/// Build a JSON response with the given status and static body.
 ///
 /// Infallible in practice: status is always valid and header names are static.
-fn json_response(status: StatusCode, body: &str) -> Response<Full<Bytes>> {
+/// Uses `Bytes::from_static` to avoid heap allocation for constant bodies.
+fn json_response(status: StatusCode, body: &'static str) -> Response<Full<Bytes>> {
     Response::builder()
         .status(status)
         .header("content-type", "application/json")
         .header("content-length", body.len().to_string())
-        .body(Full::new(Bytes::from(body.to_owned())))
+        .body(Full::new(Bytes::from_static(body.as_bytes())))
         .unwrap_or_else(|_| {
             // Unreachable, but never panic on the data path.
             Response::new(Full::new(Bytes::from_static(

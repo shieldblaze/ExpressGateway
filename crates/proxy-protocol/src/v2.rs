@@ -272,9 +272,15 @@ fn parse_tlvs(mut data: &[u8]) -> Result<Vec<Tlv>, V2Error> {
         data = &data[3 + tlv_len..];
     }
 
-    // If there are 1 or 2 trailing bytes, they're malformed TLV headers --
-    // but per the spec, implementations SHOULD ignore them for forward
-    // compatibility.
+    // 1 or 2 trailing bytes cannot form a valid TLV header (minimum 3 bytes:
+    // 1 type + 2 length).  Treat as malformed rather than silently ignoring,
+    // since this indicates corruption or a buggy sender.
+    if !data.is_empty() {
+        return Err(V2Error::MalformedTlv {
+            need: 3,
+            have: data.len(),
+        });
+    }
 
     Ok(tlvs)
 }
@@ -284,6 +290,11 @@ fn parse_tlvs(mut data: &[u8]) -> Result<Vec<Tlv>, V2Error> {
 ///
 /// If source/destination addresses are not available the LOCAL command with
 /// `AF_UNSPEC` is used.  TLV extensions are appended after the address block.
+///
+/// # Panics
+///
+/// Panics if any individual TLV value exceeds 65535 bytes, or if the total
+/// address + TLV payload exceeds 65535 bytes.
 pub fn encode_v2(header: &ProxyHeader, buf: &mut BytesMut) {
     // Signature.
     buf.put_slice(&V2_SIGNATURE);
@@ -295,8 +306,19 @@ pub fn encode_v2(header: &ProxyHeader, buf: &mut BytesMut) {
     };
     buf.put_u8(VERSION | cmd);
 
-    // Calculate TLV size.
-    let tlv_size: usize = header.tlvs.iter().map(|t| 3 + t.value.len()).sum();
+    // Calculate TLV size, validating individual TLV values fit in u16.
+    let tlv_size: usize = header
+        .tlvs
+        .iter()
+        .map(|t| {
+            assert!(
+                t.value.len() <= u16::MAX as usize,
+                "TLV value length {} exceeds maximum of 65535",
+                t.value.len()
+            );
+            3 + t.value.len()
+        })
+        .sum();
 
     // Transport nibble.
     let tp = match header.transport {
@@ -312,16 +334,26 @@ pub fn encode_v2(header: &ProxyHeader, buf: &mut BytesMut) {
         } if header.command == ProxyCommand::Proxy => {
             match (source.ip(), destination.ip()) {
                 (IpAddr::V4(s4), IpAddr::V4(d4)) => {
+                    let payload_len = ADDR_LEN_INET + tlv_size;
+                    assert!(
+                        payload_len <= MAX_ADDR_LEN,
+                        "v2 payload length {payload_len} exceeds maximum of {MAX_ADDR_LEN}"
+                    );
                     buf.put_u8(AF_INET | tp);
-                    buf.put_u16((ADDR_LEN_INET + tlv_size) as u16);
+                    buf.put_u16(payload_len as u16);
                     buf.put_slice(&s4.octets());
                     buf.put_slice(&d4.octets());
                     buf.put_u16(source.port());
                     buf.put_u16(destination.port());
                 }
                 (IpAddr::V6(s6), IpAddr::V6(d6)) => {
+                    let payload_len = ADDR_LEN_INET6 + tlv_size;
+                    assert!(
+                        payload_len <= MAX_ADDR_LEN,
+                        "v2 payload length {payload_len} exceeds maximum of {MAX_ADDR_LEN}"
+                    );
                     buf.put_u8(AF_INET6 | tp);
-                    buf.put_u16((ADDR_LEN_INET6 + tlv_size) as u16);
+                    buf.put_u16(payload_len as u16);
                     buf.put_slice(&s6.octets());
                     buf.put_slice(&d6.octets());
                     buf.put_u16(source.port());
@@ -329,6 +361,10 @@ pub fn encode_v2(header: &ProxyHeader, buf: &mut BytesMut) {
                 }
                 _ => {
                     // Mixed families: fall back to UNSPEC.
+                    assert!(
+                        tlv_size <= MAX_ADDR_LEN,
+                        "v2 payload length {tlv_size} exceeds maximum of {MAX_ADDR_LEN}"
+                    );
                     buf.put_u8(AF_UNSPEC | PROTO_UNSPEC);
                     buf.put_u16(tlv_size as u16);
                 }
@@ -338,13 +374,22 @@ pub fn encode_v2(header: &ProxyHeader, buf: &mut BytesMut) {
             source,
             destination,
         } if header.command == ProxyCommand::Proxy => {
+            let payload_len = ADDR_LEN_UNIX + tlv_size;
+            assert!(
+                payload_len <= MAX_ADDR_LEN,
+                "v2 payload length {payload_len} exceeds maximum of {MAX_ADDR_LEN}"
+            );
             buf.put_u8(AF_UNIX | tp);
-            buf.put_u16((ADDR_LEN_UNIX + tlv_size) as u16);
+            buf.put_u16(payload_len as u16);
             buf.put_slice(source);
             buf.put_slice(destination);
         }
         _ => {
             // No addresses or LOCAL command.
+            assert!(
+                tlv_size <= MAX_ADDR_LEN,
+                "v2 payload length {tlv_size} exceeds maximum of {MAX_ADDR_LEN}"
+            );
             buf.put_u8(AF_UNSPEC | PROTO_UNSPEC);
             buf.put_u16(tlv_size as u16);
         }

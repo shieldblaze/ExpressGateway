@@ -10,6 +10,7 @@ use arc_swap::ArcSwap;
 use expressgateway_core::error::{Error, Result};
 use expressgateway_core::lb::{L4Request, L4Response, LoadBalancer};
 use expressgateway_core::node::Node;
+use parking_lot::Mutex;
 
 /// Least-load L4 load balancer.
 ///
@@ -18,6 +19,8 @@ use expressgateway_core::node::Node;
 /// are broken by the absolute connection count.
 pub struct LeastLoadBalancer {
     nodes: ArcSwap<Vec<Arc<dyn Node>>>,
+    /// Serialises add/remove to prevent lost updates from concurrent mutations.
+    mutation_lock: Mutex<()>,
 }
 
 impl LeastLoadBalancer {
@@ -25,6 +28,7 @@ impl LeastLoadBalancer {
     pub fn new() -> Self {
         Self {
             nodes: ArcSwap::new(Arc::new(Vec::new())),
+            mutation_lock: Mutex::new(()),
         }
     }
 }
@@ -65,6 +69,7 @@ impl LoadBalancer<L4Request, L4Response> for LeastLoadBalancer {
     }
 
     fn add_node(&self, node: Arc<dyn Node>) {
+        let _guard = self.mutation_lock.lock();
         let old = self.nodes.load();
         let mut new_nodes = (**old).clone();
         new_nodes.push(node);
@@ -72,6 +77,7 @@ impl LoadBalancer<L4Request, L4Response> for LeastLoadBalancer {
     }
 
     fn remove_node(&self, node_id: &str) {
+        let _guard = self.mutation_lock.lock();
         let old = self.nodes.load();
         let mut new_nodes = (**old).clone();
         new_nodes.retain(|n| n.id() != node_id);

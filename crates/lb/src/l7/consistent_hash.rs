@@ -7,7 +7,7 @@
 //! Uses `ArcSwap` for lock-free reads of the ring and node list on the
 //! hot path. Mutations are serialised with a `Mutex`.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashMap};
 use std::io::Cursor;
 use std::sync::Arc;
 
@@ -33,6 +33,8 @@ pub enum HashKeySource {
 struct RingSnapshot {
     ring: BTreeMap<u128, String>,
     nodes: Vec<Arc<dyn Node>>,
+    /// O(1) node lookup by ID, used during ring walk.
+    node_map: HashMap<String, Arc<dyn Node>>,
 }
 
 /// Consistent-hash HTTP load balancer.
@@ -54,6 +56,7 @@ impl HttpConsistentHashBalancer {
             snapshot: ArcSwap::new(Arc::new(RingSnapshot {
                 ring: BTreeMap::new(),
                 nodes: Vec::new(),
+                node_map: HashMap::new(),
             })),
             mutation_lock: Mutex::new(()),
             key_source,
@@ -88,13 +91,12 @@ impl LoadBalancer<HttpRequest, HttpResponse> for HttpConsistentHashBalancer {
         // Determine the hash key.
         let key = match &self.key_source {
             HashKeySource::Header(name) => {
-                // Look for the header (case-insensitive).
-                let lower = name.to_lowercase();
+                // HeaderMap::get handles case-insensitive lookup per HTTP spec.
                 request
                     .headers
-                    .iter()
-                    .find(|(k, _)| k.to_lowercase() == lower)
-                    .map(|(_, v)| v.clone())
+                    .get(name.as_str())
+                    .and_then(|v| v.to_str().ok())
+                    .map(|s| s.to_string())
                     .unwrap_or_else(|| request.client_addr.ip().to_string())
             }
             HashKeySource::ClientIp => request.client_addr.ip().to_string(),
@@ -106,12 +108,12 @@ impl LoadBalancer<HttpRequest, HttpResponse> for HttpConsistentHashBalancer {
         let candidates = snap.ring.range(hash..).chain(snap.ring.range(..hash));
 
         for (_ring_hash, node_id) in candidates {
-            if let Some(node) = snap.nodes.iter().find(|n| n.id() == node_id)
+            if let Some(node) = snap.node_map.get(node_id)
                 && node.is_online()
             {
                 return Ok(HttpResponse {
                     node: node.clone(),
-                    headers_to_add: Vec::new(),
+                    headers_to_add: http::HeaderMap::new(),
                 });
             }
         }
@@ -124,6 +126,7 @@ impl LoadBalancer<HttpRequest, HttpResponse> for HttpConsistentHashBalancer {
         let old = self.snapshot.load();
         let mut ring = old.ring.clone();
         let mut nodes = old.nodes.clone();
+        let mut node_map = old.node_map.clone();
 
         let node_id = node.id().to_string();
         for i in 0..VIRTUAL_NODES {
@@ -131,9 +134,11 @@ impl LoadBalancer<HttpRequest, HttpResponse> for HttpConsistentHashBalancer {
             let hash = murmur3_hash(vnode_key.as_bytes());
             ring.insert(hash, node_id.clone());
         }
+        node_map.insert(node_id, node.clone());
         nodes.push(node);
 
-        self.snapshot.store(Arc::new(RingSnapshot { ring, nodes }));
+        self.snapshot
+            .store(Arc::new(RingSnapshot { ring, nodes, node_map }));
     }
 
     fn remove_node(&self, node_id: &str) {
@@ -141,6 +146,7 @@ impl LoadBalancer<HttpRequest, HttpResponse> for HttpConsistentHashBalancer {
         let old = self.snapshot.load();
         let mut ring = old.ring.clone();
         let mut nodes = old.nodes.clone();
+        let mut node_map = old.node_map.clone();
 
         for i in 0..VIRTUAL_NODES {
             let vnode_key = format!("{}-vnode-{}", node_id, i);
@@ -148,8 +154,10 @@ impl LoadBalancer<HttpRequest, HttpResponse> for HttpConsistentHashBalancer {
             ring.remove(&hash);
         }
         nodes.retain(|n| n.id() != node_id);
+        node_map.remove(node_id);
 
-        self.snapshot.store(Arc::new(RingSnapshot { ring, nodes }));
+        self.snapshot
+            .store(Arc::new(RingSnapshot { ring, nodes, node_map }));
     }
 
     fn online_nodes(&self) -> Vec<Arc<dyn Node>> {
@@ -182,11 +190,16 @@ mod tests {
     }
 
     fn make_request_with_header(header: &str, value: &str) -> HttpRequest {
+        let mut headers = http::HeaderMap::new();
+        headers.insert(
+            http::header::HeaderName::from_bytes(header.as_bytes()).unwrap(),
+            http::header::HeaderValue::from_str(value).unwrap(),
+        );
         HttpRequest {
             client_addr: "10.0.0.1:5000".parse().unwrap(),
             host: Some("example.com".into()),
             path: "/".into(),
-            headers: vec![(header.to_string(), value.to_string())],
+            headers,
         }
     }
 
@@ -200,7 +213,7 @@ mod tests {
             client_addr: "10.0.0.1:5000".parse().unwrap(),
             host: None,
             path: "/".into(),
-            headers: Vec::new(),
+            headers: http::HeaderMap::new(),
         };
 
         let first = lb.select(&req).unwrap().node.id().to_string();
@@ -211,12 +224,12 @@ mod tests {
 
     #[test]
     fn hash_by_header() {
-        let lb = HttpConsistentHashBalancer::with_header("X-User-Id");
+        let lb = HttpConsistentHashBalancer::with_header("x-user-id");
         lb.add_node(make_node("n1", 8001));
         lb.add_node(make_node("n2", 8002));
 
-        let req_a = make_request_with_header("X-User-Id", "user-123");
-        let req_b = make_request_with_header("X-User-Id", "user-456");
+        let req_a = make_request_with_header("x-user-id", "user-123");
+        let req_b = make_request_with_header("x-user-id", "user-456");
 
         let node_a = lb.select(&req_a).unwrap().node.id().to_string();
         let node_b = lb.select(&req_b).unwrap().node.id().to_string();
@@ -230,7 +243,7 @@ mod tests {
 
     #[test]
     fn falls_back_to_client_ip_when_header_absent() {
-        let lb = HttpConsistentHashBalancer::with_header("X-Missing");
+        let lb = HttpConsistentHashBalancer::with_header("x-missing");
         lb.add_node(make_node("n1", 8001));
         lb.add_node(make_node("n2", 8002));
 
@@ -238,7 +251,7 @@ mod tests {
             client_addr: "10.0.0.1:5000".parse().unwrap(),
             host: None,
             path: "/".into(),
-            headers: Vec::new(), // No X-Missing header.
+            headers: http::HeaderMap::new(),
         };
 
         // Should not error; falls back to client IP.

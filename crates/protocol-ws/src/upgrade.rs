@@ -11,12 +11,27 @@ use http::{HeaderMap, HeaderValue, Request, Response, StatusCode};
 /// The WebSocket GUID used to compute `Sec-WebSocket-Accept` (RFC 6455 sec 4.2.2).
 const WS_GUID: &str = "258EAFA5-E914-47DA-95CA-5AB5DC76E45B";
 
-/// Returns `true` if the HTTP/1.1 request headers indicate a WebSocket upgrade.
+/// Returns `true` if the HTTP/1.1 request headers indicate a valid WebSocket upgrade.
+///
+/// Per RFC 6455 section 4.2.1, the request MUST include:
+/// - `Connection: Upgrade`
+/// - `Upgrade: websocket`
+/// - `Sec-WebSocket-Key` header
+/// - `Sec-WebSocket-Version: 13`
 pub fn is_websocket_upgrade<T>(req: &Request<T>) -> bool {
     let headers = req.headers();
     has_upgrade_header(headers)
         && has_websocket_header(headers)
         && headers.contains_key("sec-websocket-key")
+        && has_version_13(headers)
+}
+
+/// Check that `Sec-WebSocket-Version` is exactly `13` (RFC 6455 section 4.2.1 item 6).
+fn has_version_13(headers: &HeaderMap) -> bool {
+    headers
+        .get("sec-websocket-version")
+        .and_then(|v| v.to_str().ok())
+        .is_some_and(|v| v.trim() == "13")
 }
 
 /// Check if `Connection` header contains `upgrade` (case-insensitive).
@@ -215,9 +230,35 @@ mod tests {
             .header("Connection", "upgrade")
             .header("Upgrade", "WebSocket")
             .header("Sec-WebSocket-Key", "dGhlIHNhbXBsZSBub25jZQ==")
+            .header("Sec-WebSocket-Version", "13")
             .body(())
             .unwrap();
         assert!(is_websocket_upgrade(&req));
+    }
+
+    #[test]
+    fn rejects_missing_version() {
+        let req = Request::builder()
+            .uri("/ws")
+            .header("Connection", "Upgrade")
+            .header("Upgrade", "websocket")
+            .header("Sec-WebSocket-Key", "dGhlIHNhbXBsZSBub25jZQ==")
+            .body(())
+            .unwrap();
+        assert!(!is_websocket_upgrade(&req));
+    }
+
+    #[test]
+    fn rejects_wrong_version() {
+        let req = Request::builder()
+            .uri("/ws")
+            .header("Connection", "Upgrade")
+            .header("Upgrade", "websocket")
+            .header("Sec-WebSocket-Key", "dGhlIHNhbXBsZSBub25jZQ==")
+            .header("Sec-WebSocket-Version", "8")
+            .body(())
+            .unwrap();
+        assert!(!is_websocket_upgrade(&req));
     }
 
     #[test]

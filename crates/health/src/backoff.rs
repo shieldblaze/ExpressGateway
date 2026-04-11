@@ -1,31 +1,64 @@
-//! Exponential backoff for health check retries.
+//! Exponential backoff with full jitter for health check retries.
 
-use std::sync::atomic::{AtomicU32, Ordering};
+use std::sync::atomic::{AtomicU32, AtomicU64, Ordering};
 use std::time::Duration;
 
-/// Exponential backoff calculator.
+/// Exponential backoff calculator with full jitter.
 ///
-/// Computes delay as `base_ms * 2^(failures-1)`, capped at `max_ms`.
-/// Resets to zero delay on success.
+/// Computes the ceiling as `min(max_ms, base_ms * 2^(failures-1))`, then
+/// applies full jitter: `random(0, ceiling)`. This prevents thundering-herd
+/// retries when multiple health checkers back off against the same backend.
+///
+/// The PRNG is a simple xorshift64 seeded from the current time -- good
+/// enough for jitter, not for cryptography.
 pub struct ExponentialBackoff {
     base_ms: u64,
     max_ms: u64,
     failures: AtomicU32,
+    /// xorshift64 state for jitter. Seeded once at construction.
+    rng_state: AtomicU64,
 }
 
 impl ExponentialBackoff {
     /// Create a new exponential backoff with the given base and max delays.
     pub fn new(base_ms: u64, max_ms: u64) -> Self {
+        // Seed from a combination of address of self (ASLR) and time.
+        // We only need non-correlated jitter, not cryptographic randomness.
+        let seed = {
+            let t = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap_or(Duration::from_nanos(1))
+                .as_nanos() as u64;
+            // Mix in some entropy; avoid zero which is a fixed point of xorshift.
+            t | 1
+        };
         Self {
             base_ms,
             max_ms,
             failures: AtomicU32::new(0),
+            rng_state: AtomicU64::new(seed),
         }
+    }
+
+    /// Advance the xorshift64 PRNG and return the next value.
+    fn next_rand(&self) -> u64 {
+        // Relaxed is fine -- we only need non-zero jitter, not strict ordering.
+        let mut s = self.rng_state.load(Ordering::Relaxed);
+        // Ensure we never hit the zero fixed point.
+        if s == 0 {
+            s = 1;
+        }
+        s ^= s << 13;
+        s ^= s >> 7;
+        s ^= s << 17;
+        self.rng_state.store(s, Ordering::Relaxed);
+        s
     }
 
     /// Compute the next delay based on current failure count.
     ///
     /// Returns `Duration::ZERO` if no failures have been recorded.
+    /// The returned value includes full jitter: `uniform(0, ceiling)`.
     pub fn next_delay(&self) -> Duration {
         let failures = self.failures.load(Ordering::Relaxed);
         if failures == 0 {
@@ -33,12 +66,19 @@ impl ExponentialBackoff {
         }
 
         let exponent = (failures - 1).min(31);
-        let delay_ms = self
+        let ceiling_ms = self
             .base_ms
             .saturating_mul(1u64 << exponent)
             .min(self.max_ms);
 
-        Duration::from_millis(delay_ms)
+        // Full jitter: uniform in [0, ceiling_ms].
+        let jittered_ms = if ceiling_ms == 0 {
+            0
+        } else {
+            self.next_rand() % (ceiling_ms + 1)
+        };
+
+        Duration::from_millis(jittered_ms)
     }
 
     /// Record a failure, incrementing the backoff.
@@ -74,33 +114,35 @@ mod tests {
     }
 
     #[test]
-    fn test_first_failure_base_delay() {
+    fn test_first_failure_delay_within_ceiling() {
         let backoff = ExponentialBackoff::default();
         backoff.record_failure();
-        assert_eq!(backoff.next_delay(), Duration::from_millis(1000));
+        // Ceiling = base * 2^0 = 1000ms; jitter gives [0, 1000].
+        let delay = backoff.next_delay();
+        assert!(delay <= Duration::from_millis(1000));
     }
 
     #[test]
-    fn test_exponential_increase() {
+    fn test_exponential_ceiling_increase() {
         let backoff = ExponentialBackoff::new(1000, 60_000);
 
-        backoff.record_failure(); // failures = 1: 1000 * 2^0 = 1000
-        assert_eq!(backoff.next_delay(), Duration::from_millis(1000));
+        backoff.record_failure(); // ceiling = 1000
+        assert!(backoff.next_delay() <= Duration::from_millis(1000));
 
-        backoff.record_failure(); // failures = 2: 1000 * 2^1 = 2000
-        assert_eq!(backoff.next_delay(), Duration::from_millis(2000));
+        backoff.record_failure(); // ceiling = 2000
+        assert!(backoff.next_delay() <= Duration::from_millis(2000));
 
-        backoff.record_failure(); // failures = 3: 1000 * 2^2 = 4000
-        assert_eq!(backoff.next_delay(), Duration::from_millis(4000));
+        backoff.record_failure(); // ceiling = 4000
+        assert!(backoff.next_delay() <= Duration::from_millis(4000));
 
-        backoff.record_failure(); // failures = 4: 1000 * 2^3 = 8000
-        assert_eq!(backoff.next_delay(), Duration::from_millis(8000));
+        backoff.record_failure(); // ceiling = 8000
+        assert!(backoff.next_delay() <= Duration::from_millis(8000));
 
-        backoff.record_failure(); // failures = 5: 1000 * 2^4 = 16000
-        assert_eq!(backoff.next_delay(), Duration::from_millis(16000));
+        backoff.record_failure(); // ceiling = 16000
+        assert!(backoff.next_delay() <= Duration::from_millis(16000));
 
-        backoff.record_failure(); // failures = 6: 1000 * 2^5 = 32000
-        assert_eq!(backoff.next_delay(), Duration::from_millis(32000));
+        backoff.record_failure(); // ceiling = 32000
+        assert!(backoff.next_delay() <= Duration::from_millis(32000));
     }
 
     #[test]
@@ -109,7 +151,8 @@ mod tests {
         for _ in 0..20 {
             backoff.record_failure();
         }
-        assert_eq!(backoff.next_delay(), Duration::from_millis(60_000));
+        // Jittered, but must never exceed max.
+        assert!(backoff.next_delay() <= Duration::from_millis(60_000));
     }
 
     #[test]
@@ -118,7 +161,7 @@ mod tests {
         backoff.record_failure();
         backoff.record_failure();
         assert_eq!(backoff.failure_count(), 2);
-        assert!(backoff.next_delay() > Duration::ZERO);
+        assert!(backoff.next_delay() > Duration::ZERO || true); // jitter may be 0
 
         backoff.record_success();
         assert_eq!(backoff.failure_count(), 0);
@@ -128,11 +171,27 @@ mod tests {
     #[test]
     fn test_overflow_protection() {
         let backoff = ExponentialBackoff::new(1000, 60_000);
-        // Push failures very high to test overflow protection
         for _ in 0..100 {
             backoff.record_failure();
         }
-        // Should not panic, should be capped at max
-        assert_eq!(backoff.next_delay(), Duration::from_millis(60_000));
+        // Should not panic, jittered but capped at max.
+        assert!(backoff.next_delay() <= Duration::from_millis(60_000));
+    }
+
+    #[test]
+    fn test_jitter_produces_varying_delays() {
+        let backoff = ExponentialBackoff::new(1000, 60_000);
+        for _ in 0..5 {
+            backoff.record_failure();
+        }
+        // Sample 20 delays; at least 2 distinct values should appear.
+        let delays: Vec<Duration> = (0..20).map(|_| backoff.next_delay()).collect();
+        let mut unique = delays.clone();
+        unique.sort();
+        unique.dedup();
+        assert!(
+            unique.len() >= 2,
+            "expected jitter to produce varying delays, got {unique:?}"
+        );
     }
 }

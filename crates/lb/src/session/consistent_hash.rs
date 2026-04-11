@@ -6,7 +6,7 @@
 //!
 //! Uses `ArcSwap` for lock-free reads on the hot path.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashMap};
 use std::io::Cursor;
 use std::net::IpAddr;
 use std::sync::Arc;
@@ -28,6 +28,8 @@ fn murmur3_hash(data: &[u8]) -> u128 {
 struct RingSnapshot {
     ring: BTreeMap<u128, String>,
     nodes: Vec<Arc<dyn Node>>,
+    /// O(1) node lookup by ID, used during ring walk.
+    node_map: HashMap<String, Arc<dyn Node>>,
 }
 
 /// Consistent-hash session persistence.
@@ -48,6 +50,7 @@ impl ConsistentHashPersistence {
             snapshot: ArcSwap::new(Arc::new(RingSnapshot {
                 ring: BTreeMap::new(),
                 nodes: Vec::new(),
+                node_map: HashMap::new(),
             })),
             mutation_lock: Mutex::new(()),
         }
@@ -59,6 +62,7 @@ impl ConsistentHashPersistence {
         let old = self.snapshot.load();
         let mut ring = old.ring.clone();
         let mut nodes = old.nodes.clone();
+        let mut node_map = old.node_map.clone();
 
         let node_id = node.id().to_string();
         for i in 0..VIRTUAL_NODES {
@@ -66,9 +70,11 @@ impl ConsistentHashPersistence {
             let hash = murmur3_hash(vnode_key.as_bytes());
             ring.insert(hash, node_id.clone());
         }
+        node_map.insert(node_id, node.clone());
         nodes.push(node);
 
-        self.snapshot.store(Arc::new(RingSnapshot { ring, nodes }));
+        self.snapshot
+            .store(Arc::new(RingSnapshot { ring, nodes, node_map }));
     }
 
     /// Remove a backend node from the ring.
@@ -77,6 +83,7 @@ impl ConsistentHashPersistence {
         let old = self.snapshot.load();
         let mut ring = old.ring.clone();
         let mut nodes = old.nodes.clone();
+        let mut node_map = old.node_map.clone();
 
         for i in 0..VIRTUAL_NODES {
             let vnode_key = format!("{}-vnode-{}", node_id, i);
@@ -84,8 +91,10 @@ impl ConsistentHashPersistence {
             ring.remove(&hash);
         }
         nodes.retain(|n| n.id() != node_id);
+        node_map.remove(node_id);
 
-        self.snapshot.store(Arc::new(RingSnapshot { ring, nodes }));
+        self.snapshot
+            .store(Arc::new(RingSnapshot { ring, nodes, node_map }));
     }
 }
 
@@ -110,7 +119,7 @@ impl SessionPersistence<IpAddr, String> for ConsistentHashPersistence {
         let candidates = snap.ring.range(hash..).chain(snap.ring.range(..hash));
 
         for (_, node_id) in candidates {
-            if let Some(node) = snap.nodes.iter().find(|n| n.id() == node_id)
+            if let Some(node) = snap.node_map.get(node_id)
                 && node.is_online()
             {
                 return Some(node_id.clone());

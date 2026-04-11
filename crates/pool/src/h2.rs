@@ -6,12 +6,20 @@
 //!
 //! Stream acquisition uses CAS for lock-free concurrency.
 
-use std::sync::atomic::{AtomicU32, Ordering};
+use std::sync::atomic::{AtomicU32, AtomicU64, Ordering};
 use std::time::{Duration, Instant};
 
 use dashmap::DashMap;
 
 use crate::evictor::Evictable;
+
+/// Statistics for the H2 connection pool.
+#[derive(Debug, Clone, Copy)]
+pub struct H2PoolStats {
+    pub streams_acquired: u64,
+    pub streams_exhausted: u64,
+    pub evictions: u64,
+}
 
 /// Configuration for the HTTP/2 connection pool.
 #[derive(Debug, Clone)]
@@ -101,10 +109,27 @@ impl H2PooledConnection {
     }
 
     /// Release a stream on this connection.
+    ///
+    /// Uses CAS loop to prevent underflow in release builds. A spurious
+    /// double-release is logged and ignored rather than wrapping to `u32::MAX`.
     #[inline]
     pub fn release_stream(&self) {
-        let prev = self.active_streams.fetch_sub(1, Ordering::AcqRel);
-        debug_assert!(prev > 0, "release_stream called with 0 active streams");
+        loop {
+            let current = self.active_streams.load(Ordering::Acquire);
+            if current == 0 {
+                tracing::error!(conn_id = self.id, "release_stream called with 0 active streams — ignoring");
+                return;
+            }
+            match self.active_streams.compare_exchange_weak(
+                current,
+                current - 1,
+                Ordering::AcqRel,
+                Ordering::Acquire,
+            ) {
+                Ok(_) => return,
+                Err(_) => continue,
+            }
+        }
     }
 
     /// Number of active streams.
@@ -124,6 +149,9 @@ impl H2PooledConnection {
 pub struct H2Pool {
     pools: DashMap<String, Vec<H2PooledConnection>>,
     config: H2PoolConfig,
+    streams_acquired: AtomicU64,
+    streams_exhausted: AtomicU64,
+    evictions: AtomicU64,
 }
 
 impl H2Pool {
@@ -132,6 +160,9 @@ impl H2Pool {
         Self {
             pools: DashMap::new(),
             config,
+            streams_acquired: AtomicU64::new(0),
+            streams_exhausted: AtomicU64::new(0),
+            evictions: AtomicU64::new(0),
         }
     }
 
@@ -143,9 +174,11 @@ impl H2Pool {
         let pool = self.pools.get(node_id)?;
         for conn in pool.iter() {
             if conn.acquire_stream() {
+                self.streams_acquired.fetch_add(1, Ordering::Relaxed);
                 return Some(conn.id);
             }
         }
+        self.streams_exhausted.fetch_add(1, Ordering::Relaxed);
         None
     }
 
@@ -203,7 +236,18 @@ impl H2Pool {
             });
             total += before - pool.len();
         }
+        self.evictions.fetch_add(total as u64, Ordering::Relaxed);
         total
+    }
+
+    /// Get current pool statistics.
+    #[inline]
+    pub fn stats(&self) -> H2PoolStats {
+        H2PoolStats {
+            streams_acquired: self.streams_acquired.load(Ordering::Relaxed),
+            streams_exhausted: self.streams_exhausted.load(Ordering::Relaxed),
+            evictions: self.evictions.load(Ordering::Relaxed),
+        }
     }
 }
 

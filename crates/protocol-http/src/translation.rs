@@ -125,6 +125,10 @@ pub struct H2PseudoHeaders {
 /// - `:path` -> request URI
 /// - `:authority` -> `Host` header
 /// - `:scheme` is consumed but not mapped to a header
+///
+/// Per RFC 9113 §8.2.2, connection-specific header fields are forbidden in
+/// HTTP/2. This function rejects them during H2->H1 downgrade to prevent
+/// smuggling through protocol translation.
 pub fn h2_to_h1_request<B: Default>(
     method: &str,
     path: &str,
@@ -141,6 +145,25 @@ pub fn h2_to_h1_request<B: Default>(
         detail: format!("invalid path: {path}"),
     })?;
 
+    // RFC 9113 §8.2.2: Reject forbidden connection-specific headers that
+    // should never appear in HTTP/2 frames. Their presence indicates a
+    // malformed or smuggling-attempt H2 request.
+    for (name, _) in headers.iter() {
+        if name == header::CONNECTION
+            || name == header::TRANSFER_ENCODING
+            || name == header::UPGRADE
+            || name == HeaderName::from_static("keep-alive")
+            || name == HeaderName::from_static("proxy-connection")
+        {
+            return Err(TranslationError::InvalidHeader {
+                detail: format!(
+                    "forbidden connection-specific header in HTTP/2: {} (RFC 9113 §8.2.2)",
+                    name
+                ),
+            });
+        }
+    }
+
     let mut builder = Request::builder()
         .method(method)
         .uri(uri)
@@ -151,7 +174,7 @@ pub fn h2_to_h1_request<B: Default>(
         builder = builder.header(header::HOST, authority);
     }
 
-    // Copy regular headers.
+    // Copy regular headers (already validated above).
     if let Some(h) = builder.headers_mut() {
         for (name, value) in headers.iter() {
             h.append(name.clone(), value.clone());
@@ -344,5 +367,48 @@ mod tests {
         let uri: Uri = "/".parse().unwrap();
         let result = h1_to_h2_headers(&Method::GET, &uri, &headers, false).unwrap();
         assert_eq!(result.path, "/");
+    }
+
+    #[test]
+    fn h2_to_h1_rejects_connection_header() {
+        // RFC 9113 §8.2.2: Connection-specific headers are forbidden in H2.
+        let mut headers = HeaderMap::new();
+        headers.insert(header::CONNECTION, HeaderValue::from_static("keep-alive"));
+        let result: Result<Request<()>, _> =
+            h2_to_h1_request("GET", "/", "example.com", &headers);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn h2_to_h1_rejects_transfer_encoding() {
+        let mut headers = HeaderMap::new();
+        headers.insert(
+            header::TRANSFER_ENCODING,
+            HeaderValue::from_static("chunked"),
+        );
+        let result: Result<Request<()>, _> =
+            h2_to_h1_request("GET", "/", "example.com", &headers);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn h2_to_h1_rejects_upgrade_header() {
+        let mut headers = HeaderMap::new();
+        headers.insert(header::UPGRADE, HeaderValue::from_static("websocket"));
+        let result: Result<Request<()>, _> =
+            h2_to_h1_request("GET", "/", "example.com", &headers);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn h2_to_h1_rejects_keep_alive_header() {
+        let mut headers = HeaderMap::new();
+        headers.insert(
+            HeaderName::from_static("keep-alive"),
+            HeaderValue::from_static("timeout=5"),
+        );
+        let result: Result<Request<()>, _> =
+            h2_to_h1_request("GET", "/", "example.com", &headers);
+        assert!(result.is_err());
     }
 }

@@ -50,7 +50,10 @@ pub fn encode_trailers_frame(trailers: &HeaderMap) -> Bytes {
         trailer_buf.put_slice(b"\r\n");
     }
 
-    let trailer_len = trailer_buf.len() as u32;
+    let trailer_len: u32 = trailer_buf
+        .len()
+        .try_into()
+        .expect("gRPC trailer block exceeds u32::MAX");
     let mut frame = BytesMut::with_capacity(FRAME_HEADER_SIZE + trailer_buf.len());
 
     // Trailer frame flag.
@@ -74,8 +77,9 @@ pub fn decode_trailers_frame(frame: &[u8]) -> Option<HeaderMap> {
         return None;
     }
 
-    // Check trailer flag.
-    if frame[0] & TRAILER_FRAME_FLAG == 0 {
+    // Check trailer flag: must be exactly 0x80. Lower bits (compression)
+    // must be zero per the gRPC-Web spec.
+    if frame[0] != TRAILER_FRAME_FLAG {
         return None;
     }
 
@@ -88,10 +92,14 @@ pub fn decode_trailers_frame(frame: &[u8]) -> Option<HeaderMap> {
     parse_trailer_block(trailer_data)
 }
 
-/// Returns `true` if the given frame byte indicates a trailer frame.
+/// Returns `true` if the given frame byte indicates a valid trailer frame.
+///
+/// Per the gRPC-Web spec, the trailer flag byte is exactly `0x80`. The
+/// lower 7 bits (compression flag) must be zero because trailers are never
+/// compressed.
 #[inline]
 pub fn is_trailer_frame(first_byte: u8) -> bool {
-    first_byte & TRAILER_FRAME_FLAG != 0
+    first_byte == TRAILER_FRAME_FLAG
 }
 
 /// Translate a gRPC-Web content-type to the corresponding native gRPC
@@ -157,7 +165,8 @@ mod tests {
     #[test]
     fn trailer_frame_detection() {
         assert!(is_trailer_frame(0x80));
-        assert!(is_trailer_frame(0x81));
+        // 0x81 has compression bit set -- invalid for trailers per gRPC-Web spec.
+        assert!(!is_trailer_frame(0x81));
         assert!(!is_trailer_frame(0x00));
         assert!(!is_trailer_frame(0x01));
     }

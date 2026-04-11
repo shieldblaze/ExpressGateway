@@ -225,7 +225,9 @@ fn set_tcp_fastopen(socket: &Socket, queue_len: u32) -> io::Result<()> {
     use std::os::unix::io::AsRawFd;
 
     let fd = socket.as_raw_fd();
-    let val: libc::c_int = queue_len as libc::c_int;
+    // Clamp to i32::MAX to prevent sign-flip on the cast.  The kernel
+    // silently clamps internally anyway, but we keep the Rust side honest.
+    let val: libc::c_int = queue_len.min(i32::MAX as u32) as libc::c_int;
 
     // SAFETY: `setsockopt` is called with:
     // - `fd`: a valid, open file descriptor obtained from `socket.as_raw_fd()`

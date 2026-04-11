@@ -28,6 +28,7 @@ pub fn routes() -> Router<AppState> {
     Router::new()
         .route("/listeners", post(create_listener))
         .route("/listeners", get(list_listeners))
+        .route("/listeners/{id}", get(get_listener))
         .route("/listeners/{id}", put(update_listener))
         .route("/listeners/{id}", delete(delete_listener))
 }
@@ -62,6 +63,19 @@ async fn list_listeners(State(state): State<AppState>) -> Json<Vec<ListenerEntry
         .map(|r| r.value().clone())
         .collect();
     Json(listeners)
+}
+
+/// GET /listeners/:id - Get a specific listener.
+async fn get_listener(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+) -> Result<Json<ListenerEntry>, StatusCode> {
+    state
+        .store
+        .listeners
+        .get(&id)
+        .map(|r| Json(r.value().clone()))
+        .ok_or(StatusCode::NOT_FOUND)
 }
 
 /// PUT /listeners/:id - Update a listener.

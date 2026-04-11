@@ -10,6 +10,14 @@ use http::header::{self, HeaderMap, HeaderName, HeaderValue};
 use uuid::Uuid;
 
 /// Static set of hop-by-hop header names to strip (all lowercase).
+///
+/// Per RFC 9110 §7.6.1: Connection, Keep-Alive, TE, Trailer,
+/// Transfer-Encoding, Upgrade are hop-by-hop.  We also strip
+/// `Proxy-Connection` (de facto hop-by-hop, non-standard).
+///
+/// Note: `Proxy-Authenticate` and `Proxy-Authorization` are NOT
+/// hop-by-hop -- they are end-to-end authentication headers per
+/// RFC 9110 §11.7 and MUST be forwarded.
 const HOP_BY_HOP_NAMES: &[&str] = &[
     "connection",
     "keep-alive",
@@ -18,8 +26,6 @@ const HOP_BY_HOP_NAMES: &[&str] = &[
     "transfer-encoding",
     "upgrade",
     "proxy-connection",
-    "proxy-authenticate",
-    "proxy-authorization",
 ];
 
 /// Strip hop-by-hop headers from a header map per RFC 9110 Section 7.6.1.

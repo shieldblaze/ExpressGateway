@@ -787,6 +787,7 @@ dependencies = [
  "expressgateway-xdp",
  "serde",
  "tokio",
+ "tokio-util",
  "tracing",
  "tracing-subscriber",
 ]
@@ -827,21 +828,14 @@ dependencies = [
 name = "expressgateway-controlplane"
 version = "0.1.0"
 dependencies = [
- "anyhow",
  "arc-swap",
  "axum 0.8.8",
  "chrono",
  "dashmap",
- "expressgateway-config",
- "expressgateway-core",
- "expressgateway-health",
- "expressgateway-lb",
- "expressgateway-metrics",
  "futures",
  "http",
  "http-body-util",
  "parking_lot",
- "prometheus",
  "prost",
  "serde",
  "serde_json",
@@ -867,6 +861,7 @@ dependencies = [
  "crossbeam",
  "dashmap",
  "futures",
+ "http",
  "parking_lot",
  "pin-project-lite",
  "rand 0.8.5",
@@ -890,6 +885,7 @@ dependencies = [
  "parking_lot",
  "thiserror 2.0.18",
  "tokio",
+ "tokio-util",
  "tracing",
 ]
 
@@ -904,6 +900,7 @@ dependencies = [
  "crossbeam",
  "dashmap",
  "expressgateway-core",
+ "http",
  "lru",
  "murmur3",
  "parking_lot",
@@ -935,14 +932,9 @@ dependencies = [
 name = "expressgateway-pool"
 version = "0.1.0"
 dependencies = [
- "anyhow",
- "async-trait",
  "bytes",
  "crossbeam",
  "dashmap",
- "expressgateway-core",
- "expressgateway-lb",
- "parking_lot",
  "thiserror 2.0.18",
  "tokio",
  "tracing",
@@ -986,6 +978,8 @@ dependencies = [
  "http",
  "parking_lot",
  "quinn",
+ "rand 0.8.5",
+ "ring",
  "thiserror 2.0.18",
  "tokio",
  "tracing",
@@ -1064,6 +1058,7 @@ dependencies = [
  "expressgateway-security",
  "futures",
  "parking_lot",
+ "socket2 0.5.10",
  "thiserror 2.0.18",
  "tokio",
  "tracing",

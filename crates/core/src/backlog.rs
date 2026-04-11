@@ -65,14 +65,30 @@ impl ConnectionBacklog {
         true
     }
 
-    /// Drain up to `DRAIN_BATCH_SIZE` items from the queue.
+    /// Drain up to `DRAIN_BATCH_SIZE` items from the queue into `out`.
+    ///
+    /// Callers should reuse the same `Vec` across calls to avoid per-drain
+    /// allocation on the hot path. The vector is cleared before filling.
+    /// Returns the number of items drained.
     #[inline]
-    pub fn drain_batch(&self) -> Vec<BytesMut> {
+    pub fn drain_batch_into(&self, out: &mut Vec<BytesMut>) -> usize {
+        out.clear();
         let mut queue = self.queue.lock();
         let count = queue.len().min(DRAIN_BATCH_SIZE);
-        let batch: Vec<BytesMut> = queue.drain(..count).collect();
+        out.extend(queue.drain(..count));
         self.size.store(queue.len(), Ordering::Release);
-        batch
+        count
+    }
+
+    /// Drain up to `DRAIN_BATCH_SIZE` items from the queue.
+    ///
+    /// Prefer [`drain_batch_into`](Self::drain_batch_into) on hot paths to
+    /// reuse the output buffer across calls.
+    #[inline]
+    pub fn drain_batch(&self) -> Vec<BytesMut> {
+        let mut out = Vec::with_capacity(DRAIN_BATCH_SIZE);
+        self.drain_batch_into(&mut out);
+        out
     }
 
     /// Clear all items from the queue.

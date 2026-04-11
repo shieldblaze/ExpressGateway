@@ -29,6 +29,7 @@ pub fn routes() -> Router<AppState> {
     Router::new()
         .route("/tls-certs", post(create_tls_cert))
         .route("/tls-certs", get(list_tls_certs))
+        .route("/tls-certs/{id}", get(get_tls_cert))
         .route("/tls-certs/{id}", put(update_tls_cert))
         .route("/tls-certs/{id}", delete(delete_tls_cert))
 }
@@ -62,6 +63,19 @@ async fn list_tls_certs(State(state): State<AppState>) -> Json<Vec<TlsCertEntry>
         .map(|r| r.value().clone())
         .collect();
     Json(certs)
+}
+
+/// GET /tls-certs/:id - Get a specific TLS certificate.
+async fn get_tls_cert(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+) -> Result<Json<TlsCertEntry>, StatusCode> {
+    state
+        .store
+        .tls_certs
+        .get(&id)
+        .map(|r| Json(r.value().clone()))
+        .ok_or(StatusCode::NOT_FOUND)
 }
 
 /// PUT /tls-certs/:id - Update a TLS certificate.

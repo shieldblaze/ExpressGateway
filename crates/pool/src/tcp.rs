@@ -138,23 +138,48 @@ impl TcpPool {
             return;
         }
 
-        let current_total = self.total_pooled.load(Ordering::Relaxed);
-        if current_total >= self.config.max_total {
-            return;
+        // Reserve a slot in the global total via CAS to prevent exceeding max_total
+        // under contention.
+        loop {
+            let current_total = self.total_pooled.load(Ordering::Acquire);
+            if current_total >= self.config.max_total {
+                return;
+            }
+            match self.total_pooled.compare_exchange_weak(
+                current_total,
+                current_total + 1,
+                Ordering::AcqRel,
+                Ordering::Acquire,
+            ) {
+                Ok(_) => break,
+                Err(_) => continue,
+            }
         }
 
         conn.touch();
+
+        // Fast path: backend already exists, no key allocation needed.
+        if let Some(mut pool) = self.pools.get_mut(backend_id) {
+            if pool.len() >= self.config.max_per_backend {
+                self.total_pooled.fetch_sub(1, Ordering::Relaxed);
+                return;
+            }
+            pool.push_back(conn);
+            return;
+        }
+
+        // Slow path: first connection for this backend, allocate key.
         let mut pool = self
             .pools
             .entry(backend_id.to_owned())
             .or_insert_with(|| VecDeque::with_capacity(self.config.max_per_backend.min(32)));
 
         if pool.len() >= self.config.max_per_backend {
+            self.total_pooled.fetch_sub(1, Ordering::Relaxed);
             return;
         }
 
         pool.push_back(conn);
-        self.total_pooled.fetch_add(1, Ordering::Relaxed);
     }
 
     /// Evict idle connections from all backend pools.

@@ -9,6 +9,7 @@ use arc_swap::ArcSwap;
 use expressgateway_core::error::{Error, Result};
 use expressgateway_core::lb::{HttpRequest, HttpResponse, LoadBalancer};
 use expressgateway_core::node::Node;
+use parking_lot::Mutex;
 use rand::Rng;
 
 /// Random HTTP load balancer.
@@ -17,6 +18,8 @@ use rand::Rng;
 /// Lock-free reads via `ArcSwap`, thread-local RNG.
 pub struct HttpRandomBalancer {
     nodes: ArcSwap<Vec<Arc<dyn Node>>>,
+    /// Serialises add/remove to prevent lost updates from concurrent mutations.
+    mutation_lock: Mutex<()>,
 }
 
 impl HttpRandomBalancer {
@@ -24,6 +27,7 @@ impl HttpRandomBalancer {
     pub fn new() -> Self {
         Self {
             nodes: ArcSwap::new(Arc::new(Vec::new())),
+            mutation_lock: Mutex::new(()),
         }
     }
 }
@@ -38,25 +42,22 @@ impl LoadBalancer<HttpRequest, HttpResponse> for HttpRandomBalancer {
     fn select(&self, _request: &HttpRequest) -> Result<HttpResponse> {
         let nodes = self.nodes.load();
 
-        let online_count = nodes.iter().filter(|n| n.is_online()).count();
-        if online_count == 0 {
+        // Single-pass collect avoids TOCTOU between count and nth.
+        let online: Vec<_> = nodes.iter().filter(|n| n.is_online()).collect();
+        if online.is_empty() {
             return Err(Error::NoHealthyBackend);
         }
 
-        let idx = rand::thread_rng().gen_range(0..online_count);
-        let node = nodes
-            .iter()
-            .filter(|n| n.is_online())
-            .nth(idx)
-            .expect("online_count > 0 guarantees nth(idx) exists");
+        let idx = rand::thread_rng().gen_range(0..online.len());
 
         Ok(HttpResponse {
-            node: node.clone(),
-            headers_to_add: Vec::new(),
+            node: online[idx].clone(),
+            headers_to_add: http::HeaderMap::new(),
         })
     }
 
     fn add_node(&self, node: Arc<dyn Node>) {
+        let _guard = self.mutation_lock.lock();
         let old = self.nodes.load();
         let mut new_nodes = (**old).clone();
         new_nodes.push(node);
@@ -64,6 +65,7 @@ impl LoadBalancer<HttpRequest, HttpResponse> for HttpRandomBalancer {
     }
 
     fn remove_node(&self, node_id: &str) {
+        let _guard = self.mutation_lock.lock();
         let old = self.nodes.load();
         let mut new_nodes = (**old).clone();
         new_nodes.retain(|n| n.id() != node_id);
@@ -101,7 +103,7 @@ mod tests {
             client_addr: "10.0.0.1:5000".parse().unwrap(),
             host: Some("example.com".into()),
             path: "/".into(),
-            headers: Vec::new(),
+            headers: http::HeaderMap::new(),
         }
     }
 

@@ -3,6 +3,9 @@
 //! The [`load_from_file`] function reads a TOML file, deserialises it into
 //! [`Config`], and runs full validation before returning.  Call [`validate`]
 //! directly if you already have an in-memory `Config`.
+//!
+//! [`load_from_file_async`] performs the same work on a blocking thread pool
+//! so it is safe to call from an async context.
 
 use std::collections::HashSet;
 use std::net::SocketAddr;
@@ -13,6 +16,9 @@ use anyhow::{Context, Result, bail};
 use crate::model::Config;
 
 /// Load a [`Config`] from a TOML file, validating it before returning.
+///
+/// This performs blocking I/O.  When calling from an async context, prefer
+/// [`load_from_file_async`].
 ///
 /// # Errors
 ///
@@ -27,6 +33,17 @@ pub fn load_from_file(path: &Path) -> Result<Config> {
     Ok(config)
 }
 
+/// Async-safe variant of [`load_from_file`].
+///
+/// Runs the blocking file read and parse on `tokio::task::spawn_blocking`
+/// so it does not block a Tokio worker thread.
+pub async fn load_from_file_async(path: &Path) -> Result<Config> {
+    let path = path.to_path_buf();
+    tokio::task::spawn_blocking(move || load_from_file(&path))
+        .await
+        .context("config load task panicked")?
+}
+
 /// Load a [`Config`] from a TOML string, validating it before returning.
 ///
 /// This is primarily useful for tests and embedded configs.
@@ -38,63 +55,27 @@ pub fn load_from_str(toml_str: &str) -> Result<Config> {
 
 /// Validate every field in the configuration.
 ///
-/// Rules enforced:
-/// - All bind addresses must be parseable as `SocketAddr`
-/// - Ports are in the 1..=65535 range (implied by `SocketAddr` parsing)
+/// Enum-typed fields are validated at parse time by serde; this function
+/// checks semantic constraints:
+/// - All bind addresses are parseable as `SocketAddr`
 /// - Routes reference clusters that exist
 /// - Node weights are positive
 /// - Timeouts are positive
-/// - No duplicate listener bind addresses
-/// - Environment is either `"production"` or `"development"`
-/// - Log level is one of the standard tracing levels
-/// - TLS profile is either `"modern"` or `"intermediate"`
-/// - Proxy-protocol modes are valid
-/// - Security mode is `"allowlist"` or `"denylist"`
-/// - Mutual TLS mode is valid
-/// - Runtime backend is `"auto"`, `"io_uring"`, or `"epoll"`
-/// - Load-balancing strategy is recognised
+/// - No duplicate listener names or bind addresses
+/// - No duplicate cluster names
+/// - When TLS is enabled, cert/key paths are set
+/// - HTTP/2 window size within spec bounds
+/// - Compression levels within algorithm bounds
+/// - Retry backoff values are sane
 pub fn validate(config: &Config) -> Result<()> {
     let mut errors: Vec<String> = Vec::new();
 
     // -- Global ---------------------------------------------------------------
-    if !["production", "development"].contains(&config.global.environment.as_str()) {
-        errors.push(format!(
-            "global.environment must be \"production\" or \"development\", got \"{}\"",
-            config.global.environment
-        ));
-    }
-
-    if !["trace", "debug", "info", "warn", "error"].contains(&config.global.log_level.as_str()) {
-        errors.push(format!(
-            "global.log_level must be one of trace/debug/info/warn/error, got \"{}\"",
-            config.global.log_level
-        ));
-    }
-
     validate_bind_addr(
         &config.global.metrics_bind,
         "global.metrics_bind",
         &mut errors,
     );
-
-    // -- Runtime --------------------------------------------------------------
-    if !["auto", "io_uring", "epoll"].contains(&config.runtime.backend.as_str()) {
-        errors.push(format!(
-            "runtime.backend must be auto/io_uring/epoll, got \"{}\"",
-            config.runtime.backend
-        ));
-    }
-
-    if config.runtime.xdp_enabled && config.runtime.xdp_interface.is_empty() {
-        errors.push("runtime.xdp_interface must be set when xdp_enabled is true".into());
-    }
-
-    if !["driver", "generic"].contains(&config.runtime.xdp_mode.as_str()) {
-        errors.push(format!(
-            "runtime.xdp_mode must be driver/generic, got \"{}\"",
-            config.runtime.xdp_mode
-        ));
-    }
 
     // -- Transport ------------------------------------------------------------
     if config.transport.connect_timeout_ms == 0 {
@@ -102,13 +83,6 @@ pub fn validate(config: &Config) -> Result<()> {
     }
 
     // -- TLS ------------------------------------------------------------------
-    if !["modern", "intermediate"].contains(&config.tls.profile.as_str()) {
-        errors.push(format!(
-            "tls.profile must be modern/intermediate, got \"{}\"",
-            config.tls.profile
-        ));
-    }
-
     if config.tls.handshake_timeout_ms == 0 {
         errors.push("tls.handshake_timeout_ms must be positive".into());
     }
@@ -117,20 +91,45 @@ pub fn validate(config: &Config) -> Result<()> {
         errors.push("tls.session_timeout_s must be positive".into());
     }
 
-    if !["not_required", "optional", "required"].contains(&config.tls.server.mutual_tls.as_str()) {
-        errors.push(format!(
-            "tls.server.mutual_tls must be not_required/optional/required, got \"{}\"",
-            config.tls.server.mutual_tls
-        ));
+    if config.tls.enabled {
+        if config.tls.server.default_cert.is_empty() {
+            errors.push(
+                "tls.server.default_cert must be set when tls.enabled is true".into(),
+            );
+        }
+        if config.tls.server.default_key.is_empty() {
+            errors.push(
+                "tls.server.default_key must be set when tls.enabled is true".into(),
+            );
+        }
+    }
+
+    for (i, sni) in config.tls.sni_certs.iter().enumerate() {
+        let label = format!("tls.sni_certs[{i}]");
+        if sni.hostname.is_empty() {
+            errors.push(format!("{label}.hostname must not be empty"));
+        }
+        if sni.cert.is_empty() {
+            errors.push(format!("{label}.cert must not be empty"));
+        }
+        if sni.key.is_empty() {
+            errors.push(format!("{label}.key must not be empty"));
+        }
     }
 
     // -- Listeners (bind addresses + uniqueness) ------------------------------
     let mut seen_binds: HashSet<String> = HashSet::new();
+    let mut seen_listener_names: HashSet<String> = HashSet::new();
     for (i, listener) in config.listeners.iter().enumerate() {
-        let label = format!("listeners[{}]", i);
+        let label = format!("listeners[{i}]");
 
         if listener.name.is_empty() {
             errors.push(format!("{label}.name must not be empty"));
+        } else if !seen_listener_names.insert(listener.name.clone()) {
+            errors.push(format!(
+                "{label}.name \"{}\" is a duplicate listener name",
+                listener.name
+            ));
         }
 
         validate_bind_addr(&listener.bind, &format!("{label}.bind"), &mut errors);
@@ -141,34 +140,21 @@ pub fn validate(config: &Config) -> Result<()> {
                 listener.bind
             ));
         }
-
-        if !["http", "https", "tcp", "udp"].contains(&listener.protocol.as_str()) {
-            errors.push(format!(
-                "{label}.protocol must be http/https/tcp/udp, got \"{}\"",
-                listener.protocol
-            ));
-        }
-
-        if let Some(ref backend) = listener.io_backend
-            && !["auto", "io_uring", "epoll"].contains(&backend.as_str())
-        {
-            errors.push(format!(
-                "{label}.io_backend must be auto/io_uring/epoll, got \"{backend}\""
-            ));
-        }
     }
 
     // -- Clusters -------------------------------------------------------------
-    let cluster_names: HashSet<&str> = config.clusters.iter().map(|c| c.name.as_str()).collect();
-
+    let mut seen_cluster_names: HashSet<&str> = HashSet::new();
     for (i, cluster) in config.clusters.iter().enumerate() {
-        let label = format!("clusters[{}]", i);
+        let label = format!("clusters[{i}]");
 
         if cluster.name.is_empty() {
             errors.push(format!("{label}.name must not be empty"));
+        } else if !seen_cluster_names.insert(&cluster.name) {
+            errors.push(format!(
+                "{label}.name \"{}\" is a duplicate cluster name",
+                cluster.name
+            ));
         }
-
-        validate_lb_strategy(&cluster.lb_strategy, &label, &mut errors);
 
         if cluster.nodes.is_empty() {
             errors.push(format!("{label}.nodes must not be empty"));
@@ -188,8 +174,9 @@ pub fn validate(config: &Config) -> Result<()> {
     }
 
     // -- Routes (cluster references) ------------------------------------------
+    let cluster_names: HashSet<&str> = config.clusters.iter().map(|c| c.name.as_str()).collect();
     for (i, route) in config.routes.iter().enumerate() {
-        let label = format!("routes[{}]", i);
+        let label = format!("routes[{i}]");
 
         if route.cluster.is_empty() {
             errors.push(format!("{label}.cluster must not be empty"));
@@ -198,10 +185,6 @@ pub fn validate(config: &Config) -> Result<()> {
                 "{label}.cluster \"{}\" does not reference an existing cluster",
                 route.cluster
             ));
-        }
-
-        if let Some(ref strategy) = route.lb_strategy {
-            validate_lb_strategy(strategy, &label, &mut errors);
         }
     }
 
@@ -219,18 +202,26 @@ pub fn validate(config: &Config) -> Result<()> {
         errors.push("http.keepalive_timeout_s must be positive".into());
     }
 
-    // -- Proxy Protocol -------------------------------------------------------
-    if !["off", "v1", "v2", "auto"].contains(&config.proxy_protocol.inbound.as_str()) {
+    // HTTP/2 spec: initial window size is 65535..=2^31-1
+    let h2_win = config.http.h2_connection_window_size;
+    if !(65_535..=2_147_483_647).contains(&h2_win) {
         errors.push(format!(
-            "proxy_protocol.inbound must be off/v1/v2/auto, got \"{}\"",
-            config.proxy_protocol.inbound
+            "http.h2_connection_window_size must be between 65535 and 2147483647, got {h2_win}"
         ));
     }
-    if !["off", "v1", "v2"].contains(&config.proxy_protocol.outbound.as_str()) {
-        errors.push(format!(
-            "proxy_protocol.outbound must be off/v1/v2, got \"{}\"",
-            config.proxy_protocol.outbound
-        ));
+
+    // -- Compression levels ---------------------------------------------------
+    for (algo, level) in &config.http.compression.levels {
+        let max = match algo {
+            crate::model::CompressionAlgorithm::Gzip => 9,
+            crate::model::CompressionAlgorithm::Brotli => 11,
+            crate::model::CompressionAlgorithm::Zstd => 22,
+        };
+        if *level == 0 || *level > max {
+            errors.push(format!(
+                "http.compression.levels.{algo}: level must be 1..={max}, got {level}"
+            ));
+        }
     }
 
     // -- Health Check ---------------------------------------------------------
@@ -245,14 +236,6 @@ pub fn validate(config: &Config) -> Result<()> {
     }
     if config.health_check.fall == 0 {
         errors.push("health_check.fall must be positive".into());
-    }
-
-    // -- Security -------------------------------------------------------------
-    if !["allowlist", "denylist"].contains(&config.security.mode.as_str()) {
-        errors.push(format!(
-            "security.mode must be allowlist/denylist, got \"{}\"",
-            config.security.mode
-        ));
     }
 
     // -- Control Plane --------------------------------------------------------
@@ -277,6 +260,24 @@ pub fn validate(config: &Config) -> Result<()> {
         errors.push("graceful_shutdown.drain_timeout_s must be positive".into());
     }
 
+    // -- Retry ----------------------------------------------------------------
+    if config.retry.enabled {
+        if config.retry.max_retries == 0 {
+            errors.push("retry.max_retries must be positive when retries are enabled".into());
+        }
+        if config.retry.initial_backoff_ms == 0 {
+            errors.push("retry.initial_backoff_ms must be positive".into());
+        }
+        if config.retry.max_backoff_ms < config.retry.initial_backoff_ms {
+            errors.push(
+                "retry.max_backoff_ms must be >= retry.initial_backoff_ms".into(),
+            );
+        }
+        if config.retry.backoff_multiplier == 0 {
+            errors.push("retry.backoff_multiplier must be positive".into());
+        }
+    }
+
     // -- Report ---------------------------------------------------------------
     if errors.is_empty() {
         Ok(())
@@ -296,23 +297,7 @@ pub fn validate(config: &Config) -> Result<()> {
 fn validate_bind_addr(addr: &str, field: &str, errors: &mut Vec<String>) {
     if addr.parse::<SocketAddr>().is_err() {
         errors.push(format!(
-            "{field} \"{}\" is not a valid socket address (expected host:port)",
-            addr
-        ));
-    }
-}
-
-fn validate_lb_strategy(strategy: &str, label: &str, errors: &mut Vec<String>) {
-    const VALID: &[&str] = &[
-        "round_robin",
-        "least_connections",
-        "ip_hash",
-        "random",
-        "weighted",
-    ];
-    if !VALID.contains(&strategy) {
-        errors.push(format!(
-            "{label}.lb_strategy must be one of {VALID:?}, got \"{strategy}\""
+            "{field} \"{addr}\" is not a valid socket address (expected host:port)",
         ));
     }
 }
@@ -334,11 +319,13 @@ mod tests {
     }
 
     #[test]
-    fn invalid_environment_rejected() {
-        let mut cfg = Config::default();
-        cfg.global.environment = "staging".into();
-        let err = validate(&cfg).unwrap_err();
-        assert!(err.to_string().contains("global.environment"));
+    fn invalid_environment_rejected_by_serde() {
+        let toml = r#"
+[global]
+environment = "staging"
+"#;
+        let result: Result<Config, _> = toml::from_str(toml);
+        assert!(result.is_err());
     }
 
     #[test]
@@ -369,6 +356,44 @@ mod tests {
     }
 
     #[test]
+    fn duplicate_listener_name_rejected() {
+        let mut cfg = Config::default();
+        cfg.listeners = vec![
+            crate::model::ListenerConfig {
+                name: "web".into(),
+                bind: "0.0.0.0:8080".into(),
+                ..Default::default()
+            },
+            crate::model::ListenerConfig {
+                name: "web".into(),
+                bind: "0.0.0.0:8081".into(),
+                ..Default::default()
+            },
+        ];
+        let err = validate(&cfg).unwrap_err();
+        assert!(err.to_string().contains("duplicate listener name"));
+    }
+
+    #[test]
+    fn duplicate_cluster_name_rejected() {
+        let mut cfg = Config::default();
+        cfg.clusters = vec![
+            crate::model::ClusterConfig {
+                name: "backend".into(),
+                ..Default::default()
+            },
+            crate::model::ClusterConfig {
+                name: "backend".into(),
+                ..Default::default()
+            },
+        ];
+        // Routes also reference "default" which doesn't exist, so fix that.
+        cfg.routes[0].cluster = "backend".into();
+        let err = validate(&cfg).unwrap_err();
+        assert!(err.to_string().contains("duplicate cluster name"));
+    }
+
+    #[test]
     fn route_referencing_missing_cluster_rejected() {
         let mut cfg = Config::default();
         cfg.routes[0].cluster = "nonexistent".into();
@@ -393,11 +418,14 @@ mod tests {
     }
 
     #[test]
-    fn invalid_lb_strategy_rejected() {
-        let mut cfg = Config::default();
-        cfg.clusters[0].lb_strategy = "magic".into();
-        let err = validate(&cfg).unwrap_err();
-        assert!(err.to_string().contains("lb_strategy"));
+    fn invalid_lb_strategy_rejected_by_serde() {
+        let toml = r#"
+[[clusters]]
+name = "x"
+lb_strategy = "magic"
+"#;
+        let result: Result<Config, _> = toml::from_str(toml);
+        assert!(result.is_err());
     }
 
     #[test]
@@ -409,7 +437,7 @@ log_level = "debug"
 metrics_bind = "127.0.0.1:9090"
 "#;
         let cfg = load_from_str(toml).expect("valid toml");
-        assert_eq!(cfg.global.environment, "development");
+        assert_eq!(cfg.global.environment, crate::model::Environment::Development);
     }
 
     #[test]
@@ -430,25 +458,19 @@ metrics_bind = "127.0.0.1:9090"
         .unwrap();
 
         let cfg = load_from_file(&path).expect("load from file");
-        assert_eq!(cfg.global.environment, "development");
+        assert_eq!(cfg.global.environment, crate::model::Environment::Development);
 
         let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]
-    fn invalid_security_mode_rejected() {
-        let mut cfg = Config::default();
-        cfg.security.mode = "permissive".into();
-        let err = validate(&cfg).unwrap_err();
-        assert!(err.to_string().contains("security.mode"));
-    }
-
-    #[test]
-    fn invalid_proxy_protocol_rejected() {
-        let mut cfg = Config::default();
-        cfg.proxy_protocol.outbound = "auto".into();
-        let err = validate(&cfg).unwrap_err();
-        assert!(err.to_string().contains("proxy_protocol.outbound"));
+    fn invalid_proxy_protocol_rejected_by_serde() {
+        let toml = r#"
+[proxy_protocol]
+outbound = "auto"
+"#;
+        let result: Result<Config, _> = toml::from_str(toml);
+        assert!(result.is_err());
     }
 
     #[test]
@@ -462,11 +484,48 @@ metrics_bind = "127.0.0.1:9090"
     #[test]
     fn multiple_errors_collected() {
         let mut cfg = Config::default();
-        cfg.global.environment = "staging".into();
-        cfg.global.log_level = "verbose".into();
         cfg.global.metrics_bind = "bad".into();
+        cfg.transport.connect_timeout_ms = 0;
+        cfg.graceful_shutdown.drain_timeout_s = 0;
         let err = validate(&cfg).unwrap_err();
         let msg = err.to_string();
         assert!(msg.contains("3 error(s)"));
+    }
+
+    #[test]
+    fn tls_enabled_without_certs_rejected() {
+        let mut cfg = Config::default();
+        cfg.tls.enabled = true;
+        let err = validate(&cfg).unwrap_err();
+        assert!(err.to_string().contains("default_cert"));
+        assert!(err.to_string().contains("default_key"));
+    }
+
+    #[test]
+    fn h2_window_too_small_rejected() {
+        let mut cfg = Config::default();
+        cfg.http.h2_connection_window_size = 100;
+        let err = validate(&cfg).unwrap_err();
+        assert!(err.to_string().contains("h2_connection_window_size"));
+    }
+
+    #[test]
+    fn compression_level_out_of_range_rejected() {
+        let mut cfg = Config::default();
+        cfg.http.compression.levels.insert(
+            crate::model::CompressionAlgorithm::Gzip,
+            99,
+        );
+        let err = validate(&cfg).unwrap_err();
+        assert!(err.to_string().contains("gzip"));
+    }
+
+    #[test]
+    fn retry_max_backoff_less_than_initial_rejected() {
+        let mut cfg = Config::default();
+        cfg.retry.initial_backoff_ms = 5000;
+        cfg.retry.max_backoff_ms = 100;
+        let err = validate(&cfg).unwrap_err();
+        assert!(err.to_string().contains("max_backoff_ms"));
     }
 }

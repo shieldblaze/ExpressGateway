@@ -13,18 +13,33 @@ use dashmap::DashMap;
 use expressgateway_core::error::Result;
 use expressgateway_core::lb::{HttpRequest, HttpResponse, LoadBalancer};
 use expressgateway_core::node::Node;
+use http::header::HeaderValue;
 use sha2::{Digest, Sha256};
 
 /// Cookie name used for sticky session routing.
 pub const COOKIE_NAME: &str = "X-SBZ-EGW-RouteID";
 
+/// Hex-encode a byte into two ASCII chars in `buf` starting at `offset`.
+fn hex_byte(b: u8, buf: &mut [u8], offset: usize) {
+    const HEX: &[u8; 16] = b"0123456789abcdef";
+    buf[offset] = HEX[(b >> 4) as usize];
+    buf[offset + 1] = HEX[(b & 0x0f) as usize];
+}
+
 /// Compute the SHA-256 hex digest of a node ID.
+///
+/// Uses a stack-allocated buffer (64 bytes for 32-byte hash) to avoid
+/// per-byte `format!` allocations.
 fn hash_node_id(node_id: &str) -> String {
     let mut hasher = Sha256::new();
     hasher.update(node_id.as_bytes());
     let result = hasher.finalize();
-    // Hex-encode the digest.
-    result.iter().map(|b| format!("{:02x}", b)).collect()
+    let mut buf = [0u8; 64];
+    for (i, &b) in result.iter().enumerate() {
+        hex_byte(b, &mut buf, i * 2);
+    }
+    // SAFETY: buf contains only ASCII hex characters.
+    String::from_utf8(buf.to_vec()).expect("hex is valid UTF-8")
 }
 
 /// Cookie-based sticky session HTTP load balancer.
@@ -76,10 +91,10 @@ impl StickySessionBalancer {
 
     /// Extract the route cookie value from request headers.
     fn extract_cookie(request: &HttpRequest) -> Option<String> {
-        for (name, value) in &request.headers {
-            if name.to_lowercase() == "cookie" {
+        for value in request.headers.get_all(http::header::COOKIE).iter() {
+            if let Ok(cookie_str) = value.to_str() {
                 // Parse cookie header: "name1=val1; name2=val2; ..."
-                for part in value.split(';') {
+                for part in cookie_str.split(';') {
                     let part = part.trim();
                     if let Some(val) = part.strip_prefix(COOKIE_NAME)
                         && let Some(val) = val.strip_prefix('=')
@@ -103,7 +118,7 @@ impl LoadBalancer<HttpRequest, HttpResponse> for StickySessionBalancer {
             if node.is_online() {
                 return Ok(HttpResponse {
                     node: node.clone(),
-                    headers_to_add: Vec::new(),
+                    headers_to_add: http::HeaderMap::new(),
                 });
             }
         }
@@ -118,7 +133,9 @@ impl LoadBalancer<HttpRequest, HttpResponse> for StickySessionBalancer {
 
         // Inject Set-Cookie header.
         let cookie = self.build_cookie(resp.node.as_ref(), request.host.as_deref());
-        resp.headers_to_add.push(("Set-Cookie".to_string(), cookie));
+        if let Ok(val) = HeaderValue::from_str(&cookie) {
+            resp.headers_to_add.insert(http::header::SET_COOKIE, val);
+        }
 
         Ok(resp)
     }
@@ -159,9 +176,13 @@ mod tests {
     }
 
     fn make_request(host: Option<&str>, cookie: Option<&str>) -> HttpRequest {
-        let mut headers = Vec::new();
+        let mut headers = http::HeaderMap::new();
         if let Some(c) = cookie {
-            headers.push(("Cookie".to_string(), format!("{}={}", COOKIE_NAME, c)));
+            let val = format!("{}={}", COOKIE_NAME, c);
+            headers.insert(
+                http::header::COOKIE,
+                HeaderValue::from_str(&val).unwrap(),
+            );
         }
         HttpRequest {
             client_addr: "10.0.0.1:5000".parse().unwrap(),
@@ -183,13 +204,13 @@ mod tests {
         assert_eq!(resp.node.id(), "n1");
         assert_eq!(resp.headers_to_add.len(), 1);
 
-        let (name, value) = &resp.headers_to_add[0];
-        assert_eq!(name, "Set-Cookie");
-        assert!(value.contains(COOKIE_NAME));
-        assert!(value.contains("HttpOnly"));
-        assert!(value.contains("SameSite=Strict"));
-        assert!(value.contains("Domain=example.com"));
-        assert!(!value.contains("Secure"));
+        let value = resp.headers_to_add.get(http::header::SET_COOKIE).unwrap();
+        let value_str = value.to_str().unwrap();
+        assert!(value_str.contains(COOKIE_NAME));
+        assert!(value_str.contains("HttpOnly"));
+        assert!(value_str.contains("SameSite=Strict"));
+        assert!(value_str.contains("Domain=example.com"));
+        assert!(!value_str.contains("Secure"));
     }
 
     #[test]
@@ -201,8 +222,8 @@ mod tests {
         let req = make_request(Some("example.com"), None);
         let resp = lb.select(&req).unwrap();
 
-        let (_, value) = &resp.headers_to_add[0];
-        assert!(value.contains("Secure"));
+        let value = resp.headers_to_add.get(http::header::SET_COOKIE).unwrap();
+        assert!(value.to_str().unwrap().contains("Secure"));
     }
 
     #[test]

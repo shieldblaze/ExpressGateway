@@ -80,13 +80,23 @@ pub fn h1_to_h3_request<B>(request: Request<B>) -> Result<Request<B>, Translatio
         .uri(h3_uri)
         .version(Version::HTTP_3);
 
-    // Copy headers, stripping connection-specific ones.
+    // Copy headers, stripping connection-specific ones per RFC 9114 §4.2.
     for (name, value) in &parts.headers {
-        if is_connection_header(name) {
-            continue;
-        }
         // Do not copy Host; it's represented by :authority in H3.
         if name == header::HOST {
+            continue;
+        }
+        // Per RFC 9114 §4.2, `TE` is allowed only with value `trailers`.
+        // Preserve it for gRPC (which requires `te: trailers`); strip all other values.
+        if name == header::TE {
+            // RFC 9114 §4.2: TE is allowed only with value "trailers".
+            // Use case-insensitive comparison per RFC 9110 §5.6.1 (token matching).
+            if value.as_bytes().eq_ignore_ascii_case(b"trailers") {
+                builder = builder.header(name, value);
+            }
+            continue;
+        }
+        if is_connection_header(name) {
             continue;
         }
         builder = builder.header(name, value);
@@ -132,7 +142,9 @@ pub fn h3_to_h1_response<B>(response: Response<B>) -> Result<Response<B>, Transl
 /// Convert an HTTP/2 request to HTTP/3 form.
 ///
 /// HTTP/2 and HTTP/3 share the same pseudo-header structure, so this is
-/// mostly a version re-tag plus stripping any H2-specific frames.
+/// mostly a version re-tag plus stripping any H2-specific connection headers.
+/// Per RFC 9113 §8.2.2, `te: trailers` is the only TE value allowed in HTTP/2,
+/// and RFC 9114 §4.2 carries the same rule for HTTP/3, so we preserve it.
 pub fn h2_to_h3_request<B>(request: Request<B>) -> Result<Request<B>, TranslationError> {
     let (parts, body) = request.into_parts();
 
@@ -142,6 +154,14 @@ pub fn h2_to_h3_request<B>(request: Request<B>) -> Result<Request<B>, Translatio
         .version(Version::HTTP_3);
 
     for (name, value) in &parts.headers {
+        // Preserve `te: trailers` (needed for gRPC over H2/H3).
+        // Use case-insensitive comparison per RFC 9110 §5.6.1 (token matching).
+        if name == header::TE {
+            if value.as_bytes().eq_ignore_ascii_case(b"trailers") {
+                builder = builder.header(name, value);
+            }
+            continue;
+        }
         if is_connection_header(name) {
             continue;
         }
@@ -175,13 +195,19 @@ pub fn h3_to_h2_response<B>(response: Response<B>) -> Result<Response<B>, Transl
 /// Per RFC 9114 §4.2 and RFC 9113 §8.2.2, the following are connection-specific:
 /// `Connection`, `Keep-Alive`, `Proxy-Connection`, `Transfer-Encoding`, `Upgrade`.
 ///
+/// `TE` is also forbidden in HTTP/3 except with the value `trailers`
+/// (RFC 9114 §4.2: "The only exception to this is the TE header field, which MAY
+/// be present in an HTTP/3 request header; when it is, it MUST NOT contain any
+/// value other than 'trailers'."). Since we strip it here, callers that need
+/// `te: trailers` for gRPC must re-add it explicitly after translation.
+///
 /// Note: `Proxy-Authenticate` and `Proxy-Authorization` are NOT connection-specific
 /// headers. They are end-to-end authentication headers per RFC 9110 §11.7 and must
 /// be forwarded.
-fn is_connection_header(name: &HeaderName) -> bool {
+pub fn is_connection_header(name: &HeaderName) -> bool {
     matches!(
         name,
-        &header::CONNECTION | &header::TRANSFER_ENCODING | &header::UPGRADE
+        &header::CONNECTION | &header::TRANSFER_ENCODING | &header::UPGRADE | &header::TE
     ) || name.as_str() == "keep-alive"
         || name.as_str() == "proxy-connection"
 }
@@ -290,6 +316,40 @@ mod tests {
         assert_eq!(
             h2_resp.headers().get("x-custom").unwrap().to_str().unwrap(),
             "value"
+        );
+    }
+
+    #[test]
+    fn h1_to_h3_strips_te_except_trailers() {
+        // RFC 9114 §4.2: TE with value other than "trailers" must be stripped.
+        let request = Request::builder()
+            .method(Method::POST)
+            .uri("https://example.com/api")
+            .header("host", "example.com")
+            .header("te", "gzip")
+            .body(())
+            .unwrap();
+
+        let h3_req = h1_to_h3_request(request).unwrap();
+        assert!(h3_req.headers().get("te").is_none());
+    }
+
+    #[test]
+    fn h1_to_h3_preserves_te_trailers() {
+        // RFC 9114 §4.2: TE with value "trailers" is allowed (needed for gRPC).
+        let request = Request::builder()
+            .method(Method::POST)
+            .uri("https://example.com/grpc")
+            .header("host", "example.com")
+            .header("te", "trailers")
+            .header("content-type", "application/grpc")
+            .body(())
+            .unwrap();
+
+        let h3_req = h1_to_h3_request(request).unwrap();
+        assert_eq!(
+            h3_req.headers().get("te").unwrap().to_str().unwrap(),
+            "trailers"
         );
     }
 

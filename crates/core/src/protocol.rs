@@ -39,7 +39,11 @@ impl Protocol {
         !self.is_l4()
     }
 
-    /// Default port for this protocol.
+    /// Default port for this protocol, or 0 if no standard default applies.
+    ///
+    /// Returns 0 for raw TCP, UDP, and WebSocket because these protocols do not
+    /// have a single well-known port (WebSocket can run over either 80 or 443
+    /// depending on TLS).
     pub fn default_port(&self) -> u16 {
         match self {
             Protocol::Http | Protocol::H2c => 80,

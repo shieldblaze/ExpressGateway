@@ -56,14 +56,17 @@ impl BackpressureController {
     /// Record `bytes` as newly pending in the write buffer.
     ///
     /// Returns `true` if the caller should **pause** producing -- i.e. the
-    /// pending bytes now exceed the high water mark.
+    /// pending bytes now exceed the high water mark.  At most one caller will
+    /// receive `true` per pause/resume cycle (CAS on the `paused` flag).
     #[inline]
     pub fn add_pending(&self, bytes: usize) -> bool {
         let prev = self.write_buffer_size.fetch_add(bytes, Ordering::AcqRel);
         let new_size = prev + bytes;
-        if new_size >= self.high_water_mark && !self.paused.load(Ordering::Acquire) {
-            self.paused.store(true, Ordering::Release);
-            true
+        if new_size >= self.high_water_mark {
+            // CAS: only one thread wins the false -> true transition.
+            self.paused
+                .compare_exchange(false, true, Ordering::AcqRel, Ordering::Relaxed)
+                .is_ok()
         } else {
             false
         }
@@ -90,9 +93,11 @@ impl BackpressureController {
             }
         };
 
-        if new_size <= self.low_water_mark && self.paused.load(Ordering::Acquire) {
-            self.paused.store(false, Ordering::Release);
-            true
+        if new_size <= self.low_water_mark {
+            // CAS: only one thread wins the true -> false transition.
+            self.paused
+                .compare_exchange(true, false, Ordering::AcqRel, Ordering::Relaxed)
+                .is_ok()
         } else {
             false
         }

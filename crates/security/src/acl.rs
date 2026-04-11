@@ -139,23 +139,28 @@ impl RadixTrie {
         }
 
         // Increment hit counter on the best-matched node.
-        if let Some(depth) = best_depth {
-            let node_mut = Self::walk_to_depth(&mut self.root, bits, depth);
+        if let Some(depth) = best_depth
+            && let Some(node_mut) = Self::walk_to_depth(&mut self.root, bits, depth)
+        {
             node_mut.hits += 1;
         }
 
         best_action
     }
 
-    fn walk_to_depth<'a>(root: &'a mut TrieNode, bits: &[u8], depth: usize) -> &'a mut TrieNode {
+    fn walk_to_depth<'a>(
+        root: &'a mut TrieNode,
+        bits: &[u8],
+        depth: usize,
+    ) -> Option<&'a mut TrieNode> {
         let mut node = root;
         for i in 0..depth {
             let byte_idx = i / 8;
             let bit_idx = 7 - (i % 8);
             let bit = ((bits[byte_idx] >> bit_idx) & 1) as usize;
-            node = node.children[bit].as_deref_mut().unwrap();
+            node = node.children[bit].as_deref_mut()?;
         }
-        node
+        Some(node)
     }
 
     /// Read-only lookup (does not increment hit counters).
@@ -188,47 +193,64 @@ impl RadixTrie {
 
 // ── CIDR Parsing ────────────────────────────────────────────────────────────
 
+/// Stack-allocated IP bytes: 16 bytes covers both IPv4 (4) and IPv6 (16).
+/// `len` is the number of valid bytes (4 or 16).
+struct IpBytes {
+    buf: [u8; 16],
+    len: u8,
+}
+
+impl IpBytes {
+    fn as_slice(&self) -> &[u8] {
+        &self.buf[..self.len as usize]
+    }
+}
+
 /// Parse a CIDR string into (bytes, prefix_length, total_bits).
-fn parse_cidr(cidr: &str) -> Result<(Vec<u8>, u8, usize)> {
-    let parts: Vec<&str> = cidr.split('/').collect();
-    let (addr_str, prefix_len) = match parts.len() {
-        1 => {
-            let addr: IpAddr = parts[0].parse().context("invalid IP address")?;
-            let prefix = match addr {
-                IpAddr::V4(_) => 32u8,
-                IpAddr::V6(_) => 128u8,
-            };
-            (parts[0], prefix)
+/// Returns stack-allocated bytes -- zero heap allocation.
+fn parse_cidr(cidr: &str) -> Result<(IpBytes, u8, usize)> {
+    let (addr_str, explicit_prefix) = match cidr.split_once('/') {
+        Some((a, p)) => {
+            let prefix: u8 = p.parse().context("invalid prefix length")?;
+            (a, Some(prefix))
         }
-        2 => {
-            let prefix: u8 = parts[1].parse().context("invalid prefix length")?;
-            (parts[0], prefix)
-        }
-        _ => anyhow::bail!("invalid CIDR format: {}", cidr),
+        None => (cidr, None),
     };
 
     let addr: IpAddr = addr_str.parse().context("invalid IP address")?;
     match addr {
         IpAddr::V4(v4) => {
+            let prefix_len = explicit_prefix.unwrap_or(32);
             if prefix_len > 32 {
                 anyhow::bail!("IPv4 prefix length {} exceeds 32", prefix_len);
             }
-            Ok((v4.octets().to_vec(), prefix_len, 32))
+            let mut buf = [0u8; 16];
+            buf[..4].copy_from_slice(&v4.octets());
+            Ok((IpBytes { buf, len: 4 }, prefix_len, 32))
         }
         IpAddr::V6(v6) => {
+            let prefix_len = explicit_prefix.unwrap_or(128);
             if prefix_len > 128 {
                 anyhow::bail!("IPv6 prefix length {} exceeds 128", prefix_len);
             }
-            Ok((v6.octets().to_vec(), prefix_len, 128))
+            let buf = v6.octets();
+            Ok((IpBytes { buf, len: 16 }, prefix_len, 128))
         }
     }
 }
 
-/// Convert an IpAddr to (bytes, total_bits).
-fn ip_to_bits(ip: &IpAddr) -> (Vec<u8>, usize) {
+/// Convert an IpAddr to stack-allocated (bytes, total_bits).
+fn ip_to_bits(ip: &IpAddr) -> (IpBytes, usize) {
     match ip {
-        IpAddr::V4(v4) => (v4.octets().to_vec(), 32),
-        IpAddr::V6(v6) => (v6.octets().to_vec(), 128),
+        IpAddr::V4(v4) => {
+            let mut buf = [0u8; 16];
+            buf[..4].copy_from_slice(&v4.octets());
+            (IpBytes { buf, len: 4 }, 32)
+        }
+        IpAddr::V6(v6) => {
+            let buf = v6.octets();
+            (IpBytes { buf, len: 16 }, 128)
+        }
     }
 }
 
@@ -264,7 +286,7 @@ impl Nacl {
     pub fn check(&self, ip: &IpAddr) -> AclAction {
         let guard = self.trie.load();
         let (bits, total_bits) = ip_to_bits(ip);
-        let rule_action = guard.lookup_readonly(&bits, total_bits);
+        let rule_action = guard.lookup_readonly(bits.as_slice(), total_bits);
 
         let decision = match rule_action {
             Some(action) => action,
@@ -288,29 +310,43 @@ impl Nacl {
         decision
     }
 
-    /// Add a CIDR rule. Performs a copy-on-write update of the trie.
+    /// Add a CIDR rule. Performs an atomic copy-on-write update of the trie.
+    ///
+    /// Uses `ArcSwap::rcu` to retry if another thread mutated the trie
+    /// concurrently, preventing lost updates.
     pub fn add_rule(&self, cidr: &str, action: AclAction) -> Result<()> {
         let (bits, prefix_len, _total_bits) = parse_cidr(cidr)?;
         debug!(cidr, ?action, "adding ACL rule");
 
-        let old = self.trie.load();
-        let mut new_trie = (**old).clone();
-        new_trie.insert(&bits, prefix_len, action);
-        self.trie.store(Arc::new(new_trie));
+        self.trie.rcu(|old| {
+            let mut new_trie = (**old).clone();
+            new_trie.insert(bits.as_slice(), prefix_len, action);
+            Arc::new(new_trie)
+        });
         Ok(())
     }
 
-    /// Remove a CIDR rule. Performs a copy-on-write update of the trie.
+    /// Remove a CIDR rule. Performs an atomic copy-on-write update of the trie.
+    ///
+    /// Uses `ArcSwap::rcu` to retry if another thread mutated the trie
+    /// concurrently, preventing lost updates.
     pub fn remove_rule(&self, cidr: &str) -> Result<()> {
         let (bits, prefix_len, _total_bits) = parse_cidr(cidr)?;
         debug!(cidr, "removing ACL rule");
 
-        let old = self.trie.load();
-        let mut new_trie = (**old).clone();
-        if !new_trie.remove(&bits, prefix_len) {
+        // We need to know if the rule was found. Since `rcu` always succeeds,
+        // we track the result via a shared cell.
+        let found = std::sync::atomic::AtomicBool::new(false);
+        self.trie.rcu(|old| {
+            let mut new_trie = (**old).clone();
+            let removed = new_trie.remove(bits.as_slice(), prefix_len);
+            found.store(removed, Ordering::Relaxed);
+            Arc::new(new_trie)
+        });
+
+        if !found.load(Ordering::Relaxed) {
             anyhow::bail!("rule not found: {}", cidr);
         }
-        self.trie.store(Arc::new(new_trie));
         Ok(())
     }
 

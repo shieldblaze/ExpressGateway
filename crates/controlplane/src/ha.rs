@@ -374,23 +374,29 @@ pub mod memory {
         }
 
         async fn cas(&self, key: &str, expected: Option<&[u8]>, value: &[u8]) -> HaResult<bool> {
-            // DashMap entry API provides the atomicity we need for single-node.
+            // Use DashMap's entry API for atomic check-and-set.
+            use dashmap::mapref::entry::Entry;
             match expected {
                 None => {
-                    // Key must not exist.
-                    if self.data.contains_key(key) {
-                        return Ok(false);
+                    // Key must not exist -- only insert via vacant entry.
+                    match self.data.entry(key.to_string()) {
+                        Entry::Vacant(vacant) => {
+                            vacant.insert(value.to_vec());
+                        }
+                        Entry::Occupied(_) => return Ok(false),
                     }
-                    self.data.insert(key.to_string(), value.to_vec());
                 }
                 Some(exp) => {
-                    let entry = self.data.get(key);
-                    match entry {
-                        Some(current) if current.value().as_slice() == exp => {
-                            drop(current);
-                            self.data.insert(key.to_string(), value.to_vec());
+                    // Key must exist with the expected value -- compare under
+                    // the occupied entry's lock, then overwrite in place.
+                    match self.data.entry(key.to_string()) {
+                        Entry::Occupied(mut occ) => {
+                            if occ.get().as_slice() != exp {
+                                return Ok(false);
+                            }
+                            occ.insert(value.to_vec());
                         }
-                        _ => return Ok(false),
+                        Entry::Vacant(_) => return Ok(false),
                     }
                 }
             }

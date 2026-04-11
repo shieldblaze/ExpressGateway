@@ -52,17 +52,22 @@ impl std::fmt::Debug for dyn Node {
 }
 
 /// HTTP load balance request with protocol-specific data.
+///
+/// Uses `http::HeaderMap` to avoid per-header `String` allocations -- the `http`
+/// crate stores header names as enum variants (for known headers) and values as
+/// `Bytes`-backed slices, both of which are cheaper than owned `String`s on the
+/// hot path.
 #[derive(Debug, Clone)]
 pub struct HttpRequest {
     pub client_addr: std::net::SocketAddr,
     pub host: Option<String>,
     pub path: String,
-    pub headers: Vec<(String, String)>,
+    pub headers: http::HeaderMap,
 }
 
 /// HTTP load balance response with optional headers to inject.
 #[derive(Debug, Clone)]
 pub struct HttpResponse {
     pub node: Arc<dyn Node>,
-    pub headers_to_add: Vec<(String, String)>,
+    pub headers_to_add: http::HeaderMap,
 }

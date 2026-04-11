@@ -5,12 +5,20 @@
 //! - Stream multiplexing with CAS-based acquire/release
 //! - Age-based eviction respecting active streams
 
-use std::sync::atomic::{AtomicU32, Ordering};
+use std::sync::atomic::{AtomicU32, AtomicU64, Ordering};
 use std::time::{Duration, Instant};
 
 use dashmap::DashMap;
 
 use crate::evictor::Evictable;
+
+/// Statistics for the QUIC connection pool.
+#[derive(Debug, Clone, Copy)]
+pub struct QuicPoolStats {
+    pub streams_acquired: u64,
+    pub streams_exhausted: u64,
+    pub evictions: u64,
+}
 
 /// Configuration for the QUIC connection pool.
 #[derive(Debug, Clone)]
@@ -33,14 +41,71 @@ impl Default for QuicPoolConfig {
     }
 }
 
+/// Maximum QUIC Connection ID length per RFC 9000 section 17.2.
+const MAX_CID_LEN: usize = 20;
+
+/// Stack-allocated QUIC Connection ID (max 20 bytes per RFC 9000).
+/// Avoids heap allocation for every pooled connection.
+#[derive(Clone)]
+pub struct ConnectionId {
+    buf: [u8; MAX_CID_LEN],
+    len: u8,
+}
+
+impl ConnectionId {
+    /// Create a new ConnectionId from a byte slice.
+    /// Panics if `bytes.len() > 20`.
+    pub fn from_slice(bytes: &[u8]) -> Self {
+        assert!(
+            bytes.len() <= MAX_CID_LEN,
+            "QUIC Connection ID exceeds 20-byte maximum (got {})",
+            bytes.len()
+        );
+        let mut buf = [0u8; MAX_CID_LEN];
+        buf[..bytes.len()].copy_from_slice(bytes);
+        Self {
+            buf,
+            len: bytes.len() as u8,
+        }
+    }
+
+    /// Return the connection ID as a byte slice.
+    #[inline]
+    pub fn as_bytes(&self) -> &[u8] {
+        &self.buf[..self.len as usize]
+    }
+
+    #[inline]
+    pub fn len(&self) -> usize {
+        self.len as usize
+    }
+
+    #[inline]
+    pub fn is_empty(&self) -> bool {
+        self.len == 0
+    }
+}
+
+impl PartialEq<[u8]> for ConnectionId {
+    fn eq(&self, other: &[u8]) -> bool {
+        self.as_bytes() == other
+    }
+}
+
+impl std::fmt::Debug for ConnectionId {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "CID({:02x?})", self.as_bytes())
+    }
+}
+
 /// A pooled QUIC connection with per-flow state (DCID/SCID).
 pub struct QuicPooledConnection {
     /// Unique connection identifier.
     pub id: u64,
-    /// Destination Connection ID.
-    pub dcid: Vec<u8>,
-    /// Source Connection ID.
-    pub scid: Vec<u8>,
+    /// Destination Connection ID (stack-allocated, max 20 bytes).
+    pub dcid: ConnectionId,
+    /// Source Connection ID (stack-allocated, max 20 bytes).
+    pub scid: ConnectionId,
     /// Number of active streams.
     active_streams: AtomicU32,
     /// Maximum concurrent streams.
@@ -53,8 +118,8 @@ impl std::fmt::Debug for QuicPooledConnection {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("QuicPooledConnection")
             .field("id", &self.id)
-            .field("dcid_len", &self.dcid.len())
-            .field("scid_len", &self.scid.len())
+            .field("dcid", &self.dcid)
+            .field("scid", &self.scid)
             .field(
                 "active_streams",
                 &self.active_streams.load(Ordering::Relaxed),
@@ -65,11 +130,11 @@ impl std::fmt::Debug for QuicPooledConnection {
 
 impl QuicPooledConnection {
     /// Create a new QUIC pooled connection.
-    pub fn new(id: u64, dcid: Vec<u8>, scid: Vec<u8>, max_concurrent_streams: u32) -> Self {
+    pub fn new(id: u64, dcid: &[u8], scid: &[u8], max_concurrent_streams: u32) -> Self {
         Self {
             id,
-            dcid,
-            scid,
+            dcid: ConnectionId::from_slice(dcid),
+            scid: ConnectionId::from_slice(scid),
             active_streams: AtomicU32::new(0),
             max_concurrent_streams,
             created_at: Instant::now(),
@@ -103,10 +168,27 @@ impl QuicPooledConnection {
     }
 
     /// Release a stream on this connection.
+    ///
+    /// Uses CAS loop to prevent underflow in release builds. A spurious
+    /// double-release is logged and ignored rather than wrapping to `u32::MAX`.
     #[inline]
     pub fn release_stream(&self) {
-        let prev = self.active_streams.fetch_sub(1, Ordering::AcqRel);
-        debug_assert!(prev > 0, "release_stream called with 0 active streams");
+        loop {
+            let current = self.active_streams.load(Ordering::Acquire);
+            if current == 0 {
+                tracing::error!(conn_id = self.id, "release_stream called with 0 active streams — ignoring");
+                return;
+            }
+            match self.active_streams.compare_exchange_weak(
+                current,
+                current - 1,
+                Ordering::AcqRel,
+                Ordering::Acquire,
+            ) {
+                Ok(_) => return,
+                Err(_) => continue,
+            }
+        }
     }
 
     /// Number of active streams.
@@ -126,6 +208,9 @@ impl QuicPooledConnection {
 pub struct QuicPool {
     pools: DashMap<String, Vec<QuicPooledConnection>>,
     config: QuicPoolConfig,
+    streams_acquired: AtomicU64,
+    streams_exhausted: AtomicU64,
+    evictions: AtomicU64,
 }
 
 impl QuicPool {
@@ -134,6 +219,9 @@ impl QuicPool {
         Self {
             pools: DashMap::new(),
             config,
+            streams_acquired: AtomicU64::new(0),
+            streams_exhausted: AtomicU64::new(0),
+            evictions: AtomicU64::new(0),
         }
     }
 
@@ -144,9 +232,11 @@ impl QuicPool {
         let pool = self.pools.get(node_id)?;
         for conn in pool.iter() {
             if conn.acquire_stream() {
+                self.streams_acquired.fetch_add(1, Ordering::Relaxed);
                 return Some(conn.id);
             }
         }
+        self.streams_exhausted.fetch_add(1, Ordering::Relaxed);
         None
     }
 
@@ -165,7 +255,9 @@ impl QuicPool {
     /// to the correct connection based on their DCID.
     pub fn find_by_dcid(&self, node_id: &str, dcid: &[u8]) -> Option<u64> {
         let pool = self.pools.get(node_id)?;
-        pool.iter().find(|c| c.dcid == dcid).map(|c| c.id)
+        pool.iter()
+            .find(|c| c.dcid == *dcid)
+            .map(|c| c.id)
     }
 
     /// Add a new connection for the given node.
@@ -207,7 +299,18 @@ impl QuicPool {
             });
             total += before - pool.len();
         }
+        self.evictions.fetch_add(total as u64, Ordering::Relaxed);
         total
+    }
+
+    /// Get current pool statistics.
+    #[inline]
+    pub fn stats(&self) -> QuicPoolStats {
+        QuicPoolStats {
+            streams_acquired: self.streams_acquired.load(Ordering::Relaxed),
+            streams_exhausted: self.streams_exhausted.load(Ordering::Relaxed),
+            evictions: self.evictions.load(Ordering::Relaxed),
+        }
     }
 }
 
@@ -223,7 +326,7 @@ mod tests {
 
     #[test]
     fn stream_capacity() {
-        let conn = QuicPooledConnection::new(1, vec![1, 2, 3], vec![4, 5, 6], 2);
+        let conn = QuicPooledConnection::new(1, &[1, 2, 3], &[4, 5, 6], 2);
         assert!(conn.has_capacity());
 
         assert!(conn.acquire_stream());
@@ -242,16 +345,16 @@ mod tests {
         let config = QuicPoolConfig::default();
         let pool = QuicPool::new(config);
 
-        let dcid1 = vec![0x01, 0x02, 0x03];
-        let dcid2 = vec![0x04, 0x05, 0x06];
+        let dcid1 = [0x01, 0x02, 0x03];
+        let dcid2 = [0x04, 0x05, 0x06];
 
         pool.add_connection(
             "node-a",
-            QuicPooledConnection::new(1, dcid1.clone(), vec![0xAA], 100),
+            QuicPooledConnection::new(1, &dcid1, &[0xAA], 100),
         );
         pool.add_connection(
             "node-a",
-            QuicPooledConnection::new(2, dcid2.clone(), vec![0xBB], 100),
+            QuicPooledConnection::new(2, &dcid2, &[0xBB], 100),
         );
 
         assert_eq!(pool.find_by_dcid("node-a", &dcid1), Some(1));
@@ -268,9 +371,9 @@ mod tests {
         };
         let pool = QuicPool::new(config);
 
-        assert!(pool.add_connection("node-a", QuicPooledConnection::new(1, vec![], vec![], 100)));
-        assert!(pool.add_connection("node-a", QuicPooledConnection::new(2, vec![], vec![], 100)));
-        assert!(!pool.add_connection("node-a", QuicPooledConnection::new(3, vec![], vec![], 100)));
+        assert!(pool.add_connection("node-a", QuicPooledConnection::new(1, &[], &[], 100)));
+        assert!(pool.add_connection("node-a", QuicPooledConnection::new(2, &[], &[], 100)));
+        assert!(!pool.add_connection("node-a", QuicPooledConnection::new(3, &[], &[], 100)));
 
         assert_eq!(pool.connection_count("node-a"), 2);
     }
@@ -284,8 +387,8 @@ mod tests {
         };
         let pool = QuicPool::new(config);
 
-        pool.add_connection("node-a", QuicPooledConnection::new(1, vec![], vec![], 100));
-        pool.add_connection("node-a", QuicPooledConnection::new(2, vec![], vec![], 100));
+        pool.add_connection("node-a", QuicPooledConnection::new(1, &[], &[], 100));
+        pool.add_connection("node-a", QuicPooledConnection::new(2, &[], &[], 100));
 
         let evicted = pool.evict_aged();
         assert_eq!(evicted, 2);
@@ -301,8 +404,8 @@ mod tests {
         };
         let pool = QuicPool::new(config);
 
-        pool.add_connection("node-a", QuicPooledConnection::new(1, vec![], vec![], 100));
-        pool.add_connection("node-a", QuicPooledConnection::new(2, vec![], vec![], 100));
+        pool.add_connection("node-a", QuicPooledConnection::new(1, &[], &[], 100));
+        pool.add_connection("node-a", QuicPooledConnection::new(2, &[], &[], 100));
 
         pool.acquire_stream("node-a");
 
@@ -315,8 +418,8 @@ mod tests {
     fn drain_node_removes_all() {
         let pool = QuicPool::new(QuicPoolConfig::default());
 
-        pool.add_connection("node-a", QuicPooledConnection::new(1, vec![], vec![], 100));
-        pool.add_connection("node-a", QuicPooledConnection::new(2, vec![], vec![], 100));
+        pool.add_connection("node-a", QuicPooledConnection::new(1, &[], &[], 100));
+        pool.add_connection("node-a", QuicPooledConnection::new(2, &[], &[], 100));
 
         let drained = pool.drain_node("node-a");
         assert_eq!(drained, 2);

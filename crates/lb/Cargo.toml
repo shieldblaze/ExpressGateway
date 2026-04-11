@@ -20,3 +20,4 @@ bytes.workspace = true
 tokio.workspace = true
 async-trait.workspace = true
 lru.workspace = true
+http.workspace = true

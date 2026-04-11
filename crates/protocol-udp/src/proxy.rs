@@ -22,6 +22,18 @@ use crate::session::SessionManager;
 /// Maximum UDP datagram size we will handle (full IPv4 UDP payload).
 const MAX_DATAGRAM_SIZE: usize = 65535;
 
+/// Bind address for ephemeral IPv4 sockets.
+const EPHEMERAL_V4: SocketAddr = SocketAddr::new(
+    std::net::IpAddr::V4(std::net::Ipv4Addr::UNSPECIFIED),
+    0,
+);
+
+/// Bind address for ephemeral IPv6 sockets.
+const EPHEMERAL_V6: SocketAddr = SocketAddr::new(
+    std::net::IpAddr::V6(std::net::Ipv6Addr::UNSPECIFIED),
+    0,
+);
+
 /// Errors from the UDP proxy.
 #[derive(Debug, thiserror::Error)]
 pub enum UdpProxyError {
@@ -186,26 +198,31 @@ impl UdpProxy {
             addr
         };
 
-        // Forward to backend via the dedicated backend socket (if available)
-        // or fall back to the frontend socket.
-        let send_result = if let Some(socket) = self.backend_sockets.get(&client_addr) {
-            socket.send(data).await
+        // Forward to backend via the dedicated backend socket.
+        if let Some(socket) = self.backend_sockets.get(&client_addr) {
+            match socket.send(data).await {
+                Ok(_) => {
+                    self.sessions.record_packet(&client_addr, data.len());
+                }
+                Err(e) => {
+                    debug!(
+                        error = %e,
+                        %client_addr,
+                        %backend_addr,
+                        "Failed to forward datagram to backend"
+                    );
+                }
+            }
         } else {
-            frontend_socket.send_to(data, backend_addr).await
-        };
-
-        match send_result {
-            Ok(_) => {
-                self.sessions.record_packet(&client_addr, data.len());
-            }
-            Err(e) => {
-                debug!(
-                    error = %e,
-                    %client_addr,
-                    %backend_addr,
-                    "Failed to forward datagram to backend"
-                );
-            }
+            // Backend socket was cleaned up between session lookup and send.
+            // This is a transient race; the session will be recreated on the
+            // next packet.
+            debug!(
+                %client_addr,
+                %backend_addr,
+                "Backend socket missing, session will be recreated"
+            );
+            self.sessions.remove_session(&client_addr);
         }
     }
 
@@ -218,10 +235,10 @@ impl UdpProxy {
         backend_addr: SocketAddr,
     ) -> std::io::Result<()> {
         // Bind to ephemeral port, same address family as the backend.
-        let bind_addr: SocketAddr = if backend_addr.is_ipv4() {
-            "0.0.0.0:0".parse().unwrap()
+        let bind_addr = if backend_addr.is_ipv4() {
+            EPHEMERAL_V4
         } else {
-            "[::]:0".parse().unwrap()
+            EPHEMERAL_V6
         };
 
         let backend_socket = UdpSocket::bind(bind_addr).await?;
@@ -231,45 +248,81 @@ impl UdpProxy {
         self.backend_sockets
             .insert(client_addr, backend_socket.clone());
 
-        // Clone references for the return-traffic task.
-        let frontend = frontend_socket
-            .local_addr()
-            .ok()
-            .and_then(|_| {
-                // We need to send_to from the frontend socket, so we need a
-                // reference to it.  The caller's &UdpSocket won't live long
-                // enough, so we re-bind the frontend address.  However, we
-                // can't clone a UdpSocket.  Instead, we'll pass the local
-                // address and use send_to from a new perspective.
-                None::<Arc<UdpSocket>>
-            });
-        let _ = frontend; // The frontend_socket is shared via Arc in the caller.
-
-        // For return traffic, we need access to the frontend socket.
-        // The run() method holds it as Arc<UdpSocket>, but handle_client_datagram
-        // only gets a reference.  To solve this properly, we store a
-        // weak reference.  For now, we skip spawning a return forwarder
-        // here -- the run() method's main loop could be extended with
-        // select! on all backend sockets.  This is the correct architecture
-        // for a production system using io_uring or epoll.
-        //
-        // In the current architecture, return traffic handling requires
-        // the frontend socket Arc, which is done at a higher level.
+        // We need the frontend socket's local address to create a new handle
+        // for the return-traffic task. Tokio's UdpSocket cannot be cloned, so
+        // we re-use the frontend's local address to bind a "send-only" socket
+        // with SO_REUSEADDR. This lets the spawned task send datagrams back to
+        // the client from the same address the client originally sent to.
+        let frontend_local_addr = frontend_socket.local_addr()?;
+        let std_socket = socket2::Socket::new(
+            if frontend_local_addr.is_ipv4() {
+                socket2::Domain::IPV4
+            } else {
+                socket2::Domain::IPV6
+            },
+            socket2::Type::DGRAM,
+            Some(socket2::Protocol::UDP),
+        )?;
+        std_socket.set_reuse_address(true)?;
+        std_socket.set_nonblocking(true)?;
+        std_socket.bind(&frontend_local_addr.into())?;
+        let reply_socket = Arc::new(UdpSocket::from_std(std_socket.into())?);
 
         let sessions = self.sessions.clone();
         let backend_sockets = self.backend_sockets.clone();
         let session_timeout = self.config.session_timeout;
 
-        // Spawn cleanup: when the session expires, remove the backend socket.
+        // Spawn a task to forward return traffic from the backend to the client.
         tokio::spawn(async move {
-            // Wait for session timeout, then clean up.
-            tokio::time::sleep(session_timeout + std::time::Duration::from_secs(1)).await;
+            let mut buf = BytesMut::zeroed(MAX_DATAGRAM_SIZE);
+            loop {
+                // Use tokio::time::timeout so we stop if the backend goes
+                // silent for longer than the session timeout.
+                let recv_result = tokio::time::timeout(
+                    session_timeout,
+                    backend_socket.recv(&mut buf),
+                )
+                .await;
 
-            // Check if session still exists; if not, clean up the socket.
-            if sessions.get_session(&client_addr).is_none() {
-                backend_sockets.remove(&client_addr);
-                debug!(%client_addr, "Cleaned up expired backend socket");
+                match recv_result {
+                    Ok(Ok(n)) => {
+                        // Check if session is still alive.
+                        if sessions.get_session(&client_addr).is_none() {
+                            break;
+                        }
+                        if let Err(e) = reply_socket.send_to(&buf[..n], client_addr).await {
+                            debug!(
+                                error = %e,
+                                %client_addr,
+                                "Failed to forward return datagram to client"
+                            );
+                            break;
+                        }
+                        sessions.record_packet(&client_addr, n);
+                    }
+                    Ok(Err(e)) => {
+                        debug!(
+                            error = %e,
+                            %client_addr,
+                            "Backend socket recv error"
+                        );
+                        break;
+                    }
+                    Err(_elapsed) => {
+                        // Session timed out waiting for backend response.
+                        debug!(
+                            %client_addr,
+                            "Return-traffic task timed out, cleaning up"
+                        );
+                        break;
+                    }
+                }
             }
+
+            // Cleanup: remove the backend socket entry.
+            backend_sockets.remove(&client_addr);
+            sessions.remove_session(&client_addr);
+            debug!(%client_addr, "Return-traffic forwarder stopped");
         });
 
         Ok(())
@@ -315,6 +368,22 @@ mod tests {
         assert_eq!(proxy.sessions().session_count(), 0);
     }
 
+    /// Helper: create a UDP socket with SO_REUSEADDR so that the
+    /// return-traffic reply socket can bind to the same address.
+    async fn reuseaddr_udp_socket(addr: &str) -> UdpSocket {
+        let std_sock = socket2::Socket::new(
+            socket2::Domain::IPV4,
+            socket2::Type::DGRAM,
+            Some(socket2::Protocol::UDP),
+        )
+        .unwrap();
+        std_sock.set_reuse_address(true).unwrap();
+        std_sock.set_nonblocking(true).unwrap();
+        let addr: SocketAddr = addr.parse().unwrap();
+        std_sock.bind(&addr.into()).unwrap();
+        UdpSocket::from_std(std_sock.into()).unwrap()
+    }
+
     #[tokio::test]
     async fn test_handle_client_datagram_creates_session() {
         let backend_addr: SocketAddr = "127.0.0.1:9999".parse().unwrap();
@@ -323,8 +392,8 @@ mod tests {
         let config = UdpProxyConfig::default();
         let proxy = UdpProxy::new(config, lb);
 
-        // Bind a UDP socket.
-        let socket = UdpSocket::bind("127.0.0.1:0").await.unwrap();
+        // Bind a UDP socket with SO_REUSEADDR (required for reply socket).
+        let socket = reuseaddr_udp_socket("127.0.0.1:0").await;
         let client_addr: SocketAddr = "127.0.0.1:12345".parse().unwrap();
 
         // Before handling, no session.
@@ -340,6 +409,70 @@ mod tests {
             proxy.sessions().get_session(&client_addr),
             Some(backend_addr)
         );
+    }
+
+    #[tokio::test]
+    async fn test_bidirectional_forwarding() {
+        // Set up a real backend that echoes datagrams.
+        let backend_socket = UdpSocket::bind("127.0.0.1:0").await.unwrap();
+        let backend_addr = backend_socket.local_addr().unwrap();
+
+        let node = NodeImpl::new_arc("n1".into(), backend_addr, 1, None);
+        let lb: Arc<dyn LoadBalancer<L4Request, L4Response>> = Arc::new(FixedLb { node });
+        let config = UdpProxyConfig {
+            session_timeout: std::time::Duration::from_secs(5),
+            ..UdpProxyConfig::default()
+        };
+        let proxy = UdpProxy::new(config, lb);
+
+        let frontend_socket = Arc::new(reuseaddr_udp_socket("127.0.0.1:0").await);
+        let frontend_addr = frontend_socket.local_addr().unwrap();
+
+        // Client socket to send through the proxy.
+        let client_socket = UdpSocket::bind("127.0.0.1:0").await.unwrap();
+        let client_addr = client_socket.local_addr().unwrap();
+
+        let (shutdown_tx, shutdown_rx) = tokio::sync::watch::channel(false);
+
+        // Run the proxy in the background.
+        let proxy_handle = {
+            let frontend = frontend_socket.clone();
+            tokio::spawn(async move { proxy.run(frontend, shutdown_rx).await })
+        };
+
+        // Send a datagram from client -> proxy.
+        client_socket
+            .send_to(b"ping", frontend_addr)
+            .await
+            .unwrap();
+
+        // The backend should receive the forwarded datagram.
+        let mut buf = [0u8; 1024];
+        let (n, from_addr) = tokio::time::timeout(
+            std::time::Duration::from_secs(2),
+            backend_socket.recv_from(&mut buf),
+        )
+        .await
+        .expect("backend should receive datagram")
+        .unwrap();
+        assert_eq!(&buf[..n], b"ping");
+
+        // Backend echoes back.
+        backend_socket.send_to(b"pong", from_addr).await.unwrap();
+
+        // Client should receive the return traffic from the proxy's frontend address.
+        let (n, reply_addr) = tokio::time::timeout(
+            std::time::Duration::from_secs(2),
+            client_socket.recv_from(&mut buf),
+        )
+        .await
+        .expect("client should receive return datagram")
+        .unwrap();
+        assert_eq!(&buf[..n], b"pong");
+        assert_eq!(reply_addr.port(), frontend_addr.port());
+
+        shutdown_tx.send(true).unwrap();
+        let _ = proxy_handle.await;
     }
 
     #[tokio::test]

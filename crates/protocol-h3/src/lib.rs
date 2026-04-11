@@ -25,4 +25,4 @@ pub use flow_control::FlowController;
 pub use proxy::{H3ProxyConfig, H3ProxyHandler};
 pub use quic::{QuicConfig, QuicTransport};
 pub use retry::RetryTokenHandler;
-pub use translation::{h1_to_h3_request, h3_to_h1_response};
+pub use translation::{h1_to_h3_request, h2_to_h3_request, h3_to_h1_response, h3_to_h2_response};

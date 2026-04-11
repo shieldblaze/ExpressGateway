@@ -68,42 +68,47 @@ impl SniResolver {
     ///
     /// Hostname is normalized to lowercase. If `hostname` starts with `*.`,
     /// it is stored as a wildcard pattern.
+    ///
+    /// Uses `ArcSwap::rcu` to retry if the map was concurrently modified,
+    /// eliminating the TOCTOU race between `load()` and `store()`.
     pub fn add(&self, hostname: &str, cert: Arc<CertifiedKey>) {
         let hostname = hostname.to_lowercase();
-        let old = self.certs.load();
+        self.certs.rcu(|old| {
+            let mut new_map = SniCertMap {
+                exact: old.exact.clone(),
+                wildcard: old.wildcard.clone(),
+            };
 
-        let mut new_map = SniCertMap {
-            exact: old.exact.clone(),
-            wildcard: old.wildcard.clone(),
-        };
+            if hostname.starts_with("*.") {
+                new_map.wildcard.retain(|(p, _)| *p != hostname);
+                new_map.wildcard.push((hostname.clone(), Arc::clone(&cert)));
+            } else {
+                new_map.exact.insert(hostname.clone(), Arc::clone(&cert));
+            }
 
-        if hostname.starts_with("*.") {
-            new_map.wildcard.retain(|(p, _)| p != &hostname);
-            new_map.wildcard.push((hostname, cert));
-        } else {
-            new_map.exact.insert(hostname, cert);
-        }
-
-        self.certs.store(Arc::new(new_map));
+            new_map
+        });
     }
 
     /// Remove a certificate for a specific hostname or wildcard pattern.
+    ///
+    /// Uses `ArcSwap::rcu` to retry if the map was concurrently modified.
     pub fn remove(&self, hostname: &str) {
         let hostname = hostname.to_lowercase();
-        let old = self.certs.load();
+        self.certs.rcu(|old| {
+            let mut new_map = SniCertMap {
+                exact: old.exact.clone(),
+                wildcard: old.wildcard.clone(),
+            };
 
-        let mut new_map = SniCertMap {
-            exact: old.exact.clone(),
-            wildcard: old.wildcard.clone(),
-        };
+            if hostname.starts_with("*.") {
+                new_map.wildcard.retain(|(p, _)| *p != hostname);
+            } else {
+                new_map.exact.remove(&hostname);
+            }
 
-        if hostname.starts_with("*.") {
-            new_map.wildcard.retain(|(p, _)| p != &hostname);
-        } else {
-            new_map.exact.remove(&hostname);
-        }
-
-        self.certs.store(Arc::new(new_map));
+            new_map
+        });
     }
 
     /// Return the number of exact entries.

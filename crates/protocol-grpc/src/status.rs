@@ -116,12 +116,16 @@ impl std::fmt::Display for GrpcStatus {
 }
 
 /// Maps an HTTP status code to the corresponding gRPC status code per the
-/// gRPC specification.
+/// gRPC over HTTP/2 specification.
+///
+/// This is used when the HTTP response has a non-200 status code, meaning the
+/// gRPC call could not be completed at the transport level. For HTTP 200
+/// responses, the gRPC status must be read from the `grpc-status` trailer --
+/// HTTP 200 does not imply gRPC OK.
 ///
 /// Returns `None` for HTTP status codes that have no defined gRPC mapping.
 pub fn http_to_grpc(http_status: u16) -> Option<GrpcStatus> {
     match http_status {
-        200 => Some(GrpcStatus::Ok),
         400 => Some(GrpcStatus::InvalidArgument),
         401 => Some(GrpcStatus::Unauthenticated),
         403 => Some(GrpcStatus::PermissionDenied),
@@ -143,11 +147,11 @@ pub fn http_to_grpc(http_status: u16) -> Option<GrpcStatus> {
 mod tests {
     use super::*;
 
-    /// All 14 spec-mandated HTTP->gRPC mappings.
+    /// All 13 spec-mandated HTTP->gRPC mappings (200 excluded; see doc on
+    /// `http_to_grpc`).
     #[test]
-    fn all_14_mappings() {
+    fn all_13_mappings() {
         let cases: &[(u16, u32, &str)] = &[
-            (200, 0, "OK"),
             (400, 3, "INVALID_ARGUMENT"),
             (401, 16, "UNAUTHENTICATED"),
             (403, 7, "PERMISSION_DENIED"),
@@ -186,6 +190,14 @@ mod tests {
         assert!(http_to_grpc(201).is_none());
         assert!(http_to_grpc(301).is_none());
         assert!(http_to_grpc(418).is_none());
+    }
+
+    /// HTTP 200 must NOT map to gRPC OK. For gRPC, HTTP 200 is the expected
+    /// transport status for all calls; the actual gRPC status comes from the
+    /// `grpc-status` trailer.
+    #[test]
+    fn http_200_does_not_map_to_grpc_ok() {
+        assert!(http_to_grpc(200).is_none());
     }
 
     #[test]

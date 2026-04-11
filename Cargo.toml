@@ -95,6 +95,7 @@ glob = "0.3"
 http-body = "1"
 tower = { version = "0.5", features = ["full"] }
 tower-service = "0.3"
+tokio-util = { version = "0.7", features = ["rt"] }
 
 [profile.release]
 opt-level = 3

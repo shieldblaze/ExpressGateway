@@ -4,7 +4,12 @@
 //! spawning tasks.  It also tracks whether the underlying platform supports
 //! io_uring so higher layers can choose optimised code paths.
 
+use std::time::Duration;
+
 use crate::backend::RuntimeBackend;
+
+/// Default graceful shutdown timeout.
+const DEFAULT_SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(30);
 
 /// Unified async runtime for ExpressGateway.
 ///
@@ -14,6 +19,7 @@ pub struct Runtime {
     backend: RuntimeBackend,
     inner: tokio::runtime::Runtime,
     worker_threads: usize,
+    shutdown_timeout: Duration,
 }
 
 /// Configuration for building a [`Runtime`].
@@ -22,6 +28,9 @@ pub struct RuntimeConfig {
     pub backend: RuntimeBackend,
     /// Number of worker threads. `0` means use all available CPUs.
     pub worker_threads: usize,
+    /// Timeout for graceful shutdown.  After this duration, remaining tasks
+    /// are forcibly cancelled.
+    pub shutdown_timeout: Duration,
 }
 
 impl Default for RuntimeConfig {
@@ -29,6 +38,7 @@ impl Default for RuntimeConfig {
         Self {
             backend: RuntimeBackend::detect(),
             worker_threads: 0,
+            shutdown_timeout: DEFAULT_SHUTDOWN_TIMEOUT,
         }
     }
 }
@@ -48,7 +58,7 @@ impl Runtime {
     pub fn with_backend(backend: RuntimeBackend) -> std::io::Result<Self> {
         Self::with_config(RuntimeConfig {
             backend,
-            worker_threads: 0,
+            ..RuntimeConfig::default()
         })
     }
 
@@ -76,6 +86,7 @@ impl Runtime {
             backend: config.backend,
             inner,
             worker_threads: thread_count,
+            shutdown_timeout: config.shutdown_timeout,
         })
     }
 
@@ -105,6 +116,24 @@ impl Runtime {
     /// Convenience wrapper around `tokio::runtime::Runtime::block_on`.
     pub fn block_on<F: std::future::Future>(&self, future: F) -> F::Output {
         self.inner.block_on(future)
+    }
+
+    /// The configured graceful shutdown timeout.
+    #[inline]
+    pub fn shutdown_timeout(&self) -> Duration {
+        self.shutdown_timeout
+    }
+
+    /// Gracefully shut down the runtime.
+    ///
+    /// Signals all tasks to stop, waits up to `shutdown_timeout` for them
+    /// to complete, then forcibly drops the remaining work.  Consumes `self`
+    /// so no further work can be spawned.
+    pub fn shutdown(self) {
+        let timeout = self.shutdown_timeout;
+        tracing::info!(timeout_secs = timeout.as_secs(), "runtime shutting down");
+        self.inner.shutdown_timeout(timeout);
+        tracing::info!("runtime shutdown complete");
     }
 }
 
@@ -139,6 +168,7 @@ mod tests {
         let rt = Runtime::with_config(RuntimeConfig {
             backend: RuntimeBackend::Epoll,
             worker_threads: 2,
+            ..RuntimeConfig::default()
         })
         .expect("failed to create runtime with 2 threads");
         assert_eq!(rt.worker_threads(), 2);
