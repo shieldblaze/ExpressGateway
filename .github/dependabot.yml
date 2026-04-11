@@ -4,7 +4,7 @@ version: 2
 # You can adjust the package-ecosystem entries or add more as needed (e.g. "github-actions").
 # See https://docs.github.com/en/code-security/supply-chain-security/keeping-your-dependencies-updated-automatically/configuration-options-for-dependency-updates
 updates:
-  - package-ecosystem: "maven"
+  - package-ecosystem: "cargo"
     directory: "/"
     schedule:
       interval: "daily"
