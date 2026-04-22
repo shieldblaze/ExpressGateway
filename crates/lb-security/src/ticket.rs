@@ -281,9 +281,7 @@ impl ProducesTickets for RotatingTicketer {
         if let Some(plain) = rot.current.decrypt(cipher) {
             return Some(plain);
         }
-        rot.previous
-            .as_ref()
-            .and_then(|prev| prev.decrypt(cipher))
+        rot.previous.as_ref().and_then(|prev| prev.decrypt(cipher))
     }
 }
 
@@ -339,8 +337,8 @@ mod tests {
 
     #[test]
     fn new_tickets_use_current_key() {
-        let rot = TicketRotator::new(Duration::from_secs(86_400), Duration::from_secs(3_600))
-            .unwrap();
+        let rot =
+            TicketRotator::new(Duration::from_secs(86_400), Duration::from_secs(3_600)).unwrap();
         let plain = sample_plain();
         let (rot_handle, ticketer) = rot.as_rustls_ticketer();
         let ct = ticketer.encrypt(&plain).unwrap();
