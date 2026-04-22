@@ -21,6 +21,12 @@
 
 use std::collections::{HashMap, VecDeque};
 
+// Pillar 4a: real aya-based userspace loader, Linux-only. The standalone
+// BPF program it loads lives in crates/lb-l4-xdp/ebpf/ and is compiled
+// out-of-workspace via scripts/build-xdp.sh.
+#[cfg(target_os = "linux")]
+pub mod loader;
+
 /// Default maximum number of conntrack entries (1 million flows).
 const DEFAULT_CONNTRACK_MAX_ENTRIES: usize = 1_000_000;
 

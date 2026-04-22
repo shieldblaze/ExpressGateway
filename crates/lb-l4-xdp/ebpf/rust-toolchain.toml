@@ -1,0 +1,7 @@
+[toolchain]
+# The BPF target requires nightly + rust-src because we compile `core`
+# from source with `-Z build-std=core`. Pinned date avoids surprise
+# breakage on nightly churn.
+channel = "nightly-2026-01-15"
+components = ["rust-src", "rustfmt", "clippy"]
+targets = ["bpfel-unknown-none"]

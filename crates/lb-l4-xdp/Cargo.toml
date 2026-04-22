@@ -5,8 +5,14 @@ edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
 publish = false
+build = "build.rs"
 
 [dependencies]
 thiserror = { workspace = true }
 rand = { workspace = true }
 parking_lot = { workspace = true }
+
+# Pillar 4a: aya userspace loader is Linux-only; keeps non-Linux targets
+# (e.g. aarch64-musl CI) building against the pure-userspace simulation.
+[target.'cfg(target_os = "linux")'.dependencies]
+aya = { workspace = true }

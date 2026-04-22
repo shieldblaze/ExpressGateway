@@ -1,6 +1,6 @@
-# ADR-0005: BPF map schema — 5-tuple conntrack, prime-sized Maglev table, FIFO eviction
+# ADR-0005: BPF map schema — real aya-ebpf maps + 5-tuple conntrack + prime-sized Maglev table
 
-- Status: Accepted
+- Status: Accepted (realised 2026-04-22 via Pillar 4a)
 - Date: 2026-04-22
 - Deciders: ExpressGateway team
 - Consulted: Maglev paper (Eisenbud et al., NSDI 2016), Katran design
@@ -9,151 +9,177 @@
 
 ## Context and problem statement
 
-The L4 data plane needs two data structures: a **flow-affinity table**
-(conntrack) that remembers which backend a given 5-tuple already points
-to, and a **consistent-hash table** (Maglev) that decides where a new
-flow should go so that adding or removing a backend disturbs as few flows
-as possible.
+The L4 data plane needs a flow-affinity table (conntrack) and a
+consistent-hash decision surface (Maglev). Pillar 4a makes these real in
+two places:
 
-The schemas for these two structures are load-bearing: they appear in
-three places — the userspace simulation (`crates/lb-l4-xdp/src/lib.rs`),
-the eventual in-kernel BPF maps (deferred, see ADR-0004), and the
-control-plane API that pushes backend sets down. If we get the schema
-wrong, every consumer has to change at once. We therefore freeze the
-schema here.
+- **In-kernel (BPF)**: maps declared in `crates/lb-l4-xdp/ebpf/src/main.rs`
+  via `aya_ebpf::macros::map`.
+- **Userspace (simulation)**: `crates/lb-l4-xdp/src/lib.rs` — identical
+  semantics, used for CI-safe tests.
 
-Specific questions to nail down:
-
-1. What constitutes the conntrack key?
-2. What is the eviction policy when the conntrack table is full?
-3. What size does the Maglev lookup table use, and why a prime?
-4. What is the consequence of a backend set being *smaller* than what an
-   existing conntrack entry remembers?
+If the two schemas drift, every consumer has to change at once. This ADR
+freezes the schema and aligns the simulation and the real BPF maps.
 
 ## Decision drivers
 
-- Consistency between the simulation and the future in-kernel BPF maps —
-  the same invariants must hold.
-- Determinism: Maglev's disruption guarantees depend on the table being
-  prime-sized.
-- Memory cap: conntrack must not grow unboundedly under DDoS.
-- Hot-swap safety: switching backend sets must not black-hole in-flight
-  flows.
-- Testability: every invariant must be reproducible in a unit test.
-- Space: BPF maps have per-map memory limits; we plan for ~1 M entries.
-- Simplicity: the schema must fit in code a human can audit end-to-end.
-
-## Considered options
-
-- Conntrack key: 5-tuple vs 4-tuple (no protocol) vs 6-tuple (with VLAN).
-- Eviction: FIFO vs LRU vs random vs TTL-based.
-- Maglev table size: fixed 65 537 vs configurable prime vs power of two.
-- Stale-entry handling on backend shrink: drop flow vs re-route via
-  Maglev vs blacklist.
+- The userspace simulation and the in-kernel BPF maps must agree on key
+  and value types.
+- Determinism: Maglev's disruption guarantees require a prime-sized
+  lookup table.
+- Memory cap: conntrack must be bounded under adversarial load.
+- Testability: every invariant reproducible in a unit test.
+- Verifier safety: BPF map sizes and types are what the kernel's BPF
+  verifier accepts — no tricks required.
 
 ## Decision outcome
 
+The real BPF map declarations as of Pillar 4a:
+
+| Map name    | BPF type           | Key                         | Value                | Max entries | Purpose                                |
+|-------------|--------------------|-----------------------------|-----------------------|-------------|----------------------------------------|
+| `CONNTRACK` | `BPF_MAP_TYPE_HASH`| `FlowKey` (5-tuple, IPv4)   | `BackendEntry`        | 1 000 000   | Flow → backend pinning                 |
+| `L7_PORTS`  | `BPF_MAP_TYPE_HASH`| `u16` (dst port, net order) | `u8` (flags)          | 256         | Ports that XDP must PASS to userspace  |
+| `ACL_DENY`  | `BPF_MAP_TYPE_HASH`| `u32` (src IPv4, net order) | `u32` (rule id)       | 100 000     | /32 deny entries (LPM in Pillar 4b)    |
+| `STATS`     | `BPF_MAP_TYPE_PERCPU_ARRAY` | `u32` (slot)       | `u64` (counter)       | 32          | Per-CPU counters; advisory             |
+
+Types as declared in `crates/lb-l4-xdp/ebpf/src/main.rs`:
+
+```rust
+#[repr(C)]
+pub struct FlowKey {
+    pub src_addr: u32,   // network order
+    pub dst_addr: u32,   // network order
+    pub src_port: u16,   // network order
+    pub dst_port: u16,   // network order
+    pub protocol: u8,    // IPPROTO_TCP (6) / IPPROTO_UDP (17)
+    pub _pad: [u8; 3],   // verifier-friendly alignment; keeps sizeof == 16
+}
+
+#[repr(C)]
+pub struct BackendEntry {
+    pub backend_idx: u32, // index into userspace Maglev table
+    pub flags: u32,       // reserved; Pillar 4b uses bit 0 for "rewrite"
+}
+```
+
+Stats slot layout (indices into `STATS`):
+
+| Index | Name              | Meaning                                     |
+|-------|-------------------|---------------------------------------------|
+| 0     | `STAT_PASS`       | Packets returned `XDP_PASS`                 |
+| 1     | `STAT_DROP`       | Packets returned `XDP_DROP` (ACL denied)    |
+| 2     | `STAT_CT_HIT`     | Conntrack hits (flow pinned to backend)     |
+| 3     | `STAT_L7`         | L7 bypass hits (port in L7_PORTS)           |
+| 4     | `STAT_PARSE_FAIL` | Header parsing bounds-check failures        |
+
+### Decisions the schema encodes
+
 1. **Conntrack key = 5-tuple** (`src_addr`, `dst_addr`, `src_port`,
-   `dst_port`, `protocol`), modelled as `FlowKey` in
-   `crates/lb-l4-xdp/src/lib.rs` (struct definition lines 47–60).
-2. **Eviction = FIFO** in the simulation, with a default capacity of
-   1 000 000 entries (`DEFAULT_CONNTRACK_MAX_ENTRIES`,
-   `crates/lb-l4-xdp/src/lib.rs:25`). In-kernel map will be
-   `BPF_MAP_TYPE_LRU_HASH` — equivalent semantics under adversarial
-   load.
-3. **Maglev table size must be prime** — validated at construction time
-   by `is_prime()` (`crates/lb-l4-xdp/src/lib.rs:152–171`);
-   `MaglevTable::new` rejects non-prime sizes with
-   `XdpError::InvalidTableSize`. Default test size: 65 537 (the smallest
-   prime > 2^16).
-4. **Backend-shrink semantics**: on lookup, a conntrack entry whose
-   recorded backend index is ≥ the current Maglev backend count is
-   treated as stale, removed, and the flow is re-routed via the current
-   Maglev table. Implemented in `HotSwapManager::route_flow`
-   (`crates/lb-l4-xdp/src/lib.rs:361–373`).
+   `dst_port`, `protocol`), mirrored in `FlowKey` in the simulation
+   (`crates/lb-l4-xdp/src/lib.rs`). The key is stored in network byte
+   order in BPF so flow lookups are a raw byte compare.
+2. **Eviction**: FIFO in the simulation (capacity 1 000 000). In-kernel
+   the map declares `BPF_MAP_TYPE_HASH`; full-capacity inserts are
+   rejected by the verifier. Pillar 4b will upgrade to
+   `BPF_MAP_TYPE_LRU_HASH` (same key/value shape; only the map-type byte
+   in the ELF changes) for adversarial-load resilience.
+3. **Maglev table size must be prime** — validated at userspace
+   construction time by `is_prime()`. The BPF side does not rebuild the
+   Maglev table; userspace computes it and pushes backend-index entries
+   into `CONNTRACK` when new flows arrive (Pillar 4a: XDP just pins,
+   userspace decides; Pillar 4b will make the kernel path lookup-only
+   with `XDP_TX`).
+4. **Stale-entry recovery**: on a shrink, userspace iterates `CONNTRACK`
+   and drops entries whose `backend_idx` is out of range for the new
+   backend set. The simulation implements this in
+   `HotSwapManager::route_flow` (`crates/lb-l4-xdp/src/lib.rs:361–373`);
+   the real kernel-side cleanup is a userspace `bpf_map_lookup_batch` +
+   `bpf_map_delete_elem` loop.
 
 ## Rationale
 
-- **5-tuple** is the standard identification for a flow at L4. Including
-  `protocol` is essential — a TCP and a UDP flow may share the same
-  `(src, dst, sport, dport)` quadruple on the wire (e.g. DNS-over-QUIC
-  vs DNS-over-TLS on :53).
-- **FIFO vs LRU**: FIFO is trivially correct, bounded-memory, and O(1)
-  with a `VecDeque` of insert order — see `ConntrackTable::insert`
-  (lines 103–122). Under sustained load LRU is strictly better (keeps
-  hot flows), but the BPF `LRU_HASH` has eviction heuristics we cannot
-  reproduce in userspace with the same fidelity. FIFO gives a *lower
-  bound* on the behaviour: if the simulation survives FIFO under
-  load, the kernel's LRU will do at least as well. The simulation's
-  update-existing-flow path (lines 105–109) deliberately does not touch
-  the eviction queue, matching LRU's "update doesn't change eviction
-  position" property poorly — this is a documented asymmetry and a
-  follow-up for the in-kernel migration.
-- **Prime table size**: Maglev's permutation construction uses
-  `(offset + c * skip) mod table_size`. When `table_size` is coprime
-  with `skip`, the full residue class is swept before a revisit; choosing
-  prime guarantees coprimality for any `skip ∈ [1, table_size-1]`. This
-  is why `MaglevTable::permutation`
-  (`crates/lb-l4-xdp/src/lib.rs:230–241`) produces `skip = (h2 %
-  (table_size - 1)) + 1` — strictly in `[1, table_size-1]`, coprime
-  with a prime `table_size`.
-- **Hash function**: two independent multiply-shift hashes (`hash_str`
-  with seed 0 and with golden-ratio-derived seed 0x9e37_79b9_7f4a_7c15)
-  produce `(offset, skip)`. This is algorithmically identical to the
-  Maglev paper and intentionally matches `lb-balancer`'s software
-  Maglev so that L4 and L7 paths route new flows consistently.
-- **Stale-entry recovery**: without it, shrinking the backend set would
-  either panic (indexing out of range — forbidden by lint) or black-hole
-  traffic. The test `hotswap_evicts_stale_conntrack_after_shrink`
-  (lines 557+) pins this behaviour.
+- **5-tuple** is the standard L4 flow identifier. Including `protocol`
+  matters — TCP and UDP flows may share the same
+  `(src, dst, sport, dport)` (e.g. DNS on :53).
+- **IPv4 only** for Pillar 4a. IPv6 (and VLAN) are Pillar 4b — they
+  require a second `FlowKey` variant (`FlowKeyV6`) and a parser branch.
+- **`_pad: [u8; 3]`** pads `FlowKey` to 16 bytes. Without padding the
+  verifier on some kernels rejects `HashMap<FlowKey, _>` because key
+  size is not naturally aligned. 16 bytes is verifier-friendly and
+  memcmp-cheap.
+- **FIFO simulation vs `LRU_HASH` kernel**: FIFO is trivially correct,
+  bounded, O(1). `LRU_HASH` has eviction heuristics the simulation
+  cannot reproduce; FIFO is a strictly conservative model (if FIFO holds
+  under load, LRU does at least as well). Acknowledged in ADR-0004.
+- **`ACL_DENY` is HashMap<u32, u32>, not LPM_TRIE**: aya-ebpf 0.1's
+  `LpmTrie` ergonomics are fragile on older kernels; Pillar 4a sticks
+  to exact /32 matches to avoid verifier surprises. Pillar 4b promotes
+  to `BPF_MAP_TYPE_LPM_TRIE` with a `[u8; 5]` key (prefix len + 4 IP
+  bytes). See ADR-0004 follow-ups.
+- **Prime Maglev size**: `(offset + c * skip) mod table_size` sweeps
+  the full residue class only when `table_size` is coprime with `skip`.
+  Choosing `table_size` prime and `skip ∈ [1, table_size-1]` guarantees
+  this; see `MaglevTable::permutation` in the simulation.
 
 ## Consequences
 
 ### Positive
-- Schema is stable across simulation and in-kernel data plane.
-- Backend add/remove is safe: in-flight flows pinned by conntrack
-  continue to their original backend; new flows use the new Maglev
-  table.
-- Memory is capped at ~1 M conntrack entries by default — roughly
-  24 B × 1 M = 24 MiB for keys plus allocator overhead, well within a
-  reasonable per-CPU BPF map budget.
+
+- Schema frozen and replicated in both the BPF program and the
+  userspace simulation; they cannot drift silently.
+- Backend add/remove is safe: in-flight flows pinned by `CONNTRACK`
+  keep reaching their original backend; new flows use the updated
+  Maglev table.
+- `STATS` slots are versioned (indices, not names) so adding a new
+  counter does not break older readers.
 
 ### Negative
-- FIFO eviction in the simulation is unfriendly to long-lived flows
-  under churn — an attacker can shove out a legitimate flow with a
-  1 M-packet-per-second burst. In-kernel LRU mitigates this partially.
-- Maglev table size is a tunable but all tunings must be prime —
-  operators cannot pick "nice" numbers like 100 000.
+
+- `FlowKey` padding wastes 3 bytes per conntrack entry (~3 MiB across
+  1 M entries) for verifier alignment. Unavoidable on current kernels.
+- `ACL_DENY` is /32 exact match, not CIDR. Pillar 4b upgrade tracked.
+- FIFO eviction (simulation) hostile to long-lived flows under churn.
+  In-kernel `LRU_HASH` (Pillar 4b) mitigates.
 
 ### Neutral
-- The exact default (65 537) is conservative; production will likely
-  want a larger prime (65 521 × n). Documented in `lb-config`.
+
+- `STATS` sized 32 slots is far more than the five currently used;
+  this is intentional headroom for Pillar 4b (add
+  `STAT_CT_MISS`, `STAT_V6_UNSUPPORTED`, etc.).
 
 ## Implementation notes
 
-- `crates/lb-l4-xdp/src/lib.rs:47–60` — `FlowKey`.
+- `crates/lb-l4-xdp/ebpf/src/main.rs` — real `#[map]` declarations and
+  `FlowKey`/`BackendEntry` layouts.
+- `crates/lb-l4-xdp/src/lib.rs:47–60` — userspace `FlowKey`.
 - `crates/lb-l4-xdp/src/lib.rs:25` — `DEFAULT_CONNTRACK_MAX_ENTRIES = 1_000_000`.
 - `crates/lb-l4-xdp/src/lib.rs:67–144` — `ConntrackTable` with FIFO
-  eviction (`insert_order: VecDeque<FlowKey>`).
+  eviction.
 - `crates/lb-l4-xdp/src/lib.rs:152–171` — `is_prime` (6k±1 trial).
 - `crates/lb-l4-xdp/src/lib.rs:178–306` — `MaglevTable` + populate loop.
 - `crates/lb-l4-xdp/src/lib.rs:314–374` — `HotSwapManager` with stale-
   entry recovery.
-- Tests: `tests/l4_xdp_conntrack.rs`, `tests/l4_xdp_maglev.rs` (see
-  `tests/` directory), plus module tests in `lib.rs`.
+- Tests: `tests/l4_xdp_conntrack.rs`, `tests/l4_xdp_maglev.rs`,
+  `tests/l4_xdp_hotswap.rs` (manifest-locked); plus loader and module
+  tests in `crates/lb-l4-xdp/src/`.
 
-## Follow-ups / open questions
+## Follow-ups / open questions (Pillar 4b)
 
-- Migrate simulation to LRU semantics to more closely match in-kernel
-  `LRU_HASH`.
-- Decide whether the Maglev table should be per-service or shared; our
-  current shape is per-`HotSwapManager`, which maps to per-service.
-- Expose conntrack capacity through `lb-config`.
+- Add `FlowKeyV6` (IPv6 variant) + second conntrack map, or widen
+  `FlowKey` to 36 bytes with a discriminant.
+- Migrate `CONNTRACK` to `BPF_MAP_TYPE_LRU_HASH`.
+- Promote `ACL_DENY` to `BPF_MAP_TYPE_LPM_TRIE` with `[u8; 5]` key.
+- Expose conntrack capacity and Maglev table size through `lb-config`.
+- Kernel-side `XDP_TX` rewrite: the `BackendEntry.flags` bit 0 becomes
+  "rewrite and transmit".
 
 ## Sources
 
 - Eisenbud, D. et al. "Maglev: A Fast and Reliable Software Network
   Load Balancer." NSDI '16.
-- Linux kernel `bpf(2)` — `BPF_MAP_TYPE_LRU_HASH`.
+- Linux kernel `bpf(2)` — `BPF_MAP_TYPE_HASH`, `BPF_MAP_TYPE_LRU_HASH`,
+  `BPF_MAP_TYPE_LPM_TRIE`, `BPF_MAP_TYPE_PERCPU_ARRAY`.
 - Katran public architecture notes.
-- Internal: `crates/lb-l4-xdp/src/lib.rs`.
+- Internal: `crates/lb-l4-xdp/ebpf/src/main.rs`,
+  `crates/lb-l4-xdp/src/lib.rs`.

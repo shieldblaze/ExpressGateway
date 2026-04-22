@@ -1,6 +1,6 @@
-# ADR-0004: eBPF/XDP framework — aya (future), userspace simulation (today)
+# ADR-0004: eBPF/XDP framework — aya (realised 2026-04-22, Pillar 4a)
 
-- Status: Accepted
+- Status: Accepted (realised 2026-04-22 via Pillar 4a)
 - Date: 2026-04-22
 - Deciders: ExpressGateway team
 - Consulted: aya-rs documentation, libbpf-rs README, Katran (Meta)
@@ -11,143 +11,157 @@
 
 ExpressGateway advertises a "Katran-class" L4 data plane: XDP/eBPF-based
 TCP and UDP packet steering with a Maglev consistent hash and a conntrack
-table held in BPF maps. There are two realistic Rust-native paths to
-produce and load the eBPF program:
+table held in BPF maps. This ADR records how the framework question is
+resolved in the repository as of Pillar 4a.
+
+Two realistic Rust-native paths exist:
 
 - **aya** — pure-Rust, writes both the eBPF program and the userspace
-  loader in Rust (`aya-bpf` + `aya`), uses the kernel's
-  `BPF_PROG_LOAD` syscall directly, no libbpf/libelf dependency.
-- **libbpf-rs** — Rust bindings over the C `libbpf` library, which owns
-  ELF handling, CO-RE relocations, and BTF. Battle-tested, used by Cilium
-  and BCC; brings a C toolchain into the build.
+  loader in Rust (`aya-ebpf` + `aya`), uses the kernel's `BPF_PROG_LOAD`
+  syscall directly, no libbpf/libelf dependency.
+- **libbpf-rs** — Rust bindings over the C `libbpf` library. Battle-tested;
+  brings a C toolchain into the build.
 
-Separately, the halting gate's CI must pass on a runner that *cannot* load
-XDP programs (no `CAP_SYS_ADMIN`, no suitable NIC, and no kernel BTF).
-That's a hard constraint: the tests in `manifest/required-tests.txt` run
-under `cargo test` with no special privileges.
-
-The honest situation today is that `lb-l4-xdp` is a **userspace
-simulation** of the data-plane semantics. The crate-level doc comment
-states this explicitly (`crates/lb-l4-xdp/src/lib.rs:1–5`):
-
-    //! L4 XDP/eBPF data plane for TCP and UDP load balancing.
-    //!
-    //! Provides userspace simulation of the L4 XDP data plane. Real eBPF programs
-    //! cannot be tested in CI, so we simulate the conntrack table, Maglev consistent
-    //! hashing, and hot-swap behavior.
-
-A stub eBPF entry point exists in `crates/lb-l4-xdp/ebpf/src/main.rs` and
-its comment references aya:
-
-    //! This is a stub for the eBPF program that will be compiled separately
-    //! using the aya-bpf toolchain. It is not compiled as part of the normal
-    //! workspace build.
-
-So this ADR records two decisions: (a) when we do build a real eBPF
-program, we use **aya**, and (b) today we keep the simulation and gate
-the real program behind a separate build.
+A second problem is CI: the halting gate runs `cargo test` under an
+unprivileged user on a runner with no suitable NIC, no `CAP_BPF`, no
+`CAP_SYS_ADMIN`, and no guaranteed BTF-enabled kernel. The tests in
+`manifest/required-tests.txt` must pass in that environment.
 
 ## Decision drivers
 
-- Rust-native toolchain alignment with the rest of the workspace
-  (edition 2024, `#![deny(clippy::unwrap_used, …)]`).
-- No C toolchain in the default build — keeps the `cargo build` story
-  reproducible on any supported Rust target.
-- CI cannot load XDP (no privileges, no BTF-enabled kernel guaranteed).
-- Licence: aya and libbpf-rs both MIT/Apache; workspace is GPL-3.0-only,
-  both compatible with dynamic linking against the kernel's BPF
-  subsystem.
-- Hot-reload story: the Maglev + conntrack hot-swap logic is the same
-  whether the data plane is a BPF program or a Rust simulation. We want
-  to develop and test that logic *now*, separately from the kernel
-  loader.
-- Testability: 1 734+ tests in the workspace (per MEMORY.md); the L4
-  suite must contribute without flakiness.
-- Debuggability: `aya` surfaces verifier errors as Rust errors; libbpf's
-  log output is C-idiomatic.
+- Rust-native toolchain alignment with the rest of the workspace.
+- No C toolchain in the default workspace build — keeps `cargo build
+  --workspace` reproducible.
+- CI cannot load XDP programs.
+- Licence: aya is MIT/Apache, compatible with our GPL-3.0-only dynamic
+  linking.
+- Hot-reload story: Maglev + conntrack hot-swap must be testable today,
+  independently of the kernel loader.
 
 ## Considered options
 
-1. **aya** for both the eBPF program and the userspace loader.
-2. **libbpf-rs** and a C (or rust-bpf) eBPF program.
-3. **Hybrid**: write the eBPF program in C and load it via aya or
-   libbpf-rs.
-4. **Userspace simulation only** in `lb-l4-xdp`, with the real eBPF
-   build as a deferred, out-of-workspace concern.
+1. **aya** for the eBPF program and the userspace loader.
+2. **libbpf-rs** and a C eBPF program.
+3. **Hybrid**: C eBPF program loaded via aya or libbpf-rs.
 
 ## Decision outcome
 
-Adopt options **1 + 4**: aya is the chosen framework for when we build
-the real data plane, and until then `lb-l4-xdp` is a userspace simulation
-that the rest of the workspace depends on via typed APIs
-(`ConntrackTable`, `MaglevTable`, `HotSwapManager`, `FlowKey`).
+**Option 1: aya**, with a standalone out-of-workspace ebpf crate and an
+aya userspace loader committed today. Userspace simulation remains as the
+CI-safe correctness substrate.
 
-The eBPF crate (`crates/lb-l4-xdp/ebpf/src/main.rs`) is a stub with a
-`fn main() {}` body and is explicitly marked "not compiled as part of the
-normal workspace build."
+Concretely, as of 2026-04-22:
+
+1. `crates/lb-l4-xdp/ebpf/` is a standalone Rust crate (NOT a workspace
+   member) that compiles to a BPF ELF via
+   `cargo +nightly build --target bpfel-unknown-none`. Its `src/main.rs`
+   is a real `#[no_std] #[no_main]` aya-ebpf XDP program — not a stub.
+   The program parses Ethernet → IPv4 → TCP/UDP with per-offset bounds
+   checks, consults BPF maps (`CONNTRACK`, `L7_PORTS`, `ACL_DENY`,
+   `STATS`), and returns `XDP_PASS` or `XDP_DROP`.
+2. `crates/lb-l4-xdp/src/loader.rs` is the userspace counterpart — an
+   aya-based `XdpLoader` with `load_from_bytes`, `kernel_load`, `attach`,
+   and `take_map`. Every fallible path returns `Result`; no
+   `unwrap/expect/panic`.
+3. `crates/lb-l4-xdp/src/lib.rs` continues to provide the userspace
+   simulation (`ConntrackTable`, `MaglevTable`, `HotSwapManager`,
+   `FlowKey`). The simulation is the functional spec the in-kernel
+   program must satisfy; tests run on every CI push.
+4. `scripts/build-xdp.sh` is a best-effort helper that compiles the ebpf
+   crate to ELF and installs it next to the loader, at
+   `crates/lb-l4-xdp/src/lb_xdp.bin`. `crates/lb-l4-xdp/build.rs` then
+   sets `cfg(lb_xdp_elf)` so `loader::LB_XDP_ELF` is available for
+   integration tests and the real launcher. If the toolchain
+   (`bpf-linker`, LLVM-18 dev headers, nightly + `rust-src`) is
+   unavailable the script logs and exits 0 — the ELF is optional, the
+   ebpf source is authoritative.
+5. The ebpf crate is **deliberately not a workspace member**. Adding it
+   would break `cargo build --workspace` on any host without bpf-linker.
 
 ## Rationale
 
-- Pure-Rust toolchain: aya fits the workspace philosophy. libbpf-rs
-  would introduce a C build step that complicates the `docker/Dockerfile`
-  and the release pipeline.
-- Verifier feedback: aya's verifier integration surfaces Rust
-  diagnostics; this preserves our developer ergonomics story.
-- CO-RE: aya supports CO-RE via `aya-gen`, adequate for our conntrack
-  map + Maglev table, which are both simple BTF-representable types.
-- Simulation-first preserves the test surface: `ConntrackTable` with
-  FIFO eviction, `MaglevTable` with a prime table size, and
-  `HotSwapManager` that preserves in-flight flows after a backend swap
-  are all exercised by deterministic unit tests in
-  `crates/lb-l4-xdp/src/lib.rs` (tests module lines 377+).
-- The simulation's invariants are the same invariants the real eBPF
-  program must satisfy — so the tests act as a functional spec for the
-  eventual kernel code.
-- Cargo.lock contains no `aya`, `aya-bpf`, or `libbpf-rs` today. This
-  ADR records that when we do add it, aya wins.
+- aya's Rust-native toolchain avoids the C build step that libbpf-rs
+  requires. `docker/Dockerfile` stays simple.
+- Keeping the ebpf crate out of the workspace means the `bpfel-unknown-none`
+  target, nightly rustc, and bpf-linker become a separate, opt-in
+  build — the workspace build runs anywhere, including CI runners without
+  BPF tooling.
+- The simulation is not throwaway: its invariants (FIFO bounded
+  conntrack, prime-sized Maglev, hot-swap stale-entry eviction) are what
+  the real XDP program must match. Every simulation test is a functional
+  requirement for the in-kernel code.
+- aya's `Ebpf::load` returns parse/relocate errors as `EbpfError` — our
+  `XdpLoader` wraps these via `#[from]`, so `-D clippy::unwrap_used`
+  still passes and diagnostics remain Rust-idiomatic.
+- ACL map: aya-ebpf 0.1 exposes `LpmTrie`, but its ergonomics under the
+  verifier on some older kernels are fragile. Pillar 4a uses a plain
+  `HashMap<u32, u32>` of /32 denies (matches what the userspace ACL in
+  `lb-security` already pushes down). Pillar 4b upgrades to a real LPM
+  trie with CIDR support (see follow-ups).
 
 ## Consequences
 
 ### Positive
-- The L4 semantics (conntrack eviction, Maglev permutation ordering,
-  hot-swap safety) are testable on every CI run without root.
-- Picking aya now locks the Cargo.toml dep surface to one framework;
-  avoids the "is it libbpf this week?" question.
-- Consistent panic-free lint story: the simulation's `lib.rs` runs under
-  the project `#![deny(…)]` block; when the eBPF crate is added, it
-  inherits the same discipline.
+
+- Real aya-ebpf source in-tree, compilable with a proper toolchain —
+  not a `fn main(){}` stub.
+- The workspace build and CI stay clean on any Linux or non-Linux host
+  (aya is gated on `cfg(target_os = "linux")`).
+- The userspace loader is testable on every CI run: garbage-ELF rejection
+  returns a typed error, `XdpMode` → `XdpFlags` mapping is pinned.
 
 ### Negative
-- No real packet processing in CI — we rely on simulation fidelity.
-- The documented "Katran-class" performance is aspirational until the
-  real XDP program is wired up.
-- aya's ecosystem is smaller than libbpf's; if we hit a toolchain
-  limitation (e.g. a BTF feature that aya lags on), we may have to
-  temporarily fall back.
+
+- Full XDP_TX packet rewriting (with RFC 1624 incremental checksum
+  correction, VLAN stack handling, IPv6 parsing) is deferred to
+  Pillar 4b. Pillar 4a's program returns `XDP_PASS` for conntrack hits
+  rather than performing the kernel-side rewrite.
+- `CAP_BPF`-gated integration tests (real load + attach on a test
+  interface) are deferred to Pillar 4b — the CI runner cannot grant it.
+- ACL is /32-only until Pillar 4b promotes the map to LPM_TRIE.
 
 ### Neutral
-- The simulation will not go away when real XDP ships: it remains the
-  unit-test substrate for the map/data-structure invariants.
+
+- The simulation will not go away when the real XDP ships. It remains
+  the unit-test substrate for map / data-structure invariants.
 
 ## Implementation notes
 
-- `crates/lb-l4-xdp/src/lib.rs` — simulation: `FlowKey`, `ConntrackTable`,
-  `MaglevTable`, `HotSwapManager`.
-- `crates/lb-l4-xdp/ebpf/src/main.rs` — stub eBPF entry point, comment
-  points at aya-bpf.
-- `crates/lb-l4-xdp/Cargo.toml` — userspace deps only (`thiserror`,
-  `rand`, `parking_lot`).
-- Tests: `tests/l4_xdp_conntrack.rs` plus the module-level tests.
+- `crates/lb-l4-xdp/Cargo.toml` — userspace crate; `aya = { workspace =
+  true }` under `[target.'cfg(target_os = "linux")'.dependencies]`.
+- `crates/lb-l4-xdp/build.rs` — detects `src/lb_xdp.bin` and emits
+  `cargo:rustc-cfg=lb_xdp_elf`.
+- `crates/lb-l4-xdp/src/lib.rs` — simulation (unchanged); declares
+  `#[cfg(target_os = "linux")] pub mod loader;`.
+- `crates/lb-l4-xdp/src/loader.rs` — `XdpLoader`, `XdpMode`,
+  `XdpLoaderError`. Tests: `load_garbage_bytes_rejected`,
+  `load_empty_bytes_rejected`, `xdp_mode_flag_mapping`, `xdp_mode_is_copy`.
+- `crates/lb-l4-xdp/ebpf/Cargo.toml` — standalone, `edition = 2024`,
+  `[workspace]` empty stanza so `cargo` does not attach it to the root
+  workspace if someone runs cargo inside it.
+- `crates/lb-l4-xdp/ebpf/rust-toolchain.toml` — nightly + `rust-src` +
+  `bpfel-unknown-none` target.
+- `crates/lb-l4-xdp/ebpf/src/main.rs` — real aya-ebpf XDP program.
+- `scripts/build-xdp.sh` — best-effort BPF build; documented-when-skipped.
+- `Cargo.toml` (workspace) — `aya = "0.13"` added to
+  `[workspace.dependencies]`.
 
-## Follow-ups / open questions
+## Follow-ups / open questions (Pillar 4b)
 
-- When do we build the real aya-based XDP program? Gated on a CI runner
-  with kernel ≥ 6.1 BTF and root/setcap.
-- Map-type choice for conntrack in the kernel: LRU_HASH vs HASH with
-  user-space eviction. ADR-0005 records the simulation choice (FIFO);
-  LRU_HASH is almost certainly what we pick in-kernel.
-- Maglev table size tuning — current tests use 65 537 (prime); production
-  may want a larger prime.
+- Full `XDP_TX` path with RFC 1624 incremental checksum rewrite on
+  conntrack hit — currently `XDP_PASS`.
+- VLAN stacking (802.1Q) and IPv6 parsing.
+- Promote `ACL_DENY` (HashMap<u32, u32>) to `BPF_MAP_TYPE_LPM_TRIE`
+  with CIDR support. Pillar 4a defers because aya-ebpf 0.1 `LpmTrie`
+  ergonomics need more exercise.
+- Multi-kernel verifier matrix via an `xtask` crate — spin through
+  kernel 5.15, 5.17, 6.1, 6.6 with prebuilt VMs; gate in CI behind a
+  GitHub-hosted self-hosted runner with KVM.
+- Real integration test: `load + attach` on a veth pair, requires
+  `CAP_BPF` + `CAP_NET_ADMIN`. Gated on the CI runner capability.
+- Wire `XdpLoader` into `crates/lb/src/main.rs` startup (optional,
+  feature-flagged) so the LB attaches the BPF program when run with
+  sufficient capabilities.
 
 ## Sources
 
@@ -156,4 +170,6 @@ normal workspace build."
 - Høiland-Jørgensen, T. et al. "The eXpress Data Path: Fast
   Programmable Packet Processing in the Operating System Kernel" (2018).
 - Meta/Katran <https://github.com/facebookincubator/katran>.
-- Internal: `crates/lb-l4-xdp/src/lib.rs`, `crates/lb-l4-xdp/ebpf/src/main.rs`.
+- Internal: `crates/lb-l4-xdp/src/lib.rs`,
+  `crates/lb-l4-xdp/src/loader.rs`,
+  `crates/lb-l4-xdp/ebpf/src/main.rs`, `scripts/build-xdp.sh`.

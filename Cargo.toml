@@ -63,6 +63,8 @@ rustls = { version = "0.23", default-features = false, features = ["ring", "std"
 rustls-pki-types = "1"
 # Utilities
 rand = "0.8"
+# XDP / eBPF (Pillar 4a: aya userspace loader; Linux-only in consumers)
+aya = "0.13"
 
 [dev-dependencies]
 lb-core = { path = "crates/lb-core" }

@@ -1,0 +1,36 @@
+# Standalone eBPF crate. Deliberately NOT part of the root workspace
+# members list — it targets bpfel-unknown-none and requires rustc nightly
+# with `rust-src` + bpf-linker, neither of which participates in
+# `cargo build --workspace`. Compile via `scripts/build-xdp.sh`.
+[package]
+name = "lb-xdp-ebpf"
+version = "0.1.0"
+edition = "2024"
+publish = false
+license = "GPL-3.0-only"
+
+[[bin]]
+name = "lb_xdp"
+path = "src/main.rs"
+
+[dependencies]
+aya-ebpf = "0.1"
+aya-log-ebpf = "0.1"
+
+[profile.dev]
+# Optimisations required even for debug: the verifier rejects debug
+# codegen from stock rustc.
+opt-level = 3
+debug = true
+overflow-checks = false
+
+[profile.release]
+panic = "abort"
+codegen-units = 1
+lto = true
+overflow-checks = false
+debug = false
+
+# Standalone crate marker — a safety net if someone pastes this path into
+# the root workspace members list by accident.
+[workspace]
