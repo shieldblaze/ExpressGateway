@@ -138,6 +138,38 @@ impl Runtime {
     pub const fn low_water_mark() -> usize {
         32_768
     }
+
+    /// Bind a TCP listener to `addr` and apply the caller-supplied socket
+    /// options. Returns the live listener on success.
+    ///
+    /// # Errors
+    /// Propagates any `io::Error` from `bind(2)` or from any failing
+    /// `setsockopt` call inside [`sockopts::apply_listener`].
+    pub fn listener_socket(
+        &self,
+        addr: std::net::SocketAddr,
+        cfg: &sockopts::ListenerSockOpts,
+    ) -> std::io::Result<std::net::TcpListener> {
+        let listener = std::net::TcpListener::bind(addr)?;
+        sockopts::apply_listener(&listener, cfg)?;
+        Ok(listener)
+    }
+
+    /// Connect a TCP socket to `addr` and apply the caller-supplied socket
+    /// options on the connected stream. Returns the live stream on success.
+    ///
+    /// # Errors
+    /// Propagates any `io::Error` from `connect(2)` or from any failing
+    /// `setsockopt` call inside [`sockopts::apply_connected`].
+    pub fn connect_socket(
+        &self,
+        addr: std::net::SocketAddr,
+        cfg: &sockopts::BackendSockOpts,
+    ) -> std::io::Result<std::net::TcpStream> {
+        let stream = std::net::TcpStream::connect(addr)?;
+        sockopts::apply_connected(&stream, cfg)?;
+        Ok(stream)
+    }
 }
 
 impl Default for Runtime {
@@ -176,6 +208,29 @@ mod tests {
         assert_eq!(Runtime::high_water_mark(), 65_536);
         assert_eq!(Runtime::low_water_mark(), 32_768);
         assert!(Runtime::low_water_mark() < Runtime::high_water_mark());
+    }
+
+    #[test]
+    fn runtime_listener_and_connect_sockets() {
+        use super::sockopts::BackendSockOpts;
+        let rt = Runtime::with_backend(IoBackend::Epoll);
+        let lcfg = ListenerSockOpts {
+            reuseaddr: true,
+            nodelay: true,
+            keepalive: true,
+            ..Default::default()
+        };
+        let listener = rt
+            .listener_socket("127.0.0.1:0".parse().unwrap(), &lcfg)
+            .unwrap();
+        let addr = listener.local_addr().unwrap();
+        let bcfg = BackendSockOpts {
+            nodelay: true,
+            keepalive: true,
+            ..Default::default()
+        };
+        let stream = rt.connect_socket(addr, &bcfg).unwrap();
+        assert_eq!(stream.peer_addr().unwrap(), addr);
     }
 
     #[test]
