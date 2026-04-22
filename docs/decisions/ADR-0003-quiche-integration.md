@@ -1,156 +1,162 @@
-# ADR-0003: QUIC transport — in-house simulation, no quiche, no quinn
+# ADR-0003: QUIC transport — quinn 0.11
 
-- Status: Accepted
+- Status: Accepted (realized 2026-04-22 via Pillar 3a)
 - Date: 2026-04-22
 - Deciders: ExpressGateway team
-- Consulted: README.md (which predates this ADR and mentions quiche),
-  Cloudflare quiche README, quinn-rs documentation, RFC 9000 (QUIC), RFC
-  9001 (QUIC-TLS), RFC 9114 (HTTP/3).
+- Supersedes: the previous revision of ADR-0003 ("in-house simulation, no
+  quiche, no quinn"), which documented the pre-Pillar-3a stopgap.
+- Consulted: Cloudflare quiche README, quinn-rs documentation, RFC 9000
+  (QUIC), RFC 9001 (QUIC-TLS), RFC 9114 (HTTP/3), RFC 8446 (TLS 1.3).
 
 ## Context and problem statement
 
-ExpressGateway must terminate or proxy QUIC + HTTP/3. The Rust ecosystem
-offers two production-quality QUIC implementations:
+ExpressGateway must terminate or proxy QUIC + HTTP/3. The previous ADR
+documented a userspace simulation (`QuicDatagram` / `QuicStream` with
+`forward_*` validators) as a stopgap: at the time the halting gate's
+panic-free rule plus the "no flaky network in CI" rule made even a
+loopback QUIC handshake feel risky. That framing is no longer true.
+Quinn 0.11's tokio runtime layer, combined with rcgen for in-process
+self-signed certs, gives a deterministic loopback handshake in a single
+test process without any external fixture. Pillar 3a makes `lb-quic` a
+real transport.
 
-- **quiche** — Cloudflare's C-callable QUIC library with Rust core;
-  widely deployed at Cloudflare scale, uses BoringSSL, callback-based I/O
-  model.
-- **quinn** — pure-Rust, `rustls`-based, tokio-integrated, connection-per-
-  task model.
-
-The project's README.md advertises "QUIC-native proxying via quiche" as a
-headline feature. That sentence predates the current state of the code.
-The halting gate's check 3 (panic-free enforcement, ADR-0010) and check 5
-(all required tests must pass in CI *without* external network access)
-impose constraints that neither integration-ready candidate satisfies
-today: quiche wraps C/BoringSSL which we cannot audit under the
-`clippy::unwrap_used` regime on our side, and quinn requires rustls + a
-real UDP socket + a TLS handshake against a certificate — none of which CI
-can exercise deterministically without a full network simulator.
-
-Cargo.lock is the ground truth for what is actually linked:
+Ground truth (post-Pillar-3a):
 
     $ grep -E '^name = "(quinn|quiche)"' Cargo.lock
-    (no matches)
-
-So the project ships a *userspace simulation* of QUIC semantics in
-`lb-quic`, exercised by in-process tests. This is not a rejection of
-quinn or quiche on technical grounds; it is the decision record for the
-*current* state and the forward path.
+    name = "quinn"
+    name = "quinn-proto"
+    name = "quinn-udp"
 
 ## Decision drivers
 
-- CI determinism: required tests must pass without UDP sockets, real
-  certificates, or a kernel-level network stack.
-- Panic-free auditability (ADR-0010): every byte-path crate runs under
-  `#![deny(clippy::unwrap_used, …)]`.
-- Dependency blast radius: adding quinn pulls in `rustls`, `ring`,
-  `webpki`, `rcgen` — doubles the dependency graph.
-- Licence: quiche is BSD-2-clause + OpenSSL-derived BoringSSL; quinn is
-  Apache/MIT. ExpressGateway is GPL-3.0-only (see `Cargo.toml` workspace
-  package). Both integrations are compatible but BoringSSL's state makes
-  auditing a choice.
-- Roadmap compatibility: HTTP/3 (`lb-h3`) must eventually ride on a real
-  QUIC transport; the seam chosen today must accept a real implementation
-  later.
-- Fuzzability: the simulated `QuicDatagram` / `QuicStream` types admit
-  targeted fuzzing of our own framing/forwarding logic without dragging a
-  full TLS handshake into the corpus.
+- **Fidelity**: integration tests must exercise a real UDP socket and a
+  real TLS 1.3 handshake, otherwise the crate cannot defend against real
+  QUIC mishandling.
+- **CI determinism**: tests must still pass hermetically in sandboxed CI.
+  Loopback (`127.0.0.1:0`) + in-process rcgen satisfy this without any
+  external fixture.
+- **Panic-free auditability** (ADR-0010): every byte-path crate runs
+  under `#![deny(clippy::unwrap_used, …)]`. `lb-quic` keeps that header
+  and routes all quinn errors through `?` into a typed `QuicError`.
+- **Dependency blast radius**: quinn + rustls + ring + rcgen is ~20 new
+  crates. Worth it for real transport; the ring backend (not aws-lc-rs)
+  keeps the C footprint minimal and the license story simple.
+- **License**: ExpressGateway is GPL-3.0-only. quinn (Apache-2.0 OR MIT),
+  rustls (Apache-2.0 OR ISC OR MIT), rcgen (MIT OR Apache-2.0) are all
+  compatible. ring is ISC AND MIT AND OpenSSL (covered by the existing
+  `[[licenses.clarify]]` stanza in `deny.toml`).
+- **Roadmap**: `lb-h3` (real H3 codec) must eventually ride on a real
+  QUIC stack. Pillar 3a gives it a real transport seam; Pillar 3b wires
+  `h3 / h3-quinn` on top.
 
 ## Considered options
 
-1. Integrate **quiche** (Cloudflare) directly; run real QUIC in CI via
-   loopback.
-2. Integrate **quinn** directly; run real QUIC in CI via loopback.
-3. Implement a userspace simulation of QUIC datagram and stream
-   forwarding in `lb-quic`, deferring real-transport integration.
-4. Feature-gate: ship stub by default, integrate quinn behind a
-   `real-quic` feature.
+1. Integrate **quinn** directly; run real QUIC on loopback in CI.
+   **Chosen.**
+2. Integrate **quiche** (Cloudflare). Rejected for Pillar 3a because it
+   wraps BoringSSL (extra audit surface under `unwrap_used`), uses a
+   callback I/O model that fights tokio, and offers no material
+   advantage for our use cases over quinn's pure-Rust stack.
+3. Keep the userspace simulation. Rejected — it is fiction, not a load
+   balancer.
+4. Feature-gate quinn behind a `real-quic` flag. Rejected — splits CI
+   coverage and lets the simulation path rot.
 
 ## Decision outcome
 
-Option 3. `lb-quic` is a simulation with typed `QuicDatagram` and
-`QuicStream` values and `forward_datagram` / `forward_stream` functions
-(`crates/lb-quic/src/lib.rs`). Neither `quinn` nor `quiche` appears in
-`Cargo.lock`. The README's "via quiche" phrasing is a roadmap statement,
-not an accurate description of current code, and is flagged for update as
-a follow-up.
+Option 1. `lb-quic` adopts quinn 0.11 with rustls 0.23 (ring backend)
+and rcgen 0.13 (dev-dep only, for in-process self-signed certs on
+`127.0.0.1`).
+
+Public surface:
+
+- `QuicDatagram { connection_id, data }` and
+  `QuicStream { stream_id, data, fin }` — unchanged data model.
+- `forward_datagram` / `forward_stream` — retained as zero-I/O
+  validators; documented as back-compat.
+- `QuicEndpoint::server_on_loopback(cert_der, key_der)` and
+  `QuicEndpoint::client_on_loopback(Arc<RootCertStore>)` — real UDP +
+  TLS endpoints bound to `127.0.0.1:0`.
+- `roundtrip_datagram` / `roundtrip_stream` — async functions that
+  exercise quinn's datagram and unidirectional-stream APIs end-to-end.
+
+The manifest-locked tests `test_quic_datagram_forwarding` and
+`test_quic_stream_forwarding` now drive real quinn roundtrips; both
+still pass, by name, under `bash scripts/halting-gate.sh`.
 
 ## Rationale
 
-- Current `crates/lb-quic/Cargo.toml` depends only on `thiserror` and
-  `bytes`. There is no QUIC library linked.
-- The crate's own doc comment is explicit:
-
-      //! QUIC transport layer simulation.
-      //!
-      //! Since we cannot run real QUIC without a network stack in CI, this crate
-      //! provides simulated datagram and stream forwarding with validation.
-
-  Lines 1–4 of `crates/lb-quic/src/lib.rs`. Honest in the code, honest in
-  the ADR.
-- The simulation covers what the L7 pipeline actually asks the QUIC layer
-  for: "give me a datagram I can forward" and "give me a stream slice with
-  a FIN bit". Both are modelled as pure data types; `forward_datagram`
-  and `forward_stream` validate non-empty payloads and return copies.
-- Deferring the real transport lets us stabilise the `lb-h3` state
-  machine and the `lb-quic` public types first. When we switch to a real
-  implementation, consumers see the same `QuicDatagram` / `QuicStream`
-  shapes.
-- Between quinn and quiche, quinn is the presumed future default: pure
-  Rust, rustls-compatible, tokio-native, already audited by the Rust
-  community, no BoringSSL. But this ADR does not bind us — it records
-  that today neither is wired up.
-- The README discrepancy ("via quiche") is tolerated because changing it
-  requires touching a file the halting-gate locks by hash; it will be
-  corrected when the real transport lands.
+- `crates/lb-quic/Cargo.toml` now depends on `quinn`, `rustls`,
+  `rustls-pki-types`, `bytes`, `thiserror`, `tokio`; `rcgen` is a
+  dev-dep (test certs only, no cert infrastructure shipped).
+- `Cargo.lock` contains `quinn`, `quinn-proto`, `quinn-udp` — the
+  transport is not fiction.
+- rustls is configured with `default-features = false,
+  features = ["ring", "std", "tls12", "logging"]` to avoid pulling in
+  `aws-lc-rs` alongside ring.
+- rcgen 0.13 is pinned because 0.14 requires Rust 1.83+ and we track
+  MSRV 1.85 already; a dev-dep with no binary impact.
+- `time 0.3.47` would fix RUSTSEC-2026-0009 but requires Rust 1.88.
+  We pin `time 0.3.37` via `Cargo.lock` and ignore the advisory with
+  a documented justification in `deny.toml`: rcgen uses `time` for
+  internal validity ranges only, not RFC 2822 parsing of untrusted
+  input, so the stack-exhaustion vector is not reachable from our
+  code.
 
 ## Consequences
 
 ### Positive
-- CI runs HTTP/3 and QUIC conformance harnesses without network sockets
-  (`tests/conformance_h3.rs`, `tests/bridging_h3_*.rs`).
-- `lb-quic`'s lint-gated, panic-free invariants are trivial to enforce on
-  ~125 lines.
-- Downstream crates (`lb-h3`, `lb-l7`) can integration-test against the
-  simulated transport without flakiness.
+- CI now exercises a real UDP socket and a real TLS 1.3 handshake on
+  loopback. The two QUIC tests in `tests/quic_native.rs` are genuine
+  integration tests, not assertions over data structures.
+- `lb-h3` gains a real transport seam to ride on in Pillar 3b.
+- Panic-free invariants are preserved: every quinn error flows through
+  a typed `QuicError` variant via `?`.
 
 ### Negative
-- We do not today defend against real-world QUIC attacks (connection-ID
-  confusion, version-negotiation downgrade, amplification, 0-RTT replay
-  — see RFC 9000 §21). These are future work.
-- README is misleading until we update it. Tracked.
-- We cannot claim "QUIC-native proxying" for performance benchmarks yet.
+- Dependency footprint grows by ~20 crates (quinn, quinn-proto,
+  quinn-udp, rustls, ring, rustls-webpki, rustls-pki-types, rcgen and
+  transitives). Release binary size grows accordingly.
+- `time` crate ships an advisory we must ignore until MSRV bumps.
 
 ### Neutral
-- Switching to quinn later is a localised change: the public surface of
-  `lb-quic` (`QuicDatagram`, `QuicStream`, `forward_*`) is narrow.
-- Licence considerations (GPL-3.0-only) accept both quinn and quiche.
+- License story unchanged (ring's OpenSSL-derived license was already
+  clarified).
+- The simulation's `forward_*` validators remain as zero-I/O helpers;
+  the previous in-process test surface is preserved.
+
+## Deferred items (explicitly Pillar 3b / 3c scope)
+
+- **Stateless retry with token validation** (RFC 9000 §8.1.2).
+- **0-RTT replay protection** (RFC 9001 §9.2, §5.6).
+- **Alt-Svc (RFC 7838) injection** on L7 responses — needs the L7
+  response path, deferred to Pillar 3c.
+- **Connection-ID-routed pool** for upstream reuse — Pillar 3c.
+- **Integration into the root binary** (`crates/lb/src/main.rs`) —
+  Pillar 3b.
+- **`h3` / `h3-quinn` on top of quinn** — Pillar 3b, when we actually
+  serve HTTP/3.
 
 ## Implementation notes
 
-- `crates/lb-quic/src/lib.rs` — full simulation (~125 lines).
-- `crates/lb-quic/Cargo.toml` — no QUIC library dependency.
-- `tests/conformance_h3.rs` and `tests/bridging_h3_*.rs` — use the
-  simulation.
-- Real transport integration hook point: `forward_datagram` /
-  `forward_stream` become trait methods.
-
-## Follow-ups / open questions
-
-- Update README to say "QUIC simulation in CI; quinn integration
-  planned" — requires manifest/.halting-gate.sha256 update.
-- Decide quinn vs quiche when we wire the real transport. Current lean:
-  quinn, because it shares our `rustls`/`tokio` ecosystem (ADR-0001 picks
-  tokio).
-- Prototype the real integration behind a `real-quic` feature gate to
-  keep CI deterministic.
+- `crates/lb-quic/src/lib.rs` — real `QuicEndpoint` + `roundtrip_*`
+  functions, plus retained `forward_*` validators and the typed data
+  model.
+- `crates/lb-quic/Cargo.toml` — adds quinn/rustls/rustls-pki-types as
+  workspace deps; rcgen as dev-dep.
+- `tests/quic_native.rs` — `#[tokio::test]` against loopback with
+  rcgen-generated self-signed certs; manifest-locked test names
+  preserved.
+- `Cargo.toml` (workspace) — adds `quinn`, `rustls`,
+  `rustls-pki-types` to `[workspace.dependencies]`.
+- `deny.toml` — adds RUSTSEC-2026-0009 to the documented ignore list
+  (see above).
 
 ## Sources
 
 - `crates/lb-quic/src/lib.rs` — module-level doc comment.
 - `crates/lb-quic/Cargo.toml` — actual dependencies.
-- `Cargo.lock` — absence of `quinn` and `quiche`.
-- <https://github.com/cloudflare/quiche>
+- `Cargo.lock` — presence of `quinn`, `quinn-proto`, `quinn-udp`.
 - <https://github.com/quinn-rs/quinn>
-- RFC 9000, 9001, 9114.
+- <https://github.com/rustls/rcgen>
+- RFC 9000, 9001, 9114, 8446.

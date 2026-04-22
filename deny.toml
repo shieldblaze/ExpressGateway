@@ -23,6 +23,12 @@ ignore = [
     "RUSTSEC-2026-0097",
     # rustls-pemfile unmaintained (v2)
     "RUSTSEC-2025-0134",
+    # time <0.3.47 RFC 2822 stack exhaustion — the fix ships in 0.3.47 which
+    # requires Rust 1.88; project MSRV is 1.85. Our only transitive consumer
+    # is rcgen (dev-dep only, Pillar 3a test certs) which uses time for
+    # internal validity ranges, not untrusted RFC 2822 string parsing. No
+    # reachable attack surface; revisit once MSRV bumps in Pillar 3b.
+    "RUSTSEC-2026-0009",
 ]
 
 [licenses]

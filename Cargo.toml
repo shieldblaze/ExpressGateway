@@ -57,6 +57,10 @@ parking_lot = "0.12"
 dashmap = "6"
 # HTTP
 http = "1"
+# QUIC + TLS (Pillar 3a: lb-quic uses real quinn endpoint on loopback)
+quinn = { version = "0.11", default-features = false, features = ["runtime-tokio", "rustls-ring", "log"] }
+rustls = { version = "0.23", default-features = false, features = ["ring", "std", "tls12", "logging"] }
+rustls-pki-types = "1"
 # Utilities
 rand = "0.8"
 
@@ -83,6 +87,9 @@ anyhow = { workspace = true }
 bytes = { workspace = true }
 http = { workspace = true }
 rand = { workspace = true }
+rustls = { workspace = true }
+rustls-pki-types = { workspace = true }
+rcgen = "0.13"
 
 [profile.release]
 opt-level = 3

@@ -9,3 +9,11 @@ publish = false
 [dependencies]
 thiserror = { workspace = true }
 bytes = { workspace = true }
+tokio = { workspace = true }
+quinn = { workspace = true }
+rustls = { workspace = true }
+rustls-pki-types = { workspace = true }
+
+[dev-dependencies]
+rcgen = "0.13"
+tokio = { workspace = true, features = ["full", "test-util"] }
