@@ -1,0 +1,25 @@
+# Build artifacts
+target/
+corpus/
+
+# IDE
+.idea/
+*.iml
+.vscode/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Environment
+.env
+.env.*
+
+# Claude Code
+.claude/
+
+# Logs
+*.log

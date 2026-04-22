@@ -1,0 +1,92 @@
+[package]
+name = "lb-integration-tests"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.85"
+publish = false
+
+[workspace]
+resolver = "2"
+members = [
+    "crates/lb-core",
+    "crates/lb-config",
+    "crates/lb-controlplane",
+    "crates/lb-cp-client",
+    "crates/lb-l4-xdp",
+    "crates/lb-io",
+    "crates/lb-h1",
+    "crates/lb-h2",
+    "crates/lb-h3",
+    "crates/lb-quic",
+    "crates/lb-grpc",
+    "crates/lb-l7",
+    "crates/lb-balancer",
+    "crates/lb-health",
+    "crates/lb-security",
+    "crates/lb-compression",
+    "crates/lb-observability",
+    "crates/lb",
+]
+
+[workspace.package]
+license = "GPL-3.0-only"
+edition = "2024"
+rust-version = "1.85"
+
+[workspace.dependencies]
+# Async runtime
+tokio = { version = "1", features = ["full"] }
+# Error handling
+thiserror = "2"
+anyhow = "1"
+# Serialization
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+toml = "0.8"
+# Networking
+bytes = "1"
+# Logging
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["json", "env-filter"] }
+# Concurrency
+arc-swap = "1"
+parking_lot = "0.12"
+dashmap = "6"
+# HTTP
+http = "1"
+# Utilities
+rand = "0.8"
+
+[dev-dependencies]
+lb-core = { path = "crates/lb-core" }
+lb-config = { path = "crates/lb-config" }
+lb-controlplane = { path = "crates/lb-controlplane" }
+lb-cp-client = { path = "crates/lb-cp-client" }
+lb-l4-xdp = { path = "crates/lb-l4-xdp" }
+lb-io = { path = "crates/lb-io" }
+lb-h1 = { path = "crates/lb-h1" }
+lb-h2 = { path = "crates/lb-h2" }
+lb-h3 = { path = "crates/lb-h3" }
+lb-quic = { path = "crates/lb-quic" }
+lb-grpc = { path = "crates/lb-grpc" }
+lb-l7 = { path = "crates/lb-l7" }
+lb-balancer = { path = "crates/lb-balancer" }
+lb-health = { path = "crates/lb-health" }
+lb-security = { path = "crates/lb-security" }
+lb-compression = { path = "crates/lb-compression" }
+lb-observability = { path = "crates/lb-observability" }
+tokio = { workspace = true, features = ["full", "test-util"] }
+anyhow = { workspace = true }
+bytes = { workspace = true }
+http = { workspace = true }
+rand = { workspace = true }
+
+[profile.release]
+opt-level = 3
+lto = "thin"
+codegen-units = 1
+strip = "symbols"
+
+[profile.dev]
+opt-level = 0
+debug = true

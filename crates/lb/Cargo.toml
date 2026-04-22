@@ -1,0 +1,20 @@
+[package]
+name = "lb"
+version = "0.1.0"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish = false
+
+[dependencies]
+anyhow = { workspace = true }
+tokio = { workspace = true }
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true }
+parking_lot = { workspace = true }
+lb-config = { path = "../lb-config" }
+lb-controlplane = { path = "../lb-controlplane" }
+lb-balancer = { path = "../lb-balancer" }
+lb-observability = { path = "../lb-observability" }
+lb-health = { path = "../lb-health" }
+lb-security = { path = "../lb-security" }

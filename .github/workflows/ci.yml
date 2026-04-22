@@ -1,0 +1,217 @@
+name: CI
+
+on:
+  push:
+    branches: [main, rust]
+  pull_request:
+  workflow_dispatch:
+
+env:
+  CARGO_TERM_COLOR: always
+  RUSTFLAGS: -D warnings
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  check:
+    name: Check
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - uses: Swatinem/rust-cache@v2
+
+      - name: cargo check
+        run: cargo check --workspace --all-targets
+
+  clippy:
+    name: Clippy
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+
+      - uses: Swatinem/rust-cache@v2
+
+      - name: cargo clippy
+        run: cargo clippy --workspace --all-targets -- -D warnings
+
+  test:
+    name: Test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - uses: Swatinem/rust-cache@v2
+
+      - name: cargo test
+        run: cargo test --workspace
+        timeout-minutes: 30
+
+  fmt:
+    name: Format
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt
+
+      - name: cargo fmt
+        run: cargo fmt --all -- --check
+
+  panic-freedom:
+    name: Panic Freedom Audit
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Verify panic-freedom deny lints are present
+        run: |
+          MISSING=""
+          for lib in crates/*/src/lib.rs; do
+            if ! grep -q 'deny.*clippy::unwrap_used' "$lib" 2>/dev/null; then
+              MISSING="$MISSING\n  $lib"
+            fi
+          done
+          if [ -n "$MISSING" ]; then
+            echo "::error::Crates missing panic-freedom deny lints:$MISSING"
+            exit 1
+          fi
+          echo "All library crates have panic-freedom deny lints."
+
+      - name: Panic-freedom grep gate
+        run: |
+          # Search for panic-inducing patterns in non-test code.
+          # This is defense-in-depth behind clippy deny lints.
+          VIOLATIONS=$(grep -rn -E 'unwrap\(\)|expect\(|panic!\(|todo!\(|unimplemented!\(|unreachable!\(' crates/ \
+            --include='*.rs' \
+            | grep -v '#\[cfg(test)\]' \
+            | grep -v '#\[test\]' \
+            | grep -v '^\s*//' \
+            | grep -v 'mod tests' \
+            | grep -v '#!\[allow(' \
+            | grep -v 'clippy::' \
+            | grep -v '/benches/' \
+            || true)
+
+          if [ -n "$VIOLATIONS" ]; then
+            echo "::error::Panic-inducing patterns found in non-test code:"
+            echo "$VIOLATIONS"
+            echo ""
+            echo "Use .get(), checked arithmetic, or proper error handling instead."
+            exit 1
+          fi
+          echo "No panic-inducing patterns found in non-test code."
+
+  audit:
+    name: Security Audit
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install cargo-audit
+        run: cargo install cargo-audit --locked
+
+      - name: cargo audit
+        run: cargo audit
+
+  deny:
+    name: Dependency Check (cargo-deny)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install cargo-deny
+        run: cargo install cargo-deny --locked
+
+      - name: cargo deny check
+        run: cargo deny check
+
+  msrv:
+    name: MSRV (1.85)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install MSRV Rust toolchain
+        uses: dtolnay/rust-toolchain@1.85
+
+      - uses: Swatinem/rust-cache@v2
+
+      - name: cargo check (MSRV)
+        run: cargo check --workspace --all-targets
+
+  fuzz-smoke:
+    name: Fuzz Smoke Test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust nightly (for cargo-fuzz)
+        uses: dtolnay/rust-toolchain@nightly
+
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Install cargo-fuzz
+        run: cargo install cargo-fuzz --locked
+
+      - name: Smoke test all fuzz targets (10 seconds each)
+        run: |
+          cd fuzz
+          for target in hpack_decode http1_parse uri_validation grpc_frame tls_sniff h2_frame h3_frame qpack_decode zstd_decode brotli_decode gzip_decode deflate_decode; do
+            echo "::group::Fuzzing $target"
+            cargo +nightly fuzz run "$target" -- -max_total_time=10 2>&1
+            echo "::endgroup::"
+          done
+
+  release-build:
+    name: Release Build
+    runs-on: ubuntu-latest
+    needs: [check, clippy, test, fmt, panic-freedom]
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - uses: Swatinem/rust-cache@v2
+
+      - name: cargo build --release
+        run: cargo build --workspace --release
+        timeout-minutes: 30
+
+  docker:
+    name: Docker Build
+    runs-on: ubuntu-latest
+    needs: [release-build]
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Build Docker image (amd64)
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          file: docker/Dockerfile
+          platforms: linux/amd64
+          push: false
+          tags: expressgateway:ci
+          cache-from: type=gha
+          cache-to: type=gha,mode=max

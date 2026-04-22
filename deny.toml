@@ -1,0 +1,60 @@
+# cargo-deny configuration (v0.19+)
+# https://embarkstudios.github.io/cargo-deny/
+
+[graph]
+targets = []
+all-features = false
+
+[advisories]
+ignore = [
+    # instant is unmaintained but deeply transitive; no replacement yet
+    "RUSTSEC-2024-0384",
+    # protobuf recursion crash - we don't use protobuf for untrusted input parsing
+    "RUSTSEC-2024-0437",
+    # rand unsound with custom logger - we don't use custom loggers with rand
+    "RUSTSEC-2025-0015",
+    # rustls-pemfile unmaintained
+    "RUSTSEC-2025-0019",
+    # dashmap unsound IterMut invalidating pointer
+    "RUSTSEC-2024-0430",
+    # dashmap v6 IterMut stacked borrows
+    "RUSTSEC-2026-0002",
+    # rand unsound with custom logger (v2)
+    "RUSTSEC-2026-0097",
+    # rustls-pemfile unmaintained (v2)
+    "RUSTSEC-2025-0134",
+]
+
+[licenses]
+allow = [
+    "MIT",
+    "Apache-2.0",
+    "BSD-2-Clause",
+    "BSD-3-Clause",
+    "ISC",
+    "Unicode-3.0",
+    "Zlib",
+    "BSL-1.0",
+    "CC0-1.0",
+    "GPL-3.0-only",
+    "GPL-3.0-or-later",
+    "CDLA-Permissive-2.0",
+]
+confidence-threshold = 0.8
+
+[[licenses.clarify]]
+name = "ring"
+expression = "ISC AND MIT AND OpenSSL"
+license-files = [
+    { path = "LICENSE", hash = 0xbd0eed23 },
+]
+
+[bans]
+multiple-versions = "warn"
+wildcards = "allow"
+
+[sources]
+unknown-registry = "deny"
+unknown-git = "deny"
+allow-registry = ["https://github.com/rust-lang/crates.io-index"]
+allow-git = []
