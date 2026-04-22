@@ -387,8 +387,11 @@ dependencies = [
 name = "lb-io"
 version = "0.1.0"
 dependencies = [
+ "dashmap",
  "io-uring",
  "libc",
+ "parking_lot",
+ "rand",
  "socket2 0.5.10",
  "thiserror",
  "tokio",

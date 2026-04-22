@@ -27,6 +27,7 @@ use tokio::signal;
 use lb_balancer::round_robin::RoundRobin;
 use lb_balancer::{Backend, LoadBalancer};
 use lb_io::Runtime;
+use lb_io::pool::{PoolConfig, TcpPool};
 use lb_io::sockopts::{BackendSockOpts, ListenerSockOpts};
 use lb_observability::MetricsRegistry;
 
@@ -46,6 +47,8 @@ struct ListenerState {
     active_connections: AtomicU64,
     /// Shared lb-io runtime (auto-detects io_uring vs epoll).
     io_runtime: Runtime,
+    /// Shared TCP connection pool for backend dials.
+    pool: TcpPool,
 }
 
 /// Listener socket options matching PROMPT.md §7 for listener sockets.
@@ -126,6 +129,10 @@ async fn async_main() -> anyhow::Result<()> {
         "lb-io runtime ready"
     );
 
+    // ── backend connection pool ─────────────────────────────────────
+    let pool = TcpPool::new(PoolConfig::default(), backend_opts(), io_runtime);
+    tracing::info!("TCP backend pool ready (defaults from PROMPT.md §21)");
+
     // ── metrics ─────────────────────────────────────────────────────
     let metrics = Arc::new(MetricsRegistry::new());
 
@@ -161,6 +168,7 @@ async fn async_main() -> anyhow::Result<()> {
             metrics: Arc::clone(&metrics),
             active_connections: AtomicU64::new(0),
             io_runtime,
+            pool: pool.clone(),
         });
 
         let bind_addr = listener_cfg.address.clone();
@@ -253,7 +261,7 @@ async fn run_listener(bind_addr: String, state: Arc<ListenerState>) -> anyhow::R
             st.metrics.increment("connections_total", 1);
 
             if let Err(e) =
-                proxy_connection(client_stream, backend_addr, &st.metrics, st.io_runtime).await
+                proxy_connection(client_stream, backend_addr, &st.metrics, &st.pool).await
             {
                 tracing::debug!(
                     client = %client_addr,
@@ -273,29 +281,43 @@ async fn proxy_connection(
     mut client: TcpStream,
     backend_addr: SocketAddr,
     metrics: &MetricsRegistry,
-    io_runtime: Runtime,
+    pool: &TcpPool,
 ) -> anyhow::Result<()> {
-    // Connect + setsockopt on a blocking socket inside spawn_blocking so we
-    // don't stall the tokio worker — the std::net::TcpStream::connect call
-    // is blocking until the 3-way handshake completes.
-    let std_backend =
-        tokio::task::spawn_blocking(move || io_runtime.connect(backend_addr, &backend_opts()))
-            .await
-            .with_context(|| format!("backend connect task joined {backend_addr}"))?
-            .with_context(|| format!("cannot connect to backend {backend_addr}"))?;
-    std_backend
-        .set_nonblocking(true)
-        .with_context(|| format!("set_nonblocking on backend {backend_addr}"))?;
-    let mut backend = TcpStream::from_std(std_backend)
-        .with_context(|| format!("tokio from_std on backend {backend_addr}"))?;
+    // Acquire a backend connection from the pool. On a hot pool this
+    // returns an idle reuse; otherwise it dials a new socket via
+    // Runtime::connect, which performs a blocking connect(2). Wrap in
+    // spawn_blocking so we don't stall the tokio worker on the cold
+    // path — pool.acquire is cheap on the hot path so the always-spawn
+    // overhead is acceptable today and matches the prior baseline.
+    let pool_for_dial = pool.clone();
+    let mut pooled = tokio::task::spawn_blocking(move || pool_for_dial.acquire(backend_addr))
+        .await
+        .with_context(|| format!("backend acquire task joined {backend_addr}"))?
+        .with_context(|| format!("cannot connect to backend {backend_addr}"))?;
 
-    let (client_to_backend, backend_to_client) =
-        io::copy_bidirectional(&mut client, &mut backend).await?;
+    let copy_result = {
+        let backend = pooled
+            .stream_mut()
+            .with_context(|| format!("pooled stream missing for {backend_addr}"))?;
+        io::copy_bidirectional(&mut client, backend).await
+    };
 
-    metrics.increment("bytes_client_to_backend", client_to_backend);
-    metrics.increment("bytes_backend_to_client", backend_to_client);
-
-    Ok(())
+    match copy_result {
+        Ok((client_to_backend, backend_to_client)) => {
+            metrics.increment("bytes_client_to_backend", client_to_backend);
+            metrics.increment("bytes_backend_to_client", backend_to_client);
+            // Half-close from either side is normal at end-of-session;
+            // the pool's liveness probe will reject the socket on the
+            // next acquire if it is no longer reusable.
+            Ok(())
+        }
+        Err(e) => {
+            // Stream is in an unknown state; do not return it to the
+            // pool to avoid serving the next request a broken socket.
+            pooled.set_reusable(false);
+            Err(e.into())
+        }
+    }
 }
 
 // ── signal handling ─────────────────────────────────────────────────────
