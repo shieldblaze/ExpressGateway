@@ -10,3 +10,5 @@ publish = false
 thiserror = { workspace = true }
 bytes = { workspace = true }
 http = { workspace = true }
+rustls = { workspace = true }
+parking_lot = { workspace = true }

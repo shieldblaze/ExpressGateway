@@ -16,12 +16,14 @@ mod error;
 mod slow_post;
 mod slowloris;
 mod smuggle;
+mod ticket;
 mod zero_rtt;
 
 pub use error::SecurityError;
 pub use slow_post::SlowPostDetector;
 pub use slowloris::SlowlorisDetector;
 pub use smuggle::SmuggleDetector;
+pub use ticket::{RotatingTicketer, TicketError, TicketKey, TicketRotator};
 pub use zero_rtt::ZeroRttReplayGuard;
 
 #[cfg(test)]
