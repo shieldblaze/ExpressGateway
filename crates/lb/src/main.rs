@@ -26,6 +26,8 @@ use tokio::signal;
 
 use lb_balancer::round_robin::RoundRobin;
 use lb_balancer::{Backend, LoadBalancer};
+use lb_io::Runtime;
+use lb_io::sockopts::{BackendSockOpts, ListenerSockOpts};
 use lb_observability::MetricsRegistry;
 
 // ── shared gateway state ────────────────────────────────────────────────
@@ -42,6 +44,35 @@ struct ListenerState {
     metrics: Arc<MetricsRegistry>,
     /// Active connection gauge.
     active_connections: AtomicU64,
+    /// Shared lb-io runtime (auto-detects io_uring vs epoll).
+    io_runtime: Runtime,
+}
+
+/// Listener socket options matching PROMPT.md §7 for listener sockets.
+const fn listener_opts() -> ListenerSockOpts {
+    ListenerSockOpts {
+        reuseaddr: true,
+        reuseport: true,
+        rcvbuf: Some(262_144),
+        sndbuf: Some(262_144),
+        nodelay: true,
+        quickack: false,
+        keepalive: true,
+        tcp_fastopen: None,
+        backlog: Some(50_000),
+    }
+}
+
+/// Backend socket options matching PROMPT.md §7 for backend sockets.
+const fn backend_opts() -> BackendSockOpts {
+    BackendSockOpts {
+        nodelay: true,
+        keepalive: true,
+        rcvbuf: Some(262_144),
+        sndbuf: Some(262_144),
+        quickack: false,
+        tcp_fastopen_connect: false,
+    }
 }
 
 // ── main ────────────────────────────────────────────────────────────────
@@ -86,6 +117,15 @@ async fn async_main() -> anyhow::Result<()> {
         "configuration loaded from {config_path}"
     );
 
+    // ── lb-io runtime ───────────────────────────────────────────────
+    let io_runtime = Runtime::new();
+    tracing::info!(
+        backend = %io_runtime.backend(),
+        high_water = Runtime::high_water_mark(),
+        low_water = Runtime::low_water_mark(),
+        "lb-io runtime ready"
+    );
+
     // ── metrics ─────────────────────────────────────────────────────
     let metrics = Arc::new(MetricsRegistry::new());
 
@@ -120,6 +160,7 @@ async fn async_main() -> anyhow::Result<()> {
             addresses,
             metrics: Arc::clone(&metrics),
             active_connections: AtomicU64::new(0),
+            io_runtime,
         });
 
         let bind_addr = listener_cfg.address.clone();
@@ -159,13 +200,24 @@ async fn async_main() -> anyhow::Result<()> {
 // ── listener loop ───────────────────────────────────────────────────────
 
 async fn run_listener(bind_addr: String, state: Arc<ListenerState>) -> anyhow::Result<()> {
-    let listener = TcpListener::bind(&bind_addr)
-        .await
+    let parsed: SocketAddr = bind_addr
+        .parse()
+        .with_context(|| format!("invalid listen address: {bind_addr}"))?;
+
+    let std_listener = state
+        .io_runtime
+        .listen(parsed, &listener_opts())
         .with_context(|| format!("failed to bind {bind_addr}"))?;
+    std_listener
+        .set_nonblocking(true)
+        .with_context(|| format!("set_nonblocking on {bind_addr}"))?;
+    let listener = TcpListener::from_std(std_listener)
+        .with_context(|| format!("tokio from_std on {bind_addr}"))?;
 
     tracing::info!(
         address = %bind_addr,
         backends = state.addresses.len(),
+        backend = %state.io_runtime.backend(),
         "listener started"
     );
 
@@ -200,7 +252,9 @@ async fn run_listener(bind_addr: String, state: Arc<ListenerState>) -> anyhow::R
             st.active_connections.fetch_add(1, Ordering::Relaxed);
             st.metrics.increment("connections_total", 1);
 
-            if let Err(e) = proxy_connection(client_stream, backend_addr, &st.metrics).await {
+            if let Err(e) =
+                proxy_connection(client_stream, backend_addr, &st.metrics, st.io_runtime).await
+            {
                 tracing::debug!(
                     client = %client_addr,
                     backend = %backend_addr,
@@ -219,10 +273,21 @@ async fn proxy_connection(
     mut client: TcpStream,
     backend_addr: SocketAddr,
     metrics: &MetricsRegistry,
+    io_runtime: Runtime,
 ) -> anyhow::Result<()> {
-    let mut backend = TcpStream::connect(backend_addr)
-        .await
-        .with_context(|| format!("cannot connect to backend {backend_addr}"))?;
+    // Connect + setsockopt on a blocking socket inside spawn_blocking so we
+    // don't stall the tokio worker — the std::net::TcpStream::connect call
+    // is blocking until the 3-way handshake completes.
+    let std_backend =
+        tokio::task::spawn_blocking(move || io_runtime.connect(backend_addr, &backend_opts()))
+            .await
+            .with_context(|| format!("backend connect task joined {backend_addr}"))?
+            .with_context(|| format!("cannot connect to backend {backend_addr}"))?;
+    std_backend
+        .set_nonblocking(true)
+        .with_context(|| format!("set_nonblocking on backend {backend_addr}"))?;
+    let mut backend = TcpStream::from_std(std_backend)
+        .with_context(|| format!("tokio from_std on backend {backend_addr}"))?;
 
     let (client_to_backend, backend_to_client) =
         io::copy_bidirectional(&mut client, &mut backend).await?;

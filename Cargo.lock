@@ -247,6 +247,7 @@ dependencies = [
  "lb-config",
  "lb-controlplane",
  "lb-health",
+ "lb-io",
  "lb-observability",
  "lb-security",
  "parking_lot",

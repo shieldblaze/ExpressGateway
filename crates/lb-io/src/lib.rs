@@ -170,6 +170,38 @@ impl Runtime {
         sockopts::apply_connected(&stream, cfg)?;
         Ok(stream)
     }
+
+    /// Bind a TCP listener, apply [`sockopts::ListenerSockOpts`], and hand
+    /// back a blocking-mode [`std::net::TcpListener`]. Callers wiring this
+    /// into tokio should `set_nonblocking(true)` on the returned listener
+    /// and convert with `tokio::net::TcpListener::from_std`.
+    ///
+    /// # Errors
+    /// Propagates any `io::Error` from `bind(2)` or from any failing
+    /// `setsockopt` call.
+    pub fn listen(
+        &self,
+        addr: std::net::SocketAddr,
+        cfg: &sockopts::ListenerSockOpts,
+    ) -> std::io::Result<std::net::TcpListener> {
+        self.listener_socket(addr, cfg)
+    }
+
+    /// Connect a TCP socket, apply [`sockopts::BackendSockOpts`], and hand
+    /// back a blocking-mode [`std::net::TcpStream`]. Callers wiring this
+    /// into tokio should `set_nonblocking(true)` on the returned stream
+    /// and convert with `tokio::net::TcpStream::from_std`.
+    ///
+    /// # Errors
+    /// Propagates any `io::Error` from `connect(2)` or from any failing
+    /// `setsockopt` call.
+    pub fn connect(
+        &self,
+        addr: std::net::SocketAddr,
+        cfg: &sockopts::BackendSockOpts,
+    ) -> std::io::Result<std::net::TcpStream> {
+        self.connect_socket(addr, cfg)
+    }
 }
 
 impl Default for Runtime {

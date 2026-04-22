@@ -12,6 +12,7 @@ tokio = { workspace = true }
 tracing = { workspace = true }
 tracing-subscriber = { workspace = true }
 parking_lot = { workspace = true }
+lb-io = { path = "../lb-io" }
 lb-config = { path = "../lb-config" }
 lb-controlplane = { path = "../lb-controlplane" }
 lb-balancer = { path = "../lb-balancer" }
