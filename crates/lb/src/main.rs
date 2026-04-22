@@ -27,6 +27,7 @@ use tokio::signal;
 use lb_balancer::round_robin::RoundRobin;
 use lb_balancer::{Backend, LoadBalancer};
 use lb_io::Runtime;
+use lb_io::dns::{DnsResolver, ResolverConfig};
 use lb_io::pool::{PoolConfig, TcpPool};
 use lb_io::sockopts::{BackendSockOpts, ListenerSockOpts};
 use lb_observability::MetricsRegistry;
@@ -49,6 +50,11 @@ struct ListenerState {
     io_runtime: Runtime,
     /// Shared TCP connection pool for backend dials.
     pool: TcpPool,
+    /// Shared DNS resolver with positive/negative caching. Used to
+    /// pre-resolve backend hostnames today; TcpPool will consume it for
+    /// on-demand re-resolution in a follow-up.
+    #[allow(dead_code)]
+    resolver: DnsResolver,
 }
 
 /// Listener socket options matching PROMPT.md §7 for listener sockets.
@@ -76,6 +82,32 @@ const fn backend_opts() -> BackendSockOpts {
         quickack: false,
         tcp_fastopen_connect: false,
     }
+}
+
+/// Split a backend address of the form `host:port`, `[v6]:port`, or
+/// `1.2.3.4:port` into its components. Returns an error if the port is
+/// missing or malformed.
+fn split_host_port(s: &str) -> anyhow::Result<(&str, u16)> {
+    // IPv6 literal: `[addr]:port`.
+    if let Some(rest) = s.strip_prefix('[') {
+        if let Some((host, tail)) = rest.split_once(']') {
+            let port_str = tail
+                .strip_prefix(':')
+                .ok_or_else(|| anyhow::anyhow!("missing port after IPv6 literal"))?;
+            let port: u16 = port_str
+                .parse()
+                .with_context(|| format!("invalid port: {port_str}"))?;
+            return Ok((host, port));
+        }
+        anyhow::bail!("unterminated IPv6 literal");
+    }
+    let (host, port_str) = s
+        .rsplit_once(':')
+        .ok_or_else(|| anyhow::anyhow!("missing port in {s}"))?;
+    let port: u16 = port_str
+        .parse()
+        .with_context(|| format!("invalid port: {port_str}"))?;
+    Ok((host, port))
 }
 
 // ── main ────────────────────────────────────────────────────────────────
@@ -133,6 +165,10 @@ async fn async_main() -> anyhow::Result<()> {
     let pool = TcpPool::new(PoolConfig::default(), backend_opts(), io_runtime);
     tracing::info!("TCP backend pool ready (defaults from PROMPT.md §21)");
 
+    // ── DNS resolver ────────────────────────────────────────────────
+    let resolver = DnsResolver::new(ResolverConfig::default());
+    tracing::info!("DNS resolver ready (positive cap 300s, negative TTL 5s)");
+
     // ── metrics ─────────────────────────────────────────────────────
     let metrics = Arc::new(MetricsRegistry::new());
 
@@ -148,16 +184,32 @@ async fn async_main() -> anyhow::Result<()> {
             continue;
         }
 
-        // Resolve backend addresses at startup.
+        // Resolve backend addresses at startup via the DNS cache. This
+        // makes hostname-configured backends (e.g. `origin.example:443`)
+        // work and warms the cache so the first proxied connection does
+        // not pay the getaddrinfo cost. IP-literal backends go down the
+        // same path; the resolver forwards to `(host, port).to_socket_addrs()`
+        // which handles both.
         let mut addresses = Vec::with_capacity(listener_cfg.backends.len());
         let mut backends = Vec::with_capacity(listener_cfg.backends.len());
 
         for (i, b) in listener_cfg.backends.iter().enumerate() {
-            let addr: SocketAddr = b
-                .address
-                .parse()
+            let (host, port) = split_host_port(&b.address)
                 .with_context(|| format!("invalid backend address: {}", b.address))?;
-            addresses.push(addr);
+            let resolved = resolver
+                .resolve(host, port)
+                .await
+                .with_context(|| format!("cannot resolve backend: {}", b.address))?;
+            let Some(first) = resolved.first().copied() else {
+                anyhow::bail!("resolver returned no addresses for {}", b.address);
+            };
+            tracing::debug!(
+                backend = %b.address,
+                resolved_count = resolved.len(),
+                chosen = %first,
+                "backend resolved via DnsResolver"
+            );
+            addresses.push(first);
             backends.push(Backend::new(format!("backend-{i}"), b.weight));
         }
 
@@ -169,6 +221,7 @@ async fn async_main() -> anyhow::Result<()> {
             active_connections: AtomicU64::new(0),
             io_runtime,
             pool: pool.clone(),
+            resolver: resolver.clone(),
         });
 
         let bind_addr = listener_cfg.address.clone();
