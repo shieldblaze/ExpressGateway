@@ -558,6 +558,8 @@ version = "0.1.0"
 dependencies = [
  "bytes",
  "http",
+ "parking_lot",
+ "rustls",
  "thiserror 2.0.18",
 ]
 
