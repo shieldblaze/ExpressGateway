@@ -20,4 +20,8 @@ mod security;
 pub use error::H2Error;
 pub use frame::{DEFAULT_MAX_FRAME_SIZE, H2Frame, decode_frame, encode_frame};
 pub use hpack::{HpackDecoder, HpackEncoder};
-pub use security::{ContinuationFloodDetector, HpackBombDetector, RapidResetDetector};
+pub use security::{
+    ContinuationFloodDetector, DEFAULT_CONTROL_FRAME_WINDOW, DEFAULT_PING_MAX_PER_WINDOW,
+    DEFAULT_SETTINGS_MAX_PER_WINDOW, DEFAULT_ZERO_WINDOW_STALL_TIMEOUT, HpackBombDetector,
+    PingFloodDetector, RapidResetDetector, SettingsFloodDetector, ZeroWindowStallDetector,
+};

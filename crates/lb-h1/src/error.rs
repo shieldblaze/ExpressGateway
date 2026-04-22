@@ -31,4 +31,13 @@ pub enum H1Error {
         /// Configured maximum.
         limit: u64,
     },
+
+    /// The header section exceeds the configured size limit.
+    #[error("headers too large: observed {observed} bytes exceeds limit {limit}")]
+    HeadersTooLarge {
+        /// Configured maximum header-section byte count.
+        limit: usize,
+        /// Number of header-section bytes observed before the cap fired.
+        observed: usize,
+    },
 }

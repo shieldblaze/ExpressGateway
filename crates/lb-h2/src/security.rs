@@ -4,6 +4,13 @@
 //! - **CONTINUATION Flood** (CVE-2024-24549): detects long runs of
 //!   CONTINUATION frames without `END_HEADERS`.
 //! - **HPACK Bomb**: detects decompression-ratio amplification attacks.
+//! - **SETTINGS flood** / **PING flood**: rolling-window rate limits on
+//!   control frames that would otherwise force the peer to allocate ACKs.
+//! - **Zero-window stall**: per-stream watchdog that fires when the peer
+//!   holds a stream open without granting any receive-window credit.
+
+use std::collections::HashMap;
+use std::time::{Duration, Instant};
 
 use crate::H2Error;
 
@@ -211,6 +218,217 @@ impl HpackBombDetector {
     }
 }
 
+/// Default SETTINGS frames per window for `SettingsFloodDetector`.
+pub const DEFAULT_SETTINGS_MAX_PER_WINDOW: u32 = 100;
+
+/// Default PING frames per window for `PingFloodDetector`.
+pub const DEFAULT_PING_MAX_PER_WINDOW: u32 = 50;
+
+/// Default rolling-window duration for SETTINGS and PING flood detectors.
+pub const DEFAULT_CONTROL_FRAME_WINDOW: Duration = Duration::from_secs(10);
+
+/// Default stall timeout for `ZeroWindowStallDetector`.
+pub const DEFAULT_ZERO_WINDOW_STALL_TIMEOUT: Duration = Duration::from_secs(30);
+
+/// Detects `SETTINGS` frame flooding using a fixed rolling window.
+///
+/// Pingora and nginx both rate-limit control frames because each `SETTINGS`
+/// forces the peer to allocate and transmit an ACK. A sustained stream of
+/// SETTINGS frames amplifies the attacker's send cost into many times
+/// more CPU and bandwidth on the defender side.
+///
+/// The detector uses `Instant` timestamps supplied by the caller and
+/// integer arithmetic throughout. When the current observation falls
+/// outside the window, the counter rotates: `count_in_window` is reset
+/// to 1 and `window_start` is advanced to `now`.
+#[derive(Debug)]
+pub struct SettingsFloodDetector {
+    max_per_window: u32,
+    window: Duration,
+    window_start: Option<Instant>,
+    count_in_window: u32,
+}
+
+impl SettingsFloodDetector {
+    /// Create a detector with explicit thresholds.
+    #[must_use]
+    pub const fn new(max_per_window: u32, window: Duration) -> Self {
+        Self {
+            max_per_window,
+            window,
+            window_start: None,
+            count_in_window: 0,
+        }
+    }
+
+    /// Create a detector with the project-default thresholds (100 / 10s).
+    #[must_use]
+    pub const fn with_defaults() -> Self {
+        Self::new(
+            DEFAULT_SETTINGS_MAX_PER_WINDOW,
+            DEFAULT_CONTROL_FRAME_WINDOW,
+        )
+    }
+
+    /// Record a `SETTINGS` frame observation at `now`.
+    ///
+    /// # Errors
+    ///
+    /// Returns `H2Error::SettingsFlood` when the rolling-window count
+    /// exceeds `max_per_window`.
+    pub fn on_settings(&mut self, now: Instant) -> Result<(), H2Error> {
+        let rotate = match self.window_start {
+            None => true,
+            Some(start) => now.saturating_duration_since(start) >= self.window,
+        };
+        if rotate {
+            self.window_start = Some(now);
+            self.count_in_window = 1;
+        } else {
+            self.count_in_window = self.count_in_window.saturating_add(1);
+        }
+        if self.count_in_window > self.max_per_window {
+            Err(H2Error::SettingsFlood {
+                count: self.count_in_window,
+            })
+        } else {
+            Ok(())
+        }
+    }
+
+    /// Reset the detector state.
+    pub fn reset(&mut self) {
+        self.window_start = None;
+        self.count_in_window = 0;
+    }
+}
+
+/// Detects `PING` frame flooding using the same rolling-window strategy as
+/// `SettingsFloodDetector`.
+///
+/// Every `PING` obliges an ACK reply, so a flood forces the peer to
+/// both read and write at attacker-controlled rates.
+#[derive(Debug)]
+pub struct PingFloodDetector {
+    max_per_window: u32,
+    window: Duration,
+    window_start: Option<Instant>,
+    count_in_window: u32,
+}
+
+impl PingFloodDetector {
+    /// Create a detector with explicit thresholds.
+    #[must_use]
+    pub const fn new(max_per_window: u32, window: Duration) -> Self {
+        Self {
+            max_per_window,
+            window,
+            window_start: None,
+            count_in_window: 0,
+        }
+    }
+
+    /// Create a detector with the project-default thresholds (50 / 10s).
+    #[must_use]
+    pub const fn with_defaults() -> Self {
+        Self::new(DEFAULT_PING_MAX_PER_WINDOW, DEFAULT_CONTROL_FRAME_WINDOW)
+    }
+
+    /// Record a `PING` frame observation at `now`.
+    ///
+    /// # Errors
+    ///
+    /// Returns `H2Error::PingFlood` when the rolling-window count
+    /// exceeds `max_per_window`.
+    pub fn on_ping(&mut self, now: Instant) -> Result<(), H2Error> {
+        let rotate = match self.window_start {
+            None => true,
+            Some(start) => now.saturating_duration_since(start) >= self.window,
+        };
+        if rotate {
+            self.window_start = Some(now);
+            self.count_in_window = 1;
+        } else {
+            self.count_in_window = self.count_in_window.saturating_add(1);
+        }
+        if self.count_in_window > self.max_per_window {
+            Err(H2Error::PingFlood {
+                count: self.count_in_window,
+            })
+        } else {
+            Ok(())
+        }
+    }
+
+    /// Reset the detector state.
+    pub fn reset(&mut self) {
+        self.window_start = None;
+        self.count_in_window = 0;
+    }
+}
+
+/// Detects streams that cannot make progress because the peer never grants
+/// additional receive-window credit.
+///
+/// Each stream has a `last_progress` timestamp. Every `WINDOW_UPDATE`
+/// observation refreshes the entry's presence, but only a *non-zero*
+/// `increment` is treated as real progress and advances the timestamp.
+/// `check_stalled` returns true once the timestamp is older than
+/// `stall_timeout`.
+#[derive(Debug)]
+pub struct ZeroWindowStallDetector {
+    stall_timeout: Duration,
+    last_progress: HashMap<u32, Instant>,
+}
+
+impl ZeroWindowStallDetector {
+    /// Create a detector with an explicit stall timeout.
+    #[must_use]
+    pub fn new(stall_timeout: Duration) -> Self {
+        Self {
+            stall_timeout,
+            last_progress: HashMap::new(),
+        }
+    }
+
+    /// Create a detector with the project-default stall timeout (30s).
+    #[must_use]
+    pub fn with_defaults() -> Self {
+        Self::new(DEFAULT_ZERO_WINDOW_STALL_TIMEOUT)
+    }
+
+    /// Record a `WINDOW_UPDATE` observation for a stream.
+    ///
+    /// The stream entry is created on first contact. A non-zero `increment`
+    /// is treated as progress and advances the stored timestamp so the
+    /// stall watchdog starts over.
+    pub fn on_window_update(&mut self, stream_id: u32, increment: u32, now: Instant) {
+        let entry = self.last_progress.entry(stream_id).or_insert(now);
+        if increment > 0 {
+            *entry = now;
+        }
+    }
+
+    /// Check whether the given stream has been stalled for longer than
+    /// `stall_timeout`.
+    #[must_use]
+    pub fn check_stalled(&self, stream_id: u32, now: Instant) -> bool {
+        self.last_progress
+            .get(&stream_id)
+            .is_some_and(|last| now.saturating_duration_since(*last) > self.stall_timeout)
+    }
+
+    /// Forget a stream. Intended for teardown after close.
+    pub fn remove_stream(&mut self, stream_id: u32) {
+        self.last_progress.remove(&stream_id);
+    }
+
+    /// Forget every stream.
+    pub fn reset(&mut self) {
+        self.last_progress.clear();
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -366,5 +584,92 @@ mod tests {
     fn hpack_bomb_size_exceeded() {
         let det = HpackBombDetector::new(100, 65536);
         assert!(det.check(10_000, 100_000).is_err());
+    }
+
+    #[test]
+    fn settings_under_limit_allowed() {
+        let mut det = SettingsFloodDetector::new(5, Duration::from_secs(10));
+        let t0 = Instant::now();
+        for i in 0..5 {
+            assert!(det.on_settings(t0 + Duration::from_millis(i * 100)).is_ok());
+        }
+    }
+
+    #[test]
+    fn settings_burst_rejected() {
+        let mut det = SettingsFloodDetector::new(5, Duration::from_secs(10));
+        let t0 = Instant::now();
+        for i in 0..5 {
+            assert!(det.on_settings(t0 + Duration::from_millis(i * 100)).is_ok());
+        }
+        let err = det
+            .on_settings(t0 + Duration::from_millis(600))
+            .unwrap_err();
+        assert!(matches!(err, H2Error::SettingsFlood { count: 6 }));
+    }
+
+    #[test]
+    fn settings_resets_after_window() {
+        let mut det = SettingsFloodDetector::new(5, Duration::from_secs(10));
+        let t0 = Instant::now();
+        for i in 0..5 {
+            assert!(det.on_settings(t0 + Duration::from_millis(i * 100)).is_ok());
+        }
+        // Jump past the window — the counter rotates and the next frame is ok.
+        assert!(det.on_settings(t0 + Duration::from_secs(11)).is_ok());
+        // And we can fit another full batch of `max_per_window` frames.
+        for i in 1..5 {
+            assert!(
+                det.on_settings(t0 + Duration::from_secs(11) + Duration::from_millis(i * 100))
+                    .is_ok()
+            );
+        }
+    }
+
+    #[test]
+    fn ping_under_limit_allowed() {
+        let mut det = PingFloodDetector::new(3, Duration::from_secs(10));
+        let t0 = Instant::now();
+        for i in 0..3 {
+            assert!(det.on_ping(t0 + Duration::from_millis(i * 50)).is_ok());
+        }
+    }
+
+    #[test]
+    fn ping_burst_rejected() {
+        let mut det = PingFloodDetector::new(3, Duration::from_secs(10));
+        let t0 = Instant::now();
+        for i in 0..3 {
+            assert!(det.on_ping(t0 + Duration::from_millis(i * 50)).is_ok());
+        }
+        let err = det.on_ping(t0 + Duration::from_millis(200)).unwrap_err();
+        assert!(matches!(err, H2Error::PingFlood { count: 4 }));
+    }
+
+    #[test]
+    fn zero_window_stall_fires_after_timeout() {
+        let mut det = ZeroWindowStallDetector::new(Duration::from_secs(5));
+        let t0 = Instant::now();
+        // First observation with a zero increment seeds the entry but does
+        // not advance the progress timestamp.
+        det.on_window_update(1, 0, t0);
+        assert!(!det.check_stalled(1, t0 + Duration::from_secs(4)));
+        assert!(det.check_stalled(1, t0 + Duration::from_secs(6)));
+    }
+
+    #[test]
+    fn zero_window_stall_reset_on_progress() {
+        let mut det = ZeroWindowStallDetector::new(Duration::from_secs(5));
+        let t0 = Instant::now();
+        det.on_window_update(7, 0, t0);
+        // A positive increment at t0+4s advances last_progress, so at t0+6s
+        // (which is only 2s after progress) the stream is not stalled.
+        det.on_window_update(7, 1024, t0 + Duration::from_secs(4));
+        assert!(!det.check_stalled(7, t0 + Duration::from_secs(6)));
+        // But far enough past the refreshed timestamp it does stall.
+        assert!(det.check_stalled(7, t0 + Duration::from_secs(12)));
+        // remove_stream clears the entry.
+        det.remove_stream(7);
+        assert!(!det.check_stalled(7, t0 + Duration::from_secs(99)));
     }
 }

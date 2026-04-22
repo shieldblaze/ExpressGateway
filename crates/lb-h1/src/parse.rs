@@ -4,6 +4,13 @@ use http::{Method, StatusCode, Uri, Version};
 
 use crate::H1Error;
 
+/// Default maximum header-section size for HTTP/1.x parsing.
+///
+/// Covers the request/response line, every header line, and the
+/// terminating blank line. Chosen to match common production settings
+/// (nginx `large_client_header_buffers`, Apache `LimitRequestFieldSize`).
+pub const MAX_HEADER_BYTES: usize = 65_536;
+
 /// Find the position of `\r\n` in `buf`, returning the index of `\r`.
 fn find_crlf(buf: &[u8]) -> Option<usize> {
     let len = buf.len();
@@ -74,7 +81,8 @@ pub fn parse_status_line(buf: &[u8]) -> Result<(Version, StatusCode, usize), H1E
     Ok((version, status, crlf_pos + 2))
 }
 
-/// Parse headers from `buf` until the blank line (`\r\n\r\n`).
+/// Parse headers from `buf` until the blank line (`\r\n\r\n`), with the
+/// default header-section size cap (`MAX_HEADER_BYTES`).
 ///
 /// Returns the list of `(name, value)` pairs and total bytes consumed
 /// (including the trailing `\r\n\r\n`).
@@ -83,8 +91,50 @@ pub fn parse_status_line(buf: &[u8]) -> Result<(Version, StatusCode, usize), H1E
 ///
 /// Returns `H1Error::Incomplete` if the terminating blank line is not found.
 /// Returns `H1Error::InvalidHeader` if any header line is malformed.
+/// Returns `H1Error::HeadersTooLarge` if the header section is longer than
+/// `MAX_HEADER_BYTES` bytes (see `parse_headers_with_limit`).
 pub fn parse_headers(buf: &[u8]) -> Result<(Vec<(String, String)>, usize), H1Error> {
-    let end = find_double_crlf(buf).ok_or(H1Error::Incomplete)?;
+    parse_headers_with_limit(buf, MAX_HEADER_BYTES)
+}
+
+/// Parse headers from `buf` until the blank line (`\r\n\r\n`), enforcing
+/// the supplied `max_header_bytes` cap on the header-section length.
+///
+/// The cap is checked *before* any parsing work: if the buffer already
+/// contains more than `max_header_bytes` bytes with no terminator in
+/// sight, the function returns `HeadersTooLarge` rather than waiting for
+/// more data that would only grow the section further. When the
+/// terminator is found, the total consumed-byte count (up to and
+/// including the trailing `\r\n\r\n`) is re-checked against the limit.
+///
+/// # Errors
+///
+/// * `H1Error::Incomplete` — terminator not yet observed *and* the
+///   already-buffered bytes are still within the cap.
+/// * `H1Error::HeadersTooLarge` — header section exceeds `max_header_bytes`.
+/// * `H1Error::InvalidHeader` — a header line is malformed.
+pub fn parse_headers_with_limit(
+    buf: &[u8],
+    max_header_bytes: usize,
+) -> Result<(Vec<(String, String)>, usize), H1Error> {
+    let Some(end) = find_double_crlf(buf) else {
+        if buf.len() > max_header_bytes {
+            return Err(H1Error::HeadersTooLarge {
+                limit: max_header_bytes,
+                observed: buf.len(),
+            });
+        }
+        return Err(H1Error::Incomplete);
+    };
+
+    let total_consumed = end + 4;
+    if total_consumed > max_header_bytes {
+        return Err(H1Error::HeadersTooLarge {
+            limit: max_header_bytes,
+            observed: total_consumed,
+        });
+    }
+
     // Include the trailing \r\n so the last header line has its CRLF terminator.
     let header_block = buf.get(..end + 2).ok_or(H1Error::Incomplete)?;
 
@@ -119,17 +169,32 @@ pub fn parse_headers(buf: &[u8]) -> Result<(Vec<(String, String)>, usize), H1Err
         pos += line_end + 2;
     }
 
-    Ok((headers, end + 4))
+    Ok((headers, total_consumed))
 }
 
 /// Parse trailer headers. Same format as regular headers, after the final chunk.
+///
+/// Uses the default `MAX_HEADER_BYTES` cap.
 ///
 /// # Errors
 ///
 /// Returns `H1Error::Incomplete` if the terminating blank line is not found.
 /// Returns `H1Error::InvalidHeader` if any trailer line is malformed.
+/// Returns `H1Error::HeadersTooLarge` if the trailer section exceeds the cap.
 pub fn parse_trailers(buf: &[u8]) -> Result<(Vec<(String, String)>, usize), H1Error> {
-    parse_headers(buf)
+    parse_headers_with_limit(buf, MAX_HEADER_BYTES)
+}
+
+/// Parse trailer headers with an explicit byte cap.
+///
+/// # Errors
+///
+/// See `parse_headers_with_limit`.
+pub fn parse_trailers_with_limit(
+    buf: &[u8],
+    max_header_bytes: usize,
+) -> Result<(Vec<(String, String)>, usize), H1Error> {
+    parse_headers_with_limit(buf, max_header_bytes)
 }
 
 /// Parse an HTTP version string like `HTTP/1.1` or `HTTP/1.0`.
@@ -203,5 +268,68 @@ mod tests {
     fn headers_incomplete() {
         let buf = b"Content-Type: text/html\r\n";
         assert!(matches!(parse_headers(buf), Err(H1Error::Incomplete)));
+    }
+
+    #[test]
+    fn header_exactly_at_limit_accepted() {
+        // Build a header section whose final `\r\n\r\n` byte lands on
+        // exactly the configured limit. Single header line
+        // "X: <pad>\r\n" + final "\r\n" → 3 + pad + 2 + 2 bytes.
+        let prefix = b"X: ";
+        let limit = 64usize;
+        let pad = limit - prefix.len() - 2 - 2;
+        let mut buf = Vec::new();
+        buf.extend_from_slice(prefix);
+        buf.extend(std::iter::repeat_n(b'a', pad));
+        buf.extend_from_slice(b"\r\n\r\n");
+        assert_eq!(buf.len(), limit);
+
+        let (headers, consumed) = parse_headers_with_limit(&buf, limit).unwrap();
+        assert_eq!(headers.len(), 1);
+        assert_eq!(headers[0].0, "X");
+        assert_eq!(headers[0].1, "a".repeat(pad));
+        assert_eq!(consumed, limit);
+    }
+
+    #[test]
+    fn header_over_limit_rejected() {
+        // Header section is 70 bytes, limit is 64 — HeadersTooLarge.
+        let mut buf = Vec::new();
+        buf.extend_from_slice(b"X: ");
+        buf.extend(std::iter::repeat_n(b'a', 70 - 3 - 4));
+        buf.extend_from_slice(b"\r\n\r\n");
+        assert_eq!(buf.len(), 70);
+
+        let err = parse_headers_with_limit(&buf, 64).unwrap_err();
+        assert!(
+            matches!(
+                err,
+                H1Error::HeadersTooLarge {
+                    limit: 64,
+                    observed: 70
+                }
+            ),
+            "expected HeadersTooLarge {{limit:64, observed:70}}, got {err:?}",
+        );
+    }
+
+    #[test]
+    fn header_unterminated_over_limit_rejected() {
+        // No terminator and the buffer already exceeds the cap — fail fast
+        // rather than wait for more data.
+        let buf = vec![b'a'; 129];
+        let err = parse_headers_with_limit(&buf, 128).unwrap_err();
+        assert!(matches!(err, H1Error::HeadersTooLarge { .. }));
+    }
+
+    #[test]
+    fn default_constant_matches_wrapper() {
+        assert_eq!(MAX_HEADER_BYTES, 65_536);
+        // The zero-arg wrapper uses MAX_HEADER_BYTES. A tiny well-formed
+        // header must still succeed via the wrapper.
+        let buf = b"Host: x\r\n\r\n";
+        let (headers, consumed) = parse_headers(buf).unwrap();
+        assert_eq!(headers.len(), 1);
+        assert_eq!(consumed, buf.len());
     }
 }

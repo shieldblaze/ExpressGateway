@@ -21,4 +21,7 @@ mod parse;
 
 pub use chunked::{ChunkedDecoder, ChunkedEncoder};
 pub use error::H1Error;
-pub use parse::{parse_headers, parse_request_line, parse_status_line, parse_trailers};
+pub use parse::{
+    MAX_HEADER_BYTES, parse_headers, parse_headers_with_limit, parse_request_line,
+    parse_status_line, parse_trailers, parse_trailers_with_limit,
+};

@@ -53,4 +53,26 @@ pub enum H2Error {
         /// Configured maximum frame size.
         limit: usize,
     },
+
+    /// A `SETTINGS` frame flood was detected.
+    #[error("settings flood: {count} SETTINGS frames in window")]
+    SettingsFlood {
+        /// Number of `SETTINGS` frames observed in the detection window.
+        count: u32,
+    },
+
+    /// A `PING` frame flood was detected.
+    #[error("ping flood: {count} PING frames in window")]
+    PingFlood {
+        /// Number of `PING` frames observed in the detection window.
+        count: u32,
+    },
+
+    /// A stream failed to advance under a zero receive-window for longer
+    /// than the configured stall timeout.
+    #[error("zero-window stall on stream {stream_id}")]
+    ZeroWindowStall {
+        /// Identifier of the stalled stream.
+        stream_id: u32,
+    },
 }
