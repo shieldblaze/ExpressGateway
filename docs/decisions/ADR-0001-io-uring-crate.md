@@ -1,6 +1,6 @@
 # ADR-0001: Async I/O runtime — tokio (epoll) over tokio-uring and glommio
 
-- Status: Accepted
+- Status: Accepted (realized 2026-04-22)
 - Date: 2026-04-22
 - Deciders: ExpressGateway team
 - Consulted: Pingora architecture notes, tokio documentation, tokio-uring README, glommio README, "Missing Manuals — io_uring worker pool"
@@ -114,10 +114,30 @@ to add an io_uring backend later without touching call sites.
 ## Implementation notes
 
 - `crates/lb-io/src/lib.rs` — `IoBackend` enum and `detect_backend()`.
+  As of Pillar 1, `detect_backend()` performs a live NOP roundtrip against
+  the kernel: it constructs an `io_uring::IoUring` with 8 entries, submits
+  a single `opcode::Nop` SQE tagged with `0xDEADBEEF`, reaps the matching
+  CQE, and tears the ring down. Any failure (kernel too old,
+  `kernel.io_uring_disabled=1`, seccomp, permission denied, etc.) is logged
+  at `tracing::debug` and the call falls back to `IoBackend::Epoll`. Full
+  ACCEPT / RECV / SEND / SPLICE operations and tokio integration are
+  scoped for Pillar 1b (follow-up); the seam in `lb-io` is now live-probed
+  rather than simulated.
+- `crates/lb-io/src/ring.rs` — Linux-only NOP probe (`nop_roundtrip()`),
+  exposed behind `#[cfg(target_os = "linux")]`.
+- `crates/lb-io/src/sockopts.rs` — `ListenerSockOpts`, `BackendSockOpts`,
+  `UdpSockOpts` and matching `apply_*` helpers covering the options listed
+  in PROMPT.md §7 (`SO_REUSEADDR`, `SO_REUSEPORT`, `SO_RCVBUF`, `SO_SNDBUF`,
+  `TCP_NODELAY`, `TCP_QUICKACK`, `SO_KEEPALIVE`, `TCP_FASTOPEN`,
+  `TCP_FASTOPEN_CONNECT`, `UDP_GRO`, listen backlog). The Linux-only knobs
+  use raw `libc::setsockopt` with per-call `SAFETY:` comments; the
+  portable subset uses `socket2`'s `SockRef` builder.
 - `crates/lb/src/main.rs:53–59` — multi-thread runtime construction
   without `#[tokio::main]` (the macro expands to an internal `.unwrap()`,
   which would violate check 3 of `scripts/halting-gate.sh`).
-- Root `Cargo.toml` workspace dep: `tokio = { version = "1", features = ["full"] }`.
+- Root `Cargo.toml` workspace dep: `tokio = { version = "1", features = ["full"] }`,
+  `io-uring = "0.7"`, `socket2 = { version = "0.5", features = ["all"] }`,
+  `libc = "0.2"`.
 
 ## Follow-ups / open questions
 
