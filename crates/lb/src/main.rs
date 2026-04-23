@@ -41,7 +41,7 @@ use lb_io::pool::{PoolConfig, TcpPool};
 use lb_io::sockopts::{BackendSockOpts, ListenerSockOpts};
 use lb_l7::h1_proxy::{AltSvcConfig as H1AltSvcConfig, H1Proxy, HttpTimeouts, RoundRobinAddrs};
 use lb_l7::h2_proxy::H2Proxy;
-use lb_observability::MetricsRegistry;
+use lb_observability::{MetricsRegistry, admin_http, http_latency_buckets};
 use lb_quic::{QuicListener, QuicListenerParams};
 use lb_security::{TicketRotator, build_server_config};
 
@@ -365,10 +365,20 @@ async fn spawn_tcp(
     for (i, b) in listener_cfg.backends.iter().enumerate() {
         let (host, port) = split_host_port(&b.address)
             .with_context(|| format!("invalid backend address: {}", b.address))?;
+        let pre_cache = resolver.cache_size();
         let lookup = resolver
             .resolve(host, port)
             .await
             .with_context(|| format!("cannot resolve backend: {}", b.address))?;
+        let grew = resolver.cache_size() > pre_cache;
+        let name = if grew {
+            ("dns_cache_misses_total", "DNS resolver cache misses")
+        } else {
+            ("dns_cache_hits_total", "DNS resolver cache hits")
+        };
+        if let Ok(c) = metrics.counter(name.0, name.1) {
+            c.inc();
+        }
         let Some(first) = lookup.first().copied() else {
             anyhow::bail!("resolver returned no addresses for {}", b.address);
         };
@@ -487,6 +497,79 @@ fn build_listener_mode(
     }
 }
 
+// ── hot-path metrics (Task #21) ────────────────────────────────────────
+
+/// Register the 5 hot-path metric handles and spawn the background
+/// sampler that reads them from the shared [`TcpPool`] /
+/// [`DnsResolver`]. We register up-front (rather than lazily at each
+/// call site) so the registry always advertises the metric even before
+/// the first event, and so a single type-mismatch or registration
+/// failure lands at startup rather than on the hot path.
+fn install_hotpath_metrics(metrics: &Arc<MetricsRegistry>, pool: &TcpPool, resolver: &DnsResolver) {
+    // Pool + DNS counters (pre-register so /metrics shows them at 0).
+    if let Err(e) = metrics.counter("pool_acquires_total", "TcpPool acquire attempts") {
+        tracing::warn!(metric = "pool_acquires_total", error = %e, "counter register failed");
+    }
+    if let Err(e) = metrics.counter("pool_probe_failures_total", "TcpPool probe failures") {
+        tracing::warn!(metric = "pool_probe_failures_total", error = %e, "counter register failed");
+    }
+    if let Err(e) = metrics.counter("dns_cache_hits_total", "DNS resolver cache hits") {
+        tracing::warn!(metric = "dns_cache_hits_total", error = %e, "counter register failed");
+    }
+    if let Err(e) = metrics.counter("dns_cache_misses_total", "DNS resolver cache misses") {
+        tracing::warn!(metric = "dns_cache_misses_total", error = %e, "counter register failed");
+    }
+
+    // http_requests_total{version,status_class}. Referenced by the H1
+    // proxy wrapper installed in proxy_connection — pre-register so
+    // scrape shape is stable from t0.
+    if let Err(e) = metrics.counter_vec(
+        "http_requests_total",
+        "HTTP requests terminated by the L7 proxy",
+        &["version", "status_class"],
+    ) {
+        tracing::warn!(metric = "http_requests_total", error = %e, "counter_vec register failed");
+    }
+    if let Err(e) = metrics.histogram_vec(
+        "http_request_duration_seconds",
+        "L7 request duration from accept to response body sent",
+        &["version"],
+        &http_latency_buckets(),
+    ) {
+        tracing::warn!(metric = "http_request_duration_seconds", error = %e, "histogram_vec register failed");
+    }
+    if let Err(e) = metrics.gauge("pool_idle_gauge", "TcpPool idle connection count") {
+        tracing::warn!(metric = "pool_idle_gauge", error = %e, "gauge register failed");
+    }
+
+    // Background sampler: lift the pool's idle count + DNS cache size
+    // into the registry every second. Neither crate publishes change
+    // events today, so a periodic pull is the least invasive wiring.
+    let pool_clone = pool.clone();
+    let resolver_clone = resolver.clone();
+    let metrics_clone = Arc::clone(metrics);
+    tokio::spawn(async move {
+        let idle_gauge =
+            match metrics_clone.gauge("pool_idle_gauge", "TcpPool idle connection count") {
+                Ok(g) => g,
+                Err(_) => return,
+            };
+        let dns_entries_gauge =
+            match metrics_clone.gauge("dns_cache_entries", "DNS resolver cache size") {
+                Ok(g) => g,
+                Err(_) => return,
+            };
+        let mut ticker = tokio::time::interval(Duration::from_secs(1));
+        loop {
+            ticker.tick().await;
+            #[allow(clippy::cast_possible_wrap)]
+            idle_gauge.set(pool_clone.idle_count() as i64);
+            #[allow(clippy::cast_possible_wrap)]
+            dns_entries_gauge.set(resolver_clone.cache_size() as i64);
+        }
+    });
+}
+
 // ── main ────────────────────────────────────────────────────────────────
 
 /// Application entry point.
@@ -558,6 +641,28 @@ async fn async_main() -> anyhow::Result<()> {
 
     // ── metrics ─────────────────────────────────────────────────────
     let metrics = Arc::new(MetricsRegistry::new());
+    install_hotpath_metrics(&metrics, &pool, &resolver);
+
+    // ── optional admin HTTP listener (GET /metrics, GET /healthz) ──
+    let admin_cancel = CancellationToken::new();
+    if let Some(obs) = config.observability.as_ref() {
+        if let Some(bind_str) = obs.metrics_bind.as_deref() {
+            let bind_addr: SocketAddr = bind_str
+                .trim()
+                .parse()
+                .with_context(|| format!("invalid observability.metrics_bind: {bind_str}"))?;
+            match admin_http::serve(Arc::clone(&metrics), bind_addr, admin_cancel.clone()).await {
+                Ok(local) => tracing::info!(
+                    address = %local,
+                    protocol = "admin-http",
+                    "admin listener started (/metrics, /healthz)"
+                ),
+                Err(e) => {
+                    tracing::error!(bind = %bind_addr, error = %e, "admin listener bind failed");
+                }
+            }
+        }
+    }
 
     // ── spawn listeners ─────────────────────────────────────────────
     let mut listener_handles = Vec::new();
@@ -591,6 +696,8 @@ async fn async_main() -> anyhow::Result<()> {
     for h in &listener_handles {
         h.abort();
     }
+    // Stop admin HTTP listener (if any).
+    admin_cancel.cancel();
 
     // Cancel QUIC listeners — each holds a CancellationToken and returns
     // a JoinHandle on shutdown().
@@ -679,6 +786,8 @@ async fn run_listener(bind_addr: String, state: Arc<ListenerState>) -> anyhow::R
             st.active_connections.fetch_add(1, Ordering::Relaxed);
             st.metrics.increment("connections_total", 1);
 
+            let http_start = Instant::now();
+            let mut http_version: Option<&'static str> = None;
             let result = match &st.mode {
                 ListenerMode::PlainTcp => {
                     proxy_connection(client_stream, backend_addr, &st.metrics, &st.pool).await
@@ -689,10 +798,13 @@ async fn run_listener(bind_addr: String, state: Arc<ListenerState>) -> anyhow::R
                     }
                     Err(e) => Err(e.into()),
                 },
-                ListenerMode::H1 { proxy } => Arc::clone(proxy)
-                    .serve_connection(client_stream, client_addr)
-                    .await
-                    .map_err(anyhow::Error::from),
+                ListenerMode::H1 { proxy } => {
+                    http_version = Some("h1");
+                    Arc::clone(proxy)
+                        .serve_connection(client_stream, client_addr)
+                        .await
+                        .map_err(anyhow::Error::from)
+                }
                 ListenerMode::H1s {
                     h1_proxy,
                     h2_proxy,
@@ -707,11 +819,13 @@ async fn run_listener(bind_addr: String, state: Arc<ListenerState>) -> anyhow::R
                         // `(io, conn)` tuple of `TlsStream`.
                         let alpn = tls_stream.get_ref().1.alpn_protocol().map(<[u8]>::to_vec);
                         if alpn.as_deref() == Some(b"h2".as_ref()) {
+                            http_version = Some("h2");
                             Arc::clone(h2_proxy)
                                 .serve_connection(tls_stream, client_addr)
                                 .await
                                 .map_err(anyhow::Error::from)
                         } else {
+                            http_version = Some("h1");
                             Arc::clone(h1_proxy)
                                 .serve_connection(tls_stream, client_addr)
                                 .await
@@ -721,6 +835,30 @@ async fn run_listener(bind_addr: String, state: Arc<ListenerState>) -> anyhow::R
                     Err(e) => Err(e.into()),
                 },
             };
+
+            // Metric: http_requests_total{version, status_class} +
+            // http_request_duration_seconds{version}. Connection-level
+            // today — per-request instrumentation requires a hook
+            // inside lb-l7 and is tracked as follow-up.
+            if let Some(version) = http_version {
+                let status_class = if result.is_ok() { "2xx" } else { "5xx" };
+                if let Ok(v) = st.metrics.counter_vec(
+                    "http_requests_total",
+                    "HTTP requests terminated by the L7 proxy",
+                    &["version", "status_class"],
+                ) {
+                    v.with_label_values(&[version, status_class]).inc();
+                }
+                if let Ok(h) = st.metrics.histogram_vec(
+                    "http_request_duration_seconds",
+                    "L7 request duration from accept to response body sent",
+                    &["version"],
+                    &http_latency_buckets(),
+                ) {
+                    h.with_label_values(&[version])
+                        .observe(http_start.elapsed().as_secs_f64());
+                }
+            }
 
             if let Err(e) = result {
                 tracing::debug!(
@@ -752,11 +890,22 @@ where
     // spawn_blocking so we don't stall the tokio worker on the cold
     // path — pool.acquire is cheap on the hot path so the always-spawn
     // overhead is acceptable today and matches the prior baseline.
+    if let Ok(c) = metrics.counter("pool_acquires_total", "TcpPool acquire attempts") {
+        c.inc();
+    }
     let pool_for_dial = pool.clone();
-    let mut pooled = tokio::task::spawn_blocking(move || pool_for_dial.acquire(backend_addr))
+    let mut pooled = match tokio::task::spawn_blocking(move || pool_for_dial.acquire(backend_addr))
         .await
         .with_context(|| format!("backend acquire task joined {backend_addr}"))?
-        .with_context(|| format!("cannot connect to backend {backend_addr}"))?;
+    {
+        Ok(p) => p,
+        Err(e) => {
+            if let Ok(c) = metrics.counter("pool_probe_failures_total", "TcpPool probe failures") {
+                c.inc();
+            }
+            return Err(e).with_context(|| format!("cannot connect to backend {backend_addr}"));
+        }
+    };
 
     let copy_result = {
         let backend = pooled

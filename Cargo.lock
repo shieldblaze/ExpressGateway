@@ -1569,8 +1569,16 @@ dependencies = [
 name = "lb-observability"
 version = "0.1.0"
 dependencies = [
+ "bytes",
  "dashmap 6.1.0",
+ "http 1.4.0",
+ "http-body-util",
+ "hyper",
+ "hyper-util",
+ "prometheus",
  "thiserror 2.0.18",
+ "tokio",
+ "tokio-util",
  "tracing",
 ]
 

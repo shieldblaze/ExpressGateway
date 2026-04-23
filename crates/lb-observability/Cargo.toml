@@ -10,3 +10,17 @@ publish = false
 thiserror = { workspace = true }
 tracing = { workspace = true }
 dashmap = { workspace = true }
+# Pillar 3b (Task #21): prometheus-backed metrics registry + text
+# exposition. `default-features = false` drops the protobuf family.
+prometheus = { workspace = true }
+# Admin HTTP listener (GET /metrics, GET /healthz).
+tokio = { workspace = true }
+tokio-util = { workspace = true }
+hyper = { workspace = true }
+hyper-util = { workspace = true }
+http-body-util = { workspace = true }
+http = { workspace = true }
+bytes = { workspace = true }
+
+[dev-dependencies]
+tokio = { workspace = true, features = ["full", "test-util"] }

@@ -38,6 +38,25 @@ pub struct LbConfig {
     /// Global runtime knobs (optional). When absent all defaults apply.
     #[serde(default)]
     pub runtime: Option<RuntimeConfig>,
+    /// Observability/admin listener settings. When absent, no admin
+    /// HTTP listener is bound and the registry is in-process only.
+    #[serde(default)]
+    pub observability: Option<ObservabilityConfig>,
+}
+
+/// Observability configuration (Task #21, Pillar 3b).
+///
+/// Currently covers the optional admin HTTP listener that exposes
+/// `GET /metrics` (Prometheus text exposition) and `GET /healthz`.
+/// Loopback-only is the expected deployment posture; there is no
+/// built-in mTLS today.
+#[derive(Debug, Clone, Default, serde::Serialize, serde::Deserialize)]
+pub struct ObservabilityConfig {
+    /// Bind address for the admin HTTP listener. When `None` the
+    /// listener is not started. Recommended value for single-host
+    /// deployments: `"127.0.0.1:9090"`.
+    #[serde(default)]
+    pub metrics_bind: Option<String>,
 }
 
 /// Process-wide runtime configuration (Pillar 4b-1).
@@ -280,6 +299,26 @@ pub fn validate_config(config: &LbConfig) -> Result<(), ConfigError> {
     if let Some(rt) = config.runtime.as_ref() {
         validate_runtime(rt)?;
     }
+    if let Some(obs) = config.observability.as_ref() {
+        validate_observability(obs)?;
+    }
+    Ok(())
+}
+
+fn validate_observability(obs: &ObservabilityConfig) -> Result<(), ConfigError> {
+    if let Some(bind) = obs.metrics_bind.as_deref() {
+        let trimmed = bind.trim();
+        if trimmed.is_empty() {
+            return Err(ConfigError::Validation(
+                "observability.metrics_bind is empty — omit the key to disable".into(),
+            ));
+        }
+        trimmed.parse::<std::net::SocketAddr>().map_err(|e| {
+            ConfigError::Validation(format!(
+                "observability.metrics_bind {trimmed:?} is not a valid SocketAddr: {e}"
+            ))
+        })?;
+    }
     Ok(())
 }
 
@@ -498,6 +537,7 @@ protocol = "tcp"
         let config = LbConfig {
             listeners: vec![],
             runtime: None,
+            observability: None,
         };
         assert!(validate_config(&config).is_err());
     }
@@ -515,6 +555,7 @@ protocol = "tcp"
                 backends: vec![],
             }],
             runtime: None,
+            observability: None,
         };
         assert!(validate_config(&config).is_err());
     }
@@ -532,6 +573,7 @@ protocol = "tcp"
                 backends: vec![],
             }],
             runtime: None,
+            observability: None,
         };
         assert!(validate_config(&config).is_ok());
     }
@@ -553,6 +595,7 @@ protocol = "tcp"
                 }],
             }],
             runtime: None,
+            observability: None,
         };
         assert!(validate_config(&config).is_err());
     }
@@ -611,6 +654,7 @@ address = "127.0.0.1:3000"
                 backends: vec![],
             }],
             runtime: None,
+            observability: None,
         };
         assert!(validate_config(&config).is_err());
     }
@@ -628,6 +672,7 @@ address = "127.0.0.1:3000"
                 backends: vec![],
             }],
             runtime: None,
+            observability: None,
         };
         assert!(validate_config(&config).is_err());
     }
@@ -650,6 +695,7 @@ address = "127.0.0.1:3000"
                 backends: vec![],
             }],
             runtime: None,
+            observability: None,
         };
         assert!(validate_config(&config).is_err());
     }
@@ -672,6 +718,7 @@ address = "127.0.0.1:3000"
                 backends: vec![],
             }],
             runtime: None,
+            observability: None,
         };
         assert!(validate_config(&config).is_err());
     }
@@ -714,6 +761,7 @@ protocol = "h1"
                 backends: vec![],
             }],
             runtime: None,
+            observability: None,
         };
         assert!(validate_config(&config).is_err());
     }
@@ -737,6 +785,7 @@ protocol = "h1"
                 backends: vec![],
             }],
             runtime: None,
+            observability: None,
         };
         assert!(validate_config(&config).is_err());
     }
@@ -758,6 +807,7 @@ protocol = "h1"
                 }],
             }],
             runtime: None,
+            observability: None,
         };
         assert!(validate_config(&config).is_err());
     }
@@ -807,6 +857,7 @@ address = "127.0.0.1:3000"
                 }],
             }],
             runtime: None,
+            observability: None,
         };
         let err = validate_config(&config).unwrap_err();
         assert!(matches!(err, ConfigError::Validation(_)));
@@ -832,6 +883,7 @@ address = "127.0.0.1:3000"
                 backends: vec![],
             }],
             runtime: None,
+            observability: None,
         };
         assert!(validate_config(&config).is_err());
     }
@@ -861,6 +913,7 @@ address = "127.0.0.1:3000"
                 }],
             }],
             runtime: None,
+            observability: None,
         };
         validate_config(&config).unwrap();
     }
@@ -886,6 +939,7 @@ address = "127.0.0.1:3000"
                 }],
             }],
             runtime: None,
+            observability: None,
         };
         assert!(validate_config(&config).is_err());
     }
@@ -927,6 +981,7 @@ xdp_interface = "eth0"
                 xdp_enabled: true,
                 xdp_interface: None,
             }),
+            observability: None,
         };
         let err = validate_config(&config).unwrap_err();
         assert!(matches!(err, ConfigError::Validation(_)));
@@ -948,6 +1003,7 @@ xdp_interface = "eth0"
                 xdp_enabled: false,
                 xdp_interface: None,
             }),
+            observability: None,
         };
         validate_config(&config).unwrap();
     }
@@ -961,5 +1017,46 @@ protocol = "tcp"
 "#;
         let config = parse_config(input).unwrap();
         assert!(config.runtime.is_none());
+        assert!(config.observability.is_none());
+    }
+
+    #[test]
+    fn parse_observability_metrics_bind() {
+        let input = r#"
+[[listeners]]
+address = "0.0.0.0:80"
+protocol = "tcp"
+
+[[listeners.backends]]
+address = "127.0.0.1:3000"
+
+[observability]
+metrics_bind = "127.0.0.1:9090"
+"#;
+        let config = parse_config(input).unwrap();
+        let obs = config.observability.as_ref().unwrap();
+        assert_eq!(obs.metrics_bind.as_deref(), Some("127.0.0.1:9090"));
+        validate_config(&config).unwrap();
+    }
+
+    #[test]
+    fn validate_observability_bad_bind_rejected() {
+        let config = LbConfig {
+            listeners: vec![ListenerConfig {
+                address: "0.0.0.0:80".into(),
+                protocol: "tcp".into(),
+                tls: None,
+                quic: None,
+                alt_svc: None,
+                http: None,
+                backends: vec![],
+            }],
+            runtime: None,
+            observability: Some(ObservabilityConfig {
+                metrics_bind: Some("not-an-address".into()),
+            }),
+        };
+        let err = validate_config(&config).unwrap_err();
+        assert!(matches!(err, ConfigError::Validation(_)));
     }
 }
