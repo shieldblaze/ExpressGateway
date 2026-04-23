@@ -57,8 +57,12 @@ parking_lot = "0.12"
 dashmap = "6"
 # HTTP
 http = "1"
-# QUIC + TLS (Pillar 3a: lb-quic uses real quinn endpoint on loopback)
-quinn = { version = "0.11", default-features = false, features = ["runtime-tokio", "rustls-ring", "log"] }
+# QUIC + TLS
+# Pillar 3b.1: lb-quic runs on quiche (BoringSSL) + tokio-quiche; see
+# docs/decisions/quinn-to-quiche-migration.md. rustls stays for the
+# TLS-over-TCP listener path + the Step 5b TicketRotator.
+quiche = "0.28"
+tokio-quiche = "0.18"
 rustls = { version = "0.23", default-features = false, features = ["ring", "std", "tls12", "logging"] }
 rustls-pki-types = "1"
 # Utilities
@@ -89,9 +93,7 @@ anyhow = { workspace = true }
 bytes = { workspace = true }
 http = { workspace = true }
 rand = { workspace = true }
-rustls = { workspace = true }
-rustls-pki-types = { workspace = true }
-rcgen = "0.13"
+rcgen = { version = "0.13", features = ["pem"] }
 
 [profile.release]
 opt-level = 3

@@ -1,45 +1,87 @@
 //! Native QUIC forwarding tests.
 //!
-//! Pillar 3a replaces the former userspace simulation with a real quinn 0.11
-//! endpoint bound to 127.0.0.1. Each test spins up a server and a client
-//! endpoint, completes a real UDP + TLS 1.3 handshake against a self-signed
-//! certificate generated in-process by rcgen, and asserts that the bytes
-//! the client sent are the bytes the server received.
+//! Pillar 3b.1 runs on quiche 0.28 + BoringSSL. Each test writes a
+//! self-signed rcgen cert+key to a temp dir, spins up a server and a
+//! client [`QuicEndpoint`] on `127.0.0.1:0`, completes a real UDP + TLS
+//! 1.3 handshake, and asserts roundtrip preservation.
 //!
 //! The two test function names are manifest-locked
 //! (`manifest/required-tests.txt`) and must not be renamed.
 
-use std::sync::Arc;
+use std::fs;
+use std::path::PathBuf;
+use std::sync::atomic::{AtomicU64, Ordering};
 
 use lb_quic::{QuicDatagram, QuicEndpoint, QuicStream, roundtrip_datagram, roundtrip_stream};
-use rustls::RootCertStore;
-use rustls_pki_types::CertificateDer;
 
-fn generate_loopback_cert() -> (Vec<u8>, Vec<u8>, CertificateDer<'static>) {
-    let generated = rcgen::generate_simple_self_signed(vec!["127.0.0.1".to_string()]).unwrap();
-    let cert_der: Vec<u8> = generated.cert.der().to_vec();
-    let key_der: Vec<u8> = generated.key_pair.serialize_der();
-    let trust_anchor = CertificateDer::from(cert_der.clone());
-    (cert_der, key_der, trust_anchor)
+static CERT_DIR_COUNTER: AtomicU64 = AtomicU64::new(0);
+
+struct TestCerts {
+    _dir: PathBuf,
+    cert: PathBuf,
+    key: PathBuf,
+    ca: PathBuf,
 }
 
-fn build_client_roots(trust_anchor: CertificateDer<'static>) -> Arc<RootCertStore> {
-    let mut roots = RootCertStore::empty();
-    roots.add(trust_anchor).unwrap();
-    Arc::new(roots)
+impl Drop for TestCerts {
+    fn drop(&mut self) {
+        let _ = fs::remove_dir_all(&self._dir);
+    }
+}
+
+fn generate_loopback_certs() -> TestCerts {
+    let nanos = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_nanos())
+        .unwrap_or(0);
+    let counter = CERT_DIR_COUNTER.fetch_add(1, Ordering::Relaxed);
+    let dir = std::env::temp_dir().join(format!(
+        "lb-quic-test-{}-{}-{counter}",
+        std::process::id(),
+        nanos
+    ));
+    fs::create_dir_all(&dir).unwrap();
+
+    // BoringSSL's verifier requires the trust anchor to carry
+    // basicConstraints=CA:TRUE. rcgen's `generate_simple_self_signed`
+    // default is a leaf cert (IsCa::NoCa), which BoringSSL rejects as a
+    // root. Build the params explicitly so the same self-signed cert
+    // can serve as both the server leaf and the client's CA anchor.
+    let mut params = rcgen::CertificateParams::new(vec!["127.0.0.1".to_string()]).unwrap();
+    params.is_ca = rcgen::IsCa::Ca(rcgen::BasicConstraints::Unconstrained);
+    let key_pair = rcgen::KeyPair::generate().unwrap();
+    let cert = params.self_signed(&key_pair).unwrap();
+    let cert_pem = cert.pem();
+    let key_pem = key_pair.serialize_pem();
+    let cert_path = dir.join("cert.pem");
+    let key_path = dir.join("key.pem");
+    let ca_path = dir.join("ca.pem");
+    fs::write(&cert_path, cert_pem.as_bytes()).unwrap();
+    fs::write(&key_path, key_pem.as_bytes()).unwrap();
+    // For a self-signed loopback cert the server cert doubles as the CA.
+    fs::write(&ca_path, cert_pem.as_bytes()).unwrap();
+    TestCerts {
+        _dir: dir,
+        cert: cert_path,
+        key: key_path,
+        ca: ca_path,
+    }
 }
 
 #[tokio::test]
 async fn test_quic_datagram_forwarding() {
-    let (cert_der, key_der, trust_anchor) = generate_loopback_cert();
-    let server = QuicEndpoint::server_on_loopback(cert_der, key_der).unwrap();
-    let roots = build_client_roots(trust_anchor);
-    let client = QuicEndpoint::client_on_loopback(roots).unwrap();
+    let certs = generate_loopback_certs();
+    let server = QuicEndpoint::server_on_loopback(certs.cert.clone(), certs.key.clone())
+        .await
+        .unwrap();
+    let client = QuicEndpoint::client_on_loopback(certs.ca.clone())
+        .await
+        .unwrap();
 
-    // Sanity: server is bound to a loopback UDP port, not the simulated
-    // in-process channel the previous implementation used.
+    // Sanity: both endpoints bound to loopback UDP ports.
     assert!(server.local_addr().ip().is_loopback());
     assert_ne!(server.local_addr().port(), 0);
+    assert!(client.local_addr().ip().is_loopback());
 
     let dg = QuicDatagram {
         connection_id: 42,
@@ -52,10 +94,13 @@ async fn test_quic_datagram_forwarding() {
 
 #[tokio::test]
 async fn test_quic_stream_forwarding() {
-    let (cert_der, key_der, trust_anchor) = generate_loopback_cert();
-    let server = QuicEndpoint::server_on_loopback(cert_der, key_der).unwrap();
-    let roots = build_client_roots(trust_anchor);
-    let client = QuicEndpoint::client_on_loopback(roots).unwrap();
+    let certs = generate_loopback_certs();
+    let server = QuicEndpoint::server_on_loopback(certs.cert.clone(), certs.key.clone())
+        .await
+        .unwrap();
+    let client = QuicEndpoint::client_on_loopback(certs.ca.clone())
+        .await
+        .unwrap();
 
     assert!(server.local_addr().ip().is_loopback());
 

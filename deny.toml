@@ -29,6 +29,14 @@ ignore = [
     # internal validity ranges, not untrusted RFC 2822 string parsing. No
     # reachable attack surface; revisit once MSRV bumps in Pillar 3b.
     "RUSTSEC-2026-0009",
+    # yaml-rust 0.4 unmaintained. Transitive via foundations 4.5 (pinned to
+    # keep workspace MSRV at 1.85 — newer foundations pulls darling 0.23
+    # which requires rustc 1.88) -> serde_yaml 0.8 -> yaml-rust. foundations
+    # is Cloudflare-maintained and ships in tokio-quiche; its YAML surface
+    # is only used for their telemetry config parsing, not for any
+    # ExpressGateway-supplied input. Added in Pillar 3b.1; revisit once
+    # Cloudflare upgrades foundations to serde_yaml_ng or MSRV bumps.
+    "RUSTSEC-2024-0320",
 ]
 
 [licenses]

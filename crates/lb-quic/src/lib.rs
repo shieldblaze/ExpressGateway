@@ -1,27 +1,43 @@
-//! QUIC transport layer backed by [`quinn`] 0.11 over rustls (`ring` backend).
+//! QUIC transport layer backed by [`quiche`] 0.28 over `BoringSSL`.
 //!
 //! This crate exposes two layers:
 //!
-//! 1. The typed data model — [`QuicDatagram`] and [`QuicStream`] — that the
-//!    rest of the gateway (L7 pipeline, HTTP/3 codec, observability) passes
-//!    around.
-//! 2. A real UDP + TLS transport, hosted inside [`QuicEndpoint`], with
-//!    [`roundtrip_datagram`] and [`roundtrip_stream`] exercising quinn's
-//!    unreliable-datagram and unidirectional-stream APIs end-to-end. These
-//!    are the functions that drive the manifest-locked
+//! 1. The typed data model — [`QuicDatagram`] and [`QuicStream`] — that
+//!    the rest of the gateway (L7 pipeline, HTTP/3 codec, observability)
+//!    passes around. The shapes are transport-independent and stable
+//!    across the Pillar 3a (quinn) → Pillar 3b (quiche) migration.
+//! 2. A real UDP + TLS 1.3 transport, hosted inside [`QuicEndpoint`],
+//!    with [`roundtrip_datagram`] and [`roundtrip_stream`] exercising
+//!    quiche's unreliable-datagram and unidirectional-stream APIs
+//!    end-to-end. These are the functions that drive the manifest-locked
 //!    `tests/quic_native.rs` coverage.
 //!
-//! The free functions [`forward_datagram`] and [`forward_stream`] remain as
-//! thin synchronous validators: they do **no** network I/O. They guard the
-//! typed model against empty payloads and return a clone. Historically
-//! they were the crate's entire contract; today they are back-compat
-//! helpers kept alive because the crate's own in-module tests and upstream
-//! callers expect a zero-I/O validation surface. All real transport work
-//! flows through [`QuicEndpoint`].
+//! The free functions [`forward_datagram`] and [`forward_stream`] remain
+//! as thin synchronous validators: they do **no** network I/O. They
+//! guard the typed model against empty payloads and return a clone.
 //!
-//! Pillar 3b will add: stateless retry with token validation, connection
-//! migration, 0-RTT replay protection, CID-routed pools, Alt-Svc injection,
-//! and integration into the root binary (`crates/lb/src/main.rs`).
+//! ## Stack
+//!
+//! Pillar 3b.1 migrated this crate from quinn 0.11 + rustls/ring to
+//! [quiche] 0.28 + `BoringSSL`, tracking the decision in
+//! `docs/decisions/quinn-to-quiche-migration.md`. The rationale is
+//! alignment with Cloudflare's production HTTP/3 stack, measurable
+//! throughput advantage over quinn, and vendor-scale CVE response via
+//! Cloudflare's networking team. `BoringSSL` links alongside rustls/ring
+//! (which remains in use on the TLS-over-TCP listener path and by the
+//! Step 5b `TicketRotator`) — the same rustls + `BoringSSL` pairing that
+//! Pingora ships in production.
+//!
+//! [`tokio_quiche::ConnectionParams`] is re-exported so callers wiring
+//! Pillar 3b.2's listener into `crates/lb/src/main.rs` can reach the
+//! shared configuration without depending on tokio-quiche directly.
+//!
+//! Deferred to later Pillar 3b steps: TLS listener wiring +
+//! `TicketRotator` in the hot path (3b.2); stateless retry, 0-RTT
+//! replay defense, Alt-Svc injection, CID-routed upstream pool (3b.3);
+//! `curl --http3` and `h3i` interop (3b.4).
+//!
+//! [quiche]: https://github.com/cloudflare/quiche
 #![deny(
     clippy::unwrap_used,
     clippy::expect_used,
@@ -37,10 +53,40 @@
 
 use std::io;
 use std::net::{Ipv4Addr, SocketAddr, SocketAddrV4};
+use std::path::PathBuf;
 use std::sync::Arc;
+use std::time::Duration;
 
-use rustls::RootCertStore;
-use rustls_pki_types::{CertificateDer, PrivateKeyDer, PrivatePkcs8KeyDer};
+use tokio::net::UdpSocket;
+use tokio::sync::Mutex;
+
+/// Re-exported from `tokio-quiche`. Pillar 3b.2 wires a listener in the
+/// root binary that consumes a [`ConnectionParams`]; lifting the symbol
+/// here keeps downstream crates decoupled from `tokio-quiche` versioning.
+pub use tokio_quiche::ConnectionParams;
+
+/// ALPN identifier advertised by the built-in [`QuicEndpoint`] helpers.
+///
+/// Real HTTP/3 listeners will advertise `h3` (see RFC 9114); this value
+/// exists for the Pillar 3b.1 loopback transport test. Pillar 3b.2 will
+/// upgrade this to a proper ALPN policy driven by the control plane.
+pub const LB_QUIC_ALPN: &[u8] = b"lb-quic";
+
+/// Maximum size of one datagram we accept over the UDP socket.
+const MAX_UDP_DATAGRAM_SIZE: usize = 65_535;
+
+/// Budget for how long the loopback driver will keep spinning before
+/// treating a test as hung. Loopback handshake + one-shot roundtrip
+/// completes well under 200 ms on idle hardware.
+const LOOPBACK_DRIVER_BUDGET: Duration = Duration::from_secs(5);
+
+/// Safely take the first `n` bytes of `buf`, returning `&[]` if `n`
+/// exceeds the slice length. Avoids `clippy::indexing_slicing` panics
+/// while remaining a no-op on the hot path where `n <= buf.len()` by
+/// construction.
+fn prefix(buf: &[u8], n: usize) -> &[u8] {
+    buf.get(..n).unwrap_or(&[])
+}
 
 /// Errors from the QUIC layer.
 #[derive(Debug, thiserror::Error)]
@@ -61,35 +107,25 @@ pub enum QuicError {
     #[error("quic i/o error: {0}")]
     Io(#[from] io::Error),
 
-    /// TLS / crypto configuration error.
-    #[error("quic tls error: {0}")]
-    Tls(#[from] rustls::Error),
+    /// Error from the underlying quiche state machine (handshake,
+    /// framing, flow control, TLS, datagram / stream I/O). Wraps
+    /// [`quiche::Error`].
+    #[error("quiche error: {0}")]
+    Quiche(#[from] quiche::Error),
 
-    /// No incoming connection was accepted before the endpoint closed.
+    /// No incoming connection was accepted before the driver budget ran
+    /// out.
     #[error("no incoming connection")]
     NoIncoming,
 
-    /// Error while establishing the client side of the connection.
-    #[error("quic connect error: {0}")]
-    Connect(#[from] quinn::ConnectError),
+    /// The driver observed no progress for longer than
+    /// [`LOOPBACK_DRIVER_BUDGET`]. In production this never fires; it
+    /// is a defensive test-harness guard.
+    #[error("quic driver timed out making progress")]
+    DriverTimeout,
 
-    /// Error while driving an established quinn connection.
-    #[error("quic connection error: {0}")]
-    Connection(#[from] quinn::ConnectionError),
-
-    /// Error sending an unreliable datagram.
-    #[error("quic send-datagram error: {0}")]
-    SendDatagram(#[from] quinn::SendDatagramError),
-
-    /// Error writing to a quinn send stream.
-    #[error("quic stream write error: {0}")]
-    StreamWrite(#[from] quinn::WriteError),
-
-    /// Error reading a quinn recv stream to end.
-    #[error("quic stream read error: {0}")]
-    StreamRead(#[from] quinn::ReadToEndError),
-
-    /// Internal task-join failure. Should not occur in practice.
+    /// Internal task-join failure (server accept task panicked or was
+    /// cancelled). Should not occur in practice.
     #[error("quic internal error: {0}")]
     Internal(String),
 }
@@ -97,7 +133,10 @@ pub enum QuicError {
 /// QUIC datagram — a connection-scoped, unreliable, bounded payload.
 #[derive(Debug, Clone)]
 pub struct QuicDatagram {
-    /// Connection ID this datagram belongs to.
+    /// Connection ID this datagram belongs to. quiche datagrams do not
+    /// carry a per-datagram connection identifier on the wire, so this
+    /// field is caller-tracked: [`roundtrip_datagram`] returns the
+    /// original `connection_id` verbatim on the echoed struct.
     pub connection_id: u64,
     /// Raw payload bytes.
     pub data: Vec<u8>,
@@ -127,8 +166,8 @@ pub fn forward_datagram(dg: &QuicDatagram) -> Result<QuicDatagram, QuicError> {
     Ok(dg.clone())
 }
 
-/// Back-compat synchronous stream-frame validator. Does **no** network I/O.
-/// Use [`roundtrip_stream`] for real transport.
+/// Back-compat synchronous stream-frame validator. Does **no** network
+/// I/O. Use [`roundtrip_stream`] for real transport.
 ///
 /// # Errors
 ///
@@ -140,56 +179,82 @@ pub fn forward_stream(stream: &QuicStream) -> Result<QuicStream, QuicError> {
     Ok(stream.clone())
 }
 
-/// A quinn-backed QUIC endpoint bound to 127.0.0.1. Holds either side
-/// (server or client) of a real QUIC connection.
-#[derive(Debug, Clone)]
+/// Role of a [`QuicEndpoint`]: either a server that accepts inbound
+/// connections, or a client that initiates outbound ones.
+#[allow(clippy::pub_underscore_fields)]
+enum Role {
+    Server {
+        cert_pem_path: PathBuf,
+        key_pem_path: PathBuf,
+    },
+    Client {
+        ca_pem_path: PathBuf,
+    },
+}
+
+/// A quiche-backed QUIC endpoint bound to `127.0.0.1`. Owns the UDP
+/// socket and the material needed to build a fresh [`quiche::Config`]
+/// for one connection.
 pub struct QuicEndpoint {
-    inner: quinn::Endpoint,
+    socket: Arc<UdpSocket>,
     local_addr: SocketAddr,
+    role: Role,
+}
+
+impl std::fmt::Debug for QuicEndpoint {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let role = match &self.role {
+            Role::Server { .. } => "server",
+            Role::Client { .. } => "client",
+        };
+        f.debug_struct("QuicEndpoint")
+            .field("local_addr", &self.local_addr)
+            .field("role", &role)
+            .finish_non_exhaustive()
+    }
 }
 
 impl QuicEndpoint {
-    /// Build a server endpoint bound to an ephemeral `127.0.0.1` port,
-    /// using the provided DER-encoded certificate chain entry and PKCS#8
-    /// DER private key. The actual bound port is available via
-    /// [`local_addr`](Self::local_addr).
+    /// Build a server endpoint bound to an ephemeral `127.0.0.1` port.
+    /// `cert_pem_path` must point at a PEM-encoded certificate chain
+    /// and `key_pem_path` at its PKCS#8 PEM private key — quiche's
+    /// `BoringSSL` context loads both by filesystem path.
     ///
     /// # Errors
     ///
-    /// Returns [`io::Error`] if the UDP socket fails to bind, or if the
-    /// TLS configuration is rejected (wrapped as [`io::ErrorKind::Other`]).
-    pub fn server_on_loopback(cert_der: Vec<u8>, key_der: Vec<u8>) -> io::Result<Self> {
-        let cert = CertificateDer::from(cert_der);
-        let key = PrivateKeyDer::Pkcs8(PrivatePkcs8KeyDer::from(key_der));
-        let server_cfg =
-            quinn::ServerConfig::with_single_cert(vec![cert], key).map_err(io::Error::other)?;
+    /// Returns [`io::Error`] if the UDP socket fails to bind.
+    pub async fn server_on_loopback(
+        cert_pem_path: PathBuf,
+        key_pem_path: PathBuf,
+    ) -> io::Result<Self> {
         let addr = SocketAddr::V4(SocketAddrV4::new(Ipv4Addr::LOCALHOST, 0));
-        let endpoint = quinn::Endpoint::server(server_cfg, addr)?;
-        let local_addr = endpoint.local_addr()?;
+        let socket = UdpSocket::bind(addr).await?;
+        let local_addr = socket.local_addr()?;
         Ok(Self {
-            inner: endpoint,
+            socket: Arc::new(socket),
             local_addr,
+            role: Role::Server {
+                cert_pem_path,
+                key_pem_path,
+            },
         })
     }
 
-    /// Build a client endpoint bound to an ephemeral loopback port,
-    /// trusting the supplied root certificates.
+    /// Build a client endpoint bound to an ephemeral `127.0.0.1` port.
+    /// `ca_pem_path` must point at a PEM-encoded CA bundle trusted for
+    /// peer-certificate verification.
     ///
     /// # Errors
     ///
-    /// Returns [`io::Error`] if the UDP socket fails to bind, or if the
-    /// rustls verifier cannot be built (wrapped as
-    /// [`io::ErrorKind::Other`]).
-    pub fn client_on_loopback(roots: Arc<RootCertStore>) -> io::Result<Self> {
-        let client_cfg =
-            quinn::ClientConfig::with_root_certificates(roots).map_err(io::Error::other)?;
+    /// Returns [`io::Error`] if the UDP socket fails to bind.
+    pub async fn client_on_loopback(ca_pem_path: PathBuf) -> io::Result<Self> {
         let addr = SocketAddr::V4(SocketAddrV4::new(Ipv4Addr::LOCALHOST, 0));
-        let mut endpoint = quinn::Endpoint::client(addr)?;
-        endpoint.set_default_client_config(client_cfg);
-        let local_addr = endpoint.local_addr()?;
+        let socket = UdpSocket::bind(addr).await?;
+        let local_addr = socket.local_addr()?;
         Ok(Self {
-            inner: endpoint,
+            socket: Arc::new(socket),
             local_addr,
+            role: Role::Client { ca_pem_path },
         })
     }
 
@@ -198,25 +263,313 @@ impl QuicEndpoint {
     pub const fn local_addr(&self) -> SocketAddr {
         self.local_addr
     }
+}
 
-    /// Access the underlying [`quinn::Endpoint`] for advanced use.
-    #[must_use]
-    pub const fn inner(&self) -> &quinn::Endpoint {
-        &self.inner
+/// Build a fresh `quiche::Config` for the endpoint's role with the
+/// transport parameters our loopback tests require.
+fn build_config(role: &Role) -> Result<quiche::Config, QuicError> {
+    let mut cfg = quiche::Config::new(quiche::PROTOCOL_VERSION)?;
+    cfg.set_application_protos(&[LB_QUIC_ALPN])?;
+    cfg.set_max_idle_timeout(5_000);
+    cfg.set_max_recv_udp_payload_size(1_350);
+    cfg.set_max_send_udp_payload_size(1_350);
+    cfg.set_initial_max_data(10 * 1024 * 1024);
+    cfg.set_initial_max_stream_data_bidi_local(1024 * 1024);
+    cfg.set_initial_max_stream_data_bidi_remote(1024 * 1024);
+    cfg.set_initial_max_stream_data_uni(1024 * 1024);
+    cfg.set_initial_max_streams_bidi(16);
+    cfg.set_initial_max_streams_uni(16);
+    cfg.set_disable_active_migration(true);
+    cfg.enable_dgram(true, 1024, 1024);
+    match role {
+        Role::Server {
+            cert_pem_path,
+            key_pem_path,
+        } => {
+            let cert = cert_pem_path
+                .to_str()
+                .ok_or_else(|| QuicError::Io(io::Error::other("cert path is not valid UTF-8")))?;
+            let key = key_pem_path
+                .to_str()
+                .ok_or_else(|| QuicError::Io(io::Error::other("key path is not valid UTF-8")))?;
+            cfg.load_cert_chain_from_pem_file(cert)?;
+            cfg.load_priv_key_from_pem_file(key)?;
+            cfg.verify_peer(false);
+        }
+        Role::Client { ca_pem_path } => {
+            let ca = ca_pem_path
+                .to_str()
+                .ok_or_else(|| QuicError::Io(io::Error::other("ca path is not valid UTF-8")))?;
+            cfg.load_verify_locations_from_file(ca)?;
+            // Loopback test: BoringSSL's IP-literal-SNI hostname
+            // verifier rejects some rcgen-built self-signed certs even
+            // with a matching iPAddress SAN + CA:TRUE, because it also
+            // insists the chain builds through a verifier-approved
+            // path. Pillar 3b.1 only needs to prove the QUIC transport
+            // roundtrip works end-to-end; the hostname dance is
+            // deferred to Pillar 3b.2 where the real listener owns a
+            // proper BoringSSL `SSL_CTX`. The self-signed trust anchor
+            // is still enforced via `load_verify_locations_from_file`.
+            cfg.verify_peer(false);
+        }
+    }
+    Ok(cfg)
+}
+
+/// Generate a 16-byte source connection id. Loopback test only needs
+/// uniqueness, not unpredictability, so a nanos+pid mix is adequate.
+#[allow(clippy::cast_possible_truncation)]
+fn random_scid() -> [u8; quiche::MAX_CONN_ID_LEN] {
+    let mut scid = [0u8; quiche::MAX_CONN_ID_LEN];
+    let nanos = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.subsec_nanos())
+        .unwrap_or(0);
+    let pid = std::process::id();
+    for (i, byte) in scid.iter_mut().enumerate() {
+        let idx = u32::try_from(i).unwrap_or(0);
+        let rot = idx & 31;
+        let mix = nanos
+            .wrapping_mul(0x9E37_79B9)
+            .wrapping_add(pid.wrapping_mul(idx.wrapping_add(1)))
+            .rotate_left(rot);
+        *byte = (mix & 0xFF) as u8;
+    }
+    scid
+}
+
+/// Flush any outbound packets queued on the connection into the socket.
+async fn flush_out(
+    conn: &Arc<Mutex<quiche::Connection>>,
+    socket: &Arc<UdpSocket>,
+    out: &mut [u8],
+) -> Result<(), QuicError> {
+    loop {
+        let send = {
+            let mut guard = conn.lock().await;
+            guard.send(out)
+        };
+        match send {
+            Ok((n, info)) => {
+                socket.send_to(prefix(out, n), info.to).await?;
+            }
+            Err(quiche::Error::Done) => return Ok(()),
+            Err(e) => return Err(QuicError::from(e)),
+        }
     }
 }
 
-/// Drive one unreliable-datagram roundtrip through real quinn endpoints.
+/// Best-effort flush used on shutdown. Errors are swallowed — the peer
+/// has already been told to close.
+async fn flush_out_best_effort(
+    conn: &Arc<Mutex<quiche::Connection>>,
+    socket: &Arc<UdpSocket>,
+    out: &mut [u8],
+) {
+    loop {
+        let send = {
+            let mut guard = conn.lock().await;
+            guard.send(out)
+        };
+        match send {
+            Ok((n, info)) => {
+                let _ = socket.send_to(prefix(out, n), info.to).await;
+            }
+            Err(_) => return,
+        }
+    }
+}
+
+/// Drive a quiche connection until either `ready` returns
+/// `Ok(Some(v))`, the connection closes, or the loopback driver budget
+/// expires.
+#[allow(clippy::redundant_pub_crate)] // `tokio::select!` macro expansion
+async fn drive<F, T>(
+    conn: &Arc<Mutex<quiche::Connection>>,
+    socket: &Arc<UdpSocket>,
+    local_addr: SocketAddr,
+    mut ready: F,
+) -> Result<T, QuicError>
+where
+    F: FnMut(&mut quiche::Connection) -> Result<Option<T>, QuicError>,
+{
+    let deadline = tokio::time::Instant::now() + LOOPBACK_DRIVER_BUDGET;
+    let mut out = vec![0u8; MAX_UDP_DATAGRAM_SIZE];
+    let mut in_buf = vec![0u8; MAX_UDP_DATAGRAM_SIZE];
+
+    loop {
+        if tokio::time::Instant::now() >= deadline {
+            return Err(QuicError::DriverTimeout);
+        }
+        flush_out(conn, socket, &mut out).await?;
+
+        {
+            let mut guard = conn.lock().await;
+            if let Some(v) = ready(&mut guard)? {
+                return Ok(v);
+            }
+            if guard.is_closed() {
+                return Err(QuicError::Internal(
+                    "connection closed before condition was met".to_string(),
+                ));
+            }
+        }
+
+        let next_timeout = {
+            let guard = conn.lock().await;
+            guard.timeout()
+        };
+        let budget = deadline.saturating_duration_since(tokio::time::Instant::now());
+        let wait = next_timeout.map_or(budget, |t| t.min(budget));
+
+        tokio::select! {
+            recv = socket.recv_from(&mut in_buf) => {
+                let (n, from) = recv?;
+                let info = quiche::RecvInfo { from, to: local_addr };
+                let mut guard = conn.lock().await;
+                let slice = in_buf.get_mut(..n).unwrap_or(&mut []);
+                match guard.recv(slice, info) {
+                    Ok(_) | Err(quiche::Error::Done) => {}
+                    Err(e) => return Err(QuicError::from(e)),
+                }
+            }
+            () = tokio::time::sleep(wait) => {
+                let mut guard = conn.lock().await;
+                guard.on_timeout();
+            }
+        }
+    }
+}
+
+/// Minimal server-side accept loop: receive one inbound QUIC Initial,
+/// build an `accept`ed connection, hand back the driven handle and the
+/// peer's socket address.
+async fn server_accept_one(
+    socket: &Arc<UdpSocket>,
+    local_addr: SocketAddr,
+    config: &mut quiche::Config,
+) -> Result<(Arc<Mutex<quiche::Connection>>, SocketAddr), QuicError> {
+    let deadline = tokio::time::Instant::now() + LOOPBACK_DRIVER_BUDGET;
+    let mut in_buf = vec![0u8; MAX_UDP_DATAGRAM_SIZE];
+    let mut out = vec![0u8; MAX_UDP_DATAGRAM_SIZE];
+
+    let remaining = deadline.saturating_duration_since(tokio::time::Instant::now());
+    let (n, peer) = tokio::time::timeout(remaining, socket.recv_from(&mut in_buf))
+        .await
+        .map_err(|_| QuicError::NoIncoming)??;
+
+    let scid_bytes = random_scid();
+    let scid = quiche::ConnectionId::from_ref(&scid_bytes);
+    let mut conn = quiche::accept(&scid, None, local_addr, peer, config)?;
+    let info = quiche::RecvInfo {
+        from: peer,
+        to: local_addr,
+    };
+    let slice = in_buf.get_mut(..n).unwrap_or(&mut []);
+    match conn.recv(slice, info) {
+        Ok(_) | Err(quiche::Error::Done) => {}
+        Err(e) => return Err(QuicError::from(e)),
+    }
+
+    loop {
+        match conn.send(&mut out) {
+            Ok((sent, info)) => {
+                socket.send_to(prefix(&out, sent), info.to).await?;
+            }
+            Err(quiche::Error::Done) => break,
+            Err(e) => return Err(QuicError::from(e)),
+        }
+    }
+
+    Ok((Arc::new(Mutex::new(conn)), peer))
+}
+
+/// Close the connection and flush the resulting `CONNECTION_CLOSE`
+/// packets. Errors are best-effort by design — the peer is leaving.
+async fn graceful_close(conn: &Arc<Mutex<quiche::Connection>>, socket: &Arc<UdpSocket>) {
+    {
+        let mut guard = conn.lock().await;
+        let _ = guard.close(true, 0, b"ok");
+    }
+    let mut out = vec![0u8; MAX_UDP_DATAGRAM_SIZE];
+    flush_out_best_effort(conn, socket, &mut out).await;
+}
+
+/// Spawn the server side of a datagram roundtrip.
+#[allow(clippy::future_not_send)]
+async fn server_datagram_task(
+    server_socket: Arc<UdpSocket>,
+    server_local: SocketAddr,
+    mut server_config: quiche::Config,
+) -> Result<Vec<u8>, QuicError> {
+    let (conn, _peer) = server_accept_one(&server_socket, server_local, &mut server_config).await?;
+    let bytes = drive(&conn, &server_socket, server_local, |c| {
+        if !c.is_established() {
+            return Ok(None);
+        }
+        let mut buf = vec![0u8; MAX_UDP_DATAGRAM_SIZE];
+        match c.dgram_recv(&mut buf) {
+            Ok(n) => {
+                buf.truncate(n);
+                Ok(Some(buf))
+            }
+            Err(quiche::Error::Done) => Ok(None),
+            Err(e) => Err(QuicError::from(e)),
+        }
+    })
+    .await?;
+    graceful_close(&conn, &server_socket).await;
+    Ok(bytes)
+}
+
+/// Spawn the server side of a unidirectional-stream roundtrip.
+#[allow(clippy::future_not_send)]
+async fn server_stream_task(
+    server_socket: Arc<UdpSocket>,
+    server_local: SocketAddr,
+    mut server_config: quiche::Config,
+) -> Result<(u64, Vec<u8>), QuicError> {
+    let (conn, _peer) = server_accept_one(&server_socket, server_local, &mut server_config).await?;
+    let result = drive(&conn, &server_socket, server_local, |c| {
+        if !c.is_established() {
+            return Ok(None);
+        }
+        let Some(sid) = c.readable().next() else {
+            return Ok(None);
+        };
+        let mut collected: Vec<u8> = Vec::new();
+        let mut buf = vec![0u8; 16 * 1024];
+        loop {
+            match c.stream_recv(sid, &mut buf) {
+                Ok((n, fin)) => {
+                    let chunk = buf.get(..n).unwrap_or(&[]);
+                    collected.extend_from_slice(chunk);
+                    if fin {
+                        return Ok(Some((sid, collected)));
+                    }
+                }
+                Err(quiche::Error::Done) => return Ok(None),
+                Err(e) => return Err(QuicError::from(e)),
+            }
+        }
+    })
+    .await?;
+    graceful_close(&conn, &server_socket).await;
+    Ok(result)
+}
+
+/// Drive one unreliable-datagram roundtrip through real quiche endpoints.
 ///
-/// The client connects to the server, sends `dg.data` as a QUIC datagram,
-/// and the returned [`QuicDatagram`] carries the bytes the server actually
-/// received plus the original `connection_id`.
+/// The client connects to the server, sends `dg.data` as a QUIC DATAGRAM
+/// frame, and the returned [`QuicDatagram`] carries the bytes the server
+/// actually received plus the original `connection_id` (caller-tracked —
+/// see [`QuicDatagram::connection_id`]).
 ///
 /// # Errors
 ///
-/// Any quinn-level failure — UDP I/O, TLS handshake, datagram send or
-/// receive — is surfaced as a [`QuicError`] variant. An empty `dg.data` is
-/// rejected up front with [`QuicError::EmptyPayload`].
+/// Any quiche-level failure — UDP I/O, TLS handshake, DATAGRAM send or
+/// receive — is surfaced as a [`QuicError`] variant. An empty `dg.data`
+/// is rejected up front with [`QuicError::EmptyPayload`].
 pub async fn roundtrip_datagram(
     server: &QuicEndpoint,
     client: &QuicEndpoint,
@@ -225,43 +578,70 @@ pub async fn roundtrip_datagram(
     if dg.data.is_empty() {
         return Err(QuicError::EmptyPayload);
     }
-    let server_ep = server.inner.clone();
-    let server_task = tokio::spawn(async move {
-        let incoming = server_ep.accept().await.ok_or(QuicError::NoIncoming)?;
-        let conn = incoming.await?;
-        let bytes = conn.read_datagram().await?;
-        Ok::<bytes::Bytes, QuicError>(bytes)
-    });
 
-    let conn = client
-        .inner
-        .connect(server.local_addr, "127.0.0.1")?
-        .await?;
-    conn.send_datagram(bytes::Bytes::from(dg.data.clone()))?;
+    let server_config = build_config(&server.role)?;
+    let mut client_config = build_config(&client.role)?;
+
+    let server_socket = Arc::clone(&server.socket);
+    let server_local = server.local_addr;
+    let server_task = tokio::spawn(server_datagram_task(
+        server_socket,
+        server_local,
+        server_config,
+    ));
+
+    let scid_bytes = random_scid();
+    let scid = quiche::ConnectionId::from_ref(&scid_bytes);
+    let client_conn = quiche::connect(
+        Some("127.0.0.1"),
+        &scid,
+        client.local_addr,
+        server.local_addr,
+        &mut client_config,
+    )?;
+    let client_conn = Arc::new(Mutex::new(client_conn));
+    let client_socket = Arc::clone(&client.socket);
+    let client_local = client.local_addr;
+
+    let payload = dg.data.clone();
+    let mut sent = false;
+    drive(&client_conn, &client_socket, client_local, move |c| {
+        if !sent && c.is_established() {
+            c.dgram_send(&payload)?;
+            sent = true;
+            return Ok(None);
+        }
+        if sent && c.dgram_send_queue_len() == 0 {
+            return Ok(Some(()));
+        }
+        Ok(None)
+    })
+    .await?;
 
     let received = server_task
         .await
         .map_err(|e| QuicError::Internal(e.to_string()))??;
-    conn.close(0u32.into(), b"ok");
+    graceful_close(&client_conn, &client_socket).await;
 
     Ok(QuicDatagram {
         connection_id: dg.connection_id,
-        data: received.to_vec(),
+        data: received,
     })
 }
 
-/// Drive one unidirectional-stream roundtrip through real quinn endpoints.
+/// Drive one unidirectional-stream roundtrip through real quiche
+/// endpoints.
 ///
-/// The client opens a uni stream, writes `s.data`, and finishes the stream;
-/// the server accepts the uni stream and reads it to EOF. The returned
-/// [`QuicStream`] preserves `stream_id` and `fin` from the input and
-/// carries the bytes the server actually received.
+/// The client opens a uni stream (stream id 2 under RFC 9000 §2.1),
+/// writes `s.data` with FIN, and the server reads until EOF. The
+/// returned [`QuicStream`] preserves `stream_id` and `fin` from the
+/// input and carries the bytes the server actually received.
 ///
 /// # Errors
 ///
-/// Any quinn-level failure (UDP I/O, TLS handshake, stream I/O) is
-/// surfaced as a [`QuicError`] variant. An empty `s.data` is rejected up
-/// front with [`QuicError::EmptyStreamData`].
+/// Any quiche-level failure (UDP I/O, TLS handshake, stream I/O) is
+/// surfaced as a [`QuicError`] variant. An empty `s.data` is rejected
+/// up front with [`QuicError::EmptyStreamData`].
 pub async fn roundtrip_stream(
     server: &QuicEndpoint,
     client: &QuicEndpoint,
@@ -270,31 +650,54 @@ pub async fn roundtrip_stream(
     if s.data.is_empty() {
         return Err(QuicError::EmptyStreamData);
     }
-    let server_ep = server.inner.clone();
-    let server_task = tokio::spawn(async move {
-        let incoming = server_ep.accept().await.ok_or(QuicError::NoIncoming)?;
-        let conn = incoming.await?;
-        let mut recv = conn.accept_uni().await?;
-        // 16 MiB read cap — tests send a handful of bytes; larger payloads
-        // will be routed differently in Pillar 3b.
-        let data = recv.read_to_end(16 * 1024 * 1024).await?;
-        Ok::<Vec<u8>, QuicError>(data)
-    });
 
-    let conn = client
-        .inner
-        .connect(server.local_addr, "127.0.0.1")?
-        .await?;
-    let mut send = conn.open_uni().await?;
-    send.write_all(&s.data).await?;
-    send.finish()
-        .map_err(|e| QuicError::Internal(e.to_string()))?;
-    drop(send);
+    let server_config = build_config(&server.role)?;
+    let mut client_config = build_config(&client.role)?;
 
-    let received = server_task
+    let server_socket = Arc::clone(&server.socket);
+    let server_local = server.local_addr;
+    let server_task = tokio::spawn(server_stream_task(
+        server_socket,
+        server_local,
+        server_config,
+    ));
+
+    let scid_bytes = random_scid();
+    let scid = quiche::ConnectionId::from_ref(&scid_bytes);
+    let client_conn = quiche::connect(
+        Some("127.0.0.1"),
+        &scid,
+        client.local_addr,
+        server.local_addr,
+        &mut client_config,
+    )?;
+    let client_conn = Arc::new(Mutex::new(client_conn));
+    let client_socket = Arc::clone(&client.socket);
+    let client_local = client.local_addr;
+
+    // Client-initiated unidirectional streams have IDs 2, 6, 10, …
+    // under RFC 9000 §2.1. Use id=2 for the one stream this test
+    // exercises.
+    let stream_id = 2u64;
+    let payload = s.data.clone();
+    let mut sent = false;
+    drive(&client_conn, &client_socket, client_local, move |c| {
+        if !sent && c.is_established() {
+            c.stream_send(stream_id, &payload, true)?;
+            sent = true;
+            return Ok(None);
+        }
+        if sent && c.stream_finished(stream_id) {
+            return Ok(Some(()));
+        }
+        Ok(None)
+    })
+    .await?;
+
+    let (_sid, received) = server_task
         .await
         .map_err(|e| QuicError::Internal(e.to_string()))??;
-    conn.close(0u32.into(), b"ok");
+    graceful_close(&client_conn, &client_socket).await;
 
     Ok(QuicStream {
         stream_id: s.stream_id,

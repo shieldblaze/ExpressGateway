@@ -1,6 +1,8 @@
 # ADR-0003: QUIC transport — quinn 0.11
 
-- Status: Accepted (realized 2026-04-22 via Pillar 3a)
+> **Superseded by** [`docs/decisions/quinn-to-quiche-migration.md`](quinn-to-quiche-migration.md) (2026-04-23). Pillar 3b.1 replaced quinn 0.11 with quiche 0.28 + tokio-quiche 0.18 over BoringSSL. This ADR is retained as the audit trail of the Pillar 3a decision.
+
+- Status: Accepted (realized 2026-04-22 via Pillar 3a); superseded 2026-04-23 by quinn-to-quiche-migration.md
 - Date: 2026-04-22
 - Deciders: ExpressGateway team
 - Supersedes: the previous revision of ADR-0003 ("in-house simulation, no

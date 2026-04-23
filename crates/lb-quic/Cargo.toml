@@ -10,10 +10,9 @@ publish = false
 thiserror = { workspace = true }
 bytes = { workspace = true }
 tokio = { workspace = true }
-quinn = { workspace = true }
-rustls = { workspace = true }
-rustls-pki-types = { workspace = true }
+quiche = { workspace = true }
+tokio-quiche = { workspace = true }
 
 [dev-dependencies]
-rcgen = "0.13"
+rcgen = { version = "0.13", features = ["pem"] }
 tokio = { workspace = true, features = ["full", "test-util"] }
