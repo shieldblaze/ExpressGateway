@@ -13,6 +13,7 @@ tokio = { workspace = true }
 tokio-util = { workspace = true }
 tracing = { workspace = true }
 parking_lot = { workspace = true }
+dashmap = { workspace = true }
 quiche = { workspace = true }
 tokio-quiche = { workspace = true }
 # `ring::rand` for retry-secret generation and SCID sampling in the
@@ -20,6 +21,12 @@ tokio-quiche = { workspace = true }
 # quiche/BoringSSL's build — declaring it direct is cheap.
 ring = "0.17"
 lb-security = { path = "../lb-security" }
+# Pillar 3b.3c-2: router needs TcpPool to forward H3 → H1 to backends.
+lb-io = { path = "../lb-io" }
+# Pillar 3b.3c-2: lb-h3 provides the RFC 9114 frame codec + QPACK static-
+# table encoder/decoder. We use its byte format on both sides of our e2e
+# client+server so the no-dynamic-table limitation is never exercised.
+lb-h3 = { path = "../lb-h3" }
 
 [dev-dependencies]
 rcgen = { version = "0.13", features = ["pem"] }

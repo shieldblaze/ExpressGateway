@@ -1395,6 +1395,9 @@ name = "lb-quic"
 version = "0.1.0"
 dependencies = [
  "bytes",
+ "dashmap 6.1.0",
+ "lb-h3",
+ "lb-io",
  "lb-security",
  "parking_lot",
  "quiche",

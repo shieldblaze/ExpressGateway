@@ -90,9 +90,13 @@ pub use lb_security::{RetryTokenSigner, ZeroRttReplayGuard};
 /// here keeps downstream crates decoupled from `tokio-quiche` versioning.
 pub use tokio_quiche::ConnectionParams;
 
+mod conn_actor;
+mod h3_bridge;
 mod listener;
+mod router;
 
 pub use listener::{QuicListener, QuicListenerParams};
+pub use router::{RouterHandle, RouterParams, spawn as spawn_router};
 
 /// ALPN identifier advertised by the built-in [`QuicEndpoint`] helpers.
 ///
