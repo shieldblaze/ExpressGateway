@@ -11,4 +11,8 @@ thiserror = { workspace = true }
 bytes = { workspace = true }
 http = { workspace = true }
 rustls = { workspace = true }
+rustls-pki-types = { workspace = true }
 parking_lot = { workspace = true }
+
+[dev-dependencies]
+rcgen = { version = "0.13", features = ["pem"] }

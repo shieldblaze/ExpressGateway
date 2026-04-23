@@ -144,6 +144,26 @@ with monotonic versioning) — the piece we can unit-test deterministically
 - `tests/reload_zero_drop.rs` — reload/rollback state-machine test.
 - `crates/lb-config/src/lib.rs` — `hard_stop_after` / drain deadline.
 
+## TLS cert hot-reload (Pillar 3b.2 amendment, 2026-04-23)
+
+Pillar 3b.2 wired a TLS-over-TCP listener using
+`rustls::ServerConfig` + `TicketRotator` (see
+`crates/lb/src/main.rs` and `crates/lb-security/src/ticket.rs`). The
+per-listener `Arc<rustls::ServerConfig>` is handed to
+`tokio_rustls::TlsAcceptor` at startup. To support SIGHUP-driven
+certificate rotation without dropping in-flight TLS handshakes, the
+forward plan is an `ArcSwap<Arc<rustls::ServerConfig>>` per listener:
+on SIGHUP, the control plane parses the new config, builds a fresh
+`ServerConfig` (new cert chain, same or rebuilt `TicketRotator`), and
+swaps it in; `TlsAcceptor::from(arc_swap.load())` per-accept picks up
+the new config for subsequent handshakes while existing connections
+continue with the old `ServerConfig` their handshake captured. This
+matches the `ArcSwap` pattern already established in ADR-0008 for
+config. The hot-swap implementation itself is Pillar 3b.3 scope; Pillar
+3b.2 ships the stable seam (the `Arc<ServerConfig>` is already shared
+rather than owned per-connection) and a background task that rotates
+ticket keys once per minute.
+
 ## Follow-ups / open questions
 
 - Wire `SO_REUSEPORT` explicitly via `socket2` in `lb/src/main.rs`
@@ -153,6 +173,8 @@ with monotonic versioning) — the piece we can unit-test deterministically
   measurement of SYNs dropped per reload exceeding an agreed budget.
 - Graceful shutdown deadline: expose in `lb-config` as
   `reload.drain_timeout_seconds`.
+- Implement the `ArcSwap<Arc<rustls::ServerConfig>>` TLS cert hot-swap
+  described above (Pillar 3b.3).
 
 ## Sources
 

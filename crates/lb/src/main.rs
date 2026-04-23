@@ -15,24 +15,46 @@
 )]
 #![warn(clippy::pedantic, clippy::nursery)]
 
+use std::io::BufReader;
 use std::net::SocketAddr;
+use std::path::Path;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
+use std::time::{Duration, Instant};
 
 use anyhow::Context;
-use tokio::io;
-use tokio::net::{TcpListener, TcpStream};
+use parking_lot::Mutex as PlMutex;
+use rustls_pki_types::{CertificateDer, PrivateKeyDer};
+use tokio::io::{self, AsyncRead, AsyncWrite};
+use tokio::net::TcpListener;
 use tokio::signal;
+use tokio_rustls::TlsAcceptor;
 
 use lb_balancer::round_robin::RoundRobin;
 use lb_balancer::{Backend, LoadBalancer};
+use lb_config::TlsConfig;
 use lb_io::Runtime;
 use lb_io::dns::{DnsResolver, ResolverConfig};
 use lb_io::pool::{PoolConfig, TcpPool};
 use lb_io::sockopts::{BackendSockOpts, ListenerSockOpts};
 use lb_observability::MetricsRegistry;
+use lb_security::{TicketRotator, build_server_config};
 
 // ── shared gateway state ────────────────────────────────────────────────
+
+/// How a listener terminates inbound traffic.
+enum ListenerMode {
+    /// Plain TCP — no TLS, forward the socket directly.
+    PlainTcp,
+    /// TLS over TCP — terminate with the shared rustls acceptor and
+    /// forward the decrypted stream. The `_rotator` handle is held so
+    /// the background ticket-rotation ticker stays alive as long as the
+    /// listener does (the ticker exits when its last `Arc` drops).
+    Tls {
+        acceptor: TlsAcceptor,
+        _rotator: Arc<PlMutex<TicketRotator>>,
+    },
+}
 
 /// Per-listener runtime state.
 struct ListenerState {
@@ -55,6 +77,8 @@ struct ListenerState {
     /// on-demand re-resolution in a follow-up.
     #[allow(dead_code)]
     resolver: DnsResolver,
+    /// Listener termination mode (plain TCP or TLS over TCP).
+    mode: ListenerMode,
 }
 
 /// Listener socket options matching PROMPT.md §7 for listener sockets.
@@ -108,6 +132,78 @@ fn split_host_port(s: &str) -> anyhow::Result<(&str, u16)> {
         .parse()
         .with_context(|| format!("invalid port: {port_str}"))?;
     Ok((host, port))
+}
+
+// ── TLS helpers ─────────────────────────────────────────────────────────
+
+/// Load a PEM-encoded certificate chain from `path`. Returns an error if
+/// the file cannot be read or contains no certificates.
+fn load_cert_chain(path: &Path) -> anyhow::Result<Vec<CertificateDer<'static>>> {
+    let file = std::fs::File::open(path)
+        .with_context(|| format!("cannot open TLS cert {}", path.display()))?;
+    let mut reader = BufReader::new(file);
+    let certs: Vec<CertificateDer<'static>> = rustls_pemfile::certs(&mut reader)
+        .collect::<Result<Vec<_>, _>>()
+        .with_context(|| format!("parse TLS cert PEM from {}", path.display()))?;
+    if certs.is_empty() {
+        anyhow::bail!("no certificates found in {}", path.display());
+    }
+    Ok(certs)
+}
+
+/// Load the first PEM-encoded private key from `path`. Accepts PKCS#8,
+/// SEC1 (EC), or RSA PKCS#1 formats.
+fn load_private_key(path: &Path) -> anyhow::Result<PrivateKeyDer<'static>> {
+    let file = std::fs::File::open(path)
+        .with_context(|| format!("cannot open TLS key {}", path.display()))?;
+    let mut reader = BufReader::new(file);
+    let key = rustls_pemfile::private_key(&mut reader)
+        .with_context(|| format!("parse TLS key PEM from {}", path.display()))?
+        .ok_or_else(|| anyhow::anyhow!("no private key found in {}", path.display()))?;
+    Ok(key)
+}
+
+/// Build the shared rustls `ServerConfig` for a listener, wiring the
+/// per-listener `TicketRotator` through `lb_security::build_server_config`.
+fn build_tls_stack(
+    tls_cfg: &TlsConfig,
+) -> anyhow::Result<(Arc<rustls::ServerConfig>, Arc<PlMutex<TicketRotator>>)> {
+    let cert_chain = load_cert_chain(Path::new(&tls_cfg.cert_path))?;
+    let key = load_private_key(Path::new(&tls_cfg.key_path))?;
+    let interval = Duration::from_secs(tls_cfg.ticket_rotation_interval_seconds);
+    let overlap = Duration::from_secs(tls_cfg.ticket_rotation_overlap_seconds);
+    let rotator = TicketRotator::new(interval, overlap)
+        .map_err(|e| anyhow::anyhow!("ticket rotator init failed: {e}"))?;
+    let rot_arc = Arc::new(PlMutex::new(rotator));
+    let server_cfg = build_server_config(Arc::clone(&rot_arc), cert_chain, key)
+        .map_err(|e| anyhow::anyhow!("rustls ServerConfig build failed: {e}"))?;
+    Ok((server_cfg, rot_arc))
+}
+
+/// Spawn a background task that nudges `rotator.rotate_if_due(now)` once
+/// per minute. The task stops when the rotator's `Arc` strong count
+/// drops to 1 (i.e. when the listener is gone).
+fn spawn_rotator_ticker(rotator: Arc<PlMutex<TicketRotator>>) {
+    tokio::spawn(async move {
+        let mut ticker = tokio::time::interval(Duration::from_secs(60));
+        // The first tick fires immediately; skip it so we don't rotate
+        // a freshly-minted key.
+        ticker.tick().await;
+        loop {
+            ticker.tick().await;
+            if Arc::strong_count(&rotator) <= 1 {
+                return;
+            }
+            let mut guard = rotator.lock();
+            match guard.rotate_if_due(Instant::now()) {
+                Ok(true) => {
+                    tracing::info!("TLS ticket key rotated");
+                }
+                Ok(false) => {}
+                Err(e) => tracing::error!("TLS ticket rotation failed: {e}"),
+            }
+        }
+    });
 }
 
 // ── main ────────────────────────────────────────────────────────────────
@@ -213,6 +309,35 @@ async fn async_main() -> anyhow::Result<()> {
             backends.push(Backend::new(format!("backend-{i}"), b.weight));
         }
 
+        let mode = match listener_cfg.protocol.as_str() {
+            "tls" => {
+                let Some(tls_cfg) = listener_cfg.tls.as_ref() else {
+                    anyhow::bail!(
+                        "listener {} has protocol=tls but no [listeners.tls] block \
+                         (validate_config should have caught this)",
+                        listener_cfg.address
+                    );
+                };
+                let (server_cfg, rotator) = build_tls_stack(tls_cfg)
+                    .with_context(|| format!("TLS setup failed for {}", listener_cfg.address))?;
+                let acceptor = TlsAcceptor::from(server_cfg);
+                spawn_rotator_ticker(Arc::clone(&rotator));
+                tracing::info!(
+                    address = %listener_cfg.address,
+                    protocol = "tls",
+                    cert = %tls_cfg.cert_path,
+                    rotation_interval_s = tls_cfg.ticket_rotation_interval_seconds,
+                    overlap_s = tls_cfg.ticket_rotation_overlap_seconds,
+                    "listener configured with TLS termination"
+                );
+                ListenerMode::Tls {
+                    acceptor,
+                    _rotator: rotator,
+                }
+            }
+            _ => ListenerMode::PlainTcp,
+        };
+
         let state = Arc::new(ListenerState {
             backends,
             balancer: parking_lot::Mutex::new(RoundRobin::new()),
@@ -222,6 +347,7 @@ async fn async_main() -> anyhow::Result<()> {
             io_runtime,
             pool: pool.clone(),
             resolver: resolver.clone(),
+            mode,
         });
 
         let bind_addr = listener_cfg.address.clone();
@@ -313,9 +439,19 @@ async fn run_listener(bind_addr: String, state: Arc<ListenerState>) -> anyhow::R
             st.active_connections.fetch_add(1, Ordering::Relaxed);
             st.metrics.increment("connections_total", 1);
 
-            if let Err(e) =
-                proxy_connection(client_stream, backend_addr, &st.metrics, &st.pool).await
-            {
+            let result = match &st.mode {
+                ListenerMode::PlainTcp => {
+                    proxy_connection(client_stream, backend_addr, &st.metrics, &st.pool).await
+                }
+                ListenerMode::Tls { acceptor, .. } => match acceptor.accept(client_stream).await {
+                    Ok(tls_stream) => {
+                        proxy_connection(tls_stream, backend_addr, &st.metrics, &st.pool).await
+                    }
+                    Err(e) => Err(e.into()),
+                },
+            };
+
+            if let Err(e) = result {
                 tracing::debug!(
                     client = %client_addr,
                     backend = %backend_addr,
@@ -330,12 +466,15 @@ async fn run_listener(bind_addr: String, state: Arc<ListenerState>) -> anyhow::R
 
 // ── TCP proxy ───────────────────────────────────────────────────────────
 
-async fn proxy_connection(
-    mut client: TcpStream,
+async fn proxy_connection<C>(
+    mut client: C,
     backend_addr: SocketAddr,
     metrics: &MetricsRegistry,
     pool: &TcpPool,
-) -> anyhow::Result<()> {
+) -> anyhow::Result<()>
+where
+    C: AsyncRead + AsyncWrite + Unpin,
+{
     // Acquire a backend connection from the pool. On a hot pool this
     // returns an idle reuse; otherwise it dials a new socket via
     // Runtime::connect, which performs a blocking connect(2). Wrap in

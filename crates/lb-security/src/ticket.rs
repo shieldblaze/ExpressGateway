@@ -36,6 +36,7 @@ use std::time::{Duration, Instant};
 use parking_lot::Mutex;
 
 use rustls::server::ProducesTickets;
+use rustls_pki_types::{CertificateDer, PrivateKeyDer};
 
 /// Errors raised by the session-ticket rotator.
 #[derive(Debug, thiserror::Error)]
@@ -43,6 +44,12 @@ pub enum TicketError {
     /// Failed to generate fresh ticket-key material from the OS RNG.
     #[error("ticket key generation failed: {0}")]
     KeyGen(String),
+
+    /// Building a [`rustls::ServerConfig`] failed — usually because the
+    /// certificate chain and private key do not match, or the chosen
+    /// protocol versions are incompatible with the `ring` provider.
+    #[error("tls server config build failed: {0}")]
+    ServerConfig(String),
 }
 
 /// A single ticket-encryption key. Opaque handle over a rustls
@@ -285,6 +292,41 @@ impl ProducesTickets for RotatingTicketer {
     }
 }
 
+/// Build a rustls [`rustls::ServerConfig`] that terminates TLS with the
+/// provided certificate chain and private key, and mints session tickets
+/// via the shared [`TicketRotator`].
+///
+/// The returned config is cheap to clone (internally an [`Arc`]).
+/// Callers wiring it into a listener should share the returned
+/// `Arc<ServerConfig>` across all connections on that listener so the
+/// rotator's hot-path `Mutex` is observed by every session.
+///
+/// Uses the `ring` [`CryptoProvider`](rustls::crypto::CryptoProvider)
+/// explicitly so the call is independent of whichever provider is
+/// installed as the process default.
+///
+/// # Errors
+///
+/// Returns [`TicketError::ServerConfig`] if the cert chain / key pair
+/// does not agree with the `ring` provider's supported signatures, or
+/// if the provider rejects the default protocol versions.
+pub fn build_server_config(
+    rotator: Arc<Mutex<TicketRotator>>,
+    cert_chain: Vec<CertificateDer<'static>>,
+    key_der: PrivateKeyDer<'static>,
+) -> Result<Arc<rustls::ServerConfig>, TicketError> {
+    let provider = Arc::new(rustls::crypto::ring::default_provider());
+    let builder = rustls::ServerConfig::builder_with_provider(provider)
+        .with_safe_default_protocol_versions()
+        .map_err(|e| TicketError::ServerConfig(e.to_string()))?
+        .with_no_client_auth();
+    let mut cfg = builder
+        .with_single_cert(cert_chain, key_der)
+        .map_err(|e| TicketError::ServerConfig(e.to_string()))?;
+    cfg.ticketer = Arc::new(RotatingTicketer { rot: rotator });
+    Ok(Arc::new(cfg))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -363,6 +405,40 @@ mod tests {
             .decrypt(&ct)
             .expect("previous decrypts pre-rotation tickets");
         assert_eq!(recovered_prev, plain);
+    }
+
+    #[test]
+    fn build_server_config_round_trip_encrypts_and_decrypts_with_current_key() {
+        // Generate an in-memory self-signed cert+key (rcgen is already a
+        // dev-dep for this crate) and feed both into `build_server_config`.
+        let generated = rcgen::generate_simple_self_signed(vec!["localhost".to_string()]).unwrap();
+        let cert_der: Vec<u8> = generated.cert.der().to_vec();
+        let key_der: Vec<u8> = generated.key_pair.serialize_der();
+        let cert_chain = vec![CertificateDer::from(cert_der)];
+        let key = PrivateKeyDer::Pkcs8(rustls_pki_types::PrivatePkcs8KeyDer::from(key_der));
+
+        let rot =
+            TicketRotator::new(Duration::from_secs(86_400), Duration::from_secs(3_600)).unwrap();
+        let current_handle = rot.current();
+        let rot_arc = Arc::new(Mutex::new(rot));
+        let server_cfg = build_server_config(Arc::clone(&rot_arc), cert_chain, key).unwrap();
+
+        // The config's ticketer encrypts with the rotator's current key:
+        // we encrypt through the ServerConfig's ticketer and decrypt
+        // directly with the rotator's current TicketKey.
+        let plain = sample_plain();
+        let ct = server_cfg
+            .ticketer
+            .encrypt(&plain)
+            .expect("ticketer produced ciphertext");
+        let recovered = current_handle
+            .decrypt(&ct)
+            .expect("current rotator key decrypts its own tickets");
+        assert_eq!(recovered, plain);
+
+        // ticketer.enabled() must be true so rustls actually advertises
+        // session tickets to clients.
+        assert!(server_cfg.ticketer.enabled());
     }
 
     #[test]

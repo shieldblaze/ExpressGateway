@@ -23,7 +23,7 @@ pub use error::SecurityError;
 pub use slow_post::SlowPostDetector;
 pub use slowloris::SlowlorisDetector;
 pub use smuggle::SmuggleDetector;
-pub use ticket::{RotatingTicketer, TicketError, TicketKey, TicketRotator};
+pub use ticket::{RotatingTicketer, TicketError, TicketKey, TicketRotator, build_server_config};
 pub use zero_rtt::ZeroRttReplayGuard;
 
 #[cfg(test)]

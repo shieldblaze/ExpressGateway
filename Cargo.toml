@@ -28,6 +28,12 @@ members = [
     "crates/lb",
 ]
 
+# MSRV-pin notes:
+# Cargo.lock pins `foundations 4.5.0` and `idna_adapter 1.1.0` to preserve
+# MSRV 1.85 — newer foundations pulls darling 0.23 (rustc 1.88) and newer
+# idna_adapter pulls icu 2.2 (rustc 1.86). Do not blindly `cargo update`;
+# verify workspace still builds on stable 1.85 after any dependency bump.
+
 [workspace.package]
 license = "GPL-3.0-only"
 edition = "2024"
@@ -65,6 +71,9 @@ quiche = "0.28"
 tokio-quiche = "0.18"
 rustls = { version = "0.23", default-features = false, features = ["ring", "std", "tls12", "logging"] }
 rustls-pki-types = "1"
+# Pillar 3b.2: TLS-over-TCP listener wiring.
+tokio-rustls = { version = "0.26", default-features = false, features = ["ring", "tls12", "logging"] }
+rustls-pemfile = "2"
 # Utilities
 rand = "0.8"
 # XDP / eBPF (Pillar 4a: aya userspace loader; Linux-only in consumers)
@@ -93,6 +102,10 @@ anyhow = { workspace = true }
 bytes = { workspace = true }
 http = { workspace = true }
 rand = { workspace = true }
+rustls = { workspace = true }
+rustls-pki-types = { workspace = true }
+tokio-rustls = { workspace = true }
+parking_lot = { workspace = true }
 rcgen = { version = "0.13", features = ["pem"] }
 
 [profile.release]
