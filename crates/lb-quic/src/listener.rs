@@ -220,6 +220,10 @@ impl QuicListener {
             pool,
             backends: Arc::new(params.backends.clone()),
             h3_backend: params.h3_backend.clone(),
+            // PROMPT.md §6 target conntrack scale. Auditor-suggested
+            // bound (2026-04-23) — finite-memory defence against Initial
+            // flooding behind legitimate source-address retry tokens.
+            max_connections: 100_000,
             cancel: shutdown.clone(),
         };
         let router_handle = router::spawn(router_params);

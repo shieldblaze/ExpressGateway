@@ -71,6 +71,16 @@ pub struct RouterParams {
     /// H3 requests on this listener route to the upstream via the
     /// QUIC pool instead of the H1/TcpPool path. Pillar 3b.3c-3.
     pub h3_backend: Option<(QuicUpstreamPool, SocketAddr, String)>,
+    /// Maximum number of concurrent QUIC connections served by this
+    /// router. When the per-CID dispatch table is at this cap, new
+    /// Initial packets are dropped (legitimate clients retry; a
+    /// memory-exhaustion attacker finds the bound is finite). Each
+    /// connection occupies two dispatch-map entries (`router_key` +
+    /// `header_dcid_key`), so the actual map size cap is `2 *
+    /// max_connections`. Auditor finding 2026-04-23: default was
+    /// unbounded; now `100_000` matches the `PROMPT.md` §6 conntrack
+    /// scale target.
+    pub max_connections: usize,
     /// Listener-wide cancellation.
     pub cancel: CancellationToken,
 }
@@ -289,6 +299,21 @@ fn spawn_new_connection(
     params: &RouterParams,
     connections: &Arc<dashmap::DashMap<Vec<u8>, mpsc::Sender<InboundPacket>>>,
 ) -> Result<(), String> {
+    // Memory-DoS cap. Each accepted connection adds TWO dispatch entries
+    // (router_key + header_dcid_key), so the cap is 2 * max_connections.
+    // When full, drop the incoming Initial and let the peer retry later;
+    // no panic, no OOM spiral. Flagged by the 2026-04-23 auditor signoff.
+    let cap_entries = params.max_connections.saturating_mul(2);
+    if connections.len() >= cap_entries {
+        tracing::warn!(
+            current = connections.len(),
+            cap = cap_entries,
+            max_connections = params.max_connections,
+            %peer,
+            "QUIC router at connection cap; dropping new Initial"
+        );
+        return Err("router at max_connections".to_owned());
+    }
     let scid_bytes = sample_conn_id();
     let scid = ConnectionId::from_ref(&scid_bytes);
     let odcid = ConnectionId::from_ref(odcid_bytes);

@@ -41,7 +41,7 @@ Each row maps an attack to the code site that mitigates it, plus a reference.
 | 9 | HTTP/2 PING flood | L7 H2 | `crates/lb-h2/src/security.rs::PingFloodDetector` (50 / 10 s) | Unit test `ping_burst_rejected` |
 | 10 | HTTP/2 zero-window stall | L7 H2 | `crates/lb-h2/src/security.rs::ZeroWindowStallDetector` (30 s) | Unit test `zero_window_stall_fires_after_timeout` |
 | 11 | HTTP/3 QPACK bomb | L7 H3 | `crates/lb-h3/src/security.rs::QpackBombDetector` | `tests/security_qpack_bomb.rs` |
-| 12 | Slowloris (slow headers) | L7 H1 | `crates/lb-security/src/slowloris.rs::SlowlorisGuard` | `tests/security_slowloris.rs` |
+| 12 | Slowloris (slow headers) | L7 H1 | `crates/lb-security/src/slowloris.rs::SlowlorisDetector` | `tests/security_slowloris.rs` |
 | 13 | Slow-POST (slow body) | L7 H1 | `crates/lb-security/src/slow_post.rs::SlowPostGuard` | `tests/security_slow_post.rs` |
 | 14 | QUIC 0-RTT replay | L5 QUIC | `crates/lb-security/src/zero_rtt.rs::ZeroRttReplayFilter` | `tests/security_zero_rtt_replay.rs` |
 | 15 | Upstream stale-connection reuse after peer FIN | Pool | `crates/lb-io/src/pool.rs` non-blocking read-zero probe before reuse (Pingora EC-01) | Unit test `probe_discards_peer_closed_connection` |

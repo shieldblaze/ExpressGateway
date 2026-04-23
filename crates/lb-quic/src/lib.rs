@@ -71,7 +71,15 @@
     missing_docs
 )]
 #![warn(clippy::pedantic, clippy::nursery)]
-#![cfg_attr(test, allow(clippy::unwrap_used, clippy::expect_used))]
+#![cfg_attr(
+    test,
+    allow(
+        clippy::unwrap_used,
+        clippy::expect_used,
+        clippy::panic,
+        clippy::match_wildcard_for_single_variants
+    )
+)]
 
 use std::io;
 use std::net::{Ipv4Addr, SocketAddr, SocketAddrV4};
