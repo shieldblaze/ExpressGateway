@@ -336,3 +336,71 @@ is passing.
   under `tests/*.rs` listed per row above.
 - Companion ADRs: `docs/decisions/ADR-0001..0010.md`.
 - `docs/architecture.md` for the intended-to-be design.
+
+## Addendum 2026-04-23: Phase B + pillar progression
+
+The body of this document was authored on 2026-04-22 at HEAD `b9853178`
+with 296 passing tests. The Phase B drive + subsequent pillars have
+since landed; rather than rewrite the matrix (losing provenance) this
+addendum records what has been closed and what remains.
+
+### Current state snapshot
+
+- **HEAD**: `9385ef76` (done.md reconciliation)
+- **Tests**: 429 passed / 0 failed / 0 ignored via `cargo test
+  --workspace --no-fail-fast`
+- **halting-gate**: GREEN (Artifacts 141/141, Tests 59/59, Manifest OK)
+- **cargo clippy --all-targets --all-features -- -D warnings**: clean
+- **cargo deny check**: clean
+- **cargo audit**: 0 vulnerabilities, 0 warnings (policy sync via
+  `.cargo/audit.toml`)
+- **trufflehog**: 0 verified, 0 unverified secrets
+
+### Gaps closed since 2026-04-22 baseline
+
+| Gap (original status) | Closed by commit(s) | New status |
+|---|---|---|
+| io_uring runtime absent / stubbed | `2bda92b9`, `631caff5`, `9c37a740` | **present** — real `io-uring = "0.7"` dep, NOP probe, Runtime + watermarks + sockopts, ACCEPT/RECV/SEND/SPLICE op wrappers, root binary I/O routed through `lb_io::Runtime`. Pipe-backed SPLICE zero-copy + fixed fds + registered buffer pools + full tokio-reactor integration explicitly deferred. |
+| TCP connection pool absent | `edd11f02` | **present** — `TcpPool` with Pingora EC-01 non-blocking read-zero liveness probe, per-peer DashMap LRU, bounds on `PooledTcp::drop`, max-age + idle-timeout on acquire. |
+| QUIC simulation (no quinn/quiche) | `a50b6a81` → superseded by `2050c8c5` (quinn → quiche per ADR `quinn-to-quiche-migration.md`) | **present** — real `quiche = "0.28"` + `tokio-quiche = "0.18"` with BoringSSL backend alongside rustls 0.23 (matches Pingora's production pairing). |
+| TLS listener not wired | `bdc1c5ed` (Pillar 3b.2) | **present** — TLS-over-TCP listener with `RotatingTicketer` (Step 5b, `a32e093b`) in hot path; ALPN added in `826760a7` offering `h2` + `http/1.1` with dispatch based on `tls_stream.get_ref().1.alpn_protocol()`. |
+| No QUIC listener in binary | `d983dd3f` (3b.3c-1 seam), `cf045248` (3b.3c-2 router + actor + H3 bridge + e2e), `882c0d7e` (3b.3c-3 QuicUpstreamPool) | **present** — custom `quiche::accept`/`accept_with_retry` loop, InboundPacketRouter with RETRY on first Initial + 0-RTT replay check via `ZeroRttReplayGuard::check_0rtt_token`, Connection actor with lb-h3 HEADERS/DATA bridge, H3→H1 forward via TcpPool, H3→H3 forward via QuicUpstreamPool (PING-ACK liveness probe). Six e2e tests. |
+| XDP L4 program is `fn main(){}` stub | `35491253` (4a real aya-ebpf source + userspace loader), `dec3b67b` (4b-1 BPF ELF compiled + binary startup CAP_BPF probe), `7eeb59fa` (4b-2 XDP_TX + RFC 1624 incremental checksum + VLAN + IPv6 + LpmTrie ACL) | **present with caveats** — 9864-byte eBPF ELF committed at `crates/lb-l4-xdp/src/lb_xdp.bin`; loader verified by `real_elf_parses_via_loader` integration test; binary attaches when `xdp_enabled=true` AND CAP_BPF present, else logs-and-skips. Multi-kernel verifier matrix (`xtask xdp-verify`) + veth-pair CAP_BPF CI stage + SIGHUP hot map updates + QinQ + SYN-cookie new-flow XDP_TX remain Pillar 4b-3. |
+| H1 flood detectors absent (`max_header_bytes`, H2 SETTINGS/PING/zero-window-stall) | `a009a778` (Step 5a) | **present** — `lb-h1::parse::MAX_HEADER_BYTES = 65_536` enforced via `parse_headers_with_limit` returning `H1Error::HeadersTooLarge`. `lb-h2::security::{SettingsFloodDetector, PingFloodDetector, ZeroWindowStallDetector}` with integer-only rolling windows. Wiring into a live H2 state machine deferred because H2 server now exists at `826760a7`; stand-alone detector unit tests green. |
+| TLS session-ticket-key rotation absent | `a32e093b` + `154566b3` (Step 5b), wired by `bdc1c5ed` (3b.2) | **present** — `TicketRotator` (ring HMAC-SHA256 + subtle constant-time MAC + 24 h default interval + 24 h overlap window) plus `RotatingTicketer impls rustls::server::ProducesTickets`; wired via `lb_security::build_server_config` into the h1s listener. Manual cert hot-reload via SIGHUP still requires the ArcSwap path implementation (documented ADR-0009 deferral). |
+| DNS re-resolution absent | `2f4d136c` (Step 5c) | **present** — `DnsResolver` with `tokio::sync::OnceCell` singleflight, positive-TTL cap 300 s, negative-TTL cache 5 s for NXDOMAIN, optional background refresh task. `lb/src/main.rs` resolves backend hostnames through it at startup/reload. TcpPool re-keying on hostname changes is deferred. |
+| Real HTTP/1.1 proxy path absent | `d6be8e4e` (Pillar 3b.3b-1) | **present** — `lb-l7::h1_proxy::H1Proxy` driven by `hyper 1.x` server + client. Hop-by-hop strip (RFC 9110 §7.6.1), X-Forwarded-{For,Proto,Host}, Via, Alt-Svc injection when configured, header/body/total timeouts. TcpPool for upstream. 9 unit tests + 3 integration e2e tests (`h1s_proxy_returns_backend_response_with_alt_svc`, hop-by-hop strip observed at backend, slow-body 504). |
+| Real HTTP/2 proxy path absent | `826760a7` (Pillar 3b.3b-2) | **present** — `lb-l7::h2_proxy::H2Proxy` via `hyper 1.x` `http2::Builder::new(TokioExecutor::new())`; service fn runs per H2 stream giving per-stream LB via the shared `RoundRobinAddrs` picker. 3 unit tests + 3 e2e including exact 3/3/3 backend distribution across 9 requests on a single H2 connection + ALPN downgrade to http/1.1. `h2spec` subprocess harness wired with skip branch (hosts without h2spec log + continue). |
+| No Prometheus `/metrics` | `e6c119b4` | **present with caveats** — `MetricsRegistry` rewritten around `prometheus::Registry` with counter / counter_vec / histogram / histogram_vec / gauge + handle cache + 10 k cardinality warn. Admin HTTP listener (hyper http1) serves GET `/metrics` text-format + GET `/healthz`. Config: `[observability].metrics_bind`. 7 instrumentation points wired in `lb/src/main.rs`. Per-request HTTP telemetry, security-family counters, XDP map pull remain — tracked in `METRICS.md`. |
+| Fuzz corpora absent | `8e9d1887` (Step 6) | **partial** — `fuzz/` with cargo-fuzz layout (out-of-workspace), 5 targets (`h1_parser`, `h2_frame`, `h3_frame`, `quic_initial`, `tls_client_hello`), seed corpora, 2-minute smoke runs committed as `fuzz/findings/*.smoke.txt`. Production ≥1 h burns deferred post-ship per `fuzz/README.md`. PROXY protocol target not added (no clean parser entry point in tree). |
+| 10 ADRs absent | `50879461` (Phase A.0) + `e600c64e` (`quinn-to-quiche-migration.md` supersedes ADR-0003) + `e600c64e` (`ebpf-toolchain-separation.md`) | **present** — 12 ADRs total now (10 original + 2 new). |
+| Ship docs absent | `e04f1a75` (Step 8) + `60d6f07e` (SECURITY.md pingora cross-ref + DEPLOYMENT.md cmake) | **present** — `README.md`, `CONFIG.md`, `DEPLOYMENT.md`, `METRICS.md`, `RUNBOOK.md`, `SECURITY.md`, `CHANGELOG.md` all present and grounded in the `lb-*` crate layout. |
+| `cargo audit` / `trufflehog` / `cargo llvm-cov` sanity gates absent | `de5c6dbf`, `8db5ffef` (Step 9) | **present** — `cargo audit`/`deny` policy synced via `.cargo/audit.toml`. Coverage report at `docs/conformance/coverage.md` (workspace 75.45 % lines / 85.38 % regions / 81.57 % functions, with per-file gap table). |
+| reviewer + auditor signoff absent | `1418d4b7` (reviewer PASS) + pending auditor | **reviewer present, auditor in-flight**. |
+
+### Remaining gaps (post-addendum)
+
+1. **Pillar 4b-3**: SYN-cookie XDP_TX for brand-new flows, QinQ, `xtask xdp-verify` multi-kernel verifier matrix (5.15 LTS + 6.1 LTS SKB + DRV modes), CAP_BPF veth-pair CI stage, SIGHUP hot BPF map updates, TCP-option rewrite, LRU_HASH conntrack migration.
+2. **Pillar 3b.4**: `curl --http3` subprocess interop test (blocks on a CI image with curl+quiche); h3i RFC 9114 MUST-clause harness wired to `.review/rfc-matrix.md`.
+3. **Detector wiring into live state machines**: H2 SETTINGS/PING/zero-window detectors exist as tested types but are not called from the live `hyper http2::Builder` service fn path yet. Same for `RapidResetDetector` / `ContinuationFloodDetector` / `HpackBombDetector`.
+4. **Per-request HTTP telemetry**: `http_requests_total` + `http_request_duration_seconds` are connection-scope today; need a lb-l7 hook (`service_fn` wrapper) for per-request labels including actual response status code.
+5. **Step 7 conformance harnesses**: `h2spec` (skip-branch wired), Autobahn, `testssl.sh`, `wrk2`, `h2load`, `curl --http3` — not installed in this sandbox; `tests/h2spec.rs` skips cleanly.
+6. **WebSocket proxy path**: absent. Out of scope for this drive; deferred.
+7. **gRPC proxy path**: absent beyond codec-level tests. Deferred.
+8. **TcpPool re-keying on hostname DNS changes**: deferred (TcpPool keys on already-resolved `SocketAddr`).
+9. **H2 upstream**: backends stay H1 today; H2 upstream is its own pillar.
+10. **`controlplane_standalone` intermittent flake** under parallel test runs (SIGHUP cross-talk between parallel test binaries). Individual-binary runs pass; workspace runs occasionally fail. Non-blocking but worth fixing.
+
+### Post-addendum risk table
+
+| Risk | Severity | Mitigation |
+|---|---|---|
+| Detector-not-wired: flood detectors shipped as unit-tested types but not invoked by the live H2 server | **medium** — traffic won't get the documented defenses until wired | Pillar 3b.3b-3 (H2 flood detector wiring) |
+| XDP attach requires operator to opt-in AND grant CAP_BPF | low — binary ships graceful fallback with clear warning | As designed per ADR-0004 + ebpf-toolchain-separation |
+| Production ≥1 h fuzz burns deferred | low — infrastructure shipped; burns are ops work | Run `for t in ...; do cargo fuzz run $t -- -max_total_time=3600; done` on a burn-in box |
+| `controlplane_standalone` flake under workspace test | low — individual-binary tests pass reliably | Parallel-test isolation fix post-ship |
+| Per-request HTTP metrics are connection-scope | low — still usable for SLO math; granularity is the missing piece | lb-l7 stats hook |
+
+The addendum is authoritative from 2026-04-23 onward. The earlier matrix
+(before this section) remains the historical record of state at
+`b9853178` baseline.

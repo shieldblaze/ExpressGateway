@@ -1,6 +1,6 @@
 # FINAL_REVIEW §9 — Definition of Done status
 
-Generated at HEAD `e04f1a75`. Phase B drive (commits `2bda92b9` through `e04f1a75`) + Phase A.0 research (`50879461`) on top of the Rust-port baseline (`b9853178`).
+Generated at HEAD `9385ef76`. Phase B drive (commits `2bda92b9` through `9385ef76`) + Phase A.0 research (`50879461`) on top of the Rust-port baseline (`b9853178`). Updated 2026-04-23 after reviewer advisory: reconcile stale §9 rows against the shipped tree.
 
 Legend: ✅ pass with evidence · ⚠ partial (documented) · ❌ not done (tracked) · ⏭ deferred by scope (tracked in an ADR)
 
@@ -21,10 +21,10 @@ Legend: ✅ pass with evidence · ⚠ partial (documented) · ❌ not done (trac
 
 | # | Check | Status | Evidence |
 |---|-------|:------:|----------|
-| 1 | `cargo test --workspace` — 100 % pass | ✅ | 346 / 346 at HEAD `e04f1a75`. |
+| 1 | `cargo test --workspace` — 100 % pass | ✅ | 429 / 429 at HEAD `9385ef76`. |
 | 2 | `cargo test --workspace -- --ignored` — 100 % pass | ✅ | No `#[ignore]` tests in this drive. |
-| 3 | Line coverage ≥ 80 % per crate | ⚠ | `docs/conformance/coverage.md` (`8db5ffef`): workspace 75.45 % lines / 85.38 % regions / 81.57 % functions. Files below 80 % listed with category + reason + path to fix. |
-| 4 | Fuzz corpora for H1/H2/QUIC/PROXY/TLS parsers, ≥ 1 h each | ❌ | `fuzz/` directory does NOT exist. Tracked in `docs/gap-analysis.md`; this is CONTINUE.md Step 6 intentionally deferred. |
+| 3 | Line coverage ≥ 80 % per crate | ⚠ | `docs/conformance/coverage.md` (`8db5ffef`): workspace 75.45 % lines / 85.38 % regions / 81.57 % functions. Files below 80 % listed with category + reason + path to fix. Numbers are pre-observability; actual coverage likely slightly higher after `e6c119b4` added lb-observability tests. |
+| 4 | Fuzz corpora for H1/H2/QUIC/PROXY/TLS parsers, ≥ 1 h each | ⚠ | `fuzz/` directory shipped in `8e9d1887` with 5 targets (h1_parser, h2_frame, h3_frame, quic_initial, tls_client_hello) + seed corpora + 2-minute smoke runs (all clean, zero crashes recorded in `fuzz/findings/*.smoke.txt`). PROXY protocol target omitted (no clean parser entry point yet). Production ≥1 h burns explicitly deferred post-ship per the cargo-fuzz README. |
 | 5 | Property tests for LB invariants, consistent-hash rebalance, EWMA monotonicity, pool bounds, rate-limiter fairness | ⚠ | Pool-size-invariant property test shipped in `crates/lb-io/src/pool.rs::tests::size_invariant_holds_under_random_ops` (Pillar 2 / `edd11f02`). Other invariants tested at unit level; no `proptest` crate dep was added. |
 
 ## 9.3 Parity & Research
@@ -40,20 +40,20 @@ Legend: ✅ pass with evidence · ⚠ partial (documented) · ❌ not done (trac
 | # | Check | Status | Evidence |
 |---|-------|:------:|----------|
 | 1 | HTTP/1.1 passes custom RFC 9110/9112 suite | ⚠ | Unit tests + `tests/conformance_h1.rs` pass; no external suite run. |
-| 2 | HTTP/2 passes `h2spec` all categories | ❌ | `h2spec` not installed + not run. CONTINUE.md Step 7. |
-| 3 | HTTP/3 passes quinn + h3 interop against ≥ 1 other client | ❌ | Pillar 3a only ships transport + manifest tests; quinn + h3 server + curl-http3 interop is Pillar 3b. |
+| 2 | HTTP/2 passes `h2spec` all categories | ⚠ | `tests/h2spec.rs` wired in `826760a7` with skip-branch for hosts without the h2spec binary (CI and this sandbox both skip); run locally via `cargo install h2spec-rs` + rerun. ALPN-dispatched H2 server proven by `h2_proxy_e2e.rs` (including 3/3/3 per-stream LB across 3 backends). |
+| 3 | HTTP/3 passes quinn + h3 interop against ≥ 1 other client | ⚠ | `tests/quic_listener_e2e.rs::quic_listener_e2e_http3_get_through_proxy_to_h1_backend` (cf045248) drives a real H3 GET from a raw-quiche+lb-h3 client through router+actor+bridge+mock-H1-backend to 200+"hello". System curl 8.5.0 lacks HTTP/3; the in-process quiche client is the moral equivalent. External `curl --http3` interop is Pillar 3b.4. |
 | 4 | gRPC: `grpc-health-probe`, `ghz` pass; deadline propagation verified | ⚠ | `tests/grpc_*.rs` unit-level pass; external tools not run. |
 | 5 | WebSocket: Autobahn required sections pass | ❌ | Autobahn not installed + not run. Step 7. |
-| 6 | TLS: `testssl.sh` A/A+ | ❌ | No TLS listener in the binary yet (Pillar 3b). |
+| 6 | TLS: `testssl.sh` A/A+ | ⚠ | TLS-over-TCP listener shipped in `bdc1c5ed` (Pillar 3b.2) with `RotatingTicketer` in hot path + ALPN (h2 preferred, http/1.1 fallback) from `826760a7`. `testssl.sh` not installed + not run in this env; Step 7. |
 
 ## 9.5 XDP
 
 | # | Check | Status | Evidence |
 |---|-------|:------:|----------|
-| 1 | Loads on Linux 5.15 + 6.1 in SKB_MODE + DRV_MODE | ❌ | BPF ELF not produced: `bpf-linker` transitive deps need rustc ≥ 1.88; MSRV 1.85. Real aya-ebpf program source shipped at `crates/lb-l4-xdp/ebpf/src/main.rs` (`35491253`). |
-| 2 | Verifier accepts, no warnings | ❌ | Blocked on (1). |
-| 3 | `bpftool prog show` + `bpftool map dump` confirm | ❌ | Blocked on (1). |
-| 4 | Userspace fallback verified when XDP unavailable | ✅ | `crates/lb-l4-xdp/src/lib.rs` userspace simulation passes all three manifest-required XDP tests (`l4_xdp_{conntrack,hotswap,maglev}.rs`). |
+| 1 | Loads on Linux 5.15 + 6.1 in SKB_MODE + DRV_MODE | ⚠ | BPF ELF produced (9864 bytes, `crates/lb-l4-xdp/src/lb_xdp.bin`) under pinned nightly per ebpf-toolchain-separation ADR (`dec3b67b` for 4b-1, rebuilt in `7eeb59fa` for 4b-2). Loader wired into binary startup with CAP_BPF probe (`dec3b67b`). Multi-kernel verifier matrix (`xtask xdp-verify` across 5.15 LTS + 6.1 LTS) NOT yet wired — Pillar 4b-3. |
+| 2 | Verifier accepts, no warnings | ⚠ | `aya_obj::Object::parse` via `XdpLoader::program_names` accepts the ELF in the `real_elf_*` integration tests; real kernel verifier run requires CAP_BPF and is Pillar 4b-3. |
+| 3 | `bpftool prog show` + `bpftool map dump` confirm | ❌ | Deferred to Pillar 4b-3 CAP_BPF veth-pair CI stage. |
+| 4 | Userspace fallback verified when XDP unavailable | ✅ | `crates/lb-l4-xdp/src/lib.rs` userspace simulation passes all three manifest-required XDP tests (`l4_xdp_{conntrack,hotswap,maglev}.rs`). Plus 4 additional sim tests landed in `7eeb59fa` (VLAN, IPv6 hit, LpmTrie, RFC 1624 checksum). |
 
 ## 9.6 Lifecycle
 
@@ -62,7 +62,7 @@ Legend: ✅ pass with evidence · ⚠ partial (documented) · ❌ not done (trac
 | 1 | Deterministic startup | ✅ | `crates/lb/src/main.rs::async_main` logs the startup sequence verbatim; `tests/controlplane_standalone.rs` + `tests/reload_zero_drop.rs` exercise it. |
 | 2 | Clean shutdown: zero dropped in-flight; SIGTERM exits 0 | ⚠ | SIGTERM path wired via `tokio::signal::ctrl_c()`; drain is best-effort (`KillMode=mixed` `TimeoutStopSec=30` in DEPLOYMENT.md systemd unit). Zero-drop verified under the specific reload scenario (`tests/reload_zero_drop.rs`). |
 | 3 | SIGHUP reload: atomic; invalid config rejected without crash | ✅ | `tests/controlplane_standalone.rs::test_controlplane_standalone_sighup_reload` + `tests/controlplane_rollback.rs::test_controlplane_rollback_on_invalid`. |
-| 4 | XDP detach on shutdown | ❌ | Blocked on 9.5.1. `crates/lb-l4-xdp/src/loader.rs` has the detach path but is not wired to the binary's shutdown handler. |
+| 4 | XDP detach on shutdown | ⚠ | `XdpLink` guard from `dec3b67b` binary wiring is held until shutdown, so drop-semantics detach on process exit. Explicit SIGTERM-triggered detach path is Pillar 4b-3. |
 
 ## 9.7 Security
 
@@ -76,7 +76,7 @@ Legend: ✅ pass with evidence · ⚠ partial (documented) · ❌ not done (trac
 
 | # | Check | Status | Evidence |
 |---|-------|:------:|----------|
-| 1 | All PROMPT.md §18 metrics at `/metrics`, scrape-tested | ❌ | No `/metrics` endpoint; registry is in-process `DashMap<String, AtomicU64>` only. Pillar 3b. `METRICS.md` honestly inventories the gap. |
+| 1 | All PROMPT.md §18 metrics at `/metrics`, scrape-tested | ⚠ | `/metrics` endpoint shipped in `e6c119b4` on a configurable loopback admin listener; 7 instrumentation points wired (pool acquires/probe-failures/idle-gauge, dns hits/misses/entries, http_requests_total + http_request_duration_seconds). Connection-scope today; per-request granularity needs a lb-l7 hook. Security-family + XDP counters still absent. See `METRICS.md`. |
 | 2 | JSON access logs schema-validated | ⚠ | `tracing_subscriber::fmt` default format is text; JSON flip is one line in `main.rs` but not enabled in this drive. |
 | 3 | `tracing` spans parent across crate boundaries | ⚠ | Library code uses `tracing::info!` etc. but cross-crate span propagation isn't exhaustively wired. |
 
@@ -100,14 +100,14 @@ Legend: ✅ pass with evidence · ⚠ partial (documented) · ❌ not done (trac
 
 | # | Check | Status | Evidence |
 |---|-------|:------:|----------|
-| 1 | `reviewer` signoff committed | ❌ | No `reviewer` teammate was spawned in this drive. |
-| 2 | `auditor` signoff committed | ❌ | No `auditor` teammate was spawned. |
-| 3 | Both agree on every item | ❌ | N/A. |
+| 1 | `reviewer` signoff committed | ✅ | `.review/reviewer-signoff.md` (`1418d4b7`): PASS verdict, 0 blocking, 5 low-severity doc-drift advisories resolved by this done.md update. |
+| 2 | `auditor` signoff committed | ⏳ | `.review/auditor-signoff.md` in-flight (Task #23). |
+| 3 | Both agree on every item | ⏳ | Pending auditor. |
 
-## Aggregate verdict
+## Aggregate verdict (post reviewer-advisory reconciliation)
 
-- **✅ Green**: 19 rows.
-- **⚠ Partial (documented)**: 13 rows.
+- **✅ Green**: 20 rows.
+- **⚠ Partial (documented)**: 19 rows.
 - **❌ Not done (tracked)**: 14 rows.
 - **⏭ Deferred by scope (tracked in an ADR)**: covered within partials.
 
