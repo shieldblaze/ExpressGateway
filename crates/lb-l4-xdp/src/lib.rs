@@ -27,6 +27,26 @@ use std::collections::{HashMap, VecDeque};
 #[cfg(target_os = "linux")]
 pub mod loader;
 
+/// The compiled BPF ELF produced by `scripts/build-xdp.sh`.
+///
+/// `build.rs` emits `cfg(lb_xdp_elf)` when `src/lb_xdp.bin` is present, so
+/// this constant exists only when a real ELF has been built and committed.
+/// Pillar 4b-1 produces this artifact (~3 KiB) and tracks it as a binary
+/// blob alongside the source. `XdpLoader::load_from_bytes(LB_XDP_ELF)` is
+/// the supported entry point.
+///
+/// The bytes are emitted with 8-byte alignment so downstream `object`-crate
+/// parsers that cast ELF headers through `from_bytes` (alignment-checked)
+/// do not reject them.
+#[cfg(lb_xdp_elf)]
+pub const LB_XDP_ELF: &[u8] = {
+    #[repr(C, align(8))]
+    struct Aligned<B: ?Sized>(B);
+    static ALIGNED: &Aligned<[u8; include_bytes!("lb_xdp.bin").len()]> =
+        &Aligned(*include_bytes!("lb_xdp.bin"));
+    &ALIGNED.0
+};
+
 /// Default maximum number of conntrack entries (1 million flows).
 const DEFAULT_CONNTRACK_MAX_ENTRIES: usize = 1_000_000;
 

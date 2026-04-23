@@ -1,9 +1,10 @@
 # ADR: eBPF toolchain lives separately from the workspace
 
-- Status: Accepted
+- Status: Accepted. Realised 2026-04-23 via Pillar 4b-1: the committed ELF
+  was produced under the pinned nightly with `bpf-linker 0.10.3`.
 - Date: 2026-04-23
 - Deciders: ExpressGateway team
-- Related: ADR-0004 (eBPF framework), ADR-0005 (BPF map schema), Pillar 4a commit `35491253`, Pillar 4b acceptance criteria
+- Related: ADR-0004 (eBPF framework), ADR-0005 (BPF map schema), Pillar 4a commit `35491253`, Pillar 4b-1 (this ADR realised)
 
 ## Context
 
@@ -60,10 +61,38 @@ ADR-0004 selected aya as the userspace loader framework and introduced the simul
 - `scripts/build-xdp.sh` already exists from Pillar 4a; extend it to pass `cargo +$(cat crates/lb-l4-xdp/ebpf/rust-toolchain.toml | grep channel | ...)` explicitly if needed.
 - Document in `DEPLOYMENT.md` that the BPF ELF build is optional for pure-L7 deployments and required only when XDP acceleration is enabled.
 
+## Pillar 4b-1 realisation notes (2026-04-23)
+
+- `crates/lb-l4-xdp/ebpf/rust-toolchain.toml` remains pinned to
+  `nightly-2026-01-15` in the committed tree. In practice, any nightly
+  ≥ rustc 1.88 (to satisfy bpf-linker's `cargo-platform 0.3.2`,
+  `libloading 0.9.0`, `time 0.3.47` transitive deps) works. The CI
+  builder used `nightly-2026-04-10` (rustc 1.96.0-nightly) and
+  `bpf-linker 0.10.3`, against the system's `libLLVM.so.18.1`.
+- `scripts/build-xdp.sh` now parses the `channel` line out of the ebpf
+  crate's `rust-toolchain.toml` and drives `cargo +<pinned-nightly>
+  install bpf-linker --locked` (if needed) + the BPF ELF build.
+- The produced ELF (`crates/lb-l4-xdp/src/lb_xdp.bin`, 3 kB) is
+  committed to the repository. `crates/lb-l4-xdp/build.rs` detects it
+  and emits `cfg(lb_xdp_elf)`. `crates/lb/build.rs` mirrors the same
+  detection so the binary's `src/xdp.rs` can gate `include_bytes!` /
+  `XdpLoader::load_from_bytes(LB_XDP_ELF)` without depending on cargo
+  feature propagation (cfg values do not cross crate boundaries).
+- Downstream consumers that want to parse the ELF *without* `CAP_BPF`
+  must use `XdpLoader::program_names` (backed by
+  `aya_obj::Object::parse`), not `XdpLoader::load_from_bytes`. The
+  latter triggers map creation through the `bpf(2)` syscall.
+
 ## Follow-ups
 
-- When aya publishes 0.13+ with stable-toolchain compat for the ebpf side, collapse the two toolchains into one. (Not currently on any public aya roadmap.)
-- Add a `cargo xtask bpf-build` wrapper so contributors don't need to know the exact `cargo +nightly-... -Z build-std=core` invocation.
+- When aya publishes a version with stable-toolchain compat for the
+  ebpf side, collapse the two toolchains into one. (Not currently on
+  any public aya roadmap.)
+- Add a `cargo xtask bpf-build` wrapper so contributors don't need to
+  know the exact `cargo +nightly-... -Z build-std=core` invocation.
+- Pillar 4b-2 will add a CI stage that invokes `scripts/build-xdp.sh`
+  and diffs the result against the committed ELF — so the BPF program
+  source and the blob cannot drift silently.
 
 ## Sources
 

@@ -247,6 +247,15 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "1e748733b7cbc798e1434b6ac524f0c1ff2ab456fe201501e6497c8417a4fc33"
 
 [[package]]
+name = "caps"
+version = "0.5.6"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "fd1ddba47aba30b6a889298ad0109c3b8dcb0e8fc993b459daa7067d46f865e0"
+dependencies = [
+ "libc",
+]
+
+[[package]]
 name = "cc"
 version = "1.2.60"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1349,6 +1358,7 @@ name = "lb"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "caps",
  "hyper",
  "hyper-util",
  "lb-balancer",
@@ -1356,6 +1366,7 @@ dependencies = [
  "lb-controlplane",
  "lb-health",
  "lb-io",
+ "lb-l4-xdp",
  "lb-l7",
  "lb-observability",
  "lb-quic",
@@ -1532,6 +1543,7 @@ name = "lb-l4-xdp"
 version = "0.1.0"
 dependencies = [
  "aya",
+ "aya-obj",
  "parking_lot",
  "rand 0.8.5",
  "thiserror 2.0.18",

@@ -86,6 +86,11 @@ tokio-util = { version = "0.7", default-features = false, features = ["rt"] }
 rand = "0.8"
 # XDP / eBPF (Pillar 4a: aya userspace loader; Linux-only in consumers)
 aya = "0.13"
+# Pillar 4b-1: aya-obj gives us the kernel-free ELF parser (no CAP_BPF
+# required) for the real_elf_parses integration test.
+aya-obj = "0.2"
+# Pillar 4b-1: CAP_BPF probe before attempting XDP attach.
+caps = "0.5"
 
 [dev-dependencies]
 lb-core = { path = "crates/lb-core" }

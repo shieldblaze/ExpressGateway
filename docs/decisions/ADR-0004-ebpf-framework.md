@@ -1,7 +1,10 @@
-# ADR-0004: eBPF/XDP framework — aya (realised 2026-04-22, Pillar 4a)
+# ADR-0004: eBPF/XDP framework — aya (realised 2026-04-22 Pillar 4a, ELF + startup 2026-04-23 Pillar 4b-1)
 
-- Status: Accepted (realised 2026-04-22 via Pillar 4a)
-- Date: 2026-04-22
+- Status: Accepted. Pillar 4a (2026-04-22) committed aya-ebpf source +
+  userspace loader. Pillar 4b-1 (2026-04-23) produced a real BPF ELF,
+  embedded it into the binary, and wired optional startup attach with a
+  `CAP_BPF` probe.
+- Date: 2026-04-22 (Pillar 4a), 2026-04-23 (Pillar 4b-1)
 - Deciders: ExpressGateway team
 - Consulted: aya-rs documentation, libbpf-rs README, Katran (Meta)
   architecture, Cilium eBPF loader, "XDP paper" (Høiland-Jørgensen et al.
@@ -163,6 +166,54 @@ Concretely, as of 2026-04-22:
   feature-flagged) so the LB attaches the BPF program when run with
   sufficient capabilities.
 
+## Pillar 4b-1 realised (2026-04-23)
+
+Between 4a and 4b-1 the LLVM / nightly situation in CI changed: the
+nightly already installed on the builder was `nightly-2026-04-10`
+(rustc 1.96.0-nightly), which accepts `bpf-linker 0.10.3` without any
+MSRV collision. `bpf-linker` itself links against the system
+`libLLVM.so.18.1`.
+
+Concrete changes landed in Pillar 4b-1:
+
+- `scripts/build-xdp.sh` now parses the nightly channel from
+  `crates/lb-l4-xdp/ebpf/rust-toolchain.toml`, ensures `rust-src` +
+  `bpfel-unknown-none` are installed for that channel, installs
+  `bpf-linker` if missing, and then runs
+  `cargo +<pinned-nightly> build --release --target bpfel-unknown-none
+  -Z build-std=core`. On success the ELF is copied to
+  `crates/lb-l4-xdp/src/lb_xdp.bin` (3 kB for the current source).
+- `crates/lb-l4-xdp/src/lib.rs` exports the ELF as
+  `pub const LB_XDP_ELF: &[u8]`. The bytes are emitted via an
+  `#[repr(C, align(8))] Aligned<[u8; N]>` wrapper so the
+  `object` crate's alignment-checked `from_bytes` cast accepts them.
+- `crates/lb-l4-xdp/src/loader.rs` gained `XdpLoader::program_names`, a
+  kernel-free path built on `aya_obj::Object::parse`. This lets the CI
+  integration test inspect the ELF without `CAP_BPF`.
+- `crates/lb-l4-xdp/tests/real_elf.rs` is a new integration test gated
+  on `cfg(lb_xdp_elf)`; it runs whenever the ELF is present and asserts
+  the `lb_xdp` entry is the only XDP program.
+- `crates/lb-config` gained `[runtime]` with `xdp_enabled` +
+  `xdp_interface`. Validation requires `xdp_interface` when
+  `xdp_enabled=true`.
+- `crates/lb/src/xdp.rs` owns the startup attach logic. It probes
+  `CAP_BPF` then `CAP_NET_ADMIN` via the `caps` crate, and falls back
+  to a `tracing::warn!` + `None` when either is missing, when the ELF
+  was not compiled into the binary, or when aya reports an attach
+  error. Never panics. The `XdpLoader` guard is held in
+  `crates/lb/src/main.rs::async_main` so the kernel attach lasts until
+  the process exits.
+
+Observed on the CI builder (unprivileged), the binary started under a
+test config with `xdp_enabled=true, xdp_interface="lo"`, logged
+`xdp disabled — run the binary with CAP_BPF or as root to enable`,
+and continued binding its TCP listener normally.
+
+Remaining deferred work is now strictly Pillar 4b-2 (XDP_TX rewrite
+with RFC 1624 incremental checksum, VLAN + IPv6 parsing, LPM_TRIE ACL
+upgrade, multi-kernel verifier matrix via `xtask xdp-verify`, and a
+`CAP_BPF`-gated real-attach CI stage on a veth pair).
+
 ## Sources
 
 - <https://aya-rs.dev/>
@@ -172,4 +223,6 @@ Concretely, as of 2026-04-22:
 - Meta/Katran <https://github.com/facebookincubator/katran>.
 - Internal: `crates/lb-l4-xdp/src/lib.rs`,
   `crates/lb-l4-xdp/src/loader.rs`,
-  `crates/lb-l4-xdp/ebpf/src/main.rs`, `scripts/build-xdp.sh`.
+  `crates/lb-l4-xdp/ebpf/src/main.rs`,
+  `crates/lb-l4-xdp/tests/real_elf.rs`,
+  `crates/lb/src/xdp.rs`, `scripts/build-xdp.sh`.

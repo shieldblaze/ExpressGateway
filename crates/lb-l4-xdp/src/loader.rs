@@ -17,6 +17,7 @@ use aya::{
     maps::{Map, MapError},
     programs::{ProgramError, Xdp, XdpFlags},
 };
+use aya_obj::{Object, ParseError};
 
 /// XDP attach mode, mirroring the kernel's `XDP_FLAGS_*` bits.
 ///
@@ -74,6 +75,11 @@ pub enum XdpLoaderError {
     /// Raw I/O error (e.g. reading an ELF from disk).
     #[error("io error: {0}")]
     Io(#[from] io::Error),
+
+    /// Object-level ELF parse failed (used by the kernel-free
+    /// `parse_object_only` path).
+    #[error("ebpf object parse error: {0}")]
+    ObjectParse(#[from] ParseError),
 }
 
 /// High-level handle to a loaded BPF object containing an XDP program.
@@ -88,15 +94,34 @@ pub struct XdpLoader {
 }
 
 impl XdpLoader {
-    /// Parse an in-memory BPF ELF. Does not touch the kernel.
+    /// Parse an in-memory BPF ELF and have aya create its declared maps
+    /// in the kernel. Requires `CAP_BPF` on modern kernels — on
+    /// unprivileged CI this will fail at the map-creation step, not at
+    /// the parse step.
+    ///
+    /// For a kernel-free parse (e.g. to inspect program names without
+    /// touching the kernel), use [`XdpLoader::program_names`].
     ///
     /// # Errors
     ///
-    /// Returns `XdpLoaderError::Load` if the bytes are not a valid BPF object
-    /// or if BTF relocation fails.
+    /// Returns `XdpLoaderError::Load` if the bytes are not a valid BPF
+    /// object, BTF relocation fails, or map creation is rejected.
     pub fn load_from_bytes(elf: &[u8]) -> Result<Self, XdpLoaderError> {
         let ebpf = EbpfLoader::new().load(elf)?;
         Ok(Self { ebpf })
+    }
+
+    /// Kernel-free ELF inspection: parse the BPF object with aya-obj and
+    /// return every program name it declares. Safe to call on
+    /// unprivileged CI runners — this never touches the BPF syscall.
+    ///
+    /// # Errors
+    ///
+    /// Returns `XdpLoaderError::ObjectParse` if the bytes are not a valid
+    /// BPF ELF.
+    pub fn program_names(elf: &[u8]) -> Result<Vec<String>, XdpLoaderError> {
+        let obj = Object::parse(elf)?;
+        Ok(obj.programs.keys().cloned().collect())
     }
 
     /// Load an XDP program from the object into the kernel.
@@ -174,18 +199,6 @@ impl XdpLoader {
         &mut self.ebpf
     }
 }
-
-/// The compiled BPF ELF, embedded when `scripts/build-xdp.sh` has produced
-/// `src/lb_xdp.bin` at build time (detected by `build.rs`). Absent when the
-/// toolchain (bpf-linker, LLVM 18 dev headers, rustc nightly + `rust-src`)
-/// is not available — in that case this constant simply does not exist.
-///
-/// The standalone `lb-xdp-ebpf` crate is NOT part of the workspace build
-/// (`cargo build --workspace` never compiles it); `scripts/build-xdp.sh`
-/// runs the BPF target build separately and installs the ELF next to this
-/// source file.
-#[cfg(lb_xdp_elf)]
-pub const LB_XDP_ELF: &[u8] = include_bytes!("lb_xdp.bin");
 
 #[cfg(test)]
 mod tests {

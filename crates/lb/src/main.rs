@@ -45,6 +45,8 @@ use lb_observability::MetricsRegistry;
 use lb_quic::{QuicListener, QuicListenerParams};
 use lb_security::{TicketRotator, build_server_config};
 
+mod xdp;
+
 // ── shared gateway state ────────────────────────────────────────────────
 
 /// How a listener terminates inbound traffic.
@@ -543,6 +545,16 @@ async fn async_main() -> anyhow::Result<()> {
     // ── DNS resolver ────────────────────────────────────────────────
     let resolver = DnsResolver::new(ResolverConfig::default());
     tracing::info!("DNS resolver ready (positive cap 300s, negative TTL 5s)");
+
+    // ── optional XDP data-plane attach (Pillar 4b-1) ────────────────
+    // Held for the process lifetime; dropping the `XdpLoader` on Linux
+    // lets aya tear down the kernel-side attachment. Non-Linux / no-op
+    // when disabled.
+    let _xdp_loader = if let Some(rt) = config.runtime.as_ref() {
+        xdp::try_attach_xdp(rt)
+    } else {
+        None
+    };
 
     // ── metrics ─────────────────────────────────────────────────────
     let metrics = Arc::new(MetricsRegistry::new());

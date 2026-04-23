@@ -46,6 +46,9 @@ const IPPROTO_TCP: u8 = 6;
 const IPPROTO_UDP: u8 = 17;
 
 const ETH_HDR_LEN: usize = 14;
+// Anchor constants for reviewers; the code enforces IHL >= 5 directly,
+// so `IPV4_MIN_HDR_LEN` would be unused at codegen time.
+#[allow(dead_code)]
 const IPV4_MIN_HDR_LEN: usize = 20;
 const TCP_MIN_HDR_LEN: usize = 20;
 const UDP_HDR_LEN: usize = 8;

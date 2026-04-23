@@ -5,6 +5,7 @@ edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
 publish = false
+build = "build.rs"
 
 [dependencies]
 anyhow = { workspace = true }
@@ -26,5 +27,11 @@ lb-health = { path = "../lb-health" }
 lb-security = { path = "../lb-security" }
 lb-quic = { path = "../lb-quic" }
 lb-l7 = { path = "../lb-l7" }
+lb-l4-xdp = { path = "../lb-l4-xdp" }
 hyper = { workspace = true }
 hyper-util = { workspace = true }
+
+# Pillar 4b-1: CAP_BPF probe. Linux-only; the XDP path is gated on
+# target_os = "linux" in main.rs.
+[target.'cfg(target_os = "linux")'.dependencies]
+caps = { workspace = true }

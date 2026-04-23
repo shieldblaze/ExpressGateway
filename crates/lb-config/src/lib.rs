@@ -30,10 +30,34 @@ pub enum ConfigError {
 }
 
 /// Top-level load balancer configuration.
-#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+#[derive(Debug, Clone, Default, serde::Serialize, serde::Deserialize)]
 pub struct LbConfig {
     /// Configured listeners.
+    #[serde(default)]
     pub listeners: Vec<ListenerConfig>,
+    /// Global runtime knobs (optional). When absent all defaults apply.
+    #[serde(default)]
+    pub runtime: Option<RuntimeConfig>,
+}
+
+/// Process-wide runtime configuration (Pillar 4b-1).
+///
+/// Currently covers the optional XDP data-plane attach. All fields are
+/// opt-in and default to "disabled" — existing deployments that never set
+/// `[runtime]` keep their current pure-userspace behaviour.
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct RuntimeConfig {
+    /// When true, the binary tries to load and attach the compiled BPF
+    /// program on startup. Requires `CAP_BPF` + `CAP_NET_ADMIN` (or root)
+    /// and a compiled ELF (`scripts/build-xdp.sh` must have produced
+    /// `crates/lb-l4-xdp/src/lb_xdp.bin` at build time). If either is
+    /// missing the process logs a warning and continues without XDP.
+    #[serde(default)]
+    pub xdp_enabled: bool,
+    /// Network interface name to attach the XDP program to. Required when
+    /// `xdp_enabled = true`. Ignored otherwise.
+    #[serde(default)]
+    pub xdp_interface: Option<String>,
 }
 
 /// Configuration for a single listener.
@@ -253,6 +277,25 @@ pub fn validate_config(config: &LbConfig) -> Result<(), ConfigError> {
     for (i, listener) in config.listeners.iter().enumerate() {
         validate_listener(i, listener)?;
     }
+    if let Some(rt) = config.runtime.as_ref() {
+        validate_runtime(rt)?;
+    }
+    Ok(())
+}
+
+fn validate_runtime(rt: &RuntimeConfig) -> Result<(), ConfigError> {
+    if rt.xdp_enabled {
+        let iface = rt
+            .xdp_interface
+            .as_deref()
+            .map(str::trim)
+            .filter(|s| !s.is_empty());
+        if iface.is_none() {
+            return Err(ConfigError::Validation(
+                "runtime.xdp_enabled=true requires runtime.xdp_interface".into(),
+            ));
+        }
+    }
     Ok(())
 }
 
@@ -452,7 +495,10 @@ protocol = "tcp"
 
     #[test]
     fn validate_empty_listeners() {
-        let config = LbConfig { listeners: vec![] };
+        let config = LbConfig {
+            listeners: vec![],
+            runtime: None,
+        };
         assert!(validate_config(&config).is_err());
     }
 
@@ -468,6 +514,7 @@ protocol = "tcp"
                 http: None,
                 backends: vec![],
             }],
+            runtime: None,
         };
         assert!(validate_config(&config).is_err());
     }
@@ -484,6 +531,7 @@ protocol = "tcp"
                 http: None,
                 backends: vec![],
             }],
+            runtime: None,
         };
         assert!(validate_config(&config).is_ok());
     }
@@ -504,6 +552,7 @@ protocol = "tcp"
                     weight: 1,
                 }],
             }],
+            runtime: None,
         };
         assert!(validate_config(&config).is_err());
     }
@@ -561,6 +610,7 @@ address = "127.0.0.1:3000"
                 http: None,
                 backends: vec![],
             }],
+            runtime: None,
         };
         assert!(validate_config(&config).is_err());
     }
@@ -577,6 +627,7 @@ address = "127.0.0.1:3000"
                 http: None,
                 backends: vec![],
             }],
+            runtime: None,
         };
         assert!(validate_config(&config).is_err());
     }
@@ -598,6 +649,7 @@ address = "127.0.0.1:3000"
                 http: None,
                 backends: vec![],
             }],
+            runtime: None,
         };
         assert!(validate_config(&config).is_err());
     }
@@ -619,6 +671,7 @@ address = "127.0.0.1:3000"
                 http: None,
                 backends: vec![],
             }],
+            runtime: None,
         };
         assert!(validate_config(&config).is_err());
     }
@@ -660,6 +713,7 @@ protocol = "h1"
                 http: None,
                 backends: vec![],
             }],
+            runtime: None,
         };
         assert!(validate_config(&config).is_err());
     }
@@ -682,6 +736,7 @@ protocol = "h1"
                 http: None,
                 backends: vec![],
             }],
+            runtime: None,
         };
         assert!(validate_config(&config).is_err());
     }
@@ -702,6 +757,7 @@ protocol = "h1"
                     weight: 1,
                 }],
             }],
+            runtime: None,
         };
         assert!(validate_config(&config).is_err());
     }
@@ -750,6 +806,7 @@ address = "127.0.0.1:3000"
                     weight: 1,
                 }],
             }],
+            runtime: None,
         };
         let err = validate_config(&config).unwrap_err();
         assert!(matches!(err, ConfigError::Validation(_)));
@@ -774,6 +831,7 @@ address = "127.0.0.1:3000"
                 http: None,
                 backends: vec![],
             }],
+            runtime: None,
         };
         assert!(validate_config(&config).is_err());
     }
@@ -802,6 +860,7 @@ address = "127.0.0.1:3000"
                     weight: 1,
                 }],
             }],
+            runtime: None,
         };
         validate_config(&config).unwrap();
     }
@@ -826,7 +885,81 @@ address = "127.0.0.1:3000"
                     weight: 1,
                 }],
             }],
+            runtime: None,
         };
         assert!(validate_config(&config).is_err());
+    }
+
+    #[test]
+    fn parse_runtime_xdp_enabled() {
+        let input = r#"
+[[listeners]]
+address = "0.0.0.0:80"
+protocol = "tcp"
+
+[[listeners.backends]]
+address = "127.0.0.1:3000"
+
+[runtime]
+xdp_enabled = true
+xdp_interface = "eth0"
+"#;
+        let config = parse_config(input).unwrap();
+        let rt = config.runtime.as_ref().unwrap();
+        assert!(rt.xdp_enabled);
+        assert_eq!(rt.xdp_interface.as_deref(), Some("eth0"));
+        assert!(validate_config(&config).is_ok());
+    }
+
+    #[test]
+    fn runtime_xdp_enabled_without_interface_rejected() {
+        let config = LbConfig {
+            listeners: vec![ListenerConfig {
+                address: "0.0.0.0:80".into(),
+                protocol: "tcp".into(),
+                tls: None,
+                quic: None,
+                alt_svc: None,
+                http: None,
+                backends: vec![],
+            }],
+            runtime: Some(RuntimeConfig {
+                xdp_enabled: true,
+                xdp_interface: None,
+            }),
+        };
+        let err = validate_config(&config).unwrap_err();
+        assert!(matches!(err, ConfigError::Validation(_)));
+    }
+
+    #[test]
+    fn runtime_xdp_disabled_does_not_require_interface() {
+        let config = LbConfig {
+            listeners: vec![ListenerConfig {
+                address: "0.0.0.0:80".into(),
+                protocol: "tcp".into(),
+                tls: None,
+                quic: None,
+                alt_svc: None,
+                http: None,
+                backends: vec![],
+            }],
+            runtime: Some(RuntimeConfig {
+                xdp_enabled: false,
+                xdp_interface: None,
+            }),
+        };
+        validate_config(&config).unwrap();
+    }
+
+    #[test]
+    fn runtime_absent_keeps_parse_backward_compatible() {
+        let input = r#"
+[[listeners]]
+address = "0.0.0.0:80"
+protocol = "tcp"
+"#;
+        let config = parse_config(input).unwrap();
+        assert!(config.runtime.is_none());
     }
 }

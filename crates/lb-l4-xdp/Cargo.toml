@@ -16,3 +16,7 @@ parking_lot = { workspace = true }
 # (e.g. aarch64-musl CI) building against the pure-userspace simulation.
 [target.'cfg(target_os = "linux")'.dependencies]
 aya = { workspace = true }
+# Pillar 4b-1: aya-obj's Object::parse is the kernel-free ELF inspector used
+# by `XdpLoader::parse_object`; the real-ELF integration test runs without
+# CAP_BPF because we never ask aya to create maps.
+aya-obj = { workspace = true }
