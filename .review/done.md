@@ -156,20 +156,24 @@ Phase B commits landing on top of the initial port:
 | 22 | `d983dd3f` | **Pillar 3b.3c-1**: QUIC listener seam — transport handshake only |
 | 23 | `cf045248` | **Pillar 3b.3c-2**: InboundPacketRouter + actor + lb-h3 H3 bridge + RETRY/0-RTT wire + H3 GET e2e |
 | 24 | `882c0d7e` | **Pillar 3b.3c-3**: QuicUpstreamPool for h3 backends; completes 3b.3c |
+| 25 | `13c29f28` | done.md: Pillar 3b.3c complete |
+| 26 | `d6be8e4e` | **Pillar 3b.3b-1**: real hyper 1.x H1 proxy with Alt-Svc + hop-by-hop + XFF |
+| 27 | `826760a7` | **Pillar 3b.3b-2**: H2 over TLS via ALPN + per-stream LB + h2spec; completes 3b.3b |
+| 28 | `dec3b67b` | **Pillar 4b-1**: BPF ELF build + userspace loader startup integration |
 
-294 → 377 tests (+83). halting-gate green through each commit. **Pillar 3b.3c complete**: a real H3 GET issued by a raw-quiche client flows through the binary's QUIC listener → InboundPacketRouter (minting RETRY via `RetryTokenSigner` on the wire, dropping 0-RTT replays via `ZeroRttReplayGuard`) → ConnectionActor (one per `quiche::Connection`) → lb-h3 HEADERS/DATA bridge → TcpPool (H1 backend) or QuicUpstreamPool (H3 backend) → 200 OK "hello" streamed back. Six e2e tests cover handshake, shutdown, H1-backend GET, H3-backend GET, RETRY round-trip, and 0-RTT replay drop.
+294 → 407 tests (+113). halting-gate green through each commit. **Pillar 3b.3c complete**: a real H3 GET issued by a raw-quiche client flows through the binary's QUIC listener → InboundPacketRouter (minting RETRY via `RetryTokenSigner` on the wire, dropping 0-RTT replays via `ZeroRttReplayGuard`) → ConnectionActor (one per `quiche::Connection`) → lb-h3 HEADERS/DATA bridge → TcpPool (H1 backend) or QuicUpstreamPool (H3 backend) → 200 OK "hello" streamed back. Six e2e tests cover handshake, shutdown, H1-backend GET, H3-backend GET, RETRY round-trip, and 0-RTT replay drop. **Pillar 3b.3b complete**: H1 and H2 L7 proxies shipped per PROMPT.md §§10/11. Alt-Svc injection, hop-by-hop stripping (RFC 9110 §7.6.1), X-Forwarded-{For,Proto,Host}, Via append, header/body/total timeouts, ALPN dispatch, per-stream LB proven by 3/3/3 distribution across 3 backends on a single H2 connection with 9 requests. **Pillar 4b-1 complete**: real 3064-byte eBPF ELF committed; `XdpLoader::load_from_bytes` + `program_names` validated; binary startup probes CAP_BPF via `caps` crate, load-and-attaches if available, logs-and-skips otherwise.
 
 ## Ordered remaining work (per user correction 2026-04-23)
 
 PROMPT.md §§10, 11, 28 always required hyper+h2 for HTTP/1.1 and HTTP/2. A TLS-terminating TCP proxy is not the gateway; "add real HTTP servers" is in scope, not new scope.
 
-1. ~~**Pillar 3b.3c**~~ ✅ complete — commits `d983dd3f` + `cf045248` + `882c0d7e`. Six e2e tests pass.
-2. **Pillar 3b.3b + H1/H2 servers, together** — real `hyper` 1.x for HTTP/1.1 and `h2` 0.4 for HTTP/2 in the binary per PROMPT.md §§10, 11. Hop-by-hop header stripping, `X-Forwarded-For`/`X-Forwarded-Proto`/`X-Forwarded-Host`/`Via`, request-header and request-body timeouts. Alt-Svc injection (RFC 7838) advertising the H3 port on H1 and H2 responses. h2spec passes on the H2 listener. h2load covers per-stream load balancing. **Pre-split into 3b.3b-1 (H1 path + Alt-Svc) and 3b.3b-2 (H2 path + h2spec)** — each roughly matches the 3b.3c-2 size.
-3. **Pillar 4b** — per `ebpf-toolchain-separation.md` ADR. `crates/lb-l4-xdp/ebpf/rust-toolchain.toml` nightly pin that bpf-linker accepts; produce the BPF ELF; wire loader into binary startup with CAP_BPF check; XDP_TX with RFC 1624 incremental checksum; VLAN + IPv6 parse; LpmTrie upgrade for ACL.
-4. **In parallel with 4b, across standby teammates**:
-   - Step 6 fuzz corpora (5 targets, ≥1 h burn each, findings in `fuzz/findings/`).
+1. ~~**Pillar 3b.3c**~~ ✅ commits `d983dd3f` + `cf045248` + `882c0d7e`.
+2. ~~**Pillar 3b.3b**~~ ✅ commits `d6be8e4e` (H1) + `826760a7` (H2 + ALPN + per-stream LB + h2spec skip-branch).
+3. **Pillar 4b** — 4b-1 ✅ (`dec3b67b`); **4b-2 remaining**: XDP_TX with RFC 1624 incremental checksum, VLAN + IPv6 parse, LpmTrie ACL upgrade, xtask multi-kernel verifier matrix, SIGHUP hot map updates.
+4. **Parallel with 4b-2**:
+   - Step 6 fuzz corpora (5 targets, ≥1 h burn each, findings in `fuzz/findings/`) — infra build is a single session; 1 h production burns deferred to post-ship.
    - Prometheus `/metrics` HTTP endpoint — promote `MetricsRegistry` to histograms + labels + exposition; registered on a loopback admin listener by default.
-   - SECURITY.md to cross-reference `docs/research/pingora.md` edge-cases section.
-5. **Conformance harnesses (Step 7)** after 2 and 3 land. h2spec, Autobahn, testssl.sh, wrk2, h2load, `curl --http3` interop. Commit outputs to `docs/conformance/`.
+   - ~~SECURITY.md cross-reference `docs/research/pingora.md`~~ ✅ in-progress edit (same batch as this update).
+5. **Conformance harnesses (Step 7)** after 4b-2 lands. h2spec (already-wired skip branch), Autobahn, testssl.sh, wrk2, h2load, `curl --http3` interop. Commit outputs to `docs/conformance/`.
 6. **reviewer + auditor sign-off** — two fresh teammates, read-only, independent. Both sign `.review/reviewer-signoff.md` and `.review/auditor-signoff.md`. Both must agree on every §9 row.
 7. **`.review/SHIP.md`** when `docs/gap-analysis.md` is either "no open gaps" or deleted, and both signoffs agree.

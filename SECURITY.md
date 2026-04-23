@@ -54,7 +54,7 @@ Each row maps an attack to the code site that mitigates it, plus a reference.
 
 ## Cross-reference
 
-The full adversarial catalog with prose descriptions, CVE IDs, and mitigation rationale is in `docs/research/dos-catalog.md`. The cross-cutting-themes doc (`docs/research/cross-cutting.md`) discusses why each defense exists where it does.
+The full adversarial catalog with prose descriptions, CVE IDs, and mitigation rationale is in `docs/research/dos-catalog.md`. The cross-cutting-themes doc (`docs/research/cross-cutting.md`) discusses why each defense exists where it does. `docs/research/pingora.md` (Cloudflare Pingora study) contains the edge-case catalog — EC-01 (non-blocking read-zero pool probe) is realized in `crates/lb-io/src/pool.rs`; EC-04 (CONTINUATION flood) and EC-05 (Rapid Reset) in `crates/lb-h2/src/security.rs`; EC-11 (ticket-key rotation) in `crates/lb-security/src/ticket.rs`; EC-16 (per-peer pool LRU) in both `crates/lb-io/src/pool.rs` (TCP) and `crates/lb-io/src/quic_pool.rs` (QUIC).
 
 ## Residual risks
 
