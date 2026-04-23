@@ -100,9 +100,9 @@ Legend: ✅ pass with evidence · ⚠ partial (documented) · ❌ not done (trac
 
 | # | Check | Status | Evidence |
 |---|-------|:------:|----------|
-| 1 | `reviewer` signoff committed | ✅ | `.review/reviewer-signoff.md` (`1418d4b7`): PASS verdict, 0 blocking, 5 low-severity doc-drift advisories resolved by this done.md update. |
-| 2 | `auditor` signoff committed | ⏳ | `.review/auditor-signoff.md` in-flight (Task #23). |
-| 3 | Both agree on every item | ⏳ | Pending auditor. |
+| 1 | `reviewer` signoff committed | ✅ | `.review/reviewer-signoff.md` (`1418d4b7`): PASS verdict, 0 blocking, 5 low-severity doc-drift advisories resolved in `2c476d7c`. |
+| 2 | `auditor` signoff committed | ✅ | `.review/auditor-signoff.md`: PASS verdict, 0 blocking, 3 residual risks flagged. Findings #1 (CID cap) + #2 (keyed 0-RTT hash) resolved in `ba7bf635`; finding #3 (detectors-not-wired) tracked as Pillar 3b.3b-3 in `docs/gap-analysis.md` addendum. |
+| 3 | Both agree on every item | ✅ | Both PASS. Independently authored; reviewer lens = maintainability/correctness, auditor lens = adversarial/security. |
 
 ## Aggregate verdict (post reviewer-advisory reconciliation)
 
@@ -179,5 +179,5 @@ PROMPT.md §§10, 11, 28 always required hyper+h2 for HTTP/1.1 and HTTP/2. A TLS
    - ~~Prometheus `/metrics`~~ ✅ `e6c119b4` (registry promoted + exposition endpoint + 7 instrumentation points).
    - ~~SECURITY.md cross-reference `docs/research/pingora.md`~~ ✅ `60d6f07e`.
 5. **Conformance harnesses (Step 7)** — h2spec (already-wired skip branch), Autobahn, testssl.sh, wrk2, h2load, `curl --http3` interop. Deferred to review disposition; may be required by reviewer + auditor, may be acceptable as post-ship.
-6. **reviewer + auditor sign-off** ← current step. Two fresh teammates, read-only, independent. Both sign `.review/reviewer-signoff.md` and `.review/auditor-signoff.md`. Both must agree on every §9 row.
-7. **`.review/SHIP.md`** when `docs/gap-analysis.md` is either "no open gaps" or deleted, and both signoffs agree.
+6. ~~**reviewer + auditor sign-off**~~ ✅ both PASS. Audit findings #1 + #2 resolved in `ba7bf635`; finding #3 tracked as scope.
+7. **`.review/SHIP.md`** — **user-gated**. FINAL_REVIEW §11 requires "no open gaps in docs/gap-analysis.md" before SHIP; the 2026-04-23 addendum lists residual gaps (Pillar 4b-3, Pillar 3b.4, detector wiring, per-request telemetry, Step 7 harnesses, WebSocket, gRPC upstream, TcpPool hostname re-keying, controlplane test flake). The user chooses (a) accept the residual list as v1 scope → SHIP.md with explicit acceptance note, or (b) close specific residual items first, or (c) stop here.
