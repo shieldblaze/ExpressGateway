@@ -28,8 +28,9 @@ use tokio::sync::mpsc;
 use tokio_util::sync::CancellationToken;
 
 use lb_io::pool::TcpPool;
+use lb_io::quic_pool::QuicUpstreamPool;
 
-use crate::h3_bridge::{H3Request, StreamRxBuf, h3_to_h1_roundtrip};
+use crate::h3_bridge::{H3Request, StreamRxBuf, h3_to_h1_roundtrip, h3_to_h3_roundtrip};
 
 /// Raw UDP packet forwarded from the router to a single actor.
 #[derive(Debug)]
@@ -61,6 +62,11 @@ pub struct ActorParams {
     /// selection picks one per H3 request; 3b.3c-2 ships the simplest
     /// possible picker.
     pub backends: Arc<Vec<SocketAddr>>,
+    /// Optional upstream H3 pool + single upstream H3 backend
+    /// `(addr, sni)`. When configured, the actor routes H3 requests
+    /// via [`h3_to_h3_roundtrip`] instead of the H1/TcpPool path.
+    /// Pillar 3b.3c-3.
+    pub h3_backend: Option<(QuicUpstreamPool, SocketAddr, String)>,
 }
 
 /// Drive one `quiche::Connection` to completion, terminating H3 and
@@ -156,6 +162,7 @@ pub async fn run_actor(mut params: ActorParams) -> std::io::Result<()> {
                 &mut request_tasks,
                 &params.pool,
                 &params.backends,
+                params.h3_backend.as_ref(),
             );
         }
     }
@@ -251,13 +258,15 @@ async fn drain_conn_send(socket: &UdpSocket, conn: &mut quiche::Connection, out_
 }
 
 /// Walk readable streams, accumulate HEADERS for any that have not
-/// started, and spawn an H3→H1 task per completed request.
+/// started, and spawn an H3→H1 (or H3→H3 when configured) task per
+/// completed request.
 fn poll_h3(
     conn: &mut quiche::Connection,
     rx_by_stream: &mut HashMap<u64, StreamRxBuf>,
     request_tasks: &mut Vec<tokio::task::JoinHandle<(u64, Vec<u8>)>>,
     pool: &TcpPool,
     backends: &Arc<Vec<SocketAddr>>,
+    h3_backend: Option<&(QuicUpstreamPool, SocketAddr, String)>,
 ) {
     let readable: Vec<u64> = conn.readable().collect();
     for sid in readable {
@@ -269,6 +278,18 @@ fn poll_h3(
                     match rx.feed(buf.get(..n).unwrap_or(&[])) {
                         Ok(Some(headers)) => {
                             let req = H3Request::from_headers(headers);
+                            if let Some((qpool, addr, sni)) = h3_backend {
+                                let qpool = qpool.clone();
+                                let addr = *addr;
+                                let sni = sni.clone();
+                                request_tasks.push(tokio::spawn(async move {
+                                    let bytes =
+                                        Box::pin(h3_to_h3_roundtrip(&req, addr, &sni, &qpool))
+                                            .await;
+                                    (sid, bytes)
+                                }));
+                                continue;
+                            }
                             let Some(backend) = select_backend(backends) else {
                                 tracing::warn!("no backends available for H3 request");
                                 continue;
@@ -279,9 +300,6 @@ fn poll_h3(
                                     Ok(b) => b,
                                     Err(e) => {
                                         tracing::warn!(error = %e, "H3→H1 roundtrip failed");
-                                        // 502 fallback already built
-                                        // in h3_to_h1_roundtrip's
-                                        // Err-path; unreachable here.
                                         Vec::new()
                                     }
                                 };

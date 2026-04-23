@@ -23,6 +23,7 @@
 
 pub mod dns;
 pub mod pool;
+pub mod quic_pool;
 pub mod sockopts;
 
 #[cfg(target_os = "linux")]

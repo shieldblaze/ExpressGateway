@@ -39,10 +39,13 @@ use std::path::PathBuf;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Duration;
 
+use std::sync::Arc;
+
 use bytes::Bytes;
 use lb_h3::{H3Frame, QpackDecoder, QpackEncoder, decode_frame, encode_frame};
 use lb_io::Runtime;
 use lb_io::pool::{PoolConfig, TcpPool};
+use lb_io::quic_pool::{QuicPoolConfig, QuicUpstreamPool};
 use lb_io::sockopts::BackendSockOpts;
 use lb_quic::{QuicListener, QuicListenerParams};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
@@ -705,5 +708,247 @@ async fn quic_listener_shuts_down_on_cancellation_token() {
     assert!(
         joined.is_ok(),
         "listener task did not exit within 2s of shutdown.cancel()"
+    );
+}
+
+// ────────────────────────────────────────────────────────────────────
+// Pillar 3b.3c-3: QuicUpstreamPool + H3→H3 end-to-end test.
+// ────────────────────────────────────────────────────────────────────
+
+/// Spawn a minimal H3 responder that listens on a UDP socket, accepts
+/// one connection (no RETRY), reads the first HEADERS frame on bidi
+/// stream 0, and writes a 200 + "hello" response back. Returns the
+/// listener's local address.
+///
+/// This is the upstream "backend" the gateway's H3→H3 bridge dials
+/// via `QuicUpstreamPool`.
+async fn spawn_mock_h3_backend(
+    cert_path: PathBuf,
+    key_path: PathBuf,
+) -> (SocketAddr, tokio::task::JoinHandle<()>) {
+    let socket = UdpSocket::bind((Ipv4Addr::LOCALHOST, 0)).await.unwrap();
+    let addr = socket.local_addr().unwrap();
+    let socket = Arc::new(socket);
+
+    let handle = tokio::spawn(async move {
+        let Ok(mut cfg) = quiche::Config::new(quiche::PROTOCOL_VERSION) else {
+            return;
+        };
+        let _ = cfg.set_application_protos(&[LB_QUIC_ALPN]);
+        cfg.set_max_idle_timeout(5_000);
+        cfg.set_max_recv_udp_payload_size(1_350);
+        cfg.set_max_send_udp_payload_size(1_350);
+        cfg.set_initial_max_data(1024 * 1024);
+        cfg.set_initial_max_stream_data_bidi_local(64 * 1024);
+        cfg.set_initial_max_stream_data_bidi_remote(64 * 1024);
+        cfg.set_initial_max_stream_data_uni(64 * 1024);
+        cfg.set_initial_max_streams_bidi(4);
+        cfg.set_initial_max_streams_uni(4);
+        cfg.set_disable_active_migration(true);
+        if cfg
+            .load_cert_chain_from_pem_file(cert_path.to_str().unwrap_or(""))
+            .is_err()
+        {
+            return;
+        }
+        if cfg
+            .load_priv_key_from_pem_file(key_path.to_str().unwrap_or(""))
+            .is_err()
+        {
+            return;
+        }
+
+        let mut in_buf = vec![0u8; MAX_UDP];
+        let mut out_buf = vec![0u8; MAX_UDP];
+
+        // Accept one connection.
+        let (n, peer) = match socket.recv_from(&mut in_buf).await {
+            Ok(v) => v,
+            Err(_) => return,
+        };
+        let scid = random_scid_bytes();
+        let scid_ref = quiche::ConnectionId::from_ref(&scid);
+        let mut conn = match quiche::accept(&scid_ref, None, addr, peer, &mut cfg) {
+            Ok(c) => c,
+            Err(_) => return,
+        };
+        let info = quiche::RecvInfo {
+            from: peer,
+            to: addr,
+        };
+        let slice = in_buf.get_mut(..n).unwrap_or(&mut []);
+        let _ = conn.recv(slice, info);
+
+        let mut rx_tail: Vec<u8> = Vec::new();
+        let mut responded = false;
+        let deadline = tokio::time::Instant::now() + Duration::from_secs(8);
+
+        while tokio::time::Instant::now() < deadline {
+            // Flush outbound.
+            loop {
+                match conn.send(&mut out_buf) {
+                    Ok((sent, info)) => {
+                        let _ = socket
+                            .send_to(out_buf.get(..sent).unwrap_or(&[]), info.to)
+                            .await;
+                    }
+                    Err(quiche::Error::Done) => break,
+                    Err(_) => break,
+                }
+            }
+            if conn.is_closed() {
+                break;
+            }
+
+            // Read readable bytes on stream 0.
+            if conn.is_established() && !responded {
+                let readable: Vec<u64> = conn.readable().collect();
+                for sid in readable {
+                    if sid != 0 {
+                        continue;
+                    }
+                    let mut chunk = [0u8; 8192];
+                    loop {
+                        match conn.stream_recv(sid, &mut chunk) {
+                            Ok((rn, _fin)) => {
+                                rx_tail.extend_from_slice(chunk.get(..rn).unwrap_or(&[]));
+                            }
+                            Err(quiche::Error::Done)
+                            | Err(quiche::Error::InvalidStreamState(_)) => break,
+                            Err(_) => break,
+                        }
+                    }
+                }
+                // If we have a full HEADERS frame, respond with 200.
+                if let Ok((H3Frame::Headers { .. }, _)) = decode_frame(&rx_tail, 1 << 20) {
+                    let encoder = QpackEncoder::new();
+                    let resp_headers: Vec<(String, String)> = vec![
+                        (":status".to_string(), "200".to_string()),
+                        ("content-length".to_string(), "5".to_string()),
+                    ];
+                    if let Ok(block) = encoder.encode(&resp_headers) {
+                        if let Ok(hframe) = encode_frame(&H3Frame::Headers {
+                            header_block: block,
+                        }) {
+                            if let Ok(dframe) = encode_frame(&H3Frame::Data {
+                                payload: Bytes::from_static(b"hello"),
+                            }) {
+                                let mut out = Vec::with_capacity(hframe.len() + dframe.len());
+                                out.extend_from_slice(&hframe);
+                                out.extend_from_slice(&dframe);
+                                let mut p = 0;
+                                while p < out.len() {
+                                    let sl = out.get(p..).unwrap_or(&[]);
+                                    let fin = p + sl.len() >= out.len();
+                                    match conn.stream_send(0, sl, fin) {
+                                        Ok(ns) => p += ns,
+                                        Err(_) => break,
+                                    }
+                                }
+                                responded = true;
+                            }
+                        }
+                    }
+                }
+            }
+
+            let timeout = conn.timeout().unwrap_or(Duration::from_millis(50));
+            match tokio::time::timeout(timeout, socket.recv_from(&mut in_buf)).await {
+                Ok(Ok((n, from))) => {
+                    let slice = in_buf.get_mut(..n).unwrap_or(&mut []);
+                    let info = quiche::RecvInfo { from, to: addr };
+                    let _ = conn.recv(slice, info);
+                }
+                Ok(Err(_)) | Err(_) => {
+                    conn.on_timeout();
+                    if responded && conn.stream_finished(0) {
+                        // Give one more iteration to flush FIN.
+                    }
+                }
+            }
+        }
+    });
+    (addr, handle)
+}
+
+fn build_quic_client_config_factory(
+    ca_path: PathBuf,
+) -> Arc<dyn Fn() -> Result<quiche::Config, quiche::Error> + Send + Sync> {
+    Arc::new(move || {
+        let mut cfg = quiche::Config::new(quiche::PROTOCOL_VERSION)?;
+        cfg.set_application_protos(&[LB_QUIC_ALPN])?;
+        cfg.load_verify_locations_from_file(ca_path.to_str().unwrap_or(""))?;
+        cfg.verify_peer(true);
+        cfg.set_max_idle_timeout(5_000);
+        cfg.set_max_recv_udp_payload_size(1_350);
+        cfg.set_max_send_udp_payload_size(1_350);
+        cfg.set_initial_max_data(1024 * 1024);
+        cfg.set_initial_max_stream_data_bidi_local(64 * 1024);
+        cfg.set_initial_max_stream_data_bidi_remote(64 * 1024);
+        cfg.set_initial_max_stream_data_uni(64 * 1024);
+        cfg.set_initial_max_streams_bidi(4);
+        cfg.set_initial_max_streams_uni(4);
+        cfg.set_disable_active_migration(true);
+        Ok(cfg)
+    })
+}
+
+#[tokio::test]
+async fn quic_listener_e2e_http3_get_through_proxy_to_h3_backend() {
+    // Shared cert for mock backend + gateway so the QuicUpstreamPool's
+    // client-side handshake verifies successfully against the backend.
+    let certs = generate_loopback_certs();
+
+    // 1. Mock H3 backend.
+    let (backend_addr, backend_handle) =
+        spawn_mock_h3_backend(certs.cert.clone(), certs.key.clone()).await;
+
+    // 2. Build a QuicUpstreamPool that dials the mock backend via its
+    //    own client config (trusts the rcgen cert).
+    let pool_client_factory = build_quic_client_config_factory(certs.ca.clone());
+    let quic_pool = QuicUpstreamPool::new(QuicPoolConfig::default(), pool_client_factory);
+
+    // 3. Gateway: QuicListener with h3_backend pointing at the mock.
+    let bind = SocketAddr::V4(SocketAddrV4::new(Ipv4Addr::LOCALHOST, 0));
+    let params = QuicListenerParams::new(
+        bind,
+        certs.cert.clone(),
+        certs.key.clone(),
+        certs.retry.clone(),
+    )
+    .with_h3_backend(quic_pool.clone(), backend_addr, TEST_SNI);
+    let shutdown = CancellationToken::new();
+    let listener = QuicListener::spawn(params, shutdown.clone()).await.unwrap();
+    let gateway_addr = listener.local_addr();
+
+    // 4. Client drives an H3 GET at the gateway.
+    let client_sock = UdpSocket::bind((Ipv4Addr::LOCALHOST, 0)).await.unwrap();
+    let client_local = client_sock.local_addr().unwrap();
+    let mut client_cfg = build_client_config(&certs.ca);
+    let scid = random_scid_bytes();
+    let scid_ref = quiche::ConnectionId::from_ref(&scid);
+    let conn = quiche::connect(
+        Some(TEST_SNI),
+        &scid_ref,
+        client_local,
+        gateway_addr,
+        &mut client_cfg,
+    )
+    .unwrap();
+
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(15);
+    let result = drive_h3_get(conn, &client_sock, "/", TEST_SNI, deadline).await;
+
+    let handle = listener.shutdown();
+    let _ = tokio::time::timeout(Duration::from_secs(2), handle).await;
+    backend_handle.abort();
+
+    let (status, body) = result.expect("H3→H3 e2e failed");
+    assert_eq!(status, 200);
+    assert_eq!(body.as_slice(), b"hello");
+    // Assert the pool was actually exercised (Pillar 3b.3c-3 goal).
+    assert!(
+        quic_pool.fresh_dials() >= 1,
+        "expected at least one fresh dial through QuicUpstreamPool"
     );
 }

@@ -13,6 +13,11 @@ tracing = { workspace = true }
 socket2 = { workspace = true }
 dashmap = { workspace = true }
 parking_lot = { workspace = true }
+quiche = { workspace = true }
+# ring for random SCID generation in the quic upstream pool. Already in
+# the tree via quiche's BoringSSL build; declaring direct keeps the
+# pool module independent of re-export chains.
+ring = "0.17"
 
 [target.'cfg(target_os = "linux")'.dependencies]
 io-uring = { workspace = true }

@@ -35,6 +35,7 @@ use tokio::sync::mpsc;
 use tokio_util::sync::CancellationToken;
 
 use lb_io::pool::TcpPool;
+use lb_io::quic_pool::QuicUpstreamPool;
 use lb_security::{RetryTokenSigner, ZeroRttReplayGuard};
 
 use crate::conn_actor::{ActorParams, InboundPacket, run_actor};
@@ -66,6 +67,10 @@ pub struct RouterParams {
     pub pool: TcpPool,
     /// Resolved backend addresses.
     pub backends: Arc<Vec<SocketAddr>>,
+    /// Optional upstream H3 backend `(pool, addr, sni)`. When set,
+    /// H3 requests on this listener route to the upstream via the
+    /// QUIC pool instead of the H1/TcpPool path. Pillar 3b.3c-3.
+    pub h3_backend: Option<(QuicUpstreamPool, SocketAddr, String)>,
     /// Listener-wide cancellation.
     pub cancel: CancellationToken,
 }
@@ -331,6 +336,7 @@ fn spawn_new_connection(
         cancel: params.cancel.clone(),
         pool: params.pool.clone(),
         backends: Arc::clone(&params.backends),
+        h3_backend: params.h3_backend.clone(),
     };
     // Spawn actor; on exit it leaves the dashmap entries behind which
     // will be reaped on next `try_send` failure. That's acceptable —

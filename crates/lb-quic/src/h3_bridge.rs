@@ -22,6 +22,7 @@
 
 use std::collections::HashMap;
 use std::net::SocketAddr;
+use std::sync::Arc;
 
 use bytes::Bytes;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
@@ -29,6 +30,7 @@ use tokio::net::TcpStream;
 
 use lb_h3::{H3Frame, QpackDecoder, QpackEncoder, decode_frame, encode_frame};
 use lb_io::pool::TcpPool;
+use lb_io::quic_pool::QuicUpstreamPool;
 
 /// Per-stream accumulator for inbound H3 request bytes. A quiche
 /// `stream_recv` on a given stream ID can yield a chunk mid-frame;
@@ -287,6 +289,187 @@ pub async fn h3_to_h1_roundtrip(
     // Connection: close was sent, socket will be dropped; do not reuse.
     pooled.set_reusable(false);
     encode_h3_response(response.status, &response.body)
+}
+
+/// Forward an H3 request to an upstream H3 backend via
+/// [`QuicUpstreamPool`] and return the response mapped back into H3
+/// wire bytes. On any backend failure returns a 502 + `"bad gateway"`.
+///
+/// Unlike `h3_to_h1_roundtrip`, this path does NOT translate —
+/// everything stays H3 end-to-end. The same lb-h3 codec is used on
+/// both sides.
+///
+/// Request-body forwarding is not supported in 3b.3c-3: the e2e
+/// exercises a body-less GET. Pillar 3b.3b will plumb DATA frames
+/// through once the downstream connection actor starts threading
+/// body bytes across stream boundaries.
+#[allow(clippy::too_many_lines, clippy::large_futures)]
+pub async fn h3_to_h3_roundtrip(
+    req: &H3Request,
+    addr: std::net::SocketAddr,
+    sni: &str,
+    pool: &QuicUpstreamPool,
+) -> Vec<u8> {
+    let mut pooled = match pool.acquire(addr, sni).await {
+        Ok(p) => p,
+        Err(e) => {
+            tracing::warn!(error = %e, %addr, "H3→H3 pool acquire failed");
+            return encode_h3_response(502, b"bad gateway").unwrap_or_else(|_| Vec::new());
+        }
+    };
+
+    let Some(upstream) = pooled.get_mut() else {
+        tracing::warn!("H3→H3 pool returned empty handle");
+        return encode_h3_response(502, b"bad gateway").unwrap_or_default();
+    };
+
+    // Build the upstream request HEADERS frame.
+    let encoder = QpackEncoder::new();
+    let mut headers: Vec<(String, String)> = Vec::with_capacity(4);
+    headers.push((":method".to_string(), req.method.clone()));
+    headers.push((":scheme".to_string(), "https".to_string()));
+    let authority = if req.authority.is_empty() {
+        sni.to_string()
+    } else {
+        req.authority.clone()
+    };
+    headers.push((":authority".to_string(), authority));
+    headers.push((":path".to_string(), req.path.clone()));
+    let Ok(header_block) = encoder.encode(&headers) else {
+        return encode_h3_response(502, b"bad gateway").unwrap_or_default();
+    };
+    let Ok(frame) = encode_frame(&H3Frame::Headers { header_block }) else {
+        return encode_h3_response(502, b"bad gateway").unwrap_or_default();
+    };
+
+    // Drive the upstream conn for one GET. We use client-initiated
+    // bidi stream 0 — each new QUIC conn starts with sid=0 available.
+    let stream_id: u64 = 0;
+    let socket_clone = Arc::clone(upstream.socket());
+    let local = upstream.local();
+    let peer = upstream.peer();
+    let qconn_mut: &mut quiche::Connection = match upstream.connection_mut() {
+        Some(c) => c,
+        None => {
+            return encode_h3_response(502, b"bad gateway").unwrap_or_default();
+        }
+    };
+
+    // Send HEADERS + FIN on the bidi stream.
+    let mut frame_pos = 0usize;
+    while frame_pos < frame.len() {
+        let chunk = frame.get(frame_pos..).unwrap_or(&[]);
+        let fin = frame_pos + chunk.len() >= frame.len();
+        match qconn_mut.stream_send(stream_id, chunk, fin) {
+            Ok(n) => {
+                if n == 0 {
+                    break;
+                }
+                frame_pos = frame_pos.saturating_add(n);
+            }
+            Err(quiche::Error::Done) => break,
+            Err(e) => {
+                tracing::warn!(error = %e, "H3→H3 stream_send");
+                pooled.set_reusable(false);
+                return encode_h3_response(502, b"bad gateway").unwrap_or_default();
+            }
+        }
+    }
+
+    // Event loop: drive send/recv/timeout until we have a full response.
+    let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(5);
+    let mut out_buf = vec![0u8; 65_535];
+    let mut in_buf = vec![0u8; 65_535];
+    let mut rx_tail: Vec<u8> = Vec::new();
+    let mut decoded_status: Option<u16> = None;
+    let mut decoded_body: Vec<u8> = Vec::new();
+    let mut body_complete = false;
+    let mut expected_len: Option<usize> = None;
+
+    while tokio::time::Instant::now() < deadline {
+        // Flush.
+        while let Ok((n, info)) = qconn_mut.send(&mut out_buf) {
+            let bytes = out_buf.get(..n).unwrap_or(&[]);
+            if socket_clone.send_to(bytes, info.to).await.is_err() {
+                break;
+            }
+        }
+
+        // Drain any readable stream bytes.
+        let readable: Vec<u64> = qconn_mut.readable().collect();
+        for sid in readable {
+            if sid != stream_id {
+                continue;
+            }
+            let mut chunk = [0u8; 8192];
+            while let Ok((n, _fin)) = qconn_mut.stream_recv(sid, &mut chunk) {
+                rx_tail.extend_from_slice(chunk.get(..n).unwrap_or(&[]));
+            }
+        }
+
+        // Try decoding frames.
+        loop {
+            match decode_frame(&rx_tail, 1 << 20) {
+                Ok((H3Frame::Headers { header_block }, consumed)) => {
+                    rx_tail.drain(..consumed);
+                    if let Ok(hdrs) = QpackDecoder::new().decode(&header_block) {
+                        for (n, v) in hdrs {
+                            if n == ":status" {
+                                decoded_status = v.parse::<u16>().ok();
+                            } else if n == "content-length" {
+                                expected_len = v.parse::<usize>().ok();
+                            }
+                        }
+                    }
+                }
+                Ok((H3Frame::Data { payload }, consumed)) => {
+                    rx_tail.drain(..consumed);
+                    decoded_body.extend_from_slice(&payload);
+                    if let Some(cl) = expected_len {
+                        if decoded_body.len() >= cl {
+                            body_complete = true;
+                        }
+                    }
+                }
+                Ok((_other, consumed)) => {
+                    rx_tail.drain(..consumed);
+                }
+                Err(_) => break,
+            }
+        }
+
+        if decoded_status.is_some() && body_complete {
+            break;
+        }
+
+        let timeout = qconn_mut
+            .timeout()
+            .unwrap_or(std::time::Duration::from_millis(50));
+        match tokio::time::timeout(timeout, socket_clone.recv_from(&mut in_buf)).await {
+            Ok(Ok((n, from))) => {
+                let slice = in_buf.get_mut(..n).unwrap_or(&mut []);
+                let info = quiche::RecvInfo { from, to: local };
+                match qconn_mut.recv(slice, info) {
+                    Ok(_) | Err(quiche::Error::Done) => {}
+                    Err(_) => break,
+                }
+            }
+            Ok(Err(_)) | Err(_) => {
+                qconn_mut.on_timeout();
+            }
+        }
+        let _ = peer; // silence unused binding when logging disabled
+    }
+
+    // Response is done; do not reuse the upstream conn since we sent
+    // FIN on its stream 0 — that connection is only good for one
+    // request in this minimal 3b.3c-3 wiring. Real H3 clients would
+    // open new streams; the pool improvement lands when we carry
+    // stream-ID allocation state across checkouts.
+    pooled.set_reusable(false);
+
+    let status = decoded_status.unwrap_or(502);
+    encode_h3_response(status, &decoded_body).unwrap_or_else(|_| Vec::new())
 }
 
 #[cfg(test)]

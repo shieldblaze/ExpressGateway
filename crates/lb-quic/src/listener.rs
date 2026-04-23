@@ -27,6 +27,7 @@ use tokio::net::UdpSocket;
 use tokio_util::sync::CancellationToken;
 
 use lb_io::pool::TcpPool;
+use lb_io::quic_pool::QuicUpstreamPool;
 use lb_security::{RetryTokenSigner, ZeroRttReplayGuard};
 
 use crate::LB_QUIC_ALPN;
@@ -64,6 +65,10 @@ pub struct QuicListenerParams {
     pub backends: Vec<SocketAddr>,
     /// Shared TCP pool for H1 backend dials.
     pub pool: Option<TcpPool>,
+    /// Optional upstream H3 backend `(pool, addr, sni)` — when set,
+    /// H3 requests on this listener route via the QUIC upstream pool
+    /// instead of the H1/TcpPool path (Pillar 3b.3c-3).
+    pub h3_backend: Option<(QuicUpstreamPool, SocketAddr, String)>,
 }
 
 impl std::fmt::Debug for QuicListenerParams {
@@ -78,6 +83,7 @@ impl std::fmt::Debug for QuicListenerParams {
             .field("replay_capacity", &self.replay_capacity)
             .field("backends", &self.backends)
             .field("pool_set", &self.pool.is_some())
+            .field("h3_backend_set", &self.h3_backend.is_some())
             .finish()
     }
 }
@@ -102,6 +108,7 @@ impl QuicListenerParams {
             replay_capacity: 1_024,
             backends: Vec::new(),
             pool: None,
+            h3_backend: None,
         }
     }
 
@@ -111,6 +118,20 @@ impl QuicListenerParams {
     pub fn with_backends(mut self, backends: Vec<SocketAddr>, pool: TcpPool) -> Self {
         self.backends = backends;
         self.pool = Some(pool);
+        self
+    }
+
+    /// Attach an upstream H3 backend for H3→H3 forwarding
+    /// (Pillar 3b.3c-3). `addr` is the backend's UDP address; `sni`
+    /// is the TLS name presented on the upstream handshake.
+    #[must_use]
+    pub fn with_h3_backend(
+        mut self,
+        pool: QuicUpstreamPool,
+        addr: SocketAddr,
+        sni: impl Into<String>,
+    ) -> Self {
+        self.h3_backend = Some((pool, addr, sni.into()));
         self
     }
 }
@@ -198,6 +219,7 @@ impl QuicListener {
             config_factory,
             pool,
             backends: Arc::new(params.backends.clone()),
+            h3_backend: params.h3_backend.clone(),
             cancel: shutdown.clone(),
         };
         let router_handle = router::spawn(router_params);
