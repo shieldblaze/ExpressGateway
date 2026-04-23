@@ -1199,6 +1199,7 @@ dependencies = [
  "lb-health",
  "lb-io",
  "lb-observability",
+ "lb-quic",
  "lb-security",
  "parking_lot",
  "rustls",
@@ -1206,6 +1207,7 @@ dependencies = [
  "rustls-pki-types",
  "tokio",
  "tokio-rustls",
+ "tokio-util",
  "tracing",
  "tracing-subscriber",
 ]
@@ -1334,12 +1336,15 @@ dependencies = [
  "lb-quic",
  "lb-security",
  "parking_lot",
+ "quiche",
  "rand 0.8.5",
  "rcgen",
+ "ring",
  "rustls",
  "rustls-pki-types",
  "tokio",
  "tokio-rustls",
+ "tokio-util",
 ]
 
 [[package]]
@@ -1394,9 +1399,12 @@ dependencies = [
  "parking_lot",
  "quiche",
  "rcgen",
+ "ring",
  "thiserror 2.0.18",
  "tokio",
  "tokio-quiche",
+ "tokio-util",
+ "tracing",
 ]
 
 [[package]]

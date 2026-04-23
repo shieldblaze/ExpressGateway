@@ -30,14 +30,17 @@ use tokio::net::TcpListener;
 use tokio::signal;
 use tokio_rustls::TlsAcceptor;
 
+use tokio_util::sync::CancellationToken;
+
 use lb_balancer::round_robin::RoundRobin;
 use lb_balancer::{Backend, LoadBalancer};
-use lb_config::TlsConfig;
+use lb_config::{QuicListenerConfig, TlsConfig};
 use lb_io::Runtime;
 use lb_io::dns::{DnsResolver, ResolverConfig};
 use lb_io::pool::{PoolConfig, TcpPool};
 use lb_io::sockopts::{BackendSockOpts, ListenerSockOpts};
 use lb_observability::MetricsRegistry;
+use lb_quic::{QuicListener, QuicListenerParams};
 use lb_security::{TicketRotator, build_server_config};
 
 // ── shared gateway state ────────────────────────────────────────────────
@@ -132,6 +135,23 @@ fn split_host_port(s: &str) -> anyhow::Result<(&str, u16)> {
         .parse()
         .with_context(|| format!("invalid port: {port_str}"))?;
     Ok((host, port))
+}
+
+// ── QUIC helpers ────────────────────────────────────────────────────────
+
+fn quic_listener_params_from_config(
+    bind_addr: SocketAddr,
+    cfg: &QuicListenerConfig,
+) -> QuicListenerParams {
+    let mut params = QuicListenerParams::new(
+        bind_addr,
+        std::path::PathBuf::from(&cfg.cert_path),
+        std::path::PathBuf::from(&cfg.key_path),
+        std::path::PathBuf::from(&cfg.retry_secret_path),
+    );
+    params.max_idle_timeout = Duration::from_millis(cfg.max_idle_timeout_ms);
+    params.max_recv_udp_payload_size = cfg.max_recv_udp_payload_size;
+    params
 }
 
 // ── TLS helpers ─────────────────────────────────────────────────────────
@@ -270,8 +290,43 @@ async fn async_main() -> anyhow::Result<()> {
 
     // ── spawn listeners ─────────────────────────────────────────────
     let mut listener_handles = Vec::new();
+    let mut quic_listeners: Vec<QuicListener> = Vec::new();
 
     for listener_cfg in &config.listeners {
+        // QUIC listener handles its own accept loop via lb_quic::QuicListener.
+        // It does not share the TCP-backed `ListenerState` shape; Pillar
+        // 3b.3c-2 wires the InboundPacketRouter → backend bridge, at which
+        // point this branch will either hand the listener the pool +
+        // backend picker, or keep the seam and let router-level config
+        // own that wiring.
+        if listener_cfg.protocol == "quic" {
+            let Some(quic_cfg) = listener_cfg.quic.as_ref() else {
+                anyhow::bail!(
+                    "listener {} has protocol=quic but no [listeners.quic] block \
+                     (validate_config should have caught this)",
+                    listener_cfg.address
+                );
+            };
+            let bind_addr: SocketAddr = listener_cfg
+                .address
+                .parse()
+                .with_context(|| format!("invalid listen address: {}", listener_cfg.address))?;
+            let params = quic_listener_params_from_config(bind_addr, quic_cfg);
+            let shutdown = CancellationToken::new();
+            let listener = QuicListener::spawn(params, shutdown)
+                .await
+                .with_context(|| format!("QUIC listener bind failed for {bind_addr}"))?;
+            tracing::info!(
+                address = %listener.local_addr(),
+                protocol = "quic",
+                cert = %quic_cfg.cert_path,
+                retry_secret = %quic_cfg.retry_secret_path,
+                "QUIC listener started (3b.3c-1 seam)"
+            );
+            quic_listeners.push(listener);
+            continue;
+        }
+
         if listener_cfg.backends.is_empty() {
             tracing::warn!(
                 address = %listener_cfg.address,
@@ -355,7 +410,7 @@ async fn async_main() -> anyhow::Result<()> {
         listener_handles.push(handle);
     }
 
-    if listener_handles.is_empty() {
+    if listener_handles.is_empty() && quic_listeners.is_empty() {
         anyhow::bail!("no listeners started — check your configuration");
     }
 
@@ -363,12 +418,28 @@ async fn async_main() -> anyhow::Result<()> {
     shutdown_signal().await;
     tracing::info!("shutdown signal received — draining connections");
 
-    // Cancel listener tasks (they will stop accepting new connections).
+    // Cancel TCP/TLS listener tasks (they will stop accepting new connections).
     for h in &listener_handles {
         h.abort();
     }
 
-    // Allow a brief drain period.
+    // Cancel QUIC listeners — each holds a CancellationToken and returns
+    // a JoinHandle on shutdown().
+    let mut quic_drain_handles = Vec::with_capacity(quic_listeners.len());
+    for listener in quic_listeners {
+        quic_drain_handles.push(listener.shutdown());
+    }
+    let quic_drain_deadline = Duration::from_secs(2);
+    for handle in quic_drain_handles {
+        if tokio::time::timeout(quic_drain_deadline, handle)
+            .await
+            .is_err()
+        {
+            tracing::warn!("QUIC listener did not drain within {quic_drain_deadline:?}");
+        }
+    }
+
+    // Allow a brief drain period for any remaining TCP connections.
     tokio::time::sleep(std::time::Duration::from_millis(500)).await;
 
     let total = metrics.get("connections_total").unwrap_or(0);

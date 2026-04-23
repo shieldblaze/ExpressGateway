@@ -74,6 +74,8 @@ rustls-pki-types = "1"
 # Pillar 3b.2: TLS-over-TCP listener wiring.
 tokio-rustls = { version = "0.26", default-features = false, features = ["ring", "tls12", "logging"] }
 rustls-pemfile = "2"
+# Pillar 3b.3c-1: CancellationToken for graceful listener shutdown.
+tokio-util = { version = "0.7", default-features = false, features = ["rt"] }
 # Utilities
 rand = "0.8"
 # XDP / eBPF (Pillar 4a: aya userspace loader; Linux-only in consumers)
@@ -106,6 +108,9 @@ rustls = { workspace = true }
 rustls-pki-types = { workspace = true }
 tokio-rustls = { workspace = true }
 parking_lot = { workspace = true }
+quiche = { workspace = true }
+tokio-util = { workspace = true }
+ring = "0.17"
 rcgen = { version = "0.13", features = ["pem"] }
 
 [profile.release]

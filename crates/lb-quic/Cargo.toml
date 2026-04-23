@@ -10,9 +10,15 @@ publish = false
 thiserror = { workspace = true }
 bytes = { workspace = true }
 tokio = { workspace = true }
+tokio-util = { workspace = true }
+tracing = { workspace = true }
 parking_lot = { workspace = true }
 quiche = { workspace = true }
 tokio-quiche = { workspace = true }
+# `ring::rand` for retry-secret generation and SCID sampling in the
+# listener seam (Pillar 3b.3c-1). ring is already in the tree via
+# quiche/BoringSSL's build — declaring it direct is cheap.
+ring = "0.17"
 lb-security = { path = "../lb-security" }
 
 [dev-dependencies]

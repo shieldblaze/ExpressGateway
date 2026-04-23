@@ -90,6 +90,10 @@ pub use lb_security::{RetryTokenSigner, ZeroRttReplayGuard};
 /// here keeps downstream crates decoupled from `tokio-quiche` versioning.
 pub use tokio_quiche::ConnectionParams;
 
+mod listener;
+
+pub use listener::{QuicListener, QuicListenerParams};
+
 /// ALPN identifier advertised by the built-in [`QuicEndpoint`] helpers.
 ///
 /// Real HTTP/3 listeners will advertise `h3` (see RFC 9114); this value

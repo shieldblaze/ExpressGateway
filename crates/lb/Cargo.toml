@@ -9,6 +9,7 @@ publish = false
 [dependencies]
 anyhow = { workspace = true }
 tokio = { workspace = true }
+tokio-util = { workspace = true }
 tracing = { workspace = true }
 tracing-subscriber = { workspace = true }
 parking_lot = { workspace = true }
@@ -23,3 +24,4 @@ lb-balancer = { path = "../lb-balancer" }
 lb-observability = { path = "../lb-observability" }
 lb-health = { path = "../lb-health" }
 lb-security = { path = "../lb-security" }
+lb-quic = { path = "../lb-quic" }
