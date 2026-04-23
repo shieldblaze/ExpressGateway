@@ -13,6 +13,13 @@ http = { workspace = true }
 rustls = { workspace = true }
 rustls-pki-types = { workspace = true }
 parking_lot = { workspace = true }
+# HMAC-SHA256 for stateless-retry tokens (Pillar 3b.3a). ring is already
+# in the tree transitively via rustls; pulling it in directly keeps the
+# retry module independent of rustls's feature set.
+ring = "0.17"
+# Constant-time equality for MAC comparison. Already transitive via
+# rustls; declaring it direct makes the intent explicit.
+subtle = "2"
 
 [dev-dependencies]
 rcgen = { version = "0.13", features = ["pem"] }

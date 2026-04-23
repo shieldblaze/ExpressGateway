@@ -32,10 +32,32 @@
 //! Pillar 3b.2's listener into `crates/lb/src/main.rs` can reach the
 //! shared configuration without depending on tokio-quiche directly.
 //!
-//! Deferred to later Pillar 3b steps: TLS listener wiring +
-//! `TicketRotator` in the hot path (3b.2); stateless retry, 0-RTT
-//! replay defense, Alt-Svc injection, CID-routed upstream pool (3b.3);
-//! `curl --http3` and `h3i` interop (3b.4).
+//! ## Security hardening (Pillar 3b.3a)
+//!
+//! * The loopback client path now honors `verify_peer(true)` and
+//!   loads the trust anchor via
+//!   `quiche::Config::load_verify_locations_from_file`; the tests
+//!   build a proper self-signed cert with SAN + `serverAuth` EKU so
+//!   `BoringSSL`'s hostname verifier accepts it. The Pillar 3b.1
+//!   `verify_peer(false)` workaround is gone.
+//! * [`QuicEndpoint::with_retry_signer`] installs a
+//!   [`lb_security::RetryTokenSigner`]. quiche 0.28 does not expose
+//!   `Config::enable_retry(bool)` — the RETRY handshake is driven by
+//!   the application via the free function [`quiche::retry`] in a
+//!   custom accept loop. The signer is stored on the endpoint as the
+//!   public surface for operator secret rotation; Pillar 3b.3c's
+//!   custom accept loop consumes it against the on-wire flow per
+//!   RFC 9000 §8.1.3.
+//! * [`QuicEndpoint::with_replay_filter`] installs a
+//!   [`lb_security::ZeroRttReplayGuard`]. The filter exposes
+//!   [`check_0rtt_token`](lb_security::ZeroRttReplayGuard::check_0rtt_token),
+//!   which the Pillar 3b.3c accept loop will call before handing any
+//!   0-RTT early-data bytes to the application.
+//!
+//! Deferred to later Pillar 3b steps: Alt-Svc injection on H2/H1
+//! responses (3b.3b); CID-routed upstream pool + wiring the QUIC
+//! listener into `crates/lb/src/main.rs` (3b.3c); `curl --http3` and
+//! `h3i` interop (3b.4).
 //!
 //! [quiche]: https://github.com/cloudflare/quiche
 #![deny(
@@ -57,8 +79,11 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
 
+use parking_lot::Mutex as PlMutex;
 use tokio::net::UdpSocket;
 use tokio::sync::Mutex;
+
+pub use lb_security::{RetryTokenSigner, ZeroRttReplayGuard};
 
 /// Re-exported from `tokio-quiche`. Pillar 3b.2 wires a listener in the
 /// root binary that consumes a [`ConnectionParams`]; lifting the symbol
@@ -71,6 +96,17 @@ pub use tokio_quiche::ConnectionParams;
 /// exists for the Pillar 3b.1 loopback transport test. Pillar 3b.2 will
 /// upgrade this to a proper ALPN policy driven by the control plane.
 pub const LB_QUIC_ALPN: &[u8] = b"lb-quic";
+
+/// SNI the loopback client presents.
+///
+/// Pillar 3b.3a turned client peer-cert verification back on;
+/// `BoringSSL`'s hostname verifier rejects an iPAddress-type SAN even
+/// with a `serverAuth` EKU, so the loopback test cert uses a DNS SAN
+/// of `expressgateway.test` and the client sends that name as SNI
+/// while still targeting `SocketAddr(127.0.0.1, <port>)`. Pillar
+/// 3b.3c will accept an SNI override via the endpoint builder when
+/// the real listener lands; for now this constant is the default.
+pub const LB_QUIC_TEST_SNI: &str = "expressgateway.test";
 
 /// Maximum size of one datagram we accept over the UDP socket.
 const MAX_UDP_DATAGRAM_SIZE: usize = 65_535;
@@ -192,13 +228,20 @@ enum Role {
     },
 }
 
-/// A quiche-backed QUIC endpoint bound to `127.0.0.1`. Owns the UDP
-/// socket and the material needed to build a fresh [`quiche::Config`]
-/// for one connection.
+/// A quiche-backed QUIC endpoint bound to `127.0.0.1`.
+///
+/// Owns the UDP socket, the material needed to build a fresh
+/// [`quiche::Config`] for one connection, and (for server endpoints)
+/// the optional [`RetryTokenSigner`] + [`ZeroRttReplayGuard`]
+/// configured via the [`with_retry_signer`](Self::with_retry_signer)
+/// and [`with_replay_filter`](Self::with_replay_filter) builder
+/// methods.
 pub struct QuicEndpoint {
     socket: Arc<UdpSocket>,
     local_addr: SocketAddr,
     role: Role,
+    retry_signer: Option<Arc<RetryTokenSigner>>,
+    replay_filter: Option<Arc<PlMutex<ZeroRttReplayGuard>>>,
 }
 
 impl std::fmt::Debug for QuicEndpoint {
@@ -237,6 +280,8 @@ impl QuicEndpoint {
                 cert_pem_path,
                 key_pem_path,
             },
+            retry_signer: None,
+            replay_filter: None,
         })
     }
 
@@ -252,6 +297,8 @@ impl QuicEndpoint {
         let socket = UdpSocket::bind(addr).await?;
         let local_addr = socket.local_addr()?;
         Ok(Self {
+            retry_signer: None,
+            replay_filter: None,
             socket: Arc::new(socket),
             local_addr,
             role: Role::Client { ca_pem_path },
@@ -263,11 +310,67 @@ impl QuicEndpoint {
     pub const fn local_addr(&self) -> SocketAddr {
         self.local_addr
     }
+
+    /// Install a [`RetryTokenSigner`] on this (server) endpoint.
+    ///
+    /// The signer is stored so that — once the listener moves to a
+    /// custom accept loop in Pillar 3b.3c — the RETRY-packet wire
+    /// handling can mint and verify tokens against a secret that the
+    /// operator rotates. quiche 0.28 does not ship a
+    /// `Config::enable_retry(bool)` toggle, so there is no
+    /// built-in path to plug into today; the signer is the stable
+    /// public surface (unit-tested in `lb_security::retry`) and the
+    /// wire integration lands with the custom accept loop.
+    #[must_use]
+    pub fn with_retry_signer(mut self, signer: Arc<RetryTokenSigner>) -> Self {
+        self.retry_signer = Some(signer);
+        self
+    }
+
+    /// Install a [`ZeroRttReplayGuard`] on this (server) endpoint.
+    ///
+    /// The filter is held so the server accept path can call
+    /// [`ZeroRttReplayGuard::check_0rtt_token`] before handing any
+    /// 0-RTT early-data bytes to the application. Pillar 3b.3a ships
+    /// the wiring seam; a custom accept loop that feeds the filter
+    /// each 0-RTT token lands in Pillar 3b.3c alongside the real QUIC
+    /// listener.
+    #[must_use]
+    pub fn with_replay_filter(mut self, filter: Arc<PlMutex<ZeroRttReplayGuard>>) -> Self {
+        self.replay_filter = Some(filter);
+        self
+    }
+
+    /// Access the installed retry signer, if any. Used by integration
+    /// tests and upcoming Pillar 3b.3c wiring.
+    #[must_use]
+    pub fn retry_signer(&self) -> Option<Arc<RetryTokenSigner>> {
+        self.retry_signer.as_ref().map(Arc::clone)
+    }
+
+    /// Access the installed replay filter, if any. Used by integration
+    /// tests and upcoming Pillar 3b.3c wiring.
+    #[must_use]
+    pub fn replay_filter(&self) -> Option<Arc<PlMutex<ZeroRttReplayGuard>>> {
+        self.replay_filter.as_ref().map(Arc::clone)
+    }
 }
 
 /// Build a fresh `quiche::Config` for the endpoint's role with the
 /// transport parameters our loopback tests require.
-fn build_config(role: &Role) -> Result<quiche::Config, QuicError> {
+///
+/// The peer-cert verification posture is the usual server-TLS
+/// default: servers do not verify clients (no mTLS yet), clients DO
+/// verify servers against the supplied trust anchor.
+///
+/// `_enable_retry` is a placeholder for Pillar 3b.3c's custom accept
+/// loop. quiche 0.28 does NOT expose a `Config::enable_retry(bool)`
+/// toggle — the RETRY handshake is driven by the application via the
+/// free function [`quiche::retry`] in a custom accept loop. The flag
+/// is accepted here so the call-site expresses intent, and so the
+/// argument exists when the loop lands.
+#[allow(clippy::needless_pass_by_value)]
+fn build_config(role: &Role, _enable_retry: bool) -> Result<quiche::Config, QuicError> {
     let mut cfg = quiche::Config::new(quiche::PROTOCOL_VERSION)?;
     cfg.set_application_protos(&[LB_QUIC_ALPN])?;
     cfg.set_max_idle_timeout(5_000);
@@ -294,23 +397,22 @@ fn build_config(role: &Role) -> Result<quiche::Config, QuicError> {
                 .ok_or_else(|| QuicError::Io(io::Error::other("key path is not valid UTF-8")))?;
             cfg.load_cert_chain_from_pem_file(cert)?;
             cfg.load_priv_key_from_pem_file(key)?;
-            cfg.verify_peer(false);
+            // Server does not require client certs — no mTLS yet. The
+            // quiche default is to not verify the peer, so we leave
+            // that explicit toggle off; flipping to `verify_peer(true)`
+            // happens when mTLS lands.
         }
         Role::Client { ca_pem_path } => {
             let ca = ca_pem_path
                 .to_str()
                 .ok_or_else(|| QuicError::Io(io::Error::other("ca path is not valid UTF-8")))?;
             cfg.load_verify_locations_from_file(ca)?;
-            // Loopback test: BoringSSL's IP-literal-SNI hostname
-            // verifier rejects some rcgen-built self-signed certs even
-            // with a matching iPAddress SAN + CA:TRUE, because it also
-            // insists the chain builds through a verifier-approved
-            // path. Pillar 3b.1 only needs to prove the QUIC transport
-            // roundtrip works end-to-end; the hostname dance is
-            // deferred to Pillar 3b.2 where the real listener owns a
-            // proper BoringSSL `SSL_CTX`. The self-signed trust anchor
-            // is still enforced via `load_verify_locations_from_file`.
-            cfg.verify_peer(false);
+            // Pillar 3b.3a: peer verification ENABLED. The test rig
+            // builds a proper CA + leaf cert via rcgen with SAN +
+            // `serverAuth` EKU so BoringSSL's hostname verifier
+            // accepts the loopback peer. The old `verify_peer(false)`
+            // workaround is gone.
+            cfg.verify_peer(true);
         }
     }
     Ok(cfg)
@@ -579,8 +681,8 @@ pub async fn roundtrip_datagram(
         return Err(QuicError::EmptyPayload);
     }
 
-    let server_config = build_config(&server.role)?;
-    let mut client_config = build_config(&client.role)?;
+    let server_config = build_config(&server.role, server.retry_signer.is_some())?;
+    let mut client_config = build_config(&client.role, false)?;
 
     let server_socket = Arc::clone(&server.socket);
     let server_local = server.local_addr;
@@ -593,7 +695,7 @@ pub async fn roundtrip_datagram(
     let scid_bytes = random_scid();
     let scid = quiche::ConnectionId::from_ref(&scid_bytes);
     let client_conn = quiche::connect(
-        Some("127.0.0.1"),
+        Some(LB_QUIC_TEST_SNI),
         &scid,
         client.local_addr,
         server.local_addr,
@@ -651,8 +753,8 @@ pub async fn roundtrip_stream(
         return Err(QuicError::EmptyStreamData);
     }
 
-    let server_config = build_config(&server.role)?;
-    let mut client_config = build_config(&client.role)?;
+    let server_config = build_config(&server.role, server.retry_signer.is_some())?;
+    let mut client_config = build_config(&client.role, false)?;
 
     let server_socket = Arc::clone(&server.socket);
     let server_local = server.local_addr;
@@ -665,7 +767,7 @@ pub async fn roundtrip_stream(
     let scid_bytes = random_scid();
     let scid = quiche::ConnectionId::from_ref(&scid_bytes);
     let client_conn = quiche::connect(
-        Some("127.0.0.1"),
+        Some(LB_QUIC_TEST_SNI),
         &scid,
         client.local_addr,
         server.local_addr,

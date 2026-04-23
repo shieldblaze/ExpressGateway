@@ -1390,6 +1390,8 @@ name = "lb-quic"
 version = "0.1.0"
 dependencies = [
  "bytes",
+ "lb-security",
+ "parking_lot",
  "quiche",
  "rcgen",
  "thiserror 2.0.18",
@@ -1405,8 +1407,10 @@ dependencies = [
  "http 1.4.0",
  "parking_lot",
  "rcgen",
+ "ring",
  "rustls",
  "rustls-pki-types",
+ "subtle",
  "thiserror 2.0.18",
 ]
 

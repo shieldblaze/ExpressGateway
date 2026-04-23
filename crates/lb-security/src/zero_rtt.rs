@@ -129,4 +129,19 @@ impl ZeroRttReplayGuard {
 
         Ok(())
     }
+
+    /// Gateway-facing entry point named for its call site in the QUIC
+    /// server accept loop (Pillar 3b.3a). Semantically identical to
+    /// [`check_and_record`](Self::check_and_record); the separate name
+    /// documents the wiring point so a reader of the accept loop can
+    /// follow the crate boundary without chasing a generic-sounding
+    /// helper.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`SecurityError::ZeroRttReplay`] if the token has been
+    /// seen since the buffer was last evicted.
+    pub fn check_0rtt_token(&mut self, token: &[u8]) -> Result<(), SecurityError> {
+        self.check_and_record(token)
+    }
 }

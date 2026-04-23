@@ -10,8 +10,10 @@ publish = false
 thiserror = { workspace = true }
 bytes = { workspace = true }
 tokio = { workspace = true }
+parking_lot = { workspace = true }
 quiche = { workspace = true }
 tokio-quiche = { workspace = true }
+lb-security = { path = "../lb-security" }
 
 [dev-dependencies]
 rcgen = { version = "0.13", features = ["pem"] }

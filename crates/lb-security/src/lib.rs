@@ -13,6 +13,7 @@
 #![cfg_attr(test, allow(clippy::unwrap_used, clippy::expect_used))]
 
 mod error;
+mod retry;
 mod slow_post;
 mod slowloris;
 mod smuggle;
@@ -20,6 +21,7 @@ mod ticket;
 mod zero_rtt;
 
 pub use error::SecurityError;
+pub use retry::{DEFAULT_RETRY_MAX_AGE, RETRY_SECRET_LEN, RetryError, RetryTokenSigner};
 pub use slow_post::SlowPostDetector;
 pub use slowloris::SlowlorisDetector;
 pub use smuggle::SmuggleDetector;
@@ -236,5 +238,16 @@ mod tests {
                 .check_and_record(b"some-long-token-value-that-would-be-expensive-to-clone!")
                 .is_ok()
         );
+    }
+
+    #[test]
+    fn zero_rtt_check_0rtt_token_detects_replay() {
+        // Pillar 3b.3a: `check_0rtt_token` is the gateway-facing entry
+        // point the QUIC server accept loop calls. It must share the
+        // underlying dedup state with `check_and_record`.
+        let mut guard = ZeroRttReplayGuard::new(16);
+        let token = b"early-data-ticket-id";
+        assert!(guard.check_0rtt_token(token).is_ok());
+        assert!(guard.check_0rtt_token(token).is_err());
     }
 }

@@ -1,18 +1,32 @@
 //! Native QUIC forwarding tests.
 //!
-//! Pillar 3b.1 runs on quiche 0.28 + BoringSSL. Each test writes a
-//! self-signed rcgen cert+key to a temp dir, spins up a server and a
-//! client [`QuicEndpoint`] on `127.0.0.1:0`, completes a real UDP + TLS
-//! 1.3 handshake, and asserts roundtrip preservation.
+//! Pillar 3b.1 put this crate on real quiche 0.28 + BoringSSL; Pillar
+//! 3b.3a turns client peer-cert verification back on. The loopback
+//! cert is now built as a CA (basicConstraints=CA:TRUE) with a DNS
+//! SAN of `expressgateway.test` and a `serverAuth` EKU so BoringSSL's
+//! hostname verifier accepts it on the client side. The client still
+//! connects to `SocketAddr(127.0.0.1, <port>)`; only the TLS SNI
+//! uses the hostname.
 //!
-//! The two test function names are manifest-locked
-//! (`manifest/required-tests.txt`) and must not be renamed.
+//! Each test writes the self-signed cert + key + CA-bundle PEM triple
+//! to a temp dir, spins up a server and a client [`QuicEndpoint`] on
+//! `127.0.0.1:0`, completes a real UDP + TLS 1.3 handshake with peer
+//! verification active, and asserts roundtrip preservation.
+//!
+//! The two test function names `test_quic_datagram_forwarding` and
+//! `test_quic_stream_forwarding` are manifest-locked; other test names
+//! in this file are not.
 
 use std::fs;
 use std::path::PathBuf;
+use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 
-use lb_quic::{QuicDatagram, QuicEndpoint, QuicStream, roundtrip_datagram, roundtrip_stream};
+use lb_quic::{
+    QuicDatagram, QuicEndpoint, QuicStream, ZeroRttReplayGuard, roundtrip_datagram,
+    roundtrip_stream,
+};
+use parking_lot::Mutex;
 
 static CERT_DIR_COUNTER: AtomicU64 = AtomicU64::new(0);
 
@@ -43,12 +57,21 @@ fn generate_loopback_certs() -> TestCerts {
     fs::create_dir_all(&dir).unwrap();
 
     // BoringSSL's verifier requires the trust anchor to carry
-    // basicConstraints=CA:TRUE. rcgen's `generate_simple_self_signed`
-    // default is a leaf cert (IsCa::NoCa), which BoringSSL rejects as a
-    // root. Build the params explicitly so the same self-signed cert
-    // can serve as both the server leaf and the client's CA anchor.
-    let mut params = rcgen::CertificateParams::new(vec!["127.0.0.1".to_string()]).unwrap();
+    // basicConstraints=CA:TRUE AND a matching hostname in the SAN. An
+    // iPAddress-type SAN with `127.0.0.1` + `verify_peer(true)` was
+    // verified empirically to still fail BoringSSL's hostname check
+    // (TlsFail) even with a `serverAuth` EKU, so Pillar 3b.3a takes
+    // the task's documented fallback: mint the cert with a DNS SAN of
+    // `expressgateway.test` and have the client connect with that
+    // hostname as SNI while still targeting `SocketAddr(127.0.0.1,
+    // <port>)`. The TCP/UDP endpoint stays loopback; only the TLS
+    // peer-name-matching surface uses a hostname.
+    let mut params =
+        rcgen::CertificateParams::new(vec!["expressgateway.test".to_string()]).unwrap();
     params.is_ca = rcgen::IsCa::Ca(rcgen::BasicConstraints::Unconstrained);
+    params
+        .extended_key_usages
+        .push(rcgen::ExtendedKeyUsagePurpose::ServerAuth);
     let key_pair = rcgen::KeyPair::generate().unwrap();
     let cert = params.self_signed(&key_pair).unwrap();
     let cert_pem = cert.pem();
@@ -113,4 +136,35 @@ async fn test_quic_stream_forwarding() {
     assert_eq!(forwarded.stream_id, 1);
     assert_eq!(forwarded.data, b"stream data");
     assert!(forwarded.fin);
+}
+
+#[tokio::test]
+async fn replay_filter_rejects_second_0rtt_with_same_token() {
+    // Pillar 3b.3a exposes the 0-RTT replay seam on QuicEndpoint. The
+    // quiche wire path does not yet feed this filter per-Initial
+    // (custom accept loop lands in Pillar 3b.3c), so this test
+    // exercises the observable contract directly: installing a filter
+    // on the endpoint makes it reachable via `replay_filter()`, and
+    // the filter detects a repeated 0-RTT token.
+    let certs = generate_loopback_certs();
+    let filter = Arc::new(Mutex::new(ZeroRttReplayGuard::new(16)));
+    let server = QuicEndpoint::server_on_loopback(certs.cert.clone(), certs.key.clone())
+        .await
+        .unwrap()
+        .with_replay_filter(Arc::clone(&filter));
+
+    let installed = server.replay_filter().expect("replay filter is installed");
+    let session_token = b"session-ticket-id-abcdef012345";
+    assert!(installed.lock().check_0rtt_token(session_token).is_ok());
+    assert!(
+        installed.lock().check_0rtt_token(session_token).is_err(),
+        "second use of the same 0-RTT token must be rejected"
+    );
+    // A fresh token is unaffected.
+    assert!(
+        installed
+            .lock()
+            .check_0rtt_token(b"different-token")
+            .is_ok()
+    );
 }
