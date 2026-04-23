@@ -10,3 +10,11 @@ publish = false
 thiserror = { workspace = true }
 bytes = { workspace = true }
 http = { workspace = true }
+# Pillar 3b.3b-1: real H1 proxy.
+hyper = { workspace = true }
+hyper-util = { workspace = true }
+http-body-util = { workspace = true }
+tokio = { workspace = true }
+tracing = { workspace = true }
+parking_lot = { workspace = true }
+lb-io = { path = "../lb-io" }

@@ -51,6 +51,11 @@ pub struct ListenerConfig {
     ///   [`[listeners.quic]`](QuicListenerConfig). HTTP/3 bridging to
     ///   backends is Pillar 3b.3c-2; 3b.3c-1 validates the listener
     ///   seam + UDP binding + TLS handshake only.
+    /// * `"h1"` — plain HTTP/1.1 on TCP, terminated by hyper. Optional
+    ///   [`[listeners.alt_svc]`](AltSvcConfig) and
+    ///   [`[listeners.http]`](HttpTimeoutsConfig) blocks.
+    /// * `"h1s"` — HTTP/1.1 over TLS. Requires
+    ///   [`[listeners.tls]`](TlsConfig). Same optional blocks as `"h1"`.
     /// * `"http"`, `"h2"`, `"h3"` — reserved for upcoming pillars.
     pub protocol: String,
     /// TLS settings. Required when `protocol == "tls"`; must be absent
@@ -61,9 +66,74 @@ pub struct ListenerConfig {
     /// otherwise.
     #[serde(default)]
     pub quic: Option<QuicListenerConfig>,
+    /// Optional `Alt-Svc` advertisement applied to every H1 response.
+    /// Only meaningful for `protocol = "h1"` or `"h1s"`.
+    #[serde(default)]
+    pub alt_svc: Option<AltSvcConfig>,
+    /// Optional H1/H2 server timeouts. Only meaningful for `protocol =
+    /// "h1"` or `"h1s"`.
+    #[serde(default)]
+    pub http: Option<HttpTimeoutsConfig>,
     /// Upstream backends to load-balance across.
     #[serde(default)]
     pub backends: Vec<BackendConfig>,
+}
+
+/// `Alt-Svc` injection config (Pillar 3b.3b-1).
+///
+/// When set, every H1 response gets `Alt-Svc: h3=":<h3_port>"; ma=<max_age>`.
+/// This is how a TLS-terminated H1 listener advertises an HTTP/3 endpoint
+/// for clients that support QUIC upgrade.
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct AltSvcConfig {
+    /// UDP port hosting the H3 listener that should be advertised.
+    pub h3_port: u16,
+    /// `max-age` value in seconds. Defaults to one hour.
+    #[serde(default = "default_alt_svc_max_age")]
+    pub max_age: u32,
+}
+
+const fn default_alt_svc_max_age() -> u32 {
+    3_600
+}
+
+/// HTTP server timeouts (Pillar 3b.3b-1).
+#[derive(Debug, Clone, Copy, serde::Serialize, serde::Deserialize)]
+pub struct HttpTimeoutsConfig {
+    /// Maximum time the listener will spend reading the *request line +
+    /// headers* before giving up. Defaults to 10 seconds.
+    #[serde(default = "default_header_timeout_ms")]
+    pub header_timeout_ms: u64,
+    /// Maximum time the listener will spend draining the request *body*
+    /// or waiting for response *body* bytes from the upstream. Defaults
+    /// to 30 seconds.
+    #[serde(default = "default_body_timeout_ms")]
+    pub body_timeout_ms: u64,
+    /// Hard upper bound on total request lifetime. Defaults to 60 seconds.
+    #[serde(default = "default_total_timeout_ms")]
+    pub total_timeout_ms: u64,
+}
+
+impl Default for HttpTimeoutsConfig {
+    fn default() -> Self {
+        Self {
+            header_timeout_ms: default_header_timeout_ms(),
+            body_timeout_ms: default_body_timeout_ms(),
+            total_timeout_ms: default_total_timeout_ms(),
+        }
+    }
+}
+
+const fn default_header_timeout_ms() -> u64 {
+    10_000
+}
+
+const fn default_body_timeout_ms() -> u64 {
+    30_000
+}
+
+const fn default_total_timeout_ms() -> u64 {
+    60_000
 }
 
 /// TLS listener configuration (Pillar 3b.2).
@@ -201,6 +271,21 @@ fn validate_listener(i: usize, listener: &ListenerConfig) -> Result<(), ConfigEr
     match protocol {
         "tls" => validate_tls_listener(i, listener)?,
         "quic" => validate_quic_listener(i, listener)?,
+        "h1s" => validate_h1s_listener(i, listener)?,
+        "h1" => {
+            // Plain HTTP/1.1 — must not declare TLS/QUIC blocks.
+            if listener.tls.is_some() {
+                return Err(ConfigError::Validation(format!(
+                    "listener {i} has [listeners.tls] but protocol is \"h1\"; \
+                     set protocol=\"h1s\" or remove the tls block"
+                )));
+            }
+            if listener.quic.is_some() {
+                return Err(ConfigError::Validation(format!(
+                    "listener {i} has [listeners.quic] but protocol is \"h1\""
+                )));
+            }
+        }
         "tcp" | "http" | "h2" | "h3" => {
             if listener.tls.is_some() {
                 return Err(ConfigError::Validation(format!(
@@ -218,7 +303,24 @@ fn validate_listener(i: usize, listener: &ListenerConfig) -> Result<(), ConfigEr
         other => {
             return Err(ConfigError::Validation(format!(
                 "listener {i} has unknown protocol {other:?} \
-                 (expected one of: tcp, tls, quic, http, h2, h3)"
+                 (expected one of: tcp, tls, quic, h1, h1s, http, h2, h3)"
+            )));
+        }
+    }
+    if let Some(http) = listener.http.as_ref() {
+        if http.header_timeout_ms == 0 {
+            return Err(ConfigError::Validation(format!(
+                "listener {i} http.header_timeout_ms must be > 0"
+            )));
+        }
+        if http.body_timeout_ms == 0 {
+            return Err(ConfigError::Validation(format!(
+                "listener {i} http.body_timeout_ms must be > 0"
+            )));
+        }
+        if http.total_timeout_ms == 0 {
+            return Err(ConfigError::Validation(format!(
+                "listener {i} http.total_timeout_ms must be > 0"
             )));
         }
     }
@@ -268,6 +370,22 @@ fn validate_tls_listener(i: usize, listener: &ListenerConfig) -> Result<(), Conf
         )));
     }
     Ok(())
+}
+
+fn validate_h1s_listener(i: usize, listener: &ListenerConfig) -> Result<(), ConfigError> {
+    // h1s = HTTP/1.1 over TLS. Reuses the [listeners.tls] block.
+    if listener.tls.is_none() {
+        return Err(ConfigError::Validation(format!(
+            "listener {i} has protocol=\"h1s\" but is missing [listeners.tls]"
+        )));
+    }
+    if listener.quic.is_some() {
+        return Err(ConfigError::Validation(format!(
+            "listener {i} has [listeners.quic] but protocol is \"h1s\""
+        )));
+    }
+    // Delegate to the TLS validator for cert/key path checks.
+    validate_tls_listener(i, listener)
 }
 
 fn validate_quic_listener(i: usize, listener: &ListenerConfig) -> Result<(), ConfigError> {
@@ -346,6 +464,8 @@ protocol = "tcp"
                 protocol: "tcp".into(),
                 tls: None,
                 quic: None,
+                alt_svc: None,
+                http: None,
                 backends: vec![],
             }],
         };
@@ -360,6 +480,8 @@ protocol = "tcp"
                 protocol: "http".into(),
                 tls: None,
                 quic: None,
+                alt_svc: None,
+                http: None,
                 backends: vec![],
             }],
         };
@@ -374,6 +496,8 @@ protocol = "tcp"
                 protocol: "tcp".into(),
                 tls: None,
                 quic: None,
+                alt_svc: None,
+                http: None,
                 backends: vec![BackendConfig {
                     address: String::new(),
                     protocol: "tcp".into(),
@@ -433,6 +557,8 @@ address = "127.0.0.1:3000"
                 protocol: "tls".into(),
                 tls: None,
                 quic: None,
+                alt_svc: None,
+                http: None,
                 backends: vec![],
             }],
         };
@@ -447,6 +573,8 @@ address = "127.0.0.1:3000"
                 protocol: "ftp".into(),
                 tls: None,
                 quic: None,
+                alt_svc: None,
+                http: None,
                 backends: vec![],
             }],
         };
@@ -466,6 +594,8 @@ address = "127.0.0.1:3000"
                     ticket_rotation_overlap_seconds: 86_400,
                 }),
                 quic: None,
+                alt_svc: None,
+                http: None,
                 backends: vec![],
             }],
         };
@@ -485,6 +615,8 @@ address = "127.0.0.1:3000"
                     ticket_rotation_overlap_seconds: 86_400,
                 }),
                 quic: None,
+                alt_svc: None,
+                http: None,
                 backends: vec![],
             }],
         };
@@ -524,6 +656,8 @@ protocol = "h1"
                 protocol: "quic".into(),
                 tls: None,
                 quic: None,
+                alt_svc: None,
+                http: None,
                 backends: vec![],
             }],
         };
@@ -544,6 +678,8 @@ protocol = "h1"
                     max_idle_timeout_ms: 30_000,
                     max_recv_udp_payload_size: 500,
                 }),
+                alt_svc: None,
+                http: None,
                 backends: vec![],
             }],
         };
@@ -558,9 +694,135 @@ protocol = "h1"
                 protocol: "tcp".into(),
                 tls: None,
                 quic: None,
+                alt_svc: None,
+                http: None,
                 backends: vec![BackendConfig {
                     address: "127.0.0.1:3000".into(),
                     protocol: "gopher".into(),
+                    weight: 1,
+                }],
+            }],
+        };
+        assert!(validate_config(&config).is_err());
+    }
+
+    #[test]
+    fn parse_h1_listener_with_alt_svc_and_timeouts() {
+        let input = r#"
+[[listeners]]
+address = "0.0.0.0:80"
+protocol = "h1"
+
+[listeners.alt_svc]
+h3_port = 8443
+
+[listeners.http]
+header_timeout_ms = 5000
+
+[[listeners.backends]]
+address = "127.0.0.1:3000"
+"#;
+        let config = parse_config(input).unwrap();
+        assert_eq!(config.listeners[0].protocol, "h1");
+        let alt = config.listeners[0].alt_svc.as_ref().unwrap();
+        assert_eq!(alt.h3_port, 8443);
+        assert_eq!(alt.max_age, 3_600);
+        let http = config.listeners[0].http.unwrap();
+        assert_eq!(http.header_timeout_ms, 5_000);
+        assert_eq!(http.body_timeout_ms, 30_000);
+        assert_eq!(http.total_timeout_ms, 60_000);
+        assert!(validate_config(&config).is_ok());
+    }
+
+    #[test]
+    fn validate_h1s_without_tls_block_rejected() {
+        let config = LbConfig {
+            listeners: vec![ListenerConfig {
+                address: "0.0.0.0:443".into(),
+                protocol: "h1s".into(),
+                tls: None,
+                quic: None,
+                alt_svc: None,
+                http: None,
+                backends: vec![BackendConfig {
+                    address: "127.0.0.1:3000".into(),
+                    protocol: "tcp".into(),
+                    weight: 1,
+                }],
+            }],
+        };
+        let err = validate_config(&config).unwrap_err();
+        assert!(matches!(err, ConfigError::Validation(_)));
+    }
+
+    #[test]
+    fn validate_h1_with_tls_block_rejected() {
+        // Plain "h1" must not carry a TLS block — that combination would
+        // silently surprise an operator who meant "h1s".
+        let config = LbConfig {
+            listeners: vec![ListenerConfig {
+                address: "0.0.0.0:80".into(),
+                protocol: "h1".into(),
+                tls: Some(TlsConfig {
+                    cert_path: "/x".into(),
+                    key_path: "/y".into(),
+                    ticket_rotation_interval_seconds: 86_400,
+                    ticket_rotation_overlap_seconds: 86_400,
+                }),
+                quic: None,
+                alt_svc: None,
+                http: None,
+                backends: vec![],
+            }],
+        };
+        assert!(validate_config(&config).is_err());
+    }
+
+    #[test]
+    fn validate_h1s_with_tls_block_ok() {
+        let config = LbConfig {
+            listeners: vec![ListenerConfig {
+                address: "0.0.0.0:443".into(),
+                protocol: "h1s".into(),
+                tls: Some(TlsConfig {
+                    cert_path: "/etc/cert.pem".into(),
+                    key_path: "/etc/key.pem".into(),
+                    ticket_rotation_interval_seconds: 86_400,
+                    ticket_rotation_overlap_seconds: 86_400,
+                }),
+                quic: None,
+                alt_svc: Some(AltSvcConfig {
+                    h3_port: 443,
+                    max_age: 3_600,
+                }),
+                http: Some(HttpTimeoutsConfig::default()),
+                backends: vec![BackendConfig {
+                    address: "127.0.0.1:3000".into(),
+                    protocol: "tcp".into(),
+                    weight: 1,
+                }],
+            }],
+        };
+        validate_config(&config).unwrap();
+    }
+
+    #[test]
+    fn validate_zero_http_timeout_rejected() {
+        let config = LbConfig {
+            listeners: vec![ListenerConfig {
+                address: "0.0.0.0:80".into(),
+                protocol: "h1".into(),
+                tls: None,
+                quic: None,
+                alt_svc: None,
+                http: Some(HttpTimeoutsConfig {
+                    header_timeout_ms: 0,
+                    body_timeout_ms: 30_000,
+                    total_timeout_ms: 60_000,
+                }),
+                backends: vec![BackendConfig {
+                    address: "127.0.0.1:3000".into(),
+                    protocol: "tcp".into(),
                     weight: 1,
                 }],
             }],

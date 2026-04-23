@@ -63,6 +63,12 @@ parking_lot = "0.12"
 dashmap = "6"
 # HTTP
 http = "1"
+# Pillar 3b.3b-1: real L7 H1 proxy. Full features cover client + server +
+# tokio runtime adapters; http-body-util gives the Empty/Full body types
+# used by the L7 module's tests and the binary's wiring code.
+hyper = { version = "1", features = ["full"] }
+hyper-util = { version = "0.1", features = ["full"] }
+http-body-util = "0.1"
 # QUIC + TLS
 # Pillar 3b.1: lb-quic runs on quiche (BoringSSL) + tokio-quiche; see
 # docs/decisions/quinn-to-quiche-migration.md. rustls stays for the
@@ -103,6 +109,9 @@ tokio = { workspace = true, features = ["full", "test-util"] }
 anyhow = { workspace = true }
 bytes = { workspace = true }
 http = { workspace = true }
+hyper = { workspace = true }
+hyper-util = { workspace = true }
+http-body-util = { workspace = true }
 rand = { workspace = true }
 rustls = { workspace = true }
 rustls-pki-types = { workspace = true }

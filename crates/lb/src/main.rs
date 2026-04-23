@@ -34,11 +34,12 @@ use tokio_util::sync::CancellationToken;
 
 use lb_balancer::round_robin::RoundRobin;
 use lb_balancer::{Backend, LoadBalancer};
-use lb_config::{QuicListenerConfig, TlsConfig};
+use lb_config::{AltSvcConfig, HttpTimeoutsConfig, QuicListenerConfig, TlsConfig};
 use lb_io::Runtime;
 use lb_io::dns::{DnsResolver, ResolverConfig};
 use lb_io::pool::{PoolConfig, TcpPool};
 use lb_io::sockopts::{BackendSockOpts, ListenerSockOpts};
+use lb_l7::h1_proxy::{AltSvcConfig as H1AltSvcConfig, H1Proxy, HttpTimeouts, RoundRobinAddrs};
 use lb_observability::MetricsRegistry;
 use lb_quic::{QuicListener, QuicListenerParams};
 use lb_security::{TicketRotator, build_server_config};
@@ -57,6 +58,14 @@ enum ListenerMode {
         acceptor: TlsAcceptor,
         _rotator: Arc<PlMutex<TicketRotator>>,
     },
+    /// Plain HTTP/1.1 — `lb-l7` `H1Proxy` over the raw TCP stream.
+    H1 { proxy: Arc<H1Proxy> },
+    /// HTTP/1.1 over TLS — `lb-l7` `H1Proxy` after TLS termination.
+    H1s {
+        proxy: Arc<H1Proxy>,
+        acceptor: TlsAcceptor,
+        _rotator: Arc<PlMutex<TicketRotator>>,
+    },
 }
 
 /// Per-listener runtime state.
@@ -71,12 +80,12 @@ struct ListenerState {
     metrics: Arc<MetricsRegistry>,
     /// Active connection gauge.
     active_connections: AtomicU64,
-    /// Shared lb-io runtime (auto-detects io_uring vs epoll).
+    /// Shared `lb-io` runtime (auto-detects `io_uring` vs epoll).
     io_runtime: Runtime,
     /// Shared TCP connection pool for backend dials.
     pool: TcpPool,
     /// Shared DNS resolver with positive/negative caching. Used to
-    /// pre-resolve backend hostnames today; TcpPool will consume it for
+    /// pre-resolve backend hostnames today; `TcpPool` will consume it for
     /// on-demand re-resolution in a follow-up.
     #[allow(dead_code)]
     resolver: DnsResolver,
@@ -226,6 +235,215 @@ fn spawn_rotator_ticker(rotator: Arc<PlMutex<TicketRotator>>) {
     });
 }
 
+// ── H1 / H1s helpers ────────────────────────────────────────────────────
+
+/// Build a [`H1Proxy`] from a resolved backend address list and the
+/// optional `[listeners.alt_svc]` / `[listeners.http]` blocks.
+fn build_h1_proxy(
+    pool: TcpPool,
+    addresses: &[SocketAddr],
+    alt_svc_cfg: Option<&AltSvcConfig>,
+    http_cfg: Option<&HttpTimeoutsConfig>,
+    is_https: bool,
+) -> anyhow::Result<Arc<H1Proxy>> {
+    let picker = RoundRobinAddrs::new(addresses.to_vec())
+        .ok_or_else(|| anyhow::anyhow!("H1 listener requires at least one backend"))?;
+    let alt_svc = alt_svc_cfg.map(|a| H1AltSvcConfig {
+        h3_port: a.h3_port,
+        max_age: a.max_age,
+    });
+    let timeouts = http_cfg.map_or_else(HttpTimeouts::default, |h| HttpTimeouts {
+        header: Duration::from_millis(h.header_timeout_ms),
+        body: Duration::from_millis(h.body_timeout_ms),
+        total: Duration::from_millis(h.total_timeout_ms),
+    });
+    Ok(Arc::new(H1Proxy::new(
+        pool,
+        Arc::new(picker),
+        alt_svc,
+        timeouts,
+        is_https,
+    )))
+}
+
+/// Build the TLS stack for an `h1s` listener. Same plumbing as the
+/// `tls` listener (ticket rotator + cert + key) plus `http/1.1` ALPN
+/// advertisement so clients negotiate H1 instead of falling through to
+/// raw TLS.
+fn build_h1s_tls_stack(
+    tls_cfg: &TlsConfig,
+) -> anyhow::Result<(Arc<rustls::ServerConfig>, Arc<PlMutex<TicketRotator>>)> {
+    let (server_cfg, rotator) = build_tls_stack(tls_cfg)?;
+    // build_tls_stack returns Arc<ServerConfig>; clone into a fresh
+    // ServerConfig so we can append ALPN without mutating the shared
+    // value. rustls::ServerConfig does not implement Clone, so we
+    // rebuild from scratch using the same inputs.
+    let cert_chain = load_cert_chain(Path::new(&tls_cfg.cert_path))?;
+    let key = load_private_key(Path::new(&tls_cfg.key_path))?;
+    let mut new_cfg = build_server_config(Arc::clone(&rotator), cert_chain, key)
+        .map_err(|e| anyhow::anyhow!("rustls ServerConfig build failed: {e}"))?;
+    // ServerConfig is wrapped in Arc; mutate before sealing.
+    Arc::get_mut(&mut new_cfg)
+        .ok_or_else(|| anyhow::anyhow!("ServerConfig Arc unexpectedly aliased"))?
+        .alpn_protocols = vec![b"http/1.1".to_vec()];
+    drop(server_cfg);
+    Ok((new_cfg, rotator))
+}
+
+/// Bind and spawn a [`QuicListener`]. Pulled out of `async_main` to
+/// keep its body small enough to satisfy `clippy::too_many_lines`.
+async fn spawn_quic(listener_cfg: &lb_config::ListenerConfig) -> anyhow::Result<QuicListener> {
+    let Some(quic_cfg) = listener_cfg.quic.as_ref() else {
+        anyhow::bail!(
+            "listener {} has protocol=quic but no [listeners.quic] block",
+            listener_cfg.address
+        );
+    };
+    let bind_addr: SocketAddr = listener_cfg
+        .address
+        .parse()
+        .with_context(|| format!("invalid listen address: {}", listener_cfg.address))?;
+    let params = quic_listener_params_from_config(bind_addr, quic_cfg);
+    let shutdown = CancellationToken::new();
+    let listener = QuicListener::spawn(params, shutdown)
+        .await
+        .with_context(|| format!("QUIC listener bind failed for {bind_addr}"))?;
+    tracing::info!(
+        address = %listener.local_addr(),
+        protocol = "quic",
+        cert = %quic_cfg.cert_path,
+        retry_secret = %quic_cfg.retry_secret_path,
+        "QUIC listener started"
+    );
+    Ok(listener)
+}
+
+/// Resolve backends, build the listener state, and spawn the accept
+/// loop for a TCP/TLS/H1/H1s listener.
+async fn spawn_tcp(
+    listener_cfg: &lb_config::ListenerConfig,
+    pool: &TcpPool,
+    resolver: &DnsResolver,
+    io_runtime: Runtime,
+    metrics: &Arc<MetricsRegistry>,
+) -> anyhow::Result<tokio::task::JoinHandle<anyhow::Result<()>>> {
+    let mut addresses = Vec::with_capacity(listener_cfg.backends.len());
+    let mut backends = Vec::with_capacity(listener_cfg.backends.len());
+    for (i, b) in listener_cfg.backends.iter().enumerate() {
+        let (host, port) = split_host_port(&b.address)
+            .with_context(|| format!("invalid backend address: {}", b.address))?;
+        let lookup = resolver
+            .resolve(host, port)
+            .await
+            .with_context(|| format!("cannot resolve backend: {}", b.address))?;
+        let Some(first) = lookup.first().copied() else {
+            anyhow::bail!("resolver returned no addresses for {}", b.address);
+        };
+        addresses.push(first);
+        backends.push(Backend::new(format!("backend-{i}"), b.weight));
+    }
+    let mode = build_listener_mode(listener_cfg, pool, &addresses)?;
+    let state = Arc::new(ListenerState {
+        backends,
+        balancer: parking_lot::Mutex::new(RoundRobin::new()),
+        addresses,
+        metrics: Arc::clone(metrics),
+        active_connections: AtomicU64::new(0),
+        io_runtime,
+        pool: pool.clone(),
+        resolver: resolver.clone(),
+        mode,
+    });
+    Ok(tokio::spawn(run_listener(
+        listener_cfg.address.clone(),
+        state,
+    )))
+}
+
+/// Build the per-listener [`ListenerMode`] from its config, dispatching
+/// on `protocol`. Spawned per listener at startup; `addresses` are the
+/// pre-resolved backend `SocketAddr`s for round-robin balancing.
+fn build_listener_mode(
+    listener_cfg: &lb_config::ListenerConfig,
+    pool: &TcpPool,
+    addresses: &[SocketAddr],
+) -> anyhow::Result<ListenerMode> {
+    match listener_cfg.protocol.as_str() {
+        "tls" => {
+            let Some(tls_cfg) = listener_cfg.tls.as_ref() else {
+                anyhow::bail!(
+                    "listener {} has protocol=tls but no [listeners.tls] block",
+                    listener_cfg.address
+                );
+            };
+            let (server_cfg, rotator) = build_tls_stack(tls_cfg)
+                .with_context(|| format!("TLS setup failed for {}", listener_cfg.address))?;
+            let acceptor = TlsAcceptor::from(server_cfg);
+            spawn_rotator_ticker(Arc::clone(&rotator));
+            tracing::info!(
+                address = %listener_cfg.address,
+                protocol = "tls",
+                cert = %tls_cfg.cert_path,
+                "listener configured with TLS termination"
+            );
+            Ok(ListenerMode::Tls {
+                acceptor,
+                _rotator: rotator,
+            })
+        }
+        "h1" => {
+            let proxy = build_h1_proxy(
+                pool.clone(),
+                addresses,
+                listener_cfg.alt_svc.as_ref(),
+                listener_cfg.http.as_ref(),
+                false,
+            )
+            .with_context(|| format!("H1 setup failed for {}", listener_cfg.address))?;
+            tracing::info!(
+                address = %listener_cfg.address,
+                protocol = "h1",
+                alt_svc = ?listener_cfg.alt_svc.as_ref().map(|a| format!("h3:{}", a.h3_port)),
+                "listener configured for HTTP/1.1"
+            );
+            Ok(ListenerMode::H1 { proxy })
+        }
+        "h1s" => {
+            let Some(tls_cfg) = listener_cfg.tls.as_ref() else {
+                anyhow::bail!(
+                    "listener {} has protocol=h1s but no [listeners.tls] block",
+                    listener_cfg.address
+                );
+            };
+            let (server_cfg, rotator) = build_h1s_tls_stack(tls_cfg)
+                .with_context(|| format!("H1s TLS setup failed for {}", listener_cfg.address))?;
+            let acceptor = TlsAcceptor::from(server_cfg);
+            spawn_rotator_ticker(Arc::clone(&rotator));
+            let proxy = build_h1_proxy(
+                pool.clone(),
+                addresses,
+                listener_cfg.alt_svc.as_ref(),
+                listener_cfg.http.as_ref(),
+                true,
+            )
+            .with_context(|| format!("H1s setup failed for {}", listener_cfg.address))?;
+            tracing::info!(
+                address = %listener_cfg.address,
+                protocol = "h1s",
+                cert = %tls_cfg.cert_path,
+                alt_svc = ?listener_cfg.alt_svc.as_ref().map(|a| format!("h3:{}", a.h3_port)),
+                "listener configured for HTTP/1.1 over TLS"
+            );
+            Ok(ListenerMode::H1s {
+                proxy,
+                acceptor,
+                _rotator: rotator,
+            })
+        }
+        _ => Ok(ListenerMode::PlainTcp),
+    }
+}
+
 // ── main ────────────────────────────────────────────────────────────────
 
 /// Application entry point.
@@ -293,40 +511,10 @@ async fn async_main() -> anyhow::Result<()> {
     let mut quic_listeners: Vec<QuicListener> = Vec::new();
 
     for listener_cfg in &config.listeners {
-        // QUIC listener handles its own accept loop via lb_quic::QuicListener.
-        // It does not share the TCP-backed `ListenerState` shape; Pillar
-        // 3b.3c-2 wires the InboundPacketRouter → backend bridge, at which
-        // point this branch will either hand the listener the pool +
-        // backend picker, or keep the seam and let router-level config
-        // own that wiring.
         if listener_cfg.protocol == "quic" {
-            let Some(quic_cfg) = listener_cfg.quic.as_ref() else {
-                anyhow::bail!(
-                    "listener {} has protocol=quic but no [listeners.quic] block \
-                     (validate_config should have caught this)",
-                    listener_cfg.address
-                );
-            };
-            let bind_addr: SocketAddr = listener_cfg
-                .address
-                .parse()
-                .with_context(|| format!("invalid listen address: {}", listener_cfg.address))?;
-            let params = quic_listener_params_from_config(bind_addr, quic_cfg);
-            let shutdown = CancellationToken::new();
-            let listener = QuicListener::spawn(params, shutdown)
-                .await
-                .with_context(|| format!("QUIC listener bind failed for {bind_addr}"))?;
-            tracing::info!(
-                address = %listener.local_addr(),
-                protocol = "quic",
-                cert = %quic_cfg.cert_path,
-                retry_secret = %quic_cfg.retry_secret_path,
-                "QUIC listener started (3b.3c-1 seam)"
-            );
-            quic_listeners.push(listener);
+            quic_listeners.push(spawn_quic(listener_cfg).await?);
             continue;
         }
-
         if listener_cfg.backends.is_empty() {
             tracing::warn!(
                 address = %listener_cfg.address,
@@ -334,79 +522,7 @@ async fn async_main() -> anyhow::Result<()> {
             );
             continue;
         }
-
-        // Resolve backend addresses at startup via the DNS cache. This
-        // makes hostname-configured backends (e.g. `origin.example:443`)
-        // work and warms the cache so the first proxied connection does
-        // not pay the getaddrinfo cost. IP-literal backends go down the
-        // same path; the resolver forwards to `(host, port).to_socket_addrs()`
-        // which handles both.
-        let mut addresses = Vec::with_capacity(listener_cfg.backends.len());
-        let mut backends = Vec::with_capacity(listener_cfg.backends.len());
-
-        for (i, b) in listener_cfg.backends.iter().enumerate() {
-            let (host, port) = split_host_port(&b.address)
-                .with_context(|| format!("invalid backend address: {}", b.address))?;
-            let resolved = resolver
-                .resolve(host, port)
-                .await
-                .with_context(|| format!("cannot resolve backend: {}", b.address))?;
-            let Some(first) = resolved.first().copied() else {
-                anyhow::bail!("resolver returned no addresses for {}", b.address);
-            };
-            tracing::debug!(
-                backend = %b.address,
-                resolved_count = resolved.len(),
-                chosen = %first,
-                "backend resolved via DnsResolver"
-            );
-            addresses.push(first);
-            backends.push(Backend::new(format!("backend-{i}"), b.weight));
-        }
-
-        let mode = match listener_cfg.protocol.as_str() {
-            "tls" => {
-                let Some(tls_cfg) = listener_cfg.tls.as_ref() else {
-                    anyhow::bail!(
-                        "listener {} has protocol=tls but no [listeners.tls] block \
-                         (validate_config should have caught this)",
-                        listener_cfg.address
-                    );
-                };
-                let (server_cfg, rotator) = build_tls_stack(tls_cfg)
-                    .with_context(|| format!("TLS setup failed for {}", listener_cfg.address))?;
-                let acceptor = TlsAcceptor::from(server_cfg);
-                spawn_rotator_ticker(Arc::clone(&rotator));
-                tracing::info!(
-                    address = %listener_cfg.address,
-                    protocol = "tls",
-                    cert = %tls_cfg.cert_path,
-                    rotation_interval_s = tls_cfg.ticket_rotation_interval_seconds,
-                    overlap_s = tls_cfg.ticket_rotation_overlap_seconds,
-                    "listener configured with TLS termination"
-                );
-                ListenerMode::Tls {
-                    acceptor,
-                    _rotator: rotator,
-                }
-            }
-            _ => ListenerMode::PlainTcp,
-        };
-
-        let state = Arc::new(ListenerState {
-            backends,
-            balancer: parking_lot::Mutex::new(RoundRobin::new()),
-            addresses,
-            metrics: Arc::clone(&metrics),
-            active_connections: AtomicU64::new(0),
-            io_runtime,
-            pool: pool.clone(),
-            resolver: resolver.clone(),
-            mode,
-        });
-
-        let bind_addr = listener_cfg.address.clone();
-        let handle = tokio::spawn(run_listener(bind_addr, state));
+        let handle = spawn_tcp(listener_cfg, &pool, &resolver, io_runtime, &metrics).await?;
         listener_handles.push(handle);
     }
 
@@ -518,6 +634,19 @@ async fn run_listener(bind_addr: String, state: Arc<ListenerState>) -> anyhow::R
                     Ok(tls_stream) => {
                         proxy_connection(tls_stream, backend_addr, &st.metrics, &st.pool).await
                     }
+                    Err(e) => Err(e.into()),
+                },
+                ListenerMode::H1 { proxy } => Arc::clone(proxy)
+                    .serve_connection(client_stream, client_addr)
+                    .await
+                    .map_err(anyhow::Error::from),
+                ListenerMode::H1s {
+                    proxy, acceptor, ..
+                } => match acceptor.accept(client_stream).await {
+                    Ok(tls_stream) => Arc::clone(proxy)
+                        .serve_connection(tls_stream, client_addr)
+                        .await
+                        .map_err(anyhow::Error::from),
                     Err(e) => Err(e.into()),
                 },
             };
