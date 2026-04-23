@@ -10,7 +10,16 @@ cargo build --release -p lb
 
 Artifact: `target/release/lb`. Strip is enabled by the `[profile.release]` block in root `Cargo.toml`; LTO is set to `thin`.
 
-Cross-compiling to `aarch64-unknown-linux-gnu` or `x86_64-unknown-linux-musl` works from a stable 1.85 host; the XDP ebpf crate is outside the workspace members list and is not built by `cargo build --workspace`.
+### Build-time dependencies
+
+- **`cmake`** (≥ 3.20) — required because `quiche` links BoringSSL and BoringSSL's build is driven by cmake. `cmake 3.28` confirmed to work on Ubuntu 24.04. See ADR `docs/decisions/quinn-to-quiche-migration.md`.
+- **C/C++ toolchain** (`build-essential` on Debian/Ubuntu, `@development-tools` on Fedora) — BoringSSL compiles roughly 6–8 minutes from cold; subsequent builds cache.
+- **libclang resource headers** — `boring-sys`'s bindgen needs `stddef.h` from clang's resource dir. Ubuntu 24.04 ships `libclang.so.1` without the resource headers, so the workspace's `.cargo/config.toml` points `BINDGEN_EXTRA_CLANG_ARGS` at `/usr/lib/gcc/x86_64-linux-gnu/13/include -I/usr/include`. Distributions that install the full `clang` package (Fedora, Arch) don't need the workaround; the env var is harmless there.
+- **~20 GB scratch disk** during the first build. BoringSSL + quiche + release artifacts together hit ~12 GB; tests in debug profile double that.
+
+### Cross-compile notes
+
+Cross-compiling to `aarch64-unknown-linux-gnu` or `x86_64-unknown-linux-musl` works from a stable 1.85 host **provided the cross cmake + C toolchain are installed**. The XDP ebpf crate is outside the workspace members list and is not built by `cargo build --workspace` — it has its own pinned nightly toolchain per ADR `docs/decisions/ebpf-toolchain-separation.md`.
 
 ## Kernel floor
 

@@ -137,7 +137,7 @@ Phase B commits landing on top of the initial port:
 | 3 | `631caff5` | Pillar 1 (CONTINUE.md Step 4): add Runtime::listener_socket / connect_socket |
 | 4 | `9c37a740` | Pillar 1b: real io_uring ACCEPT/RECV/SEND/SPLICE + route root binary I/O through lb_io |
 | 5 | `edd11f02` | Pillar 2: TCP connection pool in lb-io with liveness probe |
-| 6 | `a50b6a81` | Pillar 3a: replace lb-quic simulation with real quinn 0.11 |
+| 6 | `a50b6a81` | Pillar 3a: replace lb-quic simulation with real quinn 0.11 (superseded by 3b.1) |
 | 7 | `35491253` | Pillar 4a: real aya-ebpf XDP program + aya userspace loader |
 | 8 | `a32e093b` | Step 5b: TLS session-ticket-key rotator (daily rotation + overlap window) |
 | 9 | `154566b3` | Step 5b: rustfmt fixes in lb-security/src/ticket.rs |
@@ -147,17 +147,25 @@ Phase B commits landing on top of the initial port:
 | 13 | `de5c6dbf` | chore: add .cargo/audit.toml mirroring deny.toml ignores |
 | 14 | `8db5ffef` | Step 9: add line-coverage report with honest gap table |
 | 15 | `e04f1a75` | Step 8: ship docs (CONFIG, DEPLOYMENT, METRICS, RUNBOOK, SECURITY, CHANGELOG) |
+| 16 | `24e66fa6` | Phase B finale: `.review/done.md` row-by-row §9 status |
+| 17 | `e600c64e` | spec: quinn → quiche + tokio-quiche (Cloudflare production stack) |
+| 18 | `2050c8c5` | **Pillar 3b.1**: migrate lb-quic quinn → quiche + tokio-quiche (replaces Pillar 3a) |
+| 19 | `bdc1c5ed` | **Pillar 3b.2**: TLS-over-TCP listener with TicketRotator in hot path |
+| 20 | `8157831c` | **Pillar 3b.3a**: quiche hardening — cert verification, retry signer, 0-RTT replay |
 
-294 → 346 tests (+52). halting-gate green through each commit. Four simulations replaced with real implementations (io_uring runtime, connection pool, quinn QUIC transport, aya-ebpf XDP program source). Six Phase F ship docs landed. Three installable sanity gates (`cargo audit`, `trufflehog`, `cargo llvm-cov`) wired with documented policy.
+294 → 359 tests (+65). halting-gate green through each commit. Migrated QUIC from quinn to quiche+tokio-quiche per ADR `docs/decisions/quinn-to-quiche-migration.md`. TLS-over-TCP listener live with rustls 0.23 + `RotatingTicketer` in the hot path. `RetryTokenSigner` (HMAC-SHA256 via ring + subtle constant-time MAC) and `ZeroRttReplayGuard::check_0rtt_token` land with unit + integration coverage; wire integration into a custom quiche accept loop is 3b.3c.
 
-## Next honest work (not in this drive)
+## Ordered remaining work (per user correction 2026-04-23)
 
-In rough priority order:
-1. **Pillar 3b** — wire quinn + rustls into `crates/lb/src/main.rs`; add h3/h3-quinn; implement stateless retry, 0-RTT replay guard, Alt-Svc. Bumps MSRV to 1.88, drops RUSTSEC-2026-0009, unblocks `bpf-linker`.
-2. **Pillar 4b** — once MSRV is 1.88, produce the BPF ELF; wire loader into binary startup with CAP_BPF runtime check; XDP_TX rewrite with RFC 1624 checksum; multi-kernel verifier matrix.
-3. **CONTINUE.md Step 6** — `fuzz/` with cargo-fuzz targets for H1, H2, QUIC Initial, PROXY, TLS ClientHello. Seed corpora + 1 h burn each.
-4. **Prometheus `/metrics`** — promote `MetricsRegistry` to include histograms + labels + exposition endpoint per `METRICS.md`.
-5. **CONTINUE.md Step 7** — install + run `h2spec`, `autobahn`, `testssl.sh`, `wrk2`, `h2load`. Commit `docs/conformance/{h2spec,autobahn,testssl,perf}.md`.
-6. **reviewer + auditor sign-off pass** — a read-only review against this `done.md`.
+PROMPT.md §§10, 11, 28 always required hyper+h2 for HTTP/1.1 and HTTP/2. A TLS-terminating TCP proxy is not the gateway; "add real HTTP servers" is in scope, not new scope.
 
-The file-by-file roadmap for each item lives in `docs/gap-analysis.md` and the ADRs.
+1. **Pillar 3b.3c** — custom quiche accept loop in the binary. UDP listener bound; `InboundPacketRouter` modeled on tokio-quiche's actor pattern (read their source, paraphrase); `RetryTokenSigner` wired on the wire; `ZeroRttReplayGuard` on the accept path; CID-routed upstream connection pool per Pingora EC-16. E2e test in `tests/` drives the running listener with an in-process `tokio_quiche::ClientH3Driver` (system curl 8.5.0 lacks HTTP/3; moral equivalent, same protocol wire; subprocess curl variant added when a CI image has curl+quiche).
+2. **Pillar 3b.3b + H1/H2 servers, together** — real `hyper` 1.x for HTTP/1.1 and `h2` 0.4 for HTTP/2 in the binary per PROMPT.md §§10, 11. Hop-by-hop header stripping, `X-Forwarded-For`/`X-Forwarded-Proto`/`X-Forwarded-Host`/`Via`, request-header and request-body timeouts. Alt-Svc injection (RFC 7838) advertising the H3 port on H1 and H2 responses. h2spec passes on the H2 listener. h2load covers per-stream load balancing.
+3. **Pillar 4b** — per `ebpf-toolchain-separation.md` ADR. `crates/lb-l4-xdp/ebpf/rust-toolchain.toml` nightly pin that bpf-linker accepts; produce the BPF ELF; wire loader into binary startup with CAP_BPF check; XDP_TX with RFC 1624 incremental checksum; VLAN + IPv6 parse; LpmTrie upgrade for ACL.
+4. **In parallel with 4b, across standby teammates**:
+   - Step 6 fuzz corpora (5 targets, ≥1 h burn each, findings in `fuzz/findings/`).
+   - Prometheus `/metrics` HTTP endpoint — promote `MetricsRegistry` to histograms + labels + exposition; registered on a loopback admin listener by default.
+   - Document updates: SECURITY.md to cross-reference `docs/research/pingora.md` edge cases section (the file is `pingora.md`, not `pingora-edge-cases.md` — FINAL_REVIEW.md's aspirational name; content was consolidated). DEPLOYMENT.md add cmake as build-time dep (per `quinn-to-quiche-migration.md` ADR).
+5. **Conformance harnesses (Step 7)** after 2 and 3 land. h2spec, Autobahn, testssl.sh, wrk2, h2load, `curl --http3` interop. Commit outputs to `docs/conformance/`.
+6. **reviewer + auditor sign-off** — two fresh teammates, read-only, independent. Both sign `.review/reviewer-signoff.md` and `.review/auditor-signoff.md`. Both must agree on every §9 row.
+7. **`.review/SHIP.md`** when `docs/gap-analysis.md` is either "no open gaps" or deleted, and both signoffs agree.
