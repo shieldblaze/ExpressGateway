@@ -1,0 +1,61 @@
+   Compiling lb-fuzz v0.0.0 (/home/ubuntu/Programming/ExpressGateway/fuzz)
+    Finished `release` profile [optimized + debuginfo] target(s) in 0.25s
+    Finished `release` profile [optimized + debuginfo] target(s) in 0.03s
+     Running `target/x86_64-unknown-linux-gnu/release/h3_frame -artifact_prefix=/home/ubuntu/Programming/ExpressGateway/fuzz/artifacts/h3_frame/ -runs=1000 -max_total_time=120 /home/ubuntu/Programming/ExpressGateway/fuzz/corpus/h3_frame`
+INFO: Running with entropic power schedule (0xFF, 100).
+INFO: Seed: 424537998
+INFO: Loaded 1 modules   (1017 inline 8-bit counters): 1017 [0x5e824b1aac90, 0x5e824b1ab089), 
+INFO: Loaded 1 PC tables (1017 PCs): 1017 [0x5e824b1ab090,0x5e824b1af020), 
+INFO:        7 files found in /home/ubuntu/Programming/ExpressGateway/fuzz/corpus/h3_frame
+INFO: -max_len is not provided; libFuzzer will not generate inputs larger than 4096 bytes
+INFO: seed corpus: files: 7 min: 2b max: 6b total: 26b rss: 33Mb
+#8	INITED cov: 61 ft: 70 corp: 7/26b exec/s: 0 rss: 33Mb
+#10	NEW    cov: 63 ft: 72 corp: 8/31b lim: 6 exec/s: 0 rss: 33Mb L: 5/6 MS: 2 ChangeByte-ChangeByte-
+#13	NEW    cov: 64 ft: 73 corp: 9/37b lim: 6 exec/s: 0 rss: 33Mb L: 6/6 MS: 3 CopyPart-ShuffleBytes-ChangeBit-
+#22	REDUCE cov: 64 ft: 73 corp: 9/36b lim: 6 exec/s: 0 rss: 33Mb L: 5/6 MS: 4 CopyPart-ShuffleBytes-CrossOver-EraseBytes-
+#23	NEW    cov: 67 ft: 76 corp: 10/40b lim: 6 exec/s: 0 rss: 33Mb L: 4/6 MS: 1 CrossOver-
+#36	NEW    cov: 69 ft: 79 corp: 11/42b lim: 6 exec/s: 0 rss: 33Mb L: 2/6 MS: 3 EraseBytes-ChangeBinInt-ChangeBinInt-
+#42	NEW    cov: 70 ft: 83 corp: 12/47b lim: 6 exec/s: 0 rss: 33Mb L: 5/6 MS: 1 InsertByte-
+#46	NEW    cov: 71 ft: 84 corp: 13/51b lim: 6 exec/s: 0 rss: 33Mb L: 4/6 MS: 4 CopyPart-ChangeBinInt-ShuffleBytes-ShuffleBytes-
+	NEW_FUNC[1/1]: 0x5e824b104a70  (/home/ubuntu/Programming/ExpressGateway/fuzz/target/x86_64-unknown-linux-gnu/release/h3_frame+0x124a70) (BuildId: f2f62bf7834451615d32d3c68ba3aa85e70d498a)
+#53	NEW    cov: 74 ft: 87 corp: 14/55b lim: 6 exec/s: 0 rss: 33Mb L: 4/6 MS: 2 InsertByte-CopyPart-
+#54	NEW    cov: 75 ft: 88 corp: 15/57b lim: 6 exec/s: 0 rss: 33Mb L: 2/6 MS: 1 ChangeBit-
+#72	NEW    cov: 77 ft: 90 corp: 16/60b lim: 6 exec/s: 0 rss: 33Mb L: 3/6 MS: 3 ShuffleBytes-CrossOver-ChangeByte-
+#89	NEW    cov: 78 ft: 91 corp: 17/64b lim: 6 exec/s: 0 rss: 33Mb L: 4/6 MS: 2 CopyPart-ChangeByte-
+#115	REDUCE cov: 78 ft: 91 corp: 17/62b lim: 6 exec/s: 0 rss: 33Mb L: 2/6 MS: 1 EraseBytes-
+#121	REDUCE cov: 78 ft: 91 corp: 17/61b lim: 6 exec/s: 0 rss: 33Mb L: 4/6 MS: 1 EraseBytes-
+#128	NEW    cov: 79 ft: 92 corp: 18/65b lim: 6 exec/s: 0 rss: 33Mb L: 4/6 MS: 2 CopyPart-ShuffleBytes-
+#129	NEW    cov: 80 ft: 93 corp: 19/70b lim: 6 exec/s: 0 rss: 33Mb L: 5/6 MS: 1 ChangeBinInt-
+	NEW_FUNC[1/1]: 0x5e824b101060  (/home/ubuntu/Programming/ExpressGateway/fuzz/target/x86_64-unknown-linux-gnu/release/h3_frame+0x121060) (BuildId: f2f62bf7834451615d32d3c68ba3aa85e70d498a)
+#139	REDUCE cov: 89 ft: 102 corp: 20/76b lim: 6 exec/s: 0 rss: 34Mb L: 6/6 MS: 5 ChangeBit-CMP-CopyPart-CMP-ChangeBit- DE: "\001\000\000\000"-"\000\000"-
+#145	REDUCE cov: 89 ft: 102 corp: 20/75b lim: 6 exec/s: 0 rss: 34Mb L: 3/6 MS: 1 EraseBytes-
+#167	REDUCE cov: 89 ft: 102 corp: 20/74b lim: 6 exec/s: 0 rss: 34Mb L: 4/6 MS: 2 CopyPart-EraseBytes-
+#189	NEW    cov: 89 ft: 104 corp: 21/79b lim: 6 exec/s: 0 rss: 34Mb L: 5/6 MS: 2 ChangeBit-ChangeByte-
+#191	REDUCE cov: 91 ft: 106 corp: 22/84b lim: 6 exec/s: 0 rss: 34Mb L: 5/6 MS: 2 CrossOver-ChangeBit-
+#199	NEW    cov: 92 ft: 107 corp: 23/88b lim: 6 exec/s: 0 rss: 34Mb L: 4/6 MS: 3 InsertByte-ChangeByte-ShuffleBytes-
+#202	REDUCE cov: 92 ft: 107 corp: 23/87b lim: 6 exec/s: 0 rss: 34Mb L: 4/6 MS: 3 ChangeBit-CopyPart-EraseBytes-
+#222	REDUCE cov: 92 ft: 107 corp: 23/85b lim: 6 exec/s: 0 rss: 34Mb L: 4/6 MS: 5 ChangeByte-ChangeBit-CopyPart-ChangeBit-EraseBytes-
+	NEW_FUNC[1/3]: 0x5e824b101530  (/home/ubuntu/Programming/ExpressGateway/fuzz/target/x86_64-unknown-linux-gnu/release/h3_frame+0x121530) (BuildId: f2f62bf7834451615d32d3c68ba3aa85e70d498a)
+	NEW_FUNC[2/3]: 0x5e824b1015e0  (/home/ubuntu/Programming/ExpressGateway/fuzz/target/x86_64-unknown-linux-gnu/release/h3_frame+0x1215e0) (BuildId: f2f62bf7834451615d32d3c68ba3aa85e70d498a)
+#233	NEW    cov: 108 ft: 124 corp: 24/89b lim: 6 exec/s: 0 rss: 34Mb L: 4/6 MS: 1 CMP- DE: "\000\000"-
+#249	NEW    cov: 109 ft: 125 corp: 25/91b lim: 6 exec/s: 0 rss: 34Mb L: 2/6 MS: 1 EraseBytes-
+#253	REDUCE cov: 109 ft: 125 corp: 25/90b lim: 6 exec/s: 0 rss: 34Mb L: 2/6 MS: 4 ChangeBinInt-ChangeASCIIInt-PersAutoDict-EraseBytes- DE: "\000\000"-
+#284	REDUCE cov: 109 ft: 125 corp: 25/89b lim: 6 exec/s: 0 rss: 34Mb L: 3/6 MS: 1 EraseBytes-
+#322	REDUCE cov: 109 ft: 125 corp: 25/88b lim: 6 exec/s: 0 rss: 34Mb L: 3/6 MS: 3 ChangeBit-PersAutoDict-EraseBytes- DE: "\001\000\000\000"-
+#324	REDUCE cov: 109 ft: 125 corp: 25/87b lim: 6 exec/s: 0 rss: 34Mb L: 1/6 MS: 2 CrossOver-EraseBytes-
+#499	REDUCE cov: 109 ft: 125 corp: 25/85b lim: 6 exec/s: 0 rss: 35Mb L: 2/6 MS: 5 ShuffleBytes-CopyPart-ShuffleBytes-EraseBytes-EraseBytes-
+#542	REDUCE cov: 109 ft: 125 corp: 25/84b lim: 6 exec/s: 0 rss: 35Mb L: 4/6 MS: 3 CopyPart-CopyPart-EraseBytes-
+#698	REDUCE cov: 109 ft: 125 corp: 25/82b lim: 6 exec/s: 0 rss: 35Mb L: 2/6 MS: 1 EraseBytes-
+#704	REDUCE cov: 109 ft: 125 corp: 25/81b lim: 6 exec/s: 0 rss: 35Mb L: 3/6 MS: 1 EraseBytes-
+#717	REDUCE cov: 109 ft: 125 corp: 25/80b lim: 6 exec/s: 0 rss: 35Mb L: 3/6 MS: 3 ShuffleBytes-ShuffleBytes-EraseBytes-
+#744	REDUCE cov: 109 ft: 125 corp: 25/79b lim: 6 exec/s: 0 rss: 35Mb L: 2/6 MS: 2 CrossOver-EraseBytes-
+#812	REDUCE cov: 109 ft: 125 corp: 25/78b lim: 6 exec/s: 0 rss: 36Mb L: 2/6 MS: 3 ChangeBit-CrossOver-EraseBytes-
+#850	REDUCE cov: 109 ft: 125 corp: 25/77b lim: 6 exec/s: 0 rss: 36Mb L: 4/6 MS: 3 PersAutoDict-CopyPart-EraseBytes- DE: "\001\000\000\000"-
+#892	REDUCE cov: 109 ft: 125 corp: 25/76b lim: 6 exec/s: 0 rss: 36Mb L: 1/6 MS: 2 EraseBytes-ChangeByte-
+#897	REDUCE cov: 109 ft: 125 corp: 25/74b lim: 6 exec/s: 0 rss: 36Mb L: 3/6 MS: 5 CopyPart-ChangeBinInt-ChangeByte-ChangeByte-CrossOver-
+#1000	DONE   cov: 109 ft: 125 corp: 25/74b lim: 6 exec/s: 0 rss: 36Mb
+###### Recommended dictionary. ######
+"\001\000\000\000" # Uses: 15
+"\000\000" # Uses: 45
+###### End of recommended dictionary. ######
+Done 1000 runs in 0 second(s)

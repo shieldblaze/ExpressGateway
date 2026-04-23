@@ -1,0 +1,62 @@
+[package]
+name = "lb-fuzz"
+version = "0.0.0"
+publish = false
+edition = "2024"
+
+[package.metadata]
+cargo-fuzz = true
+
+# Empty workspace table: opts this crate out of the root workspace so
+# the nightly toolchain + libFuzzer runtime never touch the MSRV build.
+[workspace]
+
+
+# Intentionally NOT a member of the root workspace. cargo-fuzz manages
+# its own crate graph and links against libFuzzer (libclang_rt.fuzzer),
+# which requires a nightly toolchain with the -Z sanitizer machinery.
+# Keeping `fuzz/` out of `[workspace] members` keeps the nightly pin
+# off the main release/MSRV build.
+
+[dependencies]
+libfuzzer-sys = "0.4"
+lb-h1 = { path = "../crates/lb-h1" }
+lb-h2 = { path = "../crates/lb-h2" }
+lb-h3 = { path = "../crates/lb-h3" }
+quiche = "0.28"
+rustls = { version = "0.23", default-features = false, features = ["ring", "std", "tls12", "logging"] }
+
+[[bin]]
+name = "h1_parser"
+path = "fuzz_targets/h1_parser.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "h2_frame"
+path = "fuzz_targets/h2_frame.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "h3_frame"
+path = "fuzz_targets/h3_frame.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "quic_initial"
+path = "fuzz_targets/quic_initial.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "tls_client_hello"
+path = "fuzz_targets/tls_client_hello.rs"
+test = false
+doc = false
+bench = false

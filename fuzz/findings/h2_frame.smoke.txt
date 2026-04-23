@@ -1,0 +1,40 @@
+   Compiling lb-fuzz v0.0.0 (/home/ubuntu/Programming/ExpressGateway/fuzz)
+    Finished `release` profile [optimized + debuginfo] target(s) in 0.25s
+    Finished `release` profile [optimized + debuginfo] target(s) in 0.03s
+     Running `target/x86_64-unknown-linux-gnu/release/h2_frame -artifact_prefix=/home/ubuntu/Programming/ExpressGateway/fuzz/artifacts/h2_frame/ -runs=1000 -max_total_time=120 /home/ubuntu/Programming/ExpressGateway/fuzz/corpus/h2_frame`
+INFO: Running with entropic power schedule (0xFF, 100).
+INFO: Seed: 1394173811
+INFO: Loaded 1 modules   (1114 inline 8-bit counters): 1114 [0x5a1a77016a90, 0x5a1a77016eea), 
+INFO: Loaded 1 PC tables (1114 PCs): 1114 [0x5a1a77016ef0,0x5a1a7701b490), 
+INFO:        7 files found in /home/ubuntu/Programming/ExpressGateway/fuzz/corpus/h2_frame
+INFO: -max_len is not provided; libFuzzer will not generate inputs larger than 4096 bytes
+INFO: seed corpus: files: 7 min: 9b max: 17b total: 87b rss: 33Mb
+#8	INITED cov: 73 ft: 75 corp: 7/87b exec/s: 0 rss: 33Mb
+#9	NEW    cov: 76 ft: 78 corp: 8/102b lim: 17 exec/s: 0 rss: 33Mb L: 15/17 MS: 1 EraseBytes-
+#14	NEW    cov: 78 ft: 80 corp: 9/109b lim: 17 exec/s: 0 rss: 33Mb L: 7/17 MS: 5 InsertByte-ShuffleBytes-ChangeBit-CopyPart-EraseBytes-
+	NEW_FUNC[1/1]: 0x5a1a76f706b0  (/home/ubuntu/Programming/ExpressGateway/fuzz/target/x86_64-unknown-linux-gnu/release/h2_frame+0x1266b0) (BuildId: dbe5d4e7e51ec2959960f31794dd4bdcf4af12cc)
+#17	NEW    cov: 83 ft: 85 corp: 10/125b lim: 17 exec/s: 0 rss: 33Mb L: 16/17 MS: 3 ShuffleBytes-EraseBytes-CopyPart-
+#27	NEW    cov: 85 ft: 87 corp: 11/134b lim: 17 exec/s: 0 rss: 33Mb L: 9/17 MS: 5 EraseBytes-CopyPart-ChangeByte-CrossOver-CMP- DE: "\377\377"-
+#31	NEW    cov: 87 ft: 89 corp: 12/147b lim: 17 exec/s: 0 rss: 33Mb L: 13/17 MS: 4 ChangeBit-ChangeBit-CMP-CopyPart- DE: "\377\377\377\377"-
+#120	NEW    cov: 92 ft: 94 corp: 13/163b lim: 17 exec/s: 0 rss: 33Mb L: 16/17 MS: 4 ChangeByte-PersAutoDict-InsertByte-CrossOver- DE: "\377\377\377\377"-
+#121	REDUCE cov: 92 ft: 94 corp: 13/160b lim: 17 exec/s: 0 rss: 33Mb L: 10/17 MS: 1 EraseBytes-
+#159	NEW    cov: 96 ft: 98 corp: 14/176b lim: 17 exec/s: 0 rss: 33Mb L: 16/17 MS: 3 InsertByte-ChangeByte-CrossOver-
+#191	REDUCE cov: 96 ft: 98 corp: 14/174b lim: 17 exec/s: 0 rss: 34Mb L: 5/17 MS: 2 PersAutoDict-CrossOver- DE: "\377\377"-
+#230	REDUCE cov: 96 ft: 98 corp: 14/169b lim: 17 exec/s: 0 rss: 34Mb L: 11/17 MS: 4 CopyPart-ChangeBit-InsertByte-EraseBytes-
+#249	NEW    cov: 101 ft: 103 corp: 15/185b lim: 17 exec/s: 0 rss: 34Mb L: 16/17 MS: 4 ChangeBit-ChangeByte-ChangeBit-ShuffleBytes-
+#306	REDUCE cov: 101 ft: 103 corp: 15/184b lim: 17 exec/s: 0 rss: 34Mb L: 4/17 MS: 2 ShuffleBytes-EraseBytes-
+#473	REDUCE cov: 101 ft: 103 corp: 15/180b lim: 17 exec/s: 0 rss: 34Mb L: 12/17 MS: 2 PersAutoDict-EraseBytes- DE: "\377\377"-
+#596	REDUCE cov: 101 ft: 103 corp: 15/176b lim: 17 exec/s: 0 rss: 34Mb L: 11/17 MS: 3 InsertByte-ChangeBit-CrossOver-
+#683	REDUCE cov: 101 ft: 103 corp: 15/175b lim: 17 exec/s: 0 rss: 35Mb L: 3/17 MS: 2 CopyPart-EraseBytes-
+#729	REDUCE cov: 101 ft: 103 corp: 15/174b lim: 17 exec/s: 0 rss: 35Mb L: 9/17 MS: 1 EraseBytes-
+#732	NEW    cov: 103 ft: 105 corp: 16/187b lim: 17 exec/s: 0 rss: 35Mb L: 13/17 MS: 3 InsertByte-ChangeBinInt-ChangeBit-
+#758	NEW    cov: 107 ft: 109 corp: 17/203b lim: 17 exec/s: 0 rss: 35Mb L: 16/17 MS: 1 CrossOver-
+#966	REDUCE cov: 107 ft: 109 corp: 17/202b lim: 17 exec/s: 0 rss: 35Mb L: 2/17 MS: 3 ShuffleBytes-ChangeByte-EraseBytes-
+#967	REDUCE cov: 107 ft: 109 corp: 17/201b lim: 17 exec/s: 0 rss: 35Mb L: 11/17 MS: 1 CrossOver-
+#969	REDUCE cov: 107 ft: 109 corp: 17/200b lim: 17 exec/s: 0 rss: 35Mb L: 1/17 MS: 2 ChangeBinInt-EraseBytes-
+#1000	DONE   cov: 107 ft: 109 corp: 17/200b lim: 17 exec/s: 0 rss: 35Mb
+###### Recommended dictionary. ######
+"\377\377" # Uses: 35
+"\377\377\377\377" # Uses: 32
+###### End of recommended dictionary. ######
+Done 1000 runs in 0 second(s)

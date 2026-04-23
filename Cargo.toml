@@ -91,6 +91,10 @@ aya = "0.13"
 aya-obj = "0.2"
 # Pillar 4b-1: CAP_BPF probe before attempting XDP attach.
 caps = "0.5"
+# Fuzzing (Step 6). Consumed only by the out-of-workspace `fuzz/` crate;
+# declared here so the version travels with the workspace policy rather
+# than being hidden inside the fuzz crate.
+libfuzzer-sys = "0.4"
 
 [dev-dependencies]
 lb-core = { path = "crates/lb-core" }
