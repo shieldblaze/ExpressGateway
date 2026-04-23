@@ -1,7 +1,10 @@
 # ADR-0005: BPF map schema — real aya-ebpf maps + 5-tuple conntrack + prime-sized Maglev table
 
-- Status: Accepted (realised 2026-04-22 via Pillar 4a)
-- Date: 2026-04-22
+- Status: Accepted. Realised 2026-04-22 via Pillar 4a; extended
+  2026-04-23 via Pillar 4b-2 to add `CONNTRACK_V6` and promote
+  `ACL_DENY` to `BPF_MAP_TYPE_LPM_TRIE`, plus `BackendEntry` payload
+  growth for `XDP_TX` rewrite.
+- Date: 2026-04-22 (Pillar 4a), 2026-04-23 (Pillar 4b-2 revision)
 - Deciders: ExpressGateway team
 - Consulted: Maglev paper (Eisenbud et al., NSDI 2016), Katran design
   notes, Google Maglev production experience, Linux `bpf(2)` man page
@@ -34,44 +37,78 @@ freezes the schema and aligns the simulation and the real BPF maps.
 
 ## Decision outcome
 
-The real BPF map declarations as of Pillar 4a:
+The real BPF map declarations as of Pillar 4b-2:
 
-| Map name    | BPF type           | Key                         | Value                | Max entries | Purpose                                |
-|-------------|--------------------|-----------------------------|-----------------------|-------------|----------------------------------------|
-| `CONNTRACK` | `BPF_MAP_TYPE_HASH`| `FlowKey` (5-tuple, IPv4)   | `BackendEntry`        | 1 000 000   | Flow → backend pinning                 |
-| `L7_PORTS`  | `BPF_MAP_TYPE_HASH`| `u16` (dst port, net order) | `u8` (flags)          | 256         | Ports that XDP must PASS to userspace  |
-| `ACL_DENY`  | `BPF_MAP_TYPE_HASH`| `u32` (src IPv4, net order) | `u32` (rule id)       | 100 000     | /32 deny entries (LPM in Pillar 4b)    |
-| `STATS`     | `BPF_MAP_TYPE_PERCPU_ARRAY` | `u32` (slot)       | `u64` (counter)       | 32          | Per-CPU counters; advisory             |
+| Map name         | BPF type                    | Key                           | Value            | Max entries | Purpose                                            |
+|------------------|-----------------------------|-------------------------------|------------------|-------------|----------------------------------------------------|
+| `CONNTRACK`      | `BPF_MAP_TYPE_HASH`         | `FlowKey` (5-tuple, IPv4)     | `BackendEntry`   | 1 000 000   | IPv4 flow → backend pinning + rewrite state       |
+| `CONNTRACK_V6`   | `BPF_MAP_TYPE_HASH`         | `FlowKeyV6` (5-tuple, IPv6)   | `BackendEntryV6` | 512 000     | IPv6 flow → backend pinning + rewrite state       |
+| `L7_PORTS`       | `BPF_MAP_TYPE_HASH`         | `u16` (dst port, net order)   | `u8` (flags)     | 256         | Ports that XDP must PASS to userspace             |
+| `ACL_DENY_TRIE`  | `BPF_MAP_TYPE_LPM_TRIE`     | `LpmKey<u32>` (IPv4 CIDR)     | `u32` (rule id)  | 100 000     | IPv4 deny ACL with longest-prefix match           |
+| `STATS`          | `BPF_MAP_TYPE_PERCPU_ARRAY` | `u32` (slot)                  | `u64` (counter)  | 32          | Per-CPU counters; advisory                        |
 
 Types as declared in `crates/lb-l4-xdp/ebpf/src/main.rs`:
 
 ```rust
 #[repr(C)]
-pub struct FlowKey {
-    pub src_addr: u32,   // network order
-    pub dst_addr: u32,   // network order
-    pub src_port: u16,   // network order
-    pub dst_port: u16,   // network order
-    pub protocol: u8,    // IPPROTO_TCP (6) / IPPROTO_UDP (17)
-    pub _pad: [u8; 3],   // verifier-friendly alignment; keeps sizeof == 16
+pub struct FlowKey {        // 16 bytes
+    pub src_addr: u32,
+    pub dst_addr: u32,
+    pub src_port: u16,
+    pub dst_port: u16,
+    pub protocol: u8,
+    pub _pad: [u8; 3],
 }
 
 #[repr(C)]
+pub struct FlowKeyV6 {      // 40 bytes
+    pub src_addr: [u8; 16],
+    pub dst_addr: [u8; 16],
+    pub src_port: u16,
+    pub dst_port: u16,
+    pub protocol: u8,
+    pub _pad: [u8; 3],
+}
+
+/// Pillar 4b-2: BackendEntry grew from 8 → 28 bytes to carry enough
+/// rewrite state for an `XDP_TX` without a second map lookup.
+#[repr(C)]
 pub struct BackendEntry {
-    pub backend_idx: u32, // index into userspace Maglev table
-    pub flags: u32,       // reserved; Pillar 4b uses bit 0 for "rewrite"
+    pub backend_idx: u32,
+    pub flags: u32,
+    pub backend_ip: u32,      // destination IPv4 for the rewrite
+    pub backend_port: u16,    // destination L4 port for the rewrite
+    pub _pad: u16,
+    pub backend_mac: [u8; 6], // destination MAC
+    pub src_mac: [u8; 6],     // our NIC's MAC
+}
+
+#[repr(C)]
+pub struct BackendEntryV6 {   // 40 bytes
+    pub backend_idx: u32,
+    pub flags: u32,
+    pub backend_ip: [u8; 16],
+    pub backend_port: u16,
+    pub _pad: u16,
+    pub backend_mac: [u8; 6],
+    pub src_mac: [u8; 6],
 }
 ```
 
 Stats slot layout (indices into `STATS`):
 
-| Index | Name              | Meaning                                     |
-|-------|-------------------|---------------------------------------------|
-| 0     | `STAT_PASS`       | Packets returned `XDP_PASS`                 |
-| 1     | `STAT_DROP`       | Packets returned `XDP_DROP` (ACL denied)    |
-| 2     | `STAT_CT_HIT`     | Conntrack hits (flow pinned to backend)     |
-| 3     | `STAT_L7`         | L7 bypass hits (port in L7_PORTS)           |
-| 4     | `STAT_PARSE_FAIL` | Header parsing bounds-check failures        |
+| Index | Name                    | Meaning                                                        |
+|-------|-------------------------|----------------------------------------------------------------|
+| 0     | `STAT_PASS`             | Packets returned `XDP_PASS`                                    |
+| 1     | `STAT_DROP`             | Packets returned `XDP_DROP` (ACL denied)                       |
+| 2     | `STAT_CT_HIT_V4`        | IPv4 conntrack hits                                            |
+| 3     | `STAT_L7`               | L7 bypass hits (port in `L7_PORTS`)                            |
+| 4     | `STAT_PARSE_FAIL`       | Header parsing bounds-check failures                           |
+| 5     | `STAT_TX_V4`            | IPv4 `XDP_TX` (rewritten and retransmitted)                    |
+| 6     | `STAT_CT_HIT_V6`        | IPv6 conntrack hits                                            |
+| 7     | `STAT_TX_V6`            | IPv6 `XDP_TX`                                                  |
+| 8     | `STAT_VLAN`             | Frames where a single 802.1Q tag was stripped                  |
+| 9     | `STAT_V6_EXT_UNSUPPORTED` | IPv6 packets with >2 or unsupported extension headers → PASS |
 
 ### Decisions the schema encodes
 
@@ -102,8 +139,14 @@ Stats slot layout (indices into `STATS`):
 - **5-tuple** is the standard L4 flow identifier. Including `protocol`
   matters — TCP and UDP flows may share the same
   `(src, dst, sport, dport)` (e.g. DNS on :53).
-- **IPv4 only** for Pillar 4a. IPv6 (and VLAN) are Pillar 4b — they
-  require a second `FlowKey` variant (`FlowKeyV6`) and a parser branch.
+- **IPv6**: Pillar 4b-2 adds `FlowKeyV6` (40 bytes) and a separate
+  `CONNTRACK_V6` map rather than widening `FlowKey` with a
+  discriminant. Two maps are cheaper in the fast path (no
+  tagged-union match) and the per-flow memory still fits within the
+  kernel's per-map budget (512 k × 80 B ≈ 40 MiB for v6 conntrack).
+- **VLAN**: single 802.1Q tag stripped by the parser before the L3
+  branch; QinQ (stacked tags) is Pillar 4b-3. The VLAN tag is not
+  stored in the flow key — only the ports/addresses after it.
 - **`_pad: [u8; 3]`** pads `FlowKey` to 16 bytes. Without padding the
   verifier on some kernels rejects `HashMap<FlowKey, _>` because key
   size is not naturally aligned. 16 bytes is verifier-friendly and
@@ -112,11 +155,14 @@ Stats slot layout (indices into `STATS`):
   bounded, O(1). `LRU_HASH` has eviction heuristics the simulation
   cannot reproduce; FIFO is a strictly conservative model (if FIFO holds
   under load, LRU does at least as well). Acknowledged in ADR-0004.
-- **`ACL_DENY` is HashMap<u32, u32>, not LPM_TRIE**: aya-ebpf 0.1's
-  `LpmTrie` ergonomics are fragile on older kernels; Pillar 4a sticks
-  to exact /32 matches to avoid verifier surprises. Pillar 4b promotes
-  to `BPF_MAP_TYPE_LPM_TRIE` with a `[u8; 5]` key (prefix len + 4 IP
-  bytes). See ADR-0004 follow-ups.
+- **`ACL_DENY_TRIE` (Pillar 4b-2)**: promoted from Pillar 4a's plain
+  `HashMap<u32, u32>` to `BPF_MAP_TYPE_LPM_TRIE`. The key is aya's
+  `LpmKey<u32>` (4-byte CIDR prefix length followed by a 4-byte IPv4
+  address in network byte order). The verifier accepts this layout on
+  every kernel ≥ 4.20. /32 entries still work — they're just the
+  degenerate `prefix_len = 32` case. The LPM trie adds CIDR-prefix
+  matching (e.g. `10.0.0.0/8` denies the whole RFC 1918 block with
+  one entry).
 - **Prime Maglev size**: `(offset + c * skip) mod table_size` sweeps
   the full residue class only when `table_size` is coprime with `skip`.
   Choosing `table_size` prime and `skip ∈ [1, table_size-1]` guarantees
@@ -138,9 +184,11 @@ Stats slot layout (indices into `STATS`):
 
 - `FlowKey` padding wastes 3 bytes per conntrack entry (~3 MiB across
   1 M entries) for verifier alignment. Unavoidable on current kernels.
-- `ACL_DENY` is /32 exact match, not CIDR. Pillar 4b upgrade tracked.
+- `CONNTRACK_V6` at 512 k × 80 B uses ~40 MiB — half of the v4 map's
+  footprint but paid unconditionally even on v4-heavy deployments.
+  Operators can shrink it via `max_entries` patching if it's wasted.
 - FIFO eviction (simulation) hostile to long-lived flows under churn.
-  In-kernel `LRU_HASH` (Pillar 4b) mitigates.
+  In-kernel `LRU_HASH` (Pillar 4b-3) mitigates.
 
 ### Neutral
 
@@ -164,15 +212,17 @@ Stats slot layout (indices into `STATS`):
   `tests/l4_xdp_hotswap.rs` (manifest-locked); plus loader and module
   tests in `crates/lb-l4-xdp/src/`.
 
-## Follow-ups / open questions (Pillar 4b)
+## Follow-ups / open questions (Pillar 4b-3)
 
-- Add `FlowKeyV6` (IPv6 variant) + second conntrack map, or widen
-  `FlowKey` to 36 bytes with a discriminant.
-- Migrate `CONNTRACK` to `BPF_MAP_TYPE_LRU_HASH`.
-- Promote `ACL_DENY` to `BPF_MAP_TYPE_LPM_TRIE` with `[u8; 5]` key.
-- Expose conntrack capacity and Maglev table size through `lb-config`.
-- Kernel-side `XDP_TX` rewrite: the `BackendEntry.flags` bit 0 becomes
-  "rewrite and transmit".
+- Migrate `CONNTRACK` + `CONNTRACK_V6` to `BPF_MAP_TYPE_LRU_HASH`.
+- QinQ (stacked 802.1Q) parsing; current Pillar 4b-2 strips only one
+  tag.
+- `xtask xdp-verify` matrix exercising the verifier across 5.15 LTS,
+  6.1 LTS, and 6.6 LTS kernels.
+- Expose conntrack capacity, v6 conntrack capacity, and Maglev table
+  size through `lb-config`.
+- Hot-reload of `ACL_DENY_TRIE` entries from SIGHUP reload.
+- TCP option rewrite (timestamps, MSS, SACK) for `XDP_TX`.
 
 ## Sources
 

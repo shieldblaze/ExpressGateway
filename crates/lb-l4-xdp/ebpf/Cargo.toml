@@ -25,11 +25,16 @@ debug = true
 overflow-checks = false
 
 [profile.release]
+# opt-level = "z" keeps the XDP section small; the BPF verifier rejects
+# loops and unreachable code regardless of opt level, so `s`-vs-`z`
+# makes no behavioural difference here.
+opt-level = "z"
 panic = "abort"
 codegen-units = 1
 lto = true
 overflow-checks = false
 debug = false
+strip = "debuginfo"
 
 # Standalone crate marker — a safety net if someone pastes this path into
 # the root workspace members list by accident.

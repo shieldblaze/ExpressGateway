@@ -27,10 +27,19 @@ use std::collections::{HashMap, VecDeque};
 #[cfg(target_os = "linux")]
 pub mod loader;
 
+/// Pillar 4b-2 userspace simulation of the BPF extensions.
+///
+/// Covers 802.1Q VLAN stripping, IPv6 conntrack lookups, LPM-trie ACL
+/// matching, and RFC 1624 incremental checksum updates. The real in-kernel
+/// code lives under `crates/lb-l4-xdp/ebpf/src/main.rs`; this module is the
+/// CI-safe functional spec those routines must satisfy.
+pub mod sim;
+
 /// The compiled BPF ELF produced by `scripts/build-xdp.sh`.
 ///
 /// `build.rs` emits `cfg(lb_xdp_elf)` when `src/lb_xdp.bin` is present, so
 /// this constant exists only when a real ELF has been built and committed.
+///
 /// Pillar 4b-1 produces this artifact (~3 KiB) and tracks it as a binary
 /// blob alongside the source. `XdpLoader::load_from_bytes(LB_XDP_ELF)` is
 /// the supported entry point.

@@ -11,13 +11,113 @@
 //! or `panic!` — the crate-wide `#![deny(clippy::unwrap_used, …)]` applies.
 
 use std::io;
+use std::net::Ipv4Addr;
 
 use aya::{
-    Ebpf, EbpfError, EbpfLoader,
-    maps::{Map, MapError},
+    Ebpf, EbpfError, EbpfLoader, Pod,
+    maps::{
+        HashMap as AyaHashMap, Map, MapData, MapError,
+        lpm_trie::{Key as LpmKey, LpmTrie},
+    },
     programs::{ProgramError, Xdp, XdpFlags},
 };
 use aya_obj::{Object, ParseError};
+
+// ---------------------------------------------------------------------------
+// Userspace mirrors of the BPF map key/value layouts declared in
+// `crates/lb-l4-xdp/ebpf/src/main.rs`. They must stay in lock-step: aya
+// compares their byte size against the BPF ELF's declared map sizes on
+// accessor construction.
+// ---------------------------------------------------------------------------
+
+/// IPv4 flow key — matches `FlowKey` in the ebpf crate byte-for-byte.
+#[repr(C)]
+#[derive(Clone, Copy, Debug)]
+pub struct FlowKey {
+    /// Source IPv4 address (network byte order).
+    pub src_addr: u32,
+    /// Destination IPv4 address (network byte order).
+    pub dst_addr: u32,
+    /// Source port (network byte order).
+    pub src_port: u16,
+    /// Destination port (network byte order).
+    pub dst_port: u16,
+    /// IP protocol (TCP=6, UDP=17).
+    pub protocol: u8,
+    /// Padding to keep the key 16 bytes wide for verifier alignment.
+    pub pad: [u8; 3],
+}
+
+// SAFETY: `FlowKey` is `#[repr(C)]`, `Copy`, and has no padding reads —
+// aya's `Pod` is a marker trait requiring `Copy + 'static` layout stability.
+unsafe impl Pod for FlowKey {}
+
+/// IPv4 backend entry — matches `BackendEntry` in the ebpf crate.
+#[repr(C)]
+#[derive(Clone, Copy, Debug)]
+pub struct BackendEntry {
+    /// Index into the per-service Maglev table in userspace.
+    pub backend_idx: u32,
+    /// Reserved flag bits; bit 0 means "rewrite and transmit".
+    pub flags: u32,
+    /// Backend IPv4 address (network byte order) used by the `XDP_TX` rewrite.
+    pub backend_ip: u32,
+    /// Backend L4 port (network byte order).
+    pub backend_port: u16,
+    /// Padding.
+    pub pad: u16,
+    /// Destination MAC for the rewrite (the backend's).
+    pub backend_mac: [u8; 6],
+    /// Source MAC for the rewrite (our NIC's).
+    pub src_mac: [u8; 6],
+}
+
+// SAFETY: `#[repr(C)] + Copy + 'static`; matches ebpf layout exactly.
+unsafe impl Pod for BackendEntry {}
+
+/// IPv6 flow key — matches `FlowKeyV6` in the ebpf crate.
+#[repr(C)]
+#[derive(Clone, Copy, Debug)]
+pub struct FlowKeyV6 {
+    /// Source IPv6 address (network byte order, 16 raw bytes).
+    pub src_addr: [u8; 16],
+    /// Destination IPv6 address (network byte order, 16 raw bytes).
+    pub dst_addr: [u8; 16],
+    /// Source port (network byte order).
+    pub src_port: u16,
+    /// Destination port (network byte order).
+    pub dst_port: u16,
+    /// IP protocol (TCP=6, UDP=17).
+    pub protocol: u8,
+    /// Padding to 40 bytes.
+    pub pad: [u8; 3],
+}
+
+// SAFETY: `#[repr(C)] + Copy + 'static`; matches ebpf layout exactly.
+unsafe impl Pod for FlowKeyV6 {}
+
+/// IPv6 backend entry — matches `BackendEntryV6` in the ebpf crate.
+#[repr(C)]
+#[derive(Clone, Copy, Debug)]
+pub struct BackendEntryV6 {
+    /// Index into the userspace Maglev table.
+    pub backend_idx: u32,
+    /// Reserved flag bits.
+    pub flags: u32,
+    /// Backend IPv6 address (16 raw bytes).
+    pub backend_ip: [u8; 16],
+    /// Backend L4 port (network byte order).
+    pub backend_port: u16,
+    /// Padding.
+    pub pad: u16,
+    /// Destination MAC for the rewrite (the backend's).
+    pub backend_mac: [u8; 6],
+    /// Source MAC for the rewrite (our NIC's).
+    pub src_mac: [u8; 6],
+}
+
+// SAFETY: `#[repr(C)] + Copy + 'static`; matches ebpf layout exactly.
+unsafe impl Pod for BackendEntryV6 {}
 
 /// XDP attach mode, mirroring the kernel's `XDP_FLAGS_*` bits.
 ///
@@ -84,10 +184,12 @@ pub enum XdpLoaderError {
 
 /// High-level handle to a loaded BPF object containing an XDP program.
 ///
-/// Constructed by parsing a pre-compiled BPF ELF; nothing is loaded into the
-/// kernel until [`XdpLoader::attach`] is called. Map accessors (e.g.
-/// [`XdpLoader::take_map`]) allow the userspace control plane to populate
-/// `L7_PORTS`, `CONNTRACK`, and `ACL_TRIE` before traffic arrives.
+/// Constructed by parsing a pre-compiled BPF ELF; nothing is loaded into
+/// the kernel until [`XdpLoader::attach`] is called. Map accessors
+/// ([`XdpLoader::conntrack_map`], [`XdpLoader::conntrack_v6_map`],
+/// [`XdpLoader::acl_trie`], [`XdpLoader::take_map`]) allow the userspace
+/// control plane to populate `CONNTRACK`, `CONNTRACK_V6`, `ACL_DENY_TRIE`,
+/// and `L7_PORTS` before traffic arrives.
 #[derive(Debug)]
 pub struct XdpLoader {
     ebpf: Ebpf,
@@ -175,7 +277,7 @@ impl XdpLoader {
     }
 
     /// Take ownership of a BPF map by name so the caller can access it
-    /// through aya's typed map wrappers (e.g. `HashMap<_, FlowKey, BackendEntry>`).
+    /// through aya's typed map wrappers.
     ///
     /// # Errors
     ///
@@ -185,6 +287,80 @@ impl XdpLoader {
         self.ebpf
             .take_map(name)
             .ok_or(XdpLoaderError::MapNotFound(name))
+    }
+
+    /// Typed accessor for the IPv4 conntrack map.
+    ///
+    /// Returns an aya `HashMap` wrapping a mutable borrow of the underlying
+    /// `MapData` — the caller can insert, update, or iterate entries.
+    ///
+    /// # Errors
+    ///
+    /// - `MapNotFound` when the ELF does not declare `CONNTRACK`.
+    /// - `Map` when aya rejects the map (size mismatch between Rust-side
+    ///   `FlowKey`/`BackendEntry` and the ELF's declared sizes).
+    pub fn conntrack_map(
+        &mut self,
+    ) -> Result<AyaHashMap<&mut MapData, FlowKey, BackendEntry>, XdpLoaderError> {
+        let map = self
+            .ebpf
+            .map_mut("CONNTRACK")
+            .ok_or(XdpLoaderError::MapNotFound("CONNTRACK"))?;
+        AyaHashMap::try_from(map).map_err(Into::into)
+    }
+
+    /// Typed accessor for the IPv6 conntrack map.
+    ///
+    /// # Errors
+    ///
+    /// - `MapNotFound` when the ELF does not declare `CONNTRACK_V6`.
+    /// - `Map` when aya rejects the map (size mismatch).
+    pub fn conntrack_v6_map(
+        &mut self,
+    ) -> Result<AyaHashMap<&mut MapData, FlowKeyV6, BackendEntryV6>, XdpLoaderError> {
+        let map = self
+            .ebpf
+            .map_mut("CONNTRACK_V6")
+            .ok_or(XdpLoaderError::MapNotFound("CONNTRACK_V6"))?;
+        AyaHashMap::try_from(map).map_err(Into::into)
+    }
+
+    /// Typed accessor for the IPv4 deny LPM trie (Pillar 4b-2 upgrade
+    /// from the Pillar 4a `HashMap<u32, u32>`).
+    ///
+    /// # Errors
+    ///
+    /// - `MapNotFound` when the ELF does not declare `ACL_DENY_TRIE`.
+    /// - `Map` when aya rejects the map type (e.g. the ELF declares a
+    ///   plain hash map).
+    pub fn acl_trie(&mut self) -> Result<LpmTrie<&mut MapData, u32, u32>, XdpLoaderError> {
+        let map = self
+            .ebpf
+            .map_mut("ACL_DENY_TRIE")
+            .ok_or(XdpLoaderError::MapNotFound("ACL_DENY_TRIE"))?;
+        LpmTrie::try_from(map).map_err(Into::into)
+    }
+
+    /// Insert a CIDR deny rule into the IPv4 ACL LPM trie. `prefix_len` is
+    /// the number of leading bits to match; `ipv4` is the address
+    /// (network byte order handled internally). The stored value (`1`)
+    /// is an opaque tag — the BPF program only cares about presence.
+    ///
+    /// # Errors
+    ///
+    /// Propagates any error from [`XdpLoader::acl_trie`] plus aya-level
+    /// `bpf_map_update_elem` failures (full map, permission denied).
+    pub fn insert_acl_deny(
+        &mut self,
+        prefix_len: u8,
+        ipv4: Ipv4Addr,
+    ) -> Result<(), XdpLoaderError> {
+        // aya's examples store IPv4 addresses as u32.to_be() so the BPF
+        // side can compare them byte-for-byte against the packet's src_addr
+        // (which is already in network byte order). Match that convention.
+        let key = LpmKey::<u32>::new(u32::from(prefix_len), u32::from(ipv4).to_be());
+        let mut trie = self.acl_trie()?;
+        trie.insert(&key, 1u32, 0).map_err(Into::into)
     }
 
     /// Borrow the underlying `Ebpf` object — escape hatch for callers that
