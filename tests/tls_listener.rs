@@ -103,7 +103,8 @@ async fn tls_listener_handshake_and_ticket_reuse() {
     let trust_anchor = cert_chain[0].clone();
     let rot = TicketRotator::new(Duration::from_secs(86_400), Duration::from_secs(3_600)).unwrap();
     let rot_arc = Arc::new(Mutex::new(rot));
-    let server_cfg = build_server_config(Arc::clone(&rot_arc), cert_chain.clone(), key).unwrap();
+    let server_cfg =
+        build_server_config(Arc::clone(&rot_arc), cert_chain.clone(), key, &[]).unwrap();
 
     let (addr, server_handle) = spawn_echo_tls_server(Arc::clone(&server_cfg)).await;
 

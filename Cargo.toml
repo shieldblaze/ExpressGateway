@@ -117,6 +117,9 @@ rustls = { workspace = true }
 rustls-pki-types = { workspace = true }
 tokio-rustls = { workspace = true }
 parking_lot = { workspace = true }
+# Pillar 3b.3b-2: reqwest for H2 integration tests. rustls-tls + http2
+# only; no default features to avoid pulling native-tls and OpenSSL.
+reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "http2"] }
 quiche = { workspace = true }
 tokio-util = { workspace = true }
 ring = "0.17"

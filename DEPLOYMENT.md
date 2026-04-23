@@ -157,3 +157,26 @@ Until one of those lands, the XDP loader happy paths (`kernel_load`, `attach`) a
 5. `systemctl reload expressgateway`; watch logs for `reload applied` and no errors; verify no in-flight connections dropped (covered by the internal `reload_zero_drop` integration test, but worth repeating in prod).
 
 See `RUNBOOK.md` for ongoing operations.
+
+## CI conformance (optional)
+
+### h2spec — HTTP/2 conformance for `h1s` listeners
+
+`tests/h2spec.rs` spawns the gateway's H2s listener on an ephemeral port
+and invokes the [`h2spec`](https://github.com/summerwind/h2spec) binary.
+The test passes green if `h2spec` is absent from `$PATH` (it logs
+`h2spec not installed; skipping`), so the binary is **optional for local
+dev** but **required for strict CI conformance**.
+
+Install on Linux:
+
+```
+curl -L https://github.com/summerwind/h2spec/releases/download/v2.6.0/h2spec_linux_amd64.tar.gz \
+    | tar -xz
+sudo install -m 0755 h2spec /usr/local/bin/
+h2spec --version
+```
+
+On macOS/BSD, download the matching archive from the same release page.
+Once installed, `cargo test --test h2spec` exercises the full spec
+suite (`-t` for TLS, `-k` to accept the self-signed cert).

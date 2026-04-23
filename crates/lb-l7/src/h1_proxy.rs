@@ -349,7 +349,7 @@ fn error_response(status: StatusCode, msg: &str) -> Response<BoxBody<Bytes, hype
 
 /// Strip hop-by-hop headers per RFC 9110 §7.6.1 plus any names listed
 /// inside the `Connection` header value.
-fn strip_hop_by_hop(headers: &mut hyper::HeaderMap) {
+pub(crate) fn strip_hop_by_hop(headers: &mut hyper::HeaderMap) {
     // Collect Connection-token names BEFORE removing the Connection
     // header itself.
     let extra: Vec<HeaderName> = headers
@@ -373,7 +373,7 @@ fn strip_hop_by_hop(headers: &mut hyper::HeaderMap) {
 
 /// Append the peer's IP to `X-Forwarded-For`, creating the header if
 /// absent.
-fn append_xff(headers: &mut hyper::HeaderMap, peer: SocketAddr) {
+pub(crate) fn append_xff(headers: &mut hyper::HeaderMap, peer: SocketAddr) {
     let peer_ip = peer.ip().to_string();
     let new_value = headers.get(&XFF_NAME).map_or_else(
         || peer_ip.clone(),
@@ -389,7 +389,7 @@ fn append_xff(headers: &mut hyper::HeaderMap, peer: SocketAddr) {
 }
 
 /// Set `X-Forwarded-Proto` to `"https"` or `"http"`.
-fn set_xfp(headers: &mut hyper::HeaderMap, is_https: bool) {
+pub(crate) fn set_xfp(headers: &mut hyper::HeaderMap, is_https: bool) {
     let v = if is_https { "https" } else { "http" };
     if let Ok(value) = HeaderValue::from_str(v) {
         headers.insert(&XFP_NAME, value);
@@ -397,7 +397,7 @@ fn set_xfp(headers: &mut hyper::HeaderMap, is_https: bool) {
 }
 
 /// Set `X-Forwarded-Host` to the given host.
-fn set_xfh(headers: &mut hyper::HeaderMap, host: &str) {
+pub(crate) fn set_xfh(headers: &mut hyper::HeaderMap, host: &str) {
     if let Ok(value) = HeaderValue::from_str(host) {
         headers.insert(&XFH_NAME, value);
     }
@@ -405,7 +405,7 @@ fn set_xfh(headers: &mut hyper::HeaderMap, host: &str) {
 
 /// Append `HTTP/1.1 expressgateway` to `Via`, creating the header if
 /// absent.
-fn append_via(headers: &mut hyper::HeaderMap) {
+pub(crate) fn append_via(headers: &mut hyper::HeaderMap) {
     const VIA_TOKEN: &str = "HTTP/1.1 expressgateway";
     let new_value = headers.get(hyper::header::VIA).map_or_else(
         || VIA_TOKEN.to_owned(),

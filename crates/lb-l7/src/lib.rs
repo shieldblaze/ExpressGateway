@@ -16,6 +16,7 @@ pub mod h1_proxy;
 pub mod h1_to_h1;
 pub mod h1_to_h2;
 pub mod h1_to_h3;
+pub mod h2_proxy;
 pub mod h2_to_h1;
 pub mod h2_to_h2;
 pub mod h2_to_h3;

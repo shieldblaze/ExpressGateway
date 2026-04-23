@@ -40,6 +40,7 @@ use lb_io::dns::{DnsResolver, ResolverConfig};
 use lb_io::pool::{PoolConfig, TcpPool};
 use lb_io::sockopts::{BackendSockOpts, ListenerSockOpts};
 use lb_l7::h1_proxy::{AltSvcConfig as H1AltSvcConfig, H1Proxy, HttpTimeouts, RoundRobinAddrs};
+use lb_l7::h2_proxy::H2Proxy;
 use lb_observability::MetricsRegistry;
 use lb_quic::{QuicListener, QuicListenerParams};
 use lb_security::{TicketRotator, build_server_config};
@@ -60,9 +61,13 @@ enum ListenerMode {
     },
     /// Plain HTTP/1.1 — `lb-l7` `H1Proxy` over the raw TCP stream.
     H1 { proxy: Arc<H1Proxy> },
-    /// HTTP/1.1 over TLS — `lb-l7` `H1Proxy` after TLS termination.
+    /// HTTPS listener that offers HTTP/2 and HTTP/1.1 via ALPN. After
+    /// `TlsAcceptor::accept`, the runtime inspects
+    /// [`rustls::ServerConnection::alpn_protocol`] and dispatches to the
+    /// matching proxy.
     H1s {
-        proxy: Arc<H1Proxy>,
+        h1_proxy: Arc<H1Proxy>,
+        h2_proxy: Arc<H2Proxy>,
         acceptor: TlsAcceptor,
         _rotator: Arc<PlMutex<TicketRotator>>,
     },
@@ -204,7 +209,7 @@ fn build_tls_stack(
     let rotator = TicketRotator::new(interval, overlap)
         .map_err(|e| anyhow::anyhow!("ticket rotator init failed: {e}"))?;
     let rot_arc = Arc::new(PlMutex::new(rotator));
-    let server_cfg = build_server_config(Arc::clone(&rot_arc), cert_chain, key)
+    let server_cfg = build_server_config(Arc::clone(&rot_arc), cert_chain, key, &[])
         .map_err(|e| anyhow::anyhow!("rustls ServerConfig build failed: {e}"))?;
     Ok((server_cfg, rot_arc))
 }
@@ -266,28 +271,54 @@ fn build_h1_proxy(
     )))
 }
 
+/// Build a [`H2Proxy`] sharing the same picker/alt_svc/timeouts shape as
+/// the matching [`H1Proxy`]. Used when the `h1s` listener negotiates
+/// `h2` via ALPN.
+fn build_h2_proxy(
+    pool: TcpPool,
+    addresses: &[SocketAddr],
+    alt_svc_cfg: Option<&AltSvcConfig>,
+    http_cfg: Option<&HttpTimeoutsConfig>,
+    is_https: bool,
+) -> anyhow::Result<Arc<H2Proxy>> {
+    let picker = RoundRobinAddrs::new(addresses.to_vec())
+        .ok_or_else(|| anyhow::anyhow!("H2 listener requires at least one backend"))?;
+    let alt_svc = alt_svc_cfg.map(|a| H1AltSvcConfig {
+        h3_port: a.h3_port,
+        max_age: a.max_age,
+    });
+    let timeouts = http_cfg.map_or_else(HttpTimeouts::default, |h| HttpTimeouts {
+        header: Duration::from_millis(h.header_timeout_ms),
+        body: Duration::from_millis(h.body_timeout_ms),
+        total: Duration::from_millis(h.total_timeout_ms),
+    });
+    Ok(Arc::new(H2Proxy::new(
+        pool,
+        Arc::new(picker),
+        alt_svc,
+        timeouts,
+        is_https,
+    )))
+}
+
 /// Build the TLS stack for an `h1s` listener. Same plumbing as the
-/// `tls` listener (ticket rotator + cert + key) plus `http/1.1` ALPN
-/// advertisement so clients negotiate H1 instead of falling through to
-/// raw TLS.
+/// `tls` listener (ticket rotator + cert + key) plus an ALPN advertisement
+/// covering HTTP/2 (preferred) and HTTP/1.1 (fallback). The runtime
+/// dispatches by negotiated protocol after `TlsAcceptor::accept`.
 fn build_h1s_tls_stack(
     tls_cfg: &TlsConfig,
 ) -> anyhow::Result<(Arc<rustls::ServerConfig>, Arc<PlMutex<TicketRotator>>)> {
-    let (server_cfg, rotator) = build_tls_stack(tls_cfg)?;
-    // build_tls_stack returns Arc<ServerConfig>; clone into a fresh
-    // ServerConfig so we can append ALPN without mutating the shared
-    // value. rustls::ServerConfig does not implement Clone, so we
-    // rebuild from scratch using the same inputs.
     let cert_chain = load_cert_chain(Path::new(&tls_cfg.cert_path))?;
     let key = load_private_key(Path::new(&tls_cfg.key_path))?;
-    let mut new_cfg = build_server_config(Arc::clone(&rotator), cert_chain, key)
+    let interval = Duration::from_secs(tls_cfg.ticket_rotation_interval_seconds);
+    let overlap = Duration::from_secs(tls_cfg.ticket_rotation_overlap_seconds);
+    let rotator = TicketRotator::new(interval, overlap)
+        .map_err(|e| anyhow::anyhow!("ticket rotator init failed: {e}"))?;
+    let rot_arc = Arc::new(PlMutex::new(rotator));
+    let alpn: &[&[u8]] = &[b"h2", b"http/1.1"];
+    let server_cfg = build_server_config(Arc::clone(&rot_arc), cert_chain, key, alpn)
         .map_err(|e| anyhow::anyhow!("rustls ServerConfig build failed: {e}"))?;
-    // ServerConfig is wrapped in Arc; mutate before sealing.
-    Arc::get_mut(&mut new_cfg)
-        .ok_or_else(|| anyhow::anyhow!("ServerConfig Arc unexpectedly aliased"))?
-        .alpn_protocols = vec![b"http/1.1".to_vec()];
-    drop(server_cfg);
-    Ok((new_cfg, rotator))
+    Ok((server_cfg, rot_arc))
 }
 
 /// Bind and spawn a [`QuicListener`]. Pulled out of `async_main` to
@@ -419,7 +450,7 @@ fn build_listener_mode(
                 .with_context(|| format!("H1s TLS setup failed for {}", listener_cfg.address))?;
             let acceptor = TlsAcceptor::from(server_cfg);
             spawn_rotator_ticker(Arc::clone(&rotator));
-            let proxy = build_h1_proxy(
+            let h1_proxy = build_h1_proxy(
                 pool.clone(),
                 addresses,
                 listener_cfg.alt_svc.as_ref(),
@@ -427,15 +458,25 @@ fn build_listener_mode(
                 true,
             )
             .with_context(|| format!("H1s setup failed for {}", listener_cfg.address))?;
+            let h2_proxy = build_h2_proxy(
+                pool.clone(),
+                addresses,
+                listener_cfg.alt_svc.as_ref(),
+                listener_cfg.http.as_ref(),
+                true,
+            )
+            .with_context(|| format!("H2s setup failed for {}", listener_cfg.address))?;
             tracing::info!(
                 address = %listener_cfg.address,
                 protocol = "h1s",
                 cert = %tls_cfg.cert_path,
+                alpn = "h2,http/1.1",
                 alt_svc = ?listener_cfg.alt_svc.as_ref().map(|a| format!("h3:{}", a.h3_port)),
-                "listener configured for HTTP/1.1 over TLS"
+                "listener configured for HTTPS with ALPN (h2 preferred, http/1.1 fallback)"
             );
             Ok(ListenerMode::H1s {
-                proxy,
+                h1_proxy,
+                h2_proxy,
                 acceptor,
                 _rotator: rotator,
             })
@@ -641,12 +682,30 @@ async fn run_listener(bind_addr: String, state: Arc<ListenerState>) -> anyhow::R
                     .await
                     .map_err(anyhow::Error::from),
                 ListenerMode::H1s {
-                    proxy, acceptor, ..
+                    h1_proxy,
+                    h2_proxy,
+                    acceptor,
+                    ..
                 } => match acceptor.accept(client_stream).await {
-                    Ok(tls_stream) => Arc::clone(proxy)
-                        .serve_connection(tls_stream, client_addr)
-                        .await
-                        .map_err(anyhow::Error::from),
+                    Ok(tls_stream) => {
+                        // ALPN-based dispatch: h2 → H2Proxy, anything else
+                        // (http/1.1 or unknown) → H1Proxy. rustls returns
+                        // the negotiated protocol via
+                        // `ServerConnection::alpn_protocol()` on the inner
+                        // `(io, conn)` tuple of `TlsStream`.
+                        let alpn = tls_stream.get_ref().1.alpn_protocol().map(<[u8]>::to_vec);
+                        if alpn.as_deref() == Some(b"h2".as_ref()) {
+                            Arc::clone(h2_proxy)
+                                .serve_connection(tls_stream, client_addr)
+                                .await
+                                .map_err(anyhow::Error::from)
+                        } else {
+                            Arc::clone(h1_proxy)
+                                .serve_connection(tls_stream, client_addr)
+                                .await
+                                .map_err(anyhow::Error::from)
+                        }
+                    }
                     Err(e) => Err(e.into()),
                 },
             };

@@ -296,6 +296,12 @@ impl ProducesTickets for RotatingTicketer {
 /// provided certificate chain and private key, and mints session tickets
 /// via the shared [`TicketRotator`].
 ///
+/// `alpn_protocols` is the ordered list of wire-format protocol tokens
+/// to advertise during ALPN negotiation (e.g. `b"h2"`, `b"http/1.1"`).
+/// An empty slice disables ALPN advertisement, which is appropriate
+/// for TLS-over-TCP listeners that proxy the raw byte stream without
+/// inspecting application data.
+///
 /// The returned config is cheap to clone (internally an [`Arc`]).
 /// Callers wiring it into a listener should share the returned
 /// `Arc<ServerConfig>` across all connections on that listener so the
@@ -314,6 +320,7 @@ pub fn build_server_config(
     rotator: Arc<Mutex<TicketRotator>>,
     cert_chain: Vec<CertificateDer<'static>>,
     key_der: PrivateKeyDer<'static>,
+    alpn_protocols: &[&[u8]],
 ) -> Result<Arc<rustls::ServerConfig>, TicketError> {
     let provider = Arc::new(rustls::crypto::ring::default_provider());
     let builder = rustls::ServerConfig::builder_with_provider(provider)
@@ -324,6 +331,9 @@ pub fn build_server_config(
         .with_single_cert(cert_chain, key_der)
         .map_err(|e| TicketError::ServerConfig(e.to_string()))?;
     cfg.ticketer = Arc::new(RotatingTicketer { rot: rotator });
+    if !alpn_protocols.is_empty() {
+        cfg.alpn_protocols = alpn_protocols.iter().map(|p| p.to_vec()).collect();
+    }
     Ok(Arc::new(cfg))
 }
 
@@ -421,7 +431,7 @@ mod tests {
             TicketRotator::new(Duration::from_secs(86_400), Duration::from_secs(3_600)).unwrap();
         let current_handle = rot.current();
         let rot_arc = Arc::new(Mutex::new(rot));
-        let server_cfg = build_server_config(Arc::clone(&rot_arc), cert_chain, key).unwrap();
+        let server_cfg = build_server_config(Arc::clone(&rot_arc), cert_chain, key, &[]).unwrap();
 
         // The config's ticketer encrypts with the rotator's current key:
         // we encrypt through the ServerConfig's ticketer and decrypt
