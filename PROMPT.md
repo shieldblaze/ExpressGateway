@@ -486,10 +486,9 @@ webpki-roots = "0.26"
 hyper = { version = "1", features = ["full"] }
 hyper-util = { version = "0.1", features = ["full"] }
 h2 = "0.4"
-# QUIC / HTTP3
-quinn = "0.11"
-h3 = "0.0.6"
-h3-quinn = "0.0.7"
+# QUIC / HTTP3 — Cloudflare production stack (spec: quinn -> quiche, 2026-04-23)
+quiche = "0.28"
+tokio-quiche = "0.18"
 # gRPC
 tonic = "0.12"
 prost = "0.13"
