@@ -33,7 +33,7 @@ use http_body_util::{BodyExt, Full, combinators::BoxBody};
 use hyper::body::{Bytes, Incoming as IncomingBody};
 use hyper::header::HeaderValue;
 use hyper::{Request, Response, StatusCode};
-use hyper_util::rt::{TokioExecutor, TokioIo};
+use hyper_util::rt::{TokioExecutor, TokioIo, TokioTimer};
 use tokio::io::{AsyncRead, AsyncWrite};
 
 use lb_io::pool::TcpPool;
@@ -42,6 +42,7 @@ use crate::h1_proxy::{
     AltSvcConfig, BackendPicker, HttpTimeouts, append_via, append_xff, set_xfh, set_xfp,
     strip_hop_by_hop,
 };
+use crate::h2_security::H2SecurityThresholds;
 
 /// L7 HTTP/2 reverse proxy. Cheap to clone via [`Arc`].
 pub struct H2Proxy {
@@ -50,10 +51,13 @@ pub struct H2Proxy {
     alt_svc: Option<AltSvcConfig>,
     timeouts: HttpTimeouts,
     is_https: bool,
+    security: H2SecurityThresholds,
 }
 
 impl H2Proxy {
-    /// Construct an [`H2Proxy`].
+    /// Construct an [`H2Proxy`] with the default
+    /// [`H2SecurityThresholds`]. Equivalent to
+    /// [`Self::with_security`]`(..., H2SecurityThresholds::default())`.
     ///
     /// `is_https` selects the value emitted into `X-Forwarded-Proto`.
     /// It is always `true` for the production wiring (H2 ships only over
@@ -67,12 +71,33 @@ impl H2Proxy {
         timeouts: HttpTimeouts,
         is_https: bool,
     ) -> Self {
+        Self::with_security(
+            pool,
+            picker,
+            alt_svc,
+            timeouts,
+            is_https,
+            H2SecurityThresholds::default(),
+        )
+    }
+
+    /// Construct an [`H2Proxy`] with an explicit [`H2SecurityThresholds`].
+    #[must_use]
+    pub fn with_security(
+        pool: TcpPool,
+        picker: Arc<dyn BackendPicker>,
+        alt_svc: Option<AltSvcConfig>,
+        timeouts: HttpTimeouts,
+        is_https: bool,
+        security: H2SecurityThresholds,
+    ) -> Self {
         Self {
             pool,
             picker,
             alt_svc,
             timeouts,
             is_https,
+            security,
         }
     }
 
@@ -97,8 +122,20 @@ impl H2Proxy {
             inner: Arc::clone(&self),
             peer,
         };
-        let conn = hyper::server::conn::http2::Builder::new(TokioExecutor::new())
-            .serve_connection(TokioIo::new(io), svc);
+        // Configure hyper's H2 Builder with the detector-derived
+        // thresholds. Hyper enforces on the wire; the lb-h2 detector
+        // types remain the canonical threshold source (Pingora-style
+        // policy/enforcement split). See crate::h2_security for the
+        // attack → knob mapping.
+        //
+        // A `Timer` is required before `keep_alive_interval` fires;
+        // without it hyper panics "You must supply a timer." Always
+        // wire the tokio timer here — it's the same runtime our
+        // caller is already using.
+        let mut builder = hyper::server::conn::http2::Builder::new(TokioExecutor::new());
+        builder.timer(TokioTimer::new());
+        self.security.apply(&mut builder);
+        let conn = builder.serve_connection(TokioIo::new(io), svc);
         match tokio::time::timeout(total, conn).await {
             Ok(Ok(())) => Ok(()),
             Ok(Err(e)) => Err(io::Error::other(format!("h2 server: {e}"))),

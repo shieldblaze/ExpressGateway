@@ -117,9 +117,54 @@ pub struct ListenerConfig {
     /// "h1"` or `"h1s"`.
     #[serde(default)]
     pub http: Option<HttpTimeoutsConfig>,
+    /// Optional HTTP/2 security thresholds surfaced to hyper's H2
+    /// builder. Only meaningful for `protocol = "h1s"` (the H2 path
+    /// is negotiated via ALPN on that listener). When absent, the
+    /// runtime uses `H2SecurityThresholds::default()`.
+    #[serde(default)]
+    pub h2_security: Option<H2SecurityConfig>,
     /// Upstream backends to load-balance across.
     #[serde(default)]
     pub backends: Vec<BackendConfig>,
+}
+
+/// HTTP/2 security thresholds (Item 1, auditor finding #3).
+///
+/// Every field is optional; omitted fields default to the canonical
+/// value drawn from `lb_h2::security`. Mirrors the shape of
+/// `lb_l7::h2_security::H2SecurityThresholds` without importing it
+/// (keeping lb-config free of a hyper dependency).
+#[derive(Debug, Clone, Copy, Default, serde::Serialize, serde::Deserialize)]
+pub struct H2SecurityConfig {
+    /// Maximum queued pending-accept `RST_STREAM` frames before GOAWAY.
+    #[serde(default)]
+    pub max_pending_accept_reset_streams: Option<usize>,
+    /// Maximum `RST_STREAM` frames triggered by local errors before GOAWAY.
+    #[serde(default)]
+    pub max_local_error_reset_streams: Option<usize>,
+    /// Cap on concurrent streams the server will accept.
+    #[serde(default)]
+    pub max_concurrent_streams: Option<u32>,
+    /// Absolute cap on decoded HPACK header list size (bytes).
+    #[serde(default)]
+    pub max_header_list_size: Option<u32>,
+    /// Per-stream send buffer cap (bytes).
+    #[serde(default)]
+    pub max_send_buf_size: Option<usize>,
+    /// Keep-alive PING interval in milliseconds. When absent, the
+    /// keep-alive mechanism runs with the detector-derived default.
+    /// Set to 0 to disable keep-alive.
+    #[serde(default)]
+    pub keep_alive_interval_ms: Option<u64>,
+    /// Keep-alive timeout in milliseconds.
+    #[serde(default)]
+    pub keep_alive_timeout_ms: Option<u64>,
+    /// Initial per-stream receive window.
+    #[serde(default)]
+    pub initial_stream_window_size: Option<u32>,
+    /// Initial connection-level receive window.
+    #[serde(default)]
+    pub initial_connection_window_size: Option<u32>,
 }
 
 /// `Alt-Svc` injection config (Pillar 3b.3b-1).
@@ -552,6 +597,7 @@ protocol = "tcp"
                 quic: None,
                 alt_svc: None,
                 http: None,
+                h2_security: None,
                 backends: vec![],
             }],
             runtime: None,
@@ -570,6 +616,7 @@ protocol = "tcp"
                 quic: None,
                 alt_svc: None,
                 http: None,
+                h2_security: None,
                 backends: vec![],
             }],
             runtime: None,
@@ -588,6 +635,7 @@ protocol = "tcp"
                 quic: None,
                 alt_svc: None,
                 http: None,
+                h2_security: None,
                 backends: vec![BackendConfig {
                     address: String::new(),
                     protocol: "tcp".into(),
@@ -651,6 +699,7 @@ address = "127.0.0.1:3000"
                 quic: None,
                 alt_svc: None,
                 http: None,
+                h2_security: None,
                 backends: vec![],
             }],
             runtime: None,
@@ -669,6 +718,7 @@ address = "127.0.0.1:3000"
                 quic: None,
                 alt_svc: None,
                 http: None,
+                h2_security: None,
                 backends: vec![],
             }],
             runtime: None,
@@ -692,6 +742,7 @@ address = "127.0.0.1:3000"
                 quic: None,
                 alt_svc: None,
                 http: None,
+                h2_security: None,
                 backends: vec![],
             }],
             runtime: None,
@@ -715,6 +766,7 @@ address = "127.0.0.1:3000"
                 quic: None,
                 alt_svc: None,
                 http: None,
+                h2_security: None,
                 backends: vec![],
             }],
             runtime: None,
@@ -758,6 +810,7 @@ protocol = "h1"
                 quic: None,
                 alt_svc: None,
                 http: None,
+                h2_security: None,
                 backends: vec![],
             }],
             runtime: None,
@@ -782,6 +835,7 @@ protocol = "h1"
                 }),
                 alt_svc: None,
                 http: None,
+                h2_security: None,
                 backends: vec![],
             }],
             runtime: None,
@@ -800,6 +854,7 @@ protocol = "h1"
                 quic: None,
                 alt_svc: None,
                 http: None,
+                h2_security: None,
                 backends: vec![BackendConfig {
                     address: "127.0.0.1:3000".into(),
                     protocol: "gopher".into(),
@@ -850,6 +905,7 @@ address = "127.0.0.1:3000"
                 quic: None,
                 alt_svc: None,
                 http: None,
+                h2_security: None,
                 backends: vec![BackendConfig {
                     address: "127.0.0.1:3000".into(),
                     protocol: "tcp".into(),
@@ -880,6 +936,7 @@ address = "127.0.0.1:3000"
                 quic: None,
                 alt_svc: None,
                 http: None,
+                h2_security: None,
                 backends: vec![],
             }],
             runtime: None,
@@ -906,6 +963,7 @@ address = "127.0.0.1:3000"
                     max_age: 3_600,
                 }),
                 http: Some(HttpTimeoutsConfig::default()),
+                h2_security: None,
                 backends: vec![BackendConfig {
                     address: "127.0.0.1:3000".into(),
                     protocol: "tcp".into(),
@@ -932,6 +990,7 @@ address = "127.0.0.1:3000"
                     body_timeout_ms: 30_000,
                     total_timeout_ms: 60_000,
                 }),
+                h2_security: None,
                 backends: vec![BackendConfig {
                     address: "127.0.0.1:3000".into(),
                     protocol: "tcp".into(),
@@ -975,6 +1034,7 @@ xdp_interface = "eth0"
                 quic: None,
                 alt_svc: None,
                 http: None,
+                h2_security: None,
                 backends: vec![],
             }],
             runtime: Some(RuntimeConfig {
@@ -997,6 +1057,7 @@ xdp_interface = "eth0"
                 quic: None,
                 alt_svc: None,
                 http: None,
+                h2_security: None,
                 backends: vec![],
             }],
             runtime: Some(RuntimeConfig {
@@ -1049,6 +1110,7 @@ metrics_bind = "127.0.0.1:9090"
                 quic: None,
                 alt_svc: None,
                 http: None,
+                h2_security: None,
                 backends: vec![],
             }],
             runtime: None,

@@ -134,6 +134,9 @@ parking_lot = { workspace = true }
 # Pillar 3b.3b-2: reqwest for H2 integration tests. rustls-tls + http2
 # only; no default features to avoid pulling native-tls and OpenSSL.
 reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "http2"] }
+# Item 1: raw h2 crate used as a malicious-client harness in
+# tests/h2_security_live.rs. Pinned to the same minor hyper pulls.
+h2 = "0.4"
 quiche = { workspace = true }
 tokio-util = { workspace = true }
 ring = "0.17"

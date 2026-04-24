@@ -1487,6 +1487,7 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "bytes",
+ "h2",
  "http 1.4.0",
  "http-body-util",
  "hyper",
@@ -1558,6 +1559,7 @@ dependencies = [
  "http-body-util",
  "hyper",
  "hyper-util",
+ "lb-h2",
  "lb-io",
  "parking_lot",
  "thiserror 2.0.18",

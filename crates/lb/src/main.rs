@@ -34,13 +34,16 @@ use tokio_util::sync::CancellationToken;
 
 use lb_balancer::round_robin::RoundRobin;
 use lb_balancer::{Backend, LoadBalancer};
-use lb_config::{AltSvcConfig, HttpTimeoutsConfig, QuicListenerConfig, TlsConfig};
+use lb_config::{
+    AltSvcConfig, H2SecurityConfig, HttpTimeoutsConfig, QuicListenerConfig, TlsConfig,
+};
 use lb_io::Runtime;
 use lb_io::dns::{DnsResolver, ResolverConfig};
 use lb_io::pool::{PoolConfig, TcpPool};
 use lb_io::sockopts::{BackendSockOpts, ListenerSockOpts};
 use lb_l7::h1_proxy::{AltSvcConfig as H1AltSvcConfig, H1Proxy, HttpTimeouts, RoundRobinAddrs};
 use lb_l7::h2_proxy::H2Proxy;
+use lb_l7::h2_security::H2SecurityThresholds;
 use lb_observability::{MetricsRegistry, admin_http, http_latency_buckets};
 use lb_quic::{QuicListener, QuicListenerParams};
 use lb_security::{TicketRotator, build_server_config};
@@ -281,6 +284,7 @@ fn build_h2_proxy(
     addresses: &[SocketAddr],
     alt_svc_cfg: Option<&AltSvcConfig>,
     http_cfg: Option<&HttpTimeoutsConfig>,
+    h2_security_cfg: Option<&H2SecurityConfig>,
     is_https: bool,
 ) -> anyhow::Result<Arc<H2Proxy>> {
     let picker = RoundRobinAddrs::new(addresses.to_vec())
@@ -294,13 +298,58 @@ fn build_h2_proxy(
         body: Duration::from_millis(h.body_timeout_ms),
         total: Duration::from_millis(h.total_timeout_ms),
     });
-    Ok(Arc::new(H2Proxy::new(
+    let security = merge_h2_security(h2_security_cfg);
+    Ok(Arc::new(H2Proxy::with_security(
         pool,
         Arc::new(picker),
         alt_svc,
         timeouts,
         is_https,
+        security,
     )))
+}
+
+/// Merge the optional TOML block into the default `H2SecurityThresholds`.
+/// Every field in the TOML block is itself optional; unset fields inherit
+/// the detector-derived default. This keeps threshold sources of truth
+/// centralised in `lb_h2::security` while still letting an operator
+/// override a single knob in the config file.
+fn merge_h2_security(cfg: Option<&H2SecurityConfig>) -> H2SecurityThresholds {
+    let mut t = H2SecurityThresholds::default();
+    if let Some(c) = cfg {
+        if let Some(v) = c.max_pending_accept_reset_streams {
+            t.max_pending_accept_reset_streams = v;
+        }
+        if let Some(v) = c.max_local_error_reset_streams {
+            t.max_local_error_reset_streams = v;
+        }
+        if let Some(v) = c.max_concurrent_streams {
+            t.max_concurrent_streams = v;
+        }
+        if let Some(v) = c.max_header_list_size {
+            t.max_header_list_size = v;
+        }
+        if let Some(v) = c.max_send_buf_size {
+            t.max_send_buf_size = v;
+        }
+        if let Some(ms) = c.keep_alive_interval_ms {
+            t.keep_alive_interval = if ms == 0 {
+                None
+            } else {
+                Some(Duration::from_millis(ms))
+            };
+        }
+        if let Some(ms) = c.keep_alive_timeout_ms {
+            t.keep_alive_timeout = Duration::from_millis(ms);
+        }
+        if let Some(v) = c.initial_stream_window_size {
+            t.initial_stream_window_size = v;
+        }
+        if let Some(v) = c.initial_connection_window_size {
+            t.initial_connection_window_size = v;
+        }
+    }
+    t
 }
 
 /// Build the TLS stack for an `h1s` listener. Same plumbing as the
@@ -475,6 +524,7 @@ fn build_listener_mode(
                 addresses,
                 listener_cfg.alt_svc.as_ref(),
                 listener_cfg.http.as_ref(),
+                listener_cfg.h2_security.as_ref(),
                 true,
             )
             .with_context(|| format!("H2s setup failed for {}", listener_cfg.address))?;

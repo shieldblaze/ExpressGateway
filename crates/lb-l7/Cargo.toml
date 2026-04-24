@@ -18,3 +18,4 @@ tokio = { workspace = true }
 tracing = { workspace = true }
 parking_lot = { workspace = true }
 lb-io = { path = "../lb-io" }
+lb-h2 = { path = "../lb-h2" }
