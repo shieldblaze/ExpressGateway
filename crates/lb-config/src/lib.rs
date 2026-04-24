@@ -123,9 +123,62 @@ pub struct ListenerConfig {
     /// runtime uses `H2SecurityThresholds::default()`.
     #[serde(default)]
     pub h2_security: Option<H2SecurityConfig>,
+    /// Optional WebSocket capability block (Item 2, PROMPT.md §14).
+    /// Meaningful for `protocol = "h1"` and `"h1s"`. When absent, the
+    /// listener silently rejects WebSocket upgrades (they fall through
+    /// to the regular HTTP request path, which treats them as plain
+    /// GET + unknown headers).
+    #[serde(default)]
+    pub websocket: Option<WebsocketConfig>,
     /// Upstream backends to load-balance across.
     #[serde(default)]
     pub backends: Vec<BackendConfig>,
+}
+
+/// WebSocket capability config (Item 2, PROMPT.md §14).
+///
+/// Every field is optional; omitted fields default to the canonical
+/// value. When the block is absent from the TOML entirely, the listener
+/// does NOT accept WebSocket upgrades.
+#[derive(Debug, Clone, Copy, serde::Serialize, serde::Deserialize)]
+pub struct WebsocketConfig {
+    /// Master switch. Defaults to true when the block is present so
+    /// operators can enable the capability by declaring the empty table.
+    /// Set to `false` to keep the listener's other knobs while disabling
+    /// WebSocket handshakes.
+    #[serde(default = "default_ws_enabled")]
+    pub enabled: bool,
+    /// Maximum time a connection may sit idle (no frames in either
+    /// direction) before the proxy closes with code `1001 Going Away`.
+    /// Defaults to 60 seconds.
+    #[serde(default = "default_ws_idle_timeout")]
+    pub idle_timeout_seconds: u64,
+    /// Upper bound on a single incoming WebSocket message (bytes).
+    /// Defaults to 16 MiB.
+    #[serde(default = "default_ws_max_message_size")]
+    pub max_message_size_bytes: usize,
+}
+
+impl Default for WebsocketConfig {
+    fn default() -> Self {
+        Self {
+            enabled: default_ws_enabled(),
+            idle_timeout_seconds: default_ws_idle_timeout(),
+            max_message_size_bytes: default_ws_max_message_size(),
+        }
+    }
+}
+
+const fn default_ws_enabled() -> bool {
+    true
+}
+
+const fn default_ws_idle_timeout() -> u64 {
+    60
+}
+
+const fn default_ws_max_message_size() -> usize {
+    16 * 1024 * 1024
 }
 
 /// HTTP/2 security thresholds (Item 1, auditor finding #3).
@@ -434,6 +487,39 @@ fn validate_listener(i: usize, listener: &ListenerConfig) -> Result<(), ConfigEr
             )));
         }
     }
+    validate_websocket_block(i, protocol, listener)?;
+    validate_http_timeouts(i, listener)?;
+    validate_backend_list(i, listener)?;
+    Ok(())
+}
+
+fn validate_websocket_block(
+    i: usize,
+    protocol: &str,
+    listener: &ListenerConfig,
+) -> Result<(), ConfigError> {
+    if listener.websocket.is_some() && !matches!(protocol, "h1" | "h1s") {
+        return Err(ConfigError::Validation(format!(
+            "listener {i} has [listeners.websocket] but protocol is {protocol:?}; \
+             WebSocket requires protocol=\"h1\" or \"h1s\""
+        )));
+    }
+    if let Some(ws) = listener.websocket.as_ref() {
+        if ws.idle_timeout_seconds == 0 {
+            return Err(ConfigError::Validation(format!(
+                "listener {i} websocket.idle_timeout_seconds must be > 0"
+            )));
+        }
+        if ws.max_message_size_bytes == 0 {
+            return Err(ConfigError::Validation(format!(
+                "listener {i} websocket.max_message_size_bytes must be > 0"
+            )));
+        }
+    }
+    Ok(())
+}
+
+fn validate_http_timeouts(i: usize, listener: &ListenerConfig) -> Result<(), ConfigError> {
     if let Some(http) = listener.http.as_ref() {
         if http.header_timeout_ms == 0 {
             return Err(ConfigError::Validation(format!(
@@ -451,6 +537,10 @@ fn validate_listener(i: usize, listener: &ListenerConfig) -> Result<(), ConfigEr
             )));
         }
     }
+    Ok(())
+}
+
+fn validate_backend_list(i: usize, listener: &ListenerConfig) -> Result<(), ConfigError> {
     for (j, backend) in listener.backends.iter().enumerate() {
         if backend.address.trim().is_empty() {
             return Err(ConfigError::Validation(format!(
@@ -598,6 +688,7 @@ protocol = "tcp"
                 alt_svc: None,
                 http: None,
                 h2_security: None,
+                websocket: None,
                 backends: vec![],
             }],
             runtime: None,
@@ -617,6 +708,7 @@ protocol = "tcp"
                 alt_svc: None,
                 http: None,
                 h2_security: None,
+                websocket: None,
                 backends: vec![],
             }],
             runtime: None,
@@ -636,6 +728,7 @@ protocol = "tcp"
                 alt_svc: None,
                 http: None,
                 h2_security: None,
+                websocket: None,
                 backends: vec![BackendConfig {
                     address: String::new(),
                     protocol: "tcp".into(),
@@ -700,6 +793,7 @@ address = "127.0.0.1:3000"
                 alt_svc: None,
                 http: None,
                 h2_security: None,
+                websocket: None,
                 backends: vec![],
             }],
             runtime: None,
@@ -719,6 +813,7 @@ address = "127.0.0.1:3000"
                 alt_svc: None,
                 http: None,
                 h2_security: None,
+                websocket: None,
                 backends: vec![],
             }],
             runtime: None,
@@ -743,6 +838,7 @@ address = "127.0.0.1:3000"
                 alt_svc: None,
                 http: None,
                 h2_security: None,
+                websocket: None,
                 backends: vec![],
             }],
             runtime: None,
@@ -767,6 +863,7 @@ address = "127.0.0.1:3000"
                 alt_svc: None,
                 http: None,
                 h2_security: None,
+                websocket: None,
                 backends: vec![],
             }],
             runtime: None,
@@ -811,6 +908,7 @@ protocol = "h1"
                 alt_svc: None,
                 http: None,
                 h2_security: None,
+                websocket: None,
                 backends: vec![],
             }],
             runtime: None,
@@ -836,6 +934,7 @@ protocol = "h1"
                 alt_svc: None,
                 http: None,
                 h2_security: None,
+                websocket: None,
                 backends: vec![],
             }],
             runtime: None,
@@ -855,6 +954,7 @@ protocol = "h1"
                 alt_svc: None,
                 http: None,
                 h2_security: None,
+                websocket: None,
                 backends: vec![BackendConfig {
                     address: "127.0.0.1:3000".into(),
                     protocol: "gopher".into(),
@@ -906,6 +1006,7 @@ address = "127.0.0.1:3000"
                 alt_svc: None,
                 http: None,
                 h2_security: None,
+                websocket: None,
                 backends: vec![BackendConfig {
                     address: "127.0.0.1:3000".into(),
                     protocol: "tcp".into(),
@@ -937,6 +1038,7 @@ address = "127.0.0.1:3000"
                 alt_svc: None,
                 http: None,
                 h2_security: None,
+                websocket: None,
                 backends: vec![],
             }],
             runtime: None,
@@ -964,6 +1066,7 @@ address = "127.0.0.1:3000"
                 }),
                 http: Some(HttpTimeoutsConfig::default()),
                 h2_security: None,
+                websocket: None,
                 backends: vec![BackendConfig {
                     address: "127.0.0.1:3000".into(),
                     protocol: "tcp".into(),
@@ -991,6 +1094,7 @@ address = "127.0.0.1:3000"
                     total_timeout_ms: 60_000,
                 }),
                 h2_security: None,
+                websocket: None,
                 backends: vec![BackendConfig {
                     address: "127.0.0.1:3000".into(),
                     protocol: "tcp".into(),
@@ -1035,6 +1139,7 @@ xdp_interface = "eth0"
                 alt_svc: None,
                 http: None,
                 h2_security: None,
+                websocket: None,
                 backends: vec![],
             }],
             runtime: Some(RuntimeConfig {
@@ -1058,6 +1163,7 @@ xdp_interface = "eth0"
                 alt_svc: None,
                 http: None,
                 h2_security: None,
+                websocket: None,
                 backends: vec![],
             }],
             runtime: Some(RuntimeConfig {
@@ -1101,6 +1207,48 @@ metrics_bind = "127.0.0.1:9090"
     }
 
     #[test]
+    fn parse_h1_listener_with_websocket() {
+        let input = r#"
+[[listeners]]
+address = "0.0.0.0:80"
+protocol = "h1"
+
+[listeners.websocket]
+idle_timeout_seconds = 30
+max_message_size_bytes = 1048576
+
+[[listeners.backends]]
+address = "127.0.0.1:3000"
+"#;
+        let config = parse_config(input).unwrap();
+        let ws = config.listeners[0].websocket.as_ref().unwrap();
+        assert!(ws.enabled);
+        assert_eq!(ws.idle_timeout_seconds, 30);
+        assert_eq!(ws.max_message_size_bytes, 1_048_576);
+        validate_config(&config).unwrap();
+    }
+
+    #[test]
+    fn validate_websocket_on_non_http_listener_rejected() {
+        let config = LbConfig {
+            listeners: vec![ListenerConfig {
+                address: "0.0.0.0:80".into(),
+                protocol: "tcp".into(),
+                tls: None,
+                quic: None,
+                alt_svc: None,
+                http: None,
+                h2_security: None,
+                websocket: Some(WebsocketConfig::default()),
+                backends: vec![],
+            }],
+            runtime: None,
+            observability: None,
+        };
+        assert!(validate_config(&config).is_err());
+    }
+
+    #[test]
     fn validate_observability_bad_bind_rejected() {
         let config = LbConfig {
             listeners: vec![ListenerConfig {
@@ -1111,6 +1259,7 @@ metrics_bind = "127.0.0.1:9090"
                 alt_svc: None,
                 http: None,
                 h2_security: None,
+                websocket: None,
                 backends: vec![],
             }],
             runtime: None,

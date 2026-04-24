@@ -32,13 +32,15 @@ use std::pin::Pin;
 use std::sync::Arc;
 use std::time::Duration;
 
-use http_body_util::{BodyExt, Full, combinators::BoxBody};
+use http_body_util::{BodyExt, Empty, Full, combinators::BoxBody};
 use hyper::body::{Bytes, Incoming as IncomingBody};
 use hyper::header::{HeaderName, HeaderValue};
 use hyper::{Request, Response, StatusCode};
 use hyper_util::rt::TokioIo;
 use lb_io::pool::TcpPool;
 use tokio::io::{AsyncRead, AsyncWrite};
+
+use crate::ws_proxy::{self, WsProxy, build_handshake_response_headers, is_h1_upgrade_request};
 
 /// Hop-by-hop headers per RFC 9110 §7.6.1.
 ///
@@ -153,6 +155,10 @@ pub struct H1Proxy {
     alt_svc: Option<AltSvcConfig>,
     timeouts: HttpTimeouts,
     is_https: bool,
+    /// When `Some`, inbound requests carrying an RFC 6455 handshake are
+    /// routed through the WebSocket proxy instead of the regular request
+    /// path. `None` disables WebSocket support on this listener.
+    ws: Option<Arc<WsProxy>>,
 }
 
 impl H1Proxy {
@@ -174,7 +180,18 @@ impl H1Proxy {
             alt_svc,
             timeouts,
             is_https,
+            ws: None,
         }
+    }
+
+    /// Enable WebSocket upgrade handling on this proxy.
+    ///
+    /// Takes ownership; returns `self` so the call site reads as a
+    /// fluent chain off [`Self::new`].
+    #[must_use]
+    pub fn with_websocket(mut self, ws: Arc<WsProxy>) -> Self {
+        self.ws = Some(ws);
+        self
     }
 
     /// Drive HTTP/1.1 server logic over `io`.
@@ -201,7 +218,8 @@ impl H1Proxy {
         };
         let conn = hyper::server::conn::http1::Builder::new()
             .keep_alive(true)
-            .serve_connection(TokioIo::new(io), svc);
+            .serve_connection(TokioIo::new(io), svc)
+            .with_upgrades();
         match tokio::time::timeout(total, conn).await {
             Ok(Ok(())) => Ok(()),
             Ok(Err(e)) => Err(io::Error::other(format!("h1 server: {e}"))),
@@ -238,6 +256,17 @@ impl H1Proxy {
         req: Request<IncomingBody>,
         peer: SocketAddr,
     ) -> Response<BoxBody<Bytes, hyper::Error>> {
+        // WebSocket upgrade intercept (RFC 6455 §4). Only fires when the
+        // listener is configured with a `WsProxy`; all other listener
+        // traffic continues through the regular H1 request path.
+        if self
+            .ws
+            .as_ref()
+            .is_some_and(|w| w.config().enabled && is_h1_upgrade_request(&req))
+        {
+            return self.handle_ws_upgrade(req);
+        }
+
         let (mut parts, body) = req.into_parts();
         let host = parts
             .headers
@@ -314,6 +343,89 @@ impl H1Proxy {
         Ok(resp)
     }
 
+    /// Handle an RFC 6455 handshake request.
+    ///
+    /// Builds the `101 Switching Protocols` response and schedules a
+    /// detached task that awaits [`hyper::upgrade::on`] on the inbound
+    /// request, dials the backend with [`tokio_tungstenite::client_async`],
+    /// and runs the bidirectional frame forwarder.
+    ///
+    /// Returns a plain 400 if the handshake is structurally valid but
+    /// `Sec-WebSocket-Key` is missing once hyper hands us the request
+    /// (race: the detector accepted it).
+    fn handle_ws_upgrade(
+        &self,
+        mut req: Request<IncomingBody>,
+    ) -> Response<BoxBody<Bytes, hyper::Error>> {
+        let Some(ws_proxy) = self.ws.clone() else {
+            return error_response(StatusCode::BAD_GATEWAY, "websocket disabled");
+        };
+        let Some(handshake_headers) = build_handshake_response_headers(&req) else {
+            return error_response(StatusCode::BAD_REQUEST, "invalid websocket handshake");
+        };
+        let Some(backend_addr) = self.picker.pick() else {
+            return error_response(StatusCode::BAD_GATEWAY, "no backend available");
+        };
+
+        // Kick off the upgrade future BEFORE we return the 101 response.
+        // hyper will drive it as soon as the response headers have been
+        // written on the wire.
+        let upgrade_fut = hyper::upgrade::on(&mut req);
+
+        // Snapshot the request for the client-side handshake to the
+        // upstream. We reuse `path + query` and pick up headers that the
+        // RFC 6455 §4.1 client must carry (Sec-WebSocket-Protocol /
+        // -Extensions). The `Host` header is rewritten to the backend
+        // `SocketAddr` so the upstream accepts the handshake.
+        let path_and_query = req
+            .uri()
+            .path_and_query()
+            .map_or_else(|| "/".to_owned(), std::string::ToString::to_string);
+        let forwarded_protocols = req
+            .headers()
+            .get(&WS_PROTOCOL)
+            .and_then(|v| v.to_str().ok())
+            .map(str::to_owned);
+
+        // Detach a task that finishes the upgrade, dials upstream, and
+        // runs the frame forwarder. We do NOT await it here — hyper
+        // needs us to return the 101 response first so it can flip the
+        // wire.
+        tokio::spawn(run_h1_ws_upgrade_task(
+            upgrade_fut,
+            self.pool.clone(),
+            backend_addr,
+            path_and_query,
+            forwarded_protocols,
+            ws_proxy,
+        ));
+
+        // Build the 101 response. Mirror a sub-protocol selection if the
+        // client asked for one — v1 picks the first offered protocol
+        // verbatim. A later pillar can route on this.
+        let echo_protocol = req
+            .headers()
+            .get(&WS_PROTOCOL)
+            .and_then(|v| v.to_str().ok())
+            .and_then(|s| s.split(',').next())
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+            .and_then(|s| HeaderValue::from_str(s).ok());
+        let mut builder = Response::builder().status(StatusCode::SWITCHING_PROTOCOLS);
+        for (name, value) in handshake_headers {
+            builder = builder.header(name, value);
+        }
+        if let Some(hv) = echo_protocol {
+            builder = builder.header(WS_PROTOCOL.as_str(), hv);
+        }
+        let body = Empty::<Bytes>::new()
+            .map_err(|never| match never {})
+            .boxed();
+        builder.body(body).unwrap_or_else(|_| {
+            error_response(StatusCode::INTERNAL_SERVER_ERROR, "101 build failed")
+        })
+    }
+
     fn finalize_response(
         &self,
         resp: Response<IncomingBody>,
@@ -336,6 +448,80 @@ impl H1Proxy {
 enum ProxyErr {
     Upstream(String),
     Timeout,
+}
+
+/// Finish a WebSocket upgrade: await the hyper upgrade future, dial the
+/// backend over the pooled TCP path, drive the RFC 6455 client-side
+/// handshake, and hand both halves to [`WsProxy::proxy_frames`].
+async fn run_h1_ws_upgrade_task(
+    upgrade_fut: hyper::upgrade::OnUpgrade,
+    pool: TcpPool,
+    backend_addr: SocketAddr,
+    path_and_query: String,
+    forwarded_protocols: Option<String>,
+    ws_proxy: Arc<WsProxy>,
+) {
+    let upgraded = match upgrade_fut.await {
+        Ok(u) => u,
+        Err(e) => {
+            tracing::debug!(error = %e, "ws: hyper upgrade failed");
+            return;
+        }
+    };
+
+    let pooled_result = tokio::task::spawn_blocking(move || pool.acquire(backend_addr)).await;
+    let pooled = match pooled_result {
+        Ok(Ok(p)) => p,
+        Ok(Err(e)) => {
+            tracing::debug!(error = %e, backend = %backend_addr, "ws: backend dial failed");
+            return;
+        }
+        Err(e) => {
+            tracing::debug!(error = %e, "ws: dial join failed");
+            return;
+        }
+    };
+    let Some(upstream_stream) = pooled.take_stream() else {
+        tracing::debug!("ws: pooled stream missing");
+        return;
+    };
+
+    let uri = match format!("ws://{backend_addr}{path_and_query}").parse() {
+        Ok(u) => u,
+        Err(e) => {
+            tracing::debug!(error = %e, "ws: upstream uri build failed");
+            return;
+        }
+    };
+    let mut builder = tokio_tungstenite::tungstenite::client::ClientRequestBuilder::new(uri);
+    if let Some(protocols) = forwarded_protocols.as_deref() {
+        for p in protocols.split(',') {
+            let p = p.trim();
+            if !p.is_empty() {
+                builder = builder.with_sub_protocol(p);
+            }
+        }
+    }
+
+    let ws_cfg = ws_proxy.config();
+    let (backend_ws, _resp) = match tokio_tungstenite::client_async_with_config(
+        builder,
+        upstream_stream,
+        Some(ws_cfg.tungstenite_config()),
+    )
+    .await
+    {
+        Ok(pair) => pair,
+        Err(e) => {
+            tracing::debug!(error = %e, backend = %backend_addr, "ws: upstream handshake failed");
+            return;
+        }
+    };
+
+    let client_ws = ws_proxy::server_ws(TokioIo::new(upgraded), &ws_cfg).await;
+    if let Err(e) = ws_proxy.proxy_frames(client_ws, backend_ws).await {
+        tracing::debug!(error = %e, "ws: frame proxy ended with error");
+    }
 }
 
 fn error_response(status: StatusCode, msg: &str) -> Response<BoxBody<Bytes, hyper::Error>> {
@@ -424,6 +610,7 @@ pub(crate) fn append_via(headers: &mut hyper::HeaderMap) {
 static XFF_NAME: HeaderName = HeaderName::from_static("x-forwarded-for");
 static XFP_NAME: HeaderName = HeaderName::from_static("x-forwarded-proto");
 static XFH_NAME: HeaderName = HeaderName::from_static("x-forwarded-host");
+static WS_PROTOCOL: HeaderName = HeaderName::from_static("sec-websocket-protocol");
 
 #[cfg(test)]
 #[allow(clippy::unwrap_used, clippy::expect_used)]

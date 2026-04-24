@@ -29,7 +29,7 @@ use std::net::SocketAddr;
 use std::pin::Pin;
 use std::sync::Arc;
 
-use http_body_util::{BodyExt, Full, combinators::BoxBody};
+use http_body_util::{BodyExt, Empty, Full, combinators::BoxBody};
 use hyper::body::{Bytes, Incoming as IncomingBody};
 use hyper::header::HeaderValue;
 use hyper::{Request, Response, StatusCode};
@@ -43,6 +43,7 @@ use crate::h1_proxy::{
     strip_hop_by_hop,
 };
 use crate::h2_security::H2SecurityThresholds;
+use crate::ws_proxy::{self, WsProxy, is_h2_extended_connect};
 
 /// L7 HTTP/2 reverse proxy. Cheap to clone via [`Arc`].
 pub struct H2Proxy {
@@ -52,6 +53,10 @@ pub struct H2Proxy {
     timeouts: HttpTimeouts,
     is_https: bool,
     security: H2SecurityThresholds,
+    /// When `Some`, inbound extended-CONNECT streams carrying
+    /// `:protocol = websocket` (RFC 8441) are routed through the
+    /// WebSocket proxy instead of returning 502.
+    ws: Option<Arc<WsProxy>>,
 }
 
 impl H2Proxy {
@@ -98,7 +103,16 @@ impl H2Proxy {
             timeouts,
             is_https,
             security,
+            ws: None,
         }
+    }
+
+    /// Enable WebSocket upgrade handling on this proxy. Fluent; returns
+    /// `self` for chaining off [`Self::with_security`] or [`Self::new`].
+    #[must_use]
+    pub fn with_websocket(mut self, ws: Arc<WsProxy>) -> Self {
+        self.ws = Some(ws);
+        self
     }
 
     /// Drive HTTP/2 server logic over `io`.
@@ -135,6 +149,10 @@ impl H2Proxy {
         let mut builder = hyper::server::conn::http2::Builder::new(TokioExecutor::new());
         builder.timer(TokioTimer::new());
         self.security.apply(&mut builder);
+        // RFC 8441 extended CONNECT — enables SETTINGS_ENABLE_CONNECT_PROTOCOL
+        // advertisement so clients can bootstrap WebSocket over H2. Safe
+        // to always enable: clients that do not use it pay no cost.
+        builder.enable_connect_protocol();
         let conn = builder.serve_connection(TokioIo::new(io), svc);
         match tokio::time::timeout(total, conn).await {
             Ok(Ok(())) => Ok(()),
@@ -172,6 +190,16 @@ impl H2Proxy {
         req: Request<IncomingBody>,
         peer: SocketAddr,
     ) -> Response<BoxBody<Bytes, hyper::Error>> {
+        // RFC 8441 extended CONNECT intercept. Only fires when this
+        // listener was configured with a `WsProxy`; everything else
+        // continues through the regular H2 request path.
+        if self
+            .ws
+            .as_ref()
+            .is_some_and(|w| w.config().enabled && is_h2_extended_connect(&req))
+        {
+            return self.handle_ws_extended_connect(req);
+        }
         let (mut parts, body) = req.into_parts();
 
         // Determine the authority: H2 carries it in :authority, which
@@ -216,6 +244,98 @@ impl H2Proxy {
                 error_response(StatusCode::GATEWAY_TIMEOUT, "upstream timeout")
             }
         }
+    }
+
+    /// Handle an RFC 8441 extended-CONNECT WebSocket bootstrap.
+    ///
+    /// Returns `200 OK` with an empty body; hyper flips the inbound
+    /// stream into a bidirectional byte channel once the response
+    /// headers reach the wire. A detached task picks up the upgraded
+    /// stream, dials the backend over HTTP/1.1, drives the client-side
+    /// RFC 6455 handshake, and runs the bidirectional frame forwarder.
+    fn handle_ws_extended_connect(
+        &self,
+        mut req: Request<IncomingBody>,
+    ) -> Response<BoxBody<Bytes, hyper::Error>> {
+        let Some(ws_proxy) = self.ws.clone() else {
+            return error_response(StatusCode::BAD_GATEWAY, "websocket disabled");
+        };
+        let Some(backend_addr) = self.picker.pick() else {
+            return error_response(StatusCode::BAD_GATEWAY, "no backend available");
+        };
+
+        let upgrade_fut = hyper::upgrade::on(&mut req);
+        let path_and_query = req
+            .uri()
+            .path_and_query()
+            .map_or_else(|| "/".to_owned(), std::string::ToString::to_string);
+        let ws_cfg = ws_proxy.config();
+        let pool = self.pool.clone();
+
+        tokio::spawn(async move {
+            let upgraded = match upgrade_fut.await {
+                Ok(u) => u,
+                Err(e) => {
+                    tracing::debug!(error = %e, "ws/h2: upgrade failed");
+                    return;
+                }
+            };
+
+            let pooled_result =
+                tokio::task::spawn_blocking(move || pool.acquire(backend_addr)).await;
+            let pooled = match pooled_result {
+                Ok(Ok(p)) => p,
+                Ok(Err(e)) => {
+                    tracing::debug!(error = %e, backend = %backend_addr, "ws/h2: backend dial failed");
+                    return;
+                }
+                Err(e) => {
+                    tracing::debug!(error = %e, "ws/h2: dial join failed");
+                    return;
+                }
+            };
+            let Some(upstream_stream) = pooled.take_stream() else {
+                tracing::debug!("ws/h2: pooled stream missing");
+                return;
+            };
+
+            let uri = match format!("ws://{backend_addr}{path_and_query}").parse() {
+                Ok(u) => u,
+                Err(e) => {
+                    tracing::debug!(error = %e, "ws/h2: upstream uri build failed");
+                    return;
+                }
+            };
+            let builder = tokio_tungstenite::tungstenite::client::ClientRequestBuilder::new(uri);
+            let (backend_ws, _resp) = match tokio_tungstenite::client_async_with_config(
+                builder,
+                upstream_stream,
+                Some(ws_cfg.tungstenite_config()),
+            )
+            .await
+            {
+                Ok(pair) => pair,
+                Err(e) => {
+                    tracing::debug!(error = %e, backend = %backend_addr, "ws/h2: upstream handshake failed");
+                    return;
+                }
+            };
+
+            let client_ws = ws_proxy::server_ws(TokioIo::new(upgraded), &ws_cfg).await;
+            if let Err(e) = ws_proxy.proxy_frames(client_ws, backend_ws).await {
+                tracing::debug!(error = %e, "ws/h2: frame proxy ended with error");
+            }
+        });
+
+        let body = Empty::<Bytes>::new()
+            .map_err(|never| match never {})
+            .boxed();
+        Response::builder()
+            .status(StatusCode::OK)
+            .body(body)
+            .unwrap_or_else(|_| {
+                error_response(StatusCode::INTERNAL_SERVER_ERROR, "200 build failed")
+            })
     }
 
     async fn proxy_request(

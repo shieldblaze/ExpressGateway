@@ -82,6 +82,13 @@ tokio-rustls = { version = "0.26", default-features = false, features = ["ring",
 rustls-pemfile = "2"
 # Pillar 3b.3c-1: CancellationToken for graceful listener shutdown.
 tokio-util = { version = "0.7", default-features = false, features = ["rt"] }
+# Item 2: WebSocket proxy path (PROMPT.md §14). 0.24 keeps us on the same
+# rustls 0.23 + tokio-rustls 0.26 stack already pinned above.
+tokio-tungstenite = { version = "0.24", default-features = false, features = ["handshake"] }
+# Item 2: `StreamExt` + `SinkExt` combinators over `tokio-tungstenite`'s
+# `WebSocketStream`. `std` is the only default we need; we keep the pull
+# light and skip the `compat` layer.
+futures-util = { version = "0.3", default-features = false, features = ["std", "sink"] }
 # Utilities
 rand = "0.8"
 # XDP / eBPF (Pillar 4a: aya userspace loader; Linux-only in consumers)
@@ -141,6 +148,11 @@ quiche = { workspace = true }
 tokio-util = { workspace = true }
 ring = "0.17"
 rcgen = { version = "0.13", features = ["pem"] }
+# Item 2: integration tests for the WebSocket proxy. `connect` gives us
+# `connect_async` (which dials over raw TCP, no TLS needed for the ws://
+# echo tests). Stays on the same 0.24 pin as the workspace dep.
+tokio-tungstenite = { workspace = true, features = ["connect"] }
+futures-util = { workspace = true }
 
 [profile.release]
 opt-level = 3

@@ -36,6 +36,7 @@ use lb_balancer::round_robin::RoundRobin;
 use lb_balancer::{Backend, LoadBalancer};
 use lb_config::{
     AltSvcConfig, H2SecurityConfig, HttpTimeoutsConfig, QuicListenerConfig, TlsConfig,
+    WebsocketConfig,
 };
 use lb_io::Runtime;
 use lb_io::dns::{DnsResolver, ResolverConfig};
@@ -44,6 +45,7 @@ use lb_io::sockopts::{BackendSockOpts, ListenerSockOpts};
 use lb_l7::h1_proxy::{AltSvcConfig as H1AltSvcConfig, H1Proxy, HttpTimeouts, RoundRobinAddrs};
 use lb_l7::h2_proxy::H2Proxy;
 use lb_l7::h2_security::H2SecurityThresholds;
+use lb_l7::ws_proxy::{WsConfig, WsProxy};
 use lb_observability::{MetricsRegistry, admin_http, http_latency_buckets};
 use lb_quic::{QuicListener, QuicListenerParams};
 use lb_security::{TicketRotator, build_server_config};
@@ -254,6 +256,7 @@ fn build_h1_proxy(
     addresses: &[SocketAddr],
     alt_svc_cfg: Option<&AltSvcConfig>,
     http_cfg: Option<&HttpTimeoutsConfig>,
+    ws_cfg: Option<&WebsocketConfig>,
     is_https: bool,
 ) -> anyhow::Result<Arc<H1Proxy>> {
     let picker = RoundRobinAddrs::new(addresses.to_vec())
@@ -267,13 +270,21 @@ fn build_h1_proxy(
         body: Duration::from_millis(h.body_timeout_ms),
         total: Duration::from_millis(h.total_timeout_ms),
     });
-    Ok(Arc::new(H1Proxy::new(
-        pool,
-        Arc::new(picker),
-        alt_svc,
-        timeouts,
-        is_https,
-    )))
+    let mut proxy = H1Proxy::new(pool, Arc::new(picker), alt_svc, timeouts, is_https);
+    if let Some(ws) = ws_cfg {
+        proxy = proxy.with_websocket(Arc::new(WsProxy::new(ws_config_to_runtime(ws))));
+    }
+    Ok(Arc::new(proxy))
+}
+
+/// Translate the TOML `[listeners.websocket]` block to the runtime
+/// [`WsConfig`]. Centralised so H1 and H2 paths agree byte-for-byte.
+fn ws_config_to_runtime(cfg: &WebsocketConfig) -> WsConfig {
+    WsConfig {
+        idle_timeout: Duration::from_secs(cfg.idle_timeout_seconds),
+        max_message_size: cfg.max_message_size_bytes,
+        enabled: cfg.enabled,
+    }
 }
 
 /// Build a [`H2Proxy`] sharing the same picker/alt_svc/timeouts shape as
@@ -285,6 +296,7 @@ fn build_h2_proxy(
     alt_svc_cfg: Option<&AltSvcConfig>,
     http_cfg: Option<&HttpTimeoutsConfig>,
     h2_security_cfg: Option<&H2SecurityConfig>,
+    ws_cfg: Option<&WebsocketConfig>,
     is_https: bool,
 ) -> anyhow::Result<Arc<H2Proxy>> {
     let picker = RoundRobinAddrs::new(addresses.to_vec())
@@ -299,14 +311,18 @@ fn build_h2_proxy(
         total: Duration::from_millis(h.total_timeout_ms),
     });
     let security = merge_h2_security(h2_security_cfg);
-    Ok(Arc::new(H2Proxy::with_security(
+    let mut proxy = H2Proxy::with_security(
         pool,
         Arc::new(picker),
         alt_svc,
         timeouts,
         is_https,
         security,
-    )))
+    );
+    if let Some(ws) = ws_cfg {
+        proxy = proxy.with_websocket(Arc::new(WsProxy::new(ws_config_to_runtime(ws))));
+    }
+    Ok(Arc::new(proxy))
 }
 
 /// Merge the optional TOML block into the default `H2SecurityThresholds`.
@@ -489,6 +505,7 @@ fn build_listener_mode(
                 addresses,
                 listener_cfg.alt_svc.as_ref(),
                 listener_cfg.http.as_ref(),
+                listener_cfg.websocket.as_ref(),
                 false,
             )
             .with_context(|| format!("H1 setup failed for {}", listener_cfg.address))?;
@@ -516,6 +533,7 @@ fn build_listener_mode(
                 addresses,
                 listener_cfg.alt_svc.as_ref(),
                 listener_cfg.http.as_ref(),
+                listener_cfg.websocket.as_ref(),
                 true,
             )
             .with_context(|| format!("H1s setup failed for {}", listener_cfg.address))?;
@@ -525,6 +543,7 @@ fn build_listener_mode(
                 listener_cfg.alt_svc.as_ref(),
                 listener_cfg.http.as_ref(),
                 listener_cfg.h2_security.as_ref(),
+                listener_cfg.websocket.as_ref(),
                 true,
             )
             .with_context(|| format!("H2s setup failed for {}", listener_cfg.address))?;

@@ -19,3 +19,6 @@ tracing = { workspace = true }
 parking_lot = { workspace = true }
 lb-io = { path = "../lb-io" }
 lb-h2 = { path = "../lb-h2" }
+# Item 2: WebSocket proxy path (RFC 6455 + RFC 8441).
+tokio-tungstenite = { workspace = true }
+futures-util = { workspace = true }
