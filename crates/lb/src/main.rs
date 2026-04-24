@@ -35,13 +35,14 @@ use tokio_util::sync::CancellationToken;
 use lb_balancer::round_robin::RoundRobin;
 use lb_balancer::{Backend, LoadBalancer};
 use lb_config::{
-    AltSvcConfig, H2SecurityConfig, HttpTimeoutsConfig, QuicListenerConfig, TlsConfig,
-    WebsocketConfig,
+    AltSvcConfig, GrpcListenerConfig, H2SecurityConfig, HttpTimeoutsConfig, QuicListenerConfig,
+    TlsConfig, WebsocketConfig,
 };
 use lb_io::Runtime;
 use lb_io::dns::{DnsResolver, ResolverConfig};
 use lb_io::pool::{PoolConfig, TcpPool};
 use lb_io::sockopts::{BackendSockOpts, ListenerSockOpts};
+use lb_l7::grpc_proxy::{GrpcConfig, GrpcProxy};
 use lb_l7::h1_proxy::{AltSvcConfig as H1AltSvcConfig, H1Proxy, HttpTimeouts, RoundRobinAddrs};
 use lb_l7::h2_proxy::H2Proxy;
 use lb_l7::h2_security::H2SecurityThresholds;
@@ -297,6 +298,7 @@ fn build_h2_proxy(
     http_cfg: Option<&HttpTimeoutsConfig>,
     h2_security_cfg: Option<&H2SecurityConfig>,
     ws_cfg: Option<&WebsocketConfig>,
+    grpc_cfg: Option<&GrpcListenerConfig>,
     is_https: bool,
 ) -> anyhow::Result<Arc<H2Proxy>> {
     let picker = RoundRobinAddrs::new(addresses.to_vec())
@@ -312,7 +314,7 @@ fn build_h2_proxy(
     });
     let security = merge_h2_security(h2_security_cfg);
     let mut proxy = H2Proxy::with_security(
-        pool,
+        pool.clone(),
         Arc::new(picker),
         alt_svc,
         timeouts,
@@ -322,7 +324,23 @@ fn build_h2_proxy(
     if let Some(ws) = ws_cfg {
         proxy = proxy.with_websocket(Arc::new(WsProxy::new(ws_config_to_runtime(ws))));
     }
+    if let Some(grpc) = grpc_cfg {
+        proxy = proxy.with_grpc(Arc::new(GrpcProxy::new(
+            grpc_config_to_runtime(grpc),
+            pool.clone(),
+        )));
+    }
     Ok(Arc::new(proxy))
+}
+
+/// Translate the TOML `[listeners.grpc]` block to the runtime
+/// [`GrpcConfig`].
+fn grpc_config_to_runtime(cfg: &GrpcListenerConfig) -> GrpcConfig {
+    GrpcConfig {
+        enabled: cfg.enabled,
+        max_deadline: Duration::from_secs(cfg.max_deadline_seconds),
+        health_synthesized: cfg.health_synthesized,
+    }
 }
 
 /// Merge the optional TOML block into the default `H2SecurityThresholds`.
@@ -544,6 +562,7 @@ fn build_listener_mode(
                 listener_cfg.http.as_ref(),
                 listener_cfg.h2_security.as_ref(),
                 listener_cfg.websocket.as_ref(),
+                listener_cfg.grpc.as_ref(),
                 true,
             )
             .with_context(|| format!("H2s setup failed for {}", listener_cfg.address))?;

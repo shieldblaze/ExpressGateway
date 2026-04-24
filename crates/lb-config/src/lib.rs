@@ -130,9 +130,57 @@ pub struct ListenerConfig {
     /// GET + unknown headers).
     #[serde(default)]
     pub websocket: Option<WebsocketConfig>,
+    /// Optional gRPC capability block (Item 3, PROMPT.md §13). Only
+    /// meaningful for `protocol = "h1s"` — gRPC requires HTTP/2, which
+    /// is negotiated via ALPN on the h1s listener. When absent, gRPC
+    /// requests arriving over H2 fall through to the regular H2→H1
+    /// forward path (which will typically emit a 502 to a tonic client
+    /// because the upstream protocol mismatches).
+    #[serde(default)]
+    pub grpc: Option<GrpcListenerConfig>,
     /// Upstream backends to load-balance across.
     #[serde(default)]
     pub backends: Vec<BackendConfig>,
+}
+
+/// gRPC capability config (Item 3, PROMPT.md §13).
+#[derive(Debug, Clone, Copy, serde::Serialize, serde::Deserialize)]
+pub struct GrpcListenerConfig {
+    /// Master switch. Defaults to true when the block is present.
+    #[serde(default = "default_grpc_enabled")]
+    pub enabled: bool,
+    /// Upper bound on an accepted `grpc-timeout`. Clients that send a
+    /// larger value have it clamped before forwarding. Defaults to 300
+    /// seconds (the gRPC spec guidance).
+    #[serde(default = "default_grpc_max_deadline")]
+    pub max_deadline_seconds: u64,
+    /// When true, `/grpc.health.v1.Health/Check` is served locally
+    /// (gateway liveness) without forwarding to a backend. Defaults to
+    /// true.
+    #[serde(default = "default_grpc_health_synthesized")]
+    pub health_synthesized: bool,
+}
+
+impl Default for GrpcListenerConfig {
+    fn default() -> Self {
+        Self {
+            enabled: default_grpc_enabled(),
+            max_deadline_seconds: default_grpc_max_deadline(),
+            health_synthesized: default_grpc_health_synthesized(),
+        }
+    }
+}
+
+const fn default_grpc_enabled() -> bool {
+    true
+}
+
+const fn default_grpc_max_deadline() -> u64 {
+    300
+}
+
+const fn default_grpc_health_synthesized() -> bool {
+    true
 }
 
 /// WebSocket capability config (Item 2, PROMPT.md §14).
@@ -488,8 +536,30 @@ fn validate_listener(i: usize, listener: &ListenerConfig) -> Result<(), ConfigEr
         }
     }
     validate_websocket_block(i, protocol, listener)?;
+    validate_grpc_block(i, protocol, listener)?;
     validate_http_timeouts(i, listener)?;
     validate_backend_list(i, listener)?;
+    Ok(())
+}
+
+fn validate_grpc_block(
+    i: usize,
+    protocol: &str,
+    listener: &ListenerConfig,
+) -> Result<(), ConfigError> {
+    if listener.grpc.is_some() && !matches!(protocol, "h1s") {
+        return Err(ConfigError::Validation(format!(
+            "listener {i} has [listeners.grpc] but protocol is {protocol:?}; \
+             gRPC requires protocol=\"h1s\" (HTTP/2 over TLS via ALPN)"
+        )));
+    }
+    if let Some(grpc) = listener.grpc.as_ref() {
+        if grpc.max_deadline_seconds == 0 {
+            return Err(ConfigError::Validation(format!(
+                "listener {i} grpc.max_deadline_seconds must be > 0"
+            )));
+        }
+    }
     Ok(())
 }
 
@@ -689,6 +759,7 @@ protocol = "tcp"
                 http: None,
                 h2_security: None,
                 websocket: None,
+                grpc: None,
                 backends: vec![],
             }],
             runtime: None,
@@ -709,6 +780,7 @@ protocol = "tcp"
                 http: None,
                 h2_security: None,
                 websocket: None,
+                grpc: None,
                 backends: vec![],
             }],
             runtime: None,
@@ -729,6 +801,7 @@ protocol = "tcp"
                 http: None,
                 h2_security: None,
                 websocket: None,
+                grpc: None,
                 backends: vec![BackendConfig {
                     address: String::new(),
                     protocol: "tcp".into(),
@@ -794,6 +867,7 @@ address = "127.0.0.1:3000"
                 http: None,
                 h2_security: None,
                 websocket: None,
+                grpc: None,
                 backends: vec![],
             }],
             runtime: None,
@@ -814,6 +888,7 @@ address = "127.0.0.1:3000"
                 http: None,
                 h2_security: None,
                 websocket: None,
+                grpc: None,
                 backends: vec![],
             }],
             runtime: None,
@@ -839,6 +914,7 @@ address = "127.0.0.1:3000"
                 http: None,
                 h2_security: None,
                 websocket: None,
+                grpc: None,
                 backends: vec![],
             }],
             runtime: None,
@@ -864,6 +940,7 @@ address = "127.0.0.1:3000"
                 http: None,
                 h2_security: None,
                 websocket: None,
+                grpc: None,
                 backends: vec![],
             }],
             runtime: None,
@@ -909,6 +986,7 @@ protocol = "h1"
                 http: None,
                 h2_security: None,
                 websocket: None,
+                grpc: None,
                 backends: vec![],
             }],
             runtime: None,
@@ -935,6 +1013,7 @@ protocol = "h1"
                 http: None,
                 h2_security: None,
                 websocket: None,
+                grpc: None,
                 backends: vec![],
             }],
             runtime: None,
@@ -955,6 +1034,7 @@ protocol = "h1"
                 http: None,
                 h2_security: None,
                 websocket: None,
+                grpc: None,
                 backends: vec![BackendConfig {
                     address: "127.0.0.1:3000".into(),
                     protocol: "gopher".into(),
@@ -1007,6 +1087,7 @@ address = "127.0.0.1:3000"
                 http: None,
                 h2_security: None,
                 websocket: None,
+                grpc: None,
                 backends: vec![BackendConfig {
                     address: "127.0.0.1:3000".into(),
                     protocol: "tcp".into(),
@@ -1039,6 +1120,7 @@ address = "127.0.0.1:3000"
                 http: None,
                 h2_security: None,
                 websocket: None,
+                grpc: None,
                 backends: vec![],
             }],
             runtime: None,
@@ -1067,6 +1149,7 @@ address = "127.0.0.1:3000"
                 http: Some(HttpTimeoutsConfig::default()),
                 h2_security: None,
                 websocket: None,
+                grpc: None,
                 backends: vec![BackendConfig {
                     address: "127.0.0.1:3000".into(),
                     protocol: "tcp".into(),
@@ -1095,6 +1178,7 @@ address = "127.0.0.1:3000"
                 }),
                 h2_security: None,
                 websocket: None,
+                grpc: None,
                 backends: vec![BackendConfig {
                     address: "127.0.0.1:3000".into(),
                     protocol: "tcp".into(),
@@ -1140,6 +1224,7 @@ xdp_interface = "eth0"
                 http: None,
                 h2_security: None,
                 websocket: None,
+                grpc: None,
                 backends: vec![],
             }],
             runtime: Some(RuntimeConfig {
@@ -1164,6 +1249,7 @@ xdp_interface = "eth0"
                 http: None,
                 h2_security: None,
                 websocket: None,
+                grpc: None,
                 backends: vec![],
             }],
             runtime: Some(RuntimeConfig {
@@ -1240,6 +1326,54 @@ address = "127.0.0.1:3000"
                 http: None,
                 h2_security: None,
                 websocket: Some(WebsocketConfig::default()),
+                grpc: None,
+                backends: vec![],
+            }],
+            runtime: None,
+            observability: None,
+        };
+        assert!(validate_config(&config).is_err());
+    }
+
+    #[test]
+    fn parse_h1s_listener_with_grpc() {
+        let input = r#"
+[[listeners]]
+address = "0.0.0.0:443"
+protocol = "h1s"
+
+[listeners.tls]
+cert_path = "/etc/cert.pem"
+key_path = "/etc/key.pem"
+
+[listeners.grpc]
+max_deadline_seconds = 60
+health_synthesized = false
+
+[[listeners.backends]]
+address = "127.0.0.1:3000"
+"#;
+        let config = parse_config(input).unwrap();
+        let grpc = config.listeners[0].grpc.as_ref().unwrap();
+        assert!(grpc.enabled);
+        assert_eq!(grpc.max_deadline_seconds, 60);
+        assert!(!grpc.health_synthesized);
+        validate_config(&config).unwrap();
+    }
+
+    #[test]
+    fn validate_grpc_on_non_h1s_listener_rejected() {
+        let config = LbConfig {
+            listeners: vec![ListenerConfig {
+                address: "0.0.0.0:80".into(),
+                protocol: "h1".into(),
+                tls: None,
+                quic: None,
+                alt_svc: None,
+                http: None,
+                h2_security: None,
+                websocket: None,
+                grpc: Some(GrpcListenerConfig::default()),
                 backends: vec![],
             }],
             runtime: None,
@@ -1260,6 +1394,7 @@ address = "127.0.0.1:3000"
                 http: None,
                 h2_security: None,
                 websocket: None,
+                grpc: None,
                 backends: vec![],
             }],
             runtime: None,

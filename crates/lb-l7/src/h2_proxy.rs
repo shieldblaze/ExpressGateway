@@ -38,6 +38,7 @@ use tokio::io::{AsyncRead, AsyncWrite};
 
 use lb_io::pool::TcpPool;
 
+use crate::grpc_proxy::{self, GrpcProxy};
 use crate::h1_proxy::{
     AltSvcConfig, BackendPicker, HttpTimeouts, append_via, append_xff, set_xfh, set_xfp,
     strip_hop_by_hop,
@@ -57,6 +58,12 @@ pub struct H2Proxy {
     /// `:protocol = websocket` (RFC 8441) are routed through the
     /// WebSocket proxy instead of returning 502.
     ws: Option<Arc<WsProxy>>,
+    /// When `Some`, inbound streams whose content-type matches
+    /// `application/grpc[+ext]` are routed through the gRPC proxy
+    /// (Item 3 / PROMPT.md §13) instead of the regular H2 request
+    /// path. The H2 flood/bomb thresholds from Item 1 still apply to
+    /// the hosting connection.
+    grpc: Option<Arc<GrpcProxy>>,
 }
 
 impl H2Proxy {
@@ -104,6 +111,7 @@ impl H2Proxy {
             is_https,
             security,
             ws: None,
+            grpc: None,
         }
     }
 
@@ -112,6 +120,14 @@ impl H2Proxy {
     #[must_use]
     pub fn with_websocket(mut self, ws: Arc<WsProxy>) -> Self {
         self.ws = Some(ws);
+        self
+    }
+
+    /// Enable gRPC handling on this proxy. Fluent; returns `self` so
+    /// the call site reads as a chain off [`Self::with_security`].
+    #[must_use]
+    pub fn with_grpc(mut self, grpc: Arc<GrpcProxy>) -> Self {
+        self.grpc = Some(grpc);
         self
     }
 
@@ -199,6 +215,16 @@ impl H2Proxy {
             .is_some_and(|w| w.config().enabled && is_h2_extended_connect(&req))
         {
             return self.handle_ws_extended_connect(req);
+        }
+        if let Some(gp) = self
+            .grpc
+            .as_ref()
+            .filter(|g| g.config().enabled && grpc_proxy::is_grpc_request(&req))
+        {
+            let Some(backend_addr) = self.picker.pick() else {
+                return error_response(StatusCode::BAD_GATEWAY, "no backend available");
+            };
+            return Arc::clone(gp).handle(req, backend_addr).await;
         }
         let (mut parts, body) = req.into_parts();
 

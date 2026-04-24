@@ -1616,6 +1616,7 @@ dependencies = [
  "http-body-util",
  "hyper",
  "hyper-util",
+ "lb-grpc",
  "lb-h2",
  "lb-io",
  "parking_lot",

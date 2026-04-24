@@ -19,6 +19,10 @@ tracing = { workspace = true }
 parking_lot = { workspace = true }
 lb-io = { path = "../lb-io" }
 lb-h2 = { path = "../lb-h2" }
+# Item 3: gRPC proxy path (PROMPT.md §13). `lb-grpc` ships the
+# codec-level types (GrpcDeadline, GrpcStatus, GrpcFrame, StreamingMode);
+# we only consume them — no modifications to lb-grpc.
+lb-grpc = { path = "../lb-grpc" }
 # Item 2: WebSocket proxy path (RFC 6455 + RFC 8441).
 tokio-tungstenite = { workspace = true }
 futures-util = { workspace = true }

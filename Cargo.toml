@@ -153,6 +153,11 @@ rcgen = { version = "0.13", features = ["pem"] }
 # echo tests). Stays on the same 0.24 pin as the workspace dep.
 tokio-tungstenite = { workspace = true, features = ["connect"] }
 futures-util = { workspace = true }
+# Item 3: gRPC e2e tests drive a raw hyper H2 client + server to play
+# both sides of the RPC wire. `lb-grpc` supplies the frame codec and
+# status/deadline helpers; the tests exercise framing + trailers
+# without pulling `tonic`/`prost` into the dev-dep graph (tonic's
+# build.rs + protoc requirement would complicate sandbox builds).
 
 [profile.release]
 opt-level = 3
