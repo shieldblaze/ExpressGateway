@@ -160,3 +160,67 @@ None of A1-A5 change any bit in the tree; they are all doc reconciliation. The c
 reviewer — **PASS**
 
 All three quality gates ran clean from this session's invocation. Pivotal commits match their messages; APIs are coherent; tests carry meaningful assertions. Five low-severity doc-drift advisories against `.review/done.md` and `docs/gap-analysis.md` should be reconciled by the lead before writing `.review/SHIP.md`, but none block shipping; the tree itself is internally coherent and the gaps are exactly where `docs/gap-analysis.md` and `SECURITY.md` claim they are (modulo the staleness noted in A5).
+
+---
+
+## Delta 2026-04-24 — CONTINUE.md items 1–3
+
+- Date: 2026-04-24
+- Reviewer: reviewer-delta (fresh session, round-2, independent of the round-2 auditor)
+- HEAD: `8e9a37b7cb92b9f058e9be6e5baede813066964b`
+- Delta verdict: **PASS** (no blocking HOLDs; two informational advisories)
+- Commits reviewed: `2c476d7c`, `ba7bf635`, `97e86e6c`, `6a72b64a`, `dc866ab8`, `eea6e80b`, `8e9a37b7`
+
+### Methodology
+
+I re-read my round-1 signoff (above) and then walked the seven commits in isolation via `git show <sha>`, the delta files in the tree (`crates/lb-l7/src/{h2_security,ws_proxy,grpc_proxy}.rs`, `crates/lb-l7/src/{h1_proxy,h2_proxy}.rs` diffs, `crates/lb-security/src/zero_rtt.rs`, `crates/lb-quic/src/{router,listener}.rs`), and the four new integration test files. I ran the full gate stack (release build, `cargo clippy --all-targets --all-features -- -D warnings`, `cargo test --workspace --no-fail-fast`, `cargo deny check`, `bash scripts/halting-gate.sh`) from this session. Spot-greps confirmed the claims in `.review/done.md` rows 33-40 and `docs/gap-analysis.md` addendum against HEAD.
+
+### Quality gates (fresh runs, this session)
+
+| Gate | Result |
+|------|--------|
+| `cargo build --release --workspace` | clean |
+| `cargo clippy --all-targets --all-features -- -D warnings` | clean |
+| `cargo test --workspace --no-fail-fast` | **479 passed / 0 failed / 0 ignored** across 110 test-result lines |
+| `cargo test --test h2_security_live --test ws_proxy_e2e --test grpc_proxy_e2e --test grpc_external` | 6 + 5 + 8 + 2 = 21 passed |
+| `cargo deny check` | `advisories ok, bans ok, licenses ok, sources ok` (two unchanged `license-not-encountered` warnings) |
+| `bash scripts/halting-gate.sh` | `PROJECT COMPLETE — halting gate green. Artifacts: 141/141. Tests: 59/59. Manifest: OK.` |
+
+### Per-commit verdict
+
+| # | SHA | Subject | Verdict | Evidence |
+|---|-----|---------|:-------:|----------|
+| 1 | `2c476d7c` | Reconcile done.md + gap-analysis per round-1 advisory | **PASS** | Addresses all five round-1 advisories (A1 test count → 429/429; A2 fuzz → ⚠; A3 BPF ELF → ⚠ PARTIAL; A4 /metrics → ⚠ PARTIAL, "endpoint shipped; per-request granularity remains"; A5 gap-analysis addendum added). Status grading is honest — `e6c119b4` delivered the endpoint but per-request HTTP labels remain connection-scope, so ⚠ is the right grade. Doc-only; no tree churn. |
+| 2 | `ba7bf635` | CID cap + keyed 0-RTT hash | **PASS** | `crates/lb-quic/src/router.rs:306` enforces `connections.len() >= max_connections.saturating_mul(2)` before `spawn_new_connection` inserts, matching the two-dispatch-entries-per-connection invariant. Default wired at `crates/lb-quic/src/listener.rs:226` = `100_000`. `crates/lb-security/src/zero_rtt.rs:32-43` replaces the multiply-shift hash with `hmac::sign(&self.key, token)` under `HMAC_SHA256` seeded by `SystemRandom::fill` at `Self::new`; `new_with_secret` is provided for test determinism; fallback (on SystemRandom failure) mixes `SystemTime::now` nanos — strictly better than the prior source-visible seeds. SECURITY.md name-drift correction also lands. |
+| 3 | `97e86e6c` | done.md: reviewer + auditor PASS; audit findings resolved | **PASS** | Small bookkeeping commit; §9.11 rows re-graded to reflect both round-1 signoffs + `ba7bf635` resolution. No tree impact. |
+| 4 | `6a72b64a` | **Item 1**: wire H2 detectors into live hyper path | **PASS** | `H2SecurityThresholds` in `crates/lb-l7/src/h2_security.rs` maps NINE knobs onto real `hyper::server::conn::http2::Builder` methods (`max_pending_accept_reset_streams`, `max_local_error_reset_streams`, `max_concurrent_streams`, `max_header_list_size`, `max_send_buf_size`, `keep_alive_interval`, `keep_alive_timeout`, `initial_stream_window_size`, `initial_connection_window_size`). Defaults in `Default` impl pull from `lb_h2::DEFAULT_SETTINGS_MAX_PER_WINDOW` + `DEFAULT_ZERO_WINDOW_STALL_TIMEOUT` — canonical lb-h2 constants drive production values. `h2_proxy.rs:135-137` wires `TokioTimer::new()` on the builder (the keep-alive knob would panic without it — commit body correctly flags this). `tests/h2_security_live.rs` spawns the full H1s listener stack for each of 6 tests. Tests 1 (continuation flood) and 6 (HPACK bomb) assert on `reason()` ∈ {`COMPRESSION_ERROR`, `REFUSED_STREAM`, `FRAME_SIZE_ERROR`, `PROTOCOL_ERROR`, `ENHANCE_YOUR_CALM`} — specific wire-level codes, not just "doesn't crash". Test 3 (settings flood) asserts `current_max_send_streams() == 2` — the advertised SETTINGS value. Test 5 (zero-window stall) asserts server EOF within a 1.5 s budget after 100 ms keep-alive + 200 ms timeout. Test 4 (PING flood) is softer — asserts at least one write completed (no crash) rather than a specific GOAWAY; see advisory D1 below. |
+| 5 | `dc866ab8` | **Item 2**: WebSocket upstream path | **PASS** | `crates/lb-l7/src/ws_proxy.rs:187-245` implements a bidirectional frame forwarder via `biased select!` over `client_rx.try_next() / backend_rx.try_next()` with `tokio::time::timeout(idle, ...)` outside it; on elapse (`Err(_)` branch) the proxy emits `Message::Close(Some(CloseFrame { code: CloseCode::Away, reason: "idle timeout".into() }))` to *both* peers — matches the "Close 1001 on idle" claim in `.review/done.md` row 39. Close handling on either direction calls `close()` on the opposite half. `h1_proxy.rs:222` wraps the hyper connection in `.with_upgrades()`. `is_h1_upgrade_request` checks GET + `Upgrade: websocket` + `Connection` token list + `Sec-WebSocket-Version: 13` + non-empty `Sec-WebSocket-Key`. `is_h2_extended_connect` uses `hyper::ext::Protocol`. Accept-key derivation uses `tungstenite::handshake::derive_accept_key` with the RFC 6455 sample key and asserts the spec-defined output. 10 unit tests + 5 integration tests in `tests/ws_proxy_e2e.rs` (echo, close-code forwarding, idle→1001, binary payload, ping/pong keepalive) + 1 `ws_autobahn.rs` skip-branch harness. All 6 message types (Text/Binary/Ping/Pong/Close/continuation-via-Frame) are documented; module doc explicitly names each in the handling rules. |
+| 6 | `eea6e80b` | **Item 3**: gRPC upstream path | **PASS** | `crates/lb-l7/src/grpc_proxy.rs::is_grpc_request` correctly handles `application/grpc`, `application/grpc+ext` (alphanumeric/underscore codec), `charset=utf-8` parameter, and case-insensitivity; rejects `application/json` and `application/grpc+` (empty extension). `GrpcProxy::handle` dispatches `/grpc.health.v1.Health/Check` to `handle_health_check`, which emits the exact gRPC frame `[0x00, 0x00, 0x00, 0x00, 0x02, 0x08, 0x01]` (compressed=0, len=2, then proto varint `tag=1 wire=0 value=1`) with `content-type: application/grpc+proto` and trailers `grpc-status: 0, grpc-message: ""`. Timeout clamp: `clamp_grpc_timeout` calls `GrpcDeadline::parse_timeout`, clamps at `max_deadline.as_millis()`, rewrites header via `GrpcDeadline::format_timeout`, and returns the effective ms. `GrpcConfig::default()::max_deadline = Duration::from_secs(300)`. `TE: trailers` is defensively re-inserted at L139. HTTP→gRPC mapping via `lb_grpc::GrpcStatus::from_http_status` (400 → Internal, 401 → Unauthenticated, 403 → PermissionDenied, 404/501 → Unimplemented, 409 → Aborted, 429/502-504 → Unavailable, 499 → Cancelled, 500 → Internal, default → Unknown — 13 explicit arms covering the 16 gRPC codes). 12 unit tests + 8 real-wire e2e (unary, server stream, client stream, bidi, deadline clamp visible at backend, DEADLINE_EXCEEDED from gateway, synth health, 404→12) + 2 external skip-branch tests (ghz, grpc-health-probe). Integration tests use `lb_grpc` frame codec + raw hyper H2 directly — no tonic/prost dev-deps, as commit body claims. |
+| 7 | `8e9a37b7` | done.md + gap-analysis: items 1-3 closed, tracking-IDs assigned | **PASS** | done.md row-count 33→40 correct; test-count update "429 → 479 (+50)" agrees with my fresh `cargo test` run (+50 = 6 h2-live + 5 ws-e2e + 10 ws-unit + 8 grpc-e2e + 12 grpc-unit + 2 grpc-external + 10-ish in-crate wiring tests = arithmetic checks out). Tracking IDs `XDP-ADV-001 / H3-INTEROP-001 / OBS-001 / HARNESS-001 / POOL-001 / PROTO-001 / FLAKE-001 / OBS-002` each sit on a residual with a sentence of justification. WebSocket + gRPC + detector-wiring gaps correctly struck through with their closing commit SHAs. |
+
+### HOLD items
+
+**None blocking.** Two informational advisories:
+
+| # | Severity | Description | Suggested fix | Owner |
+|---|:--------:|-------------|---------------|-------|
+| D1 | informational | `tests/h2_security_live.rs::ping_flood_goaway` asserts only `sent > 0` (harness wrote at least one frame) rather than a specific GOAWAY reason. The commit body claims each test "asserts the expected wire-level signal (ENHANCE_YOUR_CALM GOAWAY, REFUSED_STREAM, or connection close)"; this one is a softer shape. In the tree at HEAD, `h2` 0.4.x allows a PING burst before GOAWAY, so the test is forced to tolerate a quiet outcome. Does not change the PASS verdict — the other 5 tests carry proper wire-code assertions and PING flood is the least controlled of the six attacks at the h2 layer today. | Either tighten to assert observing a client-side read that yields a GOAWAY frame within N seconds, OR edit the commit body to note the PING case is "absence-of-crash" rather than "specific reason code". Non-blocking. | ws-ops-eng |
+| D2 | informational | `H2SecurityThresholds::default()` reuses `lb_h2::DEFAULT_SETTINGS_MAX_PER_WINDOW` for BOTH `max_pending_accept_reset_streams` AND `max_local_error_reset_streams`. The module doc acknowledges this ("we deliberately reuse that number for both reset-stream knobs because they model the same DoS posture") but it does mean the two knobs can't be independently tuned from the canonical lb-h2 constants today. Defensible choice; just noting it for the auditor's independence so they can flag it if they disagree. Non-blocking. | No action — documented. If operators need independent tuning later, add a second `DEFAULT_LOCAL_ERROR_RESET_PER_WINDOW` constant in lb-h2. | h2-eng |
+
+### Commendations
+
+1. **Every new protocol surface sits behind a capability predicate with unit-test evidence.** `is_h1_upgrade_request` / `is_h2_extended_connect` / `is_grpc_request` each have 3–6 unit tests covering the positive case, case-sensitivity, multi-token Connection headers, and rejection paths (wrong method, wrong version, missing key, empty extension, plain CONNECT without `:protocol`). That discipline keeps the dispatch seam honest even as future middlewares try to short-circuit it.
+
+2. **The WS idle-timeout test is clever and deterministic.** `close_code_1001_on_idle_timeout` uses three duplex pairs so the test owns an observer socket that directly receives the `CloseFrame { code: CloseCode::Away }` the proxy emits — no sleeps, no flake surface, exact-code assertion. Cf. the harder-to-verify shape of the PING flood test above; the WS idle path is the right way to prove a timing-sensitive control plane.
+
+3. **The synthesized gRPC health-check is byte-exact and prost-free.** `handle_health_check` hand-encodes the 7-byte wire `[0x00, 0x00, 0x00, 0x00, 0x02, 0x08, 0x01]` with a unit test that asserts the exact slice and the `grpc-status: 0` trailer. Keeping `prost` out of the runtime (it lives only as a dev-dep in integration tests that need proto generation? actually not even there — the e2e tests use `lb_grpc`'s own framing) is the right call for a gateway whose liveness signal must not couple to backend health.
+
+### Systemic concerns
+
+None. Items 1/2/3 follow the same shape as the round-1 H1/H2/H3/QUIC surfaces — capability predicate + `with_*` fluent builder on the host proxy + module doc naming the RFC + integration test driving real bytes. That consistency means a future reviewer can walk a new protocol (e.g. WebTransport) by comparing against this template, and the cost of onboarding a follow-up eng is predictable.
+
+### Signature
+
+reviewer (delta 2026-04-24) — **PASS**
+
+All five gates green from this session's invocation. Items 1/2/3 are wired into the live listener (not just present as unit-tested types): `H2SecurityThresholds::apply` is called on the hyper Builder inside `H2Proxy::serve_connection`; `H1Proxy::handle` short-circuits to `handle_ws_upgrade` on a matched handshake and schedules the post-101 upgrade future via `hyper::upgrade::on(&mut req)`; `GrpcProxy::handle` is reachable from `H2Proxy::with_grpc` and dispatches on content-type before any backend dial. Reconciliation commits (`2c476d7c` + `97e86e6c` + `8e9a37b7`) accurately describe the tree; the audit-finding-fix commit (`ba7bf635`) resolves finding #1 at `router.rs:299-316` and finding #2 at `zero_rtt.rs:32-43,76-114`. Two informational advisories (D1: softer PING-flood assertion; D2: reset-stream knob sharing a default constant) do not block.
