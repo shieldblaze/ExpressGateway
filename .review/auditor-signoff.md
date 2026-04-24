@@ -118,3 +118,86 @@ bash scripts/halting-gate.sh                 # GREEN, 141/141, 59/59
 ## Signature
 
 auditor — PASS
+
+---
+
+## Delta 2026-04-24 — CONTINUE.md items 1–3
+
+- Date: 2026-04-24
+- Auditor: auditor-delta (fresh session, no coordination with reviewer-delta)
+- HEAD: 8e9a37b7cb92b9f058e9be6e5baede813066964b
+- Delta verdict: **PASS**
+- Commits audited: `ba7bf635`, `6a72b64a`, `dc866ab8`, `eea6e80b`
+
+Methodology: adversarial read-only walk of the four commits and the files
+they touched. Round-1 findings verification first, then threats a–o from
+Task #28 on the two new attack surfaces (WebSocket, gRPC). Independent
+`rg` / `grep` / `awk` / trufflehog / halting-gate runs; reviewer-delta
+signoff intentionally NOT read.
+
+### Round-1 findings closure verification
+
+| # | Finding (round-1) | Closed by | Evidence | Verdict |
+|---|-------------------|-----------|----------|---------|
+| 1 | QUIC CID-table unbounded growth | `ba7bf635` | `crates/lb-quic/src/router.rs:306` — `cap_entries = max_connections.saturating_mul(2); if connections.len() >= cap_entries { tracing::warn!(..); return Err("router at max_connections") }`. Cap enforced **before** `DashMap::insert`. `RouterParams.max_connections` default 100_000 wired at `listener.rs:226`. | **CLOSED** (with small nit — see residual D-1 below). |
+| 2 | ZeroRttReplayGuard non-crypto hash | `ba7bf635` | `crates/lb-security/src/zero_rtt.rs:32-43` — `hmac::sign(&self.key, token)` on HMAC-SHA256. `fresh_secret()` at L54-69 uses `ring::rand::SystemRandom::new().fill(&mut secret)` — 32-byte per-instance key. `key: hmac::Key` at L85 is private, never exposed via public API. Attacker without the key cannot precompute collisions (would need to break HMAC-SHA256). SystemRandom-failure fallback mixes `SystemTime::now` nanos (strictly better than the prior hardcoded source-visible seeds). | **CLOSED**. |
+| 3 | H2 detectors not wired into live hyper path | `6a72b64a` | `crates/lb-l7/src/h2_security.rs` introduces `H2SecurityThresholds` with 9 knobs mapped to `hyper::server::conn::http2::Builder`. `H2SecurityThresholds::apply()` at L111 chains: `max_pending_accept_reset_streams`, `max_local_error_reset_streams`, `max_concurrent_streams`, `max_header_list_size`, `max_send_buf_size`, `keep_alive_interval`, `keep_alive_timeout`, `initial_stream_window_size`, `initial_connection_window_size`. In `h2_proxy.rs:165-172`, `apply(&mut builder)` is invoked **before** `serve_connection(TokioIo::new(io), svc)` — so hyper enforces on the wire. `TokioTimer::new()` wired at L166 (required for `keep_alive_interval` to fire). 6/6 tests in `tests/h2_security_live.rs` spawn a live TLS listener and drive real h2 frames; 5 of 6 assert wire-level error codes (COMPRESSION_ERROR / REFUSED_STREAM / FRAME_SIZE_ERROR / PROTOCOL_ERROR / ENHANCE_YOUR_CALM / GOAWAY-remote); `ping_flood_goaway` accepts "burst completed, still alive" as pass (weaker assertion; hyper/h2 0.4 does cap, but the test does not strictly prove it). | **CLOSED** (with ping-flood assertion nit — see residual D-2). |
+
+### Items 2 + 3 attack-surface verdicts
+
+**WebSocket (Item 2 `dc866ab8`):**
+
+| ID | Threat | Verdict | Evidence |
+|----|--------|---------|----------|
+| a | Unmasked client frame (RFC 6455 §5.2 → 1002) | **PASS** | tungstenite 0.24 `WebSocketConfig::default()` sets `accept_unmasked_frames: false` (registry `tungstenite-0.24.0/src/protocol/mod.rs:84`). Server-role stream rejects unmasked client frames with a Protocol-error close. Our `WsConfig::tungstenite_config()` at `ws_proxy.rs:86` only overrides `max_message_size` + `max_frame_size`, leaving the default guard intact. |
+| b | Oversized message (>16 MiB → 1009) | **PASS** | `WsConfig::default()` at L72-77 sets `max_message_size: 16 * 1024 * 1024`. tungstenite enforces this on reassembly (verified at `tungstenite-0.24.0/src/protocol/mod.rs:841` test harness using the same knob). |
+| c | Invalid close code (<1000 or 1015–2999) | **PASS** | tungstenite validates via `CloseCode::is_allowed()` at `coding.rs:192`: `Bad`, `Reserved`, `Status`, `Abnormal`, `Tls` disallowed. Reserved range 1016..=2999 enumerated at L253. Read path emits Protocol error when invalid close code arrives. |
+| d | Continuation without initial frame (§5.4) | **PASS** | tungstenite reader state machine enforces the (single-opcode → Continuation*) grammar; stray Continuation → Protocol close. Inherited from tungstenite's read loop. |
+| e | Mid-message control frame (§5.5) | **PASS** | Same — tungstenite accepts interleaved control frames but enforces the ban on fragmented control frames (FIN=1 required on Ping/Pong/Close). |
+| f | Slow-read DoS on forwarder | **PASS-with-caveat** | `proxy_frames` at L208-228 uses `backend_tx.send(msg).await?` / `client_tx.send(msg).await?` — the `await` on a Sink applies producer backpressure directly. No userspace unbounded buffer. Kernel TCP buffer on the stalled side is bounded by default socket buffers. Idle timeout (default 60 s at L73) fires 1001 Going Away on stall. Caveat: buffered bytes inside tungstenite + OS TCP buffer can briefly pin (~MB/peer) until idle_timeout elapses — not a linear-memory-bomb but a slow-drain risk; tracked as residual D-3. |
+| g | `Upgrade: websocket` with `Connection: close` | **PASS** | `is_h1_upgrade_request` at `ws_proxy.rs:109` requires `header_contains_token(CONNECTION, "upgrade")` **and** `Upgrade: websocket`. A request with `Connection: close` only fails the token check → returns false → falls through to regular H1 proxy path (will return 400/502 from hyper or upstream). No upgrade performed. |
+| h | Endless Ping flood from client | **HOLD-review (MEDIUM)** | `proxy_frames` forwards every inbound `Ping` verbatim to the peer (`backend_tx.send(msg)` at L210). tungstenite auto-responds to Pings on the *receiving* side (so backend responds, NOT the gateway) and does NOT rate-limit incoming Ping frames at the gateway. A client sending 1M Pings/s will force the gateway to forward them to the backend until idle_timeout (default 60s) elapses between the forwarder's `select!` wakes — i.e. never elapses, because Ping traffic counts as activity. No HARD gateway-side cap exists. Exposure: constant-rate forward load on the backend proportional to client send rate; no gateway memory bomb, but a backend-DoS amplifier if backend can't absorb. Flagged as residual D-4. Not blocking — PROMPT.md §14 v1 explicitly defers WS-specific flood caps to a later pillar. |
+
+**gRPC (Item 3 `eea6e80b`):**
+
+| ID | Threat | Verdict | Evidence |
+|----|--------|---------|----------|
+| i | Oversized `grpc-message` value (backend → 4 MiB) | **PASS-with-caveat** | Upstream-client H2 handshake at `grpc_proxy.rs:174` uses `hyper::client::conn::http2::handshake` with default `max_header_list_size` (hyper default 2 MiB). The downstream-server H2 listener applies `H2SecurityThresholds.max_header_list_size = 64 KiB` from Item 1. A 4 MiB grpc-message in trailers is accepted on the upstream leg (brief memory pin) then rejected by the downstream H2 codec when forwarded back to the client. Not ideal (backend can briefly occupy gateway memory up to hyper client default) but bounded. Operator has no knob to tighten upstream client. Tracked as residual D-5. |
+| j | Malformed `grpc-timeout` ("foo", "-5S", "5") | **PASS** | `GrpcDeadline::parse_timeout` at `deadline.rs:29`: empty → `InvalidTimeout`; `split_at(len-1)` → digits/unit; `digits.parse::<u64>()` fails on `-5` or non-ASCII-digit → `InvalidTimeout`; unknown unit char → `InvalidTimeout`. No panic, no overflow. In `grpc_proxy::clamp_grpc_timeout` at L260 a parse failure returns `None` (treated as "no deadline"). Spec-deviation nit (spec says malformed → error, not no-deadline) but not a security bug; tracked as residual D-6. |
+| k | Timeout saturation (`3153600000000H`) | **PASS** | `parse_timeout` uses `saturating_mul` for H/M/S units (deadline.rs:49-51) → `u64::MAX` clamp. `clamp_grpc_timeout` then `parsed_ms.min(max_ms)` with `max_ms = u64::try_from(max.as_millis()).unwrap_or(u64::MAX)` → final deadline ≤ 300 s default. Eventual `Duration::from_millis(ms)` with ms ≤ 300_000 cannot overflow Duration (Duration holds u64 secs + u32 nanos). |
+| l | HTTP→gRPC status translation (14-entry table) | **PASS** | `crates/lb-grpc/src/status.rs:102-114` `from_http_status` maps: 200→Ok, 400→Internal, 401→Unauthenticated, 403→PermissionDenied, 404→Unimplemented, 409→Aborted, 429→Unavailable, 499→Cancelled, 500→Internal, 501→Unimplemented, 502..=504→Unavailable, `_`→Unknown. Covers all 9 spec-mandated entries (gRPC status-codes.md) plus 5 extras. `finalize_upstream` at `grpc_proxy.rs:346` synthesises trailers for non-200 upstream via this map. Missing grpc-status on a 200 response from backend is forwarded as-is (client synthesises `Internal (2)` per spec — PASS). |
+| m | `application/grpc` on listener with `grpc.enabled = false` | **PASS** | `h2_proxy.rs:219` gates on `g.config().enabled && is_grpc_request(&req)`. If disabled, falls through to regular H2 proxy path — the bytes are forwarded transparently to the backend as regular H2. Not a 415; per v1 design this is correct behavior (H2 proxy is content-type-agnostic). |
+| n | `application/grpc-web` confusion | **PASS** | `is_grpc_request` at `grpc_proxy.rs:221`: after `split(';').next().trim()`, checks exact `== "application/grpc"` then `strip_prefix("application/grpc+")`. `application/grpc-web` (hyphen, not plus) fails both; returns false. Verified by walking the match for `application/grpc-web+proto` — strip_prefix returns None. |
+| o | Synthesized `/grpc.health.v1.Health/Check` always SERVING | **HOLD-review (LOW, spec deviation)** | `handle_health_check` at `grpc_proxy.rs:280` returns `status = SERVING` unconditionally and does not parse the request body to extract the `service: string` field. Per grpc-proto `health.proto` §HealthCheckRequest, server MUST return `NOT_FOUND` (gRPC status 5) for unrecognized services or `UNKNOWN (2)` serving_status per the reference implementation. Our gateway is a proxy not a service registry, so "everything is SERVING from the gateway's POV" is defensible, but it's a spec deviation. Not a security issue. Flagged as residual D-7. |
+
+### New HOLD items (delta)
+
+**None blocking.** All two `HOLD-review` items (D-4 ping-flood forwarding and D-7 health-check-always-SERVING) are MEDIUM-LOW severity and documented in PROMPT.md §14 / health.proto deviations as deferred post-v1 scope. No severity reaches HIGH or CRITICAL.
+
+### Residual risks after round-2
+
+| ID | Severity | CVSSv3 | Description | Suggested fix |
+|----|----------|--------|-------------|----------------|
+| D-1 | LOW | 3.1 AV:N/AC:H/PR:L/UI:N/S:U/C:N/I:N/A:L | CID-cap drop path has no integration test. The cap logic (`router.rs:306`) is guarded by an `if` with `saturating_mul(2)`, but no test in `crates/lb-quic/tests/` drives >100_000 Initial packets to exercise the drop branch. If a refactor mutates the inequality (`>=` → `>`) or the multiplier, halting-gate wouldn't catch it. | Add a unit test for `spawn_new_connection` with a pre-populated `DashMap` at capacity, asserting the `Err("router at max_connections")` return. |
+| D-2 | LOW | 3.1 | `ping_flood_goaway` in `tests/h2_security_live.rs:392` accepts "completed 1024 PINGs without crash" as pass — does NOT strictly assert hyper's PING cap fires on the wire. Hyper/h2 0.4 DOES cap; the test is just weaker than its siblings. | Drive enough PINGs (10_000+) with a lower ENHANCE_YOUR_CALM threshold and assert GOAWAY arrives. |
+| D-3 | LOW | 3.1 AV:N/AC:L/PR:N/UI:N/S:U/C:N/I:N/A:L | WS slow-read stalls can pin kernel TCP buffer + tungstenite internal buffer for up to `idle_timeout` (60 s default) per peer. Per-peer memory footprint O(MB); at 10k concurrent stalled peers → 10 GB. | Add a `max_write_buffer_size` on `WebSocketConfig` mapped to tungstenite's field + aggressive half-close on slow peer. |
+| D-4 | MEDIUM | 4.3 AV:N/AC:L/PR:N/UI:N/S:U/C:N/I:N/A:L | No gateway-side Ping rate-limit in `ws_proxy::proxy_frames`. Client Ping flood is forwarded to backend, amplifying backend load. | Track inbound Pings per 10 s window, emit 1008 Policy Violation close above N/s. |
+| D-5 | LOW | 3.1 | Upstream H2 client in gRPC path has no `max_header_list_size` knob (hyper default 2 MiB). Malicious backend trailers up to 2 MiB transit gateway memory briefly before downstream rejection. | Apply `H2SecurityThresholds.max_header_list_size` to the upstream `http2::Builder` in `grpc_proxy.rs:174`. |
+| D-6 | LOW | N/A | `clamp_grpc_timeout` silently drops malformed `grpc-timeout` → no-deadline. Spec says malformed → error. | Return `Some(0)` (immediate DEADLINE_EXCEEDED) or synthesise an INVALID_ARGUMENT trailer on parse failure. |
+| D-7 | LOW | N/A | Synthesized `/grpc.health.v1.Health/Check` ignores the `service: string` field in request body; always returns `SERVING`. gRPC health spec expects `NOT_FOUND` / `SERVICE_UNKNOWN`. | Parse the 1–2 byte proto body, return `NOT_FOUND` for non-empty `service` (gateway doesn't know any service by name in v1). |
+
+### Always-on checks
+
+| Check | Result |
+|-------|--------|
+| Panic-free grep (AWK-skipped `#[cfg(test)]`) | **0 hits** outside tests |
+| `cargo deny check advisories` | **ok** (5 `advisory-not-detected` warnings are allowlist entries for advisories that do not match any crate — harmless) |
+| `trufflehog git --only-verified` | `chunks 13618, bytes 25217713, verified_secrets 0, unverified_secrets 0` |
+| `unsafe` blocks count | **20** (16 blocks + 4 `unsafe fn`) — **unchanged from round-1**. No new `unsafe` introduced in `ba7bf635` / `6a72b64a` / `dc866ab8` / `eea6e80b`. |
+| `bash scripts/halting-gate.sh` | **GREEN** (141/141 artifacts, 59/59 tests) |
+
+### Signature
+
+auditor (delta 2026-04-24) — **PASS** with 7 residual risks (D-1..D-7),
+0 HOLD-blocking, 0 HIGH/CRITICAL.
+
