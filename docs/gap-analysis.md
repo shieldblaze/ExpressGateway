@@ -378,18 +378,21 @@ addendum records what has been closed and what remains.
 | `cargo audit` / `trufflehog` / `cargo llvm-cov` sanity gates absent | `de5c6dbf`, `8db5ffef` (Step 9) | **present** — `cargo audit`/`deny` policy synced via `.cargo/audit.toml`. Coverage report at `docs/conformance/coverage.md` (workspace 75.45 % lines / 85.38 % regions / 81.57 % functions, with per-file gap table). |
 | reviewer + auditor signoff absent | `1418d4b7` (reviewer PASS) + pending auditor | **reviewer present, auditor in-flight**. |
 
-### Remaining gaps (post-addendum)
+### Remaining gaps (post-addendum, after CONTINUE.md items 1–3 landed)
 
-1. **Pillar 4b-3**: SYN-cookie XDP_TX for brand-new flows, QinQ, `xtask xdp-verify` multi-kernel verifier matrix (5.15 LTS + 6.1 LTS SKB + DRV modes), CAP_BPF veth-pair CI stage, SIGHUP hot BPF map updates, TCP-option rewrite, LRU_HASH conntrack migration.
-2. **Pillar 3b.4**: `curl --http3` subprocess interop test (blocks on a CI image with curl+quiche); h3i RFC 9114 MUST-clause harness wired to `.review/rfc-matrix.md`.
-3. **Detector wiring into live state machines**: H2 SETTINGS/PING/zero-window detectors exist as tested types but are not called from the live `hyper http2::Builder` service fn path yet. Same for `RapidResetDetector` / `ContinuationFloodDetector` / `HpackBombDetector`.
-4. **Per-request HTTP telemetry**: `http_requests_total` + `http_request_duration_seconds` are connection-scope today; need a lb-l7 hook (`service_fn` wrapper) for per-request labels including actual response status code.
-5. **Step 7 conformance harnesses**: `h2spec` (skip-branch wired), Autobahn, `testssl.sh`, `wrk2`, `h2load`, `curl --http3` — not installed in this sandbox; `tests/h2spec.rs` skips cleanly.
-6. **WebSocket proxy path**: absent. Out of scope for this drive; deferred.
-7. **gRPC proxy path**: absent beyond codec-level tests. Deferred.
-8. **TcpPool re-keying on hostname DNS changes**: deferred (TcpPool keys on already-resolved `SocketAddr`).
-9. **H2 upstream**: backends stay H1 today; H2 upstream is its own pillar.
-10. **`controlplane_standalone` intermittent flake** under parallel test runs (SIGHUP cross-talk between parallel test binaries). Individual-binary runs pass; workspace runs occasionally fail. Non-blocking but worth fixing.
+**Tracking-ID convention**: `XDP-ADV-nnn` for XDP post-v1 work; `H3-INTEROP-nnn` for HTTP/3 external-harness items; `OBS-nnn` for observability depth; `HARNESS-nnn` for external conformance tools; `POOL-nnn` for connection-pool polish; `PROTO-nnn` for protocol-family upstream work; `FLAKE-nnn` for known-flakes.
+
+1. **XDP-ADV-001 — Pillar 4b-3**: SYN-cookie XDP_TX for brand-new flows, QinQ, `xtask xdp-verify` multi-kernel verifier matrix (5.15 LTS + 6.1 LTS, SKB + DRV modes), CAP_BPF veth-pair CI stage, SIGHUP hot BPF map updates, TCP-option rewrite, LRU_HASH conntrack migration. Advanced XDP features beyond basic IPv4/IPv6 forwarding.
+2. **H3-INTEROP-001 — Pillar 3b.4**: `curl --http3` subprocess interop test (blocks on a CI image with curl+quiche); `h3i` RFC 9114 MUST-clause harness wired to `.review/rfc-matrix.md`. External-harness availability; in-process quiche+lb-h3 e2e already covers the wire path.
+3. ~~**Detector wiring**~~ ✅ **CLOSED** in `6a72b64a` (CONTINUE.md item 1). H2 SETTINGS / PING / zero-window / Rapid-Reset / CONTINUATION / HPACK-bomb all enforced on the wire via `hyper::http2::Builder` thresholds surfaced from the canonical lb-h2 detector types.
+4. **OBS-001 — per-request HTTP telemetry**: `http_requests_total` + `http_request_duration_seconds` are connection-scope today; need an lb-l7 hook (`service_fn` wrapper) for per-request labels including actual response status code.
+5. **HARNESS-001 — Step 7 external conformance tools**: `testssl.sh`, `wrk2`, `h2load`, `curl --http3` — not installed in sandbox. `h2spec` (`826760a7`), Autobahn `wstest` (`dc866ab8`), `grpc-health-probe` + `ghz` (`eea6e80b`) all have skip-branches that run in CI and would exercise on a harness-equipped CI image.
+6. ~~**WebSocket proxy path**~~ ✅ **CLOSED** in `dc866ab8` (CONTINUE.md item 2). RFC 6455 + 8441, frame-level proxy, idle timeout → Close 1001, all message types.
+7. ~~**gRPC proxy path**~~ ✅ **CLOSED** in `eea6e80b` (CONTINUE.md item 3). PROMPT.md §13 content-type detection, timeout clamp, trailer forwarding, status translation, synthesized Health/Check, all 4 streaming modes.
+8. **POOL-001 — TcpPool hostname re-keying**: TcpPool keys on already-resolved `SocketAddr`. DnsResolver refreshes hostnames; pool doesn't drop entries when the hostname's IP changes.
+9. **PROTO-001 — H2 upstream**: backends stay H1/H2 per-listener today (H3 upstream shipped as QuicUpstreamPool in `882c0d7e`). H2 upstream via `hyper::client::conn::http2` is its own pillar.
+10. **FLAKE-001 — `controlplane_standalone` parallel-test flake**: SIGHUP cross-talk between parallel test binaries. Individual-binary runs pass; workspace runs occasionally fail. Non-blocking.
+11. **OBS-002 — security-family metrics**: counters for each H2/H3 detector trip (rapid_reset_tripped, continuation_flood_tripped, hpack_bomb_tripped, etc.). Hyper does the enforcement silently today; we'd need a hyper observer layer (not directly supported) or a wrapping service-fn to count wire-level errors.
 
 ### Post-addendum risk table
 

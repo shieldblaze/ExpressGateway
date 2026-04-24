@@ -164,8 +164,16 @@ Phase B commits landing on top of the initial port:
 | 30 | `7eeb59fa` | **Pillar 4b-2**: XDP_TX + RFC 1624 checksum + VLAN + IPv6 + LpmTrie ACL |
 | 31 | `8e9d1887` | **Step 6**: cargo-fuzz infrastructure (5 targets, smoke runs) |
 | 32 | `e6c119b4` | **Observability**: Prometheus /metrics endpoint + histograms + labels |
+| 33 | `1418d4b7` | reviewer signoff: PASS |
+| 34 | `99f49824` | auditor signoff: PASS (3 residual risks flagged) |
+| 35 | `2c476d7c` | Reconcile done.md + gap-analysis.md per reviewer advisory |
+| 36 | `ba7bf635` | Address auditor 2026-04-23 findings: CID cap + keyed 0-RTT hash |
+| 37 | `97e86e6c` | done.md: reviewer + auditor PASS; audit findings resolved |
+| 38 | `6a72b64a` | **Item 1**: wire H2 detectors into live hyper path + 6 real-wire tests |
+| 39 | `dc866ab8` | **Item 2**: WebSocket upstream path (RFC 6455 + 8441) |
+| 40 | `eea6e80b` | **Item 3**: gRPC upstream path (PROMPT.md §13) |
 
-294 → 429 tests (+135). halting-gate green through each commit. **Pillar 3b.3c complete**: a real H3 GET issued by a raw-quiche client flows through the binary's QUIC listener → InboundPacketRouter (minting RETRY via `RetryTokenSigner` on the wire, dropping 0-RTT replays via `ZeroRttReplayGuard`) → ConnectionActor (one per `quiche::Connection`) → lb-h3 HEADERS/DATA bridge → TcpPool (H1 backend) or QuicUpstreamPool (H3 backend) → 200 OK "hello" streamed back. Six e2e tests cover handshake, shutdown, H1-backend GET, H3-backend GET, RETRY round-trip, and 0-RTT replay drop. **Pillar 3b.3b complete**: H1 and H2 L7 proxies shipped per PROMPT.md §§10/11. Alt-Svc injection, hop-by-hop stripping (RFC 9110 §7.6.1), X-Forwarded-{For,Proto,Host}, Via append, header/body/total timeouts, ALPN dispatch, per-stream LB proven by 3/3/3 distribution across 3 backends on a single H2 connection with 9 requests. **Pillar 4b-1 complete**: real 3064-byte eBPF ELF committed; `XdpLoader::load_from_bytes` + `program_names` validated; binary startup probes CAP_BPF via `caps` crate, load-and-attaches if available, logs-and-skips otherwise.
+294 → 479 tests (+185). halting-gate green through each commit. **Pillar 3b.3c complete**: a real H3 GET issued by a raw-quiche client flows through the binary's QUIC listener → InboundPacketRouter (minting RETRY via `RetryTokenSigner` on the wire, dropping 0-RTT replays via `ZeroRttReplayGuard`) → ConnectionActor (one per `quiche::Connection`) → lb-h3 HEADERS/DATA bridge → TcpPool (H1 backend) or QuicUpstreamPool (H3 backend) → 200 OK "hello" streamed back. Six e2e tests cover handshake, shutdown, H1-backend GET, H3-backend GET, RETRY round-trip, and 0-RTT replay drop. **Pillar 3b.3b complete**: H1 and H2 L7 proxies shipped per PROMPT.md §§10/11. Alt-Svc injection, hop-by-hop stripping (RFC 9110 §7.6.1), X-Forwarded-{For,Proto,Host}, Via append, header/body/total timeouts, ALPN dispatch, per-stream LB proven by 3/3/3 distribution across 3 backends on a single H2 connection with 9 requests. **Pillar 4b-1 complete**: real 3064-byte eBPF ELF committed; `XdpLoader::load_from_bytes` + `program_names` validated; binary startup probes CAP_BPF via `caps` crate, load-and-attaches if available, logs-and-skips otherwise.
 
 ## Ordered remaining work (per user correction 2026-04-23)
 
@@ -173,11 +181,16 @@ PROMPT.md §§10, 11, 28 always required hyper+h2 for HTTP/1.1 and HTTP/2. A TLS
 
 1. ~~**Pillar 3b.3c**~~ ✅ commits `d983dd3f` + `cf045248` + `882c0d7e`.
 2. ~~**Pillar 3b.3b**~~ ✅ commits `d6be8e4e` (H1) + `826760a7` (H2 + ALPN + per-stream LB + h2spec).
-3. **Pillar 4b** — 4b-1 ✅ `dec3b67b`, 4b-2 ✅ `7eeb59fa`. **4b-3 remaining (optional polish)**: SYN-cookie XDP_TX for new flows, QinQ, xtask multi-kernel verifier matrix, CAP_BPF veth-pair CI stage, SIGHUP hot map updates, TCP-option rewrite.
+3. **Pillar 4b** — 4b-1 ✅ `dec3b67b`, 4b-2 ✅ `7eeb59fa`. **4b-3 remaining (deferred)**: SYN-cookie XDP_TX for new flows, QinQ, xtask multi-kernel verifier matrix, CAP_BPF veth-pair CI stage, SIGHUP hot map updates, TCP-option rewrite.
 4. ~~**Parallel with 4b**~~:
    - ~~Step 6 fuzz corpora~~ ✅ `8e9d1887` (infrastructure + smoke; ≥1 h production burns deferred post-ship).
    - ~~Prometheus `/metrics`~~ ✅ `e6c119b4` (registry promoted + exposition endpoint + 7 instrumentation points).
    - ~~SECURITY.md cross-reference `docs/research/pingora.md`~~ ✅ `60d6f07e`.
-5. **Conformance harnesses (Step 7)** — h2spec (already-wired skip branch), Autobahn, testssl.sh, wrk2, h2load, `curl --http3` interop. Deferred to review disposition; may be required by reviewer + auditor, may be acceptable as post-ship.
-6. ~~**reviewer + auditor sign-off**~~ ✅ both PASS. Audit findings #1 + #2 resolved in `ba7bf635`; finding #3 tracked as scope.
-7. **`.review/SHIP.md`** — **user-gated**. FINAL_REVIEW §11 requires "no open gaps in docs/gap-analysis.md" before SHIP; the 2026-04-23 addendum lists residual gaps (Pillar 4b-3, Pillar 3b.4, detector wiring, per-request telemetry, Step 7 harnesses, WebSocket, gRPC upstream, TcpPool hostname re-keying, controlplane test flake). The user chooses (a) accept the residual list as v1 scope → SHIP.md with explicit acceptance note, or (b) close specific residual items first, or (c) stop here.
+5. **Conformance harnesses (Step 7)** — h2spec (skip branch in `826760a7`), Autobahn wstest (skip branch in `dc866ab8`), `grpc-health-probe` + `ghz` (skip branches in `eea6e80b`), testssl.sh / wrk2 / h2load / curl --http3 (not installed in sandbox; install-and-run is a CI concern). Deferred post-v1.
+6. ~~**Round-1 reviewer + auditor sign-off**~~ ✅ both PASS. Audit findings #1 + #2 resolved in `ba7bf635`; **finding #3 (detectors-not-wired) now closed in `6a72b64a`**.
+7. **CONTINUE.md items 1–3 closed** (user correction 2026-04-24):
+   - ~~Item 1 (H2 detectors live)~~ ✅ `6a72b64a`: 6 real-wire adversarial tests (CONTINUATION flood, Rapid Reset, SETTINGS flood, PING flood, zero-window-stall, HPACK bomb) each fire real frames at the bound listener and assert on the specific wire-level error code. Closes auditor finding #3.
+   - ~~Item 2 (WebSocket RFC 6455 + 8441)~~ ✅ `dc866ab8`: live `WsProxy` integrated into H1/H2 upgrade dispatch. 5 integration tests (echo, close-code forwarding, idle→1001, binary payload, ping/pong keepalive) + Autobahn `wstest` skip-branch.
+   - ~~Item 3 (gRPC PROMPT.md §13)~~ ✅ `eea6e80b`: live `GrpcProxy` with content-type detection + grpc-timeout clamp at 300 s + trailer forwarding + HTTP→gRPC status translation + synthesized `/grpc.health.v1.Health/Check`. 8 integration tests covering all 4 streaming modes + deadline clamp + deadline-exceeded + synth-health + status translation. `grpc-health-probe` + `ghz` skip branches.
+8. **Round-2 delta signoff** ← current step. Delta reviewer + delta auditor read Items 1/2/3 only + reconciliation commits; write appendices to `.review/reviewer-signoff.md` and `.review/auditor-signoff.md`. Both must agree.
+9. **`.review/SHIP.md`** after delta signoff — with explicit "Deferred to post-v1" section naming each remaining gap-analysis.md residual with its tracking ID.
