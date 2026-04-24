@@ -394,6 +394,19 @@ addendum records what has been closed and what remains.
 10. **FLAKE-001 — `controlplane_standalone` parallel-test flake**: SIGHUP cross-talk between parallel test binaries. Individual-binary runs pass; workspace runs occasionally fail. Non-blocking.
 11. **OBS-002 — security-family metrics**: counters for each H2/H3 detector trip (rapid_reset_tripped, continuation_flood_tripped, hpack_bomb_tripped, etc.). Hyper does the enforcement silently today; we'd need a hyper observer layer (not directly supported) or a wrapping service-fn to count wire-level errors.
 
+### Delta-audit round-2 residuals (2026-04-24)
+
+Round-2 auditor-delta signoff (`b8563799`) flagged 7 residual risks. None HIGH/CRITICAL; none blocking. Tracking IDs assigned:
+
+12. **WS-001 (MEDIUM 4.3) — WebSocket client Ping flood amplifier**: `WsProxy` forwards client Pings verbatim to the backend without rate-limiting. An abusive client can turn the gateway into a ping-flood amplifier against an upstream. Fix: window-count Pings per connection (e.g. 50/10s); on exceeded, send Close 1008 (policy violation).
+13. **WS-002 (LOW) — WebSocket slow-read TCP-buffer pinning**: A slow client can hold the upstream connection and its kernel TCP buffer until `idle_timeout` (60 s default) elapses. Bounded `mpsc(64)` limits the tungstenite-side queue but not the kernel OS buffer. Fix: shorter read timeout per frame; or explicit kernel-buffer cap via `SO_RCVBUF`.
+14. **GRPC-001 (LOW) — upstream H2 client `max_header_list_size`**: The `hyper::client::conn::http2::handshake` used by `GrpcProxy` takes hyper's default `max_header_list_size` (2 MiB). A malicious backend could send oversize trailers that transit the gateway briefly before hyper rejects. Fix: pass the listener's `max_header_list_size` setting down to the upstream client config.
+15. **GRPC-002 (LOW, spec) — malformed `grpc-timeout` silently becomes no-deadline**: `GrpcDeadline::parse` on malformed input returns `Err`; the current wiring silently drops that and forwards without deadline. Per gRPC spec, malformed header should yield INVALID_ARGUMENT. Fix: map `Err` from `GrpcDeadline::parse` to a gateway-side `grpc-status: 3 INVALID_ARGUMENT` response.
+16. **GRPC-003 (LOW, spec) — synthesized Health/Check ignores `service` field**: The gateway's synth responder returns `SERVING` unconditionally, bypassing the `service: string` request field. Per gRPC health spec, unknown services should yield `NOT_FOUND` (status 5). Fix: decode the request's `service` field; match against a configured allow-list; return `NOT_FOUND` otherwise.
+17. **TEST-001 — no dedicated test for QUIC CID-cap drop path**: `router.rs::spawn_new_connection` enforces `connections.len() >= max_connections * 2` and drops; reviewer verified the source but there's no test firing 100_001 Initials to prove the path. Fix: add `router_drops_initial_when_cap_reached` unit test with a reduced cap (e.g. max_connections=2).
+18. **TEST-002 — `ping_flood_goaway` assertion weak**: The test asserts `sent > 0` rather than a specific GOAWAY error code because hyper's PING flood response path doesn't surface a specific code over the `h2` client API. Fix: inspect raw frames via a lower-level h2 client configuration.
+19. **FLAKE-002 — `thread_safe_increment` parallel-test flake**: `crates/lb-observability/src/lib.rs::tests::thread_safe_increment` (4 threads × 1000 increments, expects 4000) passes in isolation but flakes under workspace-parallel runs. Create-race in the handle cache under high contention. In production, the registry is constructed once at startup before threads hit it, so no real-world race path; test-time-only concern. Fix: tighten the handle-cache double-check lock; or reduce test concurrency.
+
 ### Post-addendum risk table
 
 | Risk | Severity | Mitigation |
