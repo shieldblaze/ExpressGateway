@@ -282,3 +282,60 @@ None. The six closures continue the shape established in rounds 1 and 2: capabil
 reviewer (round-3 delta 2026-04-25) — **PASS**
 
 All gates green from this session's invocation; FLAKE-002 stress 20/20. The h2 0.4 `is_over_size` spot-grep confirms the teammate's HEADERS-vs-TRAILERS rewrite is grounded in the actual crate source. The TEST-001 cap-drop test fires the real `quiche::connect` Initial path against a pre-saturated DashMap with a deliberately-loud stub factory, proving both the error shape and the ordering. FLAKE-002 uses the correct `DashMap::Entry::Vacant` atomicity primitive. No HOLDs; no advisories.
+
+---
+
+## Round-4 Delta 2026-04-25 — D3-1/D3-2/D3-3
+
+- Date: 2026-04-25
+- Reviewer: reviewer-delta-4 (fresh session, round-4, independent of the round-4 auditor)
+- HEAD: `78961019b769e60302eede73ac993ba045a71af6`
+- Delta verdict: **PASS** (no blocking HOLDs; one informational advisory)
+- Commit reviewed: `78961019`
+
+### Methodology
+
+I re-read all three prior signoffs (round-1, round-2-delta, round-3-delta) so I do not duplicate prior verdicts, then walked the single round-4 closure commit via `git show 78961019` plus the source files it touched (`crates/lb/src/main.rs`, `crates/lb-l7/src/{h1_proxy,h2_proxy}.rs`, `docs/gap-analysis.md`, plus the two new integration test files). I ran the full gate stack (`cargo test --workspace --no-fail-fast`, `cargo clippy --all-targets --all-features -- -D warnings`, `cargo deny check`, `bash scripts/halting-gate.sh`) from this session and a targeted spot-grep on `tests/h2_security_live.rs::ping_flood_goaway` to validate the D3-3 doc rewrite.
+
+### Quality gates (fresh runs, this session)
+
+| Gate | Result |
+|------|--------|
+| `cargo test --workspace --no-fail-fast` | **504 passed / 0 failed / 0 ignored** (113 test-result lines; +2 vs round-3's 502 — `binary_proto_routing` + `h1_rejects_grpc`) |
+| `cargo clippy --all-targets --all-features -- -D warnings` | clean |
+| `cargo deny check` | `advisories ok, bans ok, licenses ok, sources ok` (two unchanged `license-not-encountered` warnings) |
+| `bash scripts/halting-gate.sh` | `PROJECT COMPLETE — halting gate green. Artifacts: 141/141. Tests: 59/59. Manifest: OK.` |
+
+### Per-deliverable verdict
+
+| ID | Subject | Verdict | Evidence |
+|----|---------|:-------:|----------|
+| D3-1 | binary protocol-routing wiring | **PASS** | `crates/lb/src/main.rs:262` `parse_upstream_proto` (tcp/h1→H1, h2→H2, h3→H3, else error). `:277` `build_upstream_backends` enforces non-empty backends + length match, fills `sni` from host portion for H3 backends only. `:331` `build_h2_upstream_pool` maps `H2SecurityConfig::{max_concurrent_streams, initial_stream_window_size, keep_alive_interval_ms, keep_alive_timeout_ms}` onto `Http2PoolConfig`. `:364` `build_h3_upstream_pool` constructs an `Arc<dyn Fn() -> Result<quiche::Config, quiche::Error>>` factory installing `b"lb-quic"` ALPN; `verify_peer(false)` honestly noted in doc-comment as v1 limitation. Call-sites: `"h1"` arm at `:674-679`; `"h1s"` arm at `:712-722` shares one (h2_pool, h3_pool) pair across both proxies via `clone()`. New tracing fields `upstream_h2 / upstream_h3` reflect partition outcome. `tests/binary_proto_routing.rs` builds an `LbConfig` with mixed h1+h2 backends, runs `lb_config::validate_config`, builds the same upstream vector via the public `lb_l7::upstream::*` API, attaches an `Http2Pool`, and asserts `proxy.has_h2_upstream() == true` AND `proxy.has_h3_upstream() == false` AND the round-robin picker yields `(H1, addr0) → (H2, addr1) → (H1, addr0)` proving both wiring + protocol-tagging + cycling. The test is forced to mirror `parse_upstream_proto` (the binary's helpers are private to the `[[bin]]` crate) — that's the right test architecture given the seam. |
+| D3-2 | gRPC over H1 → 415 | **PASS** | `crates/lb-l7/src/h1_proxy.rs:332-348` short-circuits any inbound request whose `Content-Type` header starts with `application/grpc`, returning `StatusCode::UNSUPPORTED_MEDIA_TYPE` with body `"gRPC requires HTTP/2; this listener is HTTP/1.1"`. The reject sits **before** the WS upgrade check (`:351`), the hop-by-hop strip (`:362`), and the picker call (`:368-370`) — confirming "before backend dispatch". `tests/h1_rejects_grpc.rs` spawns a real witness backend tracking an `AtomicBool::contacted`, configures the gateway with that backend as the sole H1 upstream, opens a real H1 connection via `hyper::client::conn::http1::handshake`, POSTs `application/grpc+proto`, asserts `StatusCode::UNSUPPORTED_MEDIA_TYPE`, asserts body contains `"gRPC requires HTTP/2"`, then sleeps 50ms and asserts `!contacted.load(SeqCst)` — proves the path is short-circuit, not pass-through. The H2 listener's `is_grpc_request` → `GrpcProxy` dispatch in `h2_proxy.rs` is unchanged (diff confirms). New `has_h2_upstream()` / `has_h3_upstream()` accessors on H1Proxy + H2Proxy are `const fn` getters with `#[must_use]` — clean. |
+| D3-3 | TEST-002 doc rewrite | **PASS** | `docs/gap-analysis.md:401` rewrite is accurate. Spot-check on `tests/h2_security_live.rs::ping_flood_goaway` (line 392): the test uses raw `write_frame(&mut tls, 0x06, 0x00, 0, &payload)` at line 409 — type 0x06 = PING — and does NOT use any `h2::client::*` API for the flood path (the surrounding `h2::client::handshake` calls at 297/368 are in OTHER tests in the file). The new rationale correctly names the actual gap: a raw-frame *reader* would be needed to decode the `GOAWAY ENHANCE_YOUR_CALM` (error code 0x0b) the server emits, OR an h2 upstream API change. The previous wording ("h2::Error::reason() returns None") was technically not the limit-causing primitive in this specific test (the test doesn't touch `h2::Error` at all); the new wording is grounded in the actual test source. Classification stays `deferred-with-rationale` per the user's "tested but coverage could be higher → defer" rule. |
+
+### HOLD items
+
+**None.** One informational advisory:
+
+| # | Severity | Description | Suggested fix | Owner |
+|---|:--------:|-------------|---------------|-------|
+| E1 | informational | The H3 upstream config-factory in `build_h3_upstream_pool` is a hard-coded `verify_peer(false)` plaintext dial config — the doc-comment honestly tracks this as a v1 limitation routed to `docs/gap-analysis.md`. Per spec the wiring must close the **routing seam** (the binary partitions backends by protocol and constructs pools); the TLS hardening of those H3 dials is a separate gap. The commit body, doc-comment, and Cargo.toml note all align on this. Non-blocking; just flagged so the auditor can decide whether to re-track as a separate ID. | If desired, assign a new tracking-ID (e.g. `H3-UPSTREAM-TLS-001`) and add an entry to `gap-analysis.md` referencing `crates/lb/src/main.rs:364`. | h3-eng |
+
+### Commendations
+
+1. **The `binary_proto_routing` test acknowledges the `[[bin]]`-import constraint correctly.** The module doc explicitly notes "The binary's private helpers cannot be imported from an integration test… so we replicate the small partition + construction logic here against the same public building blocks." That's the right test architecture for a binary — the test exercises the public API (`UpstreamBackend`, `RoundRobinUpstreams`, `Http2Pool`, `H1Proxy::with_multi_proto`) that the binary itself uses, with a comment pinning the mirror to the binary helper name (`parse_proto` → `parse_upstream_proto`). When the binary helper drifts, this comment guides the maintainer to the corresponding test mirror.
+
+2. **The H1 gRPC reject test asserts on three independent post-conditions.** `tests/h1_rejects_grpc.rs` asserts (i) the wire status code (415), (ii) the body text ("gRPC requires HTTP/2"), and (iii) the witness backend's `AtomicBool::contacted` remained `false` after a 50ms settle window. Together these prove the reject is short-circuit AND has the correct wire shape AND has an actionable error message — three orthogonal claims, all verified. The `tokio::time::sleep(50ms)` before the contacted-check is the right shape for proving a negative (gives any racing backend dial a window to land before the assertion).
+
+3. **The H1Proxy `has_h2_upstream() / has_h3_upstream()` accessors are `const fn` + `#[must_use]`.** Both accessors compile to a single field load and cannot be silently discarded by an integration test — minimal surface area, maximum honesty. Same shape applied to H2Proxy. Future protocol additions (e.g. WebTransport) plug into the same accessor template.
+
+### Systemic concerns
+
+None. D3-1 closes the binary-side wiring seam that round-3 PROTO-001 surfaced as a per-listener integration test only — the binary now uses the same `UpstreamBackend` + `RoundRobinUpstreams` + `Http2Pool` / `QuicUpstreamPool` building blocks the round-3 e2e tests proved out, threaded into both H1 and H2 ALPN paths. D3-2 closes a concrete operator-DX gap (gRPC misroute → 415 with clear message). D3-3 corrects a doc inaccuracy without changing tree behaviour. The shape continues the pattern established in rounds 1-3: capability check at the front of the dispatch path, builder-with-fluent-knobs on the host proxy, real-wire integration test with three independent post-conditions.
+
+### Signature
+
+reviewer (round-4 delta 2026-04-25) — **PASS**
+
+All four gates green from this session's invocation. The D3-1 binary helpers exist + are called from BOTH h1 and h1s spawn paths (h2/h2s served via the h1s ALPN dispatch path per `lb_config`'s listener-protocol enum); the proxy types expose observable wiring via `has_h2_upstream()`. The D3-2 gRPC reject fires before the WS upgrade check, before hop-by-hop stripping, and before `picker.pick_info()` — verified at `crates/lb-l7/src/h1_proxy.rs:332-348` against the dispatch `:368-370`. The D3-3 doc rewrite accurately describes the `tests/h2_security_live.rs::ping_flood_goaway` test mechanics (raw `write_frame` writer, no h2 client API in the flood path). One informational advisory (E1: H3 upstream `verify_peer(false)` honestly tracked as v1 limitation) does not block.
