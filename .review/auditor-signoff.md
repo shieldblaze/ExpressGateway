@@ -201,3 +201,82 @@ signoff intentionally NOT read.
 auditor (delta 2026-04-24) — **PASS** with 7 residual risks (D-1..D-7),
 0 HOLD-blocking, 0 HIGH/CRITICAL.
 
+---
+
+## Round-3 Delta 2026-04-25 — closure-commit audit
+
+- Date: 2026-04-25
+- Auditor: auditor-delta-3 (fresh session, no coordination with reviewer-delta-3)
+- HEAD: `da1ef384176e3b7d77d2128740617b387cbcb3ec`
+- Delta verdict: **PASS**
+- Commits audited: `2fac6bec` (WS-001), `7954b5ba` (PROTO-001), `22a4f5a5`
+  (WS-002 + GRPC-001/002/003), `1fdfeb10` (TEST-001), `7c1d9f99`
+  (TEST-002 reclassify), `da1ef384` (FLAKE-002).
+
+Methodology: independent walk of each closure commit's diff and the
+files it touched; round-2 D-1..D-7 closure verification first, then
+PROTO-001 a–e attack-surface walk, finally always-on (panic-free,
+unsafe count, cargo deny, trufflehog, halting-gate, workspace tests).
+Reviewer-delta-3 sign-off intentionally NOT read.
+
+### Round-2 findings closure verification
+
+| ID (round-2) | Tracking ID | Closed by | Evidence | Verdict |
+|---|---|---|---|---|
+| D-4 | **WS-001** | `2fac6bec` | `crates/lb-l7/src/ws_proxy.rs:208-269` — `client_ping_log: VecDeque<Instant>` per connection; on `Message::Ping` the loop pops expired entries and emits `Close 1008` Policy when `> ping_max`. Default 50 / 10 s mirrors `lb_h2::PingFloodDetector`. Test `ws_ping_flood_closes_with_1008` (tests/ws_proxy_e2e.rs) drives 10 Pings vs configured 5, observes Close 1008 within bound. | **CLOSED**. |
+| D-3 | **WS-002** | `22a4f5a5` | `crates/lb-l7/src/ws_proxy.rs` — added `read_frame_timeout` (default 30 s); per-direction watchdog wrapping `select!` with `tokio::time::timeout`; on stuck read emits `Close 1008 "ws read frame timeout"` and shuts upstream. Test `ws_read_frame_timeout_closes_with_1008` exercises the path. Bounds per-peer kernel-TCP/tungstenite-buffer dwell. | **CLOSED**. |
+| D-5 | **GRPC-001** | `22a4f5a5` | `crates/lb-l7/src/grpc_proxy.rs:236-237` — upstream H2 client's `hyper::client::conn::http2::Builder::max_header_list_size(self.max_header_list_size)` set BEFORE handshake; `DEFAULT_UPSTREAM_MAX_HEADER_LIST_SIZE = 64 * 1024` mirrors listener `H2SecurityThresholds`. Configurable via `with_max_header_list_size`. Test `grpc_upstream_oversize_trailer_rejected_by_gateway` drives the wire path. | **CLOSED**. |
+| D-6 | **GRPC-002** | `22a4f5a5` | `grpc_proxy.rs:312-360` — new `ParsedTimeout::{Absent, Ok, Malformed}` enum; `parse_and_clamp_grpc_timeout` distinguishes the three. On `Malformed(raw)` the forward path returns `grpc_error_response(GrpcStatus::InvalidArgument, …)` WITHOUT dialing the backend. Test `grpc_malformed_timeout_returns_invalid_argument` exercises. Spec-compliant per gRPC `Timeout` ABNF. | **CLOSED**. |
+| D-7 | **GRPC-003** | `22a4f5a5` | `grpc_proxy.rs:445-528` — `decode_health_check_service` hand-decodes the body's gRPC frame header + tag-1 length-delimited string (no prost). Bounds-checked at every step (`checked_add`, `i..end > payload.len()` returns empty service, `from_utf8` on the byte slice). Empty service → `health_check_serving_response()`; non-empty → `grpc-status: 5 NOT_FOUND` per grpc-health spec. Tests `grpc_health_check_overall_serving` + `grpc_health_check_unknown_service_not_found`. | **CLOSED**. |
+| D-1 | **TEST-001** | `1fdfeb10` | `crates/lb-quic/src/router.rs:409-523` — `router_drops_initial_when_cap_reached` prefills the `DashMap` with `2 * max_connections = 4` placeholder senders (`max_connections=2`), mints a real Initial via `quiche::connect`, calls `spawn_new_connection` directly, asserts `Err("router at max_connections")` and unchanged `connections.len() == 4`. Stub `config_factory` returns `TlsFail` so any factory invocation would fail loudly with a different error — proves the cap-check returns BEFORE factory call. | **CLOSED** (well-targeted: invariant + early-return-before-side-effect). |
+| D-2 | **TEST-002** | `7c1d9f99` (reclassified) | `tests/h2_security_live.rs:392-427` exercises the path via hand-rolled raw-frame writes and asserts `sent > 0` + no crash. Reclassification rationale (h2 0.4 `SendRequest` does not surface GOAWAY error_code post-teardown) is **partly inaccurate**: `h2::Error::reason() -> Option<Reason>` (h2-0.4.13 src/error.rs:52) DOES return `Some(Reason)` for `Kind::GoAway`, plus `is_go_away()` / `is_remote()` exist (lines 89-106). HOWEVER the test in question doesn't use `SendRequest` at all — it writes raw frames — so the rationale chosen for the gap-analysis entry doesn't match the test. The path IS exercised end-to-end (server doesn't crash, sent>0); a strict GOAWAY-reason assertion would require a frame reader on the test's TLS socket (parse for type=0x07 GOAWAY, last_stream_id, error_code=ENHANCE_YOUR_CALM=0x0b). Author chose to defer this incremental coverage. | **CLOSED** as deferred-with-rationale, with an honesty nit (D-3-1) below. |
+| — | **FLAKE-002** | `da1ef384` | `crates/lb-observability/src/lib.rs` — `MetricsRegistry::counter` (and `counter_vec` / `histogram` / `histogram_vec` / `gauge`) now go through `DashMap::entry(name).or_insert_with`-style branch on cache miss. The `Entry::Vacant` arm holds the shard write-lock so `prometheus::Registry::register` runs exactly once per name; concurrent first-callers observe `Entry::Occupied` and clone. Eliminates the `Err(AlreadyReg)` race that dropped increments. Author claims pre-fix 49/50 PASS → post-fix 50/50. | **CLOSED**. |
+
+### PROTO-001 new attack-surface verdict
+
+| ID | Threat | Verdict | Evidence |
+|----|--------|---------|----------|
+| a | H2 backend TLS verification posture | **PASS-with-disclosed-gap** | `crates/lb-io/src/http2_pool.rs` doc-comment lines 35-38 explicitly state the upstream H2 path is **plaintext only**: "TLS termination on the upstream side... PROTO-001's e2e tests run plaintext H2 backends; production H2 backends behind TLS will need ALPN-aware dial machinery, which is OUT-OF-SCOPE for v1." `Http2Pool::dial_and_handshake` (lines 256-288) calls `Builder::handshake(TokioIo::new(stream))` over a raw TCP stream from `TcpPool::acquire`. No `rustls::ClientConfig`, no SNI, no cert verification. This is a deliberate v1 limitation — backends-behind-TLS were never claimed. Tracked as residual D3-1 below. |
+| b | H3 backend SNI handling | **PASS** | `UpstreamBackend::h3(addr, sni)` (`crates/lb-l7/src/upstream.rs:88-94`) requires SNI; `UpstreamProto::H1`/`H2` ignore the field. `request_h3_upstream` (`crates/lb-quic/src/h3_bridge.rs:348-367`) takes `sni: &str` and forwards it to `QuicUpstreamPool::acquire(addr, sni)` (`crates/lb-io/src/quic_pool.rs:250`), which passes it as `Some(sni)` to `quiche::connect` (line 356). Cert verification depends on the caller-supplied `config_factory`; the e2e tests (`tests/proto_translation_e2e.rs:341-342`) use `verify_peer(true)` + `load_verify_locations_from_file(ca_path)`, demonstrating the pool honours real-cert paths when configured. Module doc-comment lines 21-29 makes this responsibility explicit. |
+| c | Cross-protocol header injection (hop-by-hop strip in live e2e path) | **PASS** | `H1Proxy::handle` (`crates/lb-l7/src/h1_proxy.rs:337`) and `H2Proxy::handle` (`crates/lb-l7/src/h2_proxy.rs:318`) call `strip_hop_by_hop(&mut parts.headers)` BEFORE the `match backend.proto` dispatch, so the H1↔H2, H1↔H3, H2↔H3 paths all see headers post-strip. The strip removes Connection / Keep-Alive / Proxy-Authenticate / Proxy-Authorization / TE / Trailers / Transfer-Encoding / Upgrade plus any tokens listed inside the Connection header value (`h1_proxy.rs:677-697`). Tested by `hop_by_hop_headers_stripped_from_request` (h1_proxy.rs:1007) and `h2_proxy_hop_by_hop_stripped` (h2_proxy.rs:876). gRPC dispatch happens before strip but the H2 codec's RFC 9113 §8.1.2.2 enforcement at hyper's frame layer rejects connection-specific headers anyway, so an H2 gRPC client cannot smuggle Upgrade/Connection through. |
+| d | Backend protocol confusion (H1 client + H1-config + Upgrade: h2c) | **PASS** | `Upgrade` is in `HOP_BY_HOP` (h1_proxy.rs:62). An H1 client sending `Upgrade: h2c\r\nConnection: Upgrade, HTTP2-Settings\r\nHTTP2-Settings: …` first has its `Connection` token list parsed (h1_proxy.rs:680-688) → `HTTP2-Settings` and `Upgrade` are added to the strip set, then `HOP_BY_HOP` removes both `Connection` and `Upgrade` themselves. The hyper H1 client (`proxy_request` line 380) never sees the upgrade tokens. The WebSocket upgrade path (line 322) gates on `is_h1_upgrade_request` which requires `Upgrade: websocket` AND `Connection: upgrade` — `h2c` does not match. Confirmed: an H1 client targeting an H1 backend cannot forge an H2 prior-knowledge handshake on the upstream pool. |
+| e | gRPC over H1 listener (should reject; PROMPT.md §13 mandates H2/H3) | **PASS-with-caveat** | `is_grpc_request` is invoked exclusively from `H2Proxy::handle` (h2_proxy.rs:283); `H1Proxy::handle` has zero references to gRPC (verified by grep). A POST `application/grpc` arriving at an H1 listener is forwarded as an opaque H1 body to the backend — no gateway-level gRPC processing (no deadline clamp, no health synthesis, no trailer rewrite). This is *not* a strict reject (no 415 / 400) — it's transparent H1 forwarding. PROMPT.md §13 says gRPC needs H2/H3; the gateway honours that by only attaching `GrpcProxy` to `H2Proxy`. Operators who terminate H1 in front of a gRPC backend get H1 transparent forwarding rather than gateway gRPC features. Acceptable for v1, but worth documenting. Tracked as residual D3-2. |
+
+### New HOLD items (delta)
+
+**None blocking.** No HIGH or CRITICAL severity reached. Three residual
+risks below are LOW-to-MEDIUM and are documented in
+`docs/gap-analysis.md` (or now flagged for a follow-up entry).
+
+### Residual risks after round-3
+
+| ID | Severity | CVSSv3 | Description | Suggested fix |
+|----|----------|--------|-------------|----------------|
+| D3-1 | MEDIUM | 4.3 AV:N/AC:H/PR:N/UI:N/S:U/C:L/I:L/A:N | `Http2Pool` dials upstream H2 in PLAINTEXT only. A backend that requires TLS (e.g. Google Cloud-style ALB-to-internal-service H2 with TLS) is unreachable; an operator who *thinks* the upstream is encrypted will get plaintext. The module doc explicitly discloses this, and the tests use plaintext, but the binary's config validator does not reject `protocol = "h2"` + `tls = true`-shaped expectations. Risk is lower than it looks: there is no v1 binary wiring of `UpstreamProto::H2` at all (`grep -n 'Http2Pool\|UpstreamProto' crates/lb/src/main.rs` returns 0 hits). PROTO-001 ships the library API and e2e tests; binary-side wiring is a separate item. | Add a TLS variant to `Http2Pool` using `rustls::ClientConfig` with ALPN `h2`, plus a config-validator check that disallows `protocol = "h2"` until that path lands. |
+| D3-2 | LOW | 3.1 N/A | gRPC over H1 listener silently transparent-forwards instead of rejecting. PROMPT.md §13 mandates H2/H3 for gRPC; v1 doesn't enforce a 415 at the H1 listener. Operator misconfiguration risk; not exploitable. | Either reject `application/grpc` at the H1 listener with `415 Unsupported Media Type`, or document the behaviour explicitly in `CONFIG.md`. |
+| D3-3 | LOW | N/A | `7c1d9f99` reclassification rationale invokes "h2 0.4 `SendRequest` does not surface GOAWAY error_code post-teardown" but the test in question (`ping_flood_goaway`) does not use `SendRequest` at all — it writes raw frames. The actual h2 API surface (`h2::Error::reason() -> Option<Reason>` for `Kind::GoAway`, plus `is_go_away()` / `is_remote()`) does carry the GOAWAY reason for client-error returns. The path *is* tested end-to-end and the deferral is reasonable, but the reasoning paragraph in `docs/gap-analysis.md` should be edited to say "the test writes raw frames; reading raw frames back to assert GOAWAY ENHANCE_YOUR_CALM is incremental coverage worth tracking but not a missing test". Honesty nit, not a security concern. | Edit the TEST-002 description in `docs/gap-analysis.md` to remove the inaccurate `SendRequest` claim. |
+| D3-4 | LOW | 3.1 | Workspace test sweep ran 502 tests / 0 failed in this session. FLAKE-002 author's claim of "pre-fix 49/50 PASS, post-fix 50/50" was not independently re-stress-tested by the auditor (50 sequential runs would take significant time). The fix is sound by construction (DashMap entry guards serialise the create-and-register), so the residual risk is purely coverage. | Optional: a CI sweep (`for i in $(seq 50); do cargo test -p lb-observability thread_safe_increment; done`) on a future cadence. |
+
+Round-2 residuals D-3..D-7 + D-1 + D-2 are fully closed by the round-3
+commits. Round-1 residuals D-1 (CID-cap), D-2 (ZeroRTT keyed hash),
+D-3 (detector wiring) all already closed in round-2. Outstanding
+non-PROTO-001 gap-analysis items (XDP-ADV-001, H3-INTEROP-001,
+OBS-001/002, HARNESS-001, POOL-001, FLAKE-001) are unchanged and
+deliberately deferred per `SHIP.md`.
+
+### Always-on checks
+
+| Check | Result |
+|-------|--------|
+| `cargo test --workspace --no-fail-fast` | **502 passed / 0 failed / 0 ignored** in this session |
+| `cargo deny check` | **ok** (advisories ok, bans ok, licenses ok, sources ok; same harmless `unmatched license allowance` warnings as round-2) |
+| `/tmp/bin/trufflehog git --only-verified` | `chunks 13748, bytes 25413619, verified_secrets 0, unverified_secrets 0` |
+| `bash scripts/halting-gate.sh` | **GREEN** (Artifacts 141/141, Tests 59/59, Manifest OK) |
+| `unsafe` count | **20** (16 blocks + 4 `unsafe fn`) — **unchanged from round-1/2**. `git diff 8e9a37b7..da1ef384` finds zero new `unsafe` keyword additions in any of the 6 closure commits. SAFETY comments unaffected. |
+| Panic-free in production code | Crate-root `#![deny(clippy::unwrap_used, expect_used, panic, indexing_slicing, todo, unimplemented, unreachable)]` enforced (sample: `crates/lb-l7/src/lib.rs:2-11`); halting-gate AWK-skip pass GREEN. New code in 6 commits inspected manually: `Http2Pool` uses `?`/`map_err`/`ok_or_else` consistently; `decode_health_check_service` is bounds-checked at every step; `parse_and_clamp_grpc_timeout` uses let-else; FLAKE-002 fix uses `Entry::Vacant`/`Entry::Occupied` pattern with no `.unwrap()`. |
+
+### Signature
+
+auditor (round-3 delta 2026-04-25) — **PASS** with 4 residual risks
+(D3-1..D3-4), 0 HOLD-blocking, 0 HIGH/CRITICAL.
+
