@@ -393,3 +393,56 @@ None. D4-1 + D4-2 close a real RFC-compliance gap (case-insensitivity per RFC 72
 reviewer-delta-5 (round-5 delta 2026-04-25) — **PASS**
 
 All four gates green from this session's invocation (516 tests, 0 failures, clippy clean, deny clean, halting-gate green). D4-1 + D4-2 fix verified at `crates/lb-l7/src/h1_proxy.rs:347-359` with 4 new test cases covering uppercase + charset-param + bare-grpc-web + grpc-web+proto. D4-4 fix verified at `crates/lb/src/main.rs:384-432` (factory + validator + listener-mismatch gate) with 8 new tests covering all five validator arms + default-true serde. D4-3 + D4-5 deferral entries verified at `docs/gap-analysis.md:407` and `:409` with concrete v2 closure paths. Zero HOLDs, zero advisories.
+
+---
+
+## Round-6 Delta 2026-04-25
+
+- Reviewer: `reviewer-delta-6`
+- Commit reviewed: `8f0dbdac` — Close D5-1 + defer D5-2: H3 upstream pool validator unit tests
+- HEAD: `8f0dbdac`
+
+### Methodology
+
+I read the five prior signoff blocks (round-1, round-2-delta, round-3-delta, round-4-delta, round-5-delta) so I do not duplicate prior verdicts, then walked the single round-6 closure commit `8f0dbdac` via `git show 8f0dbdac` end-to-end. Per the round-6 charter I did NOT read auditor signoff. Two surfaces touched: (a) `crates/lb/src/main.rs:1307-1371` — new `tests` module with 5 `#[test]` fns, (b) `docs/gap-analysis.md:411-415` — new "Delta-audit round-5 residuals" section with D5-1 marked closed and D5-2 carried as deferred-with-rationale. I ran the full gate stack from this session.
+
+### Quality gates (fresh runs, this session)
+
+| Gate | Result |
+|------|--------|
+| `cargo test -p lb tests::build_h3_upstream_pool` | **5 passed / 0 failed** — `rejects_empty_backend_list`, `accepts_uniform_verify_off_without_ca`, `rejects_mismatched_ca_path`, `rejects_mismatched_verify_peer`, `rejects_verify_without_ca` |
+| `cargo test --workspace --no-fail-fast` | **521 passed / 0 failed / 0 ignored** (+5 vs round-5's 516, matching the commit's stated `+5 unit tests in lb binary crate`) |
+| `cargo clippy --all-targets --all-features -- -D warnings` | clean |
+| `cargo deny check` | `advisories ok, bans ok, licenses ok, sources ok` (two unchanged `license-not-encountered` warnings only) |
+| `bash scripts/halting-gate.sh` | `PROJECT COMPLETE — halting gate green. Artifacts: 141/141. Tests: 59/59. Manifest: OK.` |
+
+### Per-deliverable verdict
+
+| ID | Subject | Verdict | Evidence |
+|----|---------|:-------:|----------|
+| D5-1 | 5 unit tests for `build_h3_upstream_pool` validator branches in lb binary crate | **PASS** | `crates/lb/src/main.rs:1307-1371` adds `#[cfg(test)] mod tests`. The five tests map 1:1 to the five validator arms: (1) `rejects_mismatched_verify_peer` — two H3 backends, both with same CA but `verify=true` vs `verify=false`, asserts error contains `"must share tls_verify_peer"`; (2) `rejects_mismatched_ca_path` — two H3 backends with different CA paths but same verify, asserts error contains `"must share"`; (3) `rejects_empty_backend_list` — empty slice, asserts `"zero H3 backends"`; (4) `rejects_verify_without_ca` — single H3 backend with `verify=true, ca=None`, asserts `"requires tls_ca_path"`; (5) `accepts_uniform_verify_off_without_ca` — two H3 backends with `verify=false, ca=None`, asserts the call succeeds via `.unwrap()`. The helper `h3_backend(address, ca, verify)` constructs canonical `BackendConfig` with `protocol="h3"`. All five run in 0.00s with `5 passed; 0 failed`. The five tests cover the five distinct early-return branches in the validator (empty-list bail, listener-uniform mismatch on `verify_peer`, listener-uniform mismatch on `ca_path`, verify-without-ca bail, positive path) — the test count is exact, not redundant, not under-covered. |
+| D5-2 | H3 upstream CA bundle loaded on every dial — deferred-with-rationale | **PASS** | `docs/gap-analysis.md:411-415`. The new "Delta-audit round-5 residuals" section quotes the auditor's exact phrase `"Acceptable per operator-trusted threat model"` (verbatim, in quotes — verified character-for-character against the round-6 charter's reference). Rationale is concrete: (a) operator owns the CA file, (b) symmetric failure mode with missing backend (both are operator-introduced post-deploy errors surfacing as connection failures), (c) consistent with existing on-disk-artifact loaders — TLS cert files for the TLS-over-TCP listener and retry secrets are also lazy/just-in-time-loaded, so D5-2 closure would be a uniform refactor across all file-backed loaders, not an isolated H3 fix. Closure path named (eager parse + cache at startup, with config-reload coupling). Tracked for v2. The deferral is honest — the entry does not claim D5-2 is harmless, it claims D5-2 is consistent-with-policy and refactor-scope-of-its-own. |
+
+### HOLD items
+
+**None.** Zero HOLDs this round. The round-5 advisory (D5-1 LOW — validator branches lacked test coverage at the level the gap was discovered) is now closed by the 5 new tests in `crates/lb/src/main.rs::tests`. D5-2 carries forward as honestly-deferred with the auditor's own rationale verbatim, so it is no longer an advisory but a tracked-v2 item.
+
+### Commendations
+
+1. **The 5-test surface in the lb binary crate is the right level of coverage.** The validator at `crates/lb/src/main.rs::build_h3_upstream_pool` lives in a binary crate (no `lib.rs` to import from), so the tests can't be in an external `tests/` integration directory — they have to be `#[cfg(test)] mod tests` in `main.rs` to use `super::*`. The commit chose the right shape: tests live where the function lives, no contrived re-export gymnastics. The helper `h3_backend(address, ca, verify)` keeps each test body to 4-5 lines, so the branch under test is the salient detail in every case.
+
+2. **Test names encode the branch under test.** `rejects_mismatched_verify_peer`, `rejects_mismatched_ca_path`, `rejects_empty_backend_list`, `rejects_verify_without_ca`, `accepts_uniform_verify_off_without_ca` — every name is `<verb>_<branch>` form, so a test failure in CI immediately tells the operator which validator arm regressed. This matches the round-5 `h3_upstream_verify.rs` test naming style.
+
+3. **Each test asserts a substring of the error message, not the full string.** `err.to_string().contains("must share tls_verify_peer")` not `err.to_string() == "..."`. This is the right discipline: tests pin the diagnostic content (operators search logs by substring) without locking the exact phrasing (so a future "improve error message" PR doesn't trip the test). The `expected mismatch error, got: {err}` failure message embeds the actual error in the panic, so a regression debug doesn't require a rerun under `--nocapture`.
+
+4. **D5-2 deferral cites the auditor's verbatim verdict.** `docs/gap-analysis.md:415` puts `"Acceptable per operator-trusted threat model"` in literal quotes. This is the highest-integrity form of deferral — the gap-analysis entry doesn't paraphrase the auditor (which would risk softening), it reproduces the auditor's actual sign-off language, so a future reviewer (or auditor delta) reading only `docs/gap-analysis.md` sees the same words the auditor signed off on.
+
+### Systemic concerns
+
+None. Round-6 is a tight closure: one HIGH-precision residual closed (5 tests, 5 branches, 1:1 mapping), one LOW deferred-with-rationale carried with the auditor's own words. The shape continues round-1..round-5: surface the gap, close at the level the gap was discovered (here: validator-level unit tests in the binary crate), document deferral with concrete v2 closure path. Test count progression 504 → 516 → 521 is monotonic and traceable to the spec ("+5 unit tests in lb binary crate"). All four gates green. Halting-gate manifest unchanged at 141/141, 59/59 — the new tests are unit tests in an existing crate, not new artifacts.
+
+### Signature
+
+reviewer-delta-6 (round-6 delta 2026-04-25) — **PASS**
+
+All four gates green from this session's invocation (521 tests, 0 failures, clippy clean, deny clean, halting-gate green). D5-1 closure verified at `crates/lb/src/main.rs:1307-1371` with 5 new tests covering all five validator arms (`rejects_mismatched_verify_peer`, `rejects_mismatched_ca_path`, `rejects_empty_backend_list`, `rejects_verify_without_ca`, `accepts_uniform_verify_off_without_ca`); targeted run `cargo test -p lb tests::build_h3_upstream_pool` returns `5 passed; 0 failed`. D5-2 deferral entry verified at `docs/gap-analysis.md:415` quoting auditor's verbatim `"Acceptable per operator-trusted threat model"` rationale and naming the consistency with TLS cert files + retry secrets (other lazy on-disk loaders). Zero HOLDs, zero advisories. Round-6 PASS.
