@@ -339,3 +339,57 @@ None. D3-1 closes the binary-side wiring seam that round-3 PROTO-001 surfaced as
 reviewer (round-4 delta 2026-04-25) — **PASS**
 
 All four gates green from this session's invocation. The D3-1 binary helpers exist + are called from BOTH h1 and h1s spawn paths (h2/h2s served via the h1s ALPN dispatch path per `lb_config`'s listener-protocol enum); the proxy types expose observable wiring via `has_h2_upstream()`. The D3-2 gRPC reject fires before the WS upgrade check, before hop-by-hop stripping, and before `picker.pick_info()` — verified at `crates/lb-l7/src/h1_proxy.rs:332-348` against the dispatch `:368-370`. The D3-3 doc rewrite accurately describes the `tests/h2_security_live.rs::ping_flood_goaway` test mechanics (raw `write_frame` writer, no h2 client API in the flood path). One informational advisory (E1: H3 upstream `verify_peer(false)` honestly tracked as v1 limitation) does not block.
+
+---
+
+## Round-5 Delta 2026-04-25
+
+- Reviewer: `reviewer-delta-5` (fresh session, read-only review per Task #14)
+- HEAD: `017ef15a10372f5098d1977ad865b722f1515e4c`
+- Delta verdict: **PASS** (no blocking HOLDs; zero advisories)
+- Commit reviewed: `017ef15a` — Round-4 D4-1/D4-2/D4-4 closure + D4-3/D4-5 deferral
+
+### Methodology
+
+I read the four prior signoff blocks (round-1 through round-4-delta) so I do not duplicate prior verdicts, then walked the single round-5 closure commit `017ef15a` via `git show --stat 017ef15a` and re-read each touched surface end-to-end: `crates/lb-l7/src/h1_proxy.rs` (D4-1 + D4-2 predicate), `crates/lb-config/src/lib.rs` (BackendConfig knob additions), `crates/lb/src/main.rs` (D4-4 H3 pool factory wiring + validator gate + listener-mismatch enforcement), `tests/h1_rejects_grpc.rs` (4 new test cases per spec), `tests/h3_upstream_verify.rs` (8 new tests per spec), and `docs/gap-analysis.md` rows 19-20 (D4-3 + D4-5 deferral rationales). I ran the full gate stack from this session.
+
+### Quality gates (fresh runs, this session)
+
+| Gate | Result |
+|------|--------|
+| `cargo test --workspace --no-fail-fast` | **516 passed / 0 failed / 0 ignored** (+12 vs round-4's 504: +4 in `h1_rejects_grpc` for D4-1/D4-2 + 8 new in `h3_upstream_verify` for D4-4) |
+| `cargo clippy --all-targets --all-features -- -D warnings` | clean |
+| `cargo deny check` | `advisories ok, bans ok, licenses ok, sources ok` (two unchanged `license-not-encountered` warnings only) |
+| `bash scripts/halting-gate.sh` | `PROJECT COMPLETE — halting gate green. Artifacts: 141/141. Tests: 59/59. Manifest: OK.` |
+
+### Per-deliverable verdict
+
+| ID | Subject | Verdict | Evidence |
+|----|---------|:-------:|----------|
+| D4-1 | H1 gRPC reject — case-insensitive predicate | **PASS** | `crates/lb-l7/src/h1_proxy.rs:347-359` predicate splits on `;`, trims, `.to_ascii_lowercase()`, then matches `media_type == "application/grpc" || media_type.starts_with("application/grpc+")`. The `;`-split + trim handles `application/grpc; charset=utf-8`; the `to_ascii_lowercase` handles `application/GRPC` per RFC 7231 §3.1.1.1 (media types are case-insensitive). New test at `tests/h1_rejects_grpc.rs:230` (`h1_rejects_grpc_uppercase_with_415`) and `:249` (`h1_rejects_grpc_with_charset_param_with_415`) cover both vectors with real-wire H1 POST + AtomicBool witness-backend non-contact assertion. |
+| D4-2 | H1 gRPC reject — `grpc-web` carve-out | **PASS** | Same predicate at `:347-359` uses `application/grpc+` (with literal `+`) for the prefix arm, NOT `application/grpc-` — so `application/grpc-web` (hyphen) and `application/grpc-web+proto` flow through to the H1 forward path unchanged. New tests at `tests/h1_rejects_grpc.rs:272` (`h1_passes_grpc_web_through`) and `:291` (`h1_passes_grpc_web_proto_through`) assert NOT 415 and assert backend.contacted == true (transparent forward). The fix is the right shape: the `+` boundary is what RFC 6838 §4.2.8 defines as the structured-syntax-suffix delimiter, so this matches the standard's grammar. |
+| D4-4 | H3 upstream `verify_peer` + CA wiring | **PASS** | `crates/lb-config/src/lib.rs` adds `tls_ca_path: Option<String>`, `tls_verify_hostname: Option<String>`, `tls_verify_peer: bool` (default true via `#[serde(default = ...)]`). `crates/lb/src/main.rs:384` `build_h3_upstream_pool` enforces (i) non-empty backends (`:396`), (ii) listener-uniform `(verify_peer, ca_path)` — startup error on mismatch (`:399-405`), (iii) verify=true requires ca_path (`:411-416` — diagnostic names BOTH `tls_ca_path` AND `tls_verify_peer = false (NOT RECOMMENDED)`), (iv) factory-side `cfg.load_verify_locations_from_file(path)?` + `cfg.verify_peer(true)` when verifying (`:425-427`), (v) `cfg.verify_peer(false)` only on the explicit opt-out path (`:429`). Per-backend SNI override honored when `tls_verify_hostname` is non-empty after trim. **8 unit tests** in `tests/h3_upstream_verify.rs`: (1) reject default+no-ca, (2) accept verify=false+no-ca, (3) accept verify=true+ca, (4) accept SNI-override, (5) reject empty SNI, (6) reject non-H3 backend with tls_*, (7) reject non-H3 with verify_peer=false, (8) TOML default-true round-trip — count matches spec, branches cover all five validator arms plus default-true serde. |
+| D4-3 | H2 backend plaintext-only deferral | **PASS** | `docs/gap-analysis.md:407` row 19. Deferral rationale grounded in (a) consistency with round-1 accepted "mTLS hardcoded off" posture, (b) PROMPT.md §28 omitting upstream-TLS-to-backends, (c) common practice (NGINX/HAProxy/Envoy default). Closure path named (`Http2Pool::with_tls(rustls::ClientConfig)` + ALPN `h2` + per-backend TLS knobs). Tracked for v2; appropriate deferral. |
+| D4-5 | Per-listener H3 pools not hoisted deferral | **PASS** | `docs/gap-analysis.md:409` row 20. Deferral rationale grounded in (a) memory-overhead-not-correctness shape, (b) uncommon multi-H3-listener config, (c) refactor scope (`(remote_addr, sni, ca_bundle, verify_peer)` cross-listener keying). Tracked for v2; appropriate deferral. |
+
+### HOLD items
+
+**None.** Zero advisories this round. The round-4 informational advisory E1 (H3 upstream `verify_peer(false)` hardcoded) is now closed by D4-4 — `verify_peer(false)` is no longer the default, only the explicit NOT-RECOMMENDED opt-out, with a startup-error gate forcing operators to either supply a CA bundle or explicitly opt out.
+
+### Commendations
+
+1. **The D4-4 validator gate's diagnostic names BOTH remediation paths.** `crates/lb/src/main.rs:411-416`: when `verify_peer=true` (default) and `tls_ca_path` is unset, the bail message names "tls_ca_path" AND "tls_verify_peer = false (NOT RECOMMENDED)" — an operator hitting this gate sees both the recommended fix and the explicit opt-out, with the social-cue "NOT RECOMMENDED" attached to the unsafe path. This is the right shape for a security-default-on knob: make the safe path discoverable, make the unsafe path explicit and labeled.
+
+2. **The 8-test surface in `h3_upstream_verify.rs` covers branches not deltas.** Tests cover all five validator arms (default-no-ca, opt-out-no-ca, ca, sni-override, empty-sni-reject) plus two non-H3 negative cases plus one TOML round-trip. The non-H3 cases are particularly valuable: they prove the tls_* knobs are *meaningful* on H3 only, preventing config-file copy-paste bugs where an operator sets `tls_ca_path` on an H1 backend and gets silent no-op behavior. The TOML round-trip test pins the `#[serde(default)]` knob — a future "convenience" change to default-false would break this test loud.
+
+3. **The D4-1/D4-2 predicate matches RFC 6838 grammar.** Using `application/grpc+` (with literal `+`) as the prefix gate aligns with RFC 6838 §4.2.8's "structured syntax suffix" delimiter (`+xml`, `+json`, `+proto`, etc.), so the predicate is grammatically correct, not just empirically correct on today's media-type registry. Future grpc subtypes registered with the `+suffix` form will be caught; future `grpc-web`-style hyphen-extensions will pass through. The doc-comment at `:341-346` explains exactly this.
+
+### Systemic concerns
+
+None. D4-1 + D4-2 close a real RFC-compliance gap (case-insensitivity per RFC 7231) AND a real interop gap (grpc-web is plain HTTP and was over-rejected). D4-4 closes a real security gap (MITM-able H3 backend dials) and applies the right default (verify-on, opt-out explicit). D4-3 + D4-5 are honestly deferred-with-rationale; the gap-analysis entries are concrete (not hand-wavy) and name the v2 closure path. The shape continues round-1..round-4: surface the gap, fix the dispatch-path / validator / wiring, add tests at the level the gap was discovered (predicate-level for D4-1/D4-2, factory-level for D4-4), document deferral with concrete v2 closure path.
+
+### Signature
+
+reviewer-delta-5 (round-5 delta 2026-04-25) — **PASS**
+
+All four gates green from this session's invocation (516 tests, 0 failures, clippy clean, deny clean, halting-gate green). D4-1 + D4-2 fix verified at `crates/lb-l7/src/h1_proxy.rs:347-359` with 4 new test cases covering uppercase + charset-param + bare-grpc-web + grpc-web+proto. D4-4 fix verified at `crates/lb/src/main.rs:384-432` (factory + validator + listener-mismatch gate) with 8 new tests covering all five validator arms + default-true serde. D4-3 + D4-5 deferral entries verified at `docs/gap-analysis.md:407` and `:409` with concrete v2 closure paths. Zero HOLDs, zero advisories.
