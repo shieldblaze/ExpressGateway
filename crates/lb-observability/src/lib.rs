@@ -25,6 +25,7 @@
 use std::sync::Arc;
 
 use dashmap::DashMap;
+use dashmap::mapref::entry::Entry;
 use prometheus::{Histogram as PHistogram, core::Collector};
 use prometheus::{
     HistogramOpts, HistogramVec, IntCounter, IntCounterVec, IntGauge, Opts, Registry,
@@ -120,6 +121,7 @@ impl MetricsRegistry {
     /// registry rejects the registration (for example, invalid label
     /// name).
     pub fn counter(&self, name: &str, help: &str) -> Result<IntCounter, MetricsError> {
+        // Fast path: a previous registration is visible — return its handle.
         if let Some(entry) = self.handles.get(name) {
             if let Handle::Counter(c) = entry.value() {
                 return Ok(c.clone());
@@ -128,12 +130,26 @@ impl MetricsRegistry {
                 name: name.to_owned(),
             });
         }
-        let c = IntCounter::with_opts(Opts::new(name, help))?;
-        self.inner.register(Box::new(c.clone()))?;
-        self.handles
-            .insert(name.to_owned(), Handle::Counter(c.clone()));
-        self.check_cardinality();
-        Ok(c)
+        // Slow path: take the shard write lock for this key so only one
+        // thread runs prometheus registration; the others wait, observe
+        // the inserted handle, and clone it. This eliminates the
+        // get-or-create race that could split increments across two
+        // separately-registered handles or drop them via AlreadyReg.
+        match self.handles.entry(name.to_owned()) {
+            Entry::Occupied(occ) => match occ.get() {
+                Handle::Counter(c) => Ok(c.clone()),
+                _ => Err(MetricsError::TypeMismatch {
+                    name: name.to_owned(),
+                }),
+            },
+            Entry::Vacant(vac) => {
+                let c = IntCounter::with_opts(Opts::new(name, help))?;
+                self.inner.register(Box::new(c.clone()))?;
+                vac.insert(Handle::Counter(c.clone()));
+                self.check_cardinality();
+                Ok(c)
+            }
+        }
     }
 
     /// Get-or-create a labeled [`IntCounterVec`]. Labels are fixed at
@@ -157,12 +173,21 @@ impl MetricsRegistry {
                 name: name.to_owned(),
             });
         }
-        let c = IntCounterVec::new(Opts::new(name, help), labels)?;
-        self.inner.register(Box::new(c.clone()))?;
-        self.handles
-            .insert(name.to_owned(), Handle::CounterVec(c.clone()));
-        self.check_cardinality();
-        Ok(c)
+        match self.handles.entry(name.to_owned()) {
+            Entry::Occupied(occ) => match occ.get() {
+                Handle::CounterVec(c) => Ok(c.clone()),
+                _ => Err(MetricsError::TypeMismatch {
+                    name: name.to_owned(),
+                }),
+            },
+            Entry::Vacant(vac) => {
+                let c = IntCounterVec::new(Opts::new(name, help), labels)?;
+                self.inner.register(Box::new(c.clone()))?;
+                vac.insert(Handle::CounterVec(c.clone()));
+                self.check_cardinality();
+                Ok(c)
+            }
+        }
     }
 
     /// Get-or-create a [`PHistogram`] with the given bucket boundaries.
@@ -184,12 +209,23 @@ impl MetricsRegistry {
                 name: name.to_owned(),
             });
         }
-        let h = PHistogram::with_opts(HistogramOpts::new(name, help).buckets(buckets.to_vec()))?;
-        self.inner.register(Box::new(h.clone()))?;
-        self.handles
-            .insert(name.to_owned(), Handle::Histogram(h.clone()));
-        self.check_cardinality();
-        Ok(h)
+        match self.handles.entry(name.to_owned()) {
+            Entry::Occupied(occ) => match occ.get() {
+                Handle::Histogram(h) => Ok(h.clone()),
+                _ => Err(MetricsError::TypeMismatch {
+                    name: name.to_owned(),
+                }),
+            },
+            Entry::Vacant(vac) => {
+                let h = PHistogram::with_opts(
+                    HistogramOpts::new(name, help).buckets(buckets.to_vec()),
+                )?;
+                self.inner.register(Box::new(h.clone()))?;
+                vac.insert(Handle::Histogram(h.clone()));
+                self.check_cardinality();
+                Ok(h)
+            }
+        }
     }
 
     /// Get-or-create a labeled [`HistogramVec`].
@@ -212,15 +248,24 @@ impl MetricsRegistry {
                 name: name.to_owned(),
             });
         }
-        let h = HistogramVec::new(
-            HistogramOpts::new(name, help).buckets(buckets.to_vec()),
-            labels,
-        )?;
-        self.inner.register(Box::new(h.clone()))?;
-        self.handles
-            .insert(name.to_owned(), Handle::HistogramVec(h.clone()));
-        self.check_cardinality();
-        Ok(h)
+        match self.handles.entry(name.to_owned()) {
+            Entry::Occupied(occ) => match occ.get() {
+                Handle::HistogramVec(h) => Ok(h.clone()),
+                _ => Err(MetricsError::TypeMismatch {
+                    name: name.to_owned(),
+                }),
+            },
+            Entry::Vacant(vac) => {
+                let h = HistogramVec::new(
+                    HistogramOpts::new(name, help).buckets(buckets.to_vec()),
+                    labels,
+                )?;
+                self.inner.register(Box::new(h.clone()))?;
+                vac.insert(Handle::HistogramVec(h.clone()));
+                self.check_cardinality();
+                Ok(h)
+            }
+        }
     }
 
     /// Get-or-create an [`IntGauge`].
@@ -237,12 +282,21 @@ impl MetricsRegistry {
                 name: name.to_owned(),
             });
         }
-        let g = IntGauge::with_opts(Opts::new(name, help))?;
-        self.inner.register(Box::new(g.clone()))?;
-        self.handles
-            .insert(name.to_owned(), Handle::Gauge(g.clone()));
-        self.check_cardinality();
-        Ok(g)
+        match self.handles.entry(name.to_owned()) {
+            Entry::Occupied(occ) => match occ.get() {
+                Handle::Gauge(g) => Ok(g.clone()),
+                _ => Err(MetricsError::TypeMismatch {
+                    name: name.to_owned(),
+                }),
+            },
+            Entry::Vacant(vac) => {
+                let g = IntGauge::with_opts(Opts::new(name, help))?;
+                self.inner.register(Box::new(g.clone()))?;
+                vac.insert(Handle::Gauge(g.clone()));
+                self.check_cardinality();
+                Ok(g)
+            }
+        }
     }
 
     /// Snapshot the registered metric families. Used by the text
