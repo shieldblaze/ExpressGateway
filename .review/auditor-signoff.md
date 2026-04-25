@@ -466,3 +466,105 @@ similarly thorough: serde-default `true`, validator gate, runtime
 pool-builder gate, mismatch-detection across backends, SNI override
 honoured, and 8 well-scoped validator-branch tests.
 
+## Round-6 Delta 2026-04-25 — D5-1 closure + D5-2 deferral audit
+
+Auditor `auditor-delta-6`. HEAD `8f0dbdac`. Scope: round-5 residual
+closure verification, no new code surface beyond `crates/lb/src/main.rs`
+test module + `docs/gap-analysis.md` round-5 entry.
+
+### Diff inventory
+
+`8f0dbdac` touches exactly two files:
+
+| File | Lines | Nature |
+|------|-------|--------|
+| `crates/lb/src/main.rs` | +65 | New `#[cfg(test)] mod tests` with 5 unit tests + `h3_backend` helper |
+| `docs/gap-analysis.md` | +6 | Round-5 residual section: D5-1 closed-in-this-commit prose + D5-2 deferred-with-rationale entry (item 21) |
+
+Test count claim verified: cargo workspace test run reports
+`passed: 521 failed: 0 ignored: 0` — exactly +5 from the round-5
+baseline of 516.
+
+### D5-1 closure — branch-coverage matrix
+
+`build_h3_upstream_pool` at `crates/lb/src/main.rs:384-447` has
+**4 distinct bail branches** + **1 happy path**:
+
+| Branch | Source line | Test |
+|--------|-------------|------|
+| Empty backend list | `:395-397` | `rejects_empty_backend_list` (passes `&[]`) |
+| Mismatched `tls_verify_peer` | `:399` (left disjunct) | `rejects_mismatched_verify_peer` (a=true,b=false; same CA) |
+| Mismatched `tls_ca_path` | `:399` (right disjunct) | `rejects_mismatched_ca_path` (both verify=true; ca-a vs ca-b) |
+| `verify=true && ca empty/None` | `:412-418` | `rejects_verify_without_ca` (verify=true, ca=None) |
+| Happy path → factory built | `:419-446` | `accepts_uniform_verify_off_without_ca` (both verify=false, ca=None) |
+
+All 5 tests gated by `assert!(err.to_string().contains("…"))` with
+distinct, non-overlapping substrings (`"must share tls_verify_peer"`,
+`"must share"`, `"zero H3 backends"`, `"requires tls_ca_path"`) —
+a regression that swapped two bail messages would still fail the
+matching test (the verify-mismatch test is more specific than the
+ca-mismatch test, so a swap is detected).
+
+The two-disjunct OR at `:399` (`other.tls_verify_peer != first.tls_verify_peer || other.tls_ca_path != first.tls_ca_path`) is the only short-circuit. Both disjuncts independently exercised: `rejects_mismatched_verify_peer` flips the left side while holding the right equal; `rejects_mismatched_ca_path` flips the right side while holding the left equal. **No coverage hole.**
+
+### D5-1 adversarial probe — empty-string CA
+
+Predicate `ca_path.as_deref().is_none_or(str::is_empty)`:
+- `ca_path = None` → `as_deref()` returns `None` → `is_none_or` short-
+  circuits true → bail. Covered by `rejects_verify_without_ca`.
+- `ca_path = Some("")` → `as_deref()` returns `Some("")` → `is_none_or`
+  evaluates `str::is_empty("")` = true → bail. **Not** explicitly
+  tested, but mechanically equivalent to `None` per `is_none_or`'s
+  contract (`None || pred(x)`); the test for the more-common operator
+  mistake (forgetting the field entirely → `None`, not `Some("")`) is
+  the right choice. `Some("")` would require the operator to
+  *explicitly* type an empty string in YAML, which is rare and the same
+  branch fires.
+
+The test author chose the higher-priority operator mistake (None) over
+the corner case (empty string). Acceptable.
+
+### D5-2 deferral — quote fidelity
+
+`docs/gap-analysis.md:413` (item 21) states:
+
+> The auditor explicitly noted this is "Acceptable per operator-trusted threat model" — the operator owns the CA file and a missing CA is symmetric with a missing backend …
+
+Cross-check: round-5 signoff (line 433 of this file) says
+
+> This is acceptable per the operator-trusted threat model: an operator with filesystem write to the CA bundle is already at higher privilege than the gateway.
+
+The quoted phrase **"Acceptable per operator-trusted threat model"**
+appears in the gap-analysis entry; it elides the article "the" but
+preserves the substantive claim. Minor stylistic compression, not a
+distortion. Consistency-with-other-loaders rationale is also present
+("TLS cert files, retry secrets all lazy-loaded"; "uniform refactor
+across the file-backed config loaders"). **Acceptable.**
+
+### Always-on gates
+
+| Gate | Result |
+|------|--------|
+| `cargo test --workspace --no-fail-fast` | 521 passed / 0 failed / 0 ignored |
+| `cargo deny check` | `advisories ok, bans ok, licenses ok, sources ok` (only stale unmatched-license-allowance warnings, identical to round-5) |
+| `trufflehog --only-verified` | 0 verified, 0 unverified across 13806 chunks / 25.5 MB |
+| `scripts/halting-gate.sh` | `PROJECT COMPLETE — halting gate green. Artifacts: 141/141.  Tests: 59/59.  Manifest: OK.` |
+
+### Round-6 verdict
+
+**PASS** (delta-only).
+
+Round-6 closes D5-1 with full branch coverage and properly defers D5-2
+with a faithful rationale. The diff is minimal (+71 lines, 0 production
+code change), all gates remain green, and no new residuals introduced.
+The carry-forward residual ledger now stands at:
+
+| ID | Severity | Status |
+|----|----------|--------|
+| D2-α (lb_grpc::tests dual-test fragility) | LOW | open, non-blocking |
+| D4-3, D4-5 | LOW | deferred-with-rationale (v2) |
+| **D5-2** | LOW | **deferred-with-rationale (v2)** as of this round |
+
+**No HIGH/CRITICAL residuals. No HOLD-blocking findings.** Recommend
+proceeding to SHIP.md re-write.
+
