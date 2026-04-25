@@ -308,14 +308,18 @@ fn build_upstream_backends(
             );
         };
         // SNI for H3 backends is required by the upstream pool's TLS
-        // handshake. The config does not yet carry an explicit SNI knob;
-        // fall back to the host portion of the configured address so a
-        // hostname-shaped backend still works. IP-literal addresses
-        // produce an empty SNI which the pool surfaces as a TLS error.
+        // handshake. Round-4 D4-4 adds an explicit
+        // `BackendConfig::tls_verify_hostname` knob; when present it
+        // wins so an operator can override an IP-literal address with
+        // the cert-name the backend actually presents. Otherwise fall
+        // back to the host portion of `address` so hostname-shaped
+        // backends keep working.
         let sni = if proto == UpstreamProto::H3 {
-            split_host_port(&b.address)
-                .ok()
-                .map(|(host, _)| host.to_owned())
+            b.tls_verify_hostname.clone().or_else(|| {
+                split_host_port(&b.address)
+                    .ok()
+                    .map(|(host, _)| host.to_owned())
+            })
         } else {
             None
         };
@@ -350,23 +354,80 @@ fn build_h2_upstream_pool(
     Arc::new(Http2Pool::new(cfg, tcp_pool))
 }
 
+/// Filter a listener's backends down to those declaring `protocol = "h3"`.
+/// Used to feed [`build_h3_upstream_pool`] only the H3-bound subset so
+/// the pool's verify-peer/CA factory is driven by H3-specific TLS knobs.
+fn collect_h3_backends(listener_cfg: &lb_config::ListenerConfig) -> Vec<lb_config::BackendConfig> {
+    listener_cfg
+        .backends
+        .iter()
+        .filter(|b| b.protocol == "h3")
+        .cloned()
+        .collect()
+}
+
 /// Build a [`QuicUpstreamPool`] with a config factory that produces
 /// fresh [`quiche::Config`]s. The factory installs [`LB_QUIC_ALPN`]
 /// (`"lb-quic"`) and inherits the listener's QUIC tunables when present,
 /// or [`QuicPoolConfig`] defaults otherwise.
 ///
-/// Note: this is a **plaintext / no-peer-verify** dial config. Production
-/// deployments dialling untrusted H3 origins must extend this builder
-/// with a CA bundle via
-/// [`quiche::Config::load_verify_locations_from_file`] +
-/// [`quiche::Config::verify_peer(true)`]. Tracked as a v1 limitation in
-/// `docs/gap-analysis.md`.
-fn build_h3_upstream_pool() -> Arc<QuicUpstreamPool> {
+/// Per-backend TLS verification (Round-4 D4-4) is driven by the first H3
+/// backend's `tls_*` knobs. When `tls_verify_peer` is true, the factory
+/// loads the configured CA bundle and engages
+/// [`quiche::Config::verify_peer`]; the pool aborts startup if the bundle
+/// is missing. When `tls_verify_peer` is explicitly false the factory
+/// skips peer verification — this is a NOT RECOMMENDED operator opt-out
+/// for mesh-encrypted underlays. The H3 listener's
+/// [`QuicListenerConfig`] is consulted only for tuning fields that
+/// matter on the dial side; verification posture is a backend-side
+/// decision.
+fn build_h3_upstream_pool(
+    h3_backends: &[lb_config::BackendConfig],
+) -> anyhow::Result<Arc<QuicUpstreamPool>> {
+    // All H3 backends on a single listener share one QuicUpstreamPool
+    // (and therefore one quiche::Config factory). The factory's
+    // verify-peer posture is unambiguous when every H3 backend agrees
+    // on `tls_verify_peer` and (when verifying) `tls_ca_path`. Reject
+    // mismatched configs at startup so an operator with two H3 backends
+    // and two different CA bundles gets a clear error rather than a
+    // silent first-wins.
+    let mut iter = h3_backends.iter();
+    let Some(first) = iter.next() else {
+        anyhow::bail!("build_h3_upstream_pool called with zero H3 backends");
+    };
+    for other in iter {
+        if other.tls_verify_peer != first.tls_verify_peer || other.tls_ca_path != first.tls_ca_path
+        {
+            anyhow::bail!(
+                "H3 backends on a single listener must share tls_verify_peer + \
+                 tls_ca_path (mismatch between {} and {}); one QuicUpstreamPool \
+                 cannot dial multiple distinct trust roots",
+                first.address,
+                other.address
+            );
+        }
+    }
+    let verify = first.tls_verify_peer;
+    let ca_path = first.tls_ca_path.clone();
+    if verify && ca_path.as_deref().is_none_or(str::is_empty) {
+        anyhow::bail!(
+            "H3 backend {} requires tls_ca_path for verification; \
+             set it or explicitly opt out via tls_verify_peer = false (NOT RECOMMENDED)",
+            first.address
+        );
+    }
     let factory: Arc<dyn Fn() -> Result<quiche::Config, quiche::Error> + Send + Sync> =
-        Arc::new(|| {
+        Arc::new(move || {
             let mut cfg = quiche::Config::new(quiche::PROTOCOL_VERSION)?;
             cfg.set_application_protos(&[b"lb-quic"])?;
-            cfg.verify_peer(false);
+            if verify {
+                if let Some(path) = ca_path.as_deref() {
+                    cfg.load_verify_locations_from_file(path)?;
+                }
+                cfg.verify_peer(true);
+            } else {
+                cfg.verify_peer(false);
+            }
             cfg.set_max_idle_timeout(30_000);
             cfg.set_max_recv_udp_payload_size(1_350);
             cfg.set_max_send_udp_payload_size(1_350);
@@ -379,7 +440,10 @@ fn build_h3_upstream_pool() -> Arc<QuicUpstreamPool> {
             cfg.set_disable_active_migration(true);
             Ok(cfg)
         });
-    Arc::new(QuicUpstreamPool::new(QuicPoolConfig::default(), factory))
+    Ok(Arc::new(QuicUpstreamPool::new(
+        QuicPoolConfig::default(),
+        factory,
+    )))
 }
 
 /// Build a [`H1Proxy`] from the listener's resolved upstream backends
@@ -676,7 +740,11 @@ fn build_listener_mode(
             let needs_h3 = upstreams.iter().any(|b| b.proto == UpstreamProto::H3);
             let h2_pool = needs_h2
                 .then(|| build_h2_upstream_pool(pool.clone(), listener_cfg.h2_security.as_ref()));
-            let h3_pool = needs_h3.then(build_h3_upstream_pool);
+            let h3_pool = if needs_h3 {
+                Some(build_h3_upstream_pool(&collect_h3_backends(listener_cfg))?)
+            } else {
+                None
+            };
             let proxy = build_h1_proxy(
                 pool.clone(),
                 upstreams,
@@ -719,7 +787,11 @@ fn build_listener_mode(
             // both ALPN paths.
             let h2_pool = needs_h2
                 .then(|| build_h2_upstream_pool(pool.clone(), listener_cfg.h2_security.as_ref()));
-            let h3_pool = needs_h3.then(build_h3_upstream_pool);
+            let h3_pool = if needs_h3 {
+                Some(build_h3_upstream_pool(&collect_h3_backends(listener_cfg))?)
+            } else {
+                None
+            };
             let h1_proxy = build_h1_proxy(
                 pool.clone(),
                 upstreams_h1,

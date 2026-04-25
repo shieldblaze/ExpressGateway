@@ -443,6 +443,34 @@ pub struct BackendConfig {
     /// Weight for weighted load-balancing algorithms (default 1).
     #[serde(default = "default_weight")]
     pub weight: u32,
+    /// Path to a PEM CA bundle used to verify the H3 backend's TLS
+    /// certificate during the upstream QUIC handshake. Required when
+    /// `protocol = "h3"` unless `tls_verify_peer = false`. Ignored for
+    /// non-H3 backends. (Round-4 D4-4: closes the binary's prior
+    /// `verify_peer(false)` posture on the H3 upstream pool.)
+    #[serde(default)]
+    pub tls_ca_path: Option<String>,
+    /// SNI override for backend TLS verification. Defaults to the host
+    /// portion of `address` when absent. Useful when the backend cert
+    /// presents a name that does not match the dial address (e.g. a
+    /// virtual-host-style internal hostname behind a load-balanced VIP).
+    /// Only meaningful for `protocol = "h3"`.
+    #[serde(default)]
+    pub tls_verify_hostname: Option<String>,
+    /// If `true` (the default), the H3 upstream pool validates the
+    /// backend's TLS certificate against `tls_ca_path` and the SNI
+    /// resolved from `tls_verify_hostname` / `address`. Set to `false`
+    /// to disable peer-cert verification entirely — **NOT RECOMMENDED**;
+    /// only acceptable for operators using a separate mesh-encryption
+    /// layer (e.g. `WireGuard`, an Istio-style ambient sidecar) that
+    /// authenticates the underlay independently. Ignored for non-H3
+    /// backends.
+    #[serde(default = "default_verify_peer_true")]
+    pub tls_verify_peer: bool,
+}
+
+const fn default_verify_peer_true() -> bool {
+    true
 }
 
 fn default_backend_protocol() -> String {
@@ -676,6 +704,41 @@ fn validate_backend_list(i: usize, listener: &ListenerConfig) -> Result<(), Conf
                 )));
             }
         }
+        validate_backend_h3_tls(i, j, backend)?;
+    }
+    Ok(())
+}
+
+/// Validate the H3 backend TLS knobs (D4-4). Non-H3 backends are
+/// unaffected; H3 backends must either supply a `tls_ca_path` or
+/// explicitly opt out via `tls_verify_peer = false`.
+fn validate_backend_h3_tls(i: usize, j: usize, backend: &BackendConfig) -> Result<(), ConfigError> {
+    if backend.protocol != "h3" {
+        if backend.tls_ca_path.is_some()
+            || backend.tls_verify_hostname.is_some()
+            || !backend.tls_verify_peer
+        {
+            return Err(ConfigError::Validation(format!(
+                "listener {i} backend {j} sets tls_* knobs but protocol is {:?}; \
+                 these knobs are only meaningful for protocol = \"h3\"",
+                backend.protocol
+            )));
+        }
+        return Ok(());
+    }
+    if backend.tls_verify_peer && backend.tls_ca_path.as_deref().is_none_or(str::is_empty) {
+        return Err(ConfigError::Validation(format!(
+            "listener {i} backend {j} (protocol=\"h3\") requires tls_ca_path \
+             when tls_verify_peer is true; either set tls_ca_path or explicitly \
+             opt out via tls_verify_peer = false (NOT RECOMMENDED)"
+        )));
+    }
+    if let Some(sni) = backend.tls_verify_hostname.as_deref() {
+        if sni.trim().is_empty() {
+            return Err(ConfigError::Validation(format!(
+                "listener {i} backend {j} tls_verify_hostname is empty"
+            )));
+        }
     }
     Ok(())
 }
@@ -856,6 +919,9 @@ protocol = "tcp"
                     address: String::new(),
                     protocol: "tcp".into(),
                     weight: 1,
+                    tls_ca_path: None,
+                    tls_verify_hostname: None,
+                    tls_verify_peer: true,
                 }],
             }],
             runtime: None,
@@ -1089,6 +1155,9 @@ protocol = "h1"
                     address: "127.0.0.1:3000".into(),
                     protocol: "gopher".into(),
                     weight: 1,
+                    tls_ca_path: None,
+                    tls_verify_hostname: None,
+                    tls_verify_peer: true,
                 }],
             }],
             runtime: None,
@@ -1142,6 +1211,9 @@ address = "127.0.0.1:3000"
                     address: "127.0.0.1:3000".into(),
                     protocol: "tcp".into(),
                     weight: 1,
+                    tls_ca_path: None,
+                    tls_verify_hostname: None,
+                    tls_verify_peer: true,
                 }],
             }],
             runtime: None,
@@ -1204,6 +1276,9 @@ address = "127.0.0.1:3000"
                     address: "127.0.0.1:3000".into(),
                     protocol: "tcp".into(),
                     weight: 1,
+                    tls_ca_path: None,
+                    tls_verify_hostname: None,
+                    tls_verify_peer: true,
                 }],
             }],
             runtime: None,
@@ -1233,6 +1308,9 @@ address = "127.0.0.1:3000"
                     address: "127.0.0.1:3000".into(),
                     protocol: "tcp".into(),
                     weight: 1,
+                    tls_ca_path: None,
+                    tls_verify_hostname: None,
+                    tls_verify_peer: true,
                 }],
             }],
             runtime: None,

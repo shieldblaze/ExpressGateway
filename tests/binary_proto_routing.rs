@@ -77,11 +77,17 @@ fn mixed_protocol_listener_yields_h1_proxy_with_h2_pool_and_round_robin_picker()
                 address: "127.0.0.1:9001".to_owned(),
                 protocol: "h1".to_owned(),
                 weight: 1,
+                tls_ca_path: None,
+                tls_verify_hostname: None,
+                tls_verify_peer: true,
             },
             BackendConfig {
                 address: "127.0.0.1:9002".to_owned(),
                 protocol: "h2".to_owned(),
                 weight: 1,
+                tls_ca_path: None,
+                tls_verify_hostname: None,
+                tls_verify_peer: true,
             },
         ],
     };

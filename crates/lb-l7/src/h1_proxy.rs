@@ -337,11 +337,26 @@ impl H1Proxy {
         // 415 so a misconfigured client gets a clear actionable signal
         // rather than 502 from a downstream H1 backend that wouldn't know
         // what to do with `application/grpc` either.
+        //
+        // Match exactly `application/grpc` or `application/grpc+<sub>`
+        // (e.g. `application/grpc+proto`, `application/grpc+json`) on a
+        // case-insensitive media-type token (RFC 7231 §3.1.1.1). Strip any
+        // `;`-prefixed parameters (`charset=utf-8`, etc.) before matching.
+        // The trailing `+` keeps `application/grpc-web` (hyphen) — which
+        // is plain HTTP and forwards transparently — outside the reject.
         if req
             .headers()
             .get(hyper::header::CONTENT_TYPE)
             .and_then(|v| v.to_str().ok())
-            .is_some_and(|s| s.starts_with("application/grpc"))
+            .is_some_and(|s| {
+                let media_type = s
+                    .split(';')
+                    .next()
+                    .unwrap_or("")
+                    .trim()
+                    .to_ascii_lowercase();
+                media_type == "application/grpc" || media_type.starts_with("application/grpc+")
+            })
         {
             return error_response(
                 StatusCode::UNSUPPORTED_MEDIA_TYPE,
