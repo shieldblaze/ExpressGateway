@@ -205,6 +205,17 @@ pub struct WebsocketConfig {
     /// Defaults to 16 MiB.
     #[serde(default = "default_ws_max_message_size")]
     pub max_message_size_bytes: usize,
+    /// Maximum number of client-originated `Ping` frames per
+    /// `ping_rate_limit_window_seconds` before the proxy emits
+    /// `Close 1008` (Policy Violation) to the abusive client and
+    /// shuts the upstream half. Mirrors the H/2 `PingFloodDetector`
+    /// knob (auditor-delta finding WS-001). Defaults to 50.
+    #[serde(default = "default_ws_ping_rate_limit_per_window")]
+    pub ping_rate_limit_per_window: u32,
+    /// Rolling-window duration (seconds) for the WebSocket client-Ping
+    /// rate limit. Defaults to 10 seconds.
+    #[serde(default = "default_ws_ping_rate_limit_window_seconds")]
+    pub ping_rate_limit_window_seconds: u64,
 }
 
 impl Default for WebsocketConfig {
@@ -213,6 +224,8 @@ impl Default for WebsocketConfig {
             enabled: default_ws_enabled(),
             idle_timeout_seconds: default_ws_idle_timeout(),
             max_message_size_bytes: default_ws_max_message_size(),
+            ping_rate_limit_per_window: default_ws_ping_rate_limit_per_window(),
+            ping_rate_limit_window_seconds: default_ws_ping_rate_limit_window_seconds(),
         }
     }
 }
@@ -227,6 +240,14 @@ const fn default_ws_idle_timeout() -> u64 {
 
 const fn default_ws_max_message_size() -> usize {
     16 * 1024 * 1024
+}
+
+const fn default_ws_ping_rate_limit_per_window() -> u32 {
+    50
+}
+
+const fn default_ws_ping_rate_limit_window_seconds() -> u64 {
+    10
 }
 
 /// HTTP/2 security thresholds (Item 1, auditor finding #3).
@@ -583,6 +604,16 @@ fn validate_websocket_block(
         if ws.max_message_size_bytes == 0 {
             return Err(ConfigError::Validation(format!(
                 "listener {i} websocket.max_message_size_bytes must be > 0"
+            )));
+        }
+        if ws.ping_rate_limit_per_window == 0 {
+            return Err(ConfigError::Validation(format!(
+                "listener {i} websocket.ping_rate_limit_per_window must be > 0"
+            )));
+        }
+        if ws.ping_rate_limit_window_seconds == 0 {
+            return Err(ConfigError::Validation(format!(
+                "listener {i} websocket.ping_rate_limit_window_seconds must be > 0"
             )));
         }
     }

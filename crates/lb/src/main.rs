@@ -285,6 +285,8 @@ fn ws_config_to_runtime(cfg: &WebsocketConfig) -> WsConfig {
         idle_timeout: Duration::from_secs(cfg.idle_timeout_seconds),
         max_message_size: cfg.max_message_size_bytes,
         enabled: cfg.enabled,
+        ping_rate_limit_per_window: cfg.ping_rate_limit_per_window,
+        ping_rate_limit_window: Duration::from_secs(cfg.ping_rate_limit_window_seconds),
     }
 }
 

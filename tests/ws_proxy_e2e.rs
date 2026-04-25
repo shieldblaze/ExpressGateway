@@ -190,6 +190,7 @@ async fn ws_echo_roundtrip() {
             idle_timeout: Duration::from_secs(30),
             max_message_size: 1024 * 1024,
             enabled: true,
+            ..WsConfig::default()
         },
     )
     .await;
@@ -220,6 +221,7 @@ async fn ws_close_code_forwarded() {
             idle_timeout: Duration::from_secs(30),
             max_message_size: 1024 * 1024,
             enabled: true,
+            ..WsConfig::default()
         },
     )
     .await;
@@ -262,6 +264,7 @@ async fn ws_idle_timeout_emits_1001() {
             idle_timeout: Duration::from_secs(1),
             max_message_size: 1024 * 1024,
             enabled: true,
+            ..WsConfig::default()
         },
     )
     .await;
@@ -300,6 +303,7 @@ async fn ws_binary_message_roundtrip() {
             idle_timeout: Duration::from_secs(30),
             max_message_size: 1024 * 1024,
             enabled: true,
+            ..WsConfig::default()
         },
     )
     .await;
@@ -334,6 +338,7 @@ async fn ws_ping_pong_keepalive() {
             idle_timeout: Duration::from_millis(700),
             max_message_size: 1024 * 1024,
             enabled: true,
+            ..WsConfig::default()
         },
     )
     .await;
@@ -393,4 +398,67 @@ async fn ws_ping_pong_keepalive() {
         "test concluded before the ping storm completed"
     );
     let _: Result<_, _> = client.close(None).await;
+}
+
+// ── Test 6: Ping flood → Close 1008 (WS-001) ───────────────────────────
+
+#[tokio::test]
+async fn ws_ping_flood_closes_with_1008() {
+    // Listener configured with a tiny ping budget (5/10s). The silent
+    // backend never replies, so the only Close the client can observe
+    // is the one the gateway emits on rate-limit trip.
+    let (backend, _b) = spawn_silent_backend().await;
+    let (gw, _g) = spawn_ws_gateway(
+        backend,
+        WsConfig {
+            idle_timeout: Duration::from_secs(30),
+            max_message_size: 1024 * 1024,
+            enabled: true,
+            ping_rate_limit_per_window: 5,
+            ping_rate_limit_window: Duration::from_secs(10),
+        },
+    )
+    .await;
+
+    let mut client = connect_ws_client(gw, "/flood").await;
+    // Fire 10 Pings as fast as the SinkExt buffer accepts. The gateway
+    // is allowed up to 5 in the rolling window — the 6th must trip the
+    // detector and produce Close(1008) at the client.
+    for i in 0..10u8 {
+        // Ignore send errors past the rate-limit trip — once the
+        // gateway closes the client half, further sends are expected
+        // to fail. The acceptance check is the Close frame, not the
+        // exact count of accepted Pings.
+        let _ = client.send(Message::Ping(vec![i])).await;
+    }
+
+    let deadline = Duration::from_secs(2);
+    let start = tokio::time::Instant::now();
+    let close_frame = {
+        let mut observed: Option<CloseFrame<'_>> = None;
+        while start.elapsed() < deadline {
+            let Ok(Some(Ok(msg))) =
+                tokio::time::timeout(Duration::from_millis(200), client.next()).await
+            else {
+                continue;
+            };
+            if let Message::Close(Some(f)) = msg {
+                observed = Some(f.into_owned());
+                break;
+            }
+        }
+        observed.expect("did not observe a Close frame within 2s of the ping flood")
+    };
+    assert_eq!(
+        close_frame.code,
+        CloseCode::Policy,
+        "expected Close 1008 (Policy Violation), got {:?}",
+        close_frame.code,
+    );
+    let reason = close_frame.reason.to_ascii_lowercase();
+    assert!(
+        reason.contains("ping flood") || reason.contains("rate limit"),
+        "expected reason to mention ping flood or rate limit, got {:?}",
+        close_frame.reason,
+    );
 }

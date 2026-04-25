@@ -396,9 +396,8 @@ addendum records what has been closed and what remains.
 
 ### Delta-audit round-2 residuals (2026-04-24)
 
-Round-2 auditor-delta signoff (`b8563799`) flagged 7 residual risks. None HIGH/CRITICAL; none blocking. Tracking IDs assigned:
+Round-2 auditor-delta signoff (`b8563799`) flagged 7 residual risks. None HIGH/CRITICAL; none blocking. Tracking IDs assigned. WS-001 closed post-ship — see commit log. Remaining:
 
-12. **WS-001 (MEDIUM 4.3) — WebSocket client Ping flood amplifier**: `WsProxy` forwards client Pings verbatim to the backend without rate-limiting. An abusive client can turn the gateway into a ping-flood amplifier against an upstream. Fix: window-count Pings per connection (e.g. 50/10s); on exceeded, send Close 1008 (policy violation).
 13. **WS-002 (LOW) — WebSocket slow-read TCP-buffer pinning**: A slow client can hold the upstream connection and its kernel TCP buffer until `idle_timeout` (60 s default) elapses. Bounded `mpsc(64)` limits the tungstenite-side queue but not the kernel OS buffer. Fix: shorter read timeout per frame; or explicit kernel-buffer cap via `SO_RCVBUF`.
 14. **GRPC-001 (LOW) — upstream H2 client `max_header_list_size`**: The `hyper::client::conn::http2::handshake` used by `GrpcProxy` takes hyper's default `max_header_list_size` (2 MiB). A malicious backend could send oversize trailers that transit the gateway briefly before hyper rejects. Fix: pass the listener's `max_header_list_size` setting down to the upstream client config.
 15. **GRPC-002 (LOW, spec) — malformed `grpc-timeout` silently becomes no-deadline**: `GrpcDeadline::parse` on malformed input returns `Err`; the current wiring silently drops that and forwards without deadline. Per gRPC spec, malformed header should yield INVALID_ARGUMENT. Fix: map `Err` from `GrpcDeadline::parse` to a gateway-side `grpc-status: 3 INVALID_ARGUMENT` response.

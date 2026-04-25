@@ -33,8 +33,9 @@
 //! Per-message compression (RFC 7692) is deliberately NOT negotiated;
 //! backend-side reuse and WebSocket-over-QUIC (RFC 9220) are post-v1.
 
+use std::collections::VecDeque;
 use std::sync::Arc;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use futures_util::stream::StreamExt;
 use futures_util::{SinkExt, TryStreamExt};
@@ -45,6 +46,18 @@ use tokio_tungstenite::WebSocketStream;
 use tokio_tungstenite::tungstenite::Message;
 use tokio_tungstenite::tungstenite::protocol::frame::coding::CloseCode;
 use tokio_tungstenite::tungstenite::protocol::{CloseFrame, Role, WebSocketConfig};
+
+/// Default client-originated Ping budget per rolling window.
+///
+/// Above this many client Pings within
+/// [`DEFAULT_PING_RATE_LIMIT_WINDOW`] the proxy emits `Close 1008`
+/// to the abusive client. Mirrors the H/2 sibling
+/// `lb_h2::DEFAULT_PING_MAX_PER_WINDOW`.
+pub const DEFAULT_PING_RATE_LIMIT_PER_WINDOW: u32 = 50;
+
+/// Default rolling-window duration for the WebSocket client-Ping
+/// rate limit. Mirrors `lb_h2::DEFAULT_CONTROL_FRAME_WINDOW`.
+pub const DEFAULT_PING_RATE_LIMIT_WINDOW: Duration = Duration::from_secs(10);
 
 /// Per-listener WebSocket knobs.
 ///
@@ -65,6 +78,16 @@ pub struct WsConfig {
     /// capability on a listener without removing the block entirely.
     /// Default true.
     pub enabled: bool,
+    /// Maximum number of client-originated `Ping` frames allowed per
+    /// [`Self::ping_rate_limit_window`] before the proxy treats the
+    /// stream as a flood amplifier and emits `Close 1008` to the
+    /// client. Mirrors the H/2 `PingFloodDetector` knob (auditor-delta
+    /// finding WS-001). Default
+    /// [`DEFAULT_PING_RATE_LIMIT_PER_WINDOW`].
+    pub ping_rate_limit_per_window: u32,
+    /// Rolling-window duration for the client-Ping rate limit.
+    /// Default [`DEFAULT_PING_RATE_LIMIT_WINDOW`].
+    pub ping_rate_limit_window: Duration,
 }
 
 impl Default for WsConfig {
@@ -73,6 +96,8 @@ impl Default for WsConfig {
             idle_timeout: Duration::from_secs(60),
             max_message_size: 16 * 1024 * 1024,
             enabled: true,
+            ping_rate_limit_per_window: DEFAULT_PING_RATE_LIMIT_PER_WINDOW,
+            ping_rate_limit_window: DEFAULT_PING_RATE_LIMIT_WINDOW,
         }
     }
 }
@@ -183,6 +208,14 @@ impl WsProxy {
         let (mut backend_tx, mut backend_rx) = backend_ws.split();
 
         let idle = self.cfg.idle_timeout;
+        let ping_window = self.cfg.ping_rate_limit_window;
+        let ping_max: usize = self.cfg.ping_rate_limit_per_window as usize;
+        // Per-connection sliding window of client-originated Ping
+        // timestamps. Mirrors the shape of
+        // `lb_h2::PingFloodDetector` but over wall-clock `Instant`s
+        // (we don't need an integer-tick fixture here — the loop is
+        // already async-runtime driven).
+        let mut client_ping_log: VecDeque<Instant> = VecDeque::new();
 
         loop {
             let step = tokio::time::timeout(idle, async {
@@ -206,6 +239,35 @@ impl WsProxy {
                     return Ok(());
                 }
                 Ok(Direction::ClientToBackend(Ok(Some(msg)))) => {
+                    // WS-001 (auditor-delta MEDIUM 4.3): rate-limit
+                    // client-originated Pings to keep the gateway from
+                    // amplifying a flood at the backend. Backend→client
+                    // Pings are not gated — the backend is the
+                    // would-be victim, not the attacker.
+                    if matches!(msg, Message::Ping(_)) {
+                        let now = Instant::now();
+                        client_ping_log.push_back(now);
+                        while let Some(&front) = client_ping_log.front() {
+                            if now.saturating_duration_since(front) > ping_window {
+                                client_ping_log.pop_front();
+                            } else {
+                                break;
+                            }
+                        }
+                        if client_ping_log.len() > ping_max {
+                            let frame = CloseFrame {
+                                code: CloseCode::Policy,
+                                reason: std::borrow::Cow::Borrowed(
+                                    "ping flood: rate limit exceeded",
+                                ),
+                            };
+                            let _ = client_tx.send(Message::Close(Some(frame))).await;
+                            let _ = client_tx.close().await;
+                            let _ = backend_tx.send(Message::Close(None)).await;
+                            let _ = backend_tx.close().await;
+                            return Ok(());
+                        }
+                    }
                     let is_close = matches!(msg, Message::Close(_));
                     backend_tx.send(msg).await?;
                     if is_close {
@@ -484,6 +546,8 @@ mod tests {
             idle_timeout: Duration::from_millis(150),
             max_message_size: 64 * 1024,
             enabled: true,
+            ping_rate_limit_per_window: DEFAULT_PING_RATE_LIMIT_PER_WINDOW,
+            ping_rate_limit_window: DEFAULT_PING_RATE_LIMIT_WINDOW,
         };
         let proxy = Arc::new(WsProxy::new(cfg));
 
