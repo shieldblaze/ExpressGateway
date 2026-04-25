@@ -169,6 +169,20 @@ impl H2Proxy {
         self
     }
 
+    /// Whether an H2 upstream pool has been wired for this proxy.
+    /// Exposed for integration tests.
+    #[must_use]
+    pub const fn has_h2_upstream(&self) -> bool {
+        self.h2_upstream.is_some()
+    }
+
+    /// Whether an H3 upstream pool has been wired for this proxy.
+    /// Exposed for integration tests.
+    #[must_use]
+    pub const fn has_h3_upstream(&self) -> bool {
+        self.h3_upstream.is_some()
+    }
+
     /// Enable WebSocket upgrade handling on this proxy. Fluent; returns
     /// `self` for chaining off [`Self::with_security`] or [`Self::new`].
     #[must_use]

@@ -40,12 +40,15 @@ use lb_config::{
 };
 use lb_io::Runtime;
 use lb_io::dns::{DnsResolver, ResolverConfig};
+use lb_io::http2_pool::{Http2Pool, Http2PoolConfig};
 use lb_io::pool::{PoolConfig, TcpPool};
+use lb_io::quic_pool::{QuicPoolConfig, QuicUpstreamPool};
 use lb_io::sockopts::{BackendSockOpts, ListenerSockOpts};
 use lb_l7::grpc_proxy::{GrpcConfig, GrpcProxy};
-use lb_l7::h1_proxy::{AltSvcConfig as H1AltSvcConfig, H1Proxy, HttpTimeouts, RoundRobinAddrs};
+use lb_l7::h1_proxy::{AltSvcConfig as H1AltSvcConfig, H1Proxy, HttpTimeouts};
 use lb_l7::h2_proxy::H2Proxy;
 use lb_l7::h2_security::H2SecurityThresholds;
+use lb_l7::upstream::{RoundRobinUpstreams, UpstreamBackend, UpstreamProto};
 use lb_l7::ws_proxy::{WsConfig, WsProxy};
 use lb_observability::{MetricsRegistry, admin_http, http_latency_buckets};
 use lb_quic::{QuicListener, QuicListenerParams};
@@ -250,17 +253,153 @@ fn spawn_rotator_ticker(rotator: Arc<PlMutex<TicketRotator>>) {
 
 // ── H1 / H1s helpers ────────────────────────────────────────────────────
 
-/// Build a [`H1Proxy`] from a resolved backend address list and the
-/// optional `[listeners.alt_svc]` / `[listeners.http]` blocks.
+/// Parse a backend `protocol` string into [`UpstreamProto`]. Accepts
+/// the same set [`lb_config::validate_config`] does (`"tcp"` and `"h1"`
+/// both map to [`UpstreamProto::H1`]; raw TCP plays HTTP/1.1 on the
+/// L7 wire today). Returns an error naming the offending value so a
+/// misconfigured TOML lands a clear message at startup rather than a
+/// silent fallback.
+fn parse_upstream_proto(s: &str) -> anyhow::Result<UpstreamProto> {
+    match s {
+        "tcp" | "h1" => Ok(UpstreamProto::H1),
+        "h2" => Ok(UpstreamProto::H2),
+        "h3" => Ok(UpstreamProto::H3),
+        other => Err(anyhow::anyhow!(
+            "unknown backend protocol {other:?} (expected one of: tcp, h1, h2, h3)"
+        )),
+    }
+}
+
+/// Build the [`UpstreamBackend`] vector for a listener by zipping the
+/// resolved `addresses` with each [`lb_config::BackendConfig::protocol`].
+/// `addresses[i]` must correspond to `backends[i]` — `spawn_tcp` already
+/// enforces that ordering.
+fn build_upstream_backends(
+    listener_cfg: &lb_config::ListenerConfig,
+    addresses: &[SocketAddr],
+) -> anyhow::Result<Vec<UpstreamBackend>> {
+    if listener_cfg.backends.is_empty() {
+        anyhow::bail!(
+            "listener {} has no backends configured",
+            listener_cfg.address
+        );
+    }
+    if addresses.len() != listener_cfg.backends.len() {
+        anyhow::bail!(
+            "listener {}: resolved {} addresses for {} backends",
+            listener_cfg.address,
+            addresses.len(),
+            listener_cfg.backends.len()
+        );
+    }
+    let mut out = Vec::with_capacity(listener_cfg.backends.len());
+    for (i, b) in listener_cfg.backends.iter().enumerate() {
+        let proto = parse_upstream_proto(b.protocol.as_str()).with_context(|| {
+            format!(
+                "listener {} backend {i} (address {})",
+                listener_cfg.address, b.address
+            )
+        })?;
+        let Some(addr) = addresses.get(i).copied() else {
+            anyhow::bail!(
+                "listener {}: address slot {i} missing for backend {}",
+                listener_cfg.address,
+                b.address
+            );
+        };
+        // SNI for H3 backends is required by the upstream pool's TLS
+        // handshake. The config does not yet carry an explicit SNI knob;
+        // fall back to the host portion of the configured address so a
+        // hostname-shaped backend still works. IP-literal addresses
+        // produce an empty SNI which the pool surfaces as a TLS error.
+        let sni = if proto == UpstreamProto::H3 {
+            split_host_port(&b.address)
+                .ok()
+                .map(|(host, _)| host.to_owned())
+        } else {
+            None
+        };
+        out.push(UpstreamBackend { addr, proto, sni });
+    }
+    Ok(out)
+}
+
+/// Build an [`Http2Pool`] sized to the listener's [`H2SecurityConfig`]
+/// where supplied, falling back to [`Http2PoolConfig`]'s defaults
+/// otherwise. Wires through [`H2SecurityConfig::max_concurrent_streams`]
+/// so the per-upstream stream cap matches the frontend's policy.
+fn build_h2_upstream_pool(
+    tcp_pool: TcpPool,
+    h2_security_cfg: Option<&H2SecurityConfig>,
+) -> Arc<Http2Pool> {
+    let mut cfg = Http2PoolConfig::default();
+    if let Some(c) = h2_security_cfg {
+        if let Some(v) = c.max_concurrent_streams {
+            cfg.max_concurrent_streams = v;
+        }
+        if let Some(v) = c.initial_stream_window_size {
+            cfg.initial_stream_window = v;
+        }
+        if let Some(ms) = c.keep_alive_interval_ms {
+            cfg.keep_alive_interval = Duration::from_millis(ms);
+        }
+        if let Some(ms) = c.keep_alive_timeout_ms {
+            cfg.keep_alive_timeout = Duration::from_millis(ms);
+        }
+    }
+    Arc::new(Http2Pool::new(cfg, tcp_pool))
+}
+
+/// Build a [`QuicUpstreamPool`] with a config factory that produces
+/// fresh [`quiche::Config`]s. The factory installs [`LB_QUIC_ALPN`]
+/// (`"lb-quic"`) and inherits the listener's QUIC tunables when present,
+/// or [`QuicPoolConfig`] defaults otherwise.
+///
+/// Note: this is a **plaintext / no-peer-verify** dial config. Production
+/// deployments dialling untrusted H3 origins must extend this builder
+/// with a CA bundle via
+/// [`quiche::Config::load_verify_locations_from_file`] +
+/// [`quiche::Config::verify_peer(true)`]. Tracked as a v1 limitation in
+/// `docs/gap-analysis.md`.
+fn build_h3_upstream_pool() -> Arc<QuicUpstreamPool> {
+    let factory: Arc<dyn Fn() -> Result<quiche::Config, quiche::Error> + Send + Sync> =
+        Arc::new(|| {
+            let mut cfg = quiche::Config::new(quiche::PROTOCOL_VERSION)?;
+            cfg.set_application_protos(&[b"lb-quic"])?;
+            cfg.verify_peer(false);
+            cfg.set_max_idle_timeout(30_000);
+            cfg.set_max_recv_udp_payload_size(1_350);
+            cfg.set_max_send_udp_payload_size(1_350);
+            cfg.set_initial_max_data(1024 * 1024);
+            cfg.set_initial_max_stream_data_bidi_local(64 * 1024);
+            cfg.set_initial_max_stream_data_bidi_remote(64 * 1024);
+            cfg.set_initial_max_stream_data_uni(64 * 1024);
+            cfg.set_initial_max_streams_bidi(64);
+            cfg.set_initial_max_streams_uni(64);
+            cfg.set_disable_active_migration(true);
+            Ok(cfg)
+        });
+    Arc::new(QuicUpstreamPool::new(QuicPoolConfig::default(), factory))
+}
+
+/// Build a [`H1Proxy`] from the listener's resolved upstream backends
+/// and optional H2/H3 upstream pools.
+///
+/// Wraps the picker into an [`Arc<RoundRobinUpstreams>`] and threads
+/// through the multi-protocol surface ([`H1Proxy::with_multi_proto`])
+/// so a single listener can fan out to mixed-protocol backends in one
+/// round-robin cycle.
 fn build_h1_proxy(
     pool: TcpPool,
-    addresses: &[SocketAddr],
+    upstreams: Vec<UpstreamBackend>,
+    h2_pool: Option<Arc<Http2Pool>>,
+    h3_pool: Option<Arc<QuicUpstreamPool>>,
     alt_svc_cfg: Option<&AltSvcConfig>,
     http_cfg: Option<&HttpTimeoutsConfig>,
     ws_cfg: Option<&WebsocketConfig>,
     is_https: bool,
 ) -> anyhow::Result<Arc<H1Proxy>> {
-    let picker = RoundRobinAddrs::new(addresses.to_vec())
+    let picker = RoundRobinUpstreams::new(upstreams)
         .ok_or_else(|| anyhow::anyhow!("H1 listener requires at least one backend"))?;
     let alt_svc = alt_svc_cfg.map(|a| H1AltSvcConfig {
         h3_port: a.h3_port,
@@ -271,7 +410,13 @@ fn build_h1_proxy(
         body: Duration::from_millis(h.body_timeout_ms),
         total: Duration::from_millis(h.total_timeout_ms),
     });
-    let mut proxy = H1Proxy::new(pool, Arc::new(picker), alt_svc, timeouts, is_https);
+    let mut proxy = H1Proxy::with_multi_proto(pool, Arc::new(picker), alt_svc, timeouts, is_https);
+    if let Some(h2) = h2_pool {
+        proxy = proxy.with_h2_upstream(h2);
+    }
+    if let Some(h3) = h3_pool {
+        proxy = proxy.with_h3_upstream(h3);
+    }
     if let Some(ws) = ws_cfg {
         proxy = proxy.with_websocket(Arc::new(WsProxy::new(ws_config_to_runtime(ws))));
     }
@@ -296,7 +441,9 @@ fn ws_config_to_runtime(cfg: &WebsocketConfig) -> WsConfig {
 /// `h2` via ALPN.
 fn build_h2_proxy(
     pool: TcpPool,
-    addresses: &[SocketAddr],
+    upstreams: Vec<UpstreamBackend>,
+    h2_pool: Option<Arc<Http2Pool>>,
+    h3_pool: Option<Arc<QuicUpstreamPool>>,
     alt_svc_cfg: Option<&AltSvcConfig>,
     http_cfg: Option<&HttpTimeoutsConfig>,
     h2_security_cfg: Option<&H2SecurityConfig>,
@@ -304,7 +451,7 @@ fn build_h2_proxy(
     grpc_cfg: Option<&GrpcListenerConfig>,
     is_https: bool,
 ) -> anyhow::Result<Arc<H2Proxy>> {
-    let picker = RoundRobinAddrs::new(addresses.to_vec())
+    let picker = RoundRobinUpstreams::new(upstreams)
         .ok_or_else(|| anyhow::anyhow!("H2 listener requires at least one backend"))?;
     let alt_svc = alt_svc_cfg.map(|a| H1AltSvcConfig {
         h3_port: a.h3_port,
@@ -316,7 +463,7 @@ fn build_h2_proxy(
         total: Duration::from_millis(h.total_timeout_ms),
     });
     let security = merge_h2_security(h2_security_cfg);
-    let mut proxy = H2Proxy::with_security(
+    let mut proxy = H2Proxy::with_multi_proto(
         pool.clone(),
         Arc::new(picker),
         alt_svc,
@@ -324,6 +471,12 @@ fn build_h2_proxy(
         is_https,
         security,
     );
+    if let Some(h2) = h2_pool {
+        proxy = proxy.with_h2_upstream(h2);
+    }
+    if let Some(h3) = h3_pool {
+        proxy = proxy.with_h3_upstream(h3);
+    }
     if let Some(ws) = ws_cfg {
         proxy = proxy.with_websocket(Arc::new(WsProxy::new(ws_config_to_runtime(ws))));
     }
@@ -518,9 +671,17 @@ fn build_listener_mode(
             })
         }
         "h1" => {
+            let upstreams = build_upstream_backends(listener_cfg, addresses)?;
+            let needs_h2 = upstreams.iter().any(|b| b.proto == UpstreamProto::H2);
+            let needs_h3 = upstreams.iter().any(|b| b.proto == UpstreamProto::H3);
+            let h2_pool = needs_h2
+                .then(|| build_h2_upstream_pool(pool.clone(), listener_cfg.h2_security.as_ref()));
+            let h3_pool = needs_h3.then(build_h3_upstream_pool);
             let proxy = build_h1_proxy(
                 pool.clone(),
-                addresses,
+                upstreams,
+                h2_pool,
+                h3_pool,
                 listener_cfg.alt_svc.as_ref(),
                 listener_cfg.http.as_ref(),
                 listener_cfg.websocket.as_ref(),
@@ -531,6 +692,8 @@ fn build_listener_mode(
                 address = %listener_cfg.address,
                 protocol = "h1",
                 alt_svc = ?listener_cfg.alt_svc.as_ref().map(|a| format!("h3:{}", a.h3_port)),
+                upstream_h2 = needs_h2,
+                upstream_h3 = needs_h3,
                 "listener configured for HTTP/1.1"
             );
             Ok(ListenerMode::H1 { proxy })
@@ -546,9 +709,22 @@ fn build_listener_mode(
                 .with_context(|| format!("H1s TLS setup failed for {}", listener_cfg.address))?;
             let acceptor = TlsAcceptor::from(server_cfg);
             spawn_rotator_ticker(Arc::clone(&rotator));
+            let upstreams_h1 = build_upstream_backends(listener_cfg, addresses)?;
+            let upstreams_h2 = upstreams_h1.clone();
+            let needs_h2 = upstreams_h1.iter().any(|b| b.proto == UpstreamProto::H2);
+            let needs_h3 = upstreams_h1.iter().any(|b| b.proto == UpstreamProto::H3);
+            // Share the H2/H3 upstream pools between the H1 + H2 proxies
+            // wired to this listener — they dial the same backends, so a
+            // single multiplex'd H2 connection or pooled QUIC conn serves
+            // both ALPN paths.
+            let h2_pool = needs_h2
+                .then(|| build_h2_upstream_pool(pool.clone(), listener_cfg.h2_security.as_ref()));
+            let h3_pool = needs_h3.then(build_h3_upstream_pool);
             let h1_proxy = build_h1_proxy(
                 pool.clone(),
-                addresses,
+                upstreams_h1,
+                h2_pool.clone(),
+                h3_pool.clone(),
                 listener_cfg.alt_svc.as_ref(),
                 listener_cfg.http.as_ref(),
                 listener_cfg.websocket.as_ref(),
@@ -557,7 +733,9 @@ fn build_listener_mode(
             .with_context(|| format!("H1s setup failed for {}", listener_cfg.address))?;
             let h2_proxy = build_h2_proxy(
                 pool.clone(),
-                addresses,
+                upstreams_h2,
+                h2_pool,
+                h3_pool,
                 listener_cfg.alt_svc.as_ref(),
                 listener_cfg.http.as_ref(),
                 listener_cfg.h2_security.as_ref(),
@@ -572,6 +750,8 @@ fn build_listener_mode(
                 cert = %tls_cfg.cert_path,
                 alpn = "h2,http/1.1",
                 alt_svc = ?listener_cfg.alt_svc.as_ref().map(|a| format!("h3:{}", a.h3_port)),
+                upstream_h2 = needs_h2,
+                upstream_h3 = needs_h3,
                 "listener configured for HTTPS with ALPN (h2 preferred, http/1.1 fallback)"
             );
             Ok(ListenerMode::H1s {

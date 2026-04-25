@@ -1426,6 +1426,7 @@ dependencies = [
  "lb-quic",
  "lb-security",
  "parking_lot",
+ "quiche",
  "rustls",
  "rustls-pemfile",
  "rustls-pki-types",

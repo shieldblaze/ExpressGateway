@@ -30,6 +30,10 @@ lb-l7 = { path = "../lb-l7" }
 lb-l4-xdp = { path = "../lb-l4-xdp" }
 hyper = { workspace = true }
 hyper-util = { workspace = true }
+# PROTO-001 D3-1: H3 upstream pool config-factory builds a quiche::Config
+# in-line (no shared helper exists yet). Pulled in via the workspace pin
+# already used by lb-quic / lb-io.
+quiche = { workspace = true }
 
 # Pillar 4b-1: CAP_BPF probe. Linux-only; the XDP path is gated on
 # target_os = "linux" in main.rs.

@@ -244,6 +244,21 @@ impl H1Proxy {
         self
     }
 
+    /// Whether an H2 upstream pool has been wired for this proxy.
+    /// Exposed for integration tests asserting the binary-wiring path
+    /// constructs a multi-protocol proxy correctly.
+    #[must_use]
+    pub const fn has_h2_upstream(&self) -> bool {
+        self.h2_upstream.is_some()
+    }
+
+    /// Whether an H3 upstream pool has been wired for this proxy.
+    /// Exposed for integration tests.
+    #[must_use]
+    pub const fn has_h3_upstream(&self) -> bool {
+        self.h3_upstream.is_some()
+    }
+
     /// Enable WebSocket upgrade handling on this proxy.
     ///
     /// Takes ownership; returns `self` so the call site reads as a
@@ -316,6 +331,24 @@ impl H1Proxy {
         req: Request<IncomingBody>,
         peer: SocketAddr,
     ) -> Response<BoxBody<Bytes, hyper::Error>> {
+        // gRPC requires HTTP/2 (RFC: gRPC over HTTP/2 §3.4 — gRPC PROTOCOL
+        // section). An H1 listener cannot serve gRPC: framing relies on H2
+        // streams, trailers, and HEADERS continuation. Reject early with
+        // 415 so a misconfigured client gets a clear actionable signal
+        // rather than 502 from a downstream H1 backend that wouldn't know
+        // what to do with `application/grpc` either.
+        if req
+            .headers()
+            .get(hyper::header::CONTENT_TYPE)
+            .and_then(|v| v.to_str().ok())
+            .is_some_and(|s| s.starts_with("application/grpc"))
+        {
+            return error_response(
+                StatusCode::UNSUPPORTED_MEDIA_TYPE,
+                "gRPC requires HTTP/2; this listener is HTTP/1.1",
+            );
+        }
+
         // WebSocket upgrade intercept (RFC 6455 §4). Only fires when the
         // listener is configured with a `WsProxy`; all other listener
         // traffic continues through the regular H1 request path.
