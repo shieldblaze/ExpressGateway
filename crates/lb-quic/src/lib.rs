@@ -99,10 +99,11 @@ pub use lb_security::{RetryTokenSigner, ZeroRttReplayGuard};
 pub use tokio_quiche::ConnectionParams;
 
 mod conn_actor;
-mod h3_bridge;
+pub mod h3_bridge;
 mod listener;
 mod router;
 
+pub use h3_bridge::{H3Request, H3UpstreamResponse, h3_to_h3_roundtrip, request_h3_upstream};
 pub use listener::{QuicListener, QuicListenerParams};
 pub use router::{RouterHandle, RouterParams, spawn as spawn_router};
 

@@ -421,9 +421,10 @@ pub struct BackendConfig {
     /// Wire protocol spoken to this backend. Defaults to `"tcp"`.
     /// Values accepted: `"tcp"` (raw stream, used by the plain-TCP and
     /// TLS-over-TCP listeners), `"h1"` (HTTP/1.1 over TCP — the QUIC
-    /// listener's default bridge target in Pillar 3b.3c-2), `"h3"`
-    /// (HTTP/3 over QUIC — consumed by the Pillar 3b.3c-3 upstream
-    /// pool).
+    /// listener's default bridge target in Pillar 3b.3c-2), `"h2"`
+    /// (HTTP/2 over TCP+TLS via ALPN; consumed by `lb_io::Http2Pool` from
+    /// every L7 listener — PROTO-001), `"h3"` (HTTP/3 over QUIC —
+    /// consumed by the Pillar 3b.3c-3 upstream pool).
     #[serde(default = "default_backend_protocol")]
     pub protocol: String,
     /// Weight for weighted load-balancing algorithms (default 1).
@@ -649,11 +650,11 @@ fn validate_backend_list(i: usize, listener: &ListenerConfig) -> Result<(), Conf
             )));
         }
         match backend.protocol.as_str() {
-            "tcp" | "h1" | "h3" => {}
+            "tcp" | "h1" | "h2" | "h3" => {}
             other => {
                 return Err(ConfigError::Validation(format!(
                     "listener {i} backend {j} has unknown protocol {other:?} \
-                     (expected one of: tcp, h1, h3)"
+                     (expected one of: tcp, h1, h2, h3)"
                 )));
             }
         }

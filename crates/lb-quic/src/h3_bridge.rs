@@ -25,10 +25,15 @@ use std::net::SocketAddr;
 use std::sync::Arc;
 
 use bytes::Bytes;
+use http_body_util::BodyExt;
+use http_body_util::Full;
+use http_body_util::combinators::BoxBody;
+use hyper::Request;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpStream;
 
 use lb_h3::{H3Frame, QpackDecoder, QpackEncoder, decode_frame, encode_frame};
+use lb_io::http2_pool::Http2Pool;
 use lb_io::pool::TcpPool;
 use lb_io::quic_pool::QuicUpstreamPool;
 
@@ -45,9 +50,14 @@ pub struct StreamRxBuf {
 }
 
 impl StreamRxBuf {
-    /// Append freshly-received bytes and return Ok(Some(headers)) once
-    /// a full HEADERS frame has been decoded. Returns Ok(None) if more
+    /// Append freshly-received bytes and return `Ok(Some(headers))` once
+    /// a full HEADERS frame has been decoded. Returns `Ok(None)` if more
     /// bytes are needed.
+    ///
+    /// # Errors
+    ///
+    /// Surfaces a string-formatted decode error if the H3 frame parser
+    /// rejects the buffer or if QPACK cannot decode the field block.
     pub fn feed(&mut self, chunk: &[u8]) -> Result<Option<Vec<(String, String)>>, String> {
         if self.done {
             return Ok(None);
@@ -206,16 +216,21 @@ fn parse_status_line(line: &str) -> Result<u16, String> {
         .map_err(|e| format!("status parse {code:?}: {e}"))
 }
 
-/// Build the H3 response byte stream from an H1 response. Emits one
-/// HEADERS frame (`:status`, `content-length`) followed by one DATA
-/// frame (body). Returns the concatenated bytes the actor will
-/// `stream_send` with FIN.
+/// Build the H3 response byte stream from an H1 response.
 ///
-/// Uses only QPACK static-table entries. `:status` for 100/103/200/
-/// 204/206/302/304/400/403/404/421/425/500/503 is indexed; other
-/// values fall back to literal-with-name-ref on the `:status` static
-/// entry (index 24 onwards). `content-length: N` always literal-with-
-/// name-ref (index 4, value=N).
+/// Emits one HEADERS frame (`:status`, `content-length`) followed by
+/// one DATA frame (body). Returns the concatenated bytes the actor
+/// will `stream_send` with FIN.
+///
+/// Uses only QPACK static-table entries. `:status` for the common
+/// codes (200/204/206/302/304/400/403/404/421/425/500/503) is indexed;
+/// other values fall back to literal-with-name-ref on the `:status`
+/// static entry. `content-length: N` always literal-with-name-ref.
+///
+/// # Errors
+///
+/// Surfaces a string-formatted error if QPACK encoding or the H3
+/// frame encoder reject the inputs.
 pub fn encode_h3_response(status: u16, body: &[u8]) -> Result<Vec<u8>, String> {
     let encoder = QpackEncoder::new();
     let headers: Vec<(String, String)> = vec![
@@ -244,6 +259,13 @@ pub fn encode_h3_response(status: u16, body: &[u8]) -> Result<Vec<u8>, String> {
 /// Blocking `TcpPool::acquire` is moved off the tokio worker via
 /// `spawn_blocking` — this matches the pattern already used in
 /// `crates/lb/src/main.rs`.
+///
+/// # Errors
+///
+/// Surfaces a string-formatted error if the H3 frame encoding of the
+/// fallback 502 response itself fails. Backend dial / write / read
+/// errors are caught and turned into a 502 response body internally
+/// rather than bubbled up.
 pub async fn h3_to_h1_roundtrip(
     req: &H3Request,
     backend: SocketAddr,
@@ -289,6 +311,266 @@ pub async fn h3_to_h1_roundtrip(
     // Connection: close was sent, socket will be dropped; do not reuse.
     pooled.set_reusable(false);
     encode_h3_response(response.status, &response.body)
+}
+
+/// Outcome of a single round-trip to an H3 upstream backend.
+///
+/// Carries the parsed response status, response field list, and body
+/// bytes. Used by [`request_h3_upstream`] so non-H3 listeners
+/// (`H1Proxy`, `H2Proxy`) can forward requests to an H3 backend and
+/// convert the response back into their own wire format using the
+/// `lb-l7` bridge crate.
+#[derive(Debug)]
+pub struct H3UpstreamResponse {
+    /// `:status` pseudo-header value parsed from the response HEADERS
+    /// frame.
+    pub status: u16,
+    /// Response field list. Pseudo-headers (`:status`) are filtered out
+    /// — only regular headers remain — so callers can append their own
+    /// `Content-Length` etc when bridging.
+    pub headers: Vec<(String, String)>,
+    /// Response body bytes assembled from all DATA frames received
+    /// before stream-FIN.
+    pub body: Vec<u8>,
+}
+
+/// Forward a pre-built H3 request to an upstream H3 backend via
+/// [`QuicUpstreamPool`] and return the parsed response.
+///
+/// `headers` is the QPACK-encodable field list — callers must
+/// pre-populate `:method`, `:scheme`, `:authority`, `:path` plus any
+/// regular headers. `body` is forwarded as a single DATA frame; an
+/// empty body sends FIN immediately after HEADERS.
+///
+/// On any backend failure returns an [`H3UpstreamResponse`] with
+/// `status = 502` and an empty body.
+#[allow(clippy::too_many_lines, clippy::large_futures)]
+pub async fn request_h3_upstream(
+    headers: Vec<(String, String)>,
+    body: bytes::Bytes,
+    addr: std::net::SocketAddr,
+    sni: &str,
+    pool: &QuicUpstreamPool,
+) -> H3UpstreamResponse {
+    let bad_gateway = || H3UpstreamResponse {
+        status: 502,
+        headers: Vec::new(),
+        body: Vec::new(),
+    };
+
+    let mut pooled = match pool.acquire(addr, sni).await {
+        Ok(p) => p,
+        Err(e) => {
+            tracing::warn!(error = %e, %addr, "request_h3_upstream pool acquire failed");
+            return bad_gateway();
+        }
+    };
+    let Some(upstream) = pooled.get_mut() else {
+        tracing::warn!("request_h3_upstream pool returned empty handle");
+        return bad_gateway();
+    };
+
+    let encoder = QpackEncoder::new();
+    let Ok(header_block) = encoder.encode(&headers) else {
+        return bad_gateway();
+    };
+    let Ok(headers_frame) = encode_frame(&H3Frame::Headers { header_block }) else {
+        return bad_gateway();
+    };
+    let body_frame_bytes: bytes::Bytes = if body.is_empty() {
+        bytes::Bytes::new()
+    } else {
+        match encode_frame(&H3Frame::Data {
+            payload: body.clone(),
+        }) {
+            Ok(b) => b,
+            Err(_) => return bad_gateway(),
+        }
+    };
+    let mut request_bytes = Vec::with_capacity(headers_frame.len() + body_frame_bytes.len());
+    request_bytes.extend_from_slice(&headers_frame);
+    request_bytes.extend_from_slice(&body_frame_bytes);
+
+    let stream_id: u64 = 0;
+    let socket_clone = Arc::clone(upstream.socket());
+    let local = upstream.local();
+    let qconn_mut: &mut quiche::Connection = match upstream.connection_mut() {
+        Some(c) => c,
+        None => return bad_gateway(),
+    };
+
+    let mut sent_pos = 0usize;
+    while sent_pos < request_bytes.len() {
+        let chunk = request_bytes.get(sent_pos..).unwrap_or(&[]);
+        let fin = sent_pos + chunk.len() >= request_bytes.len();
+        match qconn_mut.stream_send(stream_id, chunk, fin) {
+            Ok(n) => {
+                if n == 0 {
+                    break;
+                }
+                sent_pos = sent_pos.saturating_add(n);
+            }
+            Err(quiche::Error::Done) => break,
+            Err(e) => {
+                tracing::warn!(error = %e, "request_h3_upstream stream_send");
+                pooled.set_reusable(false);
+                return bad_gateway();
+            }
+        }
+    }
+
+    let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(30);
+    let mut out_buf = vec![0u8; 65_535];
+    let mut in_buf = vec![0u8; 65_535];
+    let mut rx_tail: Vec<u8> = Vec::new();
+    let mut decoded_status: Option<u16> = None;
+    let mut decoded_headers: Vec<(String, String)> = Vec::new();
+    let mut decoded_body: Vec<u8> = Vec::new();
+    let mut body_complete = false;
+    let mut expected_len: Option<usize> = None;
+    let mut stream_finished = false;
+
+    while tokio::time::Instant::now() < deadline {
+        while let Ok((n, info)) = qconn_mut.send(&mut out_buf) {
+            let bytes = out_buf.get(..n).unwrap_or(&[]);
+            if socket_clone.send_to(bytes, info.to).await.is_err() {
+                break;
+            }
+        }
+
+        let readable: Vec<u64> = qconn_mut.readable().collect();
+        for sid in readable {
+            if sid != stream_id {
+                continue;
+            }
+            let mut chunk = [0u8; 8192];
+            while let Ok((n, fin)) = qconn_mut.stream_recv(sid, &mut chunk) {
+                rx_tail.extend_from_slice(chunk.get(..n).unwrap_or(&[]));
+                if fin {
+                    stream_finished = true;
+                }
+            }
+        }
+
+        loop {
+            match decode_frame(&rx_tail, 1 << 20) {
+                Ok((H3Frame::Headers { header_block }, consumed)) => {
+                    rx_tail.drain(..consumed);
+                    if let Ok(hdrs) = QpackDecoder::new().decode(&header_block) {
+                        for (n, v) in hdrs {
+                            if n == ":status" {
+                                decoded_status = v.parse::<u16>().ok();
+                            } else if !n.starts_with(':') {
+                                if n == "content-length" {
+                                    expected_len = v.parse::<usize>().ok();
+                                }
+                                decoded_headers.push((n, v));
+                            }
+                        }
+                    }
+                }
+                Ok((H3Frame::Data { payload }, consumed)) => {
+                    rx_tail.drain(..consumed);
+                    decoded_body.extend_from_slice(&payload);
+                    if let Some(cl) = expected_len {
+                        if decoded_body.len() >= cl {
+                            body_complete = true;
+                        }
+                    }
+                }
+                Ok((_other, consumed)) => {
+                    rx_tail.drain(..consumed);
+                }
+                Err(_) => break,
+            }
+        }
+
+        if decoded_status.is_some() && (body_complete || stream_finished) {
+            break;
+        }
+
+        let timeout = qconn_mut
+            .timeout()
+            .unwrap_or(std::time::Duration::from_millis(50));
+        match tokio::time::timeout(timeout, socket_clone.recv_from(&mut in_buf)).await {
+            Ok(Ok((n, from))) => {
+                let slice = in_buf.get_mut(..n).unwrap_or(&mut []);
+                let info = quiche::RecvInfo { from, to: local };
+                match qconn_mut.recv(slice, info) {
+                    Ok(_) | Err(quiche::Error::Done) => {}
+                    Err(_) => break,
+                }
+            }
+            Ok(Err(_)) | Err(_) => {
+                qconn_mut.on_timeout();
+            }
+        }
+    }
+
+    pooled.set_reusable(false);
+
+    H3UpstreamResponse {
+        status: decoded_status.unwrap_or(502),
+        headers: decoded_headers,
+        body: decoded_body,
+    }
+}
+
+/// Forward an H3 request to an upstream H2 backend via
+/// [`Http2Pool`] and return the response mapped back into H3 wire
+/// bytes. On any backend failure returns a 502 + `"bad gateway"`.
+///
+/// PROTO-001 H3-listener → H2-backend path. Body forwarding is
+/// supported (single DATA frame in / collected `Bytes` to upstream
+/// hyper request) but the e2e exercise is GET-only.
+pub async fn h3_to_h2_roundtrip(
+    req: &H3Request,
+    addr: std::net::SocketAddr,
+    pool: &Http2Pool,
+) -> Vec<u8> {
+    let bad_gateway = || encode_h3_response(502, b"bad gateway").unwrap_or_default();
+
+    // Build hyper Request<BoxBody>. URI must carry scheme + authority
+    // + path so hyper's H2 client emits the right pseudo-headers.
+    let scheme = "http"; // upstream is plaintext H2 in v1
+    let authority = if req.authority.is_empty() {
+        addr.to_string()
+    } else {
+        req.authority.clone()
+    };
+    let uri = format!("{scheme}://{authority}{}", req.path);
+    let mut builder = Request::builder().method(req.method.as_str()).uri(uri);
+    for (n, v) in &req.extra {
+        if n.starts_with(':') {
+            continue;
+        }
+        builder = builder.header(n.as_str(), v.as_str());
+    }
+    let body: BoxBody<Bytes, hyper::Error> = Full::<Bytes>::new(Bytes::new())
+        .map_err(|never| match never {})
+        .boxed();
+    let request: Request<BoxBody<Bytes, hyper::Error>> = match builder.body(body) {
+        Ok(r) => r,
+        Err(_) => return bad_gateway(),
+    };
+
+    let resp = match pool.send_request(addr, request).await {
+        Ok(r) => r,
+        Err(e) => {
+            tracing::warn!(error = %e, %addr, "H3→H2 send_request failed");
+            return bad_gateway();
+        }
+    };
+
+    let (parts, body) = resp.into_parts();
+    let body_bytes = match body.collect().await {
+        Ok(b) => b.to_bytes(),
+        Err(e) => {
+            tracing::warn!(error = %e, "H3→H2 body read failed");
+            return bad_gateway();
+        }
+    };
+    encode_h3_response(parts.status.as_u16(), &body_bytes).unwrap_or_default()
 }
 
 /// Forward an H3 request to an upstream H3 backend via

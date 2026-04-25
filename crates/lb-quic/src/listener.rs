@@ -26,6 +26,7 @@ use parking_lot::Mutex as PlMutex;
 use tokio::net::UdpSocket;
 use tokio_util::sync::CancellationToken;
 
+use lb_io::http2_pool::Http2Pool;
 use lb_io::pool::TcpPool;
 use lb_io::quic_pool::QuicUpstreamPool;
 use lb_security::{RetryTokenSigner, ZeroRttReplayGuard};
@@ -69,6 +70,12 @@ pub struct QuicListenerParams {
     /// H3 requests on this listener route via the QUIC upstream pool
     /// instead of the H1/TcpPool path (Pillar 3b.3c-3).
     pub h3_backend: Option<(QuicUpstreamPool, SocketAddr, String)>,
+    /// Optional upstream H2 backend `(pool, addr)` — when set,
+    /// H3 requests on this listener route via the HTTP/2 upstream pool
+    /// (PROTO-001 H3→H2 path). Takes precedence over `h3_backend` when
+    /// both are configured; mixed-protocol routing is not supported in
+    /// v1.
+    pub h2_backend: Option<(Http2Pool, SocketAddr)>,
 }
 
 impl std::fmt::Debug for QuicListenerParams {
@@ -84,6 +91,7 @@ impl std::fmt::Debug for QuicListenerParams {
             .field("backends", &self.backends)
             .field("pool_set", &self.pool.is_some())
             .field("h3_backend_set", &self.h3_backend.is_some())
+            .field("h2_backend_set", &self.h2_backend.is_some())
             .finish()
     }
 }
@@ -109,6 +117,7 @@ impl QuicListenerParams {
             backends: Vec::new(),
             pool: None,
             h3_backend: None,
+            h2_backend: None,
         }
     }
 
@@ -132,6 +141,15 @@ impl QuicListenerParams {
         sni: impl Into<String>,
     ) -> Self {
         self.h3_backend = Some((pool, addr, sni.into()));
+        self
+    }
+
+    /// Attach an upstream H2 backend for H3→H2 forwarding
+    /// (PROTO-001). `addr` is the backend's TCP address. Takes
+    /// precedence over `h3_backend`.
+    #[must_use]
+    pub fn with_h2_backend(mut self, pool: Http2Pool, addr: SocketAddr) -> Self {
+        self.h2_backend = Some((pool, addr));
         self
     }
 }
@@ -220,6 +238,7 @@ impl QuicListener {
             pool,
             backends: Arc::new(params.backends.clone()),
             h3_backend: params.h3_backend.clone(),
+            h2_backend: params.h2_backend.clone(),
             // PROMPT.md §6 target conntrack scale. Auditor-suggested
             // bound (2026-04-23) — finite-memory defence against Initial
             // flooding behind legitimate source-address retry tokens.

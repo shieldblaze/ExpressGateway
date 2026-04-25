@@ -1582,7 +1582,11 @@ dependencies = [
 name = "lb-io"
 version = "0.1.0"
 dependencies = [
+ "bytes",
  "dashmap 6.1.0",
+ "http-body-util",
+ "hyper",
+ "hyper-util",
  "io-uring",
  "libc",
  "parking_lot",
@@ -1619,6 +1623,7 @@ dependencies = [
  "lb-grpc",
  "lb-h2",
  "lb-io",
+ "lb-quic",
  "parking_lot",
  "thiserror 2.0.18",
  "tokio",
@@ -1649,6 +1654,8 @@ version = "0.1.0"
 dependencies = [
  "bytes",
  "dashmap 6.1.0",
+ "http-body-util",
+ "hyper",
  "lb-h3",
  "lb-io",
  "lb-security",

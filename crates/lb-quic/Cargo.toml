@@ -16,6 +16,11 @@ parking_lot = { workspace = true }
 dashmap = { workspace = true }
 quiche = { workspace = true }
 tokio-quiche = { workspace = true }
+# PROTO-001: H3 listener → H2 backend path consumes hyper's H2 client
+# via lb_io::http2_pool::Http2Pool. We construct the upstream
+# `Request<BoxBody>` here in `h3_bridge::h3_to_h2_roundtrip`.
+hyper = { workspace = true }
+http-body-util = { workspace = true }
 # `ring::rand` for retry-secret generation and SCID sampling in the
 # listener seam (Pillar 3b.3c-1). ring is already in the tree via
 # quiche/BoringSSL's build — declaring it direct is cheap.

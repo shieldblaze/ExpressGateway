@@ -18,6 +18,15 @@ quiche = { workspace = true }
 # the tree via quiche's BoringSSL build; declaring direct keeps the
 # pool module independent of re-export chains.
 ring = "0.17"
+# PROTO-001: lb-io::http2_pool wraps a TcpPool with hyper's
+# `client::conn::http2` machinery so every L7 listener can dial an
+# HTTP/2 backend through the same pool surface. We also pull
+# http-body-util for `BoxBody`, the body type the pool's public
+# `send_request` API speaks.
+hyper = { workspace = true }
+hyper-util = { workspace = true }
+http-body-util = { workspace = true }
+bytes = { workspace = true }
 
 [target.'cfg(target_os = "linux")'.dependencies]
 io-uring = { workspace = true }

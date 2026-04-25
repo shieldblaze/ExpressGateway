@@ -27,10 +27,13 @@ use tokio::net::UdpSocket;
 use tokio::sync::mpsc;
 use tokio_util::sync::CancellationToken;
 
+use lb_io::http2_pool::Http2Pool;
 use lb_io::pool::TcpPool;
 use lb_io::quic_pool::QuicUpstreamPool;
 
-use crate::h3_bridge::{H3Request, StreamRxBuf, h3_to_h1_roundtrip, h3_to_h3_roundtrip};
+use crate::h3_bridge::{
+    H3Request, StreamRxBuf, h3_to_h1_roundtrip, h3_to_h2_roundtrip, h3_to_h3_roundtrip,
+};
 
 /// Raw UDP packet forwarded from the router to a single actor.
 #[derive(Debug)]
@@ -67,6 +70,11 @@ pub struct ActorParams {
     /// via [`h3_to_h3_roundtrip`] instead of the H1/TcpPool path.
     /// Pillar 3b.3c-3.
     pub h3_backend: Option<(QuicUpstreamPool, SocketAddr, String)>,
+    /// Optional upstream H2 pool + single upstream H2 backend `(addr)`.
+    /// When configured (and `h2_backend` is `Some`), the actor routes
+    /// H3 requests via [`h3_to_h2_roundtrip`]. Takes precedence over
+    /// `h3_backend`. PROTO-001 H3→H2 path.
+    pub h2_backend: Option<(Http2Pool, SocketAddr)>,
 }
 
 /// Drive one `quiche::Connection` to completion, terminating H3 and
@@ -163,6 +171,7 @@ pub async fn run_actor(mut params: ActorParams) -> std::io::Result<()> {
                 &params.pool,
                 &params.backends,
                 params.h3_backend.as_ref(),
+                params.h2_backend.as_ref(),
             );
         }
     }
@@ -267,6 +276,7 @@ fn poll_h3(
     pool: &TcpPool,
     backends: &Arc<Vec<SocketAddr>>,
     h3_backend: Option<&(QuicUpstreamPool, SocketAddr, String)>,
+    h2_backend: Option<&(Http2Pool, SocketAddr)>,
 ) {
     let readable: Vec<u64> = conn.readable().collect();
     for sid in readable {
@@ -278,6 +288,18 @@ fn poll_h3(
                     match rx.feed(buf.get(..n).unwrap_or(&[])) {
                         Ok(Some(headers)) => {
                             let req = H3Request::from_headers(headers);
+                            // PROTO-001: H3→H2 takes precedence when
+                            // h2_backend is configured.
+                            if let Some((h2pool, addr)) = h2_backend {
+                                let h2pool = h2pool.clone();
+                                let addr = *addr;
+                                request_tasks.push(tokio::spawn(async move {
+                                    let bytes =
+                                        Box::pin(h3_to_h2_roundtrip(&req, addr, &h2pool)).await;
+                                    (sid, bytes)
+                                }));
+                                continue;
+                            }
                             if let Some((qpool, addr, sni)) = h3_backend {
                                 let qpool = qpool.clone();
                                 let addr = *addr;

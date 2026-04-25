@@ -19,6 +19,10 @@ tracing = { workspace = true }
 parking_lot = { workspace = true }
 lb-io = { path = "../lb-io" }
 lb-h2 = { path = "../lb-h2" }
+# PROTO-001: H1→H3 / H2→H3 upstream paths consume `lb_quic::request_h3_upstream`
+# and the `H3UpstreamResponse` carrier type. lb-quic stays on quiche; we
+# only consume its public API.
+lb-quic = { path = "../lb-quic" }
 # Item 3: gRPC proxy path (PROMPT.md §13). `lb-grpc` ships the
 # codec-level types (GrpcDeadline, GrpcStatus, GrpcFrame, StreamingMode);
 # we only consume them — no modifications to lb-grpc.

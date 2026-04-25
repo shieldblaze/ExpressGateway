@@ -71,6 +71,9 @@ pub struct RouterParams {
     /// H3 requests on this listener route to the upstream via the
     /// QUIC pool instead of the H1/TcpPool path. Pillar 3b.3c-3.
     pub h3_backend: Option<(QuicUpstreamPool, SocketAddr, String)>,
+    /// Optional upstream H2 backend `(pool, addr)`. PROTO-001 H3→H2
+    /// path. Takes precedence over `h3_backend`.
+    pub h2_backend: Option<(lb_io::http2_pool::Http2Pool, SocketAddr)>,
     /// Maximum number of concurrent QUIC connections served by this
     /// router. When the per-CID dispatch table is at this cap, new
     /// Initial packets are dropped (legitimate clients retry; a
@@ -362,6 +365,7 @@ fn spawn_new_connection(
         pool: params.pool.clone(),
         backends: Arc::clone(&params.backends),
         h3_backend: params.h3_backend.clone(),
+        h2_backend: params.h2_backend.clone(),
     };
     // Spawn actor; on exit it leaves the dashmap entries behind which
     // will be reaped on next `try_send` failure. That's acceptable —

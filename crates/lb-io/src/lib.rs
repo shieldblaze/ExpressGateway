@@ -22,6 +22,7 @@
 #![cfg_attr(test, allow(clippy::unwrap_used, clippy::expect_used))]
 
 pub mod dns;
+pub mod http2_pool;
 pub mod pool;
 pub mod quic_pool;
 pub mod sockopts;

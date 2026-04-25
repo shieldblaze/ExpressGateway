@@ -25,6 +25,7 @@ pub mod h2_to_h3;
 pub mod h3_to_h1;
 pub mod h3_to_h2;
 pub mod h3_to_h3;
+pub mod upstream;
 pub mod ws_proxy;
 
 use h1_to_h1::H1ToH1Bridge;

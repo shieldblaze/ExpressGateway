@@ -36,7 +36,9 @@ use hyper::{Request, Response, StatusCode};
 use hyper_util::rt::{TokioExecutor, TokioIo, TokioTimer};
 use tokio::io::{AsyncRead, AsyncWrite};
 
+use lb_io::http2_pool::Http2Pool;
 use lb_io::pool::TcpPool;
+use lb_io::quic_pool::QuicUpstreamPool;
 
 use crate::grpc_proxy::{self, GrpcProxy};
 use crate::h1_proxy::{
@@ -44,12 +46,13 @@ use crate::h1_proxy::{
     strip_hop_by_hop,
 };
 use crate::h2_security::H2SecurityThresholds;
+use crate::upstream::{BackendInfoPicker, SingleProtoPicker, UpstreamBackend, UpstreamProto};
 use crate::ws_proxy::{self, WsProxy, is_h2_extended_connect};
 
 /// L7 HTTP/2 reverse proxy. Cheap to clone via [`Arc`].
 pub struct H2Proxy {
     pool: TcpPool,
-    picker: Arc<dyn BackendPicker>,
+    picker: Arc<dyn BackendInfoPicker>,
     alt_svc: Option<AltSvcConfig>,
     timeouts: HttpTimeouts,
     is_https: bool,
@@ -64,6 +67,10 @@ pub struct H2Proxy {
     /// path. The H2 flood/bomb thresholds from Item 1 still apply to
     /// the hosting connection.
     grpc: Option<Arc<GrpcProxy>>,
+    /// Optional H2 upstream pool. PROTO-001 H2→H2 path.
+    h2_upstream: Option<Arc<Http2Pool>>,
+    /// Optional H3 upstream pool. PROTO-001 H2→H3 path.
+    h3_upstream: Option<Arc<QuicUpstreamPool>>,
 }
 
 impl H2Proxy {
@@ -94,10 +101,39 @@ impl H2Proxy {
     }
 
     /// Construct an [`H2Proxy`] with an explicit [`H2SecurityThresholds`].
+    ///
+    /// Wraps `picker` in a [`SingleProtoPicker`] tagged
+    /// [`UpstreamProto::H1`] for backwards compatibility.
     #[must_use]
     pub fn with_security(
         pool: TcpPool,
         picker: Arc<dyn BackendPicker>,
+        alt_svc: Option<AltSvcConfig>,
+        timeouts: HttpTimeouts,
+        is_https: bool,
+        security: H2SecurityThresholds,
+    ) -> Self {
+        let info = Arc::new(SingleProtoPicker::new(picker, UpstreamProto::H1, None));
+        Self {
+            pool,
+            picker: info,
+            alt_svc,
+            timeouts,
+            is_https,
+            security,
+            ws: None,
+            grpc: None,
+            h2_upstream: None,
+            h3_upstream: None,
+        }
+    }
+
+    /// Construct an [`H2Proxy`] backed by a multi-protocol picker
+    /// (PROTO-001).
+    #[must_use]
+    pub const fn with_multi_proto(
+        pool: TcpPool,
+        picker: Arc<dyn BackendInfoPicker>,
         alt_svc: Option<AltSvcConfig>,
         timeouts: HttpTimeouts,
         is_https: bool,
@@ -112,7 +148,25 @@ impl H2Proxy {
             security,
             ws: None,
             grpc: None,
+            h2_upstream: None,
+            h3_upstream: None,
         }
+    }
+
+    /// Attach an H2 upstream pool used for backends with
+    /// [`UpstreamProto::H2`]. PROTO-001.
+    #[must_use]
+    pub fn with_h2_upstream(mut self, pool: Arc<Http2Pool>) -> Self {
+        self.h2_upstream = Some(pool);
+        self
+    }
+
+    /// Attach an H3 upstream pool used for backends with
+    /// [`UpstreamProto::H3`]. PROTO-001.
+    #[must_use]
+    pub fn with_h3_upstream(mut self, pool: Arc<QuicUpstreamPool>) -> Self {
+        self.h3_upstream = Some(pool);
+        self
     }
 
     /// Enable WebSocket upgrade handling on this proxy. Fluent; returns
@@ -196,7 +250,7 @@ impl hyper::service::Service<Request<IncomingBody>> for ProxyService {
     fn call(&self, req: Request<IncomingBody>) -> Self::Future {
         let inner = Arc::clone(&self.inner);
         let peer = self.peer;
-        Box::pin(async move { Ok(inner.handle(req, peer).await) })
+        Box::pin(async move { Ok(Box::pin(inner.handle(req, peer)).await) })
     }
 }
 
@@ -221,10 +275,21 @@ impl H2Proxy {
             .as_ref()
             .filter(|g| g.config().enabled && grpc_proxy::is_grpc_request(&req))
         {
-            let Some(backend_addr) = self.picker.pick() else {
+            // gRPC requires an H1/H2 backend; today's GrpcProxy speaks
+            // hyper H2 over a TCP-pool stream, so any backend selected
+            // by the multi-proto picker is acceptable provided it is
+            // not H3 (which would require a QUIC tunnel + grpc-over-h3
+            // adaptor, out of v1 scope).
+            let Some(backend) = self.picker.pick_info() else {
                 return error_response(StatusCode::BAD_GATEWAY, "no backend available");
             };
-            return Arc::clone(gp).handle(req, backend_addr).await;
+            if backend.proto == UpstreamProto::H3 {
+                return error_response(
+                    StatusCode::BAD_GATEWAY,
+                    "gRPC proxy does not support H3 backends",
+                );
+            }
+            return Arc::clone(gp).handle(req, backend.addr).await;
         }
         let (mut parts, body) = req.into_parts();
 
@@ -258,17 +323,23 @@ impl H2Proxy {
         }
         append_via(&mut parts.headers);
 
-        let Some(backend_addr) = self.picker.pick() else {
+        let Some(backend) = self.picker.pick_info() else {
             return error_response(StatusCode::BAD_GATEWAY, "no backend available");
         };
 
         let req_for_upstream = Request::from_parts(parts, body);
-        match self.proxy_request(backend_addr, req_for_upstream).await {
-            Ok(resp) => self.finalize_response(resp),
-            Err(ProxyErr::Upstream(s)) => error_response(StatusCode::BAD_GATEWAY, &s),
-            Err(ProxyErr::Timeout) => {
-                error_response(StatusCode::GATEWAY_TIMEOUT, "upstream timeout")
+        match backend.proto {
+            UpstreamProto::H1 => match self.proxy_request(backend.addr, req_for_upstream).await {
+                Ok(resp) => self.finalize_response(resp),
+                Err(ProxyErr::Upstream(s)) => error_response(StatusCode::BAD_GATEWAY, &s),
+                Err(ProxyErr::Timeout) => {
+                    error_response(StatusCode::GATEWAY_TIMEOUT, "upstream timeout")
+                }
+            },
+            UpstreamProto::H2 => {
+                Box::pin(self.proxy_h2_to_h2(backend.addr, req_for_upstream)).await
             }
+            UpstreamProto::H3 => Box::pin(self.proxy_h2_to_h3(&backend, req_for_upstream)).await,
         }
     }
 
@@ -286,9 +357,16 @@ impl H2Proxy {
         let Some(ws_proxy) = self.ws.clone() else {
             return error_response(StatusCode::BAD_GATEWAY, "websocket disabled");
         };
-        let Some(backend_addr) = self.picker.pick() else {
+        let Some(backend) = self.picker.pick_info() else {
             return error_response(StatusCode::BAD_GATEWAY, "no backend available");
         };
+        if backend.proto != UpstreamProto::H1 {
+            return error_response(
+                StatusCode::BAD_GATEWAY,
+                "WebSocket extended-CONNECT requires H1 backend",
+            );
+        }
+        let backend_addr = backend.addr;
 
         let upgrade_fut = hyper::upgrade::on(&mut req);
         let path_and_query = req
@@ -418,6 +496,325 @@ impl H2Proxy {
         }
         Response::from_parts(parts, body.boxed())
     }
+
+    /// Forward an H2 inbound request to an H2 backend (PROTO-001).
+    async fn proxy_h2_to_h2(
+        &self,
+        backend_addr: SocketAddr,
+        req: Request<IncomingBody>,
+    ) -> Response<BoxBody<Bytes, hyper::Error>> {
+        let Some(h2_pool) = self.h2_upstream.as_ref() else {
+            return error_response(
+                StatusCode::BAD_GATEWAY,
+                "H2 backend selected but no Http2Pool wired",
+            );
+        };
+        let translated = match translate_h2_request_to_h2(req).await {
+            Ok(r) => r,
+            Err(s) => return error_response(StatusCode::BAD_GATEWAY, &s),
+        };
+        match h2_pool.send_request(backend_addr, translated).await {
+            Ok(resp) => upstream_h2_response_to_h2(resp, self.alt_svc).await,
+            Err(lb_io::http2_pool::Http2PoolError::Timeout) => {
+                error_response(StatusCode::GATEWAY_TIMEOUT, "upstream H2 timeout")
+            }
+            Err(e) => error_response(StatusCode::BAD_GATEWAY, &format!("h2 upstream: {e}")),
+        }
+    }
+
+    /// Forward an H2 inbound request to an H3 backend (PROTO-001).
+    async fn proxy_h2_to_h3(
+        &self,
+        backend: &UpstreamBackend,
+        req: Request<IncomingBody>,
+    ) -> Response<BoxBody<Bytes, hyper::Error>> {
+        let Some(h3_pool) = self.h3_upstream.as_ref() else {
+            return error_response(
+                StatusCode::BAD_GATEWAY,
+                "H3 backend selected but no QuicUpstreamPool wired",
+            );
+        };
+        let sni = backend.sni.as_deref().unwrap_or("");
+        let (headers, body) = match collect_h2_request_to_h3_fieldlist(req, sni).await {
+            Ok(p) => p,
+            Err(s) => return error_response(StatusCode::BAD_GATEWAY, &s),
+        };
+        let h3_resp = Box::pin(lb_quic::request_h3_upstream(
+            headers,
+            body,
+            backend.addr,
+            sni,
+            h3_pool,
+        ))
+        .await;
+        h3_response_to_h2(h3_resp, self.alt_svc)
+    }
+}
+
+// ── PROTO-001 H2-side translation helpers ─────────────────────────────
+
+/// Lift an inbound H2 [`Request<IncomingBody>`] into the shape hyper's
+/// H2 client expects for the upstream side.
+///
+/// The request URI carries scheme + authority + path already (hyper's
+/// H2 server populates them from the inbound pseudo-headers). For H2→H2
+/// the codec bridge is essentially a pass-through, but we run it for
+/// the per-header lowercase normalization + hop-by-hop strip the bridge
+/// performs.
+async fn translate_h2_request_to_h2(
+    req: Request<IncomingBody>,
+) -> Result<Request<BoxBody<Bytes, hyper::Error>>, String> {
+    let (parts, body) = req.into_parts();
+    let body_bytes = body
+        .collect()
+        .await
+        .map_err(|e| format!("body collect: {e}"))?
+        .to_bytes();
+    let bridge = crate::create_bridge(crate::Protocol::Http2, crate::Protocol::Http2);
+    let scheme = parts
+        .uri
+        .scheme()
+        .map_or_else(|| "http".to_owned(), |s| s.as_str().to_owned());
+    let authority = parts
+        .uri
+        .authority()
+        .map(|a| a.as_str().to_owned())
+        .or_else(|| {
+            parts
+                .headers
+                .get(hyper::header::HOST)
+                .and_then(|v| v.to_str().ok())
+                .map(str::to_owned)
+        });
+    let mut bridge_in = crate::BridgeRequest {
+        method: parts.method.to_string(),
+        uri: parts
+            .uri
+            .path_and_query()
+            .map_or_else(|| "/".to_owned(), std::string::ToString::to_string),
+        headers: parts
+            .headers
+            .iter()
+            .filter_map(|(n, v)| {
+                v.to_str()
+                    .ok()
+                    .map(|s| (n.as_str().to_owned(), s.to_owned()))
+            })
+            .collect(),
+        body: body_bytes.clone(),
+        scheme: Some(scheme.clone()),
+    };
+    // Synthesise the pseudo-headers a real H2 client would have sent.
+    bridge_in
+        .headers
+        .insert(0, (":method".to_owned(), parts.method.to_string()));
+    bridge_in
+        .headers
+        .insert(1, (":path".to_owned(), bridge_in.uri.clone()));
+    bridge_in
+        .headers
+        .insert(2, (":scheme".to_owned(), scheme.clone()));
+    if let Some(a) = authority.as_deref() {
+        bridge_in
+            .headers
+            .insert(3, (":authority".to_owned(), a.to_owned()));
+    }
+
+    let translated = bridge
+        .bridge_request(&bridge_in)
+        .map_err(|e| format!("h2->h2 bridge: {e}"))?;
+
+    let mut builder = Request::builder().method(parts.method.clone());
+    if let Some(auth) = authority.as_deref() {
+        let path = parts
+            .uri
+            .path_and_query()
+            .map_or_else(|| "/".to_owned(), std::string::ToString::to_string);
+        let uri = format!("{scheme}://{auth}{path}");
+        builder = builder.uri(uri);
+    } else {
+        builder = builder.uri(parts.uri.clone());
+    }
+    for (n, v) in &translated.headers {
+        if n.starts_with(':') {
+            continue;
+        }
+        builder = builder.header(n.as_str(), v.as_str());
+    }
+    let body = http_body_util::Full::new(body_bytes)
+        .map_err(|never| match never {})
+        .boxed();
+    builder.body(body).map_err(|e| format!("build h2 req: {e}"))
+}
+
+/// Convert an upstream H2 `Response<Incoming>` back into the H2-side
+/// response (hyper's H2 server consumes a `Response<BoxBody>`).
+async fn upstream_h2_response_to_h2(
+    resp: Response<IncomingBody>,
+    alt_svc: Option<AltSvcConfig>,
+) -> Response<BoxBody<Bytes, hyper::Error>> {
+    let (parts, body) = resp.into_parts();
+    let body_bytes = match body.collect().await {
+        Ok(b) => b.to_bytes(),
+        Err(e) => {
+            return error_response(StatusCode::BAD_GATEWAY, &format!("upstream body read: {e}"));
+        }
+    };
+    let bridge = crate::create_bridge(crate::Protocol::Http2, crate::Protocol::Http2);
+    let bridge_in = crate::BridgeResponse {
+        status: parts.status.as_u16(),
+        headers: parts
+            .headers
+            .iter()
+            .filter_map(|(n, v)| {
+                v.to_str()
+                    .ok()
+                    .map(|s| (n.as_str().to_owned(), s.to_owned()))
+            })
+            .collect(),
+        body: body_bytes,
+    };
+    let translated = match bridge.bridge_response(&bridge_in) {
+        Ok(r) => r,
+        Err(e) => {
+            return error_response(
+                StatusCode::BAD_GATEWAY,
+                &format!("h2->h2 response bridge: {e}"),
+            );
+        }
+    };
+    let status = StatusCode::from_u16(translated.status).unwrap_or(StatusCode::BAD_GATEWAY);
+    let mut builder = Response::builder().status(status);
+    for (n, v) in &translated.headers {
+        if n.starts_with(':') {
+            continue;
+        }
+        builder = builder.header(n.as_str(), v.as_str());
+    }
+    if let Some(alt) = alt_svc {
+        if let Ok(value) = HeaderValue::from_str(&alt.header_value()) {
+            builder = builder.header(hyper::header::ALT_SVC, value);
+        }
+    }
+    let body = http_body_util::Full::new(translated.body)
+        .map_err(|never| match never {})
+        .boxed();
+    builder.body(body).unwrap_or_else(|_| {
+        error_response(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "build h2 response failed",
+        )
+    })
+}
+
+/// Collect an inbound H2 request, run the H2→H3 codec bridge, and
+/// return a `(field_list, body)` pair for `request_h3_upstream`.
+async fn collect_h2_request_to_h3_fieldlist(
+    req: Request<IncomingBody>,
+    sni: &str,
+) -> Result<(Vec<(String, String)>, Bytes), String> {
+    let (parts, body) = req.into_parts();
+    let body_bytes = body
+        .collect()
+        .await
+        .map_err(|e| format!("body collect: {e}"))?
+        .to_bytes();
+    let scheme = parts
+        .uri
+        .scheme()
+        .map_or_else(|| "https".to_owned(), |s| s.as_str().to_owned());
+    let authority = parts
+        .uri
+        .authority()
+        .map(|a| a.as_str().to_owned())
+        .or_else(|| {
+            parts
+                .headers
+                .get(hyper::header::HOST)
+                .and_then(|v| v.to_str().ok())
+                .map(str::to_owned)
+        })
+        .unwrap_or_else(|| sni.to_owned());
+
+    let bridge = crate::create_bridge(crate::Protocol::Http2, crate::Protocol::Http3);
+    let mut bridge_in = crate::BridgeRequest {
+        method: parts.method.to_string(),
+        uri: parts
+            .uri
+            .path_and_query()
+            .map_or_else(|| "/".to_owned(), std::string::ToString::to_string),
+        headers: parts
+            .headers
+            .iter()
+            .filter_map(|(n, v)| {
+                v.to_str()
+                    .ok()
+                    .map(|s| (n.as_str().to_owned(), s.to_owned()))
+            })
+            .collect(),
+        body: body_bytes.clone(),
+        scheme: Some(scheme.clone()),
+    };
+    bridge_in
+        .headers
+        .insert(0, (":method".to_owned(), parts.method.to_string()));
+    bridge_in
+        .headers
+        .insert(1, (":path".to_owned(), bridge_in.uri.clone()));
+    bridge_in.headers.insert(2, (":scheme".to_owned(), scheme));
+    bridge_in
+        .headers
+        .insert(3, (":authority".to_owned(), authority));
+    let translated = bridge
+        .bridge_request(&bridge_in)
+        .map_err(|e| format!("h2->h3 bridge: {e}"))?;
+    Ok((translated.headers, body_bytes))
+}
+
+/// Convert an [`lb_quic::H3UpstreamResponse`] back into the H2 response
+/// shape the listener emits.
+fn h3_response_to_h2(
+    resp: lb_quic::H3UpstreamResponse,
+    alt_svc: Option<AltSvcConfig>,
+) -> Response<BoxBody<Bytes, hyper::Error>> {
+    let bridge = crate::create_bridge(crate::Protocol::Http3, crate::Protocol::Http2);
+    let body_bytes = Bytes::from(resp.body);
+    let bridge_in = crate::BridgeResponse {
+        status: resp.status,
+        headers: resp.headers,
+        body: body_bytes,
+    };
+    let translated = match bridge.bridge_response(&bridge_in) {
+        Ok(r) => r,
+        Err(e) => {
+            return error_response(
+                StatusCode::BAD_GATEWAY,
+                &format!("h3->h2 response bridge: {e}"),
+            );
+        }
+    };
+    let status = StatusCode::from_u16(translated.status).unwrap_or(StatusCode::BAD_GATEWAY);
+    let mut builder = Response::builder().status(status);
+    for (n, v) in &translated.headers {
+        if n.starts_with(':') {
+            continue;
+        }
+        builder = builder.header(n.as_str(), v.as_str());
+    }
+    if let Some(alt) = alt_svc {
+        if let Ok(value) = HeaderValue::from_str(&alt.header_value()) {
+            builder = builder.header(hyper::header::ALT_SVC, value);
+        }
+    }
+    let body = http_body_util::Full::new(translated.body)
+        .map_err(|never| match never {})
+        .boxed();
+    builder.body(body).unwrap_or_else(|_| {
+        error_response(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "build h2 response failed",
+        )
+    })
 }
 
 enum ProxyErr {
