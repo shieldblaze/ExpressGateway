@@ -59,6 +59,14 @@ pub const DEFAULT_PING_RATE_LIMIT_PER_WINDOW: u32 = 50;
 /// rate limit. Mirrors `lb_h2::DEFAULT_CONTROL_FRAME_WINDOW`.
 pub const DEFAULT_PING_RATE_LIMIT_WINDOW: Duration = Duration::from_secs(10);
 
+/// Default per-direction read-frame watchdog (auditor-delta WS-002).
+///
+/// If a single direction produces no frame within this budget the
+/// proxy emits `Close 1008` to the client and shuts the upstream
+/// half. Distinct from [`WsConfig::idle_timeout`], which fires only
+/// when *both* directions are silent.
+pub const DEFAULT_READ_FRAME_TIMEOUT: Duration = Duration::from_secs(30);
+
 /// Per-listener WebSocket knobs.
 ///
 /// Mirrors the shape of [`crate::h1_proxy::HttpTimeouts`] and
@@ -88,6 +96,16 @@ pub struct WsConfig {
     /// Rolling-window duration for the client-Ping rate limit.
     /// Default [`DEFAULT_PING_RATE_LIMIT_WINDOW`].
     pub ping_rate_limit_window: Duration,
+    /// Per-direction read-frame watchdog. If a single direction
+    /// produces no frame within this budget the proxy emits a
+    /// `Close 1008 (Policy Violation)` with reason
+    /// `"ws read frame timeout"` to the client and shuts the upstream
+    /// half. Bounds the per-peer kernel-TCP/tungstenite-buffer dwell
+    /// (auditor-delta finding WS-002). Distinct from
+    /// [`Self::idle_timeout`]: idle fires when *both* halves are silent;
+    /// the read-frame watchdog fires when *any* half is silent.
+    /// Default [`DEFAULT_READ_FRAME_TIMEOUT`].
+    pub read_frame_timeout: Duration,
 }
 
 impl Default for WsConfig {
@@ -98,6 +116,7 @@ impl Default for WsConfig {
             enabled: true,
             ping_rate_limit_per_window: DEFAULT_PING_RATE_LIMIT_PER_WINDOW,
             ping_rate_limit_window: DEFAULT_PING_RATE_LIMIT_WINDOW,
+            read_frame_timeout: DEFAULT_READ_FRAME_TIMEOUT,
         }
     }
 }
@@ -208,6 +227,7 @@ impl WsProxy {
         let (mut backend_tx, mut backend_rx) = backend_ws.split();
 
         let idle = self.cfg.idle_timeout;
+        let read_frame = self.cfg.read_frame_timeout;
         let ping_window = self.cfg.ping_rate_limit_window;
         let ping_max: usize = self.cfg.ping_rate_limit_per_window as usize;
         // Per-connection sliding window of client-originated Ping
@@ -218,11 +238,25 @@ impl WsProxy {
         let mut client_ping_log: VecDeque<Instant> = VecDeque::new();
 
         loop {
+            // Outer envelope: `idle` covers the both-sides-silent case.
+            // Inner per-direction wrapper: `read_frame` covers the
+            // single-direction-stuck case (auditor-delta finding
+            // WS-002). The select! returns the *first* arm to resolve;
+            // a per-direction `timeout(read_frame, …)` therefore fires
+            // even when the other half is producing data.
             let step = tokio::time::timeout(idle, async {
                 tokio::select! {
                     biased;
-                    c = client_rx.try_next() => Direction::ClientToBackend(c),
-                    b = backend_rx.try_next() => Direction::BackendToClient(b),
+                    c = tokio::time::timeout(read_frame, client_rx.try_next()) => c
+                        .map_or_else(
+                            |_| Direction::ReadFrameTimeout,
+                            Direction::ClientToBackend,
+                        ),
+                    b = tokio::time::timeout(read_frame, backend_rx.try_next()) => b
+                        .map_or_else(
+                            |_| Direction::ReadFrameTimeout,
+                            Direction::BackendToClient,
+                        ),
                 }
             })
             .await;
@@ -236,6 +270,20 @@ impl WsProxy {
                     };
                     let _ = client_tx.send(Message::Close(Some(away.clone()))).await;
                     let _ = backend_tx.send(Message::Close(Some(away))).await;
+                    return Ok(());
+                }
+                Ok(Direction::ReadFrameTimeout) => {
+                    // Per-direction read-frame watchdog tripped (WS-002).
+                    // Emit Close 1008 (Policy Violation) to the client
+                    // and propagate a clean Close to the upstream half.
+                    let frame = CloseFrame {
+                        code: CloseCode::Policy,
+                        reason: std::borrow::Cow::Borrowed("ws read frame timeout"),
+                    };
+                    let _ = client_tx.send(Message::Close(Some(frame))).await;
+                    let _ = client_tx.close().await;
+                    let _ = backend_tx.send(Message::Close(None)).await;
+                    let _ = backend_tx.close().await;
                     return Ok(());
                 }
                 Ok(Direction::ClientToBackend(Ok(Some(msg)))) => {
@@ -310,6 +358,9 @@ impl WsProxy {
 enum Direction<T> {
     ClientToBackend(T),
     BackendToClient(T),
+    /// Per-direction read-frame watchdog elapsed without observing a
+    /// frame on whichever half it was guarding (WS-002).
+    ReadFrameTimeout,
 }
 
 /// Wrap a post-upgrade IO into a server-role [`WebSocketStream`].
@@ -548,6 +599,10 @@ mod tests {
             enabled: true,
             ping_rate_limit_per_window: DEFAULT_PING_RATE_LIMIT_PER_WINDOW,
             ping_rate_limit_window: DEFAULT_PING_RATE_LIMIT_WINDOW,
+            // Set the per-direction watchdog above `idle_timeout` so
+            // this test exercises the idle path; the WS-002 watchdog
+            // path is covered by `tests/ws_proxy_e2e.rs`.
+            read_frame_timeout: Duration::from_secs(30),
         };
         let proxy = Arc::new(WsProxy::new(cfg));
 

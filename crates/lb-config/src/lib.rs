@@ -216,6 +216,14 @@ pub struct WebsocketConfig {
     /// rate limit. Defaults to 10 seconds.
     #[serde(default = "default_ws_ping_rate_limit_window_seconds")]
     pub ping_rate_limit_window_seconds: u64,
+    /// Per-direction read-frame watchdog. If neither direction produces
+    /// a frame for this many seconds the proxy emits `Close 1008
+    /// (Policy Violation)` with reason `"ws read frame timeout"` to
+    /// bound per-peer pinned-buffer dwell (auditor-delta finding
+    /// WS-002). Distinct from `idle_timeout_seconds`, which fires only
+    /// when *both* directions are silent. Defaults to 30 seconds.
+    #[serde(default = "default_ws_read_frame_timeout_seconds")]
+    pub read_frame_timeout_seconds: u64,
 }
 
 impl Default for WebsocketConfig {
@@ -226,6 +234,7 @@ impl Default for WebsocketConfig {
             max_message_size_bytes: default_ws_max_message_size(),
             ping_rate_limit_per_window: default_ws_ping_rate_limit_per_window(),
             ping_rate_limit_window_seconds: default_ws_ping_rate_limit_window_seconds(),
+            read_frame_timeout_seconds: default_ws_read_frame_timeout_seconds(),
         }
     }
 }
@@ -248,6 +257,10 @@ const fn default_ws_ping_rate_limit_per_window() -> u32 {
 
 const fn default_ws_ping_rate_limit_window_seconds() -> u64 {
     10
+}
+
+const fn default_ws_read_frame_timeout_seconds() -> u64 {
+    30
 }
 
 /// HTTP/2 security thresholds (Item 1, auditor finding #3).
@@ -615,6 +628,11 @@ fn validate_websocket_block(
         if ws.ping_rate_limit_window_seconds == 0 {
             return Err(ConfigError::Validation(format!(
                 "listener {i} websocket.ping_rate_limit_window_seconds must be > 0"
+            )));
+        }
+        if ws.read_frame_timeout_seconds == 0 {
+            return Err(ConfigError::Validation(format!(
+                "listener {i} websocket.read_frame_timeout_seconds must be > 0"
             )));
         }
     }

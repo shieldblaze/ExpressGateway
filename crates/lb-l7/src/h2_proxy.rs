@@ -179,9 +179,16 @@ impl H2Proxy {
 
     /// Enable gRPC handling on this proxy. Fluent; returns `self` so
     /// the call site reads as a chain off [`Self::with_security`].
+    ///
+    /// Aligns the supplied [`GrpcProxy`]'s upstream H2 client
+    /// `max_header_list_size` with the listener's
+    /// [`H2SecurityThresholds::max_header_list_size`] (auditor-delta
+    /// finding GRPC-001) so a malicious backend cannot transit
+    /// oversize trailers through the gateway before hyper rejects.
     #[must_use]
-    pub fn with_grpc(mut self, grpc: Arc<GrpcProxy>) -> Self {
-        self.grpc = Some(grpc);
+    pub fn with_grpc(mut self, grpc: GrpcProxy) -> Self {
+        let aligned = grpc.with_max_header_list_size(self.security.max_header_list_size);
+        self.grpc = Some(Arc::new(aligned));
         self
     }
 

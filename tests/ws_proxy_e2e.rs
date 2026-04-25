@@ -416,6 +416,7 @@ async fn ws_ping_flood_closes_with_1008() {
             enabled: true,
             ping_rate_limit_per_window: 5,
             ping_rate_limit_window: Duration::from_secs(10),
+            ..WsConfig::default()
         },
     )
     .await;
@@ -459,6 +460,66 @@ async fn ws_ping_flood_closes_with_1008() {
     assert!(
         reason.contains("ping flood") || reason.contains("rate limit"),
         "expected reason to mention ping flood or rate limit, got {:?}",
+        close_frame.reason,
+    );
+}
+
+// ── Test 7: Read-frame watchdog → Close 1008 (WS-002) ──────────────────
+
+#[tokio::test]
+async fn ws_read_frame_timeout_closes_with_1008() {
+    // Listener with a tight per-direction read-frame budget. The silent
+    // backend never produces a frame, so once the budget elapses on
+    // the backend half the gateway must emit Close 1008 (Policy
+    // Violation) with reason matching "read frame timeout".
+    let (backend, _b) = spawn_silent_backend().await;
+    let (gw, _g) = spawn_ws_gateway(
+        backend,
+        WsConfig {
+            // idle_timeout deliberately well above the read-frame
+            // budget so the path that fires is the per-direction
+            // watchdog, not the all-silent idle path.
+            idle_timeout: Duration::from_secs(30),
+            max_message_size: 1024 * 1024,
+            enabled: true,
+            read_frame_timeout: Duration::from_secs(1),
+            ..WsConfig::default()
+        },
+    )
+    .await;
+
+    let mut client = connect_ws_client(gw, "/slow-read").await;
+    // One Text frame to prove the connection is alive; then sleep past
+    // the watchdog budget without sending anything else.
+    client.send(Message::Text("hello".into())).await.unwrap();
+
+    let deadline = Duration::from_secs(2);
+    let start = tokio::time::Instant::now();
+    let close_frame = {
+        let mut observed: Option<CloseFrame<'_>> = None;
+        while start.elapsed() < deadline {
+            let Ok(Some(Ok(msg))) =
+                tokio::time::timeout(Duration::from_millis(200), client.next()).await
+            else {
+                continue;
+            };
+            if let Message::Close(Some(f)) = msg {
+                observed = Some(f.into_owned());
+                break;
+            }
+        }
+        observed.expect("did not observe Close frame within 2s of read-frame timeout")
+    };
+    assert_eq!(
+        close_frame.code,
+        CloseCode::Policy,
+        "expected Close 1008 (Policy Violation), got {:?}",
+        close_frame.code,
+    );
+    let reason = close_frame.reason.to_ascii_lowercase();
+    assert!(
+        reason.contains("read frame timeout"),
+        "expected reason to mention 'read frame timeout', got {:?}",
         close_frame.reason,
     );
 }

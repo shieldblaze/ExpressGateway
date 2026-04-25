@@ -268,7 +268,7 @@ async fn spawn_gateway(
 ) -> (SocketAddr, tokio::task::JoinHandle<()>) {
     let pool = build_pool();
     let picker = Arc::new(RoundRobinAddrs::new(vec![backend_addr]).unwrap());
-    let grpc = Arc::new(GrpcProxy::new(grpc_cfg, pool.clone()));
+    let grpc = GrpcProxy::new(grpc_cfg, pool.clone());
     let h2_proxy =
         Arc::new(H2Proxy::new(pool, picker, None, HttpTimeouts::default(), false).with_grpc(grpc));
 
@@ -476,4 +476,222 @@ async fn grpc_status_translation_404() {
     let (_body, trailers) = collect_grpc_body(resp).await;
     // HTTP 404 maps to gRPC Unimplemented (12).
     assert_eq!(trailers.get("grpc-status").unwrap(), "12");
+}
+
+// ── GRPC-001: oversize response header rejected by gateway ────────────
+
+/// Backend that responds with an oversize response header value. Used
+/// to prove the gateway caps the upstream H2 client at the
+/// listener-derived `max_header_list_size`. h2 only enforces the
+/// SETTINGS-advertised cap on the *initial* response HEADERS frame
+/// (RFC 7540 §6.5.2 + h2 0.4 `is_over_size` check), so the backend
+/// stuffs the oversize bytes into a custom response header rather
+/// than a trailer.
+async fn spawn_oversize_header_backend() -> (SocketAddr, tokio::task::JoinHandle<()>) {
+    let listener = TcpListener::bind(("127.0.0.1", 0)).await.unwrap();
+    let local = listener.local_addr().unwrap();
+    let handle = tokio::spawn(async move {
+        loop {
+            let Ok((sock, _)) = listener.accept().await else {
+                return;
+            };
+            tokio::spawn(async move {
+                let builder = hyper::server::conn::http2::Builder::new(TokioExecutor::new());
+                let svc = hyper::service::service_fn(move |req: Request<Incoming>| async move {
+                    // Drain the request body to keep hyper happy.
+                    let _ = req.into_body().collect().await;
+                    // 16 KiB header value — well above the
+                    // gateway's 1 KiB cap. Stuffed into a custom
+                    // header so the on-wire HEADERS frame trips
+                    // h2's `is_over_size` check on the upstream
+                    // client side.
+                    let oversize = "A".repeat(16 * 1024);
+                    let mut trailers = HeaderMap::new();
+                    trailers.insert("grpc-status", hyper::header::HeaderValue::from_static("0"));
+                    Ok::<_, Infallible>(
+                        Response::builder()
+                            .status(StatusCode::OK)
+                            .header(hyper::header::CONTENT_TYPE, "application/grpc+proto")
+                            .header(
+                                "x-oversize",
+                                hyper::header::HeaderValue::from_str(&oversize).unwrap(),
+                            )
+                            .body(stream_body(vec![], Some(trailers)))
+                            .unwrap(),
+                    )
+                });
+                let _ = builder.serve_connection(TokioIo::new(sock), svc).await;
+            });
+        }
+    });
+    (local, handle)
+}
+
+/// Variant of [`spawn_gateway`] that lets the test fix the listener's
+/// H2 `max_header_list_size`. The default ctor uses 64 KiB, which would
+/// not block a 16 KiB trailer; we want a tight 1 KiB cap so the GRPC-001
+/// path is exercised.
+async fn spawn_gateway_with_h2_security(
+    backend_addr: SocketAddr,
+    grpc_cfg: GrpcConfig,
+    max_header_list_size: u32,
+) -> (SocketAddr, tokio::task::JoinHandle<()>) {
+    use lb_l7::h2_security::H2SecurityThresholds;
+    let pool = build_pool();
+    let picker = Arc::new(RoundRobinAddrs::new(vec![backend_addr]).unwrap());
+    let grpc = GrpcProxy::new(grpc_cfg, pool.clone());
+    let security = H2SecurityThresholds {
+        max_header_list_size,
+        ..H2SecurityThresholds::default()
+    };
+    let h2_proxy = Arc::new(
+        H2Proxy::with_security(pool, picker, None, HttpTimeouts::default(), false, security)
+            .with_grpc(grpc),
+    );
+
+    let listener = TcpListener::bind(("127.0.0.1", 0)).await.unwrap();
+    let local = listener.local_addr().unwrap();
+    let handle = tokio::spawn(async move {
+        loop {
+            let Ok((sock, peer)) = listener.accept().await else {
+                return;
+            };
+            let proxy = Arc::clone(&h2_proxy);
+            tokio::spawn(async move {
+                let _ = proxy.serve_connection(sock, peer).await;
+            });
+        }
+    });
+    (local, handle)
+}
+
+#[tokio::test]
+async fn grpc_upstream_oversize_trailer_rejected_by_gateway() {
+    // Backend responds with a 16 KiB response header value.
+    // Listener's max_header_list_size = 1 KiB. The hyper upstream H2
+    // client therefore refuses the response header block (h2
+    // `is_over_size` → REFUSED_STREAM / 502-class error); the gateway
+    // synthesises a gateway-origin gRPC error trailer. The acceptance
+    // criterion is "client does NOT see a successful gRPC OK" — we
+    // accept any gateway-origin code (Internal=13 / Unavailable=14)
+    // since hyper's error shape varies, but `grpc-status: 0` must
+    // never appear with the malicious trailer intact.
+    let (backend, _b) = spawn_oversize_header_backend().await;
+    let (gw, _g) = spawn_gateway_with_h2_security(backend, GrpcConfig::default(), 1024).await;
+
+    let payload = Bytes::from_static(b"x");
+    let req_body = stream_body(vec![frame_messages(&[payload])], None);
+    let resp = send_grpc(gw, "/svc/Echo", req_body, &[]).await;
+    // Gateway translates upstream errors into 200 OK + gRPC trailers.
+    assert_eq!(resp.status(), StatusCode::OK);
+    let (_body, trailers) = collect_grpc_body(resp).await;
+    let status = trailers
+        .get("grpc-status")
+        .map(|v| v.to_str().unwrap_or(""));
+    // Must be a gateway-origin error, not a transparent OK forward.
+    assert_ne!(
+        status,
+        Some("0"),
+        "oversize upstream response header must NOT yield grpc-status: 0"
+    );
+    assert!(
+        matches!(status, Some("13" | "14")),
+        "expected gateway-origin grpc-status (Internal=13 / Unavailable=14), got {status:?}"
+    );
+}
+
+// ── GRPC-002: malformed grpc-timeout → INVALID_ARGUMENT ────────────────
+
+#[tokio::test]
+async fn grpc_malformed_timeout_returns_invalid_argument() {
+    // Backend bound but the gateway must NOT dial it: malformed
+    // grpc-timeout has to short-circuit at the gateway with
+    // grpc-status: 3 INVALID_ARGUMENT.
+    let (backend, state, _b) = spawn_grpc_backend(BackendMode::Echo).await;
+    let (gw, _g) = spawn_gateway(backend, GrpcConfig::default()).await;
+
+    let payload = Bytes::from_static(b"x");
+    let req_body = stream_body(vec![frame_messages(&[payload])], None);
+    let resp = send_grpc(gw, "/svc/Echo", req_body, &[("grpc-timeout", "foo")]).await;
+    assert_eq!(resp.status(), StatusCode::OK);
+    let (_body, trailers) = collect_grpc_body(resp).await;
+    assert_eq!(
+        trailers.get("grpc-status").unwrap(),
+        "3",
+        "expected grpc-status: 3 INVALID_ARGUMENT for malformed grpc-timeout"
+    );
+    let msg = trailers
+        .get("grpc-message")
+        .map(|v| v.to_str().unwrap_or(""))
+        .unwrap_or("");
+    assert!(
+        msg.to_ascii_lowercase().contains("malformed"),
+        "expected grpc-message to mention 'malformed', got {msg:?}"
+    );
+    // Backend must NOT have observed the request — the gateway short-
+    // circuits before dialing.
+    assert_eq!(
+        state.hits.load(Ordering::Relaxed),
+        0,
+        "backend should not have been dialed on malformed timeout"
+    );
+}
+
+// ── GRPC-003: synthesized Health/Check honors `service` field ──────────
+
+#[tokio::test]
+async fn grpc_health_check_overall_serving() {
+    // Empty service field (the spec's "overall server health" probe)
+    // → SERVING. Use a spare port that's never accepted to prove the
+    // synth path bypasses the backend.
+    let spare = TcpListener::bind(("127.0.0.1", 0)).await.unwrap();
+    let spare_addr = spare.local_addr().unwrap();
+    drop(spare);
+    let (gw, _g) = spawn_gateway(spare_addr, GrpcConfig::default()).await;
+
+    // HealthCheckRequest with no service field == empty payload.
+    let req_body = stream_body(vec![frame_messages(&[Bytes::new()])], None);
+    let resp = send_grpc(gw, "/grpc.health.v1.Health/Check", req_body, &[]).await;
+    assert_eq!(resp.status(), StatusCode::OK);
+    let (body, trailers) = collect_grpc_body(resp).await;
+    let frames = decode_all(&body);
+    assert_eq!(frames.len(), 1);
+    // Body payload is `0x08 0x01` — `HealthCheckResponse { SERVING }`.
+    assert_eq!(frames[0].as_ref(), &[0x08, 0x01]);
+    assert_eq!(trailers.get("grpc-status").unwrap(), "0");
+}
+
+#[tokio::test]
+async fn grpc_health_check_unknown_service_not_found() {
+    // Non-empty service field → no per-service registry exists in v1
+    // → respond NOT_FOUND (5). Still bypasses the backend, so use a
+    // spare port that's never accepted.
+    let spare = TcpListener::bind(("127.0.0.1", 0)).await.unwrap();
+    let spare_addr = spare.local_addr().unwrap();
+    drop(spare);
+    let (gw, _g) = spawn_gateway(spare_addr, GrpcConfig::default()).await;
+
+    // HealthCheckRequest { service = "foo.Bar" }.
+    // protobuf encoding: tag 1 wire 2 → 0x0A, length 7, "foo.Bar".
+    let mut pb = Vec::new();
+    pb.push(0x0A);
+    pb.push(0x07);
+    pb.extend_from_slice(b"foo.Bar");
+    let req_body = stream_body(vec![frame_messages(&[Bytes::from(pb)])], None);
+    let resp = send_grpc(gw, "/grpc.health.v1.Health/Check", req_body, &[]).await;
+    assert_eq!(resp.status(), StatusCode::OK);
+    let (_body, trailers) = collect_grpc_body(resp).await;
+    assert_eq!(
+        trailers.get("grpc-status").unwrap(),
+        "5",
+        "expected grpc-status: 5 NOT_FOUND for unregistered service"
+    );
+    let msg = trailers
+        .get("grpc-message")
+        .map(|v| v.to_str().unwrap_or(""))
+        .unwrap_or("");
+    assert!(
+        msg.contains("foo.Bar") || msg.contains("not registered"),
+        "expected grpc-message to mention service name or registration, got {msg:?}"
+    );
 }

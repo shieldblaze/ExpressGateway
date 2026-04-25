@@ -42,7 +42,7 @@ use hyper::{HeaderMap, Method, Request, Response, StatusCode};
 use hyper_util::rt::{TokioExecutor, TokioIo};
 use lb_io::pool::TcpPool;
 
-use lb_grpc::{GrpcDeadline, GrpcStatus};
+use lb_grpc::{DEFAULT_MAX_MESSAGE_SIZE, GrpcDeadline, GrpcStatus, decode_grpc_frame};
 
 /// Per-listener gRPC knobs.
 #[derive(Debug, Clone, Copy)]
@@ -70,23 +70,65 @@ impl Default for GrpcConfig {
     }
 }
 
+/// Default upstream-side `max_header_list_size` (auditor-delta GRPC-001).
+///
+/// Mirrors
+/// [`crate::h2_security::H2SecurityThresholds::max_header_list_size`]'s
+/// default (64 KiB) so a malicious backend cannot transit oversize
+/// trailers through the gateway before hyper rejects them.
+pub const DEFAULT_UPSTREAM_MAX_HEADER_LIST_SIZE: u32 = 64 * 1024;
+
 /// gRPC reverse proxy. Cheap to clone via [`Arc`].
 pub struct GrpcProxy {
     cfg: GrpcConfig,
     pool: TcpPool,
+    /// Maximum decoded HPACK header-list size (bytes) accepted from
+    /// the upstream H2 client. Defaults to
+    /// [`DEFAULT_UPSTREAM_MAX_HEADER_LIST_SIZE`]; raised/lowered to
+    /// match the listener's [`H2SecurityThresholds`] when
+    /// [`crate::h2_proxy::H2Proxy::with_grpc`] is called.
+    ///
+    /// [`H2SecurityThresholds`]: crate::h2_security::H2SecurityThresholds
+    pub(crate) max_header_list_size: u32,
 }
 
 impl GrpcProxy {
     /// Construct a [`GrpcProxy`] consuming the backend [`TcpPool`].
     #[must_use]
     pub const fn new(cfg: GrpcConfig, pool: TcpPool) -> Self {
-        Self { cfg, pool }
+        Self {
+            cfg,
+            pool,
+            max_header_list_size: DEFAULT_UPSTREAM_MAX_HEADER_LIST_SIZE,
+        }
+    }
+
+    /// Override the upstream H2 client's `max_header_list_size`.
+    /// Used by [`crate::h2_proxy::H2Proxy::with_grpc`] to align the
+    /// upstream client cap with the listener's
+    /// [`H2SecurityThresholds`] (auditor-delta finding GRPC-001).
+    ///
+    /// [`H2SecurityThresholds`]: crate::h2_security::H2SecurityThresholds
+    #[must_use]
+    pub const fn with_max_header_list_size(mut self, bytes: u32) -> Self {
+        self.max_header_list_size = bytes;
+        self
     }
 
     /// Return the [`GrpcConfig`] in effect.
     #[must_use]
     pub const fn config(&self) -> GrpcConfig {
         self.cfg
+    }
+
+    /// Return the upstream H2 client's `max_header_list_size` (bytes).
+    /// Exposed for diagnostics and tests; the value is normally aligned
+    /// with the listener's [`H2SecurityThresholds`].
+    ///
+    /// [`H2SecurityThresholds`]: crate::h2_security::H2SecurityThresholds
+    #[must_use]
+    pub const fn max_header_list_size(&self) -> u32 {
+        self.max_header_list_size
     }
 
     /// Serve a gRPC request.
@@ -109,7 +151,7 @@ impl GrpcProxy {
             && req.method() == Method::POST
             && req.uri().path() == HEALTH_CHECK_PATH
         {
-            return handle_health_check();
+            return handle_health_check(req).await;
         }
         self.forward(req, backend_addr).await
     }
@@ -128,7 +170,22 @@ impl GrpcProxy {
     ) -> Response<BoxBody<Bytes, hyper::Error>> {
         let (mut parts, body) = req.into_parts();
 
-        let deadline_ms = clamp_grpc_timeout(&mut parts.headers, self.cfg.max_deadline);
+        // GRPC-002 (auditor-delta LOW 4.5): distinguish header-absent
+        // (no deadline, forward) from header-present-and-malformed
+        // (respond `grpc-status: 3 INVALID_ARGUMENT` without dialing
+        // the backend). Header-present-and-OK clamps + rewrites in
+        // place and returns the effective millisecond budget.
+        let deadline_ms =
+            match parse_and_clamp_grpc_timeout(&mut parts.headers, self.cfg.max_deadline) {
+                ParsedTimeout::Absent => None,
+                ParsedTimeout::Ok(ms) => Some(ms),
+                ParsedTimeout::Malformed(raw) => {
+                    return grpc_error_response(
+                        GrpcStatus::InvalidArgument,
+                        &format!("malformed grpc-timeout: {raw}"),
+                    );
+                }
+            };
 
         // gRPC requires `TE: trailers` per RFC 9113 §8.2.2. H2 forbids
         // the generic hop-by-hop strip from touching it; we defensively
@@ -171,12 +228,16 @@ impl GrpcProxy {
             return grpc_error_response(GrpcStatus::Internal, "pooled stream missing");
         };
 
-        let (mut sender, conn) = match hyper::client::conn::http2::handshake::<
-            _,
-            _,
-            BoxBody<Bytes, hyper::Error>,
-        >(TokioExecutor::new(), TokioIo::new(upstream_io))
-        .await
+        // GRPC-001 (auditor-delta LOW 4.4): cap the upstream H2 client
+        // `max_header_list_size` at the listener-derived value so a
+        // malicious backend cannot blast oversize trailers through the
+        // gateway before hyper rejects them. hyper's `http2::Builder`
+        // is configured before driving the handshake.
+        let mut h2_builder = hyper::client::conn::http2::Builder::new(TokioExecutor::new());
+        h2_builder.max_header_list_size(self.max_header_list_size);
+        let (mut sender, conn) = match h2_builder
+            .handshake::<_, BoxBody<Bytes, hyper::Error>>(TokioIo::new(upstream_io))
+            .await
         {
             Ok(pair) => pair,
             Err(e) => {
@@ -251,33 +312,99 @@ fn rewrite_uri_for_upstream(
     rebuilt.parse().ok()
 }
 
-/// Parse and clamp the `grpc-timeout` header in place.
+/// Outcome of parsing the `grpc-timeout` request header.
 ///
-/// Returns the effective deadline in milliseconds when a valid header
-/// is present (even if zero); returns `None` when the header is absent
-/// or unparseable (treated as "no deadline").
-fn clamp_grpc_timeout(headers: &mut HeaderMap, max: Duration) -> Option<u64> {
-    let raw = headers.get(&GRPC_TIMEOUT).and_then(|v| v.to_str().ok())?;
-    let parsed_ms = GrpcDeadline::parse_timeout(raw).ok()?;
+/// GRPC-002: distinguishes header-absent (forward without deadline),
+/// header-present-and-OK (clamp + forward with rewritten value), and
+/// header-present-but-malformed (gateway must respond with
+/// `grpc-status: 3 INVALID_ARGUMENT` per the gRPC spec).
+#[derive(Debug)]
+enum ParsedTimeout {
+    /// `grpc-timeout` header not present (or non-UTF-8). Forward.
+    Absent,
+    /// Parsed successfully; the header has been rewritten in place to
+    /// reflect the clamped milliseconds.
+    Ok(u64),
+    /// Header was present but did not parse against
+    /// `Timeout = 1*DIGIT TimeUnit`. Carries the raw header value for
+    /// the diagnostic `grpc-message` echo.
+    Malformed(String),
+}
+
+/// Parse and clamp the `grpc-timeout` header in place, distinguishing
+/// absent / malformed / OK cases (auditor-delta finding GRPC-002).
+fn parse_and_clamp_grpc_timeout(headers: &mut HeaderMap, max: Duration) -> ParsedTimeout {
+    let Some(hv) = headers.get(&GRPC_TIMEOUT) else {
+        return ParsedTimeout::Absent;
+    };
+    let Ok(raw) = hv.to_str() else {
+        // Non-UTF-8 header is malformed by definition.
+        return ParsedTimeout::Malformed(String::from("<non-utf-8>"));
+    };
+    let raw_owned = raw.to_owned();
+    let Ok(parsed_ms) = GrpcDeadline::parse_timeout(raw) else {
+        return ParsedTimeout::Malformed(raw_owned);
+    };
     let max_ms = u64::try_from(max.as_millis()).unwrap_or(u64::MAX);
     let effective = parsed_ms.min(max_ms);
     let rewritten = GrpcDeadline::format_timeout(effective);
     if let Ok(hv) = HeaderValue::from_str(&rewritten) {
         headers.insert(GRPC_TIMEOUT.clone(), hv);
     }
-    Some(effective)
+    ParsedTimeout::Ok(effective)
+}
+
+/// Backwards-compatible wrapper around [`parse_and_clamp_grpc_timeout`].
+///
+/// Returns the effective deadline in milliseconds when a valid header
+/// is present (even if zero); returns `None` when the header is absent
+/// **or** malformed. Test-only — production code branches on
+/// [`ParsedTimeout`] directly so the malformed case can surface as
+/// `INVALID_ARGUMENT` per gRPC spec (auditor-delta GRPC-002).
+#[cfg(test)]
+fn clamp_grpc_timeout(headers: &mut HeaderMap, max: Duration) -> Option<u64> {
+    match parse_and_clamp_grpc_timeout(headers, max) {
+        ParsedTimeout::Ok(ms) => Some(ms),
+        ParsedTimeout::Absent | ParsedTimeout::Malformed(_) => None,
+    }
 }
 
 /// Serve the synthesized `/grpc.health.v1.Health/Check` response.
 ///
-/// Returns a `200 OK` gRPC response with body = gRPC-framed
-/// `HealthCheckResponse { status: SERVING }` (a two-byte protobuf
-/// message `0x08 0x01`) and trailers `grpc-status: 0`.
+/// Decodes the request body's `HealthCheckRequest { string service = 1; }`
+/// to honour the gRPC health-check spec
+/// (<https://github.com/grpc/grpc/blob/master/doc/health-checking.md>):
 ///
-/// The protobuf wire format for `HealthCheckResponse` is tag=1 wire=0
-/// (0x08) followed by varint 1 (0x01). We hand-encode it so the
-/// gateway does not pull `prost` at runtime.
-fn handle_health_check() -> Response<BoxBody<Bytes, hyper::Error>> {
+/// * Empty `service` → overall server health → respond `SERVING`.
+/// * Non-empty `service` → service is not registered with this gateway
+///   (no per-service registry exists in v1) → respond
+///   `grpc-status: 5 NOT_FOUND` per the spec
+///   (auditor-delta finding GRPC-003).
+///
+/// Decode is hand-rolled (varint tag + length-delimited UTF-8) so the
+/// gateway stays prost-free, matching the response side which already
+/// hand-encodes the `HealthCheckResponse { SERVING }` payload.
+async fn handle_health_check(req: Request<IncomingBody>) -> Response<BoxBody<Bytes, hyper::Error>> {
+    // Read the request body. A zero-length body or a frame decode error
+    // is treated as "empty service" — the spec calls this the overall
+    // health probe, and we are by design always SERVING.
+    let body_bytes = (req.into_body().collect().await)
+        .map_or_else(|_| Bytes::new(), http_body_util::Collected::to_bytes);
+    let service = decode_health_check_service(&body_bytes);
+
+    if service.is_empty() {
+        return health_check_serving_response();
+    }
+    grpc_error_response(
+        GrpcStatus::NotFound,
+        &format!("service not registered: {service}"),
+    )
+}
+
+/// Build the `200 OK` SERVING response: gRPC frame containing the
+/// two-byte protobuf message `0x08 0x01` plus trailers
+/// `grpc-status: 0`.
+fn health_check_serving_response() -> Response<BoxBody<Bytes, hyper::Error>> {
     // gRPC frame header: compressed=0, length=2 (BE u32), then the
     // two-byte protobuf message `0x08 0x01`.
     let mut frame = Vec::with_capacity(7);
@@ -302,6 +429,122 @@ fn handle_health_check() -> Response<BoxBody<Bytes, hyper::Error>> {
         .header(hyper::header::CONTENT_TYPE, "application/grpc+proto")
         .body(BoxBody::new(body))
         .unwrap_or_else(|_| empty_fallback())
+}
+
+/// Hand-decode `HealthCheckRequest { string service = 1; }` from a gRPC
+/// request body without pulling prost.
+///
+/// The wire layout is:
+///
+/// 1. 5-byte gRPC frame header (compressed flag + BE u32 length).
+/// 2. Protobuf message body containing zero or more `(tag, value)` pairs.
+/// 3. The `service` field is `tag=1 wire=2 (length-delimited)`, encoded
+///    as the single varint byte `0x0A`, then a varint length, then the
+///    UTF-8 string bytes.
+///
+/// Returns the decoded service string, or `""` if absent / malformed
+/// (the empty-string path is the "overall health" branch, which is the
+/// safest default and matches the spec).
+fn decode_health_check_service(body: &[u8]) -> String {
+    // Empty body = overall health probe.
+    if body.is_empty() {
+        return String::new();
+    }
+    // Decode the gRPC envelope to get the raw protobuf message.
+    let Ok((frame, _consumed)) = decode_grpc_frame(body, DEFAULT_MAX_MESSAGE_SIZE) else {
+        return String::new();
+    };
+    // Compressed health-check request is not part of the spec; treat
+    // as "overall health" (gateway is up regardless).
+    if frame.compressed {
+        return String::new();
+    }
+    let payload = frame.data;
+
+    // Walk fields. Only field #1 (`service`) is meaningful here; any
+    // other tag we encounter is skipped by reading its wire type.
+    let mut i = 0usize;
+    while i < payload.len() {
+        let Some((tag, n)) = read_varint(&payload, i) else {
+            return String::new();
+        };
+        i += n;
+        let field_number = tag >> 3;
+        let wire_type = tag & 0x07;
+        match (field_number, wire_type) {
+            (1, 2) => {
+                // Length-delimited string for `service`.
+                let Some((len, n)) = read_varint(&payload, i) else {
+                    return String::new();
+                };
+                i += n;
+                let Ok(len) = usize::try_from(len) else {
+                    return String::new();
+                };
+                let Some(end) = i.checked_add(len) else {
+                    return String::new();
+                };
+                if end > payload.len() {
+                    return String::new();
+                }
+                let Some(bytes) = payload.get(i..end) else {
+                    return String::new();
+                };
+                let Ok(s) = std::str::from_utf8(bytes) else {
+                    return String::new();
+                };
+                return s.to_owned();
+            }
+            (_, 0) => {
+                // Skip varint value.
+                let Some((_, n)) = read_varint(&payload, i) else {
+                    return String::new();
+                };
+                i += n;
+            }
+            (_, 2) => {
+                // Skip length-delimited value (length varint + bytes).
+                let Some((len, n)) = read_varint(&payload, i) else {
+                    return String::new();
+                };
+                i += n;
+                let Ok(len) = usize::try_from(len) else {
+                    return String::new();
+                };
+                let Some(end) = i.checked_add(len) else {
+                    return String::new();
+                };
+                if end > payload.len() {
+                    return String::new();
+                }
+                i = end;
+            }
+            (_, 5) => i = i.saturating_add(4), // fixed32
+            (_, 1) => i = i.saturating_add(8), // fixed64
+            _ => return String::new(),         // unknown / SGROUP / EGROUP
+        }
+    }
+    String::new()
+}
+
+/// Read a base-128 varint from `buf[start..]`. Returns `(value,
+/// consumed_bytes)`. Returns `None` on truncation or on a varint longer
+/// than 10 bytes (the maximum possible for a 64-bit value).
+fn read_varint(buf: &[u8], start: usize) -> Option<(u64, usize)> {
+    let mut result: u64 = 0;
+    let mut shift: u32 = 0;
+    let mut i = 0;
+    while i < 10 {
+        let idx = start.checked_add(i)?;
+        let byte = *buf.get(idx)?;
+        result |= u64::from(byte & 0x7F).checked_shl(shift)?;
+        i += 1;
+        if byte & 0x80 == 0 {
+            return Some((result, i));
+        }
+        shift = shift.checked_add(7)?;
+    }
+    None
 }
 
 fn empty_fallback() -> Response<BoxBody<Bytes, hyper::Error>> {
@@ -452,8 +695,8 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn health_check_response_well_formed() {
-        let resp = handle_health_check();
+    async fn health_check_serving_response_well_formed() {
+        let resp = health_check_serving_response();
         assert_eq!(resp.status(), StatusCode::OK);
         assert_eq!(
             resp.headers().get(hyper::header::CONTENT_TYPE).unwrap(),
@@ -468,6 +711,75 @@ mod tests {
             body_bytes.as_ref(),
             &[0x00, 0x00, 0x00, 0x00, 0x02, 0x08, 0x01]
         );
+    }
+
+    #[test]
+    fn decode_health_check_service_empty_body_returns_empty() {
+        assert_eq!(decode_health_check_service(&[]), "");
+    }
+
+    #[test]
+    fn decode_health_check_service_empty_message_returns_empty() {
+        // gRPC frame whose payload is a zero-byte protobuf message.
+        let buf = [0u8, 0, 0, 0, 0];
+        assert_eq!(decode_health_check_service(&buf), "");
+    }
+
+    #[test]
+    fn decode_health_check_service_decodes_string_field() {
+        // protobuf: field 1, wire 2 (string), value "foo.Bar"
+        // Byte layout: 0x0A, 0x07, 'f','o','o','.','B','a','r'
+        let pb: Vec<u8> = vec![0x0A, 0x07, b'f', b'o', b'o', b'.', b'B', b'a', b'r'];
+        // gRPC frame header: compressed=0, BE u32 length=9, then payload.
+        let mut buf = Vec::new();
+        buf.push(0u8);
+        buf.extend_from_slice(&u32::try_from(pb.len()).unwrap().to_be_bytes());
+        buf.extend_from_slice(&pb);
+        assert_eq!(decode_health_check_service(&buf), "foo.Bar");
+    }
+
+    #[test]
+    fn decode_health_check_service_skips_unknown_field() {
+        // Field 99, wire 0 (varint), value 7. Field 1 absent.
+        // Build the bytes via varint: tag = (99 << 3) | 0 (wire 0) = 792.
+        let mut pb = Vec::new();
+        let tag: u64 = 99 << 3; // wire type 0 contributes nothing
+        write_varint(&mut pb, tag);
+        write_varint(&mut pb, 7); // varint value 7
+        let mut buf = Vec::new();
+        buf.push(0u8);
+        buf.extend_from_slice(&u32::try_from(pb.len()).unwrap().to_be_bytes());
+        buf.extend_from_slice(&pb);
+        // No field-1 anywhere → "" (overall health).
+        assert_eq!(decode_health_check_service(&buf), "");
+    }
+
+    #[test]
+    fn parse_and_clamp_grpc_timeout_malformed_yields_invalid_argument() {
+        // GRPC-002: malformed value surfaces as ParsedTimeout::Malformed.
+        let mut h = HeaderMap::new();
+        h.insert(GRPC_TIMEOUT.clone(), HeaderValue::from_static("foo"));
+        match parse_and_clamp_grpc_timeout(&mut h, Duration::from_secs(300)) {
+            ParsedTimeout::Malformed(raw) => assert_eq!(raw, "foo"),
+            other => panic!("expected Malformed, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn parse_and_clamp_grpc_timeout_absent_yields_absent() {
+        let mut h = HeaderMap::new();
+        match parse_and_clamp_grpc_timeout(&mut h, Duration::from_secs(300)) {
+            ParsedTimeout::Absent => {}
+            other => panic!("expected Absent, got {other:?}"),
+        }
+    }
+
+    fn write_varint(out: &mut Vec<u8>, mut v: u64) {
+        while v >= 0x80 {
+            out.push(((v & 0x7F) as u8) | 0x80);
+            v >>= 7;
+        }
+        out.push((v & 0x7F) as u8);
     }
 
     #[test]

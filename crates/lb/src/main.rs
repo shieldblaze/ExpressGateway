@@ -287,6 +287,7 @@ fn ws_config_to_runtime(cfg: &WebsocketConfig) -> WsConfig {
         enabled: cfg.enabled,
         ping_rate_limit_per_window: cfg.ping_rate_limit_per_window,
         ping_rate_limit_window: Duration::from_secs(cfg.ping_rate_limit_window_seconds),
+        read_frame_timeout: Duration::from_secs(cfg.read_frame_timeout_seconds),
     }
 }
 
@@ -327,10 +328,7 @@ fn build_h2_proxy(
         proxy = proxy.with_websocket(Arc::new(WsProxy::new(ws_config_to_runtime(ws))));
     }
     if let Some(grpc) = grpc_cfg {
-        proxy = proxy.with_grpc(Arc::new(GrpcProxy::new(
-            grpc_config_to_runtime(grpc),
-            pool.clone(),
-        )));
+        proxy = proxy.with_grpc(GrpcProxy::new(grpc_config_to_runtime(grpc), pool.clone()));
     }
     Ok(Arc::new(proxy))
 }
