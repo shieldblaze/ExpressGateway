@@ -90,7 +90,7 @@ tokio-tungstenite = { version = "0.24", default-features = false, features = ["h
 # light and skip the `compat` layer.
 futures-util = { version = "0.3", default-features = false, features = ["std", "sink"] }
 # Utilities
-rand = "0.8"
+rand = "0.10"
 # XDP / eBPF (Pillar 4a: aya userspace loader; Linux-only in consumers)
 aya = "0.13"
 # Pillar 4b-1: aya-obj gives us the kernel-free ELF parser (no CAP_BPF

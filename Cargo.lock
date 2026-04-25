@@ -763,7 +763,7 @@ dependencies = [
  "prometheus",
  "prometheus-client",
  "prometools",
- "rand 0.8.5",
+ "rand 0.8.6",
  "serde",
  "serde_path_to_error",
  "serde_with",
@@ -990,7 +990,7 @@ dependencies = [
  "parking_lot",
  "portable-atomic",
  "quanta",
- "rand 0.8.5",
+ "rand 0.8.6",
  "smallvec",
  "spinning_top",
 ]
@@ -1442,7 +1442,7 @@ name = "lb-balancer"
 version = "0.1.0"
 dependencies = [
  "parking_lot",
- "rand 0.8.5",
+ "rand 0.10.1",
  "thiserror 2.0.18",
 ]
 
@@ -1567,7 +1567,7 @@ dependencies = [
  "lb-security",
  "parking_lot",
  "quiche",
- "rand 0.8.5",
+ "rand 0.10.1",
  "rcgen",
  "reqwest",
  "ring",
@@ -1592,7 +1592,7 @@ dependencies = [
  "libc",
  "parking_lot",
  "quiche",
- "rand 0.8.5",
+ "rand 0.10.1",
  "ring",
  "socket2 0.5.10",
  "thiserror 2.0.18",
@@ -1607,7 +1607,7 @@ dependencies = [
  "aya",
  "aya-obj",
  "parking_lot",
- "rand 0.8.5",
+ "rand 0.10.1",
  "thiserror 2.0.18",
 ]
 
@@ -1983,7 +1983,7 @@ dependencies = [
  "opentelemetry",
  "ordered-float",
  "percent-encoding",
- "rand 0.8.5",
+ "rand 0.8.6",
  "thiserror 1.0.69",
 ]
 
@@ -2358,9 +2358,9 @@ checksum = "f8dcc9c7d52a811697d2151c701e0d08956f92b0e24136cf4cf27b57a6a0d9bf"
 
 [[package]]
 name = "rand"
-version = "0.8.5"
+version = "0.8.6"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "34af8d1a0e25924bc5b7c43c079c942339d8f0a8b57c39049bef581b46327404"
+checksum = "5ca0ecfa931c29007047d1bc58e623ab12e5590e8c7cc53200d5202b69266d8a"
 dependencies = [
  "libc",
  "rand_chacha 0.3.1",
@@ -3481,7 +3481,7 @@ dependencies = [
  "http 1.4.0",
  "httparse",
  "log",
- "rand 0.8.5",
+ "rand 0.8.6",
  "sha1",
  "thiserror 1.0.69",
  "utf-8",
