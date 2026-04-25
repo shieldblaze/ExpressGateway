@@ -280,3 +280,101 @@ deliberately deferred per `SHIP.md`.
 auditor (round-3 delta 2026-04-25) — **PASS** with 4 residual risks
 (D3-1..D3-4), 0 HOLD-blocking, 0 HIGH/CRITICAL.
 
+---
+
+## Round-4 Delta 2026-04-25 — D3-1/D3-2/D3-3 closure audit
+
+- Date: 2026-04-25
+- Auditor: auditor-delta-4 (fresh session, no coordination with reviewer-delta-4)
+- HEAD: `78961019b769e60302eede73ac993ba045a71af6`
+- Delta verdict: **PASS**
+- Commits audited: `78961019` (single closure commit for D3-1 binary
+  protocol-routing wiring + D3-2 H1 gRPC reject + D3-3 TEST-002 doc rewrite).
+
+Methodology: adversarial read-only walk of the closure commit's diff and
+the files it touched; round-3 D3-1/D3-2/D3-3 closure verification first,
+then D3-2 adversarial content-type variant probe, finally a fresh
+attack-surface walk against the new binary wiring. Independent runs of
+`cargo test --workspace`, `cargo deny check`, `trufflehog --only-verified`,
+`bash scripts/halting-gate.sh`, panic-free grep. Reviewer-delta-4
+sign-off intentionally NOT read.
+
+### Round-3 findings closure verification
+
+| ID (round-3) | Tracking ID | Closed by | Evidence | Verdict |
+|---|---|---|---|---|
+| D3-1 | binary protocol-routing wiring | `78961019` | `crates/lb/src/main.rs:262-272` `parse_upstream_proto` matches `tcp|h1 → H1`, `h2 → H2`, `h3 → H3`, errors with named-value message on unknown. `build_upstream_backends` (L278-325) errors on empty backends, mismatched address counts, and per-backend protocol parse failures. `build_h2_upstream_pool` (L327-352) wires `Http2Pool::new(cfg, tcp_pool)` honouring `H2SecurityConfig` knobs. `build_h3_upstream_pool` (L354-388) builds `QuicUpstreamPool` with a config-factory installing ALPN `lb-quic`, `verify_peer(false)`, 30 s idle timeout, 1350 B UDP datagram limits. `build_listener_mode` H1 arm (L671-699) and H1s arm (L709-755) call `build_upstream_backends` then `.then(|| build_h2_upstream_pool(...))` / `.then(build_h3_upstream_pool)` and thread the results into `H1Proxy::with_h2_upstream` / `with_h3_upstream` and `H2Proxy::with_h2_upstream` / `with_h3_upstream`. Plumbing in `crates/lb-l7/src/h1_proxy.rs:234-243,251-260,457,486-498` + `h2_proxy.rs:159-168,175-183,527,552-563` is real. `tests/binary_proto_routing.rs` PASSES (1/1) and asserts `has_h2_upstream() == true` plus the `RoundRobinUpstreams` picker yields `(p1.proto=H1, p2.proto=H2, p3=wrap)`. | **CLOSED**. |
+| D3-2 | H1 gRPC reject | `78961019` | `crates/lb-l7/src/h1_proxy.rs:340-350` short-circuits before `strip_hop_by_hop` and before WS-upgrade detection. `tests/h1_rejects_grpc.rs` PASSES (1/1) — POSTs `application/grpc+proto`, asserts `415 UNSUPPORTED_MEDIA_TYPE`, asserts body contains `"gRPC requires HTTP/2"`, asserts the witness backend was never contacted (proves short-circuit). | **CLOSED-with-finding** (case + grpc-web variants — see D4-1 / D4-2 below). |
+| D3-3 | TEST-002 doc rewrite | `78961019` | `docs/gap-analysis.md:401` paragraph rewritten. New text correctly states the test "hand-rolls the H2 preface + SETTINGS, then writes up to 1024 raw PING frames (type=0x06) at the live listener via the `write_frame` helper" and that the harness "does NOT decode the inbound frame stream and therefore cannot assert that the server emitted a `GOAWAY` with `ENHANCE_YOUR_CALM`". Cross-checked against `tests/h2_security_live.rs:392-427` — `ping_flood_goaway` indeed uses `write_frame(&mut tls, 0x06, ...)` and asserts only `sent > 0`. The previous round-3 `SendRequest` claim is gone. Two plausible closure paths (test-side raw-frame reader, upstream h2 API enhancement) are correctly named. | **CLOSED**. |
+
+### D3-2 adversarial content-type variants
+
+The walk's mandate: enumerate variants and verify `starts_with("application/grpc")` matches the bare `application/grpc[+ext]` form correctly.
+
+| Variant | `starts_with("application/grpc")` | Expected (per walk) | Actual | Verdict |
+|---|---|---|---|---|
+| `application/grpc` | true | reject (415) | reject | PASS |
+| `application/grpc+proto` | true | reject (415) | reject | PASS |
+| `application/grpc; charset=utf-8` | true | reject (415) | reject | PASS |
+| `application/GRPC` | **false** (case-sensitive) | reject (per RFC 7231 §3.1.1.1 media-type tokens are case-insensitive; gRPC client libs lowercase but a malicious client can send uppercase) | **NOT rejected** — falls through to backend dispatch | **D4-1 (LOW) bypass** |
+| `application/grpc-web` | **true** | NOT over-reject (walk note: H1 transparent forwarding is acceptable since grpc-web is plain HTTP) | rejected with 415 | **D4-2 (LOW) over-reject** |
+| `application/grpc-web+proto` | true | NOT over-reject (same rationale) | rejected with 415 | **D4-2 (subsumed)** |
+
+Inconsistency vector: `crates/lb-l7/src/grpc_proxy.rs:282` `is_grpc_request` (used by H2 listener) is **case-insensitive** (`s.trim().to_ascii_lowercase()`) and uses **exact match or `+ext` strip-prefix** (so `grpc-web` does NOT match — see grpc_proxy.rs:289-295). The H1 reject in `h1_proxy.rs:340-350` is **case-sensitive `starts_with`** — divergent semantics from the H2 detection. A perfect mirror would be:
+
+```rust
+let is_grpc = req.headers().get(CONTENT_TYPE)
+    .and_then(|v| v.to_str().ok())
+    .is_some_and(|s| {
+        let core = s.split(';').next().unwrap_or(s).trim().to_ascii_lowercase();
+        core == "application/grpc"
+            || core.strip_prefix("application/grpc+")
+                .is_some_and(|r| !r.is_empty() && r.chars().all(|c| c.is_ascii_alphanumeric() || c == '_'))
+    });
+```
+
+Both findings are LOW: D4-1 leaves a misconfigured-client downgrade path (uppercase `application/GRPC` reaches an H1 backend and elicits 502/garbage — i.e. the pre-D3-2 behaviour, not a new exposure), D4-2 returns 415 instead of transparent-forwarding `application/grpc-web` (reduced functionality, not a security issue). Neither blocks release.
+
+### New attack-surface walk on D3-1
+
+| ID | Threat | Verdict | Evidence |
+|----|--------|---------|----------|
+| 4-i | H2 backend TLS posture | **PASS-with-disclosed-gap** | `crates/lb-io/src/http2_pool.rs` doc-comment lines 35-38 explicitly disclose the upstream H2 path is plaintext-only. `Http2Pool::dial_and_handshake` calls `Builder::handshake(TokioIo::new(stream))` over a raw `TcpPool::acquire`-issued TCP stream — no `rustls::ClientConfig`, no SNI. Round-4 elevation of round-3 D3-1: `78961019` now **wires this into the binary** (`build_h2_upstream_pool` at `main.rs:327`), so an operator who configures `protocol = "h2"` on a backend gets cleartext to the upstream regardless of whether they expected TLS. The commit message names this as a v1 limitation; the gap-analysis.md PROTO-001 entry mentions `Http2Pool` exists but doesn't visibly flag binary wiring's plaintext posture. Carried as residual D4-3. |
+| 4-ii | H3 backend SNI | **MIXED** | `UpstreamBackend::h3(addr, sni)` requires an SNI string. `build_upstream_backends` (`main.rs:315-321`) populates SNI only for H3 by extracting the host portion of `BackendConfig::address` via `split_host_port`. For an IP-literal backend address (e.g. `127.0.0.1:443`), the SNI ends up as `"127.0.0.1"` — a literal IP-as-hostname which a TLS server cannot present a matching cert for. **However** `build_h3_upstream_pool` sets `cfg.verify_peer(false)`, so cert verification is **disabled** — SNI mismatches and forged certs both pass. Combined posture: any H3 backend dial is unauthenticated. Test coverage: `tests/proto_translation_e2e.rs` exercises `verify_peer(true)` paths through the e2e harness, but the binary's wiring (`build_h3_upstream_pool` → `verify_peer(false)`) is **not test-covered** by the new `binary_proto_routing.rs`. Tracked as residual D4-4. |
+| 4-iii | Empty backend list / unknown protocol | **PASS** | `build_upstream_backends` (`main.rs:284-292`) returns `anyhow::bail!("listener {addr} has no backends configured")` on empty. `parse_upstream_proto` (`main.rs:262-272`) returns `anyhow::anyhow!("unknown backend protocol {other:?} (expected one of: tcp, h1, h2, h3)")` — though `lb_config::validate_config` already rejects unknowns at `crates/lb-config/src/lib.rs:670-678` with the same set, so `parse_upstream_proto`'s error arm is defense-in-depth. Both error paths name the offending value; no silent fallback. |
+
+### New residual risks (round-4)
+
+| ID | Severity | CVSSv3 | Description | Suggested fix |
+|----|----------|--------|-------------|----------------|
+| D4-1 | LOW | 3.1 AV:N/AC:H/PR:N/UI:N/S:U/C:N/I:N/A:L | H1 gRPC reject is **case-sensitive**: `application/GRPC` (or any non-lowercase casing) bypasses the 415 and falls through to the backend. RFC 7231 §3.1.1.1 mandates case-insensitive media-type tokens. The H2 listener's `is_grpc_request` (`grpc_proxy.rs:287`) lowercases first; H1 reject does not. Behaviour pre-D3-2 (502/garbage from H1 backend) reappears for the casing edge case; not a new exposure but the user-visible signal is weaker than designed. | Lowercase the content-type before `starts_with`, or mirror `is_grpc_request`'s `to_ascii_lowercase + (== "application/grpc"` or `strip_prefix("application/grpc+")` check. |
+| D4-2 | LOW | N/A | H1 reject **over-rejects `application/grpc-web`** (and `application/grpc-web+proto`). The walk explicitly notes grpc-web is plain HTTP and H1 transparent forwarding is acceptable in v1. `starts_with("application/grpc")` greedily matches the `grpc-` prefix of `grpc-web`. Functional regression for grpc-web clients; not a security issue. | Use exact `application/grpc` match or `application/grpc+` strip-prefix (mirroring `is_grpc_request`), so `grpc-web` (hyphen, not `+`) bypasses the reject. |
+| D4-3 | MEDIUM | 4.3 AV:N/AC:H/PR:N/UI:N/S:U/C:L/I:L/A:N | Round-3 D3-1 is **closed**, but the binary's H2 backend dial is plaintext-only (`Http2Pool` posture). Operators configuring `protocol = "h2"` get cleartext upstream; if backends sit behind TLS the dial fails outright (same posture as round-3 disclosure). The new wiring inherits this; gap-analysis.md PROTO-001 entry should explicitly note the binary-side plaintext posture, not just the library API. | Add `Http2Pool::with_tls(rustls::ClientConfig)` constructor + ALPN `h2`, plus a config-validator check that rejects `protocol = "h2"` until shipped, **or** add a one-line gap-analysis entry naming the binary-side plaintext posture. |
+| D4-4 | MEDIUM | 4.8 AV:N/AC:L/PR:N/UI:N/S:U/C:L/I:L/A:N | `build_h3_upstream_pool` sets `verify_peer(false)`, so the binary's H3 backend dial is **unauthenticated**. Any on-path attacker between the gateway and the H3 backend can MITM. SNI is fallback-extracted from the backend address string and is meaningless given verify_peer=false. The commit message names this as a v1 limitation but `docs/gap-analysis.md` does not currently carry an explicit entry. No `binary_proto_routing.rs` coverage for the H3 dial path. | Plumb a `[backends.tls.ca_path]` knob through `BackendConfig`, set `verify_peer(true)` and `load_verify_locations_from_file(ca_path)` when present; until shipped, document explicitly in gap-analysis.md as v1 known-gap and have config-validator warn (or refuse) `protocol = "h3"` without a ca_path. |
+| D4-5 | LOW | N/A | `build_h3_upstream_pool` constructs a fresh `QuicUpstreamPool` every time; the H1s arm shares the pool across H1 + H2 proxies (good), but two listeners both selecting H3 backends each get an independent pool with independent connection tables. Memory bookkeeping doubles unnecessarily. Not a security issue, polish. | Hoist the pool to a process-global keyed by ALPN/config-factory, or document the per-listener-pool design as intentional. |
+
+Round-3 D3-1 (binary wiring deferral) is closed by the round-4 commit; D3-2 is closed with the D4-1/D4-2 nits above; D3-3 is fully closed. Round-3 D3-4 (FLAKE-002 stress coverage) unchanged. Round-1/2 residuals already closed.
+
+### Always-on checks
+
+| Check | Result |
+|-------|--------|
+| `cargo test --workspace --no-fail-fast` | **504 passed / 0 failed / 0 ignored** in this session (502 round-3 baseline + 2 new D3-1/D3-2 tests; matches the commit's claim). |
+| `cargo deny check` | **ok** (advisories ok, bans ok, licenses ok, sources ok; same harmless `unmatched license allowance` warnings as round-3). |
+| `/tmp/bin/trufflehog git --only-verified` | `chunks 13774, bytes 25467696, verified_secrets 0, unverified_secrets 0`. |
+| `bash scripts/halting-gate.sh` | **GREEN** — `Artifacts: 141/141. Tests: 59/59. Manifest: OK.` |
+| Panic-free in production code | `rg '\.unwrap\(\)|\.expect\(|panic!\(|todo!\('` against `crates/*/src/` post-AWK-skip of `#[cfg(test)]` blocks: **0 hits** outside test modules and one doc-comment string in `crates/lb/src/main.rs` (`/// generates an internal `.unwrap()`). New code in `78961019` (`parse_upstream_proto`, `build_upstream_backends`, `build_h2_upstream_pool`, `build_h3_upstream_pool`, H1 gRPC reject) uses `?` / `anyhow::bail!` / `is_some_and` / `let-else` consistently; no panic primitives introduced. |
+| `unsafe` count | **20** (16 blocks + 4 `unsafe fn`) — unchanged from round-1/2/3. `git diff 78961019^..78961019` adds zero `unsafe` keywords (verified by `grep -n unsafe` against the diff). |
+
+### Signature
+
+auditor (round-4 delta 2026-04-25) — **PASS** with 5 residual risks
+(D4-1..D4-5), 0 HOLD-blocking, 0 HIGH/CRITICAL. Top commendation:
+the binary wiring helpers (`parse_upstream_proto`,
+`build_upstream_backends`, `build_{h2,h3}_upstream_pool`) cleanly
+translate config strings into typed `UpstreamProto` with named-value
+errors at startup, and `binary_proto_routing.rs` is a well-scoped
+in-process integration test that asserts both pool wiring and picker
+composition without flakiness — clean v1 closure of the round-3 D3-1
+gap.
+
