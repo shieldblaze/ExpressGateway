@@ -378,3 +378,91 @@ in-process integration test that asserts both pool wiring and picker
 composition without flakiness — clean v1 closure of the round-3 D3-1
 gap.
 
+---
+
+## Round-5 Delta 2026-04-25 — D4-1/D4-2/D4-4 closure audit
+
+- Date: 2026-04-25
+- Auditor: auditor-delta-5 (fresh session, no coordination with reviewer-delta-5)
+- HEAD: `017ef15a10372f5098d1977ad865b722f1515e4c`
+- Delta verdict: **PASS**
+- Commits audited: `017ef15a` (single closure commit for D4-1
+  case-insensitive H1 gRPC reject + D4-2 grpc-web pass-through + D4-4
+  H3 upstream `verify_peer` wiring; D4-3/D4-5 deferred-with-rationale).
+
+Methodology: adversarial read-only walk of the closure commit's diff and
+the files it touched; round-4 D4-1/D4-2/D4-4 closure verification; new
+adversarial probe of D4-1 corner-case content-type variants; new
+adversarial probe of D4-4 multi-backend / non-H3 / SNI / file-race
+attack surfaces; always-on (cargo test, cargo deny, trufflehog,
+halting-gate). Reviewer-delta-5 sign-off intentionally NOT read.
+
+### Round-4 findings closure verification
+
+| ID (round-4) | Closed by | Evidence | Verdict |
+|---|---|---|---|
+| D4-1 | `017ef15a` | `crates/lb-l7/src/h1_proxy.rs:347-359` — predicate now `s.split(';').next().unwrap_or("").trim().to_ascii_lowercase()` then `media_type == "application/grpc" \|\| media_type.starts_with("application/grpc+")`. Lowercase first means `Application/Grpc`, `APPLICATION/GRPC`, mixed-case, all collapse to the canonical token. `tests/h1_rejects_grpc.rs::h1_rejects_grpc_uppercase_with_415` and `h1_rejects_grpc_with_charset_param_with_415` exercise both 415 paths and assert the witness backend is NOT contacted. | **CLOSED**. |
+| D4-2 | `017ef15a` | Same predicate above: the trailing `+` in `application/grpc+` excludes hyphen-bearing variants (`grpc-web`, `grpc-something`). Tests `h1_passes_grpc_web_through` + `h1_passes_grpc_web_proto_through` drive `application/grpc-web` and `application/grpc-web+proto` through the gateway and assert (a) status is NOT 415, (b) the witness backend WAS contacted. | **CLOSED**. |
+| D4-4 | `017ef15a` | `crates/lb-config/src/lib.rs:443-475` adds three knobs to `BackendConfig` (`tls_ca_path`, `tls_verify_hostname`, `tls_verify_peer` with serde default `true`). `validate_backend_h3_tls` (lib.rs:712-744) enforces: H3+verify=true requires non-empty `tls_ca_path`; non-H3 backends must NOT carry any `tls_*` knob; empty `tls_verify_hostname` rejected. `crates/lb/src/main.rs:384-447` `build_h3_upstream_pool(h3_backends)` now (1) rejects mismatched `(tls_verify_peer, tls_ca_path)` across H3 backends on a single listener, (2) double-checks the verify+ca_path invariant at pool build time, (3) installs `cfg.load_verify_locations_from_file(path)` + `cfg.verify_peer(true)` when verify is on, (4) preserves `verify_peer(false)` only on the explicit opt-out path. SNI override (main.rs:319-326) honours `tls_verify_hostname` then falls back to address host. `tests/h3_upstream_verify.rs` (8 tests) covers all 5 validator branches plus a TOML round-trip proving `tls_verify_peer` defaults to `true` when the key is absent. | **CLOSED**. |
+
+### D4-1 adversarial content-type variant probe (round-5 mandate)
+
+| Variant | After `split(';').next().unwrap_or("").trim().to_ascii_lowercase()` | Predicate result | Expected | Actual | Verdict |
+|---|---|---|---|---|---|
+| `application/grpc;charset=utf-8` (no space) | `application/grpc` | `==` match | reject 415 | reject 415 | **PASS** |
+| `Application/Grpc` (mixed case) | `application/grpc` | `==` match | reject 415 | reject 415 | **PASS** |
+| `application/grpc;` (trailing semicolon, empty params) | `application/grpc` | `==` match | reject 415 | reject 415 | **PASS** |
+| `application/grpc; ` (trailing semicolon + whitespace) | `application/grpc` | `==` match | reject 415 | reject 415 | **PASS** |
+| `application/GRPC+PROTO` | `application/grpc+proto` | `starts_with` match | reject 415 | reject 415 | **PASS** |
+| `   application/grpc   ` (leading/trailing whitespace) | `application/grpc` | `==` match | reject 415 | reject 415 | **PASS** |
+| `application/grpc-web` | `application/grpc-web` | neither | pass-through | pass-through | **PASS** |
+| `application/grpc-web+proto` | `application/grpc-web+proto` | neither | pass-through | pass-through | **PASS** |
+| `application/grpc-something` | `application/grpc-something` | neither | pass-through | pass-through | **PASS** |
+| `application/Grpc-Web` | `application/grpc-web` | neither | pass-through | pass-through | **PASS** |
+
+The corner cases `application/grpc;charset=utf-8` (no space), `Application/Grpc`, trailing-semicolon parameters all reject correctly. Hyphen-bearing variants flow through. No new bypass or over-reject. The predicate is symmetric with `lb-grpc::is_grpc_request` (which uses lowercase + `==` or `+` strip-prefix) — the H1 reject and H2 detect now share equivalent semantics.
+
+### D4-4 new adversarial attack-surface walk (round-5 mandate)
+
+| ID | Threat | Verdict | Evidence |
+|----|--------|---------|----------|
+| 5-α | Missing CA + verify=true → startup error | **PASS** | `validate_backend_h3_tls` (lib.rs:729-734) returns `Err(ConfigError::Validation(...))` naming `tls_ca_path` and the explicit-opt-out alternative. `tests/h3_upstream_verify.rs::h3_backend_without_ca_path_rejected_when_verify_peer_default` asserts the diagnostic substrings. Defense-in-depth: `build_h3_upstream_pool` re-checks the invariant at pool build (main.rs:412-418) so even if the validator were bypassed, the pool factory bails. |
+| 5-β | Two H3 backends with conflicting verify settings | **PASS-with-coverage-gap** | `build_h3_upstream_pool` iterator at main.rs:394-408 compares `(tls_verify_peer, tls_ca_path)` of every H3 backend against the first; mismatch → `anyhow::bail!` naming both backend addresses. **However**: no test in `tests/h3_upstream_verify.rs` covers two H3 backends on a single listener with mismatched (verify, ca_path) tuples. The branch is in a binary-crate function (`crates/lb/src/main.rs`) and not directly testable from integration tests. The validator does NOT enforce the single-listener-uniformity rule (it validates each backend independently). Tracked as residual D5-1. |
+| 5-γ | Empty SNI override (whitespace, `""`, `"   "`) | **PASS** | `validate_backend_h3_tls` (lib.rs:736-742) `if let Some(sni) = ... if sni.trim().is_empty()` → reject. Test `h3_backend_with_empty_sni_override_rejected` uses `"   "` and asserts the `tls_verify_hostname` substring. |
+| 5-δ | Non-H3 backend with TLS knobs | **PASS** | `validate_backend_h3_tls` (lib.rs:716-723) rejects when `protocol != "h3"` AND any of `(tls_ca_path.is_some(), tls_verify_hostname.is_some(), !tls_verify_peer)`. Tests `non_h3_backend_with_tls_knobs_rejected` (h1 + ca_path) and `non_h3_backend_with_verify_peer_false_rejected` (tcp + verify=false) cover both axes. |
+| 5-ε | `tls_ca_path` race condition (TOCTOU file-load on every dial) | **PASS-with-disclosed-posture** | The factory closure (main.rs:419-442) is `Arc<Fn() -> Result<quiche::Config, _>>` invoked **on every fresh QUIC config**, not once at startup. `load_verify_locations_from_file(path)` runs at each call. Operator deleting / replacing the CA bundle post-startup will surface as a `quiche::Error` on the next dial (not at startup, not at SIGHUP). This is acceptable per the operator-trusted threat model: an operator with filesystem write to the CA bundle is already at higher privilege than the gateway. CA rotation by atomic-rename works correctly (next dial picks up the new bundle). Edge case: a malformed CA file post-rotation surfaces as runtime upstream-handshake-failure → 502, not as a gateway crash. No fix needed; tracked as observability nit D5-2. |
+| 5-ζ | Path traversal in `tls_ca_path` | **PASS (operator-trusted)** | `tls_ca_path: Option<String>` is operator-controlled config, never attacker-controlled. `quiche::Config::load_verify_locations_from_file` opens the path verbatim (no chroot, no canonicalization). Per SECURITY.md threat model, the operator owns the config file; path traversal here is equivalent to "operator can read any file the gateway process can read", which is the operator's own privilege. Acceptable. |
+| 5-η | `tls_verify_peer = false` escape-hatch reachability without explicit opt-in | **PASS** | The serde default is `true` (lib.rs:471 `default_verify_peer_true`), so a TOML omitting `tls_verify_peer` gets `true`. Test `h3_backend_default_protocol_parses_with_verify_peer_true` round-trips a TOML snippet and asserts `backend.tls_verify_peer == true` — proves no accidental-default-false silent path. |
+
+### New residual risks (round-5)
+
+| ID | Severity | CVSSv3 | Description | Suggested fix |
+|----|----------|--------|-------------|----------------|
+| D5-1 | LOW | N/A | `build_h3_upstream_pool` enforces single-listener uniformity of `(tls_verify_peer, tls_ca_path)` across H3 backends, but no integration test exercises the `anyhow::bail!` branch when two H3 backends on the same listener disagree. The branch is reachable only through `crates/lb/src/main.rs` (binary crate), not from `lb-config` integration tests. A refactor that loosens the comparison would not be caught by halting-gate. | Add a `tests/h3_pool_mismatch.rs` (or extend `binary_proto_routing.rs`) that builds a `LbConfig` with two H3 backends having different `tls_ca_path` values and asserts the binary's listener-build path errors at the expected step. Alternatively, hoist the uniformity check into `validate_backend_list` so `lb-config` tests can pin it. |
+| D5-2 | LOW | N/A | The factory closure performs `load_verify_locations_from_file` on every dial. CA-file deletion post-startup will surface only on the *next* upstream handshake, not at SIGHUP / startup. An operator running a config-validation step pre-deploy will see "config valid" even if the file went missing between validation and runtime. | Consider eagerly opening the CA bundle once at pool build (cache the parsed cert chain), or document the runtime-load posture explicitly in the gap-analysis "operator runbook" section. |
+
+Round-4 D4-3 (H2 backend plaintext-only) and D4-5 (per-listener H3 pool not hoisted) are deferred-with-rationale per `docs/gap-analysis.md` and tracked for v2 — confirmed unchanged in this commit. Round-3 D3-4 (FLAKE-002 stress coverage) unchanged. Round-1/2 residuals already closed.
+
+### Always-on checks
+
+| Check | Result |
+|-------|--------|
+| `cargo test --workspace --no-fail-fast` | **516 passed / 0 failed / 0 ignored** in this session — matches the commit's claim. Includes the 4 new H1 gRPC variant tests + 8 H3 verify tests. |
+| `cargo deny check` | **ok** (advisories ok, bans ok, licenses ok, sources ok; same harmless `unmatched license allowance` warnings as round-2/3/4). |
+| `/tmp/bin/trufflehog git --only-verified` | `chunks 13799, bytes 25518325, verified_secrets 0, unverified_secrets 0`. |
+| `bash scripts/halting-gate.sh` | **GREEN** — `Artifacts: 141/141. Tests: 59/59. Manifest: OK.` |
+| Panic-free in production code | New code in `017ef15a` (predicate, validator, pool builder) uses `is_some_and` / `let-else` / `anyhow::bail!` / `Option::is_none_or` consistently; the only `unwrap_or("")` is on `split(';').next()` which is infallible by construction (`split` always yields ≥1 element). No new panic primitives. |
+| `unsafe` count | **20** (16 blocks + 4 `unsafe fn`) — unchanged from round-1/2/3/4. `git diff 78961019..017ef15a` adds zero `unsafe` keywords. |
+
+### Signature
+
+auditor (round-5 delta 2026-04-25) — **PASS** with 2 new residual risks
+(D5-1 coverage-gap, D5-2 file-race observability nit), 0 HOLD-blocking,
+0 HIGH/CRITICAL. Top commendation: the predicate rewrite at
+`h1_proxy.rs:347-359` is concise, RFC-aligned, and now matches
+`grpc_proxy::is_grpc_request` semantics — a textbook closure of two
+related round-4 findings in a single 17-line diff. The D4-4 closure is
+similarly thorough: serde-default `true`, validator gate, runtime
+pool-builder gate, mismatch-detection across backends, SNI override
+honoured, and 8 well-scoped validator-branch tests.
+
