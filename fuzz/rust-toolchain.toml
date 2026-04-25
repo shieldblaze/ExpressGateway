@@ -1,0 +1,6 @@
+[toolchain]
+# cargo-fuzz needs nightly for -Z sanitizer=address and the libFuzzer
+# runtime. Pinned to the same date as the ebpf crate so the repo only
+# depends on one nightly snapshot.
+channel = "nightly-2026-01-15"
+components = ["rust-src", "rustfmt", "clippy"]

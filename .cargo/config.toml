@@ -1,0 +1,12 @@
+# Workspace-wide cargo configuration.
+#
+# BoringSSL (via boring-sys) uses bindgen, which in turn needs libclang to
+# find `stddef.h`. On Ubuntu 24.04 we ship libclang.so.1 without the
+# clang compiler package, so clang's builtin resource-header directory is
+# missing. Pointing bindgen at gcc's include directories makes the QUIC
+# (quiche + tokio-quiche) build deterministic on every developer and CI
+# image without requiring `clang` on PATH.
+#
+# Added in Pillar 3b.1. See docs/decisions/quinn-to-quiche-migration.md.
+[env]
+BINDGEN_EXTRA_CLANG_ARGS = "-I/usr/lib/gcc/x86_64-linux-gnu/13/include -I/usr/include"

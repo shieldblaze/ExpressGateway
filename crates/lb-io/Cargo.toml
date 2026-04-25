@@ -1,0 +1,36 @@
+[package]
+name = "lb-io"
+version = "0.1.0"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish = false
+
+[dependencies]
+thiserror = { workspace = true }
+tokio = { workspace = true }
+tracing = { workspace = true }
+socket2 = { workspace = true }
+dashmap = { workspace = true }
+parking_lot = { workspace = true }
+quiche = { workspace = true }
+# ring for random SCID generation in the quic upstream pool. Already in
+# the tree via quiche's BoringSSL build; declaring direct keeps the
+# pool module independent of re-export chains.
+ring = "0.17"
+# PROTO-001: lb-io::http2_pool wraps a TcpPool with hyper's
+# `client::conn::http2` machinery so every L7 listener can dial an
+# HTTP/2 backend through the same pool surface. We also pull
+# http-body-util for `BoxBody`, the body type the pool's public
+# `send_request` API speaks.
+hyper = { workspace = true }
+hyper-util = { workspace = true }
+http-body-util = { workspace = true }
+bytes = { workspace = true }
+
+[target.'cfg(target_os = "linux")'.dependencies]
+io-uring = { workspace = true }
+libc = { workspace = true }
+
+[dev-dependencies]
+rand = { workspace = true }

@@ -1,0 +1,170 @@
+[package]
+name = "lb-integration-tests"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.85"
+publish = false
+
+[workspace]
+resolver = "2"
+members = [
+    "crates/lb-core",
+    "crates/lb-config",
+    "crates/lb-controlplane",
+    "crates/lb-cp-client",
+    "crates/lb-l4-xdp",
+    "crates/lb-io",
+    "crates/lb-h1",
+    "crates/lb-h2",
+    "crates/lb-h3",
+    "crates/lb-quic",
+    "crates/lb-grpc",
+    "crates/lb-l7",
+    "crates/lb-balancer",
+    "crates/lb-health",
+    "crates/lb-security",
+    "crates/lb-compression",
+    "crates/lb-observability",
+    "crates/lb",
+]
+
+# MSRV-pin notes:
+# Cargo.lock pins `foundations 4.5.0` and `idna_adapter 1.1.0` to preserve
+# MSRV 1.85 — newer foundations pulls darling 0.23 (rustc 1.88) and newer
+# idna_adapter pulls icu 2.2 (rustc 1.86). Do not blindly `cargo update`;
+# verify workspace still builds on stable 1.85 after any dependency bump.
+
+[workspace.package]
+license = "GPL-3.0-only"
+edition = "2024"
+rust-version = "1.85"
+
+[workspace.dependencies]
+# Async runtime
+tokio = { version = "1", features = ["full"] }
+io-uring = "0.7"
+# Error handling
+thiserror = "2"
+anyhow = "1"
+# Serialization
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+toml = "0.8"
+# Networking
+bytes = "1"
+socket2 = { version = "0.5", features = ["all"] }
+libc = "0.2"
+# Logging
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["json", "env-filter"] }
+# Concurrency
+arc-swap = "1"
+parking_lot = "0.12"
+dashmap = "6"
+# HTTP
+http = "1"
+# Pillar 3b.3b-1: real L7 H1 proxy. Full features cover client + server +
+# tokio runtime adapters; http-body-util gives the Empty/Full body types
+# used by the L7 module's tests and the binary's wiring code.
+hyper = { version = "1", features = ["full"] }
+hyper-util = { version = "0.1", features = ["full"] }
+http-body-util = "0.1"
+# QUIC + TLS
+# Pillar 3b.1: lb-quic runs on quiche (BoringSSL) + tokio-quiche; see
+# docs/decisions/quinn-to-quiche-migration.md. rustls stays for the
+# TLS-over-TCP listener path + the Step 5b TicketRotator.
+quiche = "0.28"
+tokio-quiche = "0.18"
+rustls = { version = "0.23", default-features = false, features = ["ring", "std", "tls12", "logging"] }
+rustls-pki-types = "1"
+# Pillar 3b.2: TLS-over-TCP listener wiring.
+tokio-rustls = { version = "0.26", default-features = false, features = ["ring", "tls12", "logging"] }
+rustls-pemfile = "2"
+# Pillar 3b.3c-1: CancellationToken for graceful listener shutdown.
+tokio-util = { version = "0.7", default-features = false, features = ["rt"] }
+# Item 2: WebSocket proxy path (PROMPT.md §14). 0.24 keeps us on the same
+# rustls 0.23 + tokio-rustls 0.26 stack already pinned above.
+tokio-tungstenite = { version = "0.24", default-features = false, features = ["handshake"] }
+# Item 2: `StreamExt` + `SinkExt` combinators over `tokio-tungstenite`'s
+# `WebSocketStream`. `std` is the only default we need; we keep the pull
+# light and skip the `compat` layer.
+futures-util = { version = "0.3", default-features = false, features = ["std", "sink"] }
+# Utilities
+rand = "0.8"
+# XDP / eBPF (Pillar 4a: aya userspace loader; Linux-only in consumers)
+aya = "0.13"
+# Pillar 4b-1: aya-obj gives us the kernel-free ELF parser (no CAP_BPF
+# required) for the real_elf_parses integration test.
+aya-obj = "0.2"
+# Pillar 4b-1: CAP_BPF probe before attempting XDP attach.
+caps = "0.5"
+# Fuzzing (Step 6). Consumed only by the out-of-workspace `fuzz/` crate;
+# declared here so the version travels with the workspace policy rather
+# than being hidden inside the fuzz crate.
+libfuzzer-sys = "0.4"
+# Pillar 3b (Task #21): Prometheus exposition for the /metrics admin
+# listener. `default-features = false` drops the protobuf family so we
+# keep the text-format path only; `process` enables the
+# `process_collector` for OS-level RSS/CPU samples.
+prometheus = { version = "0.13", default-features = false, features = ["process"] }
+
+[dev-dependencies]
+lb-core = { path = "crates/lb-core" }
+lb-config = { path = "crates/lb-config" }
+lb-controlplane = { path = "crates/lb-controlplane" }
+lb-cp-client = { path = "crates/lb-cp-client" }
+lb-l4-xdp = { path = "crates/lb-l4-xdp" }
+lb-io = { path = "crates/lb-io" }
+lb-h1 = { path = "crates/lb-h1" }
+lb-h2 = { path = "crates/lb-h2" }
+lb-h3 = { path = "crates/lb-h3" }
+lb-quic = { path = "crates/lb-quic" }
+lb-grpc = { path = "crates/lb-grpc" }
+lb-l7 = { path = "crates/lb-l7" }
+lb-balancer = { path = "crates/lb-balancer" }
+lb-health = { path = "crates/lb-health" }
+lb-security = { path = "crates/lb-security" }
+lb-compression = { path = "crates/lb-compression" }
+lb-observability = { path = "crates/lb-observability" }
+tokio = { workspace = true, features = ["full", "test-util"] }
+anyhow = { workspace = true }
+bytes = { workspace = true }
+http = { workspace = true }
+hyper = { workspace = true }
+hyper-util = { workspace = true }
+http-body-util = { workspace = true }
+rand = { workspace = true }
+rustls = { workspace = true }
+rustls-pki-types = { workspace = true }
+tokio-rustls = { workspace = true }
+parking_lot = { workspace = true }
+# Pillar 3b.3b-2: reqwest for H2 integration tests. rustls-tls + http2
+# only; no default features to avoid pulling native-tls and OpenSSL.
+reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "http2"] }
+# Item 1: raw h2 crate used as a malicious-client harness in
+# tests/h2_security_live.rs. Pinned to the same minor hyper pulls.
+h2 = "0.4"
+quiche = { workspace = true }
+tokio-util = { workspace = true }
+ring = "0.17"
+rcgen = { version = "0.13", features = ["pem"] }
+# Item 2: integration tests for the WebSocket proxy. `connect` gives us
+# `connect_async` (which dials over raw TCP, no TLS needed for the ws://
+# echo tests). Stays on the same 0.24 pin as the workspace dep.
+tokio-tungstenite = { workspace = true, features = ["connect"] }
+futures-util = { workspace = true }
+# Item 3: gRPC e2e tests drive a raw hyper H2 client + server to play
+# both sides of the RPC wire. `lb-grpc` supplies the frame codec and
+# status/deadline helpers; the tests exercise framing + trailers
+# without pulling `tonic`/`prost` into the dev-dep graph (tonic's
+# build.rs + protoc requirement would complicate sandbox builds).
+
+[profile.release]
+opt-level = 3
+lto = "thin"
+codegen-units = 1
+strip = "symbols"
+
+[profile.dev]
+opt-level = 0
+debug = true

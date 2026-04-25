@@ -1,0 +1,32 @@
+[package]
+name = "lb-l7"
+version = "0.1.0"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish = false
+
+[dependencies]
+thiserror = { workspace = true }
+bytes = { workspace = true }
+http = { workspace = true }
+# Pillar 3b.3b-1: real H1 proxy.
+hyper = { workspace = true }
+hyper-util = { workspace = true }
+http-body-util = { workspace = true }
+tokio = { workspace = true }
+tracing = { workspace = true }
+parking_lot = { workspace = true }
+lb-io = { path = "../lb-io" }
+lb-h2 = { path = "../lb-h2" }
+# PROTO-001: H1→H3 / H2→H3 upstream paths consume `lb_quic::request_h3_upstream`
+# and the `H3UpstreamResponse` carrier type. lb-quic stays on quiche; we
+# only consume its public API.
+lb-quic = { path = "../lb-quic" }
+# Item 3: gRPC proxy path (PROMPT.md §13). `lb-grpc` ships the
+# codec-level types (GrpcDeadline, GrpcStatus, GrpcFrame, StreamingMode);
+# we only consume them — no modifications to lb-grpc.
+lb-grpc = { path = "../lb-grpc" }
+# Item 2: WebSocket proxy path (RFC 6455 + RFC 8441).
+tokio-tungstenite = { workspace = true }
+futures-util = { workspace = true }

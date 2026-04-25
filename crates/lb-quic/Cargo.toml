@@ -1,0 +1,38 @@
+[package]
+name = "lb-quic"
+version = "0.1.0"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish = false
+
+[dependencies]
+thiserror = { workspace = true }
+bytes = { workspace = true }
+tokio = { workspace = true }
+tokio-util = { workspace = true }
+tracing = { workspace = true }
+parking_lot = { workspace = true }
+dashmap = { workspace = true }
+quiche = { workspace = true }
+tokio-quiche = { workspace = true }
+# PROTO-001: H3 listener → H2 backend path consumes hyper's H2 client
+# via lb_io::http2_pool::Http2Pool. We construct the upstream
+# `Request<BoxBody>` here in `h3_bridge::h3_to_h2_roundtrip`.
+hyper = { workspace = true }
+http-body-util = { workspace = true }
+# `ring::rand` for retry-secret generation and SCID sampling in the
+# listener seam (Pillar 3b.3c-1). ring is already in the tree via
+# quiche/BoringSSL's build — declaring it direct is cheap.
+ring = "0.17"
+lb-security = { path = "../lb-security" }
+# Pillar 3b.3c-2: router needs TcpPool to forward H3 → H1 to backends.
+lb-io = { path = "../lb-io" }
+# Pillar 3b.3c-2: lb-h3 provides the RFC 9114 frame codec + QPACK static-
+# table encoder/decoder. We use its byte format on both sides of our e2e
+# client+server so the no-dynamic-table limitation is never exercised.
+lb-h3 = { path = "../lb-h3" }
+
+[dev-dependencies]
+rcgen = { version = "0.13", features = ["pem"] }
+tokio = { workspace = true, features = ["full", "test-util"] }

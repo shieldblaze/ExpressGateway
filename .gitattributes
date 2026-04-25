@@ -1,0 +1,2 @@
+# Compiled BPF ELF produced by scripts/build-xdp.sh. Tracked binary; not diffable.
+crates/lb-l4-xdp/src/lb_xdp.bin binary

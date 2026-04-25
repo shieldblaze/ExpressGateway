@@ -1,0 +1,11 @@
+[[listeners]]
+address = "0.0.0.0:8080"
+protocol = "tcp"
+
+[[listeners.backends]]
+address = "127.0.0.1:3000"
+weight = 1
+
+[[listeners.backends]]
+address = "127.0.0.1:3001"
+weight = 1

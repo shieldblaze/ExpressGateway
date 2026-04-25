@@ -1,0 +1,37 @@
+# Build artifacts
+target/
+
+# cargo-fuzz runtime corpora: libFuzzer writes sha1-named inputs into
+# fuzz/corpus/<target>/ on every run. Ignore the directory entirely,
+# then re-include only the hand-crafted seed .bin files that we commit
+# to seed every run from a warm corpus.
+fuzz/corpus/*/*
+!fuzz/corpus/*/*.bin
+
+# cargo-fuzz writes crash reproducers + rustc build output into these
+# dirs; keep them out of git.
+fuzz/target/
+fuzz/artifacts/
+fuzz/coverage/
+
+# IDE
+.idea/
+*.iml
+.vscode/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Environment
+.env
+.env.*
+
+# Local agent / tooling state
+.claude/
+
+# Logs
+*.log

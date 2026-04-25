@@ -1,0 +1,45 @@
+[package]
+name = "lb"
+version = "0.1.0"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish = false
+build = "build.rs"
+
+[[bin]]
+name = "expressgateway"
+path = "src/main.rs"
+
+[dependencies]
+anyhow = { workspace = true }
+tokio = { workspace = true }
+tokio-util = { workspace = true }
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true }
+parking_lot = { workspace = true }
+rustls = { workspace = true }
+rustls-pki-types = { workspace = true }
+rustls-pemfile = { workspace = true }
+tokio-rustls = { workspace = true }
+lb-io = { path = "../lb-io" }
+lb-config = { path = "../lb-config" }
+lb-controlplane = { path = "../lb-controlplane" }
+lb-balancer = { path = "../lb-balancer" }
+lb-observability = { path = "../lb-observability" }
+lb-health = { path = "../lb-health" }
+lb-security = { path = "../lb-security" }
+lb-quic = { path = "../lb-quic" }
+lb-l7 = { path = "../lb-l7" }
+lb-l4-xdp = { path = "../lb-l4-xdp" }
+hyper = { workspace = true }
+hyper-util = { workspace = true }
+# PROTO-001 D3-1: H3 upstream pool config-factory builds a quiche::Config
+# in-line (no shared helper exists yet). Pulled in via the workspace pin
+# already used by lb-quic / lb-io.
+quiche = { workspace = true }
+
+# Pillar 4b-1: CAP_BPF probe. Linux-only; the XDP path is gated on
+# target_os = "linux" in main.rs.
+[target.'cfg(target_os = "linux")'.dependencies]
+caps = { workspace = true }
