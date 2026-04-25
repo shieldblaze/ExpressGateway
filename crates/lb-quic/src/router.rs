@@ -380,6 +380,149 @@ fn spawn_new_connection(
     Ok(())
 }
 
+#[cfg(test)]
+mod tests {
+    //! Unit tests for the inbound packet router.
+    //!
+    //! TEST-001 (Delta-audit residual, 2026-04-24): the cap-drop branch in
+    //! [`spawn_new_connection`] was reviewer-verified at source level but
+    //! had no dedicated test exercising the path. The test below fires it
+    //! directly with a reduced `max_connections = 2` so the dispatch table
+    //! is at the `2 * max_connections` cap before the call, then asserts
+    //! the function returns the cap-drop `Err` and does NOT grow the
+    //! table.
+    use super::*;
+    use lb_io::Runtime;
+    use lb_io::pool::PoolConfig;
+    use lb_io::sockopts::BackendSockOpts;
+    use std::net::Ipv4Addr;
+
+    /// Drives the `connections.len() >= max_connections * 2` branch of
+    /// [`spawn_new_connection`]. Constructs a real `RouterParams` with a
+    /// stub `config_factory` (must NEVER be called; the cap-check returns
+    /// before factory invocation), prefills the dashmap with `2 * 2 = 4`
+    /// closed mpsc senders, then calls `spawn_new_connection` once with a
+    /// real `quiche`-minted Initial packet header. Asserts: (a) Err
+    /// returned with the cap-drop message, (b) dispatch table size
+    /// unchanged.
+    #[tokio::test]
+    async fn router_drops_initial_when_cap_reached() {
+        // ----- plumbing -----
+        let socket = Arc::new(
+            UdpSocket::bind((Ipv4Addr::LOCALHOST, 0))
+                .await
+                .expect("bind udp"),
+        );
+        let local = socket.local_addr().expect("local_addr");
+        let peer: SocketAddr = "127.0.0.1:65535".parse().expect("parse peer");
+
+        let retry_signer = Arc::new(RetryTokenSigner::new_with_secret([0xa5u8; 32]));
+        let replay_guard = Arc::new(PlMutex::new(ZeroRttReplayGuard::new(64)));
+
+        // Factory that fails loudly: if the cap-check ever falls through,
+        // the test fails with a different error message and we know the
+        // cap-drop branch did not fire.
+        let config_factory: Arc<dyn Fn() -> Result<quiche::Config, quiche::Error> + Send + Sync> =
+            Arc::new(|| Err(quiche::Error::TlsFail));
+
+        let runtime = Runtime::new();
+        let pool = TcpPool::new(PoolConfig::default(), BackendSockOpts::default(), runtime);
+
+        let params = RouterParams {
+            socket,
+            retry_signer,
+            replay_guard,
+            config_factory,
+            pool,
+            backends: Arc::new(Vec::new()),
+            h3_backend: None,
+            h2_backend: None,
+            // TEST-001: reduced cap so the dashmap only needs 4 entries
+            // to be saturated. cap_entries = 2 * 2 = 4.
+            max_connections: 2,
+            cancel: CancellationToken::new(),
+        };
+
+        // ----- prefill the dispatch table to the cap -----
+        let connections: Arc<dashmap::DashMap<Vec<u8>, mpsc::Sender<InboundPacket>>> =
+            Arc::new(dashmap::DashMap::new());
+        for i in 0u8..4 {
+            // Keep the receiver alive so the channel is "open" — closed
+            // channels are reaped by `forward_to_actor`, but the cap
+            // check runs before any forwarding so this detail is moot;
+            // we hold the rxs to be unambiguous.
+            let (tx, _rx) = mpsc::channel::<InboundPacket>(1);
+            connections.insert(vec![i; 8], tx);
+            // Receiver dropped at end of iteration is fine — cap check
+            // does not care about channel state.
+        }
+        assert_eq!(
+            connections.len(),
+            4,
+            "fixture: dashmap should be at 2 * max_connections == 4"
+        );
+
+        // ----- mint a real Initial packet via quiche::connect -----
+        let mut client_cfg = quiche::Config::new(quiche::PROTOCOL_VERSION).expect("client cfg new");
+        client_cfg
+            .set_application_protos(&[crate::LB_QUIC_ALPN])
+            .expect("alpn");
+        client_cfg.verify_peer(false);
+        client_cfg.set_max_idle_timeout(5_000);
+        client_cfg.set_max_recv_udp_payload_size(1_350);
+        client_cfg.set_max_send_udp_payload_size(1_350);
+        client_cfg.set_initial_max_data(1024);
+        client_cfg.set_initial_max_stream_data_bidi_local(1024);
+        client_cfg.set_initial_max_streams_bidi(1);
+        client_cfg.set_disable_active_migration(true);
+
+        let client_scid_bytes = sample_conn_id();
+        let client_scid = ConnectionId::from_ref(&client_scid_bytes);
+        let mut conn = quiche::connect(Some("test"), &client_scid, peer, local, &mut client_cfg)
+            .expect("quiche::connect");
+        let mut send_buf = vec![0u8; MAX_UDP];
+        let (n, _info) = conn.send(&mut send_buf).expect("client conn.send");
+
+        // Clone wire bytes BEFORE parsing the header (the header borrows
+        // from `send_buf` and the `spawn_new_connection` API takes an
+        // owned `Vec<u8>` for `first_packet`).
+        let first_packet = send_buf.get(..n).unwrap_or(&[]).to_vec();
+        let header_buf = send_buf.get_mut(..n).unwrap_or(&mut []);
+        let header = Header::from_slice(header_buf, quiche::MAX_CONN_ID_LEN).expect("parse header");
+        assert_eq!(header.ty, Type::Initial, "wire pkt should be Initial");
+        let odcid = header.dcid.to_vec();
+
+        // ----- fire the cap-drop branch -----
+        let result = spawn_new_connection(
+            &header,
+            &odcid,
+            first_packet,
+            peer,
+            local,
+            &params,
+            &connections,
+        );
+
+        // The cap-drop branch returns Err with this exact message; any
+        // other error means the cap check did not fire and the test is
+        // not actually proving the path.
+        match result {
+            Err(msg) => assert_eq!(
+                msg, "router at max_connections",
+                "expected cap-drop Err, got a different error: {msg}"
+            ),
+            Ok(()) => panic!("expected cap-drop Err, but spawn_new_connection returned Ok"),
+        }
+        // Dispatch table size must be unchanged — the early-return is
+        // BEFORE the two `connections.insert` calls.
+        assert_eq!(
+            connections.len(),
+            4,
+            "cap-drop must not grow the dispatch table"
+        );
+    }
+}
+
 fn sample_conn_id() -> [u8; quiche::MAX_CONN_ID_LEN] {
     use ring::rand::SecureRandom;
     let mut scid = [0u8; quiche::MAX_CONN_ID_LEN];

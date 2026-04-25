@@ -396,9 +396,8 @@ addendum records what has been closed and what remains.
 
 ### Delta-audit round-2 residuals (2026-04-24)
 
-Round-2 auditor-delta signoff (`b8563799`) flagged 7 residual risks. None HIGH/CRITICAL; none blocking. Tracking IDs assigned. WS-001 closed post-ship; WS-002 + GRPC-001 + GRPC-002 + GRPC-003 closed in (this commit). Remaining:
+Round-2 auditor-delta signoff (`b8563799`) flagged 7 residual risks. None HIGH/CRITICAL; none blocking. Tracking IDs assigned. WS-001 closed post-ship; WS-002 + GRPC-001 + GRPC-002 + GRPC-003 closed in 22a4f5a5; TEST-001 closed in (this commit). Remaining:
 
-17. **TEST-001 — no dedicated test for QUIC CID-cap drop path**: `router.rs::spawn_new_connection` enforces `connections.len() >= max_connections * 2` and drops; reviewer verified the source but there's no test firing 100_001 Initials to prove the path. Fix: add `router_drops_initial_when_cap_reached` unit test with a reduced cap (e.g. max_connections=2).
 18. **TEST-002 — `ping_flood_goaway` assertion weak**: The test asserts `sent > 0` rather than a specific GOAWAY error code because hyper's PING flood response path doesn't surface a specific code over the `h2` client API. Fix: inspect raw frames via a lower-level h2 client configuration.
 19. **FLAKE-002 — `thread_safe_increment` parallel-test flake**: `crates/lb-observability/src/lib.rs::tests::thread_safe_increment` (4 threads × 1000 increments, expects 4000) passes in isolation but flakes under workspace-parallel runs. Create-race in the handle cache under high contention. In production, the registry is constructed once at startup before threads hit it, so no real-world race path; test-time-only concern. Fix: tighten the handle-cache double-check lock; or reduce test concurrency.
 
