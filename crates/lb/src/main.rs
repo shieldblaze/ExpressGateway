@@ -1304,3 +1304,68 @@ async fn shutdown_signal() {
         () = terminate => {}
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use lb_config::BackendConfig;
+
+    fn h3_backend(address: &str, ca: Option<&str>, verify: bool) -> BackendConfig {
+        BackendConfig {
+            address: address.to_string(),
+            protocol: "h3".to_string(),
+            weight: 1,
+            tls_ca_path: ca.map(String::from),
+            tls_verify_hostname: None,
+            tls_verify_peer: verify,
+        }
+    }
+
+    #[test]
+    fn build_h3_upstream_pool_rejects_mismatched_verify_peer() {
+        let a = h3_backend("127.0.0.1:4001", Some("/etc/ssl/ca.pem"), true);
+        let b = h3_backend("127.0.0.1:4002", Some("/etc/ssl/ca.pem"), false);
+        let err = build_h3_upstream_pool(&[a, b]).unwrap_err();
+        assert!(
+            err.to_string().contains("must share tls_verify_peer"),
+            "expected mismatch error, got: {err}"
+        );
+    }
+
+    #[test]
+    fn build_h3_upstream_pool_rejects_mismatched_ca_path() {
+        let a = h3_backend("127.0.0.1:4001", Some("/etc/ssl/ca-a.pem"), true);
+        let b = h3_backend("127.0.0.1:4002", Some("/etc/ssl/ca-b.pem"), true);
+        let err = build_h3_upstream_pool(&[a, b]).unwrap_err();
+        assert!(
+            err.to_string().contains("must share"),
+            "expected mismatch error, got: {err}"
+        );
+    }
+
+    #[test]
+    fn build_h3_upstream_pool_rejects_empty_backend_list() {
+        let err = build_h3_upstream_pool(&[]).unwrap_err();
+        assert!(
+            err.to_string().contains("zero H3 backends"),
+            "expected zero-backends error, got: {err}"
+        );
+    }
+
+    #[test]
+    fn build_h3_upstream_pool_rejects_verify_without_ca() {
+        let a = h3_backend("127.0.0.1:4001", None, true);
+        let err = build_h3_upstream_pool(&[a]).unwrap_err();
+        assert!(
+            err.to_string().contains("requires tls_ca_path"),
+            "expected ca-required error, got: {err}"
+        );
+    }
+
+    #[test]
+    fn build_h3_upstream_pool_accepts_uniform_verify_off_without_ca() {
+        let a = h3_backend("127.0.0.1:4001", None, false);
+        let b = h3_backend("127.0.0.1:4002", None, false);
+        build_h3_upstream_pool(&[a, b]).unwrap();
+    }
+}

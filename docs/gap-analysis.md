@@ -408,6 +408,12 @@ Round-4 auditor-delta signoff (`518ed50a`) flagged 5 residual risks (D4-1..D4-5)
 
 20. **D4-5 — Per-listener H3 upstream pools not hoisted to process-global (deferred-with-rationale)**: Each listener that selects an H3 backend instantiates its own `QuicUpstreamPool` via `build_h3_upstream_pool`. Two H3-bound listeners therefore double the connection-table bookkeeping. This is a memory-overhead concern in multi-H3-listener configs (an uncommon shape), not a correctness problem — routing remains correct. Hoisting requires keying pools by `(remote_addr, sni, ca_bundle, verify_peer)` across listener boundaries, which is a refactor outside this round's scope. Tracked for v2.
 
+### Delta-audit round-5 residuals (2026-04-25)
+
+Round-5 auditor-delta signoff (`774dc33a`) flagged 2 residual risks (D5-1, D5-2). Both LOW; none HIGH/CRITICAL; none blocking. **D5-1 closed in this commit** (5 unit tests added in `crates/lb/src/main.rs::tests` exercising every branch of `build_h3_upstream_pool`'s validator: mismatched `tls_verify_peer`, mismatched `tls_ca_path`, empty backend list, verify-without-ca, and the positive-path uniform-verify-off). **D5-2 carried as deferred-with-rationale** (below).
+
+21. **D5-2 — H3 upstream CA bundle loaded on every dial, not at startup (deferred-with-rationale)**: `build_h3_upstream_pool`'s `quiche::Config` factory closure invokes `load_verify_locations_from_file(path)` each time a new connection is established, not once at process start. Consequence: if an operator deletes or corrupts the CA file *after* gateway startup, the next H3 backend dial fails the handshake and the gateway emits a 502 to the client, rather than refusing to start. The auditor explicitly noted this is "Acceptable per operator-trusted threat model" — the operator owns the CA file and a missing CA is symmetric with a missing backend (both are operator-introduced post-deploy errors that surface as connection failures). Eagerly caching the parsed bundle at startup would tighten the failure mode but adds a config-reload coupling we don't yet have for other on-disk artifacts (cert files for the TLS-over-TCP listener, retry secrets) — those all use lazy/just-in-time loading too. Closure would be a uniform refactor across the file-backed config loaders, scope of its own. Tracked for v2.
+
 ### Post-addendum risk table
 
 | Risk | Severity | Mitigation |
