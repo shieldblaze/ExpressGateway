@@ -34,5 +34,5 @@ lb-io = { path = "../lb-io" }
 lb-h3 = { path = "../lb-h3" }
 
 [dev-dependencies]
-rcgen = { version = "0.13", features = ["pem"] }
+rcgen = { version = "0.14", features = ["pem"] }
 tokio = { workspace = true, features = ["full", "test-util"] }
