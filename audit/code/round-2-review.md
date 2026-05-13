@@ -795,7 +795,7 @@ Cross-ref: proto Q-CODE-1-06; sec S-1.
 ### CODE-2-04 — Every atomic uses `Ordering::Relaxed` (50 sites, 0 Acq/Rel/SeqCst); enforcement-gating counters need Acquire/Release
 Severity: high
 Blocking-for-prod: yes
-Status:   Open
+Status:   Proposed-Fix(c4c27da)   <!-- Wave-1 ships scripts/ci/atomic-lint.sh + one representative enforcement-site conversion (lb-core::BackendState::inc_connections -> AcqRel). Wave-2 appendix-B sweep across the remaining ~50 sites is tracked under this same finding ID. -->
 Location: 50 atomic sites. See appendix below.
 
 Description / Impact:
