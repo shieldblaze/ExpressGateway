@@ -19,6 +19,15 @@ tracing = { workspace = true }
 parking_lot = { workspace = true }
 lb-io = { path = "../lb-io" }
 lb-h2 = { path = "../lb-h2" }
+# CODE-2-01 dep edge (Wave-1 slice of CODE-2-01). lb-l7 had no
+# dependency on lb-security so the SmuggleDetector / SlowlorisDetector
+# / SlowPostDetector / per-IP cap were dead code on the L7 hot path.
+# This commit adds ONLY the Cargo dependency edge so sec can land the
+# actual detector wire-up (SEC-2-01 / SEC-2-03 / SEC-2-04 / SEC-2-10)
+# on top in Wave-2. The `SecurityHooks` trait shim is intentionally
+# NOT added here per the round-4 brief — it's deferred to the wave-2
+# file that sec wires into.
+lb-security = { path = "../lb-security" }
 # PROTO-001: H1→H3 / H2→H3 upstream paths consume `lb_quic::request_h3_upstream`
 # and the `H3UpstreamResponse` carrier type. lb-quic stays on quiche; we
 # only consume its public API.
