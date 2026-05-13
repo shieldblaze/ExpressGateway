@@ -690,7 +690,7 @@ Cross-ref: rel H2; sec §5.1.
 ### CODE-2-13 — `lb` binary declares unused `lb-controlplane` and `lb-health` deps; confirms control-plane + active-health wiring is missing
 Severity: medium
 Blocking-for-prod: no
-Status:   Open
+Status:   Proposed-Fix(1fe53ed)   <!-- Wave-1 wire-up: FileBackend + ConfigManager construction on startup + per-backend HealthChecker seeding. Distributed CP backends DEFERRED per L-001; active-probe loop is REL-2-05 in Wave-2; accept-site / SIGHUP plumbing is Wave-2 serialised after sec/rel/proto. -->
 Location:
   - `cargo machete` output in `audit/code/round-1-machete.txt`
   - `crates/lb/Cargo.toml` (declares `lb-controlplane`, `lb-health` but no `use lb_controlplane::` or `use lb_health::` in `crates/lb/src/main.rs`)
