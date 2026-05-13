@@ -88,8 +88,27 @@ impl BackendState {
     }
 
     /// Increment the active connection count by one.
+    ///
+    /// CODE-2-04 G-classification (per appendix table): the
+    /// `active_connections` counter is an enforcement-gate input —
+    /// the scheduler reads it and uses the value to drive a
+    /// load-balance pick (least-connections, P2C, etc.). The matching
+    /// mutation publishes with `AcqRel` so the scheduler-visible
+    /// store-after-fetch ordering is preserved on weakly-ordered
+    /// platforms (aarch64). On x86 this collapses to the same
+    /// `lock xadd` as `Relaxed`; cost is zero. On aarch64 it is the
+    /// correctness-fix that the round-2 review §CODE-2-04
+    /// reproduction note calls out as a real concern hidden by x86.
+    ///
+    /// Wave-2 appendix sweep (full table) follows in a subsequent
+    /// commit on this branch; this single site is the
+    /// representative enforcement-gate publish the round-4 task
+    /// brief calls for.
     pub fn inc_connections(&self) {
-        self.active_connections.fetch_add(1, Ordering::Relaxed);
+        // CLIPPY-OK: G-site (enforcement gate). AcqRel publishes the
+        // new count so a paired Acquire load in the scheduler / gauge
+        // observes the increment in causal order with this write.
+        self.active_connections.fetch_add(1, Ordering::AcqRel);
     }
 
     /// Decrement the active connection count by one (saturating).
