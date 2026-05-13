@@ -98,10 +98,15 @@ pub use lb_security::{RetryTokenSigner, ZeroRttReplayGuard};
 /// here keeps downstream crates decoupled from `tokio-quiche` versioning.
 pub use tokio_quiche::ConnectionParams;
 
+mod cleanup_guard;
 mod conn_actor;
 pub mod h3_bridge;
 mod listener;
 mod router;
+
+// CODE-2-08: re-exported so tests/quic_router_leak.rs can call
+// `CidEntryGuard::new(...)` from the integration-test target.
+pub use cleanup_guard::CidEntryGuard;
 
 pub use h3_bridge::{H3Request, H3UpstreamResponse, h3_to_h3_roundtrip, request_h3_upstream};
 pub use listener::{QuicListener, QuicListenerParams};

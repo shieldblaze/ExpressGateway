@@ -367,15 +367,29 @@ fn spawn_new_connection(
         h3_backend: params.h3_backend.clone(),
         h2_backend: params.h2_backend.clone(),
     };
-    // Spawn actor; on exit it leaves the dashmap entries behind which
-    // will be reaped on next `try_send` failure. That's acceptable —
-    // actor lifetimes are short compared to long-lived mapping leaks.
-    let connections_for_cleanup = Arc::clone(connections);
+    // CODE-2-08: wrap the two DashMap entries in a CidEntryGuard so
+    // cleanup runs unconditionally — clean exit, async-cancel
+    // future-drop, OR panic unwind. Pre-fix the two explicit
+    // `connections.remove(...)` calls below the await were skipped
+    // on unwind, pinning two map entries per panicked actor and
+    // raising the per-IP DoS surface (auditor cross-ref CODE-2-08
+    // §"Bound on the leak").
+    //
+    // Under `panic = "abort"` (CODE-2-02) release builds the unwind
+    // path is dead code — the process dies before any Drop runs.
+    // The guard exists for dev/test (CODE-2-11 proptest / loom),
+    // where `unwind` is preserved and the guarantee matters.
+    let guard = crate::cleanup_guard::CidEntryGuard::new(
+        Arc::clone(connections),
+        router_key,
+        header_dcid_key,
+    );
     tokio::spawn(async move {
+        // Move the guard into the task. Drop runs when this future
+        // resolves (Ok or Err), is cancelled, OR unwinds on panic.
+        let _guard = guard;
         let _ = Box::pin(run_actor(actor)).await;
-        // Best-effort cleanup once the actor exits.
-        connections_for_cleanup.remove(&router_key);
-        connections_for_cleanup.remove(&header_dcid_key);
+        // _guard's Drop here removes both DashMap entries.
     });
     Ok(())
 }
