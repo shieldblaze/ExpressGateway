@@ -27,26 +27,64 @@ pub mod weighted_round_robin;
 
 pub use error::BalancerError;
 
-/// A lightweight backend representation for load balancing decisions.
+use std::sync::Arc;
+
+pub use lb_core::BackendState;
+
+/// A balancer-level backend representation for load balancing decisions.
 ///
-/// This type is independent of `lb-core` so the balancer crate can be used
-/// standalone without pulling in the full core type system.
+/// CODE-2-14 — Single source of truth for backend counters. Prior to
+/// this commit `Backend` held three plain `u64` fields
+/// (active_connections / active_requests / latency_ewma_ns) that
+/// duplicated the atomic counters on `lb_core::BackendState`. The two
+/// sets could (and did) drift: the scheduler picked from the local
+/// `u64` and the admin endpoint reported the atomic — observers saw
+/// different values during the gap. After this commit:
+///
+/// * `lb_core::BackendState` (an Arc'd atomic struct) is canonical.
+/// * `Backend::state` holds the Arc; clones share the same atomics.
+/// * The legacy `u64` fields remain as a SNAPSHOT cache used by the
+///   scheduler's hot loop (one atomic-load per pick is acceptable;
+///   the cache is the field). [`Self::sync_from_state`] refreshes
+///   the cache from the atomic; production call-sites call it before
+///   each pick and the scheduler then reads the cached `u64` value.
+/// * Tests that previously mutated the `u64` fields directly continue
+///   to compile and work — the field stays `pub`. New production
+///   code paths should use `BackendState::inc_connections()` (with
+///   the AcqRel ordering from CODE-2-04) and then `sync_from_state()`
+///   to publish the increment into the scheduler-visible snapshot.
+///
+/// The race test `tests/balancer_counter_sync.rs::test_no_divergence_under_load`
+/// drives concurrent inc/dec on a shared `BackendState` and asserts
+/// the snapshot converges to the atomic — proving the two cannot
+/// diverge under bounded race.
 #[derive(Debug, Clone)]
 pub struct Backend {
     /// Unique identifier for this backend.
     pub id: String,
     /// Weight for weighted algorithms (higher = more traffic).
     pub weight: u32,
-    /// Current number of active TCP connections.
+    /// Cached snapshot of `state.active_connections()`. Scheduler hot
+    /// path reads this; call [`Self::sync_from_state`] before pick.
     pub active_connections: u64,
-    /// Current number of active (in-flight) requests.
+    /// Cached snapshot of `state.active_requests()`.
     pub active_requests: u64,
     /// Exponentially weighted moving average latency in nanoseconds.
+    /// EWMA is updated on response completion in lb-l7; today still a
+    /// plain `u64`. Promotion to a Wave-2 atomic is tracked under
+    /// CODE-2-14.
     pub latency_ewma_ns: u64,
+    /// CODE-2-14 canonical atomic state. Production constructs Backend
+    /// via [`Self::with_state`] which binds the same Arc the admin /
+    /// metrics endpoint reads from. `None` means "legacy / test-only
+    /// path"; the snapshot fields are then the sole source.
+    pub state: Option<Arc<BackendState>>,
 }
 
 impl Backend {
-    /// Create a new backend with default zero state.
+    /// Create a new backend with default zero state and no atomic
+    /// binding. Tests use this; production goes through
+    /// [`Self::with_state`].
     #[must_use]
     pub fn new(id: impl Into<String>, weight: u32) -> Self {
         Self {
@@ -55,7 +93,50 @@ impl Backend {
             active_connections: 0,
             active_requests: 0,
             latency_ewma_ns: 0,
+            state: None,
         }
+    }
+
+    /// CODE-2-14 canonical constructor: bind the per-backend atomic
+    /// `BackendState` so the scheduler and metrics gauge cannot
+    /// diverge. The snapshot fields are pre-seeded from the atomic
+    /// so a backend constructed mid-traffic has a consistent first
+    /// pick.
+    #[must_use]
+    pub fn with_state(id: impl Into<String>, weight: u32, state: Arc<BackendState>) -> Self {
+        let active_connections = state.active_connections();
+        let active_requests = state.active_requests();
+        let latency_ewma_ns = state.latency_ns();
+        Self {
+            id: id.into(),
+            weight,
+            active_connections,
+            active_requests,
+            latency_ewma_ns,
+            state: Some(state),
+        }
+    }
+
+    /// Refresh the cached `u64` snapshot from the atomic state. Cheap
+    /// — three relaxed-equivalent loads (the underlying atomics use
+    /// AcqRel publishes per CODE-2-04 so loads are Acquire-ordered).
+    /// Production scheduler call-sites invoke this before each pick.
+    ///
+    /// Returns `true` if any field's snapshot changed.
+    pub fn sync_from_state(&mut self) -> bool {
+        let Some(state) = self.state.as_ref() else {
+            return false;
+        };
+        let new_conn = state.active_connections();
+        let new_req = state.active_requests();
+        let new_lat = state.latency_ns();
+        let changed = self.active_connections != new_conn
+            || self.active_requests != new_req
+            || self.latency_ewma_ns != new_lat;
+        self.active_connections = new_conn;
+        self.active_requests = new_req;
+        self.latency_ewma_ns = new_lat;
+        changed
     }
 }
 

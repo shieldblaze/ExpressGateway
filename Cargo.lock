@@ -1463,6 +1463,7 @@ dependencies = [
 name = "lb-balancer"
 version = "0.1.0"
 dependencies = [
+ "lb-core",
  "loom",
  "parking_lot",
  "rand 0.8.5",
