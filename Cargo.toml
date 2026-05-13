@@ -164,6 +164,18 @@ opt-level = 3
 lto = "thin"
 codegen-units = 1
 strip = "symbols"
+# CODE-2-02: panic = "abort" in release so a panic across any of the 17
+# unsafe blocks in lb-io::ring + the 4 unsafe-impl-Pod sites in
+# lb-l4-xdp::loader cannot unwind into a half-restored invariant.
+# Pairs with `install_panic_hook()` in lb/src/main.rs which logs +
+# aborts. dev / test deliberately KEEP `unwind` (rustc default) for
+# proptest minimisation and loom interleaving exploration (CODE-2-11).
+panic = "abort"
+
+# Inherit release semantics for benches so the abort policy carries
+# through. Without this `cargo bench` would still default to `unwind`.
+[profile.bench]
+inherits = "release"
 
 [profile.dev]
 opt-level = 0

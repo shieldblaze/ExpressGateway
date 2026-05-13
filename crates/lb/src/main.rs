@@ -57,6 +57,61 @@ use lb_security::{TicketRotator, build_server_config};
 
 mod xdp;
 
+/// CODE-2-02: process-wide panic counter. Wave-2 wire-up with rel will
+/// surface this as a Prometheus `panic_total` counter via the
+/// `lb-observability` registry (rel REL-2-07 / REL-2-15). For Wave 1
+/// the field is a process-local `AtomicU64` so the hook is fully
+/// functional today; the metric export is a pure wiring change.
+static PANIC_TOTAL: AtomicU64 = AtomicU64::new(0);
+
+/// CODE-2-02: install a process-wide `std::panic::set_hook` that logs
+/// the panic location, payload, and a full backtrace via
+/// `tracing::error!`, bumps the `panic_total` counter, then aborts.
+///
+/// Called once early in [`async_main`] before any tokio task is spawned
+/// so a panic during runtime construction is also captured. Pairs with
+/// `panic = "abort"` in `[profile.release]` — under release the hook
+/// fires immediately before the runtime aborts; under dev/test
+/// profiles (which keep `unwind` for proptest/loom — see CODE-2-11)
+/// the hook still logs + counts but the `std::process::abort()` keeps
+/// the failure-mode identical so tests cannot drift from production.
+fn init_panic_hook() {
+    use std::backtrace::Backtrace;
+    std::panic::set_hook(Box::new(|info| {
+        let bt = Backtrace::force_capture();
+        let location = info
+            .location()
+            .map(|l| format!("{}:{}:{}", l.file(), l.line(), l.column()))
+            .unwrap_or_else(|| "<unknown>".to_owned());
+        // `payload_as_str` is nightly-only; fall back to manual downcast.
+        let payload = if let Some(s) = info.payload().downcast_ref::<&'static str>() {
+            (*s).to_owned()
+        } else if let Some(s) = info.payload().downcast_ref::<String>() {
+            s.clone()
+        } else {
+            "<non-string panic payload>".to_owned()
+        };
+        PANIC_TOTAL.fetch_add(1, Ordering::Release);
+        tracing::error!(
+            target: "panic",
+            location = %location,
+            payload = %payload,
+            backtrace = %bt,
+            "process panic — aborting"
+        );
+        // Best-effort flush of the tracing subscriber before abort.
+        std::thread::sleep(Duration::from_millis(50));
+        std::process::abort();
+    }));
+}
+
+/// CODE-2-02: read-only accessor for the panic counter. Wave-2 hooks
+/// this into the Prometheus exposition (rel REL-2-07).
+#[allow(dead_code)]
+fn panic_total() -> u64 {
+    PANIC_TOTAL.load(Ordering::Acquire)
+}
+
 // ── shared gateway state ────────────────────────────────────────────────
 
 /// How a listener terminates inbound traffic.
@@ -934,6 +989,11 @@ async fn async_main() -> anyhow::Result<()> {
                 .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("info")),
         )
         .init();
+
+    // CODE-2-02: install panic hook IMMEDIATELY after the tracing
+    // subscriber is up. Anything that panics before this point dies
+    // silently under `panic = "abort"`; anything after logs + counts.
+    init_panic_hook();
 
     tracing::info!("ExpressGateway v{}", env!("CARGO_PKG_VERSION"));
 
