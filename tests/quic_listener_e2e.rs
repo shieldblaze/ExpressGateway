@@ -52,6 +52,17 @@ use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::{TcpListener, UdpSocket};
 use tokio_util::sync::CancellationToken;
 
+/// ALPN advertised by the production `QuicListener` after PROTO-2-02.
+/// Clients dialing the gateway under test MUST use this token to
+/// satisfy RFC 9114 §3.1 ALPN negotiation.
+const H3_ALPN: &[u8] = b"h3";
+/// Legacy ALPN retained for the **mock backend + upstream-pool
+/// factory** pair below: those two sides talk to each other directly
+/// (the pool's `config_factory` injects this same token), not to the
+/// production listener, so the token they share is opaque to the
+/// PROTO-2-02 invariant. Once `crates/lb-io/src/quic_pool.rs` and the
+/// binary wire `H3_ALPN_PROTOS` (Wave 2 cross-cut), this can collapse
+/// onto `H3_ALPN`.
 const LB_QUIC_ALPN: &[u8] = b"lb-quic";
 const TEST_SNI: &str = "expressgateway.test";
 const MAX_UDP: usize = 65_535;
@@ -114,7 +125,9 @@ fn generate_loopback_certs() -> TestCerts {
 
 fn build_client_config(ca_path: &std::path::Path) -> quiche::Config {
     let mut cfg = quiche::Config::new(quiche::PROTOCOL_VERSION).unwrap();
-    cfg.set_application_protos(&[LB_QUIC_ALPN]).unwrap();
+    // Client dials the production `QuicListener`, which post-PROTO-2-02
+    // advertises `h3` (and `h3-29`) per RFC 9114 §3.1. Offer `h3` only.
+    cfg.set_application_protos(&[H3_ALPN]).unwrap();
     cfg.load_verify_locations_from_file(ca_path.to_str().unwrap())
         .unwrap();
     // The listener cert is self-signed with DNS SAN = expressgateway.test

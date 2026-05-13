@@ -487,7 +487,7 @@ mod tests {
         // ----- mint a real Initial packet via quiche::connect -----
         let mut client_cfg = quiche::Config::new(quiche::PROTOCOL_VERSION).expect("client cfg new");
         client_cfg
-            .set_application_protos(&[crate::LB_QUIC_ALPN])
+            .set_application_protos(&[crate::LB_QUIC_TEST_ALPN])
             .expect("alpn");
         client_cfg.verify_peer(false);
         client_cfg.set_max_idle_timeout(5_000);

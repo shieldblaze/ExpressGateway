@@ -54,6 +54,14 @@ use tokio_util::sync::CancellationToken;
 use lb_h3::{H3Frame, QpackDecoder, QpackEncoder, decode_frame, encode_frame};
 
 const TEST_SNI: &str = "expressgateway.test";
+/// Production gateway ALPN advertised by `QuicListener` after
+/// PROTO-2-02 (RFC 9114 §3.1).
+const H3_ALPN: &[u8] = b"h3";
+/// Legacy token retained ONLY for the mock H3 backend + upstream-pool
+/// factory pair within this test file (they negotiate with each other
+/// via an injected config factory, not against the production
+/// listener). Wave 2 will collapse this once `lb-io::quic_pool` learns
+/// the RFC token.
 const LB_QUIC_ALPN: &[u8] = b"lb-quic";
 const MAX_UDP: usize = 65_535;
 
@@ -656,7 +664,8 @@ async fn proxy_h3_listener_h2_backend() {
         .unwrap();
     let client_local = client_sock.local_addr().unwrap();
     let mut client_cfg = quiche::Config::new(quiche::PROTOCOL_VERSION).unwrap();
-    client_cfg.set_application_protos(&[LB_QUIC_ALPN]).unwrap();
+    // Dialing the production gateway listener — must offer `h3`.
+    client_cfg.set_application_protos(&[H3_ALPN]).unwrap();
     client_cfg
         .load_verify_locations_from_file(certs.ca.to_str().unwrap_or(""))
         .unwrap();

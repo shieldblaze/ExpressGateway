@@ -107,12 +107,30 @@ pub use h3_bridge::{H3Request, H3UpstreamResponse, h3_to_h3_roundtrip, request_h
 pub use listener::{QuicListener, QuicListenerParams};
 pub use router::{RouterHandle, RouterParams, spawn as spawn_router};
 
-/// ALPN identifier advertised by the built-in [`QuicEndpoint`] helpers.
+/// Production ALPN tokens advertised by the H3 listener.
 ///
-/// Real HTTP/3 listeners will advertise `h3` (see RFC 9114); this value
-/// exists for the Pillar 3b.1 loopback transport test. Pillar 3b.2 will
-/// upgrade this to a proper ALPN policy driven by the control plane.
-pub const LB_QUIC_ALPN: &[u8] = b"lb-quic";
+/// * `h3` is the RFC 9114 §3.1 IANA-registered identifier — mandatory
+///   for any peer claiming HTTP/3.
+/// * `h3-29` is the last pre-RFC IETF draft and is still emitted by
+///   clients pinned to draft-29 (chromium < 91, quic-go < 0.31). Listed
+///   second so negotiation prefers the RFC token whenever the client
+///   advertises both.
+///
+/// quiche 0.28 passes the ALPN list straight through to BoringSSL's
+/// `SSL_CTX_set_alpn_protos`; both tokens are emitted verbatim in the
+/// TLS 1.3 ClientHello / EncryptedExtensions exchange (PROTO-2-02).
+pub const H3_ALPN_PROTOS: &[&[u8]] = &[b"h3", b"h3-29"];
+
+/// Test-only ALPN for the loopback transport-only rig that does **not**
+/// speak H3 over the wire. Never advertised from a production listener
+/// — the [`build_config`] helper always installs [`H3_ALPN_PROTOS`].
+///
+/// Pre-PROTO-2-02 this constant was exported as `LB_QUIC_ALPN` and
+/// installed on the production server config. Round 4 moved it under
+/// `#[cfg(test)]` so the audit invariant "no production code path
+/// advertises anything other than `H3_ALPN_PROTOS`" holds.
+#[cfg(test)]
+pub(crate) const LB_QUIC_TEST_ALPN: &[u8] = b"lb-quic";
 
 /// SNI the loopback client presents.
 ///
@@ -389,7 +407,7 @@ impl QuicEndpoint {
 #[allow(clippy::needless_pass_by_value)]
 fn build_config(role: &Role, _enable_retry: bool) -> Result<quiche::Config, QuicError> {
     let mut cfg = quiche::Config::new(quiche::PROTOCOL_VERSION)?;
-    cfg.set_application_protos(&[LB_QUIC_ALPN])?;
+    cfg.set_application_protos(H3_ALPN_PROTOS)?;
     cfg.set_max_idle_timeout(5_000);
     cfg.set_max_recv_udp_payload_size(1_350);
     cfg.set_max_send_udp_payload_size(1_350);
