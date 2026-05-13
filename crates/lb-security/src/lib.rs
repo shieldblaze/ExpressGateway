@@ -35,7 +35,7 @@ pub use slowloris::SlowlorisDetector;
 pub use smuggle::{SmuggleDetector, SmuggleMode};
 pub use ticket::{RotatingTicketer, TicketError, TicketKey, TicketRotator, build_server_config};
 pub use watchdog::{ConnId, Watchdog, WatchdogConfig, WatchdogError};
-pub use zero_rtt::ZeroRttReplayGuard;
+pub use zero_rtt::{DEFAULT_ZERO_RTT_REPLAY_WINDOW_SIZE, ZeroRttReplayGuard};
 
 #[cfg(test)]
 mod tests {
