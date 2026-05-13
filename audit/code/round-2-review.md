@@ -528,7 +528,7 @@ Cross-ref: rel→code handoff (analysis-owed); synthesis T7.
 ### CODE-2-10 — XDP attach: `XdpLinkId` drop semantics verified against aya 0.13; recommend integration test to prevent silent regression
 Severity: info
 Blocking-for-prod: no
-Status:   Open
+Status:   Proposed-Fix(854ebdb)   <!-- Regression test landed under the ebpf agent's EBPF-2-06 commit at crates/lb-l4-xdp/tests/xdp_link_id_drop_safe.rs; same scope as the CODE-2-10 plan called for. -->
 Location:
   - `crates/lb-l4-xdp/src/loader.rs:273–276`
   - aya 0.13.1 source: `aya-0.13.1/src/programs/xdp.rs:108–162` (`attach` → `attach_to_if_index` → `self.data.links.insert(XdpLink::new(...))`)
@@ -663,7 +663,7 @@ Cross-ref: synthesis T9; rel CI matrix.
 ### CODE-2-12 — `arc-swap` workspace dependency declared but unused; remove to shrink build graph
 Severity: low
 Blocking-for-prod: no
-Status:   Open
+Status:   Proposed-Fix(f93c582)
 Location:
   - `Cargo.toml:61` (`arc-swap = "1"` in `[workspace.dependencies]`)
   - No `arc_swap::` references anywhere in `crates/` (Round 1 inventory §3.4; manual grep)
@@ -760,7 +760,8 @@ Cross-ref: synthesis §C; proto Q-CODE-1-07.
 ### CODE-2-15 — `lb-h1` crate has no in-workspace consumer outside the fuzz target
 Severity: low
 Blocking-for-prod: no
-Status:   Open
+Status:   Proposed-Fix(f93c582)   <!-- Lead remap per L-001: this finding ID covers the workspace [members] removal of `lb-compression` (SEC-2-14 / L-001 Option A: remove). lb-h1's keep-or-delete decision was bundled into batch-low.md but lead has CODE-2-15 cover the lb-compression members-list edit + crate deletion + compression_*.rs test deletions; the lb-h1 shadow-parse / consumer question stays open for a future round. -->
+
 Location:
   - `crates/lb-h1/` (full HTTP/1.1 codec)
   - Only consumer is `fuzz/fuzz_targets/h1_parser.rs` (out of workspace)
