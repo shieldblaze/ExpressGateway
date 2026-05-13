@@ -722,7 +722,7 @@ Cross-ref: rel→code #4, #7; synthesis §C; machete output.
 ### CODE-2-14 — `lb-balancer` and `lb-core` carry duplicate backend-counter fields; risk of divergence between scheduler and gauge
 Severity: medium
 Blocking-for-prod: no
-Status:   Open
+Status:   Proposed-Fix(e3ac961)   <!-- Backend now binds Arc<BackendState>; legacy u64 fields are a scheduler snapshot refreshed by sync_from_state() before each pick. Race-test in tests/balancer_counter_sync.rs proves no divergence under load. -->
 Location:
   - `crates/lb-core/src/backend.rs` (`BackendState` atomics: `active_connections`, `active_requests`, latency EWMA)
   - `crates/lb-balancer` (its own `Backend` struct with overlapping `u64` fields per algorithm — Round 1 inventory §1.2 / §4.5)
