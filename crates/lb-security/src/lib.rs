@@ -23,6 +23,7 @@ mod slow_post;
 mod slowloris;
 mod smuggle;
 mod ticket;
+mod watchdog;
 mod zero_rtt;
 
 pub use conn_gate::{ConnGate, ConnPermit, IpNet, OverCap};
@@ -33,6 +34,7 @@ pub use slow_post::SlowPostDetector;
 pub use slowloris::SlowlorisDetector;
 pub use smuggle::{SmuggleDetector, SmuggleMode};
 pub use ticket::{RotatingTicketer, TicketError, TicketKey, TicketRotator, build_server_config};
+pub use watchdog::{ConnId, Watchdog, WatchdogConfig, WatchdogError};
 pub use zero_rtt::ZeroRttReplayGuard;
 
 #[cfg(test)]
