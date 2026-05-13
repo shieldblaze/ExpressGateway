@@ -10,6 +10,14 @@ publish = false
 thiserror = { workspace = true }
 bytes = { workspace = true }
 serde = { workspace = true }
+# CODE-2-03 Shutdown token: CancellationToken + TaskTracker. Adding the
+# dep into lb-core is the workspace-wide single source so every spawn
+# site can `use lb_core::Shutdown` without each crate redeclaring
+# tokio-util themselves. `features = ["rt"]` is the minimum slice
+# (TaskTracker + CancellationToken live in `rt`).
+tokio-util = { workspace = true, features = ["rt"] }
+tokio = { workspace = true }
 
 [dev-dependencies]
 serde_json = { workspace = true }
+tokio = { workspace = true, features = ["full", "test-util"] }

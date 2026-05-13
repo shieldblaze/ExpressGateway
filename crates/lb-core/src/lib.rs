@@ -16,11 +16,13 @@ mod backend;
 mod cluster;
 mod error;
 mod policy;
+mod shutdown;
 
 pub use backend::{Backend, BackendHealth, BackendState};
 pub use cluster::Cluster;
 pub use error::CoreError;
 pub use policy::LbPolicy;
+pub use shutdown::{DrainOutcome, Shutdown};
 
 #[cfg(test)]
 mod tests {
