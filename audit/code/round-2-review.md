@@ -370,7 +370,7 @@ Cross-ref: synthesis T5(b); sec S-9; ebpf cross-review to-`code` #3.
 ### CODE-2-08 — Per-CID actor leaks DashMap entries on panic; reaper bound is "until next packet on the dead CID"
 Severity: high
 Blocking-for-prod: no
-Status:   Open
+Status:   Proposed-Fix(17dd4eb)
 Location: `crates/lb-quic/src/router.rs:373–379`
 
 Description / Impact:
