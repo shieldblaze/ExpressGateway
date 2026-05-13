@@ -1439,6 +1439,7 @@ dependencies = [
  "lb-balancer",
  "lb-config",
  "lb-controlplane",
+ "lb-core",
  "lb-health",
  "lb-io",
  "lb-l4-xdp",

@@ -39,6 +39,17 @@ use lb_config::{
     AltSvcConfig, GrpcListenerConfig, H2SecurityConfig, HttpTimeoutsConfig, QuicListenerConfig,
     TlsConfig, WebsocketConfig,
 };
+// CODE-2-13: lead-scoped slice (L-007 §E.6). File-backed control
+// plane reads existing TOML on startup; the ConfigManager owns the
+// in-memory copy + version counter and is the SIGHUP-reload entry
+// point Wave-2 will layer on top. Distributed CP backends
+// (etcd / consul / xDS) are DEFERRED per L-001.
+use lb_controlplane::{ConfigManager, FileBackend};
+// CODE-2-13: lb-health provides per-backend HealthChecker (passive
+// signal today; REL-2-05 layers the active-probe loop on top in
+// Wave-2). Used here to publish the initial Unknown status so the
+// picker has a well-defined gate from second 0.
+use lb_health::{HealthChecker, HealthStatus};
 use lb_io::Runtime;
 use lb_io::dns::{DnsResolver, ResolverConfig};
 use lb_io::http2_pool::{Http2Pool, Http2PoolConfig};
@@ -1013,6 +1024,42 @@ async fn async_main() -> anyhow::Result<()> {
         "configuration loaded from {config_path}"
     );
 
+    // CODE-2-13: wire lb-controlplane (file-backed). The ConfigManager
+    // owns the in-memory TOML string + a monotonic version counter
+    // and validates on every reload. Wave-2 will hook this into a
+    // SIGHUP handler that calls `cfg_manager.reload()`; today the
+    // wire-up alone proves the dep edge is reachable (round-1
+    // inventory flagged lb-controlplane as an UNUSED workspace dep).
+    // Held in scope for the process lifetime; SIGHUP plumbing lands
+    // alongside the Wave-2 accept-site changes.
+    let cp_backend = FileBackend::new(std::path::PathBuf::from(&config_path));
+    let _config_manager = match ConfigManager::new(Box::new(cp_backend)) {
+        Ok(mgr) => {
+            tracing::info!(
+                path = %config_path,
+                version = mgr.version(),
+                "control plane (file-backed) ready — reloads are SIGHUP-driven (Wave-2)"
+            );
+            Some(mgr)
+        }
+        Err(e) => {
+            // Fail-soft: the lb_config::parse_config above already
+            // succeeded, so an InvalidConfig error here must mean a
+            // pre-validation path (empty / non-TOML) the redundant
+            // ConfigManager validate rejects. We log + continue with
+            // the parsed config — operator can fix on next SIGHUP.
+            tracing::warn!(error = %e, "control plane manager init skipped");
+            None
+        }
+    };
+
+    // CODE-2-13: stub the lb_core::Shutdown import here so Wave-2 can
+    // pass-it-into the existing listener spawn helpers as an argument
+    // without re-architecting the call chain. NOT yet wired into the
+    // accept loop or per-connection spawn — that's serialised after
+    // sec/rel/proto land their pieces (round-4 brief constraint).
+    let _shutdown_for_wave2: lb_core::Shutdown = lb_core::Shutdown::new();
+
     // ── lb-io runtime ───────────────────────────────────────────────
     let io_runtime = Runtime::new();
     tracing::info!(
@@ -1025,6 +1072,38 @@ async fn async_main() -> anyhow::Result<()> {
     // ── backend connection pool ─────────────────────────────────────
     let pool = TcpPool::new(PoolConfig::default(), backend_opts(), io_runtime);
     tracing::info!("TCP backend pool ready (defaults from PROMPT.md §21)");
+
+    // CODE-2-13: passive health-check seed. Each unique backend in the
+    // config gets a HealthChecker initialised at HealthStatus::Unknown;
+    // today nothing reads these (the picker filter wire-in is Wave 2
+    // alongside CODE-2-14's single-source-of-truth refactor). The seed
+    // proves the lb-health dep is reachable from the binary (round-1
+    // inventory flagged it as UNUSED) and gives REL-2-05 a published
+    // collection to layer the active-probe loop on top of.
+    //
+    // Default thresholds (3 successes → Healthy, 2 failures → Unhealthy)
+    // mirror the lb_health::HealthChecker doc comment and the
+    // envoy-default convention; operator override knobs land in
+    // lb_config alongside REL-2-05.
+    let mut health_seed: Vec<(String, HealthChecker)> = Vec::new();
+    for listener in &config.listeners {
+        for backend in &listener.backends {
+            health_seed.push((backend.address.clone(), HealthChecker::new(3, 2)));
+        }
+    }
+    let initial_unknown = health_seed
+        .iter()
+        .filter(|(_, c)| c.status() == HealthStatus::Unknown)
+        .count();
+    tracing::info!(
+        backends = health_seed.len(),
+        unknown = initial_unknown,
+        "passive health checkers seeded — active probe loop is Wave-2 (REL-2-05)"
+    );
+    // Hold the seed in scope so its existence is observable to the
+    // borrow checker (and to a future debugger). Wave-2 hands this
+    // collection to lb-balancer's picker via the CODE-2-14 refactor.
+    let _health_seed = health_seed;
 
     // ── DNS resolver ────────────────────────────────────────────────
     let resolver = DnsResolver::new(ResolverConfig::default());

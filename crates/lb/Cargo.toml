@@ -24,6 +24,10 @@ rustls-pemfile = { workspace = true }
 tokio-rustls = { workspace = true }
 lb-io = { path = "../lb-io" }
 lb-config = { path = "../lb-config" }
+# CODE-2-13: stub the lb_core::Shutdown import early so Wave-2 can
+# pass-it-into the existing listener spawn helpers without a Cargo.toml
+# churn (round-4 brief constraint).
+lb-core = { path = "../lb-core" }
 lb-controlplane = { path = "../lb-controlplane" }
 lb-balancer = { path = "../lb-balancer" }
 lb-observability = { path = "../lb-observability" }
