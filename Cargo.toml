@@ -23,7 +23,13 @@ members = [
     "crates/lb-balancer",
     "crates/lb-health",
     "crates/lb-security",
-    "crates/lb-compression",
+    # CODE-2-15 / L-001: `lb-compression` removed in Round-4 because the
+    # crate had no in-workspace consumers outside its own tests and the
+    # proxy is pass-through (does not decompress in either direction).
+    # The README claim "Compression: zstd, brotli, gzip, deflate with
+    # streaming and transcoding" is rel REL-2-01's doc-lint table-of-
+    # truth fix. Re-introduction notes (BREACH guard, gRPC max-message,
+    # JSON inspection) are in audit/deferred.md.
     "crates/lb-observability",
     "crates/lb",
 ]
@@ -58,7 +64,10 @@ libc = "0.2"
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["json", "env-filter"] }
 # Concurrency
-arc-swap = "1"
+# CODE-2-12: arc-swap was declared in workspace.dependencies but had
+# zero consumers (cargo machete + manual grep). Removed Round-4; if a
+# real hot-swap site lands later (e.g. rel REL-2-03 cert rotation),
+# re-add it at the crate level under lb-security or lb.
 parking_lot = "0.12"
 dashmap = "6"
 # HTTP
@@ -134,7 +143,7 @@ lb-l7 = { path = "crates/lb-l7" }
 lb-balancer = { path = "crates/lb-balancer" }
 lb-health = { path = "crates/lb-health" }
 lb-security = { path = "crates/lb-security" }
-lb-compression = { path = "crates/lb-compression" }
+# CODE-2-15: lb-compression removed (see [workspace.members] comment).
 lb-observability = { path = "crates/lb-observability" }
 tokio = { workspace = true, features = ["full", "test-util"] }
 anyhow = { workspace = true }
