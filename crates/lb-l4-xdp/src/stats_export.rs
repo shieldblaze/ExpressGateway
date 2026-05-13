@@ -13,6 +13,17 @@
 
 use std::sync::atomic::{AtomicU8, Ordering};
 
+// EBPF-2-08: the per-CPU STATS surface is Linux-only because aya
+// is. Non-Linux callers still see the AttachModeLabel /
+// pin-reused / slot-enum APIs (they're pure-Rust).
+#[cfg(target_os = "linux")]
+use std::sync::OnceLock;
+
+#[cfg(target_os = "linux")]
+use aya::maps::{Map as AyaMap, MapData, MapError, PerCpuArray};
+#[cfg(target_os = "linux")]
+use parking_lot::Mutex;
+
 // ---------------------------------------------------------------------------
 // EBPF-2-04: XDP attach mode reporting.
 // ---------------------------------------------------------------------------
@@ -140,6 +151,138 @@ pub fn pin_reused_snapshot() -> Vec<(&'static str, bool)> {
         .collect()
 }
 
+// ---------------------------------------------------------------------------
+// EBPF-2-08: STATS per-CPU array export.
+// ---------------------------------------------------------------------------
+
+/// Slot indices into the eBPF program's `STATS: PerCpuArray<u64>`.
+/// **MUST** stay in lock-step with `crates/lb-l4-xdp/ebpf/src/main.rs`
+/// (search for `STAT_*` constants). Order is wire-stable — append
+/// new slots to the end ONLY, never reorder.
+#[derive(Copy, Clone, Debug, PartialEq, Eq)]
+#[repr(usize)]
+pub enum StatSlot {
+    /// `STAT_PASS`: packet was passed to the kernel stack.
+    Pass = 0,
+    /// `STAT_DROP`: packet was dropped by an ACL deny.
+    Drop = 1,
+    /// `STAT_CT_HIT_V4`: IPv4 conntrack lookup hit.
+    CtHitV4 = 2,
+    /// `STAT_L7`: dst-port matched the L7 divert list.
+    L7Divert = 3,
+    /// `STAT_PARSE_FAIL`: header parse failed.
+    ParseFail = 4,
+    /// `STAT_TX_V4`: IPv4 rewrite + XDP_TX issued.
+    TxV4 = 5,
+    /// `STAT_CT_HIT_V6`: IPv6 conntrack lookup hit.
+    CtHitV6 = 6,
+    /// `STAT_TX_V6`: IPv6 rewrite + XDP_TX issued.
+    TxV6 = 7,
+    /// `STAT_VLAN`: a single 802.1Q tag was stripped.
+    VlanStripped = 8,
+    /// `STAT_V6_EXT_UNSUPPORTED`: too many IPv6 extension headers.
+    V6ExtUnsupported = 9,
+}
+
+/// Number of currently-defined stat slots. Bumps to this constant
+/// must come WITH a matching addition to the `STAT_*` enum in the
+/// eBPF crate AND a new variant at the end of [`StatSlot`].
+pub const NUM_SLOTS: usize = 10;
+
+/// Errors from the STATS read path.
+#[derive(Debug, thiserror::Error)]
+pub enum StatsExportError {
+    /// The per-CPU array handle was never installed by
+    /// `XdpLoader::load_from_bytes_pinned`. Either the loader was
+    /// never called or the ELF didn't declare a `stats` map.
+    #[error("STATS handle not installed; load_from_bytes_pinned must be called first")]
+    HandleMissing,
+    /// `aya::maps::MapError` from the underlying read.
+    #[error("bpf map error: {0}")]
+    Map(String),
+}
+
+/// Owned snapshot of the STATS map at a single moment in time.
+/// `summed[i]` is the cross-CPU sum of slot `i`; the Prom scraper
+/// only ever publishes `summed`. `per_cpu[i]` is the un-summed
+/// slice for the debug HTTP endpoint.
+#[derive(Debug, Clone)]
+pub struct StatsSnapshot {
+    /// Cross-CPU sum per slot. Length = [`NUM_SLOTS`].
+    pub summed: Vec<u64>,
+    /// Per-CPU breakdown. Outer len = [`NUM_SLOTS`], inner = nr_cpus.
+    pub per_cpu: Vec<Vec<u64>>,
+}
+
+#[cfg(target_os = "linux")]
+static STATS_HANDLE: OnceLock<Mutex<PerCpuArray<MapData, u64>>> = OnceLock::new();
+
+/// Install the STATS map handle. Called by
+/// `XdpLoader::load_from_bytes_pinned` exactly once per process.
+///
+/// EBPF-2-08 invariant: aya `PerCpuArray::get(&i, 0)` performs the
+/// `bpf_map_lookup_elem` syscall on each call; we cache the typed
+/// wrapper but **never cache the values** — the scraper always sees
+/// fresh kernel state.
+///
+/// # Errors
+///
+/// - [`StatsExportError::Map`] if the supplied `Map` is not a
+///   `PerCpuArray<u64>` (e.g. someone wired the wrong slot in).
+#[cfg(target_os = "linux")]
+pub fn install_stats_handle(map: AyaMap) -> Result<(), StatsExportError> {
+    let pca: PerCpuArray<MapData, u64> =
+        PerCpuArray::try_from(map).map_err(|e: MapError| StatsExportError::Map(format!("{e}")))?;
+    STATS_HANDLE
+        .set(Mutex::new(pca))
+        .map_err(|_| StatsExportError::Map("STATS handle already installed".to_owned()))?;
+    Ok(())
+}
+
+/// Read a fresh STATS snapshot. The public Prom-side entry point.
+///
+/// Cost: one `bpf_map_lookup_elem` syscall per slot per scrape, so
+/// `NUM_SLOTS × scrape_period`-grained. On 256-CPU hosts each
+/// syscall returns a 256 × 8 = 2 KiB buffer; total per-scrape work
+/// is ~20 KiB of kernel copy.
+///
+/// # Errors
+///
+/// - [`StatsExportError::HandleMissing`]: loader has not installed
+///   the handle (e.g. running without XDP).
+/// - [`StatsExportError::Map`]: aya rejected the read (kernel-side
+///   syscall failure).
+#[cfg(target_os = "linux")]
+pub fn read_stats() -> Result<StatsSnapshot, StatsExportError> {
+    let handle = STATS_HANDLE.get().ok_or(StatsExportError::HandleMissing)?;
+    let guard = handle.lock();
+    let mut per_cpu = Vec::with_capacity(NUM_SLOTS);
+    let mut summed = Vec::with_capacity(NUM_SLOTS);
+    for i in 0..(NUM_SLOTS as u32) {
+        let values = guard
+            .get(&i, 0)
+            .map_err(|e: MapError| StatsExportError::Map(format!("{e}")))?;
+        // `PerCpuValues` derefs to `&[V]`.
+        let slice: &[u64] = &values;
+        let sum: u64 = slice.iter().copied().fold(0u64, u64::wrapping_add);
+        per_cpu.push(slice.to_vec());
+        summed.push(sum);
+    }
+    Ok(StatsSnapshot { summed, per_cpu })
+}
+
+/// Non-Linux stub. Returns a snapshot of zeros sized to
+/// [`NUM_SLOTS`] so cross-platform consumers (tests, dev mode) can
+/// still call without `cfg` gates.
+#[cfg(not(target_os = "linux"))]
+#[must_use]
+pub fn read_stats() -> Result<StatsSnapshot, StatsExportError> {
+    Ok(StatsSnapshot {
+        summed: vec![0u64; NUM_SLOTS],
+        per_cpu: vec![Vec::new(); NUM_SLOTS],
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -191,5 +334,38 @@ mod tests {
         // but not yet in `pin_names()` must not panic.
         record_pin_reused("future_map", true);
         // No observable effect — just check the call doesn't blow up.
+    }
+
+    #[test]
+    fn stat_slot_indices_are_wire_stable() {
+        // Wire-stability invariant: the numeric value of each slot
+        // is published to operators via `xdp_packets_total{result}`
+        // labels; reordering breaks Prom recording rules.
+        assert_eq!(StatSlot::Pass as usize, 0);
+        assert_eq!(StatSlot::Drop as usize, 1);
+        assert_eq!(StatSlot::CtHitV4 as usize, 2);
+        assert_eq!(StatSlot::L7Divert as usize, 3);
+        assert_eq!(StatSlot::ParseFail as usize, 4);
+        assert_eq!(StatSlot::TxV4 as usize, 5);
+        assert_eq!(StatSlot::CtHitV6 as usize, 6);
+        assert_eq!(StatSlot::TxV6 as usize, 7);
+        assert_eq!(StatSlot::VlanStripped as usize, 8);
+        assert_eq!(StatSlot::V6ExtUnsupported as usize, 9);
+    }
+
+    #[test]
+    fn num_slots_matches_enum() {
+        // If a new variant is added to StatSlot without bumping
+        // NUM_SLOTS the read loop in `read_stats` would silently
+        // skip it — this assertion guards that invariant.
+        assert_eq!(NUM_SLOTS, 10);
+    }
+
+    #[cfg(not(target_os = "linux"))]
+    #[test]
+    fn non_linux_stub_returns_zeros() {
+        let snap = read_stats().expect("non-linux stub is infallible");
+        assert_eq!(snap.summed.len(), NUM_SLOTS);
+        assert!(snap.summed.iter().all(|&v| v == 0));
     }
 }

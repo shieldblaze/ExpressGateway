@@ -246,6 +246,12 @@ pub enum XdpLoaderError {
     /// the operator can tell what the NIC actually rejected.
     #[error("all xdp attach modes exhausted; last error: {0}")]
     AllAttachModesExhausted(String),
+
+    /// EBPF-2-08: installing the STATS per-CPU handle into the
+    /// [`crate::stats_export`] module failed (already installed, or
+    /// the map type didn't match `u64`).
+    #[error("stats export install failed: {0}")]
+    StatsExport(String),
 }
 
 /// EBPF-2-04: outcome of [`XdpLoader::attach_with_fallback`].
@@ -341,6 +347,29 @@ impl XdpLoader {
         }
         let ebpf = loader.load(elf)?;
         Ok(Self { ebpf })
+    }
+
+    /// EBPF-2-08: hand the STATS per-CPU array to
+    /// [`crate::stats_export`] so rel's Prom scraper can read it.
+    /// Idempotent at the first call; a second call returns
+    /// [`XdpLoaderError::Map`] with "STATS handle already installed".
+    ///
+    /// The map is taken (not borrowed) so the loader can't double-
+    /// install it on a subsequent call — single ownership matches
+    /// the once-per-process invariant `crates/lb/src/xdp.rs` relies
+    /// on.
+    ///
+    /// # Errors
+    ///
+    /// - [`XdpLoaderError::MapNotFound`]: the ELF did not declare a
+    ///   `stats` map.
+    /// - [`XdpLoaderError::Map`]: aya rejected the typed conversion
+    ///   (size mismatch between Rust-side `u64` and the ELF's
+    ///   declared value size) OR the handle was already installed.
+    pub fn install_stats_export(&mut self) -> Result<(), XdpLoaderError> {
+        let map = self.take_map(STATS_PIN_NAME)?;
+        crate::stats_export::install_stats_handle(map)
+            .map_err(|e| XdpLoaderError::StatsExport(e.to_string()))
     }
 
     /// Kernel-free ELF inspection: parse the BPF object with aya-obj and
