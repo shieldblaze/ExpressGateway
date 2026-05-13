@@ -36,6 +36,16 @@
 )]
 #![warn(clippy::pedantic)]
 
+// EBPF-2-01 / EBPF-2-02: explicit GPL declaration in the `license` ELF
+// section. The kernel `BPF_PROG_LOAD` syscall reads `bpf_attr.license`
+// from this section; aya-obj 0.2.1 defaults to "GPL" when absent, but
+// shipping the section explicitly removes that implementation-detail
+// dependency and survives any future aya-obj upgrade. `no_mangle` keeps
+// bpf-linker's DCE from stripping the symbol.
+#[unsafe(link_section = "license")]
+#[unsafe(no_mangle)]
+pub static LICENSE: [u8; 4] = *b"GPL\0";
+
 use core::mem;
 
 use aya_ebpf::{

@@ -64,6 +64,11 @@ fi
 
 say "bpf-linker: $(bpf-linker --version 2>/dev/null || echo unknown)"
 say "Building lb-xdp-ebpf for bpfel-unknown-none…"
+# EBPF-2-01: emit DWARF (`-Cdebuginfo=2`) so bpf-linker can lower it to
+# BTF / BTF.ext. `-C link-arg=--btf` / `-C link-arg=-g` thread through
+# to bpf-linker via the standard cargo link-args plumbing. RUSTFLAGS is
+# preserved on top of whatever the caller may have set.
+export RUSTFLAGS="${RUSTFLAGS:-} -Cdebuginfo=2 -Clink-arg=--btf -Clink-arg=-g"
 pushd "${EBPF_DIR}" >/dev/null
 if cargo "+${NIGHTLY}" build --release \
       --target bpfel-unknown-none \

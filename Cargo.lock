@@ -1606,6 +1606,7 @@ version = "0.1.0"
 dependencies = [
  "aya",
  "aya-obj",
+ "object 0.36.7",
  "parking_lot",
  "rand 0.8.5",
  "thiserror 2.0.18",

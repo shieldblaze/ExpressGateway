@@ -20,3 +20,9 @@ aya = { workspace = true }
 # by `XdpLoader::parse_object`; the real-ELF integration test runs without
 # CAP_BPF because we never ask aya to create maps.
 aya-obj = { workspace = true }
+
+# EBPF-2-01: `object` is a no_std-friendly ELF parser. Already a
+# transitive dep of `aya-obj`, so this entry pulls a fresh dev-dep view
+# without adding a new crate to the lockfile graph.
+[target.'cfg(target_os = "linux")'.dev-dependencies]
+object = { version = "0.36", default-features = false, features = ["read", "std"] }
