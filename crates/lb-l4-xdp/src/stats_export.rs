@@ -88,6 +88,58 @@ pub fn current_attach_mode() -> Option<AttachModeLabel> {
     AttachModeLabel::from_byte(ATTACH_MODE.load(Ordering::Relaxed))
 }
 
+// ---------------------------------------------------------------------------
+// EBPF-2-05: pinned-map reuse reporting.
+// ---------------------------------------------------------------------------
+
+/// Snapshot of which pinned maps were reused vs. freshly-created on
+/// process startup. Read by rel's Prom layer; written once at startup
+/// from `crates/lb-l4-xdp/src/loader.rs::load_from_bytes_pinned`.
+///
+/// Bit layout in the underlying atomic: bit `i` is `1` if the
+/// `i`-th pin in [`pin_names()`] was reused from a prior process.
+/// The packing is intentional: rel's Prom scrape pulls a single
+/// atomic load and projects to per-name gauges, no Mutex required.
+static PIN_REUSED_BITMAP: AtomicU8 = AtomicU8::new(0);
+
+/// Canonical pin-name ordering for the bitmap. Add new entries to
+/// the END only — bit positions are wire-stable.
+#[must_use]
+pub fn pin_names() -> &'static [&'static str] {
+    &[
+        "conntrack",
+        "conntrack_v6",
+        "l7_ports",
+        "acl_deny_trie",
+        "stats",
+    ]
+}
+
+/// Record whether the named pin was reused.
+/// Unknown names are silently dropped (forward compatibility with
+/// future pin additions).
+pub fn record_pin_reused(name: &str, reused: bool) {
+    if let Some(idx) = pin_names().iter().position(|n| *n == name) {
+        let mask = 1u8 << idx;
+        if reused {
+            PIN_REUSED_BITMAP.fetch_or(mask, Ordering::Relaxed);
+        } else {
+            PIN_REUSED_BITMAP.fetch_and(!mask, Ordering::Relaxed);
+        }
+    }
+}
+
+/// Read back the `(name, reused?)` pairs for every known pin.
+#[must_use]
+pub fn pin_reused_snapshot() -> Vec<(&'static str, bool)> {
+    let bits = PIN_REUSED_BITMAP.load(Ordering::Relaxed);
+    pin_names()
+        .iter()
+        .enumerate()
+        .map(|(i, n)| (*n, (bits >> i) & 1 == 1))
+        .collect()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -116,5 +168,28 @@ mod tests {
         assert_eq!(AttachModeLabel::Drv.as_str(), "drv");
         assert_eq!(AttachModeLabel::Skb.as_str(), "skb");
         assert_eq!(AttachModeLabel::Hw.as_str(), "hw");
+    }
+
+    #[test]
+    fn pin_reuse_records_round_trip() {
+        // Reset bitmap so prior tests don't contaminate.
+        PIN_REUSED_BITMAP.store(0, Ordering::Relaxed);
+        record_pin_reused("conntrack", true);
+        record_pin_reused("stats", true);
+        let snap = pin_reused_snapshot();
+        let conntrack = snap.iter().find(|(n, _)| *n == "conntrack");
+        let stats = snap.iter().find(|(n, _)| *n == "stats");
+        let conntrack_v6 = snap.iter().find(|(n, _)| *n == "conntrack_v6");
+        assert_eq!(conntrack.map(|(_, r)| *r), Some(true));
+        assert_eq!(stats.map(|(_, r)| *r), Some(true));
+        assert_eq!(conntrack_v6.map(|(_, r)| *r), Some(false));
+    }
+
+    #[test]
+    fn pin_reuse_unknown_name_is_silent() {
+        // Forward-compat: a future pin name added in the eBPF crate
+        // but not yet in `pin_names()` must not panic.
+        record_pin_reused("future_map", true);
+        // No observable effect — just check the call doesn't blow up.
     }
 }

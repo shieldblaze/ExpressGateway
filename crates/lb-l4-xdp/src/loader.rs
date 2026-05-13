@@ -24,6 +24,37 @@ use aya::{
 use aya_obj::{Object, ParseError};
 
 // ---------------------------------------------------------------------------
+// EBPF-2-05: stable map pin names. These MUST match the `#[map(name =
+// "...")]` strings in `crates/lb-l4-xdp/ebpf/src/main.rs`. Pin files
+// are created at `<pin_dir>/<NAME>` by aya when
+// `EbpfLoader::map_pin_path` is set; downstream observability
+// tooling (bpftool, cilium-cli) uses the same string.
+// ---------------------------------------------------------------------------
+
+/// Pin filename of the IPv4 conntrack map. Matches
+/// `#[map(name = "conntrack")]` in `ebpf/src/main.rs`.
+pub const CONNTRACK_PIN_NAME: &str = "conntrack";
+
+/// Pin filename of the IPv6 conntrack map.
+pub const CONNTRACK_V6_PIN_NAME: &str = "conntrack_v6";
+
+/// Pin filename of the L7 ports table (config-managed; not flood-pressured).
+pub const L7_PORTS_PIN_NAME: &str = "l7_ports";
+
+/// Pin filename of the IPv4 deny LPM trie.
+pub const ACL_DENY_TRIE_PIN_NAME: &str = "acl_deny_trie";
+
+/// Pin filename of the per-CPU stats array (EBPF-2-08 exposes the
+/// counter slots via `stats_export.rs`).
+pub const STATS_PIN_NAME: &str = "stats";
+
+/// Default bpffs root for the production deployment. The directory
+/// itself must be created with `0750` ownership of the LB uid:gid
+/// before the loader runs — see `crates/lb/src/xdp.rs` and the
+/// systemd unit. Tests override via `EG_BPFFS_ROOT` env var.
+pub const DEFAULT_PIN_DIR: &str = "/sys/fs/bpf/expressgateway";
+
+// ---------------------------------------------------------------------------
 // Userspace mirrors of the BPF map key/value layouts declared in
 // `crates/lb-l4-xdp/ebpf/src/main.rs`. They must stay in lock-step: aya
 // compares their byte size against the BPF ELF's declared map sizes on
@@ -273,7 +304,42 @@ impl XdpLoader {
     /// Returns `XdpLoaderError::Load` if the bytes are not a valid BPF
     /// object, BTF relocation fails, or map creation is rejected.
     pub fn load_from_bytes(elf: &[u8]) -> Result<Self, XdpLoaderError> {
-        let ebpf = EbpfLoader::new().load(elf)?;
+        Self::load_from_bytes_pinned(elf, None)
+    }
+
+    /// EBPF-2-05: load with an optional `map_pin_path` so the maps
+    /// survive a process restart.
+    ///
+    /// When `pin_path = Some(dir)`, aya pins every map under
+    /// `dir/<pin-name>` (the lowercase names declared via
+    /// `#[map(name = "...")]` in the eBPF source — see
+    /// [`CONNTRACK_PIN_NAME`] et al.). Aya transparently reuses an
+    /// existing pin when the kernel-side map's `map_type`, `key_size`
+    /// and `value_size` match the ELF declaration; on size mismatch
+    /// it returns [`MapError::InvalidPin`] which surfaces as
+    /// [`XdpLoaderError::Map`]. Callers that want to recover from a
+    /// schema-mismatch must unlink the stale pin files and retry.
+    ///
+    /// Caller is responsible for ensuring the directory exists with
+    /// the correct mode/owner (`0750` owned by the LB uid:gid is the
+    /// recommended posture; see DEPLOYMENT.md / RUNBOOK.md).
+    ///
+    /// # Errors
+    ///
+    /// Returns `XdpLoaderError::Load` if the bytes are not a valid
+    /// BPF object, BTF relocation fails, or map creation is
+    /// rejected. With a `pin_path`, schema mismatch against an
+    /// existing pin surfaces as `XdpLoaderError::Load` carrying the
+    /// underlying `EbpfError::Map(InvalidPin)`.
+    pub fn load_from_bytes_pinned(
+        elf: &[u8],
+        pin_path: Option<&std::path::Path>,
+    ) -> Result<Self, XdpLoaderError> {
+        let mut loader = EbpfLoader::new();
+        if let Some(p) = pin_path {
+            loader.map_pin_path(p);
+        }
+        let ebpf = loader.load(elf)?;
         Ok(Self { ebpf })
     }
 
@@ -457,10 +523,14 @@ impl XdpLoader {
     pub fn conntrack_map(
         &mut self,
     ) -> Result<AyaHashMap<&mut MapData, FlowKey, BackendEntry>, XdpLoaderError> {
+        // EBPF-2-05: lowercase pin-name (`#[map(name = "conntrack")]`
+        // in the eBPF source). Aya `map_mut` accepts either case but
+        // we use the on-disk-pin spelling to keep one source of
+        // truth.
         let map = self
             .ebpf
-            .map_mut("CONNTRACK")
-            .ok_or(XdpLoaderError::MapNotFound("CONNTRACK"))?;
+            .map_mut(CONNTRACK_PIN_NAME)
+            .ok_or(XdpLoaderError::MapNotFound(CONNTRACK_PIN_NAME))?;
         AyaHashMap::try_from(map).map_err(Into::into)
     }
 
@@ -475,8 +545,8 @@ impl XdpLoader {
     ) -> Result<AyaHashMap<&mut MapData, FlowKeyV6, BackendEntryV6>, XdpLoaderError> {
         let map = self
             .ebpf
-            .map_mut("CONNTRACK_V6")
-            .ok_or(XdpLoaderError::MapNotFound("CONNTRACK_V6"))?;
+            .map_mut(CONNTRACK_V6_PIN_NAME)
+            .ok_or(XdpLoaderError::MapNotFound(CONNTRACK_V6_PIN_NAME))?;
         AyaHashMap::try_from(map).map_err(Into::into)
     }
 
@@ -491,8 +561,8 @@ impl XdpLoader {
     pub fn acl_trie(&mut self) -> Result<LpmTrie<&mut MapData, u32, u32>, XdpLoaderError> {
         let map = self
             .ebpf
-            .map_mut("ACL_DENY_TRIE")
-            .ok_or(XdpLoaderError::MapNotFound("ACL_DENY_TRIE"))?;
+            .map_mut(ACL_DENY_TRIE_PIN_NAME)
+            .ok_or(XdpLoaderError::MapNotFound(ACL_DENY_TRIE_PIN_NAME))?;
         LpmTrie::try_from(map).map_err(Into::into)
     }
 

@@ -226,24 +226,30 @@ const STAT_V6_EXT_UNSUPPORTED: u32 = 9;
 // HASH map and starved legitimate new connections of the fast path.
 // API-compatible with the previous HashMap accessors: `.get(&key)`
 // has the same signature on aya-ebpf 0.1.1 — no call-site edits.
-#[map]
+//
+// EBPF-2-05: explicit lowercase `name = …` decouples the on-disk
+// pin filename (`/sys/fs/bpf/expressgateway/conntrack`) from Rust
+// identifier churn. Aya defaults the pin name to the uppercased
+// identifier; pinning a `CONNTRACK` map to `conntrack` would force
+// a rename + state loss on every refactor of the Rust static name.
+#[map(name = "conntrack")]
 static CONNTRACK: LruHashMap<FlowKey, BackendEntry> =
     LruHashMap::<FlowKey, BackendEntry>::with_max_entries(1_000_000, 0);
 
-#[map]
+#[map(name = "conntrack_v6")]
 static CONNTRACK_V6: LruHashMap<FlowKeyV6, BackendEntryV6> =
     LruHashMap::<FlowKeyV6, BackendEntryV6>::with_max_entries(512_000, 0);
 
-#[map]
+#[map(name = "l7_ports")]
 static L7_PORTS: HashMap<u16, u8> = HashMap::<u16, u8>::with_max_entries(256, 0);
 
 /// IPv4 deny ACL as a longest-prefix-match trie. Key data is the IPv4
 /// address in network byte order; `prefix_len` is the CIDR mask length.
 /// Pillar 4b-2 upgrade from the Pillar 4a HashMap<u32,u32>.
-#[map]
+#[map(name = "acl_deny_trie")]
 static ACL_DENY_TRIE: LpmTrie<u32, u32> = LpmTrie::<u32, u32>::with_max_entries(100_000, 0);
 
-#[map]
+#[map(name = "stats")]
 static STATS: PerCpuArray<u64> = PerCpuArray::<u64>::with_max_entries(32, 0);
 
 // ---------------------------------------------------------------------------
