@@ -8,6 +8,8 @@ new supply-chain surface.
 | Crate     | Where                                          | Type        | Version  | Already-transitive? | Justification |
 |-----------|------------------------------------------------|-------------|----------|---------------------|---------------|
 | `object`  | `crates/lb-l4-xdp/Cargo.toml` (dev-only, Linux)| dev-dep     | `0.36`   | yes (via `aya-obj`) | EBPF-2-01 proof test parses the BPF ELF's section headers to assert `license` / `.BTF` / `.BTF.ext` presence + 64 KiB size budget. `object` is the no_std-friendly ELF parser the plan calls out (alternative was `goblin`; chose `object` because it already lives in the dep graph). Dev-only so it does not ship in release binaries. |
+| `tokio-util` | `crates/lb-core/Cargo.toml`                 | dep         | workspace `0.7` | yes (via lb-quic, lb-io, lb-observability, lb) | CODE-2-03: `Shutdown { CancellationToken, TaskTracker }` must live in `lb-core` so every long-lived spawn site across the workspace can `use lb_core::Shutdown`. `default-features = false` + `features = ["rt"]` is the minimum slice covering both types. No new supply-chain surface — tokio-util is already in the graph via lb-quic / lb-io / lb-observability / lb. |
+| `tokio`   | `crates/lb-core/Cargo.toml`                    | dep         | workspace `1`   | yes (via every async crate) | CODE-2-03: `Shutdown::drain` uses `tokio::time::timeout`. Already transitive — this only promotes it to a direct dep on lb-core. `dev-dependencies` adds `features = ["full","test-util"]` for the `tokio::test(start_paused = true)` paused-time runtime used in `tests/shutdown.rs`. |
 
 ## Field meanings
 
