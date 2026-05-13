@@ -15,6 +15,7 @@
     allow(clippy::unwrap_used, clippy::expect_used, clippy::indexing_slicing)
 )]
 
+mod admin_auth;
 mod conn_gate;
 mod error;
 mod hooks;
@@ -26,6 +27,7 @@ mod ticket;
 mod watchdog;
 mod zero_rtt;
 
+pub use admin_auth::{AdminAuthError, AdminAuthGate, AdminBindError, AdminTokenHash};
 pub use conn_gate::{ConnGate, ConnPermit, IpNet, OverCap};
 pub use error::SecurityError;
 pub use hooks::{HooksBundle, SecurityHooks, SecurityReject};
