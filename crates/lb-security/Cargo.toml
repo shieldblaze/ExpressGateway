@@ -13,6 +13,18 @@ http = { workspace = true }
 rustls = { workspace = true }
 rustls-pki-types = { workspace = true }
 parking_lot = { workspace = true }
+# Wave-2a SEC-2-03 / SEC-2-04 — concurrent maps for the per-IP
+# slowloris watchdog table and the per-IP connection-gate counters.
+# Already a workspace pin.
+dashmap = { workspace = true }
+# Wave-2a SEC-2-10 — `timeout_accept` wraps `tokio_rustls::TlsAcceptor::accept`
+# in `tokio::time::timeout`. `tokio` is the only API surface needed; pulling
+# `tokio-rustls` here would tie the helper to a specific feature set, so the
+# helper stays generic over `AsyncRead + AsyncWrite + Unpin` and takes the
+# acceptor by reference. The caller (Wave-2c, `lb/src/main.rs`) supplies the
+# `TlsAcceptor`.
+tokio = { workspace = true }
+tokio-rustls = { workspace = true }
 # HMAC-SHA256 for stateless-retry tokens (Pillar 3b.3a). ring is already
 # in the tree transitively via rustls; pulling it in directly keeps the
 # retry module independent of rustls's feature set.
@@ -23,3 +35,4 @@ subtle = "2"
 
 [dev-dependencies]
 rcgen = { version = "0.13", features = ["pem"] }
+tokio = { workspace = true, features = ["full", "test-util", "macros"] }

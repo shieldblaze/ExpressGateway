@@ -15,7 +15,9 @@
     allow(clippy::unwrap_used, clippy::expect_used, clippy::indexing_slicing)
 )]
 
+mod conn_gate;
 mod error;
+mod hooks;
 mod retry;
 mod slow_post;
 mod slowloris;
@@ -23,11 +25,13 @@ mod smuggle;
 mod ticket;
 mod zero_rtt;
 
+pub use conn_gate::{ConnGate, ConnPermit, IpNet, OverCap};
 pub use error::SecurityError;
+pub use hooks::{HooksBundle, SecurityHooks, SecurityReject};
 pub use retry::{DEFAULT_RETRY_MAX_AGE, RETRY_SECRET_LEN, RetryError, RetryTokenSigner};
 pub use slow_post::SlowPostDetector;
 pub use slowloris::SlowlorisDetector;
-pub use smuggle::SmuggleDetector;
+pub use smuggle::{SmuggleDetector, SmuggleMode};
 pub use ticket::{RotatingTicketer, TicketError, TicketKey, TicketRotator, build_server_config};
 pub use zero_rtt::ZeroRttReplayGuard;
 

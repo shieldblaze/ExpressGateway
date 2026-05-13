@@ -1639,6 +1639,7 @@ name = "lb-security"
 version = "0.1.0"
 dependencies = [
  "bytes",
+ "dashmap 6.1.0",
  "http 1.4.0",
  "parking_lot",
  "rcgen",
@@ -1647,6 +1648,8 @@ dependencies = [
  "rustls-pki-types",
  "subtle",
  "thiserror 2.0.18",
+ "tokio",
+ "tokio-rustls",
 ]
 
 [[package]]
