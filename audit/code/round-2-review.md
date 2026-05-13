@@ -584,7 +584,7 @@ matches reality today; the recommendation is a regression guard.
 ### CODE-2-11 — Zero proptest / loom / miri usage across the workspace
 Severity: high
 Blocking-for-prod: no
-Status:   Open
+Status:   Proposed-Fix(560c1c2)   <!-- Wave-1 scaffolding: per-parser proptest harnesses at sanity budget + a `--cfg loom` lb-balancer harness + a miri-runnable lb-io test. Full-budget CI runs and the broader loom/miri sweep are Wave-2 tracking under this same finding ID. -->
 Location: workspace-wide. Grep summary (from Round 1 inventory §4.3):
   - `proptest` references in `crates/`: 0
   - `loom` references in `crates/`: 0
