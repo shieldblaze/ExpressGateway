@@ -143,6 +143,35 @@ impl XdpMode {
             Self::Hw => XdpFlags::HW_MODE,
         }
     }
+
+    /// EBPF-2-04: translate to the telemetry label exposed via
+    /// [`crate::stats_export`]. Kept symmetric with `XdpFlags` so a
+    /// future kernel mode added to aya gets a compile error here.
+    #[must_use]
+    pub const fn to_label(self) -> crate::stats_export::AttachModeLabel {
+        match self {
+            Self::Skb => crate::stats_export::AttachModeLabel::Skb,
+            Self::Drv => crate::stats_export::AttachModeLabel::Drv,
+            Self::Hw => crate::stats_export::AttachModeLabel::Hw,
+        }
+    }
+}
+
+/// EBPF-2-04: classify a `ProgramError` as "mode unsupported by this
+/// NIC" — the only errnos that trigger ladder fall-through. Any other
+/// error means a real bug (verifier reject, bad ifname, ...) and the
+/// ladder MUST NOT swallow it.
+///
+/// Errno values are kernel-stable on Linux: EOPNOTSUPP=95, EINVAL=22.
+/// Coded as literals to avoid a `libc` direct dependency.
+fn is_unsupported_mode(e: &ProgramError) -> bool {
+    const EINVAL: i32 = 22;
+    const EOPNOTSUPP: i32 = 95;
+    if let ProgramError::SyscallError(sc) = e {
+        let raw = sc.io_error.raw_os_error();
+        return matches!(raw, Some(EINVAL) | Some(EOPNOTSUPP));
+    }
+    false
 }
 
 /// Errors surfaced by the aya-backed XDP loader.
@@ -180,6 +209,41 @@ pub enum XdpLoaderError {
     /// `parse_object_only` path).
     #[error("ebpf object parse error: {0}")]
     ObjectParse(#[from] ParseError),
+
+    /// EBPF-2-04: the attach-mode ladder ran out of modes to try.
+    /// Carries the original errno-bearing error of the last attempt so
+    /// the operator can tell what the NIC actually rejected.
+    #[error("all xdp attach modes exhausted; last error: {0}")]
+    AllAttachModesExhausted(String),
+}
+
+/// EBPF-2-04: outcome of [`XdpLoader::attach_with_fallback`].
+///
+/// `mode` is the mode the kernel accepted; `attempts` is the number of
+/// ladder steps tried (1 = first try succeeded). Surfaced into the
+/// `xdp_attach_attempts_total` counter by `crates/lb/src/xdp.rs`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct AttachOutcome {
+    /// The mode the kernel accepted.
+    pub mode: XdpMode,
+    /// How many ladder steps were tried (>=1).
+    pub attempts: u8,
+}
+
+/// EBPF-2-04: operator-facing knob mirroring
+/// [`lb_config::XdpModeChoice`]. Kept here so this crate can stay
+/// non-circular with `lb-config` if/when ownership flips.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum XdpModeChoice {
+    /// Drv → Skb fallback ladder.
+    #[default]
+    Auto,
+    /// Drv only. Loud-fail on unsupported.
+    Native,
+    /// Skb only (today's behaviour pre-EBPF-2-04).
+    Skb,
+    /// Hw only. Loud-fail on unsupported.
+    Hw,
 }
 
 /// High-level handle to a loaded BPF object containing an XDP program.
@@ -274,6 +338,86 @@ impl XdpLoader {
         // link alive as long as the Xdp handle exists inside self.ebpf.
         let _link_id = xdp.attach(ifname, mode.to_flags())?;
         Ok(())
+    }
+
+    /// EBPF-2-04: probe ladder for XDP attach.
+    ///
+    /// Translates an operator-facing [`XdpModeChoice`] into a sequence
+    /// of [`XdpMode`] attempts. Falls back from Drv to Skb only when
+    /// the kernel responds with `EOPNOTSUPP` or `EINVAL` (the two
+    /// errnos that mean "this NIC doesn't support this mode"); any
+    /// other error short-circuits to surface the real failure. The
+    /// `Native` and `Hw` choices intentionally skip the ladder so an
+    /// operator who asked for Native gets a loud startup failure
+    /// rather than a silent 10-50x throughput regression to SKB.
+    ///
+    /// Side-effect: on success, calls
+    /// [`crate::stats_export::record_attach_mode`] so rel's Prom
+    /// scrape sees the chosen mode without re-querying the kernel.
+    ///
+    /// # Errors
+    ///
+    /// - [`XdpLoaderError::ProgramNotFound`] / [`XdpLoaderError::NotXdp`]:
+    ///   propagate from the underlying program lookup.
+    /// - [`XdpLoaderError::Program`]: a non-`EOPNOTSUPP`/`EINVAL`
+    ///   attach failure — surfaced as-is.
+    /// - [`XdpLoaderError::AllAttachModesExhausted`]: every mode in
+    ///   the ladder returned `EOPNOTSUPP`/`EINVAL`.
+    pub fn attach_with_fallback(
+        &mut self,
+        prog_name: &str,
+        ifname: &str,
+        requested: XdpModeChoice,
+    ) -> Result<AttachOutcome, XdpLoaderError> {
+        // Ladder definitions live here, NOT in the caller — so the
+        // policy is single-sourced and the test in
+        // `tests/xdp_attach_mode.rs` covers every branch.
+        let order: &[XdpMode] = match requested {
+            XdpModeChoice::Auto => &[XdpMode::Drv, XdpMode::Skb],
+            XdpModeChoice::Native => &[XdpMode::Drv],
+            XdpModeChoice::Skb => &[XdpMode::Skb],
+            XdpModeChoice::Hw => &[XdpMode::Hw],
+        };
+        let program = self
+            .ebpf
+            .program_mut(prog_name)
+            .ok_or_else(|| XdpLoaderError::ProgramNotFound(prog_name.to_owned()))?;
+        let xdp: &mut Xdp = program
+            .try_into()
+            .map_err(|_| XdpLoaderError::NotXdp(prog_name.to_owned()))?;
+
+        let mut attempts: u8 = 0;
+        let mut last_err: Option<String> = None;
+        for &mode in order {
+            attempts = attempts.saturating_add(1);
+            match xdp.attach(ifname, mode.to_flags()) {
+                Ok(_link_id) => {
+                    let label = mode.to_label();
+                    crate::stats_export::record_attach_mode(label);
+                    tracing::info!(
+                        interface = ifname,
+                        mode = label.as_str(),
+                        attempts,
+                        "xdp attached"
+                    );
+                    return Ok(AttachOutcome { mode, attempts });
+                }
+                Err(e) if is_unsupported_mode(&e) => {
+                    tracing::warn!(
+                        interface = ifname,
+                        mode = mode.to_label().as_str(),
+                        error = %e,
+                        "xdp attach unsupported in this mode; trying next"
+                    );
+                    last_err = Some(format!("{e}"));
+                    continue;
+                }
+                Err(e) => return Err(XdpLoaderError::from(e)),
+            }
+        }
+        Err(XdpLoaderError::AllAttachModesExhausted(
+            last_err.unwrap_or_else(|| "no attach attempts made".to_owned()),
+        ))
     }
 
     /// Take ownership of a BPF map by name so the caller can access it

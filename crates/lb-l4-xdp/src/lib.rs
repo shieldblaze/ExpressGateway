@@ -27,6 +27,11 @@ use std::collections::{HashMap, VecDeque};
 #[cfg(target_os = "linux")]
 pub mod loader;
 
+/// EBPF-2-04 / EBPF-2-05 / EBPF-2-08: lock-step telemetry surface
+/// between the eBPF data plane and userspace observability (rel's
+/// `lb-observability` consumes via the `pub fn` accessors).
+pub mod stats_export;
+
 /// Pillar 4b-2 userspace simulation of the BPF extensions.
 ///
 /// Covers 802.1Q VLAN stripping, IPv6 conntrack lookups, LPM-trie ACL

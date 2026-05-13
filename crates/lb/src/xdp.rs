@@ -22,10 +22,24 @@ pub fn try_attach_xdp(_: &lb_config::RuntimeConfig) -> Option<()> {
 #[cfg(target_os = "linux")]
 mod linux {
     use caps::{CapSet, Capability, has_cap};
-    use lb_config::RuntimeConfig;
+    use lb_config::{RuntimeConfig, XdpModeChoice as CfgXdpModeChoice};
     use lb_l4_xdp::loader::XdpLoader;
     #[cfg(lb_xdp_elf)]
-    use lb_l4_xdp::loader::XdpMode;
+    use lb_l4_xdp::loader::XdpModeChoice as LoaderXdpModeChoice;
+
+    /// EBPF-2-04: translate the operator-facing config enum into the
+    /// loader's mode choice. Two separate types avoid a `lb-l4-xdp ↔
+    /// lb-config` cyclic dep; the conversion is the only place they
+    /// need to stay in sync.
+    #[cfg(lb_xdp_elf)]
+    const fn cfg_to_loader_mode(c: CfgXdpModeChoice) -> LoaderXdpModeChoice {
+        match c {
+            CfgXdpModeChoice::Auto => LoaderXdpModeChoice::Auto,
+            CfgXdpModeChoice::Native => LoaderXdpModeChoice::Native,
+            CfgXdpModeChoice::Skb => LoaderXdpModeChoice::Skb,
+            CfgXdpModeChoice::Hw => LoaderXdpModeChoice::Hw,
+        }
+    }
 
     /// Outcome of the CAP_BPF probe: explicit enum so we log the exact
     /// reason we skipped the attach.
@@ -95,12 +109,17 @@ mod linux {
             }
         }
 
-        attach_with_elf(iface)
+        attach_with_elf(iface, rt.xdp_mode)
     }
 
     /// Select the compiled-in ELF path.
+    ///
+    /// EBPF-2-04: probe the attach-mode ladder (Drv → Skb for
+    /// `Auto`; loud-fail for `Native`/`Hw`). The chosen mode is
+    /// recorded via `stats_export::record_attach_mode` so the
+    /// Prom scrape sees it without re-querying the kernel.
     #[cfg(lb_xdp_elf)]
-    fn attach_with_elf(iface: &str) -> Option<XdpLoader> {
+    fn attach_with_elf(iface: &str, mode: CfgXdpModeChoice) -> Option<XdpLoader> {
         let mut loader = match XdpLoader::load_from_bytes(lb_l4_xdp::LB_XDP_ELF) {
             Ok(l) => l,
             Err(e) => {
@@ -112,12 +131,19 @@ mod linux {
             tracing::warn!(error = %e, "xdp disabled — kernel_load(lb_xdp) failed");
             return None;
         }
-        match loader.attach("lb_xdp", iface, XdpMode::Skb) {
-            Ok(()) => {
+        let requested = cfg_to_loader_mode(mode);
+        match loader.attach_with_fallback("lb_xdp", iface, requested) {
+            Ok(outcome) => {
+                // `record_attach_mode` is also called inside the
+                // loader on success; calling it here too is a no-op
+                // because the byte store is idempotent. Logging
+                // duplicates info::xdp attached from the loader but
+                // this line is tied to the lb-side startup sequence.
                 tracing::info!(
                     interface = iface,
-                    mode = "skb",
-                    "xdp: program 'lb_xdp' attached"
+                    mode = outcome.mode.to_label().as_str(),
+                    attempts = outcome.attempts,
+                    "xdp: program 'lb_xdp' attached via probe ladder"
                 );
                 Some(loader)
             }
@@ -125,7 +151,8 @@ mod linux {
                 tracing::warn!(
                     error = %e,
                     interface = iface,
-                    "xdp disabled — attach failed"
+                    requested = ?mode,
+                    "xdp disabled — attach ladder failed"
                 );
                 None
             }
@@ -133,7 +160,7 @@ mod linux {
     }
 
     #[cfg(not(lb_xdp_elf))]
-    fn attach_with_elf(_iface: &str) -> Option<XdpLoader> {
+    fn attach_with_elf(_iface: &str, _mode: CfgXdpModeChoice) -> Option<XdpLoader> {
         tracing::warn!(
             "xdp_enabled=true but no ELF was built into this binary; \
              run scripts/build-xdp.sh and rebuild to enable"

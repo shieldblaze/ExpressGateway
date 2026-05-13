@@ -11,6 +11,10 @@ build = "build.rs"
 thiserror = { workspace = true }
 rand = { workspace = true }
 parking_lot = { workspace = true }
+# EBPF-2-04: the attach-fallback ladder logs each rejected mode at WARN
+# and the chosen mode at INFO so operators see the negotiation without
+# a separate metric scrape. Tracing is already in the workspace.
+tracing = { workspace = true }
 
 # Pillar 4a: aya userspace loader is Linux-only; keeps non-Linux targets
 # (e.g. aarch64-musl CI) building against the pure-userspace simulation.

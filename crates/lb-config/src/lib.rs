@@ -64,6 +64,11 @@ pub struct ObservabilityConfig {
 /// Currently covers the optional XDP data-plane attach. All fields are
 /// opt-in and default to "disabled" — existing deployments that never set
 /// `[runtime]` keep their current pure-userspace behaviour.
+///
+/// **Cross-column note (synthesis §D)**: this struct is `code`'s
+/// territory; the EBPF-2-04 change widens it with an additive
+/// `xdp_mode` field. The serde default keeps every existing config
+/// file accepted unchanged.
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct RuntimeConfig {
     /// When true, the binary tries to load and attach the compiled BPF
@@ -77,6 +82,56 @@ pub struct RuntimeConfig {
     /// `xdp_enabled = true`. Ignored otherwise.
     #[serde(default)]
     pub xdp_interface: Option<String>,
+    /// EBPF-2-04: XDP attach mode selector. Defaults to
+    /// [`XdpModeChoice::Auto`] which probes Drv-then-Skb. Set
+    /// `xdp_mode = "native"` on production NICs to refuse-to-start
+    /// rather than silently degrade to 1-3 Mpps SKB mode.
+    #[serde(default)]
+    pub xdp_mode: XdpModeChoice,
+    /// CODE-2-03: graceful-drain budget on SIGTERM, in milliseconds.
+    /// The Wave-2 SIGTERM orchestrator calls
+    /// `lb_core::Shutdown::drain(Duration::from_millis(drain_timeout_ms))`
+    /// at shutdown time; outstanding tasks above this budget are
+    /// aborted with a warn-level log. Lead decision §C: default
+    /// **10000 ms (10 s)** matches the documented "30-second graceful
+    /// drain" RUNBOOK claim once protocol-level GOAWAY (PROTO-2-11) +
+    /// inflight gauge (REL-2-09) layer on top. Operators can lower
+    /// the budget for fast cluster rotations or raise it for
+    /// long-poll workloads.
+    ///
+    /// Validation: `validate_runtime` accepts 100..=300_000 ms;
+    /// outside that range it bails with a clear error.
+    #[serde(default = "default_drain_timeout_ms")]
+    pub drain_timeout_ms: u64,
+}
+
+/// CODE-2-03: serde default for `RuntimeConfig::drain_timeout_ms`.
+/// 10 000 ms = 10 s per lead §C.
+const fn default_drain_timeout_ms() -> u64 {
+    10_000
+}
+
+/// EBPF-2-04: operator-facing XDP attach-mode selector. Reuses the
+/// kernel's mode vocabulary one-for-one.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum XdpModeChoice {
+    /// Ladder: try Drv first, fall back to Skb on `EOPNOTSUPP`/`EINVAL`.
+    /// Skips Hw (operators explicitly opt in to hardware offload).
+    /// **This is the default** — preserves least-surprise on CI/dev
+    /// boxes with veth devices while delivering Drv on real NICs.
+    #[default]
+    Auto,
+    /// Drv-mode only. Aborts startup if the NIC driver does not
+    /// support it. The right setting for a 100 G production host
+    /// where SKB mode would silently cost 10-50x throughput.
+    Native,
+    /// Generic SKB mode only. Today's behaviour pre-EBPF-2-04;
+    /// keeps existing CI runners working unchanged.
+    Skb,
+    /// Hardware offload (mlx5 / nfp). Loud-fail if the NIC does not
+    /// support it.
+    Hw,
 }
 
 /// Configuration for a single listener.
@@ -543,6 +598,19 @@ fn validate_runtime(rt: &RuntimeConfig) -> Result<(), ConfigError> {
                 "runtime.xdp_enabled=true requires runtime.xdp_interface".into(),
             ));
         }
+    }
+    // CODE-2-03: drain budget must be a sane positive duration.
+    // 100 ms floor avoids the operator-mistake "drain_timeout_ms = 1"
+    // collapsing the drain to a no-op; 300 000 ms (5 min) ceiling
+    // bounds the worst-case SIGTERM-to-exit latency for service
+    // managers (systemd default TimeoutStopSec is 90 s, k8s default
+    // terminationGracePeriodSeconds is 30 s — both well under the
+    // ceiling).
+    if !(100..=300_000).contains(&rt.drain_timeout_ms) {
+        return Err(ConfigError::Validation(format!(
+            "runtime.drain_timeout_ms={} out of range 100..=300000",
+            rt.drain_timeout_ms
+        )));
     }
     Ok(())
 }
@@ -1358,6 +1426,8 @@ xdp_interface = "eth0"
             runtime: Some(RuntimeConfig {
                 xdp_enabled: true,
                 xdp_interface: None,
+                xdp_mode: XdpModeChoice::Auto,
+                drain_timeout_ms: 10_000,
             }),
             observability: None,
         };
@@ -1383,6 +1453,8 @@ xdp_interface = "eth0"
             runtime: Some(RuntimeConfig {
                 xdp_enabled: false,
                 xdp_interface: None,
+                xdp_mode: XdpModeChoice::Auto,
+                drain_timeout_ms: 10_000,
             }),
             observability: None,
         };
