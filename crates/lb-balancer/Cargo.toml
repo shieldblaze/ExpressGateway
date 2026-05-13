@@ -10,3 +10,19 @@ publish = false
 thiserror = { workspace = true }
 rand = { workspace = true }
 parking_lot = { workspace = true }
+
+# CODE-2-11: loom interleaving exploration is `--cfg loom` gated so it
+# never compiles into normal test builds. One harness in
+# tests/loom_atomic_counter.rs explores the atomic-counter / scheduler
+# race; the broader sweep is Wave-2 work tracked under CODE-2-04.
+# Build it with: RUSTFLAGS="--cfg loom" cargo test -p lb-balancer
+[target.'cfg(loom)'.dev-dependencies]
+loom = { workspace = true }
+
+# CODE-2-11: register `loom` with `--check-cfg` so clippy's
+# `unexpected_cfgs` lint stays clean when the test file declares
+# `#![cfg(loom)]`. With this entry plain builds skip the loom test
+# (cfg is false) and `--cfg loom` builds compile it; either way the
+# lint passes.
+[lints.rust]
+unexpected_cfgs = { level = "warn", check-cfg = ['cfg(loom)'] }

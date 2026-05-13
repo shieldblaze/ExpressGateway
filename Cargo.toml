@@ -107,6 +107,16 @@ libfuzzer-sys = "0.4"
 # keep the text-format path only; `process` enables the
 # `process_collector` for OS-level RSS/CPU samples.
 prometheus = { version = "0.13", default-features = false, features = ["process"] }
+# CODE-2-11: property-based testing for the H1 / H2 / H3 / QUIC parsers.
+# Dev-only; never enters release. The default-features include
+# `proptest-derive` machinery we do not need (regex-based generators)
+# so we trim to the standard generators only.
+proptest = { version = "1", default-features = false, features = ["std", "fork", "timeout"] }
+# CODE-2-11: loom interleaving harness, gated behind `--cfg loom` so it
+# never compiles into normal test builds. One harness in lb-balancer
+# this round (atomic-counter race against scheduler); broader sweep is
+# Wave-2 work.
+loom = "0.7"
 
 [dev-dependencies]
 lb-core = { path = "crates/lb-core" }
