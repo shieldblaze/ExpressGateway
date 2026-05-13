@@ -123,7 +123,8 @@ Cross-ref: sec §B.2 (rel F-22 cross-ref); rel F-22.
 ### CODE-2-03 — TCP/H1/H1s accept loop has no graceful drain; SIGTERM aborts in-flight connections via `JoinHandle::abort()`
 Severity: critical
 Blocking-for-prod: yes
-Status:   Open
+Status:   Proposed-Fix(9ff2b9b)   <!-- Wave-1 module-only slice: lb_core::Shutdown + DrainOutcome + drain_timeout_ms knob. Wave-2 accept-site plumbing in lb/src/main.rs is serialised after sec/rel/proto land their pieces. The `drain_timeout_ms` field itself landed earlier on this branch (currently inside the EBPF-2-04 commit message line due to a multi-agent staging race; content is correct in lb-config/src/lib.rs and validated 100..=300000). -->
+
 Location:
   - `crates/lb/src/main.rs:701` (`spawn_listener` — `JoinHandle` stored, never paired with a token)
   - `crates/lb/src/main.rs:1099–1106` (accept loop has no `select! { _ = cancel.cancelled() => break, … }`)
