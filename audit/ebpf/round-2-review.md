@@ -23,7 +23,7 @@ Severity scale (project-wide):
 ### EBPF-2-01 — BPF ELF has no `license` section (and no `BTF`/`BTF.ext`)
 
 Severity: high
-Status:   Open
+Status:   Proposed-Fix(67117a5)
 Location: `crates/lb-l4-xdp/ebpf/src/main.rs` (no `license!()` /
           `#[link_section = "license"]` static); committed
           `crates/lb-l4-xdp/src/lb_xdp.bin`
@@ -102,7 +102,7 @@ Cross-ref:
 ### EBPF-2-02 — `XdpLoader::load_from_bytes` does not call any license setter (root-cause correction vs. task brief)
 
 Severity: medium
-Status:   Open
+Status:   Proposed-Fix(67117a5)
 Location: `crates/lb-l4-xdp/src/loader.rs:211-214`.
 
 Description / Impact:
@@ -140,7 +140,7 @@ Cross-ref: task brief item 1, EBPF-2-01.
 ### EBPF-2-03 — CONNTRACK / CONNTRACK_V6 are `BPF_MAP_TYPE_HASH`, not `LRU_HASH`
 
 Severity: high
-Status:   Open
+Status:   Proposed-Fix(c009219)
 Location: `crates/lb-l4-xdp/ebpf/src/main.rs:209-215`.
 
 ```
@@ -220,7 +220,7 @@ Cross-ref: synthesis T4, sec S-2, rel F-?, ADR-0005 Follow-ups.
 ### EBPF-2-04 — XDP attach is hard-coded to SKB mode with no probe, no fallback, no operator knob
 
 Severity: high
-Status:   Open
+Status:   Proposed-Fix(75d4740)
 Location: `crates/lb/src/xdp.rs:115`:
 
 ```
@@ -285,7 +285,7 @@ Cross-ref: synthesis T5, rel Round-1 §support-matrix decision.
 ### EBPF-2-05 — No map pinning: every restart starts with a cold CONNTRACK
 
 Severity: high
-Status:   Open
+Status:   Proposed-Fix(37c513c)
 Location: `crates/lb-l4-xdp/src/loader.rs` — no call to `Map::pin`
           / `Program::pin` / `XdpLoader::set_map_pin_path` anywhere
           in the crate. `EbpfLoader::map_pin_path` (aya
@@ -359,7 +359,7 @@ Cross-ref: synthesis T5, rel reload-zero-drop, sec S-?
 ### EBPF-2-06 — Dropped `XdpLinkId` at `loader.rs:275` — confirmed safe in aya 0.13.1; needs an integration test
 
 Severity: low (deferred — aya is fine; we still want a regression test)
-Status:   Open
+Status:   Proposed-Fix(854ebdb)
 Location: `crates/lb-l4-xdp/src/loader.rs:273-275`:
 
 ```
@@ -416,7 +416,7 @@ Cross-ref: synthesis T5, code Q-CODE-1 (pod / lifecycle audit).
 ### EBPF-2-07 — No verifier-log matrix captured; `crates/lb-l4-xdp/ebpf/verifier-logs/` is empty
 
 Severity: medium
-Status:   Open
+Status:   Proposed-Fix(ffde98c)
 Location: `crates/lb-l4-xdp/ebpf/verifier-logs/` (directory exists,
           empty in tree). ADR-0005 §Follow-ups promises an
           `xtask xdp-verify` driver that is not implemented.
@@ -464,7 +464,7 @@ Follow-ups, EBPF-2-09 (also tooling).
 ### EBPF-2-08 — `STATS` per-CPU array is never exported to Prometheus
 
 Severity: medium
-Status:   Open
+Status:   Proposed-Fix(7f52a52)
 Location: `crates/lb-l4-xdp/ebpf/src/main.rs:226-227` defines
           `STATS: PerCpuArray<u64>` with 10 slots used
           (`STAT_PASS` .. `STAT_V6_EXT_UNSUPPORTED`, indices 0..9).
@@ -614,14 +614,14 @@ the userspace mirror.
 
 | ID         | Severity | Owner area | Status |
 |------------|----------|------------|--------|
-| EBPF-2-01  | high     | ebpf       | Open   |
-| EBPF-2-02  | medium   | ebpf       | Open   |
-| EBPF-2-03  | high     | ebpf + sec + rel | Open |
-| EBPF-2-04  | high     | ebpf + rel | Open   |
-| EBPF-2-05  | high     | ebpf + sec + rel | Open |
-| EBPF-2-06  | low      | ebpf + code | Open  |
-| EBPF-2-07  | medium   | ebpf + rel | Open   |
-| EBPF-2-08  | medium   | ebpf + rel | Open   |
+| EBPF-2-01  | high     | ebpf       | Proposed-Fix(67117a5) |
+| EBPF-2-02  | medium   | ebpf       | Proposed-Fix(67117a5) |
+| EBPF-2-03  | high     | ebpf + sec + rel | Proposed-Fix(c009219) |
+| EBPF-2-04  | high     | ebpf + rel | Proposed-Fix(75d4740) |
+| EBPF-2-05  | high     | ebpf + sec + rel | Proposed-Fix(37c513c) |
+| EBPF-2-06  | low      | ebpf + code | Proposed-Fix(854ebdb) |
+| EBPF-2-07  | medium   | ebpf + rel | Proposed-Fix(ffde98c) |
+| EBPF-2-08  | medium   | ebpf + rel | Proposed-Fix(7f52a52) |
 | EBPF-2-09  | medium   | ebpf (confirm) + code (fix) + sec | Open |
 
 Round-3 (planning) priorities, suggested order:
