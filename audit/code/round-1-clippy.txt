@@ -1,0 +1,107 @@
+   Compiling boring-sys v4.21.2
+    Checking libm v0.2.16
+    Checking portable-atomic v1.13.1
+    Checking intrusive-collections v0.9.7
+    Checking thrift_codec v0.3.2
+    Checking crypto-common v0.1.7
+    Checking block-buffer v0.10.4
+    Checking futures v0.3.32
+    Checking dashmap v5.5.3
+    Checking http-body-util v0.1.3
+    Checking arc-swap v1.9.1
+   Compiling core-error v0.0.0
+    Checking spinning_top v0.3.0
+    Checking hostname v0.4.2
+    Checking is-terminal v0.4.17
+   Compiling object v0.36.7
+    Checking term v1.2.1
+    Checking allocator-api2 v0.2.21
+    Checking foldhash v0.1.5
+   Compiling foundations v4.5.0
+    Checking octets v0.3.5
+    Checking futures-timer v3.0.3
+   Compiling io-uring v0.7.12
+    Checking take_mut v0.2.2
+    Checking either v1.15.0
+    Checking nonzero_ext v0.3.0
+    Checking no-std-compat v0.4.1
+    Checking governor v0.6.3
+    Checking slog-async v2.8.0
+    Checking hashbrown v0.15.5
+    Checking slog-term v2.9.2
+    Checking cf-rustracing-jaeger v1.3.0
+    Checking slog-scope v4.4.1
+    Checking digest v0.10.7
+    Checking yaml-merge-keys v0.5.1
+    Checking opentelemetry-proto v0.5.0
+   Compiling nix v0.30.1
+    Checking anyhow v1.0.102
+    Checking prometools v0.2.3
+    Checking url v2.5.8
+    Checking slog-json v2.6.1
+   Compiling foundations-macros v4.5.0
+    Checking serde_spanned v0.6.9
+    Checking toml_datetime v0.6.11
+    Checking serde_path_to_error v0.1.20
+    Checking toml_write v0.1.2
+    Checking winnow v0.7.15
+   Compiling zstd-safe v7.2.4
+    Checking alloc-no-stdlib v2.0.4
+    Checking cpufeatures v0.2.17
+    Checking sha1 v0.10.6
+    Checking alloc-stdlib v0.2.2
+    Checking toml_edit v0.22.27
+    Checking slog-stdlog v4.1.1
+    Checking zstd-sys v2.0.16+zstd.1.5.7
+    Checking task-killswitch v0.2.1
+    Checking crossbeam v0.8.4
+    Checking datagram-socket v0.8.0
+    Checking ipnetwork v0.20.0
+    Checking sync_wrapper v1.0.2
+    Checking socket2 v0.5.10
+    Checking utf-8 v0.7.6
+    Checking data-encoding v2.11.0
+    Checking tungstenite v0.24.0
+    Checking tower v0.5.3
+    Checking aya-obj v0.2.1
+    Checking toml v0.8.23
+    Checking brotli-decompressor v4.0.3
+    Checking lb-security v0.1.0 (/home/ubuntu/Code/ExpressGateway/crates/lb-security)
+    Checking tokio-rustls v0.26.4
+    Checking webpki-roots v1.0.7
+    Checking lb-h3 v0.1.0 (/home/ubuntu/Code/ExpressGateway/crates/lb-h3)
+    Checking iri-string v0.7.12
+    Checking assert_matches v1.5.0
+   Compiling lb-l4-xdp v0.1.0 (/home/ubuntu/Code/ExpressGateway/crates/lb-l4-xdp)
+    Checking aya v0.13.1
+    Checking tower-http v0.6.8
+    Checking hyper-rustls v0.27.9
+    Checking brotli v7.0.0
+    Checking zstd v0.13.3
+    Checking tokio-tungstenite v0.24.0
+    Checking serde_urlencoded v0.7.1
+    Checking flate2 v1.1.9
+    Checking yasna v0.5.2
+    Checking pem v3.0.6
+    Checking lb-h2 v0.1.0 (/home/ubuntu/Code/ExpressGateway/crates/lb-h2)
+    Checking lb-grpc v0.1.0 (/home/ubuntu/Code/ExpressGateway/crates/lb-grpc)
+    Checking rcgen v0.13.2
+    Checking lb-compression v0.1.0 (/home/ubuntu/Code/ExpressGateway/crates/lb-compression)
+    Checking reqwest v0.12.28
+    Checking lb-controlplane v0.1.0 (/home/ubuntu/Code/ExpressGateway/crates/lb-controlplane)
+    Checking lb-config v0.1.0 (/home/ubuntu/Code/ExpressGateway/crates/lb-config)
+    Checking lb-observability v0.1.0 (/home/ubuntu/Code/ExpressGateway/crates/lb-observability)
+    Checking lb-balancer v0.1.0 (/home/ubuntu/Code/ExpressGateway/crates/lb-balancer)
+    Checking lb-cp-client v0.1.0 (/home/ubuntu/Code/ExpressGateway/crates/lb-cp-client)
+    Checking lb-h1 v0.1.0 (/home/ubuntu/Code/ExpressGateway/crates/lb-h1)
+    Checking lb-core v0.1.0 (/home/ubuntu/Code/ExpressGateway/crates/lb-core)
+    Checking lb-health v0.1.0 (/home/ubuntu/Code/ExpressGateway/crates/lb-health)
+    Checking boring v4.21.2
+    Checking quiche v0.28.0
+    Checking lb-io v0.1.0 (/home/ubuntu/Code/ExpressGateway/crates/lb-io)
+    Checking tokio-quiche v0.18.0
+    Checking lb-quic v0.1.0 (/home/ubuntu/Code/ExpressGateway/crates/lb-quic)
+    Checking lb-l7 v0.1.0 (/home/ubuntu/Code/ExpressGateway/crates/lb-l7)
+    Checking lb-integration-tests v0.1.0 (/home/ubuntu/Code/ExpressGateway)
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 3m 20s
+EXIT:0

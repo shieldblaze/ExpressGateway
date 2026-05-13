@@ -1,0 +1,27 @@
+STATE=ROUND_FIXES
+ROUND=4
+ROUND3_CLOSED=2026-05-13
+PLANS_APPROVED=55
+ROUND1_CLOSED=2026-05-13
+ROUND2_CLOSED=2026-05-13
+STARTED=2026-05-13
+FINDINGS_TOTAL=70
+FINDINGS_CRITICAL=11
+FINDINGS_HIGH=23
+FINDINGS_MEDIUM=20
+FINDINGS_LOW=12
+FINDINGS_INFO=4
+PLANS_REQUIRED=52
+BRANCH=main
+FEATURE_BRANCH_PENDING=prod-readiness/round-4
+TEAM=sec,code,ebpf,rel,proto
+LEAD=team-lead
+
+# Phase transitions
+# 1 -> ROUND_DISCOVERY   (inventories + cross-talk)
+# 2 -> ROUND_FINDINGS    (findings + 30-min adversarial cross-review)
+# 3 -> ROUND_PLANNING    (plan approval for medium+ findings)
+# 4 -> ROUND_FIXES       (implementation on feature branch)
+# 5 -> ROUND_VERIFY      (independent verification)
+# 6 -> ROUND_REGRESSION  (delta sweep; loop until clean)
+# 7 -> ROUND_FINAL       (gate matrix + FINAL_REPORT.md)
