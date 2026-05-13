@@ -51,7 +51,11 @@ use core::mem;
 use aya_ebpf::{
     bindings::xdp_action,
     macros::{map, xdp},
-    maps::{HashMap, LpmTrie, PerCpuArray, lpm_trie::Key as LpmKey},
+    // EBPF-2-03: CONNTRACK / CONNTRACK_V6 are LruHashMap (kernel
+    // BPF_MAP_TYPE_LRU_HASH) so the kernel evicts the oldest entry
+    // under flood instead of returning ENOMEM. L7_PORTS remains a
+    // plain HashMap — config-managed, never flood-pressured.
+    maps::{HashMap, LpmTrie, LruHashMap, PerCpuArray, lpm_trie::Key as LpmKey},
     programs::XdpContext,
 };
 
@@ -216,13 +220,19 @@ const STAT_TX_V6: u32 = 7;
 const STAT_VLAN: u32 = 8;
 const STAT_V6_EXT_UNSUPPORTED: u32 = 9;
 
+// EBPF-2-03: BPF_MAP_TYPE_LRU_HASH evicts the oldest entry under
+// flood instead of returning ENOMEM at insert time. This closes the
+// flow-spray DoS where adversary-driven 5-tuples filled the plain
+// HASH map and starved legitimate new connections of the fast path.
+// API-compatible with the previous HashMap accessors: `.get(&key)`
+// has the same signature on aya-ebpf 0.1.1 — no call-site edits.
 #[map]
-static CONNTRACK: HashMap<FlowKey, BackendEntry> =
-    HashMap::<FlowKey, BackendEntry>::with_max_entries(1_000_000, 0);
+static CONNTRACK: LruHashMap<FlowKey, BackendEntry> =
+    LruHashMap::<FlowKey, BackendEntry>::with_max_entries(1_000_000, 0);
 
 #[map]
-static CONNTRACK_V6: HashMap<FlowKeyV6, BackendEntryV6> =
-    HashMap::<FlowKeyV6, BackendEntryV6>::with_max_entries(512_000, 0);
+static CONNTRACK_V6: LruHashMap<FlowKeyV6, BackendEntryV6> =
+    LruHashMap::<FlowKeyV6, BackendEntryV6>::with_max_entries(512_000, 0);
 
 #[map]
 static L7_PORTS: HashMap<u16, u8> = HashMap::<u16, u8>::with_max_entries(256, 0);

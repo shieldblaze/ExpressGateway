@@ -294,6 +294,17 @@ impl XdpLoader {
     /// Returns an aya `HashMap` wrapping a mutable borrow of the underlying
     /// `MapData` — the caller can insert, update, or iterate entries.
     ///
+    /// EBPF-2-03: the kernel-side map is `BPF_MAP_TYPE_LRU_HASH` (not
+    /// plain HASH) so the kernel evicts the oldest entry when
+    /// `max_entries` is reached instead of returning `ENOMEM` on
+    /// `bpf_map_update_elem`. Aya 0.13.1's typed `HashMap` accessor
+    /// accepts both `Map::HashMap` and `Map::LruHashMap` variants
+    /// (see `aya/src/maps/mod.rs:505` — `HashMap from
+    /// HashMap|LruHashMap`), so the insert/get API is unchanged.
+    /// Callers should still keep ERROR-level handling on the `MapError`
+    /// path but may downgrade "insert failed under pressure" log
+    /// noise to WARN — LRU eviction is the expected steady state.
+    ///
     /// # Errors
     ///
     /// - `MapNotFound` when the ELF does not declare `CONNTRACK`.
