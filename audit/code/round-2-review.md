@@ -71,7 +71,7 @@ Cross-ref: synthesis T1; sec S-1/S-3/S-4; proto #1; rel F-17.
 ### CODE-2-02 — `panic = "abort"` not set in `[profile.release]`; default unwind across unsafe boundaries
 Severity: critical
 Blocking-for-prod: yes
-Status:   Open
+Status:   Proposed-Fix(120e4fa)
 Location:
   - `Cargo.toml:162–166` (`[profile.release]` has no `panic` key)
   - 17 `unsafe` blocks in `crates/lb-io/src/ring.rs` (io_uring SQE submission, sockaddr conversion, raw fd close)
