@@ -637,7 +637,7 @@ synthesis §C.
 
 ### PROTO-2-15 — SNI ↔ Host / `:authority` disagreement is not enforced
 Severity: medium
-Status:   Open
+Status:   Proposed-Fix-Partial(Wave-2b-2: validator function landed at `crates/lb-l7/src/sni_authority.rs::check_sni_authority` + 421 renderer `misdirected_response()`; unit tests in module (9) + integration `crates/lb-l7/tests/sni_authority_mismatch.rs::test_421_on_mismatch` (7 tests). **TLS-accept-site wiring DEFERRED to Wave-2c** because SNI capture lives in `crates/lb/src/main.rs` which Wave-2b cannot touch — see `audit/deferred.md` "PROTO-2-15 wiring side" for the threaded-through plan.)
 Location:
   * No SNI extraction or comparison anywhere in `lb-l7` /
     `lb-quic` proxy paths.

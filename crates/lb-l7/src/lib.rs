@@ -26,6 +26,7 @@ pub mod h3_to_h1;
 pub mod h3_to_h2;
 pub mod h3_to_h3;
 pub mod security_hooks;
+pub mod sni_authority;
 pub mod stripped_request;
 pub mod upstream;
 pub mod ws_proxy;

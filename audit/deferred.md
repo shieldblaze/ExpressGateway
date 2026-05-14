@@ -47,3 +47,46 @@ CODE-2-04 plan when it lands.
 ---
 
 (Other areas append their own deferred sections below.)
+
+---
+
+## proto (Wave-2b-2)
+
+### PROTO-2-15 wiring side — SNI propagation from TLS-accept site (deferred)
+
+**Status**: validator landed Wave-2b-2; **wiring deferred to Wave-2c**.
+
+`crates/lb-l7/src/sni_authority.rs::check_sni_authority` + the 421
+Misdirected Request renderer (`misdirected_response`) ship Wave-2b-2
+with full unit-test coverage (`crates/lb-l7/tests/sni_authority_mismatch.rs`
+— 7 tests pass). Threading the captured SNI from the
+`tokio_rustls::TlsAcceptor::accept` future down into
+`H1Proxy::serve_connection` / `H2Proxy::serve_connection`
+requires a handler change in `crates/lb/src/main.rs` (the TLS-accept
+site is built there). Wave-2b is forbidden from touching `main.rs`;
+Wave-2c will:
+
+  1. Capture `acceptor.accept(stream).get_ref().1.server_name()`
+     from the rustls handshake result (or the
+     `Acceptor::accept`-path equivalent) at the binary's TLS
+     handler.
+  2. Pass the captured SNI (`Option<String>`) into a new
+     `with_sni: Option<String>` builder on each `H{1,2}Proxy`
+     instance, or surface it via a request-extension propagated
+     through the `serve_connection` IO wrapper.
+  3. Inside `H1Proxy::handle` / `H2Proxy::handle`, after the
+     PROTO-2-01 `check_authority_host_agreement` block, call
+     `lb_l7::sni_authority::check_sni_authority(sni.as_deref(),
+     authority_str)` and on `Err(_)` return
+     `misdirected_response()` rendered as `Response<BoxBody<…>>`.
+
+### PROTO-2-04 / PROTO-2-05 — wstest + h3spec integration (deferred to Wave 2c CI image)
+
+Both require CI image changes (installing `wstest`, `h3spec`); they
+move with the rel-team CI image work in Wave-2c. No code change
+attempted in Wave-2b.
+
+### PROTO-2-09 / PROTO-2-11 (H2 half) — `build_listener_mode` strict-protocol-validation, GOAWAY-on-SIGTERM
+
+Both live in `crates/lb/src/main.rs` (forbidden to Wave-2b). Move
+with Wave-2c.
