@@ -140,7 +140,7 @@ synthesis T2); `proto` owns GOAWAY / CONNECTION_CLOSE emission.
 
 ### REL-2-03 — TLS certificate rotation is documented but not implemented
 Severity: critical
-Status:   Open
+Status:   Proposed-Fix(334b69a)
 Location: `crates/lb/src/main.rs:214`, `crates/lb/src/main.rs:611`, `RUNBOOK.md:49-57`, `DEPLOYMENT.md:123-125`
 
 Description: `RUNBOOK.md:49-57` and `DEPLOYMENT.md:123-125` describe a
