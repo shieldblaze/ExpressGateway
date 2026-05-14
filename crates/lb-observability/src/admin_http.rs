@@ -1,4 +1,14 @@
-//! Admin HTTP listener: `GET /metrics` (text exposition) and `GET /healthz`.
+//! Admin HTTP listener.
+//!
+//! Endpoints (all `GET`-only, loopback-bind expected):
+//!
+//! | Path        | Body type                | Semantics                                                     |
+//! |-------------|--------------------------|---------------------------------------------------------------|
+//! | `/metrics`  | Prometheus text 0.0.4    | Registry exposition for the local scraper                     |
+//! | `/healthz`  | `text/plain`             | Back-compat alias for `/livez` (REL-2-04)                     |
+//! | `/livez`    | `application/json`       | 200 while the runtime is alive; never 503 (REL-2-04)          |
+//! | `/readyz`   | `application/json`       | 200 only while `ProbeState::Ready`; 503 otherwise (REL-2-04)  |
+//! | `/startupz` | `application/json`       | 200 once `!ProbeState::Starting`; 503 during boot (REL-2-04)  |
 //!
 //! Intended for loopback scrapes. No TLS, no auth — the operator is
 //! expected to bind it to 127.0.0.1 behind a reverse proxy or over a
@@ -20,12 +30,14 @@ use tokio::net::TcpListener;
 use tokio_util::sync::CancellationToken;
 
 use crate::MetricsRegistry;
+use crate::probes::{ProbeRegistry, ProbeState};
 use crate::prometheus_exposition::{CONTENT_TYPE, render_text};
 
-/// HTTP request handler that exposes the two admin endpoints.
+/// HTTP request handler that exposes the admin endpoints.
 #[derive(Clone)]
 struct AdminService {
     registry: Arc<MetricsRegistry>,
+    probes: Arc<ProbeRegistry>,
 }
 
 impl Service<hyper::Request<Incoming>> for AdminService {
@@ -35,11 +47,16 @@ impl Service<hyper::Request<Incoming>> for AdminService {
 
     fn call(&self, request: hyper::Request<Incoming>) -> Self::Future {
         let reg_arc = Arc::clone(&self.registry);
-        Box::pin(async move { Ok(route(&reg_arc, &request)) })
+        let probes = Arc::clone(&self.probes);
+        Box::pin(async move { Ok(route(&reg_arc, &probes, &request)) })
     }
 }
 
-fn route(registry: &MetricsRegistry, request: &hyper::Request<Incoming>) -> Response<Full<Bytes>> {
+fn route(
+    registry: &MetricsRegistry,
+    probes: &ProbeRegistry,
+    request: &hyper::Request<Incoming>,
+) -> Response<Full<Bytes>> {
     if request.method() != http::Method::GET {
         return plain(StatusCode::METHOD_NOT_ALLOWED, "method not allowed\n");
     }
@@ -52,9 +69,62 @@ fn route(registry: &MetricsRegistry, request: &hyper::Request<Incoming>) -> Resp
                 .body(Full::new(Bytes::from(body)))
                 .unwrap_or_else(|_| fallback_500())
         }
-        "/healthz" => plain(StatusCode::OK, "ok\n"),
+        "/healthz" | "/livez" => livez_response(probes),
+        "/readyz" => readyz_response(probes),
+        "/startupz" => startupz_response(probes),
         _ => plain(StatusCode::NOT_FOUND, "not found\n"),
     }
+}
+
+/// REL-2-04: `/livez` — 200 while the runtime is alive. Stays 200
+/// even during drain so K8s does not kill the pod mid-shutdown.
+fn livez_response(probes: &ProbeRegistry) -> Response<Full<Bytes>> {
+    let status = if probes.is_live() {
+        StatusCode::OK
+    } else {
+        StatusCode::SERVICE_UNAVAILABLE
+    };
+    json_status(status, probes.state())
+}
+
+/// REL-2-04: `/readyz` — 200 iff [`ProbeState::Ready`]. 503 during
+/// boot and during drain.
+fn readyz_response(probes: &ProbeRegistry) -> Response<Full<Bytes>> {
+    let state = probes.state();
+    let status = if matches!(state, ProbeState::Ready) {
+        StatusCode::OK
+    } else {
+        StatusCode::SERVICE_UNAVAILABLE
+    };
+    json_status(status, state)
+}
+
+/// REL-2-04: `/startupz` — 200 once the startup sequence has
+/// completed at least once (i.e. NOT `Starting`).
+fn startupz_response(probes: &ProbeRegistry) -> Response<Full<Bytes>> {
+    let state = probes.state();
+    let status = if probes.is_started() {
+        StatusCode::OK
+    } else {
+        StatusCode::SERVICE_UNAVAILABLE
+    };
+    json_status(status, state)
+}
+
+fn json_status(status: StatusCode, state: ProbeState) -> Response<Full<Bytes>> {
+    // Hand-formatted JSON to avoid pulling serde_json into
+    // lb-observability for a one-key object. The token vocabulary is
+    // a closed set defined in `ProbeState::body_token`, so escaping
+    // is unnecessary.
+    let body = format!("{{\"status\":\"{}\"}}\n", state.body_token());
+    Response::builder()
+        .status(status)
+        .header(
+            http::header::CONTENT_TYPE,
+            "application/json; charset=utf-8",
+        )
+        .body(Full::new(Bytes::from(body)))
+        .unwrap_or_else(|_| fallback_500())
 }
 
 fn plain(status: StatusCode, body: &'static str) -> Response<Full<Bytes>> {
@@ -79,6 +149,10 @@ fn fallback_500() -> Response<Full<Bytes>> {
 
 /// Bind `addr` and serve admin HTTP requests until `shutdown` fires.
 ///
+/// `probes` is the [`ProbeRegistry`] consulted by the
+/// `/livez`/`/readyz`/`/startupz` handlers. The caller (Wave 2c
+/// `main.rs`) keeps a clone so it can flip the state on bind / drain.
+///
 /// The listener runs as a standalone loop; `serve` only returns when
 /// the cancellation token is tripped or the bind fails. Per-connection
 /// tasks are best-effort; a single bad client never takes the listener
@@ -89,15 +163,19 @@ fn fallback_500() -> Response<Full<Bytes>> {
 /// Returns an [`io::Error`] if the TCP bind fails. Successful accepts
 /// whose handshake or request handling subsequently errors are logged
 /// at `debug` and do not propagate.
-pub async fn serve(
+pub async fn serve_with_probes(
     registry: Arc<MetricsRegistry>,
+    probes: Arc<ProbeRegistry>,
     addr: SocketAddr,
     shutdown: CancellationToken,
 ) -> io::Result<SocketAddr> {
     let listener = TcpListener::bind(addr).await?;
     let local = listener.local_addr()?;
-    tracing::info!(address = %local, "admin http listener started (/metrics, /healthz)");
-    let svc = AdminService { registry };
+    tracing::info!(
+        address = %local,
+        "admin http listener started (/metrics, /livez, /readyz, /startupz, /healthz)"
+    );
+    let svc = AdminService { registry, probes };
 
     tokio::spawn(async move {
         loop {
@@ -133,6 +211,32 @@ pub async fn serve(
     Ok(local)
 }
 
+/// Back-compat wrapper used by call sites that have not yet been
+/// updated to thread the [`ProbeRegistry`] through (notably
+/// `crates/lb/src/main.rs` until Wave 2c).
+///
+/// Internally synthesises a stand-alone [`ProbeRegistry`] in the
+/// `Starting` state. Callers that need to actually flip readiness
+/// must use [`serve_with_probes`] and keep their own clone of the
+/// registry.
+///
+/// # Errors
+///
+/// Same conditions as [`serve_with_probes`].
+pub async fn serve(
+    registry: Arc<MetricsRegistry>,
+    addr: SocketAddr,
+    shutdown: CancellationToken,
+) -> io::Result<SocketAddr> {
+    let probes = ProbeRegistry::shared();
+    // Until the caller wires the real probe registry, mark Ready so
+    // that legacy `/healthz` consumers continue to see 200. The
+    // Wave-2c switch (REL-2-02) replaces this with a real registry
+    // owned by `main.rs`.
+    probes.set_ready();
+    serve_with_probes(registry, probes, addr, shutdown).await
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -140,9 +244,12 @@ mod tests {
     #[tokio::test(flavor = "current_thread")]
     async fn bind_and_shutdown() {
         let reg = Arc::new(MetricsRegistry::new());
+        let probes = ProbeRegistry::shared();
         let cancel = CancellationToken::new();
         let addr: SocketAddr = "127.0.0.1:0".parse().unwrap();
-        let local = serve(Arc::clone(&reg), addr, cancel.clone()).await.unwrap();
+        let local = serve_with_probes(Arc::clone(&reg), probes, addr, cancel.clone())
+            .await
+            .unwrap();
         assert!(local.port() > 0);
         cancel.cancel();
         // Give the accept loop a tick to notice the cancellation.

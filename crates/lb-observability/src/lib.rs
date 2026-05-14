@@ -33,7 +33,10 @@ use prometheus::{
 };
 
 pub mod admin_http;
+pub mod probes;
 pub mod prometheus_exposition;
+
+pub use probes::{ProbeRegistry, ProbeState};
 
 /// Soft cap on the number of series a single registry will hold before a
 /// tracing warning is emitted. Purely advisory — registration still
