@@ -1375,7 +1375,10 @@ name = "lb"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "bytes",
  "caps",
+ "http 1.4.0",
+ "http-body-util",
  "hyper",
  "hyper-util",
  "lb-balancer",

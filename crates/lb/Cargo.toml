@@ -55,3 +55,11 @@ quiche = { workspace = true }
 # target_os = "linux" in main.rs.
 [target.'cfg(target_os = "linux")'.dependencies]
 caps = { workspace = true }
+
+# PROTO-2-03 (Wave 2c-2): proof harness for 1xx pass-through. Spins
+# up a hyper H1 server + client over a duplex so we can observe the
+# wire-level 100 Continue auto-emit without binding a real socket.
+[dev-dependencies]
+bytes = { workspace = true }
+http = { workspace = true }
+http-body-util = { workspace = true }
