@@ -750,6 +750,36 @@ impl H1Proxy {
         resp
     }
 
+    /// Forward an H1 inbound request to an H1 upstream backend over a
+    /// single-use TCP stream.
+    ///
+    /// **ROUND8-L7-10 — take-and-discard upstream stream pattern.**
+    /// The line below calls `pooled.take_stream()` immediately after
+    /// the async `acquire_async` resolves. `take_stream` consumes the
+    /// `PooledTcp` wrapper without invoking its `Drop` return-to-pool
+    /// path, so the H1 upstream connection is effectively **single-use**:
+    /// even though the pool has a `set_reusable` API
+    /// ([`lb_io::pool::PooledTcp::set_reusable`]), this code path
+    /// never reuses an H1 upstream socket.
+    ///
+    /// This is *correct by accident*. Pingora paid for this bug twice
+    /// (0.6.0 "Discard extra upstream body and disable keepalive" plus
+    /// 0.8.0 "Ensure http1 downstream session is not reused on more
+    /// body bytes than expected"): an upstream that sends fewer or
+    /// more body bytes than its declared Content-Length corrupts the
+    /// next pipelined request on a reused connection — an upstream
+    /// request-smuggling primitive. Single-use stops that class cold.
+    ///
+    /// **Refactor warning.** Any future change that pools H1 upstream
+    /// connections (drops `take_stream()` in favour of letting
+    /// `PooledTcp` drop normally) MUST implement the Pingora-class
+    /// over-read / under-read guard: read the response body, compare
+    /// to `Content-Length`, and call
+    /// [`lb_io::pool::PooledTcp::set_reusable(false)`](lb_io::pool::PooledTcp::set_reusable)
+    /// on any mismatch before letting the wrapper drop. Without that
+    /// guard the bug Pingora paid for twice will return. See also the
+    /// H2 cousin in `Http2Pool::send_request`, which evicts on every
+    /// Send-class error for the same reason.
     async fn proxy_request(
         &self,
         backend_addr: SocketAddr,
@@ -765,6 +795,11 @@ impl H1Proxy {
             .await
             .map_err(|e| ProxyErr::Upstream(format!("backend connect {backend_addr}: {e}")))?;
 
+        // ROUND8-L7-10: see the doc-comment block on this function.
+        // `take_stream` defeats the pool's return-to-pool Drop path,
+        // making this H1 upstream connection single-use. Do not
+        // remove without first implementing the body-length guard
+        // documented above.
         let stream = pooled
             .take_stream()
             .ok_or_else(|| ProxyErr::Upstream("pooled stream missing".to_owned()))?;

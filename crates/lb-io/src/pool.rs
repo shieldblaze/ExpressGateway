@@ -386,6 +386,23 @@ impl PooledTcp {
     /// Callers that observed an I/O error on the stream should call
     /// `set_reusable(false)` before dropping so the pool does not park a
     /// broken socket.
+    ///
+    /// **ROUND8-L7-10 — API contract for future H1 upstream reuse.**
+    /// This API has no production caller today. The lb-l7 H1 upstream
+    /// path uses [`PooledTcp::take_stream`] immediately after acquire
+    /// (see the doc-comment on `H1Proxy::proxy_request`), which means
+    /// H1 upstream connections are effectively single-use and never
+    /// re-park into the pool — `set_reusable` is irrelevant on that
+    /// path.
+    ///
+    /// The API is retained because the day someone refactors the H1
+    /// upstream into a true pooled-reuse path they MUST wire this in.
+    /// Pingora paid for the body-length-mismatch upstream-smuggling
+    /// bug twice (0.6.0 + 0.8.0) — the fix is exactly this call on
+    /// any over-read / under-read of the response body before drop.
+    /// Do not delete `set_reusable` without first wiring a caller; if
+    /// the API is dead at deletion time, the next reuse refactor will
+    /// silently reintroduce the bug.
     pub const fn set_reusable(&mut self, reusable: bool) {
         self.reusable = reusable;
     }
