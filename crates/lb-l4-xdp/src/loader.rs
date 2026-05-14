@@ -83,12 +83,48 @@ pub struct FlowKey {
     /// IP protocol (TCP=6, UDP=17).
     pub protocol: u8,
     /// Padding to keep the key 16 bytes wide for verifier alignment.
+    ///
+    /// CODE-2-07: kept `pub` for backwards-compatibility with existing
+    /// struct-literal construction sites (`lib.rs`, `sim.rs`). New code
+    /// SHOULD prefer [`FlowKey::new`] which guarantees the padding is
+    /// zero-initialised — avoiding the (currently safe but fragile)
+    /// risk of a future contributor reaching for
+    /// `MaybeUninit::uninit().assume_init()`.
     pub pad: [u8; 3],
 }
 
 // SAFETY: `FlowKey` is `#[repr(C)]`, `Copy`, and has no padding reads —
 // aya's `Pod` is a marker trait requiring `Copy + 'static` layout stability.
 unsafe impl Pod for FlowKey {}
+
+impl FlowKey {
+    /// Construct a [`FlowKey`] with explicit zero-initialised padding.
+    ///
+    /// CODE-2-07: the in-tree struct-literal sites are all correct
+    /// today, but the only way to keep that property under refactor is
+    /// to funnel callers through a constructor that owns the
+    /// zero-init contract. The `pad` bytes are set to `[0u8; 3]`
+    /// unconditionally — callers may not override them.
+    ///
+    /// Sizes are documented at [`FLOWKEY_SIZE`].
+    #[must_use]
+    pub const fn new(
+        src_addr: u32,
+        src_port: u16,
+        dst_addr: u32,
+        dst_port: u16,
+        protocol: u8,
+    ) -> Self {
+        Self {
+            src_addr,
+            dst_addr,
+            src_port,
+            dst_port,
+            protocol,
+            pad: [0u8; 3],
+        }
+    }
+}
 
 /// IPv4 backend entry — matches `BackendEntry` in the ebpf crate.
 #[repr(C)]
@@ -102,7 +138,8 @@ pub struct BackendEntry {
     pub backend_ip: u32,
     /// Backend L4 port (network byte order).
     pub backend_port: u16,
-    /// Padding.
+    /// Padding. CODE-2-07: prefer [`BackendEntry::new`] which
+    /// zero-initialises this field.
     pub pad: u16,
     /// Destination MAC for the rewrite (the backend's).
     pub backend_mac: [u8; 6],
@@ -112,6 +149,31 @@ pub struct BackendEntry {
 
 // SAFETY: `#[repr(C)] + Copy + 'static`; matches ebpf layout exactly.
 unsafe impl Pod for BackendEntry {}
+
+impl BackendEntry {
+    /// Construct a [`BackendEntry`] with zero-initialised padding.
+    ///
+    /// CODE-2-07: see [`FlowKey::new`] for the rationale.
+    #[must_use]
+    pub const fn new(
+        backend_idx: u32,
+        flags: u32,
+        backend_ip: u32,
+        backend_port: u16,
+        backend_mac: [u8; 6],
+        src_mac: [u8; 6],
+    ) -> Self {
+        Self {
+            backend_idx,
+            flags,
+            backend_ip,
+            backend_port,
+            pad: 0,
+            backend_mac,
+            src_mac,
+        }
+    }
+}
 
 /// IPv6 flow key — matches `FlowKeyV6` in the ebpf crate.
 #[repr(C)]
@@ -127,12 +189,33 @@ pub struct FlowKeyV6 {
     pub dst_port: u16,
     /// IP protocol (TCP=6, UDP=17).
     pub protocol: u8,
-    /// Padding to 40 bytes.
+    /// Padding to 40 bytes. CODE-2-07: prefer [`FlowKeyV6::new`].
     pub pad: [u8; 3],
 }
 
 // SAFETY: `#[repr(C)] + Copy + 'static`; matches ebpf layout exactly.
 unsafe impl Pod for FlowKeyV6 {}
+
+impl FlowKeyV6 {
+    /// Construct a [`FlowKeyV6`] with zero-initialised padding.
+    #[must_use]
+    pub const fn new(
+        src_addr: [u8; 16],
+        src_port: u16,
+        dst_addr: [u8; 16],
+        dst_port: u16,
+        protocol: u8,
+    ) -> Self {
+        Self {
+            src_addr,
+            dst_addr,
+            src_port,
+            dst_port,
+            protocol,
+            pad: [0u8; 3],
+        }
+    }
+}
 
 /// IPv6 backend entry — matches `BackendEntryV6` in the ebpf crate.
 #[repr(C)]
@@ -146,7 +229,7 @@ pub struct BackendEntryV6 {
     pub backend_ip: [u8; 16],
     /// Backend L4 port (network byte order).
     pub backend_port: u16,
-    /// Padding.
+    /// Padding. CODE-2-07: prefer [`BackendEntryV6::new`].
     pub pad: u16,
     /// Destination MAC for the rewrite (the backend's).
     pub backend_mac: [u8; 6],
@@ -156,6 +239,52 @@ pub struct BackendEntryV6 {
 
 // SAFETY: `#[repr(C)] + Copy + 'static`; matches ebpf layout exactly.
 unsafe impl Pod for BackendEntryV6 {}
+
+impl BackendEntryV6 {
+    /// Construct a [`BackendEntryV6`] with zero-initialised padding.
+    #[must_use]
+    pub const fn new(
+        backend_idx: u32,
+        flags: u32,
+        backend_ip: [u8; 16],
+        backend_port: u16,
+        backend_mac: [u8; 6],
+        src_mac: [u8; 6],
+    ) -> Self {
+        Self {
+            backend_idx,
+            flags,
+            backend_ip,
+            backend_port,
+            pad: 0,
+            backend_mac,
+            src_mac,
+        }
+    }
+}
+
+// CODE-2-07: byte-size assertions matching the BPF-side struct layouts.
+// These compile-time checks fail the build if either side's layout
+// drifts (e.g. a `pad` byte is dropped or a field width changes).
+//
+// FlowKey:        4 + 4 + 2 + 2 + 1 + 3 = 16
+// FlowKeyV6:      16 + 16 + 2 + 2 + 1 + 3 = 40
+// BackendEntry:   4 + 4 + 4 + 2 + 2 + 6 + 6 = 28
+// BackendEntryV6: 4 + 4 + 16 + 2 + 2 + 6 + 6 = 40
+
+/// Expected wire size of [`FlowKey`] (matches BPF-side struct).
+pub const FLOWKEY_SIZE: usize = 16;
+/// Expected wire size of [`FlowKeyV6`] (matches BPF-side struct).
+pub const FLOWKEY_V6_SIZE: usize = 40;
+/// Expected wire size of [`BackendEntry`] (matches BPF-side struct).
+pub const BACKEND_ENTRY_SIZE: usize = 28;
+/// Expected wire size of [`BackendEntryV6`] (matches BPF-side struct).
+pub const BACKEND_ENTRY_V6_SIZE: usize = 40;
+
+const _: () = assert!(core::mem::size_of::<FlowKey>() == FLOWKEY_SIZE);
+const _: () = assert!(core::mem::size_of::<FlowKeyV6>() == FLOWKEY_V6_SIZE);
+const _: () = assert!(core::mem::size_of::<BackendEntry>() == BACKEND_ENTRY_SIZE);
+const _: () = assert!(core::mem::size_of::<BackendEntryV6>() == BACKEND_ENTRY_V6_SIZE);
 
 /// XDP attach mode, mirroring the kernel's `XDP_FLAGS_*` bits.
 ///
