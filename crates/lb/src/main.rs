@@ -66,7 +66,9 @@ use lb_l7::upstream::{RoundRobinUpstreams, UpstreamBackend, UpstreamProto};
 use lb_l7::ws_proxy::{WsConfig, WsProxy};
 use lb_observability::{MetricsRegistry, admin_http, http_latency_buckets};
 use lb_quic::{QuicListener, QuicListenerParams};
-use lb_security::{ConnGate, HooksBundle, SecurityHooks, SmuggleMode, TicketRotator};
+use lb_security::{
+    ConnGate, HooksBundle, SecurityHooks, SmuggleMode, TicketRotator, Watchdog, WatchdogConfig,
+};
 
 mod xdp;
 
@@ -780,6 +782,7 @@ fn build_h3_upstream_pool(
 /// through the multi-protocol surface ([`H1Proxy::with_multi_proto`])
 /// so a single listener can fan out to mixed-protocol backends in one
 /// round-robin cycle.
+#[allow(clippy::too_many_arguments)]
 fn build_h1_proxy(
     pool: TcpPool,
     upstreams: Vec<UpstreamBackend>,
@@ -790,6 +793,7 @@ fn build_h1_proxy(
     ws_cfg: Option<&WebsocketConfig>,
     is_https: bool,
     hooks: Arc<dyn lb_l7::security_hooks::DynSecurityHooks>,
+    watchdog: Option<Watchdog>,
 ) -> anyhow::Result<Arc<H1Proxy>> {
     let picker = RoundRobinUpstreams::new(upstreams)
         .ok_or_else(|| anyhow::anyhow!("H1 listener requires at least one backend"))?;
@@ -807,6 +811,12 @@ fn build_h1_proxy(
     // L7 hot path (CODE-2-01 trait shim already lives there from
     // Wave-2b).
     proxy = proxy.with_hooks(hooks);
+    // SEC-2-03 follow-on: wire the slowloris / slow-POST Watchdog
+    // into every H1 proxy so per-stream eviction lights up (the
+    // proxy falls back to NoopHooks-style behaviour when `None`).
+    if let Some(wd) = watchdog {
+        proxy = proxy.with_watchdog(wd);
+    }
     if let Some(h2) = h2_pool {
         proxy = proxy.with_h2_upstream(h2);
     }
@@ -835,6 +845,7 @@ fn ws_config_to_runtime(cfg: &WebsocketConfig) -> WsConfig {
 /// Build a [`H2Proxy`] sharing the same picker/alt_svc/timeouts shape as
 /// the matching [`H1Proxy`]. Used when the `h1s` listener negotiates
 /// `h2` via ALPN.
+#[allow(clippy::too_many_arguments)]
 fn build_h2_proxy(
     pool: TcpPool,
     upstreams: Vec<UpstreamBackend>,
@@ -847,6 +858,7 @@ fn build_h2_proxy(
     grpc_cfg: Option<&GrpcListenerConfig>,
     is_https: bool,
     hooks: Arc<dyn lb_l7::security_hooks::DynSecurityHooks>,
+    watchdog: Option<Watchdog>,
 ) -> anyhow::Result<Arc<H2Proxy>> {
     let picker = RoundRobinUpstreams::new(upstreams)
         .ok_or_else(|| anyhow::anyhow!("H2 listener requires at least one backend"))?;
@@ -871,6 +883,12 @@ fn build_h2_proxy(
     // SEC-2-04 Wave 2c-2: install the production HooksBundle on the
     // L7 hot path.
     proxy = proxy.with_hooks(hooks);
+    // SEC-2-03 follow-on: same wiring as `build_h1_proxy` — install
+    // the Watchdog on the H2 path so slow-POST eviction lights up
+    // for ALPN=h2 streams too.
+    if let Some(wd) = watchdog {
+        proxy = proxy.with_watchdog(wd);
+    }
     if let Some(h2) = h2_pool {
         proxy = proxy.with_h2_upstream(h2);
     }
@@ -989,6 +1007,7 @@ async fn spawn_tcp(
     shutdown_token: CancellationToken,
     tracker: TaskTracker,
     tls_reload_registry: Arc<PlMutex<Vec<TlsReloadEntry>>>,
+    watchdog: Option<Watchdog>,
 ) -> anyhow::Result<tokio::task::JoinHandle<anyhow::Result<()>>> {
     let mut addresses = Vec::with_capacity(listener_cfg.backends.len());
     let mut backends = Vec::with_capacity(listener_cfg.backends.len());
@@ -1023,6 +1042,7 @@ async fn spawn_tcp(
         &tls_reload_registry,
         &tracker,
         &shutdown_token,
+        watchdog.as_ref(),
     )?;
     let state = Arc::new(ListenerState {
         backends,
@@ -1067,6 +1087,7 @@ fn build_listener_mode(
     tls_reload_registry: &Arc<PlMutex<Vec<TlsReloadEntry>>>,
     tracker: &TaskTracker,
     shutdown_token: &CancellationToken,
+    watchdog: Option<&Watchdog>,
 ) -> anyhow::Result<ListenerMode> {
     // SEC-2-04 Wave 2c-2: cloned into every L7 proxy constructor
     // below via `with_hooks`. The same bundle is held at accept-site
@@ -1128,6 +1149,7 @@ fn build_listener_mode(
                 listener_cfg.websocket.as_ref(),
                 false,
                 Arc::clone(&hooks_arc_dyn),
+                watchdog.cloned(),
             )
             .with_context(|| format!("H1 setup failed for {}", listener_cfg.address))?;
             tracing::info!(
@@ -1188,6 +1210,7 @@ fn build_listener_mode(
                 listener_cfg.websocket.as_ref(),
                 true,
                 Arc::clone(&hooks_arc_dyn),
+                watchdog.cloned(),
             )
             .with_context(|| format!("H1s setup failed for {}", listener_cfg.address))?;
             let h2_proxy = build_h2_proxy(
@@ -1202,6 +1225,7 @@ fn build_listener_mode(
                 listener_cfg.grpc.as_ref(),
                 true,
                 Arc::clone(&hooks_arc_dyn),
+                watchdog.cloned(),
             )
             .with_context(|| format!("H2s setup failed for {}", listener_cfg.address))?;
             tracing::info!(
@@ -1689,6 +1713,55 @@ async fn async_main() -> anyhow::Result<()> {
         "accept-loop guards configured (CODE-2-05/06/09 + SEC-2-04 — Wave 2c-2)"
     );
 
+    // SEC-2-03 follow-on: construct the per-process Watchdog from the
+    // optional `[runtime.watchdog]` block and spawn a sweep loop on
+    // the Shutdown tracker so it joins cleanly during drain. The
+    // sweep cadence is operator-tunable; the Watchdog itself is
+    // cheap to clone (`Arc` newtype) so each L7 proxy gets its own
+    // handle that shares the same connection table.
+    let watchdog_cfg = config
+        .runtime
+        .as_ref()
+        .and_then(|r| r.watchdog)
+        .unwrap_or_default();
+    let watchdog = Watchdog::new(WatchdogConfig {
+        min_rate_bps: watchdog_cfg.body_progress_min_bps,
+        rate_window: Duration::from_secs(1),
+        max_registered: 100_000,
+    });
+    {
+        let wd = watchdog.clone();
+        let cancel = shutdown.token().clone();
+        let sweep_interval = Duration::from_millis(watchdog_cfg.sweep_interval_ms);
+        shutdown.tracker().spawn(async move {
+            let mut ticker = tokio::time::interval(sweep_interval);
+            ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+            loop {
+                tokio::select! {
+                    biased;
+                    () = cancel.cancelled() => {
+                        tracing::debug!("Watchdog sweeper shutting down");
+                        return;
+                    }
+                    _ = ticker.tick() => {}
+                }
+                let evicted = wd.sweep_expired();
+                if !evicted.is_empty() {
+                    tracing::warn!(
+                        evicted = evicted.len(),
+                        "Watchdog swept stalled connections (slow-loris/slow-POST)",
+                    );
+                }
+            }
+        });
+    }
+    tracing::info!(
+        header_deadline_ms = watchdog_cfg.header_deadline_ms,
+        body_progress_min_bps = watchdog_cfg.body_progress_min_bps,
+        sweep_interval_ms = watchdog_cfg.sweep_interval_ms,
+        "SEC-2-03 Watchdog wired into accept-site + L7 proxies"
+    );
+
     // REL-2-03 (Wave 2c-2): registry of TLS reloadables, populated as
     // each TLS / H1s listener spawns its bundle. The SIGUSR1 handler
     // below iterates this list, calls `reload_tls_bundle` for each, and
@@ -1725,6 +1798,7 @@ async fn async_main() -> anyhow::Result<()> {
             shutdown.token().clone(),
             shutdown.tracker().clone(),
             Arc::clone(&tls_reload_registry),
+            Some(watchdog.clone()),
         )
         .await?;
         listener_handles.push(handle);
@@ -2702,6 +2776,7 @@ mod tests {
             &tls_reload_registry,
             &tracker,
             &cancel,
+            None,
         );
         assert!(outcome.is_err(), "typo protocol should have errored");
         let msg = match outcome {

@@ -47,6 +47,20 @@ Bypass attempts:
 Adversarial note: the API + integration point + tests are correct in isolation; the runtime-side instantiation is missing. An attacker holding the request header line open past hyper's 10 s header timeout is still caught by hyper, but the per-stream `WatchdogConfig` thresholds (configurable, finer-grained) are dead until main.rs constructs a `Watchdog` and passes it via `with_watchdog`.
 Verdict:          **Accepted-with-caveat** — TLS-handshake half (SEC-2-10) verified; HTTP-request half ships the API + lb-l7 surface but `crates/lb/src/main.rs` does not instantiate a `Watchdog` and so slow-POST detection is dormant. Tracking the runtime-side wire-up as a Round-6 follow-up (suggested commit: construct `Arc<Watchdog>` alongside `HooksBundle` and pass via `.with_watchdog`).
 
+**Round-6 closure (task #37, rel acting with sec authority)**:
+`crates/lb/src/main.rs::async_main` now constructs a per-process
+`Watchdog` (`WatchdogConfig` sourced from a new
+`[runtime.watchdog]` block — `header_deadline_ms`,
+`body_progress_min_bps`, `sweep_interval_ms`), spawns the sweep
+loop via `shutdown.tracker().spawn(...)` so it joins cleanly
+during drain, and threads the watchdog into every `build_h1_proxy`
+/ `build_h2_proxy` call via `.with_watchdog(watchdog.clone())`.
+HTTP-side slow-loris / slow-POST eviction is therefore live as of
+this commit. Proof: `tests/watchdog_wired.rs::test_slow_loris_evicted_within_deadline`
+(plus the existing `lb-security` Watchdog unit/proof tests).
+
+Status: **Verified-Fixed**
+
 ### SEC-2-04 — ConnGate + per-IP / per-listener cap
 Author-SHA(s):  e36b50f (ConnGate API), 8e048c0 (proof tests), 4001791 (HooksBundle wiring into accept loop + L7)
 Proof-test re-ran:
@@ -203,7 +217,7 @@ Verdict:          **Verified-Fixed** (informational; the actionable hand-off has
 |-----------|-----------------------------------------|
 | SEC-2-01  | Verified-Fixed                          |
 | SEC-2-02  | Verified-Fixed                          |
-| SEC-2-03  | Accepted-with-caveat (HTTP-side Watchdog API + lb-l7 surface verified; main.rs never instantiates a `Watchdog`, so slow-progress eviction is dormant. TLS-handshake half (SEC-2-10) is fully wired.) |
+| SEC-2-03  | Verified-Fixed (Round-6 closure, task #37: main.rs now constructs `Watchdog`, spawns sweep on `Shutdown::tracker`, and threads it into every H1/H2 proxy via `.with_watchdog`; runtime knobs under `[runtime.watchdog]`. HTTP-side eviction live.) |
 | SEC-2-04  | Verified-Fixed (deep adversarial probe — atomic ordering, Drop, GC race, rollback amplification, TOCTOU — no bypass) |
 | SEC-2-05  | Verified-Fixed                          |
 | SEC-2-06  | Verified-Fixed (deep adversarial probe — constant-time eq, header canonicalisation, bind-loopback edges, probe-path prefix tricks, token redaction — no bypass) |
@@ -219,5 +233,10 @@ Verdict:          **Verified-Fixed** (informational; the actionable hand-off has
 | SEC-2-16  | Verified-Fixed (info; CODE-2-04 picked up the hand-off) |
 
 **Tally:** 13 Verified-Fixed, 2 Accepted-with-caveat (SEC-2-03 HTTP-half wiring + SEC-2-09 latent until CODE-2-07), 0 Push-back-to-Round-3.
+
+**Round-6 update (task #37):** SEC-2-03 moved from Accepted-with-caveat
+→ Verified-Fixed once `crates/lb/src/main.rs` started constructing the
+`Watchdog` + spawning the sweep loop + threading the handle into every
+H1/H2 proxy. SEC-2-09 remains latent.
 
 — `code`, Round 5 sec-fix verification.

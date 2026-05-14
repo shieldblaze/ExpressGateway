@@ -182,6 +182,70 @@ pub struct RuntimeConfig {
     /// (rustls 0.23 default `&[&TLS12, &TLS13]`).
     #[serde(default)]
     pub tls: Option<RuntimeTlsConfig>,
+    /// SEC-2-03 follow-on: optional `[runtime.watchdog]` block. When
+    /// present (or when defaulted via `RuntimeConfig::default`), the
+    /// binary instantiates an `lb_security::Watchdog`, spawns a
+    /// shutdown-tracked sweep loop, and threads it into every
+    /// `H1Proxy` / `H2Proxy` for per-stream slowloris / slow-POST
+    /// eviction. When absent, the proxies keep the legacy NoopHooks
+    /// behaviour (hyper's header-timeout still bites, but the
+    /// finer-grained rate floor is dormant).
+    #[serde(default)]
+    pub watchdog: Option<RuntimeWatchdogConfig>,
+}
+
+/// SEC-2-03 follow-on: per-process slowloris / slow-POST watchdog
+/// knobs. Mirrors `lb_security::WatchdogConfig` plus the sweep-loop
+/// cadence and the per-request header deadline.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct RuntimeWatchdogConfig {
+    /// Per-request header-phase deadline, in milliseconds. Used as
+    /// the `deadline` argument to `Watchdog::register` for inbound
+    /// HTTP requests. Default `5_000 ms` (the SEC-2-03 plan's
+    /// header-phase cap); validation range `100..=60_000`.
+    #[serde(default = "default_watchdog_header_deadline_ms")]
+    pub header_deadline_ms: u64,
+    /// Slow-POST body-phase rate floor in bytes per second. Connections
+    /// whose observed throughput drops below this over the configured
+    /// `rate_window` are evicted with `WatchdogError::SlowRate`. `0`
+    /// disables the body-phase rate check (deadline-only mode).
+    /// Default `64 B/s` per the SEC-2-03 plan; validation range
+    /// `0..=10_000_000`.
+    #[serde(default = "default_watchdog_body_progress_min_bps")]
+    pub body_progress_min_bps: u64,
+    /// Cadence of the sweep-loop that evicts connections completely
+    /// stalled (no `progress` calls). Default `1_000 ms`; validation
+    /// range `100..=60_000`.
+    #[serde(default = "default_watchdog_sweep_interval_ms")]
+    pub sweep_interval_ms: u64,
+}
+
+impl Default for RuntimeWatchdogConfig {
+    fn default() -> Self {
+        Self {
+            header_deadline_ms: default_watchdog_header_deadline_ms(),
+            body_progress_min_bps: default_watchdog_body_progress_min_bps(),
+            sweep_interval_ms: default_watchdog_sweep_interval_ms(),
+        }
+    }
+}
+
+/// SEC-2-03 follow-on: serde default for
+/// `RuntimeWatchdogConfig::header_deadline_ms`.
+const fn default_watchdog_header_deadline_ms() -> u64 {
+    5_000
+}
+
+/// SEC-2-03 follow-on: serde default for
+/// `RuntimeWatchdogConfig::body_progress_min_bps`.
+const fn default_watchdog_body_progress_min_bps() -> u64 {
+    64
+}
+
+/// SEC-2-03 follow-on: serde default for
+/// `RuntimeWatchdogConfig::sweep_interval_ms`.
+const fn default_watchdog_sweep_interval_ms() -> u64 {
+    1_000
 }
 
 /// PROTO-2-14: process-wide TLS-policy block.
@@ -796,6 +860,31 @@ fn validate_runtime(rt: &RuntimeConfig) -> Result<(), ConfigError> {
             "runtime.per_ip_connection_cap={} out of range 1..=2000000",
             rt.per_ip_connection_cap
         )));
+    }
+    // SEC-2-03 follow-on: validate the optional watchdog block. We
+    // bound `header_deadline_ms` like `connect_timeout_ms` and
+    // `sweep_interval_ms` to a similar range; `body_progress_min_bps`
+    // is a soft rate floor with a 10 MB/s ceiling — anything above
+    // would push false-positive evictions on slow mobile uplinks.
+    if let Some(wd) = rt.watchdog.as_ref() {
+        if !(100..=60_000).contains(&wd.header_deadline_ms) {
+            return Err(ConfigError::Validation(format!(
+                "runtime.watchdog.header_deadline_ms={} out of range 100..=60000",
+                wd.header_deadline_ms
+            )));
+        }
+        if wd.body_progress_min_bps > 10_000_000 {
+            return Err(ConfigError::Validation(format!(
+                "runtime.watchdog.body_progress_min_bps={} out of range 0..=10000000",
+                wd.body_progress_min_bps
+            )));
+        }
+        if !(100..=60_000).contains(&wd.sweep_interval_ms) {
+            return Err(ConfigError::Validation(format!(
+                "runtime.watchdog.sweep_interval_ms={} out of range 100..=60000",
+                wd.sweep_interval_ms
+            )));
+        }
     }
     Ok(())
 }
@@ -1634,6 +1723,7 @@ xdp_interface = "eth0"
                 connect_timeout_ms: 5_000,
                 per_ip_connection_cap: 1_024,
                 tls: None,
+                watchdog: None,
             }),
             observability: None,
             admin: None,
@@ -1668,6 +1758,7 @@ xdp_interface = "eth0"
                 connect_timeout_ms: 5_000,
                 per_ip_connection_cap: 1_024,
                 tls: None,
+                watchdog: None,
             }),
             observability: None,
             admin: None,
