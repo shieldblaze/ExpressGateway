@@ -584,6 +584,7 @@ Cross-ref: PROTO-2-04 (WebSocket conformance breadth).
 ---
 
 ### PROTO-2-14 — TLS 1.2 enabled on every TLS listener; no `tls13_only` config switch
+Status:   Proposed-Fix(Wave-2b-2: new `[runtime.tls]` block with `tls13_only: bool` (default false) added to `crates/lb-config/src/lib.rs::RuntimeConfig`; new `lb_security::build_server_config_with_policy` function in `crates/lb-security/src/ticket.rs` configures rustls via `with_protocol_versions(&[&rustls::version::TLS13])` when `tls13_only = true`. Original `build_server_config` retained as a backwards-compat shim that calls the new function with `tls13_only = false`. Proof: `crates/lb-security/tests/tls_versions.rs::test_tls13_only_rejects_tls12` (live TLS 1.2 client handshake against a tls13_only server fails) + `default_config_lists_tls12_and_tls13` + `tls13_only_config_builds_without_tls12`. Wave-2c binary wiring threads the config field into the call.)
 Severity: medium
 Status:   Open
 Location:

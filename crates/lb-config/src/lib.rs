@@ -103,6 +103,35 @@ pub struct RuntimeConfig {
     /// outside that range it bails with a clear error.
     #[serde(default = "default_drain_timeout_ms")]
     pub drain_timeout_ms: u64,
+    /// PROTO-2-14: optional `[runtime.tls]` block for process-wide
+    /// TLS-policy knobs. Currently carries a single field
+    /// (`tls13_only`); future knobs (preferred-cipher list, ALPN
+    /// allow-list) live here too. When absent, all defaults apply
+    /// (rustls 0.23 default `&[&TLS12, &TLS13]`).
+    #[serde(default)]
+    pub tls: Option<RuntimeTlsConfig>,
+}
+
+/// PROTO-2-14: process-wide TLS-policy block.
+///
+/// Lives under `[runtime.tls]` to keep listener-level
+/// `[listeners.tls]` (cert / key / kid paths) separate from
+/// gateway-wide *policy* knobs that apply to every TLS-bearing
+/// listener uniformly.
+#[derive(Clone, Debug, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct RuntimeTlsConfig {
+    /// When `true`, every TLS listener (`protocol = "tls" | "h1s"`)
+    /// negotiates **only** TLS 1.3 — rustls is configured with
+    /// `versions(&[&TLS13])` instead of the default
+    /// `&[&TLS12, &TLS13]`. Default: `false` (rustls default).
+    ///
+    /// Operators turn this on to comply with policies that forbid
+    /// TLS 1.2 (e.g. PCI-DSS 4.0 §4.2.1.1, NIST SP 800-52 Rev. 2
+    /// post-2023 transition). It is **not** a security gain in
+    /// general — rustls's TLS 1.2 cipher suites are post-quantum
+    /// downgrade-safe — but the conformance audit may require it.
+    #[serde(default)]
+    pub tls13_only: bool,
 }
 
 /// CODE-2-03: serde default for `RuntimeConfig::drain_timeout_ms`.
@@ -1428,6 +1457,7 @@ xdp_interface = "eth0"
                 xdp_interface: None,
                 xdp_mode: XdpModeChoice::Auto,
                 drain_timeout_ms: 10_000,
+                tls: None,
             }),
             observability: None,
         };
@@ -1455,6 +1485,7 @@ xdp_interface = "eth0"
                 xdp_interface: None,
                 xdp_mode: XdpModeChoice::Auto,
                 drain_timeout_ms: 10_000,
+                tls: None,
             }),
             observability: None,
         };

@@ -322,11 +322,40 @@ pub fn build_server_config(
     key_der: PrivateKeyDer<'static>,
     alpn_protocols: &[&[u8]],
 ) -> Result<Arc<rustls::ServerConfig>, TicketError> {
+    build_server_config_with_policy(rotator, cert_chain, key_der, alpn_protocols, false)
+}
+
+/// PROTO-2-14: like [`build_server_config`] but with an explicit
+/// `tls13_only` policy flag. When `tls13_only` is `true`, rustls is
+/// configured with `versions(&[&rustls::version::TLS13])` so the
+/// listener refuses TLS 1.2 ClientHellos. When `false`, the default
+/// rustls protocol set (`&[&TLS12, &TLS13]`) is used (matches
+/// [`build_server_config`]).
+///
+/// Wave-2c binary wiring threads the value from
+/// `lb_config::RuntimeTlsConfig::tls13_only`.
+///
+/// # Errors
+///
+/// Same shape as [`build_server_config`].
+pub fn build_server_config_with_policy(
+    rotator: Arc<Mutex<TicketRotator>>,
+    cert_chain: Vec<CertificateDer<'static>>,
+    key_der: PrivateKeyDer<'static>,
+    alpn_protocols: &[&[u8]],
+    tls13_only: bool,
+) -> Result<Arc<rustls::ServerConfig>, TicketError> {
     let provider = Arc::new(rustls::crypto::ring::default_provider());
-    let builder = rustls::ServerConfig::builder_with_provider(provider)
-        .with_safe_default_protocol_versions()
-        .map_err(|e| TicketError::ServerConfig(e.to_string()))?
-        .with_no_client_auth();
+    let builder = if tls13_only {
+        rustls::ServerConfig::builder_with_provider(provider)
+            .with_protocol_versions(&[&rustls::version::TLS13])
+            .map_err(|e| TicketError::ServerConfig(e.to_string()))?
+    } else {
+        rustls::ServerConfig::builder_with_provider(provider)
+            .with_safe_default_protocol_versions()
+            .map_err(|e| TicketError::ServerConfig(e.to_string()))?
+    }
+    .with_no_client_auth();
     let mut cfg = builder
         .with_single_cert(cert_chain, key_der)
         .map_err(|e| TicketError::ServerConfig(e.to_string()))?;

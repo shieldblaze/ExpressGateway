@@ -44,7 +44,10 @@ pub use retry::{DEFAULT_RETRY_MAX_AGE, RETRY_SECRET_LEN, RetryError, RetryTokenS
 pub use slow_post::SlowPostDetector;
 pub use slowloris::SlowlorisDetector;
 pub use smuggle::{SmuggleDetector, SmuggleMode};
-pub use ticket::{RotatingTicketer, TicketError, TicketKey, TicketRotator, build_server_config};
+pub use ticket::{
+    RotatingTicketer, TicketError, TicketKey, TicketRotator, build_server_config,
+    build_server_config_with_policy,
+};
 pub use watchdog::{ConnId, Watchdog, WatchdogConfig, WatchdogError};
 pub use zero_rtt::{DEFAULT_ZERO_RTT_REPLAY_WINDOW_SIZE, ZeroRttReplayGuard};
 
