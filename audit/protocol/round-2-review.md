@@ -427,7 +427,17 @@ PROTO-2-01 (host disagreement is a smuggling sibling).
 
 ### PROTO-2-11 — No HTTP/2 `GOAWAY` and no HTTP/3 `CONNECTION_CLOSE` on drain / SIGTERM
 Severity: high
-Status:   Open
+Status:   Proposed-Fix(H3 half) — `lb-quic` actor now emits
+application-layer `CONNECTION_CLOSE` with `H3_NO_ERROR = 0x0100` on
+cancel via `graceful_h3_shutdown`. Proof:
+`crates/lb-quic/tests/h3_graceful_close.rs::test_h3_connection_close_emitted_on_cancel`
+drives an end-to-end loopback handshake, calls the helper, and asserts
+the client observes `peer_error { is_app: true, error_code: 0x0100 }`.
+The H/2 `GOAWAY` half (hyper-side wiring in
+`crates/lb-l7/src/h{1,2}_proxy.rs` and the SIGTERM handler in
+`crates/lb/src/main.rs:1033-1059`) is **Open** — Wave-2c code-owned
+work to plumb `lb_core::Shutdown::token()` into the listener crate
+and call `hyper::server::conn::http2::Connection::graceful_shutdown`.
 Location:
   * SIGTERM handler: `crates/lb/src/main.rs:1033-1059` —
     receives signal, calls `JoinHandle::abort()` on every TCP

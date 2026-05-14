@@ -35,6 +35,21 @@ use crate::h3_bridge::{
     H3Request, StreamRxBuf, h3_to_h1_roundtrip, h3_to_h2_roundtrip, h3_to_h3_roundtrip,
 };
 
+/// Application-layer error code emitted in the `CONNECTION_CLOSE`
+/// frame the actor sends when the listener-wide cancel token fires.
+///
+/// `H3_NO_ERROR = 0x0100` is RFC 9114 §8.1's "graceful drain"
+/// signal — every conformant H3 peer parses it as an orderly
+/// shutdown rather than an abort (PROTO-2-11).
+pub const H3_NO_ERROR: u64 = 0x0100;
+
+/// Upper bound on how long [`graceful_h3_shutdown`] will pump the
+/// connection after issuing `close()` before giving up. Quiche enters
+/// the draining state for `3 * PTO` (RFC 9000 §10.1); 500 ms is
+/// comfortably above that for any sane PTO on a loopback link and
+/// puts a hard ceiling on shutdown latency in production.
+const GRACEFUL_SHUTDOWN_BUDGET: Duration = Duration::from_millis(500);
+
 /// Raw UDP packet forwarded from the router to a single actor.
 #[derive(Debug)]
 pub struct InboundPacket {
@@ -138,8 +153,7 @@ pub async fn run_actor(mut params: ActorParams) -> std::io::Result<()> {
         tokio::select! {
             biased;
             () = params.cancel.cancelled() => {
-                let _ = params.conn.close(false, 0x0, b"shutdown");
-                drain_conn_send(&params.socket, &mut params.conn, &mut out_buf).await;
+                graceful_h3_shutdown(&mut params.conn, &params.socket, &mut out_buf).await;
                 break;
             }
             pkt = params.inbound.recv() => {
@@ -243,6 +257,63 @@ fn drain_streams_to_conn(conn: &mut quiche::Connection, streams: &mut HashMap<u6
         }
     }
     streams.retain(|_, tx| !tx.finished);
+}
+
+/// Emit a H3 `CONNECTION_CLOSE` frame and pump the connection until
+/// quiche reports closed (PROTO-2-11).
+///
+/// The actor calls this from its cancel branch when the listener-wide
+/// `CancellationToken` (derived from `lb_core::Shutdown::token()` —
+/// the wiring of the listener-level token onto every actor is Wave-2c
+/// code-owned work; here the actor merely emits the frame on whatever
+/// cancel signal it receives) fires.
+///
+/// Behaviour:
+/// 1. Call `quiche::Connection::close(true, H3_NO_ERROR, b"shutdown")`
+///    so the wire frame is an application-layer `CONNECTION_CLOSE`
+///    (frame type 0x1d, RFC 9000 §19.19) carrying RFC 9114 §8.1's
+///    `H3_NO_ERROR = 0x0100`.
+/// 2. Pump `conn.send()` → UDP, plus `on_timeout()` ticks at the PTO
+///    cadence quiche requests, until either `is_closed()` becomes
+///    true (quiche entered the closed state — CLOSE acknowledged or
+///    draining timer elapsed) or [`GRACEFUL_SHUTDOWN_BUDGET`]
+///    elapses.
+///
+/// If `close()` is called on an already-closed connection quiche
+/// returns `Error::Done`; the helper treats that as a no-op so callers
+/// can issue it idempotently.
+pub async fn graceful_h3_shutdown(
+    conn: &mut quiche::Connection,
+    socket: &UdpSocket,
+    out_buf: &mut [u8],
+) {
+    match conn.close(true, H3_NO_ERROR, b"shutdown") {
+        Ok(()) | Err(quiche::Error::Done) => {}
+        Err(e) => {
+            tracing::debug!(error = %e, "conn.close (graceful_h3_shutdown)");
+        }
+    }
+    let deadline = tokio::time::Instant::now() + GRACEFUL_SHUTDOWN_BUDGET;
+    loop {
+        drain_conn_send(socket, conn, out_buf).await;
+        if conn.is_closed() {
+            return;
+        }
+        if tokio::time::Instant::now() >= deadline {
+            tracing::debug!(
+                "graceful_h3_shutdown: budget exhausted before is_closed(); abandoning"
+            );
+            return;
+        }
+        // Quiche's draining timer is per-connection; we wait whichever
+        // is shorter between quiche's own timer suggestion and the
+        // residual budget so we never sleep past the deadline.
+        let quiche_timeout = conn.timeout().unwrap_or(Duration::from_millis(10));
+        let residual = deadline.saturating_duration_since(tokio::time::Instant::now());
+        let wait = quiche_timeout.min(residual);
+        tokio::time::sleep(wait).await;
+        conn.on_timeout();
+    }
 }
 
 /// Repeatedly call `quiche::Connection::send` and send resulting

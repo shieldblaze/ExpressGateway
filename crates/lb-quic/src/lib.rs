@@ -104,6 +104,13 @@ pub mod h3_bridge;
 mod listener;
 mod router;
 
+// PROTO-2-11: expose the H3 graceful-shutdown helper so the integration
+// test in `tests/h3_graceful_close.rs` can drive it standalone without
+// having to spin up a full `ConnectionActor` (which would otherwise
+// require pulling the H3 bridge, TCP pool, and backend wiring through
+// the test rig).
+pub use conn_actor::{H3_NO_ERROR, graceful_h3_shutdown};
+
 // CODE-2-08: re-exported so tests/quic_router_leak.rs can call
 // `CidEntryGuard::new(...)` from the integration-test target.
 pub use cleanup_guard::CidEntryGuard;
