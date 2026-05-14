@@ -1350,19 +1350,80 @@ async fn upstream_response_to_h1(
             );
         }
     };
-    let mut builder = Response::builder().status(translated.status);
+    build_h1_response_with_trailers(translated, alt_svc)
+}
+
+/// PROTO-2-19 (Wave 2c-2): assemble the final H1 wire response from
+/// a translated [`crate::BridgeResponse`]. Shared between
+/// [`upstream_response_to_h1`] (H2→H1) and [`h3_response_to_h1`]
+/// (H3→H1) so the trailer-aware head shape is identical on both
+/// bridges.
+///
+/// When `translated.trailers` is non-empty this function injects
+/// `Transfer-Encoding: chunked` + a `Trailer: <name-list>` declaration
+/// on the response head and drops any incoming `Content-Length` /
+/// `Transfer-Encoding` / `Trailer` (the proxy's authoritative shape
+/// wins). hyper-1's H1 encoder requires both invariants to actually
+/// flush a `Frame::trailers` onto the wire
+/// (`proto/h1/encode.rs:163-213`); without them the bridge fields
+/// would silently disappear. See `audit/protocol/round-6-delta-
+/// findings.md` Vector 6 for the upstream-library citation.
+pub fn build_h1_response_with_trailers(
+    translated: crate::BridgeResponse,
+    alt_svc: Option<AltSvcConfig>,
+) -> Response<BoxBody<Bytes, hyper::Error>> {
+    let status = StatusCode::from_u16(translated.status).unwrap_or(StatusCode::BAD_GATEWAY);
+    let mut builder = Response::builder().status(status);
+    let has_trailers = !translated.trailers.is_empty();
     for (n, v) in &translated.headers {
         if n.starts_with(':') {
             continue;
         }
+        // PROTO-2-19: when re-emitting trailers on the H1 wire, the
+        // response head MUST advertise chunked TE and a `Trailer:`
+        // declaration listing the trailer names. We strip any
+        // pre-existing `transfer-encoding` and `content-length` from
+        // the upstream-translated headers — both are re-injected
+        // below in the trailer-aware shape — and any pre-existing
+        // `trailer` declaration so the proxy's authoritative list
+        // wins.
+        if has_trailers
+            && (n.eq_ignore_ascii_case("transfer-encoding")
+                || n.eq_ignore_ascii_case("content-length")
+                || n.eq_ignore_ascii_case("trailer"))
+        {
+            continue;
+        }
         builder = builder.header(n.as_str(), v.as_str());
+    }
+    if has_trailers {
+        // RFC 9110 §6.6.2: `Trailer:` is end-to-end. RFC 9112 §7.1:
+        // chunked TE is required to carry trailers. RFC 9110 §6.5:
+        // `Content-Length` MUST NOT accompany trailers on a
+        // chunked body — handled by the strip above.
+        let trailer_names: Vec<&str> = translated
+            .trailers
+            .iter()
+            .map(|(n, _)| n.as_str())
+            .collect();
+        let trailer_header = trailer_names.join(", ");
+        if let Ok(v) = HeaderValue::from_str(&trailer_header) {
+            builder = builder.header(hyper::header::TRAILER, v);
+        }
+        builder = builder.header(
+            hyper::header::TRANSFER_ENCODING,
+            HeaderValue::from_static("chunked"),
+        );
     }
     if let Some(alt) = alt_svc {
         if let Ok(value) = HeaderValue::from_str(&alt.header_value()) {
             builder = builder.header(hyper::header::ALT_SVC, value);
         }
     }
-    // PROTO-2-12: emit body + trailers via StreamBody.
+    // PROTO-2-12/-19: emit body + trailers via StreamBody. With
+    // trailers present, the head-level `Transfer-Encoding: chunked`
+    // + `Trailer:` declaration above ensures hyper actually writes
+    // the trailer frame onto the wire.
     let body = build_body_with_trailers(translated.body, &translated.trailers);
     builder.body(body).unwrap_or_else(|_| {
         error_response(
@@ -1464,29 +1525,14 @@ fn h3_response_to_h1(
             );
         }
     };
-    let status = StatusCode::from_u16(translated.status).unwrap_or(StatusCode::BAD_GATEWAY);
-    let mut builder = Response::builder().status(status);
-    for (n, v) in &translated.headers {
-        if n.starts_with(':') {
-            continue;
-        }
-        builder = builder.header(n.as_str(), v.as_str());
-    }
-    if let Some(alt) = alt_svc {
-        if let Ok(value) = HeaderValue::from_str(&alt.header_value()) {
-            builder = builder.header(hyper::header::ALT_SVC, value);
-        }
-    }
-    // PROTO-2-12: trailers field empty for now (H3 surface gap noted
-    // above). Wire-shape is correct once `lb_quic` grows trailer
-    // support.
-    let body = build_body_with_trailers(translated.body, &translated.trailers);
-    builder.body(body).unwrap_or_else(|_| {
-        error_response(
-            StatusCode::INTERNAL_SERVER_ERROR,
-            "build h1 response failed",
-        )
-    })
+    // PROTO-2-19 (Wave 2c-2): share the trailer-aware H1 head shape
+    // with the H2→H1 path via `build_h1_response_with_trailers`. Today
+    // `translated.trailers` is always empty for this leg (the H3
+    // surface gap noted above) so the trailer-injection branch is a
+    // no-op at runtime, but keeping the shared helper guarantees a
+    // future `lb_quic` upgrade that surfaces trailers gets the
+    // correct wire emission for free.
+    build_h1_response_with_trailers(translated, alt_svc)
 }
 
 #[cfg(test)]
