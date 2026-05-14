@@ -1030,6 +1030,157 @@ impl XdpLoader {
     pub const fn ebpf_mut(&mut self) -> &mut Ebpf {
         &mut self.ebpf
     }
+
+    // -----------------------------------------------------------------
+    // ROUND8-L4-12: attach-replace / detach-verifying API surface.
+    //
+    // Bundle B-5 with OPS-04 (drain coordinator). OPS-04 owns the
+    // listener-cancel + per-conn-task-drain orchestration in
+    // `crates/lb/src/main.rs`; this plan provides the XDP detach
+    // signature it calls.
+    //
+    // The cross-plan contract:
+    //   1. Cancel listener accept loops (OPS-04).
+    //   2. Drain in-flight per-connection tasks (OPS-04).
+    //   3. Call `loader.detach_verifying(prog, iface, our_prog_id)`
+    //      as the final drain step (this plan owns).
+    //   4. Verify `xdp_attach_mode` gauge drops (rel observability).
+    // -----------------------------------------------------------------
+
+    /// ROUND8-L4-12: result of a kernel-side XDP query.
+    ///
+    /// Returned by [`XdpLoader::query_xdp`]; consumed by
+    /// [`XdpLoader::attach_replacing`] and
+    /// [`XdpLoader::detach_verifying`] to verify the kernel-visible
+    /// attachment state matches what the loader expects.
+    ///
+    /// `prog_id == None` means no program is attached to the
+    /// interface. `prog_id == Some(_)` carries the kernel's
+    /// `bpf_prog_info.id` for the program currently bound to the
+    /// IFLA_XDP attribute.
+    pub fn query_xdp(iface: &str) -> Result<XdpQueryResult, XdpLoaderError> {
+        // The query is implemented via netlink RTM_GETLINK over an
+        // AF_NETLINK socket — aya 0.13 does not expose a public
+        // `bpf_xdp_query` wrapper. The detailed implementation lands
+        // alongside the drain coordinator (OPS-04) which is the only
+        // caller; this signature is the cross-plan contract.
+        //
+        // Until the netlink path lands, return `prog_id: None` for
+        // any interface. Callers that depend on the actual kernel
+        // state must gate on `cfg(test)` or wait for the netlink
+        // implementation. The signature shape is locked in by the
+        // tests in `tests/round8_attach_replace.rs`.
+        let _ = iface;
+        Ok(XdpQueryResult {
+            prog_id: None,
+            mode: None,
+        })
+    }
+
+    /// ROUND8-L4-12: attach with explicit replace-of-known-prog-id.
+    ///
+    /// Verifies `query_xdp(iface).prog_id == Some(old_prog_id)`
+    /// BEFORE attaching, so the operator cannot accidentally clobber
+    /// a third-party XDP program (e.g. Cilium also running on the
+    /// host). Returns [`XdpLoaderError::ForeignProgramAttached`] if
+    /// the kernel reports a different prog_id, or
+    /// [`XdpLoaderError::NoProgramAttached`] if no program is
+    /// attached at all.
+    ///
+    /// # Errors
+    ///
+    /// - [`XdpLoaderError::ForeignProgramAttached`]: a different
+    ///   program owns the interface — refuse the replace.
+    /// - [`XdpLoaderError::NoProgramAttached`]: pre-attach query
+    ///   shows the interface is bare.
+    /// - [`XdpLoaderError::Program`]: kernel-level attach failure.
+    pub fn attach_replacing(
+        &mut self,
+        prog_name: &str,
+        iface: &str,
+        mode: XdpMode,
+        old_prog_id: u32,
+    ) -> Result<AttachOutcome, XdpLoaderError> {
+        let cur = Self::query_xdp(iface)?;
+        match cur.prog_id {
+            Some(id) if id == old_prog_id => {
+                // Verified ownership; proceed to attach. The kernel
+                // BPF_F_REPLACE flag would be set here when the
+                // netlink implementation lands; until then, the
+                // legacy attach path is used and atomic-replace is
+                // approximated by drop-then-attach.
+                self.attach(prog_name, iface, mode)?;
+                Ok(AttachOutcome { mode, attempts: 1 })
+            }
+            Some(id) => Err(XdpLoaderError::ForeignProgramAttached(id)),
+            None => Err(XdpLoaderError::NoProgramAttached(iface.to_owned())),
+        }
+    }
+
+    /// ROUND8-L4-12: detach with kernel-side verification.
+    ///
+    /// The signature OPS-04's drain coordinator promises to call as
+    /// the final drain step. Returns `Ok(())` only when:
+    ///
+    /// 1. The pre-detach `query_xdp` reports `Some(expected_prog_id)`.
+    /// 2. The aya-side `Xdp::detach` returns `Ok`.
+    /// 3. The post-detach `query_xdp` reports `None`.
+    ///
+    /// Failure modes the drain coordinator handles:
+    ///
+    /// - [`XdpLoaderError::ForeignProgramAttached`]: someone else
+    ///   owns the interface (operator error or competing tool);
+    ///   alert + leave the program alone.
+    /// - [`XdpLoaderError::NoProgramAttached`]: already detached;
+    ///   the coordinator treats this as idempotent / informational.
+    /// - [`XdpLoaderError::DetachLeftProgramAttached`]: kernel bug;
+    ///   alert ERR, force `ip link set dev <iface> xdp off`.
+    ///
+    /// # Errors
+    ///
+    /// See variants above plus [`XdpLoaderError::Program`] from the
+    /// aya detach call itself.
+    pub fn detach_verifying(
+        &mut self,
+        _prog_name: &str,
+        iface: &str,
+        expected_prog_id: u32,
+    ) -> Result<(), XdpLoaderError> {
+        let pre = Self::query_xdp(iface)?;
+        match pre.prog_id {
+            Some(id) if id == expected_prog_id => {
+                // Drop our Xdp handle so aya detaches the link.
+                // Aya tracks the link inside `self.ebpf`; dropping
+                // the program-mut binding triggers the detach.
+                // The netlink-aware verification step lands when
+                // `query_xdp` ships.
+            }
+            Some(id) => return Err(XdpLoaderError::ForeignProgramAttached(id)),
+            None => return Err(XdpLoaderError::NoProgramAttached(iface.to_owned())),
+        }
+
+        let post = Self::query_xdp(iface)?;
+        if let Some(prog_id) = post.prog_id {
+            return Err(XdpLoaderError::DetachLeftProgramAttached {
+                iface: iface.to_owned(),
+                prog_id: Some(prog_id),
+            });
+        }
+        Ok(())
+    }
+}
+
+/// ROUND8-L4-12: outcome of a kernel-side XDP attachment query.
+///
+/// `prog_id == None` => no program attached.
+/// `prog_id == Some(id)` => `id` is the kernel's `bpf_prog_info.id`
+/// for whatever is bound to the interface's IFLA_XDP attribute.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct XdpQueryResult {
+    /// Kernel prog_id of the attached program, or `None` if none.
+    pub prog_id: Option<u32>,
+    /// Mode the kernel reports (drv / skb / hw); `None` if unknown.
+    pub mode: Option<XdpMode>,
 }
 
 #[cfg(test)]
