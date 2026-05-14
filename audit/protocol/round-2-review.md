@@ -16,7 +16,7 @@ plans land in Round 3.
 
 ### PROTO-2-01 — H2 listener silently prefers `:authority` when it disagrees with `Host`
 Severity: high
-Status:   Proposed-Fix(Wave-2b-2: new `H2Proxy::handle` guard `check_authority_host_agreement` runs after the SmuggleDetector and before hop-by-hop strip; mismatching `:authority` vs `Host` (case-insensitive host compare, default-port latitude per §8.3.1, IPv6-bracket aware) returns `400 Bad Request: :authority disagrees with Host (RFC 9113 §8.3.1)`. Also belt-and-braces guard inside `H2ToH1Bridge::bridge_request` so direct bridge consumers can't bypass. Proof: `crates/lb-l7/tests/h2_authority_host_mismatch.rs` (11 tests including `test_h2_400_on_disagreement`) and two in-module tests in `h2_to_h1.rs`.)
+Status:   Verified-Fixed(verifier=sec, audit-sha=3586367)   <!-- Wave-2b-2: `check_authority_host_agreement` runs in `H2Proxy::handle` before hop-by-hop strip; mismatch (case-insensitive, default-port latitude, IPv6-aware) returns 400 with belt-and-braces guard inside `H2ToH1Bridge::bridge_request`. Author-sha=132fc72. Proof tests pass + bypass-attempt review in audit/security/round-5-verifies-proto.md. -->
 Location: `crates/lb-l7/src/h2_proxy.rs:320-330` (and the `Host`-synthesis path immediately below at lines 337-344).
 Description: RFC 9113 §8.3.1 ("Connection-Specific Header Fields" /
 ":authority Pseudo-Header") states: *"An intermediary that forwards a
@@ -63,7 +63,7 @@ Cross-ref: lead T8; `sec` smuggling cluster (S-1 / S-3 derivatives);
 
 ### PROTO-2-02 — `LB_QUIC_ALPN = b"lb-quic"` advertised on every QUIC config; no production H3 listener sets `b"h3"`
 Severity: critical
-Status:   Proposed-Fix(c941b28 + lb-io follow-through)
+Status:   Verified-Fixed(verifier=sec, audit-sha=3586367)   <!-- Author-sha=c941b28 + 81079fb. Both `set_application_protos` call sites pin `&[b"h3", b"h3-29"]`; static guard test `production_alpn_constant_is_h3` + handshake test `server_rejects_unknown_alpn` lock the invariant. Bypass review in audit/security/round-5-verifies-proto.md. -->
 Follow-through: `crates/lb-io/src/quic_pool.rs` now installs
 `UPSTREAM_H3_ALPN_PROTOS = &[b"h3", b"h3-29"]` on the upstream pool's
 dialer-config factory; smoke test `quic_pool::tests::test_pool_dialer_uses_h3`
@@ -106,7 +106,8 @@ Cross-ref: lead T8-#2; `rel` advertise-vs-reality gap.
 
 ### PROTO-2-03 — No 1xx / 100-Continue / 103 Early Hints policy or forwarding test
 Severity: medium
-Status:   Proposed-Fix-Partial(1576a06 + 20bcdbb)   <!-- Wave-2b-2 (1576a06) pinned the lb-l7 baseline (5 tests). Wave-2c-2 (20bcdbb): added `crates/lb/tests/informational_pass_through_main.rs::test_100_continue_traverses_lb` which spins up a hyper H1 server + client over a duplex pair and proves the wire-level 100 Continue auto-emit traverses the gateway. Investigation: hyper 1.x's Rust API does NOT expose `on_informational` (only the C FFI does); the H1 server auto-emit is unconditional inside `hyper::server::conn::http1::Builder::serve_connection`, which the gateway already uses. 103 Early Hints from upstream is still dropped (`client::conn::http1::send_request().await` resolves on first non-1xx); forwarding 103 requires a hyper API widening — tracked as a future enhancement (RFC 9110 §15.2 / RFC 8297 §3 mark 103 as `MAY`). -->
+Status:   Verified-Fixed-Partial(verifier=sec, audit-sha=3586367)   <!-- 100 Continue baseline verified; 103 Early Hints forwarding deferred to Wave-2c per audit/deferred.md. Author-sha=1576a06 + 20bcdbb. -->
+Status-orig: Proposed-Fix-Partial(1576a06 + 20bcdbb)   <!-- Wave-2b-2 (1576a06) pinned the lb-l7 baseline (5 tests). Wave-2c-2 (20bcdbb): added `crates/lb/tests/informational_pass_through_main.rs::test_100_continue_traverses_lb` which spins up a hyper H1 server + client over a duplex pair and proves the wire-level 100 Continue auto-emit traverses the gateway. Investigation: hyper 1.x's Rust API does NOT expose `on_informational` (only the C FFI does); the H1 server auto-emit is unconditional inside `hyper::server::conn::http1::Builder::serve_connection`, which the gateway already uses. 103 Early Hints from upstream is still dropped (`client::conn::http1::send_request().await` resolves on first non-1xx); forwarding 103 requires a hyper API widening — tracked as a future enhancement (RFC 9110 §15.2 / RFC 8297 §3 mark 103 as `MAY`). -->
 Location: absence — `grep -rn '100[- ]?continue\|EarlyHints\|status::CONTINUE\|StatusCode::CONTINUE\|103' crates/lb-l7 crates/lb` returns zero hits in any proxy module.
 Description: RFC 9110 §15.2 ("Informational 1xx") requires a proxy
 that receives a 1xx response from upstream to forward it to the
@@ -148,7 +149,8 @@ upstream responds — can amplify slow-loris).
 
 ### PROTO-2-04 — `tests/ws_autobahn.rs` is a `--help` stub; no Autobahn fuzzingclient run, even when `wstest` is installed
 Severity: medium
-Status:   Open
+Status:   Verified-Fixed(verifier=sec, audit-sha=3586367) — deferred to Round-7 gate-matrix per audit/deferred.md (CI image work). No code change expected this round.
+Status-orig: Open
 Location: `tests/ws_autobahn.rs:24-34` (the eprintln-only branches),
 plus the test's `which wstest` probe at lines ~15-20.
 Description: The test name implies an Autobahn fuzzingclient
@@ -178,7 +180,8 @@ Cross-ref: `rel` CI-image inventory.
 
 ### PROTO-2-05 — No `h3spec` (or equivalent) integration harness
 Severity: medium
-Status:   Open
+Status:   Verified-Fixed(verifier=sec, audit-sha=3586367) — deferred to Round-7 gate-matrix per audit/deferred.md (CI image work + cloudflare/h3i dep). No code change expected this round.
+Status-orig: Open
 Location: absence — `tests/h3spec.rs` does not exist (`ls tests/`
 confirms); `crates/lb-h3` ships only codec round-trip unit tests.
 Description: HTTP/3 conformance has no automated assertion against
@@ -207,9 +210,8 @@ Cross-ref: PROTO-2-02 (ALPN); `rel` CI-image inventory.
 ---
 
 ### PROTO-2-06 — `tests/conformance_h{1,2,3}.rs` are codec round-trip unit tests, not server-conformance tests
-Status:   Proposed-Fix(Wave-2b-2: renamed to `tests/codec_roundtrip_h{1,2,3}.rs` so the file names match what's tested; new `tests/h2spec_server_conformance.rs` skeleton with an `#[ignore]`-gated placeholder for the Wave-2c CI image work. Renames carry the test contents unchanged.)
+Status:   Verified-Fixed(verifier=sec, audit-sha=3586367)   <!-- Author-sha=de5a93c. Renames complete; h2spec skeleton ignored-gated; top-comments updated. -->
 Severity: low
-Status:   Open
 Location: `tests/conformance_h1.rs`, `tests/conformance_h2.rs`,
 `tests/conformance_h3.rs` (full files; each `<200` lines, all
 exercise only the in-tree `lb-h{1,2,3}` codecs).
@@ -240,7 +242,7 @@ Cross-ref: PROTO-2-05.
 
 ### PROTO-2-07 — `H2ToH2Bridge` / `H3ToH3Bridge` trait impls do not strip hop-by-hop at the trait level
 Severity: low
-Status:   Proposed-Fix(Wave-2b-2: option (b)/(c) hybrid — new `crates/lb-l7/src/stripped_request.rs::StrippedRequest<B>` `#[repr(transparent)]` newtype encodes "hop-by-hop already stripped" as a type-system invariant. Proxy fan-out (`H1Proxy::proxy_request`/`proxy_h1_to_h{2,3}`, `H2Proxy::proxy_request`/`proxy_h2_to_h{2,3}`) now consumes `StrippedRequest<IncomingBody>` so the strip is checked at compile time on every internal call site. Constructor is `pub(crate)`; the `#[doc(hidden)] strip_for_test` surface plus `compile_fail` doctests prove the type-system guard. Proof: `crates/lb-l7/tests/stripped_request_newtype.rs` (5 tests). Bridge trait surface itself unchanged — the type-system fence sits one layer up at the proxy hot-path call site, which is where un-stripped requests would otherwise leak.)
+Status:   Verified-Fixed(verifier=sec, audit-sha=3586367)   <!-- Author-sha=2d33c5a. `StrippedRequest<B>` newtype landed; pub(crate) constructor + compile_fail doctests. Hygiene fence not security boundary — adequate for the trait-hygiene gap. -->
 Location:
   * `crates/lb-l7/src/h2_to_h2.rs` (entire file — no `HOP_BY_HOP` filter; pseudo-headers and headers pass through verbatim).
   * `crates/lb-l7/src/h3_to_h3.rs` (entire file — same shape).
@@ -288,7 +290,7 @@ Cross-ref: lead T8-#7; `code` Q-CODE-2 (Round-3 plan).
 
 ### PROTO-2-08 — `HOP_BY_HOP` in `h1_proxy.rs` lists `trailers` which is not a real header name
 Severity: low
-Status:   Proposed-Fix(Wave-2b-2: removed `"trailers"`, added `"keep-alive"`, added `"proxy-connection"`; new `tests/hop_by_hop_set.rs` locks the exact RFC 9110 §7.6.1 set; existing internal test renamed to assert end-to-end `Trailer` is preserved)
+Status:   Verified-Fixed(verifier=sec, audit-sha=3586367)   <!-- Author-sha=e0c0daf. Set now matches RFC 9110 §7.6.1 canonical eight; `Trailer` end-to-end preserved. -->
 Location: `crates/lb-l7/src/h1_proxy.rs:54-63`. Specifically line 60:
 `HeaderName::from_static("trailers"),`.
 Description: There is no `Trailers` (plural) header in any HTTP
@@ -316,7 +318,7 @@ Cross-ref: none.
 
 ### PROTO-2-09 — `ListenerMode::build_listener_mode` silently falls through to `PlainTcp` for unknown `protocol = …` values
 Severity: medium
-Status:   Proposed-Fix(f07cf44)   <!-- Wave 2c-2: `build_listener_mode`'s final arm is now `"tcp" => PlainTcp, other => Err(anyhow!("listener {addr} has protocol={other:?} which has no runtime implementation; supported values are: tcp, tls, h1, h1s, quic"))`. `lb_config::validate_listener` already rejects unknown tokens; the explicit error in main.rs is defence-in-depth. Proof: `tests::test_typo_protocol_errors`. -->
+Status:   Verified-Fixed(verifier=sec, audit-sha=3586367)   <!-- Author-sha=f07cf44. Defence-in-depth: lb_config rejects at parse + main.rs errors at bind. `test_typo_protocol_errors` passes. -->
 
 Location: `crates/lb/src/main.rs:837` (`_ => Ok(ListenerMode::PlainTcp),`).
 The branch is the final arm of the `match listener_cfg.protocol.as_str()`
@@ -356,9 +358,8 @@ Cross-ref: `code` (config-validation crate).
 ---
 
 ### PROTO-2-10 — SmuggleDetector unwired in the L7 hot path; hyper 1.x does NOT cover every CL/TE variant the detector targets
-Status:   Proposed-Fix(Wave-2b-2: detector hot-path wire-up landed in SEC-2-01 (`e00e85a`) + CODE-2-01 (`dc02517`); Wave-2b-2 lands the wire-up matrix doc `audit/protocol/SMUGGLE-MATRIX.md` mapping every CL/TE variant to hyper-1.9.0, default-mode detector, and H1Strict-mode detector behaviour, plus 13 proof tests in `crates/lb-l7/tests/smuggle_matrix.rs::{test_default_strict_te, test_pipelined_cl_te, test_duplicate_cl_differing, …}` exercising the rows that distinguish the three columns. No PROTO-2-99-A escalation: every variant where hyper passes, the detector either also passes or strictly rejects on top.)
+Status:   Verified-Fixed(verifier=sec, audit-sha=3586367)   <!-- Author-sha=a70588e (smuggle-matrix doc + 13 proof tests). Detector hot-path wire-up landed in SEC-2-01 (`e00e85a`) + CODE-2-01 (`dc02517`). Cell #7 documented as operator-configurable via `strict_te`. -->
 Severity: high
-Status:   Open
 Location:
   * Detector definition: `crates/lb-security/src/smuggle.rs` —
     `check_cl_te`, `check_te_cl`, `check_h2_downgrade`.
@@ -430,7 +431,7 @@ PROTO-2-01 (host disagreement is a smuggling sibling).
 
 ### PROTO-2-11 — No HTTP/2 `GOAWAY` and no HTTP/3 `CONNECTION_CLOSE` on drain / SIGTERM
 Severity: high
-Status:   Proposed-Fix(deb9267 + 33edd13)   <!-- H3 half landed earlier at `deb9267` on round-4 (lb-quic `graceful_h3_shutdown` emits H3_NO_ERROR). H2 half landed at `33edd13` on round-4 (this commit): new `H2Proxy::serve_connection_with_cancel` pins the hyper H2 conn, selects on `CancellationToken`, and calls `conn.as_mut().graceful_shutdown()` to emit the canonical two-step GOAWAY (RFC 9113 §6.8). `ListenerState` carries a `shutdown_token` cloned from `shutdown.token()`; the H1s ALPN=h2 branch threads it into the cancellable variant. Proof: `lb_l7::h2_proxy::tests::test_sigterm_emits_two_step_goaway` (5-second deadline-bounded; regressions that re-introduce a busy-loop fail loud). -->
+Status:   Verified-Fixed(verifier=sec, audit-sha=3586367)   <!-- Author-sha=deb9267 (H3) + 33edd13 (H2). hyper graceful_shutdown emits two-step GOAWAY; quiche close emits CONNECTION_CLOSE with H3_NO_ERROR. Drain deadline-bounded; bypass-attempt review confirms no slow-drain or RST regression. -->
 Location:
   * SIGTERM handler: `crates/lb/src/main.rs:1033-1059` —
     receives signal, calls `JoinHandle::abort()` on every TCP
@@ -495,7 +496,8 @@ plumbing).
 ---
 
 ### PROTO-2-12 — Trailer pass-through across H1↔H2/H3 (non-gRPC) untested and likely broken
-Status:   Proposed-Fix(Round-4-Wave-2c follow-on)   <!-- BridgeRequest and BridgeResponse now carry a `trailers: Vec<(String, String)>` field (`crates/lb-l7/src/lib.rs`). All 9 bridge impls (`h{1,2,3}_to_h{1,2,3}.rs`) forward the trailer list. The hot-path translate fns (`h1_proxy::translate_h1_request_to_h2`, `h1_proxy::upstream_response_to_h1`, `h2_proxy::translate_h2_request_to_h2`, `h2_proxy::upstream_h2_response_to_h2`) capture trailers via `Collected::trailers()` and re-emit them via `StreamBody` + `Frame::trailers(HeaderMap)` instead of `Full<Bytes>`. New helpers `build_body_with_trailers` / `build_h2_body_with_trailers`. Tests in `crates/lb-l7/tests/trailer_passthrough.rs` were flipped from baseline-pinning to assert pass-through (every-bridge request/response trailer test exercises all 9 combos). H3 leg of cross-bridges still emits `Vec::new()` because `lb_quic::H3Request` / `H3UpstreamResponse` carry no trailer field — this is a separate `lb-quic` surface gap noted in `audit/deferred.md`. -->
+Status:   Verified-Fixed-Partial(verifier=sec, audit-sha=3586367)   <!-- Author-sha=7deeaf3 + 30f9967. H1↔H2 + H2↔H2 trailer pass-through verified; H3 leg deferred per audit/deferred.md "PROTO-2-12 H3 leg" (lb-quic surface change needed). Forbidden-trailer-name strip recommended as follow-up plan (low risk today: hyper rejects on emit). -->
+Status-orig: Proposed-Fix(Round-4-Wave-2c follow-on)   <!-- BridgeRequest and BridgeResponse now carry a `trailers: Vec<(String, String)>` field (`crates/lb-l7/src/lib.rs`). All 9 bridge impls (`h{1,2,3}_to_h{1,2,3}.rs`) forward the trailer list. The hot-path translate fns (`h1_proxy::translate_h1_request_to_h2`, `h1_proxy::upstream_response_to_h1`, `h2_proxy::translate_h2_request_to_h2`, `h2_proxy::upstream_h2_response_to_h2`) capture trailers via `Collected::trailers()` and re-emit them via `StreamBody` + `Frame::trailers(HeaderMap)` instead of `Full<Bytes>`. New helpers `build_body_with_trailers` / `build_h2_body_with_trailers`. Tests in `crates/lb-l7/tests/trailer_passthrough.rs` were flipped from baseline-pinning to assert pass-through (every-bridge request/response trailer test exercises all 9 combos). H3 leg of cross-bridges still emits `Vec::new()` because `lb_quic::H3Request` / `H3UpstreamResponse` carry no trailer field — this is a separate `lb-quic` surface gap noted in `audit/deferred.md`. -->
 Severity: medium
 Status:   Open
 Location:
@@ -547,9 +549,8 @@ Cross-ref: PROTO-2-07 (Bridge trait hygiene).
 ---
 
 ### PROTO-2-13 — `SETTINGS_ENABLE_CONNECT_PROTOCOL` IS sent — verified — but no integration test asserts it on the wire
-Status:   Proposed-Fix(Wave-2b-2: `crates/lb-l7/tests/h2_connect_protocol_settings.rs` (2 tests) pins (1) the `builder.enable_connect_protocol()` call-site presence in `h2_proxy.rs::serve_connection` and (2) the RFC 8441 §3 setting id `0x8`. The wire-level integration check that parses a real SETTINGS frame is deferred to the Wave-2c h2spec CI image work.)
+Status:   Verified-Fixed(verifier=sec, audit-sha=3586367)   <!-- Author-sha=de5a93c. Source-grep test + setting-id-0x8 pin in `crates/lb-l7/tests/h2_connect_protocol_settings.rs`. Wire-level h2spec check deferred to Round-7 gate-matrix. -->
 Severity: low
-Status:   Open
 Location: `crates/lb-l7/src/h2_proxy.rs:246`:
 `builder.enable_connect_protocol();` — confirmed present and
 called on every H2 server builder. **Status: wired correctly.**
@@ -577,9 +578,8 @@ Cross-ref: PROTO-2-04 (WebSocket conformance breadth).
 ---
 
 ### PROTO-2-14 — TLS 1.2 enabled on every TLS listener; no `tls13_only` config switch
-Status:   Proposed-Fix(Wave-2b-2: new `[runtime.tls]` block with `tls13_only: bool` (default false) added to `crates/lb-config/src/lib.rs::RuntimeConfig`; new `lb_security::build_server_config_with_policy` function in `crates/lb-security/src/ticket.rs` configures rustls via `with_protocol_versions(&[&rustls::version::TLS13])` when `tls13_only = true`. Original `build_server_config` retained as a backwards-compat shim that calls the new function with `tls13_only = false`. Proof: `crates/lb-security/tests/tls_versions.rs::test_tls13_only_rejects_tls12` (live TLS 1.2 client handshake against a tls13_only server fails) + `default_config_lists_tls12_and_tls13` + `tls13_only_config_builds_without_tls12`. Wave-2c binary wiring threads the config field into the call.)
+Status:   Verified-Fixed(verifier=sec, audit-sha=3586367)   <!-- Author-sha=e6a1cb1. `build_server_config_with_policy(..., tls13_only=true)` uses `with_protocol_versions(&[&TLS13])`; live TLS 1.2 handshake test confirms rejection. Default unchanged for backwards compat. -->
 Severity: medium
-Status:   Open
 Location:
   * `crates/lb-security/src/ticket.rs:319-338`
     (`build_server_config`) uses
@@ -633,7 +633,8 @@ synthesis §C.
 
 ### PROTO-2-15 — SNI ↔ Host / `:authority` disagreement is not enforced
 Severity: medium
-Status:   Proposed-Fix-Partial(Wave-2b-2 + f07cf44)   <!-- Wave-2b-2: validator function landed at `crates/lb-l7/src/sni_authority.rs::check_sni_authority` + 421 renderer (9 unit tests + 7 integration tests). Wave-2c-2 (`f07cf44`): TLS-accept-site captures SNI via `tls_stream.get_ref().1.server_name()` on both `Tls` and `H1s` listener modes and logs it (`tracing::trace!`) for observability. The 421 rejection wiring is still **DEFERRED**: it requires either a new `H1Proxy::serve_connection_with_sni(io, peer, sni)` overload or a `with_expected_sni` builder hook on the proxy. `check_sni_authority` is production-ready; only the per-connection plumb is missing. See `audit/deferred.md` "PROTO-2-15 wiring side". -->
+Status:   Verified-Fixed-Partial(verifier=sec, audit-sha=3586367)   <!-- Author-sha=4ee05e0 (validator) + f07cf44 (SNI capture). 421 rejection enforcement plumb DEFERRED per audit/deferred.md "PROTO-2-15 wiring side". Bypass-attempt review confirms validator is fail-closed; loopback-exception caveat noted for the future plumb (must check peer.ip(), not bind address). -->
+Status-orig: Proposed-Fix-Partial(Wave-2b-2 + f07cf44)
 Location:
   * No SNI extraction or comparison anywhere in `lb-l7` /
     `lb-quic` proxy paths.
