@@ -390,7 +390,7 @@ Cross-ref:  rel F-05; SEC-2-04.
 
 ### SEC-2-11 — XDP capability probe misses CAP_SYS_ADMIN fallback
 Severity: low
-Status:   Handed-to-ebpf — sec rationale + test plan in batch-low.md; ebpf lands under EBPF-2-04
+Status:   Proposed-Fix(e44117d) — ebpf landed under EBPF-team ownership: `probe_caps_with` closure-based probe with CAP_BPF→CAP_SYS_ADMIN fallback, 7-test mock matrix in `tests/xdp_cap_probe.rs`.
 Location: `crates/lb/src/xdp.rs:39-55` (probe site, per ebpf
 cross-review §A.2). The probe checks `CAP_BPF` + `CAP_NET_ADMIN`
 only.
@@ -414,7 +414,7 @@ Cross-ref:  ebpf cross-review §A.2.
 
 ### SEC-2-12 — BPF ELF license / loader license-string not set
 Severity: medium
-Status:   Handed-to-ebpf — aya 0.13 default is GPL (verified Round-1); ebpf lands belt-and-suspenders + ELF regression test under EBPF-2-02
+Status:   Proposed-Fix(5064a11) — ebpf landed under EBPF-team ownership: `XdpLoader::load_from_bytes` now asserts `.license == "GPL\0"` via `assert_license_is_gpl`, fail-fast `XdpLoaderError::LicenseInvalid` variant + 3 unit tests with hand-crafted ELFs + integration test `tests/loader_license_assert.rs`.
 Location: `crates/lb-l4-xdp/ebpf/src/main.rs` (no
 `#[link_section = "license"]`); `crates/lb-l4-xdp/src/loader.rs:212`
 (`EbpfLoader::new().load(elf)` — no `set_license` call). See ebpf
