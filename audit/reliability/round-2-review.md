@@ -301,7 +301,7 @@ of reloaded config; reject downgrades).
 
 ### REL-2-06 — Logs are plain text despite docs claiming JSON
 Severity: medium
-Status:   Open
+Status:   Proposed-Fix(5729b50)
 Location: `crates/lb/src/main.rs:931-936`
 
 Description:
