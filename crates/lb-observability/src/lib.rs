@@ -33,9 +33,11 @@ use prometheus::{
 };
 
 pub mod admin_http;
+pub mod log;
 pub mod probes;
 pub mod prometheus_exposition;
 
+pub use log::{LogFormat, TracingConfig, TracingError, init_tracing};
 pub use probes::{ProbeRegistry, ProbeState};
 
 /// Soft cap on the number of series a single registry will hold before a

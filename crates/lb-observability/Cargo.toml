@@ -9,6 +9,9 @@ publish = false
 [dependencies]
 thiserror = { workspace = true }
 tracing = { workspace = true }
+# REL-2-06: structured JSON log output. `json` + `env-filter` are
+# already pinned at the workspace root.
+tracing-subscriber = { workspace = true }
 dashmap = { workspace = true }
 # Pillar 3b (Task #21): prometheus-backed metrics registry + text
 # exposition. `default-features = false` drops the protobuf family.
