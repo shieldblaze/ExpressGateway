@@ -22,7 +22,11 @@ pub use backend::{Backend, BackendHealth, BackendState};
 pub use cluster::Cluster;
 pub use error::CoreError;
 pub use policy::LbPolicy;
-pub use shutdown::{DrainOutcome, Shutdown};
+pub use shutdown::{
+    DrainObserver, DrainOutcome, DrainPhase, DrainReport, DrainSpec, InFlightDrainPhase,
+    ListenerCancelPhase, ListenerOutcome, MarkDrainingFn, PhaseTiming, Shutdown, XdpDetachFuture,
+    XdpDetachOutcome, XdpDetachPhase,
+};
 
 #[cfg(test)]
 mod tests {

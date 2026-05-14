@@ -363,6 +363,15 @@ struct ListenerState {
     /// `H2Proxy::serve_connection_with_cancel` so a SIGTERM cancel
     /// triggers a graceful GOAWAY emit instead of an abort.
     shutdown_token: CancellationToken,
+    /// OPS-04+L4-12 Round-8: the *listener-cancel* token (child of
+    /// `shutdown_token`). The accept loop selects on this so the
+    /// drain coordinator can stop accepting new connections in
+    /// phase 4 *without* triggering per-connection cancel — that
+    /// fires in phase 5 via `shutdown_token` after the readiness
+    /// settle + inflight-drain budget. See
+    /// `audit/round-8/fixes/OPS-04-L4-12.md` §B for the 15-case
+    /// table.
+    listener_cancel_token: CancellationToken,
     /// CODE-2-03 follow-on (Round-5 push-back): the process-wide
     /// task tracker. Per-connection spawns funnel through
     /// `tracker.spawn(...)` so `Shutdown::drain` waits on them at
@@ -1016,6 +1025,7 @@ async fn spawn_tcp(
     connect_timeout: Duration,
     hooks: Arc<HooksBundle>,
     shutdown_token: CancellationToken,
+    listener_cancel_token: CancellationToken,
     tracker: TaskTracker,
     tls_reload_registry: Arc<PlMutex<Vec<TlsReloadEntry>>>,
     watchdog: Option<Watchdog>,
@@ -1076,6 +1086,7 @@ async fn spawn_tcp(
         connect_timeout,
         hooks,
         shutdown_token,
+        listener_cancel_token,
         tracker: tracker.clone(),
         listener_label: Arc::new(listener_cfg.address.clone()),
     });
@@ -1829,6 +1840,14 @@ async fn async_main() -> anyhow::Result<()> {
             connect_timeout,
             Arc::clone(&hooks),
             shutdown.token().clone(),
+            // OPS-04+L4-12 Round-8: per-listener cooperative-cancel
+            // signal, fired by the drain coordinator's phase 4 BEFORE
+            // the per-conn token. The accept loop selects on this
+            // (with a synchronous post-accept tail-check to cover
+            // case C-3: cancel mid-spawn) so an in-flight accept
+            // tied to `listener.accept().await` never reaches the
+            // admission gate / semaphore once the drain has begun.
+            shutdown.listener_token().clone(),
             shutdown.tracker().clone(),
             Arc::clone(&tls_reload_registry),
             Some(watchdog.clone()),
@@ -1929,27 +1948,108 @@ async fn async_main() -> anyhow::Result<()> {
     };
     tracing::info!(signal = %signal_kind, "terminal signal — entering drain");
 
-    tracing::info!("entering drain — flipping /readyz to 503");
-    probes.set_draining();
-
+    // OPS-04+L4-12 Round-8: single drain coordinator. Replaces the
+    // legacy `set_draining → sleep → JoinHandle::abort → drain` pile
+    // that was responsible for the per-IP-counter-drift bug class
+    // (case C-3 in `audit/round-8/fixes/OPS-04-L4-12.md`).
+    //
+    // Phase ordering:
+    //   2. MarkDraining     — probes.set_draining() (closure)
+    //   3. ReadinessSettle  — sleep `readiness_settle_ms`
+    //   4. ListenerCancel   — fire listener_cancel_token; accept
+    //                          loops exit cooperatively
+    //   5. InFlightDrain    — close tracker + cancel per-conn token
+    //                          + bounded wait
+    //   6. XdpDetach        — `XdpLoader::detach()` under its own
+    //                          deadline (skipped until L4-12 lands the
+    //                          detach API in lb-l4-xdp; the coordinator
+    //                          tolerates `None` so this commit can
+    //                          land independently of div-l4)
+    //   7. Total            — coordinator wall-clock observation
+    //
+    // Each phase observation is recorded into the OPS-03 histogram
+    // family `shutdown_drain_seconds_{global,listener}` via the
+    // `DrainObserver` trait impl below.
     let runtime_cfg = config.runtime.as_ref();
-    let settle = runtime_cfg.map_or(1_000, |r| r.readiness_settle_ms);
-    if settle > 0 {
-        tracing::info!(settle_ms = settle, "settling for upstream LB before cancel");
-        tokio::time::sleep(Duration::from_millis(settle)).await;
-    }
+    let probes_for_mark = Arc::clone(&probes);
+    let metrics_for_obs = Arc::clone(&metrics);
+    let observer: std::sync::Arc<dyn lb_core::DrainObserver> =
+        std::sync::Arc::new(MetricsDrainObserver {
+            metrics: Arc::clone(&metrics_for_obs),
+        });
+    let spec = lb_core::DrainSpec {
+        readiness_settle: Duration::from_millis(
+            runtime_cfg.map_or(1_000, |r| r.readiness_settle_ms),
+        ),
+        listener_cancel_deadline: Duration::from_millis(500),
+        inflight_drain_deadline: Duration::from_millis(
+            runtime_cfg.map_or(10_000, |r| r.drain_timeout_ms),
+        ),
+        // L4-12 will land the XDP detach closure here. Until the
+        // `XdpLoader::detach()` API lands on the branch, the coordinator
+        // simply skips phase 6 — the legacy "drop the loader on
+        // process exit" behaviour is preserved as a stop-gap and the
+        // round-2 stale-pin recovery path picks up any linger on next
+        // startup (see OPS-01+L4-12+L4-04 §B.2).
+        xdp_detach_deadline: None,
+        // OPS-02 jitter: the per-conn cancel arm fires at a random
+        // sub-millisecond offset so 1000s of pods cancelling at the
+        // same wall-clock instant don't synchronise.
+        jitter_max: Duration::from_millis(50),
+        mark_draining: Some(Box::new(move || {
+            tracing::info!("entering drain — flipping /readyz to 503");
+            probes_for_mark.set_draining();
+        })),
+        xdp_detach: None,
+        observer: Some(observer),
+    };
 
-    // Cancel cooperative subsystems via the shared token. The current
-    // batch only wires this to the STATS sampler + admin listener; the
-    // 33-spawn-site connection-handler integration is the deferred
-    // follow-up. Listener accept loops are still aborted below.
-    shutdown.token().cancel();
+    // Cancel admin listener BEFORE the coordinator so it does not
+    // serve `/readyz` Ready during the settle window. Idempotent
+    // with the per-conn cancel that fires in phase 5.
     admin_cancel.cancel();
+
+    let report = shutdown.run_drain(spec).await;
+    tracing::info!(
+        mark_draining_ms = report.mark_draining.duration.as_millis() as u64,
+        readiness_settle_ms = report.readiness_settle.duration.as_millis() as u64,
+        listener_cancel_ms = report.listener_cancel.timing.duration.as_millis() as u64,
+        in_flight_drain_ms = report.in_flight_drain.timing.duration.as_millis() as u64,
+        xdp_detach_ms = report.xdp_detach.timing.duration.as_millis() as u64,
+        total_ms = report.total.duration.as_millis() as u64,
+        in_flight_remaining = report.in_flight_remaining,
+        listener_outcome = report.listener_cancel.outcome.as_label(),
+        drain_outcome = report.in_flight_drain.outcome.as_label(),
+        xdp_outcome = report.xdp_detach.outcome.as_label(),
+        "OPS-04+L4-12 drain coordinator complete"
+    );
+
+    // Phase 4 fallback (case C-14): the coordinator only set the
+    // cooperative cancel signal — the call site owns the
+    // `JoinHandle::abort` fallback for accept loops that didn't exit
+    // cooperatively within the post-cancel grace window. Any
+    // listener that is still NOT `is_finished()` here either ignored
+    // the cancel (kernel pathology — accept future never returns) or
+    // is mid-tail-check (case C-3, expected, will exit on its own
+    // microsecond-scale timescale). We bump the cooperative-cancel
+    // miss counter, then abort the survivors as a backstop.
     for h in &listener_handles {
-        h.abort();
+        if !h.is_finished() {
+            if let Ok(c) = metrics.counter(
+                "shutdown_listener_cancel_timeout_total",
+                "Listener accept loops that did not exit within the cancel deadline",
+            ) {
+                c.inc();
+            }
+            h.abort();
+        }
     }
 
-    // QUIC listeners hold their own cancellation tokens.
+    // QUIC listeners hold their own cancellation tokens. Their drain
+    // is independent of the coordinator (today) — the legacy
+    // behaviour is preserved here; a future OPS-04-bis pass moves
+    // QUIC into the coordinator via a second xdp-detach-style
+    // closure.
     let mut quic_drain_handles = Vec::with_capacity(quic_listeners.len());
     for listener in quic_listeners {
         quic_drain_handles.push(listener.shutdown());
@@ -1964,29 +2064,31 @@ async fn async_main() -> anyhow::Result<()> {
         }
     }
 
-    let drain_budget = Duration::from_millis(runtime_cfg.map_or(10_000, |r| r.drain_timeout_ms));
-    tracing::info!(
-        deadline_ms = drain_budget.as_millis() as u64,
-        "draining tasks"
-    );
-    match shutdown.drain(drain_budget).await {
-        lb_core::DrainOutcome::Clean => {
-            tracing::info!("drain completed cleanly");
+    // Surface the in-flight-drain timeout into the existing
+    // `shutdown_aborted_connections_total` counter so the RUNBOOK
+    // alert keeps firing as before (REL-2-02 contract).
+    if matches!(
+        report.in_flight_drain.outcome,
+        lb_core::ListenerOutcome::TimedOut
+    ) {
+        if let Ok(c) = metrics.counter(
+            "shutdown_aborted_connections_total",
+            "Tasks still live when the drain deadline elapsed",
+        ) {
+            c.inc_by(report.in_flight_remaining as u64);
         }
-        lb_core::DrainOutcome::TimedOut { remaining } => {
-            // Best-effort: bump the abort counter so dashboards can
-            // surface a deploy that left straggler tasks behind.
-            if let Ok(c) = metrics.counter(
-                "shutdown_aborted_connections_total",
-                "Tasks still live when the drain deadline elapsed",
-            ) {
-                c.inc_by(remaining as u64);
-            }
-            tracing::warn!(
-                remaining,
-                "drain deadline elapsed — survivors will be aborted on runtime drop"
-            );
+        if let Ok(c) = metrics.counter(
+            "shutdown_inflight_drain_timeout_total",
+            "Drain coordinator: inflight-drain phase hit its deadline",
+        ) {
+            c.inc();
         }
+        tracing::warn!(
+            remaining = report.in_flight_remaining,
+            "drain deadline elapsed — survivors will be aborted on runtime drop"
+        );
+    } else {
+        tracing::info!("drain completed cleanly");
     }
 
     let total = metrics.get("connections_total").unwrap_or(0);
@@ -2153,6 +2255,63 @@ async fn write_h1_shed_response<W: AsyncWrite + Unpin>(io: &mut W) -> std::io::R
     io.shutdown().await
 }
 
+// ── OPS-04+L4-12 drain observer ───────────────────────────────────────
+//
+// Bridges `lb_core::DrainObserver` (no metrics dep) to the
+// `shutdown_drain_seconds_{global,listener}` histogram families
+// per the OPS-03 contract (`audit/round-8/fixes/OPS-03.md` §A).
+//
+// Bucket boundaries cover the OPS-10 5-minute per-listener budget
+// upper bound. Two MetricVecs avoid `listener=""` cardinality blowup
+// on phases that are not listener-scoped.
+struct MetricsDrainObserver {
+    metrics: Arc<MetricsRegistry>,
+}
+
+impl MetricsDrainObserver {
+    const BUCKETS: &'static [f64] = &[0.1, 0.5, 1.0, 2.5, 5.0, 10.0, 30.0, 60.0, 120.0, 300.0];
+
+    fn is_listener_scoped(phase: lb_core::DrainPhase) -> bool {
+        matches!(
+            phase,
+            lb_core::DrainPhase::ListenerCancel | lb_core::DrainPhase::InFlightDrain
+        )
+    }
+}
+
+impl lb_core::DrainObserver for MetricsDrainObserver {
+    fn observe(&self, timing: &lb_core::PhaseTiming, listener: Option<&str>) {
+        let secs = timing.duration.as_secs_f64();
+        if Self::is_listener_scoped(timing.phase) {
+            // Per-listener histogram — note the observer plumbing
+            // calls us once per phase, not once per listener, so the
+            // `listener` label is best-effort: when the call site has
+            // a listener-specific timing it passes the label; today
+            // the coordinator emits a single aggregate observation
+            // with `listener="<aggregate>"`. Per-listener observation
+            // is tracked alongside OPS-10's per-listener-budget knob.
+            if let Ok(hv) = self.metrics.histogram_vec(
+                "shutdown_drain_seconds_listener",
+                "Per-phase wall-clock for the drain coordinator (listener-scoped phases)",
+                &["phase", "outcome", "listener"],
+                Self::BUCKETS,
+            ) {
+                let lbl = listener.unwrap_or("<aggregate>");
+                hv.with_label_values(&[timing.phase.as_label(), timing.outcome.as_label(), lbl])
+                    .observe(secs);
+            }
+        } else if let Ok(hv) = self.metrics.histogram_vec(
+            "shutdown_drain_seconds_global",
+            "Per-phase wall-clock for the drain coordinator (global phases)",
+            &["phase", "outcome"],
+            Self::BUCKETS,
+        ) {
+            hv.with_label_values(&[timing.phase.as_label(), timing.outcome.as_label()])
+                .observe(secs);
+        }
+    }
+}
+
 // ── listener loop ───────────────────────────────────────────────────────
 
 async fn run_listener(bind_addr: String, state: Arc<ListenerState>) -> anyhow::Result<()> {
@@ -2183,7 +2342,26 @@ async fn run_listener(bind_addr: String, state: Arc<ListenerState>) -> anyhow::R
     let mut backoff = Duration::ZERO;
 
     loop {
-        let (mut client_stream, client_addr) = match listener.accept().await {
+        // OPS-04+L4-12 Round-8 (cases C-2, C-3, C-15): cooperative
+        // cancel arm on the listener-cancel token. `biased` polls
+        // the cancel arm first so a SIGTERM during a pending
+        // `accept().await` returns cleanly without relying on
+        // `JoinHandle::abort()` (the round-2 audit's miss). The
+        // synchronous post-accept tail-check immediately below
+        // covers case C-3 (cancel arrives in the gap between accept
+        // returning Ok and the spawn).
+        let accept_outcome = tokio::select! {
+            biased;
+            () = state.listener_cancel_token.cancelled() => {
+                tracing::info!(
+                    address = %bind_addr,
+                    "listener cancelled by drain coordinator (phase 4)"
+                );
+                return Ok(());
+            }
+            res = listener.accept() => res,
+        };
+        let (mut client_stream, client_addr) = match accept_outcome {
             Ok(conn) => {
                 backoff = Duration::ZERO;
                 conn
@@ -2215,6 +2393,22 @@ async fn run_listener(bind_addr: String, state: Arc<ListenerState>) -> anyhow::R
                 }
             }
         };
+
+        // OPS-04+L4-12 case C-3 — synchronous post-accept tail check.
+        // The `select!` covers the *future* (pending accept); this
+        // check covers the *synchronous tail* between accept-returns-Ok
+        // and the spawn. Without it the per-IP counter would increment
+        // and the accepted fd would leak when SIGTERM lands here.
+        // Drop the stream explicitly (RST-style close) and exit.
+        if state.listener_cancel_token.is_cancelled() {
+            tracing::debug!(
+                client = %client_addr,
+                address = %bind_addr,
+                "accepted socket dropped post-cancel (OPS-04 case C-3)"
+            );
+            let _ = client_stream.shutdown().await;
+            return Ok(());
+        }
 
         // SEC-2-04 Wave 2c-2: per-IP / per-listener admission gate.
         // Called BEFORE the listener inflight semaphore so a saturated

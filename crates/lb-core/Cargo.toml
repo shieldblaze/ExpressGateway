@@ -17,6 +17,10 @@ serde = { workspace = true }
 # (TaskTracker + CancellationToken live in `rt`).
 tokio-util = { workspace = true, features = ["rt"] }
 tokio = { workspace = true }
+# OPS-04+L4-12 Round-8: idempotency latch + cached-report Mutex for
+# `Shutdown::run_drain`. parking_lot avoids the std-Mutex `MutexGuard`
+# Send bound and is already a workspace dep across the LB.
+parking_lot = { workspace = true }
 
 [dev-dependencies]
 serde_json = { workspace = true }
