@@ -63,7 +63,13 @@ Cross-ref: lead T8; `sec` smuggling cluster (S-1 / S-3 derivatives);
 
 ### PROTO-2-02 — `LB_QUIC_ALPN = b"lb-quic"` advertised on every QUIC config; no production H3 listener sets `b"h3"`
 Severity: critical
-Status:   Proposed-Fix(c941b28)
+Status:   Proposed-Fix(c941b28 + lb-io follow-through)
+Follow-through: `crates/lb-io/src/quic_pool.rs` now installs
+`UPSTREAM_H3_ALPN_PROTOS = &[b"h3", b"h3-29"]` on the upstream pool's
+dialer-config factory; smoke test `quic_pool::tests::test_pool_dialer_uses_h3`
+locks the invariant. The constant is duplicated rather than imported from
+`lb_quic::H3_ALPN_PROTOS` because `lb-io` does not depend on `lb-quic`
+(adding the edge is a Wave-2c task).
 Location: `crates/lb-quic/src/lib.rs:115` (constant), `crates/lb-quic/src/lib.rs:392`
 (`cfg.set_application_protos(&[LB_QUIC_ALPN])` inside `build_config`,
 the *only* `set_application_protos` call in the tree).

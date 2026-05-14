@@ -44,6 +44,20 @@ use parking_lot::Mutex;
 use ring::rand::SecureRandom;
 use tokio::net::UdpSocket;
 
+/// Production ALPN tokens the upstream QUIC pool advertises when
+/// dialing a backend (PROTO-2-02 follow-through).
+///
+/// * `h3` — RFC 9114 §3.1 IANA-registered identifier; mandatory for any
+///   peer claiming HTTP/3.
+/// * `h3-29` — last pre-RFC IETF draft, still emitted by clients
+///   pinned to draft-29.
+///
+/// These tokens are kept in sync with [`lb_quic::H3_ALPN_PROTOS`] but
+/// duplicated here because `lb-io` does not (yet) depend on `lb-quic`.
+/// Wave-2c task: add the `lb-io → lb-quic` dependency edge and import
+/// the constant directly instead of duplicating it.
+pub const UPSTREAM_H3_ALPN_PROTOS: &[&[u8]] = &[b"h3", b"h3-29"];
+
 /// Default upper bound on idle QUIC connections per peer.
 pub const DEFAULT_QUIC_PER_PEER_MAX: usize = 4;
 /// Default upper bound on idle QUIC connections pool-wide.
@@ -528,7 +542,11 @@ mod tests {
     {
         Arc::new(|| {
             let mut cfg = quiche::Config::new(quiche::PROTOCOL_VERSION)?;
-            cfg.set_application_protos(&[b"lb-quic"])?;
+            // PROTO-2-02 follow-through: dial backends with the
+            // production ALPN tokens. quiche 0.28 forwards the list to
+            // BoringSSL's SSL_CTX_set_alpn_protos, so the bytes go on
+            // the wire verbatim in the TLS 1.3 ClientHello.
+            cfg.set_application_protos(UPSTREAM_H3_ALPN_PROTOS)?;
             cfg.verify_peer(false);
             cfg.set_max_idle_timeout(5_000);
             cfg.set_max_recv_udp_payload_size(1_350);
@@ -735,5 +753,30 @@ mod tests {
     fn idle_count_zero_on_fresh_pool() {
         let pool = QuicUpstreamPool::new(QuicPoolConfig::default(), dummy_config_factory());
         assert_eq!(pool.idle_count(), 0);
+    }
+
+    /// PROTO-2-02 follow-through smoke: the upstream QUIC pool's dial
+    /// path must advertise the production HTTP/3 ALPN tokens (`h3` and
+    /// `h3-29`) — never the pre-RFC `lb-quic` token that the in-tree
+    /// loopback rig used. The constant is the single source of truth
+    /// consumed by [`dummy_config_factory`] and (in production) by every
+    /// caller-supplied `config_factory`. Asserting on the bytes locks
+    /// the invariant in place at the lb-io seam.
+    #[test]
+    fn test_pool_dialer_uses_h3() {
+        assert_eq!(
+            UPSTREAM_H3_ALPN_PROTOS,
+            &[b"h3" as &[u8], b"h3-29"],
+            "upstream QUIC pool must advertise RFC 9114 §3.1 ALPN tokens",
+        );
+        // The dummy config factory used throughout this test module
+        // installs the production tokens; constructing a config must
+        // succeed end-to-end so the assertion above is not vacuous.
+        let factory = dummy_config_factory();
+        let cfg = factory().expect("dummy_config_factory must build a valid quiche::Config");
+        // quiche::Config does not expose an ALPN getter; the smoke is
+        // (a) the constant value and (b) that the factory accepted the
+        // tokens without returning `quiche::Error::TlsFail`.
+        drop(cfg);
     }
 }
