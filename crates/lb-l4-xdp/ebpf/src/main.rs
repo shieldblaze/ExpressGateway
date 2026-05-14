@@ -139,8 +139,27 @@ struct Ipv6ExtHdr {
 struct TcpHdr {
     src_port: u16,
     dst_port: u16,
-    // Pillar 4b-2 does not parse further TCP fields.
+    _seq: u32,
+    _ack: u32,
+    /// Data offset (4) | Reserved (3) | NS (1). Pillar 4b-2 ignores this.
+    _data_offset_ns: u8,
+    /// CWR | ECE | URG | ACK | PSH | RST | SYN | FIN — read by
+    /// ROUND8-L4-02 for state-aware conntrack pruning.
+    flags: u8,
+    _window: u16,
 }
+
+/// ROUND8-L4-02: TCP control-bit constants for the state-aware
+/// conntrack-prune path (Cilium `bpf/lib/conntrack.h` lesson). Pure
+/// LRU eviction is vulnerable to a sliding-RST replay attack: an
+/// adversary spraying RST/FIN packets across already-evicted flows
+/// fills the LRU's young end and pushes live flows toward eviction.
+/// Pruning on RST and on the FIN-ACK terminating sequence keeps the
+/// table aligned to actual TCP-FSM reality without paying the verifier
+/// cost of a full FSM (deferred to Pillar 4b-3).
+const TCP_FLAG_FIN: u8 = 0x01;
+const TCP_FLAG_RST: u8 = 0x04;
+const TCP_FLAG_ACK: u8 = 0x10;
 
 #[repr(C, packed(2))]
 struct UdpHdr {
@@ -232,6 +251,16 @@ const STAT_BACKEND_UNPOPULATED: u32 = 10;
 const STAT_V4_FRAGMENT: u32 = 11;
 /// ROUND8-L4-08: IPv6 packet carrying a Fragment Extension Header.
 const STAT_V6_FRAGMENT: u32 = 12;
+/// ROUND8-L4-02: a TCP packet with RST set evicted its conntrack
+/// entry (RST-prune lesson from Cilium `bpf/lib/conntrack.h`). The
+/// original packet still goes `XDP_PASS` so the upstream RST reaches
+/// the peer end-to-end; only flow *tracking* stops.
+const STAT_CT_RST_PRUNE: u32 = 13;
+/// ROUND8-L4-02: a TCP FIN-ACK packet evicted its conntrack entry.
+/// The packet itself is forwarded normally (`XDP_TX`) — last FIN-ACK
+/// still needs to land — but the slot is freed so a replay of the
+/// already-closed flow does not pin LRU capacity.
+const STAT_CT_FIN_PRUNE: u32 = 14;
 
 // EBPF-2-03: BPF_MAP_TYPE_LRU_HASH evicts the oldest entry under
 // flood instead of returning ENOMEM at insert time. This closes the
@@ -464,7 +493,9 @@ fn handle_ipv4(ctx: &XdpContext, l3_offset: usize) -> Result<u32, ()> {
     }
 
     let l4_offset = l3_offset + ip_hdr_len;
-    let (src_port, dst_port) = match protocol {
+    // ROUND8-L4-02: parse TCP flags alongside the ports so the
+    // RST/FIN-ACK prune branch can fire BEFORE the rewrite path.
+    let (src_port, dst_port, tcp_flags) = match protocol {
         IPPROTO_TCP => {
             let tcp = unsafe { ptr_at::<TcpHdr>(ctx, l4_offset).ok_or(())? };
             // SAFETY: packed field reads.
@@ -474,7 +505,9 @@ fn handle_ipv4(ctx: &XdpContext, l3_offset: usize) -> Result<u32, ()> {
             let dp = u16::from_be(unsafe {
                 core::ptr::read_unaligned(core::ptr::addr_of!((*tcp).dst_port))
             });
-            (sp, dp)
+            let flags =
+                unsafe { core::ptr::read_unaligned(core::ptr::addr_of!((*tcp).flags)) };
+            (sp, dp, flags)
         }
         IPPROTO_UDP => {
             let udp = unsafe { ptr_at::<UdpHdr>(ctx, l4_offset).ok_or(())? };
@@ -485,7 +518,7 @@ fn handle_ipv4(ctx: &XdpContext, l3_offset: usize) -> Result<u32, ()> {
             let dp = u16::from_be(unsafe {
                 core::ptr::read_unaligned(core::ptr::addr_of!((*udp).dst_port))
             });
-            (sp, dp)
+            (sp, dp, 0u8)
         }
         _ => {
             incr_stat(STAT_PASS);
@@ -506,6 +539,26 @@ fn handle_ipv4(ctx: &XdpContext, l3_offset: usize) -> Result<u32, ()> {
         protocol,
         _pad: [0; 3],
     };
+
+    // ROUND8-L4-02: TCP-state-aware pruning, BEFORE the lookup-and-
+    // rewrite hot path. The kernel returns the entry from the LRU map
+    // even on RST/FIN-ACK; we always want to free the slot so a
+    // sliding-RST replay attack cannot pin LRU capacity. The packet
+    // itself goes XDP_PASS on RST (kernel network stack handles the
+    // RST end-to-end) and XDP_TX on FIN-ACK (the last FIN-ACK still
+    // needs to be rewritten and forwarded). Full TCP FSM (timers,
+    // ESTABLISHED/TIME_WAIT) is Pillar 4b-3.
+    if protocol == IPPROTO_TCP && (tcp_flags & TCP_FLAG_RST) != 0 {
+        // CONNTRACK.remove returns Result; we discard the outcome
+        // because "no such key" is the steady state for unrelated
+        // RST sprays — the slot was already absent or already
+        // evicted by the LRU.
+        let _ = CONNTRACK.remove(&key);
+        incr_stat(STAT_CT_RST_PRUNE);
+        incr_stat(STAT_PASS);
+        return Ok(xdp_action::XDP_PASS);
+    }
+
     // SAFETY: CONNTRACK.get reads atomically; pointer is valid for the
     // duration of this probe. Copy the BackendEntry into a local to end
     // the borrow before we start mutating the packet.
@@ -530,6 +583,18 @@ fn handle_ipv4(ctx: &XdpContext, l3_offset: usize) -> Result<u32, ()> {
     // --- Rewrite: MAC, dst IP, dst port, L3 + L4 checksums ---------------
     rewrite_v4(ctx, l3_offset, ip_hdr_len, protocol, dst_addr, &entry)?;
     incr_stat(STAT_TX_V4);
+
+    // ROUND8-L4-02: FIN-ACK prune AFTER the rewrite — the last FIN-ACK
+    // must still reach the backend, but the slot is freed so a replay
+    // can't keep an already-closed flow alive in the table.
+    if protocol == IPPROTO_TCP
+        && (tcp_flags & TCP_FLAG_FIN) != 0
+        && (tcp_flags & TCP_FLAG_ACK) != 0
+    {
+        let _ = CONNTRACK.remove(&key);
+        incr_stat(STAT_CT_FIN_PRUNE);
+    }
+
     Ok(xdp_action::XDP_TX)
 }
 
@@ -693,7 +758,7 @@ fn handle_ipv6(ctx: &XdpContext, l3_offset: usize) -> Result<u32, ()> {
         return Ok(xdp_action::XDP_PASS);
     }
 
-    let (src_port, dst_port) = match next_hdr {
+    let (src_port, dst_port, tcp_flags) = match next_hdr {
         IPPROTO_TCP => {
             let tcp = unsafe { ptr_at::<TcpHdr>(ctx, off).ok_or(())? };
             // SAFETY: packed field reads.
@@ -703,7 +768,9 @@ fn handle_ipv6(ctx: &XdpContext, l3_offset: usize) -> Result<u32, ()> {
             let dp = u16::from_be(unsafe {
                 core::ptr::read_unaligned(core::ptr::addr_of!((*tcp).dst_port))
             });
-            (sp, dp)
+            let flags =
+                unsafe { core::ptr::read_unaligned(core::ptr::addr_of!((*tcp).flags)) };
+            (sp, dp, flags)
         }
         IPPROTO_UDP => {
             let udp = unsafe { ptr_at::<UdpHdr>(ctx, off).ok_or(())? };
@@ -714,7 +781,7 @@ fn handle_ipv6(ctx: &XdpContext, l3_offset: usize) -> Result<u32, ()> {
             let dp = u16::from_be(unsafe {
                 core::ptr::read_unaligned(core::ptr::addr_of!((*udp).dst_port))
             });
-            (sp, dp)
+            (sp, dp, 0u8)
         }
         _ => {
             incr_stat(STAT_PASS);
@@ -735,6 +802,17 @@ fn handle_ipv6(ctx: &XdpContext, l3_offset: usize) -> Result<u32, ()> {
         protocol: next_hdr,
         _pad: [0; 3],
     };
+
+    // ROUND8-L4-02: TCP-state-aware pruning for IPv6, mirror of the
+    // IPv4 path. RST prunes + XDP_PASS, FIN-ACK prunes after the
+    // rewrite (last FIN-ACK forwarded).
+    if next_hdr == IPPROTO_TCP && (tcp_flags & TCP_FLAG_RST) != 0 {
+        let _ = CONNTRACK_V6.remove(&key);
+        incr_stat(STAT_CT_RST_PRUNE);
+        incr_stat(STAT_PASS);
+        return Ok(xdp_action::XDP_PASS);
+    }
+
     let entry: BackendEntryV6 = match unsafe { CONNTRACK_V6.get(&key) } {
         Some(v) => *v,
         None => {
@@ -752,6 +830,15 @@ fn handle_ipv6(ctx: &XdpContext, l3_offset: usize) -> Result<u32, ()> {
 
     rewrite_v6(ctx, l3_offset, off, next_hdr, &dst_addr, &entry)?;
     incr_stat(STAT_TX_V6);
+
+    if next_hdr == IPPROTO_TCP
+        && (tcp_flags & TCP_FLAG_FIN) != 0
+        && (tcp_flags & TCP_FLAG_ACK) != 0
+    {
+        let _ = CONNTRACK_V6.remove(&key);
+        incr_stat(STAT_CT_FIN_PRUNE);
+    }
+
     Ok(xdp_action::XDP_TX)
 }
 

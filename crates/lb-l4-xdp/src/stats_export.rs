@@ -194,12 +194,26 @@ pub enum StatSlot {
     /// `STAT_V6_FRAGMENT` (ROUND8-L4-08): IPv6 packet carrying a
     /// Fragment Extension Header (IPPROTO_FRAGMENT = 44).
     V6Fragment = 12,
+    /// `STAT_CT_RST_PRUNE` (ROUND8-L4-02): a TCP RST packet evicted
+    /// its conntrack entry (Cilium `bpf/lib/conntrack.h` RST-prune
+    /// lesson). The RST itself is passed to the kernel so the peer
+    /// still observes connection teardown end-to-end; only flow
+    /// *tracking* stops. Counter is the operator signal for sliding-
+    /// RST replay attacks.
+    CtRstPrune = 13,
+    /// `STAT_CT_FIN_PRUNE` (ROUND8-L4-02): a TCP FIN-ACK packet
+    /// evicted its conntrack entry. Packet itself is still forwarded
+    /// (XDP_TX) so the FIN-ACK reaches the backend; the slot is freed
+    /// to keep the LRU aligned with real TCP-FSM reality without
+    /// paying the verifier cost of a full FSM (deferred to Pillar
+    /// 4b-3).
+    CtFinPrune = 14,
 }
 
 /// Number of currently-defined stat slots. Bumps to this constant
 /// must come WITH a matching addition to the `STAT_*` enum in the
 /// eBPF crate AND a new variant at the end of [`StatSlot`].
-pub const NUM_SLOTS: usize = 13;
+pub const NUM_SLOTS: usize = 15;
 
 /// Errors from the STATS read path.
 #[derive(Debug, thiserror::Error)]
@@ -366,6 +380,8 @@ mod tests {
         assert_eq!(StatSlot::BackendUnpopulated as usize, 10);
         assert_eq!(StatSlot::V4Fragment as usize, 11);
         assert_eq!(StatSlot::V6Fragment as usize, 12);
+        assert_eq!(StatSlot::CtRstPrune as usize, 13);
+        assert_eq!(StatSlot::CtFinPrune as usize, 14);
     }
 
     #[test]
@@ -373,7 +389,7 @@ mod tests {
         // If a new variant is added to StatSlot without bumping
         // NUM_SLOTS the read loop in `read_stats` would silently
         // skip it — this assertion guards that invariant.
-        assert_eq!(NUM_SLOTS, 13);
+        assert_eq!(NUM_SLOTS, 15);
     }
 
     #[cfg(not(target_os = "linux"))]
