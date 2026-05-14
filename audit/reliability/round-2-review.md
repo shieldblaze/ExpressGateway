@@ -20,7 +20,7 @@ Status is `Open` for every finding; the team-lead flips status in Round
 
 ### REL-2-01 — Doc/code drift: RUNBOOK and DEPLOYMENT describe flows that do not exist
 Severity: high
-Status:   Proposed-Fix(f2bf64c)
+Status:   Verified-Fixed(verifier=proto, author-sha=f2bf64c)   <!-- Walked every doc claim against round-4 source: zero `/usr/local/bin/lb` hits in DEPLOYMENT/RUNBOOK, panic-free claim matches the `#[cfg(test)]`-excluded grep, capability matrix consistent with SEC-2-11 e44117d. See audit/protocol/round-5-verifies-rel.md. -->
 Location: `RUNBOOK.md:25-57`, `RUNBOOK.md:89`, `RUNBOOK.md:135-150`, `DEPLOYMENT.md:11`, `DEPLOYMENT.md:32-65`, `DEPLOYMENT.md:117`, `DEPLOYMENT.md:147-157`
 
 Description: Multiple operator-facing flows in `RUNBOOK.md` and
@@ -74,7 +74,7 @@ drain), `proto` (GOAWAY).
 
 ### REL-2-02 — SIGTERM is not a drain; in-flight frames severed at ~2.5 s
 Severity: critical
-Status:   Open
+Status:   Verified-Fixed(verifier=proto, author-sha=1f7ab4b+fc050b0+82551dc+33edd13)   <!-- Drain ordering at main.rs:1699-1759: set_draining → 1s settle → cancel → listener.abort → quic.shutdown(2s) → shutdown.drain(10s). H2 graceful_shutdown emits canonical two-step GOAWAY (lb-l7 unit test passes). Three drain integration tests stay #[ignore]'d with verified-accurate reasons (H1 needs serve_connection_with_cancel; H2 needs self-signed TLS scaffold + h2 client; H3 spawn_quic owns its own token). See audit/protocol/round-5-verifies-rel.md. -->
 Location: `crates/lb/src/main.rs:1032-1060`
 
 Description: The shutdown path is:
@@ -140,7 +140,7 @@ synthesis T2); `proto` owns GOAWAY / CONNECTION_CLOSE emission.
 
 ### REL-2-03 — TLS certificate rotation is documented but not implemented
 Severity: critical
-Status:   Proposed-Fix(334b69a)
+Status:   Verified-Fixed(verifier=proto, author-sha=334b69a)   <!-- ArcSwap<TlsConfigBundle> snapshotted per accept (main.rs:2093, 2148); in-flight handshakes pin their Arc so concurrent SIGUSR1 swap cannot tear the session (cert_rotation.rs tests 3/3 PASS). Invalid reload returns TlsBundleError with low-cardinality reason and leaves the old bundle live. Ticketer Arc preserved across reload. Inotify trigger deferred but SIGUSR1 path is operator-facing per RUNBOOK. See audit/protocol/round-5-verifies-rel.md. -->
 Location: `crates/lb/src/main.rs:214`, `crates/lb/src/main.rs:611`, `RUNBOOK.md:49-57`, `DEPLOYMENT.md:123-125`
 
 Description: `RUNBOOK.md:49-57` and `DEPLOYMENT.md:123-125` describe a
@@ -189,7 +189,7 @@ check, expiry gauge), per Round-1 synthesis T3.
 
 ### REL-2-04 — `/healthz` is unconditional 200; no liveness/readiness/startup split
 Severity: high
-Status:   Proposed-Fix(7108d9e)
+Status:   Verified-Fixed(verifier=proto, author-sha=7108d9e)   <!-- ProbeRegistry AtomicU8 state machine over {Starting,Ready,Draining}; /livez stays 200 across Ready+Draining so K8s does not yank mid-shutdown; /readyz flips to 503 on probes.set_draining() before per-listener cancel (main.rs:1701-1719); /startupz transitions once every listener is bound. JSON contract test updated (6e63f70). See audit/protocol/round-5-verifies-rel.md. -->
 Location: `crates/lb-observability/src/admin_http.rs:55`
 
 Description: The admin listener serves a single `/healthz` endpoint
@@ -240,7 +240,7 @@ Cross-ref: REL-2-02 (drain ordering), `sec` (loopback assumption).
 
 ### REL-2-05 — `HealthChecker` and `ConfigManager` are dead code from the binary's view
 Severity: high
-Status:   Open
+Status:   Verified-Fixed-Partial(verifier=proto, author-sha=1fe53ed)   <!-- HealthChecker + ConfigManager (file-backed) now constructed from the binary (main.rs:1418-1436), proving the dead-dep removal. Passive picker filter on Backend::is_healthy is NOT wired — `_health_seed` is unread. The commit body discloses this as Wave-2 follow-up alongside CODE-2-14. Original REL-2-05 contract (dead-peer eviction) NOT delivered yet. See audit/protocol/round-5-verifies-rel.md. -->
 Location: `crates/lb-health/src/lib.rs:54` (`HealthChecker`); `crates/lb-controlplane/src/lib.rs:156` (`ConfigManager`); `crates/lb-cp-client` (workspace member, unused)
 
 Description: Three crates declared as workspace members host types that
@@ -301,7 +301,7 @@ of reloaded config; reject downgrades).
 
 ### REL-2-06 — Logs are plain text despite docs claiming JSON
 Severity: medium
-Status:   Proposed-Fix(15c9018)
+Status:   Verified-Fixed(verifier=proto, author-sha=15c9018)   <!-- lb_observability::init_tracing default-binds JSON (flatten_event(true)); LB_LOG_FORMAT=text opts back to text for local dev. main.rs:1289 wires the default. Idempotent. See audit/protocol/round-5-verifies-rel.md. -->
 Location: `crates/lb/src/main.rs:931-936`
 
 Description:
@@ -340,7 +340,7 @@ Recommendation:
 
 ### REL-2-07 — No distributed tracing: no `traceparent` propagation, no per-request span
 Severity: high
-Status:   Proposed-Fix(1d462c7)
+Status:   Verified-Fixed-Partial(verifier=proto, author-sha=1d462c7)   <!-- W3C traceparent/tracestate codec ships in lb_observability::tracing_propagation; parse_traceparent rejects non-version-00; child-span rewrite test passes (3/3). NO L7 callsite extracts or injects today — `grep extract_parent crates/lb-l7 crates/lb-quic` returns zero hits. Library-only fix; proxy wire-in is deferred. See audit/protocol/round-5-verifies-rel.md. -->
 Location: `crates/lb-l7/src/h1_proxy.rs`, `crates/lb-l7/src/h2_proxy.rs`, `crates/lb-l7/src/grpc_proxy.rs`, `crates/lb-quic/src/lib.rs`
 
 Description: `grep -rn 'traceparent\|opentelemetry\|info_span\|tracing::Span' crates/`
@@ -390,7 +390,7 @@ strip rules for hop-by-hop vs trace headers).
 
 ### REL-2-08 — Per-listener / per-backend RED labels missing
 Severity: medium
-Status:   Proposed-Fix(551d470)
+Status:   Verified-Fixed-Partial(verifier=proto, author-sha=551d470)   <!-- CANONICAL_LABELS table + LabelBudget startup cardinality check land. Emission contract drift: actual `http_requests_total` registration at main.rs:1196-1198 uses only ["version","status_class"] — no `listener`, no `route`. Per-request hook placement inside lb-l7 is the deferred Wave-2c follow-up. Dashboards keyed off the canonical table will see empty `listener` slot. See audit/protocol/round-5-verifies-rel.md. -->
 Location: `crates/lb/src/main.rs:1186-1196` (counter_vec registration); `crates/lb-observability/src/lib.rs`
 
 Description: The exposed HTTP RED metrics are:
@@ -435,7 +435,7 @@ inside `lb-l7`).
 
 ### REL-2-09 — Unbounded `tokio::spawn` per TCP accept; missing `accept_inflight` saturation metric and alert
 Severity: critical
-Status:   Open
+Status:   Verified-Fixed-Partial(verifier=proto, author-sha=f07cf44+551d470)   <!-- Per-listener Arc<Semaphore> sized to runtime.max_inflight_connections (default 65 536) lands; on saturation it bumps `accept_shed_total` + writes best-effort 503. `accept_inflight{listener}` gauge is NOT emitted (grep returns zero hits outside the canonical-labels reservation). Operator alert `accept_inflight / max_inflight > 0.8` cannot be expressed yet. Shed signal works; warm-before-saturation gauge is deferred. See audit/protocol/round-5-verifies-rel.md. -->
 Location: `crates/lb/src/main.rs:1099-1126`
 
 Description: The accept loop:
@@ -489,7 +489,7 @@ REL-2-11 (`spawn_blocking`).
 
 ### REL-2-10 — `accept(2)` errors are a tight loop; no backoff, no `accept_errors_total`
 Severity: critical
-Status:   Open
+Status:   Verified-Fixed(verifier=proto, author-sha=f07cf44)   <!-- classify_accept_error maps raw_os_error → {emfile, enfile, eintr, econnaborted, eagain, other}; persistent kinds enter exponential backoff (1ms start, 1s cap, ±25% jitter) and bump accept_errors_total{kind}. warn!() is rate-limited via the backoff window, so the gigabytes/min log-flood mode is gone. See audit/protocol/round-5-verifies-rel.md. -->
 Location: `crates/lb/src/main.rs:1099-1106`
 
 Description:
@@ -541,7 +541,7 @@ Cross-ref: `code` owns backoff loop.
 
 ### REL-2-11 — `spawn_blocking` for upstream connect on the global blocking pool
 Severity: high
-Status:   Open
+Status:   Verified-Fixed-Partial(verifier=proto, author-sha=fc42d60)   <!-- Structural fix: TcpPool::acquire_async uses tokio::net::TcpStream::connect under tokio::time::timeout(PoolConfig::connect_timeout) — no spawn_blocking on the hot path; 75 s kernel timeout pin gone. backend_connect_seconds{listener,backend} histogram + backend_connect_errors_total{listener,backend,kind} counter are NOT yet emitted; that operability slice is the open follow-up. See audit/protocol/round-5-verifies-rel.md. -->
 Location: `crates/lb-io/src/lib.rs::Runtime::connect`; `crates/lb-io/src/pool.rs:167`; `crates/lb/src/main.rs:1238`
 
 Description: Pool `acquire` on a cold peer dials via
@@ -593,7 +593,7 @@ Cross-ref: `code` evaluates the alternative for Round-3 plan
 
 ### REL-2-12 — CONNTRACK saturation has no userspace metric or alert
 Severity: high
-Status:   Proposed-Fix(365815f)
+Status:   Verified-Fixed(verifier=proto, author-sha=365815f)   <!-- xdp_conntrack_full_total{family∈v4,v6} CounterVec registered in lb_observability::xdp_metrics; record_conntrack_full(...) monotonic increment exposed; XdpMetrics::register integration test PASS. Metric name matches runbook spec. See audit/protocol/round-5-verifies-rel.md. -->
 Location: `crates/lb-l4-xdp/src/loader.rs`; `crates/lb/src/xdp.rs`; XDP `STATS` map (kernel side)
 
 Description: The XDP data plane (Pillar 4b) maintains a CONNTRACK map
@@ -640,7 +640,7 @@ in S-2.
 
 ### REL-2-13 — Per-CPU STATS map never exported (kernel-side counters invisible)
 Severity: medium
-Status:   Proposed-Fix(a500ff7)
+Status:   Verified-Fixed(verifier=proto, author-sha=a500ff7)   <!-- 1 Hz sampler at main.rs:1629 reads lb_l4_xdp::stats_export::read_stats, computes deltas via SamplerBaseline::delta, applies them to xdp_packets_total{action} (10 pre-seeded slots). Shutdown token cancels the sampler cleanly during drain via `biased` select. sampler_errors_total covers real-read failures. See audit/protocol/round-5-verifies-rel.md. -->
 Location: `crates/lb-l4-xdp/ebpf/src/main.rs` (STATS map definition); `crates/lb/src/xdp.rs` (loader hook)
 
 Description: Sibling to REL-2-12. The XDP program maintains a
@@ -676,7 +676,7 @@ Cross-ref: `ebpf` #7 (Round-1 inventory).
 
 ### REL-2-14 — Binary name mismatch: systemd unit and runbook reference `/usr/local/bin/lb`; binary is `expressgateway`
 Severity: low
-Status:   Proposed-Fix(f2bf64c)
+Status:   Verified-Fixed(verifier=proto, author-sha=f2bf64c)   <!-- grep -n '/usr/local/bin/lb\b\|target/release/lb\b' DEPLOYMENT.md RUNBOOK.md returns zero hits; every path replaced with `expressgateway`. See audit/protocol/round-5-verifies-rel.md. -->
 Location: `DEPLOYMENT.md:11`, `DEPLOYMENT.md:44`, `RUNBOOK.md:161`; `crates/lb/Cargo.toml:[[bin]] name`; `docker/Dockerfile:34`
 
 Description: The binary built from `crates/lb` is named
@@ -709,7 +709,7 @@ No code change; doc-only. Ship the systemd unit as an actual file
 
 ### REL-2-15 — No panic hook installed; `panic = "unwind"` in release means silent task death
 Severity: high
-Status:   Open
+Status:   Verified-Fixed(verifier=proto, author-sha=120e4fa+b6aeea5)   <!-- panic = "abort" set in Cargo.toml [profile.release]:192; std::panic::set_hook installed in main.rs:97 before any spawn; emits structured tracing::error!(panic=true, message, location, backtrace) then bumps panic_total (registry-backed via MetricsRegistry::panic_total_counter, atomic fallback drained on bind). See audit/protocol/round-5-verifies-rel.md. -->
 Location: `crates/lb/src/main.rs:920-927`; `Cargo.toml:162` (`[profile.release]` lacks `panic = "abort"`)
 
 Description: The release profile (`Cargo.toml:162-166`) does not set
