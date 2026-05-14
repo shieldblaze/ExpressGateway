@@ -239,7 +239,7 @@ Cross-ref: PROTO-2-05.
 
 ### PROTO-2-07 — `H2ToH2Bridge` / `H3ToH3Bridge` trait impls do not strip hop-by-hop at the trait level
 Severity: low
-Status:   Open
+Status:   Proposed-Fix(Wave-2b-2: option (b)/(c) hybrid — new `crates/lb-l7/src/stripped_request.rs::StrippedRequest<B>` `#[repr(transparent)]` newtype encodes "hop-by-hop already stripped" as a type-system invariant. Proxy fan-out (`H1Proxy::proxy_request`/`proxy_h1_to_h{2,3}`, `H2Proxy::proxy_request`/`proxy_h2_to_h{2,3}`) now consumes `StrippedRequest<IncomingBody>` so the strip is checked at compile time on every internal call site. Constructor is `pub(crate)`; the `#[doc(hidden)] strip_for_test` surface plus `compile_fail` doctests prove the type-system guard. Proof: `crates/lb-l7/tests/stripped_request_newtype.rs` (5 tests). Bridge trait surface itself unchanged — the type-system fence sits one layer up at the proxy hot-path call site, which is where un-stripped requests would otherwise leak.)
 Location:
   * `crates/lb-l7/src/h2_to_h2.rs` (entire file — no `HOP_BY_HOP` filter; pseudo-headers and headers pass through verbatim).
   * `crates/lb-l7/src/h3_to_h3.rs` (entire file — same shape).

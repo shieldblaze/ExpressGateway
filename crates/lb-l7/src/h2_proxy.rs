@@ -49,6 +49,7 @@ use lb_security::{ConnId, SmuggleDetector, SmuggleMode, Watchdog};
 
 use crate::h2_security::H2SecurityThresholds;
 use crate::security_hooks::{DynSecurityHooks, NoopHooks};
+use crate::stripped_request::{StrippedRequest, strip_hop_by_hop as strip_into_newtype};
 use crate::upstream::{BackendInfoPicker, SingleProtoPicker, UpstreamBackend, UpstreamProto};
 use crate::ws_proxy::{self, WsProxy, is_h2_extended_connect};
 
@@ -357,7 +358,7 @@ impl H2Proxy {
             }
             return Arc::clone(gp).handle(req, backend.addr).await;
         }
-        let (mut parts, body) = req.into_parts();
+        let (parts, body) = req.into_parts();
 
         // CODE-2-01 / SEC-2-01: run the security hooks before hop-by-hop
         // strip + upstream-acquire. The reconstructed `Request<()>` is
@@ -434,38 +435,42 @@ impl H2Proxy {
                     .map(str::to_owned)
             });
 
-        strip_hop_by_hop(&mut parts.headers);
-        append_xff(&mut parts.headers, peer);
-        set_xfp(&mut parts.headers, self.is_https);
-        if let Some(h) = authority.as_deref() {
-            set_xfh(&mut parts.headers, h);
-            // Upstream is H1, which requires a Host header. If the client
-            // spoke H2 without one, synthesise it from :authority.
-            if !parts.headers.contains_key(hyper::header::HOST) {
-                if let Ok(v) = HeaderValue::from_str(h) {
-                    parts.headers.insert(hyper::header::HOST, v);
+        // PROTO-2-07 — mint a `StrippedRequest` so the proxy_* fan-out
+        // takes a type that statically guarantees hop-by-hop strip.
+        let req_pre_strip = Request::from_parts(parts, body);
+        let mut stripped = strip_into_newtype(req_pre_strip);
+        {
+            let headers = stripped.headers_mut();
+            append_xff(headers, peer);
+            set_xfp(headers, self.is_https);
+            if let Some(h) = authority.as_deref() {
+                set_xfh(headers, h);
+                // Upstream is H1, which requires a Host header. If the
+                // client spoke H2 without one, synthesise from
+                // :authority.
+                if !headers.contains_key(hyper::header::HOST) {
+                    if let Ok(v) = HeaderValue::from_str(h) {
+                        headers.insert(hyper::header::HOST, v);
+                    }
                 }
             }
+            append_via(headers);
         }
-        append_via(&mut parts.headers);
 
         let Some(backend) = self.picker.pick_info() else {
             return error_response(StatusCode::BAD_GATEWAY, "no backend available");
         };
 
-        let req_for_upstream = Request::from_parts(parts, body);
         let resp = match backend.proto {
-            UpstreamProto::H1 => match self.proxy_request(backend.addr, req_for_upstream).await {
+            UpstreamProto::H1 => match self.proxy_request(backend.addr, stripped).await {
                 Ok(resp) => self.finalize_response(resp),
                 Err(ProxyErr::Upstream(s)) => error_response(StatusCode::BAD_GATEWAY, &s),
                 Err(ProxyErr::Timeout) => {
                     error_response(StatusCode::GATEWAY_TIMEOUT, "upstream timeout")
                 }
             },
-            UpstreamProto::H2 => {
-                Box::pin(self.proxy_h2_to_h2(backend.addr, req_for_upstream)).await
-            }
-            UpstreamProto::H3 => Box::pin(self.proxy_h2_to_h3(&backend, req_for_upstream)).await,
+            UpstreamProto::H2 => Box::pin(self.proxy_h2_to_h2(backend.addr, stripped)).await,
+            UpstreamProto::H3 => Box::pin(self.proxy_h2_to_h3(&backend, stripped)).await,
         };
         // SEC-2-01 / SEC-2-03 — deregister the stream from the
         // watchdog on the normal completion path.
@@ -577,8 +582,9 @@ impl H2Proxy {
     async fn proxy_request(
         &self,
         backend_addr: SocketAddr,
-        req: Request<IncomingBody>,
+        req: StrippedRequest<IncomingBody>,
     ) -> Result<Response<IncomingBody>, ProxyErr> {
+        let req = req.into_inner();
         let pool = self.pool.clone();
         let pooled = tokio::task::spawn_blocking(move || pool.acquire(backend_addr))
             .await
@@ -633,7 +639,7 @@ impl H2Proxy {
     async fn proxy_h2_to_h2(
         &self,
         backend_addr: SocketAddr,
-        req: Request<IncomingBody>,
+        req: StrippedRequest<IncomingBody>,
     ) -> Response<BoxBody<Bytes, hyper::Error>> {
         let Some(h2_pool) = self.h2_upstream.as_ref() else {
             return error_response(
@@ -641,7 +647,7 @@ impl H2Proxy {
                 "H2 backend selected but no Http2Pool wired",
             );
         };
-        let translated = match translate_h2_request_to_h2(req).await {
+        let translated = match translate_h2_request_to_h2(req.into_inner()).await {
             Ok(r) => r,
             Err(s) => return error_response(StatusCode::BAD_GATEWAY, &s),
         };
@@ -658,7 +664,7 @@ impl H2Proxy {
     async fn proxy_h2_to_h3(
         &self,
         backend: &UpstreamBackend,
-        req: Request<IncomingBody>,
+        req: StrippedRequest<IncomingBody>,
     ) -> Response<BoxBody<Bytes, hyper::Error>> {
         let Some(h3_pool) = self.h3_upstream.as_ref() else {
             return error_response(
@@ -667,7 +673,8 @@ impl H2Proxy {
             );
         };
         let sni = backend.sni.as_deref().unwrap_or("");
-        let (headers, body) = match collect_h2_request_to_h3_fieldlist(req, sni).await {
+        let (headers, body) = match collect_h2_request_to_h3_fieldlist(req.into_inner(), sni).await
+        {
             Ok(p) => p,
             Err(s) => return error_response(StatusCode::BAD_GATEWAY, &s),
         };

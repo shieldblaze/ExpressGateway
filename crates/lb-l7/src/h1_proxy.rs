@@ -45,6 +45,7 @@ use tokio::io::{AsyncRead, AsyncWrite};
 use lb_security::{ConnId, SmuggleDetector, SmuggleMode, Watchdog};
 
 use crate::security_hooks::{DynSecurityHooks, NoopHooks, SecurityReject};
+use crate::stripped_request::{StrippedRequest, strip_hop_by_hop as strip_into_newtype};
 use crate::upstream::{BackendInfoPicker, SingleProtoPicker, UpstreamBackend, UpstreamProto};
 use crate::ws_proxy::{self, WsProxy, build_handshake_response_headers, is_h1_upgrade_request};
 
@@ -461,7 +462,7 @@ impl H1Proxy {
             return self.handle_ws_upgrade(req);
         }
 
-        let (mut parts, body) = req.into_parts();
+        let (parts, body) = req.into_parts();
         // CODE-2-01 / SEC-2-01: run the security hooks before hop-by-hop
         // strip + upstream-acquire so a rejected request never spends a
         // pool slot. The reconstructed `Request<()>` is a header-only
@@ -543,31 +544,38 @@ impl H1Proxy {
             .and_then(|v| v.to_str().ok())
             .map(str::to_owned);
 
-        strip_hop_by_hop(&mut parts.headers);
-        append_xff(&mut parts.headers, peer);
-        set_xfp(&mut parts.headers, self.is_https);
-        if let Some(h) = host.as_deref() {
-            set_xfh(&mut parts.headers, h);
+        // PROTO-2-07 — run the strip via the `StrippedRequest` newtype
+        // factory so the downstream proxy_* methods consume a type that
+        // statically guarantees hop-by-hop has been removed. Other
+        // request-mutating helpers (`append_xff`, `set_xfp`, `set_xfh`,
+        // `append_via`) operate on the underlying header map via the
+        // newtype's borrow surface.
+        let req_pre_strip = Request::from_parts(parts, body);
+        let mut stripped = strip_into_newtype(req_pre_strip);
+        {
+            let headers = stripped.headers_mut();
+            append_xff(headers, peer);
+            set_xfp(headers, self.is_https);
+            if let Some(h) = host.as_deref() {
+                set_xfh(headers, h);
+            }
+            append_via(headers);
         }
-        append_via(&mut parts.headers);
 
         let Some(backend) = self.picker.pick_info() else {
             return error_response(StatusCode::BAD_GATEWAY, "no backend available");
         };
 
-        let req_for_upstream = Request::from_parts(parts, body);
         let resp = match backend.proto {
-            UpstreamProto::H1 => match self.proxy_request(backend.addr, req_for_upstream).await {
+            UpstreamProto::H1 => match self.proxy_request(backend.addr, stripped).await {
                 Ok(resp) => self.finalize_response(resp),
                 Err(ProxyErr::Upstream(s)) => error_response(StatusCode::BAD_GATEWAY, &s),
                 Err(ProxyErr::Timeout) => {
                     error_response(StatusCode::GATEWAY_TIMEOUT, "upstream timeout")
                 }
             },
-            UpstreamProto::H2 => {
-                Box::pin(self.proxy_h1_to_h2(backend.addr, req_for_upstream)).await
-            }
-            UpstreamProto::H3 => Box::pin(self.proxy_h1_to_h3(&backend, req_for_upstream)).await,
+            UpstreamProto::H2 => Box::pin(self.proxy_h1_to_h2(backend.addr, stripped)).await,
+            UpstreamProto::H3 => Box::pin(self.proxy_h1_to_h3(&backend, stripped)).await,
         };
         // SEC-2-01 / SEC-2-03 — deregister the request from the
         // watchdog on the normal completion path. The sweeper covers
@@ -581,8 +589,9 @@ impl H1Proxy {
     async fn proxy_request(
         &self,
         backend_addr: SocketAddr,
-        req: Request<IncomingBody>,
+        req: StrippedRequest<IncomingBody>,
     ) -> Result<Response<IncomingBody>, ProxyErr> {
+        let req = req.into_inner();
         let pool = self.pool.clone();
         let pooled = tokio::task::spawn_blocking(move || pool.acquire(backend_addr))
             .await
@@ -635,7 +644,7 @@ impl H1Proxy {
     async fn proxy_h1_to_h2(
         &self,
         backend_addr: SocketAddr,
-        req: Request<IncomingBody>,
+        req: StrippedRequest<IncomingBody>,
     ) -> Response<BoxBody<Bytes, hyper::Error>> {
         let Some(h2_pool) = self.h2_upstream.as_ref() else {
             return error_response(
@@ -643,7 +652,7 @@ impl H1Proxy {
                 "H2 backend selected but no Http2Pool wired",
             );
         };
-        let translated = match translate_h1_request_to_h2(req).await {
+        let translated = match translate_h1_request_to_h2(req.into_inner()).await {
             Ok(r) => r,
             Err(s) => return error_response(StatusCode::BAD_GATEWAY, &s),
         };
@@ -664,7 +673,7 @@ impl H1Proxy {
     async fn proxy_h1_to_h3(
         &self,
         backend: &UpstreamBackend,
-        req: Request<IncomingBody>,
+        req: StrippedRequest<IncomingBody>,
     ) -> Response<BoxBody<Bytes, hyper::Error>> {
         let Some(h3_pool) = self.h3_upstream.as_ref() else {
             return error_response(
@@ -673,8 +682,9 @@ impl H1Proxy {
             );
         };
         let sni = backend.sni.as_deref().unwrap_or("");
+        let inner = req.into_inner();
         let (headers, body) =
-            match collect_h1_request_to_h3_fieldlist(req, sni, /* https = */ true).await {
+            match collect_h1_request_to_h3_fieldlist(inner, sni, /* https = */ true).await {
                 Ok(p) => p,
                 Err(s) => return error_response(StatusCode::BAD_GATEWAY, &s),
             };
