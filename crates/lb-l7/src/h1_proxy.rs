@@ -42,6 +42,7 @@ use lb_io::pool::TcpPool;
 use lb_io::quic_pool::QuicUpstreamPool;
 use tokio::io::{AsyncRead, AsyncWrite};
 
+use crate::security_hooks::{DynSecurityHooks, NoopHooks, SecurityReject};
 use crate::upstream::{BackendInfoPicker, SingleProtoPicker, UpstreamBackend, UpstreamProto};
 use crate::ws_proxy::{self, WsProxy, build_handshake_response_headers, is_h1_upgrade_request};
 
@@ -168,6 +169,10 @@ pub struct H1Proxy {
     h2_upstream: Option<Arc<Http2Pool>>,
     /// Optional H3 upstream pool. PROTO-001 H1→H3 path.
     h3_upstream: Option<Arc<QuicUpstreamPool>>,
+    /// CODE-2-01 / SEC-2-01 hook surface. Defaults to
+    /// [`NoopHooks`]; Wave-2c flips this to the production
+    /// `lb_security::HooksBundle` via [`Self::with_hooks`].
+    hooks: Arc<dyn DynSecurityHooks>,
 }
 
 impl H1Proxy {
@@ -198,6 +203,7 @@ impl H1Proxy {
             ws: None,
             h2_upstream: None,
             h3_upstream: None,
+            hooks: Arc::new(NoopHooks::new()),
         }
     }
 
@@ -208,8 +214,13 @@ impl H1Proxy {
     /// pool. Call sites must populate `h2_upstream` / `h3_upstream`
     /// when their picker can return that protocol — a pick whose
     /// matching pool is `None` falls back to a 502 response.
+    ///
+    /// Defaults the CODE-2-01 `hooks` field to
+    /// [`NoopHooks`]; Wave-2c overrides via [`Self::with_hooks`]. The
+    /// constructor is no longer `const fn` because the default
+    /// [`NoopHooks`] allocates an [`Arc`].
     #[must_use]
-    pub const fn with_multi_proto(
+    pub fn with_multi_proto(
         pool: TcpPool,
         picker: Arc<dyn BackendInfoPicker>,
         alt_svc: Option<AltSvcConfig>,
@@ -225,7 +236,20 @@ impl H1Proxy {
             ws: None,
             h2_upstream: None,
             h3_upstream: None,
+            hooks: Arc::new(NoopHooks::new()),
         }
+    }
+
+    /// Attach a [`SecurityHooks`] impl (CODE-2-01 / SEC-2-01 hot-path
+    /// surface). The Wave-2c wiring in `crates/lb/src/main.rs` calls
+    /// this with `Arc::new(lb_security::HooksBundle::new(...))` so the
+    /// production smuggle / cap / watchdog checks run on every
+    /// inbound request. Without this call, the proxy falls back to
+    /// [`NoopHooks`] (CODE-2-01 lb-l7 shim default).
+    #[must_use]
+    pub fn with_hooks(mut self, hooks: Arc<dyn DynSecurityHooks>) -> Self {
+        self.hooks = hooks;
+        self
     }
 
     /// Attach an H2 upstream pool used for backends with
@@ -376,6 +400,24 @@ impl H1Proxy {
         }
 
         let (mut parts, body) = req.into_parts();
+        // CODE-2-01 / SEC-2-01: run the security hooks before hop-by-hop
+        // strip + upstream-acquire so a rejected request never spends a
+        // pool slot. The reconstructed `Request<()>` is a header-only
+        // borrow surface — the trait reads `headers()` + `version()`,
+        // it does not consume the body.
+        let inspect_req = {
+            let mut b = Request::builder()
+                .method(parts.method.clone())
+                .uri(parts.uri.clone())
+                .version(parts.version);
+            for (n, v) in &parts.headers {
+                b = b.header(n.clone(), v.clone());
+            }
+            b.body(()).unwrap_or_else(|_| Request::new(()))
+        };
+        if let Err(rej) = self.hooks.inspect_request(&inspect_req, peer.ip()) {
+            return reject_to_response(&rej);
+        }
         let host = parts
             .headers
             .get(hyper::header::HOST)
@@ -718,6 +760,34 @@ fn error_response(status: StatusCode, msg: &str) -> Response<BoxBody<Bytes, hype
     let mut resp = Response::new(body);
     *resp.status_mut() = status;
     resp
+}
+
+/// CODE-2-01 / SEC-2-01: map a [`SecurityReject`] to the HTTP response
+/// the proxy returns to the client.
+///
+/// * `Smuggle` / `SlowHandshake` → `400 Bad Request`. Smuggling is a
+///   structural request defect; slow-handshake aligns with RFC 9110
+///   §15.5.1 "request line / headers malformed".
+/// * `RateLimited` → `503 Service Unavailable` with
+///   `Retry-After: 1`. The detector path treats rate-limiting as a
+///   transient per-peer condition; a fixed 1-second hint is the
+///   minimum useful value and avoids leaking detector internals.
+/// * `OverCap` → `503 Service Unavailable` with `Retry-After: 1`. The
+///   per-IP / per-listener counter saturated; RST-without-response is
+///   handled at the accept site (Wave-2c), not here — by the time the
+///   request handler sees `OverCap`, the connection is already
+///   established and a response is cheaper than a half-close.
+pub(crate) fn reject_to_response(rej: &SecurityReject) -> Response<BoxBody<Bytes, hyper::Error>> {
+    match rej {
+        SecurityReject::Smuggle(_) => error_response(StatusCode::BAD_REQUEST, "request smuggling"),
+        SecurityReject::SlowHandshake => error_response(StatusCode::BAD_REQUEST, "slow handshake"),
+        SecurityReject::RateLimited | SecurityReject::OverCap(_) => {
+            let mut resp = error_response(StatusCode::SERVICE_UNAVAILABLE, "over capacity");
+            resp.headers_mut()
+                .insert(hyper::header::RETRY_AFTER, HeaderValue::from_static("1"));
+            resp
+        }
+    }
 }
 
 /// Strip hop-by-hop headers per RFC 9110 §7.6.1 plus any names listed

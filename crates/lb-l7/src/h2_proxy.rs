@@ -46,6 +46,7 @@ use crate::h1_proxy::{
     strip_hop_by_hop,
 };
 use crate::h2_security::H2SecurityThresholds;
+use crate::security_hooks::{DynSecurityHooks, NoopHooks};
 use crate::upstream::{BackendInfoPicker, SingleProtoPicker, UpstreamBackend, UpstreamProto};
 use crate::ws_proxy::{self, WsProxy, is_h2_extended_connect};
 
@@ -71,6 +72,10 @@ pub struct H2Proxy {
     h2_upstream: Option<Arc<Http2Pool>>,
     /// Optional H3 upstream pool. PROTO-001 H2→H3 path.
     h3_upstream: Option<Arc<QuicUpstreamPool>>,
+    /// CODE-2-01 / SEC-2-01 hook surface. Defaults to
+    /// [`NoopHooks`]; Wave-2c flips this to the production
+    /// `lb_security::HooksBundle` via [`Self::with_hooks`].
+    hooks: Arc<dyn DynSecurityHooks>,
 }
 
 impl H2Proxy {
@@ -125,13 +130,19 @@ impl H2Proxy {
             grpc: None,
             h2_upstream: None,
             h3_upstream: None,
+            hooks: Arc::new(NoopHooks::new()),
         }
     }
 
     /// Construct an [`H2Proxy`] backed by a multi-protocol picker
     /// (PROTO-001).
+    ///
+    /// Defaults the CODE-2-01 `hooks` field to
+    /// [`NoopHooks`]; Wave-2c overrides via [`Self::with_hooks`]. The
+    /// constructor is no longer `const fn` because the default
+    /// [`NoopHooks`] allocates an [`Arc`].
     #[must_use]
-    pub const fn with_multi_proto(
+    pub fn with_multi_proto(
         pool: TcpPool,
         picker: Arc<dyn BackendInfoPicker>,
         alt_svc: Option<AltSvcConfig>,
@@ -150,7 +161,18 @@ impl H2Proxy {
             grpc: None,
             h2_upstream: None,
             h3_upstream: None,
+            hooks: Arc::new(NoopHooks::new()),
         }
+    }
+
+    /// Attach a [`SecurityHooks`] impl (CODE-2-01 / SEC-2-01 hot-path
+    /// surface). Mirrors [`crate::h1_proxy::H1Proxy::with_hooks`].
+    /// Wave-2c flips this to the production
+    /// `lb_security::HooksBundle` from `crates/lb/src/main.rs`.
+    #[must_use]
+    pub fn with_hooks(mut self, hooks: Arc<dyn DynSecurityHooks>) -> Self {
+        self.hooks = hooks;
+        self
     }
 
     /// Attach an H2 upstream pool used for backends with
@@ -313,6 +335,24 @@ impl H2Proxy {
             return Arc::clone(gp).handle(req, backend.addr).await;
         }
         let (mut parts, body) = req.into_parts();
+
+        // CODE-2-01 / SEC-2-01: run the security hooks before hop-by-hop
+        // strip + upstream-acquire. The reconstructed `Request<()>` is
+        // a header-only borrow surface; the trait reads `headers()` +
+        // `version()` only.
+        let inspect_req = {
+            let mut b = Request::builder()
+                .method(parts.method.clone())
+                .uri(parts.uri.clone())
+                .version(parts.version);
+            for (n, v) in &parts.headers {
+                b = b.header(n.clone(), v.clone());
+            }
+            b.body(()).unwrap_or_else(|_| Request::new(()))
+        };
+        if let Err(rej) = self.hooks.inspect_request(&inspect_req, peer.ip()) {
+            return crate::h1_proxy::reject_to_response(&rej);
+        }
 
         // Determine the authority: H2 carries it in :authority, which
         // hyper surfaces as `uri.authority()`. Fall back to the Host
