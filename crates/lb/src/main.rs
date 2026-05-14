@@ -369,6 +369,34 @@ struct ListenerState {
     /// long-running upstream is interrupted on drain rather than
     /// silently aborted on runtime drop.
     tracker: TaskTracker,
+    /// REL-2-09 follow-on: the bind address used as the `listener`
+    /// label on `accept_inflight{listener=…}` and on the (Wave-2c-2)
+    /// per-request `http_requests_total{listener, …}` emit-site.
+    listener_label: Arc<String>,
+}
+
+/// REL-2-09 follow-on: RAII guard that decrements the
+/// `accept_inflight{listener=…}` gauge when dropped. Constructed at
+/// the accept-site immediately after the per-listener inflight
+/// `Semaphore` permit is acquired; the guard is moved into the
+/// per-connection task so the gauge bump tracks the permit lifetime
+/// exactly (including the panic-abort path on dev/test profiles).
+struct AcceptInflightGuard {
+    metrics: Arc<MetricsRegistry>,
+    listener: Arc<String>,
+}
+
+impl AcceptInflightGuard {
+    fn new(metrics: Arc<MetricsRegistry>, listener: Arc<String>) -> Self {
+        metrics.accept_inflight_inc(listener.as_str());
+        Self { metrics, listener }
+    }
+}
+
+impl Drop for AcceptInflightGuard {
+    fn drop(&mut self) {
+        self.metrics.accept_inflight_dec(self.listener.as_str());
+    }
 }
 
 /// Listener socket options matching PROMPT.md §7 for listener sockets.
@@ -1018,6 +1046,7 @@ async fn spawn_tcp(
         hooks,
         shutdown_token,
         tracker: tracker.clone(),
+        listener_label: Arc::new(listener_cfg.address.clone()),
     });
     // CODE-2-03 follow-on: the listener accept loop itself is a
     // long-lived task. Route it through the tracker so drain waits
@@ -1274,6 +1303,12 @@ fn install_hotpath_metrics(
         "Accepts shed because the per-listener inflight cap was hit",
     ) {
         tracing::warn!(metric = "accept_shed_total", error = %e, "counter register failed");
+    }
+    // REL-2-09 follow-on: pre-register the saturation gauge so
+    // `/metrics` advertises `accept_inflight{listener}` at zero from
+    // t0 (no first-bump-creates-family race).
+    if let Err(e) = metrics.accept_inflight_gauge() {
+        tracing::warn!(metric = "accept_inflight", error = %e, "gauge register failed");
     }
     // CODE-2-06 / REL-2-10 Wave 2c-2: classifier for accept(2) errors.
     if let Err(e) = metrics.counter_vec(
@@ -2162,9 +2197,20 @@ async fn run_listener(bind_addr: String, state: Arc<ListenerState>) -> anyhow::R
         // mid-request interrupts long-running upstream work instead of
         // sitting on the connection until the runtime is dropped.
         let conn_cancel = st.shutdown_token.clone();
+        // REL-2-09 follow-on: RAII guard around the
+        // `accept_inflight{listener}` gauge. Constructed immediately
+        // after the Semaphore permit is acquired so the gauge value
+        // and the Semaphore's `available_permits()` stay coherent. The
+        // guard is moved into the per-connection task so Drop fires
+        // when the task exits, matching the permit lifetime exactly.
+        let inflight_gauge_guard = AcceptInflightGuard::new(
+            Arc::clone(&state.metrics),
+            Arc::clone(&state.listener_label),
+        );
         st.tracker.clone().spawn(async move {
             let _permit = _inflight_permit;
             let _conn_permit = _admission_permit;
+            let _gauge_guard = inflight_gauge_guard;
             st.active_connections.fetch_add(1, Ordering::Relaxed);
             st.metrics.increment("connections_total", 1);
 

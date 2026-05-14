@@ -351,6 +351,47 @@ impl MetricsRegistry {
         }
     }
 
+    /// REL-2-09 follow-on: get-or-create the canonical
+    /// `accept_inflight{listener}` gauge family. Bumped at accept-site
+    /// when a per-listener inflight permit is acquired, decremented on
+    /// permit release. Pair with [`Self::accept_inflight_inc`] /
+    /// [`Self::accept_inflight_dec`] for ergonomic call-site wiring.
+    ///
+    /// # Errors
+    ///
+    /// Bubbles up the underlying `prometheus` registration error.
+    pub fn accept_inflight_gauge(&self) -> Result<IntGaugeVec, MetricsError> {
+        self.gauge_vec(
+            "accept_inflight",
+            "In-flight accepted connections currently held under the per-listener cap",
+            &["listener"],
+        )
+    }
+
+    /// REL-2-09 follow-on: increment the `accept_inflight{listener=…}`
+    /// gauge. Best-effort — registration failures are logged at warn
+    /// and the metric is dropped on this call so the hot path is never
+    /// torn down by a metrics error.
+    pub fn accept_inflight_inc(&self, listener: &str) {
+        match self.accept_inflight_gauge() {
+            Ok(g) => g.with_label_values(&[listener]).inc(),
+            Err(e) => {
+                tracing::warn!(metric = "accept_inflight", error = %e, "gauge inc failed");
+            }
+        }
+    }
+
+    /// REL-2-09 follow-on: decrement the `accept_inflight{listener=…}`
+    /// gauge. Mirror of [`Self::accept_inflight_inc`].
+    pub fn accept_inflight_dec(&self, listener: &str) {
+        match self.accept_inflight_gauge() {
+            Ok(g) => g.with_label_values(&[listener]).dec(),
+            Err(e) => {
+                tracing::warn!(metric = "accept_inflight", error = %e, "gauge dec failed");
+            }
+        }
+    }
+
     /// REL-2-15 / CODE-2-02 wiring: get-or-create the canonical
     /// `panic_total` counter.
     ///

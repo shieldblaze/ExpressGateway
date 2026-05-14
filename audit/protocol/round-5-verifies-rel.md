@@ -321,6 +321,21 @@ Verdict: **Verified-Fixed-Partial** — semaphore + shed counter ship;
 the gauge for the "warm before saturation" alert is the deferred
 follow-up.
 
+**Round-6 closure (task #37, rel)**: `accept_inflight{listener}`
+gauge family added to `lb_observability` (helpers
+`accept_inflight_inc` / `accept_inflight_dec` + a get-or-create
+`accept_inflight_gauge`). Wired at the accept-site in
+`crates/lb/src/main.rs` via an `AcceptInflightGuard` RAII wrapper —
+inc on Semaphore permit-acquire, dec on permit-release (the guard
+is moved into the per-connection task so Drop fires with the
+permit's lifetime). Family is pre-registered in
+`install_hotpath_metrics` so `/metrics` advertises the series at
+zero from t0. Canonical-label table + `LabelBudget::worst_case`
+extended to cover the new family. Proof: `tests/metrics_endpoint.rs
+::test_accept_inflight_gauge_emitted_per_listener`.
+
+Status: **Verified-Fixed**
+
 ---
 
 ### REL-2-10 — `accept(2)` errors classified + backoff

@@ -109,3 +109,47 @@ async fn metrics_endpoint_healthz_returns_200() {
 
     cancel.cancel();
 }
+
+#[tokio::test]
+async fn test_accept_inflight_gauge_emitted_per_listener() {
+    // REL-2-09 follow-on: `accept_inflight{listener=…}` must be
+    // emitted as a per-listener gauge. We exercise the registry-side
+    // helpers (`accept_inflight_inc` / `accept_inflight_dec`) the
+    // `lb` accept-site RAII guard relies on, then scrape `/metrics`
+    // and assert the gauge shape + value.
+    let reg = Arc::new(MetricsRegistry::new());
+    // Bump on permit-acquire (RAII Drop path will dec on disconnect).
+    reg.accept_inflight_inc("0.0.0.0:8443");
+    reg.accept_inflight_inc("0.0.0.0:8443");
+    reg.accept_inflight_inc("127.0.0.1:9090");
+
+    let cancel = CancellationToken::new();
+    let bind: SocketAddr = "127.0.0.1:0".parse().unwrap();
+    let local = admin_http::serve(Arc::clone(&reg), bind, cancel.clone())
+        .await
+        .unwrap();
+    tokio::time::sleep(Duration::from_millis(20)).await;
+
+    let (status, body) = get(local, "/metrics").await;
+    assert_eq!(status, http::StatusCode::OK);
+
+    // The two distinct listeners must appear as separate series.
+    assert!(
+        body.contains("accept_inflight{listener=\"0.0.0.0:8443\"} 2"),
+        "missing inflight gauge for 0.0.0.0:8443:\n{body}"
+    );
+    assert!(
+        body.contains("accept_inflight{listener=\"127.0.0.1:9090\"} 1"),
+        "missing inflight gauge for 127.0.0.1:9090:\n{body}"
+    );
+
+    // Now simulate connection-close: the RAII guard's Drop calls dec.
+    reg.accept_inflight_dec("0.0.0.0:8443");
+    let (_, body) = get(local, "/metrics").await;
+    assert!(
+        body.contains("accept_inflight{listener=\"0.0.0.0:8443\"} 1"),
+        "gauge did not decrement after dec:\n{body}"
+    );
+
+    cancel.cancel();
+}

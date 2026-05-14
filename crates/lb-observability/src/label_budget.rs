@@ -48,6 +48,11 @@ pub const CANONICAL_LABELS: &[(&str, &[&str])] = &[
     ),
     ("backend_request_duration_seconds", &["listener", "backend"]),
     ("connections_inflight", &["listener"]),
+    // REL-2-09 follow-on: accept-site saturation gauge, emitted by
+    // `lb_observability::MetricsRegistry::accept_inflight_{inc,dec}`
+    // from `crates/lb/src/main.rs`. Cardinality matches
+    // `connections_inflight`.
+    ("accept_inflight", &["listener"]),
     ("xdp_conntrack_full_total", &["family"]),
     ("xdp_conntrack_entries_current", &["family"]),
     ("xdp_conntrack_capacity", &["family"]),
@@ -139,6 +144,9 @@ impl LabelBudget {
             backend_requests_total: self.listeners * self.backends_per_listener * STATUS_CLASSES,
             backend_request_duration_seconds: self.listeners * self.backends_per_listener,
             connections_inflight: self.listeners,
+            // REL-2-09 follow-on: `accept_inflight{listener}` shares
+            // cardinality with `connections_inflight{listener}`.
+            accept_inflight: self.listeners,
         }
     }
 
@@ -164,6 +172,7 @@ impl LabelBudget {
                 w.backend_request_duration_seconds,
             ),
             ("connections_inflight", w.connections_inflight),
+            ("accept_inflight", w.accept_inflight),
         ];
         for (family, worst) in cases {
             if *worst > ceiling {
@@ -191,6 +200,9 @@ pub struct WorstCase {
     pub backend_request_duration_seconds: usize,
     /// `connections_inflight{listener}`
     pub connections_inflight: usize,
+    /// `accept_inflight{listener}` — REL-2-09 follow-on saturation
+    /// gauge bumped at the accept-site semaphore.
+    pub accept_inflight: usize,
 }
 
 #[cfg(test)]
