@@ -315,7 +315,7 @@ Cross-ref: none.
 
 ### PROTO-2-09 — `ListenerMode::build_listener_mode` silently falls through to `PlainTcp` for unknown `protocol = …` values
 Severity: medium
-Status:   Open
+Status:   Deferred-to-Wave-2c (build_listener_mode is in main.rs:837)
 Location: `crates/lb/src/main.rs:837` (`_ => Ok(ListenerMode::PlainTcp),`).
 The branch is the final arm of the `match listener_cfg.protocol.as_str()`
 construct that starts at the function definition above line 700.
