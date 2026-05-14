@@ -75,14 +75,21 @@ jobs:
         run: cargo fmt --all -- --check
 
   doc-lint:
-    # REL-2-01: guard the operator-facing docs against drift.
-    # Fails on stale binary names, removed crate names, etc.
+    # REL-2-01 + ROUND8-OPS-09 + ROUND8-L4-10: guard the
+    # operator-facing docs against drift AND verify every
+    # `Status: Verified-Fixed(<sha>)` audit claim resolves to a
+    # SHA whose diff actually closes the recommendation.
     name: Doc Lint
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          # Tier 2 (audit-of-audit) walks `git cat-file` / `git show`
+          # / `git ls-tree` against historical SHAs cited in
+          # Verified-Fixed claims. Need full history.
+          fetch-depth: 0
 
-      - name: Run doc-lint
+      - name: Run doc-lint (tier-1 stale patterns + tier-2 audit-of-audit)
         run: bash scripts/ci/doc-lint.sh
 
   panic-freedom:
