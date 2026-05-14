@@ -16,7 +16,7 @@ plans land in Round 3.
 
 ### PROTO-2-01 — H2 listener silently prefers `:authority` when it disagrees with `Host`
 Severity: high
-Status:   Open
+Status:   Proposed-Fix(Wave-2b-2: new `H2Proxy::handle` guard `check_authority_host_agreement` runs after the SmuggleDetector and before hop-by-hop strip; mismatching `:authority` vs `Host` (case-insensitive host compare, default-port latitude per §8.3.1, IPv6-bracket aware) returns `400 Bad Request: :authority disagrees with Host (RFC 9113 §8.3.1)`. Also belt-and-braces guard inside `H2ToH1Bridge::bridge_request` so direct bridge consumers can't bypass. Proof: `crates/lb-l7/tests/h2_authority_host_mismatch.rs` (11 tests including `test_h2_400_on_disagreement`) and two in-module tests in `h2_to_h1.rs`.)
 Location: `crates/lb-l7/src/h2_proxy.rs:320-330` (and the `Host`-synthesis path immediately below at lines 337-344).
 Description: RFC 9113 §8.3.1 ("Connection-Specific Header Fields" /
 ":authority Pseudo-Header") states: *"An intermediary that forwards a

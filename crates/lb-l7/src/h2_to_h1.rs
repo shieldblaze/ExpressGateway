@@ -84,6 +84,32 @@ impl Bridge for H2ToH1Bridge {
         let auth = authority
             .filter(|a| !a.is_empty())
             .ok_or_else(|| L7Error::MissingPseudoHeader(":authority".to_owned()))?;
+
+        // PROTO-2-01 — RFC 9113 §8.3.1: if the request carries both a
+        // `:authority` pseudo-header and a regular `Host` header, the
+        // two MUST agree. Mismatch is a host-confusion smuggling
+        // primitive against backends that authorise on `Host` (the
+        // bridge would otherwise replace `Host` with `:authority`
+        // silently). The H2→H1 bridge is a separate entry point from
+        // `H2Proxy::handle`; this guard catches direct bridge users
+        // (test harnesses, future filter chains) as well as any
+        // future code path that re-uses the bridge without the
+        // proxy preamble.
+        if let Some((idx, (_, existing_host))) = regular_headers
+            .iter()
+            .enumerate()
+            .find(|(_, (k, _))| k.eq_ignore_ascii_case("host"))
+        {
+            if !authority_host_components_agree(&auth, existing_host) {
+                return Err(L7Error::BridgeError(
+                    "h2->h1 :authority/Host disagree (RFC 9113 §8.3.1)".to_owned(),
+                ));
+            }
+            // Drop the existing Host so the inserted one below is the
+            // sole entry. Keeps subsequent code unchanged.
+            regular_headers.remove(idx);
+        }
+
         regular_headers.insert(0, ("host".to_owned(), auth));
 
         check_header_count(regular_headers.len())?;
@@ -128,5 +154,96 @@ impl Bridge for H2ToH1Bridge {
 
     fn dest_protocol(&self) -> Protocol {
         Protocol::Http1
+    }
+}
+
+/// PROTO-2-01 — compare a `:authority` value against a `Host` header
+/// value per RFC 9113 §8.3.1 + RFC 3986 §3.2.2.
+///
+/// Host case-insensitive; ports compared when both are explicit.
+/// Either side eliding a port is accepted (default-port latitude).
+/// Empty host on either side rejects.
+fn authority_host_components_agree(authority: &str, host: &str) -> bool {
+    let (a_host, a_port) = split_host_port(authority);
+    let (h_host, h_port) = split_host_port(host);
+    if a_host.is_empty() || h_host.is_empty() {
+        return false;
+    }
+    if !a_host.eq_ignore_ascii_case(h_host) {
+        return false;
+    }
+    match (a_port, h_port) {
+        (Some(ap), Some(hp)) => ap == hp,
+        _ => true,
+    }
+}
+
+/// Split `host[:port]` honouring bracketed IPv6 literals. See
+/// `crate::h2_proxy::split_host_port` for the same shape used by the
+/// listener-level check; duplicated here to keep `h2_to_h1.rs`
+/// independent of the proxy module.
+fn split_host_port(s: &str) -> (&str, Option<&str>) {
+    if let Some(stripped) = s.strip_prefix('[') {
+        if let Some(end) = stripped.find(']') {
+            let host_with_brackets = &s[..=end + 1];
+            let rest = &s[end + 2..];
+            let port = rest.strip_prefix(':');
+            return (host_with_brackets, port.filter(|p| !p.is_empty()));
+        }
+        return (s, None);
+    }
+    match s.rsplit_once(':') {
+        Some((h, p)) if !p.is_empty() && p.chars().all(|c| c.is_ascii_digit()) => (h, Some(p)),
+        _ => (s, None),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn bridge_rejects_authority_host_disagreement() {
+        let bridge = H2ToH1Bridge;
+        let req = BridgeRequest {
+            method: "GET".into(),
+            uri: "/".into(),
+            headers: vec![
+                (":method".into(), "GET".into()),
+                (":path".into(), "/".into()),
+                (":scheme".into(), "https".into()),
+                (":authority".into(), "victim.example".into()),
+                ("host".into(), "attacker.example".into()),
+            ],
+            body: bytes::Bytes::new(),
+            scheme: None,
+        };
+        let err = bridge.bridge_request(&req).unwrap_err();
+        let msg = format!("{err}");
+        assert!(msg.contains("RFC 9113"), "got: {msg}");
+    }
+
+    #[test]
+    fn bridge_accepts_matching_authority_host() {
+        let bridge = H2ToH1Bridge;
+        let req = BridgeRequest {
+            method: "GET".into(),
+            uri: "/".into(),
+            headers: vec![
+                (":method".into(), "GET".into()),
+                (":path".into(), "/".into()),
+                (":authority".into(), "example.test:8443".into()),
+                ("host".into(), "example.test:8443".into()),
+            ],
+            body: bytes::Bytes::new(),
+            scheme: None,
+        };
+        let out = bridge.bridge_request(&req).unwrap();
+        let host = out
+            .headers
+            .iter()
+            .find(|(k, _)| k == "host")
+            .map(|(_, v)| v.as_str());
+        assert_eq!(host, Some("example.test:8443"));
     }
 }

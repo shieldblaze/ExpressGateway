@@ -398,6 +398,17 @@ impl H2Proxy {
             return error_response(StatusCode::BAD_REQUEST, "request smuggling");
         }
 
+        // PROTO-2-01 — RFC 9113 §8.3.1: when both `:authority` and
+        // `Host` are present they MUST agree. hyper surfaces
+        // `:authority` as `uri.authority()`. Disagreement is a
+        // routing/authz desync primitive (host-confusion smuggling
+        // against backends that authorise on `Host`), so reject with
+        // 400 BEFORE hop-by-hop strip / upstream acquire.
+        if let Err(msg) = check_authority_host_agreement(&parts.uri, &parts.headers) {
+            tracing::warn!(peer = %peer, reason = msg, "h2 :authority/Host mismatch rejected");
+            return error_response(StatusCode::BAD_REQUEST, msg);
+        }
+
         // SEC-2-01 / SEC-2-03 — register the stream with the
         // slowloris watchdog.
         let watch_id = self.watchdog.as_ref().map(|wd| {
@@ -968,6 +979,90 @@ fn error_response(status: StatusCode, msg: &str) -> Response<BoxBody<Bytes, hype
     let mut resp = Response::new(body);
     *resp.status_mut() = status;
     resp
+}
+
+/// PROTO-2-01 — RFC 9113 §8.3.1 enforcement.
+///
+/// Returns `Err(static_msg)` when **both** `:authority` (surfaced by
+/// hyper as `uri.authority()`) and `Host` are present **and** their
+/// host components disagree. The comparison is case-insensitive on
+/// the host name (RFC 3986 §3.2.2: host is case-insensitive) and
+/// ignores the port when either side lacks one (RFC 9113 §8.3.1
+/// "default port" carve-out). Returns `Ok(())` if either is absent,
+/// if they match exactly, or if only the port differs while one side
+/// elides it.
+///
+/// Per the §8.3.1 forwarding rule, an intermediary MUST treat such
+/// disagreement as a malformed request. The proxy lifts that into a
+/// 400 Bad Request response. Returning a `&'static str` keeps the
+/// rejection allocation-free on the cold path.
+pub fn check_authority_host_agreement(
+    uri: &http::Uri,
+    headers: &hyper::HeaderMap,
+) -> Result<(), &'static str> {
+    let authority = uri.authority().map(http::uri::Authority::as_str);
+    let host_hdr = headers
+        .get(hyper::header::HOST)
+        .and_then(|v| v.to_str().ok());
+    match (authority, host_hdr) {
+        (Some(a), Some(h)) => {
+            if authority_matches_host(a, h) {
+                Ok(())
+            } else {
+                Err("Bad Request: :authority disagrees with Host (RFC 9113 §8.3.1)")
+            }
+        }
+        _ => Ok(()),
+    }
+}
+
+/// Compare a `:authority` value against a `Host` header value per
+/// RFC 9113 §8.3.1 + RFC 3986 §3.2.2 (host-component case-insensitive).
+///
+/// Rules:
+///   * Empty / missing host on either side → mismatch.
+///   * Host components compared case-insensitively.
+///   * If both carry an explicit port, the ports must match.
+///   * If only one side carries an explicit port, the comparison
+///     succeeds when the host components match (the proxy does not
+///     have a default-port table; this matches the §8.3.1 latitude
+///     for omitted default ports).
+fn authority_matches_host(authority: &str, host: &str) -> bool {
+    let (a_host, a_port) = split_host_port(authority);
+    let (h_host, h_port) = split_host_port(host);
+    if a_host.is_empty() || h_host.is_empty() {
+        return false;
+    }
+    if !a_host.eq_ignore_ascii_case(h_host) {
+        return false;
+    }
+    match (a_port, h_port) {
+        (Some(ap), Some(hp)) => ap == hp,
+        // One side elides the port — accept (default-port latitude).
+        _ => true,
+    }
+}
+
+/// Split `host[:port]` into `(host, Some(port_str))` / `(host, None)`.
+/// Bracketed IPv6 literals `[::1]:443` are preserved verbatim as the
+/// host portion (including brackets) so the case-insensitive compare
+/// catches hex-digit mismatches without splitting on colon inside the
+/// literal.
+fn split_host_port(s: &str) -> (&str, Option<&str>) {
+    if let Some(stripped) = s.strip_prefix('[') {
+        // IPv6 literal: `[…]` then optional `:port`.
+        if let Some(end) = stripped.find(']') {
+            let host_with_brackets = &s[..=end + 1];
+            let rest = &s[end + 2..];
+            let port = rest.strip_prefix(':');
+            return (host_with_brackets, port.filter(|p| !p.is_empty()));
+        }
+        return (s, None);
+    }
+    match s.rsplit_once(':') {
+        Some((h, p)) if !p.is_empty() && p.chars().all(|c| c.is_ascii_digit()) => (h, Some(p)),
+        _ => (s, None),
+    }
 }
 
 #[cfg(test)]
