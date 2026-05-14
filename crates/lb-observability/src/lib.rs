@@ -33,11 +33,15 @@ use prometheus::{
 };
 
 pub mod admin_http;
+pub mod label_budget;
 pub mod log;
 pub mod probes;
 pub mod prometheus_exposition;
 pub mod tracing_propagation;
 
+pub use label_budget::{
+    CANONICAL_LABELS, DEFAULT_MAX_LABEL_CARDINALITY, LabelBudget, LabelBudgetError,
+};
 pub use log::{LogFormat, TracingConfig, TracingError, init_tracing};
 pub use probes::{ProbeRegistry, ProbeState};
 

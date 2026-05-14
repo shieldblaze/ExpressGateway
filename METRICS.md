@@ -158,3 +158,58 @@ For a P99 latency panel once latency histograms land:
 ## How this gap is tracked
 
 Every `❌` row above maps to a TODO in `docs/gap-analysis.md` under the "Observability" section. The **Pillar 3b** milestone promotes the registry from counters-only to full Prometheus exposition with histograms, gauges, and labels, at which point this file's "Ready" column fills in and the panels above can be assembled.
+
+## REL-2-08: canonical label keys + cardinality budget
+
+The rel-owned RED metric families settled on a closed-set label
+vocabulary. The list below is the **single source of truth**;
+`lb_observability::label_budget::CANONICAL_LABELS` mirrors it in
+code and the integration test in
+`crates/lb-observability/tests/red_label_budget.rs` re-validates
+the live registry against this table on every CI run.
+
+| Family                                     | Type        | Labels                                              | Worst case (8L × 32B × 16R)  |
+|--------------------------------------------|-------------|-----------------------------------------------------|------------------------------|
+| `http_requests_total`                      | CounterVec  | `listener`, `route`, `version`, `status_class`      | 8 × 16 × 4 × 5 = 2 560       |
+| `http_request_duration_seconds`            | HistogramVec| `listener`, `route`, `version`                      | 8 × 16 × 4 = 512             |
+| `backend_requests_total`                   | CounterVec  | `listener`, `backend`, `status_class`               | 8 × 32 × 5 = 1 280           |
+| `backend_request_duration_seconds`         | HistogramVec| `listener`, `backend`                               | 8 × 32 = 256                 |
+| `connections_inflight`                     | GaugeVec    | `listener`                                          | 8                            |
+| `xdp_conntrack_full_total`                 | Counter     | `family` (`v4` \| `v6`)                             | 2                            |
+| `xdp_conntrack_entries_current`            | Gauge       | `family`                                            | 2                            |
+| `xdp_conntrack_capacity`                   | Gauge       | `family`                                            | 2                            |
+| `xdp_packets_total`                        | Counter     | `action` (`pass` \| `drop` \| `tx` \| …)            | ≤ 10                         |
+| `xdp_bytes_total`                          | Counter     | `direction` (`rx` \| `tx`)                          | 2                            |
+| `xdp_attached_mode`                        | Gauge       | `mode` (`drv` \| `skb` \| `hw`)                     | 3                            |
+| `xdp_sampler_errors_total`                 | Counter     | `kind`                                              | small                        |
+
+### Why these and not others?
+
+- **No `backend` label on `http_requests_total`.** Request-level
+  metrics multiply listener × route × version × status_class but
+  not backend; otherwise a 256-backend pool with two listeners
+  already burns 25 600 series per family. Backend-keyed series
+  live on the `backend_*` family instead.
+- **No `status_class` label on duration histograms.** Each
+  histogram already has ~12 bucket entries; adding 5× status
+  classes multiplies the underlying time-series count five-fold
+  for no observable benefit (operators always look at p50/p99
+  irrespective of status).
+- **`action` not `result` on `xdp_packets_total`.** Locked in the
+  REL-2-13 / EBPF-2-08 cross-review §2.
+
+### Startup-time cardinality budget
+
+`lb_observability::LabelBudget::check(...)` runs at startup and
+refuses to boot if any family would emit more than
+`[observability].max_label_cardinality` series (default 10 000).
+The check is purely arithmetic — it multiplies the static config
+shape through the canonical label keys above. This is a hard rail
+against operator misconfiguration that would otherwise saturate
+the local Prometheus instance on the first scrape.
+
+Error:
+```
+label cardinality budget exceeded: backend_requests_total would emit
+up to 500000 series, ceiling is 10000
+```
