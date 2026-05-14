@@ -25,3 +25,16 @@ LEAD=team-lead
 # 5 -> ROUND_VERIFY      (independent verification)
 # 6 -> ROUND_REGRESSION  (delta sweep; loop until clean)
 # 7 -> ROUND_FINAL       (gate matrix + FINAL_REPORT.md)
+
+# Round 6 status:
+# 2026-05-14 — `proto` self-verification mini-loop (Round-3-mini)
+# closed:
+#   - PROTO-2-16 (Low)    — H1 cancel doc-comment fixup            — 9b374cc
+#   - PROTO-2-17 (Low)    — [security].strict_te SmuggleMode knob  — e3e7b17
+#   - PROTO-2-18 (Medium) — check_sni_authority wired into hot path — 444668d
+#   - PROTO-2-19 (Medium) — H1 trailer wire emission                — 42df990
+# Revalidation: audit/protocol/round-6-revalidation.md.
+# Status field updates in audit/protocol/round-2-review.md:
+#   - PROTO-2-15 → Verified-Fixed (was -Partial)
+#   - PROTO-2-12 → Verified-Fixed-Partial (H3 surface gap remains)
+# Lead may push PROTO-2-18/-19 to sec for adversarial cross-check.
