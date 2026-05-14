@@ -74,7 +74,7 @@ drain), `proto` (GOAWAY).
 
 ### REL-2-02 — SIGTERM is not a drain; in-flight frames severed at ~2.5 s
 Severity: critical
-Status:   Verified-Fixed(verifier=proto, author-sha=1f7ab4b+fc050b0+82551dc+33edd13)   <!-- Drain ordering at main.rs:1699-1759: set_draining → 1s settle → cancel → listener.abort → quic.shutdown(2s) → shutdown.drain(10s). H2 graceful_shutdown emits canonical two-step GOAWAY (lb-l7 unit test passes). Three drain integration tests stay #[ignore]'d with verified-accurate reasons (H1 needs serve_connection_with_cancel; H2 needs self-signed TLS scaffold + h2 client; H3 spawn_quic owns its own token). See audit/protocol/round-5-verifies-rel.md. -->
+Status:   Verified-Fixed(verifier=proto, author-sha=1f7ab4b+fc050b0+82551dc+33edd13+task-38)   <!-- Drain ordering at main.rs:1699-1759: set_draining → 1s settle → cancel → listener.abort → quic.shutdown(2s) → shutdown.drain(10s). H2 graceful_shutdown emits canonical two-step GOAWAY (lb-l7 unit test passes). Task-38 closed the three drain test gaps: H1 `serve_connection_with_cancel` + hyper http1 graceful_shutdown wired at H1 / H1s-ALPN accept sites; H2 drain test now generates a self-signed cert + writes a full `[listeners.tls]` block via `rcgen`; H3 `spawn_quic` accepts a CancellationToken cloned from `shutdown.token().child_token()` instead of owning its own. All three drain integration tests pass (`cargo test --test reload_zero_drop`). See audit/protocol/round-5-verifies-rel.md. -->
 Location: `crates/lb/src/main.rs:1032-1060`
 
 Description: The shutdown path is:

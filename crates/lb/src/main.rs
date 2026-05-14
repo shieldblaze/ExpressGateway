@@ -965,7 +965,19 @@ fn merge_h2_security(cfg: Option<&H2SecurityConfig>) -> H2SecurityThresholds {
 
 /// Bind and spawn a [`QuicListener`]. Pulled out of `async_main` to
 /// keep its body small enough to satisfy `clippy::too_many_lines`.
-async fn spawn_quic(listener_cfg: &lb_config::ListenerConfig) -> anyhow::Result<QuicListener> {
+///
+/// PROTO-2-11 (H3 follow-up, Wave 2c-2): `shutdown_token` is a child
+/// of the global `lb_core::Shutdown::token()` so a process-wide SIGTERM
+/// drains every active QUIC connection through the router's
+/// `CONNECTION_CLOSE (H3_NO_ERROR = 0x0100)` path. Previously this
+/// function constructed its own `CancellationToken::new()`, so SIGTERM
+/// only reached the listener via `QuicListener::shutdown()` and the
+/// per-connection drain signal could not be distinguished from a
+/// listener-token cancel.
+async fn spawn_quic(
+    listener_cfg: &lb_config::ListenerConfig,
+    shutdown_token: CancellationToken,
+) -> anyhow::Result<QuicListener> {
     let Some(quic_cfg) = listener_cfg.quic.as_ref() else {
         anyhow::bail!(
             "listener {} has protocol=quic but no [listeners.quic] block",
@@ -977,8 +989,7 @@ async fn spawn_quic(listener_cfg: &lb_config::ListenerConfig) -> anyhow::Result<
         .parse()
         .with_context(|| format!("invalid listen address: {}", listener_cfg.address))?;
     let params = quic_listener_params_from_config(bind_addr, quic_cfg);
-    let shutdown = CancellationToken::new();
-    let listener = QuicListener::spawn(params, shutdown)
+    let listener = QuicListener::spawn(params, shutdown_token)
         .await
         .with_context(|| format!("QUIC listener bind failed for {bind_addr}"))?;
     tracing::info!(
@@ -1775,7 +1786,7 @@ async fn async_main() -> anyhow::Result<()> {
 
     for listener_cfg in &config.listeners {
         if listener_cfg.protocol == "quic" {
-            quic_listeners.push(spawn_quic(listener_cfg).await?);
+            quic_listeners.push(spawn_quic(listener_cfg, shutdown.token().child_token()).await?);
             continue;
         }
         if listener_cfg.backends.is_empty() {

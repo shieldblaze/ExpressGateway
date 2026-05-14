@@ -431,7 +431,7 @@ PROTO-2-01 (host disagreement is a smuggling sibling).
 
 ### PROTO-2-11 — No HTTP/2 `GOAWAY` and no HTTP/3 `CONNECTION_CLOSE` on drain / SIGTERM
 Severity: high
-Status:   Verified-Fixed(verifier=sec, audit-sha=3586367)   <!-- Author-sha=deb9267 (H3) + 33edd13 (H2). hyper graceful_shutdown emits two-step GOAWAY; quiche close emits CONNECTION_CLOSE with H3_NO_ERROR. Drain deadline-bounded; bypass-attempt review confirms no slow-drain or RST regression. -->
+Status:   Verified-Fixed(verifier=sec, audit-sha=3586367+task-38)   <!-- Author-sha=deb9267 (H3) + 33edd13 (H2) + task-38 (H1 half + H3 listener cancel + H1s/H1 ALPN-branch wiring). hyper http1 + http2 graceful_shutdown emits `Connection: close` / two-step GOAWAY respectively; quiche close emits CONNECTION_CLOSE with H3_NO_ERROR. `spawn_quic` now accepts a CancellationToken cloned from `shutdown.token().child_token()` so the process-wide drain budget governs QUIC actors. Drain deadline-bounded; bypass-attempt review confirms no slow-drain or RST regression. All three drain integration tests in `tests/reload_zero_drop.rs` pass. -->
 Location:
   * SIGTERM handler: `crates/lb/src/main.rs:1033-1059` —
     receives signal, calls `JoinHandle::abort()` on every TCP

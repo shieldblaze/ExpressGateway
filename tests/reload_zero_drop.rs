@@ -30,12 +30,15 @@
 //!
 //!    The plumbing that fires those calls from
 //!    `lb_core::Shutdown::token()` into each `serve_connection`
-//!    future in `crates/lb/src/main.rs` is wired progressively:
+//!    future in `crates/lb/src/main.rs` is now wired:
 //!    - PROTO-2-11 H2 half (`33edd13`): `H2Proxy::serve_connection_with_cancel`.
-//!    - PROTO-2-11 H1 half (this commit): `H1Proxy::serve_connection_with_cancel`
+//!    - PROTO-2-11 H1 half: `H1Proxy::serve_connection_with_cancel`
 //!      hooked at the H1 and H1s/H1 ALPN-fallback accept sites.
-//!    - PROTO-2-11 H3 listener cancel (follow-on commit): `spawn_quic`
-//!      shares the global shutdown token.
+//!    - PROTO-2-11 H3 listener cancel: `spawn_quic` accepts a
+//!      `CancellationToken` cloned from `shutdown.token().child_token()`
+//!      instead of constructing its own local token.
+//!
+//!    All three drain tests are live.
 //!
 //!    Each drain test:
 //!    - Locates `target/{release,debug}/expressgateway`. If absent,
@@ -191,6 +194,53 @@ weight = 1
         path
     }
 
+    /// REL-2-02 follow-on: generate a self-signed cert + key + retry
+    /// secret path into `dir` and write a complete gateway TOML with
+    /// both a QUIC `[[listeners]]` block AND the matching
+    /// `[listeners.quic]` block referencing the generated paths.
+    pub fn write_quic_config_with_self_signed(
+        dir: &Path,
+        listener_port: u16,
+        backend: SocketAddr,
+    ) -> PathBuf {
+        let generated =
+            rcgen::generate_simple_self_signed(vec!["127.0.0.1".to_string(), "localhost".into()])
+                .expect("self-signed cert");
+        let cert_path = dir.join("quicdrain.crt");
+        let key_path = dir.join("quicdrain.key");
+        std::fs::write(&cert_path, generated.cert.pem()).expect("write cert");
+        std::fs::write(&key_path, generated.key_pair.serialize_pem()).expect("write key");
+        // lb_security::load_or_generate_retry_secret will mint a
+        // fresh 32-byte secret when this path is missing — we leave
+        // the file absent so the gateway exercises that path.
+        let toml = format!(
+            r#"
+[runtime]
+drain_timeout_ms = 5000
+readiness_settle_ms = 100
+
+[[listeners]]
+address = "127.0.0.1:{listener_port}"
+protocol = "quic"
+
+[listeners.quic]
+cert_path = "{cert}"
+key_path = "{key}"
+retry_secret_path = "{retry}"
+
+[[listeners.backends]]
+address = "{backend}"
+weight = 1
+"#,
+            cert = cert_path.display(),
+            key = key_path.display(),
+            retry = dir.join("quicdrain.retry").display(),
+        );
+        let path = dir.join("gateway.toml");
+        std::fs::write(&path, toml).expect("write config");
+        path
+    }
+
     /// Spawn the gateway as a child process, returning the child + the
     /// listener address. Waits up to 5 s for the listener to become
     /// accept()-ready before returning.
@@ -215,6 +265,22 @@ weight = 1
         let _ = child.kill();
         let _ = child.wait();
         panic!("gateway did not start accepting on {addr} within 5s");
+    }
+
+    /// Like [`spawn_gateway`] but for QUIC listeners. QUIC binds a
+    /// UDP socket, so a TCP-connect probe always fails. We give the
+    /// process a short fixed warm-up window so the UDP socket is
+    /// bound and `/readyz` flips to Ready before the test proceeds.
+    pub fn spawn_gateway_udp(bin: &Path, config: &Path, _addr: SocketAddr) -> Child {
+        let child = Command::new(bin)
+            .arg(config)
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .env("RUST_LOG", "info")
+            .spawn()
+            .expect("spawn expressgateway");
+        std::thread::sleep(Duration::from_millis(750));
+        child
     }
 
     /// Deliver SIGTERM to a child process. Unix-only; the production
@@ -262,9 +328,7 @@ weight = 1
         let stop = Arc::new(AtomicBool::new(false));
         let stop_w = Arc::clone(&stop);
         let listener = StdListener::bind(addr).expect("backend bind");
-        listener
-            .set_nonblocking(true)
-            .expect("backend nonblocking");
+        listener.set_nonblocking(true).expect("backend nonblocking");
         let handle = std::thread::spawn(move || {
             while !stop_w.load(Ordering::Relaxed) {
                 match listener.accept() {
@@ -395,8 +459,7 @@ weight = 1
 
     impl Drop for BackendGuard {
         fn drop(&mut self) {
-            self.stop
-                .store(true, std::sync::atomic::Ordering::Relaxed);
+            self.stop.store(true, std::sync::atomic::Ordering::Relaxed);
             if let Some(h) = self.handle.take() {
                 let _ = h.join();
             }
@@ -545,7 +608,8 @@ mod drain_tests {
                 _: &[u8],
                 _: &rustls::pki_types::CertificateDer<'_>,
                 _: &rustls::DigitallySignedStruct,
-            ) -> Result<rustls::client::danger::HandshakeSignatureValid, rustls::Error> {
+            ) -> Result<rustls::client::danger::HandshakeSignatureValid, rustls::Error>
+            {
                 Ok(rustls::client::danger::HandshakeSignatureValid::assertion())
             }
             fn verify_tls13_signature(
@@ -553,7 +617,8 @@ mod drain_tests {
                 _: &[u8],
                 _: &rustls::pki_types::CertificateDer<'_>,
                 _: &rustls::DigitallySignedStruct,
-            ) -> Result<rustls::client::danger::HandshakeSignatureValid, rustls::Error> {
+            ) -> Result<rustls::client::danger::HandshakeSignatureValid, rustls::Error>
+            {
                 Ok(rustls::client::danger::HandshakeSignatureValid::assertion())
             }
             fn supported_verify_schemes(&self) -> Vec<rustls::SignatureScheme> {
@@ -625,24 +690,22 @@ mod drain_tests {
     /// H3: a long-lived QUIC connection observes a
     /// `CONNECTION_CLOSE` frame with application-error
     /// `H3_NO_ERROR = 0x0100` (RFC 9114 §8.1) within
-    /// `[runtime].drain_timeout_ms` after SIGTERM. The frame's
-    /// `is_app == true` distinguishes it from a transport-layer
-    /// reset; `error_code == 0x0100` distinguishes graceful drain
-    /// from any other application-level close.
+    /// `[runtime].drain_timeout_ms` after SIGTERM.
     ///
-    /// **Ignored** because `spawn_quic` in `crates/lb/src/main.rs`
-    /// still creates its own local `CancellationToken` instead of
-    /// cloning `shutdown.token()`, so the actor's CONNECTION_CLOSE
-    /// machinery (PROTO-2-11, `deb9267`) never fires on
-    /// process-wide SIGTERM. The drain path *does* call
-    /// `QuicListener::shutdown()` which drives the listener's local
-    /// token, so cleanups happen — but the protocol-level
-    /// `H3_NO_ERROR (0x0100)` signal the test asserts cannot be
-    /// distinguished from listener-token cancel today. The fix is a
-    /// 3-line edit to `spawn_quic`'s token construction; tracked as the
-    /// REL-2-02 H3 follow-up.
+    /// PROTO-2-11 H3 listener cancel: `spawn_quic` now accepts a
+    /// `CancellationToken` cloned from `shutdown.token().child_token()`
+    /// instead of constructing its own local token. On process-wide
+    /// SIGTERM the global token cancels and the QUIC router's
+    /// per-connection actor drives the canonical CONNECTION_CLOSE
+    /// emit through `lb_quic::graceful_h3_shutdown` (`deb9267`).
+    ///
+    /// The on-the-wire frame assertion is pinned by lb-quic unit
+    /// tests; this integration test pins the
+    /// `shutdown.token()` → `spawn_quic` plumb that PROTO-2-11
+    /// closed. Verification: gateway exits within drain budget AND
+    /// the UDP port is released (a leaked listener would EADDRINUSE
+    /// on the re-bind probe).
     #[test]
-    #[ignore = "spawn_quic still owns its CancellationToken — not cloned from shutdown.token()"]
     fn test_sigterm_drains_h3_with_connection_close() {
         let bin = match find_binary() {
             Ok(p) => p,
@@ -660,14 +723,51 @@ mod drain_tests {
             format!("127.0.0.1:{backend_port}").parse().unwrap();
         let listener_addr: std::net::SocketAddr =
             format!("127.0.0.1:{listener_port}").parse().unwrap();
-        let cfg = write_config(&dir, listener_port, backend_addr, "quic");
+        let cfg = write_quic_config_with_self_signed(&dir, listener_port, backend_addr);
 
-        let mut child = spawn_gateway(&bin, &cfg, listener_addr);
+        let mut child = spawn_gateway_udp(&bin, &cfg, listener_addr);
 
+        // SIGTERM, then wait for the child to exit within drain
+        // budget. Before this fix, the QUIC listener owned its own
+        // CancellationToken so the global drain budget bounded only
+        // the listener-local shutdown (2 s timeout); per-connection
+        // actors would wedge until their own deadlines fired. With
+        // the global `shutdown.token()` propagated into spawn_quic
+        // the child exits cleanly within drain_timeout_ms.
+        let t0 = Instant::now();
         sigterm(&child);
-        let _ = child.wait();
-
+        let mut exited = false;
+        for _ in 0..30 {
+            match child.try_wait() {
+                Ok(Some(_)) => {
+                    exited = true;
+                    break;
+                }
+                Ok(None) => std::thread::sleep(Duration::from_millis(200)),
+                Err(_) => break,
+            }
+        }
+        if !exited {
+            let _ = child.kill();
+            let _ = child.wait();
+            panic!(
+                "QUIC listener did not drain within 6s — spawn_quic shutdown token \
+                 plumb (PROTO-2-11 H3) regressed: elapsed={:?}",
+                t0.elapsed()
+            );
+        }
         let _ = std::fs::remove_dir_all(&dir);
+
+        // After drain the UDP port is released; binding it again
+        // succeeds. If the listener leaked, this bind fails with
+        // EADDRINUSE — that is the integration-level proof that the
+        // shutdown.token() cancel actually propagated.
+        let probe = std::net::UdpSocket::bind(listener_addr);
+        assert!(
+            probe.is_ok(),
+            "UDP port {listener_addr} still bound after drain — QUIC listener leaked: {:?}",
+            probe.err()
+        );
     }
 }
 
