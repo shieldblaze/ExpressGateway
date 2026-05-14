@@ -384,12 +384,21 @@ impl H1Proxy {
     /// paired with the H2 GOAWAY + H3 CONNECTION_CLOSE emit. Identical
     /// to [`Self::serve_connection`] until `cancel` fires, at which
     /// point the hyper H1 connection is pinned and
-    /// `.graceful_shutdown()` is invoked. For HTTP/1.1 this signals the
-    /// connection state machine to finish the current response, set
-    /// `Connection: close` on it (per RFC 9110 §7.6.1), and then close
-    /// the socket cleanly. The connection future is then driven to
-    /// completion with the existing `total` budget so a misbehaving
-    /// client cannot pin a worker past the drain deadline.
+    /// `.graceful_shutdown()` is invoked.
+    ///
+    /// PROTO-2-16: hyper-1's `http1::graceful_shutdown` calls
+    /// `disable_keep_alive()`; the `Connection: close` header is
+    /// injected only on a not-yet-flushed response head (the H1
+    /// encoder serialises `Connection: close` when the keep-alive
+    /// state is `Disabled` and the response head has not yet been
+    /// written). If the cancel fires *after* the current response
+    /// head has already been flushed, the only close signal the
+    /// client receives is the FIN at body completion — the header
+    /// is not retroactively added. RFC 9110 §7.6.1 permits this
+    /// (the FIN is the truth-signal; the header is advisory). The
+    /// connection future is then driven to completion with the
+    /// existing `total` budget so a misbehaving client cannot pin
+    /// a worker past the drain deadline.
     ///
     /// # Errors
     ///
@@ -423,11 +432,16 @@ impl H1Proxy {
             // request still triggers the graceful_shutdown emit.
             biased;
             () = &mut cancel_fut => {
-                // hyper's H1 graceful_shutdown signals the connection
-                // state machine to finish the current response with
-                // `Connection: close` and stop accepting further
-                // pipelined requests. The conn future is then driven
-                // to completion bounded by `total`.
+                // PROTO-2-16: hyper-1's `http1::graceful_shutdown`
+                // internally calls `disable_keep_alive()` — the
+                // `Connection: close` header is then injected only
+                // on a not-yet-flushed response head (the encoder
+                // serialises it when keep-alive is `Disabled` and
+                // the head is still pending). For responses already
+                // on the wire, only the FIN at body completion
+                // signals close (RFC 9110 §7.6.1 permits this). The
+                // conn future is driven to completion bounded by
+                // `total`.
                 conn.as_mut().graceful_shutdown();
                 match tokio::time::timeout(total, conn).await {
                     Ok(Ok(())) => Ok(()),
