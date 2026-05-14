@@ -2353,8 +2353,21 @@ async fn run_listener(bind_addr: String, state: Arc<ListenerState>) -> anyhow::R
                     }
                     ListenerMode::H1 { proxy } => {
                         http_version = Some("h1");
+                        // PROTO-2-11 (H1 half, Wave 2c-2): thread the
+                        // shutdown token into the H1 conn so a SIGTERM
+                        // mid-keep-alive triggers a `Connection: close`
+                        // emit on the next response before the socket
+                        // is torn down. Lives inside the per-conn task
+                        // scope that already holds the inflight
+                        // Semaphore permit + AcceptInflightGuard (rel),
+                        // so the watchdog/accept_inflight bookkeeping
+                        // stays coherent with the graceful drain.
                         Arc::clone(proxy)
-                            .serve_connection(client_stream, client_addr)
+                            .serve_connection_with_cancel(
+                                client_stream,
+                                client_addr,
+                                st.shutdown_token.clone(),
+                            )
                             .await
                             .map_err(anyhow::Error::from)
                     }
@@ -2410,8 +2423,15 @@ async fn run_listener(bind_addr: String, state: Arc<ListenerState>) -> anyhow::R
                                         .map_err(anyhow::Error::from)
                                 } else {
                                     http_version = Some("h1");
+                                    // PROTO-2-11 (H1 half, Wave 2c-2):
+                                    // mirror the H2 branch and thread the
+                                    // shutdown token into the H1s/H1 conn.
                                     Arc::clone(h1_proxy)
-                                        .serve_connection(tls_stream, client_addr)
+                                        .serve_connection_with_cancel(
+                                            tls_stream,
+                                            client_addr,
+                                            st.shutdown_token.clone(),
+                                        )
                                         .await
                                         .map_err(anyhow::Error::from)
                                 }

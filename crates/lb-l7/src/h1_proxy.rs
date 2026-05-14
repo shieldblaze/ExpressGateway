@@ -373,6 +373,37 @@ impl H1Proxy {
     where
         IO: AsyncRead + AsyncWrite + Unpin + Send + 'static,
     {
+        // PROTO-2-11 (H1 half, Wave 2c-2): always delegates to the
+        // cancellable variant with a never-cancelled token so the
+        // original signature stays back-compat.
+        self.serve_connection_with_cancel(io, peer, tokio_util::sync::CancellationToken::new())
+            .await
+    }
+
+    /// PROTO-2-11 (Wave 2c-2) — H1 half of the drain-on-cancel contract
+    /// paired with the H2 GOAWAY + H3 CONNECTION_CLOSE emit. Identical
+    /// to [`Self::serve_connection`] until `cancel` fires, at which
+    /// point the hyper H1 connection is pinned and
+    /// `.graceful_shutdown()` is invoked. For HTTP/1.1 this signals the
+    /// connection state machine to finish the current response, set
+    /// `Connection: close` on it (per RFC 9110 §7.6.1), and then close
+    /// the socket cleanly. The connection future is then driven to
+    /// completion with the existing `total` budget so a misbehaving
+    /// client cannot pin a worker past the drain deadline.
+    ///
+    /// # Errors
+    ///
+    /// Same as [`Self::serve_connection`], plus `TimedOut` if the
+    /// graceful-shutdown driver exceeds [`HttpTimeouts::total`].
+    pub async fn serve_connection_with_cancel<IO>(
+        self: Arc<Self>,
+        io: IO,
+        peer: SocketAddr,
+        cancel: tokio_util::sync::CancellationToken,
+    ) -> io::Result<()>
+    where
+        IO: AsyncRead + AsyncWrite + Unpin + Send + 'static,
+    {
         let total = self.timeouts.total;
         let svc = ProxyService {
             inner: Arc::clone(&self),
@@ -382,10 +413,36 @@ impl H1Proxy {
             .keep_alive(true)
             .serve_connection(TokioIo::new(io), svc)
             .with_upgrades();
-        match tokio::time::timeout(total, conn).await {
-            Ok(Ok(())) => Ok(()),
-            Ok(Err(e)) => Err(io::Error::other(format!("h1 server: {e}"))),
-            Err(_) => Err(io::Error::new(
+        tokio::pin!(conn);
+        let cancel_fut = cancel.cancelled();
+        tokio::pin!(cancel_fut);
+        let timer = tokio::time::sleep(total);
+        tokio::pin!(timer);
+        tokio::select! {
+            // Cancel wins ties so a SIGTERM during a long-running
+            // request still triggers the graceful_shutdown emit.
+            biased;
+            () = &mut cancel_fut => {
+                // hyper's H1 graceful_shutdown signals the connection
+                // state machine to finish the current response with
+                // `Connection: close` and stop accepting further
+                // pipelined requests. The conn future is then driven
+                // to completion bounded by `total`.
+                conn.as_mut().graceful_shutdown();
+                match tokio::time::timeout(total, conn).await {
+                    Ok(Ok(())) => Ok(()),
+                    Ok(Err(e)) => Err(io::Error::other(format!("h1 graceful shutdown: {e}"))),
+                    Err(_) => Err(io::Error::new(
+                        io::ErrorKind::TimedOut,
+                        "h1 graceful shutdown timeout",
+                    )),
+                }
+            }
+            res = &mut conn => match res {
+                Ok(()) => Ok(()),
+                Err(e) => Err(io::Error::other(format!("h1 server: {e}"))),
+            },
+            () = &mut timer => Err(io::Error::new(
                 io::ErrorKind::TimedOut,
                 "total connection timeout",
             )),
@@ -1433,5 +1490,52 @@ mod tests {
     #[test]
     fn round_robin_empty_returns_none() {
         assert!(RoundRobinAddrs::new(vec![]).is_none());
+    }
+
+    // PROTO-2-11 H1 half (Wave 2c-2): smoke test for the cancel-aware
+    // variant. Mirrors the H2 test
+    // `h2_proxy::tests::test_sigterm_emits_two_step_goaway`. Build a
+    // minimal H1Proxy, hand it a duplex pair with the peer side
+    // dropped, plus a pre-cancelled token. The expected outcome is
+    // that `serve_connection_with_cancel` returns promptly via its
+    // graceful_shutdown branch — a regression that re-introduces a
+    // busy-loop or holds the conn open indefinitely would time out
+    // here.
+    #[tokio::test(flavor = "current_thread")]
+    async fn test_sigterm_h1_graceful_shutdown_resolves() {
+        use std::time::Duration;
+        use tokio_util::sync::CancellationToken;
+
+        let pool = lb_io::pool::TcpPool::new(
+            lb_io::pool::PoolConfig::default(),
+            lb_io::sockopts::BackendSockOpts::default(),
+            lb_io::Runtime::new(),
+        );
+        let addrs: Vec<SocketAddr> = vec!["127.0.0.1:1".parse().unwrap()];
+        let picker = RoundRobinAddrs::new(addrs).unwrap();
+        let proxy = Arc::new(H1Proxy::new(
+            pool,
+            Arc::new(picker),
+            None,
+            HttpTimeouts::default(),
+            false,
+        ));
+        // Empty duplex — peer half dropped, so any read returns EOF
+        // and hyper's H1 conn resolves without ever parsing a request
+        // line.
+        let (server_io, client) = tokio::io::duplex(8 * 1024);
+        drop(client);
+        let cancel = CancellationToken::new();
+        cancel.cancel();
+        let peer: SocketAddr = "127.0.0.1:1".parse().unwrap();
+        let r = tokio::time::timeout(
+            Duration::from_secs(5),
+            proxy.serve_connection_with_cancel(server_io, peer, cancel),
+        )
+        .await;
+        assert!(
+            r.is_ok(),
+            "h1 serve_connection_with_cancel hung past 5 s deadline — graceful shutdown is broken"
+        );
     }
 }
