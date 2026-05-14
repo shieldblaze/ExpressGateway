@@ -1120,19 +1120,34 @@ pub fn strip_hop_by_hop(headers: &mut hyper::HeaderMap) {
     }
 }
 
-/// Append the peer's IP to `X-Forwarded-For`, creating the header if
-/// absent.
+/// Append the peer's IP to `X-Forwarded-For`, iterating every
+/// existing value so multi-line / duplicate `X-Forwarded-For`
+/// headers are preserved in the canonical list form. The previous
+/// `HeaderMap::get(...)` path returned only the first value, then
+/// `insert` clobbered the rest — a silent-drop bug equivalent to
+/// **Envoy GHSA-ghc4-35x6-crw5** (RBAC comma-joined-string bypass
+/// when duplicate headers existed). Mirrored on `append_via`.
+///
+/// RFC 7239 / RFC 9110 §5.3 list-rule: comma-separate every prior
+/// value, append the peer. Non-ASCII / non-printable existing values
+/// fail `to_str` and are skipped (fail-closed-by-skip); a future
+/// `xff_policy` knob can promote that to a hard reject.
 pub(crate) fn append_xff(headers: &mut hyper::HeaderMap, peer: SocketAddr) {
     let peer_ip = peer.ip().to_string();
-    let new_value = headers.get(&XFF_NAME).map_or_else(
-        || peer_ip.clone(),
-        |existing| {
-            existing
-                .to_str()
-                .map_or_else(|_| peer_ip.clone(), |prev| format!("{prev}, {peer_ip}"))
-        },
-    );
-    if let Ok(v) = HeaderValue::from_str(&new_value) {
+    let mut joined = String::new();
+    for v in headers.get_all(&XFF_NAME) {
+        if let Ok(s) = v.to_str() {
+            if !joined.is_empty() {
+                joined.push_str(", ");
+            }
+            joined.push_str(s);
+        }
+    }
+    if !joined.is_empty() {
+        joined.push_str(", ");
+    }
+    joined.push_str(&peer_ip);
+    if let Ok(v) = HeaderValue::from_str(&joined) {
         headers.insert(&XFF_NAME, v);
     }
 }
@@ -1152,20 +1167,27 @@ pub(crate) fn set_xfh(headers: &mut hyper::HeaderMap, host: &str) {
     }
 }
 
-/// Append `HTTP/1.1 expressgateway` to `Via`, creating the header if
-/// absent.
+/// Append `HTTP/1.1 expressgateway` to `Via`, iterating every existing
+/// value. Same multi-value preservation pattern as [`append_xff`] —
+/// RFC 9110 §7.6.3 `Via` is a list-valued header; duplicate header
+/// lines must be preserved as comma-separated members of one outbound
+/// canonical value, not clobbered.
 pub(crate) fn append_via(headers: &mut hyper::HeaderMap) {
     const VIA_TOKEN: &str = "HTTP/1.1 expressgateway";
-    let new_value = headers.get(hyper::header::VIA).map_or_else(
-        || VIA_TOKEN.to_owned(),
-        |existing| {
-            existing.to_str().map_or_else(
-                |_| VIA_TOKEN.to_owned(),
-                |prev| format!("{prev}, {VIA_TOKEN}"),
-            )
-        },
-    );
-    if let Ok(v) = HeaderValue::from_str(&new_value) {
+    let mut joined = String::new();
+    for v in headers.get_all(hyper::header::VIA) {
+        if let Ok(s) = v.to_str() {
+            if !joined.is_empty() {
+                joined.push_str(", ");
+            }
+            joined.push_str(s);
+        }
+    }
+    if !joined.is_empty() {
+        joined.push_str(", ");
+    }
+    joined.push_str(VIA_TOKEN);
+    if let Ok(v) = HeaderValue::from_str(&joined) {
         headers.insert(hyper::header::VIA, v);
     }
 }
@@ -1586,6 +1608,60 @@ mod tests {
         let peer: SocketAddr = "5.6.7.8:9999".parse().unwrap();
         append_xff(&mut h, peer);
         assert_eq!(h.get("x-forwarded-for").unwrap(), "5.6.7.8");
+    }
+
+    /// ROUND8-L7-04 — two `X-Forwarded-For` header LINES must be
+    /// preserved in the comma-joined outbound value. Pre-fix the
+    /// helper called `HeaderMap::get(...)` which returned only the
+    /// first value; `insert(...)` then clobbered the rest. This is
+    /// the Envoy GHSA-ghc4-35x6-crw5 silent-drop class on the
+    /// producer side.
+    #[test]
+    fn x_forwarded_for_two_lines_preserved() {
+        let mut h = HeaderMap::new();
+        h.append(
+            HeaderName::from_static("x-forwarded-for"),
+            HeaderValue::from_static("1.1.1.1"),
+        );
+        h.append(
+            HeaderName::from_static("x-forwarded-for"),
+            HeaderValue::from_static("2.2.2.2"),
+        );
+        let peer: SocketAddr = "9.9.9.9:1".parse().unwrap();
+        append_xff(&mut h, peer);
+        let all: Vec<&str> = h
+            .get_all(HeaderName::from_static("x-forwarded-for"))
+            .iter()
+            .filter_map(|v| v.to_str().ok())
+            .collect();
+        assert_eq!(
+            all.len(),
+            1,
+            "expected canonical single header line, got {all:?}",
+        );
+        // 3 members: two pre-existing values + peer.
+        let first = all.first().copied().unwrap_or("");
+        let parts: Vec<&str> = first.split(',').map(str::trim).collect();
+        assert_eq!(parts, vec!["1.1.1.1", "2.2.2.2", "9.9.9.9"]);
+    }
+
+    /// ROUND8-L7-04 — same shape for `Via`: two header lines in,
+    /// one canonical comma-joined header line out.
+    #[test]
+    fn via_two_lines_preserved() {
+        let mut h = HeaderMap::new();
+        h.append(hyper::header::VIA, HeaderValue::from_static("1.1 gw1"));
+        h.append(hyper::header::VIA, HeaderValue::from_static("1.1 gw2"));
+        append_via(&mut h);
+        let all: Vec<&str> = h
+            .get_all(hyper::header::VIA)
+            .iter()
+            .filter_map(|v| v.to_str().ok())
+            .collect();
+        assert_eq!(all.len(), 1, "expected canonical Via, got {all:?}");
+        let first = all.first().copied().unwrap_or("");
+        let parts: Vec<&str> = first.split(',').map(str::trim).collect();
+        assert_eq!(parts, vec!["1.1 gw1", "1.1 gw2", "HTTP/1.1 expressgateway"]);
     }
 
     #[test]
