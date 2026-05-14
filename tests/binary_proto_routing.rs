@@ -96,6 +96,7 @@ fn mixed_protocol_listener_yields_h1_proxy_with_h2_pool_and_round_robin_picker()
         observability: None,
         runtime: None,
         admin: None,
+        security: None,
     };
     // Validation accepts mixed-protocol backends (lb_config range:
     // tcp/h1/h2/h3).
