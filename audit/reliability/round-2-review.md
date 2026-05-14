@@ -189,7 +189,7 @@ check, expiry gauge), per Round-1 synthesis T3.
 
 ### REL-2-04 — `/healthz` is unconditional 200; no liveness/readiness/startup split
 Severity: high
-Status:   Open
+Status:   Proposed-Fix(b49c3cd)
 Location: `crates/lb-observability/src/admin_http.rs:55`
 
 Description: The admin listener serves a single `/healthz` endpoint
