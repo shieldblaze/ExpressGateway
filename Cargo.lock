@@ -1415,6 +1415,7 @@ dependencies = [
  "parking_lot",
  "rand 0.8.5",
  "thiserror 2.0.18",
+ "tokio",
 ]
 
 [[package]]

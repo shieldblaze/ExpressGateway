@@ -16,6 +16,14 @@ parking_lot = { workspace = true }
 # gauge cannot diverge.
 lb-core = { path = "../lb-core" }
 
+# CODE-2-14 follow-on (Round-5 push-back): tokio + a JoinSet-based
+# integration race test live in tests/balancer_counter_sync.rs to
+# complement the loom model. The loom test covers the publication
+# ordering; the integration test catches divergence under a real
+# multi-thread schedule.
+[dev-dependencies]
+tokio = { workspace = true, features = ["macros", "rt-multi-thread", "sync"] }
+
 # CODE-2-11: loom interleaving exploration is `--cfg loom` gated so it
 # never compiles into normal test builds. One harness in
 # tests/loom_atomic_counter.rs explores the atomic-counter / scheduler
