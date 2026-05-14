@@ -12,6 +12,7 @@
 #![allow(clippy::pedantic, clippy::nursery)]
 #![cfg_attr(test, allow(clippy::unwrap_used, clippy::expect_used))]
 
+pub mod authority;
 pub mod grpc_proxy;
 pub mod h1_proxy;
 pub mod h1_to_h1;
