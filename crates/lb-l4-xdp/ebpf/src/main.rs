@@ -256,16 +256,36 @@ static STATS: PerCpuArray<u64> = PerCpuArray::<u64>::with_max_entries(32, 0);
 // Verifier-safe packet accessors.
 // ---------------------------------------------------------------------------
 
+// ROUND8-L4-09: every addition in `ptr_at` / `ptr_at_mut` uses
+// `checked_add`. Today's callers pass compile-time-known `offset`
+// values (header sizes), but the BPF verifier evolves between
+// kernel LTS releases and aya issue #1562 documented scalar/pointer
+// re-ordering on recent rustc/LLVM versions. The overflow guard is
+// belt-and-braces against CVE-2022-23222-class bounds-check elision
+// for any future caller that passes a runtime-controlled offset
+// (e.g. ROUND8-L4-04's per-VIP backend lookup). `checked_add`
+// lowers to `llvm.uadd.with.overflow.i64` which the verifier
+// handles cleanly on 5.15+.
+//
+// IMPORTANT: this commit changes the BPF source; the verifier-log
+// baselines under `audit/ebpf/verifier-logs/*.log.committed` must
+// be refreshed by the first CI matrix run after this lands
+// (ROUND8-L4-10 + ROUND8-L4-09 cross-ref).
+
 #[inline(always)]
 unsafe fn ptr_at<T>(ctx: &XdpContext, offset: usize) -> Option<*const T> {
     let start = ctx.data();
     let end = ctx.data_end();
     let len = mem::size_of::<T>();
-    if start + offset + len > end {
+    // Checked arithmetic so the bounds-check cannot be elided via
+    // wrap-around (aya #1562 / CVE-2022-23222 class).
+    let needed = start.checked_add(offset)?.checked_add(len)?;
+    if needed > end {
         return None;
     }
+    let addr = start.checked_add(offset)?;
     // SAFETY: bounds validated; pointer is within [start, end).
-    Some((start + offset) as *const T)
+    Some(addr as *const T)
 }
 
 #[inline(always)]
@@ -273,11 +293,13 @@ unsafe fn ptr_at_mut<T>(ctx: &XdpContext, offset: usize) -> Option<*mut T> {
     let start = ctx.data();
     let end = ctx.data_end();
     let len = mem::size_of::<T>();
-    if start + offset + len > end {
+    let needed = start.checked_add(offset)?.checked_add(len)?;
+    if needed > end {
         return None;
     }
+    let addr = start.checked_add(offset)?;
     // SAFETY: bounds validated.
-    Some((start + offset) as *mut T)
+    Some(addr as *mut T)
 }
 
 #[inline(always)]
