@@ -522,6 +522,60 @@ pub enum XdpLoaderError {
         /// Operator-facing description (which field was zero).
         reason: &'static str,
     },
+
+    /// ROUND8-L4-11: the `pin_dir` argument to
+    /// [`XdpLoader::load_from_bytes_pinned`] resolves to a directory
+    /// that is NOT backed by bpffs. Pinning into a regular tmpfs
+    /// would cause aya to deep-fail with an opaque EINVAL; this
+    /// fail-fast surfaces the actionable remediation (mount bpffs).
+    #[error("pin path {path:?} is not bpffs (found magic 0x{found_magic:x}); {hint}")]
+    PinPathNotBpffs {
+        /// The bad path the loader was asked to use.
+        path: std::path::PathBuf,
+        /// `statfs.f_type` value the kernel returned for the path.
+        found_magic: i64,
+        /// Operator-actionable next step (mount command).
+        hint: String,
+    },
+
+    /// ROUND8-L4-11: the `statfs(2)` call on the pin directory
+    /// itself failed (path missing, permission denied, ...).
+    #[error("statfs on pin path {path:?} failed: {source}")]
+    PinPathStatFailed {
+        /// The path that could not be stat'd.
+        path: std::path::PathBuf,
+        /// Underlying I/O / errno-bearing error.
+        #[source]
+        source: io::Error,
+    },
+
+    /// ROUND8-L4-12: `XdpLoader::attach_replacing` found a foreign
+    /// XDP program already attached to the interface. The replace
+    /// would have clobbered an unrelated tool — fail loudly so the
+    /// operator can resolve the conflict (`bpftool net detach`).
+    #[error("foreign XDP program attached: prog_id={0}; refusing to attach")]
+    ForeignProgramAttached(u32),
+
+    /// ROUND8-L4-12: `XdpLoader::attach_replacing` /
+    /// `detach_verifying` expected an XDP program to be attached but
+    /// the kernel reports none. For `detach_verifying` this is the
+    /// idempotent / already-detached case the drain coordinator may
+    /// log INFO and continue; for `attach_replacing` it's a hard
+    /// error (we cannot replace nothing).
+    #[error("no XDP program attached to {0}")]
+    NoProgramAttached(String),
+
+    /// ROUND8-L4-12: `detach_verifying` returned successfully but
+    /// the post-detach kernel query still shows a program attached.
+    /// Should be impossible on a healthy kernel; treat as a bug
+    /// signal and surface immediately.
+    #[error("detach left a program attached on {iface}: prog_id={prog_id:?}")]
+    DetachLeftProgramAttached {
+        /// Interface name.
+        iface: String,
+        /// Surviving prog_id (if any).
+        prog_id: Option<u32>,
+    },
 }
 
 /// SEC-2-12: required value of the ELF `license` section.
@@ -638,13 +692,25 @@ impl XdpLoader {
     /// the correct mode/owner (`0750` owned by the LB uid:gid is the
     /// recommended posture; see DEPLOYMENT.md / RUNBOOK.md).
     ///
+    /// ROUND8-L4-11: the mount-type is verified at runtime via
+    /// [`crate::bpffs::assert_bpffs`] — passing a path that is not
+    /// backed by `BPF_FS_MAGIC` returns
+    /// [`XdpLoaderError::PinPathNotBpffs`] with an operator-actionable
+    /// remediation hint, instead of a deep-aya `EbpfError::Map(InvalidPin)`
+    /// trail. The bpffs mount itself is established by the systemd
+    /// unit (`packaging/expressgateway.service`,
+    /// `RequiresMountsFor=/sys/fs/bpf`) per OPS-07.
+    ///
     /// # Errors
     ///
-    /// Returns `XdpLoaderError::Load` if the bytes are not a valid
-    /// BPF object, BTF relocation fails, or map creation is
-    /// rejected. With a `pin_path`, schema mismatch against an
-    /// existing pin surfaces as `XdpLoaderError::Load` carrying the
-    /// underlying `EbpfError::Map(InvalidPin)`.
+    /// - [`XdpLoaderError::PinPathStatFailed`] if `statfs(2)` on the
+    ///   pin path fails (missing dir, EACCES, ...).
+    /// - [`XdpLoaderError::PinPathNotBpffs`] if `statfs` reports a
+    ///   filesystem magic other than `BPF_FS_MAGIC` on the path.
+    /// - [`XdpLoaderError::LicenseInvalid`] if the ELF's `license`
+    ///   section is missing or wrong (SEC-2-12).
+    /// - [`XdpLoaderError::Load`] if the bytes are not a valid BPF
+    ///   object, BTF relocation fails, or map creation is rejected.
     pub fn load_from_bytes_pinned(
         elf: &[u8],
         pin_path: Option<&std::path::Path>,
@@ -658,6 +724,12 @@ impl XdpLoader {
         assert_license_is_gpl(elf)?;
         let mut loader = EbpfLoader::new();
         if let Some(p) = pin_path {
+            // ROUND8-L4-11: fail-fast on a non-bpffs pin directory.
+            // Runs BEFORE `loader.map_pin_path(p)` so the operator
+            // sees the typed error instead of the deep-aya EINVAL
+            // they used to see when aya tried to BPF_OBJ_GET against
+            // a regular tmpfs path.
+            crate::bpffs::assert_bpffs(p)?;
             loader.map_pin_path(p);
         }
         let ebpf = loader.load(elf)?;

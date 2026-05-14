@@ -27,6 +27,14 @@ use std::collections::{HashMap, VecDeque};
 #[cfg(target_os = "linux")]
 pub mod loader;
 
+/// ROUND8-L4-11: bpffs (`/sys/fs/bpf/...`) mount-type runtime check.
+/// Verifies the pin directory the loader is about to use is actually
+/// backed by `BPF_FS_MAGIC` so the operator sees an actionable error
+/// at startup instead of a deep-aya EINVAL. The module's own
+/// `#![cfg(target_os = "linux")]` inner attribute gates the body, so
+/// no outer cfg is needed here.
+pub mod bpffs;
+
 /// EBPF-2-04 / EBPF-2-05 / EBPF-2-08: lock-step telemetry surface
 /// between the eBPF data plane and userspace observability (rel's
 /// `lb-observability` consumes via the `pub fn` accessors).

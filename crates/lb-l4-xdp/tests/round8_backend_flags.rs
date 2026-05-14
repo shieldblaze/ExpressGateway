@@ -22,9 +22,7 @@
 #![cfg(target_os = "linux")]
 #![allow(clippy::unwrap_used, clippy::expect_used, clippy::indexing_slicing)]
 
-use lb_l4_xdp::loader::{
-    BACKEND_ENTRY_SIZE, BACKEND_ENTRY_V6_SIZE, BackendEntry, BackendEntryV6,
-};
+use lb_l4_xdp::loader::{BACKEND_ENTRY_SIZE, BACKEND_ENTRY_V6_SIZE, BackendEntry, BackendEntryV6};
 
 const MAC_A: [u8; 6] = [0x02, 0, 0, 0, 0, 1];
 const MAC_B: [u8; 6] = [0x02, 0, 0, 0, 0, 2];
