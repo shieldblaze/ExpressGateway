@@ -354,6 +354,7 @@ Cross-ref: `code` (config-validation crate).
 ---
 
 ### PROTO-2-10 — SmuggleDetector unwired in the L7 hot path; hyper 1.x does NOT cover every CL/TE variant the detector targets
+Status:   Proposed-Fix(Wave-2b-2: detector hot-path wire-up landed in SEC-2-01 (`e00e85a`) + CODE-2-01 (`dc02517`); Wave-2b-2 lands the wire-up matrix doc `audit/protocol/SMUGGLE-MATRIX.md` mapping every CL/TE variant to hyper-1.9.0, default-mode detector, and H1Strict-mode detector behaviour, plus 13 proof tests in `crates/lb-l7/tests/smuggle_matrix.rs::{test_default_strict_te, test_pipelined_cl_te, test_duplicate_cl_differing, …}` exercising the rows that distinguish the three columns. No PROTO-2-99-A escalation: every variant where hyper passes, the detector either also passes or strictly rejects on top.)
 Severity: high
 Status:   Open
 Location:
