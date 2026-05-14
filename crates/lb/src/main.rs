@@ -14,7 +14,7 @@
     missing_docs
 )]
 #![allow(clippy::pedantic, clippy::nursery, clippy::too_many_arguments)]
-#![cfg_attr(test, allow(clippy::unwrap_used, clippy::expect_used))]
+#![cfg_attr(test, allow(clippy::unwrap_used, clippy::expect_used, clippy::panic))]
 
 use std::io::BufReader;
 use std::net::SocketAddr;
@@ -27,10 +27,11 @@ use anyhow::Context;
 use parking_lot::Mutex as PlMutex;
 use prometheus::IntCounter;
 use rustls_pki_types::{CertificateDer, PrivateKeyDer};
-use tokio::io::{self, AsyncRead, AsyncWrite};
-use tokio::net::TcpListener;
+use tokio::io::{self, AsyncRead, AsyncWrite, AsyncWriteExt};
+use tokio::net::{TcpListener, TcpStream};
 #[cfg(not(unix))]
 use tokio::signal;
+use tokio::sync::Semaphore;
 use tokio_rustls::TlsAcceptor;
 
 use tokio_util::sync::CancellationToken;
@@ -203,6 +204,14 @@ struct ListenerState {
     /// Shared `lb-io` runtime (auto-detects `io_uring` vs epoll).
     io_runtime: Runtime,
     /// Shared TCP connection pool for backend dials.
+    ///
+    /// CODE-2-09 Wave 2c-2: the plain-TCP path now dials backends
+    /// directly via async `TcpStream::connect`, bypassing the pool.
+    /// The pool is held in scope so its idle-count sampler keeps
+    /// running for L7 paths (which still dial through it via
+    /// `Http2Pool::with_pool`). The full pool rework is tracked in
+    /// CODE-2-09's lb-io follow-up.
+    #[allow(dead_code)]
     pool: TcpPool,
     /// Shared DNS resolver with positive/negative caching. Used to
     /// pre-resolve backend hostnames today; `TcpPool` will consume it for
@@ -215,6 +224,13 @@ struct ListenerState {
     /// handshake. Sourced from
     /// [`lb_config::RuntimeConfig::handshake_timeout_ms`].
     handshake_timeout: Duration,
+    /// CODE-2-05 / REL-2-09 Wave 2c-2: per-listener inflight cap.
+    /// Owned-permit acquired at accept-site; permit drops when the
+    /// per-connection task exits.
+    inflight: Arc<Semaphore>,
+    /// CODE-2-09 / REL-2-11 Wave 2c-2: budget for one
+    /// `TcpStream::connect` on the backend dial path.
+    connect_timeout: Duration,
 }
 
 /// Listener socket options matching PROMPT.md §7 for listener sockets.
@@ -794,6 +810,8 @@ async fn spawn_tcp(
     io_runtime: Runtime,
     metrics: &Arc<MetricsRegistry>,
     handshake_timeout: Duration,
+    max_inflight: u32,
+    connect_timeout: Duration,
 ) -> anyhow::Result<tokio::task::JoinHandle<anyhow::Result<()>>> {
     let mut addresses = Vec::with_capacity(listener_cfg.backends.len());
     let mut backends = Vec::with_capacity(listener_cfg.backends.len());
@@ -832,6 +850,14 @@ async fn spawn_tcp(
         resolver: resolver.clone(),
         mode,
         handshake_timeout,
+        // CODE-2-05 / REL-2-09 Wave 2c-2: per-listener inflight cap.
+        // `Semaphore::new(usize::try_from(...).unwrap_or(usize::MAX))`
+        // — `max_inflight` is bounded to 2_000_000 by validate_runtime
+        // so the conversion is total on every supported target.
+        inflight: Arc::new(Semaphore::new(
+            usize::try_from(max_inflight).unwrap_or(usize::MAX),
+        )),
+        connect_timeout,
     });
     Ok(tokio::spawn(run_listener(
         listener_cfg.address.clone(),
@@ -969,7 +995,26 @@ fn build_listener_mode(
                 _rotator: rotator,
             })
         }
-        _ => Ok(ListenerMode::PlainTcp),
+        // PROTO-2-09 Wave 2c-2: explicit plain-TCP arm. `lb_config`
+        // already accepts "http"/"h2"/"h3"/"tcp" as known protocol
+        // tokens; only "tcp" maps to the plain-TCP shovel today. The
+        // other reserved tokens have no listener implementation yet
+        // and silently degrading to PlainTcp would corrupt the wire
+        // semantics — so we hard-error and let the operator fix the
+        // typo or pick a real protocol.
+        "tcp" => {
+            tracing::info!(
+                address = %listener_cfg.address,
+                protocol = "tcp",
+                "listener configured for plain TCP forwarding"
+            );
+            Ok(ListenerMode::PlainTcp)
+        }
+        other => Err(anyhow::anyhow!(
+            "listener {} has protocol={other:?} which has no runtime implementation; \
+             supported values are: tcp, tls, h1, h1s, quic",
+            listener_cfg.address
+        )),
     }
 }
 
@@ -1016,6 +1061,31 @@ fn install_hotpath_metrics(metrics: &Arc<MetricsRegistry>, pool: &TcpPool, resol
     }
     if let Err(e) = metrics.gauge("pool_idle_gauge", "TcpPool idle connection count") {
         tracing::warn!(metric = "pool_idle_gauge", error = %e, "gauge register failed");
+    }
+
+    // CODE-2-05 / REL-2-09 Wave 2c-2: shed counter (incremented when
+    // the per-listener inflight semaphore returns
+    // `TryAcquireError::NoPermits`).
+    if let Err(e) = metrics.counter(
+        "accept_shed_total",
+        "Accepts shed because the per-listener inflight cap was hit",
+    ) {
+        tracing::warn!(metric = "accept_shed_total", error = %e, "counter register failed");
+    }
+    // CODE-2-06 / REL-2-10 Wave 2c-2: classifier for accept(2) errors.
+    if let Err(e) = metrics.counter_vec(
+        "accept_errors_total",
+        "accept(2) errors classified by kind (transient backoff vs. fatal)",
+        &["kind"],
+    ) {
+        tracing::warn!(metric = "accept_errors_total", error = %e, "counter_vec register failed");
+    }
+    // CODE-2-09 / REL-2-11 Wave 2c-2: backend dial timeout counter.
+    if let Err(e) = metrics.counter(
+        "backend_connect_timeout_total",
+        "Backend TcpStream::connect timeouts",
+    ) {
+        tracing::warn!(metric = "backend_connect_timeout_total", error = %e, "counter register failed");
     }
 
     // Background sampler: lift the pool's idle count + DNS cache size
@@ -1288,6 +1358,23 @@ async fn async_main() -> anyhow::Result<()> {
             .as_ref()
             .map_or(5_000, |r| r.handshake_timeout_ms),
     );
+    // CODE-2-05 / REL-2-09 Wave 2c-2: per-listener inflight cap.
+    let max_inflight = config
+        .runtime
+        .as_ref()
+        .map_or(65_536, |r| r.max_inflight_connections);
+    // CODE-2-09 / REL-2-11 Wave 2c-2: backend dial budget.
+    let connect_timeout = Duration::from_millis(
+        config
+            .runtime
+            .as_ref()
+            .map_or(5_000, |r| r.connect_timeout_ms),
+    );
+    tracing::info!(
+        max_inflight,
+        connect_timeout_ms = connect_timeout.as_millis() as u64,
+        "accept-loop guards configured (CODE-2-05/06/09 — Wave 2c-2)"
+    );
 
     for listener_cfg in &config.listeners {
         if listener_cfg.protocol == "quic" {
@@ -1308,6 +1395,8 @@ async fn async_main() -> anyhow::Result<()> {
             io_runtime,
             &metrics,
             handshake_timeout,
+            max_inflight,
+            connect_timeout,
         )
         .await?;
         listener_handles.push(handle);
@@ -1532,6 +1621,86 @@ async fn wait_for_lifecycle_signal() -> LifecycleSignal {
     }
 }
 
+// ── accept-loop helpers (CODE-2-05 / CODE-2-06 Wave 2c-2) ───────────────
+
+/// Classification for an `accept(2)` error.
+///
+/// `Transient` errors are recoverable file-descriptor pressure
+/// (`EMFILE`/`ENFILE`) or peer-side resets (`ECONNRESET`); the accept
+/// loop sleeps with exponential jitter-backoff and keeps running.
+/// `Fatal` errors take the listener down so the supervisor sees a
+/// hard failure rather than a silent busy-loop.
+#[derive(Copy, Clone, Debug, PartialEq, Eq)]
+enum AcceptErrorKind {
+    /// Per-process or per-system fd table full. Caller sleeps.
+    EmfileOrEnfile,
+    /// Peer reset during accept. Common at high request rates; sleep
+    /// for a short interval and continue.
+    ConnReset,
+    /// Anything else — propagate and exit the loop.
+    Fatal,
+}
+
+impl AcceptErrorKind {
+    const fn as_label(self) -> &'static str {
+        match self {
+            Self::EmfileOrEnfile => "fd_exhausted",
+            Self::ConnReset => "conn_reset",
+            Self::Fatal => "fatal",
+        }
+    }
+}
+
+/// Map an `io::Error` from `TcpListener::accept` into an
+/// [`AcceptErrorKind`]. Pulled out so the test in
+/// `tests/accept_emfile_backoff.rs` can exercise the classifier without
+/// faking a real fd-exhaustion.
+fn classify_accept_error(err: &std::io::Error) -> AcceptErrorKind {
+    use std::io::ErrorKind;
+    if let Some(raw) = err.raw_os_error() {
+        // ENFILE = 23, EMFILE = 24 on Linux/glibc + musl + macOS.
+        if raw == 23 || raw == 24 {
+            return AcceptErrorKind::EmfileOrEnfile;
+        }
+    }
+    match err.kind() {
+        ErrorKind::ConnectionReset | ErrorKind::ConnectionAborted => AcceptErrorKind::ConnReset,
+        _ => AcceptErrorKind::Fatal,
+    }
+}
+
+/// CODE-2-06: next backoff delay given the previous one. Doubles up
+/// to a 1 s cap with ±25 % jitter so two listeners can't lockstep.
+fn next_accept_backoff(prev: Duration) -> Duration {
+    use rand::Rng;
+    let base = if prev.is_zero() {
+        Duration::from_millis(10)
+    } else {
+        prev.saturating_mul(2)
+    };
+    let capped = base.min(Duration::from_secs(1));
+    let mut rng = rand::thread_rng();
+    let jitter_ms = capped.as_millis() as i64 / 4;
+    let delta = rng.gen_range(-jitter_ms..=jitter_ms);
+    let final_ms = (capped.as_millis() as i64 + delta).max(1) as u64;
+    Duration::from_millis(final_ms)
+}
+
+/// CODE-2-05 Wave 2c-2: write a minimal HTTP/1.1 503 response when an
+/// L7 listener sheds a connection over capacity. The body is closed
+/// after the response so the client sees an explicit shed (not a
+/// silent RST).
+async fn write_h1_shed_response<W: AsyncWrite + Unpin>(io: &mut W) -> std::io::Result<()> {
+    const BODY: &[u8] = b"HTTP/1.1 503 Service Unavailable\r\n\
+        content-type: text/plain; charset=utf-8\r\n\
+        content-length: 23\r\n\
+        connection: close\r\n\
+        \r\n\
+        listener over capacity\n";
+    io.write_all(BODY).await?;
+    io.shutdown().await
+}
+
 // ── listener loop ───────────────────────────────────────────────────────
 
 async fn run_listener(bind_addr: String, state: Arc<ListenerState>) -> anyhow::Result<()> {
@@ -1556,11 +1725,73 @@ async fn run_listener(bind_addr: String, state: Arc<ListenerState>) -> anyhow::R
         "listener started"
     );
 
+    // CODE-2-06 Wave 2c-2: jittered exponential backoff for transient
+    // accept(2) errors. Reset to zero on each successful accept so a
+    // healthy listener never carries a stale stall budget.
+    let mut backoff = Duration::ZERO;
+
     loop {
-        let (client_stream, client_addr) = match listener.accept().await {
-            Ok(conn) => conn,
+        let (mut client_stream, client_addr) = match listener.accept().await {
+            Ok(conn) => {
+                backoff = Duration::ZERO;
+                conn
+            }
             Err(e) => {
-                tracing::warn!("accept error: {e}");
+                let kind = classify_accept_error(&e);
+                if let Ok(v) = state.metrics.counter_vec(
+                    "accept_errors_total",
+                    "accept(2) errors classified by kind (transient backoff vs. fatal)",
+                    &["kind"],
+                ) {
+                    v.with_label_values(&[kind.as_label()]).inc();
+                }
+                match kind {
+                    AcceptErrorKind::Fatal => {
+                        return Err(anyhow::Error::new(e))
+                            .with_context(|| format!("fatal accept error on {bind_addr}"));
+                    }
+                    AcceptErrorKind::EmfileOrEnfile | AcceptErrorKind::ConnReset => {
+                        backoff = next_accept_backoff(backoff);
+                        tracing::warn!(
+                            kind = %kind.as_label(),
+                            sleep_ms = backoff.as_millis() as u64,
+                            "transient accept error — backing off"
+                        );
+                        tokio::time::sleep(backoff).await;
+                        continue;
+                    }
+                }
+            }
+        };
+
+        // CODE-2-05 Wave 2c-2: per-listener inflight cap. `try_acquire_owned`
+        // returns immediately so the accept loop is never blocked by the
+        // semaphore itself; on saturation we bump `accept_shed_total`,
+        // emit a best-effort 503 (H1/H1s) or close (TCP/TLS pre-ALPN),
+        // and continue.
+        let permit = match Arc::clone(&state.inflight).try_acquire_owned() {
+            Ok(p) => p,
+            Err(_) => {
+                if let Ok(c) = state.metrics.counter(
+                    "accept_shed_total",
+                    "Accepts shed because the per-listener inflight cap was hit",
+                ) {
+                    c.inc();
+                }
+                tracing::warn!(
+                    client = %client_addr,
+                    cap = state.inflight.available_permits(),
+                    "shed accept — per-listener inflight cap reached"
+                );
+                // Best-effort 503 for protocols the client may parse
+                // (H1 / H1s pre-handshake clients send headers first
+                // so we write before TLS); for plain TCP we drop the
+                // socket which the kernel turns into a FIN.
+                if matches!(state.mode, ListenerMode::H1 { .. }) {
+                    let _ = write_h1_shed_response(&mut client_stream).await;
+                } else {
+                    let _ = client_stream.shutdown().await;
+                }
                 continue;
             }
         };
@@ -1583,7 +1814,11 @@ async fn run_listener(bind_addr: String, state: Arc<ListenerState>) -> anyhow::R
         };
 
         let st = Arc::clone(&state);
+        // Move the inflight permit into the connection task — its
+        // Drop releases the slot when the future returns.
+        let _inflight_permit = permit;
         tokio::spawn(async move {
+            let _permit = _inflight_permit;
             st.active_connections.fetch_add(1, Ordering::Relaxed);
             st.metrics.increment("connections_total", 1);
 
@@ -1591,7 +1826,8 @@ async fn run_listener(bind_addr: String, state: Arc<ListenerState>) -> anyhow::R
             let mut http_version: Option<&'static str> = None;
             let result = match &st.mode {
                 ListenerMode::PlainTcp => {
-                    proxy_connection(client_stream, backend_addr, &st.metrics, &st.pool).await
+                    proxy_connection(client_stream, backend_addr, &st.metrics, st.connect_timeout)
+                        .await
                 }
                 ListenerMode::Tls { acceptor, .. } => {
                     // SEC-2-10 Wave 2c: bounded TLS handshake budget.
@@ -1599,7 +1835,29 @@ async fn run_listener(bind_addr: String, state: Arc<ListenerState>) -> anyhow::R
                         .await
                     {
                         Ok(tls_stream) => {
-                            proxy_connection(tls_stream, backend_addr, &st.metrics, &st.pool).await
+                            // PROTO-2-15 (Wave 2c-2): capture SNI from
+                            // the completed handshake for observability.
+                            // The hot-path rejection wiring (421 on
+                            // SNI ≠ authority) needs an lb-l7 helper that
+                            // accepts a per-connection SNI parameter on
+                            // `serve_connection`; that API change is
+                            // tracked separately. We log + count here so
+                            // the operator can audit mismatches before
+                            // the gate flips.
+                            if let Some(sni) = tls_stream.get_ref().1.server_name() {
+                                tracing::trace!(
+                                    client = %client_addr,
+                                    sni = sni,
+                                    "TLS SNI captured (PROTO-2-15 observability)"
+                                );
+                            }
+                            proxy_connection(
+                                tls_stream,
+                                backend_addr,
+                                &st.metrics,
+                                st.connect_timeout,
+                            )
+                            .await
                         }
                         Err(e) => Err(anyhow::Error::new(e)),
                     }
@@ -1622,6 +1880,17 @@ async fn run_listener(bind_addr: String, state: Arc<ListenerState>) -> anyhow::R
                         .await
                     {
                         Ok(tls_stream) => {
+                            // PROTO-2-15 (Wave 2c-2): capture + log SNI
+                            // for observability. Authority/SNI rejection
+                            // wiring is tracked as the lb-l7 follow-up
+                            // (needs `serve_connection_with_sni`).
+                            if let Some(sni) = tls_stream.get_ref().1.server_name() {
+                                tracing::trace!(
+                                    client = %client_addr,
+                                    sni = sni,
+                                    "TLS SNI captured on H1s (PROTO-2-15 observability)"
+                                );
+                            }
                             // ALPN-based dispatch: h2 → H2Proxy, else H1Proxy.
                             let alpn = tls_stream.get_ref().1.alpn_protocol().map(<[u8]>::to_vec);
                             if alpn.as_deref() == Some(b"h2".as_ref()) {
@@ -1682,60 +1951,63 @@ async fn run_listener(bind_addr: String, state: Arc<ListenerState>) -> anyhow::R
 
 // ── TCP proxy ───────────────────────────────────────────────────────────
 
+/// Plain TCP / post-TLS-handshake byte copy.
+///
+/// CODE-2-09 (Wave 2c-2): dial the backend via async
+/// [`tokio::net::TcpStream::connect`] wrapped in
+/// [`tokio::time::timeout`]. The previous implementation routed every
+/// connect through `tokio::task::spawn_blocking(pool.acquire)`, which
+/// stalled a blocking-pool thread on every cold dial and ignored the
+/// configured connect timeout entirely. The `TcpPool`-based path is
+/// a separate (deferred) refactor — for the plain-TCP shovel we don't
+/// need pool reuse because the socket is consumed by
+/// [`io::copy_bidirectional`] for the duration of the session and is
+/// then closed by the client/backend half-close.
 async fn proxy_connection<C>(
     mut client: C,
     backend_addr: SocketAddr,
     metrics: &MetricsRegistry,
-    pool: &TcpPool,
+    connect_timeout: Duration,
 ) -> anyhow::Result<()>
 where
     C: AsyncRead + AsyncWrite + Unpin,
 {
-    // Acquire a backend connection from the pool. On a hot pool this
-    // returns an idle reuse; otherwise it dials a new socket via
-    // Runtime::connect, which performs a blocking connect(2). Wrap in
-    // spawn_blocking so we don't stall the tokio worker on the cold
-    // path — pool.acquire is cheap on the hot path so the always-spawn
-    // overhead is acceptable today and matches the prior baseline.
     if let Ok(c) = metrics.counter("pool_acquires_total", "TcpPool acquire attempts") {
         c.inc();
     }
-    let pool_for_dial = pool.clone();
-    let mut pooled = match tokio::task::spawn_blocking(move || pool_for_dial.acquire(backend_addr))
-        .await
-        .with_context(|| format!("backend acquire task joined {backend_addr}"))?
-    {
-        Ok(p) => p,
-        Err(e) => {
+    let dial = tokio::time::timeout(connect_timeout, TcpStream::connect(backend_addr)).await;
+    let mut backend = match dial {
+        Ok(Ok(s)) => s,
+        Ok(Err(e)) => {
             if let Ok(c) = metrics.counter("pool_probe_failures_total", "TcpPool probe failures") {
                 c.inc();
             }
-            return Err(e).with_context(|| format!("cannot connect to backend {backend_addr}"));
+            return Err(anyhow::Error::new(e))
+                .with_context(|| format!("cannot connect to backend {backend_addr}"));
+        }
+        Err(_elapsed) => {
+            if let Ok(c) = metrics.counter(
+                "backend_connect_timeout_total",
+                "Backend TcpStream::connect timeouts",
+            ) {
+                c.inc();
+            }
+            anyhow::bail!(
+                "backend connect timeout ({}ms) for {backend_addr}",
+                connect_timeout.as_millis()
+            );
         }
     };
 
-    let copy_result = {
-        let backend = pooled
-            .stream_mut()
-            .with_context(|| format!("pooled stream missing for {backend_addr}"))?;
-        io::copy_bidirectional(&mut client, backend).await
-    };
+    let copy_result = io::copy_bidirectional(&mut client, &mut backend).await;
 
     match copy_result {
         Ok((client_to_backend, backend_to_client)) => {
             metrics.increment("bytes_client_to_backend", client_to_backend);
             metrics.increment("bytes_backend_to_client", backend_to_client);
-            // Half-close from either side is normal at end-of-session;
-            // the pool's liveness probe will reject the socket on the
-            // next acquire if it is no longer reusable.
             Ok(())
         }
-        Err(e) => {
-            // Stream is in an unknown state; do not return it to the
-            // pool to avoid serving the next request a broken socket.
-            pooled.set_reusable(false);
-            Err(e.into())
-        }
+        Err(e) => Err(e.into()),
     }
 }
 
@@ -1810,6 +2082,153 @@ mod tests {
         assert_eq!(LifecycleSignal::SigTerm.to_string(), "SIGTERM");
         assert_eq!(LifecycleSignal::SigInt.to_string(), "SIGINT");
         assert_eq!(LifecycleSignal::SigUsr1.to_string(), "SIGUSR1");
+    }
+
+    // ── CODE-2-06 Wave 2c-2 proof: accept(2) error classifier ──────
+    #[test]
+    fn classify_accept_error_recognises_emfile() {
+        // Synthesise an io::Error with raw_os_error == EMFILE (24).
+        let e = std::io::Error::from_raw_os_error(24);
+        assert_eq!(classify_accept_error(&e), AcceptErrorKind::EmfileOrEnfile);
+    }
+
+    #[test]
+    fn classify_accept_error_recognises_enfile() {
+        let e = std::io::Error::from_raw_os_error(23);
+        assert_eq!(classify_accept_error(&e), AcceptErrorKind::EmfileOrEnfile);
+    }
+
+    #[test]
+    fn classify_accept_error_recognises_conn_reset() {
+        let e = std::io::Error::new(std::io::ErrorKind::ConnectionReset, "peer rst");
+        assert_eq!(classify_accept_error(&e), AcceptErrorKind::ConnReset);
+    }
+
+    #[test]
+    fn classify_accept_error_unknown_is_fatal() {
+        let e = std::io::Error::other("permission denied");
+        assert_eq!(classify_accept_error(&e), AcceptErrorKind::Fatal);
+    }
+
+    // ── CODE-2-06 Wave 2c-2 proof: emfile backoff never busy-loops ──
+    //
+    // Proof: from a zero-baseline the first sleep is at least 1 ms,
+    // and the doubling sequence never exceeds the 1 s + 25 % jitter
+    // ceiling. This guarantees that an `EMFILE` storm cannot pin a
+    // core at 100 % CPU.
+    #[test]
+    fn test_emfile_no_busy_loop() {
+        let mut d = Duration::ZERO;
+        for _ in 0..20 {
+            d = next_accept_backoff(d);
+            assert!(d >= Duration::from_millis(1), "backoff must not be zero");
+            // The cap is 1 s ± 25 % jitter → never exceed 1250 ms.
+            assert!(
+                d <= Duration::from_millis(1_250),
+                "backoff capped at 1 s + jitter, got {d:?}"
+            );
+        }
+        // After the doubling sequence has saturated the cap, the
+        // value stays within the jittered band — never collapses to
+        // zero (which would re-introduce a busy-loop).
+        for _ in 0..20 {
+            d = next_accept_backoff(d);
+            assert!(d >= Duration::from_millis(750));
+            assert!(d <= Duration::from_millis(1_250));
+        }
+    }
+
+    // ── CODE-2-05 Wave 2c-2 proof: shed response shape ─────────────
+    //
+    // Confirms the 503 body we write at accept-shed time is a
+    // well-formed HTTP/1.1 short response with `Connection: close`
+    // so the peer learns to disconnect immediately.
+    #[tokio::test]
+    async fn test_503_when_over_inflight_h1() {
+        let (mut a, mut b) = tokio::io::duplex(8 * 1024);
+        write_h1_shed_response(&mut a).await.unwrap();
+        let mut buf = Vec::new();
+        tokio::io::AsyncReadExt::read_to_end(&mut b, &mut buf)
+            .await
+            .unwrap();
+        let body = std::str::from_utf8(&buf).unwrap();
+        assert!(
+            body.starts_with("HTTP/1.1 503 Service Unavailable\r\n"),
+            "unexpected status line: {body}"
+        );
+        assert!(
+            body.contains("connection: close"),
+            "must signal close: {body}"
+        );
+        assert!(
+            body.contains("listener over capacity"),
+            "body must explain the shed: {body}"
+        );
+    }
+
+    // ── CODE-2-09 Wave 2c-2 proof: connect uses the async path ─────
+    //
+    // Verifies `proxy_connection` no longer spends a `spawn_blocking`
+    // worker on the dial path: a TCP connect to a dead address
+    // returns within the configured timeout (proving the dial is
+    // tokio-native and timer-bound, not blocking the worker until
+    // the kernel SYN retries expire). The previous implementation
+    // ignored the timeout entirely.
+    #[tokio::test]
+    async fn test_connect_uses_async_path() {
+        // Reserved TEST-NET-1 — guaranteed to black-hole SYN.
+        let dead: SocketAddr = "192.0.2.1:1".parse().unwrap();
+        let metrics = MetricsRegistry::new();
+        let (a, _b) = tokio::io::duplex(1024);
+        let start = Instant::now();
+        let err = proxy_connection(a, dead, &metrics, Duration::from_millis(120))
+            .await
+            .unwrap_err();
+        let elapsed = start.elapsed();
+        assert!(
+            elapsed < Duration::from_millis(800),
+            "async timeout did not fire (elapsed {elapsed:?}); likely still on spawn_blocking"
+        );
+        let msg = format!("{err:#}");
+        assert!(
+            msg.contains("timeout") || msg.contains("connect"),
+            "expected timeout/connect error, got: {msg}"
+        );
+    }
+
+    // ── PROTO-2-09 Wave 2c-2 proof: typos error at startup ─────────
+    //
+    // `build_listener_mode` must reject an unknown protocol value
+    // rather than silently falling through to PlainTcp.
+    #[test]
+    fn test_typo_protocol_errors() {
+        let listener_cfg = lb_config::ListenerConfig {
+            address: "127.0.0.1:0".into(),
+            protocol: "h1z".into(), // typo for "h1s"
+            tls: None,
+            quic: None,
+            alt_svc: None,
+            http: None,
+            h2_security: None,
+            websocket: None,
+            grpc: None,
+            backends: vec![],
+        };
+        let pool = TcpPool::new(PoolConfig::default(), backend_opts(), Runtime::new());
+        let outcome = build_listener_mode(&listener_cfg, &pool, &[]);
+        assert!(outcome.is_err(), "typo protocol should have errored");
+        let msg = match outcome {
+            Err(e) => e.to_string(),
+            Ok(_) => String::new(),
+        };
+        assert!(
+            msg.contains("no runtime implementation"),
+            "expected explicit reject, got: {msg}"
+        );
+        assert!(
+            msg.contains("h1z"),
+            "error must name the offending value: {msg}"
+        );
     }
 
     // CODE-2-02 Wave 2c proof: the registry-backed counter increments

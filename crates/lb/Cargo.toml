@@ -42,6 +42,10 @@ hyper-util = { workspace = true }
 # `IntCounter` into a `OnceLock` so the panic hook can bump it
 # without re-entering the registry on every hit.
 prometheus = { workspace = true }
+# CODE-2-06 Wave 2c-2: jittered exponential backoff on accept(2)
+# EMFILE/ENFILE/ECONNRESET. Workspace-pinned to 0.8 — same as the
+# wider workspace's dev-deps so no new transitive lands.
+rand = { workspace = true }
 # PROTO-001 D3-1: H3 upstream pool config-factory builds a quiche::Config
 # in-line (no shared helper exists yet). Pulled in via the workspace pin
 # already used by lb-quic / lb-io.

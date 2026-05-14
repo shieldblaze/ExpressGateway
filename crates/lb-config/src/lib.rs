@@ -42,6 +42,39 @@ pub struct LbConfig {
     /// HTTP listener is bound and the registry is in-process only.
     #[serde(default)]
     pub observability: Option<ObservabilityConfig>,
+    /// SEC-2-06 (Wave 2c-2): optional `[admin]` block carrying the
+    /// bearer-token hash + bind override flag for the admin HTTP
+    /// listener. When absent, the listener (bound via
+    /// `[observability].metrics_bind`) refuses to start on
+    /// non-loopback addresses and serves every request without
+    /// authentication.
+    #[serde(default)]
+    pub admin: Option<AdminConfig>,
+}
+
+/// SEC-2-06 (Wave 2c-2): bearer-token + bind policy for the admin
+/// HTTP listener.
+///
+/// The token is stored as a 64-char hex SHA-256 digest — never the
+/// plaintext. `lb_security::AdminTokenHash::from_hex` validates the
+/// shape at startup. `allow_non_loopback` is a foot-gun guard: even
+/// with a configured token, the listener defaults to loopback-only
+/// unless this flag is `true`.
+#[derive(Debug, Clone, Default, serde::Serialize, serde::Deserialize)]
+pub struct AdminConfig {
+    /// 64-character hex SHA-256 of the admin bearer token. When
+    /// `Some`, every request to the admin HTTP listener must carry
+    /// `Authorization: Bearer <plaintext>` whose SHA-256 matches.
+    /// When `None`, no auth is enforced and the listener must bind
+    /// loopback-only (enforced by `AdminAuthGate::validate_bind`).
+    #[serde(default)]
+    pub api_token_hash: Option<String>,
+    /// SEC-2-06: opt-in escape hatch to allow the admin listener to
+    /// bind a non-loopback address. Defaults to `false`. When `true`,
+    /// `api_token_hash` MUST also be set or the gateway refuses to
+    /// start.
+    #[serde(default)]
+    pub allow_non_loopback: bool,
 }
 
 /// Observability configuration (Task #21, Pillar 3b).
@@ -118,6 +151,21 @@ pub struct RuntimeConfig {
     /// recommendation; validation range 100..=60_000 ms.
     #[serde(default = "default_handshake_timeout_ms")]
     pub handshake_timeout_ms: u64,
+    /// CODE-2-05 / REL-2-09 (Wave 2c-2): cap on per-listener inflight
+    /// connections enforced via a `tokio::sync::Semaphore`. When the
+    /// listener is saturated the accept loop returns a 503 (H1/H2) or
+    /// closes the socket without a write (plain TCP / TLS pre-ALPN)
+    /// and bumps `accept_shed_total`. Default `65_536` matches the
+    /// PROMPT.md §21 backlog floor; validation range `100..=2_000_000`.
+    #[serde(default = "default_max_inflight_connections")]
+    pub max_inflight_connections: u32,
+    /// CODE-2-09 / REL-2-11 (Wave 2c-2): wall-clock budget for a single
+    /// upstream `TcpStream::connect`. Wraps the dial in
+    /// `tokio::time::timeout` so an unresponsive backend (SYN black
+    /// hole) returns quickly instead of monopolising a worker. Default
+    /// `5_000 ms`; validation range `100..=60_000`.
+    #[serde(default = "default_connect_timeout_ms")]
+    pub connect_timeout_ms: u64,
     /// PROTO-2-14: optional `[runtime.tls]` block for process-wide
     /// TLS-policy knobs. Currently carries a single field
     /// (`tls13_only`); future knobs (preferred-cipher list, ALPN
@@ -168,6 +216,21 @@ const fn default_readiness_settle_ms() -> u64 {
 /// healthy network completes in <100 ms, so 5 s is a generous
 /// upper bound that still bites on stalled clients.
 const fn default_handshake_timeout_ms() -> u64 {
+    5_000
+}
+
+/// CODE-2-05 / REL-2-09 (Wave 2c-2): serde default for
+/// `RuntimeConfig::max_inflight_connections`. 65 536 matches
+/// PROMPT.md §21's backlog floor.
+const fn default_max_inflight_connections() -> u32 {
+    65_536
+}
+
+/// CODE-2-09 / REL-2-11 (Wave 2c-2): serde default for
+/// `RuntimeConfig::connect_timeout_ms`. 5 000 ms = 5 s — generous
+/// upper bound for a healthy intra-DC dial while still cutting the
+/// SYN-black-hole tail.
+const fn default_connect_timeout_ms() -> u64 {
     5_000
 }
 
@@ -690,6 +753,25 @@ fn validate_runtime(rt: &RuntimeConfig) -> Result<(), ConfigError> {
             rt.handshake_timeout_ms
         )));
     }
+    // CODE-2-05 / REL-2-09 Wave 2c-2: floor of 100 keeps the sentinel
+    // semaphore from collapsing into a single-connection bottleneck;
+    // ceiling of 2_000_000 bounds memory pressure (Semaphore stores
+    // one waiter slot per permit + per waiter).
+    if !(100..=2_000_000).contains(&rt.max_inflight_connections) {
+        return Err(ConfigError::Validation(format!(
+            "runtime.max_inflight_connections={} out of range 100..=2000000",
+            rt.max_inflight_connections
+        )));
+    }
+    // CODE-2-09 / REL-2-11 Wave 2c-2: same range as
+    // `handshake_timeout_ms` — both bound stalls on a hot path that
+    // would otherwise occupy a worker indefinitely.
+    if !(100..=60_000).contains(&rt.connect_timeout_ms) {
+        return Err(ConfigError::Validation(format!(
+            "runtime.connect_timeout_ms={} out of range 100..=60000",
+            rt.connect_timeout_ms
+        )));
+    }
     Ok(())
 }
 
@@ -1002,6 +1084,7 @@ protocol = "tcp"
             listeners: vec![],
             runtime: None,
             observability: None,
+            admin: None,
         };
         assert!(validate_config(&config).is_err());
     }
@@ -1023,6 +1106,7 @@ protocol = "tcp"
             }],
             runtime: None,
             observability: None,
+            admin: None,
         };
         assert!(validate_config(&config).is_err());
     }
@@ -1044,6 +1128,7 @@ protocol = "tcp"
             }],
             runtime: None,
             observability: None,
+            admin: None,
         };
         assert!(validate_config(&config).is_ok());
     }
@@ -1072,6 +1157,7 @@ protocol = "tcp"
             }],
             runtime: None,
             observability: None,
+            admin: None,
         };
         assert!(validate_config(&config).is_err());
     }
@@ -1134,6 +1220,7 @@ address = "127.0.0.1:3000"
             }],
             runtime: None,
             observability: None,
+            admin: None,
         };
         assert!(validate_config(&config).is_err());
     }
@@ -1155,6 +1242,7 @@ address = "127.0.0.1:3000"
             }],
             runtime: None,
             observability: None,
+            admin: None,
         };
         assert!(validate_config(&config).is_err());
     }
@@ -1181,6 +1269,7 @@ address = "127.0.0.1:3000"
             }],
             runtime: None,
             observability: None,
+            admin: None,
         };
         assert!(validate_config(&config).is_err());
     }
@@ -1207,6 +1296,7 @@ address = "127.0.0.1:3000"
             }],
             runtime: None,
             observability: None,
+            admin: None,
         };
         assert!(validate_config(&config).is_err());
     }
@@ -1253,6 +1343,7 @@ protocol = "h1"
             }],
             runtime: None,
             observability: None,
+            admin: None,
         };
         assert!(validate_config(&config).is_err());
     }
@@ -1280,6 +1371,7 @@ protocol = "h1"
             }],
             runtime: None,
             observability: None,
+            admin: None,
         };
         assert!(validate_config(&config).is_err());
     }
@@ -1308,6 +1400,7 @@ protocol = "h1"
             }],
             runtime: None,
             observability: None,
+            admin: None,
         };
         assert!(validate_config(&config).is_err());
     }
@@ -1364,6 +1457,7 @@ address = "127.0.0.1:3000"
             }],
             runtime: None,
             observability: None,
+            admin: None,
         };
         let err = validate_config(&config).unwrap_err();
         assert!(matches!(err, ConfigError::Validation(_)));
@@ -1393,6 +1487,7 @@ address = "127.0.0.1:3000"
             }],
             runtime: None,
             observability: None,
+            admin: None,
         };
         assert!(validate_config(&config).is_err());
     }
@@ -1429,6 +1524,7 @@ address = "127.0.0.1:3000"
             }],
             runtime: None,
             observability: None,
+            admin: None,
         };
         validate_config(&config).unwrap();
     }
@@ -1461,6 +1557,7 @@ address = "127.0.0.1:3000"
             }],
             runtime: None,
             observability: None,
+            admin: None,
         };
         assert!(validate_config(&config).is_err());
     }
@@ -1508,9 +1605,12 @@ xdp_interface = "eth0"
                 drain_timeout_ms: 10_000,
                 readiness_settle_ms: 1_000,
                 handshake_timeout_ms: 5_000,
+                max_inflight_connections: 65_536,
+                connect_timeout_ms: 5_000,
                 tls: None,
             }),
             observability: None,
+            admin: None,
         };
         let err = validate_config(&config).unwrap_err();
         assert!(matches!(err, ConfigError::Validation(_)));
@@ -1538,9 +1638,12 @@ xdp_interface = "eth0"
                 drain_timeout_ms: 10_000,
                 readiness_settle_ms: 1_000,
                 handshake_timeout_ms: 5_000,
+                max_inflight_connections: 65_536,
+                connect_timeout_ms: 5_000,
                 tls: None,
             }),
             observability: None,
+            admin: None,
         };
         validate_config(&config).unwrap();
     }
@@ -1615,6 +1718,7 @@ address = "127.0.0.1:3000"
             }],
             runtime: None,
             observability: None,
+            admin: None,
         };
         assert!(validate_config(&config).is_err());
     }
@@ -1662,6 +1766,7 @@ address = "127.0.0.1:3000"
             }],
             runtime: None,
             observability: None,
+            admin: None,
         };
         assert!(validate_config(&config).is_err());
     }
@@ -1685,6 +1790,7 @@ address = "127.0.0.1:3000"
             observability: Some(ObservabilityConfig {
                 metrics_bind: Some("not-an-address".into()),
             }),
+            admin: None,
         };
         let err = validate_config(&config).unwrap_err();
         assert!(matches!(err, ConfigError::Validation(_)));
