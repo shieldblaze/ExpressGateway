@@ -70,6 +70,8 @@ const IPPROTO_TCP: u8 = 6;
 const IPPROTO_UDP: u8 = 17;
 const IPPROTO_HOPOPTS: u8 = 0;
 const IPPROTO_ROUTING: u8 = 43;
+/// ROUND8-L4-08: IPv6 Fragment Extension Header (RFC 2460 §4.5).
+const IPPROTO_FRAGMENT: u8 = 44;
 
 const ETH_HDR_LEN: usize = 14;
 const VLAN_HDR_LEN: usize = 4;
@@ -224,6 +226,12 @@ const STAT_V6_EXT_UNSUPPORTED: u32 = 9;
 /// kernel (not drop) so the network stack still routes the packet;
 /// the counter is the operator signal.
 const STAT_BACKEND_UNPOPULATED: u32 = 10;
+/// ROUND8-L4-08: IPv4 non-first fragment or MF-set fragment seen.
+/// Pass to kernel for reassembly (Katran / Cilium design — no
+/// in-XDP fragment reassembly).
+const STAT_V4_FRAGMENT: u32 = 11;
+/// ROUND8-L4-08: IPv6 packet carrying a Fragment Extension Header.
+const STAT_V6_FRAGMENT: u32 = 12;
 
 // EBPF-2-03: BPF_MAP_TYPE_LRU_HASH evicts the oldest entry under
 // flood instead of returning ENOMEM at insert time. This closes the
@@ -431,6 +439,19 @@ fn handle_ipv4(ctx: &XdpContext, l3_offset: usize) -> Result<u32, ()> {
     let protocol = unsafe { core::ptr::read_unaligned(core::ptr::addr_of!((*ip).protocol)) };
     let src_addr = unsafe { core::ptr::read_unaligned(core::ptr::addr_of!((*ip).src)) };
     let dst_addr = unsafe { core::ptr::read_unaligned(core::ptr::addr_of!((*ip).dst)) };
+
+    // ROUND8-L4-08: fragment detection. RFC 791 §3.1: 16-bit
+    // `frag_off` field carries bit 14 = MF (more fragments) and bits
+    // 0..12 = fragment offset in 8-byte units. If MF==1 OR offset>0
+    // this is not a complete datagram; pass to kernel for
+    // reassembly (Katran / Cilium design — no in-XDP reassembly).
+    let frag_off_be =
+        unsafe { core::ptr::read_unaligned(core::ptr::addr_of!((*ip).frag_off)) };
+    let frag_off = u16::from_be(frag_off_be);
+    if (frag_off & 0x3FFF) != 0 {
+        incr_stat(STAT_V4_FRAGMENT);
+        return Ok(xdp_action::XDP_PASS);
+    }
 
     // --- ACL via LPM trie ------------------------------------------------
     // Key data is u32 in network byte order; prefix_len is CIDR bits.
@@ -660,6 +681,15 @@ fn handle_ipv6(ctx: &XdpContext, l3_offset: usize) -> Result<u32, ()> {
     if next_hdr == IPPROTO_HOPOPTS || next_hdr == IPPROTO_ROUTING {
         // More extension headers than we handle → pass to kernel.
         incr_stat(STAT_V6_EXT_UNSUPPORTED);
+        return Ok(xdp_action::XDP_PASS);
+    }
+
+    // ROUND8-L4-08: IPv6 Fragment Extension Header (RFC 2460 §4.5).
+    // The Fragment header is present in BOTH first and later
+    // fragments — any v6 packet carrying it lacks a complete L4
+    // header to rewrite. Pass to kernel for reassembly.
+    if next_hdr == IPPROTO_FRAGMENT {
+        incr_stat(STAT_V6_FRAGMENT);
         return Ok(xdp_action::XDP_PASS);
     }
 

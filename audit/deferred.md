@@ -176,3 +176,23 @@ provides functional equivalence for the H2 slowloris attack
 class: an attacker holding HEADERS open without progress is closed
 by the keep-alive deadline. Full per-frame instrumentation moves
 with the hyper-2.x upgrade.
+
+### ROUND8-L4-08 — Fragmented datagrams: pass-to-kernel, no in-XDP reassembly
+
+**Status**: by design, declared explicit per ROUND8-L4-08.
+
+ExpressGateway XDP path does not reassemble fragments. IPv4 packets
+with `MF=1` or fragment-offset `>0` (mask `0x3FFF` over the
+big-endian `frag_off` field), and any IPv6 packet carrying a
+Fragment Extension Header (`IPPROTO_FRAGMENT = 44`) take the
+`XDP_PASS` branch with `STAT_V4_FRAGMENT` / `STAT_V6_FRAGMENT`
+incremented. The kernel's network stack reassembles via the normal
+path.
+
+This matches Katran's documented design (lessons 2-3) and Cilium's
+documented non-goal. Operators relying on L4 load-balancing for
+fragmented flows should either raise the upstream MTU so
+fragmentation does not occur on the wire, or accept the kernel-
+stack latency for the small fraction of flows that fragment.
+
+Counters: `xdp_packets_total{result="v4_fragment"|"v6_fragment"}`.

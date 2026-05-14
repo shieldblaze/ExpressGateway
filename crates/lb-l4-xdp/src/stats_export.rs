@@ -188,12 +188,18 @@ pub enum StatSlot {
     /// so the kernel stack handles the packet; this counter is the
     /// operator signal to chase the misconfiguration.
     BackendUnpopulated = 10,
+    /// `STAT_V4_FRAGMENT` (ROUND8-L4-08): IPv4 packet with MF set
+    /// or fragment offset > 0. XDP_PASS so the kernel reassembles.
+    V4Fragment = 11,
+    /// `STAT_V6_FRAGMENT` (ROUND8-L4-08): IPv6 packet carrying a
+    /// Fragment Extension Header (IPPROTO_FRAGMENT = 44).
+    V6Fragment = 12,
 }
 
 /// Number of currently-defined stat slots. Bumps to this constant
 /// must come WITH a matching addition to the `STAT_*` enum in the
 /// eBPF crate AND a new variant at the end of [`StatSlot`].
-pub const NUM_SLOTS: usize = 11;
+pub const NUM_SLOTS: usize = 13;
 
 /// Errors from the STATS read path.
 #[derive(Debug, thiserror::Error)]
@@ -358,6 +364,8 @@ mod tests {
         assert_eq!(StatSlot::VlanStripped as usize, 8);
         assert_eq!(StatSlot::V6ExtUnsupported as usize, 9);
         assert_eq!(StatSlot::BackendUnpopulated as usize, 10);
+        assert_eq!(StatSlot::V4Fragment as usize, 11);
+        assert_eq!(StatSlot::V6Fragment as usize, 12);
     }
 
     #[test]
@@ -365,7 +373,7 @@ mod tests {
         // If a new variant is added to StatSlot without bumping
         // NUM_SLOTS the read loop in `read_stats` would silently
         // skip it — this assertion guards that invariant.
-        assert_eq!(NUM_SLOTS, 11);
+        assert_eq!(NUM_SLOTS, 13);
     }
 
     #[cfg(not(target_os = "linux"))]

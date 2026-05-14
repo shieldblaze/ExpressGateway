@@ -84,5 +84,12 @@ fn stats_slot_backend_unpopulated_at_slot_10() {
     // Drift here corrupts every operator's `xdp_packets_total{result}`
     // labels.
     assert_eq!(StatSlot::BackendUnpopulated as usize, 10);
-    assert_eq!(NUM_SLOTS, 11, "NUM_SLOTS must include the new slot");
+    // NUM_SLOTS is the floor invariant — ROUND8-L4-08 bumps it to 13
+    // when fragment slots land. Assert > 10 so this test survives the
+    // L4-08 commit.
+    let slots = NUM_SLOTS;
+    assert!(
+        slots > 10,
+        "NUM_SLOTS={slots} must include the BackendUnpopulated slot",
+    );
 }
