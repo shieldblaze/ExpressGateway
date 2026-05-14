@@ -13,7 +13,7 @@ appendix is at the bottom (CODE-2-04).
 ### CODE-2-01 — `lb-l7` does not depend on `lb-security`; smuggling/slowloris/slow-POST detectors and per-IP cap are dead code on the hot path
 Severity: critical
 Blocking-for-prod: yes
-Status:   Proposed-Fix(3dcb6f3)   <!-- Wave-1 dep-edge only — `lb-security = { path = "../lb-security" }` in lb-l7's Cargo. The SecurityHooks trait shim + the actual detector wire-up (SmuggleDetector / SlowlorisDetector / SlowPostDetector / per-IP cap) are Wave-2 work owned by sec under SEC-2-01 / SEC-2-03 / SEC-2-04 / SEC-2-10. -->
+Status:   Proposed-Fix(3dcb6f3, dc02517, e00e85a, 5e7938f)   <!-- Wave-1 dep-edge (3dcb6f3) + Wave-2b lb-l7 trait-shim & insertion points (dc02517 on round-4 / 9ffe51b on worktree) + Wave-2b SEC-2-01 detector wire-up & H2→H1 downgrade guard (e00e85a on round-4 / 0ae776d on worktree) + Wave-2b proof tests (5e7938f on round-4 / e79f4f6 on worktree). The accept-site `ConnGate` wiring at `crates/lb/src/main.rs` is Wave-2c. -->
 Location:
   - `crates/lb-l7/Cargo.toml` (missing `lb-security = { path = "../lb-security" }`)
   - `crates/lb-security/src/{smuggle.rs, slowloris.rs, slow_post.rs}` (detectors exist but no consumer in lb-l7)

@@ -37,7 +37,7 @@ Severity definitions (lead-aligned):
 
 ### SEC-2-01 — `SmuggleDetector` is dead code on the proxy hot path
 Severity: high
-Status:   Proposed-Fix(e36b50f, 0c7e16b) — Wave-2a API; Wave-2b wires lb-l7
+Status:   Proposed-Fix(e36b50f, 0c7e16b, e00e85a, 5e7938f) — Wave-2a API (e36b50f, 0c7e16b) + Wave-2b lb-l7 detector wire-up & H2→H1 downgrade guard (e00e85a on round-4 / 0ae776d on worktree) + Wave-2b proof tests (5e7938f on round-4 / e79f4f6 on worktree)
 Location: `crates/lb-security/src/smuggle.rs:9-156`; absence in
 `crates/lb-l7/src/h1_proxy.rs` + `crates/lb-l7/src/h2_proxy.rs`;
 absence in `crates/lb-l7/Cargo.toml` + `crates/lb-h1/Cargo.toml` +
