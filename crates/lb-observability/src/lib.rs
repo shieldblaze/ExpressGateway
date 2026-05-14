@@ -351,6 +351,28 @@ impl MetricsRegistry {
         }
     }
 
+    /// REL-2-15 / CODE-2-02 wiring: get-or-create the canonical
+    /// `panic_total` counter.
+    ///
+    /// The Wave-2c `init_panic_hook` calls this once at startup,
+    /// clones the resulting handle into a `&'static`-bound box, and
+    /// bumps it from inside the panic hook (the AtomicU64 in
+    /// `crates/lb/src/main.rs::PANIC_TOTAL` becomes redundant once
+    /// the rewrite lands). Calling `panic_total_counter()` repeatedly
+    /// is cheap — the underlying handle is `Arc`-backed inside
+    /// `prometheus` and the registration cache makes the second call
+    /// a hashmap lookup.
+    ///
+    /// # Errors
+    ///
+    /// Bubbles up the underlying `prometheus` registration error.
+    pub fn panic_total_counter(&self) -> Result<IntCounter, MetricsError> {
+        self.counter(
+            "panic_total",
+            "Number of panics caught by the process-wide hook since startup.",
+        )
+    }
+
     /// Snapshot the registered metric families. Used by the text
     /// exposition path.
     #[must_use]
