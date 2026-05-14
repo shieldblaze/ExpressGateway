@@ -45,8 +45,9 @@ pub use slow_post::SlowPostDetector;
 pub use slowloris::SlowlorisDetector;
 pub use smuggle::{SmuggleDetector, SmuggleMode};
 pub use ticket::{
-    RotatingTicketer, TicketError, TicketKey, TicketRotator, build_server_config,
-    build_server_config_with_policy,
+    DEFAULT_MAX_CHAIN_DEPTH, RotatingTicketer, SharedTlsBundle, TicketError, TicketKey,
+    TicketRotator, TlsBundleError, TlsConfigBundle, build_server_config,
+    build_server_config_with_policy, reload_tls_bundle,
 };
 pub use watchdog::{ConnId, Watchdog, WatchdogConfig, WatchdogError};
 pub use zero_rtt::{DEFAULT_ZERO_RTT_REPLAY_WINDOW_SIZE, ZeroRttReplayGuard};

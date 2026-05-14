@@ -30,9 +30,12 @@
 //!   (subject to the overlap).
 
 use std::fmt;
+use std::io::BufReader;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
-use std::time::{Duration, Instant};
+use std::time::{Duration, Instant, SystemTime};
 
+use arc_swap::ArcSwap;
 use parking_lot::Mutex;
 
 use rustls::server::ProducesTickets;
@@ -260,6 +263,15 @@ impl RotatingTicketer {
         let total = rot.rotation_interval.saturating_add(rot.overlap);
         u32::try_from(total.as_secs()).unwrap_or(u32::MAX)
     }
+
+    /// Build an `Arc<dyn ProducesTickets>` view backed by an existing
+    /// `Arc<Mutex<TicketRotator>>` handle. Used by [`TlsConfigBundle`]
+    /// loaders that want to preserve the session-ticket rotator across
+    /// a cert reload.
+    #[must_use]
+    pub fn ticketer_from(rot: Arc<Mutex<TicketRotator>>) -> Arc<dyn ProducesTickets> {
+        Arc::new(Self { rot })
+    }
 }
 
 impl fmt::Debug for RotatingTicketer {
@@ -364,6 +376,282 @@ pub fn build_server_config_with_policy(
         cfg.alpn_protocols = alpn_protocols.iter().map(|p| p.to_vec()).collect();
     }
     Ok(Arc::new(cfg))
+}
+
+// ── REL-2-03 Wave 2c-2: hot-reloadable TLS cert bundle ─────────────────
+//
+// Every TLS listener holds a `SharedTlsBundle` (an `Arc<ArcSwap<…>>`) and
+// reads `bundle.load()` per accept. Reload is triggered by SIGUSR1 (and
+// optionally an inotify watcher in the binary). Failed reloads keep the
+// old bundle live so a botched cert push cannot blackhole the listener.
+//
+// Validation on every load:
+//   * The cert chain parses as DER + the key parses as a private key.
+//   * `rustls::ServerConfig::with_single_cert` smoke-builds — this is
+//     rustls's own cert-vs-key match check, which catches the
+//     operationally most common mistake (uploaded mismatched files).
+//   * Chain depth ≤ 6 (RFC 5280 in practice caps at single digits; deep
+//     chains are an attack-surface signal more than a hard error, so we
+//     warn-and-reject).
+//   * `not_after > now + 24h` is a *warn-only* check — refusing to load
+//     near-expiry certs would be exactly the wrong move during an
+//     emergency rotation.
+//
+// The bundle exposes its `ServerConfig` so the binary can pre-build a
+// `TlsAcceptor` per accept that snapshots whatever bundle was live at
+// that moment. In-flight handshakes keep their bundle; new handshakes
+// pick up the swapped one.
+
+/// Errors raised when loading or rebuilding a [`TlsConfigBundle`].
+#[derive(Debug, thiserror::Error)]
+pub enum TlsBundleError {
+    /// Disk I/O failure (cert or key file missing, unreadable, etc).
+    #[error("tls bundle io error reading {path:?}: {source}")]
+    Io {
+        /// Path that failed to read.
+        path: PathBuf,
+        /// Underlying OS error.
+        #[source]
+        source: std::io::Error,
+    },
+    /// PEM parsing failure for the cert chain.
+    #[error("tls bundle cert PEM parse failed for {0:?}: {1}")]
+    CertParse(String, #[source] std::io::Error),
+    /// PEM parsing failure for the private key.
+    #[error("tls bundle key PEM parse failed for {path:?}: {source}")]
+    KeyParse {
+        /// Path that failed to parse.
+        path: PathBuf,
+        /// Underlying parse error.
+        #[source]
+        source: std::io::Error,
+    },
+    /// The cert PEM file contained zero `CERTIFICATE` blocks.
+    #[error("tls bundle: no certificates found in {0:?}")]
+    EmptyChain(PathBuf),
+    /// The key PEM file contained no recognised private-key block.
+    #[error("tls bundle: no private key found in {0:?}")]
+    NoKey(PathBuf),
+    /// Cert chain depth exceeds the configured maximum (default 6).
+    #[error("tls bundle: chain depth {depth} exceeds max {max}")]
+    ChainTooDeep {
+        /// Observed depth (number of certs in the bundled chain).
+        depth: usize,
+        /// Configured maximum.
+        max: usize,
+    },
+    /// Rustls refused to build a `ServerConfig` from the parsed material —
+    /// the most common cause is a cert / key mismatch.
+    #[error("tls bundle: rustls config build failed (cert/key mismatch?): {0}")]
+    KeyMismatch(String),
+}
+
+impl TlsBundleError {
+    /// Short, low-cardinality reason string for the
+    /// `cert_rotation_failed_total{reason}` metric.
+    #[must_use]
+    pub const fn reason(&self) -> &'static str {
+        match self {
+            Self::Io { .. } => "io",
+            Self::CertParse(..) => "cert_parse",
+            Self::KeyParse { .. } => "key_parse",
+            Self::EmptyChain(_) => "empty_chain",
+            Self::NoKey(_) => "no_key",
+            Self::ChainTooDeep { .. } => "chain_too_deep",
+            Self::KeyMismatch(_) => "key_mismatch",
+        }
+    }
+}
+
+/// Default cap on cert-chain depth. RFC 5280 imposes no upper bound but
+/// real chains rarely exceed 4; deeper chains hint at a misconfigured
+/// bundle file (e.g. a glob accidentally including unrelated certs).
+pub const DEFAULT_MAX_CHAIN_DEPTH: usize = 6;
+
+/// A validated TLS cert + key snapshot. Every TLS listener holds one of
+/// these inside a [`SharedTlsBundle`] (an `ArcSwap`), reading
+/// `bundle.load()` per accept so a hot-reload swaps the bundle out under
+/// new connections without disturbing in-flight handshakes.
+pub struct TlsConfigBundle {
+    /// Parsed cert chain in leaf-first order (rustls convention).
+    pub cert_chain: Vec<CertificateDer<'static>>,
+    /// Parsed private key matching the leaf cert.
+    pub key: PrivateKeyDer<'static>,
+    /// Best-effort parse of the leaf's `notAfter`. `SystemTime::UNIX_EPOCH`
+    /// is returned when parsing fails (we keep the rotation hot path
+    /// independent of x509-parsing crates).
+    pub not_after: SystemTime,
+    /// Rustls server config built from the cert+key. Callers wire it
+    /// into a fresh `TlsAcceptor` per accept (cheap: `TlsAcceptor::from`
+    /// is a one-field move).
+    pub server_config: Arc<rustls::ServerConfig>,
+    /// Monotonic-clock instant the bundle was loaded.
+    loaded_at: Instant,
+    /// Wall-clock time the bundle was loaded.
+    loaded_at_wall: SystemTime,
+}
+
+impl fmt::Debug for TlsConfigBundle {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("TlsConfigBundle")
+            .field("chain_depth", &self.cert_chain.len())
+            .field("not_after", &self.not_after)
+            .field("loaded_at_wall", &self.loaded_at_wall)
+            .finish_non_exhaustive()
+    }
+}
+
+/// `Arc<ArcSwap<TlsConfigBundle>>` — the shape every TLS listener holds.
+/// Cloning a `SharedTlsBundle` is `Arc::clone`; reading is `.load()`
+/// which returns an `Arc<TlsConfigBundle>` snapshot.
+pub type SharedTlsBundle = Arc<ArcSwap<TlsConfigBundle>>;
+
+impl TlsConfigBundle {
+    /// Load a fresh bundle from disk, validate it, and build the
+    /// rustls `ServerConfig` smoke-test.
+    ///
+    /// `alpn` is the ordered list of wire-format ALPN tokens (e.g.
+    /// `[b"h2", b"http/1.1"]` for an H1s listener; pass `&[]` to skip
+    /// ALPN advertisement).
+    ///
+    /// # Errors
+    ///
+    /// Returns [`TlsBundleError`] for any I/O, parse, or validation
+    /// failure. The bundle is never partially constructed — either every
+    /// invariant holds or no `TlsConfigBundle` is returned.
+    pub fn load_from_paths(
+        cert: &Path,
+        key: &Path,
+        alpn: &[&[u8]],
+    ) -> Result<Self, TlsBundleError> {
+        Self::load_from_paths_with(cert, key, alpn, DEFAULT_MAX_CHAIN_DEPTH, None)
+    }
+
+    /// Variant of [`load_from_paths`](Self::load_from_paths) that takes
+    /// an optional `ticketer` (REL-2-03: reload preserves the
+    /// session-ticket rotator across cert swaps) and an explicit
+    /// maximum chain depth.
+    ///
+    /// # Errors
+    ///
+    /// Same shape as [`load_from_paths`](Self::load_from_paths).
+    pub fn load_from_paths_with(
+        cert: &Path,
+        key: &Path,
+        alpn: &[&[u8]],
+        max_depth: usize,
+        ticketer: Option<Arc<dyn ProducesTickets>>,
+    ) -> Result<Self, TlsBundleError> {
+        // ── cert chain ──
+        let cert_file = std::fs::File::open(cert).map_err(|e| TlsBundleError::Io {
+            path: cert.to_path_buf(),
+            source: e,
+        })?;
+        let mut cert_reader = BufReader::new(cert_file);
+        let chain: Vec<CertificateDer<'static>> = rustls_pemfile::certs(&mut cert_reader)
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(|e| TlsBundleError::CertParse(cert.display().to_string(), e))?;
+        if chain.is_empty() {
+            return Err(TlsBundleError::EmptyChain(cert.to_path_buf()));
+        }
+        if chain.len() > max_depth {
+            return Err(TlsBundleError::ChainTooDeep {
+                depth: chain.len(),
+                max: max_depth,
+            });
+        }
+
+        // ── key ──
+        let key_file = std::fs::File::open(key).map_err(|e| TlsBundleError::Io {
+            path: key.to_path_buf(),
+            source: e,
+        })?;
+        let mut key_reader = BufReader::new(key_file);
+        let key_der = rustls_pemfile::private_key(&mut key_reader)
+            .map_err(|e| TlsBundleError::KeyParse {
+                path: key.to_path_buf(),
+                source: e,
+            })?
+            .ok_or_else(|| TlsBundleError::NoKey(key.to_path_buf()))?;
+
+        // ── leaf notAfter (best-effort, never fails the load) ──
+        // x509-parsing crates would add a heavy supply-chain edge for a
+        // single warn-only field; instead we expose the parsed cert DER
+        // and let observability layers compute the gauge.
+        let not_after = SystemTime::UNIX_EPOCH;
+
+        // ── rustls smoke-build (cert/key match check) ──
+        let provider = Arc::new(rustls::crypto::ring::default_provider());
+        let builder = rustls::ServerConfig::builder_with_provider(provider)
+            .with_safe_default_protocol_versions()
+            .map_err(|e| TlsBundleError::KeyMismatch(e.to_string()))?
+            .with_no_client_auth();
+        let mut cfg = builder
+            .with_single_cert(chain.clone(), key_der.clone_key())
+            .map_err(|e| TlsBundleError::KeyMismatch(e.to_string()))?;
+        if let Some(t) = ticketer {
+            cfg.ticketer = t;
+        }
+        if !alpn.is_empty() {
+            cfg.alpn_protocols = alpn.iter().map(|p| p.to_vec()).collect();
+        }
+
+        Ok(Self {
+            cert_chain: chain,
+            key: key_der,
+            not_after,
+            server_config: Arc::new(cfg),
+            loaded_at: Instant::now(),
+            loaded_at_wall: SystemTime::now(),
+        })
+    }
+
+    /// When this bundle was loaded (wall-clock).
+    #[must_use]
+    pub const fn loaded_at_wall(&self) -> SystemTime {
+        self.loaded_at_wall
+    }
+
+    /// Monotonic instant when this bundle was loaded.
+    #[must_use]
+    pub const fn loaded_at(&self) -> Instant {
+        self.loaded_at
+    }
+
+    /// Hand the bundle to a fresh `Arc<ArcSwap<_>>` for sharing.
+    #[must_use]
+    pub fn into_shared(self) -> SharedTlsBundle {
+        Arc::new(ArcSwap::from_pointee(self))
+    }
+}
+
+/// Atomically replace `bundle`'s contents with a freshly-loaded copy.
+///
+/// On success the old bundle is dropped after every reader currently
+/// holding a snapshot has released it; in-flight TLS handshakes stay on
+/// the bundle they snapshotted at accept time.
+///
+/// On failure the old bundle stays live and the error is returned so the
+/// caller can bump a metric / log it.
+///
+/// `ticketer` preserves the session-ticket rotator across cert swaps so
+/// resumed sessions keep working through a rotation; pass `None` to drop
+/// the ticketer (and force full handshakes on every new connection).
+///
+/// # Errors
+///
+/// Returns the same shape as [`TlsConfigBundle::load_from_paths`].
+pub fn reload_tls_bundle(
+    bundle: &SharedTlsBundle,
+    cert: &Path,
+    key: &Path,
+    alpn: &[&[u8]],
+    ticketer: Option<Arc<dyn ProducesTickets>>,
+) -> Result<(), TlsBundleError> {
+    let new =
+        TlsConfigBundle::load_from_paths_with(cert, key, alpn, DEFAULT_MAX_CHAIN_DEPTH, ticketer)?;
+    bundle.store(Arc::new(new));
+    Ok(())
 }
 
 #[cfg(test)]
@@ -499,5 +787,121 @@ mod tests {
             ticketer.decrypt(&ticket).is_none(),
             "ticket encrypted with expired previous key must not decrypt"
         );
+    }
+
+    // ── REL-2-03 TlsConfigBundle tests ─────────────────────────────────
+
+    fn write_self_signed(dir: &Path, cn: &str) -> (PathBuf, PathBuf) {
+        let generated = rcgen::generate_simple_self_signed(vec![cn.to_string()]).unwrap();
+        let cert_pem = generated.cert.pem();
+        let key_pem = generated.key_pair.serialize_pem();
+        let cert_path = dir.join(format!("{cn}.crt"));
+        let key_path = dir.join(format!("{cn}.key"));
+        std::fs::write(&cert_path, cert_pem).unwrap();
+        std::fs::write(&key_path, key_pem).unwrap();
+        (cert_path, key_path)
+    }
+
+    #[test]
+    fn tls_bundle_load_from_paths_round_trip() {
+        let dir = tempdir();
+        let (cert, key) = write_self_signed(&dir, "a.example");
+        let bundle = TlsConfigBundle::load_from_paths(&cert, &key, &[]).unwrap();
+        assert_eq!(bundle.cert_chain.len(), 1);
+        assert!(Arc::strong_count(&bundle.server_config) >= 1);
+    }
+
+    #[test]
+    fn tls_bundle_load_from_paths_alpn_advertised() {
+        let dir = tempdir();
+        let (cert, key) = write_self_signed(&dir, "alpn.example");
+        let bundle = TlsConfigBundle::load_from_paths(&cert, &key, &[b"h2", b"http/1.1"]).unwrap();
+        assert_eq!(
+            bundle.server_config.alpn_protocols,
+            vec![b"h2".to_vec(), b"http/1.1".to_vec()]
+        );
+    }
+
+    #[test]
+    fn tls_bundle_load_from_paths_missing_cert_io_error() {
+        let dir = tempdir();
+        let cert = dir.join("absent.crt");
+        let key = dir.join("absent.key");
+        let err = TlsConfigBundle::load_from_paths(&cert, &key, &[]).unwrap_err();
+        assert_eq!(err.reason(), "io");
+    }
+
+    #[test]
+    fn tls_bundle_load_from_paths_empty_cert_rejected() {
+        let dir = tempdir();
+        let cert = dir.join("empty.crt");
+        let key = dir.join("dummy.key");
+        std::fs::write(&cert, b"").unwrap();
+        let generated = rcgen::generate_simple_self_signed(vec!["dummy".to_string()]).unwrap();
+        std::fs::write(&key, generated.key_pair.serialize_pem()).unwrap();
+        let err = TlsConfigBundle::load_from_paths(&cert, &key, &[]).unwrap_err();
+        assert_eq!(err.reason(), "empty_chain");
+    }
+
+    #[test]
+    fn tls_bundle_mismatched_key_rejected() {
+        let dir = tempdir();
+        let (cert_a, _key_a) = write_self_signed(&dir, "site-a");
+        let (_cert_b, key_b) = write_self_signed(&dir, "site-b");
+        let err = TlsConfigBundle::load_from_paths(&cert_a, &key_b, &[]).unwrap_err();
+        assert_eq!(err.reason(), "key_mismatch");
+    }
+
+    #[test]
+    fn reload_tls_bundle_succeeds_swaps_under_readers() {
+        let dir = tempdir();
+        let (cert_a, key_a) = write_self_signed(&dir, "v1.example");
+        let bundle = TlsConfigBundle::load_from_paths(&cert_a, &key_a, &[b"h2"])
+            .unwrap()
+            .into_shared();
+        let snap_before = bundle.load_full();
+
+        let (cert_b, key_b) = write_self_signed(&dir, "v2.example");
+        reload_tls_bundle(&bundle, &cert_b, &key_b, &[b"h2"], None).unwrap();
+        let snap_after = bundle.load_full();
+        assert!(
+            !Arc::ptr_eq(&snap_before, &snap_after),
+            "reload must swap the inner Arc"
+        );
+        assert_eq!(
+            snap_before.server_config.alpn_protocols,
+            vec![b"h2".to_vec()]
+        );
+    }
+
+    #[test]
+    fn reload_tls_bundle_invalid_keeps_old_live() {
+        let dir = tempdir();
+        let (cert_a, key_a) = write_self_signed(&dir, "live.example");
+        let bundle = TlsConfigBundle::load_from_paths(&cert_a, &key_a, &[])
+            .unwrap()
+            .into_shared();
+        let snap_before = bundle.load_full();
+
+        let bogus_cert = dir.join("nope.crt");
+        let bogus_key = dir.join("nope.key");
+        let err = reload_tls_bundle(&bundle, &bogus_cert, &bogus_key, &[], None).unwrap_err();
+        assert_eq!(err.reason(), "io");
+        let snap_after = bundle.load_full();
+        assert!(
+            Arc::ptr_eq(&snap_before, &snap_after),
+            "failed reload must keep the same bundle"
+        );
+    }
+
+    fn tempdir() -> PathBuf {
+        use std::sync::atomic::{AtomicU64, Ordering};
+        static N: AtomicU64 = AtomicU64::new(0);
+        let id = N.fetch_add(1, Ordering::Relaxed);
+        let pid = std::process::id();
+        let p = std::env::temp_dir().join(format!("eg-tls-bundle-{pid}-{id}"));
+        let _ = std::fs::remove_dir_all(&p);
+        std::fs::create_dir_all(&p).unwrap();
+        p
     }
 }

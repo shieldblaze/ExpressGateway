@@ -16,9 +16,8 @@
 #![allow(clippy::pedantic, clippy::nursery, clippy::too_many_arguments)]
 #![cfg_attr(test, allow(clippy::unwrap_used, clippy::expect_used, clippy::panic))]
 
-use std::io::BufReader;
 use std::net::SocketAddr;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, OnceLock};
 use std::time::{Duration, Instant};
@@ -26,7 +25,6 @@ use std::time::{Duration, Instant};
 use anyhow::Context;
 use parking_lot::Mutex as PlMutex;
 use prometheus::IntCounter;
-use rustls_pki_types::{CertificateDer, PrivateKeyDer};
 use tokio::io::{self, AsyncRead, AsyncWrite, AsyncWriteExt};
 use tokio::net::{TcpListener, TcpStream};
 #[cfg(not(unix))]
@@ -67,9 +65,7 @@ use lb_l7::upstream::{RoundRobinUpstreams, UpstreamBackend, UpstreamProto};
 use lb_l7::ws_proxy::{WsConfig, WsProxy};
 use lb_observability::{MetricsRegistry, admin_http, http_latency_buckets};
 use lb_quic::{QuicListener, QuicListenerParams};
-use lb_security::{
-    ConnGate, HooksBundle, SecurityHooks, SmuggleMode, TicketRotator, build_server_config,
-};
+use lb_security::{ConnGate, HooksBundle, SecurityHooks, SmuggleMode, TicketRotator};
 
 mod xdp;
 
@@ -163,18 +159,138 @@ fn panic_total() -> u64 {
     from_registry.saturating_add(from_fallback)
 }
 
+// ── REL-2-03: TLS cert reload registry ──────────────────────────────────
+
+/// One entry per TLS-terminating listener (`tls` or `h1s` protocol). The
+/// SIGUSR1 handler in `async_main` iterates the registry and calls
+/// [`lb_security::reload_tls_bundle`] for each entry, swapping the
+/// `SharedTlsBundle` under in-flight handshakes without disturbing them.
+#[derive(Clone)]
+struct TlsReloadEntry {
+    /// Listener address (`127.0.0.1:8443`); labels the per-listener
+    /// gauges and the log line on reload.
+    listener: String,
+    /// Cert path on disk.
+    cert_path: PathBuf,
+    /// Key path on disk.
+    key_path: PathBuf,
+    /// Wire-format ALPN tokens preserved across reloads (empty for raw
+    /// TLS, `[b"h2", b"http/1.1"]` for H1s).
+    alpn: Vec<Vec<u8>>,
+    /// Shared TLS config bundle the listener reads at accept time.
+    bundle: lb_security::SharedTlsBundle,
+    /// Session-ticket rotator handle so the reload re-installs the same
+    /// ticketer (preserving session-ticket resumption across rotations).
+    rotator: Arc<PlMutex<TicketRotator>>,
+}
+
+/// Cert-rotation metric handles. Registered once at boot so they appear
+/// in `/metrics` even before the first reload.
+#[derive(Clone)]
+struct CertMetrics {
+    succeeded_total: prometheus::IntCounter,
+    failed_total: prometheus::IntCounterVec,
+    loaded_at_seconds: prometheus::IntGaugeVec,
+}
+
+impl CertMetrics {
+    fn register(metrics: &MetricsRegistry) -> Option<Self> {
+        let succeeded_total = metrics
+            .counter(
+                "cert_rotation_succeeded_total",
+                "REL-2-03: number of successful TLS cert reloads (SIGUSR1 or inotify)",
+            )
+            .ok()?;
+        let failed_total = metrics
+            .counter_vec(
+                "cert_rotation_failed_total",
+                "REL-2-03: number of failed TLS cert reloads, labelled by reason",
+                &["reason"],
+            )
+            .ok()?;
+        let loaded_at_seconds = metrics
+            .gauge_vec(
+                "cert_loaded_at_seconds",
+                "REL-2-03: wall-clock unix timestamp the listener's TLS bundle was last (re)loaded",
+                &["listener"],
+            )
+            .ok()?;
+        Some(Self {
+            succeeded_total,
+            failed_total,
+            loaded_at_seconds,
+        })
+    }
+}
+
+/// REL-2-03 (Wave 2c-2): walk every TLS reload entry, attempt a reload,
+/// and update the cert-rotation metrics. Logs INFO on success, WARN on
+/// failure. Failed reloads keep the previous bundle live so a botched
+/// cert push never blackholes the listener.
+fn reload_all_tls(registry: &[TlsReloadEntry], metrics: Option<&CertMetrics>) -> (usize, usize) {
+    let mut ok = 0_usize;
+    let mut fail = 0_usize;
+    for entry in registry {
+        let alpn_slices: Vec<&[u8]> = entry.alpn.iter().map(Vec::as_slice).collect();
+        let ticketer = lb_security::RotatingTicketer::ticketer_from(Arc::clone(&entry.rotator));
+        match lb_security::reload_tls_bundle(
+            &entry.bundle,
+            &entry.cert_path,
+            &entry.key_path,
+            &alpn_slices,
+            Some(ticketer),
+        ) {
+            Ok(()) => {
+                ok += 1;
+                if let Some(m) = metrics {
+                    m.succeeded_total.inc();
+                    let now_secs = std::time::SystemTime::now()
+                        .duration_since(std::time::UNIX_EPOCH)
+                        .map_or(0_i64, |d| i64::try_from(d.as_secs()).unwrap_or(i64::MAX));
+                    m.loaded_at_seconds
+                        .with_label_values(&[entry.listener.as_str()])
+                        .set(now_secs);
+                }
+                tracing::info!(
+                    listener = %entry.listener,
+                    cert = %entry.cert_path.display(),
+                    key = %entry.key_path.display(),
+                    "REL-2-03 TLS cert reload succeeded"
+                );
+            }
+            Err(e) => {
+                fail += 1;
+                let reason = e.reason();
+                if let Some(m) = metrics {
+                    m.failed_total.with_label_values(&[reason]).inc();
+                }
+                tracing::warn!(
+                    listener = %entry.listener,
+                    reason,
+                    error = %e,
+                    "REL-2-03 TLS cert reload failed — keeping previous bundle live"
+                );
+            }
+        }
+    }
+    (ok, fail)
+}
+
 // ── shared gateway state ────────────────────────────────────────────────
 
 /// How a listener terminates inbound traffic.
 enum ListenerMode {
     /// Plain TCP — no TLS, forward the socket directly.
     PlainTcp,
-    /// TLS over TCP — terminate with the shared rustls acceptor and
-    /// forward the decrypted stream. The `_rotator` handle is held so
-    /// the background ticket-rotation ticker stays alive as long as the
-    /// listener does (the ticker exits when its last `Arc` drops).
+    /// TLS over TCP — terminate with the shared rustls config and
+    /// forward the decrypted stream. The bundle is held inside an
+    /// `Arc<ArcSwap<_>>` so a SIGUSR1 cert reload (REL-2-03) swaps the
+    /// snapshot under in-flight handshakes without disturbing them; new
+    /// handshakes pick up whichever bundle is current at accept time.
+    /// The `_rotator` handle is held so the background ticket-rotation
+    /// ticker stays alive as long as the listener does.
     Tls {
-        acceptor: TlsAcceptor,
+        bundle: lb_security::SharedTlsBundle,
         _rotator: Arc<PlMutex<TicketRotator>>,
     },
     /// Plain HTTP/1.1 — `lb-l7` `H1Proxy` over the raw TCP stream.
@@ -182,11 +298,12 @@ enum ListenerMode {
     /// HTTPS listener that offers HTTP/2 and HTTP/1.1 via ALPN. After
     /// `TlsAcceptor::accept`, the runtime inspects
     /// [`rustls::ServerConnection::alpn_protocol`] and dispatches to the
-    /// matching proxy.
+    /// matching proxy. As with the TLS variant the bundle is held in an
+    /// `Arc<ArcSwap<_>>` for hot-reload via SIGUSR1 (REL-2-03).
     H1s {
         h1_proxy: Arc<H1Proxy>,
         h2_proxy: Arc<H2Proxy>,
-        acceptor: TlsAcceptor,
+        bundle: lb_security::SharedTlsBundle,
         _rotator: Arc<PlMutex<TicketRotator>>,
     },
 }
@@ -316,75 +433,68 @@ fn quic_listener_params_from_config(
 }
 
 // ── TLS helpers ─────────────────────────────────────────────────────────
+//
+// REL-2-03 (Wave 2c-2): the legacy `load_cert_chain` + `load_private_key`
+// + `build_tls_stack` helpers were folded into
+// `lb_security::TlsConfigBundle::load_from_paths` so the same validation
+// runs at startup AND on every SIGUSR1 reload. SEC-2-08's key-perm
+// advisory now lives in `assert_key_perm_advisory`, called both at
+// startup and on every reload pass.
 
-/// Load a PEM-encoded certificate chain from `path`. Returns an error if
-/// the file cannot be read or contains no certificates.
-fn load_cert_chain(path: &Path) -> anyhow::Result<Vec<CertificateDer<'static>>> {
-    let file = std::fs::File::open(path)
-        .with_context(|| format!("cannot open TLS cert {}", path.display()))?;
-    let mut reader = BufReader::new(file);
-    let certs: Vec<CertificateDer<'static>> = rustls_pemfile::certs(&mut reader)
-        .collect::<Result<Vec<_>, _>>()
-        .with_context(|| format!("parse TLS cert PEM from {}", path.display()))?;
-    if certs.is_empty() {
-        anyhow::bail!("no certificates found in {}", path.display());
-    }
-    Ok(certs)
-}
-
-/// Load the first PEM-encoded private key from `path`. Accepts PKCS#8,
-/// SEC1 (EC), or RSA PKCS#1 formats.
-///
-/// SEC-2-08 (Wave 2c): refuse to load a private key whose file mode
-/// is group- or world-accessible. The default policy is **strict** on
-/// release builds (anything wider than `0o600` is a hard error) and
-/// **lax** on debug builds (logged at `warn` to keep dev ergonomics).
-/// Operators that must keep a wider mode (e.g. ESM bundled keys)
-/// should switch to a sidecar that drops perms before launch.
-fn load_private_key(path: &Path) -> anyhow::Result<PrivateKeyDer<'static>> {
-    // SEC-2-08: refuse world-readable keys at load time.
+/// SEC-2-08 (Wave 2c, retained on rotation per REL-2-03): refuse to load
+/// a private key whose file mode is group- or world-accessible. Strict
+/// on release builds, lax on debug builds.
+fn assert_key_perm_advisory(path: &Path) -> anyhow::Result<()> {
     let strict = !cfg!(debug_assertions);
     match lb_security::assert_owner_only(path, strict) {
-        Ok(lb_security::KeyPermAdvice::Ok | lb_security::KeyPermAdvice::NotApplicable) => {}
+        Ok(lb_security::KeyPermAdvice::Ok | lb_security::KeyPermAdvice::NotApplicable) => Ok(()),
         Ok(lb_security::KeyPermAdvice::TooPermissive { mode }) => {
             tracing::warn!(
                 key = %path.display(),
                 mode = format!("{mode:o}"),
                 "TLS key file permissions wider than 0o600 — tighten with `chmod 600`"
             );
+            Ok(())
         }
-        Err(e) => {
-            return Err(anyhow::anyhow!(
-                "TLS key permission check failed for {}: {e}",
-                path.display()
-            ));
-        }
+        Err(e) => Err(anyhow::anyhow!(
+            "TLS key permission check failed for {}: {e}",
+            path.display()
+        )),
     }
-
-    let file = std::fs::File::open(path)
-        .with_context(|| format!("cannot open TLS key {}", path.display()))?;
-    let mut reader = BufReader::new(file);
-    let key = rustls_pemfile::private_key(&mut reader)
-        .with_context(|| format!("parse TLS key PEM from {}", path.display()))?
-        .ok_or_else(|| anyhow::anyhow!("no private key found in {}", path.display()))?;
-    Ok(key)
 }
 
-/// Build the shared rustls `ServerConfig` for a listener, wiring the
-/// per-listener `TicketRotator` through `lb_security::build_server_config`.
-fn build_tls_stack(
+/// REL-2-03 (Wave 2c-2): build a `SharedTlsBundle` for a listener so
+/// SIGUSR1 + inotify cert reloads can swap it under in-flight handshakes
+/// without disturbing them. The bundle's `server_config` is built with
+/// the shared `RotatingTicketer` so session-ticket resumption survives a
+/// cert swap. `alpn` is the ALPN advertisement (empty for raw TLS, `h2 +
+/// http/1.1` for the H1s ALPN dispatcher).
+fn build_tls_bundle(
     tls_cfg: &TlsConfig,
-) -> anyhow::Result<(Arc<rustls::ServerConfig>, Arc<PlMutex<TicketRotator>>)> {
-    let cert_chain = load_cert_chain(Path::new(&tls_cfg.cert_path))?;
-    let key = load_private_key(Path::new(&tls_cfg.key_path))?;
+    alpn: &[&[u8]],
+) -> anyhow::Result<(lb_security::SharedTlsBundle, Arc<PlMutex<TicketRotator>>)> {
+    assert_key_perm_advisory(Path::new(&tls_cfg.key_path))?;
     let interval = Duration::from_secs(tls_cfg.ticket_rotation_interval_seconds);
     let overlap = Duration::from_secs(tls_cfg.ticket_rotation_overlap_seconds);
     let rotator = TicketRotator::new(interval, overlap)
         .map_err(|e| anyhow::anyhow!("ticket rotator init failed: {e}"))?;
     let rot_arc = Arc::new(PlMutex::new(rotator));
-    let server_cfg = build_server_config(Arc::clone(&rot_arc), cert_chain, key, &[])
-        .map_err(|e| anyhow::anyhow!("rustls ServerConfig build failed: {e}"))?;
-    Ok((server_cfg, rot_arc))
+    let ticketer = lb_security::RotatingTicketer::ticketer_from(Arc::clone(&rot_arc));
+    let bundle = lb_security::TlsConfigBundle::load_from_paths_with(
+        Path::new(&tls_cfg.cert_path),
+        Path::new(&tls_cfg.key_path),
+        alpn,
+        lb_security::DEFAULT_MAX_CHAIN_DEPTH,
+        Some(ticketer),
+    )
+    .map_err(|e| {
+        anyhow::anyhow!(
+            "TLS bundle load failed for cert={:?} key={:?}: {e}",
+            tls_cfg.cert_path,
+            tls_cfg.key_path
+        )
+    })?;
+    Ok((bundle.into_shared(), rot_arc))
 }
 
 /// Spawn a background task that nudges `rotator.rotate_if_due(now)` once
@@ -774,25 +884,11 @@ fn merge_h2_security(cfg: Option<&H2SecurityConfig>) -> H2SecurityThresholds {
     t
 }
 
-/// Build the TLS stack for an `h1s` listener. Same plumbing as the
-/// `tls` listener (ticket rotator + cert + key) plus an ALPN advertisement
-/// covering HTTP/2 (preferred) and HTTP/1.1 (fallback). The runtime
-/// dispatches by negotiated protocol after `TlsAcceptor::accept`.
-fn build_h1s_tls_stack(
-    tls_cfg: &TlsConfig,
-) -> anyhow::Result<(Arc<rustls::ServerConfig>, Arc<PlMutex<TicketRotator>>)> {
-    let cert_chain = load_cert_chain(Path::new(&tls_cfg.cert_path))?;
-    let key = load_private_key(Path::new(&tls_cfg.key_path))?;
-    let interval = Duration::from_secs(tls_cfg.ticket_rotation_interval_seconds);
-    let overlap = Duration::from_secs(tls_cfg.ticket_rotation_overlap_seconds);
-    let rotator = TicketRotator::new(interval, overlap)
-        .map_err(|e| anyhow::anyhow!("ticket rotator init failed: {e}"))?;
-    let rot_arc = Arc::new(PlMutex::new(rotator));
-    let alpn: &[&[u8]] = &[b"h2", b"http/1.1"];
-    let server_cfg = build_server_config(Arc::clone(&rot_arc), cert_chain, key, alpn)
-        .map_err(|e| anyhow::anyhow!("rustls ServerConfig build failed: {e}"))?;
-    Ok((server_cfg, rot_arc))
-}
+// REL-2-03 (Wave 2c-2): the legacy `build_h1s_tls_stack` was replaced
+// by `build_tls_bundle` which constructs a `SharedTlsBundle` so cert
+// rotation via SIGUSR1 hot-swaps the snapshot under in-flight
+// handshakes. The H1s call-site passes `&[b"h2", b"http/1.1"]` as the
+// ALPN list; the raw-TLS call-site passes `&[]`.
 
 /// Bind and spawn a [`QuicListener`]. Pulled out of `async_main` to
 /// keep its body small enough to satisfy `clippy::too_many_lines`.
@@ -824,6 +920,7 @@ async fn spawn_quic(listener_cfg: &lb_config::ListenerConfig) -> anyhow::Result<
 
 /// Resolve backends, build the listener state, and spawn the accept
 /// loop for a TCP/TLS/H1/H1s listener.
+#[allow(clippy::too_many_arguments)]
 async fn spawn_tcp(
     listener_cfg: &lb_config::ListenerConfig,
     pool: &TcpPool,
@@ -835,6 +932,7 @@ async fn spawn_tcp(
     connect_timeout: Duration,
     hooks: Arc<HooksBundle>,
     shutdown_token: CancellationToken,
+    tls_reload_registry: Arc<PlMutex<Vec<TlsReloadEntry>>>,
 ) -> anyhow::Result<tokio::task::JoinHandle<anyhow::Result<()>>> {
     let mut addresses = Vec::with_capacity(listener_cfg.backends.len());
     let mut backends = Vec::with_capacity(listener_cfg.backends.len());
@@ -861,7 +959,7 @@ async fn spawn_tcp(
         addresses.push(first);
         backends.push(Backend::new(format!("backend-{i}"), b.weight));
     }
-    let mode = build_listener_mode(listener_cfg, pool, &addresses, &hooks)?;
+    let mode = build_listener_mode(listener_cfg, pool, &addresses, &hooks, &tls_reload_registry)?;
     let state = Arc::new(ListenerState {
         backends,
         balancer: parking_lot::Mutex::new(RoundRobin::new()),
@@ -898,6 +996,7 @@ fn build_listener_mode(
     pool: &TcpPool,
     addresses: &[SocketAddr],
     hooks: &Arc<HooksBundle>,
+    tls_reload_registry: &Arc<PlMutex<Vec<TlsReloadEntry>>>,
 ) -> anyhow::Result<ListenerMode> {
     // SEC-2-04 Wave 2c-2: cloned into every L7 proxy constructor
     // below via `with_hooks`. The same bundle is held at accept-site
@@ -912,18 +1011,25 @@ fn build_listener_mode(
                     listener_cfg.address
                 );
             };
-            let (server_cfg, rotator) = build_tls_stack(tls_cfg)
+            let (bundle, rotator) = build_tls_bundle(tls_cfg, &[])
                 .with_context(|| format!("TLS setup failed for {}", listener_cfg.address))?;
-            let acceptor = TlsAcceptor::from(server_cfg);
             spawn_rotator_ticker(Arc::clone(&rotator));
+            tls_reload_registry.lock().push(TlsReloadEntry {
+                listener: listener_cfg.address.clone(),
+                cert_path: PathBuf::from(&tls_cfg.cert_path),
+                key_path: PathBuf::from(&tls_cfg.key_path),
+                alpn: Vec::new(),
+                bundle: Arc::clone(&bundle),
+                rotator: Arc::clone(&rotator),
+            });
             tracing::info!(
                 address = %listener_cfg.address,
                 protocol = "tls",
                 cert = %tls_cfg.cert_path,
-                "listener configured with TLS termination"
+                "listener configured with TLS termination (REL-2-03 hot-reload bundle)"
             );
             Ok(ListenerMode::Tls {
-                acceptor,
+                bundle,
                 _rotator: rotator,
             })
         }
@@ -967,10 +1073,18 @@ fn build_listener_mode(
                     listener_cfg.address
                 );
             };
-            let (server_cfg, rotator) = build_h1s_tls_stack(tls_cfg)
+            let h1s_alpn: &[&[u8]] = &[b"h2", b"http/1.1"];
+            let (bundle, rotator) = build_tls_bundle(tls_cfg, h1s_alpn)
                 .with_context(|| format!("H1s TLS setup failed for {}", listener_cfg.address))?;
-            let acceptor = TlsAcceptor::from(server_cfg);
             spawn_rotator_ticker(Arc::clone(&rotator));
+            tls_reload_registry.lock().push(TlsReloadEntry {
+                listener: listener_cfg.address.clone(),
+                cert_path: PathBuf::from(&tls_cfg.cert_path),
+                key_path: PathBuf::from(&tls_cfg.key_path),
+                alpn: h1s_alpn.iter().map(|p| p.to_vec()).collect(),
+                bundle: Arc::clone(&bundle),
+                rotator: Arc::clone(&rotator),
+            });
             let upstreams_h1 = build_upstream_backends(listener_cfg, addresses)?;
             let upstreams_h2 = upstreams_h1.clone();
             let needs_h2 = upstreams_h1.iter().any(|b| b.proto == UpstreamProto::H2);
@@ -1025,7 +1139,7 @@ fn build_listener_mode(
             Ok(ListenerMode::H1s {
                 h1_proxy,
                 h2_proxy,
-                acceptor,
+                bundle,
                 _rotator: rotator,
             })
         }
@@ -1455,6 +1569,17 @@ async fn async_main() -> anyhow::Result<()> {
         "accept-loop guards configured (CODE-2-05/06/09 + SEC-2-04 — Wave 2c-2)"
     );
 
+    // REL-2-03 (Wave 2c-2): registry of TLS reloadables, populated as
+    // each TLS / H1s listener spawns its bundle. The SIGUSR1 handler
+    // below iterates this list, calls `reload_tls_bundle` for each, and
+    // bumps `cert_rotation_succeeded_total` / `cert_rotation_failed_total`
+    // accordingly.
+    let tls_reload_registry: Arc<PlMutex<Vec<TlsReloadEntry>>> = Arc::new(PlMutex::new(Vec::new()));
+
+    // Register cert metric handles up front so they appear in `/metrics`
+    // even before the first reload.
+    let cert_metrics = CertMetrics::register(&metrics);
+
     for listener_cfg in &config.listeners {
         if listener_cfg.protocol == "quic" {
             quic_listeners.push(spawn_quic(listener_cfg).await?);
@@ -1478,6 +1603,7 @@ async fn async_main() -> anyhow::Result<()> {
             connect_timeout,
             Arc::clone(&hooks),
             shutdown.token().clone(),
+            Arc::clone(&tls_reload_registry),
         )
         .await?;
         listener_handles.push(handle);
@@ -1546,17 +1672,31 @@ async fn async_main() -> anyhow::Result<()> {
     //   6. abort survivors + bump `shutdown_aborted_connections_total`.
     //   7. drop the XDP loader LAST (handled implicitly by `_xdp_loader`
     //      living to the end of `async_main`).
-    let signal_kind = wait_for_lifecycle_signal().await;
-    tracing::info!(signal = %signal_kind, "lifecycle signal received");
-
-    if matches!(signal_kind, LifecycleSignal::SigUsr1) {
-        // REL-2-03 placeholder: real cert-reload wiring lands in
-        // Wave-2c-2. For now we log + continue waiting for SIGTERM.
-        tracing::info!("SIGUSR1 received — cert reload placeholder (REL-2-03)");
-        // Re-arm: wait for the *next* terminal signal.
-        let next = wait_for_lifecycle_signal().await;
-        tracing::info!(signal = %next, "subsequent lifecycle signal");
-    }
+    // REL-2-03 (Wave 2c-2): SIGUSR1 is the operator-driven cert-reload
+    // trigger. The loop services every SIGUSR1 received (so an operator
+    // can roll a cert + key, signal once, observe metrics, and signal
+    // again if validation rejected the push). Loop exits on SIGTERM /
+    // SIGINT and falls through to the drain sequence.
+    let signal_kind = loop {
+        let s = wait_for_lifecycle_signal().await;
+        tracing::info!(signal = %s, "lifecycle signal received");
+        if !matches!(s, LifecycleSignal::SigUsr1) {
+            break s;
+        }
+        let entries: Vec<TlsReloadEntry> = tls_reload_registry.lock().clone();
+        if entries.is_empty() {
+            tracing::info!("SIGUSR1 received but no TLS listeners configured — nothing to reload");
+            continue;
+        }
+        let (ok, fail) = reload_all_tls(&entries, cert_metrics.as_ref());
+        tracing::info!(
+            ok,
+            fail,
+            entries = entries.len(),
+            "REL-2-03 SIGUSR1 cert reload pass complete"
+        );
+    };
+    tracing::info!(signal = %signal_kind, "terminal signal — entering drain");
 
     tracing::info!("entering drain — flipping /readyz to 503");
     probes.set_draining();
@@ -1944,10 +2084,21 @@ async fn run_listener(bind_addr: String, state: Arc<ListenerState>) -> anyhow::R
                     proxy_connection(client_stream, backend_addr, &st.metrics, st.connect_timeout)
                         .await
                 }
-                ListenerMode::Tls { acceptor, .. } => {
+                ListenerMode::Tls { bundle, .. } => {
+                    // REL-2-03 (Wave 2c-2): snapshot the bundle live at
+                    // accept time. A SIGUSR1 cert reload concurrent with
+                    // an in-flight handshake leaves this snapshot intact
+                    // until the connection drops; the next accept sees
+                    // the new bundle.
+                    let snapshot = bundle.load_full();
+                    let acceptor = TlsAcceptor::from(Arc::clone(&snapshot.server_config));
                     // SEC-2-10 Wave 2c: bounded TLS handshake budget.
-                    match lb_security::timeout_accept(acceptor, client_stream, st.handshake_timeout)
-                        .await
+                    match lb_security::timeout_accept(
+                        &acceptor,
+                        client_stream,
+                        st.handshake_timeout,
+                    )
+                    .await
                     {
                         Ok(tls_stream) => {
                             // PROTO-2-15 (Wave 2c-2): capture SNI from
@@ -1987,12 +2138,22 @@ async fn run_listener(bind_addr: String, state: Arc<ListenerState>) -> anyhow::R
                 ListenerMode::H1s {
                     h1_proxy,
                     h2_proxy,
-                    acceptor,
+                    bundle,
                     ..
                 } => {
+                    // REL-2-03 (Wave 2c-2): snapshot the bundle live at
+                    // accept time so a SIGUSR1 cert reload concurrent
+                    // with an in-flight handshake does not disturb the
+                    // running session.
+                    let snapshot = bundle.load_full();
+                    let acceptor = TlsAcceptor::from(Arc::clone(&snapshot.server_config));
                     // SEC-2-10 Wave 2c: bounded TLS handshake budget.
-                    match lb_security::timeout_accept(acceptor, client_stream, st.handshake_timeout)
-                        .await
+                    match lb_security::timeout_accept(
+                        &acceptor,
+                        client_stream,
+                        st.handshake_timeout,
+                    )
+                    .await
                     {
                         Ok(tls_stream) => {
                             // PROTO-2-15 (Wave 2c-2): capture + log SNI
@@ -2343,7 +2504,10 @@ mod tests {
             ConnGate::new(64, 16, Vec::new()),
             SmuggleMode::H1,
         ));
-        let outcome = build_listener_mode(&listener_cfg, &pool, &[], &hooks);
+        let tls_reload_registry: Arc<PlMutex<Vec<TlsReloadEntry>>> =
+            Arc::new(PlMutex::new(Vec::new()));
+        let outcome =
+            build_listener_mode(&listener_cfg, &pool, &[], &hooks, &tls_reload_registry);
         assert!(outcome.is_err(), "typo protocol should have errored");
         let msg = match outcome {
             Err(e) => e.to_string(),

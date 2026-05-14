@@ -1647,6 +1647,7 @@ dependencies = [
 name = "lb-security"
 version = "0.1.0"
 dependencies = [
+ "arc-swap",
  "bytes",
  "dashmap 6.1.0",
  "http 1.4.0",
@@ -1654,11 +1655,13 @@ dependencies = [
  "rcgen",
  "ring",
  "rustls",
+ "rustls-pemfile",
  "rustls-pki-types",
  "subtle",
  "thiserror 2.0.18",
  "tokio",
  "tokio-rustls",
+ "tracing",
 ]
 
 [[package]]
