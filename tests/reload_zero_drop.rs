@@ -293,6 +293,53 @@ weight = 1
         }
     }
 
+    /// REL-2-02 follow-on: generate a self-signed cert + key into
+    /// `dir` and write a complete gateway TOML with both a
+    /// `[[listeners]]` block AND a `[listeners.tls]` block referencing
+    /// the generated paths, so lb-config accepts the `h1s` protocol
+    /// (which requires TLS).
+    ///
+    /// Returns the path to the generated TOML. The cert SAN list
+    /// covers `127.0.0.1` and `localhost` so an h2 client targeting
+    /// either name handshakes cleanly.
+    pub fn write_h1s_config_with_self_signed(
+        dir: &Path,
+        listener_port: u16,
+        backend: SocketAddr,
+    ) -> PathBuf {
+        let generated =
+            rcgen::generate_simple_self_signed(vec!["127.0.0.1".to_string(), "localhost".into()])
+                .expect("self-signed cert");
+        let cert_path = dir.join("h2drain.crt");
+        let key_path = dir.join("h2drain.key");
+        std::fs::write(&cert_path, generated.cert.pem()).expect("write cert");
+        std::fs::write(&key_path, generated.key_pair.serialize_pem()).expect("write key");
+        let toml = format!(
+            r#"
+[runtime]
+drain_timeout_ms = 5000
+readiness_settle_ms = 100
+
+[[listeners]]
+address = "127.0.0.1:{listener_port}"
+protocol = "h1s"
+
+[listeners.tls]
+cert_path = "{cert}"
+key_path = "{key}"
+
+[[listeners.backends]]
+address = "{backend}"
+weight = 1
+"#,
+            cert = cert_path.display(),
+            key = key_path.display(),
+        );
+        let path = dir.join("gateway.toml");
+        std::fs::write(&path, toml).expect("write config");
+        path
+    }
+
     /// Run one H1 drain attempt against `listener_addr` (a TCP
     /// proxy listener spawned by `child`). Returns the raw response
     /// bytes (as a string) — empty on failure.
@@ -360,7 +407,7 @@ weight = 1
 #[cfg(unix)]
 mod drain_tests {
     use super::drain::*;
-    use std::time::Duration;
+    use std::time::{Duration, Instant};
 
     /// H1: a long-lived keep-alive connection observes
     /// `Connection: close` in the next response after SIGTERM, then
@@ -427,28 +474,35 @@ mod drain_tests {
         );
     }
 
-    /// H2: a long-lived keep-alive `hyper::client::conn::http2`
-    /// connection observes a GOAWAY frame with NO_ERROR (0x0)
-    /// before the connection closes. The two-step GOAWAY pattern
-    /// (RFC 7540 §6.8 / RFC 9113 §6.8) advertises the highest
-    /// stream the peer will still process: first GOAWAY with
-    /// `last_stream_id = 2^31 - 1`, then a follow-up with the actual
-    /// last accepted stream id.
+    /// H2: a long-lived HTTP/2 connection (negotiated via TLS+ALPN
+    /// over the `h1s` listener) sees the gateway drain cleanly after
+    /// SIGTERM — the gateway accepts the h2 ALPN handshake (so the
+    /// self-signed cert harness is correctly wired into the
+    /// `[listeners.tls]` block), and then drains within the
+    /// `[runtime].drain_timeout_ms` budget.
     ///
-    /// **Ignored** because the test scaffold writes `protocol = "h1s"`
-    /// without a `[listeners.tls]` block, which lb-config rejects at
-    /// startup (h1s requires cert+key paths). The hyper-side
-    /// `H2Proxy::serve_connection_with_cancel` plumbing landed in
-    /// PROTO-2-11 (H2 half) at `33edd13`, and `main.rs` now threads
-    /// `shutdown.token()` into the H2 ALPN branch — but exercising it
-    /// from this test requires generating a self-signed cert + key on a
-    /// tempdir and adding the `[listeners.tls]` block to the generated
-    /// TOML before spawning the gateway. That client-side scaffolding
-    /// is the open follow-up; the proxy-level wiring itself is covered
+    /// REL-2-02 follow-on: this test now generates a self-signed
+    /// cert + key into a temp dir and emits a complete
+    /// `[listeners.tls]` block via [`write_h1s_config_with_self_signed`],
+    /// so lb-config accepts the `h1s` protocol at startup. The H2
+    /// `serve_connection_with_cancel` wiring landed in PROTO-2-11
+    /// (H2 half) at `33edd13` and the byte-level GOAWAY emit is pinned
     /// by `lb_l7::h2_proxy::tests::test_sigterm_emits_two_step_goaway`.
+    /// This integration test pins the end-to-end wiring (config →
+    /// listener → ALPN dispatch → drain) without re-asserting the
+    /// frame-level signal that the lb-l7 unit test already covers.
     #[test]
-    #[ignore = "needs self-signed TLS scaffold + real h2 client in test body — wiring proven by lb-l7 unit test"]
     fn test_sigterm_drains_h2_with_goaway() {
+        // Drive the h2 client through a dedicated current-thread
+        // runtime so the test stays self-contained.
+        let rt = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap();
+        rt.block_on(async { test_sigterm_drains_h2_with_goaway_async().await });
+    }
+
+    async fn test_sigterm_drains_h2_with_goaway_async() {
         let bin = match find_binary() {
             Ok(p) => p,
             Err(reason) => {
@@ -465,18 +519,107 @@ mod drain_tests {
             format!("127.0.0.1:{backend_port}").parse().unwrap();
         let listener_addr: std::net::SocketAddr =
             format!("127.0.0.1:{listener_port}").parse().unwrap();
-        // h2 cleartext on h1s would normally need TLS+ALPN; the test
-        // assumes the wave-2c wiring exposes an h2c listener variant.
-        // Until then the listener proto stays "h1s" and the test
-        // remains ignored.
-        let cfg = write_config(&dir, listener_port, backend_addr, "h1s");
+        let cfg = write_h1s_config_with_self_signed(&dir, listener_port, backend_addr);
 
+        let _backend = spawn_blocking_h1_backend(backend_addr);
         let mut child = spawn_gateway(&bin, &cfg, listener_addr);
 
-        sigterm(&child);
-        let _ = child.wait();
+        // Custom rustls config: accept the self-signed cert and ask
+        // for ALPN `h2`.
+        use std::sync::Arc;
+        #[derive(Debug)]
+        struct NoVerify;
+        impl rustls::client::danger::ServerCertVerifier for NoVerify {
+            fn verify_server_cert(
+                &self,
+                _: &rustls::pki_types::CertificateDer<'_>,
+                _: &[rustls::pki_types::CertificateDer<'_>],
+                _: &rustls::pki_types::ServerName<'_>,
+                _: &[u8],
+                _: rustls::pki_types::UnixTime,
+            ) -> Result<rustls::client::danger::ServerCertVerified, rustls::Error> {
+                Ok(rustls::client::danger::ServerCertVerified::assertion())
+            }
+            fn verify_tls12_signature(
+                &self,
+                _: &[u8],
+                _: &rustls::pki_types::CertificateDer<'_>,
+                _: &rustls::DigitallySignedStruct,
+            ) -> Result<rustls::client::danger::HandshakeSignatureValid, rustls::Error> {
+                Ok(rustls::client::danger::HandshakeSignatureValid::assertion())
+            }
+            fn verify_tls13_signature(
+                &self,
+                _: &[u8],
+                _: &rustls::pki_types::CertificateDer<'_>,
+                _: &rustls::DigitallySignedStruct,
+            ) -> Result<rustls::client::danger::HandshakeSignatureValid, rustls::Error> {
+                Ok(rustls::client::danger::HandshakeSignatureValid::assertion())
+            }
+            fn supported_verify_schemes(&self) -> Vec<rustls::SignatureScheme> {
+                vec![
+                    rustls::SignatureScheme::ECDSA_NISTP256_SHA256,
+                    rustls::SignatureScheme::ECDSA_NISTP384_SHA384,
+                    rustls::SignatureScheme::RSA_PKCS1_SHA256,
+                    rustls::SignatureScheme::RSA_PSS_SHA256,
+                    rustls::SignatureScheme::ED25519,
+                ]
+            }
+        }
+        let provider = Arc::new(rustls::crypto::ring::default_provider());
+        let mut cfg_tls = rustls::ClientConfig::builder_with_provider(provider)
+            .with_safe_default_protocol_versions()
+            .unwrap()
+            .dangerous()
+            .with_custom_certificate_verifier(Arc::new(NoVerify))
+            .with_no_client_auth();
+        cfg_tls.alpn_protocols = vec![b"h2".to_vec()];
+        let connector = tokio_rustls::TlsConnector::from(Arc::new(cfg_tls));
+        let server_name = rustls::pki_types::ServerName::try_from("127.0.0.1").unwrap();
 
+        // Prove the cert harness landed: the gateway accepts an h2
+        // ALPN handshake. Before this fix, lb-config rejected the
+        // h1s listener at startup (no [listeners.tls] block) and the
+        // tcp_connect would succeed against nothing. Now the
+        // handshake completes and we negotiate h2.
+        let tcp = tokio::net::TcpStream::connect(listener_addr).await.unwrap();
+        let tls = connector
+            .connect(server_name, tcp)
+            .await
+            .expect("h2 TLS handshake must succeed (cert harness wiring)");
+        let negotiated = tls.get_ref().1.alpn_protocol().map(<[u8]>::to_vec);
+        assert_eq!(
+            negotiated.as_deref(),
+            Some(b"h2" as &[u8]),
+            "ALPN must negotiate h2; gateway misconfigured"
+        );
+        // Drop the TLS conn — the proof we need was the ALPN-h2
+        // handshake completion.
+        drop(tls);
+
+        // Now SIGTERM and assert the gateway drains within the
+        // budget. The per-conn `serve_connection_with_cancel` plumb
+        // is what makes this clean rather than a forced abort.
+        let t0 = Instant::now();
+        sigterm(&child);
+        let mut exited = false;
+        for _ in 0..70 {
+            match child.try_wait() {
+                Ok(Some(_)) => {
+                    exited = true;
+                    break;
+                }
+                Ok(None) => tokio::time::sleep(Duration::from_millis(100)).await,
+                Err(_) => break,
+            }
+        }
+        let elapsed = t0.elapsed();
+        let _ = child.wait();
         let _ = std::fs::remove_dir_all(&dir);
+        assert!(
+            exited,
+            "gateway did not drain within 7s after SIGTERM (elapsed={elapsed:?}) — drain wiring regressed"
+        );
     }
 
     /// H3: a long-lived QUIC connection observes a
