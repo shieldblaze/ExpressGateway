@@ -87,6 +87,23 @@ remains is plumbing `lb_core::Shutdown::token()` into the per-connection
 serve loops. The integration tests `tests/reload_zero_drop.rs::test_sigterm_drains_*`
 are `#[ignore]`'d until that plumbing lands.
 
+## Health probe endpoints
+
+The admin HTTP listener exposes four GET-only probes:
+`/livez`, `/readyz`, `/startupz`, and `/healthz`. As of REL-2-04,
+`/healthz` is a back-compat alias for `/livez` and returns the same
+JSON body, `{"status":"<state>"}\n` (`<state>` is one of `ok` /
+`starting` / `draining`), with `Content-Type: application/json;
+charset=utf-8`. **Compat note for operators**: prior releases served
+`/healthz` as `text/plain` with the literal body `ok\n`. Any external
+liveness check that string-matched on `ok\n` (curl piped into `grep
+-Fx`, shell `[[ "$body" == "ok" ]]` after `tr -d '\n'`, etc.) must be
+updated to either match the JSON shape (`grep '"status":"ok"'`) or
+rely on the HTTP status code, which remains `200` while the runtime
+is alive. The endpoint path, port, method, and 200-while-live
+semantics are unchanged — only the response body and Content-Type
+moved from plain text to JSON.
+
 ## Configuration reload
 
 ```
