@@ -37,7 +37,7 @@ Severity definitions (lead-aligned):
 
 ### SEC-2-01 — `SmuggleDetector` is dead code on the proxy hot path
 Severity: high
-Status:   Proposed-Fix(e36b50f, 0c7e16b, e00e85a, 5e7938f) — Wave-2a API (e36b50f, 0c7e16b) + Wave-2b lb-l7 detector wire-up & H2→H1 downgrade guard (e00e85a on round-4 / 0ae776d on worktree) + Wave-2b proof tests (5e7938f on round-4 / e79f4f6 on worktree)
+Status:   Verified-Fixed(e36b50f, 0c7e16b, e00e85a, 5e7938f) — Wave-2a API (e36b50f, 0c7e16b) + Wave-2b lb-l7 detector wire-up & H2→H1 downgrade guard (e00e85a) + Wave-2b proof tests (5e7938f). code Round-5 IV: hooks_impl 8/8 + smuggle_strict_te 16/16 PASS; bypass attempts (pseudo-header re-injection, gzip-chunked TE, mixed-case TE, duplicate CL) closed. See `audit/code/round-5-verifies-sec.md`.
 Location: `crates/lb-security/src/smuggle.rs:9-156`; absence in
 `crates/lb-l7/src/h1_proxy.rs` + `crates/lb-l7/src/h2_proxy.rs`;
 absence in `crates/lb-l7/Cargo.toml` + `crates/lb-h1/Cargo.toml` +
@@ -92,7 +92,7 @@ proto #1 (hyper-only coverage matrix); rel F-17 sibling DoS.
 
 ### SEC-2-02 — XDP CONNTRACK / CONNTRACK_V6 are non-LRU `HashMap`s
 Severity: high
-Status:   Open
+Status:   Verified-Fixed(c009219) — EBPF-team authored LRU map migration; code Round-5 IV: lb-l4-xdp lib 34/34 + loader_license_assert 2/2 PASS; LRU declaration confirmed in `crates/lb-l4-xdp/ebpf/src/main.rs:236-240`. Kernel-side eviction not sandbox-testable. See `audit/code/round-5-verifies-sec.md`.
 Location: `crates/lb-l4-xdp/ebpf/src/main.rs:210-218` (map decl);
 `crates/lb-l4-xdp/src/loader.rs:302-326` (userspace accessors).
 Description: The conntrack maps are aya `HashMap` (translated to
@@ -128,7 +128,7 @@ Cross-ref:  T4 (synthesis); ebpf §2 Maps; rel saturation alert.
 
 ### SEC-2-03 — `SlowlorisDetector` / `SlowPostDetector` not wired
 Severity: medium
-Status:   Proposed-Fix(1f7f417) — Wave-2a Watchdog API; Wave-2b wires lb-l7
+Status:   Accepted-with-caveat(1f7f417, e00e85a) — code Round-5 IV: slowloris_watchdog 6/6 + timeout_accept 3/3 PASS; lb-l7 `with_watchdog` surface confirmed; HOWEVER `crates/lb/src/main.rs` does not instantiate a `Watchdog` so HTTP-side slow-progress eviction is dormant. TLS-handshake half (SEC-2-10) fully wired. Tracking runtime-side wire-up as Round-6 follow-up. See `audit/code/round-5-verifies-sec.md`.
 Location: `crates/lb-security/src/slowloris.rs`, `slow_post.rs`;
 absence in `crates/lb-l7/Cargo.toml`; absence in `H1Proxy::handle`
 and the TLS accept site at `crates/lb/src/main.rs` (`acceptor.accept`).
@@ -160,7 +160,7 @@ Cross-ref:  T1; rel F-05 (TLS accept slowloris); rel F-17.
 
 ### SEC-2-04 — No per-IP / per-listener concurrent-connection cap
 Severity: high
-Status:   Proposed-Fix(e36b50f, 8e048c0, 4001791)   <!-- Wave-2a ConnGate API (e36b50f, 8e048c0); Wave-2c-2 (4001791) wires `Arc<HooksBundle>` into `crates/lb/src/main.rs::ListenerState`. `admit_connection(peer.ip())` runs BEFORE the listener inflight semaphore so a saturated IP cannot starve other peers of admission slots. The bundle is also passed via `with_hooks(...)` into both `H1Proxy` and `H2Proxy` so the in-request SmuggleDetector / H2-downgrade guard fire too. New `runtime.per_ip_connection_cap` knob (default 1_024, range 1..=2_000_000). Proof: `lb::tests::test_per_ip_cap_enforced_at_accept`. -->
+Status:   Verified-Fixed(e36b50f, 8e048c0, 4001791) — Wave-2a ConnGate API + Wave-2c-2 HooksBundle wiring into ListenerState; `admit_connection(peer.ip())` runs BEFORE the listener inflight semaphore. code Round-5 deep IV: conn_gate 10/10 + hooks_impl 8/8 + lb::tests::test_per_ip_cap_enforced_at_accept PASS; bypass attempts (atomic ordering, Drop ordering, GC race, rollback amplification, TOCTOU, u32 overflow) all closed. AcqRel/Acquire on the success CAS confirmed per SEC-2-16 mandate. See `audit/code/round-5-verifies-sec.md`.
 Location: `crates/lb/src/main.rs:1077-1126` (`run_listener` accept
 loop); `crates/lb/src/main.rs:114-126` (`listener_opts` backlog).
 Description: the accept loop spawns one `tokio::task` per accepted
@@ -190,7 +190,7 @@ plumbing).
 
 ### SEC-2-05 — 0-RTT replay window collapses under unique-token spray
 Severity: medium
-Status:   Proposed-Fix(eeae98a) — Wave-2a LRU + 65 536 default window
+Status:   Verified-Fixed(eeae98a) — Wave-2a LRU + 65 536 default window. code Round-5 IV: zero_rtt_replay_window 9/9 PASS incl. `replay_hit_promotes_to_mru` (FIFO regression guard), `arena_reuses_freed_slots`, `fills_and_evicts_under_unique_token_spray`. HMAC-SHA256 digest preserved. See `audit/code/round-5-verifies-sec.md`.
 Location: `crates/lb-security/src/zero_rtt.rs:76-86, 125-143`.
 Description: `ZeroRttReplayGuard` is a fixed-cap HashSet (default
 cap 1_048_576). Replay detection requires the **earlier** token to
@@ -221,7 +221,7 @@ Cross-ref:  rel F-19 (TCP 0-RTT — withdrawn in SEC-2-0RTT-TCP below).
 
 ### SEC-2-06 — Admin HTTP listener has no authn / no TLS
 Severity: medium
-Status:   Proposed-Fix(baa72ca, 9484544)   <!-- Wave-2a AdminAuthGate API (baa72ca); Wave-2c-2 (9484544) wires both halves into the binary: (a) `AdminAuthGate::validate_bind` runs in `crates/lb/src/main.rs` BEFORE the admin listener binds — non-loopback bind without `[admin].allow_non_loopback = true` is a hard startup error; (b) new `lb_observability::admin_http::serve_with_auth(Option<Arc<AdminAuthGate>>)` enforces `Authorization: Bearer <token>` (SHA-256 ct-eq compare) on `/metrics`; probe endpoints (`/livez`, `/healthz`, `/readyz`, `/startupz`) stay anonymously accessible so the kubelet keeps working. New `[admin]` block in `lb_config::LbConfig` with `api_token_hash` (64-char hex) + `allow_non_loopback` (bool, default false). `lb-observability` picks up `lb-security` as a one-way dep. Proofs: `lb_observability::admin_http::tests::test_admin_403_without_token` + `lb::tests::test_non_loopback_refused`. TLS for the admin surface is still out of scope (operator deploys behind reverse proxy or mTLS sidecar). -->
+Status:   Verified-Fixed(baa72ca, 9484544) — Wave-2a AdminAuthGate API + Wave-2c-2 binary wiring (validate_bind at startup + serve_with_auth bearer enforcement on `/metrics`; probes stay anon). code Round-5 deep IV: lb-observability admin_http 2/2 + lb test_non_loopback_refused PASS + admin_auth unit 14/14 PASS; bypass attempts (constant-time leak, header canonicalisation, probe-path prefix tricks, bind-loopback edges incl. `[::]`/`0.0.0.0`/`fe80::`, token redaction in Debug) all closed. TLS for admin surface still out of scope (operator-fronts). See `audit/code/round-5-verifies-sec.md`.
 Location: `crates/lb-observability/src/admin_http.rs:80-134`;
 `crates/lb-observability/src/admin_http.rs:3` (operator-trust
 comment).
@@ -252,7 +252,7 @@ Cross-ref:  rel F-18 (readiness flip); rel H4 (json logs / labels).
 
 ### SEC-2-07 — Supply-chain CI: cargo-audit lacks `-D warnings`; no cargo-geiger
 Severity: medium
-Status:   Proposed-Fix(1fbfd14) — audit -D warnings, geiger inventory, machete soft check
+Status:   Verified-Fixed(1fbfd14) — audit -D warnings (ci.yml:127), geiger inventory + artefact upload (ci.yml:171), machete soft check (ci.yml:199). code Round-5 IV: workflow YAML inspected directly; sandbox cannot execute `cargo-audit`/`cargo-geiger`/`cargo-machete`. See `audit/code/round-5-verifies-sec.md`.
 Location: `.github/workflows/ci.yml:99-129` (audit + deny jobs);
 `.github/workflows/codeql.yml:22-28` (audit only).
 Description: CI **does** run `cargo audit` and `cargo deny check`
@@ -293,7 +293,7 @@ Cross-ref:  T9; code round-1-machete.txt.
 
 ### SEC-2-08 — TLS private-key file permissions not asserted at load
 Severity: low
-Status:   Proposed-Fix(2374ec1) — Wave-2a assert_owner_only helper; code wires lb/main.rs
+Status:   Verified-Fixed(2374ec1, fc050b0) — Wave-2a helper + lifecycle-spine wiring via `build_tls_bundle::assert_key_perm_advisory` (runs at startup AND on every REL-2-03 SIGUSR1/inotify reload). code Round-5 deep IV: lb-security key unit tests 7/7 PASS; bypass attempts (symlink, TOCTOU window, strict/lax flip, reload path, non-unix, POSIX-ACL limitation) — bounded scope acceptable for severity=low. See `audit/code/round-5-verifies-sec.md`.
 Location: `crates/lb/src/main.rs:202-211` (`load_private_key`);
 `crates/lb/src/main.rs:187-198` (`load_cert_chain`).
 Description: `std::fs::File::open(path)` does not check the file's
@@ -318,7 +318,7 @@ Cross-ref:  rel posture; code Q-CODE-1-03.
 
 ### SEC-2-09 — `unsafe impl Pod` padding-leak invariant: no constructors, no defenders
 Severity: low
-Status:   Open
+Status:   Accepted-with-caveat — code Round-5 IV: CODE-2-07 (the closure commit referenced by the cross-review) has NOT landed on `prod-readiness/round-4` (`git log | grep CODE-2-07` empty). Loader.rs still exposes `pub pad: [u8;3]`/`pub pad: u16` with no constructor. HAZARD REMAINS LATENT: zero production construction sites today, so no kernel-side stack residue can be written. Tracking as Round-6 follow-up. See `audit/code/round-5-verifies-sec.md`.
 Location: `crates/lb-l4-xdp/src/loader.rs:53` (`FlowKey`),
 `crates/lb-l4-xdp/src/loader.rs:76` (`BackendEntry`),
 `crates/lb-l4-xdp/src/loader.rs:97` (`FlowKeyV6`),
@@ -371,7 +371,7 @@ Cross-ref:  T5; ebpf cross-review to-code #3; code padding fix.
 
 ### SEC-2-10 — TLS-handshake slowloris on `acceptor.accept().await`
 Severity: medium
-Status:   Proposed-Fix(67697c0) — Wave-2a timeout_accept helper; Wave-2c wires lb/main.rs
+Status:   Verified-Fixed(67697c0, fc050b0) — Wave-2a helper + Wave-2c wiring at `crates/lb/src/main.rs:2096,2151`. code Round-5 IV: timeout_accept 3/3 PASS; on elapsed the rustls Accept future is dropped → TCP stream freed → fd released. Per-IP cap (SEC-2-04) + per-connection budget (this) close handshake-slowloris airtight. See `audit/code/round-5-verifies-sec.md`.
 Location: `crates/lb/src/main.rs` TLS accept sites; see also rel
 F-05.
 Description: in the TLS-over-TCP listener path the rustls
@@ -390,7 +390,7 @@ Cross-ref:  rel F-05; SEC-2-04.
 
 ### SEC-2-11 — XDP capability probe misses CAP_SYS_ADMIN fallback
 Severity: low
-Status:   Verified-Fixed(e44117d) — ebpf landed under EBPF-team ownership: `probe_caps_with` closure-based probe with CAP_BPF→CAP_SYS_ADMIN fallback, 7-test mock matrix in `tests/xdp_cap_probe.rs`. Cross-area verification by `rel` in `audit/reliability/round-5-verifies-ebpf.md` (round-5): all 7 mocked branches green; fallback only widens accept set, never narrows.
+Status:   Verified-Fixed(e44117d) — ebpf landed under EBPF-team ownership: `probe_caps_with` closure-based probe with CAP_BPF→CAP_SYS_ADMIN fallback, 7-test mock matrix in `tests/xdp_cap_probe.rs`. Cross-area verification by `rel` in `audit/reliability/round-5-verifies-ebpf.md` (round-5): all 7 mocked branches green; fallback only widens accept set, never narrows. `code` round-5 cross-confirmed via `cargo test -p lb --test xdp_cap_probe`: 7/7 PASS. See `audit/code/round-5-verifies-sec.md`.
 Location: `crates/lb/src/xdp.rs:39-55` (probe site, per ebpf
 cross-review §A.2). The probe checks `CAP_BPF` + `CAP_NET_ADMIN`
 only.
@@ -414,7 +414,7 @@ Cross-ref:  ebpf cross-review §A.2.
 
 ### SEC-2-12 — BPF ELF license / loader license-string not set
 Severity: medium
-Status:   Verified-Fixed(5064a11) — ebpf landed under EBPF-team ownership: `XdpLoader::load_from_bytes` now asserts `.license == "GPL\0"` via `assert_license_is_gpl`, fail-fast `XdpLoaderError::LicenseInvalid` variant + 3 unit tests with hand-crafted ELFs + integration test `tests/loader_license_assert.rs`. Cross-area verification by `rel` in `audit/reliability/round-5-verifies-ebpf.md` (round-5): all 5 license-assert tests green; both userspace entry-points (`load_from_bytes`, `load_from_bytes_pinned`) confirmed to route through `assert_license_is_gpl`; `program_names` is correctly an introspection-only escape that does NOT call the assertion. No bypass found.
+Status:   Verified-Fixed(5064a11) — ebpf landed under EBPF-team ownership: `XdpLoader::load_from_bytes` now asserts `.license == "GPL\0"` via `assert_license_is_gpl`, fail-fast `XdpLoaderError::LicenseInvalid` variant + 3 unit tests with hand-crafted ELFs + integration test `tests/loader_license_assert.rs`. Cross-area verification by `rel` in `audit/reliability/round-5-verifies-ebpf.md` (round-5): all 5 license-assert tests green; both userspace entry-points (`load_from_bytes`, `load_from_bytes_pinned`) confirmed to route through `assert_license_is_gpl`; `program_names` is correctly an introspection-only escape that does NOT call the assertion. No bypass found. `code` round-5 cross-confirmed via `cargo test -p lb-l4-xdp` (lib 34/34, loader_license_assert 2/2). The committed BPF ELF blob is stale (`tests/elf_sections.rs` `license_section_says_gpl` / `btf_sections_present_and_non_empty` fail) — EBPF-team task, not a SEC-2-12 regression. See `audit/code/round-5-verifies-sec.md`.
 Location: `crates/lb-l4-xdp/ebpf/src/main.rs` (no
 `#[link_section = "license"]`); `crates/lb-l4-xdp/src/loader.rs:212`
 (`EbpfLoader::new().load(elf)` — no `set_license` call). See ebpf
