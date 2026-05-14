@@ -13,6 +13,11 @@ tracing = { workspace = true }
 # already pinned at the workspace root.
 tracing-subscriber = { workspace = true }
 dashmap = { workspace = true }
+# REL-2-12 + REL-2-13: read the eBPF STATS map via the API ebpf
+# delivered in EBPF-2-08 (`stats_export`). Non-Linux platforms get
+# the zero-valued stub from the same crate so dev/test builds
+# compile unchanged.
+lb-l4-xdp = { path = "../lb-l4-xdp" }
 # Pillar 3b (Task #21): prometheus-backed metrics registry + text
 # exposition. `default-features = false` drops the protobuf family.
 prometheus = { workspace = true }

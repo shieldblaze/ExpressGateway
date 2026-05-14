@@ -28,7 +28,7 @@ use dashmap::DashMap;
 use dashmap::mapref::entry::Entry;
 use prometheus::{Histogram as PHistogram, core::Collector};
 use prometheus::{
-    HistogramOpts, HistogramVec, IntCounter, IntCounterVec, IntGauge, Opts, Registry,
+    HistogramOpts, HistogramVec, IntCounter, IntCounterVec, IntGauge, IntGaugeVec, Opts, Registry,
     proto::MetricFamily,
 };
 
@@ -38,12 +38,14 @@ pub mod log;
 pub mod probes;
 pub mod prometheus_exposition;
 pub mod tracing_propagation;
+pub mod xdp_metrics;
 
 pub use label_budget::{
     CANONICAL_LABELS, DEFAULT_MAX_LABEL_CARDINALITY, LabelBudget, LabelBudgetError,
 };
 pub use log::{LogFormat, TracingConfig, TracingError, init_tracing};
 pub use probes::{ProbeRegistry, ProbeState};
+pub use xdp_metrics::{ConntrackFamily, SamplerBaseline, XdpMetrics, stat_slot_labels};
 
 /// Soft cap on the number of series a single registry will hold before a
 /// tracing warning is emitted. Purely advisory — registration still
@@ -60,6 +62,7 @@ enum Handle {
     Histogram(PHistogram),
     HistogramVec(HistogramVec),
     Gauge(IntGauge),
+    GaugeVec(IntGaugeVec),
 }
 
 /// Errors raised when a metric name is already registered with a
@@ -104,6 +107,7 @@ impl std::fmt::Debug for Handle {
             Self::Histogram(_) => f.write_str("Histogram"),
             Self::HistogramVec(_) => f.write_str("HistogramVec"),
             Self::Gauge(_) => f.write_str("Gauge"),
+            Self::GaugeVec(_) => f.write_str("GaugeVec"),
         }
     }
 }
@@ -274,6 +278,44 @@ impl MetricsRegistry {
                 vac.insert(Handle::HistogramVec(h.clone()));
                 self.check_cardinality();
                 Ok(h)
+            }
+        }
+    }
+
+    /// Get-or-create a labeled [`IntGaugeVec`]. Labels are fixed at
+    /// registration time; a second call with the same name must use
+    /// the same label set.
+    ///
+    /// # Errors
+    ///
+    /// See [`Self::counter`].
+    pub fn gauge_vec(
+        &self,
+        name: &str,
+        help: &str,
+        labels: &[&str],
+    ) -> Result<IntGaugeVec, MetricsError> {
+        if let Some(entry) = self.handles.get(name) {
+            if let Handle::GaugeVec(g) = entry.value() {
+                return Ok(g.clone());
+            }
+            return Err(MetricsError::TypeMismatch {
+                name: name.to_owned(),
+            });
+        }
+        match self.handles.entry(name.to_owned()) {
+            Entry::Occupied(occ) => match occ.get() {
+                Handle::GaugeVec(g) => Ok(g.clone()),
+                _ => Err(MetricsError::TypeMismatch {
+                    name: name.to_owned(),
+                }),
+            },
+            Entry::Vacant(vac) => {
+                let g = IntGaugeVec::new(Opts::new(name, help), labels)?;
+                self.inner.register(Box::new(g.clone()))?;
+                vac.insert(Handle::GaugeVec(g.clone()));
+                self.check_cardinality();
+                Ok(g)
             }
         }
     }
