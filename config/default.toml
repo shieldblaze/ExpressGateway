@@ -1,3 +1,21 @@
+# ExpressGateway default config (ROUND8-L7-15 — edge-defaults
+# documentation expansion).
+#
+# This file shows the runtime knobs ExpressGateway exposes plus the
+# rationale for the security-relevant defaults. Every value documented
+# below maps to a Rust constant in `crates/lb-config/src/lib.rs` or
+# `crates/lb-l7/src/h2_security.rs`; see `docs/edge-defaults.md` for
+# the full parity table against Envoy edge best-practices and nginx
+# defaults.
+#
+# Operators usually do NOT need to set the runtime block — the
+# defaults are picked to be safe at edge. Keep this file minimal in
+# production; uncomment only the knobs you actually need to override.
+
+# ---------------------------------------------------------------------
+# Listeners
+# ---------------------------------------------------------------------
+
 [[listeners]]
 address = "0.0.0.0:8080"
 protocol = "tcp"
@@ -9,3 +27,74 @@ weight = 1
 [[listeners.backends]]
 address = "127.0.0.1:3001"
 weight = 1
+
+# ---------------------------------------------------------------------
+# Runtime defaults (commented — apply automatically when [runtime] is
+# omitted). Documented here so the operator sees the security posture
+# without spelunking through code.
+# ---------------------------------------------------------------------
+
+# [runtime]
+# # Drain timeout for graceful shutdown (REL-2-02 / OPS-06).
+# drain_timeout_ms = 30000
+# # Settle window between readiness signal and accept (REL-2-02).
+# readiness_settle_ms = 1000
+# # Per-connection TLS handshake budget (SEC-2-10).
+# handshake_timeout_ms = 5000
+# # Backstop cap on concurrent in-flight connections per listener.
+# max_inflight_connections = 65536
+# # TCP connect timeout when dialing upstream backends.
+# connect_timeout_ms = 5000
+# # Per-IP concurrent-connection cap (matches Pingora L4 default).
+# per_ip_connection_cap = 1024
+#
+# # ROUND8-L7-05: header name underscore policy.
+# # Envoy edge best-practice mandates REJECT; nginx default is "drop"
+# # (`underscores_in_headers off`). The underscore is an auth-bypass
+# # primitive against backends that normalise `_` <-> `-` (Java
+# # middleware, some Python frameworks, SAP). Allowed values:
+# #   "reject" — return 400 Bad Request (default).
+# #   "drop"   — silently strip the header before forwarding.
+# #   "allow"  — pass through verbatim. Set only if you know why.
+# header_underscore_policy = "reject"
+
+# ---------------------------------------------------------------------
+# Per-listener HTTP timeouts (apply when [listeners.http] is omitted).
+# Mirrors `HttpTimeoutsConfig` in lb-config. See docs/edge-defaults.md.
+# ---------------------------------------------------------------------
+
+# [listeners.http]
+# # Header-read budget — tighter than nginx (60s); matches Envoy.
+# header_timeout_ms = 10000
+# # Body-read / upstream-body budget. Tighter than both references.
+# body_timeout_ms = 30000
+# # Total request lifetime backstop.
+# total_timeout_ms = 60000
+
+# ---------------------------------------------------------------------
+# Per-listener HTTP/2 security thresholds.
+# Mirrors `H2SecurityConfig` in lb-config and the live
+# `H2SecurityThresholds::default()` in lb-l7. See
+# `audit/decisions/h2-edge-streams.md` for the rationale on the
+# deliberate divergence from Envoy 100 / nginx 128 at
+# max_concurrent_streams.
+# ---------------------------------------------------------------------
+
+# [listeners.h2_security]
+# # CVE-2023-44487 rapid-reset cap (Envoy-equivalent).
+# max_pending_accept_reset_streams = 100
+# # RUSTSEC-2024-0003 cap on locally-emitted RST_STREAM.
+# max_local_error_reset_streams = 100
+# # Deliberate divergence: 256 (Envoy 100, nginx 128). See ADR.
+# max_concurrent_streams = 256
+# # 64 KiB cap on decoded HPACK header list. Matches Pingora.
+# max_header_list_size = 65536
+# # Per-stream send buffer ceiling.
+# max_send_buf_size = 65536
+# # H2 keep-alive PING — closes zero-window stallers within 30s.
+# keep_alive_interval_ms = 30000
+# keep_alive_timeout_ms = 30000
+# # RFC 9113 default initial stream window.
+# initial_stream_window_size = 65535
+# # 1 MiB connection-level receive window.
+# initial_connection_window_size = 1048576
