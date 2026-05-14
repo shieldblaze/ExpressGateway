@@ -503,6 +503,7 @@ plumbing).
 ---
 
 ### PROTO-2-12 — Trailer pass-through across H1↔H2/H3 (non-gRPC) untested and likely broken
+Status:   Baseline-Pinned-Wave-2b-2 / Fix-Deferred-Wave-2c (investigation confirms trailers drop on every cross-protocol bridge: `BridgeRequest`/`BridgeResponse` lack a trailers field, proxy writeback uses `http_body_util::Full<Bytes>` which is single-frame. `crates/lb-l7/tests/trailer_passthrough.rs` (6 tests) pins the current trailer-dropping baseline; Wave-2c will flip them green via bridge-surface extension. See `audit/deferred.md` "PROTO-2-12" for the threaded-through plan.)
 Severity: medium
 Status:   Open
 Location:

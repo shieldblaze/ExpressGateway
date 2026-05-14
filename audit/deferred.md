@@ -80,6 +80,38 @@ Wave-2c will:
      authority_str)` and on `Err(_)` return
      `misdirected_response()` rendered as `Response<BoxBody<…>>`.
 
+### PROTO-2-12 — trailer pass-through across cross-protocol bridges (deferred)
+
+**Status**: baseline pinned Wave-2b-2; **bridge-surface fix deferred
+to Wave-2c**.
+
+Investigation showed the proxy hot path's cross-protocol bridges
+(every H1↔H2, H1↔H3, H2↔H2, H2↔H3, H3↔H2 path in `h1_proxy.rs`
+/ `h2_proxy.rs`) collect bodies via `BodyExt::collect()` then
+re-wrap as `http_body_util::Full::new(body_bytes)`. `Full<Bytes>`
+is a single-frame body and **cannot carry trailers**. The
+`BridgeRequest` / `BridgeResponse` types in `crates/lb-l7/src/lib.rs`
+also lack a trailers field, so the bridge trait surface cannot
+forward them even if the writeback were fixed.
+
+Wave-2b-2 lands `crates/lb-l7/tests/trailer_passthrough.rs` as a
+**behaviour baseline** (6 tests pass today) that pins the current
+trailer-dropping shape. Wave-2c must:
+
+  1. Add `pub trailers: Option<http::HeaderMap>` to
+     `BridgeRequest` / `BridgeResponse`.
+  2. Replace every `Full::new(body_bytes)` writeback in
+     `h{1,2}_proxy.rs` translation helpers with a `StreamBody`
+     yielding `Frame::data(_)` then `Frame::trailers(_)`.
+  3. Plumb trailers through each `Bridge` impl
+     (`H1ToH2Bridge::bridge_request`, etc.).
+  4. Flip the assertions in `trailer_passthrough.rs` to assert
+     trailers ARE preserved.
+
+The H1↔H1 path is already trailer-safe via hyper's `IncomingBody`
+round-trip — that path proxies the body as-is and hyper's frame
+loop preserves trailers automatically.
+
 ### PROTO-2-04 / PROTO-2-05 — wstest + h3spec integration (deferred to Wave 2c CI image)
 
 Both require CI image changes (installing `wstest`, `h3spec`); they
