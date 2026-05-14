@@ -38,3 +38,10 @@ LEAD=team-lead
 #   - PROTO-2-15 → Verified-Fixed (was -Partial)
 #   - PROTO-2-12 → Verified-Fixed-Partial (H3 surface gap remains)
 # Lead may push PROTO-2-18/-19 to sec for adversarial cross-check.
+#
+# 2026-05-14 — `sec` adversarial cross-check completed.
+# audit/security/round-6-cross-check.md verdict: Round 6 — CLEAN; ready for Round 7.
+# PROTO-2-18: 6 bypass attempts, 0 exploitable; status flipped to verifier=sec.
+# PROTO-2-19: 4 bypass attempts, 0 exploitable; status flipped to verifier=sec
+#             (-Partial retained for the H3 lb-quic surface gap).
+# Final delta sweep on 1f2e19c..HEAD: zero new medium-or-higher findings.
