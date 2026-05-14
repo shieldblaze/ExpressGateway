@@ -33,6 +33,7 @@ use tokio::sync::Semaphore;
 use tokio_rustls::TlsAcceptor;
 
 use tokio_util::sync::CancellationToken;
+use tokio_util::task::TaskTracker;
 
 use lb_balancer::round_robin::RoundRobin;
 use lb_balancer::{Backend, LoadBalancer};
@@ -360,6 +361,14 @@ struct ListenerState {
     /// `H2Proxy::serve_connection_with_cancel` so a SIGTERM cancel
     /// triggers a graceful GOAWAY emit instead of an abort.
     shutdown_token: CancellationToken,
+    /// CODE-2-03 follow-on (Round-5 push-back): the process-wide
+    /// task tracker. Per-connection spawns funnel through
+    /// `tracker.spawn(...)` so `Shutdown::drain` waits on them at
+    /// SIGTERM time. Coupled with `shutdown_token`, the per-conn task
+    /// also gets a cooperative-cancel arm in its `select!` — a
+    /// long-running upstream is interrupted on drain rather than
+    /// silently aborted on runtime drop.
+    tracker: TaskTracker,
 }
 
 /// Listener socket options matching PROMPT.md §7 for listener sockets.
@@ -500,14 +509,32 @@ fn build_tls_bundle(
 /// Spawn a background task that nudges `rotator.rotate_if_due(now)` once
 /// per minute. The task stops when the rotator's `Arc` strong count
 /// drops to 1 (i.e. when the listener is gone).
-fn spawn_rotator_ticker(rotator: Arc<PlMutex<TicketRotator>>) {
-    tokio::spawn(async move {
+///
+/// CODE-2-03 follow-on (Round-5 push-back): the task is now tracked by
+/// the process-wide [`lb_core::Shutdown`] handle (via the cloned
+/// [`TaskTracker`] passed in) and observes the cancellation token so
+/// `Shutdown::drain` waits on it and SIGTERM wakes the ticker out of
+/// its sleep — previously the task was unparented and stayed alive
+/// until runtime drop.
+fn spawn_rotator_ticker(
+    rotator: Arc<PlMutex<TicketRotator>>,
+    tracker: TaskTracker,
+    cancel: CancellationToken,
+) {
+    tracker.spawn(async move {
         let mut ticker = tokio::time::interval(Duration::from_secs(60));
         // The first tick fires immediately; skip it so we don't rotate
         // a freshly-minted key.
         ticker.tick().await;
         loop {
-            ticker.tick().await;
+            tokio::select! {
+                biased;
+                () = cancel.cancelled() => {
+                    tracing::debug!("ticket rotator ticker shutting down");
+                    return;
+                }
+                _ = ticker.tick() => {}
+            }
             if Arc::strong_count(&rotator) <= 1 {
                 return;
             }
@@ -932,6 +959,7 @@ async fn spawn_tcp(
     connect_timeout: Duration,
     hooks: Arc<HooksBundle>,
     shutdown_token: CancellationToken,
+    tracker: TaskTracker,
     tls_reload_registry: Arc<PlMutex<Vec<TlsReloadEntry>>>,
 ) -> anyhow::Result<tokio::task::JoinHandle<anyhow::Result<()>>> {
     let mut addresses = Vec::with_capacity(listener_cfg.backends.len());
@@ -959,7 +987,15 @@ async fn spawn_tcp(
         addresses.push(first);
         backends.push(Backend::new(format!("backend-{i}"), b.weight));
     }
-    let mode = build_listener_mode(listener_cfg, pool, &addresses, &hooks, &tls_reload_registry)?;
+    let mode = build_listener_mode(
+        listener_cfg,
+        pool,
+        &addresses,
+        &hooks,
+        &tls_reload_registry,
+        &tracker,
+        &shutdown_token,
+    )?;
     let state = Arc::new(ListenerState {
         backends,
         balancer: parking_lot::Mutex::new(RoundRobin::new()),
@@ -981,22 +1017,27 @@ async fn spawn_tcp(
         connect_timeout,
         hooks,
         shutdown_token,
+        tracker: tracker.clone(),
     });
-    Ok(tokio::spawn(run_listener(
-        listener_cfg.address.clone(),
-        state,
-    )))
+    // CODE-2-03 follow-on: the listener accept loop itself is a
+    // long-lived task. Route it through the tracker so drain waits
+    // on the loop exit (it observes `shutdown_token` indirectly via
+    // every accept that produces a tracked per-connection task).
+    Ok(tracker.spawn(run_listener(listener_cfg.address.clone(), state)))
 }
 
 /// Build the per-listener [`ListenerMode`] from its config, dispatching
 /// on `protocol`. Spawned per listener at startup; `addresses` are the
 /// pre-resolved backend `SocketAddr`s for round-robin balancing.
+#[allow(clippy::too_many_arguments)]
 fn build_listener_mode(
     listener_cfg: &lb_config::ListenerConfig,
     pool: &TcpPool,
     addresses: &[SocketAddr],
     hooks: &Arc<HooksBundle>,
     tls_reload_registry: &Arc<PlMutex<Vec<TlsReloadEntry>>>,
+    tracker: &TaskTracker,
+    shutdown_token: &CancellationToken,
 ) -> anyhow::Result<ListenerMode> {
     // SEC-2-04 Wave 2c-2: cloned into every L7 proxy constructor
     // below via `with_hooks`. The same bundle is held at accept-site
@@ -1013,7 +1054,11 @@ fn build_listener_mode(
             };
             let (bundle, rotator) = build_tls_bundle(tls_cfg, &[])
                 .with_context(|| format!("TLS setup failed for {}", listener_cfg.address))?;
-            spawn_rotator_ticker(Arc::clone(&rotator));
+            spawn_rotator_ticker(
+                Arc::clone(&rotator),
+                tracker.clone(),
+                shutdown_token.clone(),
+            );
             tls_reload_registry.lock().push(TlsReloadEntry {
                 listener: listener_cfg.address.clone(),
                 cert_path: PathBuf::from(&tls_cfg.cert_path),
@@ -1076,7 +1121,11 @@ fn build_listener_mode(
             let h1s_alpn: &[&[u8]] = &[b"h2", b"http/1.1"];
             let (bundle, rotator) = build_tls_bundle(tls_cfg, h1s_alpn)
                 .with_context(|| format!("H1s TLS setup failed for {}", listener_cfg.address))?;
-            spawn_rotator_ticker(Arc::clone(&rotator));
+            spawn_rotator_ticker(
+                Arc::clone(&rotator),
+                tracker.clone(),
+                shutdown_token.clone(),
+            );
             tls_reload_registry.lock().push(TlsReloadEntry {
                 listener: listener_cfg.address.clone(),
                 cert_path: PathBuf::from(&tls_cfg.cert_path),
@@ -1174,7 +1223,13 @@ fn build_listener_mode(
 /// call site) so the registry always advertises the metric even before
 /// the first event, and so a single type-mismatch or registration
 /// failure lands at startup rather than on the hot path.
-fn install_hotpath_metrics(metrics: &Arc<MetricsRegistry>, pool: &TcpPool, resolver: &DnsResolver) {
+fn install_hotpath_metrics(
+    metrics: &Arc<MetricsRegistry>,
+    pool: &TcpPool,
+    resolver: &DnsResolver,
+    tracker: &TaskTracker,
+    cancel: &CancellationToken,
+) {
     // Pool + DNS counters (pre-register so /metrics shows them at 0).
     if let Err(e) = metrics.counter("pool_acquires_total", "TcpPool acquire attempts") {
         tracing::warn!(metric = "pool_acquires_total", error = %e, "counter register failed");
@@ -1239,10 +1294,14 @@ fn install_hotpath_metrics(metrics: &Arc<MetricsRegistry>, pool: &TcpPool, resol
     // Background sampler: lift the pool's idle count + DNS cache size
     // into the registry every second. Neither crate publishes change
     // events today, so a periodic pull is the least invasive wiring.
+    //
+    // CODE-2-03 follow-on: tracker-attached + cancel-observing so
+    // `Shutdown::drain` joins on it and SIGTERM wakes it instantly.
     let pool_clone = pool.clone();
     let resolver_clone = resolver.clone();
     let metrics_clone = Arc::clone(metrics);
-    tokio::spawn(async move {
+    let cancel = cancel.clone();
+    tracker.spawn(async move {
         let Ok(idle_gauge) =
             metrics_clone.gauge("pool_idle_gauge", "TcpPool idle connection count")
         else {
@@ -1255,7 +1314,14 @@ fn install_hotpath_metrics(metrics: &Arc<MetricsRegistry>, pool: &TcpPool, resol
         };
         let mut ticker = tokio::time::interval(Duration::from_secs(1));
         loop {
-            ticker.tick().await;
+            tokio::select! {
+                biased;
+                () = cancel.cancelled() => {
+                    tracing::debug!("pool/dns sampler shutting down");
+                    return;
+                }
+                _ = ticker.tick() => {}
+            }
             #[allow(clippy::cast_possible_wrap)]
             idle_gauge.set(pool_clone.idle_count() as i64);
             #[allow(clippy::cast_possible_wrap)]
@@ -1376,12 +1442,19 @@ async fn async_main() -> anyhow::Result<()> {
     };
 
     // CODE-2-03 Wave 2c: process-wide graceful drain handle. SIGTERM /
-    // SIGINT / SIGUSR1 are wired below. Per-spawn-site
-    // `tracker().spawn()` integration (the 33-site refactor identified
-    // in the Wave-1 audit) is **deferred** to a separate commit so
-    // this batch keeps a clean review boundary; the sampler + admin
-    // listener already use the cancellation token directly, which
-    // covers the long-lived non-connection tasks.
+    // SIGINT / SIGUSR1 are wired below.
+    //
+    // CODE-2-03 follow-on (Round-5 push-back): the previously-deferred
+    // per-spawn-site `tracker().spawn(...)` integration is now in place
+    // for all 5 sites flagged by the round-5 ebpf verification:
+    //   1. `spawn_rotator_ticker` (was main.rs:504) — TLS ticket rotor.
+    //   2. `install_hotpath_metrics` pool/DNS sampler (was main.rs:1245).
+    //   3. listener spawn in `spawn_tcp` (was main.rs:985).
+    //   4. XDP stats sampler (was main.rs:1629).
+    //   5. per-connection task in `run_listener` (was main.rs:2074) —
+    //      the most consequential one; also gains a biased select! arm
+    //      on `shutdown_token` so a SIGTERM mid-request interrupts the
+    //      proxy work and bumps `shutdown_aborted_connections_total`.
     let shutdown: lb_core::Shutdown = lb_core::Shutdown::new();
 
     // REL-2-04 wiring: shared probe registry consulted by
@@ -1451,7 +1524,13 @@ async fn async_main() -> anyhow::Result<()> {
 
     // ── metrics ─────────────────────────────────────────────────────
     let metrics = Arc::new(MetricsRegistry::new());
-    install_hotpath_metrics(&metrics, &pool, &resolver);
+    install_hotpath_metrics(
+        &metrics,
+        &pool,
+        &resolver,
+        shutdown.tracker(),
+        shutdown.token(),
+    );
 
     // CODE-2-02 Wave 2c: bind the registry-backed panic_total counter
     // *now* that the registry exists. Any panic between the hook
@@ -1603,6 +1682,7 @@ async fn async_main() -> anyhow::Result<()> {
             connect_timeout,
             Arc::clone(&hooks),
             shutdown.token().clone(),
+            shutdown.tracker().clone(),
             Arc::clone(&tls_reload_registry),
         )
         .await?;
@@ -1623,10 +1703,13 @@ async fn async_main() -> anyhow::Result<()> {
     // per-CPU XDP STATS map, computes per-slot deltas against the
     // last tick, and bumps `xdp_packets_total{action}`. Cancelled on
     // `Shutdown::token()` so it joins cleanly during drain.
+    //
+    // CODE-2-03 follow-on (Round-5 push-back): tracker-attached so
+    // `Shutdown::drain` waits for it; cancel arm was already present.
     {
         let xdp_metrics = xdp_metrics.clone();
         let cancel = shutdown.token().clone();
-        tokio::spawn(async move {
+        shutdown.tracker().spawn(async move {
             let mut baseline = lb_observability::SamplerBaseline::default();
             let mut ticker = tokio::time::interval(Duration::from_secs(1));
             ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
@@ -2071,7 +2154,15 @@ async fn run_listener(bind_addr: String, state: Arc<ListenerState>) -> anyhow::R
         // task — their Drop releases the slot when the future returns.
         let _inflight_permit = permit;
         let _admission_permit = conn_permit;
-        tokio::spawn(async move {
+        // CODE-2-03 follow-on (Round-5 push-back): the per-connection
+        // task is the most consequential `tokio::spawn` site — these
+        // tasks held the actual client traffic. Funnel them through the
+        // tracker so `shutdown.drain(budget)` waits on them, and add a
+        // biased `select!` arm on the shutdown token so a SIGTERM
+        // mid-request interrupts long-running upstream work instead of
+        // sitting on the connection until the runtime is dropped.
+        let conn_cancel = st.shutdown_token.clone();
+        st.tracker.clone().spawn(async move {
             let _permit = _inflight_permit;
             let _conn_permit = _admission_permit;
             st.active_connections.fetch_add(1, Ordering::Relaxed);
@@ -2079,122 +2170,157 @@ async fn run_listener(bind_addr: String, state: Arc<ListenerState>) -> anyhow::R
 
             let http_start = Instant::now();
             let mut http_version: Option<&'static str> = None;
-            let result = match &st.mode {
-                ListenerMode::PlainTcp => {
-                    proxy_connection(client_stream, backend_addr, &st.metrics, st.connect_timeout)
+            let work = async {
+                match &st.mode {
+                    ListenerMode::PlainTcp => {
+                        proxy_connection(
+                            client_stream,
+                            backend_addr,
+                            &st.metrics,
+                            st.connect_timeout,
+                        )
                         .await
-                }
-                ListenerMode::Tls { bundle, .. } => {
-                    // REL-2-03 (Wave 2c-2): snapshot the bundle live at
-                    // accept time. A SIGUSR1 cert reload concurrent with
-                    // an in-flight handshake leaves this snapshot intact
-                    // until the connection drops; the next accept sees
-                    // the new bundle.
-                    let snapshot = bundle.load_full();
-                    let acceptor = TlsAcceptor::from(Arc::clone(&snapshot.server_config));
-                    // SEC-2-10 Wave 2c: bounded TLS handshake budget.
-                    match lb_security::timeout_accept(
-                        &acceptor,
-                        client_stream,
-                        st.handshake_timeout,
-                    )
-                    .await
-                    {
-                        Ok(tls_stream) => {
-                            // PROTO-2-15 (Wave 2c-2): capture SNI from
-                            // the completed handshake for observability.
-                            // The hot-path rejection wiring (421 on
-                            // SNI ≠ authority) needs an lb-l7 helper that
-                            // accepts a per-connection SNI parameter on
-                            // `serve_connection`; that API change is
-                            // tracked separately. We log + count here so
-                            // the operator can audit mismatches before
-                            // the gate flips.
-                            if let Some(sni) = tls_stream.get_ref().1.server_name() {
-                                tracing::trace!(
-                                    client = %client_addr,
-                                    sni = sni,
-                                    "TLS SNI captured (PROTO-2-15 observability)"
-                                );
+                    }
+                    ListenerMode::Tls { bundle, .. } => {
+                        // REL-2-03 (Wave 2c-2): snapshot the bundle live at
+                        // accept time. A SIGUSR1 cert reload concurrent with
+                        // an in-flight handshake leaves this snapshot intact
+                        // until the connection drops; the next accept sees
+                        // the new bundle.
+                        let snapshot = bundle.load_full();
+                        let acceptor = TlsAcceptor::from(Arc::clone(&snapshot.server_config));
+                        // SEC-2-10 Wave 2c: bounded TLS handshake budget.
+                        match lb_security::timeout_accept(
+                            &acceptor,
+                            client_stream,
+                            st.handshake_timeout,
+                        )
+                        .await
+                        {
+                            Ok(tls_stream) => {
+                                // PROTO-2-15 (Wave 2c-2): capture SNI from
+                                // the completed handshake for observability.
+                                // The hot-path rejection wiring (421 on
+                                // SNI ≠ authority) needs an lb-l7 helper that
+                                // accepts a per-connection SNI parameter on
+                                // `serve_connection`; that API change is
+                                // tracked separately. We log + count here so
+                                // the operator can audit mismatches before
+                                // the gate flips.
+                                if let Some(sni) = tls_stream.get_ref().1.server_name() {
+                                    tracing::trace!(
+                                        client = %client_addr,
+                                        sni = sni,
+                                        "TLS SNI captured (PROTO-2-15 observability)"
+                                    );
+                                }
+                                proxy_connection(
+                                    tls_stream,
+                                    backend_addr,
+                                    &st.metrics,
+                                    st.connect_timeout,
+                                )
+                                .await
                             }
-                            proxy_connection(
-                                tls_stream,
-                                backend_addr,
-                                &st.metrics,
-                                st.connect_timeout,
-                            )
+                            Err(e) => Err(anyhow::Error::new(e)),
+                        }
+                    }
+                    ListenerMode::H1 { proxy } => {
+                        http_version = Some("h1");
+                        Arc::clone(proxy)
+                            .serve_connection(client_stream, client_addr)
                             .await
-                        }
-                        Err(e) => Err(anyhow::Error::new(e)),
+                            .map_err(anyhow::Error::from)
                     }
-                }
-                ListenerMode::H1 { proxy } => {
-                    http_version = Some("h1");
-                    Arc::clone(proxy)
-                        .serve_connection(client_stream, client_addr)
+                    ListenerMode::H1s {
+                        h1_proxy,
+                        h2_proxy,
+                        bundle,
+                        ..
+                    } => {
+                        // REL-2-03 (Wave 2c-2): snapshot the bundle live at
+                        // accept time so a SIGUSR1 cert reload concurrent
+                        // with an in-flight handshake does not disturb the
+                        // running session.
+                        let snapshot = bundle.load_full();
+                        let acceptor = TlsAcceptor::from(Arc::clone(&snapshot.server_config));
+                        // SEC-2-10 Wave 2c: bounded TLS handshake budget.
+                        match lb_security::timeout_accept(
+                            &acceptor,
+                            client_stream,
+                            st.handshake_timeout,
+                        )
                         .await
-                        .map_err(anyhow::Error::from)
-                }
-                ListenerMode::H1s {
-                    h1_proxy,
-                    h2_proxy,
-                    bundle,
-                    ..
-                } => {
-                    // REL-2-03 (Wave 2c-2): snapshot the bundle live at
-                    // accept time so a SIGUSR1 cert reload concurrent
-                    // with an in-flight handshake does not disturb the
-                    // running session.
-                    let snapshot = bundle.load_full();
-                    let acceptor = TlsAcceptor::from(Arc::clone(&snapshot.server_config));
-                    // SEC-2-10 Wave 2c: bounded TLS handshake budget.
-                    match lb_security::timeout_accept(
-                        &acceptor,
-                        client_stream,
-                        st.handshake_timeout,
-                    )
-                    .await
-                    {
-                        Ok(tls_stream) => {
-                            // PROTO-2-15 (Wave 2c-2): capture + log SNI
-                            // for observability. Authority/SNI rejection
-                            // wiring is tracked as the lb-l7 follow-up
-                            // (needs `serve_connection_with_sni`).
-                            if let Some(sni) = tls_stream.get_ref().1.server_name() {
-                                tracing::trace!(
-                                    client = %client_addr,
-                                    sni = sni,
-                                    "TLS SNI captured on H1s (PROTO-2-15 observability)"
-                                );
+                        {
+                            Ok(tls_stream) => {
+                                // PROTO-2-15 (Wave 2c-2): capture + log SNI
+                                // for observability. Authority/SNI rejection
+                                // wiring is tracked as the lb-l7 follow-up
+                                // (needs `serve_connection_with_sni`).
+                                if let Some(sni) = tls_stream.get_ref().1.server_name() {
+                                    tracing::trace!(
+                                        client = %client_addr,
+                                        sni = sni,
+                                        "TLS SNI captured on H1s (PROTO-2-15 observability)"
+                                    );
+                                }
+                                // ALPN-based dispatch: h2 → H2Proxy, else H1Proxy.
+                                let alpn =
+                                    tls_stream.get_ref().1.alpn_protocol().map(<[u8]>::to_vec);
+                                if alpn.as_deref() == Some(b"h2".as_ref()) {
+                                    http_version = Some("h2");
+                                    // PROTO-2-11 Wave 2c-2: hand the
+                                    // shutdown token into the H2 conn so
+                                    // a SIGTERM mid-stream triggers a
+                                    // two-step GOAWAY emit before the
+                                    // socket is torn down.
+                                    Arc::clone(h2_proxy)
+                                        .serve_connection_with_cancel(
+                                            tls_stream,
+                                            client_addr,
+                                            st.shutdown_token.clone(),
+                                        )
+                                        .await
+                                        .map_err(anyhow::Error::from)
+                                } else {
+                                    http_version = Some("h1");
+                                    Arc::clone(h1_proxy)
+                                        .serve_connection(tls_stream, client_addr)
+                                        .await
+                                        .map_err(anyhow::Error::from)
+                                }
                             }
-                            // ALPN-based dispatch: h2 → H2Proxy, else H1Proxy.
-                            let alpn = tls_stream.get_ref().1.alpn_protocol().map(<[u8]>::to_vec);
-                            if alpn.as_deref() == Some(b"h2".as_ref()) {
-                                http_version = Some("h2");
-                                // PROTO-2-11 Wave 2c-2: hand the
-                                // shutdown token into the H2 conn so
-                                // a SIGTERM mid-stream triggers a
-                                // two-step GOAWAY emit before the
-                                // socket is torn down.
-                                Arc::clone(h2_proxy)
-                                    .serve_connection_with_cancel(
-                                        tls_stream,
-                                        client_addr,
-                                        st.shutdown_token.clone(),
-                                    )
-                                    .await
-                                    .map_err(anyhow::Error::from)
-                            } else {
-                                http_version = Some("h1");
-                                Arc::clone(h1_proxy)
-                                    .serve_connection(tls_stream, client_addr)
-                                    .await
-                                    .map_err(anyhow::Error::from)
-                            }
+                            Err(e) => Err(anyhow::Error::new(e)),
                         }
-                        Err(e) => Err(anyhow::Error::new(e)),
                     }
                 }
+            };
+
+            // CODE-2-03 follow-on: race the proxy work against the
+            // shutdown token. `biased` polls the cancel arm first so a
+            // SIGTERM mid-request takes priority over otherwise-ready
+            // work. On cancel we bump `shutdown_aborted_connections_total`
+            // and fall through to the normal post-task bookkeeping.
+            // The H2 path already wires the cancel through
+            // `serve_connection_with_cancel`, so for that case this
+            // outer race is a backstop, not the primary mechanism.
+            let result = tokio::select! {
+                biased;
+                () = conn_cancel.cancelled() => {
+                    if let Ok(c) = st.metrics.counter(
+                        "shutdown_aborted_connections_total",
+                        "Per-connection tasks cancelled mid-flight by SIGTERM drain",
+                    ) {
+                        c.inc();
+                    }
+                    tracing::debug!(
+                        client = %client_addr,
+                        backend = %backend_addr,
+                        "per-conn task cancelled by SIGTERM drain"
+                    );
+                    Err(anyhow::anyhow!("connection cancelled by shutdown"))
+                }
+                r = work => r,
             };
 
             // Metric: http_requests_total{version, status_class} +
@@ -2506,7 +2632,17 @@ mod tests {
         ));
         let tls_reload_registry: Arc<PlMutex<Vec<TlsReloadEntry>>> =
             Arc::new(PlMutex::new(Vec::new()));
-        let outcome = build_listener_mode(&listener_cfg, &pool, &[], &hooks, &tls_reload_registry);
+        let tracker = TaskTracker::new();
+        let cancel = CancellationToken::new();
+        let outcome = build_listener_mode(
+            &listener_cfg,
+            &pool,
+            &[],
+            &hooks,
+            &tls_reload_registry,
+            &tracker,
+            &cancel,
+        );
         assert!(outcome.is_err(), "typo protocol should have errored");
         let msg = match outcome {
             Err(e) => e.to_string(),
