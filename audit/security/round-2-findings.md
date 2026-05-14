@@ -293,7 +293,7 @@ Cross-ref:  T9; code round-1-machete.txt.
 
 ### SEC-2-08 — TLS private-key file permissions not asserted at load
 Severity: low
-Status:   Proposed-Fix(<batch-low sha>) — Wave-2a assert_owner_only helper; code wires lb/main.rs
+Status:   Proposed-Fix(2374ec1) — Wave-2a assert_owner_only helper; code wires lb/main.rs
 Location: `crates/lb/src/main.rs:202-211` (`load_private_key`);
 `crates/lb/src/main.rs:187-198` (`load_cert_chain`).
 Description: `std::fs::File::open(path)` does not check the file's
