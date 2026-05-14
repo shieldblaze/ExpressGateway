@@ -36,6 +36,7 @@ pub mod admin_http;
 pub mod log;
 pub mod probes;
 pub mod prometheus_exposition;
+pub mod tracing_propagation;
 
 pub use log::{LogFormat, TracingConfig, TracingError, init_tracing};
 pub use probes::{ProbeRegistry, ProbeState};
