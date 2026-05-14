@@ -1273,20 +1273,26 @@ fn install_hotpath_metrics(
         tracing::warn!(metric = "dns_cache_misses_total", error = %e, "counter register failed");
     }
 
-    // http_requests_total{version,status_class}. Referenced by the H1
-    // proxy wrapper installed in proxy_connection — pre-register so
-    // scrape shape is stable from t0.
+    // REL-2-08 follow-on: http_requests_total{listener, route, version,
+    // status_class}. Referenced by the L7 proxy wrapper installed in
+    // proxy_connection — pre-register so scrape shape is stable from
+    // t0. The `listener` + `route` labels match the canonical shape
+    // operators consume in `RUNBOOK.md` (`LbReq5xx` alert) and in
+    // `lb_observability::label_budget::CANONICAL_LABELS`. The `route`
+    // label is supplied as the empty string on the connection-level
+    // emit site (per-request routing context lives in lb-l7 and is
+    // not threaded out today — documented as a future enrichment).
     if let Err(e) = metrics.counter_vec(
         "http_requests_total",
         "HTTP requests terminated by the L7 proxy",
-        &["version", "status_class"],
+        &["listener", "route", "version", "status_class"],
     ) {
         tracing::warn!(metric = "http_requests_total", error = %e, "counter_vec register failed");
     }
     if let Err(e) = metrics.histogram_vec(
         "http_request_duration_seconds",
         "L7 request duration from accept to response body sent",
-        &["version"],
+        &["listener", "route", "version"],
         &http_latency_buckets(),
     ) {
         tracing::warn!(metric = "http_request_duration_seconds", error = %e, "histogram_vec register failed");
@@ -2369,26 +2375,34 @@ async fn run_listener(bind_addr: String, state: Arc<ListenerState>) -> anyhow::R
                 r = work => r,
             };
 
-            // Metric: http_requests_total{version, status_class} +
-            // http_request_duration_seconds{version}. Connection-level
-            // today — per-request instrumentation requires a hook
-            // inside lb-l7 and is tracked as follow-up.
+            // REL-2-08 follow-on: http_requests_total{listener, route,
+            // version, status_class} + http_request_duration_seconds
+            // {listener, route, version}. The `route` label is left
+            // empty at the connection-level emit site — per-request
+            // routing context is held inside lb-l7 and is not yet
+            // threaded back out to the accept-site (tracked as a
+            // future enrichment so dashboards/alerts can group by
+            // `route` once available; until then `route=""` keeps the
+            // RUNBOOK `LbReq5xx` alert expression valid).
             if let Some(version) = http_version {
                 let status_class = if result.is_ok() { "2xx" } else { "5xx" };
+                let listener_label = st.listener_label.as_str();
+                let route_label = "";
                 if let Ok(v) = st.metrics.counter_vec(
                     "http_requests_total",
                     "HTTP requests terminated by the L7 proxy",
-                    &["version", "status_class"],
+                    &["listener", "route", "version", "status_class"],
                 ) {
-                    v.with_label_values(&[version, status_class]).inc();
+                    v.with_label_values(&[listener_label, route_label, version, status_class])
+                        .inc();
                 }
                 if let Ok(h) = st.metrics.histogram_vec(
                     "http_request_duration_seconds",
                     "L7 request duration from accept to response body sent",
-                    &["version"],
+                    &["listener", "route", "version"],
                     &http_latency_buckets(),
                 ) {
-                    h.with_label_values(&[version])
+                    h.with_label_values(&[listener_label, route_label, version])
                         .observe(http_start.elapsed().as_secs_f64());
                 }
             }

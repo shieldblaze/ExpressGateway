@@ -300,6 +300,18 @@ Verdict: **Verified-Fixed-Partial** — canonical-label table + budget
 check land at startup; emission contract drift is the deferred
 follow-up.
 
+**Round-6 closure (task #37, rel)**: emit-site updated in
+`crates/lb/src/main.rs` to use the canonical 4-label set
+`{listener, route, version, status_class}`. The `listener` label is
+sourced from `ListenerState::listener_label`; `route` is supplied as
+`""` at the connection-level emit site (per-request route context
+lives in lb-l7 and is tracked as a future enrichment — the
+`route=""` placeholder keeps the RUNBOOK `LbReq5xx` alert
+expression valid today). Pre-registration in `install_hotpath_metrics`
+updated to match. Proof: `tests/metrics_label_shape.rs::test_http_requests_total_has_listener_route_labels`.
+
+Status: **Verified-Fixed**
+
 ---
 
 ### REL-2-09 — `accept_inflight` saturation gauge + shed counter
@@ -459,9 +471,15 @@ Verdict: **Verified-Fixed**
 
 | Verdict                    | IDs |
 |----------------------------|-----|
-| Verified-Fixed             | REL-2-01, REL-2-02, REL-2-03, REL-2-04, REL-2-06, REL-2-10, REL-2-12, REL-2-13, REL-2-14, REL-2-15 |
-| Verified-Fixed-Partial     | REL-2-05, REL-2-07, REL-2-08, REL-2-09, REL-2-11 |
+| Verified-Fixed             | REL-2-01, REL-2-02, REL-2-03, REL-2-04, REL-2-06, REL-2-08, REL-2-09, REL-2-10, REL-2-12, REL-2-13, REL-2-14, REL-2-15 |
+| Verified-Fixed-Partial     | REL-2-05, REL-2-07, REL-2-11 |
 
-No push-backs to Round 3. All five Partial verdicts match the
-self-disclosure in their author commit bodies (each names the
-Wave-2 follow-up that delivers the consumer side).
+Round-6 closure (task #37, rel): REL-2-08 and REL-2-09 moved from
+Partial → Verified-Fixed once the consumer-side wire-ins landed
+(http_requests_total carries the canonical `{listener, route,
+version, status_class}` set; `accept_inflight{listener}` gauge is
+bumped/decremented at the accept-site via an RAII guard).
+
+No push-backs to Round 3. The remaining three Partial verdicts
+match the self-disclosure in their author commit bodies (each
+names the Wave-2 follow-up that delivers the consumer side).
