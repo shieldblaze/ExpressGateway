@@ -123,7 +123,7 @@ Cross-ref: sec §B.2 (rel F-22 cross-ref); rel F-22.
 ### CODE-2-03 — TCP/H1/H1s accept loop has no graceful drain; SIGTERM aborts in-flight connections via `JoinHandle::abort()`
 Severity: critical
 Blocking-for-prod: yes
-Status:   Verified-Fixed-Partial(9ff2b9b, fc050b0)   <!-- ebpf round-5: Shutdown primitive + drain budget wired into main.rs; SIGTERM triggers cancel + drain. 5 `tokio::spawn` sites in main.rs remain NOT routed through tracker.spawn (per-connection handler at :2074 is the most consequential). Follow-on tracked under same ID per audit margin note. XdpLoader Drop ordering verified safe across drain boundary. -->
+Status:   Verified-Fixed(9ff2b9b, fc050b0, bca4285)   <!-- ebpf round-5: Shutdown primitive + drain budget wired into main.rs; SIGTERM triggers cancel + drain. Round-5 push-back closure (task #36, bca4285): all 5 previously-bypassing `tokio::spawn` sites now route through `shutdown.tracker().spawn(...)` — listener accept loop, rotator ticker, pool/DNS sampler, XDP STATS sampler, per-connection handler. The per-conn task additionally gains a biased select! cancel arm + abort-counter wiring so SIGTERM mid-request interrupts the proxy work and bumps shutdown_aborted_connections_total. Proof: crates/lb-core/tests/per_connection_drain.rs (3 tests, all green). XdpLoader Drop ordering verified safe across drain boundary. -->
 
 Location:
   - `crates/lb/src/main.rs:701` (`spawn_listener` — `JoinHandle` stored, never paired with a token)
@@ -292,7 +292,7 @@ Cross-ref: rel→code handoff #2; synthesis T7.
 ### CODE-2-07 — `Pod` constructor zero-init invariant unenforced for FlowKey/BackendEntry padding bytes
 Severity: high
 Blocking-for-prod: yes
-Status:   Open   <!-- ebpf round-5: confirmed Open. e3ac961 in the audit assignment was actually CODE-2-14 (BackendState binding), not CODE-2-07. No FlowKey::new / BackendEntry::new constructors landed; no `const _: () = assert!(size_of::<FlowKey>() == 16)` size assertions. All literal sites still write explicit `pad: [0; 3]` / `pad: 0` so current behaviour is correct; the future-contributor risk the finding flagged is unmitigated. -->
+Status:   Proposed-Fix(056f5f1)   <!-- ebpf round-5 follow-on (task #36): adds public constructors FlowKey::new / FlowKeyV6::new / BackendEntry::new / BackendEntryV6::new (all #[must_use], all zero-initialise `pad`), `const _: () = assert!(size_of::<FlowKey>() == FLOWKEY_SIZE)` size assertions matching the BPF-side struct layout, plus crates/lb-l4-xdp/tests/pod_padding.rs proving pad bytes are zero after each new(...). Existing struct-literal sites in lib.rs / sim.rs left intact (they already write explicit zeros); new code should funnel through the constructors. -->
 Location:
   - `crates/lb-l4-xdp/src/loader.rs:33–53` (`FlowKey { pad: [u8; 3] }`)
   - `crates/lb-l4-xdp/src/loader.rs:55–76` (`BackendEntry { pad: u16 }`)
@@ -722,7 +722,7 @@ Cross-ref: rel→code #4, #7; synthesis §C; machete output.
 ### CODE-2-14 — `lb-balancer` and `lb-core` carry duplicate backend-counter fields; risk of divergence between scheduler and gauge
 Severity: medium
 Blocking-for-prod: no
-Status:   Verified-Fixed-Partial(e3ac961)   <!-- ebpf round-5: lb-balancer adds lb-core dep + Backend.state: Option<Arc<BackendState>> field. with_state constructor + sync_from_state() (three Acquire loads) refresh the snapshot before each pick. AcqRel ↔ Acquire pairing with CODE-2-04 confirmed. Named race-test tests/balancer_counter_sync.rs is ABSENT in worktree — only loom_atomic_counter.rs exists; the loom model covers the underlying publication, which is stricter. -->
+Status:   Verified-Fixed(e3ac961, 7399044)   <!-- ebpf round-5: lb-balancer adds lb-core dep + Backend.state: Option<Arc<BackendState>> field. with_state constructor + sync_from_state() (three Acquire loads) refresh the snapshot before each pick. AcqRel ↔ Acquire pairing with CODE-2-04 confirmed. Round-5 push-back closure (task #36, 7399044): the previously-absent named race-test tests/balancer_counter_sync.rs now lands as a complement to the loom model — JoinSet over 16 tokio tasks × 1000 iterations each, asserts the live atomic equals TASKS×ITERS and the synced snapshot equals the live atomic (the single-source-of-truth contract). The loom model still covers the stricter publication-ordering property. -->
 Location:
   - `crates/lb-core/src/backend.rs` (`BackendState` atomics: `active_connections`, `active_requests`, latency EWMA)
   - `crates/lb-balancer` (its own `Backend` struct with overlapping `u64` fields per algorithm — Round 1 inventory §1.2 / §4.5)
@@ -796,7 +796,7 @@ Cross-ref: proto Q-CODE-1-06; sec S-1.
 ### CODE-2-04 — Every atomic uses `Ordering::Relaxed` (50 sites, 0 Acq/Rel/SeqCst); enforcement-gating counters need Acquire/Release
 Severity: high
 Blocking-for-prod: yes
-Status:   Verified-Fixed-Partial(c4c27da)   <!-- ebpf round-5: scripts/ci/atomic-lint.sh present + docs/decisions/atomics.md policy doc; lb-core::BackendState::inc_connections converted to AcqRel at backend.rs:111. Live `bash scripts/ci/atomic-lint.sh` exits 1 with one outstanding unannotated S-site (crates/lb-security/src/ticket.rs:900 — ticket-ID monotonic counter, stats-only). Wave-2 appendix-B sweep + ticket.rs annotation outstanding under same ID. BPF-map ordering parity unaffected (kernel-side syscall sequencing). -->
+Status:   Verified-Fixed(c4c27da, 9a8d2ca)   <!-- ebpf round-5: scripts/ci/atomic-lint.sh present + docs/decisions/atomics.md policy doc; lb-core::BackendState::inc_connections converted to AcqRel at backend.rs:111. Round-5 push-back closure (task #36, 9a8d2ca): the one remaining unannotated S-site at crates/lb-security/src/ticket.rs:900 — the tempdir-suffix monotonic counter in test code — now carries a // CLIPPY-OK annotation classifying it as stats-only. `bash scripts/ci/atomic-lint.sh` exits 0 (23 scoped files inspected, 0 violations). Wave-2 appendix-B sweep across the broader workspace remains tracked under same ID for future rounds. BPF-map ordering parity unaffected (kernel-side syscall sequencing). -->
 Location: 50 atomic sites. See appendix below.
 
 Description / Impact:
