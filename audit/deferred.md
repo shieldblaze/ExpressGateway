@@ -136,11 +136,13 @@ to forward 1xx frames through to the inbound client.
 status-class invariants today; Wave-2c will extend them to assert
 the wire-level forwarding.
 
-### PROTO-2-04 / PROTO-2-05 — wstest + h3spec integration (deferred to Wave 2c CI image)
+### PROTO-2-04 / PROTO-2-05 — wstest + h3spec integration (deferred to Round-7 gate-matrix CI image)
 
 Both require CI image changes (installing `wstest`, `h3spec`); they
-move with the rel-team CI image work in Wave-2c. No code change
-attempted in Wave-2b.
+move with the rel-team CI image work. Round-4 follow-on confirms no
+code change is required for these — they are pure CI/infra plumbing
+and remain deferred until the gate-matrix work in Round 7 picks up
+the conformance suites.
 
 ### PROTO-2-09 / PROTO-2-11 (H2 half) — `build_listener_mode` strict-protocol-validation, GOAWAY-on-SIGTERM
 
