@@ -201,11 +201,19 @@ impl ChunkedDecoder {
             let line_str = core::str::from_utf8(line).map_err(|_| H1Error::InvalidChunkEncoding)?;
 
             if let Some(colon) = line_str.find(':') {
-                let name = line_str
-                    .get(..colon)
-                    .ok_or(H1Error::InvalidChunkEncoding)?
-                    .trim()
-                    .to_string();
+                // ROUND8-L7-03: mirror the strict RFC 9110 §5.1
+                // header-name rules in trailer parsing. Empty name
+                // or non-tchar bytes reject (HAProxy CVE-2023-25725
+                // / nginx CVE-2019-9516).
+                let raw_name = line_str.get(..colon).ok_or(H1Error::InvalidChunkEncoding)?;
+                if raw_name.is_empty()
+                    || !raw_name
+                        .bytes()
+                        .all(crate::parse::__is_tchar_for_trailer)
+                {
+                    return Err(H1Error::InvalidChunkEncoding);
+                }
+                let name = raw_name.to_string();
                 let value = line_str
                     .get(colon + 1..)
                     .ok_or(H1Error::InvalidChunkEncoding)?
