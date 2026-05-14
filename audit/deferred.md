@@ -148,3 +148,31 @@ the conformance suites.
 
 Both live in `crates/lb/src/main.rs` (forbidden to Wave-2b). Move
 with Wave-2c.
+
+## L7 (Round 8)
+
+### ROUND8-L7-08 — Upstream H2 RST_STREAM(CANCEL) on application read timeout (deferred-with-rationale)
+
+**Status**: deferred per lead-decision `R8-L-002` in
+`audit/round-8/LEAD-DECISIONS.md`. hyper 1.x's `SendRequest` does
+not expose an explicit `send_reset(CANCEL)` API; the practical
+mitigations available today (drop-emits-CANCEL on future-drop;
+eviction from the pool on timeout) are already wired in
+`crates/lb-io/src/http2_pool.rs:206-209`. The Pingora 0.8.0 fix
+shape (explicit CANCEL with reason context) requires the hyper-2.x
+upgrade. Re-open when the hyper-2.x rebase lands.
+
+### ROUND8-L7-07 timer wire-in — H2 frame-arrival watchdog wiring through hyper
+
+**Status**: partial — the `GlitchesCounter` consolidated abuse
+counter (per ROUND8-L7-12) ships in `crates/lb-security/src/glitches.rs`
+with the `FrameRecvTimeout` kind defined. The actual `tokio::time::
+Interval` task that increments the counter on stale frame arrivals
+requires reaching into hyper's per-connection read context, which
+is not exposed in hyper 1.x's `http2::Builder::serve_connection`
+surface. The keep-alive PING + timeout already wired in
+`H2SecurityThresholds::{keep_alive_interval, keep_alive_timeout}`
+provides functional equivalence for the H2 slowloris attack
+class: an attacker holding HEADERS open without progress is closed
+by the keep-alive deadline. Full per-frame instrumentation moves
+with the hyper-2.x upgrade.

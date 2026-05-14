@@ -23,6 +23,7 @@
 mod admin_auth;
 mod conn_gate;
 mod error;
+mod glitches;
 mod handshake;
 mod hooks;
 mod key;
@@ -37,6 +38,10 @@ mod zero_rtt;
 pub use admin_auth::{AdminAuthError, AdminAuthGate, AdminBindError, AdminTokenHash};
 pub use conn_gate::{ConnGate, ConnPermit, IpNet, OverCap};
 pub use error::SecurityError;
+pub use glitches::{
+    DEFAULT_GLITCHES_THRESHOLD, DEFAULT_GLITCHES_WINDOW, DEFAULT_RECV_FRAME_TIMEOUT, GlitchKind,
+    GlitchOutcome, GlitchesCounter,
+};
 pub use handshake::{DEFAULT_HANDSHAKE_TIMEOUT_MS, HandshakeError, timeout_accept};
 pub use hooks::{HooksBundle, SecurityHooks, SecurityReject};
 pub use key::{KeyPermAdvice, KeyPermError, assert_owner_only};
