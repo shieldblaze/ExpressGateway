@@ -189,7 +189,7 @@ check, expiry gauge), per Round-1 synthesis T3.
 
 ### REL-2-04 — `/healthz` is unconditional 200; no liveness/readiness/startup split
 Severity: high
-Status:   Proposed-Fix(b49c3cd)
+Status:   Proposed-Fix(7108d9e)
 Location: `crates/lb-observability/src/admin_http.rs:55`
 
 Description: The admin listener serves a single `/healthz` endpoint
@@ -301,7 +301,7 @@ of reloaded config; reject downgrades).
 
 ### REL-2-06 — Logs are plain text despite docs claiming JSON
 Severity: medium
-Status:   Proposed-Fix(5729b50)
+Status:   Proposed-Fix(15c9018)
 Location: `crates/lb/src/main.rs:931-936`
 
 Description:
@@ -340,7 +340,7 @@ Recommendation:
 
 ### REL-2-07 — No distributed tracing: no `traceparent` propagation, no per-request span
 Severity: high
-Status:   Proposed-Fix(af2b262)
+Status:   Proposed-Fix(1d462c7)
 Location: `crates/lb-l7/src/h1_proxy.rs`, `crates/lb-l7/src/h2_proxy.rs`, `crates/lb-l7/src/grpc_proxy.rs`, `crates/lb-quic/src/lib.rs`
 
 Description: `grep -rn 'traceparent\|opentelemetry\|info_span\|tracing::Span' crates/`
@@ -390,7 +390,7 @@ strip rules for hop-by-hop vs trace headers).
 
 ### REL-2-08 — Per-listener / per-backend RED labels missing
 Severity: medium
-Status:   Proposed-Fix(46280d1)
+Status:   Proposed-Fix(551d470)
 Location: `crates/lb/src/main.rs:1186-1196` (counter_vec registration); `crates/lb-observability/src/lib.rs`
 
 Description: The exposed HTTP RED metrics are:
@@ -593,7 +593,7 @@ Cross-ref: `code` evaluates the alternative for Round-3 plan
 
 ### REL-2-12 — CONNTRACK saturation has no userspace metric or alert
 Severity: high
-Status:   Proposed-Fix(c60180d)
+Status:   Proposed-Fix(365815f)
 Location: `crates/lb-l4-xdp/src/loader.rs`; `crates/lb/src/xdp.rs`; XDP `STATS` map (kernel side)
 
 Description: The XDP data plane (Pillar 4b) maintains a CONNTRACK map
@@ -640,7 +640,7 @@ in S-2.
 
 ### REL-2-13 — Per-CPU STATS map never exported (kernel-side counters invisible)
 Severity: medium
-Status:   Proposed-Fix(4c2ccc5)
+Status:   Proposed-Fix(a500ff7)
 Location: `crates/lb-l4-xdp/ebpf/src/main.rs` (STATS map definition); `crates/lb/src/xdp.rs` (loader hook)
 
 Description: Sibling to REL-2-12. The XDP program maintains a
