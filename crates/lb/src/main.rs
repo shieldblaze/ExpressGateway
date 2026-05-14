@@ -67,7 +67,9 @@ use lb_l7::upstream::{RoundRobinUpstreams, UpstreamBackend, UpstreamProto};
 use lb_l7::ws_proxy::{WsConfig, WsProxy};
 use lb_observability::{MetricsRegistry, admin_http, http_latency_buckets};
 use lb_quic::{QuicListener, QuicListenerParams};
-use lb_security::{TicketRotator, build_server_config};
+use lb_security::{
+    ConnGate, HooksBundle, SecurityHooks, SmuggleMode, TicketRotator, build_server_config,
+};
 
 mod xdp;
 
@@ -231,6 +233,11 @@ struct ListenerState {
     /// CODE-2-09 / REL-2-11 Wave 2c-2: budget for one
     /// `TcpStream::connect` on the backend dial path.
     connect_timeout: Duration,
+    /// SEC-2-04 Wave 2c-2: per-listener / per-IP admission gate.
+    /// `admit_connection` is called *before* the listener
+    /// semaphore so a saturated IP cannot starve other clients of
+    /// inflight slots.
+    hooks: Arc<HooksBundle>,
 }
 
 /// Listener socket options matching PROMPT.md §7 for listener sockets.
@@ -612,6 +619,7 @@ fn build_h1_proxy(
     http_cfg: Option<&HttpTimeoutsConfig>,
     ws_cfg: Option<&WebsocketConfig>,
     is_https: bool,
+    hooks: Arc<dyn lb_l7::security_hooks::DynSecurityHooks>,
 ) -> anyhow::Result<Arc<H1Proxy>> {
     let picker = RoundRobinUpstreams::new(upstreams)
         .ok_or_else(|| anyhow::anyhow!("H1 listener requires at least one backend"))?;
@@ -625,6 +633,10 @@ fn build_h1_proxy(
         total: Duration::from_millis(h.total_timeout_ms),
     });
     let mut proxy = H1Proxy::with_multi_proto(pool, Arc::new(picker), alt_svc, timeouts, is_https);
+    // SEC-2-04 Wave 2c-2: install the production HooksBundle on the
+    // L7 hot path (CODE-2-01 trait shim already lives there from
+    // Wave-2b).
+    proxy = proxy.with_hooks(hooks);
     if let Some(h2) = h2_pool {
         proxy = proxy.with_h2_upstream(h2);
     }
@@ -664,6 +676,7 @@ fn build_h2_proxy(
     ws_cfg: Option<&WebsocketConfig>,
     grpc_cfg: Option<&GrpcListenerConfig>,
     is_https: bool,
+    hooks: Arc<dyn lb_l7::security_hooks::DynSecurityHooks>,
 ) -> anyhow::Result<Arc<H2Proxy>> {
     let picker = RoundRobinUpstreams::new(upstreams)
         .ok_or_else(|| anyhow::anyhow!("H2 listener requires at least one backend"))?;
@@ -685,6 +698,9 @@ fn build_h2_proxy(
         is_https,
         security,
     );
+    // SEC-2-04 Wave 2c-2: install the production HooksBundle on the
+    // L7 hot path.
+    proxy = proxy.with_hooks(hooks);
     if let Some(h2) = h2_pool {
         proxy = proxy.with_h2_upstream(h2);
     }
@@ -812,6 +828,7 @@ async fn spawn_tcp(
     handshake_timeout: Duration,
     max_inflight: u32,
     connect_timeout: Duration,
+    hooks: Arc<HooksBundle>,
 ) -> anyhow::Result<tokio::task::JoinHandle<anyhow::Result<()>>> {
     let mut addresses = Vec::with_capacity(listener_cfg.backends.len());
     let mut backends = Vec::with_capacity(listener_cfg.backends.len());
@@ -838,7 +855,7 @@ async fn spawn_tcp(
         addresses.push(first);
         backends.push(Backend::new(format!("backend-{i}"), b.weight));
     }
-    let mode = build_listener_mode(listener_cfg, pool, &addresses)?;
+    let mode = build_listener_mode(listener_cfg, pool, &addresses, &hooks)?;
     let state = Arc::new(ListenerState {
         backends,
         balancer: parking_lot::Mutex::new(RoundRobin::new()),
@@ -858,6 +875,7 @@ async fn spawn_tcp(
             usize::try_from(max_inflight).unwrap_or(usize::MAX),
         )),
         connect_timeout,
+        hooks,
     });
     Ok(tokio::spawn(run_listener(
         listener_cfg.address.clone(),
@@ -872,7 +890,13 @@ fn build_listener_mode(
     listener_cfg: &lb_config::ListenerConfig,
     pool: &TcpPool,
     addresses: &[SocketAddr],
+    hooks: &Arc<HooksBundle>,
 ) -> anyhow::Result<ListenerMode> {
+    // SEC-2-04 Wave 2c-2: cloned into every L7 proxy constructor
+    // below via `with_hooks`. The same bundle is held at accept-site
+    // for `admit_connection` so both surfaces see the same counters.
+    let hooks_arc_dyn: Arc<dyn lb_l7::security_hooks::DynSecurityHooks> =
+        Arc::clone(hooks) as Arc<_>;
     match listener_cfg.protocol.as_str() {
         "tls" => {
             let Some(tls_cfg) = listener_cfg.tls.as_ref() else {
@@ -916,6 +940,7 @@ fn build_listener_mode(
                 listener_cfg.http.as_ref(),
                 listener_cfg.websocket.as_ref(),
                 false,
+                Arc::clone(&hooks_arc_dyn),
             )
             .with_context(|| format!("H1 setup failed for {}", listener_cfg.address))?;
             tracing::info!(
@@ -963,6 +988,7 @@ fn build_listener_mode(
                 listener_cfg.http.as_ref(),
                 listener_cfg.websocket.as_ref(),
                 true,
+                Arc::clone(&hooks_arc_dyn),
             )
             .with_context(|| format!("H1s setup failed for {}", listener_cfg.address))?;
             let h2_proxy = build_h2_proxy(
@@ -976,6 +1002,7 @@ fn build_listener_mode(
                 listener_cfg.websocket.as_ref(),
                 listener_cfg.grpc.as_ref(),
                 true,
+                Arc::clone(&hooks_arc_dyn),
             )
             .with_context(|| format!("H2s setup failed for {}", listener_cfg.address))?;
             tracing::info!(
@@ -1370,10 +1397,22 @@ async fn async_main() -> anyhow::Result<()> {
             .as_ref()
             .map_or(5_000, |r| r.connect_timeout_ms),
     );
+    // SEC-2-04 Wave 2c-2: per-listener / per-IP admission gate.
+    // The same `Arc<HooksBundle>` is shared across every listener
+    // (`ConnGate`'s `listener_cap` counts all connections under
+    // this process; the per-IP cap is per-source). For a future
+    // multi-listener split, this becomes one bundle per listener.
+    let per_ip_cap = config
+        .runtime
+        .as_ref()
+        .map_or(1_024, |r| r.per_ip_connection_cap);
+    let conn_gate = ConnGate::new(max_inflight, per_ip_cap, Vec::new());
+    let hooks: Arc<HooksBundle> = Arc::new(HooksBundle::new(conn_gate, SmuggleMode::H1));
     tracing::info!(
         max_inflight,
+        per_ip_cap,
         connect_timeout_ms = connect_timeout.as_millis() as u64,
-        "accept-loop guards configured (CODE-2-05/06/09 — Wave 2c-2)"
+        "accept-loop guards configured (CODE-2-05/06/09 + SEC-2-04 — Wave 2c-2)"
     );
 
     for listener_cfg in &config.listeners {
@@ -1397,6 +1436,7 @@ async fn async_main() -> anyhow::Result<()> {
             handshake_timeout,
             max_inflight,
             connect_timeout,
+            Arc::clone(&hooks),
         )
         .await?;
         listener_handles.push(handle);
@@ -1764,6 +1804,38 @@ async fn run_listener(bind_addr: String, state: Arc<ListenerState>) -> anyhow::R
             }
         };
 
+        // SEC-2-04 Wave 2c-2: per-IP / per-listener admission gate.
+        // Called BEFORE the listener inflight semaphore so a saturated
+        // IP cannot starve other peers of the inflight slots. The
+        // returned `ConnPermit` is held alongside the semaphore permit
+        // for the lifetime of the connection.
+        let conn_permit = match state.hooks.admit_connection(client_addr.ip()) {
+            Ok(p) => p,
+            Err(reject) => {
+                if let Ok(v) = state.metrics.counter_vec(
+                    "accept_reject_total",
+                    "Accepts refused by per-IP / per-listener admission gate",
+                    &["reason"],
+                ) {
+                    let reason = match reject {
+                        lb_security::SecurityReject::OverCap(_) => "over_cap",
+                        lb_security::SecurityReject::Smuggle(_) => "smuggle",
+                        lb_security::SecurityReject::RateLimited => "rate_limited",
+                        lb_security::SecurityReject::SlowHandshake => "slow_handshake",
+                    };
+                    v.with_label_values(&[reason]).inc();
+                }
+                tracing::debug!(
+                    client = %client_addr,
+                    reject = ?reject,
+                    "admission gate refused connection"
+                );
+                // RST-style close: no body, no amplification surface.
+                let _ = client_stream.shutdown().await;
+                continue;
+            }
+        };
+
         // CODE-2-05 Wave 2c-2: per-listener inflight cap. `try_acquire_owned`
         // returns immediately so the accept loop is never blocked by the
         // semaphore itself; on saturation we bump `accept_shed_total`,
@@ -1814,11 +1886,13 @@ async fn run_listener(bind_addr: String, state: Arc<ListenerState>) -> anyhow::R
         };
 
         let st = Arc::clone(&state);
-        // Move the inflight permit into the connection task — its
-        // Drop releases the slot when the future returns.
+        // Move the inflight + admission permits into the connection
+        // task — their Drop releases the slot when the future returns.
         let _inflight_permit = permit;
+        let _admission_permit = conn_permit;
         tokio::spawn(async move {
             let _permit = _inflight_permit;
+            let _conn_permit = _admission_permit;
             st.active_connections.fetch_add(1, Ordering::Relaxed);
             st.metrics.increment("connections_total", 1);
 
@@ -2215,7 +2289,11 @@ mod tests {
             backends: vec![],
         };
         let pool = TcpPool::new(PoolConfig::default(), backend_opts(), Runtime::new());
-        let outcome = build_listener_mode(&listener_cfg, &pool, &[]);
+        let hooks = Arc::new(HooksBundle::new(
+            ConnGate::new(64, 16, Vec::new()),
+            SmuggleMode::H1,
+        ));
+        let outcome = build_listener_mode(&listener_cfg, &pool, &[], &hooks);
         assert!(outcome.is_err(), "typo protocol should have errored");
         let msg = match outcome {
             Err(e) => e.to_string(),
@@ -2229,6 +2307,30 @@ mod tests {
             msg.contains("h1z"),
             "error must name the offending value: {msg}"
         );
+    }
+
+    // ── SEC-2-04 Wave 2c-2 proof: per-IP cap enforced at accept ────
+    //
+    // Exercises the `HooksBundle::admit_connection` path the runtime
+    // calls before grabbing an inflight permit. The third admission
+    // from the same IP must be rejected with `OverCap` when the gate
+    // is sized for `per_ip_cap == 2`.
+    #[test]
+    fn test_per_ip_cap_enforced_at_accept() {
+        use std::net::{IpAddr, Ipv4Addr};
+        let bundle = HooksBundle::new(ConnGate::new(64, 2, Vec::new()), SmuggleMode::H1);
+        let peer: IpAddr = IpAddr::V4(Ipv4Addr::LOCALHOST);
+        let p1 = bundle.admit_connection(peer).unwrap();
+        let p2 = bundle.admit_connection(peer).unwrap();
+        let err = bundle.admit_connection(peer).unwrap_err();
+        assert!(
+            matches!(err, lb_security::SecurityReject::OverCap(_)),
+            "third admission must be over_cap: {err:?}"
+        );
+        // Dropping a permit releases the slot.
+        drop(p1);
+        let _p3 = bundle.admit_connection(peer).unwrap();
+        drop(p2);
     }
 
     // CODE-2-02 Wave 2c proof: the registry-backed counter increments

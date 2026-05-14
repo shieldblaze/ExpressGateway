@@ -166,6 +166,15 @@ pub struct RuntimeConfig {
     /// `5_000 ms`; validation range `100..=60_000`.
     #[serde(default = "default_connect_timeout_ms")]
     pub connect_timeout_ms: u64,
+    /// SEC-2-04 (Wave 2c-2): per-source-IP concurrent-connection cap
+    /// enforced at accept-site via `lb_security::ConnGate`. When the
+    /// counter saturates, the accept loop closes the socket without
+    /// a response (no amplification surface). Default `1024`;
+    /// validation range `1..=2_000_000`. Operators reduce this for
+    /// public-facing listeners where the per-IP fairness budget
+    /// should be tight.
+    #[serde(default = "default_per_ip_cap")]
+    pub per_ip_connection_cap: u32,
     /// PROTO-2-14: optional `[runtime.tls]` block for process-wide
     /// TLS-policy knobs. Currently carries a single field
     /// (`tls13_only`); future knobs (preferred-cipher list, ALPN
@@ -232,6 +241,14 @@ const fn default_max_inflight_connections() -> u32 {
 /// SYN-black-hole tail.
 const fn default_connect_timeout_ms() -> u64 {
     5_000
+}
+
+/// SEC-2-04 (Wave 2c-2): serde default for
+/// `RuntimeConfig::per_ip_connection_cap`. 1 024 matches the
+/// pre-2025 industry "per-IP fair share" baseline for load
+/// balancers in front of a typical web app.
+const fn default_per_ip_cap() -> u32 {
+    1_024
 }
 
 /// EBPF-2-04: operator-facing XDP attach-mode selector. Reuses the
@@ -770,6 +787,14 @@ fn validate_runtime(rt: &RuntimeConfig) -> Result<(), ConfigError> {
         return Err(ConfigError::Validation(format!(
             "runtime.connect_timeout_ms={} out of range 100..=60000",
             rt.connect_timeout_ms
+        )));
+    }
+    // SEC-2-04 Wave 2c-2: 1..=2_000_000 — zero would refuse every
+    // connection; 2_000_000 ceiling is shared with the listener cap.
+    if !(1..=2_000_000).contains(&rt.per_ip_connection_cap) {
+        return Err(ConfigError::Validation(format!(
+            "runtime.per_ip_connection_cap={} out of range 1..=2000000",
+            rt.per_ip_connection_cap
         )));
     }
     Ok(())
@@ -1607,6 +1632,7 @@ xdp_interface = "eth0"
                 handshake_timeout_ms: 5_000,
                 max_inflight_connections: 65_536,
                 connect_timeout_ms: 5_000,
+                per_ip_connection_cap: 1_024,
                 tls: None,
             }),
             observability: None,
@@ -1640,6 +1666,7 @@ xdp_interface = "eth0"
                 handshake_timeout_ms: 5_000,
                 max_inflight_connections: 65_536,
                 connect_timeout_ms: 5_000,
+                per_ip_connection_cap: 1_024,
                 tls: None,
             }),
             observability: None,
