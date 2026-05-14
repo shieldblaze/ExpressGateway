@@ -12,12 +12,18 @@
 #![allow(clippy::pedantic, clippy::nursery)]
 #![cfg_attr(
     test,
-    allow(clippy::unwrap_used, clippy::expect_used, clippy::indexing_slicing)
+    allow(
+        clippy::unwrap_used,
+        clippy::expect_used,
+        clippy::indexing_slicing,
+        clippy::panic,
+    )
 )]
 
 mod admin_auth;
 mod conn_gate;
 mod error;
+mod handshake;
 mod hooks;
 mod retry;
 mod slow_post;
@@ -30,6 +36,7 @@ mod zero_rtt;
 pub use admin_auth::{AdminAuthError, AdminAuthGate, AdminBindError, AdminTokenHash};
 pub use conn_gate::{ConnGate, ConnPermit, IpNet, OverCap};
 pub use error::SecurityError;
+pub use handshake::{DEFAULT_HANDSHAKE_TIMEOUT_MS, HandshakeError, timeout_accept};
 pub use hooks::{HooksBundle, SecurityHooks, SecurityReject};
 pub use retry::{DEFAULT_RETRY_MAX_AGE, RETRY_SECRET_LEN, RetryError, RetryTokenSigner};
 pub use slow_post::SlowPostDetector;
