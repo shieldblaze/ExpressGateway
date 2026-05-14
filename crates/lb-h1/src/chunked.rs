@@ -207,9 +207,7 @@ impl ChunkedDecoder {
                 // / nginx CVE-2019-9516).
                 let raw_name = line_str.get(..colon).ok_or(H1Error::InvalidChunkEncoding)?;
                 if raw_name.is_empty()
-                    || !raw_name
-                        .bytes()
-                        .all(crate::parse::__is_tchar_for_trailer)
+                    || !raw_name.bytes().all(crate::parse::__is_tchar_for_trailer)
                 {
                     return Err(H1Error::InvalidChunkEncoding);
                 }
