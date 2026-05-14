@@ -42,6 +42,8 @@ use lb_io::pool::TcpPool;
 use lb_io::quic_pool::QuicUpstreamPool;
 use tokio::io::{AsyncRead, AsyncWrite};
 
+use lb_security::{ConnId, SmuggleDetector, SmuggleMode, Watchdog};
+
 use crate::security_hooks::{DynSecurityHooks, NoopHooks, SecurityReject};
 use crate::upstream::{BackendInfoPicker, SingleProtoPicker, UpstreamBackend, UpstreamProto};
 use crate::ws_proxy::{self, WsProxy, build_handshake_response_headers, is_h1_upgrade_request};
@@ -173,6 +175,24 @@ pub struct H1Proxy {
     /// [`NoopHooks`]; Wave-2c flips this to the production
     /// `lb_security::HooksBundle` via [`Self::with_hooks`].
     hooks: Arc<dyn DynSecurityHooks>,
+    /// SEC-2-01 / SEC-2-03 slowloris / slow-POST watchdog.
+    ///
+    /// `None` (default) leaves the request handler running with no
+    /// per-stream deadline tracking; the proxy still relies on
+    /// [`HttpTimeouts::header`] / [`HttpTimeouts::body`] /
+    /// [`HttpTimeouts::total`]. Wave-2c sets a production
+    /// [`Watchdog`] via [`Self::with_watchdog`].
+    watchdog: Option<Watchdog>,
+    /// Monotonic per-listener connection sequence used as the
+    /// [`Watchdog`] entry key (combined with the peer IP so two
+    /// concurrent NAT-egress connections are distinguishable).
+    conn_seq: Arc<parking_lot::Mutex<u64>>,
+    /// SEC-2-01 strict-TE policy flag. When `true` the per-request
+    /// [`SmuggleDetector::check_all_mode`] call in `handle` runs in
+    /// [`SmuggleMode::H1Strict`] mode (rejects any
+    /// `Transfer-Encoding` codec other than `chunked`). Default
+    /// `false` keeps the lenient RFC 9112 baseline.
+    smuggle_strict: bool,
 }
 
 impl H1Proxy {
@@ -204,6 +224,9 @@ impl H1Proxy {
             h2_upstream: None,
             h3_upstream: None,
             hooks: Arc::new(NoopHooks::new()),
+            watchdog: None,
+            conn_seq: Arc::new(parking_lot::Mutex::new(0)),
+            smuggle_strict: false,
         }
     }
 
@@ -237,6 +260,9 @@ impl H1Proxy {
             h2_upstream: None,
             h3_upstream: None,
             hooks: Arc::new(NoopHooks::new()),
+            watchdog: None,
+            conn_seq: Arc::new(parking_lot::Mutex::new(0)),
+            smuggle_strict: false,
         }
     }
 
@@ -249,6 +275,31 @@ impl H1Proxy {
     #[must_use]
     pub fn with_hooks(mut self, hooks: Arc<dyn DynSecurityHooks>) -> Self {
         self.hooks = hooks;
+        self
+    }
+
+    /// Attach an [`lb_security::Watchdog`] for per-stream slowloris /
+    /// slow-POST eviction (SEC-2-01 / SEC-2-03). The proxy registers
+    /// each inbound request with a deadline derived from the
+    /// configured [`HttpTimeouts::header`] and records a single
+    /// `progress` measurement with the request-header byte estimate.
+    /// Per-chunk body progress is a follow-up (requires IO wrapping);
+    /// the request-side register covers the slowloris header phase
+    /// gap. A periodic sweeper task driven by `lb_core::Shutdown`
+    /// (Wave-2c) closes the full slow-POST window.
+    #[must_use]
+    pub fn with_watchdog(mut self, watchdog: Watchdog) -> Self {
+        self.watchdog = Some(watchdog);
+        self
+    }
+
+    /// Enable strict-TE policy on the per-request
+    /// [`SmuggleDetector::check_all_mode`] call (rejects any
+    /// `Transfer-Encoding` codec other than `chunked` —
+    /// [`SmuggleMode::H1Strict`]). Default is lenient.
+    #[must_use]
+    pub const fn with_smuggle_strict(mut self, strict: bool) -> Self {
+        self.smuggle_strict = strict;
         self
     }
 
@@ -418,6 +469,63 @@ impl H1Proxy {
         if let Err(rej) = self.hooks.inspect_request(&inspect_req, peer.ip()) {
             return reject_to_response(&rej);
         }
+
+        // SEC-2-01 — defense-in-depth explicit `SmuggleDetector` call.
+        // The hook surface above already invokes the detector when
+        // wired with `HooksBundle`; this call site fires regardless of
+        // which `DynSecurityHooks` impl is in use (`NoopHooks`
+        // included) so the detector is no longer dead code on the
+        // proxy hot path even before Wave-2c flips the production
+        // bundle in. The `(name, value)` pair shape matches the
+        // detector's existing API.
+        let header_pairs: Vec<(String, String)> = parts
+            .headers
+            .iter()
+            .filter_map(|(n, v)| {
+                v.to_str()
+                    .ok()
+                    .map(|s| (n.as_str().to_owned(), s.to_owned()))
+            })
+            .collect();
+        let smuggle_mode = if self.smuggle_strict {
+            SmuggleMode::H1Strict
+        } else {
+            SmuggleMode::H1
+        };
+        if let Err(e) = SmuggleDetector::check_all_mode(&header_pairs, smuggle_mode) {
+            tracing::warn!(error = %e, peer = %peer, "h1 smuggle rejected");
+            return error_response(StatusCode::BAD_REQUEST, "request smuggling");
+        }
+
+        // SEC-2-01 / SEC-2-03 — register the request with the slowloris
+        // watchdog. The deadline is `now + HttpTimeouts::header`; if
+        // the per-request future overruns it, the watchdog evicts via
+        // `progress` (or the sweeper) and the next progress call
+        // returns `WatchdogError::Deadline`.
+        let watch_id = self.watchdog.as_ref().map(|wd| {
+            let seq = {
+                let mut g = self.conn_seq.lock();
+                *g = g.wrapping_add(1);
+                *g
+            };
+            let id = ConnId::new(peer.ip(), seq);
+            let deadline = std::time::Instant::now() + self.timeouts.header;
+            wd.register(id, deadline);
+            // Account the header bytes (approximate) as the initial
+            // progress checkpoint. The detector treats progress as
+            // cumulative bytes-read; a zero-byte baseline is fine if
+            // the estimate is unavailable.
+            let header_bytes: u64 = parts
+                .headers
+                .iter()
+                .map(|(n, v)| n.as_str().len() as u64 + v.len() as u64 + 4)
+                .sum();
+            if let Err(e) = wd.progress(id, header_bytes) {
+                tracing::warn!(error = %e, peer = %peer, "h1 watchdog evicted at header phase");
+            }
+            id
+        });
+
         let host = parts
             .headers
             .get(hyper::header::HOST)
@@ -437,7 +545,7 @@ impl H1Proxy {
         };
 
         let req_for_upstream = Request::from_parts(parts, body);
-        match backend.proto {
+        let resp = match backend.proto {
             UpstreamProto::H1 => match self.proxy_request(backend.addr, req_for_upstream).await {
                 Ok(resp) => self.finalize_response(resp),
                 Err(ProxyErr::Upstream(s)) => error_response(StatusCode::BAD_GATEWAY, &s),
@@ -449,7 +557,14 @@ impl H1Proxy {
                 Box::pin(self.proxy_h1_to_h2(backend.addr, req_for_upstream)).await
             }
             UpstreamProto::H3 => Box::pin(self.proxy_h1_to_h3(&backend, req_for_upstream)).await,
+        };
+        // SEC-2-01 / SEC-2-03 — deregister the request from the
+        // watchdog on the normal completion path. The sweeper covers
+        // the abandoned-future case.
+        if let (Some(wd), Some(id)) = (self.watchdog.as_ref(), watch_id) {
+            wd.deregister(id);
         }
+        resp
     }
 
     async fn proxy_request(

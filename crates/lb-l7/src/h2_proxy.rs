@@ -45,6 +45,8 @@ use crate::h1_proxy::{
     AltSvcConfig, BackendPicker, HttpTimeouts, append_via, append_xff, set_xfh, set_xfp,
     strip_hop_by_hop,
 };
+use lb_security::{ConnId, SmuggleDetector, SmuggleMode, Watchdog};
+
 use crate::h2_security::H2SecurityThresholds;
 use crate::security_hooks::{DynSecurityHooks, NoopHooks};
 use crate::upstream::{BackendInfoPicker, SingleProtoPicker, UpstreamBackend, UpstreamProto};
@@ -76,6 +78,12 @@ pub struct H2Proxy {
     /// [`NoopHooks`]; Wave-2c flips this to the production
     /// `lb_security::HooksBundle` via [`Self::with_hooks`].
     hooks: Arc<dyn DynSecurityHooks>,
+    /// SEC-2-01 / SEC-2-03 slowloris / slow-POST watchdog
+    /// (mirrors `H1Proxy::watchdog`).
+    watchdog: Option<Watchdog>,
+    /// Monotonic per-listener connection sequence used as the
+    /// [`Watchdog`] entry key.
+    conn_seq: Arc<parking_lot::Mutex<u64>>,
 }
 
 impl H2Proxy {
@@ -131,6 +139,8 @@ impl H2Proxy {
             h2_upstream: None,
             h3_upstream: None,
             hooks: Arc::new(NoopHooks::new()),
+            watchdog: None,
+            conn_seq: Arc::new(parking_lot::Mutex::new(0)),
         }
     }
 
@@ -162,6 +172,8 @@ impl H2Proxy {
             h2_upstream: None,
             h3_upstream: None,
             hooks: Arc::new(NoopHooks::new()),
+            watchdog: None,
+            conn_seq: Arc::new(parking_lot::Mutex::new(0)),
         }
     }
 
@@ -172,6 +184,17 @@ impl H2Proxy {
     #[must_use]
     pub fn with_hooks(mut self, hooks: Arc<dyn DynSecurityHooks>) -> Self {
         self.hooks = hooks;
+        self
+    }
+
+    /// Attach an [`lb_security::Watchdog`] for per-stream slowloris /
+    /// slow-POST eviction (SEC-2-01 / SEC-2-03). Mirrors
+    /// [`crate::h1_proxy::H1Proxy::with_watchdog`]. The H2 service
+    /// closure runs once per stream so each stream registers and
+    /// deregisters independently.
+    #[must_use]
+    pub fn with_watchdog(mut self, watchdog: Watchdog) -> Self {
+        self.watchdog = Some(watchdog);
         self
     }
 
@@ -354,6 +377,48 @@ impl H2Proxy {
             return crate::h1_proxy::reject_to_response(&rej);
         }
 
+        // SEC-2-01 — defense-in-depth explicit `SmuggleDetector` call
+        // in H2 mode. Mirrors the H1 hot-path call site; the
+        // `SmuggleMode::H2` arm enables the
+        // [`check_h2_downgrade`] check (forbidden hop-by-hop headers
+        // and non-`trailers` TE per RFC 9113 §8.2.2) on top of the
+        // CL/TE/duplicate-CL defaults.
+        let header_pairs: Vec<(String, String)> = parts
+            .headers
+            .iter()
+            .filter_map(|(n, v)| {
+                v.to_str()
+                    .ok()
+                    .map(|s| (n.as_str().to_owned(), s.to_owned()))
+            })
+            .collect();
+        if let Err(e) = SmuggleDetector::check_all_mode(&header_pairs, SmuggleMode::H2) {
+            tracing::warn!(error = %e, peer = %peer, "h2 smuggle rejected");
+            return error_response(StatusCode::BAD_REQUEST, "request smuggling");
+        }
+
+        // SEC-2-01 / SEC-2-03 — register the stream with the
+        // slowloris watchdog.
+        let watch_id = self.watchdog.as_ref().map(|wd| {
+            let seq = {
+                let mut g = self.conn_seq.lock();
+                *g = g.wrapping_add(1);
+                *g
+            };
+            let id = ConnId::new(peer.ip(), seq);
+            let deadline = std::time::Instant::now() + self.timeouts.header;
+            wd.register(id, deadline);
+            let header_bytes: u64 = parts
+                .headers
+                .iter()
+                .map(|(n, v)| n.as_str().len() as u64 + v.len() as u64 + 4)
+                .sum();
+            if let Err(e) = wd.progress(id, header_bytes) {
+                tracing::warn!(error = %e, peer = %peer, "h2 watchdog evicted at header phase");
+            }
+            id
+        });
+
         // Determine the authority: H2 carries it in :authority, which
         // hyper surfaces as `uri.authority()`. Fall back to the Host
         // header for clients that still populate it.
@@ -389,7 +454,7 @@ impl H2Proxy {
         };
 
         let req_for_upstream = Request::from_parts(parts, body);
-        match backend.proto {
+        let resp = match backend.proto {
             UpstreamProto::H1 => match self.proxy_request(backend.addr, req_for_upstream).await {
                 Ok(resp) => self.finalize_response(resp),
                 Err(ProxyErr::Upstream(s)) => error_response(StatusCode::BAD_GATEWAY, &s),
@@ -401,7 +466,13 @@ impl H2Proxy {
                 Box::pin(self.proxy_h2_to_h2(backend.addr, req_for_upstream)).await
             }
             UpstreamProto::H3 => Box::pin(self.proxy_h2_to_h3(&backend, req_for_upstream)).await,
+        };
+        // SEC-2-01 / SEC-2-03 — deregister the stream from the
+        // watchdog on the normal completion path.
+        if let (Some(wd), Some(id)) = (self.watchdog.as_ref(), watch_id) {
+            wd.deregister(id);
         }
+        resp
     }
 
     /// Handle an RFC 8441 extended-CONNECT WebSocket bootstrap.
