@@ -120,6 +120,27 @@ impl Default for HttpTimeouts {
     }
 }
 
+/// ROUND8-L7-05 — runtime-side policy for `_` in inbound HTTP header
+/// names. Mirrors `lb_config::HeaderUnderscorePolicy`; lives in lb-l7
+/// to avoid a wide dep edge from the proxy onto the config crate. The
+/// wiring crate (`lb` binary) is responsible for mapping the schema
+/// enum to this enum at proxy-construction time.
+///
+/// Default: [`HeaderUnderscorePolicy::Reject`] — matches Envoy edge
+/// best-practice (`headers_with_underscores_action = REJECT_REQUEST`).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum HeaderUnderscorePolicy {
+    /// Reject the request with `400 Bad Request` if any inbound
+    /// header name contains `_`. Default.
+    #[default]
+    Reject,
+    /// Silently strip underscore-bearing headers before forwarding;
+    /// matches nginx default.
+    Drop,
+    /// Pass underscore-bearing headers through verbatim.
+    Allow,
+}
+
 /// Picks the next backend address. Implementations must be cheap to call
 /// and lock-free or fine-grained: it runs once per inbound request.
 pub trait BackendPicker: Send + Sync {
@@ -205,6 +226,14 @@ pub struct H1Proxy {
     /// `Transfer-Encoding` codec other than `chunked`). Default
     /// `false` keeps the lenient RFC 9112 baseline.
     smuggle_strict: bool,
+    /// ROUND8-L7-05: policy for `_` in inbound HTTP header names.
+    /// Default [`HeaderUnderscorePolicy::Reject`] mirrors Envoy edge
+    /// best-practice + nginx default behaviour. Set via
+    /// [`Self::with_header_underscore_policy`]. The lb-config
+    /// schema's `[runtime].header_underscore_policy` carries the
+    /// operator-facing knob; mapping into this field is the
+    /// responsibility of the wiring crate.
+    header_underscore_policy: HeaderUnderscorePolicy,
     /// PROTO-2-18 (Wave 2c-2): default expected SNI for the
     /// [`crate::sni_authority::check_sni_authority`] check. Builder
     /// default `None` means SNI/authority agreement is not enforced
@@ -247,6 +276,7 @@ impl H1Proxy {
             watchdog: None,
             conn_seq: Arc::new(parking_lot::Mutex::new(0)),
             smuggle_strict: false,
+            header_underscore_policy: HeaderUnderscorePolicy::Reject,
             expected_sni: None,
         }
     }
@@ -284,6 +314,7 @@ impl H1Proxy {
             watchdog: None,
             conn_seq: Arc::new(parking_lot::Mutex::new(0)),
             smuggle_strict: false,
+            header_underscore_policy: HeaderUnderscorePolicy::Reject,
             expected_sni: None,
         }
     }
@@ -322,6 +353,17 @@ impl H1Proxy {
     #[must_use]
     pub const fn with_smuggle_strict(mut self, strict: bool) -> Self {
         self.smuggle_strict = strict;
+        self
+    }
+
+    /// ROUND8-L7-05: set the header-name underscore policy on this
+    /// proxy. Default is [`HeaderUnderscorePolicy::Reject`] (Envoy
+    /// edge best-practice). The wiring crate maps from
+    /// `lb_config::HeaderUnderscorePolicy` to this enum at proxy
+    /// construction time.
+    #[must_use]
+    pub const fn with_header_underscore_policy(mut self, policy: HeaderUnderscorePolicy) -> Self {
+        self.header_underscore_policy = policy;
         self
     }
 
@@ -594,7 +636,56 @@ impl H1Proxy {
             return self.handle_ws_upgrade(req);
         }
 
-        let (parts, body) = req.into_parts();
+        let (mut parts, body) = req.into_parts();
+
+        // ROUND8-L7-05: enforce header-name underscore policy before
+        // any other inspection. Envoy edge best-practice + nginx
+        // default; default mode is `Reject`. See
+        // `audit/round-8/findings/ROUND8-L7-05.md` and
+        // `docs/edge-defaults.md`.
+        //
+        // SEC-2-01 defence-in-depth: when smuggle mode is strict
+        // (`smuggle_strict = true`), the policy is forced to `Reject`
+        // regardless of operator configuration. Operators who
+        // deliberately opt out of underscore rejection must also opt
+        // out of strict-TE mode.
+        let effective_policy = if self.smuggle_strict {
+            HeaderUnderscorePolicy::Reject
+        } else {
+            self.header_underscore_policy
+        };
+        match effective_policy {
+            HeaderUnderscorePolicy::Reject => {
+                if parts
+                    .headers
+                    .iter()
+                    .any(|(n, _)| n.as_str().as_bytes().contains(&b'_'))
+                {
+                    return error_response(
+                        StatusCode::BAD_REQUEST,
+                        "header name contains underscore (ROUND8-L7-05)",
+                    );
+                }
+            }
+            HeaderUnderscorePolicy::Drop => {
+                let to_drop: Vec<hyper::header::HeaderName> = parts
+                    .headers
+                    .iter()
+                    .filter_map(|(n, _)| {
+                        if n.as_str().as_bytes().contains(&b'_') {
+                            Some(n.clone())
+                        } else {
+                            None
+                        }
+                    })
+                    .collect();
+                for name in to_drop {
+                    parts.headers.remove(name);
+                }
+            }
+            HeaderUnderscorePolicy::Allow => {}
+        }
+
         // CODE-2-01 / SEC-2-01: run the security hooks before hop-by-hop
         // strip + upstream-acquire so a rejected request never spends a
         // pool slot. The reconstructed `Request<()>` is a header-only

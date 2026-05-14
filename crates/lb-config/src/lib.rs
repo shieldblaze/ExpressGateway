@@ -222,6 +222,43 @@ pub struct RuntimeConfig {
     /// finer-grained rate floor is dormant).
     #[serde(default)]
     pub watchdog: Option<RuntimeWatchdogConfig>,
+    /// ROUND8-L7-05: how to handle `_` in HTTP header names. Envoy
+    /// edge best-practice mandates `REJECT_REQUEST`; nginx default
+    /// silently drops (`underscores_in_headers off`). Both converge:
+    /// the underscore is an auth-bypass primitive against backends
+    /// that normalise `_` <-> `-` (Java middleware, some Python
+    /// frameworks, SAP gateways). Default: [`HeaderUnderscorePolicy::Reject`].
+    ///
+    /// See `docs/edge-defaults.md` and `config/default.toml` for the
+    /// documented operator surface. Wiring this knob from
+    /// [`RuntimeConfig`] into the per-listener `H1Proxy` / `H2Proxy`
+    /// builder is the responsibility of the main wiring crate; today
+    /// the proxy builders expose
+    /// `with_header_underscore_policy(...)` so the integration is a
+    /// one-call boundary on the `lb` crate side.
+    #[serde(default)]
+    pub header_underscore_policy: HeaderUnderscorePolicy,
+}
+
+/// ROUND8-L7-05: per-runtime policy for handling `_` in HTTP header
+/// names. Mirrors Envoy `headers_with_underscores_action` and nginx
+/// `underscores_in_headers`. Both references default to a rejecting
+/// stance at the edge; ExpressGateway adopts the same default.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum HeaderUnderscorePolicy {
+    /// Reject the request with `400 Bad Request` if any inbound
+    /// header name contains `_`. Matches Envoy edge best-practice
+    /// (`REJECT_REQUEST`). This is the default.
+    #[default]
+    Reject,
+    /// Silently drop underscore-bearing headers before forwarding;
+    /// matches nginx default (`underscores_in_headers off`).
+    Drop,
+    /// Pass underscore-bearing headers through verbatim. Matches
+    /// Envoy `ALLOW` (the non-edge default). Set only if the
+    /// downstream environment is known to be safe.
+    Allow,
 }
 
 /// SEC-2-03 follow-on: per-process slowloris / slow-POST watchdog
@@ -1769,6 +1806,7 @@ xdp_interface = "eth0"
                 per_ip_connection_cap: 1_024,
                 tls: None,
                 watchdog: None,
+                header_underscore_policy: HeaderUnderscorePolicy::Reject,
             }),
             observability: None,
             admin: None,
@@ -1805,6 +1843,7 @@ xdp_interface = "eth0"
                 per_ip_connection_cap: 1_024,
                 tls: None,
                 watchdog: None,
+                header_underscore_policy: HeaderUnderscorePolicy::Reject,
             }),
             observability: None,
             admin: None,

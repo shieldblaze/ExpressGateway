@@ -91,6 +91,14 @@ pub struct H2Proxy {
     /// on this proxy unless [`Self::serve_connection_with_cancel_sni`]
     /// supplies a per-connection override.
     expected_sni: Option<String>,
+    /// ROUND8-L7-05: policy for `_` in inbound H2 header names.
+    /// Default [`crate::h1_proxy::HeaderUnderscorePolicy::Reject`]
+    /// mirrors Envoy edge best-practice. The same enum used by
+    /// H1Proxy is reused here so the wiring crate maps once from
+    /// `lb_config`. hyper's H2 codec does not reject underscores for
+    /// us, so this server-side filter is the only enforcement point
+    /// on the H2 path.
+    header_underscore_policy: crate::h1_proxy::HeaderUnderscorePolicy,
 }
 
 impl H2Proxy {
@@ -149,6 +157,7 @@ impl H2Proxy {
             watchdog: None,
             conn_seq: Arc::new(parking_lot::Mutex::new(0)),
             expected_sni: None,
+            header_underscore_policy: crate::h1_proxy::HeaderUnderscorePolicy::Reject,
         }
     }
 
@@ -183,6 +192,7 @@ impl H2Proxy {
             watchdog: None,
             conn_seq: Arc::new(parking_lot::Mutex::new(0)),
             expected_sni: None,
+            header_underscore_policy: crate::h1_proxy::HeaderUnderscorePolicy::Reject,
         }
     }
 
@@ -216,6 +226,20 @@ impl H2Proxy {
     #[must_use]
     pub fn with_expected_sni(mut self, sni: Option<String>) -> Self {
         self.expected_sni = sni;
+        self
+    }
+
+    /// ROUND8-L7-05: set the header-name underscore policy on this
+    /// H2 proxy. Default is
+    /// [`crate::h1_proxy::HeaderUnderscorePolicy::Reject`]. The
+    /// wiring crate maps from `lb_config::HeaderUnderscorePolicy` to
+    /// this enum at proxy-construction time.
+    #[must_use]
+    pub const fn with_header_underscore_policy(
+        mut self,
+        policy: crate::h1_proxy::HeaderUnderscorePolicy,
+    ) -> Self {
+        self.header_underscore_policy = policy;
         self
     }
 
@@ -469,7 +493,44 @@ impl H2Proxy {
             }
             return Arc::clone(gp).handle(req, backend.addr).await;
         }
-        let (parts, body) = req.into_parts();
+        let (mut parts, body) = req.into_parts();
+
+        // ROUND8-L7-05: enforce header-name underscore policy before
+        // any other inspection. hyper's H2 codec does not reject
+        // underscores for us; this is the only enforcement point on
+        // the H2 path. Default is `Reject` (Envoy edge best-practice).
+        // See `audit/round-8/findings/ROUND8-L7-05.md`.
+        match self.header_underscore_policy {
+            crate::h1_proxy::HeaderUnderscorePolicy::Reject => {
+                if parts
+                    .headers
+                    .iter()
+                    .any(|(n, _)| n.as_str().as_bytes().contains(&b'_'))
+                {
+                    return error_response(
+                        StatusCode::BAD_REQUEST,
+                        "header name contains underscore (ROUND8-L7-05)",
+                    );
+                }
+            }
+            crate::h1_proxy::HeaderUnderscorePolicy::Drop => {
+                let to_drop: Vec<hyper::header::HeaderName> = parts
+                    .headers
+                    .iter()
+                    .filter_map(|(n, _)| {
+                        if n.as_str().as_bytes().contains(&b'_') {
+                            Some(n.clone())
+                        } else {
+                            None
+                        }
+                    })
+                    .collect();
+                for name in to_drop {
+                    parts.headers.remove(name);
+                }
+            }
+            crate::h1_proxy::HeaderUnderscorePolicy::Allow => {}
+        }
 
         // CODE-2-01 / SEC-2-01: run the security hooks before hop-by-hop
         // strip + upstream-acquire. The reconstructed `Request<()>` is
