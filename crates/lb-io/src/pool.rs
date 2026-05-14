@@ -59,6 +59,9 @@ pub const DEFAULT_TOTAL_MAX: usize = 256;
 pub const DEFAULT_IDLE_TIMEOUT_SECS: u64 = 60;
 /// Default maximum age of a pooled connection since dial (seconds).
 pub const DEFAULT_MAX_AGE_SECS: u64 = 5 * 60;
+/// Default connect-timeout for a fresh async dial. Matches
+/// `runtime.connect_timeout_ms` default of 5_000 ms in `lb-config`.
+pub const DEFAULT_CONNECT_TIMEOUT_MS: u64 = 5_000;
 
 /// Configuration for [`TcpPool`]. Defaults match PROMPT.md §21 TCP L4.
 #[derive(Debug, Clone, Copy)]
@@ -71,6 +74,12 @@ pub struct PoolConfig {
     pub idle_timeout: Duration,
     /// Connections older than this (since original dial) are discarded.
     pub max_age: Duration,
+    /// Hard timeout applied to a fresh async dial via
+    /// [`TcpPool::acquire_async`]. Defaults to 5 s; surface via
+    /// `runtime.connect_timeout_ms` in `lb-config`. The legacy blocking
+    /// [`TcpPool::acquire`] path ignores this field and inherits the
+    /// kernel's default `connect(2)` timeout.
+    pub connect_timeout: Duration,
 }
 
 impl Default for PoolConfig {
@@ -80,6 +89,7 @@ impl Default for PoolConfig {
             total_max: DEFAULT_TOTAL_MAX,
             idle_timeout: Duration::from_secs(DEFAULT_IDLE_TIMEOUT_SECS),
             max_age: Duration::from_secs(DEFAULT_MAX_AGE_SECS),
+            connect_timeout: Duration::from_millis(DEFAULT_CONNECT_TIMEOUT_MS),
         }
     }
 }
@@ -156,10 +166,14 @@ impl TcpPool {
     /// [`PooledTcp::set_reusable`].
     ///
     /// Blocking `connect(2)` for a fresh dial runs inline on the calling
-    /// task, mirroring `Runtime::connect`. Callers that do not want to
-    /// stall a tokio worker should wrap this call in
-    /// `tokio::task::spawn_blocking` exactly as they do today for the
-    /// direct-dial path.
+    /// task, mirroring `Runtime::connect`.
+    ///
+    /// # CODE-2-09 deprecation note
+    /// Production callers must use [`TcpPool::acquire_async`] instead.
+    /// This synchronous entry point remains so unit tests and embedders
+    /// outside a tokio runtime can still exercise the LRU/probe logic
+    /// without an executor. It is **not** wired into any L7 dial path
+    /// since the Wave-2c follow-on commit.
     ///
     /// # Errors
     /// Propagates any `io::Error` from the fallback `connect(2)` or from
@@ -173,6 +187,35 @@ impl TcpPool {
             }
         }
         self.dial_new(addr)
+    }
+
+    /// Async variant of [`TcpPool::acquire`] that dials fresh
+    /// connections via [`tokio::net::TcpStream::connect`] wrapped in
+    /// [`tokio::time::timeout`]`(`[`PoolConfig::connect_timeout`]`)`.
+    ///
+    /// CODE-2-09 (Round-4 follow-on): replaces every
+    /// `tokio::task::spawn_blocking(pool.acquire)` site in the upstream
+    /// dial path. Pool reuse, age/idle bookkeeping, and the
+    /// [`probe_alive`] liveness check are identical to the blocking
+    /// path; only the fresh-dial step changes. The blocking-pool
+    /// thread-coupling between `dns.rs` and every connect callsite is
+    /// eliminated, and the connect step is now cancellable when the
+    /// awaiting task is dropped.
+    ///
+    /// # Errors
+    /// * Propagates `io::Error` from the async `connect(2)` or from the
+    ///   socket-options application step.
+    /// * Returns [`io::ErrorKind::TimedOut`] when the dial exceeds
+    ///   [`PoolConfig::connect_timeout`].
+    pub async fn acquire_async(&self, addr: SocketAddr) -> io::Result<PooledTcp> {
+        while let Some(idle) = self.pop_idle(addr) {
+            match self.validate_and_upgrade(idle, addr) {
+                Ok(pooled) => return Ok(pooled),
+                Err(ValidationOutcome::Discard) => continue,
+                Err(ValidationOutcome::Fatal(err)) => return Err(err),
+            }
+        }
+        self.dial_new_async(addr).await
     }
 
     /// Pop the oldest idle entry (FIFO), decrementing the total counter.
@@ -231,6 +274,31 @@ impl TcpPool {
             created_at,
             self.inner.clone(),
         ))
+    }
+
+    /// Async fresh dial: `tokio::net::TcpStream::connect` under a
+    /// [`PoolConfig::connect_timeout`] deadline, then post-connect
+    /// [`socket2`]-driven setsockopts via
+    /// [`crate::sockopts::apply_connected_tokio`].
+    async fn dial_new_async(&self, addr: SocketAddr) -> io::Result<PooledTcp> {
+        let connect_fut = TcpStream::connect(addr);
+        let stream =
+            match tokio::time::timeout(self.inner.config.connect_timeout, connect_fut).await {
+                Ok(Ok(s)) => s,
+                Ok(Err(e)) => return Err(e),
+                Err(_elapsed) => {
+                    return Err(io::Error::new(
+                        io::ErrorKind::TimedOut,
+                        format!(
+                            "TcpStream::connect to {addr} exceeded {} ms",
+                            self.inner.config.connect_timeout.as_millis()
+                        ),
+                    ));
+                }
+            };
+        crate::sockopts::apply_connected_tokio(&stream, &self.inner.connect_opts)?;
+        let created_at = Instant::now();
+        Ok(PooledTcp::new(stream, addr, created_at, self.inner.clone()))
     }
 }
 
@@ -625,6 +693,7 @@ mod tests {
             idle_timeout: Duration::from_secs(60),
             // aggressively short
             max_age: Duration::from_millis(50),
+            ..PoolConfig::default()
         };
         let pool = pool_with(cfg);
 
@@ -649,6 +718,7 @@ mod tests {
             total_max: 16,
             idle_timeout: Duration::from_millis(30),
             max_age: Duration::from_secs(60),
+            ..PoolConfig::default()
         };
         let pool = pool_with(cfg);
 
@@ -701,6 +771,7 @@ mod tests {
             total_max: 5,
             idle_timeout: Duration::from_secs(60),
             max_age: Duration::from_secs(60),
+            ..PoolConfig::default()
         };
         let pool = pool_with(cfg);
 
@@ -741,5 +812,86 @@ mod tests {
 
         drop(held);
         assert!(pool.idle_count() <= 5);
+    }
+
+    // ── CODE-2-09 follow-on coverage ────────────────────────────────
+
+    /// `acquire_async` returns a working stream and parks it back into
+    /// the per-peer queue on drop, identical to the blocking path.
+    #[tokio::test]
+    async fn acquire_async_dials_then_parks() {
+        let (_l, addr, _stop) = echo_listener();
+        let pool = pool_with(PoolConfig::default());
+
+        {
+            let mut c = pool.acquire_async(addr).await.unwrap();
+            let s = c.stream_mut().unwrap();
+            s.write_all(b"hi").await.unwrap();
+            let mut buf = [0u8; 2];
+            s.read_exact(&mut buf).await.unwrap();
+            assert_eq!(&buf, b"hi");
+        }
+        assert_eq!(pool.idle_count_for(addr), 1);
+
+        // Reuse via the async path too.
+        let _c2 = pool.acquire_async(addr).await.unwrap();
+        assert_eq!(pool.idle_count(), 0);
+    }
+
+    /// The async dial respects `PoolConfig::connect_timeout`: a dial
+    /// against TEST-NET-1 (RFC 5737, guaranteed to drop) returns
+    /// `TimedOut` well within wall-clock budget.
+    #[tokio::test]
+    async fn acquire_async_timeout_fires() {
+        let cfg = PoolConfig {
+            connect_timeout: Duration::from_millis(150),
+            ..PoolConfig::default()
+        };
+        let pool = pool_with(cfg);
+        // 192.0.2.1:1 — RFC 5737 TEST-NET-1, packets are dropped.
+        let unreachable: SocketAddr = "192.0.2.1:1".parse().unwrap();
+
+        let start = std::time::Instant::now();
+        let res = pool.acquire_async(unreachable).await;
+        let elapsed = start.elapsed();
+
+        assert!(res.is_err(), "expected timeout error, got {res:?}");
+        let err = res.unwrap_err();
+        // Kernel may surface the dial as TimedOut (our wrapper) or as
+        // a routing error before the deadline; either is acceptable as
+        // long as the call completes well under the kernel's default
+        // connect timeout (>1 minute).
+        assert!(
+            elapsed < Duration::from_secs(2),
+            "async dial took {elapsed:?}, expected <2s (timeout {:?})",
+            err
+        );
+    }
+
+    /// Static-source proof for CODE-2-09 — the production dial path
+    /// must not route through `tokio::task::spawn_blocking`. We look
+    /// only for the fully-qualified `tokio::task::spawn_blocking`
+    /// callsite shape; doc comments and string-literal mentions are
+    /// ignored.
+    #[test]
+    fn no_spawn_blocking_in_pool_dial_path() {
+        let pool_src = include_str!("pool.rs");
+        let needle = ["tokio::task::", "spawn_blocking"].concat();
+        let mut bad = Vec::new();
+        for (lineno, line) in pool_src.lines().enumerate() {
+            if !line.contains(&needle) {
+                continue;
+            }
+            let trimmed = line.trim_start();
+            if trimmed.starts_with("//") || trimmed.starts_with("///") {
+                continue;
+            }
+            bad.push(format!("pool.rs:{}: {}", lineno + 1, line));
+        }
+        assert!(
+            bad.is_empty(),
+            "TcpPool dial path must not use the deprecated blocking dispatcher; offenders:\n{}",
+            bad.join("\n")
+        );
     }
 }

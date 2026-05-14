@@ -592,10 +592,13 @@ impl H1Proxy {
         req: StrippedRequest<IncomingBody>,
     ) -> Result<Response<IncomingBody>, ProxyErr> {
         let req = req.into_inner();
-        let pool = self.pool.clone();
-        let pooled = tokio::task::spawn_blocking(move || pool.acquire(backend_addr))
+        // CODE-2-09 follow-on: async dial via `TcpPool::acquire_async`.
+        // The pool's `PoolConfig::connect_timeout` (5 s default,
+        // sourced from `runtime.connect_timeout_ms`) bounds the syscall.
+        let pooled = self
+            .pool
+            .acquire_async(backend_addr)
             .await
-            .map_err(|e| ProxyErr::Upstream(format!("backend dial join: {e}")))?
             .map_err(|e| ProxyErr::Upstream(format!("backend connect {backend_addr}: {e}")))?;
 
         let stream = pooled
@@ -834,15 +837,13 @@ async fn run_h1_ws_upgrade_task(
         }
     };
 
-    let pooled_result = tokio::task::spawn_blocking(move || pool.acquire(backend_addr)).await;
-    let pooled = match pooled_result {
-        Ok(Ok(p)) => p,
-        Ok(Err(e)) => {
-            tracing::debug!(error = %e, backend = %backend_addr, "ws: backend dial failed");
-            return;
-        }
+    // CODE-2-09 follow-on: async dial replaces the prior
+    // `spawn_blocking(pool.acquire)` site so the WS-upgrade dial no
+    // longer ties up a blocking-pool thread for a TCP RTT.
+    let pooled = match pool.acquire_async(backend_addr).await {
+        Ok(p) => p,
         Err(e) => {
-            tracing::debug!(error = %e, "ws: dial join failed");
+            tracing::debug!(error = %e, backend = %backend_addr, "ws: backend dial failed");
             return;
         }
     };

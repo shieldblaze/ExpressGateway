@@ -256,9 +256,10 @@ pub fn encode_h3_response(status: u16, body: &[u8]) -> Result<Vec<u8>, String> {
 /// H1 response mapped into H3 wire bytes. On any backend failure,
 /// returns a 502 response body `b"bad gateway"`.
 ///
-/// Blocking `TcpPool::acquire` is moved off the tokio worker via
-/// `spawn_blocking` — this matches the pattern already used in
-/// `crates/lb/src/main.rs`.
+/// CODE-2-09 follow-on: the dial is now an async
+/// [`TcpPool::acquire_async`] call instead of
+/// `spawn_blocking(pool.acquire)`. The pool's
+/// [`lb_io::pool::PoolConfig::connect_timeout`] governs the deadline.
 ///
 /// # Errors
 ///
@@ -271,16 +272,10 @@ pub async fn h3_to_h1_roundtrip(
     backend: SocketAddr,
     pool: &TcpPool,
 ) -> Result<Vec<u8>, String> {
-    let pool_for_dial = pool.clone();
-    let mut pooled = match tokio::task::spawn_blocking(move || pool_for_dial.acquire(backend)).await
-    {
-        Ok(Ok(p)) => p,
-        Ok(Err(e)) => {
-            tracing::warn!(error = %e, "H3→H1 backend acquire failed");
-            return encode_h3_response(502, b"bad gateway");
-        }
+    let mut pooled = match pool.acquire_async(backend).await {
+        Ok(p) => p,
         Err(e) => {
-            tracing::warn!(error = %e, "H3→H1 acquire task join failed");
+            tracing::warn!(error = %e, "H3→H1 backend acquire failed");
             return encode_h3_response(502, b"bad gateway");
         }
     };

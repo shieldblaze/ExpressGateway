@@ -594,16 +594,15 @@ impl H2Proxy {
                 }
             };
 
-            let pooled_result =
-                tokio::task::spawn_blocking(move || pool.acquire(backend_addr)).await;
-            let pooled = match pooled_result {
-                Ok(Ok(p)) => p,
-                Ok(Err(e)) => {
-                    tracing::debug!(error = %e, backend = %backend_addr, "ws/h2: backend dial failed");
-                    return;
-                }
+            // CODE-2-09 follow-on: async dial via
+            // `TcpPool::acquire_async`. Eliminates the
+            // `spawn_blocking(pool.acquire)` site so an H2 extended-
+            // CONNECT WebSocket upgrade no longer parks a blocking-pool
+            // thread for the dial.
+            let pooled = match pool.acquire_async(backend_addr).await {
+                Ok(p) => p,
                 Err(e) => {
-                    tracing::debug!(error = %e, "ws/h2: dial join failed");
+                    tracing::debug!(error = %e, backend = %backend_addr, "ws/h2: backend dial failed");
                     return;
                 }
             };
@@ -657,10 +656,11 @@ impl H2Proxy {
         req: StrippedRequest<IncomingBody>,
     ) -> Result<Response<IncomingBody>, ProxyErr> {
         let req = req.into_inner();
-        let pool = self.pool.clone();
-        let pooled = tokio::task::spawn_blocking(move || pool.acquire(backend_addr))
+        // CODE-2-09 follow-on: async dial via `TcpPool::acquire_async`.
+        let pooled = self
+            .pool
+            .acquire_async(backend_addr)
             .await
-            .map_err(|e| ProxyErr::Upstream(format!("backend dial join: {e}")))?
             .map_err(|e| ProxyErr::Upstream(format!("backend connect {backend_addr}: {e}")))?;
 
         let stream = pooled

@@ -210,18 +210,15 @@ impl GrpcProxy {
         let upstream_body: BoxBody<Bytes, hyper::Error> = body.map_err(hyper::Error::from).boxed();
         let upstream_req = Request::from_parts(parts, upstream_body);
 
-        let pool = self.pool.clone();
-        let acquire = tokio::task::spawn_blocking(move || pool.acquire(backend_addr)).await;
-        let pooled = match acquire {
-            Ok(Ok(p)) => p,
-            Ok(Err(e)) => {
+        // CODE-2-09 follow-on: async dial via the pool's
+        // `acquire_async`.
+        let pooled = match self.pool.acquire_async(backend_addr).await {
+            Ok(p) => p,
+            Err(e) => {
                 return grpc_error_response(
                     GrpcStatus::Unavailable,
                     &format!("backend dial failed: {e}"),
                 );
-            }
-            Err(e) => {
-                return grpc_error_response(GrpcStatus::Internal, &format!("dial join: {e}"));
             }
         };
         let Some(upstream_io) = pooled.take_stream() else {

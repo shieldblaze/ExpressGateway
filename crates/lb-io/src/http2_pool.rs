@@ -257,10 +257,10 @@ impl Http2Pool {
         &self,
         addr: SocketAddr,
     ) -> Result<(SendRequest<BoxBody<Bytes, hyper::Error>>, JoinHandle<()>), Http2PoolError> {
-        let pool = self.inner.tcp_pool.clone();
-        let pooled = tokio::task::spawn_blocking(move || pool.acquire(addr))
-            .await
-            .map_err(|e| Http2PoolError::Handshake(format!("dial join: {e}")))??;
+        // CODE-2-09 follow-on: async dial via `TcpPool::acquire_async`,
+        // eliminating the previous `spawn_blocking(pool.acquire)` site
+        // that shared the global blocking pool with `dns::resolve`.
+        let pooled = self.inner.tcp_pool.acquire_async(addr).await?;
         let stream = pooled
             .take_stream()
             .ok_or_else(|| Http2PoolError::Handshake("pooled stream missing".to_owned()))?;
