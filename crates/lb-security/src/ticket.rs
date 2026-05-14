@@ -897,7 +897,11 @@ mod tests {
     fn tempdir() -> PathBuf {
         use std::sync::atomic::{AtomicU64, Ordering};
         static N: AtomicU64 = AtomicU64::new(0);
-        let id = N.fetch_add(1, Ordering::Relaxed);
+        // CODE-2-04 follow-on: tempdir-suffix generation in test code;
+        // counter is monotonic and uniqueness is the only property —
+        // no enforcement gate depends on this load. Stats-class per
+        // docs/decisions/atomics.md (S/G/L policy).
+        let id = N.fetch_add(1, Ordering::Relaxed); // CLIPPY-OK: stats-class, tempdir id generation
         let pid = std::process::id();
         let p = std::env::temp_dir().join(format!("eg-tls-bundle-{pid}-{id}"));
         let _ = std::fs::remove_dir_all(&p);
