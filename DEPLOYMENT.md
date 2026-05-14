@@ -149,10 +149,13 @@ Certificate and key paths go in the TOML; see `CONFIG.md`. Rotation strategy:
 3. The in-process `TicketRotator` (`crates/lb-security/src/ticket.rs`) keeps the previous ticket key valid for its `overlap` window so sessions encrypted before the reload continue to decrypt.
 
 TLS listeners are wired through `tokio_rustls::TlsAcceptor`
-(`crates/lb/src/main.rs`). The cert-and-key swap on SIGHUP via
-`ArcSwap<TlsStore>` is sequenced after Wave-2c lifecycle work (see
-`audit/reliability/round-2-review.md` REL-2-03 status). For now,
-rotating a cert requires a restart.
+(`crates/lb/src/main.rs`). REL-2-03 closed the hot-reload path:
+every TLS listener holds an `Arc<ArcSwap<TlsConfigBundle>>` (see
+`crates/lb-security/src/ticket.rs` `SharedTlsBundle`), and SIGUSR1
+atomically swaps in a freshly-built bundle. On parse/validate
+failure the old bundle stays live. See
+`audit/reliability/round-2-review.md` REL-2-03 for the audit
+closure.
 
 ## XDP toolchain caveat
 

@@ -20,7 +20,13 @@ A globally distributed load balancer written in Rust, featuring:
 - **File-backed control plane** with a trait seam for future
   distributed backends.
 - **Standalone and HA modes**.
-- **Zero-downtime reload** via `SO_REUSEPORT` and FD passing.
+- **Graceful drain on `SIGTERM`** with a bounded budget
+  (`runtime.drain_timeout_ms`, default 10 s). `SO_REUSEPORT` is set on
+  listening sockets so a supervisor can run a replacement process
+  side-by-side during a manual handover; the current binary does not
+  itself transfer FDs between processes (deferred, see `CONFIG.md`
+  Pillar 3b follow-up). For the full operator-driven restart
+  procedure see RUNBOOK.md "Drain (graceful shutdown)".
 - **Panic-free libraries**: every `crates/*/src/lib.rs` carries
   `#![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, ...)]`;
   CI's `panic-freedom` job enforces it. The binary (`crates/lb`) carries

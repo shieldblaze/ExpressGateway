@@ -435,7 +435,7 @@ inside `lb-l7`).
 
 ### REL-2-09 — Unbounded `tokio::spawn` per TCP accept; missing `accept_inflight` saturation metric and alert
 Severity: critical
-Status:   Verified-Fixed-Partial(verifier=proto, author-sha=f07cf44+551d470)   <!-- Per-listener Arc<Semaphore> sized to runtime.max_inflight_connections (default 65 536) lands; on saturation it bumps `accept_shed_total` + writes best-effort 503. `accept_inflight{listener}` gauge is NOT emitted (grep returns zero hits outside the canonical-labels reservation). Operator alert `accept_inflight / max_inflight > 0.8` cannot be expressed yet. Shed signal works; warm-before-saturation gauge is deferred. See audit/protocol/round-5-verifies-rel.md. -->
+Status:   Verified-Fixed(verifier=proto+verify, author-sha=f07cf44+551d470)   <!-- Phase C-bis (Round 8, ROUND8-RECHECK-01) walked the recommendation block against /metrics and source: per-listener `accept_inflight{listener}` IntGaugeVec is registered in `lb_observability::MetricsRegistry::accept_inflight_gauge` and inc/dec at the accept site (`crates/lb/src/main.rs:393, :400`); the family is reserved in `CANONICAL_LABELS` (`label_budget.rs:55`). `LbAcceptSaturation: accept_inflight / max_inflight > 0.8 for 2m` alert is expressible (operator-side; not in-tree). Re-graded from Verified-Fixed-Partial per STATE `ROUND8_PHASE_C_BIS_REGRADE=REL-2-09-upgrade-Partial-to-Verified-Fixed`. The earlier-round status note hand-waved the family-reservation as missing emission, which Phase C-bis disproved. See audit/round-8 + audit/STATE. -->
 Location: `crates/lb/src/main.rs:1099-1126`
 
 Description: The accept loop:

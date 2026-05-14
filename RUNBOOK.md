@@ -123,11 +123,16 @@ What requires a full restart today:
 
 ## TLS certificate rotation
 
-Until REL-2-03 lands the `ArcSwap<TlsStore>` swap:
+REL-2-03 lands the `Arc<ArcSwap<TlsConfigBundle>>` hot-reload path
+(see `crates/lb-security/src/ticket.rs` `SharedTlsBundle`); SIGUSR1
+atomically swaps in a freshly-built bundle and on parse/validate
+failure the old bundle stays live. To rotate certs without a
+restart:
 
 1. Write the new PEM files into `/etc/expressgateway/tls/` atomically
    (rename, don't truncate).
-2. `systemctl restart expressgateway`.
+2. `kill -USR1 $(pidof expressgateway)` (or `systemctl reload
+   expressgateway` if the unit's `ExecReload` is mapped to SIGUSR1).
 
 The in-process **ticket-key rotator**
 (`crates/lb-security/src/ticket.rs::TicketRotator`) rotates the TLS

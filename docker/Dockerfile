@@ -28,10 +28,46 @@ RUN cargo build --release -p lb --bin expressgateway \
 
 # Stage 4: Runtime image (distroless)
 FROM gcr.io/distroless/cc-debian12:nonroot AS runtime
+
+# ROUND8-OPS-12: OCI image provenance + runtime metadata.
+# Values are passed by the CI pipeline via `--build-arg`; fall back
+# to `unknown` for ad-hoc local builds.
+ARG GIT_SHA=unknown
+ARG BUILD_DATE=unknown
+ARG VERSION=0.0.0
+
+LABEL org.opencontainers.image.title="expressgateway" \
+      org.opencontainers.image.description="L4/L7 load balancer with XDP/eBPF data plane and HTTP/1.1, HTTP/2, HTTP/3 (QUIC) L7 proxying." \
+      org.opencontainers.image.source="https://github.com/proto/ExpressGateway" \
+      org.opencontainers.image.documentation="https://github.com/proto/ExpressGateway/blob/main/README.md" \
+      org.opencontainers.image.licenses="GPL-3.0-only" \
+      org.opencontainers.image.revision="${GIT_SHA}" \
+      org.opencontainers.image.created="${BUILD_DATE}" \
+      org.opencontainers.image.version="${VERSION}" \
+      org.opencontainers.image.base.name="gcr.io/distroless/cc-debian12:nonroot"
+
 COPY --from=builder /app/target/release/expressgateway /usr/local/bin/expressgateway
 COPY --from=builder /app/config/default.toml /etc/expressgateway/config.toml
 
-EXPOSE 80 443 8080 9090
+# Distroless `:nonroot` is uid=65532; declare it explicitly so any
+# downstream tooling that does not honour the image default (e.g.
+# K8s `securityContext: { runAsUser: ... }`) still gets the right
+# user out of the box.
+USER 65532:65532
+
+# ROUND8-OPS-12: EXPOSE only the binary's default bind set. Operator
+# listeners (80/443/etc.) are configured via [[listeners]] in the
+# TOML and EXPOSE'd by the operator's deployment manifest (K8s
+# podSpec, Compose service ports). 9090 is the admin/metrics bind
+# the binary defaults to per `crates/lb-observability/src/admin_http.rs`.
+EXPOSE 9090
+
+# ROUND8-OPS-12 Phase 1: no embedded HEALTHCHECK; container
+# orchestrators are expected to use K8s `livenessProbe` /
+# `readinessProbe` against `:9090/livez` and `/readyz`. Phase 2 will
+# add an `expressgateway --healthcheck` subcommand and re-enable a
+# HEALTHCHECK that opens 127.0.0.1:9090/livez — see
+# `audit/round-8/fixes/ops-batch-low.md` §2.2.
 
 ENTRYPOINT ["/usr/local/bin/expressgateway"]
 CMD ["--config", "/etc/expressgateway/config.toml"]

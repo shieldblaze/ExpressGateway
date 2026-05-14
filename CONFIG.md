@@ -133,7 +133,7 @@ strict_te = true
 
 The configuration watcher sends SIGHUP → `crates/lb-controlplane/src/lib.rs` re-reads, validates, and publishes via `ArcSwap<Config>` (ADR-0008). Reload behavior per key:
 
-- **`restart`**: a socket bind change. Requires process restart or a graceful handover (ADR-0009; FD-passing is deferred to Pillar 3b follow-up).
+- **`restart`**: a socket bind change. Requires process restart or a graceful handover (ADR-0009; FD-passing is deferred to Pillar 3b follow-up). <!-- doc-lint-allow-fd-passing-aspirational -->
 - **`SIGHUP`**: applied atomically via `ArcSwap` swap. The backend list, weights, and (eventually) detectors' thresholds reload on the next acquired listener reference. Existing in-flight connections see the old value; new connections see the new one. This is tested by `tests/reload_zero_drop.rs`.
 
 ## Validation
