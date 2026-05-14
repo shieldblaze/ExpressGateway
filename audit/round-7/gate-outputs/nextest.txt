@@ -1,0 +1,23 @@
+Gate 6 — `cargo nextest run --all-features`
+
+cargo-nextest is not installed locally and the spec forbids installing
+it if that requires network access. Fallback per the spec is
+`cargo test --workspace --all-features --release -- --skip ignored`,
+but that build is *already* covered by Gate 2 (`cargo clippy --workspace
+--all-targets --all-features`) which compiled every test binary and
+emitted a single compile error in `tests/h3_upstream_verify.rs`
+(missing `security` field on `LbConfig` literal — Round-2 PROTO-2-17
+added that field; the test was not migrated).
+
+Local run result is therefore deferred to CI with this command for the
+release pipeline:
+
+```yaml
+image: ghcr.io/expressgateway/ci:nextest-0.9
+steps:
+  - cargo nextest run --workspace --all-features --release
+```
+
+Status: PARTIAL — compile-time blocked by the same h3_upstream_verify
+defect that fails clippy; once that test is migrated, this gate should
+turn green. See `audit/round-7/SUMMARY.md` follow-up note.

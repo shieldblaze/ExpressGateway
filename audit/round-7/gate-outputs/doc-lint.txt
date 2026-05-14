@@ -1,0 +1,2 @@
+doc-lint: OK
+DOC_LINT_EXIT=0

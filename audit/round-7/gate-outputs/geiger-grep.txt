@@ -1,0 +1,73 @@
+crates/lb-io/src/sockopts.rs:124:            let rc = unsafe { libc::listen(fd, backlog) };
+crates/lb-io/src/sockopts.rs:292:    let rc = unsafe { libc::setsockopt(fd, level, name, std::ptr::addr_of!(value).cast(), len) };
+crates/lb-io/src/lib.rs:343:        let rc = unsafe {
+crates/lb-l4-xdp/src/loader.rs:98:unsafe impl Pod for FlowKey {}
+crates/lb-l4-xdp/src/loader.rs:151:unsafe impl Pod for BackendEntry {}
+crates/lb-l4-xdp/src/loader.rs:197:unsafe impl Pod for FlowKeyV6 {}
+crates/lb-l4-xdp/src/loader.rs:241:unsafe impl Pod for BackendEntryV6 {}
+crates/lb-l4-xdp/ebpf/src/main.rs:45:#[unsafe(link_section = "license")]
+crates/lb-l4-xdp/ebpf/src/main.rs:46:#[unsafe(no_mangle)]
+crates/lb-l4-xdp/ebpf/src/main.rs:260:unsafe fn ptr_at<T>(ctx: &XdpContext, offset: usize) -> Option<*const T> {
+crates/lb-l4-xdp/ebpf/src/main.rs:272:unsafe fn ptr_at_mut<T>(ctx: &XdpContext, offset: usize) -> Option<*mut T> {
+crates/lb-l4-xdp/ebpf/src/main.rs:287:        unsafe {
+crates/lb-l4-xdp/ebpf/src/main.rs:363:    let eth = unsafe { ptr_at::<EthHdr>(ctx, 0).ok_or(())? };
+crates/lb-l4-xdp/ebpf/src/main.rs:365:    let eth_type = u16::from_be(unsafe {
+crates/lb-l4-xdp/ebpf/src/main.rs:371:        let vlan = unsafe { ptr_at::<VlanHdr>(ctx, ETH_HDR_LEN).ok_or(())? };
+crates/lb-l4-xdp/ebpf/src/main.rs:373:        let inner_type = u16::from_be(unsafe {
+crates/lb-l4-xdp/ebpf/src/main.rs:396:    let ip = unsafe { ptr_at::<Ipv4Hdr>(ctx, l3_offset).ok_or(())? };
+crates/lb-l4-xdp/ebpf/src/main.rs:398:    let version_ihl = unsafe { core::ptr::read_unaligned(core::ptr::addr_of!((*ip).version_ihl)) };
+crates/lb-l4-xdp/ebpf/src/main.rs:404:    let protocol = unsafe { core::ptr::read_unaligned(core::ptr::addr_of!((*ip).protocol)) };
+crates/lb-l4-xdp/ebpf/src/main.rs:405:    let src_addr = unsafe { core::ptr::read_unaligned(core::ptr::addr_of!((*ip).src)) };
+crates/lb-l4-xdp/ebpf/src/main.rs:406:    let dst_addr = unsafe { core::ptr::read_unaligned(core::ptr::addr_of!((*ip).dst)) };
+crates/lb-l4-xdp/ebpf/src/main.rs:421:            let tcp = unsafe { ptr_at::<TcpHdr>(ctx, l4_offset).ok_or(())? };
+crates/lb-l4-xdp/ebpf/src/main.rs:423:            let sp = u16::from_be(unsafe {
+crates/lb-l4-xdp/ebpf/src/main.rs:426:            let dp = u16::from_be(unsafe {
+crates/lb-l4-xdp/ebpf/src/main.rs:432:            let udp = unsafe { ptr_at::<UdpHdr>(ctx, l4_offset).ok_or(())? };
+crates/lb-l4-xdp/ebpf/src/main.rs:434:            let sp = u16::from_be(unsafe {
+crates/lb-l4-xdp/ebpf/src/main.rs:437:            let dp = u16::from_be(unsafe {
+crates/lb-l4-xdp/ebpf/src/main.rs:448:    if unsafe { L7_PORTS.get(&dst_port) }.is_some() {
+crates/lb-l4-xdp/ebpf/src/main.rs:464:    let entry: BackendEntry = match unsafe { CONNTRACK.get(&key) } {
+crates/lb-l4-xdp/ebpf/src/main.rs:489:    let eth_m = unsafe { ptr_at_mut::<EthHdr>(ctx, 0).ok_or(())? };
+crates/lb-l4-xdp/ebpf/src/main.rs:491:    unsafe {
+crates/lb-l4-xdp/ebpf/src/main.rs:497:    let ip_m = unsafe { ptr_at_mut::<Ipv4Hdr>(ctx, l3_offset).ok_or(())? };
+crates/lb-l4-xdp/ebpf/src/main.rs:499:    let old_check = unsafe { core::ptr::read_unaligned(core::ptr::addr_of!((*ip_m).check)) };
+crates/lb-l4-xdp/ebpf/src/main.rs:507:    unsafe {
+crates/lb-l4-xdp/ebpf/src/main.rs:517:            let tcp_m = unsafe { ptr_at_mut::<TcpHdrRW>(ctx, l4_offset).ok_or(())? };
+crates/lb-l4-xdp/ebpf/src/main.rs:519:            unsafe {
+crates/lb-l4-xdp/ebpf/src/main.rs:540:            let udp_m = unsafe { ptr_at_mut::<UdpHdr>(ctx, l4_offset).ok_or(())? };
+crates/lb-l4-xdp/ebpf/src/main.rs:542:            unsafe {
+crates/lb-l4-xdp/ebpf/src/main.rs:596:    let ip = unsafe { ptr_at::<Ipv6Hdr>(ctx, l3_offset).ok_or(())? };
+crates/lb-l4-xdp/ebpf/src/main.rs:599:        unsafe { core::ptr::read_unaligned(core::ptr::addr_of!((*ip).next_header)) };
+crates/lb-l4-xdp/ebpf/src/main.rs:600:    let src_addr = unsafe { core::ptr::read_unaligned(core::ptr::addr_of!((*ip).src)) };
+crates/lb-l4-xdp/ebpf/src/main.rs:601:    let dst_addr = unsafe { core::ptr::read_unaligned(core::ptr::addr_of!((*ip).dst)) };
+crates/lb-l4-xdp/ebpf/src/main.rs:611:        let ext = unsafe { ptr_at::<Ipv6ExtHdr>(ctx, off).ok_or(())? };
+crates/lb-l4-xdp/ebpf/src/main.rs:613:        let (nh, len) = unsafe {
+crates/lb-l4-xdp/ebpf/src/main.rs:632:            let tcp = unsafe { ptr_at::<TcpHdr>(ctx, off).ok_or(())? };
+crates/lb-l4-xdp/ebpf/src/main.rs:634:            let sp = u16::from_be(unsafe {
+crates/lb-l4-xdp/ebpf/src/main.rs:637:            let dp = u16::from_be(unsafe {
+crates/lb-l4-xdp/ebpf/src/main.rs:643:            let udp = unsafe { ptr_at::<UdpHdr>(ctx, off).ok_or(())? };
+crates/lb-l4-xdp/ebpf/src/main.rs:645:            let sp = u16::from_be(unsafe {
+crates/lb-l4-xdp/ebpf/src/main.rs:648:            let dp = u16::from_be(unsafe {
+crates/lb-l4-xdp/ebpf/src/main.rs:659:    if unsafe { L7_PORTS.get(&dst_port) }.is_some() {
+crates/lb-l4-xdp/ebpf/src/main.rs:672:    let entry: BackendEntryV6 = match unsafe { CONNTRACK_V6.get(&key) } {
+crates/lb-l4-xdp/ebpf/src/main.rs:696:    let eth_m = unsafe { ptr_at_mut::<EthHdr>(ctx, 0).ok_or(())? };
+crates/lb-l4-xdp/ebpf/src/main.rs:698:    unsafe {
+crates/lb-l4-xdp/ebpf/src/main.rs:704:    let ip_m = unsafe { ptr_at_mut::<Ipv6Hdr>(ctx, l3_offset).ok_or(())? };
+crates/lb-l4-xdp/ebpf/src/main.rs:706:    unsafe {
+crates/lb-l4-xdp/ebpf/src/main.rs:714:            let tcp_m = unsafe { ptr_at_mut::<TcpHdrRW>(ctx, l4_offset).ok_or(())? };
+crates/lb-l4-xdp/ebpf/src/main.rs:716:            unsafe {
+crates/lb-l4-xdp/ebpf/src/main.rs:735:            let udp_m = unsafe { ptr_at_mut::<UdpHdr>(ctx, l4_offset).ok_or(())? };
+crates/lb-l4-xdp/ebpf/src/main.rs:737:            unsafe {
+crates/lb-io/src/ring.rs:50:    unsafe { push_sqe(&mut ring, &nop)? };
+crates/lb-io/src/ring.rs:99:    unsafe { push_sqe(&mut ring, &entry)? };
+crates/lb-io/src/ring.rs:110:    let addr = unsafe { sockaddr_storage_to_socketaddr(&addr_storage, addr_len)? };
+crates/lb-io/src/ring.rs:133:    unsafe { push_sqe(&mut ring, &entry)? };
+crates/lb-io/src/ring.rs:157:    unsafe { push_sqe(&mut ring, &entry)? };
+crates/lb-io/src/ring.rs:182:    unsafe { push_sqe(&mut ring, &entry)? };
+crates/lb-io/src/ring.rs:200:unsafe fn push_sqe(ring: &mut IoUring, entry: &squeue::Entry) -> io::Result<()> {
+crates/lb-io/src/ring.rs:203:    match unsafe { sq.push(entry) } {
+crates/lb-io/src/ring.rs:255:unsafe fn sockaddr_storage_to_socketaddr(
+crates/lb-io/src/ring.rs:260:    let storage_ref = unsafe { &*storage.as_ptr() };
+crates/lb-io/src/ring.rs:273:            let sin = unsafe { &*core::ptr::from_ref(storage_ref).cast::<libc::sockaddr_in>() };
+crates/lb-io/src/ring.rs:289:            let sin6 = unsafe { &*core::ptr::from_ref(storage_ref).cast::<libc::sockaddr_in6>() };
+crates/lb-io/src/ring.rs:345:                unsafe { libc::close(accepted_fd) };
