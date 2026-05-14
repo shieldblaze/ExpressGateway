@@ -123,6 +123,14 @@ impl ChunkedDecoder {
 
     /// Try to parse a chunk-size line from `self.buf`.
     /// Returns `true` if a size line was consumed, `false` if incomplete.
+    ///
+    /// Per RFC 9112 §7.1.1 `chunk-size = 1*HEXDIG`. The lexer rejects
+    /// leading `+`/`-`, any whitespace inside the size token, more than
+    /// 16 hex digits (u64 cap), and accumulates via `checked_shl` so
+    /// silent overflow is impossible on either 64- or 32-bit platforms.
+    /// References: nginx CVE-2013-2028, hyper GHSA-5h46-h7hh-c6x9,
+    /// HAProxy `BUG/MAJOR: mux_h1: fix stack buffer overflow in
+    /// h1_append_chunk_size`.
     fn try_read_size(&mut self) -> Result<bool, H1Error> {
         let Some(crlf_pos) = find_crlf_in(&self.buf) else {
             return Ok(false);
@@ -132,17 +140,18 @@ impl ChunkedDecoder {
             .buf
             .get(..crlf_pos)
             .ok_or(H1Error::InvalidChunkEncoding)?;
-        let size_str =
-            core::str::from_utf8(size_line).map_err(|_| H1Error::InvalidChunkEncoding)?;
 
-        // Chunk extensions (`;key=value`) are allowed but we ignore them.
-        let hex_part = size_str
-            .split(';')
-            .next()
-            .ok_or(H1Error::InvalidChunkEncoding)?;
-        let hex_trimmed = hex_part.trim();
+        // The hex portion is bytes before the first `;` (chunk-ext
+        // separator per RFC 9112 §7.1.1). Operate on raw bytes — do
+        // NOT decode as UTF-8 or trim whitespace; whitespace inside
+        // or around the size token is a protocol violation.
+        let hex_part: &[u8] = size_line.split(|&b| b == b';').next().unwrap_or(size_line);
+
+        let chunk_size_u64 = parse_chunk_size_hex(hex_part)?;
+        // Framing consumers key on `usize`; reject sizes that would
+        // not fit (32-bit platforms — defence vs. silent truncation).
         let chunk_size =
-            usize::from_str_radix(hex_trimmed, 16).map_err(|_| H1Error::InvalidChunkEncoding)?;
+            usize::try_from(chunk_size_u64).map_err(|_| H1Error::InvalidChunkEncoding)?;
 
         // Consume the size line + CRLF.
         let _ = self.buf.split_to(crlf_pos + 2);
@@ -283,6 +292,38 @@ impl Default for ChunkedEncoder {
     fn default() -> Self {
         Self::new()
     }
+}
+
+/// Hand-rolled RFC 9112 §7.1.1 `chunk-size` lexer.
+///
+/// Accepts `1*HEXDIG` (case-insensitive) only. Rejects:
+/// - empty input (no digits);
+/// - more than 16 hex digits (u64 cap, prevents leading-zero pad
+///   attacks like nginx CVE-2013-2028);
+/// - any byte outside `0-9A-Fa-f` (catches `+`, `-`, space, tab, NUL,
+///   and Unicode digits — every variant HAProxy and hyper paid for).
+///
+/// `checked_shl` defends against silent overflow even with the digit
+/// cap in place (belt-and-braces).
+fn parse_chunk_size_hex(line: &[u8]) -> Result<u64, H1Error> {
+    if line.is_empty() {
+        return Err(H1Error::InvalidChunkEncoding);
+    }
+    if line.len() > 16 {
+        return Err(H1Error::InvalidChunkEncoding);
+    }
+    let mut value: u64 = 0;
+    for &b in line {
+        let nibble: u64 = match b {
+            b'0'..=b'9' => u64::from(b - b'0'),
+            b'a'..=b'f' => u64::from(b - b'a' + 10),
+            b'A'..=b'F' => u64::from(b - b'A' + 10),
+            _ => return Err(H1Error::InvalidChunkEncoding),
+        };
+        value = value.checked_shl(4).ok_or(H1Error::InvalidChunkEncoding)?;
+        value |= nibble;
+    }
+    Ok(value)
 }
 
 /// Find `\r\n` in `buf`, returning index of `\r`.

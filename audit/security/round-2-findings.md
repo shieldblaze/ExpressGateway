@@ -524,7 +524,13 @@ Cross-ref:  T1; proto open question Q4.
 
 ### SEC-2-15 — Hyper 1.9.0 smuggling defenses: what it catches vs. what it doesn't
 Severity: info
-Status:   Open (informational reference for SEC-2-01)
+Status:   Open (informational reference for SEC-2-01). Round 8 extended
+the smuggle matrix beyond hyper's wire-decoder layer via the
+strict chunked-size lexer in `crates/lb-h1/src/chunked.rs::parse_chunk_size_hex`
+(ROUND8-L7-02): nginx CVE-2013-2028, hyper GHSA-5h46-h7hh-c6x9, and
+HAProxy `h1_append_chunk_size` rejection rules now run inside our
+ChunkedDecoder rather than relying on hyper's permissive
+`from_str_radix` path.
 Location: `Cargo.lock` `hyper = 1.9.0`; `crates/lb-l7/src/h1_proxy.rs:53-64`
 (hop-by-hop strip list).
 Description: per item #7, I confirm what hyper 1.9.0 catches at
