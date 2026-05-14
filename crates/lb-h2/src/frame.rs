@@ -20,6 +20,8 @@ const FRAME_CONTINUATION: u8 = 0x9;
 const FLAG_END_STREAM: u8 = 0x1;
 const FLAG_ACK: u8 = 0x1;
 const FLAG_END_HEADERS: u8 = 0x4;
+/// PADDED flag (RFC 9113 §6.1 DATA, §6.2 HEADERS, §6.6 PUSH_PROMISE).
+const FLAG_PADDED: u8 = 0x8;
 const FLAG_PRIORITY_FLAG: u8 = 0x20;
 
 /// An HTTP/2 frame.
@@ -124,6 +126,33 @@ pub enum H2Frame {
     },
 }
 
+/// Strip the PADDED-frame envelope: first byte is `Pad Length`, the
+/// trailing `Pad Length` bytes are padding. Returns the inner slice.
+///
+/// References ROUND8-L7-11 / HAProxy `BUG/MEDIUM: mux-h2: Properly
+/// consume padding for DATA frames`. Per RFC 9113 §6.1:
+/// - PADDED flag with zero-byte payload is malformed.
+/// - `Pad Length + 1 > payload.len()` is malformed.
+fn strip_padding(payload: &[u8]) -> Result<&[u8], H2Error> {
+    let pad_len = usize::from(
+        *payload
+            .first()
+            .ok_or_else(|| H2Error::InvalidFrame("PADDED frame with empty payload".to_string()))?,
+    );
+    // Total layout: 1 (pad-length byte) + inner + pad_len.
+    if pad_len + 1 > payload.len() {
+        return Err(H2Error::InvalidFrame(format!(
+            "PADDED pad_length {pad_len} exceeds payload size {} ",
+            payload.len()
+        )));
+    }
+    // Inner slice = [1, payload.len() - pad_len)
+    let inner_end = payload.len() - pad_len;
+    payload
+        .get(1..inner_end)
+        .ok_or_else(|| H2Error::InvalidFrame("PADDED inner slice out of range".to_string()))
+}
+
 /// Read a `u32` from a 4-byte big-endian slice.
 fn read_u32_be(buf: &[u8]) -> Result<u32, H2Error> {
     let b0 = u32::from(*buf.first().ok_or(H2Error::Incomplete)?);
@@ -182,23 +211,48 @@ fn decode_frame_low(
     payload: &[u8],
 ) -> Result<H2Frame, H2Error> {
     match frame_type {
-        FRAME_DATA => Ok(H2Frame::Data {
-            stream_id,
-            payload: Bytes::copy_from_slice(payload),
-            end_stream: flags & FLAG_END_STREAM != 0,
-        }),
+        FRAME_DATA => {
+            // ROUND8-L7-11: RFC 9113 §6.1 — when PADDED is set the
+            // payload is `Pad Length (1) | Data | Padding (PadLength)`.
+            // The decoder MUST strip both ends; failing to do so is
+            // the HAProxy `BUG/MEDIUM: mux-h2: Properly consume
+            // padding for DATA frames` smuggling primitive.
+            let data_slice = if flags & FLAG_PADDED != 0 {
+                strip_padding(payload)?
+            } else {
+                payload
+            };
+            Ok(H2Frame::Data {
+                stream_id,
+                payload: Bytes::copy_from_slice(data_slice),
+                end_stream: flags & FLAG_END_STREAM != 0,
+            })
+        }
         FRAME_HEADERS => {
+            // ROUND8-L7-11: layered stripping when PADDED + PRIORITY
+            // both set. RFC 9113 §6.2 wire layout:
+            //   PADDED only:  `Pad Length (1) | Block | Padding`
+            //   PRIORITY only:`E+Dep+Weight (5) | Block`
+            //   Both:         `Pad Length (1) | E+Dep+Weight (5) |
+            //                  Block | Padding (PadLength)`
+            // Strip padding from the outside first, then peel the
+            // priority block from the inside.
+            let unpadded = if flags & FLAG_PADDED != 0 {
+                strip_padding(payload)?
+            } else {
+                payload
+            };
             let hdr_payload = if flags & FLAG_PRIORITY_FLAG != 0 {
-                if payload.len() < 5 {
+                if unpadded.len() < 5 {
                     return Err(H2Error::InvalidFrame(
                         "HEADERS with PRIORITY flag but payload too short".to_string(),
                     ));
                 }
-                payload
+                unpadded
                     .get(5..)
                     .ok_or_else(|| H2Error::InvalidFrame("HEADERS priority slice".to_string()))?
             } else {
-                payload
+                unpadded
             };
             Ok(H2Frame::Headers {
                 stream_id,
