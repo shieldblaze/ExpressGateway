@@ -54,13 +54,24 @@ use crate::ws_proxy::{self, WsProxy, build_handshake_response_headers, is_h1_upg
 /// header names listed inside the `Connection` header value. Built as
 /// `HeaderName` constants so removal is panic-free at runtime (the
 /// strings are checked at compile time via `HeaderName::from_static`).
+///
+/// RFC 9110 §7.6.1 enumerates exactly these eight header field names as
+/// connection-level (hop-by-hop) controls: `Connection`, `Proxy-Connection`,
+/// `Keep-Alive`, `Proxy-Authenticate`, `Proxy-Authorization`, `TE`,
+/// `Transfer-Encoding`, `Upgrade`. PROTO-2-08 removed the entry
+/// `"trailers"` which appeared here in error: `Trailers` is **not** a
+/// real header field name — it is only a value-token recognised inside
+/// `TE: trailers` and inside the `Trailer:` (singular) declaration
+/// header. RFC 9110 §6.6.2 specifies the actual `Trailer:` header (which
+/// is end-to-end, not hop-by-hop). Adding `keep-alive` (which was
+/// missing) brings the set in line with RFC 9110 §7.6.1.
 static HOP_BY_HOP: [HeaderName; 8] = [
     HeaderName::from_static("connection"),
+    HeaderName::from_static("proxy-connection"),
     HeaderName::from_static("keep-alive"),
     HeaderName::from_static("proxy-authenticate"),
     HeaderName::from_static("proxy-authorization"),
     HeaderName::from_static("te"),
-    HeaderName::from_static("trailers"),
     HeaderName::from_static("transfer-encoding"),
     HeaderName::from_static("upgrade"),
 ];
@@ -907,7 +918,12 @@ pub(crate) fn reject_to_response(rej: &SecurityReject) -> Response<BoxBody<Bytes
 
 /// Strip hop-by-hop headers per RFC 9110 §7.6.1 plus any names listed
 /// inside the `Connection` header value.
-pub(crate) fn strip_hop_by_hop(headers: &mut hyper::HeaderMap) {
+///
+/// Exposed `pub` (rather than `pub(crate)`) so PROTO-2-08 / PROTO-2-07
+/// integration tests can pin the exact strip behaviour. The "stripped"
+/// invariant is also exposed as a compile-time guarantee via
+/// [`crate::stripped_request::StrippedRequest`] (PROTO-2-07).
+pub fn strip_hop_by_hop(headers: &mut hyper::HeaderMap) {
     // Collect Connection-token names BEFORE removing the Connection
     // header itself.
     let extra: Vec<HeaderName> = headers
@@ -1298,17 +1314,19 @@ mod tests {
     }
 
     #[test]
-    fn hop_by_hop_response_strips_te_trailers_and_transfer_encoding() {
+    fn hop_by_hop_response_strips_te_and_transfer_encoding_keeps_trailer() {
         let mut h = map_with(&[
             ("content-type", "text/plain"),
             ("transfer-encoding", "chunked"),
             ("te", "trailers"),
-            ("trailers", "X-Foo"),
+            // RFC 9110 §6.6.2: `Trailer:` is the declaration header and
+            // is end-to-end. PROTO-2-08: must NOT be stripped.
+            ("trailer", "X-Foo"),
         ]);
         strip_hop_by_hop(&mut h);
         assert!(h.get("transfer-encoding").is_none());
         assert!(h.get("te").is_none());
-        assert!(h.get("trailers").is_none());
+        assert_eq!(h.get("trailer").unwrap(), "X-Foo");
         assert_eq!(h.get("content-type").unwrap(), "text/plain");
     }
 

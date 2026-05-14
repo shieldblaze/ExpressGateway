@@ -287,7 +287,7 @@ Cross-ref: lead T8-#7; `code` Q-CODE-2 (Round-3 plan).
 
 ### PROTO-2-08 — `HOP_BY_HOP` in `h1_proxy.rs` lists `trailers` which is not a real header name
 Severity: low
-Status:   Open
+Status:   Proposed-Fix(Wave-2b-2: removed `"trailers"`, added `"keep-alive"`, added `"proxy-connection"`; new `tests/hop_by_hop_set.rs` locks the exact RFC 9110 §7.6.1 set; existing internal test renamed to assert end-to-end `Trailer` is preserved)
 Location: `crates/lb-l7/src/h1_proxy.rs:54-63`. Specifically line 60:
 `HeaderName::from_static("trailers"),`.
 Description: There is no `Trailers` (plural) header in any HTTP
