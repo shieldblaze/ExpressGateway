@@ -127,13 +127,18 @@ impl FlowKey {
 }
 
 /// IPv4 backend entry — matches `BackendEntry` in the ebpf crate.
+///
+/// ROUND8-L4-07: the legacy `flags: u32` field was a
+/// documented-but-unused field (BPF program never read it). Dropped
+/// to save 4 B/entry × 1M entries = 4 MB BPF map memory and to
+/// remove the doc-vs-code drift the audit caught. Callers that were
+/// constructing with `flags = 0` need to drop the argument from
+/// `BackendEntry::new` / `try_new`.
 #[repr(C)]
 #[derive(Clone, Copy, Debug)]
 pub struct BackendEntry {
     /// Index into the per-service Maglev table in userspace.
     pub backend_idx: u32,
-    /// Reserved flag bits; bit 0 means "rewrite and transmit".
-    pub flags: u32,
     /// Backend IPv4 address (network byte order) used by the `XDP_TX` rewrite.
     pub backend_ip: u32,
     /// Backend L4 port (network byte order).
@@ -166,7 +171,6 @@ impl BackendEntry {
     #[must_use]
     pub const fn new(
         backend_idx: u32,
-        flags: u32,
         backend_ip: u32,
         backend_port: u16,
         backend_mac: [u8; 6],
@@ -174,7 +178,6 @@ impl BackendEntry {
     ) -> Self {
         Self {
             backend_idx,
-            flags,
             backend_ip,
             backend_port,
             pad: 0,
@@ -199,7 +202,6 @@ impl BackendEntry {
     /// generates a flow to port 0).
     pub fn try_new(
         backend_idx: u32,
-        flags: u32,
         backend_ip: u32,
         backend_port: u16,
         backend_mac: [u8; 6],
@@ -217,7 +219,6 @@ impl BackendEntry {
         }
         Ok(Self::new(
             backend_idx,
-            flags,
             backend_ip,
             backend_port,
             backend_mac,
@@ -269,13 +270,13 @@ impl FlowKeyV6 {
 }
 
 /// IPv6 backend entry — matches `BackendEntryV6` in the ebpf crate.
+///
+/// ROUND8-L4-07: dropped the legacy `flags: u32`. See [`BackendEntry`].
 #[repr(C)]
 #[derive(Clone, Copy, Debug)]
 pub struct BackendEntryV6 {
     /// Index into the userspace Maglev table.
     pub backend_idx: u32,
-    /// Reserved flag bits.
-    pub flags: u32,
     /// Backend IPv6 address (16 raw bytes).
     pub backend_ip: [u8; 16],
     /// Backend L4 port (network byte order).
@@ -301,7 +302,6 @@ impl BackendEntryV6 {
     #[must_use]
     pub const fn new(
         backend_idx: u32,
-        flags: u32,
         backend_ip: [u8; 16],
         backend_port: u16,
         backend_mac: [u8; 6],
@@ -309,7 +309,6 @@ impl BackendEntryV6 {
     ) -> Self {
         Self {
             backend_idx,
-            flags,
             backend_ip,
             backend_port,
             pad: 0,
@@ -328,7 +327,6 @@ impl BackendEntryV6 {
     /// Returns [`XdpLoaderError::BackendUnpopulated`].
     pub fn try_new(
         backend_idx: u32,
-        flags: u32,
         backend_ip: [u8; 16],
         backend_port: u16,
         backend_mac: [u8; 6],
@@ -346,7 +344,6 @@ impl BackendEntryV6 {
         }
         Ok(Self::new(
             backend_idx,
-            flags,
             backend_ip,
             backend_port,
             backend_mac,
@@ -361,17 +358,25 @@ impl BackendEntryV6 {
 //
 // FlowKey:        4 + 4 + 2 + 2 + 1 + 3 = 16
 // FlowKeyV6:      16 + 16 + 2 + 2 + 1 + 3 = 40
-// BackendEntry:   4 + 4 + 4 + 2 + 2 + 6 + 6 = 28
-// BackendEntryV6: 4 + 4 + 16 + 2 + 2 + 6 + 6 = 40
+// BackendEntry:   4 + 4 + 2 + 2 + 6 + 6 = 24  (ROUND8-L4-07: dropped 4 B flags)
+// BackendEntryV6: 4 + 16 + 2 + 2 + 6 + 6 = 36 (ROUND8-L4-07: dropped 4 B flags)
 
 /// Expected wire size of [`FlowKey`] (matches BPF-side struct).
 pub const FLOWKEY_SIZE: usize = 16;
 /// Expected wire size of [`FlowKeyV6`] (matches BPF-side struct).
 pub const FLOWKEY_V6_SIZE: usize = 40;
 /// Expected wire size of [`BackendEntry`] (matches BPF-side struct).
-pub const BACKEND_ENTRY_SIZE: usize = 28;
+///
+/// ROUND8-L4-07: down from 28 → 24 after dropping the
+/// documented-but-unused `flags: u32` field. Saves 4 B/entry; at
+/// CONNTRACK's 1M max_entries that is 4 MB BPF map memory.
+pub const BACKEND_ENTRY_SIZE: usize = 24;
 /// Expected wire size of [`BackendEntryV6`] (matches BPF-side struct).
-pub const BACKEND_ENTRY_V6_SIZE: usize = 40;
+///
+/// ROUND8-L4-07: down from 40 → 36 (same rationale as
+/// [`BACKEND_ENTRY_SIZE`]; CONNTRACK_V6 max_entries is 512k →
+/// 2 MB saved).
+pub const BACKEND_ENTRY_V6_SIZE: usize = 36;
 
 const _: () = assert!(core::mem::size_of::<FlowKey>() == FLOWKEY_SIZE);
 const _: () = assert!(core::mem::size_of::<FlowKeyV6>() == FLOWKEY_V6_SIZE);

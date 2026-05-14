@@ -96,9 +96,11 @@ fn test_flowkeyv6_pad_zeroed_after_new() {
 
 #[test]
 fn test_backend_entry_pad_zeroed_after_new() {
+    // ROUND8-L4-07: layout post-flags-removal is
+    //   idx(4) | bip(4) | bport(2) | pad(2) | bmac(6) | smac(6) = 24
+    // Pad lives at bytes [10..12].
     let v = BackendEntry::new(
         0xFFFF_FFFF, // backend_idx
-        0xFFFF_FFFF, // flags
         0xFFFF_FFFF, // backend_ip
         0xFFFF,      // backend_port
         [0xFF; 6],   // backend_mac
@@ -106,25 +108,25 @@ fn test_backend_entry_pad_zeroed_after_new() {
     );
     let bytes: [u8; BACKEND_ENTRY_SIZE] = to_bytes(v);
 
-    // Layout: idx(4) | flags(4) | bip(4) | bport(2) | pad(2) | bmac(6) | smac(6) = 28
-    // Pad lives at bytes [14..16].
     assert_eq!(
-        &bytes[14..16],
+        &bytes[10..12],
         &[0u8; 2],
         "BackendEntry::new must zero-initialise the 2-byte pad between \
          backend_port and backend_mac; got pad={:?} (full bytes={:?})",
-        &bytes[14..16],
+        &bytes[10..12],
         bytes
     );
-    assert!(bytes[..14].iter().all(|&b| b == 0xFF));
-    assert!(bytes[16..].iter().all(|&b| b == 0xFF));
+    assert!(bytes[..10].iter().all(|&b| b == 0xFF));
+    assert!(bytes[12..].iter().all(|&b| b == 0xFF));
 }
 
 #[test]
 fn test_backend_entry_v6_pad_zeroed_after_new() {
+    // ROUND8-L4-07: layout post-flags-removal is
+    //   idx(4) | bip(16) | bport(2) | pad(2) | bmac(6) | smac(6) = 36
+    // Pad lives at bytes [22..24].
     let v = BackendEntryV6::new(
         0xFFFF_FFFF, // backend_idx
-        0xFFFF_FFFF, // flags
         [0xFF; 16],  // backend_ip
         0xFFFF,      // backend_port
         [0xFF; 6],   // backend_mac
@@ -132,18 +134,16 @@ fn test_backend_entry_v6_pad_zeroed_after_new() {
     );
     let bytes: [u8; BACKEND_ENTRY_V6_SIZE] = to_bytes(v);
 
-    // Layout: idx(4) | flags(4) | bip(16) | bport(2) | pad(2) | bmac(6) | smac(6) = 40
-    // Pad lives at bytes [26..28].
     assert_eq!(
-        &bytes[26..28],
+        &bytes[22..24],
         &[0u8; 2],
         "BackendEntryV6::new must zero-initialise the 2-byte pad; \
          got pad={:?} (full bytes={:?})",
-        &bytes[26..28],
+        &bytes[22..24],
         bytes
     );
-    assert!(bytes[..26].iter().all(|&b| b == 0xFF));
-    assert!(bytes[28..].iter().all(|&b| b == 0xFF));
+    assert!(bytes[..22].iter().all(|&b| b == 0xFF));
+    assert!(bytes[24..].iter().all(|&b| b == 0xFF));
 }
 
 /// CODE-2-07: the compile-time size assertions in `loader.rs` already

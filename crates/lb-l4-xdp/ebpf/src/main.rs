@@ -200,11 +200,17 @@ pub struct FlowKeyV6 {
 
 /// Conntrack value for IPv4 flows. Carries the full rewrite state so
 /// the BPF program needs no secondary lookup to run an `XDP_TX`.
+///
+/// ROUND8-L4-07: the `flags: u32` field that was here was a
+/// documented-but-unused field — the BPF program never read it and
+/// no userspace code set bits in it. The Cilium-class doc-vs-code
+/// drift was "userspace doc says bit 0 means 'rewrite and transmit',
+/// BPF never checks any bit." Dropping the field saves 4 B/entry ×
+/// 1M entries = 4 MB BPF map memory.
 #[repr(C)]
 #[derive(Clone, Copy)]
 pub struct BackendEntry {
     pub backend_idx: u32,
-    pub flags: u32,
     /// Backend IPv4 addr (network byte order).
     pub backend_ip: u32,
     /// Backend L4 port (network byte order).
@@ -221,7 +227,6 @@ pub struct BackendEntry {
 #[derive(Clone, Copy)]
 pub struct BackendEntryV6 {
     pub backend_idx: u32,
-    pub flags: u32,
     pub backend_ip: [u8; 16],
     pub backend_port: u16,
     pub _pad: u16,
