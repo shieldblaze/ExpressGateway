@@ -593,7 +593,7 @@ Cross-ref: `code` evaluates the alternative for Round-3 plan
 
 ### REL-2-12 — CONNTRACK saturation has no userspace metric or alert
 Severity: high
-Status:   Open
+Status:   Proposed-Fix(c60180d)
 Location: `crates/lb-l4-xdp/src/loader.rs`; `crates/lb/src/xdp.rs`; XDP `STATS` map (kernel side)
 
 Description: The XDP data plane (Pillar 4b) maintains a CONNTRACK map
