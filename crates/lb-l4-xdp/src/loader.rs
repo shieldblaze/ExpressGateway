@@ -23,6 +23,13 @@ use aya::{
 };
 use aya_obj::{Object, ParseError};
 
+// SEC-2-12: belt-and-suspenders ELF license check. We parse the ELF
+// *again* with `object` (a kernel-free, no_std-friendly parser) so the
+// assertion runs before aya's `EbpfLoader::load` ever touches the
+// BPF syscall. `object::Object` and `aya_obj::Object` share a name —
+// alias them to avoid the import collision.
+use object::{File as ObjectFile, Object as ObjectTrait, ObjectSection as ObjectSectionTrait};
+
 // ---------------------------------------------------------------------------
 // EBPF-2-05: stable map pin names. These MUST match the `#[map(name =
 // "...")]` strings in `crates/lb-l4-xdp/ebpf/src/main.rs`. Pin files
@@ -252,6 +259,57 @@ pub enum XdpLoaderError {
     /// the map type didn't match `u64`).
     #[error("stats export install failed: {0}")]
     StatsExport(String),
+
+    /// SEC-2-12: the loaded ELF's `license` section is missing or
+    /// does not contain the byte-for-byte string `"GPL\0"`. Belt-and-
+    /// suspenders against an accidental rebuild that strips the
+    /// `#[link_section = "license"]` static (e.g. a different
+    /// toolchain or a typo in the ebpf crate's root).
+    ///
+    /// This is a fail-fast: most BPF helpers used by lb-xdp are
+    /// `gpl_only=true` and the kernel verifier rejects the program
+    /// otherwise. Catching it here gives the operator a clear error
+    /// at startup instead of `EACCES` at `bpf(BPF_PROG_LOAD)`.
+    #[error("bpf elf license check failed: {0}")]
+    LicenseInvalid(String),
+}
+
+/// SEC-2-12: required value of the ELF `license` section.
+///
+/// Kernel-side `bpf_attr.license` is a NUL-terminated C string and
+/// must compare equal to `"GPL"` (or another GPL-compatible string).
+/// We compile the eBPF crate with `#[link_section = "license"]
+/// #[used] pub static LICENSE: [u8; 4] = *b"GPL\0";`, so the section
+/// payload is exactly four bytes including the trailing NUL.
+const EXPECTED_LICENSE: &[u8] = b"GPL\0";
+
+/// SEC-2-12: parse the ELF and assert its `license` section equals
+/// `"GPL\0"`. Returns [`XdpLoaderError::LicenseInvalid`] on any
+/// mismatch (missing section, wrong contents, unreadable data).
+///
+/// Pulled out into a free function so unit tests can synthesise an
+/// ELF without the section and prove the assertion trips.
+fn assert_license_is_gpl(elf: &[u8]) -> Result<(), XdpLoaderError> {
+    let parsed = ObjectFile::parse(elf).map_err(|e| {
+        XdpLoaderError::LicenseInvalid(format!("could not parse ELF for license check: {e}"))
+    })?;
+    let section = parsed.section_by_name("license").ok_or_else(|| {
+        XdpLoaderError::LicenseInvalid(
+            "ELF is missing the `license` section — rebuild the lb-xdp ebpf crate \
+             with #[link_section = \"license\"] (see EBPF-2-01)"
+                .to_owned(),
+        )
+    })?;
+    let data = section.data().map_err(|e| {
+        XdpLoaderError::LicenseInvalid(format!("could not read `license` section: {e}"))
+    })?;
+    if data != EXPECTED_LICENSE {
+        return Err(XdpLoaderError::LicenseInvalid(format!(
+            "expected {EXPECTED_LICENSE:?}, got {data:?} — the eBPF crate's \
+             LICENSE static may have been overwritten or stripped by a custom toolchain",
+        )));
+    }
+    Ok(())
 }
 
 /// EBPF-2-04: outcome of [`XdpLoader::attach_with_fallback`].
@@ -341,6 +399,13 @@ impl XdpLoader {
         elf: &[u8],
         pin_path: Option<&std::path::Path>,
     ) -> Result<Self, XdpLoaderError> {
+        // SEC-2-12: belt-and-suspenders. Verify the ELF declares
+        // `license = "GPL\0"` BEFORE handing it to aya / the kernel.
+        // The kernel verifier would reject most programs on a wrong
+        // license anyway, but doing it here gives the operator a
+        // clear "rebuild the ebpf crate" message at startup instead
+        // of `EACCES` deep inside `bpf(BPF_PROG_LOAD)`.
+        assert_license_is_gpl(elf)?;
         let mut loader = EbpfLoader::new();
         if let Some(p) = pin_path {
             loader.map_pin_path(p);
@@ -635,13 +700,22 @@ mod tests {
     use super::*;
 
     /// Garbage bytes must produce an `XdpLoaderError`, not a panic.
+    ///
+    /// SEC-2-12: the license guard now runs before aya touches the
+    /// bytes, so garbage trips [`XdpLoaderError::LicenseInvalid`]
+    /// (the `object` parser rejects the unrecognised header). Either
+    /// variant is acceptable here — the contract is "no panic on
+    /// malformed input".
     #[test]
     fn load_garbage_bytes_rejected() {
         let garbage = [0u8; 16];
         let result = XdpLoader::load_from_bytes(&garbage);
         assert!(
-            matches!(result, Err(XdpLoaderError::Load(_))),
-            "expected Load error for garbage bytes, got {result:?}",
+            matches!(
+                result,
+                Err(XdpLoaderError::Load(_) | XdpLoaderError::LicenseInvalid(_))
+            ),
+            "expected Load or LicenseInvalid error for garbage bytes, got {result:?}",
         );
     }
 
@@ -650,7 +724,10 @@ mod tests {
     fn load_empty_bytes_rejected() {
         let empty: [u8; 0] = [];
         let result = XdpLoader::load_from_bytes(&empty);
-        assert!(matches!(result, Err(XdpLoaderError::Load(_))));
+        assert!(matches!(
+            result,
+            Err(XdpLoaderError::Load(_) | XdpLoaderError::LicenseInvalid(_))
+        ));
     }
 
     /// Each `XdpMode` variant must map to exactly the expected aya flag set.
@@ -670,6 +747,147 @@ mod tests {
             XdpMode::Drv.to_flags().bits(),
             XdpMode::Hw.to_flags().bits()
         );
+    }
+
+    /// SEC-2-12: a well-formed ELF that lacks a `license` section
+    /// must be rejected with [`XdpLoaderError::LicenseInvalid`].
+    /// Uses a tiny hand-crafted ELF (header only, no sections of
+    /// note) — large enough that `object::File::parse` accepts the
+    /// header but small enough that `section_by_name("license")`
+    /// returns `None`.
+    #[test]
+    #[allow(clippy::panic)] // crate-level lint, intentional in test code
+    fn license_check_rejects_elf_without_license_section() {
+        // 64-bit little-endian ELF header, type=REL, machine=BPF.
+        // Section header table empty (e_shnum=0). `object` parses
+        // this as a valid ELF with zero sections.
+        let mut elf = vec![0u8; 64];
+        elf[0..4].copy_from_slice(&[0x7f, b'E', b'L', b'F']);
+        elf[4] = 2; // EI_CLASS = ELFCLASS64
+        elf[5] = 1; // EI_DATA  = ELFDATA2LSB
+        elf[6] = 1; // EI_VERSION = EV_CURRENT
+        // e_type = ET_REL (1)
+        elf[16..18].copy_from_slice(&1u16.to_le_bytes());
+        // e_machine = EM_BPF (247)
+        elf[18..20].copy_from_slice(&247u16.to_le_bytes());
+        // e_version = EV_CURRENT (1)
+        elf[20..24].copy_from_slice(&1u32.to_le_bytes());
+        // e_ehsize = 64
+        elf[52..54].copy_from_slice(&64u16.to_le_bytes());
+
+        let result = assert_license_is_gpl(&elf);
+        match result {
+            Err(XdpLoaderError::LicenseInvalid(msg)) => {
+                assert!(
+                    msg.contains("license"),
+                    "error must mention the missing section, got: {msg}",
+                );
+            }
+            other => panic!("expected LicenseInvalid, got {other:?}"),
+        }
+    }
+
+    /// SEC-2-12: an ELF whose `license` section contains the wrong
+    /// bytes (e.g. `"BSD\0"`) must also be rejected. This is the
+    /// case a misconfigured toolchain or accidental overwrite would
+    /// produce.
+    ///
+    /// Constructs a minimal valid 64-bit LSB ELF with exactly one
+    /// section named `license` whose payload is `"BSD\0"`. The
+    /// section-name string table lives in section index 2.
+    #[test]
+    #[allow(clippy::panic)] // crate-level lint, intentional in test code
+    fn license_check_rejects_wrong_payload() {
+        let elf = build_elf_with_license_section(b"BSD\0");
+        let result = assert_license_is_gpl(&elf);
+        match result {
+            Err(XdpLoaderError::LicenseInvalid(msg)) => {
+                assert!(
+                    msg.contains("BSD") || msg.contains("expected"),
+                    "error must surface the actual bytes, got: {msg}",
+                );
+            }
+            other => panic!("expected LicenseInvalid for BSD license, got {other:?}"),
+        }
+    }
+
+    /// SEC-2-12: the happy path — a `license` section containing
+    /// exactly `"GPL\0"` must be accepted.
+    #[test]
+    fn license_check_accepts_gpl_payload() {
+        let elf = build_elf_with_license_section(b"GPL\0");
+        let result = assert_license_is_gpl(&elf);
+        assert!(
+            result.is_ok(),
+            "well-formed ELF with GPL license must pass, got {result:?}",
+        );
+    }
+
+    /// Test helper: emit a minimal 64-bit LSB ELF with three
+    /// sections (NULL, `.shstrtab`, `license`). The `license`
+    /// section's content is `payload`.
+    ///
+    /// Kept inside `tests` so we can lean on `unwrap`/`expect` —
+    /// the crate-level `#![deny(clippy::unwrap_used)]` is relaxed
+    /// for test code by the `cfg_attr(test, allow(...))` pragma in
+    /// `lib.rs`.
+    fn build_elf_with_license_section(payload: &[u8]) -> Vec<u8> {
+        // Layout:
+        //   [0  ..64]   ELF header
+        //   [64 ..64+N]  section data:
+        //     [shstrtab payload]  "\0.shstrtab\0license\0"
+        //     [license payload]   payload
+        //   [...]   section header table (3 entries × 64 bytes)
+        const EHDR_SIZE: usize = 64;
+        const SHDR_SIZE: usize = 64;
+
+        let shstr = b"\0.shstrtab\0license\0";
+        let shstr_off = EHDR_SIZE;
+        let shstr_size = shstr.len();
+        let license_off = shstr_off + shstr_size;
+        let license_size = payload.len();
+        let shtab_off = license_off + license_size;
+
+        let total = shtab_off + 3 * SHDR_SIZE;
+        let mut elf = vec![0u8; total];
+
+        // --- ELF header ---
+        elf[0..4].copy_from_slice(&[0x7f, b'E', b'L', b'F']);
+        elf[4] = 2; // ELFCLASS64
+        elf[5] = 1; // ELFDATA2LSB
+        elf[6] = 1; // EV_CURRENT
+        elf[16..18].copy_from_slice(&1u16.to_le_bytes()); // e_type = ET_REL
+        elf[18..20].copy_from_slice(&247u16.to_le_bytes()); // e_machine = EM_BPF
+        elf[20..24].copy_from_slice(&1u32.to_le_bytes()); // e_version
+        // e_shoff (64-bit) at offset 40
+        elf[40..48].copy_from_slice(&(shtab_off as u64).to_le_bytes());
+        elf[52..54].copy_from_slice(&(EHDR_SIZE as u16).to_le_bytes()); // e_ehsize
+        elf[58..60].copy_from_slice(&(SHDR_SIZE as u16).to_le_bytes()); // e_shentsize
+        elf[60..62].copy_from_slice(&3u16.to_le_bytes()); // e_shnum
+        elf[62..64].copy_from_slice(&1u16.to_le_bytes()); // e_shstrndx = 1
+
+        // --- section payloads ---
+        elf[shstr_off..shstr_off + shstr_size].copy_from_slice(shstr);
+        elf[license_off..license_off + license_size].copy_from_slice(payload);
+
+        // --- section header table ---
+        // Section 0: SHN_UNDEF — all zeros (already zeroed).
+
+        // Section 1: .shstrtab
+        let s1 = shtab_off + SHDR_SIZE;
+        elf[s1..s1 + 4].copy_from_slice(&1u32.to_le_bytes()); // sh_name = 1 (".shstrtab")
+        elf[s1 + 4..s1 + 8].copy_from_slice(&3u32.to_le_bytes()); // sh_type = SHT_STRTAB
+        elf[s1 + 24..s1 + 32].copy_from_slice(&(shstr_off as u64).to_le_bytes()); // sh_offset
+        elf[s1 + 32..s1 + 40].copy_from_slice(&(shstr_size as u64).to_le_bytes()); // sh_size
+
+        // Section 2: license
+        let s2 = shtab_off + 2 * SHDR_SIZE;
+        elf[s2..s2 + 4].copy_from_slice(&11u32.to_le_bytes()); // sh_name = 11 ("license")
+        elf[s2 + 4..s2 + 8].copy_from_slice(&1u32.to_le_bytes()); // sh_type = SHT_PROGBITS
+        elf[s2 + 24..s2 + 32].copy_from_slice(&(license_off as u64).to_le_bytes()); // sh_offset
+        elf[s2 + 32..s2 + 40].copy_from_slice(&(license_size as u64).to_le_bytes()); // sh_size
+
+        elf
     }
 
     #[test]

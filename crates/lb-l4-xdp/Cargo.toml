@@ -25,8 +25,13 @@ aya = { workspace = true }
 # CAP_BPF because we never ask aya to create maps.
 aya-obj = { workspace = true }
 
-# EBPF-2-01: `object` is a no_std-friendly ELF parser. Already a
-# transitive dep of `aya-obj`, so this entry pulls a fresh dev-dep view
-# without adding a new crate to the lockfile graph.
-[target.'cfg(target_os = "linux")'.dev-dependencies]
+# SEC-2-12: `object` is a no_std-friendly ELF parser. Already a
+# transitive dep of `aya-obj`, so promoting it from dev-dep to a
+# regular dep adds no new crate to the lockfile graph. We need it
+# as a runtime dep (not just dev) because the
+# `XdpLoader::load_from_bytes` license assertion runs in production,
+# not only in tests.
+#
+# Wave-1 (EBPF-2-01) used it only for the ELF-section regression
+# tests; Wave-2 (SEC-2-12) extends that into a startup-time check.
 object = { version = "0.36", default-features = false, features = ["read", "std"] }
