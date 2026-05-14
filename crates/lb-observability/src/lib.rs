@@ -41,7 +41,8 @@ pub mod tracing_propagation;
 pub mod xdp_metrics;
 
 pub use label_budget::{
-    CANONICAL_LABELS, DEFAULT_MAX_LABEL_CARDINALITY, LabelBudget, LabelBudgetError,
+    CANONICAL_LABELS, CardinalityErr, DEFAULT_MAX_LABEL_CARDINALITY, EnforcedLabelBudget,
+    LabelBudget, LabelBudgetError, MAX_ROUTES_BUDGET,
 };
 pub use log::{LogFormat, TracingConfig, TracingError, init_tracing};
 pub use probes::{ProbeRegistry, ProbeState};

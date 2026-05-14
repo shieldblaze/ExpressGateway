@@ -1466,10 +1466,16 @@ async fn async_main() -> anyhow::Result<()> {
             .map(|l| l.backends.len())
             .max()
             .unwrap_or(0);
+        // ROUND8-OPS-05: route fan-out is bounded by MAX_ROUTES_BUDGET,
+        // NOT by the literal `1` placeholder. The worst-case product
+        // here MUST match the ceiling the runtime per-emission guard
+        // (`EnforcedLabelBudget`) enforces — otherwise the startup
+        // gate would pass while the runtime guard refuses tuples a
+        // few requests in.
         let budget = lb_observability::LabelBudget::from_config_shape(
             listeners,
             backends_per,
-            1,
+            lb_observability::MAX_ROUTES_BUDGET,
             lb_observability::DEFAULT_MAX_LABEL_CARDINALITY,
         );
         budget
