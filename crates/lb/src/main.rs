@@ -1345,6 +1345,14 @@ async fn async_main() -> anyhow::Result<()> {
         .map_err(|e| anyhow::anyhow!("XDP metric registration failed: {e}"))?;
 
     // ── optional admin HTTP listener (GET /metrics, GET /livez …) ──
+    //
+    // SEC-2-06 (Wave 2c-2): wire `AdminAuthGate` so the admin
+    // listener (a) refuses to start on a non-loopback bind without
+    // explicit `[admin].allow_non_loopback = true`, and (b) requires
+    // a `Authorization: Bearer <token>` header on
+    // information-bearing endpoints (`/metrics`) when
+    // `[admin].api_token_hash` is set. Probe endpoints stay
+    // anonymously accessible so the kubelet keeps working.
     let admin_cancel = CancellationToken::new();
     if let Some(obs) = config.observability.as_ref() {
         if let Some(bind_str) = obs.metrics_bind.as_deref() {
@@ -1352,9 +1360,33 @@ async fn async_main() -> anyhow::Result<()> {
                 .trim()
                 .parse()
                 .with_context(|| format!("invalid observability.metrics_bind: {bind_str}"))?;
-            match admin_http::serve_with_probes(
+            // Resolve `[admin]` block knobs (default: no token, no
+            // non-loopback escape hatch).
+            let admin_cfg = config.admin.as_ref();
+            let token_hash = admin_cfg
+                .and_then(|a| a.api_token_hash.as_deref())
+                .map(|hex| {
+                    lb_security::AdminTokenHash::from_hex(hex).map_err(|_| {
+                        anyhow::anyhow!(
+                            "[admin].api_token_hash must be exactly 64 hex chars (SHA-256)"
+                        )
+                    })
+                })
+                .transpose()?;
+            let allow_non_loopback = admin_cfg.is_some_and(|a| a.allow_non_loopback);
+            // SEC-2-06: refuse to start if non-loopback bind without
+            // explicit override (foot-gun guard).
+            lb_security::AdminAuthGate::validate_bind(
+                bind_addr,
+                allow_non_loopback,
+                token_hash.is_some(),
+            )
+            .map_err(|e| anyhow::anyhow!("admin bind refused: {e}"))?;
+            let gate = Arc::new(lb_security::AdminAuthGate::new(token_hash));
+            match admin_http::serve_with_auth(
                 Arc::clone(&metrics),
                 Arc::clone(&probes),
+                Some(Arc::clone(&gate)),
                 bind_addr,
                 admin_cancel.clone(),
             )
@@ -1363,6 +1395,7 @@ async fn async_main() -> anyhow::Result<()> {
                 Ok(local) => tracing::info!(
                     address = %local,
                     protocol = "admin-http",
+                    bearer_auth = gate.enforced(),
                     "admin listener started (/metrics, /livez, /readyz, /startupz, /healthz)"
                 ),
                 Err(e) => {
@@ -2307,6 +2340,36 @@ mod tests {
             msg.contains("h1z"),
             "error must name the offending value: {msg}"
         );
+    }
+
+    // ── SEC-2-06 Wave 2c-2 proof: non-loopback admin bind refused ──
+    //
+    // The `AdminAuthGate::validate_bind` defence runs BEFORE the
+    // admin HTTP listener binds; a `0.0.0.0` bind without
+    // `allow_non_loopback = true` must trigger a hard startup
+    // refusal. Pairs with the `test_admin_403_without_token`
+    // integration test inside `lb_observability::admin_http` which
+    // verifies the runtime gate also rejects un-authenticated
+    // requests once bound.
+    #[test]
+    fn test_non_loopback_refused() {
+        use lb_security::{AdminAuthGate, AdminBindError};
+        let bind: SocketAddr = "0.0.0.0:9090".parse().unwrap();
+        let err = AdminAuthGate::validate_bind(bind, false, false).unwrap_err();
+        assert!(
+            matches!(err, AdminBindError::NonLoopbackWithoutOverride { .. }),
+            "expected non-loopback refusal, got: {err:?}"
+        );
+        // Loopback is always OK.
+        AdminAuthGate::validate_bind("127.0.0.1:9090".parse().unwrap(), false, false).unwrap();
+        // allow_non_loopback without token is also refused.
+        let err2 = AdminAuthGate::validate_bind(bind, true, false).unwrap_err();
+        assert!(matches!(
+            err2,
+            AdminBindError::PublicBindWithoutToken { .. }
+        ));
+        // With both override + token, bind is allowed.
+        AdminAuthGate::validate_bind(bind, true, true).unwrap();
     }
 
     // ── SEC-2-04 Wave 2c-2 proof: per-IP cap enforced at accept ────

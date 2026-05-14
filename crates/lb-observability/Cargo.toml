@@ -18,6 +18,10 @@ dashmap = { workspace = true }
 # the zero-valued stub from the same crate so dev/test builds
 # compile unchanged.
 lb-l4-xdp = { path = "../lb-l4-xdp" }
+# SEC-2-06 (Wave 2c-2): `AdminAuthGate` provides the bearer-token
+# enforcement layer + bind-loopback validator. The dep flows in
+# one direction only (`lb-security` does NOT depend on lb-observability).
+lb-security = { path = "../lb-security" }
 # Pillar 3b (Task #21): prometheus-backed metrics registry + text
 # exposition. `default-features = false` drops the protobuf family.
 prometheus = { workspace = true }

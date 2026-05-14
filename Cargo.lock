@@ -1607,6 +1607,7 @@ dependencies = [
  "hyper",
  "hyper-util",
  "lb-l4-xdp",
+ "lb-security",
  "prometheus",
  "thiserror 2.0.18",
  "tokio",

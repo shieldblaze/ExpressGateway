@@ -29,6 +29,8 @@ use hyper_util::rt::TokioIo;
 use tokio::net::TcpListener;
 use tokio_util::sync::CancellationToken;
 
+use lb_security::AdminAuthGate;
+
 use crate::MetricsRegistry;
 use crate::probes::{ProbeRegistry, ProbeState};
 use crate::prometheus_exposition::{CONTENT_TYPE, render_text};
@@ -38,6 +40,13 @@ use crate::prometheus_exposition::{CONTENT_TYPE, render_text};
 struct AdminService {
     registry: Arc<MetricsRegistry>,
     probes: Arc<ProbeRegistry>,
+    /// SEC-2-06 (Wave 2c-2): when present every request must carry
+    /// `Authorization: Bearer <token>` whose SHA-256 matches the gate.
+    /// Liveness probes (`/livez`, `/healthz`) are exempt so k8s
+    /// kubelet can still verify the process is alive even without
+    /// the admin token — the gateway's livez/readyz semantics are
+    /// not secret.
+    auth: Option<Arc<AdminAuthGate>>,
 }
 
 impl Service<hyper::Request<Incoming>> for AdminService {
@@ -48,17 +57,40 @@ impl Service<hyper::Request<Incoming>> for AdminService {
     fn call(&self, request: hyper::Request<Incoming>) -> Self::Future {
         let reg_arc = Arc::clone(&self.registry);
         let probes = Arc::clone(&self.probes);
-        Box::pin(async move { Ok(route(&reg_arc, &probes, &request)) })
+        let auth = self.auth.clone();
+        Box::pin(async move { Ok(route(&reg_arc, &probes, auth.as_deref(), &request)) })
     }
+}
+
+/// SEC-2-06: gate the request on the bearer-token check. Liveness +
+/// startup probes are exempt — k8s probes them anonymously over
+/// loopback and they reveal no secrets.
+fn is_probe_path(path: &str) -> bool {
+    matches!(path, "/livez" | "/healthz" | "/startupz" | "/readyz")
 }
 
 fn route(
     registry: &MetricsRegistry,
     probes: &ProbeRegistry,
+    auth: Option<&AdminAuthGate>,
     request: &hyper::Request<Incoming>,
 ) -> Response<Full<Bytes>> {
     if request.method() != http::Method::GET {
         return plain(StatusCode::METHOD_NOT_ALLOWED, "method not allowed\n");
+    }
+    // SEC-2-06 Wave 2c-2: enforce bearer-token auth on
+    // information-bearing endpoints (`/metrics`). Probe endpoints
+    // are exempt — k8s probes them anonymously over loopback.
+    if let Some(gate) = auth {
+        if gate.enforced() && !is_probe_path(request.uri().path()) {
+            let header = request
+                .headers()
+                .get(http::header::AUTHORIZATION)
+                .and_then(|h| h.to_str().ok());
+            if gate.authorize(header).is_err() {
+                return plain(StatusCode::FORBIDDEN, "forbidden\n");
+            }
+        }
     }
     match request.uri().path() {
         "/metrics" => {
@@ -169,13 +201,45 @@ pub async fn serve_with_probes(
     addr: SocketAddr,
     shutdown: CancellationToken,
 ) -> io::Result<SocketAddr> {
+    serve_with_auth(registry, probes, None, addr, shutdown).await
+}
+
+/// SEC-2-06 (Wave 2c-2): admin HTTP listener with bearer-token
+/// enforcement. `auth = None` matches [`serve_with_probes`] semantics
+/// (no auth required); `auth = Some(gate)` enforces
+/// `Authorization: Bearer <token>` on every information-bearing
+/// endpoint. Liveness / readiness / startup probes remain
+/// anonymously accessible so k8s kubelet can verify the process
+/// without the admin token.
+///
+/// The caller is expected to have validated the bind address
+/// against [`AdminAuthGate::validate_bind`] before invoking this
+/// function — the bind guard is a startup-time concern owned by
+/// `lb/src/main.rs`.
+///
+/// # Errors
+///
+/// Same conditions as [`serve_with_probes`].
+pub async fn serve_with_auth(
+    registry: Arc<MetricsRegistry>,
+    probes: Arc<ProbeRegistry>,
+    auth: Option<Arc<AdminAuthGate>>,
+    addr: SocketAddr,
+    shutdown: CancellationToken,
+) -> io::Result<SocketAddr> {
     let listener = TcpListener::bind(addr).await?;
     let local = listener.local_addr()?;
+    let enforced = auth.as_ref().is_some_and(|g| g.enforced());
     tracing::info!(
         address = %local,
+        bearer_auth = enforced,
         "admin http listener started (/metrics, /livez, /readyz, /startupz, /healthz)"
     );
-    let svc = AdminService { registry, probes };
+    let svc = AdminService {
+        registry,
+        probes,
+        auth,
+    };
 
     tokio::spawn(async move {
         loop {
@@ -253,6 +317,44 @@ mod tests {
         assert!(local.port() > 0);
         cancel.cancel();
         // Give the accept loop a tick to notice the cancellation.
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+    }
+
+    // SEC-2-06 Wave 2c-2: /livez stays anonymously accessible even
+    // with the bearer-token gate enforced. /metrics returns 403
+    // without the right token.
+    #[tokio::test(flavor = "current_thread")]
+    async fn test_admin_403_without_token() {
+        use http::HeaderValue;
+        use lb_security::{AdminAuthGate, AdminTokenHash};
+
+        let reg = Arc::new(MetricsRegistry::new());
+        let probes = ProbeRegistry::shared();
+        probes.set_ready();
+        let cancel = CancellationToken::new();
+        let addr: SocketAddr = "127.0.0.1:0".parse().unwrap();
+        let token_hash = AdminTokenHash::from_plaintext("super-secret");
+        let gate = Arc::new(AdminAuthGate::new(Some(token_hash)));
+        let local = serve_with_auth(Arc::clone(&reg), probes, Some(gate), addr, cancel.clone())
+            .await
+            .unwrap();
+        // Hit /metrics without a token — should 403.
+        let stream = tokio::net::TcpStream::connect(local).await.unwrap();
+        let io = hyper_util::rt::TokioIo::new(stream);
+        let (mut sender, h1_conn) =
+            hyper::client::conn::http1::handshake::<_, http_body_util::Empty<bytes::Bytes>>(io)
+                .await
+                .unwrap();
+        tokio::spawn(h1_conn);
+        let req = http::Request::builder()
+            .method(http::Method::GET)
+            .uri("/metrics")
+            .header(http::header::HOST, HeaderValue::from_static("localhost"))
+            .body(http_body_util::Empty::new())
+            .unwrap();
+        let resp = sender.send_request(req).await.unwrap();
+        assert_eq!(resp.status(), StatusCode::FORBIDDEN, "no token → 403");
+        cancel.cancel();
         tokio::time::sleep(std::time::Duration::from_millis(50)).await;
     }
 }
