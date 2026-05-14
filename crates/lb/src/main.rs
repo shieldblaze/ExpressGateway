@@ -238,6 +238,11 @@ struct ListenerState {
     /// semaphore so a saturated IP cannot starve other clients of
     /// inflight slots.
     hooks: Arc<HooksBundle>,
+    /// PROTO-2-11 (H2 half, Wave 2c-2): cloned into every spawned
+    /// connection task. The H2 path threads this into
+    /// `H2Proxy::serve_connection_with_cancel` so a SIGTERM cancel
+    /// triggers a graceful GOAWAY emit instead of an abort.
+    shutdown_token: CancellationToken,
 }
 
 /// Listener socket options matching PROMPT.md §7 for listener sockets.
@@ -829,6 +834,7 @@ async fn spawn_tcp(
     max_inflight: u32,
     connect_timeout: Duration,
     hooks: Arc<HooksBundle>,
+    shutdown_token: CancellationToken,
 ) -> anyhow::Result<tokio::task::JoinHandle<anyhow::Result<()>>> {
     let mut addresses = Vec::with_capacity(listener_cfg.backends.len());
     let mut backends = Vec::with_capacity(listener_cfg.backends.len());
@@ -876,6 +882,7 @@ async fn spawn_tcp(
         )),
         connect_timeout,
         hooks,
+        shutdown_token,
     });
     Ok(tokio::spawn(run_listener(
         listener_cfg.address.clone(),
@@ -1470,6 +1477,7 @@ async fn async_main() -> anyhow::Result<()> {
             max_inflight,
             connect_timeout,
             Arc::clone(&hooks),
+            shutdown.token().clone(),
         )
         .await?;
         listener_handles.push(handle);
@@ -2002,8 +2010,17 @@ async fn run_listener(bind_addr: String, state: Arc<ListenerState>) -> anyhow::R
                             let alpn = tls_stream.get_ref().1.alpn_protocol().map(<[u8]>::to_vec);
                             if alpn.as_deref() == Some(b"h2".as_ref()) {
                                 http_version = Some("h2");
+                                // PROTO-2-11 Wave 2c-2: hand the
+                                // shutdown token into the H2 conn so
+                                // a SIGTERM mid-stream triggers a
+                                // two-step GOAWAY emit before the
+                                // socket is torn down.
                                 Arc::clone(h2_proxy)
-                                    .serve_connection(tls_stream, client_addr)
+                                    .serve_connection_with_cancel(
+                                        tls_stream,
+                                        client_addr,
+                                        st.shutdown_token.clone(),
+                                    )
                                     .await
                                     .map_err(anyhow::Error::from)
                             } else {

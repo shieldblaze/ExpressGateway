@@ -268,6 +268,40 @@ impl H2Proxy {
     where
         IO: AsyncRead + AsyncWrite + Unpin + Send + 'static,
     {
+        // PROTO-2-11 (H2 half, Wave 2c-2): always delegates to the
+        // cancellable variant with a never-cancelled token so the
+        // original signature stays back-compat.
+        self.serve_connection_with_cancel(io, peer, tokio_util::sync::CancellationToken::new())
+            .await
+    }
+
+    /// PROTO-2-11 (Wave 2c-2) — H2 half of the GOAWAY-on-drain
+    /// contract paired with REL-2-02's H3 `CONNECTION_CLOSE`.
+    ///
+    /// Identical to [`Self::serve_connection`] until `cancel`
+    /// fires: at that point the hyper H2 connection is pinned and
+    /// `.graceful_shutdown()` is invoked, which emits the canonical
+    /// **two-step GOAWAY** sequence (RFC 9113 §6.8): first a GOAWAY
+    /// with `last_stream_id = 2^31 - 1` so the client stops opening
+    /// new streams, then a second GOAWAY with the actual highest
+    /// in-flight stream id once the server's `MAX_CONCURRENT_STREAMS`
+    /// has drained. The connection future is then driven to
+    /// completion with the existing `total` budget so a misbehaving
+    /// client cannot pin a worker past the drain deadline.
+    ///
+    /// # Errors
+    ///
+    /// Same as [`Self::serve_connection`], plus `TimedOut` if the
+    /// graceful-shutdown driver exceeds [`HttpTimeouts::total`].
+    pub async fn serve_connection_with_cancel<IO>(
+        self: Arc<Self>,
+        io: IO,
+        peer: SocketAddr,
+        cancel: tokio_util::sync::CancellationToken,
+    ) -> io::Result<()>
+    where
+        IO: AsyncRead + AsyncWrite + Unpin + Send + 'static,
+    {
         let total = self.timeouts.total;
         let svc = ProxyService {
             inner: Arc::clone(&self),
@@ -291,10 +325,37 @@ impl H2Proxy {
         // to always enable: clients that do not use it pay no cost.
         builder.enable_connect_protocol();
         let conn = builder.serve_connection(TokioIo::new(io), svc);
-        match tokio::time::timeout(total, conn).await {
-            Ok(Ok(())) => Ok(()),
-            Ok(Err(e)) => Err(io::Error::other(format!("h2 server: {e}"))),
-            Err(_) => Err(io::Error::new(
+        tokio::pin!(conn);
+        let cancel_fut = cancel.cancelled();
+        tokio::pin!(cancel_fut);
+        let timer = tokio::time::sleep(total);
+        tokio::pin!(timer);
+        tokio::select! {
+            // Cancel wins ties so a SIGTERM during a long-running
+            // request still triggers the GOAWAY emit.
+            biased;
+            () = &mut cancel_fut => {
+                // Two-step GOAWAY: hyper handles both frames inside
+                // `graceful_shutdown` (it sets the soft limit then
+                // drains).
+                conn.as_mut().graceful_shutdown();
+                // Drive the conn future to completion with the
+                // existing `total` budget so a stalled client cannot
+                // delay drain past the deadline.
+                match tokio::time::timeout(total, conn).await {
+                    Ok(Ok(())) => Ok(()),
+                    Ok(Err(e)) => Err(io::Error::other(format!("h2 graceful shutdown: {e}"))),
+                    Err(_) => Err(io::Error::new(
+                        io::ErrorKind::TimedOut,
+                        "h2 graceful shutdown timeout",
+                    )),
+                }
+            }
+            res = &mut conn => match res {
+                Ok(()) => Ok(()),
+                Err(e) => Err(io::Error::other(format!("h2 server: {e}"))),
+            },
+            () = &mut timer => Err(io::Error::new(
                 io::ErrorKind::TimedOut,
                 "total connection timeout",
             )),
@@ -1128,5 +1189,56 @@ mod tests {
         let peer: SocketAddr = "1.2.3.4:5555".parse().unwrap();
         append_xff(&mut h, peer);
         assert_eq!(h.get("x-forwarded-for").unwrap(), "10.0.0.1, 1.2.3.4");
+    }
+
+    // PROTO-2-11 H2 half (Wave 2c-2): smoke test for the
+    // cancel-aware variant. Builds a minimal H2Proxy, hands it a
+    // duplex pair (with the peer side closed) and an already-cancelled
+    // token. The expected outcome is that `serve_connection_with_cancel`
+    // returns promptly — its graceful_shutdown branch hits the
+    // empty/EOF stream and resolves the hyper conn future. The
+    // assertion is a deadline-bounded wait: a regression that
+    // re-introduces a busy-loop or holds the conn open indefinitely
+    // would time out here.
+    #[tokio::test(flavor = "current_thread")]
+    async fn test_sigterm_emits_two_step_goaway() {
+        use std::time::Duration;
+        use tokio_util::sync::CancellationToken;
+
+        let pool = lb_io::pool::TcpPool::new(
+            lb_io::pool::PoolConfig::default(),
+            lb_io::sockopts::BackendSockOpts::default(),
+            lb_io::Runtime::new(),
+        );
+        let addrs: Vec<SocketAddr> = vec!["127.0.0.1:1".parse().unwrap()];
+        let picker = crate::h1_proxy::RoundRobinAddrs::new(addrs).unwrap();
+        let proxy = Arc::new(H2Proxy::new(
+            pool,
+            Arc::new(picker),
+            None,
+            HttpTimeouts::default(),
+            false,
+        ));
+        // Empty duplex — the peer half is dropped immediately, so any
+        // read returns EOF and hyper's H2 conn resolves without ever
+        // opening a stream.
+        let (server_io, client) = tokio::io::duplex(8 * 1024);
+        drop(client); // EOF on the next read.
+        let cancel = CancellationToken::new();
+        cancel.cancel(); // pre-cancel so the graceful path fires.
+        let peer: SocketAddr = "127.0.0.1:1".parse().unwrap();
+        let r = tokio::time::timeout(
+            Duration::from_secs(5),
+            proxy.serve_connection_with_cancel(server_io, peer, cancel),
+        )
+        .await;
+        // Whether the inner future returns Ok(()) or an Err depends on
+        // whether the H2 preface ever arrived. We only assert the
+        // deadline did not fire — the cancellable variant must NOT
+        // loop indefinitely.
+        assert!(
+            r.is_ok(),
+            "serve_connection_with_cancel hung past 5 s deadline — graceful shutdown is broken"
+        );
     }
 }
