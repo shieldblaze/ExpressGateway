@@ -141,6 +141,12 @@ Cross-ref: task brief item 1, EBPF-2-01.
 
 Severity: high
 Status:   Verified-Fixed(c009219) — rel round-5 sign-off; userspace simulator green, kernel-side proof `#[ignore]`'d for CI.
+            Augmented by ROUND8-L4-02(4ad5228): the LRU swap was necessary
+            but not sufficient. A sliding-RST replay attack still pinned LRU
+            capacity by churning the young end. L4-02 adds TCP-state-aware
+            pruning (RST → evict + XDP_PASS; FIN-ACK → rewrite-and-TX +
+            evict). Full FSM (SYN_SENT/ESTABLISHED/TIME_WAIT timers)
+            deferred to Pillar 4b-3.
 Location: `crates/lb-l4-xdp/ebpf/src/main.rs:209-215`.
 
 ```
@@ -286,6 +292,14 @@ Cross-ref: synthesis T5, rel Round-1 §support-matrix decision.
 
 Severity: high
 Status:   Verified-Fixed(37c513c) — rel round-5 sign-off; pin-name-constants test green, kernel A/B `#[ignore]`'d. Bpffs-missing failure mode confirmed as loud-fail via `XdpLoaderError::Load`.
+            Augmented by ROUND8-L4-11(28eb038): the loud-fail used to
+            come from a deep-aya `EbpfError::Map(InvalidPin)` with no
+            operator hint. `bpffs::assert_bpffs(p)` now runs BEFORE
+            `loader.map_pin_path(p)` and returns
+            `XdpLoaderError::PinPathNotBpffs { path, found_magic, hint }`
+            whose hint carries the `mount -t bpf bpffs /sys/fs/bpf`
+            command and the systemd `RequiresMountsFor=` directive
+            (OPS-07 bundle peer).
 Location: `crates/lb-l4-xdp/src/loader.rs` — no call to `Map::pin`
           / `Program::pin` / `XdpLoader::set_map_pin_path` anywhere
           in the crate. `EbpfLoader::map_pin_path` (aya
