@@ -252,14 +252,15 @@ mod drain_tests {
     /// `Connection: close` in the next response after SIGTERM, then
     /// the server closes the TCP connection cleanly.
     ///
-    /// **Ignored** because `crates/lb/src/main.rs` does not yet plumb
-    /// `lb_core::Shutdown::token()` into `H1Proxy::serve_connection`
-    /// so that hyper's `http1::Connection::graceful_shutdown` fires
-    /// on cancel. PROTO-2-09 owns the proxy-level wiring; the
-    /// `main.rs` plumbing is sequential to that and behind
-    /// `code-r4w2cb`.
+    /// **Ignored** because `H1Proxy::serve_connection` still uses the
+    /// non-cancellable hyper builder — there is no
+    /// `serve_connection_with_cancel` equivalent that calls hyper's
+    /// `http1::Connection::graceful_shutdown` on
+    /// `lb_core::Shutdown::token()`. PROTO-2-11's H1 half is the open
+    /// follow-up; until it lands, the gateway aborts H1 keep-alives at
+    /// drain time instead of signalling close on the next response.
     #[test]
-    #[ignore = "PROTO-2-09 H1 graceful_shutdown plumbing pending (wave 2c)"]
+    #[ignore = "needs H1Proxy::serve_connection_with_cancel + hyper http1::graceful_shutdown — not wired"]
     fn test_sigterm_drains_h1_with_connection_close() {
         let bin = match find_binary() {
             Ok(p) => p,
@@ -305,13 +306,19 @@ mod drain_tests {
     /// `last_stream_id = 2^31 - 1`, then a follow-up with the actual
     /// last accepted stream id.
     ///
-    /// **Ignored** because `H2Proxy::serve_connection` does not yet
-    /// call hyper's `http2::Connection::graceful_shutdown` on
-    /// `lb_core::Shutdown::token()` cancellation. PROTO-2-11 H2
-    /// owns the proxy-level wiring; the `main.rs` plumbing follows.
-    /// `code-r4w2cb` is landing this in parallel.
+    /// **Ignored** because the test scaffold writes `protocol = "h1s"`
+    /// without a `[listeners.tls]` block, which lb-config rejects at
+    /// startup (h1s requires cert+key paths). The hyper-side
+    /// `H2Proxy::serve_connection_with_cancel` plumbing landed in
+    /// PROTO-2-11 (H2 half) at `33edd13`, and `main.rs` now threads
+    /// `shutdown.token()` into the H2 ALPN branch — but exercising it
+    /// from this test requires generating a self-signed cert + key on a
+    /// tempdir and adding the `[listeners.tls]` block to the generated
+    /// TOML before spawning the gateway. That client-side scaffolding
+    /// is the open follow-up; the proxy-level wiring itself is covered
+    /// by `lb_l7::h2_proxy::tests::test_sigterm_emits_two_step_goaway`.
     #[test]
-    #[ignore = "PROTO-2-11 H2 GOAWAY plumbing pending (wave 2c)"]
+    #[ignore = "needs self-signed TLS scaffold + real h2 client in test body — wiring proven by lb-l7 unit test"]
     fn test_sigterm_drains_h2_with_goaway() {
         let bin = match find_binary() {
             Ok(p) => p,
@@ -351,13 +358,19 @@ mod drain_tests {
     /// reset; `error_code == 0x0100` distinguishes graceful drain
     /// from any other application-level close.
     ///
-    /// **Ignored** because the actor's CONNECTION_CLOSE machinery
-    /// (PROTO-2-11, `deb9267`) is gated on the listener's local
-    /// `CancellationToken`, which is not yet fed from
-    /// `lb_core::Shutdown::token()` in `crates/lb/src/main.rs`.
-    /// `code-r4w2cb` is landing the plumb.
+    /// **Ignored** because `spawn_quic` in `crates/lb/src/main.rs`
+    /// still creates its own local `CancellationToken` instead of
+    /// cloning `shutdown.token()`, so the actor's CONNECTION_CLOSE
+    /// machinery (PROTO-2-11, `deb9267`) never fires on
+    /// process-wide SIGTERM. The drain path *does* call
+    /// `QuicListener::shutdown()` which drives the listener's local
+    /// token, so cleanups happen — but the protocol-level
+    /// `H3_NO_ERROR (0x0100)` signal the test asserts cannot be
+    /// distinguished from listener-token cancel today. The fix is a
+    /// 3-line edit to `spawn_quic`'s token construction; tracked as the
+    /// REL-2-02 H3 follow-up.
     #[test]
-    #[ignore = "H3 listener-token plumbing from lb_core::Shutdown pending (wave 2c)"]
+    #[ignore = "spawn_quic still owns its CancellationToken — not cloned from shutdown.token()"]
     fn test_sigterm_drains_h3_with_connection_close() {
         let bin = match find_binary() {
             Ok(p) => p,
