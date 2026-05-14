@@ -219,6 +219,11 @@ const STAT_CT_HIT_V6: u32 = 6;
 const STAT_TX_V6: u32 = 7;
 const STAT_VLAN: u32 = 8;
 const STAT_V6_EXT_UNSUPPORTED: u32 = 9;
+/// ROUND8-L4-01: a conntrack hit whose backend_ip / backend_port is
+/// zero means the controller wrote an unpopulated entry. Pass to
+/// kernel (not drop) so the network stack still routes the packet;
+/// the counter is the operator signal.
+const STAT_BACKEND_UNPOPULATED: u32 = 10;
 
 // EBPF-2-03: BPF_MAP_TYPE_LRU_HASH evicts the oldest entry under
 // flood instead of returning ENOMEM at insert time. This closes the
@@ -492,6 +497,15 @@ fn handle_ipv4(ctx: &XdpContext, l3_offset: usize) -> Result<u32, ()> {
     };
     incr_stat(STAT_CT_HIT_V4);
 
+    // ROUND8-L4-01: sentinel guard. A conntrack entry with zero
+    // backend_ip or backend_port is a "not yet populated" marker
+    // from the controller; XDP_PASS keeps the kernel stack as the
+    // fallback and the counter surfaces the misconfiguration.
+    if entry.backend_ip == 0 || entry.backend_port == 0 {
+        incr_stat(STAT_BACKEND_UNPOPULATED);
+        return Ok(xdp_action::XDP_PASS);
+    }
+
     // --- Rewrite: MAC, dst IP, dst port, L3 + L4 checksums ---------------
     rewrite_v4(ctx, l3_offset, ip_hdr_len, protocol, dst_addr, &entry)?;
     incr_stat(STAT_TX_V4);
@@ -699,6 +713,12 @@ fn handle_ipv6(ctx: &XdpContext, l3_offset: usize) -> Result<u32, ()> {
         }
     };
     incr_stat(STAT_CT_HIT_V6);
+
+    // ROUND8-L4-01: sentinel guard, mirror of the IPv4 path above.
+    if entry.backend_ip == [0u8; 16] || entry.backend_port == 0 {
+        incr_stat(STAT_BACKEND_UNPOPULATED);
+        return Ok(xdp_action::XDP_PASS);
+    }
 
     rewrite_v6(ctx, l3_offset, off, next_hdr, &dst_addr, &entry)?;
     incr_stat(STAT_TX_V6);

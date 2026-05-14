@@ -182,12 +182,18 @@ pub enum StatSlot {
     VlanStripped = 8,
     /// `STAT_V6_EXT_UNSUPPORTED`: too many IPv6 extension headers.
     V6ExtUnsupported = 9,
+    /// `STAT_BACKEND_UNPOPULATED` (ROUND8-L4-01): a conntrack hit
+    /// whose `backend_ip == 0` or `backend_port == 0` — controller
+    /// wrote an unpopulated entry. The XDP path returns XDP_PASS
+    /// so the kernel stack handles the packet; this counter is the
+    /// operator signal to chase the misconfiguration.
+    BackendUnpopulated = 10,
 }
 
 /// Number of currently-defined stat slots. Bumps to this constant
 /// must come WITH a matching addition to the `STAT_*` enum in the
 /// eBPF crate AND a new variant at the end of [`StatSlot`].
-pub const NUM_SLOTS: usize = 10;
+pub const NUM_SLOTS: usize = 11;
 
 /// Errors from the STATS read path.
 #[derive(Debug, thiserror::Error)]
@@ -351,6 +357,7 @@ mod tests {
         assert_eq!(StatSlot::TxV6 as usize, 7);
         assert_eq!(StatSlot::VlanStripped as usize, 8);
         assert_eq!(StatSlot::V6ExtUnsupported as usize, 9);
+        assert_eq!(StatSlot::BackendUnpopulated as usize, 10);
     }
 
     #[test]
@@ -358,7 +365,7 @@ mod tests {
         // If a new variant is added to StatSlot without bumping
         // NUM_SLOTS the read loop in `read_stats` would silently
         // skip it — this assertion guards that invariant.
-        assert_eq!(NUM_SLOTS, 10);
+        assert_eq!(NUM_SLOTS, 11);
     }
 
     #[cfg(not(target_os = "linux"))]

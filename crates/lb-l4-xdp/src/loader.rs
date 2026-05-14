@@ -154,6 +154,15 @@ impl BackendEntry {
     /// Construct a [`BackendEntry`] with zero-initialised padding.
     ///
     /// CODE-2-07: see [`FlowKey::new`] for the rationale.
+    ///
+    /// **ROUND8-L4-01 caveat**: this constructor is infallible for
+    /// back-compat; it does NOT reject zero IP / zero port. New
+    /// callers SHOULD use [`BackendEntry::try_new`] which returns
+    /// `Err(XdpLoaderError::BackendUnpopulated)` on the sentinel
+    /// shapes that cause silent traffic drops. The eBPF data plane
+    /// also enforces a runtime sentinel guard — a CT entry with
+    /// `backend_ip == 0` returns `XDP_PASS` plus the
+    /// `backend_unpopulated` stat slot increment.
     #[must_use]
     pub const fn new(
         backend_idx: u32,
@@ -172,6 +181,48 @@ impl BackendEntry {
             backend_mac,
             src_mac,
         }
+    }
+
+    /// ROUND8-L4-01: fallible constructor — rejects the
+    /// `backend_ip == 0` and `backend_port == 0` sentinel shapes.
+    /// These shapes are the Katran-class silent-drop vector: a
+    /// conntrack entry with a zero backend results in `XDP_TX` to
+    /// `0.0.0.0:0` which the kernel drops without telemetry. The
+    /// eBPF program also enforces the guard at runtime, but this
+    /// constructor is the upstream admission gate.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`XdpLoaderError::BackendUnpopulated`] when
+    /// `backend_ip == 0` (Katran lesson 10 specifically calls out
+    /// reserving the zero IP) or `backend_port == 0` (kernel never
+    /// generates a flow to port 0).
+    pub fn try_new(
+        backend_idx: u32,
+        flags: u32,
+        backend_ip: u32,
+        backend_port: u16,
+        backend_mac: [u8; 6],
+        src_mac: [u8; 6],
+    ) -> Result<Self, XdpLoaderError> {
+        if backend_ip == 0 {
+            return Err(XdpLoaderError::BackendUnpopulated {
+                reason: "backend_ip is 0.0.0.0 (Katran-class silent-drop sentinel)",
+            });
+        }
+        if backend_port == 0 {
+            return Err(XdpLoaderError::BackendUnpopulated {
+                reason: "backend_port is 0",
+            });
+        }
+        Ok(Self::new(
+            backend_idx,
+            flags,
+            backend_ip,
+            backend_port,
+            backend_mac,
+            src_mac,
+        ))
     }
 }
 
@@ -242,6 +293,11 @@ unsafe impl Pod for BackendEntryV6 {}
 
 impl BackendEntryV6 {
     /// Construct a [`BackendEntryV6`] with zero-initialised padding.
+    ///
+    /// **ROUND8-L4-01 caveat**: see [`BackendEntry::new`] — prefer
+    /// [`BackendEntryV6::try_new`] for new callers; this constructor
+    /// is infallible for back-compat and does not reject the zero
+    /// sentinel shapes.
     #[must_use]
     pub const fn new(
         backend_idx: u32,
@@ -260,6 +316,42 @@ impl BackendEntryV6 {
             backend_mac,
             src_mac,
         }
+    }
+
+    /// ROUND8-L4-01: fallible constructor for IPv6. Rejects
+    /// `backend_ip == [0; 16]` (the IPv6 unspecified address) and
+    /// `backend_port == 0`. See [`BackendEntry::try_new`] for the
+    /// rationale and the eBPF-side mirror guard.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`XdpLoaderError::BackendUnpopulated`].
+    pub fn try_new(
+        backend_idx: u32,
+        flags: u32,
+        backend_ip: [u8; 16],
+        backend_port: u16,
+        backend_mac: [u8; 6],
+        src_mac: [u8; 6],
+    ) -> Result<Self, XdpLoaderError> {
+        if backend_ip == [0u8; 16] {
+            return Err(XdpLoaderError::BackendUnpopulated {
+                reason: "backend_ip is :: (IPv6 unspecified)",
+            });
+        }
+        if backend_port == 0 {
+            return Err(XdpLoaderError::BackendUnpopulated {
+                reason: "backend_port is 0",
+            });
+        }
+        Ok(Self::new(
+            backend_idx,
+            flags,
+            backend_ip,
+            backend_port,
+            backend_mac,
+            src_mac,
+        ))
     }
 }
 
@@ -411,6 +503,20 @@ pub enum XdpLoaderError {
     /// API refuse to install such an entry.
     #[error("invalid IPv4 ACL prefix length: got {0}, must be in 1..=32")]
     InvalidAclPrefixV4(u8),
+
+    /// ROUND8-L4-01: caller tried to construct a `BackendEntry` /
+    /// `BackendEntryV6` with `backend_ip == 0` or `backend_port == 0`.
+    /// Katran lesson 10: a zero-IP backend in the conntrack table
+    /// causes silent `XDP_TX` to `0.0.0.0:0` — the kernel drops it,
+    /// flow loss is invisible. The eBPF data plane also enforces a
+    /// runtime sentinel guard (returns `XDP_PASS` plus a
+    /// `backend_unpopulated` stat increment); this error is the
+    /// construction-time admission gate.
+    #[error("backend entry unpopulated: {reason}")]
+    BackendUnpopulated {
+        /// Operator-facing description (which field was zero).
+        reason: &'static str,
+    },
 }
 
 /// SEC-2-12: required value of the ELF `license` section.
