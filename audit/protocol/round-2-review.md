@@ -105,9 +105,8 @@ Cross-ref: lead T8-#2; `rel` advertise-vs-reality gap.
 ---
 
 ### PROTO-2-03 — No 1xx / 100-Continue / 103 Early Hints policy or forwarding test
-Status:   Baseline-Pinned-Wave-2b-2 / Fix-Deferred-Wave-2c (investigation: hyper auto-handles `Expect: 100-continue` at the wire level transparently, but `client::conn::http1::send_request().await` resolves on the first non-1xx response so 103 Early Hints frames drop. `crates/lb-l7/tests/informational_responses.rs` (5 tests: test_100_continue_forwarded, test_103_early_hints_forwarded, test_1xx_from_upstream_passes_through_h1, test_h2_informational + the hyper-internal baseline) pin the status-class invariants. Wave-2c installs `OnInformational` callback; see `audit/deferred.md` "PROTO-2-03".)
 Severity: medium
-Status:   Open
+Status:   Proposed-Fix-Partial(1576a06 + 20bcdbb)   <!-- Wave-2b-2 (1576a06) pinned the lb-l7 baseline (5 tests). Wave-2c-2 (20bcdbb): added `crates/lb/tests/informational_pass_through_main.rs::test_100_continue_traverses_lb` which spins up a hyper H1 server + client over a duplex pair and proves the wire-level 100 Continue auto-emit traverses the gateway. Investigation: hyper 1.x's Rust API does NOT expose `on_informational` (only the C FFI does); the H1 server auto-emit is unconditional inside `hyper::server::conn::http1::Builder::serve_connection`, which the gateway already uses. 103 Early Hints from upstream is still dropped (`client::conn::http1::send_request().await` resolves on first non-1xx); forwarding 103 requires a hyper API widening — tracked as a future enhancement (RFC 9110 §15.2 / RFC 8297 §3 mark 103 as `MAY`). -->
 Location: absence — `grep -rn '100[- ]?continue\|EarlyHints\|status::CONTINUE\|StatusCode::CONTINUE\|103' crates/lb-l7 crates/lb` returns zero hits in any proxy module.
 Description: RFC 9110 §15.2 ("Informational 1xx") requires a proxy
 that receives a 1xx response from upstream to forward it to the
@@ -317,7 +316,8 @@ Cross-ref: none.
 
 ### PROTO-2-09 — `ListenerMode::build_listener_mode` silently falls through to `PlainTcp` for unknown `protocol = …` values
 Severity: medium
-Status:   Deferred-to-Wave-2c (build_listener_mode is in main.rs:837)
+Status:   Proposed-Fix(f07cf44)   <!-- Wave 2c-2: `build_listener_mode`'s final arm is now `"tcp" => PlainTcp, other => Err(anyhow!("listener {addr} has protocol={other:?} which has no runtime implementation; supported values are: tcp, tls, h1, h1s, quic"))`. `lb_config::validate_listener` already rejects unknown tokens; the explicit error in main.rs is defence-in-depth. Proof: `tests::test_typo_protocol_errors`. -->
+
 Location: `crates/lb/src/main.rs:837` (`_ => Ok(ListenerMode::PlainTcp),`).
 The branch is the final arm of the `match listener_cfg.protocol.as_str()`
 construct that starts at the function definition above line 700.
@@ -430,17 +430,7 @@ PROTO-2-01 (host disagreement is a smuggling sibling).
 
 ### PROTO-2-11 — No HTTP/2 `GOAWAY` and no HTTP/3 `CONNECTION_CLOSE` on drain / SIGTERM
 Severity: high
-Status:   Proposed-Fix(H3 half) — `lb-quic` actor now emits
-application-layer `CONNECTION_CLOSE` with `H3_NO_ERROR = 0x0100` on
-cancel via `graceful_h3_shutdown`. Proof:
-`crates/lb-quic/tests/h3_graceful_close.rs::test_h3_connection_close_emitted_on_cancel`
-drives an end-to-end loopback handshake, calls the helper, and asserts
-the client observes `peer_error { is_app: true, error_code: 0x0100 }`.
-The H/2 `GOAWAY` half (hyper-side wiring in
-`crates/lb-l7/src/h{1,2}_proxy.rs` and the SIGTERM handler in
-`crates/lb/src/main.rs:1033-1059`) is **Open** — Wave-2c code-owned
-work to plumb `lb_core::Shutdown::token()` into the listener crate
-and call `hyper::server::conn::http2::Connection::graceful_shutdown`.
+Status:   Proposed-Fix(deb9267 + 33edd13)   <!-- H3 half landed earlier at `deb9267` on round-4 (lb-quic `graceful_h3_shutdown` emits H3_NO_ERROR). H2 half landed at `33edd13` on round-4 (this commit): new `H2Proxy::serve_connection_with_cancel` pins the hyper H2 conn, selects on `CancellationToken`, and calls `conn.as_mut().graceful_shutdown()` to emit the canonical two-step GOAWAY (RFC 9113 §6.8). `ListenerState` carries a `shutdown_token` cloned from `shutdown.token()`; the H1s ALPN=h2 branch threads it into the cancellable variant. Proof: `lb_l7::h2_proxy::tests::test_sigterm_emits_two_step_goaway` (5-second deadline-bounded; regressions that re-introduce a busy-loop fail loud). -->
 Location:
   * SIGTERM handler: `crates/lb/src/main.rs:1033-1059` —
     receives signal, calls `JoinHandle::abort()` on every TCP
@@ -643,7 +633,7 @@ synthesis §C.
 
 ### PROTO-2-15 — SNI ↔ Host / `:authority` disagreement is not enforced
 Severity: medium
-Status:   Proposed-Fix-Partial(Wave-2b-2: validator function landed at `crates/lb-l7/src/sni_authority.rs::check_sni_authority` + 421 renderer `misdirected_response()`; unit tests in module (9) + integration `crates/lb-l7/tests/sni_authority_mismatch.rs::test_421_on_mismatch` (7 tests). **TLS-accept-site wiring DEFERRED to Wave-2c** because SNI capture lives in `crates/lb/src/main.rs` which Wave-2b cannot touch — see `audit/deferred.md` "PROTO-2-15 wiring side" for the threaded-through plan.)
+Status:   Proposed-Fix-Partial(Wave-2b-2 + f07cf44)   <!-- Wave-2b-2: validator function landed at `crates/lb-l7/src/sni_authority.rs::check_sni_authority` + 421 renderer (9 unit tests + 7 integration tests). Wave-2c-2 (`f07cf44`): TLS-accept-site captures SNI via `tls_stream.get_ref().1.server_name()` on both `Tls` and `H1s` listener modes and logs it (`tracing::trace!`) for observability. The 421 rejection wiring is still **DEFERRED**: it requires either a new `H1Proxy::serve_connection_with_sni(io, peer, sni)` overload or a `with_expected_sni` builder hook on the proxy. `check_sni_authority` is production-ready; only the per-connection plumb is missing. See `audit/deferred.md` "PROTO-2-15 wiring side". -->
 Location:
   * No SNI extraction or comparison anywhere in `lb-l7` /
     `lb-quic` proxy paths.

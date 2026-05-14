@@ -160,7 +160,7 @@ Cross-ref:  T1; rel F-05 (TLS accept slowloris); rel F-17.
 
 ### SEC-2-04 — No per-IP / per-listener concurrent-connection cap
 Severity: high
-Status:   Proposed-Fix(e36b50f, 8e048c0) — Wave-2a ConnGate API; Wave-2c wires lb/main.rs
+Status:   Proposed-Fix(e36b50f, 8e048c0, 4001791)   <!-- Wave-2a ConnGate API (e36b50f, 8e048c0); Wave-2c-2 (4001791) wires `Arc<HooksBundle>` into `crates/lb/src/main.rs::ListenerState`. `admit_connection(peer.ip())` runs BEFORE the listener inflight semaphore so a saturated IP cannot starve other peers of admission slots. The bundle is also passed via `with_hooks(...)` into both `H1Proxy` and `H2Proxy` so the in-request SmuggleDetector / H2-downgrade guard fire too. New `runtime.per_ip_connection_cap` knob (default 1_024, range 1..=2_000_000). Proof: `lb::tests::test_per_ip_cap_enforced_at_accept`. -->
 Location: `crates/lb/src/main.rs:1077-1126` (`run_listener` accept
 loop); `crates/lb/src/main.rs:114-126` (`listener_opts` backlog).
 Description: the accept loop spawns one `tokio::task` per accepted
@@ -221,7 +221,7 @@ Cross-ref:  rel F-19 (TCP 0-RTT — withdrawn in SEC-2-0RTT-TCP below).
 
 ### SEC-2-06 — Admin HTTP listener has no authn / no TLS
 Severity: medium
-Status:   Proposed-Fix(baa72ca) — Wave-2a AdminAuthGate API; rel REL-2-04 wires admin_http.rs
+Status:   Proposed-Fix(baa72ca, 9484544)   <!-- Wave-2a AdminAuthGate API (baa72ca); Wave-2c-2 (9484544) wires both halves into the binary: (a) `AdminAuthGate::validate_bind` runs in `crates/lb/src/main.rs` BEFORE the admin listener binds — non-loopback bind without `[admin].allow_non_loopback = true` is a hard startup error; (b) new `lb_observability::admin_http::serve_with_auth(Option<Arc<AdminAuthGate>>)` enforces `Authorization: Bearer <token>` (SHA-256 ct-eq compare) on `/metrics`; probe endpoints (`/livez`, `/healthz`, `/readyz`, `/startupz`) stay anonymously accessible so the kubelet keeps working. New `[admin]` block in `lb_config::LbConfig` with `api_token_hash` (64-char hex) + `allow_non_loopback` (bool, default false). `lb-observability` picks up `lb-security` as a one-way dep. Proofs: `lb_observability::admin_http::tests::test_admin_403_without_token` + `lb::tests::test_non_loopback_refused`. TLS for the admin surface is still out of scope (operator deploys behind reverse proxy or mTLS sidecar). -->
 Location: `crates/lb-observability/src/admin_http.rs:80-134`;
 `crates/lb-observability/src/admin_http.rs:3` (operator-trust
 comment).

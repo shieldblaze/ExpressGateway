@@ -186,7 +186,7 @@ Cross-ref: synthesis T2; rel H7 + rel→code handoff #1/#3/#8; proto H2 GOAWAY.
 ### CODE-2-05 — Unbounded `tokio::spawn` per accept; no semaphore / max-inflight gate on TCP listener
 Severity: critical
 Blocking-for-prod: yes
-Status:   Open
+Status:   Proposed-Fix(f07cf44)   <!-- Wave 2c-2: per-listener `Arc<Semaphore>` sized from `runtime.max_inflight_connections` (default 65_536, range 100..=2_000_000). `try_acquire_owned` at accept site; owned permit moved into the connection task. Saturation bumps `accept_shed_total` and writes a best-effort HTTP/1.1 503 on H1/H1s (or `shutdown()` on TCP/TLS). Proofs: `tests::test_503_when_over_inflight_h1` + `tests::test_per_ip_cap_enforced_at_accept` in `crates/lb/src/main.rs`. -->
 Location: `crates/lb/src/main.rs:1126` (`tokio::spawn(async move { … })`)
 
 Description / Impact:
@@ -233,7 +233,7 @@ Cross-ref: synthesis T7; rel→code #1; sec S-4 (per-IP cap is the second axis).
 ### CODE-2-06 — Accept loop tight-loops on EMFILE/ENFILE; no exponential backoff
 Severity: critical
 Blocking-for-prod: yes
-Status:   Open
+Status:   Proposed-Fix(f07cf44)   <!-- Wave 2c-2: `classify_accept_error` maps EMFILE/ENFILE/ECONNRESET/ECONNABORTED to a transient bucket; the loop sleeps with jittered exponential backoff (10 ms → 1 s ± 25 %). Anything else escapes as fatal (loop exits, supervisor sees hard failure). `accept_errors_total{kind}` counter classifies. Proof: `tests::test_emfile_no_busy_loop` runs the doubling sequence twenty times and asserts the backoff never collapses to zero and stays under the 1 250 ms ceiling. -->
 Location: `crates/lb/src/main.rs:1100–1106`
 
 Description / Impact:
@@ -445,7 +445,7 @@ high).
 ### CODE-2-09 — `pool.acquire()` runs blocking `connect(2)` on tokio's global blocking pool; cold-path stall on starved pool
 Severity: high
 Blocking-for-prod: no
-Status:   Open
+Status:   Proposed-Fix-Partial(f07cf44)   <!-- Wave 2c-2: plain-TCP path in `crates/lb/src/main.rs::proxy_connection` now dials via `tokio::time::timeout(connect_timeout, TcpStream::connect)` instead of `spawn_blocking(pool.acquire)`. Timeouts now actually fire (proven by `tests::test_connect_uses_async_path` which dials TEST-NET-1 and expects < 800 ms wall). New `runtime.connect_timeout_ms` knob (default 5_000, range 100..=60_000) + `backend_connect_timeout_total` counter. The lb-io / lb-l7 surfaces enumerated in the Location list below still use `spawn_blocking`; the full pool rework is the larger lb-io follow-up tracked under this same finding ID. -->
 Location:
   - `crates/lb-io/src/pool.rs:158–168` (doc-comment admits blocking)
   - `crates/lb-io/src/pool.rs:222–227` (`fn dial_fresh` calls `std::net::TcpStream::connect`)
