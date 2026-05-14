@@ -104,3 +104,62 @@ with contents `b"GPL\0"`.
 - Boundaries: sec provides patches + tests; code (SEC-2-08) and
   ebpf (SEC-2-11, SEC-2-12) apply them inside their own plans —
   avoids the "two teammates same file" rule.
+
+---
+
+## Wave-2a follow-up notes (2026-05-13 / 2026-05-14)
+
+### SEC-2-08 — landed in `lb-security`
+
+Sec landed `crates/lb-security/src/key.rs` exposing
+`assert_owner_only(path, strict) -> Result<KeyPermAdvice, KeyPermError>`
+with seven proof-tests covering 0600 / 0700 lax+strict, 0644 / 0640
+lax-advice + strict-error, and missing-file IO error. Status:
+`Proposed-Fix(<batch-low sha>)` in `round-2-findings.md`.
+
+The two-line call-site insertion in
+`crates/lb/src/main.rs::load_private_key` and
+`crates/lb/src/main.rs::load_cert_chain` is **code-owned per §D**
+and is handed back to `code` to land alongside CODE-2-05 (TLS
+listener accept-loop rewrite). The shape:
+
+```rust
+let strict = cfg.runtime.strict_mode;
+match lb_security::assert_owner_only(&path, strict) {
+    Ok(KeyPermAdvice::Ok) | Ok(KeyPermAdvice::NotApplicable) => {}
+    Ok(KeyPermAdvice::TooPermissive { mode }) =>
+        tracing::warn!(?path, mode = format!("{mode:#o}"),
+                       "key file has loose permissions"),
+    Err(e) => return Err(e.into()),
+}
+```
+
+Same pair of lines in `lb-quic/src/listener.rs:326-337` per the
+SEC-2-08 cross-ref. Sec confirms the helper API is stable; bumping
+to a different signature is a Round-5 conversation.
+
+### SEC-2-11 — handed to ebpf
+
+`crates/lb/src/xdp.rs` is **ebpf-§D-owned**. The capability-probe
+predicate change is a 4-line edit ebpf lands in their own commit
+inside EBPF-2-04. Sec's role is the test surface
+(`crates/lb/tests/xdp_cap_probe.rs`) which sec also hands to ebpf
+because the test crate is rooted in the lb binary (also
+ebpf-touched). Sec verified the security rationale in the SEC-2-08
+plan is unchanged; ebpf owns landing.
+
+### SEC-2-12 — handed to ebpf
+
+aya 0.13's default loader behaviour is GPL (verified by ebpf in
+Round-1). The defence-in-depth `set_license("GPL")` belt-and-
+suspenders + the `goblin` ELF-section regression test belong in
+ebpf's EBPF-2-02 commit. Sec's only Wave-2a action here was the
+disposition note; no code change in `lb-security`.
+
+### SEC-2-14 — closed by L-001
+
+`lb-compression` was removed from the workspace in Round-4 (see
+`Cargo.toml` workspace.members comment dated this round). With no
+crate to wire, the finding closes by reference. Sec's `round-2-
+findings.md` entry now reads `Verified-Fixed(<L-001 sha>)` and
+points at the Cargo.toml comment as evidence.

@@ -37,7 +37,7 @@ Severity definitions (lead-aligned):
 
 ### SEC-2-01 — `SmuggleDetector` is dead code on the proxy hot path
 Severity: high
-Status:   Open
+Status:   Proposed-Fix(e36b50f, 0c7e16b) — Wave-2a API; Wave-2b wires lb-l7
 Location: `crates/lb-security/src/smuggle.rs:9-156`; absence in
 `crates/lb-l7/src/h1_proxy.rs` + `crates/lb-l7/src/h2_proxy.rs`;
 absence in `crates/lb-l7/Cargo.toml` + `crates/lb-h1/Cargo.toml` +
@@ -128,7 +128,7 @@ Cross-ref:  T4 (synthesis); ebpf §2 Maps; rel saturation alert.
 
 ### SEC-2-03 — `SlowlorisDetector` / `SlowPostDetector` not wired
 Severity: medium
-Status:   Open
+Status:   Proposed-Fix(1f7f417) — Wave-2a Watchdog API; Wave-2b wires lb-l7
 Location: `crates/lb-security/src/slowloris.rs`, `slow_post.rs`;
 absence in `crates/lb-l7/Cargo.toml`; absence in `H1Proxy::handle`
 and the TLS accept site at `crates/lb/src/main.rs` (`acceptor.accept`).
@@ -160,7 +160,7 @@ Cross-ref:  T1; rel F-05 (TLS accept slowloris); rel F-17.
 
 ### SEC-2-04 — No per-IP / per-listener concurrent-connection cap
 Severity: high
-Status:   Open
+Status:   Proposed-Fix(e36b50f, 8e048c0) — Wave-2a ConnGate API; Wave-2c wires lb/main.rs
 Location: `crates/lb/src/main.rs:1077-1126` (`run_listener` accept
 loop); `crates/lb/src/main.rs:114-126` (`listener_opts` backlog).
 Description: the accept loop spawns one `tokio::task` per accepted
@@ -190,7 +190,7 @@ plumbing).
 
 ### SEC-2-05 — 0-RTT replay window collapses under unique-token spray
 Severity: medium
-Status:   Open
+Status:   Proposed-Fix(eeae98a) — Wave-2a LRU + 65 536 default window
 Location: `crates/lb-security/src/zero_rtt.rs:76-86, 125-143`.
 Description: `ZeroRttReplayGuard` is a fixed-cap HashSet (default
 cap 1_048_576). Replay detection requires the **earlier** token to
@@ -221,7 +221,7 @@ Cross-ref:  rel F-19 (TCP 0-RTT — withdrawn in SEC-2-0RTT-TCP below).
 
 ### SEC-2-06 — Admin HTTP listener has no authn / no TLS
 Severity: medium
-Status:   Open
+Status:   Proposed-Fix(baa72ca) — Wave-2a AdminAuthGate API; rel REL-2-04 wires admin_http.rs
 Location: `crates/lb-observability/src/admin_http.rs:80-134`;
 `crates/lb-observability/src/admin_http.rs:3` (operator-trust
 comment).
@@ -252,7 +252,7 @@ Cross-ref:  rel F-18 (readiness flip); rel H4 (json logs / labels).
 
 ### SEC-2-07 — Supply-chain CI: cargo-audit lacks `-D warnings`; no cargo-geiger
 Severity: medium
-Status:   Open
+Status:   Proposed-Fix(1fbfd14) — audit -D warnings, geiger inventory, machete soft check
 Location: `.github/workflows/ci.yml:99-129` (audit + deny jobs);
 `.github/workflows/codeql.yml:22-28` (audit only).
 Description: CI **does** run `cargo audit` and `cargo deny check`
@@ -293,7 +293,7 @@ Cross-ref:  T9; code round-1-machete.txt.
 
 ### SEC-2-08 — TLS private-key file permissions not asserted at load
 Severity: low
-Status:   Open
+Status:   Proposed-Fix(<batch-low sha>) — Wave-2a assert_owner_only helper; code wires lb/main.rs
 Location: `crates/lb/src/main.rs:202-211` (`load_private_key`);
 `crates/lb/src/main.rs:187-198` (`load_cert_chain`).
 Description: `std::fs::File::open(path)` does not check the file's
@@ -371,7 +371,7 @@ Cross-ref:  T5; ebpf cross-review to-code #3; code padding fix.
 
 ### SEC-2-10 — TLS-handshake slowloris on `acceptor.accept().await`
 Severity: medium
-Status:   Open
+Status:   Proposed-Fix(67697c0) — Wave-2a timeout_accept helper; Wave-2c wires lb/main.rs
 Location: `crates/lb/src/main.rs` TLS accept sites; see also rel
 F-05.
 Description: in the TLS-over-TCP listener path the rustls
@@ -390,7 +390,7 @@ Cross-ref:  rel F-05; SEC-2-04.
 
 ### SEC-2-11 — XDP capability probe misses CAP_SYS_ADMIN fallback
 Severity: low
-Status:   Open
+Status:   Handed-to-ebpf — sec rationale + test plan in batch-low.md; ebpf lands under EBPF-2-04
 Location: `crates/lb/src/xdp.rs:39-55` (probe site, per ebpf
 cross-review §A.2). The probe checks `CAP_BPF` + `CAP_NET_ADMIN`
 only.
@@ -414,7 +414,7 @@ Cross-ref:  ebpf cross-review §A.2.
 
 ### SEC-2-12 — BPF ELF license / loader license-string not set
 Severity: medium
-Status:   Open
+Status:   Handed-to-ebpf — aya 0.13 default is GPL (verified Round-1); ebpf lands belt-and-suspenders + ELF regression test under EBPF-2-02
 Location: `crates/lb-l4-xdp/ebpf/src/main.rs` (no
 `#[link_section = "license"]`); `crates/lb-l4-xdp/src/loader.rs:212`
 (`EbpfLoader::new().load(elf)` — no `set_license` call). See ebpf
@@ -471,7 +471,7 @@ Cross-ref:  rel F-19 (resolved here).
 
 ### SEC-2-14 — `lb-compression::Decompressor` is unused (no proxy invokes it)
 Severity: medium
-Status:   Open
+Status:   Verified-Fixed(f93c582) — closed by L-001: lb-compression removed from workspace (see Cargo.toml workspace.members comment)
 Location: `crates/lb-compression/src/lib.rs:226-310` (bomb-guarded
 decoder); `grep -rln "lb_compression\|lb-compression" crates/`
 returns only `crates/lb-compression/Cargo.toml` (i.e. **no
