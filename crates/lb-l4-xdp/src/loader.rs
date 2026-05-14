@@ -401,6 +401,16 @@ pub enum XdpLoaderError {
     /// at startup instead of `EACCES` at `bpf(BPF_PROG_LOAD)`.
     #[error("bpf elf license check failed: {0}")]
     LicenseInvalid(String),
+
+    /// ROUND8-L4-06: caller passed an out-of-range CIDR prefix length
+    /// to [`XdpLoader::insert_acl_deny`]. The accepted range is
+    /// `1..=32` for IPv4 (a `/0` deny is the "block everything"
+    /// footgun the finding documents; `/33`+ is structurally
+    /// nonsensical). The simulator (`crate::sim`) already documents
+    /// that `/0` matches every packet — this guard makes the public
+    /// API refuse to install such an entry.
+    #[error("invalid IPv4 ACL prefix length: got {0}, must be in 1..=32")]
+    InvalidAclPrefixV4(u8),
 }
 
 /// SEC-2-12: required value of the ELF `license` section.
@@ -794,15 +804,30 @@ impl XdpLoader {
     /// (network byte order handled internally). The stored value (`1`)
     /// is an opaque tag — the BPF program only cares about presence.
     ///
+    /// ROUND8-L4-06: `prefix_len` is gated to `1..=32`. A `/0` entry
+    /// would match every packet (default-deny footgun documented in
+    /// the userspace simulator); `/33+` is structurally invalid for
+    /// IPv4. Only the prefix is gated — a host-route like
+    /// `insert_acl_deny(32, 0.0.0.0)` is accepted (zero IP at `/32`
+    /// is a single host, not a wildcard).
+    // TODO(L4-06): mirror this guard with `1..=128` when an IPv6
+    // ACL trie ships (currently absent).
+    ///
     /// # Errors
     ///
-    /// Propagates any error from [`XdpLoader::acl_trie`] plus aya-level
-    /// `bpf_map_update_elem` failures (full map, permission denied).
+    /// - [`XdpLoaderError::InvalidAclPrefixV4`] if `prefix_len == 0`
+    ///   or `prefix_len > 32`.
+    /// - Propagates any error from [`XdpLoader::acl_trie`] plus
+    ///   aya-level `bpf_map_update_elem` failures (full map,
+    ///   permission denied).
     pub fn insert_acl_deny(
         &mut self,
         prefix_len: u8,
         ipv4: Ipv4Addr,
     ) -> Result<(), XdpLoaderError> {
+        if prefix_len == 0 || prefix_len > 32 {
+            return Err(XdpLoaderError::InvalidAclPrefixV4(prefix_len));
+        }
         // aya's examples store IPv4 addresses as u32.to_be() so the BPF
         // side can compare them byte-for-byte against the packet's src_addr
         // (which is already in network byte order). Match that convention.
