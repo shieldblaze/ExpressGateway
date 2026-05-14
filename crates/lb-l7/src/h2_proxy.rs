@@ -85,6 +85,12 @@ pub struct H2Proxy {
     /// Monotonic per-listener connection sequence used as the
     /// [`Watchdog`] entry key.
     conn_seq: Arc<parking_lot::Mutex<u64>>,
+    /// PROTO-2-18 (Wave 2c-2): default expected SNI for the
+    /// [`crate::sni_authority::check_sni_authority`] check. Builder
+    /// default `None` means SNI/authority agreement is not enforced
+    /// on this proxy unless [`Self::serve_connection_with_cancel_sni`]
+    /// supplies a per-connection override.
+    expected_sni: Option<String>,
 }
 
 impl H2Proxy {
@@ -142,6 +148,7 @@ impl H2Proxy {
             hooks: Arc::new(NoopHooks::new()),
             watchdog: None,
             conn_seq: Arc::new(parking_lot::Mutex::new(0)),
+            expected_sni: None,
         }
     }
 
@@ -175,6 +182,7 @@ impl H2Proxy {
             hooks: Arc::new(NoopHooks::new()),
             watchdog: None,
             conn_seq: Arc::new(parking_lot::Mutex::new(0)),
+            expected_sni: None,
         }
     }
 
@@ -196,6 +204,18 @@ impl H2Proxy {
     #[must_use]
     pub fn with_watchdog(mut self, watchdog: Watchdog) -> Self {
         self.watchdog = Some(watchdog);
+        self
+    }
+
+    /// PROTO-2-18 (Wave 2c-2): default expected SNI used by the
+    /// [`crate::sni_authority::check_sni_authority`] hot-path check
+    /// when [`Self::serve_connection`] is used directly. Real TLS-
+    /// bearing deployments prefer
+    /// [`Self::serve_connection_with_cancel_sni`] which captures the
+    /// SNI live from rustls at TLS-accept time.
+    #[must_use]
+    pub fn with_expected_sni(mut self, sni: Option<String>) -> Self {
+        self.expected_sni = sni;
         self
     }
 
@@ -302,10 +322,35 @@ impl H2Proxy {
     where
         IO: AsyncRead + AsyncWrite + Unpin + Send + 'static,
     {
+        // PROTO-2-18: no per-connection SNI override; the builder
+        // default applies.
+        let sni = self.expected_sni.clone();
+        self.serve_connection_with_cancel_sni(io, peer, cancel, sni)
+            .await
+    }
+
+    /// PROTO-2-18 (Wave 2c-2) — H2 entry point that threads the
+    /// per-connection TLS SNI value into the request hot-path so the
+    /// [`crate::sni_authority::check_sni_authority`] validator runs
+    /// against the **observed** SNI rather than the builder default.
+    ///
+    /// # Errors
+    /// Same as [`Self::serve_connection_with_cancel`].
+    pub async fn serve_connection_with_cancel_sni<IO>(
+        self: Arc<Self>,
+        io: IO,
+        peer: SocketAddr,
+        cancel: tokio_util::sync::CancellationToken,
+        sni: Option<String>,
+    ) -> io::Result<()>
+    where
+        IO: AsyncRead + AsyncWrite + Unpin + Send + 'static,
+    {
         let total = self.timeouts.total;
         let svc = ProxyService {
             inner: Arc::clone(&self),
             peer,
+            expected_sni: sni,
         };
         // Configure hyper's H2 Builder with the detector-derived
         // thresholds. Hyper enforces on the wire; the lb-h2 detector
@@ -368,6 +413,9 @@ impl H2Proxy {
 struct ProxyService {
     inner: Arc<H2Proxy>,
     peer: SocketAddr,
+    /// PROTO-2-18: per-connection SNI captured from the rustls
+    /// handshake at TLS-accept time.
+    expected_sni: Option<String>,
 }
 
 impl hyper::service::Service<Request<IncomingBody>> for ProxyService {
@@ -378,7 +426,8 @@ impl hyper::service::Service<Request<IncomingBody>> for ProxyService {
     fn call(&self, req: Request<IncomingBody>) -> Self::Future {
         let inner = Arc::clone(&self.inner);
         let peer = self.peer;
-        Box::pin(async move { Ok(Box::pin(inner.handle(req, peer)).await) })
+        let sni = self.expected_sni.clone();
+        Box::pin(async move { Ok(Box::pin(inner.handle(req, peer, sni.as_deref())).await) })
     }
 }
 
@@ -387,6 +436,7 @@ impl H2Proxy {
         &self,
         req: Request<IncomingBody>,
         peer: SocketAddr,
+        expected_sni: Option<&str>,
     ) -> Response<BoxBody<Bytes, hyper::Error>> {
         // RFC 8441 extended CONNECT intercept. Only fires when this
         // listener was configured with a `WsProxy`; everything else
@@ -468,6 +518,43 @@ impl H2Proxy {
         if let Err(msg) = check_authority_host_agreement(&parts.uri, &parts.headers) {
             tracing::warn!(peer = %peer, reason = msg, "h2 :authority/Host mismatch rejected");
             return error_response(StatusCode::BAD_REQUEST, msg);
+        }
+
+        // PROTO-2-18 (Wave 2c-2) — SNI ↔ `:authority`/Host agreement
+        // (RFC 9110 §15.5.20). Precedence step 3 from
+        // `audit/protocol/round-2-review.md`: smuggle → auth/host →
+        // SNI/host. Hyper surfaces the H2 `:authority` pseudo-header
+        // as `uri.authority()`; we prefer that, falling back to
+        // `Host` if the client emitted it without `:authority`. Empty
+        // authority is `Ok` per the validator's contract (PROTO-2-01
+        // upstream rejects empty authority already). Loopback peers
+        // skip enforcement (sec-r5 caveat — same rationale as the H1
+        // path: SNI/Host confusion is a Layer-7 routing/authz vector
+        // that doesn't apply to loopback ingress).
+        if !peer.ip().is_loopback() {
+            let authority = parts
+                .uri
+                .authority()
+                .map(http::uri::Authority::as_str)
+                .unwrap_or_else(|| {
+                    parts
+                        .headers
+                        .get(hyper::header::HOST)
+                        .and_then(|v| v.to_str().ok())
+                        .unwrap_or("")
+                });
+            if let Err(mismatch) =
+                crate::sni_authority::check_sni_authority(expected_sni, authority)
+            {
+                tracing::warn!(
+                    peer = %peer,
+                    sni = %mismatch.sni,
+                    authority = %mismatch.authority,
+                    "PROTO-2-18: H2 SNI/:authority mismatch — emitting 421 Misdirected Request"
+                );
+                let (status, body) = crate::sni_authority::misdirected_response();
+                return error_response(status, body);
+            }
         }
 
         // SEC-2-01 / SEC-2-03 — register the stream with the

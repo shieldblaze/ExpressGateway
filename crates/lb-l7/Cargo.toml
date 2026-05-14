@@ -42,3 +42,15 @@ lb-grpc = { path = "../lb-grpc" }
 # Item 2: WebSocket proxy path (RFC 6455 + RFC 8441).
 tokio-tungstenite = { workspace = true }
 futures-util = { workspace = true }
+
+[dev-dependencies]
+# PROTO-2-18 (Wave 2c-2): the `tests/sni_authority_421.rs` integration
+# test drives a real TLS handshake against
+# `H1Proxy::serve_connection_with_cancel_sni` and asserts a 421
+# Misdirected Request when the SNI ≠ Host. TLS pieces are dev-only —
+# no production codepath in lb-l7 imports tokio-rustls / rcgen /
+# rustls-pki-types.
+tokio-rustls = { workspace = true }
+rustls = { workspace = true }
+rustls-pki-types = { workspace = true }
+rcgen = { version = "0.13", features = ["pem"] }

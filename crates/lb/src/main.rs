@@ -2419,15 +2419,18 @@ async fn run_listener(bind_addr: String, state: Arc<ListenerState>) -> anyhow::R
                         .await
                         {
                             Ok(tls_stream) => {
-                                // PROTO-2-15 (Wave 2c-2): capture + log SNI
-                                // for observability. Authority/SNI rejection
-                                // wiring is tracked as the lb-l7 follow-up
-                                // (needs `serve_connection_with_sni`).
-                                if let Some(sni) = tls_stream.get_ref().1.server_name() {
+                                // PROTO-2-18 (Wave 2c-2): capture SNI from
+                                // rustls and thread into the proxy's
+                                // `serve_connection_with_cancel_sni` so the
+                                // `check_sni_authority` validator runs on
+                                // every request (precedence step 3:
+                                // smuggle → auth/host → SNI/host).
+                                let sni = tls_stream.get_ref().1.server_name().map(str::to_owned);
+                                if let Some(s) = sni.as_deref() {
                                     tracing::trace!(
                                         client = %client_addr,
-                                        sni = sni,
-                                        "TLS SNI captured on H1s (PROTO-2-15 observability)"
+                                        sni = s,
+                                        "TLS SNI captured on H1s (PROTO-2-18)"
                                     );
                                 }
                                 // ALPN-based dispatch: h2 → H2Proxy, else H1Proxy.
@@ -2435,29 +2438,30 @@ async fn run_listener(bind_addr: String, state: Arc<ListenerState>) -> anyhow::R
                                     tls_stream.get_ref().1.alpn_protocol().map(<[u8]>::to_vec);
                                 if alpn.as_deref() == Some(b"h2".as_ref()) {
                                     http_version = Some("h2");
-                                    // PROTO-2-11 Wave 2c-2: hand the
-                                    // shutdown token into the H2 conn so
-                                    // a SIGTERM mid-stream triggers a
-                                    // two-step GOAWAY emit before the
-                                    // socket is torn down.
+                                    // PROTO-2-11/-18 Wave 2c-2: hand the
+                                    // shutdown token + SNI into the H2 conn
+                                    // so a SIGTERM mid-stream triggers a
+                                    // two-step GOAWAY emit AND the SNI/
+                                    // authority validator runs per request.
                                     Arc::clone(h2_proxy)
-                                        .serve_connection_with_cancel(
+                                        .serve_connection_with_cancel_sni(
                                             tls_stream,
                                             client_addr,
                                             st.shutdown_token.clone(),
+                                            sni,
                                         )
                                         .await
                                         .map_err(anyhow::Error::from)
                                 } else {
                                     http_version = Some("h1");
-                                    // PROTO-2-11 (H1 half, Wave 2c-2):
-                                    // mirror the H2 branch and thread the
-                                    // shutdown token into the H1s/H1 conn.
+                                    // PROTO-2-11/-18 (H1 half, Wave 2c-2):
+                                    // mirror the H2 branch.
                                     Arc::clone(h1_proxy)
-                                        .serve_connection_with_cancel(
+                                        .serve_connection_with_cancel_sni(
                                             tls_stream,
                                             client_addr,
                                             st.shutdown_token.clone(),
+                                            sni,
                                         )
                                         .await
                                         .map_err(anyhow::Error::from)

@@ -205,6 +205,14 @@ pub struct H1Proxy {
     /// `Transfer-Encoding` codec other than `chunked`). Default
     /// `false` keeps the lenient RFC 9112 baseline.
     smuggle_strict: bool,
+    /// PROTO-2-18 (Wave 2c-2): default expected SNI for the
+    /// [`crate::sni_authority::check_sni_authority`] check. Builder
+    /// default `None` means SNI/authority agreement is not enforced
+    /// on this proxy unless [`Self::serve_connection_with_cancel_sni`]
+    /// supplies a per-connection override. Real deployments call
+    /// [`Self::serve_connection_with_cancel_sni`] at the TLS-accept
+    /// site to pass `rustls::ServerConnection::server_name()`.
+    expected_sni: Option<String>,
 }
 
 impl H1Proxy {
@@ -239,6 +247,7 @@ impl H1Proxy {
             watchdog: None,
             conn_seq: Arc::new(parking_lot::Mutex::new(0)),
             smuggle_strict: false,
+            expected_sni: None,
         }
     }
 
@@ -275,6 +284,7 @@ impl H1Proxy {
             watchdog: None,
             conn_seq: Arc::new(parking_lot::Mutex::new(0)),
             smuggle_strict: false,
+            expected_sni: None,
         }
     }
 
@@ -312,6 +322,18 @@ impl H1Proxy {
     #[must_use]
     pub const fn with_smuggle_strict(mut self, strict: bool) -> Self {
         self.smuggle_strict = strict;
+        self
+    }
+
+    /// PROTO-2-18 (Wave 2c-2): default expected SNI used by the
+    /// [`crate::sni_authority::check_sni_authority`] hot-path check
+    /// when [`Self::serve_connection`] is used directly (no per-
+    /// connection SNI threaded in). Real TLS-bearing deployments
+    /// prefer [`Self::serve_connection_with_cancel_sni`] which
+    /// captures the SNI live from rustls at TLS-accept time.
+    #[must_use]
+    pub fn with_expected_sni(mut self, sni: Option<String>) -> Self {
+        self.expected_sni = sni;
         self
     }
 
@@ -413,10 +435,43 @@ impl H1Proxy {
     where
         IO: AsyncRead + AsyncWrite + Unpin + Send + 'static,
     {
+        // PROTO-2-18: no per-connection SNI override; the proxy's
+        // builder-level `expected_sni` (commonly `None`) is the
+        // effective value. Real TLS deployments use
+        // `serve_connection_with_cancel_sni`.
+        let sni = self.expected_sni.clone();
+        self.serve_connection_with_cancel_sni(io, peer, cancel, sni)
+            .await
+    }
+
+    /// PROTO-2-18 (Wave 2c-2) — H1 entry point that threads the
+    /// per-connection TLS SNI value into the request hot-path so the
+    /// [`crate::sni_authority::check_sni_authority`] validator runs
+    /// against the **observed** SNI rather than the builder default.
+    ///
+    /// `sni` is the value captured from the rustls handshake (commonly
+    /// `tls_stream.get_ref().1.server_name().map(str::to_owned)`).
+    /// Plain-TCP listeners and SNI-omitting clients pass `None`, which
+    /// disables the SNI/authority agreement check (the validator returns
+    /// `Ok(())` on `None`).
+    ///
+    /// # Errors
+    /// Same as [`Self::serve_connection_with_cancel`].
+    pub async fn serve_connection_with_cancel_sni<IO>(
+        self: Arc<Self>,
+        io: IO,
+        peer: SocketAddr,
+        cancel: tokio_util::sync::CancellationToken,
+        sni: Option<String>,
+    ) -> io::Result<()>
+    where
+        IO: AsyncRead + AsyncWrite + Unpin + Send + 'static,
+    {
         let total = self.timeouts.total;
         let svc = ProxyService {
             inner: Arc::clone(&self),
             peer,
+            expected_sni: sni,
         };
         let conn = hyper::server::conn::http1::Builder::new()
             .keep_alive(true)
@@ -469,6 +524,10 @@ impl H1Proxy {
 struct ProxyService {
     inner: Arc<H1Proxy>,
     peer: SocketAddr,
+    /// PROTO-2-18: SNI captured from the TLS handshake at accept time
+    /// and threaded through `serve_connection_with_cancel_sni`. `None`
+    /// on plain-TCP listeners and SNI-omitting clients.
+    expected_sni: Option<String>,
 }
 
 impl hyper::service::Service<Request<IncomingBody>> for ProxyService {
@@ -479,7 +538,8 @@ impl hyper::service::Service<Request<IncomingBody>> for ProxyService {
     fn call(&self, req: Request<IncomingBody>) -> Self::Future {
         let inner = Arc::clone(&self.inner);
         let peer = self.peer;
-        Box::pin(async move { Ok(Box::pin(inner.handle(req, peer)).await) })
+        let sni = self.expected_sni.clone();
+        Box::pin(async move { Ok(Box::pin(inner.handle(req, peer, sni.as_deref())).await) })
     }
 }
 
@@ -488,6 +548,7 @@ impl H1Proxy {
         &self,
         req: Request<IncomingBody>,
         peer: SocketAddr,
+        expected_sni: Option<&str>,
     ) -> Response<BoxBody<Bytes, hyper::Error>> {
         // gRPC requires HTTP/2 (RFC: gRPC over HTTP/2 §3.4 — gRPC PROTOCOL
         // section). An H1 listener cannot serve gRPC: framing relies on H2
@@ -551,6 +612,38 @@ impl H1Proxy {
         };
         if let Err(rej) = self.hooks.inspect_request(&inspect_req, peer.ip()) {
             return reject_to_response(&rej);
+        }
+
+        // PROTO-2-18 (Wave 2c-2) — SNI ↔ Host agreement (RFC 9110
+        // §15.5.20). H1 carries the authority in the `Host` header
+        // (RFC 9112 §3.2). The validator returns `Ok(())` when SNI
+        // is absent (plain TCP / SNI-omitting client) or when the
+        // `Host` header is missing/empty — PROTO-2-01 covers those
+        // gates upstream. Per the sec-r5 caveat, loopback peers
+        // (typically health-checkers and same-host curl users
+        // hitting `127.0.0.1`) skip enforcement: SNI-vs-Host
+        // confusion is a Layer-7 routing/authz attack vector that
+        // doesn't apply to the loopback path, and the operator's
+        // probe scripts often use IP-literal Host headers that
+        // don't match the cert's SNI.
+        if !peer.ip().is_loopback() {
+            let authority = parts
+                .headers
+                .get(hyper::header::HOST)
+                .and_then(|v| v.to_str().ok())
+                .unwrap_or("");
+            if let Err(mismatch) =
+                crate::sni_authority::check_sni_authority(expected_sni, authority)
+            {
+                tracing::warn!(
+                    peer = %peer,
+                    sni = %mismatch.sni,
+                    authority = %mismatch.authority,
+                    "PROTO-2-18: H1 SNI/Host mismatch — emitting 421 Misdirected Request"
+                );
+                let (status, body) = crate::sni_authority::misdirected_response();
+                return error_response(status, body);
+            }
         }
 
         // SEC-2-01 — defense-in-depth explicit `SmuggleDetector` call.
