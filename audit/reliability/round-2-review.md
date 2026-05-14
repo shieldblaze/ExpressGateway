@@ -640,7 +640,7 @@ in S-2.
 
 ### REL-2-13 — Per-CPU STATS map never exported (kernel-side counters invisible)
 Severity: medium
-Status:   Open
+Status:   Proposed-Fix(4c2ccc5)
 Location: `crates/lb-l4-xdp/ebpf/src/main.rs` (STATS map definition); `crates/lb/src/xdp.rs` (loader hook)
 
 Description: Sibling to REL-2-12. The XDP program maintains a
