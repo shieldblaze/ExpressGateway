@@ -1024,11 +1024,26 @@ async fn translate_h1_request_to_h2(
     req: Request<IncomingBody>,
 ) -> Result<Request<BoxBody<Bytes, hyper::Error>>, String> {
     let (parts, body) = req.into_parts();
-    let body_bytes = body
+    // PROTO-2-12: collect body + trailers in a single round-trip so
+    // the bridge sees both.
+    let collected = body
         .collect()
         .await
-        .map_err(|e| format!("body collect: {e}"))?
-        .to_bytes();
+        .map_err(|e| format!("body collect: {e}"))?;
+    let trailers_map = collected.trailers().cloned();
+    let body_bytes = collected.to_bytes();
+    let trailers_vec: Vec<(String, String)> = trailers_map
+        .as_ref()
+        .map(|tm| {
+            tm.iter()
+                .filter_map(|(n, v)| {
+                    v.to_str()
+                        .ok()
+                        .map(|s| (n.as_str().to_owned(), s.to_owned()))
+                })
+                .collect()
+        })
+        .unwrap_or_default();
     let bridge = crate::create_bridge(crate::Protocol::Http1, crate::Protocol::Http2);
     let bridge_in = crate::BridgeRequest {
         method: parts.method.to_string(),
@@ -1047,6 +1062,7 @@ async fn translate_h1_request_to_h2(
             .collect(),
         body: body_bytes.clone(),
         scheme: Some("http".to_owned()),
+        trailers: trailers_vec,
     };
     let translated = bridge
         .bridge_request(&bridge_in)
@@ -1076,10 +1092,46 @@ async fn translate_h1_request_to_h2(
         }
         builder = builder.header(n.as_str(), v.as_str());
     }
-    let body = Full::new(body_bytes)
-        .map_err(|never| match never {})
-        .boxed();
+    // PROTO-2-12: emit body + trailers as a StreamBody so the H2
+    // client sends a separate trailers frame after the data frame.
+    let body = build_body_with_trailers(body_bytes, &translated.trailers);
     builder.body(body).map_err(|e| format!("build h2 req: {e}"))
+}
+
+/// PROTO-2-12 helper: build a `BoxBody` that emits the data bytes
+/// followed by an HTTP trailer frame, so cross-protocol bridges can
+/// re-attach the trailer set captured at body-collect time.
+///
+/// `trailers` is a flat `(name, value)` list — empty means no trailer
+/// frame is emitted (the body still wraps the data frame).
+fn build_body_with_trailers(
+    body_bytes: Bytes,
+    trailers: &[(String, String)],
+) -> BoxBody<Bytes, hyper::Error> {
+    use http_body_util::StreamBody;
+    use hyper::HeaderMap;
+    use hyper::body::Frame;
+
+    if trailers.is_empty() {
+        return Full::new(body_bytes)
+            .map_err(|never| match never {})
+            .boxed();
+    }
+    let mut tmap = HeaderMap::new();
+    for (n, v) in trailers {
+        if let (Ok(name), Ok(value)) = (
+            hyper::header::HeaderName::try_from(n.as_str()),
+            HeaderValue::from_str(v),
+        ) {
+            tmap.append(name, value);
+        }
+    }
+    let frames: Vec<Result<Frame<Bytes>, hyper::Error>> = if body_bytes.is_empty() {
+        vec![Ok(Frame::trailers(tmap))]
+    } else {
+        vec![Ok(Frame::data(body_bytes)), Ok(Frame::trailers(tmap))]
+    };
+    StreamBody::new(futures_util::stream::iter(frames)).boxed()
 }
 
 /// Convert an upstream `Response<Incoming>` (H2) back into the H1
@@ -1089,12 +1141,27 @@ async fn upstream_response_to_h1(
     alt_svc: Option<AltSvcConfig>,
 ) -> Response<BoxBody<Bytes, hyper::Error>> {
     let (parts, body) = resp.into_parts();
-    let body_bytes = match body.collect().await {
-        Ok(b) => b.to_bytes(),
+    // PROTO-2-12: capture trailers alongside body.
+    let collected = match body.collect().await {
+        Ok(c) => c,
         Err(e) => {
             return error_response(StatusCode::BAD_GATEWAY, &format!("upstream body read: {e}"));
         }
     };
+    let trailers_map = collected.trailers().cloned();
+    let body_bytes = collected.to_bytes();
+    let trailers_vec: Vec<(String, String)> = trailers_map
+        .as_ref()
+        .map(|tm| {
+            tm.iter()
+                .filter_map(|(n, v)| {
+                    v.to_str()
+                        .ok()
+                        .map(|s| (n.as_str().to_owned(), s.to_owned()))
+                })
+                .collect()
+        })
+        .unwrap_or_default();
     let bridge = crate::create_bridge(crate::Protocol::Http2, crate::Protocol::Http1);
     let bridge_in = crate::BridgeResponse {
         status: parts.status.as_u16(),
@@ -1108,6 +1175,7 @@ async fn upstream_response_to_h1(
             })
             .collect(),
         body: body_bytes,
+        trailers: trailers_vec,
     };
     let translated = match bridge.bridge_response(&bridge_in) {
         Ok(r) => r,
@@ -1130,9 +1198,8 @@ async fn upstream_response_to_h1(
             builder = builder.header(hyper::header::ALT_SVC, value);
         }
     }
-    let body = Full::new(translated.body)
-        .map_err(|never| match never {})
-        .boxed();
+    // PROTO-2-12: emit body + trailers via StreamBody.
+    let body = build_body_with_trailers(translated.body, &translated.trailers);
     builder.body(body).unwrap_or_else(|_| {
         error_response(
             StatusCode::INTERNAL_SERVER_ERROR,
@@ -1186,6 +1253,14 @@ async fn collect_h1_request_to_h3_fieldlist(
         },
         body: body_bytes.clone(),
         scheme: Some(scheme.to_owned()),
+        // PROTO-2-12: H3 upstream request trailers are not currently
+        // surfaced by `lb_quic::request_h3_upstream` (the H3
+        // request representation has no separate trailer field). The
+        // H1->H3 cross-bridge therefore cannot ship a Frame::trailers
+        // through the QUIC stream until `H3Request` / `H3Upstream`
+        // grow a trailers field. See `audit/deferred.md` PROTO-2-12
+        // H3 leg.
+        trailers: Vec::new(),
     };
     let translated = bridge
         .bridge_request(&bridge_in)
@@ -1212,6 +1287,9 @@ fn h3_response_to_h1(
         status: resp.status,
         headers: resp.headers,
         body: body_bytes,
+        // PROTO-2-12: H3 response trailers not surfaced by
+        // `H3UpstreamResponse`; see deferred note above.
+        trailers: Vec::new(),
     };
     let translated = match bridge.bridge_response(&bridge_in) {
         Ok(r) => r,
@@ -1235,9 +1313,10 @@ fn h3_response_to_h1(
             builder = builder.header(hyper::header::ALT_SVC, value);
         }
     }
-    let body = Full::new(translated.body)
-        .map_err(|never| match never {})
-        .boxed();
+    // PROTO-2-12: trailers field empty for now (H3 surface gap noted
+    // above). Wire-shape is correct once `lb_quic` grows trailer
+    // support.
+    let body = build_body_with_trailers(translated.body, &translated.trailers);
     builder.body(body).unwrap_or_else(|_| {
         error_response(
             StatusCode::INTERNAL_SERVER_ERROR,

@@ -16,6 +16,7 @@ fn test_bridge_h3_to_h2() {
         ],
         body: Bytes::from_static(b"{\"name\":\"new\"}"),
         scheme: None,
+        trailers: Vec::new(),
     };
     let bridged = bridge.bridge_request(&req).unwrap();
     // Pseudo-headers preserved (same scheme between H3 and H2)

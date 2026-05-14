@@ -80,37 +80,42 @@ Wave-2c will:
      authority_str)` and on `Err(_)` return
      `misdirected_response()` rendered as `Response<BoxBody<…>>`.
 
-### PROTO-2-12 — trailer pass-through across cross-protocol bridges (deferred)
+### PROTO-2-12 — trailer pass-through across cross-protocol bridges (Round-4 follow-on; H3 leg deferred)
 
-**Status**: baseline pinned Wave-2b-2; **bridge-surface fix deferred
-to Wave-2c**.
+**Status**: Round-4-Wave-2c follow-on lands the bridge-surface fix
+for the H1↔H2 / H2↔H2 paths; **H3 leg of every cross-bridge
+remains deferred** because `lb-quic::H3Request` /
+`lb-quic::H3UpstreamResponse` carry no trailer field.
 
-Investigation showed the proxy hot path's cross-protocol bridges
-(every H1↔H2, H1↔H3, H2↔H2, H2↔H3, H3↔H2 path in `h1_proxy.rs`
-/ `h2_proxy.rs`) collect bodies via `BodyExt::collect()` then
-re-wrap as `http_body_util::Full::new(body_bytes)`. `Full<Bytes>`
-is a single-frame body and **cannot carry trailers**. The
-`BridgeRequest` / `BridgeResponse` types in `crates/lb-l7/src/lib.rs`
-also lack a trailers field, so the bridge trait surface cannot
-forward them even if the writeback were fixed.
+Landed in this round:
 
-Wave-2b-2 lands `crates/lb-l7/tests/trailer_passthrough.rs` as a
-**behaviour baseline** (6 tests pass today) that pins the current
-trailer-dropping shape. Wave-2c must:
+  1. `BridgeRequest` / `BridgeResponse` (`crates/lb-l7/src/lib.rs`)
+     each grew a `trailers: Vec<(String, String)>` field with a
+     `Default` impl.
+  2. All 9 bridge impls (`crates/lb-l7/src/h{1,2,3}_to_h{1,2,3}.rs`)
+     forward the trailer list end-to-end.
+  3. The H1 / H2 hot-path translation helpers (`h1_proxy::
+     translate_h1_request_to_h2`, `h1_proxy::upstream_response_to_h1`,
+     `h2_proxy::translate_h2_request_to_h2`, `h2_proxy::
+     upstream_h2_response_to_h2`) capture trailers via
+     `Collected::trailers()` at body-collect time and re-emit them
+     via `StreamBody` + `Frame::trailers(HeaderMap)` (new helpers
+     `build_body_with_trailers` / `build_h2_body_with_trailers`).
+  4. `crates/lb-l7/tests/trailer_passthrough.rs` flipped from
+     baseline-pinning to positive assertions: two suite tests
+     iterate every (src, dst) pair and assert request / response
+     trailers survive `bridge_request` / `bridge_response`.
 
-  1. Add `pub trailers: Option<http::HeaderMap>` to
-     `BridgeRequest` / `BridgeResponse`.
-  2. Replace every `Full::new(body_bytes)` writeback in
-     `h{1,2}_proxy.rs` translation helpers with a `StreamBody`
-     yielding `Frame::data(_)` then `Frame::trailers(_)`.
-  3. Plumb trailers through each `Bridge` impl
-     (`H1ToH2Bridge::bridge_request`, etc.).
-  4. Flip the assertions in `trailer_passthrough.rs` to assert
-     trailers ARE preserved.
-
-The H1↔H1 path is already trailer-safe via hyper's `IncomingBody`
-round-trip — that path proxies the body as-is and hyper's frame
-loop preserves trailers automatically.
+Deferred — **H3 cross-bridge trailers**: `H3Request` /
+`H3UpstreamResponse` in `lb-quic::h3_bridge` don't carry trailer
+fields, so `collect_h1_request_to_h3_fieldlist`,
+`collect_h2_request_to_h3_fieldlist`, `h3_response_to_h1`, and
+`h3_response_to_h2` ship `trailers: Vec::new()` even though the
+H1/H2 leg of the bridge is plumbed. Round-5 ticket: add a `trailers:
+Vec<(String, String)>` field to `H3Request` / `H3UpstreamResponse`,
+emit the matching `Frame::trailers` from the H3 client codec, and
+flip the H3 leg in the proxy hot-path calls to forward
+`translated.trailers`.
 
 ### PROTO-2-03 — explicit 1xx / 103 Early Hints forwarding (deferred)
 

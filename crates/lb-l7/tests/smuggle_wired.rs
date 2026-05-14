@@ -50,6 +50,7 @@ fn h2_bridge_request(headers: Vec<(&'static str, &'static str)>) -> BridgeReques
         },
         body: Bytes::new(),
         scheme: None,
+        trailers: Vec::new(),
     }
 }
 

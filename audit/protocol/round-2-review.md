@@ -495,7 +495,7 @@ plumbing).
 ---
 
 ### PROTO-2-12 — Trailer pass-through across H1↔H2/H3 (non-gRPC) untested and likely broken
-Status:   Baseline-Pinned-Wave-2b-2 / Fix-Deferred-Wave-2c (investigation confirms trailers drop on every cross-protocol bridge: `BridgeRequest`/`BridgeResponse` lack a trailers field, proxy writeback uses `http_body_util::Full<Bytes>` which is single-frame. `crates/lb-l7/tests/trailer_passthrough.rs` (6 tests) pins the current trailer-dropping baseline; Wave-2c will flip them green via bridge-surface extension. See `audit/deferred.md` "PROTO-2-12" for the threaded-through plan.)
+Status:   Proposed-Fix(Round-4-Wave-2c follow-on)   <!-- BridgeRequest and BridgeResponse now carry a `trailers: Vec<(String, String)>` field (`crates/lb-l7/src/lib.rs`). All 9 bridge impls (`h{1,2,3}_to_h{1,2,3}.rs`) forward the trailer list. The hot-path translate fns (`h1_proxy::translate_h1_request_to_h2`, `h1_proxy::upstream_response_to_h1`, `h2_proxy::translate_h2_request_to_h2`, `h2_proxy::upstream_h2_response_to_h2`) capture trailers via `Collected::trailers()` and re-emit them via `StreamBody` + `Frame::trailers(HeaderMap)` instead of `Full<Bytes>`. New helpers `build_body_with_trailers` / `build_h2_body_with_trailers`. Tests in `crates/lb-l7/tests/trailer_passthrough.rs` were flipped from baseline-pinning to assert pass-through (every-bridge request/response trailer test exercises all 9 combos). H3 leg of cross-bridges still emits `Vec::new()` because `lb_quic::H3Request` / `H3UpstreamResponse` carry no trailer field — this is a separate `lb-quic` surface gap noted in `audit/deferred.md`. -->
 Severity: medium
 Status:   Open
 Location:

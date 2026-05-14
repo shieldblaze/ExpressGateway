@@ -3,141 +3,148 @@
 //! RFC 9110 §6.6 defines trailers: a sequence of header fields sent
 //! after the body. They are end-to-end (§6.6.2 — Trailer field is
 //! end-to-end) so an intermediary MUST forward declared trailers
-//! when bridging across protocol versions, EXCEPT it MAY drop the
-//! ones listed in the `Trailer:` header that contain "transient"
-//! information (cf. RFC 9112 §6.5).
+//! when bridging across protocol versions.
 //!
-//! ## Current state (Wave-2b-2 inventory)
+//! ## Round-4 / Wave-2c fix landed
 //!
-//! The protocol bridges in `crates/lb-l7/src/{h1,h2,h3}_to_*.rs`
-//! operate on `BridgeRequest` / `BridgeResponse` which are
-//! header-and-body structs **without a trailer field**. The proxy
-//! hot path (`h1_proxy.rs::translate_h1_request_to_h2`,
-//! `upstream_response_to_h1`, etc.) collects the body to `Bytes`
-//! via `BodyExt::collect()` then re-wraps it in
-//! `http_body_util::Full::new(body_bytes)`. `Full<Bytes>` is a
-//! single-frame body — it **does not carry trailers**.
+//! `BridgeRequest` and `BridgeResponse` now carry a `trailers: Vec<(String, String)>`
+//! field. Every bridge in `crates/lb-l7/src/{h1,h2,h3}_to_*.rs`
+//! propagates the trailer list through `bridge_request` /
+//! `bridge_response`. The proxy hot path
+//! (`h1_proxy::translate_h1_request_to_h2`,
+//! `h1_proxy::upstream_response_to_h1`,
+//! `h2_proxy::translate_h2_request_to_h2`,
+//! `h2_proxy::upstream_h2_response_to_h2`)
+//! captures trailers via `Collected::trailers()` at body-collect time
+//! and re-emits them via `http_body_util::StreamBody` with a
+//! `Frame::trailers(HeaderMap)` frame on the writeback side. This
+//! flips the Wave-2b-2 baseline tests green.
 //!
-//! Consequence: trailers traverse the H1↔H1 path via hyper's
-//! `IncomingBody` round-trip (which preserves trailer frames), but
-//! every CROSS-protocol bridge (H1↔H2, H1↔H3, H2↔H2, H2↔H3,
-//! H2↔H1 with the multi-proto upstream, …) drops trailers.
+//! ## What this test file pins
 //!
-//! ## Wave-2b-2 disposition
-//!
-//! Lifting trailer pass-through across the cross-proto bridges
-//! requires:
-//!   1. Threading a `HeaderMap` trailers field through
-//!      `BridgeRequest` / `BridgeResponse`.
-//!   2. Replacing the `Full::new(body_bytes)` writebacks with a
-//!      `StreamBody` (or `Empty + Frame::trailers(map)`) so the
-//!      trailer frame survives the bytes round-trip.
-//!   3. Updating every bridge `bridge_request` /
-//!      `bridge_response` impl to carry the trailers through.
-//!
-//! This is a non-trivial refactor of the bridge surface and is
-//! **DEFERRED to Wave-2c** under PROTO-2-12 (see
-//! `audit/deferred.md`). Wave-2b-2 lands these tests as a behaviour
-//! *baseline* — they pin the current trailer-dropping behaviour so
-//! the Wave-2c fix can flip them green by extending the bridge
-//! types.
-//!
-//! ## What we DO test here
-//!
-//! Each test demonstrates that the current bridge surface has no
-//! trailer-carrying field, then documents the expected Wave-2c
-//! behaviour. The tests pass today (they assert the documented
-//! drop); Wave-2c will invert the assertions when it lands the
-//! bridge-surface extension.
+//! 1. Every bridge passes both request and response trailers through
+//!    unchanged.
+//! 2. `Frame::trailers(...)` survives the `Full → StreamBody`
+//!    writeback (the hyper API the bridges rely on).
+//! 3. The H3 cross-protocol leg is a documented gap: the H3
+//!    upstream surfaces (`H3Request` / `H3UpstreamResponse` in
+//!    `lb-quic`) do not yet carry trailers, so the H3 side of any
+//!    cross-bridge sends `Vec::new()`. The H3 leg is tracked
+//!    separately in `audit/deferred.md` PROTO-2-12 H3 leg.
 
 use bytes::Bytes;
 use http_body_util::BodyExt;
-use http_body_util::Full;
+use http_body_util::StreamBody;
+use hyper::body::Frame;
+use lb_l7::{BridgeRequest, BridgeResponse, Protocol, create_bridge};
 
-#[tokio::test]
-async fn test_h1_h2_trailers() {
-    // Behaviour pin: the H1→H2 translate path replaces the body
-    // with `Full<Bytes>`. `Full` is single-frame; its `frame()`
-    // future yields exactly one `Frame::data(_)` then `None` —
-    // never a `Frame::trailers(_)`.
-    let body = Full::<Bytes>::new(Bytes::from_static(b"hello"));
-    let collected = body.collect().await.expect("collect");
-    assert!(
-        collected.trailers().is_none(),
-        "PROTO-2-12 BASELINE: H1->H2 cross-bridge drops trailers \
-         (Full<Bytes> has no trailer frame). Wave-2c will flip this \
-         when StreamBody replaces Full in the bridge writeback."
-    );
+fn req_with_trailers() -> BridgeRequest {
+    BridgeRequest {
+        method: "POST".into(),
+        uri: "/".into(),
+        headers: vec![
+            (":method".into(), "POST".into()),
+            (":path".into(), "/".into()),
+            (":scheme".into(), "https".into()),
+            (":authority".into(), "example.com".into()),
+            ("trailer".into(), "x-checksum".into()),
+        ],
+        body: Bytes::from_static(b"hello"),
+        scheme: Some("https".into()),
+        trailers: vec![("x-checksum".into(), "abc123".into())],
+    }
 }
 
-#[tokio::test]
-async fn test_h2_h1_trailers() {
-    // Same baseline: H2→H1 in `upstream_response_to_h1` also wraps
-    // the collected body in `Full::new(translated.body)`.
-    let body = Full::<Bytes>::new(Bytes::from_static(b"world"));
-    let collected = body.collect().await.expect("collect");
-    assert!(collected.trailers().is_none());
+fn resp_with_trailers() -> BridgeResponse {
+    BridgeResponse {
+        status: 200,
+        headers: vec![("trailer".into(), "x-checksum".into())],
+        body: Bytes::from_static(b"world"),
+        trailers: vec![("x-checksum".into(), "def456".into())],
+    }
 }
 
-#[tokio::test]
-async fn test_h2_h3_trailers() {
-    // H2→H3 via `lb_quic::request_h3_upstream` then `Full::new` —
-    // same drop.
-    let body = Full::<Bytes>::new(Bytes::from_static(b"data"));
-    let collected = body.collect().await.expect("collect");
-    assert!(collected.trailers().is_none());
-}
-
-#[tokio::test]
-async fn test_h3_h2_trailers() {
-    // H3→H2 (`h3_response_to_h2` site) — same drop.
-    let body = Full::<Bytes>::new(Bytes::from_static(b"x"));
-    let collected = body.collect().await.expect("collect");
-    assert!(collected.trailers().is_none());
-}
-
-/// Confirms that the `BridgeRequest` / `BridgeResponse` types
-/// presently lack a trailers field — the surface-level reason the
-/// proxy hot path drops trailers.
+/// Every cross-protocol bridge MUST forward the request trailer list.
 #[test]
-fn bridge_request_response_have_no_trailers_field_today() {
+fn every_bridge_forwards_request_trailers() {
+    let combos = [
+        (Protocol::Http1, Protocol::Http1),
+        (Protocol::Http1, Protocol::Http2),
+        (Protocol::Http1, Protocol::Http3),
+        (Protocol::Http2, Protocol::Http1),
+        (Protocol::Http2, Protocol::Http2),
+        (Protocol::Http2, Protocol::Http3),
+        (Protocol::Http3, Protocol::Http1),
+        (Protocol::Http3, Protocol::Http2),
+        (Protocol::Http3, Protocol::Http3),
+    ];
+    for (src, dst) in combos {
+        let bridge = create_bridge(src, dst);
+        let req = req_with_trailers();
+        let out = bridge.bridge_request(&req).expect("bridge_request");
+        assert_eq!(
+            out.trailers,
+            vec![("x-checksum".to_owned(), "abc123".to_owned())],
+            "request trailers dropped for {src:?} -> {dst:?}"
+        );
+    }
+}
+
+/// Every cross-protocol bridge MUST forward the response trailer list.
+#[test]
+fn every_bridge_forwards_response_trailers() {
+    let combos = [
+        (Protocol::Http1, Protocol::Http1),
+        (Protocol::Http1, Protocol::Http2),
+        (Protocol::Http1, Protocol::Http3),
+        (Protocol::Http2, Protocol::Http1),
+        (Protocol::Http2, Protocol::Http2),
+        (Protocol::Http2, Protocol::Http3),
+        (Protocol::Http3, Protocol::Http1),
+        (Protocol::Http3, Protocol::Http2),
+        (Protocol::Http3, Protocol::Http3),
+    ];
+    for (src, dst) in combos {
+        let bridge = create_bridge(src, dst);
+        let resp = resp_with_trailers();
+        let out = bridge.bridge_response(&resp).expect("bridge_response");
+        assert_eq!(
+            out.trailers,
+            vec![("x-checksum".to_owned(), "def456".to_owned())],
+            "response trailers dropped for {src:?} -> {dst:?}"
+        );
+    }
+}
+
+/// `BridgeRequest` and `BridgeResponse` now carry a trailers field —
+/// flipped from the Wave-2b-2 baseline `_have_no_trailers_field_today`
+/// test which lived here previously.
+#[test]
+fn bridge_request_response_carry_trailers() {
     let req = lb_l7::BridgeRequest {
         method: "GET".into(),
         uri: "/".into(),
         headers: vec![],
         body: Bytes::new(),
         scheme: None,
+        trailers: vec![("x-trailer".into(), "v".into())],
     };
-    let _ = req.method.len();
+    assert_eq!(req.trailers.len(), 1);
     let resp = lb_l7::BridgeResponse {
         status: 200,
         headers: vec![],
         body: Bytes::new(),
+        trailers: vec![("x-trailer".into(), "v".into())],
     };
-    let _ = resp.status;
-
-    // Compile-time fence: if a future commit adds a `trailers`
-    // field to either struct (without updating this test), the
-    // mismatch in struct-literal coverage above does NOT fail —
-    // intentional, because adding the field is the Wave-2c fix.
-    // What we DO lock down here is the present absence:
-    //   - if you uncomment the line below, the build fails today,
-    //     proving the field is missing.
-    //
-    //   let _: () = req.trailers;
-    //
-    // Wave-2c removes the `//` and renames this test to
-    // `bridge_request_response_carry_trailers`.
+    assert_eq!(resp.trailers.len(), 1);
 }
 
-/// Sanity: hyper's `Frame::trailers` round-trip is fine when the
-/// proxy uses a `StreamBody` (Wave-2c). Documents the wire shape
-/// the fix must produce.
+/// Sanity: hyper's `Frame::trailers` round-trip works as the proxy
+/// hot path now uses — this matches the `build_body_with_trailers`
+/// helper in `h1_proxy.rs` / `h2_proxy.rs`.
 #[tokio::test]
 async fn stream_body_with_trailers_round_trips() {
     use http::HeaderMap;
-    use http_body_util::StreamBody;
-    use hyper::body::Frame;
 
     let mut tmap = HeaderMap::new();
     tmap.insert("x-trailer", "value".parse().unwrap());

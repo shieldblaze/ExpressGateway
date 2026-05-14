@@ -14,6 +14,7 @@ fn test_bridge_h1_to_h2() {
         ],
         body: Bytes::from_static(b"{}"),
         scheme: None,
+        trailers: Vec::new(),
     };
     let bridged = bridge.bridge_request(&req).unwrap();
     // Pseudo-headers added

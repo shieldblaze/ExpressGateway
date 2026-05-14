@@ -35,6 +35,7 @@ fn req_with(headers: Vec<(&'static str, &'static str)>) -> BridgeRequest {
         },
         body: Bytes::new(),
         scheme: None,
+        trailers: Vec::new(),
     }
 }
 

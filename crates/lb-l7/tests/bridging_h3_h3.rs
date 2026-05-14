@@ -15,6 +15,7 @@ fn test_bridge_h3_to_h3() {
         ],
         body: Bytes::new(),
         scheme: None,
+        trailers: Vec::new(),
     };
     let bridged = bridge.bridge_request(&req).unwrap();
     // Pseudo-headers preserved

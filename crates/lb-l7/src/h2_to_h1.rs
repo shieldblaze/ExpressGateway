@@ -120,6 +120,8 @@ impl Bridge for H2ToH1Bridge {
             headers: regular_headers,
             body: req.body.clone(),
             scheme: req.scheme.clone(),
+            // PROTO-2-12: forward request trailers.
+            trailers: req.trailers.clone(),
         })
     }
 
@@ -145,6 +147,8 @@ impl Bridge for H2ToH1Bridge {
             status: resp.status,
             headers,
             body: resp.body.clone(),
+            // PROTO-2-12: forward response trailers.
+            trailers: resp.trailers.clone(),
         })
     }
 
@@ -217,6 +221,7 @@ mod tests {
             ],
             body: bytes::Bytes::new(),
             scheme: None,
+            trailers: Vec::new(),
         };
         let err = bridge.bridge_request(&req).unwrap_err();
         let msg = format!("{err}");
@@ -237,6 +242,7 @@ mod tests {
             ],
             body: bytes::Bytes::new(),
             scheme: None,
+            trailers: Vec::new(),
         };
         let out = bridge.bridge_request(&req).unwrap();
         let host = out
