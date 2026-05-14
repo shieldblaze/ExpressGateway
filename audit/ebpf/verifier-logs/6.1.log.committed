@@ -1,0 +1,21 @@
+verify-xdp.sh: kernel 6.1; loading lb_xdp.bin via lvh
+HARNESS-CAPTURED-PENDING-CI-RERUN
+This file is a placeholder baseline emitted by ROUND8-L4-10's
+implementation pass on a sandbox without `bpf-linker` available to
+re-build the BPF ELF, nor a privileged Docker+lvh runner to actually
+load it against a 6.1 kernel. The first green CI run on kernel 6.1
+MUST refresh this file via:
+
+    scripts/verify-xdp.sh --kernel 6.1 --update-baseline
+    git add audit/ebpf/verifier-logs/6.1.log.committed
+
+Until then, the `verify-xdp.sh` diff gate will fail-loud (exit 1) on
+every change, which is the desired audit-of-audit posture — the
+script being committed without the baseline (as in EBPF-2-07's
+no-op state at ffde98c) is the failure mode this finding closes.
+
+Expected content of a refreshed baseline (post-CI):
+  - one section per BPF program section in lb_xdp.bin
+  - verifier output lines with addresses normalised to 0xADDR
+  - 'processed N insns' / 'peak_states N' counters
+  - bpftool prog run verdict + dst-MAC rewrite assertion bytes

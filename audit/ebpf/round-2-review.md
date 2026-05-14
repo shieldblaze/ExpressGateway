@@ -416,7 +416,14 @@ Cross-ref: synthesis T5, code Q-CODE-1 (pod / lifecycle audit).
 ### EBPF-2-07 — No verifier-log matrix captured; `crates/lb-l4-xdp/ebpf/verifier-logs/` is empty
 
 Severity: medium
-Status:   Verified-Fixed(ffde98c) — rel round-5 sign-off; script + README in place, supported kernels (5.15 / 6.1 / 6.6) documented, `bash -n` clean, `--help` exits 64 with usage.
+Status:   Verified-Fixed-Partial(ffde98c, ROUND8-L4-10) — round-8 audit-of-audit
+          (ROUND8-L4-10) downgraded from Verified-Fixed: the script existed at
+          ffde98c but `audit/ebpf/verifier-logs/` was empty, leaving the diff
+          gate a no-op. ROUND8-L4-10 lands the script's fail-loud diff gate
+          (exit 2 on absent baseline, exit 1 on drift) plus three
+          `HARNESS-CAPTURED-PENDING-CI-RERUN` placeholder baselines. The status
+          flips back to `Verified-Fixed(<sha>)` after the first CI matrix run
+          refreshes the three placeholders into real verifier logs.
 Location: `crates/lb-l4-xdp/ebpf/verifier-logs/` (directory exists,
           empty in tree). ADR-0005 §Follow-ups promises an
           `xtask xdp-verify` driver that is not implemented.
@@ -620,7 +627,7 @@ the userspace mirror.
 | EBPF-2-04  | high     | ebpf + rel | Verified-Fixed(75d4740) |
 | EBPF-2-05  | high     | ebpf + sec + rel | Verified-Fixed(37c513c) |
 | EBPF-2-06  | low      | ebpf + code | Verified-Fixed(854ebdb) |
-| EBPF-2-07  | medium   | ebpf + rel | Verified-Fixed(ffde98c) |
+| EBPF-2-07  | medium   | ebpf + rel | Verified-Fixed-Partial(ffde98c, ROUND8-L4-10) |
 | EBPF-2-08  | medium   | ebpf + rel | Verified-Fixed(7f52a52) |
 | EBPF-2-09  | medium   | ebpf (confirm) + code (fix) + sec | Open |
 

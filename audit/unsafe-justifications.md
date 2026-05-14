@@ -106,6 +106,10 @@ the verifier-log matrix gate (`scripts/verify-xdp.sh` × {5.15, 6.1, 6.6}).
 * Every site has an in-source `SAFETY:` comment.
 * All `lb-io` sites are tightly scoped to a single libc/io_uring call.
 * `lb-l4-xdp` BPF sites are validated by the kernel verifier on every
-  load and additionally pinned via the verifier-log diff gate in CI.
+  load. The verifier-log diff gate is wired in `scripts/verify-xdp.sh`
+  (ROUND8-L4-10) and hard-fails on baseline drift or absence; the three
+  `audit/ebpf/verifier-logs/<KVER>.log.committed` baselines start as
+  `HARNESS-CAPTURED-PENDING-CI-RERUN` placeholders and are refreshed by
+  the first green CI matrix run (5.15 / 6.1 / 6.6).
 
 **Status: PASS** — `unsafe` surface is minimal, documented, and gated.
