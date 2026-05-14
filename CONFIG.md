@@ -113,6 +113,22 @@ PROMPT.md §19 describes a broader schema. The parser's `lb_config::ParsedConfig
 | `observability.prometheus_bind` | `String` | No `/metrics` endpoint ships; see `METRICS.md`. Config key is Pillar 3b. |
 | `observability.log_level` | `String` | Controlled via `RUST_LOG` env var, not TOML. See `RUNBOOK.md`. |
 
+### Security (PROTO-2-17)
+
+The optional `[security]` table carries process-wide HTTP-security toggles consumed by the shared `lb_security::HooksBundle` at startup.
+
+| Key | Type | Default | Reload | Description |
+|-----|------|---------|:------:|-------------|
+| `[security]` table | object | absent | restart | Optional. When absent, all defaults apply. |
+| `security.strict_te` | `bool` | `false` | restart | When `true`, the `HooksBundle` is constructed with `SmuggleMode::H1Strict` instead of the lenient `SmuggleMode::H1`. Strict mode rejects any `Transfer-Encoding` codec other than `chunked` (RFC 9112 §7.1). The H2 path keeps its dynamic `SmuggleMode::H2` upgrade independent of this knob. Flip on for environments that can guarantee chunked-only ingress (e.g. behind a known CDN). |
+
+Example:
+
+```toml
+[security]
+strict_te = true
+```
+
 ## Reload semantics
 
 The configuration watcher sends SIGHUP → `crates/lb-controlplane/src/lib.rs` re-reads, validates, and publishes via `ArcSwap<Config>` (ADR-0008). Reload behavior per key:

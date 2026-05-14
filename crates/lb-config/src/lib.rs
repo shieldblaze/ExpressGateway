@@ -50,6 +50,36 @@ pub struct LbConfig {
     /// authentication.
     #[serde(default)]
     pub admin: Option<AdminConfig>,
+    /// PROTO-2-17 (Wave 2c-2): optional `[security]` block exposing
+    /// process-wide HTTP-security toggles. Currently carries a single
+    /// field (`strict_te`) that opts into
+    /// `lb_security::SmuggleMode::H1Strict` for the shared
+    /// `HooksBundle`. When absent, all defaults apply (lenient RFC
+    /// 9112 baseline, i.e. `SmuggleMode::H1`).
+    #[serde(default)]
+    pub security: Option<SecurityConfig>,
+}
+
+/// PROTO-2-17 (Wave 2c-2): process-wide HTTP security toggles.
+///
+/// Lives under `[security]` to keep deployment-decision policy
+/// (e.g. "this gateway rejects any non-`chunked` Transfer-Encoding")
+/// separate from per-listener `[listeners.*]` blocks. The shared
+/// `lb_security::HooksBundle` consumes these knobs at construction
+/// time in `crates/lb/src/main.rs`.
+#[derive(Debug, Clone, Default, serde::Serialize, serde::Deserialize)]
+pub struct SecurityConfig {
+    /// When `true`, the shared `HooksBundle` is constructed with
+    /// `SmuggleMode::H1Strict` instead of the default `SmuggleMode::H1`.
+    /// Strict mode rejects any `Transfer-Encoding` codec other than
+    /// `chunked` (RFC 9112 §7.1) — the lenient default accepts any
+    /// codec hyper can parse, which has historically been a smuggle
+    /// vector against permissive backends.
+    ///
+    /// Default: `false`. Operators flip this on for environments that
+    /// can guarantee chunked-only ingress (e.g. behind a known CDN).
+    #[serde(default)]
+    pub strict_te: bool,
 }
 
 /// SEC-2-06 (Wave 2c-2): bearer-token + bind policy for the admin
@@ -1199,6 +1229,7 @@ protocol = "tcp"
             runtime: None,
             observability: None,
             admin: None,
+            security: None,
         };
         assert!(validate_config(&config).is_err());
     }
@@ -1221,6 +1252,7 @@ protocol = "tcp"
             runtime: None,
             observability: None,
             admin: None,
+            security: None,
         };
         assert!(validate_config(&config).is_err());
     }
@@ -1243,6 +1275,7 @@ protocol = "tcp"
             runtime: None,
             observability: None,
             admin: None,
+            security: None,
         };
         assert!(validate_config(&config).is_ok());
     }
@@ -1272,6 +1305,7 @@ protocol = "tcp"
             runtime: None,
             observability: None,
             admin: None,
+            security: None,
         };
         assert!(validate_config(&config).is_err());
     }
@@ -1335,6 +1369,7 @@ address = "127.0.0.1:3000"
             runtime: None,
             observability: None,
             admin: None,
+            security: None,
         };
         assert!(validate_config(&config).is_err());
     }
@@ -1357,6 +1392,7 @@ address = "127.0.0.1:3000"
             runtime: None,
             observability: None,
             admin: None,
+            security: None,
         };
         assert!(validate_config(&config).is_err());
     }
@@ -1384,6 +1420,7 @@ address = "127.0.0.1:3000"
             runtime: None,
             observability: None,
             admin: None,
+            security: None,
         };
         assert!(validate_config(&config).is_err());
     }
@@ -1411,6 +1448,7 @@ address = "127.0.0.1:3000"
             runtime: None,
             observability: None,
             admin: None,
+            security: None,
         };
         assert!(validate_config(&config).is_err());
     }
@@ -1458,6 +1496,7 @@ protocol = "h1"
             runtime: None,
             observability: None,
             admin: None,
+            security: None,
         };
         assert!(validate_config(&config).is_err());
     }
@@ -1486,6 +1525,7 @@ protocol = "h1"
             runtime: None,
             observability: None,
             admin: None,
+            security: None,
         };
         assert!(validate_config(&config).is_err());
     }
@@ -1515,6 +1555,7 @@ protocol = "h1"
             runtime: None,
             observability: None,
             admin: None,
+            security: None,
         };
         assert!(validate_config(&config).is_err());
     }
@@ -1572,6 +1613,7 @@ address = "127.0.0.1:3000"
             runtime: None,
             observability: None,
             admin: None,
+            security: None,
         };
         let err = validate_config(&config).unwrap_err();
         assert!(matches!(err, ConfigError::Validation(_)));
@@ -1602,6 +1644,7 @@ address = "127.0.0.1:3000"
             runtime: None,
             observability: None,
             admin: None,
+            security: None,
         };
         assert!(validate_config(&config).is_err());
     }
@@ -1639,6 +1682,7 @@ address = "127.0.0.1:3000"
             runtime: None,
             observability: None,
             admin: None,
+            security: None,
         };
         validate_config(&config).unwrap();
     }
@@ -1672,6 +1716,7 @@ address = "127.0.0.1:3000"
             runtime: None,
             observability: None,
             admin: None,
+            security: None,
         };
         assert!(validate_config(&config).is_err());
     }
@@ -1727,6 +1772,7 @@ xdp_interface = "eth0"
             }),
             observability: None,
             admin: None,
+            security: None,
         };
         let err = validate_config(&config).unwrap_err();
         assert!(matches!(err, ConfigError::Validation(_)));
@@ -1762,6 +1808,7 @@ xdp_interface = "eth0"
             }),
             observability: None,
             admin: None,
+            security: None,
         };
         validate_config(&config).unwrap();
     }
@@ -1837,6 +1884,7 @@ address = "127.0.0.1:3000"
             runtime: None,
             observability: None,
             admin: None,
+            security: None,
         };
         assert!(validate_config(&config).is_err());
     }
@@ -1885,6 +1933,7 @@ address = "127.0.0.1:3000"
             runtime: None,
             observability: None,
             admin: None,
+            security: None,
         };
         assert!(validate_config(&config).is_err());
     }
@@ -1909,6 +1958,7 @@ address = "127.0.0.1:3000"
                 metrics_bind: Some("not-an-address".into()),
             }),
             admin: None,
+            security: None,
         };
         let err = validate_config(&config).unwrap_err();
         assert!(matches!(err, ConfigError::Validation(_)));

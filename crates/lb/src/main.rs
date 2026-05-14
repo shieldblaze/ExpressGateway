@@ -1716,7 +1716,23 @@ async fn async_main() -> anyhow::Result<()> {
         .as_ref()
         .map_or(1_024, |r| r.per_ip_connection_cap);
     let conn_gate = ConnGate::new(max_inflight, per_ip_cap, Vec::new());
-    let hooks: Arc<HooksBundle> = Arc::new(HooksBundle::new(conn_gate, SmuggleMode::H1));
+    // PROTO-2-17 (Wave 2c-2): select the bundle's `SmuggleMode` from
+    // the `[security].strict_te` knob. Default `false` keeps the
+    // lenient `SmuggleMode::H1` (RFC 9112 baseline); flipping the
+    // knob opts the listener into `SmuggleMode::H1Strict` (reject
+    // any non-`chunked` Transfer-Encoding). The H2 path keeps its
+    // dynamic `SmuggleMode::H2` upgrade in `HooksBundle::inspect_request`
+    // independent of this default.
+    let smuggle_mode = if config.security.as_ref().is_some_and(|s| s.strict_te) {
+        SmuggleMode::H1Strict
+    } else {
+        SmuggleMode::H1
+    };
+    let hooks: Arc<HooksBundle> = Arc::new(HooksBundle::new(conn_gate, smuggle_mode));
+    tracing::info!(
+        strict_te = matches!(smuggle_mode, SmuggleMode::H1Strict),
+        "PROTO-2-17: HooksBundle SmuggleMode selected from [security].strict_te"
+    );
     tracing::info!(
         max_inflight,
         per_ip_cap,
