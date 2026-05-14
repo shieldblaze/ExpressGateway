@@ -13,7 +13,7 @@ appendix is at the bottom (CODE-2-04).
 ### CODE-2-01 — `lb-l7` does not depend on `lb-security`; smuggling/slowloris/slow-POST detectors and per-IP cap are dead code on the hot path
 Severity: critical
 Blocking-for-prod: yes
-Status:   Proposed-Fix(3dcb6f3, dc02517, e00e85a, 5e7938f)   <!-- Wave-1 dep-edge (3dcb6f3) + Wave-2b lb-l7 trait-shim & insertion points (dc02517 on round-4 / 9ffe51b on worktree) + Wave-2b SEC-2-01 detector wire-up & H2→H1 downgrade guard (e00e85a on round-4 / 0ae776d on worktree) + Wave-2b proof tests (5e7938f on round-4 / e79f4f6 on worktree). The accept-site `ConnGate` wiring at `crates/lb/src/main.rs` is Wave-2c. -->
+Status:   Verified-Fixed(3dcb6f3, dc02517, e00e85a, 5e7938f)   <!-- ebpf round-5: dep-edge + trait shim + detector wire-up present; ConnGate accept-site wired in 4001791 (SEC-2-04). Bypass attempts on trait-shim error propagation + ConnPermit Drop semantics found nothing. -->
 Location:
   - `crates/lb-l7/Cargo.toml` (missing `lb-security = { path = "../lb-security" }`)
   - `crates/lb-security/src/{smuggle.rs, slowloris.rs, slow_post.rs}` (detectors exist but no consumer in lb-l7)
@@ -71,7 +71,7 @@ Cross-ref: synthesis T1; sec S-1/S-3/S-4; proto #1; rel F-17.
 ### CODE-2-02 — `panic = "abort"` not set in `[profile.release]`; default unwind across unsafe boundaries
 Severity: critical
 Blocking-for-prod: yes
-Status:   Proposed-Fix(120e4fa)
+Status:   Verified-Fixed(120e4fa, b6aeea5)   <!-- ebpf round-5: panic=abort in release+bench; dev/test deliberately keep unwind for proptest/loom. init_panic_hook installed before any spawn. panic_total Counter exposed. catch_unwind audit found one site (CODE-2-08) that's dead code under abort — documented. -->
 Location:
   - `Cargo.toml:162–166` (`[profile.release]` has no `panic` key)
   - 17 `unsafe` blocks in `crates/lb-io/src/ring.rs` (io_uring SQE submission, sockaddr conversion, raw fd close)
@@ -123,7 +123,7 @@ Cross-ref: sec §B.2 (rel F-22 cross-ref); rel F-22.
 ### CODE-2-03 — TCP/H1/H1s accept loop has no graceful drain; SIGTERM aborts in-flight connections via `JoinHandle::abort()`
 Severity: critical
 Blocking-for-prod: yes
-Status:   Proposed-Fix(9ff2b9b)   <!-- Wave-1 module-only slice: lb_core::Shutdown + DrainOutcome + drain_timeout_ms knob. Wave-2 accept-site plumbing in lb/src/main.rs is serialised after sec/rel/proto land their pieces. The `drain_timeout_ms` field itself landed earlier on this branch (currently inside the EBPF-2-04 commit message line due to a multi-agent staging race; content is correct in lb-config/src/lib.rs and validated 100..=300000). -->
+Status:   Verified-Fixed-Partial(9ff2b9b, fc050b0)   <!-- ebpf round-5: Shutdown primitive + drain budget wired into main.rs; SIGTERM triggers cancel + drain. 5 `tokio::spawn` sites in main.rs remain NOT routed through tracker.spawn (per-connection handler at :2074 is the most consequential). Follow-on tracked under same ID per audit margin note. XdpLoader Drop ordering verified safe across drain boundary. -->
 
 Location:
   - `crates/lb/src/main.rs:701` (`spawn_listener` — `JoinHandle` stored, never paired with a token)
@@ -186,7 +186,7 @@ Cross-ref: synthesis T2; rel H7 + rel→code handoff #1/#3/#8; proto H2 GOAWAY.
 ### CODE-2-05 — Unbounded `tokio::spawn` per accept; no semaphore / max-inflight gate on TCP listener
 Severity: critical
 Blocking-for-prod: yes
-Status:   Proposed-Fix(f07cf44)   <!-- Wave 2c-2: per-listener `Arc<Semaphore>` sized from `runtime.max_inflight_connections` (default 65_536, range 100..=2_000_000). `try_acquire_owned` at accept site; owned permit moved into the connection task. Saturation bumps `accept_shed_total` and writes a best-effort HTTP/1.1 503 on H1/H1s (or `shutdown()` on TCP/TLS). Proofs: `tests::test_503_when_over_inflight_h1` + `tests::test_per_ip_cap_enforced_at_accept` in `crates/lb/src/main.rs`. -->
+Status:   Verified-Fixed(f07cf44)   <!-- ebpf round-5: per-listener Arc<Semaphore> sized from runtime.max_inflight_connections; try_acquire_owned at accept site (main.rs:2025); permit moved into spawn closure (drops on task exit / panic). 503 path + accept_shed_total counter present. Two proof tests at :2432 + :2562. Bypass attempts (permit leak before move, fast-path skip) both failed. -->
 Location: `crates/lb/src/main.rs:1126` (`tokio::spawn(async move { … })`)
 
 Description / Impact:
@@ -233,7 +233,7 @@ Cross-ref: synthesis T7; rel→code #1; sec S-4 (per-IP cap is the second axis).
 ### CODE-2-06 — Accept loop tight-loops on EMFILE/ENFILE; no exponential backoff
 Severity: critical
 Blocking-for-prod: yes
-Status:   Proposed-Fix(f07cf44)   <!-- Wave 2c-2: `classify_accept_error` maps EMFILE/ENFILE/ECONNRESET/ECONNABORTED to a transient bucket; the loop sleeps with jittered exponential backoff (10 ms → 1 s ± 25 %). Anything else escapes as fatal (loop exits, supervisor sees hard failure). `accept_errors_total{kind}` counter classifies. Proof: `tests::test_emfile_no_busy_loop` runs the doubling sequence twenty times and asserts the backoff never collapses to zero and stays under the 1 250 ms ceiling. -->
+Status:   Verified-Fixed(f07cf44)   <!-- ebpf round-5: classify_accept_error at main.rs:1879 + next_accept_backoff at :1895. Doubling sequence 10ms→1s with ±25% jitter, .max(1) floor prevents collapse-to-zero, saturating_mul prevents overflow. accept_errors_total{kind} registered. test_emfile_no_busy_loop validates 20-iter sequence. Bypass attempts on overflow + negative-jitter + fatal-wedge all failed. -->
 Location: `crates/lb/src/main.rs:1100–1106`
 
 Description / Impact:
@@ -292,7 +292,7 @@ Cross-ref: rel→code handoff #2; synthesis T7.
 ### CODE-2-07 — `Pod` constructor zero-init invariant unenforced for FlowKey/BackendEntry padding bytes
 Severity: high
 Blocking-for-prod: yes
-Status:   Open
+Status:   Open   <!-- ebpf round-5: confirmed Open. e3ac961 in the audit assignment was actually CODE-2-14 (BackendState binding), not CODE-2-07. No FlowKey::new / BackendEntry::new constructors landed; no `const _: () = assert!(size_of::<FlowKey>() == 16)` size assertions. All literal sites still write explicit `pad: [0; 3]` / `pad: 0` so current behaviour is correct; the future-contributor risk the finding flagged is unmitigated. -->
 Location:
   - `crates/lb-l4-xdp/src/loader.rs:33–53` (`FlowKey { pad: [u8; 3] }`)
   - `crates/lb-l4-xdp/src/loader.rs:55–76` (`BackendEntry { pad: u16 }`)
@@ -370,7 +370,7 @@ Cross-ref: synthesis T5(b); sec S-9; ebpf cross-review to-`code` #3.
 ### CODE-2-08 — Per-CID actor leaks DashMap entries on panic; reaper bound is "until next packet on the dead CID"
 Severity: high
 Blocking-for-prod: no
-Status:   Proposed-Fix(17dd4eb)
+Status:   Verified-Fixed(17dd4eb)   <!-- ebpf round-5: CidEntryGuard at crates/lb-quic/src/cleanup_guard.rs:36 with Drop impl at :64. Guard wraps both router_key + header_dcid_key and is moved into the spawn closure at router.rs:382 — Drop runs on normal exit, await cancel, panic unwind, or under panic=abort the process dies first. Bypass attempts on double-panic + bypass-spawn + key-aliasing all failed. -->
 Location: `crates/lb-quic/src/router.rs:373–379`
 
 Description / Impact:
@@ -445,7 +445,7 @@ high).
 ### CODE-2-09 — `pool.acquire()` runs blocking `connect(2)` on tokio's global blocking pool; cold-path stall on starved pool
 Severity: high
 Blocking-for-prod: no
-Status:   Proposed-Fix(Round-4-Wave-2c follow-on)   <!-- Round-4 follow-on lands the lb-io / lb-l7 pool rework: `TcpPool::acquire_async(addr)` uses `tokio::net::TcpStream::connect` under a `PoolConfig::connect_timeout` deadline (defaulting to 5 000 ms, matching `runtime.connect_timeout_ms`). New sockopts helper `apply_connected_tokio(&tokio::net::TcpStream, &BackendSockOpts)` keeps the socket on the tokio reactor instead of round-tripping through `set_nonblocking`/`from_std`. Every upstream dial site now calls `acquire_async`: `lb-l7::h1_proxy::proxy_request`, `lb-l7::h1_proxy::run_h1_ws_upgrade_task`, `lb-l7::h2_proxy::proxy_request`, `lb-l7::h2_proxy::ws upgrade`, `lb-l7::grpc_proxy::proxy`, `lb-io::http2_pool::dial_and_handshake`, `lb-quic::h3_bridge::h3_to_h1_roundtrip`. Static-source proof `tests::no_spawn_blocking_in_pool_dial_path` asserts no `spawn_blocking` calls live in `pool.rs`. `tests::acquire_async_timeout_fires` proves the deadline kicks in by dialing TEST-NET-1 (192.0.2.1:1) and asserting <2 s wall. `acquire` retained as a sync entry point for non-tokio embedders / unit tests but marked deprecated for production callers (doc-string + module doc). The `PoolConfig::connect_timeout` plumb from `runtime.connect_timeout_ms` through `lb/src/main.rs::TcpPool::new` is a 1-line follow-up call-site change (currently defaults to 5 000 ms which matches the config default, so behaviour is unchanged); deferred so this commit does not race with `rel-r4w2c-cert`'s main.rs cert-rotation work. The deferred plumb is the only remaining gap. -->
+Status:   Verified-Fixed(f07cf44, fc42d60)   <!-- ebpf round-5: TcpPool::acquire_async at pool.rs:210 using tokio::net::TcpStream::connect under PoolConfig::connect_timeout. Static no_spawn_blocking_in_pool_dial_path test at :877. Live timeout test acquire_async_timeout_fires at :845. All upstream dial sites migrated: lb-l7 h1/h2/grpc proxies + lb-io http2_pool + lb-quic h3_bridge. Cancellable (drop-cancels native connect). connect_timeout-from-runtime plumb deferred 1-line follow-up — behaviour unchanged.   --><!-- Round-4 follow-on lands the lb-io / lb-l7 pool rework: `TcpPool::acquire_async(addr)` uses `tokio::net::TcpStream::connect` under a `PoolConfig::connect_timeout` deadline (defaulting to 5 000 ms, matching `runtime.connect_timeout_ms`). New sockopts helper `apply_connected_tokio(&tokio::net::TcpStream, &BackendSockOpts)` keeps the socket on the tokio reactor instead of round-tripping through `set_nonblocking`/`from_std`. Every upstream dial site now calls `acquire_async`: `lb-l7::h1_proxy::proxy_request`, `lb-l7::h1_proxy::run_h1_ws_upgrade_task`, `lb-l7::h2_proxy::proxy_request`, `lb-l7::h2_proxy::ws upgrade`, `lb-l7::grpc_proxy::proxy`, `lb-io::http2_pool::dial_and_handshake`, `lb-quic::h3_bridge::h3_to_h1_roundtrip`. Static-source proof `tests::no_spawn_blocking_in_pool_dial_path` asserts no `spawn_blocking` calls live in `pool.rs`. `tests::acquire_async_timeout_fires` proves the deadline kicks in by dialing TEST-NET-1 (192.0.2.1:1) and asserting <2 s wall. `acquire` retained as a sync entry point for non-tokio embedders / unit tests but marked deprecated for production callers (doc-string + module doc). The `PoolConfig::connect_timeout` plumb from `runtime.connect_timeout_ms` through `lb/src/main.rs::TcpPool::new` is a 1-line follow-up call-site change (currently defaults to 5 000 ms which matches the config default, so behaviour is unchanged); deferred so this commit does not race with `rel-r4w2c-cert`'s main.rs cert-rotation work. The deferred plumb is the only remaining gap. -->
 Location:
   - `crates/lb-io/src/pool.rs:158–168` (doc-comment admits blocking)
   - `crates/lb-io/src/pool.rs:222–227` (`fn dial_fresh` calls `std::net::TcpStream::connect`)
@@ -528,7 +528,7 @@ Cross-ref: rel→code handoff (analysis-owed); synthesis T7.
 ### CODE-2-10 — XDP attach: `XdpLinkId` drop semantics verified against aya 0.13; recommend integration test to prevent silent regression
 Severity: info
 Blocking-for-prod: no
-Status:   Proposed-Fix(854ebdb)   <!-- Regression test landed under the ebpf agent's EBPF-2-06 commit at crates/lb-l4-xdp/tests/xdp_link_id_drop_safe.rs; same scope as the CODE-2-10 plan called for. -->
+Status:   Verified-Fixed(854ebdb)   <!-- ebpf round-5 (self-batch): test file at crates/lb-l4-xdp/tests/xdp_link_id_drop_safe.rs present. Compile-time signature-assertion (loader_attach_signature_drops_xdplinkid_silently) catches aya signature changes; #[ignore]'d runtime test exercises real attach/detach under CAP_BPF. XdpLoader Drop ordering across drain (CODE-2-03) confirmed safe. -->
 Location:
   - `crates/lb-l4-xdp/src/loader.rs:273–276`
   - aya 0.13.1 source: `aya-0.13.1/src/programs/xdp.rs:108–162` (`attach` → `attach_to_if_index` → `self.data.links.insert(XdpLink::new(...))`)
@@ -584,7 +584,7 @@ matches reality today; the recommendation is a regression guard.
 ### CODE-2-11 — Zero proptest / loom / miri usage across the workspace
 Severity: high
 Blocking-for-prod: no
-Status:   Proposed-Fix(560c1c2)   <!-- Wave-1 scaffolding: per-parser proptest harnesses at sanity budget + a `--cfg loom` lb-balancer harness + a miri-runnable lb-io test. Full-budget CI runs and the broader loom/miri sweep are Wave-2 tracking under this same finding ID. -->
+Status:   Verified-Fixed-Partial(560c1c2)   <!-- ebpf round-5: proptest harnesses present at lb-h1/lb-h2/lb-h3/lb-quic; loom harness at lb-balancer/tests/loom_atomic_counter.rs (#![cfg(loom)], Release/Acquire two-thread model). miri-runnable lb-io test not located in worktree — Wave-2 follow-on per audit margin note. -->
 Location: workspace-wide. Grep summary (from Round 1 inventory §4.3):
   - `proptest` references in `crates/`: 0
   - `loom` references in `crates/`: 0
@@ -663,7 +663,7 @@ Cross-ref: synthesis T9; rel CI matrix.
 ### CODE-2-12 — `arc-swap` workspace dependency declared but unused; remove to shrink build graph
 Severity: low
 Blocking-for-prod: no
-Status:   Proposed-Fix(f93c582)
+Status:   Verified-Fixed(f93c582)   <!-- ebpf round-5: arc-swap removed from [workspace.dependencies] (comment at Cargo.toml:67–70 documents the removal). Re-added at crate level in crates/lb-security/Cargo.toml:36 for REL-2-03 cert rotation (commit 334b69a) — matches the original recommendation. -->
 Location:
   - `Cargo.toml:61` (`arc-swap = "1"` in `[workspace.dependencies]`)
   - No `arc_swap::` references anywhere in `crates/` (Round 1 inventory §3.4; manual grep)
@@ -690,7 +690,7 @@ Cross-ref: rel H2; sec §5.1.
 ### CODE-2-13 — `lb` binary declares unused `lb-controlplane` and `lb-health` deps; confirms control-plane + active-health wiring is missing
 Severity: medium
 Blocking-for-prod: no
-Status:   Proposed-Fix(1fe53ed)   <!-- Wave-1 wire-up: FileBackend + ConfigManager construction on startup + per-backend HealthChecker seeding. Distributed CP backends DEFERRED per L-001; active-probe loop is REL-2-05 in Wave-2; accept-site / SIGHUP plumbing is Wave-2 serialised after sec/rel/proto. -->
+Status:   Verified-Fixed-Partial(1fe53ed)   <!-- ebpf round-5: FileBackend + ConfigManager constructed at main.rs:1357-1371 (rejects on validation failure); per-backend HealthChecker::new(3,2) seed at :1418-1421. Both deps now referenced — cargo machete output flips. Active-probe loop + picker filter wire-in deferred to REL-2-05 / Wave-2 per audit margin note. -->
 Location:
   - `cargo machete` output in `audit/code/round-1-machete.txt`
   - `crates/lb/Cargo.toml` (declares `lb-controlplane`, `lb-health` but no `use lb_controlplane::` or `use lb_health::` in `crates/lb/src/main.rs`)
@@ -722,7 +722,7 @@ Cross-ref: rel→code #4, #7; synthesis §C; machete output.
 ### CODE-2-14 — `lb-balancer` and `lb-core` carry duplicate backend-counter fields; risk of divergence between scheduler and gauge
 Severity: medium
 Blocking-for-prod: no
-Status:   Proposed-Fix(e3ac961)   <!-- Backend now binds Arc<BackendState>; legacy u64 fields are a scheduler snapshot refreshed by sync_from_state() before each pick. Race-test in tests/balancer_counter_sync.rs proves no divergence under load. -->
+Status:   Verified-Fixed-Partial(e3ac961)   <!-- ebpf round-5: lb-balancer adds lb-core dep + Backend.state: Option<Arc<BackendState>> field. with_state constructor + sync_from_state() (three Acquire loads) refresh the snapshot before each pick. AcqRel ↔ Acquire pairing with CODE-2-04 confirmed. Named race-test tests/balancer_counter_sync.rs is ABSENT in worktree — only loom_atomic_counter.rs exists; the loom model covers the underlying publication, which is stricter. -->
 Location:
   - `crates/lb-core/src/backend.rs` (`BackendState` atomics: `active_connections`, `active_requests`, latency EWMA)
   - `crates/lb-balancer` (its own `Backend` struct with overlapping `u64` fields per algorithm — Round 1 inventory §1.2 / §4.5)
@@ -760,7 +760,7 @@ Cross-ref: synthesis §C; proto Q-CODE-1-07.
 ### CODE-2-15 — `lb-h1` crate has no in-workspace consumer outside the fuzz target
 Severity: low
 Blocking-for-prod: no
-Status:   Proposed-Fix(f93c582)   <!-- Lead remap per L-001: this finding ID covers the workspace [members] removal of `lb-compression` (SEC-2-14 / L-001 Option A: remove). lb-h1's keep-or-delete decision was bundled into batch-low.md but lead has CODE-2-15 cover the lb-compression members-list edit + crate deletion + compression_*.rs test deletions; the lb-h1 shadow-parse / consumer question stays open for a future round. -->
+Status:   Verified-Fixed(f93c582)   <!-- ebpf round-5: crates/lb-compression directory does not exist; Cargo.toml carries the explanatory comments at :26 + :146. lb-h1 keep-or-delete remains open for a future round per audit body. -->
 
 Location:
   - `crates/lb-h1/` (full HTTP/1.1 codec)
@@ -796,7 +796,7 @@ Cross-ref: proto Q-CODE-1-06; sec S-1.
 ### CODE-2-04 — Every atomic uses `Ordering::Relaxed` (50 sites, 0 Acq/Rel/SeqCst); enforcement-gating counters need Acquire/Release
 Severity: high
 Blocking-for-prod: yes
-Status:   Proposed-Fix(c4c27da)   <!-- Wave-1 ships scripts/ci/atomic-lint.sh + one representative enforcement-site conversion (lb-core::BackendState::inc_connections -> AcqRel). Wave-2 appendix-B sweep across the remaining ~50 sites is tracked under this same finding ID. -->
+Status:   Verified-Fixed-Partial(c4c27da)   <!-- ebpf round-5: scripts/ci/atomic-lint.sh present + docs/decisions/atomics.md policy doc; lb-core::BackendState::inc_connections converted to AcqRel at backend.rs:111. Live `bash scripts/ci/atomic-lint.sh` exits 1 with one outstanding unannotated S-site (crates/lb-security/src/ticket.rs:900 — ticket-ID monotonic counter, stats-only). Wave-2 appendix-B sweep + ticket.rs annotation outstanding under same ID. BPF-map ordering parity unaffected (kernel-side syscall sequencing). -->
 Location: 50 atomic sites. See appendix below.
 
 Description / Impact:
