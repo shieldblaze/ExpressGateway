@@ -340,7 +340,7 @@ Recommendation:
 
 ### REL-2-07 — No distributed tracing: no `traceparent` propagation, no per-request span
 Severity: high
-Status:   Open
+Status:   Proposed-Fix(af2b262)
 Location: `crates/lb-l7/src/h1_proxy.rs`, `crates/lb-l7/src/h2_proxy.rs`, `crates/lb-l7/src/grpc_proxy.rs`, `crates/lb-quic/src/lib.rs`
 
 Description: `grep -rn 'traceparent\|opentelemetry\|info_span\|tracing::Span' crates/`
