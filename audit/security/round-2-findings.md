@@ -390,7 +390,7 @@ Cross-ref:  rel F-05; SEC-2-04.
 
 ### SEC-2-11 — XDP capability probe misses CAP_SYS_ADMIN fallback
 Severity: low
-Status:   Proposed-Fix(e44117d) — ebpf landed under EBPF-team ownership: `probe_caps_with` closure-based probe with CAP_BPF→CAP_SYS_ADMIN fallback, 7-test mock matrix in `tests/xdp_cap_probe.rs`.
+Status:   Verified-Fixed(e44117d) — ebpf landed under EBPF-team ownership: `probe_caps_with` closure-based probe with CAP_BPF→CAP_SYS_ADMIN fallback, 7-test mock matrix in `tests/xdp_cap_probe.rs`. Cross-area verification by `rel` in `audit/reliability/round-5-verifies-ebpf.md` (round-5): all 7 mocked branches green; fallback only widens accept set, never narrows.
 Location: `crates/lb/src/xdp.rs:39-55` (probe site, per ebpf
 cross-review §A.2). The probe checks `CAP_BPF` + `CAP_NET_ADMIN`
 only.
@@ -414,7 +414,7 @@ Cross-ref:  ebpf cross-review §A.2.
 
 ### SEC-2-12 — BPF ELF license / loader license-string not set
 Severity: medium
-Status:   Proposed-Fix(5064a11) — ebpf landed under EBPF-team ownership: `XdpLoader::load_from_bytes` now asserts `.license == "GPL\0"` via `assert_license_is_gpl`, fail-fast `XdpLoaderError::LicenseInvalid` variant + 3 unit tests with hand-crafted ELFs + integration test `tests/loader_license_assert.rs`.
+Status:   Verified-Fixed(5064a11) — ebpf landed under EBPF-team ownership: `XdpLoader::load_from_bytes` now asserts `.license == "GPL\0"` via `assert_license_is_gpl`, fail-fast `XdpLoaderError::LicenseInvalid` variant + 3 unit tests with hand-crafted ELFs + integration test `tests/loader_license_assert.rs`. Cross-area verification by `rel` in `audit/reliability/round-5-verifies-ebpf.md` (round-5): all 5 license-assert tests green; both userspace entry-points (`load_from_bytes`, `load_from_bytes_pinned`) confirmed to route through `assert_license_is_gpl`; `program_names` is correctly an introspection-only escape that does NOT call the assertion. No bypass found.
 Location: `crates/lb-l4-xdp/ebpf/src/main.rs` (no
 `#[link_section = "license"]`); `crates/lb-l4-xdp/src/loader.rs:212`
 (`EbpfLoader::new().load(elf)` — no `set_license` call). See ebpf
