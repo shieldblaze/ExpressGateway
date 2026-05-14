@@ -105,6 +105,7 @@ Cross-ref: lead T8-#2; `rel` advertise-vs-reality gap.
 ---
 
 ### PROTO-2-03 — No 1xx / 100-Continue / 103 Early Hints policy or forwarding test
+Status:   Baseline-Pinned-Wave-2b-2 / Fix-Deferred-Wave-2c (investigation: hyper auto-handles `Expect: 100-continue` at the wire level transparently, but `client::conn::http1::send_request().await` resolves on the first non-1xx response so 103 Early Hints frames drop. `crates/lb-l7/tests/informational_responses.rs` (5 tests: test_100_continue_forwarded, test_103_early_hints_forwarded, test_1xx_from_upstream_passes_through_h1, test_h2_informational + the hyper-internal baseline) pin the status-class invariants. Wave-2c installs `OnInformational` callback; see `audit/deferred.md` "PROTO-2-03".)
 Severity: medium
 Status:   Open
 Location: absence — `grep -rn '100[- ]?continue\|EarlyHints\|status::CONTINUE\|StatusCode::CONTINUE\|103' crates/lb-l7 crates/lb` returns zero hits in any proxy module.

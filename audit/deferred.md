@@ -112,6 +112,25 @@ The H1↔H1 path is already trailer-safe via hyper's `IncomingBody`
 round-trip — that path proxies the body as-is and hyper's frame
 loop preserves trailers automatically.
 
+### PROTO-2-03 — explicit 1xx / 103 Early Hints forwarding (deferred)
+
+**Status**: baseline pinned Wave-2b-2; **forwarding fix deferred to
+Wave-2c**.
+
+Investigation: hyper 1.9.0's H1 server auto-handles `Expect:
+100-continue` transparently at the wire level, but `client::conn::http1::send_request().await`
+resolves on the first non-1xx response — so 103 Early Hints frames
+from the upstream are silently dropped. RFC 9110 §15.2 / RFC 8297
+say MAY forward; production CDNs (Cloudflare, Fastly) forward.
+
+Wave-2c will install an `OnInformational` callback on hyper's H1
+client (and the equivalent stream-frame loop on the H2 / H3 paths)
+to forward 1xx frames through to the inbound client.
+
+`crates/lb-l7/tests/informational_responses.rs` (5 tests) pins the
+status-class invariants today; Wave-2c will extend them to assert
+the wire-level forwarding.
+
 ### PROTO-2-04 / PROTO-2-05 — wstest + h3spec integration (deferred to Wave 2c CI image)
 
 Both require CI image changes (installing `wstest`, `h3spec`); they
