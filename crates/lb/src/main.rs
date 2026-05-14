@@ -2506,8 +2506,7 @@ mod tests {
         ));
         let tls_reload_registry: Arc<PlMutex<Vec<TlsReloadEntry>>> =
             Arc::new(PlMutex::new(Vec::new()));
-        let outcome =
-            build_listener_mode(&listener_cfg, &pool, &[], &hooks, &tls_reload_registry);
+        let outcome = build_listener_mode(&listener_cfg, &pool, &[], &hooks, &tls_reload_registry);
         assert!(outcome.is_err(), "typo protocol should have errored");
         let msg = match outcome {
             Err(e) => e.to_string(),
