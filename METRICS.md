@@ -213,3 +213,121 @@ Error:
 label cardinality budget exceeded: backend_requests_total would emit
 up to 500000 series, ceiling is 10000
 ```
+
+## Canonical Prometheus family enumeration (round-4)
+
+The list below is the **complete** inventory of every metric the
+binary will emit when fully wired. Wired = the metric is being emitted
+today; Pending = the name is reserved and the alert is in `RUNBOOK.md`,
+but the instrumentation site is owned by a Wave-2c follow-up. The
+canonical-label table above (REL-2-08) governs label keys for the RED
+families.
+
+### Process / lifecycle
+
+| Family                                  | Type    | Labels | Wired | Cardinality | Source                                  |
+|-----------------------------------------|---------|--------|:-----:|-------------|-----------------------------------------|
+| `panic_total`                           | Counter | —      |  yes  | 1           | `crates/lb/src/main.rs::panic_hook`     |
+| `shutdown_aborted_connections_total`    | Counter | —      |  yes  | 1           | `crates/lb/src/main.rs` drain path      |
+| `connections_total`                     | Counter | —      |  yes  | 1           | per-accept on every L7 listener         |
+| `bytes_client_to_backend`               | Counter | —      |  yes  | 1           | L4 copy_bidirectional totals            |
+| `bytes_backend_to_client`               | Counter | —      |  yes  | 1           | L4 copy_bidirectional totals            |
+
+### L7 RED (canonical, REL-2-08)
+
+| Family                              | Type         | Labels                                            | Wired   | Worst case |
+|-------------------------------------|--------------|---------------------------------------------------|:-------:|------------|
+| `http_requests_total`               | CounterVec   | `listener`, `route`, `version`, `status_class`    | partial | 2 560      |
+| `http_request_duration_seconds`     | HistogramVec | `listener`, `route`, `version`                    | partial | 512        |
+| `backend_requests_total`            | CounterVec   | `listener`, `backend`, `status_class`             | pending | 1 280      |
+| `backend_request_duration_seconds`  | HistogramVec | `listener`, `backend`                             | pending | 256        |
+| `connections_inflight`              | GaugeVec     | `listener`                                        | pending | 8          |
+
+"partial" means per-connection scoping today (one observation per
+`serve_connection` return); per-request granularity requires a
+lb-l7 hook (REL-2-08 follow-up).
+
+### Accept-side health (REL-2-09 / REL-2-10)
+
+| Family                              | Type       | Labels                                            | Wired   | Cardinality |
+|-------------------------------------|------------|---------------------------------------------------|:-------:|-------------|
+| `accept_inflight`                   | GaugeVec   | `listener`                                        | pending | 8           |
+| `accept_shed_total`                 | CounterVec | `listener`                                        | pending | 8           |
+| `accept_errors_total`               | CounterVec | `listener`, `kind` (`emfile`/`enfile`/`eintr`/`econnaborted`/`eagain`/`other`) | pending | 48 |
+
+### TCP pool (`lb-io::pool`)
+
+| Family                              | Type     | Labels | Wired | Cardinality |
+|-------------------------------------|----------|--------|:-----:|-------------|
+| `pool_acquires_total`               | Counter  | —      |  yes  | 1           |
+| `pool_probe_failures_total`         | Counter  | —      |  yes  | 1           |
+| `pool_idle_gauge`                   | Gauge    | —      |  yes  | 1           |
+
+### DNS (`lb-io::dns`)
+
+| Family                              | Type    | Labels | Wired | Cardinality |
+|-------------------------------------|---------|--------|:-----:|-------------|
+| `dns_cache_hits_total`              | Counter | —      |  yes  | 1           |
+| `dns_cache_misses_total`            | Counter | —      |  yes  | 1           |
+| `dns_cache_entries`                 | Gauge   | —      |  yes  | 1           |
+
+### XDP (REL-2-12, REL-2-13)
+
+| Family                              | Type    | Labels                                  | Wired   | Cardinality |
+|-------------------------------------|---------|-----------------------------------------|:-------:|-------------|
+| `xdp_packets_total`                 | Counter | `action`                                |  yes    | ≤ 10        |
+| `xdp_bytes_total`                   | Counter | `direction`                             |  yes    | 2           |
+| `xdp_conntrack_full_total`          | Counter | `family`                                | pending | 2           |
+| `xdp_conntrack_entries_current`     | Gauge   | `family`                                | pending | 2           |
+| `xdp_conntrack_capacity`            | Gauge   | `family`                                | pending | 2           |
+| `xdp_attached_mode`                 | Gauge   | `mode`                                  |  yes    | 3           |
+| `xdp_sampler_errors_total`          | Counter | `kind`                                  |  yes    | small       |
+
+### TLS / security (SEC-2 family)
+
+| Family                              | Type    | Labels  | Wired   | Cardinality |
+|-------------------------------------|---------|---------|:-------:|-------------|
+| `cert_rotation_failed_total`        | Counter | —       | pending | 1           |
+| `cert_rotation_total`               | Counter | —       | pending | 1           |
+| `ticket_key_rotations_total`        | Counter | —       | pending | 1           |
+| `security_rapid_reset_tripped_total`        | Counter | —       | pending | 1   |
+| `security_continuation_flood_tripped_total` | Counter | —       | pending | 1   |
+| `security_hpack_bomb_tripped_total`         | Counter | —       | pending | 1   |
+| `security_settings_flood_tripped_total`     | Counter | —       | pending | 1   |
+| `security_ping_flood_tripped_total`         | Counter | —       | pending | 1   |
+| `security_zero_window_stall_total`          | Counter | —       | pending | 1   |
+| `security_slowloris_reaped_total`           | Counter | —       | pending | 1   |
+| `security_zero_rtt_replay_rejected_total`   | Counter | —       | pending | 1   |
+
+### Cardinality budget summary
+
+Sum of the worst-case columns above: ≈ 4 800 series at the spec
+shape (8 listeners × 16 routes × 32 backends × 4 versions × 5 status
+classes). The startup-time check (`LabelBudget::check`) defaults to
+`max_label_cardinality = 10 000` so a doubling of the deployment
+shape still fits before refusal.
+
+## Scrape configuration
+
+```yaml
+# /etc/prometheus/scrape_configs.d/expressgateway.yaml
+- job_name: expressgateway
+  scrape_interval: 15s
+  scrape_timeout: 5s
+  static_configs:
+    - targets: ['127.0.0.1:9090']
+  metric_relabel_configs:
+    # drop the dynamic `route` label if it pushes total series above
+    # the local Prometheus's budget — leaves listener/version/status_class.
+    - source_labels: [__name__]
+      regex: 'http_(requests_total|request_duration_seconds.*)'
+      target_label: route
+      replacement: ''
+      action: replace
+```
+
+## Doc-lint guardrails
+
+`scripts/ci/doc-lint.sh` greps for stale references — see the script
+itself for the exact pattern list. It is wired into
+`.github/workflows/ci.yml` and fails the job on any hit. <!-- doc-lint-allow -->

@@ -1,14 +1,23 @@
 # Deployment
 
-This document covers running the `lb` binary on Linux in a production-adjacent shape. XDP-dependent items are flagged because they are currently source-only (see [XDP toolchain caveat](#xdp-toolchain-caveat)).
+This document covers running the `expressgateway` binary on Linux in a
+production-adjacent shape. XDP-dependent items are flagged because the
+BPF ELF is currently behind the toolchain caveat
+(see [XDP toolchain caveat](#xdp-toolchain-caveat)); the userspace
+loader is shipped.
 
 ## Build
 
 ```
-cargo build --release -p lb
+cargo build --release -p lb --bin expressgateway
 ```
 
-Artifact: `target/release/lb`. Strip is enabled by the `[profile.release]` block in root `Cargo.toml`; LTO is set to `thin`.
+Artifact: `target/release/expressgateway`. Strip is enabled by the
+`[profile.release]` block in root `Cargo.toml`; LTO is set to `thin`.
+The crate is named `lb` but the binary it produces is `expressgateway`
+(see `crates/lb/Cargo.toml` `[[bin]] name = "expressgateway"` and
+`docker/Dockerfile` line 31 `COPY .../target/release/expressgateway
+/usr/local/bin/expressgateway`).
 
 ### Build-time dependencies
 
@@ -41,7 +50,7 @@ Wants=network-online.target
 Type=simple
 User=expressgateway
 Group=expressgateway
-ExecStart=/usr/local/bin/lb /etc/expressgateway/lb.toml
+ExecStart=/usr/local/bin/expressgateway /etc/expressgateway/lb.toml
 ExecReload=/bin/kill -HUP $MAINPID
 KillMode=mixed
 KillSignal=SIGTERM
@@ -80,8 +89,23 @@ WantedBy=multi-user.target
 ### Capability rationale
 
 - **`CAP_NET_BIND_SERVICE`** — bind to ports < 1024 (443 for HTTPS) as a non-root user.
-- **`CAP_NET_ADMIN`** — `SO_REUSEPORT` and socket-option setting beyond what an unprivileged user can do; XDP userspace loader needs it for netlink.
-- **`CAP_BPF`** — load + attach the XDP program when Pillar 4b wires it. Not strictly required for the current binary (XDP attach is not invoked), but granted so a SIGHUP that enables XDP does not require a restart.
+- **`CAP_NET_ADMIN`** — `SO_REUSEPORT`, raw socket-options the kernel
+  hides from unprivileged users, and netlink for the XDP userspace
+  loader. Required for any XDP attach.
+- **`CAP_BPF`** (Linux ≥ 5.8) — load + attach the XDP program. On
+  pre-5.8 kernels the loader transparently falls back to checking for
+  `CAP_SYS_ADMIN` (see SEC-2-11 in `audit/security/round-2-review.md`).
+
+**Effective capability matrix**:
+
+| Kernel       | Required (XDP off)        | Required (XDP on)                                      |
+|--------------|---------------------------|--------------------------------------------------------|
+| Linux ≥ 5.8  | `CAP_NET_BIND_SERVICE`    | `CAP_NET_BIND_SERVICE`, `CAP_NET_ADMIN`, `CAP_BPF`     |
+| Linux < 5.8  | `CAP_NET_BIND_SERVICE`    | `CAP_NET_BIND_SERVICE`, `CAP_NET_ADMIN`, `CAP_SYS_ADMIN` |
+
+The capability check landed with SEC-2-11 (`5064a11`,
+`e44117d`). The userspace loader at startup logs which path it took
+and refuses to attach if neither shape is present.
 
 ## Sysctls (recommended)
 
@@ -124,7 +148,11 @@ Certificate and key paths go in the TOML; see `CONFIG.md`. Rotation strategy:
 2. `systemctl reload expressgateway` (SIGHUP).
 3. The in-process `TicketRotator` (`crates/lb-security/src/ticket.rs`) keeps the previous ticket key valid for its `overlap` window so sessions encrypted before the reload continue to decrypt.
 
-TLS listener wiring is Pillar 3b; until then, the rotator is tested at the unit level only.
+TLS listeners are wired through `tokio_rustls::TlsAcceptor`
+(`crates/lb/src/main.rs`). The cert-and-key swap on SIGHUP via
+`ArcSwap<TlsStore>` is sequenced after Wave-2c lifecycle work (see
+`audit/reliability/round-2-review.md` REL-2-03 status). For now,
+rotating a cert requires a restart.
 
 ## XDP toolchain caveat
 
@@ -144,9 +172,19 @@ Until one of those lands, the XDP loader happy paths (`kernel_load`, `attach`) a
 
 ## Observability
 
-- **Logs**: `RUST_LOG=info` at start, JSON to stdout via `tracing_subscriber::fmt().with_env_filter(...)`. Route with journald: `journalctl -u expressgateway -f`.
-- **Metrics**: not yet exposed via HTTP; see `METRICS.md`.
-- **Health**: no external health endpoint. Use `ss -tln` or `curl -v 127.0.0.1:<port>` for a liveness smoke test; the binary exits non-zero on config parse / validate errors and on any main-loop `anyhow::Error`.
+- **Logs**: `RUST_LOG=info` at start. Default formatter is plain text;
+  the JSON formatter (`tracing_subscriber::fmt::format::json`) is
+  available behind a config flag — see REL-2-06 in the audit for
+  current status. Route with journald: `journalctl -u expressgateway -f`.
+- **Metrics**: Prometheus text exposition at the
+  `[observability].metrics_bind` address (default `127.0.0.1:9090`).
+  `GET /metrics` is `text/plain; version=0.0.4`; `GET /healthz` returns
+  200; `GET /readyz` flips to 503 during drain (lameduck signal).
+  Full family catalog is `METRICS.md`.
+- **Health**: in addition to the admin endpoints above, the binary
+  exits non-zero on config parse/validate errors and on any
+  un-recovered main-loop `anyhow::Error`. systemd's `Restart=on-failure`
+  brings it back.
 
 ## Verification after deploy
 
@@ -154,7 +192,14 @@ Until one of those lands, the XDP loader happy paths (`kernel_load`, `attach`) a
 2. `journalctl -u expressgateway -n 20` → `lb-io runtime ready backend=io_uring` (or `epoll`), `TCP backend pool ready`, `DNS resolver ready`, one `listening on ...` line per listener.
 3. `ss -tln` → one socket per listener address in LISTEN state.
 4. Send a test request; verify upstream receives it; verify the connection count on the backend increments.
-5. `systemctl reload expressgateway`; watch logs for `reload applied` and no errors; verify no in-flight connections dropped (covered by the internal `reload_zero_drop` integration test, but worth repeating in prod).
+5. `systemctl reload expressgateway`; watch logs for the
+   `subsequent lifecycle signal` line (and absence of errors); verify
+   no in-flight connections dropped. The internal `reload_zero_drop`
+   integration test in `tests/reload_zero_drop.rs` exercises the
+   `ConfigManager` reload path in-process. The full systemd reload
+   loop (SIGHUP → re-read TOML → atomic config swap) is the
+   REL-2-05 follow-up; until then `systemctl reload` works on
+   SIGUSR1 only.
 
 See `RUNBOOK.md` for ongoing operations.
 

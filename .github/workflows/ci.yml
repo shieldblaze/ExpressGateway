@@ -74,6 +74,17 @@ jobs:
       - name: cargo fmt
         run: cargo fmt --all -- --check
 
+  doc-lint:
+    # REL-2-01: guard the operator-facing docs against drift.
+    # Fails on stale binary names, removed crate names, etc.
+    name: Doc Lint
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Run doc-lint
+        run: bash scripts/ci/doc-lint.sh
+
   panic-freedom:
     name: Panic Freedom Audit
     runs-on: ubuntu-latest
@@ -232,7 +243,7 @@ jobs:
   release-build:
     name: Release Build
     runs-on: ubuntu-latest
-    needs: [check, clippy, test, fmt, panic-freedom]
+    needs: [check, clippy, test, fmt, panic-freedom, doc-lint]
     steps:
       - uses: actions/checkout@v4
 

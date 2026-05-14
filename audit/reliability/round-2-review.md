@@ -20,7 +20,7 @@ Status is `Open` for every finding; the team-lead flips status in Round
 
 ### REL-2-01 — Doc/code drift: RUNBOOK and DEPLOYMENT describe flows that do not exist
 Severity: high
-Status:   Open
+Status:   Proposed-Fix(pending-cherrypick)
 Location: `RUNBOOK.md:25-57`, `RUNBOOK.md:89`, `RUNBOOK.md:135-150`, `DEPLOYMENT.md:11`, `DEPLOYMENT.md:32-65`, `DEPLOYMENT.md:117`, `DEPLOYMENT.md:147-157`
 
 Description: Multiple operator-facing flows in `RUNBOOK.md` and
@@ -676,7 +676,7 @@ Cross-ref: `ebpf` #7 (Round-1 inventory).
 
 ### REL-2-14 — Binary name mismatch: systemd unit and runbook reference `/usr/local/bin/lb`; binary is `expressgateway`
 Severity: low
-Status:   Open
+Status:   Proposed-Fix(pending-cherrypick)
 Location: `DEPLOYMENT.md:11`, `DEPLOYMENT.md:44`, `RUNBOOK.md:161`; `crates/lb/Cargo.toml:[[bin]] name`; `docker/Dockerfile:34`
 
 Description: The binary built from `crates/lb` is named
