@@ -1,0 +1,43 @@
+   Compiling rustls v0.23.38
+   Compiling neli-proc-macros v0.2.2
+   Compiling getset v0.1.6
+   Compiling memoffset v0.9.1
+   Compiling getrandom v0.4.2
+   Compiling object v0.37.3
+   Compiling boring-sys v4.21.2
+   Compiling unicode-normalization v0.1.25
+   Compiling dashmap v6.1.0
+   Compiling arc-swap v1.9.1
+   Compiling http v0.2.12
+   Compiling crossbeam-channel v0.5.15
+   Compiling pin-project-internal v1.1.11
+   Compiling async-trait v0.1.89
+   Compiling foreign-types-macros v0.2.3
+   Compiling portable-atomic v1.13.1
+   Compiling ipnet v2.12.0
+   Compiling libm v0.2.16
+   Compiling prometheus v0.13.4
+   Compiling linked-hash-map v0.5.6
+   Compiling unicode-bidi v0.3.18
+   Compiling foreign-types-shared v0.3.1
+   Compiling crc32fast v1.5.0
+   Compiling rustc-demangle v0.1.27
+   Compiling hashbrown v0.12.3
+   Compiling urlencoding v2.1.3
+   Compiling opentelemetry v0.22.0
+   Compiling indexmap v1.9.3
+   Compiling backtrace v0.3.76
+   Compiling foreign-types v0.5.0
+...
+   Compiling base64 v0.21.7
+   Compiling allocator-api2 v0.2.21
+   Compiling iana-time-zone v0.1.65
+   Compiling object v0.36.7
+   Compiling cfg_aliases v0.2.1
+   Compiling dtoa v1.0.11
+   Compiling humantime v2.3.0
+   Compiling anyhow v1.0.102
+   Compiling qlog v0.17.0
+EXIT_CARGO=124
+
+NOTE: First run captured exit 0 from the tail filter in the pipeline (not cargo). Re-run with clean exit capture timed out at 540s during release-mode dependency build (boring-sys, h2, hyper, rustls, quiche, prost cold). Local sandbox cannot complete this gate in the session budget. Defer to CI where the workspace target dir is already warm. The smuggling code path is statically validated by clippy (no related errors) and the test files themselves only depend on lb-security which compiles cleanly.

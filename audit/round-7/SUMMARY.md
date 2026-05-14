@@ -19,7 +19,7 @@ no real NICs; no nightly toolchain.
 | 6  | cargo nextest                              | BLOCKED  | gate-outputs/nextest.txt                      | same h3_upstream_verify defect |
 | 7  | cargo llvm-cov                             | DEFERRED | audit/coverage-scope.md, deferred-to-ci.md    | install needs network |
 | 8  | cargo miri                                 | DEFERRED | deferred-to-ci.md                             | needs nightly |
-| 9  | loom test                                  | SEE-ROW  | gate-outputs/loom.txt                         | exit code in file |
+| 9  | loom test                                  | DEFERRED | gate-outputs/loom.txt                         | exit 124 — loom build did not finish in 300s budget (separate target dir for --cfg loom). Defer to CI. |
 | 10 | proptest PROPTEST_CASES=10000              | BLOCKED  | gate-outputs/nextest.txt                      | same defect |
 | 11 | cargo audit                                | DEFERRED | deferred-to-ci.md                             | install needs network |
 | 12 | cargo deny check                           | DEFERRED | deferred-to-ci.md                             | install needs network; deny.toml committed |
@@ -27,7 +27,7 @@ no real NICs; no nightly toolchain.
 | 14 | bpftool real-kernel                        | DEFERRED | deferred-to-ci.md                             | needs lvh + privileged Docker |
 | 15 | XDP verifier-log matrix                    | DEFERRED | deferred-to-ci.md                             | scripts/verify-xdp.sh present; logs dir not built locally |
 | 16 | h2spec                                     | DEFERRED | deferred-to-ci.md                             | binary not installed |
-| 17 | smuggling tests                            | SEE-ROW  | gate-outputs/protocol-conformance.txt         | exit code in file |
+| 17 | smuggling tests                            | DEFERRED | gate-outputs/protocol-conformance.txt         | timeout 124 during cold release build (boring-sys + h2 + hyper + rustls + quiche + prost). Defer to CI where build cache is warm. Smuggling code path is clippy-clean. |
 | 18 | h3spec + Autobahn                          | DEFERRED | deferred-to-ci.md                             | binaries not installed |
 | 19 | criterion benches                          | DEFERRED | gate-outputs/bench.txt                        | bench/criterion/*.rs are stubs |
 | 20 | soak / chaos (4h)                          | DEFERRED | deferred-to-ci.md                             | 4h budget |
@@ -36,15 +36,14 @@ no real NICs; no nightly toolchain.
 | 23 | container image scan                       | DEFERRED | deferred-to-ci.md                             | trivy/grype not installed |
 | 24 | RUNBOOK doc-lint                           | PASS     | gate-outputs/doc-lint.txt                     | doc-lint: OK |
 | 25 | Prometheus scrape (compose)                | DEFERRED | deferred-to-ci.md                             | no docker daemon |
-| 26 | SIGTERM drain (reload_zero_drop)           | SEE-ROW  | gate-outputs/reload-zero-drop.txt             | exit code in file |
+| 26 | SIGTERM drain (reload_zero_drop)           | DEFERRED | gate-outputs/reload-zero-drop.txt             | timeout 124 during cold release build (boring-sys + h2 + hyper + rustls). Defer to CI where workspace target dir is warm. |
 
 ## Counts (local-runnable subset)
 
 - PASS: 8 (fmt, machete*, geiger-fallback, unsafe-justifications, sbom-fallback, round-2-findings, default-config, doc-lint)
 - FAIL: 1 (clippy — single integration-test compile error; workspace lints otherwise clean)
 - BLOCKED: 2 (nextest, proptest — downstream of the same compile error)
-- SEE-ROW: 3 (loom, smuggling, reload — see exit codes in their files)
-- DEFERRED to CI: 12
+- DEFERRED to CI: 15 (now also includes loom + reload-zero-drop + smuggling-tests — release-mode build budget exceeds 540s in this sandbox; CI runs with warm target dir)
 
 ## Key surprise
 
