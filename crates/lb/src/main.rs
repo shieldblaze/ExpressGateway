@@ -19,15 +19,17 @@
 use std::io::BufReader;
 use std::net::SocketAddr;
 use std::path::Path;
-use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::{Arc, OnceLock};
 use std::time::{Duration, Instant};
 
 use anyhow::Context;
 use parking_lot::Mutex as PlMutex;
+use prometheus::IntCounter;
 use rustls_pki_types::{CertificateDer, PrivateKeyDer};
 use tokio::io::{self, AsyncRead, AsyncWrite};
 use tokio::net::TcpListener;
+#[cfg(not(unix))]
 use tokio::signal;
 use tokio_rustls::TlsAcceptor;
 
@@ -68,12 +70,17 @@ use lb_security::{TicketRotator, build_server_config};
 
 mod xdp;
 
-/// CODE-2-02: process-wide panic counter. Wave-2 wire-up with rel will
-/// surface this as a Prometheus `panic_total` counter via the
-/// `lb-observability` registry (rel REL-2-07 / REL-2-15). For Wave 1
-/// the field is a process-local `AtomicU64` so the hook is fully
-/// functional today; the metric export is a pure wiring change.
-static PANIC_TOTAL: AtomicU64 = AtomicU64::new(0);
+/// CODE-2-02 Wave 2c: cell holding the registry-backed `panic_total`
+/// counter. Set exactly once in [`async_main`] right after the
+/// `MetricsRegistry` is constructed; the panic hook then bumps it
+/// directly without re-entering the registry HashMap on every hit.
+///
+/// A second fallback `AtomicU64` is kept so a panic that fires *before*
+/// the registry is ready (e.g. during config parsing) is still
+/// counted; the registry-side counter is incremented by the same
+/// fallback delta once it becomes available so no panic is lost.
+static PANIC_TOTAL_COUNTER: OnceLock<IntCounter> = OnceLock::new();
+static PANIC_TOTAL_FALLBACK: AtomicU64 = AtomicU64::new(0);
 
 /// CODE-2-02: install a process-wide `std::panic::set_hook` that logs
 /// the panic location, payload, and a full backtrace via
@@ -102,7 +109,13 @@ fn init_panic_hook() {
         } else {
             "<non-string panic payload>".to_owned()
         };
-        PANIC_TOTAL.fetch_add(1, Ordering::Release);
+        // Prefer the registry-side counter; fall back to the atomic
+        // for the pre-registry window.
+        if let Some(c) = PANIC_TOTAL_COUNTER.get() {
+            c.inc();
+        } else {
+            PANIC_TOTAL_FALLBACK.fetch_add(1, Ordering::Release);
+        }
         tracing::error!(
             target: "panic",
             location = %location,
@@ -116,11 +129,35 @@ fn init_panic_hook() {
     }));
 }
 
-/// CODE-2-02: read-only accessor for the panic counter. Wave-2 hooks
-/// this into the Prometheus exposition (rel REL-2-07).
+/// CODE-2-02 Wave 2c: bind the registry-backed counter to the panic
+/// hook and drain any pre-registry panics counted in the atomic
+/// fallback. Called once in [`async_main`] after the
+/// `MetricsRegistry` is constructed.
+fn bind_panic_counter(metrics: &MetricsRegistry) {
+    match metrics.panic_total_counter() {
+        Ok(c) => {
+            // Drain any pre-registry panics counted in the fallback so
+            // none are lost.
+            let pre = PANIC_TOTAL_FALLBACK.swap(0, Ordering::AcqRel);
+            if pre > 0 {
+                c.inc_by(pre);
+            }
+            let _ = PANIC_TOTAL_COUNTER.set(c);
+        }
+        Err(e) => {
+            tracing::warn!(error = %e, "panic_total counter registration failed");
+        }
+    }
+}
+
+/// CODE-2-02: read-only accessor for the panic counter. Sums the
+/// registry counter (if bound) with the fallback atomic so callers
+/// see the total regardless of when init happened.
 #[allow(dead_code)]
 fn panic_total() -> u64 {
-    PANIC_TOTAL.load(Ordering::Acquire)
+    let from_registry = PANIC_TOTAL_COUNTER.get().map_or(0, IntCounter::get);
+    let from_fallback = PANIC_TOTAL_FALLBACK.load(Ordering::Acquire);
+    from_registry.saturating_add(from_fallback)
 }
 
 // ── shared gateway state ────────────────────────────────────────────────
@@ -174,6 +211,10 @@ struct ListenerState {
     resolver: DnsResolver,
     /// Listener termination mode (plain TCP or TLS over TCP).
     mode: ListenerMode,
+    /// SEC-2-10 Wave 2c: max wall-clock budget for one TLS
+    /// handshake. Sourced from
+    /// [`lb_config::RuntimeConfig::handshake_timeout_ms`].
+    handshake_timeout: Duration,
 }
 
 /// Listener socket options matching PROMPT.md §7 for listener sockets.
@@ -265,7 +306,33 @@ fn load_cert_chain(path: &Path) -> anyhow::Result<Vec<CertificateDer<'static>>> 
 
 /// Load the first PEM-encoded private key from `path`. Accepts PKCS#8,
 /// SEC1 (EC), or RSA PKCS#1 formats.
+///
+/// SEC-2-08 (Wave 2c): refuse to load a private key whose file mode
+/// is group- or world-accessible. The default policy is **strict** on
+/// release builds (anything wider than `0o600` is a hard error) and
+/// **lax** on debug builds (logged at `warn` to keep dev ergonomics).
+/// Operators that must keep a wider mode (e.g. ESM bundled keys)
+/// should switch to a sidecar that drops perms before launch.
 fn load_private_key(path: &Path) -> anyhow::Result<PrivateKeyDer<'static>> {
+    // SEC-2-08: refuse world-readable keys at load time.
+    let strict = !cfg!(debug_assertions);
+    match lb_security::assert_owner_only(path, strict) {
+        Ok(lb_security::KeyPermAdvice::Ok | lb_security::KeyPermAdvice::NotApplicable) => {}
+        Ok(lb_security::KeyPermAdvice::TooPermissive { mode }) => {
+            tracing::warn!(
+                key = %path.display(),
+                mode = format!("{mode:o}"),
+                "TLS key file permissions wider than 0o600 — tighten with `chmod 600`"
+            );
+        }
+        Err(e) => {
+            return Err(anyhow::anyhow!(
+                "TLS key permission check failed for {}: {e}",
+                path.display()
+            ));
+        }
+    }
+
     let file = std::fs::File::open(path)
         .with_context(|| format!("cannot open TLS key {}", path.display()))?;
     let mut reader = BufReader::new(file);
@@ -726,6 +793,7 @@ async fn spawn_tcp(
     resolver: &DnsResolver,
     io_runtime: Runtime,
     metrics: &Arc<MetricsRegistry>,
+    handshake_timeout: Duration,
 ) -> anyhow::Result<tokio::task::JoinHandle<anyhow::Result<()>>> {
     let mut addresses = Vec::with_capacity(listener_cfg.backends.len());
     let mut backends = Vec::with_capacity(listener_cfg.backends.len());
@@ -763,6 +831,7 @@ async fn spawn_tcp(
         pool: pool.clone(),
         resolver: resolver.clone(),
         mode,
+        handshake_timeout,
     });
     Ok(tokio::spawn(run_listener(
         listener_cfg.address.clone(),
@@ -993,17 +1062,22 @@ fn main() -> anyhow::Result<()> {
 }
 
 async fn async_main() -> anyhow::Result<()> {
-    // ── tracing ─────────────────────────────────────────────────────
-    tracing_subscriber::fmt()
-        .with_env_filter(
-            tracing_subscriber::EnvFilter::try_from_default_env()
-                .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("info")),
-        )
-        .init();
+    // ── tracing (REL-2-06 wiring) ──────────────────────────────────
+    // Use the central `lb_observability::init_tracing` so every
+    // binary shares the same JSON / text format + filter resolution.
+    // `init_tracing` is idempotent — a second call (rare under tests
+    // that run async_main twice in the same process) returns
+    // AlreadyInitialised which we treat as success.
+    match lb_observability::init_tracing(&lb_observability::TracingConfig::default()) {
+        Ok(()) | Err(lb_observability::TracingError::AlreadyInitialised) => {}
+    }
 
     // CODE-2-02: install panic hook IMMEDIATELY after the tracing
     // subscriber is up. Anything that panics before this point dies
     // silently under `panic = "abort"`; anything after logs + counts.
+    // The registry-backed counter is bound below once the registry
+    // is available; until then the atomic fallback ensures we never
+    // lose a panic.
     init_panic_hook();
 
     tracing::info!("ExpressGateway v{}", env!("CARGO_PKG_VERSION"));
@@ -1018,6 +1092,36 @@ async fn async_main() -> anyhow::Result<()> {
 
     let config = lb_config::parse_config(&config_str).context("config parse error")?;
     lb_config::validate_config(&config).context("config validation error")?;
+
+    // REL-2-08 wiring: refuse to boot if the live config shape would
+    // blow the per-family series ceiling. Worst case is
+    // `listeners × backends × status_classes` for backend_requests —
+    // bound listener count + max backends here so a typo cannot DoS
+    // the scraper.
+    {
+        let listeners = config.listeners.len();
+        let backends_per = config
+            .listeners
+            .iter()
+            .map(|l| l.backends.len())
+            .max()
+            .unwrap_or(0);
+        let budget = lb_observability::LabelBudget::from_config_shape(
+            listeners,
+            backends_per,
+            1,
+            lb_observability::DEFAULT_MAX_LABEL_CARDINALITY,
+        );
+        budget
+            .check()
+            .map_err(|e| anyhow::anyhow!("label cardinality budget exceeded: {e}"))?;
+        tracing::info!(
+            listeners,
+            backends_per,
+            ceiling = lb_observability::DEFAULT_MAX_LABEL_CARDINALITY,
+            "label cardinality budget OK"
+        );
+    }
 
     tracing::info!(
         listeners = config.listeners.len(),
@@ -1053,12 +1157,20 @@ async fn async_main() -> anyhow::Result<()> {
         }
     };
 
-    // CODE-2-13: stub the lb_core::Shutdown import here so Wave-2 can
-    // pass-it-into the existing listener spawn helpers as an argument
-    // without re-architecting the call chain. NOT yet wired into the
-    // accept loop or per-connection spawn — that's serialised after
-    // sec/rel/proto land their pieces (round-4 brief constraint).
-    let _shutdown_for_wave2: lb_core::Shutdown = lb_core::Shutdown::new();
+    // CODE-2-03 Wave 2c: process-wide graceful drain handle. SIGTERM /
+    // SIGINT / SIGUSR1 are wired below. Per-spawn-site
+    // `tracker().spawn()` integration (the 33-site refactor identified
+    // in the Wave-1 audit) is **deferred** to a separate commit so
+    // this batch keeps a clean review boundary; the sampler + admin
+    // listener already use the cancellation token directly, which
+    // covers the long-lived non-connection tasks.
+    let shutdown: lb_core::Shutdown = lb_core::Shutdown::new();
+
+    // REL-2-04 wiring: shared probe registry consulted by
+    // `/livez`/`/readyz`/`/startupz`. Starts in `Starting`; flipped
+    // to `Ready` once every listener has bound; flipped to `Draining`
+    // at SIGTERM (k8s lameduck signal).
+    let probes = lb_observability::ProbeRegistry::shared();
 
     // ── lb-io runtime ───────────────────────────────────────────────
     let io_runtime = Runtime::new();
@@ -1123,7 +1235,19 @@ async fn async_main() -> anyhow::Result<()> {
     let metrics = Arc::new(MetricsRegistry::new());
     install_hotpath_metrics(&metrics, &pool, &resolver);
 
-    // ── optional admin HTTP listener (GET /metrics, GET /healthz) ──
+    // CODE-2-02 Wave 2c: bind the registry-backed panic_total counter
+    // *now* that the registry exists. Any panic between the hook
+    // install and this point was counted in the atomic fallback and
+    // is drained into the counter inside `bind_panic_counter`.
+    bind_panic_counter(&metrics);
+
+    // REL-2-12 / REL-2-13 wiring: register the XDP metric families
+    // (zero-valued today) so dashboards see the panel even before
+    // the first eBPF tick. The 1 Hz sampler below feeds them.
+    let xdp_metrics = lb_observability::xdp_metrics::XdpMetrics::register(&metrics)
+        .map_err(|e| anyhow::anyhow!("XDP metric registration failed: {e}"))?;
+
+    // ── optional admin HTTP listener (GET /metrics, GET /livez …) ──
     let admin_cancel = CancellationToken::new();
     if let Some(obs) = config.observability.as_ref() {
         if let Some(bind_str) = obs.metrics_bind.as_deref() {
@@ -1131,11 +1255,18 @@ async fn async_main() -> anyhow::Result<()> {
                 .trim()
                 .parse()
                 .with_context(|| format!("invalid observability.metrics_bind: {bind_str}"))?;
-            match admin_http::serve(Arc::clone(&metrics), bind_addr, admin_cancel.clone()).await {
+            match admin_http::serve_with_probes(
+                Arc::clone(&metrics),
+                Arc::clone(&probes),
+                bind_addr,
+                admin_cancel.clone(),
+            )
+            .await
+            {
                 Ok(local) => tracing::info!(
                     address = %local,
                     protocol = "admin-http",
-                    "admin listener started (/metrics, /healthz)"
+                    "admin listener started (/metrics, /livez, /readyz, /startupz, /healthz)"
                 ),
                 Err(e) => {
                     tracing::error!(bind = %bind_addr, error = %e, "admin listener bind failed");
@@ -1147,6 +1278,16 @@ async fn async_main() -> anyhow::Result<()> {
     // ── spawn listeners ─────────────────────────────────────────────
     let mut listener_handles = Vec::new();
     let mut quic_listeners: Vec<QuicListener> = Vec::new();
+
+    // SEC-2-10 Wave 2c: source the TLS handshake budget from
+    // `[runtime].handshake_timeout_ms`. Falls back to 5 s when no
+    // `[runtime]` block is present.
+    let handshake_timeout = Duration::from_millis(
+        config
+            .runtime
+            .as_ref()
+            .map_or(5_000, |r| r.handshake_timeout_ms),
+    );
 
     for listener_cfg in &config.listeners {
         if listener_cfg.protocol == "quic" {
@@ -1160,7 +1301,15 @@ async fn async_main() -> anyhow::Result<()> {
             );
             continue;
         }
-        let handle = spawn_tcp(listener_cfg, &pool, &resolver, io_runtime, &metrics).await?;
+        let handle = spawn_tcp(
+            listener_cfg,
+            &pool,
+            &resolver,
+            io_runtime,
+            &metrics,
+            handshake_timeout,
+        )
+        .await?;
         listener_handles.push(handle);
     }
 
@@ -1168,19 +1317,98 @@ async fn async_main() -> anyhow::Result<()> {
         anyhow::bail!("no listeners started — check your configuration");
     }
 
-    // ── shutdown ────────────────────────────────────────────────────
-    shutdown_signal().await;
-    tracing::info!("shutdown signal received — draining connections");
+    // REL-2-04 wiring: now that every listener has bound, flip the
+    // shared probe registry from `Starting` to `Ready` so `/readyz`
+    // returns 200 to the upstream LB / k8s probe.
+    probes.set_ready();
+    tracing::info!("probes flipped to Ready — service open for traffic");
 
-    // Cancel TCP/TLS listener tasks (they will stop accepting new connections).
+    // REL-2-13 wiring: spawn the 1 Hz STATS sampler. Reads the
+    // per-CPU XDP STATS map, computes per-slot deltas against the
+    // last tick, and bumps `xdp_packets_total{action}`. Cancelled on
+    // `Shutdown::token()` so it joins cleanly during drain.
+    {
+        let xdp_metrics = xdp_metrics.clone();
+        let cancel = shutdown.token().clone();
+        tokio::spawn(async move {
+            let mut baseline = lb_observability::SamplerBaseline::default();
+            let mut ticker = tokio::time::interval(Duration::from_secs(1));
+            ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+            loop {
+                tokio::select! {
+                    biased;
+                    () = cancel.cancelled() => {
+                        tracing::debug!("XDP stats sampler shutting down");
+                        return;
+                    }
+                    _ = ticker.tick() => {}
+                }
+                match lb_l4_xdp::stats_export::read_stats() {
+                    Ok(snap) => {
+                        let deltas = baseline.delta(&snap.summed);
+                        lb_observability::xdp_metrics::apply_packet_deltas(&xdp_metrics, &deltas);
+                    }
+                    Err(e) => {
+                        // Non-Linux returns Ok(zeros), so an error here
+                        // always means a real read failure — count it
+                        // and keep ticking.
+                        xdp_metrics.sampler_errors_total.inc();
+                        tracing::debug!(error = %e, "XDP stats read failed");
+                    }
+                }
+            }
+        });
+    }
+
+    // ── shutdown ────────────────────────────────────────────────────
+    // REL-2-02 + CODE-2-03 Wave 2c: deterministic SIGTERM sequence.
+    //
+    //   1. wait for SIGTERM/SIGINT/SIGUSR1 (SIGUSR1 is the cert-reload
+    //      knob REL-2-03 will fill in; today it just logs).
+    //   2. `probes.set_draining()` so `/readyz` returns 503 to upstream
+    //      LBs.
+    //   3. sleep `readiness_settle_ms` so the upstream observes the
+    //      503 and stops sending new traffic.
+    //   4. `shutdown.token().cancel()` to wake every cooperative
+    //      `select!` in long-lived tasks (sampler, future per-conn
+    //      actors).
+    //   5. wait up to `drain_timeout_ms` for the tracker to drain.
+    //   6. abort survivors + bump `shutdown_aborted_connections_total`.
+    //   7. drop the XDP loader LAST (handled implicitly by `_xdp_loader`
+    //      living to the end of `async_main`).
+    let signal_kind = wait_for_lifecycle_signal().await;
+    tracing::info!(signal = %signal_kind, "lifecycle signal received");
+
+    if matches!(signal_kind, LifecycleSignal::SigUsr1) {
+        // REL-2-03 placeholder: real cert-reload wiring lands in
+        // Wave-2c-2. For now we log + continue waiting for SIGTERM.
+        tracing::info!("SIGUSR1 received — cert reload placeholder (REL-2-03)");
+        // Re-arm: wait for the *next* terminal signal.
+        let next = wait_for_lifecycle_signal().await;
+        tracing::info!(signal = %next, "subsequent lifecycle signal");
+    }
+
+    tracing::info!("entering drain — flipping /readyz to 503");
+    probes.set_draining();
+
+    let runtime_cfg = config.runtime.as_ref();
+    let settle = runtime_cfg.map_or(1_000, |r| r.readiness_settle_ms);
+    if settle > 0 {
+        tracing::info!(settle_ms = settle, "settling for upstream LB before cancel");
+        tokio::time::sleep(Duration::from_millis(settle)).await;
+    }
+
+    // Cancel cooperative subsystems via the shared token. The current
+    // batch only wires this to the STATS sampler + admin listener; the
+    // 33-spawn-site connection-handler integration is the deferred
+    // follow-up. Listener accept loops are still aborted below.
+    shutdown.token().cancel();
+    admin_cancel.cancel();
     for h in &listener_handles {
         h.abort();
     }
-    // Stop admin HTTP listener (if any).
-    admin_cancel.cancel();
 
-    // Cancel QUIC listeners — each holds a CancellationToken and returns
-    // a JoinHandle on shutdown().
+    // QUIC listeners hold their own cancellation tokens.
     let mut quic_drain_handles = Vec::with_capacity(quic_listeners.len());
     for listener in quic_listeners {
         quic_drain_handles.push(listener.shutdown());
@@ -1195,8 +1423,30 @@ async fn async_main() -> anyhow::Result<()> {
         }
     }
 
-    // Allow a brief drain period for any remaining TCP connections.
-    tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+    let drain_budget = Duration::from_millis(runtime_cfg.map_or(10_000, |r| r.drain_timeout_ms));
+    tracing::info!(
+        deadline_ms = drain_budget.as_millis() as u64,
+        "draining tasks"
+    );
+    match shutdown.drain(drain_budget).await {
+        lb_core::DrainOutcome::Clean => {
+            tracing::info!("drain completed cleanly");
+        }
+        lb_core::DrainOutcome::TimedOut { remaining } => {
+            // Best-effort: bump the abort counter so dashboards can
+            // surface a deploy that left straggler tasks behind.
+            if let Ok(c) = metrics.counter(
+                "shutdown_aborted_connections_total",
+                "Tasks still live when the drain deadline elapsed",
+            ) {
+                c.inc_by(remaining as u64);
+            }
+            tracing::warn!(
+                remaining,
+                "drain deadline elapsed — survivors will be aborted on runtime drop"
+            );
+        }
+    }
 
     let total = metrics.get("connections_total").unwrap_or(0);
     let bytes_in = metrics.get("bytes_client_to_backend").unwrap_or(0);
@@ -1208,7 +1458,78 @@ async fn async_main() -> anyhow::Result<()> {
         "ExpressGateway stopped"
     );
 
+    // _xdp_loader drops *here*, AFTER the drain has settled, so the
+    // userspace inserter sees a stable map until the last connection
+    // handler has exited.
+    drop(_xdp_loader);
+
     Ok(())
+}
+
+/// CODE-2-03 Wave 2c: terminal-or-reload signal returned by
+/// [`wait_for_lifecycle_signal`].
+#[derive(Copy, Clone, Debug)]
+enum LifecycleSignal {
+    /// SIGTERM (k8s lameduck, systemd stop).
+    SigTerm,
+    /// SIGINT (Ctrl-C in interactive sessions).
+    SigInt,
+    /// SIGUSR1 (REL-2-03 cert reload trigger; today a no-op + log).
+    SigUsr1,
+}
+
+impl std::fmt::Display for LifecycleSignal {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(match self {
+            Self::SigTerm => "SIGTERM",
+            Self::SigInt => "SIGINT",
+            Self::SigUsr1 => "SIGUSR1",
+        })
+    }
+}
+
+/// Wait for SIGTERM, SIGINT, or SIGUSR1. On non-unix targets only
+/// Ctrl-C is wired (Windows operators trigger drain via Ctrl-C too).
+async fn wait_for_lifecycle_signal() -> LifecycleSignal {
+    #[cfg(unix)]
+    {
+        use tokio::signal::unix::{SignalKind, signal as unix_signal};
+        let mut sigterm = match unix_signal(SignalKind::terminate()) {
+            Ok(s) => s,
+            Err(e) => {
+                tracing::warn!(error = %e, "SIGTERM handler install failed");
+                return LifecycleSignal::SigInt;
+            }
+        };
+        let mut sigint = match unix_signal(SignalKind::interrupt()) {
+            Ok(s) => s,
+            Err(e) => {
+                tracing::warn!(error = %e, "SIGINT handler install failed");
+                return LifecycleSignal::SigTerm;
+            }
+        };
+        let mut sigusr1 = match unix_signal(SignalKind::user_defined1()) {
+            Ok(s) => s,
+            Err(e) => {
+                tracing::warn!(error = %e, "SIGUSR1 handler install failed");
+                // Fall through to a select on the two terminal signals.
+                tokio::select! {
+                    _ = sigterm.recv() => return LifecycleSignal::SigTerm,
+                    _ = sigint.recv() => return LifecycleSignal::SigInt,
+                }
+            }
+        };
+        tokio::select! {
+            _ = sigterm.recv() => LifecycleSignal::SigTerm,
+            _ = sigint.recv() => LifecycleSignal::SigInt,
+            _ = sigusr1.recv() => LifecycleSignal::SigUsr1,
+        }
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = signal::ctrl_c().await;
+        LifecycleSignal::SigInt
+    }
 }
 
 // ── listener loop ───────────────────────────────────────────────────────
@@ -1272,12 +1593,17 @@ async fn run_listener(bind_addr: String, state: Arc<ListenerState>) -> anyhow::R
                 ListenerMode::PlainTcp => {
                     proxy_connection(client_stream, backend_addr, &st.metrics, &st.pool).await
                 }
-                ListenerMode::Tls { acceptor, .. } => match acceptor.accept(client_stream).await {
-                    Ok(tls_stream) => {
-                        proxy_connection(tls_stream, backend_addr, &st.metrics, &st.pool).await
+                ListenerMode::Tls { acceptor, .. } => {
+                    // SEC-2-10 Wave 2c: bounded TLS handshake budget.
+                    match lb_security::timeout_accept(acceptor, client_stream, st.handshake_timeout)
+                        .await
+                    {
+                        Ok(tls_stream) => {
+                            proxy_connection(tls_stream, backend_addr, &st.metrics, &st.pool).await
+                        }
+                        Err(e) => Err(anyhow::Error::new(e)),
                     }
-                    Err(e) => Err(e.into()),
-                },
+                }
                 ListenerMode::H1 { proxy } => {
                     http_version = Some("h1");
                     Arc::clone(proxy)
@@ -1290,30 +1616,31 @@ async fn run_listener(bind_addr: String, state: Arc<ListenerState>) -> anyhow::R
                     h2_proxy,
                     acceptor,
                     ..
-                } => match acceptor.accept(client_stream).await {
-                    Ok(tls_stream) => {
-                        // ALPN-based dispatch: h2 → H2Proxy, anything else
-                        // (http/1.1 or unknown) → H1Proxy. rustls returns
-                        // the negotiated protocol via
-                        // `ServerConnection::alpn_protocol()` on the inner
-                        // `(io, conn)` tuple of `TlsStream`.
-                        let alpn = tls_stream.get_ref().1.alpn_protocol().map(<[u8]>::to_vec);
-                        if alpn.as_deref() == Some(b"h2".as_ref()) {
-                            http_version = Some("h2");
-                            Arc::clone(h2_proxy)
-                                .serve_connection(tls_stream, client_addr)
-                                .await
-                                .map_err(anyhow::Error::from)
-                        } else {
-                            http_version = Some("h1");
-                            Arc::clone(h1_proxy)
-                                .serve_connection(tls_stream, client_addr)
-                                .await
-                                .map_err(anyhow::Error::from)
+                } => {
+                    // SEC-2-10 Wave 2c: bounded TLS handshake budget.
+                    match lb_security::timeout_accept(acceptor, client_stream, st.handshake_timeout)
+                        .await
+                    {
+                        Ok(tls_stream) => {
+                            // ALPN-based dispatch: h2 → H2Proxy, else H1Proxy.
+                            let alpn = tls_stream.get_ref().1.alpn_protocol().map(<[u8]>::to_vec);
+                            if alpn.as_deref() == Some(b"h2".as_ref()) {
+                                http_version = Some("h2");
+                                Arc::clone(h2_proxy)
+                                    .serve_connection(tls_stream, client_addr)
+                                    .await
+                                    .map_err(anyhow::Error::from)
+                            } else {
+                                http_version = Some("h1");
+                                Arc::clone(h1_proxy)
+                                    .serve_connection(tls_stream, client_addr)
+                                    .await
+                                    .map_err(anyhow::Error::from)
+                            }
                         }
+                        Err(e) => Err(anyhow::Error::new(e)),
                     }
-                    Err(e) => Err(e.into()),
-                },
+                }
             };
 
             // Metric: http_requests_total{version, status_class} +
@@ -1412,39 +1739,6 @@ where
     }
 }
 
-// ── signal handling ─────────────────────────────────────────────────────
-
-#[allow(clippy::redundant_pub_crate)]
-async fn shutdown_signal() {
-    let ctrl_c = async {
-        signal::ctrl_c()
-            .await
-            .unwrap_or_else(|_| tracing::warn!("failed to listen for ctrl-c"));
-    };
-
-    #[cfg(unix)]
-    let terminate = async {
-        match signal::unix::signal(signal::unix::SignalKind::terminate()) {
-            Ok(mut sig) => {
-                sig.recv().await;
-            }
-            Err(e) => {
-                tracing::warn!("failed to listen for SIGTERM: {e}");
-                // Fall back to waiting forever (ctrl_c will still work).
-                std::future::pending::<()>().await;
-            }
-        }
-    };
-
-    #[cfg(not(unix))]
-    let terminate = std::future::pending::<()>();
-
-    tokio::select! {
-        () = ctrl_c => {}
-        () = terminate => {}
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1507,5 +1801,50 @@ mod tests {
         let a = h3_backend("127.0.0.1:4001", None, false);
         let b = h3_backend("127.0.0.1:4002", None, false);
         build_h3_upstream_pool(&[a, b]).unwrap();
+    }
+
+    // CODE-2-03 Wave 2c proof: the three lifecycle signal kinds render
+    // to the canonical signal names so /admin logs are greppable.
+    #[test]
+    fn lifecycle_signal_display_matches_canonical_names() {
+        assert_eq!(LifecycleSignal::SigTerm.to_string(), "SIGTERM");
+        assert_eq!(LifecycleSignal::SigInt.to_string(), "SIGINT");
+        assert_eq!(LifecycleSignal::SigUsr1.to_string(), "SIGUSR1");
+    }
+
+    // CODE-2-02 Wave 2c proof: the registry-backed counter increments
+    // through the panic hook's path when bound. We bypass the abort
+    // by exercising `bind_panic_counter` + the public `panic_total()`
+    // accessor — bumping the *fallback* atomic the same way the hook
+    // would, then proving `bind_panic_counter` drains it into the
+    // registry counter.
+    #[test]
+    fn panic_total_drains_fallback_into_registry_counter() {
+        // Snapshot the current state so this test is robust if other
+        // tests in the same binary have already touched the static.
+        let baseline = panic_total();
+
+        // Simulate a pre-registry panic count.
+        PANIC_TOTAL_FALLBACK.fetch_add(3, Ordering::Release);
+        assert_eq!(panic_total(), baseline + 3, "fallback must be visible");
+
+        // Bind a fresh registry — drains the fallback delta into the
+        // counter. NB: `PANIC_TOTAL_COUNTER` is process-global; once
+        // set it stays set. That's fine — subsequent inc_by(0) is a
+        // no-op and the assertion still holds.
+        let registry = MetricsRegistry::new();
+        bind_panic_counter(&registry);
+
+        // After bind, fallback is zero and panic_total still
+        // reflects the same total (registry counter + fallback).
+        assert_eq!(
+            PANIC_TOTAL_FALLBACK.load(Ordering::Acquire),
+            0,
+            "bind_panic_counter must drain the fallback"
+        );
+        assert!(
+            panic_total() >= baseline + 3,
+            "drained fallback must show up in panic_total"
+        );
     }
 }

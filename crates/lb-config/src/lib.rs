@@ -103,6 +103,21 @@ pub struct RuntimeConfig {
     /// outside that range it bails with a clear error.
     #[serde(default = "default_drain_timeout_ms")]
     pub drain_timeout_ms: u64,
+    /// CODE-2-03 (Wave 2c): kubelet-style settle window between
+    /// flipping `/readyz` to `503 Draining` and starting the
+    /// cooperative cancel. Gives upstream LBs / service-mesh
+    /// sidecars one health-check interval to stop sending traffic
+    /// before connections are torn down. Default: `1000 ms` per
+    /// REL-2-02 spec; validation range 0..=30_000 ms.
+    #[serde(default = "default_readiness_settle_ms")]
+    pub readiness_settle_ms: u64,
+    /// SEC-2-10 (Wave 2c): max wall-clock for `acceptor.accept()`
+    /// to complete a TLS handshake. Caps slow-loris-style
+    /// handshake-stall attacks at this many ms regardless of
+    /// downstream backpressure. Default: `5_000 ms` per the audit
+    /// recommendation; validation range 100..=60_000 ms.
+    #[serde(default = "default_handshake_timeout_ms")]
+    pub handshake_timeout_ms: u64,
     /// PROTO-2-14: optional `[runtime.tls]` block for process-wide
     /// TLS-policy knobs. Currently carries a single field
     /// (`tls13_only`); future knobs (preferred-cipher list, ALPN
@@ -138,6 +153,22 @@ pub struct RuntimeTlsConfig {
 /// 10 000 ms = 10 s per lead §C.
 const fn default_drain_timeout_ms() -> u64 {
     10_000
+}
+
+/// CODE-2-03 (Wave 2c): serde default for
+/// `RuntimeConfig::readiness_settle_ms`. 1 000 ms = 1 s per
+/// REL-2-02; matches the conventional kubelet probe interval.
+const fn default_readiness_settle_ms() -> u64 {
+    1_000
+}
+
+/// SEC-2-10 (Wave 2c): serde default for
+/// `RuntimeConfig::handshake_timeout_ms`. 5 000 ms = 5 s per the
+/// audit recommendation — a normal TLS 1.3 1-RTT handshake on a
+/// healthy network completes in <100 ms, so 5 s is a generous
+/// upper bound that still bites on stalled clients.
+const fn default_handshake_timeout_ms() -> u64 {
+    5_000
 }
 
 /// EBPF-2-04: operator-facing XDP attach-mode selector. Reuses the
@@ -639,6 +670,24 @@ fn validate_runtime(rt: &RuntimeConfig) -> Result<(), ConfigError> {
         return Err(ConfigError::Validation(format!(
             "runtime.drain_timeout_ms={} out of range 100..=300000",
             rt.drain_timeout_ms
+        )));
+    }
+    // CODE-2-03 Wave 2c: settle window may be 0 (skip the sleep) but
+    // is capped at 30 s — beyond that operators are mis-using the
+    // knob (k8s terminationGracePeriodSeconds usually <= 30).
+    if rt.readiness_settle_ms > 30_000 {
+        return Err(ConfigError::Validation(format!(
+            "runtime.readiness_settle_ms={} out of range 0..=30000",
+            rt.readiness_settle_ms
+        )));
+    }
+    // SEC-2-10 Wave 2c: 100 ms floor avoids an accidental
+    // zero-budget timeout starving every TLS connect; 60 s ceiling
+    // bounds slow-loris exposure.
+    if !(100..=60_000).contains(&rt.handshake_timeout_ms) {
+        return Err(ConfigError::Validation(format!(
+            "runtime.handshake_timeout_ms={} out of range 100..=60000",
+            rt.handshake_timeout_ms
         )));
     }
     Ok(())
@@ -1457,6 +1506,8 @@ xdp_interface = "eth0"
                 xdp_interface: None,
                 xdp_mode: XdpModeChoice::Auto,
                 drain_timeout_ms: 10_000,
+                readiness_settle_ms: 1_000,
+                handshake_timeout_ms: 5_000,
                 tls: None,
             }),
             observability: None,
@@ -1485,6 +1536,8 @@ xdp_interface = "eth0"
                 xdp_interface: None,
                 xdp_mode: XdpModeChoice::Auto,
                 drain_timeout_ms: 10_000,
+                readiness_settle_ms: 1_000,
+                handshake_timeout_ms: 5_000,
                 tls: None,
             }),
             observability: None,

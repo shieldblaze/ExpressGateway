@@ -1390,6 +1390,7 @@ dependencies = [
  "lb-quic",
  "lb-security",
  "parking_lot",
+ "prometheus",
  "quiche",
  "rustls",
  "rustls-pemfile",
