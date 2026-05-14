@@ -1,4 +1,9 @@
-//! HTTP/2 conformance tests.
+//! HTTP/2 codec round-trip tests.
+//!
+//! PROTO-2-06 (Wave-2b-2): renamed from `conformance_h2.rs`. These
+//! are codec-level tests; true server-conformance against the
+//! h2spec test suite lives in `tests/h2spec_server_conformance.rs`
+//! (skeleton, deferred to CI image work in Wave-2c).
 
 use bytes::Bytes;
 use lb_h2::*;

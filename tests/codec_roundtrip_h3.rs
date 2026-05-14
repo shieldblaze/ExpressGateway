@@ -1,4 +1,8 @@
-//! HTTP/3 conformance tests.
+//! HTTP/3 codec round-trip tests.
+//!
+//! PROTO-2-06 (Wave-2b-2): renamed from `conformance_h3.rs`. True
+//! H3 server-conformance is covered by `h3spec` (deferred to CI
+//! image work in Wave-2c per `audit/deferred.md`).
 
 use bytes::Bytes;
 use lb_h3::*;

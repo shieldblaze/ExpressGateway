@@ -208,6 +208,7 @@ Cross-ref: PROTO-2-02 (ALPN); `rel` CI-image inventory.
 ---
 
 ### PROTO-2-06 — `tests/conformance_h{1,2,3}.rs` are codec round-trip unit tests, not server-conformance tests
+Status:   Proposed-Fix(Wave-2b-2: renamed to `tests/codec_roundtrip_h{1,2,3}.rs` so the file names match what's tested; new `tests/h2spec_server_conformance.rs` skeleton with an `#[ignore]`-gated placeholder for the Wave-2c CI image work. Renames carry the test contents unchanged.)
 Severity: low
 Status:   Open
 Location: `tests/conformance_h1.rs`, `tests/conformance_h2.rs`,
@@ -556,6 +557,7 @@ Cross-ref: PROTO-2-07 (Bridge trait hygiene).
 ---
 
 ### PROTO-2-13 — `SETTINGS_ENABLE_CONNECT_PROTOCOL` IS sent — verified — but no integration test asserts it on the wire
+Status:   Proposed-Fix(Wave-2b-2: `crates/lb-l7/tests/h2_connect_protocol_settings.rs` (2 tests) pins (1) the `builder.enable_connect_protocol()` call-site presence in `h2_proxy.rs::serve_connection` and (2) the RFC 8441 §3 setting id `0x8`. The wire-level integration check that parses a real SETTINGS frame is deferred to the Wave-2c h2spec CI image work.)
 Severity: low
 Status:   Open
 Location: `crates/lb-l7/src/h2_proxy.rs:246`:

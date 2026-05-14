@@ -1,4 +1,10 @@
-//! HTTP/1.1 conformance tests.
+//! HTTP/1.1 codec round-trip tests.
+//!
+//! PROTO-2-06 (Wave-2b-2): renamed from `conformance_h1.rs`. These
+//! are codec-level unit tests for the H1 wire codec — NOT
+//! server-conformance tests. True wire-conformance lives in
+//! `tests/h2spec_server_conformance.rs` (skeleton, deferred to CI
+//! image work in Wave-2c).
 
 use lb_h1::*;
 
