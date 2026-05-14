@@ -390,7 +390,7 @@ strip rules for hop-by-hop vs trace headers).
 
 ### REL-2-08 — Per-listener / per-backend RED labels missing
 Severity: medium
-Status:   Open
+Status:   Proposed-Fix(46280d1)
 Location: `crates/lb/src/main.rs:1186-1196` (counter_vec registration); `crates/lb-observability/src/lib.rs`
 
 Description: The exposed HTTP RED metrics are:
