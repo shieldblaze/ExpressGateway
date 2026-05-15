@@ -803,6 +803,8 @@ fn build_h1_proxy(
     is_https: bool,
     hooks: Arc<dyn lb_l7::security_hooks::DynSecurityHooks>,
     watchdog: Option<Watchdog>,
+    // ROUND8-L7-06: per-keep-alive-connection request cap.
+    max_keepalive_requests: u32,
 ) -> anyhow::Result<Arc<H1Proxy>> {
     let picker = RoundRobinUpstreams::new(upstreams)
         .ok_or_else(|| anyhow::anyhow!("H1 listener requires at least one backend"))?;
@@ -816,6 +818,8 @@ fn build_h1_proxy(
         total: Duration::from_millis(h.total_timeout_ms),
     });
     let mut proxy = H1Proxy::with_multi_proto(pool, Arc::new(picker), alt_svc, timeouts, is_https);
+    // ROUND8-L7-06: nginx-parity per-keep-alive request cap.
+    proxy = proxy.with_max_keepalive_requests(max_keepalive_requests);
     // SEC-2-04 Wave 2c-2: install the production HooksBundle on the
     // L7 hot path (CODE-2-01 trait shim already lives there from
     // Wave-2b).
@@ -1023,6 +1027,9 @@ async fn spawn_tcp(
     handshake_timeout: Duration,
     max_inflight: u32,
     connect_timeout: Duration,
+    // ROUND8-L7-06: per-keep-alive-connection request cap threaded
+    // into the H1/H2 proxy builders.
+    max_keepalive_requests: u32,
     hooks: Arc<HooksBundle>,
     shutdown_token: CancellationToken,
     listener_cancel_token: CancellationToken,
@@ -1064,6 +1071,7 @@ async fn spawn_tcp(
         &tracker,
         &shutdown_token,
         watchdog.as_ref(),
+        max_keepalive_requests,
     )?;
     let state = Arc::new(ListenerState {
         backends,
@@ -1110,6 +1118,8 @@ fn build_listener_mode(
     tracker: &TaskTracker,
     shutdown_token: &CancellationToken,
     watchdog: Option<&Watchdog>,
+    // ROUND8-L7-06: per-keep-alive-connection request cap.
+    max_keepalive_requests: u32,
 ) -> anyhow::Result<ListenerMode> {
     // SEC-2-04 Wave 2c-2: cloned into every L7 proxy constructor
     // below via `with_hooks`. The same bundle is held at accept-site
@@ -1172,6 +1182,7 @@ fn build_listener_mode(
                 false,
                 Arc::clone(&hooks_arc_dyn),
                 watchdog.cloned(),
+                max_keepalive_requests,
             )
             .with_context(|| format!("H1 setup failed for {}", listener_cfg.address))?;
             tracing::info!(
@@ -1233,6 +1244,7 @@ fn build_listener_mode(
                 true,
                 Arc::clone(&hooks_arc_dyn),
                 watchdog.cloned(),
+                max_keepalive_requests,
             )
             .with_context(|| format!("H1s setup failed for {}", listener_cfg.address))?;
             let h2_proxy = build_h2_proxy(
@@ -1723,6 +1735,14 @@ async fn async_main() -> anyhow::Result<()> {
             .as_ref()
             .map_or(5_000, |r| r.connect_timeout_ms),
     );
+    // ROUND8-L7-06: per-keep-alive-connection request cap (nginx
+    // `keepalive_requests 100` parity / Pingora 0.8.0). `0` disables.
+    // Falls back to the nginx-parity 100 when no `[runtime]` block is
+    // present.
+    let max_keepalive_requests = config
+        .runtime
+        .as_ref()
+        .map_or(100, |r| r.max_keepalive_requests);
     // SEC-2-04 Wave 2c-2: per-listener / per-IP admission gate.
     // The same `Arc<HooksBundle>` is shared across every listener
     // (`ConnGate`'s `listener_cap` counts all connections under
@@ -1838,6 +1858,7 @@ async fn async_main() -> anyhow::Result<()> {
             handshake_timeout,
             max_inflight,
             connect_timeout,
+            max_keepalive_requests,
             Arc::clone(&hooks),
             shutdown.token().clone(),
             // OPS-04+L4-12 Round-8: per-listener cooperative-cancel
@@ -3079,6 +3100,7 @@ mod tests {
             &tracker,
             &cancel,
             None,
+            100,
         );
         assert!(outcome.is_err(), "typo protocol should have errored");
         let msg = match outcome {

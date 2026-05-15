@@ -259,6 +259,29 @@ pub struct RuntimeConfig {
     /// one-call boundary on the `lb` crate side.
     #[serde(default)]
     pub header_underscore_policy: HeaderUnderscorePolicy,
+    /// ROUND8-L7-06: hard cap on the number of requests (H1) /
+    /// lifetime streams (H2) served on a single keep-alive
+    /// connection before the gateway proactively closes it. Mirrors
+    /// nginx's `keepalive_requests 100` default and the Pingora
+    /// 0.8.0 `keepalive_requests` cap (Cloudflare added it after
+    /// hitting per-connection accounting growth + TLS-session-age +
+    /// FD-pinning pain at the edge).
+    ///
+    /// `0` disables the cap (transparent-pass mode — only the
+    /// wall-clock / idle timeouts apply). Default `100`
+    /// (`default_max_keepalive_requests`). Any configured value
+    /// above `u32::MAX` is clamped at parse time by the serde `u64`
+    /// → `u32` conversion in the wiring crate; `validate_runtime`
+    /// accepts the full `0..=u32::MAX` range so the only failure
+    /// mode is a type error, not a runtime surprise.
+    #[serde(default = "default_max_keepalive_requests")]
+    pub max_keepalive_requests: u32,
+}
+
+/// ROUND8-L7-06: nginx-parity default of 100 requests per keep-alive
+/// connection. `0` would disable; we ship the safe industry floor.
+const fn default_max_keepalive_requests() -> u32 {
+    100
 }
 
 impl RuntimeConfig {
@@ -1992,6 +2015,7 @@ xdp_interface = "eth0"
                 tls: None,
                 watchdog: None,
                 header_underscore_policy: HeaderUnderscorePolicy::Reject,
+                max_keepalive_requests: 100,
             }),
             observability: None,
             admin: None,
@@ -2032,6 +2056,7 @@ xdp_interface = "eth0"
                 tls: None,
                 watchdog: None,
                 header_underscore_policy: HeaderUnderscorePolicy::Reject,
+                max_keepalive_requests: 100,
             }),
             observability: None,
             admin: None,
@@ -2186,6 +2211,7 @@ address = "127.0.0.1:3000"
             tls: None,
             watchdog: None,
             header_underscore_policy: HeaderUnderscorePolicy::Reject,
+            max_keepalive_requests: 100,
         }
     }
 

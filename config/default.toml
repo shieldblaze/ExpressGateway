@@ -48,6 +48,18 @@ weight = 1
 # # Per-IP concurrent-connection cap (matches Pingora L4 default).
 # per_ip_connection_cap = 1024
 #
+# # ROUND8-L7-06: hard cap on requests served per keep-alive
+# # connection before the gateway proactively closes it. Mirrors
+# # nginx `keepalive_requests 100` and the Pingora 0.8.0
+# # `keepalive_requests` cap. On the cap-th H1 response the gateway
+# # sets `Connection: close` and tears the socket down after the
+# # body flushes — bounding per-connection accounting growth, TLS
+# # session ageing, and FD pinning. `0` disables (transparent-pass;
+# # only the wall-clock / idle timeouts then apply). Operators with
+# # long-poll / SSE reconnect-heavy workloads on one keepalive may
+# # raise this (see RUNBOOK). Default 100.
+# max_keepalive_requests = 100
+#
 # # ROUND8-L7-05: header name underscore policy.
 # # Envoy edge best-practice mandates REJECT; nginx default is "drop"
 # # (`underscores_in_headers off`). The underscore is an auth-bypass

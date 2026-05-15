@@ -242,6 +242,21 @@ pub struct H1Proxy {
     /// [`Self::serve_connection_with_cancel_sni`] at the TLS-accept
     /// site to pass `rustls::ServerConnection::server_name()`.
     expected_sni: Option<String>,
+    /// ROUND8-L7-06: hard cap on requests served per keep-alive
+    /// connection (nginx `keepalive_requests 100` / Pingora 0.8.0
+    /// `keepalive_requests`). `0` disables. On the `cap`-th response
+    /// the per-connection wrapper sets `Connection: close` and signals
+    /// the connection driver to `graceful_shutdown` after the body
+    /// flushes. Default `100`; set via
+    /// [`Self::with_max_keepalive_requests`].
+    max_keepalive_requests: u32,
+    /// ROUND8-L7-06: process-wide counter incremented once per
+    /// cap-triggered keep-alive close. The wiring crate lifts this
+    /// into `lb_keepalive_terminated_by_count_cap_total{listener,
+    /// protocol}` via the existing metrics sampler (lb-l7 has no
+    /// metrics-registry dep edge; an `AtomicU64` keeps the surface
+    /// minimal).
+    keepalive_cap_terminations: Arc<std::sync::atomic::AtomicU64>,
 }
 
 impl H1Proxy {
@@ -278,6 +293,11 @@ impl H1Proxy {
             smuggle_strict: false,
             header_underscore_policy: HeaderUnderscorePolicy::Reject,
             expected_sni: None,
+            // ROUND8-L7-06: nginx-parity default. The wiring crate
+            // overrides from `[runtime].max_keepalive_requests` via
+            // `with_max_keepalive_requests`.
+            max_keepalive_requests: 100,
+            keepalive_cap_terminations: Arc::new(std::sync::atomic::AtomicU64::new(0)),
         }
     }
 
@@ -316,6 +336,11 @@ impl H1Proxy {
             smuggle_strict: false,
             header_underscore_policy: HeaderUnderscorePolicy::Reject,
             expected_sni: None,
+            // ROUND8-L7-06: nginx-parity default. The wiring crate
+            // overrides from `[runtime].max_keepalive_requests` via
+            // `with_max_keepalive_requests`.
+            max_keepalive_requests: 100,
+            keepalive_cap_terminations: Arc::new(std::sync::atomic::AtomicU64::new(0)),
         }
     }
 
@@ -408,6 +433,25 @@ impl H1Proxy {
     #[must_use]
     pub const fn has_h3_upstream(&self) -> bool {
         self.h3_upstream.is_some()
+    }
+
+    /// ROUND8-L7-06: set the per-keep-alive-connection request cap.
+    /// `0` disables (transparent-pass — only the wall-clock / idle
+    /// timeouts apply). The wiring crate maps
+    /// `[runtime].max_keepalive_requests` here.
+    #[must_use]
+    pub fn with_max_keepalive_requests(mut self, cap: u32) -> Self {
+        self.max_keepalive_requests = cap;
+        self
+    }
+
+    /// ROUND8-L7-06: shared handle to the cap-triggered-close counter
+    /// so the wiring crate can lift it into
+    /// `lb_keepalive_terminated_by_count_cap_total` without an
+    /// lb-l7 → metrics-registry dep edge.
+    #[must_use]
+    pub fn keepalive_cap_termination_counter(&self) -> Arc<std::sync::atomic::AtomicU64> {
+        Arc::clone(&self.keepalive_cap_terminations)
     }
 
     /// Enable WebSocket upgrade handling on this proxy.
@@ -510,10 +554,18 @@ impl H1Proxy {
         IO: AsyncRead + AsyncWrite + Unpin + Send + 'static,
     {
         let total = self.timeouts.total;
+        // ROUND8-L7-06: per-connection request counter + close-notify,
+        // constructed once here and shared across hyper's per-request
+        // service clones.
+        let cap = self.max_keepalive_requests;
+        let close_signal = Arc::new(tokio::sync::Notify::new());
         let svc = ProxyService {
             inner: Arc::clone(&self),
             peer,
             expected_sni: sni,
+            served: Arc::new(std::sync::atomic::AtomicU32::new(0)),
+            cap,
+            close_signal: Arc::clone(&close_signal),
         };
         let conn = hyper::server::conn::http1::Builder::new()
             .keep_alive(true)
@@ -524,6 +576,15 @@ impl H1Proxy {
         tokio::pin!(cancel_fut);
         let timer = tokio::time::sleep(total);
         tokio::pin!(timer);
+        // ROUND8-L7-06: cap-driven close. Additive arm — does NOT
+        // touch div-ops's SIGTERM-cancel / total-timeout arms (the
+        // drain-coordinator phase logic). When the per-connection cap
+        // is hit the service has already set `Connection: close` on
+        // the cap-th response head; this arm then drives the same
+        // `graceful_shutdown` hyper uses for SIGTERM so the socket is
+        // torn down after that response flushes (RFC 9110 §7.6.1).
+        let cap_close = close_signal.notified();
+        tokio::pin!(cap_close);
         tokio::select! {
             // Cancel wins ties so a SIGTERM during a long-running
             // request still triggers the graceful_shutdown emit.
@@ -557,11 +618,38 @@ impl H1Proxy {
                 io::ErrorKind::TimedOut,
                 "total connection timeout",
             )),
+            // ROUND8-L7-06: per-connection request cap reached. The
+            // cap-th response already carries `Connection: close`;
+            // drive the same graceful_shutdown the SIGTERM arm uses so
+            // the socket FIN follows the flushed response. Bounded by
+            // `total` so a wedged client cannot pin the conn open
+            // after the cap. A clean completion here is `Ok(())` (the
+            // cap close is the *intended* terminal state, not an
+            // error — unlike the total-timeout arm).
+            () = &mut cap_close => {
+                conn.as_mut().graceful_shutdown();
+                match tokio::time::timeout(total, conn).await {
+                    Ok(Ok(())) => Ok(()),
+                    Ok(Err(e)) => Err(io::Error::other(format!(
+                        "h1 keepalive-cap shutdown: {e}"
+                    ))),
+                    Err(_) => Err(io::Error::new(
+                        io::ErrorKind::TimedOut,
+                        "h1 keepalive-cap shutdown timeout",
+                    )),
+                }
+            }
         }
     }
 }
 
 /// Service implementation carrying the [`H1Proxy`] plus the peer address.
+///
+/// ROUND8-L7-06: the service is cloned by hyper once per request but
+/// the *connection*-scoped state (`served`, `cap`, `close_signal`)
+/// lives behind `Arc`s constructed once per connection in
+/// [`H1Proxy::serve_connection_with_cancel_sni`], so every per-request
+/// clone shares one counter and one close-notify.
 #[derive(Clone)]
 struct ProxyService {
     inner: Arc<H1Proxy>,
@@ -570,6 +658,15 @@ struct ProxyService {
     /// and threaded through `serve_connection_with_cancel_sni`. `None`
     /// on plain-TCP listeners and SNI-omitting clients.
     expected_sni: Option<String>,
+    /// ROUND8-L7-06: per-connection request counter (shared across
+    /// the per-request `Clone`s).
+    served: Arc<std::sync::atomic::AtomicU32>,
+    /// ROUND8-L7-06: per-connection request cap (`0` disables).
+    cap: u32,
+    /// ROUND8-L7-06: notified once when the cap is reached so the
+    /// connection driver issues `graceful_shutdown` after the
+    /// cap-th response flushes.
+    close_signal: Arc<tokio::sync::Notify>,
 }
 
 impl hyper::service::Service<Request<IncomingBody>> for ProxyService {
@@ -581,7 +678,35 @@ impl hyper::service::Service<Request<IncomingBody>> for ProxyService {
         let inner = Arc::clone(&self.inner);
         let peer = self.peer;
         let sni = self.expected_sni.clone();
-        Box::pin(async move { Ok(Box::pin(inner.handle(req, peer, sni.as_deref())).await) })
+        // ROUND8-L7-06: count this request against the per-connection
+        // cap BEFORE handling it. `fetch_add` returns the prior value
+        // so `count` is 1-based for this request.
+        let cap = self.cap;
+        let count = self
+            .served
+            .fetch_add(1, std::sync::atomic::Ordering::SeqCst)
+            + 1;
+        let force_close = cap > 0 && count >= cap;
+        let close_signal = Arc::clone(&self.close_signal);
+        let cap_counter = Arc::clone(&inner.keepalive_cap_terminations);
+        Box::pin(async move {
+            let mut resp = Box::pin(inner.handle(req, peer, sni.as_deref())).await;
+            if force_close {
+                // RFC 9110 §7.6.1: advertise the close on the response
+                // head. hyper still serialises the body; the driver's
+                // `graceful_shutdown` (signalled below) tears the
+                // socket down after the flush. `count == cap` fires
+                // exactly once (later requests on a
+                // disable-keep-alive'd conn do not reach here).
+                resp.headers_mut()
+                    .insert(hyper::header::CONNECTION, HeaderValue::from_static("close"));
+                if count == cap {
+                    cap_counter.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                }
+                close_signal.notify_one();
+            }
+            Ok(resp)
+        })
     }
 }
 
