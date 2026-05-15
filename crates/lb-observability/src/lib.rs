@@ -28,9 +28,15 @@ use dashmap::DashMap;
 use dashmap::mapref::entry::Entry;
 use prometheus::{Histogram as PHistogram, core::Collector};
 use prometheus::{
-    HistogramOpts, HistogramVec, IntCounter, IntCounterVec, IntGauge, IntGaugeVec, Opts, Registry,
+    HistogramOpts, HistogramVec, IntCounterVec, IntGauge, IntGaugeVec, Opts, Registry,
     proto::MetricFamily,
 };
+
+/// Re-export of [`prometheus::IntCounter`] so downstream crates that
+/// already depend on `lb-observability` (e.g. `lb-l7` for the
+/// ROUND8-L7-07 glitches counter) can name a registered counter
+/// handle without taking a direct `prometheus` dependency edge.
+pub use prometheus::IntCounter;
 
 pub mod admin_http;
 pub mod label_budget;

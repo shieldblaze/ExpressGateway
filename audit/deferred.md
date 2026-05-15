@@ -162,20 +162,35 @@ eviction from the pool on timeout) are already wired in
 shape (explicit CANCEL with reason context) requires the hyper-2.x
 upgrade. Re-open when the hyper-2.x rebase lands.
 
-### ROUND8-L7-07 timer wire-in — H2 frame-arrival watchdog wiring through hyper
+### ROUND8-L7-07 FrameRecvTimeout timer sub-part — per-frame arrival watchdog
 
-**Status**: partial — the `GlitchesCounter` consolidated abuse
-counter (per ROUND8-L7-12) ships in `crates/lb-security/src/glitches.rs`
-with the `FrameRecvTimeout` kind defined. The actual `tokio::time::
-Interval` task that increments the counter on stale frame arrivals
-requires reaching into hyper's per-connection read context, which
-is not exposed in hyper 1.x's `http2::Builder::serve_connection`
-surface. The keep-alive PING + timeout already wired in
+**Status**: partial — ONLY the `GlitchKind::FrameRecvTimeout`
+*timer* sub-part is deferred. The COUNTER half (the actual HAProxy
+`tune.h2.fe.glitches-threshold` pattern) is now fully WIRED:
+`H2Proxy::with_glitches` creates one `GlitchesCounter` per H2
+connection (`crates/lb-l7/src/h2_proxy.rs`,
+`serve_connection_with_cancel_sni` → `GlitchConnState`); every H2
+protocol-abuse event (underscore-policy reject, smuggle reject,
+malformed authority [ROUND8-L7-09], `:authority`/Host disagreement,
+SNI mismatch) records a weighted glitch, bumps `h2_glitches_total`,
+and on threshold-crossing cancels the connection drain token →
+the existing two-step GOAWAY path (logical ENHANCE_YOUR_CALM).
+Proof: `crates/lb-l7/tests/round8_glitches_enforced.rs` (1/1 PASS —
+drives abuse requests, asserts the connection drains at the
+threshold and `h2_glitches_total` is non-zero).
+
+What remains deferred is strictly the `tokio::time::Interval`
+frame-arrival watchdog that would `record(FrameRecvTimeout, ..)`
+on a stale inbound H2 frame. That requires reaching into hyper's
+per-connection read context, which is not exposed in hyper 1.x's
+`http2::Builder::serve_connection` surface (hyper pinned at 1.9.0,
+`Cargo.lock`). The keep-alive PING + timeout already wired in
 `H2SecurityThresholds::{keep_alive_interval, keep_alive_timeout}`
-provides functional equivalence for the H2 slowloris attack
-class: an attacker holding HEADERS open without progress is closed
-by the keep-alive deadline. Full per-frame instrumentation moves
-with the hyper-2.x upgrade.
+provides partial coverage for the holding-HEADERS-open slowloris
+class (server-initiated PING, not gated on inbound frame
+progress). The per-frame timer moves with the hyper-2.x upgrade;
+the consolidated counter it would feed is already live, so the
+operator knob and Prometheus surface are in place ahead of it.
 
 ### ROUND8-L4-08 — Fragmented datagrams: pass-to-kernel, no in-XDP reassembly
 

@@ -45,7 +45,9 @@ use crate::h1_proxy::{
     AltSvcConfig, BackendPicker, HttpTimeouts, append_via, append_xff, set_xfh, set_xfp,
     strip_hop_by_hop,
 };
-use lb_security::{ConnId, SmuggleDetector, SmuggleMode, Watchdog};
+use lb_security::{
+    ConnId, GlitchKind, GlitchOutcome, GlitchesCounter, SmuggleDetector, SmuggleMode, Watchdog,
+};
 
 use crate::h2_security::H2SecurityThresholds;
 use crate::security_hooks::{DynSecurityHooks, NoopHooks};
@@ -99,6 +101,26 @@ pub struct H2Proxy {
     /// us, so this server-side filter is the only enforcement point
     /// on the H2 path.
     header_underscore_policy: crate::h1_proxy::HeaderUnderscorePolicy,
+    /// ROUND8-L7-07 / L7-12 — HAProxy 3.0
+    /// `tune.h2.fe.glitches-threshold` consolidated protocol-abuse
+    /// counter. When `Some(threshold)` a per-connection
+    /// [`GlitchesCounter`] is created in
+    /// [`Self::serve_connection_with_cancel_sni`]; every H2
+    /// protocol-abuse event (underscore-policy reject, smuggle reject,
+    /// `:authority`/Host disagreement, malformed authority, SNI
+    /// mismatch) records a weighted glitch. Crossing the threshold
+    /// drains the connection via the existing two-step GOAWAY path
+    /// (RFC 9113 §6.8; logical ENHANCE_YOUR_CALM). `None` (default)
+    /// keeps the counter dormant for backwards-compatible callers.
+    glitches_threshold: Option<u32>,
+    /// ROUND8-L7-07 — optional metrics registry used to register and
+    /// bump `h2_glitches_total` so the abuse threshold is operator-
+    /// observable. `lb-l7` already depends on `lb-observability`
+    /// (trace-context). The production wire-in (mapping the config
+    /// knob + the process `MetricsRegistry`) is performed by the `lb`
+    /// binary; the counter logic itself runs whenever a registry is
+    /// supplied (the proof test supplies its own).
+    glitches_metrics: Option<Arc<lb_observability::MetricsRegistry>>,
 }
 
 impl H2Proxy {
@@ -158,6 +180,8 @@ impl H2Proxy {
             conn_seq: Arc::new(parking_lot::Mutex::new(0)),
             expected_sni: None,
             header_underscore_policy: crate::h1_proxy::HeaderUnderscorePolicy::Reject,
+            glitches_threshold: None,
+            glitches_metrics: None,
         }
     }
 
@@ -193,6 +217,8 @@ impl H2Proxy {
             conn_seq: Arc::new(parking_lot::Mutex::new(0)),
             expected_sni: None,
             header_underscore_policy: crate::h1_proxy::HeaderUnderscorePolicy::Reject,
+            glitches_threshold: None,
+            glitches_metrics: None,
         }
     }
 
@@ -214,6 +240,39 @@ impl H2Proxy {
     #[must_use]
     pub fn with_watchdog(mut self, watchdog: Watchdog) -> Self {
         self.watchdog = Some(watchdog);
+        self
+    }
+
+    /// ROUND8-L7-07 / L7-12 — enable the HAProxy-3.0 consolidated
+    /// glitches abuse counter on this proxy. A per-connection
+    /// [`GlitchesCounter`] (default 60 s rolling window) is created in
+    /// [`Self::serve_connection_with_cancel_sni`]; every detected H2
+    /// protocol-abuse event records a weighted glitch and bumps the
+    /// `h2_glitches_total` metric on `registry`. When the weighted
+    /// rolling sum exceeds `threshold` the connection is drained via
+    /// the existing two-step GOAWAY path (logical ENHANCE_YOUR_CALM).
+    ///
+    /// `threshold` of `0` keeps the counter dormant (operator opt-out
+    /// parity with HAProxy's `tune.h2.fe.glitches-threshold 0`).
+    ///
+    /// The frame-arrival sub-timer half of L7-07
+    /// ([`GlitchKind::FrameRecvTimeout`]) is NOT wired here: hyper 1.x
+    /// `serve_connection` exposes no per-frame read context, so the
+    /// `tokio::time::Interval` watchdog is deferred-with-rationale
+    /// (see `audit/deferred.md`). The COUNTER half — the actual
+    /// HAProxy pattern — is fully wired by this builder.
+    #[must_use]
+    pub fn with_glitches(
+        mut self,
+        threshold: u32,
+        registry: Arc<lb_observability::MetricsRegistry>,
+    ) -> Self {
+        self.glitches_threshold = if threshold == 0 {
+            None
+        } else {
+            Some(threshold)
+        };
+        self.glitches_metrics = Some(registry);
         self
     }
 
@@ -371,10 +430,40 @@ impl H2Proxy {
         IO: AsyncRead + AsyncWrite + Unpin + Send + 'static,
     {
         let total = self.timeouts.total;
+
+        // ROUND8-L7-07 / L7-12 — one GlitchesCounter per H2
+        // connection. `conn_cancel` is a CHILD of the caller's
+        // `cancel`: a parent (SIGTERM) cancellation propagates DOWN to
+        // it, and a glitch-drain cancels it DIRECTLY. The select arm
+        // below waits on `conn_cancel` so BOTH causes resolve the
+        // SAME existing two-step GOAWAY path (logical
+        // ENHANCE_YOUR_CALM) — additive child token only, the 15-case
+        // drain contract is unaffected.
+        let conn_cancel = cancel.child_token();
+        let glitch_state = self.glitches_threshold.map(|threshold| {
+            let metric = self.glitches_metrics.as_ref().and_then(|reg| {
+                reg.counter(
+                    "h2_glitches_total",
+                    "HTTP/2 protocol-abuse glitch events recorded by the \
+                     consolidated HAProxy-style counter (ROUND8-L7-07/L7-12)",
+                )
+                .ok()
+            });
+            GlitchConnState {
+                counter: Arc::new(parking_lot::Mutex::new(GlitchesCounter::new(
+                    threshold,
+                    lb_security::DEFAULT_GLITCHES_WINDOW,
+                ))),
+                metric,
+                drain: conn_cancel.clone(),
+            }
+        });
+
         let svc = ProxyService {
             inner: Arc::clone(&self),
             peer,
             expected_sni: sni,
+            glitch: glitch_state,
         };
         // Configure hyper's H2 Builder with the detector-derived
         // thresholds. Hyper enforces on the wire; the lb-h2 detector
@@ -395,7 +484,10 @@ impl H2Proxy {
         builder.enable_connect_protocol();
         let conn = builder.serve_connection(TokioIo::new(io), svc);
         tokio::pin!(conn);
-        let cancel_fut = cancel.cancelled();
+        // Wait on the connection-level token: cancelled by either the
+        // parent `cancel` (SIGTERM drain — propagates parent→child) or
+        // a glitch-threshold trip (cancels `conn_cancel` directly).
+        let cancel_fut = conn_cancel.cancelled();
         tokio::pin!(cancel_fut);
         let timer = tokio::time::sleep(total);
         tokio::pin!(timer);
@@ -432,6 +524,44 @@ impl H2Proxy {
     }
 }
 
+/// ROUND8-L7-07 / L7-12 — per-H2-connection abuse-counter state.
+/// Cloned cheaply into every per-stream `ProxyService` clone hyper
+/// makes; the `Arc<Mutex<..>>` keeps a single shared counter across
+/// all streams of the connection (the HAProxy `h2c->glitches` is
+/// per-connection, not per-stream).
+#[derive(Clone)]
+struct GlitchConnState {
+    counter: Arc<parking_lot::Mutex<GlitchesCounter>>,
+    /// Resolved `h2_glitches_total` handle (None if no registry was
+    /// supplied — the counter still drains, it is just unobserved).
+    metric: Option<lb_observability::IntCounter>,
+    /// Connection-level drain token. Cancelling it triggers the
+    /// existing two-step GOAWAY select arm (ENHANCE_YOUR_CALM shape).
+    drain: tokio_util::sync::CancellationToken,
+}
+
+impl GlitchConnState {
+    /// Record one weighted abuse event. Bumps `h2_glitches_total`
+    /// and, if the rolling weighted sum crosses the threshold,
+    /// cancels the connection drain token (→ GOAWAY) and returns
+    /// `true` so the caller can short-circuit the request.
+    fn record(&self, kind: GlitchKind) -> bool {
+        if let Some(m) = &self.metric {
+            m.inc();
+        }
+        let outcome = {
+            let mut c = self.counter.lock();
+            c.record(kind, std::time::Instant::now())
+        };
+        if outcome == GlitchOutcome::Drain {
+            self.drain.cancel();
+            true
+        } else {
+            false
+        }
+    }
+}
+
 /// Service implementation carrying the [`H2Proxy`] plus the peer address.
 #[derive(Clone)]
 struct ProxyService {
@@ -440,6 +570,9 @@ struct ProxyService {
     /// PROTO-2-18: per-connection SNI captured from the rustls
     /// handshake at TLS-accept time.
     expected_sni: Option<String>,
+    /// ROUND8-L7-07 / L7-12: per-connection glitches counter; `None`
+    /// when the operator has not enabled the consolidated threshold.
+    glitch: Option<GlitchConnState>,
 }
 
 impl hyper::service::Service<Request<IncomingBody>> for ProxyService {
@@ -451,7 +584,10 @@ impl hyper::service::Service<Request<IncomingBody>> for ProxyService {
         let inner = Arc::clone(&self.inner);
         let peer = self.peer;
         let sni = self.expected_sni.clone();
-        Box::pin(async move { Ok(Box::pin(inner.handle(req, peer, sni.as_deref())).await) })
+        let glitch = self.glitch.clone();
+        Box::pin(async move {
+            Ok(Box::pin(inner.handle(req, peer, sni.as_deref(), glitch.as_ref())).await)
+        })
     }
 }
 
@@ -469,6 +605,7 @@ impl H2Proxy {
         mut req: Request<IncomingBody>,
         peer: SocketAddr,
         expected_sni: Option<&str>,
+        glitch: Option<&GlitchConnState>,
     ) -> Response<BoxBody<Bytes, hyper::Error>> {
         use tracing::Instrument;
         let listener_label = if self.is_https { "h2" } else { "h2c" };
@@ -488,7 +625,7 @@ impl H2Proxy {
         req_trace.inject_upstream(req.headers_mut());
         let span = req_trace.span.clone();
         let resp = self
-            .handle_inner(req, peer, expected_sni)
+            .handle_inner(req, peer, expected_sni, glitch)
             .instrument(span.clone())
             .await;
         span.record("http.status_code", resp.status().as_u16());
@@ -500,6 +637,7 @@ impl H2Proxy {
         req: Request<IncomingBody>,
         peer: SocketAddr,
         expected_sni: Option<&str>,
+        glitch: Option<&GlitchConnState>,
     ) -> Response<BoxBody<Bytes, hyper::Error>> {
         // RFC 8441 extended CONNECT intercept. Only fires when this
         // listener was configured with a `WsProxy`; everything else
@@ -546,6 +684,13 @@ impl H2Proxy {
                     .iter()
                     .any(|(n, _)| n.as_str().as_bytes().contains(&b'_'))
                 {
+                    // ROUND8-L7-07: protocol-abuse glitch (low weight —
+                    // a single malformed-header request is noisy but
+                    // not by itself an attack; sustained ones trip the
+                    // consolidated threshold).
+                    if let Some(g) = glitch {
+                        g.record(GlitchKind::ContinuationFlood);
+                    }
                     return error_response(
                         StatusCode::BAD_REQUEST,
                         "header name contains underscore (ROUND8-L7-05)",
@@ -606,6 +751,13 @@ impl H2Proxy {
             .collect();
         if let Err(e) = SmuggleDetector::check_all_mode(&header_pairs, SmuggleMode::H2) {
             tracing::warn!(error = %e, peer = %peer, "h2 smuggle rejected");
+            // ROUND8-L7-07: request-smuggling against an H2 mux is the
+            // single most severe protocol abuse (CL/TE desync,
+            // forbidden hop-by-hop, h2 downgrade) — highest glitch
+            // weight so a smuggle burst drains the connection fast.
+            if let Some(g) = glitch {
+                g.record(GlitchKind::HpackRatio);
+            }
             return error_response(StatusCode::BAD_REQUEST, "request smuggling");
         }
 
@@ -636,6 +788,11 @@ impl H2Proxy {
                     error = ?err,
                     "ROUND8-L7-09: H2 authority rejected"
                 );
+                // ROUND8-L7-07: a malformed authority is a routing/ACL
+                // desync attempt — medium glitch weight.
+                if let Some(g) = glitch {
+                    g.record(GlitchKind::RapidReset);
+                }
                 return error_response(StatusCode::BAD_REQUEST, "invalid authority (ROUND8-L7-09)");
             }
         }
@@ -648,6 +805,11 @@ impl H2Proxy {
         // 400 BEFORE hop-by-hop strip / upstream acquire.
         if let Err(msg) = check_authority_host_agreement(&parts.uri, &parts.headers) {
             tracing::warn!(peer = %peer, reason = msg, "h2 :authority/Host mismatch rejected");
+            // ROUND8-L7-07: host-confusion smuggling primitive —
+            // medium glitch weight.
+            if let Some(g) = glitch {
+                g.record(GlitchKind::RapidReset);
+            }
             return error_response(StatusCode::BAD_REQUEST, msg);
         }
 
@@ -683,6 +845,11 @@ impl H2Proxy {
                     authority = %mismatch.authority,
                     "PROTO-2-18: H2 SNI/:authority mismatch — emitting 421 Misdirected Request"
                 );
+                // ROUND8-L7-07: SNI/host confusion is a Layer-7
+                // routing/authz desync — medium glitch weight.
+                if let Some(g) = glitch {
+                    g.record(GlitchKind::RapidReset);
+                }
                 let (status, body) = crate::sni_authority::misdirected_response();
                 return error_response(status, body);
             }
