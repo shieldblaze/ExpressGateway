@@ -1,0 +1,29 @@
+### ROUND8-L4-12 — XDP attach does not use `BPF_F_REPLACE`; will silently clobber a co-tenant program (kernel selftest `xdp_attach.c`)
+
+Reference: `audit/round-8/research/kernel-selftests.md` lesson 1 (`xdp_attach.c` enforces `XDP_FLAGS_REPLACE` semantics); xdp-tutorial lesson 12 (multi-program dispatcher)
+Our equivalent: `crates/lb-l4-xdp/src/loader.rs:613-630` (`attach`), `:655-710` (`attach_with_fallback`)
+
+Severity: medium
+Status:   Proposed-Fix (div-l4, task#73, 2026-05-15, commit 67024106 `ROUND8-L4-12 — real RTM_GETLINK XDP prog-id query`) — failure-mode-A (EBUSY-on-redeploy) is now CLOSED, not deferred. New `crates/lb-l4-xdp/src/netlink_xdp.rs`: real RTM_GETLINK query over a raw AF_NETLINK/NETLINK_ROUTE socket parsing IFLA_XDP→IFLA_XDP_PROG_ID (libc only — no aya dep, no new dep; pure panic-free `.get()`-based parser). `query_xdp` now returns real kernel state (loud `XdpLoaderError::XdpQueryFailed` on socket/ifindex failure — never silent blind-pass). `XdpLoader` retains the `XdpLinkId`; `detach_verifying` now issues a REAL `Xdp::detach(link_id)` (the empty-block / no-`xdp.detach()` gap the verifier flagged is closed) then a REAL post-detach query; `attach_replacing` detaches-then-attaches under the now-genuine prog-id ownership check (single-syscall BPF_F_REPLACE is unavailable in aya 0.13.1 — detach-then-attach with the real pre-check removes the EBUSY at the dependency floor). Proof: NEW `crates/lb-l4-xdp/tests/round8_netlink_xdp_query.rs` byte-parses a real-shaped RTM_NEWLINK blob → prog_id=0xDEADBEEF; no-XDP→None; prog_id-0 normalised; NLMSG_ERROR surfaced; truncated/malformed/empty handled without panic (7 pass + 1 ignored live; the live AF_NETLINK path also succeeds in-sandbox on `lo`). `round8_attach_replace` updated for real semantics (4 pass + 1 ignored). clippy --all-targets -D warnings clean. Verify re-checks.
+          [Prior: Accepted-with-caveat (verify, task#70, 2026-05-15) — stub did NOT cause silent-pass (detach_verifying returned Err loud; OPS-04 coordinator had xdp_detach:None) but real query/detach NOT implemented and failure-mode-A remained OPEN. Signature scaffold lead-approved Bundle B-5. See audit/round-8/verify/l4.md.]
+
+Divergence:
+- Kernel selftest: replacing an attached XDP program REQUIRES passing the old program's fd via `XDP_FLAGS_REPLACE`. An unconditional replace silently overwrites whatever was there.
+- Us: `xdp.attach(ifname, mode.to_flags())` passes only the user-chosen `Skb`/`Drv`/`Hw` flag bit. Aya's default behaviour: if the interface already has an XDP program, attach fails unless we OR-in `XDP_FLAGS_UPDATE_IF_NOEXIST = (1<<1)` (refuse-if-present) or use `BPF_F_REPLACE`. We do neither; aya's default is "kernel default", which means attaching to an interface that already has an XDP program *fails* with `EBUSY`.
+- That's actually the safe default — but it means a deploy that follows a previous deploy of our LB will fail to attach until someone runs `ip link set dev <iface> xdpgeneric off`. The Round-7 attach-mode story doesn't cover this. There's no "clean detach on previous-process exit" — if the previous process crashed with the pin still alive, the new process can't attach.
+
+Impact:
+- Failure mode A (today): the second deploy of our LB on an interface that already has our program attached gets `EBUSY` from `xdp.attach`. No graceful re-attach.
+- Failure mode B (kernel selftest #1 scenario): if our loader is ever extended to "always succeed", we silently clobber any other XDP program installed by an operator (e.g. an out-of-band DDoS filter). The reverse can also happen: another agent overwrites our program; we cannot detect because we don't `bpf_xdp_query` the link-id.
+- The handoff (cross-cutting item 1(c)) explicitly asks us to use `BPF_F_REPLACE` with the old prog fd.
+
+Reproduction:
+- Attach a dummy XDP_PASS program to `dummy0` via `bpftool net attach`. Run `XdpLoader::attach`. Observe `EBUSY`.
+
+Recommendation:
+1. Two-step attach: first call `bpf_xdp_query(ifindex)`. If a program is attached and its `prog_id` is *ours* (matches our prog fd from the previous attach attempt), reuse the link. If it's a stranger, fail loudly with `XdpLoaderError::ForeignProgramAttached(prog_id)`.
+2. For graceful self-replace (CI/dev), expose `XdpLoader::attach_replacing(ifname, mode, old_prog_fd)` that ORs `BPF_F_REPLACE`. Used by a "soft reload" path.
+3. Add `xdp_attach_query_total{result}` metric: counters `ok`, `foreign`, `none`.
+4. Document the operator runbook: "Before deploying a new ExpressGateway version, stop the old one fully; or use `attach_replacing` to swap atomically."
+
+Cross-ref handoff cross-cutting item 1: detach must also verify post-detach that `bpf_xdp_query` returns zero prog-id; we don't do this either. Bundle the two checks.
