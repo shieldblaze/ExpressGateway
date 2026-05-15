@@ -41,6 +41,34 @@ This section aggregates the Round-4 audit-driven work landing on
 - **PROTO-2-14** (`e6a1cb1`) — `[runtime].tls13_only` knob.
 - **PROTO-2-15** (`4ee05e0`) — SNI / `:authority` validator (wiring
   deferred to Wave 2c).
+- **ROUND8-L7-01** — **behaviour change (operator-visible).** The
+  client-visible `101 Switching Protocols` on a WebSocket upgrade is
+  now emitted **only after** the upstream WS handshake has completed
+  successfully (Pingora GHSA-xq2h-p299-vjwv / Envoy
+  GHSA-rj35-4m94-77jh class, both CVSS 9.3). Previously the proxy
+  returned `101` synchronously and dialed the upstream in a detached
+  task. Consequences for operators:
+  - WS upgrades now carry **one extra upstream-RTT of latency**
+    (unavoidable; every reference proxy does this).
+  - A failed upstream WS handshake now produces a clean
+    **`502 Bad Gateway`** (upstream refused / unreachable) or
+    **`504 Gateway Timeout`** (upstream dial / handshake budget,
+    bounded by `[runtime].*` header timeout) **instead of**
+    `101`-then-silent-close. External WS clients that previously
+    relied on the buggy `101` (and only later noticed no traffic)
+    will now see the failure immediately.
+  - Bytes pipelined after the upgrade request are no longer admitted
+    to an unread upgraded byte-stream on upstream failure
+    (request-smuggling primitive closed).
+- **ROUND8-OPS-06 / REL-2-07** — the W3C trace-context propagation
+  library (`lb_observability::tracing_propagation`, shipped library-
+  only in `1d462c7`) now has its first production L7 callsite. The
+  H1/H2 proxies open a per-request span (`lb.l7.request`, carrying
+  `trace_id` / `parent_id` / `http.method` / `http.target` /
+  `http.status_code`) and inject a refreshed child `traceparent`
+  onto the upstream request — including the WebSocket-upgrade dial —
+  so an on-call engineer can pivot from an upgrade failure to the
+  exact upstream dial.
 
 ### Security
 

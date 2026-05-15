@@ -1593,6 +1593,7 @@ dependencies = [
  "lb-grpc",
  "lb-h2",
  "lb-io",
+ "lb-observability",
  "lb-quic",
  "lb-security",
  "parking_lot",
@@ -1605,6 +1606,7 @@ dependencies = [
  "tokio-tungstenite",
  "tokio-util",
  "tracing",
+ "tracing-subscriber",
 ]
 
 [[package]]

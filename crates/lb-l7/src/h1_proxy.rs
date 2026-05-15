@@ -586,11 +586,58 @@ impl hyper::service::Service<Request<IncomingBody>> for ProxyService {
 }
 
 impl H1Proxy {
+    /// Span-opening wrapper. Extracts the inbound W3C trace context,
+    /// opens the request span, and runs the request body
+    /// `.instrument()`-ed so the span is current for every `.await`
+    /// in the handler *and* for any task the handler spawns with
+    /// `.instrument(req_trace.span.clone())` — without holding a
+    /// `tracing::span::Entered` guard across an `.await` (that
+    /// anti-pattern leaks the span onto whatever the executor polls
+    /// next on the same thread; it bites only under concurrent load,
+    /// which is exactly the "lesson-not-yet-paid-for" class).
+    ///
+    /// ROUND8-OPS-06 / REL-2-07: this is the FIRST L7 callsite of
+    /// `lb_observability::tracing_propagation`. The codec shipped in
+    /// 1d462c7 but the proxy wire-in was deferred every round since,
+    /// leaving REL-2-07 stuck at `Verified-Fixed-Partial`.
     async fn handle(
         &self,
         req: Request<IncomingBody>,
         peer: SocketAddr,
         expected_sni: Option<&str>,
+    ) -> Response<BoxBody<Bytes, hyper::Error>> {
+        use tracing::Instrument;
+        // H1Proxy carries no per-bind label and the constructor
+        // boundary into main.rs is div-ops's house, so the span's
+        // `listener` field is the protocol family (h1/h1s).
+        let listener_label = if self.is_https { "h1s" } else { "h1" };
+        let req_trace = crate::trace_ctx::RequestTrace::open(
+            req.headers(),
+            "h1",
+            req.method().as_str(),
+            req.uri()
+                .path_and_query()
+                .map_or("/", http::uri::PathAndQuery::as_str),
+            listener_label,
+            expected_sni,
+        );
+        let span = req_trace.span.clone();
+        let resp = self
+            .handle_inner(req, peer, expected_sni, req_trace)
+            .instrument(span.clone())
+            .await;
+        // Record the response status on the request span (OTLP
+        // `http.status_code`) before it closes.
+        span.record("http.status_code", resp.status().as_u16());
+        resp
+    }
+
+    async fn handle_inner(
+        &self,
+        req: Request<IncomingBody>,
+        peer: SocketAddr,
+        expected_sni: Option<&str>,
+        req_trace: crate::trace_ctx::RequestTrace,
     ) -> Response<BoxBody<Bytes, hyper::Error>> {
         // gRPC requires HTTP/2 (RFC: gRPC over HTTP/2 §3.4 — gRPC PROTOCOL
         // section). An H1 listener cannot serve gRPC: framing relies on H2
@@ -633,7 +680,7 @@ impl H1Proxy {
             .as_ref()
             .is_some_and(|w| w.config().enabled && is_h1_upgrade_request(&req))
         {
-            return self.handle_ws_upgrade(req);
+            return self.handle_ws_upgrade(req, req_trace).await;
         }
 
         let (mut parts, body) = req.into_parts();
@@ -994,17 +1041,44 @@ impl H1Proxy {
 
     /// Handle an RFC 6455 handshake request.
     ///
-    /// Builds the `101 Switching Protocols` response and schedules a
-    /// detached task that awaits [`hyper::upgrade::on`] on the inbound
-    /// request, dials the backend with [`tokio_tungstenite::client_async`],
-    /// and runs the bidirectional frame forwarder.
+    /// **ROUND8-L7-01 (Pingora GHSA-xq2h-p299-vjwv / Envoy
+    /// GHSA-rj35-4m94-77jh, both CVSS 9.3):** the client-visible
+    /// `101 Switching Protocols` is emitted **only after** the
+    /// upstream WebSocket handshake has completed successfully. The
+    /// pre-fix code returned `101` synchronously and dialed the
+    /// upstream in a detached task — so a client the upstream would
+    /// have rejected was already committed to WS framing on a wire
+    /// that then silently closed, and any bytes pipelined after the
+    /// upgrade request entered an unread upgraded byte-stream (the
+    /// smuggling primitive both references paid for).
+    ///
+    /// New order (mirrors Pingora `proxy_h1.rs` and Envoy
+    /// `WsHandlerImpl`): dial upstream → drive the upstream WS client
+    /// handshake under a bounded timeout → only then build `101` from
+    /// the upstream-accepted handshake. On upstream failure the wire
+    /// is still in H1 mode (no `101` emitted) so we return
+    /// `502 Bad Gateway` (handshake rejected / unreachable) or
+    /// `504 Gateway Timeout` (dial/handshake budget elapsed) and the
+    /// client connection stays keep-alive-eligible.
+    ///
+    /// Behaviour change (documented in CHANGELOG): one upstream-RTT of
+    /// added latency on the WS upgrade, and `502/504` instead of
+    /// `101`-then-silent-close on upstream failure.
+    ///
+    /// ROUND8-OPS-06: `req_trace` carries the request span + the child
+    /// W3C context; the child `traceparent` is injected onto the
+    /// upstream WS handshake request so an on-call engineer can pivot
+    /// from an upgrade failure to the exact upstream dial. The
+    /// detached splice task is `.instrument()`-ed with the request
+    /// span so its events nest under the same `trace_id`.
     ///
     /// Returns a plain 400 if the handshake is structurally valid but
     /// `Sec-WebSocket-Key` is missing once hyper hands us the request
     /// (race: the detector accepted it).
-    fn handle_ws_upgrade(
+    async fn handle_ws_upgrade(
         &self,
         mut req: Request<IncomingBody>,
+        req_trace: crate::trace_ctx::RequestTrace,
     ) -> Response<BoxBody<Bytes, hyper::Error>> {
         let Some(ws_proxy) = self.ws.clone() else {
             return error_response(StatusCode::BAD_GATEWAY, "websocket disabled");
@@ -1025,16 +1099,6 @@ impl H1Proxy {
         }
         let backend_addr = backend.addr;
 
-        // Kick off the upgrade future BEFORE we return the 101 response.
-        // hyper will drive it as soon as the response headers have been
-        // written on the wire.
-        let upgrade_fut = hyper::upgrade::on(&mut req);
-
-        // Snapshot the request for the client-side handshake to the
-        // upstream. We reuse `path + query` and pick up headers that the
-        // RFC 6455 §4.1 client must carry (Sec-WebSocket-Protocol /
-        // -Extensions). The `Host` header is rewritten to the backend
-        // `SocketAddr` so the upstream accepts the handshake.
         let path_and_query = req
             .uri()
             .path_and_query()
@@ -1045,17 +1109,55 @@ impl H1Proxy {
             .and_then(|v| v.to_str().ok())
             .map(str::to_owned);
 
-        // Detach a task that finishes the upgrade, dials upstream, and
-        // runs the frame forwarder. We do NOT await it here — hyper
-        // needs us to return the 101 response first so it can flip the
-        // wire.
-        tokio::spawn(run_h1_ws_upgrade_task(
-            upgrade_fut,
+        // ROUND8-L7-01 — dial the upstream and drive its WS handshake
+        // BEFORE any client-visible response. Bounded by the H1
+        // header-receipt budget (`HttpTimeouts::header`): "time to get
+        // the upstream's handshake response" is exactly that budget's
+        // semantics. A timeout maps to 504; any other failure to 502.
+        let child_traceparent = req_trace.child_traceparent();
+        let tracestate = req_trace.tracestate.clone();
+        let upstream_dial = dial_upstream_ws(
             self.pool.clone(),
             backend_addr,
             path_and_query,
             forwarded_protocols,
-            ws_proxy,
+            child_traceparent,
+            tracestate,
+            ws_proxy.clone(),
+        );
+        let backend_ws = match tokio::time::timeout(self.timeouts.header, upstream_dial).await {
+            Ok(Ok(ws)) => ws,
+            Ok(Err(ProxyErr::Upstream(msg))) => {
+                tracing::debug!(backend = %backend_addr, error = %msg, "ws: upstream handshake refused — returning 502 (no 101 emitted)");
+                return error_response(
+                    StatusCode::BAD_GATEWAY,
+                    "websocket upstream handshake failed",
+                );
+            }
+            Ok(Err(ProxyErr::Timeout)) => {
+                tracing::debug!(backend = %backend_addr, "ws: upstream dial timeout — returning 504 (no 101 emitted)");
+                return error_response(
+                    StatusCode::GATEWAY_TIMEOUT,
+                    "websocket upstream dial timeout",
+                );
+            }
+            Err(_elapsed) => {
+                tracing::debug!(backend = %backend_addr, "ws: upstream handshake budget elapsed — returning 504 (no 101 emitted)");
+                return error_response(
+                    StatusCode::GATEWAY_TIMEOUT,
+                    "websocket upstream handshake timeout",
+                );
+            }
+        };
+
+        // Upstream handshake succeeded. ONLY NOW arm the hyper upgrade
+        // future and build the client `101`. The detached task no
+        // longer dials — it just splices the already-established
+        // upstream WS to the post-upgrade client stream.
+        let upgrade_fut = hyper::upgrade::on(&mut req);
+        tokio::spawn(tracing::Instrument::instrument(
+            run_h1_ws_splice_task(upgrade_fut, backend_ws, ws_proxy),
+            req_trace.span.clone(),
         ));
 
         // Build the 101 response. Mirror a sub-protocol selection if the
@@ -1108,47 +1210,37 @@ enum ProxyErr {
     Timeout,
 }
 
-/// Finish a WebSocket upgrade: await the hyper upgrade future, dial the
-/// backend over the pooled TCP path, drive the RFC 6455 client-side
-/// handshake, and hand both halves to [`WsProxy::proxy_frames`].
-async fn run_h1_ws_upgrade_task(
-    upgrade_fut: hyper::upgrade::OnUpgrade,
+/// ROUND8-L7-01 — dial the backend and drive the RFC 6455 client-side
+/// handshake **before** the client sees `101`. On success returns the
+/// established upstream [`WebSocketStream`]; on failure a [`ProxyErr`]
+/// the caller maps to `502` (refused/unreachable) or `504` (timeout).
+///
+/// ROUND8-OPS-06: the caller's child `traceparent` (and forwarded
+/// `tracestate`) is injected onto the upstream handshake request so
+/// the upstream sees the LB span as its parent.
+async fn dial_upstream_ws(
     pool: TcpPool,
     backend_addr: SocketAddr,
     path_and_query: String,
     forwarded_protocols: Option<String>,
+    child_traceparent: String,
+    tracestate: Option<String>,
     ws_proxy: Arc<WsProxy>,
-) {
-    let upgraded = match upgrade_fut.await {
-        Ok(u) => u,
-        Err(e) => {
-            tracing::debug!(error = %e, "ws: hyper upgrade failed");
-            return;
-        }
-    };
+) -> Result<tokio_tungstenite::WebSocketStream<tokio::net::TcpStream>, ProxyErr> {
+    // CODE-2-09 follow-on: async dial (no blocking-pool thread for the
+    // TCP RTT). A dial failure here is `502` to the client — but
+    // crucially the client has NOT yet seen `101`.
+    let pooled = pool
+        .acquire_async(backend_addr)
+        .await
+        .map_err(|e| ProxyErr::Upstream(format!("backend dial failed: {e}")))?;
+    let upstream_stream = pooled
+        .take_stream()
+        .ok_or_else(|| ProxyErr::Upstream("pooled stream missing".to_owned()))?;
 
-    // CODE-2-09 follow-on: async dial replaces the prior
-    // `spawn_blocking(pool.acquire)` site so the WS-upgrade dial no
-    // longer ties up a blocking-pool thread for a TCP RTT.
-    let pooled = match pool.acquire_async(backend_addr).await {
-        Ok(p) => p,
-        Err(e) => {
-            tracing::debug!(error = %e, backend = %backend_addr, "ws: backend dial failed");
-            return;
-        }
-    };
-    let Some(upstream_stream) = pooled.take_stream() else {
-        tracing::debug!("ws: pooled stream missing");
-        return;
-    };
-
-    let uri = match format!("ws://{backend_addr}{path_and_query}").parse() {
-        Ok(u) => u,
-        Err(e) => {
-            tracing::debug!(error = %e, "ws: upstream uri build failed");
-            return;
-        }
-    };
+    let uri = format!("ws://{backend_addr}{path_and_query}")
+        .parse()
+        .map_err(|e| ProxyErr::Upstream(format!("upstream uri build failed: {e}")))?;
     let mut builder = tokio_tungstenite::tungstenite::client::ClientRequestBuilder::new(uri);
     if let Some(protocols) = forwarded_protocols.as_deref() {
         for p in protocols.split(',') {
@@ -1158,22 +1250,48 @@ async fn run_h1_ws_upgrade_task(
             }
         }
     }
+    // ROUND8-OPS-06: propagate the W3C trace context onto the upstream
+    // WS handshake request (tungstenite's builder takes header pairs,
+    // not a HeaderMap, so we use the pre-rendered child header value).
+    builder = builder.with_header(
+        lb_observability::tracing_propagation::TRACEPARENT_HEADER,
+        child_traceparent,
+    );
+    if let Some(ts) = tracestate {
+        builder = builder.with_header(lb_observability::tracing_propagation::TRACESTATE_HEADER, ts);
+    }
 
     let ws_cfg = ws_proxy.config();
-    let (backend_ws, _resp) = match tokio_tungstenite::client_async_with_config(
+    let (backend_ws, _resp) = tokio_tungstenite::client_async_with_config(
         builder,
         upstream_stream,
         Some(ws_cfg.tungstenite_config()),
     )
     .await
-    {
-        Ok(pair) => pair,
+    .map_err(|e| ProxyErr::Upstream(format!("upstream handshake failed: {e}")))?;
+    Ok(backend_ws)
+}
+
+/// ROUND8-L7-01 — splice-only task. By the time this runs the upstream
+/// WS is already established and `101` has been written to the client;
+/// we only await the hyper upgrade future (now guaranteed to resolve
+/// because the wire flipped) and hand both halves to
+/// [`WsProxy::proxy_frames`].
+async fn run_h1_ws_splice_task(
+    upgrade_fut: hyper::upgrade::OnUpgrade,
+    backend_ws: tokio_tungstenite::WebSocketStream<tokio::net::TcpStream>,
+    ws_proxy: Arc<WsProxy>,
+) {
+    let upgraded = match upgrade_fut.await {
+        Ok(u) => u,
         Err(e) => {
-            tracing::debug!(error = %e, backend = %backend_addr, "ws: upstream handshake failed");
+            // The upstream WS is dropped here — `backend_ws`'s Drop
+            // closes the pooled TCP socket so we do not leak it.
+            tracing::debug!(error = %e, "ws: hyper upgrade failed after upstream established");
             return;
         }
     };
-
+    let ws_cfg = ws_proxy.config();
     let client_ws = ws_proxy::server_ws(TokioIo::new(upgraded), &ws_cfg).await;
     if let Err(e) = ws_proxy.proxy_frames(client_ws, backend_ws).await {
         tracing::debug!(error = %e, "ws: frame proxy ended with error");

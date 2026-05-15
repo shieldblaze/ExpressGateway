@@ -456,7 +456,46 @@ impl hyper::service::Service<Request<IncomingBody>> for ProxyService {
 }
 
 impl H2Proxy {
+    /// ROUND8-OPS-06 / REL-2-07 — H2 mirror of the H1 trace-context
+    /// wire-in. H2 has no hyper `Upgrade` primitive today (the WS path
+    /// is RFC 8441 extended CONNECT, handled in
+    /// `handle_ws_extended_connect`), so this commit only adds the
+    /// per-request span + child-context injection for parity; the
+    /// ROUND8-L7-01 "defer 101" restructure is H1-specific. Same
+    /// `Instrument`-not-`Entered` discipline as H1 so the span never
+    /// leaks across an `.await` onto a co-scheduled task.
     async fn handle(
+        &self,
+        mut req: Request<IncomingBody>,
+        peer: SocketAddr,
+        expected_sni: Option<&str>,
+    ) -> Response<BoxBody<Bytes, hyper::Error>> {
+        use tracing::Instrument;
+        let listener_label = if self.is_https { "h2" } else { "h2c" };
+        let req_trace = crate::trace_ctx::RequestTrace::open(
+            req.headers(),
+            "h2",
+            req.method().as_str(),
+            req.uri()
+                .path_and_query()
+                .map_or("/", http::uri::PathAndQuery::as_str),
+            listener_label,
+            expected_sni,
+        );
+        // Inject the child context onto the inbound request now so
+        // every downstream H2→{H1,H2,H3} bridge forwards it without a
+        // per-bridge callsite (H2 has many forwarding paths).
+        req_trace.inject_upstream(req.headers_mut());
+        let span = req_trace.span.clone();
+        let resp = self
+            .handle_inner(req, peer, expected_sni)
+            .instrument(span.clone())
+            .await;
+        span.record("http.status_code", resp.status().as_u16());
+        resp
+    }
+
+    async fn handle_inner(
         &self,
         req: Request<IncomingBody>,
         peer: SocketAddr,

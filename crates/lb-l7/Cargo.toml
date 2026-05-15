@@ -42,6 +42,13 @@ lb-grpc = { path = "../lb-grpc" }
 # Item 2: WebSocket proxy path (RFC 6455 + RFC 8441).
 tokio-tungstenite = { workspace = true }
 futures-util = { workspace = true }
+# ROUND8-OPS-06 / REL-2-07: W3C trace-context propagation. Zero L7
+# callsites consumed `lb_observability::tracing_propagation` before
+# this — the library shipped in 1d462c7 but the proxy wire-in was
+# deferred. This edge lets `h1_proxy`/`h2_proxy` extract the inbound
+# `traceparent`, open a request span, and inject a child context onto
+# the upstream request (incl. the WS-upgrade dial).
+lb-observability = { path = "../lb-observability" }
 
 [dev-dependencies]
 # PROTO-2-18 (Wave 2c-2): the `tests/sni_authority_421.rs` integration
@@ -54,3 +61,7 @@ tokio-rustls = { workspace = true }
 rustls = { workspace = true }
 rustls-pki-types = { workspace = true }
 rcgen = { version = "0.13", features = ["pem"] }
+# ROUND8-OPS-06: the traceparent-propagation proof installs a custom
+# `tracing_subscriber` layer that snapshots emitted span fields so the
+# test can assert the request span carries the inbound `trace_id`.
+tracing-subscriber = { workspace = true }

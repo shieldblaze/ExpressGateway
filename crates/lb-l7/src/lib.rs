@@ -29,6 +29,9 @@ pub mod h3_to_h3;
 pub mod security_hooks;
 pub mod sni_authority;
 pub mod stripped_request;
+/// ROUND8-OPS-06 / REL-2-07: L7 wire-in for the W3C trace-context
+/// propagation library (`lb_observability::tracing_propagation`).
+pub mod trace_ctx;
 pub mod upstream;
 pub mod ws_proxy;
 
