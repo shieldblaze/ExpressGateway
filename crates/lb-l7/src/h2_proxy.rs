@@ -639,6 +639,33 @@ impl H2Proxy {
         expected_sni: Option<&str>,
         glitch: Option<&GlitchConnState>,
     ) -> Response<BoxBody<Bytes, hyper::Error>> {
+        // ROUND8-L7-09 — uniform authority validation CHOKE POINT.
+        // HAProxy `BUG/MAJOR: http: forbid comma in authority` +
+        // `BUG/MEDIUM: h1: Enforce the authority validation`. The SAME
+        // predicate the H1 path enforces MUST run on the H2 parser
+        // too, BEFORE the request forks into the extended-CONNECT WS
+        // handler or the gRPC proxy (the prior verify pass found both
+        // forks reached upstream selection unvalidated —
+        // `audit/round-8/verify/fixback.md`). Placed as the FIRST
+        // statement so neither fork below can bypass it. H2 carries
+        // the authority in `:authority` (hyper surfaces it as
+        // `uri.authority()`); a client may also send `Host`. Both are
+        // validated by `validate_request`.
+        if let Err((bad, err)) = crate::authority::validate_request(&req) {
+            tracing::warn!(
+                peer = %peer,
+                authority = %bad,
+                error = ?err,
+                "ROUND8-L7-09: H2 authority rejected (choke point)"
+            );
+            // ROUND8-L7-07: a malformed authority is a routing/ACL
+            // desync attempt — medium glitch weight.
+            if let Some(g) = glitch {
+                g.record(GlitchKind::RapidReset);
+            }
+            return error_response(StatusCode::BAD_REQUEST, "invalid authority (ROUND8-L7-09)");
+        }
+
         // RFC 8441 extended CONNECT intercept. Only fires when this
         // listener was configured with a `WsProxy`; everything else
         // continues through the regular H2 request path.
@@ -761,41 +788,10 @@ impl H2Proxy {
             return error_response(StatusCode::BAD_REQUEST, "request smuggling");
         }
 
-        // ROUND8-L7-09 — uniform authority validation (HAProxy
-        // `BUG/MAJOR: http: forbid comma in authority` +
-        // `BUG/MEDIUM: h1: Enforce the authority validation`). The
-        // SAME predicate that the H1 path enforces MUST run on the
-        // H2 parser too, BEFORE the agreement compare and BEFORE
-        // upstream selection. H2 carries the authority in the
-        // `:authority` pseudo-header (hyper surfaces it as
-        // `uri.authority()`); a client may also still send `Host`.
-        // Validate whichever value(s) are present.
-        for candidate in [
-            parts.uri.authority().map(http::uri::Authority::as_str),
-            parts
-                .headers
-                .get(hyper::header::HOST)
-                .and_then(|v| v.to_str().ok()),
-        ]
-        .into_iter()
-        .flatten()
-        .filter(|s| !s.is_empty())
-        {
-            if let Err(err) = crate::authority::validate(candidate) {
-                tracing::warn!(
-                    peer = %peer,
-                    authority = %candidate,
-                    error = ?err,
-                    "ROUND8-L7-09: H2 authority rejected"
-                );
-                // ROUND8-L7-07: a malformed authority is a routing/ACL
-                // desync attempt — medium glitch weight.
-                if let Some(g) = glitch {
-                    g.record(GlitchKind::RapidReset);
-                }
-                return error_response(StatusCode::BAD_REQUEST, "invalid authority (ROUND8-L7-09)");
-            }
-        }
+        // ROUND8-L7-09 authority validation now runs at the
+        // `handle_inner` choke point (above the extended-CONNECT /
+        // gRPC forks) via `crate::authority::validate_request`, so it
+        // covers those paths too. No second call needed here.
 
         // PROTO-2-01 — RFC 9113 §8.3.1: when both `:authority` and
         // `Host` are present they MUST agree. hyper surfaces

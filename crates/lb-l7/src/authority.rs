@@ -78,6 +78,56 @@ pub fn validate(value: &str) -> Result<(), AuthorityError> {
     Ok(())
 }
 
+/// ROUND8-L7-09 choke point — validate every authority value carried
+/// by an inbound request, regardless of which downstream path the
+/// request will take (plain, WebSocket-upgrade, H2 extended-CONNECT,
+/// or gRPC).
+///
+/// This is the SINGLE place both the H1 and H2 dispatchers call, at
+/// the very top of `handle_inner`, BEFORE the fork into the
+/// upgrade / CONNECT / gRPC handlers. Hoisting the check above the
+/// fork (rather than duplicating it into each handler) is the
+/// less-rot-prone shape: a new fork added later inherits the check
+/// for free.
+///
+/// Both candidates are validated when present:
+/// - the URI authority (H2 `:authority` pseudo-header, surfaced by
+///   hyper as `uri.authority()`; also any absolute-form H1 target);
+/// - the `Host` header (H1 carries the authority here per RFC 9112
+///   §3.2; an H2 client may additionally send `Host`).
+///
+/// An absent or empty value is NOT rejected here — PROTO-2-01 covers
+/// the missing-authority gate; this predicate only sanitises a
+/// present value (HAProxy `BUG/MAJOR` comma class).
+///
+/// There is deliberately NO loopback exemption: the loopback carve-out
+/// applies only to the SNI-vs-Host *agreement* check, not to authority
+/// value sanitisation. Applying the carve-out here would make the
+/// upgrade path looser than the plain path — exactly the H1-vs-H2
+/// divergence the HAProxy `BUG/MEDIUM` fix was about.
+///
+/// # Errors
+///
+/// Returns the first offending value together with its
+/// [`AuthorityError`] when any present candidate fails [`validate`].
+pub fn validate_request<B>(req: &http::Request<B>) -> Result<(), (String, AuthorityError)> {
+    for candidate in [
+        req.uri().authority().map(http::uri::Authority::as_str),
+        req.headers()
+            .get(http::header::HOST)
+            .and_then(|v| v.to_str().ok()),
+    ]
+    .into_iter()
+    .flatten()
+    .filter(|s| !s.is_empty())
+    {
+        if let Err(err) = validate(candidate) {
+            return Err((candidate.to_owned(), err));
+        }
+    }
+    Ok(())
+}
+
 /// Return the port suffix (the substring after the last `:` that is
 /// not inside brackets), or `None` if no port is present.
 fn port_suffix(value: &str) -> Option<&str> {
