@@ -56,7 +56,28 @@ fn ipv6_fragment_proto_value_is_44() {
 fn stat_slots_for_fragments_at_indices_11_and_12() {
     assert_eq!(StatSlot::V4Fragment as usize, 11);
     assert_eq!(StatSlot::V6Fragment as usize, 12);
-    assert_eq!(NUM_SLOTS, 13);
+    // ROUND8-L4-02/08: L4-03 grew the slot table (appended
+    // `StatSlot::NewFlowRateCap` at 15, NUM_SLOTS 13 -> 16). The bare
+    // `NUM_SLOTS == 13` literal regressed. Re-anchor to the invariant
+    // that actually matters here: both fragment slots must fall inside
+    // the `read_stats()` `0..NUM_SLOTS` loop, and the read loop must end
+    // exactly at the last STAT_*-backed enum variant. Expressed via the
+    // enum so a future slot add updates this automatically instead of
+    // silently dropping a slot from the kernel read.
+    assert!(
+        (StatSlot::V4Fragment as usize) < NUM_SLOTS,
+        "V4Fragment slot must be inside the read_stats loop"
+    );
+    assert!(
+        (StatSlot::V6Fragment as usize) < NUM_SLOTS,
+        "V6Fragment slot must be inside the read_stats loop"
+    );
+    assert_eq!(
+        StatSlot::NewFlowRateCap as usize + 1,
+        NUM_SLOTS,
+        "NUM_SLOTS must bound the read loop exactly to the last \
+         STAT_*-backed slot (NewFlowRateCap = 15)"
+    );
 }
 
 #[test]

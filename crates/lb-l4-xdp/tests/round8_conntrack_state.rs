@@ -218,5 +218,27 @@ fn stat_slot_indices_for_prune_slots_are_stable() {
     // Compile-time `const _: () = assert!(NUM_SLOTS >= 15)` would also
     // work but the const path masks an upgrade footgun (a hand-edited
     // NUM_SLOTS without a matching enum addition).
-    assert_eq!(StatSlot::CtFinPrune as usize + 1, NUM_SLOTS);
+    //
+    // ROUND8-L4-02/08: L4-03 appended `StatSlot::NewFlowRateCap` (15) so
+    // `CtFinPrune` (14) is no longer the LAST kernel slot — the previous
+    // `CtFinPrune + 1 == NUM_SLOTS` literal regressed. The load-bearing
+    // invariant is unchanged: every prune slot must fall inside the
+    // `read_stats()` `0..NUM_SLOTS` loop, and the last kernel slot must
+    // be the last STAT_*-backed enum variant (`NewFlowRateCap`). Both
+    // are expressed relative to the enum so the next slot add cannot
+    // silently break the read loop without tripping this test.
+    assert!(
+        (StatSlot::CtRstPrune as usize) < NUM_SLOTS,
+        "CtRstPrune slot must be inside the read_stats loop"
+    );
+    assert!(
+        (StatSlot::CtFinPrune as usize) < NUM_SLOTS,
+        "CtFinPrune slot must be inside the read_stats loop"
+    );
+    assert_eq!(
+        StatSlot::NewFlowRateCap as usize + 1,
+        NUM_SLOTS,
+        "NewFlowRateCap is the last kernel-read slot; NUM_SLOTS must \
+         bound the read loop exactly to the STAT_*-backed slots"
+    );
 }
