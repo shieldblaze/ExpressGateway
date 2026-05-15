@@ -46,6 +46,8 @@ fn make_listener(backend: BackendConfig) -> LbConfig {
             h2_security: None,
             websocket: None,
             grpc: None,
+            drain_timeout_ms: None,
+            drain_jitter_ms: None,
             backends: vec![backend],
         }],
         runtime: None,

@@ -106,6 +106,68 @@ If you see traffic landing on a draining pod (`accept_inflight`
 rising after `entering drain — flipping /readyz to 503`), the window
 is too short for your upstream's probe period.
 
+### Tuning the drain budget (per-listener, ROUND-8 OPS-10)
+
+The gateway-level `[runtime].drain_timeout_ms` (default 10 s) is
+correct for short-request HTTP but materially insufficient for
+long-poll H1 / gRPC bidi / SSE / WebSocket listeners — Pingora ships
+`EXIT_TIMEOUT=300s` for exactly this reason. Rather than raise the
+gateway default (which would slow every short-request listener's
+restart up to 5 min), set a **per-listener** override:
+
+```toml
+[[listeners]]
+address = "0.0.0.0:443"
+protocol = "h1s"            # gRPC over H2 via ALPN
+drain_timeout_ms = 300000   # 5 min — Pingora EXIT_TIMEOUT
+drain_jitter_ms  = 0        # optional: disable jitter for this listener
+```
+
+| Workload                                       | Recommended `drain_timeout_ms` | Rationale                          |
+|------------------------------------------------|--------------------------------|------------------------------------|
+| Short-request HTTP (request/response, p99 <1s) | 10000 (default)                | Pingora `CLOSE_TIMEOUT` analogue.  |
+| Streaming HTTP / SSE / long-poll (p99 <60s)    | 60000                          | Allow one full poll cycle.         |
+| gRPC bidi / WebSocket                          | 300000                         | Pingora `EXIT_TIMEOUT` default.    |
+
+`None` (key omitted) inherits `[runtime].drain_timeout_ms`. Validation
+range `100..=300000` ms (same as the gateway key). The coordinator's
+InFlightDrain phase waits the **max** effective per-listener budget so
+the longest-budget listener gets its full window;
+`lb_drain_timeout_ms_listener{listener}` on `/metrics` reflects the
+effective per-listener budget (used by `LbShutdownSlow`).
+
+Calibrate with `shutdown_drain_seconds_listener{phase="InFlightDrain",
+listener=...}` p99: if it routinely reaches the budget the drain is
+*timing out* (raise the per-listener budget); if it sits below
+`drain_timeout_ms / 10` the budget is over-generous (lower it to keep
+deploys snappy).
+
+### Drain jitter (ROUND-8 OPS-02)
+
+On a deploy-wide SIGTERM every replica's drain coordinator would
+otherwise fire its in-flight cancel at the same wall-clock instant,
+producing a thundering-herd reconnect storm against the shared
+upstream LB (Envoy hit this in production with stateful upstream LBs
+at >2-3 replicas — `drain_manager_impl.cc`). The coordinator sleeps a
+per-process random duration uniformly distributed in
+`[0, drain_jitter_ms)` before the InFlightDrain cancel so close
+events spread across the fleet instead of synchronising.
+
+- `[runtime].drain_jitter_ms` — gateway-level ceiling. Omit (the
+  default) to *derive* `drain_timeout_ms / 4` (Envoy's "first
+  quarter" recipe). Set to `0` for single-instance / deterministic
+  testing. Per-listener override: `[[listeners]].drain_jitter_ms`.
+- Validation: an explicit value must be `<=` the effective drain
+  budget it subdivides (checked gateway-level and per-listener after
+  `[runtime]` inheritance is resolved).
+
+The per-process draw desynchronises *across* replicas (the primary
+thundering-herd mitigation). Per-connection intra-pod spreading (each
+connection drawing its own jitter in the per-conn cancel arm) is a
+tracked follow-up owned by the L7 accept/serve-connection work; it
+refines the within-pod close distribution but is not required for
+the cross-replica herd protection.
+
 **Per-protocol drain signal**:
 
 | Protocol | Drain signal               | Wired through main.rs?            |
@@ -267,6 +329,28 @@ latency regression will tip them into truncating connections
    `shutdown_drain_seconds_listener{phase,outcome,listener}` covers
    ListenerCancel / InFlightDrain. Two MetricVecs by design so the
    non-listener-scoped phases don't carry an empty `listener` label.
+
+### LbShutdownTruncatedStreams — streaming listener aborting on drain
+
+**Trigger**: `sum by (listener) (rate(shutdown_aborted_connections_total[1h])) > 0`
+for a listener carrying streaming (gRPC bidi / WebSocket / SSE)
+traffic.
+**Severity**: warn
+**Wired**: partial — `shutdown_aborted_connections_total` is bumped
+from the drain path; the streaming-listener correlation is operator
+judgement (cross-reference the listener's `protocol` and the
+`lb_drain_timeout_ms_listener{listener}` budget).
+**Meaning**: a streaming listener is aborting connections at drain —
+almost always an under-budget drain for that workload.
+**Diagnose**:
+1. Confirm the listener carries streaming traffic (gRPC bidi /
+   WebSocket / long-poll SSE).
+2. Check `lb_drain_timeout_ms_listener{listener=...}` — if it is the
+   gateway default (10000) for a streaming listener, set a
+   per-listener `[[listeners]].drain_timeout_ms` (300000 for gRPC
+   bidi / WS, 60000 for SSE / long-poll — see "Tuning the drain
+   budget" above).
+3. Re-check after the next deploy that the abort rate drops to 0.
 
 ### LbAcceptSaturation — listener accept queue near cap
 
@@ -496,6 +580,7 @@ journalctl -u expressgateway -r | head -20    # most recent startup
 | `LbPanic`                   | `journalctl -u expressgateway -g 'panic' -n 50`                 |
 | `LbShutdownAborted`         | `journalctl -u expressgateway -g 'drain deadline elapsed'`      |
 | `LbShutdownSlow`            | `curl 127.0.0.1:9090/metrics \| grep shutdown_drain_seconds`    |
+| `LbShutdownTruncatedStreams`| `curl 127.0.0.1:9090/metrics \| grep lb_drain_timeout_ms_listener` |
 | `LbAcceptSaturation`        | `lsof -p $(pidof expressgateway) \| wc -l`                       |
 | `LbAcceptErrors`            | `journalctl -u expressgateway -g 'accept error'`                |
 | `LbAcceptShed`              | Same as `LbAcceptSaturation`                                    |

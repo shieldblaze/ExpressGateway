@@ -1977,6 +1977,44 @@ async fn async_main() -> anyhow::Result<()> {
         std::sync::Arc::new(MetricsDrainObserver {
             metrics: Arc::clone(&metrics_for_obs),
         });
+    // ROUND-8 OPS-10: resolve the effective per-listener drain
+    // budget + jitter (per-listener override falling back to
+    // [runtime], falling back to the lb-config defaults). The
+    // phase-level InFlightDrain deadline is the *max* over all
+    // listeners so the longest-budget listener (e.g. a gRPC-bidi /
+    // WebSocket streaming listener at the Pingora 300 s budget) gets
+    // its full window; short-request listeners exit well inside it.
+    // Per-connection-await-its-own-listener-budget (OPS-10 §C.3) is a
+    // div-l7-owned follow-up in the per-conn cancel arm (the
+    // accept/serve-connection region this commit must not touch);
+    // the phase-level max is the coordinator-level honoring of the
+    // override and is sufficient for the gRPC/WS streaming-listener
+    // regression the finding targets.
+    let mut max_listener_drain_ms = runtime_cfg.map_or(10_000, |r| r.drain_timeout_ms);
+    let mut max_listener_jitter_ms = runtime_cfg.map_or(
+        10_000 / 4,
+        lb_config::RuntimeConfig::effective_drain_jitter_ms,
+    );
+    {
+        let drain_budget_gauge = metrics
+            .gauge_vec(
+                "lb_drain_timeout_ms_listener",
+                "ROUND-8 OPS-10: effective per-listener drain budget (ms), \
+                 build-info style — used by the LbShutdownSlow alert",
+                &["listener"],
+            )
+            .ok();
+        for lc in &config.listeners {
+            let eff_t = lc.effective_drain_timeout_ms(runtime_cfg);
+            let eff_j = lc.effective_drain_jitter_ms(runtime_cfg);
+            max_listener_drain_ms = max_listener_drain_ms.max(eff_t);
+            max_listener_jitter_ms = max_listener_jitter_ms.max(eff_j);
+            if let Some(g) = drain_budget_gauge.as_ref() {
+                g.with_label_values(&[lc.address.as_str()])
+                    .set(eff_t as i64);
+            }
+        }
+    }
     let spec = lb_core::DrainSpec {
         readiness_settle: Duration::from_millis(
             // ROUND-8 OPS-11: fallback matches
@@ -1986,9 +2024,7 @@ async fn async_main() -> anyhow::Result<()> {
             runtime_cfg.map_or(11_000, |r| r.readiness_settle_ms),
         ),
         listener_cancel_deadline: Duration::from_millis(500),
-        inflight_drain_deadline: Duration::from_millis(
-            runtime_cfg.map_or(10_000, |r| r.drain_timeout_ms),
-        ),
+        inflight_drain_deadline: Duration::from_millis(max_listener_drain_ms),
         // L4-12 will land the XDP detach closure here. Until the
         // `XdpLoader::detach()` API lands on the branch, the coordinator
         // simply skips phase 6 — the legacy "drop the loader on
@@ -1996,10 +2032,19 @@ async fn async_main() -> anyhow::Result<()> {
         // round-2 stale-pin recovery path picks up any linger on next
         // startup (see OPS-01+L4-12+L4-04 §B.2).
         xdp_detach_deadline: None,
-        // OPS-02 jitter: the per-conn cancel arm fires at a random
-        // sub-millisecond offset so 1000s of pods cancelling at the
-        // same wall-clock instant don't synchronise.
-        jitter_max: Duration::from_millis(50),
+        // ROUND-8 OPS-02: the coordinator sleeps a per-process random
+        // `[0, jitter_max)` before the in-flight-drain cancel so a
+        // deploy-wide SIGTERM doesn't make every replica cancel at
+        // the same wall-clock instant (thundering-herd reconnect
+        // storm against the shared upstream LB — Envoy
+        // `drain_manager_impl.cc`). `jitter_max` is the max effective
+        // per-listener jitter (override → [runtime] → drain/4
+        // derivation). Per-connection intra-pod spreading (each conn
+        // its own jitter draw) is the div-l7-owned refinement in the
+        // per-conn cancel arm; the per-process draw already
+        // desynchronises *across* replicas, which is the primary
+        // thundering-herd mitigation the finding targets.
+        jitter_max: Duration::from_millis(max_listener_jitter_ms),
         mark_draining: Some(Box::new(move || {
             tracing::info!("entering drain — flipping /readyz to 503");
             probes_for_mark.set_draining();
@@ -3012,6 +3057,8 @@ mod tests {
             h2_security: None,
             websocket: None,
             grpc: None,
+            drain_timeout_ms: None,
+            drain_jitter_ms: None,
             backends: vec![],
         };
         let pool = TcpPool::new(PoolConfig::default(), backend_opts(), Runtime::new());

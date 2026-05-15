@@ -177,6 +177,24 @@ pub struct RuntimeConfig {
     /// removal latency). Validation range 0..=30_000 ms.
     #[serde(default = "default_readiness_settle_ms")]
     pub readiness_settle_ms: u64,
+    /// ROUND-8 OPS-02: gateway-level drain-cancel jitter ceiling,
+    /// in milliseconds. On a deploy-wide SIGTERM, every replica's
+    /// drain coordinator would otherwise fire `token.cancel()` at
+    /// the same wall-clock instant, producing a thundering-herd
+    /// reconnect storm against the shared upstream LB (Envoy hit
+    /// this in production with stateful upstream LBs at >2-3
+    /// replicas — `drain_manager_impl.cc`). The coordinator sleeps a
+    /// per-process random `[0, jitter)` before the in-flight-drain
+    /// cancel so close events spread across the fleet instead of
+    /// synchronising.
+    ///
+    /// `None` (the default) means *derive* `drain_timeout_ms / 4`
+    /// (Envoy's "first quarter" recipe). `Some(0)` disables jitter
+    /// (single-instance / deterministic testing). Per-listener
+    /// override: `[[listeners]].drain_jitter_ms`. Validation range
+    /// for an explicit value: `0..=drain_timeout_ms`.
+    #[serde(default)]
+    pub drain_jitter_ms: Option<u64>,
     /// SEC-2-10 (Wave 2c): max wall-clock for `acceptor.accept()`
     /// to complete a TLS handshake. Caps slow-loris-style
     /// handshake-stall attacks at this many ms regardless of
@@ -241,6 +259,50 @@ pub struct RuntimeConfig {
     /// one-call boundary on the `lb` crate side.
     #[serde(default)]
     pub header_underscore_policy: HeaderUnderscorePolicy,
+}
+
+impl RuntimeConfig {
+    /// ROUND-8 OPS-02: the effective gateway-level drain-cancel
+    /// jitter ceiling in milliseconds. `drain_jitter_ms` when set,
+    /// otherwise the Envoy "first quarter" derivation
+    /// `drain_timeout_ms / 4`.
+    #[must_use]
+    pub const fn effective_drain_jitter_ms(&self) -> u64 {
+        match self.drain_jitter_ms {
+            Some(j) => j,
+            None => self.drain_timeout_ms / 4,
+        }
+    }
+}
+
+impl ListenerConfig {
+    /// ROUND-8 OPS-10: the effective drain budget for this listener
+    /// in milliseconds. The per-listener `drain_timeout_ms` override
+    /// when present, else the gateway-level `[runtime].drain_timeout_ms`
+    /// (or the `default_drain_timeout_ms()` fallback when there is no
+    /// `[runtime]` block).
+    #[must_use]
+    pub fn effective_drain_timeout_ms(&self, runtime: Option<&RuntimeConfig>) -> u64 {
+        self.drain_timeout_ms.unwrap_or_else(|| {
+            runtime.map_or_else(default_drain_timeout_ms, |r| r.drain_timeout_ms)
+        })
+    }
+
+    /// ROUND-8 OPS-02/OPS-10: the effective drain-cancel jitter
+    /// ceiling for this listener in milliseconds. The per-listener
+    /// `drain_jitter_ms` override when present, else the gateway-level
+    /// derived jitter (`RuntimeConfig::effective_drain_jitter_ms`, or
+    /// `default_drain_timeout_ms() / 4` when there is no `[runtime]`
+    /// block).
+    #[must_use]
+    pub fn effective_drain_jitter_ms(&self, runtime: Option<&RuntimeConfig>) -> u64 {
+        self.drain_jitter_ms.unwrap_or_else(|| {
+            runtime.map_or_else(
+                || default_drain_timeout_ms() / 4,
+                RuntimeConfig::effective_drain_jitter_ms,
+            )
+        })
+    }
 }
 
 /// ROUND8-L7-05: per-runtime policy for handling `_` in HTTP header
@@ -355,8 +417,8 @@ const fn default_drain_timeout_ms() -> u64 {
 /// and start cancelling connections while still listed `Ready` in
 /// the Endpoints object, so the next ~10 s of new connections landed
 /// on the draining pod. 11 s = one full kubelet probe period (10 s)
-/// + 1 s margin, so at least one `/readyz` 503 falls inside the
-/// settle window even in the worst case (set_draining firing
+/// plus a 1 s margin, so at least one `/readyz` 503 falls inside
+/// the settle window even in the worst case (set_draining firing
 /// immediately after a probe). Validation cap stays 30 000 ms;
 /// operators with aggressively-tuned kubelets can lower it (see
 /// `RUNBOOK.md` "Tuning `readiness_settle_ms`"). Aligns with
@@ -480,6 +542,28 @@ pub struct ListenerConfig {
     /// because the upstream protocol mismatches).
     #[serde(default)]
     pub grpc: Option<GrpcListenerConfig>,
+    /// ROUND-8 OPS-10: per-listener graceful-drain budget override,
+    /// in milliseconds. `None` (the default) inherits
+    /// `[runtime].drain_timeout_ms`. The gateway-level default
+    /// (10 s) is correct for short-request HTTP but materially
+    /// insufficient for long-poll H1 / gRPC bidi / SSE / WebSocket
+    /// listeners — Pingora ships `EXIT_TIMEOUT=300s` for exactly
+    /// this reason. Set this per streaming listener instead of
+    /// raising the gateway default (which would slow every
+    /// short-request listener's restart). Matches the
+    /// HAProxy-`hard-stop-after`-per-frontend granularity. When
+    /// `Some`, must satisfy the same `100..=300_000` ms range as the
+    /// gateway-level key. See `RUNBOOK.md` "Tuning the drain budget".
+    #[serde(default)]
+    pub drain_timeout_ms: Option<u64>,
+    /// ROUND-8 OPS-02 / OPS-10: per-listener drain-cancel jitter
+    /// ceiling override, in milliseconds. `None` inherits the
+    /// gateway-level derived jitter (`drain_timeout_ms / 4`).
+    /// `Some(0)` disables jitter for this listener (operator
+    /// preference / single-instance). When `Some`, must satisfy
+    /// `0..=` the *effective* per-listener `drain_timeout_ms`.
+    #[serde(default)]
+    pub drain_jitter_ms: Option<u64>,
     /// Upstream backends to load-balance across.
     #[serde(default)]
     pub backends: Vec<BackendConfig>,
@@ -850,6 +934,23 @@ pub fn validate_config(config: &LbConfig) -> Result<(), ConfigError> {
     if let Some(rt) = config.runtime.as_ref() {
         validate_runtime(rt)?;
     }
+    // ROUND-8 OPS-02/OPS-10: cross-check that each listener's
+    // *effective* jitter does not exceed its *effective* drain
+    // budget once inheritance from [runtime] is resolved. This
+    // catches the case where a listener sets drain_jitter_ms but
+    // inherits a smaller [runtime].drain_timeout_ms (validate_listener
+    // alone can't see the runtime block).
+    for (i, listener) in config.listeners.iter().enumerate() {
+        let eff_timeout = listener.effective_drain_timeout_ms(config.runtime.as_ref());
+        let eff_jitter = listener.effective_drain_jitter_ms(config.runtime.as_ref());
+        if eff_jitter > eff_timeout {
+            return Err(ConfigError::Validation(format!(
+                "listener {i} effective drain_jitter_ms={eff_jitter} exceeds \
+                 effective drain_timeout_ms={eff_timeout} after [runtime] \
+                 inheritance (jitter must be <= the drain budget)"
+            )));
+        }
+    }
     if let Some(obs) = config.observability.as_ref() {
         validate_observability(obs)?;
     }
@@ -898,6 +999,19 @@ fn validate_runtime(rt: &RuntimeConfig) -> Result<(), ConfigError> {
             "runtime.drain_timeout_ms={} out of range 100..=300000",
             rt.drain_timeout_ms
         )));
+    }
+    // ROUND-8 OPS-02: gateway-level jitter ceiling, when explicitly
+    // set, must be 0..=drain_timeout_ms (jitter cannot exceed the
+    // budget it is subdividing). `None` derives drain_timeout_ms/4
+    // and is always in range by construction.
+    if let Some(j) = rt.drain_jitter_ms {
+        if j > rt.drain_timeout_ms {
+            return Err(ConfigError::Validation(format!(
+                "runtime.drain_jitter_ms={j} exceeds runtime.drain_timeout_ms={} \
+                 (jitter must be <= the drain budget)",
+                rt.drain_timeout_ms
+            )));
+        }
     }
     // CODE-2-03 Wave 2c: settle window may be 0 (skip the sleep) but
     // is capped at 30 s — beyond that operators are mis-using the
@@ -1027,6 +1141,30 @@ fn validate_listener(i: usize, listener: &ListenerConfig) -> Result<(), ConfigEr
     validate_grpc_block(i, protocol, listener)?;
     validate_http_timeouts(i, listener)?;
     validate_backend_list(i, listener)?;
+    // ROUND-8 OPS-10: per-listener drain budget override must satisfy
+    // the same 100..=300_000 ms range as the gateway-level key.
+    if let Some(t) = listener.drain_timeout_ms {
+        if !(100..=300_000).contains(&t) {
+            return Err(ConfigError::Validation(format!(
+                "listener {i} drain_timeout_ms={t} out of range 100..=300000"
+            )));
+        }
+    }
+    // ROUND-8 OPS-02: per-listener jitter override must be in
+    // 0..=effective-listener-drain-timeout. When the listener does
+    // not override drain_timeout_ms the effective bound depends on
+    // the [runtime] block (cross-checked in validate_config); here we
+    // bound it by the per-listener override when present, else the
+    // absolute 300_000 ms ceiling.
+    if let Some(j) = listener.drain_jitter_ms {
+        let upper = listener.drain_timeout_ms.unwrap_or(300_000);
+        if j > upper {
+            return Err(ConfigError::Validation(format!(
+                "listener {i} drain_jitter_ms={j} exceeds the effective \
+                 drain_timeout_ms={upper} (jitter must be <= drain budget)"
+            )));
+        }
+    }
     Ok(())
 }
 
@@ -1300,6 +1438,8 @@ protocol = "tcp"
                 h2_security: None,
                 websocket: None,
                 grpc: None,
+                drain_timeout_ms: None,
+                drain_jitter_ms: None,
                 backends: vec![],
             }],
             runtime: None,
@@ -1323,6 +1463,8 @@ protocol = "tcp"
                 h2_security: None,
                 websocket: None,
                 grpc: None,
+                drain_timeout_ms: None,
+                drain_jitter_ms: None,
                 backends: vec![],
             }],
             runtime: None,
@@ -1346,6 +1488,8 @@ protocol = "tcp"
                 h2_security: None,
                 websocket: None,
                 grpc: None,
+                drain_timeout_ms: None,
+                drain_jitter_ms: None,
                 backends: vec![BackendConfig {
                     address: String::new(),
                     protocol: "tcp".into(),
@@ -1417,6 +1561,8 @@ address = "127.0.0.1:3000"
                 h2_security: None,
                 websocket: None,
                 grpc: None,
+                drain_timeout_ms: None,
+                drain_jitter_ms: None,
                 backends: vec![],
             }],
             runtime: None,
@@ -1440,6 +1586,8 @@ address = "127.0.0.1:3000"
                 h2_security: None,
                 websocket: None,
                 grpc: None,
+                drain_timeout_ms: None,
+                drain_jitter_ms: None,
                 backends: vec![],
             }],
             runtime: None,
@@ -1468,6 +1616,8 @@ address = "127.0.0.1:3000"
                 h2_security: None,
                 websocket: None,
                 grpc: None,
+                drain_timeout_ms: None,
+                drain_jitter_ms: None,
                 backends: vec![],
             }],
             runtime: None,
@@ -1496,6 +1646,8 @@ address = "127.0.0.1:3000"
                 h2_security: None,
                 websocket: None,
                 grpc: None,
+                drain_timeout_ms: None,
+                drain_jitter_ms: None,
                 backends: vec![],
             }],
             runtime: None,
@@ -1544,6 +1696,8 @@ protocol = "h1"
                 h2_security: None,
                 websocket: None,
                 grpc: None,
+                drain_timeout_ms: None,
+                drain_jitter_ms: None,
                 backends: vec![],
             }],
             runtime: None,
@@ -1573,6 +1727,8 @@ protocol = "h1"
                 h2_security: None,
                 websocket: None,
                 grpc: None,
+                drain_timeout_ms: None,
+                drain_jitter_ms: None,
                 backends: vec![],
             }],
             runtime: None,
@@ -1596,6 +1752,8 @@ protocol = "h1"
                 h2_security: None,
                 websocket: None,
                 grpc: None,
+                drain_timeout_ms: None,
+                drain_jitter_ms: None,
                 backends: vec![BackendConfig {
                     address: "127.0.0.1:3000".into(),
                     protocol: "gopher".into(),
@@ -1654,6 +1812,8 @@ address = "127.0.0.1:3000"
                 h2_security: None,
                 websocket: None,
                 grpc: None,
+                drain_timeout_ms: None,
+                drain_jitter_ms: None,
                 backends: vec![BackendConfig {
                     address: "127.0.0.1:3000".into(),
                     protocol: "tcp".into(),
@@ -1692,6 +1852,8 @@ address = "127.0.0.1:3000"
                 h2_security: None,
                 websocket: None,
                 grpc: None,
+                drain_timeout_ms: None,
+                drain_jitter_ms: None,
                 backends: vec![],
             }],
             runtime: None,
@@ -1723,6 +1885,8 @@ address = "127.0.0.1:3000"
                 h2_security: None,
                 websocket: None,
                 grpc: None,
+                drain_timeout_ms: None,
+                drain_jitter_ms: None,
                 backends: vec![BackendConfig {
                     address: "127.0.0.1:3000".into(),
                     protocol: "tcp".into(),
@@ -1757,6 +1921,8 @@ address = "127.0.0.1:3000"
                 h2_security: None,
                 websocket: None,
                 grpc: None,
+                drain_timeout_ms: None,
+                drain_jitter_ms: None,
                 backends: vec![BackendConfig {
                     address: "127.0.0.1:3000".into(),
                     protocol: "tcp".into(),
@@ -1808,6 +1974,8 @@ xdp_interface = "eth0"
                 h2_security: None,
                 websocket: None,
                 grpc: None,
+                drain_timeout_ms: None,
+                drain_jitter_ms: None,
                 backends: vec![],
             }],
             runtime: Some(RuntimeConfig {
@@ -1816,6 +1984,7 @@ xdp_interface = "eth0"
                 xdp_mode: XdpModeChoice::Auto,
                 drain_timeout_ms: 10_000,
                 readiness_settle_ms: 1_000,
+                drain_jitter_ms: None,
                 handshake_timeout_ms: 5_000,
                 max_inflight_connections: 65_536,
                 connect_timeout_ms: 5_000,
@@ -1845,6 +2014,8 @@ xdp_interface = "eth0"
                 h2_security: None,
                 websocket: None,
                 grpc: None,
+                drain_timeout_ms: None,
+                drain_jitter_ms: None,
                 backends: vec![],
             }],
             runtime: Some(RuntimeConfig {
@@ -1853,6 +2024,7 @@ xdp_interface = "eth0"
                 xdp_mode: XdpModeChoice::Auto,
                 drain_timeout_ms: 10_000,
                 readiness_settle_ms: 1_000,
+                drain_jitter_ms: None,
                 handshake_timeout_ms: 5_000,
                 max_inflight_connections: 65_536,
                 connect_timeout_ms: 5_000,
@@ -1934,6 +2106,8 @@ address = "127.0.0.1:3000"
                 h2_security: None,
                 websocket: Some(WebsocketConfig::default()),
                 grpc: None,
+                drain_timeout_ms: None,
+                drain_jitter_ms: None,
                 backends: vec![],
             }],
             runtime: None,
@@ -1983,6 +2157,8 @@ address = "127.0.0.1:3000"
                 h2_security: None,
                 websocket: None,
                 grpc: Some(GrpcListenerConfig::default()),
+                drain_timeout_ms: None,
+                drain_jitter_ms: None,
                 backends: vec![],
             }],
             runtime: None,
@@ -1991,6 +2167,144 @@ address = "127.0.0.1:3000"
             security: None,
         };
         assert!(validate_config(&config).is_err());
+    }
+
+    // ── ROUND-8 OPS-10 / OPS-02: per-listener drain budget + jitter ──
+
+    fn base_runtime() -> RuntimeConfig {
+        RuntimeConfig {
+            xdp_enabled: false,
+            xdp_interface: None,
+            xdp_mode: XdpModeChoice::Auto,
+            drain_timeout_ms: 10_000,
+            readiness_settle_ms: 1_000,
+            drain_jitter_ms: None,
+            handshake_timeout_ms: 5_000,
+            max_inflight_connections: 65_536,
+            connect_timeout_ms: 5_000,
+            per_ip_connection_cap: 1_024,
+            tls: None,
+            watchdog: None,
+            header_underscore_policy: HeaderUnderscorePolicy::Reject,
+        }
+    }
+
+    fn min_listener(addr: &str) -> ListenerConfig {
+        ListenerConfig {
+            address: addr.into(),
+            protocol: "tcp".into(),
+            tls: None,
+            quic: None,
+            alt_svc: None,
+            http: None,
+            h2_security: None,
+            websocket: None,
+            grpc: None,
+            drain_timeout_ms: None,
+            drain_jitter_ms: None,
+            backends: vec![BackendConfig {
+                address: "127.0.0.1:9000".into(),
+                protocol: "tcp".into(),
+                weight: 1,
+                tls_ca_path: None,
+                tls_verify_hostname: None,
+                tls_verify_peer: true,
+            }],
+        }
+    }
+
+    #[test]
+    fn ops10_override_takes_precedence_over_runtime() {
+        let mut l = min_listener("0.0.0.0:443");
+        l.drain_timeout_ms = Some(300_000);
+        let rt = RuntimeConfig {
+            drain_timeout_ms: 10_000,
+            ..base_runtime()
+        };
+        // Per-listener override wins over the [runtime] default.
+        assert_eq!(l.effective_drain_timeout_ms(Some(&rt)), 300_000);
+        // No override → inherit [runtime].
+        let l2 = min_listener("0.0.0.0:80");
+        assert_eq!(l2.effective_drain_timeout_ms(Some(&rt)), 10_000);
+        // No [runtime] block → lb-config default.
+        assert_eq!(l2.effective_drain_timeout_ms(None), 10_000);
+    }
+
+    #[test]
+    fn ops02_jitter_default_is_quarter_of_budget() {
+        let l = min_listener("0.0.0.0:80");
+        let rt = RuntimeConfig {
+            drain_timeout_ms: 20_000,
+            drain_jitter_ms: None,
+            ..base_runtime()
+        };
+        // Derived: drain_timeout_ms / 4.
+        assert_eq!(rt.effective_drain_jitter_ms(), 5_000);
+        assert_eq!(l.effective_drain_jitter_ms(Some(&rt)), 5_000);
+        // Explicit 0 disables jitter for the listener.
+        let mut l0 = min_listener("0.0.0.0:81");
+        l0.drain_jitter_ms = Some(0);
+        assert_eq!(l0.effective_drain_jitter_ms(Some(&rt)), 0);
+    }
+
+    #[test]
+    fn ops10_per_listener_timeout_range_rejected() {
+        let mut l = min_listener("0.0.0.0:80");
+        l.drain_timeout_ms = Some(50); // below 100 floor
+        let cfg = LbConfig {
+            listeners: vec![l],
+            runtime: None,
+            observability: None,
+            admin: None,
+            security: None,
+        };
+        assert!(validate_config(&cfg).is_err());
+    }
+
+    #[test]
+    fn ops02_listener_jitter_exceeding_inherited_budget_rejected() {
+        // Listener sets a big jitter but inherits a small [runtime]
+        // budget — the validate_config cross-check must reject it.
+        let mut l = min_listener("0.0.0.0:80");
+        l.drain_jitter_ms = Some(9_000);
+        let rt = RuntimeConfig {
+            drain_timeout_ms: 5_000,
+            ..base_runtime()
+        };
+        let cfg = LbConfig {
+            listeners: vec![l],
+            runtime: Some(rt),
+            observability: None,
+            admin: None,
+            security: None,
+        };
+        let err = validate_config(&cfg).unwrap_err();
+        assert!(matches!(err, ConfigError::Validation(_)));
+    }
+
+    #[test]
+    fn ops02_gateway_jitter_exceeding_budget_rejected() {
+        let rt = RuntimeConfig {
+            drain_timeout_ms: 5_000,
+            drain_jitter_ms: Some(9_000),
+            ..base_runtime()
+        };
+        let cfg = LbConfig {
+            listeners: vec![min_listener("0.0.0.0:80")],
+            runtime: Some(rt),
+            observability: None,
+            admin: None,
+            security: None,
+        };
+        assert!(validate_config(&cfg).is_err());
+    }
+
+    #[test]
+    fn ops11_readiness_settle_default_is_kubelet_aligned() {
+        // Regression guard for OPS-11: the default must be one full
+        // kubelet probe period (10 s) + margin.
+        assert_eq!(default_readiness_settle_ms(), 11_000);
+        assert!(default_readiness_settle_ms() <= 30_000); // still in range
     }
 
     #[test]
@@ -2006,6 +2320,8 @@ address = "127.0.0.1:3000"
                 h2_security: None,
                 websocket: None,
                 grpc: None,
+                drain_timeout_ms: None,
+                drain_jitter_ms: None,
                 backends: vec![],
             }],
             runtime: None,

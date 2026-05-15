@@ -72,6 +72,8 @@ fn mixed_protocol_listener_yields_h1_proxy_with_h2_pool_and_round_robin_picker()
         h2_security: None,
         websocket: None,
         grpc: None,
+        drain_timeout_ms: None,
+        drain_jitter_ms: None,
         backends: vec![
             BackendConfig {
                 address: "127.0.0.1:9001".to_owned(),

@@ -30,6 +30,8 @@ This produces a single L4 TCP listener on port 8080 that load-balances round-rob
 |-----|------|---------|:------:|-------------|
 | `address` | `String` (socketaddr or `host:port`) | (required) | restart | Bind address. IPv6 literals must be bracketed: `[::1]:8080`. |
 | `protocol` | `String` (`"tcp"`) | `"tcp"` | restart | Listener protocol. Currently only TCP is wired in `crates/lb/src/main.rs`; UDP / QUIC / HTTP are scaffolded but not yet served from the binary. |
+| `drain_timeout_ms` | `Option<u64>` (`100..=300000`) | inherit `[runtime].drain_timeout_ms` | restart | ROUND-8 OPS-10: per-listener graceful-drain budget. Set per streaming listener (gRPC bidi / WS = 300000, SSE / long-poll = 60000). See RUNBOOK "Tuning the drain budget". |
+| `drain_jitter_ms` | `Option<u64>` (`0..=`effective `drain_timeout_ms`) | inherit derived `[runtime]` jitter | restart | ROUND-8 OPS-02: per-listener drain-cancel jitter ceiling. `0` disables jitter for this listener. |
 | `backends` | array | `[]` | SIGHUP | Backend pool (see below). A listener with an empty pool logs a warning and is skipped. |
 
 ### `[[listeners.backends]]`
