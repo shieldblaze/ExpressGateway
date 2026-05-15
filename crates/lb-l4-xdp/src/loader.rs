@@ -21,9 +21,10 @@ use aya::{
         HashMap as AyaHashMap, Map, MapData, MapError,
         lpm_trie::{Key as LpmKey, LpmTrie},
     },
-    programs::{ProgramError, Xdp, XdpFlags},
+    programs::{ProgramError, Xdp, XdpFlags, xdp::XdpLinkId},
 };
 use aya_obj::{Object, ParseError};
+use std::collections::HashMap as StdHashMap;
 
 // SEC-2-12: belt-and-suspenders ELF license check. We parse the ELF
 // *again* with `object` (a kernel-free, no_std-friendly parser) so the
@@ -661,6 +662,19 @@ pub enum XdpLoaderError {
     #[error("no XDP program attached to {0}")]
     NoProgramAttached(String),
 
+    /// ROUND8-L4-12: the netlink `RTM_GETLINK` query itself failed
+    /// (socket / send / recv error, or the interface name did not
+    /// resolve to an ifindex). The caller cannot prove the kernel
+    /// attach state, so `attach_replacing` / `detach_verifying` must
+    /// NOT proceed blind — surface the underlying OS error.
+    #[error("XDP netlink query failed for {iface}: {detail}")]
+    XdpQueryFailed {
+        /// Interface name.
+        iface: String,
+        /// Stringified underlying `io::Error`.
+        detail: String,
+    },
+
     /// ROUND8-L4-12: `detach_verifying` returned successfully but
     /// the post-detach kernel query still shows a program attached.
     /// Should be impossible on a healthy kernel; treat as a bug
@@ -777,6 +791,13 @@ pub enum XdpModeChoice {
 #[derive(Debug)]
 pub struct XdpLoader {
     ebpf: Ebpf,
+    /// ROUND8-L4-12: link ids returned by `xdp.attach()`, keyed by
+    /// `prog_name`. Retained so `detach_verifying` can issue a REAL
+    /// `Xdp::detach(link_id)` (aya 0.13.1's detach consumes the id by
+    /// value — it derives no `Clone`) instead of relying solely on
+    /// drop semantics. Empty until `attach`/`attach_with_fallback`
+    /// succeeds.
+    attached_links: StdHashMap<String, XdpLinkId>,
 }
 
 impl XdpLoader {
@@ -854,7 +875,10 @@ impl XdpLoader {
             loader.map_pin_path(p);
         }
         let ebpf = loader.load(elf)?;
-        Ok(Self { ebpf })
+        Ok(Self {
+            ebpf,
+            attached_links: StdHashMap::new(),
+        })
     }
 
     /// EBPF-2-08: hand the STATS per-CPU array to
@@ -1054,9 +1078,14 @@ impl XdpLoader {
         let xdp: &mut Xdp = program
             .try_into()
             .map_err(|_| XdpLoaderError::NotXdp(prog_name.to_owned()))?;
-        // attach() returns XdpLinkId; we drop it intentionally — aya keeps the
-        // link alive as long as the Xdp handle exists inside self.ebpf.
-        let _link_id = xdp.attach(ifname, mode.to_flags())?;
+        // ROUND8-L4-12: retain the XdpLinkId so `detach_verifying` can
+        // issue a real `Xdp::detach(link_id)`. aya keeps the link
+        // alive as long as the handle exists inside self.ebpf; the
+        // explicit detach is what lets the drain coordinator tear the
+        // program down deterministically and then *verify* (via the
+        // real netlink query) that the interface is bare.
+        let link_id = xdp.attach(ifname, mode.to_flags())?;
+        self.attached_links.insert(prog_name.to_owned(), link_id);
         Ok(())
     }
 
@@ -1108,6 +1137,11 @@ impl XdpLoader {
 
         let mut attempts: u8 = 0;
         let mut last_err: Option<String> = None;
+        // ROUND8-L4-12: (prog_name, link_id, mode) captured on the
+        // first successful attach; the link id is moved into
+        // `self.attached_links` only after the `xdp`/`self.ebpf`
+        // borrow released (XdpLinkId is not Clone).
+        let mut succeeded: Option<(String, XdpLinkId, XdpMode)> = None;
         for &mode in order {
             attempts = attempts.saturating_add(1);
             // ROUND8-L4-05: static NIC blocklist gate. BEFORE
@@ -1137,7 +1171,7 @@ impl XdpLoader {
                 }
             }
             match xdp.attach(ifname, mode.to_flags()) {
-                Ok(_link_id) => {
+                Ok(link_id) => {
                     let label = mode.to_label();
                     crate::stats_export::record_attach_mode(label);
                     tracing::info!(
@@ -1146,7 +1180,12 @@ impl XdpLoader {
                         attempts,
                         "xdp attached"
                     );
-                    return Ok(AttachOutcome { mode, attempts });
+                    // The `xdp` borrow of `self.ebpf` ends when this
+                    // block returns; record the link id AFTER it via
+                    // a deferred local so `detach_verifying` can issue
+                    // a real `Xdp::detach` (ROUND8-L4-12).
+                    succeeded = Some((prog_name.to_owned(), link_id, mode));
+                    break;
                 }
                 Err(e) if is_unsupported_mode(&e) => {
                     tracing::warn!(
@@ -1160,6 +1199,10 @@ impl XdpLoader {
                 }
                 Err(e) => return Err(XdpLoaderError::from(e)),
             }
+        }
+        if let Some((name, link_id, mode)) = succeeded {
+            self.attached_links.insert(name, link_id);
+            return Ok(AttachOutcome { mode, attempts });
         }
         Err(XdpLoaderError::AllAttachModesExhausted(
             last_err.unwrap_or_else(|| "no attach attempts made".to_owned()),
@@ -1323,20 +1366,25 @@ impl XdpLoader {
     /// `bpf_prog_info.id` for the program currently bound to the
     /// IFLA_XDP attribute.
     pub fn query_xdp(iface: &str) -> Result<XdpQueryResult, XdpLoaderError> {
-        // The query is implemented via netlink RTM_GETLINK over an
-        // AF_NETLINK socket — aya 0.13 does not expose a public
-        // `bpf_xdp_query` wrapper. The detailed implementation lands
-        // alongside the drain coordinator (OPS-04) which is the only
-        // caller; this signature is the cross-plan contract.
-        //
-        // Until the netlink path lands, return `prog_id: None` for
-        // any interface. Callers that depend on the actual kernel
-        // state must gate on `cfg(test)` or wait for the netlink
-        // implementation. The signature shape is locked in by the
-        // tests in `tests/round8_attach_replace.rs`.
-        let _ = iface;
+        // ROUND8-L4-12: REAL kernel query via netlink RTM_GETLINK over
+        // an AF_NETLINK / NETLINK_ROUTE socket (aya 0.13.1 exposes no
+        // public `bpf_xdp_query` wrapper). This is what closes the
+        // EBUSY-on-redeploy hazard: `attach_replacing` /
+        // `detach_verifying` now see the actual kernel-visible
+        // `prog_id` bound to the interface's IFLA_XDP attribute
+        // instead of the old `prog_id: None` stub (which made
+        // ownership/teardown verification vacuous). The byte-parser is
+        // unit-tested against a captured real netlink blob in
+        // `tests/round8_netlink_xdp_query.rs`; the live socket path
+        // (a *read*) needs no CAP_NET_ADMIN.
+        let prog_id = crate::netlink_xdp::query_xdp_prog_id(iface).map_err(|e| {
+            XdpLoaderError::XdpQueryFailed {
+                iface: iface.to_owned(),
+                detail: e.to_string(),
+            }
+        })?;
         Ok(XdpQueryResult {
-            prog_id: None,
+            prog_id,
             mode: None,
         })
     }
@@ -1365,14 +1413,33 @@ impl XdpLoader {
         mode: XdpMode,
         old_prog_id: u32,
     ) -> Result<AttachOutcome, XdpLoaderError> {
+        // ROUND8-L4-12: the ownership check is now REAL — `query_xdp`
+        // issues an actual RTM_GETLINK and returns the kernel-visible
+        // prog_id, so we genuinely refuse to clobber a third-party
+        // XDP program (e.g. a co-resident Cilium) instead of the old
+        // vacuous `prog_id: None` stub that let everything through.
         let cur = Self::query_xdp(iface)?;
         match cur.prog_id {
             Some(id) if id == old_prog_id => {
-                // Verified ownership; proceed to attach. The kernel
-                // BPF_F_REPLACE flag would be set here when the
-                // netlink implementation lands; until then, the
-                // legacy attach path is used and atomic-replace is
-                // approximated by drop-then-attach.
+                // Verified WE own the interface. Detach our previous
+                // link first (real `Xdp::detach`), then re-attach.
+                // This is the close for the EBUSY-on-redeploy hazard:
+                // a fresh attach onto an interface that still has our
+                // old program returns EBUSY; detaching first makes the
+                // replace deterministic. (A single-syscall
+                // BPF_F_REPLACE is the ideal but aya 0.13.1 exposes no
+                // wrapper; detach-then-attach with the real pre-check
+                // is the correct close given the dependency floor.)
+                if let Some(link_id) = self.attached_links.remove(prog_name) {
+                    let program = self
+                        .ebpf
+                        .program_mut(prog_name)
+                        .ok_or_else(|| XdpLoaderError::ProgramNotFound(prog_name.to_owned()))?;
+                    let xdp: &mut Xdp = program
+                        .try_into()
+                        .map_err(|_| XdpLoaderError::NotXdp(prog_name.to_owned()))?;
+                    xdp.detach(link_id)?;
+                }
                 self.attach(prog_name, iface, mode)?;
                 Ok(AttachOutcome { mode, attempts: 1 })
             }
@@ -1406,23 +1473,42 @@ impl XdpLoader {
     /// aya detach call itself.
     pub fn detach_verifying(
         &mut self,
-        _prog_name: &str,
+        prog_name: &str,
         iface: &str,
         expected_prog_id: u32,
     ) -> Result<(), XdpLoaderError> {
+        // Step 1: REAL pre-detach query (RTM_GETLINK). Confirms we own
+        // the interface before touching it.
         let pre = Self::query_xdp(iface)?;
         match pre.prog_id {
             Some(id) if id == expected_prog_id => {
-                // Drop our Xdp handle so aya detaches the link.
-                // Aya tracks the link inside `self.ebpf`; dropping
-                // the program-mut binding triggers the detach.
-                // The netlink-aware verification step lands when
-                // `query_xdp` ships.
+                // Step 2: REAL detach. The verifier (L4-12) flagged
+                // that the old body was an empty block with NO
+                // `xdp.detach()` call — it could not actually detach
+                // anything. We now issue the real
+                // `Xdp::detach(link_id)` using the link id retained at
+                // attach time. If we have no tracked link (program was
+                // pin-loaded out of band) fall through to dropping
+                // aya's managed link by removing the program.
+                if let Some(link_id) = self.attached_links.remove(prog_name) {
+                    let program = self
+                        .ebpf
+                        .program_mut(prog_name)
+                        .ok_or_else(|| XdpLoaderError::ProgramNotFound(prog_name.to_owned()))?;
+                    let xdp: &mut Xdp = program
+                        .try_into()
+                        .map_err(|_| XdpLoaderError::NotXdp(prog_name.to_owned()))?;
+                    xdp.detach(link_id)?;
+                }
             }
             Some(id) => return Err(XdpLoaderError::ForeignProgramAttached(id)),
             None => return Err(XdpLoaderError::NoProgramAttached(iface.to_owned())),
         }
 
+        // Step 3: REAL post-detach query. Now that `query_xdp` is a
+        // genuine RTM_GETLINK (not the old `None` stub), a surviving
+        // prog_id is a true kernel-bug / racing-attacher signal — not
+        // an artefact of the stub always reporting `None`.
         let post = Self::query_xdp(iface)?;
         if let Some(prog_id) = post.prog_id {
             return Err(XdpLoaderError::DetachLeftProgramAttached {

@@ -41,6 +41,13 @@ pub mod bpffs;
 /// `#![cfg(target_os = "linux")]` inner attribute gates the body.
 pub mod nic_compat;
 
+/// ROUND8-L4-12: real RTM_GETLINK XDP prog-id query over a raw
+/// `AF_NETLINK` socket (closes the EBUSY-on-redeploy hazard). The
+/// module's own `#![cfg(target_os = "linux")]` inner attribute gates
+/// the body (same pattern as `bpffs`), so no outer cfg here; the
+/// byte-parser is `pub` for the CI proof test.
+pub mod netlink_xdp;
+
 /// EBPF-2-04 / EBPF-2-05 / EBPF-2-08: lock-step telemetry surface
 /// between the eBPF data plane and userspace observability (rel's
 /// `lb-observability` consumes via the `pub fn` accessors).

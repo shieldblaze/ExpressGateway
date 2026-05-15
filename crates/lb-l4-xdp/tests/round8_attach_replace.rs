@@ -18,15 +18,21 @@
 use lb_l4_xdp::loader::{XdpLoader, XdpLoaderError, XdpMode, XdpQueryResult};
 
 #[test]
-fn query_returns_default_for_clean_iface() {
-    // The query API contract: `prog_id == None` for any interface
-    // not yet wired to an XDP program. Until netlink lands, the
-    // function returns this same shape unconditionally; the
-    // signature here is the cross-plan contract that won't move.
-    let r = XdpLoader::query_xdp("dummy-nonexistent");
-    let res: XdpQueryResult = r.expect("query_xdp must not error on a stub call");
-    assert_eq!(res.prog_id, None);
-    assert_eq!(res.mode, None);
+fn query_unknown_iface_is_a_loud_error_not_a_silent_none() {
+    // ROUND8-L4-12: `query_xdp` is now a REAL RTM_GETLINK netlink
+    // round-trip (no more `prog_id: None` stub). An interface that
+    // does not exist resolves no ifindex, so the contract is a LOUD
+    // `XdpQueryFailed` (NotFound) — NOT a silent `Ok(None)` which
+    // previously made `detach_verifying`/`attach_replacing` operate
+    // blind. Failing-loud here is exactly what stops the drain
+    // coordinator from "verifying" a teardown against a stub.
+    let r = XdpLoader::query_xdp("eg-nonexistent-iface-zzz");
+    match r {
+        Err(XdpLoaderError::XdpQueryFailed { iface, .. }) => {
+            assert_eq!(iface, "eg-nonexistent-iface-zzz");
+        }
+        other => panic!("expected XdpQueryFailed for a nonexistent iface, got {other:?}"),
+    }
 }
 
 #[test]
