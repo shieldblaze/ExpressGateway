@@ -233,6 +233,41 @@ not reach. Per-connection tasks were SIGKILL-equivalent aborted.
 3. If the increase happens outside deploys, the binary is restarting
    unexpectedly — cross-reference `LbPanic`.
 
+### LbShutdownSlow — drains routinely brush the budget
+
+**Trigger**:
+```promql
+histogram_quantile(0.99,
+  sum by (le, listener) (
+    rate(shutdown_drain_seconds_listener_bucket{phase="InFlightDrain"}[15m])
+  )
+) > 0.8 * (
+  max by (listener) (lb_drain_timeout_ms_listener) / 1000
+)
+```
+**Severity**: warn
+**Wired**: yes — `shutdown_drain_seconds_{global,listener}` is emitted
+per drain phase by the `MetricsDrainObserver` in
+`crates/lb/src/main.rs` (ROUND-8 OPS-04+L4-12 coordinator; histogram
+contract is OPS-03). `lb_drain_timeout_ms_listener` is the
+build-info-style per-listener-budget gauge (ROUND-8 OPS-10).
+**Meaning**: the p99 in-flight-drain phase is within 20 % of the
+configured budget — drains are *completing* but only just; a small
+latency regression will tip them into truncating connections
+(`LbShutdownAborted`).
+**Diagnose**:
+1. Identify the listener via the `listener` label.
+2. Compare the p99 to that listener's effective budget
+   (`lb_drain_timeout_ms_listener{listener=...}`). If the listener
+   carries streaming/long-poll traffic, raise its per-listener
+   `[[listeners]].drain_timeout_ms` (ROUND-8 OPS-10) — see "Tuning
+   the drain budget" below.
+3. Histogram families: `shutdown_drain_seconds_global{phase,outcome}`
+   covers ReadinessSettle / XdpDetach / Total;
+   `shutdown_drain_seconds_listener{phase,outcome,listener}` covers
+   ListenerCancel / InFlightDrain. Two MetricVecs by design so the
+   non-listener-scoped phases don't carry an empty `listener` label.
+
 ### LbAcceptSaturation — listener accept queue near cap
 
 **Trigger**: `accept_inflight / max_inflight > 0.8 for 2m`
@@ -460,6 +495,7 @@ journalctl -u expressgateway -r | head -20    # most recent startup
 |-----------------------------|-----------------------------------------------------------------|
 | `LbPanic`                   | `journalctl -u expressgateway -g 'panic' -n 50`                 |
 | `LbShutdownAborted`         | `journalctl -u expressgateway -g 'drain deadline elapsed'`      |
+| `LbShutdownSlow`            | `curl 127.0.0.1:9090/metrics \| grep shutdown_drain_seconds`    |
 | `LbAcceptSaturation`        | `lsof -p $(pidof expressgateway) \| wc -l`                       |
 | `LbAcceptErrors`            | `journalctl -u expressgateway -g 'accept error'`                |
 | `LbAcceptShed`              | Same as `LbAcceptSaturation`                                    |
