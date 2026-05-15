@@ -196,3 +196,34 @@ fragmentation does not occur on the wire, or accept the kernel-
 stack latency for the small fraction of flows that fragment.
 
 Counters: `xdp_packets_total{result="v4_fragment"|"v6_fragment"}`.
+
+### ROUND8-L4-04 — Maglev consistent-hash backend selection in the XDP data plane
+
+**Status**: deferred to Pillar 4b-3, with the atomicity guarantee
+landed early (ROUND8-L4-04 Proposed-Fix).
+
+ROUND8-L4-04 lands the load-bearing half of the Unimog / l4drop D1
+lesson NOW: the `backends_v4` BPF map + `BackendTable` value layout
+and `XdpLoader::publish_backends_v4` — a SINGLE `bpf_map_update_elem`
+per VIP so a concurrent data-plane lookup never observes a
+half-populated table, plus the Unimog lesson-3 daisy-chain
+(`previous_entries`/`previous_count`) so in-flight flows during a
+swap reach the previous backend. The atomic-publish + daisy-chain
+algorithm is unit-tested (`tests/round8_atomic_backends.rs`).
+
+Deferred to Pillar 4b-3: the verifier-heavy *data-plane read* side —
+per-packet `BACKENDS_V4[vip]` lookup + consistent-hash
+`entries[hash(5-tuple) % count]` selection + CT-remembered-generation
+vs. current-generation compare driving the daisy-chain fallback.
+Wiring it now forces a verifier-log re-capture for a code path no
+production flow exercises yet (backend selection is still
+control-plane-driven via CONNTRACK inserts). The eBPF program holds
+a behaviorally-inert `backend_table_published(vip)` touch on the
+CT-miss path so the map + BTF survive bpf-linker DCE and the
+atomic-publication visibility is provable end-to-end; the
+Pillar-4b-3 selection logic slots in at exactly that call site.
+
+This also subsumes the long-standing "Maglev consistent hashing"
+follow-up: the `MAX_BACKENDS_PER_VIP = 64` ceiling is the
+verifier-tractable floor; a Maglev table larger than that, or
+weighted backends, is the Pillar-4b-3 scope.

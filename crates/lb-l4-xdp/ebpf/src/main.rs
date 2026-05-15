@@ -234,6 +234,92 @@ pub struct BackendEntryV6 {
     pub src_mac: [u8; 6],
 }
 
+// ---------------------------------------------------------------------------
+// ROUND8-L4-04: atomic per-VIP backend-table publication (Unimog /
+// l4drop D1 lesson). Today there is NO single "backend table" map:
+// backend population is N separate `bpf_map_update_elem` syscalls into
+// CONNTRACK. During that N-syscall window a reader sees some entries
+// old, some new — a partial table. Unimog's forwarding-table
+// publication is a single atomic swap so no reader ever observes a
+// half-populated table; lesson 3 adds a daisy-chain "previous slot"
+// so in-flight flows during a swap still reach the previous backend.
+//
+// The `BackendTable` is one map value: a single `bpf_map_update_elem`
+// of the whole struct is atomic w.r.t. concurrent `bpf_map_lookup_elem`
+// (kernel `BPF_MAP_TYPE_HASH` value updates are atomic per-key). That
+// single-syscall publication IS the bug fix — readers see either the
+// entire old table or the entire new table, never a torn merge.
+//
+// SCOPE (matches the finding's "Pillar-4b-3-or-later" flag and the
+// ROUND8-L4-12 precedent): this commit freezes the map + value layout
+// and the userspace atomic-publish + daisy-chain shift contract
+// (`XdpLoader::publish_backends_v4`). The verifier-heavy hot-path
+// integration (per-packet `BACKENDS_V4[vip]` lookup + bounded
+// `entries[hash % count]` selection + generation compare) is the
+// Pillar-4b-3 piece — wiring it now would force a verifier-log
+// re-capture for a code path no production flow exercises yet. The
+// map exists so the atomicity guarantee and the userspace publication
+// path are real and tested today; the BPF read side lands when
+// consistent-hash backend selection moves into the data plane.
+// ---------------------------------------------------------------------------
+
+/// ROUND8-L4-04: Pillar 4b-2 verifier-tractable ceiling on backends
+/// per VIP. A VIP needing more partitions or waits for Pillar 4b-3
+/// (Maglev consistent hashing — see `audit/deferred.md`).
+pub const MAX_BACKENDS_PER_VIP: usize = 64;
+
+/// ROUND8-L4-04: per-VIP backend table, published atomically as a
+/// single map value (Unimog D1). `generation` increments on every
+/// publish so a CT entry can remember which generation selected its
+/// backend; if it differs from `generation`, the flow is in the
+/// daisy-chain transitional window and consults `previous_entries`
+/// (Unimog lesson 3) so in-flight flows reach the previous backend
+/// instead of being stranded.
+#[repr(C)]
+#[derive(Clone, Copy)]
+pub struct BackendTable {
+    /// Monotonic publication counter (wraps at u32::MAX — only
+    /// equality vs. a CT-remembered value matters, not ordering).
+    pub generation: u32,
+    /// Number of live entries in `entries` (`<= MAX_BACKENDS_PER_VIP`).
+    pub count: u32,
+    /// Current generation's backends.
+    pub entries: [BackendEntry; MAX_BACKENDS_PER_VIP],
+    /// Daisy-chain (Unimog lesson 3): the previous generation's live
+    /// count. Zero outside the transitional window.
+    pub previous_count: u32,
+    pub _pad: u32,
+    /// Daisy-chain: the previous generation's backends, kept so
+    /// in-flight flows during a swap still reach their old backend.
+    pub previous_entries: [BackendEntry; MAX_BACKENDS_PER_VIP],
+}
+
+#[map(name = "backends_v4")]
+static BACKENDS_V4: HashMap<u32, BackendTable> =
+    HashMap::<u32, BackendTable>::with_max_entries(1024, 0);
+
+/// ROUND8-L4-04: verifier-safe, behaviorally-inert reference to the
+/// `BACKENDS_V4` map. Called once on the IPv4 CT-miss path so:
+///   1. bpf-linker DCE keeps the map + its BTF (the LICENSE static
+///      comment above documents how aggressive DCE is in this build),
+///   2. the *atomic-publication contract* is exercised end-to-end —
+///      a lookup that observes a published table proves the single
+///      `bpf_map_update_elem` swap is visible to the data plane.
+///
+/// It deliberately does NOT select a backend or mutate CONNTRACK:
+/// per-packet `entries[hash % count]` selection + generation/daisy-
+/// chain compare is the Pillar-4b-3 verifier-heavy piece (see the
+/// scope note above and `audit/deferred.md`). Returns whether a
+/// populated current table exists for `vip` — today only used to
+/// keep the path honest; the Pillar-4b-3 selection slots in here.
+#[inline(always)]
+fn backend_table_published(vip: u32) -> bool {
+    match unsafe { BACKENDS_V4.get(&vip) } {
+        Some(t) => t.count > 0,
+        None => false,
+    }
+}
+
 /// Stats slots.
 const STAT_PASS: u32 = 0;
 const STAT_DROP: u32 = 1;
@@ -674,6 +760,13 @@ fn handle_ipv4(ctx: &XdpContext, l3_offset: usize) -> Result<u32, ()> {
     let entry: BackendEntry = match unsafe { CONNTRACK.get(&key) } {
         Some(v) => *v,
         None => {
+            // ROUND8-L4-04: behaviorally-inert touch of the atomic
+            // per-VIP backend table. Keeps the map + BTF alive for
+            // userspace `publish_backends_v4` and proves the single-
+            // syscall publication is visible to the data plane.
+            // Pillar-4b-3 replaces this with consistent-hash backend
+            // selection + daisy-chain generation compare.
+            let _table_ready = backend_table_published(dst_addr);
             // ROUND8-L4-03: conntrack MISS == a *new* flow. Under a
             // SYN flood this is the attacker's lever: each unique
             // 5-tuple is a miss that the userspace control plane

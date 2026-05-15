@@ -71,6 +71,13 @@ pub const NEW_FLOW_CAP_CFG_PIN_NAME: &str = "new_flow_cap_cfg";
 /// / observability tooling can find the pin.
 pub const NEW_FLOW_RATE_PIN_NAME: &str = "new_flow_rate";
 
+/// ROUND8-L4-04: pin filename of the atomic per-VIP backend table.
+/// Matches `#[map(name = "backends_v4")]` in `ebpf/src/main.rs`.
+/// `XdpLoader::publish_backends_v4` writes one `BackendTable` value
+/// per VIP key with a single `bpf_map_update_elem` (atomic swap;
+/// Unimog / l4drop D1).
+pub const BACKENDS_V4_PIN_NAME: &str = "backends_v4";
+
 /// Default bpffs root for the production deployment. The directory
 /// itself must be created with `0750` ownership of the LB uid:gid
 /// before the loader runs — see `crates/lb/src/xdp.rs` and the
@@ -399,6 +406,79 @@ const _: () = assert!(core::mem::size_of::<FlowKeyV6>() == FLOWKEY_V6_SIZE);
 const _: () = assert!(core::mem::size_of::<BackendEntry>() == BACKEND_ENTRY_SIZE);
 const _: () = assert!(core::mem::size_of::<BackendEntryV6>() == BACKEND_ENTRY_V6_SIZE);
 
+/// ROUND8-L4-04: verifier-tractable ceiling on backends per VIP.
+/// MUST equal `MAX_BACKENDS_PER_VIP` in
+/// `crates/lb-l4-xdp/ebpf/src/main.rs`.
+pub const MAX_BACKENDS_PER_VIP: usize = 64;
+
+/// ROUND8-L4-04: userspace mirror of the eBPF `BackendTable`. The
+/// whole struct is one BPF map value; `XdpLoader::publish_backends_v4`
+/// writes it with a SINGLE `bpf_map_update_elem` so a concurrent
+/// data-plane lookup sees either the entire old table or the entire
+/// new table — never a half-populated merge (Unimog / l4drop D1).
+/// `previous_*` is the Unimog lesson-3 daisy-chain: in-flight flows
+/// during a swap reach the previous backend instead of being
+/// stranded.
+///
+/// Layout MUST match the eBPF struct byte-for-byte (aya compares the
+/// Rust value size against the ELF's declared map value size).
+#[repr(C)]
+#[derive(Clone, Copy)]
+pub struct BackendTable {
+    /// Monotonic publication counter (wraps; only equality matters).
+    pub generation: u32,
+    /// Live entry count (`<= MAX_BACKENDS_PER_VIP`).
+    pub count: u32,
+    /// Current generation's backends.
+    pub entries: [BackendEntry; MAX_BACKENDS_PER_VIP],
+    /// Daisy-chain: previous generation's live count (0 outside the
+    /// transitional window).
+    pub previous_count: u32,
+    /// Explicit pad so the struct size is identical on both sides.
+    pub pad: u32,
+    /// Daisy-chain: previous generation's backends.
+    pub previous_entries: [BackendEntry; MAX_BACKENDS_PER_VIP],
+}
+
+// SAFETY: `#[repr(C)] + Copy + 'static`; matches the eBPF layout
+// (asserted below). `BackendEntry: Pod` already.
+unsafe impl Pod for BackendTable {}
+
+impl BackendTable {
+    /// An all-zero table: generation 0, no entries. The sentinel for
+    /// "this VIP has never been published" — `publish_backends_v4`
+    /// reads `unwrap_or_default()` of this shape before the first
+    /// publish so the daisy-chain shift starts from a clean slate.
+    #[must_use]
+    pub const fn zeroed() -> Self {
+        const ZERO_ENTRY: BackendEntry = BackendEntry::new(0, 0, 0, [0u8; 6], [0u8; 6]);
+        Self {
+            generation: 0,
+            count: 0,
+            entries: [ZERO_ENTRY; MAX_BACKENDS_PER_VIP],
+            previous_count: 0,
+            pad: 0,
+            previous_entries: [ZERO_ENTRY; MAX_BACKENDS_PER_VIP],
+        }
+    }
+}
+
+impl Default for BackendTable {
+    fn default() -> Self {
+        Self::zeroed()
+    }
+}
+
+/// Expected wire size of [`BackendTable`]:
+/// `4 + 4 + 24*64 + 4 + 4 + 24*64 = 3088`.
+pub const BACKEND_TABLE_SIZE: usize = 4
+    + 4
+    + BACKEND_ENTRY_SIZE * MAX_BACKENDS_PER_VIP
+    + 4
+    + 4
+    + BACKEND_ENTRY_SIZE * MAX_BACKENDS_PER_VIP;
+const _: () = assert!(core::mem::size_of::<BackendTable>() == BACKEND_TABLE_SIZE);
+
 /// XDP attach mode, mirroring the kernel's `XDP_FLAGS_*` bits.
 ///
 /// `Skb` (generic mode) works on any interface and is the CI/dev default.
@@ -592,6 +672,15 @@ pub enum XdpLoaderError {
         /// Surviving prog_id (if any).
         prog_id: Option<u32>,
     },
+
+    /// ROUND8-L4-04: [`XdpLoader::publish_backends_v4`] was given more
+    /// than [`MAX_BACKENDS_PER_VIP`] entries. The `BackendTable` is a
+    /// fixed-size verifier-tractable value; a VIP needing more must
+    /// partition or wait for Pillar-4b-3 Maglev. Returned BEFORE any
+    /// map write so a too-large publish is a no-op (the live table is
+    /// untouched).
+    #[error("too many backends for one VIP: got {0}, max {max}", max = MAX_BACKENDS_PER_VIP)]
+    TooManyBackends(usize),
 }
 
 /// SEC-2-12: required value of the ELF `license` section.
@@ -804,6 +893,91 @@ impl XdpLoader {
             .max(1);
         let values = PerCpuValues::try_from(vec![cap; nr_cpus]).map_err(XdpLoaderError::Io)?;
         cfg.set(0, values, 0).map_err(XdpLoaderError::Map)?;
+        Ok(())
+    }
+
+    /// ROUND8-L4-04: typed accessor for the atomic per-VIP backend
+    /// table map.
+    ///
+    /// # Errors
+    ///
+    /// - [`XdpLoaderError::MapNotFound`]: the ELF did not declare
+    ///   `backends_v4` (stale BPF object — rebuild the ebpf crate).
+    /// - [`XdpLoaderError::Map`]: aya rejected the typed conversion
+    ///   (size mismatch between Rust-side [`BackendTable`] and the
+    ///   ELF's declared value size — the layout assertions in this
+    ///   module are the compile-time guard against that drift).
+    pub fn backends_v4_map(
+        &mut self,
+    ) -> Result<AyaHashMap<&mut MapData, u32, BackendTable>, XdpLoaderError> {
+        let map = self
+            .ebpf
+            .map_mut(BACKENDS_V4_PIN_NAME)
+            .ok_or(XdpLoaderError::MapNotFound(BACKENDS_V4_PIN_NAME))?;
+        AyaHashMap::try_from(map).map_err(Into::into)
+    }
+
+    /// ROUND8-L4-04: atomically publish a new backend set for `vip`
+    /// (Unimog / l4drop D1).
+    ///
+    /// The whole `BackendTable` value is written with a SINGLE
+    /// `bpf_map_update_elem` syscall, so a concurrent data-plane
+    /// lookup observes either the entire previous table or the entire
+    /// new table — never a half-populated merge. This replaces the
+    /// non-atomic "N separate inserts into CONNTRACK" pattern the
+    /// finding documents.
+    ///
+    /// Daisy-chain (Unimog lesson 3): the current generation's
+    /// `entries`/`count` are shifted into `previous_entries`/
+    /// `previous_count` before the new set is written, so flows that
+    /// were pinned to a now-old backend (and whose CT entry remembers
+    /// the old generation) can still be steered to the previous
+    /// backend during the transitional window. `lb-balancer`
+    /// schedules a follow-up publish with the previous slots cleared
+    /// after its drain-grace (out of scope of the loader).
+    ///
+    /// `generation` increments (wrapping) on every publish.
+    ///
+    /// # Errors
+    ///
+    /// - [`XdpLoaderError::TooManyBackends`]: `new_entries.len() >
+    ///   `[`MAX_BACKENDS_PER_VIP`] — returned BEFORE any map write,
+    ///   so the live table is untouched.
+    /// - [`XdpLoaderError::MapNotFound`] / [`XdpLoaderError::Map`]:
+    ///   propagated from [`XdpLoader::backends_v4_map`] / the
+    ///   `bpf_map_update_elem`.
+    pub fn publish_backends_v4(
+        &mut self,
+        vip: Ipv4Addr,
+        new_entries: &[BackendEntry],
+    ) -> Result<(), XdpLoaderError> {
+        if new_entries.len() > MAX_BACKENDS_PER_VIP {
+            return Err(XdpLoaderError::TooManyBackends(new_entries.len()));
+        }
+        let key = u32::from(vip).to_be();
+        let mut map = self.backends_v4_map()?;
+        // Read-modify-publish. The read is a point-in-time snapshot;
+        // the single insert below is the atomic swap. (There is one
+        // writer — the control plane — so no publish-publish race.)
+        let mut table = match map.get(&key, 0) {
+            Ok(t) => t,
+            Err(MapError::KeyNotFound) => BackendTable::zeroed(),
+            Err(e) => return Err(XdpLoaderError::Map(e)),
+        };
+        // Daisy-chain shift: current → previous (Unimog lesson 3).
+        table.previous_entries = table.entries;
+        table.previous_count = table.count;
+        // Repopulate `entries` from the new set; zero the tail so a
+        // shrink cannot leave a stale backend addressable.
+        let zero = BackendEntry::new(0, 0, 0, [0u8; 6], [0u8; 6]);
+        table.entries = [zero; MAX_BACKENDS_PER_VIP];
+        for (slot, e) in table.entries.iter_mut().zip(new_entries.iter()) {
+            *slot = *e;
+        }
+        table.count = u32::try_from(new_entries.len()).unwrap_or(u32::MAX);
+        table.generation = table.generation.wrapping_add(1);
+        // ATOMIC publication: one syscall, whole value.
+        map.insert(key, table, 0).map_err(XdpLoaderError::Map)?;
         Ok(())
     }
 
