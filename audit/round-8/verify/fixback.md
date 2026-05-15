@@ -177,3 +177,76 @@ normal request path but the adversarial probe found a real residual
 bypass on the WebSocket-upgrade / H2 extended-CONNECT / gRPC paths
 that skip the validator before upstream selection — push-back stands
 (non-blocking, medium, future-routing primitive).
+
+---
+
+## ROUND8-L7-09 re-re-verify (verify, task#76, 2026-05-15, sha 1a89a4e4) — VERIFIED-FIXED (H1/H2 scope) + NEW finding ROUND8-L7-16 (H3 gap)
+
+Re-checked div-l7's `1a89a4e4` (I did not author it).
+
+### 1. Choke-point placement — CONFIRMED
+- `crate::authority::validate_request<B>(&Request<B>)` (authority.rs:78-128)
+  validates BOTH `req.uri().authority()` (H2 `:authority` / H1 absolute-form)
+  AND the `Host` header; non-empty present values only; reject -> `(String, AuthorityError)`.
+- H1: it is the **FIRST statement** of `H1Proxy::handle_inner`
+  (`crates/lb-l7/src/h1_proxy.rs:779`). `handle` (728) only opens the
+  trace span then calls `handle_inner`. The gRPC-415 reject (802) and
+  the WS-upgrade fork are strictly BELOW 779.
+- H2: it is the **FIRST statement** of `H2Proxy::handle_inner`
+  (`crates/lb-l7/src/h2_proxy.rs:654`), ABOVE the RFC-8441
+  extended-CONNECT intercept (672) and the gRPC fork (679). `handle`
+  (603) only opens the span / injects trace ctx.
+- The OLD redundant in-path L7-09 blocks were REMOVED in both files
+  (replaced by comments at h1_proxy.rs:902-905 / h2_proxy.rs:790-794).
+  No double-validation, no dead path.
+
+### 2. round8_authority_enforced — 7/7 PASS
+The 3 new tests drive REAL request shapes down each previously-bypassing fork:
+- `test_ws_upgrade_comma_authority_rejected`: structurally-valid RFC 6455
+  H1 handshake (Upgrade/Connection/Sec-WebSocket-Key) + `Host: a,b` -> 400,
+  asserts real accept-counting probe backend `hits == 0`.
+- `test_h2_ext_connect_comma_authority_rejected`: real H2 handshake,
+  `CONNECT` + `hyper::ext::Protocol("websocket")` + comma `:authority`
+  -> 400, probe backend `hits == 0`.
+- `test_h2_grpc_comma_authority_rejected`: real H2 handshake, POST
+  `content-type: application/grpc` + `te: trailers` + comma `:authority`
+  -> 400, probe backend `hits == 0`.
+Each uses a real `TcpListener` probe with an `AtomicU32` SeqCst counter
+and asserts ZERO upstream connections. Test shapes match their names —
+not plain-GET-renamed.
+
+### 3. Adversarial 4th-path hunt
+- H2->H1 downgrade bridge (`proxy_request`, h2_proxy.rs:918): downstream
+  of the line-654 choke point — COVERED.
+- Non-extended CONNECT on H2: lacks the `:protocol` extension so
+  `is_h2_extended_connect` is false; falls through to the normal path
+  below the choke point — COVERED.
+- Pipelined / kept-alive H1 second request: hyper invokes
+  `handle` -> `handle_inner` PER request, so the choke point runs on
+  every request — COVERED.
+- **H3/QUIC: SEPARATE UNGUARDED DISPATCH — REAL GAP.**
+  `lb-quic` is a distinct crate that does NOT depend on `lb-l7`.
+  `crates/lb-quic/src/conn_actor.rs:361` builds
+  `H3Request::from_headers(headers)` and proceeds directly to upstream
+  selection (`h2_backend` 364 / `h3_backend` 374 / `select_backend` 386)
+  with NO `authority::validate` anywhere. The `:authority` pseudo-header
+  (`h3_bridge.rs:121-131`) is forwarded verbatim into `build_h1_request`
+  (h3_bridge.rs:139-147) and the H2/H3 upstream builders. `grep -rn`
+  for `authority::validate|forbid comma|BUG/MAJOR` across `lb-quic` and
+  `lb-h3` returns ZERO hits. This is exactly the HAProxy `BUG/MAJOR`
+  desync primitive — and L7-09's own Recommendation step 2 explicitly
+  required "H3: in the QUIC conn_actor's header-callback path", which
+  the fix did NOT deliver.
+
+### 4. round8_drain_15case — 16/16 PASS (unchanged by this fix)
+
+### VERDICT
+- **ROUND8-L7-09: VERIFIED-FIXED** for its H1/H2 scope. The 3 forks
+  (H1 WS-upgrade, H2 ext-CONNECT, H2 gRPC) now reject -> 400 with zero
+  upstream connections; no 4th bypass on the H1/H2 path.
+- **NEW finding ROUND8-L7-16 opened** for the H3/QUIC unguarded
+  dispatch (`crates/lb-quic/src/conn_actor.rs:361`). Severity medium,
+  NON-BLOCKING for prod (future-routing primitive, same risk class as
+  L7-09's pre-fix state; no host-based routing today) but it MUST be
+  closed before any vhost/host-routing pillar lands, same as L7-09.
+  Reported to lead.
