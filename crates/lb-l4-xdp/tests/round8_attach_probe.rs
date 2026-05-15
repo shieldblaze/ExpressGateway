@@ -10,8 +10,13 @@
 //! What is deferred (with an explicit tripwire test):
 //!   - the runtime `BPF_PROG_TEST_RUN` probe — aya 0.13.1 exposes no
 //!     public wrapper. `probe_xdp_silent_drop()` returns
-//!     `ProbeUnavailable`; `probe_unavailable_is_the_documented_state`
-//!     is the tripwire to wire the real probe when aya gains the API.
+//!     `ProbeUnavailable`. The REAL tripwire
+//!     (`aya_version_is_pinned_to_the_no_test_run_release`)
+//!     introspects the resolved aya version in `Cargo.lock` and FAILS
+//!     on any aya bump — forcing a human to re-audit the test_run
+//!     surface and wire the real probe. (Replaced the old
+//!     `probe_unavailable_is_the_documented_state` const-fn tautology,
+//!     which asserted a hardcoded return value and could never fire.)
 //!   - the kernel-touching attach-demotion happy path — needs
 //!     CAP_BPF + a real (or mlx5-mocked) NIC; that is the CI
 //!     privileged-stage fixture.
@@ -102,19 +107,201 @@ fn attach_probe_failed_counter_is_monotonic() {
     assert!(b > a, "counter must increase: {a} -> {b}");
 }
 
-/// TRIPWIRE: documents the aya 0.13.1 `BPF_PROG_TEST_RUN` API
-/// blocker. When aya gains a public `test_run` wrapper on `Xdp`,
-/// `probe_xdp_silent_drop()` should run the real synthetic packet
-/// and this assertion will (correctly) fail — the signal to wire the
-/// kernel-touching probe + flip the CI fixture from `#[ignore]`.
+/// Extract the resolved `aya` crate version from a `Cargo.lock`
+/// body. Returns the version string of the `[[package]]` whose
+/// `name = "aya"` (the program-loader crate, NOT `aya-obj` /
+/// `aya-ebpf` / `aya-log`). Pure string parse so the tripwire logic
+/// is unit-testable against a *simulated* future lockfile.
+fn aya_version_from_lock(lock: &str) -> Option<String> {
+    // Cargo.lock packages are TOML array-of-tables; find the block
+    // whose name line is EXACTLY `name = "aya"` then read the next
+    // `version = "..."` before the block ends (blank line / next
+    // `[[package]]`).
+    let mut lines = lock.lines().peekable();
+    while let Some(line) = lines.next() {
+        if line.trim() != "[[package]]" {
+            continue;
+        }
+        let mut name: Option<&str> = None;
+        let mut version: Option<&str> = None;
+        for body in lines.by_ref() {
+            let b = body.trim();
+            if b == "[[package]]" || b.is_empty() {
+                break;
+            }
+            if let Some(v) = b.strip_prefix("name = ") {
+                name = Some(v.trim_matches('"'));
+            } else if let Some(v) = b.strip_prefix("version = ") {
+                version = Some(v.trim_matches('"'));
+            }
+        }
+        if name == Some("aya") {
+            return version.map(str::to_owned);
+        }
+    }
+    None
+}
+
+/// Parse a `MAJOR.MINOR.PATCH` semver into a comparable tuple.
+fn semver_tuple(v: &str) -> (u64, u64, u64) {
+    let mut it = v.split('.').map(|p| {
+        // strip any pre-release / build metadata on the patch part
+        p.split(['-', '+'])
+            .next()
+            .unwrap_or("0")
+            .parse::<u64>()
+            .unwrap_or(0)
+    });
+    (
+        it.next().unwrap_or(0),
+        it.next().unwrap_or(0),
+        it.next().unwrap_or(0),
+    )
+}
+
+/// The aya version that is KNOWN to lack a public `BPF_PROG_TEST_RUN`
+/// wrapper on the `Xdp` program type (verified by code inspection of
+/// aya 0.13.1 — only the raw generated binding constant exists, no
+/// safe `Xdp::test_run`). The runtime silent-drop probe stays a
+/// scaffold for exactly this version and no other.
+const AYA_PINNED_NO_TEST_RUN: &str = "0.13.1";
+
+fn workspace_cargo_lock() -> std::path::PathBuf {
+    // crates/lb-l4-xdp -> workspace root is two levels up.
+    std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("..")
+        .join("..")
+        .join("Cargo.lock")
+}
+
+/// REAL TRIPWIRE (replaces the old const-fn tautology that asserted
+/// `probe_xdp_silent_drop() == ProbeUnavailable` — a `const fn`
+/// hardcoded to that value, so it could never fail and never
+/// detected an aya upgrade).
+///
+/// This introspects the resolved `aya` version in the workspace
+/// `Cargo.lock` and FAILS the moment it differs from the pinned
+/// `0.13.1`. Any aya bump is the trigger to (a) check whether the
+/// new aya exposes a public `BPF_PROG_TEST_RUN` / `Xdp::test_run`,
+/// (b) if so, replace `probe_xdp_silent_drop()` with the real
+/// synthetic-packet probe and un-`#[ignore]`
+/// `probe_synthetic_packet_round_trip`, then (c) re-pin
+/// `AYA_PINNED_NO_TEST_RUN` to the new version (only if it STILL
+/// lacks the API). The scaffold can no longer rot silently across
+/// an aya upgrade.
 #[test]
-fn probe_unavailable_is_the_documented_state() {
+fn aya_version_is_pinned_to_the_no_test_run_release() {
+    // Scaffold-state self-check: the probe is still the scaffold.
     assert_eq!(
         probe_xdp_silent_drop(),
         ProbeOutcome::ProbeUnavailable,
-        "aya 0.13.1 has no public BPF_PROG_TEST_RUN; if this fails, \
-         aya gained the API — wire the real probe (see nic_compat.rs)"
+        "probe is still the scaffold; if you wired the real probe, \
+         update this tripwire too"
     );
+
+    let lock_path = workspace_cargo_lock();
+    let lock = std::fs::read_to_string(&lock_path)
+        .unwrap_or_else(|e| panic!("read {}: {e}", lock_path.display()));
+    let resolved = aya_version_from_lock(&lock)
+        .expect("Cargo.lock must contain an [[package]] name = \"aya\"");
+
+    assert_eq!(
+        resolved, AYA_PINNED_NO_TEST_RUN,
+        "aya resolved to {resolved} but the silent-drop probe scaffold \
+         is pinned to {AYA_PINNED_NO_TEST_RUN} (the release verified to \
+         have NO public BPF_PROG_TEST_RUN / Xdp::test_run). aya moved: \
+         check whether the new release exposes the API; if so wire the \
+         real probe in nic_compat.rs::probe_xdp_silent_drop and \
+         un-#[ignore] probe_synthetic_packet_round_trip; then re-pin \
+         AYA_PINNED_NO_TEST_RUN. This tripwire MUST be resolved by hand \
+         — the scaffold cannot be trusted on an unaudited aya."
+    );
+
+    // Defence in depth: even if someone hand-edits the pinned literal
+    // forward without auditing, also fail on ANY version strictly
+    // greater than the audited one (an upgrade is always the signal).
+    let (rmaj, rmin, rpat) = semver_tuple(&resolved);
+    let (pmaj, pmin, ppat) = semver_tuple(AYA_PINNED_NO_TEST_RUN);
+    assert!(
+        (rmaj, rmin, rpat) <= (pmaj, pmin, ppat),
+        "aya {resolved} > audited {AYA_PINNED_NO_TEST_RUN}: an upgrade \
+         is the signal to re-audit the BPF_PROG_TEST_RUN surface"
+    );
+}
+
+/// Proves the tripwire above ACTUALLY fails under a simulated
+/// "aya gained the API" condition (a future Cargo.lock that resolves
+/// aya to a newer release). The old test could never do this — it
+/// asserted a `const fn`'s hardcoded return. This one exercises the
+/// real parse + comparison path on a synthetic lockfile blob.
+#[test]
+fn tripwire_fires_when_aya_is_upgraded_simulation() {
+    // A synthetic Cargo.lock fragment where aya has moved to a
+    // hypothetical 0.14.0 that (per the comment) gained test_run.
+    let simulated_future_lock = "\
+# This file is automatically @generated by Cargo.
+version = 4
+
+[[package]]
+name = \"anyhow\"
+version = \"1.0.0\"
+
+[[package]]
+name = \"aya\"
+version = \"0.14.0\"
+source = \"registry+https://github.com/rust-lang/crates.io-index\"
+
+[[package]]
+name = \"aya-obj\"
+version = \"0.14.0\"
+";
+    let resolved =
+        aya_version_from_lock(simulated_future_lock).expect("simulated lock has an aya package");
+    assert_eq!(
+        resolved, "0.14.0",
+        "parser must pick `aya` (0.14.0), NOT `aya-obj`"
+    );
+
+    // The exact assertion the real tripwire runs — confirm it WOULD
+    // panic on this simulated-future lock instead of silently passing.
+    let would_fail = std::panic::catch_unwind(|| {
+        assert_eq!(resolved, AYA_PINNED_NO_TEST_RUN);
+    })
+    .is_err();
+    assert!(
+        would_fail,
+        "tripwire is hollow: it did NOT fail when aya was upgraded \
+         to 0.14.0 in the (simulated) lockfile"
+    );
+
+    // And the semver guard also fires.
+    let (rmaj, rmin, rpat) = semver_tuple(&resolved);
+    let (pmaj, pmin, ppat) = semver_tuple(AYA_PINNED_NO_TEST_RUN);
+    assert!(
+        (rmaj, rmin, rpat) > (pmaj, pmin, ppat),
+        "semver guard must classify 0.14.0 as an upgrade over \
+         {AYA_PINNED_NO_TEST_RUN}"
+    );
+}
+
+/// The parser must not be fooled by `aya-obj` / `aya-ebpf` /
+/// `aya-log` (whose names START with `aya` but are different crates).
+#[test]
+fn aya_lock_parser_does_not_confuse_sibling_crates() {
+    let lock = "\
+[[package]]
+name = \"aya-obj\"
+version = \"9.9.9\"
+
+[[package]]
+name = \"aya\"
+version = \"0.13.1\"
+
+[[package]]
+name = \"aya-log\"
+version = \"8.8.8\"
+";
+    assert_eq!(aya_version_from_lock(lock).as_deref(), Some("0.13.1"));
 }
 
 /// CI privileged-stage scaffold: attach to dummy0, pre-insert a
