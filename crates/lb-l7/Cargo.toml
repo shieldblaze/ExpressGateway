@@ -20,6 +20,13 @@ tokio = { workspace = true }
 tokio-util = { workspace = true }
 tracing = { workspace = true }
 parking_lot = { workspace = true }
+# ROUND8-L7-16: the protocol-neutral authority value predicate
+# (`validate` / `AuthorityError`) was hoisted into lb-core so the
+# H3/QUIC datapath (lb-quic) shares ONE implementation. lb-l7 now
+# consumes the predicate from lb-core; `crate::authority` is just the
+# hyper `http::Request` wrapper + re-export. lb-core is a leaf crate
+# (zero lb-* deps) so this edge introduces no cycle.
+lb-core = { path = "../lb-core" }
 lb-io = { path = "../lb-io" }
 lb-h2 = { path = "../lb-h2" }
 # CODE-2-01 dep edge (Wave-1 slice of CODE-2-01). lb-l7 had no

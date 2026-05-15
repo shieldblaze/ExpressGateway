@@ -32,7 +32,8 @@ use lb_io::pool::TcpPool;
 use lb_io::quic_pool::QuicUpstreamPool;
 
 use crate::h3_bridge::{
-    H3Request, StreamRxBuf, h3_to_h1_roundtrip, h3_to_h2_roundtrip, h3_to_h3_roundtrip,
+    H3Request, StreamRxBuf, encode_h3_response, h3_to_h1_roundtrip, h3_to_h2_roundtrip,
+    h3_to_h3_roundtrip,
 };
 
 /// Application-layer error code emitted in the `CONNECTION_CLOSE`
@@ -359,6 +360,39 @@ fn poll_h3(
                     match rx.feed(buf.get(..n).unwrap_or(&[])) {
                         Ok(Some(headers)) => {
                             let req = H3Request::from_headers(headers);
+                            // ROUND8-L7-16: authority value sanitisation
+                            // choke point — the H3 leg of L7-09
+                            // (HAProxy `BUG/MAJOR: http: forbid comma
+                            // character in authority value`). This MUST
+                            // run before ANY of the three upstream
+                            // branches below so a comma / whitespace /
+                            // control byte in `:authority` is rejected
+                            // (H3 `:status 400`) and ZERO upstream
+                            // connection is dialled. The predicate is
+                            // `lb_core::authority::validate` — the
+                            // EXACT same one the H1/H2 path
+                            // (`lb_l7::authority`) calls, so the
+                            // behaviour is byte-identical across all
+                            // three protocols (no fork, no loopback
+                            // exemption: value sanitisation only). An
+                            // absent / empty `:authority` is NOT
+                            // rejected here (PROTO-2-01's gate, not
+                            // this predicate's).
+                            if !req.authority.is_empty() {
+                                if let Err(e) = lb_core::authority::validate(&req.authority) {
+                                    tracing::warn!(
+                                        authority = %req.authority,
+                                        error = ?e,
+                                        stream_id = sid,
+                                        "ROUND8-L7-16: H3 :authority rejected \
+                                         before upstream selection"
+                                    );
+                                    let resp =
+                                        encode_h3_response(400, b"bad request").unwrap_or_default();
+                                    request_tasks.push(tokio::spawn(async move { (sid, resp) }));
+                                    continue;
+                                }
+                            }
                             // PROTO-001: H3→H2 takes precedence when
                             // h2_backend is configured.
                             if let Some((h2pool, addr)) = h2_backend {

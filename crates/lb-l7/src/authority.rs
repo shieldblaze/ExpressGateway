@@ -1,4 +1,5 @@
-//! ROUND8-L7-09 — protocol-neutral authority validator.
+//! ROUND8-L7-09 / ROUND8-L7-16 — protocol-neutral authority validator
+//! (H1/H2 `http::Request` wrapper).
 //!
 //! References:
 //! - HAProxy `BUG/MAJOR: http: forbid comma character in authority
@@ -8,6 +9,18 @@
 //! - RFC 9110 §4 authority component definition.
 //! - RFC 3986 §3.2 host = IP-literal / IPv4 / reg-name.
 //!
+//! ROUND8-L7-16: the byte-level predicate ([`validate`] /
+//! [`AuthorityError`]) was hoisted into `lb-core` (a leaf crate both
+//! `lb-l7` and `lb-quic` depend on — no cycle, `lb-core` has zero
+//! `lb-*` deps) so the H3/QUIC datapath shares the EXACT same
+//! implementation rather than re-deriving it. Re-implementing it
+//! per-protocol is precisely the H1-vs-H2-vs-H3 divergence the
+//! HAProxy `BUG/MEDIUM` fix warns about. This module is now only the
+//! hyper/`http`-version-specific request wrapper; the predicate is
+//! re-exported verbatim so every existing
+//! `crate::authority::{validate, AuthorityError}` callsite stays
+//! byte-identical with the H3 path.
+//!
 //! Today the gateway validates SNI / Host agreement
 //! (`sni_authority::check_sni_authority`) but does not sanitise the
 //! authority value itself. A `,` / whitespace / control byte inside
@@ -15,68 +28,8 @@
 //! a Host-based ACL. This validator runs on every parser path before
 //! the agreement comparison.
 
-/// Reason an authority value was rejected.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum AuthorityError {
-    /// Empty string.
-    Empty,
-    /// Comma byte inside the value (HAProxy bug class).
-    Comma,
-    /// SP or HTAB inside the value.
-    Whitespace,
-    /// C0 control or DEL.
-    Control,
-    /// IPv6 bracket balance mismatch (`[` without `]`, or vice versa,
-    /// or more than one of either).
-    UnbalancedBrackets,
-    /// Port suffix present but contained non-digit bytes.
-    InvalidPort,
-}
-
-/// Validate an authority value against the canonical predicate.
-///
-/// Returns `Ok(())` if the value passes; `Err(AuthorityError)`
-/// otherwise. Callers MUST run this before any agreement comparison
-/// (Host vs `:authority`, SNI vs Host).
-///
-/// # Errors
-///
-/// Returns [`AuthorityError`] when the value fails any of the
-/// predicates documented on the variants.
-pub fn validate(value: &str) -> Result<(), AuthorityError> {
-    if value.is_empty() {
-        return Err(AuthorityError::Empty);
-    }
-    for b in value.bytes() {
-        match b {
-            b',' => return Err(AuthorityError::Comma),
-            b' ' | b'\t' => return Err(AuthorityError::Whitespace),
-            0..=0x1F | 0x7F => return Err(AuthorityError::Control),
-            _ => {}
-        }
-    }
-    // IPv6 bracket balance: RFC 3986 §3.2.2 `IP-literal = "["
-    // (IPv6address / IPvFuture) "]"`. Exactly one bracket pair
-    // allowed; the unbracketed reg-name form has zero.
-    let opens = value.bytes().filter(|&b| b == b'[').count();
-    let closes = value.bytes().filter(|&b| b == b']').count();
-    if opens != closes || opens > 1 {
-        return Err(AuthorityError::UnbalancedBrackets);
-    }
-    // Port suffix validation: if a `:` appears after the host
-    // portion, every byte after the LAST `:` must be a digit.
-    // (IPv6 addresses contain colons inside the brackets; only the
-    // colon after `]` is the port separator.)
-    if let Some(port_part) = port_suffix(value) {
-        if port_part.is_empty() {
-            return Err(AuthorityError::InvalidPort);
-        }
-        if !port_part.bytes().all(|b| b.is_ascii_digit()) {
-            return Err(AuthorityError::InvalidPort);
-        }
-    }
-    Ok(())
-}
+// ROUND8-L7-16: single source of truth lives in `lb-core`.
+pub use lb_core::authority::{AuthorityError, validate};
 
 /// ROUND8-L7-09 choke point — validate every authority value carried
 /// by an inbound request, regardless of which downstream path the
@@ -128,90 +81,70 @@ pub fn validate_request<B>(req: &http::Request<B>) -> Result<(), (String, Author
     Ok(())
 }
 
-/// Return the port suffix (the substring after the last `:` that is
-/// not inside brackets), or `None` if no port is present.
-fn port_suffix(value: &str) -> Option<&str> {
-    // If brackets are present, the port (if any) is what's after `]:`.
-    if let Some(rb) = value.rfind(']') {
-        let after = value.get(rb + 1..)?;
-        return after.strip_prefix(':');
-    }
-    // No brackets — port is after the LAST `:`, but only if no other
-    // colons appear (no raw IPv6 outside brackets, per RFC 3986).
-    let count = value.bytes().filter(|&b| b == b':').count();
-    if count != 1 {
-        return None;
-    }
-    let colon = value.rfind(':')?;
-    value.get(colon + 1..)
-}
-
 #[cfg(test)]
 #[allow(clippy::unwrap_used)]
 mod tests {
     use super::*;
 
+    // ROUND8-L7-16: the byte-level predicate's own unit tests live in
+    // `lb_core::authority`. These pin the H1/H2 `http::Request`
+    // wrapper behaviour the QUIC path does NOT share (URI authority +
+    // Host header extraction, empty/absent skip semantics).
+
     #[test]
-    fn comma_rejected() {
+    fn predicate_reexport_is_lb_core() {
+        // The re-exported predicate must be byte-identical to the
+        // shared one (same rejects, same loopback policy: none).
         assert_eq!(validate("a,b"), Err(AuthorityError::Comma));
-    }
-
-    #[test]
-    fn whitespace_rejected() {
         assert_eq!(validate("a b"), Err(AuthorityError::Whitespace));
-        assert_eq!(validate("a\tb"), Err(AuthorityError::Whitespace));
-    }
-
-    #[test]
-    fn control_char_rejected() {
-        assert_eq!(validate("\x01host"), Err(AuthorityError::Control));
-        assert_eq!(validate("a\x7Fb"), Err(AuthorityError::Control));
-    }
-
-    #[test]
-    fn empty_rejected() {
-        assert_eq!(validate(""), Err(AuthorityError::Empty));
-    }
-
-    #[test]
-    fn ipv6_brackets_must_balance() {
-        assert_eq!(validate("[::1"), Err(AuthorityError::UnbalancedBrackets));
-        assert_eq!(validate("::1]"), Err(AuthorityError::UnbalancedBrackets));
-        assert_eq!(validate("[::1]:8080"), Ok(()));
-    }
-
-    #[test]
-    fn port_digits_only() {
-        assert_eq!(
-            validate("example.com:abc"),
-            Err(AuthorityError::InvalidPort)
-        );
-        assert_eq!(validate("example.com:80"), Ok(()));
-    }
-
-    #[test]
-    fn happy_path_examples() {
-        assert!(validate("example.com").is_ok());
         assert!(validate("example.com:8080").is_ok());
-        assert!(validate("[::1]:8080").is_ok());
-        assert!(validate("192.0.2.1").is_ok());
-        assert!(validate("192.0.2.1:80").is_ok());
-        assert!(validate("sub.example.com").is_ok());
     }
 
     #[test]
-    fn empty_port_after_colon_rejected() {
-        assert_eq!(validate("example.com:"), Err(AuthorityError::InvalidPort));
+    fn request_uri_authority_validated() {
+        let req = http::Request::builder()
+            .uri("http://victim.example,attacker.example/p")
+            .body(())
+            .unwrap();
+        assert_eq!(
+            validate_request(&req),
+            Err((
+                "victim.example,attacker.example".to_owned(),
+                AuthorityError::Comma
+            ))
+        );
     }
 
     #[test]
-    fn raw_ipv6_without_brackets_accepted_today() {
-        // `::1` (no brackets) has multiple colons. Our heuristic
-        // skips port validation when colon count > 1; the RFC 3986
-        // grammar says this is invalid as an authority, but a more
-        // expensive grammar parse is out of scope for this fix.
-        // Pinning the current behaviour so any future tightening
-        // surfaces here (e.g. via the `http::uri` authority parser).
-        assert!(validate("::1").is_ok());
+    fn request_host_header_validated() {
+        let req = http::Request::builder()
+            .uri("/p")
+            .header(http::header::HOST, "victim.example attacker")
+            .body(())
+            .unwrap();
+        assert_eq!(
+            validate_request(&req),
+            Err((
+                "victim.example attacker".to_owned(),
+                AuthorityError::Whitespace
+            ))
+        );
+    }
+
+    #[test]
+    fn request_absent_and_empty_authority_skipped() {
+        // No authority, no Host → nothing to sanitise (PROTO-2-01's
+        // gate, not this predicate's).
+        let req = http::Request::builder().uri("/p").body(()).unwrap();
+        assert_eq!(validate_request(&req), Ok(()));
+    }
+
+    #[test]
+    fn request_valid_authority_passes() {
+        let req = http::Request::builder()
+            .uri("http://example.test:8080/p")
+            .body(())
+            .unwrap();
+        assert_eq!(validate_request(&req), Ok(()));
     }
 }

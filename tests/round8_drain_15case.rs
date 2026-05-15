@@ -28,8 +28,7 @@ use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::time::Duration;
 
 use lb_core::{
-    DrainObserver, DrainPhase, DrainSpec, ListenerOutcome, PhaseTiming, Shutdown,
-    XdpDetachOutcome,
+    DrainObserver, DrainPhase, DrainSpec, ListenerOutcome, PhaseTiming, Shutdown, XdpDetachOutcome,
 };
 
 // ── helpers ─────────────────────────────────────────────────────────
@@ -42,8 +41,9 @@ fn xdp_detach_clean()
     })
 }
 
-fn xdp_detach_failure(reason: &'static str)
--> Pin<Box<dyn std::future::Future<Output = XdpDetachOutcome> + Send + 'static>> {
+fn xdp_detach_failure(
+    reason: &'static str,
+) -> Pin<Box<dyn std::future::Future<Output = XdpDetachOutcome> + Send + 'static>> {
     Box::pin(async move {
         tokio::time::sleep(Duration::from_millis(2)).await;
         XdpDetachOutcome::Failed {
@@ -363,7 +363,11 @@ async fn case_c10_two_sigterms_idempotent() {
     }));
     let r2 = s.run_drain(spec2).await;
 
-    assert_eq!(calls.load(Ordering::Acquire), 1, "mark_draining must run exactly once");
+    assert_eq!(
+        calls.load(Ordering::Acquire),
+        1,
+        "mark_draining must run exactly once"
+    );
     assert_eq!(r1, r2, "second SIGTERM returns cached report");
 }
 

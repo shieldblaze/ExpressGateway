@@ -99,7 +99,13 @@ pub use lb_security::{RetryTokenSigner, ZeroRttReplayGuard};
 pub use tokio_quiche::ConnectionParams;
 
 mod cleanup_guard;
-mod conn_actor;
+// ROUND8-L7-16: `conn_actor` is now `pub` so the H3 authority-
+// enforcement proof (`tests/round8_h3_authority_enforced.rs`) can
+// drive the REAL `run_actor` / `ActorParams` / `InboundPacket`
+// against a real accept-counting probe backend — the same proof
+// shape the H1/H2 L7-09 tests use. `h3_bridge` is already `pub mod`
+// for the same reason.
+pub mod conn_actor;
 pub mod h3_bridge;
 mod listener;
 mod router;

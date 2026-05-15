@@ -12,12 +12,14 @@
 #![allow(clippy::pedantic, clippy::nursery)]
 #![cfg_attr(test, allow(clippy::unwrap_used, clippy::expect_used))]
 
+pub mod authority;
 mod backend;
 mod cluster;
 mod error;
 mod policy;
 mod shutdown;
 
+pub use authority::{AuthorityError, validate as validate_authority};
 pub use backend::{Backend, BackendHealth, BackendState};
 pub use cluster::Cluster;
 pub use error::CoreError;
