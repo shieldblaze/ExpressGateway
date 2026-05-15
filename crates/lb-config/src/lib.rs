@@ -170,8 +170,11 @@ pub struct RuntimeConfig {
     /// flipping `/readyz` to `503 Draining` and starting the
     /// cooperative cancel. Gives upstream LBs / service-mesh
     /// sidecars one health-check interval to stop sending traffic
-    /// before connections are torn down. Default: `1000 ms` per
-    /// REL-2-02 spec; validation range 0..=30_000 ms.
+    /// before connections are torn down. Default: `11000 ms`
+    /// (ROUND-8 OPS-11 — sized for the kubelet default
+    /// `periodSeconds: 10` so at least one `/readyz` 503 falls
+    /// inside the window; was `1000 ms` which was below the kubelet
+    /// removal latency). Validation range 0..=30_000 ms.
     #[serde(default = "default_readiness_settle_ms")]
     pub readiness_settle_ms: u64,
     /// SEC-2-10 (Wave 2c): max wall-clock for `acceptor.accept()`
@@ -344,10 +347,23 @@ const fn default_drain_timeout_ms() -> u64 {
 }
 
 /// CODE-2-03 (Wave 2c): serde default for
-/// `RuntimeConfig::readiness_settle_ms`. 1 000 ms = 1 s per
-/// REL-2-02; matches the conventional kubelet probe interval.
+/// `RuntimeConfig::readiness_settle_ms`.
+///
+/// ROUND-8 OPS-11: raised from 1 000 ms to 11 000 ms. The old 1 s
+/// default was below the kubelet default `periodSeconds: 10`
+/// readiness-probe interval: a pod could transition to `Terminating`
+/// and start cancelling connections while still listed `Ready` in
+/// the Endpoints object, so the next ~10 s of new connections landed
+/// on the draining pod. 11 s = one full kubelet probe period (10 s)
+/// + 1 s margin, so at least one `/readyz` 503 falls inside the
+/// settle window even in the worst case (set_draining firing
+/// immediately after a probe). Validation cap stays 30 000 ms;
+/// operators with aggressively-tuned kubelets can lower it (see
+/// `RUNBOOK.md` "Tuning `readiness_settle_ms`"). Aligns with
+/// Envoy/Kubernetes lameduck guidance (K8s "Termination of Pods"
+/// docs; Envoy `drain_strategy` + endpoint-removal lag).
 const fn default_readiness_settle_ms() -> u64 {
-    1_000
+    11_000
 }
 
 /// SEC-2-10 (Wave 2c): serde default for

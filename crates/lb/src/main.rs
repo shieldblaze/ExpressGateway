@@ -1979,7 +1979,11 @@ async fn async_main() -> anyhow::Result<()> {
         });
     let spec = lb_core::DrainSpec {
         readiness_settle: Duration::from_millis(
-            runtime_cfg.map_or(1_000, |r| r.readiness_settle_ms),
+            // ROUND-8 OPS-11: fallback matches
+            // `lb_config::default_readiness_settle_ms()` (11 s — one
+            // kubelet probe period + margin) when no [runtime] block
+            // is present.
+            runtime_cfg.map_or(11_000, |r| r.readiness_settle_ms),
         ),
         listener_cancel_deadline: Duration::from_millis(500),
         inflight_drain_deadline: Duration::from_millis(

@@ -44,8 +44,10 @@ log stream:
    `draining = true`. External LBs scraping `/readyz` see 503 on the
    next probe (typically ≤ 10 s) and stop sending new traffic.
 3. `settling for upstream LB before cancel` — sleep for
-   `[runtime].readiness_settle_ms` (default 1 000 ms) so the upstream
-   probe round-trip lands.
+   `[runtime].readiness_settle_ms` (default 11 000 ms — ROUND-8
+   OPS-11) so the upstream probe round-trip lands. See "Tuning
+   `readiness_settle_ms`" below for why the default is one full
+   kubelet probe period plus margin.
 4. `shutdown.token().cancel()` — cooperative `select!` arms in
    long-lived tasks observe the cancel.
 5. Listener `JoinHandle::abort()` for every TCP accept loop.
@@ -69,7 +71,40 @@ Unit-file knobs that matter:
   receive SIGKILL after `TimeoutStopSec`.
 - `TimeoutStopSec=30` — should exceed `drain_timeout_ms` plus
   `readiness_settle_ms` plus the 2 s QUIC budget so systemd doesn't
-  SIGKILL mid-drain.
+  SIGKILL mid-drain. With the ROUND-8 OPS-11 defaults this is
+  `11 s (settle) + 10 s (drain) + 2 s (QUIC) = 23 s`, leaving 7 s of
+  headroom under the conventional `terminationGracePeriodSeconds:
+  30` / `TimeoutStopSec=30`. If you raise either budget, raise the
+  service-manager timeout to match.
+
+### Tuning `readiness_settle_ms`
+
+The lameduck window between flipping `/readyz` to 503 and starting
+the cooperative cancel must be **at least one full upstream-probe
+period plus margin** — otherwise the pod starts severing connections
+while the upstream LB (kubelet, cloud LB, mesh sidecar) still lists
+it Ready, and the next probe-period's worth of new connections land
+on the draining pod.
+
+K8s alignment: the kubelet default readiness-probe `periodSeconds`
+is 10 s, and endpoint removal lags the pod `Terminating` transition
+by up to one probe period (see the Kubernetes "Termination of Pods"
+docs and Envoy's `drain_strategy` guidance, which both treat the
+endpoint-removal lag — not the signal-handler latency — as the
+quantity to wait out). The 11 000 ms default is `10 s + 1 s` so at
+least one 503 lands inside the window even when `set_draining` fires
+immediately after a probe.
+
+| Upstream LB         | Typical probe period | Recommended `readiness_settle_ms` |
+|---------------------|----------------------|-----------------------------------|
+| kubelet (default)   | 10 s                 | 11000 (default)                   |
+| kubelet, aggressive | 1 s                  | 1500                              |
+| AWS ALB / NLB       | 30 s                 | 30000 (validation cap)            |
+| GCP Load Balancer   | 5 s                  | 6000                              |
+
+If you see traffic landing on a draining pod (`accept_inflight`
+rising after `entering drain — flipping /readyz to 503`), the window
+is too short for your upstream's probe period.
 
 **Per-protocol drain signal**:
 
