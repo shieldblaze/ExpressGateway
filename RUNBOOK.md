@@ -528,6 +528,52 @@ Verifier-log capture:
 sudo bpftool prog load crates/lb-l4-xdp/src/lb_xdp.bin /sys/fs/bpf/lb_xdp 2>&1
 ```
 
+### Known-bad NIC + firmware for native XDP (ROUND8-L4-05)
+
+Some NIC driver + firmware combinations *silently drop* packets in
+native (`drv`) XDP mode: the attach syscall succeeds, every map
+operation reports success, the `xdp_attach_mode` gauge reads `drv`,
+and the packet path goes to /dev/null. This is the aya #1193 /
+Cilium-lesson-8 silent-drop class.
+
+ExpressGateway refuses `drv` on these combinations *before*
+attempting the attach (a failed-attach check is not enough — the
+attach "succeeds"). The static blocklist
+(`crates/lb-l4-xdp/src/nic_compat.rs::BLOCKLIST`):
+
+| Driver      | Unsafe firmware       | Action                |
+|-------------|-----------------------|-----------------------|
+| `mlx5_core` | `< 16.32.1010`        | demote `drv` → `skb`  |
+| `ena`       | `< 2.10` (c5n/m5n)    | demote `drv` → `skb`  |
+| `ice`       | `<= 4.10`             | demote `drv` → `skb`  |
+
+When a row matches, the loader logs a loud `WARN` ("xdp Drv refused
+by NIC blocklist…"), increments `xdp_attach_probe_failed_total`, and
+continues the ladder to `skb`.
+
+Operator override (force generic mode regardless of NIC):
+```toml
+[runtime]
+xdp_mode = "skb"
+```
+
+Diagnose a suspected silent drop:
+```
+ethtool -i <iface> | grep -E 'driver|firmware-version'
+# Cross-check against the table above.
+
+# Is the data plane actually forwarding? STAT_TX_V4 must climb:
+sudo bpftool map dump name stats   # slot 5 = tx_v4
+# xdp_attach_mode == "drv" but tx_v4 flat under load == silent drop.
+```
+
+The static blocklist is best-effort and will go stale. The always-on
+backstop is a post-attach `BPF_PROG_TEST_RUN` synthetic-packet probe;
+its kernel-touching implementation is deferred (aya 0.13.1 exposes no
+public `BPF_PROG_TEST_RUN` wrapper — see the API-blocker note in
+`nic_compat.rs`). The CI privileged stage runs the probe fixture and
+alerts on `xdp_attach_probe_failed_total > 0`.
+
 ## DNS cache inspection
 
 The resolver keeps its cache in-memory

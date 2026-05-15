@@ -35,6 +35,12 @@ pub mod loader;
 /// no outer cfg is needed here.
 pub mod bpffs;
 
+/// ROUND8-L4-05: known-bad NIC + firmware blocklist for native
+/// (`Drv`) XDP and the post-attach silent-drop probe scaffold (aya
+/// #1193 / Cilium lesson 8). The module's own
+/// `#![cfg(target_os = "linux")]` inner attribute gates the body.
+pub mod nic_compat;
+
 /// EBPF-2-04 / EBPF-2-05 / EBPF-2-08: lock-step telemetry surface
 /// between the eBPF data plane and userspace observability (rel's
 /// `lb-observability` consumes via the `pub fn` accessors).

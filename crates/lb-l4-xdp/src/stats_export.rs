@@ -100,6 +100,33 @@ pub fn current_attach_mode() -> Option<AttachModeLabel> {
 }
 
 // ---------------------------------------------------------------------------
+// ROUND8-L4-05: xdp_attach_probe_failed_total.
+// ---------------------------------------------------------------------------
+
+/// Process-global count of `Drv` attaches the static NIC blocklist
+/// refused OR the post-attach silent-drop probe found dead (aya
+/// #1193 / Cilium lesson 8), forcing a demotion to `Skb`. Userspace-
+/// only — there is no kernel `STATS` slot because the BPF program
+/// never runs when an attach silently drops. rel's Prom layer
+/// projects this to `xdp_attach_probe_failed_total{iface,mode}`.
+static ATTACH_PROBE_FAILED: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
+/// Increment the attach-probe-failed counter. Called by
+/// `XdpLoader::attach_with_fallback` when the NIC blocklist refuses
+/// `Drv` (and the loader falls through to `Skb`) or when the runtime
+/// probe finds a silent drop.
+pub fn record_attach_probe_failed() {
+    ATTACH_PROBE_FAILED.fetch_add(1, Ordering::Relaxed);
+}
+
+/// Read back the cumulative attach-probe-failed count for Prom
+/// exposition (`xdp_attach_probe_failed_total`).
+#[must_use]
+pub fn attach_probe_failed_count() -> u64 {
+    ATTACH_PROBE_FAILED.load(Ordering::Relaxed)
+}
+
+// ---------------------------------------------------------------------------
 // EBPF-2-05: pinned-map reuse reporting.
 // ---------------------------------------------------------------------------
 
@@ -221,11 +248,33 @@ pub enum StatSlot {
     /// control loop polls. The userspace `CtInsertGate` increments
     /// the same slot when it denies a control-plane CT insert.
     NewFlowRateCap = 15,
+    /// `xdp_attach_probe_failed_total` (ROUND8-L4-05): the post-attach
+    /// silent-drop probe (or the static NIC blocklist) found the
+    /// requested `Drv` attach dead/unsafe and the loader demoted to
+    /// `Skb` (aya #1193 / Cilium lesson 8). This is NOT an eBPF
+    /// per-CPU `STATS` slot — the BPF program never runs if the
+    /// attach silently drops — so it has no `STAT_*` constant in the
+    /// ebpf crate. It lives in the enum's wire-stable ordering so
+    /// rel's exposition keeps one slot vocabulary; the counter is
+    /// surfaced via [`record_attach_probe_failed`] /
+    /// [`attach_probe_failed_count`] (a process-global atomic), not
+    /// via `read_stats()`.
+    AttachProbeFailed = 16,
 }
 
-/// Number of currently-defined stat slots. Bumps to this constant
-/// must come WITH a matching addition to the `STAT_*` enum in the
-/// eBPF crate AND a new variant at the end of [`StatSlot`].
+/// Number of **kernel-side** per-CPU `STATS` slots — the length of
+/// the `read_stats()` `bpf_map_lookup_elem` loop. Slots `0..=15`
+/// (`Pass`..=`NewFlowRateCap`) each have a matching `STAT_*` constant
+/// in the eBPF crate. Bumps MUST come WITH a new `STAT_*` constant in
+/// the eBPF crate AND a new [`StatSlot`] variant.
+///
+/// ROUND8-L4-05 note: `StatSlot::AttachProbeFailed` (16) is
+/// deliberately NOT counted here — it is a userspace-only counter
+/// (the BPF program never runs when an attach silently drops, so
+/// there is no kernel slot to read). It is surfaced via the
+/// process-global [`attach_probe_failed_count`] atomic, NOT
+/// `read_stats()`. Keeping `NUM_SLOTS == 16` is what keeps the
+/// kernel read loop bounded to real kernel slots.
 pub const NUM_SLOTS: usize = 16;
 
 /// Errors from the STATS read path.
@@ -396,6 +445,18 @@ mod tests {
         assert_eq!(StatSlot::CtRstPrune as usize, 13);
         assert_eq!(StatSlot::CtFinPrune as usize, 14);
         assert_eq!(StatSlot::NewFlowRateCap as usize, 15);
+        // ROUND8-L4-05: userspace-only slot (NOT counted in
+        // NUM_SLOTS — see the const doc). Wire position is still
+        // stable so rel's exposition vocabulary is single-sourced.
+        assert_eq!(StatSlot::AttachProbeFailed as usize, 16);
+    }
+
+    #[test]
+    fn attach_probe_failed_counter_round_trip() {
+        let before = attach_probe_failed_count();
+        record_attach_probe_failed();
+        record_attach_probe_failed();
+        assert_eq!(attach_probe_failed_count(), before + 2);
     }
 
     #[test]

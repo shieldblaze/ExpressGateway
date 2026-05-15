@@ -239,6 +239,23 @@ Cross-ref: synthesis T4, sec S-2, rel F-?, ADR-0005 Follow-ups.
 
 Severity: high
 Status:   Verified-Fixed(75d4740) — rel round-5 sign-off; stats_export round-trip green, kernel-side `#[ignore]`'d for CI.
+            Augmented by ROUND8-L4-05 (Proposed-Fix): the EBPF-2-04
+            attach-mode ladder + gauge graded Verified-Fixed
+            "ladder exists" — it did NOT cover the aya #1193 /
+            Cilium-lesson-8 *silent-drop* class where the `Drv` attach
+            syscall succeeds, the gauge reads `drv`, and the packet
+            path is dead. L4-05 adds a static (driver, firmware)
+            blocklist (`nic_compat.rs`, mlx5_core/ena/ice rows) that
+            refuses `Drv` BEFORE the attach (a failed-attach check is
+            insufficient — the attach "succeeds"), demotes to `Skb`,
+            and bumps `xdp_attach_probe_failed_total`. The always-on
+            backstop — a post-attach `BPF_PROG_TEST_RUN`
+            synthetic-packet probe — is shipped as a typed scaffold
+            with an EXPLICIT aya-0.13.1 API blocker (no public
+            `BPF_PROG_TEST_RUN` wrapper); `probe_xdp_silent_drop()`
+            returns `ProbeUnavailable` and a tripwire test fires when
+            aya gains the API. Same deferred-with-structure posture as
+            ROUND8-L4-12's netlink `query_xdp`.
 Location: `crates/lb/src/xdp.rs:115`:
 
 ```

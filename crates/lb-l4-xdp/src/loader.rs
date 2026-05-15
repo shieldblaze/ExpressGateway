@@ -681,6 +681,22 @@ pub enum XdpLoaderError {
     /// untouched).
     #[error("too many backends for one VIP: got {0}, max {max}", max = MAX_BACKENDS_PER_VIP)]
     TooManyBackends(usize),
+
+    /// ROUND8-L4-05: the post-attach silent-drop probe (or the static
+    /// NIC blocklist) determined the requested mode is unsafe / dead.
+    /// For the blocklist path the loader demotes `Drv` → `Skb` and
+    /// only surfaces this if `Skb` ALSO fails; for the runtime probe
+    /// path it fires when `BPF_PROG_TEST_RUN` shows the program never
+    /// saw the synthetic packet (aya #1193 / Cilium lesson 8 silent-
+    /// drop class). Carries the mode that failed and a human reason
+    /// incl. the bug-id link.
+    #[error("xdp attach probe failed in {mode:?} mode: {reason}")]
+    AttachProbeFailed {
+        /// The mode whose attach was found dead by the probe/blocklist.
+        mode: XdpMode,
+        /// Operator-facing reason incl. the bug-id link.
+        reason: String,
+    },
 }
 
 /// SEC-2-12: required value of the ELF `license` section.
@@ -1094,6 +1110,32 @@ impl XdpLoader {
         let mut last_err: Option<String> = None;
         for &mode in order {
             attempts = attempts.saturating_add(1);
+            // ROUND8-L4-05: static NIC blocklist gate. BEFORE
+            // attempting `Drv`, consult the (driver, firmware)
+            // blocklist (aya #1193 / Cilium lesson 8 silent-drop
+            // class). On a known-bad combo we SKIP `Drv` entirely —
+            // the attach syscall would "succeed" while the packet
+            // path silently goes to /dev/null, so failing the attach
+            // is not enough; we must not attempt it at all. The
+            // runtime BPF_PROG_TEST_RUN probe is the always-on
+            // backstop once aya exposes it (see
+            // `nic_compat::probe_xdp_silent_drop` API-blocker note).
+            if mode == XdpMode::Drv {
+                if let Ok(crate::nic_compat::DrvSupport::Refuse { reason }) =
+                    crate::nic_compat::drv_supported(ifname)
+                {
+                    tracing::warn!(
+                        interface = ifname,
+                        mode = "drv",
+                        reason = %reason,
+                        "xdp Drv refused by NIC blocklist (silent-drop \
+                         class, aya#1193); demoting"
+                    );
+                    crate::stats_export::record_attach_probe_failed();
+                    last_err = Some(format!("Drv refused by NIC blocklist: {reason}"));
+                    continue;
+                }
+            }
             match xdp.attach(ifname, mode.to_flags()) {
                 Ok(_link_id) => {
                     let label = mode.to_label();
