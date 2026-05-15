@@ -250,3 +250,77 @@ not plain-GET-renamed.
   L7-09's pre-fix state; no host-based routing today) but it MUST be
   closed before any vhost/host-routing pillar lands, same as L7-09.
   Reported to lead.
+
+---
+
+## ROUND8-L7-16 — authority validation on H3/QUIC dispatch (re-verify, task#78, 2026-05-15)
+
+- **SHA**: 69cda7f4 (author div-l7; verifier verify, author != verifier).
+
+- **(1) No logic fork.** `git show 69cda7f4` shows the byte-level
+  predicate (`validate` + `port_suffix` + `AuthorityError`) DELETED from
+  `crates/lb-l7/src/authority.rs` and ADDED verbatim (line-identical
+  body — same comma/whitespace/control/empty rejects, same IPv6 bracket
+  balance, same `port_suffix` heuristic, same `::1` pin) to the new
+  `crates/lb-core/src/authority.rs`. `lb-l7` now does
+  `pub use lb_core::authority::{AuthorityError, validate};` and retains
+  ONLY the hyper `http::Request` wrapper `validate_request`. lb-quic
+  calls `lb_core::authority::validate` directly. ONE implementation,
+  no forked/weakened copy. The H1/H2 L7-09 callsites and proof stay
+  byte-identical.
+
+- **(2) Cycle check.** `cargo tree -p lb-core -e normal` excluding the
+  root node = ZERO `lb-*` dependency edges (full tree inspected: only
+  bytes/parking_lot/serde/thiserror/tokio/tokio-util — no workspace
+  crates). lb-core is a leaf. `lb-quic` and `lb-l7` both gained a
+  `lb-core` path dep (recorded in audit/deps-added.md, 2 rows);
+  `lb-l7`-as-dep-of-`lb-quic` (which would cycle, lb-l7 depends on
+  lb-quic) was correctly rejected. `cargo build --workspace` SUCCEEDS
+  (lb-core, lb-quic, lb-l7 all compile, 34s, clean).
+
+- **(3) Choke point + 4th-path hunt.** `conn_actor.rs:381-395` runs
+  `lb_core::authority::validate(&req.authority)` on a non-empty
+  `:authority` immediately after `H3Request::from_headers` (line 362)
+  and structurally BEFORE all 3 upstream branches: `h2_backend`
+  (line 398), `h3_backend` (line 408), `select_backend` (line 420).
+  Reject path emits `encode_h3_response(400, ...)` and `continue` —
+  zero dial. Adversarial 4th-path hunt: `poll_h3` (called once from
+  `run_actor:182`) is the SOLE H3 request-dispatch site — the only
+  `H3Request::from_headers` / `h3_to_*_roundtrip` callers in the crate.
+  No H3-datagram, 0-RTT/early-data, or extended-CONNECT-over-H3 path
+  reaches upstream skipping it (the router.rs 0-RTT replay guard is a
+  packet-level Initial gate, not an upstream-selection path; it does no
+  dial). GET vs POST share the one `Ok(Some(headers))` arm. NO 4th
+  H3 bypass.
+
+- **(4) Proof test.** `cargo test -p lb-quic --test
+  round8_h3_authority_enforced` — 3/3 PASS with `--test-threads=1`.
+  Tests drive a REAL `:authority` pseudo-header (`(":authority",
+  authority)` in the QPACK-encoded HEADERS frame — not a renamed plain
+  request) through a REAL loopback quiche handshake into the REAL
+  `run_actor`, with an accept-counting probe backend (`fetch_add` on
+  connect; `hits.load`). comma -> :status 400 + hits==0; whitespace ->
+  400 + hits==0; valid `example.test:8080` -> hits>=1 + status 200/502
+  (NOT over-rejected). NOTE: default parallel run flaked 2/3 with
+  `load_priv_key_from_pem_file -> TlsFail` (BoringSSL contending on
+  concurrent rcgen self-signed key loads via shared temp state) — a
+  pre-existing test-harness ISOLATION weakness, NOT a fix defect and
+  NOT a logic regression; serial run is deterministic 3/3. Flagged
+  for div-l7 as a separate proof-harness hardening item (not
+  blocking; the fix logic is sound).
+
+- **(5) Drain.** `cargo test --test round8_drain_15case` — 16/16 PASS,
+  unchanged by this fix.
+
+### VERDICT
+- **ROUND8-L7-16: VERIFIED-FIXED.** Genuinely closed, no logic fork
+  (predicate hoisted verbatim to leaf crate lb-core, re-exported), no
+  4th H3 bypass, no dep cycle, drain 16/16. NON-BLOCKING for prod
+  (future-routing primitive; no host-based routing today, same risk
+  class as L7-09's pre-fix state) — but the H3 leg of L7-09 is now
+  closed. Finding Status flipped to Verified-Fixed.
+- **Non-blocking sub-item reported to lead:** the H3 proof harness
+  (`round8_h3_authority_enforced.rs`) is not parallel-safe (shared
+  temp cert state -> BoringSSL TlsFail under default test-threads);
+  proof is sound serially. Hand to div-l7 for harness isolation; does
+  NOT affect the L7-16 verdict.
