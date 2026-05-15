@@ -877,6 +877,38 @@ impl H1Proxy {
             return reject_to_response(&rej);
         }
 
+        // ROUND8-L7-09 — uniform authority validation. HAProxy
+        // `BUG/MAJOR: http: forbid comma character in authority value`
+        // + `BUG/MEDIUM: h1: Enforce the authority validation during
+        // H1 request parsing` (the H1 parser was missing the check
+        // that H2/H3 had). The validator MUST run on EVERY parser
+        // path, BEFORE the agreement comparison and BEFORE upstream
+        // selection — a comma / whitespace / control byte inside the
+        // value is a routing/ACL-desync primitive. H1 carries the
+        // authority in the `Host` header (RFC 9112 §3.2); an absent /
+        // empty Host is handled by PROTO-2-01 upstream, so only a
+        // present-but-malformed value reaches the validator here.
+        if let Some(host_val) = parts
+            .headers
+            .get(hyper::header::HOST)
+            .and_then(|v| v.to_str().ok())
+        {
+            if !host_val.is_empty() {
+                if let Err(err) = crate::authority::validate(host_val) {
+                    tracing::warn!(
+                        peer = %peer,
+                        authority = %host_val,
+                        error = ?err,
+                        "ROUND8-L7-09: H1 Host authority rejected"
+                    );
+                    return error_response(
+                        StatusCode::BAD_REQUEST,
+                        "invalid authority (ROUND8-L7-09)",
+                    );
+                }
+            }
+        }
+
         // PROTO-2-18 (Wave 2c-2) — SNI ↔ Host agreement (RFC 9110
         // §15.5.20). H1 carries the authority in the `Host` header
         // (RFC 9112 §3.2). The validator returns `Ok(())` when SNI

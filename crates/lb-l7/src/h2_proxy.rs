@@ -609,6 +609,37 @@ impl H2Proxy {
             return error_response(StatusCode::BAD_REQUEST, "request smuggling");
         }
 
+        // ROUND8-L7-09 — uniform authority validation (HAProxy
+        // `BUG/MAJOR: http: forbid comma in authority` +
+        // `BUG/MEDIUM: h1: Enforce the authority validation`). The
+        // SAME predicate that the H1 path enforces MUST run on the
+        // H2 parser too, BEFORE the agreement compare and BEFORE
+        // upstream selection. H2 carries the authority in the
+        // `:authority` pseudo-header (hyper surfaces it as
+        // `uri.authority()`); a client may also still send `Host`.
+        // Validate whichever value(s) are present.
+        for candidate in [
+            parts.uri.authority().map(http::uri::Authority::as_str),
+            parts
+                .headers
+                .get(hyper::header::HOST)
+                .and_then(|v| v.to_str().ok()),
+        ]
+        .into_iter()
+        .flatten()
+        .filter(|s| !s.is_empty())
+        {
+            if let Err(err) = crate::authority::validate(candidate) {
+                tracing::warn!(
+                    peer = %peer,
+                    authority = %candidate,
+                    error = ?err,
+                    "ROUND8-L7-09: H2 authority rejected"
+                );
+                return error_response(StatusCode::BAD_REQUEST, "invalid authority (ROUND8-L7-09)");
+            }
+        }
+
         // PROTO-2-01 — RFC 9113 §8.3.1: when both `:authority` and
         // `Host` are present they MUST agree. hyper surfaces
         // `:authority` as `uri.authority()`. Disagreement is a
