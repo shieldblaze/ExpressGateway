@@ -5,6 +5,7 @@ Our equivalent: `crates/lb-l4-xdp/ebpf/src/main.rs:395-477` (IPv4 path), `:595-6
 
 Severity: medium
 Status:   Proposed-Fix (div-l4, task#73, 2026-05-15, commit d4d81e40 `ROUND8-L4-02/08 — repair NUM_SLOTS sibling assertions`) — the push-back is addressed: `round8_fragments.rs:59` no longer hardcodes `assert_eq!(NUM_SLOTS,13)`. Re-anchored to the enum: both fragment slots must be `< NUM_SLOTS` AND `NewFlowRateCap+1 == NUM_SLOTS`. Proof: `cargo test -p lb-l4-xdp --test round8_fragments` 6/6 PASS (was 5/1-FAIL); `stats_export` 3 pass + 1 ignored. L4-03 BPF source already changed under 43d250ee; verifier-log re-capture is the ROUND8-L4-10 diff-gate's job at first privileged CI run (cross-ref L4-10; tests-only repair). Verify re-checks.
+          [VERIFIED-FIXED (verify, task#74, 2026-05-15, sha d4d81e40) — re-check of the hollow push-back. round8_fragments 6/6 PASS. The asserts are now genuinely ENUM-DERIVED, not bumped to 16: `(StatSlot::V4Fragment as usize) < NUM_SLOTS`, `(StatSlot::V6Fragment as usize) < NUM_SLOTS`, `StatSlot::NewFlowRateCap as usize + 1 == NUM_SLOTS`. Same anti-rot tripwire as L4-02: a future slot add after NewFlowRateCap trips `NewFlowRateCap+1 == NUM_SLOTS` instead of silently dropping a kernel-read slot. NON-BLOCKING for prod. See audit/round-8/verify/fixback.md.]
           [Prior: Push-back (verify, task#70, 2026-05-15) — eBPF frag detection correct, but proof `round8_fragments.rs:59` FAILED: hardcoded `assert_eq!(NUM_SLOTS,13)` while L4-03 grew it to 16. See audit/round-8/verify/l4.md.]
 
 Divergence:
