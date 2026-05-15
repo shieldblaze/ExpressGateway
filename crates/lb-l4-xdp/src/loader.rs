@@ -12,6 +12,8 @@
 
 use std::io;
 use std::net::Ipv4Addr;
+use std::sync::atomic::{AtomicU32, AtomicU64, Ordering};
+use std::time::{SystemTime, UNIX_EPOCH};
 
 use aya::{
     Ebpf, EbpfError, EbpfLoader, Pod,
@@ -54,6 +56,20 @@ pub const ACL_DENY_TRIE_PIN_NAME: &str = "acl_deny_trie";
 /// Pin filename of the per-CPU stats array (EBPF-2-08 exposes the
 /// counter slots via `stats_export.rs`).
 pub const STATS_PIN_NAME: &str = "stats";
+
+/// ROUND8-L4-03: pin filename of the runtime new-flow-cap config
+/// (per-CPU `u32`). Matches `#[map(name = "new_flow_cap_cfg")]` in
+/// `ebpf/src/main.rs`. Userspace writes the
+/// `xdp_new_flow_cap_per_sec_per_cpu` value here so the BPF
+/// `is_under_flood()` hot path reads an operator-tunable cap without
+/// a redeploy. A `0` value disables the rate limiter.
+pub const NEW_FLOW_CAP_CFG_PIN_NAME: &str = "new_flow_cap_cfg";
+
+/// ROUND8-L4-03: pin filename of the per-CPU sliding-window counter
+/// (`RateWindow`). Matches `#[map(name = "new_flow_rate")]`. Owned by
+/// the BPF program; userspace never writes it. Named here so bpftool
+/// / observability tooling can find the pin.
+pub const NEW_FLOW_RATE_PIN_NAME: &str = "new_flow_rate";
 
 /// Default bpffs root for the production deployment. The directory
 /// itself must be created with `0750` ownership of the LB uid:gid
@@ -759,6 +775,38 @@ impl XdpLoader {
             .map_err(|e| XdpLoaderError::StatsExport(e.to_string()))
     }
 
+    /// ROUND8-L4-03: write the per-CPU new-flow cap into the
+    /// `new_flow_cap_cfg` map so the BPF `is_under_flood()` hot path
+    /// reads an operator-tunable threshold (Katran `MAX_CONN_RATE`
+    /// parity, default 125_000/s/CPU). A `cap` of `0` disables the
+    /// rate limiter at the data plane. Idempotent; the control plane
+    /// re-applies it on every config reload.
+    ///
+    /// The value is broadcast to every CPU's slot (the BPF program
+    /// reads its own CPU's slot; the cap is uniform across CPUs).
+    ///
+    /// # Errors
+    ///
+    /// - [`XdpLoaderError::MapNotFound`]: the ELF did not declare
+    ///   `new_flow_cap_cfg` (stale BPF object — rebuild the ebpf crate).
+    /// - [`XdpLoaderError::Map`]: aya rejected the per-CPU typed
+    ///   conversion or the `bpf_map_update_elem` write.
+    pub fn set_new_flow_cap(&mut self, cap: u32) -> Result<(), XdpLoaderError> {
+        use aya::maps::{PerCpuArray, PerCpuValues};
+        let map = self
+            .ebpf
+            .map_mut(NEW_FLOW_CAP_CFG_PIN_NAME)
+            .ok_or(XdpLoaderError::MapNotFound(NEW_FLOW_CAP_CFG_PIN_NAME))?;
+        let mut cfg: PerCpuArray<&mut MapData, u32> =
+            PerCpuArray::try_from(map).map_err(XdpLoaderError::Map)?;
+        let nr_cpus = aya::util::nr_cpus()
+            .map_err(|(_, e)| XdpLoaderError::Io(e))?
+            .max(1);
+        let values = PerCpuValues::try_from(vec![cap; nr_cpus]).map_err(XdpLoaderError::Io)?;
+        cfg.set(0, values, 0).map_err(XdpLoaderError::Map)?;
+        Ok(())
+    }
+
     /// Kernel-free ELF inspection: parse the BPF object with aya-obj and
     /// return every program name it declares. Safe to call on
     /// unprivileged CI runners — this never touches the BPF syscall.
@@ -1181,6 +1229,120 @@ pub struct XdpQueryResult {
     pub prog_id: Option<u32>,
     /// Mode the kernel reports (drv / skb / hw); `None` if unknown.
     pub mode: Option<XdpMode>,
+}
+
+/// ROUND8-L4-03: Katran `MAX_CONN_RATE` parity default — new flows
+/// admitted per second per CPU before the rate cap engages. Mirrors
+/// `crates/lb-l4-xdp/ebpf/src/main.rs::DEFAULT_NEW_FLOW_CAP_PER_CPU`
+/// and `lb_config`'s `default_xdp_new_flow_cap_per_sec_per_cpu`.
+pub const DEFAULT_NEW_FLOW_CAP_PER_SEC_PER_CPU: u32 = 125_000;
+
+/// ROUND8-L4-03: userspace leaky-bucket rate limiter for control-plane
+/// conntrack inserts (`lb-balancer` driving `conntrack_map().insert()`).
+///
+/// The BPF-side `is_under_flood()` gate (Katran lesson 4) protects the
+/// LRU from the attacker's *data-plane* RPS. But our flow-control loop
+/// is in userspace, so the *control-plane* write path
+/// (`lb-balancer` → `bpf_map_update_elem`) is the other lever: under a
+/// SYN flood the balancer would otherwise push millions of throwaway
+/// CT entries/sec, achieving the same LRU-thrash via a different door.
+/// This gate is the userspace mirror — composed in front of every
+/// `insert_conntrack_v4` / `insert_conntrack_v6`.
+///
+/// Leaky-bucket, lock-free: `tokens` is replenished lazily on each
+/// `try_admit` from the elapsed wall-clock since `last_refill_ns`,
+/// capped at `burst`. `SystemTime` (not `Instant`) is used so the
+/// gate is `Send + Sync + 'static` without an `Instant` field; the
+/// refill math only ever uses *deltas* so a wall-clock step back
+/// merely yields a (safe) zero-refill tick.
+#[derive(Debug)]
+pub struct CtInsertGate {
+    tokens: AtomicU32,
+    refill_per_sec: u32,
+    burst: u32,
+    last_refill_ns: AtomicU64,
+}
+
+impl CtInsertGate {
+    /// Build a gate with `refill_per_sec` admissions/sec and a burst
+    /// ceiling of `refill_per_sec` (one second of slack). A
+    /// `refill_per_sec` of `0` disables the gate (every `try_admit`
+    /// returns `true`) so an operator can opt out via the
+    /// `xdp_new_flow_cap_per_sec_per_cpu = 0` config.
+    #[must_use]
+    pub fn new(refill_per_sec: u32) -> Self {
+        Self {
+            tokens: AtomicU32::new(refill_per_sec),
+            refill_per_sec,
+            burst: refill_per_sec,
+            last_refill_ns: AtomicU64::new(Self::now_ns()),
+        }
+    }
+
+    fn now_ns() -> u64 {
+        // A wall-clock step backwards yields a saturating-sub of 0 in
+        // the refill path — never a panic, never a negative refill.
+        SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map(|d| u64::try_from(d.as_nanos()).unwrap_or(u64::MAX))
+            .unwrap_or(0)
+    }
+
+    /// Attempt to admit one control-plane conntrack insert. Returns
+    /// `true` if a token was available (insert may proceed), `false`
+    /// if the bucket is empty (caller MUST skip the insert and bump
+    /// `StatSlot::NewFlowRateCap`).
+    pub fn try_admit(&self) -> bool {
+        if self.refill_per_sec == 0 {
+            return true; // disabled
+        }
+        // Lazy refill: add `elapsed_ns * rate / 1e9` tokens, capped.
+        let now = Self::now_ns();
+        let last = self.last_refill_ns.load(Ordering::Relaxed);
+        let elapsed = now.saturating_sub(last);
+        if elapsed > 0 {
+            let refill =
+                (u128::from(elapsed) * u128::from(self.refill_per_sec) / 1_000_000_000u128) as u64;
+            if refill > 0
+                && self
+                    .last_refill_ns
+                    .compare_exchange(last, now, Ordering::Relaxed, Ordering::Relaxed)
+                    .is_ok()
+            {
+                let add = u32::try_from(refill).unwrap_or(u32::MAX);
+                // Saturating add then clamp to burst.
+                let mut cur = self.tokens.load(Ordering::Relaxed);
+                loop {
+                    let next = cur.saturating_add(add).min(self.burst);
+                    match self.tokens.compare_exchange_weak(
+                        cur,
+                        next,
+                        Ordering::Relaxed,
+                        Ordering::Relaxed,
+                    ) {
+                        Ok(_) => break,
+                        Err(observed) => cur = observed,
+                    }
+                }
+            }
+        }
+        // Consume one token if available.
+        let mut cur = self.tokens.load(Ordering::Relaxed);
+        loop {
+            if cur == 0 {
+                return false;
+            }
+            match self.tokens.compare_exchange_weak(
+                cur,
+                cur - 1,
+                Ordering::Relaxed,
+                Ordering::Relaxed,
+            ) {
+                Ok(_) => return true,
+                Err(observed) => cur = observed,
+            }
+        }
+    }
 }
 
 #[cfg(test)]

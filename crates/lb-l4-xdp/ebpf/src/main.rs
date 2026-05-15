@@ -266,6 +266,16 @@ const STAT_CT_RST_PRUNE: u32 = 13;
 /// still needs to land — but the slot is freed so a replay of the
 /// already-closed flow does not pin LRU capacity.
 const STAT_CT_FIN_PRUNE: u32 = 14;
+/// ROUND8-L4-03: a *new* flow (conntrack miss) was rate-capped under a
+/// SYN-flood. Katran `is_under_flood()` lesson 4: above the per-CPU
+/// new-flow cap, the new flow's CT-miss path is short-circuited to
+/// `XDP_PASS` WITHOUT signalling the userspace control plane to
+/// populate the conntrack table. Established flows (CT hit) are
+/// unaffected — the LRU stays stable for legitimate traffic instead
+/// of being thrashed by the attacker's unique 5-tuples. The counter
+/// is the operator's SYN-flood signal and the back-pressure feedback
+/// the control loop polls.
+const STAT_NEW_FLOW_RATE_CAP: u32 = 15;
 
 // EBPF-2-03: BPF_MAP_TYPE_LRU_HASH evicts the oldest entry under
 // flood instead of returning ENOMEM at insert time. This closes the
@@ -298,6 +308,100 @@ static ACL_DENY_TRIE: LpmTrie<u32, u32> = LpmTrie::<u32, u32>::with_max_entries(
 
 #[map(name = "stats")]
 static STATS: PerCpuArray<u64> = PerCpuArray::<u64>::with_max_entries(32, 0);
+
+// ---------------------------------------------------------------------------
+// ROUND8-L4-03: per-CPU new-flow-rate tracker (Katran `is_under_flood()`
+// lesson 4). Under a SYN flood an attacker sprays millions of unique
+// 5-tuples/sec. Each is a conntrack MISS; today the BPF program returns
+// `XDP_PASS` on miss and the userspace control plane (`lb-balancer`)
+// reacts by pushing a CONNTRACK entry. At flood scale that is millions
+// of `bpf_map_update_elem` syscalls/sec into a 1M-entry LRU — every
+// established (legitimate) flow becomes an LRU eviction loser.
+//
+// The cap is per-CPU (no cross-CPU coherence cost; XDP runs one
+// instance per RX queue/CPU) and a 1-second sliding window keyed off
+// `bpf_ktime_get_ns()`. When `flows_this_window > cap`, the new flow's
+// miss path is short-circuited to `XDP_PASS` WITHOUT the stat slot
+// that the control loop treats as "please populate CT" — the LRU is
+// left stable for the established-flow CT-hit path.
+//
+// IMPORTANT: this commit changes the BPF source (a new
+// `bpf_ktime_get_ns()` helper call + two new per-CPU maps); the
+// verifier-log baselines under `audit/ebpf/verifier-logs/*.committed`
+// must be refreshed by the first CI matrix run after this lands
+// (same posture as ROUND8-L4-02 / ROUND8-L4-10 cross-ref).
+// ---------------------------------------------------------------------------
+
+/// Per-CPU sliding-window counter for the new-flow-rate cap.
+#[repr(C)]
+#[derive(Clone, Copy)]
+pub struct RateWindow {
+    /// `bpf_ktime_get_ns()` value at the start of the current 1 s window.
+    pub window_start_ns: u64,
+    /// New flows (CT misses) admitted in the current window.
+    pub flows_this_window: u32,
+    pub _pad: u32,
+}
+
+#[map(name = "new_flow_rate")]
+static NEW_FLOW_RATE: PerCpuArray<RateWindow> = PerCpuArray::<RateWindow>::with_max_entries(1, 0);
+
+/// Runtime-tunable per-CPU new-flow cap. One-entry per-CPU array the
+/// hot path reads once per CT-miss (verifier-cheap: a single
+/// `bpf_map_lookup_elem` of an `Array`). Userspace writes it from the
+/// `xdp_new_flow_cap_per_sec_per_cpu` config knob (default 125_000,
+/// mirroring Katran's `MAX_CONN_RATE`). A zero value means "cap
+/// disabled" so an operator can opt out without a redeploy.
+#[map(name = "new_flow_cap_cfg")]
+static NEW_FLOW_CAP_CFG: PerCpuArray<u32> = PerCpuArray::<u32>::with_max_entries(1, 0);
+
+/// ROUND8-L4-03: Katran `MAX_CONN_RATE` parity — the compile-time
+/// fallback used when userspace has not (yet) written
+/// `NEW_FLOW_CAP_CFG` (value still 0 at the very first packets after
+/// load, before the control plane's config push). 0 in the cfg map is
+/// interpreted as "operator disabled the cap", so we distinguish
+/// not-yet-written from disabled by only consulting the fallback when
+/// the slot is unreadable.
+const DEFAULT_NEW_FLOW_CAP_PER_CPU: u32 = 125_000;
+
+/// One billion nanoseconds = the 1-second sliding window.
+const RATE_WINDOW_NS: u64 = 1_000_000_000;
+
+/// ROUND8-L4-03: returns `true` when this CPU has already admitted
+/// more than the configured cap of new flows in the current 1-second
+/// window. Mirrors Katran `balancer_kern.c` `is_under_flood()`:
+/// per-CPU window, reset on rollover, increment-then-compare.
+///
+/// Called only on the conntrack-MISS path (a CT hit is an established
+/// flow and is never rate-capped — that is the whole point: keep the
+/// LRU stable for legitimate traffic under flood).
+#[inline(always)]
+fn is_under_flood() -> bool {
+    let cap = match NEW_FLOW_CAP_CFG.get_ptr(0) {
+        // SAFETY: aya returned a non-null pointer for this CPU's slot.
+        Some(p) => unsafe { *p },
+        None => DEFAULT_NEW_FLOW_CAP_PER_CPU,
+    };
+    // Cap of 0 = operator disabled the rate limiter entirely.
+    if cap == 0 {
+        return false;
+    }
+    let Some(slot) = NEW_FLOW_RATE.get_ptr_mut(0) else {
+        // Map unreadable — fail OPEN (do not drop legitimate traffic
+        // because telemetry state is unavailable).
+        return false;
+    };
+    // SAFETY: aya returned a non-null pointer for this CPU's slot;
+    // per-CPU array element is exclusively owned by this CPU.
+    let w = unsafe { &mut *slot };
+    let now = unsafe { aya_ebpf::helpers::bpf_ktime_get_ns() };
+    if now.wrapping_sub(w.window_start_ns) > RATE_WINDOW_NS {
+        w.window_start_ns = now;
+        w.flows_this_window = 0;
+    }
+    w.flows_this_window = w.flows_this_window.saturating_add(1);
+    w.flows_this_window > cap
+}
 
 // ---------------------------------------------------------------------------
 // Verifier-safe packet accessors.
@@ -570,6 +674,17 @@ fn handle_ipv4(ctx: &XdpContext, l3_offset: usize) -> Result<u32, ()> {
     let entry: BackendEntry = match unsafe { CONNTRACK.get(&key) } {
         Some(v) => *v,
         None => {
+            // ROUND8-L4-03: conntrack MISS == a *new* flow. Under a
+            // SYN flood this is the attacker's lever: each unique
+            // 5-tuple is a miss that the userspace control plane
+            // would otherwise populate, thrashing the LRU. Above the
+            // per-CPU cap, short-circuit to XDP_PASS WITHOUT the
+            // STAT_PASS signal the control loop treats as "populate
+            // CT" — established (CT-hit) flows above are unaffected.
+            if is_under_flood() {
+                incr_stat(STAT_NEW_FLOW_RATE_CAP);
+                return Ok(xdp_action::XDP_PASS);
+            }
             incr_stat(STAT_PASS);
             return Ok(xdp_action::XDP_PASS);
         }
@@ -821,6 +936,11 @@ fn handle_ipv6(ctx: &XdpContext, l3_offset: usize) -> Result<u32, ()> {
     let entry: BackendEntryV6 = match unsafe { CONNTRACK_V6.get(&key) } {
         Some(v) => *v,
         None => {
+            // ROUND8-L4-03: mirror of the IPv4 CT-miss flood gate.
+            if is_under_flood() {
+                incr_stat(STAT_NEW_FLOW_RATE_CAP);
+                return Ok(xdp_action::XDP_PASS);
+            }
             incr_stat(STAT_PASS);
             return Ok(xdp_action::XDP_PASS);
         }

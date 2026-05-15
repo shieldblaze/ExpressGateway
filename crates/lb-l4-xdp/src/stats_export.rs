@@ -208,12 +208,25 @@ pub enum StatSlot {
     /// paying the verifier cost of a full FSM (deferred to Pillar
     /// 4b-3).
     CtFinPrune = 14,
+    /// `STAT_NEW_FLOW_RATE_CAP` (ROUND8-L4-03): a *new* flow
+    /// (conntrack miss) was rate-capped under a SYN flood. Katran
+    /// `is_under_flood()` lesson 4: above the per-CPU new-flow cap
+    /// (`xdp_new_flow_cap_per_sec_per_cpu`, default 125_000), the
+    /// CT-miss path is short-circuited to XDP_PASS WITHOUT the
+    /// STAT_PASS "please populate conntrack" signal — established
+    /// (CT-hit) flows are untouched so the LRU stays stable for
+    /// legitimate traffic instead of being thrashed by the
+    /// attacker's unique 5-tuples. This counter is the operator's
+    /// SYN-flood alarm AND the back-pressure signal the userspace
+    /// control loop polls. The userspace `CtInsertGate` increments
+    /// the same slot when it denies a control-plane CT insert.
+    NewFlowRateCap = 15,
 }
 
 /// Number of currently-defined stat slots. Bumps to this constant
 /// must come WITH a matching addition to the `STAT_*` enum in the
 /// eBPF crate AND a new variant at the end of [`StatSlot`].
-pub const NUM_SLOTS: usize = 15;
+pub const NUM_SLOTS: usize = 16;
 
 /// Errors from the STATS read path.
 #[derive(Debug, thiserror::Error)]
@@ -382,6 +395,7 @@ mod tests {
         assert_eq!(StatSlot::V6Fragment as usize, 12);
         assert_eq!(StatSlot::CtRstPrune as usize, 13);
         assert_eq!(StatSlot::CtFinPrune as usize, 14);
+        assert_eq!(StatSlot::NewFlowRateCap as usize, 15);
     }
 
     #[test]
@@ -389,7 +403,7 @@ mod tests {
         // If a new variant is added to StatSlot without bumping
         // NUM_SLOTS the read loop in `read_stats` would silently
         // skip it — this assertion guards that invariant.
-        assert_eq!(NUM_SLOTS, 15);
+        assert_eq!(NUM_SLOTS, 16);
     }
 
     #[cfg(not(target_os = "linux"))]

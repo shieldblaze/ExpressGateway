@@ -276,6 +276,36 @@ pub struct RuntimeConfig {
     /// mode is a type error, not a runtime surprise.
     #[serde(default = "default_max_keepalive_requests")]
     pub max_keepalive_requests: u32,
+    /// ROUND8-L4-03: per-CPU new-flow-rate cap for the XDP SYN-flood
+    /// mitigation (Katran `balancer_kern.c` `is_under_flood()`,
+    /// `MAX_CONN_RATE`). When the data plane sees more than this many
+    /// conntrack-MISS (new) flows per second on a single CPU, the
+    /// excess new flows are short-circuited to `XDP_PASS` WITHOUT the
+    /// "populate conntrack" signal — established (CT-hit) flows are
+    /// untouched, so an attacker spraying millions of unique
+    /// 5-tuples/sec can no longer thrash the 1M-entry LRU and evict
+    /// legitimate established connections. The same value gates the
+    /// userspace control-plane `CtInsertGate` (leaky-bucket on
+    /// `lb-balancer`'s conntrack inserts).
+    ///
+    /// `0` disables the rate limiter (data plane + control plane).
+    /// Default `125_000` mirrors Katran's per-core
+    /// `MAX_CONN_RATE`. Validation range: `0` (disabled) or
+    /// `1_000..=10_000_000` — a cap below 1k/s/CPU would skip CT
+    /// insertion for normal traffic (repeated lookup misses → packets
+    /// fall to the kernel stack instead of `XDP_TX`); above 10M/s/CPU
+    /// is past line rate on any current NIC and effectively unbounded.
+    /// Multi-replica deployments must size this per-replica (the
+    /// `CtInsertGate` is per-process) — see RUNBOOK.
+    #[serde(default = "default_xdp_new_flow_cap_per_sec_per_cpu")]
+    pub xdp_new_flow_cap_per_sec_per_cpu: u32,
+}
+
+/// ROUND8-L4-03: Katran `MAX_CONN_RATE` per-core parity. Mirrors
+/// `lb_l4_xdp::DEFAULT_NEW_FLOW_CAP_PER_SEC_PER_CPU` and the eBPF
+/// `DEFAULT_NEW_FLOW_CAP_PER_CPU`.
+const fn default_xdp_new_flow_cap_per_sec_per_cpu() -> u32 {
+    125_000
 }
 
 /// ROUND8-L7-06: nginx-parity default of 100 requests per keep-alive
@@ -1105,6 +1135,21 @@ fn validate_runtime(rt: &RuntimeConfig) -> Result<(), ConfigError> {
                 wd.sweep_interval_ms
             )));
         }
+    }
+    // ROUND8-L4-03: the new-flow cap is either 0 (disabled) or in
+    // 1_000..=10_000_000 per CPU. Below 1k/s/CPU the data plane would
+    // skip conntrack insertion for normal traffic (lookup misses →
+    // packets fall to the kernel stack instead of XDP_TX); above
+    // 10M/s/CPU is past line rate on any current NIC. The clamp keeps
+    // the runtime footgun (finding "Risk / blast radius") off the
+    // table — an out-of-range value is a hard config error, not a
+    // silent traffic blackhole.
+    let cap = rt.xdp_new_flow_cap_per_sec_per_cpu;
+    if cap != 0 && !(1_000..=10_000_000).contains(&cap) {
+        return Err(ConfigError::Validation(format!(
+            "runtime.xdp_new_flow_cap_per_sec_per_cpu={cap} out of range \
+             (0 to disable, else 1000..=10000000)",
+        )));
     }
     Ok(())
 }
@@ -2016,6 +2061,7 @@ xdp_interface = "eth0"
                 watchdog: None,
                 header_underscore_policy: HeaderUnderscorePolicy::Reject,
                 max_keepalive_requests: 100,
+                xdp_new_flow_cap_per_sec_per_cpu: 125_000,
             }),
             observability: None,
             admin: None,
@@ -2057,6 +2103,7 @@ xdp_interface = "eth0"
                 watchdog: None,
                 header_underscore_policy: HeaderUnderscorePolicy::Reject,
                 max_keepalive_requests: 100,
+                xdp_new_flow_cap_per_sec_per_cpu: 125_000,
             }),
             observability: None,
             admin: None,
@@ -2212,6 +2259,7 @@ address = "127.0.0.1:3000"
             watchdog: None,
             header_underscore_policy: HeaderUnderscorePolicy::Reject,
             max_keepalive_requests: 100,
+            xdp_new_flow_cap_per_sec_per_cpu: 125_000,
         }
     }
 

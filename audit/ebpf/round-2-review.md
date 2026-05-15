@@ -147,6 +147,18 @@ Status:   Verified-Fixed(c009219) — rel round-5 sign-off; userspace simulator 
             pruning (RST → evict + XDP_PASS; FIN-ACK → rewrite-and-TX +
             evict). Full FSM (SYN_SENT/ESTABLISHED/TIME_WAIT timers)
             deferred to Pillar 4b-3.
+            Further augmented by ROUND8-L4-03 (Proposed-Fix): the LRU
+            swap + RST/FIN pruning still left the *write-amplification*
+            angle open — under a SYN flood the userspace control plane
+            pushes millions of throwaway CT inserts/sec, evicting
+            established flows. L4-03 adds the Katran `is_under_flood()`
+            per-CPU new-flow-rate cap on the CT-miss path (data plane)
+            plus a `CtInsertGate` leaky-bucket on the control-plane
+            insert path, gated by `xdp_new_flow_cap_per_sec_per_cpu`
+            (default 125_000/s/CPU). Orthogonal to L4-02: a SYN flood
+            never hits RST/FIN so pruning alone does not bound it.
+            BPF source changed → verifier-log re-capture pending
+            (ROUND8-L4-10).
 Location: `crates/lb-l4-xdp/ebpf/src/main.rs:209-215`.
 
 ```

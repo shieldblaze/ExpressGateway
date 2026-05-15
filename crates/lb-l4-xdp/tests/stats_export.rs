@@ -69,9 +69,18 @@ fn read_stats_without_install_returns_handle_missing() {
     }
 }
 
+/// Wire-stability guard for the STATS slot count. The original
+/// EBPF-2-08 baseline was 10; ROUND8-L4-01/-02/-08 appended slots
+/// 10..=14 and ROUND8-L4-03 appended slot 15
+/// (`StatSlot::NewFlowRateCap`, the SYN-flood cap counter), so the
+/// current contract is 16. Each bump MUST come with (a) a new
+/// `STAT_*` constant in the eBPF crate, (b) a new `StatSlot` variant
+/// appended at the end, and (c) this assertion updated in lock-step
+/// — the inline `stats_export::tests::num_slots_matches_enum` is the
+/// sibling guard.
 #[test]
-fn num_slots_constant_is_ten() {
-    assert_eq!(NUM_SLOTS, 10);
+fn num_slots_constant_tracks_appended_slots() {
+    assert_eq!(NUM_SLOTS, 16);
 }
 
 /// EBPF-2-08 named proof test for the kernel-side path. Deferred to
