@@ -384,6 +384,14 @@ struct ListenerState {
     /// label on `accept_inflight{listener=…}` and on the (Wave-2c-2)
     /// per-request `http_requests_total{listener, …}` emit-site.
     listener_label: Arc<String>,
+    /// ROUND8 OPS-02 div-l7 refinement: per-listener effective drain
+    /// jitter ceiling (ms). On SIGTERM the per-conn cancel arm draws
+    /// an independent `[0, this)` sleep so connections *within* one
+    /// pod stagger their abort instant (intra-pod desync) on top of
+    /// the coordinator-level per-process draw div-ops landed (which
+    /// only desyncs *across* replicas). `0` (jitter disabled, or no
+    /// `[runtime]`) makes the arm behave exactly as before.
+    per_conn_drain_jitter_ms: u64,
 }
 
 /// REL-2-09 follow-on: RAII guard that decrements the
@@ -1030,6 +1038,10 @@ async fn spawn_tcp(
     // ROUND8-L7-06: per-keep-alive-connection request cap threaded
     // into the H1/H2 proxy builders.
     max_keepalive_requests: u32,
+    // ROUND8 OPS-02 div-l7 refinement: per-listener effective drain
+    // jitter ceiling (ms) used by the per-conn cancel arm to draw a
+    // per-connection desync sleep on SIGTERM.
+    per_conn_drain_jitter_ms: u64,
     hooks: Arc<HooksBundle>,
     shutdown_token: CancellationToken,
     listener_cancel_token: CancellationToken,
@@ -1097,6 +1109,7 @@ async fn spawn_tcp(
         listener_cancel_token,
         tracker: tracker.clone(),
         listener_label: Arc::new(listener_cfg.address.clone()),
+        per_conn_drain_jitter_ms,
     });
     // CODE-2-03 follow-on: the listener accept loop itself is a
     // long-lived task. Route it through the tracker so drain waits
@@ -1849,6 +1862,16 @@ async fn async_main() -> anyhow::Result<()> {
             );
             continue;
         }
+        // ROUND8 OPS-02 div-l7 refinement (Wave 2b-1 handoff): the
+        // coordinator-level jitter (div-ops) is a single per-PROCESS
+        // draw that desynchronises *replicas*. This is the finer
+        // per-CONNECTION ceiling: each per-conn cancel arm draws its
+        // OWN `[0, jitter)` so connections *within* one pod also
+        // desync their abort instant (intra-pod spread), not just
+        // inter-pod. Sourced from the same per-listener effective
+        // jitter OPS-10 honours (override → [runtime] → drain/4).
+        let per_conn_drain_jitter_ms =
+            listener_cfg.effective_drain_jitter_ms(config.runtime.as_ref());
         let handle = spawn_tcp(
             listener_cfg,
             &pool,
@@ -1859,6 +1882,7 @@ async fn async_main() -> anyhow::Result<()> {
             max_inflight,
             connect_timeout,
             max_keepalive_requests,
+            per_conn_drain_jitter_ms,
             Arc::clone(&hooks),
             shutdown.token().clone(),
             // OPS-04+L4-12 Round-8: per-listener cooperative-cancel
@@ -2592,9 +2616,15 @@ async fn run_listener(bind_addr: String, state: Arc<ListenerState>) -> anyhow::R
             st.metrics.increment("connections_total", 1);
 
             let http_start = Instant::now();
-            let mut http_version: Option<&'static str> = None;
+            // ROUND8 OPS-02 div-l7 refinement: the work future now
+            // *returns* the negotiated HTTP version alongside its
+            // result instead of capturing `&mut http_version`. That
+            // lifts the borrow so the future can be `tokio::pin!`-ed
+            // and re-polled inside the per-conn jitter grace without
+            // a borrow-conflict against the post-task metrics read.
             let work = async {
-                match &st.mode {
+                let mut http_version: Option<&'static str> = None;
+                let res: anyhow::Result<()> = match &st.mode {
                     ListenerMode::PlainTcp => {
                         proxy_connection(
                             client_stream,
@@ -2740,7 +2770,8 @@ async fn run_listener(bind_addr: String, state: Arc<ListenerState>) -> anyhow::R
                             Err(e) => Err(anyhow::Error::new(e)),
                         }
                     }
-                }
+                };
+                (http_version, res)
             };
 
             // CODE-2-03 follow-on: race the proxy work against the
@@ -2751,23 +2782,58 @@ async fn run_listener(bind_addr: String, state: Arc<ListenerState>) -> anyhow::R
             // The H2 path already wires the cancel through
             // `serve_connection_with_cancel`, so for that case this
             // outer race is a backstop, not the primary mechanism.
-            let result = tokio::select! {
+            tokio::pin!(work);
+            let (http_version, result) = tokio::select! {
                 biased;
                 () = conn_cancel.cancelled() => {
-                    if let Ok(c) = st.metrics.counter(
-                        "shutdown_aborted_connections_total",
-                        "Per-connection tasks cancelled mid-flight by SIGTERM drain",
-                    ) {
-                        c.inc();
+                    // ROUND8 OPS-02 div-l7 refinement: instead of
+                    // abandoning the connection at the *same instant*
+                    // as every other in-flight conn in this pod (the
+                    // pre-refinement behaviour — div-ops's
+                    // coordinator-level draw only desyncs *across*
+                    // replicas), draw a per-CONNECTION
+                    // `[0, per_conn_drain_jitter_ms)` grace. Near-done
+                    // work that completes inside its own jittered
+                    // window finishes cleanly (counts as success);
+                    // the rest still abort but at staggered instants,
+                    // smearing the upstream-close burst within the
+                    // pod. Bounded by the per-listener jitter ceiling
+                    // (≤ the coordinator inflight-drain deadline
+                    // div-ops owns), so this never extends the drain.
+                    // `0` (jitter disabled / no [runtime]) collapses
+                    // to the original immediate-abort behaviour.
+                    let jitter = {
+                        let ceil = st.per_conn_drain_jitter_ms;
+                        if ceil == 0 {
+                            Duration::ZERO
+                        } else {
+                            use rand::Rng;
+                            Duration::from_millis(
+                                rand::thread_rng().gen_range(0..ceil),
+                            )
+                        }
+                    };
+                    tokio::select! {
+                        biased;
+                        r = &mut work => r,
+                        () = tokio::time::sleep(jitter) => {
+                            if let Ok(c) = st.metrics.counter(
+                                "shutdown_aborted_connections_total",
+                                "Per-connection tasks cancelled mid-flight by SIGTERM drain",
+                            ) {
+                                c.inc();
+                            }
+                            tracing::debug!(
+                                client = %client_addr,
+                                backend = %backend_addr,
+                                jitter_ms = jitter.as_millis() as u64,
+                                "per-conn task cancelled by SIGTERM drain (post per-conn jitter)"
+                            );
+                            (None, Err(anyhow::anyhow!("connection cancelled by shutdown")))
+                        }
                     }
-                    tracing::debug!(
-                        client = %client_addr,
-                        backend = %backend_addr,
-                        "per-conn task cancelled by SIGTERM drain"
-                    );
-                    Err(anyhow::anyhow!("connection cancelled by shutdown"))
                 }
-                r = work => r,
+                r = &mut work => r,
             };
 
             // REL-2-08 follow-on: http_requests_total{listener, route,
