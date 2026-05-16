@@ -173,6 +173,41 @@ closure.
 
 Until one of those lands, the XDP loader happy paths (`kernel_load`, `attach`) are not exercised. L4 proxying goes through the kernel TCP stack as normal; no traffic is lost.
 
+## ENA native-XDP requirements (hard deployment constraint)
+
+The shipped `lb_xdp.bin` is built **without XDP multi-buffer (frags)
+support**. On the AWS `ena` driver, native (`xdpdrv` / `XDP_FLAGS_DRV_MODE`)
+attach is **refused by the driver** unless BOTH of the following hold on
+the target interface:
+
+1. **MTU ≤ 3498.** With a larger MTU (e.g. the VPC jumbo default
+   `9001`) the `ena` driver rejects native XDP with
+   `the current MTU (<n>) is larger than the maximum allowed MTU
+   (3498) while xdp is on`. This is a direct consequence of the
+   no-frags build — a frags-enabled object would lift this.
+2. **Combined channels ≤ max/2** (`ethtool -L <iface> combined
+   <≤max/2>`). The `ena` driver reserves a dedicated XDP TX queue per
+   channel; at `combined == max` native attach fails with
+   `the Rx/Tx channel count should be at most half of the maximum
+   allowed channel count`.
+
+Operational guidance for a native-XDP deployment on ENA:
+
+- Set `MTU ≤ 3498` on the data-plane interface, **or** do not enable
+  native XDP (the loader falls back to `skb`/generic with a significant
+  performance penalty — see RUNBOOK `LbXdpAttachMode`).
+- Set `ethtool -L <iface> combined <≤ half of max>` before attach.
+- These are verified by the privileged D-1 test
+  `lb-l4-xdp/tests/xdp_attach_mode.rs::d1_native_attach::
+  drv_mode_attach_to_ens5_proves_live_datapath`, which transiently
+  applies them for the attach window only and restores them on
+  teardown.
+
+**Known follow-up (not yet done):** rebuild the eBPF object with XDP
+multi-buffer / frags support so native XDP works at the production
+jumbo-frame MTU without lowering it. Tracked in
+`audit/round-9/d1-native-xdp-constraint.md`.
+
 ## Observability
 
 - **Logs**: `RUST_LOG=info` at start. Default formatter is plain text;

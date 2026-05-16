@@ -413,6 +413,14 @@ listener inflight cap rejects an accept.
 2. Check kernel logs for verifier rejections.
 3. Some virtual NICs (virtio, veth) only support `skb`. Acceptable
    on those.
+4. **AWS `ena` driver:** native (`drv`) attach is refused unless
+   `MTU ≤ 3498` AND `combined channels ≤ max/2`, because the shipped
+   `lb_xdp.bin` is built without XDP multi-buffer/frags. `dmesg` will
+   show `MTU (...) is larger than the maximum allowed MTU (3498)
+   while xdp is on` or `channel count should be at most half`. Fix
+   the MTU/channels per `DEPLOYMENT.md` § "ENA native-XDP
+   requirements" — `skb` fallback here is a *configuration* gap, not
+   a hardware limit.
 
 ### LbXdpSamplerErrors — userspace BPF map read failing
 
