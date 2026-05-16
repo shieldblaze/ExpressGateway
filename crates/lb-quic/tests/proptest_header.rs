@@ -7,8 +7,18 @@
 //! router, so we keep a catch-unwind safety net in CI.
 //!
 //! Sanity budget; CI raises to 100 000 cases via PROPTEST_CASES env.
-
-#![cfg(feature = "proptest")]
+//!
+//! S1-A (2026-05-16, task B.1): the `#![cfg(feature = "proptest")]`
+//! gate was removed so this 256-case sanity net runs under the default
+//! `cargo test -p lb-quic` instead of being silent dead coverage (it
+//! never ran by default — flagged in
+//! `audit/h3-program/s1-inventory.md`). `proptest` is an
+//! UNCONDITIONAL `[dev-dependencies]` entry in
+//! `crates/lb-quic/Cargo.toml`, so no feature flag is needed to
+//! compile this binary. CI still scales the budget to 100 000 cases
+//! via the `PROPTEST_CASES` env var, which `proptest` reads at runtime
+//! independent of any cfg — that behaviour is unchanged. The case
+//! logic below is byte-for-byte the original 256-case sanity budget.
 
 use proptest::collection::vec;
 use proptest::prelude::*;
