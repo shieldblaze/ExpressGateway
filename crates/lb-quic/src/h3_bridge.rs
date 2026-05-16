@@ -45,6 +45,23 @@ use lb_io::quic_pool::QuicUpstreamPool;
 // TODO(s3): wire into listener/actor config.
 pub const MAX_REQUEST_BODY_BYTES: usize = 64 * 1024 * 1024;
 
+/// SESSION 2 / P1-C: maximum total H1-RESPONSE size (status line +
+/// headers + body) the bridge will buffer from the upstream before it
+/// gives up and returns a clean H3 `502`. This is a memory-safety
+/// ceiling ONLY: today `read_h1_response` reads the whole upstream
+/// response to EOF into one `Vec` (FULLY BUFFERED — see
+/// `audit/h3-program/p1c-response-streaming-assessment.md`), so a
+/// malicious / mis-configured upstream returning a multi-GB body could
+/// OOM the proxy. The cap (64 MiB, mirroring `MAX_REQUEST_BODY_BYTES`)
+/// bounds that. It is NOT incremental egress and NOT a backpressure
+/// mechanism — genuine incremental response egress is the headline
+/// Session 3 item. Every existing test's response body is <= 256 KiB,
+/// `<<` this ceiling, so the cap changes no observable behaviour for
+/// any conformant response.
+// TODO(s3): config + incremental egress (replace this buffer-and-cap
+// with a channel back into the actor + progressive `StreamTx`).
+pub const MAX_RESPONSE_BODY_BYTES: usize = 64 * 1024 * 1024;
+
 /// SESSION 2 / P1-A: largest single `ReqBodyEvent::Chunk` the body
 /// phase machine emits. With `H3_BODY_CHANNEL_DEPTH` this bounds the
 /// max in-flight bytes (≈ depth * chunk ≈ 64 KiB) INDEPENDENT of the
@@ -612,6 +629,26 @@ struct H1Response {
 /// delimited response and closes; handling `Transfer-Encoding: chunked`
 /// and keep-alive is out of scope for 3b.3c-2.
 async fn read_h1_response(stream: &mut TcpStream) -> Result<H1Response, String> {
+    // Production path: the response-side memory-safety ceiling is the
+    // named `MAX_RESPONSE_BODY_BYTES` const. The cap logic lives in
+    // `read_h1_response_capped` so it can be unit-tested with a tiny
+    // limit (a true 64 MiB transfer is impractical on a 2-CPU/7 GB
+    // box); this wrapper is the SOLE production caller and passes the
+    // const unchanged → byte-for-byte identical behaviour for every
+    // conformant (<<= 256 KiB) response.
+    read_h1_response_capped(stream, MAX_RESPONSE_BODY_BYTES).await
+}
+
+/// Cap-parameterised core of [`read_h1_response`]. `cap` bounds the
+/// total buffered response (status line + headers + body); exceeding it
+/// returns `Err` (mapped to a clean H3 `502` by the caller) rather than
+/// growing the buffer until the proxy OOMs. The whole response is FULLY
+/// BUFFERED here — incremental egress is the headline Session 3 item
+/// (`audit/h3-program/p1c-response-streaming-assessment.md`).
+async fn read_h1_response_capped(
+    stream: &mut TcpStream,
+    cap: usize,
+) -> Result<H1Response, String> {
     let mut all = Vec::with_capacity(1024);
     let mut buf = [0u8; 4096];
     loop {
@@ -623,6 +660,16 @@ async fn read_h1_response(stream: &mut TcpStream) -> Result<H1Response, String> 
             break;
         }
         all.extend_from_slice(buf.get(..n).unwrap_or(&[]));
+        // Bail the instant the accumulated response exceeds the
+        // ceiling; the upstream conn is already marked non-reusable by
+        // the caller's `fail502!`. Conformant responses are `<<` the
+        // 64 MiB production ceiling so this changes nothing observable.
+        if all.len() > cap {
+            return Err(format!(
+                "backend response exceeds {cap} bytes \
+                 (P1-C cap; incremental egress is Session 3)"
+            ));
+        }
         // Optimistic early-exit if we see end of headers followed by
         // Content-Length bytes; for the mock backend the server always
         // closes, so the above read-to-zero drains the socket.
@@ -971,9 +1018,31 @@ pub async fn h3_to_h1_stream(
                     }
                 }
                 ReqBodyEvent::End { trailers: _ } => {
-                    // Trailers are not forwarded to the H1 upstream in
-                    // this increment (H1 trailer egress is later work);
-                    // they are consumed so the stream terminates clean.
+                    // SESSION 2 / P1-C — REQUEST TRAILERS ARE INTENTIONALLY
+                    // DROPPED on the H3→H1/1.1 leg. An H3 request trailing
+                    // field section (RFC 9114 §4.1: a HEADERS frame after
+                    // the DATA frames) is fully PARSED upstream by
+                    // `StreamRxBuf::feed_body` (so a malformed/oversized
+                    // trailer block is still rejected and the body-phase
+                    // parser cannot crash/corrupt — that path is
+                    // regression-locked by the P1-C trailer e2e) and the
+                    // decoded list is carried here in `End.trailers`, but
+                    // it is deliberately NOT emitted to the HTTP/1.1
+                    // upstream. Rationale: forwarding trailers over
+                    // HTTP/1.1 requires `Transfer-Encoding: chunked` PLUS a
+                    // request-side `Trailer:` announcement and is only
+                    // legal for declared, non-forbidden fields (RFC 9110
+                    // §6.5 / RFC 7230 §4.1.2); silently smuggling
+                    // peer-controlled trailer fields into the H1 request
+                    // head/body would be a request-smuggling vector.
+                    // Dropping them yields a well-formed, complete H1
+                    // request (the body is already correctly framed by
+                    // Content-Length or the chunked terminator) and is an
+                    // RFC-acceptable downgrade: HTTP/1.1 has no obligation
+                    // to convey upstream-uninterpreted trailers. Genuine
+                    // H1 trailer egress (chunked + `Trailer:` allow-list)
+                    // is deferred to a later session. The value is consumed
+                    // (`trailers: _`) so the stream terminates clean.
                     clean_end = true;
                     break;
                 }
@@ -1609,6 +1678,84 @@ mod tests {
             body.len()
         );
         assert_eq!(got, expected.as_bytes());
+    }
+
+    /// SESSION 2 / P1-C: the response-side total-size ceiling. A
+    /// backend that streams MORE than the cap must make
+    /// `read_h1_response_capped` return `Err` (which the caller maps to
+    /// a clean H3 502) rather than buffering unboundedly → OOM; a
+    /// conformant under-cap response must still parse correctly (no
+    /// regression). Both halves are exercised against a REAL localhost
+    /// TCP backend through the EXACT function `read_h1_response` calls
+    /// in production (it is the sole production caller, passing
+    /// `MAX_RESPONSE_BODY_BYTES`). A tiny `cap` is used so the test is
+    /// fast/deterministic — a literal 64 MiB transfer is impractical on
+    /// a 2-CPU/7 GB box and would only re-test a single `>` compare.
+    /// The named const's production value is pinned below; sub-cap
+    /// large-binary end-to-end correctness is
+    /// `tests/h3_h1_trailers_resp_e2e.rs::pc2`.
+    #[tokio::test]
+    async fn read_h1_response_capped_rejects_over_cap_and_passes_under_cap() {
+        use tokio::io::AsyncWriteExt as _;
+        use tokio::net::{TcpListener, TcpStream};
+
+        // Pin the production ceiling (single source of truth, mirrors
+        // MAX_REQUEST_BODY_BYTES).
+        assert_eq!(MAX_RESPONSE_BODY_BYTES, 64 * 1024 * 1024);
+
+        // (A) OVER-CAP: backend sends a valid head then a body LARGER
+        // than the (tiny) cap. Must return Err, not buffer it all.
+        let l1 = TcpListener::bind((std::net::Ipv4Addr::LOCALHOST, 0))
+            .await
+            .unwrap();
+        let a1 = l1.local_addr().unwrap();
+        let big = vec![0xABu8; 70_000]; // > the 64 KiB test cap below
+        let s1 = tokio::spawn(async move {
+            let (mut s, _) = l1.accept().await.unwrap();
+            let mut t = [0u8; 1024];
+            let _ = tokio::io::AsyncReadExt::read(&mut s, &mut t).await;
+            let head = format!(
+                "HTTP/1.1 200 OK\r\nContent-Length: {}\r\n\r\n",
+                big.len()
+            );
+            let _ = s.write_all(head.as_bytes()).await;
+            let _ = s.write_all(&big).await;
+            let _ = s.shutdown().await;
+        });
+        let mut c1 = TcpStream::connect(a1).await.unwrap();
+        c1.write_all(b"GET / HTTP/1.1\r\n\r\n").await.unwrap();
+        let cap = 64 * 1024usize;
+        let over = super::read_h1_response_capped(&mut c1, cap).await;
+        let _ = s1.await;
+        let err = over.expect_err("over-cap response must return Err");
+        assert!(
+            err.contains(&format!("exceeds {cap} bytes")),
+            "Err must name the cap; got: {err}"
+        );
+
+        // (B) UNDER-CAP no-regression: a small conformant response
+        // through the SAME function still parses status + body exactly.
+        let l2 = TcpListener::bind((std::net::Ipv4Addr::LOCALHOST, 0))
+            .await
+            .unwrap();
+        let a2 = l2.local_addr().unwrap();
+        let s2 = tokio::spawn(async move {
+            let (mut s, _) = l2.accept().await.unwrap();
+            let mut t = [0u8; 1024];
+            let _ = tokio::io::AsyncReadExt::read(&mut s, &mut t).await;
+            s.write_all(b"HTTP/1.1 206 X\r\nContent-Length: 3\r\n\r\n\xFF\x00\x80")
+                .await
+                .unwrap();
+            s.shutdown().await.unwrap();
+        });
+        let mut c2 = TcpStream::connect(a2).await.unwrap();
+        c2.write_all(b"GET / HTTP/1.1\r\n\r\n").await.unwrap();
+        let ok = super::read_h1_response_capped(&mut c2, cap)
+            .await
+            .expect("under-cap response must parse");
+        s2.await.unwrap();
+        assert_eq!(ok.status, 206);
+        assert_eq!(ok.body.as_ref(), &[0xFF, 0x00, 0x80]);
     }
 
     #[test]
