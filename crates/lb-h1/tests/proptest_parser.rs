@@ -39,13 +39,14 @@ fn arb_method() -> impl Strategy<Value = &'static [u8]> {
 
 /// Target token: 0..256 bytes drawn from a "URL-ish" byte set.
 fn arb_target() -> impl Strategy<Value = Vec<u8>> {
-    vec(
-        prop_oneof![
-            // ASCII visible chars; bias the distribution toward path-safe.
-            any::<u8>().prop_filter("printable ASCII", |b| (0x20..0x7F).contains(b))
-        ],
-        0..256,
-    )
+    // Printable-ASCII bytes (0x20..=0x7E), 0..256 of them. Generated
+    // from a direct range strategy so there are ZERO local rejects:
+    // the prior `any::<u8>().prop_filter(0x20..0x7F)` rejected ~25% of
+    // every sampled byte and, at PROPTEST_CASES=20000+, blew proptest's
+    // default `max_local_rejects` (65536) and aborted the property.
+    // Same value space (printable ASCII, len 0..256) — invariants
+    // (no-panic, bounded consumption) are unchanged.
+    prop::collection::vec(0x20u8..0x7Fu8, 0..256)
 }
 
 /// HTTP version literal (HTTP/1.0 vs HTTP/1.1).

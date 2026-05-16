@@ -24,9 +24,10 @@ defects predating Round-8 Phase E**, with **no product-code regression**:
 - Provenance: introduced commit `1f7ab4bb` "REL-2-02 — multi-protocol
   drain integration test" (2026-05-14), **before** Round-8 Phase E.
 - 398/399 workspace tests PASS.
-- Classification: **pre-existing environment/hardware-timing
-  test-harness limitation (DEFERRED-ENV for that one test).
-  Non-blocking for prod. NOT a new finding. No Phase-D loop.**
+- Classification: **pre-existing test-harness defect. NOT a new
+  finding, no Phase-D loop. SUPERSEDED — see "REMEDIATED — task#80"
+  below: root cause was the 0o664 TLS-key-perm rejection, not
+  hardware timing; fixed test-file-only. No longer DEFERRED-ENV.**
 
 ### Gate 05 (PROPTEST_CASES=20000) — 1 sub-suite FAIL, non-blocking
 - Failing sub-suite: `lb-h1` `proptest_parser.rs ::
@@ -52,11 +53,62 @@ defects predating Round-8 Phase E**, with **no product-code regression**:
   `prop::collection::vec(0x20u8..0x7F, 0..256)` directly, or raise
   `max_local_rejects`) — a pre-existing reconciliation gap.
 - Classification: **pre-existing test-strategy/budget-mismatch defect
-  (test-only, parser invariants demonstrably hold; passes fully at the
-  file's default 256-case budget). Low / non-blocking. NOT a new
-  finding. No Phase-D loop.**
+  (test-only, parser invariants demonstrably hold). Low / non-blocking.
+  NOT a new finding. No Phase-D loop. REMEDIATED — see "REMEDIATED —
+  task#80" below; passes fully at PROPTEST_CASES=20000. No longer
+  DEFERRED-ENV.**
 
 ## Phase-D loop: NOT triggered
 Neither failure is a NEW medium+ product defect. Both are pre-existing
 test-infrastructure issues with no product-code regression. Phase E
 introduces no new Phase-D work item from these gates.
+
+## REMEDIATED — task#80 (2026-05-16, prod-readiness/round-4)
+
+Both pre-existing test-infra defects are now **REMEDIATED** and are
+**NO LONGER DEFERRED-ENV**. Test-FILE-only fixes; zero product-source
+changes; the audit mandate forbids deferring runnable checks.
+
+### Gate 04 — root cause corrected + fixed
+The earlier diagnosis ("5s cold-start deadline too tight for 2-vCPU
+box; gateway boots & serves") was INCOMPLETE. Empirically, the
+`test_sigterm_drains_h2_with_goaway` gateway never bound the listener
+even at a 90s boot budget. Direct repro showed the gateway exits
+**before binding any listener** with:
+`Error: H1s TLS setup failed ... TLS key permission check failed ...
+mode 0o664 permits group/other access (strict mode); chmod 0600 to
+fix`. The h1s/QUIC config generators in `tests/reload_zero_drop.rs`
+wrote the rcgen private key via `std::fs::write` (umask-derived 0o664);
+the product's strict-mode TLS-key-perm check (`lb_security`) correctly
+rejects a world/group-readable key. The "200+GOAWAY observed once"
+note was an artifact (likely a pre-strict-check / cached-state run).
+Two test-FILE fixes:
+1. Boot deadline now reads `LB_TEST_BOOT_TIMEOUT_SECS` (parse, default
+   30), applied to `spawn_gateway` (H1/H2 polling loop, ceiling only)
+   and `spawn_gateway_udp` (H3 warm-up; default 750ms unchanged unless
+   the env var is explicitly set). No drain/GOAWAY assertion weakened.
+2. New `write_key_0600` helper writes the TLS key with mode 0600
+   (forced even on a reused stale temp file); used by both the h1s and
+   QUIC config generators.
+Result: `LB_TEST_BOOT_TIMEOUT_SECS=30 cargo test --test
+reload_zero_drop --release -- --skip ignored` → 4/4 PASS
+(test_sigterm_drains_h1/h2/h3 + reload soak), finished 31.63s.
+
+### Gate 05 — fixed
+`crates/lb-h1/tests/proptest_parser.rs` `arb_target()` replaced the
+per-byte `any::<u8>().prop_filter("printable ASCII", 0x20..0x7F)`
+(~25% reject rate; at PROPTEST_CASES=20000 the cumulative per-byte
+rejects exceed proptest's default `max_local_rejects` 65536, aborting
+after 299 successes) with the reject-free direct range strategy
+`prop::collection::vec(0x20u8..0x7Fu8, 0..256)`. Identical value space
+(printable ASCII, len 0..256); the no-panic + bounded-consumption
+invariants are unchanged; the case budget was NOT lowered.
+Result: `PROPTEST_CASES=20000 cargo test -p lb-h1 --release --features
+proptest --test proptest_parser` → 2/2 PASS (request_line_no_panic +
+headers_no_panic), finished 0.19s, no max_local_rejects abort.
+
+Both gates flip FAIL→PASS in SUMMARY.md. Still verified clean:
+`cargo fmt --check` exit 0, `cargo clippy -p lb-h1 --all-targets
+-- -D warnings` exit 0 (incl. `--features proptest`),
+`cargo test --test round8_drain_15case` 16/16. The genuinely
+env-bound items D-1..D-6 in deferred-env.md are untouched.

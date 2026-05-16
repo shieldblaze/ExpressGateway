@@ -11,8 +11,8 @@ Disposition legend: PASS · FAIL · DEFERRED-ENV · PASS(recorded)
 | 01 | cargo fmt --check | PASS | gate-outputs/01-cargo-fmt.txt | FMT_EXIT=0 (already-done; not re-run) |
 | 02 | cargo clippy --workspace --all-targets --all-features -D warnings | PASS | gate-outputs/02-cargo-clippy.txt | exit 0, 1m14s clean (already-done) |
 | 03 | cargo machete | PASS | gate-outputs/03-cargo-machete.txt | soft check (CI continue-on-error); no regression vs R7 (already-done) |
-| 04 | cargo test --workspace --release -- --skip ignored | FAIL (non-blocking) | gate-outputs/04-cargo-test-release.txt | 398/399 PASS. ONE fail: reload_zero_drop::test_sigterm_drains_h2_with_goaway — pre-existing 5s cold-start deadline too tight for 2-vCPU box (commit 1f7ab4bb REL-2-02, pre-Round-8). Gateway boots & serves (HTTP 200+GOAWAY observed). DEFERRED-ENV for that one test. Not a product regression, not new. |
-| 05 | PROPTEST_CASES=20000 (per-crate, --features proptest) | FAIL (non-blocking) | gate-outputs/05-proptest.txt | 3/4 suites PASS full 20000-case contract (lb-h2/hpack, lb-h3/qpack, lb-quic/header). lb-h1/proptest_parser request_line_no_panic aborts on proptest max_local_rejects (299 successes / 65536 rejects at 'printable ASCII') — pre-existing test-strategy defect, commit 560c1c25 CODE-2-11, pre-Round-8. NOT a parser counterexample/regression. |
+| 04 | cargo test --workspace --release -- --skip ignored | PASS | gate-outputs/04-cargo-test-release.txt | REMEDIATED (task#80, test-infra only). reload_zero_drop drain suite 4/4 PASS with `LB_TEST_BOOT_TIMEOUT_SECS=30` (test_sigterm_drains_h1/h2/h3 + reload soak; finished 31.63s). Two test-FILE-only fixes: (a) boot deadline now env-tunable `LB_TEST_BOOT_TIMEOUT_SECS` (parse, default 30) applied to spawn_gateway (H1/H2 polling loop) + spawn_gateway_udp (H3 warm-up); (b) ROOT CAUSE was NOT cold-start timing — the h1s/QUIC config generators wrote the rcgen TLS key via std::fs::write (mode 0o664), which the product strict-mode TLS-key-perm check correctly rejects ("chmod 0600 to fix"), so the gateway exited before binding any listener and no boot budget could ever help. Harness now writes the key 0600 (write_key_0600 helper). Zero product-source changes. |
+| 05 | PROPTEST_CASES=20000 (per-crate, --features proptest) | PASS | gate-outputs/05-proptest.txt | REMEDIATED (task#80, test-infra only). lb-h1 proptest_parser 2/2 PASS at PROPTEST_CASES=20000 (request_line_no_panic + headers_no_panic, finished 0.19s, no max_local_rejects abort). Fix: arb_target() generator replaced the per-byte `any::<u8>().prop_filter(0x20..0x7F)` (~25% reject rate, blew default max_local_rejects 65536, aborted after 299 successes) with the reject-free direct range strategy `prop::collection::vec(0x20u8..0x7Fu8, 0..256)` — identical value space (printable ASCII, len 0..256); no-panic + bounded-consumption invariants unchanged. Case budget NOT lowered. Other 3 suites already PASS. |
 | 06 | cargo audit | PASS | gate-outputs/06-cargo-audit.txt | 2 unmaintained (allowed in deny.toml), no NEW advisory (already-done) |
 | 07 | cargo deny check | DEFERRED-ENV | gate-outputs/07-cargo-deny.txt | cargo-deny 0.18.3 (only version installable on MSRV rustc 1.85; 0.19.x needs rustc 1.88) fails CONFIG DESERIALIZATION on deny.toml's v0.19-grammar GPL-3.0-only/-or-later tokens (lines 53-54) before any check runs. NOT a policy violation. Advisories arm corroborated by Gate 06 cargo-audit PASS. Needs rustc>=1.88 + cargo-deny>=0.19. |
 | 08 | sbom-cyclonedx | PASS(recorded) | gate-outputs/08-sbom-cyclonedx.txt | regenerated with real cargo-cyclonedx 0.5.9 provenance; OPS-08 status-upgrade candidate (already-done) |
@@ -55,10 +55,27 @@ environment, no "see CI" hand-waving:
   2-vCPU build budget; ~45 min just for the cold no-run build)
 
 ## Tally
-- PASS: 01,02,03,06,08,09,10,11,12,13,14,15,16 (= 13)
-- FAIL (non-blocking, pre-existing test-infra, NOT new): 04, 05 (= 2)
+- PASS: 01,02,03,04,05,06,08,09,10,11,12,13,14,15,16 (= 15)
 - DEFERRED-ENV (07 cargo deny): config needs cargo-deny>=0.19 (=>rustc>=1.88>MSRV); advisories corroborated by gate 06 PASS
-- DEFERRED-ENV: gate 07 (cargo deny) + D-1..D-6 + the single gate-04 env-timing test
+- DEFERRED-ENV: gate 07 (cargo deny) + D-1..D-6 (gate-04/05 NO LONGER deferred — remediated task#80)
+
+## Phase-E remediation (task#80, STATE=ROUND_8_REGRESSION)
+Gates 04 and 05 were the only non-PASS runnable checks; the audit
+mandate forbids deferring runnable checks. Both root-caused to
+test-FILE-only defects and remediated on prod-readiness/round-4 with
+zero product-source changes:
+- Gate 04: `tests/reload_zero_drop.rs` — boot deadline env-tunable
+  (`LB_TEST_BOOT_TIMEOUT_SECS`, default 30) AND the actual root cause
+  fixed: harness wrote the rcgen TLS key 0o664; the product strict-perm
+  check (correctly) rejected it pre-bind, so no boot budget could help.
+  Key now written 0600 (write_key_0600 helper). 4/4 drain tests PASS.
+- Gate 05: `crates/lb-h1/tests/proptest_parser.rs` — reject-by-filter
+  `arb_target()` generator replaced with the reject-free direct range
+  strategy `prop::collection::vec(0x20u8..0x7Fu8, 0..256)`. 2/2 PASS at
+  PROPTEST_CASES=20000 (no abort). Case budget NOT lowered.
+Verified: cargo fmt --check (exit 0), clippy -p lb-h1 --all-targets
+-D warnings (exit 0, incl. --features proptest), round8_drain_15case
+16/16.
 
 ## NEW medium+ / Phase-D
 NONE. Both gate-04 and gate-05 failures are pre-existing test-harness /

@@ -122,6 +122,28 @@ mod drain {
     use std::process::{Child, Command, Stdio};
     use std::time::{Duration, Instant};
 
+    /// Write a TLS private key to `path` with mode 0600.
+    ///
+    /// The production gateway runs a strict TLS-key-permission check
+    /// (`lb_security`): a key file readable by group/other (e.g. the
+    /// 0o664 that `std::fs::write` yields under the default umask) is
+    /// rejected and the gateway exits *before binding any listener*
+    /// with `TLS key permission check failed ... mode 0o664 permits
+    /// group/other access (strict mode); chmod 0600 to fix`. Without
+    /// this the h1s/QUIC drain tests never see an accept()-ready
+    /// listener and time out regardless of the boot budget. The fix
+    /// belongs in the harness (write the key the way an operator must,
+    /// i.e. 0600), not in the product check.
+    pub fn write_key_0600(path: &Path, pem: &str) {
+        std::fs::write(path, pem).expect("write key");
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o600))
+                .expect("chmod 0600 key");
+        }
+    }
+
     /// Locate the production binary on disk. Cargo does not auto-set
     /// `CARGO_BIN_EXE_expressgateway` for tests in this workspace-root
     /// integration-test crate, so we walk the target dir manually.
@@ -209,7 +231,7 @@ weight = 1
         let cert_path = dir.join("quicdrain.crt");
         let key_path = dir.join("quicdrain.key");
         std::fs::write(&cert_path, generated.cert.pem()).expect("write cert");
-        std::fs::write(&key_path, generated.key_pair.serialize_pem()).expect("write key");
+        write_key_0600(&key_path, &generated.key_pair.serialize_pem());
         // lb_security::load_or_generate_retry_secret will mint a
         // fresh 32-byte secret when this path is missing — we leave
         // the file absent so the gateway exercises that path.
@@ -241,9 +263,30 @@ weight = 1
         path
     }
 
+    /// Boot-wait ceiling for child-process startup, in seconds.
+    ///
+    /// The release `expressgateway` binary cold-start (process spawn +
+    /// listener bind + self-signed TLS load) can exceed a few seconds on
+    /// a constrained (2-vCPU) runner. The polling loop below is
+    /// unchanged — only the ceiling is tunable via
+    /// `LB_TEST_BOOT_TIMEOUT_SECS` (default 30). This widens only the
+    /// *startup* budget; it does not weaken any drain/GOAWAY assertion.
+    fn boot_timeout_override() -> Option<Duration> {
+        std::env::var("LB_TEST_BOOT_TIMEOUT_SECS")
+            .ok()
+            .and_then(|v| v.trim().parse::<u64>().ok())
+            .filter(|&s| s > 0)
+            .map(Duration::from_secs)
+    }
+
+    /// TCP boot-wait ceiling: env override if set, else 30 s default.
+    fn boot_timeout() -> Duration {
+        boot_timeout_override().unwrap_or(Duration::from_secs(30))
+    }
+
     /// Spawn the gateway as a child process, returning the child + the
-    /// listener address. Waits up to 5 s for the listener to become
-    /// accept()-ready before returning.
+    /// listener address. Waits up to `boot_timeout()` for the listener
+    /// to become accept()-ready before returning.
     pub fn spawn_gateway(bin: &Path, config: &Path, addr: SocketAddr) -> Child {
         let mut child = Command::new(bin)
             .arg(config)
@@ -253,7 +296,8 @@ weight = 1
             .spawn()
             .expect("spawn expressgateway");
 
-        let deadline = Instant::now() + Duration::from_secs(5);
+        let budget = boot_timeout();
+        let deadline = Instant::now() + budget;
         while Instant::now() < deadline {
             if std::net::TcpStream::connect_timeout(&addr, Duration::from_millis(100)).is_ok() {
                 return child;
@@ -264,7 +308,10 @@ weight = 1
         // drop(child) without a wait would zombie the gateway.
         let _ = child.kill();
         let _ = child.wait();
-        panic!("gateway did not start accepting on {addr} within 5s");
+        panic!(
+            "gateway did not start accepting on {addr} within {}s",
+            budget.as_secs()
+        );
     }
 
     /// Like [`spawn_gateway`] but for QUIC listeners. QUIC binds a
@@ -279,7 +326,14 @@ weight = 1
             .env("RUST_LOG", "info")
             .spawn()
             .expect("spawn expressgateway");
-        std::thread::sleep(Duration::from_millis(750));
+        // QUIC binds a UDP socket so there is no TCP accept() probe to
+        // poll; we use a fixed warm-up window. On a constrained runner
+        // the 750 ms default may be too short for cold-start, so the
+        // window is widened (never shortened) when the operator raises
+        // LB_TEST_BOOT_TIMEOUT_SECS. This only extends the *startup*
+        // budget for the H3 drain test; no drain assertion changes.
+        let warmup = boot_timeout_override().unwrap_or(Duration::from_millis(750));
+        std::thread::sleep(warmup);
         child
     }
 
@@ -377,7 +431,7 @@ weight = 1
         let cert_path = dir.join("h2drain.crt");
         let key_path = dir.join("h2drain.key");
         std::fs::write(&cert_path, generated.cert.pem()).expect("write cert");
-        std::fs::write(&key_path, generated.key_pair.serialize_pem()).expect("write key");
+        write_key_0600(&key_path, &generated.key_pair.serialize_pem());
         let toml = format!(
             r#"
 [runtime]
