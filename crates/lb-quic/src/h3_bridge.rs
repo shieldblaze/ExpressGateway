@@ -161,10 +161,24 @@ impl H3Request {
     }
 }
 
-/// Build a minimal HTTP/1.1 request line + headers for a bodyless
-/// request (GET/HEAD). Callers with bodies will extend this in 3b.3b.
-fn build_h1_request(req: &H3Request) -> String {
-    let mut s = String::with_capacity(128);
+/// Build a minimal HTTP/1.1 request line + headers.
+///
+/// S1-B seam (SESSION 1): `body` threads an OPTIONAL request payload so
+/// SESSION 2's request-body forwarding has a stable signature to fill
+/// in. **Behaviour-preserving contract:** `body == None` produces the
+/// exact bytes the prior bodyless implementation produced
+/// (`Content-Length: 0` + `Connection: close`) — the only caller today
+/// (`h3_to_h1_roundtrip`) passes `None`, so no on-wire behaviour
+/// changes this session. When `Some(bytes)` is passed, the request
+/// head carries the correct `Content-Length: <bytes.len()>` and the
+/// payload is appended after the header terminator; that path is NOT
+/// exercised on the datapath in SESSION 1 (the connection actor does
+/// not yet accumulate inbound DATA frames — that is SESSION 2 work in
+/// `conn_actor::poll_h3`). See the marker test below (it is
+/// `#[ignore]`-d with reason `S2: request-body forwarding`) for the
+/// SESSION 2 target.
+fn build_h1_request(req: &H3Request, body: Option<&[u8]>) -> String {
+    let mut s = String::with_capacity(128 + body.map_or(0, <[u8]>::len));
     s.push_str(&req.method);
     s.push(' ');
     s.push_str(&req.path);
@@ -174,10 +188,21 @@ fn build_h1_request(req: &H3Request) -> String {
         s.push_str(&req.authority);
         s.push_str("\r\n");
     }
-    // Signal no body so the mock backend does not block on a read.
-    s.push_str("Content-Length: 0\r\n");
+    // S1-B seam: emit the body's real length. `None` keeps the
+    // historical `Content-Length: 0` (bodyless GET/HEAD) so this
+    // session is byte-identical on the wire.
+    let body_len = body.map_or(0, <[u8]>::len);
+    s.push_str("Content-Length: ");
+    s.push_str(&body_len.to_string());
+    s.push_str("\r\n");
     s.push_str("Connection: close\r\n");
     s.push_str("\r\n");
+    if let Some(bytes) = body {
+        // SESSION 2 will feed real inbound DATA-frame bytes here. Today
+        // no caller passes `Some`, so this branch is inert on the
+        // datapath and only exercised by the ignored S2 marker test.
+        s.push_str(&String::from_utf8_lossy(bytes));
+    }
     s
 }
 
@@ -294,10 +319,19 @@ pub fn encode_h3_response(status: u16, body: &[u8]) -> Result<Vec<u8>, String> {
 /// fallback 502 response itself fails. Backend dial / write / read
 /// errors are caught and turned into a 502 response body internally
 /// rather than bubbled up.
+/// S1-B seam (SESSION 1): `body` is an OPTIONAL request payload.
+/// Today every caller (`conn_actor::poll_h3`) passes `None` because the
+/// connection actor does not yet accumulate inbound H3 DATA frames —
+/// that work is SESSION 2. Passing `None` is byte-for-byte identical to
+/// the prior bodyless implementation (verified by the crate-local e2e
+/// `h3_h1_bridge_e2e.rs` and unchanged repo-root tests). SESSION 2 will
+/// pass `Some(collected_request_body)` here once `poll_h3` threads DATA
+/// frames across the stream boundary.
 pub async fn h3_to_h1_roundtrip(
     req: &H3Request,
     backend: SocketAddr,
     pool: &TcpPool,
+    body: Option<&[u8]>,
 ) -> Result<Vec<u8>, String> {
     let mut pooled = match pool.acquire_async(backend).await {
         Ok(p) => p,
@@ -306,7 +340,7 @@ pub async fn h3_to_h1_roundtrip(
             return encode_h3_response(502, b"bad gateway");
         }
     };
-    let h1_request = build_h1_request(req);
+    let h1_request = build_h1_request(req, body);
     let response = {
         let stream = pooled
             .stream_mut()
@@ -855,6 +889,61 @@ mod tests {
             H3Frame::Data { payload } => assert_eq!(payload.as_ref(), b"hello"),
             _ => panic!("expected DATA"),
         }
+    }
+
+    #[test]
+    fn build_h1_request_none_body_is_byte_identical_to_legacy_bodyless() {
+        // S1-B behaviour-preservation guard: `None` MUST reproduce the
+        // exact pre-seam bytes (`Content-Length: 0` + `Connection:
+        // close`, no body). This is what every datapath caller passes
+        // in SESSION 1, so the seam changes nothing on the wire.
+        let req = H3Request {
+            method: "GET".to_string(),
+            path: "/p".to_string(),
+            authority: "host.test:443".to_string(),
+            extra: Vec::new(),
+            trailers: Vec::new(),
+        };
+        let got = build_h1_request(&req, None);
+        let expected = "GET /p HTTP/1.1\r\n\
+                        Host: host.test:443\r\n\
+                        Content-Length: 0\r\n\
+                        Connection: close\r\n\r\n";
+        assert_eq!(got, expected);
+    }
+
+    /// SESSION 2 target — request-body forwarding through the H3→H1
+    /// bridge. The S1-B seam (`build_h1_request`'s `Some(body)` arm +
+    /// `h3_to_h1_roundtrip`'s `body` param) is in place; this asserts
+    /// the seam's CONTRACT (correct `Content-Length` + appended
+    /// payload) so SESSION 2 has a concrete, named target. It is
+    /// `#[ignore]` ONLY because SESSION 2's datapath wiring
+    /// (`conn_actor::poll_h3` accumulating inbound H3 DATA frames and
+    /// passing `Some(..)` here) is UNBUILT — it does not mask any
+    /// existing passing behaviour (no caller passes `Some` yet). When
+    /// SESSION 2 lands DATA-frame accumulation, drop the `#[ignore]`
+    /// and extend this into a real bodyful e2e.
+    #[test]
+    #[ignore = "S2: request-body forwarding"]
+    fn s2_target_build_h1_request_with_body_sets_content_length_and_appends_payload() {
+        let req = H3Request {
+            method: "POST".to_string(),
+            path: "/submit".to_string(),
+            authority: "api.test".to_string(),
+            extra: Vec::new(),
+            trailers: Vec::new(),
+        };
+        let body = b"hello-s2-body";
+        let got = build_h1_request(&req, Some(body));
+        let expected = format!(
+            "POST /submit HTTP/1.1\r\n\
+             Host: api.test\r\n\
+             Content-Length: {}\r\n\
+             Connection: close\r\n\r\n\
+             hello-s2-body",
+            body.len()
+        );
+        assert_eq!(got, expected);
     }
 
     #[test]

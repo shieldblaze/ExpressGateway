@@ -423,7 +423,12 @@ fn poll_h3(
                             };
                             let pool = pool.clone();
                             request_tasks.push(tokio::spawn(async move {
-                                let bytes = match h3_to_h1_roundtrip(&req, backend, &pool).await {
+                                // S1-B seam: `None` body — SESSION 2's
+                                // poll_h3 DATA-frame accumulation will
+                                // pass `Some(..)` here.
+                                let bytes = match h3_to_h1_roundtrip(&req, backend, &pool, None)
+                                    .await
+                                {
                                     Ok(b) => b,
                                     Err(e) => {
                                         tracing::warn!(error = %e, "H3→H1 roundtrip failed");
