@@ -37,16 +37,135 @@ use lb_io::http2_pool::Http2Pool;
 use lb_io::pool::TcpPool;
 use lb_io::quic_pool::QuicUpstreamPool;
 
+/// SESSION 2 / P1-A: maximum total request-body size the streaming
+/// bridge will forward before it returns H3 `413`. This is the
+/// *total-size* cap (a request-correctness limit), NOT the
+/// memory-safety mechanism — memory safety comes from the bounded
+/// in-flight body channel (`H3_BODY_CHANNEL_DEPTH` * <=8 KiB chunks).
+// TODO(s3): wire into listener/actor config.
+pub const MAX_REQUEST_BODY_BYTES: usize = 64 * 1024 * 1024;
+
+/// SESSION 2 / P1-A: largest single `ReqBodyEvent::Chunk` the body
+/// phase machine emits. With `H3_BODY_CHANNEL_DEPTH` this bounds the
+/// max in-flight bytes (≈ depth * chunk ≈ 64 KiB) INDEPENDENT of the
+/// total body size — a DATA frame larger than this is split.
+pub const H3_BODY_CHUNK_MAX: usize = 8 * 1024;
+
+/// RFC 9114 §7.2 `DATA` frame type.
+const FRAME_DATA: u64 = 0x00;
+/// RFC 9114 §7.2 `HEADERS` frame type.
+const FRAME_HEADERS: u64 = 0x01;
+
+/// SESSION 2 / P1-A FIX: hard cap on the partial frame-header bytes the
+/// body-phase parser will accumulate before BOTH the frame-type varint
+/// and the length varint decode. Two QUIC varints are at most 8 bytes
+/// each (RFC 9000 §16), so a well-formed frame header is ≤ 16 bytes;
+/// anything larger is malformed framing → Reset.
+pub const MAX_FRAME_HEADER_BYTES: usize = 16;
+
+/// SESSION 2 / P1-A FIX: hard cap on a body-phase trailing HEADERS
+/// (RFC 9114 §4.1) QPACK field block. The QPACK decoder needs the whole
+/// block buffered to decode, so unlike DATA this MUST be accumulated —
+/// but bounded so a hostile/oversized trailer block cannot grow memory
+/// without limit. 64 KiB is far above any realistic trailer section.
+pub const MAX_TRAILER_BLOCK_BYTES: usize = 64 * 1024;
+
+/// SESSION 2 / P1-A: an ordered item produced by [`StreamRxBuf`]'s
+/// `Body` phase as post-HEADERS frames are decoded.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum BodyItem {
+    /// A (sub-)chunk of request DATA (≤ [`H3_BODY_CHUNK_MAX`] bytes).
+    Data(Bytes),
+    /// RFC 9114 §4.1 trailing field section — a HEADERS frame that
+    /// arrived *after* DATA frames.
+    Trailers(Vec<(String, String)>),
+    /// Cumulative decoded body exceeded the caller-supplied cap; the
+    /// bridge must respond `413` and tear the upstream down.
+    TooLarge,
+}
+
+/// SESSION 2 / P1-A: event forwarded over the per-stream bounded body
+/// channel from `conn_actor::poll_h3` to [`h3_to_h1_stream`].
+#[derive(Debug, Clone)]
+pub enum ReqBodyEvent {
+    /// A bounded request-body chunk.
+    Chunk(Bytes),
+    /// End of request body. `trailers` is the RFC 9114 §4.1 trailing
+    /// field section (empty when none).
+    End {
+        /// Request trailers (post-DATA HEADERS frame); empty if none.
+        trailers: Vec<(String, String)>,
+    },
+    /// The stream was reset / aborted before a clean end — the egress
+    /// task must abort the upstream and fail the request.
+    Reset,
+}
+
+/// SESSION 2 / P1-A — phase of the per-stream inbound decoder.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+enum RxPhase {
+    /// Awaiting / decoding the request HEADERS frame.
+    #[default]
+    Headers,
+    /// HEADERS emitted; subsequent frames are DATA / trailers.
+    Body,
+}
+
+/// SESSION 2 / P1-A FIX — body-phase incremental frame-parser state.
+///
+/// This is a true streaming state machine over the raw post-HEADERS
+/// byte stream. It NEVER buffers a whole DATA frame: DATA payload bytes
+/// are emitted (chunked) and drained the moment they arrive. The only
+/// state that retains bytes is the (≤16 B) partial frame header and the
+/// (bounded) trailing-HEADERS field block, which QPACK genuinely
+/// requires whole.
+#[derive(Debug, Clone)]
+enum BodyParse {
+    /// Accumulating the frame-type varint + length varint. `hdr` holds
+    /// only the not-yet-decodable prefix; bounded by
+    /// [`MAX_FRAME_HEADER_BYTES`].
+    AwaitingFrameHeader { hdr: Vec<u8> },
+    /// Inside a DATA frame; `remaining` payload bytes still to stream.
+    InData { remaining: usize },
+    /// Inside a trailing-HEADERS (RFC 9114 §4.1) frame; accumulate the
+    /// QPACK field block (bounded by [`MAX_TRAILER_BLOCK_BYTES`]) until
+    /// `remaining` hits 0, then decode + emit `Trailers`.
+    InTrailers { remaining: usize, block: Vec<u8> },
+    /// Inside an unknown / ignored frame (RFC 9114 §9): discard
+    /// `remaining` bytes incrementally, never buffering.
+    InSkip { remaining: usize },
+}
+
+impl Default for BodyParse {
+    fn default() -> Self {
+        Self::AwaitingFrameHeader { hdr: Vec::new() }
+    }
+}
+
 /// Per-stream accumulator for inbound H3 request bytes. A quiche
 /// `stream_recv` on a given stream ID can yield a chunk mid-frame;
-/// we buffer until a full HEADERS frame is parseable.
+/// we buffer until a full frame is parseable.
+///
+/// SESSION 2 / P1-A: this is now a small two-phase machine. The
+/// `Headers` phase preserves the exact S1 contract — `feed` returns
+/// `Ok(Some(headers))` once the request HEADERS frame is decoded (the
+/// S1 unit test `stream_rx_buf_accumulates_partial_headers` exercises
+/// exactly this and stays green). After headers it flips to the
+/// `Body` phase; the actor then calls `feed_body` to drain DATA /
+/// trailer frames incrementally.
 #[derive(Default)]
 pub struct StreamRxBuf {
     buf: Vec<u8>,
-    /// Once we see request HEADERS + FIN we flip this and stop reading
-    /// new frames on this stream (all the information the bridge needs
-    /// is already in hand — the e2e does not carry request bodies).
-    done: bool,
+    phase: RxPhase,
+    /// Cumulative decoded request-body bytes (Body phase only).
+    body_seen: usize,
+    /// Latched once the cap is exceeded so `feed_body` keeps reporting
+    /// `TooLarge` and never forwards further data.
+    too_large: bool,
+    /// SESSION 2 / P1-A FIX — body-phase streaming parser state. In the
+    /// Body phase this (NOT `buf`) holds the only retained bytes: the
+    /// ≤16 B partial frame header or a bounded trailer field block.
+    body: BodyParse,
 }
 
 impl StreamRxBuf {
@@ -54,12 +173,22 @@ impl StreamRxBuf {
     /// a full HEADERS frame has been decoded. Returns `Ok(None)` if more
     /// bytes are needed.
     ///
+    /// SESSION 2 / P1-A: on the HEADERS hit the buffer flips to the
+    /// `Body` phase (instead of latching `done`) and any *leftover*
+    /// bytes (DATA frames that arrived coalesced with HEADERS in the
+    /// same `stream_recv`) are retained for [`StreamRxBuf::feed_body`].
+    /// The observable `Ok(Some(headers))` / `Ok(None)` return shape is
+    /// unchanged from S1.
+    ///
     /// # Errors
     ///
     /// Surfaces a string-formatted decode error if the H3 frame parser
     /// rejects the buffer or if QPACK cannot decode the field block.
     pub fn feed(&mut self, chunk: &[u8]) -> Result<Option<Vec<(String, String)>>, String> {
-        if self.done {
+        if self.phase == RxPhase::Body {
+            // Headers already emitted; new bytes belong to the body
+            // phase. Retain them; caller pulls via `feed_body`.
+            self.buf.extend_from_slice(chunk);
             return Ok(None);
         }
         self.buf.extend_from_slice(chunk);
@@ -67,7 +196,7 @@ impl StreamRxBuf {
             match decode_frame(&self.buf, 1 << 20) {
                 Ok((H3Frame::Headers { header_block }, consumed)) => {
                     self.buf.drain(..consumed);
-                    self.done = true;
+                    self.phase = RxPhase::Body;
                     let decoder = QpackDecoder::new();
                     let headers = decoder
                         .decode(&header_block)
@@ -83,6 +212,264 @@ impl StreamRxBuf {
                 Err(lb_h3::H3Error::Incomplete) => return Ok(None),
                 Err(e) => return Err(format!("h3 decode_frame: {e}")),
             }
+        }
+    }
+
+    /// SESSION 2 / P1-A — `Body` phase. Append freshly-received bytes
+    /// and decode *as many* post-HEADERS frames as are fully buffered,
+    /// returning an ordered list of [`BodyItem`]s:
+    ///
+    ///   * `Data(Bytes)`     — a DATA-frame payload, split so no item
+    ///                          exceeds [`H3_BODY_CHUNK_MAX`].
+    ///   * `Trailers(..)`    — a post-DATA HEADERS frame (RFC 9114
+    ///                          §4.1 trailing field section).
+    ///   * `TooLarge`        — cumulative body exceeded `max_body`; the
+    ///                          item is emitted once and latched (all
+    ///                          subsequent calls re-report it and emit
+    ///                          no further data).
+    ///
+    /// Returns `Ok(vec![])` when no complete frame is yet buffered.
+    /// Must only be called after `feed` has returned `Ok(Some(_))`.
+    ///
+    /// # Errors
+    ///
+    /// Surfaces a string-formatted decode error if a post-HEADERS
+    /// frame is malformed or a trailer field block fails QPACK decode.
+    pub fn feed_body(&mut self, chunk: &[u8], max_body: usize) -> Result<Vec<BodyItem>, String> {
+        let mut items = Vec::new();
+        if self.too_large {
+            items.push(BodyItem::TooLarge);
+            return Ok(items);
+        }
+        // SESSION 2 / P1-A FIX: the ONLY bytes that may live in
+        // `self.buf` in the Body phase are leftover bytes the HEADERS
+        // decode in `feed` could not consume (a DATA prefix that
+        // arrived coalesced with the HEADERS frame in one `stream_recv`).
+        // Move them into a local input stream FIRST, then the fresh
+        // `chunk`, and clear `self.buf` so it never retains a frame.
+        // After this, `self.buf` is empty for the whole Body phase.
+        let mut input: Vec<u8> = Vec::new();
+        if !self.buf.is_empty() {
+            input.append(&mut self.buf);
+        }
+        input.extend_from_slice(chunk);
+
+        let mut pos = 0usize;
+        while pos < input.len() {
+            let avail = input.get(pos..).unwrap_or(&[]);
+            match std::mem::take(&mut self.body) {
+                BodyParse::AwaitingFrameHeader { mut hdr } => {
+                    // Accumulate the smallest prefix that decodes BOTH
+                    // the type varint and the length varint. We feed
+                    // bytes one at a time from `avail` so the partial
+                    // header buffer is bounded and we never over-read.
+                    let mut consumed_here = 0usize;
+                    let parsed = loop {
+                        match Self::try_parse_frame_header(&hdr) {
+                            Some(Ok((ftype, len, _hlen))) => break Some((ftype, len)),
+                            Some(Err(e)) => return Err(e),
+                            None => {
+                                let Some(&b) = avail.get(consumed_here) else {
+                                    break None;
+                                };
+                                consumed_here += 1;
+                                hdr.push(b);
+                                if hdr.len() > MAX_FRAME_HEADER_BYTES {
+                                    return Err(format!(
+                                        "h3 body frame header exceeds \
+                                         {MAX_FRAME_HEADER_BYTES} bytes (malformed)"
+                                    ));
+                                }
+                            }
+                        }
+                    };
+                    pos += consumed_here;
+                    match parsed {
+                        None => {
+                            // Ran out of input mid-header; retain the
+                            // (bounded) partial header for the next call.
+                            self.body = BodyParse::AwaitingFrameHeader { hdr };
+                            break;
+                        }
+                        Some((ftype, len)) => {
+                            let remaining = usize::try_from(len).map_err(|_| {
+                                "h3 body frame length overflows usize".to_string()
+                            })?;
+                            self.body = match ftype {
+                                FRAME_DATA => BodyParse::InData { remaining },
+                                FRAME_HEADERS => BodyParse::InTrailers {
+                                    remaining,
+                                    block: Vec::new(),
+                                },
+                                // RFC 9114 §9: ignore unknown / other
+                                // frame types — skip incrementally.
+                                _ => BodyParse::InSkip { remaining },
+                            };
+                        }
+                    }
+                }
+                BodyParse::InData { remaining } => {
+                    if remaining == 0 {
+                        // Zero-length DATA frame ⇒ no spurious chunk.
+                        self.body = BodyParse::default();
+                        continue;
+                    }
+                    let take = remaining.min(input.len() - pos);
+                    let end = pos + take;
+                    // Cumulative total-body cap (request correctness,
+                    // NOT the memory mechanism). Counted across ALL
+                    // emitted Data bytes; a single huge DATA frame is
+                    // fine — only the cumulative total is capped.
+                    self.body_seen = self.body_seen.saturating_add(take);
+                    if self.body_seen > max_body {
+                        self.too_large = true;
+                        items.push(BodyItem::TooLarge);
+                        return Ok(items);
+                    }
+                    // Emit the available payload immediately, chunked to
+                    // <= H3_BODY_CHUNK_MAX, and DRAIN it (advance `pos`)
+                    // — the whole frame is NEVER retained.
+                    let mut off = pos;
+                    while off < end {
+                        let stop = (off + H3_BODY_CHUNK_MAX).min(end);
+                        items.push(BodyItem::Data(Bytes::copy_from_slice(
+                            input.get(off..stop).unwrap_or(&[]),
+                        )));
+                        off = stop;
+                    }
+                    pos = end;
+                    let rem = remaining - take;
+                    self.body = if rem == 0 {
+                        BodyParse::default()
+                    } else {
+                        BodyParse::InData { remaining: rem }
+                    };
+                }
+                BodyParse::InTrailers {
+                    remaining,
+                    mut block,
+                } => {
+                    // RFC 9114 §4.1: a HEADERS frame after DATA is the
+                    // trailing field section. QPACK needs the WHOLE
+                    // block — accumulate, but BOUND it.
+                    let take = remaining.min(input.len() - pos);
+                    let end = pos + take;
+                    block.extend_from_slice(input.get(pos..end).unwrap_or(&[]));
+                    if block.len() > MAX_TRAILER_BLOCK_BYTES {
+                        return Err(format!(
+                            "h3 body trailer field block exceeds \
+                             {MAX_TRAILER_BLOCK_BYTES} bytes (malformed)"
+                        ));
+                    }
+                    pos = end;
+                    let rem = remaining - take;
+                    if rem == 0 {
+                        let decoder = QpackDecoder::new();
+                        let trailers = decoder
+                            .decode(&block)
+                            .map_err(|e| format!("qpack trailer decode: {e}"))?;
+                        items.push(BodyItem::Trailers(trailers));
+                        self.body = BodyParse::default();
+                    } else {
+                        self.body = BodyParse::InTrailers {
+                            remaining: rem,
+                            block,
+                        };
+                    }
+                }
+                BodyParse::InSkip { remaining } => {
+                    // RFC 9114 §9: discard the payload incrementally,
+                    // never buffering it.
+                    let take = remaining.min(input.len() - pos);
+                    pos += take;
+                    let rem = remaining - take;
+                    self.body = if rem == 0 {
+                        BodyParse::default()
+                    } else {
+                        BodyParse::InSkip { remaining: rem }
+                    };
+                }
+            }
+        }
+        Ok(items)
+    }
+
+    /// SESSION 2 / P1-A FIX: try to decode a body-phase frame header
+    /// (frame-type varint + length varint) from `hdr`.
+    ///
+    /// Returns `None` if more bytes are needed, `Some(Ok((type, len,
+    /// header_len)))` once both varints decode, or `Some(Err(_))` on a
+    /// malformed varint.
+    fn try_parse_frame_header(hdr: &[u8]) -> Option<Result<(u64, u64, usize), String>> {
+        let (ftype, tlen) = match lb_h3::decode_varint(hdr) {
+            Ok(v) => v,
+            Err(lb_h3::H3Error::Incomplete) => return None,
+            Err(e) => return Some(Err(format!("h3 body frame type varint: {e}"))),
+        };
+        let rest = hdr.get(tlen..)?;
+        let (len, llen) = match lb_h3::decode_varint(rest) {
+            Ok(v) => v,
+            Err(lb_h3::H3Error::Incomplete) => return None,
+            Err(e) => return Some(Err(format!("h3 body frame length varint: {e}"))),
+        };
+        Some(Ok((ftype, len, tlen + llen)))
+    }
+
+    /// SESSION 2 / P1-A: true once the cumulative body cap has been
+    /// exceeded — the actor uses this to stop forwarding and reset.
+    #[must_use]
+    pub const fn is_too_large(&self) -> bool {
+        self.too_large
+    }
+
+    /// SESSION 2 / P1-A FIX (test-gauge): bytes this `StreamRxBuf`
+    /// currently RETAINS in the Body phase — the leftover `buf` plus
+    /// whatever the streaming parser is holding (a ≤16 B partial frame
+    /// header, or a bounded trailer field block). This is the figure
+    /// the T5 memory-bound proof sums: a whole-DATA-frame-buffering
+    /// implementation would make this grow with frame size; the
+    /// streaming parser keeps it tiny.
+    #[cfg(any(test, feature = "test-gauges"))]
+    #[must_use]
+    pub fn retained_bytes(&self) -> usize {
+        let parser = match &self.body {
+            BodyParse::AwaitingFrameHeader { hdr } => hdr.len(),
+            BodyParse::InTrailers { block, .. } => block.len(),
+            BodyParse::InData { .. } | BodyParse::InSkip { .. } => 0,
+        };
+        self.buf.len() + parser
+    }
+}
+
+/// SESSION 2 / P1-A FIX (test-gauge): the maximum, observed at any
+/// instant, of the TOTAL per-stream request-body memory the proxy
+/// retains while a body is in flight — i.e. the `StreamRxBuf` internal
+/// buffer + every byte still queued in `body_pending` for the stream +
+/// the bounded channel occupancy. Unlike [`MAX_INFLIGHT_BODY_BYTES`]
+/// (which only ever sees already-split ≤8 KiB chunks in the egress),
+/// this captures the buffers UPSTREAM of the split, so it FAILS if the
+/// body-phase decoder buffers a whole DATA frame. Recorded in
+/// `conn_actor` right after `feed_body` decode and before flush — the
+/// point where these buffers are largest.
+#[cfg(any(test, feature = "test-gauges"))]
+pub static MAX_RETAINED_BODY_BYTES: std::sync::atomic::AtomicUsize =
+    std::sync::atomic::AtomicUsize::new(0);
+
+/// SESSION 2 / P1-A FIX (test-gauge): max-update for
+/// [`MAX_RETAINED_BODY_BYTES`].
+#[cfg(any(test, feature = "test-gauges"))]
+pub fn record_retained(n: usize) {
+    use std::sync::atomic::Ordering;
+    let mut cur = MAX_RETAINED_BODY_BYTES.load(Ordering::Relaxed);
+    while n > cur {
+        match MAX_RETAINED_BODY_BYTES.compare_exchange_weak(
+            cur,
+            n,
+            Ordering::Relaxed,
+            Ordering::Relaxed,
+        ) {
+            Ok(_) => break,
+            Err(observed) => cur = observed,
         }
     }
 }
@@ -370,6 +757,263 @@ pub async fn h3_to_h1_roundtrip(
         }
     };
     // Connection: close was sent, socket will be dropped; do not reuse.
+    pooled.set_reusable(false);
+    encode_h3_response(response.status, &response.body)
+}
+
+/// SESSION 2 / P1-A: build ONLY the HTTP/1.1 request head (request
+/// line + headers + CRLF CRLF terminator) — no body. Used by
+/// [`h3_to_h1_stream`] so the body can be streamed incrementally
+/// after the head instead of being concatenated into one buffer.
+///
+/// `framing` selects the entity-body framing header:
+///   * [`H1BodyFraming::None`]    — `Content-Length: 0` (bodyless;
+///     BYTE-IDENTICAL to `build_h1_request(req, None)`).
+///   * [`H1BodyFraming::ContentLength(n)`] — `Content-Length: n`.
+///   * [`H1BodyFraming::Chunked`] — `Transfer-Encoding: chunked`.
+fn build_h1_head(req: &H3Request, framing: &H1BodyFraming) -> Vec<u8> {
+    let mut s = String::with_capacity(128);
+    s.push_str(&req.method);
+    s.push(' ');
+    s.push_str(&req.path);
+    s.push_str(" HTTP/1.1\r\n");
+    if !req.authority.is_empty() {
+        s.push_str("Host: ");
+        s.push_str(&req.authority);
+        s.push_str("\r\n");
+    }
+    match framing {
+        H1BodyFraming::None => s.push_str("Content-Length: 0\r\n"),
+        H1BodyFraming::ContentLength(n) => {
+            s.push_str("Content-Length: ");
+            s.push_str(&n.to_string());
+            s.push_str("\r\n");
+        }
+        H1BodyFraming::Chunked => s.push_str("Transfer-Encoding: chunked\r\n"),
+    }
+    s.push_str("Connection: close\r\n");
+    s.push_str("\r\n");
+    s.into_bytes()
+}
+
+/// SESSION 2 / P1-A: HTTP/1.1 request entity-body framing choice.
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum H1BodyFraming {
+    /// No body — `Content-Length: 0`.
+    None,
+    /// Client supplied `content-length`; forward raw bytes unframed.
+    ContentLength(u64),
+    /// No client `content-length`; HTTP/1.1 chunked transfer-coding.
+    Chunked,
+}
+
+/// SESSION 2 / P1-A: test-only gauge of the maximum number of
+/// in-flight body bytes the streaming egress has buffered at once
+/// (the single peeked chunk). Asserted by the backpressure test (T5)
+/// to prove the proxy is NOT buffering the whole body.
+#[cfg(any(test, feature = "test-gauges"))]
+pub static MAX_INFLIGHT_BODY_BYTES: std::sync::atomic::AtomicUsize =
+    std::sync::atomic::AtomicUsize::new(0);
+
+#[cfg(any(test, feature = "test-gauges"))]
+fn record_inflight(n: usize) {
+    use std::sync::atomic::Ordering;
+    let mut cur = MAX_INFLIGHT_BODY_BYTES.load(Ordering::Relaxed);
+    while n > cur {
+        match MAX_INFLIGHT_BODY_BYTES.compare_exchange_weak(
+            cur,
+            n,
+            Ordering::Relaxed,
+            Ordering::Relaxed,
+        ) {
+            Ok(_) => break,
+            Err(observed) => cur = observed,
+        }
+    }
+}
+
+#[cfg(not(any(test, feature = "test-gauges")))]
+#[inline]
+fn record_inflight(_n: usize) {}
+
+/// SESSION 2 / P1-A: write one request-body chunk to the H1 upstream
+/// with the chosen framing. `Err(())` signals an upstream write
+/// failure (caller maps to 502). Empty data is a no-op (a zero-length
+/// DATA frame must NOT emit a spurious `0\r\n\r\n` chunk-terminator).
+async fn write_body_chunk(stream: &mut TcpStream, data: &[u8], chunked: bool) -> Result<(), ()> {
+    if data.is_empty() {
+        return Ok(());
+    }
+    if chunked {
+        let hdr = format!("{:x}\r\n", data.len());
+        stream.write_all(hdr.as_bytes()).await.map_err(|_| ())?;
+        stream.write_all(data).await.map_err(|_| ())?;
+        stream.write_all(b"\r\n").await.map_err(|_| ())?;
+    } else {
+        stream.write_all(data).await.map_err(|_| ())?;
+    }
+    Ok(())
+}
+
+/// SESSION 2 / P1-A — **incremental** H3→H1 request-body streaming.
+///
+/// Forwards request DATA to the H1 upstream as it arrives over the
+/// per-stream bounded channel `body_rx`. Memory safety comes from the
+/// channel's bounded depth + backpressure (poll_h3 stops calling
+/// `stream_recv` when the channel is full), NOT from buffering: at
+/// most ONE chunk is held here at any instant (the peeked head chunk,
+/// then one chunk per loop iteration). The response is still buffered
+/// via [`read_h1_response`] + [`encode_h3_response`] — response
+/// streaming is a later increment.
+///
+/// Framing decision (from the first body event + the client
+/// `content-length` header in `req.extra`, case-insensitive):
+///   * first event `End` with no prior `Chunk` ⇒ bodyless ⇒ head is
+///     BYTE-IDENTICAL to `build_h1_request(req, None)`.
+///   * body present + client `content-length` ⇒ `Content-Length: <v>`,
+///     raw body bytes forwarded unframed.
+///   * body present, no client `content-length` ⇒
+///     `Transfer-Encoding: chunked`, each chunk HTTP/1.1-chunk-framed.
+///
+/// `max_body` is the total-size cap surfaced as H3 `413` (the in-flight
+/// window is the memory mechanism, separate from this).
+///
+/// # Errors
+///
+/// Returns the H3 wire bytes of a `413` when `body_rx` delivers a
+/// `Reset` *carrying the too-large signal* (poll_h3 drops the channel
+/// after sending nothing further); a `502` on any upstream
+/// dial/write/read failure or premature channel close. Surfaces a
+/// string error only if encoding the fallback response itself fails.
+#[allow(clippy::too_many_lines)]
+pub async fn h3_to_h1_stream(
+    req: &H3Request,
+    backend: SocketAddr,
+    pool: &TcpPool,
+    mut body_rx: tokio::sync::mpsc::Receiver<ReqBodyEvent>,
+    _max_body: usize,
+) -> Result<Vec<u8>, String> {
+    // Peek the FIRST body event to choose framing. We buffer at most
+    // ONE chunk here — bounded, never the whole body.
+    let first = body_rx.recv().await;
+    let (framing, mut pending_first): (H1BodyFraming, Option<Bytes>) = match &first {
+        // Bodyless: byte-identical head to build_h1_request(req, None).
+        Some(ReqBodyEvent::End { .. }) | None => (H1BodyFraming::None, None),
+        Some(ReqBodyEvent::Reset) => {
+            // Reset before any data ⇒ treat as a too-large/abort signal
+            // surfaced by poll_h3: respond 413 (poll_h3 only Resets
+            // early for the oversized case in this increment).
+            return encode_h3_response(413, b"payload too large");
+        }
+        Some(ReqBodyEvent::Chunk(b)) => {
+            let cl = req.extra.iter().find_map(|(n, v)| {
+                if n.eq_ignore_ascii_case("content-length") {
+                    v.trim().parse::<u64>().ok()
+                } else {
+                    None
+                }
+            });
+            match cl {
+                Some(n) => (H1BodyFraming::ContentLength(n), Some(b.clone())),
+                None => (H1BodyFraming::Chunked, Some(b.clone())),
+            }
+        }
+    };
+    record_inflight(pending_first.as_ref().map_or(0, Bytes::len));
+
+    let mut pooled = match pool.acquire_async(backend).await {
+        Ok(p) => p,
+        Err(e) => {
+            tracing::warn!(error = %e, "H3→H1 stream backend acquire failed");
+            return encode_h3_response(502, b"bad gateway");
+        }
+    };
+
+    let head = build_h1_head(req, &framing);
+    let chunked = framing == H1BodyFraming::Chunked;
+
+    // --- write head + stream body incrementally ---
+    let response = {
+        let stream = pooled
+            .stream_mut()
+            .ok_or_else(|| "pool returned empty handle".to_string())?;
+
+        macro_rules! fail502 {
+            ($ctx:expr, $e:expr) => {{
+                pooled.set_reusable(false);
+                tracing::warn!(error = %$e, $ctx);
+                return encode_h3_response(502, b"bad gateway");
+            }};
+        }
+
+        if let Err(e) = stream.write_all(&head).await {
+            fail502!("H3→H1 stream head write failed", e);
+        }
+
+        if let Some(b) = pending_first.take() {
+            if write_body_chunk(stream, &b, chunked).await.is_err() {
+                fail502!("H3→H1 stream body write failed", "first chunk");
+            }
+        }
+
+        // Stream the remaining events incrementally. One event held at
+        // a time → backpressure: a slow upstream stalls this recv loop,
+        // the channel fills, poll_h3 stops extending QUIC flow control.
+        // Bodyless (first event == End / channel already closed) is a
+        // clean end with no further events.
+        let mut clean_end = matches!(first, Some(ReqBodyEvent::End { .. }) | None);
+        while let Some(ev) = body_rx.recv().await {
+            match ev {
+                ReqBodyEvent::Chunk(b) => {
+                    record_inflight(b.len());
+                    if write_body_chunk(stream, &b, chunked).await.is_err() {
+                        fail502!("H3→H1 stream body write failed", "chunk");
+                    }
+                }
+                ReqBodyEvent::End { trailers: _ } => {
+                    // Trailers are not forwarded to the H1 upstream in
+                    // this increment (H1 trailer egress is later work);
+                    // they are consumed so the stream terminates clean.
+                    clean_end = true;
+                    break;
+                }
+                ReqBodyEvent::Reset => {
+                    // Mid-body reset (oversized latched in poll_h3, or
+                    // client abort): abort the upstream, do NOT leave
+                    // it with a completed request.
+                    pooled.set_reusable(false);
+                    tracing::warn!("H3→H1 stream body reset; aborting upstream");
+                    // Only the oversized path triggers a mid-body Reset
+                    // in this increment, so it maps to 413.
+                    return encode_h3_response(413, b"payload too large");
+                }
+            }
+        }
+        if !clean_end {
+            // Channel closed before an explicit End/Reset → producer
+            // dropped mid-body: abort rather than present a truncated
+            // request to the upstream.
+            pooled.set_reusable(false);
+            tracing::warn!("H3→H1 stream channel closed before End; aborting upstream");
+            return encode_h3_response(502, b"bad gateway");
+        }
+        if chunked {
+            if let Err(e) = stream.write_all(b"0\r\n\r\n").await {
+                fail502!("H3→H1 stream chunked terminator failed", e);
+            }
+        }
+
+        if let Err(e) = stream.flush().await {
+            fail502!("H3→H1 stream flush failed", e);
+        }
+        match read_h1_response(stream).await {
+            Ok(r) => r,
+            Err(e) => {
+                fail502!("H3→H1 stream backend read failed", e);
+            }
+        }
+    };
+
     pooled.set_reusable(false);
     encode_h3_response(response.status, &response.body)
 }

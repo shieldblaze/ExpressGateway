@@ -51,3 +51,9 @@ proptest = { workspace = true }
 [features]
 default = []
 proptest = []
+# SESSION 2 / P1-A: exposes `h3_bridge::MAX_INFLIGHT_BODY_BYTES`, a
+# test-only gauge integration tests assert to prove the streaming
+# bridge is memory-bounded (not whole-body buffering). Off by default
+# so production never compiles the gauge; the P1-A backpressure test
+# (T5) is run with `--features test-gauges`.
+test-gauges = []

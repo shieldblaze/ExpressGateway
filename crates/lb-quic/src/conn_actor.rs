@@ -19,6 +19,7 @@
 //! inside the actor itself.
 
 use std::collections::HashMap;
+use std::collections::VecDeque;
 use std::net::SocketAddr;
 use std::sync::Arc;
 use std::time::Duration;
@@ -32,9 +33,19 @@ use lb_io::pool::TcpPool;
 use lb_io::quic_pool::QuicUpstreamPool;
 
 use crate::h3_bridge::{
-    H3Request, StreamRxBuf, encode_h3_response, h3_to_h1_roundtrip, h3_to_h2_roundtrip,
-    h3_to_h3_roundtrip,
+    BodyItem, H3Request, MAX_REQUEST_BODY_BYTES, ReqBodyEvent, StreamRxBuf, encode_h3_response,
+    h3_to_h2_roundtrip, h3_to_h3_roundtrip, h3_to_h1_stream,
 };
+
+/// SESSION 2 / P1-A: depth of the per-stream bounded request-body
+/// channel. With `h3_bridge::H3_BODY_CHUNK_MAX` (8 KiB) this caps the
+/// max in-flight body to ≈ `H3_BODY_CHANNEL_DEPTH * 8 KiB` (≈ 64 KiB)
+/// INDEPENDENT of the total request-body size — the memory-safety
+/// mechanism. When the channel is full `poll_h3` stops calling
+/// `stream_recv` for that stream, so quiche does not extend the QUIC
+/// stream flow-control window and the H3 client is paused → genuine
+/// end-to-end backpressure.
+pub const H3_BODY_CHANNEL_DEPTH: usize = 8;
 
 /// Application-layer error code emitted in the `CONNECTION_CLOSE`
 /// frame the actor sends when the listener-wide cancel token fires.
@@ -105,6 +116,17 @@ pub async fn run_actor(mut params: ActorParams) -> std::io::Result<()> {
     let mut out_buf = vec![0u8; 65_535];
     let mut rx_buf_by_stream: HashMap<u64, StreamRxBuf> = HashMap::new();
     let mut stream_response: HashMap<u64, StreamTx> = HashMap::new();
+    // SESSION 2 / P1-A: per-stream bounded request-body channels. The
+    // sender lives here in the actor; the matching receiver is moved
+    // into the spawned `h3_to_h1_stream` task. Bounded depth +
+    // backpressure (poll_h3 skips `stream_recv` when full) is the
+    // memory-safety mechanism.
+    let mut body_tx_by_stream: HashMap<u64, mpsc::Sender<ReqBodyEvent>> = HashMap::new();
+    // SESSION 2 / P1-A: decoded-but-not-yet-sent body events per
+    // stream. A single DATA frame can decode into many ≤8 KiB chunks;
+    // we never drop a decoded item — overflow past the channel's spare
+    // capacity stays here and is flushed (with backpressure) next tick.
+    let mut body_pending: HashMap<u64, VecDeque<ReqBodyEvent>> = HashMap::new();
     // `request_tasks` holds the bridge's H3→H1 jobs. We push each
     // spawned JoinHandle in, and await the first-completed inside the
     // select! so the actor wakes as soon as a response is ready — not
@@ -121,7 +143,19 @@ pub async fn run_actor(mut params: ActorParams) -> std::io::Result<()> {
             break;
         }
 
-        let next_wait = params.conn.timeout().unwrap_or(Duration::from_millis(100));
+        let mut next_wait = params.conn.timeout().unwrap_or(Duration::from_millis(100));
+        // SESSION 2 / P1-A: while a request body is actively streaming
+        // the only thing that advances it is a `poll_h3` tick draining
+        // decoded chunks into the (bounded) channel as the egress task
+        // consumes them. quiche's idle timeout can be hundreds of ms,
+        // which would throttle body forwarding to a crawl (and idle
+        // out the client). Cap the wait to a short tick so a paused/
+        // backpressured stream resumes promptly. This does NOT defeat
+        // backpressure: the bounded channel + capacity gate still cap
+        // in-flight bytes; we merely poll the gate more often.
+        if !body_tx_by_stream.is_empty() || !body_pending.is_empty() {
+            next_wait = next_wait.min(Duration::from_millis(2));
+        }
 
         // Build the "task completed" future: the first finished one
         // among request_tasks. If none are outstanding, we push a
@@ -182,6 +216,8 @@ pub async fn run_actor(mut params: ActorParams) -> std::io::Result<()> {
             poll_h3(
                 &mut params.conn,
                 &mut rx_buf_by_stream,
+                &mut body_tx_by_stream,
+                &mut body_pending,
                 &mut request_tasks,
                 &params.pool,
                 &params.backends,
@@ -341,21 +377,50 @@ async fn drain_conn_send(socket: &UdpSocket, conn: &mut quiche::Connection, out_
 /// Walk readable streams, accumulate HEADERS for any that have not
 /// started, and spawn an H3→H1 (or H3→H3 when configured) task per
 /// completed request.
+#[allow(clippy::too_many_lines, clippy::too_many_arguments)]
 fn poll_h3(
     conn: &mut quiche::Connection,
     rx_by_stream: &mut HashMap<u64, StreamRxBuf>,
+    body_tx_by_stream: &mut HashMap<u64, mpsc::Sender<ReqBodyEvent>>,
+    body_pending: &mut HashMap<u64, VecDeque<ReqBodyEvent>>,
     request_tasks: &mut Vec<tokio::task::JoinHandle<(u64, Vec<u8>)>>,
     pool: &TcpPool,
     backends: &Arc<Vec<SocketAddr>>,
     h3_backend: Option<&(QuicUpstreamPool, SocketAddr, String)>,
     h2_backend: Option<&(Http2Pool, SocketAddr)>,
 ) {
+    // SESSION 2 / P1-A: flush any decoded-but-not-yet-sent body events
+    // for EVERY active stream first, independent of `conn.readable()`.
+    // Once a request stream is fully received + FIN, quiche stops
+    // listing it as readable — but the per-stream pending queue may
+    // still hold the tail chunks + the `End` event that the egress is
+    // blocked waiting on. Without this pass those would never be
+    // delivered and the request would hang. This is also where
+    // backpressure releases: as the egress drains the bounded channel,
+    // capacity frees and the queued tail flows out.
+    let pending_sids: Vec<u64> = body_pending.keys().copied().collect();
+    for sid in pending_sids {
+        flush_pending(sid, body_tx_by_stream, body_pending);
+    }
+
     let readable: Vec<u64> = conn.readable().collect();
     for sid in readable {
+        // SESSION 2 / P1-A: streams that already have an active body
+        // channel are in the Body phase. Drain them with channel
+        // capacity backpressure: if the bounded channel is full we do
+        // NOT call `stream_recv` this tick → quiche keeps the QUIC
+        // stream flow-control window unextended → the H3 client is
+        // paused. This is the genuine end-to-end backpressure / memory
+        // mechanism (max in-flight = depth * chunk, body-size
+        // independent).
+        if body_tx_by_stream.contains_key(&sid) {
+            drain_body_stream(conn, sid, rx_by_stream, body_tx_by_stream, body_pending);
+            continue;
+        }
         let mut buf = [0u8; 8192];
         loop {
             match conn.stream_recv(sid, &mut buf) {
-                Ok((n, _fin)) => {
+                Ok((n, fin)) => {
                     let rx = rx_by_stream.entry(sid).or_default();
                     match rx.feed(buf.get(..n).unwrap_or(&[])) {
                         Ok(Some(headers)) => {
@@ -421,24 +486,69 @@ fn poll_h3(
                                 tracing::warn!("no backends available for H3 request");
                                 continue;
                             };
+                            // SESSION 2 / P1-A: spawn the INCREMENTAL
+                            // streaming egress. The bounded body channel
+                            // is the memory mechanism; the receiver is
+                            // moved into the task, the sender stays here.
                             let pool = pool.clone();
+                            let (btx, brx) =
+                                mpsc::channel::<ReqBodyEvent>(H3_BODY_CHANNEL_DEPTH);
                             request_tasks.push(tokio::spawn(async move {
-                                // S1-B seam: `None` body — SESSION 2's
-                                // poll_h3 DATA-frame accumulation will
-                                // pass `Some(..)` here.
-                                let bytes = match h3_to_h1_roundtrip(&req, backend, &pool, None)
-                                    .await
+                                let bytes = match h3_to_h1_stream(
+                                    &req,
+                                    backend,
+                                    &pool,
+                                    brx,
+                                    MAX_REQUEST_BODY_BYTES,
+                                )
+                                .await
                                 {
                                     Ok(b) => b,
                                     Err(e) => {
-                                        tracing::warn!(error = %e, "H3→H1 roundtrip failed");
+                                        tracing::warn!(error = %e, "H3→H1 stream failed");
                                         Vec::new()
                                     }
                                 };
                                 (sid, bytes)
                             }));
+                            if fin {
+                                // Bodyless (HEADERS + FIN): the egress
+                                // sees `End` first ⇒ byte-identical
+                                // bodyless head. Don't register a body
+                                // channel — request is complete.
+                                let _ = btx.try_send(ReqBodyEvent::End {
+                                    trailers: Vec::new(),
+                                });
+                            } else {
+                                // Body to follow. Drain any post-HEADERS
+                                // bytes that arrived coalesced in THIS
+                                // recv, then hand the stream over to the
+                                // body-phase drainer for later ticks.
+                                body_tx_by_stream.insert(sid, btx);
+                                body_pending.entry(sid).or_default();
+                                decode_into_pending(
+                                    sid,
+                                    rx_by_stream,
+                                    body_tx_by_stream,
+                                    body_pending,
+                                    &[],
+                                    fin,
+                                );
+                                flush_pending(sid, body_tx_by_stream, body_pending);
+                            }
+                            // This stream is now in the Body phase;
+                            // stop the headers recv loop for it.
+                            break;
                         }
-                        Ok(None) => {}
+                        Ok(None) => {
+                            if fin {
+                                // FIN before a full HEADERS frame — a
+                                // malformed/empty stream; nothing to
+                                // forward. Drop any partial state.
+                                rx_by_stream.remove(&sid);
+                                break;
+                            }
+                        }
                         Err(e) => {
                             tracing::warn!(error = %e, stream_id = sid, "h3 decode");
                         }
@@ -451,6 +561,206 @@ fn poll_h3(
                 }
             }
         }
+    }
+}
+
+/// SESSION 2 / P1-A — Body-phase drain for a stream that already has
+/// an active bounded body channel. Backpressure: if the channel has
+/// no spare capacity (and the pending queue is non-empty) we return
+/// WITHOUT calling `stream_recv`, so quiche does not extend the QUIC
+/// stream flow-control window and the H3 client is paused (genuine
+/// end-to-end backpressure; max in-flight stays ≈ depth*chunk
+/// regardless of total body size).
+fn drain_body_stream(
+    conn: &mut quiche::Connection,
+    sid: u64,
+    rx_by_stream: &mut HashMap<u64, StreamRxBuf>,
+    body_tx_by_stream: &mut HashMap<u64, mpsc::Sender<ReqBodyEvent>>,
+    body_pending: &mut HashMap<u64, VecDeque<ReqBodyEvent>>,
+) {
+    let mut buf = [0u8; 8192];
+    loop {
+        // First, push out anything already decoded-but-not-sent.
+        flush_pending(sid, body_tx_by_stream, body_pending);
+        if !body_tx_by_stream.contains_key(&sid) {
+            // Stream completed / aborted while flushing.
+            return;
+        }
+        // Backpressure gate: if items are still pending the channel is
+        // full — do NOT pull more bytes off quiche this tick.
+        let pending_empty = body_pending.get(&sid).is_none_or(VecDeque::is_empty);
+        if !pending_empty {
+            return;
+        }
+        match conn.stream_recv(sid, &mut buf) {
+            Ok((n, fin)) => {
+                decode_into_pending(
+                    sid,
+                    rx_by_stream,
+                    body_tx_by_stream,
+                    body_pending,
+                    buf.get(..n).unwrap_or(&[]),
+                    fin,
+                );
+                if !body_tx_by_stream.contains_key(&sid) {
+                    flush_pending(sid, body_tx_by_stream, body_pending);
+                    return;
+                }
+            }
+            Err(quiche::Error::Done) => {
+                flush_pending(sid, body_tx_by_stream, body_pending);
+                return;
+            }
+            Err(e) => {
+                tracing::debug!(error = %e, stream_id = sid, "stream_recv (body)");
+                if let Some(tx) = body_tx_by_stream.remove(&sid) {
+                    let _ = tx.try_send(ReqBodyEvent::Reset);
+                }
+                rx_by_stream.remove(&sid);
+                body_pending.remove(&sid);
+                return;
+            }
+        }
+    }
+}
+
+/// SESSION 2 / P1-A — decode freshly-received Body-phase bytes into
+/// ordered events and APPEND them to the per-stream pending queue. No
+/// decoded item is ever dropped: a large DATA frame splits into many
+/// ≤8 KiB chunks that wait here for channel capacity. On `TooLarge`
+/// the channel is `Reset` and torn down; on `fin` an `End` event is
+/// appended after the data so the egress terminates cleanly.
+fn decode_into_pending(
+    sid: u64,
+    rx_by_stream: &mut HashMap<u64, StreamRxBuf>,
+    body_tx_by_stream: &mut HashMap<u64, mpsc::Sender<ReqBodyEvent>>,
+    body_pending: &mut HashMap<u64, VecDeque<ReqBodyEvent>>,
+    chunk: &[u8],
+    fin: bool,
+) {
+    let Some(rx) = rx_by_stream.get_mut(&sid) else {
+        return;
+    };
+    let items = match rx.feed_body(chunk, MAX_REQUEST_BODY_BYTES) {
+        Ok(v) => v,
+        Err(e) => {
+            tracing::warn!(error = %e, stream_id = sid, "h3 body decode");
+            if let Some(tx) = body_tx_by_stream.remove(&sid) {
+                let _ = tx.try_send(ReqBodyEvent::Reset);
+            }
+            rx_by_stream.remove(&sid);
+            body_pending.remove(&sid);
+            return;
+        }
+    };
+    let q = body_pending.entry(sid).or_default();
+    let mut trailers: Vec<(String, String)> = Vec::new();
+    for item in items {
+        match item {
+            BodyItem::Data(b) => q.push_back(ReqBodyEvent::Chunk(b)),
+            BodyItem::Trailers(t) => trailers = t,
+            BodyItem::TooLarge => {
+                // Cap exceeded: discard anything queued, signal the
+                // egress to 413 + abort the upstream, and tear down.
+                if let Some(tx) = body_tx_by_stream.remove(&sid) {
+                    let _ = tx.try_send(ReqBodyEvent::Reset);
+                }
+                rx_by_stream.remove(&sid);
+                body_pending.remove(&sid);
+                return;
+            }
+        }
+    }
+    if fin {
+        body_pending
+            .entry(sid)
+            .or_default()
+            .push_back(ReqBodyEvent::End { trailers });
+        rx_by_stream.remove(&sid);
+    }
+    // SESSION 2 / P1-A FIX (test-gauge): record the TOTAL per-stream
+    // retained body memory at the largest point — right after the
+    // decode and BEFORE flush drains anything: `StreamRxBuf` internal
+    // buffer + every byte queued in `body_pending` + the bounded
+    // channel occupancy (upper-bounded by used slots * chunk-max).
+    // This FAILS if the body-phase parser buffered a whole DATA frame.
+    #[cfg(any(test, feature = "test-gauges"))]
+    record_retained_for_stream(sid, rx_by_stream, body_tx_by_stream, body_pending);
+}
+
+/// SESSION 2 / P1-A FIX (test-gauge): sum the per-stream retained body
+/// memory and feed it to [`crate::h3_bridge::record_retained`].
+#[cfg(any(test, feature = "test-gauges"))]
+fn record_retained_for_stream(
+    sid: u64,
+    rx_by_stream: &HashMap<u64, StreamRxBuf>,
+    body_tx_by_stream: &HashMap<u64, mpsc::Sender<ReqBodyEvent>>,
+    body_pending: &HashMap<u64, VecDeque<ReqBodyEvent>>,
+) {
+    let rx_bytes = rx_by_stream
+        .get(&sid)
+        .map_or(0, crate::h3_bridge::StreamRxBuf::retained_bytes);
+    let pending_bytes: usize = body_pending.get(&sid).map_or(0, |q| {
+        q.iter()
+            .map(|ev| match ev {
+                ReqBodyEvent::Chunk(b) => b.len(),
+                ReqBodyEvent::End { .. } | ReqBodyEvent::Reset => 0,
+            })
+            .sum()
+    });
+    // Channel occupancy is not byte-introspectable; every queued event
+    // is a Chunk of <= H3_BODY_CHUNK_MAX, so used slots * chunk-max is a
+    // sound UPPER bound (the gauge must over- not under-estimate).
+    let chan_used = body_tx_by_stream.get(&sid).map_or(0, |tx| {
+        tx.max_capacity().saturating_sub(tx.capacity())
+    });
+    let chan_bytes = chan_used.saturating_mul(crate::h3_bridge::H3_BODY_CHUNK_MAX);
+    crate::h3_bridge::record_retained(rx_bytes + pending_bytes + chan_bytes);
+}
+
+/// SESSION 2 / P1-A — push as many pending events as the bounded
+/// channel will currently accept (`try_reserve`), in order. Stops at
+/// the first full / closed signal so the rest stay queued — that is
+/// the backpressure point. Removes per-stream state once `End`/`Reset`
+/// has been delivered.
+fn flush_pending(
+    sid: u64,
+    body_tx_by_stream: &mut HashMap<u64, mpsc::Sender<ReqBodyEvent>>,
+    body_pending: &mut HashMap<u64, VecDeque<ReqBodyEvent>>,
+) {
+    let Some(tx) = body_tx_by_stream.get(&sid) else {
+        body_pending.remove(&sid);
+        return;
+    };
+    let Some(q) = body_pending.get_mut(&sid) else {
+        return;
+    };
+    let mut terminated = false;
+    while !q.is_empty() {
+        match tx.try_reserve() {
+            Ok(permit) => {
+                // Loop guard `!q.is_empty()` guarantees an element; the
+                // `else` arm is unreachable but handled without panic.
+                let Some(ev) = q.pop_front() else { break };
+                let is_end =
+                    matches!(ev, ReqBodyEvent::End { .. } | ReqBodyEvent::Reset);
+                permit.send(ev);
+                if is_end {
+                    terminated = true;
+                    break;
+                }
+            }
+            Err(mpsc::error::TrySendError::Full(())) => break,
+            Err(mpsc::error::TrySendError::Closed(())) => {
+                // Egress task gone (upstream failed) — stop forwarding.
+                terminated = true;
+                break;
+            }
+        }
+    }
+    if terminated {
+        body_tx_by_stream.remove(&sid);
+        body_pending.remove(&sid);
     }
 }
 
