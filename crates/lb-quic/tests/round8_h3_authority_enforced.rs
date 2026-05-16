@@ -27,7 +27,7 @@
 use std::net::{Ipv4Addr, SocketAddr, SocketAddrV4};
 use std::path::PathBuf;
 use std::sync::Arc;
-use std::sync::atomic::{AtomicU32, Ordering};
+use std::sync::atomic::{AtomicU32, AtomicU64, Ordering};
 use std::time::Duration;
 
 use tokio::net::{TcpListener, UdpSocket};
@@ -63,11 +63,22 @@ fn write_test_cert() -> (CertTempFile, CertTempFile) {
         .duration_since(std::time::UNIX_EPOCH)
         .map(|d| d.subsec_nanos())
         .unwrap_or(0);
+    // ROUND8 Phase-E test-harness micro-fix (verify, task#79): the prior
+    // nonce was `pid * K + subsec_nanos`. `std::process::id()` is constant
+    // across every `#[test]` in this binary, so two tests running in
+    // parallel could land on the same `subsec_nanos()` (or collide through
+    // the wrapping mul/add) and therefore the SAME cert path — one test's
+    // `CertTempFile::drop` then `remove_file`s the cert another test is
+    // still loading, yielding the intermittent "load cert" parallel flake.
+    // A process-global monotonic counter makes every cert path unique by
+    // construction (no parallel collision possible, no serial-only crutch).
+    static CERT_SEQ: AtomicU64 = AtomicU64::new(0);
+    let seq = CERT_SEQ.fetch_add(1, Ordering::Relaxed);
     let nonce = std::process::id()
         .wrapping_mul(0x9E37_79B9)
         .wrapping_add(subsec);
-    let cert_path = dir.join(format!("lb-quic-l7-16-cert-{nonce}.pem"));
-    let key_path = dir.join(format!("lb-quic-l7-16-key-{nonce}.pem"));
+    let cert_path = dir.join(format!("lb-quic-l7-16-cert-{nonce}-{seq}.pem"));
+    let key_path = dir.join(format!("lb-quic-l7-16-key-{nonce}-{seq}.pem"));
     std::fs::write(&cert_path, cert_pem).expect("write cert");
     std::fs::write(&key_path, key_pem).expect("write key");
     (CertTempFile(cert_path), CertTempFile(key_path))

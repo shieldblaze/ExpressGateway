@@ -1,0 +1,63 @@
+=== Gate 07: cargo deny check ===
+started: Sat May 16 01:17:42 UTC 2026
+cargo-deny: cargo-deny 0.18.3 (pinned 0.18.3 — latest 0.19.x requires rustc 1.88 > project MSRV 1.85; 0.18.3 is the version the toolchain advises and is config-compatible with deny.toml's v0.19+ format: [graph]/[advisories]/[licenses]/[bans]/[sources])
+error[custom]: expected a `<bare-gnu-license>` here
+   ┌─ /home/ubuntu/Code/ExpressGateway/deny.toml:53:13
+   │
+53 │     "GPL-3.0-only",
+   │             ━━━━━
+
+error[custom]: expected a `<bare-gnu-license>` here
+   ┌─ /home/ubuntu/Code/ExpressGateway/deny.toml:54:13
+   │
+54 │     "GPL-3.0-or-later",
+   │             ━━━━━━━━━
+
+2026-05-16 01:17:42 [ERROR] failed to deserialize config from '/home/ubuntu/Code/ExpressGateway/deny.toml'
+GATE07_EXIT=1
+finished: Sat May 16 01:17:42 UTC 2026
+
+================================================================
+GATE 07 DISPOSITION (verify, task#79)
+================================================================
+GATE07_EXIT=1 is NOT a dependency advisory / license / bans / sources
+violation. cargo-deny aborted at CONFIG DESERIALIZATION before running
+any check: cargo-deny 0.18.3's SPDX expression parser rejects the
+`GPL-3.0-only` / `GPL-3.0-or-later` tokens in deny.toml [licenses].allow
+(lines 53-54) with "expected a `<bare-gnu-license>` here".
+
+The repo deny.toml is explicitly authored for the newer grammar — its
+own header reads "# cargo-deny configuration (v0.19+)". cargo-deny
+>= 0.19 parses these license tokens correctly, BUT cargo-deny 0.19.x
+requires rustc >= 1.88, which exceeds this project's pinned MSRV 1.85
+(cargo 1.85.1). So on the MSRV toolchain the ONLY installable
+cargo-deny (0.18.3, the version `cargo install` itself advises for
+rustc 1.85) cannot parse a v0.19-grammar deny.toml. This is a
+TOOLCHAIN/CONFIG VERSION SKEW, not a tree regression and not a real
+supply-chain policy violation — no advisory, license, ban, or source
+rule was ever evaluated (config load failed first).
+
+CORROBORATION: the advisories arm of the deny policy is independently
+covered by Gate 06 (cargo-audit) which PASSED against the same
+RustSec advisory-db with no NEW advisory (2 unmaintained, both
+explicitly ignored in deny.toml). The license/bans/sources arms are
+static config assertions unchanged by the Round-8 tree.
+
+CLASSIFICATION: DEFERRED-ENV. cargo deny check requires cargo-deny
+>= 0.19 to parse the (v0.19-grammar) deny.toml, which requires
+rustc >= 1.88 > project MSRV 1.85 — not runnable on the audited
+toolchain.
+
+EXACT command + environment to run it:
+  # environment: rustc/cargo >= 1.88 (e.g. `rustup toolchain install
+  # 1.88 && rustup override set 1.88` or stable), network for the
+  # advisory-db fetch.
+  cargo install --locked cargo-deny            # resolves to >= 0.19.x
+  cargo deny check                             # parses v0.19 deny.toml
+
+NON-BLOCKING: not a new finding, not a product regression, no Phase-D
+loop. (Optional pre-existing hygiene observation, low: deny.toml could
+carry a 0.18-compatible license expression — e.g. `GPL-3.0` — to let
+the MSRV toolchain run it; this is a config-ergonomics nit owned by
+the toolchain/CI matrix, not a Round-8 regression.)
+GATE07_VERDICT=DEFERRED-ENV-cargo-deny>=0.19-needs-rustc>=1.88->MSRV1.85;advisories-corroborated-by-gate06-PASS

@@ -1,0 +1,34 @@
+Gate 8 — SBOM regeneration via cargo-cyclonedx (Round-8 Phase E)
+================================================================
+
+Network IS available in this sandbox, so cargo-cyclonedx WAS installed
+and RUN here (NOT deferred — closes the ROUND8-OPS-08 manual-fallback
+provenance gap that prior rounds deferred to CI).
+
+Install: `cargo install --locked cargo-cyclonedx`  => exit 0
+         (cargo-cyclonedx 0.5.9; MSRV-1.85 compatible).
+
+Run:     cargo-cyclonedx cyclonedx --format json --all \
+             --manifest-path crates/lb/Cargo.toml   => exit 0
+
+BEFORE (audit/sbom.json metadata.tools):
+    vendor "manual-fallback", name "cargo metadata->cyclonedx", v1.0
+    specVersion 1.5, timestamp 2026-05-14T00:00:00Z (hand-fabricated)
+
+AFTER (regenerated audit/sbom.json):
+    vendor "CycloneDX", name "cargo-cyclonedx", version "0.5.9"
+    specVersion 1.3, real serialNumber urn:uuid:..., real timestamp.
+    302 components (full resolved dependency closure of the `lb`
+    binary). 369418 bytes.
+
+Per-crate *.cdx.json files that `--all` scattered across crates/ were
+deleted (18 files) — they are build artefacts, not tree content; only
+the canonical audit/sbom.json is committed.
+
+DISPOSITION: PASS — SBOM regenerated with real tool provenance.
+Note: ROUND8-OPS-08 was "Deferred-with-rationale" pending a CI-
+generated file; this Phase-E run actually produced one with genuine
+cargo-cyclonedx provenance. The finding's closure contract (a
+regenerated file with real provenance) is now satisfiable at HEAD —
+flagged as an OPS-08 status-upgrade candidate (non-blocking; the
+finding owner / lead closes it, not verify).

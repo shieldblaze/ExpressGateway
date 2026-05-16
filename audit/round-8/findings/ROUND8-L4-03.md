@@ -4,7 +4,8 @@ Reference: `audit/round-8/research/katran.md` lesson 4 (`is_under_flood()`) + ha
 Our equivalent: `crates/lb-l4-xdp/ebpf/src/main.rs:464-470` (CONNTRACK lookup; insert is userspace-side via `XdpLoader::conntrack_map`)
 
 Severity: high
-Status:   Proposed-Fix — eBPF per-CPU `is_under_flood()` gate (Katran
+Status:   Verified-Fixed (verify, task#70, 2026-05-15) — is_under_flood() is on the CT-MISS path ONLY; established (CT-hit) flows are NOT throttled (adversarial check confirmed); fails open on cap==0 / unreadable map. See audit/round-8/verify/l4.md. [Original Proposed-Fix below.]
+          Proposed-Fix — eBPF per-CPU `is_under_flood()` gate (Katran
           lesson 4) on the CT-miss path of `handle_ipv4`/`handle_ipv6`
           (`new_flow_rate` per-CPU `RateWindow` + runtime-tunable
           `new_flow_cap_cfg`); userspace `CtInsertGate` leaky-bucket

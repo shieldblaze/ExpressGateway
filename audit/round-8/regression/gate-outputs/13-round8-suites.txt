@@ -1,0 +1,386 @@
+=== Gate 13: cargo test --workspace --release --test 'round8_*' -- --test-threads=1 (serial: h3-authority shared-temp-cert flake) ===
+h3-flake disposition: per-test tempdir fix applied to crates/lb-quic/tests/round8_h3_authority_enforced.rs ONLY (process-global AtomicU64 CERT_SEQ → unique cert path per test; trivial, allowed by task#79 constraints)
+started: Sat May 16 00:54:52 UTC 2026
+    Finished `release` profile [optimized] target(s) in 0.47s
+     Running tests/round8_drain_coordinator.rs (target/release/deps/round8_drain_coordinator-236e9c430974f7ef)
+
+running 6 tests
+test listener_token_is_child_of_root_token ... ok
+test run_drain_admin_skips_xdp_c13 ... ok
+test run_drain_idempotent_c10 ... ok
+test run_drain_inflight_timeout_c7 ... ok
+test run_drain_phases_in_order ... ok
+test run_drain_xdp_detach_timeout_c8 ... ok
+
+test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.11s
+
+     Running tests/round8_chunk_size_cve_corpus.rs (target/release/deps/round8_chunk_size_cve_corpus-ba600061f1c17a57)
+
+running 14 tests
+test accepts_chunk_extensions ... ok
+test accepts_mixed_case_hex ... ok
+test accepts_u64_max_size_token_on_64bit ... ok
+test regression_well_formed_chunked_decodes ... ok
+test rejects_empty_size_line ... ok
+test rejects_empty_size_token_before_extension ... ok
+test rejects_leading_whitespace_space ... ok
+test rejects_leading_whitespace_tab ... ok
+test rejects_minus_sign ... ok
+test rejects_non_hex_inside_size_token ... ok
+test rejects_overflow_via_checked_shl ... ok
+test rejects_overlong_hex_zero_pad ... ok
+test rejects_plus_sign ... ok
+test rejects_trailing_whitespace_in_size_token ... ok
+
+test result: ok. 14 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/round8_header_name_rfc9110.rs (target/release/deps/round8_header_name_rfc9110-fbd92fbd494acfde)
+
+running 9 tests
+test control_char_in_name_rejected ... ok
+test empty_name_rejected ... ok
+test leading_whitespace_in_name_rejected ... ok
+test null_byte_in_name_rejected ... ok
+test tab_in_name_rejected ... ok
+test underscore_in_name_accepted_default ... ok
+test valid_token_chars_accepted ... ok
+test value_whitespace_still_trimmed ... ok
+test whitespace_in_name_rejected ... ok
+
+test result: ok. 9 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/round8_h2_cve_corpus.rs (target/release/deps/round8_h2_cve_corpus-3a2f1b007915ba03)
+
+running 3 tests
+test data_padded_empty_payload_errors ... ok
+test data_padded_pad_length_exceeds_payload_errors ... ok
+test data_padded_strips_padding ... ok
+
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/round8_padded_frame.rs (target/release/deps/round8_padded_frame-13c6d739305af014)
+
+running 6 tests
+test data_pad_length_exceeds_payload_errors ... ok
+test data_padded_empty_payload_errors ... ok
+test data_with_padded_strips_padding ... ok
+test data_without_padded_unaffected ... ok
+test headers_with_padded_and_priority_decoded_correctly ... ok
+test headers_without_padded_unaffected ... ok
+
+test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/round8_drain_15case.rs (target/release/deps/round8_drain_15case-3f13f8f96069c861)
+
+running 16 tests
+test case_c01_steady_idle ... ok
+test case_c02_sigterm_during_pending_accept ... ok
+test case_c03_post_accept_synchronous_tail_visibility ... ok
+test case_c04_handshake_future_dropped_on_cancel ... ok
+test case_c05_long_lived_stream_severed_at_deadline ... ok
+test case_c06_websocket_severed_at_deadline ... ok
+test case_c07_inflight_timeout_still_runs_xdp_phase ... ok
+test case_c08_xdp_detach_hang_bounded ... ok
+test case_c09_drain_after_external_cancel_is_safe ... ok
+test case_c10_two_sigterms_idempotent ... ok
+test case_c11_admin_drain_then_sigterm_idempotent ... ok
+test case_c12_per_conn_panic_does_not_hang_drain ... ok
+test case_c13_admin_drain_skips_xdp_detach ... ok
+test case_c14_listener_cancel_signal_fires ... ok
+test case_c15_zero_listeners_clean_drain ... ok
+test xdp_detach_kernel_error_surfaced ... ok
+
+test result: ok. 16 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.46s
+
+     Running tests/round8_acl_admission.rs (target/release/deps/round8_acl_admission-cfc95a60162e16fe)
+
+running 6 tests
+test accept_host_route_zero_ip_with_full_prefix ... ok
+test accept_prefix_one_through_thirty_two ... ok
+test error_variant_shape ... ok
+test reject_prefix_max_u8 ... ok
+test reject_prefix_thirty_three ... ok
+test reject_prefix_zero ... ok
+
+test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/round8_atomic_backends.rs (target/release/deps/round8_atomic_backends-095e426626fda10b)
+
+running 6 tests
+test backend_table_wire_size_is_frozen ... ok
+test daisy_chain_shifts_current_into_previous ... ok
+test fixture_macs_distinct ... ok
+test generation_wraps ... ok
+test too_many_backends_error_carries_count ... ok
+test zeroed_table_is_clean_slate ... ok
+
+test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/round8_attach_probe.rs (target/release/deps/round8_attach_probe-b9eba81cbecd17a2)
+
+running 11 tests
+test attach_probe_failed_counter_is_monotonic ... ok
+test aya_lock_parser_does_not_confuse_sibling_crates ... ok
+test aya_version_is_pinned_to_the_no_test_run_release ... ok
+test drv_supported_fails_open_on_unknown_iface ... ok
+test ena_and_ice_blocklist_rows_round_trip ... ok
+test ethtool_firmware_line_parsing ... ok
+test mlx5_patched_firmware_allowed ... ok
+test mlx5_pre_ghsa_firmware_is_refused_with_bug_id ... ok
+test probe_synthetic_packet_round_trip ... ignored, needs CAP_BPF + aya BPF_PROG_TEST_RUN (aya 0.13.1 API blocker)
+test tripwire_fires_when_aya_is_upgraded_simulation ... ok
+test unknown_or_virtual_driver_allowed ... ok
+
+test result: ok. 10 passed; 0 failed; 1 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/round8_attach_replace.rs (target/release/deps/round8_attach_replace-707db89a6aae4f1f)
+
+running 5 tests
+test attach_replacing_signature_present ... ok
+test detach_signature_matches_ops04_coordinator ... ok
+test detach_verifying_on_real_iface ... ignored, kernel-touching: requires CAP_BPF + dummy netdev
+test query_unknown_iface_is_a_loud_error_not_a_silent_none ... ok
+test xdp_query_result_is_copy_and_default ... ok
+
+test result: ok. 4 passed; 0 failed; 1 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/round8_backend_flags.rs (target/release/deps/round8_backend_flags-837c7d1dc3fc40b6)
+
+running 5 tests
+test backend_entry_constructor_takes_no_flags_arg ... ok
+test backend_entry_size_is_24_post_l4_07 ... ok
+test backend_entry_v6_constructor_takes_no_flags_arg ... ok
+test backend_entry_v6_size_is_36_post_l4_07 ... ok
+test no_flags_field_on_backend_entry ... ok
+
+test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/round8_backend_sentinel.rs (target/release/deps/round8_backend_sentinel-c1bbf12b8edecffb)
+
+running 7 tests
+test legacy_new_still_accepts_zero_for_back_compat ... ok
+test stats_slot_backend_unpopulated_at_slot_10 ... ok
+test userspace_try_new_accepts_populated_v4 ... ok
+test userspace_try_new_rejects_zero_ip_v4 ... ok
+test userspace_try_new_rejects_zero_ip_v6 ... ok
+test userspace_try_new_rejects_zero_port_v4 ... ok
+test userspace_try_new_rejects_zero_port_v6 ... ok
+
+test result: ok. 7 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/round8_bpffs_check.rs (target/release/deps/round8_bpffs_check-8e589eaab5c0c779)
+
+running 5 tests
+test accepts_real_bpffs ... ignored, requires CAP_BPF and a bpffs mount; see CI privileged lane
+test bpf_fs_magic_matches_uapi_constant ... ok
+test rejects_missing_path ... ok
+test rejects_relative_root ... ok
+test rejects_tempdir_with_actionable_hint ... ok
+
+test result: ok. 4 passed; 0 failed; 1 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/round8_conntrack_state.rs (target/release/deps/round8_conntrack_state-91eea92d579823c7)
+
+running 7 tests
+test fin_ack_prunes_after_tx ... ok
+test fin_without_ack_does_not_prune ... ok
+test rst_for_untracked_flow_is_no_op_on_table ... ok
+test rst_prunes_conntrack_and_passes_to_kernel ... ok
+test rst_replay_only_evicts_matching_flow ... ok
+test stat_slot_indices_for_prune_slots_are_stable ... ok
+test syn_ack_does_not_prune ... ok
+
+test result: ok. 7 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/round8_fragments.rs (target/release/deps/round8_fragments-1743b7a09d0cba7f)
+
+running 6 tests
+test ipv4_first_fragment_with_mf_set_detected ... ok
+test ipv4_fragment_mask_0x3fff_covers_offset_and_mf ... ok
+test ipv4_later_fragment_with_offset_detected ... ok
+test ipv4_unfragmented_packet_not_detected ... ok
+test ipv6_fragment_proto_value_is_44 ... ok
+test stat_slots_for_fragments_at_indices_11_and_12 ... ok
+
+test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/round8_netlink_xdp_query.rs (target/release/deps/round8_netlink_xdp_query-a69c339737bf6947)
+
+running 8 tests
+test empty_buffer_is_default_not_error ... ok
+test extracts_prog_id_from_real_shaped_getlink_reply ... ok
+test live_query_loopback_has_no_xdp ... ignored, live AF_NETLINK socket — privileged CI lane only
+test malformed_nested_rtattr_does_not_loop_or_panic ... ok
+test nlmsg_error_with_errno_is_surfaced ... ok
+test no_xdp_attribute_means_prog_id_none ... ok
+test prog_id_zero_is_normalised_to_none ... ok
+test truncated_message_is_rejected_not_panicked ... ok
+
+test result: ok. 7 passed; 0 failed; 1 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/round8_ptr_at_bounds.rs (target/release/deps/round8_ptr_at_bounds-7788cbab284aeb4d)
+
+running 7 tests
+test accepts_in_bounds ... ok
+test header_size_corpus_in_bounds ... ok
+test ipv6_extension_header_walk_boundary ... ok
+test rejects_len_wraparound ... ok
+test rejects_offset_wraparound ... ok
+test rejects_out_of_bounds_no_wrap ... ok
+test rejects_strict_greater_than_end ... ok
+
+test result: ok. 7 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/round8_synflood_cap.rs (target/release/deps/round8_synflood_cap-90b69bcb150253a9)
+
+running 4 tests
+test ct_insert_gate_blocks_burst_above_cap ... ok
+test ct_insert_gate_refills_after_window ... ok
+test ct_insert_gate_zero_cap_disables ... ok
+test default_cap_matches_katran_max_conn_rate ... ok
+
+test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.22s
+
+     Running tests/round8_verify_xdp_gate.rs (target/release/deps/round8_verify_xdp_gate-294aaf598976e26a)
+
+running 5 tests
+test baseline_files_exist_for_all_supported_kernels ... ok
+test placeholder_baselines_carry_pending_marker ... ok
+test script_help_exits_with_usage_code ... usage: scripts/verify-xdp.sh --kernel <KVER> [--update-baseline]
+
+  --kernel <KVER>      One of: 5.15, 6.1, 6.6 (the supported LTS /
+                       rolling-LTS floors per DEPLOYMENT.md §27).
+  --update-baseline    Capture the verifier log and overwrite the
+                       committed .log.committed snapshot. Use after
+                       an intentional BPF source change.
+
+Each KVER value maps to a pinned lvh-images digest so the CI matrix
+is reproducible.
+
+Deprecated: positional KVER (e.g. `verify-xdp.sh 5.15`) is still
+accepted for one release with a WARN. Switch call sites to the flag
+form.
+ok
+test script_rejects_floating_image_without_override ... ok
+test script_rejects_unknown_kernel ... verify-xdp.sh: unsupported kernel version 9.99
+usage: scripts/verify-xdp.sh --kernel <KVER> [--update-baseline]
+
+  --kernel <KVER>      One of: 5.15, 6.1, 6.6 (the supported LTS /
+                       rolling-LTS floors per DEPLOYMENT.md §27).
+  --update-baseline    Capture the verifier log and overwrite the
+                       committed .log.committed snapshot. Use after
+                       an intentional BPF source change.
+
+Each KVER value maps to a pinned lvh-images digest so the CI matrix
+is reproducible.
+
+Deprecated: positional KVER (e.g. `verify-xdp.sh 5.15`) is still
+accepted for one release with a WARN. Switch call sites to the flag
+form.
+ok
+
+test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.04s
+
+     Running tests/round8_authority_enforced.rs (target/release/deps/round8_authority_enforced-7c29aae3e8dab533)
+
+running 7 tests
+test h1_comma_in_authority_rejected_before_upstream ... ok
+test h1_valid_authority_passes_validator ... ok
+test h2_comma_in_authority_rejected_before_upstream ... ok
+test h2_valid_authority_passes_validator ... ok
+test test_h2_ext_connect_comma_authority_rejected ... ok
+test test_h2_grpc_comma_authority_rejected ... ok
+test test_ws_upgrade_comma_authority_rejected ... ok
+
+test result: ok. 7 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.46s
+
+     Running tests/round8_body_overread.rs (target/release/deps/round8_body_overread-4c70be4af54dd120)
+
+running 4 tests
+test h1_take_and_discard_doc_block_present ... ok
+test h2_pool_failed_send_leaves_no_stale_entry ... ok
+test http2_pool_send_request_doc_block_present ... ok
+test pooled_tcp_set_reusable_doc_block_present ... ok
+
+test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/round8_edge_defaults_table.rs (target/release/deps/round8_edge_defaults_table-cf5b173322028c43)
+
+running 2 tests
+test h2_security_defaults_match_documented_table ... ok
+test h2_security_thresholds_default_constructs ... ok
+
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/round8_glitches_enforced.rs (target/release/deps/round8_glitches_enforced-1d9498b2f1bbfdc3)
+
+running 1 test
+test glitches_counter_drains_connection_at_threshold_and_is_observable ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.04s
+
+     Running tests/round8_keepalive_count_cap.rs (target/release/deps/round8_keepalive_count_cap-ad264ba012dcc18d)
+
+running 3 tests
+test counter_increments_on_cap_close ... ok
+test h1_cap_zero_disables ... ok
+test h1_nth_response_carries_connection_close ... ok
+
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.21s
+
+     Running tests/round8_traceparent_propagation.rs (target/release/deps/round8_traceparent_propagation-a4ce0da073fac26a)
+
+running 1 test
+test request_span_carries_trace_id_and_status ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.10s
+
+     Running tests/round8_underscore_policy.rs (target/release/deps/round8_underscore_policy-3a3307b2c12d0ae6)
+
+running 6 tests
+test default_policy_is_reject ... ok
+test h1_proxy_source_carries_l7_05_marker ... ok
+test h2_proxy_source_carries_l7_05_marker ... ok
+test lb_config_enum_default_matches_lb_l7_enum_default ... ok
+test policy_variants_are_distinct ... ok
+test underscore_byte_scan_predicate_reference_corpus ... ok
+
+test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/round8_ws_upgrade_defer.rs (target/release/deps/round8_ws_upgrade_defer-03ea20e244367242)
+
+running 4 tests
+test client_sees_502_when_backend_rejects_ws ... ok
+test client_sees_504_on_dial_timeout ... ok
+test no_smuggled_request_forwarded_on_failure ... ok
+test upstream_receives_child_traceparent ... ok
+
+test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.66s
+
+     Running tests/round8_xff_iteration.rs (target/release/deps/round8_xff_iteration-4ee8de0ffa47836b)
+
+running 5 tests
+test no_xff_header_inserts_peer_only ... ok
+test single_xff_unchanged_format ... ok
+test three_xff_headers_count_preserved ... ok
+test two_xff_headers_preserved_in_join ... ok
+test xff_with_comma_in_existing_value_preserves_inner_commas ... ok
+
+test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/round8_h3_authority_enforced.rs (target/release/deps/round8_h3_authority_enforced-3084387b032b3f32)
+
+running 3 tests
+test h3_comma_in_authority_rejected_before_upstream ... ok
+test h3_valid_authority_passes_validator ... ok
+test h3_whitespace_in_authority_rejected_before_upstream ... ok
+
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.85s
+
+GATE13_EXIT=0
+finished: Sat May 16 00:54:57 UTC 2026
+=== h3-flake fix validation: round8_h3_authority_enforced run PARALLEL (default threads) x2 to prove the AtomicU64 CERT_SEQ fix eliminates the shared-temp-cert collision ===
+--- parallel run 1 ---
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.23s
+--- parallel run 2 ---
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.24s

@@ -1,0 +1,20 @@
+=== Gate 16: cargo test -p lb-l4-xdp --test round8_netlink_xdp_query ===
+started: Sat May 16 00:54:31 UTC 2026
+   Compiling lb-l4-xdp v0.1.0 (/home/ubuntu/Code/ExpressGateway/crates/lb-l4-xdp)
+    Finished `release` profile [optimized] target(s) in 11.29s
+     Running tests/round8_netlink_xdp_query.rs (target/release/deps/round8_netlink_xdp_query-d5872f7e002e5428)
+
+running 8 tests
+test empty_buffer_is_default_not_error ... ok
+test extracts_prog_id_from_real_shaped_getlink_reply ... ok
+test live_query_loopback_has_no_xdp ... ignored, live AF_NETLINK socket — privileged CI lane only
+test malformed_nested_rtattr_does_not_loop_or_panic ... ok
+test nlmsg_error_with_errno_is_surfaced ... ok
+test no_xdp_attribute_means_prog_id_none ... ok
+test prog_id_zero_is_normalised_to_none ... ok
+test truncated_message_is_rejected_not_panicked ... ok
+
+test result: ok. 7 passed; 0 failed; 1 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+GATE16_EXIT=0
+finished: Sat May 16 00:54:43 UTC 2026

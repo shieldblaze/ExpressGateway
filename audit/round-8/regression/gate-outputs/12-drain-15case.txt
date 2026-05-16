@@ -1,0 +1,28 @@
+=== Gate 12: cargo test --test round8_drain_15case (expect 16/16) ===
+started: Sat May 16 00:53:22 UTC 2026
+   Compiling lb-integration-tests v0.1.0 (/home/ubuntu/Code/ExpressGateway)
+    Finished `release` profile [optimized] target(s) in 16.80s
+     Running tests/round8_drain_15case.rs (target/release/deps/round8_drain_15case-cb4764197400dcd7)
+
+running 16 tests
+test case_c01_steady_idle ... ok
+test case_c02_sigterm_during_pending_accept ... ok
+test case_c04_handshake_future_dropped_on_cancel ... ok
+test case_c03_post_accept_synchronous_tail_visibility ... ok
+test case_c05_long_lived_stream_severed_at_deadline ... ok
+test case_c06_websocket_severed_at_deadline ... ok
+test case_c08_xdp_detach_hang_bounded ... ok
+test case_c09_drain_after_external_cancel_is_safe ... ok
+test case_c10_two_sigterms_idempotent ... ok
+test case_c11_admin_drain_then_sigterm_idempotent ... ok
+test case_c07_inflight_timeout_still_runs_xdp_phase ... ok
+test case_c13_admin_drain_skips_xdp_detach ... ok
+test case_c14_listener_cancel_signal_fires ... ok
+test case_c12_per_conn_panic_does_not_hang_drain ... ok
+test case_c15_zero_listeners_clean_drain ... ok
+test xdp_detach_kernel_error_surfaced ... ok
+
+test result: ok. 16 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.23s
+
+GATE12_EXIT=0
+finished: Sat May 16 00:53:39 UTC 2026

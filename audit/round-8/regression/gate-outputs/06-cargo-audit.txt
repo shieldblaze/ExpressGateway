@@ -1,0 +1,65 @@
+    Fetching advisory database from `https://github.com/RustSec/advisory-db.git`
+      Loaded 1090 security advisories (from /home/ubuntu/.cargo/advisory-db)
+    Updating crates.io index
+    Scanning Cargo.lock for vulnerabilities (399 crate dependencies)
+Crate:     rustls-pemfile
+Version:   2.2.0
+Warning:   unmaintained
+Title:     rustls-pemfile is unmaintained
+Date:      2025-11-28
+ID:        RUSTSEC-2025-0134
+URL:       https://rustsec.org/advisories/RUSTSEC-2025-0134
+Dependency tree:
+rustls-pemfile 2.2.0
+├── lb-security 0.1.0
+│   ├── lb-quic 0.1.0
+│   │   ├── lb-l7 0.1.0
+│   │   │   ├── lb-integration-tests 0.1.0
+│   │   │   └── lb 0.1.0
+│   │   ├── lb-integration-tests 0.1.0
+│   │   └── lb 0.1.0
+│   ├── lb-observability 0.1.0
+│   │   ├── lb-l7 0.1.0
+│   │   ├── lb-integration-tests 0.1.0
+│   │   └── lb 0.1.0
+│   ├── lb-l7 0.1.0
+│   ├── lb-integration-tests 0.1.0
+│   └── lb 0.1.0
+└── lb 0.1.0
+
+Crate:     yaml-rust
+Version:   0.4.5
+Warning:   unmaintained
+Title:     yaml-rust is unmaintained.
+Date:      2024-03-20
+ID:        RUSTSEC-2024-0320
+URL:       https://rustsec.org/advisories/RUSTSEC-2024-0320
+Dependency tree:
+yaml-rust 0.4.5
+├── yaml-merge-keys 0.5.1
+│   └── foundations 4.5.0
+│       └── tokio-quiche 0.18.0
+│           └── lb-quic 0.1.0
+│               ├── lb-l7 0.1.0
+│               │   ├── lb-integration-tests 0.1.0
+│               │   └── lb 0.1.0
+│               ├── lb-integration-tests 0.1.0
+│               └── lb 0.1.0
+└── serde_yaml 0.8.26
+    ├── yaml-merge-keys 0.5.1
+    └── foundations 4.5.0
+
+warning: 2 allowed warnings found
+AUDIT_EXIT=0
+
+=== VERIFY ANNOTATION (Gate 6, Round-8 Phase E) ===
+Result: 0 VULNERABILITIES across 399 crate deps (1090 advisories loaded).
+Exit 0. Two informational `unmaintained` warnings only:
+  - RUSTSEC-2025-0134 rustls-pemfile 2.2.0 (unmaintained) — direct via
+    lb-security; low risk (PEM parsing helper, no known CVE).
+  - RUSTSEC-2024-0320 yaml-rust 0.4.5 (unmaintained) — transitive via
+    foundations 4.5.0 -> tokio-quiche 0.18.0; foundations is MSRV-pinned
+    (workspace Cargo.toml note: newer foundations needs rustc 1.88).
+Both are `unmaintained` (not vulnerabilities), allowed in deny.toml,
+exit 0. No NEW advisory vs prior rounds.
+DISPOSITION: PASS.

@@ -1,0 +1,16 @@
+Gate 11 — default-config-refuses-placeholders (Round-8 Phase E)
+================================================================
+
+[1] Placeholder/secret token grep on config/default.toml:
+  >> none (PASS) — only intentional documented bind addrs present
+
+[2] Runtime placeholder-refusal guard present in lb/src/main.rs:
+496:// runs at startup AND on every SIGUSR1 reload. SEC-2-08's key-perm
+500:/// SEC-2-08 (Wave 2c, retained on rotation per REL-2-03): refuse to load
+1347:    // REL-2-08 follow-on: http_requests_total{listener, route, version,
+1492:    // REL-2-08 wiring: refuse to boot if the live config shape would
+2839:            // REL-2-08 follow-on: http_requests_total{listener, route,
+
+[3] Round-7 baseline (SUMMARY gate 22): PASS — no placeholders in config/default.toml. Round-8 expanded the file (ROUND8-L7-15) with documentation comments only; re-grep confirms still clean.
+
+VERDICT: PASS

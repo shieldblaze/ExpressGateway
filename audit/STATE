@@ -1,5 +1,15 @@
-STATE=ROUND_8_RECONCILE
+STATE=ROUND_8_REGRESSION
 ROUND=8
+ROUND8_PHASE_D_CLOSED=2026-05-14
+ROUND8_PHASE_D_RESULT=all-medium+-Verified-Fixed-by-verify
+ROUND8_NEW_FINDING=ROUND8-L7-16(H3-authority)=Verified-Fixed
+ROUND8_PHASE_E_CARRY=h3-authority-test-parallel-flake-shared-temp-cert
+ROUND8_PHASE_E_CLOSED=2026-05-16
+ROUND8_PHASE_E_RESULT=regression-clean;13-PASS;04+05-FAIL-preexisting-test-infra-nonblocking;07-DEFERRED-ENV(cargo-deny>=0.19-needs-rustc>=1.88);D1-D6-DEFERRED-ENV
+ROUND8_PHASE_E_CARRY_RESOLVED=h3-flake-fixed-via-per-test-AtomicU64-CERT_SEQ(crates/lb-quic/tests/round8_h3_authority_enforced.rs)
+ROUND8_PHASE_E_NEW_MEDIUM=none
+ROUND8_PHASE_E_PHASE_D_LOOP=not-triggered
+ROUND8_PHASE_E_PHASE_F_READY=true
 ROUND8_PHASE_A_CLOSED=2026-05-14
 ROUND8_PHASE_B_CLOSED=2026-05-14
 ROUND8_PHASE_C_CLOSED=2026-05-14

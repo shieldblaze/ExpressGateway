@@ -4,7 +4,8 @@ Reference: `audit/round-8/research/l4drop.md` D1 (atomic forwarding-table update
 Our equivalent: `crates/lb-l4-xdp/src/loader.rs:746-758` (`conntrack_map` returns `AyaHashMap` — every `.insert(&k, &v, 0)` is one map_update syscall per key) and `:761-774` (v6)
 
 Severity: medium
-Status:   Proposed-Fix — eBPF `backends_v4` HashMap + `BackendTable`
+Status:   Verified-Fixed (verify, task#70, 2026-05-15) — single-syscall publish + generation/daisy-chain confirmed; data-plane touch behaviorally-inert per lead-approved Pillar-4b-3 scope split. See audit/round-8/verify/l4.md. [Original Proposed-Fix below.]
+          Proposed-Fix — eBPF `backends_v4` HashMap + `BackendTable`
           value (generation + count + entries[64] + Unimog-lesson-3
           daisy-chain previous_entries[64]); userspace
           `XdpLoader::publish_backends_v4` does the atomic swap as a
