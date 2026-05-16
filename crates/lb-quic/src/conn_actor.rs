@@ -555,8 +555,26 @@ fn poll_h3(
                     }
                 }
                 Err(quiche::Error::Done) => break,
+                // SESSION 2 / P1-B: peer reset/stopped the stream while
+                // we were still accumulating HEADERS (no body channel
+                // exists yet, so nothing to forward). Drop the partial
+                // per-stream rx buffer so no state leaks, then stop the
+                // recv loop for this stream. Other errors are handled
+                // identically (fail safe).
+                Err(quiche::Error::StreamReset(code))
+                | Err(quiche::Error::StreamStopped(code)) => {
+                    tracing::debug!(
+                        stream_id = sid,
+                        code,
+                        "SESSION 2 / P1-B: peer reset/stopped stream during HEADERS; \
+                         dropping partial per-stream state"
+                    );
+                    rx_by_stream.remove(&sid);
+                    break;
+                }
                 Err(e) => {
                     tracing::debug!(error = %e, stream_id = sid, "stream_recv");
+                    rx_by_stream.remove(&sid);
                     break;
                 }
             }
@@ -609,6 +627,36 @@ fn drain_body_stream(
             }
             Err(quiche::Error::Done) => {
                 flush_pending(sid, body_tx_by_stream, body_pending);
+                return;
+            }
+            // SESSION 2 / P1-B: CLIENT CANCELS MID-BODY. When the H3
+            // peer aborts the request stream (QUIC RESET_STREAM /
+            // STOP_SENDING) before FIN, quiche surfaces it here as
+            // `Err(quiche::Error::StreamReset(_))` (peer reset its send
+            // side) or `Err(quiche::Error::StreamStopped(_))` (peer
+            // STOP_SENDING our receive side). Either way the body is
+            // incomplete and MUST NOT be presented to the backend as a
+            // completed request (HTTP-request-smuggling / cache-poisoning
+            // guard). We send `ReqBodyEvent::Reset` into the body channel
+            // — `h3_to_h1_stream` aborts the upstream (marks the pooled
+            // conn non-reusable, returns WITHOUT writing the `0\r\n\r\n`
+            // chunked terminator) — and tear down ALL per-stream state so
+            // nothing leaks. Any other `stream_recv` error is treated
+            // identically (fail safe: never forward a partial body as
+            // complete). Matched explicitly so the smuggling-relevant
+            // reset path is unmistakable and regression-locked.
+            Err(quiche::Error::StreamReset(code)) | Err(quiche::Error::StreamStopped(code)) => {
+                tracing::debug!(
+                    stream_id = sid,
+                    code,
+                    "SESSION 2 / P1-B: peer reset/stopped request stream mid-body; \
+                     aborting upstream + tearing down per-stream state"
+                );
+                if let Some(tx) = body_tx_by_stream.remove(&sid) {
+                    let _ = tx.try_send(ReqBodyEvent::Reset);
+                }
+                rx_by_stream.remove(&sid);
+                body_pending.remove(&sid);
                 return;
             }
             Err(e) => {

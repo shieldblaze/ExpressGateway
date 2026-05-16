@@ -978,13 +978,29 @@ pub async fn h3_to_h1_stream(
                     break;
                 }
                 ReqBodyEvent::Reset => {
-                    // Mid-body reset (oversized latched in poll_h3, or
-                    // client abort): abort the upstream, do NOT leave
-                    // it with a completed request.
+                    // SESSION 2 / P1-B: mid-body Reset. poll_h3 emits
+                    // this for BOTH (a) the oversized cap breach and
+                    // (b) a CLIENT CANCEL (peer QUIC RESET_STREAM /
+                    // STOP_SENDING before FIN). In every case the body
+                    // is incomplete and MUST NOT be delivered to the
+                    // backend as a completed request: we mark the pooled
+                    // upstream connection non-reusable (so the partially
+                    // written request can never be paired with a
+                    // subsequent one — HTTP-request-smuggling / cache-
+                    // poisoning guard) and return IMMEDIATELY, BEFORE the
+                    // `0\r\n\r\n` chunked terminator / before the full
+                    // Content-Length body is written, so the backend
+                    // never sees a completable request. The 413 status
+                    // is the safe client-facing response; a cancelling
+                    // client has already torn down its stream and will
+                    // not read it, while the oversized path genuinely
+                    // wants 413 — the load-bearing invariant here is the
+                    // upstream abort, not the status code.
                     pooled.set_reusable(false);
-                    tracing::warn!("H3→H1 stream body reset; aborting upstream");
-                    // Only the oversized path triggers a mid-body Reset
-                    // in this increment, so it maps to 413.
+                    tracing::warn!(
+                        "SESSION 2 / P1-B: H3→H1 stream body Reset (oversized or \
+                         client cancel); aborting upstream without completing the request"
+                    );
                     return encode_h3_response(413, b"payload too large");
                 }
             }
