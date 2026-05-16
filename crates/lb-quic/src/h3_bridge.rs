@@ -177,8 +177,14 @@ impl H3Request {
 /// `conn_actor::poll_h3`). See the marker test below (it is
 /// `#[ignore]`-d with reason `S2: request-body forwarding`) for the
 /// SESSION 2 target.
-fn build_h1_request(req: &H3Request, body: Option<&[u8]>) -> String {
-    let mut s = String::with_capacity(128 + body.map_or(0, <[u8]>::len));
+fn build_h1_request(req: &H3Request, body: Option<&[u8]>) -> Vec<u8> {
+    let body_len = body.map_or(0, <[u8]>::len);
+    // Build the ASCII head exactly as before, then append the RAW body
+    // bytes. SESSION 2 fix: the body is appended via
+    // `extend_from_slice` — NO `from_utf8_lossy`/string conversion —
+    // so non-UTF-8 payloads (protobuf/images/gzip) survive byte-for-
+    // byte. `Content-Length` is unchanged (already `body.len()`).
+    let mut s = String::with_capacity(128);
     s.push_str(&req.method);
     s.push(' ');
     s.push_str(&req.path);
@@ -188,22 +194,21 @@ fn build_h1_request(req: &H3Request, body: Option<&[u8]>) -> String {
         s.push_str(&req.authority);
         s.push_str("\r\n");
     }
-    // S1-B seam: emit the body's real length. `None` keeps the
-    // historical `Content-Length: 0` (bodyless GET/HEAD) so this
-    // session is byte-identical on the wire.
-    let body_len = body.map_or(0, <[u8]>::len);
+    // `None` keeps the historical `Content-Length: 0` (bodyless
+    // GET/HEAD) so the bodyless output is byte-identical to legacy.
     s.push_str("Content-Length: ");
     s.push_str(&body_len.to_string());
     s.push_str("\r\n");
     s.push_str("Connection: close\r\n");
     s.push_str("\r\n");
+    let mut out = s.into_bytes();
+    out.reserve(body_len);
     if let Some(bytes) = body {
-        // SESSION 2 will feed real inbound DATA-frame bytes here. Today
-        // no caller passes `Some`, so this branch is inert on the
-        // datapath and only exercised by the ignored S2 marker test.
-        s.push_str(&String::from_utf8_lossy(bytes));
+        // Raw, lossless append: the request body forwarded to the H1
+        // backend is exactly the inbound H3 DATA-frame bytes.
+        out.extend_from_slice(bytes);
     }
-    s
+    out
 }
 
 /// Parsed H1 response captured from the backend.
@@ -345,7 +350,7 @@ pub async fn h3_to_h1_roundtrip(
         let stream = pooled
             .stream_mut()
             .ok_or_else(|| "pool returned empty handle".to_string())?;
-        if let Err(e) = stream.write_all(h1_request.as_bytes()).await {
+        if let Err(e) = stream.write_all(&h1_request).await {
             pooled.set_reusable(false);
             tracing::warn!(error = %e, "H3→H1 backend write failed");
             return encode_h3_response(502, b"bad gateway");
@@ -909,7 +914,7 @@ mod tests {
                         Host: host.test:443\r\n\
                         Content-Length: 0\r\n\
                         Connection: close\r\n\r\n";
-        assert_eq!(got, expected);
+        assert_eq!(got, expected.as_bytes());
     }
 
     /// SESSION 2 target — request-body forwarding through the H3→H1
@@ -943,7 +948,7 @@ mod tests {
              hello-s2-body",
             body.len()
         );
-        assert_eq!(got, expected);
+        assert_eq!(got, expected.as_bytes());
     }
 
     #[test]
