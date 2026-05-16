@@ -242,3 +242,49 @@ This also subsumes the long-standing "Maglev consistent hashing"
 follow-up: the `MAX_BACKENDS_PER_VIP = 64` ceiling is the
 verifier-tractable floor; a Maglev table larger than that, or
 weighted backends, is the Pillar-4b-3 scope.
+
+## D-5 container scan — CVE-2026-0861 (glibc) WAIVER (2026-05-16)
+
+`.trivyignore` waives CVE-2026-0861 (libc6 2.36-9+deb12u13, Debian 12.13
+distroless base). Reason: `FixedVersion=<none>`, Debian has not shipped
+a patched libc6 — unremediable at the image layer. This is a documented
+exception, NOT a code fix. RE-REVIEW: drop the `.trivyignore` line and
+rebuild once `trivy image` shows a non-empty FixedVersion for this CVE.
+
+## D-1 native XDP on ENA — fixes + remaining gap (2026-05-16)
+
+FIXED (root cause of original Round-8 D-1/D-2 FAIL):
+  * scripts/build-xdp.sh: removed broken `--target bpfel-unknown-none`
+    from `rustup toolchain install` (no prebuilt std; `-Z build-std=core`
+    handles core) — this is what silently skipped the ELF build.
+  * scripts/build-xdp.sh: dropped `-Clink-arg=-g` (bpf-linker 0.10.3
+    rejects `-g`; BTF comes from `-Cdebuginfo=2` + `--btf`).
+  * scripts/build-xdp.sh: added post-build `llvm-objcopy --strip-debug`
+    (keeps xdp/license/maps/.BTF) — ELF 181912 -> 35864 B, back under
+    MAX_ELF_BYTES so build.rs re-embeds it.
+  Result: rebuilt lb_xdp.bin HAS the `license` section; the production
+  aya loader loads it and the kernel verifier ACCEPTS it (proven: skb
+  attach on a dummy netdev succeeded). This resolves D-2's verifier
+  question on this kernel via the production path.
+
+ENA native-XDP DEPLOYMENT PREREQUISITES (discovered, must be in RUNBOOK):
+  * ENA max XDP MTU is 3498; the AWS jumbo default (9001) must be
+    lowered (`ip link set dev <if> mtu 3498`) or native attach fails:
+    "current MTU larger than maximum allowed MTU".
+  * ENA requires combined channel count <= half the max for native
+    XDP (it allocates equal dedicated XDP TX queues):
+    `ethtool -L <if> combined <=N/2>`. 8/8 fails; 4 works.
+
+REMAINING GAP (not closed here):
+  * With ELF fixed + MTU + channels corrected, legacy netlink DRV
+    attach works on ENA, but the production loader's aya-0.13.1
+    `bpf_link`-based DRV attach still fails ("bpf_link_create failed").
+    The loader needs a netlink-XDP attach fallback when bpf_link is
+    refused by a driver that supports netlink XDP. This is real loader
+    work + requires the 3-kernel matrix (CI) to validate. D-1 native
+    via the production code path therefore remains OPEN.
+
+D-2 bpftool literal path: aya-ebpf 0.1 emits a legacy `maps` section
+that libbpf-1.0+ (bpftool, `ip link obj`) refuses. Closing the literal
+bpftool path needs an aya-ebpf major bump (BTF `.maps`) + matrix
+re-validation. Verifier acceptance itself is proven via the loader.
