@@ -1,0 +1,26 @@
+# Documented vulnerability WAIVERS for the container scan gate (D-5).
+#
+# Policy: only no-upstream-fix base-OS CVEs may be listed here, each with
+# a rationale and a re-review trigger. Anything with a FixedVersion must
+# be fixed by bumping the base image, NOT added here.
+#
+# ---------------------------------------------------------------------
+# CVE-2026-0861 — glibc (libc6) integer overflow in memalign -> heap
+# corruption. Package: libc6 2.36-9+deb12u13 (Debian 12.13 / distroless
+# cc-debian12 base).
+#
+# Status as of 2026-05-16: trivy reports FixedVersion=<none>, Status=
+# affected. Debian has NOT released a patched libc6; no distroless or
+# debian-12 base image can remediate this until Debian ships the fix.
+# It is therefore unremediable at the image layer — the textbook
+# no-fix-available base-OS waiver case.
+#
+# Exposure note: the gateway is a single static-ish Rust binary; it does
+# not call memalign with attacker-controlled alignment, and there is no
+# other process in the distroless image. Practical exploitability in
+# this image is low, but this remains a WAIVER, not a fix.
+#
+# RE-REVIEW TRIGGER: remove this line and rebuild as soon as
+# `trivy image` reports a non-empty FixedVersion for CVE-2026-0861
+# (i.e. Debian publishes the patched libc6). Tracked in audit/deferred.md.
+CVE-2026-0861
