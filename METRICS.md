@@ -178,7 +178,7 @@ the live registry against this table on every CI run.
 | `xdp_conntrack_full_total`                 | Counter     | `family` (`v4` \| `v6`)                             | 2                            |
 | `xdp_conntrack_entries_current`            | Gauge       | `family`                                            | 2                            |
 | `xdp_conntrack_capacity`                   | Gauge       | `family`                                            | 2                            |
-| `xdp_packets_total`                        | Counter     | `action` (`pass` \| `drop` \| `tx` \| …)            | ≤ 10                         |
+| `xdp_packets_total`                        | Counter     | `action` (`pass` \| `drop` \| `tx` \| …)            | ≤ 16                         |
 | `xdp_bytes_total`                          | Counter     | `direction` (`rx` \| `tx`)                          | 2                            |
 | `xdp_attached_mode`                        | Gauge       | `mode` (`drv` \| `skb` \| `hw`)                     | 3                            |
 | `xdp_sampler_errors_total`                 | Counter     | `kind`                                              | small                        |
@@ -275,7 +275,7 @@ lb-l7 hook (REL-2-08 follow-up).
 
 | Family                              | Type    | Labels                                  | Wired   | Cardinality |
 |-------------------------------------|---------|-----------------------------------------|:-------:|-------------|
-| `xdp_packets_total`                 | Counter | `action`                                |  yes    | ≤ 10        |
+| `xdp_packets_total`                 | Counter | `action`                                |  yes    | ≤ 16        |
 | `xdp_bytes_total`                   | Counter | `direction`                             |  yes    | 2           |
 | `xdp_conntrack_full_total`          | Counter | `family`                                | pending | 2           |
 | `xdp_conntrack_entries_current`     | Gauge   | `family`                                | pending | 2           |

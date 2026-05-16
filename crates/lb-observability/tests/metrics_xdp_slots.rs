@@ -1,6 +1,7 @@
-//! REL-2-13 proof test: every one of the 10 [`StatSlot`] entries
-//! in `lb_l4_xdp::stats_export` has a corresponding row in the
-//! exported Prometheus text under `xdp_packets_total{action}`.
+//! REL-2-13 proof test: every one of the `NUM_SLOTS` kernel
+//! `StatSlot` entries in `lb_l4_xdp::stats_export` has a
+//! corresponding row in the exported Prometheus text under
+//! `xdp_packets_total{action}`.
 //!
 //! This is the "STATS map → userspace mirror" contract that
 //! ebpf/proto/rel signed off on in the EBPF-2-08 cross-review §2.
@@ -41,7 +42,9 @@ fn deltas_apply_per_slot() {
 
     // Deltas in the order of stat_slot_labels(): pass=1, drop=2,
     // ct_hit_v4=3, l7_divert=4, parse_fail=5, tx_v4=6, ct_hit_v6=7,
-    // tx_v6=8, vlan_stripped=9, v6_ext_unsupported=10.
+    // tx_v6=8, vlan_stripped=9, v6_ext_unsupported=10,
+    // backend_unpopulated=11, v4_fragment=12, v6_fragment=13,
+    // ct_rst_prune=14, ct_fin_prune=15, new_flow_rate_cap=16.
     let deltas: Vec<u64> = (1..=NUM_SLOTS as u64).collect();
     apply_packet_deltas(&m, &deltas);
 

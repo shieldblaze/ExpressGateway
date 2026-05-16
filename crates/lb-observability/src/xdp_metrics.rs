@@ -98,16 +98,22 @@ impl XdpMetrics {
 #[must_use]
 pub const fn stat_slot_labels() -> &'static [&'static str] {
     &[
-        "pass",               // StatSlot::Pass
-        "drop",               // StatSlot::Drop
-        "ct_hit_v4",          // StatSlot::CtHitV4
-        "l7_divert",          // StatSlot::L7Divert
-        "parse_fail",         // StatSlot::ParseFail
-        "tx_v4",              // StatSlot::TxV4
-        "ct_hit_v6",          // StatSlot::CtHitV6
-        "tx_v6",              // StatSlot::TxV6
-        "vlan_stripped",      // StatSlot::VlanStripped
-        "v6_ext_unsupported", // StatSlot::V6ExtUnsupported
+        "pass",                // StatSlot::Pass
+        "drop",                // StatSlot::Drop
+        "ct_hit_v4",           // StatSlot::CtHitV4
+        "l7_divert",           // StatSlot::L7Divert
+        "parse_fail",          // StatSlot::ParseFail
+        "tx_v4",               // StatSlot::TxV4
+        "ct_hit_v6",           // StatSlot::CtHitV6
+        "tx_v6",               // StatSlot::TxV6
+        "vlan_stripped",       // StatSlot::VlanStripped
+        "v6_ext_unsupported",  // StatSlot::V6ExtUnsupported
+        "backend_unpopulated", // StatSlot::BackendUnpopulated
+        "v4_fragment",         // StatSlot::V4Fragment
+        "v6_fragment",         // StatSlot::V6Fragment
+        "ct_rst_prune",        // StatSlot::CtRstPrune
+        "ct_fin_prune",        // StatSlot::CtFinPrune
+        "new_flow_rate_cap",   // StatSlot::NewFlowRateCap
     ]
 }
 
