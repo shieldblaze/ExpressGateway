@@ -101,6 +101,27 @@ pub struct H3Request {
     /// the H1 backend path only knows `Host` + `Content-Length`.
     #[allow(dead_code)]
     pub extra: Vec<(String, String)>,
+    /// PROTO-2-12: HTTP/3 trailing field section (RFC 9114 §4.1) — a
+    /// second HEADERS frame sent after the request DATA frames. Empty
+    /// when the request carries no trailers. Populated by the proxy
+    /// hot path (`collect_h{1,2}_request_to_h3_fieldlist`) and shipped
+    /// on the wire by [`request_h3_upstream`].
+    pub trailers: Vec<(String, String)>,
+}
+
+impl Default for H3Request {
+    /// Mirrors the [`H3Request::from_headers`] missing-pseudo defaults
+    /// (method `GET`, path `/`, empty authority) so a defaulted value
+    /// is wire-coherent rather than carrying empty pseudo-headers.
+    fn default() -> Self {
+        Self {
+            method: "GET".to_string(),
+            path: "/".to_string(),
+            authority: String::new(),
+            extra: Vec::new(),
+            trailers: Vec::new(),
+        }
+    }
 }
 
 impl H3Request {
@@ -130,6 +151,12 @@ impl H3Request {
             path: path.unwrap_or_else(|| "/".to_string()),
             authority: authority.unwrap_or_default(),
             extra,
+            // RFC 9114 §4.1: request trailers arrive in a *second*
+            // HEADERS frame after DATA, not in the initial field
+            // block parsed here — so this is empty at request-head
+            // decode time. The proxy hot path threads inbound H1/H2
+            // trailers into `request_h3_upstream` directly.
+            trailers: Vec::new(),
         }
     }
 }
@@ -327,6 +354,24 @@ pub struct H3UpstreamResponse {
     /// Response body bytes assembled from all DATA frames received
     /// before stream-FIN.
     pub body: Vec<u8>,
+    /// PROTO-2-12: response trailing field section (RFC 9114 §4.1)
+    /// parsed from the HEADERS frame the upstream sends *after* its
+    /// DATA frames. Pseudo-headers are filtered out. Empty when the
+    /// upstream response carries no trailers.
+    pub trailers: Vec<(String, String)>,
+}
+
+impl Default for H3UpstreamResponse {
+    /// The bad-gateway shape: `502`, no headers/body/trailers. Used by
+    /// [`request_h3_upstream`]'s error paths.
+    fn default() -> Self {
+        Self {
+            status: 502,
+            headers: Vec::new(),
+            body: Vec::new(),
+            trailers: Vec::new(),
+        }
+    }
 }
 
 /// Forward a pre-built H3 request to an upstream H3 backend via
@@ -337,21 +382,25 @@ pub struct H3UpstreamResponse {
 /// regular headers. `body` is forwarded as a single DATA frame; an
 /// empty body sends FIN immediately after HEADERS.
 ///
+/// PROTO-2-12: `trailers` is the request trailing field section. When
+/// non-empty it is QPACK-encoded into a *second* HEADERS frame emitted
+/// after the DATA frame (RFC 9114 §4.1), so wire order is
+/// `HEADERS → DATA → HEADERS(trailers) → FIN`. The parsed response
+/// likewise surfaces any post-DATA HEADERS frame as
+/// [`H3UpstreamResponse::trailers`].
+///
 /// On any backend failure returns an [`H3UpstreamResponse`] with
 /// `status = 502` and an empty body.
 #[allow(clippy::too_many_lines, clippy::large_futures)]
 pub async fn request_h3_upstream(
     headers: Vec<(String, String)>,
     body: bytes::Bytes,
+    trailers: Vec<(String, String)>,
     addr: std::net::SocketAddr,
     sni: &str,
     pool: &QuicUpstreamPool,
 ) -> H3UpstreamResponse {
-    let bad_gateway = || H3UpstreamResponse {
-        status: 502,
-        headers: Vec::new(),
-        body: Vec::new(),
-    };
+    let bad_gateway = H3UpstreamResponse::default;
 
     let mut pooled = match pool.acquire(addr, sni).await {
         Ok(p) => p,
@@ -382,9 +431,29 @@ pub async fn request_h3_upstream(
             Err(_) => return bad_gateway(),
         }
     };
-    let mut request_bytes = Vec::with_capacity(headers_frame.len() + body_frame_bytes.len());
+    // PROTO-2-12: RFC 9114 §4.1 trailing field section — a second
+    // HEADERS frame after DATA. Encoded only when trailers are
+    // present so a no-trailer request keeps the original
+    // `HEADERS → DATA → FIN` shape.
+    let trailers_frame_bytes: bytes::Bytes = if trailers.is_empty() {
+        bytes::Bytes::new()
+    } else {
+        let Ok(trailer_block) = encoder.encode(&trailers) else {
+            return bad_gateway();
+        };
+        match encode_frame(&H3Frame::Headers {
+            header_block: trailer_block,
+        }) {
+            Ok(b) => b,
+            Err(_) => return bad_gateway(),
+        }
+    };
+    let mut request_bytes = Vec::with_capacity(
+        headers_frame.len() + body_frame_bytes.len() + trailers_frame_bytes.len(),
+    );
     request_bytes.extend_from_slice(&headers_frame);
     request_bytes.extend_from_slice(&body_frame_bytes);
+    request_bytes.extend_from_slice(&trailers_frame_bytes);
 
     let stream_id: u64 = 0;
     let socket_clone = Arc::clone(upstream.socket());
@@ -420,6 +489,7 @@ pub async fn request_h3_upstream(
     let mut rx_tail: Vec<u8> = Vec::new();
     let mut decoded_status: Option<u16> = None;
     let mut decoded_headers: Vec<(String, String)> = Vec::new();
+    let mut decoded_trailers: Vec<(String, String)> = Vec::new();
     let mut decoded_body: Vec<u8> = Vec::new();
     let mut body_complete = false;
     let mut expected_len: Option<usize> = None;
@@ -451,9 +521,19 @@ pub async fn request_h3_upstream(
             match decode_frame(&rx_tail, 1 << 20) {
                 Ok((H3Frame::Headers { header_block }, consumed)) => {
                     rx_tail.drain(..consumed);
+                    // PROTO-2-12 / RFC 9114 §4.1: the first HEADERS
+                    // frame is the response head; any *subsequent*
+                    // HEADERS frame (after DATA) is the trailing field
+                    // section. Pseudo-headers are filtered out of the
+                    // trailer list per RFC 9114 §4.3.
+                    let is_trailers = decoded_status.is_some();
                     if let Ok(hdrs) = QpackDecoder::new().decode(&header_block) {
                         for (n, v) in hdrs {
-                            if n == ":status" {
+                            if is_trailers {
+                                if !n.starts_with(':') {
+                                    decoded_trailers.push((n, v));
+                                }
+                            } else if n == ":status" {
                                 decoded_status = v.parse::<u16>().ok();
                             } else if !n.starts_with(':') {
                                 if n == "content-length" {
@@ -508,6 +588,7 @@ pub async fn request_h3_upstream(
         status: decoded_status.unwrap_or(502),
         headers: decoded_headers,
         body: decoded_body,
+        trailers: decoded_trailers,
     }
 }
 

@@ -26,11 +26,13 @@
 //!    unchanged.
 //! 2. `Frame::trailers(...)` survives the `Full → StreamBody`
 //!    writeback (the hyper API the bridges rely on).
-//! 3. The H3 cross-protocol leg is a documented gap: the H3
-//!    upstream surfaces (`H3Request` / `H3UpstreamResponse` in
-//!    `lb-quic`) do not yet carry trailers, so the H3 side of any
-//!    cross-bridge sends `Vec::new()`. The H3 leg is tracked
-//!    separately in `audit/deferred.md` PROTO-2-12 H3 leg.
+//! 3. PROTO-2-12 H3 leg (landed): the `lb-quic` upstream surfaces
+//!    `H3Request` / `H3UpstreamResponse` now carry a
+//!    `trailers: Vec<(String, String)>` field (with `Default`), the
+//!    H3 client codec emits/parses the matching trailing HEADERS
+//!    frame (RFC 9114 §4.1), and the proxy hot-path H3 legs forward
+//!    `translated.trailers` instead of `Vec::new()`. The H3 surface
+//!    is pinned positively below.
 
 use bytes::Bytes;
 use http_body_util::BodyExt;
@@ -270,16 +272,15 @@ async fn test_h2_h1_trailers_emitted_on_wire() {
     );
 }
 
-/// PROTO-2-19 — H3→H1 leg analogue of the H2→H1 test above. The
-/// H3 leg currently has no trailer surface in `lb_quic::H3UpstreamResponse`
-/// (deferred — see `audit/deferred.md` PROTO-2-12 H3 leg), so this
-/// test models the *forward-compatible* shape: a `BridgeResponse`
-/// carrying H3-origin trailers exercises the same shared helper
-/// `build_h1_response_with_trailers`. The wire bytes assertion is
-/// identical to the H2 leg because both paths feed into the same
-/// encoder via the same head-shaping code. The test pins this
-/// invariant so once `lb_quic` surfaces H3 trailers, the wire
-/// emission is correct on day one.
+/// PROTO-2-19 — H3→H1 leg analogue of the H2→H1 test above.
+/// PROTO-2-12 (H3 leg landed): `lb_quic::H3UpstreamResponse` now
+/// carries a `trailers` field that `h3_response_to_h1` forwards into
+/// the `BridgeResponse` fed to `build_h1_response_with_trailers`.
+/// This test drives that exact helper with an H3-origin trailer-
+/// bearing `BridgeResponse` and asserts the chunked-trailer block
+/// reaches the H1 wire. The wire-bytes assertion is identical to the
+/// H2 leg because both paths feed the same encoder via the same
+/// head-shaping code.
 #[tokio::test]
 async fn test_h3_h1_trailers_emitted_on_wire() {
     use hyper::Request;
@@ -355,4 +356,81 @@ async fn test_h3_h1_trailers_emitted_on_wire() {
         text.contains("grpc-message: OK"),
         "expected `grpc-message: OK` trailer on wire; got: {text}"
     );
+}
+
+/// PROTO-2-12 H3 leg — the `lb-quic` upstream surfaces now carry a
+/// `trailers` field with a `Default` impl. Previously this gap was
+/// only documented; this is the positive pin replacing that prose.
+#[test]
+fn lb_quic_h3_surfaces_carry_trailers() {
+    // `H3Request` carries trailers and `Default` yields an empty list
+    // (RFC 9114 §4.1 request trailers arrive in a post-DATA HEADERS
+    // frame, not the request head).
+    let mut req = lb_quic::H3Request::default();
+    assert!(
+        req.trailers.is_empty(),
+        "H3Request::default() must start with no trailers"
+    );
+    req.trailers
+        .push(("x-checksum".to_owned(), "abc123".to_owned()));
+    assert_eq!(
+        req.trailers,
+        vec![("x-checksum".to_owned(), "abc123".to_owned())]
+    );
+
+    // `H3UpstreamResponse` carries trailers and `Default` is the
+    // 502/empty bad-gateway shape with no trailers.
+    let resp_default = lb_quic::H3UpstreamResponse::default();
+    assert_eq!(resp_default.status, 502);
+    assert!(
+        resp_default.trailers.is_empty(),
+        "H3UpstreamResponse::default() must start with no trailers"
+    );
+    let resp = lb_quic::H3UpstreamResponse {
+        status: 200,
+        headers: vec![("content-type".to_owned(), "application/grpc".to_owned())],
+        body: b"world".to_vec(),
+        trailers: vec![("grpc-status".to_owned(), "0".to_owned())],
+    };
+    assert_eq!(
+        resp.trailers,
+        vec![("grpc-status".to_owned(), "0".to_owned())]
+    );
+}
+
+/// PROTO-2-12 H3 leg — positive end-to-end pin that request and
+/// response trailers survive **every (src, dst) pair that involves
+/// HTTP/3**, exercising the same `bridge_request` / `bridge_response`
+/// code path the proxy hot-path H3 legs
+/// (`collect_h{1,2}_request_to_h3_fieldlist`, `h3_response_to_h{1,2}`)
+/// now feed `translated.trailers` through. This replaces the former
+/// `Vec::new()` baseline-pin for the H3 legs with assertions.
+#[test]
+fn h3_legs_forward_trailers_for_every_pair_involving_h3() {
+    let h3_pairs = [
+        (Protocol::Http1, Protocol::Http3),
+        (Protocol::Http2, Protocol::Http3),
+        (Protocol::Http3, Protocol::Http1),
+        (Protocol::Http3, Protocol::Http2),
+        (Protocol::Http3, Protocol::Http3),
+    ];
+    for (src, dst) in h3_pairs {
+        let bridge = create_bridge(src, dst);
+        let req_out = bridge
+            .bridge_request(&req_with_trailers())
+            .expect("bridge_request");
+        assert_eq!(
+            req_out.trailers,
+            vec![("x-checksum".to_owned(), "abc123".to_owned())],
+            "H3 leg dropped request trailers for {src:?} -> {dst:?}"
+        );
+        let resp_out = bridge
+            .bridge_response(&resp_with_trailers())
+            .expect("bridge_response");
+        assert_eq!(
+            resp_out.trailers,
+            vec![("x-checksum".to_owned(), "def456".to_owned())],
+            "H3 leg dropped response trailers for {src:?} -> {dst:?}"
+        );
+    }
 }

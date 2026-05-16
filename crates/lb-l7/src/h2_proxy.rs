@@ -1126,14 +1126,15 @@ impl H2Proxy {
             );
         };
         let sni = backend.sni.as_deref().unwrap_or("");
-        let (headers, body) = match collect_h2_request_to_h3_fieldlist(req.into_inner(), sni).await
-        {
-            Ok(p) => p,
-            Err(s) => return error_response(StatusCode::BAD_GATEWAY, &s),
-        };
+        let (headers, body, trailers) =
+            match collect_h2_request_to_h3_fieldlist(req.into_inner(), sni).await {
+                Ok(p) => p,
+                Err(s) => return error_response(StatusCode::BAD_GATEWAY, &s),
+            };
         let h3_resp = Box::pin(lb_quic::request_h3_upstream(
             headers,
             body,
+            trailers,
             backend.addr,
             sni,
             h3_pool,
@@ -1363,17 +1364,37 @@ async fn upstream_h2_response_to_h2(
 }
 
 /// Collect an inbound H2 request, run the H2→H3 codec bridge, and
-/// return a `(field_list, body)` pair for `request_h3_upstream`.
+/// return a `(field_list, body, trailers)` triple for
+/// `request_h3_upstream`.
+///
+/// PROTO-2-12: inbound H2 request trailers are captured via
+/// `Collected::trailers()` at body-collect time, bridged through
+/// `bridge_request`, and returned so the caller ships them as a
+/// post-DATA `Frame::trailers` HEADERS frame on the QUIC stream.
 async fn collect_h2_request_to_h3_fieldlist(
     req: Request<IncomingBody>,
     sni: &str,
-) -> Result<(Vec<(String, String)>, Bytes), String> {
+) -> Result<(Vec<(String, String)>, Bytes, Vec<(String, String)>), String> {
     let (parts, body) = req.into_parts();
-    let body_bytes = body
+    // PROTO-2-12: capture request trailers alongside the body.
+    let collected = body
         .collect()
         .await
-        .map_err(|e| format!("body collect: {e}"))?
-        .to_bytes();
+        .map_err(|e| format!("body collect: {e}"))?;
+    let trailers_map = collected.trailers().cloned();
+    let body_bytes = collected.to_bytes();
+    let trailers_vec: Vec<(String, String)> = trailers_map
+        .as_ref()
+        .map(|tm| {
+            tm.iter()
+                .filter_map(|(n, v)| {
+                    v.to_str()
+                        .ok()
+                        .map(|s| (n.as_str().to_owned(), s.to_owned()))
+                })
+                .collect()
+        })
+        .unwrap_or_default();
     let scheme = parts
         .uri
         .scheme()
@@ -1409,10 +1430,10 @@ async fn collect_h2_request_to_h3_fieldlist(
             .collect(),
         body: body_bytes.clone(),
         scheme: Some(scheme.clone()),
-        // PROTO-2-12: H3 upstream request trailers not yet surfaced
-        // by `lb_quic::request_h3_upstream`. See deferred note in
-        // `crates/lb-l7/src/h1_proxy.rs::collect_h1_request_to_h3_fieldlist`.
-        trailers: Vec::new(),
+        // PROTO-2-12: forward inbound H2 request trailers through the
+        // H2→H3 bridge; the caller ships them as a post-DATA HEADERS
+        // frame on the upstream QUIC stream.
+        trailers: trailers_vec,
     };
     bridge_in
         .headers
@@ -1427,7 +1448,7 @@ async fn collect_h2_request_to_h3_fieldlist(
     let translated = bridge
         .bridge_request(&bridge_in)
         .map_err(|e| format!("h2->h3 bridge: {e}"))?;
-    Ok((translated.headers, body_bytes))
+    Ok((translated.headers, body_bytes, translated.trailers))
 }
 
 /// Convert an [`lb_quic::H3UpstreamResponse`] back into the H2 response
@@ -1442,10 +1463,11 @@ fn h3_response_to_h2(
         status: resp.status,
         headers: resp.headers,
         body: body_bytes,
-        // PROTO-2-12: H3 upstream response trailers not surfaced by
-        // `H3UpstreamResponse` (no trailer field on the QUIC client
-        // body). See deferred note in `h1_proxy.rs::h3_response_to_h1`.
-        trailers: Vec::new(),
+        // PROTO-2-12 (H3 leg landed): forward the H3 upstream's
+        // trailing field section (parsed from the post-DATA HEADERS
+        // frame) down the H3→H2 bridge. `build_h2_body_with_trailers`
+        // re-emits it as an H2 `Frame::trailers` on the wire.
+        trailers: resp.trailers,
     };
     let translated = match bridge.bridge_response(&bridge_in) {
         Ok(r) => r,
@@ -1469,8 +1491,8 @@ fn h3_response_to_h2(
             builder = builder.header(hyper::header::ALT_SVC, value);
         }
     }
-    // PROTO-2-12: emit body + trailers via StreamBody (currently no
-    // trailers from H3 backend; see deferred note).
+    // PROTO-2-12 (H3 leg landed): emit body + the H3 upstream's
+    // trailing field section via StreamBody as an H2 `Frame::trailers`.
     let body = build_h2_body_with_trailers(translated.body, &translated.trailers);
     builder.body(body).unwrap_or_else(|_| {
         error_response(
