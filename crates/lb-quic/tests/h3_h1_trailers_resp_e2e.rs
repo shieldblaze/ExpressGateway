@@ -289,7 +289,9 @@ async fn drive_h3(
         (":authority".to_string(), REQUEST_AUTHORITY.to_string()),
         (":path".to_string(), REQUEST_PATH.to_string()),
     ];
-    let hb = encoder.encode(&headers).map_err(|e| format!("qpack: {e}"))?;
+    let hb = encoder
+        .encode(&headers)
+        .map_err(|e| format!("qpack: {e}"))?;
     let headers_frame = encode_frame(&H3Frame::Headers { header_block: hb })
         .map_err(|e| format!("h3 frame: {e}"))?;
 
@@ -363,8 +365,9 @@ async fn drive_h3(
                 loop {
                     match conn.stream_recv(sid, &mut c) {
                         Ok((n, _)) => rx_tail.extend_from_slice(&c[..n]),
-                        Err(quiche::Error::Done)
-                        | Err(quiche::Error::InvalidStreamState(_)) => break,
+                        Err(quiche::Error::Done) | Err(quiche::Error::InvalidStreamState(_)) => {
+                            break;
+                        }
                         Err(e) => return Err(format!("stream_recv: {e}")),
                     }
                 }
@@ -507,14 +510,7 @@ async fn pc1_request_with_trailing_field_section_completes_and_drops_trailers() 
 
     let (conn, sock) = client_conn(server, &certs.ca);
     let deadline = tokio::time::Instant::now() + Duration::from_secs(60);
-    let res = drive_h3(
-        conn,
-        &sock,
-        vec![f0, f1],
-        Some(trailers),
-        deadline,
-    )
-    .await;
+    let res = drive_h3(conn, &sock, vec![f0, f1], Some(trailers), deadline).await;
 
     let captured = tokio::time::timeout(Duration::from_secs(3), body_rx)
         .await

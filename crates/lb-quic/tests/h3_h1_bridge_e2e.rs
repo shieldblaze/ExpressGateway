@@ -298,8 +298,7 @@ async fn drive_h3_get(
                             .map_err(|e| format!("qpack decode: {e}"))?;
                         for (n, v) in hdrs {
                             if n == ":status" {
-                                decoded_status =
-                                    Some(v.parse::<u16>().map_err(|e| e.to_string())?);
+                                decoded_status = Some(v.parse::<u16>().map_err(|e| e.to_string())?);
                             } else if n == "content-length" {
                                 expected_len = v.parse::<usize>().ok();
                             }

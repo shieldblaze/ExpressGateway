@@ -159,7 +159,9 @@ async fn drive_client(
         loop {
             match conn.send(&mut out_buf) {
                 Ok((n, info)) => {
-                    let _ = socket.send_to(out_buf.get(..n).unwrap_or(&[]), info.to).await;
+                    let _ = socket
+                        .send_to(out_buf.get(..n).unwrap_or(&[]), info.to)
+                        .await;
                 }
                 Err(quiche::Error::Done) => break,
                 Err(_) => break,

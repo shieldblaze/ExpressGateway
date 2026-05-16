@@ -331,7 +331,9 @@ async fn drive_h3_body_request(
         (":path".to_string(), REQUEST_PATH.to_string()),
     ];
     headers.extend(extra_headers);
-    let hb = encoder.encode(&headers).map_err(|e| format!("qpack: {e}"))?;
+    let hb = encoder
+        .encode(&headers)
+        .map_err(|e| format!("qpack: {e}"))?;
     let headers_frame = encode_frame(&H3Frame::Headers { header_block: hb })
         .map_err(|e| format!("h3 frame: {e}"))?;
 
@@ -401,8 +403,9 @@ async fn drive_h3_body_request(
                 loop {
                     match conn.stream_recv(sid, &mut c) {
                         Ok((n, _)) => rx_tail.extend_from_slice(&c[..n]),
-                        Err(quiche::Error::Done)
-                        | Err(quiche::Error::InvalidStreamState(_)) => break,
+                        Err(quiche::Error::Done) | Err(quiche::Error::InvalidStreamState(_)) => {
+                            break;
+                        }
                         Err(e) => return Err(format!("stream_recv: {e}")),
                     }
                 }
@@ -446,7 +449,6 @@ async fn drive_h3_body_request(
             }
         }
 
-
         loop {
             match conn.send(&mut out_buf) {
                 Ok((n, info)) => {
@@ -468,8 +470,7 @@ async fn drive_h3_body_request(
         // under test, not the client's pacing).
         let qto = conn.timeout().unwrap_or(Duration::from_millis(20));
         let wait = qto.clamp(Duration::from_millis(2), Duration::from_millis(20));
-        match tokio::time::timeout(wait, socket.recv_from(&mut in_buf)).await
-        {
+        match tokio::time::timeout(wait, socket.recv_from(&mut in_buf)).await {
             Ok(Ok((n, from))) => {
                 let info = quiche::RecvInfo { from, to: local };
                 match conn.recv(&mut in_buf[..n], info) {
@@ -503,16 +504,14 @@ async fn start_listener(
 }
 
 fn client_conn(server: SocketAddr, ca: &std::path::Path) -> (quiche::Connection, UdpSocket) {
-    let sock =
-        std::net::UdpSocket::bind((Ipv4Addr::LOCALHOST, 0)).expect("bind client udp");
+    let sock = std::net::UdpSocket::bind((Ipv4Addr::LOCALHOST, 0)).expect("bind client udp");
     sock.set_nonblocking(true).unwrap();
     let sock = UdpSocket::from_std(sock).unwrap();
     let local = sock.local_addr().unwrap();
     let mut cfg = build_client_config(ca);
     let scid = random_scid_bytes();
     let scid_ref = quiche::ConnectionId::from_ref(&scid);
-    let conn =
-        quiche::connect(Some(TEST_SNI), &scid_ref, local, server, &mut cfg).unwrap();
+    let conn = quiche::connect(Some(TEST_SNI), &scid_ref, local, server, &mut cfg).unwrap();
     (conn, sock)
 }
 
@@ -560,7 +559,8 @@ async fn t1_multi_data_frame_binary_body_forwarded_byte_identical() {
     assert_eq!(status, UPSTREAM_STATUS);
     let (head, body) = captured.expect("backend captured no request");
     assert!(
-        head.to_ascii_lowercase().contains("transfer-encoding: chunked"),
+        head.to_ascii_lowercase()
+            .contains("transfer-encoding: chunked"),
         "no client content-length ⇒ chunked egress; head:\n{head}"
     );
     assert_eq!(
@@ -739,10 +739,14 @@ async fn t4_oversized_body_yields_413_and_upstream_not_completed() {
     // prescribes.
     let mut chunk = vec![0u8; 4096];
     chunk[..3].copy_from_slice(NON_UTF8);
-    tx.send(lb_quic::h3_bridge::ReqBodyEvent::Chunk(bytes::Bytes::from(chunk)))
+    tx.send(lb_quic::h3_bridge::ReqBodyEvent::Chunk(bytes::Bytes::from(
+        chunk,
+    )))
+    .await
+    .unwrap();
+    tx.send(lb_quic::h3_bridge::ReqBodyEvent::Reset)
         .await
         .unwrap();
-    tx.send(lb_quic::h3_bridge::ReqBodyEvent::Reset).await.unwrap();
     drop(tx);
 
     let resp = tokio::time::timeout(
@@ -873,14 +877,8 @@ async fn t5_single_large_data_frame_is_memory_bounded_through_stalled_upstream()
     let (listener2, server2, _sd2) = start_listener(&certs, backend2).await;
     let (conn2, sock2) = client_conn(server2, &certs.ca);
     let deadline2 = tokio::time::Instant::now() + Duration::from_secs(90);
-    let res2 = drive_h3_body_request(
-        conn2,
-        &sock2,
-        vec![expected.clone()],
-        vec![],
-        deadline2,
-    )
-    .await;
+    let res2 =
+        drive_h3_body_request(conn2, &sock2, vec![expected.clone()], vec![], deadline2).await;
     let captured = tokio::time::timeout(Duration::from_secs(5), body_rx2)
         .await
         .ok()

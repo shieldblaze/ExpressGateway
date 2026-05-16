@@ -122,13 +122,13 @@ async fn drive_to_established(
             return Ok(());
         }
         if conn.is_closed() {
-            return Err(format!("closed before established: {:?}", conn.peer_error()));
+            return Err(format!(
+                "closed before established: {:?}",
+                conn.peer_error()
+            ));
         }
         if tokio::time::Instant::now() >= deadline {
-            return Err(format!(
-                "deadline; established={}",
-                conn.is_established()
-            ));
+            return Err(format!("deadline; established={}", conn.is_established()));
         }
 
         loop {
@@ -160,7 +160,10 @@ async fn drive_to_established(
     }
 }
 
-async fn connect_client(server_addr: SocketAddr, ca: &std::path::Path) -> (quiche::Connection, UdpSocket) {
+async fn connect_client(
+    server_addr: SocketAddr,
+    ca: &std::path::Path,
+) -> (quiche::Connection, UdpSocket) {
     let sock = UdpSocket::bind((Ipv4Addr::LOCALHOST, 0)).await.unwrap();
     let local = sock.local_addr().unwrap();
     let mut cfg = build_client_config(ca);
@@ -276,9 +279,7 @@ async fn retry_token_round_trip_through_router() {
                 // Inspect the long-header type WITHOUT consuming the
                 // datagram (clone for the probe).
                 let mut probe = in_buf.get(..n).unwrap_or(&[]).to_vec();
-                if let Ok(hdr) =
-                    quiche::Header::from_slice(&mut probe, quiche::MAX_CONN_ID_LEN)
-                {
+                if let Ok(hdr) = quiche::Header::from_slice(&mut probe, quiche::MAX_CONN_ID_LEN) {
                     if hdr.ty == quiche::Type::Retry {
                         saw_retry = true;
                     } else if saw_retry {

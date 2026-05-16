@@ -270,8 +270,9 @@ impl ClientPump {
                 loop {
                     match conn.stream_recv(sid, &mut c) {
                         Ok((n, _)) => self.rx_tail.extend_from_slice(&c[..n]),
-                        Err(quiche::Error::Done)
-                        | Err(quiche::Error::InvalidStreamState(_)) => break,
+                        Err(quiche::Error::Done) | Err(quiche::Error::InvalidStreamState(_)) => {
+                            break;
+                        }
                         Err(_) => break,
                     }
                 }
@@ -285,8 +286,7 @@ impl ClientPump {
                             .map_err(|e| format!("qpack decode: {e}"))?;
                         for (n, v) in hdrs {
                             if n == ":status" {
-                                self.status =
-                                    Some(v.parse().map_err(|_| "status".to_string())?);
+                                self.status = Some(v.parse().map_err(|_| "status".to_string())?);
                             } else if n == "content-length" {
                                 self.expected_len = v.parse().ok();
                             }
@@ -488,7 +488,9 @@ async fn p1b_t1_client_cancels_mid_body_upstream_not_completed_and_no_leak() {
     {
         let (mut conn, sock) = client_conn(server, &certs.ca);
         let deadline = tokio::time::Instant::now() + Duration::from_secs(45);
-        handshake(&mut conn, &sock, deadline).await.expect("handshake");
+        handshake(&mut conn, &sock, deadline)
+            .await
+            .expect("handshake");
         let stream_id = 0u64;
         // HEADERS (no content-length ⇒ chunked egress) + ONE partial
         // DATA chunk, carrying the non-UTF-8 marker. No fin.
@@ -593,7 +595,9 @@ async fn p1b_t2_upstream_resets_mid_body_yields_502() {
 
     let (mut conn, sock) = client_conn(server, &certs.ca);
     let deadline = tokio::time::Instant::now() + Duration::from_secs(45);
-    handshake(&mut conn, &sock, deadline).await.expect("handshake");
+    handshake(&mut conn, &sock, deadline)
+        .await
+        .expect("handshake");
     let stream_id = 0u64;
 
     // Chunked egress (no content-length). HEADERS + several DATA frames

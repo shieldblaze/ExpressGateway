@@ -309,9 +309,8 @@ impl StreamRxBuf {
                             break;
                         }
                         Some((ftype, len)) => {
-                            let remaining = usize::try_from(len).map_err(|_| {
-                                "h3 body frame length overflows usize".to_string()
-                            })?;
+                            let remaining = usize::try_from(len)
+                                .map_err(|_| "h3 body frame length overflows usize".to_string())?;
                             self.body = match ftype {
                                 FRAME_DATA => BodyParse::InData { remaining },
                                 FRAME_HEADERS => BodyParse::InTrailers {
@@ -645,10 +644,7 @@ async fn read_h1_response(stream: &mut TcpStream) -> Result<H1Response, String> 
 /// growing the buffer until the proxy OOMs. The whole response is FULLY
 /// BUFFERED here — incremental egress is the headline Session 3 item
 /// (`audit/h3-program/p1c-response-streaming-assessment.md`).
-async fn read_h1_response_capped(
-    stream: &mut TcpStream,
-    cap: usize,
-) -> Result<H1Response, String> {
+async fn read_h1_response_capped(stream: &mut TcpStream, cap: usize) -> Result<H1Response, String> {
     let mut all = Vec::with_capacity(1024);
     let mut buf = [0u8; 4096];
     loop {
@@ -1714,10 +1710,7 @@ mod tests {
             let (mut s, _) = l1.accept().await.unwrap();
             let mut t = [0u8; 1024];
             let _ = tokio::io::AsyncReadExt::read(&mut s, &mut t).await;
-            let head = format!(
-                "HTTP/1.1 200 OK\r\nContent-Length: {}\r\n\r\n",
-                big.len()
-            );
+            let head = format!("HTTP/1.1 200 OK\r\nContent-Length: {}\r\n\r\n", big.len());
             let _ = s.write_all(head.as_bytes()).await;
             let _ = s.write_all(&big).await;
             let _ = s.shutdown().await;

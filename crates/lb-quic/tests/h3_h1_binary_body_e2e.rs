@@ -94,9 +94,7 @@ async fn spawn_capturing_backend() -> (
             match sock.read(&mut buf).await {
                 Ok(0) => {
                     let sep_pos = all.windows(4).position(|w| w == b"\r\n\r\n");
-                    let body = sep_pos
-                        .map(|p| all[p + 4..].to_vec())
-                        .unwrap_or_default();
+                    let body = sep_pos.map(|p| all[p + 4..].to_vec()).unwrap_or_default();
                     let _ = tx.send((body, None));
                     break;
                 }
@@ -154,8 +152,7 @@ async fn h3_to_h1_forwards_non_utf8_body_byte_for_byte() {
         "expected encoded H3 response bytes from the bridge"
     );
 
-    let (captured_body, content_len) =
-        captured.expect("backend did not capture a request body");
+    let (captured_body, content_len) = captured.expect("backend did not capture a request body");
 
     // (1) Content-Length header parsed to exactly body.len() (7).
     assert_eq!(

@@ -34,7 +34,7 @@ use lb_io::quic_pool::QuicUpstreamPool;
 
 use crate::h3_bridge::{
     BodyItem, H3Request, MAX_REQUEST_BODY_BYTES, ReqBodyEvent, StreamRxBuf, encode_h3_response,
-    h3_to_h2_roundtrip, h3_to_h3_roundtrip, h3_to_h1_stream,
+    h3_to_h1_stream, h3_to_h2_roundtrip, h3_to_h3_roundtrip,
 };
 
 /// SESSION 2 / P1-A: depth of the per-stream bounded request-body
@@ -491,8 +491,7 @@ fn poll_h3(
                             // is the memory mechanism; the receiver is
                             // moved into the task, the sender stays here.
                             let pool = pool.clone();
-                            let (btx, brx) =
-                                mpsc::channel::<ReqBodyEvent>(H3_BODY_CHANNEL_DEPTH);
+                            let (btx, brx) = mpsc::channel::<ReqBodyEvent>(H3_BODY_CHANNEL_DEPTH);
                             request_tasks.push(tokio::spawn(async move {
                                 let bytes = match h3_to_h1_stream(
                                     &req,
@@ -561,8 +560,7 @@ fn poll_h3(
                 // per-stream rx buffer so no state leaks, then stop the
                 // recv loop for this stream. Other errors are handled
                 // identically (fail safe).
-                Err(quiche::Error::StreamReset(code))
-                | Err(quiche::Error::StreamStopped(code)) => {
+                Err(quiche::Error::StreamReset(code)) | Err(quiche::Error::StreamStopped(code)) => {
                     tracing::debug!(
                         stream_id = sid,
                         code,
@@ -759,9 +757,9 @@ fn record_retained_for_stream(
     // Channel occupancy is not byte-introspectable; every queued event
     // is a Chunk of <= H3_BODY_CHUNK_MAX, so used slots * chunk-max is a
     // sound UPPER bound (the gauge must over- not under-estimate).
-    let chan_used = body_tx_by_stream.get(&sid).map_or(0, |tx| {
-        tx.max_capacity().saturating_sub(tx.capacity())
-    });
+    let chan_used = body_tx_by_stream
+        .get(&sid)
+        .map_or(0, |tx| tx.max_capacity().saturating_sub(tx.capacity()));
     let chan_bytes = chan_used.saturating_mul(crate::h3_bridge::H3_BODY_CHUNK_MAX);
     crate::h3_bridge::record_retained(rx_bytes + pending_bytes + chan_bytes);
 }
@@ -790,8 +788,7 @@ fn flush_pending(
                 // Loop guard `!q.is_empty()` guarantees an element; the
                 // `else` arm is unreachable but handled without panic.
                 let Some(ev) = q.pop_front() else { break };
-                let is_end =
-                    matches!(ev, ReqBodyEvent::End { .. } | ReqBodyEvent::Reset);
+                let is_end = matches!(ev, ReqBodyEvent::End { .. } | ReqBodyEvent::Reset);
                 permit.send(ev);
                 if is_end {
                     terminated = true;
