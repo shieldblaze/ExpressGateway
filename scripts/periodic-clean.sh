@@ -26,5 +26,12 @@ if [ -d target ] && [ -n "$(find target -maxdepth 2 -newermt '-5 minutes' -print
 fi
 
 before=$(du -sh target 2>/dev/null | cut -f1)
+# Privileged tests (D-1 sudo cargo) leave root-owned files under target/
+# that make `cargo clean` fail with EPERM. Reclaim ownership first.
+if [ -d target ] && find target -not -user "$(id -un)" -print -quit 2>/dev/null | grep -q .; then
+  sudo -n chown -R "$(id -un):$(id -gn)" target 2>/dev/null \
+    && log "reclaimed root-owned target/ files before clean" \
+    || log "warn: could not chown root-owned target/ files (clean may be partial)"
+fi
 cargo clean 2>&1 | sed 's/^/[cargo clean] /' || true
 log "cargo clean done (target was ${before:-n/a})"
