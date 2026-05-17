@@ -1446,44 +1446,67 @@ async fn write_body_chunk(stream: &mut TcpStream, data: &[u8], chunked: bool) ->
     Ok(())
 }
 
-/// SESSION 2 / P1-A — **incremental** H3→H1 request-body streaming.
+/// SESSION 4 / P1-A.1 — terminal outcome of the request-write half
+/// ([`write_h1_request`]).
 ///
-/// Forwards request DATA to the H1 upstream as it arrives over the
-/// per-stream bounded channel `body_rx`. Memory safety comes from the
-/// channel's bounded depth + backpressure (poll_h3 stops calling
-/// `stream_recv` when the channel is full), NOT from buffering: at
-/// most ONE chunk is held here at any instant (the peeked head chunk,
-/// then one chunk per loop iteration). The response is still buffered
-/// via [`read_h1_response`] + [`encode_h3_response`] — response
-/// streaming is a later increment.
+/// The request body is forwarded incrementally; this reports HOW that
+/// phase ended so the caller can pick the client-facing response AND
+/// the pooled-connection disposition (C2). Each non-`Complete` outcome
+/// means the request was NOT completed on the wire (no chunked
+/// terminator / partial `Content-Length`), so the upstream never sees
+/// a completable request — the caller MUST mark the pooled connection
+/// non-reusable (request-smuggling / cache-poisoning guard).
+enum ReqWriteOutcome {
+    /// Request head + body fully + correctly written and flushed
+    /// (chunked terminator already sent when chunked). The caller
+    /// reads/streams the response on the same stream.
+    Complete,
+    /// A graceful client-facing abort decided by the body channel:
+    /// `body_rx` delivered `Reset` (poll_h3's oversized / client-cancel
+    /// signal — the pre-extraction `413`) or the channel closed before
+    /// `End` (producer dropped mid-body — the pre-extraction `502`).
+    /// `(status, body)` is exactly what the pre-extraction
+    /// `h3_to_h1_stream` returned for that case.
+    Aborted(u16, &'static [u8]),
+}
+
+/// SESSION 4 / P1-A.1 — the request-write half, extracted **verbatim**
+/// from the pre-extraction `h3_to_h1_stream` body so its observable
+/// behaviour is BYTE-IDENTICAL (the two request-side e2e suites,
+/// `h3_to_h1_roundtrip`, and all S1–S3 H3 request-streaming e2e stay
+/// green — pure extraction, no logic change).
 ///
-/// Framing decision (from the first body event + the client
-/// `content-length` header in `req.extra`, case-insensitive):
-///   * first event `End` with no prior `Chunk` ⇒ bodyless ⇒ head is
-///     BYTE-IDENTICAL to `build_h1_request(req, None)`.
-///   * body present + client `content-length` ⇒ `Content-Length: <v>`,
-///     raw body bytes forwarded unframed.
-///   * body present, no client `content-length` ⇒
-///     `Transfer-Encoding: chunked`, each chunk HTTP/1.1-chunk-framed.
+/// Peeks the first body event to choose framing, writes the H1 head,
+/// then forwards request DATA incrementally over `body_rx` (one event
+/// held at a time → request-side backpressure, unchanged from S2). It
+/// returns BEFORE the chunked terminator / full `Content-Length` on
+/// any abort so the upstream never sees a completable request.
 ///
-/// `max_body` is the total-size cap surfaced as H3 `413` (the in-flight
-/// window is the memory mechanism, separate from this).
+/// **Pooled-connection ownership (C2):** the CALLER owns the
+/// `PooledTcp`; this helper only borrows `stream` and NEVER calls
+/// `set_reusable`. The caller threads ownership as
+/// `acquire pooled → let stream = pooled.stream_mut() →
+/// write_h1_request(req, stream, &mut rx)` then, on `Err(())`
+/// (upstream I/O failure) OR `Ok(ReqWriteOutcome::Aborted(..))`
+/// (channel abort) OR — for the streaming P1-B producer — any
+/// `Err(RespAbort)` from [`stream_h1_response`], calls
+/// `pooled.set_reusable(false)` before the pooled handle drops. The
+/// buffered [`h3_to_h1_stream`] caller below preserves the
+/// pre-extraction disposition exactly (every terminal path drops the
+/// conn non-reusable).
 ///
 /// # Errors
 ///
-/// Returns the H3 wire bytes of a `413` when `body_rx` delivers a
-/// `Reset` *carrying the too-large signal* (poll_h3 drops the channel
-/// after sending nothing further); a `502` on any upstream
-/// dial/write/read failure or premature channel close. Surfaces a
-/// string error only if encoding the fallback response itself fails.
+/// `Err(())` on any upstream write/flush I/O failure (head, a body
+/// chunk, the chunked terminator, or the final flush) — the
+/// pre-extraction `502` path. The caller maps it to a client-facing
+/// `502` and marks the pooled connection non-reusable.
 #[allow(clippy::too_many_lines)]
-pub async fn h3_to_h1_stream(
+async fn write_h1_request(
     req: &H3Request,
-    backend: SocketAddr,
-    pool: &TcpPool,
-    mut body_rx: tokio::sync::mpsc::Receiver<ReqBodyEvent>,
-    _max_body: usize,
-) -> Result<Vec<u8>, String> {
+    stream: &mut TcpStream,
+    body_rx: &mut tokio::sync::mpsc::Receiver<ReqBodyEvent>,
+) -> Result<ReqWriteOutcome, ()> {
     // Peek the FIRST body event to choose framing. We buffer at most
     // ONE chunk here — bounded, never the whole body.
     let first = body_rx.recv().await;
@@ -1494,7 +1517,7 @@ pub async fn h3_to_h1_stream(
             // Reset before any data ⇒ treat as a too-large/abort signal
             // surfaced by poll_h3: respond 413 (poll_h3 only Resets
             // early for the oversized case in this increment).
-            return encode_h3_response(413, b"payload too large");
+            return Ok(ReqWriteOutcome::Aborted(413, b"payload too large"));
         }
         Some(ReqBodyEvent::Chunk(b)) => {
             let cl = req.extra.iter().find_map(|(n, v)| {
@@ -1512,6 +1535,142 @@ pub async fn h3_to_h1_stream(
     };
     record_inflight(pending_first.as_ref().map_or(0, Bytes::len));
 
+    let head = build_h1_head(req, &framing);
+    let chunked = framing == H1BodyFraming::Chunked;
+
+    if let Err(e) = stream.write_all(&head).await {
+        tracing::warn!(error = %e, "H3→H1 stream head write failed");
+        return Err(());
+    }
+
+    if let Some(b) = pending_first.take() {
+        if write_body_chunk(stream, &b, chunked).await.is_err() {
+            tracing::warn!(error = %"first chunk", "H3→H1 stream body write failed");
+            return Err(());
+        }
+    }
+
+    // Stream the remaining events incrementally. One event held at
+    // a time → backpressure: a slow upstream stalls this recv loop,
+    // the channel fills, poll_h3 stops extending QUIC flow control.
+    // Bodyless (first event == End / channel already closed) is a
+    // clean end with no further events.
+    let mut clean_end = matches!(first, Some(ReqBodyEvent::End { .. }) | None);
+    while let Some(ev) = body_rx.recv().await {
+        match ev {
+            ReqBodyEvent::Chunk(b) => {
+                record_inflight(b.len());
+                if write_body_chunk(stream, &b, chunked).await.is_err() {
+                    tracing::warn!(error = %"chunk", "H3→H1 stream body write failed");
+                    return Err(());
+                }
+            }
+            ReqBodyEvent::End { trailers: _ } => {
+                // SESSION 2 / P1-C — REQUEST TRAILERS ARE INTENTIONALLY
+                // DROPPED on the H3→H1/1.1 leg. An H3 request trailing
+                // field section (RFC 9114 §4.1: a HEADERS frame after
+                // the DATA frames) is fully PARSED upstream by
+                // `StreamRxBuf::feed_body` (so a malformed/oversized
+                // trailer block is still rejected and the body-phase
+                // parser cannot crash/corrupt — that path is
+                // regression-locked by the P1-C trailer e2e) and the
+                // decoded list is carried here in `End.trailers`, but
+                // it is deliberately NOT emitted to the HTTP/1.1
+                // upstream. Rationale: forwarding trailers over
+                // HTTP/1.1 requires `Transfer-Encoding: chunked` PLUS a
+                // request-side `Trailer:` announcement and is only
+                // legal for declared, non-forbidden fields (RFC 9110
+                // §6.5 / RFC 7230 §4.1.2); silently smuggling
+                // peer-controlled trailer fields into the H1 request
+                // head/body would be a request-smuggling vector.
+                // Dropping them yields a well-formed, complete H1
+                // request (the body is already correctly framed by
+                // Content-Length or the chunked terminator) and is an
+                // RFC-acceptable downgrade: HTTP/1.1 has no obligation
+                // to convey upstream-uninterpreted trailers. Genuine
+                // H1 trailer egress (chunked + `Trailer:` allow-list)
+                // is deferred to a later session. The value is consumed
+                // (`trailers: _`) so the stream terminates clean.
+                clean_end = true;
+                break;
+            }
+            ReqBodyEvent::Reset => {
+                // SESSION 2 / P1-B: mid-body Reset. poll_h3 emits
+                // this for BOTH (a) the oversized cap breach and
+                // (b) a CLIENT CANCEL (peer QUIC RESET_STREAM /
+                // STOP_SENDING before FIN). In every case the body
+                // is incomplete and MUST NOT be delivered to the
+                // backend as a completed request: we return IMMEDIATELY,
+                // BEFORE the `0\r\n\r\n` chunked terminator / before the
+                // full Content-Length body is written, so the backend
+                // never sees a completable request; the CALLER marks
+                // the pooled upstream connection non-reusable (so the
+                // partially written request can never be paired with a
+                // subsequent one — HTTP-request-smuggling / cache-
+                // poisoning guard). The 413 status is the safe
+                // client-facing response; a cancelling client has
+                // already torn down its stream and will not read it,
+                // while the oversized path genuinely wants 413 — the
+                // load-bearing invariant here is the upstream abort,
+                // not the status code.
+                tracing::warn!(
+                    "SESSION 2 / P1-B: H3→H1 stream body Reset (oversized or \
+                     client cancel); aborting upstream without completing the request"
+                );
+                return Ok(ReqWriteOutcome::Aborted(413, b"payload too large"));
+            }
+        }
+    }
+    if !clean_end {
+        // Channel closed before an explicit End/Reset → producer
+        // dropped mid-body: abort rather than present a truncated
+        // request to the upstream.
+        tracing::warn!("H3→H1 stream channel closed before End; aborting upstream");
+        return Ok(ReqWriteOutcome::Aborted(502, b"bad gateway"));
+    }
+    if chunked {
+        if let Err(e) = stream.write_all(b"0\r\n\r\n").await {
+            tracing::warn!(error = %e, "H3→H1 stream chunked terminator failed");
+            return Err(());
+        }
+    }
+
+    if let Err(e) = stream.flush().await {
+        tracing::warn!(error = %e, "H3→H1 stream flush failed");
+        return Err(());
+    }
+    Ok(ReqWriteOutcome::Complete)
+}
+
+/// SESSION 2 / P1-A — buffered H3→H1 request-streaming round-trip.
+///
+/// Composes the extracted request-write half ([`write_h1_request`])
+/// with the buffered [`read_h1_response`] + [`encode_h3_response`]
+/// tail. Behaviour is BYTE-IDENTICAL to the pre-P1-A.1 monolithic
+/// implementation (regression-locked by `h3_h1_stream_body_e2e.rs`,
+/// `h3_h1_stream_body_errors_e2e.rs`, and the S1–S3 H3 request
+/// streaming e2e). The SESSION 4 streaming producer uses
+/// [`write_h1_request`] + [`stream_h1_response`] instead of this
+/// buffered tail; this buffered variant is retained UNCHANGED for the
+/// request-side suites and is not on the actor's H1 hot path after
+/// P1-B.
+///
+/// `max_body` is the total-size cap surfaced as H3 `413` (the
+/// in-flight window is the memory mechanism, separate from this).
+///
+/// # Errors
+///
+/// Returns the H3 wire bytes of a `413` when `body_rx` delivers a
+/// `Reset` *carrying the too-large signal*; a `502` on any upstream
+/// dial/write/read failure or premature channel close. Surfaces a
+/// string error only if encoding the fallback response itself fails.
+pub async fn h3_to_h1_stream(
+    req: &H3Request,
+    backend: SocketAddr,
+    pool: &TcpPool,
+    mut body_rx: tokio::sync::mpsc::Receiver<ReqBodyEvent>,
+    _max_body: usize,
+) -> Result<Vec<u8>, String> {
     let mut pooled = match pool.acquire_async(backend).await {
         Ok(p) => p,
         Err(e) => {
@@ -1520,125 +1679,35 @@ pub async fn h3_to_h1_stream(
         }
     };
 
-    let head = build_h1_head(req, &framing);
-    let chunked = framing == H1BodyFraming::Chunked;
-
-    // --- write head + stream body incrementally ---
+    // --- write head + stream body incrementally (extracted helper) ---
     let response = {
         let stream = pooled
             .stream_mut()
             .ok_or_else(|| "pool returned empty handle".to_string())?;
 
-        macro_rules! fail502 {
-            ($ctx:expr, $e:expr) => {{
-                pooled.set_reusable(false);
-                tracing::warn!(error = %$e, $ctx);
-                return encode_h3_response(502, b"bad gateway");
-            }};
-        }
-
-        if let Err(e) = stream.write_all(&head).await {
-            fail502!("H3→H1 stream head write failed", e);
-        }
-
-        if let Some(b) = pending_first.take() {
-            if write_body_chunk(stream, &b, chunked).await.is_err() {
-                fail502!("H3→H1 stream body write failed", "first chunk");
-            }
-        }
-
-        // Stream the remaining events incrementally. One event held at
-        // a time → backpressure: a slow upstream stalls this recv loop,
-        // the channel fills, poll_h3 stops extending QUIC flow control.
-        // Bodyless (first event == End / channel already closed) is a
-        // clean end with no further events.
-        let mut clean_end = matches!(first, Some(ReqBodyEvent::End { .. }) | None);
-        while let Some(ev) = body_rx.recv().await {
-            match ev {
-                ReqBodyEvent::Chunk(b) => {
-                    record_inflight(b.len());
-                    if write_body_chunk(stream, &b, chunked).await.is_err() {
-                        fail502!("H3→H1 stream body write failed", "chunk");
-                    }
-                }
-                ReqBodyEvent::End { trailers: _ } => {
-                    // SESSION 2 / P1-C — REQUEST TRAILERS ARE INTENTIONALLY
-                    // DROPPED on the H3→H1/1.1 leg. An H3 request trailing
-                    // field section (RFC 9114 §4.1: a HEADERS frame after
-                    // the DATA frames) is fully PARSED upstream by
-                    // `StreamRxBuf::feed_body` (so a malformed/oversized
-                    // trailer block is still rejected and the body-phase
-                    // parser cannot crash/corrupt — that path is
-                    // regression-locked by the P1-C trailer e2e) and the
-                    // decoded list is carried here in `End.trailers`, but
-                    // it is deliberately NOT emitted to the HTTP/1.1
-                    // upstream. Rationale: forwarding trailers over
-                    // HTTP/1.1 requires `Transfer-Encoding: chunked` PLUS a
-                    // request-side `Trailer:` announcement and is only
-                    // legal for declared, non-forbidden fields (RFC 9110
-                    // §6.5 / RFC 7230 §4.1.2); silently smuggling
-                    // peer-controlled trailer fields into the H1 request
-                    // head/body would be a request-smuggling vector.
-                    // Dropping them yields a well-formed, complete H1
-                    // request (the body is already correctly framed by
-                    // Content-Length or the chunked terminator) and is an
-                    // RFC-acceptable downgrade: HTTP/1.1 has no obligation
-                    // to convey upstream-uninterpreted trailers. Genuine
-                    // H1 trailer egress (chunked + `Trailer:` allow-list)
-                    // is deferred to a later session. The value is consumed
-                    // (`trailers: _`) so the stream terminates clean.
-                    clean_end = true;
-                    break;
-                }
-                ReqBodyEvent::Reset => {
-                    // SESSION 2 / P1-B: mid-body Reset. poll_h3 emits
-                    // this for BOTH (a) the oversized cap breach and
-                    // (b) a CLIENT CANCEL (peer QUIC RESET_STREAM /
-                    // STOP_SENDING before FIN). In every case the body
-                    // is incomplete and MUST NOT be delivered to the
-                    // backend as a completed request: we mark the pooled
-                    // upstream connection non-reusable (so the partially
-                    // written request can never be paired with a
-                    // subsequent one — HTTP-request-smuggling / cache-
-                    // poisoning guard) and return IMMEDIATELY, BEFORE the
-                    // `0\r\n\r\n` chunked terminator / before the full
-                    // Content-Length body is written, so the backend
-                    // never sees a completable request. The 413 status
-                    // is the safe client-facing response; a cancelling
-                    // client has already torn down its stream and will
-                    // not read it, while the oversized path genuinely
-                    // wants 413 — the load-bearing invariant here is the
-                    // upstream abort, not the status code.
+        match write_h1_request(req, stream, &mut body_rx).await {
+            Ok(ReqWriteOutcome::Complete) => match read_h1_response(stream).await {
+                Ok(r) => r,
+                Err(e) => {
                     pooled.set_reusable(false);
-                    tracing::warn!(
-                        "SESSION 2 / P1-B: H3→H1 stream body Reset (oversized or \
-                         client cancel); aborting upstream without completing the request"
-                    );
-                    return encode_h3_response(413, b"payload too large");
+                    tracing::warn!(error = %e, "H3→H1 stream backend read failed");
+                    return encode_h3_response(502, b"bad gateway");
                 }
+            },
+            Ok(ReqWriteOutcome::Aborted(status, body)) => {
+                // Request was NOT completed on the wire (returned before
+                // the chunked terminator / full Content-Length): drop
+                // the pooled conn non-reusable so the partial request
+                // can never be paired with a later one — byte-identical
+                // to the pre-extraction 413/502 abort disposition.
+                pooled.set_reusable(false);
+                return encode_h3_response(status, body);
             }
-        }
-        if !clean_end {
-            // Channel closed before an explicit End/Reset → producer
-            // dropped mid-body: abort rather than present a truncated
-            // request to the upstream.
-            pooled.set_reusable(false);
-            tracing::warn!("H3→H1 stream channel closed before End; aborting upstream");
-            return encode_h3_response(502, b"bad gateway");
-        }
-        if chunked {
-            if let Err(e) = stream.write_all(b"0\r\n\r\n").await {
-                fail502!("H3→H1 stream chunked terminator failed", e);
-            }
-        }
-
-        if let Err(e) = stream.flush().await {
-            fail502!("H3→H1 stream flush failed", e);
-        }
-        match read_h1_response(stream).await {
-            Ok(r) => r,
-            Err(e) => {
-                fail502!("H3→H1 stream backend read failed", e);
+            Err(()) => {
+                // Upstream write/flush I/O failure — the pre-extraction
+                // `fail502!` path (warn already logged in the helper).
+                pooled.set_reusable(false);
+                return encode_h3_response(502, b"bad gateway");
             }
         }
     };
