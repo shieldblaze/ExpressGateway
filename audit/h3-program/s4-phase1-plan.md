@@ -507,16 +507,30 @@ New `crates/lb-quic/tests/h3_h1_resp_stream_e2e.rs`, harness modelled on
 
 - **R1** multi-DATA binary response (≥100 KB; 0xFF/0x00/0x80 markers at
   head/mid/tail) byte-identical at the H3 client.
-- **R2** non-vacuous memory bound: 1 MiB response, slow/stalled H3
-  client; assert `MAX_RETAINED_RESP_BYTES ≤ 4 * (depth*chunk)` and
-  `≪ 1 MiB`; plus liveness + byte-identity after resume (mirrors S2 T5,
-  `h3_h1_stream_body_e2e.rs:791`).
+- **R2** non-vacuous memory bound: slow/stalled H3 client; assert
+  `MAX_RETAINED_RESP_BYTES ≤ 4 * (H3_RESP_CHANNEL_DEPTH *
+  (H3_RESP_CHUNK_MAX + H3_FRAME_HDR_MAX))` — the EXACT §1.5 C5 sound
+  bound (test ceiling == gauge bound; NOT the looser `depth*chunk`
+  form) — AND the response body sized so that C5 ceiling is
+  unambiguously `≪` body at **≥8× margin** (≈4 MiB body ⇒ ≈16×); plus
+  liveness + byte-identity after resume (mirrors S2 T5,
+  `h3_h1_stream_body_e2e.rs:791`). The verifier owns the independent
+  authoritative R2 numbers; the in-file assertion MUST agree with
+  theirs.
 - **R3** slow-client backpressure: upstream read provably pauses (gauge
   stays bounded), request still completes correctly.
 - **R4** empty response body + zero-length DATA; byte-identical, clean
   FIN.
-- **R5** upstream resets mid-response ⇒ client observes RESET_STREAM, no
-  truncated body presented as complete.
+- **R5** upstream resets mid-response ⇒ client observes RESET_STREAM
+  with **`error_code == H3_INTERNAL_ERROR == 0x0102` AND `!=
+  H3_NO_ERROR (0x0100)`**, AND no truncated body presented as
+  complete. The non-`H3_NO_ERROR` assertion is the load-bearing
+  cache-poisoning guard (binding condition C1): a bare "observes
+  RESET_STREAM" would still pass if the abort wrongly used the
+  graceful code. The same explicit-code assertion is added to the
+  **over-cap** and **premature-EOF-before-`Content-Length`** abort
+  cases (the §1.4 Q2 paragraph's "(see §2)" cross-reference) — each
+  ⇒ RESET_STREAM with `== 0x0102`, never a completed/truncated body.
 - **R6** client cancels mid-response ⇒ proxy stops reading upstream,
   per-stream state torn down, no leak.
 - **R7** chunked upstream response, byte-identical (new decoder).
