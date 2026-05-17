@@ -108,9 +108,60 @@ unreached. ⇒ producer `tx.send().await` never sees a closed receiver
 pooled upstream forever; pooled conn never freed, `h3_bridge.rs:1813`
 C2 teardown never reached. DoS: open-stream-then-STOP_SENDING.
 
-Status: routed to builder-2 (task #9), plan-approval pending; verifier
-re-verifies `r6_*` + `c2_clientgone_*` flip to PASS with the 13
-passing task-#6 tests and full workspace staying green (R3).
+**Fix `ad9374dc` (lead-designed/approved minimal variant; authored by
+builder2b — author ≠ verifier).** A single self-contained helper
+`reap_client_cancelled_responses(conn, &mut resp_rx_by_stream, &mut
+stream_response)` in `conn_actor.rs`, called in `run_actor` between the
+`poll_h3` block and the §1.4.3 gate: for each stream with a live
+response receiver, `conn.stream_writable(sid, 1)`; on
+`Err(StreamStopped|StreamReset)` drop the `Receiver` (⇒ producer's next
+`tx.send().await` ⇒ `Err(RespAbort::ClientGone)` ⇒
+`h3_to_h1_stream_resp` sets the pooled upstream non-reusable + returns,
+stopping the upstream read) and drop the `StreamTx` (never FIN, never
+RESET_STREAM — §1.3.4 ClientGone, distinct from the 0x0102 abort path).
+`drain_streams_to_conn` signature + the Progressive send branch
+UNCHANGED. Covers both empty- and non-empty-queue cancel via the
+per-iteration poll. A more invasive builder-2 variant (drain signature
+change + in-branch arms) was stood down as redundant/higher-risk; its
+analysis independently cross-validated the mechanism + the quiche 0.28
+`stream_writable` STOP_SENDING semantics.
+
+**Independent re-verification `ba64cfdd` (verifier; author ≠ verifier
+held — product code untouched by verifier): DEFECT-CLIENTGONE
+RE-VERIFIED.**
+- `r6_*` + `c2_clientgone_*` PASS deterministically 3× in 0.74 s.
+  **Causation proven by negative control:** with only the
+  `reap_client_cancelled_responses` *call* commented out (helper +
+  tests byte-identical) both FAIL with the exact original mechanism
+  (endless backend read never closes, 40.68 s); call restored ⇒ PASS
+  in 0.74 s. Real teardown asserted (backend read-half closes,
+  upstream read stops, single-slot pool idle==0).
+- C2 ClientGone parity with the other 5 RespAbort variants — PASS.
+- §1.3.4/C1: abort path UNCHANGED — R5 still RESET_STREAM
+  `0x0102 == H3_INTERNAL_ERROR != 0x0100`; no RESET_STREAM on
+  client-cancel (correct).
+- R8 preserved: R2/R3 numbers byte-identical to the pre-fix
+  authoritative bound (max_retained 73,859 B; ceiling 262,656 B;
+  4 MiB body; 15.97×). §1.4.3 gate + bounded channel untouched.
+- No regression: `h3_h1_resp_stream_e2e` 15 pass / 0 fail / 1 ignored
+  (the 2 locks flipped; R8 placeholder stays `#[ignore]`d — P1-C
+  scope, not weakened); `h3_h1_trailers_resp_e2e` pc1/pc2 GREEN
+  (PROTO-2-12); full `cargo test --workspace --all-features` ZERO
+  failures (202 ok); clippy `-D warnings` clean; `fmt --check` clean.
+  fmt note: 21 pre-existing fmt diffs ALL confined to the
+  verifier-authored task-#6 test file (from `56079026`), zero in
+  product / the `ad9374dc` fix — normalized by the verifier on its own
+  test file (pure formatting, suite re-ran 15/0/1 unchanged); product
+  code untouched so author ≠ verifier holds.
+
+### Phase 0 verdict — COMPLETE
+
+S4's response-streaming work (P1-A / P1-A.1 / P1-B) is now fully
+verified, the withheld P1-B regression run executed green, task #6's
+real-wire R1–R8 + C2 + C3 + non-vacuous memory proof + backpressure
+proof all pass, and the one surfaced defect (DEFECT-CLIENTGONE) is
+fixed and independently re-verified — no finding asterisked, no test
+weakened, no rule bent. **Phase 0 COMPLETE; Phase 1 (P1-C) may begin.**
 
 ---
 
