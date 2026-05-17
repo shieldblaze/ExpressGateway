@@ -1,0 +1,115 @@
+Diff in /home/ubuntu/Code/ExpressGateway/crates/lb-l4-xdp/src/nic_compat.rs:384:
+         // Allowed (no fleet-wide native-XDP regression); a driver
+         // without a kernel-keyed row → still fail-open (probe backstop).
+         Err(_) => {
+[31m-            return Ok(classify_unresolved_firmware(
+(B[m[31m-                &driver,
+(B[m[31m-                current_kernel_mm(),
+(B[m[31m-            ));
+(B[m[32m+            return Ok(classify_unresolved_firmware(&driver, current_kernel_mm()));
+(B[m         }
+     };
+     Ok(classify(&driver, &firmware))
+Diff in /home/ubuntu/Code/ExpressGateway/crates/lb-l4-xdp/tests/round8_ena_kernel_blocklist.rs:22:
+ //! `nic_compat::tests` (ena/pre-6.7 → Refuse) so BOTH lead-D1
+ //! assertions are proven.
+ 
+[31m-use lb_l4_xdp::nic_compat::{drv_supported, driver_of, DrvSupport};
+(B[m[32m+use lb_l4_xdp::nic_compat::{DrvSupport, driver_of, drv_supported};
+(B[m 
+ /// (1) lead D1: on THIS box (ena, kernel 7.0 — a NOT-known-bad combo,
+ /// firmware unresolved) `drv_supported("ens5")` MUST be `Allowed`.
+Diff in /home/ubuntu/Code/ExpressGateway/crates/lb-l4-xdp/tests/round8_ena_kernel_blocklist.rs:57:
+             );
+         }
+         Err(e) => {
+[31m-            eprintln!("SKIP: could not resolve {iface} driver ({e}) — \
+(B[m[31m-                 virtual/CI host");
+(B[m[32m+            eprintln!(
+(B[m[32m+                "SKIP: could not resolve {iface} driver ({e}) — \
+(B[m[32m+                 virtual/CI host"
+(B[m[32m+            );
+(B[m         }
+     }
+ }
+Diff in /home/ubuntu/Code/ExpressGateway/crates/lb-l4-xdp/tests/round8_verifier_baseline_70.rs:25:
+ //!   sudo -E env "PATH=$PATH" cargo test -p lb-l4-xdp \
+ //!     --test round8_verifier_baseline_70 -- --ignored --nocapture
+ 
+[31m-use lb_l4_xdp::loader::XdpLoader;
+(B[m use lb_l4_xdp::LB_XDP_ELF;
+[32m+use lb_l4_xdp::loader::XdpLoader;
+(B[m use std::path::Path;
+ use std::process::Command;
+ 
+Diff in /home/ubuntu/Code/ExpressGateway/crates/lb-l4-xdp/tests/round8_verifier_baseline_70.rs:73:
+     let prog: &mut Program = ebpf
+         .program_mut(PROG)
+         .expect("program_mut(lb_xdp) present after kernel_load");
+[31m-    let xdp: &Xdp = (&*prog)
+(B[m[31m-        .try_into()
+(B[m[31m-        .expect("lb_xdp is an Xdp program");
+(B[m[32m+    let xdp: &Xdp = (&*prog).try_into().expect("lb_xdp is an Xdp program");
+(B[m     let info = xdp.info().expect("ProgramInfo for the loaded prog");
+ 
+     let prog_id = info.id();
+Diff in /home/ubuntu/Code/ExpressGateway/tests/balancer_counter_sync.rs:82:
+     // post-join exact-equality check (the real CODE-2-14 contract) is
+     // retained UNCHANGED and still fails if the product ever drifts.
+     let churn_window = std::time::Instant::now() + Duration::from_secs(2);
+[31m-    while std::time::Instant::now() < churn_window
+(B[m[31m-        && !handles.iter().all(|h| h.is_finished())
+(B[m[31m-    {
+(B[m[32m+    while std::time::Instant::now() < churn_window && !handles.iter().all(|h| h.is_finished()) {
+(B[m         std::thread::yield_now();
+     }
+     stop.store(true, Ordering::Release);
+Diff in /home/ubuntu/Code/ExpressGateway/tests/h2_rapid_reset_goaway_under_load.rs:247:
+     let signal_in_send = send_err
+         .as_ref()
+         .map_or(false, |e| e.is_remote() || e.is_go_away());
+[31m-    let signal_in_conn =
+(B[m[31m-        matches!(&conn_res, Ok(Ok(Err(e))) if e.is_remote() || e.is_go_away());
+(B[m[32m+    let signal_in_conn = matches!(&conn_res, Ok(Ok(Err(e))) if e.is_remote() || e.is_go_away());
+(B[m     if signal_in_send || signal_in_conn {
+         return FloodOutcome::ServerGoAway;
+     }
+Diff in /home/ubuntu/Code/ExpressGateway/tests/h2_validation_before_forward.rs:203:
+ // ── Minimal raw HTTP/2 framing (the `h2` crate cannot express a
+ //    pseudo-header in trailers nor a content-length≠ΣDATA on purpose) ──
+ 
+[31m-async fn write_frame(
+(B[m[31m-    s: &mut TlsStream<TcpStream>,
+(B[m[31m-    ty: u8,
+(B[m[31m-    flags: u8,
+(B[m[31m-    sid: u32,
+(B[m[31m-    payload: &[u8],
+(B[m[31m-) {
+(B[m[32m+async fn write_frame(s: &mut TlsStream<TcpStream>, ty: u8, flags: u8, sid: u32, payload: &[u8]) {
+(B[m     let len = payload.len() as u32;
+     let mut hdr = [0u8; 9];
+     hdr[0] = ((len >> 16) & 0xff) as u8;
+Diff in /home/ubuntu/Code/ExpressGateway/tests/reload_zero_drop.rs:1277:
+             "stub must produce a byte-complete response (fixture sanity)"
+         );
+         assert!(!clean_eof, "stub deliberately never FIN-closed");
+[31m-        assert!(!has_conn_close, "stub deliberately sent no Connection: close");
+(B[m[32m+        assert!(
+(B[m[32m+            !has_conn_close,
+(B[m[32m+            "stub deliberately sent no Connection: close"
+(B[m[32m+        );
+(B[m 
+         let kind = classify_close(byte_complete, has_conn_close, clean_eof);
+         assert_eq!(
+Diff in /home/ubuntu/Code/ExpressGateway/tests/reload_zero_drop.rs:1290:
+         // test_sigterm_drains_h1_with_connection_close is exactly this
+         // matches!() — prove it now REJECTS the defect case.
+         assert!(
+[31m-            !matches!(
+(B[m[31m-                kind,
+(B[m[31m-                Some(CloseKind::Header) | Some(CloseKind::FinOnly)
+(B[m[31m-            ),
+(B[m[32m+            !matches!(kind, Some(CloseKind::Header) | Some(CloseKind::FinOnly)),
+(B[m             "the drain assertion would have FALSELY accepted a \
+              never-closed socket as a clean close"
+         );
