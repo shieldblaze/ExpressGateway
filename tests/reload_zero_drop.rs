@@ -59,8 +59,13 @@ use lb_controlplane::{ConfigManager, FileBackend};
 
 #[test]
 fn test_reload_zero_drop_under_load() {
-    let dir = std::env::temp_dir().join("eg-test-zero-drop");
-    let _ = std::fs::create_dir_all(&dir);
+    // F-COR-3: was a FIXED shared path (temp_dir().join(
+    // "eg-test-zero-drop")) — a stale leftover from a killed prior run
+    // or a re-invocation overlap makes the writes below panic on
+    // NotFound/PermissionDenied. Mirror the already-verified H1 fix
+    // (9e58bbf2): unique per-iteration dir. `unique_temp_dir` is `pub`
+    // in the sibling `mod drain`, reachable crate-relative.
+    let dir = drain::unique_temp_dir("reload-soak");
     let path = dir.join("zero_drop_config.toml");
 
     std::fs::write(&path, "config = \"v1\"").unwrap();
@@ -918,8 +923,9 @@ mod drain_tests {
             }
         };
 
-        let dir = std::env::temp_dir().join("eg-drain-h2");
-        let _ = std::fs::create_dir_all(&dir);
+        // F-COR-3: mirror the verified H1 fix (9e58bbf2) — unique
+        // per-cycle dir instead of the fixed shared "eg-drain-h2".
+        let dir = unique_temp_dir("drain-h2");
         let backend_port = ephemeral_port();
         let listener_port = ephemeral_port();
         let backend_addr: std::net::SocketAddr =
@@ -1059,8 +1065,9 @@ mod drain_tests {
             }
         };
 
-        let dir = std::env::temp_dir().join("eg-drain-h3");
-        let _ = std::fs::create_dir_all(&dir);
+        // F-COR-3: mirror the verified H1 fix (9e58bbf2) — unique
+        // per-cycle dir instead of the fixed shared "eg-drain-h3".
+        let dir = unique_temp_dir("drain-h3");
         let backend_port = ephemeral_port();
         let listener_port = ephemeral_port();
         let backend_addr: std::net::SocketAddr =
