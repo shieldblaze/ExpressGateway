@@ -132,3 +132,223 @@ F-SEC-1=044db8da, F-COR-1=9e41d07f, F-COR-6=7770de99. NOT pushed
 (lead pushes). No R7 blocker hit (F-SEC-1 D3 STOP condition was NOT
 triggered — deterministic gate achieved via the structural unit test).
 Author != verifier: a different agent must verify each.
+
+---
+
+## 2026-05-17 — F-SEC-1 REOPENED → v2 fix (builder-1)
+
+Task #7 (F-SEC-1) reopened. Prior commit 044db8da (CleanCloseIo
+break-on-Pending drain) was INSUFFICIENT — phase3-final/RESULT.md
+proved the real wire test `tests/h2_security_live.rs::rapid_reset_goaway`
+still FAILS ~1/3 under full-workspace 8-core load with the original
+signature `rapid_reset: send_err=None
+conn_res=Ok(Ok(Err(Error { kind: Io(Kind(BrokenPipe)) })))` (client
+never received a server GOAWAY).
+
+Plan written: audit/foundation-pass/plans/builder-1-fsec1-v2.md.
+Pre-authorized SECURITY scope (R6 unconditional) — proceeded without
+waiting. No R7 fork (lingering-close is the unambiguous RFC-correct
+behaviour).
+
+### ROOT CAUSE (proven from hyper-1.9.0 + h2-0.4.13 source)
+
+h2 DOES flush the GOAWAY before the FIN: rapid-reset trip ->
+`handle_go_away` queues GOAWAY + sets `State::Closing` ->
+`State::Closing` arm runs `ready!(self.codec.shutdown(cx))?` =
+`framed_write::shutdown` = `flush()` (writes GOAWAY bytes via
+`poll_write_buf`+`poll_flush`) THEN `inner.poll_shutdown` (FIN), THEN
+`State::Closed` -> conn future resolves Err -> hyper surfaces it -> our
+`res = &mut conn` arm returns Err -> `conn`/io dropped.
+
+The real defect is the ABORTIVE RST CLOSE. The prior CleanCloseIo
+drained inbound only until the first `Poll::Pending`, then BROKE AND
+FINed anyway. During a rapid-reset flood the abusive client is
+continuously streaming RST_STREAM frames, so the kernel recv buffer is
+essentially never durably empty and the client still has bytes in
+flight. Closing/dropping a TCP socket while the peer is still actively
+sending makes Linux emit an RST (RFC 1122 §4.2.2.13 / tcp_close); the
+client's TCP stack discards its ENTIRE RX buffer — incl. the
+already-arrived GOAWAY — on the RST, surfacing only Io(BrokenPipe),
+send_err=None. Nondeterministic (~1/3) = the RST-vs-clean-close race
+under 8-core contention. The prior unit proxy
+`clean_close_io_drains_inbound_before_fin` false-verified because it
+only modelled "finite data then clean EOF" — never "peer keeps
+sending past the FIN", the actual condition.
+
+### FIX (server-side, structural — bounded graceful lingering close)
+
+`CleanCloseIo::poll_shutdown` now performs a proper lingering close
+(nginx-`lingering_close` pattern): GOAWAY already flushed by h2's
+codec.shutdown (verified in source) BEFORE poll_shutdown; we drain
+inbound until the peer closes its write half (EOF — the normal
+reaction to a GOAWAY), and on `Poll::Pending` we RETURN
+`Poll::Pending` (yield, wait for the post-GOAWAY FIN) instead of
+racing the peer with our own RST-causing close. Hard-bounded by BOTH
+the existing 256 KiB DRAIN_CAP and a new 5 s LINGER_DEADLINE
+(tokio::time::Sleep, named const, strictly inside the 60 s
+HttpTimeouts::total) so a silent/wedged client cannot pin the worker.
+Client now receives ...GOAWAY...FIN in order on a cleanly closed
+socket -> decodes GOAWAY -> conn future resolves
+Err(GoAway(_,_,Remote)) (is_go_away()/is_remote()). DoS mitigation
+unchanged (connection still dies, bounded). No protocol behaviour
+change for conformant peers.
+
+Diff: crates/lb-l7/src/h2_proxy.rs only (CleanCloseIo doc/struct/
+poll_shutdown + new const + Duration import + 1 new unit test).
+Prior unit tests KEPT unchanged (R5) as additional coverage; new unit
+test `clean_close_io_does_not_fin_while_peer_still_open` asserts the
+core property (Pending => no FIN; FIN only after peer EOF). NOT the
+gate.
+
+### EVIDENCE (verbatim)
+
+PRE-FIX (cited phase3-final/RESULT.md, the FINAL R1 gate, verbatim):
+  rapid_reset: send_err=None conn_res=Ok(Ok(Err(Error { kind: Io(Kind(BrokenPipe)) })))
+  thread 'rapid_reset_goaway' panicked at tests/h2_security_live.rs:342:5
+Local reproduce attempt (3x full-workspace 8-core): all green this
+round (the ~1/3 rate did not surface in 3; mechanism already proven +
+captured in phase3-final, per directive "cite + reproduce once").
+
+POST-FIX isolated sanity:
+  rapid_reset: send_err=None conn_res=Ok(Ok(Err(Error { kind: GoAway(b"", PROTOCOL_ERROR, Remote) })))
+  test rapid_reset_goaway ... ok
+
+POST-FIX GATE (>=15 consecutive `rapid_reset_goaway` GREEN, each UNDER
+full `cargo test --workspace --all-features -- --test-threads=8`
+8-core contention): see appended block below once the 16-run harness
+completes.
+
+---
+
+## 2026-05-17 — F-SEC-1 v2 ACCEPTANCE EVIDENCE (builder-1)
+
+FINAL fix design (refined from the plan after discovering the
+lingering-only variant regressed `zero_window_stall_stream_reset` —
+that close must stay prompt): **FIN-FIRST then bounded post-FIN
+drain**. A TCP FIN never causes an RST; only DROPPING a socket with
+unread inbound does, and h2 drops the io the instant our poll_shutdown
+resolves. So poll_shutdown (1) delegates the inner FIN promptly (zero
+teardown-latency regression — keep-alive-stall close still immediate),
+then (2) reads+discards inbound until the peer's reciprocal FIN (EOF),
+hard-bounded by 256 KiB DRAIN_CAP AND a 1 s LINGER_DEADLINE, before
+letting the drop proceed. Client receives ...GOAWAY...FIN on a cleanly
+closed socket -> decodes the GOAWAY.
+
+### PRE-FIX (cited verbatim, phase3-final/RESULT.md — the FINAL R1 gate)
+```
+rapid_reset: send_err=None conn_res=Ok(Ok(Err(Error { kind: Io(Kind(BrokenPipe)) })))
+thread 'rapid_reset_goaway' panicked at tests/h2_security_live.rs:342:5:
+expected server-initiated GOAWAY after rapid-reset flood; send_err=None, conn_res=Ok(Ok(Err(Error { kind: Io(Kind(BrokenPipe)) })))
+```
+(Real R1 condition: `cargo test --workspace --all-features --
+--test-threads=8` ×3 8-core, FAILED 1/3. Mechanism proven in
+RESULT.md §R2; reproduced-once locally — the ~1/3 rate did not
+resurface in 3 but the captured FINAL-gate failure stands as the
+pre-fix proof per directive.)
+
+### POST-FIX GATE — REAL wire test, >=15 consecutive GREEN UNDER full
+### `cargo test --workspace --all-features -- --test-threads=8` 8-core
+### contention (--nocapture so the wire line is captured every run)
+
+Command per run: `cargo test --workspace --all-features --
+--test-threads=8 --nocapture`  (the literal R1 contended condition;
+--nocapture only adds stdout capture, does not change parallelism).
+
+Result: **16 / 16 consecutive GREEN, BEST_CONSEC=16** (bar is >=15).
+Every one of the 16 runs, for the real `tests/h2_security_live.rs::
+rapid_reset_goaway`:
+```
+rapid_reset: send_err=None conn_res=Ok(Ok(Err(Error { kind: GoAway(b"", PROTOCOL_ERROR, Remote) })))
+test rapid_reset_goaway ... ok
+test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.31s   (whole h2_security_live binary)
+```
+- GoAway(_, PROTOCOL_ERROR, **Remote**) => client h2 conn observed a
+  server-initiated GOAWAY: `is_go_away()` AND `is_remote()` both true
+  (the exact RFC 9113 §6.8 / CVE-2023-44487 contract the test asserts;
+  the assertion was NOT modified).
+- 16/16 runs contain that exact proof line; 0/16 runs have ANY
+  `BrokenPipe` / non-GOAWAY teardown in the rapid_reset path;
+  any_FAILED=0 every run; NO other test regressed (h2_security_live
+  6/6 incl. `zero_window_stall_stream_reset` every run).
+
+Gate harness: /tmp/fsec1_gate3.sh ; per-run logs /tmp/fsec1c_run_*.log
+(verbatim), summary /tmp/fsec1_gate3_out.log.
+
+Tests: NONE weakened/skipped/#[ignore]d/deleted (R5). The prior unit
+`clean_close_io_drains_inbound_before_fin` (which asserted the
+INSUFFICIENT design's invariant and false-verified) was REWRITTEN to
+assert the corrected, STRONGER invariant
+(`clean_close_io_drains_inbound_to_eof_before_resolving`: poll_shutdown
+must not resolve until inbound drained to EOF so the drop is clean) +
+a NEW core-property unit test
+(`clean_close_io_does_not_resolve_while_peer_still_open`) + the bound
+test kept. These unit tests + the untouched corroboration test
+(`tests/h2_rapid_reset_goaway_under_load.rs`) are ADDITIONAL coverage,
+explicitly NOT the gate — the gate is the real wire test above.
+
+R1 triple (`cargo test --workspace --all-features` ×3 8-core) + fmt +
+clippy result: appended below once /tmp/r1_triple.sh completes.
+Commit follows; NOT pushed. Author != verifier — a different agent
+re-verifies.
+
+---
+
+## 2026-05-17 — R1 triple + clippy/fmt result, and a SEPARATE flake found (builder-1)
+
+`/tmp/r1_triple.sh` (8-core, real R1 commands):
+```
+cargo fmt --check                                   -> FMT_EXIT=0    (CLEAN)
+cargo clippy --all-targets --all-features -Dwarnings -> CLIPPY_EXIT=0 (0 warn/err lines, CLEAN)
+R1 TEST RUN 1: exit=0   any_FAILED=0  h2_security_live: 6 passed 0 failed
+R1 TEST RUN 2: exit=0   any_FAILED=0  h2_security_live: 6 passed 0 failed
+R1 TEST RUN 3: exit=101 any_FAILED=2  h2_security_live: 6 passed 0 failed
+```
+
+F-SEC-1 itself: GREEN in ALL 3 R1-triple runs AND all 16 gate3 runs
+(h2_security_live 6/6 incl. rapid_reset_goaway every time). The fix
+holds unconditionally.
+
+R1-triple RUN 3's failure is a DIFFERENT, pre-existing test and is NOT
+caused by the F-SEC-1 change. Captured mechanism (R2 — from output,
+not hand-waved):
+```
+---- drain_tests::test_sigterm_drains_h2_with_goaway stdout ----
+thread '...' panicked at tests/reload_zero_drop.rs:1045:14:
+h2 TLS handshake must succeed (cert harness wiring): Custom { kind: InvalidData, error: InvalidMessage(InvalidContentType) }
+test result: FAILED. 5 passed; 1 failed; ... finished in 20.74s
+error: test failed, to rerun pass -p lb-integration-tests --test reload_zero_drop
+```
+Why it is independent of F-SEC-1:
+- It panics at the **rustls TLS handshake** (`InvalidMessage(
+  InvalidContentType)`) at reload_zero_drop.rs:1045 — a stage that
+  runs ENTIRELY BEFORE any h2/serve_connection/GOAWAY/poll_shutdown
+  logic. The F-SEC-1 change is confined to
+  `CleanCloseIo::poll_shutdown` (post-connection-establishment
+  teardown); that code is never reached when the handshake itself
+  fails.
+- Coverage proof: across the 16 gate3 full-workspace 8-core runs +
+  R1-triple runs 1&2, `reload_zero_drop` passed 6/6 EIGHTEEN times;
+  it failed exactly ONCE (R1-triple run 3) = ~1/19 under identical
+  contention. Provenance: last touched by F-COR-4 `05d801c1`
+  (pre-F-SEC-1); `git log` shows the F-SEC-1 commit does not touch
+  tests/reload_zero_drop.rs.
+- Isolated repro: `test_sigterm_drains_h2_with_goaway` (which DOES
+  exercise the SIGTERM->graceful_shutdown->CleanCloseIo::poll_shutdown
+  path) passes 5/5 in isolation, including its real GOAWAY-drain
+  assertion — so the F-SEC-1 teardown path is healthy; the failure is
+  purely the pre-handshake TLS flake.
+
+Classification: this is a SEPARATE pre-existing low-rate TLS-handshake
+flake in `tests/reload_zero_drop.rs::test_sigterm_drains_h2_with_
+goaway`, OUTSIDE F-SEC-1 (task #7) scope, NOT introduced by this fix.
+Flagging for the lead as a distinct finding for the R1 baseline
+workstream (it is a real defect per R2 — a TLS handshake should not
+intermittently fail; likely a cert-harness/listener-readiness race in
+that test's setup — but it is not F-SEC-1 and not mine to fix under
+this task's SECURITY-scoped directive; recorded, not asterisked).
+
+F-SEC-1 (task #7) acceptance bar — REAL wire test
+`tests/h2_security_live.rs::rapid_reset_goaway` GREEN >=15 consecutive
+(achieved 16/16) under full-workspace 8-core contention with the
+verbatim server GOAWAY and zero BrokenPipe — IS MET. Committing the
+F-SEC-1 fix now (NOT pushed). Author != verifier.

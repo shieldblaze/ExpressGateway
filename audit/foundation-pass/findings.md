@@ -36,6 +36,36 @@ Fix: drive the h2 connection future / graceful_shutdown to flush the
 queued GOAWAY before dropping `io`. Regression test must reproduce
 the flood under induced contention and assert a real GOAWAY.
 
+**[FIX NOTE v2 — builder-1, F-SEC-1 REOPENED]** Prior commit
+`044db8da` (CleanCloseIo break-on-Pending drain) was INSUFFICIENT —
+phase3-final/RESULT.md proved the real wire test
+`tests/h2_security_live.rs::rapid_reset_goaway` still FAILED ~1/3
+under full-workspace 8-core load with the original
+`send_err=None / Io(BrokenPipe)` signature (no server GOAWAY at the
+client). Refined ROOT CAUSE (proven from hyper-1.9.0 + h2-0.4.13
+source): h2 DOES flush the GOAWAY before the FIN
+(`State::Closing` → `codec.shutdown` = flush-then-poll_shutdown);
+the real defect is the **abortive RST close** — the prior drain
+stopped at the first `Poll::Pending` then FINed/dropped while the
+abusive client was still streaming, so the kernel emitted an RST that
+discarded the client's already-arrived GOAWAY (RFC 1122 §4.2.2.13).
+The prior unit proxy false-verified because it only modelled
+"finite data then clean EOF", never "peer keeps sending past close".
+FIX v2: `CleanCloseIo::poll_shutdown` now does **FIN-first then a
+bounded post-FIN drain** (a FIN never RSTs; only dropping with unread
+data does) — send the FIN promptly (no teardown-latency regression,
+keep-alive-stall close still prompt), then read+discard inbound until
+the peer's reciprocal FIN (EOF), hard-bounded by the 256 KiB
+`DRAIN_CAP` AND a 1 s `LINGER_DEADLINE`, before letting h2 drop the
+io. Client now receives `…GOAWAY…FIN` on a cleanly-closed socket and
+decodes the GOAWAY. GATE = the REAL wire test `rapid_reset_goaway`
+green ≥15 consecutive UNDER full `cargo test --workspace
+--all-features --test-threads=8` 8-core contention (the unit/
+corroboration tests are kept as ADDITIONAL coverage, NOT the gate;
+none weakened/deleted per R5; the rapid_reset assertion is unchanged).
+Source diff: `crates/lb-l7/src/h2_proxy.rs` only. Commit follows once
+the gate bar is captured.
+
 ---
 
 ## CORRECTNESS / CONFORMANCE tier (R6 → FIX this session + reg test)
