@@ -218,9 +218,7 @@ enum RespBody {
     /// client will take. The proxy MUST `RespAbort::OverCap` ⇒
     /// RESET_STREAM with 0x0102, never present a body as complete
     /// (R5 over-cap sub-case, binding C1).
-    OverCap {
-        declared_len: usize,
-    },
+    OverCap { declared_len: usize },
     /// Endless body (huge `Content-Length`, never satisfied); writes
     /// until the proxy stops reading (R6 client-cancel: prove the
     /// upstream read halts). `read_done` is fired once the backend's
@@ -382,11 +380,8 @@ async fn spawn_resp_backend(
                     // Probe whether the proxy closed its read half: a
                     // zero-byte read returns Ok(0) on FIN / Err on RST.
                     let mut probe = [0u8; 1];
-                    match tokio::time::timeout(
-                        Duration::from_millis(1),
-                        sock.read(&mut probe),
-                    )
-                    .await
+                    match tokio::time::timeout(Duration::from_millis(1), sock.read(&mut probe))
+                        .await
                     {
                         Ok(Ok(0)) | Ok(Err(_)) => break, // upstream torn down.
                         _ => {}
@@ -706,7 +701,9 @@ async fn drive_h3_response_client_stalled(
         (":authority".to_string(), REQUEST_AUTHORITY.to_string()),
         (":path".to_string(), REQUEST_PATH.to_string()),
     ];
-    let hb = encoder.encode(&headers).map_err(|e| format!("qpack: {e}"))?;
+    let hb = encoder
+        .encode(&headers)
+        .map_err(|e| format!("qpack: {e}"))?;
     let headers_frame = encode_frame(&H3Frame::Headers { header_block: hb })
         .map_err(|e| format!("h3 frame: {e}"))?;
 
@@ -733,7 +730,12 @@ async fn drive_h3_response_client_stalled(
         }
         if conn.is_closed() {
             if fin || reset_code.is_some() {
-                return Ok(ClientOutcome { status, body, fin, reset_code });
+                return Ok(ClientOutcome {
+                    status,
+                    body,
+                    fin,
+                    reset_code,
+                });
             }
             return Err(format!(
                 "conn closed early: peer={:?} local={:?} status={status:?} body={}",
@@ -805,8 +807,7 @@ async fn drive_h3_response_client_stalled(
                                 .map_err(|e| format!("qpack decode: {e}"))?;
                             for (n, v) in hdrs {
                                 if n == ":status" {
-                                    status =
-                                        Some(v.parse().map_err(|_| "status".to_string())?);
+                                    status = Some(v.parse().map_err(|_| "status".to_string())?);
                                 }
                             }
                         }
@@ -828,9 +829,7 @@ async fn drive_h3_response_client_stalled(
         // wall-time to fill its bounded in-flight window against us.
         if in_stall && !sampled {
             if let Some(t) = stall_until {
-                if t.saturating_duration_since(tokio::time::Instant::now())
-                    <= stall / 2
-                {
+                if t.saturating_duration_since(tokio::time::Instant::now()) <= stall / 2 {
                     sample();
                     sampled = true;
                 }
@@ -838,7 +837,12 @@ async fn drive_h3_response_client_stalled(
         }
 
         if (fin && status.is_some()) || reset_code.is_some() {
-            return Ok(ClientOutcome { status, body, fin, reset_code });
+            return Ok(ClientOutcome {
+                status,
+                body,
+                fin,
+                reset_code,
+            });
         }
 
         loop {
@@ -1018,11 +1022,7 @@ async fn r2_response_memory_bounded_through_stalled_client() {
     // directive — this is the same expression `drain_resp_channels`
     // feeds `record_resp_retained` (conn_actor.rs:382-385).
     let c5_channel_bound = H3_RESP_CHANNEL_DEPTH * (H3_RESP_CHUNK_MAX + H3_FRAME_HDR_MAX);
-    let ceiling = resp_retained_ceiling(
-        H3_RESP_CHANNEL_DEPTH,
-        H3_RESP_CHUNK_MAX,
-        H3_FRAME_HDR_MAX,
-    );
+    let ceiling = resp_retained_ceiling(H3_RESP_CHANNEL_DEPTH, H3_RESP_CHUNK_MAX, H3_FRAME_HDR_MAX);
     assert_eq!(
         ceiling,
         4 * c5_channel_bound,
@@ -1045,8 +1045,11 @@ async fn r2_response_memory_bounded_through_stalled_client() {
     let certs = generate_loopback_certs();
     let expected = binary_body(total_body);
     let resume = Arc::new(Notify::new());
-    let (backend, backend_h) =
-        spawn_resp_backend(RespBody::ContentLength(expected.clone()), Some(resume.clone())).await;
+    let (backend, backend_h) = spawn_resp_backend(
+        RespBody::ContentLength(expected.clone()),
+        Some(resume.clone()),
+    )
+    .await;
     let (listener, server, _sd) = start_listener(&certs, backend).await;
     let (conn, sock) = client_conn(server, &certs.ca);
 
@@ -1063,14 +1066,9 @@ async fn r2_response_memory_bounded_through_stalled_client() {
     let deadline = tokio::time::Instant::now() + Duration::from_secs(90);
     // Stall ≈1.6s of NOT reading the response stream — spans the body
     // release, so the proxy's window is provably full while we sample.
-    let out = drive_h3_response_client_stalled(
-        conn,
-        &sock,
-        Duration::from_millis(1600),
-        deadline,
-        || {},
-    )
-    .await;
+    let out =
+        drive_h3_response_client_stalled(conn, &sock, Duration::from_millis(1600), deadline, || {})
+            .await;
     let _ = tokio::time::timeout(Duration::from_secs(3), listener.shutdown()).await;
     backend_h.abort();
 
@@ -1096,7 +1094,10 @@ async fn r2_response_memory_bounded_through_stalled_client() {
          proxy would retain ≈ body size."
     );
     assert_eq!(out.status, Some(UPSTREAM_STATUS));
-    assert!(out.fin, "R2 must end with a clean FIN after resume (liveness)");
+    assert!(
+        out.fin,
+        "R2 must end with a clean FIN after resume (liveness)"
+    );
     assert_eq!(
         out.body, expected,
         "R2 body must be byte-identical after the stall+resume"
@@ -1121,11 +1122,7 @@ async fn r3_slow_client_backpressures_upstream_read() {
     };
 
     MAX_RETAINED_RESP_BYTES.store(0, Ordering::SeqCst);
-    let ceiling = resp_retained_ceiling(
-        H3_RESP_CHANNEL_DEPTH,
-        H3_RESP_CHUNK_MAX,
-        H3_FRAME_HDR_MAX,
-    );
+    let ceiling = resp_retained_ceiling(H3_RESP_CHANNEL_DEPTH, H3_RESP_CHUNK_MAX, H3_FRAME_HDR_MAX);
 
     let total_body = 4 * 1024 * 1024usize; // 4 MiB, 16× the ceiling
     let certs = generate_loopback_certs();
@@ -1325,11 +1322,7 @@ async fn r6_client_cancel_midresponse_stops_upstream_read() {
     // The proxy must drop the pooled upstream connection promptly after
     // the cancel; the backend's read half then observes close. If this
     // times out the upstream read did NOT stop ⇒ leak / no teardown.
-    let torn_down = tokio::time::timeout(
-        Duration::from_secs(20),
-        read_closed.notified(),
-    )
-    .await;
+    let torn_down = tokio::time::timeout(Duration::from_secs(20), read_closed.notified()).await;
 
     let written_at_teardown = bytes_written.load(Ordering::Relaxed);
     tokio::time::sleep(Duration::from_millis(300)).await;
@@ -1397,14 +1390,10 @@ async fn r7_chunked_upstream_response_byte_identical() {
 
 /// Drive one C2 abort scenario through a single-slot pool; returns the
 /// client outcome and the post-abort idle-count for the backend.
-async fn run_c2_scenario(
-    body: RespBody,
-    cancel_after: Option<usize>,
-) -> (ClientOutcome, usize) {
+async fn run_c2_scenario(body: RespBody, cancel_after: Option<usize>) -> (ClientOutcome, usize) {
     let certs = generate_loopback_certs();
     let (backend, backend_h) = spawn_resp_backend(body, None).await;
-    let (listener, server, _sd, pool) =
-        start_listener_single_slot_pool(&certs, backend).await;
+    let (listener, server, _sd, pool) = start_listener_single_slot_pool(&certs, backend).await;
     let (conn, sock) = client_conn(server, &certs.ca);
     let deadline = tokio::time::Instant::now() + Duration::from_secs(60);
     let out = drive_h3_response_client(conn, &sock, vec![], cancel_after, deadline).await;
@@ -1429,7 +1418,10 @@ async fn c2_every_abort_variant_drops_pooled_upstream_and_resets() {
     )
     .await;
     assert_c1_reset(&out, "C2/UpstreamReset");
-    assert_eq!(idle, 0, "C2/UpstreamReset: poisoned upstream must NOT be parked");
+    assert_eq!(
+        idle, 0,
+        "C2/UpstreamReset: poisoned upstream must NOT be parked"
+    );
 
     // PrematureEof (EOF before Content-Length).
     let (out, idle) = run_c2_scenario(
@@ -1441,7 +1433,10 @@ async fn c2_every_abort_variant_drops_pooled_upstream_and_resets() {
     )
     .await;
     assert_c1_reset(&out, "C2/PrematureEof");
-    assert_eq!(idle, 0, "C2/PrematureEof: poisoned upstream must NOT be parked");
+    assert_eq!(
+        idle, 0,
+        "C2/PrematureEof: poisoned upstream must NOT be parked"
+    );
 
     // ChunkedDecode (malformed chunk framing mid-body): a first chunk
     // decodes, then a non-hex size token ⇒ RespAbort::ChunkedDecode.
@@ -1451,7 +1446,10 @@ async fn c2_every_abort_variant_drops_pooled_upstream_and_resets() {
     )
     .await;
     assert_c1_reset(&out, "C2/ChunkedDecode");
-    assert_eq!(idle, 0, "C2/ChunkedDecode: poisoned upstream must NOT be parked");
+    assert_eq!(
+        idle, 0,
+        "C2/ChunkedDecode: poisoned upstream must NOT be parked"
+    );
 
     // OverCap (declared > MAX_RESPONSE_BODY_BYTES).
     let (out, idle) = run_c2_scenario(
@@ -1503,15 +1501,13 @@ async fn c2_clientgone_drops_pooled_upstream() {
         None,
     )
     .await;
-    let (listener, server, _sd, pool) =
-        start_listener_single_slot_pool(&certs, backend).await;
+    let (listener, server, _sd, pool) = start_listener_single_slot_pool(&certs, backend).await;
     let (conn, sock) = client_conn(server, &certs.ca);
     let deadline = tokio::time::Instant::now() + Duration::from_secs(45);
     let drive = tokio::spawn(async move {
         drive_h3_response_client(conn, &sock, vec![], Some(32 * 1024), deadline).await
     });
-    let torn_down =
-        tokio::time::timeout(Duration::from_secs(20), read_closed.notified()).await;
+    let torn_down = tokio::time::timeout(Duration::from_secs(20), read_closed.notified()).await;
     let idle = pool.idle_count_for(backend);
     let _ = tokio::time::timeout(Duration::from_secs(3), listener.shutdown()).await;
     let _ = tokio::time::timeout(Duration::from_secs(5), drive).await;
@@ -1534,8 +1530,7 @@ async fn c2_clientgone_drops_pooled_upstream() {
 async fn run_c2_raw_chunked(raw: &str) -> (ClientOutcome, usize) {
     let certs = generate_loopback_certs();
     let (backend, backend_h) = spawn_raw_backend(raw.as_bytes().to_vec()).await;
-    let (l, server, _sd, pool) =
-        start_listener_single_slot_pool(&certs, backend).await;
+    let (l, server, _sd, pool) = start_listener_single_slot_pool(&certs, backend).await;
     let (conn, sock) = client_conn(server, &certs.ca);
     let deadline = tokio::time::Instant::now() + Duration::from_secs(45);
     let out = drive_h3_response_client(conn, &sock, vec![], None, deadline).await;
@@ -1570,8 +1565,7 @@ async fn run_c2_bad_head() -> (ClientOutcome, usize) {
             let _ = sock.shutdown().await;
         }
     });
-    let (l, server, _sd, pool) =
-        start_listener_single_slot_pool(&certs, backend).await;
+    let (l, server, _sd, pool) = start_listener_single_slot_pool(&certs, backend).await;
     let (conn, sock) = client_conn(server, &certs.ca);
     let deadline = tokio::time::Instant::now() + Duration::from_secs(45);
     let out = drive_h3_response_client(conn, &sock, vec![], None, deadline).await;
