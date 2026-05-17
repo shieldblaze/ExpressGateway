@@ -118,6 +118,75 @@ pub enum ReqBodyEvent {
     Reset,
 }
 
+/// SESSION 4 / P1-A: depth of the per-stream bounded RESPONSE channel
+/// from the `stream_h1_response` producer task back into the actor.
+/// Mirrors [`H3_BODY_CHANNEL_DEPTH`](crate::conn_actor::H3_BODY_CHANNEL_DEPTH).
+/// Memory safety = this depth × [`H3_RESP_CHUNK_MAX`] (+ frame header),
+/// INDEPENDENT of total response size and of [`MAX_RESPONSE_BODY_BYTES`].
+pub const H3_RESP_CHANNEL_DEPTH: usize = 8;
+
+/// SESSION 4 / P1-A: largest response-body slice a single DATA frame in
+/// a [`RespEvent::Bytes`] carries. Mirrors [`H3_BODY_CHUNK_MAX`]. A
+/// larger upstream read is split into ≤ this many payload bytes per
+/// frame so in-flight memory stays bounded regardless of body size.
+pub const H3_RESP_CHUNK_MAX: usize = 8 * 1024;
+
+/// SESSION 4 / P1-A: a `RespEvent::Bytes` carries a PRE-ENCODED H3
+/// frame — a ≤ [`H3_RESP_CHUNK_MAX`] payload PLUS a small frame header
+/// (type + length QUIC varints). A well-formed H3 frame header is ≤ 16
+/// bytes (two varints, RFC 9000 §16); this is the same bound as the
+/// existing [`MAX_FRAME_HEADER_BYTES`] and is re-exported under a
+/// response-side name so the §1.5 memory gauge can OVER-estimate
+/// channel occupancy (never under — soundness parity with the
+/// request-side gauge).
+pub const H3_FRAME_HDR_MAX: usize = MAX_FRAME_HEADER_BYTES;
+
+/// SESSION 4 / P1-A: one unit of the bounded response byte-pipe from
+/// the H1-upstream reader task ([`stream_h1_response`]) back to the
+/// actor. PRE-ENCODED H3 wire bytes so the actor-side drain stays a
+/// uniform byte queue (the producer owns ALL H3 framing: HEADERS /
+/// DATA / trailing-HEADERS). H2/H3 + inline-error responses do NOT use
+/// this channel — they remain on the legacy buffered path.
+#[derive(Debug, Clone)]
+pub enum RespEvent {
+    /// Pre-encoded H3 wire bytes to `stream_send` to the client as-is.
+    Bytes(Bytes),
+    /// All response bytes delivered — the actor sets FIN on the client
+    /// stream.
+    End,
+    /// Abort: the actor RESET_STREAMs the client (never FIN). Emitted
+    /// for upstream reset / premature EOF / chunked-decode error /
+    /// over-cap / bad head / client cancel.
+    Reset,
+}
+
+/// SESSION 4 / P1-A: why [`stream_h1_response`] aborted. EVERY variant
+/// maps to a single client-facing outcome — emit [`RespEvent::Reset`]
+/// (best-effort) and return `Err(RespAbort)` — so the actor
+/// RESET_STREAMs the client and NEVER sets FIN. A partial body is
+/// therefore never presentable as a complete response (response-
+/// splitting / cache-poisoning guard; parity with the request-side
+/// P1-B abort). The caller MUST mark the pooled upstream connection
+/// NON-reusable on every variant (approval condition C2).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum RespAbort {
+    /// Upstream socket reset / read error mid-response.
+    UpstreamReset,
+    /// Socket EOF before the declared `Content-Length` was satisfied.
+    PrematureEof,
+    /// `Transfer-Encoding: chunked` decode error, or EOF before the
+    /// chunked terminator.
+    ChunkedDecode,
+    /// Total response exceeded the cap ([`MAX_RESPONSE_BODY_BYTES`]).
+    OverCap,
+    /// HEADERS parse failure / head exceeded the head cap before the
+    /// `\r\n\r\n` terminator.
+    BadHead,
+    /// The response channel was closed by the actor (the H3 client
+    /// cancelled the stream) — stop reading the upstream.
+    ClientGone,
+}
+
 /// SESSION 2 / P1-A — phase of the per-stream inbound decoder.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 enum RxPhase {
@@ -731,24 +800,454 @@ fn parse_status_line(line: &str) -> Result<u16, String> {
 /// Surfaces a string-formatted error if QPACK encoding or the H3
 /// frame encoder reject the inputs.
 pub fn encode_h3_response(status: u16, body: &[u8]) -> Result<Vec<u8>, String> {
-    let encoder = QpackEncoder::new();
-    let headers: Vec<(String, String)> = vec![
-        (":status".to_string(), status.to_string()),
-        ("content-length".to_string(), body.len().to_string()),
-    ];
-    let header_block = encoder
-        .encode(&headers)
-        .map_err(|e| format!("qpack encode: {e}"))?;
-    let headers_frame = encode_frame(&H3Frame::Headers { header_block })
-        .map_err(|e| format!("h3 headers frame: {e}"))?;
-    let data_frame = encode_frame(&H3Frame::Data {
-        payload: Bytes::copy_from_slice(body),
-    })
-    .map_err(|e| format!("h3 data frame: {e}"))?;
+    let headers_frame = encode_h3_headers_frame(status, Some(body.len()))?;
+    let data_frame = encode_h3_data_frame(body)?;
     let mut out = Vec::with_capacity(headers_frame.len() + data_frame.len());
     out.extend_from_slice(&headers_frame);
     out.extend_from_slice(&data_frame);
     Ok(out)
+}
+
+/// SESSION 4 / P1-A: encode just the H3 response HEADERS frame.
+///
+/// `content_length`:
+///   * `Some(n)` — emits `:status` + `content-length: n`. With
+///     `Some(body.len())` this is **byte-identical** to the HEADERS
+///     frame [`encode_h3_response`] produced before this refactor
+///     (the no-regression contract — every existing CL backend +
+///     test client depends on it).
+///   * `None` — emits `:status` only (length unknown:
+///     chunked / EOF-delimited; the client relies on stream FIN).
+///
+/// QPACK / frame-encoder behaviour is unchanged from the pre-refactor
+/// `encode_h3_response`.
+///
+/// # Errors
+///
+/// Surfaces a string-formatted error if QPACK encoding or the H3
+/// frame encoder reject the inputs.
+pub fn encode_h3_headers_frame(
+    status: u16,
+    content_length: Option<usize>,
+) -> Result<Bytes, String> {
+    let encoder = QpackEncoder::new();
+    let mut headers: Vec<(String, String)> = vec![(":status".to_string(), status.to_string())];
+    if let Some(n) = content_length {
+        headers.push(("content-length".to_string(), n.to_string()));
+    }
+    let header_block = encoder
+        .encode(&headers)
+        .map_err(|e| format!("qpack encode: {e}"))?;
+    encode_frame(&H3Frame::Headers { header_block }).map_err(|e| format!("h3 headers frame: {e}"))
+}
+
+/// SESSION 4 / P1-A: encode one H3 response DATA frame carrying
+/// `payload`. Byte-identical to the DATA frame [`encode_h3_response`]
+/// produced before this refactor.
+///
+/// # Errors
+///
+/// Surfaces a string-formatted error if the H3 frame encoder rejects
+/// the input.
+pub fn encode_h3_data_frame(payload: &[u8]) -> Result<Bytes, String> {
+    encode_frame(&H3Frame::Data {
+        payload: Bytes::copy_from_slice(payload),
+    })
+    .map_err(|e| format!("h3 data frame: {e}"))
+}
+
+/// SESSION 4 / P1-A: response-body framing decided from the parsed
+/// upstream H1 response headers.
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum RespFraming {
+    /// `Content-Length: n` — stream exactly `n` body bytes.
+    ContentLength(usize),
+    /// `Transfer-Encoding: chunked` — incremental de-chunk.
+    Chunked,
+    /// No CL, no TE — body runs until socket EOF.
+    Eof,
+}
+
+/// SESSION 4 / P1-A: incremental HTTP/1.1 chunked-transfer decoder for
+/// RESPONSES (production previously did not parse chunked responses at
+/// all). Feed raw socket bytes; it yields decoded payload and detects
+/// the zero-size terminator. Every malformed input ⇒
+/// [`RespAbort::ChunkedDecode`] (approval condition C3) — never a
+/// truncated/forwarded body presented as complete.
+#[derive(Debug)]
+struct ChunkDecoder {
+    /// Bytes not yet consumed (a partial chunk-size line or a partial
+    /// chunk body straddling reads). Bounded: a chunk-size line is
+    /// rejected past [`MAX_FRAME_HEADER_BYTES`]-class small limits, and
+    /// payload is drained immediately (never whole-chunk buffered).
+    buf: Vec<u8>,
+    /// `Some(remaining)` while inside a chunk body; `None` while
+    /// expecting the next chunk-size line.
+    in_chunk: Option<usize>,
+    /// The zero-size chunk was seen — body complete (trailers, if any,
+    /// follow but are handled by P1-C, not here).
+    done: bool,
+}
+
+/// Max bytes a chunk-size line (`<hex>[;ext]\r\n`) may occupy before we
+/// reject it as malformed/hostile framing (smuggling guard, C3).
+const MAX_CHUNK_SIZE_LINE: usize = 256;
+
+impl ChunkDecoder {
+    const fn new() -> Self {
+        Self {
+            buf: Vec::new(),
+            in_chunk: None,
+            done: false,
+        }
+    }
+
+    /// Feed `input`, appending decoded payload to `out`. Returns
+    /// `Err(RespAbort::ChunkedDecode)` on ANY malformed framing.
+    fn feed(&mut self, input: &[u8], out: &mut Vec<u8>) -> Result<(), RespAbort> {
+        self.buf.extend_from_slice(input);
+        loop {
+            if self.done {
+                return Ok(());
+            }
+            match self.in_chunk {
+                Some(0) => {
+                    // Expect the trailing CRLF after a chunk body.
+                    let Some(lead) = self.buf.get(..2) else {
+                        return Ok(());
+                    };
+                    if lead != b"\r\n" {
+                        return Err(RespAbort::ChunkedDecode);
+                    }
+                    self.buf.drain(..2);
+                    self.in_chunk = None;
+                }
+                Some(remaining) => {
+                    if self.buf.is_empty() {
+                        return Ok(());
+                    }
+                    let take = remaining.min(self.buf.len());
+                    let Some(slice) = self.buf.get(..take) else {
+                        return Err(RespAbort::ChunkedDecode);
+                    };
+                    out.extend_from_slice(slice);
+                    self.buf.drain(..take);
+                    self.in_chunk = Some(remaining - take);
+                }
+                None => {
+                    // Awaiting a chunk-size line terminated by CRLF.
+                    let Some(nl) = self.buf.windows(2).position(|w| w == b"\r\n") else {
+                        if self.buf.len() > MAX_CHUNK_SIZE_LINE {
+                            return Err(RespAbort::ChunkedDecode);
+                        }
+                        return Ok(());
+                    };
+                    if nl > MAX_CHUNK_SIZE_LINE {
+                        return Err(RespAbort::ChunkedDecode);
+                    }
+                    let Some(line) = self.buf.get(..nl) else {
+                        return Err(RespAbort::ChunkedDecode);
+                    };
+                    // Strip a chunk extension (`;name=value`); the size
+                    // is the hex before the first ';'.
+                    let hex_end = line.iter().position(|&b| b == b';').unwrap_or(line.len());
+                    let hex = std::str::from_utf8(line.get(..hex_end).unwrap_or(line))
+                        .map_err(|_| RespAbort::ChunkedDecode)?
+                        .trim();
+                    if hex.is_empty() {
+                        return Err(RespAbort::ChunkedDecode);
+                    }
+                    let size = usize::from_str_radix(hex, 16)
+                        .map_err(|_| RespAbort::ChunkedDecode)?;
+                    self.buf.drain(..nl + 2);
+                    if size == 0 {
+                        // Zero-size terminator. Any non-CRLF junk
+                        // immediately after (before an optional trailer
+                        // section / final CRLF) is a smuggling signal;
+                        // P1-C owns the trailer-section parse, so here
+                        // we only mark the body complete.
+                        self.done = true;
+                        return Ok(());
+                    }
+                    self.in_chunk = Some(size);
+                }
+            }
+        }
+    }
+}
+
+/// SESSION 4 / P1-A — **incremental, bounded, backpressured** H3
+/// RESPONSE egress: read the H1 upstream response and pipe it to the
+/// actor as pre-encoded H3 wire bytes over the bounded `tx`, as the
+/// bytes arrive.
+///
+/// 1. Read only until the `\r\n\r\n` head terminator (bounded by a
+///    64 KiB head cap → [`RespAbort::BadHead`] if exceeded), parse the
+///    status line + headers.
+/// 2. Emit the HEADERS [`RespEvent::Bytes`] **immediately** — before
+///    any body byte is read. `Content-Length` ⇒
+///    [`encode_h3_headers_frame`]`(status, Some(n))` (byte-identical
+///    to the legacy HEADERS — the no-regression contract); chunked /
+///    EOF ⇒ `Some` length unknown → `None` (`:status` only, client
+///    relies on FIN).
+/// 3. Stream the body per framing as ≤ [`H3_RESP_CHUNK_MAX`] DATA
+///    frames, each emitted the instant its bytes arrive from the
+///    socket (NOT after the whole body). `tx.send(..).await` blocking
+///    on the bounded channel is the backpressure point: a stalled H3
+///    client → full channel → this `await` parks → upstream socket
+///    `read()` not called → TCP backpressure to the upstream.
+/// 4. On clean completion emit [`RespEvent::End`] and return `Ok(())`.
+///    Every failure (upstream reset / premature EOF before CL /
+///    chunked-decode error / over-cap / bad head / channel closed by
+///    a cancelling client) emits [`RespEvent::Reset`] (best-effort)
+///    and returns `Err(RespAbort)` — NEVER a truncated body presented
+///    as complete (response-splitting / cache-poisoning guard).
+///
+/// The caller MUST mark the pooled upstream NON-reusable on any
+/// `Err(RespAbort)` (approval condition C2).
+///
+/// # Errors
+///
+/// Returns [`RespAbort`] (variant identifies the cause) on any
+/// upstream / framing / cap / client-cancel failure.
+pub async fn stream_h1_response(
+    stream: &mut TcpStream,
+    tx: &tokio::sync::mpsc::Sender<RespEvent>,
+    cap: usize,
+) -> Result<(), RespAbort> {
+    /// Send a `RespEvent`, mapping a closed channel (cancelling
+    /// client) to `ClientGone` so the producer stops reading upstream.
+    macro_rules! send {
+        ($tx:expr, $ev:expr) => {
+            $tx.send($ev).await.map_err(|_| RespAbort::ClientGone)?
+        };
+    }
+
+    // --- 1. read + parse the head, bounded ---
+    const HEAD_CAP: usize = 64 * 1024;
+    let mut head = Vec::with_capacity(1024);
+    let mut rbuf = [0u8; 8 * 1024];
+    let sep = loop {
+        if let Some(p) = find_header_sep(&head) {
+            break p;
+        }
+        if head.len() > HEAD_CAP {
+            let _ = tx.send(RespEvent::Reset).await;
+            return Err(RespAbort::BadHead);
+        }
+        let n = match stream.read(&mut rbuf).await {
+            Ok(n) => n,
+            Err(_) => {
+                let _ = tx.send(RespEvent::Reset).await;
+                return Err(RespAbort::UpstreamReset);
+            }
+        };
+        if n == 0 {
+            // EOF before the header terminator: nothing parseable.
+            let _ = tx.send(RespEvent::Reset).await;
+            return Err(RespAbort::BadHead);
+        }
+        head.extend_from_slice(rbuf.get(..n).unwrap_or(&rbuf));
+    };
+    // Bytes already read past the header terminator are the first body
+    // bytes — must NOT be lost.
+    let mut body_prefix = head.split_off(sep + 4);
+    head.truncate(sep);
+
+    let head_str = std::str::from_utf8(&head).map_err(|_| {
+        // best-effort Reset; mapped to BadHead.
+        RespAbort::BadHead
+    });
+    let head_str = match head_str {
+        Ok(s) => s,
+        Err(e) => {
+            let _ = tx.send(RespEvent::Reset).await;
+            return Err(e);
+        }
+    };
+    let mut lines = head_str.split("\r\n");
+    let status = match lines
+        .next()
+        .ok_or(RespAbort::BadHead)
+        .and_then(|l| parse_status_line(l).map_err(|_| RespAbort::BadHead))
+    {
+        Ok(s) => s,
+        Err(e) => {
+            let _ = tx.send(RespEvent::Reset).await;
+            return Err(e);
+        }
+    };
+    let mut content_length: Option<usize> = None;
+    let mut chunked = false;
+    for line in lines {
+        let Some((k, v)) = line.split_once(':') else {
+            continue;
+        };
+        let k = k.trim().to_ascii_lowercase();
+        if k == "content-length" {
+            match v.trim().parse::<usize>() {
+                Ok(n) => content_length = Some(n),
+                Err(_) => {
+                    let _ = tx.send(RespEvent::Reset).await;
+                    return Err(RespAbort::BadHead);
+                }
+            }
+        } else if k == "transfer-encoding" && v.to_ascii_lowercase().contains("chunked") {
+            chunked = true;
+        }
+    }
+    // Transfer-Encoding takes precedence over Content-Length (RFC 9112
+    // §6.1); a message with BOTH is a smuggling vector — reject.
+    let framing = if chunked {
+        if content_length.is_some() {
+            let _ = tx.send(RespEvent::Reset).await;
+            return Err(RespAbort::BadHead);
+        }
+        RespFraming::Chunked
+    } else if let Some(n) = content_length {
+        RespFraming::ContentLength(n)
+    } else {
+        RespFraming::Eof
+    };
+
+    // --- 2. emit HEADERS immediately (before any body byte) ---
+    let hdr_len = match &framing {
+        RespFraming::ContentLength(n) => Some(*n),
+        RespFraming::Chunked | RespFraming::Eof => None,
+    };
+    let headers_frame = match encode_h3_headers_frame(status, hdr_len) {
+        Ok(f) => f,
+        Err(_) => {
+            let _ = tx.send(RespEvent::Reset).await;
+            return Err(RespAbort::BadHead);
+        }
+    };
+    let mut total: usize = 0;
+    if headers_frame.len() > cap {
+        let _ = tx.send(RespEvent::Reset).await;
+        return Err(RespAbort::OverCap);
+    }
+    total = total.saturating_add(headers_frame.len());
+    send!(tx, RespEvent::Bytes(headers_frame));
+
+    // --- 3. stream the body per framing, as it arrives ---
+    // Emit one ≤H3_RESP_CHUNK_MAX DATA frame from `payload`.
+    macro_rules! emit_data {
+        ($payload:expr) => {{
+            for slice in $payload.chunks(H3_RESP_CHUNK_MAX) {
+                let frame = match encode_h3_data_frame(slice) {
+                    Ok(f) => f,
+                    Err(_) => {
+                        let _ = tx.send(RespEvent::Reset).await;
+                        return Err(RespAbort::UpstreamReset);
+                    }
+                };
+                total = total.saturating_add(frame.len());
+                if total > cap {
+                    let _ = tx.send(RespEvent::Reset).await;
+                    return Err(RespAbort::OverCap);
+                }
+                send!(tx, RespEvent::Bytes(frame));
+            }
+        }};
+    }
+
+    match framing {
+        RespFraming::ContentLength(n) => {
+            let mut remaining = n;
+            // Drain the post-head prefix first.
+            if !body_prefix.is_empty() {
+                if body_prefix.len() > remaining {
+                    // More bytes than declared = framing violation.
+                    let _ = tx.send(RespEvent::Reset).await;
+                    return Err(RespAbort::ChunkedDecode);
+                }
+                remaining -= body_prefix.len();
+                let p = std::mem::take(&mut body_prefix);
+                emit_data!(&p);
+            }
+            while remaining > 0 {
+                let want = remaining.min(rbuf.len());
+                let dst = rbuf.get_mut(..want).ok_or(RespAbort::UpstreamReset)?;
+                let nr = match stream.read(dst).await {
+                    Ok(n) => n,
+                    Err(_) => {
+                        let _ = tx.send(RespEvent::Reset).await;
+                        return Err(RespAbort::UpstreamReset);
+                    }
+                };
+                if nr == 0 {
+                    // EOF before Content-Length satisfied.
+                    let _ = tx.send(RespEvent::Reset).await;
+                    return Err(RespAbort::PrematureEof);
+                }
+                remaining -= nr;
+                let slice = rbuf.get(..nr).unwrap_or(&rbuf);
+                emit_data!(slice);
+            }
+        }
+        RespFraming::Chunked => {
+            let mut dec = ChunkDecoder::new();
+            let mut decoded = Vec::new();
+            if !body_prefix.is_empty() {
+                let p = std::mem::take(&mut body_prefix);
+                if let Err(e) = dec.feed(&p, &mut decoded) {
+                    let _ = tx.send(RespEvent::Reset).await;
+                    return Err(e);
+                }
+                if !decoded.is_empty() {
+                    let d = std::mem::take(&mut decoded);
+                    emit_data!(&d);
+                }
+            }
+            while !dec.done {
+                let nr = match stream.read(&mut rbuf).await {
+                    Ok(n) => n,
+                    Err(_) => {
+                        let _ = tx.send(RespEvent::Reset).await;
+                        return Err(RespAbort::UpstreamReset);
+                    }
+                };
+                if nr == 0 {
+                    // EOF before the chunked terminator.
+                    let _ = tx.send(RespEvent::Reset).await;
+                    return Err(RespAbort::ChunkedDecode);
+                }
+                if let Err(e) = dec.feed(rbuf.get(..nr).unwrap_or(&rbuf), &mut decoded) {
+                    let _ = tx.send(RespEvent::Reset).await;
+                    return Err(e);
+                }
+                if !decoded.is_empty() {
+                    let d = std::mem::take(&mut decoded);
+                    emit_data!(&d);
+                }
+            }
+        }
+        RespFraming::Eof => {
+            if !body_prefix.is_empty() {
+                let p = std::mem::take(&mut body_prefix);
+                emit_data!(&p);
+            }
+            loop {
+                let nr = match stream.read(&mut rbuf).await {
+                    Ok(n) => n,
+                    Err(_) => {
+                        let _ = tx.send(RespEvent::Reset).await;
+                        return Err(RespAbort::UpstreamReset);
+                    }
+                };
+                if nr == 0 {
+                    break; // EOF-delimited: clean end.
+                }
+                let slice = rbuf.get(..nr).unwrap_or(&rbuf);
+                emit_data!(slice);
+            }
+        }
+    }
+
+    // --- 4. clean completion ---
+    send!(tx, RespEvent::End);
+    Ok(())
 }
 
 /// Forward an H3 request to an H1 backend via `TcpPool` and return the
@@ -1857,5 +2356,101 @@ mod tests {
         // Second half: should yield decoded headers.
         let second = rx.feed(frame.get(mid..).unwrap()).unwrap();
         assert!(second.is_some());
+    }
+
+    /// SESSION 4 / P1-A no-regression contract: the refactored
+    /// `encode_h3_headers_frame(status, Some(len)) + encode_h3_data_frame`
+    /// is BYTE-IDENTICAL to the monolithic `encode_h3_response` (every
+    /// existing CL backend + test client depends on this).
+    #[test]
+    fn encode_h3_response_is_byte_identical_to_split_helpers() {
+        for (status, body) in [
+            (200u16, &b"hello world"[..]),
+            (204, &b""[..]),
+            (404, &b"nope"[..]),
+            (500, &[0xFFu8, 0x00, 0x80, 0x01][..]),
+        ] {
+            let whole = encode_h3_response(status, body).unwrap();
+            let mut split = Vec::new();
+            split.extend_from_slice(&encode_h3_headers_frame(status, Some(body.len())).unwrap());
+            split.extend_from_slice(&encode_h3_data_frame(body).unwrap());
+            assert_eq!(whole, split, "status={status} body.len()={}", body.len());
+        }
+    }
+
+    /// `content_length: None` emits `:status` only (no `content-length`).
+    #[test]
+    fn encode_h3_headers_frame_none_omits_content_length() {
+        let f = encode_h3_headers_frame(200, None).unwrap();
+        let (frame, _) = decode_frame(&f, 1 << 20).unwrap();
+        let H3Frame::Headers { header_block } = frame else {
+            panic!("expected HEADERS");
+        };
+        let headers = QpackDecoder::new().decode(&header_block).unwrap();
+        assert!(headers.iter().any(|(n, v)| n == ":status" && v == "200"));
+        assert!(
+            !headers.iter().any(|(n, _)| n == "content-length"),
+            "content-length must be ABSENT when length unknown"
+        );
+    }
+
+    /// Happy-path chunked decode across a split feed: payload is exact
+    /// and the zero-size terminator sets `done`.
+    #[test]
+    fn chunk_decoder_decodes_split_chunks() {
+        let mut dec = ChunkDecoder::new();
+        let mut out = Vec::new();
+        // "Wiki" + "pedia" then terminator, fed in awkward splits.
+        dec.feed(b"4\r\nWik", &mut out).unwrap();
+        dec.feed(b"i\r\n5\r\npedia\r\n", &mut out).unwrap();
+        assert!(!dec.done);
+        dec.feed(b"0\r\n", &mut out).unwrap();
+        assert!(dec.done);
+        assert_eq!(out, b"Wikipedia");
+    }
+
+    /// SESSION 4 / P1-A approval condition C3: every malformed chunked
+    /// framing ⇒ `RespAbort::ChunkedDecode` — NEVER a truncated or
+    /// forwarded body presented as complete.
+    #[test]
+    fn chunk_decoder_rejects_malformed_framing_c3() {
+        // (a) non-hex chunk size.
+        let mut d = ChunkDecoder::new();
+        assert_eq!(
+            d.feed(b"zz\r\nabc\r\n", &mut Vec::new()),
+            Err(RespAbort::ChunkedDecode)
+        );
+        // (b) empty chunk-size token.
+        let mut d = ChunkDecoder::new();
+        assert_eq!(
+            d.feed(b"\r\nabc\r\n", &mut Vec::new()),
+            Err(RespAbort::ChunkedDecode)
+        );
+        // (c) wrong byte where the post-body CRLF must be.
+        let mut d = ChunkDecoder::new();
+        let mut o = Vec::new();
+        assert_eq!(
+            d.feed(b"3\r\nabcXX", &mut o),
+            Err(RespAbort::ChunkedDecode)
+        );
+        // (d) chunk-size line longer than the smuggling-guard cap.
+        let mut d = ChunkDecoder::new();
+        let huge = format!("{}\r\n", "1".repeat(MAX_CHUNK_SIZE_LINE + 8));
+        assert_eq!(
+            d.feed(huge.as_bytes(), &mut Vec::new()),
+            Err(RespAbort::ChunkedDecode)
+        );
+    }
+
+    /// A chunk extension (`;ext`) is tolerated; size is the hex before
+    /// `;`. (Smuggling-relevant: a decoder that mis-parses the size
+    /// past `;` would frame the body wrong.)
+    #[test]
+    fn chunk_decoder_tolerates_chunk_extension() {
+        let mut dec = ChunkDecoder::new();
+        let mut out = Vec::new();
+        dec.feed(b"4;name=value\r\nbody\r\n0\r\n", &mut out).unwrap();
+        assert!(dec.done);
+        assert_eq!(out, b"body");
     }
 }
