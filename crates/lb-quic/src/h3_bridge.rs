@@ -384,6 +384,18 @@ impl StreamRxBuf {
                         let trailers = decoder
                             .decode(&block)
                             .map_err(|e| format!("qpack trailer decode: {e}"))?;
+                        // F-COR-1 (b) — RFC 9114 §4.3: a pseudo-header
+                        // field in the trailing field section is
+                        // malformed. Reject (the `feed_body` `Err`
+                        // contract is mapped to `ReqBodyEvent::Reset` +
+                        // stream teardown / PROTOCOL_ERROR-class in
+                        // conn_actor.rs — exactly the mandated
+                        // rejection, never a forwarded body). Was:
+                        // pushed `BodyItem::Trailers` with no pseudo
+                        // check.
+                        if trailers.iter().any(|(n, _)| n.starts_with(':')) {
+                            return Err("h3 trailer pseudo-header (RFC 9114 §4.3)".to_owned());
+                        }
                         items.push(BodyItem::Trailers(trailers));
                         self.body = BodyParse::default();
                     } else {
@@ -1749,6 +1761,71 @@ mod tests {
         s2.await.unwrap();
         assert_eq!(ok.status, 206);
         assert_eq!(ok.body.as_ref(), &[0xFF, 0x00, 0x80]);
+    }
+
+    /// F-COR-1 (b) — RFC 9114 §4.3: a pseudo-header field in the H3
+    /// trailing field section is malformed. `feed_body` MUST return
+    /// `Err` (mapped to `ReqBodyEvent::Reset` / PROTOCOL_ERROR-class in
+    /// conn_actor.rs), never push `BodyItem::Trailers`. Pre-fix it
+    /// pushed the trailers with no pseudo check.
+    #[test]
+    fn feed_body_rejects_pseudo_header_in_h3_trailers() {
+        // DATA frame ("hi") then a trailing HEADERS frame whose field
+        // section contains a pseudo-header (`:status`).
+        let data = encode_frame(&H3Frame::Data {
+            payload: Bytes::from_static(b"hi"),
+        })
+        .unwrap();
+        let trailers = vec![
+            ("x-trailer".to_string(), "ok".to_string()),
+            (":status".to_string(), "200".to_string()),
+        ];
+        let tblock = QpackEncoder::new().encode(&trailers).unwrap();
+        let theaders = encode_frame(&H3Frame::Headers {
+            header_block: tblock,
+        })
+        .unwrap();
+        let mut input = Vec::new();
+        input.extend_from_slice(&data);
+        input.extend_from_slice(&theaders);
+
+        let mut rx = StreamRxBuf::default();
+        let res = rx.feed_body(&input, MAX_REQUEST_BODY_BYTES);
+        let err = res.expect_err("pseudo-header in H3 trailers must be rejected (RFC 9114 §4.3)");
+        assert!(
+            err.contains("pseudo-header"),
+            "unexpected error message: {err}"
+        );
+    }
+
+    /// No-regression: a VALID (non-pseudo) H3 trailer is still accepted
+    /// and surfaced as `BodyItem::Trailers` — the §4.3 rejection must be
+    /// surgical (only `:`-prefixed names), not a blanket trailer break.
+    #[test]
+    fn feed_body_accepts_valid_h3_trailers() {
+        let data = encode_frame(&H3Frame::Data {
+            payload: Bytes::from_static(b"hi"),
+        })
+        .unwrap();
+        let trailers = vec![("x-checksum".to_string(), "abc123".to_string())];
+        let tblock = QpackEncoder::new().encode(&trailers).unwrap();
+        let theaders = encode_frame(&H3Frame::Headers {
+            header_block: tblock,
+        })
+        .unwrap();
+        let mut input = Vec::new();
+        input.extend_from_slice(&data);
+        input.extend_from_slice(&theaders);
+
+        let mut rx = StreamRxBuf::default();
+        let items = rx
+            .feed_body(&input, MAX_REQUEST_BODY_BYTES)
+            .expect("valid trailers must be accepted");
+        assert!(
+            items.iter().any(|i| matches!(i, BodyItem::Trailers(t)
+                    if t.iter().any(|(n, v)| n == "x-checksum" && v == "abc123"))),
+            "valid trailer not surfaced: {items:?}"
+        );
     }
 
     #[test]

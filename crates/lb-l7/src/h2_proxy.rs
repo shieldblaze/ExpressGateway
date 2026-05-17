@@ -56,6 +56,19 @@ use crate::stripped_request::{StrippedRequest, strip_hop_by_hop as strip_into_ne
 use crate::upstream::{BackendInfoPicker, SingleProtoPicker, UpstreamBackend, UpstreamProto};
 use crate::ws_proxy::{self, WsProxy, is_h2_extended_connect};
 
+/// F-COR-1 (D1) — bound for the H2→H1 buffered request body.
+///
+/// The H2→H1 path now fully receives + protocol-validates the inbound
+/// H2 request body BEFORE dialing the upstream (the ordering fix that
+/// closes the validate-vs-forward race, see [`H2Proxy::proxy_request`]).
+/// Buffering the request body requires a hard cap so a large/streamed
+/// inbound body cannot OOM the proxy. 64 MiB, mirroring the H3 path's
+/// `lb_quic::MAX_REQUEST_BODY_BYTES`, so the H2→H1, H2→H2, H2→H3 and H3
+/// paths all share one consistent ceiling. Exceeding it yields
+/// `413 Payload Too Large` (RFC 9110 §15.5.14), never an unbounded
+/// allocation.
+pub const MAX_REQUEST_BODY_BYTES: usize = 64 * 1024 * 1024;
+
 /// L7 HTTP/2 reverse proxy. Cheap to clone via [`Arc`].
 pub struct H2Proxy {
     pool: TcpPool,
@@ -1062,6 +1075,17 @@ impl H2Proxy {
                 Err(ProxyErr::Timeout) => {
                     error_response(StatusCode::GATEWAY_TIMEOUT, "upstream timeout")
                 }
+                // F-COR-1 (D1): request-body cap exceeded — reject with
+                // 413 before any upstream contact.
+                Err(ProxyErr::BodyTooLarge) => error_response(
+                    StatusCode::PAYLOAD_TOO_LARGE,
+                    "request body exceeds maximum",
+                ),
+                // F-COR-1: inbound H2 request failed protocol
+                // validation during receive — reject (PROTOCOL_ERROR-
+                // class, surfaced as 400) WITHOUT having dialed the
+                // backend, so the backend 200 body can never leak.
+                Err(ProxyErr::BadRequest(s)) => error_response(StatusCode::BAD_REQUEST, &s),
             },
             UpstreamProto::H2 => Box::pin(self.proxy_h2_to_h2(backend.addr, stripped)).await,
             UpstreamProto::H3 => Box::pin(self.proxy_h2_to_h3(&backend, stripped)).await,
@@ -1178,7 +1202,68 @@ impl H2Proxy {
         req: StrippedRequest<IncomingBody>,
     ) -> Result<Response<IncomingBody>, ProxyErr> {
         let req = req.into_inner();
+        let (parts, body) = req.into_parts();
+
+        // F-COR-1 (A2-2) — ORDERING FIX. Previously the live inbound H2
+        // `IncomingBody` was streamed straight into the H1 upstream
+        // before hyper/h2 finished protocol-validating the inbound
+        // stream (trailers / content-length≠ΣDATA / stream-state /
+        // second-HEADERS / flow-control). The static backend's 200 body
+        // could be relayed BEFORE the malformed-request rejection
+        // landed, so h2spec saw DATA instead of the mandated
+        // RST/GOAWAY (the validate-vs-forward race; ≥5 h2spec faces).
+        //
+        // Fix: fully RECEIVE + VALIDATE the inbound request body here,
+        // BEFORE dialing the upstream. `Limited` enforces the named
+        // D1 cap; `collect()` drives hyper/h2 protocol validation to
+        // completion and surfaces any stream/connection error. On any
+        // error we return BEFORE any backend dial, so a malformed
+        // request can never leak the backend response — the race window
+        // is removed structurally (matches the already-shipped H2→H2 /
+        // H2→H3 sibling paths, which also collect() before forwarding).
+        let limited = http_body_util::Limited::new(body, MAX_REQUEST_BODY_BYTES);
+        let collected = match limited.collect().await {
+            Ok(c) => c,
+            Err(e) => {
+                // `Limited` returns a boxed `LengthLimitError` on cap
+                // exceed; anything else is a hyper/h2 protocol/IO error
+                // from validating the malformed inbound stream.
+                if e.downcast_ref::<http_body_util::LengthLimitError>()
+                    .is_some()
+                {
+                    return Err(ProxyErr::BodyTooLarge);
+                }
+                return Err(ProxyErr::BadRequest(format!(
+                    "malformed H2 request body: {e}"
+                )));
+            }
+        };
+        let trailers_map = collected.trailers().cloned();
+        let body_bytes = collected.to_bytes();
+
+        // F-COR-1 (b) — RFC 9113 §8.1: a pseudo-header field in the
+        // trailing field section is malformed. Reject (PROTOCOL_ERROR-
+        // class, surfaced as 400) — never forward. This is the H2→H1
+        // trailer-capture site (contrast h2_to_h2.rs:19 which only
+        // filters on the regular-header path).
+        let mut trailers_vec: Vec<(String, String)> = Vec::new();
+        if let Some(tm) = trailers_map.as_ref() {
+            for (n, v) in tm {
+                if n.as_str().starts_with(':') {
+                    return Err(ProxyErr::BadRequest(
+                        "pseudo-header field in trailers (RFC 9113 §8.1)".to_owned(),
+                    ));
+                }
+                if let Ok(s) = v.to_str() {
+                    trailers_vec.push((n.as_str().to_owned(), s.to_owned()));
+                }
+            }
+        }
+
         // CODE-2-09 follow-on: async dial via `TcpPool::acquire_async`.
+        // Reached ONLY after the inbound request is fully received and
+        // validated — no backend contact happens for a malformed
+        // request.
         let pooled = self
             .pool
             .acquire_async(backend_addr)
@@ -1191,13 +1276,21 @@ impl H2Proxy {
 
         // Upstream is H1 — matches nginx/haproxy production behaviour.
         // H2 upstream support is a future pillar.
-        let (mut sender, conn) = hyper::client::conn::http1::handshake(TokioIo::new(stream))
-            .await
-            .map_err(|e| ProxyErr::Upstream(format!("h1 client handshake: {e}")))?;
+        let (mut sender, conn) = hyper::client::conn::http1::handshake::<
+            _,
+            BoxBody<Bytes, hyper::Error>,
+        >(TokioIo::new(stream))
+        .await
+        .map_err(|e| ProxyErr::Upstream(format!("h1 client handshake: {e}")))?;
 
         let conn_handle = tokio::spawn(async move {
             let _ = conn.await;
         });
+
+        // Rebuild the upstream request with the buffered, validated body
+        // (+ any validated trailers), preserving method/uri/headers.
+        let upstream_body = build_h2_body_with_trailers(body_bytes, &trailers_vec);
+        let req = Request::from_parts(parts, upstream_body);
 
         let send_fut = sender.send_request(req);
         let resp = match tokio::time::timeout(self.timeouts.body, send_fut).await {
@@ -1306,18 +1399,11 @@ async fn translate_h2_request_to_h2(
         .map_err(|e| format!("body collect: {e}"))?;
     let trailers_map = collected.trailers().cloned();
     let body_bytes = collected.to_bytes();
-    let trailers_vec: Vec<(String, String)> = trailers_map
-        .as_ref()
-        .map(|tm| {
-            tm.iter()
-                .filter_map(|(n, v)| {
-                    v.to_str()
-                        .ok()
-                        .map(|s| (n.as_str().to_owned(), s.to_owned()))
-                })
-                .collect()
-        })
-        .unwrap_or_default();
+    // F-COR-1 (b): RFC 9113 §8.1 — reject pseudo-header in trailers
+    // (was: silent build with no `:`-prefix filter at this H2→H2
+    // request trailer-capture site).
+    let trailers_vec: Vec<(String, String)> =
+        capture_request_trailers_rejecting_pseudo(trailers_map.as_ref())?;
     let bridge = crate::create_bridge(crate::Protocol::Http2, crate::Protocol::Http2);
     let scheme = parts
         .uri
@@ -1394,6 +1480,32 @@ async fn translate_h2_request_to_h2(
     // PROTO-2-12: emit body + trailers via StreamBody.
     let body = build_h2_body_with_trailers(body_bytes, &translated.trailers);
     builder.body(body).map_err(|e| format!("build h2 req: {e}"))
+}
+
+/// F-COR-1 (b) — RFC 9113 §8.1 enforcement for the H2 trailer-capture
+/// sites (`translate_h2_request_to_h2`, `collect_h2_request_to_h3_
+/// fieldlist`). Builds the trailer pairs from the captured trailer map
+/// and REJECTS — returning `Err` — if ANY trailer name is a
+/// pseudo-header (`:`-prefixed). RFC 9113 §8.1 mandates a malformed
+/// request be treated as a stream error (PROTOCOL_ERROR-class), NOT
+/// silently stripped, for the trailing field section. The existing
+/// `?`/`map_err` plumbing at each call site turns this `Err` into an
+/// error response / connection failure — never a forwarded body.
+fn capture_request_trailers_rejecting_pseudo(
+    trailers_map: Option<&hyper::HeaderMap>,
+) -> Result<Vec<(String, String)>, String> {
+    let mut out = Vec::new();
+    if let Some(tm) = trailers_map {
+        for (n, v) in tm {
+            if n.as_str().starts_with(':') {
+                return Err("pseudo-header field in trailers (RFC 9113 §8.1)".to_owned());
+            }
+            if let Ok(s) = v.to_str() {
+                out.push((n.as_str().to_owned(), s.to_owned()));
+            }
+        }
+    }
+    Ok(out)
 }
 
 /// PROTO-2-12 helper for the H2 proxy: identical shape to
@@ -1524,18 +1636,11 @@ async fn collect_h2_request_to_h3_fieldlist(
         .map_err(|e| format!("body collect: {e}"))?;
     let trailers_map = collected.trailers().cloned();
     let body_bytes = collected.to_bytes();
-    let trailers_vec: Vec<(String, String)> = trailers_map
-        .as_ref()
-        .map(|tm| {
-            tm.iter()
-                .filter_map(|(n, v)| {
-                    v.to_str()
-                        .ok()
-                        .map(|s| (n.as_str().to_owned(), s.to_owned()))
-                })
-                .collect()
-        })
-        .unwrap_or_default();
+    // F-COR-1 (b): RFC 9113 §8.1 — reject pseudo-header in trailers
+    // (was: silent build with no `:`-prefix filter at this H2→H3
+    // request trailer-capture site).
+    let trailers_vec: Vec<(String, String)> =
+        capture_request_trailers_rejecting_pseudo(trailers_map.as_ref())?;
     let scheme = parts
         .uri
         .scheme()
@@ -1646,6 +1751,19 @@ fn h3_response_to_h2(
 enum ProxyErr {
     Upstream(String),
     Timeout,
+    /// F-COR-1 (D1): the buffered inbound H2 request body exceeded
+    /// [`MAX_REQUEST_BODY_BYTES`]. Surfaced as `413 Payload Too Large`
+    /// — NOT a backend dial (the request is rejected before any
+    /// upstream contact).
+    BodyTooLarge,
+    /// F-COR-1: the inbound H2 request failed protocol validation while
+    /// being received (hyper/h2 surfaced a stream/connection error
+    /// during `body.collect()` — malformed trailers, content-length≠
+    /// ΣDATA, stream-state violation, etc.). Surfaced as
+    /// `400 Bad Request` and, critically, returned BEFORE any backend
+    /// dial so the malformed request can never leak the backend's 200
+    /// body (closes the validate-vs-forward race deterministically).
+    BadRequest(String),
 }
 
 fn error_response(status: StatusCode, msg: &str) -> Response<BoxBody<Bytes, hyper::Error>> {
@@ -2043,5 +2161,45 @@ mod tests {
             io.drain_budget == 0,
             "drain must consume exactly up to DRAIN_CAP then stop"
         );
+    }
+
+    // ── F-COR-1 (b) unit regression — RFC 9113 §8.1 trailer rule ──────
+
+    /// RFC 9113 §8.1 enforcement note for the H2 trailer-capture sites
+    /// (`translate_h2_request_to_h2`, `collect_h2_request_to_h3_
+    /// fieldlist`):
+    ///
+    /// A pseudo-header trailer CANNOT be represented as an
+    /// `http::HeaderName` (the `:` byte 0x3A is not an RFC 7230 token
+    /// char, so `HeaderName::from_bytes(b":x")` is `Err`) — so it never
+    /// reaches `capture_request_trailers_rejecting_pseudo` via the
+    /// `http::HeaderMap` the H2 server hands us. The real, proven H2
+    /// §8.1 protection is therefore the ORDERING fix
+    /// (`proxy_request` now collect()s + validates the inbound request
+    /// BEFORE dialing, so hyper/h2's own §8.1 trailer rejection wins
+    /// DETERMINISTICALLY instead of racing the forward) — proven by the
+    /// deterministic integration gate
+    /// `tests/h2_validation_before_forward.rs::
+    /// pseudo_header_in_trailers_never_leaks_backend_body` (+ the
+    /// backend-dial-count invariant). The `:`-prefix filter in the
+    /// shared helper is retained as cheap defense-in-depth for any
+    /// future String-keyed path (it IS reachable and unit-tested on the
+    /// H3 side: `lb_quic::h3_bridge::tests::
+    /// feed_body_rejects_pseudo_header_in_h3_trailers`).
+    ///
+    /// This unit test pins the helper's NO-REGRESSION contract: valid
+    /// (non-pseudo) trailers are still captured verbatim — the §8.1
+    /// rejection is surgical, not a blanket trailer break (guards the
+    /// trailer_passthrough / bridging contract).
+    #[test]
+    fn capture_request_trailers_accepts_valid() {
+        let mut tm = HeaderMap::new();
+        tm.append(
+            HeaderName::try_from("x-checksum").unwrap(),
+            HeaderValue::from_static("abc123"),
+        );
+        let out = capture_request_trailers_rejecting_pseudo(Some(&tm))
+            .expect("valid trailers must be accepted");
+        assert_eq!(out, vec![("x-checksum".to_owned(), "abc123".to_owned())]);
     }
 }

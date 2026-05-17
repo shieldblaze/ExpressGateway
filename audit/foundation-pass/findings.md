@@ -55,6 +55,32 @@ Tractable: one ordering fix (forward backend body only after protocol
 validation) + add the trailer pseudo-header rejection on both
 surfaces. Regression test reproduces the h2spec cases under contention.
 
+**[FIX NOTE — builder-1, directive D1, commit follows]** F-COR-1
+fixed via the buffer-then-forward approach (per D1, the consistent
+in-scope fix; the streaming-preserving variant is recorded as optional
+future work only, NOT an asterisk — R4). BEHAVIORAL CHANGE: the H2→H1
+request direction (`H2Proxy::proxy_request`) is now BUFFERED, not
+streamed — the inbound H2 request body is fully received +
+protocol-validated (`http_body_util::Limited` + `collect()`, driving
+hyper/h2 validation to completion) BEFORE the upstream is dialed. This
+is consistent with the already-shipped H2→H2 (`translate_h2_request_
+to_h2`) and H2→H3 (`collect_h2_request_to_h3_fieldlist`) sibling paths,
+which already `collect()` before forwarding. The buffer is HARD-CAPPED
+by a NEW named constant `lb_l7::h2_proxy::MAX_REQUEST_BODY_BYTES`
+(64 MiB, mirroring `lb_quic::MAX_REQUEST_BODY_BYTES`); exceeding it
+yields `413 Payload Too Large` (new `ProxyErr::BodyTooLarge`), never an
+unbounded allocation. A malformed inbound request now surfaces as
+`ProxyErr::BadRequest` → `400`, returned BEFORE any backend dial, so it
+can never leak the backend 200 body — the validate-vs-forward race is
+closed STRUCTURALLY (deterministic, scheduler-independent), not merely
+narrowed. Pseudo-header-in-trailers is rejected at the H2→H1 inline
+capture, the shared `capture_request_trailers_rejecting_pseudo` helper
+(H2→H2 / H2→H3 sites), and the H3 `feed_body` `InTrailers` arm
+(RFC 9114 §4.3 → `ReqBodyEvent::Reset`). Optional future work (out of
+scope this session, recorded only): a streaming-preserving variant that
+withholds the response until the inbound stream is validated without
+buffering the request body.
+
 ### F-COR-2 (BL-1) — balancer_counter_sync unsound concurrent bracket
 (THE R1 BASELINE BLOCKER). `tests/balancer_counter_sync.rs:74-91`
 asserts the sync-moment snapshot lies within `[min(pre,post),
