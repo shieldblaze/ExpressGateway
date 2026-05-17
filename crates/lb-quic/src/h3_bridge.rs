@@ -1654,19 +1654,27 @@ mod tests {
         assert_eq!(got, expected.as_bytes());
     }
 
-    /// SESSION 2 target — request-body forwarding through the H3→H1
-    /// bridge. The S1-B seam (`build_h1_request`'s `Some(body)` arm +
-    /// `h3_to_h1_roundtrip`'s `body` param) is in place; this asserts
-    /// the seam's CONTRACT (correct `Content-Length` + appended
-    /// payload) so SESSION 2 has a concrete, named target. It is
-    /// `#[ignore]` ONLY because SESSION 2's datapath wiring
-    /// (`conn_actor::poll_h3` accumulating inbound H3 DATA frames and
-    /// passing `Some(..)` here) is UNBUILT — it does not mask any
-    /// existing passing behaviour (no caller passes `Some` yet). When
-    /// SESSION 2 lands DATA-frame accumulation, drop the `#[ignore]`
-    /// and extend this into a real bodyful e2e.
+    /// Request-body forwarding through the H3→H1 bridge — the S1-B
+    /// seam's CONTRACT (correct `Content-Length` + appended payload via
+    /// `build_h1_request`'s `Some(body)` arm).
+    ///
+    /// F-COR-6 (auditor-4 F-2): the SESSION 2 datapath this test
+    /// targets is BUILT. S2 P1-A (commit `f2af73c4`) landed
+    /// `conn_actor::poll_h3` inbound H3 DATA-frame accumulation and the
+    /// streaming forward path passes the accumulated body into
+    /// `build_h1_request`; this is e2e-proven green (3/3 this session):
+    /// `h3_h1_stream_body_e2e::t1_multi_data_frame_binary_body_
+    /// forwarded_byte_identical`, `..::t5_single_large_data_frame_is_
+    /// memory_bounded_through_stalled_upstream`, and
+    /// `h3_to_h1_forwards_non_utf8_body_byte_for_byte`. The prior
+    /// `#[ignore = "S2: request-body forwarding"]` + "datapath …
+    /// UNBUILT … (no caller passes `Some` yet)" justification was
+    /// STALE-FALSE: the assertion passes verbatim against shipped S2
+    /// code (`build_h1_request` h3_bridge.rs `Some(..)` arm). The
+    /// `#[ignore]` is removed so the now-passing contract is actually
+    /// asserted in the gate (R5: never leave a passing test masked
+    /// behind a false "unbuilt" marker).
     #[test]
-    #[ignore = "S2: request-body forwarding"]
     fn s2_target_build_h1_request_with_body_sets_content_length_and_appends_payload() {
         let req = H3Request {
             method: "POST".to_string(),
