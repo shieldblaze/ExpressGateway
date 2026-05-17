@@ -11,8 +11,20 @@
 //!    rejects overlong encodings (RFC 9000 §16) without panicking.
 //!
 //! Sanity budget; CI bumps via PROPTEST_CASES env.
-
-#![cfg(feature = "proptest")]
+//!
+//! F-COR-5 (foundation audit): the `#![cfg(feature = "proptest")]`
+//! gate was removed so this sanity net runs under the default
+//! `cargo test -p lb-h3` instead of being silent dead coverage (it
+//! reported `running 0 tests` by default — auditor-4 F-1). This
+//! mirrors verbatim the S1 change to the sibling
+//! `crates/lb-quic/tests/proptest_header.rs` (25d8ad84): `proptest`
+//! is an UNCONDITIONAL `[dev-dependencies]` entry in
+//! `crates/lb-h3/Cargo.toml` (line 17), and the separate empty marker
+//! feature `proptest = []` (line 21) gates no code, so no feature
+//! flag is needed to compile this binary. CI still scales the budget
+//! via the `PROPTEST_CASES` env var, which `proptest` reads at
+//! runtime independent of any cfg — unchanged. The case logic below
+//! is byte-for-byte unchanged.
 
 use bytes::BytesMut;
 use proptest::collection::vec;
