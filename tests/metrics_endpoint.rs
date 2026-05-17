@@ -18,6 +18,11 @@ use tokio_util::sync::CancellationToken;
 use lb_observability::{MetricsRegistry, admin_http};
 
 async fn get(addr: SocketAddr, path: &str) -> (http::StatusCode, String) {
+    let (status, _ct, body) = get_full(addr, path).await;
+    (status, body)
+}
+
+async fn get_full(addr: SocketAddr, path: &str) -> (http::StatusCode, Option<String>, String) {
     let stream = TcpStream::connect(addr).await.unwrap();
     let io = TokioIo::new(stream);
     let (mut sender, conn) = hyper::client::conn::http1::handshake::<_, Empty<Bytes>>(io)
@@ -32,8 +37,17 @@ async fn get(addr: SocketAddr, path: &str) -> (http::StatusCode, String) {
         .unwrap();
     let resp = sender.send_request(req).await.unwrap();
     let (parts, body) = resp.into_parts();
+    let content_type = parts
+        .headers
+        .get(http::header::CONTENT_TYPE)
+        .and_then(|v| v.to_str().ok())
+        .map(|s| s.to_owned());
     let bytes = body.collect().await.unwrap().to_bytes();
-    (parts.status, String::from_utf8(bytes.to_vec()).unwrap())
+    (
+        parts.status,
+        content_type,
+        String::from_utf8(bytes.to_vec()).unwrap(),
+    )
 }
 
 #[tokio::test]
@@ -77,12 +91,65 @@ async fn metrics_endpoint_healthz_returns_200() {
         .unwrap();
     tokio::time::sleep(Duration::from_millis(20)).await;
 
-    let (status, body) = get(local, "/healthz").await;
+    // REL-2-04: /healthz is now a back-compat alias for /livez and
+    // returns the JSON probe body `{"status":"ok"}\n` with
+    // Content-Type: application/json. The old `"ok\n"` text body is
+    // gone — see RUNBOOK §/healthz for the operator compat note.
+    let (status, content_type, body) = get_full(local, "/healthz").await;
     assert_eq!(status, http::StatusCode::OK);
-    assert_eq!(body, "ok\n");
+    assert_eq!(body, "{\"status\":\"ok\"}\n");
+    let ct = content_type.expect("/healthz must set a Content-Type header");
+    assert!(
+        ct.starts_with("application/json"),
+        "/healthz Content-Type must be application/json, got: {ct}"
+    );
 
     let (status, _body) = get(local, "/unknown").await;
     assert_eq!(status, http::StatusCode::NOT_FOUND);
+
+    cancel.cancel();
+}
+
+#[tokio::test]
+async fn test_accept_inflight_gauge_emitted_per_listener() {
+    // REL-2-09 follow-on: `accept_inflight{listener=…}` must be
+    // emitted as a per-listener gauge. We exercise the registry-side
+    // helpers (`accept_inflight_inc` / `accept_inflight_dec`) the
+    // `lb` accept-site RAII guard relies on, then scrape `/metrics`
+    // and assert the gauge shape + value.
+    let reg = Arc::new(MetricsRegistry::new());
+    // Bump on permit-acquire (RAII Drop path will dec on disconnect).
+    reg.accept_inflight_inc("0.0.0.0:8443");
+    reg.accept_inflight_inc("0.0.0.0:8443");
+    reg.accept_inflight_inc("127.0.0.1:9090");
+
+    let cancel = CancellationToken::new();
+    let bind: SocketAddr = "127.0.0.1:0".parse().unwrap();
+    let local = admin_http::serve(Arc::clone(&reg), bind, cancel.clone())
+        .await
+        .unwrap();
+    tokio::time::sleep(Duration::from_millis(20)).await;
+
+    let (status, body) = get(local, "/metrics").await;
+    assert_eq!(status, http::StatusCode::OK);
+
+    // The two distinct listeners must appear as separate series.
+    assert!(
+        body.contains("accept_inflight{listener=\"0.0.0.0:8443\"} 2"),
+        "missing inflight gauge for 0.0.0.0:8443:\n{body}"
+    );
+    assert!(
+        body.contains("accept_inflight{listener=\"127.0.0.1:9090\"} 1"),
+        "missing inflight gauge for 127.0.0.1:9090:\n{body}"
+    );
+
+    // Now simulate connection-close: the RAII guard's Drop calls dec.
+    reg.accept_inflight_dec("0.0.0.0:8443");
+    let (_, body) = get(local, "/metrics").await;
+    assert!(
+        body.contains("accept_inflight{listener=\"0.0.0.0:8443\"} 1"),
+        "gauge did not decrement after dec:\n{body}"
+    );
 
     cancel.cancel();
 }

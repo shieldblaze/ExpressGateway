@@ -1,0 +1,22 @@
+Gate 19 — `cargo bench`
+
+Inspection of `bench/criterion/`:
+  - h1_throughput.rs — stub, emits "benchmark stub — not yet implemented"
+  - h2_throughput.rs — stub
+  - h3_throughput.rs — stub
+  - compression.rs   — stub
+  - xdp_pps.rs       — stub
+
+Result: criterion benches under bench/criterion/ are not yet wired
+(they exist as scaffolding; the proxy core path through them is TODO).
+Per-crate `benches/` directories under crates/* (the location actually
+discovered by `cargo bench --workspace`) — none present in this tree.
+
+Recommendation for the lead: this gate cannot meaningfully pass in
+Round 7. Either:
+  (a) accept the stub set and have CI run them to confirm they still
+      compile;  or
+  (b) defer with explicit follow-up to land at least h1/h2 throughput
+      benches before the GA tag.
+
+Status: DEFERRED (no implemented benches to run).

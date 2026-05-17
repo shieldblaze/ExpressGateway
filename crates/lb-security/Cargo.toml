@@ -12,7 +12,31 @@ bytes = { workspace = true }
 http = { workspace = true }
 rustls = { workspace = true }
 rustls-pki-types = { workspace = true }
+# REL-2-03 (Wave 2c-2): PEM parsing for `TlsConfigBundle::load_from_paths`.
+# Already a workspace pin used by `lb/src/main.rs`; promoting the direct
+# edge so the load helper lives next to the data type it produces.
+rustls-pemfile = { workspace = true }
 parking_lot = { workspace = true }
+# Wave-2a SEC-2-03 / SEC-2-04 — concurrent maps for the per-IP
+# slowloris watchdog table and the per-IP connection-gate counters.
+# Already a workspace pin.
+dashmap = { workspace = true }
+# Wave-2a SEC-2-10 — `timeout_accept` wraps `tokio_rustls::TlsAcceptor::accept`
+# in `tokio::time::timeout`. `tokio` is the only API surface needed; pulling
+# `tokio-rustls` here would tie the helper to a specific feature set, so the
+# helper stays generic over `AsyncRead + AsyncWrite + Unpin` and takes the
+# acceptor by reference. The caller (Wave-2c, `lb/src/main.rs`) supplies the
+# `TlsAcceptor`.
+tokio = { workspace = true }
+tokio-rustls = { workspace = true }
+# REL-2-03 (Wave 2c-2): lock-free Arc swap for hot-reload of TLS cert
+# bundles. Every TLS listener holds an `Arc<ArcSwap<TlsConfigBundle>>`
+# and reads `bundle.load()` per accept; the SIGUSR1 reload path stores a
+# new bundle without blocking accepts. Already transitive via prometheus.
+arc-swap = "1"
+# REL-2-03 (Wave 2c-2): tracing inside the cert-rotation reload path so
+# the log line lands in the same JSON stream as the rest of lb's events.
+tracing = { workspace = true }
 # HMAC-SHA256 for stateless-retry tokens (Pillar 3b.3a). ring is already
 # in the tree transitively via rustls; pulling it in directly keeps the
 # retry module independent of rustls's feature set.
@@ -23,3 +47,4 @@ subtle = "2"
 
 [dev-dependencies]
 rcgen = { version = "0.13", features = ["pem"] }
+tokio = { workspace = true, features = ["full", "test-util", "macros"] }

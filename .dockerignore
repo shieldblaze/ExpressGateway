@@ -1,0 +1,7 @@
+target/
+.git/
+audit/
+bench/
+fuzz/
+docs/
+*.log

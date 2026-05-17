@@ -183,6 +183,60 @@ pub fn apply_connected(socket: &TcpStream, cfg: &BackendSockOpts) -> io::Result<
     Ok(())
 }
 
+/// Apply [`BackendSockOpts`] to a connected [`tokio::net::TcpStream`].
+///
+/// Identical to [`apply_connected`], but works directly on a tokio
+/// socket so the async dial path in [`crate::pool::TcpPool::acquire_async`]
+/// can keep the kernel fd registered with the tokio reactor instead of
+/// converting via [`tokio::net::TcpStream::from_std`].
+///
+/// `tokio::net::TcpStream` implements [`std::os::fd::AsFd`], which is
+/// what [`socket2::SockRef::from`] consumes; the option-setting code is
+/// shared with the blocking path via the underlying `SockRef`.
+///
+/// # Errors
+/// Returns any `io::Error` reported by `setsockopt`. The first failure
+/// aborts the remaining options.
+pub fn apply_connected_tokio(
+    socket: &tokio::net::TcpStream,
+    cfg: &BackendSockOpts,
+) -> io::Result<()> {
+    let sock = SockRef::from(socket);
+    if cfg.nodelay {
+        sock.set_nodelay(true)?;
+    }
+    if cfg.keepalive {
+        sock.set_keepalive(true)?;
+    }
+    if let Some(sz) = cfg.rcvbuf {
+        sock.set_recv_buffer_size(sz)?;
+    }
+    if let Some(sz) = cfg.sndbuf {
+        sock.set_send_buffer_size(sz)?;
+    }
+
+    #[cfg(target_os = "linux")]
+    {
+        use std::os::fd::AsRawFd;
+        let fd = socket.as_raw_fd();
+        if cfg.quickack {
+            set_int(fd, libc::IPPROTO_TCP, libc::TCP_QUICKACK, 1)?;
+        }
+        if cfg.tcp_fastopen_connect {
+            const TCP_FASTOPEN_CONNECT: libc::c_int = 30;
+            set_int(fd, libc::IPPROTO_TCP, TCP_FASTOPEN_CONNECT, 1)?;
+        }
+    }
+
+    #[cfg(not(target_os = "linux"))]
+    {
+        let _ = cfg.quickack;
+        let _ = cfg.tcp_fastopen_connect;
+    }
+
+    Ok(())
+}
+
 /// Apply [`UdpSockOpts`] to a bound [`UdpSocket`].
 ///
 /// # Errors

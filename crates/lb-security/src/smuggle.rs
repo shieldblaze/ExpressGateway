@@ -5,6 +5,36 @@
 
 use crate::SecurityError;
 
+/// Mode selector for [`SmuggleDetector::check_all_mode`].
+///
+/// The Wave-2b hot-path (`crates/lb-l7/src/h{1,2}_proxy.rs`) selects
+/// the mode per request based on the protocol version + the
+/// `[runtime].strict_te` configuration knob (SEC-2-15 matrix). The
+/// mode is exposed publicly so the production
+/// [`HooksBundle`](crate::hooks::HooksBundle) can carry it as a
+/// field set once at construction.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum SmuggleMode {
+    /// Standard HTTP/1.1 checks per RFC 9112 §6.1. Final `chunked`
+    /// codec is sufficient — earlier codecs (e.g. `gzip, chunked`)
+    /// are accepted (hyper's default).
+    #[default]
+    H1,
+
+    /// Strict HTTP/1.1: any codec list with anything other than the
+    /// single token `chunked` is rejected, per SEC-2-15 matrix.
+    /// Use when the upstream is known to mis-implement the
+    /// codec-chain decode (which is most non-Pingora upstreams).
+    H1Strict,
+
+    /// HTTP/2 — additionally runs the H2→H1 downgrade check (RFC
+    /// 9113 §8.2.2: no `connection`, `transfer-encoding`,
+    /// `keep-alive`, `upgrade`, `proxy-connection`; no
+    /// pseudo-headers leaking into translated H1; `te` must equal
+    /// `trailers` if present).
+    H2,
+}
+
 /// Stateless detector for HTTP request smuggling attack patterns.
 pub struct SmuggleDetector;
 
@@ -101,6 +131,77 @@ impl SmuggleDetector {
         Self::check_duplicate_cl(headers)?;
         if is_h2_origin {
             Self::check_h2_downgrade(headers, true)?;
+        }
+        Ok(())
+    }
+
+    /// Mode-aware variant of [`check_all`](Self::check_all).
+    ///
+    /// * [`SmuggleMode::H1`] — same as `check_all(_, false)`.
+    /// * [`SmuggleMode::H1Strict`] — additionally runs
+    ///   [`check_te_strict`](Self::check_te_strict).
+    /// * [`SmuggleMode::H2`] — same as `check_all(_, true)`.
+    ///
+    /// # Errors
+    ///
+    /// Returns the first `SecurityError` encountered.
+    pub fn check_all_mode(
+        headers: &[(String, String)],
+        mode: SmuggleMode,
+    ) -> Result<(), SecurityError> {
+        Self::check_cl_te(headers)?;
+        Self::check_te_cl(headers)?;
+        Self::check_duplicate_cl(headers)?;
+        match mode {
+            SmuggleMode::H1 => {}
+            SmuggleMode::H1Strict => {
+                Self::check_te_strict(headers)?;
+            }
+            SmuggleMode::H2 => {
+                Self::check_h2_downgrade(headers, true)?;
+            }
+        }
+        Ok(())
+    }
+
+    /// Strict Transfer-Encoding codec policy (SEC-2-15 matrix).
+    ///
+    /// Rejects any `Transfer-Encoding` whose codec list contains a
+    /// token other than `chunked`. The single-element list
+    /// `Transfer-Encoding: chunked` is the only accepted form.
+    ///
+    /// Rationale: per RFC 9112 §6.1 the final encoding must be
+    /// `chunked`, but the spec permits a codec chain ahead of it
+    /// (e.g. `gzip, chunked`). Real-world upstreams frequently
+    /// mis-implement the decode chain — they either ignore the
+    /// non-final codec (and forward the gzip-wrapped payload to the
+    /// application, which decompresses it itself, causing a length
+    /// mis-match across the gateway boundary) or downright reject.
+    /// Strict mode collapses the surface to the unambiguous form.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`SecurityError::SmuggleTECL`] if any codec other than
+    /// `chunked` appears in a `Transfer-Encoding` header. The
+    /// existing variant is reused so callers that branch on a single
+    /// "smuggle" class do not need to learn a new error case; the
+    /// rendering still reads as a TE-CL ambiguity which is what the
+    /// strict policy is defending against.
+    pub fn check_te_strict(headers: &[(String, String)]) -> Result<(), SecurityError> {
+        for (name, value) in headers {
+            if name.eq_ignore_ascii_case("transfer-encoding") {
+                for codec in value.split(',') {
+                    let codec = codec.trim();
+                    if codec.is_empty() {
+                        // `chunked,` or `,chunked` — empty codec is
+                        // its own smell; reject.
+                        return Err(SecurityError::SmuggleTECL);
+                    }
+                    if !codec.eq_ignore_ascii_case("chunked") {
+                        return Err(SecurityError::SmuggleTECL);
+                    }
+                }
+            }
         }
         Ok(())
     }

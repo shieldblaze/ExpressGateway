@@ -91,6 +91,8 @@ impl Bridge for H1ToH2Bridge {
             headers: pseudo_headers,
             body: req.body.clone(),
             scheme: req.scheme.clone(),
+            // PROTO-2-12: forward request trailers (RFC 9110 §6.6).
+            trailers: req.trailers.clone(),
         })
     }
 
@@ -121,6 +123,8 @@ impl Bridge for H1ToH2Bridge {
             status: resp.status,
             headers,
             body: resp.body.clone(),
+            // PROTO-2-12: forward response trailers (RFC 9110 §6.6).
+            trailers: resp.trailers.clone(),
         })
     }
 

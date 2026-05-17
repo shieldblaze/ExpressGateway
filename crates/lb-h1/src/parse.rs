@@ -11,6 +11,38 @@ use crate::H1Error;
 /// (nginx `large_client_header_buffers`, Apache `LimitRequestFieldSize`).
 pub const MAX_HEADER_BYTES: usize = 65_536;
 
+/// Crate-internal re-export of `is_tchar` for the chunked trailer
+/// parser (ROUND8-L7-03 mirror).
+#[doc(hidden)]
+pub(crate) const fn __is_tchar_for_trailer(b: u8) -> bool {
+    is_tchar(b)
+}
+
+/// RFC 9110 §5.6.2 `tchar` predicate. Used by the header-name lexer
+/// (ROUND8-L7-03) to reject any byte outside the token grammar.
+const fn is_tchar(b: u8) -> bool {
+    matches!(
+        b,
+        b'!' | b'#'
+        | b'$'
+        | b'%'
+        | b'&'
+        | b'\''
+        | b'*'
+        | b'+'
+        | b'-'
+        | b'.'
+        | b'^'
+        | b'_'
+        | b'`'
+        | b'|'
+        | b'~'
+        | b'0'..=b'9'
+        | b'a'..=b'z'
+        | b'A'..=b'Z'
+    )
+}
+
 /// Find the position of `\r\n` in `buf`, returning the index of `\r`.
 fn find_crlf(buf: &[u8]) -> Option<usize> {
     let len = buf.len();
@@ -154,11 +186,25 @@ pub fn parse_headers_with_limit(
             .find(':')
             .ok_or_else(|| H1Error::InvalidHeader(line_str.to_string()))?;
 
-        let name = line_str
+        // ROUND8-L7-03 / HAProxy CVE-2023-25725 / nginx CVE-2019-9516.
+        // RFC 9110 §5.1 `field-name = token`, `token = 1*tchar`. The
+        // raw bytes BEFORE the colon must be non-empty and every byte
+        // must be a tchar. Whitespace around the name is itself a
+        // violation per RFC 9112 §5.1 ("no whitespace allowed
+        // between header field-name and colon"), so we deliberately
+        // do not `.trim()` the name.
+        let raw_name = line_str
             .get(..colon_pos)
-            .ok_or_else(|| H1Error::InvalidHeader(line_str.to_string()))?
-            .trim()
-            .to_string();
+            .ok_or_else(|| H1Error::InvalidHeader(line_str.to_string()))?;
+        if raw_name.is_empty() {
+            return Err(H1Error::InvalidHeader("empty header name".to_string()));
+        }
+        if !raw_name.bytes().all(is_tchar) {
+            return Err(H1Error::InvalidHeader(
+                "non-tchar in header name".to_string(),
+            ));
+        }
+        let name = raw_name.to_string();
         let value = line_str
             .get(colon_pos + 1..)
             .ok_or_else(|| H1Error::InvalidHeader(line_str.to_string()))?

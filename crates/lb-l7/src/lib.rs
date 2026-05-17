@@ -12,6 +12,7 @@
 #![allow(clippy::pedantic, clippy::nursery)]
 #![cfg_attr(test, allow(clippy::unwrap_used, clippy::expect_used))]
 
+pub mod authority;
 pub mod grpc_proxy;
 pub mod h1_proxy;
 pub mod h1_to_h1;
@@ -25,6 +26,12 @@ pub mod h2_to_h3;
 pub mod h3_to_h1;
 pub mod h3_to_h2;
 pub mod h3_to_h3;
+pub mod security_hooks;
+pub mod sni_authority;
+pub mod stripped_request;
+/// ROUND8-OPS-06 / REL-2-07: L7 wire-in for the W3C trace-context
+/// propagation library (`lb_observability::tracing_propagation`).
+pub mod trace_ctx;
 pub mod upstream;
 pub mod ws_proxy;
 
@@ -80,6 +87,29 @@ pub struct BridgeRequest {
     /// pseudo-header.  Defaults to `None`, which bridges interpret as
     /// `"https"`.
     pub scheme: Option<String>,
+    /// PROTO-2-12 — Trailer fields (RFC 9110 §6.6).
+    ///
+    /// Filled by the H1/H2/H3 entry sites that observe the upstream
+    /// body collect's trailers and threaded through each bridge so the
+    /// destination-protocol writeback can re-emit them via
+    /// [`hyper::body::Frame::trailers`]. Defaults to an empty `Vec`
+    /// (no trailers); legacy call sites that have not yet been updated
+    /// simply omit the field on construction (cf. struct-update
+    /// syntax with `..Default::default()`).
+    pub trailers: Vec<(String, String)>,
+}
+
+impl Default for BridgeRequest {
+    fn default() -> Self {
+        Self {
+            method: "GET".to_owned(),
+            uri: "/".to_owned(),
+            headers: Vec::new(),
+            body: Bytes::new(),
+            scheme: None,
+            trailers: Vec::new(),
+        }
+    }
 }
 
 /// Protocol-neutral HTTP response representation for bridging.
@@ -91,6 +121,20 @@ pub struct BridgeResponse {
     pub headers: Vec<(String, String)>,
     /// Response body bytes (ref-counted, zero-copy clone).
     pub body: Bytes,
+    /// PROTO-2-12 — Trailer fields (RFC 9110 §6.6). See
+    /// [`BridgeRequest::trailers`].
+    pub trailers: Vec<(String, String)>,
+}
+
+impl Default for BridgeResponse {
+    fn default() -> Self {
+        Self {
+            status: 200,
+            headers: Vec::new(),
+            body: Bytes::new(),
+            trailers: Vec::new(),
+        }
+    }
 }
 
 /// Errors that can occur during L7 protocol bridging.
@@ -220,6 +264,7 @@ mod tests {
             headers: vec![("host".into(), "localhost".into())],
             body: body.clone(),
             scheme: None,
+            trailers: Vec::new(),
         };
 
         let bridge = create_bridge(Protocol::Http1, Protocol::Http2);
@@ -233,6 +278,7 @@ mod tests {
             status: 404,
             headers: vec![("content-type".into(), "text/plain".into())],
             body: Bytes::from_static(b"not found"),
+            trailers: Vec::new(),
         };
 
         let bridge = create_bridge(Protocol::Http2, Protocol::Http1);
@@ -252,6 +298,7 @@ mod tests {
             headers,
             body: Bytes::new(),
             scheme: None,
+            trailers: Vec::new(),
         };
         let bridge = create_bridge(Protocol::Http1, Protocol::Http1);
         let err = bridge.bridge_request(&req).unwrap_err();
@@ -272,6 +319,7 @@ mod tests {
             ],
             body: Bytes::new(),
             scheme: None,
+            trailers: Vec::new(),
         };
         let bridge = create_bridge(Protocol::Http1, Protocol::Http1);
         let bridged = bridge.bridge_request(&req).unwrap();
@@ -296,6 +344,7 @@ mod tests {
             ],
             body: Bytes::new(),
             scheme: None,
+            trailers: Vec::new(),
         };
         let bridge = create_bridge(Protocol::Http2, Protocol::Http1);
         let err = bridge.bridge_request(&req).unwrap_err();
@@ -315,6 +364,7 @@ mod tests {
             ],
             body: Bytes::new(),
             scheme: None,
+            trailers: Vec::new(),
         };
         let bridge = create_bridge(Protocol::Http2, Protocol::Http1);
         let err = bridge.bridge_request(&req).unwrap_err();
@@ -334,6 +384,7 @@ mod tests {
             ],
             body: Bytes::new(),
             scheme: None,
+            trailers: Vec::new(),
         };
         let bridge = create_bridge(Protocol::Http3, Protocol::Http1);
         let err = bridge.bridge_request(&req).unwrap_err();
@@ -349,6 +400,7 @@ mod tests {
                 ("te".into(), "trailers".into()),
             ],
             body: Bytes::new(),
+            trailers: Vec::new(),
         };
         let bridge = create_bridge(Protocol::Http1, Protocol::Http1);
         let bridged = bridge.bridge_response(&resp).unwrap();
@@ -368,6 +420,7 @@ mod tests {
             headers: vec![("host".into(), "example.com".into())],
             body: Bytes::new(),
             scheme: Some("http".into()),
+            trailers: Vec::new(),
         };
         let bridge = create_bridge(Protocol::Http1, Protocol::Http2);
         let bridged = bridge.bridge_request(&req).unwrap();

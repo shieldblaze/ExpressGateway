@@ -75,6 +75,10 @@ impl Bridge for H1ToH1Bridge {
             headers,
             body: req.body.clone(),
             scheme: req.scheme.clone(),
+            // PROTO-2-12: trailers are end-to-end (RFC 9110 §6.6.2);
+            // forward without filtering. The Trailer-list field in the
+            // headers (already preserved above) declares what is sent.
+            trailers: req.trailers.clone(),
         })
     }
 
@@ -107,6 +111,8 @@ impl Bridge for H1ToH1Bridge {
             status: resp.status,
             headers,
             body: resp.body.clone(),
+            // PROTO-2-12: trailers pass through unchanged.
+            trailers: resp.trailers.clone(),
         })
     }
 

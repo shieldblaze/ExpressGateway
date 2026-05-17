@@ -2,6 +2,116 @@
 
 All notable changes to ExpressGateway. Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning aims for [SemVer](https://semver.org/spec/v2.0.0.html) once the first release is cut.
 
+## [Unreleased] — Round-4 production-readiness drive
+
+This section aggregates the Round-4 audit-driven work landing on
+`prod-readiness/round-4`. Commits not yet on `main`.
+
+### Lifecycle
+
+- **CODE-2-03** (`fc050b0`) — `lb_core::Shutdown` graceful-drain
+  primitive (`TaskTracker` + `CancellationToken`). `crates/lb/src/main.rs`
+  installs SIGTERM/SIGINT/SIGUSR1 handlers; the drain sequence is
+  `set_draining() → settle → cancel → listener abort → bounded wait →
+  abort survivors`. `shutdown_aborted_connections_total` counter is
+  emitted on deadline overflow.
+- **CODE-2-02** — `std::panic::set_hook` installed before any spawn;
+  emits a structured `tracing::error!(panic=true, location, backtrace)`
+  and bumps the registry-backed `panic_total` counter. Pre-registry
+  panics are buffered in an `AtomicU64` and drained on registry bind.
+- **REL-2-02 / REL-2-04 / REL-2-06 / REL-2-08 / REL-2-13** — wave-2
+  fix batch sequenced behind CODE-2-03; see `audit/reliability/round-2-review.md`.
+
+### Protocol
+
+- **PROTO-2-01** (`132fc72`) — H2 requests with `:authority` ≠ `Host`
+  are rejected (RFC 9113 §8.3.1).
+- **PROTO-2-06 / PROTO-2-13** (`de5a93c`) — codec rename + `h2spec`
+  skeleton + CONNECT-PROTOCOL test.
+- **PROTO-2-07** (`2d33c5a`) — `StrippedRequest<B>` newtype gives a
+  compile-time guarantee that hop-by-hop headers were filtered.
+- **PROTO-2-08** (`e0c0daf`) — `HOP_BY_HOP` set matches RFC 9110
+  §7.6.1 exactly.
+- **PROTO-2-10** (`a70588e`) — smuggle-defence matrix + proof tests.
+- **PROTO-2-11** (`deb9267`) — H3 actor emits `CONNECTION_CLOSE`
+  with `H3_NO_ERROR = 0x0100` (RFC 9114 §8.1) on cancel.
+  `graceful_h3_shutdown` is `pub` for cross-crate use.
+- **PROTO-2-12** (`0d3f901`) — trailer pass-through baseline test
+  pinned.
+- **PROTO-2-14** (`e6a1cb1`) — `[runtime].tls13_only` knob.
+- **PROTO-2-15** (`4ee05e0`) — SNI / `:authority` validator (wiring
+  deferred to Wave 2c).
+- **ROUND8-L7-01** — **behaviour change (operator-visible).** The
+  client-visible `101 Switching Protocols` on a WebSocket upgrade is
+  now emitted **only after** the upstream WS handshake has completed
+  successfully (Pingora GHSA-xq2h-p299-vjwv / Envoy
+  GHSA-rj35-4m94-77jh class, both CVSS 9.3). Previously the proxy
+  returned `101` synchronously and dialed the upstream in a detached
+  task. Consequences for operators:
+  - WS upgrades now carry **one extra upstream-RTT of latency**
+    (unavoidable; every reference proxy does this).
+  - A failed upstream WS handshake now produces a clean
+    **`502 Bad Gateway`** (upstream refused / unreachable) or
+    **`504 Gateway Timeout`** (upstream dial / handshake budget,
+    bounded by `[runtime].*` header timeout) **instead of**
+    `101`-then-silent-close. External WS clients that previously
+    relied on the buggy `101` (and only later noticed no traffic)
+    will now see the failure immediately.
+  - Bytes pipelined after the upgrade request are no longer admitted
+    to an unread upgraded byte-stream on upstream failure
+    (request-smuggling primitive closed).
+- **ROUND8-OPS-06 / REL-2-07** — the W3C trace-context propagation
+  library (`lb_observability::tracing_propagation`, shipped library-
+  only in `1d462c7`) now has its first production L7 callsite. The
+  H1/H2 proxies open a per-request span (`lb.l7.request`, carrying
+  `trace_id` / `parent_id` / `http.method` / `http.target` /
+  `http.status_code`) and inject a refreshed child `traceparent`
+  onto the upstream request — including the WebSocket-upgrade dial —
+  so an on-call engineer can pivot from an upgrade failure to the
+  exact upstream dial.
+
+### Security
+
+- **SEC-2-01 / CODE-2-01** (`e00e85a`, `dc02517`, `5e7938f`) —
+  `SmuggleDetector` and `SlowlorisWatchdog` wired into the H1 / H2
+  hot path; `SecurityHooks` trait shim.
+- **SEC-2-11** (`e44117d`) — XDP cap probe falls back to
+  `CAP_SYS_ADMIN` on pre-5.8 kernels.
+- **SEC-2-12** (`5064a11`) — userspace loader asserts `.license == "GPL"`
+  on the BPF ELF at startup.
+
+### Documentation
+
+- **REL-2-01** (this commit) — RUNBOOK / DEPLOYMENT / METRICS / README
+  rewrite. Every doc claim audited against current source:
+  - README compression-feature line removed (the compression crate was deleted
+    by L-001). <!-- doc-lint-allow -->
+  - README panic-free claim verified by a non-test grep: zero hits
+    across `crates/`.
+  - DEPLOYMENT binary name corrected to `expressgateway`
+    (`/usr/local/bin/expressgateway`, `target/release/expressgateway`).
+  - DEPLOYMENT capability matrix added: `CAP_BPF || CAP_SYS_ADMIN`
+    + `CAP_NET_ADMIN` depending on kernel.
+  - RUNBOOK rewritten to cover every alert that can fire: `LbPanic`,
+    `LbShutdownAborted`, `LbAcceptSaturation`, `LbAcceptErrors`,
+    `LbAcceptShed`, `LbXdpConntrackFull`, `LbXdpAttachMode`,
+    `LbXdpSamplerErrors`, `LbCertRotationFailed`, `LbReqDuration`,
+    `LbReq5xx`, `LbDnsCacheMiss`, `LbPoolProbeFailures`,
+    `LbConnectionsInflight`. Drain sequence and per-protocol drain
+    signal matrix added.
+  - METRICS enumerates every Prometheus family the binary will emit
+    when fully wired, plus cardinality budget per family.
+- **REL-2-02 drain integration test** (REL-2-02 commit) — multi-protocol
+  drain test cases under `tests/reload_zero_drop.rs`:
+  `test_sigterm_drains_h2_with_goaway`,
+  `test_sigterm_drains_h1_with_connection_close`,
+  `test_sigterm_drains_h3_with_connection_close`. `#[ignore]`'d
+  until the listener-level `lb_core::Shutdown::token()` is plumbed
+  through each protocol's `serve_connection` path.
+- `scripts/ci/doc-lint.sh` — greps for stale references (see the
+  script for the exact pattern list) and fails on hit. Wired into
+  `.github/workflows/ci.yml`. <!-- doc-lint-allow -->
+
 ## [Unreleased] — Phase B production-readiness drive
 
 This section aggregates the Phase B drive's commits since `b9853178` ("ExpressGateway: high-performance L4/L7 load balancer in Rust"). Commits are on `main`.

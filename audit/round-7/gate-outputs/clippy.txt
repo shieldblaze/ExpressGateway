@@ -1,0 +1,20 @@
+Gate 2 — `cargo clippy --workspace --all-targets --all-features -- -D warnings`
+
+Status: PASS
+
+Command:
+    cargo clippy --workspace --all-targets --all-features -- -D warnings
+
+Result: exit 0, zero warnings, zero errors.
+
+Full rebuild (cold cache) finished in 11m 32s; re-run after warm cache:
+
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 0.55s
+
+Notes:
+- Round-7 gate-1 regression cleared by adding `security: None,` to the
+  `LbConfig { … }` literal in `tests/h3_upstream_verify.rs:38` (PROTO-2-17
+  added the field but did not migrate this test). The same one-field gap
+  was also fixed in `tests/binary_proto_routing.rs:94` for parity.
+- `cargo fmt --check` is clean (Gate 1 / fmt.txt empty).
+- Workspace contains zero clippy lint warnings under `-D warnings`.

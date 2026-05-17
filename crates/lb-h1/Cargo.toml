@@ -10,3 +10,18 @@ publish = false
 thiserror = { workspace = true }
 bytes = { workspace = true }
 http = { workspace = true }
+
+[dev-dependencies]
+# CODE-2-11: property-based no-panic / round-trip assertions over
+# the H1 request-line + header parser. Full audit-gate budget is
+# 200 000 cases per PROPTEST_CASES env in CI; this round ships the
+# scaffolding at a sanity-only budget so cargo test stays fast.
+proptest = { workspace = true }
+
+[features]
+# CODE-2-11: opt-in feature for the proptest target so plain
+# `cargo test -p lb-h1` stays fast for the inner loop; CI runs
+# `cargo test -p lb-h1 --features proptest` with PROPTEST_CASES
+# raised to the audit-gate budget.
+default = []
+proptest = []

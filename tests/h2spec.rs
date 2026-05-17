@@ -86,7 +86,18 @@ async fn spawn_static_backend() -> SocketAddr {
     local
 }
 
-#[tokio::test]
+// Multi-thread runtime is mandatory: this test drives the `h2spec`
+// child via the *blocking* `std::process::Command::output()` while the
+// gateway listener, the static backend, and every per-connection
+// TLS/H2 task run on `tokio::spawn`. On the default single-threaded
+// `#[tokio::test]` runtime the blocking `.output()` call parks the only
+// worker thread for the whole h2spec run, so the spawned accept loop is
+// never polled and h2spec's TLS dial times out
+// (`tls: DialWithDialer timed out`) before a single HTTP/2 byte is
+// exchanged. Two worker threads let the listener make progress
+// concurrently with the blocked subprocess wait. Same pattern as
+// `tests/round8_drain_15case.rs`.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn h2spec_generic_conformance() {
     let Some(h2spec_bin) = h2spec_on_path() else {
         eprintln!(

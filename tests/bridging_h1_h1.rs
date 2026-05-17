@@ -22,6 +22,7 @@ fn test_bridge_h1_to_h1() {
         ],
         body: body.clone(),
         scheme: None,
+        trailers: Vec::new(),
     };
 
     let bridged = bridge.bridge_request(&req).unwrap();

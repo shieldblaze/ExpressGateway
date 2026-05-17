@@ -30,6 +30,8 @@ impl Bridge for H3ToH2Bridge {
             headers,
             body: req.body.clone(),
             scheme: req.scheme.clone(),
+            // PROTO-2-12: forward request trailers.
+            trailers: req.trailers.clone(),
         })
     }
 
@@ -46,6 +48,8 @@ impl Bridge for H3ToH2Bridge {
             status: resp.status,
             headers,
             body: resp.body.clone(),
+            // PROTO-2-12: forward response trailers.
+            trailers: resp.trailers.clone(),
         })
     }
 

@@ -1,0 +1,2346 @@
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.25s
+     Running unittests src/lib.rs (target/debug/deps/lb-8cc6b8a04f8b5225)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running unittests src/main.rs (target/debug/deps/expressgateway-38990d8ea42867b7)
+
+running 17 tests
+test tests::build_h3_upstream_pool_rejects_mismatched_ca_path ... ok
+test tests::build_h3_upstream_pool_rejects_empty_backend_list ... ok
+test tests::build_h3_upstream_pool_rejects_mismatched_verify_peer ... ok
+test tests::build_h3_upstream_pool_rejects_verify_without_ca ... ok
+test tests::classify_accept_error_recognises_conn_reset ... ok
+test tests::build_h3_upstream_pool_accepts_uniform_verify_off_without_ca ... ok
+test tests::classify_accept_error_recognises_emfile ... ok
+test tests::classify_accept_error_unknown_is_fatal ... ok
+test tests::lifecycle_signal_display_matches_canonical_names ... ok
+test tests::classify_accept_error_recognises_enfile ... ok
+test tests::test_non_loopback_refused ... ok
+test tests::test_emfile_no_busy_loop ... ok
+test tests::panic_total_drains_fallback_into_registry_counter ... ok
+test tests::test_503_when_over_inflight_h1 ... ok
+test tests::test_per_ip_cap_enforced_at_accept ... ok
+test tests::test_typo_protocol_errors ... ok
+test tests::test_connect_uses_async_path ... ok
+
+test result: ok. 17 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.12s
+
+     Running tests/informational_pass_through_main.rs (target/debug/deps/informational_pass_through_main-2237ca0fba1aa96f)
+
+running 1 test
+test test_100_continue_traverses_lb ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/panic_abort.rs (target/debug/deps/panic_abort-3984da64b41f66db)
+
+running 2 tests
+test release_profile_has_panic_abort ... ok
+test panic_in_tokio_task_aborts_release_process ... ok
+
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 5.26s
+
+     Running tests/xdp_cap_probe.rs (target/debug/deps/xdp_cap_probe-809bb8333931f6b5)
+
+running 7 tests
+test test_bpf_then_sys_admin_compensates_for_missing_net_admin ... ok
+test test_bpf_without_net_admin_rejects ... ok
+test test_cap_bpf_path ... ok
+test test_cap_bpf_probe_error_falls_through_to_sys_admin ... ok
+test test_cap_sys_admin_fallback ... ok
+test test_double_probe_error_composes_message ... ok
+test test_no_caps_rejects ... ok
+
+test result: ok. 7 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running unittests src/lib.rs (target/debug/deps/lb_balancer-95dcbe180087d140)
+
+running 22 tests
+test ewma::tests::test_accounts_for_load ... ok
+test ewma::tests::test_cold_start_no_thundering_herd ... ok
+test ewma::tests::test_prefers_fast ... ok
+test least_connections::tests::test_picks_minimum ... ok
+test least_request::tests::test_picks_minimum ... ok
+test least_connections::tests::test_tie_breaks_by_index ... ok
+test ring_hash::tests::test_detects_stale_identity ... ok
+test p2c::tests::test_avoids_heavily_loaded ... ok
+test round_robin::tests::test_cycles_through_all ... ok
+test round_robin::tests::test_empty_backends ... ok
+test ring_hash::tests::test_consistent ... ok
+test session_affinity::tests::test_sticky ... ok
+test session_affinity::tests::test_different_keys_spread ... ok
+test weighted_round_robin::tests::test_all_zero_weight ... ok
+test weighted_round_robin::tests::test_backend_removal_resets_state ... ok
+test weighted_round_robin::tests::test_weight_proportional ... ok
+test maglev::tests::test_detects_stale_identity ... ok
+test random::tests::test_uniform_distribution ... ok
+test maglev::tests::test_consistent_mapping ... ok
+test weighted_random::tests::test_weighted_distribution ... ok
+test ring_hash::tests::test_minimal_disruption_on_removal ... ok
+test maglev::tests::test_minimal_disruption ... ok
+
+test result: ok. 22 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.06s
+
+     Running tests/balancer_counter_sync.rs (target/debug/deps/balancer_counter_sync-92a375abccaf381b)
+
+running 2 tests
+test test_with_state_seeds_snapshot_from_atomic ... ok
+test test_no_divergence_under_concurrent_increment ... ok
+
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/loom_atomic_counter.rs (target/debug/deps/loom_atomic_counter-55122746fc890b93)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running unittests src/lib.rs (target/debug/deps/lb_config-a03737f7bd360a52)
+
+running 37 tests
+test tests::ops02_gateway_jitter_exceeding_budget_rejected ... ok
+test tests::ops02_jitter_default_is_quarter_of_budget ... ok
+test tests::ops10_override_takes_precedence_over_runtime ... ok
+test tests::ops11_readiness_settle_default_is_kubelet_aligned ... ok
+test tests::ops02_listener_jitter_exceeding_inherited_budget_rejected ... ok
+test tests::ops10_per_listener_timeout_range_rejected ... ok
+test tests::parse_config_with_backends ... ok
+test tests::parse_invalid_toml ... ok
+test tests::parse_h1_listener_with_websocket ... ok
+test tests::parse_h1_listener_with_alt_svc_and_timeouts ... ok
+test tests::parse_h1s_listener_with_grpc ... ok
+test tests::parse_observability_metrics_bind ... ok
+test tests::parse_runtime_xdp_enabled ... ok
+test tests::parse_valid_toml ... ok
+test tests::runtime_xdp_disabled_does_not_require_interface ... ok
+test tests::runtime_xdp_enabled_without_interface_rejected ... ok
+test tests::runtime_absent_keeps_parse_backward_compatible ... ok
+test tests::parse_tls_listener ... ok
+test tests::validate_backend_unknown_protocol_rejected ... ok
+test tests::validate_empty_address ... ok
+test tests::validate_empty_backend_address ... ok
+test tests::validate_empty_listeners ... ok
+test tests::parse_quic_listener ... ok
+test tests::validate_grpc_on_non_h1s_listener_rejected ... ok
+test tests::validate_h1_with_tls_block_rejected ... ok
+test tests::validate_h1s_with_tls_block_ok ... ok
+test tests::validate_h1s_without_tls_block_rejected ... ok
+test tests::validate_observability_bad_bind_rejected ... ok
+test tests::validate_ok ... ok
+test tests::validate_quic_small_mtu_rejected ... ok
+test tests::validate_quic_without_block_rejected ... ok
+test tests::validate_tls_block_without_tls_protocol_rejected ... ok
+test tests::validate_tls_empty_cert_path_rejected ... ok
+test tests::validate_tls_without_block_rejected ... ok
+test tests::validate_unknown_protocol_rejected ... ok
+test tests::validate_websocket_on_non_http_listener_rejected ... ok
+test tests::validate_zero_http_timeout_rejected ... ok
+
+test result: ok. 37 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running unittests src/lib.rs (target/debug/deps/lb_controlplane-caaea6bfa2dbf499)
+
+running 15 tests
+test tests::config_manager_rejects_empty_initial_config ... ok
+test tests::config_manager_rejects_invalid_initial_config ... ok
+test tests::config_manager_initial_load ... ok
+test tests::config_manager_reload_no_change ... ok
+test tests::config_manager_reload_saves_previous ... ok
+test tests::config_manager_rollback_to_previous ... ok
+test tests::ha_poller_first_poll_returns_some ... ok
+test tests::config_manager_rollback_to_previous_none ... ok
+test tests::ha_poller_no_change_returns_none ... ok
+test tests::in_memory_backend_load_store ... ok
+test tests::validate_empty_is_error ... ok
+test tests::validate_invalid_toml_is_error ... ok
+test tests::file_backend_atomic_write ... ok
+test tests::validate_non_empty_ok ... ok
+test tests::validate_valid_toml_ok ... ok
+
+test result: ok. 15 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running unittests src/lib.rs (target/debug/deps/lb_core-2a5245c0c4cd5e36)
+
+running 19 tests
+test authority::tests::comma_rejected ... ok
+test authority::tests::control_char_rejected ... ok
+test authority::tests::empty_rejected ... ok
+test authority::tests::empty_port_after_colon_rejected ... ok
+test authority::tests::ipv6_brackets_must_balance ... ok
+test authority::tests::happy_path_examples ... ok
+test authority::tests::port_digits_only ... ok
+test authority::tests::raw_ipv6_without_brackets_accepted_today ... ok
+test authority::tests::whitespace_rejected ... ok
+test tests::test_backend_creation ... ok
+test tests::test_backend_health_default ... ok
+test tests::test_backend_state_connections ... ok
+test tests::test_backend_serde_roundtrip ... ok
+test tests::test_backend_state_latency ... ok
+test tests::test_backend_state_requests ... ok
+test tests::test_cluster_creation ... ok
+test tests::test_cluster_serde_roundtrip ... ok
+test tests::test_core_error_display ... ok
+test tests::test_lb_policy_variants ... ok
+
+test result: ok. 19 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/per_connection_drain.rs (target/debug/deps/per_connection_drain-e8e6d264443bdf4a)
+
+running 3 tests
+test test_inflight_request_completes_or_cancels_on_sigterm ... ok
+test test_uncooperative_task_times_out ... ok
+test test_inflight_request_completes_when_under_budget ... ok
+
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.15s
+
+     Running tests/round8_drain_coordinator.rs (target/debug/deps/round8_drain_coordinator-10b347e15782c25d)
+
+running 6 tests
+test listener_token_is_child_of_root_token ... ok
+test run_drain_admin_skips_xdp_c13 ... ok
+test run_drain_phases_in_order ... ok
+test run_drain_idempotent_c10 ... ok
+test run_drain_xdp_detach_timeout_c8 ... ok
+test run_drain_inflight_timeout_c7 ... ok
+
+test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.07s
+
+     Running tests/shutdown.rs (target/debug/deps/shutdown-315f3277c2f334c5)
+
+running 4 tests
+test drain_zero_tasks_is_clean ... ok
+test child_shares_orchestration ... ok
+test test_drain_times_out_returns_remaining ... ok
+test test_drain_cancels_clean ... ok
+
+test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running unittests src/lib.rs (target/debug/deps/lb_cp_client-598407abb23e0db6)
+
+running 4 tests
+test tests::connect_with_endpoint_ok ... ok
+test tests::connect_without_endpoint_errors ... ok
+test tests::default_is_new ... ok
+test tests::new_client_disconnected ... ok
+
+test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running unittests src/lib.rs (target/debug/deps/lb_grpc-3d2ff28695a3c6bf)
+
+running 21 tests
+test tests::deadline_format_roundtrip ... ok
+test tests::deadline_invalid_format ... ok
+test tests::deadline_parse_micros ... ok
+test tests::deadline_parse_millis ... ok
+test tests::deadline_parse_hours ... ok
+test tests::deadline_parse_nanos ... ok
+test tests::deadline_parse_minutes ... ok
+test tests::deadline_parse_seconds ... ok
+test tests::deadline_remaining ... ok
+test tests::deadline_submillisecond_rounds_up ... ok
+test tests::frame_empty_data ... ok
+test tests::frame_incomplete_body ... ok
+test tests::frame_roundtrip_compressed ... ok
+test tests::frame_roundtrip_uncompressed ... ok
+test tests::frame_incomplete_header ... ok
+test tests::grpc_message_too_large ... ok
+test tests::status_from_code_invalid ... ok
+test tests::multi_frame_decode ... ok
+test tests::status_from_http ... ok
+test tests::status_to_http ... ok
+test tests::status_from_code_valid ... ok
+
+test result: ok. 21 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running unittests src/lib.rs (target/debug/deps/lb_h1-1f4e2aa2e3677066)
+
+running 14 tests
+test chunked::tests::encode_decode_roundtrip ... ok
+test chunked::tests::encode_decode_with_trailers ... ok
+test chunked::tests::incremental_feed ... ok
+test parse::tests::header_exactly_at_limit_accepted ... ok
+test parse::tests::header_over_limit_rejected ... ok
+test parse::tests::headers_basic ... ok
+test parse::tests::headers_incomplete ... ok
+test parse::tests::header_unterminated_over_limit_rejected ... ok
+test parse::tests::request_line_incomplete ... ok
+test parse::tests::request_line_get ... ok
+test parse::tests::request_line_post_http10 ... ok
+test parse::tests::status_line_200 ... ok
+test parse::tests::default_constant_matches_wrapper ... ok
+test parse::tests::status_line_404 ... ok
+
+test result: ok. 14 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/proptest_parser.rs (target/debug/deps/proptest_parser-d27295e3b7c5d85f)
+
+running 2 tests
+test headers_no_panic ... ok
+test request_line_no_panic ... ok
+
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.05s
+
+     Running tests/round8_chunk_size_cve_corpus.rs (target/debug/deps/round8_chunk_size_cve_corpus-ff3d6a593f288407)
+
+running 14 tests
+test accepts_chunk_extensions ... ok
+test accepts_mixed_case_hex ... ok
+test rejects_empty_size_line ... ok
+test accepts_u64_max_size_token_on_64bit ... ok
+test regression_well_formed_chunked_decodes ... ok
+test rejects_empty_size_token_before_extension ... ok
+test rejects_leading_whitespace_space ... ok
+test rejects_leading_whitespace_tab ... ok
+test rejects_minus_sign ... ok
+test rejects_non_hex_inside_size_token ... ok
+test rejects_overflow_via_checked_shl ... ok
+test rejects_overlong_hex_zero_pad ... ok
+test rejects_plus_sign ... ok
+test rejects_trailing_whitespace_in_size_token ... ok
+
+test result: ok. 14 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/round8_header_name_rfc9110.rs (target/debug/deps/round8_header_name_rfc9110-2bf295c670b4917b)
+
+running 9 tests
+test control_char_in_name_rejected ... ok
+test empty_name_rejected ... ok
+test leading_whitespace_in_name_rejected ... ok
+test underscore_in_name_accepted_default ... ok
+test tab_in_name_rejected ... ok
+test null_byte_in_name_rejected ... ok
+test valid_token_chars_accepted ... ok
+test value_whitespace_still_trimmed ... ok
+test whitespace_in_name_rejected ... ok
+
+test result: ok. 9 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running unittests src/lib.rs (target/debug/deps/lb_h2-0e70257e99cc790a)
+
+running 30 tests
+test frame::tests::data_frame_roundtrip ... ok
+test frame::tests::goaway_roundtrip ... ok
+test frame::tests::frame_too_large_rejected ... ok
+test frame::tests::incomplete_returns_error ... ok
+test frame::tests::ping_roundtrip ... ok
+test frame::tests::settings_ack_roundtrip ... ok
+test frame::tests::unknown_frame_roundtrip ... ok
+test frame::tests::unknown_frame_type_ignored ... ok
+test hpack::tests::hpack_dynamic_table_eviction ... ok
+test hpack::tests::hpack_encode_decode_roundtrip ... ok
+test hpack::tests::hpack_static_indexed ... ok
+test hpack::tests::string_roundtrip ... ok
+test hpack::tests::integer_roundtrip ... ok
+test security::tests::continuation_flood_exceeded ... ok
+test security::tests::continuation_flood_ok ... ok
+test security::tests::hpack_bomb_ok ... ok
+test security::tests::hpack_bomb_ratio_exceeded ... ok
+test security::tests::hpack_bomb_size_exceeded ... ok
+test security::tests::ping_burst_rejected ... ok
+test security::tests::ping_under_limit_allowed ... ok
+test security::tests::rapid_reset_boundary_attack_detected ... ok
+test security::tests::rapid_reset_over_threshold ... ok
+test security::tests::rapid_reset_sliding_window_decays ... ok
+test security::tests::rapid_reset_under_threshold ... ok
+test security::tests::rapid_reset_window_expiry ... ok
+test security::tests::settings_burst_rejected ... ok
+test security::tests::settings_resets_after_window ... ok
+test security::tests::settings_under_limit_allowed ... ok
+test security::tests::zero_window_stall_fires_after_timeout ... ok
+test security::tests::zero_window_stall_reset_on_progress ... ok
+
+test result: ok. 30 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/proptest_hpack.rs (target/debug/deps/proptest_hpack-e1a9bcf53a317ab0)
+
+running 2 tests
+test decode_frame_no_panic ... ok
+test hpack_round_trip ... ok
+
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.45s
+
+     Running tests/round8_h2_cve_corpus.rs (target/debug/deps/round8_h2_cve_corpus-d4060274bd00cdbd)
+
+running 3 tests
+test data_padded_pad_length_exceeds_payload_errors ... ok
+test data_padded_empty_payload_errors ... ok
+test data_padded_strips_padding ... ok
+
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/round8_padded_frame.rs (target/debug/deps/round8_padded_frame-23621ee3a898fd5e)
+
+running 6 tests
+test data_pad_length_exceeds_payload_errors ... ok
+test data_padded_empty_payload_errors ... ok
+test data_with_padded_strips_padding ... ok
+test data_without_padded_unaffected ... ok
+test headers_with_padded_and_priority_decoded_correctly ... ok
+test headers_without_padded_unaffected ... ok
+
+test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running unittests src/lib.rs (target/debug/deps/lb_h3-74b3daeb1bdad271)
+
+running 19 tests
+test frame::tests::data_frame_roundtrip ... ok
+test frame::tests::frame_too_large_rejected ... ok
+test frame::tests::goaway_frame_roundtrip ... ok
+test frame::tests::headers_frame_roundtrip ... ok
+test frame::tests::settings_frame_roundtrip ... ok
+test frame::tests::incomplete_input ... ok
+test frame::tests::unknown_frame_type_ignored ... ok
+test qpack::tests::roundtrip_name_ref_value_literal ... ok
+test qpack::tests::roundtrip_static_only ... ok
+test qpack::tests::roundtrip_with_literals ... ok
+test security::tests::normal_input_ok ... ok
+test security::tests::ratio_exceeded ... ok
+test security::tests::size_exceeded ... ok
+test security::tests::zero_encoded ... ok
+test varint::tests::overflow ... ok
+test varint::tests::roundtrip_eight_byte ... ok
+test varint::tests::roundtrip_four_byte ... ok
+test varint::tests::roundtrip_small ... ok
+test varint::tests::roundtrip_two_byte ... ok
+
+test result: ok. 19 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/proptest_qpack.rs (target/debug/deps/proptest_qpack-85b6809bc3a9ce93)
+
+running 4 tests
+test varint_round_trip ... ok
+test varint_decode_no_panic ... ok
+test decode_frame_no_panic ... ok
+test qpack_round_trip ... ok
+
+test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.45s
+
+     Running unittests src/lib.rs (target/debug/deps/lb_health-e216cd1ef17d96d8)
+
+running 6 tests
+test tests::becomes_healthy_after_threshold ... ok
+test tests::becomes_unhealthy_after_threshold ... ok
+test tests::starts_unknown ... ok
+test tests::display_status ... ok
+test tests::success_resets_failure_count ... ok
+test tests::zero_threshold_clamped_to_one ... ok
+
+test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/balancer_counter_sync.rs (target/debug/deps/balancer_counter_sync-11c2361fa2861626)
+
+running 4 tests
+test legacy_backend_keeps_plain_u64_semantics ... ok
+test with_state_seeds_snapshot_from_atomic ... ok
+test snapshot_tracks_atomic_monotonic_midflight ... ok
+test test_no_divergence_under_load ... ok
+
+test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/balancer_ewma.rs (target/debug/deps/balancer_ewma-c94d4574ae719fa0)
+
+running 4 tests
+test test_balancer_ewma_load_factor ... ok
+test test_balancer_ewma_prefers_fast ... ok
+test test_balancer_ewma_zero_latency ... ok
+test test_balancer_ewma_empty ... ok
+
+test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/balancer_least_connections.rs (target/debug/deps/balancer_least_connections-f41943c2daffa30e)
+
+running 3 tests
+test test_balancer_least_conn_empty ... ok
+test test_balancer_least_conn_picks_min ... ok
+test test_balancer_least_conn_tie_breaks_by_index ... ok
+
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/balancer_least_request.rs (target/debug/deps/balancer_least_request-f5c322f6cbcce484)
+
+running 3 tests
+test test_balancer_least_req_empty ... ok
+test test_balancer_least_req_picks_min ... ok
+test test_balancer_least_req_tie_breaks_by_index ... ok
+
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/balancer_maglev.rs (target/debug/deps/balancer_maglev-aa76ede8f2395217)
+
+running 3 tests
+test test_balancer_maglev_consistent ... ok
+test test_balancer_maglev_distribution ... ok
+test test_balancer_maglev_minimal_disruption ... ok
+
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.03s
+
+     Running tests/balancer_p2c.rs (target/debug/deps/balancer_p2c-152950fec714bf07)
+
+running 3 tests
+test test_balancer_p2c_empty ... ok
+test test_balancer_p2c_single_backend ... ok
+test test_balancer_p2c_converges ... ok
+
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/balancer_random.rs (target/debug/deps/balancer_random-5884d1754dc9ded0)
+
+running 2 tests
+test test_balancer_random_empty ... ok
+test test_balancer_random_uniform ... ok
+
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s
+
+     Running tests/balancer_ring_hash.rs (target/debug/deps/balancer_ring_hash-8da897c495b3e2f9)
+
+running 3 tests
+test test_balancer_ring_hash_consistent ... ok
+test test_balancer_ring_hash_distribution ... ok
+test test_balancer_ring_hash_minimal_disruption ... ok
+
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.02s
+
+     Running tests/balancer_round_robin.rs (target/debug/deps/balancer_round_robin-5d9a35979eb930b3)
+
+running 3 tests
+test test_balancer_round_robin_distribution ... ok
+test test_balancer_round_robin_empty ... ok
+test test_balancer_round_robin_single_backend ... ok
+
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/balancer_session_affinity.rs (target/debug/deps/balancer_session_affinity-1019fa94d9155746)
+
+running 3 tests
+test test_balancer_session_affinity_empty ... ok
+test test_balancer_session_affinity_sticky ... ok
+test test_balancer_session_affinity_different_sessions_spread ... ok
+
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/balancer_weighted_random.rs (target/debug/deps/balancer_weighted_random-96faf9861ca57bc0)
+
+running 2 tests
+test test_balancer_wrandom_all_zero_weight ... ok
+test test_balancer_wrandom_respects_weights ... ok
+
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s
+
+     Running tests/balancer_weighted_round_robin.rs (target/debug/deps/balancer_weighted_round_robin-33796a2c532e4050)
+
+running 3 tests
+test test_balancer_wrr_all_zero_weight ... ok
+test test_balancer_wrr_smooth_interleaving ... ok
+test test_balancer_wrr_respects_weights ... ok
+
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/binary_proto_routing.rs (target/debug/deps/binary_proto_routing-b726d4e20744a5db)
+
+running 1 test
+test mixed_protocol_listener_yields_h1_proxy_with_h2_pool_and_round_robin_picker ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/bridging_h1_h1.rs (target/debug/deps/bridging_h1_h1-6ce73aba4185c4d2)
+
+running 1 test
+test test_bridge_h1_to_h1 ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/bridging_h1_h2.rs (target/debug/deps/bridging_h1_h2-283bc4798d6a0b3e)
+
+running 1 test
+test test_bridge_h1_to_h2 ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/bridging_h1_h3.rs (target/debug/deps/bridging_h1_h3-496c4acf4e937933)
+
+running 1 test
+test test_bridge_h1_to_h3 ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/bridging_h2_h1.rs (target/debug/deps/bridging_h2_h1-343d72e6fa6c7f58)
+
+running 1 test
+test test_bridge_h2_to_h1 ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/bridging_h2_h2.rs (target/debug/deps/bridging_h2_h2-374a7fafdef7e90b)
+
+running 1 test
+test test_bridge_h2_to_h2 ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/bridging_h2_h3.rs (target/debug/deps/bridging_h2_h3-98353d13106365e7)
+
+running 1 test
+test test_bridge_h2_to_h3 ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/bridging_h3_h1.rs (target/debug/deps/bridging_h3_h1-6f5dd6b4a5941ed5)
+
+running 1 test
+test test_bridge_h3_to_h1 ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/bridging_h3_h2.rs (target/debug/deps/bridging_h3_h2-0f6e3d9181bd65e1)
+
+running 1 test
+test test_bridge_h3_to_h2 ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/bridging_h3_h3.rs (target/debug/deps/bridging_h3_h3-0c9b29fa249f39af)
+
+running 1 test
+test test_bridge_h3_to_h3 ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/cert_rotation.rs (target/debug/deps/cert_rotation-f8616c3082d2166a)
+
+running 3 tests
+test test_in_flight_handshake_sees_pre_rotation_bundle ... ok
+test test_invalid_reload_keeps_old_cert_serving ... ok
+test test_sigusr1_rotates_cert_no_drop ... ok
+
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s
+
+     Running tests/codec_roundtrip_h1.rs (target/debug/deps/codec_roundtrip_h1-4a054d43ea16af5a)
+
+running 3 tests
+test test_h1_chunked_encoding ... ok
+test test_h1_request_line_parsing ... ok
+test test_h1_trailer_handling ... ok
+
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/codec_roundtrip_h2.rs (target/debug/deps/codec_roundtrip_h2-dbd23d5ddebc34e5)
+
+running 5 tests
+test test_h2_continuation_flood_mitigation ... ok
+test test_h2_frame_decoder ... ok
+test test_h2_hpack_bomb_mitigation ... ok
+test test_h2_rapid_reset_mitigation ... ok
+test test_h2_hpack_roundtrip ... ok
+
+test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/codec_roundtrip_h3.rs (target/debug/deps/codec_roundtrip_h3-749c6874fe274172)
+
+running 3 tests
+test test_h3_qpack_bomb_mitigation ... ok
+test test_h3_qpack_roundtrip ... ok
+test test_h3_frame_decoder ... ok
+
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/controlplane_ha.rs (target/debug/deps/controlplane_ha-63218d92b5123da1)
+
+running 1 test
+test test_controlplane_ha_polling ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/controlplane_rollback.rs (target/debug/deps/controlplane_rollback-25d8687d6eace71e)
+
+running 1 test
+test test_controlplane_rollback_on_invalid ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/controlplane_standalone.rs (target/debug/deps/controlplane_standalone-630d8906e0623e86)
+
+running 2 tests
+test test_controlplane_standalone_sighup_reload ... ok
+test test_backend_pool_observes_toml_reload ... ok
+
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/grpc_bidi_streaming.rs (target/debug/deps/grpc_bidi_streaming-98ba3ffae5098d96)
+
+running 1 test
+test test_grpc_bidi_streaming ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/grpc_client_streaming.rs (target/debug/deps/grpc_client_streaming-64421151393b93ac)
+
+running 1 test
+test test_grpc_client_streaming ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/grpc_deadline.rs (target/debug/deps/grpc_deadline-206917792b890980)
+
+running 1 test
+test test_grpc_deadline_propagation ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/grpc_external.rs (target/debug/deps/grpc_external-793ab7c1ddf28066)
+
+running 2 tests
+test ghz_harness ... ok
+test grpc_health_probe_harness ... ok
+
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/grpc_proxy_e2e.rs (target/debug/deps/grpc_proxy_e2e-b57490c80930cd95)
+
+running 12 tests
+test grpc_health_check_unknown_service_not_found ... ok
+test grpc_health_check_synthesized ... ok
+test grpc_health_check_overall_serving ... ok
+test grpc_malformed_timeout_returns_invalid_argument ... ok
+test grpc_client_stream ... ok
+test grpc_deadline_clamps_at_300s ... ok
+test grpc_bidi_stream ... ok
+test grpc_status_translation_404 ... ok
+test grpc_unary_echo ... ok
+test grpc_server_stream ... ok
+test grpc_upstream_oversize_trailer_rejected_by_gateway ... ok
+test grpc_deadline_exceeded_from_gateway ... ok
+
+test result: ok. 12 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.11s
+
+     Running tests/grpc_server_streaming.rs (target/debug/deps/grpc_server_streaming-43a4c5cd14fea820)
+
+running 1 test
+test test_grpc_server_streaming ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/grpc_status_translation.rs (target/debug/deps/grpc_status_translation-2e7e1cf540d10559)
+
+running 1 test
+test test_grpc_status_translation ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/grpc_unary.rs (target/debug/deps/grpc_unary-da0ab955f9f6dcc7)
+
+running 1 test
+test test_grpc_unary_roundtrip ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/h1_proxy_e2e.rs (target/debug/deps/h1_proxy_e2e-3519659e33ec30c7)
+
+running 3 tests
+test h1_proxy_strips_hop_by_hop_in_request ... ok
+test h1s_proxy_returns_backend_response_with_alt_svc ... ok
+test h1s_proxy_times_out_on_slow_body ... ok
+
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.21s
+
+     Running tests/h1_rejects_grpc.rs (target/debug/deps/h1_rejects_grpc-07b139ae77bf783e)
+
+running 5 tests
+test h1_passes_grpc_web_through ... ok
+test h1_passes_grpc_web_proto_through ... ok
+test h1_listener_rejects_grpc_with_415 ... ok
+test h1_rejects_grpc_uppercase_with_415 ... ok
+test h1_rejects_grpc_with_charset_param_with_415 ... ok
+
+test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.05s
+
+     Running tests/h2_proxy_e2e.rs (target/debug/deps/h2_proxy_e2e-a472d91468eaa65a)
+
+running 3 tests
+test h2s_alpn_downgrade_to_http11 ... ok
+test h2s_proxy_returns_backend_response_with_alt_svc ... ok
+test h2s_per_stream_load_balancing ... ok
+
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.06s
+
+     Running tests/h2_rapid_reset_goaway_under_load.rs (target/debug/deps/h2_rapid_reset_goaway_under_load-2b6229df53e04401)
+
+running 1 test
+test rapid_reset_server_goaway_corroboration ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.02s
+
+     Running tests/h2_security_live.rs (target/debug/deps/h2_security_live-2089740491c97d62)
+
+running 6 tests
+test rapid_reset_goaway ... ok
+test hpack_bomb_connection_close ... ok
+test continuation_flood_goaway ... ok
+test ping_flood_goaway ... ok
+test settings_flood_goaway ... ok
+test zero_window_stall_stream_reset ... ok
+
+test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.31s
+
+     Running tests/h2_validation_before_forward.rs (target/debug/deps/h2_validation_before_forward-7159727621bb91c1)
+
+running 3 tests
+test content_length_mismatch_never_leaks_backend_body ... ok
+test pseudo_header_in_trailers_never_leaks_backend_body ... ok
+test oversized_request_body_rejected_413_not_buffered_unbounded ... ok
+
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.76s
+
+     Running tests/h2spec.rs (target/debug/deps/h2spec-880b056d817376be)
+
+running 1 test
+test h2spec_generic_conformance ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.90s
+
+     Running tests/h2spec_server_conformance.rs (target/debug/deps/h2spec_server_conformance-76a18a6062300d79)
+
+running 2 tests
+test h2spec_server_conformance_passes ... ignored, h2spec binary not provisioned until Wave-2c CI image; see audit/deferred.md PROTO-2-04/05
+test h2spec_binary_path_documented ... ok
+
+test result: ok. 1 passed; 0 failed; 1 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/h3_s3_inflight_h1_drain_proof.rs (target/debug/deps/h3_s3_inflight_h1_drain_proof-12fbbcecf765c01a)
+
+running 3 tests
+test shortwindow_control_is_window_not_drop ... ok
+test inflight_h1_completes_with_long_read_window ... ok
+test fixed_400ms_window_is_shorter_than_drain_timeline_not_a_drop ... ok
+
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 16.81s
+
+     Running tests/h3_upstream_verify.rs (target/debug/deps/h3_upstream_verify-5ce5e70981c78077)
+
+running 8 tests
+test h3_backend_with_explicit_sni_override_validates ... ok
+test h3_backend_with_ca_path_validates_cleanly ... ok
+test h3_backend_with_empty_sni_override_rejected ... ok
+test h3_backend_without_ca_path_rejected_when_verify_peer_default ... ok
+test h3_backend_without_ca_path_accepted_when_verify_peer_explicitly_false ... ok
+test non_h3_backend_with_verify_peer_false_rejected ... ok
+test non_h3_backend_with_tls_knobs_rejected ... ok
+test h3_backend_default_protocol_parses_with_verify_peer_true ... ok
+
+test result: ok. 8 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/l4_xdp_conntrack.rs (target/debug/deps/l4_xdp_conntrack-008ced3d13dad9cd)
+
+running 1 test
+test test_xdp_conntrack_flow_pinning ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/l4_xdp_hotswap.rs (target/debug/deps/l4_xdp_hotswap-60ae6bac178ad3b2)
+
+running 1 test
+test test_xdp_hotswap_no_flow_drop ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.02s
+
+     Running tests/l4_xdp_maglev.rs (target/debug/deps/l4_xdp_maglev-82add28acbab2c2c)
+
+running 1 test
+test test_xdp_maglev_consistent_hash ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s
+
+     Running tests/metrics_endpoint.rs (target/debug/deps/metrics_endpoint-37493d102b14e78e)
+
+running 3 tests
+test metrics_endpoint_serves_text_exposition ... ok
+test metrics_endpoint_healthz_returns_200 ... ok
+test test_accept_inflight_gauge_emitted_per_listener ... ok
+
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.02s
+
+     Running tests/metrics_label_shape.rs (target/debug/deps/metrics_label_shape-9e450f93ae141e00)
+
+running 2 tests
+test test_http_requests_total_has_listener_route_labels ... ok
+test test_http_request_duration_seconds_has_listener_route_labels ... ok
+
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/proto_translation_e2e.rs (target/debug/deps/proto_translation_e2e-9cdef3cf66ee63a8)
+
+running 5 tests
+test proxy_h1_listener_h2_backend ... ok
+test proxy_h2_listener_h2_backend ... ok
+test proxy_h1_listener_h3_backend ... ok
+test proxy_h2_listener_h3_backend ... ok
+test proxy_h3_listener_h2_backend ... ok
+
+test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.05s
+
+     Running tests/quic_alpn_h3.rs (target/debug/deps/quic_alpn_h3-f17f856224d66cef)
+
+running 4 tests
+test production_alpn_constant_is_h3 ... ok
+test server_accepts_h3_29_legacy_client ... ok
+test server_advertises_h3 ... ok
+test server_rejects_unknown_alpn ... ok
+
+test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 3.04s
+
+     Running tests/quic_listener_e2e.rs (target/debug/deps/quic_listener_e2e-8921d444e41a12b5)
+
+running 6 tests
+test zero_rtt_replay_dropped ... ok
+test retry_mints_on_first_initial_verifies_on_second ... ok
+test quic_listener_e2e_http3_get_through_proxy_to_h1_backend ... ok
+test quic_listener_shuts_down_on_cancellation_token ... ok
+test quic_listener_accepts_handshake_smoke ... ok
+test quic_listener_e2e_http3_get_through_proxy_to_h3_backend ... ok
+
+test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.11s
+
+     Running tests/quic_native.rs (target/debug/deps/quic_native-b9638eecb26cfd83)
+
+running 3 tests
+test replay_filter_rejects_second_0rtt_with_same_token ... ok
+test test_quic_datagram_forwarding ... ok
+test test_quic_stream_forwarding ... ok
+
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.04s
+
+     Running tests/reload_zero_drop.rs (target/debug/deps/reload_zero_drop-30b8d5ea3e6e9dda)
+
+running 6 tests
+test drain_tests::classify_close_requires_observed_fin_for_finonly ... ok
+test test_reload_zero_drop_under_load ... ok
+test drain_tests::negative_regression_complete_body_never_closed_is_caught ... ok
+test drain_tests::test_sigterm_drains_h3_with_connection_close ... ok
+test drain_tests::test_sigterm_drains_h2_with_goaway ... ok
+test drain_tests::test_sigterm_drains_h1_with_connection_close ... ok
+
+test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 19.50s
+
+     Running tests/round8_drain_15case.rs (target/debug/deps/round8_drain_15case-8ba457b9bf297ffa)
+
+running 16 tests
+test case_c01_steady_idle ... ok
+test case_c09_drain_after_external_cancel_is_safe ... ok
+test case_c02_sigterm_during_pending_accept ... ok
+test case_c10_two_sigterms_idempotent ... ok
+test case_c11_admin_drain_then_sigterm_idempotent ... ok
+test case_c04_handshake_future_dropped_on_cancel ... ok
+test case_c13_admin_drain_skips_xdp_detach ... ok
+test case_c14_listener_cancel_signal_fires ... ok
+test case_c08_xdp_detach_hang_bounded ... ok
+test case_c15_zero_listeners_clean_drain ... ok
+test xdp_detach_kernel_error_surfaced ... ok
+test case_c12_per_conn_panic_does_not_hang_drain ... ok
+test case_c03_post_accept_synchronous_tail_visibility ... ok
+test case_c06_websocket_severed_at_deadline ... ok
+test case_c05_long_lived_stream_severed_at_deadline ... ok
+test case_c07_inflight_timeout_still_runs_xdp_phase ... ok
+
+test result: ok. 16 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.08s
+
+     Running tests/security_continuation_flood.rs (target/debug/deps/security_continuation_flood-ec5e266b9b5b0964)
+
+running 1 test
+test test_continuation_flood_detection ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/security_hpack_bomb.rs (target/debug/deps/security_hpack_bomb-30b3499b11104617)
+
+running 1 test
+test test_hpack_bomb_detection ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/security_qpack_bomb.rs (target/debug/deps/security_qpack_bomb-21cb532e143a5156)
+
+running 1 test
+test test_qpack_bomb_detection ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/security_rapid_reset.rs (target/debug/deps/security_rapid_reset-06f167fd547faf54)
+
+running 1 test
+test test_rapid_reset_detection ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/security_slow_post.rs (target/debug/deps/security_slow_post-2f5c731f5b081073)
+
+running 1 test
+test test_slow_post_rejected ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/security_slowloris.rs (target/debug/deps/security_slowloris-07f219cf47decf84)
+
+running 1 test
+test test_slowloris_connection_reaped ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/security_smuggling_cl_te.rs (target/debug/deps/security_smuggling_cl_te-deb08aab9767fb52)
+
+running 1 test
+test test_smuggling_cl_te_rejected ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/security_smuggling_h2_downgrade.rs (target/debug/deps/security_smuggling_h2_downgrade-be0ce1ed75be6c0e)
+
+running 1 test
+test test_smuggling_h2_downgrade_rejected ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/security_smuggling_te_cl.rs (target/debug/deps/security_smuggling_te_cl-039da570649b16ea)
+
+running 1 test
+test test_smuggling_te_cl_rejected ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/security_zero_rtt_replay.rs (target/debug/deps/security_zero_rtt_replay-ab61c51149a61559)
+
+running 1 test
+test test_zero_rtt_replay_rejected ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/tls_listener.rs (target/debug/deps/tls_listener-1712871f6b4eae4e)
+
+running 1 test
+test tls_listener_handshake_and_ticket_reuse ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s
+
+     Running tests/watchdog_wired.rs (target/debug/deps/watchdog_wired-dd55add491cc3028)
+
+running 2 tests
+test test_watchdog_progress_path_evicts_on_deadline ... ok
+test test_slow_loris_evicted_within_deadline ... ok
+
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.50s
+
+     Running tests/ws_autobahn.rs (target/debug/deps/ws_autobahn-3ebf3469bc7d5512)
+
+running 1 test
+test autobahn_fuzzingclient_smoke ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/ws_proxy_e2e.rs (target/debug/deps/ws_proxy_e2e-6fab1fa1e55f5ddf)
+
+running 7 tests
+test ws_close_code_forwarded ... ok
+test ws_echo_roundtrip ... ok
+test ws_ping_flood_closes_with_1008 ... ok
+test ws_binary_message_roundtrip ... ok
+test ws_ping_pong_keepalive ... ok
+test ws_idle_timeout_emits_1001 ... ok
+test ws_read_frame_timeout_closes_with_1008 ... ok
+
+test result: ok. 7 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.01s
+
+     Running unittests src/lib.rs (target/debug/deps/lb_io-e98eeef1dbaddefe)
+
+running 44 tests
+test dns::tests::io_err_mapped_to_nxdomain_for_getaddrinfo_text ... ok
+test dns::tests::cache_hit_returns_same_result_before_ttl ... ok
+test http2_pool::tests::defaults_match_documented_values ... ok
+test http2_pool::tests::pool_starts_empty ... ok
+test dns::tests::cache_size_tracks_entries ... ok
+test dns::tests::resolver_config_defaults ... ok
+test pool::tests::defaults_match_prompt_section_21 ... ok
+test dns::tests::refresh_all_re_queries_entries ... ok
+test pool::tests::acquire_async_dials_then_parks ... ok
+test pool::tests::acquire_then_release_returns_same_socket ... ok
+test pool::tests::no_spawn_blocking_in_pool_dial_path ... ok
+test pool::tests::non_reusable_is_not_parked ... ok
+test pool::tests::probe_discards_peer_closed_connection ... ok
+test pool::tests::per_peer_max_enforced ... ok
+test pool::tests::take_stream_detaches_from_pool ... ok
+test pool::tests::total_max_enforced ... ok
+test quic_pool::tests::idle_count_zero_on_fresh_pool ... ok
+test dns::tests::concurrent_resolvers_share_cache ... ok
+test pool::tests::size_invariant_holds_under_random_ops ... ok
+test dns::tests::negative_entry_caches_nxdomain ... ok
+test quic_pool::tests::quic_pool_config_defaults_match_section_21 ... ok
+test dns::tests::positive_entry_expires_at_cap ... ok
+test pool::tests::idle_timeout_discards_on_acquire ... ok
+test ring::tests::accept_one_loopback ... ok
+test ring::tests::nop_roundtrip_ok_or_skip ... ok
+test ring::tests::recv_send_loopback_pair ... ok
+test ring::tests::splice_rejects_non_pipe_or_succeeds ... ok
+test sockopts::tests::apply_backend_minimal ... ok
+test sockopts::tests::apply_listener_defaults_is_noop ... ok
+test sockopts::tests::apply_udp_minimal ... ok
+test tests::backend_names ... ok
+test tests::detect_backend_returns_real_choice ... ok
+test tests::nop_roundtrip_linux ... ok
+test tests::runtime_listener_and_connect_sockets ... ok
+test tests::runtime_with_backend ... ok
+test tests::socket_options_listener ... ok
+test tests::watermarks_present ... ok
+test quic_pool::tests::test_pool_dialer_uses_h3 ... ok
+test quic_pool::tests::per_peer_max_enforced ... ok
+test quic_pool::tests::total_max_enforced ... ok
+test pool::tests::max_age_expiry_discards_on_acquire ... ok
+test pool::tests::acquire_async_timeout_fires ... ok
+test quic_pool::tests::max_age_expiry_discards_on_acquire ... ok
+test quic_pool::tests::probe_discards_closed_connection ... ok
+
+test result: ok. 44 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 5.18s
+
+     Running tests/miri_ring.rs (target/debug/deps/miri_ring-3aa47c2dc09d0674)
+
+running 3 tests
+test head_tail_wrap_arithmetic ... ok
+test head_tail_wraps_past_u32_max ... ok
+test raw_slice_round_trip_is_provenance_clean ... ok
+
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running unittests src/lib.rs (target/debug/deps/lb_l4_xdp-6dace3136e2acb0d)
+
+running 52 tests
+test bpffs::tests::bpf_fs_magic_constant_is_kernel_value ... ok
+test bpffs::tests::rejects_missing_path ... ok
+test bpffs::tests::rejects_interior_nul_path ... ok
+test bpffs::tests::rejects_non_bpffs_tempdir ... ok
+test loader::tests::license_check_rejects_elf_without_license_section ... ok
+test loader::tests::license_check_accepts_gpl_payload ... ok
+test loader::tests::license_check_rejects_wrong_payload ... ok
+test loader::tests::load_empty_bytes_rejected ... ok
+test loader::tests::load_garbage_bytes_rejected ... ok
+test loader::tests::xdp_mode_flag_mapping ... ok
+test loader::tests::xdp_mode_is_copy ... ok
+test nic_compat::tests::current_kernel_mm_resolves_on_this_box ... ok
+test nic_compat::tests::classify_unchanged_is_pure_and_untouched ... ok
+test nic_compat::tests::ena_unresolved_fw_modern_kernel_stays_allowed ... ok
+test nic_compat::tests::ena_and_ice_rows ... ok
+test nic_compat::tests::ena_unresolved_fw_prebad_kernel_refuses ... ok
+test nic_compat::tests::ethtool_firmware_parse ... ok
+test nic_compat::tests::mlx5_old_firmware_refused ... ok
+test nic_compat::tests::non_kernel_keyed_driver_unresolved_fw_still_fail_open ... ok
+test nic_compat::tests::probe_reports_unavailable_on_aya_013 ... ok
+test nic_compat::tests::unknown_driver_allowed ... ok
+test nic_compat::tests::version_compare_basic ... ok
+test nic_compat::tests::mlx5_new_firmware_allowed ... ok
+test sim::tests::ipv6_conntrack_hit_triggers_xdp_tx_sim ... ok
+test sim::tests::lpm_trie_zero_prefix_matches_everything ... ok
+test sim::tests::lpm_trie_acl_matches_prefix ... ok
+test sim::tests::rfc_1624_incremental_reversible ... ok
+test sim::tests::untagged_frame_has_14_byte_l3_offset ... ok
+test sim::tests::truncated_vlan_frame_returns_none ... ok
+test stats_export::tests::attach_probe_failed_counter_round_trip ... ok
+test sim::tests::vlan_tag_stripped_before_ipv4_parse ... ok
+test stats_export::tests::label_strings_match_kernel_vocab ... ok
+test stats_export::tests::num_slots_matches_enum ... ok
+test stats_export::tests::pin_reuse_records_round_trip ... ok
+test stats_export::tests::pin_reuse_unknown_name_is_silent ... ok
+test stats_export::tests::round_trip_all_modes ... ok
+test stats_export::tests::stat_slot_indices_are_wire_stable ... ok
+test stats_export::tests::unset_returns_none ... ok
+test tests::conntrack_default ... ok
+test tests::conntrack_eviction_at_capacity ... ok
+test tests::conntrack_insert_lookup_remove ... ok
+test tests::conntrack_update_existing_does_not_evict ... ok
+test tests::is_prime_checks ... ok
+test tests::maglev_no_backends_error ... ok
+test tests::maglev_non_prime_table_size_rejected ... ok
+test nic_compat::tests::version_parse_truncates_junk ... ok
+test tests::maglev_zero_table_size_error ... ok
+test tests::maglev_distribution ... ok
+test tests::maglev_consistency ... ok
+test tests::hotswap_preserves_conntrack ... ok
+test sim::tests::rfc_1624_incremental_checksum_matches_recompute ... ok
+test tests::hotswap_evicts_stale_conntrack_after_shrink ... ok
+
+test result: ok. 52 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.03s
+
+     Running tests/elf_sections.rs (target/debug/deps/elf_sections-b144a1697ca8ace3)
+
+running 3 tests
+test btf_sections_present_and_non_empty ... ok
+test elf_size_within_budget ... ok
+test license_section_says_gpl ... ok
+
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/l4_xdp_conntrack.rs (target/debug/deps/l4_xdp_conntrack-8b5ecfc7a72f4b69)
+
+running 2 tests
+test lru_evicts_oldest_under_flood ... ignored, needs CAP_BPF + post-EBPF-2-03 lb_xdp.bin rebuild — runs in CI privileged stage
+test flood_does_not_oom_userspace_simulator ... ok
+
+test result: ok. 1 passed; 0 failed; 1 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/loader_license_assert.rs (target/debug/deps/loader_license_assert-2d046cdde9d6ea1d)
+
+running 2 tests
+test test_loader_refuses_elf_without_license ... ok
+test test_loader_refuses_real_elf_without_license_section ... ok
+
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/pod_padding.rs (target/debug/deps/pod_padding-acf300f4831927d7)
+
+running 5 tests
+test test_backend_entry_pad_zeroed_after_new ... ok
+test test_backend_entry_v6_pad_zeroed_after_new ... ok
+test test_flowkeyv6_pad_zeroed_after_new ... ok
+test test_flowkey_pad_zeroed_after_new ... ok
+test test_struct_sizes_match_bpf_side ... ok
+
+test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/real_elf.rs (target/debug/deps/real_elf-49e5f235362f5db3)
+
+running 2 tests
+test real_elf_has_single_lb_xdp_program ... ok
+test real_elf_parses_via_loader ... ok
+
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/round8_acl_admission.rs (target/debug/deps/round8_acl_admission-4a1e733b8a1559d1)
+
+running 6 tests
+test accept_host_route_zero_ip_with_full_prefix ... ok
+test accept_prefix_one_through_thirty_two ... ok
+test reject_prefix_thirty_three ... ok
+test error_variant_shape ... ok
+test reject_prefix_zero ... ok
+test reject_prefix_max_u8 ... ok
+
+test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/round8_atomic_backends.rs (target/debug/deps/round8_atomic_backends-a58cbd23ad75609e)
+
+running 6 tests
+test daisy_chain_shifts_current_into_previous ... ok
+test backend_table_wire_size_is_frozen ... ok
+test generation_wraps ... ok
+test fixture_macs_distinct ... ok
+test zeroed_table_is_clean_slate ... ok
+test too_many_backends_error_carries_count ... ok
+
+test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/round8_attach_probe.rs (target/debug/deps/round8_attach_probe-25d6ee46b702582a)
+
+running 11 tests
+test attach_probe_failed_counter_is_monotonic ... ok
+test aya_lock_parser_does_not_confuse_sibling_crates ... ok
+test ena_and_ice_blocklist_rows_round_trip ... ok
+test drv_supported_fails_open_on_unknown_iface ... ok
+test ethtool_firmware_line_parsing ... ok
+test probe_synthetic_packet_round_trip ... ignored, needs CAP_BPF + aya BPF_PROG_TEST_RUN (aya 0.13.1 API blocker)
+test mlx5_patched_firmware_allowed ... ok
+test tripwire_fires_when_aya_is_upgraded_simulation ... ok
+test unknown_or_virtual_driver_allowed ... ok
+test mlx5_pre_ghsa_firmware_is_refused_with_bug_id ... ok
+test aya_version_is_pinned_to_the_no_test_run_release ... ok
+
+test result: ok. 10 passed; 0 failed; 1 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/round8_attach_replace.rs (target/debug/deps/round8_attach_replace-938f1d335717e589)
+
+running 5 tests
+test detach_verifying_on_real_iface ... ignored, kernel-touching: requires CAP_BPF + dummy netdev
+test attach_replacing_signature_present ... ok
+test query_unknown_iface_is_a_loud_error_not_a_silent_none ... ok
+test xdp_query_result_is_copy_and_default ... ok
+test detach_signature_matches_ops04_coordinator ... ok
+
+test result: ok. 4 passed; 0 failed; 1 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/round8_backend_flags.rs (target/debug/deps/round8_backend_flags-c2b15d2c8cc64518)
+
+running 5 tests
+test backend_entry_constructor_takes_no_flags_arg ... ok
+test backend_entry_v6_size_is_36_post_l4_07 ... ok
+test backend_entry_size_is_24_post_l4_07 ... ok
+test backend_entry_v6_constructor_takes_no_flags_arg ... ok
+test no_flags_field_on_backend_entry ... ok
+
+test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/round8_backend_sentinel.rs (target/debug/deps/round8_backend_sentinel-cddc3b9c4f58c42d)
+
+running 7 tests
+test legacy_new_still_accepts_zero_for_back_compat ... ok
+test stats_slot_backend_unpopulated_at_slot_10 ... ok
+test userspace_try_new_accepts_populated_v4 ... ok
+test userspace_try_new_rejects_zero_ip_v4 ... ok
+test userspace_try_new_rejects_zero_ip_v6 ... ok
+test userspace_try_new_rejects_zero_port_v4 ... ok
+test userspace_try_new_rejects_zero_port_v6 ... ok
+
+test result: ok. 7 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/round8_bpffs_check.rs (target/debug/deps/round8_bpffs_check-0d92d04fc6bab49e)
+
+running 5 tests
+test accepts_real_bpffs ... ignored, requires CAP_BPF and a bpffs mount; see CI privileged lane
+test bpf_fs_magic_matches_uapi_constant ... ok
+test rejects_missing_path ... ok
+test rejects_relative_root ... ok
+test rejects_tempdir_with_actionable_hint ... ok
+
+test result: ok. 4 passed; 0 failed; 1 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/round8_conntrack_state.rs (target/debug/deps/round8_conntrack_state-1041c9647c2bb12a)
+
+running 7 tests
+test fin_ack_prunes_after_tx ... ok
+test fin_without_ack_does_not_prune ... ok
+test rst_for_untracked_flow_is_no_op_on_table ... ok
+test rst_prunes_conntrack_and_passes_to_kernel ... ok
+test rst_replay_only_evicts_matching_flow ... ok
+test stat_slot_indices_for_prune_slots_are_stable ... ok
+test syn_ack_does_not_prune ... ok
+
+test result: ok. 7 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/round8_ena_kernel_blocklist.rs (target/debug/deps/round8_ena_kernel_blocklist-1120072f5db5d101)
+
+running 1 test
+test drv_supported_ens5_is_allowed_on_this_not_known_bad_ena_box ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/round8_fragments.rs (target/debug/deps/round8_fragments-3f1ff839be363c8b)
+
+running 6 tests
+test ipv4_first_fragment_with_mf_set_detected ... ok
+test ipv4_fragment_mask_0x3fff_covers_offset_and_mf ... ok
+test ipv4_later_fragment_with_offset_detected ... ok
+test ipv4_unfragmented_packet_not_detected ... ok
+test ipv6_fragment_proto_value_is_44 ... ok
+test stat_slots_for_fragments_at_indices_11_and_12 ... ok
+
+test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/round8_netlink_xdp_query.rs (target/debug/deps/round8_netlink_xdp_query-bbdf54ba5ad91924)
+
+running 8 tests
+test live_query_loopback_has_no_xdp ... ignored, live AF_NETLINK socket — privileged CI lane only
+test empty_buffer_is_default_not_error ... ok
+test extracts_prog_id_from_real_shaped_getlink_reply ... ok
+test malformed_nested_rtattr_does_not_loop_or_panic ... ok
+test nlmsg_error_with_errno_is_surfaced ... ok
+test no_xdp_attribute_means_prog_id_none ... ok
+test prog_id_zero_is_normalised_to_none ... ok
+test truncated_message_is_rejected_not_panicked ... ok
+
+test result: ok. 7 passed; 0 failed; 1 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/round8_ptr_at_bounds.rs (target/debug/deps/round8_ptr_at_bounds-bd2a62d1c140bc87)
+
+running 7 tests
+test accepts_in_bounds ... ok
+test rejects_len_wraparound ... ok
+test header_size_corpus_in_bounds ... ok
+test ipv6_extension_header_walk_boundary ... ok
+test rejects_out_of_bounds_no_wrap ... ok
+test rejects_strict_greater_than_end ... ok
+test rejects_offset_wraparound ... ok
+
+test result: ok. 7 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/round8_synflood_cap.rs (target/debug/deps/round8_synflood_cap-7ecbe5182ec2f026)
+
+running 4 tests
+test default_cap_matches_katran_max_conn_rate ... ok
+test ct_insert_gate_zero_cap_disables ... ok
+test ct_insert_gate_blocks_burst_above_cap ... ok
+test ct_insert_gate_refills_after_window ... ok
+
+test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.20s
+
+     Running tests/round8_verifier_baseline_70.rs (target/debug/deps/round8_verifier_baseline_70-c741a7ef344b8621)
+
+running 1 test
+test capture_real_70_verifier_baseline ... ignored, privileged: real BPF_PROG_LOAD on the running kernel to capture the verifier baseline — run via sudo -E cargo test -p lb-l4-xdp --test round8_verifier_baseline_70 -- --ignored --nocapture
+
+test result: ok. 0 passed; 0 failed; 1 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/round8_verify_xdp_gate.rs (target/debug/deps/round8_verify_xdp_gate-e37eb72a37bd7953)
+
+running 5 tests
+test baseline_files_exist_for_all_supported_kernels ... ok
+test placeholder_baselines_carry_pending_marker ... ok
+verify-xdp.sh: unsupported kernel version 9.99
+test script_rejects_floating_image_without_override ... ok
+usage: scripts/verify-xdp.sh --kernel <KVER> [--update-baseline]
+
+  --kernel <KVER>      One of: 5.15, 6.1, 6.6 (the supported LTS /
+                       rolling-LTS floors per DEPLOYMENT.md §27).
+  --update-baseline    Capture the verifier log and overwrite the
+                       committed .log.committed snapshot. Use after
+                       an intentional BPF source change.
+
+Each KVER value maps to a pinned lvh-images digest so the CI matrix
+is reproducible.
+
+Deprecated: positional KVER (e.g. `verify-xdp.sh 5.15`) is still
+accepted for one release with a WARN. Switch call sites to the flag
+form.
+usage: scripts/verify-xdp.sh --kernel <KVER> [--update-baseline]
+
+  --kernel <KVER>      One of: 5.15, 6.1, 6.6 (the supported LTS /
+                       rolling-LTS floors per DEPLOYMENT.md §27).
+  --update-baseline    Capture the verifier log and overwrite the
+                       committed .log.committed snapshot. Use after
+                       an intentional BPF source change.
+
+Each KVER value maps to a pinned lvh-images digest so the CI matrix
+is reproducible.
+
+Deprecated: positional KVER (e.g. `verify-xdp.sh 5.15`) is still
+accepted for one release with a WARN. Switch call sites to the flag
+form.
+test script_help_exits_with_usage_code ... ok
+test script_rejects_unknown_kernel ... ok
+
+test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s
+
+     Running tests/stats_export.rs (target/debug/deps/stats_export-62c875128a8e2825)
+
+running 4 tests
+test summed_counters_advance_under_load ... ignored, needs CAP_BPF + bpffs — runs in CI privileged stage
+test num_slots_constant_tracks_appended_slots ... ok
+test read_stats_without_install_returns_handle_missing ... ok
+test slot_indices_match_ebpf_constants ... ok
+
+test result: ok. 3 passed; 0 failed; 1 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/xdp_attach_mode.rs (target/debug/deps/xdp_attach_mode-f7586e951b14a84c)
+
+running 3 tests
+test d1_native_attach::drv_mode_attach_to_ens5_proves_live_datapath ... ignored, privileged: real DRV-mode XDP attach to ens5 (ENA NIC) — run via sudo -E cargo test -p lb-l4-xdp --test xdp_attach_mode -- --ignored --nocapture
+test test_skb_fallback_logs_warning ... ignored, needs CAP_BPF + CAP_NET_ADMIN + dummy0 netdev — runs in CI privileged stage
+test stats_export_round_trip_drv_skb_hw ... ok
+
+test result: ok. 1 passed; 0 failed; 2 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/xdp_link_id_drop_safe.rs (target/debug/deps/xdp_link_id_drop_safe-efb00b80c7586003)
+
+running 2 tests
+test xdp_link_persists_after_id_drop ... ignored, needs CAP_BPF + CAP_NET_ADMIN + dummy0 — runs in CI privileged stage
+test loader_attach_signature_drops_xdplinkid_silently ... ok
+
+test result: ok. 1 passed; 0 failed; 1 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/xdp_pin_paths.rs (target/debug/deps/xdp_pin_paths-0f4ab5de8ac5e5fa)
+
+running 3 tests
+test test_maps_pinned_then_loaded_from_pin ... ignored, needs CAP_BPF + bpffs mount — runs in CI privileged stage
+test default_pin_dir_is_canonical ... ok
+test pin_name_constants_match_ebpf_source ... ok
+
+test result: ok. 2 passed; 0 failed; 1 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running unittests src/lib.rs (target/debug/deps/lb_l7-4bcc906ba2059b98)
+
+running 88 tests
+test authority::tests::predicate_reexport_is_lb_core ... ok
+test authority::tests::request_valid_authority_passes ... ok
+test authority::tests::request_absent_and_empty_authority_skipped ... ok
+test authority::tests::request_uri_authority_validated ... ok
+test authority::tests::request_host_header_validated ... ok
+test grpc_proxy::tests::decode_health_check_service_empty_body_returns_empty ... ok
+test grpc_proxy::tests::decode_health_check_service_empty_message_returns_empty ... ok
+test grpc_proxy::tests::decode_health_check_service_decodes_string_field ... ok
+test grpc_proxy::tests::grpc_timeout_absent_returns_none ... ok
+test grpc_proxy::tests::decode_health_check_service_skips_unknown_field ... ok
+test grpc_proxy::tests::grpc_timeout_below_max_is_preserved ... ok
+test grpc_proxy::tests::grpc_timeout_parse_and_clamp_at_max ... ok
+test grpc_proxy::tests::http_non_200_translates_to_grpc_status ... ok
+test grpc_proxy::tests::is_grpc_request_matches_application_grpc ... ok
+test grpc_proxy::tests::is_grpc_request_matches_application_grpc_plus_proto ... ok
+test grpc_proxy::tests::is_grpc_request_matches_case_insensitive ... ok
+test grpc_proxy::tests::is_grpc_request_matches_with_charset_parameter ... ok
+test grpc_proxy::tests::is_grpc_request_rejects_application_json ... ok
+test grpc_proxy::tests::health_check_serving_response_well_formed ... ok
+test grpc_proxy::tests::grpc_error_response_carries_trailer_status ... ok
+test grpc_proxy::tests::is_grpc_request_rejects_empty_extension ... ok
+test grpc_proxy::tests::parse_and_clamp_grpc_timeout_malformed_yields_invalid_argument ... ok
+test grpc_proxy::tests::parse_and_clamp_grpc_timeout_absent_yields_absent ... ok
+test h1_proxy::tests::alt_svc_absent_when_not_configured ... ok
+test h1_proxy::tests::alt_svc_injected_when_configured ... ok
+test h1_proxy::tests::round_robin_empty_returns_none ... ok
+test h1_proxy::tests::hop_by_hop_headers_stripped_from_request ... ok
+test h1_proxy::tests::hop_by_hop_response_strips_te_and_transfer_encoding_keeps_trailer ... ok
+test h1_proxy::tests::round_robin_picker_cycles ... ok
+test h1_proxy::tests::via_appended ... ok
+test h1_proxy::tests::via_two_lines_preserved ... ok
+test h1_proxy::tests::x_forwarded_for_appended ... ok
+test h1_proxy::tests::x_forwarded_for_created_when_absent ... ok
+test h1_proxy::tests::x_forwarded_for_two_lines_preserved ... ok
+test h2_proxy::tests::capture_request_trailers_accepts_valid ... ok
+test h2_proxy::tests::h2_proxy_alt_svc_injected ... ok
+test h2_proxy::tests::clean_close_io_drain_is_bounded ... ok
+test h2_proxy::tests::h2_proxy_hop_by_hop_stripped ... ok
+test h1_proxy::tests::test_sigterm_h1_graceful_shutdown_resolves ... ok
+test h2_proxy::tests::clean_close_io_drains_inbound_before_fin ... ok
+test h2_security::tests::apply_does_not_panic_with_defaults ... ok
+test h2_security::tests::defaults_align_with_lb_h2_constants ... ok
+test h2_to_h1::tests::bridge_accepts_matching_authority_host ... ok
+test h2_to_h1::tests::bridge_rejects_authority_host_disagreement ... ok
+test security_hooks::tests::default_hooks_returns_noop ... ok
+test sni_authority::tests::authority_with_port_compared_on_host_only ... ok
+test security_hooks::tests::noop_admit_connection_always_ok ... ok
+test security_hooks::tests::noop_inspect_request_always_ok ... ok
+test sni_authority::tests::case_insensitive_match ... ok
+test sni_authority::tests::empty_authority_passes ... ok
+test sni_authority::tests::ipv6_authority ... ok
+test sni_authority::tests::matching_pair_passes ... ok
+test h2_proxy::tests::test_sigterm_emits_two_step_goaway ... ok
+test sni_authority::tests::misdirected_response_is_421 ... ok
+test sni_authority::tests::mismatch_rejected ... ok
+test sni_authority::tests::no_sni_passes ... ok
+test sni_authority::tests::trailing_dot_normalised ... ok
+test stripped_request::tests::into_inner_yields_request ... ok
+test stripped_request::tests::repr_transparent_zero_cost ... ok
+test stripped_request::tests::strip_removes_hop_by_hop ... ok
+test tests::all_bridge_combinations_report_correct_protocols ... ok
+test tests::bridge_preserves_body ... ok
+test tests::bridge_response_preserves_status_and_body ... ok
+test tests::h1_to_h1_response_strips_te_trailers ... ok
+test tests::h1_to_h1_strips_hop_by_hop_headers ... ok
+test tests::h1_to_h2_uses_custom_scheme ... ok
+test tests::h2_to_h1_empty_authority_errors ... ok
+test tests::h2_to_h1_missing_authority_errors ... ok
+test tests::h3_to_h1_empty_authority_errors ... ok
+test trace_ctx::tests::child_keeps_trace_id_replaces_parent ... ok
+test tests::too_many_headers_rejected ... ok
+test trace_ctx::tests::missing_traceparent_synthesises_root ... ok
+test trace_ctx::tests::inject_round_trips_onto_hyper_headers ... ok
+test trace_ctx::tests::span_ids_are_unique_per_call ... ok
+test upstream::tests::round_robin_upstreams_cycles ... ok
+test upstream::tests::round_robin_upstreams_empty_returns_none ... ok
+test upstream::tests::upstream_backend_constructors_set_proto ... ok
+test ws_proxy::tests::connection_token_list_accepts_additional_tokens ... ok
+test ws_proxy::tests::non_upgrade_request_passes_through ... ok
+test ws_proxy::tests::handshake_response_headers_includes_accept ... ok
+test ws_proxy::tests::plain_connect_not_websocket ... ok
+test ws_proxy::tests::rejects_missing_key ... ok
+test ws_proxy::tests::rejects_non_get ... ok
+test ws_proxy::tests::rejects_wrong_version ... ok
+test ws_proxy::tests::rfc8441_extended_connect_detected ... ok
+test ws_proxy::tests::upgrade_request_detected_correctly ... ok
+test h2_proxy::tests::h2_proxy_xff_appended ... ok
+test ws_proxy::tests::close_code_1001_on_idle_timeout ... ok
+
+test result: ok. 88 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.15s
+
+     Running tests/bridging_h1_h1.rs (target/debug/deps/bridging_h1_h1-2069de77cffaa18a)
+
+running 1 test
+test test_bridge_h1_to_h1 ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/bridging_h1_h2.rs (target/debug/deps/bridging_h1_h2-e7cd8b10ed45b5b2)
+
+running 1 test
+test test_bridge_h1_to_h2 ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/bridging_h1_h3.rs (target/debug/deps/bridging_h1_h3-0c35320eb21885b2)
+
+running 1 test
+test test_bridge_h1_to_h3 ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/bridging_h2_h1.rs (target/debug/deps/bridging_h2_h1-7b8df431c08d4fcd)
+
+running 1 test
+test test_bridge_h2_to_h1 ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/bridging_h2_h2.rs (target/debug/deps/bridging_h2_h2-96542e971e74ed78)
+
+running 1 test
+test test_bridge_h2_to_h2 ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/bridging_h2_h3.rs (target/debug/deps/bridging_h2_h3-418b2e718ec08836)
+
+running 1 test
+test test_bridge_h2_to_h3 ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/bridging_h3_h1.rs (target/debug/deps/bridging_h3_h1-742db6dd956940b8)
+
+running 1 test
+test test_bridge_h3_to_h1 ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/bridging_h3_h2.rs (target/debug/deps/bridging_h3_h2-dc34d596774aecaa)
+
+running 1 test
+test test_bridge_h3_to_h2 ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/bridging_h3_h3.rs (target/debug/deps/bridging_h3_h3-d3c64a0193e10027)
+
+running 1 test
+test test_bridge_h3_to_h3 ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/h2_authority_host_mismatch.rs (target/debug/deps/h2_authority_host_mismatch-c5ae804876236a86)
+
+running 11 tests
+test case_insensitive_host_match ... ok
+test ipv6_authority_match ... ok
+test empty_host_value_rejects ... ok
+test matching_authority_and_host_pass ... ok
+test missing_authority_is_not_rejected_here ... ok
+test ipv6_vs_ipv4_disagreement ... ok
+test missing_host_is_not_rejected_here ... ok
+test port_elision_one_side_accepted ... ok
+test port_match_when_both_explicit ... ok
+test port_mismatch_when_both_explicit_rejected ... ok
+test test_h2_400_on_disagreement ... ok
+
+test result: ok. 11 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/h2_connect_protocol_settings.rs (target/debug/deps/h2_connect_protocol_settings-3af3623d147ea57d)
+
+running 2 tests
+test h2_connect_protocol_setting_id_documented ... ok
+test h2_proxy_calls_enable_connect_protocol ... ok
+
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/h2_to_h1_pseudo_strip.rs (target/debug/deps/h2_to_h1_pseudo_strip-27626bef06a1e956)
+
+running 6 tests
+test h2_to_h1_clean_request_ok ... ok
+test h2_to_h1_connection_header_rejected ... ok
+test h2_to_h1_transfer_encoding_rejected ... ok
+test h2_to_h1_te_trailers_ok ... ok
+test h2_to_h1_keep_alive_header_rejected ... ok
+test h2_to_h1_te_non_trailers_rejected ... ok
+
+test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/hop_by_hop_set.rs (target/debug/deps/hop_by_hop_set-a7dff622e9d88994)
+
+running 3 tests
+test strip_does_not_remove_the_trailers_pseudo_token ... ok
+test strip_removes_connection_listed_extras ... ok
+test strip_removes_exactly_the_rfc_9110_set ... ok
+
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/informational_responses.rs (target/debug/deps/informational_responses-bd574a71ecf6f1ae)
+
+running 5 tests
+test hyper_h1_server_handles_expect_100_continue_internally ... ok
+test test_103_early_hints_forwarded ... ok
+test test_100_continue_forwarded ... ok
+test test_h2_informational ... ok
+test test_1xx_from_upstream_passes_through_h1 ... ok
+
+test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/round8_authority_enforced.rs (target/debug/deps/round8_authority_enforced-12214f6818867f4c)
+
+running 7 tests
+test h1_valid_authority_passes_validator ... ok
+test h1_comma_in_authority_rejected_before_upstream ... ok
+test h2_comma_in_authority_rejected_before_upstream ... ok
+test h2_valid_authority_passes_validator ... ok
+test test_ws_upgrade_comma_authority_rejected ... ok
+test test_h2_grpc_comma_authority_rejected ... ok
+test test_h2_ext_connect_comma_authority_rejected ... ok
+
+test result: ok. 7 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.15s
+
+     Running tests/round8_body_overread.rs (target/debug/deps/round8_body_overread-b5a73335ca100506)
+
+running 4 tests
+test http2_pool_send_request_doc_block_present ... ok
+test pooled_tcp_set_reusable_doc_block_present ... ok
+test h2_pool_failed_send_leaves_no_stale_entry ... ok
+test h1_take_and_discard_doc_block_present ... ok
+
+test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/round8_edge_defaults_table.rs (target/debug/deps/round8_edge_defaults_table-cc89532671890f9b)
+
+running 2 tests
+test h2_security_defaults_match_documented_table ... ok
+test h2_security_thresholds_default_constructs ... ok
+
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/round8_glitches_enforced.rs (target/debug/deps/round8_glitches_enforced-1a268b13604e4426)
+
+running 1 test
+test glitches_counter_drains_connection_at_threshold_and_is_observable ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.04s
+
+     Running tests/round8_keepalive_count_cap.rs (target/debug/deps/round8_keepalive_count_cap-8c1c672db0740a74)
+
+running 3 tests
+test h1_nth_response_carries_connection_close ... ok
+test h1_cap_zero_disables ... ok
+test counter_increments_on_cap_close ... ok
+
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.20s
+
+     Running tests/round8_traceparent_propagation.rs (target/debug/deps/round8_traceparent_propagation-fe317a984661a989)
+
+running 1 test
+test request_span_carries_trace_id_and_status ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.10s
+
+     Running tests/round8_underscore_policy.rs (target/debug/deps/round8_underscore_policy-51b7a7fcc2e8c8c3)
+
+running 6 tests
+test default_policy_is_reject ... ok
+test lb_config_enum_default_matches_lb_l7_enum_default ... ok
+test policy_variants_are_distinct ... ok
+test underscore_byte_scan_predicate_reference_corpus ... ok
+test h1_proxy_source_carries_l7_05_marker ... ok
+test h2_proxy_source_carries_l7_05_marker ... ok
+
+test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/round8_ws_upgrade_defer.rs (target/debug/deps/round8_ws_upgrade_defer-51394e7e09e6c792)
+
+running 4 tests
+test client_sees_502_when_backend_rejects_ws ... ok
+test upstream_receives_child_traceparent ... ok
+test client_sees_504_on_dial_timeout ... ok
+test no_smuggled_request_forwarded_on_failure ... ok
+
+test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.50s
+
+     Running tests/round8_xff_iteration.rs (target/debug/deps/round8_xff_iteration-566576f24e74a38b)
+
+running 5 tests
+test no_xff_header_inserts_peer_only ... ok
+test single_xff_unchanged_format ... ok
+test two_xff_headers_preserved_in_join ... ok
+test three_xff_headers_count_preserved ... ok
+test xff_with_comma_in_existing_value_preserves_inner_commas ... ok
+
+test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/smuggle_matrix.rs (target/debug/deps/smuggle_matrix-216c74f8ec15b2c1)
+
+running 13 tests
+test test_default_strict_te ... ok
+test test_duplicate_cl_identical_accepted ... ok
+test test_duplicate_cl_differing ... ok
+test test_h1_default_accepts_plain_chunked ... ok
+test test_h2_downgrade_connection_rejected ... ok
+test test_h2_downgrade_te_chunked_rejected ... ok
+test test_pipelined_cl_te ... ok
+test test_h2_te_non_trailers_rejected ... ok
+test test_strict_rejects_codec_chain_with_chunked_first ... ok
+test test_strict_rejects_empty_codec ... ok
+test test_te_non_chunked_final ... ok
+test test_te_identity_rejected ... ok
+test test_h2_te_trailers_accepted ... ok
+
+test result: ok. 13 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/smuggle_wired.rs (target/debug/deps/smuggle_wired-c25a808c0fcd4616)
+
+running 3 tests
+test test_cl_te_rejected ... ok
+test test_te_gzip_chunked_strict_rejected ... ok
+test test_duplicate_cl_differing_values_rejected ... ok
+
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/sni_authority_421.rs (target/debug/deps/sni_authority_421-c847e03573305584)
+
+running 2 tests
+test test_loopback_allows_mismatch ... ok
+test test_421_emitted_on_sni_host_mismatch_over_tls ... ok
+
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 5.00s
+
+     Running tests/sni_authority_mismatch.rs (target/debug/deps/sni_authority_mismatch-e7688e1c3f42e9fd)
+
+running 7 tests
+test ipv6_authority_with_brackets ... ok
+test matching_sni_and_authority_passes ... ok
+test missing_sni_does_not_falsely_reject ... ok
+test case_insensitive_pass ... ok
+test test_421_on_mismatch ... ok
+test trailing_dot_normalised ... ok
+test port_in_authority_ignored ... ok
+
+test result: ok. 7 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/stripped_request_newtype.rs (target/debug/deps/stripped_request_newtype-40a76cde69b4a61f)
+
+running 5 tests
+test cannot_construct_stripped_request_without_strip ... ok
+test idempotent_strip_does_not_panic_or_resurrect_headers ... ok
+test repr_transparent_zero_cost ... ok
+test into_inner_round_trips_uri_and_method ... ok
+test strip_removes_canonical_hop_by_hop_set ... ok
+
+test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/trailer_passthrough.rs (target/debug/deps/trailer_passthrough-f04dd33d5de0425a)
+
+running 8 tests
+test bridge_request_response_carry_trailers ... ok
+test every_bridge_forwards_response_trailers ... ok
+test lb_quic_h3_surfaces_carry_trailers ... ok
+test h3_legs_forward_trailers_for_every_pair_involving_h3 ... ok
+test every_bridge_forwards_request_trailers ... ok
+test stream_body_with_trailers_round_trips ... ok
+test test_h3_h1_trailers_emitted_on_wire ... ok
+test test_h2_h1_trailers_emitted_on_wire ... ok
+
+test result: ok. 8 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running unittests src/lib.rs (target/debug/deps/lb_observability-9452c4aa703a2674)
+
+running 43 tests
+test label_budget::tests::canonical_label_table_covers_red_families ... ok
+test label_budget::tests::enforced_budget_refuses_overflow ... ok
+test label_budget::tests::enforced_budget_admits_within_ceiling ... ok
+test label_budget::tests::enforced_budget_distinguishes_arity_via_separator ... ok
+test label_budget::tests::max_routes_budget_constant_matches_plan ... ok
+test label_budget::tests::oversize_config_refuses_to_start ... ok
+test label_budget::tests::realistic_config_fits_within_default_budget ... ok
+test label_budget::tests::xdp_label_keys_locked_to_action_family_direction_mode ... ok
+test log::tests::default_config_is_json_info ... ok
+test log::tests::format_parser_accepts_canonical_tokens ... ok
+test probes::tests::body_token_string_is_stable ... ok
+test probes::tests::drain_flips_readiness_but_keeps_liveness ... ok
+test probes::tests::ready_after_drain_is_a_no_op ... ok
+test probes::tests::ready_transition_flips_flags ... ok
+test probes::tests::starts_in_starting_state ... ok
+test prometheus_exposition::tests::empty_registry_renders_empty_string ... ok
+test prometheus_exposition::tests::renders_help_and_type_lines ... ok
+test prometheus_exposition::tests::exposition_text_parses_as_openmetrics_subset ... ok
+test prometheus_exposition::tests::renders_histogram_buckets_and_sum ... ok
+test tests::counter_vec_labels_increment_independently ... ok
+test tests::counter_get_or_create_is_idempotent ... ok
+test tests::gather_snapshot_matches_registered_metrics ... ok
+test tests::histogram_observe_appears_in_exposition ... ok
+test tests::missing_counter_returns_none ... ok
+test tests::increment_and_read_backcompat ... ok
+test tracing_propagation::tests::extract_and_inject_round_trip ... ok
+test tracing_propagation::tests::otlp_disabled_keeps_sampler_ratio ... ok
+test tests::type_mismatch_is_reported ... ok
+test tracing_propagation::tests::rejects_invalid_traceparent_shapes ... ok
+test tracing_propagation::tests::roundtrip_encode_decode ... ok
+test tracing_propagation::tests::span_name_format_is_locked ... ok
+test tracing_propagation::tests::tracestate_overlong_is_dropped ... ok
+test xdp_metrics::tests::delta_emits_increments ... ok
+test xdp_metrics::tests::delta_first_tick_is_zero ... ok
+test xdp_metrics::tests::delta_handles_counter_reset ... ok
+test tracing_propagation::tests::parse_canonical_traceparent ... ok
+test xdp_metrics::tests::record_conntrack_full_bumps_family ... ok
+test xdp_metrics::tests::register_pre_seeds_all_label_slots ... ok
+test xdp_metrics::tests::set_attached_mode_one_hot ... ok
+test xdp_metrics::tests::apply_packet_deltas_updates_counter ... ok
+test tests::thread_safe_increment ... ok
+test admin_http::tests::bind_and_shutdown ... ok
+test admin_http::tests::test_admin_403_without_token ... ok
+
+test result: ok. 43 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.05s
+
+     Running tests/health_endpoints.rs (target/debug/deps/health_endpoints-40b3edfeb555e674)
+
+running 2 tests
+test test_readyz_returns_json_content_type ... ok
+test test_livez_readyz_startupz_states ... ok
+
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.06s
+
+     Running tests/log_format.rs (target/debug/deps/log_format-bff18e0e2d3112b9)
+
+running 2 tests
+test test_log_format_env_token_round_trips ... ok
+test test_json_log_emits_json ... ok
+
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/metrics_xdp_conntrack.rs (target/debug/deps/metrics_xdp_conntrack-6a4f35ac41a9338e)
+
+running 2 tests
+test test_counter_is_monotonically_increasing ... ok
+test test_counter_reflects_stats_slot ... ok
+
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/metrics_xdp_slots.rs (target/debug/deps/metrics_xdp_slots-93be72e4d026f241)
+
+running 3 tests
+test label_key_is_action_not_result ... ok
+test all_stat_slots_are_exported_at_zero ... ok
+test deltas_apply_per_slot ... ok
+
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/panic_total.rs (target/debug/deps/panic_total-b297efdf071150ec)
+
+running 2 tests
+test panic_total_accessor_is_idempotent ... ok
+test panic_total_starts_at_zero_and_is_exposed ... ok
+
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/red_label_budget.rs (target/debug/deps/red_label_budget-4038c21f658d012d)
+
+running 4 tests
+test test_budget_refuses_start_on_overflow ... ok
+test test_canonical_label_table_documents_red_families ... ok
+test test_realistic_budget_passes ... ok
+test test_zero_listeners_is_zero_series ... ok
+
+test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/tracing_traceparent.rs (target/debug/deps/tracing_traceparent-254c4d2dd4ced608)
+
+running 3 tests
+test test_span_name_convention_documented ... ok
+test test_traceparent_with_child_span_rewrite ... ok
+test test_traceparent_roundtrip ... ok
+
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running unittests src/lib.rs (target/debug/deps/lb_quic-ee21f2c347fc5505)
+
+running 12 tests
+test h3_bridge::tests::build_h1_request_none_body_is_byte_identical_to_legacy_bodyless ... ok
+test h3_bridge::tests::encode_h3_response_includes_status_and_body ... ok
+test h3_bridge::tests::feed_body_accepts_valid_h3_trailers ... ok
+test h3_bridge::tests::feed_body_rejects_pseudo_header_in_h3_trailers ... ok
+test h3_bridge::tests::s2_target_build_h1_request_with_body_sets_content_length_and_appends_payload ... ok
+test tests::datagram_empty_rejected ... ok
+test h3_bridge::tests::stream_rx_buf_accumulates_partial_headers ... ok
+test tests::stream_empty_rejected ... ok
+test tests::stream_forward_ok ... ok
+test tests::datagram_forward_ok ... ok
+test h3_bridge::tests::read_h1_response_capped_rejects_over_cap_and_passes_under_cap ... ok
+test router::tests::router_drops_initial_when_cap_reached ... ok
+
+test result: ok. 12 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.02s
+
+     Running tests/h3_graceful_close.rs (target/debug/deps/h3_graceful_close-1e7986a82199a8f1)
+
+running 1 test
+test test_h3_connection_close_emitted_on_cancel ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.59s
+
+     Running tests/h3_h1_binary_body_e2e.rs (target/debug/deps/h3_h1_binary_body_e2e-5f985149b4c27258)
+
+running 1 test
+test h3_to_h1_forwards_non_utf8_body_byte_for_byte ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/h3_h1_bridge_e2e.rs (target/debug/deps/h3_h1_bridge_e2e-1557e1858324a156)
+
+running 1 test
+test h3_h1_bridge_status_body_and_host_verbatim_through_quic_listener ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.05s
+
+     Running tests/h3_h1_stream_body_e2e.rs (target/debug/deps/h3_h1_stream_body_e2e-27034f99702d6738)
+
+running 6 tests
+test t4_feed_body_tiny_cap_emits_toolarge_and_latches ... ok
+test t4_oversized_body_yields_413_and_upstream_not_completed ... ok
+test t2_empty_body_is_byte_identical_to_s1_bodyless_head ... ok
+test t3_zero_length_data_frame_then_fin_no_spurious_chunk ... ok
+test t1_multi_data_frame_binary_body_forwarded_byte_identical ... ok
+test t5_single_large_data_frame_is_memory_bounded_through_stalled_upstream ... ok
+
+test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 6.94s
+
+     Running tests/h3_h1_stream_body_errors_e2e.rs (target/debug/deps/h3_h1_stream_body_errors_e2e-de5d5d9892ac6701)
+
+running 3 tests
+test p1b_t2_upstream_resets_mid_body_yields_502 ... ok
+test p1b_t3_oversized_after_partial_chunked_send_413_upstream_aborted ... ok
+test p1b_t1_client_cancels_mid_body_upstream_not_completed_and_no_leak ... ok
+
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.79s
+
+     Running tests/h3_h1_trailers_resp_e2e.rs (target/debug/deps/h3_h1_trailers_resp_e2e-437da1acfc97cfb6)
+
+running 2 tests
+test pc2_large_binary_response_body_reassembled_byte_identical ... ok
+test pc1_request_with_trailing_field_section_completes_and_drops_trailers ... ok
+
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.09s
+
+     Running tests/listener_lifecycle.rs (target/debug/deps/listener_lifecycle-301bb8c0d943a8a3)
+
+running 6 tests
+test udp_bind_and_local_addr_observable ... ok
+test shutdown_cancels_join_cleanly ... ok
+test retry_secret_autogenerated_0600_then_reloaded ... ok
+test alpn_h3_accepted_handshake_established ... ok
+test alpn_h3_29_legacy_accepted_handshake_established ... ok
+test alpn_unknown_rejected_handshake_fails ... ok
+
+test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 3.04s
+
+     Running tests/proptest_header.rs (target/debug/deps/proptest_header-aabb2143b6d516ed)
+
+running 1 test
+test header_from_slice_no_panic ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.11s
+
+     Running tests/quic_router_leak.rs (target/debug/deps/quic_router_leak-e44ba3429e08982d)
+
+running 3 tests
+test clean_exit_also_removes_entries ... ok
+test cancel_drops_entries ... ok
+test test_panicking_actor_removes_entry ... ok
+
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/round8_h3_authority_enforced.rs (target/debug/deps/round8_h3_authority_enforced-2a5ac233d8d14ad0)
+
+running 3 tests
+test h3_whitespace_in_authority_rejected_before_upstream ... ok
+test h3_comma_in_authority_rejected_before_upstream ... ok
+test h3_valid_authority_passes_validator ... ok
+
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.64s
+
+     Running tests/router_accept_path.rs (target/debug/deps/router_accept_path-540cddd57920af53)
+
+running 3 tests
+test zero_rtt_replay_guard_rejects_second_use_on_shared_instance ... ok
+test retry_token_round_trip_through_router ... ok
+test two_concurrent_clients_distinct_actors ... ok
+
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.08s
+
+     Running unittests src/lib.rs (target/debug/deps/lb_security-efa7b42ca5146e64)
+
+running 84 tests
+test admin_auth::tests::debug_does_not_print_digest_bytes ... ok
+test admin_auth::tests::from_hex_non_hex_rejected ... ok
+test admin_auth::tests::correct_token_accepted ... ok
+test admin_auth::tests::bearer_prefix_case_insensitive ... ok
+test admin_auth::tests::from_hex_wrong_length_rejected ... ok
+test admin_auth::tests::loopback_v6_always_ok ... ok
+test admin_auth::tests::from_hex_round_trips_with_plaintext_hash ... ok
+test admin_auth::tests::no_token_configured_allows_all ... ok
+test admin_auth::tests::missing_header_rejected ... ok
+test admin_auth::tests::loopback_v4_always_ok ... ok
+test admin_auth::tests::public_bind_without_override_rejected ... ok
+test admin_auth::tests::public_bind_override_with_token_ok ... ok
+test admin_auth::tests::wrong_token_rejected ... ok
+test admin_auth::tests::public_bind_override_without_token_rejected ... ok
+test admin_auth::tests::non_bearer_rejected ... ok
+test glitches::tests::defaults_match_haproxy_3_0 ... ok
+test glitches::tests::crossing_threshold_drains ... ok
+test glitches::tests::counter_resets_after_window ... ok
+test glitches::tests::glitches_score_aggregates_across_detectors ... ok
+test glitches::tests::weights_match_haproxy_table ... ok
+test glitches::tests::under_threshold_allows ... ok
+test hooks::tests::admit_connection_returns_permit ... ok
+test hooks::tests::admit_connection_over_cap_rejected ... ok
+test hooks::tests::inspect_request_clean_h1_ok ... ok
+test hooks::tests::inspect_request_cl_te_rejected ... ok
+test hooks::tests::inspect_request_strict_te_rejected_only_under_strict ... ok
+test hooks::tests::inspect_request_h2_downgrade_connection_rejected ... ok
+test key::tests_unix::missing_file_returns_io_error ... ok
+test key::tests_unix::mode_0600_passes_lax ... ok
+test key::tests_unix::mode_0600_passes_strict ... ok
+test key::tests_unix::mode_0640_group_read_only_still_advises ... ok
+test key::tests_unix::mode_0644_advises_in_lax ... ok
+test key::tests_unix::mode_0644_errors_in_strict ... ok
+test key::tests_unix::mode_0700_passes ... ok
+test retry::tests::mint_then_verify_roundtrip ... ok
+test retry::tests::verify_rejects_expired_token ... ok
+test handshake::tests::timeout_fires_on_silent_stream ... ok
+test retry::tests::verify_rejects_tampered_token ... ok
+test retry::tests::verify_rejects_wrong_peer ... ok
+test tests::slow_post_above_threshold_windowed ... ok
+test tests::slow_post_below_threshold_windowed ... ok
+test tests::slow_post_timeout_exceeded ... ok
+test tests::slowloris_rate_above_min_windowed ... ok
+test tests::slowloris_rate_below_min_windowed ... ok
+test tests::slowloris_timeout_exceeded ... ok
+test tests::slowloris_window_too_short_skipped ... ok
+test tests::slowloris_within_timeout ... ok
+test tests::smuggle_check_all_clean_headers_ok ... ok
+test tests::smuggle_cl_only_ok ... ok
+test tests::smuggle_cl_te_both_present_rejected ... ok
+test tests::smuggle_duplicate_cl_differing_values_rejected ... ok
+test tests::smuggle_duplicate_cl_same_values_ok ... ok
+test tests::smuggle_h2_downgrade_connection_header_rejected ... ok
+test tests::smuggle_h2_downgrade_not_h2_ok ... ok
+test tests::smuggle_h2_downgrade_te_non_trailers_rejected ... ok
+test tests::smuggle_h2_downgrade_te_trailers_case_insensitive_ok ... ok
+test tests::smuggle_h2_downgrade_te_trailers_ok ... ok
+test tests::smuggle_single_cl_ok ... ok
+test tests::smuggle_te_cl_chunked_final_ok ... ok
+test tests::smuggle_te_cl_non_chunked_final_rejected ... ok
+test tests::zero_rtt_check_0rtt_token_detects_replay ... ok
+test tests::zero_rtt_eviction_on_capacity ... ok
+test tests::zero_rtt_hash_based_dedup ... ok
+test tests::zero_rtt_different_tokens_ok ... ok
+test tests::zero_rtt_replay_detected ... ok
+test ticket::tests::new_tickets_use_current_key ... ok
+test ticket::tests::overlap_preserves_previous_for_decrypt ... ok
+test ticket::tests::previous_expires_after_overlap ... ok
+test ticket::tests::rotate_if_due_noop_before_interval ... ok
+test ticket::tests::rotate_if_due_swaps_keys_at_interval ... ok
+test ticket::tests::build_server_config_round_trip_encrypts_and_decrypts_with_current_key ... ok
+test ticket::tests::tls_bundle_load_from_paths_missing_cert_io_error ... ok
+test ticket::tests::tls_bundle_load_from_paths_empty_cert_rejected ... ok
+test ticket::tests::reload_tls_bundle_invalid_keeps_old_live ... ok
+test watchdog::tests::max_registered_enforced ... ok
+test watchdog::tests::register_progress_deregister_roundtrip ... ok
+test ticket::tests::tls_bundle_load_from_paths_alpn_advertised ... ok
+test ticket::tests::tls_bundle_load_from_paths_round_trip ... ok
+test watchdog::tests::unknown_id_errs ... ok
+test ticket::tests::reload_tls_bundle_succeeds_swaps_under_readers ... ok
+test ticket::tests::tls_bundle_mismatched_key_rejected ... ok
+test handshake::tests::zero_budget_promoted_to_one_ms ... ok
+test watchdog::tests::deadline_evicts_via_progress ... ok
+test watchdog::tests::sweep_evicts_stalled_connections ... ok
+
+test result: ok. 84 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.02s
+
+     Running tests/conn_gate.rs (target/debug/deps/conn_gate-412cb04d39106dc6)
+
+running 10 tests
+test cap_accessors_return_config ... ok
+test per_ip_entry_gcs_when_count_drops_to_zero ... ok
+test per_ip_cap_independent_across_ips ... ok
+test per_ip_full_does_not_consume_listener_slot ... ok
+test test_listener_cap_enforced ... ok
+test trusted_cidrs_do_not_currently_exempt ... ok
+test trusted_cidrs_field_round_trips ... ok
+test test_listener_cap_releases_on_drop ... ok
+test test_per_ip_cap_drops_on_drop ... ok
+test concurrent_admits_observe_cap ... ok
+
+test result: ok. 10 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/hooks_impl.rs (target/debug/deps/hooks_impl-624a57d9ff982a10)
+
+running 8 tests
+test admit_per_ip_full_rolls_back_listener_count ... ok
+test admit_listener_full_rejected_with_overcap ... ok
+test admit_returns_permit_and_drop_releases ... ok
+test clean_request_passes_inspect ... ok
+test smuggle_cl_te_is_rejected_as_smuggle ... ok
+test smuggle_h2_downgrade_connection_header_rejected ... ok
+test smuggle_duplicate_cl_differing_is_rejected ... ok
+test smuggle_strict_te_gzip_chunked_rejected_only_under_strict ... ok
+
+test result: ok. 8 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/slowloris_watchdog.rs (target/debug/deps/slowloris_watchdog-25c290d8311ac5e6)
+
+running 6 tests
+test deregister_returns_existence ... ok
+test max_registered_caps_the_table ... ok
+test sweep_expired_evicts_stalled ... ok
+test deadline_evicts ... ok
+test test_slow_progress_fires_eviction ... ok
+test fast_progress_passes ... ok
+
+test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.12s
+
+     Running tests/smuggle_strict_te.rs (target/debug/deps/smuggle_strict_te-6cf599c4b5dbf87d)
+
+running 16 tests
+test check_all_mode_h2_te_trailers_ok ... ok
+test check_all_mode_h2_runs_downgrade_check ... ok
+test check_all_mode_lenient_accepts_gzip_chunked ... ok
+test check_all_mode_strict_rejects_gzip_chunked ... ok
+test strict_te_chunked_alone_case_insensitive_ok ... ok
+test strict_te_chunked_gzip_rejected ... ok
+test strict_te_chunked_alone_ok ... ok
+test strict_te_deflate_rejected ... ok
+test check_all_mode_strict_still_catches_cl_te ... ok
+test strict_te_identity_rejected ... ok
+test strict_te_gzip_chunked_rejected ... ok
+test strict_te_leading_empty_codec_rejected ... ok
+test strict_te_internal_whitespace_normalised ... ok
+test strict_te_multiple_te_headers_each_checked ... ok
+test strict_te_no_te_header_ok ... ok
+test strict_te_trailing_empty_codec_rejected ... ok
+
+test result: ok. 16 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/timeout_accept.rs (target/debug/deps/timeout_accept-de45df8274483f67)
+
+running 3 tests
+test very_short_budget_still_returns_timeout ... ok
+test timeout_uses_default_budget_constant ... ok
+test test_slow_handshake_times_out ... ok
+
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/tls_versions.rs (target/debug/deps/tls_versions-da547acafb49326a)
+
+running 3 tests
+test default_config_lists_tls12_and_tls13 ... ok
+test tls13_only_config_builds_without_tls12 ... ok
+test test_tls13_only_rejects_tls12 ... ok
+
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/zero_rtt_replay_window.rs (target/debug/deps/zero_rtt_replay_window-8f2e4240fa917fcf)
+
+running 9 tests
+test capacity_one_still_detects_replay_of_last_token ... ok
+test default_window_size_constant_is_65k ... ok
+test capacity_zero_coerced_to_one ... ok
+test replay_hit_promotes_to_mru ... ok
+test replay_detected_within_window ... ok
+test test_lru_evicts_oldest ... ok
+test with_default_window_sizes_correctly ... ok
+test fills_and_evicts_under_unique_token_spray ... ok
+test arena_reuses_freed_slots ... ok
+
+test result: ok. 9 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.05s
+
+   Doc-tests lb
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+   Doc-tests lb_balancer
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+   Doc-tests lb_config
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+   Doc-tests lb_controlplane
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+   Doc-tests lb_core
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+   Doc-tests lb_cp_client
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+   Doc-tests lb_grpc
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+   Doc-tests lb_h1
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+   Doc-tests lb_h2
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+   Doc-tests lb_h3
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+   Doc-tests lb_health
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+   Doc-tests lb_io
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+   Doc-tests lb_l4_xdp
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+   Doc-tests lb_l7
+
+running 2 tests
+test crates/lb-l7/src/stripped_request.rs - stripped_request::strip_for_test (line 116) - compile fail ... ok
+test crates/lb-l7/src/stripped_request.rs - stripped_request::strip_for_test (line 103) - compile fail ... ok
+
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.09s
+
+   Doc-tests lb_observability
+
+running 2 tests
+test crates/lb-observability/src/label_budget.rs - label_budget (line 8) ... ignored
+test crates/lb-observability/src/tracing_propagation.rs - tracing_propagation::span_name (line 257) ... ok
+
+test result: ok. 1 passed; 0 failed; 1 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+   Doc-tests lb_quic
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+   Doc-tests lb_security
+
+running 3 tests
+test crates/lb-security/src/admin_auth.rs - admin_auth (line 8) ... ignored
+test crates/lb-security/src/hooks.rs - hooks (line 13) ... ignored
+test crates/lb-security/src/watchdog.rs - watchdog (line 12) ... ignored
+
+test result: ok. 0 passed; 0 failed; 3 ignored; 0 measured; 0 filtered out; finished in 0.00s
+

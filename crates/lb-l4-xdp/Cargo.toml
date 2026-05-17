@@ -11,6 +11,10 @@ build = "build.rs"
 thiserror = { workspace = true }
 rand = { workspace = true }
 parking_lot = { workspace = true }
+# EBPF-2-04: the attach-fallback ladder logs each rejected mode at WARN
+# and the chosen mode at INFO so operators see the negotiation without
+# a separate metric scrape. Tracing is already in the workspace.
+tracing = { workspace = true }
 
 # Pillar 4a: aya userspace loader is Linux-only; keeps non-Linux targets
 # (e.g. aarch64-musl CI) building against the pure-userspace simulation.
@@ -20,3 +24,20 @@ aya = { workspace = true }
 # by `XdpLoader::parse_object`; the real-ELF integration test runs without
 # CAP_BPF because we never ask aya to create maps.
 aya-obj = { workspace = true }
+# ROUND8-L4-11: bpffs runtime check. `libc::statfs` lets us verify the
+# pin directory is backed by `BPF_FS_MAGIC` BEFORE handing the path to
+# aya, replacing an opaque deep-aya EINVAL with an operator-actionable
+# error. `libc` is already in `workspace.dependencies` so this adds no
+# new crate to the lockfile graph.
+libc = { workspace = true }
+
+# SEC-2-12: `object` is a no_std-friendly ELF parser. Already a
+# transitive dep of `aya-obj`, so promoting it from dev-dep to a
+# regular dep adds no new crate to the lockfile graph. We need it
+# as a runtime dep (not just dev) because the
+# `XdpLoader::load_from_bytes` license assertion runs in production,
+# not only in tests.
+#
+# Wave-1 (EBPF-2-01) used it only for the ELF-section regression
+# tests; Wave-2 (SEC-2-12) extends that into a startup-time check.
+object = { version = "0.36", default-features = false, features = ["read", "std"] }

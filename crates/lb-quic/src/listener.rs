@@ -31,7 +31,7 @@ use lb_io::pool::TcpPool;
 use lb_io::quic_pool::QuicUpstreamPool;
 use lb_security::{RetryTokenSigner, ZeroRttReplayGuard};
 
-use crate::LB_QUIC_ALPN;
+use crate::H3_ALPN_PROTOS;
 use crate::router::{self, RouterParams};
 
 /// 32-byte retry-secret file size on disk.
@@ -349,7 +349,7 @@ fn build_server_config(
     recv_payload: usize,
 ) -> Result<quiche::Config, quiche::Error> {
     let mut cfg = quiche::Config::new(quiche::PROTOCOL_VERSION)?;
-    cfg.set_application_protos(&[LB_QUIC_ALPN])?;
+    cfg.set_application_protos(H3_ALPN_PROTOS)?;
     cfg.set_max_idle_timeout(idle_ms);
     cfg.set_max_recv_udp_payload_size(recv_payload);
     cfg.set_max_send_udp_payload_size(1_350);

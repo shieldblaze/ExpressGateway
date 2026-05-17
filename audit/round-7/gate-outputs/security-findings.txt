@@ -1,0 +1,4 @@
+Gate 21 — Round-2 critical/high/medium 'Status: Open' findings.
+Grep: grep -hE '^Severity: (critical|high|medium)' -A 1 audit/*/round-2-*.md | grep 'Status: Open'
+Result: (empty) — no open critical/high/medium findings.
+PASS.

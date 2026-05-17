@@ -1,0 +1,45 @@
+=== Gate 15: cargo test -p lb-l4-xdp --test round8_attach_probe (L4-05 tripwire, pinned aya 0.13.1) ===
+started: Sat May 16 00:53:47 UTC 2026
+aya v0.13.1
+   Compiling libc v0.2.184
+   Compiling equivalent v1.0.2
+   Compiling hashbrown v0.17.0
+   Compiling indexmap v2.14.0
+   Compiling getrandom v0.2.17
+   Compiling hashbrown v0.15.5
+   Compiling memchr v2.8.0
+   Compiling object v0.36.7
+   Compiling rand_core v0.6.4
+   Compiling log v0.4.29
+   Compiling bytes v1.11.1
+   Compiling smallvec v1.15.1
+   Compiling parking_lot_core v0.9.12
+   Compiling rand_chacha v0.3.1
+   Compiling tracing-core v0.1.36
+   Compiling bitflags v2.11.0
+   Compiling tracing v0.1.44
+   Compiling rand v0.8.5
+   Compiling parking_lot v0.12.5
+   Compiling aya-obj v0.2.1
+   Compiling aya v0.13.1
+   Compiling lb-l4-xdp v0.1.0 (/home/ubuntu/Code/ExpressGateway/crates/lb-l4-xdp)
+    Finished `release` profile [optimized] target(s) in 43.62s
+     Running tests/round8_attach_probe.rs (target/release/deps/round8_attach_probe-14a71501fa8738c2)
+
+running 11 tests
+test attach_probe_failed_counter_is_monotonic ... ok
+test aya_lock_parser_does_not_confuse_sibling_crates ... ok
+test drv_supported_fails_open_on_unknown_iface ... ok
+test aya_version_is_pinned_to_the_no_test_run_release ... ok
+test ena_and_ice_blocklist_rows_round_trip ... ok
+test ethtool_firmware_line_parsing ... ok
+test mlx5_patched_firmware_allowed ... ok
+test probe_synthetic_packet_round_trip ... ignored, needs CAP_BPF + aya BPF_PROG_TEST_RUN (aya 0.13.1 API blocker)
+test mlx5_pre_ghsa_firmware_is_refused_with_bug_id ... ok
+test unknown_or_virtual_driver_allowed ... ok
+test tripwire_fires_when_aya_is_upgraded_simulation ... ok
+
+test result: ok. 10 passed; 0 failed; 1 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+GATE15_EXIT=0
+finished: Sat May 16 00:54:31 UTC 2026

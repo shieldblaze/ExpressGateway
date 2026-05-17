@@ -1,0 +1,105 @@
+STATE=ROUND_8_FINAL
+ROUND=8
+ROUND8_PHASE_D_CLOSED=2026-05-14
+ROUND8_PHASE_D_RESULT=all-medium+-Verified-Fixed-by-verify
+ROUND8_NEW_FINDING=ROUND8-L7-16(H3-authority)=Verified-Fixed
+ROUND8_PHASE_E_CARRY=h3-authority-test-parallel-flake-shared-temp-cert
+ROUND8_PHASE_E_CLOSED=2026-05-16
+ROUND8_PHASE_E_RESULT=regression-clean;13-PASS;04+05-FAIL-preexisting-test-infra-nonblocking;07-DEFERRED-ENV(cargo-deny>=0.19-needs-rustc>=1.88);D1-D6-DEFERRED-ENV
+ROUND8_PHASE_E_CARRY_RESOLVED=h3-flake-fixed-via-per-test-AtomicU64-CERT_SEQ(crates/lb-quic/tests/round8_h3_authority_enforced.rs)
+ROUND8_PHASE_E_NEW_MEDIUM=none
+ROUND8_PHASE_E_PHASE_D_LOOP=not-triggered
+ROUND8_PHASE_E_PHASE_F_READY=true
+ROUND8_FINAL_CLOSED=2026-05-16
+ROUND8_VERDICT=NO-GO
+ROUND8_FINAL_RATIONALE=remediation-complete-and-verified;NO-GO-solely-on-7-unrun-env-bound-prod-gates(D1-D6+gate-07)
+ROUND8_FINAL_REPORT=audit/round-8/FINAL.md
+ROUND8_PHASE_A_CLOSED=2026-05-14
+ROUND8_PHASE_B_CLOSED=2026-05-14
+ROUND8_PHASE_C_CLOSED=2026-05-14
+ROUND8_RECONCILE_NEW=24
+ROUND8_RECONCILE_MISSED=14
+ROUND8_RECONCILE_DISPUTE=1
+ROUND8_RECHECK_SAMPLE=17
+ROUND8_RECHECK_STILL_VERIFIED=13
+ROUND8_RECHECK_PARTIAL=3
+ROUND8_RECHECK_FALSE_VERIFIED=1
+ROUND8_BLIND_SPOT=systematic
+ROUND8_ESCALATION_TRIGGERED=false
+ROUND8_PHASE_C_RECOMMENDATION=proceed-phase-d-normally
+ROUND8_PHASE_C_BIS_CLOSED=2026-05-14
+ROUND8_PHASE_C_BIS_EXAMINED=25
+ROUND8_PHASE_C_BIS_NEW_FALSE_VERIFIED=0
+ROUND8_PHASE_C_BIS_NEW_PARTIAL=0
+ROUND8_PHASE_C_BIS_REGRADE=REL-2-09-upgrade-Partial-to-Verified-Fixed
+ROUND8_PHASE_C_BIS_RECOMMENDATION=phase-d-ready
+ROUND8_RESEARCH_LESSONS=195
+ROUND8_RESEARCH_REFS=11
+ROUND8_FINDINGS_TOTAL=39
+ROUND8_CRITICAL=1
+ROUND8_HIGH=13
+ROUND8_MEDIUM=20
+ROUND8_LOW=5
+ROUND8_BUNDLES=7
+ROUND7_CLOSED=2026-05-14
+ROUND7_VERDICT=CONDITIONAL_GO
+ROUND7_BRANCH_TIP=7742278
+ROUND8_LEAD=team-lead-r8
+ROUND8_TEAM=ref-l7,ref-l4,div-l7,div-l4,div-ops,verify
+ROUND8_STANCE=adversarial-re-audit
+ROUND8_STARTED=2026-05-14
+STARTED=2026-05-13
+ROUND1_CLOSED=2026-05-13
+ROUND2_CLOSED=2026-05-13
+ROUND3_CLOSED=2026-05-13
+ROUND4_CLOSED=2026-05-14
+ROUND5_CLOSED=2026-05-14
+ROUND6_CLOSED=2026-05-14
+ROUND6_BRANCH_TIP=ecc7771
+ROUND6_VERDICT=CLEAN
+PLANS_APPROVED=55
+ROUND4_COMMITS=114
+ROUND5_VERIFIED_FIXED=53
+ROUND5_PARTIAL=15
+ROUND5_PUSHBACK=1
+ROUND6_MEDIUM_DELTAS=2_closed
+FINDINGS_TOTAL=74
+FINDINGS_CRITICAL=11
+FINDINGS_HIGH=23
+FINDINGS_MEDIUM=20
+FINDINGS_LOW=12
+FINDINGS_INFO=4
+PLANS_REQUIRED=52
+BRANCH=main
+FEATURE_BRANCH_PENDING=prod-readiness/round-4
+TEAM=sec,code,ebpf,rel,proto
+LEAD=team-lead
+
+# Phase transitions
+# 1 -> ROUND_DISCOVERY   (inventories + cross-talk)
+# 2 -> ROUND_FINDINGS    (findings + 30-min adversarial cross-review)
+# 3 -> ROUND_PLANNING    (plan approval for medium+ findings)
+# 4 -> ROUND_FIXES       (implementation on feature branch)
+# 5 -> ROUND_VERIFY      (independent verification)
+# 6 -> ROUND_REGRESSION  (delta sweep; loop until clean)
+# 7 -> ROUND_FINAL       (gate matrix + FINAL_REPORT.md)
+
+# Round 6 status:
+# 2026-05-14 — `proto` self-verification mini-loop (Round-3-mini)
+# closed:
+#   - PROTO-2-16 (Low)    — H1 cancel doc-comment fixup            — 9b374cc
+#   - PROTO-2-17 (Low)    — [security].strict_te SmuggleMode knob  — e3e7b17
+#   - PROTO-2-18 (Medium) — check_sni_authority wired into hot path — 444668d
+#   - PROTO-2-19 (Medium) — H1 trailer wire emission                — 42df990
+# Revalidation: audit/protocol/round-6-revalidation.md.
+# Status field updates in audit/protocol/round-2-review.md:
+#   - PROTO-2-15 → Verified-Fixed (was -Partial)
+#   - PROTO-2-12 → Verified-Fixed-Partial (H3 surface gap remains)
+# Lead may push PROTO-2-18/-19 to sec for adversarial cross-check.
+#
+# 2026-05-14 — `sec` adversarial cross-check completed.
+# audit/security/round-6-cross-check.md verdict: Round 6 — CLEAN; ready for Round 7.
+# PROTO-2-18: 6 bypass attempts, 0 exploitable; status flipped to verifier=sec.
+# PROTO-2-19: 4 bypass attempts, 0 exploitable; status flipped to verifier=sec
+#             (-Partial retained for the H3 lb-quic surface gap).
+# Final delta sweep on 1f2e19c..HEAD: zero new medium-or-higher findings.

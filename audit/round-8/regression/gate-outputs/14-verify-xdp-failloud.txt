@@ -1,0 +1,65 @@
+Gate 14 — verify-xdp.sh fail-loud behaviour (stub docker on PATH)
+=================================================================
+
+STUB docker emits a fixed 3-line verifier log. Sandbox copy under /tmp/tmp.Pp45jMhoSx.
+
+--- Scenario A: no committed baseline => expect exit 2 ---
+verify-xdp.sh: FATAL: no pinned digest for kernel 6.1
+                   set EG_ALLOW_FLOATING_IMAGE=1 to use the floating
+                   quay.io/lvh-images/kernel-images:6.1-main tag (NOT reproducible)
+EXIT=3 (expect 2)
+
+--- Scenario B: capture baseline (--update-baseline) then identical => expect exit 0 ---
+verify-xdp.sh: FATAL: no pinned digest for kernel 6.1
+                   set EG_ALLOW_FLOATING_IMAGE=1 to use the floating
+                   quay.io/lvh-images/kernel-images:6.1-main tag (NOT reproducible)
+UPDATE_EXIT=3 (expect 0)
+verify-xdp.sh: FATAL: no pinned digest for kernel 6.1
+                   set EG_ALLOW_FLOATING_IMAGE=1 to use the floating
+                   quay.io/lvh-images/kernel-images:6.1-main tag (NOT reproducible)
+IDENTICAL_EXIT=3 (expect 0)
+
+--- Scenario C: inject drift into stub output => expect exit 1 ---
+verify-xdp.sh: FATAL: no pinned digest for kernel 6.1
+                   set EG_ALLOW_FLOATING_IMAGE=1 to use the floating
+                   quay.io/lvh-images/kernel-images:6.1-main tag (NOT reproducible)
+DRIFT_EXIT=3 (expect 1)
+
+=== RE-RUN with EG_ALLOW_FLOATING_IMAGE=1 (reaches the diff-gate; matches verify-l4 earlier method) ===
+
+--- Scenario A: no committed baseline => expect exit 2 ---
+verify-xdp.sh: kernel 6.1; loading lb_xdp.bin via lvh
+verify-xdp.sh: captured verifier log → /tmp/tmp.Pp45jMhoSx/audit/ebpf/verifier-logs/6.1.log
+verify-xdp.sh: FATAL: no committed baseline at /tmp/tmp.Pp45jMhoSx/audit/ebpf/verifier-logs/6.1.log.committed
+verify-xdp.sh: either: 1) commit /tmp/tmp.Pp45jMhoSx/audit/ebpf/verifier-logs/6.1.log as the baseline (first-time setup)
+verify-xdp.sh:           run with --update-baseline, then git add the file
+verify-xdp.sh:         2) restore the deleted committed baseline (regression)
+EXIT_A=2 (expect 2)
+
+--- Scenario B: --update-baseline then identical => expect 0 then 0 ---
+verify-xdp.sh: kernel 6.1; loading lb_xdp.bin via lvh
+verify-xdp.sh: captured verifier log → /tmp/tmp.Pp45jMhoSx/audit/ebpf/verifier-logs/6.1.log
+verify-xdp.sh: wrote new baseline → /tmp/tmp.Pp45jMhoSx/audit/ebpf/verifier-logs/6.1.log.committed
+verify-xdp.sh: remember: git add /tmp/tmp.Pp45jMhoSx/audit/ebpf/verifier-logs/6.1.log.committed
+EXIT_B_UPDATE=0 (expect 0)
+verify-xdp.sh: kernel 6.1; loading lb_xdp.bin via lvh
+verify-xdp.sh: captured verifier log → /tmp/tmp.Pp45jMhoSx/audit/ebpf/verifier-logs/6.1.log
+verify-xdp.sh: verifier log matches baseline (3 lines)
+EXIT_B_IDENTICAL=0 (expect 0)
+
+--- Scenario C: inject drift => expect exit 1 ---
+verify-xdp.sh: kernel 6.1; loading lb_xdp.bin via lvh
+verify-xdp.sh: captured verifier log → /tmp/tmp.Pp45jMhoSx/audit/ebpf/verifier-logs/6.1.log
+--- /tmp/tmp.Pp45jMhoSx/audit/ebpf/verifier-logs/6.1.log.committed	2026-05-15 23:10:21.245493687 +0000
++++ /tmp/tmp.Pp45jMhoSx/audit/ebpf/verifier-logs/6.1.log	2026-05-15 23:10:21.515341966 +0000
+@@ -1,3 +1,4 @@
+ 0: (b7) r0 = 2
+-1: (95) exit
++1: (DRIFT-INJECTED) changed instruction
++2: (95) exit
+ processed N insns (limit 1000000) max_states_per_insn 0 total_states 1 peak_states N mark_read N
+verify-xdp.sh: VERIFIER LOG DIFF on kernel 6.1
+verify-xdp.sh: if intentional: rerun with --update-baseline and commit the result
+EXIT_C_DRIFT=1 (expect 1)
+
+VERDICT: 0=missing-baseline->2, identical->0, drift->1 all as specified => re-confirms verify-l4 ROUND8-L4-10 finding holds at HEAD.

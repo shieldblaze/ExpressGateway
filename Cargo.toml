@@ -23,7 +23,13 @@ members = [
     "crates/lb-balancer",
     "crates/lb-health",
     "crates/lb-security",
-    "crates/lb-compression",
+    # CODE-2-15 / L-001: `lb-compression` removed in Round-4 because the
+    # crate had no in-workspace consumers outside its own tests and the
+    # proxy is pass-through (does not decompress in either direction).
+    # The README claim "Compression: zstd, brotli, gzip, deflate with
+    # streaming and transcoding" is rel REL-2-01's doc-lint table-of-
+    # truth fix. Re-introduction notes (BREACH guard, gRPC max-message,
+    # JSON inspection) are in audit/deferred.md.
     "crates/lb-observability",
     "crates/lb",
 ]
@@ -58,7 +64,10 @@ libc = "0.2"
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["json", "env-filter"] }
 # Concurrency
-arc-swap = "1"
+# CODE-2-12: arc-swap was declared in workspace.dependencies but had
+# zero consumers (cargo machete + manual grep). Removed Round-4; if a
+# real hot-swap site lands later (e.g. rel REL-2-03 cert rotation),
+# re-add it at the crate level under lb-security or lb.
 parking_lot = "0.12"
 dashmap = "6"
 # HTTP
@@ -107,6 +116,16 @@ libfuzzer-sys = "0.4"
 # keep the text-format path only; `process` enables the
 # `process_collector` for OS-level RSS/CPU samples.
 prometheus = { version = "0.13", default-features = false, features = ["process"] }
+# CODE-2-11: property-based testing for the H1 / H2 / H3 / QUIC parsers.
+# Dev-only; never enters release. The default-features include
+# `proptest-derive` machinery we do not need (regex-based generators)
+# so we trim to the standard generators only.
+proptest = { version = "1", default-features = false, features = ["std", "fork", "timeout"] }
+# CODE-2-11: loom interleaving harness, gated behind `--cfg loom` so it
+# never compiles into normal test builds. One harness in lb-balancer
+# this round (atomic-counter race against scheduler); broader sweep is
+# Wave-2 work.
+loom = "0.7"
 
 [dev-dependencies]
 lb-core = { path = "crates/lb-core" }
@@ -124,7 +143,7 @@ lb-l7 = { path = "crates/lb-l7" }
 lb-balancer = { path = "crates/lb-balancer" }
 lb-health = { path = "crates/lb-health" }
 lb-security = { path = "crates/lb-security" }
-lb-compression = { path = "crates/lb-compression" }
+# CODE-2-15: lb-compression removed (see [workspace.members] comment).
 lb-observability = { path = "crates/lb-observability" }
 tokio = { workspace = true, features = ["full", "test-util"] }
 anyhow = { workspace = true }
@@ -164,6 +183,18 @@ opt-level = 3
 lto = "thin"
 codegen-units = 1
 strip = "symbols"
+# CODE-2-02: panic = "abort" in release so a panic across any of the 17
+# unsafe blocks in lb-io::ring + the 4 unsafe-impl-Pod sites in
+# lb-l4-xdp::loader cannot unwind into a half-restored invariant.
+# Pairs with `install_panic_hook()` in lb/src/main.rs which logs +
+# aborts. dev / test deliberately KEEP `unwind` (rustc default) for
+# proptest minimisation and loom interleaving exploration (CODE-2-11).
+panic = "abort"
+
+# Inherit release semantics for benches so the abort policy carries
+# through. Without this `cargo bench` would still default to `unwind`.
+[profile.bench]
+inherits = "release"
 
 [profile.dev]
 opt-level = 0

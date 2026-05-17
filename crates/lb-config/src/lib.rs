@@ -42,6 +42,69 @@ pub struct LbConfig {
     /// HTTP listener is bound and the registry is in-process only.
     #[serde(default)]
     pub observability: Option<ObservabilityConfig>,
+    /// SEC-2-06 (Wave 2c-2): optional `[admin]` block carrying the
+    /// bearer-token hash + bind override flag for the admin HTTP
+    /// listener. When absent, the listener (bound via
+    /// `[observability].metrics_bind`) refuses to start on
+    /// non-loopback addresses and serves every request without
+    /// authentication.
+    #[serde(default)]
+    pub admin: Option<AdminConfig>,
+    /// PROTO-2-17 (Wave 2c-2): optional `[security]` block exposing
+    /// process-wide HTTP-security toggles. Currently carries a single
+    /// field (`strict_te`) that opts into
+    /// `lb_security::SmuggleMode::H1Strict` for the shared
+    /// `HooksBundle`. When absent, all defaults apply (lenient RFC
+    /// 9112 baseline, i.e. `SmuggleMode::H1`).
+    #[serde(default)]
+    pub security: Option<SecurityConfig>,
+}
+
+/// PROTO-2-17 (Wave 2c-2): process-wide HTTP security toggles.
+///
+/// Lives under `[security]` to keep deployment-decision policy
+/// (e.g. "this gateway rejects any non-`chunked` Transfer-Encoding")
+/// separate from per-listener `[listeners.*]` blocks. The shared
+/// `lb_security::HooksBundle` consumes these knobs at construction
+/// time in `crates/lb/src/main.rs`.
+#[derive(Debug, Clone, Default, serde::Serialize, serde::Deserialize)]
+pub struct SecurityConfig {
+    /// When `true`, the shared `HooksBundle` is constructed with
+    /// `SmuggleMode::H1Strict` instead of the default `SmuggleMode::H1`.
+    /// Strict mode rejects any `Transfer-Encoding` codec other than
+    /// `chunked` (RFC 9112 §7.1) — the lenient default accepts any
+    /// codec hyper can parse, which has historically been a smuggle
+    /// vector against permissive backends.
+    ///
+    /// Default: `false`. Operators flip this on for environments that
+    /// can guarantee chunked-only ingress (e.g. behind a known CDN).
+    #[serde(default)]
+    pub strict_te: bool,
+}
+
+/// SEC-2-06 (Wave 2c-2): bearer-token + bind policy for the admin
+/// HTTP listener.
+///
+/// The token is stored as a 64-char hex SHA-256 digest — never the
+/// plaintext. `lb_security::AdminTokenHash::from_hex` validates the
+/// shape at startup. `allow_non_loopback` is a foot-gun guard: even
+/// with a configured token, the listener defaults to loopback-only
+/// unless this flag is `true`.
+#[derive(Debug, Clone, Default, serde::Serialize, serde::Deserialize)]
+pub struct AdminConfig {
+    /// 64-character hex SHA-256 of the admin bearer token. When
+    /// `Some`, every request to the admin HTTP listener must carry
+    /// `Authorization: Bearer <plaintext>` whose SHA-256 matches.
+    /// When `None`, no auth is enforced and the listener must bind
+    /// loopback-only (enforced by `AdminAuthGate::validate_bind`).
+    #[serde(default)]
+    pub api_token_hash: Option<String>,
+    /// SEC-2-06: opt-in escape hatch to allow the admin listener to
+    /// bind a non-loopback address. Defaults to `false`. When `true`,
+    /// `api_token_hash` MUST also be set or the gateway refuses to
+    /// start.
+    #[serde(default)]
+    pub allow_non_loopback: bool,
 }
 
 /// Observability configuration (Task #21, Pillar 3b).
@@ -64,6 +127,11 @@ pub struct ObservabilityConfig {
 /// Currently covers the optional XDP data-plane attach. All fields are
 /// opt-in and default to "disabled" — existing deployments that never set
 /// `[runtime]` keep their current pure-userspace behaviour.
+///
+/// **Cross-column note (synthesis §D)**: this struct is `code`'s
+/// territory; the EBPF-2-04 change widens it with an additive
+/// `xdp_mode` field. The serde default keeps every existing config
+/// file accepted unchanged.
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct RuntimeConfig {
     /// When true, the binary tries to load and attach the compiled BPF
@@ -77,6 +145,395 @@ pub struct RuntimeConfig {
     /// `xdp_enabled = true`. Ignored otherwise.
     #[serde(default)]
     pub xdp_interface: Option<String>,
+    /// EBPF-2-04: XDP attach mode selector. Defaults to
+    /// [`XdpModeChoice::Auto`] which probes Drv-then-Skb. Set
+    /// `xdp_mode = "native"` on production NICs to refuse-to-start
+    /// rather than silently degrade to 1-3 Mpps SKB mode.
+    #[serde(default)]
+    pub xdp_mode: XdpModeChoice,
+    /// CODE-2-03: graceful-drain budget on SIGTERM, in milliseconds.
+    /// The Wave-2 SIGTERM orchestrator calls
+    /// `lb_core::Shutdown::drain(Duration::from_millis(drain_timeout_ms))`
+    /// at shutdown time; outstanding tasks above this budget are
+    /// aborted with a warn-level log. Lead decision §C: default
+    /// **10000 ms (10 s)** matches the documented "30-second graceful
+    /// drain" RUNBOOK claim once protocol-level GOAWAY (PROTO-2-11) +
+    /// inflight gauge (REL-2-09) layer on top. Operators can lower
+    /// the budget for fast cluster rotations or raise it for
+    /// long-poll workloads.
+    ///
+    /// Validation: `validate_runtime` accepts 100..=300_000 ms;
+    /// outside that range it bails with a clear error.
+    #[serde(default = "default_drain_timeout_ms")]
+    pub drain_timeout_ms: u64,
+    /// CODE-2-03 (Wave 2c): kubelet-style settle window between
+    /// flipping `/readyz` to `503 Draining` and starting the
+    /// cooperative cancel. Gives upstream LBs / service-mesh
+    /// sidecars one health-check interval to stop sending traffic
+    /// before connections are torn down. Default: `11000 ms`
+    /// (ROUND-8 OPS-11 — sized for the kubelet default
+    /// `periodSeconds: 10` so at least one `/readyz` 503 falls
+    /// inside the window; was `1000 ms` which was below the kubelet
+    /// removal latency). Validation range 0..=30_000 ms.
+    #[serde(default = "default_readiness_settle_ms")]
+    pub readiness_settle_ms: u64,
+    /// ROUND-8 OPS-02: gateway-level drain-cancel jitter ceiling,
+    /// in milliseconds. On a deploy-wide SIGTERM, every replica's
+    /// drain coordinator would otherwise fire `token.cancel()` at
+    /// the same wall-clock instant, producing a thundering-herd
+    /// reconnect storm against the shared upstream LB (Envoy hit
+    /// this in production with stateful upstream LBs at >2-3
+    /// replicas — `drain_manager_impl.cc`). The coordinator sleeps a
+    /// per-process random `[0, jitter)` before the in-flight-drain
+    /// cancel so close events spread across the fleet instead of
+    /// synchronising.
+    ///
+    /// `None` (the default) means *derive* `drain_timeout_ms / 4`
+    /// (Envoy's "first quarter" recipe). `Some(0)` disables jitter
+    /// (single-instance / deterministic testing). Per-listener
+    /// override: `[[listeners]].drain_jitter_ms`. Validation range
+    /// for an explicit value: `0..=drain_timeout_ms`.
+    #[serde(default)]
+    pub drain_jitter_ms: Option<u64>,
+    /// SEC-2-10 (Wave 2c): max wall-clock for `acceptor.accept()`
+    /// to complete a TLS handshake. Caps slow-loris-style
+    /// handshake-stall attacks at this many ms regardless of
+    /// downstream backpressure. Default: `5_000 ms` per the audit
+    /// recommendation; validation range 100..=60_000 ms.
+    #[serde(default = "default_handshake_timeout_ms")]
+    pub handshake_timeout_ms: u64,
+    /// CODE-2-05 / REL-2-09 (Wave 2c-2): cap on per-listener inflight
+    /// connections enforced via a `tokio::sync::Semaphore`. When the
+    /// listener is saturated the accept loop returns a 503 (H1/H2) or
+    /// closes the socket without a write (plain TCP / TLS pre-ALPN)
+    /// and bumps `accept_shed_total`. Default `65_536` matches the
+    /// PROMPT.md §21 backlog floor; validation range `100..=2_000_000`.
+    #[serde(default = "default_max_inflight_connections")]
+    pub max_inflight_connections: u32,
+    /// CODE-2-09 / REL-2-11 (Wave 2c-2): wall-clock budget for a single
+    /// upstream `TcpStream::connect`. Wraps the dial in
+    /// `tokio::time::timeout` so an unresponsive backend (SYN black
+    /// hole) returns quickly instead of monopolising a worker. Default
+    /// `5_000 ms`; validation range `100..=60_000`.
+    #[serde(default = "default_connect_timeout_ms")]
+    pub connect_timeout_ms: u64,
+    /// SEC-2-04 (Wave 2c-2): per-source-IP concurrent-connection cap
+    /// enforced at accept-site via `lb_security::ConnGate`. When the
+    /// counter saturates, the accept loop closes the socket without
+    /// a response (no amplification surface). Default `1024`;
+    /// validation range `1..=2_000_000`. Operators reduce this for
+    /// public-facing listeners where the per-IP fairness budget
+    /// should be tight.
+    #[serde(default = "default_per_ip_cap")]
+    pub per_ip_connection_cap: u32,
+    /// PROTO-2-14: optional `[runtime.tls]` block for process-wide
+    /// TLS-policy knobs. Currently carries a single field
+    /// (`tls13_only`); future knobs (preferred-cipher list, ALPN
+    /// allow-list) live here too. When absent, all defaults apply
+    /// (rustls 0.23 default `&[&TLS12, &TLS13]`).
+    #[serde(default)]
+    pub tls: Option<RuntimeTlsConfig>,
+    /// SEC-2-03 follow-on: optional `[runtime.watchdog]` block. When
+    /// present (or when defaulted via `RuntimeConfig::default`), the
+    /// binary instantiates an `lb_security::Watchdog`, spawns a
+    /// shutdown-tracked sweep loop, and threads it into every
+    /// `H1Proxy` / `H2Proxy` for per-stream slowloris / slow-POST
+    /// eviction. When absent, the proxies keep the legacy NoopHooks
+    /// behaviour (hyper's header-timeout still bites, but the
+    /// finer-grained rate floor is dormant).
+    #[serde(default)]
+    pub watchdog: Option<RuntimeWatchdogConfig>,
+    /// ROUND8-L7-05: how to handle `_` in HTTP header names. Envoy
+    /// edge best-practice mandates `REJECT_REQUEST`; nginx default
+    /// silently drops (`underscores_in_headers off`). Both converge:
+    /// the underscore is an auth-bypass primitive against backends
+    /// that normalise `_` <-> `-` (Java middleware, some Python
+    /// frameworks, SAP gateways). Default: [`HeaderUnderscorePolicy::Reject`].
+    ///
+    /// See `docs/edge-defaults.md` and `config/default.toml` for the
+    /// documented operator surface. Wiring this knob from
+    /// [`RuntimeConfig`] into the per-listener `H1Proxy` / `H2Proxy`
+    /// builder is the responsibility of the main wiring crate; today
+    /// the proxy builders expose
+    /// `with_header_underscore_policy(...)` so the integration is a
+    /// one-call boundary on the `lb` crate side.
+    #[serde(default)]
+    pub header_underscore_policy: HeaderUnderscorePolicy,
+    /// ROUND8-L7-06: hard cap on the number of requests (H1) /
+    /// lifetime streams (H2) served on a single keep-alive
+    /// connection before the gateway proactively closes it. Mirrors
+    /// nginx's `keepalive_requests 100` default and the Pingora
+    /// 0.8.0 `keepalive_requests` cap (Cloudflare added it after
+    /// hitting per-connection accounting growth + TLS-session-age +
+    /// FD-pinning pain at the edge).
+    ///
+    /// `0` disables the cap (transparent-pass mode — only the
+    /// wall-clock / idle timeouts apply). Default `100`
+    /// (`default_max_keepalive_requests`). Any configured value
+    /// above `u32::MAX` is clamped at parse time by the serde `u64`
+    /// → `u32` conversion in the wiring crate; `validate_runtime`
+    /// accepts the full `0..=u32::MAX` range so the only failure
+    /// mode is a type error, not a runtime surprise.
+    #[serde(default = "default_max_keepalive_requests")]
+    pub max_keepalive_requests: u32,
+    /// ROUND8-L4-03: per-CPU new-flow-rate cap for the XDP SYN-flood
+    /// mitigation (Katran `balancer_kern.c` `is_under_flood()`,
+    /// `MAX_CONN_RATE`). When the data plane sees more than this many
+    /// conntrack-MISS (new) flows per second on a single CPU, the
+    /// excess new flows are short-circuited to `XDP_PASS` WITHOUT the
+    /// "populate conntrack" signal — established (CT-hit) flows are
+    /// untouched, so an attacker spraying millions of unique
+    /// 5-tuples/sec can no longer thrash the 1M-entry LRU and evict
+    /// legitimate established connections. The same value gates the
+    /// userspace control-plane `CtInsertGate` (leaky-bucket on
+    /// `lb-balancer`'s conntrack inserts).
+    ///
+    /// `0` disables the rate limiter (data plane + control plane).
+    /// Default `125_000` mirrors Katran's per-core
+    /// `MAX_CONN_RATE`. Validation range: `0` (disabled) or
+    /// `1_000..=10_000_000` — a cap below 1k/s/CPU would skip CT
+    /// insertion for normal traffic (repeated lookup misses → packets
+    /// fall to the kernel stack instead of `XDP_TX`); above 10M/s/CPU
+    /// is past line rate on any current NIC and effectively unbounded.
+    /// Multi-replica deployments must size this per-replica (the
+    /// `CtInsertGate` is per-process) — see RUNBOOK.
+    #[serde(default = "default_xdp_new_flow_cap_per_sec_per_cpu")]
+    pub xdp_new_flow_cap_per_sec_per_cpu: u32,
+}
+
+/// ROUND8-L4-03: Katran `MAX_CONN_RATE` per-core parity. Mirrors
+/// `lb_l4_xdp::DEFAULT_NEW_FLOW_CAP_PER_SEC_PER_CPU` and the eBPF
+/// `DEFAULT_NEW_FLOW_CAP_PER_CPU`.
+const fn default_xdp_new_flow_cap_per_sec_per_cpu() -> u32 {
+    125_000
+}
+
+/// ROUND8-L7-06: nginx-parity default of 100 requests per keep-alive
+/// connection. `0` would disable; we ship the safe industry floor.
+const fn default_max_keepalive_requests() -> u32 {
+    100
+}
+
+impl RuntimeConfig {
+    /// ROUND-8 OPS-02: the effective gateway-level drain-cancel
+    /// jitter ceiling in milliseconds. `drain_jitter_ms` when set,
+    /// otherwise the Envoy "first quarter" derivation
+    /// `drain_timeout_ms / 4`.
+    #[must_use]
+    pub const fn effective_drain_jitter_ms(&self) -> u64 {
+        match self.drain_jitter_ms {
+            Some(j) => j,
+            None => self.drain_timeout_ms / 4,
+        }
+    }
+}
+
+impl ListenerConfig {
+    /// ROUND-8 OPS-10: the effective drain budget for this listener
+    /// in milliseconds. The per-listener `drain_timeout_ms` override
+    /// when present, else the gateway-level `[runtime].drain_timeout_ms`
+    /// (or the `default_drain_timeout_ms()` fallback when there is no
+    /// `[runtime]` block).
+    #[must_use]
+    pub fn effective_drain_timeout_ms(&self, runtime: Option<&RuntimeConfig>) -> u64 {
+        self.drain_timeout_ms.unwrap_or_else(|| {
+            runtime.map_or_else(default_drain_timeout_ms, |r| r.drain_timeout_ms)
+        })
+    }
+
+    /// ROUND-8 OPS-02/OPS-10: the effective drain-cancel jitter
+    /// ceiling for this listener in milliseconds. The per-listener
+    /// `drain_jitter_ms` override when present, else the gateway-level
+    /// derived jitter (`RuntimeConfig::effective_drain_jitter_ms`, or
+    /// `default_drain_timeout_ms() / 4` when there is no `[runtime]`
+    /// block).
+    #[must_use]
+    pub fn effective_drain_jitter_ms(&self, runtime: Option<&RuntimeConfig>) -> u64 {
+        self.drain_jitter_ms.unwrap_or_else(|| {
+            runtime.map_or_else(
+                || default_drain_timeout_ms() / 4,
+                RuntimeConfig::effective_drain_jitter_ms,
+            )
+        })
+    }
+}
+
+/// ROUND8-L7-05: per-runtime policy for handling `_` in HTTP header
+/// names. Mirrors Envoy `headers_with_underscores_action` and nginx
+/// `underscores_in_headers`. Both references default to a rejecting
+/// stance at the edge; ExpressGateway adopts the same default.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum HeaderUnderscorePolicy {
+    /// Reject the request with `400 Bad Request` if any inbound
+    /// header name contains `_`. Matches Envoy edge best-practice
+    /// (`REJECT_REQUEST`). This is the default.
+    #[default]
+    Reject,
+    /// Silently drop underscore-bearing headers before forwarding;
+    /// matches nginx default (`underscores_in_headers off`).
+    Drop,
+    /// Pass underscore-bearing headers through verbatim. Matches
+    /// Envoy `ALLOW` (the non-edge default). Set only if the
+    /// downstream environment is known to be safe.
+    Allow,
+}
+
+/// SEC-2-03 follow-on: per-process slowloris / slow-POST watchdog
+/// knobs. Mirrors `lb_security::WatchdogConfig` plus the sweep-loop
+/// cadence and the per-request header deadline.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct RuntimeWatchdogConfig {
+    /// Per-request header-phase deadline, in milliseconds. Used as
+    /// the `deadline` argument to `Watchdog::register` for inbound
+    /// HTTP requests. Default `5_000 ms` (the SEC-2-03 plan's
+    /// header-phase cap); validation range `100..=60_000`.
+    #[serde(default = "default_watchdog_header_deadline_ms")]
+    pub header_deadline_ms: u64,
+    /// Slow-POST body-phase rate floor in bytes per second. Connections
+    /// whose observed throughput drops below this over the configured
+    /// `rate_window` are evicted with `WatchdogError::SlowRate`. `0`
+    /// disables the body-phase rate check (deadline-only mode).
+    /// Default `64 B/s` per the SEC-2-03 plan; validation range
+    /// `0..=10_000_000`.
+    #[serde(default = "default_watchdog_body_progress_min_bps")]
+    pub body_progress_min_bps: u64,
+    /// Cadence of the sweep-loop that evicts connections completely
+    /// stalled (no `progress` calls). Default `1_000 ms`; validation
+    /// range `100..=60_000`.
+    #[serde(default = "default_watchdog_sweep_interval_ms")]
+    pub sweep_interval_ms: u64,
+}
+
+impl Default for RuntimeWatchdogConfig {
+    fn default() -> Self {
+        Self {
+            header_deadline_ms: default_watchdog_header_deadline_ms(),
+            body_progress_min_bps: default_watchdog_body_progress_min_bps(),
+            sweep_interval_ms: default_watchdog_sweep_interval_ms(),
+        }
+    }
+}
+
+/// SEC-2-03 follow-on: serde default for
+/// `RuntimeWatchdogConfig::header_deadline_ms`.
+const fn default_watchdog_header_deadline_ms() -> u64 {
+    5_000
+}
+
+/// SEC-2-03 follow-on: serde default for
+/// `RuntimeWatchdogConfig::body_progress_min_bps`.
+const fn default_watchdog_body_progress_min_bps() -> u64 {
+    64
+}
+
+/// SEC-2-03 follow-on: serde default for
+/// `RuntimeWatchdogConfig::sweep_interval_ms`.
+const fn default_watchdog_sweep_interval_ms() -> u64 {
+    1_000
+}
+
+/// PROTO-2-14: process-wide TLS-policy block.
+///
+/// Lives under `[runtime.tls]` to keep listener-level
+/// `[listeners.tls]` (cert / key / kid paths) separate from
+/// gateway-wide *policy* knobs that apply to every TLS-bearing
+/// listener uniformly.
+#[derive(Clone, Debug, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct RuntimeTlsConfig {
+    /// When `true`, every TLS listener (`protocol = "tls" | "h1s"`)
+    /// negotiates **only** TLS 1.3 — rustls is configured with
+    /// `versions(&[&TLS13])` instead of the default
+    /// `&[&TLS12, &TLS13]`. Default: `false` (rustls default).
+    ///
+    /// Operators turn this on to comply with policies that forbid
+    /// TLS 1.2 (e.g. PCI-DSS 4.0 §4.2.1.1, NIST SP 800-52 Rev. 2
+    /// post-2023 transition). It is **not** a security gain in
+    /// general — rustls's TLS 1.2 cipher suites are post-quantum
+    /// downgrade-safe — but the conformance audit may require it.
+    #[serde(default)]
+    pub tls13_only: bool,
+}
+
+/// CODE-2-03: serde default for `RuntimeConfig::drain_timeout_ms`.
+/// 10 000 ms = 10 s per lead §C.
+const fn default_drain_timeout_ms() -> u64 {
+    10_000
+}
+
+/// CODE-2-03 (Wave 2c): serde default for
+/// `RuntimeConfig::readiness_settle_ms`.
+///
+/// ROUND-8 OPS-11: raised from 1 000 ms to 11 000 ms. The old 1 s
+/// default was below the kubelet default `periodSeconds: 10`
+/// readiness-probe interval: a pod could transition to `Terminating`
+/// and start cancelling connections while still listed `Ready` in
+/// the Endpoints object, so the next ~10 s of new connections landed
+/// on the draining pod. 11 s = one full kubelet probe period (10 s)
+/// plus a 1 s margin, so at least one `/readyz` 503 falls inside
+/// the settle window even in the worst case (set_draining firing
+/// immediately after a probe). Validation cap stays 30 000 ms;
+/// operators with aggressively-tuned kubelets can lower it (see
+/// `RUNBOOK.md` "Tuning `readiness_settle_ms`"). Aligns with
+/// Envoy/Kubernetes lameduck guidance (K8s "Termination of Pods"
+/// docs; Envoy `drain_strategy` + endpoint-removal lag).
+const fn default_readiness_settle_ms() -> u64 {
+    11_000
+}
+
+/// SEC-2-10 (Wave 2c): serde default for
+/// `RuntimeConfig::handshake_timeout_ms`. 5 000 ms = 5 s per the
+/// audit recommendation — a normal TLS 1.3 1-RTT handshake on a
+/// healthy network completes in <100 ms, so 5 s is a generous
+/// upper bound that still bites on stalled clients.
+const fn default_handshake_timeout_ms() -> u64 {
+    5_000
+}
+
+/// CODE-2-05 / REL-2-09 (Wave 2c-2): serde default for
+/// `RuntimeConfig::max_inflight_connections`. 65 536 matches
+/// PROMPT.md §21's backlog floor.
+const fn default_max_inflight_connections() -> u32 {
+    65_536
+}
+
+/// CODE-2-09 / REL-2-11 (Wave 2c-2): serde default for
+/// `RuntimeConfig::connect_timeout_ms`. 5 000 ms = 5 s — generous
+/// upper bound for a healthy intra-DC dial while still cutting the
+/// SYN-black-hole tail.
+const fn default_connect_timeout_ms() -> u64 {
+    5_000
+}
+
+/// SEC-2-04 (Wave 2c-2): serde default for
+/// `RuntimeConfig::per_ip_connection_cap`. 1 024 matches the
+/// pre-2025 industry "per-IP fair share" baseline for load
+/// balancers in front of a typical web app.
+const fn default_per_ip_cap() -> u32 {
+    1_024
+}
+
+/// EBPF-2-04: operator-facing XDP attach-mode selector. Reuses the
+/// kernel's mode vocabulary one-for-one.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum XdpModeChoice {
+    /// Ladder: try Drv first, fall back to Skb on `EOPNOTSUPP`/`EINVAL`.
+    /// Skips Hw (operators explicitly opt in to hardware offload).
+    /// **This is the default** — preserves least-surprise on CI/dev
+    /// boxes with veth devices while delivering Drv on real NICs.
+    #[default]
+    Auto,
+    /// Drv-mode only. Aborts startup if the NIC driver does not
+    /// support it. The right setting for a 100 G production host
+    /// where SKB mode would silently cost 10-50x throughput.
+    Native,
+    /// Generic SKB mode only. Today's behaviour pre-EBPF-2-04;
+    /// keeps existing CI runners working unchanged.
+    Skb,
+    /// Hardware offload (mlx5 / nfp). Loud-fail if the NIC does not
+    /// support it.
+    Hw,
 }
 
 /// Configuration for a single listener.
@@ -138,6 +595,28 @@ pub struct ListenerConfig {
     /// because the upstream protocol mismatches).
     #[serde(default)]
     pub grpc: Option<GrpcListenerConfig>,
+    /// ROUND-8 OPS-10: per-listener graceful-drain budget override,
+    /// in milliseconds. `None` (the default) inherits
+    /// `[runtime].drain_timeout_ms`. The gateway-level default
+    /// (10 s) is correct for short-request HTTP but materially
+    /// insufficient for long-poll H1 / gRPC bidi / SSE / WebSocket
+    /// listeners — Pingora ships `EXIT_TIMEOUT=300s` for exactly
+    /// this reason. Set this per streaming listener instead of
+    /// raising the gateway default (which would slow every
+    /// short-request listener's restart). Matches the
+    /// HAProxy-`hard-stop-after`-per-frontend granularity. When
+    /// `Some`, must satisfy the same `100..=300_000` ms range as the
+    /// gateway-level key. See `RUNBOOK.md` "Tuning the drain budget".
+    #[serde(default)]
+    pub drain_timeout_ms: Option<u64>,
+    /// ROUND-8 OPS-02 / OPS-10: per-listener drain-cancel jitter
+    /// ceiling override, in milliseconds. `None` inherits the
+    /// gateway-level derived jitter (`drain_timeout_ms / 4`).
+    /// `Some(0)` disables jitter for this listener (operator
+    /// preference / single-instance). When `Some`, must satisfy
+    /// `0..=` the *effective* per-listener `drain_timeout_ms`.
+    #[serde(default)]
+    pub drain_jitter_ms: Option<u64>,
     /// Upstream backends to load-balance across.
     #[serde(default)]
     pub backends: Vec<BackendConfig>,
@@ -508,6 +987,23 @@ pub fn validate_config(config: &LbConfig) -> Result<(), ConfigError> {
     if let Some(rt) = config.runtime.as_ref() {
         validate_runtime(rt)?;
     }
+    // ROUND-8 OPS-02/OPS-10: cross-check that each listener's
+    // *effective* jitter does not exceed its *effective* drain
+    // budget once inheritance from [runtime] is resolved. This
+    // catches the case where a listener sets drain_jitter_ms but
+    // inherits a smaller [runtime].drain_timeout_ms (validate_listener
+    // alone can't see the runtime block).
+    for (i, listener) in config.listeners.iter().enumerate() {
+        let eff_timeout = listener.effective_drain_timeout_ms(config.runtime.as_ref());
+        let eff_jitter = listener.effective_drain_jitter_ms(config.runtime.as_ref());
+        if eff_jitter > eff_timeout {
+            return Err(ConfigError::Validation(format!(
+                "listener {i} effective drain_jitter_ms={eff_jitter} exceeds \
+                 effective drain_timeout_ms={eff_timeout} after [runtime] \
+                 inheritance (jitter must be <= the drain budget)"
+            )));
+        }
+    }
     if let Some(obs) = config.observability.as_ref() {
         validate_observability(obs)?;
     }
@@ -543,6 +1039,117 @@ fn validate_runtime(rt: &RuntimeConfig) -> Result<(), ConfigError> {
                 "runtime.xdp_enabled=true requires runtime.xdp_interface".into(),
             ));
         }
+    }
+    // CODE-2-03: drain budget must be a sane positive duration.
+    // 100 ms floor avoids the operator-mistake "drain_timeout_ms = 1"
+    // collapsing the drain to a no-op; 300 000 ms (5 min) ceiling
+    // bounds the worst-case SIGTERM-to-exit latency for service
+    // managers (systemd default TimeoutStopSec is 90 s, k8s default
+    // terminationGracePeriodSeconds is 30 s — both well under the
+    // ceiling).
+    if !(100..=300_000).contains(&rt.drain_timeout_ms) {
+        return Err(ConfigError::Validation(format!(
+            "runtime.drain_timeout_ms={} out of range 100..=300000",
+            rt.drain_timeout_ms
+        )));
+    }
+    // ROUND-8 OPS-02: gateway-level jitter ceiling, when explicitly
+    // set, must be 0..=drain_timeout_ms (jitter cannot exceed the
+    // budget it is subdividing). `None` derives drain_timeout_ms/4
+    // and is always in range by construction.
+    if let Some(j) = rt.drain_jitter_ms {
+        if j > rt.drain_timeout_ms {
+            return Err(ConfigError::Validation(format!(
+                "runtime.drain_jitter_ms={j} exceeds runtime.drain_timeout_ms={} \
+                 (jitter must be <= the drain budget)",
+                rt.drain_timeout_ms
+            )));
+        }
+    }
+    // CODE-2-03 Wave 2c: settle window may be 0 (skip the sleep) but
+    // is capped at 30 s — beyond that operators are mis-using the
+    // knob (k8s terminationGracePeriodSeconds usually <= 30).
+    if rt.readiness_settle_ms > 30_000 {
+        return Err(ConfigError::Validation(format!(
+            "runtime.readiness_settle_ms={} out of range 0..=30000",
+            rt.readiness_settle_ms
+        )));
+    }
+    // SEC-2-10 Wave 2c: 100 ms floor avoids an accidental
+    // zero-budget timeout starving every TLS connect; 60 s ceiling
+    // bounds slow-loris exposure.
+    if !(100..=60_000).contains(&rt.handshake_timeout_ms) {
+        return Err(ConfigError::Validation(format!(
+            "runtime.handshake_timeout_ms={} out of range 100..=60000",
+            rt.handshake_timeout_ms
+        )));
+    }
+    // CODE-2-05 / REL-2-09 Wave 2c-2: floor of 100 keeps the sentinel
+    // semaphore from collapsing into a single-connection bottleneck;
+    // ceiling of 2_000_000 bounds memory pressure (Semaphore stores
+    // one waiter slot per permit + per waiter).
+    if !(100..=2_000_000).contains(&rt.max_inflight_connections) {
+        return Err(ConfigError::Validation(format!(
+            "runtime.max_inflight_connections={} out of range 100..=2000000",
+            rt.max_inflight_connections
+        )));
+    }
+    // CODE-2-09 / REL-2-11 Wave 2c-2: same range as
+    // `handshake_timeout_ms` — both bound stalls on a hot path that
+    // would otherwise occupy a worker indefinitely.
+    if !(100..=60_000).contains(&rt.connect_timeout_ms) {
+        return Err(ConfigError::Validation(format!(
+            "runtime.connect_timeout_ms={} out of range 100..=60000",
+            rt.connect_timeout_ms
+        )));
+    }
+    // SEC-2-04 Wave 2c-2: 1..=2_000_000 — zero would refuse every
+    // connection; 2_000_000 ceiling is shared with the listener cap.
+    if !(1..=2_000_000).contains(&rt.per_ip_connection_cap) {
+        return Err(ConfigError::Validation(format!(
+            "runtime.per_ip_connection_cap={} out of range 1..=2000000",
+            rt.per_ip_connection_cap
+        )));
+    }
+    // SEC-2-03 follow-on: validate the optional watchdog block. We
+    // bound `header_deadline_ms` like `connect_timeout_ms` and
+    // `sweep_interval_ms` to a similar range; `body_progress_min_bps`
+    // is a soft rate floor with a 10 MB/s ceiling — anything above
+    // would push false-positive evictions on slow mobile uplinks.
+    if let Some(wd) = rt.watchdog.as_ref() {
+        if !(100..=60_000).contains(&wd.header_deadline_ms) {
+            return Err(ConfigError::Validation(format!(
+                "runtime.watchdog.header_deadline_ms={} out of range 100..=60000",
+                wd.header_deadline_ms
+            )));
+        }
+        if wd.body_progress_min_bps > 10_000_000 {
+            return Err(ConfigError::Validation(format!(
+                "runtime.watchdog.body_progress_min_bps={} out of range 0..=10000000",
+                wd.body_progress_min_bps
+            )));
+        }
+        if !(100..=60_000).contains(&wd.sweep_interval_ms) {
+            return Err(ConfigError::Validation(format!(
+                "runtime.watchdog.sweep_interval_ms={} out of range 100..=60000",
+                wd.sweep_interval_ms
+            )));
+        }
+    }
+    // ROUND8-L4-03: the new-flow cap is either 0 (disabled) or in
+    // 1_000..=10_000_000 per CPU. Below 1k/s/CPU the data plane would
+    // skip conntrack insertion for normal traffic (lookup misses →
+    // packets fall to the kernel stack instead of XDP_TX); above
+    // 10M/s/CPU is past line rate on any current NIC. The clamp keeps
+    // the runtime footgun (finding "Risk / blast radius") off the
+    // table — an out-of-range value is a hard config error, not a
+    // silent traffic blackhole.
+    let cap = rt.xdp_new_flow_cap_per_sec_per_cpu;
+    if cap != 0 && !(1_000..=10_000_000).contains(&cap) {
+        return Err(ConfigError::Validation(format!(
+            "runtime.xdp_new_flow_cap_per_sec_per_cpu={cap} out of range \
+             (0 to disable, else 1000..=10000000)",
+        )));
     }
     Ok(())
 }
@@ -602,6 +1209,30 @@ fn validate_listener(i: usize, listener: &ListenerConfig) -> Result<(), ConfigEr
     validate_grpc_block(i, protocol, listener)?;
     validate_http_timeouts(i, listener)?;
     validate_backend_list(i, listener)?;
+    // ROUND-8 OPS-10: per-listener drain budget override must satisfy
+    // the same 100..=300_000 ms range as the gateway-level key.
+    if let Some(t) = listener.drain_timeout_ms {
+        if !(100..=300_000).contains(&t) {
+            return Err(ConfigError::Validation(format!(
+                "listener {i} drain_timeout_ms={t} out of range 100..=300000"
+            )));
+        }
+    }
+    // ROUND-8 OPS-02: per-listener jitter override must be in
+    // 0..=effective-listener-drain-timeout. When the listener does
+    // not override drain_timeout_ms the effective bound depends on
+    // the [runtime] block (cross-checked in validate_config); here we
+    // bound it by the per-listener override when present, else the
+    // absolute 300_000 ms ceiling.
+    if let Some(j) = listener.drain_jitter_ms {
+        let upper = listener.drain_timeout_ms.unwrap_or(300_000);
+        if j > upper {
+            return Err(ConfigError::Validation(format!(
+                "listener {i} drain_jitter_ms={j} exceeds the effective \
+                 drain_timeout_ms={upper} (jitter must be <= drain budget)"
+            )));
+        }
+    }
     Ok(())
 }
 
@@ -856,6 +1487,8 @@ protocol = "tcp"
             listeners: vec![],
             runtime: None,
             observability: None,
+            admin: None,
+            security: None,
         };
         assert!(validate_config(&config).is_err());
     }
@@ -873,10 +1506,14 @@ protocol = "tcp"
                 h2_security: None,
                 websocket: None,
                 grpc: None,
+                drain_timeout_ms: None,
+                drain_jitter_ms: None,
                 backends: vec![],
             }],
             runtime: None,
             observability: None,
+            admin: None,
+            security: None,
         };
         assert!(validate_config(&config).is_err());
     }
@@ -894,10 +1531,14 @@ protocol = "tcp"
                 h2_security: None,
                 websocket: None,
                 grpc: None,
+                drain_timeout_ms: None,
+                drain_jitter_ms: None,
                 backends: vec![],
             }],
             runtime: None,
             observability: None,
+            admin: None,
+            security: None,
         };
         assert!(validate_config(&config).is_ok());
     }
@@ -915,6 +1556,8 @@ protocol = "tcp"
                 h2_security: None,
                 websocket: None,
                 grpc: None,
+                drain_timeout_ms: None,
+                drain_jitter_ms: None,
                 backends: vec![BackendConfig {
                     address: String::new(),
                     protocol: "tcp".into(),
@@ -926,6 +1569,8 @@ protocol = "tcp"
             }],
             runtime: None,
             observability: None,
+            admin: None,
+            security: None,
         };
         assert!(validate_config(&config).is_err());
     }
@@ -984,10 +1629,14 @@ address = "127.0.0.1:3000"
                 h2_security: None,
                 websocket: None,
                 grpc: None,
+                drain_timeout_ms: None,
+                drain_jitter_ms: None,
                 backends: vec![],
             }],
             runtime: None,
             observability: None,
+            admin: None,
+            security: None,
         };
         assert!(validate_config(&config).is_err());
     }
@@ -1005,10 +1654,14 @@ address = "127.0.0.1:3000"
                 h2_security: None,
                 websocket: None,
                 grpc: None,
+                drain_timeout_ms: None,
+                drain_jitter_ms: None,
                 backends: vec![],
             }],
             runtime: None,
             observability: None,
+            admin: None,
+            security: None,
         };
         assert!(validate_config(&config).is_err());
     }
@@ -1031,10 +1684,14 @@ address = "127.0.0.1:3000"
                 h2_security: None,
                 websocket: None,
                 grpc: None,
+                drain_timeout_ms: None,
+                drain_jitter_ms: None,
                 backends: vec![],
             }],
             runtime: None,
             observability: None,
+            admin: None,
+            security: None,
         };
         assert!(validate_config(&config).is_err());
     }
@@ -1057,10 +1714,14 @@ address = "127.0.0.1:3000"
                 h2_security: None,
                 websocket: None,
                 grpc: None,
+                drain_timeout_ms: None,
+                drain_jitter_ms: None,
                 backends: vec![],
             }],
             runtime: None,
             observability: None,
+            admin: None,
+            security: None,
         };
         assert!(validate_config(&config).is_err());
     }
@@ -1103,10 +1764,14 @@ protocol = "h1"
                 h2_security: None,
                 websocket: None,
                 grpc: None,
+                drain_timeout_ms: None,
+                drain_jitter_ms: None,
                 backends: vec![],
             }],
             runtime: None,
             observability: None,
+            admin: None,
+            security: None,
         };
         assert!(validate_config(&config).is_err());
     }
@@ -1130,10 +1795,14 @@ protocol = "h1"
                 h2_security: None,
                 websocket: None,
                 grpc: None,
+                drain_timeout_ms: None,
+                drain_jitter_ms: None,
                 backends: vec![],
             }],
             runtime: None,
             observability: None,
+            admin: None,
+            security: None,
         };
         assert!(validate_config(&config).is_err());
     }
@@ -1151,6 +1820,8 @@ protocol = "h1"
                 h2_security: None,
                 websocket: None,
                 grpc: None,
+                drain_timeout_ms: None,
+                drain_jitter_ms: None,
                 backends: vec![BackendConfig {
                     address: "127.0.0.1:3000".into(),
                     protocol: "gopher".into(),
@@ -1162,6 +1833,8 @@ protocol = "h1"
             }],
             runtime: None,
             observability: None,
+            admin: None,
+            security: None,
         };
         assert!(validate_config(&config).is_err());
     }
@@ -1207,6 +1880,8 @@ address = "127.0.0.1:3000"
                 h2_security: None,
                 websocket: None,
                 grpc: None,
+                drain_timeout_ms: None,
+                drain_jitter_ms: None,
                 backends: vec![BackendConfig {
                     address: "127.0.0.1:3000".into(),
                     protocol: "tcp".into(),
@@ -1218,6 +1893,8 @@ address = "127.0.0.1:3000"
             }],
             runtime: None,
             observability: None,
+            admin: None,
+            security: None,
         };
         let err = validate_config(&config).unwrap_err();
         assert!(matches!(err, ConfigError::Validation(_)));
@@ -1243,10 +1920,14 @@ address = "127.0.0.1:3000"
                 h2_security: None,
                 websocket: None,
                 grpc: None,
+                drain_timeout_ms: None,
+                drain_jitter_ms: None,
                 backends: vec![],
             }],
             runtime: None,
             observability: None,
+            admin: None,
+            security: None,
         };
         assert!(validate_config(&config).is_err());
     }
@@ -1272,6 +1953,8 @@ address = "127.0.0.1:3000"
                 h2_security: None,
                 websocket: None,
                 grpc: None,
+                drain_timeout_ms: None,
+                drain_jitter_ms: None,
                 backends: vec![BackendConfig {
                     address: "127.0.0.1:3000".into(),
                     protocol: "tcp".into(),
@@ -1283,6 +1966,8 @@ address = "127.0.0.1:3000"
             }],
             runtime: None,
             observability: None,
+            admin: None,
+            security: None,
         };
         validate_config(&config).unwrap();
     }
@@ -1304,6 +1989,8 @@ address = "127.0.0.1:3000"
                 h2_security: None,
                 websocket: None,
                 grpc: None,
+                drain_timeout_ms: None,
+                drain_jitter_ms: None,
                 backends: vec![BackendConfig {
                     address: "127.0.0.1:3000".into(),
                     protocol: "tcp".into(),
@@ -1315,6 +2002,8 @@ address = "127.0.0.1:3000"
             }],
             runtime: None,
             observability: None,
+            admin: None,
+            security: None,
         };
         assert!(validate_config(&config).is_err());
     }
@@ -1353,13 +2042,30 @@ xdp_interface = "eth0"
                 h2_security: None,
                 websocket: None,
                 grpc: None,
+                drain_timeout_ms: None,
+                drain_jitter_ms: None,
                 backends: vec![],
             }],
             runtime: Some(RuntimeConfig {
                 xdp_enabled: true,
                 xdp_interface: None,
+                xdp_mode: XdpModeChoice::Auto,
+                drain_timeout_ms: 10_000,
+                readiness_settle_ms: 1_000,
+                drain_jitter_ms: None,
+                handshake_timeout_ms: 5_000,
+                max_inflight_connections: 65_536,
+                connect_timeout_ms: 5_000,
+                per_ip_connection_cap: 1_024,
+                tls: None,
+                watchdog: None,
+                header_underscore_policy: HeaderUnderscorePolicy::Reject,
+                max_keepalive_requests: 100,
+                xdp_new_flow_cap_per_sec_per_cpu: 125_000,
             }),
             observability: None,
+            admin: None,
+            security: None,
         };
         let err = validate_config(&config).unwrap_err();
         assert!(matches!(err, ConfigError::Validation(_)));
@@ -1378,13 +2084,30 @@ xdp_interface = "eth0"
                 h2_security: None,
                 websocket: None,
                 grpc: None,
+                drain_timeout_ms: None,
+                drain_jitter_ms: None,
                 backends: vec![],
             }],
             runtime: Some(RuntimeConfig {
                 xdp_enabled: false,
                 xdp_interface: None,
+                xdp_mode: XdpModeChoice::Auto,
+                drain_timeout_ms: 10_000,
+                readiness_settle_ms: 1_000,
+                drain_jitter_ms: None,
+                handshake_timeout_ms: 5_000,
+                max_inflight_connections: 65_536,
+                connect_timeout_ms: 5_000,
+                per_ip_connection_cap: 1_024,
+                tls: None,
+                watchdog: None,
+                header_underscore_policy: HeaderUnderscorePolicy::Reject,
+                max_keepalive_requests: 100,
+                xdp_new_flow_cap_per_sec_per_cpu: 125_000,
             }),
             observability: None,
+            admin: None,
+            security: None,
         };
         validate_config(&config).unwrap();
     }
@@ -1455,10 +2178,14 @@ address = "127.0.0.1:3000"
                 h2_security: None,
                 websocket: Some(WebsocketConfig::default()),
                 grpc: None,
+                drain_timeout_ms: None,
+                drain_jitter_ms: None,
                 backends: vec![],
             }],
             runtime: None,
             observability: None,
+            admin: None,
+            security: None,
         };
         assert!(validate_config(&config).is_err());
     }
@@ -1502,12 +2229,156 @@ address = "127.0.0.1:3000"
                 h2_security: None,
                 websocket: None,
                 grpc: Some(GrpcListenerConfig::default()),
+                drain_timeout_ms: None,
+                drain_jitter_ms: None,
                 backends: vec![],
             }],
             runtime: None,
             observability: None,
+            admin: None,
+            security: None,
         };
         assert!(validate_config(&config).is_err());
+    }
+
+    // ── ROUND-8 OPS-10 / OPS-02: per-listener drain budget + jitter ──
+
+    fn base_runtime() -> RuntimeConfig {
+        RuntimeConfig {
+            xdp_enabled: false,
+            xdp_interface: None,
+            xdp_mode: XdpModeChoice::Auto,
+            drain_timeout_ms: 10_000,
+            readiness_settle_ms: 1_000,
+            drain_jitter_ms: None,
+            handshake_timeout_ms: 5_000,
+            max_inflight_connections: 65_536,
+            connect_timeout_ms: 5_000,
+            per_ip_connection_cap: 1_024,
+            tls: None,
+            watchdog: None,
+            header_underscore_policy: HeaderUnderscorePolicy::Reject,
+            max_keepalive_requests: 100,
+            xdp_new_flow_cap_per_sec_per_cpu: 125_000,
+        }
+    }
+
+    fn min_listener(addr: &str) -> ListenerConfig {
+        ListenerConfig {
+            address: addr.into(),
+            protocol: "tcp".into(),
+            tls: None,
+            quic: None,
+            alt_svc: None,
+            http: None,
+            h2_security: None,
+            websocket: None,
+            grpc: None,
+            drain_timeout_ms: None,
+            drain_jitter_ms: None,
+            backends: vec![BackendConfig {
+                address: "127.0.0.1:9000".into(),
+                protocol: "tcp".into(),
+                weight: 1,
+                tls_ca_path: None,
+                tls_verify_hostname: None,
+                tls_verify_peer: true,
+            }],
+        }
+    }
+
+    #[test]
+    fn ops10_override_takes_precedence_over_runtime() {
+        let mut l = min_listener("0.0.0.0:443");
+        l.drain_timeout_ms = Some(300_000);
+        let rt = RuntimeConfig {
+            drain_timeout_ms: 10_000,
+            ..base_runtime()
+        };
+        // Per-listener override wins over the [runtime] default.
+        assert_eq!(l.effective_drain_timeout_ms(Some(&rt)), 300_000);
+        // No override → inherit [runtime].
+        let l2 = min_listener("0.0.0.0:80");
+        assert_eq!(l2.effective_drain_timeout_ms(Some(&rt)), 10_000);
+        // No [runtime] block → lb-config default.
+        assert_eq!(l2.effective_drain_timeout_ms(None), 10_000);
+    }
+
+    #[test]
+    fn ops02_jitter_default_is_quarter_of_budget() {
+        let l = min_listener("0.0.0.0:80");
+        let rt = RuntimeConfig {
+            drain_timeout_ms: 20_000,
+            drain_jitter_ms: None,
+            ..base_runtime()
+        };
+        // Derived: drain_timeout_ms / 4.
+        assert_eq!(rt.effective_drain_jitter_ms(), 5_000);
+        assert_eq!(l.effective_drain_jitter_ms(Some(&rt)), 5_000);
+        // Explicit 0 disables jitter for the listener.
+        let mut l0 = min_listener("0.0.0.0:81");
+        l0.drain_jitter_ms = Some(0);
+        assert_eq!(l0.effective_drain_jitter_ms(Some(&rt)), 0);
+    }
+
+    #[test]
+    fn ops10_per_listener_timeout_range_rejected() {
+        let mut l = min_listener("0.0.0.0:80");
+        l.drain_timeout_ms = Some(50); // below 100 floor
+        let cfg = LbConfig {
+            listeners: vec![l],
+            runtime: None,
+            observability: None,
+            admin: None,
+            security: None,
+        };
+        assert!(validate_config(&cfg).is_err());
+    }
+
+    #[test]
+    fn ops02_listener_jitter_exceeding_inherited_budget_rejected() {
+        // Listener sets a big jitter but inherits a small [runtime]
+        // budget — the validate_config cross-check must reject it.
+        let mut l = min_listener("0.0.0.0:80");
+        l.drain_jitter_ms = Some(9_000);
+        let rt = RuntimeConfig {
+            drain_timeout_ms: 5_000,
+            ..base_runtime()
+        };
+        let cfg = LbConfig {
+            listeners: vec![l],
+            runtime: Some(rt),
+            observability: None,
+            admin: None,
+            security: None,
+        };
+        let err = validate_config(&cfg).unwrap_err();
+        assert!(matches!(err, ConfigError::Validation(_)));
+    }
+
+    #[test]
+    fn ops02_gateway_jitter_exceeding_budget_rejected() {
+        let rt = RuntimeConfig {
+            drain_timeout_ms: 5_000,
+            drain_jitter_ms: Some(9_000),
+            ..base_runtime()
+        };
+        let cfg = LbConfig {
+            listeners: vec![min_listener("0.0.0.0:80")],
+            runtime: Some(rt),
+            observability: None,
+            admin: None,
+            security: None,
+        };
+        assert!(validate_config(&cfg).is_err());
+    }
+
+    #[test]
+    fn ops11_readiness_settle_default_is_kubelet_aligned() {
+        // Regression guard for OPS-11: the default must be one full
+        // kubelet probe period (10 s) + margin.
+        assert_eq!(default_readiness_settle_ms(), 11_000);
+        assert!(default_readiness_settle_ms() <= 30_000); // still in range
     }
 
     #[test]
@@ -1523,12 +2394,16 @@ address = "127.0.0.1:3000"
                 h2_security: None,
                 websocket: None,
                 grpc: None,
+                drain_timeout_ms: None,
+                drain_jitter_ms: None,
                 backends: vec![],
             }],
             runtime: None,
             observability: Some(ObservabilityConfig {
                 metrics_bind: Some("not-an-address".into()),
             }),
+            admin: None,
+            security: None,
         };
         let err = validate_config(&config).unwrap_err();
         assert!(matches!(err, ConfigError::Validation(_)));

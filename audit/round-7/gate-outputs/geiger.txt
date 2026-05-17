@@ -1,0 +1,1 @@
+GATE 4 (cargo-geiger): cargo-geiger not installed locally; fallback grep of 'unsafe' across crates/ recorded. Total occurrences: 73. See audit/unsafe-justifications.md for per-site rationale.

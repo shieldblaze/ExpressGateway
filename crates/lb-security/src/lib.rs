@@ -12,24 +12,50 @@
 #![allow(clippy::pedantic, clippy::nursery)]
 #![cfg_attr(
     test,
-    allow(clippy::unwrap_used, clippy::expect_used, clippy::indexing_slicing)
+    allow(
+        clippy::unwrap_used,
+        clippy::expect_used,
+        clippy::indexing_slicing,
+        clippy::panic,
+    )
 )]
 
+mod admin_auth;
+mod conn_gate;
 mod error;
+mod glitches;
+mod handshake;
+mod hooks;
+mod key;
 mod retry;
 mod slow_post;
 mod slowloris;
 mod smuggle;
 mod ticket;
+mod watchdog;
 mod zero_rtt;
 
+pub use admin_auth::{AdminAuthError, AdminAuthGate, AdminBindError, AdminTokenHash};
+pub use conn_gate::{ConnGate, ConnPermit, IpNet, OverCap};
 pub use error::SecurityError;
+pub use glitches::{
+    DEFAULT_GLITCHES_THRESHOLD, DEFAULT_GLITCHES_WINDOW, DEFAULT_RECV_FRAME_TIMEOUT, GlitchKind,
+    GlitchOutcome, GlitchesCounter,
+};
+pub use handshake::{DEFAULT_HANDSHAKE_TIMEOUT_MS, HandshakeError, timeout_accept};
+pub use hooks::{HooksBundle, SecurityHooks, SecurityReject};
+pub use key::{KeyPermAdvice, KeyPermError, assert_owner_only};
 pub use retry::{DEFAULT_RETRY_MAX_AGE, RETRY_SECRET_LEN, RetryError, RetryTokenSigner};
 pub use slow_post::SlowPostDetector;
 pub use slowloris::SlowlorisDetector;
-pub use smuggle::SmuggleDetector;
-pub use ticket::{RotatingTicketer, TicketError, TicketKey, TicketRotator, build_server_config};
-pub use zero_rtt::ZeroRttReplayGuard;
+pub use smuggle::{SmuggleDetector, SmuggleMode};
+pub use ticket::{
+    DEFAULT_MAX_CHAIN_DEPTH, RotatingTicketer, SharedTlsBundle, TicketError, TicketKey,
+    TicketRotator, TlsBundleError, TlsConfigBundle, build_server_config,
+    build_server_config_with_policy, reload_tls_bundle,
+};
+pub use watchdog::{ConnId, Watchdog, WatchdogConfig, WatchdogError};
+pub use zero_rtt::{DEFAULT_ZERO_RTT_REPLAY_WINDOW_SIZE, ZeroRttReplayGuard};
 
 #[cfg(test)]
 mod tests {

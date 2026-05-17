@@ -26,6 +26,14 @@ http-body-util = { workspace = true }
 # quiche/BoringSSL's build — declaring it direct is cheap.
 ring = "0.17"
 lb-security = { path = "../lb-security" }
+# ROUND8-L7-16: the H3/QUIC ingress dispatch must run the SAME
+# authority value predicate the H1/H2 path uses (HAProxy BUG/MAJOR
+# comma class; L7-09's H3 leg). The predicate lives in lb-core
+# (`lb_core::authority::validate`). lb-core is a leaf crate (zero
+# lb-* deps) so this edge introduces no cycle, and lb-l7 (which
+# depends on lb-quic) is NOT pulled in — avoiding the
+# lb-quic↔lb-l7 cycle the alternative (lb-l7 dep) would create.
+lb-core = { path = "../lb-core" }
 # Pillar 3b.3c-2: router needs TcpPool to forward H3 → H1 to backends.
 lb-io = { path = "../lb-io" }
 # Pillar 3b.3c-2: lb-h3 provides the RFC 9114 frame codec + QPACK static-
@@ -36,3 +44,16 @@ lb-h3 = { path = "../lb-h3" }
 [dev-dependencies]
 rcgen = { version = "0.13", features = ["pem"] }
 tokio = { workspace = true, features = ["full", "test-util"] }
+# CODE-2-11: proptest harness for the long/short header parse path.
+# Sanity budget; CI bumps via PROPTEST_CASES env.
+proptest = { workspace = true }
+
+[features]
+default = []
+proptest = []
+# SESSION 2 / P1-A: exposes `h3_bridge::MAX_INFLIGHT_BODY_BYTES`, a
+# test-only gauge integration tests assert to prove the streaming
+# bridge is memory-bounded (not whole-body buffering). Off by default
+# so production never compiles the gauge; the P1-A backpressure test
+# (T5) is run with `--features test-gauges`.
+test-gauges = []

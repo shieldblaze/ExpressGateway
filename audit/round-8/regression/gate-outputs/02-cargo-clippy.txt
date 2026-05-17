@@ -1,0 +1,16 @@
+    Blocking waiting for file lock on package cache
+    Blocking waiting for file lock on package cache
+    Blocking waiting for file lock on package cache
+    Checking lb-core v0.1.0 (/home/ubuntu/Code/ExpressGateway/crates/lb-core)
+    Checking lb-h3 v0.1.0 (/home/ubuntu/Code/ExpressGateway/crates/lb-h3)
+    Checking lb-h2 v0.1.0 (/home/ubuntu/Code/ExpressGateway/crates/lb-h2)
+    Checking lb-quic v0.1.0 (/home/ubuntu/Code/ExpressGateway/crates/lb-quic)
+    Checking lb-balancer v0.1.0 (/home/ubuntu/Code/ExpressGateway/crates/lb-balancer)
+    Checking lb-h1 v0.1.0 (/home/ubuntu/Code/ExpressGateway/crates/lb-h1)
+    Checking lb-l7 v0.1.0 (/home/ubuntu/Code/ExpressGateway/crates/lb-l7)
+    Checking lb v0.1.0 (/home/ubuntu/Code/ExpressGateway/crates/lb)
+    Checking lb-integration-tests v0.1.0 (/home/ubuntu/Code/ExpressGateway)
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 1m 14s
+CLIPPY_EXIT=0
+
+=== VERIFY ANNOTATION: Gate 2 PASS — clippy --workspace --all-targets --all-features -D warnings finished clean (exit 0), 1m14s. ===

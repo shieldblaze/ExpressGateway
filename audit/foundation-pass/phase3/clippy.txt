@@ -1,0 +1,120 @@
+    Checking serde_spanned v0.6.9
+    Checking toml_datetime v0.6.11
+   Compiling lb-l4-xdp v0.1.0 (/home/ubuntu/Code/ExpressGateway/crates/lb-l4-xdp)
+    Checking lb-security v0.1.0 (/home/ubuntu/Code/ExpressGateway/crates/lb-security)
+    Checking lb-core v0.1.0 (/home/ubuntu/Code/ExpressGateway/crates/lb-core)
+    Checking tracing-subscriber v0.3.23
+    Checking tower v0.5.3
+    Checking lb-io v0.1.0 (/home/ubuntu/Code/ExpressGateway/crates/lb-io)
+    Checking tokio-quiche v0.18.0
+    Checking toml_edit v0.22.27
+    Checking lb-h3 v0.1.0 (/home/ubuntu/Code/ExpressGateway/crates/lb-h3)
+    Checking tower-http v0.6.8
+    Checking hyper-rustls v0.27.9
+    Checking tokio-tungstenite v0.24.0
+    Checking serde_urlencoded v0.7.1
+    Checking lb-grpc v0.1.0 (/home/ubuntu/Code/ExpressGateway/crates/lb-grpc)
+    Checking lb-h2 v0.1.0 (/home/ubuntu/Code/ExpressGateway/crates/lb-h2)
+    Checking lb-balancer v0.1.0 (/home/ubuntu/Code/ExpressGateway/crates/lb-balancer)
+    Checking lb-health v0.1.0 (/home/ubuntu/Code/ExpressGateway/crates/lb-health)
+    Checking reqwest v0.12.28
+    Checking lb-cp-client v0.1.0 (/home/ubuntu/Code/ExpressGateway/crates/lb-cp-client)
+    Checking lb-h1 v0.1.0 (/home/ubuntu/Code/ExpressGateway/crates/lb-h1)
+    Checking lb-observability v0.1.0 (/home/ubuntu/Code/ExpressGateway/crates/lb-observability)
+    Checking lb-quic v0.1.0 (/home/ubuntu/Code/ExpressGateway/crates/lb-quic)
+    Checking toml v0.8.23
+    Checking lb-config v0.1.0 (/home/ubuntu/Code/ExpressGateway/crates/lb-config)
+    Checking lb-controlplane v0.1.0 (/home/ubuntu/Code/ExpressGateway/crates/lb-controlplane)
+    Checking lb-l7 v0.1.0 (/home/ubuntu/Code/ExpressGateway/crates/lb-l7)
+    Checking lb-integration-tests v0.1.0 (/home/ubuntu/Code/ExpressGateway)
+error: doc list item without indentation
+    --> tests/reload_zero_drop.rs:1194:9
+     |
+1194 |     /// HOLDS the socket open (never FIN) well past the read window.
+     |         ^
+     |
+     = help: if this is supposed to be its own paragraph, add a blank line
+     = help: for further information visit https://rust-lang.github.io/rust-clippy/master/index.html#doc_lazy_continuation
+     = note: `-D clippy::doc-lazy-continuation` implied by `-D warnings`
+     = help: to override `-D warnings` add `#[allow(clippy::doc_lazy_continuation)]`
+help: indent this line
+     |
+1194 |     ///   HOLDS the socket open (never FIN) well past the read window.
+     |         ++
+
+error: doc list item without indentation
+    --> tests/reload_zero_drop.rs:1195:9
+     |
+1195 |     /// Pre-F-COR-4 this was misclassified `FinOnly` and PASSED (wrong);
+     |         ^
+     |
+     = help: if this is supposed to be its own paragraph, add a blank line
+     = help: for further information visit https://rust-lang.github.io/rust-clippy/master/index.html#doc_lazy_continuation
+help: indent this line
+     |
+1195 |     ///   Pre-F-COR-4 this was misclassified `FinOnly` and PASSED (wrong);
+     |         ++
+
+error: doc list item without indentation
+    --> tests/reload_zero_drop.rs:1196:9
+     |
+1196 |     /// post-fix it MUST classify `BodyCompleteNoClose` AND the
+     |         ^
+     |
+     = help: if this is supposed to be its own paragraph, add a blank line
+     = help: for further information visit https://rust-lang.github.io/rust-clippy/master/index.html#doc_lazy_continuation
+help: indent this line
+     |
+1196 |     ///   post-fix it MUST classify `BodyCompleteNoClose` AND the
+     |         ++
+
+error: doc list item without indentation
+    --> tests/reload_zero_drop.rs:1197:9
+     |
+1197 |     /// per-iteration assertion MUST reject it.
+     |         ^
+     |
+     = help: if this is supposed to be its own paragraph, add a blank line
+     = help: for further information visit https://rust-lang.github.io/rust-clippy/master/index.html#doc_lazy_continuation
+help: indent this line
+     |
+1197 |     ///   per-iteration assertion MUST reject it.
+     |         ++
+
+error: could not compile `lb-integration-tests` (test "reload_zero_drop") due to 4 previous errors
+warning: build failed, waiting for other jobs to finish...
+error: this `map_or` can be simplified
+   --> tests/h2_rapid_reset_goaway_under_load.rs:247:26
+    |
+247 |       let signal_in_send = send_err
+    |  __________________________^
+248 | |         .as_ref()
+249 | |         .map_or(false, |e| e.is_remote() || e.is_go_away());
+    | |___________________________________________________________^
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/master/index.html#unnecessary_map_or
+    = note: `-D clippy::unnecessary-map-or` implied by `-D warnings`
+    = help: to override `-D warnings` add `#[allow(clippy::unnecessary_map_or)]`
+help: use is_some_and instead
+    |
+247 ~     let signal_in_send = send_err
+248 ~         .as_ref().is_some_and(|e| e.is_remote() || e.is_go_away());
+    |
+
+error: this `map_or` can be simplified
+   --> tests/h2_rapid_reset_goaway_under_load.rs:259:23
+    |
+259 |       let only_broken = send_err
+    |  _______________________^
+260 | |         .as_ref()
+261 | |         .map_or(false, |e| bare_transport(&format!("{e:?}")))
+    | |_____________________________________________________________^
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/master/index.html#unnecessary_map_or
+help: use is_some_and instead
+    |
+259 ~     let only_broken = send_err
+260 +         .as_ref().is_some_and(|e| bare_transport(&format!("{e:?}")))
+    |
+
+error: could not compile `lb-integration-tests` (test "h2_rapid_reset_goaway_under_load") due to 2 previous errors

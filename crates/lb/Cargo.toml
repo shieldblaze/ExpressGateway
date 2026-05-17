@@ -24,6 +24,10 @@ rustls-pemfile = { workspace = true }
 tokio-rustls = { workspace = true }
 lb-io = { path = "../lb-io" }
 lb-config = { path = "../lb-config" }
+# CODE-2-13: stub the lb_core::Shutdown import early so Wave-2 can
+# pass-it-into the existing listener spawn helpers without a Cargo.toml
+# churn (round-4 brief constraint).
+lb-core = { path = "../lb-core" }
 lb-controlplane = { path = "../lb-controlplane" }
 lb-balancer = { path = "../lb-balancer" }
 lb-observability = { path = "../lb-observability" }
@@ -34,6 +38,14 @@ lb-l7 = { path = "../lb-l7" }
 lb-l4-xdp = { path = "../lb-l4-xdp" }
 hyper = { workspace = true }
 hyper-util = { workspace = true }
+# CODE-2-02 Wave 2c: bind `MetricsRegistry::panic_total_counter()`'s
+# `IntCounter` into a `OnceLock` so the panic hook can bump it
+# without re-entering the registry on every hit.
+prometheus = { workspace = true }
+# CODE-2-06 Wave 2c-2: jittered exponential backoff on accept(2)
+# EMFILE/ENFILE/ECONNRESET. Workspace-pinned to 0.8 — same as the
+# wider workspace's dev-deps so no new transitive lands.
+rand = { workspace = true }
 # PROTO-001 D3-1: H3 upstream pool config-factory builds a quiche::Config
 # in-line (no shared helper exists yet). Pulled in via the workspace pin
 # already used by lb-quic / lb-io.
@@ -43,3 +55,11 @@ quiche = { workspace = true }
 # target_os = "linux" in main.rs.
 [target.'cfg(target_os = "linux")'.dependencies]
 caps = { workspace = true }
+
+# PROTO-2-03 (Wave 2c-2): proof harness for 1xx pass-through. Spins
+# up a hyper H1 server + client over a duplex so we can observe the
+# wire-level 100 Continue auto-emit without binding a real socket.
+[dev-dependencies]
+bytes = { workspace = true }
+http = { workspace = true }
+http-body-util = { workspace = true }

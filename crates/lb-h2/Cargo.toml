@@ -10,3 +10,12 @@ publish = false
 thiserror = { workspace = true }
 bytes = { workspace = true }
 http = { workspace = true }
+
+[dev-dependencies]
+# CODE-2-11: property-based decode_frame / HPACK round-trip
+# assertions. Sanity budget here; CI bumps via PROPTEST_CASES env.
+proptest = { workspace = true }
+
+[features]
+default = []
+proptest = []

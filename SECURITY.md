@@ -48,8 +48,8 @@ Each row maps an attack to the code site that mitigates it, plus a reference.
 | 16 | Unbounded pool growth | Pool | `crates/lb-io/src/pool.rs` `per_peer_max` + `total_max` enforced on `PooledTcp::drop`; `max_age` + `idle_timeout` eviction | Unit tests `per_peer_max_enforced`, `total_max_enforced`, `size_invariant_holds_under_random_ops` |
 | 17 | DNS cache poisoning via stale entries after NXDOMAIN | DNS | `crates/lb-io/src/dns.rs` negative-TTL caches NXDOMAIN for 5 s by default; positive TTL capped at 300 s | Unit test `negative_entry_caches_nxdomain` |
 | 18 | TLS session-ticket-key compromise | TLS | `crates/lb-security/src/ticket.rs::TicketRotator` rotates daily with an overlap window; `RotatingTicketer` impls `rustls::server::ProducesTickets` | Unit tests `rotate_if_due_swaps_keys_at_interval`, `overlap_preserves_previous_for_decrypt` |
-| 19 | Compression bomb (zip-of-zip) | L7 | `crates/lb-compression/src/lib.rs::CompressionGuard` bounded decompression | `tests/compression_bomb_cap.rs` |
-| 20 | BREACH / compression-oracle via response body | L7 | `crates/lb-compression` refuses to recompress responses that mix secrets and attacker-controlled input (posture) | `tests/compression_breach_posture.rs` |
+| 19 | Compression bomb (zip-of-zip) | L7 | Out of scope — compression layer removed by L-001 in round-1. Upstream-Accept-Encoding headers are passed through unchanged; the gateway does not decompress responses. | n/a |
+| 20 | BREACH / compression-oracle via response body | L7 | Out of scope — see row 19. The gateway never recompresses response bodies; BREACH risk lives at the origin tier where the response is generated. | n/a |
 | 21 | Panic-as-DoS (e.g. the Cloudflare 2025 incident) | Whole codebase | Crate-root `#![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::todo, clippy::unimplemented, clippy::unreachable, clippy::indexing_slicing)]` + halting-gate check 3 grep | ADR-0010 |
 
 ## Cross-reference

@@ -1,0 +1,52 @@
+Analyzing dependencies of crates in this directory...
+cargo-machete found the following unused dependencies in this directory:
+lb-balancer -- ./crates/lb-balancer/Cargo.toml:
+	parking_lot
+lb -- ./crates/lb/Cargo.toml:
+	rustls
+	rustls-pemfile
+	rustls-pki-types
+	tracing-subscriber
+lb-health -- ./crates/lb-health/Cargo.toml:
+	tokio
+lb-h2 -- ./crates/lb-h2/Cargo.toml:
+	http
+lb-security -- ./crates/lb-security/Cargo.toml:
+	bytes
+	tracing
+lb-xdp-ebpf -- ./crates/lb-l4-xdp/ebpf/Cargo.toml:
+	aya-log-ebpf
+lb-l4-xdp -- ./crates/lb-l4-xdp/Cargo.toml:
+	rand
+lb-controlplane -- ./crates/lb-controlplane/Cargo.toml:
+	serde
+	serde_json
+lb-io -- ./crates/lb-io/Cargo.toml:
+	bytes
+lb-core -- ./crates/lb-core/Cargo.toml:
+	bytes
+lb-grpc -- ./crates/lb-grpc/Cargo.toml:
+	http
+
+If you believe cargo-machete has detected an unused dependency incorrectly,
+you can add the dependency to the list of dependencies to ignore in the
+`[package.metadata.cargo-machete]` section of the appropriate Cargo.toml.
+For example:
+
+[package.metadata.cargo-machete]
+ignored = ["prost"]
+
+You can also try running it with the `--with-metadata` flag for better accuracy,
+though this may modify your Cargo.lock files.
+
+Done!
+MACHETE_EXIT=1
+
+=== VERIFY ANNOTATION (Round-8 Phase E) ===
+Diffed against Round-7 baseline (audit/round-7/gate-outputs/machete.txt):
+the unused-dep set is IDENTICAL between Round-7 and Round-8 (same known
+feature-gated / macro re-export / cfg-gated false-positives). No NEW
+unused dependency introduced by the Round-8 tree.
+CI policy (.github/workflows/ci.yml:188, SEC-2-07): machete job is
+`continue-on-error: true` — informational soft check, not a hard gate.
+Disposition: PASS (no regression vs Round-7; pre-existing accepted state).

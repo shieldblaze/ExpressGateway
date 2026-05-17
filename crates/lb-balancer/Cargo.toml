@@ -10,3 +10,32 @@ publish = false
 thiserror = { workspace = true }
 rand = { workspace = true }
 parking_lot = { workspace = true }
+# CODE-2-14: lb-core::BackendState is the single source of truth for
+# the active_connections / active_requests counters. lb-balancer holds
+# an Arc<BackendState> per Backend so the scheduler and the metrics
+# gauge cannot diverge.
+lb-core = { path = "../lb-core" }
+
+# CODE-2-14 follow-on (Round-5 push-back): tokio + a JoinSet-based
+# integration race test live in tests/balancer_counter_sync.rs to
+# complement the loom model. The loom test covers the publication
+# ordering; the integration test catches divergence under a real
+# multi-thread schedule.
+[dev-dependencies]
+tokio = { workspace = true, features = ["macros", "rt-multi-thread", "sync"] }
+
+# CODE-2-11: loom interleaving exploration is `--cfg loom` gated so it
+# never compiles into normal test builds. One harness in
+# tests/loom_atomic_counter.rs explores the atomic-counter / scheduler
+# race; the broader sweep is Wave-2 work tracked under CODE-2-04.
+# Build it with: RUSTFLAGS="--cfg loom" cargo test -p lb-balancer
+[target.'cfg(loom)'.dev-dependencies]
+loom = { workspace = true }
+
+# CODE-2-11: register `loom` with `--check-cfg` so clippy's
+# `unexpected_cfgs` lint stays clean when the test file declares
+# `#![cfg(loom)]`. With this entry plain builds skip the loom test
+# (cfg is false) and `--cfg loom` builds compile it; either way the
+# lint passes.
+[lints.rust]
+unexpected_cfgs = { level = "warn", check-cfg = ['cfg(loom)'] }

@@ -1,0 +1,263 @@
+# Production-readiness gates for ExpressGateway (L7 LB + L4 XDP).
+#
+# Covers the Round-8 deferred gates that need a real CI environment:
+#   gate-07  cargo-deny           (also verified locally 2026-05-16: PASS)
+#   D-6      cargo-llvm-cov       hot-path coverage >= 80%
+#   D-4      h2spec / h3spec      HTTP/2 + HTTP/3 conformance
+#   D-3a     chaos ATTACK suite   Rapid Reset / CONTINUATION / HPACK / slowloris
+#   D-5      trivy image scan     real docker build + image scan
+#   D-2      bpftool verifier     XDP load on kernels 5.15 / 6.1 / 6.6
+#
+# NOT covered here (need real hardware — see D1-soak-runbook.md):
+#   D-1      native-mode XDP attach on a production ENA NIC
+#   D-3b     4-hour soak / leak detection
+#
+# Drop this file in .github/workflows/. Tune the marked TODOs to the repo.
+
+name: prod-readiness-gates
+
+on:
+  push:
+    branches: [prod-readiness/round-4, main]
+  pull_request:
+  workflow_dispatch:
+
+env:
+  CARGO_TERM_COLOR: always
+  # MSRV — matches rust-toolchain.toml. cargo-deny needs its own newer
+  # toolchain (see the gate-07 job).
+  RUST_MSRV: "1.85"
+
+jobs:
+
+  # ---------------------------------------------------------------
+  # gate-07 — cargo-deny (advisories / licenses / bans / sources)
+  # cargo-deny >=0.19 requires rustc >=1.88, so it runs on a separate
+  # toolchain from the workspace build. cargo-deny is a standalone
+  # lockfile analyzer; toolchain mismatch with the project is fine.
+  # ---------------------------------------------------------------
+  gate-07-cargo-deny:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install cargo-deny (prebuilt binary, no toolchain needed)
+        run: |
+          VER=0.19.6
+          curl -fsSL "https://github.com/EmbarkStudios/cargo-deny/releases/download/${VER}/cargo-deny-${VER}-x86_64-unknown-linux-musl.tar.gz" \
+            | tar -xz --strip-components=1 -C /usr/local/bin --wildcards '*/cargo-deny'
+          cargo-deny --version
+      - name: cargo-deny check
+        run: cargo-deny check
+      # NOTE: deny.toml currently carries 6 stale ignore entries
+      # (advisory-not-detected) and 2 unmatched license allowances.
+      # Not gate-failing, but prune them — see audit note 2026-05-16.
+
+  # ---------------------------------------------------------------
+  # Build + clippy + fmt gate (fast feedback; not one of the seven
+  # but the foundation the others depend on).
+  # ---------------------------------------------------------------
+  build-and-lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: ${{ env.RUST_MSRV }}
+          components: clippy, rustfmt
+      - uses: Swatinem/rust-cache@v2
+      - name: System deps (BoringSSL/boring-sys + bindgen)
+        run: sudo apt-get update && sudo apt-get install -y cmake clang libclang-dev llvm
+      - run: cargo fmt --all --check
+      - run: cargo clippy --all-targets --all-features -- -D warnings
+      - run: cargo build --workspace
+
+  # ---------------------------------------------------------------
+  # D-6 — hot-path coverage >= 80%
+  # The 80% threshold applies to the hot-path modules enumerated in
+  # audit/round-8/coverage-scope.md, NOT the whole workspace. Adjust
+  # the --package / --ignore-filename-regex flags to match that file.
+  # ---------------------------------------------------------------
+  D6-coverage:
+    runs-on: ubuntu-latest
+    needs: build-and-lint
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: ${{ env.RUST_MSRV }}
+          components: llvm-tools-preview
+      - uses: Swatinem/rust-cache@v2
+      - run: sudo apt-get update && sudo apt-get install -y cmake clang libclang-dev llvm
+      - name: Install cargo-llvm-cov + nextest
+        run: |
+          curl -fsSL https://github.com/taiki-e/cargo-llvm-cov/releases/latest/download/cargo-llvm-cov-x86_64-unknown-linux-gnu.tar.gz | tar -xz -C ~/.cargo/bin
+          curl -fsSL https://get.nexte.st/latest/linux | tar -xz -C ~/.cargo/bin
+      - name: Coverage (hot-path scope)
+        # TODO: replace the package list with the hot-path crates named
+        # in audit/round-8/coverage-scope.md. Example below covers the
+        # request/packet path crates.
+        run: |
+          cargo llvm-cov nextest \
+            --package lb-l7 --package lb-h1 --package lb-h2 --package lb-h3 \
+            --package lb-l4-xdp --package lb-balancer --package lb-io \
+            --package lb-quic \
+            --fail-under-lines 80 \
+            --lcov --output-path coverage.lcov
+      - uses: actions/upload-artifact@v4
+        with:
+          name: coverage-lcov
+          path: coverage.lcov
+
+  # ---------------------------------------------------------------
+  # D-4 — HTTP/2 + HTTP/3 conformance (h2spec, h3spec)
+  # Boots the gateway with an H1/H2/H3 listener in front of a stub
+  # backend, then runs the conformance suites against it.
+  # ---------------------------------------------------------------
+  D4-conformance:
+    runs-on: ubuntu-latest
+    needs: build-and-lint
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@master
+        with: { toolchain: "${{ env.RUST_MSRV }}" }
+      - uses: Swatinem/rust-cache@v2
+      - run: sudo apt-get update && sudo apt-get install -y cmake clang libclang-dev llvm nghttp2-client
+      - run: cargo build -p lb
+      - name: Stub backend + test certs
+        run: |
+          # Minimal upstream the gateway proxies to.
+          python3 -m http.server 3000 &
+          python3 -m http.server 3001 &
+          # Self-signed cert/key for the TLS (H2/H3) listener.
+          openssl req -x509 -newkey rsa:2048 -keyout key.pem -out cert.pem \
+            -days 1 -nodes -subj "/CN=localhost" -addext "subjectAltName=DNS:localhost"
+      - name: Write conformance config
+        # TODO: confirm key names against crates/lb-config/src/lib.rs.
+        # The default.toml ships an L4 `protocol = "tcp"` listener; D-4
+        # needs an L7 HTTPS listener with H2 + H3 enabled.
+        run: |
+          cat > conformance.toml <<'TOML'
+          [[listeners]]
+          address  = "0.0.0.0:8443"
+          protocol = "https"          # H1 + H2 over TLS, ALPN-negotiated
+          tls_cert = "cert.pem"
+          tls_key  = "key.pem"
+
+          [[listeners.backends]]
+          address = "127.0.0.1:3000"
+          weight  = 1
+
+          [[listeners.h3]]            # HTTP/3 / QUIC listener
+          address  = "0.0.0.0:8443"
+          tls_cert = "cert.pem"
+          tls_key  = "key.pem"
+          TOML
+      - name: Boot gateway
+        run: |
+          ./target/debug/expressgateway conformance.toml &
+          echo $! > gw.pid
+          for i in $(seq 1 30); do
+            curl -sk https://localhost:8443/ >/dev/null 2>&1 && break || sleep 1
+          done
+      - name: h2spec (HTTP/2 conformance)
+        run: |
+          curl -fsSL https://github.com/summerwind/h2spec/releases/latest/download/h2spec_linux_amd64.tar.gz | tar -xz
+          # --strict fails the job on any non-conformant case. If specific
+          # cases are knowingly waived, list them in
+          # docs/conformance/h2spec-waivers.md and use --skip instead.
+          ./h2spec -t -k -h localhost -p 8443 --strict
+      - name: h3spec (HTTP/3 conformance)
+        run: |
+          # h3spec is distributed as a prebuilt binary; pin a known tag.
+          curl -fsSL -o h3spec https://github.com/kazu-yamamoto/h3spec/releases/latest/download/h3spec-linux-x86_64
+          chmod +x h3spec
+          ./h3spec localhost 8443
+      - name: Stop gateway
+        if: always()
+        run: kill "$(cat gw.pid)" || true
+
+  # ---------------------------------------------------------------
+  # D-3a — chaos ATTACK suite (the half that does not need a soak host)
+  # Rapid Reset, CONTINUATION flood, HPACK bomb, slowloris.
+  # The 4-hour soak (D-3b) is NOT here — see D1-soak-runbook.md.
+  # ---------------------------------------------------------------
+  D3a-chaos-attacks:
+    runs-on: ubuntu-latest
+    needs: build-and-lint
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@master
+        with: { toolchain: "${{ env.RUST_MSRV }}" }
+      - uses: Swatinem/rust-cache@v2
+      - run: sudo apt-get update && sudo apt-get install -y cmake clang libclang-dev llvm
+      - run: cargo build -p lb
+      - name: Run chaos attack suite
+        # TODO: point this at the repo's own attack harness. The Round-8
+        # audit wired Smuggle/Slowloris/SlowPost detectors and the
+        # CONTINUATION/Rapid-Reset caps — there should be a test target
+        # exercising them. Prefer the in-repo harness over ad-hoc tools
+        # so the gate tests the product's own limits.
+        run: |
+          cargo nextest run --package lb-h2 --package lb-l7 \
+            -E 'test(/chaos|rapid_reset|continuation|hpack|slowloris/)'
+        # If an external generator is preferred for some cases:
+        #   h2load, or github.com/bahattincinic/rapid-reset-poc, etc.
+        # Each attack must assert the gateway stayed up and shed within
+        # the documented limit — not merely "didn't crash".
+
+  # ---------------------------------------------------------------
+  # D-5 — container image scan (real docker build + trivy image)
+  # ---------------------------------------------------------------
+  D5-image-scan:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build image
+        # TODO: point -f at the real Dockerfile (docker/ holds it).
+        run: docker build -f docker/Dockerfile -t expressgateway:ci .
+      - name: Trivy image scan
+        uses: aquasecurity/trivy-action@master
+        with:
+          image-ref: expressgateway:ci
+          format: table
+          exit-code: "1"                 # fail the job on findings
+          severity: HIGH,CRITICAL
+          ignore-unfixed: true
+      # This is the REAL D-5: it scans the built image's OS layer +
+      # base image, not just Cargo.lock. A `trivy fs` on the source
+      # tree is NOT a substitute and must not be logged as D-5 pass.
+
+  # ---------------------------------------------------------------
+  # D-2 — eBPF verifier matrix: XDP program loads on 5.15 / 6.1 / 6.6
+  # GitHub runners are kernel 6.x only, so each target kernel runs in
+  # a VM via the lima/qemu action. Alternative: self-hosted runners
+  # pinned to each kernel, or vmtest (github.com/danobi/vmtest).
+  # ---------------------------------------------------------------
+  D2-verifier-matrix:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        kernel: ["5.15", "6.1", "6.6"]
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build the XDP object
+        # TODO: confirm how the repo builds the BPF object. With aya this
+        # is typically `cargo xtask build-ebpf` or a build.rs step in
+        # crates/lb-l4-xdp. Produce the .o / embedded object here.
+        run: |
+          sudo apt-get update && sudo apt-get install -y cmake clang libclang-dev llvm
+          cargo build -p lb-l4-xdp
+      - name: Load under target kernel ${{ matrix.kernel }}
+        # vmtest boots a VM at the requested kernel and runs the command
+        # inside it. The command must exercise `bpftool prog load` (or the
+        # aya loader) against the built object and assert verifier accept.
+        uses: danobi/vmtest-action@main
+        with:
+          kernel: ${{ matrix.kernel }}
+          command: |
+            bpftool prog load ./target/bpf/xdp_prog.o /sys/fs/bpf/xdp_test
+            bpftool prog show pinned /sys/fs/bpf/xdp_test
+        # Capture verifier output to an artifact so a human can read it;
+        # verifier ACCEPT is necessary but not sufficient — it does not
+        # prove safety against malformed traffic (that is D-1 + fuzzing).

@@ -9,3 +9,13 @@ publish = false
 [dependencies]
 thiserror = { workspace = true }
 bytes = { workspace = true }
+
+[dev-dependencies]
+# CODE-2-11: property-based decode_frame / QPACK + varint
+# round-trip / no-panic assertions. Sanity budget; CI raises via
+# PROPTEST_CASES env.
+proptest = { workspace = true }
+
+[features]
+default = []
+proptest = []

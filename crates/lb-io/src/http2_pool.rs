@@ -182,13 +182,28 @@ impl Http2Pool {
     /// On a missing or dead cached connection the pool dials fresh and
     /// stores the new sender for subsequent calls.
     ///
+    /// **ROUND8-L7-10 — H2 cousin of the H1 take-and-discard pattern.**
+    /// This method evicts the cached `PeerEntry` for `addr` on every
+    /// `Send`-class hyper error (`Ok(Err(e))` branch below) and on
+    /// every header-roundtrip timeout (`Err(_)` branch). That covers
+    /// the full set of H2 stream framing errors a misbehaving upstream
+    /// can emit — `PROTOCOL_ERROR`, `FRAME_SIZE_ERROR`, mid-body
+    /// `STREAM_CLOSED`, body-length over-read / under-read — because
+    /// hyper surfaces all of them as `SendRequest` errors. Eviction
+    /// here is **deliberately broad**: the H2 reuse path multiplexes
+    /// many streams on one connection, so a single corrupted stream
+    /// could otherwise corrupt every concurrent stream on the same
+    /// peer. See Pingora 0.6.0 / 0.8.0 CHANGELOG for the upstream-
+    /// smuggling bug class this guards against.
+    ///
     /// # Errors
     ///
     /// * [`Http2PoolError::Dial`] — TCP dial failed.
     /// * [`Http2PoolError::Handshake`] — hyper H2 handshake failed.
-    /// * [`Http2PoolError::Send`] — `send_request` failed.
+    /// * [`Http2PoolError::Send`] — `send_request` failed; cached
+    ///   entry for this address is evicted before returning.
     /// * [`Http2PoolError::Timeout`] — header roundtrip exceeded
-    ///   [`Http2PoolConfig::send_timeout`].
+    ///   [`Http2PoolConfig::send_timeout`]; cached entry is evicted.
     pub async fn send_request(
         &self,
         addr: SocketAddr,
@@ -199,7 +214,11 @@ impl Http2Pool {
         match tokio::time::timeout(self.inner.config.send_timeout, send_fut).await {
             Ok(Ok(resp)) => Ok(resp),
             Ok(Err(e)) => {
-                // Drop the cached entry — it may be stuck.
+                // ROUND8-L7-10: evict on every Send-class error so a
+                // single stream-framing fault (PROTOCOL_ERROR, FRAME_
+                // SIZE_ERROR, mid-body STREAM_CLOSED, body-length
+                // mismatch) cannot corrupt subsequent multiplexed
+                // streams on the same upstream peer.
                 self.evict(addr);
                 Err(Http2PoolError::Send(e.to_string()))
             }
@@ -257,10 +276,10 @@ impl Http2Pool {
         &self,
         addr: SocketAddr,
     ) -> Result<(SendRequest<BoxBody<Bytes, hyper::Error>>, JoinHandle<()>), Http2PoolError> {
-        let pool = self.inner.tcp_pool.clone();
-        let pooled = tokio::task::spawn_blocking(move || pool.acquire(addr))
-            .await
-            .map_err(|e| Http2PoolError::Handshake(format!("dial join: {e}")))??;
+        // CODE-2-09 follow-on: async dial via `TcpPool::acquire_async`,
+        // eliminating the previous `spawn_blocking(pool.acquire)` site
+        // that shared the global blocking pool with `dns::resolve`.
+        let pooled = self.inner.tcp_pool.acquire_async(addr).await?;
         let stream = pooled
             .take_stream()
             .ok_or_else(|| Http2PoolError::Handshake("pooled stream missing".to_owned()))?;

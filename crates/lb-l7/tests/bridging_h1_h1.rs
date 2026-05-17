@@ -13,6 +13,7 @@ fn test_bridge_h1_to_h1() {
         ],
         body: Bytes::new(),
         scheme: None,
+        trailers: Vec::new(),
     };
     let bridged = bridge.bridge_request(&req).unwrap();
     assert_eq!(bridged.method, "GET");

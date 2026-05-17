@@ -42,6 +42,10 @@ use lb_io::pool::TcpPool;
 use lb_io::quic_pool::QuicUpstreamPool;
 use tokio::io::{AsyncRead, AsyncWrite};
 
+use lb_security::{ConnId, SmuggleDetector, SmuggleMode, Watchdog};
+
+use crate::security_hooks::{DynSecurityHooks, NoopHooks, SecurityReject};
+use crate::stripped_request::{StrippedRequest, strip_hop_by_hop as strip_into_newtype};
 use crate::upstream::{BackendInfoPicker, SingleProtoPicker, UpstreamBackend, UpstreamProto};
 use crate::ws_proxy::{self, WsProxy, build_handshake_response_headers, is_h1_upgrade_request};
 
@@ -51,13 +55,24 @@ use crate::ws_proxy::{self, WsProxy, build_handshake_response_headers, is_h1_upg
 /// header names listed inside the `Connection` header value. Built as
 /// `HeaderName` constants so removal is panic-free at runtime (the
 /// strings are checked at compile time via `HeaderName::from_static`).
+///
+/// RFC 9110 §7.6.1 enumerates exactly these eight header field names as
+/// connection-level (hop-by-hop) controls: `Connection`, `Proxy-Connection`,
+/// `Keep-Alive`, `Proxy-Authenticate`, `Proxy-Authorization`, `TE`,
+/// `Transfer-Encoding`, `Upgrade`. PROTO-2-08 removed the entry
+/// `"trailers"` which appeared here in error: `Trailers` is **not** a
+/// real header field name — it is only a value-token recognised inside
+/// `TE: trailers` and inside the `Trailer:` (singular) declaration
+/// header. RFC 9110 §6.6.2 specifies the actual `Trailer:` header (which
+/// is end-to-end, not hop-by-hop). Adding `keep-alive` (which was
+/// missing) brings the set in line with RFC 9110 §7.6.1.
 static HOP_BY_HOP: [HeaderName; 8] = [
     HeaderName::from_static("connection"),
+    HeaderName::from_static("proxy-connection"),
     HeaderName::from_static("keep-alive"),
     HeaderName::from_static("proxy-authenticate"),
     HeaderName::from_static("proxy-authorization"),
     HeaderName::from_static("te"),
-    HeaderName::from_static("trailers"),
     HeaderName::from_static("transfer-encoding"),
     HeaderName::from_static("upgrade"),
 ];
@@ -103,6 +118,27 @@ impl Default for HttpTimeouts {
             total: Duration::from_secs(60),
         }
     }
+}
+
+/// ROUND8-L7-05 — runtime-side policy for `_` in inbound HTTP header
+/// names. Mirrors `lb_config::HeaderUnderscorePolicy`; lives in lb-l7
+/// to avoid a wide dep edge from the proxy onto the config crate. The
+/// wiring crate (`lb` binary) is responsible for mapping the schema
+/// enum to this enum at proxy-construction time.
+///
+/// Default: [`HeaderUnderscorePolicy::Reject`] — matches Envoy edge
+/// best-practice (`headers_with_underscores_action = REJECT_REQUEST`).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum HeaderUnderscorePolicy {
+    /// Reject the request with `400 Bad Request` if any inbound
+    /// header name contains `_`. Default.
+    #[default]
+    Reject,
+    /// Silently strip underscore-bearing headers before forwarding;
+    /// matches nginx default.
+    Drop,
+    /// Pass underscore-bearing headers through verbatim.
+    Allow,
 }
 
 /// Picks the next backend address. Implementations must be cheap to call
@@ -168,6 +204,59 @@ pub struct H1Proxy {
     h2_upstream: Option<Arc<Http2Pool>>,
     /// Optional H3 upstream pool. PROTO-001 H1→H3 path.
     h3_upstream: Option<Arc<QuicUpstreamPool>>,
+    /// CODE-2-01 / SEC-2-01 hook surface. Defaults to
+    /// [`NoopHooks`]; Wave-2c flips this to the production
+    /// `lb_security::HooksBundle` via [`Self::with_hooks`].
+    hooks: Arc<dyn DynSecurityHooks>,
+    /// SEC-2-01 / SEC-2-03 slowloris / slow-POST watchdog.
+    ///
+    /// `None` (default) leaves the request handler running with no
+    /// per-stream deadline tracking; the proxy still relies on
+    /// [`HttpTimeouts::header`] / [`HttpTimeouts::body`] /
+    /// [`HttpTimeouts::total`]. Wave-2c sets a production
+    /// [`Watchdog`] via [`Self::with_watchdog`].
+    watchdog: Option<Watchdog>,
+    /// Monotonic per-listener connection sequence used as the
+    /// [`Watchdog`] entry key (combined with the peer IP so two
+    /// concurrent NAT-egress connections are distinguishable).
+    conn_seq: Arc<parking_lot::Mutex<u64>>,
+    /// SEC-2-01 strict-TE policy flag. When `true` the per-request
+    /// [`SmuggleDetector::check_all_mode`] call in `handle` runs in
+    /// [`SmuggleMode::H1Strict`] mode (rejects any
+    /// `Transfer-Encoding` codec other than `chunked`). Default
+    /// `false` keeps the lenient RFC 9112 baseline.
+    smuggle_strict: bool,
+    /// ROUND8-L7-05: policy for `_` in inbound HTTP header names.
+    /// Default [`HeaderUnderscorePolicy::Reject`] mirrors Envoy edge
+    /// best-practice + nginx default behaviour. Set via
+    /// [`Self::with_header_underscore_policy`]. The lb-config
+    /// schema's `[runtime].header_underscore_policy` carries the
+    /// operator-facing knob; mapping into this field is the
+    /// responsibility of the wiring crate.
+    header_underscore_policy: HeaderUnderscorePolicy,
+    /// PROTO-2-18 (Wave 2c-2): default expected SNI for the
+    /// [`crate::sni_authority::check_sni_authority`] check. Builder
+    /// default `None` means SNI/authority agreement is not enforced
+    /// on this proxy unless [`Self::serve_connection_with_cancel_sni`]
+    /// supplies a per-connection override. Real deployments call
+    /// [`Self::serve_connection_with_cancel_sni`] at the TLS-accept
+    /// site to pass `rustls::ServerConnection::server_name()`.
+    expected_sni: Option<String>,
+    /// ROUND8-L7-06: hard cap on requests served per keep-alive
+    /// connection (nginx `keepalive_requests 100` / Pingora 0.8.0
+    /// `keepalive_requests`). `0` disables. On the `cap`-th response
+    /// the per-connection wrapper sets `Connection: close` and signals
+    /// the connection driver to `graceful_shutdown` after the body
+    /// flushes. Default `100`; set via
+    /// [`Self::with_max_keepalive_requests`].
+    max_keepalive_requests: u32,
+    /// ROUND8-L7-06: process-wide counter incremented once per
+    /// cap-triggered keep-alive close. The wiring crate lifts this
+    /// into `lb_keepalive_terminated_by_count_cap_total{listener,
+    /// protocol}` via the existing metrics sampler (lb-l7 has no
+    /// metrics-registry dep edge; an `AtomicU64` keeps the surface
+    /// minimal).
+    keepalive_cap_terminations: Arc<std::sync::atomic::AtomicU64>,
 }
 
 impl H1Proxy {
@@ -198,6 +287,17 @@ impl H1Proxy {
             ws: None,
             h2_upstream: None,
             h3_upstream: None,
+            hooks: Arc::new(NoopHooks::new()),
+            watchdog: None,
+            conn_seq: Arc::new(parking_lot::Mutex::new(0)),
+            smuggle_strict: false,
+            header_underscore_policy: HeaderUnderscorePolicy::Reject,
+            expected_sni: None,
+            // ROUND8-L7-06: nginx-parity default. The wiring crate
+            // overrides from `[runtime].max_keepalive_requests` via
+            // `with_max_keepalive_requests`.
+            max_keepalive_requests: 100,
+            keepalive_cap_terminations: Arc::new(std::sync::atomic::AtomicU64::new(0)),
         }
     }
 
@@ -208,8 +308,13 @@ impl H1Proxy {
     /// pool. Call sites must populate `h2_upstream` / `h3_upstream`
     /// when their picker can return that protocol — a pick whose
     /// matching pool is `None` falls back to a 502 response.
+    ///
+    /// Defaults the CODE-2-01 `hooks` field to
+    /// [`NoopHooks`]; Wave-2c overrides via [`Self::with_hooks`]. The
+    /// constructor is no longer `const fn` because the default
+    /// [`NoopHooks`] allocates an [`Arc`].
     #[must_use]
-    pub const fn with_multi_proto(
+    pub fn with_multi_proto(
         pool: TcpPool,
         picker: Arc<dyn BackendInfoPicker>,
         alt_svc: Option<AltSvcConfig>,
@@ -225,7 +330,78 @@ impl H1Proxy {
             ws: None,
             h2_upstream: None,
             h3_upstream: None,
+            hooks: Arc::new(NoopHooks::new()),
+            watchdog: None,
+            conn_seq: Arc::new(parking_lot::Mutex::new(0)),
+            smuggle_strict: false,
+            header_underscore_policy: HeaderUnderscorePolicy::Reject,
+            expected_sni: None,
+            // ROUND8-L7-06: nginx-parity default. The wiring crate
+            // overrides from `[runtime].max_keepalive_requests` via
+            // `with_max_keepalive_requests`.
+            max_keepalive_requests: 100,
+            keepalive_cap_terminations: Arc::new(std::sync::atomic::AtomicU64::new(0)),
         }
+    }
+
+    /// Attach a [`SecurityHooks`] impl (CODE-2-01 / SEC-2-01 hot-path
+    /// surface). The Wave-2c wiring in `crates/lb/src/main.rs` calls
+    /// this with `Arc::new(lb_security::HooksBundle::new(...))` so the
+    /// production smuggle / cap / watchdog checks run on every
+    /// inbound request. Without this call, the proxy falls back to
+    /// [`NoopHooks`] (CODE-2-01 lb-l7 shim default).
+    #[must_use]
+    pub fn with_hooks(mut self, hooks: Arc<dyn DynSecurityHooks>) -> Self {
+        self.hooks = hooks;
+        self
+    }
+
+    /// Attach an [`lb_security::Watchdog`] for per-stream slowloris /
+    /// slow-POST eviction (SEC-2-01 / SEC-2-03). The proxy registers
+    /// each inbound request with a deadline derived from the
+    /// configured [`HttpTimeouts::header`] and records a single
+    /// `progress` measurement with the request-header byte estimate.
+    /// Per-chunk body progress is a follow-up (requires IO wrapping);
+    /// the request-side register covers the slowloris header phase
+    /// gap. A periodic sweeper task driven by `lb_core::Shutdown`
+    /// (Wave-2c) closes the full slow-POST window.
+    #[must_use]
+    pub fn with_watchdog(mut self, watchdog: Watchdog) -> Self {
+        self.watchdog = Some(watchdog);
+        self
+    }
+
+    /// Enable strict-TE policy on the per-request
+    /// [`SmuggleDetector::check_all_mode`] call (rejects any
+    /// `Transfer-Encoding` codec other than `chunked` —
+    /// [`SmuggleMode::H1Strict`]). Default is lenient.
+    #[must_use]
+    pub const fn with_smuggle_strict(mut self, strict: bool) -> Self {
+        self.smuggle_strict = strict;
+        self
+    }
+
+    /// ROUND8-L7-05: set the header-name underscore policy on this
+    /// proxy. Default is [`HeaderUnderscorePolicy::Reject`] (Envoy
+    /// edge best-practice). The wiring crate maps from
+    /// `lb_config::HeaderUnderscorePolicy` to this enum at proxy
+    /// construction time.
+    #[must_use]
+    pub const fn with_header_underscore_policy(mut self, policy: HeaderUnderscorePolicy) -> Self {
+        self.header_underscore_policy = policy;
+        self
+    }
+
+    /// PROTO-2-18 (Wave 2c-2): default expected SNI used by the
+    /// [`crate::sni_authority::check_sni_authority`] hot-path check
+    /// when [`Self::serve_connection`] is used directly (no per-
+    /// connection SNI threaded in). Real TLS-bearing deployments
+    /// prefer [`Self::serve_connection_with_cancel_sni`] which
+    /// captures the SNI live from rustls at TLS-accept time.
+    #[must_use]
+    pub fn with_expected_sni(mut self, sni: Option<String>) -> Self {
+        self.expected_sni = sni;
+        self
     }
 
     /// Attach an H2 upstream pool used for backends with
@@ -259,6 +435,25 @@ impl H1Proxy {
         self.h3_upstream.is_some()
     }
 
+    /// ROUND8-L7-06: set the per-keep-alive-connection request cap.
+    /// `0` disables (transparent-pass — only the wall-clock / idle
+    /// timeouts apply). The wiring crate maps
+    /// `[runtime].max_keepalive_requests` here.
+    #[must_use]
+    pub fn with_max_keepalive_requests(mut self, cap: u32) -> Self {
+        self.max_keepalive_requests = cap;
+        self
+    }
+
+    /// ROUND8-L7-06: shared handle to the cap-triggered-close counter
+    /// so the wiring crate can lift it into
+    /// `lb_keepalive_terminated_by_count_cap_total` without an
+    /// lb-l7 → metrics-registry dep edge.
+    #[must_use]
+    pub fn keepalive_cap_termination_counter(&self) -> Arc<std::sync::atomic::AtomicU64> {
+        Arc::clone(&self.keepalive_cap_terminations)
+    }
+
     /// Enable WebSocket upgrade handling on this proxy.
     ///
     /// Takes ownership; returns `self` so the call site reads as a
@@ -286,31 +481,192 @@ impl H1Proxy {
     where
         IO: AsyncRead + AsyncWrite + Unpin + Send + 'static,
     {
+        // PROTO-2-11 (H1 half, Wave 2c-2): always delegates to the
+        // cancellable variant with a never-cancelled token so the
+        // original signature stays back-compat.
+        self.serve_connection_with_cancel(io, peer, tokio_util::sync::CancellationToken::new())
+            .await
+    }
+
+    /// PROTO-2-11 (Wave 2c-2) — H1 half of the drain-on-cancel contract
+    /// paired with the H2 GOAWAY + H3 CONNECTION_CLOSE emit. Identical
+    /// to [`Self::serve_connection`] until `cancel` fires, at which
+    /// point the hyper H1 connection is pinned and
+    /// `.graceful_shutdown()` is invoked.
+    ///
+    /// PROTO-2-16: hyper-1's `http1::graceful_shutdown` calls
+    /// `disable_keep_alive()`; the `Connection: close` header is
+    /// injected only on a not-yet-flushed response head (the H1
+    /// encoder serialises `Connection: close` when the keep-alive
+    /// state is `Disabled` and the response head has not yet been
+    /// written). If the cancel fires *after* the current response
+    /// head has already been flushed, the only close signal the
+    /// client receives is the FIN at body completion — the header
+    /// is not retroactively added. RFC 9110 §7.6.1 permits this
+    /// (the FIN is the truth-signal; the header is advisory). The
+    /// connection future is then driven to completion with the
+    /// existing `total` budget so a misbehaving client cannot pin
+    /// a worker past the drain deadline.
+    ///
+    /// # Errors
+    ///
+    /// Same as [`Self::serve_connection`], plus `TimedOut` if the
+    /// graceful-shutdown driver exceeds [`HttpTimeouts::total`].
+    pub async fn serve_connection_with_cancel<IO>(
+        self: Arc<Self>,
+        io: IO,
+        peer: SocketAddr,
+        cancel: tokio_util::sync::CancellationToken,
+    ) -> io::Result<()>
+    where
+        IO: AsyncRead + AsyncWrite + Unpin + Send + 'static,
+    {
+        // PROTO-2-18: no per-connection SNI override; the proxy's
+        // builder-level `expected_sni` (commonly `None`) is the
+        // effective value. Real TLS deployments use
+        // `serve_connection_with_cancel_sni`.
+        let sni = self.expected_sni.clone();
+        self.serve_connection_with_cancel_sni(io, peer, cancel, sni)
+            .await
+    }
+
+    /// PROTO-2-18 (Wave 2c-2) — H1 entry point that threads the
+    /// per-connection TLS SNI value into the request hot-path so the
+    /// [`crate::sni_authority::check_sni_authority`] validator runs
+    /// against the **observed** SNI rather than the builder default.
+    ///
+    /// `sni` is the value captured from the rustls handshake (commonly
+    /// `tls_stream.get_ref().1.server_name().map(str::to_owned)`).
+    /// Plain-TCP listeners and SNI-omitting clients pass `None`, which
+    /// disables the SNI/authority agreement check (the validator returns
+    /// `Ok(())` on `None`).
+    ///
+    /// # Errors
+    /// Same as [`Self::serve_connection_with_cancel`].
+    pub async fn serve_connection_with_cancel_sni<IO>(
+        self: Arc<Self>,
+        io: IO,
+        peer: SocketAddr,
+        cancel: tokio_util::sync::CancellationToken,
+        sni: Option<String>,
+    ) -> io::Result<()>
+    where
+        IO: AsyncRead + AsyncWrite + Unpin + Send + 'static,
+    {
         let total = self.timeouts.total;
+        // ROUND8-L7-06: per-connection request counter + close-notify,
+        // constructed once here and shared across hyper's per-request
+        // service clones.
+        let cap = self.max_keepalive_requests;
+        let close_signal = Arc::new(tokio::sync::Notify::new());
         let svc = ProxyService {
             inner: Arc::clone(&self),
             peer,
+            expected_sni: sni,
+            served: Arc::new(std::sync::atomic::AtomicU32::new(0)),
+            cap,
+            close_signal: Arc::clone(&close_signal),
         };
         let conn = hyper::server::conn::http1::Builder::new()
             .keep_alive(true)
             .serve_connection(TokioIo::new(io), svc)
             .with_upgrades();
-        match tokio::time::timeout(total, conn).await {
-            Ok(Ok(())) => Ok(()),
-            Ok(Err(e)) => Err(io::Error::other(format!("h1 server: {e}"))),
-            Err(_) => Err(io::Error::new(
+        tokio::pin!(conn);
+        let cancel_fut = cancel.cancelled();
+        tokio::pin!(cancel_fut);
+        let timer = tokio::time::sleep(total);
+        tokio::pin!(timer);
+        // ROUND8-L7-06: cap-driven close. Additive arm — does NOT
+        // touch div-ops's SIGTERM-cancel / total-timeout arms (the
+        // drain-coordinator phase logic). When the per-connection cap
+        // is hit the service has already set `Connection: close` on
+        // the cap-th response head; this arm then drives the same
+        // `graceful_shutdown` hyper uses for SIGTERM so the socket is
+        // torn down after that response flushes (RFC 9110 §7.6.1).
+        let cap_close = close_signal.notified();
+        tokio::pin!(cap_close);
+        tokio::select! {
+            // Cancel wins ties so a SIGTERM during a long-running
+            // request still triggers the graceful_shutdown emit.
+            biased;
+            () = &mut cancel_fut => {
+                // PROTO-2-16: hyper-1's `http1::graceful_shutdown`
+                // internally calls `disable_keep_alive()` — the
+                // `Connection: close` header is then injected only
+                // on a not-yet-flushed response head (the encoder
+                // serialises it when keep-alive is `Disabled` and
+                // the head is still pending). For responses already
+                // on the wire, only the FIN at body completion
+                // signals close (RFC 9110 §7.6.1 permits this). The
+                // conn future is driven to completion bounded by
+                // `total`.
+                conn.as_mut().graceful_shutdown();
+                match tokio::time::timeout(total, conn).await {
+                    Ok(Ok(())) => Ok(()),
+                    Ok(Err(e)) => Err(io::Error::other(format!("h1 graceful shutdown: {e}"))),
+                    Err(_) => Err(io::Error::new(
+                        io::ErrorKind::TimedOut,
+                        "h1 graceful shutdown timeout",
+                    )),
+                }
+            }
+            res = &mut conn => match res {
+                Ok(()) => Ok(()),
+                Err(e) => Err(io::Error::other(format!("h1 server: {e}"))),
+            },
+            () = &mut timer => Err(io::Error::new(
                 io::ErrorKind::TimedOut,
                 "total connection timeout",
             )),
+            // ROUND8-L7-06: per-connection request cap reached. The
+            // cap-th response already carries `Connection: close`;
+            // drive the same graceful_shutdown the SIGTERM arm uses so
+            // the socket FIN follows the flushed response. Bounded by
+            // `total` so a wedged client cannot pin the conn open
+            // after the cap. A clean completion here is `Ok(())` (the
+            // cap close is the *intended* terminal state, not an
+            // error — unlike the total-timeout arm).
+            () = &mut cap_close => {
+                conn.as_mut().graceful_shutdown();
+                match tokio::time::timeout(total, conn).await {
+                    Ok(Ok(())) => Ok(()),
+                    Ok(Err(e)) => Err(io::Error::other(format!(
+                        "h1 keepalive-cap shutdown: {e}"
+                    ))),
+                    Err(_) => Err(io::Error::new(
+                        io::ErrorKind::TimedOut,
+                        "h1 keepalive-cap shutdown timeout",
+                    )),
+                }
+            }
         }
     }
 }
 
 /// Service implementation carrying the [`H1Proxy`] plus the peer address.
+///
+/// ROUND8-L7-06: the service is cloned by hyper once per request but
+/// the *connection*-scoped state (`served`, `cap`, `close_signal`)
+/// lives behind `Arc`s constructed once per connection in
+/// [`H1Proxy::serve_connection_with_cancel_sni`], so every per-request
+/// clone shares one counter and one close-notify.
 #[derive(Clone)]
 struct ProxyService {
     inner: Arc<H1Proxy>,
     peer: SocketAddr,
+    /// PROTO-2-18: SNI captured from the TLS handshake at accept time
+    /// and threaded through `serve_connection_with_cancel_sni`. `None`
+    /// on plain-TCP listeners and SNI-omitting clients.
+    expected_sni: Option<String>,
+    /// ROUND8-L7-06: per-connection request counter (shared across
+    /// the per-request `Clone`s).
+    served: Arc<std::sync::atomic::AtomicU32>,
+    /// ROUND8-L7-06: per-connection request cap (`0` disables).
+    cap: u32,
+    /// ROUND8-L7-06: notified once when the cap is reached so the
+    /// connection driver issues `graceful_shutdown` after the
+    /// cap-th response flushes.
+    close_signal: Arc<tokio::sync::Notify>,
 }
 
 impl hyper::service::Service<Request<IncomingBody>> for ProxyService {
@@ -321,16 +677,115 @@ impl hyper::service::Service<Request<IncomingBody>> for ProxyService {
     fn call(&self, req: Request<IncomingBody>) -> Self::Future {
         let inner = Arc::clone(&self.inner);
         let peer = self.peer;
-        Box::pin(async move { Ok(Box::pin(inner.handle(req, peer)).await) })
+        let sni = self.expected_sni.clone();
+        // ROUND8-L7-06: count this request against the per-connection
+        // cap BEFORE handling it. `fetch_add` returns the prior value
+        // so `count` is 1-based for this request.
+        let cap = self.cap;
+        let count = self
+            .served
+            .fetch_add(1, std::sync::atomic::Ordering::SeqCst)
+            + 1;
+        let force_close = cap > 0 && count >= cap;
+        let close_signal = Arc::clone(&self.close_signal);
+        let cap_counter = Arc::clone(&inner.keepalive_cap_terminations);
+        Box::pin(async move {
+            let mut resp = Box::pin(inner.handle(req, peer, sni.as_deref())).await;
+            if force_close {
+                // RFC 9110 §7.6.1: advertise the close on the response
+                // head. hyper still serialises the body; the driver's
+                // `graceful_shutdown` (signalled below) tears the
+                // socket down after the flush. `count == cap` fires
+                // exactly once (later requests on a
+                // disable-keep-alive'd conn do not reach here).
+                resp.headers_mut()
+                    .insert(hyper::header::CONNECTION, HeaderValue::from_static("close"));
+                if count == cap {
+                    cap_counter.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                }
+                close_signal.notify_one();
+            }
+            Ok(resp)
+        })
     }
 }
 
 impl H1Proxy {
+    /// Span-opening wrapper. Extracts the inbound W3C trace context,
+    /// opens the request span, and runs the request body
+    /// `.instrument()`-ed so the span is current for every `.await`
+    /// in the handler *and* for any task the handler spawns with
+    /// `.instrument(req_trace.span.clone())` — without holding a
+    /// `tracing::span::Entered` guard across an `.await` (that
+    /// anti-pattern leaks the span onto whatever the executor polls
+    /// next on the same thread; it bites only under concurrent load,
+    /// which is exactly the "lesson-not-yet-paid-for" class).
+    ///
+    /// ROUND8-OPS-06 / REL-2-07: this is the FIRST L7 callsite of
+    /// `lb_observability::tracing_propagation`. The codec shipped in
+    /// 1d462c7 but the proxy wire-in was deferred every round since,
+    /// leaving REL-2-07 stuck at `Verified-Fixed-Partial`.
     async fn handle(
         &self,
         req: Request<IncomingBody>,
         peer: SocketAddr,
+        expected_sni: Option<&str>,
     ) -> Response<BoxBody<Bytes, hyper::Error>> {
+        use tracing::Instrument;
+        // H1Proxy carries no per-bind label and the constructor
+        // boundary into main.rs is div-ops's house, so the span's
+        // `listener` field is the protocol family (h1/h1s).
+        let listener_label = if self.is_https { "h1s" } else { "h1" };
+        let req_trace = crate::trace_ctx::RequestTrace::open(
+            req.headers(),
+            "h1",
+            req.method().as_str(),
+            req.uri()
+                .path_and_query()
+                .map_or("/", http::uri::PathAndQuery::as_str),
+            listener_label,
+            expected_sni,
+        );
+        let span = req_trace.span.clone();
+        let resp = self
+            .handle_inner(req, peer, expected_sni, req_trace)
+            .instrument(span.clone())
+            .await;
+        // Record the response status on the request span (OTLP
+        // `http.status_code`) before it closes.
+        span.record("http.status_code", resp.status().as_u16());
+        resp
+    }
+
+    async fn handle_inner(
+        &self,
+        req: Request<IncomingBody>,
+        peer: SocketAddr,
+        expected_sni: Option<&str>,
+        req_trace: crate::trace_ctx::RequestTrace,
+    ) -> Response<BoxBody<Bytes, hyper::Error>> {
+        // ROUND8-L7-09 — uniform authority validation CHOKE POINT.
+        // HAProxy `BUG/MAJOR: http: forbid comma character in
+        // authority value` + `BUG/MEDIUM: h1: Enforce the authority
+        // validation during H1 request parsing` (the H1 parser was
+        // missing the check the H2/H3 path had). This MUST run on
+        // EVERY parser path BEFORE the request forks into the
+        // WebSocket-upgrade handler / picker — a comma / whitespace /
+        // control byte in `Host` (or an absolute-form target) is a
+        // routing/ACL-desync primitive. Placed as the FIRST statement
+        // so the WS-upgrade fork below cannot bypass it (the prior
+        // verify pass found `handle_ws_upgrade` reached `pick_info()`
+        // unvalidated — `audit/round-8/verify/fixback.md`).
+        if let Err((bad, err)) = crate::authority::validate_request(&req) {
+            tracing::warn!(
+                peer = %peer,
+                authority = %bad,
+                error = ?err,
+                "ROUND8-L7-09: H1 authority rejected (choke point)"
+            );
+            return error_response(StatusCode::BAD_REQUEST, "invalid authority (ROUND8-L7-09)");
+        }
+
         // gRPC requires HTTP/2 (RFC: gRPC over HTTP/2 §3.4 — gRPC PROTOCOL
         // section). An H1 listener cannot serve gRPC: framing relies on H2
         // streams, trailers, and HEADERS continuation. Reject early with
@@ -372,55 +827,269 @@ impl H1Proxy {
             .as_ref()
             .is_some_and(|w| w.config().enabled && is_h1_upgrade_request(&req))
         {
-            return self.handle_ws_upgrade(req);
+            return self.handle_ws_upgrade(req, req_trace).await;
         }
 
         let (mut parts, body) = req.into_parts();
+
+        // ROUND8-L7-05: enforce header-name underscore policy before
+        // any other inspection. Envoy edge best-practice + nginx
+        // default; default mode is `Reject`. See
+        // `audit/round-8/findings/ROUND8-L7-05.md` and
+        // `docs/edge-defaults.md`.
+        //
+        // SEC-2-01 defence-in-depth: when smuggle mode is strict
+        // (`smuggle_strict = true`), the policy is forced to `Reject`
+        // regardless of operator configuration. Operators who
+        // deliberately opt out of underscore rejection must also opt
+        // out of strict-TE mode.
+        let effective_policy = if self.smuggle_strict {
+            HeaderUnderscorePolicy::Reject
+        } else {
+            self.header_underscore_policy
+        };
+        match effective_policy {
+            HeaderUnderscorePolicy::Reject => {
+                if parts
+                    .headers
+                    .iter()
+                    .any(|(n, _)| n.as_str().as_bytes().contains(&b'_'))
+                {
+                    return error_response(
+                        StatusCode::BAD_REQUEST,
+                        "header name contains underscore (ROUND8-L7-05)",
+                    );
+                }
+            }
+            HeaderUnderscorePolicy::Drop => {
+                let to_drop: Vec<hyper::header::HeaderName> = parts
+                    .headers
+                    .iter()
+                    .filter_map(|(n, _)| {
+                        if n.as_str().as_bytes().contains(&b'_') {
+                            Some(n.clone())
+                        } else {
+                            None
+                        }
+                    })
+                    .collect();
+                for name in to_drop {
+                    parts.headers.remove(name);
+                }
+            }
+            HeaderUnderscorePolicy::Allow => {}
+        }
+
+        // CODE-2-01 / SEC-2-01: run the security hooks before hop-by-hop
+        // strip + upstream-acquire so a rejected request never spends a
+        // pool slot. The reconstructed `Request<()>` is a header-only
+        // borrow surface — the trait reads `headers()` + `version()`,
+        // it does not consume the body.
+        let inspect_req = {
+            let mut b = Request::builder()
+                .method(parts.method.clone())
+                .uri(parts.uri.clone())
+                .version(parts.version);
+            for (n, v) in &parts.headers {
+                b = b.header(n.clone(), v.clone());
+            }
+            b.body(()).unwrap_or_else(|_| Request::new(()))
+        };
+        if let Err(rej) = self.hooks.inspect_request(&inspect_req, peer.ip()) {
+            return reject_to_response(&rej);
+        }
+
+        // ROUND8-L7-09 authority validation now runs at the
+        // `handle_inner` choke point (above the WS-upgrade fork) via
+        // `crate::authority::validate_request`, so it covers the
+        // upgrade path too. No second call needed here.
+
+        // PROTO-2-18 (Wave 2c-2) — SNI ↔ Host agreement (RFC 9110
+        // §15.5.20). H1 carries the authority in the `Host` header
+        // (RFC 9112 §3.2). The validator returns `Ok(())` when SNI
+        // is absent (plain TCP / SNI-omitting client) or when the
+        // `Host` header is missing/empty — PROTO-2-01 covers those
+        // gates upstream. Per the sec-r5 caveat, loopback peers
+        // (typically health-checkers and same-host curl users
+        // hitting `127.0.0.1`) skip enforcement: SNI-vs-Host
+        // confusion is a Layer-7 routing/authz attack vector that
+        // doesn't apply to the loopback path, and the operator's
+        // probe scripts often use IP-literal Host headers that
+        // don't match the cert's SNI.
+        if !peer.ip().is_loopback() {
+            let authority = parts
+                .headers
+                .get(hyper::header::HOST)
+                .and_then(|v| v.to_str().ok())
+                .unwrap_or("");
+            if let Err(mismatch) =
+                crate::sni_authority::check_sni_authority(expected_sni, authority)
+            {
+                tracing::warn!(
+                    peer = %peer,
+                    sni = %mismatch.sni,
+                    authority = %mismatch.authority,
+                    "PROTO-2-18: H1 SNI/Host mismatch — emitting 421 Misdirected Request"
+                );
+                let (status, body) = crate::sni_authority::misdirected_response();
+                return error_response(status, body);
+            }
+        }
+
+        // SEC-2-01 — defense-in-depth explicit `SmuggleDetector` call.
+        // The hook surface above already invokes the detector when
+        // wired with `HooksBundle`; this call site fires regardless of
+        // which `DynSecurityHooks` impl is in use (`NoopHooks`
+        // included) so the detector is no longer dead code on the
+        // proxy hot path even before Wave-2c flips the production
+        // bundle in. The `(name, value)` pair shape matches the
+        // detector's existing API.
+        let header_pairs: Vec<(String, String)> = parts
+            .headers
+            .iter()
+            .filter_map(|(n, v)| {
+                v.to_str()
+                    .ok()
+                    .map(|s| (n.as_str().to_owned(), s.to_owned()))
+            })
+            .collect();
+        let smuggle_mode = if self.smuggle_strict {
+            SmuggleMode::H1Strict
+        } else {
+            SmuggleMode::H1
+        };
+        if let Err(e) = SmuggleDetector::check_all_mode(&header_pairs, smuggle_mode) {
+            tracing::warn!(error = %e, peer = %peer, "h1 smuggle rejected");
+            return error_response(StatusCode::BAD_REQUEST, "request smuggling");
+        }
+
+        // SEC-2-01 / SEC-2-03 — register the request with the slowloris
+        // watchdog. The deadline is `now + HttpTimeouts::header`; if
+        // the per-request future overruns it, the watchdog evicts via
+        // `progress` (or the sweeper) and the next progress call
+        // returns `WatchdogError::Deadline`.
+        let watch_id = self.watchdog.as_ref().map(|wd| {
+            let seq = {
+                let mut g = self.conn_seq.lock();
+                *g = g.wrapping_add(1);
+                *g
+            };
+            let id = ConnId::new(peer.ip(), seq);
+            let deadline = std::time::Instant::now() + self.timeouts.header;
+            wd.register(id, deadline);
+            // Account the header bytes (approximate) as the initial
+            // progress checkpoint. The detector treats progress as
+            // cumulative bytes-read; a zero-byte baseline is fine if
+            // the estimate is unavailable.
+            let header_bytes: u64 = parts
+                .headers
+                .iter()
+                .map(|(n, v)| n.as_str().len() as u64 + v.len() as u64 + 4)
+                .sum();
+            if let Err(e) = wd.progress(id, header_bytes) {
+                tracing::warn!(error = %e, peer = %peer, "h1 watchdog evicted at header phase");
+            }
+            id
+        });
+
         let host = parts
             .headers
             .get(hyper::header::HOST)
             .and_then(|v| v.to_str().ok())
             .map(str::to_owned);
 
-        strip_hop_by_hop(&mut parts.headers);
-        append_xff(&mut parts.headers, peer);
-        set_xfp(&mut parts.headers, self.is_https);
-        if let Some(h) = host.as_deref() {
-            set_xfh(&mut parts.headers, h);
+        // PROTO-2-07 — run the strip via the `StrippedRequest` newtype
+        // factory so the downstream proxy_* methods consume a type that
+        // statically guarantees hop-by-hop has been removed. Other
+        // request-mutating helpers (`append_xff`, `set_xfp`, `set_xfh`,
+        // `append_via`) operate on the underlying header map via the
+        // newtype's borrow surface.
+        let req_pre_strip = Request::from_parts(parts, body);
+        let mut stripped = strip_into_newtype(req_pre_strip);
+        {
+            let headers = stripped.headers_mut();
+            append_xff(headers, peer);
+            set_xfp(headers, self.is_https);
+            if let Some(h) = host.as_deref() {
+                set_xfh(headers, h);
+            }
+            append_via(headers);
         }
-        append_via(&mut parts.headers);
 
         let Some(backend) = self.picker.pick_info() else {
             return error_response(StatusCode::BAD_GATEWAY, "no backend available");
         };
 
-        let req_for_upstream = Request::from_parts(parts, body);
-        match backend.proto {
-            UpstreamProto::H1 => match self.proxy_request(backend.addr, req_for_upstream).await {
+        let resp = match backend.proto {
+            UpstreamProto::H1 => match self.proxy_request(backend.addr, stripped).await {
                 Ok(resp) => self.finalize_response(resp),
                 Err(ProxyErr::Upstream(s)) => error_response(StatusCode::BAD_GATEWAY, &s),
                 Err(ProxyErr::Timeout) => {
                     error_response(StatusCode::GATEWAY_TIMEOUT, "upstream timeout")
                 }
             },
-            UpstreamProto::H2 => {
-                Box::pin(self.proxy_h1_to_h2(backend.addr, req_for_upstream)).await
-            }
-            UpstreamProto::H3 => Box::pin(self.proxy_h1_to_h3(&backend, req_for_upstream)).await,
+            UpstreamProto::H2 => Box::pin(self.proxy_h1_to_h2(backend.addr, stripped)).await,
+            UpstreamProto::H3 => Box::pin(self.proxy_h1_to_h3(&backend, stripped)).await,
+        };
+        // SEC-2-01 / SEC-2-03 — deregister the request from the
+        // watchdog on the normal completion path. The sweeper covers
+        // the abandoned-future case.
+        if let (Some(wd), Some(id)) = (self.watchdog.as_ref(), watch_id) {
+            wd.deregister(id);
         }
+        resp
     }
 
+    /// Forward an H1 inbound request to an H1 upstream backend over a
+    /// single-use TCP stream.
+    ///
+    /// **ROUND8-L7-10 — take-and-discard upstream stream pattern.**
+    /// The line below calls `pooled.take_stream()` immediately after
+    /// the async `acquire_async` resolves. `take_stream` consumes the
+    /// `PooledTcp` wrapper without invoking its `Drop` return-to-pool
+    /// path, so the H1 upstream connection is effectively **single-use**:
+    /// even though the pool has a `set_reusable` API
+    /// ([`lb_io::pool::PooledTcp::set_reusable`]), this code path
+    /// never reuses an H1 upstream socket.
+    ///
+    /// This is *correct by accident*. Pingora paid for this bug twice
+    /// (0.6.0 "Discard extra upstream body and disable keepalive" plus
+    /// 0.8.0 "Ensure http1 downstream session is not reused on more
+    /// body bytes than expected"): an upstream that sends fewer or
+    /// more body bytes than its declared Content-Length corrupts the
+    /// next pipelined request on a reused connection — an upstream
+    /// request-smuggling primitive. Single-use stops that class cold.
+    ///
+    /// **Refactor warning.** Any future change that pools H1 upstream
+    /// connections (drops `take_stream()` in favour of letting
+    /// `PooledTcp` drop normally) MUST implement the Pingora-class
+    /// over-read / under-read guard: read the response body, compare
+    /// to `Content-Length`, and call
+    /// [`lb_io::pool::PooledTcp::set_reusable(false)`](lb_io::pool::PooledTcp::set_reusable)
+    /// on any mismatch before letting the wrapper drop. Without that
+    /// guard the bug Pingora paid for twice will return. See also the
+    /// H2 cousin in `Http2Pool::send_request`, which evicts on every
+    /// Send-class error for the same reason.
     async fn proxy_request(
         &self,
         backend_addr: SocketAddr,
-        req: Request<IncomingBody>,
+        req: StrippedRequest<IncomingBody>,
     ) -> Result<Response<IncomingBody>, ProxyErr> {
-        let pool = self.pool.clone();
-        let pooled = tokio::task::spawn_blocking(move || pool.acquire(backend_addr))
+        let req = req.into_inner();
+        // CODE-2-09 follow-on: async dial via `TcpPool::acquire_async`.
+        // The pool's `PoolConfig::connect_timeout` (5 s default,
+        // sourced from `runtime.connect_timeout_ms`) bounds the syscall.
+        let pooled = self
+            .pool
+            .acquire_async(backend_addr)
             .await
-            .map_err(|e| ProxyErr::Upstream(format!("backend dial join: {e}")))?
             .map_err(|e| ProxyErr::Upstream(format!("backend connect {backend_addr}: {e}")))?;
 
+        // ROUND8-L7-10: see the doc-comment block on this function.
+        // `take_stream` defeats the pool's return-to-pool Drop path,
+        // making this H1 upstream connection single-use. Do not
+        // remove without first implementing the body-length guard
+        // documented above.
         let stream = pooled
             .take_stream()
             .ok_or_else(|| ProxyErr::Upstream("pooled stream missing".to_owned()))?;
@@ -467,7 +1136,7 @@ impl H1Proxy {
     async fn proxy_h1_to_h2(
         &self,
         backend_addr: SocketAddr,
-        req: Request<IncomingBody>,
+        req: StrippedRequest<IncomingBody>,
     ) -> Response<BoxBody<Bytes, hyper::Error>> {
         let Some(h2_pool) = self.h2_upstream.as_ref() else {
             return error_response(
@@ -475,7 +1144,7 @@ impl H1Proxy {
                 "H2 backend selected but no Http2Pool wired",
             );
         };
-        let translated = match translate_h1_request_to_h2(req).await {
+        let translated = match translate_h1_request_to_h2(req.into_inner()).await {
             Ok(r) => r,
             Err(s) => return error_response(StatusCode::BAD_GATEWAY, &s),
         };
@@ -496,7 +1165,7 @@ impl H1Proxy {
     async fn proxy_h1_to_h3(
         &self,
         backend: &UpstreamBackend,
-        req: Request<IncomingBody>,
+        req: StrippedRequest<IncomingBody>,
     ) -> Response<BoxBody<Bytes, hyper::Error>> {
         let Some(h3_pool) = self.h3_upstream.as_ref() else {
             return error_response(
@@ -505,14 +1174,16 @@ impl H1Proxy {
             );
         };
         let sni = backend.sni.as_deref().unwrap_or("");
-        let (headers, body) =
-            match collect_h1_request_to_h3_fieldlist(req, sni, /* https = */ true).await {
+        let inner = req.into_inner();
+        let (headers, body, trailers) =
+            match collect_h1_request_to_h3_fieldlist(inner, sni, /* https = */ true).await {
                 Ok(p) => p,
                 Err(s) => return error_response(StatusCode::BAD_GATEWAY, &s),
             };
         let h3_resp = Box::pin(lb_quic::request_h3_upstream(
             headers,
             body,
+            trailers,
             backend.addr,
             sni,
             h3_pool,
@@ -523,17 +1194,44 @@ impl H1Proxy {
 
     /// Handle an RFC 6455 handshake request.
     ///
-    /// Builds the `101 Switching Protocols` response and schedules a
-    /// detached task that awaits [`hyper::upgrade::on`] on the inbound
-    /// request, dials the backend with [`tokio_tungstenite::client_async`],
-    /// and runs the bidirectional frame forwarder.
+    /// **ROUND8-L7-01 (Pingora GHSA-xq2h-p299-vjwv / Envoy
+    /// GHSA-rj35-4m94-77jh, both CVSS 9.3):** the client-visible
+    /// `101 Switching Protocols` is emitted **only after** the
+    /// upstream WebSocket handshake has completed successfully. The
+    /// pre-fix code returned `101` synchronously and dialed the
+    /// upstream in a detached task — so a client the upstream would
+    /// have rejected was already committed to WS framing on a wire
+    /// that then silently closed, and any bytes pipelined after the
+    /// upgrade request entered an unread upgraded byte-stream (the
+    /// smuggling primitive both references paid for).
+    ///
+    /// New order (mirrors Pingora `proxy_h1.rs` and Envoy
+    /// `WsHandlerImpl`): dial upstream → drive the upstream WS client
+    /// handshake under a bounded timeout → only then build `101` from
+    /// the upstream-accepted handshake. On upstream failure the wire
+    /// is still in H1 mode (no `101` emitted) so we return
+    /// `502 Bad Gateway` (handshake rejected / unreachable) or
+    /// `504 Gateway Timeout` (dial/handshake budget elapsed) and the
+    /// client connection stays keep-alive-eligible.
+    ///
+    /// Behaviour change (documented in CHANGELOG): one upstream-RTT of
+    /// added latency on the WS upgrade, and `502/504` instead of
+    /// `101`-then-silent-close on upstream failure.
+    ///
+    /// ROUND8-OPS-06: `req_trace` carries the request span + the child
+    /// W3C context; the child `traceparent` is injected onto the
+    /// upstream WS handshake request so an on-call engineer can pivot
+    /// from an upgrade failure to the exact upstream dial. The
+    /// detached splice task is `.instrument()`-ed with the request
+    /// span so its events nest under the same `trace_id`.
     ///
     /// Returns a plain 400 if the handshake is structurally valid but
     /// `Sec-WebSocket-Key` is missing once hyper hands us the request
     /// (race: the detector accepted it).
-    fn handle_ws_upgrade(
+    async fn handle_ws_upgrade(
         &self,
         mut req: Request<IncomingBody>,
+        req_trace: crate::trace_ctx::RequestTrace,
     ) -> Response<BoxBody<Bytes, hyper::Error>> {
         let Some(ws_proxy) = self.ws.clone() else {
             return error_response(StatusCode::BAD_GATEWAY, "websocket disabled");
@@ -554,16 +1252,6 @@ impl H1Proxy {
         }
         let backend_addr = backend.addr;
 
-        // Kick off the upgrade future BEFORE we return the 101 response.
-        // hyper will drive it as soon as the response headers have been
-        // written on the wire.
-        let upgrade_fut = hyper::upgrade::on(&mut req);
-
-        // Snapshot the request for the client-side handshake to the
-        // upstream. We reuse `path + query` and pick up headers that the
-        // RFC 6455 §4.1 client must carry (Sec-WebSocket-Protocol /
-        // -Extensions). The `Host` header is rewritten to the backend
-        // `SocketAddr` so the upstream accepts the handshake.
         let path_and_query = req
             .uri()
             .path_and_query()
@@ -574,17 +1262,55 @@ impl H1Proxy {
             .and_then(|v| v.to_str().ok())
             .map(str::to_owned);
 
-        // Detach a task that finishes the upgrade, dials upstream, and
-        // runs the frame forwarder. We do NOT await it here — hyper
-        // needs us to return the 101 response first so it can flip the
-        // wire.
-        tokio::spawn(run_h1_ws_upgrade_task(
-            upgrade_fut,
+        // ROUND8-L7-01 — dial the upstream and drive its WS handshake
+        // BEFORE any client-visible response. Bounded by the H1
+        // header-receipt budget (`HttpTimeouts::header`): "time to get
+        // the upstream's handshake response" is exactly that budget's
+        // semantics. A timeout maps to 504; any other failure to 502.
+        let child_traceparent = req_trace.child_traceparent();
+        let tracestate = req_trace.tracestate.clone();
+        let upstream_dial = dial_upstream_ws(
             self.pool.clone(),
             backend_addr,
             path_and_query,
             forwarded_protocols,
-            ws_proxy,
+            child_traceparent,
+            tracestate,
+            ws_proxy.clone(),
+        );
+        let backend_ws = match tokio::time::timeout(self.timeouts.header, upstream_dial).await {
+            Ok(Ok(ws)) => ws,
+            Ok(Err(ProxyErr::Upstream(msg))) => {
+                tracing::debug!(backend = %backend_addr, error = %msg, "ws: upstream handshake refused — returning 502 (no 101 emitted)");
+                return error_response(
+                    StatusCode::BAD_GATEWAY,
+                    "websocket upstream handshake failed",
+                );
+            }
+            Ok(Err(ProxyErr::Timeout)) => {
+                tracing::debug!(backend = %backend_addr, "ws: upstream dial timeout — returning 504 (no 101 emitted)");
+                return error_response(
+                    StatusCode::GATEWAY_TIMEOUT,
+                    "websocket upstream dial timeout",
+                );
+            }
+            Err(_elapsed) => {
+                tracing::debug!(backend = %backend_addr, "ws: upstream handshake budget elapsed — returning 504 (no 101 emitted)");
+                return error_response(
+                    StatusCode::GATEWAY_TIMEOUT,
+                    "websocket upstream handshake timeout",
+                );
+            }
+        };
+
+        // Upstream handshake succeeded. ONLY NOW arm the hyper upgrade
+        // future and build the client `101`. The detached task no
+        // longer dials — it just splices the already-established
+        // upstream WS to the post-upgrade client stream.
+        let upgrade_fut = hyper::upgrade::on(&mut req);
+        tokio::spawn(tracing::Instrument::instrument(
+            run_h1_ws_splice_task(upgrade_fut, backend_ws, ws_proxy),
+            req_trace.span.clone(),
         ));
 
         // Build the 101 response. Mirror a sub-protocol selection if the
@@ -637,49 +1363,37 @@ enum ProxyErr {
     Timeout,
 }
 
-/// Finish a WebSocket upgrade: await the hyper upgrade future, dial the
-/// backend over the pooled TCP path, drive the RFC 6455 client-side
-/// handshake, and hand both halves to [`WsProxy::proxy_frames`].
-async fn run_h1_ws_upgrade_task(
-    upgrade_fut: hyper::upgrade::OnUpgrade,
+/// ROUND8-L7-01 — dial the backend and drive the RFC 6455 client-side
+/// handshake **before** the client sees `101`. On success returns the
+/// established upstream [`WebSocketStream`]; on failure a [`ProxyErr`]
+/// the caller maps to `502` (refused/unreachable) or `504` (timeout).
+///
+/// ROUND8-OPS-06: the caller's child `traceparent` (and forwarded
+/// `tracestate`) is injected onto the upstream handshake request so
+/// the upstream sees the LB span as its parent.
+async fn dial_upstream_ws(
     pool: TcpPool,
     backend_addr: SocketAddr,
     path_and_query: String,
     forwarded_protocols: Option<String>,
+    child_traceparent: String,
+    tracestate: Option<String>,
     ws_proxy: Arc<WsProxy>,
-) {
-    let upgraded = match upgrade_fut.await {
-        Ok(u) => u,
-        Err(e) => {
-            tracing::debug!(error = %e, "ws: hyper upgrade failed");
-            return;
-        }
-    };
+) -> Result<tokio_tungstenite::WebSocketStream<tokio::net::TcpStream>, ProxyErr> {
+    // CODE-2-09 follow-on: async dial (no blocking-pool thread for the
+    // TCP RTT). A dial failure here is `502` to the client — but
+    // crucially the client has NOT yet seen `101`.
+    let pooled = pool
+        .acquire_async(backend_addr)
+        .await
+        .map_err(|e| ProxyErr::Upstream(format!("backend dial failed: {e}")))?;
+    let upstream_stream = pooled
+        .take_stream()
+        .ok_or_else(|| ProxyErr::Upstream("pooled stream missing".to_owned()))?;
 
-    let pooled_result = tokio::task::spawn_blocking(move || pool.acquire(backend_addr)).await;
-    let pooled = match pooled_result {
-        Ok(Ok(p)) => p,
-        Ok(Err(e)) => {
-            tracing::debug!(error = %e, backend = %backend_addr, "ws: backend dial failed");
-            return;
-        }
-        Err(e) => {
-            tracing::debug!(error = %e, "ws: dial join failed");
-            return;
-        }
-    };
-    let Some(upstream_stream) = pooled.take_stream() else {
-        tracing::debug!("ws: pooled stream missing");
-        return;
-    };
-
-    let uri = match format!("ws://{backend_addr}{path_and_query}").parse() {
-        Ok(u) => u,
-        Err(e) => {
-            tracing::debug!(error = %e, "ws: upstream uri build failed");
-            return;
-        }
-    };
+    let uri = format!("ws://{backend_addr}{path_and_query}")
+        .parse()
+        .map_err(|e| ProxyErr::Upstream(format!("upstream uri build failed: {e}")))?;
     let mut builder = tokio_tungstenite::tungstenite::client::ClientRequestBuilder::new(uri);
     if let Some(protocols) = forwarded_protocols.as_deref() {
         for p in protocols.split(',') {
@@ -689,22 +1403,48 @@ async fn run_h1_ws_upgrade_task(
             }
         }
     }
+    // ROUND8-OPS-06: propagate the W3C trace context onto the upstream
+    // WS handshake request (tungstenite's builder takes header pairs,
+    // not a HeaderMap, so we use the pre-rendered child header value).
+    builder = builder.with_header(
+        lb_observability::tracing_propagation::TRACEPARENT_HEADER,
+        child_traceparent,
+    );
+    if let Some(ts) = tracestate {
+        builder = builder.with_header(lb_observability::tracing_propagation::TRACESTATE_HEADER, ts);
+    }
 
     let ws_cfg = ws_proxy.config();
-    let (backend_ws, _resp) = match tokio_tungstenite::client_async_with_config(
+    let (backend_ws, _resp) = tokio_tungstenite::client_async_with_config(
         builder,
         upstream_stream,
         Some(ws_cfg.tungstenite_config()),
     )
     .await
-    {
-        Ok(pair) => pair,
+    .map_err(|e| ProxyErr::Upstream(format!("upstream handshake failed: {e}")))?;
+    Ok(backend_ws)
+}
+
+/// ROUND8-L7-01 — splice-only task. By the time this runs the upstream
+/// WS is already established and `101` has been written to the client;
+/// we only await the hyper upgrade future (now guaranteed to resolve
+/// because the wire flipped) and hand both halves to
+/// [`WsProxy::proxy_frames`].
+async fn run_h1_ws_splice_task(
+    upgrade_fut: hyper::upgrade::OnUpgrade,
+    backend_ws: tokio_tungstenite::WebSocketStream<tokio::net::TcpStream>,
+    ws_proxy: Arc<WsProxy>,
+) {
+    let upgraded = match upgrade_fut.await {
+        Ok(u) => u,
         Err(e) => {
-            tracing::debug!(error = %e, backend = %backend_addr, "ws: upstream handshake failed");
+            // The upstream WS is dropped here — `backend_ws`'s Drop
+            // closes the pooled TCP socket so we do not leak it.
+            tracing::debug!(error = %e, "ws: hyper upgrade failed after upstream established");
             return;
         }
     };
-
+    let ws_cfg = ws_proxy.config();
     let client_ws = ws_proxy::server_ws(TokioIo::new(upgraded), &ws_cfg).await;
     if let Err(e) = ws_proxy.proxy_frames(client_ws, backend_ws).await {
         tracing::debug!(error = %e, "ws: frame proxy ended with error");
@@ -720,9 +1460,42 @@ fn error_response(status: StatusCode, msg: &str) -> Response<BoxBody<Bytes, hype
     resp
 }
 
+/// CODE-2-01 / SEC-2-01: map a [`SecurityReject`] to the HTTP response
+/// the proxy returns to the client.
+///
+/// * `Smuggle` / `SlowHandshake` → `400 Bad Request`. Smuggling is a
+///   structural request defect; slow-handshake aligns with RFC 9110
+///   §15.5.1 "request line / headers malformed".
+/// * `RateLimited` → `503 Service Unavailable` with
+///   `Retry-After: 1`. The detector path treats rate-limiting as a
+///   transient per-peer condition; a fixed 1-second hint is the
+///   minimum useful value and avoids leaking detector internals.
+/// * `OverCap` → `503 Service Unavailable` with `Retry-After: 1`. The
+///   per-IP / per-listener counter saturated; RST-without-response is
+///   handled at the accept site (Wave-2c), not here — by the time the
+///   request handler sees `OverCap`, the connection is already
+///   established and a response is cheaper than a half-close.
+pub(crate) fn reject_to_response(rej: &SecurityReject) -> Response<BoxBody<Bytes, hyper::Error>> {
+    match rej {
+        SecurityReject::Smuggle(_) => error_response(StatusCode::BAD_REQUEST, "request smuggling"),
+        SecurityReject::SlowHandshake => error_response(StatusCode::BAD_REQUEST, "slow handshake"),
+        SecurityReject::RateLimited | SecurityReject::OverCap(_) => {
+            let mut resp = error_response(StatusCode::SERVICE_UNAVAILABLE, "over capacity");
+            resp.headers_mut()
+                .insert(hyper::header::RETRY_AFTER, HeaderValue::from_static("1"));
+            resp
+        }
+    }
+}
+
 /// Strip hop-by-hop headers per RFC 9110 §7.6.1 plus any names listed
 /// inside the `Connection` header value.
-pub(crate) fn strip_hop_by_hop(headers: &mut hyper::HeaderMap) {
+///
+/// Exposed `pub` (rather than `pub(crate)`) so PROTO-2-08 / PROTO-2-07
+/// integration tests can pin the exact strip behaviour. The "stripped"
+/// invariant is also exposed as a compile-time guarantee via
+/// [`crate::stripped_request::StrippedRequest`] (PROTO-2-07).
+pub fn strip_hop_by_hop(headers: &mut hyper::HeaderMap) {
     // Collect Connection-token names BEFORE removing the Connection
     // header itself.
     let extra: Vec<HeaderName> = headers
@@ -744,19 +1517,34 @@ pub(crate) fn strip_hop_by_hop(headers: &mut hyper::HeaderMap) {
     }
 }
 
-/// Append the peer's IP to `X-Forwarded-For`, creating the header if
-/// absent.
+/// Append the peer's IP to `X-Forwarded-For`, iterating every
+/// existing value so multi-line / duplicate `X-Forwarded-For`
+/// headers are preserved in the canonical list form. The previous
+/// `HeaderMap::get(...)` path returned only the first value, then
+/// `insert` clobbered the rest — a silent-drop bug equivalent to
+/// **Envoy GHSA-ghc4-35x6-crw5** (RBAC comma-joined-string bypass
+/// when duplicate headers existed). Mirrored on `append_via`.
+///
+/// RFC 7239 / RFC 9110 §5.3 list-rule: comma-separate every prior
+/// value, append the peer. Non-ASCII / non-printable existing values
+/// fail `to_str` and are skipped (fail-closed-by-skip); a future
+/// `xff_policy` knob can promote that to a hard reject.
 pub(crate) fn append_xff(headers: &mut hyper::HeaderMap, peer: SocketAddr) {
     let peer_ip = peer.ip().to_string();
-    let new_value = headers.get(&XFF_NAME).map_or_else(
-        || peer_ip.clone(),
-        |existing| {
-            existing
-                .to_str()
-                .map_or_else(|_| peer_ip.clone(), |prev| format!("{prev}, {peer_ip}"))
-        },
-    );
-    if let Ok(v) = HeaderValue::from_str(&new_value) {
+    let mut joined = String::new();
+    for v in headers.get_all(&XFF_NAME) {
+        if let Ok(s) = v.to_str() {
+            if !joined.is_empty() {
+                joined.push_str(", ");
+            }
+            joined.push_str(s);
+        }
+    }
+    if !joined.is_empty() {
+        joined.push_str(", ");
+    }
+    joined.push_str(&peer_ip);
+    if let Ok(v) = HeaderValue::from_str(&joined) {
         headers.insert(&XFF_NAME, v);
     }
 }
@@ -776,20 +1564,27 @@ pub(crate) fn set_xfh(headers: &mut hyper::HeaderMap, host: &str) {
     }
 }
 
-/// Append `HTTP/1.1 expressgateway` to `Via`, creating the header if
-/// absent.
+/// Append `HTTP/1.1 expressgateway` to `Via`, iterating every existing
+/// value. Same multi-value preservation pattern as [`append_xff`] —
+/// RFC 9110 §7.6.3 `Via` is a list-valued header; duplicate header
+/// lines must be preserved as comma-separated members of one outbound
+/// canonical value, not clobbered.
 pub(crate) fn append_via(headers: &mut hyper::HeaderMap) {
     const VIA_TOKEN: &str = "HTTP/1.1 expressgateway";
-    let new_value = headers.get(hyper::header::VIA).map_or_else(
-        || VIA_TOKEN.to_owned(),
-        |existing| {
-            existing.to_str().map_or_else(
-                |_| VIA_TOKEN.to_owned(),
-                |prev| format!("{prev}, {VIA_TOKEN}"),
-            )
-        },
-    );
-    if let Ok(v) = HeaderValue::from_str(&new_value) {
+    let mut joined = String::new();
+    for v in headers.get_all(hyper::header::VIA) {
+        if let Ok(s) = v.to_str() {
+            if !joined.is_empty() {
+                joined.push_str(", ");
+            }
+            joined.push_str(s);
+        }
+    }
+    if !joined.is_empty() {
+        joined.push_str(", ");
+    }
+    joined.push_str(VIA_TOKEN);
+    if let Ok(v) = HeaderValue::from_str(&joined) {
         headers.insert(hyper::header::VIA, v);
     }
 }
@@ -812,11 +1607,26 @@ async fn translate_h1_request_to_h2(
     req: Request<IncomingBody>,
 ) -> Result<Request<BoxBody<Bytes, hyper::Error>>, String> {
     let (parts, body) = req.into_parts();
-    let body_bytes = body
+    // PROTO-2-12: collect body + trailers in a single round-trip so
+    // the bridge sees both.
+    let collected = body
         .collect()
         .await
-        .map_err(|e| format!("body collect: {e}"))?
-        .to_bytes();
+        .map_err(|e| format!("body collect: {e}"))?;
+    let trailers_map = collected.trailers().cloned();
+    let body_bytes = collected.to_bytes();
+    let trailers_vec: Vec<(String, String)> = trailers_map
+        .as_ref()
+        .map(|tm| {
+            tm.iter()
+                .filter_map(|(n, v)| {
+                    v.to_str()
+                        .ok()
+                        .map(|s| (n.as_str().to_owned(), s.to_owned()))
+                })
+                .collect()
+        })
+        .unwrap_or_default();
     let bridge = crate::create_bridge(crate::Protocol::Http1, crate::Protocol::Http2);
     let bridge_in = crate::BridgeRequest {
         method: parts.method.to_string(),
@@ -835,6 +1645,7 @@ async fn translate_h1_request_to_h2(
             .collect(),
         body: body_bytes.clone(),
         scheme: Some("http".to_owned()),
+        trailers: trailers_vec,
     };
     let translated = bridge
         .bridge_request(&bridge_in)
@@ -864,10 +1675,46 @@ async fn translate_h1_request_to_h2(
         }
         builder = builder.header(n.as_str(), v.as_str());
     }
-    let body = Full::new(body_bytes)
-        .map_err(|never| match never {})
-        .boxed();
+    // PROTO-2-12: emit body + trailers as a StreamBody so the H2
+    // client sends a separate trailers frame after the data frame.
+    let body = build_body_with_trailers(body_bytes, &translated.trailers);
     builder.body(body).map_err(|e| format!("build h2 req: {e}"))
+}
+
+/// PROTO-2-12 helper: build a `BoxBody` that emits the data bytes
+/// followed by an HTTP trailer frame, so cross-protocol bridges can
+/// re-attach the trailer set captured at body-collect time.
+///
+/// `trailers` is a flat `(name, value)` list — empty means no trailer
+/// frame is emitted (the body still wraps the data frame).
+fn build_body_with_trailers(
+    body_bytes: Bytes,
+    trailers: &[(String, String)],
+) -> BoxBody<Bytes, hyper::Error> {
+    use http_body_util::StreamBody;
+    use hyper::HeaderMap;
+    use hyper::body::Frame;
+
+    if trailers.is_empty() {
+        return Full::new(body_bytes)
+            .map_err(|never| match never {})
+            .boxed();
+    }
+    let mut tmap = HeaderMap::new();
+    for (n, v) in trailers {
+        if let (Ok(name), Ok(value)) = (
+            hyper::header::HeaderName::try_from(n.as_str()),
+            HeaderValue::from_str(v),
+        ) {
+            tmap.append(name, value);
+        }
+    }
+    let frames: Vec<Result<Frame<Bytes>, hyper::Error>> = if body_bytes.is_empty() {
+        vec![Ok(Frame::trailers(tmap))]
+    } else {
+        vec![Ok(Frame::data(body_bytes)), Ok(Frame::trailers(tmap))]
+    };
+    StreamBody::new(futures_util::stream::iter(frames)).boxed()
 }
 
 /// Convert an upstream `Response<Incoming>` (H2) back into the H1
@@ -877,12 +1724,27 @@ async fn upstream_response_to_h1(
     alt_svc: Option<AltSvcConfig>,
 ) -> Response<BoxBody<Bytes, hyper::Error>> {
     let (parts, body) = resp.into_parts();
-    let body_bytes = match body.collect().await {
-        Ok(b) => b.to_bytes(),
+    // PROTO-2-12: capture trailers alongside body.
+    let collected = match body.collect().await {
+        Ok(c) => c,
         Err(e) => {
             return error_response(StatusCode::BAD_GATEWAY, &format!("upstream body read: {e}"));
         }
     };
+    let trailers_map = collected.trailers().cloned();
+    let body_bytes = collected.to_bytes();
+    let trailers_vec: Vec<(String, String)> = trailers_map
+        .as_ref()
+        .map(|tm| {
+            tm.iter()
+                .filter_map(|(n, v)| {
+                    v.to_str()
+                        .ok()
+                        .map(|s| (n.as_str().to_owned(), s.to_owned()))
+                })
+                .collect()
+        })
+        .unwrap_or_default();
     let bridge = crate::create_bridge(crate::Protocol::Http2, crate::Protocol::Http1);
     let bridge_in = crate::BridgeResponse {
         status: parts.status.as_u16(),
@@ -896,6 +1758,7 @@ async fn upstream_response_to_h1(
             })
             .collect(),
         body: body_bytes,
+        trailers: trailers_vec,
     };
     let translated = match bridge.bridge_response(&bridge_in) {
         Ok(r) => r,
@@ -906,21 +1769,81 @@ async fn upstream_response_to_h1(
             );
         }
     };
-    let mut builder = Response::builder().status(translated.status);
+    build_h1_response_with_trailers(translated, alt_svc)
+}
+
+/// PROTO-2-19 (Wave 2c-2): assemble the final H1 wire response from
+/// a translated [`crate::BridgeResponse`]. Shared between
+/// [`upstream_response_to_h1`] (H2→H1) and [`h3_response_to_h1`]
+/// (H3→H1) so the trailer-aware head shape is identical on both
+/// bridges.
+///
+/// When `translated.trailers` is non-empty this function injects
+/// `Transfer-Encoding: chunked` + a `Trailer: <name-list>` declaration
+/// on the response head and drops any incoming `Content-Length` /
+/// `Transfer-Encoding` / `Trailer` (the proxy's authoritative shape
+/// wins). hyper-1's H1 encoder requires both invariants to actually
+/// flush a `Frame::trailers` onto the wire
+/// (`proto/h1/encode.rs:163-213`); without them the bridge fields
+/// would silently disappear. See `audit/protocol/round-6-delta-
+/// findings.md` Vector 6 for the upstream-library citation.
+pub fn build_h1_response_with_trailers(
+    translated: crate::BridgeResponse,
+    alt_svc: Option<AltSvcConfig>,
+) -> Response<BoxBody<Bytes, hyper::Error>> {
+    let status = StatusCode::from_u16(translated.status).unwrap_or(StatusCode::BAD_GATEWAY);
+    let mut builder = Response::builder().status(status);
+    let has_trailers = !translated.trailers.is_empty();
     for (n, v) in &translated.headers {
         if n.starts_with(':') {
             continue;
         }
+        // PROTO-2-19: when re-emitting trailers on the H1 wire, the
+        // response head MUST advertise chunked TE and a `Trailer:`
+        // declaration listing the trailer names. We strip any
+        // pre-existing `transfer-encoding` and `content-length` from
+        // the upstream-translated headers — both are re-injected
+        // below in the trailer-aware shape — and any pre-existing
+        // `trailer` declaration so the proxy's authoritative list
+        // wins.
+        if has_trailers
+            && (n.eq_ignore_ascii_case("transfer-encoding")
+                || n.eq_ignore_ascii_case("content-length")
+                || n.eq_ignore_ascii_case("trailer"))
+        {
+            continue;
+        }
         builder = builder.header(n.as_str(), v.as_str());
+    }
+    if has_trailers {
+        // RFC 9110 §6.6.2: `Trailer:` is end-to-end. RFC 9112 §7.1:
+        // chunked TE is required to carry trailers. RFC 9110 §6.5:
+        // `Content-Length` MUST NOT accompany trailers on a
+        // chunked body — handled by the strip above.
+        let trailer_names: Vec<&str> = translated
+            .trailers
+            .iter()
+            .map(|(n, _)| n.as_str())
+            .collect();
+        let trailer_header = trailer_names.join(", ");
+        if let Ok(v) = HeaderValue::from_str(&trailer_header) {
+            builder = builder.header(hyper::header::TRAILER, v);
+        }
+        builder = builder.header(
+            hyper::header::TRANSFER_ENCODING,
+            HeaderValue::from_static("chunked"),
+        );
     }
     if let Some(alt) = alt_svc {
         if let Ok(value) = HeaderValue::from_str(&alt.header_value()) {
             builder = builder.header(hyper::header::ALT_SVC, value);
         }
     }
-    let body = Full::new(translated.body)
-        .map_err(|never| match never {})
-        .boxed();
+    // PROTO-2-12/-19: emit body + trailers via StreamBody. With
+    // trailers present, the head-level `Transfer-Encoding: chunked`
+    // + `Trailer:` declaration above ensures hyper actually writes
+    // the trailer frame onto the wire.
+    let body = build_body_with_trailers(translated.body, &translated.trailers);
     builder.body(body).unwrap_or_else(|_| {
         error_response(
             StatusCode::INTERNAL_SERVER_ERROR,
@@ -930,19 +1853,38 @@ async fn upstream_response_to_h1(
 }
 
 /// Collect an inbound H1 request, run the H1→H3 codec bridge, and
-/// return a `(field_list, body)` pair for
+/// return a `(field_list, body, trailers)` triple for
 /// `lb_quic::request_h3_upstream`.
+///
+/// PROTO-2-12: inbound H1 request trailers are captured via
+/// `Collected::trailers()` at body-collect time, bridged through
+/// `bridge_request`, and returned so the caller can ship a post-DATA
+/// `Frame::trailers` HEADERS frame on the upstream QUIC stream.
 async fn collect_h1_request_to_h3_fieldlist(
     req: Request<IncomingBody>,
     sni: &str,
     is_https: bool,
-) -> Result<(Vec<(String, String)>, Bytes), String> {
+) -> Result<(Vec<(String, String)>, Bytes, Vec<(String, String)>), String> {
     let (parts, body) = req.into_parts();
-    let body_bytes = body
+    // PROTO-2-12: capture request trailers alongside the body.
+    let collected = body
         .collect()
         .await
-        .map_err(|e| format!("body collect: {e}"))?
-        .to_bytes();
+        .map_err(|e| format!("body collect: {e}"))?;
+    let trailers_map = collected.trailers().cloned();
+    let body_bytes = collected.to_bytes();
+    let trailers_vec: Vec<(String, String)> = trailers_map
+        .as_ref()
+        .map(|tm| {
+            tm.iter()
+                .filter_map(|(n, v)| {
+                    v.to_str()
+                        .ok()
+                        .map(|s| (n.as_str().to_owned(), s.to_owned()))
+                })
+                .collect()
+        })
+        .unwrap_or_default();
     let host = parts
         .headers
         .get(hyper::header::HOST)
@@ -974,6 +1916,10 @@ async fn collect_h1_request_to_h3_fieldlist(
         },
         body: body_bytes.clone(),
         scheme: Some(scheme.to_owned()),
+        // PROTO-2-12: forward inbound H1 request trailers through the
+        // H1→H3 bridge; the caller ships them as a post-DATA HEADERS
+        // frame on the upstream QUIC stream.
+        trailers: trailers_vec,
     };
     let translated = bridge
         .bridge_request(&bridge_in)
@@ -985,7 +1931,7 @@ async fn collect_h1_request_to_h3_fieldlist(
     {
         field_list.push((":authority".to_owned(), host));
     }
-    Ok((field_list, body_bytes))
+    Ok((field_list, body_bytes, translated.trailers))
 }
 
 /// Convert an [`lb_quic::H3UpstreamResponse`] back into the H1 response
@@ -1000,6 +1946,11 @@ fn h3_response_to_h1(
         status: resp.status,
         headers: resp.headers,
         body: body_bytes,
+        // PROTO-2-12: forward the H3 upstream's trailing field
+        // section (parsed from the post-DATA HEADERS frame) down the
+        // H3→H1 bridge; `build_h1_response_with_trailers` re-emits it
+        // as a chunked-trailer block on the H1 wire.
+        trailers: resp.trailers,
     };
     let translated = match bridge.bridge_response(&bridge_in) {
         Ok(r) => r,
@@ -1010,28 +1961,12 @@ fn h3_response_to_h1(
             );
         }
     };
-    let status = StatusCode::from_u16(translated.status).unwrap_or(StatusCode::BAD_GATEWAY);
-    let mut builder = Response::builder().status(status);
-    for (n, v) in &translated.headers {
-        if n.starts_with(':') {
-            continue;
-        }
-        builder = builder.header(n.as_str(), v.as_str());
-    }
-    if let Some(alt) = alt_svc {
-        if let Ok(value) = HeaderValue::from_str(&alt.header_value()) {
-            builder = builder.header(hyper::header::ALT_SVC, value);
-        }
-    }
-    let body = Full::new(translated.body)
-        .map_err(|never| match never {})
-        .boxed();
-    builder.body(body).unwrap_or_else(|_| {
-        error_response(
-            StatusCode::INTERNAL_SERVER_ERROR,
-            "build h1 response failed",
-        )
-    })
+    // PROTO-2-19 (Wave 2c-2): share the trailer-aware H1 head shape
+    // with the H2→H1 path via `build_h1_response_with_trailers`.
+    // PROTO-2-12 (H3 leg landed): `translated.trailers` now carries
+    // the H3 upstream's trailing field section, so the trailer-
+    // injection branch emits a chunked-trailer block on the H1 wire.
+    build_h1_response_with_trailers(translated, alt_svc)
 }
 
 #[cfg(test)]
@@ -1087,6 +2022,60 @@ mod tests {
         assert_eq!(h.get("x-forwarded-for").unwrap(), "5.6.7.8");
     }
 
+    /// ROUND8-L7-04 — two `X-Forwarded-For` header LINES must be
+    /// preserved in the comma-joined outbound value. Pre-fix the
+    /// helper called `HeaderMap::get(...)` which returned only the
+    /// first value; `insert(...)` then clobbered the rest. This is
+    /// the Envoy GHSA-ghc4-35x6-crw5 silent-drop class on the
+    /// producer side.
+    #[test]
+    fn x_forwarded_for_two_lines_preserved() {
+        let mut h = HeaderMap::new();
+        h.append(
+            HeaderName::from_static("x-forwarded-for"),
+            HeaderValue::from_static("1.1.1.1"),
+        );
+        h.append(
+            HeaderName::from_static("x-forwarded-for"),
+            HeaderValue::from_static("2.2.2.2"),
+        );
+        let peer: SocketAddr = "9.9.9.9:1".parse().unwrap();
+        append_xff(&mut h, peer);
+        let all: Vec<&str> = h
+            .get_all(HeaderName::from_static("x-forwarded-for"))
+            .iter()
+            .filter_map(|v| v.to_str().ok())
+            .collect();
+        assert_eq!(
+            all.len(),
+            1,
+            "expected canonical single header line, got {all:?}",
+        );
+        // 3 members: two pre-existing values + peer.
+        let first = all.first().copied().unwrap_or("");
+        let parts: Vec<&str> = first.split(',').map(str::trim).collect();
+        assert_eq!(parts, vec!["1.1.1.1", "2.2.2.2", "9.9.9.9"]);
+    }
+
+    /// ROUND8-L7-04 — same shape for `Via`: two header lines in,
+    /// one canonical comma-joined header line out.
+    #[test]
+    fn via_two_lines_preserved() {
+        let mut h = HeaderMap::new();
+        h.append(hyper::header::VIA, HeaderValue::from_static("1.1 gw1"));
+        h.append(hyper::header::VIA, HeaderValue::from_static("1.1 gw2"));
+        append_via(&mut h);
+        let all: Vec<&str> = h
+            .get_all(hyper::header::VIA)
+            .iter()
+            .filter_map(|v| v.to_str().ok())
+            .collect();
+        assert_eq!(all.len(), 1, "expected canonical Via, got {all:?}");
+        let first = all.first().copied().unwrap_or("");
+        let parts: Vec<&str> = first.split(',').map(str::trim).collect();
+        assert_eq!(parts, vec!["1.1 gw1", "1.1 gw2", "HTTP/1.1 expressgateway"]);
+    }
+
     #[test]
     fn via_appended() {
         let mut h = map_with(&[("via", "1.1 gw1")]);
@@ -1113,17 +2102,19 @@ mod tests {
     }
 
     #[test]
-    fn hop_by_hop_response_strips_te_trailers_and_transfer_encoding() {
+    fn hop_by_hop_response_strips_te_and_transfer_encoding_keeps_trailer() {
         let mut h = map_with(&[
             ("content-type", "text/plain"),
             ("transfer-encoding", "chunked"),
             ("te", "trailers"),
-            ("trailers", "X-Foo"),
+            // RFC 9110 §6.6.2: `Trailer:` is the declaration header and
+            // is end-to-end. PROTO-2-08: must NOT be stripped.
+            ("trailer", "X-Foo"),
         ]);
         strip_hop_by_hop(&mut h);
         assert!(h.get("transfer-encoding").is_none());
         assert!(h.get("te").is_none());
-        assert!(h.get("trailers").is_none());
+        assert_eq!(h.get("trailer").unwrap(), "X-Foo");
         assert_eq!(h.get("content-type").unwrap(), "text/plain");
     }
 
@@ -1140,5 +2131,52 @@ mod tests {
     #[test]
     fn round_robin_empty_returns_none() {
         assert!(RoundRobinAddrs::new(vec![]).is_none());
+    }
+
+    // PROTO-2-11 H1 half (Wave 2c-2): smoke test for the cancel-aware
+    // variant. Mirrors the H2 test
+    // `h2_proxy::tests::test_sigterm_emits_two_step_goaway`. Build a
+    // minimal H1Proxy, hand it a duplex pair with the peer side
+    // dropped, plus a pre-cancelled token. The expected outcome is
+    // that `serve_connection_with_cancel` returns promptly via its
+    // graceful_shutdown branch — a regression that re-introduces a
+    // busy-loop or holds the conn open indefinitely would time out
+    // here.
+    #[tokio::test(flavor = "current_thread")]
+    async fn test_sigterm_h1_graceful_shutdown_resolves() {
+        use std::time::Duration;
+        use tokio_util::sync::CancellationToken;
+
+        let pool = lb_io::pool::TcpPool::new(
+            lb_io::pool::PoolConfig::default(),
+            lb_io::sockopts::BackendSockOpts::default(),
+            lb_io::Runtime::new(),
+        );
+        let addrs: Vec<SocketAddr> = vec!["127.0.0.1:1".parse().unwrap()];
+        let picker = RoundRobinAddrs::new(addrs).unwrap();
+        let proxy = Arc::new(H1Proxy::new(
+            pool,
+            Arc::new(picker),
+            None,
+            HttpTimeouts::default(),
+            false,
+        ));
+        // Empty duplex — peer half dropped, so any read returns EOF
+        // and hyper's H1 conn resolves without ever parsing a request
+        // line.
+        let (server_io, client) = tokio::io::duplex(8 * 1024);
+        drop(client);
+        let cancel = CancellationToken::new();
+        cancel.cancel();
+        let peer: SocketAddr = "127.0.0.1:1".parse().unwrap();
+        let r = tokio::time::timeout(
+            Duration::from_secs(5),
+            proxy.serve_connection_with_cancel(server_io, peer, cancel),
+        )
+        .await;
+        assert!(
+            r.is_ok(),
+            "h1 serve_connection_with_cancel hung past 5 s deadline — graceful shutdown is broken"
+        );
     }
 }

@@ -15,10 +15,29 @@ hyper = { workspace = true }
 hyper-util = { workspace = true }
 http-body-util = { workspace = true }
 tokio = { workspace = true }
+# PROTO-2-11 Wave 2c-2: `CancellationToken` powers the H2 graceful-
+# shutdown emit (`serve_connection_with_cancel`).
+tokio-util = { workspace = true }
 tracing = { workspace = true }
 parking_lot = { workspace = true }
+# ROUND8-L7-16: the protocol-neutral authority value predicate
+# (`validate` / `AuthorityError`) was hoisted into lb-core so the
+# H3/QUIC datapath (lb-quic) shares ONE implementation. lb-l7 now
+# consumes the predicate from lb-core; `crate::authority` is just the
+# hyper `http::Request` wrapper + re-export. lb-core is a leaf crate
+# (zero lb-* deps) so this edge introduces no cycle.
+lb-core = { path = "../lb-core" }
 lb-io = { path = "../lb-io" }
 lb-h2 = { path = "../lb-h2" }
+# CODE-2-01 dep edge (Wave-1 slice of CODE-2-01). lb-l7 had no
+# dependency on lb-security so the SmuggleDetector / SlowlorisDetector
+# / SlowPostDetector / per-IP cap were dead code on the L7 hot path.
+# This commit adds ONLY the Cargo dependency edge so sec can land the
+# actual detector wire-up (SEC-2-01 / SEC-2-03 / SEC-2-04 / SEC-2-10)
+# on top in Wave-2. The `SecurityHooks` trait shim is intentionally
+# NOT added here per the round-4 brief — it's deferred to the wave-2
+# file that sec wires into.
+lb-security = { path = "../lb-security" }
 # PROTO-001: H1→H3 / H2→H3 upstream paths consume `lb_quic::request_h3_upstream`
 # and the `H3UpstreamResponse` carrier type. lb-quic stays on quiche; we
 # only consume its public API.
@@ -30,3 +49,26 @@ lb-grpc = { path = "../lb-grpc" }
 # Item 2: WebSocket proxy path (RFC 6455 + RFC 8441).
 tokio-tungstenite = { workspace = true }
 futures-util = { workspace = true }
+# ROUND8-OPS-06 / REL-2-07: W3C trace-context propagation. Zero L7
+# callsites consumed `lb_observability::tracing_propagation` before
+# this — the library shipped in 1d462c7 but the proxy wire-in was
+# deferred. This edge lets `h1_proxy`/`h2_proxy` extract the inbound
+# `traceparent`, open a request span, and inject a child context onto
+# the upstream request (incl. the WS-upgrade dial).
+lb-observability = { path = "../lb-observability" }
+
+[dev-dependencies]
+# PROTO-2-18 (Wave 2c-2): the `tests/sni_authority_421.rs` integration
+# test drives a real TLS handshake against
+# `H1Proxy::serve_connection_with_cancel_sni` and asserts a 421
+# Misdirected Request when the SNI ≠ Host. TLS pieces are dev-only —
+# no production codepath in lb-l7 imports tokio-rustls / rcgen /
+# rustls-pki-types.
+tokio-rustls = { workspace = true }
+rustls = { workspace = true }
+rustls-pki-types = { workspace = true }
+rcgen = { version = "0.13", features = ["pem"] }
+# ROUND8-OPS-06: the traceparent-propagation proof installs a custom
+# `tracing_subscriber` layer that snapshots emitted span fields so the
+# test can assert the request span carries the inbound `trace_id`.
+tracing-subscriber = { workspace = true }

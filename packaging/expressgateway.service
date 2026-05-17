@@ -1,0 +1,113 @@
+[Unit]
+# ROUND8-OPS-07 (+ REL-2-14): canonical, hardened systemd unit.
+#
+# This file is the operator-installable systemd unit. The inline
+# code block in `DEPLOYMENT.md` is a (regression-tested) rendering
+# of these directives; the doc-lint job enforces that every
+# directive named in `DEPLOYMENT.md` appears here.
+#
+# Drop-ins:
+#   - Non-XDP deploys: install
+#     `/etc/systemd/system/expressgateway.service.d/no-xdp.conf`
+#     with
+#         [Service]
+#         RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+#         CapabilityBoundingSet=CAP_NET_BIND_SERVICE
+#         AmbientCapabilities=CAP_NET_BIND_SERVICE
+#     to drop AF_NETLINK + CAP_NET_ADMIN + CAP_BPF.
+#   - Hosts without bpffs at /sys/fs/bpf: add a `mount -t bpf bpffs
+#     /sys/fs/bpf` to a precondition unit; this unit's
+#     `RequiresMountsFor=` will refuse to start otherwise.
+#
+# Hardening: `systemd-analyze security packaging/expressgateway.service`
+# must score below 1.5 ("OK"); CI gate `systemd-analyze-security`
+# enforces.
+
+Description=ExpressGateway L4/L7 load balancer
+Documentation=https://github.com/proto/ExpressGateway/blob/main/README.md
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=notify
+NotifyAccess=main
+User=expressgateway
+Group=expressgateway
+ExecStart=/usr/local/bin/expressgateway /etc/expressgateway/lb.toml
+ExecReload=/bin/kill -USR1 $MAINPID
+KillMode=mixed
+KillSignal=SIGTERM
+TimeoutStopSec=30
+Restart=on-failure
+RestartSec=5s
+
+# --- Capabilities (SEC-2-11) ---
+AmbientCapabilities=CAP_NET_BIND_SERVICE CAP_NET_ADMIN CAP_BPF
+CapabilityBoundingSet=CAP_NET_BIND_SERVICE CAP_NET_ADMIN CAP_BPF
+
+# --- Round 8 hardening (OPS-07) ---
+
+# Syscall filter. @system-service is a curated set; ~@privileged etc
+# strip everything we never call.
+SystemCallFilter=@system-service
+SystemCallFilter=~@privileged @resources @debug @cpu-emulation @keyring @obsolete @mount @raw-io
+SystemCallArchitectures=native
+
+# Address family restriction.
+# Default set covers UNIX (admin socket) + IPv4/IPv6 (listeners) +
+# AF_NETLINK (XDP attach / link query). Operators running without XDP
+# should drop AF_NETLINK in a drop-in.
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6 AF_NETLINK
+
+# Namespace + privilege restrictions.
+RestrictNamespaces=true
+RestrictRealtime=true
+RestrictSUIDSGID=true
+LockPersonality=true
+NoNewPrivileges=true
+RemoveIPC=true
+
+# Kernel protections.
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectKernelLogs=true
+ProtectControlGroups=true
+ProtectClock=true
+ProtectHostname=true
+ProtectProc=invisible
+ProcSubset=pid
+ProtectSystem=strict
+ProtectHome=true
+
+# /tmp + /dev isolation.
+PrivateTmp=true
+PrivateDevices=true
+DevicePolicy=closed
+# PrivateUsers=true is incompatible with CAP_BPF on some kernels;
+# leave default (false).
+
+# Memory.
+MemoryDenyWriteExecute=true
+UMask=0077
+
+# FS write surface.
+ReadOnlyPaths=/
+ReadWritePaths=/var/log/expressgateway /run/expressgateway
+
+# Mount preconditions: refuse to start if bpffs is not mounted at
+# /sys/fs/bpf (XDP loader pins its maps there; cross-references
+# ROUND8-L4-11 runtime statfs check inside the loader).
+RequiresMountsFor=/sys/fs/bpf
+
+# Resource limits.
+LimitNOFILE=1048576
+LimitMEMLOCK=infinity
+
+# Watchdog: requires sd_notify(WATCHDOG=1) from the process. Wave 2
+# wires the heartbeat task; until then the unit may flap on
+# WatchdogSec triggers, so this is commented out and re-enabled by
+# the same Wave 2 commit that adds the heartbeat.
+#WatchdogSec=15s
+
+[Install]
+WantedBy=multi-user.target

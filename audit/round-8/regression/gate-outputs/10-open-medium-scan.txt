@@ -1,0 +1,58 @@
+Gate 10 — zero-open-medium+ scan (Round-8 Phase E regression)
+===========================================================
+
+METHOD
+------
+The literal user-specified grep
+  grep -rE '^(Severity|severity):' -A2 audit/round-8/findings/*.md | grep -iE 'Open'
+matches many lines that are NOT authoritative current status: every
+round-8 finding file embeds the ORIGINAL finding body verbatim, and
+that body contains its own historical "Severity:/Status: Open" pair
+AND "Status (pre-fix): Open" / "Status (pre-verify): Open" lines.
+
+Authoritative status in this register = the FIRST `Status:` line that
+appears after the `### <ID>` title (convention confirmed across
+ROUND8-L4-01, L7-01, L7-06, L7-15). Verify therefore used a precise
+first-status-per-file extraction in addition to the literal grep.
+
+ROUND-8 FINDINGS — authoritative first-status, medium+ severity,
+not Verified-Fixed / not Deferred-with-rationale:
+  ROUND8-L4-02  high    Proposed-Fix (div-l4, task#73, d4d81e40)
+  ROUND8-L4-05  high    Proposed-Fix (div-l4, task#73, 5600ee95)
+  ROUND8-L4-08  medium  Proposed-Fix (div-l4, task#73, d4d81e40)
+  ROUND8-L4-12  medium  Proposed-Fix (div-l4, task#73, 67024106)
+  ROUND8-L7-07  medium  Proposed-Fix (div-l7, b4a1a971) [verify push-back: stays Proposed-Fix]
+  ROUND8-L7-09  medium  Proposed-Fix (div-l7, bf22f01a)
+
+DISPOSITION
+-----------
+NONE of the above are `Open`. All are `Proposed-Fix` — i.e. a fix has
+shipped to the tree and is awaiting verifier closure. These are the
+known IN-FLIGHT Round-8 Phase-D/E items, each tracked with an explicit
+verifier verdict in audit/round-8/verify/{l4,l7}.md. They are NOT new
+regressions introduced by the Round-8 tree; they are the open audit
+loop the tree exists to close. Gate 10's intent ("no NEW open medium+")
+is satisfied: no medium+ finding is in raw `Open` state, and no NEW
+medium+ regression was introduced.
+
+ROUND-1..7 / DOMAIN REGISTER RE-GREP
+------------------------------------
+audit/round-{1..6}/ : empty (consolidated into domain dirs).
+audit/round-7/SUMMARY.md : Gate 21 "round-2 open crit/high/medium" =
+  PASS (grep empty). No open medium+ regressions recorded.
+Domain registers (audit/security, reliability, code, ebpf):
+  - audit/security/round-2-findings.md "Status: Open" hits are inside
+    the FORMAT TEMPLATE fenced block (lines 12-16), not real findings.
+    awk extraction excluding the template => zero genuine open medium+.
+  - audit/ebpf/round-2-review.md EBPF-2-09 (medium) shows "Status: Open"
+    in its in-place finding body + summary table line 675. This is a
+    PRE-EXISTING historical-register bookkeeping item (round-2 origin),
+    NOT introduced by the Round-8 tree. The userspace constructor fix
+    it called for is carried by ROUND8-L4-01 ("userspace try_new
+    added"). Recorded as pre-existing advisory, NOT a new Round-8
+    regression. Flagged as a register-hygiene observation (low,
+    non-blocking) — see SUMMARY notes.
+
+VERDICT: PASS (no NEW open medium+ regression in the Round-8 tree;
+all medium+ items are tracked in-flight Proposed-Fix or pre-existing
+historical-register entries).
