@@ -165,6 +165,56 @@ weakened, no rule bent. **Phase 0 COMPLETE; Phase 1 (P1-C) may begin.**
 
 ---
 
+## Phase 1 — P1-C: chunked response trailers (C4)
+
+Plan-approved by lead (R5) with binding conditions PC-1 (decoder
+state-machine no-regression), PC-2 (coalesced trailer-remainder
+correctness), PC-3 (additive-only to the task-#6 file). Authored by
+builder-1, pushed `78bdaae2`. Independent verifier re-verification
+(author ≠ verifier) IN PROGRESS at `78bdaae2`.
+
+Design (h3_bridge.rs only for product; conn_actor untouched ⇒ R8
+preserved): `ChunkDecoder` gains `complete` (trailer-section + final
+CRLF consumed) distinct from `done` (zero-size chunk seen — keeps the
+P1-A unit tests valid); `parse_trailer_section` (RFC 9112 §7.1.2,
+`MAX_TRAILER_SECTION = 64 KiB` hard cap; no-colon / `:`-pseudo /
+oversized / EOF-mid-section ⇒ `RespAbort::ChunkedDecode` ⇒ Reset, never
+forwarded-as-complete — consistent with C3); coalesced + split + bare
+`0\r\n\r\n` handled (PC-2). `stream_h1_response` chunked arm emits ONE
+bounded final trailer-HEADERS `RespEvent::Bytes` (cap-accounted) after
+the last DATA, before `End`; CL/EOF arms byte-identical.
+`encode_h3_trailers_frame` is a deliberate ~3-line QPACK/frame
+duplication (vs forking the PROTO-2-12-locked `request_h3_upstream`) —
+accepted as the no-regression-safe choice, `TODO(future)` dedupe noted
+(carry-forward CF-DEDUP-1). Test: the `#[ignore]` r8 placeholder
+replaced with the real-wire `r8_chunked_response_trailers_delivered_to_h3_client`
+(3 sub-cases, binary 0xFF 00 80 bodies); additive-only to the task-#6
+file (PC-3).
+
+### Clippy-gate accounting (R2 — diagnosis corrected on evidence)
+
+builder-1 hit `clippy::while_let_loop` under the **narrower**
+`cargo clippy -p lb-quic --all-targets --all-features -- -D warnings`
+on the pre-existing verifier-authored `RespBody::Endless` probe loop.
+Initial lead suspicion was a Phase-0 verification gap (task-#9 claimed
+clippy clean). **The lead independently reproduced the EXACT R1 gate
+command** — `cargo clippy --all-targets --all-features -- -D warnings`
+(full workspace, no `-p`; the binding R1 wording) — at the Phase-0 tip
+`98f4ed12`: result **`R1_CLIPPY_EXIT=0`, CLEAN** (evidence
+`s5-evidence/clippy-recheck/r1-clippy-98f4ed12.txt`). Therefore the
+task-#9 verifier's clippy-clean claim is **CONFIRMED ACCURATE** for the
+binding R1 gate; there is **no Phase-0 verification-integrity defect**
+(earlier suspicion refuted on evidence per R2). The `-p lb-quic`-scoped
+error is a real but non-gating clippy false-positive (the lint's
+`while let` rewrite would drop the loop's essential post-match teardown
+probe — semantically wrong). Remediation: a tightly-scoped
+`#[allow(clippy::while_let_loop)]` + rationale on that pre-existing
+loop — zero behaviour/logic/assertion change, harmless hardening for
+the `-p`/toolchain-drift case, does not mask any other lint (verifier
+to confirm). Not a defect, not asterisked.
+
+---
+
 ## Open items (carry-forward — not asterisked, tracked)
 
 - **F-ESC-1** — multi-kernel (5.15/6.1/6.6) verifier-log CI lane
@@ -174,5 +224,8 @@ weakened, no rule bent. **Phase 0 COMPLETE; Phase 1 (P1-C) may begin.**
 - **S4-NUANCE-1** — benign: P1-A.1 early-Reset path acquires+discards
   one pooled conn (client bytes identical, smuggling-safe, untested
   path). Optional cheap cleanup, else carry.
-</content>
-</invoke>
+- **CF-DEDUP-1** (new, cosmetic) — `encode_h3_trailers_frame`
+  (h3_bridge.rs) duplicates ~3 lines of the QPACK/frame trailer encode
+  in `request_h3_upstream`; kept separate deliberately to protect the
+  PROTO-2-12 lock. Dedupe once both share a regression lock. Not a
+  defect.
