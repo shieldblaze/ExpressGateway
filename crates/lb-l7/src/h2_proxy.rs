@@ -28,6 +28,7 @@ use std::io;
 use std::net::SocketAddr;
 use std::pin::Pin;
 use std::sync::Arc;
+use std::task::{Context, Poll};
 
 use http_body_util::{BodyExt, Empty, Full, combinators::BoxBody};
 use hyper::body::{Bytes, Incoming as IncomingBody};
@@ -121,6 +122,140 @@ pub struct H2Proxy {
     /// binary; the counter logic itself runs whenever a registry is
     /// supplied (the proof test supplies its own).
     glitches_metrics: Option<Arc<lb_observability::MetricsRegistry>>,
+}
+
+/// F-SEC-1 (CVE-2023-44487-adjacent) — clean-close I/O wrapper that
+/// flushes the RFC 9113 §6.8 GOAWAY signal reliably on connection
+/// teardown.
+///
+/// Mechanism (auditor-2 A2-1): when hyper/h2's rapid-reset /
+/// local-error-reset mitigation trips, h2 queues a
+/// GOAWAY(PROTOCOL_ERROR), writes it to the socket via `codec.flush`,
+/// and then calls `AsyncWrite::poll_shutdown` on the underlying I/O
+/// (`framed_write::shutdown` = flush-then-poll_shutdown — the GOAWAY
+/// bytes are ALREADY on the wire by the time `poll_shutdown` runs).
+/// The defect: the abusive client is still mid-flood, so the kernel's
+/// receive buffer on the server side holds unconsumed inbound bytes
+/// (the client's RST_STREAM spam). Closing a TCP socket that still has
+/// unread inbound data makes the kernel emit an RST instead of a clean
+/// FIN (RFC 1122 / Linux behaviour); the client's TCP stack discards
+/// its ENTIRE receive buffer — including the GOAWAY that already
+/// arrived — upon receiving that RST, surfacing only `Io(BrokenPipe)`.
+/// Under scheduler starvation this is the common case (auditor-2: 6/48
+/// under induced contention, deterministic under heavier churn here).
+///
+/// The fix is structural and entirely server-side: before issuing the
+/// FIN in `poll_shutdown`, drain (read and discard) any pending inbound
+/// bytes to a bounded cap so the close is a clean FIN, not an RST. With
+/// no unread data the client's TCP stack does NOT discard its receive
+/// buffer, so the already-delivered GOAWAY survives and is decoded.
+/// This makes the GOAWAY delivery deterministic and scheduler-
+/// independent (directive D3): the drain is driven inside
+/// `poll_shutdown` itself (same task, same waker) with a hard byte cap
+/// so an unbounded inbound flood cannot delay teardown.
+struct CleanCloseIo<IO> {
+    inner: IO,
+    /// Remaining inbound bytes we are willing to drain during shutdown
+    /// before forcing the FIN regardless (hard bound — a wedged/flooding
+    /// client cannot delay teardown indefinitely).
+    drain_budget: usize,
+    /// Set once the pre-FIN drain has finished (cap hit, EOF, or no
+    /// more immediately-available data) so we do not re-drain on a
+    /// second `poll_shutdown` poll.
+    drained: bool,
+}
+
+impl<IO> CleanCloseIo<IO> {
+    /// 256 KiB: comfortably larger than any in-flight RST_STREAM /
+    /// HEADERS burst a client can have queued between the server
+    /// emitting GOAWAY and the FIN, yet a hard cap so a deliberate
+    /// post-GOAWAY flood cannot pin the worker. Drain is read-and-
+    /// discard only (no allocation growth beyond a fixed scratch
+    /// buffer) and is bounded by both this cap AND the surrounding
+    /// `total` connection-timeout budget hyper already enforces.
+    const DRAIN_CAP: usize = 256 * 1024;
+
+    fn new(inner: IO) -> Self {
+        Self {
+            inner,
+            drain_budget: Self::DRAIN_CAP,
+            drained: false,
+        }
+    }
+}
+
+impl<IO: AsyncRead + Unpin> AsyncRead for CleanCloseIo<IO> {
+    fn poll_read(
+        mut self: Pin<&mut Self>,
+        cx: &mut Context<'_>,
+        buf: &mut tokio::io::ReadBuf<'_>,
+    ) -> Poll<io::Result<()>> {
+        Pin::new(&mut self.inner).poll_read(cx, buf)
+    }
+}
+
+impl<IO: AsyncWrite + AsyncRead + Unpin> AsyncWrite for CleanCloseIo<IO> {
+    fn poll_write(
+        mut self: Pin<&mut Self>,
+        cx: &mut Context<'_>,
+        buf: &[u8],
+    ) -> Poll<io::Result<usize>> {
+        Pin::new(&mut self.inner).poll_write(cx, buf)
+    }
+
+    fn poll_flush(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<io::Result<()>> {
+        Pin::new(&mut self.inner).poll_flush(cx)
+    }
+
+    fn poll_shutdown(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<io::Result<()>> {
+        // F-SEC-1: drain pending inbound bytes BEFORE the FIN so the
+        // close is a clean FIN, not an RST — see `CleanCloseIo` doc.
+        // The GOAWAY has already been flushed to the socket by h2's
+        // `codec.shutdown` (flush precedes this poll_shutdown call).
+        if !self.drained {
+            let mut scratch = [0u8; 16 * 1024];
+            loop {
+                if self.drain_budget == 0 {
+                    break;
+                }
+                let cap = scratch.len().min(self.drain_budget);
+                let Some(slot) = scratch.get_mut(..cap) else {
+                    break;
+                };
+                let mut rb = tokio::io::ReadBuf::new(slot);
+                match Pin::new(&mut self.inner).poll_read(cx, &mut rb) {
+                    Poll::Ready(Ok(())) => {
+                        let n = rb.filled().len();
+                        if n == 0 {
+                            // Clean EOF — peer's write half closed; no
+                            // unread data remains, safe to FIN.
+                            break;
+                        }
+                        self.drain_budget -= n;
+                        // Keep draining; loop again.
+                    }
+                    Poll::Ready(Err(_)) => {
+                        // Read error (e.g. reset already) — nothing more
+                        // we can usefully drain; proceed to shutdown.
+                        break;
+                    }
+                    Poll::Pending => {
+                        // No more inbound data immediately available.
+                        // The kernel receive buffer is drained for now;
+                        // a clean FIN will not trigger RST. Proceed
+                        // (do NOT return Pending — we must not wait on
+                        // a possibly-silent client; the GOAWAY is
+                        // already on the wire and the receive buffer is
+                        // empty, which is exactly the clean-FIN
+                        // precondition).
+                        break;
+                    }
+                }
+            }
+            self.drained = true;
+        }
+        Pin::new(&mut self.inner).poll_shutdown(cx)
+    }
 }
 
 impl H2Proxy {
@@ -482,7 +617,13 @@ impl H2Proxy {
         // advertisement so clients can bootstrap WebSocket over H2. Safe
         // to always enable: clients that do not use it pay no cost.
         builder.enable_connect_protocol();
-        let conn = builder.serve_connection(TokioIo::new(io), svc);
+        // F-SEC-1: wrap `io` so connection teardown drains pending
+        // inbound bytes before the FIN, guaranteeing the queued RFC
+        // 9113 §6.8 GOAWAY (already written by h2 before poll_shutdown)
+        // is delivered with a clean FIN instead of being discarded by
+        // an RST-on-unread-data close. Deterministic, scheduler-
+        // independent (directive D3).
+        let conn = builder.serve_connection(TokioIo::new(CleanCloseIo::new(io)), svc);
         tokio::pin!(conn);
         // Wait on the connection-level token: cancelled by either the
         // parent `cancel` (SIGTERM drain — propagates parent→child) or
@@ -1713,6 +1854,194 @@ mod tests {
         assert!(
             r.is_ok(),
             "serve_connection_with_cancel hung past 5 s deadline — graceful shutdown is broken"
+        );
+    }
+
+    // ── F-SEC-1 DETERMINISTIC gate regression (directive D3) ──────────
+    //
+    // The wire-level rapid-reset defect (auditor-2 A2-1) is, by its
+    // nature, a scheduler race (auditor-2: 6/48 only under maximal
+    // starvation) — a wire-observation test for it CANNOT be a
+    // deterministic gate per R1/D3 (the under-churn variant is kept as
+    // CORROBORATING evidence in tests/h2_rapid_reset_goaway_under_load.rs,
+    // exactly the D2 pattern). The STRUCTURAL property the fix
+    // introduces, however, is fully deterministic and is what
+    // guarantees the queued GOAWAY survives teardown: `CleanCloseIo`
+    // MUST drain all pending inbound bytes BEFORE delegating the FIN to
+    // the inner socket, so a close on a socket with unread data (which
+    // makes the kernel emit an RST that discards the peer's
+    // already-received GOAWAY) cannot happen. These tests assert that
+    // contract directly and deterministically.
+
+    use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+
+    /// Arc-shared mock IO (interior-mutable via atomics) so the test
+    /// can inspect call ordering after `CleanCloseIo` consumes it.
+    /// Yields `to_deliver` inbound bytes in `chunk`-sized reads, then a
+    /// clean EOF; records whether the inner `poll_shutdown` (→ FIN) was
+    /// delegated while inbound data was still unread (the RST-causing
+    /// defect precondition).
+    struct ProbeInner {
+        to_deliver: usize,
+        chunk: usize,
+        delivered: AtomicUsize,
+        eof_seen: AtomicBool,
+        shutdown_called: AtomicBool,
+        shutdown_called_with_undrained: AtomicBool,
+    }
+
+    #[derive(Clone)]
+    struct Probe(std::sync::Arc<ProbeInner>);
+
+    impl Probe {
+        fn new(to_deliver: usize, chunk: usize) -> Self {
+            Probe(std::sync::Arc::new(ProbeInner {
+                to_deliver,
+                chunk,
+                delivered: AtomicUsize::new(0),
+                eof_seen: AtomicBool::new(false),
+                shutdown_called: AtomicBool::new(false),
+                shutdown_called_with_undrained: AtomicBool::new(false),
+            }))
+        }
+    }
+
+    impl AsyncRead for Probe {
+        fn poll_read(
+            self: Pin<&mut Self>,
+            _cx: &mut Context<'_>,
+            buf: &mut tokio::io::ReadBuf<'_>,
+        ) -> Poll<io::Result<()>> {
+            let s = &self.0;
+            let done = s.delivered.load(Ordering::SeqCst);
+            if done >= s.to_deliver {
+                s.eof_seen.store(true, Ordering::SeqCst);
+                return Poll::Ready(Ok(())); // 0 bytes = clean EOF
+            }
+            let n = s.chunk.min(s.to_deliver - done).min(buf.remaining());
+            let zeros = vec![0u8; n];
+            buf.put_slice(&zeros);
+            s.delivered.fetch_add(n, Ordering::SeqCst);
+            Poll::Ready(Ok(()))
+        }
+    }
+
+    impl AsyncWrite for Probe {
+        fn poll_write(
+            self: Pin<&mut Self>,
+            _cx: &mut Context<'_>,
+            b: &[u8],
+        ) -> Poll<io::Result<usize>> {
+            Poll::Ready(Ok(b.len()))
+        }
+        fn poll_flush(self: Pin<&mut Self>, _cx: &mut Context<'_>) -> Poll<io::Result<()>> {
+            Poll::Ready(Ok(()))
+        }
+        fn poll_shutdown(self: Pin<&mut Self>, _cx: &mut Context<'_>) -> Poll<io::Result<()>> {
+            let s = &self.0;
+            s.shutdown_called.store(true, Ordering::SeqCst);
+            if s.delivered.load(Ordering::SeqCst) < s.to_deliver {
+                s.shutdown_called_with_undrained
+                    .store(true, Ordering::SeqCst);
+            }
+            Poll::Ready(Ok(()))
+        }
+    }
+
+    /// DETERMINISTIC gate (D3): `CleanCloseIo::poll_shutdown` MUST drain
+    /// all pending inbound bytes before issuing the FIN, so the close is
+    /// a clean FIN and the peer's already-received GOAWAY is not
+    /// RST-discarded. Without the wrapper hyper calls `poll_shutdown`
+    /// directly on the raw socket with the flood still unread -> kernel
+    /// RST -> the peer discards the queued GOAWAY -> BrokenPipe. This
+    /// asserts the structural fix directly, zero scheduler dependence.
+    #[tokio::test(flavor = "current_thread")]
+    async fn clean_close_io_drains_inbound_before_fin() {
+        use tokio::io::AsyncWriteExt;
+        // 200 KiB pending inbound flood, under the 256 KiB DRAIN_CAP,
+        // delivered in 4 KiB reads then EOF.
+        let probe = Probe::new(200 * 1024, 4096);
+        let mut io = CleanCloseIo::new(probe.clone());
+        Pin::new(&mut io).shutdown().await.unwrap();
+
+        let s = &probe.0;
+        assert!(
+            s.shutdown_called.load(Ordering::SeqCst),
+            "inner poll_shutdown was never delegated"
+        );
+        assert!(
+            s.eof_seen.load(Ordering::SeqCst),
+            "F-SEC-1: CleanCloseIo did not drain inbound to EOF before FIN"
+        );
+        assert!(
+            !s.shutdown_called_with_undrained.load(Ordering::SeqCst),
+            "F-SEC-1 DEFECT: FIN issued while inbound data still unread — \
+             kernel would RST and the peer's queued RFC 9113 §6.8 GOAWAY \
+             would be discarded"
+        );
+        assert_eq!(
+            s.delivered.load(Ordering::SeqCst),
+            200 * 1024,
+            "all pending inbound bytes must be drained pre-FIN"
+        );
+    }
+
+    /// DETERMINISTIC (D3): the drain is HARD-BOUNDED by `DRAIN_CAP` so a
+    /// deliberate unbounded post-GOAWAY inbound flood cannot pin the
+    /// worker — teardown still completes. Proves the bound, not just the
+    /// happy path (no unbounded-drain regression, mirrors the D1 cap
+    /// discipline applied to F-COR-1).
+    #[tokio::test(flavor = "current_thread")]
+    async fn clean_close_io_drain_is_bounded() {
+        use tokio::io::AsyncWriteExt;
+        // Endless inbound source: never EOFs. The drain MUST still
+        // terminate at DRAIN_CAP and let the FIN proceed.
+        struct EndlessIo {
+            read_total: AtomicUsize,
+        }
+        impl AsyncRead for EndlessIo {
+            fn poll_read(
+                self: Pin<&mut Self>,
+                _cx: &mut Context<'_>,
+                buf: &mut tokio::io::ReadBuf<'_>,
+            ) -> Poll<io::Result<()>> {
+                let n = buf.remaining().min(8192);
+                let zeros = vec![0u8; n];
+                buf.put_slice(&zeros);
+                self.read_total.fetch_add(n, Ordering::SeqCst);
+                Poll::Ready(Ok(()))
+            }
+        }
+        impl AsyncWrite for EndlessIo {
+            fn poll_write(
+                self: Pin<&mut Self>,
+                _cx: &mut Context<'_>,
+                b: &[u8],
+            ) -> Poll<io::Result<usize>> {
+                Poll::Ready(Ok(b.len()))
+            }
+            fn poll_flush(self: Pin<&mut Self>, _cx: &mut Context<'_>) -> Poll<io::Result<()>> {
+                Poll::Ready(Ok(()))
+            }
+            fn poll_shutdown(self: Pin<&mut Self>, _cx: &mut Context<'_>) -> Poll<io::Result<()>> {
+                Poll::Ready(Ok(()))
+            }
+        }
+        let mut io = CleanCloseIo::new(EndlessIo {
+            read_total: AtomicUsize::new(0),
+        });
+        // Must complete (not hang) despite the endless inbound source.
+        tokio::time::timeout(
+            std::time::Duration::from_secs(5),
+            Pin::new(&mut io).shutdown(),
+        )
+        .await
+        .expect("F-SEC-1: bounded drain must not hang on an endless inbound flood")
+        .unwrap();
+        // Drained at most DRAIN_CAP (+ one final chunk granularity).
+        assert!(
+            io.drain_budget == 0,
+            "drain must consume exactly up to DRAIN_CAP then stop"
         );
     }
 }
