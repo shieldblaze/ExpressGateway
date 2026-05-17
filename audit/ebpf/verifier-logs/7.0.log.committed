@@ -1,0 +1,35 @@
+# REAL eBPF verifier baseline — kernel 7.0.0-1004-aws
+#
+# F-ESC-1 (foundation audit). This is a REAL capture, NOT the
+# HARNESS-CAPTURED-PENDING-CI-RERUN placeholder. Method: the
+# shipped crates/lb-l4-xdp/src/lb_xdp.bin was loaded via the
+# proven aya path (XdpLoader::load_from_bytes_pinned +
+# kernel_load -> a genuine BPF_PROG_LOAD on the running
+# kernel; libbpf/bpftool CANNOT load this legacy-map ELF, so
+# aya is the only real loader — D-1 proved this path). The
+# counters below are the kernel verifier's own outputs read
+# back via aya ProgramInfo + bpftool prog show on the loaded
+# prog id. No attach was performed (the load is what runs the
+# verifier).
+#
+capture_method   = aya XdpLoader::kernel_load (real BPF_PROG_LOAD) + aya ProgramInfo + bpftool prog show id <id>
+capture_timestamp = 2026-05-17T12:13:06Z
+uname            = Linux ip-172-31-28-187 7.0.0-1004-aws #4-Ubuntu SMP PREEMPT Mon Apr 13 13:14:24 UTC 2026 x86_64 GNU/Linux
+kernel_release   = 7.0.0-1004-aws
+elf              = crates/lb-l4-xdp/src/lb_xdp.bin
+prog_name        = lb_xdp
+prog_id          = 78
+prog_tag         = 0x72c34ab7e4f44914
+verified_insns   = Some(9284)   # kernel verified_insns (None if pre-5.16; 7.0 reports it)
+size_translated  = Some(12800)   # xlated bytes
+size_jitted      = 7264   # jited bytes
+GPL license: ASSERTED (BPF_PROG_LOAD succeeded; the kernel rejects GPL-only helpers used by lb_xdp under a non-GPL license, so a successful real load is proof of the GPL declaration).
+
+## bpftool prog show id 78 (plain)
+78: xdp  name lb_xdp  tag 72c34ab7e4f44914  gpl
+	loaded_at 2026-05-17T12:13:06+0000  uid 0
+	xlated 12800B  jited 7264B  memlock 16384B  map_ids 57,56,55,50,52,51,54,53
+	btf_id 119
+
+## bpftool prog show id 78 --json
+{"id":78,"type":"xdp","name":"lb_xdp","tag":"72c34ab7e4f44914","gpl_compatible":true,"loaded_at":1779019986,"uid":0,"orphaned":false,"bytes_xlated":12800,"jited":true,"bytes_jited":7264,"bytes_memlock":16384,"map_ids":[57,56,55,50,52,51,54,53],"btf_id":119}
