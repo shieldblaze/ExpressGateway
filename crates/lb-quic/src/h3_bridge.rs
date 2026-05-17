@@ -893,6 +893,29 @@ pub fn encode_h3_data_frame(payload: &[u8]) -> Result<Bytes, String> {
     .map_err(|e| format!("h3 data frame: {e}"))
 }
 
+/// SESSION 4 / P1-C (C4): encode the RFC 9114 §4.1 trailing field
+/// section as a post-DATA H3 HEADERS frame, carrying the upstream H1
+/// response's chunked trailer fields.
+///
+/// The QPACK + frame encode is intentionally identical to the
+/// request-side trailer encode in [`request_h3_upstream`]
+/// (`QpackEncoder::encode` → `H3Frame::Headers`). The ~3-line
+/// duplication is a deliberate no-regression trade-off: forking a
+/// shared helper into the PROTO-2-12-locked `request_h3_upstream` would
+/// risk that path's byte-for-byte wire identity for no behavioural
+/// gain. TODO(future): dedupe once both paths share a regression lock.
+///
+/// # Errors
+///
+/// Surfaces a string-formatted error if QPACK encoding or the H3 frame
+/// encoder reject the inputs.
+pub fn encode_h3_trailers_frame(trailers: &[(String, String)]) -> Result<Bytes, String> {
+    let header_block = QpackEncoder::new()
+        .encode(trailers)
+        .map_err(|e| format!("qpack trailer encode: {e}"))?;
+    encode_frame(&H3Frame::Headers { header_block }).map_err(|e| format!("h3 trailer frame: {e}"))
+}
+
 /// SESSION 4 / P1-A: response-body framing decided from the parsed
 /// upstream H1 response headers.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -921,31 +944,81 @@ struct ChunkDecoder {
     /// `Some(remaining)` while inside a chunk body; `None` while
     /// expecting the next chunk-size line.
     in_chunk: Option<usize>,
-    /// The zero-size chunk was seen — body complete (trailers, if any,
-    /// follow but are handled by P1-C, not here).
+    /// The zero-size chunk was seen — no more body payload follows. The
+    /// optional RFC 9112 §7.1.2 trailer section + the final CRLF are
+    /// still being consumed until [`Self::complete`].
     done: bool,
+    /// SESSION 4 / P1-C (C4): the zero-size chunk, the trailer section
+    /// (possibly empty), and the terminating CRLF were ALL consumed —
+    /// the chunked message is genuinely finished. The
+    /// [`stream_h1_response`] chunked loop exits on this (NOT `done`):
+    /// stopping at `done` would drop / mis-frame the trailer section.
+    complete: bool,
+    /// SESSION 4 / P1-C: decoded trailer fields (RFC 9112 §7.1.2
+    /// trailer section). Empty when the message had no trailers.
+    /// Taken once via [`Self::take_trailers`] for the post-DATA H3
+    /// trailing-HEADERS frame.
+    trailers: Vec<(String, String)>,
+    /// SESSION 4 / P1-C: bytes of the trailer section read so far,
+    /// awaiting its terminating blank line. Hard-bounded by
+    /// [`MAX_TRAILER_SECTION`] (a hostile/oversized trailer block must
+    /// not grow memory without limit — mirrors the request-side
+    /// `MAX_TRAILER_BLOCK_BYTES` ceiling rationale).
+    trailer_buf: Vec<u8>,
 }
 
 /// Max bytes a chunk-size line (`<hex>[;ext]\r\n`) may occupy before we
 /// reject it as malformed/hostile framing (smuggling guard, C3).
 const MAX_CHUNK_SIZE_LINE: usize = 256;
 
+/// SESSION 4 / P1-C (C4): max bytes the chunked trailer section
+/// (RFC 9112 §7.1.2 — the field lines after the `0\r\n` plus the
+/// terminating CRLF) may occupy before it is rejected as
+/// malformed/hostile framing ⇒ [`RespAbort::ChunkedDecode`]. 64 KiB is
+/// far above any realistic trailer section and mirrors the request-side
+/// trailer-block ceiling rationale (`h3_bridge.rs` ~:86-87).
+const MAX_TRAILER_SECTION: usize = 64 * 1024;
+
 impl ChunkDecoder {
-    const fn new() -> Self {
+    fn new() -> Self {
         Self {
             buf: Vec::new(),
             in_chunk: None,
             done: false,
+            complete: false,
+            trailers: Vec::new(),
+            trailer_buf: Vec::new(),
         }
     }
 
+    /// SESSION 4 / P1-C: take the decoded trailer fields (empty if the
+    /// chunked message carried no trailer section). Only meaningful
+    /// once [`Self::complete`] is set.
+    fn take_trailers(&mut self) -> Vec<(String, String)> {
+        std::mem::take(&mut self.trailers)
+    }
+
     /// Feed `input`, appending decoded payload to `out`. Returns
-    /// `Err(RespAbort::ChunkedDecode)` on ANY malformed framing.
+    /// `Err(RespAbort::ChunkedDecode)` on ANY malformed framing
+    /// (including a malformed trailer section — C3/C4 parity: a
+    /// truncated/forwarded body is NEVER presented as complete).
     fn feed(&mut self, input: &[u8], out: &mut Vec<u8>) -> Result<(), RespAbort> {
         self.buf.extend_from_slice(input);
         loop {
-            if self.done {
+            if self.complete {
+                // The trailer section + final CRLF were consumed: the
+                // message is genuinely finished. Any further bytes are
+                // not part of this response.
                 return Ok(());
+            }
+            if self.done {
+                // The zero-size chunk was seen; the only thing left is
+                // the RFC 9112 §7.1.2 trailer section (possibly empty)
+                // terminated by a blank CRLF line. PC-2: this consumes
+                // from `self.buf`, so a trailer section coalesced into
+                // the SAME read as the `0\r\n` size line is parsed
+                // here, not only subsequently-read socket bytes.
+                return self.parse_trailer_section();
             }
             match self.in_chunk {
                 Some(0) => {
@@ -998,17 +1071,80 @@ impl ChunkDecoder {
                         usize::from_str_radix(hex, 16).map_err(|_| RespAbort::ChunkedDecode)?;
                     self.buf.drain(..nl + 2);
                     if size == 0 {
-                        // Zero-size terminator. Any non-CRLF junk
-                        // immediately after (before an optional trailer
-                        // section / final CRLF) is a smuggling signal;
-                        // P1-C owns the trailer-section parse, so here
-                        // we only mark the body complete.
+                        // Zero-size terminator: no more body payload.
+                        // SESSION 4 / P1-C (C4): the optional trailer
+                        // section + final CRLF still follow — do NOT
+                        // return here; loop back so a trailer section
+                        // coalesced into THIS read (after the `0\r\n`
+                        // size line, now drained from `self.buf`) is
+                        // consumed by `parse_trailer_section` in the
+                        // same `feed` call (PC-2 correctness).
                         self.done = true;
-                        return Ok(());
+                        continue;
                     }
                     self.in_chunk = Some(size);
                 }
             }
+        }
+    }
+
+    /// SESSION 4 / P1-C (C4): parse the RFC 9112 §7.1.2 trailer section
+    /// — zero or more `field-line CRLF` then a terminating empty CRLF
+    /// line — that follows the zero-size chunk. Called only while
+    /// `self.done && !self.complete`.
+    ///
+    /// Consumes from `self.buf` into the bounded `self.trailer_buf` so a
+    /// trailer section split across reads (or coalesced with the
+    /// `0\r\n` size line, PC-2) parses identically. On the terminating
+    /// blank line sets `self.complete` and decodes the accumulated
+    /// fields. ANY malformed input ⇒ [`RespAbort::ChunkedDecode`]
+    /// (C3/C4 parity — never a truncated/forwarded body as complete):
+    ///   * a field line with no `:` (e.g. junk after the terminator),
+    ///   * a `:`-prefixed pseudo-header name (RFC 9114 §4.3, mirrors
+    ///     the request-side body-trailer guard),
+    ///   * an empty field name,
+    ///   * a trailer section exceeding [`MAX_TRAILER_SECTION`].
+    fn parse_trailer_section(&mut self) -> Result<(), RespAbort> {
+        loop {
+            // Move available bytes into the bounded trailer buffer.
+            if !self.buf.is_empty() {
+                if self.trailer_buf.len() + self.buf.len() > MAX_TRAILER_SECTION {
+                    return Err(RespAbort::ChunkedDecode);
+                }
+                self.trailer_buf.append(&mut self.buf);
+            }
+            let Some(nl) = self.trailer_buf.windows(2).position(|w| w == b"\r\n") else {
+                // No complete line yet. Bound the partial accumulation
+                // (a never-terminated trailer section is hostile).
+                if self.trailer_buf.len() > MAX_TRAILER_SECTION {
+                    return Err(RespAbort::ChunkedDecode);
+                }
+                return Ok(());
+            };
+            if nl == 0 {
+                // Empty line: end of the trailer section.
+                self.trailer_buf.drain(..2);
+                self.complete = true;
+                return Ok(());
+            }
+            let line = self.trailer_buf.get(..nl).ok_or(RespAbort::ChunkedDecode)?;
+            let line = std::str::from_utf8(line).map_err(|_| RespAbort::ChunkedDecode)?;
+            // A trailer field line MUST be `name: value`. No `:` (junk
+            // after the zero-size terminator, e.g. the C3 smuggling
+            // case) ⇒ malformed framing.
+            let (name, value) = line.split_once(':').ok_or(RespAbort::ChunkedDecode)?;
+            let name = name.trim().to_ascii_lowercase();
+            if name.is_empty() {
+                return Err(RespAbort::ChunkedDecode);
+            }
+            // RFC 9114 §4.3: a trailer section MUST NOT contain
+            // pseudo-header fields. Mirrors the request-side guard
+            // (`feed_body` H3 trailer parsing).
+            if name.starts_with(':') {
+                return Err(RespAbort::ChunkedDecode);
+            }
+            self.trailers.push((name, value.trim().to_owned()));
+            self.trailer_buf.drain(..nl + 2);
         }
     }
 }
@@ -1237,7 +1373,13 @@ pub async fn stream_h1_response(
                     emit_data!(&d);
                 }
             }
-            while !dec.done {
+            // SESSION 4 / P1-C (C4): loop until `complete` (zero-size
+            // chunk + trailer section + final CRLF all consumed), NOT
+            // merely `done` (zero-size chunk seen) — stopping at `done`
+            // would drop / mis-frame the trailer section. EOF before
+            // `complete` (terminator OR trailer section truncated) ⇒
+            // ChunkedDecode, never a forwarded truncated body.
+            while !dec.complete {
                 let nr = match stream.read(&mut rbuf).await {
                     Ok(n) => n,
                     Err(_) => {
@@ -1246,7 +1388,8 @@ pub async fn stream_h1_response(
                     }
                 };
                 if nr == 0 {
-                    // EOF before the chunked terminator.
+                    // EOF before the chunked terminator / before the
+                    // trailer section's terminating CRLF.
                     let _ = tx.send(RespEvent::Reset).await;
                     return Err(RespAbort::ChunkedDecode);
                 }
@@ -1258,6 +1401,30 @@ pub async fn stream_h1_response(
                     let d = std::mem::take(&mut decoded);
                     emit_data!(&d);
                 }
+            }
+            // SESSION 4 / P1-C (C4): trailing-HEADERS-after-DATA. The
+            // RFC 9112 §7.1.2 chunked trailer section maps to an
+            // RFC 9114 §4.1 H3 trailing HEADERS frame, emitted as ONE
+            // final `RespEvent::Bytes` AFTER the last DATA and BEFORE
+            // `End` (never before the body; never on an abort — any
+            // abort returned above without reaching here). Reuses the
+            // same QPACK/frame encode as `request_h3_upstream` (see
+            // `encode_h3_trailers_frame`'s no-regression note).
+            let trailers = dec.take_trailers();
+            if !trailers.is_empty() {
+                let trailer_frame = match encode_h3_trailers_frame(&trailers) {
+                    Ok(f) => f,
+                    Err(_) => {
+                        let _ = tx.send(RespEvent::Reset).await;
+                        return Err(RespAbort::UpstreamReset);
+                    }
+                };
+                total = total.saturating_add(trailer_frame.len());
+                if total > cap {
+                    let _ = tx.send(RespEvent::Reset).await;
+                    return Err(RespAbort::OverCap);
+                }
+                send!(tx, RespEvent::Bytes(trailer_frame));
             }
         }
         RespFraming::Eof => {
@@ -2654,5 +2821,85 @@ mod tests {
             .unwrap();
         assert!(dec.done);
         assert_eq!(out, b"body");
+    }
+
+    /// SESSION 4 / P1-C (C4): the RFC 9112 §7.1.2 trailer-section
+    /// parse. `done` (zero-size chunk seen) is distinct from `complete`
+    /// (trailer section + terminating CRLF consumed); the producer
+    /// loops on `complete`. PC-2: a trailer section coalesced into the
+    /// SAME feed as the `0\r\n` size line parses identically to one
+    /// split across feeds.
+    #[test]
+    fn chunk_decoder_parses_trailer_section_c4() {
+        // (a) coalesced: `0\r\n<fields>\r\n` in one feed.
+        let mut d = ChunkDecoder::new();
+        let mut o = Vec::new();
+        d.feed(
+            b"3\r\nabc\r\n0\r\nx-checksum: deadbeef\r\nx-two: v2\r\n\r\n",
+            &mut o,
+        )
+        .unwrap();
+        assert!(d.done && d.complete, "trailer section consumed");
+        assert_eq!(o, b"abc");
+        assert_eq!(
+            d.take_trailers(),
+            vec![
+                ("x-checksum".to_string(), "deadbeef".to_string()),
+                ("x-two".to_string(), "v2".to_string()),
+            ]
+        );
+
+        // (b) split across feeds: size line, fields and the terminating
+        //     CRLF in separate feeds ⇒ identical decoded outcome.
+        let mut d = ChunkDecoder::new();
+        let mut o = Vec::new();
+        d.feed(b"3\r\nabc\r\n0\r\n", &mut o).unwrap();
+        assert!(d.done && !d.complete, "awaiting trailer section");
+        d.feed(b"x-checksum: dead", &mut o).unwrap();
+        assert!(!d.complete);
+        d.feed(b"beef\r\n", &mut o).unwrap();
+        d.feed(b"\r\n", &mut o).unwrap();
+        assert!(d.complete);
+        assert_eq!(o, b"abc");
+        assert_eq!(
+            d.take_trailers(),
+            vec![("x-checksum".to_string(), "deadbeef".to_string())]
+        );
+
+        // (c) no trailer section: bare `0\r\n\r\n` ⇒ complete, empty.
+        let mut d = ChunkDecoder::new();
+        let mut o = Vec::new();
+        d.feed(b"3\r\nabc\r\n0\r\n\r\n", &mut o).unwrap();
+        assert!(d.complete);
+        assert_eq!(o, b"abc");
+        assert!(d.take_trailers().is_empty());
+
+        // (d) C3/C4 parity — junk (a no-colon line) after the
+        //     zero-size terminator is NOT a valid trailer field ⇒
+        //     ChunkedDecode, never accepted/forwarded.
+        let mut d = ChunkDecoder::new();
+        assert_eq!(
+            d.feed(b"3\r\nabc\r\n0\r\nthis-is-junk\r\n\r\n", &mut Vec::new()),
+            Err(RespAbort::ChunkedDecode)
+        );
+
+        // (e) a `:`-prefixed pseudo-header in the trailer section is
+        //     rejected (RFC 9114 §4.3).
+        let mut d = ChunkDecoder::new();
+        assert_eq!(
+            d.feed(b"0\r\n:status: 200\r\n\r\n", &mut Vec::new()),
+            Err(RespAbort::ChunkedDecode)
+        );
+
+        // (f) an oversized trailer section is rejected (smuggling
+        //     guard, MAX_TRAILER_SECTION).
+        let mut d = ChunkDecoder::new();
+        let mut huge = Vec::from(&b"0\r\n"[..]);
+        huge.extend_from_slice(b"x-big: ");
+        huge.extend(std::iter::repeat_n(b'A', MAX_TRAILER_SECTION + 16));
+        assert_eq!(
+            d.feed(&huge, &mut Vec::new()),
+            Err(RespAbort::ChunkedDecode)
+        );
     }
 }

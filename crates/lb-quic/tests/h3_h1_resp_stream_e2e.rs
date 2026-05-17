@@ -197,6 +197,19 @@ enum RespBody {
         body: Vec<u8>,
         chunk_sizes: Vec<usize>,
     },
+    /// SESSION 4 / P1-C (R8/C4): `Transfer-Encoding: chunked` body with
+    /// an RFC 9112 §7.1.2 trailer section after the zero-size chunk.
+    /// `coalesce` controls whether the `0\r\n`, the trailer fields and
+    /// the terminating CRLF are written in ONE socket write (PC-2
+    /// coalesced-remainder) or split across separate writes (PC-2
+    /// split-across-reads). Empty `trailers` ⇒ a bare `0\r\n\r\n`
+    /// terminator (no spurious trailing HEADERS expected).
+    ChunkedWithTrailers {
+        body: Vec<u8>,
+        chunk_sizes: Vec<usize>,
+        trailers: Vec<(String, String)>,
+        coalesce: bool,
+    },
     /// EOF-delimited: no CL, no TE, `Connection: close`; body then the
     /// socket is shut (length unknown ⇒ client relies on FIN).
     EofDelimited(Vec<u8>),
@@ -296,6 +309,53 @@ async fn spawn_resp_backend(
                 let _ = sock.write_all(b"0\r\n\r\n").await;
                 let _ = sock.shutdown().await;
             }
+            RespBody::ChunkedWithTrailers {
+                body,
+                chunk_sizes,
+                trailers,
+                coalesce,
+            } => {
+                let head = format!(
+                    "HTTP/1.1 {UPSTREAM_STATUS} OK\r\nTransfer-Encoding: chunked\r\nConnection: close\r\n\r\n"
+                );
+                let _ = sock.write_all(head.as_bytes()).await;
+                if let Some(n) = &stall {
+                    n.notified().await;
+                }
+                let mut off = 0;
+                for sz in chunk_sizes {
+                    let end = (off + sz).min(body.len());
+                    let piece = &body[off..end];
+                    let _ = sock
+                        .write_all(format!("{:x}\r\n", piece.len()).as_bytes())
+                        .await;
+                    let _ = sock.write_all(piece).await;
+                    let _ = sock.write_all(b"\r\n").await;
+                    off = end;
+                }
+                // Zero-size chunk + RFC 9112 §7.1.2 trailer section +
+                // terminating CRLF. `coalesce` decides whether they are
+                // one write (PC-2 coalesced-remainder, parsed from the
+                // SAME read as the `0\r\n` size line) or split across
+                // writes (PC-2 split-across-reads).
+                let mut tail = Vec::from(&b"0\r\n"[..]);
+                for (n, v) in &trailers {
+                    tail.extend_from_slice(format!("{n}: {v}\r\n").as_bytes());
+                }
+                tail.extend_from_slice(b"\r\n");
+                if coalesce {
+                    let _ = sock.write_all(&tail).await;
+                } else {
+                    // Split so the size line, the trailer fields and
+                    // the terminating CRLF arrive in separate reads.
+                    for byte in &tail {
+                        let _ = sock.write_all(std::slice::from_ref(byte)).await;
+                        let _ = sock.flush().await;
+                        tokio::time::sleep(Duration::from_millis(1)).await;
+                    }
+                }
+                let _ = sock.shutdown().await;
+            }
             RespBody::EofDelimited(b) => {
                 let head = format!("HTTP/1.1 {UPSTREAM_STATUS} OK\r\nConnection: close\r\n\r\n");
                 let _ = sock.write_all(head.as_bytes()).await;
@@ -370,6 +430,15 @@ async fn spawn_resp_backend(
                 );
                 let _ = sock.write_all(head.as_bytes()).await;
                 let chunk = vec![0x5Au8; 32 * 1024];
+                // SESSION 4 / P1-C note (NOT a P1-C logic change): this
+                // lint is PRE-EXISTING at base HEAD 98f4ed12 (proven via
+                // git-stash + clippy at clean HEAD), not introduced by
+                // P1-C. The clippy `while let Ok(()) = write_all` rewrite
+                // would DROP the essential post-match teardown probe
+                // below (the 1 ms `sock.read(&probe)` that detects the
+                // proxy closing its read half) — semantically wrong. No
+                // test logic / assertion / ordering is changed.
+                #[allow(clippy::while_let_loop)]
                 loop {
                     match sock.write_all(&chunk).await {
                         Ok(()) => {
@@ -396,7 +465,7 @@ async fn spawn_resp_backend(
 }
 
 /// Outcome the FIN-aware response client driver reports.
-#[derive(Debug)]
+#[derive(Debug, Default)]
 struct ClientOutcome {
     status: Option<u16>,
     body: Vec<u8>,
@@ -404,6 +473,10 @@ struct ClientOutcome {
     fin: bool,
     /// `Some(code)` if the proxy RESET_STREAM'd us (R5/R6 abort path).
     reset_code: Option<u64>,
+    /// SESSION 4 / P1-C (R8/C4): fields of the post-DATA trailing
+    /// HEADERS frame (RFC 9114 §4.1), empty when the response carried
+    /// no trailer section. Additive — existing tests ignore it.
+    trailers: Vec<(String, String)>,
 }
 
 /// FIN-aware H3 response client driver.
@@ -453,6 +526,9 @@ async fn drive_h3_response_client(
     let mut fin = false;
     let mut reset_code: Option<u64> = None;
     let mut cancelled = false;
+    // SESSION 4 / P1-C (R8/C4): a post-DATA HEADERS frame (no `:status`)
+    // is the RFC 9114 §4.1 trailing field section.
+    let mut trailers: Vec<(String, String)> = Vec::new();
 
     loop {
         if tokio::time::Instant::now() >= deadline {
@@ -473,6 +549,7 @@ async fn drive_h3_response_client(
                     body,
                     fin,
                     reset_code,
+                    trailers,
                 });
             }
             return Err(format!(
@@ -530,10 +607,17 @@ async fn drive_h3_response_client(
                         let hdrs = QpackDecoder::new()
                             .decode(&header_block)
                             .map_err(|e| format!("qpack decode: {e}"))?;
-                        for (n, v) in hdrs {
-                            if n == ":status" {
-                                status = Some(v.parse().map_err(|_| "status".to_string())?);
+                        if hdrs.iter().any(|(n, _)| n == ":status") {
+                            for (n, v) in hdrs {
+                                if n == ":status" {
+                                    status = Some(v.parse().map_err(|_| "status".to_string())?);
+                                }
                             }
+                        } else {
+                            // SESSION 4 / P1-C (R8/C4): a post-DATA
+                            // HEADERS frame with no `:status` is the
+                            // RFC 9114 §4.1 trailing field section.
+                            trailers.extend(hdrs);
                         }
                     }
                     Ok((H3Frame::Data { payload }, c)) => {
@@ -565,6 +649,7 @@ async fn drive_h3_response_client(
                 body,
                 fin,
                 reset_code,
+                trailers,
             });
         }
 
@@ -735,6 +820,7 @@ async fn drive_h3_response_client_stalled(
                     body,
                     fin,
                     reset_code,
+                    trailers: Vec::new(),
                 });
             }
             return Err(format!(
@@ -842,6 +928,7 @@ async fn drive_h3_response_client_stalled(
                 body,
                 fin,
                 reset_code,
+                trailers: Vec::new(),
             });
         }
 
@@ -1691,6 +1778,120 @@ fn c3_unit_supplement_documents_coverage() {
     // explicit and grep-able.
 }
 
+// --------------------------------------------------------------------
+// R8 — P1-C (C4): an upstream chunked response that carries an
+// RFC 9112 §7.1.2 trailer section is delivered to the H3 client as a
+// post-DATA RFC 9114 §4.1 trailing HEADERS frame, AFTER a
+// byte-identical binary body and BEFORE a clean FIN. Real wire:
+// QuicListener → router → conn_actor → h3_bridge → real H1 backend.
+//
+// PROTO-2-12 no-regression is locked separately by the unchanged
+// `h3_h1_trailers_resp_e2e.rs` pc1/pc2 + the `request_h3_upstream`
+// H3-upstream trailer path (this new H1-channel path never touches
+// them). The Content-Length / EOF framings emit NO trailer frame —
+// R1/R4 already prove those stay byte-identical; this test additionally
+// asserts the no-trailer chunked sub-case produces NO spurious empty
+// trailing HEADERS.
+// --------------------------------------------------------------------
+
+/// Drive one chunked-with-trailers scenario end-to-end and return the
+/// FIN-aware client outcome (status + binary body + decoded trailers).
+async fn run_r8_scenario(body: RespBody) -> ClientOutcome {
+    let certs = generate_loopback_certs();
+    let (backend, backend_h) = spawn_resp_backend(body, None).await;
+    let (listener, server, _sd) = start_listener(&certs, backend).await;
+    let (conn, sock) = client_conn(server, &certs.ca);
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(60);
+    let out = drive_h3_response_client(conn, &sock, vec![], None, deadline).await;
+    let _ = tokio::time::timeout(Duration::from_secs(2), listener.shutdown()).await;
+    backend_h.abort();
+    out.expect("R8 e2e failed")
+}
+
 #[tokio::test]
-#[ignore = "UNBLOCKS at P1-C: PROTO-2-12 trailer no-regression is locked by h3_h1_trailers_resp_e2e.rs pc1/pc2"]
-async fn r8_trailers_no_regression_placeholder() {}
+async fn r8_chunked_response_trailers_delivered_to_h3_client() {
+    let expected = binary_body(60_000);
+    let trailers = vec![
+        ("x-checksum".to_string(), "abc123-DEADBEEF".to_string()),
+        ("x-trailer-two".to_string(), "second-value".to_string()),
+    ];
+
+    // (1) PC-2 coalesced: `0\r\n<trailer-fields>\r\n` arrives in ONE
+    //     backend write (parsed from the SAME read as the `0\r\n` size
+    //     line, not only subsequently-read socket bytes).
+    let out = run_r8_scenario(RespBody::ChunkedWithTrailers {
+        body: expected.clone(),
+        chunk_sizes: vec![1, 7, 4096, 8192, 1, 100, 99_999],
+        trailers: trailers.clone(),
+        coalesce: true,
+    })
+    .await;
+    assert_eq!(out.status, Some(UPSTREAM_STATUS));
+    assert!(
+        out.fin,
+        "R8 coalesced: clean FIN after the trailing HEADERS frame"
+    );
+    assert_eq!(
+        out.body, expected,
+        "R8 coalesced: body byte-identical (binary 0xFF/0x00/0x80)"
+    );
+    assert_eq!(
+        out.trailers, trailers,
+        "R8 coalesced: chunked trailer section delivered as the H3 \
+         trailing HEADERS frame, byte-identical"
+    );
+
+    // (2) PC-2 split-across-reads: the size line, trailer fields and
+    //     terminating CRLF arrive in separate reads — must parse to the
+    //     identical decoded outcome.
+    let out = run_r8_scenario(RespBody::ChunkedWithTrailers {
+        body: expected.clone(),
+        chunk_sizes: vec![8192, 8192, 43_616],
+        trailers: trailers.clone(),
+        coalesce: false,
+    })
+    .await;
+    assert_eq!(out.status, Some(UPSTREAM_STATUS));
+    assert!(out.fin, "R8 split: clean FIN after the trailing HEADERS");
+    assert_eq!(
+        out.body, expected,
+        "R8 split: body byte-identical across split-read trailer parse"
+    );
+    assert_eq!(
+        out.trailers, trailers,
+        "R8 split: trailer section byte-identical when split across reads"
+    );
+
+    // (3) Chunked WITHOUT a trailer section (`0\r\n\r\n`): the trailing
+    //     HEADERS frame is CONDITIONAL — no spurious empty trailer
+    //     frame, body byte-identical, clean FIN. (PC-2 also covers the
+    //     coalesced bare `0\r\n\r\n` terminator here.)
+    let out = run_r8_scenario(RespBody::ChunkedWithTrailers {
+        body: expected.clone(),
+        chunk_sizes: vec![4096, 55_904],
+        trailers: vec![],
+        coalesce: true,
+    })
+    .await;
+    assert_eq!(out.status, Some(UPSTREAM_STATUS));
+    assert!(out.fin, "R8 no-trailers: clean FIN");
+    assert_eq!(out.body, expected, "R8 no-trailers: body byte-identical");
+    assert!(
+        out.trailers.is_empty(),
+        "R8 no-trailers: a chunked response with NO trailer section \
+         MUST NOT produce a spurious trailing HEADERS frame"
+    );
+
+    // (4) No-regression assertion for the Content-Length framing: it
+    //     carries NO trailer section and therefore NO trailing HEADERS
+    //     frame (R1/R4 already lock CL byte-identity; this makes the
+    //     "trailer frame is chunked-only" contract explicit).
+    let out = run_r8_scenario(RespBody::ContentLength(expected.clone())).await;
+    assert_eq!(out.status, Some(UPSTREAM_STATUS));
+    assert!(out.fin, "R8 CL: clean FIN");
+    assert_eq!(out.body, expected, "R8 CL: body byte-identical");
+    assert!(
+        out.trailers.is_empty(),
+        "R8 CL: Content-Length framing carries no trailer frame"
+    );
+}
