@@ -3,9 +3,30 @@
 ROUND8-L4-10 captures the BPF verifier's output per supported LTS
 kernel. CI runs `scripts/verify-xdp.sh --kernel <KVER>` for each of:
 
-- `5.15.log.committed` — current LTS floor (`DEPLOYMENT.md §27`).
+- `5.15.log.committed` — current LTS floor (`DEPLOYMENT.md` Kernel floor).
 - `6.1.log.committed`  — current LTS.
 - `6.6.log.committed`  — current rolling LTS.
+- `7.0.log.committed`  — REAL baseline captured live on the audit
+  foundation-pass box (F-ESC-1): aya `ProgramInfo` kernel
+  verifier-derived counters + `bpftool prog show` on the loaded prog
+  id. This box runs kernel **7.0** which is OUTSIDE the official
+  5.15/6.1/6.6 matrix.
+
+### Kernel support window (F-DOC-1 / auditor-3 A-3)
+
+The aya-ebpf program uses **no BPF ring buffer and no kfuncs**, and
+its BTF/CO-RE relocations load cleanly, so the **effective verifier
+floor is ~5.15 LTS**. 5.15/6.1/6.6 are the officially-validated LTS
+window. Kernel **7.0 is validated live** (D-1 native ENA attach +
+this directory's real `7.0.log.committed`) but is **outside the
+official matrix**.
+
+> **OPEN R7 PRODUCT DECISION (not gate-blocking, not asterisked):**
+> whether to formally **extend the official verifier-baseline matrix
+> to 7.x** (and declare 7.x officially supported) is a product
+> decision for the owner — it is recorded here, not decided in the
+> audit. 7.0 itself is proven working; this item is only about
+> declaring/CI-pinning the wider 7.x window.
 
 The committed baselines are the load-bearing audit artefact: the
 script hard-fails (exit 2) if a baseline is absent, and hard-fails

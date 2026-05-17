@@ -33,7 +33,7 @@ Cross-compiling to `aarch64-unknown-linux-gnu` or `x86_64-unknown-linux-musl` wo
 ## Kernel floor
 
 - **Linux 5.1+** for `io_uring`. Verified at process start: `lb_io::Runtime::new()` logs `backend=io_uring` or `backend=epoll`. Older kernels silently fall back.
-- **Linux 5.15 LTS** or **6.1 LTS** for the XDP data plane (when Pillar 4b lands the loader integration). The aya-ebpf program's verifier constraints are tuned for those LTS kernels.
+- **Linux ≥ 5.15** (effective floor) for the XDP data plane. The aya-ebpf program uses neither BPF ring buffer nor kfuncs, and its BTF/CO-RE relocations load cleanly, so the effective verifier floor is ~5.15 LTS; 5.15 LTS / 6.1 LTS / 6.6 are the officially-validated LTS window (see `audit/ebpf/verifier-logs/`). The XDP data plane has additionally been **validated live on Linux 7.0** (audit foundation pass D-1: native ENA `xdpdrv` attach on `ens5`, full data path + state restore — see `audit/foundation-pass/d1-native-attach-result.md` and `audit/ebpf/verifier-logs/7.0.log.committed`). **7.x is NOT YET in the official verifier-baseline matrix**; whether to formally extend the supported/validated matrix to 7.x is an open R7 product decision recorded in `audit/ebpf/verifier-logs/README.md` (not gate-blocking; 7.0 itself is verified working).
 - **glibc ≥ 2.31** (or the musl static build).
 
 ## systemd unit (minimal)
