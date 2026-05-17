@@ -95,12 +95,19 @@ New in `h3_bridge.rs`, adjacent to `H3_BODY_CHANNEL_DEPTH`
 ```rust
 pub const H3_RESP_CHANNEL_DEPTH: usize = 8;        // mirrors H3_BODY_CHANNEL_DEPTH
 pub const H3_RESP_CHUNK_MAX: usize    = 8 * 1024;  // mirrors H3_BODY_CHUNK_MAX
+/// A `RespEvent::Bytes` carries a PRE-ENCODED H3 frame (HEADERS or
+/// DATA): a ≤`H3_RESP_CHUNK_MAX` payload PLUS a small frame header
+/// (type + length varints). This upper-bounds that header so the §1.5
+/// gauge OVER-estimates channel occupancy (never under — same
+/// soundness rule as the request gauge, `h3_bridge.rs:757-759`).
+pub const H3_FRAME_HDR_MAX: usize     = 16;
 ```
 
 Max in-flight response bytes the proxy retains ≈
-`H3_RESP_CHANNEL_DEPTH * H3_RESP_CHUNK_MAX` (channel) + ≤ one chunk in
-the progressive `StreamTx` + quiche's own flow-control-bounded send
-buffer. **Independent of total response size.** `MAX_RESPONSE_BODY_BYTES`
+`H3_RESP_CHANNEL_DEPTH * (H3_RESP_CHUNK_MAX + H3_FRAME_HDR_MAX)`
+(channel) + ≤ one chunk in the progressive `StreamTx` + quiche's own
+flow-control-bounded send buffer. **Independent of total response
+size.** `MAX_RESPONSE_BODY_BYTES`
 (`h3_bridge.rs:63`, 64 MiB) stays a SEPARATE total-size ceiling,
 explicitly NOT the memory-safety mechanism — its existing unit test
 (`read_h1_response_capped_rejects_over_cap_and_passes_under_cap`,
@@ -227,8 +234,9 @@ returning `Err(RespAbort)` (best-effort: on `ClientGone` the channel is
 already closed, so only the `Err` return applies — the actor already
 knows). builder-2's §1.4 actor-side handling sets the progressive
 `StreamTx` `reset` flag and `drain_streams_to_conn` issues
-`conn.stream_shutdown(sid, Shutdown::Write, <Q2 code>)`; the Reset path
-**never** transitions to the FIN branch.
+`conn.stream_shutdown(sid, Shutdown::Write, H3_INTERNAL_ERROR)` (Q2 —
+`0x0102`, see §1.4); the Reset path **never** transitions to the FIN
+branch.
 
 ### 1.3.3 No-regression contract (load-bearing)
 
@@ -293,7 +301,8 @@ matches the variant: `Buffered` runs the existing loop verbatim;
 `Progressive` drains `queue` front-to-back via `conn.stream_send(sid,
 &chunk, false)` (re-queueing the unsent tail on `Done`/partial), and
 then: if `reset` ⇒ `conn.stream_shutdown(sid, Shutdown::Write,
-<Q2 code>)` and drop the stream, **never FIN**; else if `ended` &&
+H3_INTERNAL_ERROR)` (Q2, `0x0102` — see below) and drop the stream,
+**never FIN**; else if `ended` &&
 `queue` empty ⇒ zero-length `stream_send(sid, &[], true)` to set FIN
 (same FIN mechanism as the legacy branch).
 
@@ -336,13 +345,46 @@ inline-400 (`:457`), `h3_to_h2_roundtrip` (`:466`), `h3_to_h3_roundtrip`
 `task_wait` (`:163-186`) / `StreamTx::new(Vec)` (`:206`) legacy path
 stay **exactly as-is**.
 
-**Q2 — RESET_STREAM error code (builder-2 fills this one line):**
-`[Q2 — builder-2: state the H3 error-code constant for
-conn.stream_shutdown(Write, …) on the Reset path — reuse the existing
-H3 cancel/internal-error constant already used by the codebase's
-stream_shutdown / the module that defines H3_NO_ERROR=0x0100
-(conn_actor.rs:327); give name + numeric value + source module; do NOT
-invent a new code.]`
+**Q2 — RESET_STREAM error code (RESOLVED — team-lead ruling, R6
+correctness; builder-2 owns this paragraph):** the Reset/abort path
+issues `conn.stream_shutdown(sid, Shutdown::Write, H3_INTERNAL_ERROR)`
+with a new named constant **`H3_INTERNAL_ERROR: u64 = 0x0102`**
+(RFC 9114 §8.1), added to the `conn_actor` module beside the existing
+`pub const H3_NO_ERROR: u64 = 0x0100` (`conn_actor.rs:56`) and exported
+from `lib.rs` alongside it.
+
+Resolution record: builder-2's grep of all of `crates/lb-quic`
+(src + tests) found **no reusable production cancel/internal-error
+constant** — the only production H3 app-error const is the *graceful*
+`H3_NO_ERROR = 0x0100` (`conn_actor.rs:56`, used by `conn.close` at
+`:327`, regression-locked by `h3_graceful_close.rs`), and the only
+`stream_shutdown(Write, code)` anywhere is a test-only literal `0x10`
+in `h3_h1_stream_body_errors_e2e.rs:516` simulating a *client* request
+reset (not a server response-abort code). The "reuse existing"
+instruction presupposed a reusable code that does not exist; using the
+RFC 9114 §8.1 *registered* codepoint is therefore the conformant
+choice, not an invented value (team-lead ruling).
+
+- **Reusing `H3_NO_ERROR` (0x0100) is REJECTED** as a correctness/
+  security defect: it signals clean completion, so a client/cache
+  seeing it on a RESET_STREAM could treat the partial body as a
+  complete response — the exact truncated-as-complete / cache-poisoning
+  hazard §1.4.6 exists to prevent.
+- **`H3_INTERNAL_ERROR` (0x0102), not `H3_REQUEST_CANCELLED`
+  (0x010C):** every abort cause on this path — upstream reset,
+  premature EOF before `Content-Length`, chunked-decode error,
+  over-`cap` ceiling — is a proxy/upstream-side failure to produce a
+  faithful complete response, which is precisely `H3_INTERNAL_ERROR`'s
+  semantics. `H3_REQUEST_CANCELLED` implies the *requester* cancelled,
+  which is the distinct client-cancel path — there the proxy does
+  **not** send RESET_STREAM, it stops reading the upstream and tears
+  the stream down (§1.4.6). One abort code keeps §1.4.6 uniform.
+- **Load-bearing test invariant:** on every abort path the H3 client
+  observes RESET_STREAM with a **non-`H3_NO_ERROR`** code (asserted
+  `== H3_INTERNAL_ERROR == 0x0102`) AND never a truncated body
+  presented as complete. The Phase 1 test plan's R5 (upstream reset)
+  and the over-cap / premature-EOF cases MUST explicitly assert the
+  non-`H3_NO_ERROR` code (see §2).
 
 ### How P1-B satisfies R8
 
