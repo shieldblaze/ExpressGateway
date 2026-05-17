@@ -112,6 +112,20 @@ struct BlockRow {
     first_safe: &'static str,
     /// Operator-facing reason incl. the bug-id link.
     reason: &'static str,
+    /// F-COR-7: `Some((major, minor))` = first kernel version at/above
+    /// which this driver's silent-drop window does NOT apply, used as
+    /// a driver+kernel fallback key when firmware is UNRESOLVED (some
+    /// drivers — notably `ena` on AWS — never report a firmware string
+    /// via `ethtool -i`, so the firmware-only key was permanently
+    /// dead and `drv_supported` fail-OPENed). The boundary is taken
+    /// directly from the row's own documented condition (NOT a new
+    /// fleet-wide product guess): the `ena` reason states the
+    /// silent-drop window is "pre-2024 kernels" — kernel 6.7 (Jan
+    /// 2024) is the first 2024 mainline line, so `(6, 7)` means
+    /// "kernel < 6.7 with this driver and unresolved firmware is the
+    /// known-bad combo; kernel >= 6.7 is NOT known-bad and stays
+    /// Allowed". `None` = no kernel fallback (firmware-only row).
+    bad_kernel_below: Option<(u8, u8)>,
 }
 
 /// ROUND8-L4-05 source-of-truth blocklist. Best-effort; the runtime
@@ -124,20 +138,53 @@ const BLOCKLIST: &[BlockRow] = &[
         reason: "mlx5_core firmware < 16.32.1010 silently drops XDP_REDIRECT/\
                  XDP_TX in DRV mode (aya#1193 / GHSA window). Force \
                  runtime.xdp_mode = \"skb\".",
+        // mlx5 reports firmware reliably; no kernel fallback needed.
+        bad_kernel_below: None,
     },
     BlockRow {
         driver: "ena",
         first_safe: "2.10.0",
         reason: "ena firmware < 2.10 on c5n/m5n silently drops native XDP \
                  in pre-2024 kernels. Force runtime.xdp_mode = \"skb\".",
+        // F-COR-7: ena never reports firmware via `ethtool -i` on AWS,
+        // so the firmware key alone is permanently dead. The row's own
+        // documented condition is "pre-2024 kernels"; kernel 6.7 (Jan
+        // 2024) is the first 2024 mainline line. So a kernel < 6.7 ena
+        // box with unresolved firmware IS the known-bad combo (now
+        // Refuse — the dead defence path is live); a kernel >= 6.7 ena
+        // box (e.g. this audit box, ena/7.0, D-1 PASS) is NOT
+        // known-bad and stays Allowed (no fleet-wide native-XDP
+        // regression).
+        bad_kernel_below: Some((6, 7)),
     },
     BlockRow {
         driver: "ice",
         first_safe: "4.11",
         reason: "ice firmware <= 4.10 has the Cilium-listed native-XDP \
                  regression. Force runtime.xdp_mode = \"skb\".",
+        bad_kernel_below: None,
     },
 ];
+
+/// F-COR-7: `(major, minor)` of the running kernel via aya's
+/// `KernelVersion::current()`, or `None` if it cannot be resolved.
+/// Used only as the driver+kernel fallback key when firmware is
+/// unresolved on a driver that carries a `bad_kernel_below`.
+fn current_kernel_mm() -> Option<(u8, u8)> {
+    let kv = aya::util::KernelVersion::current().ok()?;
+    // KernelVersion fields are crate-private; reconstruct (major,
+    // minor) from its public LINUX_VERSION_CODE-style `code()`
+    // (code = (major<<16) | (minor<<8) | patch, patch clamped 0..=255).
+    let code = kv.code();
+    let major = ((code >> 16) & 0xff) as u8;
+    let minor = ((code >> 8) & 0xff) as u8;
+    Some((major, minor))
+}
+
+/// `true` iff `(major, minor)` is strictly below `bound`.
+fn kernel_below(k: (u8, u8), bound: (u8, u8)) -> bool {
+    k.0 < bound.0 || (k.0 == bound.0 && k.1 < bound.1)
+}
 
 /// Parse a dotted-numeric version into a comparable `Vec<u64>`.
 /// Non-numeric trailing junk (e.g. `16.32.1010 (MT_0000000080)`) is
@@ -186,6 +233,53 @@ pub fn classify(driver: &str, firmware: &str) -> DrvSupport {
             };
         }
     }
+    DrvSupport::Allowed
+}
+
+/// F-COR-7: driver + kernel classification used ONLY when firmware is
+/// UNRESOLVED. Pure (kernel passed in, not read) so it is unit-
+/// testable for both this box (ena/7.0 → Allowed) and a synthetic
+/// known-bad combo (ena/pre-6.7 → Refuse). `classify` itself is left
+/// pure and UNCHANGED.
+///
+/// Rationale: for a driver carrying a `bad_kernel_below`, an
+/// unresolved firmware must NOT silently fail-open (that was the dead
+/// path — the ROUND8-L4-05 ena row could never fire on real AWS ena
+/// because `ethtool -i` reports no firmware). Instead we key on the
+/// row's own documented kernel condition: kernel below the boundary
+/// = the known-bad combo → Refuse; kernel at/above = NOT known-bad →
+/// Allowed (native XDP preserved, D-1-consistent). Drivers without a
+/// `bad_kernel_below` keep fail-open on unresolved firmware
+/// (virtual/dummy/veth and firmware-reliable drivers unaffected).
+#[must_use]
+pub fn classify_unresolved_firmware(driver: &str, kernel: Option<(u8, u8)>) -> DrvSupport {
+    for row in BLOCKLIST {
+        if row.driver != driver {
+            continue;
+        }
+        let Some(bound) = row.bad_kernel_below else {
+            // Firmware-only row, firmware unresolved → fail-open (the
+            // runtime probe + alert remain the backstop, unchanged).
+            return DrvSupport::Allowed;
+        };
+        return match kernel {
+            Some(k) if kernel_below(k, bound) => DrvSupport::Refuse {
+                reason: format!(
+                    "{} (driver={driver} firmware UNRESOLVED, kernel {}.{} \
+                     < known-good {}.{}: refusing native XDP on the \
+                     known-bad driver+kernel combo rather than fail-open; \
+                     ROUND8-L4-05 / F-COR-7)",
+                    row.reason, k.0, k.1, bound.0, bound.1
+                ),
+            },
+            // kernel >= boundary (e.g. this audit box ena/7.0) → NOT a
+            // known-bad combo → Allowed (D-1 native xdpdrv preserved).
+            // Kernel unknowable → fail-open (cannot prove known-bad;
+            // do not fleet-regress on an unprovable guess).
+            _ => DrvSupport::Allowed,
+        };
+    }
+    // No blocklist row for this driver → fail-open as before.
     DrvSupport::Allowed
 }
 
@@ -281,8 +375,20 @@ pub fn drv_supported(iface: &str) -> Result<DrvSupport, NicCompatError> {
     };
     let firmware = match firmware_of(iface) {
         Ok(f) => f,
-        // Could not read firmware — fail open, rely on the probe.
-        Err(_) => return Ok(DrvSupport::Allowed),
+        // F-COR-7: firmware unresolved. Previously this fail-OPENed
+        // unconditionally, which made the ROUND8-L4-05 ena blocklist
+        // row permanently dead on real AWS ena (it never reports a
+        // firmware string). Instead use the driver+kernel fallback
+        // key: a known-bad driver+kernel combo → Refuse (dead path
+        // now live); a not-known-bad combo (e.g. ena/7.0, D-1 PASS) →
+        // Allowed (no fleet-wide native-XDP regression); a driver
+        // without a kernel-keyed row → still fail-open (probe backstop).
+        Err(_) => {
+            return Ok(classify_unresolved_firmware(
+                &driver,
+                current_kernel_mm(),
+            ));
+        }
     };
     Ok(classify(&driver, &firmware))
 }
@@ -397,5 +503,95 @@ mod tests {
         // aya gains a public BPF_PROG_TEST_RUN wrapper this test is
         // the tripwire to wire the real probe.
         assert_eq!(probe_xdp_silent_drop(), ProbeOutcome::ProbeUnavailable);
+    }
+
+    // ---- F-COR-7: driver+kernel fallback when firmware unresolved ----
+
+    #[test]
+    fn classify_unchanged_is_pure_and_untouched() {
+        // classify() itself MUST stay pure/unchanged by F-COR-7 (lead
+        // D1): the firmware-keyed behaviour is identical.
+        assert!(matches!(
+            classify("ena", "2.9.5"),
+            DrvSupport::Refuse { .. }
+        ));
+        assert_eq!(classify("ena", "2.11"), DrvSupport::Allowed);
+        assert_eq!(classify("virtio_net", ""), DrvSupport::Allowed);
+    }
+
+    #[test]
+    fn ena_unresolved_fw_modern_kernel_stays_allowed() {
+        // (1) lead D1: NOT-known-bad ena box (ena, kernel >= 6.7, e.g.
+        // this audit box's 7.0) with unresolved firmware stays Allowed
+        // — native XDP preserved, D-1-consistent, no fleet regression.
+        assert_eq!(
+            classify_unresolved_firmware("ena", Some((7, 0))),
+            DrvSupport::Allowed
+        );
+        assert_eq!(
+            classify_unresolved_firmware("ena", Some((6, 7))),
+            DrvSupport::Allowed,
+            "6.7 is the known-good boundary (inclusive) → Allowed"
+        );
+        // Kernel unknowable → cannot prove known-bad → fail-open
+        // (do not fleet-regress on an unprovable guess).
+        assert_eq!(
+            classify_unresolved_firmware("ena", None),
+            DrvSupport::Allowed
+        );
+    }
+
+    #[test]
+    fn ena_unresolved_fw_prebad_kernel_refuses() {
+        // (2) lead D1: a synthetic KNOWN-BAD ena/kernel combo (the
+        // row's documented "pre-2024" window) → Refuse — the
+        // previously-dead ROUND8-L4-05 defence path now genuinely
+        // fires.
+        for k in [(6, 6), (6, 1), (5, 15), (5, 10)] {
+            match classify_unresolved_firmware("ena", Some(k)) {
+                DrvSupport::Refuse { reason } => {
+                    assert!(
+                        reason.contains("ena") && reason.contains("ROUND8-L4-05"),
+                        "reason must cite ena + bug-id: {reason}"
+                    );
+                    assert!(
+                        reason.contains("F-COR-7"),
+                        "reason must mark the driver+kernel path: {reason}"
+                    );
+                }
+                DrvSupport::Allowed => {
+                    panic!("ena kernel {k:?} (pre-6.7, unresolved fw) must Refuse")
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn non_kernel_keyed_driver_unresolved_fw_still_fail_open() {
+        // mlx5/ice report firmware reliably (bad_kernel_below=None) →
+        // unresolved firmware keeps the original fail-open semantics
+        // (the runtime probe + alert remain the backstop). Drivers
+        // with no row also fail-open.
+        assert_eq!(
+            classify_unresolved_firmware("mlx5_core", Some((5, 15))),
+            DrvSupport::Allowed
+        );
+        assert_eq!(
+            classify_unresolved_firmware("ice", Some((5, 15))),
+            DrvSupport::Allowed
+        );
+        assert_eq!(
+            classify_unresolved_firmware("dummy", Some((5, 15))),
+            DrvSupport::Allowed
+        );
+    }
+
+    #[test]
+    fn current_kernel_mm_resolves_on_this_box() {
+        // This audit box runs kernel 7.0; aya KernelVersion must
+        // resolve a plausible (major, minor) so the real drv_supported
+        // path keys correctly.
+        let k = current_kernel_mm().expect("kernel version must resolve");
+        assert!(k.0 >= 3, "implausible kernel major {}", k.0);
     }
 }
