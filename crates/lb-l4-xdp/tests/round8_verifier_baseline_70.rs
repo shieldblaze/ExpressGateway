@@ -25,8 +25,8 @@
 //!   sudo -E env "PATH=$PATH" cargo test -p lb-l4-xdp \
 //!     --test round8_verifier_baseline_70 -- --ignored --nocapture
 
-use lb_l4_xdp::loader::XdpLoader;
 use lb_l4_xdp::LB_XDP_ELF;
+use lb_l4_xdp::loader::XdpLoader;
 use std::path::Path;
 use std::process::Command;
 
@@ -73,9 +73,7 @@ fn capture_real_70_verifier_baseline() {
     let prog: &mut Program = ebpf
         .program_mut(PROG)
         .expect("program_mut(lb_xdp) present after kernel_load");
-    let xdp: &Xdp = (&*prog)
-        .try_into()
-        .expect("lb_xdp is an Xdp program");
+    let xdp: &Xdp = (&*prog).try_into().expect("lb_xdp is an Xdp program");
     let info = xdp.info().expect("ProgramInfo for the loaded prog");
 
     let prog_id = info.id();

@@ -22,7 +22,7 @@
 //! `nic_compat::tests` (ena/pre-6.7 → Refuse) so BOTH lead-D1
 //! assertions are proven.
 
-use lb_l4_xdp::nic_compat::{drv_supported, driver_of, DrvSupport};
+use lb_l4_xdp::nic_compat::{DrvSupport, driver_of, drv_supported};
 
 /// (1) lead D1: on THIS box (ena, kernel 7.0 — a NOT-known-bad combo,
 /// firmware unresolved) `drv_supported("ens5")` MUST be `Allowed`.
@@ -57,8 +57,10 @@ fn drv_supported_ens5_is_allowed_on_this_not_known_bad_ena_box() {
             );
         }
         Err(e) => {
-            eprintln!("SKIP: could not resolve {iface} driver ({e}) — \
-                 virtual/CI host");
+            eprintln!(
+                "SKIP: could not resolve {iface} driver ({e}) — \
+                 virtual/CI host"
+            );
         }
     }
 }

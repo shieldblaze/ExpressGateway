@@ -246,9 +246,8 @@ async fn rapid_reset_flood(gw: SocketAddr, anchor: CertificateDer<'static>) -> F
     // reached the peer, which is the RFC 9113 §6.8 guarantee.
     let signal_in_send = send_err
         .as_ref()
-        .map_or(false, |e| e.is_remote() || e.is_go_away());
-    let signal_in_conn =
-        matches!(&conn_res, Ok(Ok(Err(e))) if e.is_remote() || e.is_go_away());
+        .is_some_and(|e| e.is_remote() || e.is_go_away());
+    let signal_in_conn = matches!(&conn_res, Ok(Ok(Err(e))) if e.is_remote() || e.is_go_away());
     if signal_in_send || signal_in_conn {
         return FloodOutcome::ServerGoAway;
     }
@@ -258,7 +257,7 @@ async fn rapid_reset_flood(gw: SocketAddr, anchor: CertificateDer<'static>) -> F
     let bare_transport = |s: &str| s.contains("BrokenPipe") || s.contains("Io(");
     let only_broken = send_err
         .as_ref()
-        .map_or(false, |e| bare_transport(&format!("{e:?}")))
+        .is_some_and(|e| bare_transport(&format!("{e:?}")))
         || matches!(&conn_res, Ok(Ok(Err(e))) if bare_transport(&format!("{e:?}")));
     if only_broken {
         FloodOutcome::BrokenPipe

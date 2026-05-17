@@ -1190,8 +1190,8 @@ mod drain_tests {
     /// F-COR-4 — DETERMINISTIC NEGATIVE REGRESSION.
     ///
     /// A stub TCP server writes a COMPLETE, byte-identical HTTP/1.1 200
-    /// + the exact drain body, with NO `Connection: close` header, then
-    /// HOLDS the socket open (never FIN) well past the read window.
+    /// plus the exact drain body, with NO `Connection: close` header,
+    /// then HOLDS the socket open (never FIN) past the read window.
     /// Pre-F-COR-4 this was misclassified `FinOnly` and PASSED (wrong);
     /// post-fix it MUST classify `BodyCompleteNoClose` AND the
     /// per-iteration assertion MUST reject it.
@@ -1277,7 +1277,10 @@ mod drain_tests {
             "stub must produce a byte-complete response (fixture sanity)"
         );
         assert!(!clean_eof, "stub deliberately never FIN-closed");
-        assert!(!has_conn_close, "stub deliberately sent no Connection: close");
+        assert!(
+            !has_conn_close,
+            "stub deliberately sent no Connection: close"
+        );
 
         let kind = classify_close(byte_complete, has_conn_close, clean_eof);
         assert_eq!(
@@ -1290,10 +1293,7 @@ mod drain_tests {
         // test_sigterm_drains_h1_with_connection_close is exactly this
         // matches!() — prove it now REJECTS the defect case.
         assert!(
-            !matches!(
-                kind,
-                Some(CloseKind::Header) | Some(CloseKind::FinOnly)
-            ),
+            !matches!(kind, Some(CloseKind::Header) | Some(CloseKind::FinOnly)),
             "the drain assertion would have FALSELY accepted a \
              never-closed socket as a clean close"
         );

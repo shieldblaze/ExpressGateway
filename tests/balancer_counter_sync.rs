@@ -82,9 +82,7 @@ fn test_no_divergence_under_load() {
     // post-join exact-equality check (the real CODE-2-14 contract) is
     // retained UNCHANGED and still fails if the product ever drifts.
     let churn_window = std::time::Instant::now() + Duration::from_secs(2);
-    while std::time::Instant::now() < churn_window
-        && !handles.iter().all(|h| h.is_finished())
-    {
+    while std::time::Instant::now() < churn_window && !handles.iter().all(|h| h.is_finished()) {
         std::thread::yield_now();
     }
     stop.store(true, Ordering::Release);

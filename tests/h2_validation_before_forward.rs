@@ -203,13 +203,7 @@ async fn connect_tls(
 // ── Minimal raw HTTP/2 framing (the `h2` crate cannot express a
 //    pseudo-header in trailers nor a content-length≠ΣDATA on purpose) ──
 
-async fn write_frame(
-    s: &mut TlsStream<TcpStream>,
-    ty: u8,
-    flags: u8,
-    sid: u32,
-    payload: &[u8],
-) {
+async fn write_frame(s: &mut TlsStream<TcpStream>, ty: u8, flags: u8, sid: u32, payload: &[u8]) {
     let len = payload.len() as u32;
     let mut hdr = [0u8; 9];
     hdr[0] = ((len >> 16) & 0xff) as u8;

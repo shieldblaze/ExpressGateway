@@ -384,10 +384,7 @@ pub fn drv_supported(iface: &str) -> Result<DrvSupport, NicCompatError> {
         // Allowed (no fleet-wide native-XDP regression); a driver
         // without a kernel-keyed row → still fail-open (probe backstop).
         Err(_) => {
-            return Ok(classify_unresolved_firmware(
-                &driver,
-                current_kernel_mm(),
-            ));
+            return Ok(classify_unresolved_firmware(&driver, current_kernel_mm()));
         }
     };
     Ok(classify(&driver, &firmware))
