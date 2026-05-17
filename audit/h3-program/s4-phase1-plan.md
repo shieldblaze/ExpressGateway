@@ -1,7 +1,49 @@
 # Session 4 — Phase 1 build plan: incremental, bounded, backpressured H3 RESPONSE egress
 
-Status: **DRAFT — awaiting team-lead plan approval. No source changed yet.**
-Phase 0 baseline (task #1, lead-owned) must be green before any code lands.
+Status: **APPROVED (CONDITIONAL) by team-lead — 2026-05-17.** Phase 0
+(task #1) is verifier-confirmed GREEN (R1, 3× deterministic, no
+asterisk). R8 satisfied (bounded-incremental from first byte; memory
+bound = `H3_RESP_CHANNEL_DEPTH × H3_RESP_CHUNK_MAX`, independent of
+total body size and of the 64 MiB cap; end-to-end backpressure stall
+chain explicit; `bytes::Bytes` hot path; H2/H3+inline byte-identical).
+Source changes are now permitted, subject to the binding conditions
+below.
+
+### team-lead approval conditions (BINDING — R6; non-negotiable)
+
+- **C1 (Q2 — confirms the builder-2 ruling already applied @28db0e60).**
+  Grep proved NO reusable production H3 cancel/internal-error constant
+  exists (only `H3_NO_ERROR=0x0100`, a graceful-drain code). Reusing
+  `H3_NO_ERROR` on an abort is a correctness/security defect (signals
+  clean completion → truncated-as-complete cache-poisoning, the exact
+  §1.3.4 hazard). Ruling stands: new named const
+  `H3_INTERNAL_ERROR: u64 = 0x0102` (RFC 9114 §8.1) beside
+  `H3_NO_ERROR`, used for the `stream_shutdown(Write, …)` Reset path.
+  The abort regression tests MUST assert the H3 client observes
+  RESET_STREAM with a **non-`H3_NO_ERROR`** code on every abort path.
+- **C2 (pooled-upstream smuggling guard — R6 security, parity with the
+  S2 request side).** On EVERY `RespAbort` variant (UpstreamReset /
+  PrematureEof / ChunkedDecode / OverCap / BadHead / ClientGone) the
+  pooled upstream connection MUST be dropped / marked NON-reusable and
+  never returned to the connection pool (a partially-consumed upstream
+  response must not poison a future request). Add an explicit
+  regression assertion mirroring the S2 request-side guard.
+- **C3 (chunked-decoder negative/smuggling tests — R6).** The net-new
+  chunked-response decoder MUST have negative tests beyond R7's happy-
+  path byte-identity: malformed/non-hex chunk-size, missing CRLF,
+  declared-size overflow, junk after the zero-size terminator — each
+  ⇒ `RespAbort::ChunkedDecode` ⇒ `Reset`, NEVER a truncated/forwarded
+  body presented as complete.
+- **C4 (P1-C chunked trailers).** P1-C trailing-HEADERS-after-DATA
+  handling MUST include the chunked trailer-section parse (trailer
+  fields after the zero-size chunk) and keep PROTO-2-12
+  (`h3_h1_trailers_resp_e2e.rs` pc1/pc2 + `request_h3_upstream`) green.
+
+C2 binds P1-A signature/teardown (builder-1, §1.3.4) AND P1-B wiring
+(builder-2). C3 binds P1-A (the decoder, builder-1) + tests. C1 binds
+P1-B + the abort tests. C4 binds P1-C. P1-A (task #3) may start
+immediately (it does not depend on Q2). Conditions are enforced at
+each owning increment's independent verification (author ≠ verifier).
 
 Branch: `feature/h3-quic-s4` @ base `9d2bd9ca` (audit/foundation-pass tip).
 This plan executes the APPROVED design in
