@@ -564,8 +564,49 @@ weight = 1
         Header,
         /// No `Connection: close` header; the gateway instead closed
         /// the socket via a clean FIN-only EOF after a complete
-        /// response (RFC 9110 §7.6.1 valid).
+        /// response (RFC 9110 §7.6.1 valid). REQUIRES an observed
+        /// `Ok(0)` (real FIN) — not merely a read-window timeout.
         FinOnly,
+        /// F-COR-4: the response body was byte-complete but the socket
+        /// was NEVER FIN-closed (no `Connection: close` header AND no
+        /// observed `Ok(0)` within the generous read window). This is
+        /// a REAL drain DEFECT — the gateway delivered the full body
+        /// but failed to close on SIGTERM (half-open / FD-leak /
+        /// wedged-until-client-timeout). It MUST fail the assertion,
+        /// never pass as a clean `FinOnly`.
+        BodyCompleteNoClose,
+    }
+
+    /// F-COR-4: pure, unit-testable close classification.
+    ///
+    /// Previously this logic discarded `clean_eof` (`let _ =
+    /// clean_eof;`) so ANY byte-complete && !has_conn_close outcome
+    /// was reported `FinOnly` even when the socket merely timed out
+    /// after the body arrived and never actually sent FIN — the test
+    /// that exists to guard the close-contract could not fail on the
+    /// "didn't actually close" defect it claims to cover (auditor-1
+    /// F-2). Now `clean_eof` (observed `Ok(0)`) is REQUIRED for
+    /// `FinOnly`; its absence yields `BodyCompleteNoClose` (a hard
+    /// failure). The 12 s read window is far above
+    /// readiness_settle + jitter_max + backend hold + drain budget, so
+    /// a genuinely clean (even slow) FIN is reliably observed and only
+    /// a real non-close trips `BodyCompleteNoClose`.
+    pub fn classify_close(
+        byte_complete: bool,
+        has_conn_close: bool,
+        clean_eof: bool,
+    ) -> Option<CloseKind> {
+        if !byte_complete {
+            return None;
+        }
+        if has_conn_close {
+            return Some(CloseKind::Header);
+        }
+        if clean_eof {
+            Some(CloseKind::FinOnly)
+        } else {
+            Some(CloseKind::BodyCompleteNoClose)
+        }
     }
 
     /// Result of one in-flight-at-SIGTERM H1 drain attempt.
@@ -683,19 +724,10 @@ weight = 1
             && status_line.contains("200")
             && declared_cl == Some(DRAIN_H1_BODY_LEN)
             && body == expected.as_slice();
-        let close_kind = if byte_complete {
-            Some(if has_conn_close {
-                CloseKind::Header
-            } else {
-                // No header: this MUST be a clean FIN-only EOF (the
-                // peer closed after the complete response). If we did
-                // not observe Ok(0) the close was not clean.
-                let _ = clean_eof;
-                CloseKind::FinOnly
-            })
-        } else {
-            None
-        };
+        // F-COR-4: real gate on the observed clean FIN. `clean_eof`
+        // is no longer discarded — byte-complete && !header && !Ok(0)
+        // -> BodyCompleteNoClose (a hard failure), not a false FinOnly.
+        let close_kind = classify_close(byte_complete, has_conn_close, clean_eof);
         H1DrainOutcome {
             byte_complete,
             close_kind,
@@ -849,6 +881,7 @@ mod drain_tests {
                     finonly_cnt += 1;
                     "FinOnly"
                 }
+                Some(CloseKind::BodyCompleteNoClose) => "BodyCompleteNoClose(DEFECT)",
                 None => "NONE(incomplete)",
             };
             eprintln!(
@@ -868,13 +901,21 @@ mod drain_tests {
                  (drop/truncation): status='{}' declared_cl={:?} body_len={} raw_len={}",
                 out.status_line, out.declared_cl, out.body_len, out.raw_len,
             );
+            // F-COR-4: MUST be Header or a VERIFIED clean FIN
+            // (FinOnly requires an observed Ok(0)). A byte-complete
+            // body whose socket was never FIN-closed is now
+            // BodyCompleteNoClose and MUST fail here — the real drain
+            // defect this test claims to guard.
             assert!(
                 matches!(
                     out.close_kind,
                     Some(CloseKind::Header) | Some(CloseKind::FinOnly)
                 ),
-                "iter {it}: byte-complete response but close kind not \
-                 classified as Header or FinOnly",
+                "iter {it}: byte-complete response but close_kind={:?} — \
+                 expected Header or a VERIFIED FinOnly (observed Ok(0)). \
+                 BodyCompleteNoClose means the gateway delivered the full \
+                 body but never FIN-closed on SIGTERM (drain defect).",
+                out.close_kind,
             );
         }
 
@@ -1119,6 +1160,146 @@ mod drain_tests {
             "UDP port {listener_addr} still bound after drain — QUIC listener leaked: {:?}",
             probe.err()
         );
+    }
+
+    /// F-COR-4 — pure truth table for `classify_close`.
+    ///
+    /// Locks in: the ONLY way to be `FinOnly` is byte-complete &&
+    /// !header && observed Ok(0). byte-complete && !header && NO Ok(0)
+    /// -> `BodyCompleteNoClose` (the previously-discarded case the
+    /// classifier now catches).
+    #[test]
+    fn classify_close_requires_observed_fin_for_finonly() {
+        // Not byte-complete -> None regardless.
+        assert_eq!(classify_close(false, false, false), None);
+        assert_eq!(classify_close(false, true, true), None);
+        // Header present -> Header (clean_eof irrelevant).
+        assert_eq!(classify_close(true, true, false), Some(CloseKind::Header));
+        assert_eq!(classify_close(true, true, true), Some(CloseKind::Header));
+        // No header + observed Ok(0) -> verified FinOnly.
+        assert_eq!(classify_close(true, false, true), Some(CloseKind::FinOnly));
+        // No header + NO observed Ok(0) -> the defect case.
+        assert_eq!(
+            classify_close(true, false, false),
+            Some(CloseKind::BodyCompleteNoClose),
+            "byte-complete body but socket never FIN-closed must be a \
+             hard failure, not a false FinOnly (auditor-1 F-2)"
+        );
+    }
+
+    /// F-COR-4 — DETERMINISTIC NEGATIVE REGRESSION.
+    ///
+    /// A stub TCP server writes a COMPLETE, byte-identical HTTP/1.1 200
+    /// + the exact drain body, with NO `Connection: close` header, then
+    /// HOLDS the socket open (never FIN) well past the read window.
+    /// Pre-F-COR-4 this was misclassified `FinOnly` and PASSED (wrong);
+    /// post-fix it MUST classify `BodyCompleteNoClose` AND the
+    /// per-iteration assertion MUST reject it.
+    #[test]
+    fn negative_regression_complete_body_never_closed_is_caught() {
+        use std::io::{Read, Write};
+        use std::net::{TcpListener, TcpStream};
+        use std::sync::mpsc;
+
+        let listener = TcpListener::bind("127.0.0.1:0").expect("bind stub");
+        let addr = listener.local_addr().unwrap();
+        let (hold_tx, hold_rx) = mpsc::channel::<()>();
+
+        let server = std::thread::spawn(move || {
+            let (mut sock, _) = listener.accept().expect("stub accept");
+            let mut req = [0u8; 1024];
+            let _ = sock.read(&mut req); // consume the GET
+            let body = drain_h1_expected_body();
+            // Complete, byte-identical, NO Connection: close header.
+            let resp_head = format!(
+                "HTTP/1.1 200 OK\r\nContent-Length: {}\r\n\r\n",
+                DRAIN_H1_BODY_LEN
+            );
+            sock.write_all(resp_head.as_bytes()).unwrap();
+            sock.write_all(&body).unwrap();
+            sock.flush().unwrap();
+            // HOLD the socket open — never FIN — until the test is done.
+            let _ = hold_rx.recv();
+            drop(sock);
+        });
+
+        let mut stream = TcpStream::connect(addr).expect("connect stub");
+        let read_window = Duration::from_millis(800);
+        stream.set_read_timeout(Some(read_window)).ok();
+        stream
+            .write_all(b"GET / HTTP/1.1\r\nHost: 127.0.0.1\r\n\r\n")
+            .unwrap();
+        stream.flush().ok();
+
+        // Same read loop as drain_h1_attempt: Ok(0)=clean_eof; a
+        // WouldBlock/TimedOut exit leaves clean_eof=false.
+        let mut buf = Vec::new();
+        let mut chunk = [0u8; 8192];
+        let mut clean_eof = false;
+        loop {
+            match stream.read(&mut chunk) {
+                Ok(0) => {
+                    clean_eof = true;
+                    break;
+                }
+                Ok(n) => buf.extend_from_slice(&chunk[..n]),
+                Err(e)
+                    if e.kind() == std::io::ErrorKind::WouldBlock
+                        || e.kind() == std::io::ErrorKind::TimedOut =>
+                {
+                    break;
+                }
+                Err(_) => break,
+            }
+        }
+
+        let split = buf.windows(4).position(|w| w == b"\r\n\r\n");
+        let (h, body): (&[u8], &[u8]) = match split {
+            Some(i) => (&buf[..i], &buf[i + 4..]),
+            None => (&buf[..], &[]),
+        };
+        let head_str = String::from_utf8_lossy(h);
+        let status_line = head_str.lines().next().unwrap_or("");
+        let has_conn_close = head_str.to_ascii_lowercase().contains("connection: close");
+        let declared_cl = head_str
+            .lines()
+            .find(|l| l.to_ascii_lowercase().starts_with("content-length:"))
+            .and_then(|l| l.split(':').nth(1))
+            .and_then(|v| v.trim().parse::<usize>().ok());
+        let expected = drain_h1_expected_body();
+        let byte_complete = split.is_some()
+            && status_line.contains("200")
+            && declared_cl == Some(DRAIN_H1_BODY_LEN)
+            && body == expected.as_slice();
+
+        assert!(
+            byte_complete,
+            "stub must produce a byte-complete response (fixture sanity)"
+        );
+        assert!(!clean_eof, "stub deliberately never FIN-closed");
+        assert!(!has_conn_close, "stub deliberately sent no Connection: close");
+
+        let kind = classify_close(byte_complete, has_conn_close, clean_eof);
+        assert_eq!(
+            kind,
+            Some(CloseKind::BodyCompleteNoClose),
+            "complete body but never-closed socket MUST be \
+             BodyCompleteNoClose (pre-F-COR-4 this was a false FinOnly)"
+        );
+        // The per-iteration assertion in
+        // test_sigterm_drains_h1_with_connection_close is exactly this
+        // matches!() — prove it now REJECTS the defect case.
+        assert!(
+            !matches!(
+                kind,
+                Some(CloseKind::Header) | Some(CloseKind::FinOnly)
+            ),
+            "the drain assertion would have FALSELY accepted a \
+             never-closed socket as a clean close"
+        );
+
+        let _ = hold_tx.send(());
+        let _ = server.join();
     }
 }
 
