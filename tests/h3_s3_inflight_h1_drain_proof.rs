@@ -72,6 +72,27 @@ fn ephemeral_port() -> u16 {
     port
 }
 
+/// Create a UNIQUE, freshly-made temp dir for a single spawn/config
+/// cycle. Uniqueness = pid + monotonic-nanos + per-process atomic
+/// counter + `tag`, so no two cycles (across threads OR concurrent
+/// test binaries under full-`--workspace` parallelism) ever share a
+/// directory — preventing the shared-fixed-path mid-run delete race
+/// (verifier-C Phase-0 finding). The caller removes it when done.
+fn unique_temp_dir(tag: &str) -> PathBuf {
+    use std::sync::atomic::{AtomicU64, Ordering};
+    use std::time::{SystemTime, UNIX_EPOCH};
+    static SEQ: AtomicU64 = AtomicU64::new(0);
+    let pid = std::process::id();
+    let nanos = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_nanos())
+        .unwrap_or(0);
+    let seq = SEQ.fetch_add(1, Ordering::Relaxed);
+    let dir = std::env::temp_dir().join(format!("eg-{tag}-{pid}-{nanos}-{seq}"));
+    std::fs::create_dir_all(&dir).expect("create unique temp dir");
+    dir
+}
+
 /// Default-jitter config: `drain_timeout_ms = 5000`, NO
 /// `drain_jitter_ms` override => effective jitter ceiling 1250 ms.
 fn write_config(dir: &Path, listener_port: u16, backend: SocketAddr) -> PathBuf {
@@ -350,8 +371,7 @@ fn inflight_h1_completes_with_long_read_window() {
         let mut out = None;
         let mut elapsed = Duration::default();
         for spawn_try in 0..4 {
-            let dir = std::env::temp_dir().join(format!("eg-s3-inflight-{run}-{spawn_try}"));
-            let _ = std::fs::create_dir_all(&dir);
+            let dir = unique_temp_dir("s3-inflight");
             let backend_port = ephemeral_port();
             let listener_port = ephemeral_port();
             let backend_addr: SocketAddr = format!("127.0.0.1:{backend_port}").parse().unwrap();
@@ -458,8 +478,7 @@ fn fixed_400ms_window_is_shorter_than_drain_timeline_not_a_drop() {
     let mut b_complete = 0usize;
     for run in 0..runs {
         // Phase A: hard 400ms wall-clock cap after SIGTERM.
-        let dir = std::env::temp_dir().join(format!("eg-s3-fixA-{run}"));
-        let _ = std::fs::create_dir_all(&dir);
+        let dir = unique_temp_dir("s3-fixA");
         let bp = ephemeral_port();
         let lp = ephemeral_port();
         let ba: SocketAddr = format!("127.0.0.1:{bp}").parse().unwrap();
@@ -501,21 +520,43 @@ fn fixed_400ms_window_is_shorter_than_drain_timeline_not_a_drop() {
         let _ = std::fs::remove_dir_all(&dir);
 
         // Phase B: SAME scenario, fresh gateway, LONG 8s window.
-        let dir = std::env::temp_dir().join(format!("eg-s3-fixB-{run}"));
-        let _ = std::fs::create_dir_all(&dir);
-        let bp = ephemeral_port();
-        let lp = ephemeral_port();
-        let ba: SocketAddr = format!("127.0.0.1:{bp}").parse().unwrap();
-        let la: SocketAddr = format!("127.0.0.1:{lp}").parse().unwrap();
-        let cfg = write_config(&dir, lp, ba);
-        let _be = spawn_slow_h1_backend(ba, backend_hold);
-        let mut child = spawn_gateway(&bin, &cfg, la);
-        let ob = inflight_attempt(&la, &child, backend_hold, pre, Duration::from_secs(8));
+        // Same bounded zero-byte harness-miss retry as the decisive
+        // test (verifier-C proved this sound): raw_len == 0 means the
+        // request never reached a working gateway (ephemeral-port /
+        // boot race under whole-crate parallelism), NOT a drop — a
+        // genuine drop yields a *partial* response (raw_len > 0). Only
+        // a zero-byte boot miss is retried; any produced response is
+        // scored as-is, so the byte-complete contract is unchanged.
+        let mut ob = None;
+        for spawn_try in 0..4 {
+            let dir = unique_temp_dir("s3-fixB");
+            let bp = ephemeral_port();
+            let lp = ephemeral_port();
+            let ba: SocketAddr = format!("127.0.0.1:{bp}").parse().unwrap();
+            let la: SocketAddr = format!("127.0.0.1:{lp}").parse().unwrap();
+            let cfg = write_config(&dir, lp, ba);
+            let _be = spawn_slow_h1_backend(ba, backend_hold);
+            let mut child = spawn_gateway(&bin, &cfg, la);
+            let attempt = inflight_attempt(&la, &child, backend_hold, pre, Duration::from_secs(8));
+            let _ = child.wait();
+            let _ = std::fs::remove_dir_all(&dir);
+            if attempt.raw_len == 0 {
+                eprintln!(
+                    "RUN {run}: Phase B spawn_try {spawn_try} produced ZERO bytes \
+                     (harness port/boot miss, not a drop) — retrying"
+                );
+                continue;
+            }
+            ob = Some(attempt);
+            break;
+        }
+        let ob = ob.expect(
+            "Phase B: gateway never produced any response across 4 spawn tries \
+             (harness/boot failure, not a product drop)",
+        );
         if ob.complete_and_correct {
             b_complete += 1;
         }
-        let _ = child.wait();
-        let _ = std::fs::remove_dir_all(&dir);
 
         eprintln!(
             "RUN {run}: [A 400ms-hard] conn_close={} complete={} raw_len={} status='{}' | [B 8s] complete={} raw_len={} status='{}'",
@@ -559,8 +600,7 @@ fn shortwindow_control_is_window_not_drop() {
             return;
         }
     };
-    let dir = std::env::temp_dir().join("eg-s3-shortwin");
-    let _ = std::fs::create_dir_all(&dir);
+    let dir = unique_temp_dir("s3-shortwin");
     let backend_port = ephemeral_port();
     let listener_port = ephemeral_port();
     let backend_addr: SocketAddr = format!("127.0.0.1:{backend_port}").parse().unwrap();

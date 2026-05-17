@@ -187,6 +187,35 @@ mod drain {
         port
     }
 
+    /// Create a UNIQUE, freshly-made temp dir for a single
+    /// spawn/config cycle and return its path.
+    ///
+    /// Earlier this harness wrote `gateway.toml` into a FIXED shared
+    /// path (`temp_dir().join("eg-drain-h1")`) created once but
+    /// rewritten every iteration. Under full-`--workspace` test
+    /// parallelism a sibling test/iteration could `remove_dir_all`
+    /// that shared path mid-run, so the next `File::create(gateway
+    /// .toml)` panicked with `NotFound` (the Phase-0 blocker symptom,
+    /// reproduced by verifier-C). Uniqueness = process id + a
+    /// monotonic-nanos timestamp + a per-process atomic counter +
+    /// caller-supplied `tag`, so no two cycles (across threads OR
+    /// concurrent test binaries) ever share a directory. The caller
+    /// `remove_dir_all`s it at the end of its own iteration.
+    pub fn unique_temp_dir(tag: &str) -> PathBuf {
+        use std::sync::atomic::{AtomicU64, Ordering};
+        use std::time::{SystemTime, UNIX_EPOCH};
+        static SEQ: AtomicU64 = AtomicU64::new(0);
+        let pid = std::process::id();
+        let nanos = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map(|d| d.as_nanos())
+            .unwrap_or(0);
+        let seq = SEQ.fetch_add(1, Ordering::Relaxed);
+        let dir = std::env::temp_dir().join(format!("eg-{tag}-{pid}-{nanos}-{seq}"));
+        std::fs::create_dir_all(&dir).expect("create unique temp dir");
+        dir
+    }
+
     /// Generate a minimal TOML for the gateway pointing at `backend`.
     /// `proto` is one of `"h1"`, `"h1s"`, `"quic"` per `lb_config::ListenerConfig`.
     pub fn write_config(
@@ -739,9 +768,6 @@ mod drain_tests {
             }
         };
 
-        let dir = std::env::temp_dir().join("eg-drain-h1");
-        let _ = std::fs::create_dir_all(&dir);
-
         // Backend holds the proxied request 600 ms before responding;
         // we SIGTERM 250 ms in => the response is provably NOT yet
         // produced at SIGTERM (genuine in-flight). The per-conn jitter
@@ -774,6 +800,12 @@ mod drain_tests {
             //    is a HARD FAIL (the no-drop violation we must catch).
             let mut out = None;
             for spawn_try in 0..4 {
+                // UNIQUE temp dir per spawn cycle (pid + nanos + seq),
+                // created here and removed at the end of THIS cycle —
+                // no fixed shared path is written across iterations,
+                // so concurrent --workspace test binaries cannot
+                // delete it mid-run (verifier-C Phase-0 race).
+                let dir = unique_temp_dir("drain-h1");
                 let backend_port = ephemeral_port();
                 let listener_port = ephemeral_port();
                 let backend_addr: std::net::SocketAddr =
@@ -786,6 +818,7 @@ mod drain_tests {
                 let mut child = spawn_gateway(&bin, &cfg, listener_addr);
                 let attempt = drain_h1_attempt(&listener_addr, &child, pre, read_window);
                 let _ = child.wait();
+                let _ = std::fs::remove_dir_all(&dir);
 
                 if attempt.raw_len == 0 {
                     eprintln!(
@@ -839,7 +872,6 @@ mod drain_tests {
                  classified as Header or FinOnly",
             );
         }
-        let _ = std::fs::remove_dir_all(&dir);
 
         eprintln!(
             "SUMMARY h1-drain: {iterations} iters all byte-complete; \
