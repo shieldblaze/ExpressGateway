@@ -165,13 +165,70 @@ rewires; in P1-A it is added but not yet wired):
    to the upstream. End-to-end: slow H3 client → quiche send window
    full → actor stops draining the channel (§1.4 gate) → channel fills
    → upstream read pauses.
-4. On clean completion emit `RespEvent::End`. Any of: upstream reset,
-   premature EOF before `Content-Length` satisfied, chunked-decode
-   error, over-`cap` (total > `MAX_RESPONSE_BODY_BYTES`) ⇒
-   `RespEvent::Reset` — **never a truncated body presented as a complete
-   response** (response-splitting / cache-poisoning guard; parity with
-   the request-side P1-B abort at `h3_to_h1_stream:1057-1092`).
-   `RespAbort` is the internal error type the actor maps to `Reset`.
+4. On clean completion emit `RespEvent::End`. Every abort path ⇒
+   `RespEvent::Reset` and **never FIN** — see §1.3.4.
+
+### 1.3.4 `RespAbort` + the abort → `Reset` mapping (Q3 — builder-1 owns, FINAL)
+
+team-lead assigned the `stream_h1_response` signature and the
+`RespAbort` → `Reset` mapping to builder-1 (P1-A). Decided and FINAL:
+
+```rust
+/// SESSION 4 / P1-A: why the incremental response producer aborted.
+/// EVERY variant maps to a single client-facing outcome: emit
+/// `RespEvent::Reset` into the channel and return `Err(RespAbort)` —
+/// the actor RESET_STREAMs the client and NEVER sets FIN. A partial
+/// body is therefore never presentable as a complete response
+/// (response-splitting / cache-poisoning guard; parity with the
+/// request-side P1-B abort at `h3_to_h1_stream:1057-1092`).
+#[derive(Debug)]
+pub enum RespAbort {
+    /// Upstream socket reset / error mid-response.
+    UpstreamReset,
+    /// Socket EOF before the declared `Content-Length` was satisfied.
+    PrematureEof,
+    /// `Transfer-Encoding: chunked` decode error / EOF before the
+    /// chunked terminator.
+    ChunkedDecode,
+    /// Total response exceeded `cap` (`MAX_RESPONSE_BODY_BYTES`).
+    OverCap,
+    /// HEADERS parse failure / head cap exceeded before `\r\n\r\n`.
+    BadHead,
+    /// The response channel was closed by the actor (client cancelled
+    /// the H3 stream) — stop reading the upstream.
+    ClientGone,
+}
+```
+
+Signature (FINAL):
+
+```rust
+async fn stream_h1_response(
+    stream: &mut TcpStream,
+    tx: &tokio::sync::mpsc::Sender<RespEvent>,
+    cap: usize,
+) -> Result<(), RespAbort>;
+```
+
+Mapping (exhaustive, no other outcome exists):
+
+| Producer condition | `RespAbort` | Wire effect |
+|---|---|---|
+| upstream socket reset/error mid-response | `UpstreamReset` | `RespEvent::Reset`, never FIN |
+| socket EOF before `Content-Length` bytes read | `PrematureEof` | `RespEvent::Reset`, never FIN |
+| chunked decode error / EOF before terminator | `ChunkedDecode` | `RespEvent::Reset`, never FIN |
+| total bytes > `cap` (= `MAX_RESPONSE_BODY_BYTES`) | `OverCap` | `RespEvent::Reset`, never FIN |
+| no `\r\n\r\n` within the 64 KiB head cap / bad status line | `BadHead` | `RespEvent::Reset`, never FIN |
+| `tx.send` returns `Err` (actor dropped the receiver = client cancel) | `ClientGone` | producer stops reading upstream; no further events |
+| Content-Length satisfied / chunked terminator / EOF-delimited EOF | — (`Ok(())`) | final `RespEvent::End` ⇒ actor sets FIN |
+
+The producer emits `RespEvent::Reset` into the channel *before*
+returning `Err(RespAbort)` (best-effort: on `ClientGone` the channel is
+already closed, so only the `Err` return applies — the actor already
+knows). builder-2's §1.4 actor-side handling sets the progressive
+`StreamTx` `reset` flag and `drain_streams_to_conn` issues
+`conn.stream_shutdown(sid, Shutdown::Write, <Q2 code>)`; the Reset path
+**never** transitions to the FIN branch.
 
 ### 1.3.3 No-regression contract (load-bearing)
 
@@ -194,39 +251,150 @@ H3_RESP_CHUNK_MAX`, **not** by total response size and **not** by the
 NOT "accumulate full response then send" (the rejected buffering trap).
 `bytes::Bytes` is used for the hot-path frame buffers.
 
-## 1.4 Actor wiring (P1-B, builder-2 — placeholder, to be integrated)
+## 1.4 Actor wiring (P1-B, builder-2)
 
-> builder-2 owns this section per s3-phase1-plan §1.4: `resp_rx_by_stream:
-> HashMap<u64, mpsc::Receiver<RespEvent>>` (actor-owned, H1 spawn site
-> only); the **additional** progressive `StreamTx` variant
-> (`queue: VecDeque<Bytes>`, `ended`, `reset`, `fin_sent`) with the
-> existing `StreamTx::new(Vec<u8>)` constructor + its drain kept
-> byte-identical so H2/H3 + inline errors are bit-for-bit unaffected;
-> `drain_streams_to_conn` handling both variants (H1: drain queue; on
-> `ended` && empty → FIN; on `reset` → `stream_shutdown(Write)`);
-> the post-`select!` backpressure gate (drain a receiver into its
-> `StreamTx` **only when that StreamTx's queue is empty** — mirrors the
-> request-side `pending_empty` gate, `conn_actor.rs:401-404`); `next_wait`
-> ≤ 2 ms while any response channel is active (same pattern as the
-> existing body tick `conn_actor.rs:156-158`); rewire **only** the H1
-> spawn at `conn_actor.rs:494-512` to a `stream_h1_response` producer
-> task with `resp_tx`. inline-400 / `h3_to_h2_roundtrip` /
-> `h3_to_h3_roundtrip` spawns (`conn_actor.rs:457/466/477`) and the
-> `request_tasks`/`task_wait`/`StreamTx::new(Vec)` legacy path stay
-> EXACTLY as-is. builder-2 to supply final §1.4 text + how it satisfies
-> R8 (the gate is the backpressure/memory bound); I integrate before
-> requesting approval.
+Owner: builder-2 (P1-B, task #4). This is the approved s3-phase1-plan
+§1.4 design, anchored to foundation-pass code (builder-2 independently
+re-confirmed every anchor). The H2/H3 + inline-error legacy path is
+**not touched**.
 
-## 1.5 Non-vacuous memory gauge (P1-B, builder-2 — placeholder)
+**1.4.1 Actor-owned response receivers.** Add to `run_actor`
+(`conn_actor.rs:115`) alongside `stream_response` (`:118`):
 
-> Mirrors `MAX_RETAINED_BODY_BYTES` / `record_retained` (`h3_bridge.rs:483
-> / 491`) and `record_retained_for_stream` (`conn_actor.rs:740-765`):
-> add `MAX_RETAINED_RESP_BYTES` atomic + `record_resp_retained`
-> (`cfg(any(test, feature="test-gauges"))`), recorded in the actor at
-> the largest point (after draining receivers into `StreamTx`, before
-> `drain_streams_to_conn`): Σ over streams of progressive-`StreamTx`
-> queued bytes + channel occupancy upper bound (`used_slots *
-> H3_RESP_CHUNK_MAX`). builder-2 to supply final text.
+```rust
+let mut resp_rx_by_stream: HashMap<u64, mpsc::Receiver<RespEvent>> = HashMap::new();
+```
+
+The matching `mpsc::Sender<RespEvent>` (bounded depth
+`H3_RESP_CHANNEL_DEPTH`) is moved into the spawned `stream_h1_response`
+producer task; the receiver stays here. **Used by the H1 spawn site
+only.**
+
+**1.4.2 Progressive `StreamTx` variant.** `StreamTx`
+(`conn_actor.rs:235-249`) gains an **additional** variant for H1
+streaming; the existing legacy shape + `StreamTx::new(Vec<u8>)`
+constructor + its drain branch in `drain_streams_to_conn`
+(`:254-297`) stay **byte-for-byte identical** so H2/H3 + the inline
+400/502/413 responses are bit-for-bit unaffected:
+
+```rust
+enum StreamTx {
+    /// Legacy: one pre-built Vec, byte cursor + FIN-on-empty.
+    /// UNCHANGED — serves H2/H3 + inline-error responses.
+    Buffered { bytes: Vec<u8>, sent: usize, finished: bool },
+    /// SESSION 4 / P1-B: progressive H1 response egress.
+    Progressive { queue: VecDeque<bytes::Bytes>, ended: bool, reset: bool, fin_sent: bool },
+}
+```
+
+`StreamTx::new(Vec<u8>)` continues to construct the `Buffered` variant
+(legacy call site `conn_actor.rs:206` unchanged). `drain_streams_to_conn`
+matches the variant: `Buffered` runs the existing loop verbatim;
+`Progressive` drains `queue` front-to-back via `conn.stream_send(sid,
+&chunk, false)` (re-queueing the unsent tail on `Done`/partial), and
+then: if `reset` ⇒ `conn.stream_shutdown(sid, Shutdown::Write,
+<Q2 code>)` and drop the stream, **never FIN**; else if `ended` &&
+`queue` empty ⇒ zero-length `stream_send(sid, &[], true)` to set FIN
+(same FIN mechanism as the legacy branch).
+
+**1.4.3 Backpressure gate (the memory bound).** After the `select!`
+post-event block (near `poll_h3`, `conn_actor.rs:214-227`), for each
+H1 stream drain its `resp_rx_by_stream` receiver into its
+`Progressive` `StreamTx` **only while that `StreamTx.queue` is empty**
+— pull at most enough to refill an empty queue, then stop. This
+mirrors the request-side `pending_empty`/`flush_pending` gate
+(`conn_actor.rs:401-404`, `:772-810`). `RespEvent::Bytes` → push to
+`queue`; `RespEvent::End` → set `ended`; `RespEvent::Reset` (or
+receiver closed with no `End`) → set `reset`. Because the gate refuses
+to pull while the queue is non-empty, proxy-retained response bytes are
+bounded to ≈ one queue's worth + the bounded channel; a stalled client
+(quiche send window full ⇒ `Progressive` drain makes no progress ⇒
+queue stays non-empty ⇒ gate pulls nothing ⇒ channel fills ⇒
+`stream_h1_response`'s `tx.send().await` blocks ⇒ upstream socket read
+pauses).
+
+**1.4.4 Wake cadence.** Extend the existing 2 ms `next_wait` cap
+(`conn_actor.rs:146-158`, today gated on
+`!body_tx_by_stream.is_empty() || !body_pending.is_empty()`) to also
+trip while `!resp_rx_by_stream.is_empty()`, so a backpressured response
+resumes promptly. Identical pattern to the already-accepted S2
+request-body tick; does not defeat backpressure (the gate + bounded
+channel still cap in-flight bytes).
+
+**1.4.5 Spawn-site rewire — H1 ONLY.** Replace **only** the H1 spawn at
+`conn_actor.rs:494-512` (`h3_to_h1_stream` push): create
+`mpsc::channel::<RespEvent>(H3_RESP_CHANNEL_DEPTH)`, insert the
+receiver into `resp_rx_by_stream`, immediately insert a
+`StreamTx::Progressive` (empty) into `stream_response`, and spawn the
+producer task running `stream_h1_response(stream, &resp_tx,
+MAX_RESPONSE_BODY_BYTES)` — the task acquires the pooled upstream,
+writes the request head + streams the request body (the existing P1-A
+request-side machinery in `h3_to_h1_stream` is reused: the response
+half is what changes), then pipes the response via `resp_tx`. The
+inline-400 (`:457`), `h3_to_h2_roundtrip` (`:466`), `h3_to_h3_roundtrip`
+(`:477`) spawns and the entire `request_tasks` /
+`task_wait` (`:163-186`) / `StreamTx::new(Vec)` (`:206`) legacy path
+stay **exactly as-is**.
+
+**Q2 — RESET_STREAM error code (builder-2 fills this one line):**
+`[Q2 — builder-2: state the H3 error-code constant for
+conn.stream_shutdown(Write, …) on the Reset path — reuse the existing
+H3 cancel/internal-error constant already used by the codebase's
+stream_shutdown / the module that defines H3_NO_ERROR=0x0100
+(conn_actor.rs:327); give name + numeric value + source module; do NOT
+invent a new code.]`
+
+### How P1-B satisfies R8
+
+The §1.4.3 gate ("drain the receiver into the `StreamTx` **only when
+its `queue` is empty**") is the memory bound: proxy-retained response
+bytes ≈ one `VecDeque<bytes::Bytes>` queue (≤ a small number of
+≤`H3_RESP_CHUNK_MAX` chunks) + the bounded `mpsc` channel
+(`H3_RESP_CHANNEL_DEPTH * H3_RESP_CHUNK_MAX`) + quiche's own
+flow-control-bounded send buffer — **independent of total response
+size and of the 64 MiB cap**. The end-to-end stall chain: slow H3
+client → quiche send window full → `Progressive` drain makes no
+progress → `StreamTx.queue` stays non-empty → gate pulls nothing from
+the receiver → channel fills → `stream_h1_response`'s `tx.send().await`
+blocks → upstream socket `read()` is not called → TCP backpressure to
+the upstream. Bytes flow from the first frame (the gate forwards
+HEADERS/DATA the instant the queue drains); this is NOT
+"accumulate-then-send". The progressive queue is
+`VecDeque<bytes::Bytes>` — the `bytes::Bytes` hot-path buffer mandated
+by R8.
+
+## 1.5 Non-vacuous memory gauge (P1-B, builder-2)
+
+Owner: builder-2 (P1-B, task #4). Exact mirror of the request-side
+gauge: `MAX_RETAINED_BODY_BYTES` / `record_retained`
+(`h3_bridge.rs:483 / 491`) and the per-stream summation
+`record_retained_for_stream` (`conn_actor.rs:740-765`).
+
+Add to `h3_bridge.rs`, `cfg(any(test, feature="test-gauges"))`:
+
+```rust
+pub static MAX_RETAINED_RESP_BYTES: std::sync::atomic::AtomicUsize =
+    std::sync::atomic::AtomicUsize::new(0);
+fn record_resp_retained(n: usize) { /* CAS-max, identical to record_retained */ }
+```
+
+Recorded in the actor at the **largest point** — after §1.4.3 drains
+the receivers into the `Progressive` `StreamTx`s and **before**
+`drain_streams_to_conn` — as the sound UPPER bound:
+
+```
+Σ_streams ( Σ progressive-StreamTx.queue chunk lengths )
+         + ( used_slots × H3_RESP_CHUNK_MAX )      // channel occupancy upper bound
+```
+
+`used_slots = tx.max_capacity() - tx.capacity()` on the
+`Sender<RespEvent>` (same technique as `record_retained_for_stream`'s
+`chan_used`). The gauge must over- not under-estimate (every queued
+event is ≤ `H3_RESP_CHUNK_MAX`, so `used_slots × H3_RESP_CHUNK_MAX` is
+sound). **R2** (1 MiB response, stalled H3 client) asserts
+`MAX_RETAINED_RESP_BYTES ≤ 4 × (H3_RESP_CHANNEL_DEPTH ×
+H3_RESP_CHUNK_MAX)` and `≪ 1 MiB` — non-vacuous proof that RSS does
+not grow with response size.
 
 ## 2. Tests (task #6, builder-1) — real listener/router/bridge, binary bodies
 
