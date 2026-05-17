@@ -477,17 +477,27 @@ the receivers into the `Progressive` `StreamTx`s and **before**
 
 ```
 Σ_streams ( Σ progressive-StreamTx.queue chunk lengths )
-         + ( used_slots × H3_RESP_CHUNK_MAX )      // channel occupancy upper bound
+         + ( used_slots × (H3_RESP_CHUNK_MAX + H3_FRAME_HDR_MAX) )  // channel occupancy upper bound
 ```
 
 `used_slots = tx.max_capacity() - tx.capacity()` on the
 `Sender<RespEvent>` (same technique as `record_retained_for_stream`'s
-`chan_used`). The gauge must over- not under-estimate (every queued
-event is ≤ `H3_RESP_CHUNK_MAX`, so `used_slots × H3_RESP_CHUNK_MAX` is
-sound). **R2** (1 MiB response, stalled H3 client) asserts
+`chan_used`). The gauge MUST over- not under-estimate: each queued
+`RespEvent::Bytes` carries a PRE-ENCODED H3 frame — a
+≤`H3_RESP_CHUNK_MAX` payload PLUS the frame-header varints — so the
+per-slot bound is `H3_RESP_CHUNK_MAX + H3_FRAME_HDR_MAX`, NOT bare
+`H3_RESP_CHUNK_MAX` (C5; builder-1's catch — a bare-`H3_RESP_CHUNK_MAX`
+gauge would UNDER-count by the frame header and be an unsound memory
+proof, violating R8's non-vacuous requirement; this matches the
+request-gauge soundness rule the §1.2 comment cites,
+`h3_bridge.rs:757-759`, and §1.2's own
+`H3_RESP_CHANNEL_DEPTH × (H3_RESP_CHUNK_MAX + H3_FRAME_HDR_MAX)`
+bound). **R2** (1 MiB response, stalled H3 client) asserts
 `MAX_RETAINED_RESP_BYTES ≤ 4 × (H3_RESP_CHANNEL_DEPTH ×
-H3_RESP_CHUNK_MAX)` and `≪ 1 MiB` — non-vacuous proof that RSS does
-not grow with response size.
+(H3_RESP_CHUNK_MAX + H3_FRAME_HDR_MAX))` and `≪ 1 MiB` — still
+non-vacuous (the `+ H3_FRAME_HDR_MAX` per slot is ≈128 B vs the 64 KiB
+channel term; the `≪ 1 MiB` / body-size-independence proof is
+unaffected).
 
 ## 2. Tests (task #6, builder-1) — real listener/router/bridge, binary bodies
 
