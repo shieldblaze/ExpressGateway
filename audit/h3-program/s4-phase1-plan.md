@@ -39,11 +39,20 @@ below.
   fields after the zero-size chunk) and keep PROTO-2-12
   (`h3_h1_trailers_resp_e2e.rs` pc1/pc2 + `request_h3_upstream`) green.
 
+- **C5 (gauge soundness — R6/R8; builder-1's catch).** §1.5's
+  channel-occupancy term must be `used_slots × (H3_RESP_CHUNK_MAX +
+  H3_FRAME_HDR_MAX)`, NOT bare `× H3_RESP_CHUNK_MAX`. `RespEvent::Bytes`
+  carries a pre-encoded frame (payload + frame-header varints); §1.2
+  bounds it with `+ H3_FRAME_HDR_MAX`. A gauge that under-counts is an
+  unsound memory proof (R8 non-vacuous requirement). R2's ceiling stays
+  generous (`≤ 4 × DEPTH × (CHUNK_MAX + FRAME_HDR_MAX)`, `≪ 1 MiB`).
+
 C2 binds P1-A signature/teardown (builder-1, §1.3.4) AND P1-B wiring
 (builder-2). C3 binds P1-A (the decoder, builder-1) + tests. C1 binds
-P1-B + the abort tests. C4 binds P1-C. P1-A (task #3) may start
-immediately (it does not depend on Q2). Conditions are enforced at
-each owning increment's independent verification (author ≠ verifier).
+P1-B + the abort tests. C4 binds P1-C. C5 binds P1-B (builder-2's
+§1.5 gauge). P1-A (task #3) may start immediately (it does not depend
+on Q2). Conditions are enforced at each owning increment's independent
+verification (author ≠ verifier).
 
 Branch: `feature/h3-quic-s4` @ base `9d2bd9ca` (audit/foundation-pass tip).
 This plan executes the APPROVED design in
