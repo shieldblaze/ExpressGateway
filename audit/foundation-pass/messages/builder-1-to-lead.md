@@ -80,3 +80,55 @@ just not at the wire-observation layer the plan assumed.
 - task #7 → completed (my part); not pushed (lead pushes).
 
 Proceeding to F-COR-1 (task #8).
+
+## 2026-05-17 — F-COR-1 COMPLETE (task #8) — commit 9e41d07f
+
+Implemented per D1 (buffer-then-forward, NAMED cap MAX_REQUEST_BODY_BYTES
+=64 MiB, 413 on exceed) + D2 (DETERMINISTIC gate). DEVIATION (stronger,
+in scope): the deterministic gate uses a connection-counting backend —
+the scheduler-independent invariant is "malformed request ⇒ backend
+dialed ZERO times" (validate-before-dial). A pure wire-DATA assertion
+is NOT deterministic (the race only loses under churn, per auditor-2),
+so the dial-count invariant is the correct deterministic gate; h2spec
+stays corroboration only (passes, not flaky). Also: a pseudo-header
+trailer cannot exist as an http::HeaderName (`:` is not an RFC7230
+token char) so the H2 helper's filter is defense-in-depth; the real
+proven H2 §8.1 enforcement is the ordering fix (gate test +
+dial-count). H3 path uses String pairs → its :-check IS reachable and
+unit-tested.
+
+- pre-fix fail: F-COR-1 src reverted → both ordering-race gate tests
+  FAIL deterministically "backend was dialed for a malformed request"
+  (no churn).
+- post-fix pass: h2_validation_before_forward 3/3 ×3; lb-quic feed_body
+  trailer 2/2; lb-l7 lib 88/88; lb-quic lib 11/11; trailer_passthrough
+  8/8; bridging_h2_* / h3_h1 1/1; h3_h1_trailers_resp_e2e 2/2;
+  h2_proxy_e2e 3/3; h2_security_live 6/6; h2spec corroboration PASSES;
+  clippy + fmt clean.
+- D1 behavioral-change note appended to findings.md under F-COR-1.
+- files: crates/lb-l7/src/h2_proxy.rs, crates/lb-quic/src/h3_bridge.rs,
+  tests/h2_validation_before_forward.rs (new),
+  audit/foundation-pass/findings.md.
+- task #8 → completed (my part); not pushed.
+
+Proceeding to F-COR-6 (task #9).
+
+## 2026-05-17 — F-COR-6 COMPLETE (task #9) — commit 7770de99
+
+Removed #[ignore = "S2: request-body forwarding"] and rewrote the
+stale-false UNBUILT doc comment to state the datapath is BUILT (S2
+P1-A f2af73c4) citing the e2e proofs (h3_h1_stream_body_e2e t1/t5,
+h3_to_h1_forwards_non_utf8_body). No assertion change (already passes).
+
+- pre-fix state: lb-quic lib 11 passed / 1 ignored (test "ignored,
+  S2: request-body forwarding").
+- post-fix pass: lb-quic lib 12 passed / 0 IGNORED; the test runs
+  `s2_target_build_h1_request_with_body_... ok`. clippy + fmt clean.
+- files: crates/lb-quic/src/h3_bridge.rs.
+- task #9 → completed (my part); not pushed.
+
+ALL THREE FINDINGS COMPLETE. Serialized chain done:
+F-SEC-1=044db8da, F-COR-1=9e41d07f, F-COR-6=7770de99. NOT pushed
+(lead pushes). No R7 blocker hit (F-SEC-1 D3 STOP condition was NOT
+triggered — deterministic gate achieved via the structural unit test).
+Author != verifier: a different agent must verify each.
