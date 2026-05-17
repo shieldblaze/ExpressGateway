@@ -46,5 +46,5 @@ ring = "0.17"
 subtle = "2"
 
 [dev-dependencies]
-rcgen = { version = "0.13", features = ["pem"] }
+rcgen = { version = "0.14", features = ["pem"] }
 tokio = { workspace = true, features = ["full", "test-util", "macros"] }

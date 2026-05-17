@@ -42,7 +42,7 @@ lb-io = { path = "../lb-io" }
 lb-h3 = { path = "../lb-h3" }
 
 [dev-dependencies]
-rcgen = { version = "0.13", features = ["pem"] }
+rcgen = { version = "0.14", features = ["pem"] }
 tokio = { workspace = true, features = ["full", "test-util"] }
 # CODE-2-11: proptest harness for the long/short header parse path.
 # Sanity budget; CI bumps via PROPTEST_CASES env.
