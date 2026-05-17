@@ -571,6 +571,43 @@ pub fn record_retained(n: usize) {
     }
 }
 
+/// SESSION 4 / P1-B (§1.5 non-vacuous memory proof — approval
+/// condition C5): the maximum, observed at any instant, of the TOTAL
+/// per-stream RESPONSE memory the proxy retains while a response is in
+/// flight — i.e. Σ over streams of the `Progressive` `StreamTx` queued
+/// bytes + the bounded response-channel occupancy (an UPPER bound;
+/// soundness parity with [`MAX_RETAINED_BODY_BYTES`]). Recorded in
+/// `conn_actor` right after the §1.4.3 gate refills the `Progressive`
+/// `StreamTx`s from the channels and BEFORE `drain_streams_to_conn` —
+/// the point where these buffers are largest. A whole-response
+/// buffering implementation would make this grow with response size;
+/// the bounded channel + the empty-queue gate keep it ≈
+/// `H3_RESP_CHANNEL_DEPTH × (H3_RESP_CHUNK_MAX + H3_FRAME_HDR_MAX)`,
+/// independent of total response size and of [`MAX_RESPONSE_BODY_BYTES`].
+#[cfg(any(test, feature = "test-gauges"))]
+pub static MAX_RETAINED_RESP_BYTES: std::sync::atomic::AtomicUsize =
+    std::sync::atomic::AtomicUsize::new(0);
+
+/// SESSION 4 / P1-B (test-gauge): max-update for
+/// [`MAX_RETAINED_RESP_BYTES`]. Identical CAS-max to
+/// [`record_retained`].
+#[cfg(any(test, feature = "test-gauges"))]
+pub fn record_resp_retained(n: usize) {
+    use std::sync::atomic::Ordering;
+    let mut cur = MAX_RETAINED_RESP_BYTES.load(Ordering::Relaxed);
+    while n > cur {
+        match MAX_RETAINED_RESP_BYTES.compare_exchange_weak(
+            cur,
+            n,
+            Ordering::Relaxed,
+            Ordering::Relaxed,
+        ) {
+            Ok(_) => break,
+            Err(observed) => cur = observed,
+        }
+    }
+}
+
 /// Parsed H3 request headers.
 #[derive(Debug, Clone)]
 pub struct H3Request {
@@ -957,8 +994,8 @@ impl ChunkDecoder {
                     if hex.is_empty() {
                         return Err(RespAbort::ChunkedDecode);
                     }
-                    let size = usize::from_str_radix(hex, 16)
-                        .map_err(|_| RespAbort::ChunkedDecode)?;
+                    let size =
+                        usize::from_str_radix(hex, 16).map_err(|_| RespAbort::ChunkedDecode)?;
                     self.buf.drain(..nl + 2);
                     if size == 0 {
                         // Zero-size terminator. Any non-CRLF junk
@@ -2429,10 +2466,7 @@ mod tests {
         // (c) wrong byte where the post-body CRLF must be.
         let mut d = ChunkDecoder::new();
         let mut o = Vec::new();
-        assert_eq!(
-            d.feed(b"3\r\nabcXX", &mut o),
-            Err(RespAbort::ChunkedDecode)
-        );
+        assert_eq!(d.feed(b"3\r\nabcXX", &mut o), Err(RespAbort::ChunkedDecode));
         // (d) chunk-size line longer than the smuggling-guard cap.
         let mut d = ChunkDecoder::new();
         let huge = format!("{}\r\n", "1".repeat(MAX_CHUNK_SIZE_LINE + 8));
@@ -2449,7 +2483,8 @@ mod tests {
     fn chunk_decoder_tolerates_chunk_extension() {
         let mut dec = ChunkDecoder::new();
         let mut out = Vec::new();
-        dec.feed(b"4;name=value\r\nbody\r\n0\r\n", &mut out).unwrap();
+        dec.feed(b"4;name=value\r\nbody\r\n0\r\n", &mut out)
+            .unwrap();
         assert!(dec.done);
         assert_eq!(out, b"body");
     }
