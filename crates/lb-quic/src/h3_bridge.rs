@@ -1716,6 +1716,104 @@ pub async fn h3_to_h1_stream(
     encode_h3_response(response.status, &response.body)
 }
 
+/// SESSION 4 / P1-B — **incremental, bounded, backpressured** H3→H1
+/// with INCREMENTAL RESPONSE egress. The actor's H1 hot-path producer
+/// task body (replaces the buffered [`h3_to_h1_stream`] there; the
+/// buffered variant is retained only for the request-side e2e suites).
+///
+/// Owns the [`PooledTcp`] for its whole lifetime. The request-write
+/// half is the shared [`write_h1_request`] (byte-identical request
+/// behaviour); the response is streamed incrementally via
+/// [`stream_h1_response`] into the bounded `resp_tx` channel back to
+/// the actor (the §1.4.3 backpressure gate + bounded channel are the
+/// memory bound, response-size-independent — R8).
+///
+/// **C2 (approval condition — pooled-upstream smuggling guard):** on
+/// EVERY non-clean outcome — `write_h1_request` `Err(())` (upstream
+/// I/O failure) or `Ok(ReqWriteOutcome::Aborted(..))` (channel abort),
+/// OR any [`RespAbort`] from `stream_h1_response` (all six variants
+/// incl. `ClientGone`) — the `PooledTcp` is marked NON-reusable before
+/// it drops, so a partially-written request / partially-consumed
+/// upstream response can never poison a pooled connection. The clean
+/// path ALSO marks it non-reusable, preserving the pre-P1-B
+/// unconditional-on-success disposition (the request carries
+/// `Connection: close`; the socket is not re-parked).
+///
+/// Returns `Ok(())` once the response was fully piped (the actor saw
+/// `RespEvent::End` and will FIN), or `Err(RespAbort)` describing why
+/// it aborted (the actor already saw the matching `RespEvent::Reset`
+/// and will `RESET_STREAM` with `H3_INTERNAL_ERROR`). The request-write
+/// abort/error cases are surfaced to the client as a complete inline
+/// `413`/`502` (HEADERS+DATA then `End`) and return `Ok(())`.
+pub async fn h3_to_h1_stream_resp(
+    req: &H3Request,
+    backend: SocketAddr,
+    pool: &TcpPool,
+    mut body_rx: tokio::sync::mpsc::Receiver<ReqBodyEvent>,
+    resp_tx: tokio::sync::mpsc::Sender<RespEvent>,
+    cap: usize,
+) -> Result<(), RespAbort> {
+    /// Emit a complete inline H3 response (HEADERS+DATA) then `End`,
+    /// for the request-write abort/error paths. Best-effort: a closed
+    /// channel (client already gone) just means nobody is listening.
+    async fn inline(tx: &tokio::sync::mpsc::Sender<RespEvent>, status: u16, body: &[u8]) {
+        if let Ok(bytes) = encode_h3_response(status, body) {
+            let _ = tx.send(RespEvent::Bytes(Bytes::from(bytes))).await;
+            let _ = tx.send(RespEvent::End).await;
+        } else {
+            let _ = tx.send(RespEvent::Reset).await;
+        }
+    }
+
+    let mut pooled = match pool.acquire_async(backend).await {
+        Ok(p) => p,
+        Err(e) => {
+            tracing::warn!(error = %e, "H3→H1 resp stream backend acquire failed");
+            inline(&resp_tx, 502, b"bad gateway").await;
+            // No upstream connection acquired — nothing to poison.
+            return Ok(());
+        }
+    };
+
+    let outcome: Result<(), RespAbort> = {
+        let Some(stream) = pooled.stream_mut() else {
+            inline(&resp_tx, 502, b"bad gateway").await;
+            pooled.set_reusable(false);
+            return Ok(());
+        };
+
+        match write_h1_request(req, stream, &mut body_rx).await {
+            Ok(ReqWriteOutcome::Complete) => {
+                // Stream the response incrementally. On ANY RespAbort
+                // (upstream reset / premature EOF / chunked-decode /
+                // over-cap / bad head / client gone) the upstream was
+                // consumed partially/faithlessly ⇒ C2 below.
+                stream_h1_response(stream, &resp_tx, cap).await
+            }
+            Ok(ReqWriteOutcome::Aborted(status, body)) => {
+                inline(&resp_tx, status, body).await;
+                // Request never completed on the wire — smuggling guard.
+                pooled.set_reusable(false);
+                return Ok(());
+            }
+            Err(()) => {
+                inline(&resp_tx, 502, b"bad gateway").await;
+                pooled.set_reusable(false);
+                return Ok(());
+            }
+        }
+    };
+
+    // C2: every remaining outcome marks the pooled connection
+    // non-reusable before it drops — `Err(RespAbort)` (all variants:
+    // the upstream response was consumed partially / not faithfully
+    // relayed) AND the `Ok(())` clean path (pre-P1-B
+    // unconditional-on-success: the request carried `Connection:
+    // close`, the socket must not be re-parked).
+    pooled.set_reusable(false);
+    outcome
+}
+
 /// Outcome of a single round-trip to an H3 upstream backend.
 ///
 /// Carries the parsed response status, response field list, and body

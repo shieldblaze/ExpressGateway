@@ -35,8 +35,9 @@ use lb_io::quic_pool::QuicUpstreamPool;
 use bytes::Bytes;
 
 use crate::h3_bridge::{
-    BodyItem, H3Request, MAX_REQUEST_BODY_BYTES, ReqBodyEvent, RespEvent, StreamRxBuf,
-    encode_h3_response, h3_to_h1_stream, h3_to_h2_roundtrip, h3_to_h3_roundtrip,
+    BodyItem, H3_RESP_CHANNEL_DEPTH, H3Request, MAX_REQUEST_BODY_BYTES, MAX_RESPONSE_BODY_BYTES,
+    ReqBodyEvent, RespEvent, StreamRxBuf, encode_h3_response, h3_to_h1_stream_resp,
+    h3_to_h2_roundtrip, h3_to_h3_roundtrip,
 };
 
 /// SESSION 2 / P1-A: depth of the per-stream bounded request-body
@@ -264,6 +265,9 @@ pub async fn run_actor(mut params: ActorParams) -> std::io::Result<()> {
                 &mut body_tx_by_stream,
                 &mut body_pending,
                 &mut request_tasks,
+                &mut resp_rx_by_stream,
+                &mut resp_tasks,
+                &mut stream_response,
                 &params.pool,
                 &params.backends,
                 params.h3_backend.as_ref(),
@@ -649,6 +653,16 @@ fn poll_h3(
     body_tx_by_stream: &mut HashMap<u64, mpsc::Sender<ReqBodyEvent>>,
     body_pending: &mut HashMap<u64, VecDeque<ReqBodyEvent>>,
     request_tasks: &mut Vec<tokio::task::JoinHandle<(u64, Vec<u8>)>>,
+    // SESSION 4 / P1-B: the H1 spawn site moves its response off the
+    // legacy `request_tasks`/`task_wait` Vec path onto the bounded
+    // RESPONSE channel. `resp_rx_by_stream` (actor-owned receivers) +
+    // an empty `Progressive` `StreamTx` are registered here; the
+    // producer `JoinHandle` goes to `resp_tasks` (NOT `request_tasks`).
+    // The inline-400 / h2 / h3 spawns + the legacy Vec path are
+    // untouched.
+    resp_rx_by_stream: &mut HashMap<u64, mpsc::Receiver<RespEvent>>,
+    resp_tasks: &mut Vec<tokio::task::JoinHandle<()>>,
+    stream_response: &mut HashMap<u64, StreamTx>,
     pool: &TcpPool,
     backends: &Arc<Vec<SocketAddr>>,
     h3_backend: Option<&(QuicUpstreamPool, SocketAddr, String)>,
@@ -751,29 +765,48 @@ fn poll_h3(
                                 tracing::warn!("no backends available for H3 request");
                                 continue;
                             };
-                            // SESSION 2 / P1-A: spawn the INCREMENTAL
-                            // streaming egress. The bounded body channel
-                            // is the memory mechanism; the receiver is
-                            // moved into the task, the sender stays here.
+                            // SESSION 4 / P1-B: spawn the INCREMENTAL
+                            // request + INCREMENTAL response producer.
+                            // The request-body channel (btx/brx) is the
+                            // request-side memory mechanism (unchanged
+                            // from S2). The NEW response channel
+                            // (resp_tx/resp_rx) is the response-side
+                            // one: the producer owns the sender, the
+                            // actor owns the receiver (registered here)
+                            // and drains it under the §1.4.3
+                            // backpressure gate into an (empty)
+                            // `Progressive` `StreamTx`. The producer
+                            // `JoinHandle` goes to `resp_tasks`, NOT
+                            // `request_tasks` — the legacy
+                            // `request_tasks`/`task_wait` Vec path stays
+                            // byte-for-byte and still serves H2/H3 +
+                            // the inline-400/502/413 errors. C2: the
+                            // producer owns the `PooledTcp` and marks
+                            // it non-reusable on every abort/clean
+                            // outcome (inside `h3_to_h1_stream_resp`).
                             let pool = pool.clone();
                             let (btx, brx) = mpsc::channel::<ReqBodyEvent>(H3_BODY_CHANNEL_DEPTH);
-                            request_tasks.push(tokio::spawn(async move {
-                                let bytes = match h3_to_h1_stream(
+                            let (resp_tx, resp_rx) =
+                                mpsc::channel::<RespEvent>(H3_RESP_CHANNEL_DEPTH);
+                            resp_rx_by_stream.insert(sid, resp_rx);
+                            stream_response.insert(sid, StreamTx::progressive());
+                            resp_tasks.push(tokio::spawn(async move {
+                                if let Err(abort) = h3_to_h1_stream_resp(
                                     &req,
                                     backend,
                                     &pool,
                                     brx,
-                                    MAX_REQUEST_BODY_BYTES,
+                                    resp_tx,
+                                    MAX_RESPONSE_BODY_BYTES,
                                 )
                                 .await
                                 {
-                                    Ok(b) => b,
-                                    Err(e) => {
-                                        tracing::warn!(error = %e, "H3→H1 stream failed");
-                                        Vec::new()
-                                    }
-                                };
-                                (sid, bytes)
+                                    tracing::warn!(
+                                        ?abort,
+                                        stream_id = sid,
+                                        "H3→H1 resp stream aborted"
+                                    );
+                                }
                             }));
                             if fin {
                                 // Bodyless (HEADERS + FIN): the egress
