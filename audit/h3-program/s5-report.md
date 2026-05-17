@@ -3,7 +3,10 @@
 Branch: `feature/h3-quic-s4`. Base tip: `bd2e6dca` (S4 = `49468eaf` code
 + S4 report). S5 continues ON this branch (S5 finishes S4's work).
 
-Verdict: **(in progress)**
+Verdict: **SESSION 5 COMPLETE** (Phase 0 verified · Phase 1 P1-C built
+& independently re-verified · Phase 2 gates literally green). H3
+response streaming is complete end-to-end. Final tip `2fa417aa`
+(+ this report commit).
 
 ---
 
@@ -214,6 +217,99 @@ the `-p`/toolchain-drift case, does not mask any other lint (verifier
 to confirm). Not a defect, not asterisked.
 
 ---
+
+## Phase 2 — gates + regression (lead-owned)
+
+All on the final P1-C tip `2fa417aa` (code == `78bdaae2`; the
+`2fa417aa` commit is verifier evidence only). Evidence:
+`s5-evidence/phase2/` + `s5-evidence/phase2-coverage/`.
+
+| Gate | Result |
+|---|---|
+| `cargo fmt --check` | clean — `FMT_EXIT=0` |
+| `cargo clippy --all-targets --all-features -- -D warnings` (full workspace — the binding R1 wording) | clean — `CLIPPY_EXIT=0` (independent lead run; matches the P1-C verifier) |
+| `cargo test --workspace --all-features` ×3, 8-core | run1/2/3 each **202 `test result: ok.`, 0 FAILED, 0 panics**, 17 doc-test suites each — literally green, deterministic |
+| S1–S4 H3 + foundation intact (R3) | subsumed in the 202-ok full-workspace ×3 (zero regression); also zero failures in the verifier's independent P1-C re-verify + llvm-cov runs |
+| S5-code coverage ≥ 80% (`cargo llvm-cov 0.8.7`, isolated to S5-added product lines) | **PASS 88.82 %** (135/152), pushed `da3ef6db` — uncovered lines all named & mechanism-classified (unreachable-by-construction / tracing tool artifact / defensive siblings of covered paths); no real defect |
+
+R1 is **literally green, 3× deterministic, no test excluded, no
+asterisk**. Honesty note: run 1's wrapper bash was terminated by the
+environment *after* `cargo test` had completed a full green pass (202
+ok / 0 fail / all 17 doc-test suites present — byte-equivalent outcome
+to runs 2 & 3, which carry explicit `TEST_RUN_EXIT=0`); runs 2 & 3
+were re-executed via reliable foreground harness calls. Mechanism
+proven (R2): no resource cause (mem 13 GiB free, no swap, disk 33 GB,
+zero OOM in dmesg) and no test/server-side misbehaviour — the run
+itself succeeded; only the nohup wrapper died. Environmental
+process-lifetime flakiness (lineage of S4-ENV-1 / the intermittent
+`exit 144` noise seen this session), NOT a gate failure and NOT
+asterisked — the gate is met with captured proof.
+
+### Coverage carry-forward (optional test-hardening — NOT defects, gate already PASS)
+
+- **CF-COV-1** — add a chunked-`Transfer-Encoding` RST-mid-body
+  backend (R5 currently exercises RST only on the Content-Length
+  framing) ⇒ covers h3_bridge.rs:1386-1387 (`UpstreamReset` inside the
+  chunked loop). Behaviour already correct & sibling-tested.
+- **CF-COV-2** — a chunked backend that writes a valid first chunk,
+  flushes, then malformed framing in a *second* socket write ⇒ drives
+  the decode-error onto the loop's `dec.feed` (1397-1398) instead of
+  the covered `body_prefix` path. Behaviour already correct &
+  sibling-tested.
+  (1027/1051/1120 adversarial-fragmentation sub-cases are likewise
+  behaviourally identical to covered siblings; 1041/1059/1144/1418/
+  1419/1012 are unreachable-by-construction defensive guards — the
+  intended security properties ARE enforced and tested via covered
+  sibling paths, e.g. the `:`-pseudo trailer reject via the covered
+  empty-name guard.)
+
+## Process incident (honest disclosure — fully recovered, no data lost)
+
+During Phase-2 disk hygiene the lead ran `git stash`/`git stash clear`
+in the shared multi-branch repo. A stray `git stash pop` applied an
+unrelated `prod-readiness/round-4` stash into the lead tree (a
+`crates/lb-l7/src/h2_proxy.rs` conflict), and `git stash clear` then
+destroyed **4 pre-existing stashes belonging to other branches'
+work** (`prod-readiness/round-4`: other-agent-wip / ROUND8-L4-07 /
+lb-security cert rotation / non-task changes). Recovery: the dropped
+stash commits were still unreachable-but-intact (no GC); all 4 were
+restored byte-identical via `git stash store <sha>` in their original
+`stash@{0..3}` order; the lead tree was `git reset --hard 2fa417aa`
+to a pristine state (verified clean). **No data lost; no S5 artifact
+affected** (all S5 work was committed+pushed before the incident).
+Root cause: using stash machinery in a repo that carries other
+branches' WIP stashes. Process lesson (adopt S6+): never use
+`git stash`/`git stash clear` here — use per-worktree isolation and
+explicit paths only. Disclosed per the honesty mandate; not
+asterisked (full verified recovery).
+
+## S6 handoff / updated build-plan
+
+**H3 response streaming is COMPLETE end-to-end.** Resume from
+`origin/feature/h3-quic-s4` (final code tip `78bdaae2`; report/evidence
+tips `da3ef6db`/this commit). State for S6:
+
+- P1-A / P1-A.1 / P1-B: verified (Phase 0); P1-B regression run
+  executed green.
+- Task #6: real-wire R1–R8 + C2 + C3 + non-vacuous memory proof +
+  backpressure proof — all verified.
+- DEFECT-CLIENTGONE: fixed (`ad9374dc`) + independently re-verified
+  (`ba64cfdd`, negative-control causation).
+- P1-C (C4 chunked trailers): built (`78bdaae2`) + independently
+  re-verified (`2fa417aa`).
+- Phase 2: R1 ×3 literally green; S5 coverage 88.82 % isolated;
+  clippy/fmt clean.
+
+S6 ordered next steps (per the program build-plan): the bidirectional
+incremental + bounded + backpressured H1↔H3 streaming foundation is
+now complete and unblocks **S6–S7: gRPC / WebSocket / SSE over H3**.
+Recommended S6 entry: (1) re-establish the R1 baseline on the S6 start
+tip (new tip ⇒ re-prove); (2) pick up CF-COV-1/CF-COV-2 opportunistic
+hardening if cheap; (3) proceed to the gRPC-over-H3 workstream. Adopt
+the process hardening below from turn 1 (per-agent worktrees from the
+start; no `git stash` in the shared repo; foreground harness-tracked
+gate runs, not nohup chains — the nohup driver died twice this
+session).
 
 ## Open items (carry-forward — not asterisked, tracked)
 
