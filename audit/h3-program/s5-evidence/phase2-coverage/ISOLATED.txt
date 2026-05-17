@@ -1,0 +1,11 @@
+=== conn_actor.rs ===
+  reap call site (282-286): 5/5 = 100.0%
+  reap_client_cancelled_responses fn (317-344): 20/22 = 90.9%  MISSING=[329, 330]
+=== h3_bridge.rs ===
+  encode_h3_trailers_frame (912-917): 6/6 = 100.0%
+  ChunkDecoder::new C4 inits (988-990): 3/3 = 100.0%
+  take_trailers (997-999): 3/3 = 100.0%
+  feed C4 dispatch + parse_trailer_section (1008-1149): 76/83 = 91.6%  MISSING=[1012, 1027, 1041, 1051, 1059, 1120, 1144]
+  chunked-arm while !complete + trailer emit (1382-1428): 22/30 = 73.3%  MISSING=[1386, 1387, 1397, 1398, 1418, 1419, 1424, 1425]
+
+ISOLATED S5 AGGREGATE: 135/152 = 88.82%
