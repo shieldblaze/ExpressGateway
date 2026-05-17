@@ -32,6 +32,8 @@ use lb_io::http2_pool::Http2Pool;
 use lb_io::pool::TcpPool;
 use lb_io::quic_pool::QuicUpstreamPool;
 
+use bytes::Bytes;
+
 use crate::h3_bridge::{
     BodyItem, H3Request, MAX_REQUEST_BODY_BYTES, ReqBodyEvent, StreamRxBuf, encode_h3_response,
     h3_to_h1_stream, h3_to_h2_roundtrip, h3_to_h3_roundtrip,
@@ -54,6 +56,26 @@ pub const H3_BODY_CHANNEL_DEPTH: usize = 8;
 /// signal — every conformant H3 peer parses it as an orderly
 /// shutdown rather than an abort (PROTO-2-11).
 pub const H3_NO_ERROR: u64 = 0x0100;
+
+/// SESSION 4 / P1-B (Q2 — team-lead ruling, approval condition C1):
+/// the H3 application error code the actor puts on a `RESET_STREAM`
+/// when an H1-upstream response is aborted mid-flight (upstream reset /
+/// premature EOF / chunked-decode error / over-cap / bad head / client
+/// cancel — every [`crate::h3_bridge::RespAbort`] variant).
+///
+/// `H3_INTERNAL_ERROR = 0x0102` is RFC 9114 §8.1's code for a
+/// proxy/upstream-side failure to produce a faithful complete
+/// response, which is exactly what every abort cause on this path is.
+/// It is deliberately NOT [`H3_NO_ERROR`] (`0x0100`): signalling the
+/// graceful-drain code on an abort would let a client/cache treat the
+/// partial body as a complete response (truncated-as-complete /
+/// cache-poisoning). It is deliberately NOT `H3_REQUEST_CANCELLED`
+/// (`0x010c`): that implies the *requester* cancelled, which is the
+/// distinct client-cancel path where the proxy does not RESET but
+/// stops reading the upstream. A grep of `crates/lb-quic` found no
+/// pre-existing reusable cancel/internal-error constant, so this is
+/// the RFC-registered codepoint, not an invented value.
+pub const H3_INTERNAL_ERROR: u64 = 0x0102;
 
 /// Upper bound on how long [`graceful_h3_shutdown`] will pump the
 /// connection after issuing `close()` before giving up. Quiche enters
@@ -229,21 +251,59 @@ pub async fn run_actor(mut params: ActorParams) -> std::io::Result<()> {
     Ok(())
 }
 
-/// Per-stream outbound cursor. Tracks how much of the encoded H3
-/// response has been fed into quiche's send buffer and whether FIN has
-/// been set.
-struct StreamTx {
-    bytes: Vec<u8>,
-    sent: usize,
-    finished: bool,
+/// Per-stream outbound cursor.
+///
+/// Two variants. `Buffered` is the LEGACY shape (a single pre-built
+/// `Vec`, byte cursor + FIN-on-empty) — it is **unchanged** and still
+/// serves H2/H3 round-trips and the inline 400/502/413 error responses
+/// (bit-for-bit identical wire behaviour; SESSION 4 adds no buffering
+/// to that path). `Progressive` is the SESSION 4 / P1-B incremental
+/// H1-response egress: a bounded queue of pre-encoded H3 frame chunks
+/// fed by [`stream_h1_response`] over a bounded channel, drained into
+/// quiche as flow control allows. The queue + the channel are the
+/// memory bound (≈ `H3_RESP_CHANNEL_DEPTH` × chunk), independent of
+/// total response size.
+enum StreamTx {
+    /// Legacy: one pre-built `Vec`, byte cursor + FIN-on-empty.
+    Buffered {
+        bytes: Vec<u8>,
+        sent: usize,
+        finished: bool,
+    },
+    /// SESSION 4 / P1-B: progressive H1 response egress.
+    ///
+    /// `queue` holds pre-encoded H3 wire chunks not yet handed to
+    /// quiche. `ended` ⇒ once `queue` drains, set FIN. `reset` ⇒
+    /// `RESET_STREAM` (never FIN) — a partial body is never presented
+    /// as complete (response-splitting / cache-poisoning guard).
+    /// `fin_sent` guards the one-shot FIN/shutdown.
+    Progressive {
+        queue: VecDeque<Bytes>,
+        ended: bool,
+        reset: bool,
+        fin_sent: bool,
+    },
 }
 
 impl StreamTx {
+    /// Construct the LEGACY buffered cursor. Unchanged signature +
+    /// behaviour so every existing caller (`conn_actor.rs:206`, the
+    /// H2/H3 + inline-error path) is bit-for-bit unaffected.
     const fn new(bytes: Vec<u8>) -> Self {
-        Self {
+        Self::Buffered {
             bytes,
             sent: 0,
             finished: false,
+        }
+    }
+
+    /// Construct an empty SESSION 4 / P1-B progressive egress cursor.
+    fn progressive() -> Self {
+        Self::Progressive {
+            queue: VecDeque::new(),
+            ended: false,
+            reset: false,
+            fin_sent: false,
         }
     }
 }
@@ -254,46 +314,118 @@ impl StreamTx {
 fn drain_streams_to_conn(conn: &mut quiche::Connection, streams: &mut HashMap<u64, StreamTx>) {
     let mut to_drop = Vec::new();
     for (&sid, tx) in streams.iter_mut() {
-        if tx.finished {
-            continue;
-        }
-        loop {
-            let remaining = tx.bytes.get(tx.sent..).unwrap_or(&[]);
-            if remaining.is_empty() {
-                // All bytes in; send FIN separately via a zero-length
-                // send with fin=true.
-                match conn.stream_send(sid, &[], true) {
-                    Ok(_) | Err(quiche::Error::Done) => {
-                        tx.finished = true;
+        match tx {
+            // LEGACY buffered path — byte-for-byte the pre-SESSION-4
+            // loop. H2/H3 + inline-error responses are unaffected.
+            StreamTx::Buffered {
+                bytes,
+                sent,
+                finished,
+            } => {
+                if *finished {
+                    continue;
+                }
+                loop {
+                    let remaining = bytes.get(*sent..).unwrap_or(&[]);
+                    if remaining.is_empty() {
+                        // All bytes in; send FIN separately via a
+                        // zero-length send with fin=true.
+                        match conn.stream_send(sid, &[], true) {
+                            Ok(_) | Err(quiche::Error::Done) => {
+                                *finished = true;
+                            }
+                            Err(e) => {
+                                tracing::debug!(error = %e, stream_id = sid, "stream_send FIN");
+                                *finished = true;
+                            }
+                        }
+                        to_drop.push(sid);
+                        break;
                     }
-                    Err(e) => {
-                        tracing::debug!(error = %e, stream_id = sid, "stream_send FIN");
-                        tx.finished = true;
+                    match conn.stream_send(sid, remaining, false) {
+                        Ok(0) | Err(quiche::Error::Done) => break,
+                        Ok(n) => {
+                            *sent = sent.saturating_add(n);
+                        }
+                        Err(e) => {
+                            tracing::debug!(error = %e, stream_id = sid, "stream_send");
+                            break;
+                        }
                     }
                 }
-                to_drop.push(sid);
-                break;
             }
-            match conn.stream_send(sid, remaining, false) {
-                Ok(0) | Err(quiche::Error::Done) => break,
-                Ok(n) => {
-                    tx.sent = tx.sent.saturating_add(n);
+            // SESSION 4 / P1-B progressive H1 egress.
+            StreamTx::Progressive {
+                queue,
+                ended,
+                reset,
+                fin_sent,
+            } => {
+                if *fin_sent {
+                    continue;
                 }
-                Err(e) => {
-                    tracing::debug!(error = %e, stream_id = sid, "stream_send");
-                    break;
+                // Drain queued pre-encoded chunks front-to-back. On a
+                // short/refused send, split the front chunk so the
+                // unsent tail stays queued in order (no drop / reorder).
+                while let Some(front) = queue.front_mut() {
+                    match conn.stream_send(sid, front, false) {
+                        Ok(0) | Err(quiche::Error::Done) => break,
+                        Ok(n) if n >= front.len() => {
+                            queue.pop_front();
+                        }
+                        Ok(n) => {
+                            // Partial: advance past the sent prefix,
+                            // keep the remainder at the queue front.
+                            let _ = front.split_to(n);
+                            break;
+                        }
+                        Err(e) => {
+                            tracing::debug!(error = %e, stream_id = sid, "stream_send (resp)");
+                            break;
+                        }
+                    }
+                }
+                if *reset {
+                    // Abort: RESET_STREAM, NEVER FIN — a partial body
+                    // is never presented as a complete response (Q2 /
+                    // C1: H3_INTERNAL_ERROR, not the graceful code).
+                    match conn.stream_shutdown(sid, quiche::Shutdown::Write, H3_INTERNAL_ERROR) {
+                        Ok(()) | Err(quiche::Error::Done) => {}
+                        Err(e) => {
+                            tracing::debug!(error = %e, stream_id = sid, "stream_shutdown (resp)");
+                        }
+                    }
+                    *fin_sent = true;
+                    to_drop.push(sid);
+                } else if *ended && queue.is_empty() {
+                    // Clean completion: FIN via a zero-length fin send
+                    // (same mechanism as the legacy branch).
+                    match conn.stream_send(sid, &[], true) {
+                        Ok(_) | Err(quiche::Error::Done) => {}
+                        Err(e) => {
+                            tracing::debug!(error = %e, stream_id = sid, "stream_send FIN (resp)");
+                        }
+                    }
+                    *fin_sent = true;
+                    to_drop.push(sid);
                 }
             }
         }
     }
     for sid in to_drop {
-        // Keep the StreamTx with finished=true so subsequent calls skip
-        // it; remove lazily on next poll to keep the allocation low.
+        // Mark terminal so subsequent calls skip it; remove lazily to
+        // keep the allocation low (unchanged from the legacy policy).
         if let Some(tx) = streams.get_mut(&sid) {
-            tx.finished = true;
+            match tx {
+                StreamTx::Buffered { finished, .. } => *finished = true,
+                StreamTx::Progressive { fin_sent, .. } => *fin_sent = true,
+            }
         }
     }
-    streams.retain(|_, tx| !tx.finished);
+    streams.retain(|_, tx| match tx {
+        StreamTx::Buffered { finished, .. } => !*finished,
+        StreamTx::Progressive { fin_sent, .. } => !*fin_sent,
+    });
 }
 
 /// Emit a H3 `CONNECTION_CLOSE` frame and pump the connection until
