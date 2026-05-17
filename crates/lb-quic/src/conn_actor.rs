@@ -275,6 +275,16 @@ pub async fn run_actor(mut params: ActorParams) -> std::io::Result<()> {
             );
         }
 
+        // SESSION 5 / DEFECT-CLIENTGONE: detect client-cancel of the
+        // response stream and tear it down (stops the upstream read;
+        // binding C2 / §1.3.4). Must run before the §1.4.3 gate so the
+        // cancelled stream is not re-driven this tick.
+        reap_client_cancelled_responses(
+            &mut params.conn,
+            &mut resp_rx_by_stream,
+            &mut stream_response,
+        );
+
         // SESSION 4 / P1-B §1.4.3: the backpressure gate. Drain each
         // response receiver into its `Progressive` `StreamTx` ONLY
         // while that StreamTx's queue is empty — the memory bound and
@@ -289,6 +299,48 @@ pub async fn run_actor(mut params: ActorParams) -> std::io::Result<()> {
         resp_tasks.retain(|h| !h.is_finished());
     }
     Ok(())
+}
+
+/// SESSION 5 / DEFECT-CLIENTGONE: a client that STOP_SENDINGs (or
+/// RESET_STREAMs) the H3 RESPONSE stream must stop the upstream read.
+/// quiche surfaces a peer STOP_SENDING on a stream we are *writing* as
+/// `Err(StreamStopped)` from `stream_writable` (via `stream_capacity`);
+/// a peer reset as `Err(StreamReset)`. For every stream with a live
+/// response receiver, poll write-side status; on a peer cancel drop the
+/// receiver — the producer's next `tx.send().await` then returns
+/// `Err(RespAbort::ClientGone)`, so `h3_to_h1_stream_resp` marks the
+/// pooled upstream NON-reusable and returns (binding C2 / §1.3.4) —
+/// and drop the `StreamTx`. The proxy does NOT emit RESET_STREAM here:
+/// the client already cancelled (§1.3.4 ClientGone — distinct from the
+/// H3_INTERNAL_ERROR=0x0102 abort path). Mirrors the S2 request-side
+/// StreamReset|StreamStopped arms (~conn_actor.rs:861/:944).
+fn reap_client_cancelled_responses(
+    conn: &mut quiche::Connection,
+    resp_rx_by_stream: &mut HashMap<u64, mpsc::Receiver<RespEvent>>,
+    stream_response: &mut HashMap<u64, StreamTx>,
+) {
+    let mut cancelled: Vec<u64> = Vec::new();
+    for &sid in resp_rx_by_stream.keys() {
+        match conn.stream_writable(sid, 1) {
+            Err(quiche::Error::StreamStopped(code)) | Err(quiche::Error::StreamReset(code)) => {
+                tracing::debug!(
+                    stream_id = sid,
+                    code,
+                    "SESSION 5 DEFECT-CLIENTGONE: client cancelled H3 response \
+                     stream; dropping receiver to stop upstream read (ClientGone)"
+                );
+                cancelled.push(sid);
+            }
+            _ => {}
+        }
+    }
+    for sid in cancelled {
+        // Drop the Receiver ⇒ producer's next tx.send() ⇒ ClientGone ⇒
+        // h3_to_h1_stream_resp sets pooled non-reusable + returns (C2).
+        resp_rx_by_stream.remove(&sid);
+        // Drop the StreamTx: never FIN, never RESET_STREAM (ClientGone).
+        stream_response.remove(&sid);
+    }
 }
 
 /// SESSION 4 / P1-B §1.4.3 — the response-side backpressure gate.
