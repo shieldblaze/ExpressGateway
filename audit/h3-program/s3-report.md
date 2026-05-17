@@ -380,6 +380,51 @@ S2 "verified" claims with corresponding scepticism and re-run them
 under the full `--all-features` suite (now possible on the 60 GB
 box) before relying on them.
 
+### Independent verification round 2 (verifier-C, final) — PASS
+
+Commit `9e58bbf2` (temp-dir race fix on top of the verified
+`e47c55d3` contract fix). verifier-C, independent, author≠verifier:
+
+- Diff: **PASS** — only the two test files; no product code;
+  e47c55d3 H1 contract/assertions/jitter/iteration-count byte-for-
+  byte intact; H2/H3 drain tests untouched; nothing
+  weakened/skipped/ignored/deleted.
+- Phase-B zero-byte-retry (author's out-of-assigned-scope addition,
+  flagged): **PASS, sound, NOT masked weakening** — independently
+  re-analysed line-by-line; a genuine drop/abort/truncation still
+  hard-fails (`502/504` or partial = `raw_len>0` → `assert` fails),
+  only a harmless pre-dispatch zero-byte boot miss is retried,
+  bounded, exhaustion panics. Empirically saw it fire once and
+  correctly absorb a true boot miss while Phase B stayed 7/7
+  byte-complete.
+- Determinism under parallelism: **PASS** — `reload_zero_drop`
+  5/5 and `h3_s3_inflight_h1_drain_proof` 5/5 multi-threaded
+  `--all-features` RC=0; **zero** shared-temp-dir reproductions;
+  H1 close-kinds Header=18 / FinOnly=62 over 80 iters (both every
+  run).
+- Full gate ×2: **PASS** — `cargo test --workspace --all-features`
+  ran to completion **twice, both RC=0, 197 `test result: ok`,
+  0 FAILED**; `reload_zero_drop` & the proof test green every run;
+  zero new S3-related failures.
+- clippy `-D warnings` + fmt: **PASS**.
+
+The S3-introduced shared-temp-dir race is **eliminated**; the H1
+graceful-drain fix is **fully verified, deterministic, author ≠
+verifier**. Deliverable #1 (land H1 fix + verifier re-run)
+**COMPLETE**.
+
+**Honest nuance on the full gate:** verifier-C's two final
+`--all-features` runs were both fully green, but the two
+**pre-existing** H2 defects are **non-deterministic / load-
+dependent** (~1/4 historically; did not trip in these two passes).
+So the full `--all-features` suite is **intermittently red**, not
+reliably green — the S3 work no longer contributes any failure, but
+the two documented pre-existing H2 defects
+(`pre-existing-h2-defects.md`) remain real and a Session-4
+prerequisite. The suite passing 2/2 here does **not** clear them;
+they were proven real with verbatim mechanisms and must be fixed,
+not assumed gone because two runs were lucky.
+
 ### Investigation-trail note (kept for honesty)
 
 The "Why I am stopping" / "Open questions" deliberations that were
