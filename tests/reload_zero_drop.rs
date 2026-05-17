@@ -314,7 +314,9 @@ weight = 1
     }
 
     /// TCP boot-wait ceiling: env override if set, else 30 s default.
-    fn boot_timeout() -> Duration {
+    /// `pub` so the H2 drain test's F-COR-9 TLS-faithful readiness
+    /// loop can reuse the same startup budget as `spawn_gateway`.
+    pub fn boot_timeout() -> Duration {
         boot_timeout_override().unwrap_or(Duration::from_secs(30))
     }
 
@@ -1038,11 +1040,91 @@ mod drain_tests {
         // h1s listener at startup (no [listeners.tls] block) and the
         // tcp_connect would succeed against nothing. Now the
         // handshake completes and we negotiate h2.
-        let tcp = tokio::net::TcpStream::connect(listener_addr).await.unwrap();
-        let tls = connector
-            .connect(server_name, tcp)
-            .await
-            .expect("h2 TLS handshake must succeed (cert harness wiring)");
+        //
+        // F-COR-9: TLS-FAITHFUL READINESS GATE. `spawn_gateway`'s only
+        // readiness check is a bare TCP `connect_timeout`, which
+        // returns Ok the instant ANY process completes a TCP handshake
+        // on `listener_addr`. `ephemeral_port()` reserves a port by
+        // binding `:0` then DROPPING the listener, so that port is
+        // released and — under full `--workspace --all-features
+        // --test-threads=8` 8-core contention — a different concurrent
+        // test process can grab it during the gateway's slow
+        // cold-start. The bare TCP probe then reports "ready" against
+        // that FOREIGN socket and the single-shot handshake below
+        // connected to a non-TLS peer, whose first byte is not a valid
+        // TLS record ContentType → rustls
+        // `InvalidMessage(InvalidContentType)` at :1045, BEFORE any
+        // ALPN/GOAWAY/drain code (the ~1/19 flake; isolated 5/5 pass).
+        // ROOT FIX (harness-only — the gateway takes only an address
+        // from config, no fd-passing): do not proceed until a probe
+        // that completes the EXACT TLS+ALPN(`h2`) handshake the test
+        // relies on succeeds against `listener_addr`. Only the real
+        // gateway (its self-signed cert + live h1s accept loop) can
+        // satisfy that handshake; a foreign reused-port socket or a
+        // stale/half-open fd cannot. So a success here means the
+        // gateway itself owns the port and its TLS path is live for
+        // THIS connection — closing both the foreign-port-reuse and
+        // the stale-fd windows at the root. The handshake that finally
+        // succeeds IS the cert-harness/ALPN-h2 proof this test
+        // asserts (assertion unchanged, just made race-free). If a
+        // foreign holder kept the port for the whole boot budget the
+        // loop panics with a clear, correctly-attributed diagnostic
+        // (deterministic failure) instead of a corrupt-handshake
+        // flake; in practice the transient holder releases well
+        // within the budget and an attempt succeeds.
+        let ready_deadline = Instant::now() + boot_timeout();
+        let mut last_err: Option<String> = None;
+        let tls = loop {
+            if Instant::now() >= ready_deadline {
+                let _ = child.kill();
+                let _ = child.wait();
+                let _ = std::fs::remove_dir_all(&dir);
+                panic!(
+                    "gateway h2 TLS listener not ready on {listener_addr} within {}s \
+                     (last handshake error: {}); likely a foreign process holding the \
+                     ephemeral port for the entire boot budget — re-run; F-COR-9 gate",
+                    boot_timeout().as_secs(),
+                    last_err.as_deref().unwrap_or("none")
+                );
+            }
+            let tcp = match tokio::net::TcpStream::connect(listener_addr).await {
+                Ok(s) => s,
+                Err(e) => {
+                    last_err = Some(format!("tcp connect: {e}"));
+                    tokio::time::sleep(Duration::from_millis(100)).await;
+                    continue;
+                }
+            };
+            match connector.connect(server_name.clone(), tcp).await {
+                Ok(tls) => {
+                    // Only the real gateway can complete this exact
+                    // TLS handshake with the harness self-signed cert
+                    // *and* negotiate ALPN `h2`. Require both before
+                    // declaring the listener ready, so a foreign peer
+                    // that somehow TLS-handshakes but does not speak
+                    // `h2` cannot satisfy the gate either.
+                    let negotiated = tls.get_ref().1.alpn_protocol().map(<[u8]>::to_vec);
+                    if negotiated.as_deref() == Some(b"h2" as &[u8]) {
+                        break tls;
+                    }
+                    last_err = Some(format!("ALPN negotiated {negotiated:?}, want h2"));
+                    drop(tls);
+                    tokio::time::sleep(Duration::from_millis(100)).await;
+                }
+                Err(e) => {
+                    // `InvalidMessage(InvalidContentType)` lands here:
+                    // we connected to something that is not the
+                    // gateway's TLS stream (foreign reused port /
+                    // stale fd). Retry until the gateway itself is
+                    // serving TLS on this port.
+                    last_err = Some(format!("tls handshake: {e}"));
+                    tokio::time::sleep(Duration::from_millis(100)).await;
+                }
+            }
+        };
+        // ALPN-h2 was verified inside the readiness loop above; assert
+        // it again on the established connection so the cert-harness
+        // contract remains an explicit, unweakened test assertion.
         let negotiated = tls.get_ref().1.alpn_protocol().map(<[u8]>::to_vec);
         assert_eq!(
             negotiated.as_deref(),

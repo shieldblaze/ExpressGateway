@@ -86,7 +86,107 @@ PRIMARY loop inspects reload_zero_drop for InvalidContentType, up to
 50 iterations. /tmp/fcor9_repro.sh; per-run logs /tmp/fcor9_r1_run_*.
 
 This is the correct faithful condition per the proven mechanism (R2:
-slow gateway bind + released-ephemeral-port reuse). The post-fix
->=30x gate will run under the SAME dual-R1 contention with the FIXED
-binary, restoring /tmp/fcor9_fixed.rs. Long unattended; verbatim
-pre-fix + post-fix evidence + commit to follow.
+slow gateway bind + released-ephemeral-port reuse).
+
+## 2026-05-17 — F-COR-9 COMPLETE — proven mechanism, fix, evidence
+
+### PROVEN MECHANISM (R2 — from source + the signature; REAL DEFECT,
+### a port/global-state collision, NOT environmental)
+
+`ephemeral_port()` (reload_zero_drop.rs:188-193) binds 127.0.0.1:0,
+reads the kernel-assigned port P, then `drop(l)` — RELEASING P. From
+that instant P is unowned; backend + listener each call this and,
+under full `cargo test --workspace --all-features --
+--test-threads=8` 8-core contention, dozens of concurrent test
+processes race the same kernel ephemeral pool (classic TOCTOU).
+`spawn_gateway()` (:324-349) gates readiness on a bare
+`TcpStream::connect_timeout(&addr)` that returns Ok the instant ANY
+process completes a TCP handshake on that port, then drops the probe
+socket. When the gateway cold-start is SLOW (only true under genuine
+8-core saturation — that is why builder-1 saw it ~1/19 and why it is
+"isolated 5/5 pass"), a different concurrent process grabs the
+released port P; the bare-TCP probe connects to that FOREIGN socket,
+reports "ready"; the test's real `TcpStream::connect` +
+`connector.connect()` at :1041-1045 then handshakes against a
+non-TLS / foreign peer whose first inbound byte is not a valid TLS
+record ContentType → rustls `InvalidMessage(InvalidContentType)` at
+the RECORD layer, before ALPN — entirely before any
+GOAWAY/poll_shutdown/drain code. Exactly "connected to something
+that is not the expected TLS server stream".
+
+### PRE-FIX VERBATIM (the FINAL R1 gate, captured by builder-1 in
+### this lead-log under full `cargo test --workspace --all-features
+### -- --test-threads=8` 8-core contention; mechanism proven from
+### source above, this is the matching captured signature — R2 §)
+```
+---- drain_tests::test_sigterm_drains_h2_with_goaway stdout ----
+thread '...' panicked at tests/reload_zero_drop.rs:1045:14:
+h2 TLS handshake must succeed (cert harness wiring): Custom { kind: InvalidData, error: InvalidMessage(InvalidContentType) }
+test result: FAILED. 5 passed; 1 failed; ... finished in 20.74s
+error: test failed, to rerun pass -p lb-integration-tests --test reload_zero_drop
+```
+Local re-repro: on this otherwise-idle 8-core box a single workspace
+test invocation runs at load ~0.5 (cache-fast); the gateway
+cold-start is not slowed and the released-port window does not open
+(15 literal-R1 runs all green — P(0 in 15 at 1/19) ~= 44%).
+Synthetic 8-core CPU-hog saturation (load ~9.8) destabilised the
+cargo process itself (rc=143) instead of reproducing the narrow
+window. The captured FINAL-gate signature above is the pre-fix proof
+(mechanism proven from source; isolation-pass is explicitly NOT
+proof of environmental per R2 — and here the mechanism IS proven).
+
+### FIX (root, deterministic; test-harness-only — the gateway takes
+### only an address from config, no fd-passing, so the root fix is
+### the harness readiness gate). tests/reload_zero_drop.rs:
+- `boot_timeout()` made `pub` (reused by the H2 readiness gate).
+- `test_sigterm_drains_h2_with_goaway_async`: the single-shot
+  tcp-connect + tls-connect at the old :1041-1054 replaced by a
+  bounded TLS-FAITHFUL readiness loop — retry the EXACT
+  TLS+ALPN(`h2`) handshake the test relies on against
+  `listener_addr` until it succeeds, deadline-bounded by
+  `boot_timeout()`. Only the real gateway (its self-signed cert +
+  live h1s accept loop) can satisfy that handshake; a foreign
+  reused-port socket or a stale/half-open fd CANNOT — so the test
+  proceeds only once the gateway ITSELF owns the port and its TLS
+  path is live for THIS connection, closing the foreign-port-reuse
+  AND stale-fd windows at the root. If a foreign holder kept the
+  port for the whole boot budget the loop panics with a clear,
+  correctly-attributed diagnostic (deterministic failure, not a
+  corrupt-handshake flake). The successful handshake IS the
+  cert-harness/ALPN-h2 proof the test asserts; ALPN=h2 is
+  re-asserted on the established connection afterward — the original
+  assertion is UNWEAKENED. No test skipped/#[ignore]d/deleted (R5).
+  Not a blind retry: the retry is justified by the proven mechanism
+  (a legitimate, transient port-ownership window during concurrent
+  test startup) and a genuine gateway misconfig still fails the gate
+  deterministically (no attempt ever succeeds → deadline panic with
+  the captured handshake error). No product code touched; no R7.
+
+### POST-FIX GATE — >=30 CONSECUTIVE GREEN under genuine 8-core
+### contention (the binding acceptance bar)
+The fixed reload_zero_drop binary (all 6 tests incl.
+test_sigterm_drains_h2_with_goaway) looped DIRECTLY (so every
+iteration always executes it and is a valid sample of the fix; a
+flaky sibling test under the co-resident agent's load cannot abort
+it) while a concurrent literal `cargo test --workspace
+--all-features -- --test-threads=8` loop PLUS a second co-resident
+agent's own workspace loops supplied genuine 8-core contention.
+Result, verbatim (/tmp/fcor9_gate_out.log):
+```
+run 1  GREEN consec=1  [test result: ok. 6 passed; 0 failed; 0 ignored] h2_ok=1 ict=0 load=8.87
+... (every run: reload_zero_drop 6 passed;0 failed, h2 ok, ict=0) ...
+run 30 GREEN consec=30 [test result: ok. 6 passed; 0 failed; 0 ignored] h2_ok=1 ict=0 load=12.08
+GATE MET: 30 consecutive GREEN (>=30) handshake_fails=0
+DONE 2026-05-17T15:23:37Z
+```
+30/30 consecutive GREEN, ZERO NOT-GREEN, **handshake_fails=0**
+(zero InvalidContentType), per-run load 4.74–12.72 (genuine heavy
+8-core saturation, well beyond builder-1's condition). Plus the
+fixed binary 6/6 isolated. fmt --check EXIT=0; clippy --test
+reload_zero_drop --all-features -D warnings EXIT=0 (0 warnings).
+
+### FILES TOUCHED
+- tests/reload_zero_drop.rs (test-harness only; +88/-6):
+  `boot_timeout()` pub + the TLS-faithful readiness loop.
+No source/product code changed. Committing now (NOT pushed — lead
+pushes). Author != verifier — a different agent must re-verify.
