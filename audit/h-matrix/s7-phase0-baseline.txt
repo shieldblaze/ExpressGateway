@@ -1,0 +1,151 @@
+================================================================
+SESSION 7 — PHASE 0 BASELINE (verifier, independent)
+================================================================
+Worktree : /home/ubuntu/Code/s7-verifier
+Branch   : s7/verifier
+Base     : main @ 2c62896f8913604bfc0bc6abf05c30a7ba2a1ef8
+            ("Promote S6: H3->H2 cell BUILT + H3->H3 R8 plan approved")
+When     : 2026-05-18T20:11:15Z (UTC)
+Host     : 8-core, full parallelism (Percent of CPU ~501%)
+CARGO_TARGET_DIR = /home/ubuntu/Code/ExpressGateway/target  (disk constraint, mandated)
+
+----------------------------------------------------------------
+DISK
+----------------------------------------------------------------
+Before : /dev/root 67G  33G used  34G avail  50%
+After   : /dev/root 67G  36G used  32G avail  54%
+(One-shot diagnostic run with `env -u CARGO_TARGET_DIR` wrote a fresh
+ probe target into the worktree default target → +3G. Still 32G free,
+ far above the 12G STOP floor. All R1x3 + R10 runs kept the env var set.)
+
+----------------------------------------------------------------
+COMMANDS
+----------------------------------------------------------------
+export CARGO_TARGET_DIR=/home/ubuntu/Code/ExpressGateway/target
+cargo fmt --check
+cargo clippy --all-targets --all-features -- -D warnings
+cargo test --workspace --all-features --no-fail-fast            (x3, runs 1-3)
+cargo test --workspace --all-features --features test-gauges --no-fail-fast  (R10)
+env -u CARGO_TARGET_DIR -u CARGO cargo test -p lb --test panic_abort  (mechanism proof)
+
+NOTE on --no-fail-fast: `cargo test` stops at the first failing test
+binary, which hid the rest of the suite. --no-fail-fast was used to
+enumerate the FULL workspace result and prove the failure set is a
+singleton. Determinism asserted across 3 independent full runs.
+
+----------------------------------------------------------------
+RESULTS — fmt / clippy
+----------------------------------------------------------------
+cargo fmt --check ............... CLEAN (exit 0)
+cargo clippy --all-targets
+  --all-features -D warnings .... CLEAN (exit 0)
+
+----------------------------------------------------------------
+RESULTS — test (R1 x3, full parallelism)
+----------------------------------------------------------------
+Run 1 : passed=1131  failed=1  ignored=16
+Run 2 : passed=1131  failed=1  ignored=16
+Run 3 : passed=1131  failed=1  ignored=16
+DETERMINISTIC across 3 runs (counts, the single failing test, and the
+16-member ignore-set are byte-identical run to run).
+203 test binaries enumerated.
+
+R10 test-gauges run : passed=1131 failed=1 ignored=16
+  R8/memory proofs EXECUTED (not skipped):
+    h2_e2e_request_memory_bounded_through_stalled_backend ... ok
+    h2_e2e_response_memory_bounded_through_stalled_client .. ok
+    r2_response_memory_bounded_through_stalled_client ...... ok
+    t5_single_large_data_frame_is_memory_bounded_
+        through_stalled_upstream .......................... ok
+  => R10 gate flag honored; gauge-gated proofs ran with the flag.
+
+----------------------------------------------------------------
+IGNORED SET (16) — all documented privileged/CI-lane or doctest
+----------------------------------------------------------------
+h2spec_server_conformance_passes (h2spec binary, Wave-2c CI)
+lru_evicts_oldest_under_flood (CAP_BPF)
+probe_synthetic_packet_round_trip (CAP_BPF / aya 0.13.1)
+detach_verifying_on_real_iface (CAP_BPF + dummy netdev)
+accepts_real_bpffs (CAP_BPF + bpffs)
+live_query_loopback_has_no_xdp (AF_NETLINK, privileged)
+capture_real_70_verifier_baseline (privileged BPF_PROG_LOAD)
+summed_counters_advance_under_load (CAP_BPF + bpffs)
+d1_native_attach::drv_mode_attach_to_ens5_proves_live_datapath (priv XDP)
+test_skb_fallback_logs_warning (CAP_BPF + CAP_NET_ADMIN)
+xdp_link_persists_after_id_drop (CAP_BPF + CAP_NET_ADMIN)
+test_maps_pinned_then_loaded_from_pin (CAP_BPF + bpffs)
+crates/lb-observability/src/label_budget.rs doctest (line 8)
+crates/lb-security/src/admin_auth.rs doctest (line 8)
+crates/lb-security/src/hooks.rs doctest (line 13)
+crates/lb-security/src/watchdog.rs doctest (line 12)
+=> Matches the S6 first-gate ignore-set (memory: s2-verification-gap
+   lineage); no new suppressions introduced by/around S7 base.
+
+================================================================
+THE ONE FAILURE — MECHANISM (FLAKE PROTOCOL, R2)
+================================================================
+Test : panic_in_tokio_task_aborts_release_process
+File : crates/lb/tests/panic_abort.rs:143
+Error: invoke probe: Os { code: 2, kind: NotFound,
+       message: "No such file or directory" }
+
+CLASSIFICATION: NOT a product defect. NOT a flake (fully
+deterministic). It is a deterministic TEST-HARNESS / ENVIRONMENT
+interaction caused by the disk-constraint-mandated CARGO_TARGET_DIR.
+
+MECHANISM (proven from output + filesystem, not asserted):
+  1. The test spawns a child `cargo build --release` for a throwaway
+     probe crate in a tmp dir (panic_abort.rs:125-128). It does NOT
+     clear the environment for that child.
+  2. We are MANDATED (S7 disk constraint) to export
+     CARGO_TARGET_DIR=/home/ubuntu/Code/ExpressGateway/target.
+     The test process inherits it; so does the child cargo build.
+  3. Result: the probe binary is written to
+     $CARGO_TARGET_DIR/release/code202_panic_probe
+     instead of <tmp>/target/release/code202_panic_probe.
+     PROVEN: `ls` showed the binary at
+       /home/ubuntu/Code/ExpressGateway/target/release/code202_panic_probe
+     and the tmp dir /tmp/code-2-02-panic-abort-* had NO target/ at all.
+  4. build.status.success() is TRUE (so the test does not take its
+     own offline-skip branch at line 130), then line 143 runs
+     Command::new(<tmp>/target/release/code202_panic_probe) which
+     does not exist → ENOENT. The test author's stated intent
+     (lines 80-81: "so its target/ never contaminates the workspace
+     target/") is defeated by the inherited CARGO_TARGET_DIR.
+
+PRODUCT POLICY IS SOUND — DIRECT PROOF:
+  Re-ran `env -u CARGO_TARGET_DIR -u CARGO cargo test -p lb
+  --test panic_abort` → BOTH tests PASS:
+    release_profile_has_panic_abort ............... ok
+    panic_in_tokio_task_aborts_release_process .... ok
+  i.e. the `[profile.release] panic = "abort"` policy is intact and
+  a tokio-task panic DOES abort the process with SIGABRT. Zero
+  server-side / product misbehavior.
+
+  Additionally, the STATIC hard-gate `release_profile_has_panic_abort`
+  PASSED in every R1 run — the actual CODE-2-02 invariant (workspace
+  Cargo.toml [profile.release] panic="abort") is verified GREEN
+  independent of the probe path.
+
+PRE-EXISTING: base is pristine main @ 2c62896f (no S7 code). This
+interaction is a property of the env + this pre-existing test, not of
+any S7 change.
+
+================================================================
+VERDICT
+================================================================
+GREEN (qualified): fmt clean, clippy clean, 1131/1/16 deterministic
+x3 + R10 gauges executed. The single failure is a fully-proven,
+deterministic CARGO_TARGET_DIR redirection in a pre-existing test's
+child cargo build — NOT a product defect and NOT a flake. Product
+panic-abort policy directly proven sound (passes with a clean target
+dir; static gate passes always).
+
+OPEN ITEM for lead: to get a literally all-green
+`cargo test --workspace --all-features`, the probe-build child in
+panic_abort.rs:125 needs its CARGO_TARGET_DIR pointed at <tmp>/target
+(or unset). That is a TEST fix and OUT OF VERIFIER SCOPE (author owns
+code). Recommend lead assign the author to env-scope the child build;
+verifier will re-confirm. Until then the failure is a known,
+mechanism-explained, non-blocking environment artifact.
+================================================================
