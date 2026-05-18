@@ -1046,14 +1046,26 @@ fn c5_resp_retained_ceiling_is_sound_and_much_less_than_1mib() {
 }
 
 // --------------------------------------------------------------------
-// R1..R8 real-wire tests — SCAFFOLD ONLY. `#[ignore]`d with an explicit
-// precondition: they exercise the proxy's RESPONSE path, which is the
-// legacy buffered path until builder-2's P1-B wires `stream_h1_response`
-// into `conn_actor`. Running them now would assert against the OLD
-// path (a false signal). builder-1 finalizes the bodies + un-ignores
-// them once P1-B is verifier-passed and the §1.5 gauge is wired
-// (task #6 continuation). The harness above is exercised by the
-// fixture tests, so this file is NOT vacuous.
+// R1..R8 / C2 / C3 real-wire tests — THE H3→H1 R8 VERIFICATION BAR.
+//
+// INTEGRITY FIX (S6 I0, owner binding condition 3): the prior comment
+// here claimed these tests were "SCAFFOLD ONLY" and `#[ignore]`d
+// pending builder-2's P1-B response wiring. That claim is FALSE at the
+// current tip: P1-B shipped, `stream_h1_response` is wired into
+// `conn_actor`, there are NO `#[ignore]` attributes anywhere in this
+// file, and ALL of these tests RUN and PASS (16/16 at the S5/S6 tip).
+// They are not scaffold — they are the non-vacuous reference proof
+// every other H-matrix cell's R8 gate is measured against.
+//
+// FEATURE GATE (load-bearing): R2 (`r2_response_memory_bounded_through_
+// stalled_client`) and R3 (`r3_slow_client_backpressures_upstream_
+// read`) reference `lb_quic::h3_bridge::MAX_RETAINED_RESP_BYTES`, a
+// `#[cfg(any(test, feature = "test-gauges"))]` static. This test
+// crate therefore only COMPILES the memory/backpressure proofs under
+// `--features test-gauges`; a CI gate that omits that flag silently
+// drops the only non-vacuous memory assertions. Any R8 gate for this
+// cell (or a sibling reusing this pattern) MUST run
+// `cargo test -p lb-quic --features test-gauges`.
 // --------------------------------------------------------------------
 
 #[tokio::test]

@@ -218,6 +218,16 @@ Cases:
 6. `h2_e2e_upstream_reset_midbody_resets_client_no_fin` — H2 backend
    resets mid-body ⇒ client sees RESET_STREAM, never a clean FIN
    (response-splitting guard, `RespAbort::UpstreamReset` path).
+7. **`h2_e2e_client_reset_midrequest_rsts_h2_upstream_no_truncated_request`**
+   (BINDING — lead A2, request-side smuggling-parity, the request
+   analog of case 6): the H3 client RESETs MID request body (peer QUIC
+   RESET_STREAM before FIN ⇒ `ReqBodyEvent::Reset`). Assert the
+   streaming request `BoxBody` errors ⇒ hyper RST_STREAMs that H2
+   upstream stream, and the real H2 backend NEVER observes a
+   silently-truncated request presented as complete (it sees a body
+   stream error / no clean end-of-request, never a short-but-"complete"
+   body). H2 multiplexing ⇒ a per-stream RST does not poison the
+   connection (lead A2: no extra non-reusable bookkeeping).
 
 All cases run, none `#[ignore]`d. The file MUST NOT contain a stale
 "SCAFFOLD ONLY / `#[ignore]`d" comment block (we explicitly do not
@@ -277,7 +287,7 @@ disk-friendly — full `--workspace` reserved for the Phase 3 gate).
 | I1 | **M-B response half**: add `stream_h2_response` (§2) + unit test of HEADERS/DATA/trailers re-encode + over-cap/reset mapping. No actor wiring yet. | builder-1 | `cargo test -p lb-quic` (new unit tests green; nothing else touched) |
 | I2 | **M-B request half**: add `h2_request_body_from_rx` streaming `BoxBody` + `h3_to_h2_stream_resp` orchestrator (§1, §3). Old `h3_to_h2_roundtrip` kept temporarily (not yet called by actor). | builder-1 | `cargo build -p lb-quic`; unit tests for the body-driver framing/abort mapping |
 | I3 | **Actor wiring**: swap the `poll_h3` H2 branch (:794) from `h3_to_h2_roundtrip` to the H1-shaped streaming spawn; delete now-dead `h3_to_h2_roundtrip`. | builder-1 | `cargo test -p lb-quic --features test-gauges` — H3→H1 suites still 22/22 (R3 no-regression); existing `proto_translation_e2e::proxy_h3_listener_h2_backend` still PASS |
-| I4 | **Verification suite**: add `tests/h3_h2_stream_e2e.rs` (§4 cases 1–6) incl. the real hyper H2 backend helper. | builder-1 | `cargo test -p lb-quic --features test-gauges --test h3_h2_stream_e2e` — all cases PASS, 0 ignored |
+| I4 | **Verification suite**: add `tests/h3_h2_stream_e2e.rs` (§4 cases 1–7, incl. BINDING case 7 per lead A2) incl. the real hyper H2 backend helper. | builder-1 | `cargo test -p lb-quic --features test-gauges --test h3_h2_stream_e2e` — all cases PASS, 0 ignored |
 | I5 | **Phase gate**: full suite + clippy + fmt at the agreed gate point. | lead-assigned verifier | Phase-3 gate (`--workspace` reserved here only) |
 
 I0 lands first (cheap, unblocks the integrity claim and re-locks R3).
@@ -295,7 +305,26 @@ Risk concentrated in I4 (real H2 backend harness wiring) and the
 backpressure timing of case 5 (mitigated by reusing the proven
 `drive_h3_response_client_stalled` harness).
 
-**Open questions for the lead:**
+**Open questions — RESOLVED (lead, BINDING):**
+
+- **A1 (Q1):** APPROVED — entire M-B delta stays in `lb-quic`, no
+  `lb-io`/codec change. If implementation reveals one is required,
+  STOP and re-request approval (scope change).
+- **A2 (Q2):** Pool eviction on Send/Timeout is sufficient for
+  connection-level faults; the erroring request `BoxBody` ⇒ hyper
+  per-stream RST_STREAM is the correct + sufficient H2-equivalent
+  partial-request guard (H2 multiplexing ⇒ per-stream RST does not
+  poison the connection). NO extra non-reusable bookkeeping. Adds
+  BINDING verification case 7 (above) + into increment I4.
+- **A3 (Q3):** APPROVED — dropping request trailers on the H2 leg is
+  in-scope-out for S6 (parity with H3→H1 P1-C). MUST stay documented
+  in the code comment AND listed in the S6 report as scoped-out.
+- **A4 (Q4):** No pre-approval micro-commit. I0 is the first
+  post-approval increment, as sequenced.
+
+---
+
+**Original open questions (for the record):**
 
 - **Q1.** Confirm M-B requires NO `lb-io` change:
   `Http2Pool::send_request` already returns a streaming
