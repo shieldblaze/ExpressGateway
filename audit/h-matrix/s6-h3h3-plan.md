@@ -2,7 +2,15 @@
 
 - Author: `builder-1` (R9 worktree `.claude/worktrees/builder-1-h3h3-plan`, branch `s6/builder-1-h3h3-plan`)
 - Base: `9cb91cee` (feature/h-matrix-s6, H3→H2 verified BUILT + integrated)
-- Status: PLAN ONLY. ZERO source changes, ZERO `cargo build`/`test`. Implementation is S7 work, BLOCKED on lead R8 approval of this plan.
+- Status: **LEAD-APPROVED (R8) 2026-05-18 — ready for S7 implementation.** PLAN ONLY this session: ZERO source changes, ZERO `cargo build`/`test`. Implementation is S7 work (increments J1–J5).
+
+> **Lead R8 approval & open-question answers (binding for S7):**
+> Plan satisfies R8 — every buffer bounded by a fixed in-flight window (depth×chunk), `decoded_body` deleted, bidirectional QUIC-flow-control backpressure with explicit causal chains, verification to the H3→H1 bar with `--features test-gauges`. Answers:
+> - **A-Q1 (no lb-io/quiche/codec change):** APPROVED as the S7 scope boundary. Analysis sound — M-C drives quiche directly via the existing `QuicUpstreamPool`/`UpstreamQuicConn` surface (no typed-error-body intermediary, so no I0.5-class blocker). The standing **A1 escalation contract applies**: if implementation reveals any `lb-io`/quiche/codec change is required, STOP and re-request approval — do not self-decide.
+> - **A-Q2 (S-2 single-stream pool disposition):** ACCEPTED. M-C keeps "one request per pooled upstream conn, `set_reusable(false)` on completion" (parity with today). Multi-stream pooled-H3-upstream reuse is OUT of S7 scope and is recorded as a carry-forward efficiency optimization (correctness/memory unaffected).
+> - **A-Q3 (request trailers dropped on H3→H3 leg):** APPROVED in-scope-out for S7, parity with H3→H1 P1-C / H3→H2 (A3). MUST stay explicitly documented in code + report (lossless FIN-framed body, NOT silent loss).
+> - **A-Q4 (reuse existing mock-H3-upstream harness for J4):** APPROVED, with the binding condition that the upstream is a **genuine quiche QUIC endpoint over a real socket** (real-wire bar). The S7 independent verifier MUST confirm the upstream is real, not an in-process stub — same adversarial check the H3→H2 verifier applied.
+> - Author≠verifier remains strict for S7 (builder implements J1–J4, does not self-verify the cell).
 - Reference cell (the bar): H3→H1 (`h3_to_h1_stream_resp`, `write_h1_request`, `stream_h1_response`) and the just-verified H3→H2 (`h3_to_h2_stream_resp`, `H3ReqStreamBody`, `stream_h2_response`) — H3→H3 mirrors the H3→H2 shape, swapping the hyper-h2 upstream for a quiche-H3 upstream.
 - Defect this plan closes: H3→H3 currently uses `h3_to_h3_roundtrip` (`crates/lb-quic/src/h3_bridge.rs:2642`) which (a) **drops every request body** — doc: *"Request-body forwarding is not supported in 3b.3c-3"*, only a bodyless GET is wired; and (b) **buffers the whole response** in an unbounded `decoded_body: Vec<u8>` (`h3_bridge.rs:2720`, `:2762`). Both violate R8 and (a) is a silent functional data-loss defect (same class as the H3→H2 one we just fixed).
 
