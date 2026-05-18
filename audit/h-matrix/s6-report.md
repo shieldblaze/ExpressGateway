@@ -2,8 +2,8 @@
 
 - Branch: `feature/h-matrix-s6`
 - Base: `main @ 26ddd43e` (S5 promoted this session; byte-identical to verified S5 tip `9c02b08e`)
-- Final ship tip: `9dd703b4`
-- Verdict: **PENDING Phase 3 RE-GATE** (see §6; finalized when the independent re-gate reports)
+- Final code-complete tip: `9dd703b4` (re-gate ran here; later commits are docs/evidence only — zero code delta)
+- Verdict: **SESSION 6 COMPLETE** — exit condition (a): Phase 0 green + inventory delivered + owner-confirmed H3→H2 built & independently verified + Phase 3 RE-GATE 5/5 green; H3→H3 R8 plan approved for S7.
 
 ---
 
@@ -70,7 +70,9 @@ Per owner Option 3 (plan-only this session). `audit/h-matrix/s6-h3h3-plan.md`, *
 
 **Remediation (integrated, `b944cf72`/`0478671b`/`9dd703b4`):** G3 — workspace `cargo fmt` (http2_pool.rs formatting-only, independently verified: line-collapsing of `H2ReqBody`/`take_alive_sender`, zero logic). G5 — targeted new tests for the enumerated under-covered H3→H2 error arms; builder-1 self-measured isolated S6 = **95.63%**; A1 honored (independently verified: production diff = http2_pool.rs fmt-only + a single purely-additive hunk inside `h3_bridge.rs` `#[cfg(test)]` L2810). R3 preserved (full lb-quic suite green: lib 23/23, h3_h1 16/16, h3_h1_body 6/6, h3_h2 10/10).
 
-**Phase 3 RE-GATE (`9dd703b4`, independent, `gate-verifier`, author≠verifier): _PENDING — verdict to be appended on completion._**
+**Phase 3 RE-GATE (`9dd703b4`, independent `gate-verifier`, author≠verifier): VERDICT PASS — 5/5 literally green.** R1 ×3 = **1132 passed / 0 failed / 16 ignored**, deterministic, ignore-set identical across runs AND identical to the first-gate set (no new ignore from the remediation tests); clippy `-D warnings` clean; **workspace** `cargo fmt --check` clean (G3 target `http2_pool.rs` independently confirmed clean); binding `--features test-gauges` gate ran *with the flag*, memory cases executed (h3_h1 16/16, h3_h1_body 6/6, h3_h2 10/10, lib 23); isolated S6 coverage **independently re-measured 95.61%** (h3_bridge 71.4%→94.6%) using the original gate's `isolate_s6.py` — confirms builder-1's 95.63%, ≫ 80%. Both originally-failing gates fixed; none of the three originally-passing gates regressed. Evidence: `audit/h-matrix/s6-evidence/phase3-regate/`.
+
+**Note:** the re-gate ran at code-complete tip `9dd703b4`; subsequent commits (`d6556d08` report draft, `96f21fb1` re-gate evidence, and this finalization) are documentation/evidence only — zero code delta, so the verdict holds for the final session tip.
 
 ## 7. Findings (logged, none asterisked)
 
