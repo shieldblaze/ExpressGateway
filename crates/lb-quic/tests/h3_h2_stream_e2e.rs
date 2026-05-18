@@ -106,16 +106,10 @@ impl hyper::rt::Write for HyperIo {
     ) -> Poll<std::io::Result<usize>> {
         Pin::new(&mut self.0).poll_write(cx, buf)
     }
-    fn poll_flush(
-        mut self: Pin<&mut Self>,
-        cx: &mut Context<'_>,
-    ) -> Poll<std::io::Result<()>> {
+    fn poll_flush(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<std::io::Result<()>> {
         Pin::new(&mut self.0).poll_flush(cx)
     }
-    fn poll_shutdown(
-        mut self: Pin<&mut Self>,
-        cx: &mut Context<'_>,
-    ) -> Poll<std::io::Result<()>> {
+    fn poll_shutdown(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<std::io::Result<()>> {
         Pin::new(&mut self.0).poll_shutdown(cx)
     }
 }
@@ -310,8 +304,7 @@ async fn drive_h3(
     let mut ccfg = build_client_config(ca);
     let scid = random_scid();
     let scid_ref = quiche::ConnectionId::from_ref(&scid);
-    let mut conn =
-        quiche::connect(Some(TEST_SNI), &scid_ref, local, gateway, &mut ccfg).unwrap();
+    let mut conn = quiche::connect(Some(TEST_SNI), &scid_ref, local, gateway, &mut ccfg).unwrap();
 
     let mut in_buf = vec![0u8; MAX_UDP];
     let mut out_buf = vec![0u8; MAX_UDP];
@@ -402,11 +395,8 @@ async fn drive_h3(
                             // a RESET threshold reached mid-buffer.
                             if let Some(k) = cfg.reset_after_req_bytes {
                                 if tx_off.saturating_sub(data_start) >= k {
-                                    let _ = conn.stream_shutdown(
-                                        sid,
-                                        quiche::Shutdown::Write,
-                                        0x10c,
-                                    );
+                                    let _ =
+                                        conn.stream_shutdown(sid, quiche::Shutdown::Write, 0x10c);
                                     did_reset = true;
                                     req_done = true;
                                 }
@@ -500,8 +490,11 @@ async fn drive_h3(
         // naturally backpressures the gateway) — only `stream_recv`
         // is withheld above.
         let to = conn.timeout().unwrap_or(Duration::from_millis(20));
-        match tokio::time::timeout(to.min(Duration::from_millis(25)), sock.recv_from(&mut in_buf))
-            .await
+        match tokio::time::timeout(
+            to.min(Duration::from_millis(25)),
+            sock.recv_from(&mut in_buf),
+        )
+        .await
         {
             Ok(Ok((n, from))) => {
                 let slice = in_buf.get_mut(..n).unwrap_or(&mut []);
@@ -541,9 +534,7 @@ struct BackendSeen {
     requests: Arc<AtomicUsize>,
 }
 
-async fn spawn_h2_echo(
-    seen: BackendSeen,
-) -> (SocketAddr, tokio::task::JoinHandle<()>) {
+async fn spawn_h2_echo(seen: BackendSeen) -> (SocketAddr, tokio::task::JoinHandle<()>) {
     let listener = TcpListener::bind(("127.0.0.1", 0)).await.unwrap();
     let local = listener.local_addr().unwrap();
     let h = tokio::spawn(async move {
@@ -604,9 +595,7 @@ async fn spawn_h2_echo(
 /// Large-response backend: replies 200 with a fixed `body` (used for
 /// the response-direction memory/backpressure proofs). Splits the
 /// body into 16 KiB frames so the H2 send window governs progress.
-async fn spawn_h2_large_resp(
-    body: Vec<u8>,
-) -> (SocketAddr, tokio::task::JoinHandle<()>) {
+async fn spawn_h2_large_resp(body: Vec<u8>) -> (SocketAddr, tokio::task::JoinHandle<()>) {
     let listener = TcpListener::bind(("127.0.0.1", 0)).await.unwrap();
     let local = listener.local_addr().unwrap();
     let body = Arc::new(body);
@@ -671,7 +660,10 @@ async fn h2_e2e_get_response_byte_identical() {
 
     assert_eq!(out.status, Some(200), "H3→H2 GET must return 200");
     assert!(out.fin, "clean FIN expected");
-    assert_eq!(out.body, b"h2-empty", "bodyless GET ⇒ backend echo sentinel");
+    assert_eq!(
+        out.body, b"h2-empty",
+        "bodyless GET ⇒ backend echo sentinel"
+    );
 }
 
 /// Case 2 (BINDING cond 1) — a NON-EMPTY BINARY request body arrives
@@ -687,10 +679,7 @@ async fn h2_e2e_request_body_byte_identical_at_backend() {
     let payload = binary_body(1024 * 1024 + 777); // ≥1 MiB, non-UTF-8
     // Split into many DATA frames (≈48 KiB) to exercise the
     // multi-frame incremental pump.
-    let chunks: Vec<Vec<u8>> = payload
-        .chunks(48 * 1024)
-        .map(<[u8]>::to_vec)
-        .collect();
+    let chunks: Vec<Vec<u8>> = payload.chunks(48 * 1024).map(<[u8]>::to_vec).collect();
 
     let out = drive_h3(
         gw,
@@ -801,11 +790,15 @@ async fn h2_e2e_response_memory_bounded_through_stalled_client() {
 #[cfg(feature = "test-gauges")]
 #[tokio::test]
 async fn h2_e2e_request_memory_bounded_through_stalled_backend() {
-    use lb_quic::h3_bridge::{H3_BODY_CHUNK_MAX, MAX_FRAME_HEADER_BYTES, MAX_RETAINED_BODY_BYTES};
     use lb_quic::conn_actor::H3_BODY_CHANNEL_DEPTH;
+    use lb_quic::h3_bridge::{H3_BODY_CHUNK_MAX, MAX_FRAME_HEADER_BYTES, MAX_RETAINED_BODY_BYTES};
 
     MAX_RETAINED_BODY_BYTES.store(0, Ordering::SeqCst);
-    let ceiling = retained_ceiling(H3_BODY_CHANNEL_DEPTH, H3_BODY_CHUNK_MAX, MAX_FRAME_HEADER_BYTES);
+    let ceiling = retained_ceiling(
+        H3_BODY_CHANNEL_DEPTH,
+        H3_BODY_CHUNK_MAX,
+        MAX_FRAME_HEADER_BYTES,
+    );
     assert_eq!(ceiling, 262_656, "C5 REQ ceiling authoritative value");
 
     let payload = binary_body(4 * 1024 * 1024); // 4 MiB
@@ -923,7 +916,10 @@ async fn h2_e2e_backpressure_stalled_client_pauses_h2_upstream_read() {
     let retained = MAX_RETAINED_RESP_BYTES.load(Ordering::SeqCst);
     bh.abort();
 
-    assert!(out.fin, "body must complete after resume (causal chain held)");
+    assert!(
+        out.fin,
+        "body must complete after resume (causal chain held)"
+    );
     assert_eq!(out.body, body, "8 MiB byte-identical (no drop/corruption)");
     assert!(
         retained <= ceiling,
@@ -994,9 +990,7 @@ async fn h2_e2e_upstream_reset_midbody_resets_client_no_fin() {
     // RESET_STREAM (no FIN), an inline 5xx (clean FIN but NOT 200),
     // or a short/incomplete body that does not satisfy the declared
     // content-length.
-    let delivered_complete_200 = out.status == Some(200)
-        && out.fin
-        && out.body.len() >= 1_048_576;
+    let delivered_complete_200 = out.status == Some(200) && out.fin && out.body.len() >= 1_048_576;
     assert!(
         !delivered_complete_200,
         "mid-body upstream error MUST NOT yield a clean complete 200 \
@@ -1022,8 +1016,8 @@ async fn h2_e2e_upstream_reset_midbody_resets_client_no_fin() {
 /// Err arm AFTER having forwarded a partial body, exercising the true
 /// mid-body response-splitting guard (declared content-length 1 MiB,
 /// only ~64 KiB delivered).
-fn error_body() -> http_body_util::combinators::BoxBody<Bytes, Box<dyn std::error::Error + Send + Sync>>
-{
+fn error_body()
+-> http_body_util::combinators::BoxBody<Bytes, Box<dyn std::error::Error + Send + Sync>> {
     use std::pin::Pin;
     use std::task::{Context, Poll};
     struct ErrBody {
@@ -1040,9 +1034,10 @@ fn error_body() -> http_body_util::combinators::BoxBody<Bytes, Box<dyn std::erro
                 Poll::Ready(Some(Err("backend mid-body abort".into())))
             } else {
                 self.frames += 1;
-                Poll::Ready(Some(Ok(hyper::body::Frame::data(Bytes::from(
-                    vec![7u8; 8192],
-                )))))
+                Poll::Ready(Some(Ok(hyper::body::Frame::data(Bytes::from(vec![
+                    7u8;
+                    8192
+                ])))))
             }
         }
     }
