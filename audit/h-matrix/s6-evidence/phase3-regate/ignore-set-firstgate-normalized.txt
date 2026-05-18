@@ -1,0 +1,16 @@
+accepts_real_bpffs
+capture_real_70_verifier_baseline
+crates/lb-observability/src/label_budget.rs - label_budget (line 8)
+crates/lb-security/src/admin_auth.rs - admin_auth (line 8)
+crates/lb-security/src/hooks.rs - hooks (line 13)
+crates/lb-security/src/watchdog.rs - watchdog (line 12)
+d1_native_attach::drv_mode_attach_to_ens5_proves_live_datapath
+detach_verifying_on_real_iface
+h2spec_server_conformance_passes
+live_query_loopback_has_no_xdp
+lru_evicts_oldest_under_flood
+probe_synthetic_packet_round_trip
+summed_counters_advance_under_load
+test_maps_pinned_then_loaded_from_pin
+test_skb_fallback_logs_warning
+xdp_link_persists_after_id_drop

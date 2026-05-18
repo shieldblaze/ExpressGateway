@@ -1,0 +1,13 @@
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.16s
+     Running tests/h3_h1_stream_body_e2e.rs (target/debug/deps/h3_h1_stream_body_e2e-be81f81a1c6be9d5)
+
+running 6 tests
+test t4_feed_body_tiny_cap_emits_toolarge_and_latches ... ok
+test t4_oversized_body_yields_413_and_upstream_not_completed ... ok
+test t3_zero_length_data_frame_then_fin_no_spurious_chunk ... ok
+test t2_empty_body_is_byte_identical_to_s1_bodyless_head ... ok
+test t1_multi_data_frame_binary_body_forwarded_byte_identical ... ok
+test t5_single_large_data_frame_is_memory_bounded_through_stalled_upstream ... ok
+
+test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 6.95s
+

@@ -1,0 +1,22 @@
+   Compiling lb-quic v0.1.0 (/home/ubuntu/Code/ExpressGateway/.claude/worktrees/verify-h3h2/crates/lb-quic)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 4.54s
+     Running tests/h3_h2_stream_e2e.rs (target/debug/deps/h3_h2_stream_e2e-029b8ec23b2b3ca2)
+
+running 1 test
+test h2_e2e_response_memory_bounded_through_stalled_client ... FAILED
+
+failures:
+
+---- h2_e2e_response_memory_bounded_through_stalled_client stdout ----
+
+thread 'h2_e2e_response_memory_bounded_through_stalled_client' panicked at crates/lb-quic/tests/h3_h2_stream_e2e.rs:793:5:
+VERIFIER PROBE: retained 73859 is NOT > ceiling 262656 (body 4194304) — the bound IS load-bearing; original assertion sound
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+
+failures:
+    h2_e2e_response_memory_bounded_through_stalled_client
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 6 filtered out; finished in 2.17s
+
+error: test failed, to rerun pass `-p lb-quic --test h3_h2_stream_e2e`

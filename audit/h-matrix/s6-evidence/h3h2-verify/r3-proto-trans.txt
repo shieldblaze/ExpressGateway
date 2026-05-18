@@ -1,0 +1,81 @@
+   Compiling tracing-core v0.1.36
+   Compiling version_check v0.9.5
+   Compiling crc32fast v1.5.0
+   Compiling typenum v1.20.0
+   Compiling foldhash v0.1.5
+   Compiling object v0.36.7
+   Compiling allocator-api2 v0.2.21
+   Compiling form_urlencoded v1.2.2
+   Compiling regex-syntax v0.8.10
+   Compiling url v2.5.8
+   Compiling generic-array v0.14.7
+   Compiling core-error v0.0.0
+   Compiling hashbrown v0.15.5
+   Compiling tracing v0.1.44
+   Compiling serde_spanned v0.6.9
+   Compiling toml_datetime v0.6.11
+   Compiling h2 v0.4.13
+   Compiling tonic v0.11.0
+   Compiling lb-l4-xdp v0.1.0 (/home/ubuntu/Code/ExpressGateway/.claude/worktrees/verify-h3h2/crates/lb-l4-xdp)
+   Compiling toml_write v0.1.2
+   Compiling cpufeatures v0.2.17
+   Compiling assert_matches v1.5.0
+   Compiling winnow v0.7.15
+   Compiling lb-security v0.1.0 (/home/ubuntu/Code/ExpressGateway/.claude/worktrees/verify-h3h2/crates/lb-security)
+   Compiling tracing-serde v0.2.0
+   Compiling tracing-log v0.2.0
+   Compiling crypto-common v0.1.7
+   Compiling block-buffer v0.10.4
+   Compiling opentelemetry-proto v0.5.0
+   Compiling digest v0.10.7
+   Compiling regex-automata v0.4.14
+   Compiling sha1 v0.10.6
+   Compiling foundations v4.5.0
+   Compiling sharded-slab v0.1.7
+   Compiling sync_wrapper v1.0.2
+   Compiling utf-8 v0.7.6
+   Compiling data-encoding v2.11.0
+   Compiling toml_edit v0.22.27
+   Compiling nu-ansi-term v0.50.3
+   Compiling tower v0.5.3
+   Compiling tungstenite v0.24.0
+   Compiling hyper v1.9.0
+   Compiling matchers v0.2.0
+   Compiling tracing-subscriber v0.3.23
+   Compiling tokio-quiche v0.18.0
+   Compiling webpki-roots v1.0.7
+   Compiling iri-string v0.7.12
+   Compiling hyper-util v0.1.20
+   Compiling aya-obj v0.2.1
+   Compiling toml v0.8.23
+   Compiling tower-http v0.6.8
+   Compiling tokio-tungstenite v0.24.0
+   Compiling serde_urlencoded v0.7.1
+   Compiling lb-h2 v0.1.0 (/home/ubuntu/Code/ExpressGateway/.claude/worktrees/verify-h3h2/crates/lb-h2)
+   Compiling lb-grpc v0.1.0 (/home/ubuntu/Code/ExpressGateway/.claude/worktrees/verify-h3h2/crates/lb-grpc)
+   Compiling lb-config v0.1.0 (/home/ubuntu/Code/ExpressGateway/.claude/worktrees/verify-h3h2/crates/lb-config)
+   Compiling aya v0.13.1
+   Compiling lb-io v0.1.0 (/home/ubuntu/Code/ExpressGateway/.claude/worktrees/verify-h3h2/crates/lb-io)
+   Compiling hyper-rustls v0.27.9
+   Compiling reqwest v0.12.28
+   Compiling lb-controlplane v0.1.0 (/home/ubuntu/Code/ExpressGateway/.claude/worktrees/verify-h3h2/crates/lb-controlplane)
+   Compiling lb-balancer v0.1.0 (/home/ubuntu/Code/ExpressGateway/.claude/worktrees/verify-h3h2/crates/lb-balancer)
+   Compiling lb-cp-client v0.1.0 (/home/ubuntu/Code/ExpressGateway/.claude/worktrees/verify-h3h2/crates/lb-cp-client)
+   Compiling lb-health v0.1.0 (/home/ubuntu/Code/ExpressGateway/.claude/worktrees/verify-h3h2/crates/lb-health)
+   Compiling lb-quic v0.1.0 (/home/ubuntu/Code/ExpressGateway/.claude/worktrees/verify-h3h2/crates/lb-quic)
+   Compiling lb-h1 v0.1.0 (/home/ubuntu/Code/ExpressGateway/.claude/worktrees/verify-h3h2/crates/lb-h1)
+   Compiling lb-observability v0.1.0 (/home/ubuntu/Code/ExpressGateway/.claude/worktrees/verify-h3h2/crates/lb-observability)
+   Compiling lb-l7 v0.1.0 (/home/ubuntu/Code/ExpressGateway/.claude/worktrees/verify-h3h2/crates/lb-l7)
+   Compiling lb-integration-tests v0.1.0 (/home/ubuntu/Code/ExpressGateway/.claude/worktrees/verify-h3h2)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 20.92s
+     Running tests/proto_translation_e2e.rs (target/debug/deps/proto_translation_e2e-584e3b792393a64f)
+
+running 5 tests
+test proxy_h1_listener_h2_backend ... ok
+test proxy_h2_listener_h2_backend ... ok
+test proxy_h1_listener_h3_backend ... ok
+test proxy_h2_listener_h3_backend ... ok
+test proxy_h3_listener_h2_backend ... ok
+
+test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.06s
+

@@ -1,0 +1,26 @@
+warning: function `retained_ceiling` is never used
+   --> crates/lb-quic/tests/h3_h2_stream_e2e.rs:143:4
+    |
+143 | fn retained_ceiling(depth: usize, chunk_max: usize, frame_hdr_max: usize) -> usize {
+    |    ^^^^^^^^^^^^^^^^
+    |
+    = note: `#[warn(dead_code)]` on by default
+
+warning: function `spawn_h2_large_resp` is never used
+   --> crates/lb-quic/tests/h3_h2_stream_e2e.rs:607:10
+    |
+607 | async fn spawn_h2_large_resp(
+    |          ^^^^^^^^^^^^^^^^^^^
+
+warning: `lb-quic` (test "h3_h2_stream_e2e") generated 2 warnings
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.16s
+     Running tests/h3_h2_stream_e2e.rs (target/debug/deps/h3_h2_stream_e2e-cb65853f1915af92)
+
+running 4 tests
+test h2_e2e_get_response_byte_identical ... ok
+test h2_e2e_upstream_reset_midbody_resets_client_no_fin ... ok
+test h2_e2e_request_body_byte_identical_at_backend ... ok
+test h2_e2e_client_reset_midrequest_rsts_h2_upstream_no_truncated_request ... ok
+
+test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.41s
+

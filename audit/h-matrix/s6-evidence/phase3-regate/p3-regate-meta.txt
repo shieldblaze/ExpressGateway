@@ -1,0 +1,33 @@
+S6 PHASE 3 RE-GATE — META (TASK #10, gate-verifier, adversarial as-shipped)
+date: 2026-05-18
+worktree: /home/ubuntu/Code/ExpressGateway/.claude/worktrees/phase3-regate
+branch: s6/phase3-regate
+HEAD: 9dd703b46a0295f66ce78ef7acd068a641d2fb81 (== required 9dd703b4 final ship tip)
+nproc: 8 (full 8-core, no --test-threads)
+llvm-cov: cargo-llvm-cov 0.8.7
+first-gate tip: 9cb91cee (s6/phase3-gate); first gate FAILED 2/5 (G3 fmt, G5 79.13%)
+
+GATE 1 (R1 x3 workspace --all-features, foreground): PASS
+  rg1/rg2/rg3 all exit 0; each: 1132 passed, 0 failed, 16 ignored
+  deterministic counts across all 3 (identical)
+  named ignore-set: 16 entries, IDENTICAL rg1=rg2=rg3
+  ignore-set IDENTICAL to first gate's committed p3-ignoreset (16/16, prefix-normalized)
+  no new ignore introduced by remediation tests
+GATE 2 (clippy --all-targets --all-features -D warnings): PASS exit 0, no warnings
+GATE 3 (cargo fmt --check WORKSPACE): PASS exit 0; http2_pool.rs independently clean (G3 regression target FIXED)
+GATE 4 (cargo test -p lb-quic --features test-gauges): PASS exit 0
+  RAN WITH --features test-gauges flag; gauge memory-proof cases executed:
+  h3_h1_resp_stream_e2e 16/16; h3_h1_stream_body_e2e 6/6; h3_h2_stream_e2e 10/10 (7 prior+3 new G5); lib 23
+GATE 5 (isolated S6 coverage >=80%): PASS — independently measured 95.61% (196/205)
+  methodology: ORIGINAL first-gate isolate_s6.py (fetched origin/s6/phase3-gate, byte-identical
+  to g5-remediation copy) applied to MY OWN cargo llvm-cov --workspace --all-features --lcov
+  on tip 9dd703b4. Range 60a13ddc..9dd703b4: product-source ranges unchanged vs 9cb91cee
+  (only deltas: http2_pool.rs fmt-only b944cf72 within counted 59-77; h3_bridge.rs +178 at
+  L3257 INSIDE #[cfg(test)] mod tests L2810 -> excluded by methodology = 0478671b tests).
+  h3_bridge.rs 71.4%->94.6% (remediation target hit). http2_pool 4/4=100% (fmt reflow
+  dropped 1 DA line, num+den both -1, still 100%; accounts for 95.61 vs builder 95.63).
+  builder-1 self-claim 95.63% CONFIRMED by independent measure (95.61%, both >> 80%).
+
+DISK: before 34G free; after all-features ~16G; ONE cargo clean between all-features and
+  llvm-cov phases (R9 allowed, recorded) -> back to 34G; after llvm-cov 18G free. No ENOSPC.
+VERDICT: PASS (all 5 gates literally green; no asterisk)

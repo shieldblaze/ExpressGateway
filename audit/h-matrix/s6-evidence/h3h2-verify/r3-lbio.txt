@@ -1,0 +1,93 @@
+   Compiling libc v0.2.184
+   Compiling indexmap v2.14.0
+   Compiling quiche v0.28.0
+   Compiling futures-channel v0.3.32
+   Compiling futures-task v0.3.32
+   Compiling bitflags v2.11.0
+   Compiling futures-util v0.3.32
+   Compiling parking_lot_core v0.9.12
+   Compiling errno v0.3.14
+   Compiling signal-hook-registry v1.4.8
+   Compiling parking_lot v0.12.5
+   Compiling mio v1.2.0
+   Compiling socket2 v0.6.3
+   Compiling getrandom v0.2.17
+   Compiling dashmap v6.1.0
+   Compiling socket2 v0.5.10
+   Compiling io-uring v0.7.12
+   Compiling rand_core v0.6.4
+   Compiling ring v0.17.14
+   Compiling tokio v1.51.1
+   Compiling rand_chacha v0.3.1
+   Compiling rand v0.8.5
+   Compiling tokio-util v0.7.18
+   Compiling h2 v0.4.13
+   Compiling hyper v1.9.0
+   Compiling hyper-util v0.1.20
+   Compiling lb-io v0.1.0 (/home/ubuntu/Code/ExpressGateway/.claude/worktrees/verify-h3h2/crates/lb-io)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 17.00s
+     Running unittests src/lib.rs (target/debug/deps/lb_io-9debb51793975c54)
+
+running 44 tests
+test dns::tests::io_err_mapped_to_nxdomain_for_getaddrinfo_text ... ok
+test dns::tests::resolver_config_defaults ... ok
+test dns::tests::cache_hit_returns_same_result_before_ttl ... ok
+test http2_pool::tests::defaults_match_documented_values ... ok
+test http2_pool::tests::pool_starts_empty ... ok
+test dns::tests::cache_size_tracks_entries ... ok
+test dns::tests::refresh_all_re_queries_entries ... ok
+test pool::tests::defaults_match_prompt_section_21 ... ok
+test pool::tests::acquire_async_dials_then_parks ... ok
+test pool::tests::acquire_then_release_returns_same_socket ... ok
+test pool::tests::non_reusable_is_not_parked ... ok
+test pool::tests::no_spawn_blocking_in_pool_dial_path ... ok
+test pool::tests::per_peer_max_enforced ... ok
+test pool::tests::probe_discards_peer_closed_connection ... ok
+test pool::tests::take_stream_detaches_from_pool ... ok
+test pool::tests::total_max_enforced ... ok
+test quic_pool::tests::idle_count_zero_on_fresh_pool ... ok
+test dns::tests::concurrent_resolvers_share_cache ... ok
+test pool::tests::size_invariant_holds_under_random_ops ... ok
+test dns::tests::negative_entry_caches_nxdomain ... ok
+test quic_pool::tests::quic_pool_config_defaults_match_section_21 ... ok
+test dns::tests::positive_entry_expires_at_cap ... ok
+test pool::tests::idle_timeout_discards_on_acquire ... ok
+test ring::tests::accept_one_loopback ... ok
+test ring::tests::nop_roundtrip_ok_or_skip ... ok
+test ring::tests::recv_send_loopback_pair ... ok
+test ring::tests::splice_rejects_non_pipe_or_succeeds ... ok
+test sockopts::tests::apply_backend_minimal ... ok
+test sockopts::tests::apply_listener_defaults_is_noop ... ok
+test sockopts::tests::apply_udp_minimal ... ok
+test tests::backend_names ... ok
+test tests::detect_backend_returns_real_choice ... ok
+test tests::nop_roundtrip_linux ... ok
+test tests::runtime_listener_and_connect_sockets ... ok
+test tests::runtime_with_backend ... ok
+test tests::socket_options_listener ... ok
+test tests::watermarks_present ... ok
+test quic_pool::tests::test_pool_dialer_uses_h3 ... ok
+test pool::tests::max_age_expiry_discards_on_acquire ... ok
+test quic_pool::tests::per_peer_max_enforced ... ok
+test quic_pool::tests::total_max_enforced ... ok
+test pool::tests::acquire_async_timeout_fires ... ok
+test quic_pool::tests::max_age_expiry_discards_on_acquire ... ok
+test quic_pool::tests::probe_discards_closed_connection ... ok
+
+test result: ok. 44 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 5.19s
+
+     Running tests/miri_ring.rs (target/debug/deps/miri_ring-a0790b67944e9656)
+
+running 3 tests
+test head_tail_wrap_arithmetic ... ok
+test raw_slice_round_trip_is_provenance_clean ... ok
+test head_tail_wraps_past_u32_max ... ok
+
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+   Doc-tests lb_io
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+

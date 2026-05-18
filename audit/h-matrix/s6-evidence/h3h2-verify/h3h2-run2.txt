@@ -1,0 +1,14 @@
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.16s
+     Running tests/h3_h2_stream_e2e.rs (target/debug/deps/h3_h2_stream_e2e-029b8ec23b2b3ca2)
+
+running 7 tests
+test h2_e2e_get_response_byte_identical ... ok
+test h2_e2e_upstream_reset_midbody_resets_client_no_fin ... ok
+test h2_e2e_request_body_byte_identical_at_backend ... ok
+test h2_e2e_client_reset_midrequest_rsts_h2_upstream_no_truncated_request ... ok
+test h2_e2e_response_memory_bounded_through_stalled_client ... ok
+test h2_e2e_backpressure_stalled_client_pauses_h2_upstream_read ... ok
+test h2_e2e_request_memory_bounded_through_stalled_backend ... ok
+
+test result: ok. 7 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 4.93s
+

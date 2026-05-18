@@ -1,0 +1,11 @@
+   Compiling lb-integration-tests v0.1.0 (/home/ubuntu/Code/ExpressGateway/.claude/worktrees/verify-h3h2)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 6.36s
+     Running tests/h1_proxy_e2e.rs (target/debug/deps/h1_proxy_e2e-a036499941f51cbb)
+
+running 3 tests
+test h1_proxy_strips_hop_by_hop_in_request ... ok
+test h1s_proxy_returns_backend_response_with_alt_svc ... ok
+test h1s_proxy_times_out_on_slow_body ... ok
+
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.21s
+
