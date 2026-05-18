@@ -115,7 +115,7 @@ mod router;
 // having to spin up a full `ConnectionActor` (which would otherwise
 // require pulling the H3 bridge, TCP pool, and backend wiring through
 // the test rig).
-pub use conn_actor::{H3_NO_ERROR, graceful_h3_shutdown};
+pub use conn_actor::{H3_INTERNAL_ERROR, H3_NO_ERROR, graceful_h3_shutdown};
 
 // CODE-2-08: re-exported so tests/quic_router_leak.rs can call
 // `CidEntryGuard::new(...)` from the integration-test target.

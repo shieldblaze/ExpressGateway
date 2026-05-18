@@ -1,0 +1,5 @@
+    Checking lb-quic v0.1.0 (/home/ubuntu/Code/ExpressGateway/crates/lb-quic)
+    Checking lb-l7 v0.1.0 (/home/ubuntu/Code/ExpressGateway/crates/lb-l7)
+    Checking lb-integration-tests v0.1.0 (/home/ubuntu/Code/ExpressGateway)
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 8.60s
+CLIPPY_EXIT=0

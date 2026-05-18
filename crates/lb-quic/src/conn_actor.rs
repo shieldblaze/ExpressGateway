@@ -32,9 +32,12 @@ use lb_io::http2_pool::Http2Pool;
 use lb_io::pool::TcpPool;
 use lb_io::quic_pool::QuicUpstreamPool;
 
+use bytes::Bytes;
+
 use crate::h3_bridge::{
-    BodyItem, H3Request, MAX_REQUEST_BODY_BYTES, ReqBodyEvent, StreamRxBuf, encode_h3_response,
-    h3_to_h1_stream, h3_to_h2_roundtrip, h3_to_h3_roundtrip,
+    BodyItem, H3_RESP_CHANNEL_DEPTH, H3Request, MAX_REQUEST_BODY_BYTES, MAX_RESPONSE_BODY_BYTES,
+    ReqBodyEvent, RespEvent, StreamRxBuf, encode_h3_response, h3_to_h1_stream_resp,
+    h3_to_h2_roundtrip, h3_to_h3_roundtrip,
 };
 
 /// SESSION 2 / P1-A: depth of the per-stream bounded request-body
@@ -54,6 +57,26 @@ pub const H3_BODY_CHANNEL_DEPTH: usize = 8;
 /// signal — every conformant H3 peer parses it as an orderly
 /// shutdown rather than an abort (PROTO-2-11).
 pub const H3_NO_ERROR: u64 = 0x0100;
+
+/// SESSION 4 / P1-B (Q2 — team-lead ruling, approval condition C1):
+/// the H3 application error code the actor puts on a `RESET_STREAM`
+/// when an H1-upstream response is aborted mid-flight (upstream reset /
+/// premature EOF / chunked-decode error / over-cap / bad head / client
+/// cancel — every [`crate::h3_bridge::RespAbort`] variant).
+///
+/// `H3_INTERNAL_ERROR = 0x0102` is RFC 9114 §8.1's code for a
+/// proxy/upstream-side failure to produce a faithful complete
+/// response, which is exactly what every abort cause on this path is.
+/// It is deliberately NOT [`H3_NO_ERROR`] (`0x0100`): signalling the
+/// graceful-drain code on an abort would let a client/cache treat the
+/// partial body as a complete response (truncated-as-complete /
+/// cache-poisoning). It is deliberately NOT `H3_REQUEST_CANCELLED`
+/// (`0x010c`): that implies the *requester* cancelled, which is the
+/// distinct client-cancel path where the proxy does not RESET but
+/// stops reading the upstream. A grep of `crates/lb-quic` found no
+/// pre-existing reusable cancel/internal-error constant, so this is
+/// the RFC-registered codepoint, not an invented value.
+pub const H3_INTERNAL_ERROR: u64 = 0x0102;
 
 /// Upper bound on how long [`graceful_h3_shutdown`] will pump the
 /// connection after issuing `close()` before giving up. Quiche enters
@@ -132,6 +155,19 @@ pub async fn run_actor(mut params: ActorParams) -> std::io::Result<()> {
     // select! so the actor wakes as soon as a response is ready — not
     // only on quiche's timeout or the next inbound packet.
     let mut request_tasks: Vec<tokio::task::JoinHandle<(u64, Vec<u8>)>> = Vec::new();
+    // SESSION 4 / P1-B: per-stream bounded RESPONSE channels. The
+    // `stream_h1_response` producer task owns the SENDER (the inverse
+    // of the request side, where the actor owns the sender); the
+    // RECEIVER stays here and is drained — under the §1.4.3
+    // backpressure gate — into the stream's `Progressive` `StreamTx`.
+    // Used by the H1 spawn site ONLY; H2/H3 + inline errors stay on the
+    // legacy `request_tasks`/`task_wait` buffered path, untouched.
+    let mut resp_rx_by_stream: HashMap<u64, mpsc::Receiver<RespEvent>> = HashMap::new();
+    // SESSION 4 / P1-B: liveness handles for the response producer
+    // tasks. NOT pushed into `request_tasks` (whose `(u64, Vec<u8>)`
+    // type + its sole consumer, the legacy `finished` arm, must stay
+    // untouched). Joined opportunistically to reap finished producers.
+    let mut resp_tasks: Vec<tokio::task::JoinHandle<()>> = Vec::new();
 
     loop {
         // Before waiting: push any outbound bytes from quiche + any
@@ -153,7 +189,17 @@ pub async fn run_actor(mut params: ActorParams) -> std::io::Result<()> {
         // backpressured stream resumes promptly. This does NOT defeat
         // backpressure: the bounded channel + capacity gate still cap
         // in-flight bytes; we merely poll the gate more often.
-        if !body_tx_by_stream.is_empty() || !body_pending.is_empty() {
+        // SESSION 4 / P1-B: the same reasoning applies to an active
+        // RESPONSE stream — the only thing that advances it is a tick
+        // draining the bounded response channel into the `Progressive`
+        // `StreamTx` as quiche frees send-window. Identical accepted S2
+        // pattern; does NOT defeat backpressure (the §1.4.3 gate + the
+        // bounded channel still cap in-flight bytes — we only poll the
+        // gate more often so a backpressured response resumes promptly).
+        if !body_tx_by_stream.is_empty()
+            || !body_pending.is_empty()
+            || !resp_rx_by_stream.is_empty()
+        {
             next_wait = next_wait.min(Duration::from_millis(2));
         }
 
@@ -219,31 +265,234 @@ pub async fn run_actor(mut params: ActorParams) -> std::io::Result<()> {
                 &mut body_tx_by_stream,
                 &mut body_pending,
                 &mut request_tasks,
+                &mut resp_rx_by_stream,
+                &mut resp_tasks,
+                &mut stream_response,
                 &params.pool,
                 &params.backends,
                 params.h3_backend.as_ref(),
                 params.h2_backend.as_ref(),
             );
         }
+
+        // SESSION 5 / DEFECT-CLIENTGONE: detect client-cancel of the
+        // response stream and tear it down (stops the upstream read;
+        // binding C2 / §1.3.4). Must run before the §1.4.3 gate so the
+        // cancelled stream is not re-driven this tick.
+        reap_client_cancelled_responses(
+            &mut params.conn,
+            &mut resp_rx_by_stream,
+            &mut stream_response,
+        );
+
+        // SESSION 4 / P1-B §1.4.3: the backpressure gate. Drain each
+        // response receiver into its `Progressive` `StreamTx` ONLY
+        // while that StreamTx's queue is empty — the memory bound and
+        // the stall that propagates to the upstream. Then (§1.5) record
+        // the retained-response gauge: this is the largest instant
+        // (channel just refilled the StreamTx, bytes not yet handed to
+        // quiche by the next `drain_streams_to_conn`).
+        drain_resp_channels(&mut resp_rx_by_stream, &mut stream_response);
+
+        // Reap finished response producers (liveness only; the actor
+        // already observed their events / channel close).
+        resp_tasks.retain(|h| !h.is_finished());
     }
     Ok(())
 }
 
-/// Per-stream outbound cursor. Tracks how much of the encoded H3
-/// response has been fed into quiche's send buffer and whether FIN has
-/// been set.
-struct StreamTx {
-    bytes: Vec<u8>,
-    sent: usize,
-    finished: bool,
+/// SESSION 5 / DEFECT-CLIENTGONE: a client that STOP_SENDINGs (or
+/// RESET_STREAMs) the H3 RESPONSE stream must stop the upstream read.
+/// quiche surfaces a peer STOP_SENDING on a stream we are *writing* as
+/// `Err(StreamStopped)` from `stream_writable` (via `stream_capacity`);
+/// a peer reset as `Err(StreamReset)`. For every stream with a live
+/// response receiver, poll write-side status; on a peer cancel drop the
+/// receiver — the producer's next `tx.send().await` then returns
+/// `Err(RespAbort::ClientGone)`, so `h3_to_h1_stream_resp` marks the
+/// pooled upstream NON-reusable and returns (binding C2 / §1.3.4) —
+/// and drop the `StreamTx`. The proxy does NOT emit RESET_STREAM here:
+/// the client already cancelled (§1.3.4 ClientGone — distinct from the
+/// H3_INTERNAL_ERROR=0x0102 abort path). Mirrors the S2 request-side
+/// StreamReset|StreamStopped arms (~conn_actor.rs:861/:944).
+fn reap_client_cancelled_responses(
+    conn: &mut quiche::Connection,
+    resp_rx_by_stream: &mut HashMap<u64, mpsc::Receiver<RespEvent>>,
+    stream_response: &mut HashMap<u64, StreamTx>,
+) {
+    let mut cancelled: Vec<u64> = Vec::new();
+    for &sid in resp_rx_by_stream.keys() {
+        match conn.stream_writable(sid, 1) {
+            Err(quiche::Error::StreamStopped(code)) | Err(quiche::Error::StreamReset(code)) => {
+                tracing::debug!(
+                    stream_id = sid,
+                    code,
+                    "SESSION 5 DEFECT-CLIENTGONE: client cancelled H3 response \
+                     stream; dropping receiver to stop upstream read (ClientGone)"
+                );
+                cancelled.push(sid);
+            }
+            _ => {}
+        }
+    }
+    for sid in cancelled {
+        // Drop the Receiver ⇒ producer's next tx.send() ⇒ ClientGone ⇒
+        // h3_to_h1_stream_resp sets pooled non-reusable + returns (C2).
+        resp_rx_by_stream.remove(&sid);
+        // Drop the StreamTx: never FIN, never RESET_STREAM (ClientGone).
+        stream_response.remove(&sid);
+    }
+}
+
+/// SESSION 4 / P1-B §1.4.3 — the response-side backpressure gate.
+///
+/// For each stream with a live response receiver, refill its
+/// `Progressive` `StreamTx` from the bounded channel **only while that
+/// StreamTx's queue is empty**. Refusing to pull while the queue still
+/// holds bytes (i.e. while quiche's send window is full and
+/// `drain_streams_to_conn` has not yet shipped them) is the memory
+/// bound: the channel fills, `stream_h1_response`'s `tx.send().await`
+/// blocks, and the upstream socket read pauses — genuine end-to-end
+/// backpressure, in-flight bytes ≈ channel depth, body-size
+/// independent. Mirrors the request-side `pending_empty`/`flush_pending`
+/// gate.
+///
+/// Event mapping: `Bytes` ⇒ push to the queue; `End` ⇒ set `ended`;
+/// `Reset`, or the channel closing with no prior `End`, ⇒ set `reset`
+/// (a partial body is never presented as complete — the
+/// response-splitting / cache-poisoning guard, parity with the
+/// request-side P1-B abort).
+fn drain_resp_channels(
+    resp_rx_by_stream: &mut HashMap<u64, mpsc::Receiver<RespEvent>>,
+    stream_response: &mut HashMap<u64, StreamTx>,
+) {
+    let sids: Vec<u64> = resp_rx_by_stream.keys().copied().collect();
+    for sid in sids {
+        // The H1 spawn site inserts an empty `Progressive` StreamTx
+        // alongside the receiver, so this entry exists; if a legacy
+        // `Buffered` somehow occupies the slot we leave it untouched.
+        let tx = stream_response
+            .entry(sid)
+            .or_insert_with(StreamTx::progressive);
+        let StreamTx::Progressive {
+            queue,
+            ended,
+            reset,
+            fin_sent,
+        } = tx
+        else {
+            continue;
+        };
+        if *fin_sent || *reset || *ended {
+            // Terminal already decided; nothing more to pull. (Keep
+            // the receiver until the stream is dropped by
+            // `drain_streams_to_conn` so a late Reset is not lost.)
+            continue;
+        }
+        // The gate: only refill an EMPTY queue.
+        if !queue.is_empty() {
+            continue;
+        }
+        let Some(rx) = resp_rx_by_stream.get_mut(&sid) else {
+            continue;
+        };
+        // Pull exactly ONE event: one chunk is the gate granularity.
+        // The queue must drain to quiche before we pull more — that is
+        // the backpressure point (a non-empty queue ⇒ no pull next
+        // tick ⇒ channel fills ⇒ producer `send().await` blocks ⇒
+        // upstream read pauses).
+        match rx.try_recv() {
+            Ok(RespEvent::Bytes(b)) => queue.push_back(b),
+            Ok(RespEvent::End) => *ended = true,
+            Ok(RespEvent::Reset) => *reset = true,
+            Err(mpsc::error::TryRecvError::Empty) => {}
+            Err(mpsc::error::TryRecvError::Disconnected) => {
+                // Producer gone. If it never signalled End/Reset
+                // explicitly, treat as Reset — NEVER FIN a possibly
+                // truncated body (truncated-as-complete guard).
+                *reset = true;
+            }
+        }
+    }
+
+    // SESSION 4 / P1-B §1.5 (test-gauge): non-vacuous memory proof —
+    // recorded here, the largest instant (StreamTx just refilled from
+    // the channels, before `drain_streams_to_conn` ships bytes to
+    // quiche). Σ progressive-queue bytes + a sound UPPER bound on
+    // channel occupancy (`used_slots × (H3_RESP_CHUNK_MAX +
+    // H3_FRAME_HDR_MAX)` — each queued `RespEvent::Bytes` is a
+    // pre-encoded frame: ≤chunk payload + frame-header varints; the
+    // gauge must over- not under-count, parity with the request gauge).
+    #[cfg(any(test, feature = "test-gauges"))]
+    {
+        let mut total: usize = 0;
+        for tx in stream_response.values() {
+            if let StreamTx::Progressive { queue, .. } = tx {
+                total = total.saturating_add(queue.iter().map(Bytes::len).sum());
+            }
+        }
+        for rx in resp_rx_by_stream.values() {
+            let used = rx.max_capacity().saturating_sub(rx.capacity());
+            total = total.saturating_add(used.saturating_mul(
+                crate::h3_bridge::H3_RESP_CHUNK_MAX + crate::h3_bridge::H3_FRAME_HDR_MAX,
+            ));
+        }
+        crate::h3_bridge::record_resp_retained(total);
+    }
+}
+
+/// Per-stream outbound cursor.
+///
+/// Two variants. `Buffered` is the LEGACY shape (a single pre-built
+/// `Vec`, byte cursor + FIN-on-empty) — it is **unchanged** and still
+/// serves H2/H3 round-trips and the inline 400/502/413 error responses
+/// (bit-for-bit identical wire behaviour; SESSION 4 adds no buffering
+/// to that path). `Progressive` is the SESSION 4 / P1-B incremental
+/// H1-response egress: a bounded queue of pre-encoded H3 frame chunks
+/// fed by [`stream_h1_response`] over a bounded channel, drained into
+/// quiche as flow control allows. The queue + the channel are the
+/// memory bound (≈ `H3_RESP_CHANNEL_DEPTH` × chunk), independent of
+/// total response size.
+enum StreamTx {
+    /// Legacy: one pre-built `Vec`, byte cursor + FIN-on-empty.
+    Buffered {
+        bytes: Vec<u8>,
+        sent: usize,
+        finished: bool,
+    },
+    /// SESSION 4 / P1-B: progressive H1 response egress.
+    ///
+    /// `queue` holds pre-encoded H3 wire chunks not yet handed to
+    /// quiche. `ended` ⇒ once `queue` drains, set FIN. `reset` ⇒
+    /// `RESET_STREAM` (never FIN) — a partial body is never presented
+    /// as complete (response-splitting / cache-poisoning guard).
+    /// `fin_sent` guards the one-shot FIN/shutdown.
+    Progressive {
+        queue: VecDeque<Bytes>,
+        ended: bool,
+        reset: bool,
+        fin_sent: bool,
+    },
 }
 
 impl StreamTx {
+    /// Construct the LEGACY buffered cursor. Unchanged signature +
+    /// behaviour so every existing caller (`conn_actor.rs:206`, the
+    /// H2/H3 + inline-error path) is bit-for-bit unaffected.
     const fn new(bytes: Vec<u8>) -> Self {
-        Self {
+        Self::Buffered {
             bytes,
             sent: 0,
             finished: false,
+        }
+    }
+
+    /// Construct an empty SESSION 4 / P1-B progressive egress cursor.
+    fn progressive() -> Self {
+        Self::Progressive {
+            queue: VecDeque::new(),
+            ended: false,
+            reset: false,
+            fin_sent: false,
         }
     }
 }
@@ -254,46 +503,118 @@ impl StreamTx {
 fn drain_streams_to_conn(conn: &mut quiche::Connection, streams: &mut HashMap<u64, StreamTx>) {
     let mut to_drop = Vec::new();
     for (&sid, tx) in streams.iter_mut() {
-        if tx.finished {
-            continue;
-        }
-        loop {
-            let remaining = tx.bytes.get(tx.sent..).unwrap_or(&[]);
-            if remaining.is_empty() {
-                // All bytes in; send FIN separately via a zero-length
-                // send with fin=true.
-                match conn.stream_send(sid, &[], true) {
-                    Ok(_) | Err(quiche::Error::Done) => {
-                        tx.finished = true;
+        match tx {
+            // LEGACY buffered path — byte-for-byte the pre-SESSION-4
+            // loop. H2/H3 + inline-error responses are unaffected.
+            StreamTx::Buffered {
+                bytes,
+                sent,
+                finished,
+            } => {
+                if *finished {
+                    continue;
+                }
+                loop {
+                    let remaining = bytes.get(*sent..).unwrap_or(&[]);
+                    if remaining.is_empty() {
+                        // All bytes in; send FIN separately via a
+                        // zero-length send with fin=true.
+                        match conn.stream_send(sid, &[], true) {
+                            Ok(_) | Err(quiche::Error::Done) => {
+                                *finished = true;
+                            }
+                            Err(e) => {
+                                tracing::debug!(error = %e, stream_id = sid, "stream_send FIN");
+                                *finished = true;
+                            }
+                        }
+                        to_drop.push(sid);
+                        break;
                     }
-                    Err(e) => {
-                        tracing::debug!(error = %e, stream_id = sid, "stream_send FIN");
-                        tx.finished = true;
+                    match conn.stream_send(sid, remaining, false) {
+                        Ok(0) | Err(quiche::Error::Done) => break,
+                        Ok(n) => {
+                            *sent = sent.saturating_add(n);
+                        }
+                        Err(e) => {
+                            tracing::debug!(error = %e, stream_id = sid, "stream_send");
+                            break;
+                        }
                     }
                 }
-                to_drop.push(sid);
-                break;
             }
-            match conn.stream_send(sid, remaining, false) {
-                Ok(0) | Err(quiche::Error::Done) => break,
-                Ok(n) => {
-                    tx.sent = tx.sent.saturating_add(n);
+            // SESSION 4 / P1-B progressive H1 egress.
+            StreamTx::Progressive {
+                queue,
+                ended,
+                reset,
+                fin_sent,
+            } => {
+                if *fin_sent {
+                    continue;
                 }
-                Err(e) => {
-                    tracing::debug!(error = %e, stream_id = sid, "stream_send");
-                    break;
+                // Drain queued pre-encoded chunks front-to-back. On a
+                // short/refused send, split the front chunk so the
+                // unsent tail stays queued in order (no drop / reorder).
+                while let Some(front) = queue.front_mut() {
+                    match conn.stream_send(sid, front, false) {
+                        Ok(0) | Err(quiche::Error::Done) => break,
+                        Ok(n) if n >= front.len() => {
+                            queue.pop_front();
+                        }
+                        Ok(n) => {
+                            // Partial: advance past the sent prefix,
+                            // keep the remainder at the queue front.
+                            let _ = front.split_to(n);
+                            break;
+                        }
+                        Err(e) => {
+                            tracing::debug!(error = %e, stream_id = sid, "stream_send (resp)");
+                            break;
+                        }
+                    }
+                }
+                if *reset {
+                    // Abort: RESET_STREAM, NEVER FIN — a partial body
+                    // is never presented as a complete response (Q2 /
+                    // C1: H3_INTERNAL_ERROR, not the graceful code).
+                    match conn.stream_shutdown(sid, quiche::Shutdown::Write, H3_INTERNAL_ERROR) {
+                        Ok(()) | Err(quiche::Error::Done) => {}
+                        Err(e) => {
+                            tracing::debug!(error = %e, stream_id = sid, "stream_shutdown (resp)");
+                        }
+                    }
+                    *fin_sent = true;
+                    to_drop.push(sid);
+                } else if *ended && queue.is_empty() {
+                    // Clean completion: FIN via a zero-length fin send
+                    // (same mechanism as the legacy branch).
+                    match conn.stream_send(sid, &[], true) {
+                        Ok(_) | Err(quiche::Error::Done) => {}
+                        Err(e) => {
+                            tracing::debug!(error = %e, stream_id = sid, "stream_send FIN (resp)");
+                        }
+                    }
+                    *fin_sent = true;
+                    to_drop.push(sid);
                 }
             }
         }
     }
     for sid in to_drop {
-        // Keep the StreamTx with finished=true so subsequent calls skip
-        // it; remove lazily on next poll to keep the allocation low.
+        // Mark terminal so subsequent calls skip it; remove lazily to
+        // keep the allocation low (unchanged from the legacy policy).
         if let Some(tx) = streams.get_mut(&sid) {
-            tx.finished = true;
+            match tx {
+                StreamTx::Buffered { finished, .. } => *finished = true,
+                StreamTx::Progressive { fin_sent, .. } => *fin_sent = true,
+            }
         }
     }
-    streams.retain(|_, tx| !tx.finished);
+    streams.retain(|_, tx| match tx {
+        StreamTx::Buffered { finished, .. } => !*finished,
+        StreamTx::Progressive { fin_sent, .. } => !*fin_sent,
+    });
 }
 
 /// Emit a H3 `CONNECTION_CLOSE` frame and pump the connection until
@@ -384,6 +705,16 @@ fn poll_h3(
     body_tx_by_stream: &mut HashMap<u64, mpsc::Sender<ReqBodyEvent>>,
     body_pending: &mut HashMap<u64, VecDeque<ReqBodyEvent>>,
     request_tasks: &mut Vec<tokio::task::JoinHandle<(u64, Vec<u8>)>>,
+    // SESSION 4 / P1-B: the H1 spawn site moves its response off the
+    // legacy `request_tasks`/`task_wait` Vec path onto the bounded
+    // RESPONSE channel. `resp_rx_by_stream` (actor-owned receivers) +
+    // an empty `Progressive` `StreamTx` are registered here; the
+    // producer `JoinHandle` goes to `resp_tasks` (NOT `request_tasks`).
+    // The inline-400 / h2 / h3 spawns + the legacy Vec path are
+    // untouched.
+    resp_rx_by_stream: &mut HashMap<u64, mpsc::Receiver<RespEvent>>,
+    resp_tasks: &mut Vec<tokio::task::JoinHandle<()>>,
+    stream_response: &mut HashMap<u64, StreamTx>,
     pool: &TcpPool,
     backends: &Arc<Vec<SocketAddr>>,
     h3_backend: Option<&(QuicUpstreamPool, SocketAddr, String)>,
@@ -486,29 +817,48 @@ fn poll_h3(
                                 tracing::warn!("no backends available for H3 request");
                                 continue;
                             };
-                            // SESSION 2 / P1-A: spawn the INCREMENTAL
-                            // streaming egress. The bounded body channel
-                            // is the memory mechanism; the receiver is
-                            // moved into the task, the sender stays here.
+                            // SESSION 4 / P1-B: spawn the INCREMENTAL
+                            // request + INCREMENTAL response producer.
+                            // The request-body channel (btx/brx) is the
+                            // request-side memory mechanism (unchanged
+                            // from S2). The NEW response channel
+                            // (resp_tx/resp_rx) is the response-side
+                            // one: the producer owns the sender, the
+                            // actor owns the receiver (registered here)
+                            // and drains it under the §1.4.3
+                            // backpressure gate into an (empty)
+                            // `Progressive` `StreamTx`. The producer
+                            // `JoinHandle` goes to `resp_tasks`, NOT
+                            // `request_tasks` — the legacy
+                            // `request_tasks`/`task_wait` Vec path stays
+                            // byte-for-byte and still serves H2/H3 +
+                            // the inline-400/502/413 errors. C2: the
+                            // producer owns the `PooledTcp` and marks
+                            // it non-reusable on every abort/clean
+                            // outcome (inside `h3_to_h1_stream_resp`).
                             let pool = pool.clone();
                             let (btx, brx) = mpsc::channel::<ReqBodyEvent>(H3_BODY_CHANNEL_DEPTH);
-                            request_tasks.push(tokio::spawn(async move {
-                                let bytes = match h3_to_h1_stream(
+                            let (resp_tx, resp_rx) =
+                                mpsc::channel::<RespEvent>(H3_RESP_CHANNEL_DEPTH);
+                            resp_rx_by_stream.insert(sid, resp_rx);
+                            stream_response.insert(sid, StreamTx::progressive());
+                            resp_tasks.push(tokio::spawn(async move {
+                                if let Err(abort) = h3_to_h1_stream_resp(
                                     &req,
                                     backend,
                                     &pool,
                                     brx,
-                                    MAX_REQUEST_BODY_BYTES,
+                                    resp_tx,
+                                    MAX_RESPONSE_BODY_BYTES,
                                 )
                                 .await
                                 {
-                                    Ok(b) => b,
-                                    Err(e) => {
-                                        tracing::warn!(error = %e, "H3→H1 stream failed");
-                                        Vec::new()
-                                    }
-                                };
-                                (sid, bytes)
+                                    tracing::warn!(
+                                        ?abort,
+                                        stream_id = sid,
+                                        "H3→H1 resp stream aborted"
+                                    );
+                                }
                             }));
                             if fin {
                                 // Bodyless (HEADERS + FIN): the egress

@@ -1,0 +1,7 @@
+R1_CLIPPY_EXIT(full workspace, no -p)=0
+LBQUIC_CLIPPY_EXIT=0
+FMT_EXIT=0
+WORKSPACE: 202 test-result-ok lines, 0 failed
+R2 max_retained=73859 B ceiling=262656 B body=4194304 B margin=15.97x (identical to pre-P1-C)
+R3 mid=peak=73859 B (identical)
+resp-stream suite 3x: 16 passed / 0 failed / 0 ignored (real r8, was 15/0/1)
