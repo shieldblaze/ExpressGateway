@@ -1,0 +1,23 @@
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.16s
+     Running tests/h3_h1_resp_stream_e2e.rs (target/debug/deps/h3_h1_resp_stream_e2e-5a9df72650d2727d)
+
+running 16 tests
+test c3_unit_supplement_documents_coverage ... ok
+test fixture_r4_empty_body ... ok
+test c5_resp_retained_ceiling_is_sound_and_much_less_than_1mib ... ok
+test fixture_r7_chunked_split_reassembles ... ok
+test fixture_r1_binary_body_is_large_and_non_utf8_marked ... ok
+test r4_empty_response_body_clean_fin ... ok
+test r1_multi_data_binary_response_byte_identical ... ok
+test r7_chunked_upstream_response_byte_identical ... ok
+test c3_malformed_chunked_responses_reset_never_forward_truncated ... ok
+test c2_clientgone_drops_pooled_upstream ... ok
+test r8_chunked_response_trailers_delivered_to_h3_client ... ok
+test r6_client_cancel_midresponse_stops_upstream_read ... ok
+test r2_response_memory_bounded_through_stalled_client ... ok
+test r3_slow_client_backpressures_upstream_read ... ok
+test r5_upstream_reset_midresponse_yields_reset_stream ... ok
+test c2_every_abort_variant_drops_pooled_upstream_and_resets ... ok
+
+test result: ok. 16 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 13.10s
+

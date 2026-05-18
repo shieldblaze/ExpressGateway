@@ -1,0 +1,169 @@
+Diff in /home/ubuntu/Code/ExpressGateway/.claude/worktrees/verify-h3h2/crates/lb-quic/tests/h3_h2_stream_e2e.rs:106:
+     ) -> Poll<std::io::Result<usize>> {
+         Pin::new(&mut self.0).poll_write(cx, buf)
+     }
+[31m-    fn poll_flush(
+(B[m[31m-        mut self: Pin<&mut Self>,
+(B[m[31m-        cx: &mut Context<'_>,
+(B[m[31m-    ) -> Poll<std::io::Result<()>> {
+(B[m[32m+    fn poll_flush(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<std::io::Result<()>> {
+(B[m         Pin::new(&mut self.0).poll_flush(cx)
+     }
+[31m-    fn poll_shutdown(
+(B[m[31m-        mut self: Pin<&mut Self>,
+(B[m[31m-        cx: &mut Context<'_>,
+(B[m[31m-    ) -> Poll<std::io::Result<()>> {
+(B[m[32m+    fn poll_shutdown(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<std::io::Result<()>> {
+(B[m         Pin::new(&mut self.0).poll_shutdown(cx)
+     }
+ }
+Diff in /home/ubuntu/Code/ExpressGateway/.claude/worktrees/verify-h3h2/crates/lb-quic/tests/h3_h2_stream_e2e.rs:310:
+     let mut ccfg = build_client_config(ca);
+     let scid = random_scid();
+     let scid_ref = quiche::ConnectionId::from_ref(&scid);
+[31m-    let mut conn =
+(B[m[31m-        quiche::connect(Some(TEST_SNI), &scid_ref, local, gateway, &mut ccfg).unwrap();
+(B[m[32m+    let mut conn = quiche::connect(Some(TEST_SNI), &scid_ref, local, gateway, &mut ccfg).unwrap();
+(B[m 
+     let mut in_buf = vec![0u8; MAX_UDP];
+     let mut out_buf = vec![0u8; MAX_UDP];
+Diff in /home/ubuntu/Code/ExpressGateway/.claude/worktrees/verify-h3h2/crates/lb-quic/tests/h3_h2_stream_e2e.rs:402:
+                             // a RESET threshold reached mid-buffer.
+                             if let Some(k) = cfg.reset_after_req_bytes {
+                                 if tx_off.saturating_sub(data_start) >= k {
+[31m-                                    let _ = conn.stream_shutdown(
+(B[m[31m-                                        sid,
+(B[m[31m-                                        quiche::Shutdown::Write,
+(B[m[31m-                                        0x10c,
+(B[m[31m-                                    );
+(B[m[32m+                                    let _ =
+(B[m[32m+                                        conn.stream_shutdown(sid, quiche::Shutdown::Write, 0x10c);
+(B[m                                     did_reset = true;
+                                     req_done = true;
+                                 }
+Diff in /home/ubuntu/Code/ExpressGateway/.claude/worktrees/verify-h3h2/crates/lb-quic/tests/h3_h2_stream_e2e.rs:500:
+         // naturally backpressures the gateway) — only `stream_recv`
+         // is withheld above.
+         let to = conn.timeout().unwrap_or(Duration::from_millis(20));
+[31m-        match tokio::time::timeout(to.min(Duration::from_millis(25)), sock.recv_from(&mut in_buf))
+(B[m[31m-            .await
+(B[m[32m+        match tokio::time::timeout(
+(B[m[32m+            to.min(Duration::from_millis(25)),
+(B[m[32m+            sock.recv_from(&mut in_buf),
+(B[m[32m+        )
+(B[m[32m+        .await
+(B[m         {
+             Ok(Ok((n, from))) => {
+                 let slice = in_buf.get_mut(..n).unwrap_or(&mut []);
+Diff in /home/ubuntu/Code/ExpressGateway/.claude/worktrees/verify-h3h2/crates/lb-quic/tests/h3_h2_stream_e2e.rs:541:
+     requests: Arc<AtomicUsize>,
+ }
+ 
+[31m-async fn spawn_h2_echo(
+(B[m[31m-    seen: BackendSeen,
+(B[m[31m-) -> (SocketAddr, tokio::task::JoinHandle<()>) {
+(B[m[32m+async fn spawn_h2_echo(seen: BackendSeen) -> (SocketAddr, tokio::task::JoinHandle<()>) {
+(B[m     let listener = TcpListener::bind(("127.0.0.1", 0)).await.unwrap();
+     let local = listener.local_addr().unwrap();
+     let h = tokio::spawn(async move {
+Diff in /home/ubuntu/Code/ExpressGateway/.claude/worktrees/verify-h3h2/crates/lb-quic/tests/h3_h2_stream_e2e.rs:604:
+ /// Large-response backend: replies 200 with a fixed `body` (used for
+ /// the response-direction memory/backpressure proofs). Splits the
+ /// body into 16 KiB frames so the H2 send window governs progress.
+[31m-async fn spawn_h2_large_resp(
+(B[m[31m-    body: Vec<u8>,
+(B[m[31m-) -> (SocketAddr, tokio::task::JoinHandle<()>) {
+(B[m[32m+async fn spawn_h2_large_resp(body: Vec<u8>) -> (SocketAddr, tokio::task::JoinHandle<()>) {
+(B[m     let listener = TcpListener::bind(("127.0.0.1", 0)).await.unwrap();
+     let local = listener.local_addr().unwrap();
+     let body = Arc::new(body);
+Diff in /home/ubuntu/Code/ExpressGateway/.claude/worktrees/verify-h3h2/crates/lb-quic/tests/h3_h2_stream_e2e.rs:671:
+ 
+     assert_eq!(out.status, Some(200), "H3→H2 GET must return 200");
+     assert!(out.fin, "clean FIN expected");
+[31m-    assert_eq!(out.body, b"h2-empty", "bodyless GET ⇒ backend echo sentinel");
+(B[m[32m+    assert_eq!(
+(B[m[32m+        out.body, b"h2-empty",
+(B[m[32m+        "bodyless GET ⇒ backend echo sentinel"
+(B[m[32m+    );
+(B[m }
+ 
+ /// Case 2 (BINDING cond 1) — a NON-EMPTY BINARY request body arrives
+Diff in /home/ubuntu/Code/ExpressGateway/.claude/worktrees/verify-h3h2/crates/lb-quic/tests/h3_h2_stream_e2e.rs:687:
+     let payload = binary_body(1024 * 1024 + 777); // ≥1 MiB, non-UTF-8
+     // Split into many DATA frames (≈48 KiB) to exercise the
+     // multi-frame incremental pump.
+[31m-    let chunks: Vec<Vec<u8>> = payload
+(B[m[31m-        .chunks(48 * 1024)
+(B[m[31m-        .map(<[u8]>::to_vec)
+(B[m[31m-        .collect();
+(B[m[32m+    let chunks: Vec<Vec<u8>> = payload.chunks(48 * 1024).map(<[u8]>::to_vec).collect();
+(B[m 
+     let out = drive_h3(
+         gw,
+Diff in /home/ubuntu/Code/ExpressGateway/.claude/worktrees/verify-h3h2/crates/lb-quic/tests/h3_h2_stream_e2e.rs:801:
+ #[cfg(feature = "test-gauges")]
+ #[tokio::test]
+ async fn h2_e2e_request_memory_bounded_through_stalled_backend() {
+[31m-    use lb_quic::h3_bridge::{H3_BODY_CHUNK_MAX, MAX_FRAME_HEADER_BYTES, MAX_RETAINED_BODY_BYTES};
+(B[m     use lb_quic::conn_actor::H3_BODY_CHANNEL_DEPTH;
+[32m+    use lb_quic::h3_bridge::{H3_BODY_CHUNK_MAX, MAX_FRAME_HEADER_BYTES, MAX_RETAINED_BODY_BYTES};
+(B[m 
+     MAX_RETAINED_BODY_BYTES.store(0, Ordering::SeqCst);
+[31m-    let ceiling = retained_ceiling(H3_BODY_CHANNEL_DEPTH, H3_BODY_CHUNK_MAX, MAX_FRAME_HEADER_BYTES);
+(B[m[32m+    let ceiling = retained_ceiling(
+(B[m[32m+        H3_BODY_CHANNEL_DEPTH,
+(B[m[32m+        H3_BODY_CHUNK_MAX,
+(B[m[32m+        MAX_FRAME_HEADER_BYTES,
+(B[m[32m+    );
+(B[m     assert_eq!(ceiling, 262_656, "C5 REQ ceiling authoritative value");
+ 
+     let payload = binary_body(4 * 1024 * 1024); // 4 MiB
+Diff in /home/ubuntu/Code/ExpressGateway/.claude/worktrees/verify-h3h2/crates/lb-quic/tests/h3_h2_stream_e2e.rs:923:
+     let retained = MAX_RETAINED_RESP_BYTES.load(Ordering::SeqCst);
+     bh.abort();
+ 
+[31m-    assert!(out.fin, "body must complete after resume (causal chain held)");
+(B[m[32m+    assert!(
+(B[m[32m+        out.fin,
+(B[m[32m+        "body must complete after resume (causal chain held)"
+(B[m[32m+    );
+(B[m     assert_eq!(out.body, body, "8 MiB byte-identical (no drop/corruption)");
+     assert!(
+         retained <= ceiling,
+Diff in /home/ubuntu/Code/ExpressGateway/.claude/worktrees/verify-h3h2/crates/lb-quic/tests/h3_h2_stream_e2e.rs:994:
+     // RESET_STREAM (no FIN), an inline 5xx (clean FIN but NOT 200),
+     // or a short/incomplete body that does not satisfy the declared
+     // content-length.
+[31m-    let delivered_complete_200 = out.status == Some(200)
+(B[m[31m-        && out.fin
+(B[m[31m-        && out.body.len() >= 1_048_576;
+(B[m[32m+    let delivered_complete_200 = out.status == Some(200) && out.fin && out.body.len() >= 1_048_576;
+(B[m     assert!(
+         !delivered_complete_200,
+         "mid-body upstream error MUST NOT yield a clean complete 200 \
+Diff in /home/ubuntu/Code/ExpressGateway/.claude/worktrees/verify-h3h2/crates/lb-quic/tests/h3_h2_stream_e2e.rs:1022:
+ /// Err arm AFTER having forwarded a partial body, exercising the true
+ /// mid-body response-splitting guard (declared content-length 1 MiB,
+ /// only ~64 KiB delivered).
+[31m-fn error_body() -> http_body_util::combinators::BoxBody<Bytes, Box<dyn std::error::Error + Send + Sync>>
+(B[m[31m-{
+(B[m[32m+fn error_body()
+(B[m[32m+-> http_body_util::combinators::BoxBody<Bytes, Box<dyn std::error::Error + Send + Sync>> {
+(B[m     use std::pin::Pin;
+     use std::task::{Context, Poll};
+     struct ErrBody {
+Diff in /home/ubuntu/Code/ExpressGateway/.claude/worktrees/verify-h3h2/crates/lb-quic/tests/h3_h2_stream_e2e.rs:1040:
+                 Poll::Ready(Some(Err("backend mid-body abort".into())))
+             } else {
+                 self.frames += 1;
+[31m-                Poll::Ready(Some(Ok(hyper::body::Frame::data(Bytes::from(
+(B[m[31m-                    vec![7u8; 8192],
+(B[m[31m-                )))))
+(B[m[32m+                Poll::Ready(Some(Ok(hyper::body::Frame::data(Bytes::from(vec![
+(B[m[32m+                    7u8;
+(B[m[32m+                    8192
+(B[m[32m+                ])))))
+(B[m             }
+         }
+     }
