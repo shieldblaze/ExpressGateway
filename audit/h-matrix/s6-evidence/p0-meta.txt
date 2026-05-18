@@ -1,0 +1,15 @@
+=== p0-meta ===
+HEAD: 26ddd43e0f932096add136c6a9a8003644e47725
+branch: worktree-agent-aae742917af3c81c2
+nproc: 8
+date_start: Mon May 18 16:44:56 UTC 2026
+--- df -h /home/ubuntu ---
+Filesystem      Size  Used Avail Use% Mounted on
+/dev/root        67G   31G   36G  47% /
+--- cargo/rustc ---
+cargo 1.85.1 (d73d2caf9 2024-12-31)
+rustc 1.85.1 (4eb161250 2025-03-15)
+date_end: Mon May 18 16:54:05 UTC 2026
+df_end:
+Filesystem      Size  Used Avail Use% Mounted on
+/dev/root        67G   49G   19G  73% /

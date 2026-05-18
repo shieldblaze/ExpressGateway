@@ -1,0 +1,13 @@
+S6 PHASE 0 R1 GREEN BASELINE — STATUS
+VERDICT: PASS
+HEAD: 26ddd43e0f932096add136c6a9a8003644e47725 (branch worktree-agent-aae742917af3c81c2; content of feature/h-matrix-s6 @ 26ddd43e == verified S5 tip 9c02b08e)
+test run1: 1117 passed / 0 failed / 16 ignored — exit 0
+test run2: 1117 passed / 0 failed / 16 ignored — exit 0
+test run3: 1117 passed / 0 failed / 16 ignored — exit 0
+determinism: identical pass/fail/ignored counts AND identical ignore-set across all 3 runs
+clippy --all-targets --all-features -D warnings: CLEAN (exit 0)
+fmt --check: CLEAN (exit 0)
+ignored=16: all #[ignore]/doctest-ignore baked into source at the verified S5 baseline (privileged CAP_BPF/bpffs/NIC tests + 4 illustrative doctests + h2spec deferred PROTO-2-04/05). NOT excluded/skipped by this run's invocation (no --skip/--exclude, no --test-threads restriction, full 8-core). Inherited, already-accepted S5 baseline per R3 — not a new regression.
+ENOSPC: none. disk before: 36G free; after: 19G free
+R2: no test failed any run; flake protocol not triggered.
+date_end: Mon May 18 16:54:05 UTC 2026
