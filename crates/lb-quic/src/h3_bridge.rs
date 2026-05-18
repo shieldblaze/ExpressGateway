@@ -3257,6 +3257,185 @@ mod tests {
         assert!(r.is_ok(), "bodyless request must build");
     }
 
+    /// G5 remediation — `H3ReqAbort`'s `Display`/`Error` impls
+    /// (h3_bridge.rs:2145-2147). Pure; exercises the exact wire-fault
+    /// message used on the request-smuggling abort path.
+    #[test]
+    fn g5_h3reqabort_display_and_error_impl() {
+        let e = H3ReqAbort;
+        let s = e.to_string();
+        assert!(
+            s.contains("request body aborted"),
+            "Display must describe the abort cause, got: {s}"
+        );
+        // Exercise the `std::error::Error` blanket use (source()=None).
+        let dyn_err: &dyn std::error::Error = &e;
+        assert!(dyn_err.source().is_none());
+        // Boxed form is what the streaming body actually yields.
+        let boxed: Box<dyn std::error::Error + Send + Sync> = Box::new(H3ReqAbort);
+        assert!(boxed.to_string().contains("client RESET"));
+    }
+
+    /// G5 remediation — `h2_request_body_from_rx` head-construction
+    /// arms that the I2 unit test did not exercise
+    /// (h3_bridge.rs:2267 empty-authority fallback; 2274-2277
+    /// pseudo-header skip + regular-header copy loop).
+    #[tokio::test]
+    async fn g5_h2_request_body_from_rx_head_construction_arms() {
+        // (a) EMPTY authority ⇒ `addr.to_string()` fallback (2267),
+        // and a `:`-pseudo header is SKIPPED while a regular header is
+        // copied (2274-2277). Bodyless (first == End) so no dial.
+        let req = H3Request {
+            method: "GET".to_string(),
+            path: "/x".to_string(),
+            authority: String::new(), // ← empty ⇒ addr fallback
+            extra: vec![
+                (":scheme".to_string(), "https".to_string()), // pseudo ⇒ skip
+                ("x-keep".to_string(), "1".to_string()),       // regular ⇒ copy
+            ],
+            trailers: Vec::new(),
+        };
+        let addr: std::net::SocketAddr = "127.0.0.1:65000".parse().unwrap();
+        let (_tx, rx) = tokio::sync::mpsc::channel::<ReqBodyEvent>(1);
+        let built = h2_request_body_from_rx(
+            &req,
+            addr,
+            rx,
+            Some(ReqBodyEvent::End {
+                trailers: Vec::new(),
+            }),
+        )
+        .expect("empty-authority bodyless request must build");
+        // The authority fell back to the socket addr in the URI.
+        assert_eq!(
+            built.uri().authority().map(ToString::to_string),
+            Some("127.0.0.1:65000".to_string()),
+            "empty :authority must fall back to addr"
+        );
+        assert_eq!(
+            built.headers().get("x-keep").map(|v| v.to_str().unwrap()),
+            Some("1"),
+            "regular header must be copied"
+        );
+        assert!(
+            built.headers().get(":scheme").is_none(),
+            "pseudo-header must be skipped (not copied as a real header)"
+        );
+
+        // (b) non-empty authority ⇒ that branch of the if/else (2269).
+        let req2 = H3Request {
+            method: "GET".to_string(),
+            path: "/y".to_string(),
+            authority: "explicit.host:443".to_string(),
+            extra: Vec::new(),
+            trailers: Vec::new(),
+        };
+        let (_tx2, rx2) = tokio::sync::mpsc::channel::<ReqBodyEvent>(1);
+        let built2 = h2_request_body_from_rx(&req2, addr, rx2, None)
+            .expect("bodyless (None) must build");
+        assert_eq!(
+            built2.uri().authority().map(ToString::to_string),
+            Some("explicit.host:443".to_string())
+        );
+    }
+
+    /// G5 remediation — `h3_to_h2_stream_resp` pre-dial inline arms
+    /// (h3_bridge.rs:2351-2356 + the 2340 `inline` happy branch): a
+    /// pre-data `Reset` ⇒ inline 413 (no pool dial), and a
+    /// builder-failure ⇒ inline 502. The pool is constructed but NEVER
+    /// dialled (both arms return before `send_request`), so this is a
+    /// fast, hermetic unit test.
+    #[tokio::test]
+    async fn g5_h3_to_h2_stream_resp_inline_413_and_502_no_dial() {
+        let pool = lb_io::http2_pool::Http2Pool::new(
+            lb_io::http2_pool::Http2PoolConfig::default(),
+            lb_io::pool::TcpPool::new(
+                lb_io::pool::PoolConfig::default(),
+                lb_io::sockopts::BackendSockOpts::default(),
+                lb_io::Runtime::new(),
+            ),
+        );
+        let addr: std::net::SocketAddr = "127.0.0.1:1".parse().unwrap();
+
+        // --- 413 arm: first event is Reset ⇒ inline 413, Ok(()) ---
+        let req = H3Request {
+            method: "POST".to_string(),
+            path: "/p".to_string(),
+            authority: "h.test".to_string(),
+            extra: Vec::new(),
+            trailers: Vec::new(),
+        };
+        let (btx, brx) = tokio::sync::mpsc::channel::<ReqBodyEvent>(2);
+        btx.send(ReqBodyEvent::Reset).await.unwrap();
+        let (rtx, mut rrx) = tokio::sync::mpsc::channel::<RespEvent>(8);
+        let r = h3_to_h2_stream_resp(&req, addr, &pool, brx, rtx, MAX_RESPONSE_BODY_BYTES).await;
+        assert!(r.is_ok(), "pre-data Reset path returns Ok(())");
+        // The inline 413 HEADERS+DATA then End must be on the channel.
+        let mut saw_end = false;
+        let mut blob: Vec<u8> = Vec::new();
+        while let Ok(ev) = rrx.try_recv() {
+            match ev {
+                RespEvent::Bytes(b) => blob.extend_from_slice(&b),
+                RespEvent::End => saw_end = true,
+                RespEvent::Reset => panic!("413 path must not Reset"),
+            }
+        }
+        assert!(saw_end, "inline path must emit End");
+        // Decode the inline response status == 413.
+        let (f, _c) = decode_frame(&blob, 1 << 20).expect("inline HEADERS decodes");
+        let H3Frame::Headers { header_block } = f else {
+            panic!("expected HEADERS");
+        };
+        let hdrs = QpackDecoder::new().decode(&header_block).unwrap();
+        assert!(
+            hdrs.iter().any(|(n, v)| n == ":status" && v == "413"),
+            "pre-data Reset ⇒ inline 413"
+        );
+
+        // --- 502 arm: builder failure ⇒ inline 502, Ok(()) ---
+        // An invalid method byte makes `Request::builder().method(..)`
+        // / `.body()` fail ⇒ `h2_request_body_from_rx` returns
+        // Err(502) ⇒ the `Err(_) => inline 502` arm (2354-2356).
+        let bad = H3Request {
+            method: "BAD METHOD WITH SPACES".to_string(),
+            path: "/p".to_string(),
+            authority: "h.test".to_string(),
+            extra: Vec::new(),
+            trailers: Vec::new(),
+        };
+        let (btx2, brx2) = tokio::sync::mpsc::channel::<ReqBodyEvent>(2);
+        btx2.send(ReqBodyEvent::End {
+            trailers: Vec::new(),
+        })
+        .await
+        .unwrap();
+        let (rtx2, mut rrx2) = tokio::sync::mpsc::channel::<RespEvent>(8);
+        let r2 =
+            h3_to_h2_stream_resp(&bad, addr, &pool, brx2, rtx2, MAX_RESPONSE_BODY_BYTES).await;
+        assert!(r2.is_ok(), "builder-failure path returns Ok(())");
+        let mut blob2: Vec<u8> = Vec::new();
+        let mut saw_end2 = false;
+        while let Ok(ev) = rrx2.try_recv() {
+            match ev {
+                RespEvent::Bytes(b) => blob2.extend_from_slice(&b),
+                RespEvent::End => saw_end2 = true,
+                RespEvent::Reset => {}
+            }
+        }
+        assert!(saw_end2, "inline 502 must emit End");
+        let (f2, _c2) = decode_frame(&blob2, 1 << 20).expect("inline 502 HEADERS decodes");
+        let H3Frame::Headers { header_block: hb2 } = f2 else {
+            panic!("expected HEADERS");
+        };
+        let hdrs2 = QpackDecoder::new().decode(&hb2).unwrap();
+        assert!(
+            hdrs2.iter().any(|(n, v)| n == ":status" && v == "502"),
+            "builder failure ⇒ inline 502"
+        );
+        // Pool was never dialled (both arms returned pre-send_request).
+        assert_eq!(pool.peer_count(), 0, "no upstream dial on inline arms");
+    }
+
     /// `content_length: None` emits `:status` only (no `content-length`).
     #[test]
     fn encode_h3_headers_frame_none_omits_content_length() {

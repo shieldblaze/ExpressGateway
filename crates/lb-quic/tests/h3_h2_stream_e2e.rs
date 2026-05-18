@@ -1105,3 +1105,314 @@ async fn h2_e2e_client_reset_midrequest_rsts_h2_upstream_no_truncated_request() 
         "an aborted request must not yield a clean 200 FIN to the client"
     );
 }
+
+// ─────────────────────────────────────────────────────────────────────
+// §4  G5 remediation — DIRECT `stream_h2_response` coverage.
+//
+// `stream_h2_response` takes a real `hyper::Response<Incoming>` (no
+// public constructor for `Incoming`), so these drive a genuine hyper
+// H2 server + in-process hyper H2 client to obtain a real `Incoming`,
+// then call `lb_quic::h3_bridge::stream_h2_response` DIRECTLY with a
+// controlled channel + `cap`. This covers the response-side arms the
+// I1/I4 tests left uncovered (G5 isolate): the trailers branch
+// (h3_bridge.rs:1571-1599), the over-cap `Reset`/`OverCap` arms
+// (1527-1528, 1546-1548, 1593-1595), and the `send!` `ClientGone`
+// arm (1503). Real-wire — NOT a mock; NO production logic changed.
+// ─────────────────────────────────────────────────────────────────────
+
+use lb_quic::h3_bridge::{RespAbort, RespEvent, stream_h2_response};
+
+/// Spawn a hyper H2 backend whose response carries `body_bytes` as a
+/// DATA frame followed by an HTTP trailer field section (so the
+/// proxy's `stream_h2_response` exercises the `frame.trailers_ref()`
+/// branch). Status is 200.
+async fn spawn_h2_trailers_backend(
+    body_bytes: Vec<u8>,
+) -> (SocketAddr, tokio::task::JoinHandle<()>) {
+    let listener = TcpListener::bind(("127.0.0.1", 0)).await.unwrap();
+    let local = listener.local_addr().unwrap();
+    let body = Arc::new(body_bytes);
+    let h = tokio::spawn(async move {
+        loop {
+            let Ok((sock, _)) = listener.accept().await else {
+                return;
+            };
+            let body = Arc::clone(&body);
+            tokio::spawn(async move {
+                let svc = service_fn(move |_req: Request<Incoming>| {
+                    let body = Arc::clone(&body);
+                    async move {
+                        // Dependency-free body (no futures_util /
+                        // StreamBody — A1 scope: no new dep), mirroring
+                        // this file's existing `error_body` pattern:
+                        // one DATA frame then a trailer field section,
+                        // then end-of-stream.
+                        struct TrailerBody {
+                            data: Option<Bytes>,
+                            trailer_sent: bool,
+                        }
+                        impl hyper::body::Body for TrailerBody {
+                            type Data = Bytes;
+                            type Error = std::convert::Infallible;
+                            fn poll_frame(
+                                mut self: Pin<&mut Self>,
+                                _cx: &mut Context<'_>,
+                            ) -> Poll<
+                                Option<Result<hyper::body::Frame<Bytes>, Self::Error>>,
+                            > {
+                                if let Some(d) = self.data.take() {
+                                    return Poll::Ready(Some(Ok(
+                                        hyper::body::Frame::data(d),
+                                    )));
+                                }
+                                if !self.trailer_sent {
+                                    self.trailer_sent = true;
+                                    let mut tmap = hyper::HeaderMap::new();
+                                    tmap.insert(
+                                        "x-checksum",
+                                        hyper::header::HeaderValue::from_static(
+                                            "deadbeef",
+                                        ),
+                                    );
+                                    return Poll::Ready(Some(Ok(
+                                        hyper::body::Frame::trailers(tmap),
+                                    )));
+                                }
+                                Poll::Ready(None)
+                            }
+                        }
+                        let resp_body = TrailerBody {
+                            data: Some(Bytes::from((*body).clone())),
+                            trailer_sent: false,
+                        };
+                        Ok::<_, std::convert::Infallible>(
+                            Response::builder()
+                                .status(StatusCode::OK)
+                                .body(resp_body)
+                                .unwrap(),
+                        )
+                    }
+                });
+                let _ = hyper::server::conn::http2::Builder::new(TokioExec)
+                    .serve_connection(HyperIo(sock), svc)
+                    .await;
+            });
+        }
+    });
+    (local, h)
+}
+
+/// In-process hyper H2 client: dial `addr`, send a GET, return the
+/// real `Response<Incoming>`. Drives the client connection on a task.
+async fn h2_client_get(addr: SocketAddr) -> Response<Incoming> {
+    let stream = TcpStream::connect(addr).await.unwrap();
+    let (mut sender, conn) =
+        hyper::client::conn::http2::handshake::<_, _, http_body_util::Empty<Bytes>>(
+            TokioExec,
+            HyperIo(stream),
+        )
+        .await
+        .unwrap();
+    tokio::spawn(async move {
+        let _ = conn.await;
+    });
+    let req = Request::builder()
+        .method("GET")
+        .uri("/g5")
+        .header("host", "g5.test")
+        .body(http_body_util::Empty::<Bytes>::new())
+        .unwrap();
+    sender.send_request(req).await.unwrap()
+}
+
+/// G5 — the response TRAILERS branch (h3_bridge.rs:1571-1599 happy
+/// path): an upstream H2 response with a DATA frame + a trailer
+/// section must re-encode to HEADERS + DATA + trailing-HEADERS + End,
+/// all bounded.
+#[tokio::test]
+async fn g5_stream_h2_response_forwards_trailers() {
+    let payload = vec![0x5Au8; 40 * 1024]; // > H3_RESP_CHUNK_MAX ⇒ multi-frame
+    let (backend, bh) = spawn_h2_trailers_backend(payload.clone()).await;
+    let resp = h2_client_get(backend).await;
+
+    let (tx, mut rx) = tokio::sync::mpsc::channel::<RespEvent>(64);
+    let r = stream_h2_response(resp, &tx, lb_quic::h3_bridge::MAX_RESPONSE_BODY_BYTES).await;
+    bh.abort();
+    assert!(r.is_ok(), "clean trailered response must succeed: {r:?}");
+
+    // Reassemble the emitted H3 frames: HEADERS, DATA*, trailing
+    // HEADERS, then End.
+    let mut blob: Vec<u8> = Vec::new();
+    let mut ended = false;
+    while let Ok(ev) = rx.try_recv() {
+        match ev {
+            RespEvent::Bytes(b) => blob.extend_from_slice(&b),
+            RespEvent::End => ended = true,
+            RespEvent::Reset => panic!("clean response must not Reset"),
+        }
+    }
+    assert!(ended, "must emit End");
+    // Decode all frames; expect ≥1 HEADERS (status), DATA bytes ==
+    // payload, and a SECOND HEADERS frame carrying the trailer.
+    let mut headers_frames = 0usize;
+    let mut data: Vec<u8> = Vec::new();
+    let mut saw_trailer = false;
+    let mut off = 0usize;
+    while off < blob.len() {
+        let (frame, c) = decode_frame(&blob[off..], 1 << 20).expect("decode");
+        off += c;
+        match frame {
+            H3Frame::Headers { header_block } => {
+                headers_frames += 1;
+                let hdrs = QpackDecoder::new().decode(&header_block).unwrap();
+                if hdrs.iter().any(|(n, v)| n == "x-checksum" && v == "deadbeef") {
+                    saw_trailer = true;
+                }
+            }
+            H3Frame::Data { payload } => data.extend_from_slice(&payload),
+            _ => {}
+        }
+    }
+    assert!(headers_frames >= 2, "response HEADERS + trailing HEADERS");
+    assert_eq!(data, payload, "DATA must be byte-identical");
+    assert!(
+        saw_trailer,
+        "the upstream trailer field must be forwarded as a trailing HEADERS frame"
+    );
+}
+
+/// G5 — the over-cap `Reset`/`OverCap` arms: a `cap` smaller than the
+/// HEADERS frame trips 1526-1528; a `cap` that admits HEADERS but not
+/// the DATA trips 1546-1548; a `cap` that admits HEADERS+DATA but not
+/// the trailer trips 1593-1595. Each must emit `Reset` and return
+/// `Err(RespAbort::OverCap)` — a partial body never FIN'd.
+#[tokio::test]
+async fn g5_stream_h2_response_over_cap_arms_reset() {
+    // (a) cap = 0 ⇒ even the HEADERS frame is over cap (1526-1528).
+    {
+        let (backend, bh) = spawn_h2_trailers_backend(vec![1u8; 8]).await;
+        let resp = h2_client_get(backend).await;
+        let (tx, mut rx) = tokio::sync::mpsc::channel::<RespEvent>(16);
+        let r = stream_h2_response(resp, &tx, 0).await;
+        bh.abort();
+        assert_eq!(r, Err(RespAbort::OverCap), "cap=0 ⇒ OverCap on HEADERS");
+        let mut saw_reset = false;
+        while let Ok(ev) = rx.try_recv() {
+            if matches!(ev, RespEvent::Reset) {
+                saw_reset = true;
+            }
+            assert!(!matches!(ev, RespEvent::End), "over-cap must NOT End");
+        }
+        assert!(saw_reset, "over-cap must emit Reset");
+    }
+
+    // (b) cap admits HEADERS only ⇒ the DATA frame trips OverCap
+    // (1546-1548). HEADERS frame for status 200 (no content-length,
+    // StreamBody) is small (< 64 B); pick a cap between it and the
+    // first DATA frame.
+    {
+        let (backend, bh) = spawn_h2_trailers_backend(vec![2u8; 16 * 1024]).await;
+        let resp = h2_client_get(backend).await;
+        let (tx, mut rx) = tokio::sync::mpsc::channel::<RespEvent>(16);
+        // 64 B is enough for the HEADERS frame but far below a
+        // 16 KiB DATA frame.
+        let r = stream_h2_response(resp, &tx, 64).await;
+        bh.abort();
+        assert_eq!(r, Err(RespAbort::OverCap), "DATA over cap ⇒ OverCap");
+        let mut saw_reset = false;
+        let mut ended = false;
+        while let Ok(ev) = rx.try_recv() {
+            match ev {
+                RespEvent::Reset => saw_reset = true,
+                RespEvent::End => ended = true,
+                RespEvent::Bytes(_) => {}
+            }
+        }
+        assert!(saw_reset && !ended, "DATA over-cap ⇒ Reset, never End");
+    }
+
+    // (c) cap admits HEADERS + DATA but NOT the trailing-HEADERS frame
+    // ⇒ the trailer over-cap arm (h3_bridge.rs:1593-1595). Tiny body
+    // so HEADERS+DATA are small; sweep cap upward until HEADERS+DATA
+    // fit but +trailer trips OverCap (frame sizes are deterministic;
+    // the sweep makes the test robust to exact QPACK/varint lengths).
+    {
+        let mut hit_trailer_overcap = false;
+        for cap in [40usize, 48, 56, 64, 72, 80, 88, 96, 104, 112, 120] {
+            let (backend, bh) = spawn_h2_trailers_backend(vec![3u8; 16]).await;
+            let resp = h2_client_get(backend).await;
+            let (tx, mut rx) = tokio::sync::mpsc::channel::<RespEvent>(16);
+            let r = stream_h2_response(resp, &tx, cap).await;
+            bh.abort();
+            if r != Err(RespAbort::OverCap) {
+                continue;
+            }
+            // Count emitted frames: a trailer-over-cap run must have
+            // forwarded HEADERS + at least one DATA byte before the
+            // Reset (distinguishing it from the HEADERS/DATA over-cap
+            // arms, which Reset earlier).
+            let mut bytes_frames = 0usize;
+            let mut saw_reset = false;
+            let mut ended = false;
+            let mut blob: Vec<u8> = Vec::new();
+            while let Ok(ev) = rx.try_recv() {
+                match ev {
+                    RespEvent::Bytes(b) => {
+                        bytes_frames += 1;
+                        blob.extend_from_slice(&b);
+                    }
+                    RespEvent::Reset => saw_reset = true,
+                    RespEvent::End => ended = true,
+                }
+            }
+            // Decode: must have a HEADERS frame AND a DATA frame
+            // emitted before the Reset (i.e. the trailer was the
+            // thing that tripped the cap, not the HEADERS or DATA).
+            let mut had_headers = false;
+            let mut had_data = false;
+            let mut off = 0usize;
+            while off < blob.len() {
+                if let Ok((fr, c)) = decode_frame(&blob[off..], 1 << 20) {
+                    off += c;
+                    match fr {
+                        H3Frame::Headers { .. } => had_headers = true,
+                        H3Frame::Data { .. } => had_data = true,
+                        _ => {}
+                    }
+                } else {
+                    break;
+                }
+            }
+            if saw_reset && !ended && had_headers && had_data && bytes_frames >= 2 {
+                hit_trailer_overcap = true;
+                break;
+            }
+        }
+        assert!(
+            hit_trailer_overcap,
+            "a cap between (HEADERS+DATA) and (+trailer) must trip the \
+             trailer over-cap Reset arm (HEADERS+DATA forwarded, then \
+             Reset, never End)"
+        );
+    }
+}
+
+/// G5 — the `send!` `ClientGone` arm (h3_bridge.rs:1503): if the
+/// downstream receiver is dropped, the very first `send!` (HEADERS)
+/// maps the closed channel to `Err(RespAbort::ClientGone)` and the
+/// upstream relay stops (a stalled/cancelled client must not be
+/// served further).
+#[tokio::test]
+async fn g5_stream_h2_response_client_gone_on_closed_channel() {
+    let (backend, bh) = spawn_h2_trailers_backend(vec![9u8; 1024]).await;
+    let resp = h2_client_get(backend).await;
+    let (tx, rx) = tokio::sync::mpsc::channel::<RespEvent>(4);
+    drop(rx); // downstream client gone BEFORE the first send.
+    let r = stream_h2_response(resp, &tx, lb_quic::h3_bridge::MAX_RESPONSE_BODY_BYTES).await;
+    bh.abort();
+    assert_eq!(
+        r,
+        Err(RespAbort::ClientGone),
+        "a closed response channel ⇒ ClientGone (stop relaying)"
+    );
+}
