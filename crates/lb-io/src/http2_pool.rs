@@ -72,8 +72,7 @@ use crate::pool::TcpPool;
 /// itself satisfies that bound, so every pre-existing caller adapts
 /// with a single `.map_err(Into::into)` (or unchanged when its body is
 /// `Infallible`/already-boxed).
-pub type H2ReqBody =
-    BoxBody<Bytes, Box<dyn std::error::Error + Send + Sync>>;
+pub type H2ReqBody = BoxBody<Bytes, Box<dyn std::error::Error + Send + Sync>>;
 
 /// Default H2 max concurrent streams per upstream connection.
 pub const DEFAULT_H2_MAX_CONCURRENT_STREAMS: u32 = 256;
@@ -266,10 +265,7 @@ impl Http2Pool {
         Ok(sender)
     }
 
-    fn take_alive_sender(
-        &self,
-        addr: SocketAddr,
-    ) -> Option<SendRequest<H2ReqBody>> {
+    fn take_alive_sender(&self, addr: SocketAddr) -> Option<SendRequest<H2ReqBody>> {
         let mut peers = self.inner.peers.lock();
         match peers.get(&addr) {
             Some(entry) if entry.is_alive() => Some(entry.sender.clone()),
