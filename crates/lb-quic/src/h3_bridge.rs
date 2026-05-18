@@ -1453,6 +1453,158 @@ pub async fn stream_h1_response(
     Ok(())
 }
 
+/// S6 / H3→H2 R8 (M-B / I1) — stream a hyper H2 upstream
+/// [`Response<Incoming>`] back to the H3 client, re-encoded into H3
+/// wire frames, **bounded-incrementally** and with end-to-end
+/// backpressure. This is the H2 cousin of [`stream_h1_response`] and
+/// obeys the IDENTICAL `RespEvent` / `RespAbort` contract:
+///
+/// 1. Emit the response HEADERS frame (`:status` [+ `content-length`
+///    iff the upstream declared one]) as the FIRST [`RespEvent::Bytes`]
+///    BEFORE any body byte — byte-identical framing to
+///    [`stream_h1_response`]'s step 2.
+/// 2. Pull the H2 body **one frame at a time** via
+///    [`http_body_util::BodyExt::frame`]; split each DATA frame into
+///    `≤ H3_RESP_CHUNK_MAX` slices, encode each as an H3 DATA frame,
+///    and `send` it on the bounded `tx`. The `.send().await` is the
+///    backpressure point: a stalled H3 client ⇒ the actor stops
+///    draining ⇒ this channel fills ⇒ `body.frame().await` is not
+///    called again ⇒ hyper stops issuing H2 `WINDOW_UPDATE`s ⇒ the H2
+///    upstream's send window closes (stalled client ⇒ paused upstream
+///    read). Memory retained = at most the in-hand frame (dropped
+///    after splitting) + `H3_RESP_CHANNEL_DEPTH` queued events —
+///    body-size INDEPENDENT, never `.collect()`, never a `Vec<u8>`.
+/// 3. A trailing H2 trailers frame (RFC 9110 §6.5) is re-encoded as
+///    one final post-DATA H3 trailing-HEADERS [`RespEvent::Bytes`]
+///    (pseudo-headers filtered) BEFORE `End` — parity with
+///    [`stream_h1_response`]'s chunked-trailer C4 behaviour.
+/// 4. Clean end ⇒ [`RespEvent::End`] (actor FINs), `Ok(())`.
+/// 5. Any hyper body error / premature failure ⇒ best-effort
+///    [`RespEvent::Reset`] + `Err(RespAbort::UpstreamReset)` so the
+///    actor RESET_STREAMs the client and NEVER FINs — a partial body
+///    is never presentable as a complete response (response-splitting
+///    guard, identical to [`stream_h1_response`]). Over the `cap` ⇒
+///    `Err(RespAbort::OverCap)`. A closed channel (client cancelled)
+///    ⇒ `Err(RespAbort::ClientGone)` via the `send!` macro.
+///
+/// # Errors
+///
+/// Returns `Err(RespAbort)` describing why the relay aborted; the
+/// caller (the H3→H2 orchestrator) propagates it so the actor
+/// RESET_STREAMs the client.
+pub async fn stream_h2_response(
+    resp: hyper::Response<hyper::body::Incoming>,
+    tx: &tokio::sync::mpsc::Sender<RespEvent>,
+    cap: usize,
+) -> Result<(), RespAbort> {
+    macro_rules! send {
+        ($tx:expr, $ev:expr) => {
+            $tx.send($ev).await.map_err(|_| RespAbort::ClientGone)?
+        };
+    }
+
+    let (parts, mut body) = resp.into_parts();
+
+    // --- 1. emit HEADERS immediately (before any body byte) ---
+    // Mirror `stream_h1_response`: forward `content-length` only when
+    // the upstream declared a valid one (so the H3 client gets the
+    // same `Some(n)` vs `None` framing decision).
+    let declared_len: Option<usize> = parts
+        .headers
+        .get(hyper::header::CONTENT_LENGTH)
+        .and_then(|v| v.to_str().ok())
+        .and_then(|s| s.trim().parse::<usize>().ok());
+    let headers_frame = match encode_h3_headers_frame(parts.status.as_u16(), declared_len) {
+        Ok(f) => f,
+        Err(_) => {
+            let _ = tx.send(RespEvent::Reset).await;
+            return Err(RespAbort::BadHead);
+        }
+    };
+    let mut total: usize = headers_frame.len();
+    if total > cap {
+        let _ = tx.send(RespEvent::Reset).await;
+        return Err(RespAbort::OverCap);
+    }
+    send!(tx, RespEvent::Bytes(headers_frame));
+
+    // --- 2/3. stream body frames as they arrive ---
+    // Emit one ≤H3_RESP_CHUNK_MAX DATA frame per slice; identical
+    // framing/cap discipline to `stream_h1_response`'s `emit_data!`.
+    macro_rules! emit_data {
+        ($payload:expr) => {{
+            for slice in $payload.chunks(H3_RESP_CHUNK_MAX) {
+                let frame = match encode_h3_data_frame(slice) {
+                    Ok(f) => f,
+                    Err(_) => {
+                        let _ = tx.send(RespEvent::Reset).await;
+                        return Err(RespAbort::UpstreamReset);
+                    }
+                };
+                total = total.saturating_add(frame.len());
+                if total > cap {
+                    let _ = tx.send(RespEvent::Reset).await;
+                    return Err(RespAbort::OverCap);
+                }
+                send!(tx, RespEvent::Bytes(frame));
+            }
+        }};
+    }
+
+    while let Some(frame_res) = body.frame().await {
+        let frame = match frame_res {
+            Ok(f) => f,
+            Err(_) => {
+                // Upstream body error mid-response: best-effort Reset,
+                // never a clean FIN (response-splitting guard).
+                let _ = tx.send(RespEvent::Reset).await;
+                return Err(RespAbort::UpstreamReset);
+            }
+        };
+        if let Some(data) = frame.data_ref() {
+            // Re-borrow as a slice; `Bytes` derefs to `[u8]`.
+            let bytes: &[u8] = data;
+            if !bytes.is_empty() {
+                emit_data!(bytes);
+            }
+        } else if let Some(tmap) = frame.trailers_ref() {
+            // RFC 9110 §6.5 trailers → one post-DATA H3 trailing
+            // HEADERS frame. Filter pseudo-headers (defensive; H2
+            // trailers must not carry them) and skip an empty set.
+            let trailers: Vec<(String, String)> = tmap
+                .iter()
+                .filter(|(n, _)| !n.as_str().starts_with(':'))
+                .filter_map(|(n, v)| {
+                    v.to_str()
+                        .ok()
+                        .map(|vs| (n.as_str().to_owned(), vs.to_owned()))
+                })
+                .collect();
+            if !trailers.is_empty() {
+                let trailer_frame = match encode_h3_trailers_frame(&trailers) {
+                    Ok(f) => f,
+                    Err(_) => {
+                        let _ = tx.send(RespEvent::Reset).await;
+                        return Err(RespAbort::UpstreamReset);
+                    }
+                };
+                total = total.saturating_add(trailer_frame.len());
+                if total > cap {
+                    let _ = tx.send(RespEvent::Reset).await;
+                    return Err(RespAbort::OverCap);
+                }
+                send!(tx, RespEvent::Bytes(trailer_frame));
+            }
+        }
+        // Any other frame kind (none currently in http-body 1.x) is
+        // ignored — never forwarded raw.
+    }
+
+    // --- 4. clean completion ---
+    send!(tx, RespEvent::End);
+    Ok(())
+}
+
 /// Forward an H3 request to an H1 backend via `TcpPool` and return the
 /// H1 response mapped into H3 wire bytes. On any backend failure,
 /// returns a 502 response body `b"bad gateway"`.
@@ -2748,6 +2900,90 @@ mod tests {
             split.extend_from_slice(&encode_h3_data_frame(body).unwrap());
             assert_eq!(whole, split, "status={status} body.len()={}", body.len());
         }
+    }
+
+    /// S6 I1 — `stream_h2_response`'s re-encode contract, asserted on
+    /// the SHARED frame encoders it calls (a `Response<Incoming>`
+    /// cannot be constructed without a live H2 conn — the full drive +
+    /// backpressure + non-vacuous memory proof is the I4 real-H2 e2e;
+    /// this locks the load-bearing framing decisions so an I4
+    /// regression is bisectable to a single unit).
+    ///
+    /// (a) declared content-length ⇒ HEADERS carries `:status` +
+    ///     `content-length` (matches `stream_h1_response`'s
+    ///     `RespFraming::ContentLength` head); (b) unknown length ⇒
+    ///     `:status` only; (c) a >chunk-max body splits into
+    ///     `ceil(len / H3_RESP_CHUNK_MAX)` DATA frames each ≤ the cap;
+    ///     (d) trailers re-encode to a decodable trailing HEADERS frame
+    ///     with pseudo-headers filtered.
+    #[test]
+    fn s6_i1_stream_h2_response_reencode_framing_contract() {
+        // (a) + (b): HEADERS framing parity with stream_h1_response.
+        let with_len = encode_h3_headers_frame(200, Some(1234)).unwrap();
+        let (f, _) = decode_frame(&with_len, 1 << 20).unwrap();
+        let H3Frame::Headers { header_block } = f else {
+            panic!("HEADERS");
+        };
+        let h = QpackDecoder::new().decode(&header_block).unwrap();
+        assert!(h.iter().any(|(n, v)| n == ":status" && v == "200"));
+        assert!(
+            h.iter().any(|(n, v)| n == "content-length" && v == "1234"),
+            "declared CL must be forwarded (parity w/ stream_h1_response)"
+        );
+        let no_len = encode_h3_headers_frame(204, None).unwrap();
+        let (f2, _) = decode_frame(&no_len, 1 << 20).unwrap();
+        let H3Frame::Headers { header_block: hb2 } = f2 else {
+            panic!("HEADERS");
+        };
+        let h2 = QpackDecoder::new().decode(&hb2).unwrap();
+        assert!(
+            !h2.iter().any(|(n, _)| n == "content-length"),
+            "no CL ⇒ content-length ABSENT (client relies on FIN)"
+        );
+
+        // (c) a body larger than H3_RESP_CHUNK_MAX is emitted as
+        // multiple DATA frames, each payload ≤ H3_RESP_CHUNK_MAX —
+        // exactly the `emit_data!` split loop in stream_h2_response.
+        let big = vec![0xABu8; H3_RESP_CHUNK_MAX * 2 + 7];
+        let mut frames = 0usize;
+        let mut reassembled = Vec::new();
+        for slice in big.chunks(H3_RESP_CHUNK_MAX) {
+            assert!(slice.len() <= H3_RESP_CHUNK_MAX);
+            let enc = encode_h3_data_frame(slice).unwrap();
+            let (df, _) = decode_frame(&enc, 1 << 20).unwrap();
+            let H3Frame::Data { payload } = df else {
+                panic!("DATA");
+            };
+            reassembled.extend_from_slice(&payload);
+            frames += 1;
+        }
+        assert_eq!(frames, 3, "2*chunk+7 ⇒ 3 DATA frames");
+        assert_eq!(reassembled, big, "split is byte-identical");
+
+        // (d) trailers → trailing HEADERS, pseudo-headers filtered (the
+        // exact transform stream_h2_response applies to a trailers
+        // frame before encode_h3_trailers_frame).
+        let raw = [
+            (":status".to_owned(), "200".to_owned()), // pseudo — DROP
+            ("x-checksum".to_owned(), "deadbeef".to_owned()),
+        ];
+        let filtered: Vec<(String, String)> = raw
+            .iter()
+            .filter(|(n, _)| !n.starts_with(':'))
+            .cloned()
+            .collect();
+        assert_eq!(filtered.len(), 1);
+        let tf = encode_h3_trailers_frame(&filtered).unwrap();
+        let (tdec, _) = decode_frame(&tf, 1 << 20).unwrap();
+        let H3Frame::Headers { header_block: tb } = tdec else {
+            panic!("trailing HEADERS");
+        };
+        let td = QpackDecoder::new().decode(&tb).unwrap();
+        assert!(td.iter().any(|(n, v)| n == "x-checksum" && v == "deadbeef"));
+        assert!(
+            !td.iter().any(|(n, _)| n.starts_with(':')),
+            "pseudo-header must be filtered from trailers"
+        );
     }
 
     /// `content_length: None` emits `:status` only (no `content-length`).
