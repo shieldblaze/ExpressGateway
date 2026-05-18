@@ -125,6 +125,10 @@ fn main() {
     let build = Command::new(&cargo)
         .args(["build", "--release", "--quiet"])
         .current_dir(&tmp)
+        // Drop any inherited CARGO_TARGET_DIR so cargo writes the probe
+        // to <tmp>/target (current_dir/target), matching the run step
+        // below and keeping it out of the shared workspace target/.
+        .env_remove("CARGO_TARGET_DIR")
         .output()
         .expect("invoke cargo build");
     if !build.status.success() {
