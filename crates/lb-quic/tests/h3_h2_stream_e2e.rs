@@ -1157,26 +1157,21 @@ async fn spawn_h2_trailers_backend(
                             fn poll_frame(
                                 mut self: Pin<&mut Self>,
                                 _cx: &mut Context<'_>,
-                            ) -> Poll<
-                                Option<Result<hyper::body::Frame<Bytes>, Self::Error>>,
-                            > {
+                            ) -> Poll<Option<Result<hyper::body::Frame<Bytes>, Self::Error>>>
+                            {
                                 if let Some(d) = self.data.take() {
-                                    return Poll::Ready(Some(Ok(
-                                        hyper::body::Frame::data(d),
-                                    )));
+                                    return Poll::Ready(Some(Ok(hyper::body::Frame::data(d))));
                                 }
                                 if !self.trailer_sent {
                                     self.trailer_sent = true;
                                     let mut tmap = hyper::HeaderMap::new();
                                     tmap.insert(
                                         "x-checksum",
-                                        hyper::header::HeaderValue::from_static(
-                                            "deadbeef",
-                                        ),
+                                        hyper::header::HeaderValue::from_static("deadbeef"),
                                     );
-                                    return Poll::Ready(Some(Ok(
-                                        hyper::body::Frame::trailers(tmap),
-                                    )));
+                                    return Poll::Ready(Some(Ok(hyper::body::Frame::trailers(
+                                        tmap,
+                                    ))));
                                 }
                                 Poll::Ready(None)
                             }
@@ -1206,13 +1201,13 @@ async fn spawn_h2_trailers_backend(
 /// real `Response<Incoming>`. Drives the client connection on a task.
 async fn h2_client_get(addr: SocketAddr) -> Response<Incoming> {
     let stream = TcpStream::connect(addr).await.unwrap();
-    let (mut sender, conn) =
-        hyper::client::conn::http2::handshake::<_, _, http_body_util::Empty<Bytes>>(
-            TokioExec,
-            HyperIo(stream),
-        )
-        .await
-        .unwrap();
+    let (mut sender, conn) = hyper::client::conn::http2::handshake::<
+        _,
+        _,
+        http_body_util::Empty<Bytes>,
+    >(TokioExec, HyperIo(stream))
+    .await
+    .unwrap();
     tokio::spawn(async move {
         let _ = conn.await;
     });
@@ -1265,7 +1260,10 @@ async fn g5_stream_h2_response_forwards_trailers() {
             H3Frame::Headers { header_block } => {
                 headers_frames += 1;
                 let hdrs = QpackDecoder::new().decode(&header_block).unwrap();
-                if hdrs.iter().any(|(n, v)| n == "x-checksum" && v == "deadbeef") {
+                if hdrs
+                    .iter()
+                    .any(|(n, v)| n == "x-checksum" && v == "deadbeef")
+                {
                     saw_trailer = true;
                 }
             }

@@ -3291,7 +3291,7 @@ mod tests {
             authority: String::new(), // ← empty ⇒ addr fallback
             extra: vec![
                 (":scheme".to_string(), "https".to_string()), // pseudo ⇒ skip
-                ("x-keep".to_string(), "1".to_string()),       // regular ⇒ copy
+                ("x-keep".to_string(), "1".to_string()),      // regular ⇒ copy
             ],
             trailers: Vec::new(),
         };
@@ -3331,8 +3331,8 @@ mod tests {
             trailers: Vec::new(),
         };
         let (_tx2, rx2) = tokio::sync::mpsc::channel::<ReqBodyEvent>(1);
-        let built2 = h2_request_body_from_rx(&req2, addr, rx2, None)
-            .expect("bodyless (None) must build");
+        let built2 =
+            h2_request_body_from_rx(&req2, addr, rx2, None).expect("bodyless (None) must build");
         assert_eq!(
             built2.uri().authority().map(ToString::to_string),
             Some("explicit.host:443".to_string())
@@ -3410,8 +3410,7 @@ mod tests {
         .await
         .unwrap();
         let (rtx2, mut rrx2) = tokio::sync::mpsc::channel::<RespEvent>(8);
-        let r2 =
-            h3_to_h2_stream_resp(&bad, addr, &pool, brx2, rtx2, MAX_RESPONSE_BODY_BYTES).await;
+        let r2 = h3_to_h2_stream_resp(&bad, addr, &pool, brx2, rtx2, MAX_RESPONSE_BODY_BYTES).await;
         assert!(r2.is_ok(), "builder-failure path returns Ok(())");
         let mut blob2: Vec<u8> = Vec::new();
         let mut saw_end2 = false;
