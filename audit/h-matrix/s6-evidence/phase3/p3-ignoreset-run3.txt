@@ -1,0 +1,16 @@
+test accepts_real_bpffs
+test capture_real_70_verifier_baseline
+test crates/lb-observability/src/label_budget.rs - label_budget (line 8)
+test crates/lb-security/src/admin_auth.rs - admin_auth (line 8)
+test crates/lb-security/src/hooks.rs - hooks (line 13)
+test crates/lb-security/src/watchdog.rs - watchdog (line 12)
+test d1_native_attach::drv_mode_attach_to_ens5_proves_live_datapath
+test detach_verifying_on_real_iface
+test h2spec_server_conformance_passes
+test live_query_loopback_has_no_xdp
+test lru_evicts_oldest_under_flood
+test probe_synthetic_packet_round_trip
+test summed_counters_advance_under_load
+test test_maps_pinned_then_loaded_from_pin
+test test_skb_fallback_logs_warning
+test xdp_link_persists_after_id_drop

@@ -1,0 +1,180 @@
+   Compiling tracing-core v0.1.36
+   Compiling form_urlencoded v1.2.2
+   Compiling lb-h3 v0.1.0 (/home/ubuntu/Code/ExpressGateway/.claude/worktrees/phase3-gate/crates/lb-h3)
+   Compiling url v2.5.8
+   Compiling tracing v0.1.44
+   Compiling tonic v0.11.0
+   Compiling h2 v0.4.13
+   Compiling lb-security v0.1.0 (/home/ubuntu/Code/ExpressGateway/.claude/worktrees/phase3-gate/crates/lb-security)
+   Compiling opentelemetry-proto v0.5.0
+   Compiling foundations v4.5.0
+   Compiling tokio-quiche v0.18.0
+   Compiling hyper v1.9.0
+   Compiling hyper-util v0.1.20
+   Compiling lb-io v0.1.0 (/home/ubuntu/Code/ExpressGateway/.claude/worktrees/phase3-gate/crates/lb-io)
+   Compiling lb-quic v0.1.0 (/home/ubuntu/Code/ExpressGateway/.claude/worktrees/phase3-gate/crates/lb-quic)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 21.28s
+     Running unittests src/lib.rs (target/debug/deps/lb_quic-16b89cee6e4e7f7a)
+
+running 20 tests
+test h3_bridge::tests::build_h1_request_none_body_is_byte_identical_to_legacy_bodyless ... ok
+test h3_bridge::tests::chunk_decoder_decodes_split_chunks ... ok
+test h3_bridge::tests::chunk_decoder_tolerates_chunk_extension ... ok
+test h3_bridge::tests::chunk_decoder_rejects_malformed_framing_c3 ... ok
+test h3_bridge::tests::encode_h3_headers_frame_none_omits_content_length ... ok
+test h3_bridge::tests::encode_h3_response_includes_status_and_body ... ok
+test h3_bridge::tests::encode_h3_response_is_byte_identical_to_split_helpers ... ok
+test h3_bridge::tests::feed_body_accepts_valid_h3_trailers ... ok
+test h3_bridge::tests::feed_body_rejects_pseudo_header_in_h3_trailers ... ok
+test h3_bridge::tests::s6_i1_stream_h2_response_reencode_framing_contract ... ok
+test h3_bridge::tests::s2_target_build_h1_request_with_body_sets_content_length_and_appends_payload ... ok
+test h3_bridge::tests::stream_rx_buf_accumulates_partial_headers ... ok
+test tests::datagram_empty_rejected ... ok
+test tests::datagram_forward_ok ... ok
+test tests::stream_empty_rejected ... ok
+test h3_bridge::tests::s6_i2_h3_req_stream_body_frame_and_abort_contract ... ok
+test tests::stream_forward_ok ... ok
+test h3_bridge::tests::chunk_decoder_parses_trailer_section_c4 ... ok
+test h3_bridge::tests::read_h1_response_capped_rejects_over_cap_and_passes_under_cap ... ok
+test router::tests::router_drops_initial_when_cap_reached ... ok
+
+test result: ok. 20 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.02s
+
+     Running tests/h3_graceful_close.rs (target/debug/deps/h3_graceful_close-740240107bf19a3f)
+
+running 1 test
+test test_h3_connection_close_emitted_on_cancel ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.80s
+
+     Running tests/h3_h1_binary_body_e2e.rs (target/debug/deps/h3_h1_binary_body_e2e-42f470e68b81accd)
+
+running 1 test
+test h3_to_h1_forwards_non_utf8_body_byte_for_byte ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s
+
+     Running tests/h3_h1_bridge_e2e.rs (target/debug/deps/h3_h1_bridge_e2e-ec9b71f275247b12)
+
+running 1 test
+test h3_h1_bridge_status_body_and_host_verbatim_through_quic_listener ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.05s
+
+     Running tests/h3_h1_resp_stream_e2e.rs (target/debug/deps/h3_h1_resp_stream_e2e-5a9df72650d2727d)
+
+running 16 tests
+test c3_unit_supplement_documents_coverage ... ok
+test fixture_r4_empty_body ... ok
+test c5_resp_retained_ceiling_is_sound_and_much_less_than_1mib ... ok
+test fixture_r7_chunked_split_reassembles ... ok
+test fixture_r1_binary_body_is_large_and_non_utf8_marked ... ok
+test r4_empty_response_body_clean_fin ... ok
+test r1_multi_data_binary_response_byte_identical ... ok
+test r7_chunked_upstream_response_byte_identical ... ok
+test c3_malformed_chunked_responses_reset_never_forward_truncated ... ok
+test c2_clientgone_drops_pooled_upstream ... ok
+test r8_chunked_response_trailers_delivered_to_h3_client ... ok
+test r6_client_cancel_midresponse_stops_upstream_read ... ok
+test r2_response_memory_bounded_through_stalled_client ... ok
+test r3_slow_client_backpressures_upstream_read ... ok
+test r5_upstream_reset_midresponse_yields_reset_stream ... ok
+test c2_every_abort_variant_drops_pooled_upstream_and_resets ... ok
+
+test result: ok. 16 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 13.17s
+
+     Running tests/h3_h1_stream_body_e2e.rs (target/debug/deps/h3_h1_stream_body_e2e-be81f81a1c6be9d5)
+
+running 6 tests
+test t4_feed_body_tiny_cap_emits_toolarge_and_latches ... ok
+test t4_oversized_body_yields_413_and_upstream_not_completed ... ok
+test t3_zero_length_data_frame_then_fin_no_spurious_chunk ... ok
+test t2_empty_body_is_byte_identical_to_s1_bodyless_head ... ok
+test t1_multi_data_frame_binary_body_forwarded_byte_identical ... ok
+test t5_single_large_data_frame_is_memory_bounded_through_stalled_upstream ... ok
+
+test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 6.91s
+
+     Running tests/h3_h1_stream_body_errors_e2e.rs (target/debug/deps/h3_h1_stream_body_errors_e2e-129f5c7d2d23b7d8)
+
+running 3 tests
+test p1b_t2_upstream_resets_mid_body_yields_502 ... ok
+test p1b_t3_oversized_after_partial_chunked_send_413_upstream_aborted ... ok
+test p1b_t1_client_cancels_mid_body_upstream_not_completed_and_no_leak ... ok
+
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.80s
+
+     Running tests/h3_h1_trailers_resp_e2e.rs (target/debug/deps/h3_h1_trailers_resp_e2e-a6ba04071ed06eba)
+
+running 2 tests
+test pc2_large_binary_response_body_reassembled_byte_identical ... ok
+test pc1_request_with_trailing_field_section_completes_and_drops_trailers ... ok
+
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.09s
+
+     Running tests/h3_h2_stream_e2e.rs (target/debug/deps/h3_h2_stream_e2e-029b8ec23b2b3ca2)
+
+running 7 tests
+test h2_e2e_get_response_byte_identical ... ok
+test h2_e2e_upstream_reset_midbody_resets_client_no_fin ... ok
+test h2_e2e_request_body_byte_identical_at_backend ... ok
+test h2_e2e_client_reset_midrequest_rsts_h2_upstream_no_truncated_request ... ok
+test h2_e2e_response_memory_bounded_through_stalled_client ... ok
+test h2_e2e_backpressure_stalled_client_pauses_h2_upstream_read ... ok
+test h2_e2e_request_memory_bounded_through_stalled_backend ... ok
+
+test result: ok. 7 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 4.94s
+
+     Running tests/listener_lifecycle.rs (target/debug/deps/listener_lifecycle-e6c956922773e51c)
+
+running 6 tests
+test shutdown_cancels_join_cleanly ... ok
+test udp_bind_and_local_addr_observable ... ok
+test retry_secret_autogenerated_0600_then_reloaded ... ok
+test alpn_h3_accepted_handshake_established ... ok
+test alpn_h3_29_legacy_accepted_handshake_established ... ok
+test alpn_unknown_rejected_handshake_fails ... ok
+
+test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 3.04s
+
+     Running tests/proptest_header.rs (target/debug/deps/proptest_header-bd3ba4d90bf6986c)
+
+running 1 test
+test header_from_slice_no_panic ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.11s
+
+     Running tests/quic_router_leak.rs (target/debug/deps/quic_router_leak-2583709de0113d93)
+
+running 3 tests
+test clean_exit_also_removes_entries ... ok
+test cancel_drops_entries ... ok
+test test_panicking_actor_removes_entry ... ok
+
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/round8_h3_authority_enforced.rs (target/debug/deps/round8_h3_authority_enforced-c31337fe0f1a90a8)
+
+running 3 tests
+test h3_valid_authority_passes_validator ... ok
+test h3_whitespace_in_authority_rejected_before_upstream ... ok
+test h3_comma_in_authority_rejected_before_upstream ... ok
+
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.64s
+
+     Running tests/router_accept_path.rs (target/debug/deps/router_accept_path-26a325e7213df3b3)
+
+running 3 tests
+test zero_rtt_replay_guard_rejects_second_use_on_shared_instance ... ok
+test retry_token_round_trip_through_router ... ok
+test two_concurrent_clients_distinct_actors ... ok
+
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.08s
+
+   Doc-tests lb_quic
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+GAUGES_EXIT=0

@@ -1,0 +1,19 @@
+S6 PHASE 3 GATE — META
+date_start: Mon May 18 18:57:44 UTC 2026
+toplevel: /home/ubuntu/Code/ExpressGateway/.claude/worktrees/phase3-gate
+branch: s6/phase3-gate
+HEAD: 9cb91cee5fa567781273814c9ad905a71c716b1d
+rustc: rustc 1.85.1 (4eb161250 2025-03-15)
+cargo: cargo 1.85.1 (d73d2caf9 2024-12-31)
+llvm-cov: cargo-llvm-cov 0.8.7
+nproc: 8
+disk_before:
+Filesystem      Size  Used Avail Use% Mounted on
+/dev/root        67G   33G   34G  50% /
+S6 product delta range: 60a13ddc..9cb91cee
+
+disk_after:
+Filesystem      Size  Used Avail Use% Mounted on
+/dev/root        67G   50G   18G  74% /
+date_end: Mon May 18 19:13:09 UTC 2026
+NOTE: cargo clean run between all-features test phase and llvm-cov phase (R9 disk headroom); recorded.
