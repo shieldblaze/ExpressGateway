@@ -1605,7 +1605,7 @@ static WS_PROTOCOL: HeaderName = HeaderName::from_static("sec-websocket-protocol
 /// bridge; hyper synthesises pseudo-headers from the rewritten URI.
 async fn translate_h1_request_to_h2(
     req: Request<IncomingBody>,
-) -> Result<Request<BoxBody<Bytes, hyper::Error>>, String> {
+) -> Result<Request<lb_io::http2_pool::H2ReqBody>, String> {
     let (parts, body) = req.into_parts();
     // PROTO-2-12: collect body + trailers in a single round-trip so
     // the bridge sees both.
@@ -1677,7 +1677,15 @@ async fn translate_h1_request_to_h2(
     }
     // PROTO-2-12: emit body + trailers as a StreamBody so the H2
     // client sends a separate trailers frame after the data frame.
-    let body = build_body_with_trailers(body_bytes, &translated.trailers);
+    // I0.5: the H2 pool body type is widened to a boxed error.
+    // `build_body_with_trailers` is shared with the H1-response path
+    // (still `hyper::Error`); re-box its error into the pool alias
+    // here. `hyper::Error: Into<Box<dyn Error+Send+Sync>>`, so this is
+    // a lossless type adaptation (no behavioural change).
+    let body: lb_io::http2_pool::H2ReqBody =
+        build_body_with_trailers(body_bytes, &translated.trailers)
+            .map_err(Into::into)
+            .boxed();
     builder.body(body).map_err(|e| format!("build h2 req: {e}"))
 }
 

@@ -56,6 +56,25 @@ use tokio::task::JoinHandle;
 
 use crate::pool::TcpPool;
 
+/// S6 / H3→H2 R8 (I0.5, lead-approved Option A): the request-body type
+/// the H2 upstream pool accepts.
+///
+/// Widened from `BoxBody<Bytes, hyper::Error>` to a boxed
+/// `std::error::Error` so a *streaming, bounded-incremental* request
+/// body can signal a mid-body abort (H3 client RESET / premature
+/// channel close) with a CONSTRUCTIBLE error — `hyper::Error` has no
+/// public constructor, so an erroring streaming request body could not
+/// be expressed against the old alias (request-smuggling parity: a
+/// truncated request must RST_STREAM the upstream, never be presented
+/// as complete). This is a **type-only widening with NO behavioural
+/// change**: hyper's `SendRequest` already accepts any body whose
+/// `Error: Into<Box<dyn Error + Send + Sync>>`, and `hyper::Error`
+/// itself satisfies that bound, so every pre-existing caller adapts
+/// with a single `.map_err(Into::into)` (or unchanged when its body is
+/// `Infallible`/already-boxed).
+pub type H2ReqBody =
+    BoxBody<Bytes, Box<dyn std::error::Error + Send + Sync>>;
+
 /// Default H2 max concurrent streams per upstream connection.
 pub const DEFAULT_H2_MAX_CONCURRENT_STREAMS: u32 = 256;
 /// Default H2 initial stream window (RFC 7540 §6.5.2 initial value).
@@ -99,7 +118,7 @@ impl Default for Http2PoolConfig {
 
 /// Per-peer cached entry: a `SendRequest` handle plus the driver task.
 struct PeerEntry {
-    sender: SendRequest<BoxBody<Bytes, hyper::Error>>,
+    sender: SendRequest<H2ReqBody>,
     driver: JoinHandle<()>,
 }
 
@@ -207,7 +226,7 @@ impl Http2Pool {
     pub async fn send_request(
         &self,
         addr: SocketAddr,
-        request: Request<BoxBody<Bytes, hyper::Error>>,
+        request: Request<H2ReqBody>,
     ) -> Result<Response<Incoming>, Http2PoolError> {
         let mut sender = self.acquire_sender(addr).await?;
         let send_fut = sender.send_request(request);
@@ -234,7 +253,7 @@ impl Http2Pool {
     async fn acquire_sender(
         &self,
         addr: SocketAddr,
-    ) -> Result<SendRequest<BoxBody<Bytes, hyper::Error>>, Http2PoolError> {
+    ) -> Result<SendRequest<H2ReqBody>, Http2PoolError> {
         if let Some(sender) = self.take_alive_sender(addr) {
             return Ok(sender);
         }
@@ -250,7 +269,7 @@ impl Http2Pool {
     fn take_alive_sender(
         &self,
         addr: SocketAddr,
-    ) -> Option<SendRequest<BoxBody<Bytes, hyper::Error>>> {
+    ) -> Option<SendRequest<H2ReqBody>> {
         let mut peers = self.inner.peers.lock();
         match peers.get(&addr) {
             Some(entry) if entry.is_alive() => Some(entry.sender.clone()),
@@ -275,7 +294,7 @@ impl Http2Pool {
     async fn dial_and_handshake(
         &self,
         addr: SocketAddr,
-    ) -> Result<(SendRequest<BoxBody<Bytes, hyper::Error>>, JoinHandle<()>), Http2PoolError> {
+    ) -> Result<(SendRequest<H2ReqBody>, JoinHandle<()>), Http2PoolError> {
         // CODE-2-09 follow-on: async dial via `TcpPool::acquire_async`,
         // eliminating the previous `spawn_blocking(pool.acquire)` site
         // that shared the global blocking pool with `dns::resolve`.
@@ -296,7 +315,7 @@ impl Http2Pool {
                 .keep_alive_while_idle(true);
         }
         let (sender, conn) = builder
-            .handshake::<_, BoxBody<Bytes, hyper::Error>>(TokioIo::new(stream))
+            .handshake::<_, H2ReqBody>(TokioIo::new(stream))
             .await
             .map_err(|e| Http2PoolError::Handshake(e.to_string()))?;
 

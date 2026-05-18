@@ -27,7 +27,6 @@ use std::sync::Arc;
 use bytes::Bytes;
 use http_body_util::BodyExt;
 use http_body_util::Full;
-use http_body_util::combinators::BoxBody;
 use hyper::Request;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpStream;
@@ -2268,10 +2267,12 @@ pub async fn h3_to_h2_roundtrip(
         }
         builder = builder.header(n.as_str(), v.as_str());
     }
-    let body: BoxBody<Bytes, hyper::Error> = Full::<Bytes>::new(Bytes::new())
+    // I0.5: pool body type widened to a boxed error. `Full` is
+    // `Infallible`; map the never-error into the boxed-error alias.
+    let body: lb_io::http2_pool::H2ReqBody = Full::<Bytes>::new(Bytes::new())
         .map_err(|never| match never {})
         .boxed();
-    let request: Request<BoxBody<Bytes, hyper::Error>> = match builder.body(body) {
+    let request: Request<lb_io::http2_pool::H2ReqBody> = match builder.body(body) {
         Ok(r) => r,
         Err(_) => return bad_gateway(),
     };

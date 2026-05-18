@@ -1479,7 +1479,7 @@ impl H2Proxy {
 /// performs.
 async fn translate_h2_request_to_h2(
     req: Request<IncomingBody>,
-) -> Result<Request<BoxBody<Bytes, hyper::Error>>, String> {
+) -> Result<Request<lb_io::http2_pool::H2ReqBody>, String> {
     let (parts, body) = req.into_parts();
     // PROTO-2-12: capture trailers along with body.
     let collected = body
@@ -1567,7 +1567,12 @@ async fn translate_h2_request_to_h2(
         builder = builder.header(n.as_str(), v.as_str());
     }
     // PROTO-2-12: emit body + trailers via StreamBody.
-    let body = build_h2_body_with_trailers(body_bytes, &translated.trailers);
+    // I0.5: re-box the shared helper's `hyper::Error` into the widened
+    // H2 pool body alias (lossless; no behavioural change).
+    let body: lb_io::http2_pool::H2ReqBody =
+        build_h2_body_with_trailers(body_bytes, &translated.trailers)
+            .map_err(Into::into)
+            .boxed();
     builder.body(body).map_err(|e| format!("build h2 req: {e}"))
 }
 
