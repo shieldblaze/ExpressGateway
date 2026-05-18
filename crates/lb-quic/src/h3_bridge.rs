@@ -27,6 +27,7 @@ use std::sync::Arc;
 use bytes::Bytes;
 use http_body_util::BodyExt;
 use http_body_util::Full;
+use http_body_util::combinators::BoxBody;
 use hyper::Request;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpStream;
@@ -2132,6 +2133,242 @@ pub async fn h3_to_h1_stream_resp(
     outcome
 }
 
+/// S6 / H3→H2 R8 (M-B / I2) — boxed error type carried by the
+/// streaming H2 request body so a mid-body abort is expressible (see
+/// [`lb_io::http2_pool::H2ReqBody`]; `hyper::Error` has no public
+/// constructor). A distinct unit type keeps the abort cause greppable
+/// on the wire-fault path.
+#[derive(Debug)]
+struct H3ReqAbort;
+
+impl std::fmt::Display for H3ReqAbort {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("H3→H2 request body aborted (client RESET / producer dropped mid-body)")
+    }
+}
+impl std::error::Error for H3ReqAbort {}
+
+/// S6 / H3→H2 R8 (M-B / I2) — the streaming H2 request body. Owns the
+/// inbound H3 request DATA `Receiver` and yields exactly one hyper
+/// DATA `Frame` per `ReqBodyEvent::Chunk`, completing on `End`/closed
+/// and **erroring** ([`H3ReqAbort`]) on a mid-body `Reset` so hyper
+/// RST_STREAMs the H2 upstream (a truncated request is never presented
+/// as complete — request-smuggling guard, BINDING case 7).
+///
+/// `tokio::sync::mpsc::Receiver<ReqBodyEvent>` is `Send + Sync` (its
+/// payload is `Send + Sync`), so this body satisfies `BoxBody`'s
+/// `Send + Sync` bound WITHOUT a pump task or the http-body-util
+/// `channel` feature. `poll_frame` polls `body_rx` directly: the
+/// backpressure is end-to-end — hyper only polls when the H2 send
+/// window is open, so a stalled H2 upstream stops draining `body_rx`,
+/// the M-A bounded channel fills, and `poll_h3` stops extending QUIC
+/// flow control (memory bound = `H3_BODY_CHANNEL_DEPTH` × chunk,
+/// body-size independent). `done` latches so a post-error/EOS poll
+/// returns `None`.
+struct H3ReqStreamBody {
+    body_rx: tokio::sync::mpsc::Receiver<ReqBodyEvent>,
+    first: Option<Bytes>,
+    done: bool,
+}
+
+impl hyper::body::Body for H3ReqStreamBody {
+    type Data = Bytes;
+    type Error = Box<dyn std::error::Error + Send + Sync>;
+
+    fn poll_frame(
+        self: std::pin::Pin<&mut Self>,
+        cx: &mut std::task::Context<'_>,
+    ) -> std::task::Poll<Option<Result<hyper::body::Frame<Bytes>, Self::Error>>> {
+        use std::task::Poll;
+        let this = self.get_mut();
+        if this.done {
+            return Poll::Ready(None);
+        }
+        if let Some(b) = this.first.take() {
+            // The already-peeked first chunk. (Empty first chunk would
+            // have been classified bodyless upstream — never reaches
+            // here, but an empty frame is harmless.)
+            return Poll::Ready(Some(Ok(hyper::body::Frame::data(b))));
+        }
+        match this.body_rx.poll_recv(cx) {
+            Poll::Pending => Poll::Pending,
+            Poll::Ready(Some(ReqBodyEvent::Chunk(b))) => {
+                Poll::Ready(Some(Ok(hyper::body::Frame::data(b))))
+            }
+            Poll::Ready(Some(ReqBodyEvent::End { trailers: _ })) => {
+                // S6 scoped-out: request trailers are NOT forwarded on
+                // the H2 leg (parity w/ H3→H1 P1-C). Clean end-of-
+                // stream — the body is fully + correctly framed.
+                this.done = true;
+                Poll::Ready(None)
+            }
+            Poll::Ready(Some(ReqBodyEvent::Reset)) | Poll::Ready(None) => {
+                // Mid-body client RESET, or producer dropped before
+                // End: error so hyper RST_STREAMs the H2 upstream — a
+                // truncated request is NEVER presented as complete
+                // (request-smuggling guard, BINDING case 7). H2
+                // multiplexing ⇒ a per-stream RST does not poison the
+                // connection (lead A2: no extra non-reusable
+                // bookkeeping).
+                this.done = true;
+                Poll::Ready(Some(Err(Box::new(H3ReqAbort))))
+            }
+        }
+    }
+}
+
+/// S6 / H3→H2 R8 (M-B / I2) — build the upstream H2 request with a
+/// **streaming, bounded-incremental** body fed from the inbound H3
+/// request DATA channel (`body_rx`, the M-A pump that H3→H1 already
+/// proved). FIXES the dropped-request-body defect: the previous
+/// `h3_to_h2_roundtrip` hard-wired `Full::new(Bytes::new())`, silently
+/// deleting every request body.
+///
+/// Framing decision mirrors [`write_h1_request`]: peek the FIRST
+/// `ReqBodyEvent` —
+///   * `End` / channel-closed first ⇒ a legitimately **bodyless**
+///     request (`Full::new(empty)` — content-length 0, NOT a dropped
+///     body);
+///   * `Reset` first ⇒ pre-dial abort: return `Err(413)` so the caller
+///     emits the inline 413 and dials NOTHING (oversized / client
+///     cancel before any data — smuggling guard parity with
+///     `write_h1_request`'s pre-data `Reset`);
+///   * `Chunk(b)` first ⇒ a **streaming** body: an
+///     [`http_body_util::channel::Channel`] (capacity 1 — a single
+///     in-flight frame; the REAL memory bound is `body_rx`'s
+///     `H3_BODY_CHANNEL_DEPTH`, body-size independent) driven by a
+///     spawned pump that forwards `Chunk → send_data`, `End → drop
+///     sender` (clean EOS), and `Reset` / premature channel close →
+///     `sender.abort(H3ReqAbort)`. A body error makes hyper
+///     **RST_STREAM** the H2 upstream so a truncated request is NEVER
+///     presented as complete (request-smuggling parity; H2
+///     multiplexing ⇒ per-stream RST does not poison the connection —
+///     no extra non-reusable bookkeeping, per lead A2).
+///
+/// REQUEST TRAILERS on the H2 leg are intentionally DROPPED (scoped
+/// out for S6, parity with the H3→H1 P1-C decision: the body is fully
+/// and correctly framed by hyper, so this is a lossless
+/// RFC-acceptable downgrade, NOT silent body loss; explicitly
+/// reported as a scoped-out item).
+///
+/// Returns the built `Request`, or `Err(status)` for the pre-dial
+/// abort (413 oversized/cancel-before-data, 502 builder failure).
+fn h2_request_body_from_rx(
+    req: &H3Request,
+    addr: std::net::SocketAddr,
+    body_rx: tokio::sync::mpsc::Receiver<ReqBodyEvent>,
+    first: Option<ReqBodyEvent>,
+) -> Result<Request<lb_io::http2_pool::H2ReqBody>, u16> {
+    // Build the request head (URI carries scheme+authority+path so
+    // hyper emits the right pseudo-headers) — unchanged from the
+    // pre-I2 roundtrip.
+    let scheme = "http"; // upstream is plaintext H2 in v1
+    let authority = if req.authority.is_empty() {
+        addr.to_string()
+    } else {
+        req.authority.clone()
+    };
+    let uri = format!("{scheme}://{authority}{}", req.path);
+    let mut builder = Request::builder().method(req.method.as_str()).uri(uri);
+    for (n, v) in &req.extra {
+        if n.starts_with(':') {
+            continue;
+        }
+        builder = builder.header(n.as_str(), v.as_str());
+    }
+
+    let body: lb_io::http2_pool::H2ReqBody = match first {
+        // Bodyless: legitimately empty (content-length 0) — NOT a
+        // dropped body. Byte-equivalent to the pre-I2 bodyless case.
+        Some(ReqBodyEvent::End { .. }) | None => Full::<Bytes>::new(Bytes::new())
+            .map_err(|never| match never {})
+            .boxed(),
+        // Reset before any data ⇒ pre-dial abort (413). Caller emits
+        // the inline response and dials nothing.
+        Some(ReqBodyEvent::Reset) => return Err(413),
+        // Streaming body: the custom `H3ReqStreamBody` pulls `body_rx`
+        // directly (one frame at a time → direct end-to-end
+        // backpressure; in-flight window = H3_BODY_CHANNEL_DEPTH,
+        // body-size independent). It errors on mid-body Reset so hyper
+        // RST_STREAMs the upstream.
+        Some(ReqBodyEvent::Chunk(b0)) => BoxBody::new(H3ReqStreamBody {
+            body_rx,
+            first: Some(b0),
+            done: false,
+        }),
+    };
+
+    builder.body(body).map_err(|_| 502u16)
+}
+
+/// S6 / H3→H2 R8 (M-B / I2/I3) — the streaming H3→H2 orchestrator.
+/// The H2 cousin of [`h3_to_h1_stream_resp`], same `ReqBodyEvent` in /
+/// `RespEvent` out channel contract:
+///
+/// 1. Peek the first request-body event; build the upstream H2 request
+///    with a bounded-incremental streaming body
+///    ([`h2_request_body_from_rx`]). A pre-data `Reset` ⇒ inline 413
+///    (nothing dialled).
+/// 2. `pool.send_request` (header roundtrip only — the body streams
+///    afterwards). On pool error ⇒ inline 502. The pool already
+///    evicts the peer entry on Send/Timeout (lead A2: sufficient
+///    connection-level guard; the erroring body handles the
+///    per-stream partial-request guard via RST_STREAM).
+/// 3. Relay the H2 response back via [`stream_h2_response`]
+///    (bounded-incremental, end-to-end backpressure, never a
+///    `.collect()` / `Vec<u8>`).
+///
+/// Returns `Ok(())` once the response was fully piped (`RespEvent::End`
+/// sent ⇒ actor FINs) or after an inline error response; or
+/// `Err(RespAbort)` from [`stream_h2_response`] (actor RESET_STREAMs).
+pub async fn h3_to_h2_stream_resp(
+    req: &H3Request,
+    addr: std::net::SocketAddr,
+    pool: &Http2Pool,
+    mut body_rx: tokio::sync::mpsc::Receiver<ReqBodyEvent>,
+    resp_tx: tokio::sync::mpsc::Sender<RespEvent>,
+    cap: usize,
+) -> Result<(), RespAbort> {
+    /// Emit a complete inline H3 response (HEADERS+DATA) then `End`.
+    /// Best-effort: a closed channel (client gone) just means nobody
+    /// is listening. Identical helper to `h3_to_h1_stream_resp`'s.
+    async fn inline(tx: &tokio::sync::mpsc::Sender<RespEvent>, status: u16, body: &[u8]) {
+        if let Ok(bytes) = encode_h3_response(status, body) {
+            let _ = tx.send(RespEvent::Bytes(Bytes::from(bytes))).await;
+            let _ = tx.send(RespEvent::End).await;
+        } else {
+            let _ = tx.send(RespEvent::Reset).await;
+        }
+    }
+
+    // Peek the FIRST body event (bounded — one event) to choose
+    // framing, exactly as `write_h1_request` does.
+    let first = body_rx.recv().await;
+
+    let request = match h2_request_body_from_rx(req, addr, body_rx, first) {
+        Ok(r) => r,
+        Err(413) => {
+            inline(&resp_tx, 413, b"payload too large").await;
+            return Ok(());
+        }
+        Err(_) => {
+            inline(&resp_tx, 502, b"bad gateway").await;
+            return Ok(());
+        }
+    };
+
+    let resp = match pool.send_request(addr, request).await {
+        Ok(r) => r,
+        Err(e) => {
+            tracing::warn!(error = %e, %addr, "H3→H2 stream send_request failed");
+            inline(&resp_tx, 502, b"bad gateway").await;
+            return Ok(());
+        }
+    };
+
+    stream_h2_response(resp, &resp_tx, cap).await
+}
+
 /// Outcome of a single round-trip to an H3 upstream backend.
 ///
 /// Carries the parsed response status, response field list, and body
@@ -2984,6 +3221,99 @@ mod tests {
             !td.iter().any(|(n, _)| n.starts_with(':')),
             "pseudo-header must be filtered from trailers"
         );
+    }
+
+    /// S6 I2 — `H3ReqStreamBody` frame contract: chunks → DATA frames
+    /// byte-identical, `End` → clean EOS (`None`), mid-body `Reset` →
+    /// `Err` (so hyper RST_STREAMs — BINDING case 7), channel-closed
+    /// before `End` → `Err` (producer dropped mid-body, never a
+    /// truncated-as-complete request). Unit-testable (unlike
+    /// `Response<Incoming>`): drive the body via `BodyExt::frame`.
+    #[tokio::test]
+    async fn s6_i2_h3_req_stream_body_frame_and_abort_contract() {
+        use http_body_util::BodyExt as _;
+
+        // (a) chunks then End ⇒ two DATA frames, byte-identical, then
+        // clean end-of-stream.
+        let (tx, rx) = tokio::sync::mpsc::channel::<ReqBodyEvent>(8);
+        let mut body = H3ReqStreamBody {
+            body_rx: rx,
+            first: Some(Bytes::from_static(b"AAAA")),
+            done: false,
+        };
+        tx.send(ReqBodyEvent::Chunk(Bytes::from_static(b"BBBB")))
+            .await
+            .unwrap();
+        tx.send(ReqBodyEvent::End {
+            trailers: Vec::new(),
+        })
+        .await
+        .unwrap();
+        drop(tx);
+        let f1 = body.frame().await.unwrap().unwrap();
+        assert_eq!(f1.into_data().unwrap().as_ref(), b"AAAA");
+        let f2 = body.frame().await.unwrap().unwrap();
+        assert_eq!(f2.into_data().unwrap().as_ref(), b"BBBB");
+        assert!(body.frame().await.is_none(), "End ⇒ clean EOS");
+        assert!(body.frame().await.is_none(), "done latches");
+
+        // (b) mid-body Reset ⇒ Err (hyper RST_STREAMs; BINDING case 7).
+        let (tx, rx) = tokio::sync::mpsc::channel::<ReqBodyEvent>(8);
+        let mut body = H3ReqStreamBody {
+            body_rx: rx,
+            first: Some(Bytes::from_static(b"X")),
+            done: false,
+        };
+        tx.send(ReqBodyEvent::Reset).await.unwrap();
+        let _ = body.frame().await.unwrap().unwrap(); // first chunk
+        let err = body.frame().await.unwrap();
+        assert!(err.is_err(), "mid-body Reset MUST surface as a body error");
+        assert!(
+            body.frame().await.is_none(),
+            "post-error poll latches to None"
+        );
+
+        // (c) channel closed before End (producer dropped mid-body) ⇒
+        // Err — never a silently-truncated request presented complete.
+        let (tx, rx) = tokio::sync::mpsc::channel::<ReqBodyEvent>(8);
+        let mut body = H3ReqStreamBody {
+            body_rx: rx,
+            first: Some(Bytes::from_static(b"Y")),
+            done: false,
+        };
+        drop(tx);
+        let _ = body.frame().await.unwrap().unwrap(); // first chunk
+        assert!(
+            body.frame().await.unwrap().is_err(),
+            "premature close MUST error (truncation guard)"
+        );
+
+        // (d) framing decision: a leading `Reset` ⇒ pre-dial 413
+        // (oversized / cancel-before-data), nothing dialled.
+        let (_tx, rx) = tokio::sync::mpsc::channel::<ReqBodyEvent>(1);
+        let req = H3Request {
+            method: "POST".to_string(),
+            path: "/p".to_string(),
+            authority: "h.test".to_string(),
+            extra: Vec::new(),
+            trailers: Vec::new(),
+        };
+        let addr: std::net::SocketAddr = "127.0.0.1:1".parse().unwrap();
+        let r = h2_request_body_from_rx(&req, addr, rx, Some(ReqBodyEvent::Reset));
+        assert_eq!(r.err(), Some(413), "pre-data Reset ⇒ 413, no dial");
+
+        // (e) bodyless (first == End) builds an empty-body request OK
+        // (legitimately empty — NOT a dropped body).
+        let (_tx, rx) = tokio::sync::mpsc::channel::<ReqBodyEvent>(1);
+        let r = h2_request_body_from_rx(
+            &req,
+            addr,
+            rx,
+            Some(ReqBodyEvent::End {
+                trailers: Vec::new(),
+            }),
+        );
+        assert!(r.is_ok(), "bodyless request must build");
     }
 
     /// `content_length: None` emits `:status` only (no `content-length`).
