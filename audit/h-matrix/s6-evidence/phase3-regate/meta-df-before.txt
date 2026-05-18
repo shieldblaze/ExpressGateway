@@ -1,0 +1,2 @@
+/dev/root        67G   33G   34G  50% /
+CLEAN done. CLEAN_BETWEEN_PHASES=yes
