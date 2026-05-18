@@ -2626,65 +2626,6 @@ pub async fn request_h3_upstream(
     }
 }
 
-/// Forward an H3 request to an upstream H2 backend via
-/// [`Http2Pool`] and return the response mapped back into H3 wire
-/// bytes. On any backend failure returns a 502 + `"bad gateway"`.
-///
-/// PROTO-001 H3-listener → H2-backend path. Body forwarding is
-/// supported (single DATA frame in / collected `Bytes` to upstream
-/// hyper request) but the e2e exercise is GET-only.
-pub async fn h3_to_h2_roundtrip(
-    req: &H3Request,
-    addr: std::net::SocketAddr,
-    pool: &Http2Pool,
-) -> Vec<u8> {
-    let bad_gateway = || encode_h3_response(502, b"bad gateway").unwrap_or_default();
-
-    // Build hyper Request<BoxBody>. URI must carry scheme + authority
-    // + path so hyper's H2 client emits the right pseudo-headers.
-    let scheme = "http"; // upstream is plaintext H2 in v1
-    let authority = if req.authority.is_empty() {
-        addr.to_string()
-    } else {
-        req.authority.clone()
-    };
-    let uri = format!("{scheme}://{authority}{}", req.path);
-    let mut builder = Request::builder().method(req.method.as_str()).uri(uri);
-    for (n, v) in &req.extra {
-        if n.starts_with(':') {
-            continue;
-        }
-        builder = builder.header(n.as_str(), v.as_str());
-    }
-    // I0.5: pool body type widened to a boxed error. `Full` is
-    // `Infallible`; map the never-error into the boxed-error alias.
-    let body: lb_io::http2_pool::H2ReqBody = Full::<Bytes>::new(Bytes::new())
-        .map_err(|never| match never {})
-        .boxed();
-    let request: Request<lb_io::http2_pool::H2ReqBody> = match builder.body(body) {
-        Ok(r) => r,
-        Err(_) => return bad_gateway(),
-    };
-
-    let resp = match pool.send_request(addr, request).await {
-        Ok(r) => r,
-        Err(e) => {
-            tracing::warn!(error = %e, %addr, "H3→H2 send_request failed");
-            return bad_gateway();
-        }
-    };
-
-    let (parts, body) = resp.into_parts();
-    let body_bytes = match body.collect().await {
-        Ok(b) => b.to_bytes(),
-        Err(e) => {
-            tracing::warn!(error = %e, "H3→H2 body read failed");
-            return bad_gateway();
-        }
-    };
-    encode_h3_response(parts.status.as_u16(), &body_bytes).unwrap_or_default()
-}
-
 /// Forward an H3 request to an upstream H3 backend via
 /// [`QuicUpstreamPool`] and return the response mapped back into H3
 /// wire bytes. On any backend failure returns a 502 + `"bad gateway"`.
