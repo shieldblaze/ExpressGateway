@@ -1,0 +1,13 @@
+=== http2_pool.rs (I0.5 boxed-error widening) ===
+  4/4 = 100.0%
+=== h1_proxy.rs (translate_h1_request_to_h2 adapt) ===
+  5/5 = 100.0%
+=== h2_proxy.rs (translate_h2_request_to_h2 adapt) ===
+  5/5 = 100.0%
+=== conn_actor.rs (H2 wiring in poll_h3 + ActorParams) ===
+  43/44 = 97.7%  MISSING=[832]
+=== h3_bridge.rs (H3->H2 streaming path; tests 3083-3259 EXCLUDED) ===
+  139/147 = 94.6%  MISSING=[1521, 1522, 1570, 1588, 1589, 1598, 1599, 2340]
+
+ISOLATED S6 AGGREGATE: 196/205 = 95.61%
+GATE (>=80%): PASS
