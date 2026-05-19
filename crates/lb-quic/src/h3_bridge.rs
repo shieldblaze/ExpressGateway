@@ -4298,7 +4298,13 @@ mod tests {
         //     M-A `AwaitingFrameHeader` "ran out of input" outcome.
         assert!(parse_frame_header(&[]).is_none());
         // First varint only present, length varint missing ⇒ None.
-        assert!(parse_frame_header(&hf[..1]).is_none());
+        // `.get(..1)` (not `&hf[..1]`) keeps the crate-root
+        // `deny(clippy::indexing_slicing)` satisfied in test code
+        // (`expect_used` IS test-allowed); `hf` is a real encoded
+        // HEADERS frame so it is always ≥1 byte — the 1-byte-prefix
+        // assertion is byte-identical, not weakened.
+        let one_byte = hf.get(..1).expect("encoded HEADERS frame is ≥1 byte");
+        assert!(parse_frame_header(one_byte).is_none());
 
         // (c) the recv DATA re-encode is byte-identical to a fresh
         //     `encode_h3_data_frame` per ≤H3_RESP_CHUNK_MAX slice — a
