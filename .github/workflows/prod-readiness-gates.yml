@@ -39,7 +39,7 @@ jobs:
   gate-07-cargo-deny:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
       - name: Install cargo-deny (prebuilt binary, no toolchain needed)
         run: |
           VER=0.19.6
@@ -59,7 +59,7 @@ jobs:
   build-and-lint:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
       - uses: dtolnay/rust-toolchain@master
         with:
           toolchain: ${{ env.RUST_MSRV }}
@@ -81,7 +81,7 @@ jobs:
     runs-on: ubuntu-latest
     needs: build-and-lint
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
       - uses: dtolnay/rust-toolchain@master
         with:
           toolchain: ${{ env.RUST_MSRV }}
@@ -103,7 +103,7 @@ jobs:
             --package lb-quic \
             --fail-under-lines 80 \
             --lcov --output-path coverage.lcov
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: coverage-lcov
           path: coverage.lcov
@@ -117,7 +117,7 @@ jobs:
     runs-on: ubuntu-latest
     needs: build-and-lint
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
       - uses: dtolnay/rust-toolchain@master
         with: { toolchain: "${{ env.RUST_MSRV }}" }
       - uses: Swatinem/rust-cache@v2
@@ -185,7 +185,7 @@ jobs:
     runs-on: ubuntu-latest
     needs: build-and-lint
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
       - uses: dtolnay/rust-toolchain@master
         with: { toolchain: "${{ env.RUST_MSRV }}" }
       - uses: Swatinem/rust-cache@v2
@@ -211,7 +211,7 @@ jobs:
   D5-image-scan:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
       - name: Build image
         # TODO: point -f at the real Dockerfile (docker/ holds it).
         run: docker build -f docker/Dockerfile -t expressgateway:ci .
@@ -240,7 +240,7 @@ jobs:
       matrix:
         kernel: ["5.15", "6.1", "6.6"]
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
       - name: Build the XDP object
         # TODO: confirm how the repo builds the BPF object. With aya this
         # is typically `cargo xtask build-ebpf` or a build.rs step in
