@@ -121,7 +121,7 @@ pub use conn_actor::{H3_INTERNAL_ERROR, H3_NO_ERROR, graceful_h3_shutdown};
 // `CidEntryGuard::new(...)` from the integration-test target.
 pub use cleanup_guard::CidEntryGuard;
 
-pub use h3_bridge::{H3Request, H3UpstreamResponse, h3_to_h3_roundtrip, request_h3_upstream};
+pub use h3_bridge::{H3Request, H3UpstreamResponse, request_h3_upstream};
 pub use listener::{QuicListener, QuicListenerParams};
 pub use router::{RouterHandle, RouterParams, spawn as spawn_router};
 

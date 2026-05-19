@@ -2648,191 +2648,11 @@ pub async fn request_h3_upstream(
     }
 }
 
-/// Forward an H3 request to an upstream H3 backend via
-/// [`QuicUpstreamPool`] and return the response mapped back into H3
-/// wire bytes. On any backend failure returns a 502 + `"bad gateway"`.
-///
-/// Unlike `h3_to_h1_roundtrip`, this path does NOT translate —
-/// everything stays H3 end-to-end. The same lb-h3 codec is used on
-/// both sides.
-///
-/// Request-body forwarding is not supported in 3b.3c-3: the e2e
-/// exercises a body-less GET. Pillar 3b.3b will plumb DATA frames
-/// through once the downstream connection actor starts threading
-/// body bytes across stream boundaries.
-#[allow(clippy::too_many_lines, clippy::large_futures)]
-pub async fn h3_to_h3_roundtrip(
-    req: &H3Request,
-    addr: std::net::SocketAddr,
-    sni: &str,
-    pool: &QuicUpstreamPool,
-) -> Vec<u8> {
-    let mut pooled = match pool.acquire(addr, sni).await {
-        Ok(p) => p,
-        Err(e) => {
-            tracing::warn!(error = %e, %addr, "H3→H3 pool acquire failed");
-            return encode_h3_response(502, b"bad gateway").unwrap_or_else(|_| Vec::new());
-        }
-    };
-
-    let Some(upstream) = pooled.get_mut() else {
-        tracing::warn!("H3→H3 pool returned empty handle");
-        return encode_h3_response(502, b"bad gateway").unwrap_or_default();
-    };
-
-    // Build the upstream request HEADERS frame.
-    let encoder = QpackEncoder::new();
-    let mut headers: Vec<(String, String)> = Vec::with_capacity(4);
-    headers.push((":method".to_string(), req.method.clone()));
-    headers.push((":scheme".to_string(), "https".to_string()));
-    let authority = if req.authority.is_empty() {
-        sni.to_string()
-    } else {
-        req.authority.clone()
-    };
-    headers.push((":authority".to_string(), authority));
-    headers.push((":path".to_string(), req.path.clone()));
-    let Ok(header_block) = encoder.encode(&headers) else {
-        return encode_h3_response(502, b"bad gateway").unwrap_or_default();
-    };
-    let Ok(frame) = encode_frame(&H3Frame::Headers { header_block }) else {
-        return encode_h3_response(502, b"bad gateway").unwrap_or_default();
-    };
-
-    // Drive the upstream conn for one GET. We use client-initiated
-    // bidi stream 0 — each new QUIC conn starts with sid=0 available.
-    let stream_id: u64 = 0;
-    let socket_clone = Arc::clone(upstream.socket());
-    let local = upstream.local();
-    let peer = upstream.peer();
-    let qconn_mut: &mut quiche::Connection = match upstream.connection_mut() {
-        Some(c) => c,
-        None => {
-            return encode_h3_response(502, b"bad gateway").unwrap_or_default();
-        }
-    };
-
-    // Send HEADERS + FIN on the bidi stream.
-    let mut frame_pos = 0usize;
-    while frame_pos < frame.len() {
-        let chunk = frame.get(frame_pos..).unwrap_or(&[]);
-        let fin = frame_pos + chunk.len() >= frame.len();
-        match qconn_mut.stream_send(stream_id, chunk, fin) {
-            Ok(n) => {
-                if n == 0 {
-                    break;
-                }
-                frame_pos = frame_pos.saturating_add(n);
-            }
-            Err(quiche::Error::Done) => break,
-            Err(e) => {
-                tracing::warn!(error = %e, "H3→H3 stream_send");
-                pooled.set_reusable(false);
-                return encode_h3_response(502, b"bad gateway").unwrap_or_default();
-            }
-        }
-    }
-
-    // Event loop: drive send/recv/timeout until we have a full response.
-    let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(5);
-    let mut out_buf = vec![0u8; 65_535];
-    let mut in_buf = vec![0u8; 65_535];
-    let mut rx_tail: Vec<u8> = Vec::new();
-    let mut decoded_status: Option<u16> = None;
-    let mut decoded_body: Vec<u8> = Vec::new();
-    let mut body_complete = false;
-    let mut expected_len: Option<usize> = None;
-
-    while tokio::time::Instant::now() < deadline {
-        // Flush.
-        while let Ok((n, info)) = qconn_mut.send(&mut out_buf) {
-            let bytes = out_buf.get(..n).unwrap_or(&[]);
-            if socket_clone.send_to(bytes, info.to).await.is_err() {
-                break;
-            }
-        }
-
-        // Drain any readable stream bytes.
-        let readable: Vec<u64> = qconn_mut.readable().collect();
-        for sid in readable {
-            if sid != stream_id {
-                continue;
-            }
-            let mut chunk = [0u8; 8192];
-            while let Ok((n, _fin)) = qconn_mut.stream_recv(sid, &mut chunk) {
-                rx_tail.extend_from_slice(chunk.get(..n).unwrap_or(&[]));
-            }
-        }
-
-        // Try decoding frames.
-        loop {
-            match decode_frame(&rx_tail, 1 << 20) {
-                Ok((H3Frame::Headers { header_block }, consumed)) => {
-                    rx_tail.drain(..consumed);
-                    if let Ok(hdrs) = QpackDecoder::new().decode(&header_block) {
-                        for (n, v) in hdrs {
-                            if n == ":status" {
-                                decoded_status = v.parse::<u16>().ok();
-                            } else if n == "content-length" {
-                                expected_len = v.parse::<usize>().ok();
-                            }
-                        }
-                    }
-                }
-                Ok((H3Frame::Data { payload }, consumed)) => {
-                    rx_tail.drain(..consumed);
-                    decoded_body.extend_from_slice(&payload);
-                    if let Some(cl) = expected_len {
-                        if decoded_body.len() >= cl {
-                            body_complete = true;
-                        }
-                    }
-                }
-                Ok((_other, consumed)) => {
-                    rx_tail.drain(..consumed);
-                }
-                Err(_) => break,
-            }
-        }
-
-        if decoded_status.is_some() && body_complete {
-            break;
-        }
-
-        let timeout = qconn_mut
-            .timeout()
-            .unwrap_or(std::time::Duration::from_millis(50));
-        match tokio::time::timeout(timeout, socket_clone.recv_from(&mut in_buf)).await {
-            Ok(Ok((n, from))) => {
-                let slice = in_buf.get_mut(..n).unwrap_or(&mut []);
-                let info = quiche::RecvInfo { from, to: local };
-                match qconn_mut.recv(slice, info) {
-                    Ok(_) | Err(quiche::Error::Done) => {}
-                    Err(_) => break,
-                }
-            }
-            Ok(Err(_)) | Err(_) => {
-                qconn_mut.on_timeout();
-            }
-        }
-        let _ = peer; // silence unused binding when logging disabled
-    }
-
-    // Response is done; do not reuse the upstream conn since we sent
-    // FIN on its stream 0 — that connection is only good for one
-    // request in this minimal 3b.3c-3 wiring. Real H3 clients would
-    // open new streams; the pool improvement lands when we carry
-    // stream-ID allocation state across checkouts.
-    pooled.set_reusable(false);
-
-    let status = decoded_status.unwrap_or(502);
-    encode_h3_response(status, &decoded_body).unwrap_or_else(|_| Vec::new())
-}
-
-/// SESSION 7 / J1 (H3→H3 R8): bounded streaming H3-upstream connector,
+/// SESSION 7 (H3→H3 R8): bounded streaming H3-upstream connector,
 /// the H3→H3 analogue of [`h3_to_h2_stream_resp`]. Replaces the
-/// buffered, body-dropping [`h3_to_h3_roundtrip`] (whole-response
-/// `decoded_body: Vec<u8>` accumulation + no request body) with a
+/// former buffered, body-dropping H3→H3 round-trip (which accumulated
+/// the whole response into a `decoded_body: Vec<u8>` and forwarded no
+/// request body — deleted in J3) with a
 /// connector that re-emits the upstream H3 response frame-by-frame
 /// onto the bounded `resp_tx`, retaining memory bounded ONLY by a
 /// fixed in-flight window (`H3_RESP_CHANNEL_DEPTH ×
@@ -2847,17 +2667,15 @@ pub async fn h3_to_h3_roundtrip(
 /// J1 added the orchestrator skeleton + the M-C **recv half**
 /// (response ingress). J2 added the M-C **request send half**: the
 /// streaming request-DATA pump (peeked-first chunk, `stream_capacity`-
-/// gated incremental DATA, mid-body abort). The J1 `Chunk`-first
-/// `inline(502)` placeholder has been **wholesale-replaced** by that
-/// streaming body path (this doc reflects the post-J2 reality — no
-/// stub remains). Until J3 rewires the actor the live H3→H3 path is
-/// still [`h3_to_h3_roundtrip`]; this fn has no caller yet, so adding
-/// it changes no behaviour.
+/// gated incremental DATA, mid-body abort). J3 made this the LIVE
+/// H3→H3 path: [`crate::conn_actor`]'s `h3_backend` branch spawns it
+/// on the bounded `resp_tasks` streaming path (the former buffered
+/// round-trip + its legacy `request_tasks` Vec wiring were deleted).
 ///
 /// ### Request-event peek (`body_rx`)
 /// * `End` / channel-closed first ⇒ legitimately **bodyless** request:
-///   send HEADERS + FIN, byte-identical to [`h3_to_h3_roundtrip`]'s
-///   bodyless GET — no regression.
+///   send HEADERS + FIN, byte-identical to the former buffered H3→H3
+///   path's bodyless GET — no regression.
 /// * `Reset` first ⇒ pre-dial abort (oversized / cancel before any
 ///   data): inline `413`, dial NOTHING (smuggling-guard parity with
 ///   [`h3_to_h2_stream_resp`]).
@@ -2877,7 +2695,8 @@ pub async fn h3_to_h3_roundtrip(
 ///
 /// ### M-C recv half (the R8 core — replaces `decoded_body`)
 /// Drives the pooled `quiche::Connection` send/recv/timeout loop (the
-/// proven [`h3_to_h3_roundtrip`] skeleton) but with the
+/// same proven pooled-quiche-conn driver shape [`request_h3_upstream`]
+/// uses) but with the
 /// whole-response `Vec<u8>` accumulation **deleted**. Because
 /// [`lb_h3::decode_frame`] only yields a frame once its ENTIRE
 /// payload is buffered (it would force buffering a multi-MiB DATA
@@ -2906,9 +2725,9 @@ pub async fn h3_to_h3_roundtrip(
 /// window closes.
 ///
 /// On EVERY return path the pooled upstream conn is marked
-/// non-reusable (parity with [`h3_to_h3_roundtrip`]; one request per
-/// pooled upstream conn — pooling efficiency is explicitly out of R8
-/// scope, S-2).
+/// non-reusable (parity with the former buffered H3→H3 path; one
+/// request per pooled upstream conn — pooling efficiency is
+/// explicitly out of R8 scope, S-2).
 ///
 /// # Errors
 ///
@@ -2994,8 +2813,8 @@ pub async fn h3_to_h3_stream_resp(
         return Ok(());
     };
 
-    // Build the upstream request HEADERS frame (byte-identical to
-    // `h3_to_h3_roundtrip`'s bodyless GET — no regression).
+    // Build the upstream request HEADERS frame (byte-identical to the
+    // former buffered H3→H3 path's bodyless GET — no regression).
     let encoder = QpackEncoder::new();
     let mut headers: Vec<(String, String)> = Vec::with_capacity(4);
     headers.push((":method".to_string(), req.method.clone()));
@@ -3032,8 +2851,8 @@ pub async fn h3_to_h3_stream_resp(
     };
 
     // Send the HEADERS frame. FIN here ONLY for a bodyless request
-    // (byte-identical to `h3_to_h3_roundtrip`'s bodyless GET — no
-    // regression); when a streaming body follows, HEADERS is sent
+    // (byte-identical to the former buffered H3→H3 path's bodyless
+    // GET — no regression); when a streaming body follows, HEADERS is sent
     // WITHOUT FIN and the request stream is FIN-terminated later by
     // `stream_send(.., fin=true)` on the request-DATA pump (J2-G2:
     // a QUIC stream FIN, NOT a synthetic zero-length DATA frame —
@@ -3568,9 +3387,9 @@ pub async fn h3_to_h3_stream_resp(
         let _ = peer; // silence unused binding when logging disabled
     }
 
-    // One request per pooled upstream conn (parity with
-    // `h3_to_h3_roundtrip`; pooling efficiency is out of R8 scope this
-    // increment) — non-reusable on EVERY exit path.
+    // One request per pooled upstream conn (parity with the former
+    // buffered H3→H3 path; pooling efficiency is out of R8 scope,
+    // S-2) — non-reusable on EVERY exit path.
     pooled.set_reusable(false);
 
     if response_complete {
@@ -3631,7 +3450,7 @@ fn j2_req_event_action(ev: Option<ReqBodyEvent>) -> J2ReqAction {
 
 /// SESSION 7 / J1 (G1 DoS parity): reject a declared NON-DATA frame
 /// `payload_len` larger than the SAME limit [`decode_frame`] enforced
-/// on the old buffered [`h3_to_h3_roundtrip`] path
+/// on the former buffered H3→H3 round-trip path
 /// ([`DEFAULT_MAX_PAYLOAD_SIZE`]). Applies to block-buffered frames
 /// only — DATA payloads are streamed and NEVER sized from this value
 /// (binding condition 3).
