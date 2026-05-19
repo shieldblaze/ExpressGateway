@@ -700,3 +700,53 @@ wall-clock cap (NOT unsoundness). #17 accepted. The genuine J4
 is a VACUOUS parallel-stable 7/7 — cell remains NOT BUILT; F-S7-4
 is required to make case-4 non-vacuous, then #7.
 ================================================================
+
+
+================================================================
+# F-S7-4 INDEPENDENT AUDIT (verifier2, 2026-05-19)
+================================================================
+Target: s7/builder-1 @ 8d0fe450 (parent b24d9bfd = accepted
+F-S7-6; grandparent fedb5cf4 = accepted J5-FIX/F-S7-2). Author
+!= verifier (R5): builder-1 authored src + J4 harness; verifier2
+independent, mechanism-proven (R2). Worktree: /home/ubuntu/Code/
+s7-verifier (branch s7/verifier). Source-of-record baseline
+sha1 (== git 8d0fe450, confirmed byte-identical):
+  h3_bridge.rs        61a17ef8a0f6833614c3cf4cc4aeb8ea12ae5536
+  conn_actor.rs       393e38941e32092042277b5d67f1584dd1df52c0
+  lib.rs              50e832988e53389570395a837cb5b5e031904528
+  h3_h3_stream_e2e.rs c1099114a8d8a9f54c013f9ebd8ab66627124870
+
+NOTE (recovery context): prior verifier worktree was left with
+UNRESTORED transient eprintln probes (FS74V markers) in
+conn_actor.rs + h3_bridge.rs (detached HEAD @ 8d0fe450). These
+were debug-only instrumentation, NOT source-of-record;
+verifier2 discarded them (`git checkout --`) and re-established
+the byte-identical target tree before any audit. Inverted-probe
+discipline re-asserted.
+
+## STEP 1 — G1 SCOPE: PASS (mechanism)
+Independent re-derivation in worktree:
+* `git diff --stat b24d9bfd..8d0fe450` = ONLY
+  crates/lb-quic/tests/h3_h3_stream_e2e.rs | 160 +++/--- (77+/83-).
+  NO src (non-test) file changed (`git diff b24d9bfd..8d0fe450
+  -- crates/lb-quic/src/` EMPTY = byte-identical).
+* `git diff -w b24d9bfd..8d0fe450` (non-whitespace logic delta)
+  = SOLE semantic change: in `spawn_h3_upstream`, `draining` is
+  now computed BEFORE the `conn.readable()`/`conn.stream_recv`
+  drain, and the ENTIRE recv-drain block is gated `if draining`.
+  Previously `draining` was computed AFTER stream_recv (only
+  frame-decode gated). All other lines = pure rustfmt reflow
+  (identical expressions re-wrapped). Other upstream modes
+  (Echo / LargeResp / ResetMidResponse) hit the `_ => true`
+  arm ⇒ behaviourally byte-identical.
+* Ancestry: 8d0fe450^ == b24d9bfd; b24d9bfd^ == fedb5cf4 —
+  linear first-parent chain fedb5cf4→b24d9bfd→8d0fe450.
+* FF / no-force: s7/builder-1 reflog = every entry `commit:`
+  (append-only); `git merge-base --is-ancestor b24d9bfd
+  origin/s7/builder-1` TRUE; origin/s7/builder-1 ==
+  8d0fe45015cfc7244e54979925c5a4b206884e37 (exact).
+G1 VERDICT: PASS — scope is exactly the J4 test file; sole
+non-whitespace delta is the intended F-S7-4 draining-gate;
+no force-push/rebase; fast-forward only.
+
+(steps 2-4 + #7 follow as executed)
