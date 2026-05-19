@@ -749,4 +749,66 @@ G1 VERDICT: PASS — scope is exactly the J4 test file; sole
 non-whitespace delta is the intended F-S7-4 draining-gate;
 no force-push/rebase; fast-forward only.
 
-(steps 2-4 + #7 follow as executed)
+## STEP 2 — NON-VACUITY PROBE (BINDING): ESCALATED — gate `Ok(0)` NEVER FIRES; genuine partial-write backpressure DOES engage
+
+Transient probes added in worktree (V2PROBE markers), src
+restored byte-identical afterward (sha1 re-verified ==
+source-of-record: h3_bridge.rs 61a17ef8…, conn_actor.rs
+393e3894…; `git diff 8d0fe450 -- src` EMPTY). Inverted-probe
+discipline satisfied.
+
+Probe A: `eprintln` immediately BEFORE the genuine J2 gate
+(`crates/lb-quic/src/h3_bridge.rs:3037` — the
+`match qconn_mut.stream_capacity(stream_id)` inside
+`if let ReqSend::InHand`, same stream_id, same loop iter),
+logging every capacity result incl the `Ok(0)` branch.
+Probe B: `eprintln` in `record_retained` logging each
+new-max retained sample.
+
+Genuine case-4 (`h3h3_e2e_request_memory_bounded_through_
+stalled_backend`, `StallReadThenEcho(1500ms)`, 4 MiB POST,
+`--features test-gauges`, default runner). Two independent
+runs (corrected stderr capture, /tmp/v2_case4.log):
+
+  test result  : ok (1 passed) BOTH runs — green.
+  J2 gate-check calls           : 2126
+  `Ok(0)` GATE-FIRED occurrences: 0   ← gate NEVER fires
+  min stream_capacity observed  : 41 (never 0)
+  capacity floor (persistent)   : ~111 (15×), 41 (1×), 138 (1×)
+  capacity sawtooth             : drops to ~111 then quiche
+                                  replenishes to ~20–68 K — a
+                                  genuine flow-control cycle
+  max MAX_RETAINED_BODY_BYTES   : 73728 B (≈1.76% of the 4 MiB
+                                  body; 28% of ceiling 262656;
+                                  body completes byte-identical)
+  stream_capacity Err           : 0
+
+MECHANISM (proven, not inferred): under the F-S7-4 stall the
+upstream withholds the request-stream flow-control window, so
+`stream_capacity` is driven down to a tiny floor (~41–138 B,
+≪ the ≤8192 B chunk). But the code gate is
+`Ok(cap_avail) if cap_avail > 0` — at capacity 111 it takes
+the >0 arm and does a PARTIAL `stream_send` (~111 B accepted,
+chunk stays in hand, `*sent` dribbles forward). quiche then
+replenishes the window in small increments, so the value
+floors just ABOVE 0 and the `Ok(0)` branch is never reached.
+Backpressure is therefore GENUINE (request pump throttled to
+~111-byte dribbles; retained bounded to 73728 ≪ 4 MiB ⇒ NOT
+whole-body buffering), but it manifests as the partial-write
+path, NOT the literal `stream_capacity==0` gate the step-2
+charter names.
+
+ADJUDICATION REQUIRED (escalated to team-lead, NOT
+self-classified): step-2 charter says "CONFIRM
+`stream_capacity==0` ACTUALLY FIRES … gate never fires =
+FAIL regardless of green." By the literal criterion this is
+a FAIL (0/2126 `Ok(0)`). By mechanism, genuine transport-
+layer backpressure IS engaged and retention IS non-vacuously
+bounded (the partial-write throttle is the same flow-control
+phenomenon, merely surfaced as `Ok(small)`+partial-send
+rather than `Ok(0)`). This is a material spec-vs-mechanism
+ambiguity that the verifier must not resolve unilaterally.
+F-S7-4 step-2 verdict: ESCALATED. #7 NOT entered pending
+lead adjudication (F-S7-4 FAIL/ambiguous ⇒ stop, no #7).
+
+(steps 3-4 + #7 follow IFF lead adjudicates step-2 PASS)
