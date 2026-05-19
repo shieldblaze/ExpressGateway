@@ -103,8 +103,36 @@ session as a new plan-approval-gated increment**, owned by builder-1
 real-wire suite (5/5 of cases 1-5 passing + 6,7 still correct), never
 by inference.
 
+## SOURCE-OF-RECORD RE-CONFIRMATION (committed J4 asset e42a9b4e)
+After builder-1 committed the J4 asset to s7/builder-1 @ e42a9b4e
+("test(s7/J4): real-wire H3→H3 suite — 5/7 FAIL exposing F-S7-2"),
+I independently re-confirmed against the source-of-record:
+ * `git diff --stat d17e51c4 e42a9b4e -- crates/lb-quic/src/` = EMPTY
+   — ZERO src change between my diagnosed base and the committed
+   asset; `h3_to_h3_stream_resp` + the J3 conn_actor wiring are
+   byte-identical to what I diagnosed. The mechanism above holds
+   verbatim against the source-of-record.
+ * Independent full-suite repro (detached @ e42a9b4e in s7-verifier,
+   CARGO_TARGET_DIR exported, --features test-gauges): **2 passed,
+   5 failed** — cases 6,7 ok (they assert ABSENCE of a clean 200, so
+   the broken recv-half trivially satisfies them — NOT correctness
+   evidence); cases 1-5 FAIL. Exactly matches the J4-FAIL report and
+   my prior reproduction. Deterministic.
+ * Cross-check vs builder-1's own s7-j4-FAIL.md: builder-1 correctly
+   STOPPED at localization (recv-half; ~43 ms ≪ 5 s deadline ⇒ an
+   explicit early `Err(RespAbort::*)`, not a timeout) and explicitly
+   DEFERRED deep mechanism to verifier (R5). My diagnosis is
+   consistent with and strictly extends builder-1's localization with
+   the proven quiche mechanism.
+
 ## VERDICT
 H3→H3 cell is **NOT BUILT** (R8 requires the genuine real-wire suite
-to pass). F-S7-2 = real src defect, mechanism proven above. Fix is a
-tractable gated increment; #6/#7 stay blocked until the J4 suite
-passes against the fixed recv-half.
+to pass). F-S7-2 = real src defect, mechanism proven above and
+re-confirmed against the committed source-of-record e42a9b4e. Fix is
+the gated increment task #14 (J5-FIX), owned by builder-1; its
+binding constraints correctly capture this mechanism (must relay the
+ACTUAL 200+body — J4 case 1/2 byte-identity is the guard against a
+"finish without delivering" silent regression; must NOT blanket-map
+Err⇒done or case-6/7 reset/response-splitting guards regress).
+#6/#7 stay blocked until the genuine J4 suite passes against the
+fixed recv-half; I independently verify, never by inference.
