@@ -108,3 +108,68 @@ J4 asset itself. No src work implied by cases 3/4/5 beyond F-S7-2/J5.
 BINDING: the H3→H3 cell is NOT BUILT until cases 3,4,5 genuinely pass
 on a CORRECTED harness against the F-S7-2-fixed src — not asterisked,
 not vacuous (esp. case 4 must actually engage the J2 gate).
+
+
+================================================================
+ADDENDUM (lead-requested refinement) — CASE 3 FLAKE: PROVEN
+MECHANISM = SRC F-S7-6, NOT gauge-isolation harness defect
+================================================================
+Prior #15 report ran cases ×3 ONLY under `--test-threads=1`
+(serialized) where case 3 deterministically PASSED — that missed
+the parallel flake. Owned. Re-verified under the DEFAULT parallel
+runner on fedb5cf4:
+  parallel suite ×4: case 3 = ok, FAILED, ok, ok (1 fail / 4)
+  → genuinely FLAKY under parallel execution; deterministically
+    PASSES serialized. The lead's "case 3 is flaky" correction is
+    right.
+
+MECHANISM (captured, every parallel failure identical): case 3
+panics at h3_h3_stream_e2e.rs:**980** `assert!(out.fin, "client
+must resume and see a clean FIN (liveness)")` — NOT the retained
+gauge assertion (:983). So the flake is NOT
+gauge-static cross-test interference (that would corrupt the
+`retained` value at :983; the CAS-max can only push it HIGHER,
+and :983 was never reached). It is a LIVENESS/timing truncation.
+
+LEAD FAST-PATH HYPOTHESIS TESTED & DISPROVEN: h3_h2_stream_e2e's
+`h2_e2e_response_memory_bounded_through_stalled_client` is
+STRUCTURALLY IDENTICAL to h3_h3 case 3 — same 4 MiB binary body,
+same `stall_after: Some(256*1024)`, same `stall_for: 2 s`, same
+`assert!(out.fin, …)`. NEITHER suite has any gauge-isolation
+discipline (no mutex / `#[serial]` / sequencing; both bare
+`MAX_RETAINED_*.store(0)` → `.load()`, both share
+`MAX_RETAINED_RESP_BYTES` across two cases). So h3_h3 did NOT
+"omit" isolation that h3_h2 has — there is none in either. The
+ONLY difference is the SRC path: h3_h2's `stream_h2_response` is
+event-driven with NO fixed wall-clock deadline; h3_h3's
+`h3_to_h3_stream_resp` has the HARDCODED `Duration::from_secs(5)`
+(h3_bridge.rs:2911 — the **F-S7-6** defect). Under parallel
+execution the box is contended (multiple real-QUIC-handshake
+multi-MiB e2e tests at once), slowing case 3's 4 MiB streamed
+response so it intermittently exceeds 5 s ⇒ F-S7-6 truncates it
+before the clean FIN ⇒ :980 fails. Serialized, there is no
+contention, it finishes < 5 s, it passes.
+
+VERDICT case 3 (revised, decisive): the flake is the **SRC F-S7-6
+deadline defect, contention-sensitized under parallel execution**
+— NOT a harness gauge-isolation defect. Proof that the gauge
+statics are sound: h3_h2 uses the SAME process-global
+`MAX_RETAINED_*` statics with the SAME no-isolation pattern and
+is deterministic 10/10 — so the shared-static accounting is NOT
+racy; fixing F-S7-6 will make case 3 deterministic. (Secondary,
+non-causal: serializing the gauge cases / snapshotting deltas is
+still reasonable defensive test hygiene for the F-S7-4 harness
+increment, but it is NOT the cause and NOT required for
+correctness once F-S7-6 lands.)
+
+PATH IMPACT: cases 3 AND 5 are BOTH the single SRC defect F-S7-6
+(case 5 = deterministic truncation at exactly 5000 ms even
+serialized, 8 MiB; case 3 = the same truncation made flaky by
+parallel contention, 4 MiB). Case 4 = the separate F-S7-4 harness
+defect (J2 `stream_capacity` gate never engaged) with request-
+side memory INDEPENDENTLY PROVEN SOUND. So: ONE tractable src fix
+(F-S7-6) makes cases 3 & 5 deterministically pass; F-S7-4 harness
+correction makes case 4 non-vacuous. No broader src rework. Cell
+NOT BUILT until F-S7-6 (src) + F-S7-4 (harness) land and cases
+1-5 genuinely (non-vacuously, parallel-stable) pass with 6/7
+still guarding.
