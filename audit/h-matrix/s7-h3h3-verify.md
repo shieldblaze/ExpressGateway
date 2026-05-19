@@ -588,3 +588,115 @@ BEEN READ and confirmed to drive the specific changed branch (e.g.
 the test name or a plan's assertion. (Lead persists this to memory;
 verifier persisted `verify-cited-test-drives-changed-path`, linked
 [[s2-verification-gap]].)
+
+
+================================================================
+F-S7-6 STANDALONE AUDIT (#17) — s7/builder-1 @ b24d9bfd
+================================================================
+Verifier: `verifier` (R5 independent; builder-1 authored the fix —
+verifier≠builder-1). Parent fedb5cf4 (accepted J5-FIX), linear FF
+no force. Probes inserted in s7-verifier worktree only, src
+restored byte-identical (sha1 61a17ef8…, git clean) — R5 honored.
+
+VERDICT: **PASS** (all 6 items). F-S7-6 is a SOUND event-driven
+idle-deadline remediation. The genuine J4 is now a deterministic
+parallel-stable 7/7 — but a **VACUOUS 7/7**: case-4's pass is
+proven vacuous (F-S7-4 still required). Cell remains NOT BUILT.
+
+1. SCOPE/R-S76-4 — PASS. `git diff fedb5cf4 b24d9bfd` = ONLY
+   crates/lb-quic/src/h3_bridge.rs (+84 −6); 10 hunks, each
+   F-S7-6-attributable (new `H3_RESP_IDLE_TIMEOUT` const+doc incl.
+   the CF-S7-RHU carry-forward note; `idle_deadline` decl before
+   the send! macro; `send_progress!` macro; loop cond
+   deadline→idle_deadline; the 3 progress-reset points; 3
+   send!→send_progress! swaps). No stray reflow, no other file.
+
+2. send_progress! IMPLEMENTATION (builder-flagged) — PASS.
+   (a) `send_progress!` == `send!` ($tx.send($ev).await
+       .map_err(|_|ClientGone)?) + idle_deadline reset. Send
+       semantics unchanged.
+   (b) Used at EXACTLY the 3 in-loop mid-stream egress Bytes
+       sites — data_frame (:3247), trailer tf (:3311), head
+       (:3343) — the complete correct set; none missed, none
+       spurious. All other in-loop resp_tx egress is
+       RespEvent::Reset (abort paths — correctly NOT progress).
+   (c) Terminal post-loop `End` is PLAIN `send!` (NOT
+       send_progress!). Post-loop disposition block BYTE-IDENTICAL
+       fedb5cf4→b24d9bfd (464 lines, diff empty) — R-S76-2 PASS:
+       still PrematureEof+Reset on a truncated partial, NEVER End.
+   (d) Reset placement correct: response-ingress `stream_recv`
+       Ok `if n>0` (:3110); request-egress `stream_send` Ok
+       `if n>0` (:3050); request clean-FIN `stream_send(&[],true)`
+       Ok/Done (:3455).
+   (e) R-S76-5 PASS: idle_deadline reset ONLY on those 3
+       application-data-progress events. NOT reset on the quiche
+       timer/on_timeout, socket recv_from (transport
+       keepalive/ACK), zero-byte reads/sends (explicit `if n>0`),
+       or backpressure parks (select! park doesn't touch it).
+
+3. F-S7-6 BINDING ACCEPTANCE — PASS. Genuine J4 under the
+   DEFAULT PARALLEL runner, 4 reruns: **7/7 deterministic** every
+   run (~10.7–11.1 s). Case 5 (8 MiB) byte-identical; **case 3
+   (4 MiB) now deterministic under PARALLEL execution** — the
+   F-S7-6 idle deadline fixes the case-3 contention flake proven
+   in the #15 addendum. Cases 1,2,6,7 green.
+
+4. R-S76-5 NO-HANG / R-S76-6 — PASS (by mechanism, item 2(e)).
+   A dead-but-connected upstream (ACK/keepalive only, zero app
+   bytes either direction) never resets idle_deadline ⇒ it fires
+   within H3_RESP_IDLE_TIMEOUT (30 s) ⇒ the BYTE-UNCHANGED
+   post-loop yields Err(PrematureEof)+Reset, NEVER End, NEVER an
+   infinite hang. R-S76-6: a large/slow request upload with no
+   response yet keeps idle_deadline alive via the request-egress
+   `stream_send n>0` + request-FIN resets — not spuriously
+   idle-aborted (this is exactly the case-4 flip mechanism, §5).
+
+5. CASE-4 FAIL→PASS FLIP — ADJUDICATED (R2, proven, builder
+   correctly refused to self-classify):
+   * VACUITY RE-CONFIRMED at b24d9bfd: instrumented the J2 gate;
+     `stream_capacity==0` fired ZERO times across the full case-4
+     run. The J2 request-side backpressure gate STILL never
+     fires — the harness `StallReadThenEcho` still calls
+     stream_recv unconditionally so the gateway send window never
+     closes. Case 4 is STILL VACUOUS; `retained ≤ ceiling` holds
+     WITHOUT exercising the backpressure path.
+   * FLIP MECHANISM (proven, post-loop probe): pre-F-S7-6 case-4
+     = `sent_head=false`, status=None, deadline-truncated at
+     5003 ms; post-F-S7-6 = `response_complete=true
+     outcome_ok=true sent_head=true`. The pre-fix shared 5 s
+     WALL-CLOCK `deadline` also bounded the request-send side
+     (request DATA pumped in the same loop); the 4 MiB upload +
+     1500 ms stall + response exceeded 5 s ⇒ the loop hit the
+     wall-clock cap before the response completed ⇒ status=None.
+     Post-fix the loop runs on `idle_deadline`, reset on
+     request-egress progress (R-S76-6 iii), so the
+     actively-progressing 4 MiB upload keeps the loop alive ⇒
+     the exchange completes ⇒ case 4 "passes". This is EXACTLY
+     the lead's hypothesis confirmed: the flip is F-S7-6
+     removing the pre-existing 5 s truncation that was ALSO
+     killing the request-heavy case-4 — NOT any new unsoundness.
+   * CONCLUSION: F-S7-6 sound; the 7/7 is a VACUOUS 7/7 (case-4
+     backpressure gate never fires); cell NOT BUILT; F-S7-4
+     still required to make case-4 non-vacuous.
+
+6. REGRESSION/GATES — PASS. lib 26/26 incl s7_j5; h3_h2 10/10;
+   h3_h1_stream_body 6/6; h3_h1_resp_stream 16/16; round8 3/3.
+   Corrected clippy -p lb-quic --all-targets --features
+   test-gauges -- -D warnings CLEAN. F-S7-6 src
+   (h3_bridge.rs) fmt-CLEAN; the 24 fmt diffs in
+   tests/h3_h3_stream_e2e.rs are the known F-S7-5 (F-S7-4-owned,
+   NOT an F-S7-6 fault). R8 memory bound unperturbed: F-S7-6 adds
+   no buffering/retention (diff confirms classification/timing
+   only); the #15-proven ≤~74 KB-class both-direction bounds for
+   4 MiB bodies hold (cases 3/5 byte-identity passing under
+   parallel corroborates).
+
+================================================================
+F-S7-6 VERDICT: PASS — event-driven idle deadline correctly
+replaces the J1 5 s wall-clock truncation; R-S76-2/5/6 all met
+by mechanism; scope/regression/gates clean; the case-4 fail→pass
+flip is the proven benign consequence of removing the shared
+wall-clock cap (NOT unsoundness). #17 accepted. The genuine J4
+is a VACUOUS parallel-stable 7/7 — cell remains NOT BUILT; F-S7-4
+is required to make case-4 non-vacuous, then #7.
+================================================================
