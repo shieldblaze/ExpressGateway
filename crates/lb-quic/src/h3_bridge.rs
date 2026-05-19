@@ -163,6 +163,37 @@ pub const H3_RESP_CHUNK_MAX: usize = 8 * 1024;
 /// request-side gauge).
 pub const H3_FRAME_HDR_MAX: usize = MAX_FRAME_HEADER_BYTES;
 
+/// SESSION 7 / F-S7-6: the H3→H3 upstream connector's
+/// **NO-FORWARD-PROGRESS idle deadline** — the maximum time
+/// [`h3_to_h3_stream_resp`] will wait with ZERO bidirectional
+/// application-data progress before aborting the exchange.
+///
+/// This is explicitly **NOT a wall-clock response cap**. It replaces
+/// the original hardcoded `Instant::now() + Duration::from_secs(5)`
+/// wall-clock deadline (J1), which truncated a valid, actively-
+/// progressing large/slow response at exactly 5 s regardless of
+/// progress (a verified defect — an 8 MiB response cut off at
+/// ~4.37 MiB). The idle deadline is RESET on every forward-progress
+/// event (response stream_recv with n>0 ingress, OR a successful
+/// `resp_tx` relay egress, OR a request-DATA `stream_send` with n>0 /
+/// the request FIN egress — R-S76-6 bidirectional), so a legitimately
+/// slow-but-progressing response OR a large/slow request upload never
+/// trips it; only the genuine ABSENCE of all progress for this window
+/// fires it. It is NEVER reset by transport keepalive/ACK, the quiche
+/// idle timer, zero-byte reads, or backpressure parks (R-S76-5), so a
+/// dead-but-connected upstream is still aborted within this bound (no
+/// infinite hang) — a deadline-truncated partial is returned as
+/// `Err(RespAbort::PrematureEof)` + `Reset`, NEVER `RespEvent::End`
+/// (response-splitting guard, post-loop disposition unchanged).
+///
+/// Sized at 30 s (the same magnitude as
+/// [`request_h3_upstream`]'s total budget) but applied as IDLE, not
+/// wall-clock. NOTE: `request_h3_upstream`'s own 30 s is a *fixed
+/// wall-clock* cap with the SAME latent truncation bug — a separate
+/// carry-forward (CF-S7-RHU), an `H1→H3`/`H2→H3` R3 boundary, and is
+/// intentionally NOT fixed here.
+pub const H3_RESP_IDLE_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(30);
+
 /// SESSION 4 / P1-A: one unit of the bounded response byte-pipe from
 /// the H1-upstream reader task ([`stream_h1_response`]) back to the
 /// actor. PRE-ENCODED H3 wire bytes so the actor-side drain stays a
@@ -2760,10 +2791,33 @@ pub async fn h3_to_h3_stream_resp(
         }
     }
 
+    // F-S7-6: declared BEFORE the `send!` macro so the macro body can
+    // reset it on a successful response-egress relay (R-S76-6 (ii)).
+    // A NO-FORWARD-PROGRESS idle deadline (NOT a wall-clock cap — see
+    // `H3_RESP_IDLE_TIMEOUT`): reset on every bidirectional
+    // application-data progress event; NEVER on keepalive/ACK/quiche-
+    // timer/zero-byte/backpressure-park (R-S76-5). Replaces J1's fixed
+    // `+ Duration::from_secs(5)` which truncated valid progressing
+    // large/slow responses at 5 s.
+    let mut idle_deadline = tokio::time::Instant::now() + H3_RESP_IDLE_TIMEOUT;
+
     macro_rules! send {
         ($tx:expr, $ev:expr) => {
             $tx.send($ev).await.map_err(|_| RespAbort::ClientGone)?
         };
+    }
+    // F-S7-6 R-S76-6 (ii): response-egress forward progress. Reset the
+    // no-forward-progress idle deadline ONLY after a mid-stream
+    // relay (a HEADERS/DATA/trailer frame forwarded downstream) — NOT
+    // after the terminal `End` (the fn returns immediately after that,
+    // so there is no further idle wait to extend, and a reset there
+    // would be a dead write). Used at the 3 in-loop `send_progress!`
+    // sites; the post-loop `End` path is left byte-unchanged (R-S76-2).
+    macro_rules! send_progress {
+        ($tx:expr, $ev:expr) => {{
+            send!($tx, $ev);
+            idle_deadline = tokio::time::Instant::now() + H3_RESP_IDLE_TIMEOUT;
+        }};
     }
 
     // --- peek the FIRST request body event (bounded — one event) to
@@ -2908,7 +2962,8 @@ pub async fn h3_to_h3_stream_resp(
         InSkip { remaining: usize },
     }
 
-    let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(5);
+    // (`idle_deadline` is declared earlier — before the `send!`
+    // macro — so the macro can reset it on response-egress progress.)
     let mut out_buf = vec![0u8; 65_535];
     let mut in_buf = vec![0u8; 65_535];
     // Bounded working buffer: holds at most a partial frame header
@@ -2970,7 +3025,7 @@ pub async fn h3_to_h3_stream_resp(
         ReqSend::Ended
     };
 
-    'evloop: while tokio::time::Instant::now() < deadline {
+    'evloop: while tokio::time::Instant::now() < idle_deadline {
         // --- SESSION 7 / J2: request-DATA egress, flow-control-gated.
         // Write the in-hand DATA frame ONLY while the upstream send
         // window has room (`stream_capacity` > 0). When it is closed
@@ -2985,6 +3040,15 @@ pub async fn h3_to_h3_stream_resp(
                     match qconn_mut.stream_send(stream_id, rest, false) {
                         Ok(n) => {
                             *sent = sent.saturating_add(n);
+                            // F-S7-6 R-S76-6 (iii): request-egress
+                            // forward progress — real request DATA
+                            // bytes forwarded upstream. ONLY n>0
+                            // counts (R-S76-5). Keeps a healthy
+                            // large/slow request upload (no response
+                            // yet) from being spuriously idle-aborted.
+                            if n > 0 {
+                                idle_deadline = tokio::time::Instant::now() + H3_RESP_IDLE_TIMEOUT;
+                            }
                             if *sent >= frame.len() {
                                 // Chunk fully sent ⇒ pull the next
                                 // event at the single park point.
@@ -3037,6 +3101,13 @@ pub async fn h3_to_h3_stream_resp(
                         rx_tail.extend_from_slice(chunk.get(..n).unwrap_or(&[]));
                         if fin {
                             upstream_fin = true;
+                        }
+                        // F-S7-6 R-S76-6 (i): response-ingress forward
+                        // progress. ONLY n>0 counts (R-S76-5: a
+                        // zero-byte read is NOT progress — a dead
+                        // upstream must still trip the idle deadline).
+                        if n > 0 {
+                            idle_deadline = tokio::time::Instant::now() + H3_RESP_IDLE_TIMEOUT;
                         }
                     }
                     Err(e) => match classify_recv_err(&e) {
@@ -3173,7 +3244,7 @@ pub async fn h3_to_h3_stream_resp(
                             outcome = Err(RespAbort::OverCap);
                             break 'evloop;
                         }
-                        send!(resp_tx, RespEvent::Bytes(data_frame));
+                        send_progress!(resp_tx, RespEvent::Bytes(data_frame));
                         off = stop;
                     }
                     pos = end;
@@ -3237,7 +3308,7 @@ pub async fn h3_to_h3_stream_resp(
                                     outcome = Err(RespAbort::OverCap);
                                     break 'evloop;
                                 }
-                                send!(resp_tx, RespEvent::Bytes(tf));
+                                send_progress!(resp_tx, RespEvent::Bytes(tf));
                             }
                         } else {
                             // First HEADERS ⇒ response head. Parse
@@ -3269,7 +3340,7 @@ pub async fn h3_to_h3_stream_resp(
                                 outcome = Err(RespAbort::OverCap);
                                 break 'evloop;
                             }
-                            send!(resp_tx, RespEvent::Bytes(head));
+                            send_progress!(resp_tx, RespEvent::Bytes(head));
                             sent_head = true;
                         }
                         state = RecvState::AwaitingHeader { hdr: Vec::new() };
@@ -3376,7 +3447,14 @@ pub async fn h3_to_h3_stream_resp(
                         // RFC-acceptable downgrade, NOT silent loss
                         // (explicitly reported as a scoped-out item).
                         match qconn_mut.stream_send(stream_id, &[], true) {
-                            Ok(_) | Err(quiche::Error::Done) => {}
+                            Ok(_) | Err(quiche::Error::Done) => {
+                                // F-S7-6 R-S76-6 (iii): request-egress
+                                // forward progress — the request
+                                // stream was cleanly FIN-terminated
+                                // upstream (request fully delivered).
+                                idle_deadline = tokio::time::Instant::now()
+                                    + H3_RESP_IDLE_TIMEOUT;
+                            }
                             Err(e) => {
                                 tracing::warn!(error = %e, "H3→H3 stream request FIN");
                                 outcome = Err(RespAbort::UpstreamReset);
