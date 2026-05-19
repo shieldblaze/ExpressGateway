@@ -221,10 +221,8 @@ async fn start_h3_listener_h3(
     certs: &TestCerts,
     backend: SocketAddr,
 ) -> (QuicListener, SocketAddr, CancellationToken) {
-    let quic_pool = QuicUpstreamPool::new(
-        QuicPoolConfig::default(),
-        upstream_pool_config_factory(),
-    );
+    let quic_pool =
+        QuicUpstreamPool::new(QuicPoolConfig::default(), upstream_pool_config_factory());
     let bind = SocketAddr::V4(SocketAddrV4::new(Ipv4Addr::LOCALHOST, 0));
     let params = QuicListenerParams::new(
         bind,
@@ -365,8 +363,7 @@ async fn drive_h3(
                             req_done = true;
                         } else if let Some(k) = cfg.reset_after_req_bytes {
                             if tx_off.saturating_sub(data_start) >= k {
-                                let _ =
-                                    conn.stream_shutdown(sid, quiche::Shutdown::Write, 0x10c);
+                                let _ = conn.stream_shutdown(sid, quiche::Shutdown::Write, 0x10c);
                                 did_reset = true;
                                 req_done = true;
                             }
@@ -586,17 +583,14 @@ async fn spawn_h3_upstream(
             let mut resp_fin_on_drain = true;
             let mut resp_reset_after_drain = false;
             let mut resp_done = false;
-            let conn_deadline =
-                tokio::time::Instant::now() + Duration::from_secs(120);
+            let conn_deadline = tokio::time::Instant::now() + Duration::from_secs(120);
 
             while tokio::time::Instant::now() < conn_deadline {
                 // Flush egress.
                 loop {
                     match conn.send(&mut out_buf) {
                         Ok((m, info)) => {
-                            let _ = sock
-                                .send_to(out_buf.get(..m).unwrap_or(&[]), info.to)
-                                .await;
+                            let _ = sock.send_to(out_buf.get(..m).unwrap_or(&[]), info.to).await;
                         }
                         Err(quiche::Error::Done) => break,
                         Err(_) => break,
@@ -608,37 +602,21 @@ async fn spawn_h3_upstream(
 
                 // Drain request stream bytes.
                 if conn.is_established() {
-                    let readable: Vec<u64> = conn.readable().collect();
-                    for r in readable {
-                        if r != req_sid {
-                            continue;
-                        }
-                        let mut chunk = [0u8; 8192];
-                        loop {
-                            match conn.stream_recv(r, &mut chunk) {
-                                Ok((m, fin)) => {
-                                    rx_tail.extend_from_slice(
-                                        chunk.get(..m).unwrap_or(&[]),
-                                    );
-                                    if fin {
-                                        req_fin = true;
-                                    }
-                                }
-                                Err(quiche::Error::Done) => break,
-                                Err(_) => break,
-                            }
-                        }
-                    }
-
-                    // For the stalled-backend mode, hold off decoding
-                    // (so we do not drain the request stream) until
-                    // the stall window elapses — this is what forces
-                    // the gateway's request pump to backpressure.
+                    // F-S7-4: for StallReadThenEcho (case-4), hold off
+                    // the stall window. `draining` is computed BEFORE
+                    // the stream_recv drain so the drain itself can be
+                    // gated on it — during the stall the upstream calls
+                    // NEITHER `readable()` NOR `stream_recv`, so quiche
+                    // stops extending the request stream's flow-control
+                    // window and the gateway's J2 `stream_capacity`
+                    // backpressure gate GENUINELY fires (a real
+                    // transport-layer stall, not merely deferred
+                    // decoding). All other modes take the `_ => true`
+                    // arm ⇒ byte-identical behaviour.
                     let draining = match &mode {
                         UpstreamMode::StallReadThenEcho(d) => {
                             if stall_until.is_none() {
-                                stall_until =
-                                    Some(tokio::time::Instant::now() + *d);
+                                stall_until = Some(tokio::time::Instant::now() + *d);
                             }
                             stall_until
                                 .map(|u| tokio::time::Instant::now() >= u)
@@ -648,6 +626,26 @@ async fn spawn_h3_upstream(
                     };
 
                     if draining {
+                        let readable: Vec<u64> = conn.readable().collect();
+                        for r in readable {
+                            if r != req_sid {
+                                continue;
+                            }
+                            let mut chunk = [0u8; 8192];
+                            loop {
+                                match conn.stream_recv(r, &mut chunk) {
+                                    Ok((m, fin)) => {
+                                        rx_tail.extend_from_slice(chunk.get(..m).unwrap_or(&[]));
+                                        if fin {
+                                            req_fin = true;
+                                        }
+                                    }
+                                    Err(quiche::Error::Done) => break,
+                                    Err(_) => break,
+                                }
+                            }
+                        }
+
                         loop {
                             match decode_frame(&rx_tail, 1 << 20) {
                                 Ok((H3Frame::Headers { .. }, c)) => {
@@ -670,8 +668,7 @@ async fn spawn_h3_upstream(
                 // Emit the response once the request is in / FIN'd.
                 if conn.is_established()
                     && !response_started
-                    && (req_fin
-                        || matches!(mode, UpstreamMode::LargeResp(_)))
+                    && (req_fin || matches!(mode, UpstreamMode::LargeResp(_)))
                 {
                     // For Echo/Stall we wait for the clean request FIN
                     // so the captured body + complete flag are final.
@@ -682,17 +679,14 @@ async fn spawn_h3_upstream(
                         UpstreamMode::StallReadThenEcho(_) => {
                             req_fin
                                 && stall_until
-                                    .map(|u| {
-                                        tokio::time::Instant::now() >= u
-                                    })
+                                    .map(|u| tokio::time::Instant::now() >= u)
                                     .unwrap_or(false)
                         }
                     };
                     if ready {
                         *seen.body.lock().unwrap() = body.clone();
                         seen.complete.store(req_fin, Ordering::SeqCst);
-                        seen.headers_frames
-                            .store(headers_frames, Ordering::SeqCst);
+                        seen.headers_frames.store(headers_frames, Ordering::SeqCst);
                         seen.requests.fetch_add(1, Ordering::SeqCst);
                         response_started = true;
                     }
@@ -702,21 +696,18 @@ async fn spawn_h3_upstream(
                     // Build the full response wire ONCE.
                     if !resp_built {
                         match &mode {
-                            UpstreamMode::Echo
-                            | UpstreamMode::StallReadThenEcho(_) => {
+                            UpstreamMode::Echo | UpstreamMode::StallReadThenEcho(_) => {
                                 let payload = if body.is_empty() {
                                     b"h3-empty".to_vec()
                                 } else {
                                     body.clone()
                                 };
                                 resp_wire = response_head(200, None);
-                                resp_wire
-                                    .extend_from_slice(&data_frames(&payload));
+                                resp_wire.extend_from_slice(&data_frames(&payload));
                                 resp_fin_on_drain = true;
                             }
                             UpstreamMode::LargeResp(b) => {
-                                resp_wire =
-                                    response_head(200, Some(b.len()));
+                                resp_wire = response_head(200, Some(b.len()));
                                 resp_wire.extend_from_slice(&data_frames(b));
                                 resp_fin_on_drain = true;
                             }
@@ -725,11 +716,8 @@ async fn spawn_h3_upstream(
                                 // ~64 KiB, then RESET the response
                                 // stream — the gateway must NEVER
                                 // deliver a clean complete 200.
-                                resp_wire =
-                                    response_head(200, Some(1_048_576));
-                                resp_wire.extend_from_slice(&data_frames(
-                                    &vec![7u8; 64 * 1024],
-                                ));
+                                resp_wire = response_head(200, Some(1_048_576));
+                                resp_wire.extend_from_slice(&data_frames(&vec![7u8; 64 * 1024]));
                                 resp_fin_on_drain = false;
                                 resp_reset_after_drain = true;
                             }
@@ -739,8 +727,7 @@ async fn spawn_h3_upstream(
                     // Push with partial-accept retry; FIN only when
                     // fully drained (Echo/Large) — never lose bytes.
                     while resp_off < resp_wire.len() {
-                        let remaining =
-                            resp_wire.get(resp_off..).unwrap_or(&[]);
+                        let remaining = resp_wire.get(resp_off..).unwrap_or(&[]);
                         let last = true;
                         let fin = resp_fin_on_drain && last;
                         match conn.stream_send(req_sid, remaining, fin) {
@@ -754,18 +741,13 @@ async fn spawn_h3_upstream(
                     }
                     if resp_off >= resp_wire.len() {
                         if resp_reset_after_drain {
-                            let _ = conn.stream_shutdown(
-                                req_sid,
-                                quiche::Shutdown::Write,
-                                0x010c,
-                            );
+                            let _ = conn.stream_shutdown(req_sid, quiche::Shutdown::Write, 0x010c);
                         }
                         resp_done = true;
                     }
                 }
 
-                let to =
-                    conn.timeout().unwrap_or(Duration::from_millis(20));
+                let to = conn.timeout().unwrap_or(Duration::from_millis(20));
                 match tokio::time::timeout(
                     to.min(Duration::from_millis(25)),
                     sock.recv_from(&mut in_buf),
@@ -773,12 +755,8 @@ async fn spawn_h3_upstream(
                 .await
                 {
                     Ok(Ok((m, f))) => {
-                        let slice =
-                            in_buf.get_mut(..m).unwrap_or(&mut []);
-                        let _ = conn.recv(
-                            slice,
-                            quiche::RecvInfo { from: f, to: local },
-                        );
+                        let slice = in_buf.get_mut(..m).unwrap_or(&mut []);
+                        let _ = conn.recv(slice, quiche::RecvInfo { from: f, to: local });
                     }
                     Ok(Err(_)) | Err(_) => conn.on_timeout(),
                 }
@@ -951,8 +929,12 @@ async fn h3h3_e2e_response_memory_bounded_through_stalled_client() {
 
     let certs = generate_loopback_certs();
     let seen = BackendSeen::default();
-    let (backend, bh) =
-        spawn_h3_upstream(&certs, UpstreamMode::LargeResp(Arc::new(body.clone())), seen).await;
+    let (backend, bh) = spawn_h3_upstream(
+        &certs,
+        UpstreamMode::LargeResp(Arc::new(body.clone())),
+        seen,
+    )
+    .await;
     let (listener, gw, sd) = start_h3_listener_h3(&certs, backend).await;
 
     let out = drive_h3(
@@ -999,7 +981,11 @@ async fn h3h3_e2e_request_memory_bounded_through_stalled_backend() {
     use lb_quic::h3_bridge::{H3_BODY_CHUNK_MAX, MAX_FRAME_HEADER_BYTES, MAX_RETAINED_BODY_BYTES};
 
     MAX_RETAINED_BODY_BYTES.store(0, Ordering::SeqCst);
-    let ceiling = retained_ceiling(H3_BODY_CHANNEL_DEPTH, H3_BODY_CHUNK_MAX, MAX_FRAME_HEADER_BYTES);
+    let ceiling = retained_ceiling(
+        H3_BODY_CHANNEL_DEPTH,
+        H3_BODY_CHUNK_MAX,
+        MAX_FRAME_HEADER_BYTES,
+    );
     assert_eq!(ceiling, 262_656, "C5 REQ ceiling authoritative value");
 
     let payload = binary_body(4 * 1024 * 1024);
@@ -1043,7 +1029,10 @@ async fn h3h3_e2e_request_memory_bounded_through_stalled_backend() {
     bh.abort();
 
     assert_eq!(out.status, Some(200), "request must complete after unblock");
-    assert!(got == payload, "4 MiB request body byte-identical at backend");
+    assert!(
+        got == payload,
+        "4 MiB request body byte-identical at backend"
+    );
     assert_eq!(out.body, payload, "echoed response body byte-identical");
     assert!(
         retained <= ceiling,
@@ -1072,8 +1061,12 @@ async fn h3h3_e2e_backpressure_stalled_client_pauses_upstream_read() {
 
     let certs = generate_loopback_certs();
     let seen = BackendSeen::default();
-    let (backend, bh) =
-        spawn_h3_upstream(&certs, UpstreamMode::LargeResp(Arc::new(body.clone())), seen).await;
+    let (backend, bh) = spawn_h3_upstream(
+        &certs,
+        UpstreamMode::LargeResp(Arc::new(body.clone())),
+        seen,
+    )
+    .await;
     let (listener, gw, sd) = start_h3_listener_h3(&certs, backend).await;
 
     let out = drive_h3(
@@ -1097,7 +1090,10 @@ async fn h3h3_e2e_backpressure_stalled_client_pauses_upstream_read() {
     let retained = MAX_RETAINED_RESP_BYTES.load(Ordering::SeqCst);
     bh.abort();
 
-    assert!(out.fin, "body must complete after resume (causal chain held)");
+    assert!(
+        out.fin,
+        "body must complete after resume (causal chain held)"
+    );
     assert_eq!(out.body, body, "8 MiB byte-identical (no drop/corruption)");
     assert!(
         retained <= ceiling,
@@ -1113,8 +1109,7 @@ async fn h3h3_e2e_backpressure_stalled_client_pauses_upstream_read() {
 async fn h3h3_e2e_upstream_reset_midbody_resets_client_no_fin() {
     let certs = generate_loopback_certs();
     let seen = BackendSeen::default();
-    let (backend, bh) =
-        spawn_h3_upstream(&certs, UpstreamMode::ResetMidResponse, seen).await;
+    let (backend, bh) = spawn_h3_upstream(&certs, UpstreamMode::ResetMidResponse, seen).await;
     let (listener, gw, sd) = start_h3_listener_h3(&certs, backend).await;
 
     let out = drive_h3(
@@ -1139,8 +1134,7 @@ async fn h3h3_e2e_upstream_reset_midbody_resets_client_no_fin() {
 
     // A mid-body upstream reset must NEVER be delivered to the client
     // as a clean COMPLETE 200 (FIN with the full declared 1 MiB body).
-    let delivered_complete_200 =
-        out.status == Some(200) && out.fin && out.body.len() >= 1_048_576;
+    let delivered_complete_200 = out.status == Some(200) && out.fin && out.body.len() >= 1_048_576;
     assert!(
         !delivered_complete_200,
         "mid-body upstream reset MUST NOT yield a clean complete 200 \
