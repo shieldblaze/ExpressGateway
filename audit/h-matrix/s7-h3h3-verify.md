@@ -265,3 +265,160 @@ abort, R8 no-accumulation), additive-only, h3_to_h3_roundtrip
 byte-untouched, J1 stub + doc wholesale gone. J3 is clear to
 start.
 ================================================================
+
+
+================================================================
+J3 — actor rewire to streaming + delete dead code (LIVE PATH)
+================================================================
+Date (UTC): 2026-05-19 audit run
+TARGET: s7/builder-1 @ e07b6f6347010833b614733959928b4334f4889f
+Parent: 8fef9e9f (accepted J2). Linear fast-forward
+8fef9e9f..e07b6f63 (8fef9e9f is ancestor; NO force);
+remote origin/s7/builder-1 == e07b6f63.
+
+VERDICT: **PASS** (all 10 scope items). One NON-BLOCKING
+disclosure (commit-message overclaim, see item 8 + item 9).
+J4 may proceed.
+
+1. STRUCTURE — PASS. `git show --stat` = EXACTLY 3 files:
+   conn_actor.rs (+83), h3_bridge.rs (227 ±, net −188),
+   lib.rs (±2). NO lb-io/quiche/codec/lb-h3. Linear FF, no force.
+
+2. TOKEN-PARITY (independently re-derived — NOT builder's
+   annotated diff) — PASS. Extracted the verified H3→H2 template
+   from PARENT 8fef9e9f conn_actor.rs:809-863 and the new H3→H3
+   branch from e07b6f63:884-940; `diff`ed them myself. The branch
+   body is token-identical EXCEPT exactly the 3 authorized deltas:
+     Δ1  `if let Some((h2pool, addr)) = h2_backend { let h2pool =
+          h2pool.clone();`  →  `if let Some((qpool, addr, sni)) =
+          h3_backend { let qpool = qpool.clone();` PLUS added
+          `let sni = sni.clone();`  (sni destructure + clone)
+     Δ2  `h3_to_h2_stream_resp(... &h2pool, ...)` →
+          `h3_to_h3_stream_resp(... &sni, &qpool, ...)` (spawned
+          fn + &sni arg; arg order matches the J2-verified
+          h3_to_h3_stream_resp signature)
+     Δ3  warn label "H3→H2 resp stream aborted" → "H3→H3 ..."
+   Every other token identical: `let addr = *addr;`,
+   `mpsc::channel::<ReqBodyEvent>(H3_BODY_CHANNEL_DEPTH)`,
+   `mpsc::channel::<RespEvent>(H3_RESP_CHANNEL_DEPTH)`,
+   `resp_rx_by_stream.insert(sid, resp_rx)`,
+   `stream_response.insert(sid, StreamTx::progressive())`,
+   `resp_tasks.push(tokio::spawn(...))`,
+   `MAX_RESPONSE_BODY_BYTES`, the whole
+   `if fin { btx.try_send(End{trailers:Vec::new()}) } else {
+   body_tx_by_stream.insert + body_pending.entry(sid).or_default()
+   + decode_into_pending(sid, rx_by_stream, body_tx_by_stream,
+   body_pending, &[], fin) + flush_pending(sid, body_tx_by_stream,
+   body_pending) }` tail, and the closing `break;`. No
+   unauthorized token difference.
+
+3. continue→break + ordering — PASS. The new H3→H3 branch ends in
+   `break;` (parity with H2 :862 / H1 :950), NOT `continue;` (the
+   deleted legacy buffered branch ended in `continue;`). Branch
+   order preserved h2_backend → h3_backend → select_backend.
+   conn_actor.rs has EXACTLY 3 hunks (`@@ -37` import token,
+   `@@ -117` h3_backend field doc reword, `@@ -861` the branch
+   replacement). Lines 42-808 byte-identical J2→J3 except the one
+   comment-only doc reword (79-80); select_backend..EOF
+   byte-identical (the only out-of-block change is positional —
+   select_backend shifted 876→941 from the longer new branch +
+   leading comment; its body unchanged). Builder's out-of-block
+   claim VERIFIED.
+
+4. WORKSPACE GREP ⇒ 0 + stream_resp code unchanged — PASS.
+   Independent `grep -rn "h3_to_h3_roundtrip" --include="*.rs" .`
+   over the whole workspace = ZERO (incl tests + comments); zero
+   in *.toml too (J3-G2 cross-crate surface-safety, S6 F-S6-3).
+   `fn h3_to_h3_roundtrip` count in J3 h3_bridge.rs blob = 0 (was
+   1 in J2) — fully deleted. h3_to_h3_stream_resp: 670-line span
+   in both J2 and J3; stripping //+/// comment lines → 499
+   code-lines each, code-only diff BYTE-IDENTICAL J2→J3 (only doc
+   comments reworded).
+
+5. R3 BOUNDARY (diff-proven byte-identical J2→J3) — PASS.
+   request_h3_upstream (199 lines), h3_to_h1_stream_resp (68),
+   h3_to_h2_stream_resp (47), stream_h2_response (112) — all
+   byte-identical. The h3_bridge.rs J2→J3 diff added ZERO
+   non-comment lines (only the roundtrip-body deletion + 13
+   doc-comment rewords). conn_actor H1/H2/inline-error branches +
+   drain_resp_channels/drain_body_stream/decode_into_pending/
+   flush_pending are in the byte-identical regions (item 3).
+
+6. lib.rs — PASS. One-line change: `h3_to_h3_roundtrip` token
+   removed from `pub use h3_bridge::{...}`; H3Request,
+   H3UpstreamResponse, request_h3_upstream RETAINED.
+
+7. LIVE-PATH REGRESSION (independently re-run on e07b6f63,
+   CARGO_TARGET_DIR exported, --features test-gauges, 30G free)
+   — PASS, DETERMINISTIC.
+     cargo test -p lb-quic --lib ............... 25/0/0 (incl
+       s7_j1 + s7_j2)
+     --test round8_h3_authority_enforced ....... 3/0/0  ×3 runs
+       (THE no-regression proof: the now-LIVE H3-backend actor
+       path via real quiche::accept driving h3_to_h3_stream_resp,
+       passing exactly as it did vs the deleted roundtrip)
+     --test h3_h2_stream_e2e ................... 10/0/0 ×3 runs
+       (H3→H2 unregressed by the parity edit)
+     --test h3_h1_stream_body_e2e .............. 6/0/0
+     --test h3_h1_resp_stream_e2e .............. 16/0/0
+       (H1 branch untouched)
+   All deterministic across the 3 independent reruns of the two
+   critical live-path suites. NOTE: the commit message
+   transposes the last two counts (claims h3_h1_stream_body_e2e
+   16/16 + h3_h1_resp_stream_e2e 6/6); my independent run shows
+   the reverse (6/6 and 16/16) — both pass, so this is a cosmetic
+   message error, NOT a code defect.
+
+8. CLIPPY — PASS (adjudicated). `cargo fmt -p lb-quic --check`
+   clean. `clippy -p lb-quic --lib --features test-gauges` CLEAN
+   (exit 0) — production code is clippy-clean. `clippy -p lb-quic
+   --tests --features test-gauges` FAILS with ONE
+   `clippy::indexing_slicing` "slicing may panic" at
+   h3_bridge.rs:4301 — that line is
+   `assert!(parse_frame_header(&hf[..1]).is_none());`, the `&hf[..1]`
+   slice in the J1-era `s7_j1_recv_half_frame_machinery` test.
+   ADJUDICATED PRE-EXISTING, NOT J3-introduced: J3's h3_bridge.rs
+   hunks are all ≤ line 3631 and added ZERO non-comment lines (it
+   never touched the test mod); reproduced BYTE-IDENTICALLY on
+   parent 8fef9e9f (J2) with the same `--tests --features
+   test-gauges` invocation (same "slicing may panic", same "could
+   not compile (lib test)", exit 101). It is the test-code analogue
+   of the J1/J2-adjudicated artifact: a pre-existing strict-lint
+   (lib.rs:67 clippy::indexing_slicing) surfaced only when --tests
+   compiles the lib test mod; outside J3's scoped-self-check
+   contract (-p lb-quic --lib, which is clean). The --all-targets
+   no-features E0432 `unresolved import MAX_RETAINED_RESP_BYTES`
+   (h3_h1_resp_stream_e2e.rs:1113/:1220) is ALSO the IDENTICAL
+   pre-existing test-gauges artifact from J1/J2 — unchanged, not
+   J3-introduced.
+
+9. HOUSEKEEPING — PASS (with disclosure). git log = SINGLE clean
+   J3 commit e07b6f63; message is intact prose, NO bash-
+   substituted backtick garbage, NO stray /tmp/scratch/.log
+   artifact in the tree, NO force-push. DISCLOSURE (non-blocking):
+   the commit message's self-check section overclaims —
+   (a) transposes the two h3_h1 counts (item 7), and (b) states
+   "clippy (... + the live-path test targets) clean" which does
+   NOT hold for `--tests` (the pre-existing item-8 lint fails it).
+   Neither is a J3 code defect (both pre-existing / cosmetic);
+   surfaced here per honest-reporting. J3's actual contract
+   (-p lb-quic --lib + the live-path test RESULTS) all pass.
+
+10. STALE-DOC — PASS. Zero `[`h3_to_h3_roundtrip`]` rustdoc links
+    and zero `h3_to_h3_roundtrip` token occurrences anywhere in
+    *.rs (consistent with item 4 — no cargo-doc break). The 13
+    reworded refs describe behaviour intrinsically as historical
+    prose ("former buffered, body-dropping H3→H3 round-trip ...
+    deleted in J3"), NOT as dangling `[`...`]` links to a missing
+    symbol. S6 stale-scaffold precedent satisfied.
+
+================================================================
+J3 VERDICT: PASS — token-for-token H3→H2 clone independently
+re-derived (only the 3 authorized deltas + continue→break),
+roundtrip deleted workspace-wide (grep⇒0), stream_resp code +
+all R3-boundary fns byte-identical, the LIVE-path regression
+suite (round8_h3_authority_enforced especially) green &
+deterministic ×3. Clippy/message overclaims adjudicated
+NON-BLOCKING (pre-existing artifact + cosmetic). The cell is
+safe to go live; J4 is clear to start.
+================================================================
