@@ -523,3 +523,68 @@ semantics), lib 25/25 both session tests green, single-site
 sweep conclusion independently corroborated, zero behavior
 change. F-S7-1 accepted; J4 (#6) unblocks.
 ================================================================
+
+
+================================================================
+F-S7-3 — VERIFICATION-GAP, FINALIZED (round8 never exercised the
+live H3→H3 path; honest re-characterization of J1/J2/J3)
+================================================================
+Verifier: `verifier`. [[s2-verification-gap]]-class recurrence,
+owned factually — no defensiveness. The real-wire requirement
+working as designed is the point: it caught this.
+
+INDEPENDENTLY CONFIRMED (read, cited — not inferred):
+`crates/lb-quic/tests/round8_h3_authority_enforced.rs:326-327`:
+    h3_backend: None,
+    h2_backend: None,
+`conn_actor::poll_h3`'s J3-rewired live H3→H3 branch is
+`if let Some((qpool, addr, sni)) = h3_backend { … h3_to_h3_stream_resp
+… }`. With `h3_backend: None` that branch is structurally NEVER
+entered ⇒ `h3_to_h3_stream_resp` is NEVER called by round8. round8's
+own module header confirms its purpose is the H3 authority gate; its
+valid-`:authority` case dials a TcpPool probe via
+`select_backend(backends)` (the H1 fallback), not the H3→H3 branch.
+
+WHAT EACH PRIOR STEP ACTUALLY PROVED (vs not):
+* J1 / J2 unit tests (`s7_j1_recv_half_frame_machinery`,
+  `s7_j2_request_send_decision`): VALID but NARROW — pure
+  codec/decision-table proofs, socket-less; never a real wire.
+* J3 token-parity: VALID — the new conn_actor H3→H3 branch IS a
+  token-for-token clone of the verified H3→H2 branch with only the 3
+  authorized deltas (independently re-derived in the J3 section).
+* J3 R3 no-regression for H3→H1 / H3→H2
+  (`h3_h1_*`, `h3_h2_stream_e2e`): VALID — those cells have genuine
+  real-wire suites that DO drive their branches.
+* round8 ×3 (3/3, cited in s6 plan §4, the s7 reconfirm, the J3
+  builder self-check, AND THIS DOCUMENT's J3 section
+  ~lines 356-357 & 420): VALID ONLY for the H3 authority gate. The
+  inference that it was the "swap no-regression proof for the live
+  H3→H3 path / the now-LIVE H3-backend actor path driving
+  h3_to_h3_stream_resp" was UNFOUNDED — round8 with `h3_backend:None`
+  cannot and does not exercise that path. **That claim is formally
+  WITHDRAWN here.**
+* J4 genuine real-wire suite: the FIRST true exercise of the live
+  H3→H3 path — and it caught the latent defect (F-S7-2), exactly as
+  the real-wire requirement is meant to.
+
+NET: "H3→H3 works end-to-end" was NEVER established pre-J4. J1/J2/J3
+acceptance partly rested on the round8 inference, which did not hold.
+The still-valid structural/unit/parity/H3→H1/H3→H2 proofs stand; the
+cell is NOT BUILT pending the J5-FIX + a genuinely-green J4 suite.
+
+ROOT OF THE AUDIT ERROR (owned): round8 was accepted as the live-path
+proof from the test NAME + the s6-plan/s7-reconfirm framing, run
+green ×3, WITHOUT reading its `h3_backend`/`h2_backend` wiring to
+confirm it drives the rewired branch. Token/structural parity is
+necessary but NOT sufficient: a verbatim-correct clone of a correct
+template can still be reached only via a path no in-tree test
+exercises, and the cloned-from recv-half (J1) was itself untested on
+a real wire and defective (F-S7-2).
+
+BINDING FORWARD RULE: any "swap / rewire / clone no-regression" or
+"live path works" claim MUST cite a test whose BACKEND WIRING HAS
+BEEN READ and confirmed to drive the specific changed branch (e.g.
+`h3_backend: Some(..)` for the H3→H3 branch) — never inferred from
+the test name or a plan's assertion. (Lead persists this to memory;
+verifier persisted `verify-cited-test-drives-changed-path`, linked
+[[s2-verification-gap]].)
