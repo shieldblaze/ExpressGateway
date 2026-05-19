@@ -37,6 +37,12 @@ byte-identical (sha1 7971d3f8…, git clean) — R5 honored.
   3/3.
 * Corrected clippy `-p lb-quic --all-targets --features
   test-gauges -- -D warnings` — CLEAN (exit 0).
+* DETERMINISM — PASS. Full genuine J4 suite rerun ×3 on fedb5cf4
+  (--test-threads=1): byte-identical EVERY run — 5 passed
+  (1,2,3,6,7) / 2 failed (4,5), ~17.1 s each. No flakiness; the
+  cases 4/5 failures are deterministic defects (R2), not flakes —
+  consistent with the F-S7-6 (case 5, exactly 5000 ms) / F-S7-4
+  (case 4) mechanisms proven below.
 * fmt: J5-FIX SRC (h3_bridge.rs/conn_actor.rs) CLEAN. The only fmt
   diffs are in the J4 TEST asset h3_h3_stream_e2e.rs = the
   separately-tracked F-S7-5, NOT J5-FIX src.
