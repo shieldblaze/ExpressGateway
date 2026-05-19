@@ -422,3 +422,104 @@ deterministic ×3. Clippy/message overclaims adjudicated
 NON-BLOCKING (pre-existing artifact + cosmetic). The cell is
 safe to go live; J4 is clear to start.
 ================================================================
+
+
+================================================================
+F-S7-1 — corrective increment (crate-root-denied
+clippy::indexing_slicing in J1 session test code)
+================================================================
+Date (UTC): 2026-05-19 audit run
+TARGET: s7/builder-1 @ d17e51c490466ed8583bed29430376098aa05b06
+Parent: e07b6f63 (accepted J3). Linear fast-forward
+e07b6f63..d17e51c4, NO force; remote origin/s7/builder-1 ==
+d17e51c4.
+
+CONTEXT: F-S7-1 = J1-introduced (`&hf[..1]` in
+s7_j1_recv_half_frame_machinery), latent J1→J3 because per-
+increment self-checks used `-p lb-quic --lib` (did not compile
+the test target). It IS a Phase-3 blocker: lib.rs:63 crate-root
+`#![deny(clippy::indexing_slicing,...)]` and the
+`#![cfg_attr(test, allow(...))]` block does NOT exempt
+indexing_slicing in tests, so it would fail the canonical
+`clippy --all-targets --all-features -- -D warnings` (clean
+pre-J1 at Phase-0). Audit clippy scope is now the CORRECTED
+`cargo clippy -p lb-quic --all-targets --features test-gauges
+-- -D warnings` (the `--lib`-only scope is retired).
+
+VERDICT: **PASS** (all 6 scope items). F-S7-1 accepted; J4
+(#6) unblocks.
+
+1. STRUCTURE — PASS. `git show --stat` = ONLY h3_bridge.rs
+   (+7 -1), exactly the s7_j1 test site (~:4301); no
+   src/non-test code, no other file. Linear FF, no force,
+   remote==d17e51c4.
+
+2. ACCEPTANCE BAR (independently run, CORRECTED scope) — PASS.
+   `cargo clippy -p lb-quic --all-targets --features
+   test-gauges -- -D warnings` (CARGO_TARGET_DIR exported, NOT
+   --lib) = CLEAN, exit 0. Because --all-targets compiles the
+   test target and -D warnings promotes every crate-root-denied
+   lint to a hard error, this clean run IS the
+   sweep-completeness proof — it catches any crate-root-denied
+   site the hand-sweep could have missed OR that clippy never
+   reached when it aborted at :4301 in the pre-fix run.
+
+3. ASSERTION BYTE-PRESERVING — PASS. Diff replaces
+   `assert!(parse_frame_header(&hf[..1]).is_none());` with
+   `let one_byte = hf.get(..1).expect("encoded HEADERS frame is
+   ≥1 byte"); assert!(parse_frame_header(one_byte).is_none());`.
+   `hf.get(..1)` yields `Some(&hf[..1])` — the SAME 1-byte
+   prefix (`hf` is a real encoded HEADERS frame, always ≥1
+   byte); `.expect()` unwraps to the identical `&[u8]`;
+   `.is_none()` check unchanged; no #[ignore]/skip; no
+   weakening. lib.rs cfg_attr(test) allow block exempts ONLY
+   unwrap_used/expect_used/panic/match_wildcard — NOT
+   indexing_slicing/todo/unimplemented/unreachable/missing_docs.
+   So `&hf[..1]` (indexing_slicing) is DENIED in test code while
+   `.get()`+`.expect()` (expect_used) IS test-allowed: a clean
+   denied→allowed trade with byte-identical semantics.
+
+4. LIB TEST + FMT — PASS. `cargo test -p lb-quic --lib` =
+   25 passed / 0 failed / 0 ignored, with BOTH
+   s7_j1_recv_half_frame_machinery AND
+   s7_j2_request_send_decision still `... ok` (same
+   assertions; s7_j1 via the semantically-identical .get()
+   form). `cargo fmt -p lb-quic --check` clean.
+
+5. SWEEP-COMPLETENESS CROSS-CHECK — PASS. The clean corrected
+   gate (item 2) proves no other crate-root-denied/non-test-
+   allowed lint remains in session test code. Spot-confirmed:
+   `&payload[..]` (:4355) and the `&b"..."[..]` sites
+   (:3745-3748, :4258) are FULL-RANGE reborrows (RangeFull `x[..]`)
+   which clippy::indexing_slicing legitimately does NOT flag
+   (only fixed-index/partial-range slices can panic). Independent
+   scan of both s7_j1 + s7_j2 fns for bare-index/partial-range
+   slicing = NONE remaining. Builder's single-offending-site
+   conclusion is sound.
+
+6. R3 + HOUSEKEEPING — PASS. This change is
+   test-assertion-binding-only, ZERO product/behavior change
+   (one test assertion line + a binding line + an explanatory
+   comment inside the s7_j1 test mod; no src/non-test/product
+   code, no conn_actor.rs, no h3_to_h3_stream_resp). Therefore
+   the J3 live-path regression suite need NOT be re-run for this
+   increment — lib 25/25 + corrected-gate-clean is sufficient
+   and disk-proportionate. Single clean commit d17e51c4; message
+   intact prose (single-quoted heredoc — no bash-substituted
+   garbage), no stray artifact, no force-push.
+
+NOTE (kept distinct, per lead): the `--all-targets`
+NO-`--features` E0432 `unresolved import MAX_RETAINED_RESP_BYTES`
+is a SEPARATE, genuinely-harmless test-gauges feature-gate
+artifact — the canonical Phase-3 gate is `--all-features` so the
+cfg'd symbol resolves (Phase-0 proved that path clean). It is
+NOT F-S7-1 and is not conflated with it.
+
+================================================================
+F-S7-1 VERDICT: PASS — corrected-scope acceptance gate
+independently CLEAN (= sweep-completeness proof), assertion
+byte-preserving (denied→allowed lint trade, identical
+semantics), lib 25/25 both session tests green, single-site
+sweep conclusion independently corroborated, zero behavior
+change. F-S7-1 accepted; J4 (#6) unblocks.
+================================================================
