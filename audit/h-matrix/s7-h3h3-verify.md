@@ -135,3 +135,133 @@ artifact.
 J1 VERDICT: PASS — mechanism sound, additive-only, no regression.
 J2 is clear to start.
 ================================================================
+
+
+================================================================
+J2 — M-C request/send half (streaming request-DATA pump)
+================================================================
+Date (UTC): 2026-05-19 audit run
+TARGET: s7/builder-1 @ 8fef9e9f9d3905af9a25a0bd3ee1637c72e39c11
+Parent: 0ce98bad (accepted J1). 0ce98bad..8fef9e9f is a LINEAR
+fast-forward (0ce98bad is an ancestor; no force); remote
+origin/s7/builder-1 == 8fef9e9f.
+
+VERDICT: **PASS** (all 10 scope items). J3 may proceed.
+
+1. R3 — PASS. `git show 8fef9e9f --stat` = ONLY
+   crates/lb-quic/src/h3_bridge.rs (+348 -47). conn_actor.rs NOT
+   present. h3_to_h3_roundtrip CODE BODY is byte-identical J1→J2
+   (brace-balanced extraction, 167 lines, diff exit 0 — the only
+   nearby diff lines are in the SEPARATE h3_to_h3_stream_resp `///`
+   doc block). h3_to_h3_stream_resp still has NO external caller
+   (additive, zero live-path behaviour change).
+
+2. J1-STUB-GONE — PASS. grep on the 8fef9e9f blob: `J1 STUB`,
+   `unreachable in J1's wired path`, `increment-named` ⇒ ZERO
+   matches (all present in J1). The Chunk arm is now
+   `Some(ReqBodyEvent::Chunk(b0)) => { ... req_streaming = true }`
+   (real streaming path), not an inline-502 return. The fn doc was
+   REWRITTEN ("# Build scope (J1 recv half + J2 send half)" / "The
+   J1 Chunk-first inline(502) placeholder has been wholesale-
+   replaced ... this doc reflects the post-J2 reality — no stub
+   remains") — fixed, not left stale.
+
+3. J2-G1 (NO BUSY-SPIN — critical) — PASS. The ONLY await/park in
+   the loop is the single `tokio::select!` (:3488). Arms: (a)
+   `tokio::time::timeout(timeout, socket_clone.recv_from(..))`,
+   (b) `ev = body_rx.recv(), if want_next` where
+   `want_next = matches!(req_send, ReqSend::AwaitNext)` (:3487). NO
+   bare `body_rx.try_recv()` / hot-poll anywhere in the fn (grep
+   clean; pre-loop peek is awaited `body_rx.recv().await`). When
+   `stream_capacity==0` the in-hand chunk is retained, `body_rx` is
+   NOT pulled (`Ok(_) => { /* window closed — keep in hand, no pull
+   */ }` :3194) and `req_send` stays `InHand` ⇒ `want_next==false`
+   ⇒ select arm (b) disabled ⇒ task PARKS on arm (a) (recv_from is
+   genuinely Pending absent a packet, bounded by the quiche
+   timeout) — it SLEEPS, does not spin; body_rx fills (depth 8) ⇒
+   unchanged M-A pump pauses the client (request-direction
+   backpressure). `biased;` polls (a) first but (a) is genuinely
+   Pending absent a UDP packet, so it does not starve (b).
+
+4. J2-G2 — PASS. `J2ReqAction::FinNoTrailers` ⇒
+   `qconn_mut.stream_send(stream_id, &[], true)` — empty final
+   write, fin=true = QUIC stream FIN; doc states byte-identical to
+   request_h3_upstream / H3ReqStreamBody; NOT a synthetic
+   zero-length H3 DATA frame. Real DATA writes only via
+   encode_h3_data_frame for ≤H3_BODY_CHUNK_MAX chunks.
+
+5. Q-J2 — PASS. `const H3_REQUEST_CANCELLED: u64 = 0x010c` (:96).
+   Doc cites RFC 9114 §8.1 verbatim AND explicitly contrasts
+   conn_actor.rs:73's response-leg H3_INTERNAL_ERROR (0x0102),
+   stating the proxy-as-client vs proxy-as-server asymmetry is
+   intentional and "must NOT be 'fixed' to a false consistency".
+
+6. CASE-7 SMUGGLING — PASS. AbortNoFin ⇒ NO FIN +
+   `stream_shutdown(Write, H3_REQUEST_CANCELLED)` + `outcome =
+   Err(RespAbort::UpstreamReset)` + break ⇒ set_reusable(false)
+   (:3574). Post-loop: response_complete false ⇒ RespEvent::End
+   branch NOT taken; outcome.is_ok() false ⇒ falls to best-effort
+   `resp_tx.send(RespEvent::Reset)` then `return outcome` (Err).
+   NEVER RespEvent::End on a partial. `j2_req_event_action` maps
+   `Some(Reset) | None` (mid-body reset OR producer dropped before
+   End) AND encode-failure ⇒ AbortNoFin. Pre-loop first_chunk
+   encode-fail path also stream_shutdown + set_reusable(false) +
+   resp_tx Reset + Err. Upstream can never see a
+   truncated-as-complete request.
+
+7. R8 REQUEST — PASS. No request-body accumulation: the only
+   `.collect()` in the fn is `qconn_mut.readable().collect()`
+   (small Vec<u64> of stream ids, pre-existing J1 recv pattern),
+   no decoded_body, no req-body Vec<u8>, no extend_from_slice of
+   request bytes. `ReqSend::InHand { frame: Bytes, sent }` holds
+   ≤1 in-hand encoded DATA frame; `first_chunk: Option<Bytes>` ≤1
+   peeked chunk. Real bound = depth-8 body_rx
+   (H3_BODY_CHANNEL_DEPTH), unchanged M-A pump; request-body-size
+   INDEPENDENT. Cap is DoS-abort only, not a memory bound (comment
+   :3116-3118). J2 added/modified NOTHING in
+   MAX_RETAINED_BODY_BYTES / record_retained (diff empty) — zero
+   new gauge wiring, reuses the pre-existing instrument.
+
+8. G3/A1 — PASS. Commit touches ONLY h3_bridge.rs; no
+   lb-io/quiche/codec/lb-h3 files. Only already-public lb-h3
+   exports used.
+
+9. TRAILERS-DROPPED documented — PASS. const-adjacent J2ReqAction
+   doc, the select End arm comment ("lossless RFC-acceptable
+   downgrade, NOT silent loss ... explicitly reported as a
+   scoped-out item"), the rewritten fn doc, and j2_req_event_action
+   doc all document it. `Some(End { trailers: _ })` discards
+   trailers ⇒ FinNoTrailers. Unit test case (b) asserts
+   `End { trailers: vec![("x-trailer","v")] }` ⇒ FinNoTrailers
+   ("trailers are not forwarded on the H3→H3 leg") — parity, not
+   silent loss.
+
+10. SCOPED SELF-CHECK (independently re-run on 8fef9e9f,
+    CARGO_TARGET_DIR exported) — PASS.
+      cargo fmt -p lb-quic -- --check ........... CLEAN (exit 0)
+      cargo test -p lb-quic --lib ............... 25 passed; 0
+        failed; 0 ignored — INCLUDES BOTH
+        `s7_j2_request_send_decision ... ok` AND J1's
+        `s7_j1_recv_half_frame_machinery ... ok` (still green;
+        exactly 25 as expected).
+      cargo clippy -p lb-quic --lib ............. CLEAN (exit 0)
+    The J2 unit test is non-vacuous: (a) Chunk⇒SendData
+    byte-identical + round-trips to original, empty-chunk⇒SendData
+    (never reclassified End), (b) End-with-trailers⇒FinNoTrailers,
+    (c) Reset⇒AbortNoFin, (d) None⇒AbortNoFin (truncation guard).
+    `clippy -p lb-quic --all-targets` (no --features) E0432
+    `unresolved import MAX_RETAINED_RESP_BYTES` is the IDENTICAL
+    pre-existing test-gauges feature-gate artifact adjudicated in
+    J1 (same test-file imports :1113/:1220, exit 101) — NOT
+    J2-introduced (J2 touches neither that symbol nor the test
+    file; the symbol's decl line merely shifted 590→610 from the
+    20-line const block J2 added before it). Unchanged from the J1
+    adjudication.
+
+================================================================
+J2 VERDICT: PASS — mechanism sound (single-park no-spin
+backpressure proven from code, FIN-terminator, case-7 no-FIN
+abort, R8 no-accumulation), additive-only, h3_to_h3_roundtrip
+byte-untouched, J1 stub + doc wholesale gone. J3 is clear to
+start.
+================================================================
