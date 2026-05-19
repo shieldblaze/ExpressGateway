@@ -945,4 +945,112 @@ LEAD-ADJUDICATED PASS on the proven substantive criterion
 (step4). F-S7-4 is the last blocker cleared ⇒ H3→H3 cell
 eligible for #7 full-cell verification.
 
-(#7 full-cell follows)
+================================================================
+# #7 FULL-CELL VERIFICATION (verifier2, 2026-05-19)
+================================================================
+Per METHOD.md. Source-of-record byte-identical throughout
+(sha1 h3_bridge 61a17ef8, conn_actor 393e3894, test
+c1099114 — re-verified pre each heavy run).
+
+§1 REAL-WIRE GENUINE: PASS. J4 upstream (tests/
+h3_h3_stream_e2e.rs) is a GENUINE quiche endpoint, not a
+stub: `quiche::accept(&scid, None, local, from,
+&mut server_cfg)` (:556) on a real `UdpSocket::bind`
+loopback (:525), real `sock.recv_from` (:539) of a real
+client Initial, real `conn.recv` handshake (:561); client
+is real `quiche::connect` (:280) on a real socket (:273).
+LIVE-PATH TRACE (satisfies "verify cited test drives changed
+path"): test sets ONLY `.with_h3_backend(quic_pool, backend,
+TEST_SNI)` (:233) — `h2_backend` stays None (listener.rs
+:119 default). conn_actor.rs `poll_h3` (:703, called :263
+with `params.h3_backend.as_ref()` :274) → the H3→H2 branch
+needs h2_backend Some (None here) so falls through to
+`if let Some((qpool,addr,sni)) = h3_backend` (:884) → spawns
+`h3_to_h3_stream_resp(&req, addr, &sni, &qpool, brx,
+resp_tx, MAX_RESPONSE_BODY_BYTES)` (:895) — the EXACT fn
+holding the J2 gate (h3_bridge.rs:3037) the step-2 probe
+fired inside 2126×. So the LIVE J3 h3_backend branch (the
+F-S7-4-relevant changed path) IS driven, NOT a
+`h3_backend:None` dead path. Binary (non-UTF-8) request +
+response bodies (`binary_body`). PASS.
+
+§2/§3 NON-VACUOUS MEMORY both dirs: PASS (covered by F-S7-4
+step2/step3 + J4 cases 3/4/5 green ×3; gauge = the REAL
+crate statics MAX_RETAINED_{BODY,RESP}_BYTES; retained
+73728 ≪ 262656 for 4 MiB, body byte-identical; body-size-
+independent cross-ref S6 73859 / S7 73728).
+§4 BACKPRESSURE both dirs: PASS (req-dir = F-S7-4 step2
+proven genuine throttle; resp-dir = case-5 8 MiB bounded +
+byte-identical ×3).
+§5 CASE-7 SMUGGLING: PASS (h3h3_e2e_client_reset_midrequest_
+rsts_upstream_no_truncated_request green ×3 + ×coverage run).
+§6 7 CASES + cond-3: PASS (7/7 ×3 deterministic; cond-3
+flagless = 4 tests, gauge cases compiled out; 0 #[ignore]).
+§8 R3 NO-REGRESSION: PASS (lib 26/26; h3_h2 10/10; round8
+3/3; quic_router_leak 3/3; router_accept_path 3/3 — all
+green in the instrumented coverage pass too).
+§9 GATES: PASS (fmt --check clean incl test file; corrected
+clippy --all-targets --features test-gauges -D warnings
+genuinely clean via forced-recompile).
+§10 FLAKE/MECHANISM: no failures to classify across all
+deterministic reruns; no flakiness observed.
+
+## §7 INDEPENDENT CANONICAL COVERAGE: **FAIL** (BINDING)
+
+Canonical tool AVAILABLE locally — cargo-llvm-cov 0.8.7 +
+llvm-tools-x86_64 installed (llvm-profdata present); NO
+offline fallback needed. Invocation (CARGO_TARGET_DIR
+exported):
+  cargo llvm-cov -p lb-quic --features test-gauges
+    --no-fail-fast --summary-only
+J4 7/7 + all lb-quic suites ran INSTRUMENTED (h3_h3_stream
+_e2e 7 passed in the cov pass — session code genuinely
+exercised). Authoritative figures (lcov DA per-line, llvm-
+cov's own model; whole-file cross-check 78.62% vs llvm-cov
+summary 79.21% ⇒ method validated):
+
+  WHOLE FILE h3_bridge.rs : 79.21% line (llvm-cov summary;
+                            itself <80%)
+  conn_actor.rs (J3 branch host): 88.42% line — PASS
+
+  SESSION CODE (METHOD.md def — the S7 fns ONLY):
+   h3_to_h3_stream_resp [2773-3540] : 67.91% line (292/430)
+   j2_req_event_action  [3541-3557] : 87.50% line (7/8)
+   check_block_len      [3558-3608] : 100.00% line (6/6)
+   parse_frame_header   [3623-3636] : 83.33% line (10/12)
+   ── SESSION TOTAL                 : 69.08% line (315/456)
+
+69.08% ≪ the binding ≥80% METHOD.md §7 bar. Dominated by
+`h3_to_h3_stream_resp` at 67.91% — 138 uncovered lines in
+43 blocks, characterised by mechanism (sampled): they are
+predominantly UNTESTED ERROR/ABORT + PROTOCOL-EDGE arms,
+NOT dead code:
+ * upstream mid-stream transport-error recovery
+   (`Err(e)` → RespAbort::UpstreamReset on HEADERS/DATA/FIN
+   stream_send, e.g. :2927-2932, :3058-3073, :3458-3461) —
+   no J4 case injects an upstream transport fault;
+ * response TRAILERS path (:3290-3312 — `:`-pseudo-header
+   rejection, trailer-encode failure, trailer over-cap) —
+   no J4 case sends response trailers on H3→H3;
+ * `RecvState::InSkip` unknown-frame skip + check_block_len
+   over-cap aborts (:3204-3217, :3349-3359) — no J4 case
+   sends an unknown frame type / oversized block to skip.
+
+These are real fault-handling and protocol-conformance
+paths (R8/soundness-relevant), left unexercised by the
+7-case J4 suite. Per METHOD.md VERDICT RULE ("H3→H3 BUILT
+only if 1–9 all PASS … esp. the §7 independent ≥80%. Any
+FAIL ⇒ proven mechanism, escalate, NOT BUILT") this is a
+BINDING FAIL. Evidence: v2-7-coverage-summary.txt,
+v2-7-coverage.lcov.txt.
+
+## #7 VERDICT: **NOT BUILT** — §7 independent canonical
+coverage FAIL (session code 69.08% line ≪ 80%;
+h3_to_h3_stream_resp 67.91%). §1-6,8-10 all PASS; F-S7-4
+itself PASS. The cell's STREAMING/BACKPRESSURE behaviour is
+genuine and non-vacuous (proven), but the new session fn's
+error/edge arms are under-tested vs the binding bar. NOT a
+src defect (no F-S7-7) — a TEST-COVERAGE gap requiring
+added J4 adversarial cases (upstream-fault, response-
+trailers, unknown-frame-skip) to reach ≥80%. ESCALATED to
+team-lead with mechanism; H3→H3 NOT promoted.
