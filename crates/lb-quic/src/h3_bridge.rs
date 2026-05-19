@@ -75,6 +75,26 @@ const FRAME_DATA: u64 = 0x00;
 /// RFC 9114 §7.2 `HEADERS` frame type.
 const FRAME_HEADERS: u64 = 0x01;
 
+/// SESSION 7 / J2 (Q-J2, lead-ruled): the HTTP/3 application error code
+/// the H3→H3 connector puts on the **request-leg** stream when it
+/// aborts the upstream request without FIN (mid-body client RESET, or
+/// the request-body producer dropped before a clean `End`).
+///
+/// `H3_REQUEST_CANCELLED = 0x010c` (RFC 9114 §8.1: "the request or its
+/// response ... is cancelled") is the conformant code HERE because on
+/// the request leg the proxy IS the client toward the upstream: the
+/// downstream client going away genuinely cancels the request the
+/// proxy initiated upstream. This is deliberately the OPPOSITE choice
+/// from the *response* leg: [`crate::conn_actor::H3_INTERNAL_ERROR`]
+/// (`0x0102`, see `conn_actor.rs:73`) is used when the proxy
+/// (acting as *server* toward the downstream client) RESETs the
+/// client stream on an aborted response — there, a peer-cancelled
+/// (`0x010c`) code would misattribute a gateway-internal failure to
+/// the client. The two legs use different codes ON PURPOSE
+/// (proxy-as-client vs proxy-as-server); this asymmetry is correct
+/// per RFC 9114 §8.1 and must NOT be "fixed" to a false consistency.
+const H3_REQUEST_CANCELLED: u64 = 0x010c;
+
 /// SESSION 2 / P1-A FIX: hard cap on the partial frame-header bytes the
 /// body-phase parser will accumulate before BOTH the frame-type varint
 /// and the length varint decode. Two QUIC varints are at most 8 bytes
@@ -2822,31 +2842,38 @@ pub async fn h3_to_h3_roundtrip(
 /// `cap` (which stays ONLY a DoS abort threshold, identical role to
 /// [`stream_h1_response`]/[`stream_h2_response`]).
 ///
-/// # J1 scope (this increment)
+/// # Build scope (J1 recv half + J2 send half)
 ///
-/// J1 implements the orchestrator skeleton + the M-C **recv half**
-/// (response ingress) for the **bodyless-request path only**. The
-/// request **send half** (streaming request DATA frames pulled from
-/// `body_rx` with `stream_capacity` gating + mid-body-`Reset`
-/// `stream_shutdown`) is **J2**. Until J3 rewires the actor, the live
-/// H3→H3 path is still [`h3_to_h3_roundtrip`]; this fn has no caller
-/// yet, so adding it changes no behaviour.
+/// J1 added the orchestrator skeleton + the M-C **recv half**
+/// (response ingress). J2 added the M-C **request send half**: the
+/// streaming request-DATA pump (peeked-first chunk, `stream_capacity`-
+/// gated incremental DATA, mid-body abort). The J1 `Chunk`-first
+/// `inline(502)` placeholder has been **wholesale-replaced** by that
+/// streaming body path (this doc reflects the post-J2 reality — no
+/// stub remains). Until J3 rewires the actor the live H3→H3 path is
+/// still [`h3_to_h3_roundtrip`]; this fn has no caller yet, so adding
+/// it changes no behaviour.
 ///
-/// ### J1 request-event peek (`body_rx`)
-/// * `End` / channel-closed first ⇒ legitimately **bodyless** request
-///   (today's only wired case): send HEADERS + FIN, byte-identical to
-///   [`h3_to_h3_roundtrip`]'s bodyless GET — no regression.
+/// ### Request-event peek (`body_rx`)
+/// * `End` / channel-closed first ⇒ legitimately **bodyless** request:
+///   send HEADERS + FIN, byte-identical to [`h3_to_h3_roundtrip`]'s
+///   bodyless GET — no regression.
 /// * `Reset` first ⇒ pre-dial abort (oversized / cancel before any
 ///   data): inline `413`, dial NOTHING (smuggling-guard parity with
 ///   [`h3_to_h2_stream_resp`]).
-/// * `Chunk(_)` first ⇒ a streaming request body. **J1 STUB:** this
-///   path emits an inline `502` and returns `Ok(())`. It is (a)
-///   **unreachable in J1's wired path** — the only live H3→H3 caller
-///   until J3 is [`h3_to_h3_roundtrip`], which is itself bodyless, and
-///   J3 does not rewire to this fn until **after** J2 — and (b)
-///   **wholesale-replaced in J2** (the streaming request-DATA pump)
-///   *before* any J3 rewire. It is a deliberate, increment-named
-///   placeholder, NOT silent body loss and NOT stale scaffold.
+/// * `Chunk(b0)` first ⇒ a **streaming request body** (J2): `b0` is
+///   carried as the first in-hand chunk (parity with
+///   [`H3ReqStreamBody`]'s peeked `first`); subsequent
+///   [`ReqBodyEvent`]s are pulled one-at-a-time at the loop's single
+///   park point, each forwarded as ONE bounded H3 DATA frame only
+///   while `stream_capacity` has room. `End` ⇒ a QUIC stream FIN
+///   (request trailers DROPPED — parity H3→H1 P1-C / H3→H2 A3; the
+///   body is fully framed by the FIN, a lossless RFC-acceptable
+///   downgrade, NOT silent loss). Mid-body `Reset` / producer dropped
+///   before `End` ⇒ NO FIN +
+///   `stream_shutdown(Write, H3_REQUEST_CANCELLED)` + non-reusable
+///   (BINDING case-7: the upstream never sees a truncated-as-complete
+///   request).
 ///
 /// ### M-C recv half (the R8 core — replaces `decoded_body`)
 /// Drives the pooled `quiche::Connection` send/recv/timeout loop (the
@@ -2879,8 +2906,9 @@ pub async fn h3_to_h3_roundtrip(
 /// window closes.
 ///
 /// On EVERY return path the pooled upstream conn is marked
-/// non-reusable (parity with [`h3_to_h3_roundtrip`]; pooling
-/// efficiency is explicitly out of R8 scope this increment).
+/// non-reusable (parity with [`h3_to_h3_roundtrip`]; one request per
+/// pooled upstream conn — pooling efficiency is explicitly out of R8
+/// scope, S-2).
 ///
 /// # Errors
 ///
@@ -2922,10 +2950,18 @@ pub async fn h3_to_h3_stream_resp(
     // --- peek the FIRST request body event (bounded — one event) to
     // choose the request shape, exactly as `h3_to_h2_stream_resp` /
     // `write_h1_request` do. ---
+    //
+    // SESSION 7 / J2: the J1 `Chunk(_) ⇒ inline(502)` stub is REPLACED
+    // here (before any J3 rewire) by a streaming request body. The
+    // peeked first chunk is carried as the first in-hand bytes, exactly
+    // like `H3ReqStreamBody { first: Some(b0), .. }` (h3_bridge.rs:2298)
+    // / `write_h1_request`'s peeked-first discipline.
+    let mut req_streaming: bool = false;
+    let mut first_chunk: Option<Bytes> = None;
     match body_rx.recv().await {
         None | Some(ReqBodyEvent::End { .. }) => {
-            // Bodyless request (today's only wired case): fall through
-            // to the HEADERS + FIN path below.
+            // Bodyless request (today's only wired case): HEADERS+FIN
+            // below — content-length-0 semantics, NOT a dropped body.
         }
         Some(ReqBodyEvent::Reset) => {
             // Pre-dial abort (oversized / cancelled before any data):
@@ -2934,16 +2970,12 @@ pub async fn h3_to_h3_stream_resp(
             inline(&resp_tx, 413, b"payload too large").await;
             return Ok(());
         }
-        Some(ReqBodyEvent::Chunk(_)) => {
-            // J1 STUB — streaming request body. Wired in **J2** (the
-            // `stream_capacity`-gated request-DATA pump) BEFORE the J3
-            // actor rewire, so this branch is unreachable on the live
-            // path until it is replaced. NOT silent body loss, NOT
-            // stale scaffold: an explicit increment-named placeholder
-            // emitting a deterministic 502 so a J1-only build cannot
-            // forward a truncated request.
-            inline(&resp_tx, 502, b"bad gateway").await;
-            return Ok(());
+        Some(ReqBodyEvent::Chunk(b0)) => {
+            // Streaming request body: carry `b0` as the first in-hand
+            // chunk; subsequent events are pulled one-at-a-time from
+            // `body_rx` inside the event loop's single park point.
+            req_streaming = true;
+            first_chunk = Some(b0);
         }
     }
 
@@ -2999,11 +3031,19 @@ pub async fn h3_to_h3_stream_resp(
         }
     };
 
-    // Send HEADERS + FIN (bodyless request).
+    // Send the HEADERS frame. FIN here ONLY for a bodyless request
+    // (byte-identical to `h3_to_h3_roundtrip`'s bodyless GET — no
+    // regression); when a streaming body follows, HEADERS is sent
+    // WITHOUT FIN and the request stream is FIN-terminated later by
+    // `stream_send(.., fin=true)` on the request-DATA pump (J2-G2:
+    // a QUIC stream FIN, NOT a synthetic zero-length DATA frame —
+    // matching `request_h3_upstream` / `H3ReqStreamBody`).
+    let headers_fin = !req_streaming;
     let mut frame_pos = 0usize;
     while frame_pos < frame.len() {
         let chunk = frame.get(frame_pos..).unwrap_or(&[]);
-        let fin = frame_pos + chunk.len() >= frame.len();
+        let last = frame_pos + chunk.len() >= frame.len();
+        let fin = headers_fin && last;
         match qconn_mut.stream_send(stream_id, chunk, fin) {
             Ok(n) => {
                 if n == 0 {
@@ -3067,7 +3107,95 @@ pub async fn h3_to_h3_stream_resp(
     // once and never FINs a partial response.
     let mut outcome: Result<(), RespAbort> = Ok(());
 
+    // --- SESSION 7 / J2: M-C request/send half ---
+    //
+    // The request-DATA pump holds AT MOST ONE in-flight `ReqBodyEvent`
+    // worth of bytes (the encoded DATA frame for one ≤`H3_BODY_CHUNK_MAX`
+    // chunk). The REAL memory bound is the depth-8 `body_rx`
+    // (`H3_BODY_CHANNEL_DEPTH`) filled by the unchanged M-A pump —
+    // request-body-size INDEPENDENT, NO accumulation, NO `.collect()`,
+    // NO total-body cap as a memory bound (the cumulative cap stays a
+    // DoS abort only, same role as the response side).
+    enum ReqSend {
+        /// Encoded DATA frame for one chunk; `sent` bytes already
+        /// written to the stream (partial `stream_send` retries).
+        InHand { frame: Bytes, sent: usize },
+        /// Previous chunk fully sent; pull the next `ReqBodyEvent`.
+        AwaitNext,
+        /// Clean end-of-request: a QUIC stream FIN has been written
+        /// (J2-G2). Nothing more to send.
+        Ended,
+    }
+    // Bodyless requests already FIN'd the stream with HEADERS above.
+    let mut req_send = if req_streaming {
+        match first_chunk.take() {
+            Some(b0) => match encode_h3_data_frame(&b0) {
+                Ok(frame) => ReqSend::InHand { frame, sent: 0 },
+                Err(_) => {
+                    // Encoding our own DATA frame failed ⇒ we cannot
+                    // forward a faithful request. Abort WITHOUT FIN
+                    // (case-7: never a truncated-as-complete request).
+                    let _ = qconn_mut.stream_shutdown(
+                        stream_id,
+                        quiche::Shutdown::Write,
+                        H3_REQUEST_CANCELLED,
+                    );
+                    pooled.set_reusable(false);
+                    let _ = resp_tx.send(RespEvent::Reset).await;
+                    return Err(RespAbort::UpstreamReset);
+                }
+            },
+            None => ReqSend::AwaitNext,
+        }
+    } else {
+        ReqSend::Ended
+    };
+
     'evloop: while tokio::time::Instant::now() < deadline {
+        // --- SESSION 7 / J2: request-DATA egress, flow-control-gated.
+        // Write the in-hand DATA frame ONLY while the upstream send
+        // window has room (`stream_capacity` > 0). When it is closed
+        // the chunk stays in hand and we do NOT pull `body_rx`, so the
+        // depth-8 channel fills and the unchanged M-A pump pauses the
+        // downstream client's request upload (request-direction
+        // backpressure, native quiche — no hyper).
+        if let ReqSend::InHand { frame, sent } = &mut req_send {
+            match qconn_mut.stream_capacity(stream_id) {
+                Ok(cap_avail) if cap_avail > 0 => {
+                    let rest = frame.get(*sent..).unwrap_or(&[]);
+                    match qconn_mut.stream_send(stream_id, rest, false) {
+                        Ok(n) => {
+                            *sent = sent.saturating_add(n);
+                            if *sent >= frame.len() {
+                                // Chunk fully sent ⇒ pull the next
+                                // event at the single park point.
+                                req_send = ReqSend::AwaitNext;
+                            }
+                        }
+                        Err(quiche::Error::Done) => {
+                            // Window closed between the capacity check
+                            // and the write — retain in hand, retry.
+                        }
+                        Err(e) => {
+                            tracing::warn!(error = %e, "H3→H3 stream request DATA stream_send");
+                            // Upstream send failed mid-request: abort
+                            // WITHOUT FIN (case-7 — never a truncated-
+                            // as-complete request).
+                            let _ = qconn_mut.stream_shutdown(
+                                stream_id,
+                                quiche::Shutdown::Write,
+                                H3_REQUEST_CANCELLED,
+                            );
+                            outcome = Err(RespAbort::UpstreamReset);
+                            break 'evloop;
+                        }
+                    }
+                }
+                Ok(_) => { /* window closed — keep in hand, no pull */ }
+                Err(_) => { /* stream gone — recv side will surface it */ }
+            }
+        }
+
         // Flush egress.
         while let Ok((n, info)) = qconn_mut.send(&mut out_buf) {
             let bytes = out_buf.get(..n).unwrap_or(&[]);
@@ -3343,24 +3471,98 @@ pub async fn h3_to_h3_stream_resp(
             break 'evloop;
         }
 
+        // --- SESSION 7 / J2-G1: the SINGLE park point. ONE await that
+        // simultaneously waits on {upstream socket readable | next
+        // request-body event (ONLY while `AwaitNext`) | quiche
+        // timeout}. The task SLEEPS here whenever nothing is ready —
+        // there is NO bare `try_recv` hot-poll anywhere in the loop,
+        // so an empty `body_rx` PARKS (which is exactly what the
+        // request-direction backpressure chain requires) instead of
+        // burning a core. When not `AwaitNext` the `body_rx` arm is
+        // disabled (`if` guard) so a peeked-but-unsent chunk does not
+        // race ahead of the in-hand one.
         let timeout = qconn_mut
             .timeout()
             .unwrap_or(std::time::Duration::from_millis(50));
-        match tokio::time::timeout(timeout, socket_clone.recv_from(&mut in_buf)).await {
-            Ok(Ok((n, from))) => {
-                let slice = in_buf.get_mut(..n).unwrap_or(&mut []);
-                let info = quiche::RecvInfo { from, to: local };
-                match qconn_mut.recv(slice, info) {
-                    Ok(_) | Err(quiche::Error::Done) => {}
-                    Err(e) => {
-                        tracing::warn!(error = %e, "H3→H3 stream upstream recv");
+        let want_next = matches!(req_send, ReqSend::AwaitNext);
+        tokio::select! {
+            biased;
+            // (a) inbound UDP from the upstream (response progress +
+            //     flow-control credit).
+            r = tokio::time::timeout(timeout, socket_clone.recv_from(&mut in_buf)) => {
+                match r {
+                    Ok(Ok((n, from))) => {
+                        let slice = in_buf.get_mut(..n).unwrap_or(&mut []);
+                        let info = quiche::RecvInfo { from, to: local };
+                        match qconn_mut.recv(slice, info) {
+                            Ok(_) | Err(quiche::Error::Done) => {}
+                            Err(e) => {
+                                tracing::warn!(error = %e, "H3→H3 stream upstream recv");
+                                outcome = Err(RespAbort::UpstreamReset);
+                                break 'evloop;
+                            }
+                        }
+                    }
+                    Ok(Err(_)) | Err(_) => {
+                        qconn_mut.on_timeout();
+                    }
+                }
+            }
+            // (b) the next request-body event — armed ONLY when the
+            //     previous chunk is fully sent (`AwaitNext`). The
+            //     event→action decision is the module-level
+            //     `j2_req_event_action` (the SAME code the
+            //     `s7_j2_request_send_decision` unit test exercises).
+            ev = body_rx.recv(), if want_next => {
+                match j2_req_event_action(ev) {
+                    J2ReqAction::SendData(frame) => {
+                        // `frame` is one encoded H3 DATA frame for a
+                        // ≤`H3_BODY_CHUNK_MAX` chunk — the only
+                        // retained request bytes.
+                        req_send = ReqSend::InHand { frame, sent: 0 };
+                    }
+                    J2ReqAction::FinNoTrailers => {
+                        // Clean end-of-request. J2-G2: terminate via a
+                        // QUIC stream FIN (empty final write, fin=true)
+                        // — byte-identical to how `request_h3_upstream`
+                        // / `H3ReqStreamBody` end the request stream;
+                        // NOT a synthetic zero-length H3 DATA frame.
+                        // Request trailers are DROPPED on the H3→H3 leg
+                        // (parity with H3→H1 P1-C / H3→H2 lead A3 /
+                        // `H3ReqStreamBody`:2200): the body is fully +
+                        // correctly framed by the FIN — a lossless
+                        // RFC-acceptable downgrade, NOT silent loss
+                        // (explicitly reported as a scoped-out item).
+                        match qconn_mut.stream_send(stream_id, &[], true) {
+                            Ok(_) | Err(quiche::Error::Done) => {}
+                            Err(e) => {
+                                tracing::warn!(error = %e, "H3→H3 stream request FIN");
+                                outcome = Err(RespAbort::UpstreamReset);
+                                break 'evloop;
+                            }
+                        }
+                        req_send = ReqSend::Ended;
+                    }
+                    J2ReqAction::AbortNoFin => {
+                        // Mid-body client RESET, the request-body
+                        // producer dropped before a clean `End`, or
+                        // our own DATA-frame encode failed. The
+                        // upstream must NEVER see a completable
+                        // (truncated-as-complete) request — BINDING
+                        // case-7, the analogue of `H3ReqStreamBody`'s
+                        // `Err(H3ReqAbort)` (h3_bridge.rs:2207-2217).
+                        // Send NO FIN; RESET the request stream with
+                        // `H3_REQUEST_CANCELLED` (Q-J2 / RFC 9114
+                        // §8.1) and fail the exchange.
+                        let _ = qconn_mut.stream_shutdown(
+                            stream_id,
+                            quiche::Shutdown::Write,
+                            H3_REQUEST_CANCELLED,
+                        );
                         outcome = Err(RespAbort::UpstreamReset);
                         break 'evloop;
                     }
                 }
-            }
-            Ok(Err(_)) | Err(_) => {
-                qconn_mut.on_timeout();
             }
         }
         let _ = peer; // silence unused binding when logging disabled
@@ -3387,6 +3589,44 @@ pub async fn h3_to_h3_stream_resp(
     // recv/loop-error paths too. NEVER End (response-splitting guard).
     let _ = resp_tx.send(RespEvent::Reset).await;
     outcome
+}
+
+/// SESSION 7 / J2: the request-send action the H3→H3 connector takes
+/// for the next `ReqBodyEvent` pulled at its single park point. The
+/// classification is factored out (module-level, like J1's
+/// [`check_block_len`]) so the binding decision is exercised by the
+/// `s7_j2_request_send_decision` pure unit test against the REAL code
+/// — not a test-only re-statement.
+#[derive(Debug, PartialEq, Eq)]
+enum J2ReqAction {
+    /// `Chunk` ⇒ forward as one bounded H3 DATA frame (the encoded
+    /// frame bytes; the ONLY retained request bytes).
+    SendData(Bytes),
+    /// `End` ⇒ clean end-of-request: terminate the upstream request
+    /// stream with a QUIC stream FIN (J2-G2), request trailers
+    /// DROPPED on the H3→H3 leg (parity H3→H1 P1-C / H3→H2 A3).
+    FinNoTrailers,
+    /// `Reset` / channel-closed-before-`End` ⇒ mid-body abort: NO
+    /// FIN, `stream_shutdown(Write, H3_REQUEST_CANCELLED)` (case-7
+    /// request-smuggling parity).
+    AbortNoFin,
+}
+
+/// SESSION 7 / J2: classify the next request-body event into its
+/// send action. `None` models a closed `body_rx` (producer dropped
+/// before a clean `End`) — treated identically to a mid-body `Reset`
+/// (never a truncated-as-complete request). `Err` from
+/// [`encode_h3_data_frame`] maps to `AbortNoFin` (we cannot forward a
+/// faithful request, so we MUST NOT FIN it).
+fn j2_req_event_action(ev: Option<ReqBodyEvent>) -> J2ReqAction {
+    match ev {
+        Some(ReqBodyEvent::Chunk(b)) => match encode_h3_data_frame(&b) {
+            Ok(frame) => J2ReqAction::SendData(frame),
+            Err(_) => J2ReqAction::AbortNoFin,
+        },
+        Some(ReqBodyEvent::End { trailers: _ }) => J2ReqAction::FinNoTrailers,
+        Some(ReqBodyEvent::Reset) | None => J2ReqAction::AbortNoFin,
+    }
 }
 
 /// SESSION 7 / J1 (G1 DoS parity): reject a declared NON-DATA frame
@@ -4266,5 +4506,66 @@ mod tests {
             Err(RespAbort::BadHead)
         );
         assert_eq!(check_block_len(DEFAULT_MAX_PAYLOAD_SIZE), Ok(()));
+    }
+
+    /// SESSION 7 / J2 (H3→H3 R8) pure unit proof: the M-C request
+    /// send-half decision table — the analogue of the H3→H2 I2 test
+    /// `s6_i2_h3_req_stream_body_frame_and_abort_contract`. Exercises
+    /// the REAL module-level `j2_req_event_action` (the same fn the
+    /// event-loop park arm calls), no socket.
+    #[test]
+    fn s7_j2_request_send_decision() {
+        // (a) Chunk ⇒ forward as ONE byte-identical H3 DATA frame.
+        //     The action's frame bytes decode back to the exact
+        //     original payload (no corruption, no accumulation).
+        let payload = vec![0x5Au8; H3_BODY_CHUNK_MAX]; // non-trivial, max-size
+        let act = j2_req_event_action(Some(ReqBodyEvent::Chunk(Bytes::from(payload.clone()))));
+        match act {
+            J2ReqAction::SendData(frame) => {
+                // Byte-identical to a fresh encode_h3_data_frame...
+                assert_eq!(frame, encode_h3_data_frame(&payload).unwrap());
+                // ...and round-trips to the original bytes.
+                let (dec, _c) = decode_frame(&frame, 1 << 20).unwrap();
+                match dec {
+                    H3Frame::Data { payload: p } => assert_eq!(p.as_ref(), &payload[..]),
+                    _ => panic!("expected DATA"),
+                }
+            }
+            other => panic!("Chunk ⇒ SendData, got {other:?}"),
+        }
+        // An empty chunk still classifies as SendData (a zero-length
+        // DATA frame is well-formed; never reclassified as End).
+        assert!(matches!(
+            j2_req_event_action(Some(ReqBodyEvent::Chunk(Bytes::new()))),
+            J2ReqAction::SendData(_)
+        ));
+
+        // (b) End ⇒ FIN-terminate, request trailers DROPPED (the
+        //     action carries NO trailer payload — parity H3→H1 P1-C /
+        //     H3→H2 A3; the body is framed by the QUIC FIN, J2-G2).
+        assert_eq!(
+            j2_req_event_action(Some(ReqBodyEvent::End {
+                trailers: vec![("x-trailer".into(), "v".into())],
+            })),
+            J2ReqAction::FinNoTrailers,
+            "End ⇒ FIN; trailers are not forwarded on the H3→H3 leg"
+        );
+
+        // (c) mid-body Reset ⇒ abort WITHOUT FIN (BINDING case-7:
+        //     never a truncated-as-complete request upstream).
+        assert_eq!(
+            j2_req_event_action(Some(ReqBodyEvent::Reset)),
+            J2ReqAction::AbortNoFin,
+            "mid-body Reset MUST abort the upstream request with NO FIN"
+        );
+
+        // (d) channel closed before End (producer dropped mid-body) ⇒
+        //     abort WITHOUT FIN — identical to a mid-body Reset, never
+        //     a silently-truncated request presented as complete.
+        assert_eq!(
+            j2_req_event_action(None),
+            J2ReqAction::AbortNoFin,
+            "premature channel close MUST abort with NO FIN (truncation guard)"
+        );
     }
 }
