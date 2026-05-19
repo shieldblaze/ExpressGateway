@@ -883,4 +883,66 @@ quiche-timeout-bounded select park, NOT busy-spinning; no
 core pegged during case-4's stall (load nominal during runs).
 CONFIRMED: no busy-spin.
 
-(steps 3-4 + #7 follow — lead adjudicated step-2 PASS)
+## STEP 3 — BOUND UNDER GENUINE BACKPRESSURE: PASS
+
+With the throttle proven engaged (step 2: capacity floored
+41–111 B ≪ 8192 B chunk, partial-write dribbles), case-4's
+`MAX_RETAINED_BODY_BYTES` was measured at 73728 B for a 4 MiB
+(4 194 304 B) request body — well under the authoritative
+ceiling 262656 B (the test itself asserts
+`assert_eq!(ceiling, 262_656)` from the crate-const formula
+4×(H3_BODY_CHANNEL_DEPTH=8 × (H3_BODY_CHUNK_MAX=8192 +
+MAX_FRAME_HEADER_BYTES=16))). ~74 KB-class ceiling holds
+(73728 ≤ 262656; 28% of ceiling, 1.76% of body). BODY-SIZE-
+INDEPENDENT: corroborated by the cross-ref above (S6 H3→H2
+73859 @4 MiB; S7 H3→H3 73728 @4 MiB; S6 case-5 @8 MiB still
+≤262656) — fixed in-flight-window class, NOT ∝ body. The
+`retained <= ceiling` + `retained > 0` assertions pass
+non-vacuously across all 3 deterministic J4 reruns below.
+It does NOT exceed the ceiling ⇒ NOT a new finding (no
+F-S7-7). STEP 3: PASS.
+
+## STEP 4 — GENUINE J4 7/7 + GATE SUITES: PASS
+
+J4 genuine, NON-VACUOUS (step-2 proved case-4's gate
+genuinely throttles), DEFAULT PARALLEL runner
+(`cargo test -p lb-quic --features test-gauges --test
+h3_h3_stream_e2e`, NO --test-threads), source-of-record
+byte-identical (sha1 h3_bridge 61a17ef8, conn_actor
+393e3894, test c1099114 — re-verified pre-run):
+ * RUN 1: 7 passed; 0 failed; 0 ignored (11.02 s)
+ * RUN 2: 7 passed; 0 failed; 0 ignored (10.94 s)
+ * RUN 3: 7 passed; 0 failed; 0 ignored (10.78 s)
+ DETERMINISTIC ×3. All 7 cases ran genuine (incl case-4
+ gate-firing per step 2; case-7 client-RESET guard).
+Gates:
+ * `cargo fmt -p lb-quic -- --check` CLEAN (exit 0, no
+   diff — incl tests/h3_h3_stream_e2e.rs; F-S7-5 closed).
+ * `cargo clippy -p lb-quic --all-targets --features
+   test-gauges -- -D warnings` CLEAN — verified GENUINE
+   (forced recompile via content-cachebust, rc=0, zero
+   warning/error; src restored byte-identical sha1
+   61a17ef8 == baseline). Corrected scope (F-S7-1 lesson,
+   --all-targets not --lib).
+ * `cargo test -p lb-quic --lib` 26/26, 0 ignored.
+ * `--test h3_h2_stream_e2e --features test-gauges` 10/10,
+   0 ignored (H2 leg / H3→H2 cell intact — R3).
+ * `--test round8_h3_authority_enforced` 3/3, 0 ignored.
+ * COND-3 (flagless): `cargo test -p lb-quic --test
+   h3_h3_stream_e2e` (NO test-gauges) runs exactly 4 tests
+   — the 3 `#[cfg(feature="test-gauges")]` gauge cases
+   (case-3/4/5 memory+backpressure) are COMPILED OUT, not
+   #[ignore]'d; strictly fewer (4 < 7); the memory proofs
+   genuinely require the flag and are non-vacuously present
+   under it. NO `#[ignore]` anywhere in either config.
+STEP 4: PASS.
+
+F-S7-4 VERDICT: PASS — G1 scope clean (step1); non-vacuity
+LEAD-ADJUDICATED PASS on the proven substantive criterion
+(step2, NOT F-S7-7); bound-under-genuine-backpressure
+73728 ≤ 262656 body-size-independent (step3); genuine J4
+7/7 ×3 deterministic + all gate suites + cond-3 clean
+(step4). F-S7-4 is the last blocker cleared ⇒ H3→H3 cell
+eligible for #7 full-cell verification.
+
+(#7 full-cell follows)
