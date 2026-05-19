@@ -67,7 +67,7 @@ lb-observability = { path = "../lb-observability" }
 tokio-rustls = { workspace = true }
 rustls = { workspace = true }
 rustls-pki-types = { workspace = true }
-rcgen = { version = "0.13", features = ["pem"] }
+rcgen = { version = "0.14", features = ["pem"] }
 # ROUND8-OPS-06: the traceparent-propagation proof installs a custom
 # `tracing_subscriber` layer that snapshots emitted span fields so the
 # test can assert the request span carries the inbound `trace_id`.
