@@ -811,4 +811,76 @@ ambiguity that the verifier must not resolve unilaterally.
 F-S7-4 step-2 verdict: ESCALATED. #7 NOT entered pending
 lead adjudication (F-S7-4 FAIL/ambiguous ⇒ stop, no #7).
 
-(steps 3-4 + #7 follow IFF lead adjudicates step-2 PASS)
+## STEP 2 — LEAD ADJUDICATION (2026-05-19) + SUBSTANTIVE PASS
+
+Escalation resolved by team-lead. RULING (recorded verbatim
+in substance): NON-VACUITY = **PASS BY PROVEN MECHANISM**.
+The literal `stream_capacity()==0` token in the original
+step-2 charter was a PROXY for the real binding property, and
+an over-literal one: quiche replenishes flow-control credit
+incrementally, so an exact-zero floor is NOT how its flow
+control manifests — the over-literal token was a charter
+wording error, NOT a code defect. NOT F-S7-7: the
+`Ok(cap_avail) if cap_avail > 0` partial-write path IS
+correct, R8-sound QUIC flow-control backpressure (a partial
+`stream_send` under a shrunk window is precisely how
+backpressure should present); NO src finding opened.
+
+SUBSTANTIVE (binding) non-vacuity criterion — POSITIVELY
+PROVEN by verifier2 mechanism evidence:
+ (i) THROTTLE ENGAGES: under the genuine F-S7-4 stall the
+     request-stream flow-control window is driven to ≪ one
+     chunk — measured 41–111 B vs the 8192 B H3_BODY_CHUNK_MAX
+     (floor 111 B recurred 15×, also 41, 138; 0/2126 literal
+     `Ok(0)`). The J2 pump is genuinely throttled into
+     partial-writes with the chunk held in-hand. CONTRAST the
+     prior VACUOUS harness (pre-F-S7-4): capacity stayed large
+     and the pump never throttled (the still-vacuous 7/7 the
+     #17/F-S7-6 verdict flagged).
+ (ii) MEMORY BOUNDED + BODY-SIZE-INDEPENDENT: max
+     MAX_RETAINED_BODY_BYTES = 73728 B = 1.76% of the 4 MiB
+     request body, 28% of ceiling 262656; request body
+     byte-identical at the genuine upstream. WOULD-CATCH-
+     UNBOUNDED contrast: a whole-body-buffering impl would
+     retain ~4 MiB (4 194 304 B) ≫ 262656 ceiling ⇒ the
+     `retained <= ceiling` assertion is load-bearing and
+     WOULD fail under an unbounded regression (not vacuous).
+
+Both (i)+(ii) hold ⇒ genuine non-vacuous R8 request-side
+backpressure + bounded memory. **F-S7-4 step-2: PASS** (on
+the substantive criterion, lead-adjudicated — auditable, not
+a silent goalpost move).
+
+### BODY-SIZE-INDEPENDENCE CROSS-REF (R8 crux: fixed window, NOT ∝ body)
+Independent prior-evidence corroboration that the ~74 KB-class
+retention is INVARIANT across body size AND direction:
+ * S6 H3→H2 (independent prior verifier, audit/h-matrix/
+   s6-evidence/h3h2-verify/VERDICT.md:48-49,131): inverted
+   probe FAILED for the expected mechanism — `retained 73859`
+   for a 4 MiB body (~57× under the 262656 ceiling).
+ * S7 H3→H3 case-4 (this audit): `retained 73728` for a 4 MiB
+   body — SAME ~73.7–73.9 KB class, different direction.
+ * S6 VERDICT also records case-5 at an 8 MiB body (≥16×
+   ceiling) staying ≤ 262656 — i.e. doubling the body did NOT
+   double retention.
+CONCLUSION: retention is a FIXED in-flight-window class
+(~74 KB), invariant across 4 MiB↔8 MiB bodies and across
+H3→H2↔H3→H3 — NOT proportional to body size. Cross-ref holds
+under independent check; no papering required.
+
+### NO-BUSY-SPIN CONFIRMATION (residual-risk closure)
+2126 J2 gate-checks over a ~10.9 s test (1.5 s stall window)
+= ~195/s averaged, ≤~1417/s even if all concentrated in the
+stall. A busy-spin would be O(1e5–1e6)/s and peg a core; the
+observed rate is timer/ACK-paced. MECHANISM (code-proven,
+h3_bridge.rs:3387-3413, "J2-G1: the SINGLE park point"): the
+loop's sole `.await` is `tokio::select!` whose arm (a) is
+`tokio::time::timeout(qconn_mut.timeout(), socket_clone
+.recv_from(..))` and arm (b) `body_rx.recv()` is gated
+`if want_next` — an empty `body_rx` PARKS; there is NO bare
+`try_recv` hot-poll. The ~111 B-dribble path is paced by the
+quiche-timeout-bounded select park, NOT busy-spinning; no
+core pegged during case-4's stall (load nominal during runs).
+CONFIRMED: no busy-spin.
+
+(steps 3-4 + #7 follow — lead adjudicated step-2 PASS)
