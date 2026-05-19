@@ -3039,12 +3039,35 @@ pub async fn h3_to_h3_stream_resp(
                             upstream_fin = true;
                         }
                     }
-                    Err(quiche::Error::Done) => break,
-                    Err(e) => {
-                        tracing::warn!(error = %e, "H3→H3 stream upstream stream_recv");
-                        outcome = Err(RespAbort::UpstreamReset);
-                        break 'evloop;
-                    }
+                    Err(e) => match classify_recv_err(&e) {
+                        // No data this tick — stop the INNER read loop
+                        // only (unchanged J1 behaviour).
+                        RecvErrClass::Done => break,
+                        // Benign: quiche collected the stream because
+                        // it cleanly completed (or a non-fault stream
+                        // condition). Stop reading THIS stream; do NOT
+                        // abort. The already-captured `upstream_fin` +
+                        // `rx_tail` flow to the unchanged parse loop +
+                        // `if upstream_fin` completion block, which
+                        // relays the REAL status/headers/body then
+                        // `End`. The no-FIN corner stays guarded by
+                        // the post-loop `PrematureEof` path. Mirrors
+                        // `request_h3_upstream`'s `while let Ok(..)`.
+                        RecvErrClass::BenignCollected => break,
+                        // Genuine upstream fault (peer RESET_STREAM /
+                        // final-size violation): abort. The actor
+                        // RESET_STREAMs the client and NEVER emits
+                        // `End` on a partial (response-splitting /
+                        // smuggling guard — J1 cond-4 / J4 case-6).
+                        RecvErrClass::GenuineReset => {
+                            tracing::warn!(
+                                error = %e,
+                                "H3→H3 stream upstream stream_recv (genuine reset)"
+                            );
+                            outcome = Err(RespAbort::UpstreamReset);
+                            break 'evloop;
+                        }
+                    },
                 }
             }
         }
@@ -3459,6 +3482,58 @@ fn check_block_len(len: usize) -> Result<(), RespAbort> {
         return Err(RespAbort::BadHead);
     }
     Ok(())
+}
+
+/// SESSION 7 / F-S7-2 (J5-FIX): classification of a `stream_recv`
+/// error on the upstream response stream. Factored module-level (like
+/// [`j2_req_event_action`] / [`check_block_len`]) so the production
+/// recv arm acts on EXACTLY the decision the pure
+/// `s7_j5_recv_stream_err_classification` test exercises — no
+/// behavioural logic outside the tested fn (J5-G2).
+#[derive(Debug, PartialEq, Eq)]
+enum RecvErrClass {
+    /// `quiche::Error::Done` — no data to read this tick; break the
+    /// INNER read loop only (unchanged J1 behaviour).
+    Done,
+    /// A genuine upstream fault: peer `RESET_STREAM`
+    /// (`StreamReset`) or a final-size protocol violation
+    /// (`FinalSize`). ⇒ `Err(RespAbort::UpstreamReset)` + abort the
+    /// event loop; the actor RESET_STREAMs the client and NEVER emits
+    /// `End` on a partial (response-splitting / smuggling guard —
+    /// J1 cond-4 / J4 case-6 must NOT regress). Provably cannot
+    /// co-occur with `upstream_fin == true`: once the FIN is cleanly
+    /// delivered the stream is complete & collected, so a later recv
+    /// is `InvalidStreamState`, not these.
+    GenuineReset,
+    /// Every OTHER non-`Done` error — notably
+    /// `InvalidStreamState` (quiche collected the stream because it
+    /// cleanly completed: request FIN + upstream response FIN ⇒
+    /// `Stream::is_complete`), also `StreamStopped`, `StreamLimit`,
+    /// etc. ⇒ stop reading THIS stream only; do NOT abort. Control
+    /// falls through to the UNCHANGED parse loop + the `if
+    /// upstream_fin` completion block (which relays the ALREADY-
+    /// captured real status/headers/body then `End`), and the
+    /// post-loop `PrematureEof` path still guards the no-FIN corner.
+    /// Mirrors the proven sibling [`request_h3_upstream`]'s
+    /// `while let Ok(..)` discipline (any err just stops the read;
+    /// completion is keyed off the POSITIVE fin signal, never the
+    /// error).
+    BenignCollected,
+}
+
+/// SESSION 7 / F-S7-2 (J5-FIX): see [`RecvErrClass`]. Per lead
+/// open-point ruling, BOTH `StreamReset(_)` and `FinalSize` are
+/// genuine upstream faults; all other non-`Done` errors are benign
+/// (rely on the positive `upstream_fin` completion gate). Variant
+/// identifiers/arities verified against quiche 0.28.0 `error.rs`
+/// (`StreamReset(u64)`, `FinalSize` unit, `Done` unit,
+/// `InvalidStreamState(u64)`) — J5-G1.
+fn classify_recv_err(e: &quiche::Error) -> RecvErrClass {
+    match e {
+        quiche::Error::Done => RecvErrClass::Done,
+        quiche::Error::StreamReset(_) | quiche::Error::FinalSize => RecvErrClass::GenuineReset,
+        _ => RecvErrClass::BenignCollected,
+    }
 }
 
 /// SESSION 7 / J1: decode an H3 frame header (frame-type varint +
@@ -4391,6 +4466,57 @@ mod tests {
             j2_req_event_action(None),
             J2ReqAction::AbortNoFin,
             "premature channel close MUST abort with NO FIN (truncation guard)"
+        );
+    }
+
+    /// SESSION 7 / F-S7-2 (J5-FIX) pure proof: the upstream
+    /// `stream_recv` error classifier — the REAL `classify_recv_err`
+    /// the production recv arm calls (J5-G2). This is the binding
+    /// decision F-S7-2 turned on: `InvalidStreamState` (stream
+    /// cleanly completed & collected) must be BENIGN (so the captured
+    /// real 200+body is relayed), while a genuine peer
+    /// `RESET_STREAM` / final-size violation must stay GENUINE-RESET
+    /// (so the response-splitting / smuggling guard does NOT regress —
+    /// J4 case-6/7).
+    #[test]
+    fn s7_j5_recv_stream_err_classification() {
+        // Done ⇒ Done (break the inner read loop only; unchanged).
+        assert_eq!(classify_recv_err(&quiche::Error::Done), RecvErrClass::Done);
+
+        // The F-S7-2 root cause: a cleanly-finished local bidi stream
+        // is COLLECTED by quiche, so a later stream_recv yields
+        // InvalidStreamState. This MUST be benign — NOT an upstream
+        // reset — so the already-captured real response + FIN is
+        // relayed by the unchanged `if upstream_fin` path.
+        assert_eq!(
+            classify_recv_err(&quiche::Error::InvalidStreamState(0)),
+            RecvErrClass::BenignCollected,
+            "stream-collected-after-complete MUST be benign (this is F-S7-2)"
+        );
+
+        // Genuine upstream faults ⇒ GenuineReset (⇒ UpstreamReset,
+        // never End-on-partial — guard MUST NOT regress).
+        assert_eq!(
+            classify_recv_err(&quiche::Error::StreamReset(0x010c)),
+            RecvErrClass::GenuineReset,
+            "peer RESET_STREAM is a genuine upstream fault"
+        );
+        assert_eq!(
+            classify_recv_err(&quiche::Error::FinalSize),
+            RecvErrClass::GenuineReset,
+            "final-size violation is a genuine upstream protocol fault (lead ruling)"
+        );
+
+        // Every OTHER non-Done error is benign (rely on the positive
+        // upstream_fin gate; mirrors request_h3_upstream which does
+        // not special-case at all).
+        assert_eq!(
+            classify_recv_err(&quiche::Error::StreamStopped(0)),
+            RecvErrClass::BenignCollected
+        );
+        assert_eq!(
+            classify_recv_err(&quiche::Error::StreamLimit),
+            RecvErrClass::BenignCollected
         );
     }
 }
