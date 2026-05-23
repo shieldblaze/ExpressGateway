@@ -1309,7 +1309,32 @@ impl H2Proxy {
         req: StrippedRequest<IncomingBody>,
     ) -> Result<Response<IncomingBody>, ProxyErr> {
         let req = req.into_inner();
-        let (parts, mut body) = req.into_parts();
+        let (mut parts, mut body) = req.into_parts();
+
+        // F-MD-1 (S8 remediation) — the inbound request `parts` were minted
+        // from an HTTP/2 stream, so `parts.version == HTTP/2.0` and the header
+        // map may carry the inbound framing headers (`content-length`,
+        // `transfer-encoding`). This request is about to be handed to the
+        // in-crate hyper HTTP/1.1 client. hyper's http1 encoder, when it sees
+        // an HTTP/2-versioned request OR a stale `content-length` alongside an
+        // unknown-length streaming body, MIS-FRAMES the body: it sends an
+        // empty/zero-length body and never polls our `StreamBody`, so the
+        // backend observes an immediate EOF (0 bytes forwarded). We MUST let
+        // hyper choose the http1 framing itself.
+        //
+        //  • Force the request version to HTTP/1.1 (the upstream protocol).
+        //  • Strip `content-length` and `transfer-encoding` so hyper sets the
+        //    framing for the body we actually hand it (chunked for the
+        //    streaming Branch B; content-length for the Full body in Branch A).
+        //
+        // (Branch A's `Full` body happened to work even at HTTP/2.0 because it
+        // has an exact size hint and hyper emitted content-length anyway; the
+        // streaming Branch B body has no exact size, which is where the
+        // mis-framing struck. Normalising here fixes Branch B and keeps Branch
+        // A correct and explicit.)
+        parts.version = hyper::Version::HTTP_11;
+        parts.headers.remove(hyper::header::CONTENT_LENGTH);
+        parts.headers.remove(hyper::header::TRANSFER_ENCODING);
 
         // S8 / M-D — bounded H2 INGRESS pump (lookahead-window), replaces
         // the R8-violating `Limited::collect()` (whole-body buffer).
@@ -1472,11 +1497,34 @@ impl H2Proxy {
         // WINDOW_UPDATE → the H2 client is paused (the R8 backpressure chain).
         let (tx, mut rx) =
             tokio::sync::mpsc::channel::<Result<Frame<Bytes>, hyper::Error>>(H2_REQ_CHANNEL_DEPTH);
+
+        // F-MD-3 (S8 remediation) — a GENUINE retained-memory gauge. The two
+        // streaming-phase record sites previously stored a CONSTANT (the
+        // 64 KiB window ceiling), so a whole-body-buffering regression would
+        // not move the gauge. Instead we track the ACTUAL instantaneous
+        // in-flight channel occupancy: `in_flight_bytes` is incremented by the
+        // pump just before it pushes a chunk into the channel and DECREMENTED
+        // in the body's poll the moment hyper pulls that chunk back out. The
+        // pump then records `lookahead_remaining + live_in_flight` at each push
+        // — the real retained inbound set. A buffering regression that held the
+        // whole body in `in_flight_bytes` (or a lookahead that never drained)
+        // would push the gauge above the window ceiling and trip the bound.
+        let in_flight_bytes = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let in_flight_body = std::sync::Arc::clone(&in_flight_bytes);
+
         // Bridge the mpsc receiver into an `http_body` stream body without a
-        // new dep (futures-util is already a dependency).
+        // new dep (futures-util is already a dependency). As hyper pulls each
+        // frame we decrement the live in-flight counter (the chunk has left
+        // our retained set and is now owned by hyper's write buffer).
         let stream_body =
             http_body_util::StreamBody::new(futures_util::stream::poll_fn(move |cx| {
-                rx.poll_recv(cx)
+                let polled = rx.poll_recv(cx);
+                if let std::task::Poll::Ready(Some(Ok(ref frame))) = polled {
+                    if let Some(d) = frame.data_ref() {
+                        in_flight_body.fetch_sub(d.len(), std::sync::atomic::Ordering::Relaxed);
+                    }
+                }
+                polled
             }))
             .boxed();
         let req = Request::from_parts(parts, stream_body);
@@ -1492,50 +1540,103 @@ impl H2Proxy {
             // in the streaming regime, exactly as it did under the buffered
             // path. Starts at the bytes already in the lookahead buffer.
             let mut forwarded_total: usize = buffered;
+            // Bytes still sitting in the lookahead `drained` queue, not yet
+            // pushed into the channel. Part of the live retained set (F-MD-3).
+            let mut lookahead_remaining: usize = buffered;
 
-            // The retained in-flight upper bound = the in-flight channel
-            // occupancy (depth × chunk). Because each chunk we push is
-            // ≤ H2_REQ_CHUNK_MAX and at most H2_REQ_CHANNEL_DEPTH are queued
-            // before `send().await` parks, the retained inbound memory is
-            // pinned at the window ceiling, body-size-INDEPENDENT.
-            #[cfg(any(test, feature = "test-gauges"))]
-            record_retained((H2_REQ_CHANNEL_DEPTH * H2_REQ_CHUNK_MAX).min(buffered));
+            // Outcome of the forwarding phase. `Forwarded` = the channel
+            // accepted the whole body (clean EOF) → verdict Ok. `ReceiverGone`
+            // = hyper dropped the request body (the backend short-circuited its
+            // response WITHOUT reading the body — an early/short response). On
+            // `ReceiverGone` we MUST NOT manufacture a 413; we switch to
+            // drain-and-validate (F-MD-2) so the backend's real response is
+            // relayed once the inbound body validates.
+            enum SendOutcome {
+                ReceiverGone,
+            }
 
             // Helper: split a DATA payload into ≤ H2_REQ_CHUNK_MAX pieces and
             // push each through the bounded channel (the backpressure point).
-            // Returns Err(()) if the receiver (hyper body) dropped.
-            macro_rules! send_data {
-                ($bytes:expr) => {{
+            // Increments the live in-flight gauge before each push and records
+            // the real retained set. Returns Err(ReceiverGone) if the receiver
+            // (hyper body) dropped (backend stopped reading).
+            macro_rules! send_chunked {
+                ($bytes:expr, $is_lookahead:expr) => {{
                     let mut data: Bytes = $bytes;
-                    let mut closed = false;
+                    let mut outcome: Result<(), SendOutcome> = Ok(());
                     while !data.is_empty() {
                         let take = data.len().min(H2_REQ_CHUNK_MAX);
                         let chunk = data.split_to(take);
+                        let clen = chunk.len();
+                        // This chunk is about to enter the channel: it joins
+                        // the live in-flight set and leaves the lookahead set
+                        // (if it came from there).
+                        in_flight_bytes.fetch_add(clen, std::sync::atomic::Ordering::Relaxed);
+                        if $is_lookahead {
+                            lookahead_remaining = lookahead_remaining.saturating_sub(clen);
+                        }
+                        // F-MD-3: record the ACTUAL retained inbound set =
+                        // lookahead still queued + bytes live in the channel.
                         #[cfg(any(test, feature = "test-gauges"))]
-                        record_retained(H2_REQ_CHANNEL_DEPTH * H2_REQ_CHUNK_MAX);
+                        record_retained(
+                            lookahead_remaining
+                                + in_flight_bytes.load(std::sync::atomic::Ordering::Relaxed),
+                        );
                         if tx.send(Ok(Frame::data(chunk))).await.is_err() {
-                            closed = true;
+                            // hyper dropped the receiver before accepting this
+                            // chunk → it never entered hyper's buffer; back the
+                            // counter out so the gauge stays honest.
+                            in_flight_bytes.fetch_sub(clen, std::sync::atomic::Ordering::Relaxed);
+                            outcome = Err(SendOutcome::ReceiverGone);
                             break;
                         }
                     }
-                    closed
+                    outcome
+                }};
+            }
+
+            // drain-and-validate (F-MD-2): the backend stopped reading the
+            // request body (early/short response). We can no longer forward,
+            // but we MUST still drive the inbound body to a validated terminal
+            // state so a malformed request never relays the backend response.
+            // Bytes are DISCARDED (memory stays bounded — we hold at most one
+            // frame at a time), but the 64 MiB cap and protocol validation
+            // still apply. Returns the terminal verdict.
+            macro_rules! drain_and_validate {
+                () => {{
+                    loop {
+                        match body.frame().await {
+                            None => break Ok(()), // clean EOF → relay backend resp.
+                            Some(Ok(frame)) => {
+                                if frame.is_trailers() {
+                                    break validate_request_trailers(frame.trailers_ref())
+                                        .map(|_| ());
+                                }
+                                if let Some(d) = frame.data_ref() {
+                                    forwarded_total = forwarded_total.saturating_add(d.len());
+                                    if forwarded_total > MAX_REQUEST_BODY_BYTES {
+                                        break Err(ProxyErr::BodyTooLarge);
+                                    }
+                                }
+                                // discard the data frame — bounded memory.
+                            }
+                            Some(Err(e)) => {
+                                break Err(ProxyErr::BadRequest(format!(
+                                    "malformed H2 request body: {e}"
+                                )));
+                            }
+                        }
+                    }
                 }};
             }
 
             // 1) Drain the lookahead buffer first (oldest chunks first),
             // re-chunked to the window granularity.
             for chunk in drained {
-                if send_data!(chunk) {
-                    // Receiver (hyper body) dropped BEFORE the inbound request
-                    // reached a validated terminal state — the backend
-                    // short-circuited its response without consuming the (by
-                    // definition >window) request body. We could neither fully
-                    // forward NOR fully validate this body without buffering
-                    // it whole (the R8 violation). Treat it exactly as the
-                    // buffered path treated an over-window body: reject 413,
-                    // never relay the backend's response (no leak). See the
-                    // verdict gate below.
-                    let _ = verdict_tx.send(Err(ProxyErr::BodyTooLarge));
+                if let Err(SendOutcome::ReceiverGone) = send_chunked!(chunk, true) {
+                    // Backend short-circuited before reading the whole body —
+                    // F-MD-2 drain-and-validate, NOT a 413.
+                    let _ = verdict_tx.send(drain_and_validate!());
                     return;
                 }
             }
@@ -1573,10 +1674,11 @@ impl H2Proxy {
                                 let _ = verdict_tx.send(Err(ProxyErr::BodyTooLarge));
                                 return;
                             }
-                            if send_data!(data) {
-                                // Receiver dropped before inbound EOF — same
-                                // over-window-body reject as the drain phase.
-                                let _ = verdict_tx.send(Err(ProxyErr::BodyTooLarge));
+                            if let Err(SendOutcome::ReceiverGone) = send_chunked!(data, false) {
+                                // Backend stopped reading mid-stream (early/
+                                // short response) — F-MD-2 drain-and-validate,
+                                // NOT a 413.
+                                let _ = verdict_tx.send(drain_and_validate!());
                                 return;
                             }
                         }
