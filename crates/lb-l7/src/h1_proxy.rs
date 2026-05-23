@@ -1305,7 +1305,16 @@ impl H1Proxy {
                         let take = data.len().min(H1_REQ_CHUNK_MAX);
                         let chunk = data.split_to(take);
                         let clen = chunk.len();
+                        // This chunk is about to enter the channel: it joins the
+                        // live in-flight set.
                         in_flight_bytes.fetch_add(clen, std::sync::atomic::Ordering::Relaxed);
+                        // F-MD-3: record the ACTUAL retained inbound set = the
+                        // live in-flight channel occupancy (the decrement
+                        // happens in the StreamBody poll when hyper pulls).
+                        #[cfg(any(test, feature = "test-gauges"))]
+                        record_retained_h1(
+                            in_flight_bytes.load(std::sync::atomic::Ordering::Relaxed),
+                        );
                         if tx.send(Ok(Frame::data(chunk))).await.is_err() {
                             // hyper dropped the receiver before accepting this
                             // chunk → it never entered hyper's buffer; back the
@@ -2389,6 +2398,52 @@ fn h3_response_to_h1(
     // the H3 upstream's trailing field section, so the trailer-
     // injection branch emits a chunked-trailer block on the H1 wire.
     build_h1_response_with_trailers(translated, alt_svc)
+}
+
+/// S9 / M-D-lite (F-MD-3 — lb-l7 R8 gauge) — the maximum, observed at any
+/// instant, of the inbound H1→H1 REQUEST memory the bounded ingress pump
+/// retains while a request is in flight: the instantaneous in-flight channel
+/// occupancy (≤ `H1_REQ_CHANNEL_DEPTH × H1_REQ_CHUNK_MAX` = 64 KiB).
+///
+/// This is a GENUINE retained-memory gauge, NOT a constant: the pump
+/// increments a live `in_flight_bytes` counter just before it pushes each
+/// chunk into the bounded channel and DECREMENTS it the moment hyper pulls the
+/// chunk back out (in the `StreamBody`'s poll). It records the live occupancy
+/// at each push. A whole-body buffering implementation (the raw-`IncomingBody`
+/// hand-off this cell replaces would have held the whole body in hyper's write
+/// buffer) — or any no-decrement variant — would make this grow with request
+/// size and trip the ≤256 KiB ceiling the memory proof asserts. The bounded
+/// window keeps it ≤ 64 KiB, independent of total request size and of
+/// [`MAX_REQUEST_BODY_BYTES`].
+///
+/// Test-only (off by default so production never compiles the gauge); mirrors
+/// `h2_proxy::H2_REQ_MAX_RETAINED_BODY_BYTES` and lb-quic
+/// `h3_bridge::MAX_RETAINED_BODY_BYTES`. Distinct symbol name (NOT the H2
+/// gauge) so the H1 memory proof reads its own counter.
+#[cfg(any(test, feature = "test-gauges"))]
+pub static H1_REQ_MAX_RETAINED_BODY_BYTES: std::sync::atomic::AtomicUsize =
+    std::sync::atomic::AtomicUsize::new(0);
+
+/// S9 / M-D-lite (test-gauge) — max-update for
+/// [`H1_REQ_MAX_RETAINED_BODY_BYTES`]. Identical lock-free CAS-max to
+/// `h2_proxy::record_retained` / lb-quic `h3_bridge::record_retained`: the
+/// gauge only ever moves UP, recording the largest instantaneous retained
+/// inbound-request memory the pump observes.
+#[cfg(any(test, feature = "test-gauges"))]
+pub fn record_retained_h1(n: usize) {
+    use std::sync::atomic::Ordering;
+    let mut cur = H1_REQ_MAX_RETAINED_BODY_BYTES.load(Ordering::Relaxed);
+    while n > cur {
+        match H1_REQ_MAX_RETAINED_BODY_BYTES.compare_exchange_weak(
+            cur,
+            n,
+            Ordering::Relaxed,
+            Ordering::Relaxed,
+        ) {
+            Ok(_) => break,
+            Err(observed) => cur = observed,
+        }
+    }
 }
 
 #[cfg(test)]
