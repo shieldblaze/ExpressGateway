@@ -937,6 +937,17 @@ async fn diag_branch_b_body_bytes_reaching_upstream() {
 // real occupancy, the in-situ proof is vacuous — reported as a FINDING.
 // ══════════════════════════════════════════════════════════════════════
 
+// S8 gate fix (global-state collision, R2): the gauge tests share the
+// process-global `H2_REQ_MAX_RETAINED_BODY_BYTES`, and the inverted-probe test
+// deliberately writes a 4 MiB sentinel into it. Under the Phase-3 gate's
+// 8-thread parallelism that write leaked into a concurrent gauge test's
+// reset→read window (run-3 flake: peak read as exactly 4194304). This lock
+// serializes the gauge tests so a measurement window never overlaps another
+// gauge test's deliberate write. Background non-gauge proxy tests only record
+// per-request retained (≤ ~136 KiB ≪ the 256 KiB bound), so they need no lock.
+#[cfg(feature = "test-gauges")]
+static GAUGE_SERIAL: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
+
 #[cfg(feature = "test-gauges")]
 async fn spawn_stalled_backend() -> (SocketAddr, Arc<AtomicUsize>, Arc<tokio::sync::Notify>) {
     let listener = TcpListener::bind(("127.0.0.1", 0)).await.unwrap();
@@ -986,6 +997,11 @@ async fn spawn_stalled_backend() -> (SocketAddr, Arc<AtomicUsize>, Arc<tokio::sy
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn memory_gauge_non_vacuous_and_load_bearing() {
     use lb_l7::h2_proxy::{H2_REQ_MAX_RETAINED_BODY_BYTES, record_retained};
+
+    // Hold for the whole test: the inverted probe below writes a 4 MiB sentinel
+    // into the shared global gauge; serialize so it cannot leak into a
+    // concurrent gauge test's reset→read window.
+    let _gauge_serial = GAUGE_SERIAL.lock().await;
 
     H2_REQ_MAX_RETAINED_BODY_BYTES.store(0, Ordering::Relaxed);
 
@@ -1096,6 +1112,10 @@ async fn memory_gauge_non_vacuous_and_load_bearing() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn memory_gauge_tracks_live_occupancy_not_cumulative() {
     use lb_l7::h2_proxy::H2_REQ_MAX_RETAINED_BODY_BYTES;
+
+    // Serialize against the inverted-probe test that writes a 4 MiB sentinel
+    // into the shared global gauge (else its write leaks into this read window).
+    let _gauge_serial = GAUGE_SERIAL.lock().await;
 
     H2_REQ_MAX_RETAINED_BODY_BYTES.store(0, Ordering::Relaxed);
 
