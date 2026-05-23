@@ -246,6 +246,18 @@ struct ClientOut {
     content_length: Option<usize>,
     fin: bool,
     reset: bool,
+    /// F-S7-8 cluster 2 — count of HEADERS frames the client decoded on
+    /// the response stream. `1` = response head only; `2` = the head
+    /// PLUS a forwarded post-DATA trailing-HEADERS frame (used by
+    /// CASE 9a to assert response trailers are FORWARDED). Additive,
+    /// `Default`-initialised; the existing 7 cases never read it (a
+    /// provable pure no-op — S78-G3).
+    resp_headers_frames: usize,
+    /// F-S7-8 cluster 2 — the trailer field names the client decoded
+    /// from a second (post-DATA) HEADERS frame, if any. Lets CASE 9a
+    /// assert the specific trailer arrived and CASE 9b assert a
+    /// pseudo-header trailer was NEVER forwarded.
+    resp_trailer_names: Vec<String>,
 }
 
 /// Drive ONE H3 request on stream 0 (verbatim shape from
@@ -262,6 +274,22 @@ struct DriveCfg {
     stall_after: Option<usize>,
     stall_for: Duration,
     reset_after_req_bytes: Option<usize>,
+    /// F-S7-8 cluster 4 — when set, omit the `:authority` pseudo-header
+    /// from the request HEADERS entirely. With an absent `:authority`
+    /// the gateway's `req.authority` is empty, so `h3_to_h3_stream_resp`
+    /// substitutes the configured SNI for the upstream `:authority`
+    /// (h3_bridge.rs :2876-2877 — the `if req.authority.is_empty()`
+    /// TRUE branch). The request still succeeds end-to-end.
+    omit_authority: bool,
+    /// F-S7-8 cluster 4 — when `Some(k)`, after the client has read `k`
+    /// response body bytes it STOP_SENDINGs (`Shutdown::Read`) the
+    /// RESPONSE stream WITHOUT reading further. quiche surfaces this to
+    /// the gateway as `Err(StreamStopped)`; the actor's
+    /// `reap_client_cancelled_responses` drops the response receiver, so
+    /// the bridge's NEXT `send!`/`send_progress!` returns
+    /// `Err(RespAbort::ClientGone)` (h3_bridge.rs :2806 — the `send!`
+    /// macro's `ClientGone` map). Used by CASE 12.
+    stop_reading_resp_after: Option<usize>,
 }
 
 async fn drive_h3(
@@ -292,6 +320,10 @@ async fn drive_h3(
     let mut out = ClientOut::default();
     let mut stalling_until: Option<tokio::time::Instant> = None;
     let mut stalled_once = false;
+    // F-S7-8 cluster 4 — once the client has READ this many response
+    // body bytes it STOP_SENDINGs the response stream (CASE 12). Latched
+    // so it fires exactly once.
+    let mut resp_stop_sent = false;
 
     let deadline = tokio::time::Instant::now() + overall;
     while tokio::time::Instant::now() < deadline {
@@ -307,12 +339,17 @@ async fn drive_h3(
 
         if conn.is_established() && !head_sent {
             let encoder = QpackEncoder::new();
-            let headers = vec![
+            // F-S7-8 cluster 4 — `omit_authority` drops `:authority`
+            // entirely so the gateway substitutes the SNI for the
+            // upstream authority (h3_bridge.rs :2876-2877).
+            let mut headers = vec![
                 (":method".to_string(), cfg.method.to_string()),
                 (":scheme".to_string(), "https".to_string()),
-                (":authority".to_string(), TEST_SNI.to_string()),
-                (":path".to_string(), cfg.path.to_string()),
             ];
+            if !cfg.omit_authority {
+                headers.push((":authority".to_string(), TEST_SNI.to_string()));
+            }
+            headers.push((":path".to_string(), cfg.path.to_string()));
             let block = encoder.encode(&headers).unwrap();
             tx_wire.extend_from_slice(
                 &encode_frame(&H3Frame::Headers {
@@ -381,7 +418,7 @@ async fn drive_h3(
                 stalling_until = None;
             }
         }
-        if conn.is_established() && stalling_until.is_none() {
+        if conn.is_established() && stalling_until.is_none() && !resp_stop_sent {
             let readable: Vec<u64> = conn.readable().collect();
             for r in readable {
                 if r != sid {
@@ -408,8 +445,16 @@ async fn drive_h3(
                 match decode_frame(&rx_tail, 1 << 20) {
                     Ok((H3Frame::Headers { header_block }, c)) => {
                         rx_tail.drain(..c);
+                        out.resp_headers_frames += 1;
+                        // The FIRST HEADERS frame is the response head;
+                        // any SUBSEQUENT (post-DATA) HEADERS frame is a
+                        // forwarded trailer section (F-S7-8 cluster 2).
+                        let is_trailer = out.resp_headers_frames > 1;
                         if let Ok(h) = QpackDecoder::new().decode(&header_block) {
                             for (n, v) in h {
+                                if is_trailer {
+                                    out.resp_trailer_names.push(n.clone());
+                                }
                                 if n == ":status" {
                                     out.status = v.parse().ok();
                                 } else if n == "content-length" {
@@ -439,9 +484,32 @@ async fn drive_h3(
                     stalled_once = true;
                 }
             }
+            // F-S7-8 cluster 4 — CASE 12 client-gone: once the client
+            // has read `k` response body bytes, STOP_SENDING the
+            // response stream and stop reading it. quiche surfaces this
+            // to the gateway as a peer STOP_SENDING on the stream it is
+            // writing; the actor reaps the response receiver and the
+            // bridge's next `send!` returns `RespAbort::ClientGone`
+            // (h3_bridge.rs :2806).
+            if let Some(k) = cfg.stop_reading_resp_after {
+                if !resp_stop_sent && !out.fin && out.body.len() >= k {
+                    let _ = conn.stream_shutdown(sid, quiche::Shutdown::Read, 0x010c);
+                    resp_stop_sent = true;
+                }
+            }
         }
 
-        if out.fin || out.reset {
+        // CASE 12: after STOP_SENDING the response stream the client
+        // intentionally stops reading; keep the connection alive (so the
+        // STOP_SENDING is actually delivered and the gateway observes
+        // it) for a bounded settle window, then exit. Do NOT break on
+        // `out.fin`/`out.reset` here for that case — there is no clean
+        // FIN to wait for.
+        if resp_stop_sent {
+            // Drive a few more I/O ticks so quiche flushes the
+            // STOP_SENDING frame to the gateway, then fall through to
+            // the normal park/recv below until the overall deadline.
+        } else if out.fin || out.reset {
             break;
         }
 
@@ -507,6 +575,61 @@ enum UpstreamMode {
     /// (response-splitting guard — the client must never get a clean
     /// complete 200).
     ResetMidResponse,
+    /// F-S7-8 cluster 1 — after draining `after_bytes` of request DATA,
+    /// the upstream `stream_shutdown(req_sid, Shutdown::Read, ..)` ⇒ a
+    /// real STOP_SENDING on the wire. The gateway's next request-leg
+    /// `stream_send` then returns `Err(StreamStopped)`, driving the
+    /// HEADERS / request-DATA / request-FIN send-error arms
+    /// (h3_bridge.rs :2928-2933, :3062-3074, :3458-3461) depending on
+    /// WHEN the STOP_SENDING lands relative to the request leg.
+    StopSendingMidRequest { after_bytes: usize },
+    /// F-S7-8 cluster 2 — 200 + a small DATA body, then a post-DATA
+    /// trailing-HEADERS frame (RFC 9114 §4.1) of the given kind, then
+    /// FIN. Drives the response-trailer path (h3_bridge.rs :3284-3312).
+    RespWithTrailers(TrailerKind),
+    /// F-S7-8 cluster 3 — 200 + an UNKNOWN frame type (small declared
+    /// length) interleaved before the DATA body, then FIN. Drives the
+    /// `RecvState::InSkip` unknown-frame skip (h3_bridge.rs :3200-3209
+    /// entry + :3349-3360 drain) then transparent resume.
+    UnknownFrameThenResp,
+    /// F-S7-8 cluster 3 — 200 then a hand-built frame header declaring
+    /// a length `> DEFAULT_MAX_PAYLOAD_SIZE` (1 MiB) for the given
+    /// frame type, with NO real payload. The gateway aborts on the
+    /// DECLARED length at the header (`check_block_len`): `frame_type`
+    /// `0x01` ⇒ the FRAME_HEADERS arm (h3_bridge.rs :3189-3193);
+    /// any other ⇒ the unknown-frame arm (:3204-3207). Both map to
+    /// `RespAbort::BadHead` — the client never gets a clean 200+FIN.
+    OversizedBlock { frame_type: u64 },
+    /// F-S7-8 cluster 4 — 200, then a ZERO-LENGTH DATA frame (`0x00
+    /// 0x00`) emitted BEFORE the real body, then the body + FIN. Drives
+    /// the gateway's empty-DATA fast-path (h3_bridge.rs :3214-3217:
+    /// `RecvState::InData { remaining: 0 }` returns straight to
+    /// `AwaitingHeader`, no spurious chunk). The gateway must skip the
+    /// zero-length frame and still deliver the real body byte-identical
+    /// with a clean FIN.
+    EmptyDataThenResp,
+    /// F-S7-8 cluster 4 — 200, then a DATA frame whose declared length
+    /// is LARGER than the payload actually written, then a clean QUIC
+    /// FIN. The gateway is mid-`InData` (remaining > 0) when the FIN
+    /// lands, so it is NOT between frames ⇒ a premature EOF
+    /// (h3_bridge.rs :3375-3383: `else { outcome = PrematureEof }`).
+    /// The client MUST NOT receive a clean complete 200+FIN.
+    HeadThenTruncatedData,
+}
+
+/// F-S7-8 cluster 2 — the kind of post-DATA trailing-HEADERS frame the
+/// upstream emits, selecting which response-trailer arm is driven.
+#[derive(Clone)]
+enum TrailerKind {
+    /// One ordinary `(name, value)` trailer ⇒ the forward path
+    /// (h3_bridge.rs :3284-3296 + :3297-3312): trailers are FORWARDED
+    /// on the H3→H3 response leg (confirmed against src; distinct from
+    /// J2 dropping REQUEST trailers — different direction).
+    Valid,
+    /// A trailer field whose name begins with `:` (a pseudo-header) ⇒
+    /// the malformed-trailer reject arm (h3_bridge.rs :3290-3293):
+    /// `RespAbort::BadHead`, never forwarded (RFC 9114 §4.3).
+    PseudoHeader,
 }
 
 /// Spawn a genuine quiche `accept` H3 upstream on a real `UdpSocket`.
@@ -572,6 +695,8 @@ async fn spawn_h3_upstream(
             let mut headers_frames = 0usize;
             let mut req_fin = false;
             let mut response_started = false;
+            // F-S7-8 cluster 1 — STOP_SENDING issued at most once.
+            let mut req_stop_sent = false;
             let mut stall_until: Option<tokio::time::Instant> = None;
             // The full response wire, built ONCE when the request is
             // ready, then pushed with partial-accept retry (mirrors
@@ -665,6 +790,29 @@ async fn spawn_h3_upstream(
                     }
                 }
 
+                // F-S7-8 cluster 1 — once `after_bytes` of request DATA
+                // have been drained (counted on the decoded request
+                // body), the upstream issues a real STOP_SENDING on the
+                // request stream (`Shutdown::Read`). The gateway's next
+                // request-leg `stream_send` then returns
+                // `Err(StreamStopped)`. `after_bytes == 0` ⇒ the
+                // STOP_SENDING is armed as soon as the request stream is
+                // observed at all (the HEADERS / first request-DATA
+                // write races it). The connection is otherwise driven
+                // normally so quiche actually transmits the frame.
+                if let UpstreamMode::StopSendingMidRequest { after_bytes } = &mode {
+                    if conn.is_established() && !req_stop_sent {
+                        let seen_bytes = body.len();
+                        let stream_known = conn.readable().any(|s| s == req_sid)
+                            || seen_bytes > 0
+                            || headers_frames > 0;
+                        if (*after_bytes == 0 && stream_known) || seen_bytes >= *after_bytes {
+                            let _ = conn.stream_shutdown(req_sid, quiche::Shutdown::Read, 0x010c);
+                            req_stop_sent = true;
+                        }
+                    }
+                }
+
                 // Emit the response once the request is in / FIN'd.
                 if conn.is_established()
                     && !response_started
@@ -682,6 +830,20 @@ async fn spawn_h3_upstream(
                                     .map(|u| tokio::time::Instant::now() >= u)
                                     .unwrap_or(false)
                         }
+                        // F-S7-8 cluster 1 — the gateway aborts the
+                        // exchange WITHOUT FIN once it sees the
+                        // STOP_SENDING; this upstream never produces a
+                        // response (it just idles until the conn closes).
+                        UpstreamMode::StopSendingMidRequest { .. } => false,
+                        // F-S7-8 clusters 2/3 — respond on the clean
+                        // request FIN, exactly like `Echo` (the request
+                        // leg is conformant; the adversarial behaviour
+                        // is on the RESPONSE leg).
+                        UpstreamMode::RespWithTrailers(_)
+                        | UpstreamMode::UnknownFrameThenResp
+                        | UpstreamMode::OversizedBlock { .. }
+                        | UpstreamMode::EmptyDataThenResp
+                        | UpstreamMode::HeadThenTruncatedData => req_fin,
                     };
                     if ready {
                         *seen.body.lock().unwrap() = body.clone();
@@ -720,6 +882,85 @@ async fn spawn_h3_upstream(
                                 resp_wire.extend_from_slice(&data_frames(&vec![7u8; 64 * 1024]));
                                 resp_fin_on_drain = false;
                                 resp_reset_after_drain = true;
+                            }
+                            // F-S7-8 cluster 1 — never reached: `ready`
+                            // is always false for this mode (the gateway
+                            // aborts the request leg), so the response
+                            // is never built. Arm present for
+                            // exhaustiveness; emits nothing.
+                            UpstreamMode::StopSendingMidRequest { .. } => {}
+                            // F-S7-8 cluster 2 — 200 + small DATA body
+                            // + a post-DATA trailing-HEADERS frame, then
+                            // a clean FIN. The body is intentionally
+                            // tiny (S78-G4): the response-trailer arm is
+                            // size-independent.
+                            UpstreamMode::RespWithTrailers(kind) => {
+                                resp_wire = response_head(200, None);
+                                resp_wire.extend_from_slice(&data_frames(b"h3-trail-body"));
+                                let tf = match kind {
+                                    TrailerKind::Valid => {
+                                        trailers_frame(&[("x-resp-trailer", "v1")])
+                                    }
+                                    TrailerKind::PseudoHeader => {
+                                        // A `:`-prefixed field in a
+                                        // trailer section is malformed
+                                        // (RFC 9114 §4.3) ⇒ the gateway
+                                        // MUST reject, never forward it.
+                                        trailers_frame(&[(":illegal", "x")])
+                                    }
+                                };
+                                resp_wire.extend_from_slice(&tf);
+                                resp_fin_on_drain = true;
+                            }
+                            // F-S7-8 cluster 3 — 200, then an UNKNOWN
+                            // frame type (small payload) BEFORE the DATA
+                            // body, then FIN. The gateway must skip the
+                            // unknown frame (`InSkip`) and still deliver
+                            // the body byte-identical with a clean FIN.
+                            UpstreamMode::UnknownFrameThenResp => {
+                                resp_wire = response_head(200, None);
+                                resp_wire.extend_from_slice(&unknown_frame(
+                                    0x21,
+                                    b"reserved-frame-payload-skip-me",
+                                ));
+                                resp_wire.extend_from_slice(&data_frames(b"h3-skip-body"));
+                                resp_fin_on_drain = true;
+                            }
+                            // F-S7-8 cluster 3 — 200, then a frame header
+                            // declaring a length > 1 MiB with NO body.
+                            // The gateway aborts on the declared length
+                            // (`check_block_len`) — it never gets a
+                            // clean complete 200. We FIN after the
+                            // (tiny) bytes we wrote; the gateway has
+                            // already aborted by then.
+                            UpstreamMode::OversizedBlock { frame_type } => {
+                                resp_wire = response_head(200, None);
+                                resp_wire.extend_from_slice(&oversized_block_header(
+                                    *frame_type,
+                                    (1024 * 1024 + 1) as u64,
+                                ));
+                                resp_fin_on_drain = true;
+                            }
+                            // F-S7-8 cluster 4 — 200, then a ZERO-LENGTH
+                            // DATA frame (type 0x00, len 0) BEFORE the
+                            // real body, then the body + FIN. The empty
+                            // DATA frame is the `0x00 0x00` two-byte
+                            // header with NO payload.
+                            UpstreamMode::EmptyDataThenResp => {
+                                resp_wire = response_head(200, None);
+                                resp_wire.extend_from_slice(&empty_data_frame());
+                                resp_wire.extend_from_slice(&data_frames(b"h3-empty-data-body"));
+                                resp_fin_on_drain = true;
+                            }
+                            // F-S7-8 cluster 4 — 200, then a DATA frame
+                            // header declaring 4096 bytes but only 16
+                            // bytes of payload, then a clean FIN. The
+                            // gateway FINs while still mid-`InData`
+                            // (remaining > 0) ⇒ PrematureEof.
+                            UpstreamMode::HeadThenTruncatedData => {
+                                resp_wire = response_head(200, None);
+                                resp_wire.extend_from_slice(&truncated_data_frame(4096, 16));
+                                resp_fin_on_drain = true;
                             }
                         }
                         resp_built = true;
@@ -781,6 +1022,76 @@ fn response_head(status: u16, content_length: Option<usize>) -> Vec<u8> {
     .to_vec()
 }
 
+/// F-S7-8 cluster 2 — encode a post-DATA trailing-HEADERS frame
+/// (a `FRAME_HEADERS` frame whose QPACK block carries trailer fields).
+/// Wire-identical to a normal HEADERS frame; the gateway distinguishes
+/// it as a TRAILER purely positionally (it arrives after `sent_head`).
+fn trailers_frame(fields: &[(&str, &str)]) -> Vec<u8> {
+    let owned: Vec<(String, String)> = fields
+        .iter()
+        .map(|(n, v)| ((*n).to_string(), (*v).to_string()))
+        .collect();
+    let block = QpackEncoder::new().encode(&owned).unwrap();
+    encode_frame(&H3Frame::Headers {
+        header_block: block,
+    })
+    .unwrap()
+    .to_vec()
+}
+
+/// F-S7-8 cluster 3 — an UNKNOWN H3 frame (RFC 9114 §7.2.8 reserved
+/// type) with a small `payload`. The gateway MUST skip it transparently
+/// (`RecvState::InSkip`) and resume parsing the following frames.
+fn unknown_frame(frame_type: u64, payload: &[u8]) -> Vec<u8> {
+    encode_frame(&H3Frame::Unknown {
+        frame_type,
+        payload: Bytes::copy_from_slice(payload),
+    })
+    .unwrap()
+    .to_vec()
+}
+
+/// F-S7-8 cluster 3 — a hand-built frame header `varint(frame_type) ||
+/// varint(declared_len)` with NO payload bytes. `declared_len` is
+/// chosen `> DEFAULT_MAX_PAYLOAD_SIZE` (1 MiB) so the gateway's
+/// `check_block_len` rejects it on the DECLARED length the moment the
+/// header parses — it never waits for (and we never send) the body.
+/// `frame_type 0x01` exercises the FRAME_HEADERS over-cap arm; any
+/// other type exercises the unknown-frame over-cap arm.
+fn oversized_block_header(frame_type: u64, declared_len: u64) -> Vec<u8> {
+    use bytes::BytesMut;
+    let mut buf = BytesMut::new();
+    lb_h3::encode_varint(&mut buf, frame_type).unwrap();
+    lb_h3::encode_varint(&mut buf, declared_len).unwrap();
+    buf.to_vec()
+}
+
+/// F-S7-8 cluster 4 — a ZERO-LENGTH H3 DATA frame: the two-byte header
+/// `varint(FRAME_DATA=0x00) || varint(len=0)` with NO payload. The
+/// gateway must treat this as a no-op (`RecvState::InData { remaining:
+/// 0 }`) and emit no spurious body chunk.
+fn empty_data_frame() -> Vec<u8> {
+    use bytes::BytesMut;
+    let mut buf = BytesMut::new();
+    lb_h3::encode_varint(&mut buf, 0x00).unwrap(); // FRAME_DATA
+    lb_h3::encode_varint(&mut buf, 0).unwrap(); // length 0
+    buf.to_vec()
+}
+
+/// F-S7-8 cluster 4 — a DATA frame HEADER declaring `declared_len`
+/// bytes followed by only `actual_len` (< declared) real payload bytes.
+/// Used with a subsequent clean FIN so the gateway sees the stream end
+/// while still mid-`InData` (a premature EOF).
+fn truncated_data_frame(declared_len: u64, actual_len: usize) -> Vec<u8> {
+    use bytes::BytesMut;
+    let mut buf = BytesMut::new();
+    lb_h3::encode_varint(&mut buf, 0x00).unwrap(); // FRAME_DATA
+    lb_h3::encode_varint(&mut buf, declared_len).unwrap();
+    let mut out = buf.to_vec();
+    out.extend(std::iter::repeat_n(0x5Au8, actual_len));
+    out
+}
+
 /// Encode `payload` as ≤16 KiB H3 DATA frames.
 fn data_frames(payload: &[u8]) -> Vec<u8> {
     let mut out = Vec::new();
@@ -823,6 +1134,8 @@ async fn h3h3_e2e_get_response_byte_identical() {
             stall_after: None,
             stall_for: Duration::ZERO,
             reset_after_req_bytes: None,
+            omit_authority: false,
+            stop_reading_resp_after: None,
         },
         Duration::from_secs(25),
     )
@@ -864,6 +1177,8 @@ async fn h3h3_e2e_request_body_byte_identical_at_backend() {
             stall_after: None,
             stall_for: Duration::ZERO,
             reset_after_req_bytes: None,
+            omit_authority: false,
+            stop_reading_resp_after: None,
         },
         Duration::from_secs(60),
     )
@@ -948,6 +1263,8 @@ async fn h3h3_e2e_response_memory_bounded_through_stalled_client() {
             stall_after: Some(256 * 1024),
             stall_for: Duration::from_secs(2),
             reset_after_req_bytes: None,
+            omit_authority: false,
+            stop_reading_resp_after: None,
         },
         Duration::from_secs(75),
     )
@@ -1017,6 +1334,8 @@ async fn h3h3_e2e_request_memory_bounded_through_stalled_backend() {
             stall_after: None,
             stall_for: Duration::ZERO,
             reset_after_req_bytes: None,
+            omit_authority: false,
+            stop_reading_resp_after: None,
         },
         Duration::from_secs(75),
     )
@@ -1080,6 +1399,8 @@ async fn h3h3_e2e_backpressure_stalled_client_pauses_upstream_read() {
             stall_after: Some(256 * 1024),
             stall_for: Duration::from_secs(3),
             reset_after_req_bytes: None,
+            omit_authority: false,
+            stop_reading_resp_after: None,
         },
         Duration::from_secs(100),
     )
@@ -1123,6 +1444,8 @@ async fn h3h3_e2e_upstream_reset_midbody_resets_client_no_fin() {
             stall_after: None,
             stall_for: Duration::ZERO,
             reset_after_req_bytes: None,
+            omit_authority: false,
+            stop_reading_resp_after: None,
         },
         Duration::from_secs(40),
     )
@@ -1178,6 +1501,8 @@ async fn h3h3_e2e_client_reset_midrequest_rsts_upstream_no_truncated_request() {
             stall_after: None,
             stall_for: Duration::ZERO,
             reset_after_req_bytes: Some(256 * 1024),
+            omit_authority: false,
+            stop_reading_resp_after: None,
         },
         Duration::from_secs(40),
     )
@@ -1200,5 +1525,761 @@ async fn h3h3_e2e_client_reset_midrequest_rsts_upstream_no_truncated_request() {
     assert!(
         !(out.status == Some(200) && out.fin),
         "an aborted request must not yield a clean 200 FIN to the client"
+    );
+}
+
+// ─────────────────────────────────────────────────────────────────────
+// §4  F-S7-8 — adversarial coverage-remediation cases (test asset
+//     only; same real wire: front quiche H3 client → QuicListener →
+//     router → conn_actor poll_h3 LIVE h3_backend → h3_to_h3_stream_resp
+//     → genuine quiche::accept upstream). Each case drives a specific
+//     verifier-identified uncovered ERROR/EDGE arm of
+//     `h3_to_h3_stream_resp` over the real wire — no stub, no #[ignore].
+// ─────────────────────────────────────────────────────────────────────
+
+/// Cluster 1 / CASE 8 — the upstream STOP_SENDINGs the REQUEST stream
+/// AFTER ~64 KiB of request DATA has been forwarded. The gateway's next
+/// request-DATA `stream_send` returns `Err(StreamStopped)`, driving the
+/// request-DATA send-error arm (h3_bridge.rs :3062-3074:
+/// `stream_shutdown(Write, H3_REQUEST_CANCELLED)` → `UpstreamReset` →
+/// break). The client MUST NOT get a clean 200+FIN, and the backend
+/// MUST NOT have seen a cleanly-ended request.
+#[tokio::test]
+async fn h3h3_e2e_upstream_stop_sending_mid_request_data_aborts_no_fin() {
+    let certs = generate_loopback_certs();
+    let seen = BackendSeen::default();
+    let (backend, bh) = spawn_h3_upstream(
+        &certs,
+        UpstreamMode::StopSendingMidRequest {
+            after_bytes: 64 * 1024,
+        },
+        seen.clone(),
+    )
+    .await;
+    let (listener, gw, sd) = start_h3_listener_h3(&certs, backend).await;
+
+    // ~512 KiB binary body so request DATA is genuinely in flight when
+    // the STOP_SENDING lands (small enough — S78-G4 — but multi-chunk).
+    let payload = binary_body(512 * 1024);
+    let chunks: Vec<Vec<u8>> = payload.chunks(32 * 1024).map(<[u8]>::to_vec).collect();
+
+    let out = drive_h3(
+        gw,
+        &certs.ca,
+        DriveCfg {
+            method: "POST",
+            path: "/stop-mid-data",
+            req_body: chunks,
+            req_trailers: vec![],
+            stall_after: None,
+            stall_for: Duration::ZERO,
+            reset_after_req_bytes: None,
+            omit_authority: false,
+            stop_reading_resp_after: None,
+        },
+        Duration::from_secs(40),
+    )
+    .await;
+
+    tokio::time::sleep(Duration::from_millis(300)).await;
+    let _ = tokio::time::timeout(Duration::from_secs(2), listener.shutdown()).await;
+    sd.cancel();
+    let backend_saw_complete = seen.complete.load(Ordering::SeqCst);
+    bh.abort();
+
+    assert!(
+        !(out.status == Some(200) && out.fin),
+        "an upstream STOP_SENDING mid request-DATA must NOT yield a \
+         clean 200 FIN (status={:?} fin={})",
+        out.status,
+        out.fin
+    );
+    assert!(
+        !backend_saw_complete,
+        "the upstream must NEVER observe a cleanly-ended request after \
+         it STOP_SENDINGs the request stream mid-DATA"
+    );
+}
+
+/// Cluster 1 / CASE 8b — the upstream STOP_SENDINGs the REQUEST stream
+/// as early as possible (`after_bytes = 0`, armed the instant the
+/// request stream is observed). The fault lands on the HEADERS / first
+/// request-DATA write, driving the HEADERS send-error arm
+/// (h3_bridge.rs :2928-2933: `set_reusable(false)` → `RespEvent::Reset`
+/// → `return Err(UpstreamReset)`) and/or the early request-DATA
+/// send-error arm. Either way the client never gets a clean 200+FIN.
+#[tokio::test]
+async fn h3h3_e2e_upstream_stop_sending_immediately_aborts_no_fin() {
+    let certs = generate_loopback_certs();
+    let seen = BackendSeen::default();
+    let (backend, bh) = spawn_h3_upstream(
+        &certs,
+        UpstreamMode::StopSendingMidRequest { after_bytes: 0 },
+        seen.clone(),
+    )
+    .await;
+    let (listener, gw, sd) = start_h3_listener_h3(&certs, backend).await;
+
+    // A multi-chunk body so a request leg genuinely exists for the
+    // STOP_SENDING to abort (kept small — S78-G4).
+    let payload = binary_body(256 * 1024);
+    let chunks: Vec<Vec<u8>> = payload.chunks(32 * 1024).map(<[u8]>::to_vec).collect();
+
+    let out = drive_h3(
+        gw,
+        &certs.ca,
+        DriveCfg {
+            method: "POST",
+            path: "/stop-immediate",
+            req_body: chunks,
+            req_trailers: vec![],
+            stall_after: None,
+            stall_for: Duration::ZERO,
+            reset_after_req_bytes: None,
+            omit_authority: false,
+            stop_reading_resp_after: None,
+        },
+        Duration::from_secs(40),
+    )
+    .await;
+
+    tokio::time::sleep(Duration::from_millis(300)).await;
+    let _ = tokio::time::timeout(Duration::from_secs(2), listener.shutdown()).await;
+    sd.cancel();
+    let backend_saw_complete = seen.complete.load(Ordering::SeqCst);
+    bh.abort();
+
+    assert!(
+        !(out.status == Some(200) && out.fin),
+        "an immediate upstream STOP_SENDING must NOT yield a clean 200 \
+         FIN (status={:?} fin={})",
+        out.status,
+        out.fin
+    );
+    assert!(
+        !backend_saw_complete,
+        "the upstream must NEVER observe a cleanly-ended request when \
+         it STOP_SENDINGs the request stream immediately"
+    );
+}
+
+/// Cluster 1 / CASE 8c — the upstream STOP_SENDINGs the REQUEST stream
+/// AFTER it has drained the FULL request body. The fault then lands on
+/// the gateway's terminal request-stream FIN write, driving the
+/// request-FIN send-error arm (h3_bridge.rs :3458-3461:
+/// `UpstreamReset` → break). Contingency (S78-G5): if the FIN-race
+/// proves timing-flaky over the real wire this still deterministically
+/// drives a request-leg send-error (the body fully buffered upstream
+/// but the request never cleanly FIN-completed at the gateway); the
+/// binding assertion (no clean 200+FIN, request never seen complete)
+/// holds for EITHER landing point — reported as such.
+#[tokio::test]
+async fn h3h3_e2e_upstream_stop_sending_at_request_fin_aborts_no_fin() {
+    let certs = generate_loopback_certs();
+    let seen = BackendSeen::default();
+    // ~256 KiB body; STOP_SENDING armed once the upstream has drained
+    // ALL of it, so the gateway's terminal FIN write races the fault.
+    let payload = binary_body(256 * 1024);
+    let (backend, bh) = spawn_h3_upstream(
+        &certs,
+        UpstreamMode::StopSendingMidRequest {
+            after_bytes: payload.len(),
+        },
+        seen.clone(),
+    )
+    .await;
+    let (listener, gw, sd) = start_h3_listener_h3(&certs, backend).await;
+
+    let chunks: Vec<Vec<u8>> = payload.chunks(32 * 1024).map(<[u8]>::to_vec).collect();
+    let out = drive_h3(
+        gw,
+        &certs.ca,
+        DriveCfg {
+            method: "POST",
+            path: "/stop-at-fin",
+            req_body: chunks,
+            req_trailers: vec![],
+            stall_after: None,
+            stall_for: Duration::ZERO,
+            reset_after_req_bytes: None,
+            omit_authority: false,
+            stop_reading_resp_after: None,
+        },
+        Duration::from_secs(40),
+    )
+    .await;
+
+    tokio::time::sleep(Duration::from_millis(300)).await;
+    let _ = tokio::time::timeout(Duration::from_secs(2), listener.shutdown()).await;
+    sd.cancel();
+    let backend_saw_complete = seen.complete.load(Ordering::SeqCst);
+    bh.abort();
+
+    assert!(
+        !(out.status == Some(200) && out.fin),
+        "an upstream STOP_SENDING at request-FIN must NOT yield a clean \
+         200 FIN (status={:?} fin={})",
+        out.status,
+        out.fin
+    );
+    assert!(
+        !backend_saw_complete,
+        "the upstream must NEVER record a cleanly-ended request when it \
+         STOP_SENDINGs the request stream at the FIN boundary"
+    );
+}
+
+/// Cluster 2 / CASE 9a — the upstream sends 200 + a small DATA body +
+/// a VALID post-DATA trailing-HEADERS frame, then a clean FIN. Drives
+/// the response-trailer FORWARD path (h3_bridge.rs :3284-3296 +
+/// :3297-3312; src-confirmed to forward response trailers — distinct
+/// from J2 dropping REQUEST trailers). The client MUST get 200, the
+/// body byte-identical, a clean FIN, AND a SECOND (trailing) HEADERS
+/// frame carrying the forwarded trailer.
+#[tokio::test]
+async fn h3h3_e2e_response_trailers_forwarded() {
+    let certs = generate_loopback_certs();
+    let seen = BackendSeen::default();
+    let (backend, bh) = spawn_h3_upstream(
+        &certs,
+        UpstreamMode::RespWithTrailers(TrailerKind::Valid),
+        seen,
+    )
+    .await;
+    let (listener, gw, sd) = start_h3_listener_h3(&certs, backend).await;
+
+    let out = drive_h3(
+        gw,
+        &certs.ca,
+        DriveCfg {
+            method: "GET",
+            path: "/with-trailers",
+            req_body: vec![],
+            req_trailers: vec![],
+            stall_after: None,
+            stall_for: Duration::ZERO,
+            reset_after_req_bytes: None,
+            omit_authority: false,
+            stop_reading_resp_after: None,
+        },
+        Duration::from_secs(25),
+    )
+    .await;
+
+    let _ = tokio::time::timeout(Duration::from_secs(2), listener.shutdown()).await;
+    sd.cancel();
+    bh.abort();
+
+    assert_eq!(out.status, Some(200), "trailer response must be 200");
+    assert!(out.fin, "clean FIN expected after forwarded trailers");
+    assert_eq!(
+        out.body, b"h3-trail-body",
+        "response body byte-identical alongside forwarded trailers"
+    );
+    assert_eq!(
+        out.resp_headers_frames, 2,
+        "the client must see TWO HEADERS frames: the response head + a \
+         FORWARDED post-DATA trailing-HEADERS frame (got {})",
+        out.resp_headers_frames
+    );
+    assert!(
+        out.resp_trailer_names.iter().any(|n| n == "x-resp-trailer"),
+        "the forwarded trailer field must be present on the H3→H3 \
+         response leg (got names {:?})",
+        out.resp_trailer_names
+    );
+}
+
+/// Cluster 2 / CASE 9b — the upstream sends 200 + DATA + a MALFORMED
+/// trailing-HEADERS frame containing a `:`-prefixed pseudo-header.
+/// Drives the trailer pseudo-header reject arm (h3_bridge.rs
+/// :3290-3293: `RespAbort::BadHead` → `RespEvent::Reset`). The pseudo
+/// trailer MUST NEVER be forwarded and the client MUST NOT get a clean
+/// complete 200+FIN.
+#[tokio::test]
+async fn h3h3_e2e_response_pseudo_header_trailer_rejected() {
+    let certs = generate_loopback_certs();
+    let seen = BackendSeen::default();
+    let (backend, bh) = spawn_h3_upstream(
+        &certs,
+        UpstreamMode::RespWithTrailers(TrailerKind::PseudoHeader),
+        seen,
+    )
+    .await;
+    let (listener, gw, sd) = start_h3_listener_h3(&certs, backend).await;
+
+    let out = drive_h3(
+        gw,
+        &certs.ca,
+        DriveCfg {
+            method: "GET",
+            path: "/bad-trailers",
+            req_body: vec![],
+            req_trailers: vec![],
+            stall_after: None,
+            stall_for: Duration::ZERO,
+            reset_after_req_bytes: None,
+            omit_authority: false,
+            stop_reading_resp_after: None,
+        },
+        Duration::from_secs(25),
+    )
+    .await;
+
+    let _ = tokio::time::timeout(Duration::from_secs(2), listener.shutdown()).await;
+    sd.cancel();
+    bh.abort();
+
+    assert!(
+        !out.resp_trailer_names.iter().any(|n| n.starts_with(':')),
+        "a pseudo-header trailer MUST NEVER be forwarded to the client \
+         (got trailer names {:?})",
+        out.resp_trailer_names
+    );
+    assert!(
+        !(out.status == Some(200) && out.fin && !out.body.is_empty()),
+        "a malformed (pseudo-header) trailer section must abort the \
+         response, never a clean complete 200+FIN (status={:?} \
+         fin={} body_len={})",
+        out.status,
+        out.fin,
+        out.body.len()
+    );
+}
+
+/// Cluster 3 / CASE 10a — the upstream sends 200, then an UNKNOWN H3
+/// frame type (RFC 9114 §7.2.8 reserved) BEFORE the DATA body, then a
+/// clean FIN. Drives the unknown-frame skip path (h3_bridge.rs
+/// :3200-3209 `InSkip` entry + :3349-3360 incremental drain). The
+/// gateway MUST transparently skip the unknown frame and still deliver
+/// the body byte-identical with a clean FIN (non-vacuous: the skip
+/// resumed correctly).
+#[tokio::test]
+async fn h3h3_e2e_unknown_response_frame_skipped_transparently() {
+    let certs = generate_loopback_certs();
+    let seen = BackendSeen::default();
+    let (backend, bh) = spawn_h3_upstream(&certs, UpstreamMode::UnknownFrameThenResp, seen).await;
+    let (listener, gw, sd) = start_h3_listener_h3(&certs, backend).await;
+
+    let out = drive_h3(
+        gw,
+        &certs.ca,
+        DriveCfg {
+            method: "GET",
+            path: "/unknown-frame",
+            req_body: vec![],
+            req_trailers: vec![],
+            stall_after: None,
+            stall_for: Duration::ZERO,
+            reset_after_req_bytes: None,
+            omit_authority: false,
+            stop_reading_resp_after: None,
+        },
+        Duration::from_secs(25),
+    )
+    .await;
+
+    let _ = tokio::time::timeout(Duration::from_secs(2), listener.shutdown()).await;
+    sd.cancel();
+    bh.abort();
+
+    assert_eq!(out.status, Some(200), "200 expected past the skipped frame");
+    assert!(
+        out.fin,
+        "clean FIN expected — the unknown frame was skipped and parsing \
+         resumed (InSkip drain non-vacuous)"
+    );
+    assert_eq!(
+        out.body, b"h3-skip-body",
+        "body byte-identical after a transparently-skipped unknown frame"
+    );
+}
+
+/// Cluster 3 / CASE 10b — the upstream sends 200, then a HEADERS-typed
+/// (`0x01`) frame header declaring a length `> DEFAULT_MAX_PAYLOAD_SIZE`
+/// (1 MiB) with NO payload. Drives the FRAME_HEADERS over-cap arm
+/// (h3_bridge.rs :3189-3193: `check_block_len` → `RespAbort::BadHead`
+/// → break). The client MUST NOT get a clean complete 200+FIN.
+#[tokio::test]
+async fn h3h3_e2e_oversized_headers_block_rejected() {
+    let certs = generate_loopback_certs();
+    let seen = BackendSeen::default();
+    let (backend, bh) = spawn_h3_upstream(
+        &certs,
+        UpstreamMode::OversizedBlock { frame_type: 0x01 },
+        seen,
+    )
+    .await;
+    let (listener, gw, sd) = start_h3_listener_h3(&certs, backend).await;
+
+    let out = drive_h3(
+        gw,
+        &certs.ca,
+        DriveCfg {
+            method: "GET",
+            path: "/oversized-headers",
+            req_body: vec![],
+            req_trailers: vec![],
+            stall_after: None,
+            stall_for: Duration::ZERO,
+            reset_after_req_bytes: None,
+            omit_authority: false,
+            stop_reading_resp_after: None,
+        },
+        Duration::from_secs(25),
+    )
+    .await;
+
+    let _ = tokio::time::timeout(Duration::from_secs(2), listener.shutdown()).await;
+    sd.cancel();
+    bh.abort();
+
+    assert!(
+        !(out.status == Some(200) && out.fin),
+        "an oversized declared HEADERS block must abort (BadHead), \
+         never a clean complete 200+FIN (status={:?} fin={})",
+        out.status,
+        out.fin
+    );
+}
+
+/// Cluster 3 / CASE 10c — as 10b but the oversized declared length is
+/// on an UNKNOWN frame type (`0x21`), driving the OTHER `check_block_len`
+/// call-site: the unknown-frame over-cap arm (h3_bridge.rs :3204-3207:
+/// `check_block_len` → `RespAbort::BadHead` → break) — a distinct line
+/// region from 10b's FRAME_HEADERS arm. The client MUST NOT get a clean
+/// complete 200+FIN.
+#[tokio::test]
+async fn h3h3_e2e_oversized_unknown_frame_rejected() {
+    let certs = generate_loopback_certs();
+    let seen = BackendSeen::default();
+    let (backend, bh) = spawn_h3_upstream(
+        &certs,
+        UpstreamMode::OversizedBlock { frame_type: 0x21 },
+        seen,
+    )
+    .await;
+    let (listener, gw, sd) = start_h3_listener_h3(&certs, backend).await;
+
+    let out = drive_h3(
+        gw,
+        &certs.ca,
+        DriveCfg {
+            method: "GET",
+            path: "/oversized-unknown",
+            req_body: vec![],
+            req_trailers: vec![],
+            stall_after: None,
+            stall_for: Duration::ZERO,
+            reset_after_req_bytes: None,
+            omit_authority: false,
+            stop_reading_resp_after: None,
+        },
+        Duration::from_secs(25),
+    )
+    .await;
+
+    let _ = tokio::time::timeout(Duration::from_secs(2), listener.shutdown()).await;
+    sd.cancel();
+    bh.abort();
+
+    assert!(
+        !(out.status == Some(200) && out.fin),
+        "an oversized declared UNKNOWN-frame length must abort \
+         (BadHead), never a clean complete 200+FIN (status={:?} \
+         fin={})",
+        out.status,
+        out.fin
+    );
+}
+
+// ─────────────────────────────────────────────────────────────────────
+// §5  F-S7-8 cluster 4 — further targeted real-wire coverage of the
+//     session error/edge arms (test asset only; same real wire).
+// ─────────────────────────────────────────────────────────────────────
+
+/// Cluster 4 / CASE 11 — the H3 backend address has NO live quiche
+/// upstream listening, so the pool's fresh dial cannot complete the
+/// handshake and `pool.acquire(addr, sni)` returns `Err` after the
+/// dial deadline. Drives the pool-acquire-failure 502 path
+/// (h3_bridge.rs :2856-2862: the `acquire` `Err(e)` arm → `inline(502)`
+/// → return `Ok(())`) AND the `inline` helper SUCCESS path
+/// (:2785-2788: `encode_h3_response` Ok → `Bytes` + `End`). The client
+/// MUST receive a 502 with a clean FIN (a genuine inline error
+/// response, NOT a dropped/hung stream).
+#[tokio::test]
+async fn h3h3_e2e_pool_acquire_failure_returns_502() {
+    let certs = generate_loopback_certs();
+    // A loopback UDP address with NOTHING bound: bind to grab a free
+    // ephemeral port, capture it, then drop the socket so the port is
+    // free again. The gateway's pooled dial sends Initials there and
+    // never gets a handshake response ⇒ `acquire` fails at the dial
+    // deadline. Deterministic; no long idle (the dial deadline bounds
+    // it — see quic_pool::dial_new).
+    let dead_backend = {
+        let s =
+            std::net::UdpSocket::bind(SocketAddr::V4(SocketAddrV4::new(Ipv4Addr::LOCALHOST, 0)))
+                .unwrap();
+        s.local_addr().unwrap()
+        // `s` dropped here ⇒ port unbound, no responder.
+    };
+
+    let (listener, gw, sd) = start_h3_listener_h3(&certs, dead_backend).await;
+
+    let out = drive_h3(
+        gw,
+        &certs.ca,
+        DriveCfg {
+            method: "GET",
+            path: "/no-backend",
+            req_body: vec![],
+            req_trailers: vec![],
+            stall_after: None,
+            stall_for: Duration::ZERO,
+            reset_after_req_bytes: None,
+            omit_authority: false,
+            stop_reading_resp_after: None,
+        },
+        Duration::from_secs(20),
+    )
+    .await;
+
+    let _ = tokio::time::timeout(Duration::from_secs(2), listener.shutdown()).await;
+    sd.cancel();
+
+    assert_eq!(
+        out.status,
+        Some(502),
+        "a failed pool acquire (no live backend) MUST yield an inline \
+         502 (status={:?})",
+        out.status
+    );
+    assert!(
+        out.fin,
+        "the inline 502 must be a CLEAN complete response (FIN), not a \
+         hung/dropped stream"
+    );
+    assert_eq!(
+        out.body, b"bad gateway",
+        "the inline 502 body must be the gateway's `bad gateway` sentinel"
+    );
+}
+
+/// Cluster 4 / CASE 12 — the H3 client reads the response head + a few
+/// body bytes, then STOP_SENDINGs the RESPONSE stream and stops reading.
+/// quiche surfaces this to the gateway as a peer STOP_SENDING on the
+/// stream it is writing; the actor's `reap_client_cancelled_responses`
+/// drops the response receiver, so the bridge's next
+/// `send!`/`send_progress!` returns `Err(RespAbort::ClientGone)`
+/// (h3_bridge.rs :2806 — the `send!` macro's `ClientGone` map). The
+/// client MUST NOT receive a clean complete 200+FIN carrying the whole
+/// body (the relay was cancelled mid-stream).
+#[tokio::test]
+async fn h3h3_e2e_client_stop_sending_response_maps_client_gone() {
+    let certs = generate_loopback_certs();
+    let seen = BackendSeen::default();
+    // A multi-MiB response so the relay is genuinely in-flight across
+    // many ticks when the client STOP_SENDINGs after the first 64 KiB.
+    let body = binary_body(4 * 1024 * 1024);
+    let (backend, bh) = spawn_h3_upstream(
+        &certs,
+        UpstreamMode::LargeResp(Arc::new(body.clone())),
+        seen,
+    )
+    .await;
+    let (listener, gw, sd) = start_h3_listener_h3(&certs, backend).await;
+
+    let out = drive_h3(
+        gw,
+        &certs.ca,
+        DriveCfg {
+            method: "GET",
+            path: "/client-gone",
+            req_body: vec![],
+            req_trailers: vec![],
+            stall_after: None,
+            stall_for: Duration::ZERO,
+            reset_after_req_bytes: None,
+            omit_authority: false,
+            stop_reading_resp_after: Some(64 * 1024),
+        },
+        // Bounded settle window: long enough for the STOP_SENDING to
+        // land and the gateway to attempt another relay send (→
+        // ClientGone), short enough to keep the test snappy.
+        Duration::from_secs(10),
+    )
+    .await;
+
+    let _ = tokio::time::timeout(Duration::from_secs(2), listener.shutdown()).await;
+    sd.cancel();
+    bh.abort();
+
+    // The client cancelled mid-stream: it MUST NOT have received a
+    // clean complete 200+FIN carrying the whole 4 MiB body.
+    assert!(
+        !(out.fin && out.body.len() >= body.len()),
+        "a client STOP_SENDING mid-response must NOT yield a clean \
+         complete delivery of the whole body (fin={} body_len={} of {})",
+        out.fin,
+        out.body.len(),
+        body.len()
+    );
+}
+
+/// Cluster 4 / CASE 13 — the H3 client omits the `:authority`
+/// pseudo-header entirely. The gateway's `req.authority` is then empty,
+/// so `h3_to_h3_stream_resp` substitutes the configured SNI for the
+/// upstream request `:authority` (h3_bridge.rs :2876-2877 — the
+/// `if req.authority.is_empty()` TRUE branch). The request must still
+/// succeed end-to-end: 200, clean FIN, body byte-identical at the
+/// backend (an absent authority is a legitimate handled case here).
+#[tokio::test]
+async fn h3h3_e2e_absent_authority_substitutes_sni() {
+    let certs = generate_loopback_certs();
+    let seen = BackendSeen::default();
+    let (backend, bh) = spawn_h3_upstream(&certs, UpstreamMode::Echo, seen.clone()).await;
+    let (listener, gw, sd) = start_h3_listener_h3(&certs, backend).await;
+
+    let payload = binary_body(40 * 1024);
+    let chunks: Vec<Vec<u8>> = payload.chunks(16 * 1024).map(<[u8]>::to_vec).collect();
+
+    let out = drive_h3(
+        gw,
+        &certs.ca,
+        DriveCfg {
+            method: "POST",
+            path: "/no-authority",
+            req_body: chunks,
+            req_trailers: vec![],
+            stall_after: None,
+            stall_for: Duration::ZERO,
+            reset_after_req_bytes: None,
+            omit_authority: true,
+            stop_reading_resp_after: None,
+        },
+        Duration::from_secs(25),
+    )
+    .await;
+
+    let _ = tokio::time::timeout(Duration::from_secs(2), listener.shutdown()).await;
+    sd.cancel();
+    let got = seen.body.lock().unwrap().clone();
+    bh.abort();
+
+    assert_eq!(
+        out.status,
+        Some(200),
+        "an absent :authority must still succeed (SNI substituted \
+         upstream); status={:?}",
+        out.status
+    );
+    assert!(out.fin, "clean FIN expected for the absent-authority case");
+    assert!(
+        got == payload,
+        "request body byte-identical at the backend even with the \
+         SNI-substituted authority"
+    );
+    assert_eq!(out.body, payload, "echoed response body byte-identical");
+}
+
+/// Cluster 4 / CASE 14 — the upstream emits a ZERO-LENGTH DATA frame
+/// (`0x00 0x00`) BEFORE the real body, then the body + a clean FIN.
+/// Drives the gateway's empty-DATA fast-path (h3_bridge.rs :3214-3217:
+/// `RecvState::InData { remaining: 0 }` returns straight to
+/// `AwaitingHeader` with no spurious chunk). The gateway MUST skip the
+/// zero-length frame and still deliver the real body byte-identical
+/// with a clean FIN (non-vacuous: the empty frame was handled, not
+/// mis-parsed, and the body resumed correctly).
+#[tokio::test]
+async fn h3h3_e2e_empty_data_frame_skipped_then_body() {
+    let certs = generate_loopback_certs();
+    let seen = BackendSeen::default();
+    let (backend, bh) = spawn_h3_upstream(&certs, UpstreamMode::EmptyDataThenResp, seen).await;
+    let (listener, gw, sd) = start_h3_listener_h3(&certs, backend).await;
+
+    let out = drive_h3(
+        gw,
+        &certs.ca,
+        DriveCfg {
+            method: "GET",
+            path: "/empty-data",
+            req_body: vec![],
+            req_trailers: vec![],
+            stall_after: None,
+            stall_for: Duration::ZERO,
+            reset_after_req_bytes: None,
+            omit_authority: false,
+            stop_reading_resp_after: None,
+        },
+        Duration::from_secs(25),
+    )
+    .await;
+
+    let _ = tokio::time::timeout(Duration::from_secs(2), listener.shutdown()).await;
+    sd.cancel();
+    bh.abort();
+
+    assert_eq!(
+        out.status,
+        Some(200),
+        "200 expected past the zero-length DATA frame"
+    );
+    assert!(
+        out.fin,
+        "clean FIN expected — the zero-length DATA frame was handled \
+         and parsing resumed"
+    );
+    assert_eq!(
+        out.body, b"h3-empty-data-body",
+        "real body byte-identical after a skipped zero-length DATA frame"
+    );
+}
+
+/// Cluster 4 / CASE 15 — the upstream sends 200, then a DATA frame
+/// header declaring 4096 bytes but only 16 bytes of payload, then a
+/// clean QUIC FIN. The gateway sees the upstream stream end while still
+/// mid-`InData` (`remaining > 0`), i.e. NOT between frames, so it is a
+/// premature EOF (h3_bridge.rs :3375-3383: the `else { outcome =
+/// PrematureEof }` branch — never FIN a partial body, the response-
+/// splitting / smuggling guard). The client MUST NOT receive a clean
+/// complete 200+FIN.
+#[tokio::test]
+async fn h3h3_e2e_upstream_premature_eof_mid_data_no_clean_fin() {
+    let certs = generate_loopback_certs();
+    let seen = BackendSeen::default();
+    let (backend, bh) = spawn_h3_upstream(&certs, UpstreamMode::HeadThenTruncatedData, seen).await;
+    let (listener, gw, sd) = start_h3_listener_h3(&certs, backend).await;
+
+    let out = drive_h3(
+        gw,
+        &certs.ca,
+        DriveCfg {
+            method: "GET",
+            path: "/premature-eof",
+            req_body: vec![],
+            req_trailers: vec![],
+            stall_after: None,
+            stall_for: Duration::ZERO,
+            reset_after_req_bytes: None,
+            omit_authority: false,
+            stop_reading_resp_after: None,
+        },
+        Duration::from_secs(25),
+    )
+    .await;
+
+    let _ = tokio::time::timeout(Duration::from_secs(2), listener.shutdown()).await;
+    sd.cancel();
+    bh.abort();
+
+    // An upstream FIN mid-DATA (declared 4096, only 16 sent) must NEVER
+    // be presented to the client as a clean complete 200+FIN.
+    assert!(
+        !(out.status == Some(200) && out.fin),
+        "a premature upstream EOF mid-DATA must NOT yield a clean \
+         complete 200+FIN (status={:?} fin={} body_len={})",
+        out.status,
+        out.fin,
+        out.body.len()
     );
 }
