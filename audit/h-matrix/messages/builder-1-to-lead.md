@@ -180,3 +180,67 @@ verifier's, not mine.)
   proxy_request — smuggle tests stay green.
 
 Standing by for approval / corrections before any source edit.
+
+---
+
+## 2026-05-23 — I1 + I2 DONE (built per approval; awaiting independent verifier)
+
+Implemented exactly to the approval (MOD1 local `H1PumpAbort`, h2_proxy.rs
+BYTE-UNCHANGED; MOD2 both CL + chunked framings safe; both reaffirmations
+explicit in source).
+
+**I1 — bounded ingress pump + StreamBody — SHA `b01a13d2`**
+- Branch-B-only bounded pump in `H1Proxy::proxy_request` (mirror of the M-D
+  pump, lookahead removed): bounded mpsc depth 8 x 8 KiB = 64 KiB fixed
+  in-flight window -> in-flight-counting `StreamBody` -> hyper http1 sender.
+  No whole-body buffer, no collect(), no Limited.
+- F-MD-1: parts.version=HTTP/1.1 + strip CL/TE.
+- F-MD-4 (H1 MIRROR-IMAGE, documented verbatim at the pump site): `None` =
+  positively-confirmed clean end; `Some(Err)` (IncompleteBody on early EOF,
+  BOTH CL and chunked) = truncation -> inject `H1PumpAbort` BEFORE the verdict
+  (FIFO Err-before-close) -> hyper aborts upstream WITHOUT terminator. Do NOT
+  use is_end_stream (unreliable for Kind::Chan). On Err verdict the caller
+  aborts conn_handle+pump and returns ProxyErr, never relays the response;
+  take_stream() single-use kept (aborted upstream dropped, not pooled).
+- Q-H4: imported `MAX_REQUEST_BODY_BYTES` (NOT redefined) 64 MiB -> 413.
+- F-MD-2: receiver-drop -> drain-and-validate (relay backend early response),
+  NOT a 413.
+- Q-H3 branch (b): `validate_h1_request_trailers` rejects forbidden framing/
+  routing trailer fields (CL/TE/Host/Trailer/TE/Connection + HOP_BY_HOP) ->
+  400; legitimate trailers forwarded byte-faithfully. (Decoder fact: hyper-1.9.0
+  `decode_trailers` rejects none — confirmed in source.)
+- ProxyErr += BadRequest(String)->400, BodyTooLarge->413; call-site + WS-dial
+  match arms updated.
+- Q-H2 preserved: ROUND8-L7-10 doc-block + take_stream() single-use intact.
+
+**I2 — non-vacuous gauge (F-MD-3) — SHA `0a479579`**
+- `pub static H1_REQ_MAX_RETAINED_BODY_BYTES` + `pub fn record_retained_h1`
+  (CAS-max) behind `#[cfg(any(test, feature="test-gauges"))]`, distinct symbol
+  from the H2 gauge, reachable as
+  `lb_l7::h1_proxy::H1_REQ_MAX_RETAINED_BODY_BYTES` under --all-features (R10).
+- Record site in the pump's `send_chunked!`: records LIVE in_flight_bytes on
+  each push; decrement in the StreamBody poll when hyper pulls. Non-vacuous.
+
+**Checks I ran (author-side; the real proofs are the verifier's):**
+- `cargo build -p lb-l7 --all-features`: clean. Also default-features (gauge
+  off) clean.
+- `cargo clippy -p lb-l7 --all-targets --all-features -- -D warnings`: clean.
+  Also default-features clippy clean.
+- `cargo fmt --check -p lb-l7`: clean.
+- Regression (all green): lb-l7 lib 91; full lb-l7 integration suite (all 31
+  test binaries ok); h1_proxy_e2e 3/3; bridging_h1_h1 1; round8_body_overread
+  4 (doc-block provenance green); trailer_passthrough 8; smuggle_matrix 13;
+  smuggle_wired 3; round8_keepalive_count_cap 3; security_smuggling_{cl_te,
+  te_cl,h2_downgrade} 3.
+- h2_proxy.rs untouched (MOD1): `git diff a2e0f6fe -- crates/lb-l7/src/h2_proxy.rs`
+  is empty.
+- Disk: 27 GB free (above the 25 GB floor) throughout.
+
+**NOT self-verified (verifier owns, per the bar):** real-wire both-direction
+binary byte-identity; non-vacuous/body-size-independent memory + inverted
+probe; backpressure causal chains; F-MD-4 premature-close complete=0 on the
+wire for BOTH CL and chunked; 64 MiB->413 real-wire; >=80% coverage sub-metric.
+I did NOT self-declare BUILT.
+
+Pushed to origin/s9/builder-1 (tip `0a479579`). Standing by for verifier
+findings / any lead corrections.
