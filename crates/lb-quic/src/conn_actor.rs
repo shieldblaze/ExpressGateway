@@ -37,7 +37,7 @@ use bytes::Bytes;
 use crate::h3_bridge::{
     BodyItem, H3_RESP_CHANNEL_DEPTH, H3Request, MAX_REQUEST_BODY_BYTES, MAX_RESPONSE_BODY_BYTES,
     ReqBodyEvent, RespEvent, StreamRxBuf, encode_h3_response, h3_to_h1_stream_resp,
-    h3_to_h2_stream_resp, h3_to_h3_roundtrip,
+    h3_to_h2_stream_resp, h3_to_h3_stream_resp,
 };
 
 /// SESSION 2 / P1-A: depth of the per-stream bounded request-body
@@ -117,8 +117,8 @@ pub struct ActorParams {
     pub backends: Arc<Vec<SocketAddr>>,
     /// Optional upstream H3 pool + single upstream H3 backend
     /// `(addr, sni)`. When configured, the actor routes H3 requests
-    /// via [`h3_to_h3_roundtrip`] instead of the H1/TcpPool path.
-    /// Pillar 3b.3c-3.
+    /// via [`h3_to_h3_stream_resp`] (bounded-incremental, R8) instead
+    /// of the H1/TcpPool path. SESSION 7 / H3→H3 R8.
     pub h3_backend: Option<(QuicUpstreamPool, SocketAddr, String)>,
     /// Optional upstream H2 pool + single upstream H2 backend `(addr)`.
     /// When configured (and `h2_backend` is `Some`), the actor routes
@@ -861,17 +861,82 @@ fn poll_h3(
                                 // the headers recv loop for it.
                                 break;
                             }
+                            // SESSION 7 / H3→H3 R8 (J3): H3→H3 when
+                            // h3_backend is configured. Was the
+                            // BUFFERED, request-body-DROPPING H3→H3
+                            // round-trip on the legacy
+                            // `request_tasks` Vec path; now the SAME
+                            // bounded-incremental request+response
+                            // producer shape the H3→H1/H3→H2 cells
+                            // proved — `h3_to_h3_stream_resp` on the
+                            // `resp_tasks` path with the identical
+                            // (btx/brx)+(resp_tx/resp_rx)+Progressive
+                            // StreamTx registration and the shared
+                            // `fin`/body-channel tail (so a slow H3
+                            // upstream backpressures the H3 client, and
+                            // the request body is forwarded — no longer
+                            // silently deleted). This block is a
+                            // token-for-token clone of the verified
+                            // H3→H2 branch above; the ONLY deltas are
+                            // the `sni` destructure, the spawned fn
+                            // (`h3_to_h3_stream_resp` + `&sni`), and the
+                            // warn label.
                             if let Some((qpool, addr, sni)) = h3_backend {
                                 let qpool = qpool.clone();
                                 let addr = *addr;
                                 let sni = sni.clone();
-                                request_tasks.push(tokio::spawn(async move {
-                                    let bytes =
-                                        Box::pin(h3_to_h3_roundtrip(&req, addr, &sni, &qpool))
-                                            .await;
-                                    (sid, bytes)
+                                let (btx, brx) =
+                                    mpsc::channel::<ReqBodyEvent>(H3_BODY_CHANNEL_DEPTH);
+                                let (resp_tx, resp_rx) =
+                                    mpsc::channel::<RespEvent>(H3_RESP_CHANNEL_DEPTH);
+                                resp_rx_by_stream.insert(sid, resp_rx);
+                                stream_response.insert(sid, StreamTx::progressive());
+                                resp_tasks.push(tokio::spawn(async move {
+                                    if let Err(abort) = h3_to_h3_stream_resp(
+                                        &req,
+                                        addr,
+                                        &sni,
+                                        &qpool,
+                                        brx,
+                                        resp_tx,
+                                        MAX_RESPONSE_BODY_BYTES,
+                                    )
+                                    .await
+                                    {
+                                        tracing::warn!(
+                                            ?abort,
+                                            stream_id = sid,
+                                            "H3→H3 resp stream aborted"
+                                        );
+                                    }
                                 }));
-                                continue;
+                                if fin {
+                                    // Bodyless (HEADERS + FIN): the
+                                    // egress peeks `End` first ⇒
+                                    // legitimately bodyless request.
+                                    let _ = btx.try_send(ReqBodyEvent::End {
+                                        trailers: Vec::new(),
+                                    });
+                                } else {
+                                    // Body to follow — identical
+                                    // body-channel handover to the H1
+                                    // streaming path (M-A pump,
+                                    // unchanged).
+                                    body_tx_by_stream.insert(sid, btx);
+                                    body_pending.entry(sid).or_default();
+                                    decode_into_pending(
+                                        sid,
+                                        rx_by_stream,
+                                        body_tx_by_stream,
+                                        body_pending,
+                                        &[],
+                                        fin,
+                                    );
+                                    flush_pending(sid, body_tx_by_stream, body_pending);
+                                }
+                                // Stream is now in the Body phase; stop
+                                // the headers recv loop for it.
+                                break;
                             }
                             let Some(backend) = select_backend(backends) else {
                                 tracing::warn!("no backends available for H3 request");
