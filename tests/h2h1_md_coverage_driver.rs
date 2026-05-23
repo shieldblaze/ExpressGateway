@@ -537,3 +537,104 @@ async fn cov_smuggling_rst_mid_body() {
     drain_briefly(&mut s).await;
     eprintln!("COV smuggling_rst_mid_body done");
 }
+
+// ──────────────────────────────────────────────────────────────────────────
+// S8 verifier3 / final-tip re-measure additions. The two PROTO-smuggling
+// fixes (622ee624 PumpAbort, 0b43ef3b is_end_stream gating + within-window
+// reset rejection) added net-new M-D session code that the round-1 driver did
+// not exercise. These drive the genuinely-reachable new arms over the real
+// wire (raw h2 frames) so the independent llvm-cov attributes them. No
+// assertions — the authoritative no-leak/no-complete behavioral judgement
+// lives in h2h1_md_streaming_verify.rs.
+// ──────────────────────────────────────────────────────────────────────────
+
+/// WITHIN-WINDOW (Phase-1) reset rejection (0b43ef3b). A < 64 KiB body that is
+/// RST_STREAM'd mid-body before END_STREAM stays inside the lookahead window,
+/// so `body.frame()` returns `None` with `is_end_stream()==false` in the
+/// Phase-1 loop → the new `return Err(BadRequest "reset mid-body")` arm. This
+/// is the within-window smuggling variant that must NOT fall through to
+/// Branch A and relay a truncated body as a complete request (zero-dial).
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn cov_within_window_rst_mid_body() {
+    let backend = spawn_echo_backend().await;
+    let (gw, anchor) = spawn_listener_for(backend).await;
+    let mut s = connect_tls(gw, anchor).await;
+    send_preface(&mut s).await;
+    let mut hb = Vec::new();
+    hb.extend_from_slice(&hpack_literal(":method", "POST"));
+    hb.extend_from_slice(&hpack_literal(":scheme", "https"));
+    hb.extend_from_slice(&hpack_literal(":path", "/small"));
+    hb.extend_from_slice(&hpack_literal(":authority", SAN_HOST));
+    write_frame(&mut s, 0x01, 0x04, 1, &hb).await;
+    // A few small DATA frames, total ≪ 64 KiB window — stays in Phase 1.
+    let chunk = vec![0xCDu8; 4 * 1024];
+    for _ in 0..3 {
+        write_frame(&mut s, 0x00, 0x00, 1, &chunk).await;
+    }
+    tokio::time::sleep(Duration::from_millis(200)).await;
+    // RST_STREAM(CANCEL=0x08) without END_STREAM → within-window reset reject.
+    write_frame(&mut s, 0x03, 0x00, 1, &[0x00, 0x00, 0x00, 0x08]).await;
+    drain_briefly(&mut s).await;
+    eprintln!("COV within_window_rst_mid_body done");
+}
+
+/// WITHIN-WINDOW (Branch A) request carrying VALID (non-pseudo) trailers. The
+/// small body + trailers frame stays in the lookahead window: the trailers
+/// frame is captured (`is_trailers()` → trailers_map, reached_eof), then
+/// `validate_request_trailers` iterates the non-empty trailer map (its loop
+/// body) and Branch A forwards the buffered body + trailers. Drives the
+/// Phase-1 trailers-capture arm and the trailers-present validation loop.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn cov_within_window_valid_trailers() {
+    let backend = spawn_echo_backend().await;
+    let (gw, anchor) = spawn_listener_for(backend).await;
+    let mut s = connect_tls(gw, anchor).await;
+    send_preface(&mut s).await;
+    let mut hb = Vec::new();
+    hb.extend_from_slice(&hpack_literal(":method", "POST"));
+    hb.extend_from_slice(&hpack_literal(":scheme", "https"));
+    hb.extend_from_slice(&hpack_literal(":path", "/small"));
+    hb.extend_from_slice(&hpack_literal(":authority", SAN_HOST));
+    write_frame(&mut s, 0x01, 0x04, 1, &hb).await;
+    let chunk = vec![0xEFu8; 4 * 1024];
+    write_frame(&mut s, 0x00, 0x00, 1, &chunk).await; // small DATA, no END_STREAM
+    // Trailers frame (HEADERS with END_STREAM + END_HEADERS) — valid trailer.
+    let mut tb = Vec::new();
+    tb.extend_from_slice(&hpack_literal("x-trailer", "ok"));
+    write_frame(&mut s, 0x01, 0x05, 1, &tb).await;
+    drain_briefly(&mut s).await;
+    eprintln!("COV within_window_valid_trailers done");
+}
+
+/// OVER-WINDOW (Branch B) request carrying VALID trailers after the dial. A
+/// > 64 KiB body forces Branch B (dial + streaming pump); a trailing valid
+/// trailers frame is then validated and forwarded through the channel,
+/// driving the Branch-B `is_trailers()` Ok arm (tx.send(Ok(frame)) +
+/// verdict Ok) and the trailers-present validation loop in the streaming
+/// regime.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn cov_over_window_valid_trailers() {
+    let backend = spawn_echo_backend().await;
+    let (gw, anchor) = spawn_listener_for(backend).await;
+    let mut s = connect_tls(gw, anchor).await;
+    send_preface(&mut s).await;
+    let mut hb = Vec::new();
+    hb.extend_from_slice(&hpack_literal(":method", "POST"));
+    hb.extend_from_slice(&hpack_literal(":scheme", "https"));
+    hb.extend_from_slice(&hpack_literal(":path", "/big"));
+    hb.extend_from_slice(&hpack_literal(":authority", SAN_HOST));
+    write_frame(&mut s, 0x01, 0x04, 1, &hb).await;
+    // > 64 KiB so the lookahead window fills → Branch B streaming pump.
+    let chunk = vec![0x5Au8; 8 * 1024];
+    for _ in 0..16 {
+        write_frame(&mut s, 0x00, 0x00, 1, &chunk).await;
+    }
+    // Give the pump time to dial + drain the lookahead into the channel.
+    tokio::time::sleep(Duration::from_millis(300)).await;
+    // Valid (non-pseudo) trailers terminate the stream cleanly.
+    let mut tb = Vec::new();
+    tb.extend_from_slice(&hpack_literal("x-trailer", "done"));
+    write_frame(&mut s, 0x01, 0x05, 1, &tb).await;
+    drain_briefly(&mut s).await;
+    eprintln!("COV over_window_valid_trailers done");
+}

@@ -250,3 +250,131 @@ covered):
 - The harness-bug fix is confined to the verifier's own test file
   (`tests/h2h1_md_streaming_verify.rs`); the builder src under test is the
   exact `origin/s8/builder-1` tip `bc23b9f8`, diff-verified empty.
+
+---
+
+## § final-tip coverage re-measure (verifier3, S8)
+
+**Why a re-measure.** The §7 81.82% was measured on tip `bc23b9f8`. Two PROTO
+smuggling fixes then edited the M-D session code and cannot be cited stale
+(R5 + CF-COV-S8):
+- `622ee624` — inbound-abort → hyper BODY ERROR via the new constructible
+  `PumpAbort` type (`tx.send(Err(PumpAbort))` on every abort/over-cap arm,
+  never a clean EOF drop).
+- `0b43ef3b` — positively confirm `END_STREAM` (`body.is_end_stream()`) instead
+  of `None == EOF`, incl. the **within-window Phase-1 reset rejection** (a
+  < 64 KiB body RST'd mid-body must be rejected zero-dial, not relayed as a
+  complete buffered request).
+
+**Tip measured.** `feature/h-matrix-s8` `5a5e633e` (final integrated tip: final
+M-D src + gauge-serialization fix `414e9b1c` + both smuggle fixes). Verified
+present: `grep -c is_end_stream crates/lb-l7/src/h2_proxy.rs` == 5 (≥5). The
+`crates/` tree in the `s8/verifier` measurement worktree is diff-identical to
+`feature/h-matrix-s8` (`git diff feature/h-matrix-s8 -- crates/` empty); only
+the verifier-owned awk + tests + this doc + the evidence lcov differ.
+
+**Re-calibrated session sub-metric ranges.** Every range shifted (smuggle
+fixes grew `proxy_request`). Convention unchanged: `fn`/`struct` signature line
+through the last body line; lcov only emits `DA:` for instrumentable lines.
+
+| Item | round-1 (bc23b9f8) | final tip (5a5e633e) | net-new this session |
+|---|---|---|---|
+| `PumpAbort` type + Display/Error impls | — (did not exist) | 108–116 | YES (622ee624) |
+| `proxy_request` (lookahead + Branch A + Branch B pump) | 1306–1741 | 1333–1857 | grew (is_end_stream gating, PumpAbort arms, within-window reset reject) |
+| `validate_request_trailers` | 1956–1973 | 2071–2088 | shifted |
+| `concat_chunks` | 1978–1987 | 2093–2102 | shifted |
+| `record_retained` | 2356–2370 | 2471–2485 | shifted |
+
+The net-new helpers/types the task enumerates all fall in-range: the
+`PumpAbort` type (108–116), the in-flight-counter body wrapper (the
+`StreamBody::new(poll_fn(..))` decrement closure, 1567–1577, inside
+`proxy_request`), `concat_chunks`, `validate_request_trailers`, `record_retained`.
+
+**Tool (canonical).** toolchain `1.85.1`, `cargo-llvm-cov 0.8.7`, single-shot:
+```
+export CARGO_TARGET_DIR=/home/ubuntu/Code/eg-target
+cargo llvm-cov --workspace --features test-gauges --lcov \
+  --output-path /home/ubuntu/Code/s8-eg-cov-runN.lcov \
+  --test h2h1_md_coverage_driver --test h2h1_md_streaming_verify \
+  --test h2_validation_before_forward -- --test-threads=1
+awk -f audit/h-matrix/s8-md-cov.awk /home/ubuntu/Code/s8-eg-cov-runN.lcov
+```
+All test binaries green (coverage driver 11 passed, streaming-verify 14 passed,
+h2_validation_before_forward passed).
+
+**Tests added (verifier3, in the coverage driver — I own tests, not the src).**
+The first measurement on the final tip came in at **77.12% (246/319)** — BELOW
+the 80% bar — because the new smuggle-fix arms were unexercised (within-window
+reset reject 1431–1436, trailers-present validation loop 2076–2084, Phase-1
+trailers capture 1454–1457 all uncovered). Added 3 minimal REAL-WIRE (raw h2
+frame) driver tests in `tests/h2h1_md_coverage_driver.rs`:
+- `cov_within_window_rst_mid_body` — < 64 KiB body RST'd mid-body → exercises
+  the new Phase-1 within-window reset rejection (`is_end_stream()==false`
+  → `Err(BadRequest "reset mid-body")`, zero-dial).
+- `cov_within_window_valid_trailers` — small body + valid trailers frame →
+  Branch-A trailers capture + the `validate_request_trailers` loop body.
+- `cov_over_window_valid_trailers` — > 64 KiB body + valid trailers → Branch-B
+  streaming pump trailers handling.
+These recovered 1431–1436, 1447, 1454–1456, 2076/2077/2081–2084 → **82.13%**.
+
+**Deterministic result (3× identical; awk-output md5 `fe1d3cb5e5c5a4b3916d2cf5cdb976a2`):**
+```
+PumpAbort type            : 0/3   = 0.00%
+proxy_request (pump)      : 227/277 = 81.95%
+validate_request_trailers : 14/17  = 82.35%
+concat_chunks             : 10/10  = 100.00%
+record_retained           : 11/12  = 91.67%
+SESSION TOTAL (M-D)       : 262/319 = 82.13%   (need >=80% => >=256 covered)
+```
+
+**Uncovered session lines (57, deterministic across 3 runs):**
+```
+111 112 113 1445 1457 1482 1504 1505 1506 1509 1510 1674 1700 1701 1755 1757
+1758 1759 1761 1762 1763 1764 1765 1766 1767 1768 1782 1783 1784 1793 1795
+1796 1797 1798 1799 1800 1801 1802 1803 1804 1805 1806 1807 1808 1809 1810
+1828 1829 1830 1850 1851 1852 1853 2078 2079 2080 2482
+```
+Honest characterization (all defensive/error/edge arms; none is a smuggling
+no-leak/no-complete path that lacks coverage — those are now covered):
+- **111–113** — `PumpAbort::Display::fmt`: trait glue only hit if the abort
+  error is string-formatted; hyper drops the body error without formatting it,
+  so it is never reached at runtime (pure trait-impl coverage gap, not a logic
+  path).
+- **1445, 1457** — 413 total-cap during lookahead / a lookahead arm tail.
+- **1482, 1504–1510, 1828–1830, 1850–1853** — Branch-A/Branch-B upstream
+  connect/send_request error + timeout mapping and the pump-vanished-verdict
+  arm: error/timeout arms (not exercised by a healthy backend).
+- **1674, 1700–1701** — drain-and-validate (F-MD-2) lookahead-`ReceiverGone`
+  variant + its trailers-validate map: reached only when the backend
+  short-circuits DURING the lookahead-drain (a narrow timing window; the
+  over-window early-response test hits the streaming-loop variant instead).
+- **1755–1768** — Branch-B trailers arms: the over-window-valid-trailers test
+  drives the pump but hyper had not yet PULLED the trailers frame through the
+  bounded channel within the brief drive window, so the in-pump
+  `is_trailers()` send/validate lines stayed unhit; covered structurally by the
+  identical Branch-A trailers path (2076–2084 now covered).
+- **1782–1784, 1793, 1795–1810** — Branch-B mid-stream `BodyTooLarge` cap +
+  the post-dial inbound-protocol-error → `PumpAbort` arm: reachable only when a
+  > window stream turns over-cap/malformed AFTER the dial via the live h2 path;
+  the over-window RST variant deterministically surfaces as `None`-not-
+  END_STREAM (1731–1748, COVERED) rather than `Some(Err)`.
+- **2078–2080** — the pseudo-header-in-trailers rejection branch inside the
+  `validate_request_trailers` loop (only valid trailers were sent by the new
+  tests; the raw pseudo-trailer probe is flow-control-rejected before reaching
+  the in-loop check).
+- **2482** — the `record_retained` CAS-retry arm (only taken under a losing
+  concurrent compare-exchange).
+
+**Bar: PASS — 82.13% ≥ 80% on tip `5a5e633e`.** Canonical lcov committed at
+`audit/h-matrix/s8-evidence/s8-h2h1-md-cov-finaltip.lcov`.
+
+**Action for lead:** I ADDED 3 verifier-owned coverage-driver tests (above).
+Per the task the lead must RE-GATE ×3 after this change.
+
+### Environment notes (re-measure)
+- Shared `CARGO_TARGET_DIR=/home/ubuntu/Code/eg-target`; disk held at ~26 GB
+  free through the instrumented builds (well above the 14 GB floor — the base
+  build was already present so the instrumented delta was ~3 GB).
+- AFTER capturing the canonical lcov the instrumented target subdir
+  (`eg-target/llvm-cov-target`) was REMOVED to reclaim disk; the committed
+  evidence lcov is preserved.
