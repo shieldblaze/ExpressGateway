@@ -70,6 +70,24 @@ use crate::ws_proxy::{self, WsProxy, is_h2_extended_connect};
 /// allocation.
 pub const MAX_REQUEST_BODY_BYTES: usize = 64 * 1024 * 1024;
 
+/// S8 / M-D (Q-D4) — depth of the bounded in-flight channel feeding the
+/// streaming H2→H1 request body. Mirrors the H3 cells'
+/// `H3_BODY_CHANNEL_DEPTH = 8`. The fixed in-flight window =
+/// `H2_REQ_CHANNEL_DEPTH × H2_REQ_CHUNK_MAX` (= 64 KiB) is the ceiling on
+/// retained inbound-request memory and DOUBLES as the validate-before-forward
+/// lookahead: a whole request that fits inside the window is polled to EOF
+/// (driving the identical hyper/h2 validation `collect()` did) BEFORE the
+/// upstream is dialed.
+pub const H2_REQ_CHANNEL_DEPTH: usize = 8;
+
+/// S8 / M-D (Q-D4) — maximum size of one chunk pumped through the in-flight
+/// channel. Mirrors the H3 cells' `H3_BODY_CHUNK_MAX = 8 KiB`. The window
+/// ceiling `H2_REQ_CHANNEL_DEPTH × H2_REQ_CHUNK_MAX = 64 KiB` is
+/// body-size-INDEPENDENT and independent of [`MAX_REQUEST_BODY_BYTES`]
+/// (64 MiB) — that body-independence is the R8 property the memory proof
+/// asserts.
+pub const H2_REQ_CHUNK_MAX: usize = 8 * 1024;
+
 /// L7 HTTP/2 reverse proxy. Cheap to clone via [`Arc`].
 pub struct H2Proxy {
     pool: TcpPool,
@@ -1953,6 +1971,41 @@ fn split_host_port(s: &str) -> (&str, Option<&str>) {
     }
 }
 
+/// S8 / M-D (Q-D3 — lb-l7 R8 gauge) — the maximum, observed at any instant,
+/// of the inbound H2→H1 REQUEST memory the bounded ingress pump retains while
+/// a request is in flight: the lookahead/streaming buffer length PLUS the
+/// in-flight channel occupancy (≤ `H2_REQ_CHANNEL_DEPTH × H2_REQ_CHUNK_MAX`).
+/// A whole-body buffering implementation (the `collect()` this cell replaces)
+/// would make this grow with request size; the bounded window keeps it
+/// ≤ `H2_REQ_CHANNEL_DEPTH × H2_REQ_CHUNK_MAX = 64 KiB`, independent of total
+/// request size and of [`MAX_REQUEST_BODY_BYTES`]. Test-only (off by default
+/// so production never compiles the gauge); mirrors lb-quic
+/// `h3_bridge::MAX_RETAINED_BODY_BYTES`.
+#[cfg(any(test, feature = "test-gauges"))]
+pub static H2_REQ_MAX_RETAINED_BODY_BYTES: std::sync::atomic::AtomicUsize =
+    std::sync::atomic::AtomicUsize::new(0);
+
+/// S8 / M-D (test-gauge) — max-update for [`H2_REQ_MAX_RETAINED_BODY_BYTES`].
+/// Identical lock-free CAS-max to lb-quic `h3_bridge::record_retained`: the
+/// gauge only ever moves UP, recording the largest instantaneous retained
+/// inbound-request memory the pump observes.
+#[cfg(any(test, feature = "test-gauges"))]
+pub fn record_retained(n: usize) {
+    use std::sync::atomic::Ordering;
+    let mut cur = H2_REQ_MAX_RETAINED_BODY_BYTES.load(Ordering::Relaxed);
+    while n > cur {
+        match H2_REQ_MAX_RETAINED_BODY_BYTES.compare_exchange_weak(
+            cur,
+            n,
+            Ordering::Relaxed,
+            Ordering::Relaxed,
+        ) {
+            Ok(_) => break,
+            Err(observed) => cur = observed,
+        }
+    }
+}
+
 #[cfg(test)]
 #[allow(clippy::unwrap_used, clippy::expect_used)]
 mod tests {
@@ -1969,6 +2022,45 @@ mod tests {
             );
         }
         m
+    }
+
+    /// S8 / M-D (Q-D4) — pin the in-flight window constants and the ceiling
+    /// formula. The bounded ingress pump's body-independence proof (the R8
+    /// memory bar) rests on these exact values; this guards them against a
+    /// silent drift. `MAX_REQUEST_BODY_BYTES` is the total-body cap (a
+    /// SEPARATE axis from the in-flight window) and is pinned at its def site
+    /// — not duplicated here.
+    #[test]
+    fn h2_req_window_constants_pinned() {
+        assert_eq!(H2_REQ_CHANNEL_DEPTH, 8, "in-flight channel depth");
+        assert_eq!(H2_REQ_CHUNK_MAX, 8 * 1024, "per-chunk max (8 KiB)");
+        // Window ceiling = depth × chunk = 64 KiB, body-size-INDEPENDENT.
+        assert_eq!(
+            H2_REQ_CHANNEL_DEPTH * H2_REQ_CHUNK_MAX,
+            64 * 1024,
+            "in-flight window ceiling (64 KiB)"
+        );
+        // The window is independent of the total-body cap: the ceiling must
+        // be << MAX_REQUEST_BODY_BYTES so retained memory cannot scale to it.
+        assert!(
+            H2_REQ_CHANNEL_DEPTH * H2_REQ_CHUNK_MAX < MAX_REQUEST_BODY_BYTES,
+            "window must be far below the total-body cap"
+        );
+    }
+
+    /// S8 / M-D (Q-D3) — the retained-memory gauge is a real max-update, not a
+    /// constant: it only moves up, and a smaller value never lowers it.
+    #[test]
+    fn h2_req_record_retained_is_monotone_max() {
+        use std::sync::atomic::Ordering;
+        H2_REQ_MAX_RETAINED_BODY_BYTES.store(0, Ordering::Relaxed);
+        record_retained(4096);
+        assert_eq!(H2_REQ_MAX_RETAINED_BODY_BYTES.load(Ordering::Relaxed), 4096);
+        record_retained(1024); // smaller — must NOT lower the max
+        assert_eq!(H2_REQ_MAX_RETAINED_BODY_BYTES.load(Ordering::Relaxed), 4096);
+        record_retained(8192); // larger — moves the max up
+        assert_eq!(H2_REQ_MAX_RETAINED_BODY_BYTES.load(Ordering::Relaxed), 8192);
+        H2_REQ_MAX_RETAINED_BODY_BYTES.store(0, Ordering::Relaxed);
     }
 
     #[test]
