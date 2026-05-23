@@ -6,6 +6,17 @@ rust-version.workspace = true
 license.workspace = true
 publish = false
 
+[features]
+default = []
+# S8 / M-D (H2→H1 R8): exposes `h2_proxy::H2_REQ_MAX_RETAINED_BODY_BYTES`,
+# a test-only gauge the H2→H1 memory proof asserts to prove the bounded
+# ingress pump retains ≤ the fixed in-flight window (64 KiB), not the whole
+# request body. Off by default so production never compiles the gauge;
+# mirrors the lb-quic `test-gauges` discipline. The workspace gate runs
+# `--all-features`, which enables this, so the R10 memory proof is not
+# silently skipped.
+test-gauges = []
+
 [dependencies]
 thiserror = { workspace = true }
 bytes = { workspace = true }

@@ -5,6 +5,13 @@ edition = "2024"
 rust-version = "1.85"
 publish = false
 
+# S8 / M-D (verifier I3) — forward the lb-l7 `test-gauges` feature so the
+# verifier's H2→H1 memory test can read
+# `lb_l7::h2_proxy::H2_REQ_MAX_RETAINED_BODY_BYTES` from this integration
+# crate. Off by default; the workspace gate enables it via `--all-features`.
+[features]
+test-gauges = ["lb-l7/test-gauges"]
+
 [workspace]
 resolver = "2"
 members = [
