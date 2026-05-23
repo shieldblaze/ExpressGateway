@@ -1390,6 +1390,7 @@ impl H2Proxy {
         //    request that turns malformed at the trailers NEVER relays the
         //    backend response body downstream (the h2spec invariant), without
         //    buffering the whole body.
+        use hyper::body::Body as _;
         use hyper::body::Frame;
 
         let mut lookahead: Vec<Bytes> = Vec::new();
@@ -1416,8 +1417,23 @@ impl H2Proxy {
 
             match body.frame().await {
                 None => {
-                    reached_eof = true;
-                    break;
+                    // F-MD-4 (S8 PROTO smuggling fix) — `None` is ambiguous:
+                    // an inbound RST_STREAM(CANCEL/NO_ERROR) is mapped to
+                    // `None` by hyper, indistinguishable from clean END_STREAM.
+                    // Within the window this would otherwise fall to Branch A
+                    // and relay a fully-buffered (truncated) body as a COMPLETE
+                    // request — the within-window smuggling variant. Only a
+                    // POSITIVELY-confirmed END_STREAM is a clean terminal state.
+                    // A reset is rejected here, BEFORE any dial (zero-dial).
+                    if body.is_end_stream() {
+                        reached_eof = true;
+                        break;
+                    }
+                    return Err(ProxyErr::BadRequest(
+                        "inbound H2 request body ended without END_STREAM \
+                         (reset mid-body)"
+                            .to_owned(),
+                    ));
                 }
                 Some(Ok(frame)) => {
                     if let Some(data) = frame.data_ref() {
@@ -1638,7 +1654,20 @@ impl H2Proxy {
                 () => {{
                     loop {
                         match body.frame().await {
-                            None => break Ok(()), // clean EOF → relay backend resp.
+                            None => {
+                                // `None` is ambiguous (reset vs END_STREAM); see
+                                // the streaming-loop comment. Only a positively
+                                // confirmed END_STREAM is a clean terminal state
+                                // that may relay the backend's (early) response.
+                                if body.is_end_stream() {
+                                    break Ok(());
+                                }
+                                break Err(ProxyErr::BadRequest(
+                                    "inbound H2 request body ended without END_STREAM \
+                                     (reset mid-body)"
+                                        .to_owned(),
+                                ));
+                            }
                             Some(Ok(frame)) => {
                                 if frame.is_trailers() {
                                     break validate_request_trailers(frame.trailers_ref())
@@ -1676,8 +1705,48 @@ impl H2Proxy {
             loop {
                 match body.frame().await {
                     None => {
-                        let _ = verdict_tx.send(Ok(()));
-                        return; // clean EOF — channel drop signals body end.
+                        // F-MD-4 (S8 PROTO smuggling fix) — `frame()==None` is
+                        // AMBIGUOUS: hyper's `Incoming::poll_frame` maps an
+                        // inbound H2 RST_STREAM with reason CANCEL or NO_ERROR
+                        // to `Poll::Ready(None)` — INDISTINGUISHABLE from a
+                        // clean END_STREAM (hyper-1.9.0 body/incoming.rs ~L250).
+                        // A client that streams a body then drops it without
+                        // END_STREAM (RST_STREAM/CANCEL) therefore surfaces as
+                        // `None` here, NOT as `Some(Err)`. Inferring clean EOF
+                        // from `None` alone would drop `tx` cleanly → the
+                        // StreamBody yields `None` → hyper writes the chunked
+                        // terminator `0\r\n\r\n` → the truncated request is
+                        // relayed to the upstream as COMPLETE (request
+                        // smuggling). We MUST positively confirm END_STREAM.
+                        //
+                        // `Body::is_end_stream()` for the H2 kind delegates to
+                        // `h2::RecvStream::is_end_stream()`, true IFF the stream
+                        // reached `Closed(Cause::EndStream)`/`HalfClosedRemote`
+                        // (a real END_STREAM flag) and FALSE after any reset
+                        // (`Closed(Cause::Error(Reset))` /
+                        // `ScheduledLibraryReset`) — h2-0.4.13
+                        // proto/streams/state.rs `is_recv_end_stream`. This is
+                        // deterministic under arbitrary scheduling: it reflects
+                        // the protocol terminal STATE, not a timing race.
+                        if body.is_end_stream() {
+                            // Positively-confirmed clean END_STREAM → drop `tx`
+                            // → StreamBody yields `None` → hyper writes the
+                            // terminator → upstream sees a COMPLETE request.
+                            let _ = verdict_tx.send(Ok(()));
+                        } else {
+                            // `None` from a RST_STREAM (no END_STREAM): inject a
+                            // BODY ERROR so hyper aborts the upstream request
+                            // WITHOUT a terminator; the caller aborts the conn
+                            // and never relays its response. The truncated
+                            // request is NEVER seen as complete upstream.
+                            let _ = tx.send(Err(PumpAbort)).await;
+                            let _ = verdict_tx.send(Err(ProxyErr::BadRequest(
+                                "inbound H2 request body ended without END_STREAM \
+                                 (reset mid-body)"
+                                    .to_owned(),
+                            )));
+                        }
+                        return;
                     }
                     Some(Ok(frame)) => {
                         if frame.is_trailers() {
