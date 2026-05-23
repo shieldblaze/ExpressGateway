@@ -34,6 +34,10 @@ use std::time::Duration;
 
 use http_body_util::{BodyExt, Empty, Full, combinators::BoxBody};
 use hyper::body::{Bytes, Incoming as IncomingBody};
+// S9 / M-D-lite — reuse the documented cross-cell 64 MiB request-body cap
+// (Q-H4 parity) by IMPORT; do NOT redefine it (it is `pub` in h2_proxy and
+// names H1→H1 explicitly as the gap this cell closes).
+use crate::h2_proxy::MAX_REQUEST_BODY_BYTES;
 use hyper::header::{HeaderName, HeaderValue};
 use hyper::{Request, Response, StatusCode};
 use hyper_util::rt::TokioIo;
@@ -76,6 +80,93 @@ static HOP_BY_HOP: [HeaderName; 8] = [
     HeaderName::from_static("transfer-encoding"),
     HeaderName::from_static("upgrade"),
 ];
+
+/// S9 / M-D-lite (Q-H1) — depth of the bounded in-flight channel feeding the
+/// streaming H1→H1 request body. Mirrors the M-D `H2_REQ_CHANNEL_DEPTH = 8`.
+/// The fixed in-flight window = `H1_REQ_CHANNEL_DEPTH × H1_REQ_CHUNK_MAX`
+/// (= 64 KiB) is the ceiling on retained inbound-request memory,
+/// body-size-INDEPENDENT and independent of [`MAX_REQUEST_BODY_BYTES`]
+/// (64 MiB) — that body-independence is the R8 property the memory proof
+/// asserts. (Defined H1-locally rather than reusing the H2-named const so the
+/// H1 path reads cleanly; CF-DEDUP-1 unifies the two pumps later.)
+const H1_REQ_CHANNEL_DEPTH: usize = 8;
+
+/// S9 / M-D-lite (Q-H1) — maximum size of one chunk pumped through the
+/// in-flight channel. Mirrors the M-D `H2_REQ_CHUNK_MAX = 8 KiB`. Window
+/// ceiling `H1_REQ_CHANNEL_DEPTH × H1_REQ_CHUNK_MAX = 64 KiB`.
+const H1_REQ_CHUNK_MAX: usize = 8 * 1024;
+
+/// S9 / M-D-lite (F-MD-4, H1 mirror of the M-D `PumpAbort`) — request-
+/// smuggling fix. The Branch-B-only streaming pump feeds the inbound H1
+/// request body to the upstream via a bounded `mpsc` channel bridged into an
+/// `http_body` `StreamBody`. A dropped channel sender makes the receiver's
+/// `poll_recv` return `None`, which `StreamBody` translates to a CLEAN body
+/// EOF — hyper then emits the chunked terminator (`0\r\n\r\n`) and the
+/// upstream sees a COMPLETE request. That is the WRONG signal when the inbound
+/// stream was truncated mid-body (premature client TCP half-close = smuggling
+/// primitive): a truncated request must NEVER be relayed as complete.
+///
+/// `hyper::Error` has no public constructor, so we cannot inject one into the
+/// channel directly. This tiny error is the channel's error type instead: on
+/// every inbound-error / over-cap / trailer-reject arm the pump SENDS
+/// `Err(H1PumpAbort)` into the channel BEFORE signaling its verdict, so hyper
+/// polls the body, sees an ERROR (not a clean EOF), and aborts the upstream
+/// request WITHOUT a terminator. It satisfies hyper's request-body bound
+/// `Body::Error: Into<Box<dyn std::error::Error + Send + Sync>>`.
+///
+/// This is a LOCAL mirror of `h2_proxy::PumpAbort` (Q-H1 chose
+/// mirror-over-share to keep the BUILT M-D cell byte-unchanged; CF-DEDUP-1
+/// unifies them later).
+#[derive(Debug)]
+struct H1PumpAbort;
+
+impl std::fmt::Display for H1PumpAbort {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("inbound H1 request body aborted before clean end-of-body")
+    }
+}
+
+impl std::error::Error for H1PumpAbort {}
+
+/// S9 / Q-H3 (H1 request-trailer validation) — reject framing/routing fields
+/// in inbound H1 request trailers.
+///
+/// **Decoder fact (hyper 1.9.0, `proto/h1/decode.rs::decode_trailers`):** the
+/// inbound H1 chunked-trailer decoder only validates trailer name/value
+/// *syntax* and inserts EVERY field into the trailers `HeaderMap` — it does
+/// NOT strip or reject framing/routing fields. So forwarding inbound trailers
+/// verbatim (the R3 requirement that keeps `trailer_passthrough.rs` green)
+/// would also forward a `Transfer-Encoding`/`Content-Length`/etc. carried in
+/// the trailers, which RFC 7230 §4.1.2 / RFC 9110 §6.5.1 forbid because they
+/// are a request-smuggling/desync primitive when relayed to the next hop.
+///
+/// The H1 analogue of M-D's pseudo-header-in-trailers reject (H1 has no
+/// pseudo-headers): trailers MUST NOT carry message-framing or routing fields.
+/// We reject `Transfer-Encoding`, `Content-Length`, `Host`, `Trailer`, `TE`,
+/// `Connection`, plus any [`HOP_BY_HOP`] name. A legitimate trailer (e.g.
+/// `x-checksum`, `grpc-status`) passes through untouched and is forwarded
+/// byte-faithfully by the pump.
+fn validate_h1_request_trailers(trailers: &hyper::HeaderMap) -> Result<(), ProxyErr> {
+    use hyper::header::{CONNECTION, CONTENT_LENGTH, HOST, TE, TRAILER, TRANSFER_ENCODING};
+    for name in trailers.keys() {
+        // Framing/routing fields explicitly forbidden in trailers
+        // (RFC 7230 §4.1.2): they alter message framing/routing if relayed.
+        if name == CONTENT_LENGTH
+            || name == TRANSFER_ENCODING
+            || name == HOST
+            || name == TRAILER
+            || name == TE
+            || name == CONNECTION
+            || HOP_BY_HOP.iter().any(|h| h == name)
+        {
+            return Err(ProxyErr::BadRequest(format!(
+                "forbidden field `{}` in request trailers (RFC 7230 §4.1.2)",
+                name.as_str()
+            )));
+        }
+    }
+    Ok(())
+}
 
 /// Configuration for the `Alt-Svc` advertisement injected into responses.
 #[derive(Debug, Clone, Copy)]
@@ -1027,6 +1118,15 @@ impl H1Proxy {
                 Err(ProxyErr::Timeout) => {
                     error_response(StatusCode::GATEWAY_TIMEOUT, "upstream timeout")
                 }
+                // S9 / M-D-lite — a malformed inbound H1 request body
+                // (F-MD-4 truncation or Q-H3 forbidden trailer) is the
+                // CLIENT's fault → 400, never the backend's response.
+                Err(ProxyErr::BadRequest(s)) => error_response(StatusCode::BAD_REQUEST, &s),
+                // S9 / Q-H4 — inbound body over the 64 MiB cap → 413.
+                Err(ProxyErr::BodyTooLarge) => error_response(
+                    StatusCode::PAYLOAD_TOO_LARGE,
+                    "request body exceeds maximum allowed size",
+                ),
             },
             UpstreamProto::H2 => Box::pin(self.proxy_h1_to_h2(backend.addr, stripped)).await,
             UpstreamProto::H3 => Box::pin(self.proxy_h1_to_h3(&backend, stripped)).await,
@@ -1075,10 +1175,36 @@ impl H1Proxy {
         backend_addr: SocketAddr,
         req: StrippedRequest<IncomingBody>,
     ) -> Result<Response<IncomingBody>, ProxyErr> {
+        use hyper::body::Frame;
+
         let req = req.into_inner();
+        let (mut parts, mut body) = req.into_parts();
+
+        // F-MD-1 (carried forward from M-D) — let hyper's HTTP/1.1 encoder
+        // choose the framing for the unknown-length streaming body we hand it.
+        //  • Force the request version to HTTP/1.1 (the upstream protocol).
+        //  • STRIP `content-length` + `transfer-encoding`: an inbound H1
+        //    request CAN carry a `content-length`, and a stale CL alongside an
+        //    unknown-length `StreamBody` mis-frames identically to F-MD-1 (the
+        //    encoder either truncates to the stale CL or emits an empty body
+        //    and never polls our pump). With both stripped, hyper frames the
+        //    streaming body as `Transfer-Encoding: chunked` itself.
+        // (Header-level CL/TE smuggling was already rejected pre-pump by
+        // `SmuggleDetector::check_all_mode` in `handle`; this strip is the
+        // framing-correctness step, not a security check.)
+        parts.version = hyper::Version::HTTP_11;
+        parts.headers.remove(hyper::header::CONTENT_LENGTH);
+        parts.headers.remove(hyper::header::TRANSFER_ENCODING);
+
         // CODE-2-09 follow-on: async dial via `TcpPool::acquire_async`.
         // The pool's `PoolConfig::connect_timeout` (5 s default,
         // sourced from `runtime.connect_timeout_ms`) bounds the syscall.
+        //
+        // S9 / M-D-lite — Branch-B-only (no lookahead): H1 ingress has no
+        // HPACK / no H2 framing / no validate-before-forward ordering
+        // requirement, so we forward-as-it-arrives. We dial first (as the
+        // pre-S9 code did) and stream the inbound body through a bounded
+        // in-flight window — NO whole-body buffering, NO `collect()`.
         let pooled = self
             .pool
             .acquire_async(backend_addr)
@@ -1094,9 +1220,17 @@ impl H1Proxy {
             .take_stream()
             .ok_or_else(|| ProxyErr::Upstream("pooled stream missing".to_owned()))?;
 
-        let (mut sender, conn) = hyper::client::conn::http1::handshake(TokioIo::new(stream))
-            .await
-            .map_err(|e| ProxyErr::Upstream(format!("h1 client handshake: {e}")))?;
+        // F-MD-4: the upstream request body is a `StreamBody` whose error type
+        // is the constructible `H1PumpAbort` (not `hyper::Error`, which has no
+        // public constructor) so the pump can INJECT a body error on the
+        // truncation/abort path instead of silently dropping the channel (a
+        // drop = clean EOF = smuggled-complete request).
+        let (mut sender, conn) = hyper::client::conn::http1::handshake::<
+            _,
+            BoxBody<Bytes, H1PumpAbort>,
+        >(TokioIo::new(stream))
+        .await
+        .map_err(|e| ProxyErr::Upstream(format!("h1 client handshake: {e}")))?;
 
         let conn_handle = tokio::spawn(async move {
             // hyper's H1 client connection drives reads/writes of the
@@ -1108,22 +1242,283 @@ impl H1Proxy {
             let _ = conn.await;
         });
 
+        // Bounded in-flight channel (depth = H1_REQ_CHANNEL_DEPTH). When the
+        // backend write stalls, hyper stops pulling → the channel fills → the
+        // pump stops polling the inbound body → the frontend H1 read window
+        // stalls → the client send is paused (the R8 backpressure chain).
+        let (tx, mut rx) =
+            tokio::sync::mpsc::channel::<Result<Frame<Bytes>, H1PumpAbort>>(H1_REQ_CHANNEL_DEPTH);
+
+        // F-MD-3 (gauge wiring lands in I2) — track ACTUAL instantaneous
+        // in-flight channel occupancy: incremented by the pump just before it
+        // pushes a chunk and DECREMENTED in the body's poll the moment hyper
+        // pulls that chunk back out. (The `record_retained_h1` call sites are
+        // added in I2; the counter itself is load-bearing for them.)
+        let in_flight_bytes = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let in_flight_body = std::sync::Arc::clone(&in_flight_bytes);
+
+        // Bridge the mpsc receiver into an `http_body` stream body (futures-util
+        // is already a dependency). As hyper pulls each frame we decrement the
+        // live in-flight counter (the chunk has left our retained set and is
+        // now owned by hyper's write buffer).
+        let stream_body =
+            http_body_util::StreamBody::new(futures_util::stream::poll_fn(move |cx| {
+                let polled = rx.poll_recv(cx);
+                if let std::task::Poll::Ready(Some(Ok(ref frame))) = polled {
+                    if let Some(d) = frame.data_ref() {
+                        in_flight_body.fetch_sub(d.len(), std::sync::atomic::Ordering::Relaxed);
+                    }
+                }
+                polled
+            }))
+            .boxed();
+        let req = Request::from_parts(parts, stream_body);
+
+        // The pump owns the inbound body. It reports its terminal verdict via a
+        // oneshot so the response-head relay is gated on a VALIDATED terminal
+        // state (clean end-of-body, or a surfaced error mapped to 400/413).
+        let (verdict_tx, verdict_rx) = tokio::sync::oneshot::channel::<Result<(), ProxyErr>>();
+        let pump = tokio::spawn(async move {
+            // Running cumulative total of forwarded request bytes — the Q-H4
+            // total-body cap (`MAX_REQUEST_BODY_BYTES`, 64 MiB) applies in the
+            // streaming regime exactly as it does on the H2→H1 path.
+            let mut forwarded_total: usize = 0;
+
+            // `ReceiverGone` = hyper dropped the request body (the backend
+            // early-responded WITHOUT reading the body). On `ReceiverGone` we
+            // MUST NOT manufacture a 413 (F-MD-2); we switch to
+            // drain-and-validate so the backend's real response is relayed once
+            // the inbound body validates.
+            enum SendOutcome {
+                ReceiverGone,
+            }
+
+            // Split a DATA payload into ≤ H1_REQ_CHUNK_MAX pieces and push each
+            // through the bounded channel (the backpressure point). Increments
+            // the live in-flight gauge before each push. Returns
+            // Err(ReceiverGone) if the receiver (hyper body) dropped.
+            macro_rules! send_chunked {
+                ($bytes:expr) => {{
+                    let mut data: Bytes = $bytes;
+                    let mut outcome: Result<(), SendOutcome> = Ok(());
+                    while !data.is_empty() {
+                        let take = data.len().min(H1_REQ_CHUNK_MAX);
+                        let chunk = data.split_to(take);
+                        let clen = chunk.len();
+                        in_flight_bytes.fetch_add(clen, std::sync::atomic::Ordering::Relaxed);
+                        if tx.send(Ok(Frame::data(chunk))).await.is_err() {
+                            // hyper dropped the receiver before accepting this
+                            // chunk → it never entered hyper's buffer; back the
+                            // counter out so the gauge stays honest.
+                            in_flight_bytes.fetch_sub(clen, std::sync::atomic::Ordering::Relaxed);
+                            outcome = Err(SendOutcome::ReceiverGone);
+                            break;
+                        }
+                    }
+                    outcome
+                }};
+            }
+
+            // drain-and-validate (F-MD-2): the backend stopped reading the
+            // request body (early/short response). We can no longer forward,
+            // but we MUST still drive the inbound body to a validated terminal
+            // state so a malformed/truncated request never relays the backend's
+            // response. Bytes are DISCARDED (memory stays bounded — one frame
+            // at a time), but the 64 MiB cap and the trailer guard still apply.
+            macro_rules! drain_and_validate {
+                () => {{
+                    loop {
+                        match body.frame().await {
+                            // F-MD-4 (H1): clean end-of-body. For an H1 inbound
+                            // body `frame()==None` is the POSITIVELY-confirmed
+                            // clean end (see the streaming-loop comment); a
+                            // truncation surfaces as `Some(Err)` instead.
+                            None => break Ok(()),
+                            Some(Ok(frame)) => {
+                                if frame.is_trailers() {
+                                    if let Some(t) = frame.trailers_ref() {
+                                        break validate_h1_request_trailers(t);
+                                    }
+                                    break Ok(());
+                                }
+                                if let Some(d) = frame.data_ref() {
+                                    forwarded_total = forwarded_total.saturating_add(d.len());
+                                    if forwarded_total > MAX_REQUEST_BODY_BYTES {
+                                        break Err(ProxyErr::BodyTooLarge);
+                                    }
+                                }
+                                // discard the data frame — bounded memory.
+                            }
+                            Some(Err(e)) => {
+                                break Err(ProxyErr::BadRequest(format!(
+                                    "inbound H1 request body incomplete: {e}"
+                                )));
+                            }
+                        }
+                    }
+                }};
+            }
+
+            // Forward-as-it-arrives with the bounded window.
+            loop {
+                match body.frame().await {
+                    None => {
+                        // F-MD-4 (H1 — MIRROR-IMAGE of the M-D / H2 case;
+                        // do NOT copy the H2 `is_end_stream` logic here).
+                        //
+                        // The inbound H1 server body is hyper's `Kind::Chan`
+                        // (a channel fed by the H1 connection driver), NOT
+                        // `Kind::H2`. For H1, `frame()==None` is the
+                        // POSITIVELY-confirmed clean end-of-body: the chunked
+                        // decoder reached the real `0\r\n\r\n` terminator (or a
+                        // Content-Length body was fully satisfied) and the
+                        // driver dropped the body sender → the channel yields
+                        // `None`. A PREMATURE mid-body TCP half-close does NOT
+                        // reach here as `None`: hyper-1.9.0's decoder emits
+                        // `IncompleteBody` (UnexpectedEof) on early EOF for BOTH
+                        // chunked (`decode.rs` ~L162) and Content-Length
+                        // (~L504) framings, which the driver pushes into the
+                        // body channel as `Some(Err(..))` — handled in the
+                        // `Some(Err)` arm below. (Request bodies are never
+                        // close-delimited: a request with neither CL nor TE has
+                        // no body, so there is no "EOF == clean end" framing on
+                        // the request path. The verifier proves this on the wire
+                        // for BOTH CL and chunked premature closes → complete=0.)
+                        //
+                        // We deliberately do NOT consult `Body::is_end_stream()`
+                        // for H1: for `Kind::Chan` it returns
+                        // `content_length == ZERO`, which is unreliable for
+                        // chunked bodies (CHUNKED is never decremented to ZERO).
+                        // `None`-after-no-error is the correct, sufficient
+                        // clean-end signal here.
+                        //
+                        // Clean end → drop `tx` → the StreamBody yields `None`
+                        // → hyper writes the chunked terminator → the upstream
+                        // sees a COMPLETE request.
+                        let _ = verdict_tx.send(Ok(()));
+                        return;
+                    }
+                    Some(Ok(frame)) => {
+                        if frame.is_trailers() {
+                            // Q-H3: validate trailers BEFORE forwarding them. A
+                            // framing/routing field in trailers is a desync
+                            // primitive (hyper's inbound decoder does NOT reject
+                            // it — see `validate_h1_request_trailers`).
+                            let verdict = frame
+                                .trailers_ref()
+                                .map_or(Ok(()), validate_h1_request_trailers);
+                            match verdict {
+                                Ok(()) => {
+                                    // Forward the legitimate trailers frame
+                                    // byte-faithfully (R3: keeps
+                                    // `trailer_passthrough` green), then a clean
+                                    // verdict.
+                                    let _ = tx.send(Ok(frame)).await;
+                                    let _ = verdict_tx.send(Ok(()));
+                                    return;
+                                }
+                                Err(e) => {
+                                    // FIFO Err-before-close: inject the body
+                                    // error FIRST so hyper aborts the upstream
+                                    // request WITHOUT a clean terminator
+                                    // (dropping tx alone = clean EOF =
+                                    // smuggled-complete request), THEN signal
+                                    // the verdict.
+                                    let _ = tx.send(Err(H1PumpAbort)).await;
+                                    let _ = verdict_tx.send(Err(e));
+                                    return;
+                                }
+                            }
+                        }
+                        if let Ok(data) = frame.into_data() {
+                            forwarded_total = forwarded_total.saturating_add(data.len());
+                            if forwarded_total > MAX_REQUEST_BODY_BYTES {
+                                // Q-H4 total-body cap exceeded mid-stream. FIFO
+                                // Err-before-close: inject the body error FIRST
+                                // (the upstream body terminates abruptly WITHOUT
+                                // a clean terminator; the caller aborts the conn
+                                // and never relays its response), THEN the 413
+                                // verdict.
+                                let _ = tx.send(Err(H1PumpAbort)).await;
+                                let _ = verdict_tx.send(Err(ProxyErr::BodyTooLarge));
+                                return;
+                            }
+                            if let Err(SendOutcome::ReceiverGone) = send_chunked!(data) {
+                                // Backend stopped reading mid-stream (early/
+                                // short response) — F-MD-2 drain-and-validate,
+                                // NOT a 413.
+                                let _ = verdict_tx.send(drain_and_validate!());
+                                return;
+                            }
+                        }
+                    }
+                    Some(Err(e)) => {
+                        // F-MD-4 (H1): a premature mid-body close (or any
+                        // inbound body protocol/IO error) surfaces HERE as
+                        // `Some(Err)` (hyper's `IncompleteBody` on early EOF),
+                        // NOT as a clean `None`. FIFO Err-before-close: inject
+                        // the body error FIRST so hyper sees the upstream
+                        // request body terminate ABRUPTLY (no clean `0\r\n\r\n`
+                        // terminator) and aborts the upstream request — the
+                        // backend NEVER observes a COMPLETE (truncated) request.
+                        // Then signal the 400 verdict. The caller also aborts
+                        // the connection (defense in depth) and never relays the
+                        // response; single-use `take_stream` ensures the aborted
+                        // upstream conn is dropped, not pooled.
+                        let _ = tx.send(Err(H1PumpAbort)).await;
+                        let _ = verdict_tx.send(Err(ProxyErr::BadRequest(format!(
+                            "inbound H1 request body incomplete: {e}"
+                        ))));
+                        return;
+                    }
+                }
+            }
+        });
+
+        // Drive the upstream send concurrently with the pump (hyper must pull
+        // the channel for the pump to make progress under backpressure), but do
+        // NOT relay the response until the pump's terminal verdict lands.
         let send_fut = sender.send_request(req);
         let resp = match tokio::time::timeout(self.timeouts.body, send_fut).await {
             Ok(Ok(r)) => r,
             Ok(Err(e)) => {
+                pump.abort();
                 conn_handle.abort();
                 return Err(ProxyErr::Upstream(format!("send_request: {e}")));
             }
             Err(_) => {
+                pump.abort();
                 conn_handle.abort();
                 return Err(ProxyErr::Timeout);
             }
         };
-        // We deliberately do NOT await `conn_handle` — the response body
-        // streaming still needs the driver task running. Detach it.
-        drop(conn_handle);
-        Ok(resp)
+
+        // Validate-before-RESPONSE-relay gate: the response head only relays
+        // once the inbound body has reached a validated terminal state.
+        match verdict_rx.await {
+            Ok(Ok(())) => {
+                // We deliberately do NOT await `conn_handle` — the response
+                // body streaming still needs the driver task running. Detach it.
+                drop(conn_handle);
+                Ok(resp)
+            }
+            Ok(Err(e)) => {
+                // Malformed/truncated inbound (F-MD-4) or over-cap (Q-H4):
+                // abort the upstream connection (do NOT pool it) and the pump,
+                // and NEVER relay the upstream response.
+                pump.abort();
+                conn_handle.abort();
+                Err(e)
+            }
+            Err(_) => {
+                // Pump task vanished without a verdict (panic/abort) — treat as
+                // an inbound failure; never leak the backend response.
+                conn_handle.abort();
+                Err(ProxyErr::BadRequest(
+                    "inbound H1 request pump terminated without a verdict".to_owned(),
+                ))
+            }
+        }
     }
 
     /// Forward an H1 inbound request to an H2 backend (PROTO-001).
@@ -1294,6 +1689,15 @@ impl H1Proxy {
                     "websocket upstream dial timeout",
                 );
             }
+            // The WS dial path (`dial_upstream_ws`) never runs the request-body
+            // pump, so it cannot produce these M-D-lite body verdicts; map them
+            // defensively to 502 to keep the match exhaustive (no 101 emitted).
+            Ok(Err(ProxyErr::BadRequest(_) | ProxyErr::BodyTooLarge)) => {
+                return error_response(
+                    StatusCode::BAD_GATEWAY,
+                    "websocket upstream handshake failed",
+                );
+            }
             Err(_elapsed) => {
                 tracing::debug!(backend = %backend_addr, "ws: upstream handshake budget elapsed — returning 504 (no 101 emitted)");
                 return error_response(
@@ -1361,6 +1765,16 @@ impl H1Proxy {
 enum ProxyErr {
     Upstream(String),
     Timeout,
+    /// S9 / M-D-lite — a malformed inbound H1 request body surfaced by the
+    /// streaming pump: a premature mid-body close (F-MD-4 truncation) or a
+    /// forbidden field in the request trailers (Q-H3). Mapped to `400 Bad
+    /// Request`. The upstream response (if any) is NEVER relayed on this arm.
+    BadRequest(String),
+    /// S9 / Q-H4 — the inbound request body exceeded the cross-cell
+    /// [`MAX_REQUEST_BODY_BYTES`] (64 MiB) cap mid-stream. Mapped to `413
+    /// Payload Too Large` (RFC 9110 §15.5.14). DISTINCT from an upstream
+    /// receiver-drop (F-MD-2), which is NOT a 413.
+    BodyTooLarge,
 }
 
 /// ROUND8-L7-01 — dial the backend and drive the RFC 6455 client-side
