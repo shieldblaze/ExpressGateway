@@ -88,6 +88,33 @@ pub const H2_REQ_CHANNEL_DEPTH: usize = 8;
 /// asserts.
 pub const H2_REQ_CHUNK_MAX: usize = 8 * 1024;
 
+/// F-MD-4 (S8 remediation) — request-smuggling fix. The Branch-B streaming
+/// pump feeds the inbound request body to the upstream via a bounded `mpsc`
+/// channel bridged into an `http_body` `StreamBody`. A dropped channel sender
+/// makes the receiver's `poll_recv` return `None`, which `StreamBody`
+/// translates to a CLEAN body EOF — hyper then emits the chunked terminator
+/// (`0\r\n\r\n`) and the upstream sees a COMPLETE request. That is the wrong
+/// signal when the inbound stream was RST mid-body (smuggling): a truncated
+/// request must NEVER be relayed as complete.
+///
+/// `hyper::Error` has no public constructor, so we cannot inject one into the
+/// channel directly. This tiny error is the channel's error type instead: on
+/// every inbound-error / abort path the pump SENDS `Err(PumpAbort)` into the
+/// channel BEFORE returning, so hyper polls the body, sees an ERROR (not a
+/// clean EOF), and aborts the upstream request WITHOUT a terminator. It
+/// satisfies hyper's request-body bound
+/// `Body::Error: Into<Box<dyn std::error::Error + Send + Sync>>`.
+#[derive(Debug)]
+struct PumpAbort;
+
+impl std::fmt::Display for PumpAbort {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("inbound H2 request body aborted before END_STREAM")
+    }
+}
+
+impl std::error::Error for PumpAbort {}
+
 /// L7 HTTP/2 reverse proxy. Cheap to clone via [`Arc`].
 pub struct H2Proxy {
     pool: TcpPool,
@@ -1481,9 +1508,14 @@ impl H2Proxy {
         let stream = pooled
             .take_stream()
             .ok_or_else(|| ProxyErr::Upstream("pooled stream missing".to_owned()))?;
+        // F-MD-4: the Branch-B upstream request body is a `StreamBody` whose
+        // error type is the constructible `PumpAbort` (not `hyper::Error`,
+        // which has no public constructor) so the pump can INJECT a body
+        // error on the inbound-abort path instead of silently dropping the
+        // channel (a drop = clean EOF = smuggled-complete request).
         let (mut sender, conn) = hyper::client::conn::http1::handshake::<
             _,
-            BoxBody<Bytes, hyper::Error>,
+            BoxBody<Bytes, PumpAbort>,
         >(TokioIo::new(stream))
         .await
         .map_err(|e| ProxyErr::Upstream(format!("h1 client handshake: {e}")))?;
@@ -1496,7 +1528,7 @@ impl H2Proxy {
         // pump stops polling the inbound body → hyper/h2 withholds
         // WINDOW_UPDATE → the H2 client is paused (the R8 backpressure chain).
         let (tx, mut rx) =
-            tokio::sync::mpsc::channel::<Result<Frame<Bytes>, hyper::Error>>(H2_REQ_CHANNEL_DEPTH);
+            tokio::sync::mpsc::channel::<Result<Frame<Bytes>, PumpAbort>>(H2_REQ_CHANNEL_DEPTH);
 
         // F-MD-3 (S8 remediation) — a GENUINE retained-memory gauge. The two
         // streaming-phase record sites previously stored a CONSTANT (the
@@ -1658,8 +1690,13 @@ impl H2Proxy {
                                     return;
                                 }
                                 Err(e) => {
+                                    // F-MD-4: inject a BODY ERROR so hyper
+                                    // aborts the upstream request WITHOUT a
+                                    // clean terminator (dropping tx alone =
+                                    // clean EOF = smuggled-complete request).
+                                    let _ = tx.send(Err(PumpAbort)).await;
                                     let _ = verdict_tx.send(Err(e));
-                                    return; // drop tx → upstream body aborted.
+                                    return;
                                 }
                             }
                         }
@@ -1667,10 +1704,13 @@ impl H2Proxy {
                             forwarded_total = forwarded_total.saturating_add(data.len());
                             if forwarded_total > MAX_REQUEST_BODY_BYTES {
                                 // D1 total-body cap exceeded mid-stream. Report
-                                // 413 and DROP the channel → the upstream body
-                                // terminates abruptly; the caller aborts the
+                                // 413 and inject a BODY ERROR (F-MD-4) → the
+                                // upstream body terminates abruptly WITHOUT a
+                                // clean terminator; the caller aborts the
                                 // connection and never relays its response. The
-                                // client sees a stream reset (no 200 leak).
+                                // client sees a stream reset (no 200 leak), and
+                                // the upstream never sees a complete request.
+                                let _ = tx.send(Err(PumpAbort)).await;
                                 let _ = verdict_tx.send(Err(ProxyErr::BodyTooLarge));
                                 return;
                             }
@@ -1685,10 +1725,16 @@ impl H2Proxy {
                     }
                     Some(Err(e)) => {
                         // Inbound protocol error AFTER the dial (streaming
-                        // regime): report the verdict and DROP the channel
-                        // sender → hyper sees the upstream body terminate
-                        // abruptly. The caller aborts the connection (NOT
-                        // returned to the pool) and never relays the response.
+                        // regime) — e.g. the client RST_STREAMs mid-body
+                        // (smuggling, F-MD-4). Inject a BODY ERROR into the
+                        // channel so hyper sees the upstream request body
+                        // terminate ABRUPTLY (no clean `0\r\n\r\n` terminator)
+                        // and aborts the upstream request: the backend never
+                        // observes a COMPLETE (truncated) request. Dropping the
+                        // sender alone would be a clean EOF → smuggled complete.
+                        // The caller also aborts the connection (defense in
+                        // depth) and never relays the response.
+                        let _ = tx.send(Err(PumpAbort)).await;
                         let _ = verdict_tx.send(Err(ProxyErr::BadRequest(format!(
                             "malformed H2 request body: {e}"
                         ))));
