@@ -1733,8 +1733,7 @@ impl H1Proxy {
         // The pump owns the inbound body + already-buffered lookahead and
         // reports its terminal verdict via a oneshot so the response-head
         // relay is gated on a VALIDATED terminal state.
-        let (verdict_tx, verdict_rx) =
-            tokio::sync::oneshot::channel::<Result<(), H2ProxyErr>>();
+        let (verdict_tx, verdict_rx) = tokio::sync::oneshot::channel::<Result<(), H2ProxyErr>>();
         let drained: Vec<Bytes> = std::mem::take(&mut lookahead);
         let pump = tokio::spawn(async move {
             let mut forwarded_total: usize = buffered;

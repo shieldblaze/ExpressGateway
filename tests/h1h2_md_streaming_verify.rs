@@ -88,11 +88,7 @@ async fn spawn_h1_to_h2_listener_full(
         Arc::new(RoundRobinUpstreams::new(vec![UpstreamBackend::h2(backend_addr)]).unwrap());
     let h1_proxy = Arc::new(
         H1Proxy::with_multi_proto(
-            tcp_pool,
-            picker,
-            None,
-            timeouts,
-            /* is_https = */ false,
+            tcp_pool, picker, None, timeouts, /* is_https = */ false,
         )
         .with_h2_upstream(Arc::clone(&h2_pool)),
     );
@@ -956,9 +952,12 @@ async fn fcap1_over_cap_upload_yields_413_not_502() {
         let chunk = Bytes::from(vec![0x5Au8; 64 * 1024]);
         let mut sent = 0usize;
         while sent < over {
-            if tokio::time::timeout(Duration::from_secs(10), tx.send(Ok(Frame::data(chunk.clone()))))
-                .await
-                .is_err()
+            if tokio::time::timeout(
+                Duration::from_secs(10),
+                tx.send(Ok(Frame::data(chunk.clone()))),
+            )
+            .await
+            .is_err()
             {
                 break;
             }

@@ -2619,8 +2619,7 @@ pub(crate) async fn drive_h2_upstream_send(
         tokio::sync::oneshot::channel::<Result<Response<IncomingBody>, ProxyErr>>();
     let pool_for_task = pool.clone();
     tokio::spawn(async move {
-        let mut send_fut =
-            std::pin::pin!(pool_for_task.send_request(backend_addr, upstream_req));
+        let mut send_fut = std::pin::pin!(pool_for_task.send_request(backend_addr, upstream_req));
         // Race the upstream send against the pump's verdict (resolves
         // exactly once). `resp` is Some only when the response head won
         // the race; every other branch reports its result + returns.
