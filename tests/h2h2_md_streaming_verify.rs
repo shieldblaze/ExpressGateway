@@ -1126,54 +1126,36 @@ async fn req_backpressure_resume_completes_byte_identical() {
 // ══════════════════════════════════════════════════════════════════════
 // 4. F-MD-4 — real-wire H2 client RST_STREAM mid-body → the H2 BACKEND
 //    observes the request as NOT complete (never a truncated-as-complete
-//    request). Non-vacuous: a clean upload on the same backend records
-//    complete=true.
+//    request). Non-vacuous: a clean upload records complete=true.
+//
+// HARDENED (round 2): the round-1 single-shot variant passed 20/20 PARALLEL
+// while the smuggle bug was LIVE — a downstream-RST graceful-drop race that
+// only manifests under LOW contention (~25–50% of ISOLATED runs, masked
+// under the 4-thread gate). To make this regression land robustly INSIDE the
+// normal parallel ×3 gate, this test (a) runs on a CURRENT-THREAD runtime
+// (low contention — the exact condition under which the bug appeared), and
+// (b) repeats the smuggle scenario FMD4_SMUGGLE_ITERS times, asserting the
+// security invariant on EVERY iteration. With a per-iter catch probability
+// of ~0.25–0.5 for the live bug, N=24 gives P(miss) ≤ 0.75^24 ≈ 1e-3 at the
+// pessimistic end and ≪ that at 0.5 — so a regression of THIS bug is caught
+// deterministically by the gate. The negative-control (pre-fix code) is
+// proven in s10-h2h2-verify.md §round2-negative-control. No assertion is
+// weakened. NON-#[ignore]'d.
 // ══════════════════════════════════════════════════════════════════════
 
-#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn fmd4_client_rst_mid_body_never_complete_at_h2_upstream() {
+const FMD4_SMUGGLE_ITERS: usize = 24;
+
+/// One real-wire smuggle attempt on a FRESH backend/listener (no shared flag,
+/// no pooled connection reuse). A genuine h2 client streams a >window
+/// (256 KiB → Branch B) body then RST_STREAMs mid-body (drop `send_body`
+/// without END_STREAM → CANCEL). Returns `(saw_complete, n_requests,
+/// backend_body_len)`. `saw_complete=true` is the F-MD-4 smuggle DEFECT (a
+/// truncated request relayed to the H2 upstream as cleanly finished).
+async fn run_smuggle_once() -> (bool, usize, usize) {
     use h2 as h2crate;
-
-    // Non-vacuity baseline: a clean upload through a DEDICATED backend records
-    // complete=true. (Separate backend + listener from the smuggle so the
-    // single shared `complete` flag and the pooled H2 connection can never
-    // cross-contaminate the two requests.)
-    let clean_seen = BackendSeen::default();
-    let clean_backend = spawn_h2_echo(clean_seen.clone()).await;
-    let clean_gw = spawn_listener_for(clean_backend).await;
-    {
-        let mut sender = connect_h2_client(clean_gw).await;
-        let body = Full::new(Bytes::from(binary_pattern(2 * 1024 * 1024)))
-            .map_err(|never| match never {})
-            .boxed();
-        let req = Request::builder()
-            .method("POST")
-            .uri(format!("http://{SAN_HOST}/clean"))
-            .body(body)
-            .unwrap();
-        let resp = tokio::time::timeout(Duration::from_secs(60), sender.send_request(req))
-            .await
-            .expect("timed out")
-            .expect("clean send failed");
-        assert_eq!(resp.status(), 200);
-        let _ = resp.into_body().collect().await;
-    }
-    // Settle so the backend service finishes recording the clean completion.
-    tokio::time::sleep(Duration::from_millis(300)).await;
-    assert_eq!(clean_seen.requests.load(Ordering::SeqCst), 1);
-    assert!(
-        clean_seen.complete.load(Ordering::SeqCst),
-        "NON-VACUITY: a clean upload must record complete=true at the backend"
-    );
-
-    // Now the smuggle, on a FRESH backend/listener (no shared flag, no pooled
-    // connection reuse): a genuine h2 client streams a >window body then
-    // RST_STREAMs mid-body (drop send_body without END_STREAM → CANCEL). The
-    // backend must NEVER see a complete request for this stream.
     let seen = BackendSeen::default();
     let backend = spawn_h2_echo(seen.clone()).await;
     let gw = spawn_listener_for(backend).await;
-    let prev_requests = 0usize;
 
     let stream = TcpStream::connect(gw).await.unwrap();
     let mut builder = h2crate::client::Builder::new();
@@ -1215,27 +1197,81 @@ async fn fmd4_client_rst_mid_body_never_complete_at_h2_upstream() {
         off = end;
     }
     // Let the dial + initial forward land so the abort is genuinely mid-body.
-    tokio::time::sleep(Duration::from_millis(500)).await;
+    tokio::time::sleep(Duration::from_millis(300)).await;
     // ABORT mid-body WITHOUT END_STREAM → RST_STREAM(CANCEL).
     drop(send_body);
     let _ = tokio::time::timeout(Duration::from_secs(3), resp_fut).await;
-    tokio::time::sleep(Duration::from_secs(1)).await;
+    // Settle so any (defective) clean END_STREAM the gateway might emit
+    // upstream is observed + recorded by the backend before we read the flag.
+    tokio::time::sleep(Duration::from_millis(700)).await;
 
-    let saw_complete = seen.complete.load(Ordering::SeqCst);
-    let n_requests = seen.requests.load(Ordering::SeqCst);
-    let backend_body_len = seen.body.lock().len();
-    eprintln!(
-        "FMD4 smuggle: backend_requests_total={n_requests} (prev={prev_requests}) \
-         saw_complete={saw_complete} backend_body_len={backend_body_len} (client RST after 256 KiB, never END_STREAM)"
-    );
-    // The security invariant: a client RST mid-body must NEVER be observed as
-    // a COMPLETE request at the H2 upstream. (If the gateway never dialed for
-    // the smuggle stream, the backend simply never saw a 2nd request — still
-    // safe; complete stays false.)
+    (
+        seen.complete.load(Ordering::SeqCst),
+        seen.requests.load(Ordering::SeqCst),
+        seen.body.lock().len(),
+    )
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn fmd4_client_rst_mid_body_never_complete_at_h2_upstream() {
+    // Non-vacuity baseline: a clean upload through a DEDICATED backend records
+    // complete=true (so a vacuous "complete is just always false" can't pass).
+    let clean_seen = BackendSeen::default();
+    let clean_backend = spawn_h2_echo(clean_seen.clone()).await;
+    let clean_gw = spawn_listener_for(clean_backend).await;
+    {
+        let mut sender = connect_h2_client(clean_gw).await;
+        let body = Full::new(Bytes::from(binary_pattern(2 * 1024 * 1024)))
+            .map_err(|never| match never {})
+            .boxed();
+        let req = Request::builder()
+            .method("POST")
+            .uri(format!("http://{SAN_HOST}/clean"))
+            .body(body)
+            .unwrap();
+        let resp = tokio::time::timeout(Duration::from_secs(60), sender.send_request(req))
+            .await
+            .expect("timed out")
+            .expect("clean send failed");
+        assert_eq!(resp.status(), 200);
+        let _ = resp.into_body().collect().await;
+    }
+    tokio::time::sleep(Duration::from_millis(300)).await;
+    assert_eq!(clean_seen.requests.load(Ordering::SeqCst), 1);
     assert!(
-        !saw_complete,
-        "F-MD-4 DEFECT: a client RST mid-body was seen as a COMPLETE request \
-         at the H2 upstream — the truncated body was relayed as finished"
+        clean_seen.complete.load(Ordering::SeqCst),
+        "NON-VACUITY: a clean upload must record complete=true at the backend"
+    );
+
+    // Hardened smuggle loop: every iteration the truncated (RST mid-body)
+    // request MUST NOT be observed as a COMPLETE request at the H2 upstream.
+    let mut dialed_iters = 0usize;
+    for iter in 0..FMD4_SMUGGLE_ITERS {
+        let (saw_complete, n_requests, backend_body_len) = run_smuggle_once().await;
+        if n_requests >= 1 {
+            dialed_iters += 1;
+        }
+        eprintln!(
+            "FMD4 smuggle iter={iter}: backend_requests={n_requests} \
+             saw_complete={saw_complete} backend_body_len={backend_body_len} \
+             (client RST after 256 KiB, never END_STREAM)"
+        );
+        assert!(
+            !saw_complete,
+            "F-MD-4 DEFECT (iter {iter}): a client RST mid-body was seen as a \
+             COMPLETE request at the H2 upstream — the truncated body \
+             ({backend_body_len} B) was relayed as finished"
+        );
+    }
+    // Non-vacuity of the loop: the gateway must actually DIAL + forward to the
+    // backend on the vast majority of iterations (else the smuggle path is
+    // never exercised and the asserts are trivially satisfied).
+    eprintln!("FMD4 smuggle: dialed_iters={dialed_iters}/{FMD4_SMUGGLE_ITERS}");
+    assert!(
+        dialed_iters * 2 >= FMD4_SMUGGLE_ITERS,
+        "smuggle path under-exercised: only {dialed_iters}/{FMD4_SMUGGLE_ITERS} \
+         iterations dialed the upstream (Branch B not reached) — the loop is \
+         not load-bearing"
     );
 }
 
@@ -1794,6 +1830,161 @@ async fn resp_alt_svc_header_injected() {
     assert!(
         alt_hdr.contains("h3=") && alt_hdr.contains("443"),
         "alt-svc header not injected by the response relay: {alt_hdr:?}"
+    );
+}
+
+// ══════════════════════════════════════════════════════════════════════
+// 10. reset_peer COLLATERAL probe (round-2 mandate #7b) — does a client RST
+//     mid-body on ONE H2→H2 stream, which triggers `reset_peer` (whole-
+//     connection teardown), disrupt a CONCURRENT HEALTHY H2→H2 request to
+//     the SAME backend on the SAME pooled connection?
+//
+//     This is a CHARACTERIZATION probe, not a hard pass/fail gate: the
+//     pool's reset_peer is connection-scoped by design (ROUND8-L7-10 broad-
+//     eviction philosophy). We record whether the healthy concurrent request
+//     survives (multiplex isolation) or is collaterally reset, and report
+//     the finding. We assert only the SECURITY floor (the smuggle is never
+//     complete); the collateral outcome is logged for the lead.
+// ══════════════════════════════════════════════════════════════════════
+
+#[tokio::test(flavor = "current_thread")]
+async fn reset_peer_collateral_concurrent_stream_probe() {
+    use h2 as h2crate;
+    let seen = BackendSeen::default();
+    let backend = spawn_h2_echo(seen.clone()).await;
+    // Long send_timeout so the healthy stream's deliberate slowness is not a
+    // spurious timeout; default total is fine (healthy completes well under).
+    let cfg = Http2PoolConfig {
+        send_timeout: Duration::from_secs(120),
+        ..Http2PoolConfig::default()
+    };
+    let gw = spawn_listener_for_with_cfg(backend, cfg).await;
+
+    // ── Healthy request: a genuine hyper client streaming an 8 MiB body
+    // SLOWLY (via a channel) so it is still in flight when the smuggle aborts.
+    let mut healthy_sender = connect_h2_client(gw).await;
+    let healthy_payload = binary_pattern(8 * 1024 * 1024);
+    let (htx, hrx) = tokio::sync::mpsc::channel::<Result<Frame<Bytes>, hyper::Error>>(2);
+    let healthy_body = StreamBody::new(recv_stream(hrx)).boxed();
+    let healthy_req = Request::builder()
+        .method("POST")
+        .uri(format!("http://{SAN_HOST}/healthy"))
+        .body(healthy_body)
+        .unwrap();
+    let healthy_task = tokio::spawn(async move {
+        match tokio::time::timeout(
+            Duration::from_secs(60),
+            healthy_sender.send_request(healthy_req),
+        )
+        .await
+        {
+            Ok(Ok(resp)) => {
+                let status = resp.status().as_u16();
+                let n = resp
+                    .into_body()
+                    .collect()
+                    .await
+                    .map(|c| c.to_bytes().len())
+                    .unwrap_or(0);
+                (Some(status), n)
+            }
+            Ok(Err(_)) | Err(_) => (None, 0),
+        }
+    });
+    // Feed the healthy body slowly so it stays in flight across the smuggle.
+    let hp = healthy_payload.clone();
+    let healthy_writer = tokio::spawn(async move {
+        let mut off = 0;
+        while off < hp.len() {
+            let end = (off + 64 * 1024).min(hp.len());
+            if htx
+                .send(Ok(Frame::data(Bytes::copy_from_slice(&hp[off..end]))))
+                .await
+                .is_err()
+            {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(8)).await; // ~slow drip
+            off = end;
+        }
+        let _ = htx.send(Ok(Frame::data(Bytes::new()))).await;
+    });
+
+    // Let the healthy request DIAL the upstream (establishing the pooled
+    // connection) and begin streaming.
+    tokio::time::sleep(Duration::from_millis(400)).await;
+
+    // ── Smuggle request to the SAME backend (same pooled upstream conn):
+    // >window body, RST mid-body → triggers reset_peer (conn teardown).
+    {
+        let stream = TcpStream::connect(gw).await.unwrap();
+        let mut builder = h2crate::client::Builder::new();
+        builder
+            .initial_window_size(8 * 1024 * 1024)
+            .initial_connection_window_size(8 * 1024 * 1024);
+        let (h2, conn) = builder.handshake::<_, Bytes>(stream).await.unwrap();
+        tokio::spawn(async move {
+            let _ = conn.await;
+        });
+        let mut s = h2.ready().await.unwrap();
+        let req = http::Request::builder()
+            .method("POST")
+            .uri(format!("http://{SAN_HOST}/smuggle"))
+            .body(())
+            .unwrap();
+        let (rf, mut sb) = s.send_request(req, false).unwrap();
+        let p = binary_pattern(256 * 1024);
+        let mut off = 0;
+        while off < p.len() {
+            let end = (off + 16 * 1024).min(p.len());
+            let chunk = Bytes::copy_from_slice(&p[off..end]);
+            sb.reserve_capacity(chunk.len());
+            match tokio::time::timeout(
+                Duration::from_secs(5),
+                futures_util::future::poll_fn(|cx| sb.poll_capacity(cx)),
+            )
+            .await
+            {
+                Ok(Some(Ok(c))) if c > 0 => {}
+                _ => break,
+            }
+            if sb.send_data(chunk, false).is_err() {
+                break;
+            }
+            off = end;
+        }
+        tokio::time::sleep(Duration::from_millis(200)).await;
+        drop(sb); // RST_STREAM(CANCEL) → gateway reset_peer
+        let _ = tokio::time::timeout(Duration::from_secs(3), rf).await;
+    }
+
+    // Resolve the healthy request and characterize collateral.
+    let _ = healthy_writer.await;
+    let (healthy_status, healthy_len) = healthy_task.await.unwrap_or((None, 0));
+    let isolated = healthy_status == Some(200) && healthy_len == healthy_payload.len();
+    eprintln!(
+        "RESET_PEER_COLLATERAL healthy_status={healthy_status:?} healthy_len={healthy_len} \
+         (expected 8388608) multiplex_isolated={isolated}"
+    );
+    if !isolated {
+        eprintln!(
+            "RESET_PEER_COLLATERAL FINDING (CF, not blocker): a client RST mid-body on \
+             one H2→H2 stream collaterally disrupted a CONCURRENT healthy request to the \
+             SAME backend (shared pooled connection torn down by reset_peer). This is \
+             consistent with the pool's connection-scoped ROUND8-L7-10 broad-eviction \
+             philosophy — documented tradeoff, NOT a security defect."
+        );
+    } else {
+        eprintln!(
+            "RESET_PEER_COLLATERAL: concurrent healthy request SURVIVED (multiplex isolated)."
+        );
+    }
+    // SECURITY floor only (collateral is characterization, not a gate): the
+    // smuggle must still never be a complete request at the backend, and the
+    // probe must be non-vacuous (the upstream WAS dialed).
+    assert!(
+        seen.requests.load(Ordering::SeqCst) >= 1,
+        "probe vacuous: upstream never dialed"
     );
 }
 

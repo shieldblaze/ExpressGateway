@@ -199,3 +199,154 @@ bounded/load-bearing memory gauge, request + response backpressure, F-CAP-1 413/
 discrimination, trailers both directions, zero-dial within-window reject) PASS, and the
 session-code coverage sub-metric (84.26%) clears the binding 80% bar. **FLAGGED FOR LEAD;
 builder to fix the F-MD-4 reset→upstream-RST propagation race, verifier to re-verify.**
+
+---
+
+# ROUND 2 — RE-VERIFY of the F-MD-4 fix (commit 9173bd97; tip 4fb569b1)
+
+Independent re-verification of builder-1's F-MD-4 smuggling fix. Do NOT trust the
+builder self-measure. Same env (`CARGO_TARGET_DIR=/home/ubuntu/Code/eg-target`,
+`--features test-gauges`, scoped llvm-cov).
+
+## R2.1 — Diff scope (mandate #1)
+
+Since the verifier round-1 commit `55b73898`:
+```
+$ git diff --stat 55b73898 4fb569b1
+ audit/h-matrix/s10-report.md   |  44 ++++   (lead-owned, not touched by verifier)
+ crates/lb-io/src/http2_pool.rs |  31 ++++   (new reset_peer)
+ crates/lb-l7/src/h2_proxy.rs   | 238 ++++   (detached send task + inject_abort + reset_peer call sites)
+```
+Only the two src files + the lead's report changed. **`proxy_request` BYTE-UNCHANGED**:
+fn body sha256 = `30c517c7…` IDENTICAL at 55b73898 (lines 1333–1910) and 4fb569b1
+(lines 1347–1924; +14-line shift from the const/doc hunk at line 115). The fix hunks in
+h2_proxy.rs are at line 115 (const+doc) and 2089–2369 (inside `proxy_h2_to_h2_request`) —
+NONE fall in `proxy_request`'s range. **H2→H1 untouched, independently confirmed.**
+
+## R2.2 — Full battery on 9173bd97 (all conditions STILL pass)
+
+All 21 tests PASS (the detached-task refactor did NOT regress the happy path /
+Branch-B byte-identity / backpressure / F-CAP-1 / response leg):
+
+| Group | Tests | Result |
+|-------|-------|--------|
+| Req byte-identity A/B (1 KiB, 5/8 MiB) | 3 | PASS — verbatim at backend |
+| Memory gauge (non-vacuous+inverted, live-occupancy) | 2 | PASS — in_situ 80 KiB, inverted trips 4 MiB, peak 80 KiB |
+| Req backpressure (48 MiB pause→resume; 8 MiB resume) | 2 | PASS — paused≪body, full drain + 200 |
+| F-CAP-1 (over-cap 413; pseudo-trailer RST; CL-mismatch; dead→502) | 4 | PASS — 413 / no-leak / no-leak / 502 |
+| Resp byte-identity 8/48 MiB | 2 | PASS — no truncation |
+| Resp backpressure (slow client) + trailers | 2 | PASS — 4301 frames, trailer landed |
+| Extra arms (within-window RST zero-dial, A/B valid trailers, alt-svc) | 4 | PASS |
+| **F-MD-4 (hardened, see R2.3/R2.4)** | 1 | **PASS (24/24 iters, 0 smuggle)** |
+| **reset_peer collateral probe (see R2.7)** | 1 | PASS — concurrent healthy stream survived |
+
+`cargo test --features test-gauges --test h2h2_md_streaming_verify` → **21 passed; 0 failed.**
+
+## R2.3 — F-MD-4 fix verification: 50× isolated (mandate #3)
+
+```
+$ for i in 1..50: cargo test ... --test-threads=1 fmd4_client_rst_mid_body_never_complete_at_h2_upstream
+FMD4 50x: pass=50/50   saw_complete=true (smuggle)=0/50
+```
+**0/50 smuggles** (was 25–50% before the fix). The fix is effective.
+
+## R2.4 — HARDENED regression test inside the parallel ×3 gate (mandate #4)
+
+The round-1 single-shot test passed 20/20 PARALLEL while the bug was LIVE (the race is
+masked under load + a single shot catches only ~25–50%). HARDENED:
+- `#[tokio::test(flavor = "current_thread")]` — single-threaded async runtime = the LOW-
+  CONTENTION condition under which the bug manifests, regardless of the outer harness
+  `--test-threads`.
+- Internal loop `FMD4_SMUGGLE_ITERS = 24` — asserts `!saw_complete` on EVERY iteration.
+  At a pessimistic per-iter catch p≈0.25 for the live bug, P(miss) ≤ 0.75^24 ≈ 1e-3; at
+  p≈0.5, ≪ that. (Negative control below shows it catches at ITER 0.)
+- Non-vacuity guard: asserts `dialed_iters ≥ N/2` (the upstream is actually dialed → the
+  Branch-B smuggle path is exercised). No assertion weakened. NON-`#[ignore]`'d.
+
+**NEGATIVE CONTROL (load-bearing proof).** Scratch worktree at the pre-fix tip
+(`55b73898` = fix's parent: pre-fix src, 0 reset_peer / 0 inject_abort) + the HARDENED
+test copied in, separate target dir:
+```
+PRE-FIX: FMD4 smuggle iter=0: backend_requests=1 saw_complete=true backend_body_len=262144
+         panicked: F-MD-4 DEFECT (iter 0) ... truncated body (262144 B) relayed as finished
+         test result: FAILED   (caught at the FIRST iteration, 7.09s)
+FIX (4fb569b1): dialed_iters=24/24, 0 smuggle, test result: ok (101s)
+```
+The hardened test **FAILS on pre-fix, PASSES on the fix** — load-bearing, deterministic
+catch (no longer probabilistic). Scratch worktree + target removed after.
+
+## R2.5 — R3 no-regression incl. the SHARED pool (mandate #5)
+
+| Suite | Result | Note |
+|-------|--------|------|
+| `crates/lb-quic h3_h2_stream_e2e` | **10 passed** | SHARED `Http2Pool` + new `reset_peer` API — NO regression |
+| `tests/h2h1_md_streaming_verify` (smuggling esp.) | **15 passed** | proxy_request byte-unchanged |
+| `tests/h1h1_md_streaming_verify` | **14 passed** | |
+| `tests/proto_translation_e2e` | **5 passed** | incl. `proxy_h2_listener_h2_backend` |
+
+The highest-risk change (shared-pool `reset_peer`) does NOT regress H3→H2.
+
+## R2.6 — Coverage SESSION sub-metric on the NEW (larger) fn ranges (mandate #6)
+
+Scoped: `cargo llvm-cov --workspace --features test-gauges --lcov --test h2h2_md_streaming_verify`.
+Updated `audit/h-matrix/s10-h2h2-cov.awk` for the new ranges (detached send task grew
+`proxy_h2_to_h2_request` to [1964-2414]; added `reset_peer` [http2_pool.rs:314-319]):
+
+```
+proxy_h2_to_h2 (orchestrator)     : 17/22  = 77.27%
+proxy_h2_to_h2_request (pump+task): 194/240 = 80.83%   (detached task + inject_abort + reset_peer call sites)
+build_h2_upstream_request_parts   : 70/77  = 90.91%
+upstream_h2_response_to_h2 (relay): 25/30  = 83.33%
+reset_peer (http2_pool.rs)        : 6/6    = 100.00%
+SESSION TOTAL (H2->H2 R8 + fix)   : 312/375 = 83.20%   (need >=80% => >=300)   [single-thread, stable]
+```
+**SESSION sub-metric = 83.20% ≥ 80% (BINDING bar MET).** `reset_peer` 100%; the F-MD-4
+abort path's `reset_peer` call site (h2_proxy.rs:2323) hit 25×. Multi-thread runs vary
+80.53–83.20% (the F-CAP-1 send-error-vs-verdict-race arm fires on only one path per run);
+single-thread is the stable 83.20%. Uncovered (63) are defensive/timing arms: missing-
+pool 502 (1931-1934), Timeout-504/send-Timeout (2342-2355), the head-won-then-abort
+verdict-gate Err arms (2387-2400, a narrow race window). Disk during instrumentation:
+**27 GB free** (above the 25 GB floor).
+
+## R2.7 — reset_peer assessment (mandate #7; CF, not blocker)
+
+**(a) Is reset_peer LOAD-BEARING?** Scratch worktree at the fix tip with `reset_peer`
+NEUTRALIZED to a no-op + the hardened F-MD-4 test (72 iterations across 3 runs):
+**0 smuggles — the test PASSES with reset_peer disabled.** ⇒ In this reproduction the
+**detached send task + `inject_abort!` (hold sender + `tx.closed()` FIFO observation)
+alone are sufficient** to prevent the smuggle; `reset_peer` is NOT strictly load-bearing
+for the test's scenario. It is a defense-in-depth backstop providing DETERMINISTIC
+upstream teardown for cases the test may not cover (e.g. a wedged upstream driver where
+`inject_abort`'s `tx.closed()` hits `H2_ABORT_OBSERVE_TIMEOUT`). Keeping it is the safe
+choice; this is a documentation note, not a defect.
+
+**(b) COLLATERAL on a concurrent healthy stream.** `reset_peer_collateral_concurrent_
+stream_probe`: a slow healthy 8 MiB H2→H2 request in flight to a backend while a smuggle
+RST to the SAME backend triggers `reset_peer` (connection teardown). Result (5/5 runs):
+the healthy request **SURVIVED — status=200, full 8388608 B, multiplex_isolated=true.**
+No collateral disruption observed in the concurrent-streaming case. (reset_peer IS
+connection-scoped by design — consistent with the pool's ROUND8-L7-10 broad-eviction
+philosophy — so disruption is POSSIBLE under other timings; but the probe shows the
+common concurrent-stream case is unaffected.) **No multiplex-isolation regression found;
+CF note only.**
+
+## R2.8 — Determinism ×3 (final 21-test suite, parallel gate)
+
+```
+RUN 1: 21 passed; 0 failed   (101.33s)
+RUN 2: 21 passed; 0 failed   (101.29s)
+RUN 3: 21 passed; 0 failed   (101.28s)
+```
+All 21 pass ×3 under the parallel gate, INCLUDING the hardened F-MD-4 (now deterministic
+via current_thread + N=24 loop — and proven to FAIL on pre-fix, R2.4). The ~101 s runtime
+is dominated by the hardened F-MD-4 loop; acceptable for a security regression.
+
+## R2.9 — ROUND-2 VERDICT
+
+The F-MD-4 request-smuggling defect from round 1 is **FIXED**: 50/50 isolated runs
+0-smuggle; the hardened regression test fails on pre-fix and passes on the fix
+(load-bearing, deterministic, inside the parallel ×3 gate). The detached-task refactor
+introduced NO regression — all 21 conditions pass, R3 (incl. shared `Http2Pool` H3→H2)
+all green, `proxy_request` byte-unchanged. Session-code coverage 83.20% ≥ 80% (binding).
+`reset_peer`: defense-in-depth (detached-task+inject_abort suffice in test), no collateral
+multiplex-isolation regression observed (CF note). **The H2→H2 BUILT bar is now MET.**
