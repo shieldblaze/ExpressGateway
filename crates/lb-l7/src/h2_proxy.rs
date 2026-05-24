@@ -115,6 +115,20 @@ impl std::fmt::Display for PumpAbort {
 
 impl std::error::Error for PumpAbort {}
 
+/// F-MD-4 (S10 H2→H2 DEFECT FIX) — upper bound on how long the Branch-B
+/// request pump waits, after injecting `Err(PumpAbort)` into the upstream
+/// request-body channel, for hyper to OBSERVE that error and drop the
+/// channel receiver (i.e. reset the upstream H2 stream). Holding the
+/// sender open across this window is what makes the upstream reset
+/// DETERMINISTIC instead of racing a channel-close clean-EOF — see the
+/// `inject_abort!` macro in [`H2Proxy::proxy_h2_to_h2_request`]. hyper
+/// drops the receiver essentially immediately once it polls the body, so
+/// this bound is only a liveness backstop against a wedged upstream
+/// driver; it must not hang the detached pump task forever. 5 s is
+/// generous relative to the sub-millisecond observed reset latency while
+/// remaining well under typical request/body timeouts.
+const H2_ABORT_OBSERVE_TIMEOUT: Duration = Duration::from_secs(5);
+
 /// L7 HTTP/2 reverse proxy. Cheap to clone via [`Arc`].
 pub struct H2Proxy {
     pool: TcpPool,
@@ -2089,7 +2103,7 @@ impl H2Proxy {
         // The pump owns the inbound body + already-buffered lookahead and
         // reports its terminal verdict via a oneshot so the response-head
         // relay is gated on a VALIDATED terminal state.
-        let (verdict_tx, verdict_rx) = tokio::sync::oneshot::channel::<Result<(), ProxyErr>>();
+        let (verdict_tx, mut verdict_rx) = tokio::sync::oneshot::channel::<Result<(), ProxyErr>>();
         let drained: Vec<Bytes> = std::mem::take(&mut lookahead);
         let pump = tokio::spawn(async move {
             let mut forwarded_total: usize = buffered;
@@ -2162,6 +2176,39 @@ impl H2Proxy {
                 }};
             }
 
+            // F-MD-4 (S10 DEFECT FIX, body-layer half) — on every abort
+            // terminal state (client RST mid-body, forbidden trailer,
+            // over-cap), inject `Err(PumpAbort)` into the upstream
+            // request-body channel and HOLD the sender open until hyper has
+            // OBSERVED it (`tx.closed().await`, which resolves once hyper
+            // drops the receiver). Because mpsc delivery is FIFO (a buffered
+            // item is always returned before the closed `None`), holding the
+            // sender forces hyper to poll `Ready(Some(Err(PumpAbort)))`
+            // BEFORE it can ever see a channel-close `None` — so hyper
+            // RESETS the upstream stream rather than taking the clean-EOF
+            // (`Ready(None)`) branch and emitting a spurious END_STREAM.
+            //
+            // This is necessary but is only HALF the fix: it guarantees
+            // hyper does not infer a clean EOF *from the channel*. The other
+            // half lives in the caller (`proxy_h2_to_h2_request`'s detached
+            // send task + `reset_peer`): a downstream client RST cancels
+            // this gateway's service future, which would otherwise DROP the
+            // in-flight upstream request body at a clean frame boundary and
+            // make hyper finalize END_STREAM on the graceful drop — racing
+            // ahead of this injection. Owning the send in a detached task
+            // keeps the body alive across the downstream cancel, and the
+            // verdict-driven `reset_peer` (connection teardown, the
+            // multiplexed-pool analog of the H1 pump's `conn_handle.abort()`
+            // backstop) deterministically resets the upstream stream. The
+            // `tx.closed()` wait is bounded by `H2_ABORT_OBSERVE_TIMEOUT` so
+            // a wedged upstream driver cannot hang the detached task.
+            macro_rules! inject_abort {
+                () => {{
+                    let _ = tx.send(Err(PumpAbort)).await;
+                    let _ = tokio::time::timeout(H2_ABORT_OBSERVE_TIMEOUT, tx.closed()).await;
+                }};
+            }
+
             // 1) Drain the lookahead buffer first (oldest chunks first).
             for chunk in drained {
                 if let Err(SendOutcome::ReceiverGone) = send_chunked!(chunk, true) {
@@ -2179,7 +2226,7 @@ impl H2Proxy {
                         if body.is_end_stream() {
                             let _ = verdict_tx.send(Ok(()));
                         } else {
-                            let _ = tx.send(Err(PumpAbort)).await;
+                            inject_abort!();
                             let _ = verdict_tx.send(Err(ProxyErr::BadRequest(
                                 "inbound H2 request body ended without END_STREAM \
                                  (reset mid-body)"
@@ -2197,7 +2244,7 @@ impl H2Proxy {
                                     return;
                                 }
                                 Err(e) => {
-                                    let _ = tx.send(Err(PumpAbort)).await;
+                                    inject_abort!();
                                     let _ = verdict_tx.send(Err(e));
                                     return;
                                 }
@@ -2206,7 +2253,7 @@ impl H2Proxy {
                         if let Ok(data) = frame.into_data() {
                             forwarded_total = forwarded_total.saturating_add(data.len());
                             if forwarded_total > MAX_REQUEST_BODY_BYTES {
-                                let _ = tx.send(Err(PumpAbort)).await;
+                                inject_abort!();
                                 let _ = verdict_tx.send(Err(ProxyErr::BodyTooLarge));
                                 return;
                             }
@@ -2217,7 +2264,7 @@ impl H2Proxy {
                         }
                     }
                     Some(Err(e)) => {
-                        let _ = tx.send(Err(PumpAbort)).await;
+                        inject_abort!();
                         let _ = verdict_tx.send(Err(ProxyErr::BadRequest(format!(
                             "malformed H2 request body: {e}"
                         ))));
@@ -2227,58 +2274,141 @@ impl H2Proxy {
             }
         });
 
-        // Drive the upstream send concurrently with the pump (hyper must
-        // pull the channel for the pump to progress under backpressure),
-        // but do NOT relay the response until the verdict lands.
-        let resp = match h2_pool.send_request(backend_addr, upstream_req).await {
-            Ok(r) => r,
-            Err(Http2PoolError::Timeout) => {
-                // A genuine header-roundtrip timeout. The pump's verdict is
-                // irrelevant to a wall-clock stall → 504 (mirror of the
-                // proxy_request Timeout arm). Do not consult the verdict.
-                pump.abort();
-                return Err(ProxyErr::Timeout);
-            }
-            Err(e) => {
-                // F-CAP-1 (mirror of proxy_request:1822–1849) — a Send/Dial/
-                // Handshake error is the DOWNSTREAM EFFECT of whatever the
-                // pump did; the pump's classified verdict is the
-                // AUTHORITATIVE cause. When the pump deliberately aborts the
-                // upstream (over-cap → BodyTooLarge, forbidden trailer /
-                // mid-body reset → BadRequest) it injects `PumpAbort` then
-                // sends its verdict (FIFO), so the backend's response head
-                // may never arrive and `send_request` fails (the pool also
-                // evicts on Send error, ROUND8-L7-10). Returning 502 here
-                // would mask the real 413/400 (R2 413-vs-502 race). Consult
-                // the verdict FIRST, BOUNDED by `timeouts.body` so a wedged
-                // pump cannot hang the error path. Do NOT abort the pump
-                // before this await (it must still deliver its verdict).
-                let classified = match tokio::time::timeout(self.timeouts.body, verdict_rx).await {
-                    Ok(Ok(Err(ve @ (ProxyErr::BodyTooLarge | ProxyErr::BadRequest(_))))) => {
-                        Some(ve)
+        // F-MD-4 (S10 DEFECT FIX) — DETACH the upstream send + verdict
+        // resolution into a task that OWNS the in-flight `send_request`
+        // future (and therefore the upstream request body) and is NOT tied
+        // to the downstream H2 server stream future's lifetime.
+        //
+        // Root cause of the verifier's intermittent smuggle: when the
+        // downstream client RST_STREAMs mid-body, hyper's H2 server cancels
+        // this service future. If the in-flight `send_request` future (and
+        // its request body) were owned DIRECTLY by this future, that cancel
+        // would DROP the upstream request body at a clean frame boundary,
+        // and hyper's H2 client finalizes the upstream stream with a clean
+        // END_STREAM on that graceful drop — relaying the truncated request
+        // as COMPLETE, BEFORE any verdict-driven `reset_peer` could run.
+        //
+        // By moving the send into a detached task, a downstream cancel only
+        // drops the caller's `recv` of `head_rx`; the detached task keeps
+        // the request body alive and resolves the pump's verdict. On an
+        // abort verdict it forcibly `reset_peer`s (connection teardown →
+        // upstream stream RESET) BEFORE dropping the body, so the backend
+        // can never observe a clean END_STREAM for a truncated request.
+        // On a clean verdict it relays the response head back via `head_rx`.
+        // This is the multiplexed-pool analog of the H1 pump's
+        // `conn_handle.abort()` backstop.
+        let (head_tx, head_rx) =
+            tokio::sync::oneshot::channel::<Result<Response<IncomingBody>, ProxyErr>>();
+        let pool_for_task = h2_pool.clone();
+        let body_timeout = self.timeouts.body;
+        tokio::spawn(async move {
+            let mut send_fut =
+                std::pin::pin!(pool_for_task.send_request(backend_addr, upstream_req));
+            // Race the upstream send against the pump's verdict (resolves
+            // exactly once). `resp` is Some only when the response head won
+            // the race; every other branch reports its result + returns.
+            let resp: Option<Response<IncomingBody>> = tokio::select! {
+                // Bias toward the verdict: an abort verdict landing at the
+                // same time as the head must win so we RESET rather than
+                // relay.
+                biased;
+                v = &mut verdict_rx => {
+                    match v {
+                        // Abort terminal state reached BEFORE the head:
+                        // deterministically reset the upstream stream
+                        // (connection teardown) and report the classified
+                        // error. The send future (and body) is dropped only
+                        // AFTER the reset.
+                        Ok(Err(e)) => {
+                            pool_for_task.reset_peer(backend_addr);
+                            pump.abort();
+                            let _ = head_tx.send(Err(e));
+                            return;
+                        }
+                        // Clean terminal state before the head (small/fast
+                        // body): await the head then relay.
+                        Ok(Ok(())) => {
+                            let out = match send_fut.await {
+                                Ok(r) => Ok(r),
+                                Err(Http2PoolError::Timeout) => Err(ProxyErr::Timeout),
+                                Err(e) => Err(ProxyErr::Upstream(format!("h2 upstream: {e}"))),
+                            };
+                            let _ = head_tx.send(out);
+                            return;
+                        }
+                        // Pump vanished without a verdict (panic/abort):
+                        // reset and never leak the backend response.
+                        Err(_) => {
+                            pool_for_task.reset_peer(backend_addr);
+                            let _ = head_tx.send(Err(ProxyErr::BadRequest(
+                                "inbound H2 request pump terminated without a verdict".to_owned(),
+                            )));
+                            return;
+                        }
                     }
-                    _ => None,
-                };
-                pump.abort();
-                return Err(
-                    classified.unwrap_or_else(|| ProxyErr::Upstream(format!("h2 upstream: {e}")))
-                );
-            }
-        };
+                }
+                r = &mut send_fut => match r {
+                    Ok(resp) => Some(resp),
+                    Err(Http2PoolError::Timeout) => {
+                        pump.abort();
+                        let _ = head_tx.send(Err(ProxyErr::Timeout));
+                        return;
+                    }
+                    Err(e) => {
+                        // F-CAP-1 (mirror of proxy_request:1822–1849):
+                        // consult the verdict FIRST (BOUNDED) and prefer a
+                        // classified 413/400 over the generic 502; also reset
+                        // the peer so any in-flight stream is torn down.
+                        // (`send_request` failing IS the downstream effect of
+                        // the pump's abort.)
+                        let classified =
+                            match tokio::time::timeout(body_timeout, &mut verdict_rx).await {
+                                Ok(Ok(Err(
+                                    ve @ (ProxyErr::BodyTooLarge | ProxyErr::BadRequest(_)),
+                                ))) => Some(ve),
+                                _ => None,
+                            };
+                        pool_for_task.reset_peer(backend_addr);
+                        pump.abort();
+                        let _ = head_tx.send(Err(classified
+                            .unwrap_or_else(|| ProxyErr::Upstream(format!("h2 upstream: {e}")))));
+                        return;
+                    }
+                },
+            };
+            // SAFETY: every non-head branch above `return`ed, so reaching
+            // here means the head won the race.
+            let Some(resp) = resp else { return };
 
-        // Validate-before-RESPONSE-relay gate (mirror of 1857–1878): the
-        // response head only relays once the inbound body reached a
-        // validated terminal state.
-        match verdict_rx.await {
-            Ok(Ok(())) => Ok(resp),
-            Ok(Err(e)) => {
-                // Malformed inbound after the head arrived: never relay the
-                // backend response body. (The pool evicts the peer on the
-                // subsequent stream fault; nothing to abort here.)
-                Err(e)
-            }
+            // The response head won the race (arrived before any verdict).
+            // Validate-before-RESPONSE-relay gate (mirror of 1857–1878):
+            // relay only once the inbound body reached a validated terminal
+            // state; on an abort verdict reset and never relay.
+            let out = match verdict_rx.await {
+                Ok(Ok(())) => Ok(resp),
+                Ok(Err(e)) => {
+                    pool_for_task.reset_peer(backend_addr);
+                    Err(e)
+                }
+                Err(_) => {
+                    pool_for_task.reset_peer(backend_addr);
+                    Err(ProxyErr::BadRequest(
+                        "inbound H2 request pump terminated without a verdict".to_owned(),
+                    ))
+                }
+            };
+            let _ = head_tx.send(out);
+        });
+
+        // Await the detached task's verdict-gated result. If the downstream
+        // RSTs, this await is cancelled — but the detached task survives and
+        // still resets the upstream on an abort verdict (the smuggling fix).
+        match head_rx.await {
+            Ok(result) => result,
+            // The send task dropped `head_tx` without sending (it was
+            // aborted, or panicked) — never leak a backend response.
             Err(_) => Err(ProxyErr::BadRequest(
-                "inbound H2 request pump terminated without a verdict".to_owned(),
+                "inbound H2 upstream send task terminated without a result".to_owned(),
             )),
         }
     }
