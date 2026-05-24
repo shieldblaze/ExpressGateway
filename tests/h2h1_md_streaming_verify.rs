@@ -1726,6 +1726,89 @@ async fn smuggling_rst_mid_body_never_complete_at_upstream() {
     );
 }
 
+// ══════════════════════════════════════════════════════════════════════
+// S9 / F-CAP-1 (re-verify) — H2→H1 over-cap upload to a BODY-READING backend
+// now yields a deterministic 413, not the pre-fix 502. The fix consults the
+// pump's classified BodyTooLarge verdict (bounded by timeouts.body) on the
+// send_request-error arm. (Appended to this verifier-owned S8 suite.)
+// ══════════════════════════════════════════════════════════════════════
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn fcap1_h2_over_cap_upload_yields_413() {
+    // Real H2 client → TLS gateway → real H1 backend that READS (drains) the
+    // body continuously and never sends a response head (so send_request fails
+    // and the F-CAP-1 verdict path is exercised). The drain backend lets the
+    // gateway stream the body upstream at full speed so the forwarded total
+    // crosses MAX_REQUEST_BODY_BYTES (64 MiB) and the cap fires.
+    let (backend, body_bytes) = spawn_body_counting_backend().await;
+    let (gw, anchor) = spawn_listener_for(backend).await;
+    let tls = connect_tls(gw, anchor).await;
+
+    let mut builder = h2::client::Builder::new();
+    builder
+        .initial_window_size(8 * 1024 * 1024)
+        .initial_connection_window_size(8 * 1024 * 1024);
+    let (h2, conn) = builder.handshake::<_, Bytes>(tls).await.unwrap();
+    tokio::spawn(async move {
+        let _ = conn.await;
+    });
+    let mut sender = h2.ready().await.unwrap();
+    let req = http::Request::builder()
+        .method("POST")
+        .uri(format!("https://{SAN_HOST}/big"))
+        .body(())
+        .unwrap();
+    let (resp_fut, mut send_body) = sender.send_request(req, false).unwrap();
+
+    let over = 64 * 1024 * 1024 + 2 * 1024 * 1024; // 66 MiB > 64 MiB cap
+    let chunk = vec![0x5Au8; 64 * 1024];
+    let writer = tokio::spawn(async move {
+        let mut off = 0;
+        while off < over {
+            send_body.reserve_capacity(chunk.len());
+            // Wait (unbounded within the test's outer 60 s budget) for the H2
+            // flow-control capacity the gateway grants — backpressure parks us
+            // but does not abandon the upload.
+            match futures_util::future::poll_fn(|cx| send_body.poll_capacity(cx)).await {
+                Some(Ok(cap)) if cap > 0 => {}
+                _ => break, // window closed (gateway aborted the stream → cap hit)
+            }
+            if send_body
+                .send_data(Bytes::copy_from_slice(&chunk), false)
+                .is_err()
+            {
+                break;
+            }
+            off += chunk.len();
+        }
+        let _ = send_body.send_data(Bytes::new(), true);
+        off
+    });
+
+    let status = match tokio::time::timeout(Duration::from_secs(60), resp_fut).await {
+        Ok(Ok(resp)) => Some(resp.status().as_u16()),
+        Ok(Err(e)) => {
+            eprintln!("FCAP1_H2 response errored: {e:?}");
+            None
+        }
+        Err(_) => {
+            eprintln!("FCAP1_H2 response timed out");
+            None
+        }
+    };
+    let written = writer.await.unwrap_or(0);
+    eprintln!(
+        "FCAP1_H2_OVER_CAP status={status:?} written={written} backend_body_bytes={}",
+        body_bytes.load(Ordering::SeqCst)
+    );
+    assert_eq!(
+        status,
+        Some(413),
+        "F-CAP-1: H2→H1 over-cap upload to a draining backend should yield 413, \
+         got {status:?} (wrote {written} bytes)"
+    );
+}
+
 // Reference the StreamBody/Frame imports so an unused-import lint cannot
 // fire if a future edit drops a use; these mirror the production body type.
 #[allow(dead_code)]

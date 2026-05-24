@@ -1,0 +1,15 @@
+=== H1 cell (h1h1_md_streaming_verify) ===
+test forbidden_framing_field_trailer_rejected_400 ... FORBIDDEN_TRAILER status_line="HTTP/1.1 400 Bad Request" backend_dials=1 backend_complete=0
+test genuine_upstream_failure_still_502 ... GENUINE_UPSTREAM_FAIL status_line="HTTP/1.1 502 Bad Gateway" backend_dials=1
+test legit_request_trailer_forwarded_200 ... LEGIT_TRAILER status_line="HTTP/1.1 200 OK" forwarded=true complete=1
+test over_64mib_upload_yields_413_when_backend_responds_early ... OVER_64MIB_413 status_line="HTTP/1.1 413 Payload Too Large" written=68157440
+test over_64mib_upload_yields_413_with_body_reading_backend ... OVER_64MIB_413_BODYREAD status_line="HTTP/1.1 413 Payload Too Large" written=68157440
+test pre_pump_cl_te_smuggle_still_rejected ... PRE_PUMP_SMUGGLE status_line="HTTP/1.1 400 Bad Request" backend_dials=0
+test smuggle_parity_chunked_truncation ... SMUGGLE_PARITY framing=chunked backend_dials=1 complete=0 backend_body_bytes=32800
+test smuggle_parity_content_length_truncation ... SMUGGLE_PARITY framing=cl backend_dials=1 complete=0 backend_body_bytes=32800
+test result: ok. 14 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 10.80s
+
+=== H2 cell F-CAP-1 + smuggling (h2h1_md_streaming_verify) ===
+test fcap1_h2_over_cap_upload_yields_413 ... FCAP1_H2_OVER_CAP status=Some(413) written=67174400 backend_body_bytes=67180299
+test smuggling_rst_mid_body_never_complete_at_upstream ... SMUGGLING dials=1 complete_requests=0
+test result: ok. 15 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 28.15s
