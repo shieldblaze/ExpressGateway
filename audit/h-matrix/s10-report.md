@@ -85,8 +85,48 @@ llvm-cov command (R10).
   bridging_h2_h2 + bridging_h3_h2 ok; clippy (lb-l7/lb-io) clean. Disk 30 GB.
 - No plan deviations.
 
-**Verification (verifier, independent):** (pending — full R8 proof battery both
-legs + F-MD-4 + F-CAP-1 + coverage re-measure + R3 sweep)
+**Verification (verifier, independent; commits `…55b73898`, src diff-empty vs
+builder tip `30918809`):** `tests/h2h2_md_streaming_verify.rs` +
+`s10-h2h2-cov.awk` + `s10-h2h2-verify.md`. **19/20 conditions PASS; 1 REAL
+DEFECT (F-MD-4) found → H2→H2 NOT YET BUILT.**
+- Request byte-identity Branch A (1 KiB) + B (5/8 MiB) verbatim at H2 backend. PASS.
+- Memory gauge non-vacuous: in-situ 80 KiB (≈1.25×window) for 4 MiB & 48 MiB
+  (body-INDEPENDENT); inverted probe trips. PASS.
+- Request backpressure: 48 MiB, paused at 1.44 MiB under stall, retained 80 KiB,
+  resume → full 50331648 + 200. PASS.
+- F-CAP-1: over-cap 66 MiB → **413** (backend drained), forbidden pseudo-trailer
+  → RST no-leak, CL-mismatch → no-leak, dead backend → **502** (arm
+  discriminates). PASS.
+- Response leg (net-new): 8/48 MiB byte-identical (no truncation); slow-client
+  bounded-by-construction (honest — no gauge claimed); trailers relayed. PASS.
+- Coverage SESSION sub-metric (binding) **84.26%** (257/305) ≥ 80%
+  (`proxy_h2_to_h2` 77.27%, `proxy_h2_to_h2_request` 82.39%,
+  `build_h2_upstream_request_parts` 90.91%, `upstream_h2_response_to_h2` 83.33%);
+  scoped `cargo llvm-cov --workspace --features test-gauges --lcov --test
+  h2h2_md_streaming_verify` (R10). Disk 27 GB.
+- R3: h2h1 15/15, h1h1 14/14, proto_translation 5/5, h3_h2 10/10 (shared
+  Http2Pool un-regressed).
+- **DEFECT F-MD-4 (BLOCKER, R2/R6/R8):** client RST mid-body (256 KiB Branch B,
+  full-forward + 500 ms settle + RST_STREAM/CANCEL, no END_STREAM) → H2 backend
+  records `complete=true` w/ full body in ~25–50% of ISOLATED runs (truncated
+  request relayed as complete = request smuggling). MASKED under the parallel
+  gate (20/20) — the gate would not catch it; repro needs `--test-threads=1`
+  repetition. `complete=true` ⟺ gateway sent a clean upstream END_STREAM ⟺ pump
+  dropped `tx` without enqueuing `Err(PumpAbort)`. Dispatched to builder-1 to
+  diagnose (instrumented) + fix, with an explicit R12 mandate (the suspect arm is
+  byte-identical in the promoted H2→H1 `proxy_request`; default = fix both if
+  shared). Verifier to re-verify deterministically + harden the regression so it
+  lands robustly inside the ×3 gate (a methodological finding: the parallel gate
+  masked a real F-MD-4 smuggle — single-run/parallel "green" is not green, R1/R2).
+
+## Phase 2 — H1→H2 — HONEST-STOPPED (lead, R7)
+Per the mission honest-stop rule ("one fully-verified cell beats two half-done")
+and R7 (lead owns the honest-stop call): with a security defect to fix +
+re-verify + the mandatory Phase 3 ×3 gate consuming the remaining budget, I
+honest-stopped Phase 2. **H1→H2 is NOT built this session.** Its R8 plan is
+authored as the S11 head-start (incorporating the S10 F-MD-4 fix mechanism once
+known). Rationale: shipping H1→H2 half-verified while H2→H2 carries a known
+smuggling defect would be the opposite of the program's verification-quality bar.
 
 ## Phase 2 — H1→H2 (honest-stop gated)
 (decision pending H2→H2 completion + budget)
