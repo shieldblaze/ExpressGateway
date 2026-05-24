@@ -1022,13 +1022,17 @@ async fn legit_request_trailer_forwarded_200() {
     );
 }
 
+/// F-CAP-1 (Q-H3): a forbidden framing-field trailer is rejected with a
+/// deterministic **400 Bad Request** even against a BODY-READING backend that
+/// has NOT yet sent a response head. Before F-CAP-1 this raced to 502 because
+/// the injected `H1PumpAbort` made `send_request` error first; the fix consults
+/// the pump's classified `BadRequest` verdict (bounded by `timeouts.body`)
+/// before falling through to 502, so the real 400 always surfaces.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn forbidden_framing_field_trailer_rejected_400() {
-    // EARLY-responding backend so the gateway's Q-H3 400 verdict surfaces AS
-    // the client status (same verdict-relay-gate shape as the 413 proof: the
-    // verdict is only mapped to a status when send_request resolved with a
-    // response head). transfer-encoding in trailers = desync primitive.
-    let (backend, w) = spawn_trailer_witness_backend(true).await;
+    // Body-reading witness (does NOT reply early) — the realistic case the
+    // F-CAP-1 fix targets. transfer-encoding in trailers = desync primitive.
+    let (backend, w) = spawn_trailer_witness_backend(false).await;
     let gw = proxy_for(backend, relaxed_timeouts());
     let gw_addr = spawn_h1_gateway(gw).await;
 
@@ -1043,18 +1047,11 @@ async fn forbidden_framing_field_trailer_rejected_400() {
         w.dials.load(Ordering::SeqCst) >= 1,
         "non-vacuous: backend never dialed for the forbidden-trailer case"
     );
-    // Q-H3 rejection. The mapped status is 400 when the verdict-relay gate is
-    // reached (send_request resolved a head first) and 502 when the injected
-    // H1PumpAbort makes send_request error first — a benign timing race with
-    // the IDENTICAL security outcome (the SAME shape as the 413/502 cap case;
-    // see over_64mib_*). It must NEVER be a 200 (forbidden trailer accepted).
+    // F-CAP-1: deterministic 400 (the classified BadRequest verdict now wins
+    // over the send_request error), NEVER 502 and NEVER 200.
     assert!(
-        status.starts_with("HTTP/1.1 400") || status.starts_with("HTTP/1.1 502"),
-        "forbidden framing-field trailer not rejected (expected 400 or 502): {status:?}"
-    );
-    assert!(
-        !status.contains(" 200"),
-        "forbidden framing-field trailer was ACCEPTED (200): {status:?}"
+        status.starts_with("HTTP/1.1 400"),
+        "forbidden framing-field trailer not rejected with 400 (F-CAP-1): {status:?}"
     );
     // F-MD-4: the backend MUST NEVER see a complete request (Err-before-close
     // aborts the upstream body before a clean `0\r\n` terminator).
@@ -1208,36 +1205,100 @@ async fn over_64mib_upload_yields_413_when_backend_responds_early() {
     );
 }
 
-/// 64 MiB cap with a BODY-READING backend → the over-cap inbound is REJECTED
-/// (never relayed as a success). On the Branch-B-only streaming path, when the
-/// backend has not yet sent a response head, the `H1PumpAbort` injected on the
-/// cap-exceed arm makes hyper's `send_request` error first, which maps to
-/// `502 Bad Gateway` (the upstream send failed) rather than the 413 verdict.
-/// This MIRRORS the already-BUILT H2→H1 sibling cell, whose S8 verify doc
-/// blessed the same `client_status=502` for the streaming over-cap case and
-/// left the mid-stream `BodyTooLarge` line uncovered for the identical reason.
-/// The security-relevant invariant holds either way: the over-cap request is
-/// NOT relayed as a complete success and the upstream conn is aborted
-/// (single-use `take_stream`). Documented as a behavioral characterization,
-/// not a defect.
+/// F-CAP-1: 64 MiB cap with a BODY-READING backend → deterministic **413**.
+/// Before F-CAP-1 this path raced to 502 (the `H1PumpAbort` injection made
+/// `send_request` error before the verdict was consulted). The fix consults
+/// the pump's classified `BodyTooLarge` verdict (bounded by `timeouts.body`)
+/// on the send-error arm, so the real 413 now surfaces against a normal
+/// body-reading backend — the realistic case.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn over_64mib_upload_rejected_502_with_body_reading_backend() {
+async fn over_64mib_upload_yields_413_with_body_reading_backend() {
     let (backend, _dials) = spawn_drain_200_backend().await;
     let gw = proxy_for(backend, relaxed_timeouts());
     let gw_addr = spawn_h1_gateway(gw).await;
 
     let (status_line, written) = over_cap_status_line(gw_addr).await;
-    eprintln!("OVER_64MIB_REJECT status_line={status_line:?} written={written}");
-    // The load-bearing assertion is that the upload is NOT accepted (no 200).
+    eprintln!("OVER_64MIB_413_BODYREAD status_line={status_line:?} written={written}");
     assert!(
         !status_line.contains(" 200"),
         "over-cap upload was accepted with 200 (cap not enforced): {status_line:?}"
     );
-    // Captured shape on this path is 413 OR 502 (both = rejection). With a
-    // body-reading backend it is 502 (the documented streaming shape).
+    // F-CAP-1: deterministic 413, NOT the pre-fix 502.
     assert!(
-        status_line.contains("413") || status_line.contains("502"),
-        "over-cap upload yielded an unexpected status: {status_line:?}"
+        status_line.contains("413"),
+        "F-CAP-1: over-cap upload to a body-reading backend did not yield 413: {status_line:?}"
+    );
+}
+
+/// F-CAP-1 must NOT mask a GENUINE upstream failure. A backend that accepts the
+/// connection then closes mid-request (NOT a pump-caused abort) must still map
+/// to **502 Bad Gateway** — the verdict here is `Ok(())` (the inbound body was
+/// fine), so the fix's `_ => None` arm falls through to the generic 502.
+async fn spawn_close_mid_request_backend() -> (SocketAddr, Arc<AtomicUsize>) {
+    let listener = TcpListener::bind(("127.0.0.1", 0)).await.unwrap();
+    let local = listener.local_addr().unwrap();
+    let dials = Arc::new(AtomicUsize::new(0));
+    let d2 = Arc::clone(&dials);
+    tokio::spawn(async move {
+        loop {
+            let Ok((mut sock, _)) = listener.accept().await else {
+                return;
+            };
+            d2.fetch_add(1, Ordering::SeqCst);
+            tokio::spawn(async move {
+                // Read a little of the request head then abruptly close WITHOUT
+                // sending any response — a genuine upstream failure.
+                let mut tmp = [0u8; 64];
+                let _ = sock.read(&mut tmp).await;
+                let _ = sock.shutdown().await;
+                drop(sock);
+            });
+        }
+    });
+    (local, dials)
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn genuine_upstream_failure_still_502() {
+    let (backend, dials) = spawn_close_mid_request_backend().await;
+    let gw = proxy_for(backend, relaxed_timeouts());
+    let gw_addr = spawn_h1_gateway(gw).await;
+
+    // A small, WELL-FORMED upload (under the cap) — the pump verdict is Ok(());
+    // any send error here is a genuine upstream failure, not a pump abort.
+    let payload = binary_pattern(4096);
+    let mut sock = TcpStream::connect(gw_addr).await.unwrap();
+    let head = format!(
+        "POST /up HTTP/1.1\r\nhost: backend.test\r\ncontent-length: {}\r\n\r\n",
+        payload.len()
+    );
+    let _ = sock.write_all(head.as_bytes()).await;
+    let _ = sock.write_all(&payload).await;
+    let _ = sock.flush().await;
+    let (head, _body) = tokio::time::timeout(Duration::from_secs(15), read_h1_response(&mut sock))
+        .await
+        .expect("no response to a request against a failing backend");
+    let status = String::from_utf8_lossy(&head)
+        .lines()
+        .next()
+        .unwrap_or("")
+        .to_owned();
+    eprintln!(
+        "GENUINE_UPSTREAM_FAIL status_line={status:?} backend_dials={}",
+        dials.load(Ordering::SeqCst)
+    );
+    assert!(
+        dials.load(Ordering::SeqCst) >= 1,
+        "non-vacuous: backend never dialed"
+    );
+    // The fix must NOT mask a real upstream failure as 413/400.
+    assert!(
+        status.starts_with("HTTP/1.1 502") || status.starts_with("HTTP/1.1 504"),
+        "genuine upstream failure should map to 502/504, got: {status:?}"
+    );
+    assert!(
+        !status.contains("413") && !status.contains("400"),
+        "F-CAP-1 MASKED a genuine upstream failure as a pump verdict: {status:?}"
     );
 }
 

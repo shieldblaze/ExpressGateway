@@ -273,7 +273,7 @@ covered.
   llvm-cov-target`, ~18 GB) was removed after capturing the 3 canonical lcov
   traces (S8 precedent); 48 GB free at report time.
 
-## VERDICT
+## VERDICT (round 1)
 
 **BUILT.** Every BUILT-bar item passes with captured real-wire evidence; the
 session-code coverage sub-metric is 95.54% (deterministic ×3, ≥80%); fmt and
@@ -281,3 +281,167 @@ clippy are clean; the named R3 regression suites are green. The single
 behavioral nuance (over-cap/forbidden-trailer verdict surfacing as 502 with a
 not-yet-responding backend) is characterized, matches the already-BUILT H2→H1
 sibling, and preserves the security invariant in every case.
+
+---
+
+# ROUND 2 — F-CAP-1 re-verification (BOTH cells)
+
+builder-1 fixed F-CAP-1 (the behavioral nuance above) in BOTH cells:
+`origin/s9/builder-1` commit **`23b45d6f`** — "pump verdict authoritative over
+send_request error". The fix is caller-side only and IDENTICAL in both cells:
+on the `send_request` `Ok(Err(e))` arm, consult the pump's classified verdict
+FIRST (bounded by `timeouts.body`), return it if it is `BodyTooLarge` (→413) or
+`BadRequest` (→400), else fall through to the generic `Upstream` (→502). The
+pump must NOT be aborted before this await (it must still deliver its verdict).
+Genuine upstream failures (verdict `Ok(())`) still map to 502/504.
+
+I re-verified INDEPENDENTLY (author≠verifier still holds — I did not edit the
+src; new assertions live in the verifier-owned test files).
+
+## STEP 0 (round 2) — exact src under test, BOTH cells (diff-empty proof)
+
+```
+$ git checkout origin/s9/builder-1 -- crates/lb-l7/src/h1_proxy.rs \
+      crates/lb-l7/src/h2_proxy.rs tests/h1_proxy_e2e.rs tests/h2_proxy_e2e.rs
+$ git diff origin/s9/builder-1 -- crates/lb-l7/src/h1_proxy.rs crates/lb-l7/src/h2_proxy.rs
+        (no output — EMPTY)
+DIFF_EMPTY rc=0           # also re-confirmed after all coverage + clippy builds
+```
+
+Fix verified by inspection in both files (`h1_proxy.rs:1493-1521`,
+`h2_proxy.rs:1822-1849`): the new `classified` match returns
+`Some(BodyTooLarge | BadRequest)` else `None`; `return Err(classified
+.unwrap_or_else(|| Upstream(...)))`; `pump.abort()` moved AFTER the verdict
+await. The two edits are textually identical.
+
+## Round-2 evidence — `audit/h-matrix/s9-evidence/fcap1-verify-run.txt`
+
+### Item 1 — F-CAP-1 status, BOTH cells
+
+**H1→H1** (`tests/h1h1_md_streaming_verify.rs`, 14 tests green):
+
+```
+OVER_64MIB_413_BODYREAD status_line="HTTP/1.1 413 Payload Too Large" written=68157440
+OVER_64MIB_413         status_line="HTTP/1.1 413 Payload Too Large" written=68157440
+FORBIDDEN_TRAILER      status_line="HTTP/1.1 400 Bad Request" backend_dials=1 backend_complete=0
+GENUINE_UPSTREAM_FAIL  status_line="HTTP/1.1 502 Bad Gateway" backend_dials=1
+```
+
+- `over_64mib_upload_yields_413_with_body_reading_backend` — a >64 MiB chunked
+  upload to a backend that is STILL READING the body now yields a deterministic
+  **413** (was 502 pre-fix). Both Content-Length-... actually the gateway always
+  re-frames the streamed body as chunked (F-MD-1), so the wire framing is
+  chunked; the >64 MiB total crosses `MAX_REQUEST_BODY_BYTES`.
+- `over_64mib_upload_yields_413_when_backend_responds_early` — still 413 (the
+  early-head path, unchanged).
+- `forbidden_framing_field_trailer_rejected_400` — a forbidden framing-field
+  (`transfer-encoding`) in H1 request trailers against a body-reading backend
+  now yields a deterministic **400** (was a 400/502 race pre-fix);
+  `backend_complete=0` (F-MD-4 invariant intact — never relayed complete).
+- `genuine_upstream_failure_still_502` — a well-formed under-cap upload to a
+  backend that closes mid-request (NOT a pump abort; verdict `Ok(())`) still
+  maps to **502** — the fix does NOT mask genuine upstream failures.
+
+**H2→H1** (`tests/h2h1_md_streaming_verify.rs`, new test
+`fcap1_h2_over_cap_upload_yields_413`):
+
+```
+FCAP1_H2_OVER_CAP status=Some(413) written=67174400 backend_body_bytes=67180299
+```
+
+A real `h2` client streams ~66 MiB through the TLS gateway to a draining H1
+backend; the forwarded total crosses 64 MiB (`backend_body_bytes` ≈ 67 MB
+confirms the body flowed upstream) and the client now observes **413** (was 502
+pre-fix).
+
+**Determinism (R2):** the H1 trio (413 / 400 / 502) was run **×8** and the H2
+413 **×6** — every run produced the IDENTICAL status, no 413-vs-502 flap. (The
+pump's FIFO Err-then-verdict ordering means the bounded verdict await always
+resolves with the classified verdict on a deliberate abort; the genuine-failure
+case has verdict `Ok(())` so it falls through.)
+
+### Item 2 — H2→H1 NO REGRESSION
+
+```
+SMUGGLING dials=1 complete_requests=0          # F-MD-4 invariant intact
+real_wire_small_body_byte_identical ... ok     # success path intact
+real_wire_large_body_byte_identical ... ok
+h2h1_md_streaming_verify : 15 passed
+h2h1_md_coverage_driver  : 11 passed
+```
+
+The F-MD-4 smuggling `complete=0` (client RST mid-body never seen as a complete
+request at the H1 upstream) STILL holds, the byte-identical success path (Ok
+verdict → relay response) is intact, and the whole S8 M-D BUILT suite + the
+coverage driver are green. The caller change did not regress the M-D bar.
+
+### Item 3 — H1→H1 full bar still holds
+
+`h1h1_md_streaming_verify` — **14 passed** (the original 11 + the corrected
+forbidden-trailer 400 + the new body-reading 413 + the genuine-502 test). The
+memory gauge, backpressure, smuggle parity (both framings, complete=0),
+byte-identical roundtrips, and pre-pump CL/TE 400 all remain green.
+
+### Item 4 — Coverage (scoped, CF-DISK-1)
+
+Scoped command (NOT bare `--workspace`; instruments only the 5 named binaries):
+```
+cargo llvm-cov --workspace --features test-gauges --lcov --output-path … \
+  --test h1h1_md_streaming_verify --test h1_proxy_e2e \
+  --test h2h1_md_streaming_verify --test h2h1_md_coverage_driver \
+  --test h2_proxy_e2e -- --test-threads=1
+```
+Run ×3 — byte-identical totals + uncovered set. lcov traces:
+`audit/h-matrix/s9-evidence/fcap1-cov{1,2,3}.lcov`.
+
+**H1 session sub-metric** (`audit/h-matrix/s9-h1h1-cov.awk`):
+
+| item | covered |
+|---|---|
+| `H1PumpAbort` type + impls | 0/3 |
+| `validate_h1_request_trailers` | 16/16 = 100% |
+| `proxy_request` (pump, incl. the new F-CAP-1 send-error arm) | 162/163 = 99.39% |
+| **SESSION TOTAL** | **178/182 = 97.80%** (≥80%) |
+
+(Up from the round-1 95.54%: the new send-error verdict-consult arm and the
+previously-uncovered pump-vanished/CAS-retry lines are now covered by the
+over-cap + genuine-failure tests. `record_retained_h1` shows no DA lines in this
+scoped binary set — an llvm-cov instrumentation artifact — but `FNDA:36320`
+proves it WAS called by the memory tests, so it is excluded from the denominator
+rather than counted as uncovered.)
+
+The NEW **F-CAP-1 caller arms** are fully covered in BOTH cells:
+- H1 `h1_proxy.rs:1493-1522`: every instrumentable line hit; line 1507/1508
+  (classified-verdict match, 7 hits) AND line 1513 (`_ => None` genuine-failure
+  fall-through, 2 hits) both covered.
+- H2 `h2_proxy.rs:1822-1849` (`audit/h-matrix/s9-fcap1-h2-cov.awk`):
+  **10/10 = 100%** — line 1836 (classified match, 2 hits) AND 1842
+  (`_ => None`, 1 hit) both covered.
+
+Remaining H1 uncovered: `124 125 126` (`H1PumpAbort` `Display::fmt`, never
+formatted) and `1462` (a structural brace) — same cosmetic/structural lines as
+round 1, none security-relevant.
+
+### Item 5 — fmt / clippy / R3
+
+- `cargo fmt --check` — **clean** (rc 0).
+- `cargo clippy --all-targets --all-features -- -D warnings` — **clean** (rc 0).
+- R3: `h1_proxy_e2e` (7), `h2_proxy_e2e` (5), `bridging_h1_h1` (1),
+  `bridging_h2_h1` (1), `smuggle_matrix` (13), `smuggle_wired` (3),
+  `round8_body_overread` (4), `round8_keepalive_count_cap` (3),
+  `trailer_passthrough` (8) — all green.
+
+Disk: the scoped `llvm-cov-target` was ~3.5 GB (vs ~18 GB for the bare-workspace
+build) and was removed after capturing the lcov; 46 GB free.
+
+## FINAL VERDICT — BOTH cells BUILT
+
+**H1→H1: BUILT.** **H2→H1: BUILT (no regression).** F-CAP-1 (`23b45d6f`) is
+correct in both cells: an over-cap (>64 MiB) upload to a body-reading backend
+now yields a deterministic **413** (H1 chunked + H2→H1), an H1 forbidden-framing
+trailer yields a deterministic **400**, and a GENUINE upstream failure still
+yields **502** — proven deterministic across repeated runs (no flap, R2). The
+F-MD-4 smuggling `complete=0` invariant and the success path are intact in both
+cells. Coverage: H1 session 97.80% (≥80%), the new F-CAP-1 caller arms 100% in
+both cells, deterministic ×3. fmt + clippy clean; R3 regressions green. No real
+defect found.
