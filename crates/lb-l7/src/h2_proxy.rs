@@ -127,7 +127,10 @@ impl std::error::Error for PumpAbort {}
 /// driver; it must not hang the detached pump task forever. 5 s is
 /// generous relative to the sub-millisecond observed reset latency while
 /// remaining well under typical request/body timeouts.
-const H2_ABORT_OBSERVE_TIMEOUT: Duration = Duration::from_secs(5);
+// CF-DEDUP-1 / S11 I2: `pub(crate)` so the H1→H2 streaming request pump
+// (`h1_proxy::proxy_h1_to_h2_request`) shares the SAME abort-observe bound
+// rather than re-declaring a drifting copy (mechanical, no behaviour change).
+pub(crate) const H2_ABORT_OBSERVE_TIMEOUT: Duration = Duration::from_secs(5);
 
 /// L7 HTTP/2 reverse proxy. Cheap to clone via [`Arc`].
 pub struct H2Proxy {

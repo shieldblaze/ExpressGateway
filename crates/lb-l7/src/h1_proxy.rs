@@ -38,6 +38,12 @@ use hyper::body::{Bytes, Incoming as IncomingBody};
 // (Q-H4 parity) by IMPORT; do NOT redefine it (it is `pub` in h2_proxy and
 // names H1→H1 explicitly as the gap this cell closes).
 use crate::h2_proxy::MAX_REQUEST_BODY_BYTES;
+// S11 I2 (D2 / CF-DEDUP-1): the H1→H2 streaming request leg routes its
+// egress through the SHARED graceful-drop driver and therefore speaks the
+// h2_proxy `ProxyErr` (the type the driver returns) — NOT the h1_proxy-local
+// `ProxyErr`, which the H1→H1 / WS / H1→H3 paths keep using. The shared
+// abort-observe bound is reused so the FIFO inject window matches H2→H2.
+use crate::h2_proxy::{H2_ABORT_OBSERVE_TIMEOUT, ProxyErr as H2ProxyErr, drive_h2_upstream_send};
 use hyper::header::{HeaderName, HeaderValue};
 use hyper::{Request, Response, StatusCode};
 use hyper_util::rt::TokioIo;
@@ -1553,13 +1559,354 @@ impl H1Proxy {
         }
     }
 
+    /// S11 I2 (D2) — STREAMING H1→H2 request leg. MIRROR of
+    /// [`crate::h2_proxy::H2Proxy::proxy_h2_to_h2_request`] (h2_proxy.rs:1964):
+    /// a bounded lookahead window → Branch A (whole request fit the window →
+    /// buffered send) / Branch B (request > window → bounded streaming pump →
+    /// the SHARED [`drive_h2_upstream_send`] graceful-drop driver, D1).
+    ///
+    /// DELTAS vs the H2→H2 mirror:
+    /// - **Preamble**: [`build_h1_to_h2_upstream_parts`] (H1→H2 bridge head,
+    ///   no body collect) instead of `build_h2_upstream_request_parts`.
+    /// - **Ingress framing = H1 M-D-lite (MIRROR-IMAGE of H2)**: for an
+    ///   inbound H1 body `frame()==None` is the POSITIVELY-confirmed clean end
+    ///   (NOT gated on `is_end_stream()`, which is unreliable for chunked
+    ///   `Kind::Chan` bodies); a premature mid-body close surfaces as
+    ///   `Some(Err)` (hyper's `IncompleteBody`). See [`Self::proxy_request`]
+    ///   1372-1483 for the reference arms.
+    /// - **Egress channel error** = the constructible [`H1PumpAbort`] (so the
+    ///   pump can INJECT a body error → hyper RESETs the upstream stream
+    ///   rather than emitting a spurious clean END_STREAM on a truncated
+    ///   request — the F-MD-4 body-layer half, mirror of H2→H2's `PumpAbort`).
+    /// - **Trailers** validated with [`validate_h1_request_trailers`] (H1
+    ///   path); **memory gauge** = [`record_retained_h1`].
+    ///
+    /// Returns the h2_proxy [`H2ProxyErr`] (the type the shared driver
+    /// returns); the caller [`Self::proxy_h1_to_h2`] maps it to 502/504/413/400.
+    async fn proxy_h1_to_h2_request(
+        &self,
+        h2_pool: &Http2Pool,
+        backend_addr: SocketAddr,
+        req: StrippedRequest<IncomingBody>,
+    ) -> Result<Response<IncomingBody>, H2ProxyErr> {
+        // NB (DELTA vs proxy_h2_to_h2_request): no `use hyper::body::Body`
+        // here — the H1 M-D-lite framing deliberately does NOT call
+        // `is_end_stream()` (`None` is the clean-end signal for H1).
+        use hyper::body::Frame;
+        use lb_io::http2_pool::{H2ReqBody, Http2PoolError};
+
+        let req = req.into_inner();
+        let (parts, mut body) = req.into_parts();
+
+        // ── Preamble (DELTA vs proxy_request): keep the request HTTP/2-
+        // shaped for the H2 upstream via the H1→H2 bridge head — WITHOUT
+        // collecting the body. We do NOT force HTTP/1.1 and do NOT strip
+        // content-length/transfer-encoding the way the H1-egress pump does
+        // (those were H1-framing fixes; H2 upstream framing is hyper's H2
+        // encoder's job — same DELTA as H2→H2's `build_h2_upstream_request_parts`).
+        let upstream_parts = match build_h1_to_h2_upstream_parts(&parts) {
+            Ok(p) => p,
+            Err(e) => return Err(H2ProxyErr::Upstream(e)),
+        };
+
+        // S11 / M-D mirror — bounded H1 INGRESS pump (lookahead-window). The
+        // lookahead posture (validate-before-dial within the window, stream
+        // past it) is IDENTICAL to H2→H2; only the framing arms differ.
+        let mut lookahead: Vec<Bytes> = Vec::new();
+        let mut buffered: usize = 0;
+        let mut trailers_map: Option<hyper::HeaderMap> = None;
+        let mut reached_eof = false;
+
+        // ── Phase 1: lookahead. Poll frames until EOF or the window fills.
+        loop {
+            #[cfg(any(test, feature = "test-gauges"))]
+            record_retained_h1(buffered);
+
+            if buffered > H1_REQ_CHANNEL_DEPTH * H1_REQ_CHUNK_MAX {
+                break;
+            }
+
+            match body.frame().await {
+                None => {
+                    // F-MD-4 (H1 — MIRROR-IMAGE of H2): for an inbound H1 body
+                    // `None` is the POSITIVELY-confirmed clean end (the
+                    // chunked terminator / satisfied Content-Length). A
+                    // premature close surfaces as `Some(Err)` below, NOT here.
+                    // Do NOT consult `is_end_stream()` (unreliable for chunked
+                    // `Kind::Chan`). Clean end within the window → Branch A.
+                    reached_eof = true;
+                    break;
+                }
+                Some(Ok(frame)) => {
+                    if let Some(data) = frame.data_ref() {
+                        buffered = buffered.saturating_add(data.len());
+                        if buffered > MAX_REQUEST_BODY_BYTES {
+                            return Err(H2ProxyErr::BodyTooLarge);
+                        }
+                    }
+                    if frame.is_data() {
+                        lookahead.push(frame.into_data().unwrap_or_default());
+                    } else if frame.is_trailers() {
+                        trailers_map = frame.into_trailers().ok();
+                        reached_eof = true;
+                        break;
+                    }
+                }
+                Some(Err(e)) => {
+                    // F-MD-4 (H1): a premature mid-body close / protocol/IO
+                    // error surfaces while VALIDATING the inbound stream,
+                    // BEFORE any pool contact (zero-dial for a within-window
+                    // truncation — preserves Branch-A validate-before-dial).
+                    return Err(H2ProxyErr::BadRequest(format!(
+                        "inbound H1 request body incomplete: {e}"
+                    )));
+                }
+            }
+        }
+
+        if reached_eof {
+            // ── Branch A: the whole request fit within the window. ──
+            // Validate trailers, then build the buffered H2 body and send.
+            // ZERO pool contact for a malformed within-window request:
+            // any inbound Err returned ABOVE this point.
+            if let Some(tm) = trailers_map.as_ref() {
+                validate_h1_request_trailers(tm).map_err(h1_to_h2_proxy_err)?;
+            }
+            let trailers_vec: Vec<(String, String)> = trailers_map
+                .as_ref()
+                .map(|tm| {
+                    tm.iter()
+                        .filter_map(|(n, v)| {
+                            v.to_str()
+                                .ok()
+                                .map(|s| (n.as_str().to_owned(), s.to_owned()))
+                        })
+                        .collect()
+                })
+                .unwrap_or_default();
+
+            let body_bytes = concat_h1_chunks(&lookahead, buffered);
+            // DELTA: Branch A body must be `H2ReqBody`
+            // (BoxBody<Bytes, Box<dyn Error+Send+Sync>>). `build_body_with_trailers`
+            // yields BoxBody<_, hyper::Error>; widen the error losslessly
+            // (mirror of H2→H2 Branch A + `translate_h1_request_to_h2`'s
+            // former boxed-error adaptation).
+            let upstream_body: H2ReqBody = build_body_with_trailers(body_bytes, &trailers_vec)
+                .map_err(|e| Box::new(e) as Box<dyn std::error::Error + Send + Sync>)
+                .boxed();
+            let upstream_req = Request::from_parts(upstream_parts, upstream_body);
+
+            return match h2_pool.send_request(backend_addr, upstream_req).await {
+                Ok(resp) => Ok(resp),
+                Err(Http2PoolError::Timeout) => Err(H2ProxyErr::Timeout),
+                Err(e) => Err(H2ProxyErr::Upstream(format!("h2 upstream: {e}"))),
+            };
+        }
+
+        // ── Branch B: request > window → stream with the bounded in-flight
+        // window; gate the response head on the inbound terminal state.
+        let (tx, mut rx) =
+            tokio::sync::mpsc::channel::<Result<Frame<Bytes>, H1PumpAbort>>(H1_REQ_CHANNEL_DEPTH);
+
+        // F-MD-3: genuine retained-memory gauge (live in-flight occupancy).
+        let in_flight_bytes = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let in_flight_body = std::sync::Arc::clone(&in_flight_bytes);
+
+        // Bridge the mpsc receiver into an `http_body` StreamBody, mapping
+        // the channel error `H1PumpAbort` → `Box<dyn Error+Send+Sync>` so the
+        // body is `H2ReqBody` (the H2 pool body alias). H1PumpAbort already
+        // impls Error.
+        let stream_body: H2ReqBody =
+            http_body_util::StreamBody::new(futures_util::stream::poll_fn(move |cx| {
+                let polled = rx.poll_recv(cx);
+                if let std::task::Poll::Ready(Some(Ok(ref frame))) = polled {
+                    if let Some(d) = frame.data_ref() {
+                        in_flight_body.fetch_sub(d.len(), std::sync::atomic::Ordering::Relaxed);
+                    }
+                }
+                polled
+            }))
+            .map_err(|e| Box::new(e) as Box<dyn std::error::Error + Send + Sync>)
+            .boxed();
+        let upstream_req = Request::from_parts(upstream_parts, stream_body);
+
+        // The pump owns the inbound body + already-buffered lookahead and
+        // reports its terminal verdict via a oneshot so the response-head
+        // relay is gated on a VALIDATED terminal state.
+        let (verdict_tx, verdict_rx) =
+            tokio::sync::oneshot::channel::<Result<(), H2ProxyErr>>();
+        let drained: Vec<Bytes> = std::mem::take(&mut lookahead);
+        let pump = tokio::spawn(async move {
+            let mut forwarded_total: usize = buffered;
+            let mut lookahead_remaining: usize = buffered;
+
+            enum SendOutcome {
+                ReceiverGone,
+            }
+
+            macro_rules! send_chunked {
+                ($bytes:expr, $is_lookahead:expr) => {{
+                    let mut data: Bytes = $bytes;
+                    let mut outcome: Result<(), SendOutcome> = Ok(());
+                    while !data.is_empty() {
+                        let take = data.len().min(H1_REQ_CHUNK_MAX);
+                        let chunk = data.split_to(take);
+                        let clen = chunk.len();
+                        in_flight_bytes.fetch_add(clen, std::sync::atomic::Ordering::Relaxed);
+                        if $is_lookahead {
+                            lookahead_remaining = lookahead_remaining.saturating_sub(clen);
+                        }
+                        #[cfg(any(test, feature = "test-gauges"))]
+                        record_retained_h1(
+                            lookahead_remaining
+                                + in_flight_bytes.load(std::sync::atomic::Ordering::Relaxed),
+                        );
+                        if tx.send(Ok(Frame::data(chunk))).await.is_err() {
+                            in_flight_bytes.fetch_sub(clen, std::sync::atomic::Ordering::Relaxed);
+                            outcome = Err(SendOutcome::ReceiverGone);
+                            break;
+                        }
+                    }
+                    outcome
+                }};
+            }
+
+            macro_rules! drain_and_validate {
+                () => {{
+                    loop {
+                        match body.frame().await {
+                            // F-MD-4 (H1): clean end-of-body = `None`; a
+                            // truncation surfaces as `Some(Err)` instead.
+                            None => break Ok(()),
+                            Some(Ok(frame)) => {
+                                if frame.is_trailers() {
+                                    if let Some(t) = frame.trailers_ref() {
+                                        break validate_h1_request_trailers(t)
+                                            .map_err(h1_to_h2_proxy_err);
+                                    }
+                                    break Ok(());
+                                }
+                                if let Some(d) = frame.data_ref() {
+                                    forwarded_total = forwarded_total.saturating_add(d.len());
+                                    if forwarded_total > MAX_REQUEST_BODY_BYTES {
+                                        break Err(H2ProxyErr::BodyTooLarge);
+                                    }
+                                }
+                            }
+                            Some(Err(e)) => {
+                                break Err(H2ProxyErr::BadRequest(format!(
+                                    "inbound H1 request body incomplete: {e}"
+                                )));
+                            }
+                        }
+                    }
+                }};
+            }
+
+            // F-MD-4 (S10 DEFECT FIX, body-layer half — H1 mirror of H2→H2's
+            // `inject_abort!`) — on every abort terminal state (premature
+            // close, forbidden trailer, over-cap), inject `Err(H1PumpAbort)`
+            // into the upstream request-body channel and HOLD the sender open
+            // until hyper has OBSERVED it (`tx.closed().await`). FIFO delivery
+            // forces hyper to poll the error BEFORE any channel-close `None`,
+            // so hyper RESETS the upstream stream rather than emitting a
+            // spurious clean END_STREAM. Bounded by `H2_ABORT_OBSERVE_TIMEOUT`
+            // (shared) so a wedged upstream driver cannot hang the pump.
+            macro_rules! inject_abort {
+                () => {{
+                    let _ = tx.send(Err(H1PumpAbort)).await;
+                    let _ = tokio::time::timeout(H2_ABORT_OBSERVE_TIMEOUT, tx.closed()).await;
+                }};
+            }
+
+            // 1) Drain the lookahead buffer first (oldest chunks first).
+            for chunk in drained {
+                if let Err(SendOutcome::ReceiverGone) = send_chunked!(chunk, true) {
+                    let _ = verdict_tx.send(drain_and_validate!());
+                    return;
+                }
+            }
+            // 2) Continue forward-as-it-arrives with the bounded window.
+            loop {
+                match body.frame().await {
+                    None => {
+                        // F-MD-4 (H1 — MIRROR-IMAGE of H2; do NOT copy the H2
+                        // `is_end_stream` logic). `None` = clean end → drop tx
+                        // → hyper writes the terminator → the upstream sees a
+                        // COMPLETE request. NO inject_abort on this arm.
+                        let _ = verdict_tx.send(Ok(()));
+                        return;
+                    }
+                    Some(Ok(frame)) => {
+                        if frame.is_trailers() {
+                            let verdict = frame
+                                .trailers_ref()
+                                .map_or(Ok(()), validate_h1_request_trailers);
+                            match verdict {
+                                Ok(()) => {
+                                    let _ = tx.send(Ok(frame)).await;
+                                    let _ = verdict_tx.send(Ok(()));
+                                    return;
+                                }
+                                Err(e) => {
+                                    inject_abort!();
+                                    let _ = verdict_tx.send(Err(h1_to_h2_proxy_err(e)));
+                                    return;
+                                }
+                            }
+                        }
+                        if let Ok(data) = frame.into_data() {
+                            forwarded_total = forwarded_total.saturating_add(data.len());
+                            if forwarded_total > MAX_REQUEST_BODY_BYTES {
+                                inject_abort!();
+                                let _ = verdict_tx.send(Err(H2ProxyErr::BodyTooLarge));
+                                return;
+                            }
+                            if let Err(SendOutcome::ReceiverGone) = send_chunked!(data, false) {
+                                let _ = verdict_tx.send(drain_and_validate!());
+                                return;
+                            }
+                        }
+                    }
+                    Some(Err(e)) => {
+                        // F-MD-4 (H1): premature mid-body close / inbound body
+                        // error → inject the body error FIRST so hyper aborts
+                        // the upstream request WITHOUT a clean terminator,
+                        // THEN signal the 400 verdict.
+                        inject_abort!();
+                        let _ = verdict_tx.send(Err(H2ProxyErr::BadRequest(format!(
+                            "inbound H1 request body incomplete: {e}"
+                        ))));
+                        return;
+                    }
+                }
+            }
+        });
+
+        // F-MD-4 (S10 DEFECT FIX) — route the graceful-drop egress through
+        // the SHARED driver (CF-DEDUP-1 / S11 D1), identical to H2→H2's
+        // Branch B. The driver owns the detached send task (biased
+        // verdict-vs-head race + `reset_peer` on every abort + F-CAP-1 caller
+        // arm + `pump.abort()`) and the final `head_rx.await`.
+        drive_h2_upstream_send(
+            h2_pool,
+            backend_addr,
+            upstream_req,
+            verdict_rx,
+            pump,
+            self.timeouts.body,
+        )
+        .await
+    }
+
     /// Forward an H1 inbound request to an H2 backend (PROTO-001).
     ///
-    /// Bridges via [`crate::create_bridge`]`(Http1, Http2)` — the
-    /// codec-level translation produces the pseudo-header set hyper's
-    /// H2 client expects from the request URI authority + scheme +
-    /// path. Body is collected into a `Bytes` ahead of dial because the
-    /// pool's `send_request` consumes the request once.
+    /// S11 I2 (D2): dispatch shim over the streaming
+    /// [`Self::proxy_h1_to_h2_request`] leg. Bridges via
+    /// [`crate::create_bridge`]`(Http1, Http2)` — the codec-level translation
+    /// produces the pseudo-header set hyper's H2 client expects. The request
+    /// body is STREAMED (no ahead-of-dial collect); the response leg keeps the
+    /// buffering [`upstream_response_to_h1`] until I3.
     async fn proxy_h1_to_h2(
         &self,
         backend_addr: SocketAddr,
@@ -1571,16 +1918,27 @@ impl H1Proxy {
                 "H2 backend selected but no Http2Pool wired",
             );
         };
-        let translated = match translate_h1_request_to_h2(req.into_inner()).await {
-            Ok(r) => r,
-            Err(s) => return error_response(StatusCode::BAD_GATEWAY, &s),
-        };
-        match h2_pool.send_request(backend_addr, translated).await {
+        // S11 I2 (D2) — STREAMING H1→H2 request leg (mirror of
+        // `proxy_h2_to_h2`'s dispatch arm, h2_proxy.rs:1925-1955). The
+        // request body is no longer collected ahead of dial; the
+        // bounded-window pump streams it and gates the response head on a
+        // VALIDATED inbound terminal state (F-MD-4 mirror-image). The Ok
+        // arm keeps the EXISTING buffering response leg
+        // (`upstream_response_to_h1`); I3 converts it to a streaming relay.
+        match self
+            .proxy_h1_to_h2_request(h2_pool, backend_addr, req)
+            .await
+        {
             Ok(resp) => upstream_response_to_h1(resp, self.alt_svc).await,
-            Err(lb_io::http2_pool::Http2PoolError::Timeout) => {
+            Err(H2ProxyErr::Upstream(s)) => error_response(StatusCode::BAD_GATEWAY, &s),
+            Err(H2ProxyErr::Timeout) => {
                 error_response(StatusCode::GATEWAY_TIMEOUT, "upstream H2 timeout")
             }
-            Err(e) => error_response(StatusCode::BAD_GATEWAY, &format!("h2 upstream: {e}")),
+            Err(H2ProxyErr::BodyTooLarge) => error_response(
+                StatusCode::PAYLOAD_TOO_LARGE,
+                "request body exceeds maximum",
+            ),
+            Err(H2ProxyErr::BadRequest(s)) => error_response(StatusCode::BAD_REQUEST, &s),
         }
     }
 
@@ -2042,37 +2400,24 @@ static WS_PROTOCOL: HeaderName = HeaderName::from_static("sec-websocket-protocol
 
 // ── PROTO-001 cross-protocol translation helpers ───────────────────────
 
-/// Lift an inbound H1 [`Request<IncomingBody>`] into the shape hyper's
-/// H2 client expects. Body is collected into `Bytes`; the URI is
-/// rebuilt to include the authority hyper extracts into `:authority`.
+/// S11 I2 (D2) — HEAD-ONLY preamble for the streaming H1→H2 request leg.
 ///
-/// Uses the `lb_l7::create_bridge(Http1, Http2)` codec for header
-/// transformation. Hop-by-hop headers + Host are stripped by the
-/// bridge; hyper synthesises pseudo-headers from the rewritten URI.
-async fn translate_h1_request_to_h2(
-    req: Request<IncomingBody>,
-) -> Result<Request<lb_io::http2_pool::H2ReqBody>, String> {
-    let (parts, body) = req.into_parts();
-    // PROTO-2-12: collect body + trailers in a single round-trip so
-    // the bridge sees both.
-    let collected = body
-        .collect()
-        .await
-        .map_err(|e| format!("body collect: {e}"))?;
-    let trailers_map = collected.trailers().cloned();
-    let body_bytes = collected.to_bytes();
-    let trailers_vec: Vec<(String, String)> = trailers_map
-        .as_ref()
-        .map(|tm| {
-            tm.iter()
-                .filter_map(|(n, v)| {
-                    v.to_str()
-                        .ok()
-                        .map(|s| (n.as_str().to_owned(), s.to_owned()))
-                })
-                .collect()
-        })
-        .unwrap_or_default();
+/// The head-construction half of the former `translate_h1_request_to_h2`
+/// MINUS the body collect: run the `create_bridge(Http1, Http2)` codec over
+/// a body-LESS [`crate::BridgeRequest`] (empty body + empty trailers) so the
+/// bridge produces the H2 pseudo-header set hyper's H2 client expects, then
+/// build the hyper `Request` parts (method + `scheme://authority/path` URI +
+/// re-emitted non-`:` headers).
+///
+/// DELTA (mirror of `h2_proxy::build_h2_upstream_request_parts`): we do NOT
+/// force HTTP/1.1 and do NOT strip `content-length`/`transfer-encoding` the
+/// way the H1→H1 egress pump does — H2 upstream framing is hyper's H2
+/// encoder's job; those strips were H1-framing fixes. The body is attached
+/// SEPARATELY by the caller (buffered `H2ReqBody` in Branch A, streaming
+/// `StreamBody` in Branch B).
+fn build_h1_to_h2_upstream_parts(
+    parts: &http::request::Parts,
+) -> Result<http::request::Parts, String> {
     let bridge = crate::create_bridge(crate::Protocol::Http1, crate::Protocol::Http2);
     let bridge_in = crate::BridgeRequest {
         method: parts.method.to_string(),
@@ -2089,9 +2434,9 @@ async fn translate_h1_request_to_h2(
                     .map(|s| (n.as_str().to_owned(), s.to_owned()))
             })
             .collect(),
-        body: body_bytes.clone(),
+        body: Bytes::new(),
         scheme: Some("http".to_owned()),
-        trailers: trailers_vec,
+        trailers: Vec::new(),
     };
     let translated = bridge
         .bridge_request(&bridge_in)
@@ -2121,18 +2466,43 @@ async fn translate_h1_request_to_h2(
         }
         builder = builder.header(n.as_str(), v.as_str());
     }
-    // PROTO-2-12: emit body + trailers as a StreamBody so the H2
-    // client sends a separate trailers frame after the data frame.
-    // I0.5: the H2 pool body type is widened to a boxed error.
-    // `build_body_with_trailers` is shared with the H1-response path
-    // (still `hyper::Error`); re-box its error into the pool alias
-    // here. `hyper::Error: Into<Box<dyn Error+Send+Sync>>`, so this is
-    // a lossless type adaptation (no behavioural change).
-    let body: lb_io::http2_pool::H2ReqBody =
-        build_body_with_trailers(body_bytes, &translated.trailers)
-            .map_err(Into::into)
-            .boxed();
-    builder.body(body).map_err(|e| format!("build h2 req: {e}"))
+    // Build with an empty body purely to validate method/uri/headers, then
+    // return its `Parts` for the caller to recombine with the real body.
+    let (head, ()) = builder
+        .body(())
+        .map_err(|e| format!("build h2 req: {e}"))?
+        .into_parts();
+    Ok(head)
+}
+
+/// S11 I2 (D2) — map the h1_proxy-local [`ProxyErr`] returned by
+/// [`validate_h1_request_trailers`] into the h2_proxy [`H2ProxyErr`] the
+/// streaming H1→H2 leg speaks (its verdict channel + the shared driver). The
+/// validator only ever yields `BadRequest`, but we map every variant for
+/// completeness so a future variant cannot silently mis-classify.
+fn h1_to_h2_proxy_err(e: ProxyErr) -> H2ProxyErr {
+    match e {
+        ProxyErr::Upstream(s) => H2ProxyErr::Upstream(s),
+        ProxyErr::Timeout => H2ProxyErr::Timeout,
+        ProxyErr::BadRequest(s) => H2ProxyErr::BadRequest(s),
+        ProxyErr::BodyTooLarge => H2ProxyErr::BodyTooLarge,
+    }
+}
+
+/// S11 I2 (D2) — H1 analog of `h2_proxy::concat_chunks`: concatenate the
+/// lookahead DATA chunks into one `Bytes` for the within-window (Branch A)
+/// buffered upstream body. `total` is the exact summed length so we allocate
+/// once. (A local copy, NOT a shared helper: `concat_chunks` is private to
+/// h2_proxy; this byte-identical analog avoids widening its visibility.)
+fn concat_h1_chunks(chunks: &[Bytes], total: usize) -> Bytes {
+    if let [single] = chunks {
+        return single.clone();
+    }
+    let mut out = bytes::BytesMut::with_capacity(total);
+    for c in chunks {
+        out.extend_from_slice(c);
+    }
+    out.freeze()
 }
 
 /// PROTO-2-12 helper: build a `BoxBody` that emits the data bytes
