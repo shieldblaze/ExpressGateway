@@ -356,3 +356,169 @@ async fn h2s_alpn_downgrade_to_http11() {
     let body = resp.bytes().await.unwrap();
     assert_eq!(&body[..], b"backend-ok");
 }
+
+// ── F-CAP-1: pump verdict authoritative over a send_request error (H2→H1) ──
+//
+// Same conformance fix as the H1 cell: when the M-D streaming pump aborts the
+// upstream over the 64 MiB cap, the upstream `send_request` fails because the
+// backend (still reading the body) never sent a response head. The caller must
+// return the pump's classified 413 verdict, NOT 502 — deterministically.
+
+/// Backend that drains the whole request body and replies `200 OK` only on a
+/// clean end-of-body. For an over-cap upload the gateway pump aborts the
+/// upstream request mid-body, so this backend never sends a response head —
+/// the F-CAP-1 condition (client must still see 413 from the pump verdict).
+async fn spawn_drain_body_backend() -> (SocketAddr, tokio::task::JoinHandle<()>) {
+    let listener = TcpListener::bind(("127.0.0.1", 0)).await.unwrap();
+    let local = listener.local_addr().unwrap();
+    let handle = tokio::spawn(async move {
+        loop {
+            let Ok((sock, _)) = listener.accept().await else {
+                return;
+            };
+            tokio::spawn(async move {
+                let svc = service_fn(move |req: Request<Incoming>| async move {
+                    use http_body_util::BodyExt as _;
+                    let mut body = req.into_body();
+                    while let Some(next) = body.frame().await {
+                        if next.is_err() {
+                            // gateway aborted the upstream request body.
+                            return Ok::<_, Infallible>(
+                                Response::builder()
+                                    .status(StatusCode::OK)
+                                    .body(Full::new(Bytes::from_static(b"ok")))
+                                    .unwrap(),
+                            );
+                        }
+                    }
+                    Ok::<_, Infallible>(
+                        Response::builder()
+                            .status(StatusCode::OK)
+                            .body(Full::new(Bytes::from_static(b"ok")))
+                            .unwrap(),
+                    )
+                });
+                let _ = srv_h1::Builder::new()
+                    .serve_connection(TokioIo::new(sock), svc)
+                    .await;
+            });
+        }
+    });
+    (local, handle)
+}
+
+const OVER_CAP_BYTES: usize = 64 * 1024 * 1024 + 64 * 1024; // > MAX_REQUEST_BODY_BYTES
+
+/// F-CAP-1 (H2→H1): a >64 MiB upload over H2 to a backend still reading the
+/// body → the client observes 413, not 502. Exercises the M-D streaming pump's
+/// mid-stream `BodyTooLarge` verdict surfacing through the F-CAP-1 caller-side
+/// fix even though the backend never sent a response head.
+#[tokio::test]
+async fn h2_over_cap_upload_yields_413_not_502() {
+    let (backend_addr, _bh) = spawn_drain_body_backend().await;
+
+    let pool = build_pool();
+    let picker = Arc::new(RoundRobinAddrs::new(vec![backend_addr]).unwrap());
+    // Generous body timeout so the F-CAP-1 bounded verdict await resolves on
+    // the pump verdict, not on elapse.
+    let timeouts = HttpTimeouts {
+        header: Duration::from_secs(20),
+        body: Duration::from_secs(20),
+        total: Duration::from_secs(60),
+    };
+    let h1_proxy = Arc::new(H1Proxy::new(
+        pool.clone(),
+        Arc::clone(&picker) as _,
+        None,
+        timeouts,
+        true,
+    ));
+    let h2_proxy = Arc::new(H2Proxy::new(pool, picker as _, None, timeouts, true));
+
+    let (cert_chain, key) = make_cert_for(SAN_HOST);
+    let trust_anchor = cert_chain[0].clone();
+    let server_cfg = build_server_cfg_with_alpn(cert_chain, key);
+    let (gateway_addr, _gh) = spawn_h1s_gateway(server_cfg, h1_proxy, h2_proxy).await;
+
+    let client = build_reqwest_client(gateway_addr, &trust_anchor, /* http1_only */ false);
+    // A >64 MiB body. reqwest's H2 stack streams it respecting flow control;
+    // the gateway pump counts past the cap and aborts the upstream.
+    let body = vec![0xABu8; OVER_CAP_BYTES];
+    let resp = tokio::time::timeout(
+        Duration::from_secs(40),
+        client
+            .post(format!("https://{SAN_HOST}:{}/upload", gateway_addr.port()))
+            .body(body)
+            .send(),
+    )
+    .await
+    .expect("client timed out waiting for gateway response")
+    .expect("gateway did not return a response");
+    assert_eq!(
+        resp.version(),
+        reqwest::Version::HTTP_2,
+        "expected H2 after ALPN negotiation"
+    );
+    assert_eq!(
+        resp.status().as_u16(),
+        413,
+        "over-cap H2 upload must yield 413 (pump verdict), not 502"
+    );
+}
+
+/// F-CAP-1 (H2→H1 negative): a GENUINE upstream failure (backend drops the
+/// connection without speaking HTTP) is NOT pump-caused → must still map to
+/// 502, never a spurious 413/400.
+#[tokio::test]
+async fn h2_genuine_upstream_failure_still_yields_502() {
+    // Backend that accepts then immediately drops the socket.
+    let listener = TcpListener::bind(("127.0.0.1", 0)).await.unwrap();
+    let backend_addr = listener.local_addr().unwrap();
+    let _bh = tokio::spawn(async move {
+        loop {
+            let Ok((sock, _)) = listener.accept().await else {
+                return;
+            };
+            drop(sock);
+        }
+    });
+
+    let pool = build_pool();
+    let picker = Arc::new(RoundRobinAddrs::new(vec![backend_addr]).unwrap());
+    let timeouts = HttpTimeouts {
+        header: Duration::from_secs(20),
+        body: Duration::from_secs(20),
+        total: Duration::from_secs(60),
+    };
+    let h1_proxy = Arc::new(H1Proxy::new(
+        pool.clone(),
+        Arc::clone(&picker) as _,
+        None,
+        timeouts,
+        true,
+    ));
+    let h2_proxy = Arc::new(H2Proxy::new(pool, picker as _, None, timeouts, true));
+
+    let (cert_chain, key) = make_cert_for(SAN_HOST);
+    let trust_anchor = cert_chain[0].clone();
+    let server_cfg = build_server_cfg_with_alpn(cert_chain, key);
+    let (gateway_addr, _gh) = spawn_h1s_gateway(server_cfg, h1_proxy, h2_proxy).await;
+
+    let client = build_reqwest_client(gateway_addr, &trust_anchor, /* http1_only */ false);
+    // Small, well-formed body within the cap; the only failure is the upstream.
+    let resp = tokio::time::timeout(
+        Duration::from_secs(40),
+        client
+            .post(format!("https://{SAN_HOST}:{}/ok", gateway_addr.port()))
+            .body(vec![0u8; 5])
+            .send(),
+    )
+    .await
+    .expect("client timed out waiting for gateway response")
+    .expect("gateway did not return a response");
+    assert_eq!(
+        resp.status().as_u16(),
+        502,
+        "a genuine upstream failure must still map to 502 (not a spurious 413/400)"
+    );
+}
