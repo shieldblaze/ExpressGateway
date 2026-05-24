@@ -21,7 +21,12 @@ use crate::{Bridge, BridgeRequest, BridgeResponse, L7Error, Protocol, check_head
 
 /// Hop-by-hop headers that must not appear in a forwarded HTTP/1.1 response
 /// when the upstream was HTTP/2.
-const RESPONSE_HOP_BY_HOP: &[&str] = &[
+///
+/// S11 I3 (D3): `pub(crate)` so the STREAMING H1←H2 response relay
+/// (`h1_proxy::upstream_response_to_h1`) strips the SAME authoritative set as
+/// the buffering `H2ToH1Bridge::bridge_response` path — single source of
+/// truth, no copied list (mechanical, no behaviour change).
+pub(crate) const RESPONSE_HOP_BY_HOP: &[&str] = &[
     "connection",
     "keep-alive",
     "transfer-encoding",

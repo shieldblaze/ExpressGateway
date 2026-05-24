@@ -1901,12 +1901,13 @@ impl H1Proxy {
 
     /// Forward an H1 inbound request to an H2 backend (PROTO-001).
     ///
-    /// S11 I2 (D2): dispatch shim over the streaming
+    /// S11 I2/I3 (D2+D3): dispatch shim over the streaming
     /// [`Self::proxy_h1_to_h2_request`] leg. Bridges via
     /// [`crate::create_bridge`]`(Http1, Http2)` — the codec-level translation
-    /// produces the pseudo-header set hyper's H2 client expects. The request
-    /// body is STREAMED (no ahead-of-dial collect); the response leg keeps the
-    /// buffering [`upstream_response_to_h1`] until I3.
+    /// produces the pseudo-header set hyper's H2 client expects. BOTH legs now
+    /// stream: the request body is STREAMED (no ahead-of-dial collect, I2) and
+    /// the response is relayed by the STREAMING [`upstream_response_to_h1`]
+    /// (no body collect, I3).
     async fn proxy_h1_to_h2(
         &self,
         backend_addr: SocketAddr,
@@ -1918,18 +1919,18 @@ impl H1Proxy {
                 "H2 backend selected but no Http2Pool wired",
             );
         };
-        // S11 I2 (D2) — STREAMING H1→H2 request leg (mirror of
+        // S11 I2/I3 (D2+D3) — fully STREAMING H1↔H2 (mirror of
         // `proxy_h2_to_h2`'s dispatch arm, h2_proxy.rs:1925-1955). The
         // request body is no longer collected ahead of dial; the
         // bounded-window pump streams it and gates the response head on a
-        // VALIDATED inbound terminal state (F-MD-4 mirror-image). The Ok
-        // arm keeps the EXISTING buffering response leg
-        // (`upstream_response_to_h1`); I3 converts it to a streaming relay.
+        // VALIDATED inbound terminal state (F-MD-4 mirror-image). The Ok arm
+        // relays the upstream response via the STREAMING
+        // `upstream_response_to_h1` (I3 — `body.boxed()`, no collect).
         match self
             .proxy_h1_to_h2_request(h2_pool, backend_addr, req)
             .await
         {
-            Ok(resp) => upstream_response_to_h1(resp, self.alt_svc).await,
+            Ok(resp) => upstream_response_to_h1(resp, self.alt_svc),
             Err(H2ProxyErr::Upstream(s)) => error_response(StatusCode::BAD_GATEWAY, &s),
             Err(H2ProxyErr::Timeout) => {
                 error_response(StatusCode::GATEWAY_TIMEOUT, "upstream H2 timeout")
@@ -2543,57 +2544,79 @@ fn build_body_with_trailers(
 
 /// Convert an upstream `Response<Incoming>` (H2) back into the H1
 /// response shape the listener emits to the client.
-async fn upstream_response_to_h1(
+///
+/// S11 I3 (D3) — STREAMING relay (mirror of
+/// [`crate::h2_proxy::upstream_h2_response_to_h2`] but with H2→H1 header
+/// semantics). Replaces the R8-violating `body.collect().await` (which
+/// materialised the WHOLE H2-backend response before relay). We take
+/// `(parts, body)`, build the H1 head from status + the H2→H1
+/// header transform (drop `:`-pseudo + the [`RESPONSE_HOP_BY_HOP`] set,
+/// lowercase the rest — the SAME authoritative shape as
+/// [`H2ToH1Bridge::bridge_response`], referenced directly, not copied),
+/// inject `Alt-Svc` if configured, then `body.boxed()` the `Incoming` for
+/// streaming-by-construction. The H2 `Incoming` body's error type is already
+/// `hyper::Error`, so `body.boxed()` IS `BoxBody<Bytes, hyper::Error>` (the
+/// return type) with no error adaptation — same as `upstream_h2_response_to_h2`.
+/// Backpressure / R8 bound: hyper frames the unknown-length body as chunked
+/// and only pulls it as fast as the downstream H1 client drains, bounded by
+/// hyper's H2 receive-window on the upstream leg.
+///
+/// CF-RESP-1 / D3 TRAILERS: a STREAMED relay cannot pre-declare the head
+/// `Trailer:` names — they arrive only in the boxed body's TERMINAL frame,
+/// after the head is already on the wire. We deliberately do NOT reintroduce
+/// a `collect()` to capture trailer names (that is the exact R8 violation this
+/// increment removes), so we do NOT call [`build_h1_response_with_trailers`]
+/// here. The upstream H2 response trailers ride the boxed `Incoming` body's
+/// terminal frame; whether hyper-1's H1 encoder flushes that terminal trailer
+/// frame WITHOUT a head `Trailer:` declaration + chunked TE is VERIFIER-
+/// DETERMINED on the wire (D3): (i) if it does, H1←H2 response trailers relay
+/// for free; (ii) if it does NOT, streamed H1←H2 responses simply do not
+/// forward response trailers — this matches the nginx default of not
+/// forwarding H2 response trailers to H1, and no existing wire test asserts
+/// proxy-level H1←H2 trailer relay, so it is a bounded documented behaviour,
+/// NOT a silent regression. (The H3→H1 leg keeps the buffering
+/// [`build_h1_response_with_trailers`], which still pre-declares trailers.)
+fn upstream_response_to_h1(
     resp: Response<IncomingBody>,
     alt_svc: Option<AltSvcConfig>,
 ) -> Response<BoxBody<Bytes, hyper::Error>> {
     let (parts, body) = resp.into_parts();
-    // PROTO-2-12: capture trailers alongside body.
-    let collected = match body.collect().await {
-        Ok(c) => c,
-        Err(e) => {
-            return error_response(StatusCode::BAD_GATEWAY, &format!("upstream body read: {e}"));
+    // H2→H1 response header transform (mirror of `H2ToH1Bridge::bridge_
+    // response`): drop `:`-prefixed pseudo-headers AND the authoritative
+    // `RESPONSE_HOP_BY_HOP` set (case-insensitive), re-emit every other
+    // header lowercased. Status preserved.
+    let mut builder = Response::builder().status(parts.status);
+    for (n, v) in &parts.headers {
+        let name = n.as_str();
+        if name.starts_with(':') {
+            continue;
         }
-    };
-    let trailers_map = collected.trailers().cloned();
-    let body_bytes = collected.to_bytes();
-    let trailers_vec: Vec<(String, String)> = trailers_map
-        .as_ref()
-        .map(|tm| {
-            tm.iter()
-                .filter_map(|(n, v)| {
-                    v.to_str()
-                        .ok()
-                        .map(|s| (n.as_str().to_owned(), s.to_owned()))
-                })
-                .collect()
-        })
-        .unwrap_or_default();
-    let bridge = crate::create_bridge(crate::Protocol::Http2, crate::Protocol::Http1);
-    let bridge_in = crate::BridgeResponse {
-        status: parts.status.as_u16(),
-        headers: parts
-            .headers
+        let lower = name.to_lowercase();
+        if crate::h2_to_h1::RESPONSE_HOP_BY_HOP
             .iter()
-            .filter_map(|(n, v)| {
-                v.to_str()
-                    .ok()
-                    .map(|s| (n.as_str().to_owned(), s.to_owned()))
-            })
-            .collect(),
-        body: body_bytes,
-        trailers: trailers_vec,
-    };
-    let translated = match bridge.bridge_response(&bridge_in) {
-        Ok(r) => r,
-        Err(e) => {
-            return error_response(
-                StatusCode::BAD_GATEWAY,
-                &format!("h2->h1 response bridge: {e}"),
-            );
+            .any(|h| *h == lower.as_str())
+        {
+            continue;
         }
-    };
-    build_h1_response_with_trailers(translated, alt_svc)
+        // HeaderName is already stored lowercase by hyper's H2 codec;
+        // re-emit via the lowercased string to match the bridge's
+        // `to_lowercase()` semantics exactly.
+        builder = builder.header(lower.as_str(), v);
+    }
+    if let Some(alt) = alt_svc {
+        if let Ok(value) = HeaderValue::from_str(&alt.header_value()) {
+            builder = builder.header(hyper::header::ALT_SVC, value);
+        }
+    }
+    // R8: stream the upstream `Incoming` body by construction. The terminal
+    // trailers frame (if any) rides the boxed body naturally; no `collect()`,
+    // no owned buffer.
+    builder.body(body.boxed()).unwrap_or_else(|_| {
+        error_response(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "build h1 response failed",
+        )
+    })
 }
 
 /// PROTO-2-19 (Wave 2c-2): assemble the final H1 wire response from
