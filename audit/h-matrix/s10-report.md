@@ -1,4 +1,4 @@
-# SESSION 10 — H-to-H MATRIX — REPORT (in progress)
+# SESSION 10 — H-to-H MATRIX — REPORT
 
 - Branch: `feature/h-matrix-s10` (base `main` @ `cce5a8ed`, the S9 promote).
 - Team (Opus, strict author≠verifier): `lead` (this), `builder-1` (general-purpose),
@@ -7,7 +7,18 @@
 
 ---
 
-## VERDICT: (pending)
+## VERDICT: SESSION 10 COMPLETE
+**H2→H2 BUILT (M-D pump → M-B egress, both legs streamed) — 6 of 9 cells.** Found
++ fixed a real F-MD-4 request-smuggling defect (intermittent, gate-masked) during
+verification; re-verified to the BUILT bar with a load-bearing hardened
+regression now living inside the ×3 gate. Phase 2 (H1→H2) honest-stopped per the
+mission rule, its R8 plan authored as the S11 head-start. Phase 3 ×3
+`--all-features` green deterministic; fmt/clippy clean. `proxy_request` (promoted
+H2→H1) byte-identical throughout (R12). Promoted to `main` per R11.
+
+The →H1 column and the H3-front row were already complete; **the →H2 column now
+has H2→H2 and H3→H2** (H1→H2 remains). Cells BUILT: H3→H1, H3→H2, H3→H3, H2→H1,
+H1→H1, **H2→H2**. Remaining (3): H1→H2, H1→H3, H2→H3.
 
 ---
 
@@ -119,6 +130,45 @@ DEFECT (F-MD-4) found → H2→H2 NOT YET BUILT.**
   lands robustly inside the ×3 gate (a methodological finding: the parallel gate
   masked a real F-MD-4 smuggle — single-run/parallel "green" is not green, R1/R2).
 
+**Fix (builder-1, `9173bd97`; src files `h2_proxy.rs` + `http2_pool.rs` only;
+`proxy_request` byte-unchanged, content-sha `e0161a3e…` identical):** root cause
+confirmed by instrumentation = a **graceful-drop race** feeding the H2 upstream:
+a downstream client RST cancels the gateway's H2-server stream future, dropping
+the in-flight `send_request` future + upstream request body at a clean frame
+boundary, so hyper emits a clean END_STREAM upstream BEFORE polling the injected
+`PumpAbort`. Fix = (1) DETACH the upstream send + verdict resolution into a task
+that owns `send_fut`+body (a downstream cancel no longer drops the upstream body);
+(2) `Http2Pool::reset_peer(addr)` on abort verdicts (connection-teardown backstop,
+the multiplexed analog of H1's `conn_handle.abort()`); (3) `inject_abort!` holds
+the sender + `tx.closed().await` (≤`H2_ABORT_OBSERVE_TIMEOUT`=5 s) so hyper
+observes the FIFO Err before any channel close. R12: H2→H2-SPECIFIC — H2→H1 proven
+safe (40/40, structural immunity: dedicated conn + chunked-terminator semantics),
+H3→H2 safe (30/30, synchronous abort in poll_frame). proxy_request not modified.
+
+**Re-verification round 2 (verifier, `8a7a49a6`; src byte-identical to the fix
+tip — verifier added only tests): H2→H2 BUILT bar MET.**
+- F-MD-4: **50/50 isolated single-threaded, 0 smuggles** (was 25–50% pre-fix).
+- **Hardened regression + load-bearing negative control**: F-MD-4 test refactored
+  to `current_thread` flavor (the bug's low-contention condition) + an internal
+  24-iteration smuggle loop + a `dialed` non-vacuity guard, non-`#[ignore]`'d.
+  NEGATIVE CONTROL: the hardened test FAILS at iter 0 on the pre-fix parent
+  (`saw_complete=true`, 262144 B) and PASSES 24/24 on the fix → it now catches a
+  regression of this bug INSIDE the parallel gate (closing the R1/R2 gap).
+- Full battery 21/21 (no detached-task refactor regression): byte-identity both
+  legs, gauge non-vacuous + inverted-probe-load-bearing (in-situ 80 KiB, trips at
+  4 MiB), request+response backpressure, F-CAP-1 (413/400/502 discriminated),
+  trailers both directions, zero-dial reject.
+- R3 incl. the SHARED pool: h3_h2 10/10, h2h1 15/15, h1h1 14/14,
+  proto_translation 5/5 — `Http2Pool` + new `reset_peer` un-regressed.
+- Coverage SESSION sub-metric (binding) **83.20%** (312/375) ≥ 80% (scoped
+  llvm-cov; multi-thread varies 80.53–83.20% via the F-CAP-1 race arm, always
+  ≥80%). `reset_peer` 100%.
+- `reset_peer` assessment: NOT strictly load-bearing (detached task + inject_abort
+  alone fix it — 72 iters clean with reset_peer no-op'd); NO multiplex collateral
+  (a concurrent healthy 8 MiB stream to the same backend survived 5/5). Kept as
+  defense-in-depth for the wedged-upstream (5 s timeout) case. → CF-RESETPEER-1.
+- Determinism: verifier suite ×3 = 21/21 each.
+
 ## Phase 2 — H1→H2 — HONEST-STOPPED (lead, R7)
 Per the mission honest-stop rule ("one fully-verified cell beats two half-done")
 and R7 (lead owns the honest-stop call): with a security defect to fix +
@@ -131,16 +181,54 @@ smuggling defect would be the opposite of the program's verification-quality bar
 ## Phase 2 — H1→H2 (honest-stop gated)
 (decision pending H2→H2 completion + budget)
 
-## Phase 3 — gates + regression
-(pending)
+## Phase 3 — gates + regression — GREEN
+`cargo test --workspace --all-features` ×3 (real cargo exit via PIPESTATUS):
+- RUN 1/2/3: cargo_rc=0, **1224 passed / 0 failed / 16 ignored**, deterministic
+  (1203 S9 baseline + 21 new H2→H2 proofs). The hardened F-MD-4 (24-iter loop) +
+  F-CAP-1 ran INSIDE the parallel ×3 gate (R10) with no flake.
+- `cargo fmt --check` clean (rc=0); `cargo clippy --all-targets --all-features
+  -- -D warnings` clean (rc=0). Disk ended 26 GB free (above the 25 GB floor, R9).
+- R3: no regression to S1–S9 or the prior 5 BUILT cells (subsumed by the green
+  full-workspace ×3 + the verifier's explicit sibling sweep).
+- Coverage: the binding H2→H2 session sub-metric is 83.20% (verifier-measured,
+  scoped llvm-cov per R10/CF-DISK-1) ≥ 80%.
 
 ## Carry-forwards
-- CF-RESP-1 (NEW, surfaced at plan time): response-leg `collect()` buffering also
-  in H2→H3 (`h3_response_to_h2`) and likely H3-front response paths — track for
-  remaining unbuilt cells; relates to the H3 "response-egress headline" note.
-- Carried: CF-DEDUP-1 (unify H1/H2/H2H2 pumps), CF-DEP-1 (2 dependabot advisories,
-  owner), CF-IGN-1 (16 inherited #[ignore]), F-ESC-1, N-1, S4-NUANCE-1,
-  CF-COV-1/2, CF-COV-S7, CF-DISK-1 (encoded in R10).
+- **CF-RESETPEER-1 (NEW):** `Http2Pool::reset_peer` tears down the whole
+  multiplexed connection on a single-stream abort. Proven this session: NOT
+  strictly load-bearing (the detached send task + `inject_abort` FIFO observation
+  fix the smuggle alone) and NO multiplex collateral (concurrent stream survived).
+  Kept as defense-in-depth for the wedged-upstream (`tx.closed()` 5 s timeout)
+  case. Refinement question for CF-DEDUP-1/S11: keep, narrow to per-stream, or
+  drop. Carries into H1→H2 (same egress).
+- **CF-RESP-1 (NEW, plan time):** response-leg `collect()` buffering also in
+  H1→H2 (`upstream_response_to_h1`), H2→H3 (`h3_response_to_h2`), and likely the
+  H3-front response paths — convert per remaining unbuilt cell; relates to the H3
+  "response-egress headline" note.
+- **CF-DEDUP-1 (now compelling):** H2→H2 and H1→H2 share the IDENTICAL
+  egress-to-`Http2Pool` streaming machinery (detached send + reset_peer +
+  inject_abort + F-CAP-1 arm + verdict gate); only the ingress pump differs (H2
+  M-D vs H1 M-D-lite). Extract a shared helper at S11 and re-verify both cells.
+- **METHOD note (binding for future cells):** the parallel ×3 gate MASKED a real
+  F-MD-4 smuggle (passed 20/20 while the bug reproduced 25–50% single-threaded).
+  Every cell's F-MD-4/smuggling regression MUST be hardened (current_thread +
+  internal repetition + a load-bearing negative control proving it fails pre-fix)
+  so the gate actually catches it. Encoded in the S11 plan's BUILT bar.
+- Carried: CF-DEP-1 (2 dependabot advisories on the default branch — owner work,
+  surfaced on every push this session), CF-IGN-1 (16 inherited #[ignore]),
+  F-ESC-1, N-1, S4-NUANCE-1, CF-COV-1/2, CF-COV-S7, CF-DISK-1 (encoded in R10).
 
-## S11 handoff
-(to be written at COMPLETE)
+## S11 handoff (dependency-ordered remaining cells — 3 of 9 unbuilt)
+1. **H1→H2** (plan ready, `s11-h1h2-plan.md`): H1 M-D-lite ingress (None=clean /
+   Some(Err)=truncation F-MD-4 mirror-image) + M-B egress + response-leg stream.
+   MUST reuse the S10 detached-send/reset_peer/inject_abort egress hardening from
+   the start (same `Http2Pool` graceful-drop hazard) — consider the CF-DEDUP-1
+   extraction here and re-verify H2→H2 + H1→H2 together. → 7 of 9.
+2. **H2→H3 / H1→H3**: need M-C (H3 upstream via QUIC, heaviest); response leg
+   `h3_response_to_h2` also buffers (CF-RESP-1).
+Then: chaos/soak suite, native QUIC proxy, WS/gRPC-over-H3, full h3spec
+conformance. Owner: CF-DEP-1 (2 advisories).
+
+Base for S11: promote tip of `feature/h-matrix-s10` (this session) on `main`.
+Per the standing rule, verify `main`'s tree before branching — do not trust the
+prompt's stated base.
