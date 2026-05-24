@@ -737,7 +737,17 @@ async fn spawn_body_counting_backend() -> (SocketAddr, Arc<AtomicUsize>) {
                 let mut seen_headers = false;
                 let mut acc: Vec<u8> = Vec::new();
                 loop {
-                    match tokio::time::timeout(Duration::from_secs(3), sock.read(&mut buf)).await {
+                    // S11: 30 s (was 3 s). The over-cap test streams 66 MiB and
+                    // the backend must keep draining for the whole upload; under
+                    // the full `--workspace --all-features` gate at 8-core
+                    // saturation a >3 s scheduling gap in THIS backend task fired
+                    // the read timeout, closed the upstream, and the gateway
+                    // (correctly) returned 502 for a genuinely-dropped upstream —
+                    // a test-harness fragility, not a product defect. 30 s gives
+                    // ~10× starvation margin yet stays bounded under the test's
+                    // 60 s client budget so a truly-dead gateway still terminates
+                    // this task. (Mirror of the S11 reload_zero_drop hardening.)
+                    match tokio::time::timeout(Duration::from_secs(30), sock.read(&mut buf)).await {
                         Ok(Ok(0)) | Err(_) => break,
                         Ok(Ok(n)) => {
                             if !seen_headers {

@@ -720,7 +720,11 @@ async fn spawn_framing_witness_backend() -> (SocketAddr, FramingWitness) {
                 let mut raw: Vec<u8> = Vec::new();
                 let mut tmp = [0u8; 16 * 1024];
                 loop {
-                    match tokio::time::timeout(Duration::from_secs(5), sock.read(&mut tmp)).await {
+                    // S11: 30 s (was 5 s) — saturation-robustness for the
+                    // multi-MiB drain under the full --workspace gate (same
+                    // class as the h2h1 body-counting backend fix); bounded
+                    // well under the test's outer budget.
+                    match tokio::time::timeout(Duration::from_secs(30), sock.read(&mut tmp)).await {
                         Ok(Ok(0)) | Err(_) => break, // EOF (abort) or idle timeout
                         Ok(Ok(n)) => raw.extend_from_slice(&tmp[..n]),
                         Ok(Err(_)) => break,
@@ -923,7 +927,10 @@ async fn spawn_trailer_witness_backend(early: bool) -> (SocketAddr, TrailerWitne
                 let mut tmp = [0u8; 16 * 1024];
                 let mut replied = false;
                 loop {
-                    match tokio::time::timeout(Duration::from_secs(5), sock.read(&mut tmp)).await {
+                    // S11: 30 s (was 5 s) — saturation-robustness for the
+                    // multi-MiB drain under the full --workspace gate (same
+                    // class as the h2h1 body-counting backend fix).
+                    match tokio::time::timeout(Duration::from_secs(30), sock.read(&mut tmp)).await {
                         Ok(Ok(0)) | Err(_) => break,
                         Ok(Ok(n)) => acc.extend_from_slice(&tmp[..n]),
                         Ok(Err(_)) => break,
