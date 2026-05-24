@@ -1,0 +1,15 @@
+test backpressure_client_send_paused_while_backend_stalled ... BACKPRESSURE phase1 paused_at=8388608 paused_at2=8388608 body_size=50331648 window=65536
+BACKPRESSURE phase2 resumed_at=50331648 status_line="HTTP/1.1 200 OK"
+test forbidden_framing_field_trailer_rejected_400 ... FORBIDDEN_TRAILER status_line="HTTP/1.1 502 Bad Gateway" backend_dials=1 backend_complete=0
+test legit_request_trailer_forwarded_200 ... LEGIT_TRAILER status_line="HTTP/1.1 200 OK" forwarded=true complete=1
+test memory_gauge_non_vacuous_and_load_bearing ... MEMORY_GAUGE in_situ_retained_bytes=65536 body_size=4194304 window=65536 ceiling=262144 inverted_probe_after=4194304
+test memory_gauge_tracks_live_occupancy_not_cumulative ... LIVE_OCCUPANCY peak_retained_bytes=65536 body_size=4194304 window=65536
+test over_64mib_upload_rejected_502_with_body_reading_backend ... OVER_64MIB_REJECT status_line="HTTP/1.1 502 Bad Gateway" written=68157440
+test over_64mib_upload_yields_413_when_backend_responds_early ... OVER_64MIB_413 status_line="HTTP/1.1 413 Payload Too Large" written=68157440
+test pre_pump_cl_te_smuggle_still_rejected ... PRE_PUMP_SMUGGLE status_line="HTTP/1.1 400 Bad Request" backend_dials=0
+test real_wire_large_body_byte_identical ... REAL_WIRE byte_identical len=5242880 status=200 OK
+test real_wire_small_body_byte_identical ... REAL_WIRE byte_identical len=1000 status=200 OK
+test smuggle_parity_chunked_truncation ... SMUGGLE_PARITY framing=chunked backend_dials=1 complete=0 backend_body_bytes=32800
+test smuggle_parity_content_length_truncation ... SMUGGLE_PARITY framing=cl backend_dials=1 complete=0 backend_body_bytes=32800
+test under_cap_large_upload_yields_200 ... REAL_WIRE byte_identical len=8388608 status=200 OK
+test result: ok. 13 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 10.85s

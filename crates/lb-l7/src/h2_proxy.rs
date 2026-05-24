@@ -1820,9 +1820,32 @@ impl H2Proxy {
         let resp = match tokio::time::timeout(self.timeouts.body, send_fut).await {
             Ok(Ok(r)) => r,
             Ok(Err(e)) => {
+                // F-CAP-1 — a `send_request` error is the DOWNSTREAM EFFECT of
+                // whatever the pump did; the pump's classified verdict is the
+                // AUTHORITATIVE cause. When the pump deliberately aborts the
+                // upstream (over-cap → BodyTooLarge, forbidden trailer / mid-
+                // body reset → BadRequest) it injects the body Err and then
+                // sends its verdict immediately AFTER it (FIFO), so the
+                // backend's response head may never arrive and `send_request`
+                // fails. Returning 502 here would mask the real 413/400 and
+                // create a 413-vs-502 race (R2). Instead consult the verdict
+                // first, BOUNDED by `timeouts.body` so a wedged pump cannot
+                // hang the error path. Do NOT `pump.abort()` before this await
+                // (the pump must still deliver its verdict).
+                let classified = match tokio::time::timeout(self.timeouts.body, verdict_rx).await {
+                    Ok(Ok(Err(ve @ (ProxyErr::BodyTooLarge | ProxyErr::BadRequest(_))))) => {
+                        Some(ve)
+                    }
+                    // Verdict Ok(()), a non-classified verdict error, the pump
+                    // vanished, or the bounded await elapsed → the send error is
+                    // a GENUINE upstream failure; fall through to 502.
+                    _ => None,
+                };
                 pump.abort();
                 conn_handle.abort();
-                return Err(ProxyErr::Upstream(format!("send_request: {e}")));
+                return Err(
+                    classified.unwrap_or_else(|| ProxyErr::Upstream(format!("send_request: {e}")))
+                );
             }
             Err(_) => {
                 pump.abort();
