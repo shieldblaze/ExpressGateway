@@ -287,6 +287,37 @@ impl Http2Pool {
         peers.remove(&addr);
     }
 
+    /// F-MD-4 (S10 H2→H2 request-smuggling fix) — forcibly tear down the
+    /// cached H2 connection to `addr`, RESETTING every stream currently
+    /// multiplexed on it.
+    ///
+    /// This is the H2 analog of the H1 path's `conn_handle.abort()`
+    /// backstop. When an L7 streaming-request pump determines that the
+    /// inbound request was truncated mid-body (client RST_STREAM without
+    /// END_STREAM, over-cap, or a forbidden trailer), it MUST guarantee
+    /// the upstream stream is reset so the backend never observes the
+    /// truncated request as COMPLETE. Injecting a body error into hyper's
+    /// `SendStream` is racy on a multiplexed connection: hyper may
+    /// gracefully finalize (END_STREAM) the upstream stream — emitting the
+    /// truncated body as complete — before it polls the injected error,
+    /// especially when the downstream cancellation drops the request body
+    /// at a frame boundary. Dropping the cached `PeerEntry` aborts its
+    /// driver task ([`PeerEntry::drop`] → `driver.abort()`), which closes
+    /// the underlying connection and DETERMINISTICALLY resets the
+    /// in-flight upstream stream(s).
+    ///
+    /// Like [`Self::send_request`]'s ROUND8-L7-10 eviction this is
+    /// deliberately connection-scoped: an L7 abort is a rare,
+    /// security-relevant event, and resetting the peer connection (the
+    /// same broad teardown the error-eviction path already performs) is
+    /// the safe choice over risking a smuggled-complete request.
+    pub fn reset_peer(&self, addr: SocketAddr) {
+        // Dropping the removed `PeerEntry` runs its `Drop` impl which
+        // `driver.abort()`s the connection task → connection close → all
+        // streams on it reset.
+        let _evicted = self.inner.peers.lock().remove(&addr);
+    }
+
     async fn dial_and_handshake(
         &self,
         addr: SocketAddr,
